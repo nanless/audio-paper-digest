@@ -38,7 +38,8 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     if (options.command === 'projection') {
         const plan = read(options.planFile); const inventory = read(options.inventoryFile);
         const projection = api.buildAggregateProjection({ plan, inventory });
-        const output = { status: options.apply ? 'written' : 'dry-run', projection };
+        const output = { status: options.apply ? 'written' : 'dry-run',
+            conferenceTaskCoverage: projection.conferenceTaskCoverage, projection };
         if (options.apply) output.output = api.writeAggregateProjection({ root: Config.FILES.historicalDirectAggregateProjectionDir,
             outputName: options.outputName, projection, plan });
         console.log(JSON.stringify(output)); return output;
@@ -48,7 +49,8 @@ function main(argv = process.argv.slice(2), runtime = {}) {
         executionRoot: Config.FILES.historicalDirectRewriteExecutionDir });
     const aggregates = api.buildDirectAggregates({ inputs, daily: options.daily, conference: options.conference });
     const aggregateRunId = api.aggregateRunIdFor(aggregates);
-    const output = { status: options.apply ? 'written' : 'dry-run', aggregateRunId, aggregates };
+    const output = { status: options.apply ? 'written' : 'dry-run', aggregateRunId,
+        conferenceTaskCoverage: inputs.projection.conferenceTaskCoverage, aggregates };
     if (options.apply) output.outputs = api.writeDirectAggregates({ outputRoot: Config.FILES.historicalDirectAggregateDir,
         aggregateRunId, aggregates });
     console.log(JSON.stringify(output)); return output;

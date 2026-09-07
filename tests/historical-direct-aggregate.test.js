@@ -8,6 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const direct = require('../scripts/lib/historical-direct-aggregate.js');
+const catalogApi = require('../scripts/lib/historical-direct-rewrite-input-catalog.js');
 const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
 const conferenceProjections = require('../scripts/lib/historical-conference-page-projections.js');
@@ -26,13 +27,13 @@ function write(filename, value) {
     return sha(Buffer.isBuffer(value) ? value : Buffer.from(value));
 }
 function writeJson(filename, value) { return write(filename, `${JSON.stringify(value, null, 2)}\n`); }
-function page(root, relative, title, kind, scope, cohortDate) {
-    const content = `---\ntitle: ${title}\ndate: ${cohortDate}\n---\nPOISON_OLD_BODY_${title}\n`;
+function page(root, relative, title, kind, scope, cohortDate, body = `POISON_OLD_BODY_${title}`, identityHints = null) {
+    const content = `---\ntitle: ${title}\ndate: ${cohortDate}\n---\n${body}\n`;
     return { pageId: pageKey(relative), path: relative, primaryUrl: `https://example.test/${path.basename(relative, '.md')}/`,
         contentSha256: write(path.join(root, relative), content), kind, scope, cohortDate,
-        identityHints: kind === 'paper' && scope.type === 'daily'
+        identityHints: identityHints || (kind === 'paper' && scope.type === 'daily'
             ? { status: 'single', candidates: [{ scheme: 'arxiv', value: title.replace('arXiv ', ''), sources: ['body:arxiv-link'] }] }
-            : { status: 'none', candidates: [] } };
+            : { status: 'none', candidates: [] }) };
 }
 function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     const arxivId = item.route.arxivId || '2608.00001'; const paper = validLegacyApiAnalysisPaper(arxivId);
@@ -69,28 +70,51 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
     return paper;
 }
-async function fixture(t) {
+async function fixture(t, { mixedDailyConference = false } = {}) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-aggregate-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blog = path.join(root, 'blog'); const metadata = path.join(root, 'metadata.json'); const pdf = path.join(root, 'conference.pdf');
     const arxivOne = '2608.00001'; const arxivTwo = '2608.00002';
+    const icmlMetadata = path.join(root, 'icml-metadata.json'); const icmlPdf = path.join(root, 'icml.pdf');
     const pages = [
         page(blog, 'content/posts/arxiv-one.md', `arXiv ${arxivOne}`, 'paper', { type: 'daily', key: DATE }, DATE),
         page(blog, 'content/posts/arxiv-two.md', `arXiv ${arxivTwo}`, 'paper', { type: 'daily', key: DATE }, DATE),
         page(blog, `content/posts/${DATE}.md`, 'Daily summary', 'daily-summary', { type: 'daily', key: DATE }, DATE),
         page(blog, 'content/posts/conference-paper.md', 'Conference fresh title', 'paper', { type: 'conference', key: CONFERENCE }, DATE),
-        page(blog, 'content/posts/icassp-2026.md', 'Conference summary', 'conference-summary', { type: 'conference', key: CONFERENCE }, DATE)
+        page(blog, 'content/posts/icassp-2026.md', 'Conference summary', 'conference-summary', { type: 'conference', key: CONFERENCE }, DATE),
+        { ...page(blog, 'content/posts/icassp2026-task-001.md', 'Conference task', 'conference-task',
+            { type: 'conference', key: CONFERENCE }, DATE), legacyTaskKey: 'task-001' }
     ];
+    if (mixedDailyConference) pages.push(
+        page(blog, 'content/posts/icml-paper.md', 'ICML daily title', 'paper', { type: 'conference', key: 'icml-2026' }, DATE),
+        page(blog, 'content/posts/icml-2026.md', 'ICML summary', 'conference-summary', { type: 'conference', key: 'icml-2026' }, DATE),
+        page(blog, 'content/posts/icml-daily.md', 'ICML daily title', 'paper', { type: 'daily', key: DATE }, DATE,
+            '[paper](https://icml.cc/virtual/2026/poster/60946)', { status: 'none', candidates: [] })
+    );
     const inventory = { counts: {}, ledgerSha256: sha('inventory-ledger'), pageSetSha256: planApi.stableHash(pages), pages };
     const metadataSha = writeJson(metadata, { papers: [{ arnumber: '100', title: 'Conference fresh title' }] });
     const pdfSha = write(pdf, '%PDF-1.4\nconference bytes\n%%EOF\n');
-    const catalog = { contract: 'merged-good-historical-local-data-v3', version: 3, entries: [
-        { paperId: `arxiv:${arxivOne}`, sources: [{ sourcePath: '/ignored/a', fileSha256: sha('a'), availability: 'old-analysis' }] },
-        { paperId: `arxiv:${arxivTwo}`, sources: [{ sourcePath: '/ignored/b', fileSha256: sha('b'), availability: 'old-analysis' }] },
+    const icmlMetadataSha = mixedDailyConference
+        ? writeJson(icmlMetadata, { papers: [{ id: 'Icml_123', title: 'ICML daily title' }] }) : null;
+    const icmlPdfSha = mixedDailyConference ? write(icmlPdf, '%PDF-1.4\nicml bytes\n%%EOF\n') : null;
+    const catalog = catalogApi.normalizeCatalog({ contract: catalogApi.CONTRACT, version: catalogApi.VERSION, scope: catalogApi.SCOPE,
+        scopeBinding: { inventoryPath: path.join(root, 'inventory.json'), inventorySha256: sha('inventory file'),
+            inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
+            arxivPageCount: 2, conferencePageCount: mixedDailyConference ? 2 : 1 },
+        inputs: [{ path: path.join(root, 'conference-local-sources.json'), sha256: sha('conference manifest'), selectedPapers: mixedDailyConference ? 2 : 1 }],
+        summary: { arxivPapers: 2, arxivPages: 2, conferencePapers: mixedDailyConference ? 2 : 1,
+            canonicalRecords: mixedDailyConference ? 4 : 3, sourceRecords: mixedDailyConference ? 2 : 1,
+            conferenceSourceSets: mixedDailyConference ? { 'retained-local': 1, 'workspace-icml-2026': 1 } : { 'retained-local': 1 } }, entries: [
+        { paperId: `arxiv:${arxivOne}`, sources: [] },
+        { paperId: `arxiv:${arxivTwo}`, sources: [] },
         { paperId: 'conference:icassp:2026:icassp-arnumber:100', sources: [{ sourceSet: 'retained-local', provenance: 'retained-local',
             metadata: { absolutePath: metadata, sha256: metadataSha, recordIndex: 0, metadataIdentityBindingSha256: sha('metadata-binding') },
             pdf: { absolutePath: pdf, sha256: pdfSha, availability: 'available', bytes: fs.statSync(pdf).size } }] }
-    ] };
+    ].concat(mixedDailyConference ? [{ paperId: 'conference:icml:2026:openreview-forum-id:Icml_123',
+        sources: [{ sourceSet: 'workspace-icml-2026', provenance: 'retained-local-crawler',
+            metadata: { absolutePath: icmlMetadata, sha256: icmlMetadataSha, recordIndex: 0,
+                metadataIdentityBindingSha256: sha('icml-metadata-binding') },
+            pdf: { absolutePath: icmlPdf, sha256: icmlPdfSha, availability: 'available', bytes: fs.statSync(icmlPdf).size } }] }] : []) });
     const catalogSha = jsonSha(catalog);
     const conference = conferenceProjections.buildConferencePageProjections({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
     const plan = planApi.buildDirectRewritePlan({ catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections: conference });
@@ -121,7 +145,7 @@ async function fixture(t) {
     assert.equal(first.status, 'complete', JSON.stringify(first.results));
     const second = await runner.runDirectRewrite({ ...options, queue: 'arxiv', arxivGeneration: 2 }, deps);
     assert.equal(second.status, 'complete', JSON.stringify(second.results));
-    return { root, plan, projection, paths, firstRegistry: first.registryFile, secondRegistry: second.registryFile };
+    return { root, inventory, plan, projection, paths, firstRegistry: first.registryFile, secondRegistry: second.registryFile };
 }
 function inputs(f, registryFile = f.firstRegistry) {
     return direct.loadDirectAggregateInputs({ planFile: f.paths.planFile, registryFile, projectionFile: f.paths.projectionFile,
@@ -134,12 +158,58 @@ function rebasedRegistry(registry, entries) {
     return { ...body, registrySha256: runner.stableHash(body) };
 }
 
+test('aggregate projection audits retained conference task pages as unsupported publication blockers', async t => {
+    const f = await fixture(t); const projection = f.projection;
+    assert.equal(projection.contract, 'historical-direct-aggregate-projection-v2');
+    assert.equal(projection.version, 2);
+    assert.equal(projection.conferenceTaskPages.length, 1);
+    assert.deepEqual(projection.conferenceTaskPages[0], {
+        pageKey: pageKey('content/posts/icassp2026-task-001.md'),
+        path: 'content/posts/icassp2026-task-001.md',
+        primaryUrl: 'https://example.test/icassp2026-task-001/',
+        previousContentSha256: f.inventory.pages.find(page => page.kind === 'conference-task').contentSha256,
+        conferenceKey: CONFERENCE,
+        legacyTaskKey: 'task-001',
+        status: 'pending',
+        rendererSupport: 'unsupported',
+        publicationDisposition: 'blocked',
+        reason: 'conference-task-renderer-not-implemented'
+    });
+    assert.equal(projection.conferenceTaskPageSetSha256, direct.stableHash(projection.conferenceTaskPages));
+    assert.equal(projection.conferenceTaskCoverage.status, 'pending');
+    assert.equal(projection.conferenceTaskCoverage.rendererSupport, 'unsupported');
+    assert.equal(projection.conferenceTaskCoverage.publicationReady, false);
+    assert.equal(projection.conferenceTaskCoverage.total, 1);
+    assert.equal(projection.conferenceTaskCoverage.pending, 1);
+    assert.equal(projection.conferenceTaskCoverage.unsupported, 1);
+    assert.equal(projection.conferenceTaskCoverage.inventoryPageSetSha256, f.inventory.pageSetSha256);
+    assert.equal(projection.conferenceTaskCoverage.taskPageSetSha256, projection.conferenceTaskPageSetSha256);
+    assert.deepEqual(projection.conferenceTaskCoverage.conferences, [{ conferenceKey: CONFERENCE,
+        total: 1, pending: 1, unsupported: 1, taskPageSetSha256: projection.conferenceTaskPageSetSha256 }]);
+    assert.equal(projection.conferenceTaskCoverage.conferenceSetSha256,
+        direct.stableHash(projection.conferenceTaskCoverage.conferences));
+    assert.equal(projection.conferenceTaskCoverageSha256, direct.stableHash(projection.conferenceTaskCoverage));
+    assert.doesNotMatch(JSON.stringify(projection), /POISON_OLD_BODY/);
+    assert.deepEqual(direct.normalizeAggregateProjection(projection, f.plan), projection);
+
+    const forged = structuredClone(projection);
+    forged.conferenceTaskCoverage.status = 'complete';
+    forged.conferenceTaskCoverage.publicationReady = true;
+    forged.conferenceTaskCoverageSha256 = direct.stableHash(forged.conferenceTaskCoverage);
+    const forgedBody = { ...forged }; delete forgedBody.projectionSha256;
+    forged.projectionSha256 = direct.stableHash(forgedBody);
+    assert.throws(() => direct.normalizeAggregateProjection(forged, f.plan), /conference task coverage report drifted/);
+});
+
 test('direct aggregate accepts a complete daily cohort and produces source-generation-bound markdown', async t => {
     const f = await fixture(t); const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
     assert.equal(aggregate.scope, 'daily'); assert.equal(aggregate.key, DATE);
+    assert.equal(aggregate.outputPage.path, `content/posts/${DATE}.md`);
     assert.equal(aggregate.members.length, 2);
     assert.deepEqual(aggregate.members.map(item => item.paperId), ['arxiv:2608.00001', 'arxiv:2608.00002']);
     assert.equal(aggregate.source.sourceGeneration.generation, 1);
+    assert.equal(aggregate.source.conferenceTaskCoverageSha256, f.projection.conferenceTaskCoverageSha256);
+    assert.equal(aggregate.source.conferenceTaskPublicationReady, false);
     assert.match(aggregate.markdown, /FRESH_READER|source-only/);
     assert.doesNotMatch(JSON.stringify(aggregate), /POISON_OLD_BODY/);
     const output = direct.writeDirectAggregates({ outputRoot: path.join(f.root, 'aggregates'),
@@ -147,6 +217,30 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.equal(output.length, 1); assert.equal(fs.statSync(output[0].filename).mode & 0o777, 0o600);
     assert.equal(fs.statSync(output[0].pageFilename).mode & 0o777, 0o600);
     assert.match(fs.readFileSync(output[0].pageFilename, 'utf8'), /\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)/);
+});
+
+test('direct aggregate signs an explicit mixed source binding for a daily arXiv and ICML cohort', async t => {
+    const f = await fixture(t, { mixedDailyConference: true });
+    const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
+    assert.deepEqual(aggregate.members.map(item => item.paperId), [
+        'arxiv:2608.00001',
+        'arxiv:2608.00002',
+        'conference:icml:2026:openreview-forum-id:Icml_123'
+    ]);
+    const binding = aggregate.source.sourceGeneration;
+    assert.equal(binding.contract, 'historical-direct-mixed-source-v1');
+    assert.equal(binding.version, 1);
+    assert.equal(binding.arxiv.contract, 'fresh-arxiv-generation-v1');
+    assert.equal(binding.arxiv.generation, 1);
+    assert.equal(binding.arxiv.sources.length, 2);
+    assert.equal(binding.arxiv.sourceSetSha256, direct.stableHash(binding.arxiv.sources));
+    assert.equal(binding.conference.contract, 'retained-local-conference-pdf-v1');
+    assert.equal(binding.conference.generation, null);
+    assert.deepEqual(binding.conference.sources.map(item => item.paperId),
+        ['conference:icml:2026:openreview-forum-id:Icml_123']);
+    assert.equal(binding.conference.sourceSetSha256, direct.stableHash(binding.conference.sources));
+    const body = structuredClone(binding); delete body.bindingSha256;
+    assert.equal(binding.bindingSha256, direct.stableHash(body));
 });
 
 test('direct aggregate rejects a partial daily cohort', async t => {
@@ -180,8 +274,12 @@ test('direct aggregate rejects a projection that omits a planned cohort', async 
 test('direct aggregate creates a complete retained-local conference aggregate', async t => {
     const f = await fixture(t); const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), conference: CONFERENCE });
     assert.equal(aggregate.scope, 'conference'); assert.equal(aggregate.key, CONFERENCE);
+    assert.equal(aggregate.outputPage.path, 'content/posts/icassp-2026.md');
     assert.equal(aggregate.members.length, 1);
     assert.equal(aggregate.members[0].paperId, 'conference:icassp:2026:icassp-arnumber:100');
     assert.equal(aggregate.source.sourceGeneration.contract, 'retained-local-conference-pdf-v1');
     assert.equal(aggregate.source.sourceGeneration.generation, null);
+    assert.equal(aggregate.source.conferenceTaskCoverageSha256, f.projection.conferenceTaskCoverageSha256);
+    assert.equal(aggregate.source.conferenceTaskPublicationReady, false);
+    assert.doesNotMatch(aggregate.markdown, /Conference task|task-001|POISON_OLD_BODY/);
 });

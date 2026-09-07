@@ -9,6 +9,8 @@ const test = require('node:test');
 const planner = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const projections = require('../scripts/lib/historical-conference-page-projections.js');
 const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
+const runnerCli = require('../scripts/historical-direct-rewrite-run.js');
+const directControl = require('../scripts/lib/historical-direct-control.js');
 const context = require('../scripts/lib/direct-rewrite-analysis-context.js');
 const freshSource = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
 const engine = require('../scripts/analysis-engine.js');
@@ -34,8 +36,17 @@ function fixture(t) {
         page(blog, 'content/posts/conference.md', 'POISON_METADATA_TITLE', { type: 'conference', key: 'icassp-2026' })
     ];
     const inventory = { counts: { pages: pages.length, papers: pages.length }, ledgerSha256: sha('ledger'), pageSetSha256: sha('pages'), pages };
-    const catalog = { contract: 'merged-good-historical-local-data-v3', version: 3, entries: [
-        { paperId: 'arxiv:2601.00001', sources: [{ sourcePath: '/poison/local.json', fileSha256: sha('poison'), availability: 'old-analysis', provenance: 'POISON_OLD_ANALYSIS_AND_READER' }] },
+    const inventoryPath = path.join(root, 'inventory.json'); json(inventoryPath, inventory);
+    const conferenceManifestPath = path.join(root, 'conference-manifest.json'); const conferenceManifestSha256 = json(conferenceManifestPath, { fixture: true });
+    const catalog = { contract: 'merged-good-historical-local-data-v3', version: 3,
+        scope: 'historical-corresponding-local-sources-only',
+        scopeBinding: { inventoryPath, inventorySha256: sha(fs.readFileSync(inventoryPath)),
+            inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
+            arxivPageCount: 1, conferencePageCount: 1 },
+        inputs: [{ path: conferenceManifestPath, sha256: conferenceManifestSha256, selectedPapers: 1 }],
+        summary: { arxivPapers: 1, arxivPages: 1, conferencePapers: 1, canonicalRecords: 2,
+            sourceRecords: 1, conferenceSourceSets: { 'retained-local': 1 } }, entries: [
+        { paperId: 'arxiv:2601.00001', sources: [] },
         { paperId: 'conference:icassp:2026:icassp-arnumber:100', sources: [{ sourceSet: 'retained-local', provenance: 'retained-local',
             metadata: { absolutePath: metadata, sha256: metadataSha256, recordIndex: 0, metadataIdentityBindingSha256: sha('binding') },
             pdf: { absolutePath: pdf, sha256: pdfSha256, availability: 'available', bytes: fs.statSync(pdf).size } }] }
@@ -176,6 +187,132 @@ function directArxivCapture() {
 }
 function stageFiles(root) { return allFiles(path.join(root, 'runtime', 'staging')).filter(name => path.basename(name) === 'staging-input.json'); }
 function renderDirectPage() { return { markdown: '---\ntitle: Direct fixture\n---\nFresh staged page.\n', assets: [] }; }
+
+test('direct-run selection is plan-ordered, bounded, and rejects duplicate or out-of-queue IDs', async t => {
+    const f = fixture(t); const roots = files(f.root);
+    const ids = f.plan.queue.map(item => item.paperId); const reversed = ids.slice().reverse();
+    const dryRun = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
+        paperIds: reversed, maxPapers: 1 });
+    assert.equal(dryRun.status, 'dry-run'); assert.deepEqual(dryRun.paperIds, [ids[0]]);
+    assert.deepEqual(dryRun.selection.selectedPaperIds, [ids[0]]);
+    assert.deepEqual(dryRun.selection.requestedPaperIds, ids.slice().sort());
+    assert.equal(dryRun.selection.maxPapers, 1); assert.equal(dryRun.selection.availableCount, 2);
+    assert.match(dryRun.pauseFile, new RegExp(`${f.plan.planSha256}\\.arxiv-generation-000001\\.json\\.pause$`));
+    await assert.rejects(runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
+        paperIds: [ids[0], ids[0]] }), /unique/);
+    await assert.rejects(runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
+        queue: 'conference', paperIds: [ids.find(id => id.startsWith('arxiv:'))] }), /unknown or outside/);
+    assert.equal(fs.existsSync(roots.registryRoot), false, 'dry-run must not create the registry/control directory');
+});
+
+test('direct-run CLI parses stable scopes and rejects ambiguous limits or malformed paper sets', () => {
+    const plan = '/tmp/direct-plan.json'; const pause = '/tmp/direct-plan.pause';
+    const parsed = runnerCli.parseArgs(['--apply', '--plan', plan, '--paper-ids',
+        'arxiv:2601.00001,conference:icassp:2026:icassp-arnumber:100', '--max-papers', '2',
+        '--pause-file', pause, '--concurrency', '3']);
+    assert.deepEqual(parsed.paperIds, ['arxiv:2601.00001', 'conference:icassp:2026:icassp-arnumber:100']);
+    assert.equal(parsed.maxPapers, 2); assert.equal(parsed.pauseFile, pause);
+    assert.equal(runnerCli.parseArgs(['--dry-run', '--plan', plan, '--limit', '1']).maxPapers, 1);
+    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--max-papers', '1', '--limit', '1']), /Use/);
+    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--paper-ids', 'arxiv:2601.00001,arxiv:2601.00001']), /Use/);
+    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--pause-file', 'relative.pause']), /Use/);
+});
+
+test('implicit max-papers advances past staged entries while explicit IDs remain replayable', async t => {
+    const f = fixture(t); const roots = files(f.root); const conferenceId = f.plan.queue
+        .find(item => item.route.kind === 'conference-local-pdf').paperId;
+    const dependencies = { extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => sealedAnalysis(item, sourceDescriptor, sourceDetails) };
+    const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'conference', maxPapers: 1 }, dependencies);
+    assert.equal(first.results[0].status, 'staged');
+    const next = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
+        queue: 'conference', maxPapers: 1 });
+    assert.deepEqual(next.paperIds, []); assert.equal(next.selection.skippedCompletedCount, 1);
+    const explicit = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
+        queue: 'conference', paperIds: [conferenceId], maxPapers: 1 });
+    assert.deepEqual(explicit.paperIds, [conferenceId]); assert.equal(explicit.selection.skippedCompletedCount, 0);
+});
+
+test('persistent pause marker stops before new work and the same selection resumes after marker removal', async t => {
+    const f = fixture(t); const roots = files(f.root);
+    const pauseFile = runner.defaultPauseFilePath(roots.registryRoot, f.plan, 1);
+    directControl.writePauseRequest({ registryRoot: roots.registryRoot, plan: f.plan, generation: 1,
+        requestedAt: '2026-09-07T00:00:00.000Z' });
+    let analyses = 0; const dependencies = {
+        captureFreshArxivRewriteSource: directArxivCapture(),
+        extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => {
+            analyses += 1; return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }
+    };
+    const paused = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        arxivGeneration: 1, concurrency: 1 }, dependencies);
+    assert.equal(paused.status, 'paused'); assert.deepEqual(paused.progress, { selected: 2, processed: 0, remaining: 2 });
+    assert.equal(analyses, 0); assert.equal(paused.registryCounts.pending, 2);
+    fs.unlinkSync(pauseFile);
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        arxivGeneration: 1, concurrency: 1 }, dependencies);
+    assert.equal(resumed.status, 'complete'); assert.equal(resumed.progress.processed, 2);
+    assert.equal(resumed.registryCounts.staged, 2); assert.equal(analyses, 2);
+});
+
+test('a pause requested by progress finishes the active paper and resumes without redoing sealed work', async t => {
+    const f = fixture(t); const roots = files(f.root); const pauseFile = runner.defaultPauseFilePath(roots.registryRoot, f.plan, 1);
+    const sourceText = 'PAUSE_BOUNDARY_FRESH_ARXIV_TEXT '.repeat(80); let analyses = 0;
+    const capture = options => freshSource.captureFreshArxivRewriteSource(options, {
+        fetchText: async id => ({ text: sourceText, source: 'html', sourceId: id,
+            url: `https://arxiv.org/html/${id}`, fetchedAt: '2026-09-07T00:00:01.000Z' }),
+        fetchPdf: async id => ({ bytes: Buffer.from(`%PDF-1.4\n${id}\n%%EOF\n`),
+            url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: '2026-09-07T00:00:02.000Z' })
+    });
+    const base = { captureFreshArxivRewriteSource: capture,
+        extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => {
+            analyses += 1; return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        } };
+    const progress = [];
+    const paused = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        arxivGeneration: 1, concurrency: 1 }, { ...base, onProgress: event => {
+        progress.push(event); if (event.completedThisRun === 1) directControl.writePauseRequest({
+            registryRoot: roots.registryRoot, plan: f.plan, generation: 1,
+            requestedAt: '2026-09-07T00:00:00.000Z' });
+    } });
+    assert.equal(paused.status, 'paused'); assert.deepEqual(paused.progress, { selected: 2, processed: 1, remaining: 1 });
+    assert.equal(paused.registryCounts.staged, 1); assert.equal(progress.length, 1); assert.equal(progress[0].pauseRequested, true);
+    fs.unlinkSync(pauseFile);
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        arxivGeneration: 1, concurrency: 1 }, base);
+    assert.equal(resumed.status, 'complete'); assert.deepEqual(resumed.results.map(item => item.status), ['recovered', 'staged']);
+    assert.equal(resumed.registryCounts.staged, 2); assert.equal(analyses, 2, 'the staged arXiv paper is replayed, not re-analyzed');
+});
+
+test('plan-generation operation lock prevents concurrent direct runners from loading one registry', async t => {
+    const f = fixture(t); const roots = files(f.root); let releaseAnalysis;
+    const analysisGate = new Promise(resolve => { releaseAnalysis = resolve; });
+    let enteredAnalysis; const entered = new Promise(resolve => { enteredAnalysis = resolve; });
+    const dependencies = {
+        extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => {
+            enteredAnalysis(); await analysisGate; return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }
+    };
+    const first = runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'conference', arxivGeneration: 1 }, dependencies);
+    await entered;
+    try {
+        await assert.rejects(runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+            queue: 'conference', arxivGeneration: 1 }, { ...dependencies,
+            lockOptions: { timeoutMs: 25, staleMs: 60_000 } }), /等待文件锁超时/);
+    } finally { releaseAnalysis(); }
+    const completed = await first;
+    assert.equal(completed.status, 'complete'); assert.equal(completed.registryCounts.staged, 1);
+    assert.equal(fs.existsSync(`${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`), false);
+});
 
 // A defaultAnalyze result can contain a per-paper error without throwing. It
 // must still fail the registry/run and must never write an analysis or stage.

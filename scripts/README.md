@@ -107,10 +107,11 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/historical-conference-local-sources.js` | Node 库 | 仅收集本地会议 metadata/PDF 的稳定来源坐标、SHA 和 conference ID，完全不读取历史页、网络或旧分析。 |
 | `lib/historical-conference-page-projections.js` | Node 库 | 将冻结 inventory 的 frontmatter title fingerprint 与本地会议 collector 建成不读正文的 page projection。 |
 | `lib/historical-direct-rewrite-input-catalog.js` | Node 库 | 从冻结 inventory 的既有 arXiv 链接、conference local-source manifest 建立历史范围内的 `merged-good-historical-local-data-v3`；只重放会议页 frontmatter title fingerprint，拒绝旧 arXiv 本地正文/图片和无关的 accepted ICLR corpus。 |
-| `lib/historical-direct-rewrite-plan.js` | Node 库 | 从直接本地 catalog、inventory 与会议 projections 生成可重放路由计划；不调用 LLM、网络、crosswalk 或旧正文。 |
-| `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行 direct plan：arXiv 每 generation 重新获取并封存 TXT/PDF，会议使用本地 PDF；以 source-only analysis/Reader 结果写隔离 registry 和 staging。 |
+| `lib/historical-direct-rewrite-plan.js` | Node 库 | 从 strict current catalog、inventory 与会议 projections 生成可重放路由计划，并自哈希记录所有未覆盖 frozen paper pages 及 scope/hint-status 汇总；不调用 LLM、网络、crosswalk 或旧正文。 |
+| `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行 direct plan：arXiv 每 generation 重新获取并封存 TXT/PDF，会议使用本地 PDF；支持稳定 paper 集合/上限、plan+generation 独占锁、pause marker、信号安全暂停和逐篇进度，以 source-only analysis/Reader 结果写隔离 registry 和 staging。 |
+| `lib/historical-direct-control.js` | Node 库 | 提供 source/analysis 两阶段 plan+generation 绑定的 immutable pause request、安全 resume、source checkpoint、registry/aggregate/task/publication blocker 只读汇总；不调用模型或修改博客。 |
 | `lib/historical-direct-page-staging.js` | Node 库 | 将 sealed direct source/analysis/Reader packet 投影成历史单篇 staging 页面，不冒充 legacy crosswalk 路径。 |
-| `lib/historical-direct-aggregate.js` | Node 库 | 从 direct registry 与 page projections 可重放地产生日汇总和会议汇总 staging，不读取旧汇总正文。 |
+| `lib/historical-direct-aggregate.js` | Node 库 | 从 direct registry 与 page projections 可重放地产生日汇总和会议汇总 staging，不读取旧汇总正文；Daily 可用自哈希 mixed-source 合同绑定同 generation arXiv manifests 与会议 PDF SHA；projection v2 独立封存 conference-task coverage，未实现 renderer 时明确阻断后续 publication，但不污染汇总成员。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
@@ -150,10 +151,11 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-conference-local-sources.js` | 只收集本地会议 metadata/PDF source catalog；不接触历史页、crosswalk、LLM、网络或发布。 |
 | `historical-conference-page-projections.js` | 从显式本地 catalog 和冻结 inventory 建立会议页 projection；不读取历史正文。 |
 | `historical-direct-rewrite-inputs.js` | 从冻结 inventory 的 arXiv 链接与 conference manifest、blog root 写出 scoped v3 direct-input catalog；不要求额外 arXiv manifest，输出可直接接 `history:conference-projections` 和 `history:direct-plan`。 |
-| `historical-direct-rewrite-plan.js` | 从 direct catalog、inventory 与会议 projections 签发 source-only rewrite route plan。 |
-| `historical-direct-rewrite-scheduler.js` | 只准备 direct plan 的 arXiv/会议来源队列和 sealed source 工件；arXiv 原子写 TXT、PDF、runtime metadata、manifest，失败只写 immutable crosswalk handoff；不调用分析、Reader、crosswalk 或发布。 |
-| `historical-direct-rewrite-run.js` | 显式运行 source-only direct analysis、Reader 与单篇 staging；arXiv 重放本次四文件官方 bundle，会议重放本地 metadata/PDF SHA。 |
+| `historical-direct-rewrite-plan.js` | 从 direct catalog、inventory 与会议 projections 签发 source-only rewrite route plan；projection/plan 共用 producer strict catalog validator，旧 v3 collector 文件失败关闭，CLI 同时报告 frozen paper page 覆盖缺口。 |
+| `historical-direct-rewrite-scheduler.js` | 只准备 direct plan 的 arXiv/会议来源队列和 sealed source 工件；支持稳定 paper 集合/上限、plan+generation 来源锁、pause marker、信号安全停点和逐项进度；arXiv 原子写 TXT、PDF、runtime metadata、manifest，失败只写 immutable crosswalk handoff；不调用分析、Reader、crosswalk 或发布。 |
+| `historical-direct-rewrite-run.js` | 显式运行 source-only direct analysis、Reader 与单篇 staging；支持 `--paper-ids`、`--max-papers`、plan+generation 独占锁、pause marker、SIGINT/SIGTERM 安全停点和逐篇进度；arXiv 重放本次四文件官方 bundle，会议重放本地 metadata/PDF SHA。 |
 | `historical-direct-aggregate.js` | 为完成的 direct registry 生成可重放 daily 或 conference aggregate staging。 |
+| `historical-direct-control.js` | 全历史长任务控制面：`history:status` 单次/持续只读汇总 registry、pause/lock、覆盖率、汇总和 publication blockers；`history:pause` 写入 plan+generation 绑定的停机请求；`history:resume` 只在 operation lock 释放后恢复。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与 Node 共用 registry 的 Python 加载、current/legacy 显式解析和精确映射；production current 只接受 active 中文首选标签，未知/歧义不自动收窄。 |
 | `taxonomy_paths.py` | 集中管理独立标签预览的Python路径，复用项目根与环境；不改变正式发布path_config模板指纹。 |

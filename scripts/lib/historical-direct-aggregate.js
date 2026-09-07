@@ -15,12 +15,15 @@ const { parseAnalysis } = require('../utils.js');
 
 const CONTRACT = 'historical-direct-aggregate-v1';
 const VERSION = 1;
-const PROJECTION_CONTRACT = 'historical-direct-aggregate-projection-v1';
-const PROJECTION_VERSION = 1;
+const PROJECTION_CONTRACT = 'historical-direct-aggregate-projection-v2';
+const PROJECTION_VERSION = 2;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const CONFERENCE_KEY_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const CONFERENCE_TASK_KEY_RE = /^task-[a-z0-9._-]+$/;
+const CONFERENCE_TASK_UNSUPPORTED_REASON = 'conference-task-renderer-not-implemented';
 
 class HistoricalDirectAggregateError extends Error {
     constructor(message) {
@@ -97,6 +100,43 @@ function projectionOutputPage(page, label) {
     return { pageKey: page.pageKey, path: page.path, primaryUrl: validUrl(page.primaryUrl, `${label}.primaryUrl`),
         previousContentSha256: page.previousContentSha256 };
 }
+function projectionConferenceTaskPage(page, label) {
+    exact(page, ['pageKey', 'path', 'primaryUrl', 'previousContentSha256', 'conferenceKey', 'legacyTaskKey',
+        'status', 'rendererSupport', 'publicationDisposition', 'reason'], label);
+    const output = projectionOutputPage({ pageKey: page.pageKey, path: page.path, primaryUrl: page.primaryUrl,
+        previousContentSha256: page.previousContentSha256 }, label);
+    if (output.primaryUrl === null || path.posix.normalize(output.path) !== output.path || output.path.split('/').includes('..')
+        || !CONFERENCE_KEY_RE.test(String(page.conferenceKey || ''))
+        || !CONFERENCE_TASK_KEY_RE.test(String(page.legacyTaskKey || ''))
+        || page.status !== 'pending' || page.rendererSupport !== 'unsupported'
+        || page.publicationDisposition !== 'blocked' || page.reason !== CONFERENCE_TASK_UNSUPPORTED_REASON) {
+        fail(`${label} support state is invalid`);
+    }
+    return { ...output, conferenceKey: page.conferenceKey, legacyTaskKey: page.legacyTaskKey,
+        status: 'pending', rendererSupport: 'unsupported', publicationDisposition: 'blocked',
+        reason: CONFERENCE_TASK_UNSUPPORTED_REASON };
+}
+function conferenceTaskCoverageFor(taskPages, inventoryPageSetSha256) {
+    if (!Array.isArray(taskPages) || !validSha(inventoryPageSetSha256)) fail('conference task coverage inputs are invalid');
+    const conferences = [...new Set(taskPages.map(page => page.conferenceKey))].sort().map(conferenceKey => {
+        const pages = taskPages.filter(page => page.conferenceKey === conferenceKey);
+        return { conferenceKey, total: pages.length, pending: pages.length, unsupported: pages.length,
+            taskPageSetSha256: stableHash(pages) };
+    });
+    return {
+        status: taskPages.length ? 'pending' : 'complete',
+        rendererSupport: taskPages.length ? 'unsupported' : 'not-required',
+        publicationReady: taskPages.length === 0,
+        reason: taskPages.length ? CONFERENCE_TASK_UNSUPPORTED_REASON : null,
+        total: taskPages.length,
+        pending: taskPages.length,
+        unsupported: taskPages.length,
+        inventoryPageSetSha256,
+        taskPageSetSha256: stableHash(taskPages),
+        conferences,
+        conferenceSetSha256: stableHash(conferences)
+    };
+}
 function normalizeInventoryForAggregateProjection(value, plan) {
     if (!plain(value) || !validSha(value.ledgerSha256) || !validSha(value.pageSetSha256) || !Array.isArray(value.pages)
         || stableHash(value.pages) !== value.pageSetSha256) {
@@ -111,13 +151,17 @@ function normalizeInventoryForAggregateProjection(value, plan) {
             || typeof page.path !== 'string' || !/^content\/posts\/[A-Za-z0-9._/-]+\.md$/.test(page.path)
             || !validSha(page.contentSha256) || !plain(page.scope) || typeof page.scope.type !== 'string'
             || typeof page.scope.key !== 'string' || typeof page.cohortDate !== 'string'
-            || !['paper', 'daily-summary', 'conference-summary'].includes(page.kind)) {
+            || !['paper', 'daily-summary', 'conference-summary', 'conference-task'].includes(page.kind)) {
             fail(`aggregate projection inventory page ${index} is invalid`);
+        }
+        if (page.kind === 'conference-task' && (page.scope.type !== 'conference'
+            || !CONFERENCE_KEY_RE.test(page.scope.key) || !CONFERENCE_TASK_KEY_RE.test(String(page.legacyTaskKey || '')))) {
+            fail(`aggregate projection inventory conference task page ${index} is invalid`);
         }
         seen.add(page.pageId);
         return { pageKey: page.pageId, path: page.path, primaryUrl: validUrl(page.primaryUrl, `inventory page ${page.pageId} URL`),
             previousContentSha256: page.contentSha256, kind: page.kind, scope: { type: page.scope.type, key: page.scope.key },
-            cohortDate: page.cohortDate };
+            cohortDate: page.cohortDate, ...(page.kind === 'conference-task' ? { legacyTaskKey: page.legacyTaskKey } : {}) };
     });
 }
 function cohortEntries(plan, scope, key) {
@@ -145,20 +189,32 @@ function buildAggregateProjection({ plan, inventory } = {}) {
     };
     const daily = dailyKeys.map(key => build('daily', key, 'daily-summary'));
     const conference = conferenceKeys.map(key => build('conference', key, 'conference-summary'));
+    const conferenceTaskPages = pages.filter(page => page.kind === 'conference-task').map(page =>
+        projectionConferenceTaskPage({ pageKey: page.pageKey, path: page.path, primaryUrl: page.primaryUrl,
+            previousContentSha256: page.previousContentSha256, conferenceKey: page.scope.key,
+            legacyTaskKey: page.legacyTaskKey, status: 'pending', rendererSupport: 'unsupported',
+            publicationDisposition: 'blocked', reason: CONFERENCE_TASK_UNSUPPORTED_REASON },
+        `conference task ${page.pageKey}`)).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    const conferenceTaskCoverage = conferenceTaskCoverageFor(conferenceTaskPages, normalizedPlan.inventory.pageSetSha256);
     const body = { contract: PROJECTION_CONTRACT, version: PROJECTION_VERSION, planSha256: normalizedPlan.planSha256,
         inventory: clone(normalizedPlan.inventory), daily, dailySetSha256: stableHash(daily),
-        conference, conferenceSetSha256: stableHash(conference) };
+        conference, conferenceSetSha256: stableHash(conference), conferenceTaskPages,
+        conferenceTaskPageSetSha256: stableHash(conferenceTaskPages), conferenceTaskCoverage,
+        conferenceTaskCoverageSha256: stableHash(conferenceTaskCoverage) };
     return { ...body, projectionSha256: stableHash(body) };
 }
 function normalizeAggregateProjection(value, plan) {
     const normalizedPlan = planApi.normalizePlan(plan);
     exact(value, ['contract', 'version', 'planSha256', 'inventory', 'daily', 'dailySetSha256',
-        'conference', 'conferenceSetSha256', 'projectionSha256'], 'direct aggregate projection');
+        'conference', 'conferenceSetSha256', 'conferenceTaskPages', 'conferenceTaskPageSetSha256',
+        'conferenceTaskCoverage', 'conferenceTaskCoverageSha256', 'projectionSha256'], 'direct aggregate projection');
     if (value.contract !== PROJECTION_CONTRACT || value.version !== PROJECTION_VERSION || value.planSha256 !== normalizedPlan.planSha256
         || !plain(value.inventory) || Object.keys(value.inventory).sort().join('\0') !== ['ledgerSha256', 'pageSetSha256'].join('\0')
         || value.inventory.ledgerSha256 !== normalizedPlan.inventory.ledgerSha256
         || value.inventory.pageSetSha256 !== normalizedPlan.inventory.pageSetSha256 || !Array.isArray(value.daily)
-        || !Array.isArray(value.conference) || !validSha(value.dailySetSha256) || !validSha(value.conferenceSetSha256)
+        || !Array.isArray(value.conference) || !Array.isArray(value.conferenceTaskPages)
+        || !validSha(value.dailySetSha256) || !validSha(value.conferenceSetSha256)
+        || !validSha(value.conferenceTaskPageSetSha256) || !validSha(value.conferenceTaskCoverageSha256)
         || !validSha(value.projectionSha256)) fail('direct aggregate projection envelope is invalid');
     const seenPages = new Set();
     const normalizeCohort = (item, index, scope) => {
@@ -179,6 +235,20 @@ function normalizeAggregateProjection(value, plan) {
     };
     const daily = value.daily.map((item, index) => normalizeCohort(item, index, 'daily')).sort((a, b) => a.key.localeCompare(b.key));
     const conference = value.conference.map((item, index) => normalizeCohort(item, index, 'conference')).sort((a, b) => a.key.localeCompare(b.key));
+    const conferenceTaskPages = value.conferenceTaskPages.map((item, index) =>
+        projectionConferenceTaskPage(item, `conferenceTaskPages[${index}]`));
+    if (new Set(conferenceTaskPages.map(item => item.pageKey)).size !== conferenceTaskPages.length
+        || new Set(conferenceTaskPages.map(item => item.path)).size !== conferenceTaskPages.length
+        || conferenceTaskPages.some((item, index) => index && conferenceTaskPages[index - 1].pageKey.localeCompare(item.pageKey) >= 0)
+        || stableHash(conferenceTaskPages) !== value.conferenceTaskPageSetSha256) {
+        fail('conference task page coverage is duplicate, unsorted, or hash-drifted');
+    }
+    const expectedTaskCoverage = conferenceTaskCoverageFor(conferenceTaskPages, normalizedPlan.inventory.pageSetSha256);
+    if (!plain(value.conferenceTaskCoverage)
+        || stableHash(value.conferenceTaskCoverage) !== value.conferenceTaskCoverageSha256
+        || stableHash(value.conferenceTaskCoverage) !== stableHash(expectedTaskCoverage)) {
+        fail('conference task coverage report drifted');
+    }
     const expectedDailyKeys = [...new Set(normalizedPlan.projectedPages.filter(page => page.scope.type === 'daily')
         .map(page => page.scope.key))].sort();
     const expectedConferenceKeys = [...new Set(normalizedPlan.projectedPages.filter(page => page.scope.type === 'conference')
@@ -192,7 +262,10 @@ function normalizeAggregateProjection(value, plan) {
     }
     const body = { contract: value.contract, version: value.version, planSha256: value.planSha256,
         inventory: clone(value.inventory), daily, dailySetSha256: value.dailySetSha256,
-        conference, conferenceSetSha256: value.conferenceSetSha256 };
+        conference, conferenceSetSha256: value.conferenceSetSha256, conferenceTaskPages,
+        conferenceTaskPageSetSha256: value.conferenceTaskPageSetSha256,
+        conferenceTaskCoverage: clone(value.conferenceTaskCoverage),
+        conferenceTaskCoverageSha256: value.conferenceTaskCoverageSha256 };
     if (stableHash(body) !== value.projectionSha256) fail('direct aggregate projection self-SHA drifted');
     return { ...body, projectionSha256: value.projectionSha256 };
 }
@@ -370,6 +443,35 @@ function renderAggregate(scope, key, members) {
     }
     return output;
 }
+function sourceGenerationFor(scope, key, staged) {
+    const arxiv = staged.filter(member => member.item.route.kind === 'arxiv-fresh-fetch');
+    const conference = staged.filter(member => member.item.route.kind === 'conference-local-pdf');
+    if (arxiv.length + conference.length !== staged.length) fail(`${scope}:${key} has an unsupported source route`);
+    if (scope === 'conference' && (arxiv.length || !conference.length)) {
+        fail(`${scope}:${key} must use retained local conference PDFs`);
+    }
+    if (scope === 'daily' && !arxiv.length && !conference.length) fail(`${scope}:${key} has no source-bound members`);
+    const generations = new Set(arxiv.map(member => member.source.generation));
+    if (generations.size > 1) fail(`${scope}:${key} has mixed arXiv source generations`);
+    const arxivBinding = arxiv.length ? {
+        contract: 'fresh-arxiv-generation-v1', generation: [...generations][0],
+        sourceManifestSetSha256: stableHash(arxiv.map(member => member.source.sourceManifestSha256).sort())
+    } : null;
+    const conferenceBinding = conference.length ? {
+        contract: 'retained-local-conference-pdf-v1', generation: null,
+        sourcePdfSetSha256: stableHash(conference.map(member => member.source.pdfSha256).sort())
+    } : null;
+    if (!arxivBinding) return conferenceBinding;
+    if (!conferenceBinding) return arxivBinding;
+    const arxivSources = arxiv.map(member => ({ paperId: member.item.paperId,
+        sourceManifestSha256: member.source.sourceManifestSha256 })).sort((left, right) => left.paperId.localeCompare(right.paperId));
+    const conferenceSources = conference.map(member => ({ paperId: member.item.paperId,
+        pdfSha256: member.source.pdfSha256 })).sort((left, right) => left.paperId.localeCompare(right.paperId));
+    const body = { contract: 'historical-direct-mixed-source-v1', version: 1,
+        arxiv: { ...arxivBinding, sources: arxivSources, sourceSetSha256: stableHash(arxivSources) },
+        conference: { ...conferenceBinding, sources: conferenceSources, sourceSetSha256: stableHash(conferenceSources) } };
+    return { ...body, bindingSha256: stableHash(body) };
+}
 function buildCohort(inputs, cohort) {
     const selected = cohort.requiredPaperIds.map(paperId => inputs.members.get(paperId));
     if (selected.some(item => !item)) fail(`${cohort.scope}:${cohort.key} is missing a direct plan member`);
@@ -378,11 +480,7 @@ function buildCohort(inputs, cohort) {
     const pages = staged.flatMap(member => member.item.pages.filter(page => page.scope.type === cohort.scope && page.scope.key === cohort.key));
     const actualKeys = pages.map(page => page.pageKey).sort();
     if (actualKeys.join('\0') !== cohort.requiredPageKeys.join('\0')) fail(`${cohort.scope}:${cohort.key} staging does not exactly cover the complete cohort`);
-    const routes = new Set(staged.map(member => member.item.route.kind));
-    const expectedRoute = cohort.scope === 'daily' ? 'arxiv-fresh-fetch' : 'conference-local-pdf';
-    if (routes.size !== 1 || !routes.has(expectedRoute)) fail(`${cohort.scope}:${cohort.key} has a mixed source contract`);
-    const generations = expectedRoute === 'arxiv-fresh-fetch' ? new Set(staged.map(member => member.source.generation)) : new Set([null]);
-    if (generations.size !== 1) fail(`${cohort.scope}:${cohort.key} has mixed arXiv source generations`);
+    const sourceGeneration = sourceGenerationFor(cohort.scope, cohort.key, staged);
     const members = staged.map(member => {
         const pages = member.item.pages.filter(page => page.scope.type === cohort.scope && page.scope.key === cohort.key);
         const rendered = new Map(member.pageStaging.pages.map(page => [page.pageKey, page]));
@@ -392,11 +490,6 @@ function buildCohort(inputs, cohort) {
     })
         .sort((left, right) => right.canonical.score - left.canonical.score || left.item.paperId.localeCompare(right.item.paperId))
         .map((member, index) => ({ rank: index + 1, ...member }));
-    const sourceGeneration = expectedRoute === 'arxiv-fresh-fetch'
-        ? { contract: 'fresh-arxiv-generation-v1', generation: [...generations][0],
-            sourceManifestSetSha256: stableHash(members.map(member => member.source.sourceManifestSha256).sort()) }
-        : { contract: 'retained-local-conference-pdf-v1', generation: null,
-            sourcePdfSetSha256: stableHash(members.map(member => member.source.pdfSha256).sort()) };
     const markdown = renderAggregate(cohort.scope, cohort.key, members);
     const memberRecords = members.map(member => ({ rank: member.rank, paperId: member.item.paperId, runId: member.item.runId, route: member.item.route.kind,
         pageKeys: member.pages.map(page => page.pageKey).sort(), pagePaths: member.pages.map(page => page.pagePath).sort(),
@@ -415,6 +508,8 @@ function buildCohort(inputs, cohort) {
         outputPage, source: { planSha256: inputs.plan.planSha256, planFileSha256: inputs.planFileSha256,
             registrySha256: inputs.registry.registrySha256, registryFileSha256: inputs.registryFileSha256,
             aggregateProjectionSha256: inputs.projection.projectionSha256, aggregateProjectionFileSha256: inputs.projectionFileSha256,
+            conferenceTaskCoverageSha256: inputs.projection.conferenceTaskCoverageSha256,
+            conferenceTaskPublicationReady: inputs.projection.conferenceTaskCoverage.publicationReady,
             sourceGeneration }, members: memberRecords, memberSetSha256: stableHash(memberRecords), markdown,
         markdownSha256: sha256(Buffer.from(markdown, 'utf8')) };
     return { ...body, manifestSha256: stableHash(body) };

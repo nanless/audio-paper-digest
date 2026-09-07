@@ -12,6 +12,8 @@ const conferenceSources = require('../scripts/lib/historical-conference-local-so
 const inputsCli = require('../scripts/historical-direct-rewrite-inputs.js');
 const projectionsCli = require('../scripts/historical-conference-page-projections.js');
 const planCli = require('../scripts/historical-direct-rewrite-plan.js');
+const projectionApi = require('../scripts/lib/historical-conference-page-projections.js');
+const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const pdf = () => Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n');
@@ -96,16 +98,38 @@ test('CLI produces a scoped v3 catalog and its projection-to-plan dry-run succee
     });
     assert.deepEqual({ projections: projection.projections, projectedPages: projection.projectedPages, unmatchedPages: projection.unmatchedPages }, { projections: 4, projectedPages: 5, unmatchedPages: 0 });
     const projectionArtifact = require('../scripts/lib/historical-conference-page-projections.js').buildFromFiles({ catalogFile: written.filename, inventoryFile: f.inventoryFile, blogRoot: f.blog });
-    const projectionFile = path.join(f.projectionRoot, 'conference-page-projections-v1.json');
-    require('../scripts/lib/historical-conference-page-projections.js').writeProjectionArtifact({ root: f.projectionRoot, outputName: 'conference-page-projections-v1.json', artifact: projectionArtifact });
+    const projectionFile = path.join(f.projectionRoot, 'conference-page-projections-v2.json');
+    require('../scripts/lib/historical-conference-page-projections.js').writeProjectionArtifact({ root: f.projectionRoot, outputName: 'conference-page-projections-v2.json', artifact: projectionArtifact });
     const plan = planCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile, '--conference-projections', projectionFile], {
         files: { historicalDirectRewritePlanDir: f.planRoot, historicalDirectRewriteUnprojectedReportDir: f.reportRoot }
     });
     assert.deepEqual({ arxiv: plan.arxivFreshFetch, conference: plan.conferenceLocalPdf, canonicals: plan.canonicalPapers, pages: plan.projectedPages, unprojected: plan.unprojectedCatalogEntries }, { arxiv: 1, conference: 4, canonicals: 5, pages: 7, unprojected: 0 });
+    assert.deepEqual({ frozen: plan.frozenPaperPages, uncovered: plan.uncoveredFrozenPaperPages,
+        complete: plan.paperPageCoverageComplete }, { frozen: 7, uncovered: 0, complete: true });
 });
 
 test('CLI rejects the removed arXiv-manifest prerequisite and incomplete scope', t => {
     const f = fixture(t);
     assert.throws(() => inputsCli.parseArgs(['--dry-run', '--arxiv-manifest', '/tmp/old.json', '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile, '--blog-root', f.blog]), /Use/);
     assert.throws(() => inputsCli.parseArgs(['--dry-run', '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile]), /Use/);
+});
+
+test('projection and plan reject legacy v3 collector bytes through the producer strict validator', t => {
+    const f = fixture(t);
+    const current = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
+        inventoryFile: f.inventoryFile, blogRoot: f.blog });
+    const cases = [
+        value => { delete value.scopeBinding; },
+        value => { value.inputs.unshift({ path: '/tmp/legacy-arxiv-good-data.json',
+            sha256: sha('legacy arxiv input'), selectedPapers: 1 }); },
+        value => { value.entries.find(entry => entry.paperId === 'arxiv:2601.00001').sources = [{
+            sourcePath: 'data/current/papers.json', fileSha256: sha('legacy retained arxiv prose'),
+            availability: 'crawler-full-text-record', provenance: 'legacy-local-crawler'
+        }]; }
+    ];
+    for (const mutate of cases) {
+        const legacy = structuredClone(current); mutate(legacy);
+        assert.throws(() => projectionApi.normalizeCatalog(legacy), /current scoped v3 local source catalog/);
+        assert.throws(() => planApi.normalizeCatalog(legacy), /current scoped v3 local source catalog/);
+    }
 });

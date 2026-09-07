@@ -9,8 +9,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const conferenceProjections = require('./historical-conference-page-projections.js');
 
-const CONTRACT = 'historical-direct-rewrite-plan-v2';
-const VERSION = 2;
+const CONTRACT = 'historical-direct-rewrite-plan-v3';
+const VERSION = 3;
 const CATALOG_CONTRACT = 'merged-good-historical-local-data-v3';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -60,22 +60,18 @@ function deterministicRunId(catalogFileSha256, paperId) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function normalizeCatalog(value) {
-    if (!plain(value) || value.contract !== CATALOG_CONTRACT || value.version !== 3
-        || !Array.isArray(value.entries)) fail('v3 local source catalog contract is invalid');
-    const paperIds = new Set();
-    const entries = value.entries.map((entry, index) => {
-        exact(entry, ['paperId', 'sources'], `catalog.entries[${index}]`);
-        const isArxiv = typeof entry.paperId === 'string' && ARXIV_ID_RE.test(entry.paperId.slice(6))
-            && entry.paperId.startsWith('arxiv:');
-        const isConference = typeof entry.paperId === 'string'
-            && /^conference:[a-z0-9]+(?:-[a-z0-9]+)*:\d{4}:(?:icassp-arnumber|openreview-forum-id):[^:]+$/.test(entry.paperId);
-        if ((!isArxiv && !isConference) || !Array.isArray(entry.sources) || (isConference && !entry.sources.length)
-            || paperIds.has(entry.paperId)) fail('catalog has malformed or duplicate paper identity');
-        paperIds.add(entry.paperId); return clone(entry);
-    }).sort((left, right) => left.paperId.localeCompare(right.paperId));
-    return entries;
+function normalizeCurrentCatalog(value) {
+    // The producer owns the complete current v3 contract.  Do not maintain a
+    // second, weaker validator here: legacy v3 collector files used the same
+    // headline version while allowing retained arXiv prose/PDF inputs.
+    try {
+        return require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
+    } catch (error) {
+        fail(`current scoped v3 local source catalog is invalid: ${error.message}`);
+    }
 }
+
+function normalizeCatalog(value) { return normalizeCurrentCatalog(value).entries; }
 
 function normalizeInventory(value) {
     if (!plain(value) || !Array.isArray(value.pages) || !validSha(value.pageSetSha256)
@@ -171,9 +167,51 @@ function normalizedConferenceProjections(value, { catalogFileSha256, inventory }
     return artifact;
 }
 
+const IDENTITY_HINT_STATUSES = new Set(['none', 'single', 'conflict', 'multiple']);
+function uncoveredPageRecord(page) {
+    const identityHintStatus = page.identityHints?.status;
+    if (!IDENTITY_HINT_STATUSES.has(identityHintStatus)) {
+        fail(`${page.pageKey} frozen paper identity hint status is invalid`);
+    }
+    return { pageKey: page.pageKey, pagePath: page.pagePath, primaryUrl: page.primaryUrl,
+        cohortDate: page.cohortDate, scope: clone(page.scope), pageContentSha256: page.pageContentSha256,
+        identityHintStatus, reason: 'no-direct-source-route' };
+}
+
+function countBy(values, keyFor) {
+    const counts = new Map();
+    for (const value of values) {
+        const key = keyFor(value); counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, count]) => ({ key, count }));
+}
+
+function coverageSummary(projectedPages, uncoveredPages) {
+    const all = [...projectedPages.map(page => ({ scope: page.scope, projected: true })),
+        ...uncoveredPages.map(page => ({ scope: page.scope, projected: false }))];
+    const scopeKeys = [...new Set(all.map(page => `${page.scope.type}\0${page.scope.key}`))].sort();
+    const byScope = scopeKeys.map(scopeKey => {
+        const [scopeType, scopeKeyValue] = scopeKey.split('\0');
+        const selected = all.filter(page => page.scope.type === scopeType && page.scope.key === scopeKeyValue);
+        const projected = selected.filter(page => page.projected).length;
+        return { scope: { type: scopeType, key: scopeKeyValue }, frozenPaperPages: selected.length,
+            projectedPaperPages: projected, uncoveredFrozenPaperPages: selected.length - projected };
+    });
+    return { frozenPaperPages: all.length, projectedPaperPages: projectedPages.length,
+        uncoveredFrozenPaperPages: uncoveredPages.length, coverageComplete: uncoveredPages.length === 0,
+        byScope, uncoveredByIdentityHintStatus: countBy(uncoveredPages, page => page.identityHintStatus)
+            .map(item => ({ status: item.key, count: item.count })) };
+}
+
 function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, conferencePageProjections } = {}) {
     if (!validSha(catalogFileSha256)) fail('catalog file SHA is required');
-    const entries = normalizeCatalog(catalog); const history = normalizeInventory(inventory);
+    const currentCatalog = normalizeCurrentCatalog(catalog); const entries = currentCatalog.entries;
+    const history = normalizeInventory(inventory);
+    if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
+        || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
+        fail('current scoped v3 catalog belongs to a different frozen inventory');
+    }
     const conferenceArtifact = normalizedConferenceProjections(conferencePageProjections, {
         catalogFileSha256, inventory: history
     });
@@ -209,7 +247,8 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
     }
     queue.sort((left, right) => left.paperId.localeCompare(right.paperId));
     unprojectedCatalogEntries.sort((left, right) => left.paperId.localeCompare(right.paperId));
-    const coveredConferencePages = new Set(conferenceArtifact.projections.flatMap(item => item.pageKeys));
+    const coveredConferencePages = new Set(conferenceArtifact.projections.flatMap(item => item.pages
+        .filter(page => page.scope.type === 'conference').map(page => page.pageKey)));
     const requiredConferencePages = history.pages.filter(page => page.scope.type === 'conference');
     if (coveredConferencePages.size !== requiredConferencePages.length
         || requiredConferencePages.some(page => !coveredConferencePages.has(page.pageKey))) {
@@ -217,25 +256,36 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
     }
     const projectedPages = queue.flatMap(item => item.pages.map(page => ({ paperId: item.paperId,
         runId: item.runId, route: item.route.kind, ...page }))).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    const projectedArxivPages = projectedPages.filter(page => page.route === 'arxiv-fresh-fetch').length;
+    if (projectedArxivPages !== currentCatalog.scopeBinding.arxivPageCount) {
+        fail('direct arXiv projection count drifted from the current scoped catalog');
+    }
+    const uncoveredFrozenPaperPages = history.pages.filter(page => !allPageKeys.has(page.pageKey))
+        .map(uncoveredPageRecord).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    const paperPageCoverage = coverageSummary(projectedPages, uncoveredFrozenPaperPages);
     const body = { contract: CONTRACT, version: VERSION, catalogFileSha256,
         inventory: { ledgerSha256: history.ledgerSha256, pageSetSha256: history.pageSetSha256 },
         conferenceProjectionArtifactSha256: conferenceArtifact.artifactSha256,
         queue, queueSha256: stableHash(queue), projectedPages,
         unprojectedCatalogEntries, unprojectedCatalogEntrySetSha256: stableHash(unprojectedCatalogEntries),
-        projectedPageSetSha256: stableHash(projectedPages) };
+        projectedPageSetSha256: stableHash(projectedPages), uncoveredFrozenPaperPages,
+        uncoveredFrozenPaperPageSetSha256: stableHash(uncoveredFrozenPaperPages), paperPageCoverage };
     return { ...body, planSha256: stableHash(body) };
 }
 
 function normalizePlan(value) {
     exact(value, ['contract', 'version', 'catalogFileSha256', 'inventory', 'conferenceProjectionArtifactSha256',
         'queue', 'queueSha256', 'projectedPages', 'unprojectedCatalogEntries', 'unprojectedCatalogEntrySetSha256',
-        'projectedPageSetSha256', 'planSha256'], 'direct rewrite plan');
+        'projectedPageSetSha256', 'uncoveredFrozenPaperPages', 'uncoveredFrozenPaperPageSetSha256',
+        'paperPageCoverage', 'planSha256'], 'direct rewrite plan');
     if (value.contract !== CONTRACT || value.version !== VERSION || !validSha(value.catalogFileSha256)
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
         || !validSha(value.conferenceProjectionArtifactSha256) || !Array.isArray(value.queue)
         || !validSha(value.queueSha256) || !Array.isArray(value.projectedPages)
         || !Array.isArray(value.unprojectedCatalogEntries) || !validSha(value.unprojectedCatalogEntrySetSha256)
-        || !validSha(value.projectedPageSetSha256) || !validSha(value.planSha256)) fail('direct rewrite plan envelope is invalid');
+        || !validSha(value.projectedPageSetSha256) || !Array.isArray(value.uncoveredFrozenPaperPages)
+        || !validSha(value.uncoveredFrozenPaperPageSetSha256) || !plain(value.paperPageCoverage)
+        || !validSha(value.planSha256)) fail('direct rewrite plan envelope is invalid');
     const paperIds = new Set(); const pageKeys = new Set();
     const queue = value.queue.map((item, index) => {
         exact(item, ['paperId', 'runId', 'route', 'pageKeys', 'pages', 'projectionSha256'], `queue[${index}]`);
@@ -266,12 +316,18 @@ function normalizePlan(value) {
             if (!PAGE_KEY_RE.test(page.pageKey) || typeof page.pagePath !== 'string' || !page.pagePath
                 || !(page.primaryUrl === null || typeof page.primaryUrl === 'string') || typeof page.cohortDate !== 'string'
                 || !plain(page.scope) || typeof page.scope.type !== 'string' || typeof page.scope.key !== 'string'
-                || !validSha(page.pageContentSha256) || !['frozen-single-arxiv-identity-hint', 'retained-local-title-fingerprint'].includes(page.mapping)
+                || !validSha(page.pageContentSha256) || !['frozen-single-arxiv-identity-hint', 'retained-local-title-fingerprint',
+                    conferenceProjections.DAILY_ICML_MAPPING].includes(page.mapping)
                 || pageKeys.has(page.pageKey)) fail('direct rewrite projected page is malformed or duplicated');
             const historicalArxivLink = route.kind === 'arxiv-fresh-fetch'
                 ? normalizeHistoricalArxivLink(page.historicalArxivLink, route.arxivId)
                 : page.historicalArxivLink === null ? null : fail('conference projection cannot carry an arXiv link');
-            if ((route.kind === 'arxiv-fresh-fetch') !== (page.mapping === 'frozen-single-arxiv-identity-hint')) {
+            if ((route.kind === 'arxiv-fresh-fetch') !== (page.mapping === 'frozen-single-arxiv-identity-hint')
+                || page.mapping === conferenceProjections.DAILY_ICML_MAPPING
+                    && (route.kind !== 'conference-local-pdf' || page.scope.type !== 'daily'
+                        || !item.paperId.startsWith('conference:icml:2026:'))
+                || page.mapping === 'retained-local-title-fingerprint' && page.scope.type !== 'conference'
+                || page.mapping === 'frozen-single-arxiv-identity-hint' && page.scope.type !== 'daily') {
                 fail('direct rewrite route/page mapping kind drifted');
             }
             pageKeys.add(page.pageKey); return { ...clone(page), historicalArxivLink };
@@ -313,13 +369,36 @@ function normalizePlan(value) {
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     const expectedProjected = queue.flatMap(item => item.pages.map(page => ({ paperId: item.paperId,
         runId: item.runId, route: item.route.kind, ...page }))).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    const uncoveredPageKeys = new Set();
+    const uncoveredFrozenPaperPages = value.uncoveredFrozenPaperPages.map((page, index) => {
+        exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'scope', 'pageContentSha256',
+            'identityHintStatus', 'reason'], `uncoveredFrozenPaperPages[${index}]`);
+        if (!PAGE_KEY_RE.test(String(page.pageKey || '')) || pageKeys.has(page.pageKey) || uncoveredPageKeys.has(page.pageKey)
+            || typeof page.pagePath !== 'string' || !page.pagePath || !(page.primaryUrl === null || typeof page.primaryUrl === 'string')
+            || typeof page.cohortDate !== 'string' || !plain(page.scope) || typeof page.scope.type !== 'string'
+            || typeof page.scope.key !== 'string' || !validSha(page.pageContentSha256)
+            || !IDENTITY_HINT_STATUSES.has(page.identityHintStatus) || page.reason !== 'no-direct-source-route') {
+            fail('uncovered frozen paper page is malformed, duplicated, or already projected');
+        }
+        uncoveredPageKeys.add(page.pageKey); return clone(page);
+    }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    if (value.uncoveredFrozenPaperPages.some((page, index) => page.pageKey !== uncoveredFrozenPaperPages[index].pageKey)) {
+        fail('uncovered frozen paper pages are unordered');
+    }
+    const expectedCoverage = coverageSummary(projectedPages, uncoveredFrozenPaperPages);
     if (stableHash(queue) !== value.queueSha256 || stableHash(projectedPages) !== value.projectedPageSetSha256
-        || stableHash(projectedPages) !== stableHash(expectedProjected)) fail('direct rewrite plan queue/projection binding drifted');
+        || stableHash(projectedPages) !== stableHash(expectedProjected)
+        || stableHash(uncoveredFrozenPaperPages) !== value.uncoveredFrozenPaperPageSetSha256
+        || stableHash(value.paperPageCoverage) !== stableHash(expectedCoverage)) {
+        fail('direct rewrite plan queue/projection/coverage binding drifted');
+    }
     const body = { contract: CONTRACT, version: VERSION, catalogFileSha256: value.catalogFileSha256,
         inventory: clone(value.inventory), conferenceProjectionArtifactSha256: value.conferenceProjectionArtifactSha256,
         queue, queueSha256: value.queueSha256, projectedPages, unprojectedCatalogEntries,
         unprojectedCatalogEntrySetSha256: value.unprojectedCatalogEntrySetSha256,
-        projectedPageSetSha256: value.projectedPageSetSha256 };
+        projectedPageSetSha256: value.projectedPageSetSha256, uncoveredFrozenPaperPages,
+        uncoveredFrozenPaperPageSetSha256: value.uncoveredFrozenPaperPageSetSha256,
+        paperPageCoverage: clone(expectedCoverage) };
     if (stableHash(body) !== value.planSha256) fail('direct rewrite plan self-SHA drifted');
     return { ...body, planSha256: value.planSha256 };
 }
@@ -566,6 +645,11 @@ function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile }
     const catalog = conferenceProjections.readStableJson(catalogFile, 'local source catalog');
     const inventory = conferenceProjections.readStableJson(inventoryFile, 'historical inventory');
     const projection = conferenceProjections.readStableJson(conferenceProjectionFile, 'conference page projection');
+    const currentCatalog = normalizeCurrentCatalog(catalog.value);
+    if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
+        || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
+        fail('current scoped v3 catalog inventory file binding drifted');
+    }
     return buildDirectRewritePlan({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, conferencePageProjections: projection.value });
 }
@@ -714,35 +798,70 @@ function directStagingBinding({ plan, registry, paperId, analysisArtifact } = {}
     return { ...body, stagingInputSha256: stableHash(body) };
 }
 
-function bounded(work, concurrency) {
+async function bounded(work, concurrency, shouldPause = () => false, onProgress = null) {
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) fail('queue concurrency is invalid');
     let cursor = 0;
     const worker = async () => {
         const output = [];
         while (cursor < work.length) {
+            if (await shouldPause()) break;
             const value = work[cursor++];
             try {
                 const result = await value.run();
-                output.push({ paperId: value.paperId,
-                    status: result?.outcome === 'crosswalk-handoff' ? 'handoff' : 'ready', result });
+                const record = { paperId: value.paperId,
+                    status: result?.outcome === 'crosswalk-handoff' ? 'handoff' : 'ready', result };
+                output.push(record); if (onProgress) await onProgress(record);
             }
-            catch (error) { output.push({ paperId: value.paperId, status: 'failed', error: String(error.message).slice(0, 2000) }); }
+            catch (error) { const record = { paperId: value.paperId, status: 'failed', error: String(error.message).slice(0, 2000) };
+                output.push(record); if (onProgress) await onProgress(record); }
         }
         return output;
     };
-    return Promise.all(Array.from({ length: Math.min(concurrency, work.length) }, worker)).then(groups => groups.flat());
+    const groups = await Promise.all(Array.from({ length: Math.min(concurrency, work.length) }, worker));
+    return groups.flat();
 }
 
 async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
     arxivConcurrency = 3, conferenceConcurrency = 5, apply = false, freshArxivSourceRoot,
-    freshArxivFailureHandoffRoot, observedAt } = {}, overrides = {}) {
+    freshArxivFailureHandoffRoot, observedAt, paperIds = [], maxPapers = null, completedPaperIds = [],
+    shouldPause = () => false, onProgress = null } = {}, overrides = {}) {
     const normalized = normalizePlan(plan);
     if (!['all', 'arxiv', 'conference'].includes(queue) || !Number.isSafeInteger(arxivGeneration)
         || arxivGeneration < 1) fail('direct source queue/generation is invalid');
-    const queues = splitQueues(normalized);
-    const arxiv = queue === 'conference' ? [] : queues.arxiv;
-    const conferences = queue === 'arxiv' ? [] : queues.conference;
-    if (!apply) return { status: 'dry-run', arxiv: arxiv.map(item => ({ paperId: item.paperId, runId: item.runId,
+    const queues = splitQueues(normalized); let selected = [...(queue === 'conference' ? [] : queues.arxiv),
+        ...(queue === 'arxiv' ? [] : queues.conference)].sort((left, right) => left.paperId.localeCompare(right.paperId));
+    if (!Array.isArray(paperIds) || paperIds.some(id => typeof id !== 'string' || !id)
+        || new Set(paperIds).size !== paperIds.length) fail('source paper IDs must be unique');
+    const known = new Set(selected.map(item => item.paperId)); const unknown = paperIds.filter(id => !known.has(id));
+    if (unknown.length) fail(`source paper IDs are unknown or outside queue=${queue}: ${unknown.join(', ')}`);
+    if (paperIds.length) { const requested = new Set(paperIds); selected = selected.filter(item => requested.has(item.paperId)); }
+    if (!Array.isArray(completedPaperIds) || completedPaperIds.some(id => !known.has(id))
+        || new Set(completedPaperIds).size !== completedPaperIds.length) fail('completed source paper IDs are invalid');
+    if (!paperIds.length && completedPaperIds.length) {
+        const completed = new Set(completedPaperIds);
+        // Conference verification has no separate durable source bundle, so
+        // its locked status checkpoint advances bounded batches.  arXiv ready
+        // entries remain here until the exact four-file generation is replayed
+        // by the existing filter below.
+        selected = selected.filter(item => item.route.kind === 'arxiv-fresh-fetch' || !completed.has(item.paperId));
+    }
+    if (maxPapers !== null) {
+        if (!Number.isSafeInteger(maxPapers) || maxPapers < 1) fail('source maxPapers must be positive');
+        if (!paperIds.length && typeof freshArxivSourceRoot === 'string' && fs.existsSync(freshArxivSourceRoot)) {
+            const fresh = require('./fresh-arxiv-rewrite-source.js');
+            selected = selected.filter(item => {
+                if (item.route.kind !== 'arxiv-fresh-fetch'
+                    || !fresh.generationExists(freshArxivSourceRoot, item.route.arxivId, arxivGeneration)) return true;
+                fresh.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
+                    arxivId: item.route.arxivId, generation: arxivGeneration });
+                return false;
+            });
+        }
+        selected = selected.slice(0, maxPapers);
+    }
+    const arxiv = selected.filter(item => item.route.kind === 'arxiv-fresh-fetch');
+    const conferences = selected.filter(item => item.route.kind === 'conference-local-pdf');
+    if (!apply) return { status: 'dry-run', selectedCount: selected.length, selectedPaperIds: selected.map(item => item.paperId), arxiv: arxiv.map(item => ({ paperId: item.paperId, runId: item.runId,
         arxivId: item.route.arxivId, generation: arxivGeneration, sourceRoot: freshArxivSourceRoot || null })),
     conference: conferences.map(item => ({ paperId: item.paperId, runId: item.runId,
         localPdfSources: item.route.writerInputs.length, projectedPages: item.pageKeys.length })) };
@@ -787,15 +906,18 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
                     handoff: { status: handoff.status, handoffName: handoff.handoffName,
                         fileSha256: handoff.fileSha256, handoffSha256: handoff.handoff.handoffSha256 } };
             }
-        } })), arxivConcurrency),
+        } })), arxivConcurrency, shouldPause, onProgress),
         bounded(conferences.map(item => ({ paperId: item.paperId, run: async () => {
             await verifyConference(item);
             return { sourceCount: item.route.writerInputs.length,
                 sourceSetSha256: stableHash(item.route.writerInputs) };
-        } })), conferenceConcurrency)
+        } })), conferenceConcurrency, shouldPause, onProgress)
     ]);
-    return { status: arxivResults.some(item => item.status !== 'ready') || conferenceResults.some(item => item.status !== 'ready')
-        ? 'partial' : 'ready', arxiv: arxivResults.sort((left, right) => left.paperId.localeCompare(right.paperId)),
+    const processedCount = arxivResults.length + conferenceResults.length;
+    return { status: processedCount < selected.length && await shouldPause() ? 'paused'
+        : arxivResults.some(item => item.status !== 'ready') || conferenceResults.some(item => item.status !== 'ready') ? 'partial' : 'ready',
+        selectedCount: selected.length, processedCount, remainingCount: selected.length - processedCount,
+        selectedPaperIds: selected.map(item => item.paperId), arxiv: arxivResults.sort((left, right) => left.paperId.localeCompare(right.paperId)),
     conference: conferenceResults.sort((left, right) => left.paperId.localeCompare(right.paperId)) };
 }
 

@@ -23,7 +23,7 @@ function parseArgs(argv) {
     return { apply: mode === '--apply', catalogFile: path.resolve(values['--catalog']),
         inventoryFile: path.resolve(values['--inventory']),
         conferenceProjectionFile: path.resolve(values['--conference-projections']),
-        outputName: values['--output'] || 'direct-rewrite-plan-v2.json' };
+        outputName: values['--output'] || 'direct-rewrite-plan-v3.json' };
 }
 function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-direct-rewrite-plan.js');
@@ -37,6 +37,10 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     const result = { status: options.apply ? null : 'dry-run', arxivFreshFetch: queues.arxiv.length,
         conferenceLocalPdf: queues.conference.length, canonicalPapers: plan.queue.length,
         projectedPages: plan.projectedPages.length, unprojectedCatalogEntries: plan.unprojectedCatalogEntries.length,
+        frozenPaperPages: plan.paperPageCoverage.frozenPaperPages,
+        uncoveredFrozenPaperPages: plan.paperPageCoverage.uncoveredFrozenPaperPages,
+        paperPageCoverageComplete: plan.paperPageCoverage.coverageComplete,
+        uncoveredByIdentityHintStatus: plan.paperPageCoverage.uncoveredByIdentityHintStatus,
         planSha256: plan.planSha256 };
     if (!options.apply) return result;
     const report = api.writeUnprojectedCatalogReport({ root: files.historicalDirectRewriteUnprojectedReportDir, plan });

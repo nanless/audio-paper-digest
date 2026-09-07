@@ -24,7 +24,7 @@ function parseArgs(argv) {
         throw new Error(`Use ${USAGE}`);
     }
     return { apply: mode === '--apply', catalogFile: path.resolve(values['--catalog']),
-        inventoryFile: path.resolve(values['--inventory']), outputName: values['--output'] || 'conference-page-projections-v1.json' };
+        inventoryFile: path.resolve(values['--inventory']), outputName: values['--output'] || 'conference-page-projections-v2.json' };
 }
 function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-conference-page-projections.js');

@@ -97,20 +97,33 @@ npm run history:conference-local-sources -- --apply [--output conference-local-s
 npm run history:direct-inputs -- --apply --conference-manifest /abs/conference-local-sources-v1.json \
   --inventory /abs/all-history.json --blog-root /abs/audio-paper-digest-blog [--name scoped-historical-local-data-v3.json]
 npm run history:conference-projections -- --apply --catalog /abs/scoped-historical-local-data-v3.json \
-  --inventory /abs/all-history.json [--output conference-page-projections-v1.json]
+  --inventory /abs/all-history.json [--output conference-page-projections-v2.json]
 npm run history:direct-plan -- --apply --catalog /abs/scoped-historical-local-data-v3.json \
-  --inventory /abs/all-history.json --conference-projections /abs/conference-page-projections-v1.json \
-  [--output direct-rewrite-plan-v2.json]
-npm run history:direct-scheduler -- --apply --plan /abs/direct-rewrite-plan-v2.json \
-  [--queue all|arxiv|conference] [--generation N] [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
-npm run history:direct-run -- --apply --plan /abs/direct-rewrite-plan-v2.json \
-  [--queue all|arxiv|conference] [--generation N] [--concurrency 1-8]
-npm run history:direct-aggregate -- projection --apply --plan-file /abs/direct-rewrite-plan-v2.json \
-  --inventory-file /abs/all-history.json --output-name direct-aggregate-projection-v1.json
-npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-rewrite-plan-v2.json \
-  --registry-file /abs/direct-rewrite-registry.json --projection-file /abs/direct-aggregate-projection-v1.json \
+  --inventory /abs/all-history.json --conference-projections /abs/conference-page-projections-v2.json \
+  [--output direct-rewrite-plan-v3.json]
+npm run history:direct-scheduler -- --apply --plan /abs/direct-rewrite-plan-v3.json \
+  [--queue all|arxiv|conference] [--generation N] [--paper-ids ID[,ID...]] [--max-papers N] \
+  [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
+npm run history:direct-run -- --apply --plan /abs/direct-rewrite-plan-v3.json \
+  [--queue all|arxiv|conference] [--generation N] [--paper-ids ID[,ID...]] \
+  [--max-papers N] [--concurrency 1-8]
+npm run history:status -- --plan /abs/direct-rewrite-plan-v3.json [--generation N] [--watch-seconds N]
+npm run history:pause -- --plan /abs/direct-rewrite-plan-v3.json --phase source|analysis [--generation N]
+npm run history:resume -- --plan /abs/direct-rewrite-plan-v3.json --phase source|analysis [--generation N]
+npm run history:direct-aggregate -- projection --apply --plan-file /abs/direct-rewrite-plan-v3.json \
+  --inventory-file /abs/all-history.json --output-name direct-aggregate-projection-v2.json
+npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-rewrite-plan-v3.json \
+  --registry-file /abs/direct-rewrite-registry.json --projection-file /abs/direct-aggregate-projection-v2.json \
   (--daily YYYY-MM-DD|--conference conference-key)
 ```
+
+aggregate projection v2 会把 inventory 中的会议 task 页作为独立 coverage report 保存并自哈希；在 task renderer
+实现前，它们保持 `pending`、`unsupported`、`publicationReady=false`。task 页不参与 daily/conference 汇总成员或
+排名，后续历史 publication 必须消费该阻断状态，不能把汇总 staging 完成解释为 task 页已重写。
+
+长任务通过 `history:pause --phase source|analysis` 请求在活动来源/论文完成后安全暂停；看到相应 operation lock
+已释放后才运行同 phase 的 `history:resume`。`history:status` 是只读快照，`--watch-seconds` 持续输出 NDJSON；最终 `completion.blockers`
+会继续列出未覆盖论文页、失败/未 staged 论文、缺失汇总、会议 task 页和尚未接通的历史 publication。
 
 `history:crosswalk` 只保留 legacy pending decision state 的只读/审计用途。`history:arxiv-batch` 必须明确传入
 `--handoffs NAME.json[,NAME.json...]`，并且只接受 direct scheduler/run 写入的 named immutable fresh-arXiv failure

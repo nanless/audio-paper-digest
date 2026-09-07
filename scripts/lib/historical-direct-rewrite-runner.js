@@ -102,7 +102,61 @@ function registryName(plan, arxivGeneration = 1) {
     return `${plan.planSha256}.arxiv-generation-${String(checkedArxivGeneration(arxivGeneration)).padStart(6, '0')}.json`;
 }
 function registryPath(registryRoot, plan, arxivGeneration = 1) {
-    return path.join(safeDirectory(registryRoot, true, 'registry root'), registryName(plan, arxivGeneration));
+    if (typeof registryRoot !== 'string' || !path.isAbsolute(registryRoot)) fail('registry root must be an absolute path');
+    return path.join(path.resolve(registryRoot), registryName(plan, arxivGeneration));
+}
+function defaultPauseFilePath(registryRoot, plan, arxivGeneration = 1) {
+    return `${registryPath(registryRoot, plan, arxivGeneration)}.pause`;
+}
+function operationLockTarget(registryRoot, plan, arxivGeneration = 1) {
+    return `${registryPath(registryRoot, plan, arxivGeneration)}.direct-run-operation`;
+}
+function pauseFileRequested(filename, plan, generation) {
+    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail('pause file must be an absolute path');
+    const entry = fs.lstatSync(filename, { throwIfNoEntry: false });
+    if (!entry) return false;
+    if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) fail('pause file must be a single-link regular file');
+    const loaded = require('./historical-conference-page-projections.js').readStableJson(filename, 'direct rewrite pause request');
+    const value = loaded.value; const expectedKeys = ['contract', 'version', 'planSha256', 'generation', 'requestedAt', 'requestSha256'];
+    if (!value || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')
+        || value.contract !== 'historical-direct-rewrite-pause-request-v1' || value.version !== 1
+        || value.planSha256 !== plan.planSha256 || value.generation !== generation
+        || new Date(value.requestedAt).toISOString() !== value.requestedAt) fail('pause request is not bound to this plan/generation');
+    const body = { ...value }; delete body.requestSha256;
+    if (value.requestSha256 !== stableHash(body)) fail('pause request SHA drifted');
+    return true;
+}
+function selectDirectItems(plan, options = {}, registry = null) {
+    const normalized = planApi.normalizePlan(plan); const queue = options.queue || 'all';
+    if (!['all', 'arxiv', 'conference'].includes(queue)) fail('queue is invalid');
+    const requestedPaperIds = options.paperIds ?? [];
+    if (!Array.isArray(requestedPaperIds) || requestedPaperIds.some(id => typeof id !== 'string' || !id)
+        || new Set(requestedPaperIds).size !== requestedPaperIds.length) fail('paperIds must be a unique non-empty string array');
+    if (options.maxPapers !== undefined && options.maxPapers !== null
+        && options.limit !== undefined && options.limit !== null) fail('maxPapers and limit cannot both be supplied');
+    const maxPapers = options.maxPapers ?? options.limit ?? null;
+    if (maxPapers !== null && (!Number.isSafeInteger(maxPapers) || maxPapers < 1 || maxPapers > 999999999)) {
+        fail('maxPapers must be a positive safe integer');
+    }
+    const available = normalized.queue.filter(item => queue === 'all'
+        || (queue === 'arxiv' ? item.route.kind === 'arxiv-fresh-fetch' : item.route.kind === 'conference-local-pdf'));
+    const availableIds = new Set(available.map(item => item.paperId));
+    const unknownPaperIds = requestedPaperIds.filter(id => !availableIds.has(id));
+    if (unknownPaperIds.length) fail(`paper IDs are unknown or outside queue=${queue}: ${unknownPaperIds.join(', ')}`);
+    const requested = new Set(requestedPaperIds);
+    const scoped = requested.size ? available.filter(item => requested.has(item.paperId)) : available;
+    const completed = registry === null ? new Set() : new Set(normalizeRegistry(registry, normalized).entries
+        .filter(entry => entry.status === 'staged').map(entry => entry.paperId));
+    // A bounded implicit batch must advance on resume instead of repeatedly
+    // selecting the same already-staged prefix. Explicit IDs remain replayable
+    // so an operator can deliberately re-verify their sealed artifacts.
+    const candidates = maxPapers !== null && requested.size === 0
+        ? scoped.filter(item => !completed.has(item.paperId)) : scoped;
+    const items = maxPapers === null ? candidates : candidates.slice(0, maxPapers);
+    return { items, selection: { queue, requestedPaperIds: requestedPaperIds.slice().sort(), maxPapers,
+        availableCount: available.length, scopedCount: scoped.length,
+        skippedCompletedCount: scoped.length - candidates.length, selectedCount: items.length,
+        selectedPaperIds: items.map(item => item.paperId) } };
 }
 function initialRegistry(plan, now) {
     const entries = plan.queue.map(item => ({ paperId: item.paperId, runId: item.runId, route: item.route.kind,
@@ -131,7 +185,7 @@ function normalizeRegistry(value, plan) {
     return { ...clone(value), entries };
 }
 function loadOrCreateRegistry({ registryRoot, plan, now, arxivGeneration = 1 }) {
-    const filename = registryPath(registryRoot, plan, arxivGeneration);
+    const filename = path.join(safeDirectory(registryRoot, true, 'registry root'), registryName(plan, arxivGeneration));
     if (!fs.existsSync(filename)) {
         const registry = initialRegistry(plan, now); writeAtomic(filename, registry); return { filename, registry, created: true };
     }
@@ -339,10 +393,24 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     }
 }
 
-function bounded(items, concurrency, callback) {
+async function bounded(items, concurrency, callback, shouldPause = () => false) {
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) fail('concurrency must be between 1 and 8');
-    let cursor = 0; const worker = async () => { const values = []; while (cursor < items.length) values.push(await callback(items[cursor++])); return values; };
-    return Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker)).then(groups => groups.flat());
+    let cursor = 0; let paused = false;
+    const worker = async () => {
+        const values = [];
+        while (cursor < items.length) {
+            if (await shouldPause()) { paused = true; break; }
+            // Another worker may have advanced the shared cursor while this
+            // worker awaited the pause check. Re-check before claiming work so
+            // a short final batch never dispatches an undefined item.
+            if (cursor >= items.length) break;
+            const item = items[cursor++];
+            values.push(await callback(item));
+        }
+        return values;
+    };
+    const groups = await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+    return { values: groups.flat(), paused };
 }
 
 function executionDirectory(root, item, sourceDescriptor) {
@@ -479,29 +547,19 @@ async function sealedFailureHandoff({ root, plan, item, generation, error, obser
         handoffSha256: stored.handoff.handoffSha256 };
 }
 
-async function runDirectRewrite(options = {}, dependencies = {}) {
-    const plan = planApi.normalizePlan(options.plan);
-    const apply = options.apply === true; const queue = options.queue || 'all';
-    if (!['all', 'arxiv', 'conference'].includes(queue)) fail('queue is invalid');
+async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
+    lockTarget }, dependencies = {}) {
     const arxivGeneration = checkedArxivGeneration(options.arxivGeneration || 1);
     const now = (dependencies.now || (() => new Date().toISOString()))();
-    const selected = plan.queue.filter(item => queue === 'all' || (queue === 'arxiv' ? item.route.kind === 'arxiv-fresh-fetch' : item.route.kind === 'conference-local-pdf'));
-    if (!apply) return { status: 'dry-run', paperCount: selected.length, paperIds: selected.map(item => item.paperId) };
-    for (const key of ['registryRoot', 'executionRoot', 'stagingRoot', 'freshArxivSourceRoot']) {
-        if (typeof options[key] !== 'string' || !path.isAbsolute(options[key])) fail(`${key} is required`);
-    }
-    if (selected.some(item => item.route.kind === 'arxiv-fresh-fetch')
-        && (typeof options.freshArxivFailureHandoffRoot !== 'string'
-            || !path.isAbsolute(options.freshArxivFailureHandoffRoot))) {
-        fail('freshArxivFailureHandoffRoot is required for arXiv direct rewrite');
-    }
-    let { filename: registryFile, registry } = loadOrCreateRegistry({ registryRoot: options.registryRoot, plan, now, arxivGeneration });
+    let { filename, registry } = loadOrCreateRegistry({ registryRoot: options.registryRoot, plan, now, arxivGeneration });
+    if (filename !== registryFile) fail('registry path changed after the direct-run operation lock was acquired');
+    const { items: selected, selection } = selectDirectItems(plan, options, registry);
     const persist = () => { writeAtomic(registryFile, registry); };
     const capture = dependencies.captureFreshArxivRewriteSource || freshArxiv.captureFreshArxivRewriteSource;
     const analyze = dependencies.analyze || defaultAnalyze;
     const writeFailureHandoff = dependencies.writeArxivFreshFailureHandoff || planApi.writeArxivFreshFailureHandoff;
     if (typeof writeFailureHandoff !== 'function') fail('arXiv failure handoff writer is required');
-    const results = await bounded(selected, options.concurrency || 3, async item => {
+    const runOne = async item => {
         let active = registry.entries.find(entry => entry.paperId === item.paperId);
         if (active.status === 'staged') {
             try {
@@ -608,15 +666,82 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
             }
             return { paperId: item.paperId, status: 'failed', error: String(error.message) };
         }
-    });
+    };
+    let completedThisRun = 0;
+    const pauseRequested = async () => Boolean(await dependencies.shouldPause?.()) || pauseFileRequested(pauseFile, plan, arxivGeneration);
+    const boundedResult = await bounded(selected, options.concurrency || 3, async item => {
+        const result = await runOne(item); completedThisRun += 1;
+        const current = normalizeRegistry(registry, plan); const counts = registryCounts(current);
+        const event = { contract: 'historical-direct-rewrite-progress-v1', version: 1,
+            planSha256: plan.planSha256, arxivGeneration, queue: selection.queue,
+            selectedCount: selected.length, completedThisRun, remainingSelected: selected.length - completedThisRun,
+            paperId: item.paperId, outcome: result.status, registrySha256: current.registrySha256,
+            registryCounts: counts, pauseRequested: await pauseRequested() };
+        if (dependencies.onProgress) await dependencies.onProgress(event);
+        // A progress consumer may create the persistent pause marker.  Refresh
+        // the same event object after the callback so in-process monitors and
+        // tests observe the committed control state, while the CLI emission
+        // still truthfully describes the state at emission time.
+        event.pauseRequested = await pauseRequested();
+        return result;
+    }, pauseRequested);
+    const results = boundedResult.values;
     const final = normalizeRegistry(registry, plan);
-    return { status: results.some(item => ['failed', 'handoff'].includes(item.status)) ? 'partial' : 'complete', registryFile,
+    const paused = boundedResult.paused || results.length < selected.length && await pauseRequested();
+    const counts = registryCounts(final);
+    return { status: paused ? 'paused' : results.some(item => ['failed', 'handoff'].includes(item.status)) ? 'partial' : 'complete',
+        planSha256: plan.planSha256, arxivGeneration, selection, progress: { selected: selected.length, processed: results.length,
+            remaining: selected.length - results.length }, pauseFile, operationLockTarget: lockTarget,
+        operationLockPath: `${lockTarget}.lock`, registryFile,
         registrySha256: final.registrySha256, staged: final.entries.filter(item => item.status === 'staged').length,
-        failed: final.entries.filter(item => item.status === 'failed').length, results: results.sort((a, b) => a.paperId.localeCompare(b.paperId)) };
+        failed: final.entries.filter(item => item.status === 'failed').length, registryCounts: counts,
+        results: results.sort((a, b) => a.paperId.localeCompare(b.paperId)) };
+}
+
+function registryCounts(registry) {
+    const counts = Object.fromEntries([...STATES].sort().map(status => [status, 0]));
+    for (const entry of registry.entries) counts[entry.status] += 1;
+    return counts;
+}
+
+async function runDirectRewrite(options = {}, dependencies = {}) {
+    const plan = planApi.normalizePlan(options.plan);
+    const arxivGeneration = checkedArxivGeneration(options.arxivGeneration || 1);
+    const hasRegistryRoot = typeof options.registryRoot === 'string' && path.isAbsolute(options.registryRoot);
+    const registryFile = hasRegistryRoot ? registryPath(options.registryRoot, plan, arxivGeneration) : null;
+    let existingRegistry = null;
+    if (options.apply !== true && registryFile && fs.existsSync(registryFile)) {
+        existingRegistry = normalizeRegistry(JSON.parse(readRegular(registryFile).bytes.toString('utf8')), plan);
+    }
+    const { items: selected, selection } = selectDirectItems(plan, options, existingRegistry);
+    if (options.pauseFile !== undefined && options.pauseFile !== null
+        && (typeof options.pauseFile !== 'string' || !path.isAbsolute(options.pauseFile))) fail('pauseFile must be absolute');
+    const pauseFile = options.pauseFile || (hasRegistryRoot
+        ? defaultPauseFilePath(options.registryRoot, plan, arxivGeneration) : null);
+    const lockTarget = hasRegistryRoot ? operationLockTarget(options.registryRoot, plan, arxivGeneration) : null;
+    if (options.apply !== true) return { status: 'dry-run', planSha256: plan.planSha256, arxivGeneration,
+        paperCount: selected.length, paperIds: selected.map(item => item.paperId), selection, pauseFile, operationLockTarget: lockTarget,
+        operationLockPath: lockTarget === null ? null : `${lockTarget}.lock` };
+    for (const key of ['registryRoot', 'executionRoot', 'stagingRoot', 'freshArxivSourceRoot']) {
+        if (typeof options[key] !== 'string' || !path.isAbsolute(options[key])) fail(`${key} is required`);
+    }
+    safeDirectory(options.registryRoot, true, 'registry root');
+    if (typeof pauseFile !== 'string' || !path.isAbsolute(pauseFile)) fail('pauseFile is required');
+    if (selected.some(item => item.route.kind === 'arxiv-fresh-fetch')
+        && (typeof options.freshArxivFailureHandoffRoot !== 'string'
+            || !path.isAbsolute(options.freshArxivFailureHandoffRoot))) {
+        fail('freshArxivFailureHandoffRoot is required for arXiv direct rewrite');
+    }
+    const engine = require('../analysis-engine.js');
+    const withOperationLock = dependencies.withOperationLock
+        || ((target, callback, lockOptions) => engine.withFileLock(target, callback, lockOptions));
+    return withOperationLock(lockTarget, () => runDirectRewriteLocked({ options, plan,
+        registryFile, pauseFile, lockTarget }, dependencies), dependencies.lockOptions || {});
 }
 
 module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, HistoricalDirectRewriteRunnerError, stableHash,
-    initialRegistry, normalizeRegistry, loadOrCreateRegistry, transition, directPaper, fallbackArxivDetails,
+    STATES, registryName, registryPath, defaultPauseFilePath, operationLockTarget, pauseFileRequested, selectDirectItems,
+    initialRegistry, normalizeRegistry, loadOrCreateRegistry, transition, registryCounts, directPaper, fallbackArxivDetails,
     extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
     withEphemeralConferenceFigures, renderConferencePdfPages,
     directProvenanceFor, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,

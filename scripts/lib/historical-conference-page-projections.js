@@ -2,21 +2,25 @@
 
 // Build the page side of the retained-local conference route.  This module
 // deliberately consumes only frozen inventory metadata, a local collector
-// record's title, and a frontmatter title fingerprint.  It never exposes a
-// historical page body or a retained generated analysis as a rewrite input.
+// record's title, and a frontmatter title fingerprint.  A narrowly-scoped
+// daily ICML recovery also inspects the frozen bytes for one official poster
+// URL as identity evidence. It never exposes a historical page body or a
+// retained generated analysis as a rewrite input.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const conference = require('./historical-conference-crawl-authority.js');
 
-const CONTRACT = 'historical-conference-page-projections-v1';
+const CONTRACT = 'historical-conference-page-projections-v2';
 const VERSION = 2;
 const CATALOG_CONTRACT = 'merged-good-historical-local-data-v3';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const MAX_JSON_BYTES = 128 * 1024 * 1024;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
+const DAILY_ICML_BINDING_CONTRACT = 'historical-daily-icml-page-binding-v1';
+const DAILY_ICML_MAPPING = 'frozen-daily-icml-official-link-and-title-fingerprint';
 
 class HistoricalConferencePageProjectionError extends Error {
     constructor(message) {
@@ -112,23 +116,24 @@ function readStableJson(filename, label, maxBytes = MAX_JSON_BYTES) {
     return { ...loaded, value };
 }
 
+function normalizeCurrentCatalog(value) {
+    // Keep the producer as the single schema authority.  In particular, an
+    // older v3 collector artifact may share the contract/version strings while
+    // lacking scopeBinding, carrying two input manifests, or retaining local
+    // arXiv writer sources.  Projection must reject those bytes rather than
+    // accepting a weaker look-alike contract.
+    let normalized;
+    try {
+        normalized = require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
+    } catch (error) {
+        fail(`current scoped v3 local source catalog is invalid: ${error.message}`);
+    }
+    return normalized;
+}
+
 function normalizeCatalog(value) {
-    if (!plain(value) || value.contract !== CATALOG_CONTRACT || value.version !== 3
-        || !Array.isArray(value.entries)) fail('v3 local source catalog contract is invalid');
-    const seen = new Set();
-    const entries = value.entries.map((entry, index) => {
-        exact(entry, ['paperId', 'sources'], `catalog.entries[${index}]`);
-        const isConference = typeof entry.paperId === 'string' && entry.paperId.startsWith('conference:');
-        const isArxiv = typeof entry.paperId === 'string' && entry.paperId.startsWith('arxiv:');
-        if ((!isConference && !isArxiv) || !Array.isArray(entry.sources)
-            || (isConference && !entry.sources.length) || seen.has(entry.paperId)) {
-            fail('catalog entries must have a unique supported identity and source list');
-        }
-        seen.add(entry.paperId);
-        return clone(entry);
-    }).filter(entry => entry.paperId.startsWith('conference:'))
-        .sort((left, right) => left.paperId.localeCompare(right.paperId));
-    return entries;
+    return normalizeCurrentCatalog(value).entries.filter(entry => entry.paperId.startsWith('conference:'))
+        .map(clone).sort((left, right) => left.paperId.localeCompare(right.paperId));
 }
 
 function normalizeInventory(value) {
@@ -140,12 +145,14 @@ function normalizeInventory(value) {
     const pages = value.pages.filter(page => page?.kind === 'paper').map((page, index) => {
         if (!PAGE_KEY_RE.test(String(page.pageId || '')) || typeof page.path !== 'string' || !page.path
             || !validSha(page.contentSha256) || !plain(page.scope) || typeof page.scope.type !== 'string'
-            || typeof page.scope.key !== 'string' || pageKeys.has(page.pageId)) {
+            || typeof page.scope.key !== 'string' || !plain(page.identityHints)
+            || !Array.isArray(page.identityHints.candidates) || pageKeys.has(page.pageId)) {
             fail(`inventory paper page ${index} is malformed`);
         }
         pageKeys.add(page.pageId);
         return { pageKey: page.pageId, pagePath: page.path, primaryUrl: typeof page.primaryUrl === 'string' ? page.primaryUrl : null,
-            pageContentSha256: page.contentSha256, scope: clone(page.scope), cohortDate: String(page.cohortDate || '') };
+            pageContentSha256: page.contentSha256, scope: clone(page.scope), cohortDate: String(page.cohortDate || ''),
+            identityHints: clone(page.identityHints) };
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     return { pageSetSha256: value.pageSetSha256, ledgerSha256: value.ledgerSha256, pages };
 }
@@ -183,7 +190,9 @@ function metadataTitle(source, paperId, cache) {
         || typeof records[metadata.recordIndex].title !== 'string') {
         fail(`${paperId} conference metadata record has no source title`);
     }
-    return titleProjectionFingerprintSha256s(records[metadata.recordIndex].title, 'conference metadata title');
+    const title = records[metadata.recordIndex].title;
+    return { exact: conference.titleFingerprint(title, 'conference metadata title'),
+        projections: titleProjectionFingerprintSha256s(title, 'conference metadata title') };
 }
 
 function selectConferenceSources(entry, cache) {
@@ -192,7 +201,8 @@ function selectConferenceSources(entry, cache) {
         const fingerprints = metadataTitle(source, entry.paperId, cache);
         if (!fingerprints) continue;
         selected.push({ sourceSet: String(source.sourceSet || ''), provenance: String(source.provenance || ''),
-            metadata: clone(source.metadata), pdf: clone(source.pdf), titleProjectionFingerprintSha256s: fingerprints });
+            metadata: clone(source.metadata), pdf: clone(source.pdf), metadataTitleFingerprintSha256: fingerprints.exact,
+            titleProjectionFingerprintSha256s: fingerprints.projections });
     }
     if (!selected.length) fail(`${entry.paperId} has no usable retained local conference PDF source`);
     return selected.sort((left, right) => stableHash(left).localeCompare(stableHash(right)));
@@ -204,10 +214,60 @@ function conferenceScopeFor(paperId) {
     return { type: 'conference', key: `${match[1]}-${match[2]}` };
 }
 
+function dailyIcmlOfficialLinkBinding({ blogRoot, page, titleBinding } = {}) {
+    if (!page || page.scope?.type !== 'daily' || page.identityHints?.status !== 'none'
+        || !titleBinding || titleBinding.pageKey !== page.pageKey
+        || titleBinding.pageContentSha256 !== page.pageContentSha256) return null;
+    const root = safeDirectory(blogRoot, 'blogRoot'); const filename = path.resolve(root, page.pagePath);
+    if (!filename.startsWith(`${root}${path.sep}`)) fail('daily ICML page escapes blogRoot');
+    const loaded = readStableFile(filename, 'daily ICML historical page', 8 * 1024 * 1024);
+    if (loaded.fileSha256 !== page.pageContentSha256) fail('daily ICML page bytes differ from frozen inventory');
+    let text;
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes); }
+    catch { fail('daily ICML historical page is not strict UTF-8'); }
+    const frontmatter = text.match(/^---\n[\s\S]*?\n---\n/);
+    if (!frontmatter) fail('daily ICML historical page lacks strict frontmatter');
+    const body = text.slice(frontmatter[0].length);
+    const candidates = new Set();
+    for (const match of body.matchAll(/https:\/\/icml\.cc\/virtual\/2026\/poster\/[^\s<>"'\])]+/gu)) {
+        let url;
+        try { url = new URL(match[0]); } catch { continue; }
+        const poster = url.pathname.match(/^\/virtual\/2026\/poster\/([1-9]\d*)\/?$/u);
+        if (url.protocol !== 'https:' || url.hostname !== 'icml.cc' || url.port || url.username || url.password
+            || url.search || url.hash || !poster) continue;
+        candidates.add(`https://icml.cc/virtual/2026/poster/${poster[1]}`);
+    }
+    if (candidates.size !== 1) return null;
+    const officialUrl = [...candidates][0]; const posterId = officialUrl.slice(officialUrl.lastIndexOf('/') + 1);
+    const bodyRecord = { contract: DAILY_ICML_BINDING_CONTRACT, version: 1, pageKey: page.pageKey,
+        pageContentSha256: page.pageContentSha256, officialUrl, posterId,
+        titleFingerprintSha256: titleBinding.titleFingerprintSha256 };
+    return { ...bodyRecord, bindingSha256: stableHash(bodyRecord) };
+}
+
+function normalizeDailyIcmlBinding(value, page) {
+    exact(value, ['contract', 'version', 'pageKey', 'pageContentSha256', 'officialUrl', 'posterId',
+        'titleFingerprintSha256', 'bindingSha256'], 'daily ICML page binding');
+    const body = { ...clone(value) }; delete body.bindingSha256;
+    if (value.contract !== DAILY_ICML_BINDING_CONTRACT || value.version !== 1 || value.pageKey !== page.pageKey
+        || value.pageContentSha256 !== page.pageContentSha256 || !/^[1-9]\d*$/.test(String(value.posterId || ''))
+        || value.officialUrl !== `https://icml.cc/virtual/2026/poster/${value.posterId}`
+        || !validSha(value.titleFingerprintSha256) || !validSha(value.bindingSha256)
+        || stableHash(body) !== value.bindingSha256) fail('daily ICML page binding is invalid');
+    return clone(value);
+}
+
 function buildConferencePageProjections({ catalog, catalogFileSha256, inventory, blogRoot } = {}) {
     if (!validSha(catalogFileSha256)) fail('catalog file SHA is required');
-    const entries = normalizeCatalog(catalog); const history = normalizeInventory(inventory);
+    const currentCatalog = normalizeCurrentCatalog(catalog); const entries = currentCatalog.entries
+        .filter(entry => entry.paperId.startsWith('conference:')).map(clone);
+    const history = normalizeInventory(inventory);
+    if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
+        || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
+        fail('current scoped v3 catalog belongs to a different frozen inventory');
+    }
     const cache = new Map(); const candidatesByScopeAndTitle = new Map();
+    const icmlCandidatesByTitle = new Map();
     const sourceByPaperId = new Map();
     for (const entry of entries) {
         const sources = selectConferenceSources(entry, cache); sourceByPaperId.set(entry.paperId, sources);
@@ -217,6 +277,11 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
                 const key = `${scope.key}\0${fingerprint}`;
                 const candidates = candidatesByScopeAndTitle.get(key) || new Set();
                 candidates.add(entry.paperId); candidatesByScopeAndTitle.set(key, candidates);
+            }
+            if (scope.key === 'icml-2026') {
+                const fingerprint = source.metadataTitleFingerprintSha256;
+                const icmlCandidates = icmlCandidatesByTitle.get(fingerprint) || new Set();
+                icmlCandidates.add(entry.paperId); icmlCandidatesByTitle.set(fingerprint, icmlCandidates);
             }
         }
     }
@@ -230,7 +295,19 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
             scope: page.scope, reason: 'no-retained-local-title-match' }); continue; }
         if (candidates.size !== 1) fail(`${page.pageKey} frontmatter title maps to multiple retained conference identities`);
         const paperId = [...candidates][0]; const values = pagesByPaperId.get(paperId) || [];
-        values.push({ ...page, titleFingerprintSha256: binding.titleFingerprintSha256 }); pagesByPaperId.set(paperId, values);
+        values.push({ ...page, titleFingerprintSha256: binding.titleFingerprintSha256,
+            mapping: 'retained-local-title-fingerprint', dailyIcmlBinding: null }); pagesByPaperId.set(paperId, values);
+    }
+    for (const page of history.pages.filter(item => item.scope.type === 'daily' && item.identityHints?.status === 'none')) {
+        const titleBinding = conference.pageTitleBinding({ blogRoot, pageKey: page.pageKey,
+            pagePath: page.pagePath, pageContentSha256: page.pageContentSha256 });
+        const linkBinding = dailyIcmlOfficialLinkBinding({ blogRoot, page, titleBinding });
+        if (!linkBinding) continue;
+        const candidates = icmlCandidatesByTitle.get(titleBinding.titleFingerprintSha256) || new Set();
+        if (candidates.size !== 1) continue;
+        const paperId = [...candidates][0]; const values = pagesByPaperId.get(paperId) || [];
+        values.push({ ...page, titleFingerprintSha256: titleBinding.titleFingerprintSha256,
+            mapping: DAILY_ICML_MAPPING, dailyIcmlBinding: linkBinding }); pagesByPaperId.set(paperId, values);
     }
     const projections = entries.map(entry => {
         const pages = (pagesByPaperId.get(entry.paperId) || []).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
@@ -238,7 +315,8 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
         return { paperId: entry.paperId, sourceSetSha256: stableHash(sourceByPaperId.get(entry.paperId)),
             pageKeys: pages.map(page => page.pageKey), pages: pages.map(page => ({ pageKey: page.pageKey,
                 pagePath: page.pagePath, primaryUrl: page.primaryUrl, pageContentSha256: page.pageContentSha256,
-                cohortDate: page.cohortDate, scope: page.scope, titleFingerprintSha256: page.titleFingerprintSha256 })) };
+                cohortDate: page.cohortDate, scope: page.scope, titleFingerprintSha256: page.titleFingerprintSha256,
+                mapping: page.mapping, dailyIcmlBinding: page.dailyIcmlBinding })) };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     const body = { contract: CONTRACT, version: VERSION, catalogFileSha256,
         inventory: { ledgerSha256: history.ledgerSha256, pageSetSha256: history.pageSetSha256 },
@@ -261,12 +339,24 @@ function normalizeProjectionArtifact(value) {
             || !validSha(item.sourceSetSha256) || !Array.isArray(item.pageKeys) || !item.pageKeys.length
             || !Array.isArray(item.pages) || item.pageKeys.length !== item.pages.length) fail('conference projection is malformed');
         const pages = item.pages.map((page, pageIndex) => {
-            exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'pageContentSha256', 'cohortDate', 'scope', 'titleFingerprintSha256'],
+            exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'pageContentSha256', 'cohortDate', 'scope',
+                'titleFingerprintSha256', 'mapping', 'dailyIcmlBinding'],
                 `projections[${index}].pages[${pageIndex}]`);
             if (!PAGE_KEY_RE.test(page.pageKey) || typeof page.pagePath !== 'string' || !page.pagePath
                 || !(page.primaryUrl === null || typeof page.primaryUrl === 'string') || !validSha(page.pageContentSha256) || typeof page.cohortDate !== 'string' || !plain(page.scope)
                 || typeof page.scope.type !== 'string' || typeof page.scope.key !== 'string'
-                || !validSha(page.titleFingerprintSha256) || seenPages.has(page.pageKey)) fail('conference projected page is malformed or duplicated');
+                || !validSha(page.titleFingerprintSha256) || seenPages.has(page.pageKey)
+                || !['retained-local-title-fingerprint', DAILY_ICML_MAPPING].includes(page.mapping)) {
+                fail('conference projected page is malformed or duplicated');
+            }
+            if (page.mapping === DAILY_ICML_MAPPING) {
+                if (page.scope.type !== 'daily' || !String(item.paperId).startsWith('conference:icml:2026:')
+                    || normalizeDailyIcmlBinding(page.dailyIcmlBinding, page).titleFingerprintSha256 !== page.titleFingerprintSha256) {
+                    fail('daily ICML projection evidence is invalid');
+                }
+            } else if (page.scope.type !== 'conference' || page.dailyIcmlBinding !== null) {
+                fail('conference title projection evidence is invalid');
+            }
             seenPages.add(page.pageKey); return clone(page);
         }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
         if (item.pageKeys.join('\0') !== pages.map(page => page.pageKey).join('\0')) fail('conference projection pageKeys drifted');
@@ -315,11 +405,18 @@ function writeProjectionArtifact({ root, outputName, artifact } = {}) {
 function buildFromFiles({ catalogFile, inventoryFile, blogRoot } = {}) {
     const catalog = readStableJson(catalogFile, 'local source catalog');
     const inventory = readStableJson(inventoryFile, 'historical inventory');
+    const currentCatalog = normalizeCurrentCatalog(catalog.value);
+    if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
+        || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
+        fail('current scoped v3 catalog inventory file binding drifted');
+    }
     return buildConferencePageProjections({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, blogRoot });
 }
 
 module.exports = { CONTRACT, VERSION, CATALOG_CONTRACT, SAFE_NAME_RE, HistoricalConferencePageProjectionError,
+    DAILY_ICML_BINDING_CONTRACT, DAILY_ICML_MAPPING,
     stableHash, prettyBytes, safeDirectory, readStableFile, readStableJson, normalizeCatalog, normalizeInventory,
-    titleProjectionFingerprintSha256s, selectConferenceSources, buildConferencePageProjections, normalizeProjectionArtifact,
+    titleProjectionFingerprintSha256s, selectConferenceSources, dailyIcmlOfficialLinkBinding,
+    buildConferencePageProjections, normalizeProjectionArtifact,
     writeProjectionArtifact, buildFromFiles };

@@ -36,9 +36,8 @@ arXiv + HuggingFace
 
 ## 全历史重写
 
-全历史工作只在 `audio-paper-digest-rewrite-all` 工作区执行，采用 **direct-local-first** 路线。冻结历史页
-只提供页面范围、已有 arXiv 链接和投影关系；旧博客正文、旧分析、旧 Reader、本地 arXiv TXT/PDF/图片都不
-进入新的写作输入。
+全历史工作只在 `audio-paper-digest-rewrite-all` 工作区执行，采用 **direct-local-first**：arXiv 每个
+generation 重取官方 TXT/PDF，会议重放已绑定 SHA 的本地 metadata/PDF；旧博客正文和旧分析不进入写作输入。
 
 ```text
 本地会议 metadata/PDF ─┐
@@ -47,34 +46,13 @@ arXiv + HuggingFace
                                                                └→ direct-aggregate
 ```
 
-- arXiv route 在每个新的 generation 重新取得官方文本和 PDF，原子封存
-  `data/runtime/fetched-arxiv-sources/<arxivId>/generation-000001/`（generation 递增）下的 `source.txt`、`source.pdf`、runtime
-  metadata 和 manifest；图片只在该次调用的 OS 临时目录存在，任务结束后清理。
-- 会议 route 重放 local-source manifest 已绑定的本地 metadata/PDF SHA，以本地会议 PDF 作为全文和图片来源。
-- 同一 canonical paper 只重写一次，再投影至所有冻结历史页、每日汇总或会议汇总。
-- crosswalk 是严格的 arXiv failure-only fallback：只有 arXiv fresh acquisition 已失败并写出 immutable
-  handoff 的论文可以进入。会议本地 metadata/PDF 缺失或损坏时 direct route 失败关闭，不能转入 crosswalk；它不阻塞正常 direct 队列。
-
-建立 direct 输入时不需要任何 arXiv 本地正文 manifest：
-
-```bash
-npm run history:conference-local-sources -- --apply
-npm run history:direct-inputs -- --apply \
-  --conference-manifest /absolute/path/conference-local-sources-v1.json \
-  --inventory /absolute/path/all-history.json \
-  --blog-root /absolute/path/audio-paper-digest-blog
-```
-
-`history:direct-inputs` 只接受上述会议 manifest、冻结 inventory 和博客根目录（可选 `--name`）；它不接受
-`--arxiv-manifest`。完整的 plan、scheduler、run 和 aggregate 命令见[历史重写底座](docs/history-rewrite.md)。
-
-历史链当前只能生成私有 source、analysis、single-page staging 和 aggregate staging。历史专用的 review、博客
-activation、commit/push receipt 与远端 OID 发布事务尚未实现；因此历史 staging 完成不代表可以发布，也不能
-绕过这项缺口覆盖博客仓库。
+同一 canonical paper 只重写一次再投影到历史 URL；crosswalk 仅接收 fresh arXiv 获取失败产生的命名 handoff。
+长任务可分批、查看状态、安全暂停和续跑。当前只支持私有 staging；历史 review、activation、push 和远端
+OID 事务完成前不得覆盖博客。完整命令与恢复规则见[历史重写底座](docs/history-rewrite.md)。
 
 ## 5 分钟开始
 
-要求：Node `>=20.18.1 <21 || >=22.3.0`、Python 3.11+（OpenSSL 后端），以及可用的 Hugo 博客仓库。
+要求：Node `>=20.18.1 <21 || >=22.3.0`、Python 3.11+（OpenSSL 后端）及 Hugo 博客仓库。
 
 ```bash
 # 1. 安装依赖
@@ -82,23 +60,12 @@ npm install
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 
-# 2. 创建项目配置
+# 2. 创建并按 docs/setup.md 填写项目配置
 cp env.example .env
 ```
 
-在项目根 `.env` 中至少填写：
-
-```dotenv
-PAPER_ANALYZER_API_KEY=...
-# 可选：同一 OpenCode Go 路由的备用账号；仅确认额度耗尽时切换
-PAPER_ANALYZER_FALLBACK_API_KEYS=...
-PAPER_ANALYZER_MODEL=...
-PAPER_ANALYZER_ENDPOINT=https://...
-HTTPS_PROXY=http://127.0.0.1:7897   # 也可按 setup 使用 HTTP_PROXY
-```
-
-备用账号采用跨进程、跨日期的长期 sticky 策略，不做轮询或并发分摊。模型、协议和代理要求见[环境配置](docs/setup.md)。项目脚本需要在沙箱外运行；入口会在
-网络、日志和写入前拒绝受限沙箱。
+`.env` 至少配置模型 key/model/endpoint、HTTP CONNECT 代理和博客路径；完整字段与 sticky 备用账号规则见
+[环境配置](docs/setup.md)。项目脚本必须在沙箱外运行。
 
 ```bash
 # 3. 运行 Node 测试
@@ -226,12 +193,3 @@ Prompt 或持久化契约前，请阅读[维护约定](docs/maintenance.md)。
 - [契约兼容矩阵](docs/compatibility.md)：当前 writer、历史读取和 production 资格。
 - [排错手册](docs/troubleshooting.md)：API、代理、分析、发布和视觉问题。
 - [Manual 子系统](manual/README.md)：显式人工高保障路线。
-
-## 可选集成
-
-微信公众号、飞书和小红书入口仍可独立使用，但不由默认日更调用。相关命令集中在
-[脚本说明](docs/scripts.md#43-发布脚本)。
-
-## 参考与致谢
-
-项目设计参考了 [speech-paper-daily-skill](https://github.com/JusperLee/speech-paper-daily-skill)。

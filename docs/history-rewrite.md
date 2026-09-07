@@ -32,7 +32,7 @@ npm run history:conference-projections -- --apply \
 npm run history:direct-plan -- --apply \
   --catalog /absolute/path/scoped-historical-local-data-v3.json \
   --inventory /absolute/path/all-history.json \
-  --conference-projections /absolute/path/conference-page-projections-v1.json
+  --conference-projections /absolute/path/conference-page-projections-v2.json
 ```
 
 `history:direct-scheduler` 对 arXiv 每个 generation 重新拉取官方文本/PDF，原子封存
@@ -222,23 +222,32 @@ npm run history:conference-projections -- --dry-run \
 npm run history:direct-plan -- --dry-run \
   --catalog /absolute/path/scoped-historical-local-data-v3.json \
   --inventory /absolute/path/all-history.json \
-  --conference-projections /absolute/path/conference-page-projections-v1.json
+  --conference-projections /absolute/path/conference-page-projections-v2.json
 
 # source phase 与 LLM/staging 分离；两条队列可并发，单篇 canonical 只由一个 writer 执行
-npm run history:direct-scheduler -- --apply --plan /absolute/path/direct-rewrite-plan-v2.json \
-  --queue all --generation 1 --arxiv-concurrency 3 --conference-concurrency 5
-npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-v2.json \
-  --queue all --generation 1 --concurrency 3
+npm run history:direct-scheduler -- --apply --plan /absolute/path/direct-rewrite-plan-v3.json \
+  --queue all --generation 1 --max-papers 100 --arxiv-concurrency 3 --conference-concurrency 5
+npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-v3.json \
+  --queue all --generation 1 --max-papers 50 --concurrency 3
+
+# 只读进度快照；--watch-seconds 5 可持续输出 NDJSON 快照
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v3.json --generation 1
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v3.json --generation 1 --watch-seconds 5
+
+# 请求安全暂停；活动论文完成原子落盘并释放 operation lock 后，才允许 resume
+npm run history:pause -- --plan /absolute/path/direct-rewrite-plan-v3.json --phase source --generation 1
+npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v3.json --phase source --generation 1
+# LLM/direct-run 阶段把 --phase source 换成 --phase analysis
 
 # direct-run 输出的 registryFile 与 aggregate projection 均使用命令实际输出的绝对路径
 npm run history:direct-aggregate -- projection --apply \
-  --plan-file /absolute/path/direct-rewrite-plan-v2.json \
+  --plan-file /absolute/path/direct-rewrite-plan-v3.json \
   --inventory-file /absolute/path/all-history.json \
-  --output-name direct-aggregate-projection-v1.json
+  --output-name direct-aggregate-projection-v2.json
 npm run history:direct-aggregate -- aggregate --apply \
-  --plan-file /absolute/path/direct-rewrite-plan-v2.json \
+  --plan-file /absolute/path/direct-rewrite-plan-v3.json \
   --registry-file /absolute/path/direct-rewrite-registry.json \
-  --projection-file /absolute/path/direct-aggregate-projection-v1.json \
+  --projection-file /absolute/path/direct-aggregate-projection-v2.json \
   --daily YYYY-MM-DD
 # 或把最后一项替换为 --conference conference-key
 ```
@@ -248,12 +257,35 @@ npm run history:direct-aggregate -- aggregate --apply \
 提供该省略形式的指纹。两种形式只要映射到多个 conference identity 就失败，不做标题相似度匹配；projection 是 direct
 route 的页面投影证据，绝不是 crosswalk identity recovery。
 
-`history:direct-plan` 生成 `historical-direct-rewrite-plan-v2`。队列中的 arXiv canonical paper 每个
+projection v2 还处理一条严格的 ICML 2026 例外：daily-scope、`identityHints=none` 的冻结论文页只有在
+逐字重放 page SHA 后，正文恰有一个规范 `https://icml.cc/virtual/2026/poster/<numeric>` 官方目标，且
+frontmatter title fingerprint 在已认证的 ICML 本地 metadata 中只对应一个 canonical identity 时，才作为该
+conference canonical 的额外页面投影。正文只用于提取并封存该 identity binding，绝不进入分析、Reader 或新稿；
+不能只凭标题，也不能从汇总页反推。当前 inventory 预期 116 个此类 `none` 页面中 97 个闭合、19 个继续留在
+plan 的 uncovered audit；实际数字仍以新 projection/plan 的自哈希输出为准。
+
+`history:direct-plan` 生成 `historical-direct-rewrite-plan-v3`。projection 与 plan 都复用
+`history:direct-inputs` producer 的完整 strict catalog validator；旧式虽同名为 v3、但缺少 `scopeBinding`、
+包含双 input manifest 或给 arXiv 保留本地 writer source 的 collector 产物会失败关闭。plan 除了 catalog
+中无历史投影的 source 记录，还会把每个未进入 direct route 的 frozen paper page 及其 page/content SHA、
+scope 和 identity-hint 状态写入自哈希覆盖审计，并汇总逐 scope 与逐 hint-status 数量；它只报告
+`none/conflict/multiple` 等缺口，不据此猜测或自动解决身份。
+
+队列中的 arXiv canonical paper 每个
 generation 都重新从官方 arXiv 获取正文和 PDF，并持久化 `source.txt`、`source.pdf`、`source-runtime.json`
 和 `source-manifest.json`；generation 目录只能有这四件文件。图片只在当前调用的系统临时目录存在。来自同一
 fresh source 的标题进入 runtime metadata，供新稿
 identity 使用；它不来自冻结博客页面。队列中的 conference paper 只重放 catalog 已绑定的本地
 metadata/PDF SHA，并从该 metadata record 取得标题。两条队列都不以 legacy crosswalk 为前置条件。
+
+来源阶段也支持 `--paper-ids`、`--max-papers`（或 `--limit`）和 `--pause-file`；未显式指定 ID 的
+bounded 续跑会先严格重放并跳过同 generation 已封存的 arXiv 四文件 bundle，会议项则按稳定 plan 顺序分批
+重放 metadata/PDF SHA。默认 source pause marker 与 scheduler operation lock 位于
+`fetched-arxiv-sources` 根，文件名绑定 plan SHA 与 generation。SIGINT/SIGTERM 或安全普通 pause marker
+只阻止领取下一项；stderr 逐项输出 `historical-direct-source-progress-v1`，最终 JSON 报告 selected、processed、
+remaining 及 pause/lock 路径。每项结果还会在同一 scheduler lock 内更新自哈希
+`historical-direct-source-status-v1`；因此会议 SHA 验证和 arXiv sealed bundle 都可由 `history:status` 跨进程查看，
+重复 bounded 命令会推进下一批。该 checkpoint 是进度证据，direct-run 仍会现场重放来源字节后才使用。
 
 `history:direct-run --apply` 只有在 canonical analysis、API Reader 和 direct source provenance 都完成并
 逐项绑定同一 source snapshot 后，才会把一个 canonical paper 标为 `staged`。它同时在该 paper 的
@@ -262,14 +294,49 @@ direct staging 目录生成 `historical-direct-paper-page-staging-v1`：每个�
 这里不读取 crosswalk、旧 fresh run、旧 taxonomy assignment 或任何旧博客正文。Renderer 实现变更、Reader
 SHA 漂移、历史页 projection 漂移和任何单页字节替换都会拒绝恢复。
 
+长任务使用 `--paper-ids ID[,ID...]` 做显式集合，或用 `--max-papers N`（兼容别名 `--limit N`）按
+`plan.queue` 的稳定顺序截取；两者同时使用时先限定 ID 集合、再稳定截取。重复、未知或不属于所选
+`--queue` 的 ID 都会在来源和模型请求前失败。dry-run 会报告最终 `selectedPaperIds`、默认 pause marker 和
+operation-lock 路径。未显式给 ID 的 `--max-papers` 会跳过 registry 中已经 `staged` 的前项，因此原命令
+重复运行会稳定推进下一批；显式 ID 仍会重放已完成工件以支持定向复验。默认 pause marker 是同一 plan SHA 与 arXiv generation 的 registry 文件加 `.pause`；
+也可用 `--pause-file ABSOLUTE` 覆写。marker 必须是由 `history:pause` 签发、绑定同一 plan/generation 的
+自哈希私有普通文件，不能用空文件伪造。签发 marker，或向运行进程发送
+一次 `SIGINT`/`SIGTERM`，只会阻止领取下一篇；已经开始的并发论文会完成其原子 registry/staging 边界后退出为
+`paused`。移走 marker 后原样重跑即可续跑。
+
+同一 plan SHA 与 generation 的 apply 全程持有跨进程 operation lock；锁覆盖 registry 的首次创建、重读、
+所有状态写入和最终计数。第二个 direct-run 不得并发抢写同一 registry。每篇结束后 stderr 输出一行
+`historical-direct-rewrite-progress-v1`，最终 stdout JSON 提供 selection、processed/remaining、完整
+`registryCounts`、pauseFile 和 operationLockTarget，供外部只读 status 聚合；进度流本身不是完成证明。
+
+`history:pause --phase source|analysis` 以 `0600`、plan SHA 与 generation 自哈希绑定的独立 immutable marker 请求停机；它不杀死
+活动来源或模型请求。`history:resume` 只在对应 phase 的 operation lock 已释放后移除经过重放的 marker，避免
+“暂停尚未落稳就继续领任务”。`history:status` 不写 runtime，可单次输出或用 `--watch-seconds N`
+持续输出；它汇总 registry 全状态、完成百分比、最近失败、pause/lock、daily/conference aggregate
+缺口、conference-task 阻断和 publication 收尾 blocker。`staged`、aggregate complete 或私有 bundle
+存在都不会单独把全历史状态标成 complete。
+
 `history:direct-aggregate projection` 先从 plan 与冻结 inventory 签发
-`historical-direct-aggregate-projection-v1`；`aggregate` 只消费该 projection、direct-run registry 和上述
+`historical-direct-aggregate-projection-v2`；`aggregate` 只消费该 projection、direct-run registry 和上述
 完成的单页 staging manifest，先重放同一 daily 或 conference cohort
 的完整成员集合和单页 SHA，再渲染汇总页。排行榜和二级条目都使用冻结历史页的内部 URL，因此链接可点击；
 汇总 Markdown 及其真实 `pages/content/posts/...` staging 字节会一起写入 aggregate run。它不从旧汇总正文
 补内容，也不能用只有 analysis.json 或 staging-input.json 的半成品伪造汇总。
 
-catalog 中没有任何冻结历史页投影的记录绝不进入 fresh fetch、crosswalk 或 LLM 队列。`--apply`
+Daily cohort 可以由 fresh arXiv 与已认证 conference-local PDF 成员共同组成。纯来源 cohort 沿用各自来源合同；
+混合 cohort 必须签发 `historical-direct-mixed-source-v1` 自哈希绑定，分别封存同一 arXiv generation 的逐篇
+source manifest 集合和逐篇会议 PDF SHA 集合。Conference cohort 仍只允许 conference-local PDF；任一 arXiv
+generation、manifest、PDF 或成员身份漂移都会拒绝生成汇总。
+
+projection v2 还逐页保留冻结 inventory 中的 `conference-task` 路径、URL、旧字节 SHA、会议 key 与 task key，
+并以 `conferenceTaskPageSetSha256`、`conferenceTaskCoverageSha256` 和 projection self-SHA 封口。当前没有 task
+renderer，因此这些页面明确记录为 `pending` / `unsupported` / publication `blocked`；它们不进入 daily 或
+conference 汇总的论文成员、排名和正文，也不能因汇总 staging 完成而冒充已重写。后续历史 publication 必须
+重放该 coverage，并在 `publicationReady=false` 时失败关闭。
+
+catalog 中没有任何冻结历史页投影的记录绝不进入 fresh fetch、crosswalk 或 LLM 队列。反方向上，
+frozen paper page 没有 direct source route 时也必须出现在 plan 的 `uncoveredFrozenPaperPages` 与
+`paperPageCoverage`，不能因非会议页没有单一 arXiv hint 就静默消失。`--apply`
 会把它们写为与 plan SHA 绑定、不可变的
 `historical-direct-rewrite-unprojected-catalog-report-v1`，记录 paper ID、route 和原因。该 report 是
 缺投影审计，不是待处理任务清单。
