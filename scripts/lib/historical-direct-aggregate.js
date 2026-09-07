@@ -12,6 +12,7 @@ const runnerApi = require('./historical-direct-rewrite-runner.js');
 const directPages = require('./historical-direct-page-staging.js');
 const projectionIo = require('./historical-conference-page-projections.js');
 const { parseAnalysis } = require('../utils.js');
+const taxonomyRuntime = require('./taxonomy-runtime.js').getDefaultTaxonomyRuntime();
 
 const CONTRACT = 'historical-direct-aggregate-v1';
 const VERSION = 1;
@@ -294,10 +295,17 @@ function readAnalysis(entry, item, artifact, executionRoot) {
         || !parsed?.taxonomyValidation?.valid || !parsed.primaryTaskTag || !parsed.primaryMethodTag || labels.length < 3) {
         fail(`${item.paperId} direct canonical analysis cannot supply aggregate fields`);
     }
+    const taxonomyValidation = parsed.taxonomyValidation;
+    if (taxonomyValidation.registryVersion !== taxonomyRuntime.registryVersion
+        || taxonomyValidation.registrySha256 !== taxonomyRuntime.registrySha256) {
+        fail(`${item.paperId} direct canonical taxonomy differs from current registry`);
+    }
     return { analysis, analysisFileSha256: loaded.fileSha256, analysisRecordSha256: stableHash(analysis),
         readerArticleSha256: analysis.apiReaderArticleSha256, title: analysis.title.trim(), summary: parsed.summary.trim(), score,
         labels: labels.map(label => label.replace(/^#/, '')).sort(), primaryTaskLabel: parsed.primaryTaskTag.replace(/^#/, ''),
-        primaryMethodLabel: parsed.primaryMethodTag.replace(/^#/, '') };
+        primaryMethodLabel: parsed.primaryMethodTag.replace(/^#/, ''),
+        taxonomy: { selectionContract: taxonomyRuntime.selectionContract,
+            registryVersion: taxonomyRuntime.registryVersion, registrySha256: taxonomyRuntime.registrySha256 } };
 }
 function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoot }) {
     const entry = exactRegistryEntry(registryEntry, item);
@@ -357,9 +365,20 @@ function md(value) { return String(value).replace(/([\\`*_[\]<>|])/g, '\\$1').re
 function renderAggregate(scope, key, members) {
     const display = scope === 'daily' ? `语音/音乐/音频论文速递 ${key}` : `${key.toUpperCase()} 论文汇总`;
     const tags = [...new Set(members.flatMap(item => item.canonical.labels))].sort();
+    const taxonomy = members[0]?.canonical.taxonomy;
+    if (!taxonomy || members.some(item => stableHash(item.canonical.taxonomy) !== stableHash(taxonomy))) {
+        fail(`${scope}:${key} aggregate taxonomy metadata is missing or mixed`);
+    }
     let output = `---\ntitle: "${display}"\ndraft: false\n`;
-    output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n---\n\n# ${display}\n\n`;
+    output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;
+    output += `paper_digest_taxonomy_contract: "${taxonomyRuntime.flatCompatContract}"\n`;
+    output += `paper_digest_taxonomy_selection_contract: "${taxonomy.selectionContract}"\n`;
+    output += `paper_digest_taxonomy_registry_version: "${taxonomy.registryVersion}"\n`;
+    output += `paper_digest_taxonomy_registry_sha256: "${taxonomy.registrySha256}"\n`;
+    output += 'paper_digest_taxonomy_scope: "aggregate-primary-task-counts"\n---\n\n';
+    output += `# ${display}\n\n`;
     output += `本期共收录 **${members.length}** 篇完成 source-only 重写的论文。\n\n`;
+    output += '🏷️ 标签说明：本期使用新版受控 taxonomy；站点标签页暂时兼容展示历史标签与新标签。\n\n';
     output += '| 排名 | 论文 | 评分 | 主任务 | 主方法 |\n|---:|---|---:|---|---|\n';
     for (const member of members) output += `| ${member.rank} | [${md(member.canonical.title)}](${internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`)}) | ${member.canonical.score.toFixed(1)} | ${md(member.canonical.primaryTaskLabel)} | ${md(member.canonical.primaryMethodLabel)} |\n`;
     output += '\n---\n';

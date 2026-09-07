@@ -122,6 +122,12 @@ generation manifest 和 review receipt。review 会从 `publishedPapers` 权威�
 重建 sidecar 并逐字比较，push 仍只允许 receipt 中的精确 delta。无版本输入绝不
 推断为 v1，而是保存 `version: null` 并使用 base abs/PDF URL。
 
+兼容旧 Hugo 标签页时，新 production 论文仍把 3–5 个 active 中文首选标签写入
+扁平 `tags`，并额外写入 `paper-taxonomy-flat-tags-compat-v1`、selection contract、
+registry version/SHA、按标签顺序排列的 `{id, facet, label}`、显式主任务和显式主方法。
+`rethink-context.json.assessment` 保存同一份 taxonomy 投影。旧页面不因新发布而改写；
+汇总页只把主任务频次称为“热门方向”。
+
 ## review receipt 与远端发布
 
 review receipt 绑定 generation SHA、逐页实际 SHA、每页 review 协议、Git baseline、Hugo gate、Hugo 配置/布局/数据/前端代码运行时指纹和 production proof。模板或站点脚本在 review 后变化时，push 会失败关闭并要求重新 review。push 成功后追加：

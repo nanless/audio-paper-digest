@@ -141,6 +141,9 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.deepEqual(aggregate.members.map(item => item.paperId), ['arxiv:2608.00001', 'arxiv:2608.00002']);
     assert.equal(aggregate.source.sourceGeneration.generation, 1);
     assert.match(aggregate.markdown, /FRESH_READER|source-only/);
+    assert.match(aggregate.markdown, /paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"/);
+    assert.match(aggregate.markdown, /paper_digest_taxonomy_registry_sha256: "[a-f0-9]{64}"/);
+    assert.match(aggregate.markdown, /站点标签页暂时兼容展示历史标签与新标签/);
     assert.doesNotMatch(JSON.stringify(aggregate), /POISON_OLD_BODY/);
     const output = direct.writeDirectAggregates({ outputRoot: path.join(f.root, 'aggregates'),
         aggregateRunId: direct.aggregateRunIdFor([aggregate]), aggregates: [aggregate] });

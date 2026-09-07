@@ -1972,6 +1972,91 @@ title: "Score rows"
             'https://arxiv.org/abs/2608.30002',
         )
 
+    def test_current_taxonomy_keeps_flat_tags_and_adds_explicit_compat_metadata(self):
+        paper = llm_api_publication_fixture()
+        paper['parsed'].update({
+            'tags': ['#语音识别', '#Transformer', '#低资源'],
+            'primaryTaskTag': '#语音识别',
+            'primaryMethodTag': '#Transformer',
+            'taxonomyValidation': {
+                'valid': True,
+                'errors': [],
+                'registryVersion': publish_to_blog._PAGE_TAXONOMY['version'],
+                'registrySha256': publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+                'primaryTaskId': 'task.asr',
+                'primaryMethodId': 'method.transformer',
+                'conceptIds': ['task.asr', 'method.transformer', 'setting.low-resource'],
+            },
+        })
+        markdown, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-08-31', category='论文速递',
+        )
+        frontmatter, _body = publish_to_blog._parse_frontmatter_content(
+            'paper.md', markdown,
+        )
+        self.assertEqual(frontmatter['tags'], ['语音识别', 'Transformer', '低资源'])
+        self.assertEqual(frontmatter['paper_digest_primary_task'], '语音识别')
+        self.assertEqual(frontmatter['paper_digest_primary_method'], 'Transformer')
+        self.assertEqual(
+            frontmatter['paper_digest_taxonomy_contract'],
+            publish_to_blog.FLAT_TAXONOMY_COMPAT_CONTRACT,
+        )
+        self.assertEqual(
+            frontmatter['paper_digest_taxonomy_registry_sha256'],
+            publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+        )
+        self.assertEqual(
+            [item['id'] for item in frontmatter['paper_digest_taxonomy_concepts']],
+            ['task.asr', 'method.transformer', 'setting.low-resource'],
+        )
+        bundle = publish_to_blog.build_researcher_workbench_bundle(
+            paper, '2026-08-31',
+        )
+        context = json.loads(next(
+            raw for path, raw in bundle['sidecars'].items()
+            if path.name == 'rethink-context.json'
+        ))
+        self.assertEqual(context['assessment']['primaryMethod'], 'Transformer')
+        self.assertEqual(
+            context['assessment']['taxonomy']['registrySha256'],
+            publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+        )
+
+    def test_current_taxonomy_index_counts_only_primary_tasks_as_directions(self):
+        first = llm_api_publication_fixture()
+        second = copy.deepcopy(first)
+        second['arxivId'] = '2608.30003'
+        selections = [
+            (first, '#语音识别', 'task.asr'),
+            (second, '#语音合成', 'task.speech-synthesis'),
+        ]
+        for paper, task, task_id in selections:
+            paper['parsed'].update({
+                'tags': [task, '#Transformer', '#低资源'],
+                'primaryTaskTag': task,
+                'primaryMethodTag': '#Transformer',
+                'taxonomyValidation': {
+                    'valid': True, 'errors': [],
+                    'registryVersion': publish_to_blog._PAGE_TAXONOMY['version'],
+                    'registrySha256': publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+                    'primaryTaskId': task_id,
+                    'primaryMethodId': 'method.transformer',
+                    'conceptIds': [task_id, 'method.transformer', 'setting.low-resource'],
+                },
+            })
+        markdown = publish_to_blog.generate_index_page(
+            [(8.0, first, first['parsed']), (7.0, second, second['parsed'])],
+            [], '2026-08-31',
+            {first['arxivId']: 'first', second['arxivId']: 'second'},
+        )
+        direction_table = markdown.split('### 🏷️ 热门方向', 1)[1].split(
+            '### 📊 论文评分排行榜', 1,
+        )[0]
+        self.assertIn('| #语音识别 | 1 篇 |', direction_table)
+        self.assertIn('| #语音合成 | 1 篇 |', direction_table)
+        self.assertNotIn('#Transformer', direction_table)
+        self.assertIn('站点标签页暂时兼容展示历史标签与新标签', markdown)
+
     def test_researcher_sidecars_are_deterministic_safe_and_manifest_bound(self):
         paper = llm_api_publication_fixture()
         paper['arxivId'] = '2608.30002v3'

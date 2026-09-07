@@ -13,6 +13,7 @@ LABEL_MODE_LEGACY = 'legacy'
 LABEL_MODES = (LABEL_MODE_CURRENT, LABEL_MODE_LEGACY)
 TAXONOMY_PROJECTION_CONTRACT = 'paper-taxonomy-prompt-projection-v1'
 TAXONOMY_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1'
+TAXONOMY_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
 CONCEPT_KEYS = {'id', 'facet', 'preferredLabel', 'aliases', 'broaderId',
                 'definition', 'scopeNote', 'status', 'replacedBy'}
 # ECMAScript String.trim whitespace, including BOM (Python str.strip differs).

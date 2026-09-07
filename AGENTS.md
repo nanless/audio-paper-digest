@@ -114,6 +114,7 @@ npm run digest:prepare -- YYYY-MM-DD
 - 每个表格单元格必须重放到原表 DOM cell，或由全文逐字 quote 覆盖全部数字与单位；展示公式只可由结构化原始 TeX 注入。
 - 作者姓名与机构逐项绑定 HTML DOM、论文 metadata 或显式不可得状态；资源链接逐项绑定原文/Demo 证据、重定向终点与可达状态，只有 `available` 可支撑“已开源/可用”声明。
 - 汇总页 `reader-facing-v3` 中排行榜及中英文题目都指向独立博客；标签/评分不重复，排名、文档类型和 arXiv 位于评分后、作者机构前；汇总页和单篇页的可见 HTTPS URL 必须可点击。
+- 新 production 页面在 Hugo `tags` 扁平字段中只写 current taxonomy 的 active 中文首选标签，同时签发 `paper-taxonomy-flat-tags-compat-v1`、registry SHA、逐标签 concept/facet、显式主任务与主方法；旧页面和旧标签 URL 不批量改写。兼容期汇总“热门方向”只统计主任务，标签页必须明确标示新旧混合，不能把扁平计数冒充九分面统计。
 - Figure 必须形成“导读 → 看图路径 → 原图 → 图注 → 解释”；未传入像素不得猜坐标轴、曲线、颜色或模块。
 - 评分使用八维、类型感知、单一缺陷单一主维度原则；代码重算总分并封顶 10。缺失证据不得写成技术错误。
 - 摘要级分析默认不可发布；只有显式 `allowAbstractAnalysisPublish: true` 才允许并显示降级提示。
