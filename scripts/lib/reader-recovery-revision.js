@@ -77,9 +77,17 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (expectedPixels !== undefined && !/^[a-f0-9]{64}$/.test(expectedPixels)) {
         throw new Error('Reader recovery pixel evidence identity is invalid');
     }
+    const expectedEphemeralPixels = options.ephemeralImageEvidenceSha256;
+    if (expectedEphemeralPixels !== undefined && !/^[a-f0-9]{64}$/.test(expectedEphemeralPixels)) {
+        throw new Error('Reader recovery ephemeral pixel evidence identity is invalid');
+    }
     const verifyPixels = payload => {
         if (expectedPixels !== undefined && hashDraft(payload?.imageEvidence || []) !== expectedPixels) {
             throw new Error('Reader failed candidate image evidence drifted; refusing to migrate pixel-dependent narration');
+        }
+        if (expectedEphemeralPixels !== undefined
+            && hashDraft(payload?.ephemeralImageEvidence) !== expectedEphemeralPixels) {
+            throw new Error('Reader failed candidate ephemeral image evidence drifted; refusing to migrate pixel-dependent narration');
         }
     };
     const exact = loadFailedCandidate(directory, identity);

@@ -27,9 +27,13 @@ PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
 PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
+# 可选：全历史 ICLR 2026 direct 路线的本地 accepted metadata/PDF 根目录
+PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```
 
 默认模型是 OpenCode Go 的 Muse Spark 1.2 Contributor，协议为 OpenAI Responses。endpoint 必须为 HTTPS；只有 loopback 测试服务允许 HTTP。
+
+`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 只用于全历史 ICLR 2026 会议论文的 direct 路线：它必须指向已保留的本地官方 accepted metadata/PDF 根目录。未设置时默认使用 `~/code/github_repos/iclr2026-paper-scraper`；它不是日更抓取输入，也不会触发下载。
 
 `PAPER_ANALYZER_FALLBACK_API_KEYS` 不是负载均衡。系统持续使用当前 active 账号，只有 OpenCode Go 返回 HTTP 429 且结构化类型明确为 `GoUsageLimitError` 才立即切到下一账号；切换结果跨 Node/Python 和日期保存在 `data/runtime/llm-account-pool.json`。原账号到期后不会自动切回。普通 429、5xx、网络/代理错误、截断或内容校验失败均不切换。若只需固定第三顺位，可用 `PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY`；它总排在 `PAPER_ANALYZER_FALLBACK_API_KEYS` 的所有账号之后。副模型如有独立账号池，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`；只有主/副端点规范化后属于同一 OpenCode Go 服务且副模型没有独立 key 时，副模型才继承主账号池。不同服务的副模型必须提供自己的 key，不能继承主账号池。凭据发送前，实际请求 URL 还必须精确匹配由 endpoint 与 model 推导出的规范 API 路由。
 
@@ -54,6 +58,18 @@ Node 由 `scripts/env-loader.js`，Python 由 `scripts/project_env.py` 加载同
 | 外部图片/Demo | HTTPS only；逐跳校验公网 IP |
 
 缺代理必须明确失败，不能静默直连。访问本地代理的脚本必须沙箱外运行。
+
+## PDF/TXT 来源存储
+
+默认日更不会把抓取时的旧 text cache 当作分析输入。筛选完成后，`full-fetch.js` 通过项目代理为每个
+入选 arXiv ID 新拉官方 HTML 文本与 PDF，封存到 `data/runtime/daily-fresh-source-runs/` 的私有四文件
+generation（TXT、PDF、runtime metadata、manifest）。该目录是 production replay evidence，不能用
+`storage:prune` 删除；图像只在当前模型调用的 OS 临时目录存在。
+
+历史 direct route 同样为每个 arXiv generation 新拉、封存 TXT/PDF/runtime/manifest 到
+`data/runtime/fetched-arxiv-sources/`。纯会议条目才重放保留的本地 metadata/PDF SHA。若使用本机 ICLR
+accepted corpus，`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 可显式指向其根目录；它只供会议 local-source
+collector，不会成为 arXiv 写作输入。
 
 ## 常用容量参数
 

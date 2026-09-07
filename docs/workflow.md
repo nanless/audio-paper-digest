@@ -18,6 +18,7 @@ npm run digest:prepare -- YYYY-MM-DD
  → 博客去重
  → 关键词预筛
  → LLM 筛选
+ → 封存本次官方 arXiv TXT/PDF
  → 全文与多阶段分析
  → 评分审计
  → API Reader 长文
@@ -58,7 +59,12 @@ LLM 决定逐篇写入 `filter-decisions.json`。Muse 使用配置的筛选 batc
 
 ## 4. 全文与多阶段分析
 
-优先健康 arXiv HTML，结构不足时回退 PDF。来源状态记录原始长度、实际输入长度、SHA、截断与警告；摘要 fallback 默认不可发布。
+筛选完成后、深度分析前，必须为每个入选 arXiv ID 新拉取官方 HTML 文本与 PDF，并原子封存
+`data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/` 下的 `source.txt`、
+`source.pdf`、`source-runtime.json` 与 `source-manifest.json`。随后分析、Reader、generate、review 和 push
+只重放该 sealed generation；不能使用旧 `data/current` 文本、PDF 或图片缓存。HTML 优先、PDF 回退只发生在这次
+source capture 内。图像仅在当前模型调用的 OS 临时目录物化，不能写入 runtime 图片缓存。来源状态记录原始长度、
+实际输入长度、SHA、截断与警告；摘要 fallback 默认不可发布。
 
 分析阶段按指纹恢复：
 
@@ -98,6 +104,9 @@ npm run blog:push -- --date YYYY-MM-DD
 
 review worker 不修改已审页面。任何修正都返回生成/修复阶段；页面 SHA、Git 基线、协议或 remote 漂移会阻断。
 
+generation 记录实际选中的 current、日期 archive 或 `--data-file` 的绝对路径、字节数和 SHA-256；review/push
+只能重放这一 generation input reference，不能改读随后变化的 current 文件。
+
 汇总页使用 `reader-facing-v3` 布局：排行榜、中文标题和英文标题都链接到对应独立博客；标签与八维评分只显示一次，随后依次显示排名分档、文档类型、arXiv 原文链接和作者机构。旧版重复的“分数/置信度/标签/arXiv”尾行禁止重新生成。汇总页与单篇页中的读者可见裸 HTTPS URL 会转成 Markdown autolink；已有链接、图片、代码块和 frontmatter 保持不变。
 
 ## 7. 发布后视觉
@@ -121,6 +130,12 @@ npm run cover:status -- --date YYYY-MM-DD
 # 只续分析
 npm run deep -- --date YYYY-MM-DD
 
+# 只续 canonical 中未完成论文
+npm run batch
+
+# 强制重分析
+npm run reanalyze -- --concurrency 5
+
 # 刷新 Reader/评分
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 
@@ -130,3 +145,5 @@ npm run digest:status -- --date YYYY-MM-DD
 ```
 
 最终报告必须在最后一次 push/record 之后重新生成。它是当时快照，不会随状态变化自动更新。
+
+`deep`、`batch`、`reanalyze` 和 `api:reader:refresh` 只能重放 current canonical 的 `dailyFreshSourceRun`。它精确绑定本批日期、论文集合和每篇 sealed PDF/TXT/runtime/manifest；命令不会补抓来源或读取 legacy cache。缺少或漂移时先重新运行 `digest:prepare`，图像也只能在当前调用的 OS 临时目录物化。

@@ -11,6 +11,8 @@ For maintainers changing default API, shared publication, prompts, data contract
 | Node settings/paths | `scripts/config.js` | entries, tests, env.example |
 | Python publishing paths | `scripts/path_config.py` | generate/review/push |
 | protocol/proxy | `utils.js`, `publish_common.py` | filter, analysis, review, key test |
+| daily sealed PDF/TXT | `lib/daily-fresh-source-plan.js`, `lib/fresh-arxiv-rewrite-source.js` | full-fetch, four recovery entries, validator, Python generate/review/push, storage, docs |
+| historical direct sources/projections | `historical-direct-*`, `historical-conference-*-sources/projections` | catalog, plan, scheduler, runner, aggregate, crosswalk fallback, script index, history docs |
 | recovery | `analysis-engine.js`, `deep-analyzer.js` | all analysis entries, status |
 | analysis/scoring | contract + prompts | Node/Python parsers, publisher |
 | Reader quality | Reader prompt + editorial gate | validator, blog review |
@@ -25,6 +27,10 @@ For maintainers changing default API, shared publication, prompts, data contract
 - Muse and arXiv require proxy; other LLM providers default to `agent:false`.
 - Per-paper analysis and shared JSON updates lock and reread inside the lock.
 - Fingerprints invalidate only required stages.
+- Daily API analysis, Reader, and publication read only the current sealed PDF/TXT/runtime/manifest; missing or
+  drifted evidence returns to `digest:prepare`, never a legacy cache.
+- Every historical arXiv generation freshly captures official PDF/TXT/runtime/manifest; historical conference
+  entries replay only bound local metadata/PDF SHA. Neither may use old blog prose, analysis, or Reader output.
 - Generate, review, and push remain separate; review is read-only.
 - Production proof, page SHA, Git baseline, remote OID, and visual tasks bind layer by layer.
 - Project scripts never call an image API.
@@ -55,7 +61,13 @@ Apply is an offline maintenance operation. Run it only when acquisition, analysi
 
 ## Verification
 
-When a user explicitly requests a complete rewrite with no prior generated prose, use the [fresh rewrite staged workflow](../fresh-rewrite.md). Ordinary reanalysis, Reader refresh, or deleting only `analysis` does not provide the same isolation guarantee. `prepare` and `status` never call the model; `sources` and `analyze` are explicit phases, and `promote` requires complete same-run/source provenance plus baseline compare-and-swap before changing canonical data.
+When a user explicitly requests a complete rewrite of an existing daily batch with no prior generated prose, use
+the [fresh rewrite staged workflow](../fresh-rewrite.md). For full history, use the
+[direct-local-first history workflow](../history-rewrite.md): retained conference metadata/PDF routes directly,
+arXiv freshly captures PDF/TXT each generation, and crosswalk accepts only named immutable fresh-arXiv failure handoffs. Ordinary reanalysis,
+Reader refresh, or deleting only `analysis` does not provide either isolation guarantee. `rewrite:source`
+`prepare` and `status` never call the model; its `sources` and `analyze` phases are explicit, and `promote`
+requires complete same-run/source provenance plus baseline compare-and-swap before changing canonical data.
 
 ```bash
 npm run verify

@@ -20,14 +20,57 @@
 
 ```text
 arXiv + HuggingFace
-  → 关键词预筛 → LLM 逐篇筛选 → 多阶段全文分析与评分
+  → 关键词预筛 → LLM 逐篇筛选 → 封存本次官方 arXiv TXT/PDF
+  → 多阶段全文分析与评分
   → 博客 generate → review → push / 远端 OID 验证
   → TOP 10 长图与汇总封面 → 最终状态验收
 ```
 
 - `digest:prepare` 与 `digest:api` 是同一条默认路线。
+- 默认 API 日更在筛选结束、深度分析开始前，为每个入选 arXiv 论文封存本次官方文本和 PDF。每个
+  sealed source run 位于 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`，
+  包含 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json`。分析与 Reader 只能读取这组
+  已封存的文件；论文图仅在当前请求的 OS 临时目录物化，不写入 `data/current/` 或 runtime 图片缓存。
 - Manual/人工高保障流程只有在明确选择时才启用；API、网络或配额失败不会自动切换。
 - 微信、飞书、小红书是可选集成，不属于默认日更。
+
+## 全历史重写
+
+全历史工作只在 `audio-paper-digest-rewrite-all` 工作区执行，采用 **direct-local-first** 路线。冻结历史页
+只提供页面范围、已有 arXiv 链接和投影关系；旧博客正文、旧分析、旧 Reader、本地 arXiv TXT/PDF/图片都不
+进入新的写作输入。
+
+```text
+本地会议 metadata/PDF ─┐
+                       ├→ direct-inputs → conference-projections → direct-plan
+历史页已有 arXiv 链接 ─┘                                      ├→ direct-scheduler → direct-run → staging
+                                                               └→ direct-aggregate
+```
+
+- arXiv route 在每个新的 generation 重新取得官方文本和 PDF，原子封存
+  `data/runtime/fetched-arxiv-sources/<arxivId>/generation-000001/`（generation 递增）下的 `source.txt`、`source.pdf`、runtime
+  metadata 和 manifest；图片只在该次调用的 OS 临时目录存在，任务结束后清理。
+- 会议 route 重放 local-source manifest 已绑定的本地 metadata/PDF SHA，以本地会议 PDF 作为全文和图片来源。
+- 同一 canonical paper 只重写一次，再投影至所有冻结历史页、每日汇总或会议汇总。
+- crosswalk 是严格的 arXiv failure-only fallback：只有 arXiv fresh acquisition 已失败并写出 immutable
+  handoff 的论文可以进入。会议本地 metadata/PDF 缺失或损坏时 direct route 失败关闭，不能转入 crosswalk；它不阻塞正常 direct 队列。
+
+建立 direct 输入时不需要任何 arXiv 本地正文 manifest：
+
+```bash
+npm run history:conference-local-sources -- --apply
+npm run history:direct-inputs -- --apply \
+  --conference-manifest /absolute/path/conference-local-sources-v1.json \
+  --inventory /absolute/path/all-history.json \
+  --blog-root /absolute/path/audio-paper-digest-blog
+```
+
+`history:direct-inputs` 只接受上述会议 manifest、冻结 inventory 和博客根目录（可选 `--name`）；它不接受
+`--arxiv-manifest`。完整的 plan、scheduler、run 和 aggregate 命令见[历史重写底座](docs/history-rewrite.md)。
+
+历史链当前只能生成私有 source、analysis、single-page staging 和 aggregate staging。历史专用的 review、博客
+activation、commit/push receipt 与远端 OID 发布事务尚未实现；因此历史 staging 完成不代表可以发布，也不能
+绕过这项缺口覆盖博客仓库。
 
 ## 5 分钟开始
 
@@ -90,8 +133,8 @@ npm run digest:status -- --date "$today"
 | 目的 | 命令 |
 |---|---|
 | 默认当天日更 | `npm run digest:prepare -- YYYY-MM-DD` |
-| 续跑未完成分析 | `npm run deep -- --date YYYY-MM-DD` |
-| 刷新 API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader` |
+| 续跑未完成日更分析 | `npm run deep -- --date YYYY-MM-DD`（只重放已封存的 TXT/PDF） |
+| 刷新 API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`（只重放已封存的 TXT/PDF） |
 | 校验 current 数据 | `npm run validate:data` |
 | 查看运行数据占用 | `npm run storage:status` |
 | 预览引用感知清理 | `npm run storage:prune` |
@@ -118,7 +161,10 @@ npm run taxonomy:serve
 ## 失败后从哪里继续
 
 - 抓取或筛选中断：直接重跑默认入口，健康 checkpoint 会复用。
-- 只有部分论文分析失败：运行 `npm run deep -- --date YYYY-MM-DD`，或按论文定向重分析。
+- 只有部分论文分析失败：运行 `npm run deep -- --date YYYY-MM-DD`，或按论文定向重分析。`deep`、`batch`、
+  `reanalyze` 和 `api:reader:refresh` 只能精确重放当前 canonical 已绑定的 sealed TXT/PDF；它们不抓取、不补建
+  source run，也不读取 legacy text/cache。sealed source 缺失或 SHA 漂移时，重新运行
+  `npm run digest:prepare -- YYYY-MM-DD`。
 - 博客审查或推送失败：修复后运行 `npm run blog:review -- --date YYYY-MM-DD` 或 `npm run blog:push -- --date YYYY-MM-DD`。
 - 视觉任务缺失或失效：运行 `npm run visual:post-publish -- --date YYYY-MM-DD`，不要重发博客。
 - 不确定失败属于哪一层：先看[排错手册](docs/troubleshooting.md)和
@@ -149,6 +195,9 @@ Manual 的脚本、Prompt、测试和工作流集中在 [`manual/`](manual/READM
 |---|---|
 | `data/current/` | 当前候选、筛选、分析、发布凭证和视觉任务状态 |
 | `data/archive/<date>/` | 每日数据快照与最终视觉资产 |
+| `data/runtime/daily-fresh-source-runs/` | 日更筛选后封存、供分析/Reader 重放的官方 TXT/PDF source runs |
+| `data/runtime/fetched-arxiv-sources/` | 历史 direct arXiv generation 重新抓取并封存的官方 TXT/PDF source runs |
+| `data/runtime/` 的其他历史子目录 | 历史 direct plan、analysis、单页 staging 与汇总 staging；不写入博客仓库 |
 | `logs/` | 脱敏后的运行日志，可在 `.env` 中关闭文件日志 |
 | Hugo 博客仓库 | 汇总页、论文页、主题模板与发布提交 |
 
@@ -171,6 +220,7 @@ Prompt 或持久化契约前，请阅读[维护约定](docs/maintenance.md)。
 - [安装与配置](docs/setup.md)：环境变量、代理、模型和博客仓库。
 - [默认主流程](docs/workflow.md)：归档、抓取、筛选、分析、发布和恢复。
 - [默认 API 架构](docs/architecture.md)：组件调用、单篇 DAG、锁和跨仓库事务。
+- [历史重写底座](docs/history-rewrite.md)：direct-local-first 历史输入、fresh arXiv source、会议 PDF 与 fallback。
 - [脚本说明](docs/scripts.md)：命令参数和运行语义。
 - [数据格式](docs/data-format.md)：checkpoint、canonical、receipt 和 manifest。
 - [契约兼容矩阵](docs/compatibility.md)：当前 writer、历史读取和 production 资格。

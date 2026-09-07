@@ -59,7 +59,8 @@ OID 协议已经不兼容。禁止整体 merge、整文件覆盖或批量 cherry
 5. taxonomy evidence sidecar 绑定当前 registry SHA、原文证据和 unknown/conflict 审核。
 6. conference publication scope 生成稳定单篇 URL、任务视图和会议汇总，经
    generate → review → exact push → remote OID。
-7. 先做 3–5 篇试点，再重写历史入选集；最后对会议全集重新筛选并更新完整汇总。
+7. 本文的旧分支迁移试验可用隔离小样本验证代码，但不构成当前历史 direct-local-first 的放量门槛；
+   历史重写使用本地 metadata/PDF catalog、冻结 projection 和独立并发队列。
 
 旧分析和旧博客正文只用于差异检查，任何新 Reader、标签、评分或汇总都不得把它们作为
 生成上下文。

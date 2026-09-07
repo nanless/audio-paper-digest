@@ -62,6 +62,10 @@ npm run digest:prepare -- YYYY-MM-DD
 - `filtered-papers.json`：当日正式入选集合。
 - `deep-analysis-result.json`：canonical 分析、逐阶段 checkpoint 和 production proof。
 
+默认 API 日更在筛选完成后、进入深度分析前，必须为每个入选 arXiv ID 重新拉取官方 HTML 文本与 PDF，并封存为
+`data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/` 下的
+`source.txt`、`source.pdf`、`source-runtime.json` 与 `source-manifest.json`。分析只能读取该 sealed bundle；图像只可在 OS 临时目录按当前调用物化，禁止写入 `data/current` 或 runtime 图片缓存。
+
 完整性不是“文件存在”：raw、decision、filtered、deep 的日期、来源、候选指纹和论文集合必须闭合。运行 `npm run validate:data` 做只读验证；干净 checkout 才可显式加 `--allow-empty`。
 
 ## 模型、代理、并发与预算
@@ -92,9 +96,10 @@ npm run digest:prepare -- YYYY-MM-DD
 ## 恢复原则
 
 - 普通续跑：重新运行同一入口；checkpoint 指纹决定从哪个阶段继续。
+- `npm run deep`、`npm run batch`、`npm run reanalyze` 和 `npm run api:reader:refresh` 都是**日更 sealed source 恢复入口**：只重放当前 canonical 的 `dailyFreshSourceRun`，要求 batchDate、完整论文集合及每篇 `source.txt`、`source.pdf`、runtime/manifest 全部精确闭合。它们不抓取、不补建 source run、不读取 legacy text/cache；未绑定当前 generation 的旧成功记录必须重分析，Reader refresh 则直接拒绝。缺失或漂移时在模型/图片请求前失败。此时重新运行 `npm run digest:prepare -- YYYY-MM-DD`。
 - 只续深度分析：`npm run deep -- --date YYYY-MM-DD`。
 - 强制全量重分析：`npm run reanalyze -- --concurrency N`。
-- 刷新 Reader/评分：`npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`。
+- 刷新 Reader/评分：`npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`；Reader 图像仍只在当前调用的 OS 临时目录物化。
 - 历史日期不能从 fetch 开始；只可从已有安全阶段运行 `./run-daily-digest.sh DATE --from generate|review|push|visual` 等代码允许的阶段。
 - 失败记录必须保留 `analysisManifest`、checkpoint 和恢复图片清单。旧成功正文可保留，但最新失败必须强制后续重试；成功后才清除失败标记。
 - 同篇分析必须持有规范化 arXiv ID 锁，并在锁内重读、合并、递增 generation，禁止用锁外陈旧对象覆盖 canonical。

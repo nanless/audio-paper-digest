@@ -33,19 +33,21 @@ npm run workspace:role -- status
 | 命令 | 行为 |
 |---|---|
 | `npm run fetch` | 归档、抓取、筛选、分析；不发布 |
-| `npm run deep -- --date DATE` | 从 complete filtered 安全续分析 |
-| `npm run batch` | 批量处理 canonical 中未完成论文 |
-| `npm run reanalyze -- --concurrency N` | 强制全量重分析 |
+| `npm run deep -- --date DATE` | 从 current sealed PDF/TXT source run 续分析；不能补抓或使用 legacy cache |
+| `npm run batch` | 仅用 current sealed PDF/TXT 批量处理 canonical 中未完成论文 |
+| `npm run reanalyze -- --concurrency N` | 强制全量重分析，仍只重放 current sealed PDF/TXT |
 | `node scripts/analyze-single-paper.js ID --force` | 单篇分析 |
 | `node scripts/reanalyze-selected.js ID...` | 指定集合重分析 |
 | `node scripts/refilter-reanalyze-by-date.js DATE` | 历史日期重筛与重分析 |
-| `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 批量刷新评分与 Reader |
+| `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 批量刷新评分与 Reader；重放 sealed PDF/TXT，图像仅临时物化 |
 | `npm run validate:data` | 只读 current 契约检查 |
 | `npm run keyword:recall` | 关键词预筛金标准回放 |
 | `npm run backfill` | 仅补录历史 paper ID |
 | `npm run paper:rethink` | 历史独立维护工具；博客已取消集成，读者无需启动。旧接口保留于[历史说明](paper-rethink-companion.md)。 |
 
 `full-fetch.js` 从 fetch 开始时只接受北京时间当天。后台运行可直接调用 `node scripts/full-fetch.js`，避免 npm/TTY 包装干扰。
+
+以上四个恢复入口都要求 `deep-analysis-result.json.dailyFreshSourceRun` 可精确重放：canonical batchDate、论文集和每个 `source.txt`、`source.pdf`、runtime/manifest 必须闭合。缺失、损坏或漂移会在模型或图片请求前失败；运行 `npm run digest:prepare -- DATE` 重新建立 source phase，不能手补 checkpoint。
 
 ## 博客事务
 
@@ -56,6 +58,11 @@ npm run workspace:role -- status
 | `npm run blog:push -- --date DATE` | 精确 commit/push 与远端 OID |
 | `--include-id ID` | 单篇隔离范围，适用阶段必须保持同一 ID |
 | `--exclude-id ID` | generate 阶段显式排除，可重复 |
+
+generation manifest 会把实际选中的 current、日期 archive 或显式 `--data-file` 写成
+`generation-input-source-reference-v1`：绝对路径、字节数和 SHA-256 同时进入 input fingerprint。review 和
+push 只重放该文件及其 `dailyFreshSourceRun`，不会退回当时的 `DEEP_ANALYSIS_RESULT_FILE`；输入或 sealed
+TXT/PDF 漂移时必须重新 generate。
 
 不得把三个入口合并为一个模糊的“发布脚本”。`publish-to-blog.py` 是共享实现与生成兼容入口，不替代三阶段门禁。
 三个入口都会先取得博客仓库 Git common-dir 下的私有共享锁，再取得本项目的日期事务锁；因此即使两个
@@ -77,11 +84,39 @@ npm run history:inventory -- --apply \
   --ledger all-history.json --receipt all-history.receipt.json
 ```
 
-双文件会写入受保护的 `data/runtime/historical-page-inventories`。`history:crosswalk` 建立 pending
-审核状态，通过受控 decision/CAS 记录待核、阻断、冲突，或在现场重放 authenticated
-production-authorized `paper-source-authority-v1` 后记录 verified；全部 verified 且每次读取均可重新
-解析当前 authority handle，才能生成或消费不可变 final receipt。
-真实 arXiv authority 批处理、已验证 arXiv identity 的历史分析、taxonomy/单篇/daily 确定性后处理已实现。仍未完成的是全部来源身份闭合、会议历史路径映射，以及历史专属 review/install/commit/push 交易。准确命令和当前运行快照见[历史重写底座](history-rewrite.md)与[全历史重写交接](historical-rewrite-handoff-2026-09-07.md)。
+双文件会写入受保护的 `data/runtime/historical-page-inventories`。本地好数据不等待 crosswalk；当前
+执行链为 `conference-local-sources → direct-inputs → conference-projections → direct-plan → direct-scheduler
+→ direct-run → direct-aggregate`。arXiv route 来自冻结页已有的单一 arXiv hint，并在每次 generation 新拉、
+封存官方 TXT/PDF/runtime/manifest；会议只重放绑定的本地 metadata/PDF SHA。crosswalk 仅处理 named fresh arXiv
+acquisition handoff；本地会议输入缺失/损坏使 direct item 失败关闭。历史专属 review、activation、commit/push receipt
+与 remote OID 仍未实现。
+
+```bash
+# 所有文件参数均为绝对路径；先用 --dry-run，确认后才改为 --apply
+npm run history:conference-local-sources -- --apply [--output conference-local-sources-v1.json]
+npm run history:direct-inputs -- --apply --conference-manifest /abs/conference-local-sources-v1.json \
+  --inventory /abs/all-history.json --blog-root /abs/audio-paper-digest-blog [--name scoped-historical-local-data-v3.json]
+npm run history:conference-projections -- --apply --catalog /abs/scoped-historical-local-data-v3.json \
+  --inventory /abs/all-history.json [--output conference-page-projections-v1.json]
+npm run history:direct-plan -- --apply --catalog /abs/scoped-historical-local-data-v3.json \
+  --inventory /abs/all-history.json --conference-projections /abs/conference-page-projections-v1.json \
+  [--output direct-rewrite-plan-v2.json]
+npm run history:direct-scheduler -- --apply --plan /abs/direct-rewrite-plan-v2.json \
+  [--queue all|arxiv|conference] [--generation N] [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
+npm run history:direct-run -- --apply --plan /abs/direct-rewrite-plan-v2.json \
+  [--queue all|arxiv|conference] [--generation N] [--concurrency 1-8]
+npm run history:direct-aggregate -- projection --apply --plan-file /abs/direct-rewrite-plan-v2.json \
+  --inventory-file /abs/all-history.json --output-name direct-aggregate-projection-v1.json
+npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-rewrite-plan-v2.json \
+  --registry-file /abs/direct-rewrite-registry.json --projection-file /abs/direct-aggregate-projection-v1.json \
+  (--daily YYYY-MM-DD|--conference conference-key)
+```
+
+`history:crosswalk` 只保留 legacy pending decision state 的只读/审计用途。`history:arxiv-batch` 必须明确传入
+`--handoffs NAME.json[,NAME.json...]`，并且只接受 direct scheduler/run 写入的 named immutable fresh-arXiv failure
+handoff；它不枚举 pending 页。`history:local-crawl-batch`（及 `archive-crawl-batch`）和
+`history:conference-crawl-batch` 是 fail-closed retired compatibility endpoints，不能写 crosswalk。准确来源边界和
+recovery 见[历史重写底座](history-rewrite.md)。
 
 ## 视觉状态机
 

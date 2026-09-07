@@ -519,7 +519,27 @@ body
             module.review_all_posts.assert_not_called()
             module.run_hugo_gate.assert_not_called()
             module.save_review_receipt.assert_not_called()
-            module.git_push.assert_not_called()
+
+    def test_review_replays_manifest_bound_input_before_any_current_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / 'generation.json'
+            payload = {
+                'schemaVersion': 3,
+                'inputSourceReference': {'path': '/archive/2026-07-10/deep-analysis-result.json'},
+            }
+            manifest.write_text(json.dumps(payload), encoding='utf-8')
+            replay = mock.Mock(side_effect=ValueError('archived input drift'))
+            module = SimpleNamespace(
+                PublishDataValidationError=ValueError,
+                validate_publish_target=lambda: (Path(tmp) / 'blog', Path(tmp) / 'posts'),
+                load_generation_manifest=lambda _date: ([], manifest),
+                validate_generation_input_source_reference=replay,
+                validate_git_publish_branch=mock.Mock(),
+            )
+            with self.assertRaisesRegex(ValueError, 'archived input drift'):
+                review_blog._run_review(module, '2026-07-10')
+            replay.assert_called_once_with(payload, '2026-07-10')
+            module.validate_git_publish_branch.assert_not_called()
 
     def test_push_entry_only_verifies_receipt_and_pushes(self):
         path = Path('/tmp/content/posts/2026-07-10.md')

@@ -70,6 +70,19 @@ npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-
 
 来源 SHA、Prompt 或模型变化会按指纹失效对应阶段。旧成功正文存在但最新尝试失败时仍需重试。
 
+如果恢复命令报告 sealed daily source 缺失或漂移，不要改 checkpoint，也不要用旧 `data/current` 文本补跑；重新运行同日 `npm run digest:prepare -- YYYY-MM-DD`，让 source phase 重新封存 PDF/TXT。
+
+## 6.1 历史 direct source 或 staging 失败
+
+先确认失败路由，而不是启动 crosswalk：arXiv direct item 的当前 generation 应在
+`data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/` 中有 TXT、PDF、runtime 和 manifest；
+重新运行同一 `history:direct-scheduler` 或 `history:direct-run` 会验证并恢复一致的工件。fresh acquisition
+失败只会写 immutable handoff，不自动修改 crosswalk，也不应阻断本地会议队列。
+
+会议 direct item 先检查 local-source manifest 中 metadata/PDF 的路径和 SHA、冻结 inventory SHA 以及
+conference projection。不要用旧博客正文、旧分析、文件名相似度或随意标题搜索补齐；只有本地会议输入缺失/损坏，
+或已写出的 arXiv failure handoff，才进入相应 crosswalk fallback。
+
 ## 7. Reader 文章机械、表格或图片脱节
 
 检查 `apiReaderPlan` 与正文：

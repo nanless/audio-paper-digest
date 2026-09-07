@@ -1,6 +1,13 @@
 # 从原文完整重写已有批次
 
-适用于用户明确要求“完全重写，不使用以前生成的正文”。这不是普通 `reanalyze` 或 `api:reader:refresh`：先创建隔离 run，只把原论文元数据、同源原文与原图送入新分析，全部成功后才提升 canonical。所有命令必须沙箱外执行。
+这是既有日批次的隔离 `rewrite:source` 维护流程，适用于用户明确要求“完全重写，不使用以前生成的正文”。
+它不是普通 `reanalyze` 或 `api:reader:refresh`：先创建隔离 run，只把原论文元数据、同源原文与原图送入
+新分析，全部成功后才提升 canonical。所有命令必须沙箱外执行。
+
+它**不是**当前全历史执行入口。全历史 arXiv 必须使用 [direct-local-first 历史流程](history-rewrite.md)：每个
+generation 从官方 arXiv 新拉并持久化 `source.txt`、`source.pdf`、`source-runtime.json` 和
+`source-manifest.json`；会议只重放本地 metadata/PDF SHA。不要用本页 legacy source cache 代替该四文件
+contract，也不要让 crosswalk 或 pilot 成为本地好数据的前置条件。
 
 ## 分阶段入口
 

@@ -1,9 +1,12 @@
-# 全历史博客重写：实施路线图
+# 全历史博客重写：实施路线图（历史设计记录）
 
-状态：实施级规划，尚未授权任何模型调用、历史页面改写或发布。本文件中的 `history:*`
-新命令和 `*-v1` 新合同均是**待实现接口**；已经存在的命令会明确标为“现有”。执行时仍须
-遵守仓库根 `AGENTS.md`：所有脚本与测试在沙箱外运行，历史正文不得进入新的分析或 Reader
-上下文，任何来源、页面集合、Git、Hugo 或远端证明不闭合都失败关闭。
+> 本文的 crosswalk-first 规划已被当前 direct-local-first 路线取代：`conference-local-sources → direct-inputs → conference-projections → direct-plan → direct-scheduler → direct-run → direct-aggregate`。arXiv route 直接来自冻结页已有的单一 hint，并在本次 generation 重新抓取、封存 TXT/PDF/runtime/manifest；会议使用本地 metadata/PDF SHA。crosswalk 只处理 named fresh arXiv acquisition failure handoff；本地会议输入缺失或损坏会让 direct item 失败关闭。执行以 [history-rewrite.md](history-rewrite.md) 为准。
+
+状态：历史设计记录。它所列的 P0–P5、试点矩阵、crosswalk finalize、放大阈值和后文所有 `planned`
+命令均不再是执行合同，不能复制执行或阻断 direct-local queue。已实现的当前入口、参数和运行边界只以
+[history-rewrite.md](history-rewrite.md)、[conference-workflow.md](conference-workflow.md) 与
+`package.json` 为准。执行时仍须遵守仓库根 `AGENTS.md`：所有脚本与测试在沙箱外运行，历史正文
+不得进入新的分析或 Reader 上下文，任何直接来源、页面集合、Git、Hugo 或远端证明不闭合都失败关闭。
 
 ## 1. 目标、范围与当前基线
 

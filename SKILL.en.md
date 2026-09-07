@@ -26,7 +26,8 @@ Use it only when the user explicitly requests Manual/human processing, and read 
 
 ```bash
 npm install
-python3 -m pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 cp env.example .env
 ```
 
@@ -41,7 +42,10 @@ HTTP_PROXY=http://127.0.0.1:7897
 PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 ```
 
-Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Every project script, test, syntax check, and data validation command must run outside the sandbox.
+Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Default publishing and visual entry points require Python 3.11+
+with an OpenSSL TLS backend; `scripts/python-runtime.sh` prefers the project `.venv`, then `python3.11`, then a
+validated `python3`. Every project script, test, syntax check, and data validation command must run outside the
+sandbox.
 
 ## 3. Default Workflow
 
@@ -51,6 +55,7 @@ archive current
   → published-paper deduplication
   → high-recall keyword prefilter
   → per-paper LLM filtering
+  → seal this run's official arXiv text/PDF
   → staged full-text analysis
   → type-aware scoring
   → API Reader v3 longform and official figures
@@ -69,7 +74,13 @@ archive current
 
 ### 3.2 Analysis and Reader Longform
 
-Each paper prefers healthy arXiv HTML and uses controlled PDF fallback. Metadata shells and malformed short pages cannot claim full-text provenance. A source-SHA change invalidates primary analysis and downstream stages.
+After filtering and before deep analysis, every selected arXiv ID is freshly captured from official arXiv into
+`data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`. The sealed generation
+contains `source.txt`, `source.pdf`, `source-runtime.json`, and `source-manifest.json`; it is the only
+daily API input for analysis and Reader. HTML remains preferred and PDF is the controlled textual fallback
+inside that capture. Metadata shells and malformed short pages cannot claim full-text provenance. A source-SHA
+change invalidates primary analysis and downstream stages. Figure pixels are materialized only for the active
+OS-temporary call and never persist in `data/current` or runtime image caches.
 
 Stages include primary analysis, open-source and demo scans, revision, table/method/structure repair, scoring audit, API Reader, and figure materialization. Each stage binds input, model, protocol, prompt, temperature, budgets, and output SHA.
 
@@ -109,7 +120,7 @@ arXiv metadata, HTML, PDF, and images require project HTTP CONNECT. HuggingFace 
 | Setting | Default |
 |---|---:|
 | analysis concurrency | 3 |
-| configured filter batch | 5; exact Muse effective batch is 1 |
+| configured filter batch | 5; Muse uses the configured value |
 | whole-paper retries / per-stage attempts | 2 / 3 |
 | primary / local-repair output | 64,000 / 16,000 tokens |
 | primary input | 200,000 characters |
@@ -130,6 +141,7 @@ OpenAI Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`. An `incomple
 | `filter-decisions.json` | per-paper decisions and cache |
 | `filtered-papers.json` | selected set |
 | `deep-analysis-result.json` | canonical analysis, checkpoints, production proof |
+| `data/runtime/daily-fresh-source-runs/` | immutable official PDF/TXT source generations replayed by daily analysis and publication |
 | generation manifest | exact blog-page set and SHA values |
 | review receipt | review, Git baseline, and remote publication proof |
 | visual manifests | TOP 10 and cover task state |
@@ -148,6 +160,11 @@ npm run digest:status -- --date YYYY-MM-DD
 
 Fetching from scratch is restricted to Beijing today. Historical batches resume only from stages accepted by the orchestrator. Never edit checkpoints to manufacture completion.
 
+`deep`, `batch`, `reanalyze`, and `api:reader:refresh` are sealed-source recovery commands: they replay only
+the current canonical `dailyFreshSourceRun`, including the exact batch date, paper set, and every TXT/PDF/runtime/
+manifest. They never recapture a source or read legacy text/cache. Missing or drifted source evidence requires
+`npm run digest:prepare -- YYYY-MM-DD`.
+
 Failures retain manifests and checkpoints. A prior successful body may remain available, but the latest failure forces a retry until a later success clears it. Per-paper analysis holds a normalized-arXiv-ID lock and rereads canonical state inside the lock before merging.
 
 ## 6. Blog Transaction
@@ -163,6 +180,23 @@ Generate installs exact pages and issues the generation manifest. Review treats 
 Page bytes, generation, production proof, review protocol, Hugo gate, blog baseline, remote name, or push-URL identity drift invalidates the transaction. Review workers never modify reviewed bytes; findings return to generation/repair.
 
 Single-paper inclusion, exclusion, and historical sealed preview are explicit maintenance scopes. Their IDs must remain identical across applicable stages and cannot establish full-batch visual proof.
+
+## Historical direct rewrite
+
+The history workspace uses a separate `direct-local-first` path:
+
+```text
+retained conference metadata/PDF + frozen single arXiv hints
+  → conference-local-sources → direct-inputs → conference-projections → direct-plan
+  → direct-scheduler → direct-run → private page staging / direct-aggregate
+```
+
+Each arXiv generation freshly fetches and seals official text, PDF, runtime metadata, and manifest under
+`data/runtime/fetched-arxiv-sources/`; local arXiv text, PDF, images, prior analysis, and prior blog prose are
+excluded from writing input. Conference entries replay their retained metadata/PDF SHA. Crosswalk is only a
+failure handoff for an unavailable/damaged conference source or a failed fresh arXiv acquisition; it is not a
+direct-queue prerequisite. Historical review, blog activation, commit/push receipt, and remote-OID publication
+remain unimplemented. Use [docs/history-rewrite.md](docs/history-rewrite.md) for exact CLI arguments.
 
 ## 7. Post-Publication Visuals
 

@@ -64,14 +64,24 @@ function fixture(t, { sourceId } = {}) {
     const paperLockRoot = path.join(root, 'paper-locks');
     const options = { runDir, rootDir, date, paperIds, blogRepo, canonicalPath, currentDir, paperLockRoot };
     const baseline = prepareBaseline(options);
+    const sourceRecords = Object.fromEntries(papers.map(p => [p.arxivId, { version: 2,
+        contract: 'fresh-source-bundle-v2', runId: 'run-one', paperId: p.arxivId,
+        sourceGeneration: 1, sourceManifestSha256: sha(`fresh manifest ${p.arxivId}`),
+        sourceSha256: sha(`fresh source ${p.arxivId}`), structuredArtifactsSha256: sha(`fresh artifacts ${p.arxivId}`),
+        sourceSnapshotSha256: sha(`fresh snapshot ${p.arxivId}`) }]));
     const run = { version: 1, contract: 'fresh-rewrite-run-v1', runId: 'run-one', date,
-        paperIds, baseline, sourceExpectations: baseline.sourceExpectations, status: 'complete' };
+        paperIds, baseline, sourceExpectations: baseline.sourceExpectations, sourceRecords, status: 'complete' };
     const rewritten = papers.map(p => {
+        const sourceRecord = sourceRecords[p.arxivId];
         const provenance = { contract: 'fresh-source-analysis-v1', runId: run.runId, sourceOnly: true,
-            oldGeneratedTextIncluded: false, sourceSha256: p.sourceSha256,
-            structuredArtifactsSha256: p.structuredArtifactsSha256, sourceSnapshotSha256: sha(`snapshot ${p.arxivId}`) };
+            oldGeneratedTextIncluded: false, sourceSha256: sourceRecord.sourceSha256,
+            structuredArtifactsSha256: sourceRecord.structuredArtifactsSha256,
+            sourceSnapshotSha256: sourceRecord.sourceSnapshotSha256, sourceGeneration: sourceRecord.sourceGeneration,
+            sourceManifestSha256: sourceRecord.sourceManifestSha256 };
         return { ...p, complete: true, analysis: `new analysis ${p.arxivId}`, apiReaderArticle: `new reader ${p.arxivId}`,
-            freshRewriteProvenance: provenance, analysisManifest: { ...p.analysisManifest, freshRewriteProvenance: provenance } };
+            sourceSha256: sourceRecord.sourceSha256, freshRewriteProvenance: provenance,
+            analysisManifest: { ...p.analysisManifest, sourceAcquisition: { sourceSha256: sourceRecord.sourceSha256,
+                structuredArtifactsSha256: sourceRecord.structuredArtifactsSha256 }, freshRewriteProvenance: provenance } };
     });
     const analysis = { status: 'complete', papers: rewritten };
     const hooks = { applyDigestStatuses: (database, incoming, opts) => {
@@ -106,11 +116,10 @@ test('prepare backs actual 31 pages including newer single release, assets, data
     assert.throws(() => prepareBaseline(f), /backup|baseline/i);
 });
 
-test('new baseline optionally pins the original arXiv version without weakening source hashes', t => {
+test('new baseline audits the original arXiv version while requiring a new sealed source generation', t => {
     const f = fixture(t, { sourceId: '2609.00001v1' });
     assert.deepEqual(f.baseline.sourceExpectations['2609.00001'], {
-        sourceSha256: sha('source 2609.00001'), structuredArtifactsSha256: sha('artifacts 2609.00001'),
-        sourceId: '2609.00001v1'
+        sourceMode: 'sealed-arxiv-bundle-v1', sourceGeneration: 1
     });
     assert.equal(f.baseline.sourceExpectations['2609.00002'].sourceId, undefined);
     assert.deepEqual(prepareBaseline(f), f.baseline);

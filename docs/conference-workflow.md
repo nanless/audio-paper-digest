@@ -6,6 +6,14 @@
 source ledger 继续保留 v1 是因为其四类来源工件格式未变；所有携带 canonical `paperId`
 的 discovery/filter/staging/import plan/run/execution 合同均已升级为 v2。
 
+历史全量重写不等待这条 legacy conference execution 链：已有本地 metadata/PDF 的冻结历史页走
+`history:conference-local-sources → history:direct-inputs → history:conference-projections → history:direct-plan`
+后进入 direct 队列。`direct-inputs` 的 arXiv route 直接来自冻结页已有的单一 arXiv hint，且每个 generation
+新拉、封存官方 TXT、PDF、runtime metadata 与 manifest；会议 route 才消费这里的本地 PDF、metadata SHA 与
+冻结页 frontmatter title fingerprint。图像仅由本次 Reader 在系统临时目录从 PDF 物化；缺失或损坏的本地会议
+输入会使该 direct item 失败关闭，绝不转入 crosswalk。只有 named arXiv fresh acquisition failure handoff
+可以进入 crosswalk。
+
 ## 为什么不能把会议 PDF 当作普通日更
 
 默认日更的身份和来源是 arXiv 批次。历史会议页中存在没有可靠 arXiv ID 的记录；
@@ -378,15 +386,17 @@ PDF 是弱结构来源：不能可靠复原原始 TeX 时，不展示“可验�
 
 ## 与历史重写的关系
 
-已有完整 arXiv 原文、数据闭环和简单发布拓扑的历史日期，可继续使用
-[`rewrite:source`](fresh-rewrite.md)。会议记录必须先经过 ledger 和本地 PDF 来源适配器；
-不能临时把 `fullText`、文件路径或旧 Reader 文本塞进 canonical。
+单个既有日批次的隔离重写可以使用 [`rewrite:source`](fresh-rewrite.md)。全历史会议页则优先使用
+本页开头的 direct-local-first chain；它不要求先跑 legacy ledger/execution，也不把 legacy `fullText`、
+任意文件路径或旧 Reader 文本塞进 canonical。direct conference route 只接受 local-source manifest 已绑定的
+metadata/PDF SHA 和冻结 projection。
 
-历史重写的顺序是：来源身份闭合 → source-only 重写 → 事实/分类审核 → promotion →
-旧发布凭证交接 → generate/review/push。旧 URL 与旧 receipt 不能被删除或覆盖。
+历史 direct 顺序是：本地 source catalog/projection/plan → source-only rewrite → 私有单页/汇总 staging。
+旧 URL 与旧 receipt 保留为投影和未来 publication 基线；现阶段没有历史专属 review、activation 或
+generate/review/push receipt。
 
 ## Token 与批次控制
 
-先从覆盖不同会议、PDF 质量、任务类型与页面长度的小批试点开始。每次请求都使用既有
-用量账本和 checkpoint；来源 SHA、Reader 或 taxonomy 规则发生变化才失效必要下游。
-不要依据历史页面数量或一次会议目录总数直接启动全量模型调用。
+会议执行可按 source、analysis 与 Reader 并发限制分片；同一 canonical paper 仍只能有一个 writer。每次请求
+使用既有用量账本和 checkpoint；来源 SHA、Reader 或 taxonomy 规则变化才失效必要下游。质量 review 是每个
+direct run 的常规阶段，不是本地好数据队列的 pilot-first 开关。

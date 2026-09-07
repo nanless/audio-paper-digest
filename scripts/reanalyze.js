@@ -13,7 +13,6 @@ const {
     analyzeBatch,
     readJsonFileStrict,
     updateJsonFileLocked,
-    initializeJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
     getCanonicalAnalysisRunSummary,
@@ -21,6 +20,7 @@ const {
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
+const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 
 loadEnvFile();
 
@@ -47,7 +47,6 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const DEFAULT_CURRENT_FILE = Config.FILES.deepAnalysisResult;
-const DEFAULT_LEGACY_FILE = Config.FILES.deepAnalysisResultLegacy;
 const DATA_FILE = dataFileArg || DEFAULT_CURRENT_FILE;
 
 // 并发度：命令行 > 环境变量 > 配置默认值
@@ -57,14 +56,7 @@ if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) {
     process.exit(1);
 }
 
-async function reanalyzeAll() {
-    if (!dataFileArg && !fs.existsSync(DEFAULT_CURRENT_FILE) && fs.existsSync(DEFAULT_LEGACY_FILE)) {
-        const legacyData = readJsonFileStrict(DEFAULT_LEGACY_FILE);
-        initializeJsonFileLocked(DEFAULT_CURRENT_FILE, Array.isArray(legacyData)
-            ? { timestamp: getBeijingISOString(), source: DEFAULT_LEGACY_FILE, papers: legacyData }
-            : legacyData);
-        console.log(`[reanalyze] 📦 已将 legacy 分析结果迁移到权威路径: ${DEFAULT_CURRENT_FILE}`);
-    }
+async function reanalyzeAll(options = {}) {
     console.log(`[reanalyze] 读取数据文件: ${DATA_FILE}`);
 
     if (!fs.existsSync(DATA_FILE)) {
@@ -75,6 +67,9 @@ async function reanalyzeAll() {
     const data = readJsonFileStrict(DATA_FILE);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
+    const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
+        papers, label: 'reanalyze recovery'
+    });
     console.log(`[reanalyze] 共 ${papers.length} 篇论文需要重新分析`);
     console.log(`[reanalyze] 模型: ${process.env.PAPER_ANALYZER_MODEL}`);
     console.log(`[reanalyze] 并发度: ${CONCURRENCY}`);
@@ -121,18 +116,25 @@ async function reanalyzeAll() {
         return payload;
     });
 
-    const { stats } = await analyzeBatch(papers, {
+    const runSealedDailyAnalysis = () => (options.analyzeBatch || analyzeBatch)(papers, {
         checkpointFilePath: DATA_FILE,
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(DATA_FILE);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
-            return { paper: latest ? { ...paper, ...latest } : paper, skip: false };
+            return {
+                paper: dailyFreshSources.prepareDailyPaper(latest ? { ...paper, ...latest } : paper, dailySourcePlan),
+                skip: false
+            };
         },
         concurrency: CONCURRENCY,
         maxRetries: 2,
         retryDelayMs: 2000,
         saveInterval: 0,
+        analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
+            ...options,
+            ...(options.analyzeFn ? { analyze: options.analyzeFn } : {})
+        }),
         onPaperResultLocked: async (paper, result) => {
             const attempted = result.result || {
                 ...paper,
@@ -170,6 +172,7 @@ async function reanalyzeAll() {
             if (!result.skipped) console.log(`[reanalyze] 💾 单篇结果已保存 (${attemptResults.length}/${papers.length})`);
         }
     });
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runSealedDailyAnalysis);
 
     const finalPayload = updateJsonFileLocked(DATA_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);

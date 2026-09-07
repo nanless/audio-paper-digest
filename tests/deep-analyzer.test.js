@@ -3521,15 +3521,18 @@ has_dataset: 否
             /(## 核心摘要\n)[\s\S]*?(?=\n## 方法概述和架构)/,
             '$1<CORE_SUMMARY_BYTES>'
         );
-        let prompt = ''; let maxTokens = null;
+        let prompt = ''; const prompts = []; let maxTokens = null; let repairCalls = 0;
         const updated = await repairCoreSummarySection(
             { arxivId: '2608.13817', title: 'Local summary repair' },
             original,
             '原文含同协议 WER 12.4%、9.8% 与移除融合门后的 11.1% 结果。',
             '局部证据',
             { callModelFn: async (messages, requestedMaxTokens) => {
+                repairCalls += 1;
                 prompt = messages[0].content;
+                prompts.push(prompt);
                 maxTokens = requestedMaxTokens;
+                if (repairCalls < 3) return '## 核心摘要\n这是一条仍不完整的修复摘要。';
                 return `## 核心摘要\n${expanded}`;
             } }
         );
@@ -3540,6 +3543,9 @@ has_dataset: 否
         assert.match(prompt, /2–4 个步骤/);
         assert.match(prompt, /320–600 个中文\/中文标点字符/);
         assert.strictEqual(maxTokens, 2500);
+        assert.strictEqual(repairCalls, 3);
+        assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
+        assert.match(prompts[1], /这是第 2 次局部修复/);
     });
 
     it('Reader 内部尝试耗尽后只抑制本次 outer retry', () => {

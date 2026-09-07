@@ -545,6 +545,37 @@ test('changed pixel evidence refuses candidate reuse before another model reques
     assert.equal(calls, 2);
 });
 
+test('direct source scope persists a separate ephemeral pixel binding and rejects a changed callback image', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
+    const directory = temporary(t); const paper = { arxivId: '2609.99985', title: '直接来源临时像素' };
+    const url = 'https://arxiv.org/html/2609.99985/figure.png';
+    const sourceEvidence = `FIGURE_1: 仅当前请求可见的图\nFIGURE_1_URL: ${url}`;
+    const invalid = fixture(); invalid.readerTitle = '短';
+    const sourceDetails = { paperId: 'arxiv:2609.99985', source: 'html', sourceId: '2609.99985', text: 'source',
+        structuredArtifacts: { tables: [], formulas: [], figures: [] } };
+    let calls = 0;
+    const invoke = async (pixels, callModel) => direct.withDirectRewriteAnalysisSource({
+        paperId: 'arxiv:2609.99985', route: 'arxiv-fresh-fetch', sourceDetails,
+        readerAttemptsDir: directory,
+        materializeReaderFigures: async figures => figures.map(figure => ({ ...figure,
+            rawBytes: Buffer.from(pixels), assetSha256: require('node:crypto').createHash('sha256').update(pixels).digest('hex'),
+            assetMediaType: 'image/png' }))
+    }, () => generateApiReaderArticleDetailed(paper, 'canonical', sourceEvidence, {
+        sourceText: 'source', readerMaxAttempts: 1, readerRecordDisposition: () => {}, readerCallModel: callModel
+    }));
+    await assert.rejects(invoke('first ephemeral pixels', async () => {
+        calls += 1; return JSON.stringify(invalid);
+    }), /读者标题/);
+    const stored = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
+    assert.deepEqual(Object.keys(stored.payload.ephemeralImageEvidence).sort(), ['directSupplementaryEvidence', 'imageEvidence']);
+    assert.doesNotMatch(JSON.stringify(stored.payload.ephemeralImageEvidence), /rawBytes|base64|cachePath|tempPath/);
+    await assert.rejects(invoke('changed ephemeral pixels', async () => {
+        calls += 1; throw new Error('must not make a model call after ephemeral drift');
+    }), /ephemeral image evidence drifted/);
+    assert.equal(calls, 1);
+});
+
 test('two initial network failures do not consume received-content or malformed-root budgets', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);

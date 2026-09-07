@@ -46,6 +46,7 @@ const {
     validateManualPaperSourceIdentity
 } = require('../manual/scripts/manual-paper-source-identity.js');
 const { resolveArtifactAuthority } = require('../manual/scripts/manual-fresh-authoring-contract.js');
+const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
@@ -494,6 +495,60 @@ function validateAnalysisSourceProvenance(filePath, source, prefix, issues) {
     }
 }
 
+function validateDailyFreshSourceRun(filePath, data, papers, issues) {
+    const reference = data?.dailyFreshSourceRun;
+    const bundleProvenance = papers.some(paper => (
+        paper?.freshRewriteProvenance?.sourceGeneration !== undefined
+        || paper?.freshRewriteProvenance?.sourceManifestSha256 !== undefined
+    ));
+    if (reference === undefined) {
+        if (bundleProvenance) addIssue(issues, filePath, 'sealed daily source provenance 缺少 dailyFreshSourceRun 顶层引用');
+        return;
+    }
+    let plan;
+    try { plan = dailyFreshSources.readDailyFreshSourcePlan(reference); }
+    catch (error) {
+        addIssue(issues, filePath, `dailyFreshSourceRun 无法重放: ${error.message}`);
+        return;
+    }
+    if (data.batchDate !== plan.batchDate) {
+        addIssue(issues, filePath, `dailyFreshSourceRun.batchDate (${plan.batchDate}) 必须等于 deep batchDate (${data.batchDate})`);
+    }
+    const dailyPaperId = paper => String(paper?.arxivId || paper?.paper_id || '').trim().replace(/v\d+$/i, '')
+        || normalizedId(paper);
+    const paperIds = papers.map(dailyPaperId);
+    const sortedPaperIds = [...paperIds].sort();
+    const sealedPaperIds = [...plan.paperIds].sort();
+    if (paperIds.some(id => !id) || new Set(paperIds).size !== paperIds.length
+        || sortedPaperIds.length !== sealedPaperIds.length
+        || !sortedPaperIds.every((id, index) => id === sealedPaperIds[index])) {
+        addIssue(issues, filePath, 'dailyFreshSourceRun 的 sealed paper set 必须精确覆盖 deep papers');
+        return;
+    }
+    for (const [index, paper] of papers.entries()) {
+        const prefix = `papers[${index}].freshRewriteProvenance`;
+        try {
+            const details = dailyFreshSources.readDailyFreshSource(plan, paper);
+            const descriptor = details.freshSourceDescriptor;
+            const proof = paper.freshRewriteProvenance;
+            const manifestProof = paper.analysisManifest?.freshRewriteProvenance;
+            if (!proof || proof.contract !== 'fresh-source-analysis-v1' || proof.runId !== plan.runId
+                || proof.sourceGeneration !== dailyFreshSources.SOURCE_GENERATION
+                || proof.sourceManifestSha256 !== descriptor.sourceManifestSha256
+                || proof.sourceSha256 !== descriptor.sourceSha256
+                || proof.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256
+                || proof.sourceOnly !== true || proof.oldGeneratedTextIncluded !== false
+                || stableContentSha256(manifestProof) !== stableContentSha256(proof)
+                || paper.sourceSha256 !== descriptor.sourceSha256
+                || paper.analysisManifest?.sourceAcquisition?.sourceSha256 !== descriptor.sourceSha256) {
+                addIssue(issues, filePath, `${prefix} 未精确绑定 sealed TXT/PDF generation`);
+            }
+        } catch (error) {
+            addIssue(issues, filePath, `${prefix} sealed source 无法重放: ${error.message}`);
+        }
+    }
+}
+
 function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
     const manifest = paper?.analysisManifest;
     if (![MANUAL_DEPTH_CONTRACT_VERSION_V4, MANUAL_DEPTH_CONTRACT_VERSION_V5]
@@ -829,6 +884,7 @@ function validatePaperListFile(filePath, options = {}) {
         }
         if (options.deepAnalysis) {
             validateDeepAnalysisMetadata(filePath, data, papers, issues, options);
+            validateDailyFreshSourceRun(filePath, data, papers, issues);
         }
     }
 
@@ -1690,6 +1746,7 @@ module.exports = {
     validateCurrentDataFiles,
     validateFilteredDeepPapersConsistency,
     validateSourceHealth,
+    validateDailyFreshSourceRun,
     loadBoundManualV4SourceText,
     validateManualV4CanonicalSourceClosure: loadBoundManualV4SourceText,
     resolveManualPaperIdentityMode,

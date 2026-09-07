@@ -8,6 +8,7 @@ const RUN_CONTRACT = 'fresh-rewrite-run-v1';
 const INPUT_CONTRACT = 'fresh-rewrite-inputs-v1';
 const ANALYSIS_CONTRACT = 'fresh-rewrite-analysis-v1';
 const FRESHNESS_CONTRACT = 'fresh-source-analysis-v1';
+const BUNDLE_SOURCE_MODE = 'sealed-arxiv-bundle-v1';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[0-9a-f]{64}$/;
 const SEALED_RECOVERY_CAPABILITIES = new WeakMap();
@@ -20,6 +21,8 @@ function stableHash(value) {
         : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, normalize(item[key])])) : item;
     return sha256(JSON.stringify(normalize(value)));
 }
+const isBundleExpectation = value => value?.sourceMode === BUNDLE_SOURCE_MODE
+    && Number.isSafeInteger(value.sourceGeneration) && value.sourceGeneration >= 1;
 
 function mintSealedRecoveryCapabilities(loaded, selectedIds, sourceRecords) {
     const analysisFileSha256 = loaded.analysisFileSha256;
@@ -40,6 +43,8 @@ function mintSealedRecoveryCapabilities(loaded, selectedIds, sourceRecords) {
             sourceSha256: descriptor.sourceSha256,
             structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
             sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+            ...(descriptor.contract === 'fresh-source-bundle-v2' ? { sourceGeneration: descriptor.sourceGeneration,
+                sourceManifestSha256: descriptor.sourceManifestSha256 } : {}),
             consumed: false
         });
         capabilities.set(id, handle);
@@ -225,8 +230,10 @@ function assertSourceExpectations(expectations, ids) {
         throw new Error('Fresh rewrite source expectations do not cover the exact paper set');
     }
     for (const id of ids) {
-        if (!SHA_RE.test(expectations[id]?.sourceSha256 || '') || !SHA_RE.test(expectations[id]?.structuredArtifactsSha256 || '')) {
-            throw new Error(`${id} lacks verified source/artifact SHA for a fresh rewrite`);
+        const expectation = expectations[id];
+        if (!isBundleExpectation(expectation)
+            && (!SHA_RE.test(expectation?.sourceSha256 || '') || !SHA_RE.test(expectation?.structuredArtifactsSha256 || ''))) {
+            throw new Error(`${id} lacks a sealed source contract for a fresh rewrite`);
         }
     }
 }
@@ -249,14 +256,18 @@ function assertAnalysisEnvelope(analysis, run, inputs) {
 function assertFreshProvenance(paper, run, descriptor = null) {
     const id = paperId(paper);
     const provenance = paper.freshRewriteProvenance;
-    const expected = run.sourceExpectations[id];
+    const expected = descriptor || run.sourceRecords?.[id] || run.sourceExpectations[id];
     if (!provenance || provenance.contract !== FRESHNESS_CONTRACT || provenance.runId !== run.runId
         || provenance.sourceOnly !== true || provenance.oldGeneratedTextIncluded !== false
-        || provenance.sourceSha256 !== expected.sourceSha256
+        || !expected || provenance.sourceSha256 !== expected.sourceSha256
         || provenance.structuredArtifactsSha256 !== expected.structuredArtifactsSha256
         || !SHA_RE.test(provenance.sourceSnapshotSha256 || '')
         || stableHash(paper.analysisManifest?.freshRewriteProvenance || null) !== stableHash(provenance)
-        || (descriptor && provenance.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256)) {
+        || (descriptor && provenance.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256)
+        || (isBundleExpectation(run.sourceExpectations[id]) && (!Number.isSafeInteger(provenance.sourceGeneration)
+            || provenance.sourceGeneration !== expected.sourceGeneration
+            || provenance.sourceManifestSha256 !== expected.sourceManifestSha256
+            || !SHA_RE.test(provenance.sourceManifestSha256 || '')))) {
         throw new Error(`${id} generated text is not bound to this fresh run and source snapshot`);
     }
     return true;

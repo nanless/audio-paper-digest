@@ -463,10 +463,13 @@ async function runHistoricalScheduler(options, overrides = {}) {
     const deps = { ...defaultDependencies(), ...overrides };
     if (!options.apply) return runHistoricalSchedulerUnlocked(options, deps);
     const filename = schedulerPath(deps.files.historicalAnalysisSchedulerDir, options.crosswalkId);
+    const engine = require('../analysis-engine.js');
     const withSchedulerLock = deps.withSchedulerLock
-        || ((lockPath, callback) => require('../analysis-engine.js').withFileLock(lockPath, callback));
+        || ((lockPath, callback, lockOptions) => engine.withFileLock(lockPath, callback, lockOptions));
     return withSchedulerLock(`${filename}.scheduler-operation`,
-        () => runHistoricalSchedulerUnlocked(options, deps, filename));
+        () => runHistoricalSchedulerUnlocked(options, deps, filename), {
+            recoveryPolicy: engine.HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY
+        });
 }
 
 module.exports = { CONTRACT, VERSION, READER_TRANSPORT_COOLDOWN_MS, READER_RECOVERY_POLICY_VERSION,

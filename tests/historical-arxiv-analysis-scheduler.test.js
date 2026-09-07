@@ -215,6 +215,25 @@ test('durable scheduler operation lock prevents two instances from repeating one
     assert.equal(authorities, 1);
 });
 
+test('scheduler wires its local-dead recovery capability only to the outer operation lock', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    let received;
+    const result = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'prepare-only', queue: 'all', limit: 'pilot', concurrency: 1 }, { files,
+        withSchedulerLock: async (_lockPath, callback, options) => {
+            received = options; return callback();
+        },
+        readCrosswalk: () => state(), recoverRun: () => null,
+        fetchMetadata: async () => ({ metadata: {}, proof: {}, rawBytes: Buffer.from('atom') }),
+        prepareAuthority: async () => ({ authorityHandle: {} }),
+        prepareRun: () => ({ status: 'recovered' }), now: () => '2026-09-07T00:00:00.000Z' });
+    const engine = require('../scripts/analysis-engine.js');
+    assert.equal(received.recoveryPolicy, engine.HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY);
+    assert.equal(result.prepared, 1);
+});
+
 test('prepare returns the current checkpoint item instead of reusing stale recovery permission', async t => {
     const engine = require('../scripts/analysis-engine.js');
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),

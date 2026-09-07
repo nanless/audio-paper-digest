@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const Config = require('../scripts/config.js');
 const fresh = require('../scripts/lib/fresh-analysis-context.js');
+const freshSource = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function fixture(t) {
@@ -89,6 +90,53 @@ test('fresh source fetch stores exact full originals, deduplicates simultaneous 
     for (const name of fs.readdirSync(directory)) assert.equal(fs.statSync(path.join(directory, name)).mode & 0o777, 0o600);
     assert.equal(source.structuredArtifacts.payloadSha256, f.artifacts.payloadSha256);
     assert.equal(fs.readFileSync(path.join(directory, 'source-details.json'), 'utf8'), JSON.stringify(f.details));
+});
+
+test('daily bundle mode seals PDF/TXT/manifest once and replays only that generation without the legacy text cache', async t => {
+    const f = fixture(t); const generation = 1;
+    const sourceExpectations = { [f.id]: { sourceMode: fresh.BUNDLE_SOURCE_MODE, sourceGeneration: generation } };
+    const manifest = JSON.parse(fs.readFileSync(path.join(f.context.runDir, 'run.json'), 'utf8'));
+    manifest.sourceExpectations = sourceExpectations;
+    fs.writeFileSync(path.join(f.context.runDir, 'run.json'), JSON.stringify(manifest), { mode: 0o600 });
+    const identity = { ...f.context, sourceExpectations };
+    const sourceRoot = path.join(f.context.runDir, 'sources'); let captures = 0; const originalCapture = freshSource.captureFreshArxivRewriteSource;
+    freshSource.captureFreshArxivRewriteSource = options => { captures++; return originalCapture(options, {
+        fetchText: async id => {
+            const text = `fresh daily HTML source ${id}. `.repeat(100);
+            const artifacts = { version: 1, source: 'html', flattenedTextSha256: sha(text),
+                tables: [{ ordinal: 1, caption: 'daily table', rows: [] }],
+                formulas: [{ ordinal: 1, latex: 'x=y' }],
+                figures: [{ ordinal: 1, caption: 'daily figure', images: [{ kind: 'external_url', url: `https://arxiv.org/html/${id}/f.png` }] }] };
+            artifacts.payloadSha256 = sha(JSON.stringify({ ...artifacts }));
+            return { text, source: 'html', sourceId: id, url: `https://arxiv.org/html/${id}`,
+                fetchedAt: '2026-09-07T00:00:01.000Z', imageInfos: [{ url: `https://arxiv.org/html/${id}/f.png`, caption: 'daily figure' }],
+                structuredArtifacts: artifacts, htmlAvailability: 'available', htmlAttempts: 1, warnings: [] };
+        },
+        fetchPdf: async id => ({ bytes: Buffer.from(`%PDF-1.4\nfresh daily ${id}\n%%EOF\n`),
+            url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: '2026-09-07T00:00:02.000Z' })
+    }); };
+    t.after(() => { freshSource.captureFreshArxivRewriteSource = originalCapture; });
+    const first = await fresh.withFreshAnalysisContext(identity, () => fresh.fetchFreshSource(f.id, async () => {
+        captures++; throw new Error('legacy text-only fetch must not run');
+    }));
+    assert.equal(captures, 1, 'daily sources phase must use one sealed bundle capture');
+    assert.equal(first.freshSourceDescriptor.contract, fresh.BUNDLE_CACHE_CONTRACT);
+    assert.equal(first.freshSourceDescriptor.sourceGeneration, generation);
+    assert.match(first.freshSourceDescriptor.sourceManifestSha256, /^[a-f0-9]{64}$/);
+    assert.equal(first.structuredArtifacts.tables[0].caption, 'daily table');
+    assert.equal(first.structuredArtifacts.formulas[0].latex, 'x=y');
+    assert.match(first.imageInfos[0].url, /\/f\.png$/);
+    const directory = path.join(sourceRoot, f.id, 'generation-000001');
+    assert.deepEqual(fs.readdirSync(directory).sort(), ['source-manifest.json', 'source-runtime.json', 'source.pdf', 'source.txt']);
+    const replayed = await fresh.withFreshAnalysisContext(identity, () => fresh.fetchFreshSource(f.id, async () => {
+        throw new Error('same generation must replay the sealed bundle');
+    }));
+    assert.equal(captures, 1, 'same generation must not fetch again');
+    assert.equal(replayed.freshSourceDescriptor.sourceManifestSha256, first.freshSourceDescriptor.sourceManifestSha256);
+    const paper = { arxivId: f.id }; const analysisManifest = { stages: {} };
+    await fresh.withFreshAnalysisContext(identity, () => fresh.attachFreshSourceProvenance(paper, analysisManifest, replayed));
+    assert.equal(paper.freshRewriteProvenance.sourceGeneration, generation);
+    assert.equal(paper.freshRewriteProvenance.sourceManifestSha256, replayed.freshSourceDescriptor.sourceManifestSha256);
 });
 
 test('source resolution keeps the baseline version or caller version and rejects cross-paper sourceId', async t => {

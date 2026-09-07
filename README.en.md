@@ -19,12 +19,18 @@ The default route is LLM/API, not the human workflow:
 
 ```text
 arXiv + HuggingFace
-  → keyword prefilter → per-paper LLM filter → staged full-text analysis and scoring
+  → keyword prefilter → per-paper LLM filter → seal this run's official arXiv text/PDF
+  → staged full-text analysis and scoring
   → blog generate → review → push / remote-OID verification
   → TOP 10 infographics and digest cover → final status gate
 ```
 
 - `digest:prepare` and `digest:api` are aliases for the same default route.
+- After filtering and before deep analysis, every selected arXiv paper is captured into a sealed source
+  generation at `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`.
+  It contains `source.txt`, `source.pdf`, `source-runtime.json`, and `source-manifest.json`. Analysis,
+  Reader, generate, review, and push replay that exact bundle. Figure pixels exist only in an active
+  OS-temporary call and never become a runtime image cache.
 - Manual runs only when explicitly selected; API, network, or quota failures never switch provenance.
 - WeChat, Feishu, and Xiaohongshu are optional integrations, not part of the default daily run.
 
@@ -83,13 +89,39 @@ A complete daily run means all of the following:
 Once the blog is published, a visual failure does not revoke it and must not trigger blog regeneration
 or another page review.
 
+## Full-history rewrite
+
+Full-history work runs only in the `audio-paper-digest-rewrite-all` workspace. Its active route is
+`direct-local-first`:
+
+```text
+retained local conference metadata/PDF ─┐
+                                        ├→ direct-inputs → conference-projections → direct-plan
+frozen historical arXiv links ─────────┘                                  ├→ direct-scheduler → direct-run → staging
+                                                                            └→ direct-aggregate
+```
+
+- The arXiv route fetches and seals a new official `source.txt`, `source.pdf`, runtime metadata, and
+  manifest for every generation under `data/runtime/fetched-arxiv-sources/`; it never uses retained
+  arXiv text, PDF, figures, old posts, old analyses, or old Reader prose as writing input.
+- The conference route replays the retained local metadata/PDF SHA selected by the frozen-page
+  projection. One canonical paper is analyzed once and then projected to every frozen historical page.
+- A crosswalk is a strict arXiv-failure-only fallback: it accepts only a named immutable arXiv
+  fresh-acquisition handoff. An unavailable or damaged retained conference source fails its direct route closed;
+  it never enters a crosswalk and does not gate the remaining direct queue.
+- Historical output remains private runtime source/analysis/page/aggregate staging. Historical
+  review, activation, commit/push receipt, and remote-OID publication are not implemented.
+
+The active commands and exact absolute-path arguments are documented in the Chinese
+[historical rewrite guide](docs/history-rewrite.md).
+
 ## Core commands
 
 | Purpose | Command |
 |---|---|
 | Default daily run | `npm run digest:prepare -- YYYY-MM-DD` |
-| Resume incomplete analysis | `npm run deep -- --date YYYY-MM-DD` |
-| Refresh API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader` |
+| Resume incomplete analysis | `npm run deep -- --date YYYY-MM-DD` (replays only the sealed PDF/TXT bundle) |
+| Refresh API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader` (replays only the sealed PDF/TXT bundle) |
 | Validate current data | `npm run validate:data` |
 | Inspect runtime storage | `npm run storage:status` |
 | Preview reference-aware pruning | `npm run storage:prune` |
@@ -116,7 +148,9 @@ See the [implementation plan](docs/tag-taxonomy-implementation.md) and [taxonomy
 ## Where to resume after a failure
 
 - Interrupted fetch/filter: rerun the default entry; healthy checkpoints are reused.
-- Only some analyses failed: run `npm run deep -- --date YYYY-MM-DD` or targeted reanalysis.
+- Only some analyses failed: run `npm run deep -- --date YYYY-MM-DD` or targeted reanalysis. These
+  recovery entries never refetch or reuse legacy text/cache; a missing or drifted sealed bundle requires
+  `npm run digest:prepare -- YYYY-MM-DD` to create a new source generation.
 - Blog review/push failed: resume with `npm run blog:review -- --date YYYY-MM-DD` or `npm run blog:push -- --date YYYY-MM-DD`.
 - Visual tasks are missing or stale: run `npm run visual:post-publish -- --date YYYY-MM-DD`; do not republish the blog.
 - Unsure which stage failed: start with [Troubleshooting](docs/en/troubleshooting.md) and
@@ -148,6 +182,9 @@ evidence and provenance. Manual scripts, prompts, tests, and workflow live under
 |---|---|
 | `data/current/` | Current candidates, filtering, analysis, publication receipts, and visual state |
 | `data/archive/<date>/` | Daily snapshots and final visual assets |
+| `data/runtime/daily-fresh-source-runs/` | Daily official PDF/TXT source generations used by API analysis and publication replay |
+| `data/runtime/fetched-arxiv-sources/` | Official PDF/TXT source generations for historical direct arXiv rewrites |
+| other historical `data/runtime/` directories | Direct plans, private analysis, page staging, and aggregate staging; never a blog publication |
 | `logs/` | Redacted run logs; file logging can be disabled in `.env` |
 | Hugo blog repository | Digest pages, paper pages, templates, and publication commits |
 
@@ -171,6 +208,7 @@ contracts.
 - [Setup](docs/en/setup.md): environment, proxy, model, and blog repository.
 - [Default workflow](docs/en/workflow.md): archive, fetch, filter, analysis, publication, and recovery.
 - [Default API architecture](docs/en/architecture.md): components, state machines, locks, and publication transactions.
+- [Historical rewrite guide](docs/history-rewrite.md): direct-local inputs, fresh arXiv sources, conference PDFs, and fallback boundaries.
 - [Script responsibilities](docs/en/scripts.md): command arguments and runtime semantics.
 - [Data formats](docs/en/data-format.md): checkpoints, canonical data, receipts, and manifests.
 - [Contract compatibility](docs/en/compatibility.md): current writers, historical reads, and production eligibility.

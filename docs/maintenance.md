@@ -11,6 +11,8 @@
 | Node 参数/路径 | `scripts/config.js` | 入口脚本、测试、env.example |
 | Python 发布路径 | `scripts/path_config.py` | generate/review/push、测试 |
 | API 协议/代理 | `scripts/utils.js`、`publish_common.py` | 筛选、分析、review、API key 测试 |
+| 日更 sealed PDF/TXT | `lib/daily-fresh-source-plan.js`、`lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、validator、Python generate/review/push、storage、文档 |
+| 历史 direct 来源/投影 | `historical-direct-*`、`historical-conference-*-sources/projections` | catalog、plan、scheduler、runner、aggregate、crosswalk fallback、脚本索引和历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口、digest 状态 |
 | 分析结构/评分 | `analysis-contract.js`、Prompt | Node/Python parser、publisher |
 | Reader 文风/图表/修复 | `api-reader-article.md`、`api-reader-repair.md`、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader validator、候选与阶段指纹、博客 review |
@@ -25,6 +27,10 @@
 - Muse 与 arXiv 必须代理；其他 LLM 默认 `agent:false`。
 - 同篇分析与共享 JSON 更新必须持锁并锁内重读。
 - checkpoint 指纹变化只失效必要阶段，不能无条件清空全部成功项。
+- 日更 API 分析、Reader 和发布只可读取当前 sealed PDF/TXT/runtime/manifest；缺失或漂移必须回到
+  `digest:prepare`，不得以 legacy cache 补跑。
+- 历史 arXiv 每 generation 重新拉取并保存官方 PDF/TXT/runtime/manifest；历史会议只重放绑定的本地
+  metadata/PDF SHA；两者均不得输入旧博客正文、旧分析或旧 Reader。
 - generate、review、push 分离；review 只读最终字节。
 - production proof、页面 SHA、Git baseline、remote OID 和视觉任务逐层绑定。
 - 项目脚本不调用图像 API。
@@ -69,7 +75,7 @@
 
 ## 运行存储诊断与清理
 
-`npm run storage:status` 只读统计 `data/current`、`data/archive`、`logs` 及图片/Reader/视觉参考缓存的文件数和字节数。`npm run storage:prune` 默认仅输出 dry-run 删除清单；人工核对后才可运行：
+`npm run storage:status` 还统计受保护的 daily sealed TXT/PDF、historical direct source/plan/staging 与会议来源目录；它们不是缓存，`storage:prune` 永不删除。`npm run storage:prune` 默认仅输出 dry-run 删除清单；人工核对后才可运行：
 
 ```bash
 npm run storage:prune -- --apply
@@ -83,7 +89,10 @@ npm run storage:prune -- --apply
 
 ## 验证矩阵
 
-用户明确要求完全不用旧生成正文重写历史批次时，使用 [fresh rewrite 分阶段流程](fresh-rewrite.md)。普通 `reanalyze`、Reader refresh 和清除个别 analysis 字段都不等于这一隔离保证。
+用户明确要求完全不用旧生成正文重写一个既有日批次时，使用 [fresh rewrite 分阶段流程](fresh-rewrite.md)。
+全历史则使用 [direct-local-first 历史流程](history-rewrite.md)：本地会议 metadata/PDF 直达，arXiv 在每个
+generation 新拉 PDF/TXT，crosswalk 只补坏输入。普通 `reanalyze`、Reader refresh 和清除个别 analysis 字段都
+不等于任一隔离保证。
 
 ```bash
 npm run verify

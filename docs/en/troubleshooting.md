@@ -41,6 +41,22 @@ npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-
 
 A retained older success plus a latest failure still requires retry.
 
+If a recovery command reports a missing or drifted sealed daily source, do not edit a checkpoint or reuse old `data/current` text. Re-run `npm run digest:prepare -- YYYY-MM-DD` so its source phase seals a new PDF/TXT pair.
+
+## Historical Direct Source or Staging Failure
+
+Identify the route before starting a crosswalk. An arXiv direct item's current generation must contain TXT,
+PDF, runtime metadata, and manifest at
+`data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`. Re-running the same
+`history:direct-scheduler` or `history:direct-run` verifies and resumes identical artifacts. A failed fresh
+acquisition writes only an immutable handoff; it does not mutate crosswalk automatically or block the local
+conference queue.
+
+For a conference direct item, check the local-source manifest metadata/PDF paths and SHA, frozen inventory SHA,
+and conference projection. Do not substitute old post prose, old analysis, filename similarity, or an ad-hoc
+title search. An unavailable/damaged local conference source fails that direct item closed. Only a named immutable
+arXiv fresh-acquisition failure handoff can enter the crosswalk fallback.
+
 ## Mechanical Reader, Detached Tables, or Figures
 
 Check term-pair roles and combination meaning; table question/conditions/interpretation; figure lead/viewing path/caption/explanation; no-pixel visual guesses; and ambiguous pronouns. Fix analysis/structured findings and refresh Reader. Review must not rewrite the page.

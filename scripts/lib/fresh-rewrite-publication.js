@@ -271,19 +271,22 @@ function prepareBaseline(options) {
         const papers = targetCoverage(canonical, ctx); const sourceExpectations = {}; const oldPaperHashes = {};
         for (const paper of papers) {
             const id = idOf(paper); const source = paper.analysisManifest?.sourceAcquisition;
+            // A fresh rewrite never inherits the canonical source hashes as
+            // its authoring evidence.  They remain useful only for the old
+            // text-difference audit below.  The sources phase seals a new
+            // official HTML/PDF bundle at generation 1 and records its sealed
+            // manifest/text/PDF/runtime identity before analysis can start.
             const structuredSha = source?.structuredArtifactsSha256;
             if (!validSha(paper.sourceSha256) || paper.sourceSha256 !== source?.sourceSha256 || !validSha(structuredSha)
                 || typeof paper.analysis !== 'string' || typeof paper.apiReaderArticle !== 'string') {
-                throw new Error(`Baseline paper lacks original source proof or old text: ${id}`);
+                throw new Error(`Baseline paper lacks old generated text for the difference audit: ${id}`);
             }
-            sourceExpectations[id] = { sourceSha256: paper.sourceSha256, structuredArtifactsSha256: structuredSha };
-            if (source.sourceId !== undefined) {
-                if (typeof source.sourceId !== 'string' || !/^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/.test(source.sourceId)
-                    || idOf({ arxivId: source.sourceId }) !== id) {
-                    throw new Error(`Baseline original source ID does not identify its paper: ${id}`);
-                }
-                sourceExpectations[id].sourceId = source.sourceId;
+            if (source.sourceId !== undefined && (typeof source.sourceId !== 'string'
+                || !/^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/.test(source.sourceId)
+                || idOf({ arxivId: source.sourceId }) !== id)) {
+                throw new Error(`Baseline original source ID does not identify its paper: ${id}`);
             }
+            sourceExpectations[id] = { sourceMode: 'sealed-arxiv-bundle-v1', sourceGeneration: 1 };
             oldPaperHashes[id] = { analysisSha256: hash(paper.analysis), readerArticleSha256: hash(paper.apiReaderArticle) };
         }
         const dataFiles = relatedDataFiles(ctx); const blogFiles = new Set();
@@ -350,15 +353,19 @@ function promoteRun(options) {
     const validatePaper = options.validatePaper || isSuccessfulAnalysisRecord;
     const readSource = options.readSource || require('./fresh-analysis-context.js').readFreshSource;
     const validateNewBatch = () => analysis.papers.forEach(paper => {
-        const id = idOf(paper); const provenance = paper.freshRewriteProvenance; const expected = baseline.sourceExpectations[id];
+        const id = idOf(paper); const provenance = paper.freshRewriteProvenance;
+        const expected = run.sourceRecords?.[id]; const sourcePlan = baseline.sourceExpectations[id];
         if (!provenance || provenance.contract !== SOURCE_CONTRACT || provenance.runId !== run.runId
             || provenance.sourceOnly !== true || provenance.oldGeneratedTextIncluded !== false
             || jsonHash(provenance) !== jsonHash(paper.analysisManifest?.freshRewriteProvenance)
-            || provenance.sourceSha256 !== expected.sourceSha256 || paper.sourceSha256 !== expected.sourceSha256
+            || !expected || provenance.sourceSha256 !== expected.sourceSha256 || paper.sourceSha256 !== expected.sourceSha256
             || paper.analysisManifest?.sourceAcquisition?.sourceSha256 !== expected.sourceSha256
             || paper.analysisManifest?.sourceAcquisition?.structuredArtifactsSha256 !== expected.structuredArtifactsSha256
             || provenance.structuredArtifactsSha256 !== expected.structuredArtifactsSha256
             || !validSha(provenance.sourceSnapshotSha256) || paperDate(paper, analysis.batchDate) !== ctx.date
+            || (sourcePlan?.sourceMode === 'sealed-arxiv-bundle-v1' && (provenance.sourceGeneration !== expected.sourceGeneration
+                || provenance.sourceManifestSha256 !== expected.sourceManifestSha256
+                || !validSha(provenance.sourceManifestSha256)))
             || !validatePaper(paper)) throw new Error(`Incomplete fresh production/source proof: ${id}`);
         if (typeof paper.analysis !== 'string' || !paper.analysis.trim()
             || typeof paper.apiReaderArticle !== 'string' || !paper.apiReaderArticle.trim()
@@ -366,9 +373,11 @@ function promoteRun(options) {
             || hash(paper.apiReaderArticle) === baseline.oldPaperHashes[id].readerArticleSha256) {
             throw new Error(`Every paper needs newly written analysis and Reader text: ${id}`);
         }
-        const descriptor = readSource(ctx.runDir, paper, { runId: run.runId, sourceExpectations: baseline.sourceExpectations })?.freshSourceDescriptor;
+        const descriptor = readSource(ctx.runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations })?.freshSourceDescriptor;
         if (!descriptor || descriptor.runId !== run.runId || descriptor.paperId !== id
-            || ['sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256'].some(key => descriptor[key] !== provenance[key])) {
+            || ['sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256'].some(key => descriptor[key] !== provenance[key])
+            || (sourcePlan?.sourceMode === 'sealed-arxiv-bundle-v1'
+                && ['sourceGeneration', 'sourceManifestSha256'].some(key => descriptor[key] !== provenance[key]))) {
             throw new Error(`Fresh source snapshot drift or missing original evidence: ${id}`);
         }
     });

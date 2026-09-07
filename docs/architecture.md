@@ -9,14 +9,15 @@ run-daily-digest.sh
   ├─ full-fetch.js
   │    ├─ fetch-papers.js / fetch-huggingface-papers.js
   │    ├─ LLM filter
-  │    └─ analysis-engine.js → deep-analyzer.js
+  │    ├─ daily-fresh-source-plan.js → sealed official TXT/PDF bundle
+  │    └─ analysis-engine.js → deep-analyzer.js (replays only that bundle)
   ├─ generate-blog.py
   ├─ review-blog.py → deterministic gate + LLM review + Hugo gate
   ├─ push-blog.py → exact Git delta + remote OID verification
   └─ visual planners → Codex image_gen → record/status
 ```
 
-- Node 数据层拥有抓取、筛选、单篇分析、checkpoint 和 visual manifest。
+- Node 数据层拥有抓取、筛选、日更 sealed source capture、单篇分析、checkpoint 和 visual manifest。
 - Python 发布层拥有页面生成、只读 review、Hugo 门禁和 Git 事务。
 - Node 与 Python 的 OpenCode Go 请求共享 `data/runtime/llm-account-pool.json`。账号选择是 provider 运输状态，不进入论文、Prompt 或发布内容指纹。
 - 博客仓库是发布目标，不是分析事实来源；未提交页面不能反向改变筛选去重基线。
@@ -34,6 +35,11 @@ source acquisition
   → API Reader article + official Figures
   → optional legacy image supplement
 ```
+
+默认 API 的 source acquisition 在 LLM 筛选后一次性完成：每个入选 arXiv ID 新拉取官方 HTML 文本和 PDF，
+原子封存为 `daily-fresh-source-run-v1` 的四文件 bundle。后续分析、Reader 和 Python 发布重放其
+`dailyFreshSourceRun`；缺失或 SHA 漂移在模型/图片请求前失败。官方 Figure 像素只在当前调用的 OS 临时目录
+存在，不能成为 `data/current` 或 runtime 图片缓存。
 
 每个阶段保存输入指纹、模型与协议、Prompt SHA、证据预算、输出 SHA 和终态。阶段输入变化时只失效该阶段及其下游。整篇论文由规范化 arXiv ID 锁保护，锁内必须重新读取 canonical 后再合并。
 
@@ -61,6 +67,10 @@ review 不修改页面。任何修正必须回到生成或分析阶段并产生�
 ```text
 data/current/               当日权威状态和可续跑 checkpoint
 data/archive/<date>/        已结束日期快照和最终视觉资产
+data/runtime/daily-fresh-source-runs/
+                            日更分析/发布重放的官方 PDF/TXT/runtime/manifest
+data/runtime/fetched-arxiv-sources/
+                            历史 direct arXiv generation 的官方 PDF/TXT/runtime/manifest
 Hugo blog repository        已生成页面、静态资产和已验证发布提交
 logs/                       脱敏日志，受年龄与容量保留策略约束
 ```
@@ -86,4 +96,6 @@ logs/                       脱敏日志，受年龄与容量保留策略约束
 - OpenCode Go 备用账号严格长期 sticky：只响应明确 `GoUsageLimitError`，不对普通 429、5xx 或网络故障切号，也不在冷却到期后自动 failback。认证信息只会附加到与 endpoint/model 推导结果精确一致的规范 API URL；不同服务的副模型不得继承主账号池。
 - canonical SHA 证明“这些字节被发布”，来源级 table/formula/claim binding 才证明“这些事实来自论文”。
 - 新 generation 必须重放当前来源绑定；历史页面可读取，不得只凭旧 Reader 版本号重新取得 production 资格。
+- 历史 direct-local-first 由独立 catalog/plan/scheduler/runner 处理：arXiv 每 generation 重新拉取官方
+  PDF/TXT，会议只重放本地 metadata/PDF SHA；crosswalk 只接收 named arXiv fresh-failure handoff，会议本地输入坏掉时直接失败关闭，且历史发布事务尚未实现。
 - 视觉失败不撤销已验证博客，但整批只有视觉 complete 或有效 waiver 后才是业务终态。

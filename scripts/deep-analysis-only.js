@@ -13,7 +13,6 @@ const {
     analyzeBatch,
     readJsonFileStrict,
     updateJsonFileLocked,
-    initializeJsonFileLocked,
     mergePapersById,
     mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
@@ -22,6 +21,7 @@ const {
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
+const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 
 loadEnvFile();
 
@@ -121,49 +121,48 @@ async function runDeepAnalysis(options = {}) {
     console.log('=== 仅运行深度分析 ===\n');
 
     const currentPath = Config.FILES.deepAnalysisResult;
-    const legacyPath = Config.FILES.deepAnalysisResultLegacy;
     const filteredPath = Config.FILES.filteredPapers;
     const today = options.date || parseTargetDate();
     const filteredData = validateCompleteFilteredForToday(readJsonFileStrict(filteredPath), today);
 
     const resultPath = currentPath;
 
-    if (!fs.existsSync(currentPath) && fs.existsSync(legacyPath)) {
-        const legacyData = validateDeepAnalysisInput(readJsonFileStrict(legacyPath), filteredData, today);
-        initializeJsonFileLocked(currentPath, Array.isArray(legacyData)
-            ? { timestamp: getBeijingISOString(), source: legacyPath, papers: legacyData }
-            : legacyData);
-        console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${currentPath}`);
+    // A recovery must never revive an analysis file from the legacy location
+    // or initialise one from filtered metadata.  Neither contains a sealed
+    // source-run reference, so doing so would make deep-analyzer fetch legacy
+    // text/cache data.  full-fetch owns source capture and is the only writer
+    // allowed to create the daily plan.
+    if (!fs.existsSync(resultPath)) {
+        throw new Error('仅续分析要求当前 canonical 已绑定 sealed daily PDF/TXT source run；请重新运行 npm run digest:prepare');
     }
 
-    let existingData = null;
-    if (fs.existsSync(resultPath)) {
-        existingData = readJsonFileStrict(resultPath);
-        existingData = repairMissingAnalysisRecords(resultPath, existingData, filteredData);
-        existingData = validateDeepAnalysisInput(existingData, filteredData, today);
-    } else {
-        const filteredPapers = filteredData.papers;
-        existingData = {
-            timestamp: getBeijingISOString(),
-            source: filteredPath,
-            stats: filteredData.stats || {},
-            papers: filteredPapers
-        };
-        existingData = initializeJsonFileLocked(resultPath, existingData);
-        console.log(`📄 未找到分析结果，已从筛选结果初始化: ${filteredPath}`);
-    }
+    let existingData = readJsonFileStrict(resultPath);
+    const currentPapersBeforeRepair = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
+    const currentIds = new Set(currentPapersBeforeRepair.map(normalizedId).filter(Boolean));
+    const sourcePlanRows = mergePapersById(currentPapersBeforeRepair,
+        filteredData.papers.filter(paper => !currentIds.has(normalizedId(paper))));
+    const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(existingData, {
+        papers: sourcePlanRows, label: 'deep-only recovery'
+    });
+    existingData = repairMissingAnalysisRecords(resultPath, existingData, filteredData);
+    existingData = validateDeepAnalysisInput(existingData, filteredData, today);
 
     const papers = Array.isArray(existingData) ? existingData : (existingData.papers || []);
-    const analyzedCount = papers.filter(isSuccessfulAnalysisRecord).length;
-    console.log(`📊 读取到 ${papers.length} 篇筛选后的论文 (已分析: ${analyzedCount})\n`);
+    const analyzedCount = papers.filter(paper => (
+        isSuccessfulAnalysisRecord(paper)
+        && dailyFreshSources.isPaperBoundToPlan(paper, dailySourcePlan)
+    )).length;
+    console.log(`📊 读取到 ${papers.length} 篇筛选后的论文 (已由当前 sealed source 分析: ${analyzedCount})\n`);
 
     const freshById = new Map(filteredData.papers.map(paper => [normalizedId(paper), paper]));
     const notAnalyzed = papers
-        .filter(p => !isSuccessfulAnalysisRecord(p))
+        .filter(p => !isSuccessfulAnalysisRecord(p)
+            || !dailyFreshSources.isPaperBoundToPlan(p, dailySourcePlan))
         .map(canonical => mergeCanonicalAnalysisState(
             freshById.get(normalizedId(canonical)) || canonical,
             canonical
-        ));
+        ))
+        .map(paper => dailyFreshSources.prepareDailyPaper(paper, dailySourcePlan));
     if (notAnalyzed.length === 0) {
         const finalPayload = finalizeDeepZeroWorkState(resultPath, filteredData, today);
         updateAnalysisDigestStatuses(finalPayload.papers, { batchDate: today });
@@ -191,19 +190,29 @@ async function runDeepAnalysis(options = {}) {
         return payload;
     });
 
-    const { stats } = await analyzeBatch(notAnalyzed, {
+    const runSealedDailyAnalysis = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
         checkpointFilePath: resultPath,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: Config.ANALYSIS_CONFIG.concurrency,
+        analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
+            ...options,
+            ...(options.analyzeFn ? { analyze: options.analyzeFn } : {})
+        }),
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(resultPath);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
-            if (isSuccessfulAnalysisRecord(latest)) return { paper: latest, skip: true };
+            if (isSuccessfulAnalysisRecord(latest)
+                && dailyFreshSources.isPaperBoundToPlan(latest, dailySourcePlan)) {
+                return { paper: latest, skip: true };
+            }
             return {
-                paper: latest ? mergeCanonicalAnalysisState(paper, latest) : paper,
+                paper: dailyFreshSources.prepareDailyPaper(
+                    latest ? mergeCanonicalAnalysisState(paper, latest) : paper,
+                    dailySourcePlan
+                ),
                 skip: false
             };
         },
@@ -264,6 +273,7 @@ async function runDeepAnalysis(options = {}) {
             console.log(`  💾 已更新批次统计 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})`);
         }
     });
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runSealedDailyAnalysis);
 
     const finalPayload = updateJsonFileLocked(resultPath, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);

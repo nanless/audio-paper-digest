@@ -198,6 +198,17 @@ def preflight_generated_pages(
 def _run_review(module, date_str):
         blog_repo, content_dir = module.validate_publish_target()
         paths, manifest_path = module.load_generation_manifest(date_str)
+        try:
+            generation = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise module.PublishDataValidationError('生成清单权威快照无法读取或解析') from exc
+        if not isinstance(generation, dict):
+            raise module.PublishDataValidationError('生成清单必须是对象')
+        replay_generation_source = getattr(module, 'validate_generation_input_source_reference', None)
+        if replay_generation_source:
+            # Never substitute current canonical data here. The manifest binds
+            # the exact archive / --data-file selected at generate time.
+            replay_generation_source(generation, date_str)
         base_head = module.validate_git_publish_branch()
         published_reusable = module.reusable_verified_publication_review(
             date_str, base_head,
@@ -221,12 +232,6 @@ def _run_review(module, date_str):
                 '已保留既有 receipt，拒绝开始新 review 覆盖唯一发布证据'
             )
         authoritative_papers = None
-        try:
-            generation = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise module.PublishDataValidationError('生成清单权威快照无法读取或解析') from exc
-        if not isinstance(generation, dict):
-            raise module.PublishDataValidationError('生成清单必须是对象')
         if generation.get('schemaVersion') == 3:
             authoritative_papers = generation.get('publishedPapers') or []
         page_artifacts = {}

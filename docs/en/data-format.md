@@ -45,9 +45,30 @@ Must equal positive raw decisions minus explicit exclusions. Unknown, failed, or
 
 Default API canonical analysis, parsed cache, source identity, stage checkpoints, scoring/Reader bindings, and production proof. Its paper set must exactly cover filtered.
 
+When a payload claims `dailyFreshSourceRun`, the `daily-fresh-source-reference-v1` reference must bind the
+batch date, complete canonical paper set, run-manifest SHA, and source-set SHA. Every paper's
+`freshRewriteProvenance` and `analysisManifest.freshRewriteProvenance` must replay the exact `source.txt`,
+`source.pdf`, `source-runtime.json`, and `source-manifest.json` SHA values. A missing or extra file, source/set
+drift, or legacy provenance cannot establish default API production.
+
+## Daily sealed source run
+
+A daily run lives at `data/runtime/daily-fresh-source-runs/<runId>/`. Its plan uses
+`daily-fresh-source-run-v1`; every `<arxivId>/generation-000001/` contains exactly four private files:
+
+- `source.txt`: official full text captured for this run;
+- `source.pdf`: the official PDF bytes captured for this run;
+- `source-runtime.json`: no-pixel structured artifacts, author/figure URL metadata, and the TXT binding;
+- `source-manifest.json`: the source files, official URLs, extractor, byte counts, and SHA closure.
+
+These are replayable evidence rather than date-rotated caches. Image bytes, base64, cache paths, and temporary
+filenames are prohibited from the bundle.
+
 ## Analysis Source and Recovery
 
-`analysisSource` binds source type, request ID, raw/full/used lengths, truncation, SHA, warnings, and confidence. A source-SHA change invalidates primary analysis and downstream work.
+`analysisSource` binds source type, request ID, raw/full/used lengths, truncation, SHA, warnings, and confidence.
+For default API records it must agree with the sealed source generation above. A source-SHA change invalidates
+primary analysis and downstream work.
 
 Failures retain manifests, general and per-stage checkpoints, recovery image state, and latest error. Fingerprints include input, model, protocol, prompt, temperature, budgets, and output SHA, enabling minimal stage recovery.
 

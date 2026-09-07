@@ -8,14 +8,15 @@ This page explains component ownership, the per-paper state machine, publication
 run-daily-digest.sh
   ├─ full-fetch.js
   │    ├─ arXiv / HuggingFace acquisition and LLM filtering
-  │    └─ analysis-engine.js → deep-analyzer.js
+  │    ├─ daily-fresh-source-plan.js → sealed official TXT/PDF bundle
+  │    └─ analysis-engine.js → deep-analyzer.js (replays only that bundle)
   ├─ generate-blog.py
   ├─ review-blog.py → deterministic, LLM, image, and Hugo gates
   ├─ push-blog.py → exact Git delta and remote OID verification
   └─ visual planners → Codex image_gen → record/status
 ```
 
-Node owns acquisition, filtering, analysis checkpoints, canonical results, and visual manifests. Python owns page generation, immutable review artifacts, Hugo validation, and the Git publication transaction. The Hugo repository is a publication target, never a source of analysis facts.
+Node owns acquisition, filtering, daily sealed-source capture, analysis checkpoints, canonical results, and visual manifests. Python owns page generation, immutable review artifacts, Hugo validation, and the Git publication transaction. The Hugo repository is a publication target, never a source of analysis facts.
 
 Node and Python share OpenCode Go active/cooldown state in `data/runtime/llm-account-pool.json`. It contains no raw key, but its stable credential fingerprints make it `0600` sensitive operational metadata. Credential selection is transport state and does not enter paper, prompt, or publication-content fingerprints.
 
@@ -30,6 +31,12 @@ source acquisition
   → API Reader article and official Figures
   → optional legacy image supplement
 ```
+
+For the default API route, source acquisition completes after filtering and before any analysis: every selected
+arXiv ID freshly captures official HTML text and PDF into a four-file `daily-fresh-source-run-v1` bundle.
+Analysis, Reader, and Python publication replay its `dailyFreshSourceRun`; a missing or drifted SHA fails before
+model or figure work. Official Figure pixels exist only in the active call's OS-temporary directory and never
+become a `data/current` or runtime image cache.
 
 Every stage binds its inputs, model and protocol, prompt, evidence budget, output hash, and terminal state. A changed input invalidates that stage and its downstream consumers, not unrelated papers.
 
@@ -58,6 +65,8 @@ Review never edits a reviewed page. Fixes return to analysis or generation and p
 |---|---|
 | `data/current/` | active batch state and resumable checkpoints |
 | `data/archive/<date>/` | closed-date snapshots and final visual assets |
+| `data/runtime/daily-fresh-source-runs/` | official PDF/TXT/runtime/manifest replay evidence for daily analysis and publication |
+| `data/runtime/fetched-arxiv-sources/` | official PDF/TXT/runtime/manifest generations for historical direct arXiv rewrite |
 | Hugo repository | generated pages and verified publication commits |
 | `logs/` | redacted diagnostics under age and capacity retention |
 
@@ -78,3 +87,8 @@ Only the implementing lease/owner checks may classify a lock as stale. Never rem
 Muse, arXiv, HuggingFace, and paper assets follow their project proxy policies; unrelated LLM providers do not inherit that proxy automatically. External assets are HTTPS-only, reject private/reserved targets on every redirect, pin the validated public IP, and preserve the original Host and TLS SNI. All network responses and subprocesses have byte and absolute-time bounds.
 
 OpenCode Go fallback is strictly long-lived sticky failover: only an explicit `GoUsageLimitError` switches credentials. Generic 429, 5xx, and network failures do not switch, and expiration of an older account's cooldown does not automatically fail traffic back. Credentials are attached only when the actual URL exactly matches the canonical route derived from the endpoint and model; a secondary model on a different service never inherits the primary account pool.
+
+Historical `direct-local-first` is separate: a catalog/plan/scheduler/runner freshly captures each arXiv
+generation and replays retained conference metadata/PDF SHA. Crosswalk receives only named immutable fresh-arXiv failure handoffs; it is
+not a direct-queue prerequisite. Historical review, activation, commit/push receipt, and remote-OID publication
+are not implemented.

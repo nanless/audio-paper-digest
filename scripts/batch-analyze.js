@@ -13,7 +13,6 @@ const {
     analyzeBatch,
     readJsonFileStrict,
     updateJsonFileLocked,
-    initializeJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
     getCanonicalAnalysisRunSummary,
@@ -21,10 +20,10 @@ const {
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
+const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 
 loadEnvFile();
 
-const LEGACY_RESULT_FILE = Config.FILES.deepAnalysisResultLegacy;
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
 
 function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
@@ -58,13 +57,12 @@ function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
     });
 }
 
-async function main() {
-    if (!fs.existsSync(RESULT_FILE) && fs.existsSync(LEGACY_RESULT_FILE)) {
-        const legacyData = readJsonFileStrict(LEGACY_RESULT_FILE);
-        initializeJsonFileLocked(RESULT_FILE, Array.isArray(legacyData)
-            ? { timestamp: getBeijingISOString(), source: LEGACY_RESULT_FILE, papers: legacyData }
-            : legacyData);
-        console.log(`📦 已将 legacy 分析结果迁移到权威路径: ${RESULT_FILE}`);
+async function main(options = {}) {
+    // This is a daily recovery entrypoint.  A legacy result file has no
+    // sealed PDF/TXT run reference, so it must never be promoted and then
+    // allowed to fall back through deep-analyzer's historical fetch path.
+    if (!fs.existsSync(RESULT_FILE)) {
+        throw new Error('batch recovery requires current canonical with a sealed daily PDF/TXT source run; rerun npm run digest:prepare');
     }
     console.log('=== 批量论文分析 ===');
     console.log(`数据文件: ${RESULT_FILE}`);
@@ -72,6 +70,9 @@ async function main() {
     const data = readJsonFileStrict(RESULT_FILE);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
+    const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
+        papers, label: 'batch recovery'
+    });
     const batchDate = inferAnalysisBatchDate(
         papers,
         Array.isArray(data) ? {} : data,
@@ -79,7 +80,8 @@ async function main() {
     );
     console.log(`总论文数: ${papers.length}`);
 
-    const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p));
+    const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p)
+        || !dailyFreshSources.isPaperBoundToPlan(p, dailySourcePlan));
     console.log(`未分析论文: ${notAnalyzed.length}`);
 
     if (notAnalyzed.length === 0) {
@@ -109,18 +111,25 @@ async function main() {
         return payload;
     });
 
-    const { stats } = await analyzeBatch(notAnalyzed, {
+    const runSealedDailyAnalysis = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
         checkpointFilePath: RESULT_FILE,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: 1,
+        analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
+            ...options,
+            ...(options.analyzeFn ? { analyze: options.analyzeFn } : {})
+        }),
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(RESULT_FILE);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
-            if (isSuccessfulAnalysisRecord(latest)) return { paper: latest, skip: true };
-            return { paper: latest || paper, skip: false };
+            if (isSuccessfulAnalysisRecord(latest)
+                && dailyFreshSources.isPaperBoundToPlan(latest, dailySourcePlan)) {
+                return { paper: latest, skip: true };
+            }
+            return { paper: dailyFreshSources.prepareDailyPaper(latest || paper, dailySourcePlan), skip: false };
         },
         onPaperResultLocked: async (paper, result) => {
             const attempted = result.result || { ...paper, analysis: null, parsed: null, error: result.error || '分析失败' };
@@ -187,6 +196,7 @@ async function main() {
             console.log(`   已更新批次统计到 ${RESULT_FILE}`);
         }
     });
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runSealedDailyAnalysis);
 
     console.log('\n=== 批量分析完成 ===');
     console.log(`成功: ${stats.success} | 失败: ${stats.failed} | 总计处理: ${notAnalyzed.length}`);

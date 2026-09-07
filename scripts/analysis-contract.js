@@ -1163,6 +1163,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     }
     if (stage.summarySha256 !== summarySha256) return '核心摘要正文未绑定阶段 SHA';
     const structure = manifest?.stages?.structureRepair;
+    const taxonomy = manifest?.stages?.taxonomySeal;
     const scoring = manifest?.stages?.scoringAudit;
     const requiredShaFields = [
         'inputAnalysisSha256', 'inputSummarySha256',
@@ -1171,8 +1172,13 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (requiredShaFields.some(field => !/^[a-f0-9]{64}$/.test(String(stage[field] || '')))) {
         return '核心摘要阶段缺少可重放输入/投影 SHA 链';
     }
-    if (structure?.outputAnalysisSha256 !== stage.inputAnalysisSha256) {
-        return '核心摘要输入没有绑定 structureRepair 输出';
+    const taxonomyOutputSha256 = String(taxonomy?.outputAnalysisSha256 || '');
+    const hasTaxonomyOutput = isRecoveryStageTerminal('taxonomySeal', taxonomy?.status)
+        && /^[a-f0-9]{64}$/.test(taxonomyOutputSha256);
+    const upstreamStage = hasTaxonomyOutput ? taxonomy : structure;
+    const upstreamLabel = hasTaxonomyOutput ? 'taxonomySeal' : 'structureRepair';
+    if (upstreamStage?.outputAnalysisSha256 !== stage.inputAnalysisSha256) {
+        return `核心摘要输入没有绑定 ${upstreamLabel} 输出`;
     }
     if (stage.inputStructureProjectionSha256 !== stage.outputStructureProjectionSha256) {
         return '核心摘要局部修复改变了其他 12 节投影';

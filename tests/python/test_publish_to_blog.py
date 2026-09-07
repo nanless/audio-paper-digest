@@ -670,6 +670,60 @@ def reseal_llm_api_reader_fixture(paper):
     return paper
 
 
+def llm_api_ephemeral_figure_fixture():
+    """A sealed daily-style Reader record with evidence but no image asset."""
+    paper = llm_api_publication_fixture()
+    paper_id = paper['arxivId']
+    url = f'https://arxiv.org/html/{paper_id}v1/figure-1.png'
+    result_heading = next(
+        item['heading'] for item in paper['apiReaderPlan']['sections']
+        if item['kind'] == 'result'
+    )
+    lead = '现在看这张图，是为了核对主结果的比较口径、指标方向与曲线差距是否处在同一实验条件下。'
+    focus_points = [
+        '先核对横轴所表示的评测条件是否一致',
+        '再比较两条曲线在同一纵轴尺度下的距离',
+    ]
+    explanation = '图中横轴保持评测条件一致，纵轴按越高越好的方向读取；目标曲线与基线的间距只支持当前设置下的收益，不能代替跨域证据。'
+    focus_block = '> **看图路径：** ' + '；'.join(
+        f'{index}. {value}' for index, value in enumerate(focus_points, 1)
+    )
+    image_block = (
+        f'{lead}\n\n{focus_block}\n\n'
+        f'![原论文 Figure 1：Main result.]({url})\n\n'
+        '*论文图 1。原论文 Figure 1：Main result.*\n\n'
+        f'{explanation}'
+    )
+    result_anchor = (
+        f'### {result_heading}\n\n'
+        '这是围绕本篇论文证据展开的教学段落，说明输入、处理、输出、比较口径与不能外推的边界。'
+    )
+    paper['apiReaderArticle'] = paper['apiReaderArticle'].replace(
+        result_anchor, f'{result_anchor}\n\n{image_block}',
+    )
+    paper['apiReaderPlan']['figurePlacements'] = [{
+        'figureOrdinal': 1, 'targetKind': 'result', 'marker': '[[FIGURE_1]]',
+        'focusPoints': focus_points, 'leadQuote': lead,
+        'explanationQuote': explanation,
+    }]
+    figure = {
+        'ordinal': 1, 'label': 'Figure 1:', 'caption': 'Main result.',
+        'url': url, 'mediaType': 'image/png', 'sourceDomSha256': '5' * 64,
+        'targetKind': 'result', 'targetHeading': result_heading,
+        'marker': '[[FIGURE_1]]', 'focusPoints': focus_points,
+        'leadQuote': lead, 'explanationQuote': explanation,
+    }
+    paper['apiReaderFigures'] = [figure]
+    paper['analysisManifest']['contracts']['apiReaderFigurePersistence'] = (
+        'ephemeral-no-persisted-figure-assets-v1'
+    )
+    reseal_llm_api_reader_fixture(paper)
+    stage = paper['analysisManifest']['stages']['apiReaderArticle']
+    stage['figureCount'] = 1
+    stage['figuresSha256'] = publish_to_blog._stable_json_sha256([figure])
+    return paper
+
+
 def reseal_llm_api_resource_identity(paper):
     payload = paper['apiReaderResources']
     identity = {
@@ -1579,6 +1633,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
                         publish_to_blog, 'validate_publish_target',
                         return_value=(Path(tmp), Path(tmp) / 'posts'),
                     ), \
+                    mock.patch.object(publish_to_blog, 'validate_daily_fresh_sources_for_publish'), \
                     mock.patch.object(publish_to_blog, 'load_papers', return_value=[]), \
                     contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(
@@ -1617,6 +1672,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
                         publish_to_blog, 'validate_publish_target',
                         return_value=(Path(tmp), Path(tmp) / 'posts'),
                     ), \
+                    mock.patch.object(publish_to_blog, 'validate_daily_fresh_sources_for_publish'), \
                     mock.patch.object(publish_to_blog, 'load_papers', return_value=[]), \
                     contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(
@@ -2877,6 +2933,47 @@ title: "Bad table"
                 'https://arxiv.org/html/2608.28981v1/02_image_invertible_coupling.jpg',
             ],
         )
+
+    def test_daily_ephemeral_figure_generates_reviewable_page_without_image_asset(self):
+        paper = llm_api_ephemeral_figure_fixture()
+        payload = publish_to_blog._api_reader_payload(paper)
+        figure_url = paper['apiReaderFigures'][0]['url']
+        self.assertEqual(
+            payload['figurePersistence'],
+            publish_to_blog.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT,
+        )
+        self.assertEqual(payload['assets'], [])
+        self.assertNotIn(figure_url, payload['renderedArticle'])
+        self.assertIn('论文图 1（像素未随页面持久化）', payload['renderedArticle'])
+        self.assertNotRegex(
+            json.dumps(payload, ensure_ascii=False),
+            r'(?:cachePath|assetFilename|assetBytes|assetMediaType)',
+        )
+        markdown, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-09-07', category='论文速递',
+        )
+        self.assertIn(
+            'paper_digest_api_reader_figure_persistence: '
+            '"ephemeral-no-persisted-figure-assets-v1"', markdown,
+        )
+        self.assertIn('论文图 1（像素未随页面持久化）', markdown)
+        self.assertNotIn(figure_url, markdown)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(markdown, paper))
+        with tempfile.TemporaryDirectory() as root:
+            staged = publish_to_blog.prepare_api_reader_staged_assets(
+                [paper], Path(root),
+            )
+            self.assertEqual(staged, [])
+            self.assertEqual(list(Path(root).rglob('*')), [])
+            page_path = Path(root) / '2026-09-07-reader.md'
+            page_path.write_text(markdown, encoding='utf-8')
+            artifact = publish_to_blog.build_final_page_artifact(page_path, paper)
+            self.assertIsNone(artifact['apiReaderIssue'])
+
+        missing_marker = copy.deepcopy(paper)
+        del missing_marker['analysisManifest']['contracts']['apiReaderFigurePersistence']
+        with self.assertRaisesRegex(PublishDataValidationError, 'figure 字段非法'):
+            publish_to_blog._api_reader_payload(missing_marker)
 
     def test_manual_v5_reader_plan_uses_reader_first_header_and_preserves_custom_subheads(self):
         reader_article = (
@@ -4713,6 +4810,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(content_dir)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
                     mock.patch.object(publish_to_blog, 'load_papers', return_value=[paper]), \
+                    mock.patch.object(publish_to_blog, 'validate_daily_fresh_sources_for_publish'), \
                     mock.patch.object(publish_to_blog, 'validate_papers_for_publish', return_value=[paper]), \
                     mock.patch.object(publish_to_blog, 'score_and_sort', return_value=([(7.0, paper, paper['parsed'])], [])), \
                     mock.patch.object(publish_to_blog, 'review_all_posts') as review, \
@@ -6548,6 +6646,99 @@ body
                         reviewed_results=reviewed,
                     )
 
+    def test_review_and_push_reject_fresh_provenance_without_input_source_reference(self):
+        """A claimed fresh source cannot lose its replayable generation input."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp, with_remote=True)
+            current = Path(tmp) / 'data' / 'current'
+            date_str = '2026-07-10'
+            paper = {
+                'arxivId': '2607.12345', 'title': 'Paper',
+                'fetchBatchDate': date_str,
+            }
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(publish_to_blog, 'GITHUB_REMOTE', 'origin'), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                publication = create_verified_schema_v3_publication(
+                    date_str, posts, paper,
+                )
+                manifest = json.loads(publication['manifest'].read_text(encoding='utf-8'))
+                manifest['publishedPapers'][0]['freshRewriteProvenance'] = {'claimed': True}
+                publication['manifest'].write_text(
+                    json.dumps(manifest, ensure_ascii=False), encoding='utf-8',
+                )
+                receipt = json.loads(publication['receipt'].read_text(encoding='utf-8'))
+                receipt['generationManifestSha256'] = publish_to_blog._sha256_file(
+                    publication['manifest'],
+                )
+                publication['receipt'].write_text(
+                    json.dumps(receipt, ensure_ascii=False), encoding='utf-8',
+                )
+                with self.assertRaisesRegex(
+                        PublishDataValidationError,
+                        'freshRewriteProvenance.*inputSourceReference',
+                ):
+                    review_blog._run_review(publish_to_blog, date_str)
+                remote_head = git(_remote, 'rev-parse', 'refs/heads/main').stdout.strip()
+                self.assertFalse(publish_to_blog.git_push(date_str, publication['paths']))
+                self.assertEqual(
+                    git(_remote, 'rev-parse', 'refs/heads/main').stdout.strip(),
+                    remote_head,
+                )
+
+    def test_git_push_rechecks_schema_v3_input_integrity_before_receipt_or_git_mutation(self):
+        """Direct push callers cannot bypass the schema-v3 fresh-source gate."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            date_str = '2026-07-10'
+            paper = {'arxivId': '2607.12345', 'title': 'Paper'}
+            paper_page = posts / '2026-07-10-paper.md'
+            paper_page.write_text(
+                '---\npaper_digest_page_type: paper\n'
+                'paper_digest_arxiv_id: "2607.12345"\n---\nbody\n',
+                encoding='utf-8',
+            )
+            index_page = posts / '2026-07-10.md'
+            index_page.write_text(
+                '---\npaper_digest_page_type: index\n---\nindex\n',
+                encoding='utf-8',
+            )
+            paths = [paper_page, index_page]
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                manifest_path = publish_to_blog.save_generation_manifest(
+                    date_str, paths,
+                    input_fingerprint=publish_to_blog.generation_input_fingerprint(
+                        [paper], date_str, '论文速递', False,
+                    ),
+                    template_fingerprint=publish_to_blog.generation_template_fingerprint(),
+                    base_head=git(repo, 'rev-parse', 'HEAD').stdout.strip(),
+                    published_papers=[paper],
+                    publication_mode=publish_to_blog.LEGACY_V5_MAINTENANCE_MODE,
+                )
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                manifest['publishedPapers'][0]['freshRewriteProvenance'] = {
+                    'claimed': True,
+                }
+                manifest_path.write_text(
+                    json.dumps(manifest, ensure_ascii=False), encoding='utf-8',
+                )
+                with mock.patch.object(
+                        publish_to_blog, 'load_verified_review_receipt',
+                        return_value=(paths, Path('receipt.json')),
+                ) as receipt, mock.patch.object(
+                    publish_to_blog, 'capture_git_publish_state',
+                    side_effect=AssertionError('Git state must not be captured before input integrity'),
+                ) as capture:
+                    self.assertFalse(publish_to_blog.git_push(date_str, paths))
+                receipt.assert_called_once_with(date_str)
+                capture.assert_not_called()
+
     def test_manifest_rejects_cross_date_post_for_existing_and_deleted_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
@@ -6654,6 +6845,74 @@ body
             hashlib.sha256(markdown.encode('utf-8')).hexdigest(),
             'bc5af5ef60d96ea735188539675b4377d0654688231d3b5290d207c7d2d75208',
         )
+
+    def test_generation_input_source_reference_replays_selected_archive_and_rejects_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archived = root / 'data' / 'archive' / '2026-07-10' / 'deep-analysis-result.json'
+            archived.parent.mkdir(parents=True)
+            archived.write_text('{"papers": []}\n', encoding='utf-8')
+            current = root / 'data' / 'current' / 'deep-analysis-result.json'
+            current.parent.mkdir(parents=True)
+            current.write_text('{"papers": [{"arxivId": "different"}]}\n', encoding='utf-8')
+            reference = publish_to_blog.build_generation_input_source_reference(archived)
+            self.assertEqual(reference['path'], str(archived.resolve()))
+            self.assertNotEqual(
+                reference['sha256'],
+                publish_to_blog.build_generation_input_source_reference(current)['sha256'],
+            )
+            manifest = {'inputSourceReference': reference}
+            with mock.patch.object(
+                    publish_to_blog, 'validate_daily_fresh_sources_for_publish',
+            ) as replay_daily:
+                self.assertEqual(
+                    publish_to_blog.validate_generation_input_source_reference(
+                        manifest, '2026-07-10',
+                    ),
+                    str(archived.resolve()),
+                )
+            replay_daily.assert_called_once_with(str(archived.resolve()), '2026-07-10')
+            archived.write_text('{"papers": [{"changed": true}]}\n', encoding='utf-8')
+            with self.assertRaisesRegex(
+                    publish_to_blog.PublishDataValidationError, '字节或 SHA-256 已漂移',
+            ):
+                publish_to_blog.validate_generation_input_source_reference(
+                    manifest, '2026-07-10',
+                )
+
+    def test_schema_v3_manifest_binds_selected_data_file_and_rejects_archive_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / 'blog'
+            page = repo / 'content' / 'posts' / '2026-07-10-source-bound.md'
+            page.parent.mkdir(parents=True)
+            page.write_text('source-bound\n', encoding='utf-8')
+            archive = root / 'data' / 'archive' / '2026-07-10' / 'deep-analysis-result.json'
+            archive.parent.mkdir(parents=True)
+            archive.write_text('{"papers": []}\n', encoding='utf-8')
+            source_reference = publish_to_blog.build_generation_input_source_reference(archive)
+            paper = {'arxivId': '2607.00001', 'title': 'Source bound'}
+            fingerprint = publish_to_blog.generation_input_fingerprint(
+                [paper], '2026-07-10', '论文速递', False,
+                input_source_reference=source_reference,
+            )
+            current = root / 'data' / 'current'
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                manifest_path = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [page], input_fingerprint=fingerprint,
+                    template_fingerprint=publish_to_blog.generation_template_fingerprint(),
+                    base_head='a' * 40, published_papers=[paper],
+                    publication_mode=publish_to_blog.LEGACY_V5_MAINTENANCE_MODE,
+                    input_source_reference=source_reference,
+                )
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                self.assertEqual(manifest['inputSourceReference'], source_reference)
+                archive.write_text('{"papers": [{"changed": true}]}\n', encoding='utf-8')
+                with self.assertRaisesRegex(
+                        publish_to_blog.PublishDataValidationError, '字节或 SHA-256 已漂移',
+                ):
+                    publish_to_blog.load_generation_manifest('2026-07-10')
 
 
 if __name__ == '__main__':

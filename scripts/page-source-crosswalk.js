@@ -71,7 +71,14 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
     const options = parseArgs(argv);
     const configured = dependencies.files || Config.FILES;
     const roots = requireRoots(dependencies.roots || { inventoryRoot: configured.historicalPageInventoryDir,
-        crosswalkRoot: configured.pageSourceCrosswalkDir, authorityRoot: configured.paperSourceAuthorityDir });
+        crosswalkRoot: configured.pageSourceCrosswalkDir, authorityRoot: configured.paperSourceAuthorityDir,
+        archiveIdentityRoot: configured.historicalArchiveCrawlIdentityDir, archiveDataRoot: Config.DATA_DIR,
+        localCrawlIdentityRoot: configured.historicalLocalCrawlIdentityDir,
+        localCrawlSnapshotRoot: configured.historicalLocalCrawlSnapshotDir,
+        localCrawlDataRoot: Config.DATA_DIR,
+        conferenceIdentityRoot: configured.historicalConferenceCrawlIdentityDir, conferenceDataRoot: Config.DATA_DIR,
+        conferenceBlogRoot: Config.PUBLISH_CONFIG.blogRepo,
+        conferenceIclrAcceptedRoot: Config.HISTORICAL_CONFERENCE_CONFIG.iclr2026AcceptedRoot });
     if (options.command === 'prepare') {
         const inventoryHandle = api.loadHistoricalInventoryHandle({ inventoryRoot: roots.inventoryRoot,
             ledgerName: options.ledgerName, receiptName: options.receiptName });
@@ -114,7 +121,12 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
         }
     }
     const finalized = api.finalizeCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId,
-        authorityRoot: roots.authorityRoot, now: dependencies.now });
+        authorityRoot: roots.authorityRoot, archiveIdentityRoot: roots.archiveIdentityRoot, archiveDataRoot: roots.archiveDataRoot,
+        localCrawlIdentityRoot: roots.localCrawlIdentityRoot, localCrawlSnapshotRoot: roots.localCrawlSnapshotRoot,
+        localCrawlDataRoot: roots.localCrawlDataRoot,
+        conferenceIdentityRoot: roots.conferenceIdentityRoot, conferenceDataRoot: roots.conferenceDataRoot,
+        conferenceBlogRoot: roots.conferenceBlogRoot, conferenceIclrAcceptedRoot: roots.conferenceIclrAcceptedRoot,
+        now: dependencies.now });
     const output = { status: 'finalized', contract: finalized.receipt.contract, crosswalkId: options.crosswalkId,
         receiptSha256: finalized.receipt.receiptSha256, receiptFileSha256: finalized.receiptFileSha256,
         verified: finalized.receipt.verified, total: finalized.receipt.total,

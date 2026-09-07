@@ -11,6 +11,9 @@ const path = require('node:path');
 const api = require('../scripts/lib/page-source-crosswalk.js');
 const cli = require('../scripts/page-source-crosswalk.js');
 const authorityApi = require('../scripts/lib/paper-source-authority.js');
+const archiveCrawlAuthorityApi = require('../scripts/lib/historical-archive-crawl-authority.js');
+const localCrawlAuthorityApi = require('../scripts/lib/historical-local-crawl-authority.js');
+const conferenceCrawlAuthorityApi = require('../scripts/lib/historical-conference-crawl-authority.js');
 const identityApi = require('../scripts/lib/paper-identity.js');
 const contextApi = require('../scripts/lib/conference-source-context.js');
 const arxivAdapter = require('../scripts/lib/arxiv-source-authority.js');
@@ -127,6 +130,20 @@ function useConferenceHint(f, value = '100') {
     f.receipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
     fs.writeFileSync(path.join(f.inventory, f.receiptName), api.prettyBytes(f.receipt), { mode: 0o600 });
 }
+function useOpenReviewHint(f, value = 'AbCdef_12') {
+    const paper = f.ledger.pages.find(page => page.kind === 'paper');
+    paper.identityHints = { status: 'single', candidates: [
+        { scheme: 'openreview-forum-id', value, sources: ['body:openreview-link'] }
+    ] };
+    rehashPage(paper); rehashLedger(f.ledger);
+    const ledgerBytes = api.prettyBytes(f.ledger);
+    fs.writeFileSync(path.join(f.inventory, f.ledgerName), ledgerBytes, { mode: 0o600 });
+    const receiptBody = structuredClone(f.receipt); delete receiptBody.receiptSha256;
+    receiptBody.ledger.fileSha256 = sha(ledgerBytes); receiptBody.ledger.ledgerSha256 = f.ledger.ledgerSha256;
+    receiptBody.ledger.pageSetSha256 = f.ledger.pageSetSha256;
+    f.receipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
+    fs.writeFileSync(path.join(f.inventory, f.receiptName), api.prettyBytes(f.receipt), { mode: 0o600 });
+}
 
 function useArxivConflictHints(f, secondScheme = 'arxiv') {
     const paper = f.ledger.pages.find(page => page.kind === 'paper');
@@ -178,11 +195,11 @@ function writeConferenceAuthority(t, root, value = '100', name = 'conference-aut
 function eio(stage) {
     const error = new Error(`${stage} injected EIO`); error.code = 'EIO'; return error;
 }
-function writeOperationLock(directory, { pid = 99999999, startedAt = '2000-01-01T00:00:00.000Z',
+function writeOperationLock(directory, { pid = 99999999, hostname = os.hostname(), startedAt = '2000-01-01T00:00:00.000Z',
     heartbeatAt = startedAt, token = ids[9], extra = false } = {}) {
     const lock = path.join(directory, 'operation.lock'); fs.mkdirSync(lock, { mode: 0o700 });
     const body = { contract: api.LOCK_OWNER_CONTRACT, version: 1, owner: 'fixture.owner', pid,
-        hostname: os.hostname(), token, startedAt, heartbeatAt, leaseMs: api.LOCK_STALE_MS };
+        hostname, token, startedAt, heartbeatAt, leaseMs: api.LOCK_STALE_MS };
     const owner = { ...body, ownerSha256: api.stableHash(body) };
     const ownerFile = path.join(lock, 'owner.json'); fs.writeFileSync(ownerFile, api.prettyBytes(owner), { mode: 0o600 });
     if (extra) fs.writeFileSync(path.join(lock, 'unexpected'), 'x');
@@ -520,6 +537,63 @@ test('operation lock reclaims only a verified stale lock owned by a dead local P
     assert.equal(fs.existsSync(path.join(directory, 'operation.lock.reclaim')), false);
 });
 
+test('local crawler recovery capabilities bypass the lease only for a strict same-host dead owner', t => {
+    const f = fixture(t); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true });
+    const directory = path.join(f.crosswalk, ids[0]); const lockPath = path.join(directory, 'operation.lock');
+    const fresh = new Date().toISOString();
+    const policies = [api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY,
+        api.HISTORICAL_CONFERENCE_CRAWL_BATCH_LOCK_RECOVERY];
+    for (const [index, recoveryPolicy] of policies.entries()) {
+        writeOperationLock(directory, { pid: 99999999, startedAt: fresh, heartbeatAt: fresh });
+        assert.throws(() => api.acquireLock(directory, 'ordinary.worker', stamp), /not stale/);
+        const handle = api.acquireLock(directory, `local.worker.${index}`, stamp, { recoveryPolicy });
+        api.releaseLock(handle); assert.equal(fs.existsSync(lockPath), false);
+    }
+
+    writeOperationLock(directory, { pid: 99999999, startedAt: fresh, heartbeatAt: fresh });
+    assert.throws(() => api.acquireLock(directory, 'forged.worker', stamp,
+        { recoveryPolicy: Symbol('historical-local-crawl-batch-local-dead-owner-recovery-v1') }), /not stale/);
+    fs.rmSync(lockPath, { recursive: true });
+
+    writeOperationLock(directory, { pid: process.pid, startedAt: fresh, heartbeatAt: fresh });
+    assert.throws(() => api.acquireLock(directory, 'live.worker', stamp,
+        { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /live process/);
+    fs.rmSync(lockPath, { recursive: true });
+
+    writeOperationLock(directory, { pid: 99999999, hostname: `${os.hostname()}-remote`, startedAt: fresh, heartbeatAt: fresh });
+    assert.throws(() => api.acquireLock(directory, 'remote.worker', stamp,
+        { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /not stale/);
+    fs.rmSync(lockPath, { recursive: true });
+
+    fs.mkdirSync(lockPath, { mode: 0o700 });
+    assert.throws(() => api.acquireLock(directory, 'empty.worker', stamp,
+        { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /unknown or missing evidence/);
+    fs.rmSync(lockPath, { recursive: true });
+
+    const malformed = writeOperationLock(directory, { pid: 99999999, startedAt: fresh, heartbeatAt: fresh });
+    fs.writeFileSync(malformed.ownerFile, api.prettyBytes({ ...malformed.owner, owner: 'mutated.owner' }), { mode: 0o600 });
+    assert.throws(() => api.acquireLock(directory, 'malformed.worker', stamp,
+        { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /self-SHA drifted/);
+});
+
+test('operation lock reclaims a verified remote lock only after its lease expires', t => {
+    const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
+    const artifact = api.buildDecisionArtifact({ state, pageKey, operationId: ids[1], actorId: 'reviewer',
+        status: 'needs-review', reason: 'review', now: stamp });
+    const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionName: 'review.json', artifact }); const decisionHandle = api.loadDecisionHandle(decisionFile);
+    const directory = path.join(f.crosswalk, ids[0]); const stale = writeOperationLock(directory, {
+        hostname: `${os.hostname()}-remote`
+    });
+    const updated = api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], decisionHandle,
+        owner: 'worker', now: stamp });
+    assert.equal(updated.completion.needsReview, 1);
+    assert.equal(fs.existsSync(stale.lock), false);
+    assert.equal(fs.existsSync(path.join(directory, 'operation.lock.reclaim')), false);
+});
+
 test('SIGINT releases only the child-owned lock and leaves canonical state bytes intact', async t => {
     const f = fixture(t); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true });
@@ -751,6 +825,82 @@ test('conflict resolver rejects single pages, durable-only authority, and author
         selectedHint: { scheme: 'openreview-forum-id', value: 'Forum_000002' },
         authorityHandle: production.authorityHandle, operationId: ids[5], actorId: 'operator.2', now: stamp }),
     /does not exactly match/);
+});
+
+test('archive crawl identity authority closes an exact archived arXiv hint without becoming a full-text authority', t => {
+    const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true });
+    const dataRoot = path.join(f.root, 'data'); const archiveDirectory = path.join(dataRoot, 'archive', '2026-01-01');
+    const identityRoot = path.join(f.root, 'archive-identities'); fs.mkdirSync(archiveDirectory, { recursive: true, mode: 0o700 });
+    const record = { arxivId: '2601.00001', paper_id: '2601.00001', title: 'Retained crawl title',
+        abstract: 'Retained crawler metadata only.', authors: ['Author'], categories: ['cs.SD'], source: 'arxiv', sources: ['arxiv'] };
+    fs.writeFileSync(path.join(archiveDirectory, 'filtered-papers.json'), JSON.stringify({ papers: [record] }), { mode: 0o600 });
+    const index = archiveCrawlAuthorityApi.scanRetainedFilteredPapers({ dataRoot });
+    const prepared = archiveCrawlAuthorityApi.prepareArchiveCrawlAuthority({ identityRoot, dataRoot, arxivId: '2601.00001',
+        match: index.matches.get('2601.00001')[0], apply: true });
+    const pageKey = Object.keys(state.assignments)[0];
+    const artifact = api.buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle: prepared.authorityHandle,
+        operationId: ids[1], actorId: 'archive-crawl.test', now: stamp });
+    assert.equal(artifact.sourceAuthority.authorityContract, archiveCrawlAuthorityApi.CONTRACT);
+    assert.equal(artifact.sourceAuthority.evidenceKind, archiveCrawlAuthorityApi.EVIDENCE_KIND);
+    assert.equal('fulltextSha256' in artifact.sourceAuthority, false);
+    const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionName: 'archive-crawl-exact.json', artifact });
+    const applied = api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionHandle: api.loadDecisionHandle(decisionFile, { authorityHandle: prepared.authorityHandle }),
+        owner: 'archive-crawl.test', now: stamp });
+    assert.equal(applied.assignments[pageKey].status, 'verified');
+    assert.throws(() => authorityApi.authorityHandleSnapshot(prepared.authorityHandle), /authenticated paper source authority/);
+});
+
+test('current local crawler authority finalization dispatches separate local, legacy, and snapshot roots', t => {
+    const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
+    const dataRoot = path.join(f.root, 'data'); const current = path.join(dataRoot, 'current'); const authorityRoot = path.join(f.root, 'paper-authorities');
+    const identityRoot = path.join(f.root, 'local-identities'); const snapshotRoot = path.join(f.root, 'local-snapshots'); const legacyRoot = path.join(f.root, 'legacy-identities');
+    fs.mkdirSync(current, { recursive: true, mode: 0o700 }); fs.mkdirSync(authorityRoot, { mode: 0o700 });
+    fs.writeFileSync(path.join(current, 'papers.json'), JSON.stringify({ papers: { '2601.00001': {
+        arxivId: '2601.00001', title: 'not identity evidence', analysis: { generated: true } } } }), { mode: 0o600 });
+    const match = localCrawlAuthorityApi.scanLocalCrawlPapers({ dataRoot }).matches.get('2601.00001')[0];
+    const prepared = localCrawlAuthorityApi.prepareLocalCrawlAuthority({ identityRoot, snapshotRoot, dataRoot, arxivId: '2601.00001', match, apply: true });
+    const artifact = api.buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle: prepared.authorityHandle,
+        operationId: ids[1], actorId: 'local-crawl.test', now: stamp });
+    const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], decisionName: 'local-crawl.json', artifact });
+    api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], decisionHandle: api.loadDecisionHandle(decisionFile,
+        { authorityHandle: prepared.authorityHandle }), owner: 'local-crawl.test', now: stamp });
+    const finalized = api.finalizeCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot,
+        archiveIdentityRoot: legacyRoot, archiveDataRoot: dataRoot, localCrawlIdentityRoot: identityRoot,
+        localCrawlSnapshotRoot: snapshotRoot, localCrawlDataRoot: dataRoot });
+    assert.equal(finalized.receipt.verified, 1);
+    fs.writeFileSync(path.join(current, 'papers.json'), JSON.stringify({ papers: { '2602.00001': { arxivId: '2602.00001' } } }), { mode: 0o600 });
+    assert.equal(api.readFinalReceipt({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], authorityRoot,
+        archiveIdentityRoot: legacyRoot, archiveDataRoot: dataRoot, localCrawlIdentityRoot: identityRoot,
+        localCrawlSnapshotRoot: snapshotRoot, localCrawlDataRoot: dataRoot }).receipt.receiptSha256, finalized.receipt.receiptSha256);
+});
+
+test('retained local conference crawler metadata and PDF authority verifies an exact OpenReview page hint', t => {
+    const f = fixture(t); useOpenReviewHint(f); const dataRoot = path.join(f.root, 'data');
+    const current = path.join(dataRoot, 'current'); const pdfRoot = path.join(dataRoot, 'pdfs', 'icml2026');
+    fs.mkdirSync(current, { recursive: true, mode: 0o700 }); fs.mkdirSync(pdfRoot, { recursive: true, mode: 0o700 });
+    const id = 'AbCdef_12'; const pdf = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n');
+    fs.writeFileSync(path.join(current, 'icml_2026_deep_analysis.json'), JSON.stringify({ papers: [{ id, title: 'Metadata only', fullText: 'not authority content' }] }), { mode: 0o600 });
+    fs.writeFileSync(path.join(pdfRoot, `${id}.pdf`), pdf, { mode: 0o600 });
+    for (const name of ['icassp_2026_deep_analyzers.json', 'iclr_2026_deep_analyzers.json']) {
+        fs.writeFileSync(path.join(current, name), JSON.stringify({ papers: [] }), { mode: 0o600 });
+    }
+    const match = conferenceCrawlAuthorityApi.scanRetainedConferenceCrawlers({ dataRoot })
+        .matches.get(`openreview-forum-id:${id}`)[0];
+    const prepared = conferenceCrawlAuthorityApi.prepareConferenceCrawlAuthority({ identityRoot: path.join(f.root, 'conference-identities'), dataRoot, match, apply: true });
+    const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f), crosswalkId: ids[0], now: stamp, apply: true });
+    const pageKey = Object.keys(state.assignments)[0]; const artifact = api.buildVerifiedDecisionArtifact({ state, pageKey,
+        authorityHandle: prepared.authorityHandle, operationId: ids[1], actorId: 'conference.local', now: stamp });
+    assert.equal(artifact.sourceAuthority.authorityContract, conferenceCrawlAuthorityApi.CONTRACT);
+    assert.equal(artifact.sourceAuthority.pdfSha256, match.pdfSha256);
+    const decisionFile = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], decisionName: 'conference-local.json', artifact });
+    const applied = api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0], owner: 'conference.local', now: stamp,
+        decisionHandle: api.loadDecisionHandle(decisionFile, { authorityHandle: prepared.authorityHandle }) });
+    assert.equal(applied.assignments[pageKey].status, 'verified');
+    assert.equal(conferenceCrawlAuthorityApi.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle);
 });
 
 test('verified conference decision replays locked bytes and final receipt requires live production authority', t => {

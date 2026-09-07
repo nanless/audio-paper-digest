@@ -7,6 +7,9 @@ const crypto = require('node:crypto');
 const scope = new AsyncLocalStorage();
 const CONTRACT = 'fresh-source-analysis-v1';
 const CACHE_CONTRACT = 'fresh-source-cache-v1';
+const BUNDLE_CACHE_CONTRACT = 'fresh-source-bundle-v2';
+const BUNDLE_SOURCE_MODE = 'sealed-arxiv-bundle-v1';
+const DAILY_SOURCE_RUN_CONTRACT = 'daily-fresh-source-run-v1';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const stable = value => {
     const normalize = item => Array.isArray(item) ? item.map(normalize)
@@ -14,6 +17,11 @@ const stable = value => {
     return sha(JSON.stringify(normalize(value)) ?? 'null');
 };
 const validSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
+
+function isBundleExpectation(value) {
+    return Boolean(value) && value.sourceMode === BUNDLE_SOURCE_MODE
+        && Number.isSafeInteger(value.sourceGeneration) && value.sourceGeneration >= 1;
+}
 
 function fail(message) {
     const error = new Error(message);
@@ -63,11 +71,18 @@ function validateRun(runDir, identity) {
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(runId || ''))) {
         throw fail('Fresh runId must be a UUID');
     }
-    const expectedDirectory = path.join(path.resolve(Config.FILES.freshRewriteRunsDir), runId);
-    if (path.resolve(runDir) !== expectedDirectory) throw fail('Fresh runDir must be the configured root/runId directory');
-    safeDirectory(expectedDirectory);
-    const run = readJson(path.join(expectedDirectory, 'run.json'));
-    if (run.runId !== runId || run.contract !== 'fresh-rewrite-run-v1' || run.version !== 1) throw fail('Fresh run manifest identity mismatch');
+    const rewriteRoot = path.resolve(Config.FILES.freshRewriteRunsDir);
+    const dailyRoot = path.resolve(Config.FILES.dailyFreshSourceRunsDir || '');
+    const resolvedRunDir = path.resolve(runDir);
+    const roots = [
+        { root: rewriteRoot, contract: 'fresh-rewrite-run-v1' },
+        { root: dailyRoot, contract: DAILY_SOURCE_RUN_CONTRACT }
+    ].filter(item => item.root && item.root !== path.resolve('.'));
+    const matchedRoot = roots.find(item => resolvedRunDir === path.join(item.root, runId));
+    if (!matchedRoot) throw fail('Fresh runDir must be the configured root/runId directory');
+    safeDirectory(resolvedRunDir);
+    const run = readJson(path.join(resolvedRunDir, 'run.json'));
+    if (run.runId !== runId || run.contract !== matchedRoot.contract || run.version !== 1) throw fail('Fresh run manifest identity mismatch');
     const expectations = identity?.sourceExpectations;
     if (!expectations || typeof expectations !== 'object' || Array.isArray(expectations)
         || stable(expectations) !== stable(run.sourceExpectations)) throw fail('Fresh source expectations differ from the run manifest');
@@ -76,13 +91,16 @@ function validateRun(runDir, identity) {
         throw fail('Fresh source expectations do not cover the exact run input set');
     }
     for (const id of ids) {
-        if (paperId(id) !== id || !validSha(expectations[id]?.sourceSha256)
-            || !validSha(expectations[id]?.structuredArtifactsSha256)) throw fail(`Fresh baseline lacks exact source hashes: ${id}`);
+        const expectation = expectations[id];
+        if (paperId(id) !== id || (!isBundleExpectation(expectation)
+            && (!validSha(expectation?.sourceSha256) || !validSha(expectation?.structuredArtifactsSha256)))) {
+            throw fail(`Fresh baseline lacks an exact source contract: ${id}`);
+        }
         if (expectations[id].sourceId !== undefined && paperId(expectations[id].sourceId) !== id) {
             throw fail(`Fresh sourceId belongs to another paper: ${id}`);
         }
     }
-    return { runId, runDir: expectedDirectory, sourceExpectations: structuredClone(expectations),
+    return { runId, runDir: resolvedRunDir, runContract: matchedRoot.contract, sourceExpectations: structuredClone(expectations),
         inputSetSha256: stable(ids.slice().sort()) };
 }
 
@@ -102,8 +120,10 @@ function withFreshAnalysisContext(identity, callback) {
             const expected = checked.sourceExpectations[id];
             return !expected || snapshot?.runId !== checked.runId
                 || snapshot.paperId !== id
-                || snapshot.sourceSha256 !== expected.sourceSha256
-                || snapshot.structuredArtifactsSha256 !== expected.structuredArtifactsSha256;
+                || (!isBundleExpectation(expected) && (snapshot.sourceSha256 !== expected.sourceSha256
+                    || snapshot.structuredArtifactsSha256 !== expected.structuredArtifactsSha256))
+                || (isBundleExpectation(expected) && (snapshot.sourceGeneration !== expected.sourceGeneration
+                    || !validSha(snapshot.sourceManifestSha256)));
         })) throw fail('Fresh sealed recovery capabilities are invalid or forged');
     const { withLlmUsageContext } = require('./llm-usage.js');
     const context = Object.freeze({ ...checked,
@@ -115,6 +135,15 @@ function withFreshAnalysisContext(identity, callback) {
 }
 
 function getFreshAnalysisContext() { return scope.getStore() || null; }
+
+// Daily source runs seal source.txt, source.pdf, source-runtime.json, and
+// source-manifest.json. Figure bytes are intentionally materialized afresh
+// for the active request, so failed Reader candidates need a separate
+// ephemeral-pixel binding. Older fresh rewrite runs retain their existing
+// candidate semantics.
+function isDailyFreshSourceScope() {
+    return getFreshAnalysisContext()?.runContract === DAILY_SOURCE_RUN_CONTRACT;
+}
 
 function getSealedRecoveryCapability(id = getFreshAnalysisContext()?.paperId) {
     const context = getFreshAnalysisContext();
@@ -146,11 +175,56 @@ function validateSource(details, id, expectation) {
 
 function sourceDirectory(context, id) { return path.join(context.runDir, 'sources', id); }
 
+function bundleRoot(context) { return path.join(context.runDir, 'sources'); }
+
+function detailsFromSealedBundle(stored) {
+    // The sealed source bundle already validates its non-pixel runtime metadata
+    // against the persisted PDF/TXT manifest. Replaying it preserves exact
+    // table/formula bindings and figure discovery for daily Reader runs; it
+    // never contains image bytes or a legacy data/current cache path.
+    const runtime = stored.runtimeDetails;
+    if (!runtime || runtime.paperId !== stored.manifest.paperId
+        || runtime.text !== stored.text || runtime.source !== stored.manifest.text.source
+        || runtime.sourceId !== stored.manifest.text.sourceId) {
+        throw fail('Fresh sealed bundle runtime metadata drift');
+    }
+    const details = { text: runtime.text, source: runtime.source, sourceId: runtime.sourceId,
+        imageInfos: structuredClone(runtime.imageInfos), structuredArtifacts: structuredClone(runtime.structuredArtifacts),
+        readerAuthors: runtime.readerAuthors === null ? { authors: [] } : structuredClone(runtime.readerAuthors),
+        htmlAvailability: runtime.htmlAvailability, htmlAttempts: runtime.htmlAttempts,
+        warnings: runtime.warnings.map(String) };
+    const sourceSnapshot = { sourceManifestSha256: stored.sourceManifestSha256,
+        sourceGeneration: stored.generation, details };
+    const descriptor = { version: 2, contract: BUNDLE_CACHE_CONTRACT, runId: null, paperId: stored.manifest.paperId.slice(6),
+        sourceGeneration: stored.generation, sourceManifestSha256: stored.sourceManifestSha256,
+        sourceSha256: stored.manifest.text.responseSha256,
+        structuredArtifactsSha256: details.structuredArtifacts.payloadSha256 || '',
+        sourceSnapshotSha256: sha(JSON.stringify(sourceSnapshot)) };
+    return { ...details, freshSourceDescriptor: descriptor };
+}
+
+function readBundleFreshSource(checked, id, expectation) {
+    const sourceApi = require('./fresh-arxiv-rewrite-source.js');
+    const root = bundleRoot(checked);
+    if (!sourceApi.generationExists(root, id, expectation.sourceGeneration)) return null;
+    const stored = sourceApi.readFreshArxivRewriteSource({ rootDir: root, arxivId: id,
+        generation: expectation.sourceGeneration });
+    const source = detailsFromSealedBundle(stored);
+    source.freshSourceDescriptor.runId = checked.runId;
+    if (source.freshSourceDescriptor.paperId !== id
+        || source.freshSourceDescriptor.sourceGeneration !== expectation.sourceGeneration
+        || !validSha(source.freshSourceDescriptor.sourceManifestSha256)) {
+        throw fail('Fresh sealed source bundle identity drift');
+    }
+    return source;
+}
+
 function readFreshSource(runDir, paper, identity) {
     const checked = validateRun(runDir, identity);
     const id = paperId(paper);
     const expectation = checked.sourceExpectations[id];
     if (!expectation) throw fail(`Paper is outside fresh run: ${id}`);
+    if (isBundleExpectation(expectation)) return readBundleFreshSource(checked, id, expectation);
     const directory = sourceDirectory(checked, id);
     try { safeDirectory(directory); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     let descriptor;
@@ -203,6 +277,14 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
     if (context.pendingSources.has(id)) return structuredClone(await context.pendingSources.get(id));
     const pending = (async () => {
         const expectation = context.sourceExpectations[id];
+        if (isBundleExpectation(expectation)) {
+            const sourceApi = require('./fresh-arxiv-rewrite-source.js');
+            await sourceApi.captureFreshArxivRewriteSource({ rootDir: bundleRoot(context), arxivId: id,
+                generation: expectation.sourceGeneration });
+            const sealed = readFreshSource(context.runDir, id, context);
+            if (!sealed) throw fail('Fresh source bundle capture did not seal a readable source');
+            return sealed;
+        }
         const directory = sourceDirectory(context, id);
         let details;
         try {
@@ -230,7 +312,7 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
 
 function resolveFreshSource(runDir, paper, identity) {
     const id = paperId(paper);
-    const requestedId = identity?.sourceExpectations?.[id]?.sourceId
+    const requestedId = isBundleExpectation(identity?.sourceExpectations?.[id]) ? id : identity?.sourceExpectations?.[id]?.sourceId
         ?? (typeof paper === 'string' ? paper : paper.arxivId || paper.paper_id || paper.id);
     if (paperId(requestedId) !== id) throw fail(`Fresh sourceId belongs to another paper: ${id}`);
     return withFreshAnalysisContext({ ...identity, runDir }, () => require('../deep-analyzer.js').fetchArxivTextDetailed(requestedId));
@@ -252,6 +334,8 @@ function provenanceFromSource(source) {
     if (!context || descriptor?.runId !== context.runId) throw fail('Fresh provenance requires the current run source descriptor');
     return { contract: CONTRACT, runId: context.runId, sourceSha256: descriptor.sourceSha256,
         structuredArtifactsSha256: descriptor.structuredArtifactsSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+        ...(descriptor.contract === BUNDLE_CACHE_CONTRACT ? { sourceGeneration: descriptor.sourceGeneration,
+            sourceManifestSha256: descriptor.sourceManifestSha256 } : {}),
         sourceOnly: true, oldGeneratedTextIncluded: false };
 }
 
@@ -295,7 +379,8 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
     return expected;
 }
 
-module.exports = { CONTRACT, CACHE_CONTRACT, withFreshAnalysisContext, getFreshAnalysisContext,
+module.exports = { CONTRACT, CACHE_CONTRACT, BUNDLE_CACHE_CONTRACT, BUNDLE_SOURCE_MODE, DAILY_SOURCE_RUN_CONTRACT, isBundleExpectation,
+    withFreshAnalysisContext, getFreshAnalysisContext, isDailyFreshSourceScope,
     getSealedRecoveryCapability,
     readFreshSource, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
     withFreshPaperContext, attachFreshSourceProvenance, freshReaderAttemptsDirectory };

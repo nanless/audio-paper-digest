@@ -14,24 +14,33 @@ This page is task-oriented. See [scripts/README.md](../../scripts/README.md) for
 | `npm run digest:status -- --date DATE` | read-only final snapshot |
 | `npm run digest:waive-visuals -- --date DATE --reason TEXT` | explicit user visual waiver |
 
+## Workspace Role
+
+Run `npm run workspace:role -- status` before a production command. `digest:*`, `fetch`, and
+`blog:generate/review/push` require the `daily` workspace; `history:*`, `conference:*`, `rewrite:source`, and
+`blog:activate-fresh` require `history`. Bind a verified checkout with
+`npm run workspace:role -- set daily|history [--force]`.
+
 ## Data Stage
 
 | Command | Behavior |
 |---|---|
 | `npm run fetch` | archive, fetch, filter, analyze; no publication |
-| `npm run deep -- --date DATE` | safely continue analysis |
-| `npm run batch` | analyze unfinished canonical papers |
-| `npm run reanalyze -- --concurrency N` | force full reanalysis |
+| `npm run deep -- --date DATE` | continue only from the current sealed PDF/TXT source run; never refetch or use legacy cache |
+| `npm run batch` | analyze unfinished canonical papers only from current sealed PDF/TXT |
+| `npm run reanalyze -- --concurrency N` | force reanalysis while replaying only current sealed PDF/TXT |
 | `node scripts/analyze-single-paper.js ID --force` | analyze one paper |
 | `node scripts/reanalyze-selected.js ID...` | reanalyze selected IDs |
 | `node scripts/refilter-reanalyze-by-date.js DATE` | controlled historical refilter/reanalysis |
-| `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | batch score/Reader refresh |
+| `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | batch score/Reader refresh from sealed PDF/TXT; figures are call-temporary |
 | `npm run validate:data` | read-only current validation |
 | `npm run keyword:recall` | keyword-gate gold replay |
 | `npm run backfill` | ID backfill only |
 | `npm run paper:rethink` | historical standalone maintenance tool; no longer integrated into the blog and not needed by readers; see the [archived interface documentation](../paper-rethink-companion.md) |
 
 A fetch-start run accepts Beijing today. Direct `node scripts/full-fetch.js` is preferable for background data-only execution when npm/TTY wrappers are unreliable.
+
+All four recovery entries require an exact replay of `deep-analysis-result.json.dailyFreshSourceRun`: its batch date, canonical paper set, and each `source.txt`, `source.pdf`, runtime metadata, and manifest. Missing or drifted bundles fail before model or image work. Re-run `npm run digest:prepare -- DATE` to establish a new source phase; do not patch checkpoints.
 
 ## Blog Transaction
 
@@ -43,9 +52,40 @@ A fetch-start run accepts Beijing today. Direct `node scripts/full-fetch.js` is 
 | `--include-id ID` | isolated paper scope; same ID across applicable stages |
 | `--exclude-id ID` | explicit generation exclusion; repeatable |
 
+The generation manifest records the actual current file, dated archive, or explicit `--data-file` as
+`generation-input-source-reference-v1`; its absolute path, byte count, and SHA-256 enter the input fingerprint.
+Review and push replay only that file and its `dailyFreshSourceRun`, never the then-current
+`DEEP_ANALYSIS_RESULT_FILE`. Input or sealed PDF/TXT drift requires generation again.
+
 `publish-to-blog.py` is shared implementation and a generation compatibility entry, not a bypass around the three stages.
 
 Default blog and visual commands pass through `scripts/python-runtime.sh`, which prefers the project `.venv` and rejects Python versions below 3.11 or non-OpenSSL TLS runtimes.
+
+## Historical Direct Rewrite
+
+The active historical route is `conference-local-sources → direct-inputs → conference-projections → direct-plan
+→ direct-scheduler → direct-run → direct-aggregate`. It does not wait for crosswalk: arXiv derives from a frozen
+single historical hint and freshly seals official TXT/PDF/runtime/manifest per generation; conference replays
+bound retained metadata/PDF SHA. Crosswalk accepts only a named immutable fresh-arXiv failure handoff; a damaged or
+missing local conference source fails its direct item closed. Historical review, activation, commit/push receipt, and remote-OID publication
+are not implemented.
+
+```bash
+npm run history:conference-local-sources -- --dry-run|--apply [--output NAME.json]
+npm run history:direct-inputs -- --dry-run|--apply --conference-manifest /abs/FILE.json --inventory /abs/FILE.json --blog-root /abs/DIR [--name NAME.json]
+npm run history:conference-projections -- --dry-run|--apply --catalog /abs/FILE.json --inventory /abs/FILE.json [--output NAME.json]
+npm run history:direct-plan -- --dry-run|--apply --catalog /abs/FILE.json --inventory /abs/FILE.json --conference-projections /abs/FILE.json [--output NAME.json]
+npm run history:direct-scheduler -- --dry-run|--apply --plan /abs/FILE.json [--queue all|arxiv|conference] [--generation N] [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
+npm run history:direct-run -- --dry-run|--apply --plan /abs/FILE.json [--queue all|arxiv|conference] [--generation N] [--concurrency 1-8]
+npm run history:direct-aggregate -- projection --dry-run|--apply --plan-file /abs/FILE.json --inventory-file /abs/FILE.json --output-name NAME.json
+npm run history:direct-aggregate -- aggregate --dry-run|--apply --plan-file /abs/FILE.json --registry-file /abs/FILE.json --projection-file /abs/FILE.json (--daily YYYY-MM-DD|--conference KEY)
+```
+
+`history:crosswalk` remains read-only/audit state for the active route. `history:arxiv-batch` requires explicit named
+immutable failure handoffs; it does not enumerate pending hints. `history:local-crawl-batch` (the
+`archive-crawl-batch` compatibility alias) and `history:conference-crawl-batch` are retired fail-closed endpoints.
+The detailed active guide is currently
+[Chinese](../history-rewrite.md).
 
 ## Visual State Machines
 

@@ -18,6 +18,7 @@ date and archive
  → published-paper deduplication
  → keyword prefilter
  → LLM filtering
+ → seal this run's official arXiv text/PDF
  → full-text staged analysis
  → scoring audit
  → API Reader longform
@@ -56,7 +57,13 @@ Decisions persist per paper. Muse uses the configured filter batch size. If a st
 
 ## 4. Full Text and Staged Analysis
 
-Healthy arXiv HTML is preferred; structurally inadequate pages fall back to PDF. Metadata shells cannot claim full-text provenance, and source-SHA changes invalidate primary analysis and downstream stages.
+After filtering and before deep analysis, every selected arXiv ID freshly captures official HTML text and PDF
+into `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`: `source.txt`,
+`source.pdf`, `source-runtime.json`, and `source-manifest.json`. Analysis, Reader, generate, review, and push
+replay only that sealed generation, never a legacy `data/current` text/PDF/image cache. HTML preference and PDF
+fallback are contained in this capture. Figure pixels are materialized only in the active model call's
+OS-temporary directory. Metadata shells cannot claim full-text provenance, and source-SHA changes invalidate
+primary analysis and downstream stages.
 
 Stages are primary analysis, open-source/demo scans, factual revision, table/method/structure repair, scoring audit, API Reader v3, source-identity replay for tables/formulas/authors/resources, and official-figure materialization. Stage fingerprints bind inputs, model, protocol, prompt, temperature, budgets, and output SHA.
 
@@ -91,6 +98,9 @@ receipt-authorized delta and verifies remote `main`.
 
 Review never mutates reviewed bytes. Page, baseline, protocol, generation, or remote drift invalidates the transaction.
 
+Generation records the absolute path, byte count, and SHA-256 of its actual current file, dated archive, or
+`--data-file`. Review and push replay only that generation input reference and cannot switch to a later current file.
+
 ## 7. Visuals
 
 After remote verification, the system plans TOP 10 paper infographics and one digest cover. Scripts never call an image API; Codex uses built-in `image_gen`.
@@ -108,9 +118,13 @@ Use only absolute paths emitted by prepare. Inspect every final image before rec
 ```bash
 ./run-daily-digest.sh YYYY-MM-DD --from review
 npm run deep -- --date YYYY-MM-DD
+npm run batch
+npm run reanalyze -- --concurrency 5
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 npm run validate:data
 npm run digest:status -- --date YYYY-MM-DD
 ```
 
 Regenerate final status after the last push, record, or waiver. Reports are snapshots, not live state.
+
+`deep`, `batch`, `reanalyze`, and `api:reader:refresh` replay only the current canonical `dailyFreshSourceRun`. It binds the batch date, exact paper set, and each sealed PDF/TXT/runtime/manifest; these commands never recapture a source or read a legacy cache. Re-run `digest:prepare` when it is missing or drifted. Figures remain materialized only in the active call's OS-temporary directory.

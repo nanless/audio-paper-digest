@@ -3,7 +3,6 @@
 
 const Config = require('./config.js');
 const {
-    fetchArxivTextDetailed,
     refreshApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,
@@ -18,6 +17,7 @@ const {
     withPaperAnalysisLock,
     apiReaderV3BindsCanonical
 } = require('./analysis-engine.js');
+const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const {
     updateAnalysisDigestStatuses,
     inferAnalysisBatchDate,
@@ -232,6 +232,9 @@ async function refreshApiReader(targetId, options = {}) {
     const resultPath = Config.FILES.deepAnalysisResult;
     const current = readJsonFileStrict(resultPath);
     const papers = Array.isArray(current) ? current : current.papers;
+    dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, {
+        papers, label: 'API Reader recovery'
+    });
     const existing = papers.find(paper => normalizedId(paper) === requested);
     if (!existing || (!isSuccessfulAnalysisRecord(existing)
         && !(options.scoringAndReader && canRepairScoringBinding(existing))
@@ -242,11 +245,17 @@ async function refreshApiReader(targetId, options = {}) {
     return withPaperAnalysisLock(existing, async () => {
         const latest = readJsonFileStrict(resultPath);
         const latestPapers = Array.isArray(latest) ? latest : latest.papers;
+        const lockedDailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(latest, {
+            papers: latestPapers, label: 'API Reader recovery'
+        });
         const canonical = latestPapers.find(paper => normalizedId(paper) === requested);
         if (!canonical || (!isSuccessfulAnalysisRecord(canonical)
             && !(options.scoringAndReader && canRepairScoringBinding(canonical))
             && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(canonical)))) {
             throw new Error(`${requested} canonical 在加锁后发生变化`);
+        }
+        if (!dailyFreshSources.isPaperBoundToPlan(canonical, lockedDailySourcePlan)) {
+            throw new Error(`${requested} canonical 未由当前 sealed daily source generation 生成；请先运行 npm run reanalyze`);
         }
         const inputIdentity = paperRefreshInputIdentity(canonical);
         const refreshLabel = options.authorsOnly
@@ -259,13 +268,17 @@ async function refreshApiReader(targetId, options = {}) {
                 ? '评分复验与读者文章'
                 : '读者文章';
         console.log(`📄 只刷新${refreshLabel}: ${canonical.title || requested}`);
-        const sourceDetails = options.surfaceBindingsOnly
-            ? null
-            : await fetchArxivTextDetailed(
-                canonical.arxivId || canonical.paper_id || targetId
-            );
-        const refreshed = options.surfaceBindingsOnly
-            ? (() => {
+        const refreshOperations = options.operations || {};
+        const refreshFromSealedSource = async sourceDetails => options.authorsOnly
+            ? (refreshOperations.authors || refreshApiReaderAuthorsFromSource)(canonical, sourceDetails)
+            : options.figuresOnly
+                ? await (refreshOperations.figures || refreshApiReaderFiguresFromSource)(canonical, sourceDetails)
+                : options.scoringAndReader
+                    ? await (refreshOperations.scoringAndReader || refreshApiScoringAndReaderFromSource)(canonical, sourceDetails)
+                    : await (refreshOperations.article || refreshApiReaderArticleFromSource)(canonical, sourceDetails, {
+                        reviewFeedback: options.reviewFeedback
+                    });
+        const repairSurfaceBindings = () => {
                 const repaired = JSON.parse(JSON.stringify(canonical));
                 repairApiReaderPlanSurfaceBinding(repaired, repaired.analysisManifest);
                 const bridges = repaired.apiReaderPlan?.conceptBridges;
@@ -287,16 +300,19 @@ async function refreshApiReader(targetId, options = {}) {
                     throw new Error(`${requested} 正文图片顺序无法与结构化 figure 闭环`);
                 }
                 return repaired;
-            })()
-            : options.authorsOnly
-                ? refreshApiReaderAuthorsFromSource(canonical, sourceDetails)
-            : options.figuresOnly
-                ? await refreshApiReaderFiguresFromSource(canonical, sourceDetails)
-            : options.scoringAndReader
-                ? await refreshApiScoringAndReaderFromSource(canonical, sourceDetails)
-                : await refreshApiReaderArticleFromSource(canonical, sourceDetails, {
-                    reviewFeedback: options.reviewFeedback
-                });
+            };
+        // Even the deterministic surface-only operation runs inside the
+        // source/figure scope. This makes every Reader recovery prove the
+        // exact bundle before it can touch canonical bytes and prevents a
+        // later surface repair from acquiring a legacy figure/cache shortcut.
+        const refreshed = await dailyFreshSources.withDailyFreshAnalysisContext(lockedDailySourcePlan, () =>
+            dailyFreshSources.withDailyFreshPaperSource(
+                lockedDailySourcePlan,
+                canonical,
+                options.surfaceBindingsOnly ? repairSurfaceBindings : refreshFromSealedSource,
+                options
+            )
+        );
         const savedPayload = updateJsonFileLocked(resultPath, payload => {
             const rows = Array.isArray(payload) ? payload : payload.papers;
             if (!Array.isArray(rows)) throw new Error('deep canonical papers 不是数组');

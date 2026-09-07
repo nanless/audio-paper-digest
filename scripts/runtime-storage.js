@@ -43,6 +43,11 @@ function getLayout(projectRoot = PROJECT_ROOT) {
     // visible to status, but storage:prune has no authority to remove it.
     // A future conference execution owns its own explicit retention protocol.
     const protectedRuntime = [
+        // Fresh sealed source.txt, source.pdf, source-runtime.json, and
+        // source-manifest.json bundles are reproducible evidence, not caches.
+        { key: 'daily-fresh-source-runs', root: path.join(runtime, 'daily-fresh-source-runs') },
+        { key: 'fetched-arxiv-sources', root: path.join(runtime, 'fetched-arxiv-sources') },
+        { key: 'historical-arxiv-fresh-failure-handoffs', root: path.join(runtime, 'historical-arxiv-fresh-failure-handoffs') },
         { key: 'conference-discovery-catalogs', root: path.join(runtime, 'conference-discovery-catalogs') },
         { key: 'conference-discovery-reports', root: path.join(runtime, 'conference-discovery-reports') },
         { key: 'conference-filter-specs', root: path.join(runtime, 'conference-filter-specs') },
@@ -58,6 +63,23 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'conference-page-staging', root: path.join(runtime, 'conference-page-staging') },
         { key: 'conference-aggregates', root: path.join(runtime, 'conference-aggregates') },
         { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
+        { key: 'direct-local-inputs', root: path.join(runtime, 'direct-local-inputs') },
+        { key: 'historical-conference-local-sources', root: path.join(runtime, 'historical-conference-local-sources') },
+        { key: 'historical-conference-page-projections', root: path.join(runtime, 'historical-conference-page-projections') },
+        { key: 'historical-direct-rewrite-plans', root: path.join(runtime, 'historical-direct-rewrite-plans') },
+        { key: 'historical-direct-rewrite-unprojected-reports', root: path.join(runtime, 'historical-direct-rewrite-unprojected-reports') },
+        { key: 'historical-direct-rewrite-registries', root: path.join(runtime, 'historical-direct-rewrite-registries') },
+        { key: 'historical-direct-rewrite-executions', root: path.join(runtime, 'historical-direct-rewrite-executions') },
+        { key: 'historical-direct-rewrite-staging', root: path.join(runtime, 'historical-direct-rewrite-staging') },
+        { key: 'historical-direct-aggregate-projections', root: path.join(runtime, 'historical-direct-aggregate-projections') },
+        { key: 'historical-direct-aggregates', root: path.join(runtime, 'historical-direct-aggregates') },
+        { key: 'historical-local-crawl-identities', root: path.join(runtime, 'historical-local-crawl-identities') },
+        { key: 'historical-local-crawl-identity-snapshots', root: path.join(runtime, 'historical-local-crawl-identity-snapshots') },
+        { key: 'historical-local-crawl-batches', root: path.join(runtime, 'historical-local-crawl-batches') },
+        { key: 'historical-archive-crawl-identities', root: path.join(runtime, 'historical-archive-crawl-identities') },
+        { key: 'historical-archive-crawl-batches', root: path.join(runtime, 'historical-archive-crawl-batches') },
+        { key: 'historical-conference-crawl-identities', root: path.join(runtime, 'historical-conference-crawl-identities') },
+        { key: 'historical-conference-crawl-batches', root: path.join(runtime, 'historical-conference-crawl-batches') },
         { key: 'page-source-crosswalks', root: path.join(runtime, 'page-source-crosswalks') },
         { key: 'historical-arxiv-batches', root: path.join(runtime, 'historical-arxiv-batches') },
         { key: 'historical-analysis-schedulers', root: path.join(runtime, 'historical-analysis-schedulers') },

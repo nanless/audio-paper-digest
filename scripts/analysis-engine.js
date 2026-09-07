@@ -70,6 +70,13 @@ function sleepSync(ms) {
 
 const FILE_LOCK_OWNER_KEYS = Object.freeze(['acquiredAt', 'hostname', 'pid', 'token']);
 const FILE_LOCK_TOKEN_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+// This capability is intentionally opaque.  It is passed only by the
+// historical analysis scheduler for its outer operation lock: that process
+// has no work to protect once its same-host owner PID is confirmed gone.  All
+// other file locks keep their lease-based reclaim policy.
+const HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY = Symbol(
+    'historical-analysis-scheduler-local-dead-owner-recovery-v1'
+);
 
 function jsonHasDuplicateObjectKeys(source) {
     const stack = [];
@@ -222,8 +229,47 @@ function sameFileLockSnapshot(left, right, {
         && Boolean(sameOwnerFile);
 }
 
-function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now()) {
+function strictCurrentFileLockOwner(snapshot) {
+    const owner = snapshot?.owner;
+    const acquiredAt = new Date(owner?.acquiredAt);
+    return Boolean(snapshot?.exists && snapshot.consistent
+        && snapshot.directory?.mode === 0o700
+        && snapshot.ownerFile?.mode === 0o600
+        && JSON.stringify(owner?.keys) === JSON.stringify(FILE_LOCK_OWNER_KEYS)
+        // readFileLockSnapshot validates the raw owner with exactFileLockOwner
+        // before projecting it and adding the schema-key witness above.
+        && Number.isInteger(owner?.pid) && owner.pid > 0
+        && typeof owner?.hostname === 'string' && owner.hostname.trim()
+        && typeof owner?.token === 'string' && FILE_LOCK_TOKEN_RE.test(owner.token)
+        && typeof owner?.acquiredAt === 'string'
+        && Number.isFinite(acquiredAt.getTime())
+        && acquiredAt.toISOString() === owner.acquiredAt);
+}
+
+function localOwnerIsConfirmedDead(owner) {
+    try {
+        process.kill(owner.pid, 0);
+        return false;
+    } catch (error) {
+        if (error.code === 'ESRCH') return true;
+        if (error.code === 'EPERM') return false;
+        throw error;
+    }
+}
+
+function schedulerMayImmediatelyReclaimLocalDeadOwner(snapshot, options = {}) {
+    if (options.recoveryPolicy !== HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY
+        || !strictCurrentFileLockOwner(snapshot)
+        || snapshot.owner.hostname !== os.hostname()) return false;
+    return localOwnerIsConfirmedDead(snapshot.owner);
+}
+
+function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), options = {}) {
     if (!snapshot?.exists || !snapshot.consistent) return false;
+    // The scheduler-only policy does not apply to empty, malformed, legacy,
+    // remote, live, or permission-indeterminate locks.  Those all continue
+    // through the ordinary lease gate below.
+    if (schedulerMayImmediatelyReclaimLocalDeadOwner(snapshot, options)) return true;
     const ageMs = nowMs - (snapshot.ownerFile?.mtimeMs ?? snapshot.directory.mtimeMs);
     if (!(ageMs > staleMs)) return false;
     const owner = snapshot.owner;
@@ -244,18 +290,11 @@ function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now()) {
     // are deliberately never reclaimed.
     if (exactLegacy && owner.hostname !== os.hostname()) return false;
     if (owner.hostname !== os.hostname()) return true;
-    try {
-        process.kill(owner.pid, 0);
-        return false;
-    } catch (error) {
-        if (error.code === 'ESRCH') return true;
-        if (error.code === 'EPERM') return false;
-        throw error;
-    }
+    return localOwnerIsConfirmedDead(owner);
 }
 
-function canReclaimFileLock(lockPath, staleMs) {
-    return fileLockSnapshotIsReclaimable(readFileLockSnapshot(lockPath), staleMs);
+function canReclaimFileLock(lockPath, staleMs, options = {}) {
+    return fileLockSnapshotIsReclaimable(readFileLockSnapshot(lockPath), staleMs, Date.now(), options);
 }
 
 function readReclaimMarker(filename) {
@@ -342,9 +381,9 @@ function acquireReclaimMarker(lockPath, staleMs, targetSnapshot, staleMarkerRemo
     }
 }
 
-function reclaimFileLockIfSame(lockPath, staleMs) {
+function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
     const first = readFileLockSnapshot(lockPath);
-    if (!fileLockSnapshotIsReclaimable(first, staleMs)) return false;
+    if (!fileLockSnapshotIsReclaimable(first, staleMs, Date.now(), options)) return false;
     const marker = acquireReclaimMarker(lockPath, staleMs, first);
     if (!marker) return false;
     try {
@@ -354,7 +393,7 @@ function reclaimFileLockIfSame(lockPath, staleMs) {
             directory: { ...second.directory, mtimeMs: first.directory.mtimeMs }
         } : second;
         if (!sameFileLockSnapshot(first, second, { ignoreDirectoryMtime: true })
-            || !fileLockSnapshotIsReclaimable(secondWithOriginalLease, staleMs)
+            || !fileLockSnapshotIsReclaimable(secondWithOriginalLease, staleMs, Date.now(), options)
             || !sameReclaimMarker(marker, readReclaimMarker(marker.filename))
             || JSON.stringify(second.entryNames) !== JSON.stringify(
                 second.ownerFile ? ['.reclaiming.json', 'owner.json'] : ['.reclaiming.json']
@@ -580,7 +619,7 @@ function acquireFileLockSync(filePath, options = {}) {
         } catch (error) {
             if (error.code !== 'EEXIST') throw error;
             try {
-                if (reclaimFileLockIfSame(lockPath, staleMs)) continue;
+                if (reclaimFileLockIfSame(lockPath, staleMs, options)) continue;
             } catch (statError) {
                 if (statError.code === 'ENOENT') continue;
                 throw statError;
@@ -635,7 +674,7 @@ async function acquireFileLock(filePath, options = {}) {
         } catch (error) {
             if (error.code !== 'EEXIST') throw error;
             try {
-                if (reclaimFileLockIfSame(lockPath, staleMs)) continue;
+                if (reclaimFileLockIfSame(lockPath, staleMs, options)) continue;
             } catch (statError) {
                 if (statError.code === 'ENOENT') continue;
                 throw statError;
@@ -701,29 +740,38 @@ function initializeJsonFileLocked(filePath, fallbackValue, options = {}) {
     ), options);
 }
 
-function isCompleteAnalysisContent(paper) {
-    if (!hasValidAnalysisBody(paper)) return false;
-    if (!paper.analysisManifest || paper.analysisManifest.version !== 1) return false;
+function getIncompleteAnalysisContentReason(paper) {
+    if (!hasValidAnalysisBody(paper)) return '分析正文未通过内容合同';
+    if (!paper.analysisManifest || paper.analysisManifest.version !== 1) {
+        return 'analysisManifest 缺失或版本非法';
+    }
     const stages = paper.analysisManifest.stages;
     if (!stages || typeof stages !== 'object' || REQUIRED_RECOVERY_STAGES.some(stage =>
         !isRecoveryStageTerminal(stage, stages[stage]?.status))) {
-        return false;
+        return '必需恢复阶段未全部进入允许终态';
     }
-    if (!paper.analysisManifest.manualTakeover
-        && validateTaxonomyStageBinding(paper, { parsed: parseAnalysis(paper.analysis) })) return false;
-    if (validateCoreSummaryStageBinding(paper)) return false;
+    const taxonomyBindingIssue = !paper.analysisManifest.manualTakeover
+        ? validateTaxonomyStageBinding(paper, { parsed: parseAnalysis(paper.analysis) })
+        : null;
+    if (taxonomyBindingIssue) return `taxonomySeal 证明无法重放: ${taxonomyBindingIssue}`;
+    const coreSummaryBindingIssue = validateCoreSummaryStageBinding(paper);
+    if (coreSummaryBindingIssue) return `核心摘要证明无法重放: ${coreSummaryBindingIssue}`;
     if (validateManualTakeoverManifest(
         paper.analysisManifest,
         paper.analysisManifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
         { analysis: paper.analysis, imageManifest: paper.imageManifest }
-    )) return false;
+    )) return 'manual takeover 证明无法重放';
     const scoring = stages.scoringAudit;
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
-        if (!scoringAuditBindsFinalAnalysis(paper)) return false;
-        if (!scoringStabilityIsResolved(scoring)) return false;
-        if (!apiReaderV3BindsCanonical(paper)) return false;
+        if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审计未绑定最终正文';
+        if (!scoringStabilityIsResolved(scoring)) return '评分稳定性未解决';
+        if (!apiReaderV3BindsCanonical(paper)) return 'API Reader source-only 证明无法重放';
     }
-    return true;
+    return null;
+}
+
+function isCompleteAnalysisContent(paper) {
+    return getIncompleteAnalysisContentReason(paper) === null;
 }
 
 const LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES = Object.freeze(
@@ -816,6 +864,11 @@ const SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-
 const API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4';
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
 const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
+const EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1';
+const EPHEMERAL_FIGURE_FORBIDDEN_FIELDS = new Set([
+    'cachePath', 'tempPath', 'path', 'bytes', 'rawBytes', 'buffer',
+    'assetFilename', 'assetBytes', 'assetWidth', 'assetHeight', 'assetMediaType'
+]);
 
 function stableSha256(value) {
     const normalize = item => {
@@ -962,6 +1015,12 @@ function apiReaderV3BindsCanonical(paper) {
                     .update(block).digest('hex')
                 && article.split(block).length === 2;
         });
+    const figurePersistence = manifest?.contracts?.apiReaderFigurePersistence;
+    const ephemeralFiguresValid = figurePersistence !== EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT
+        || figures.every(figure => figure && typeof figure === 'object' && !Array.isArray(figure)
+            && Object.keys(figure).every(key => !EPHEMERAL_FIGURE_FORBIDDEN_FIELDS.has(key)));
+    const figurePersistenceValid = figurePersistence === undefined
+        || figurePersistence === EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT;
     return Boolean(
         paper.apiReaderArticleSha256 === articleSha256
         && paper.apiReaderPlanSha256 === planSha256
@@ -996,6 +1055,8 @@ function apiReaderV3BindsCanonical(paper) {
         && manifest?.contracts?.apiReaderSourceBindings === API_READER_SOURCE_BINDING_CONTRACT
         && plan.sourceBindingsSha256 === sourceBindingsSha256
         && stage.sourceBindingsContractVersion === API_READER_SOURCE_BINDING_CONTRACT
+        && figurePersistenceValid
+        && ephemeralFiguresValid
         && stage.sourceBindingsSha256 === sourceBindingsSha256
         && stage.sourceBindingsSourceTextSha256 === paper.sourceSha256
         && stage.sourceBindingsSourceTextSha256 === manifest?.sourceAcquisition?.sourceSha256
@@ -1140,12 +1201,11 @@ async function analyzePaperWithRetry(paper, options = {}) {
                         analyzed.analysisManifest || paper.analysisManifest
                     )
                 });
-                const recoveryReason = isCompleteAnalysisContent(analyzed)
-                    ? null
-                    : '分析恢复阶段未全部进入各自允许的终态';
+                const recoveryReason = getIncompleteAnalysisContentReason(analyzed);
                 const rejectionReason = invalidReason || recoveryReason;
                 if (rejectionReason) {
                     lastError = rejectionReason;
+                    console.warn(`[analysis-engine] 完整性门禁拒绝: ${rejectionReason}`);
                     if (attempt < maxRetries) {
                         if (onRetry) onRetry(attempt + 1, new Error(rejectionReason), paper);
                         await sleep(retryDelayMs);
@@ -1649,6 +1709,7 @@ module.exports = {
     loadCanonicalAnalysisRecord,
     readJsonFileStrict,
     initializeJsonFileLocked,
+    HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY,
     acquireFileLockSync,
     acquireFileLock,
     canReclaimFileLock,

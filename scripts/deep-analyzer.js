@@ -3380,9 +3380,26 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const contentMode = start.isRevision ? READER_SIGNED_REVISION_CONTENT_MODE : READER_SOURCE_CONTENT_MODE;
     const requestModel = options.readerCallModel || callModel;
     const recordDisposition = options.readerRecordDisposition || require('./lib/llm-usage.js').recordLlmDisposition;
-    const materializeFigures = options.readerMaterializeFigures || materializeApiReaderFigures;
+    const direct = require('./lib/direct-rewrite-analysis-context.js');
+    // Direct historical rewrites and the daily source-first route intentionally
+    // keep figure pixels out of persistent source bundles.  Bind only those
+    // ephemeral pixels to their failed candidates.  Legacy/durable source runs
+    // retain their pre-existing repair semantics and do not acquire this new
+    // gate merely because their Reader code shares this implementation.
+    const useEphemeralFigureEvidence = Boolean(direct.getDirectRewriteAnalysisContext())
+        || fresh.isDailyFreshSourceScope();
+    // A direct historical rewrite supplies its own materializer.  It returns
+    // image bytes in memory after an OS-temporary lifetime, never a path in
+    // data/current/image-cache or data/current/api-reader-assets.
+    const materializeFigures = options.readerMaterializeFigures
+        || direct.directReaderMaterializer() || materializeApiReaderFigures;
+    const directSupplementaryImages = direct.directSupplementaryReaderImages();
+    const directSupplementaryEvidence = directSupplementaryImages.map(image => ({ ordinal: image.ordinal,
+        sha256: image.assetSha256, mediaType: image.mediaType, caption: image.caption || null }));
     const conference = require('./lib/conference-analysis-context.js');
-    const candidateDirectory = fresh.getFreshAnalysisContext()
+    const candidateDirectory = direct.getDirectRewriteAnalysisContext()
+        ? direct.directReaderAttemptsDirectory(options.readerAttemptsDir)
+        : fresh.getFreshAnalysisContext()
         ? fresh.freshReaderAttemptsDirectory(options.readerAttemptsDir)
         : conference.getConferenceAnalysisContext()
             ? conference.conferenceReaderAttemptsDirectory(options.readerAttemptsDir)
@@ -3397,7 +3414,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         contentMode,
         inputFingerprint: stableFingerprint({ contentMode, sourceEvidence,
             reviewFeedback: options.reviewFeedback || '', initialDraft: start.previousDraft,
-            structuredArtifacts: options.structuredArtifacts?.payloadSha256 || '' }),
+            structuredArtifacts: options.structuredArtifacts?.payloadSha256 || '',
+            directSupplementaryEvidence }),
         sourceSha256: repair.shaText(options.sourceText || ''),
         model: modelFingerprint(DEEP_CONFIG, start.temperature, API_READER_MAX_TOKENS),
         promptSha256: promptTemplateSha256('prompts/api-reader-article.md'),
@@ -3495,7 +3513,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const downloadedReaderImages = [];
     let readerImageBase64Chars = 0;
     for (const image of materializedReaderImages) {
-        const raw = fs.readFileSync(image.cachePath);
+        const raw = image.rawBytes === undefined
+            ? fs.readFileSync(image.cachePath)
+            : Buffer.from(image.rawBytes);
+        if (direct.getDirectRewriteAnalysisContext() && image.rawBytes === undefined) {
+            throw new Error(`Direct Reader Figure ${image.ordinal} lacks ephemeral in-memory bytes`);
+        }
         const actualPixelSha256 = crypto.createHash('sha256').update(raw).digest('hex');
         if (actualPixelSha256 !== image.assetSha256) {
             throw new Error(`Reader Figure ${image.ordinal} cache bytes differ from materialized pixel SHA`);
@@ -3512,7 +3535,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         downloadedReaderImages.push({
             url: image.url,
             base64,
-            mime: 'image/png',
+            mime: image.assetMediaType || image.mediaType || 'image/png',
             sha256: image.assetSha256
         });
     }
@@ -3526,7 +3549,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             },
             buildImageContent(image.url, image.base64, image.mime)
         ];
-    });
+    }).concat(directSupplementaryImages.flatMap(image => {
+        const base64 = Buffer.from(image.rawBytes).toString('base64');
+        if (base64.length > IMAGE_MAX_BASE64_CHARS) return [];
+        return [{ type: 'text', text: `以下是论文 PDF 的临时渲染页 ${image.ordinal}。它只在本次请求中可见，`
+            + '不能在文章中生成图片链接；可用它辅助理解，但正文涉及坐标、曲线或布局时仍须有可重放的文本/表格证据。' },
+        buildImageContent(`conference-pdf-page-${image.ordinal}.png`, base64, image.mediaType)];
+    }));
     const imageEvidence = downloadedReaderImages.map(image => {
         const figure = figureEvidenceEntries.find(item => item.url === image.url);
         return {
@@ -3535,8 +3564,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             sha256: image.sha256
         };
     });
-    recovered = require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(candidateDirectory, identity,
-        { pixelEvidenceSha256: repair.hashDraft(imageEvidence) });
+    const ephemeralImageEvidence = { imageEvidence, directSupplementaryEvidence };
+    const recoveryOptions = useEphemeralFigureEvidence
+        ? { ephemeralImageEvidenceSha256: repair.hashDraft(ephemeralImageEvidence) } : undefined;
+    recovered = require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
+        candidateDirectory, identity, recoveryOptions
+    );
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
     candidate = recovered?.draft || null;
     draftOrderMappings = recovered?.draftOrderMappings || [];
@@ -3661,7 +3694,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
                     issues: currentIssues, attempts: attempt, fullAttempts, noProgress,
                     failureSignature, validationFailureSignature: previousValidationFailureSignature,
-                    validationFailureStreak, implementationRepairAllowanceProof, imageEvidence, transportFailures,
+                    validationFailureStreak, implementationRepairAllowanceProof, imageEvidence,
+                    ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}), transportFailures,
                     lastContentError: { code: error.code, message: String(error.message || error),
                         outputTokens: Number.isFinite(error.outputTokens) ? error.outputTokens : null,
                         maxOutputTokens: Number.isFinite(error.maxOutputTokens) ? error.maxOutputTokens : null }
@@ -3678,6 +3712,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 noProgress, failureSignature: previousFailureSignature,
                 validationFailureSignature: previousValidationFailureSignature,
                 validationFailureStreak, implementationRepairAllowanceProof, imageEvidence,
+                ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                 transportFailures, lastTransportError: String(error?.message || error)
             });
             throw error;
@@ -3739,6 +3774,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             repair.saveFailedCandidate(candidateDirectory, identity, {
                 status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
                 issues: currentIssues, attempts: attempt, fullAttempts, noProgress, failureSignature, imageEvidence,
+                ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                 transportFailures, validationFailureSignature: normalizedFailureSignature,
                 validationFailureStreak, implementationRepairAllowanceProof
             });
@@ -5652,6 +5688,11 @@ function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest
 }
 
 function getPreProvidedImageUrls(paper) {
+    // A direct source scope is supplied by either the daily sealed bundle or
+    // the historical direct runner.  Caller-held recovery URLs may have come
+    // from an earlier analysis/current cache, so only the current source's
+    // image metadata may participate in this run.
+    if (require('./lib/direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext()) return [];
     let restored = normalizeImageInfos((paper?.analysisRecoveryImageManifest || paper?.imageManifest)?.candidates);
     for (const value of [paper?.allImageUrls, paper?.imageUrls]) {
         restored = mergeImageInfoMetadata(restored, value);
@@ -7459,7 +7500,7 @@ async function fetchArxivTextDetailedUncached(arxivId) {
     return fetchArxivTextDetailedOriginal(arxivId);
 }
 
-async function fetchArxivTextDetailedOriginal(arxivId) {
+async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
     const maxRetries = 6;
     const warnings = [];
     let htmlAvailability = 'transient_failure';
@@ -7543,6 +7584,8 @@ async function fetchArxivTextDetailedOriginal(arxivId) {
                     }
                     return {
                         text: content,
+                        title: String($('meta[name="citation_title"]').first().attr('content')
+                            || $('.ltx_title').first().text() || '').replace(/\s+/g, ' ').trim(),
                         source: 'html',
                         sourceId: htmlId,
                         imageInfos,
@@ -7579,6 +7622,17 @@ async function fetchArxivTextDetailedOriginal(arxivId) {
             console.log(`    [deep] fetchArxivText ${arxivId} retry ${attempt}/${maxRetries} after ${delay}ms`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
+    }
+    if (options.allowPdfFallback === false) {
+        // Fresh rewrite capture owns the only PDF request.  Returning this
+        // HTML-only observation lets its source store extract fallback text
+        // from the exact PDF bytes it will seal, instead of downloading and
+        // then discarding a second PDF here.
+        return {
+            text: '', source: 'unavailable', sourceId: '', imageInfos: [], structuredArtifacts: null,
+            htmlAvailability, htmlAttempts, warnings,
+            failureClass: classifyArxivSourceFailure(htmlAvailability, false), failureError: ''
+        };
     }
     console.log(`    [deep] fetchArxivText ${arxivId} 转入 PDF fallback | html_status=${htmlAvailability} | attempts=${htmlAttempts}`);
 
@@ -7669,8 +7723,89 @@ async function fetchArxivTextDetailedOriginal(arxivId) {
     };
 }
 
+// The fresh source store calls this only with the one raw official PDF it has
+// already persisted.  It contains no network path and therefore cannot fetch
+// a different fallback document behind the manifest's back.
+async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options = {}) {
+    const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
+    if (!/^\d{4}\.\d{4,5}$/.test(normalized)) throw new Error('arXiv PDF extraction requires a normalized modern arXiv ID');
+    const bytes = Buffer.from(rawBytes || []);
+    if (bytes.length < 5 || bytes.length > ARXIV_PDF_MAX_BYTES || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+        throw new Error(`arXiv PDF ${normalized} bytes are invalid for fallback extraction`);
+    }
+    const parser = new PDFParse({ data: bytes });
+    let result;
+    try { result = await parser.getText(); }
+    finally { await parser.destroy().catch(() => {}); }
+    const rawPdfText = String(result?.text || '');
+    const structuredArtifacts = buildUnstructuredTextArtifactSignals(rawPdfText, 'pdf_text');
+    const text = rawPdfText.replace(/\n\s*\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
+    if (text.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
+        throw new Error(`arXiv PDF ${normalized} fallback text is too short (${text.length} chars)`);
+    }
+    return {
+        text, source: 'pdf', sourceId: normalized, imageInfos: [],
+        structuredArtifacts: bindStructuredArtifactsToText(structuredArtifacts, text),
+        htmlAvailability: options.htmlAvailability || 'unavailable',
+        htmlAttempts: Number.isSafeInteger(options.htmlAttempts) ? options.htmlAttempts : 0,
+        warnings: Array.isArray(options.warnings) ? options.warnings.slice() : []
+    };
+}
+
+async function fetchArxivHtmlTextDetailedUncached(arxivId) {
+    return fetchArxivTextDetailedOriginal(arxivId, { allowPdfFallback: false });
+}
+
 async function fetchArxivText(arxivId) {
     return (await fetchArxivTextDetailed(arxivId)).text;
+}
+
+// Historical fresh-rewrite source capture always keeps a raw official PDF,
+// including on the healthy HTML path.  This deliberately bypasses the normal
+// fresh-source cache and uses the same mandatory arXiv CONNECT dispatcher as
+// the full-text fetcher above.
+async function fetchArxivPdfUncached(arxivId) {
+    const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
+    if (!/^\d{4}\.\d{4,5}$/.test(normalized)) {
+        throw new Error('arXiv PDF fetch requires a normalized modern arXiv ID');
+    }
+    const url = `https://arxiv.org/pdf/${normalized}.pdf`;
+    const response = await fetch(url, {
+        headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+        signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
+        dispatcher: getArxivFetchDispatcher()
+    });
+    if (!response.ok) throw new Error(`arXiv PDF ${normalized} download failed: HTTP ${response.status}`);
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
+        throw new Error(`arXiv PDF ${normalized} returned unexpected Content-Type ${contentType}`);
+    }
+    const bytes = await readResponseBufferWithLimit(response, ARXIV_PDF_MAX_BYTES);
+    if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+        throw new Error(`arXiv PDF ${normalized} returned an invalid PDF header`);
+    }
+    return { bytes, url, fetchedAt: new Date().toISOString() };
+}
+
+// Figure evidence for a historical fresh rewrite is intentionally not routed
+// through data/current/image-cache. The caller owns an OS-temporary lifetime
+// and must remove it after the active Reader call.
+async function fetchArxivFigureBytesUncached(rawUrl) {
+    const parsed = new URL(String(rawUrl || ''));
+    if (parsed.protocol !== 'https:' || parsed.hostname !== 'arxiv.org' || parsed.port
+        || parsed.username || parsed.password || parsed.search || parsed.hash
+        || !parsed.pathname.startsWith('/html/')) {
+        throw new Error('Historical arXiv Figure fetch requires a direct official arXiv HTML HTTPS URL');
+    }
+    const response = await fetch(parsed.toString(), {
+        headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+        signal: AbortSignal.timeout(IMAGE_DOWNLOAD_TIMEOUT_MS),
+        dispatcher: getArxivFetchDispatcher()
+    });
+    if (!response.ok) throw new Error(`arXiv Figure download failed: HTTP ${response.status}`);
+    const raw = await readResponseBufferWithLimit(response, IMAGE_MAX_BYTES);
+    const trusted = prepareTrustedArxivFigureBuffer(raw, response.headers.get('content-type') || '');
+    return { bytes: trusted.buffer, mediaType: trusted.mediaType };
 }
 
 /**
@@ -8121,7 +8256,9 @@ async function downloadImageBase64(imageUrl, maxRetries = 5, maxBytes = IMAGE_MA
  * @param {number} maxTotalBase64Chars - 所有图片 base64 字符数上限
  * @returns {Promise<Array<{url: string, base64: string, mime: string}>>}
  */
-async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTotalBase64Chars = IMAGE_TOTAL_BASE64_CHARS) {
+async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTotalBase64Chars = IMAGE_TOTAL_BASE64_CHARS, options = {}) {
+    const downloadDetailed = options.downloadImageDetailed || downloadImageBase64Detailed;
+    if (typeof downloadDetailed !== 'function') throw new Error('图片下载器必须是函数');
     const results = [];
     const outcomes = [];
     let totalBase64Chars = 0;
@@ -8140,7 +8277,7 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTota
             break;
         }
         try {
-            const image = await downloadImageBase64Detailed(url, 5, IMAGE_MAX_BYTES);
+            const image = await downloadDetailed(url, 5, IMAGE_MAX_BYTES);
             if (image?.base64 && image.base64.length < maxBase64Chars) {
                 if (maxTotalBase64Chars > 0 && totalBase64Chars + image.base64.length > maxTotalBase64Chars) {
                     console.log(`    [deep] 跳过图片 ${safeImageLabel(url)}: 加入后总 base64 ${((totalBase64Chars + image.base64.length) / 1024).toFixed(1)}KB 超过上限`);
@@ -9014,15 +9151,23 @@ async function analyzePaperDeepInternal(paper) {
     stripManualAnalysisProvenance(paper);
     sanitizePaperImageRecovery(paper);
     const arxivId = getPaperArxivId(paper);
+    const directRewriteContext = require('./lib/direct-rewrite-analysis-context.js');
+    const directSource = directRewriteContext.getDirectRewriteSource(paper);
+    const directPrimaryImageDownloader = directRewriteContext.directPrimaryImageDownloader();
     const conferenceSource = require('./lib/conference-analysis-context.js').getConferenceAnalysisSource(paper);
+    if (directSource && conferenceSource) {
+        throw new Error('Direct rewrite source and conference source cannot both be active');
+    }
     const previousScore = Number.parseFloat(paper?.parsed?.score);
     const sealedCoreSummaryRecoveryCandidate = captureSealedCoreSummaryRecoveryCandidate(paper);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
-    // 优先使用预提供的全文（ICML/会议场景），否则从 arXiv 抓取
-    let fullText = conferenceSource?.text || paper.fullText || paper.pdfText || '';
-    let sourceDetails = conferenceSource || {
+    // Direct historical runs must only consume the source injected by their
+    // runner.  In particular they never fall through to a caller's old
+    // fullText/pdfText/analysis fields or the legacy arXiv cache.
+    let fullText = directSource?.text || conferenceSource?.text || paper.fullText || paper.pdfText || '';
+    let sourceDetails = directSource || conferenceSource || {
         source: fullText ? (paper.fullText ? 'provided_full_text' : 'provided_pdf_text') : 'unavailable',
         sourceId: '',
         imageInfos: [],
@@ -9050,7 +9195,12 @@ async function analyzePaperDeepInternal(paper) {
         console.log(`    [deep] 使用预提供全文: ${fullText.length} 字符`);
     }
 
-    require('./lib/fresh-analysis-context.js').attachFreshSourceProvenance(paper, analysisManifest, sourceDetails);
+    // Direct historical executions receive their source proof from the active
+    // direct scope. All other source-only executions retain the fresh-run
+    // source proof. Both paths bind the exact supplied text/artifacts before
+    // any analysis or Reader checkpoint can be persisted.
+    if (directSource) directRewriteContext.attachDirectSourceProvenance(paper, analysisManifest, sourceDetails);
+    else require('./lib/fresh-analysis-context.js').attachFreshSourceProvenance(paper, analysisManifest, sourceDetails);
 
     const hasFullText = fullText.length > FULL_TEXT_MIN_CHARS_FOR_FULL;
     const abstractText = paper.abstract || paper.summary || '';
@@ -9278,8 +9428,15 @@ async function analyzePaperDeepInternal(paper) {
         ? (sourceProvenance.truncated ? '以下是论文全文节选，请只依据已提供内容分析。' : '以下是论文全文，请仔细阅读所有技术细节。')
         : '以下是论文摘要；由于全文不可用，请降低事实判断和评分置信度，不得声称已经核对全文细节。';
 
+    if (directSource && isDualModel && !directPrimaryImageDownloader) {
+        throw new Error('Direct dual-model analysis requires an ephemeral primary image downloader');
+    }
+    // Direct historical analyses never touch the legacy data/current image
+    // cache. Their downloader returns only ephemeral in-memory bytes from the
+    // runner-owned source route; ordinary daily analysis retains its cache.
     const downloadedImages = isDualModel
-        ? await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS, IMAGE_TOTAL_BASE64_CHARS)
+        ? await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS,
+            IMAGE_TOTAL_BASE64_CHARS, directSource ? { downloadImageDetailed: directPrimaryImageDownloader } : {})
         : [];
     const downloadOutcomes = downloadedImages.outcomes || [];
     imageManifest.downloaded = downloadedImages.map(img => ({
@@ -10140,6 +10297,21 @@ async function analyzePaperDeepInternal(paper) {
     )) {
         console.log('    [deep] ♻️  Reader 原文证据未漂移，已移除无效的 canonical analysis 指纹依赖');
     }
+    // A recovered direct/daily Reader may predate the publication-side
+    // persistence marker while already carrying the intentionally stripped
+    // Figure evidence.  Seal the mode before deciding whether its Reader stage
+    // can be reused; this is metadata only and never restores a cache path.
+    const activeDirectReaderContext = require('./lib/direct-rewrite-analysis-context.js');
+    if (activeDirectReaderContext.getDirectRewriteAnalysisContext()
+        && analysisManifest.contracts?.apiReaderArticle === API_READER_ARTICLE_CONTRACT
+        && Array.isArray(paper.apiReaderFigures)) {
+        activeDirectReaderContext.assertNoPersistentFigureFields(paper.apiReaderFigures);
+        analysisManifest.contracts = {
+            ...(analysisManifest.contracts || {}),
+            apiReaderFigurePersistence:
+                activeDirectReaderContext.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT
+        };
+    }
     if (isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
         if (repairApiReaderPlanSurfaceBinding(paper, analysisManifest)) {
             console.log('    [deep] ✅ 已确定性对齐读者文章与计划标题排版');
@@ -10190,7 +10362,9 @@ async function analyzePaperDeepInternal(paper) {
                 sourceDetails.structuredArtifacts,
                 arxivId
             );
-            const materializedFigures = await materializeApiReaderFigures(
+            const directContext = require('./lib/direct-rewrite-analysis-context.js');
+            const directMaterializer = directContext.directReaderMaterializer();
+            const materializedFigures = await (directMaterializer || materializeApiReaderFigures)(
                 injectedReaderResult.figures, arxivId
             );
             const materializedFigureOrdinals = new Set(
@@ -10208,11 +10382,16 @@ async function analyzePaperDeepInternal(paper) {
                     injectedReaderResult.figures,
                     materializedFigures
                 ),
-                figures: materializedFigures
+                figures: directContext.getDirectRewriteAnalysisContext()
+                    ? materializedFigures.map(directContext.stripEphemeralFigureFields)
+                    : materializedFigures
             };
             paper.apiReaderArticle = readerResult.article;
             paper.apiReaderPlan = readerResult.plan;
             paper.apiReaderFigures = readerResult.figures;
+            if (directContext.getDirectRewriteAnalysisContext()) {
+                directContext.assertNoPersistentFigureFields(paper.apiReaderFigures);
+            }
             paper.apiReaderAuthors = resolveApiReaderAuthors(paper, sourceDetails);
             if (!paper.apiReaderResources
                 || paper.apiReaderResources.sourceTextSha256 !== paper.sourceSha256) {
@@ -10230,7 +10409,10 @@ async function analyzePaperDeepInternal(paper) {
                 apiReaderArticle: API_READER_ARTICLE_CONTRACT,
                 apiReaderSourceBindings: API_READER_SOURCE_BINDING_CONTRACT,
                 apiReaderAuthorIdentity: API_READER_AUTHOR_IDENTITY_CONTRACT,
-                apiReaderResourceIdentity: API_READER_RESOURCE_IDENTITY_CONTRACT
+                apiReaderResourceIdentity: API_READER_RESOURCE_IDENTITY_CONTRACT,
+                ...(directContext.getDirectRewriteAnalysisContext()
+                    ? { apiReaderFigurePersistence: directContext.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT }
+                    : {})
             };
             markRecoveryStage(analysisManifest, 'apiReaderArticle', 'complete', {
                 fingerprint: apiReaderFingerprint,
@@ -11034,13 +11216,18 @@ async function repairCoreSummarySection(
     let issue = getCoreSummaryDetailIssue(original, { sourceText });
     if (!issue) return original;
     let feedback = issue;
+    let candidateSummary = existingSummary;
     const repairCallModel = options.callModelFn || callModel;
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const summaryIssue = attempt === 1
+            ? feedback
+            : `这是第 ${attempt} 次局部修复。保留上一候选中已合格的句子，只编辑或补充量化句，`
+                + `使其在同一句内闭合比较对象、评测设置或数据集、指标、数值与方向。\n上次校验错误：${feedback}`;
         const prompt = loadPrompt('prompts/core-summary-repair.md', {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
-            summaryIssue: feedback,
-            existingSummary,
+            summaryIssue,
+            existingSummary: candidateSummary,
             textForAnalysis: evidenceContext
         });
         const raw = String(await repairCallModel([{ role: 'user', content: prompt }],
@@ -11051,12 +11238,14 @@ async function repairCoreSummarySection(
             feedback = '输出必须且只能包含一节 ## 核心摘要，不得包含其他标题。';
             continue;
         }
+        candidateSummary = match[1];
         const updated = mergeSectionByTitle(original, '核心摘要', match[1]);
         if (sectionExteriorBytes(updated, '核心摘要') !== originalExterior) {
             throw contractRejectedError('核心摘要局部修复改变了其他一级章节字节');
         }
         issue = getCoreSummaryDetailIssue(updated, { sourceText });
         if (!issue) return updated;
+        console.warn(`    [deep] ⚠️  核心摘要局部修复未通过 (${attempt}/3): ${issue}`);
         feedback = issue;
     }
     throw contractRejectedError(`核心摘要局部修复失败: ${feedback}`);
@@ -11566,6 +11755,10 @@ module.exports = {
     fetchArxivText,
     fetchArxivTextDetailed,
     fetchArxivTextDetailedUncached,
+    fetchArxivHtmlTextDetailedUncached,
+    extractArxivPdfTextDetailedFromBytes,
+    fetchArxivPdfUncached,
+    fetchArxivFigureBytesUncached,
     fetchArxivImageUrls,
     parseArxivImageInfosFromHtml,
     parseArxivStructuredArtifactsFromHtml,
@@ -11578,6 +11771,7 @@ module.exports = {
     removeUnapprovedMarkdownImages,
     selectImageCandidates,
     scoreImageCandidate,
+    getPreProvidedImageUrls,
     normalizeImageInfos,
     mergeImageInfoMetadata,
     sanitizeImageManifestHttpsOnly,
@@ -11594,6 +11788,7 @@ module.exports = {
     buildImageContent,
     isCorruptedMultimodalError,
     downloadImageBase64,
+    downloadImagesSerial,
     cachePublicImageDetailed,
     fetchPublicImageResponse,
     requestPinnedPublicHttps,

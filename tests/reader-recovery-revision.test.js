@@ -173,6 +173,26 @@ test('pixel drift cannot migrate a candidate while an exact legacy pixel payload
     assert.deepEqual(loadFailedCandidate(f.directory, oldIdentity), oldPayload);
 });
 
+test('ephemeral direct/daily pixel bindings use their own payload field and reject drift', t => {
+    const f = fixture(t);
+    const oldIdentity = { ...f.identity, parserImplementationSha256: '4'.repeat(64) };
+    const ephemeralImageEvidence = {
+        imageEvidence: [{ ordinal: 1, sha256: '6'.repeat(64), url: 'https://example.invalid/figure.png' }],
+        directSupplementaryEvidence: [{ ordinal: 2, sha256: '7'.repeat(64), mediaType: 'image/png', caption: null }]
+    };
+    const oldPayload = { ...f.payload, ephemeralImageEvidence };
+    saveFailedCandidate(f.directory, oldIdentity, oldPayload);
+    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, {
+        ephemeralImageEvidenceSha256: hashDraft({ ...ephemeralImageEvidence,
+            directSupplementaryEvidence: [{ ...ephemeralImageEvidence.directSupplementaryEvidence[0], sha256: '8'.repeat(64) }] })
+    })), /ephemeral image evidence drifted/);
+    assert.deepEqual(loadFailedCandidate(f.directory, oldIdentity), oldPayload);
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, {
+        ephemeralImageEvidenceSha256: hashDraft(ephemeralImageEvidence)
+    }));
+    assert.deepEqual(migrated.ephemeralImageEvidence, ephemeralImageEvidence);
+});
+
 test('corrupt and symlink candidate files fail closed before a new candidate is installed', t => {
     const f = fixture(t); const filename = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     fs.writeFileSync(filename, '{invalid JSON', { mode: 0o600 });

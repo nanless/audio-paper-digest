@@ -31,7 +31,14 @@ const CONFERENCE_PROTECTED_KEYS = [
 ];
 const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks',
     'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-postprocess-schedulers', 'historical-taxonomy-assignments',
-    'historical-page-staging', 'historical-daily-aggregates', 'historical-publications', 'paper-source-authorities'];
+    'historical-page-staging', 'historical-daily-aggregates', 'historical-publications', 'paper-source-authorities',
+    'daily-fresh-source-runs', 'fetched-arxiv-sources', 'historical-arxiv-fresh-failure-handoffs',
+    'direct-local-inputs', 'historical-conference-local-sources', 'historical-conference-page-projections',
+    'historical-direct-rewrite-plans', 'historical-direct-rewrite-unprojected-reports',
+    'historical-direct-rewrite-registries', 'historical-direct-rewrite-executions', 'historical-direct-rewrite-staging',
+    'historical-direct-aggregate-projections', 'historical-direct-aggregates', 'historical-local-crawl-identities',
+    'historical-local-crawl-identity-snapshots', 'historical-local-crawl-batches', 'historical-archive-crawl-identities',
+    'historical-archive-crawl-batches', 'historical-conference-crawl-identities', 'historical-conference-crawl-batches'];
 
 const NOW_MS = Date.parse('2026-09-02T00:00:00.000Z');
 const OLD_MS = NOW_MS - 40 * 24 * 60 * 60 * 1000;
@@ -106,7 +113,9 @@ describe('runtime storage status', () => {
         try {
             const layout = getLayout(projectRoot);
             const protectedKeys = [...CONFERENCE_PROTECTED_KEYS, ...HISTORY_PROTECTED_KEYS];
-            assert.deepEqual(layout.protectedRuntime.map(item => item.key), protectedKeys);
+            assert.deepEqual(layout.protectedRuntime.map(item => item.key).sort(), protectedKeys.slice().sort());
+            assert.ok(layout.protectedRuntime.some(item => item.key === 'direct-local-inputs'));
+            assert.ok(!layout.protectedRuntime.some(item => item.key === 'historical-direct-rewrite-input-catalogs'));
             const oldFiles = protectedKeys.map(key => writeFile(projectRoot,
                 `data/runtime/${key}/old-fixture.bin`, key, NOW_MS - 90 * 24 * 60 * 60 * 1000));
             const status = getStorageStatus({ projectRoot, nowMs: NOW_MS });

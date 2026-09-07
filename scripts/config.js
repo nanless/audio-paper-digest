@@ -173,6 +173,20 @@ const FILES = {
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
     llmUsageDir: path.join(DATA_DIR, 'runtime', 'llm-usage'),
     freshRewriteRunsDir: path.join(DATA_DIR, 'runtime', 'fresh-rewrites'),
+    // The default daily API path has its own sealed four-file source runs:
+    // source.txt, source.pdf, source-runtime.json, and source-manifest.json.
+    // Keeping them outside current/ prevents archive rotation from discarding
+    // the exact sealed bundle a daily analysis used, and keeps it distinct
+    // from historical fresh-rewrite publications.
+    dailyFreshSourceRunsDir: path.join(DATA_DIR, 'runtime', 'daily-fresh-source-runs'),
+    // Every arXiv rewrite generation obtains a new official four-file bundle:
+    // source.txt, source.pdf, source-runtime.json, and source-manifest.json.
+    // Figures are active-run temporary evidence, never a durable cache.
+    freshArxivFetchedSourcesDir: path.join(DATA_DIR, 'runtime', 'fetched-arxiv-sources'),
+    // A fresh arXiv acquisition failure is recorded here with its exact
+    // frozen page/link map for a later crosswalk worker.  It is not a
+    // crosswalk state directory and cannot mutate page assignments.
+    historicalArxivFreshFailureHandoffDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-fresh-failure-handoffs'),
     // Conference PDFs and their source ledgers are private runtime inputs.
     // They are isolated from current/ so incomplete imports cannot alter a
     // daily production batch.
@@ -191,8 +205,38 @@ const FILES = {
     conferencePageStagingDir: path.join(DATA_DIR, 'runtime', 'conference-page-staging'),
     conferenceAggregateDir: path.join(DATA_DIR, 'runtime', 'conference-aggregates'),
     historicalPageInventoryDir: path.join(DATA_DIR, 'runtime', 'historical-page-inventories'),
+    // Deterministic, local-only direct-input catalog for the historical rewrite.
+    // It records retained crawler/PDF pointers and hashes, never blog prose.
+    // This configured root is the only historical direct-input catalog root.
+    historicalDirectRewriteInputCatalogDir: path.join(DATA_DIR, 'runtime', 'direct-local-inputs'),
+    // Frozen retained-local title mappings and the canonical direct-rewrite
+    // queue.  They are independent from legacy crosswalk state.
+    historicalConferencePageProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-conference-page-projections'),
+    historicalDirectRewritePlanDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-plans'),
+    historicalDirectRewriteUnprojectedReportDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-unprojected-reports'),
+    // State and artifacts for the source-only direct execution path. They are
+    // separate from legacy fresh-rewrites and never contain image assets.
+    historicalDirectRewriteRegistryDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-registries'),
+    historicalDirectRewriteExecutionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-executions'),
+    historicalDirectRewriteStagingDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-staging'),
+    historicalDirectAggregateProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregate-projections'),
+    historicalDirectAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregates'),
     pageSourceCrosswalkDir: path.join(DATA_DIR, 'runtime', 'page-source-crosswalks'),
     historicalArxivBatchDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-batches'),
+    // Identity-only authorities derived from retained local crawler snapshots.
+    // They cannot be consumed as paper full-text authorities or analysis sources.
+    historicalLocalCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identities'),
+    historicalLocalCrawlSnapshotDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identity-snapshots'),
+    historicalLocalCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-batches'),
+    // Legacy names intentionally preserve the existing five archive authority
+    // assignments and their immutable file locations during replay.
+    historicalArchiveCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-archive-crawl-identities'),
+    historicalArchiveCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-archive-crawl-batches'),
+    historicalConferenceCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-conference-crawl-identities'),
+    historicalConferenceCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-conference-crawl-batches'),
+    // Local conference source manifests are source-only rewrite inputs.  They
+    // do not contain historical page material or crosswalk assignments.
+    historicalConferenceLocalSourcesDir: path.join(DATA_DIR, 'runtime', 'historical-conference-local-sources'),
     historicalTaxonomyAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-taxonomy-assignments'),
     historicalPageStagingDir: path.join(DATA_DIR, 'runtime', 'historical-page-staging'),
     historicalDailyAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-daily-aggregates'),
@@ -268,6 +312,10 @@ const ARCHIVE_CONFIG = {
 const BLOG_REPO = expandHome(
     process.env.PAPER_DIGEST_BLOG_REPO || path.join(require('os').homedir(), 'code/github_repos/audio-paper-digest-blog')
 );
+const HISTORICAL_CONFERENCE_CONFIG = {
+    iclr2026AcceptedRoot: expandHome(process.env.PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT
+        || path.join(require('os').homedir(), 'code/github_repos/iclr2026-paper-scraper'))
+};
 
 const PUBLISH_CONFIG = {
     blogRepo: BLOG_REPO,
@@ -479,5 +527,6 @@ module.exports = {
 
     FILES,
     ARCHIVE_CONFIG,
-    PUBLISH_CONFIG
+    PUBLISH_CONFIG,
+    HISTORICAL_CONFERENCE_CONFIG
 };

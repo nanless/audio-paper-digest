@@ -15,9 +15,9 @@
 | 下载论文与引用、复制 AI 提问 | [无需助手的博客阅读工具](blog-reading-tools.md) | 博客“关于与方法”页面 |
 | 修改评分、Prompt、路径或契约 | [维护约定](maintenance.md) | [数据格式](data-format.md) |
 | 完整离线验收、CI 与故障回放 | [维护指南：验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
-| 完全不用旧生成文本重写已发布批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 分阶段入口 |
-| 冻结全历史页面、URL 与聚合拓扑（不保存旧正文） | [历史重写底座](history-rewrite.md) | `npm run history:inventory -- --dry-run` |
-| 接管 2026-09-07 全历史重写现场 | [全历史重写交接](historical-rewrite-handoff-2026-09-07.md) | 先复验 crosswalk/pilot，再运行模型 |
+| 完全不用旧生成文本重写一个既有日批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 分阶段入口 |
+| 全历史重写：本地会议 PDF 与 fresh arXiv PDF/TXT 直达私有 staging | [历史重写底座](history-rewrite.md) | `conference-local-sources → direct-inputs → direct-plan → direct-run` |
+| 接管 2026-09-07 全历史重写现场 | [全历史重写交接](historical-rewrite-handoff-2026-09-07.md) | 先生成 local-direct catalog/plan；crosswalk 只处理 named arXiv fresh-failure handoff |
 | 改进解读写法并比较重跑效果 | [Reader 写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
 | 整理历史标签、任务层级与分面检索 | [标签体系设计](tag-taxonomy-design.md) | [实施与验收计划](tag-taxonomy-implementation.md)、`npm run taxonomy:preview` |
 | 整理本机会议 PDF、重写历史会议论文并生成会议汇总 | [会议论文工作流](conference-workflow.md) | `conference:*` 已接通筛选/分析/postprocess；历史 URL 映射与 review/push 未完成 |
@@ -31,7 +31,7 @@
 ## 默认生产链路
 
 ```text
-抓取 → 关键词预筛 → LLM 筛选 → 多阶段全文分析
+抓取 → 关键词预筛 → LLM 筛选 → 封存本次官方 arXiv TXT/PDF → 多阶段全文分析
      → 博客 generate → review → push/远端 OID
      → TOP 10 长图与汇总封面 → digest:status
 ```

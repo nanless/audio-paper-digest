@@ -38,6 +38,7 @@ const {
     updateAnalysisDigestStatuses,
     backupPapersJson
 } = require('./digest-status.js');
+const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 
 const Config = require('./config.js');
 
@@ -1719,10 +1720,32 @@ async function runFullFetch() {
 
     // ========== 第五步：深度分析 ==========
     console.log('\n🔬 第五步：深度分析每篇论文');
-    const papersToAnalyze = filteredNew
-        .filter(paper => !successfulAnalysisIds.has(normalizedId(paper)))
-        .map(paper => mergeCanonicalAnalysisState(paper, loadCanonicalAnalysisRecord(outputFile, paper)));
-    const skippedAlreadyAnalyzed = filteredNew.length - papersToAnalyze.length;
+    // Daily API analysis is source-first.  The selected set is frozen into a
+    // separate runtime plan, every paper gets an official HTML/PDF bundle, and
+    // only then do we enter the LLM stages.  A legacy current analysis cannot
+    // be reused merely because it was successful: it must bind this exact
+    // daily PDF/TXT manifest first.
+    const dailySourcePlan = filteredNew.length ? dailyFreshSources.createDailyFreshSourcePlan({
+        batchDate: today, batchId, papers: filteredNew
+    }) : null;
+    const dailyFreshSourceRun = dailySourcePlan
+        ? dailyFreshSources.dailyFreshSourceReference(dailySourcePlan) : null;
+    if (dailySourcePlan) {
+        console.log(`  📚 日更 source phase：封存 ${dailySourcePlan.paperIds.length} 篇官方 arXiv PDF/TXT 后再分析`);
+        await dailyFreshSources.captureDailyFreshSources(dailySourcePlan, {
+            concurrency: ANALYSIS_CONCURRENCY
+        });
+    }
+    const papersToAnalyze = filteredNew.map(paper => {
+        const canonical = mergeCanonicalAnalysisState(paper, loadCanonicalAnalysisRecord(outputFile, paper));
+        return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(canonical, dailySourcePlan) : canonical;
+    });
+    const skippedAlreadyAnalyzed = dailySourcePlan
+        ? filteredNew.filter(paper => {
+            const canonical = loadCanonicalAnalysisRecord(outputFile, paper);
+            return isSuccessfulAnalysisRecord(canonical) && dailyFreshSources.isPaperBoundToPlan(canonical, dailySourcePlan);
+        }).length
+        : 0;
     if (skippedAlreadyAnalyzed > 0) {
         console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${papersToAnalyze.length} 篇`);
     }
@@ -1739,21 +1762,26 @@ async function runFullFetch() {
                 analysisStatus: 'running'
             }
         };
+        if (dailyFreshSourceRun) payload.dailyFreshSourceRun = dailyFreshSourceRun;
+        else delete payload.dailyFreshSourceRun;
         delete payload.deepAnalysisCompletedAt;
         return payload;
     });
 
-    const { stats: analysisStats } = await analyzeBatch(papersToAnalyze, {
+    const runDailyAnalysis = () => analyzeBatch(papersToAnalyze, {
         checkpointFilePath: outputFile,
         concurrency: ANALYSIS_CONCURRENCY,
         maxRetries: ANALYSIS_RETRY_MAX,
         retryDelayMs: ANALYSIS_RETRY_DELAY_MS,
+        analyzeFn: dailySourcePlan ? dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan) : null,
         preparePaperLocked: paper => {
             const canonical = loadCanonicalAnalysisRecord(outputFile, paper);
-            if (isSuccessfulAnalysisRecord(canonical)) {
+            if (dailySourcePlan && isSuccessfulAnalysisRecord(canonical)
+                && dailyFreshSources.isPaperBoundToPlan(canonical, dailySourcePlan)) {
                 return { paper: canonical, skip: true, reason: '该论文已由其他进程完成' };
             }
-            return { paper: mergeCanonicalAnalysisState(paper, canonical), skip: false };
+            const merged = mergeCanonicalAnalysisState(paper, canonical);
+            return { paper: dailySourcePlan ? dailyFreshSources.prepareDailyPaper(merged, dailySourcePlan) : merged, skip: false };
         },
         onPaperResultLocked: async (paper, result) => {
             if (result.skipped) return;
@@ -1793,6 +1821,9 @@ async function runFullFetch() {
             console.log(`  💾 批次状态已更新: 本批成功 ${batchSuccess} 篇（canonical 共 ${canonicalPapers.length} 篇）`);
         }
     });
+    const { stats: analysisStats } = dailySourcePlan
+        ? await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runDailyAnalysis)
+        : await runDailyAnalysis();
 
     // ========== 第六步：保存深度分析结果 ==========
     console.log('\n💾 第六步：保存深度分析结果');

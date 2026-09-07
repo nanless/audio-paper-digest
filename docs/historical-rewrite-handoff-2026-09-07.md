@@ -1,18 +1,28 @@
 # 全历史论文博客重写交接（2026-09-07）
 
-本文给下一次 Codex 会话使用。它记录本轮已经提交的实现、尚未完成的真实工作、当前私有运行状态，以及后续安全执行顺序。不要把“代码已具备部分能力”描述成“全历史已经重写或发布”。
+本文保留 2026-09-07 的**归档现场快照**，只供定位旧 runtime 工件使用。它不再定义执行顺序，也不能把旧
+crosswalk 数字、`pilot` 参数、逐级放量或下面的旧命令样例当成当前门槛；除本节开头的 current-route 摘要外，
+后续命令块均是历史记录，**不得执行**。当前操作以
+[历史重写底座](history-rewrite.md) 为准：先合并本地好数据，直接建计划并重写；只有 arXiv fresh fetch
+失败后写出的 named immutable handoff 才进入 crosswalk。会议本地输入缺失或损坏时 direct item 失败关闭。
 
-## 1. 当前结论
+当前链路是：`conference-local-sources → direct-inputs → conference-projections → direct-plan →
+direct-scheduler → direct-run → direct-aggregate`。`direct-inputs` 的 arXiv route 直接来自冻结 inventory
+已有的单一 arXiv link，故不再需要 `--arxiv-manifest`；每次 arXiv run 重新拉取、封存 TXT/PDF/runtime/manifest，会议则
+重放本地 metadata/PDF SHA。任何旧 `history:analyze-batch`、`history:postprocess` 或 `crosswalk` 命令只能处理
+相应 fallback/历史审计，不能阻挡 direct 队列。
+
+## 1. 归档时的结论（非当前状态）
 
 - 代码仓库 `main` 已推送到 `7671bdb8afca7b9f7b5ed03f1ceac96e75c6216e`。
 - 博客仓库 `/Users/francis7999/code/github_repos/audio-paper-digest-blog` 工作区干净；本地与远端 `main` 均为 `bf263b803bd353f1411d94f27c621edb33dbb898`。
 - 本轮没有启动全量 LLM 历史重写，没有改写或发布任何历史博客，也没有生成图片。
 - 全仓验证已通过：Node `1504/1504`、Python `467/467`、Manual Python `24/24`；JavaScript/Python/shell 语法和真实 `validate:data --allow-empty` 通过。
-- 当前历史 inventory 冻结了 4490 个已发布页面，其中 4185 个是论文页面。Crosswalk 仅有 147 页完成来源身份验证，形成 128 个唯一 arXiv identity group；4038 页仍为 pending。因此现在只能对已验证子集试点，不能声称可以无遗漏地重写全部历史页面。
+- 当前历史 inventory 冻结了 4490 个已发布页面，其中 4185 个是论文页面。下文记录的 legacy crosswalk 数字仅描述当时的 identity fallback 快照；它不限制本地好数据进入 direct rewrite。
 - 历史 publication 目前只实现安全的 `plan` 与私有 bundle `generate`；全历史专属 review、真实博客 activation、commit/push receipt 仍未实现。即使全部 staging 完成，也不能绕过这一缺口直接批量覆盖博客。
-- 会议来源链已经进入 `main`，但真实 ICASSP 2026 PDF 尚未形成完整的 discovery/filter/extraction/import/plan/execution/completion 生产链。本机 PDF 目录本身不是已验证来源账本。
+- 会议本地 metadata/PDF 可经 `history:conference-local-sources` 纳入 direct local catalog；其 SHA 与冻结页面 projection 是重写输入，不需要先走 legacy conference execution 或 crosswalk。
 
-## 2. 本轮到底完成了什么
+## 2. 归档时到底完成了什么
 
 ### 2.1 更详细、一次成型的核心摘要
 
@@ -83,7 +93,7 @@ Manual V6 的 author base、production packet、task runner、revision binder、
 
 `tests/conference-postprocess.test.js` 不再使用两个标签和缺失角色行的旧 fixture，而是从 current runtime 按稳定 concept ID 生成 3 个 active 首选标签并自证 task/method/层级合同。会议 postprocess 聚焦测试 `11/11` 通过；没有为了测试变绿而放宽生产门禁。
 
-## 3. 当前私有运行状态
+## 3. 已废止私有运行状态（只用于解释旧 runtime）
 
 所有 `data/runtime/` 工件都不提交 Git。新会话必须现场重读，以下数字只是 2026-09-07 交接快照。
 
@@ -239,7 +249,11 @@ data/current/output/icassp-2026-report.md
 
 对用户本机目录做过只读 discovery 盘点：3694 条 metadata、3694 个 PDF；1652 个 exact、2040 个 normalized、2 个 ambiguous、0 unmatched、1 orphan。歧义项是同标题 `Robust Multimodal Representation Learning in Healthcare` 的 arnumber `11460772` / `11464483`；孤立文件是 `Robust Multimodal Representation Learning in Healthcare (11464483).pdf`。必须用人工或官方身份证据解歧，不能依赖标题自动认定。
 
-## 4. 新 Codex 会话的最短开场
+## 4. 旧会话开场记录（不执行）
+
+本节保留原会话的命令历史，不能作为新会话的开场清单。它引用的 crosswalk status、
+`history:analyze-batch` 和 `--limit pilot` 都不是 direct rewrite 的前置步骤。新会话只按
+`docs/history-rewrite.md` 的 local-direct chain 建 catalog/plan；不要执行下面的旧命令样例。
 
 让新模型先完整阅读根目录 `AGENTS.md`、`SKILL.md`、`docs/history-rewrite.md`、`docs/conference-workflow.md` 和本文，然后执行只读检查：
 
@@ -260,11 +274,13 @@ npm run history:analyze-batch -- --dry-run \
 
 预期代码 HEAD 是本文提交之后的文档提交，而代码功能基线至少包含 `7671bdb8...`。博客仓库必须仍是干净 `main`；如有人工修改，先报告，不得覆盖。
 
-建议给新 Codex 的第一条任务：
+原先建议的单篇 `arxiv:2403.14817` pilot 已撤销，不能用作任何放大门槛。质量审查保留为每个
+direct run 的常规 review，而不是阻塞本地好数据的队列开关。
 
-> 阅读 `AGENTS.md` 与 `docs/historical-rewrite-handoff-2026-09-07.md`，不要重新设计。先复验状态，然后只对 `arxiv:2403.14817` 运行 current full pilot；审查摘要、标签、taxonomySeal、评分和 Reader 复用证明。通过后按文档扩大批次。不要生图，不要把 partial staging 发布到博客。
+## 5. 已废止的 2026-09-07 执行草案（不执行）
 
-## 5. 后续执行顺序
+以下 A–E 保留为旧运行记录，帮助解释既有 runtime 目录，不是当前执行路线。特别是其中的
+`pilot`、分级放量、crosswalk finalize 和“先身份闭合再分析”要求均已被 direct-local-first 取代。
 
 ### 阶段 A：单篇真实 pilot
 
@@ -398,12 +414,12 @@ npm run history:publication -- generate --apply \
 
 不要把现有日更 `blog:generate/blog:review/blog:push` 强行套到数千页历史 bundle，除非先证明它们可以绑定完整历史 DAG、精确允许的 delta 和跨批次恢复；否则会破坏已经实现的历史事务边界。
 
-## 6. 完成定义
+## 6. 当时拟定的完成定义（已废止）
 
 “全部历史论文博客已重写、重标并发布”必须同时满足：
 
-- 4185 个冻结论文页面全部有 verified source identity，crosswalk `pending=0`；
-- 每个唯一 identity 只从 source-only 证据生成一次 current canonical；
+- 4185 个冻结论文页面全部有可重放的 direct source route；本地好数据直接进入该 route，只有 arXiv fresh fetch 失败后写出的 named immutable handoff 才有已解决的 crosswalk fallback；
+- 每个唯一 canonical paper 只从 source-only 证据生成一次 analysis/Reader；
 - 每篇摘要、评分、Reader 和 taxonomy production proof 全部 current 且可重放；
 - 3–5 标签使用当前 registry，主任务/主方法明确，无 alias 输出和祖先重复；
 - 所有重复历史页面得到同一 canonical 的确定性投影，同时保留原 URL；
@@ -415,7 +431,7 @@ npm run history:publication -- generate --apply \
 
 用户明确要求本轮不生图。图片生成不是上述重写任务的完成条件；不要调用 `image_gen`，除非用户以后重新明确授权。
 
-## 7. 明确禁止的捷径
+## 7. 仍有效的禁止捷径
 
 - 不读取旧博客正文、旧摘要或旧 Reader prose 作为新稿创作输入。
 - 不用 `npm run reanalyze` 代替隔离的全历史 source-only scheduler。
@@ -423,7 +439,7 @@ npm run history:publication -- generate --apply \
 - 不在 API、网络或额度失败时切到 Manual。
 - 不因标签错误重写 Reader；先用 `taxonomySeal` 局部修复。
 - 不手工编辑 runtime JSON、SHA、receipt、checkpoint、锁或 completed 状态。
-- 不在 crosswalk 未闭合、日期成员不全或会议 authority 不完整时发布 partial 汇总。
+- 不在 direct source/analysis 未闭合、日期成员不全或会议本地 PDF/metadata 绑定不完整时发布 partial 汇总。
 - 不把代码测试通过、staging 完成、私有 bundle 生成或局部 push 描述成全历史完成。
 
 ## 8. 相关权威文档

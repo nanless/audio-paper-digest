@@ -41,6 +41,9 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | 文件 | 类型 | 职责 |
 |---|---|---|
 | `full-fetch.js` | Node 入口 | 默认数据总编排：归档、抓取、筛选、去重、深度分析和增量落盘。 |
+| `lib/daily-fresh-source-plan.js` | Node 库 | 日更筛选结束后为每个 arXiv 论文封存本次官方 TXT/PDF/manifest；分析只重放 sealed bundle，图像只在请求期间临时物化。 |
+| `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 为 fresh arXiv generation 原子封存官方文本、PDF、无像素 runtime metadata 和 manifest；图像字节仅在 OS 临时目录回调中可见并清理。 |
+| `lib/direct-rewrite-analysis-context.js` | Node 库 | 将 direct historical 与日更 source bundle 放入隔离 AsyncLocalStorage，阻止旧正文/缓存进入分析，并约束 Reader 临时图像不跨持久化边界。 |
 | `fetch-papers.js` | Node 模块/入口 | arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选。 |
 | `fetch-huggingface-papers.js` | Node 模块/入口 | 通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
 | `deep-analyzer.js` | Node 核心 | 单篇全文获取、多阶段分析、评分审计、API reader 长文和图片计划；结构修复后以 source-only 证据封口 `core-summary-detailed-v3`，并用显式阶段 DAG、SHA 投影和 stale snapshot 减少安全恢复时的整篇返工。 |
@@ -92,10 +95,22 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/arxiv-source-authority.js` | Node 库 | 复用默认强制代理 arXiv 全文抓取器，把官方来源封存为 request→observation→fulltext→snapshot→receipt→authority；支持 O_EXCL 恢复且拒绝旧博客正文。 |
 | `lib/arxiv-metadata-source.js` | Node 库 | 通过项目 HTTP CONNECT 精确抓取单篇 arXiv Atom 元数据，绑定原始响应 SHA 与白名单标题、摘要、作者、类别。 |
 | `lib/page-source-crosswalk.js` | Node 库 | 跨运行时重放历史 inventory，以锁内 CAS/append-only 决策绑定 pageId/页面 SHA 与 production-authorized source authority；标题不能 verified，同 identity 多页确定性分组，finalize 与每次 final receipt 读取都重新验证来源。 |
-| `lib/history-conflict-identity.js` | Node 库 | 仅对冻结 inventory 中 `conflict/multiple` 页面接受操作者明确选择的已有非标题 hint，并要求 production authority 精确匹配后生成 verified decision。 |
+| `lib/history-conflict-identity.js` | Node 库 | legacy conflict resolver；当前 direct policy 不把 conflict/multiple 页面送入 production crosswalk。 |
 | `lib/historical-arxiv-analysis.js` | Node 库 | 将 live arXiv 全文 authority 和官方 Atom 元数据封装为可恢复的隔离 fresh-analysis run，不读取旧生成正文。 |
-| `lib/historical-arxiv-analysis-scheduler.js` | Node 库 | 从 crosswalk 已 verified 的唯一 arXiv identity groups 派生稳定 run ID，按 pilot/限额可恢复准备或执行隔离历史分析。 |
-| `lib/historical-arxiv-batch.js` | Node 库 | 按唯一 arXiv 身份批处理 single-hint 历史页面；同身份多页共用一次 live 来源授权，逐页 CAS 并持久化尝试记录。 |
+| `lib/historical-arxiv-analysis-scheduler.js` | Node 库 | legacy fallback：从 crosswalk 已 verified 的唯一 arXiv identity groups 派生稳定 run ID；不调度正常 direct-local 历史重写。 |
+| `lib/historical-arxiv-batch.js` | Node 库 | strict fallback：只消费 named immutable fresh-arXiv failure handoff；重放 handoff 的 inventory/page SHA/非标题链接后才按其中列出的页面 CAS，绝不扫描 pending hint。 |
+| `lib/historical-archive-crawl-authority.js` | Node 库 | 以 retained archive crawler 的稳定 arXiv ID 和输入 SHA 签发 identity-only authority；不暴露正文、图片或旧分析。 |
+| `lib/historical-local-crawl-authority.js` | Node 库 | 汇集 archive 与 current 本地 crawler 的稳定 arXiv identity 记录，作为无网络、无正文的 local-first authority。 |
+| `lib/historical-archive-crawl-batch.js` | Node 库 | retained crawler 的只读审计 helper；其 crosswalk writer 已退休，任何调用都会失败关闭。 |
+| `lib/historical-conference-crawl-authority.js` | Node 库 | 以 retained conference metadata/PDF 的稳定会议 ID 形成 identity-only authority，支持 ICASSP 与 ICLR 的本地来源重放。 |
+| `lib/historical-conference-crawl-batch.js` | Node 库 | legacy 只读 helper；其 crosswalk writer 已退休。会议 title fingerprint 只能进入 direct projection，不能写 crosswalk。 |
+| `lib/historical-conference-local-sources.js` | Node 库 | 仅收集本地会议 metadata/PDF 的稳定来源坐标、SHA 和 conference ID，完全不读取历史页、网络或旧分析。 |
+| `lib/historical-conference-page-projections.js` | Node 库 | 将冻结 inventory 的 frontmatter title fingerprint 与本地会议 collector 建成不读正文的 page projection。 |
+| `lib/historical-direct-rewrite-input-catalog.js` | Node 库 | 从冻结 inventory 的既有 arXiv 链接、conference local-source manifest 建立历史范围内的 `merged-good-historical-local-data-v3`；只重放会议页 frontmatter title fingerprint，拒绝旧 arXiv 本地正文/图片和无关的 accepted ICLR corpus。 |
+| `lib/historical-direct-rewrite-plan.js` | Node 库 | 从直接本地 catalog、inventory 与会议 projections 生成可重放路由计划；不调用 LLM、网络、crosswalk 或旧正文。 |
+| `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行 direct plan：arXiv 每 generation 重新获取并封存 TXT/PDF，会议使用本地 PDF；以 source-only analysis/Reader 结果写隔离 registry 和 staging。 |
+| `lib/historical-direct-page-staging.js` | Node 库 | 将 sealed direct source/analysis/Reader packet 投影成历史单篇 staging 页面，不冒充 legacy crosswalk 路径。 |
+| `lib/historical-direct-aggregate.js` | Node 库 | 从 direct registry 与 page projections 可重放地产生日汇总和会议汇总 staging，不读取旧汇总正文。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
@@ -118,28 +133,38 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-page-render.py` | 只从完成 canonical 与 assigned taxonomy packet 渲染历史单篇页面；不读取旧页面正文。 |
 | `page-source-crosswalk.js` | 从直接命名的历史 ledger/receipt 创建隔离 crosswalk，管理受控 decision/CAS；普通磁盘 arXiv bundle 不能升级 production 权限；`finalize` 要求全部 verified 且来源可现场重放。 |
 | `history-conflict-identity.js` | 同一进程现场验证官方 arXiv 来源，并将操作者选择的已有冲突 hint 写成 verified decision 后 CAS apply；不读旧正文或标题。 |
-| `arxiv-source-authority.js` | 对规范化 arXiv ID 规划或抓取官方全文；组合参数在同一进程用 live opaque handle 完成 verified decision/CAS，磁盘重载会降级；dry-run 不联网、不写盘。 |
+| `arxiv-source-authority.js` | 对规范化 arXiv ID 规划或抓取官方全文；用于 source-authority 维护，不属于 direct route 或 fresh-failure crosswalk batch 的选择器；dry-run 不联网、不写盘。 |
 | `historical-arxiv-analysis.js` | 用 live arXiv authority 与白名单原始抓取元数据建立隔离 source-only run；`analyze` 复用现有多阶段引擎，canonical 不写入 daily current。 |
-| `historical-arxiv-analysis-scheduler.js` | 从 finalized crosswalk 批量调度历史 arXiv run；以 `new-full`、`reader-recovery`、`all` 分离队列，支持联网前 fail-closed 的精确 `--paper-ids`、pilot/数值 limit 与小并发恢复。 |
+| `historical-arxiv-analysis-scheduler.js` | legacy fallback：从 finalized crosswalk 调度历史 arXiv run；`new-full`、`reader-recovery`、`all` 只维护这条旧队列，不能阻塞或替代 direct-local。 |
 | `historical-taxonomy-assignment.js` | 对完成的历史 analysis run 执行单篇或批量 deterministic 重标；dry-run 零写，apply 只写独立 assignment artifact，不调用 LLM。 |
 | `historical-page-staging.js` | 按显式 analysis run 与当前 registry SHA 精确选择 assignment，从 verified crosswalk 生成隔离单篇页面 staging；不写博客仓库。 |
 | `historical-daily-aggregate.js` | 以 `--staging-runs UUID[,UUID...]` 合并多份单篇 staging run，重建 daily summary 的隔离 manifest；保留原路径/URL，dry-run 零写，apply 不写博客仓库。 |
 | `historical-publication.js` | `plan` 冻结历史发布输入、博客基线与逐路径操作；`generate` 再重放 producer 并 O_EXCL 写私有 bundle。conference refs 在有 authenticated aggregate 前明确拒绝。 |
-| `historical-postprocess-scheduler.js` | 可恢复批量编排历史重标、per-paper staging 和就绪日期汇总；支持 dry-run/apply、pilot/限额、日期和 1–3 并发。 |
+| `historical-postprocess-scheduler.js` | legacy fallback：可恢复地编排旧 crosswalk analysis 的重标、staging 与日期汇总；direct-local 使用 `historical-direct-aggregate.js`。 |
 | `conference-postprocess.js` | 使用完整 conference plan authority flags 对单篇执行重标/staging，或对 plan 全量 selected members 生成隔离 aggregate；roots 全部来自项目配置。 |
 | `conference-page-render.py` | 从已封存 conference Reader 与 assigned taxonomy 渲染无 arXiv 别名的弱结构会议单篇页；不生成资产，不读取旧博客正文。 |
-| `historical-arxiv-batch.js` | 对 pending single-hint arXiv 页面按唯一论文分组抓取与 verified 映射；支持 pilot/数值 limit 和可恢复全量续跑，不调用 LLM。 |
+| `historical-arxiv-batch.js` | strict fallback：只接受 `--handoffs NAME.json[,NAME.json...]` 的 named immutable fresh-arXiv failure handoff。逐页重放冻结 inventory/page SHA 与非标题链接；不扫描 crosswalk pending 页，不调用 LLM，也不阻塞 direct 队列。 |
+| `historical-archive-crawl-batch.js` | retired fail-closed compatibility endpoint；retained archive crawler 数据只能由 direct 路线消费。 |
+| `historical-local-crawl-batch.js` | `historical-archive-crawl-batch.js` 的 retired fail-closed compatibility alias。 |
+| `historical-conference-crawl-batch.js` | retired fail-closed compatibility endpoint；会议 metadata/PDF 和 exact title fingerprint 只能进入 direct local-source/projection 路线，不能写 crosswalk。 |
+| `historical-conference-local-sources.js` | 只收集本地会议 metadata/PDF source catalog；不接触历史页、crosswalk、LLM、网络或发布。 |
+| `historical-conference-page-projections.js` | 从显式本地 catalog 和冻结 inventory 建立会议页 projection；不读取历史正文。 |
+| `historical-direct-rewrite-inputs.js` | 从冻结 inventory 的 arXiv 链接与 conference manifest、blog root 写出 scoped v3 direct-input catalog；不要求额外 arXiv manifest，输出可直接接 `history:conference-projections` 和 `history:direct-plan`。 |
+| `historical-direct-rewrite-plan.js` | 从 direct catalog、inventory 与会议 projections 签发 source-only rewrite route plan。 |
+| `historical-direct-rewrite-scheduler.js` | 只准备 direct plan 的 arXiv/会议来源队列和 sealed source 工件；arXiv 原子写 TXT、PDF、runtime metadata、manifest，失败只写 immutable crosswalk handoff；不调用分析、Reader、crosswalk 或发布。 |
+| `historical-direct-rewrite-run.js` | 显式运行 source-only direct analysis、Reader 与单篇 staging；arXiv 重放本次四文件官方 bundle，会议重放本地 metadata/PDF SHA。 |
+| `historical-direct-aggregate.js` | 为完成的 direct registry 生成可重放 daily 或 conference aggregate staging。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与 Node 共用 registry 的 Python 加载、current/legacy 显式解析和精确映射；production current 只接受 active 中文首选标签，未知/歧义不自动收窄。 |
 | `taxonomy_paths.py` | 集中管理独立标签预览的Python路径，复用项目根与环境；不改变正式发布path_config模板指纹。 |
 | `build-taxonomy-preview.py` | 只读扫描Hugo历史论文，生成有来源指纹的映射预览、完整旧词处置与待核报告；不修改博客或current。 |
-| `deep-analysis-only.js` | 从 complete 筛选结果安全续跑未完成分析。 |
-| `batch-analyze.js` | 对现有 canonical 中的未完成论文批量分析。 |
-| `reanalyze.js` | 强制全量重分析，支持显式并发与数据文件。 |
+| `deep-analysis-only.js` | 仅重放当前 `dailyFreshSourceRun` 的 sealed PDF/TXT，续跑 complete 筛选结果中未完成分析；缺少或漂移时失败，不抓取或读取 legacy cache。 |
+| `batch-analyze.js` | 仅用当前 sealed 日更 PDF/TXT 批量分析 canonical 中的未完成论文；缺少 source run 时失败。 |
+| `reanalyze.js` | 强制全量重分析，但仍只用 canonical 精确绑定的 sealed 日更 PDF/TXT；不从 legacy result/text/cache 恢复。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `analyze-single-paper.js` | 从论文库取一篇论文分析并合并回 canonical。 |
 | `refilter-reanalyze-by-date.js` | 对历史日期重新筛选、分析并写入受控日期快照。 |
-| `refresh-api-reader.js` | 对指定论文或日期批次刷新 API reader/评分/作者/图片阶段。 |
+| `refresh-api-reader.js` | 对指定论文或日期批次刷新 API reader/评分/作者/图片阶段；重放 sealed PDF/TXT，并只在 OS 临时目录物化当前调用的图像。 |
 | `evaluate-keyword-prefilter.js` | 只读回放金标准与历史正样本，报告关键词召回。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
 | `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据门禁；`--quick` 仅语法与数据，不是完整验收。 |

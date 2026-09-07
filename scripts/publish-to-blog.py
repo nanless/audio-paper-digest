@@ -60,6 +60,7 @@ from path_config import (
     ARCHIVE_DIR,
     CURRENT_DIR,
     DEEP_ANALYSIS_RESULT_FILE,
+    DAILY_FRESH_SOURCE_RUNS_DIR,
     resolve_deep_analysis_result_path,
     DIGEST_COVER_ASSET_DIR,
     DIGEST_COVER_MANIFEST_DIR,
@@ -144,6 +145,9 @@ LLM_API_READER_STRUCTURED_CONTRACTS = {
 LLM_API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4'
 LLM_API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1'
 LLM_API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1'
+# Its presence makes the lack of a stored Figure asset intentional and
+# reviewable.  Older Reader records remain cache-backed when this is absent.
+EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1'
 LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
 CORE_SUMMARY_DETAILED_CONTRACT = 'core-summary-detailed-v3'
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
@@ -4155,6 +4159,42 @@ def _modern_api_bridge_render_spacing(article, plan):
     return article
 
 
+def _ephemeral_figure_note(figure):
+    ordinal = figure.get('ordinal') if isinstance(figure, dict) else None
+    caption = figure.get('caption') if isinstance(figure, dict) else None
+    if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1 \
+            or not isinstance(caption, str) or not caption.strip() \
+            or '\n' in caption or '\r' in caption:
+        raise PublishDataValidationError('ephemeral Figure 的 ordinal/caption 非法')
+    return f'> **论文图 {ordinal}（像素未随页面持久化）**：{caption.strip()}'
+
+
+def render_ephemeral_api_reader_figures(article, figures):
+    """Render source-bound Figure slots as durable ordinal/caption evidence.
+
+    The canonical Reader record retains official URLs for source replay.  This
+    publication-only view has no image Markdown, hotlink, cache path or asset.
+    """
+    if not isinstance(article, str) or not isinstance(figures, list):
+        raise PublishDataValidationError('ephemeral Figure 渲染缺少正文或 figure 数组')
+    rendered = article
+    for figure in figures:
+        if not isinstance(figure, dict) or not isinstance(figure.get('url'), str):
+            raise PublishDataValidationError('ephemeral Figure URL 非法')
+        pattern = re.compile(
+            rf'^!\[(?:\\.|[^\]\\\n])*\]\({re.escape(figure["url"])}\)$',
+            flags=re.MULTILINE,
+        )
+        rendered, replaced = pattern.subn(_ephemeral_figure_note(figure), rendered)
+        if replaced != 1:
+            raise PublishDataValidationError(
+                f'ephemeral Figure {figure.get("ordinal")} 未唯一映射到 canonical 正文'
+            )
+    if _api_reader_article_image_urls(rendered):
+        raise PublishDataValidationError('ephemeral Figure 渲染后仍包含图片 Markdown')
+    return rendered
+
+
 def _api_reader_payload(paper):
     """Replay the API reader article contract from canonical bytes."""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
@@ -4163,6 +4203,12 @@ def _api_reader_payload(paper):
     if reader_contract not in LLM_API_READER_LEGACY_CONTRACTS | {
             LLM_API_READER_CONTRACT}:
         return None
+    declared_figure_persistence = contracts.get('apiReaderFigurePersistence')
+    if declared_figure_persistence not in (None, EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT):
+        raise PublishDataValidationError('API reader Figure persistence contract 非法')
+    if declared_figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT \
+            and reader_contract not in LLM_API_READER_STRUCTURED_CONTRACTS:
+        raise PublishDataValidationError('ephemeral Figure persistence 只适用于结构化 API Reader')
     article = paper.get('apiReaderArticle')
     plan = paper.get('apiReaderPlan')
     stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
@@ -4309,15 +4355,19 @@ def _api_reader_payload(paper):
         figure_urls = [item.get('url') for item in figures if isinstance(item, dict)]
         if article_image_urls != figure_urls or len(set(figure_urls)) != len(figure_urls):
             raise PublishDataValidationError('API reader v2 正文图片与 figure 绑定不一致')
+        figure_persistence = declared_figure_persistence
+        ephemeral_figures = figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT
         paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
         article_paragraphs = re.split(r'\n(?:[ \t]*\n)+', article)
         figure_assets = []
         for item in figures:
             expected_figure_fields = {
                     'ordinal', 'label', 'caption', 'url', 'mediaType',
-                    'sourceDomSha256', 'targetKind', 'targetHeading',
+                    'sourceDomSha256', 'targetKind', 'targetHeading'}
+            if not ephemeral_figures:
+                expected_figure_fields.update({
                     'cachePath', 'assetFilename', 'assetMediaType',
-                    'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'}
+                    'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'})
             if plan_version in {2, 3}:
                 expected_figure_fields.update({
                     'marker', 'leadQuote', 'explanationQuote',
@@ -4376,6 +4426,11 @@ def _api_reader_payload(paper):
                     or parsed_url.hostname not in {'arxiv.org', 'www.arxiv.org'} \
                     or not re.fullmatch(r'[0-9a-f]{64}', str(item['sourceDomSha256'])):
                 raise PublishDataValidationError('API reader v2 figure 来源绑定非法')
+            if ephemeral_figures:
+                # Cache and pixel fields are deliberately absent.  The final
+                # page retains only the sealed ordinal/caption evidence.
+                _ephemeral_figure_note(item)
+                continue
             declared_cache_path = Path(str(item['cachePath'] or '')).expanduser()
             if declared_cache_path.is_symlink() or declared_cache_path.parent.is_symlink():
                 raise PublishDataValidationError('API reader v2 figure 缓存路径不得使用符号链接')
@@ -4438,8 +4493,11 @@ def _api_reader_payload(paper):
         figures = []
         figure_assets = []
         reader_authors = None
+        figure_persistence = None
     rendered_article = _modern_api_bridge_render_spacing(article, plan) \
         if reader_contract == LLM_API_READER_CONTRACT else article
+    if figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
+        rendered_article = render_ephemeral_api_reader_figures(rendered_article, figures)
     for asset in figure_assets:
         rendered_article = rendered_article.replace(
             f']({asset["sourceUrl"]})', f']({asset["publicUrl"]})'
@@ -4453,6 +4511,7 @@ def _api_reader_payload(paper):
         'planSha256': plan_sha,
         'figures': figures,
         'assets': figure_assets,
+        'figurePersistence': figure_persistence,
         'readerAuthors': reader_authors,
         'sourceBindingProof': source_binding_proof,
         'authorIdentityProof': author_identity_proof,
@@ -4543,6 +4602,14 @@ def _api_reader_page_binding_issue(content, paper):
                 'resourceCount': str(resource_proof['count']),
         }:
             raise PublishDataValidationError('最终页面 author/resource identity marker 与 canonical 不一致')
+        figure_persistence_marker = frontmatter_value(
+            'paper_digest_api_reader_figure_persistence', r'"([^"]+)"',
+        )
+        if payload.get('figurePersistence') == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
+            if figure_persistence_marker != EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
+                raise PublishDataValidationError('最终页面 Figure persistence marker 与 canonical 不一致')
+        elif figure_persistence_marker is not None:
+            raise PublishDataValidationError('legacy API reader 页面不得伪造 ephemeral Figure marker')
 
         def h2_section(label):
             heading_match = re.search(
@@ -4814,6 +4881,11 @@ def generate_paper_page(paper, date_str, category='论文速递'):
             f'{source_binding_marker}'
             f'{identity_marker}'
         )
+        if api_reader_payload.get('figurePersistence') == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
+            api_reader_marker += (
+                'paper_digest_api_reader_figure_persistence: '
+                f'"{EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT}"\n'
+            )
         if api_reader_payload['contract'] == LLM_API_READER_CONTRACT:
             api_reader_marker += (
                 f'paper_digest_api_reader_decision_projection: "{API_READER_DECISION_PROJECTION_CONTRACT}"\n'
@@ -5427,6 +5499,423 @@ def _paper_fresh_run_id(paper):
     return run_id if isinstance(run_id, str) and re.fullmatch(
         r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', run_id,
     ) else None
+
+
+GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT = 'generation-input-source-reference-v1'
+
+
+def build_generation_input_source_reference(data_file):
+    """Describe the exact canonical/archived JSON selected for generation.
+
+    This is deliberately a file reference, rather than an inferred `current`
+    location: review runs later and must replay the same input that generation
+    selected after `--date` / `--data-file` resolution. A missing file returns
+    ``None`` only for injected legacy/unit-test callers; the normal loader then
+    remains responsible for rejecting the absent input before generation.
+    """
+    if data_file is None:
+        return None
+    candidate = Path(data_file).expanduser()
+    if not candidate.is_absolute():
+        candidate = (Path.cwd() / candidate).resolve()
+    try:
+        entry = candidate.lstat()
+    except OSError:
+        return None
+    if stat.S_ISLNK(entry.st_mode):
+        raise PublishDataValidationError('generation 输入文件不能是符号链接')
+    if not stat.S_ISREG(entry.st_mode):
+        raise PublishDataValidationError('generation 输入必须是普通 JSON 文件')
+    canonical = candidate.resolve()
+    payload = canonical.read_bytes()
+    return {
+        'contract': GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT,
+        'version': 1,
+        'path': str(canonical),
+        'sha256': hashlib.sha256(payload).hexdigest(),
+        'bytes': len(payload),
+    }
+
+
+def validate_generation_input_source_reference(manifest, target_date):
+    """Replay a generation manifest's exact input file before review/push.
+
+    Older manifests legitimately have no file reference. A newly generated
+    manifest carries the reference and cannot silently fall back to
+    ``DEEP_ANALYSIS_RESULT_FILE`` when the selected archive or `--data-file`
+    differs from current.
+    """
+    if not isinstance(manifest, dict):
+        raise PublishDataValidationError('generation 输入来源必须由对象清单承载')
+    reference = manifest.get('inputSourceReference')
+    if reference is None:
+        return None
+    expected_keys = {'contract', 'version', 'path', 'sha256', 'bytes'}
+    if (
+            not isinstance(reference, dict) or set(reference) != expected_keys
+            or reference.get('contract') != GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT
+            or reference.get('version') != 1
+            or not isinstance(reference.get('path'), str)
+            or not Path(reference['path']).is_absolute()
+            or not re.fullmatch(r'[0-9a-f]{64}', str(reference.get('sha256') or ''))
+            or not isinstance(reference.get('bytes'), int)
+            or reference['bytes'] < 0
+    ):
+        raise PublishDataValidationError('generation 输入来源引用缺失或格式非法')
+    source = Path(reference['path'])
+    try:
+        entry = source.lstat()
+    except OSError as exc:
+        raise PublishDataValidationError('generation 输入来源文件无法重放') from exc
+    if stat.S_ISLNK(entry.st_mode) or not stat.S_ISREG(entry.st_mode):
+        raise PublishDataValidationError('generation 输入来源必须保持为普通非符号链接文件')
+    try:
+        payload = source.read_bytes()
+    except OSError as exc:
+        raise PublishDataValidationError('generation 输入来源文件无法读取') from exc
+    if len(payload) != reference['bytes'] or hashlib.sha256(payload).hexdigest() != reference['sha256']:
+        raise PublishDataValidationError('generation 输入来源文件字节或 SHA-256 已漂移')
+    validate_daily_fresh_sources_for_publish(str(source), target_date)
+    return str(source)
+
+
+_DAILY_FRESH_SOURCE_REFERENCE_KEYS = frozenset({
+    'contract', 'version', 'runId', 'batchDate', 'batchId', 'sourceGeneration',
+    'sourceSetSha256', 'runManifestSha256',
+})
+_DAILY_FRESH_SOURCE_RUN_KEYS = frozenset({
+    'contract', 'version', 'runId', 'batchDate', 'batchId', 'paperIds',
+    'sourceSetSha256', 'sourceExpectations',
+})
+_DAILY_FRESH_SOURCE_MANIFEST_KEYS = frozenset({
+    'contract', 'version', 'arxivId', 'paperId', 'generation', 'capturedAt',
+    'text', 'pdf', 'runtimeMetadata',
+})
+_DAILY_FRESH_SOURCE_RUNTIME_KEYS = frozenset({
+    'contract', 'version', 'paperId', 'title', 'textSha256',
+    'structuredArtifacts', 'imageInfos', 'readerAuthors', 'htmlAvailability',
+    'htmlAttempts', 'warnings',
+})
+_DAILY_FRESH_SOURCE_FORBIDDEN_RUNTIME_FIELDS = frozenset({
+    'cachePath', 'tempPath', 'rawBytes', 'assetBytes', 'base64', 'buffer',
+    'assetFilename', 'assetMediaType', 'assetWidth', 'assetHeight', 'dataUri',
+})
+
+
+def _daily_fresh_sha256(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def _daily_fresh_is_sha256(value):
+    return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+
+def _daily_fresh_canonical(value):
+    if isinstance(value, dict):
+        return {key: _daily_fresh_canonical(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_daily_fresh_canonical(item) for item in value]
+    return value
+
+
+def _daily_fresh_canonical_json_bytes(value):
+    try:
+        return (json.dumps(
+            _daily_fresh_canonical(value), ensure_ascii=False, indent=2,
+            allow_nan=False,
+        ) + '\n').encode('utf-8')
+    except (TypeError, ValueError) as exc:
+        raise PublishDataValidationError('daily sealed source JSON 不可规范化') from exc
+
+
+def _daily_fresh_compact_json_bytes(value):
+    """Mirror JSON.stringify for sealed objects already canonicalized by Node."""
+    try:
+        return json.dumps(
+            value, ensure_ascii=False, separators=(',', ':'), allow_nan=False,
+        ).encode('utf-8')
+    except (TypeError, ValueError) as exc:
+        raise PublishDataValidationError('daily sealed source JSON 不可重放') from exc
+
+
+def _daily_fresh_safe_directory(directory, label):
+    try:
+        entry = Path(directory).lstat()
+    except OSError as exc:
+        raise PublishDataValidationError(f'{label} 无法读取') from exc
+    if stat.S_ISLNK(entry.st_mode) or not stat.S_ISDIR(entry.st_mode):
+        raise PublishDataValidationError(f'{label} 必须是非符号链接目录')
+    return Path(directory)
+
+
+def _daily_fresh_read_private_file(filename, label, maximum_bytes):
+    """Use the source store's private-file semantics for publish-time replay."""
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    descriptor = None
+    try:
+        descriptor = os.open(filename, flags)
+        info = os.fstat(descriptor)
+        if (
+                not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_size < 0 or info.st_size > maximum_bytes
+                or (os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o600)
+        ):
+            raise PublishDataValidationError(f'{label} 不是安全的私有普通文件')
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        payload = b''.join(chunks)
+        if len(payload) != info.st_size:
+            raise PublishDataValidationError(f'{label} 在重放时发生字节漂移')
+        return payload
+    except PublishDataValidationError:
+        raise
+    except OSError as exc:
+        raise PublishDataValidationError(f'{label} 无法安全读取') from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _daily_fresh_read_canonical_json(filename, label, maximum_bytes):
+    raw = _daily_fresh_read_private_file(filename, label, maximum_bytes)
+    try:
+        value = json.loads(raw.decode('utf-8'))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError(f'{label} 不是有效 JSON') from exc
+    if raw != _daily_fresh_canonical_json_bytes(value):
+        raise PublishDataValidationError(f'{label} 不是规范化 JSON')
+    return raw, value
+
+
+def _daily_fresh_contains_persistent_image_fields(value):
+    if isinstance(value, list):
+        return any(_daily_fresh_contains_persistent_image_fields(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    return any(
+        key in _DAILY_FRESH_SOURCE_FORBIDDEN_RUNTIME_FIELDS
+        or _daily_fresh_contains_persistent_image_fields(item)
+        for key, item in value.items()
+    )
+
+
+def _daily_fresh_normalized_paper_id(paper):
+    if not isinstance(paper, dict):
+        raise PublishDataValidationError('daily sealed source 发布输入包含非对象论文')
+    value = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+    if not re.fullmatch(r'\d{4}\.\d{4,5}', str(value or '')):
+        raise PublishDataValidationError('daily sealed source 发布输入缺少规范化 arXiv ID')
+    return value
+
+
+def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
+    if (
+            not isinstance(runtime, dict) or set(runtime) != _DAILY_FRESH_SOURCE_RUNTIME_KEYS
+            or runtime.get('contract') != 'fresh-arxiv-rewrite-runtime-metadata-v1'
+            or runtime.get('version') != 1
+            or runtime.get('paperId') != f'arxiv:{paper_id}'
+            or runtime.get('textSha256') != _daily_fresh_sha256(text)
+            or not isinstance(runtime.get('title'), str)
+            or not isinstance(runtime.get('structuredArtifacts'), dict)
+            or not isinstance(runtime.get('imageInfos'), list)
+            or not isinstance(runtime.get('warnings'), list)
+            or type(runtime.get('htmlAttempts')) is not int
+            or runtime.get('htmlAttempts') < 0
+            or not isinstance(runtime.get('htmlAvailability'), str)
+            or (runtime.get('readerAuthors') is not None
+                and (not isinstance(runtime.get('readerAuthors'), dict)
+                     or isinstance(runtime.get('readerAuthors'), list)))
+            or _daily_fresh_contains_persistent_image_fields(runtime)
+    ):
+        raise PublishDataValidationError(f'{paper_id} source-runtime.json 与 sealed TXT 不一致')
+    artifacts = runtime['structuredArtifacts']
+    artifact_payload = dict(artifacts)
+    payload_sha = artifact_payload.pop('payloadSha256', None)
+    if (
+            not _daily_fresh_is_sha256(payload_sha)
+            or artifacts.get('flattenedTextSha256') != _daily_fresh_sha256(text)
+            or _daily_fresh_sha256(_daily_fresh_compact_json_bytes(artifact_payload)) != payload_sha
+    ):
+        raise PublishDataValidationError(f'{paper_id} source-runtime.json structuredArtifacts 未绑定 sealed TXT')
+    text_manifest = manifest.get('text')
+    if runtime['textSha256'] != text_manifest.get('responseSha256'):
+        raise PublishDataValidationError(f'{paper_id} source-runtime.json text SHA 与 source manifest 不一致')
+    return artifacts
+
+
+def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
+    source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
+    _daily_fresh_safe_directory(run_dir / 'sources', 'daily sealed source 根目录')
+    _daily_fresh_safe_directory(run_dir / 'sources' / paper_id, f'{paper_id} source 目录')
+    _daily_fresh_safe_directory(source_dir, f'{paper_id} source generation 目录')
+    try:
+        entries = set(os.listdir(source_dir))
+    except OSError as exc:
+        raise PublishDataValidationError(f'{paper_id} source generation 目录无法读取') from exc
+    if entries != {
+            'source-manifest.json', 'source-runtime.json', 'source.pdf', 'source.txt',
+    }:
+        raise PublishDataValidationError(f'{paper_id} source generation 文件集合不完整或包含额外文件')
+    manifest_bytes, manifest = _daily_fresh_read_canonical_json(
+        source_dir / 'source-manifest.json', f'{paper_id} source-manifest.json', 1024 * 1024,
+    )
+    runtime_bytes, runtime = _daily_fresh_read_canonical_json(
+        source_dir / 'source-runtime.json', f'{paper_id} source-runtime.json', 64 * 1024 * 1024,
+    )
+    text = _daily_fresh_read_private_file(
+        source_dir / 'source.txt', f'{paper_id} source.txt', 64 * 1024 * 1024,
+    )
+    pdf = _daily_fresh_read_private_file(
+        source_dir / 'source.pdf', f'{paper_id} source.pdf', 512 * 1024 * 1024,
+    )
+    if (
+            not isinstance(manifest, dict) or set(manifest) != _DAILY_FRESH_SOURCE_MANIFEST_KEYS
+            or manifest.get('contract') != 'fresh-arxiv-rewrite-source-v1'
+            or manifest.get('version') != 2 or manifest.get('arxivId') != paper_id
+            or manifest.get('paperId') != f'arxiv:{paper_id}' or manifest.get('generation') != 1
+            or _daily_fresh_sha256(manifest_bytes) != proof.get('sourceManifestSha256')
+            or _daily_fresh_sha256(text) != proof.get('sourceSha256')
+            or not pdf.startswith(b'%PDF-')
+    ):
+        raise PublishDataValidationError(f'{paper_id} sealed TXT/PDF 或 provenance SHA 漂移')
+    text_manifest = manifest.get('text')
+    pdf_manifest = manifest.get('pdf')
+    runtime_manifest = manifest.get('runtimeMetadata')
+    if (
+            not isinstance(text_manifest, dict) or not isinstance(pdf_manifest, dict)
+            or not isinstance(runtime_manifest, dict)
+            or text_manifest.get('filename') != 'source.txt'
+            or text_manifest.get('source') not in {'html', 'pdf'}
+            or text_manifest.get('sourceId') != paper_id
+            or text_manifest.get('responseBytes') != len(text)
+            or text_manifest.get('responseSha256') != _daily_fresh_sha256(text)
+            or text_manifest.get('responseSha256') != proof.get('sourceSha256')
+            or pdf_manifest.get('filename') != 'source.pdf'
+            or pdf_manifest.get('responseBytes') != len(pdf)
+            or pdf_manifest.get('responseSha256') != _daily_fresh_sha256(pdf)
+            or runtime_manifest.get('filename') != 'source-runtime.json'
+            or runtime_manifest.get('responseBytes') != len(runtime_bytes)
+            or runtime_manifest.get('responseSha256') != _daily_fresh_sha256(runtime_bytes)
+    ):
+        raise PublishDataValidationError(f'{paper_id} source manifest 未闭合 TXT/PDF/runtime SHA')
+    artifacts = _daily_fresh_validate_runtime(runtime, manifest, text, paper_id)
+    details = {
+        'text': text.decode('utf-8'),
+        'source': text_manifest['source'],
+        'sourceId': text_manifest['sourceId'],
+        'imageInfos': runtime['imageInfos'],
+        'structuredArtifacts': artifacts,
+        'readerAuthors': {'authors': []} if runtime['readerAuthors'] is None else runtime['readerAuthors'],
+        'htmlAvailability': runtime['htmlAvailability'],
+        'htmlAttempts': runtime['htmlAttempts'],
+        'warnings': runtime['warnings'],
+    }
+    source_snapshot_sha = _daily_fresh_sha256(_daily_fresh_compact_json_bytes({
+        'sourceManifestSha256': _daily_fresh_sha256(manifest_bytes),
+        'sourceGeneration': 1,
+        'details': details,
+    }))
+    if proof.get('sourceSnapshotSha256') != source_snapshot_sha:
+        raise PublishDataValidationError(f'{paper_id} fresh provenance 未绑定 source-runtime.json')
+    manifest_proof = paper.get('analysisManifest', {}).get('freshRewriteProvenance') \
+        if isinstance(paper.get('analysisManifest'), dict) else None
+    if (
+            manifest_proof != proof or paper.get('sourceSha256') != proof.get('sourceSha256')
+            or not isinstance(paper.get('analysisManifest'), dict)
+            or paper['analysisManifest'].get('sourceAcquisition', {}).get('sourceSha256')
+            != proof.get('sourceSha256')
+    ):
+        raise PublishDataValidationError(f'{paper_id} daily fresh provenance 未闭合到 canonical/analysis manifest')
+
+
+def validate_daily_fresh_sources_for_publish(data_file, target_date):
+    """Replay every claimed daily source generation before generate/review/push.
+
+    A daily run is all-or-nothing: its run reference and every paper's exact
+    provenance must replay.  A legacy paper cannot be mixed into a batch that
+    advertises a sealed daily run, even if a later publish filter would omit it.
+    """
+    # Generation's existing loader remains authoritative for an absent explicit
+    # input.  The normal publication path always supplies a real source file.
+    source_path = Path(data_file)
+    if not source_path.is_file():
+        return
+    try:
+        payload = json.loads(source_path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError('无法读取 daily sealed source 输入') from exc
+    if not isinstance(payload, dict):
+        return
+    papers = payload.get('papers')
+    run_claimed = 'dailyFreshSourceRun' in payload
+    provenance_claimed = isinstance(papers, list) and any(
+        isinstance(paper, dict) and 'freshRewriteProvenance' in paper
+        for paper in papers
+    )
+    if not run_claimed and not provenance_claimed:
+        return
+    if not isinstance(papers, list) or not papers:
+        raise PublishDataValidationError('dailyFreshSourceRun 要求非空 papers 数组')
+    reference = payload.get('dailyFreshSourceRun')
+    if (
+            not isinstance(reference, dict) or set(reference) != _DAILY_FRESH_SOURCE_REFERENCE_KEYS
+            or reference.get('contract') != 'daily-fresh-source-reference-v1'
+            or reference.get('version') != 1
+            or not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', str(reference.get('runId') or ''))
+            or reference.get('sourceGeneration') != 1
+            or reference.get('batchDate') != target_date
+            or not isinstance(reference.get('batchId'), str) or not reference['batchId'].strip()
+            or not all(_daily_fresh_is_sha256(reference.get(key))
+                       for key in ('sourceSetSha256', 'runManifestSha256'))
+    ):
+        raise PublishDataValidationError('dailyFreshSourceRun 缺失或格式非法')
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / reference['runId']
+    _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, 'daily sealed source 根目录')
+    _daily_fresh_safe_directory(run_dir, 'daily sealed source run 目录')
+    run_bytes, run = _daily_fresh_read_canonical_json(
+        run_dir / 'run.json', 'daily sealed source run.json', 4 * 1024 * 1024,
+    )
+    if _daily_fresh_sha256(run_bytes) != reference['runManifestSha256']:
+        raise PublishDataValidationError('daily sealed source run.json SHA 漂移')
+    expected_ids = sorted(_daily_fresh_normalized_paper_id(paper) for paper in papers)
+    if len(expected_ids) != len(set(expected_ids)):
+        raise PublishDataValidationError('daily sealed source 发布输入包含重复 arXiv ID')
+    source_expectations = {
+        paper_id: {'sourceMode': 'sealed-arxiv-bundle-v1', 'sourceGeneration': 1}
+        for paper_id in expected_ids
+    }
+    expected_set_sha = _daily_fresh_sha256(_daily_fresh_compact_json_bytes(
+        _daily_fresh_canonical({
+            'batchDate': reference['batchDate'], 'batchId': reference['batchId'],
+            'paperIds': expected_ids, 'sourceGeneration': 1,
+        })
+    ))
+    if (
+            not isinstance(run, dict) or set(run) != _DAILY_FRESH_SOURCE_RUN_KEYS
+            or run.get('contract') != 'daily-fresh-source-run-v1' or run.get('version') != 1
+            or run.get('runId') != reference['runId']
+            or run.get('batchDate') != reference['batchDate'] or run.get('batchId') != reference['batchId']
+            or run.get('paperIds') != expected_ids or run.get('sourceExpectations') != source_expectations
+            or run.get('sourceSetSha256') != reference['sourceSetSha256']
+            or run.get('sourceSetSha256') != expected_set_sha
+    ):
+        raise PublishDataValidationError('daily sealed source run 未精确覆盖发布输入论文集合')
+    for paper, paper_id in zip(papers, [_daily_fresh_normalized_paper_id(p) for p in papers]):
+        proof = paper.get('freshRewriteProvenance') if isinstance(paper, dict) else None
+        if (
+                not isinstance(proof, dict) or proof.get('contract') != 'fresh-source-analysis-v1'
+                or proof.get('runId') != reference['runId'] or proof.get('sourceGeneration') != 1
+                or proof.get('sourceOnly') is not True or proof.get('oldGeneratedTextIncluded') is not False
+                or not all(_daily_fresh_is_sha256(proof.get(key)) for key in (
+                    'sourceManifestSha256', 'sourceSha256', 'sourceSnapshotSha256',
+                ))
+        ):
+            raise PublishDataValidationError(f'{paper_id} 缺少精确 daily sealed fresh provenance')
+        _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
 
 
 def _review_single_paper(args):
@@ -6843,12 +7332,40 @@ def _load_push_receipt(date_str):
     return receipt, path, base_head
 
 
+def _validate_push_generation_input_integrity(date_str):
+    """Replay schema-v3 generation input proof before a push mutates Git.
+
+    ``load_verified_review_receipt`` performs the complete receipt check, but
+    ``git_push`` is also called directly by recovery and maintenance entry
+    points.  Keep this narrow replay here so those callers cannot bypass the
+    source-input contract by substituting or stubbing receipt loading.  Older
+    manifests intentionally keep their legacy behavior; their receipt checks
+    remain unchanged.
+    """
+    manifest_path = generation_manifest_path(date_str)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PublishDataValidationError(
+            f'无法读取推送前 generation manifest: {manifest_path}'
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise PublishDataValidationError('推送前 generation manifest 必须是对象')
+    if manifest.get('schemaVersion') == 3:
+        _validate_generation_input_integrity(manifest, date_str)
+
+
 def git_push(date_str, publish_paths, rollback_state=None):
     """Commit, push HEAD explicitly to main, and verify the remote object ID."""
     manifest = _git_relative_manifest(publish_paths)
     state = rollback_state
     try:
         verified_paths, _verified_receipt_path = load_verified_review_receipt(date_str)
+        # This must remain before validate_git_publish_branch, index capture,
+        # add, commit, receipt adoption, or any remote operation.  Receipt
+        # validation is intentionally repeated below as part of its own
+        # immutable-evidence contract.
+        _validate_push_generation_input_integrity(date_str)
         if _git_relative_manifest(verified_paths) != manifest:
             raise PublishDataValidationError('git push 路径与已验证审查凭证不一致')
         receipt, receipt_path, base_head = _load_push_receipt(date_str)
@@ -7278,6 +7795,7 @@ def llm_api_publication_bindings(published_papers):
             'readerArticleSha256': reader['articleSha256'],
             'readerPlanSha256': reader['planSha256'],
             'readerFiguresSha256': _stable_json_sha256(reader['figures']),
+            'readerFigurePersistence': reader['figurePersistence'],
             'readerAuthorsSha256': _stable_json_sha256(reader['readerAuthors']),
             'analysisSha256': analysis_sha,
             'coreSummaryContract': CORE_SUMMARY_DETAILED_CONTRACT,
@@ -7402,6 +7920,7 @@ def _require_active_publication_request(include_id):
 
 def generation_input_fingerprint(
     papers, date_str, category, publish_all, include_id=None,
+    input_source_reference=None,
 ):
     """Bind resumable generation to the exact publication inputs and options."""
     image_exclusions = []
@@ -7440,6 +7959,8 @@ def generation_input_fingerprint(
     scope = _single_publication_scope(include_id)
     if scope is not None:
         payload['publicationScope'] = scope
+    if input_source_reference is not None:
+        payload['inputSourceReference'] = input_source_reference
     return _stable_json_sha256(payload)
 
 
@@ -7460,9 +7981,30 @@ def _validate_generation_input_integrity(manifest, date_str):
         )
     actual_input = str(manifest.get('inputFingerprint') or '')
     scope = _validate_publication_scope(manifest, published_papers)
+    input_source_reference = manifest.get('inputSourceReference')
+    # A schema-v3 snapshot that advertises fresh-source analysis must retain
+    # the exact JSON input from which that provenance can be replayed.  Without
+    # it, review/push could accept a manifest whose claimed fresh bundle cannot
+    # be located or checked after `data/current` advances.
+    if (
+            any(
+                isinstance(paper, dict)
+                and 'freshRewriteProvenance' in paper
+                for paper in published_papers
+            )
+            and input_source_reference is None
+    ):
+        raise PublishDataValidationError(
+            'freshRewriteProvenance 发布论文缺少 generation inputSourceReference'
+        )
+    if input_source_reference is not None:
+        # Check source bytes before fingerprint replay, so a changed archive or
+        # --data-file reports source drift rather than a generic mismatch.
+        validate_generation_input_source_reference(manifest, date_str)
     expected_input = generation_input_fingerprint(
         published_papers, date_str, category, publish_all,
         scope.get('includeId') if scope else None,
+        input_source_reference=input_source_reference,
     )
     if actual_input != expected_input:
         raise PublishDataValidationError(
@@ -8080,7 +8622,7 @@ def save_generation_manifest(
     date_str, publish_paths, *, input_fingerprint=None,
     template_fingerprint=None, base_head=None, category='论文速递',
     published_papers=None, publish_all=False, include_id=None,
-    publication_mode=None,
+    publication_mode=None, input_source_reference=None,
 ):
     """Save the exact generated/removed path list for the separate review step."""
     _require_active_publication_request(include_id)
@@ -8134,7 +8676,7 @@ def save_generation_manifest(
             raise PublishDataValidationError('正式 generation manifest publishAll 必须是布尔值')
         expected_input = generation_input_fingerprint(
             published_papers, validated_date, validated_category, publish_all,
-            include_id,
+            include_id, input_source_reference=input_source_reference,
         )
         if input_fingerprint != expected_input:
             raise PublishDataValidationError(
@@ -8158,6 +8700,8 @@ def save_generation_manifest(
             'llmApiBindings': api_bindings,
             'publicationMode': publication_mode,
         })
+        if input_source_reference is not None:
+            manifest['inputSourceReference'] = input_source_reference
         publication_scope_value = _single_publication_scope(include_id)
         if publication_scope_value is not None:
             _validate_publication_scope(
@@ -8464,6 +9008,8 @@ def load_generation_manifest(date_str):
                 )
         paths.append(target)
     validate_generation_visual_contract(manifest, date_str, repo)
+    if manifest.get('schemaVersion') == 3:
+        _validate_generation_input_integrity(manifest, date_str)
     return paths, manifest_path
 
 
@@ -8870,6 +9416,7 @@ def reusable_verified_publication_generation(
         repo = Path(BLOG_REPO).expanduser().resolve()
         validate_generation_visual_contract(manifest, date_str, repo)
         validate_generation_manifest_file_bytes(manifest_path, date_str)
+        _validate_generation_input_integrity(manifest, date_str)
 
         receipt = _load_json_object(receipt_path, '审查凭证')
         publication_commit = str(receipt.get('publicationCommit') or '').lower()
@@ -8915,6 +9462,8 @@ def reusable_verified_publication_generation(
             != manifest.get('manualV6ProductionFingerprint')
             or receipt.get('llmApiProductionFingerprint')
             != manifest.get('llmApiProductionFingerprint')
+            or receipt.get('generationInputSourceReference')
+            != manifest.get('inputSourceReference')
         ):
             return None
 
@@ -9138,6 +9687,10 @@ def save_review_receipt(
         ),
         'generationInputFingerprint': generation_input_fingerprint_value,
         'publishedPapersFingerprint': published_snapshot_fingerprint,
+        'generationInputSourceReference': (
+            generation_payload.get('inputSourceReference')
+            if generation_schema == 3 else None
+        ),
         # Explicitly bind whether this reviewed generation can enter the modern
         # post-publication visual state machine. The generation SHA remains the
         # cryptographic source of truth; this field makes maintenance intent
@@ -9673,11 +10226,15 @@ def load_verified_review_receipt(date_str):
     publication_scope_value = _validate_active_publication_scope(generation_manifest)
     validate_generation_visual_contract(generation_manifest, date_str)
     validate_generation_manifest_file_bytes(manifest_path, date_str)
+    if generation_manifest.get('schemaVersion') == 3:
+        _validate_generation_input_integrity(generation_manifest, date_str)
     if generation_manifest.get('schemaVersion') == 3 and (
         receipt.get('generationInputIntegrity') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT
         or receipt.get('generationInputFingerprint') != generation_manifest.get('inputFingerprint')
         or receipt.get('publishedPapersFingerprint')
         != generation_manifest.get('publishedPapersFingerprint')
+        or receipt.get('generationInputSourceReference')
+        != generation_manifest.get('inputSourceReference')
     ):
         raise PublishDataValidationError('审查凭证未绑定已反向验证的 generation 输入快照')
     if (
@@ -9943,6 +10500,7 @@ def generate_main(options=None):
         sys.exit(1)
     print(f"📅 博客日期: {today}")
     sealed_preview = None
+    input_source_reference = None
     if sealed_tutorial_preview:
         publication_mode = SEALED_TUTORIAL_PREVIEW_MODE
         normalized_include = normalize_publish_arxiv_id(include_id)
@@ -9962,6 +10520,11 @@ def generate_main(options=None):
         data_file = select_generation_data_file(
             data_file, today, publish_all, legacy_v5_maintenance,
         )
+        input_source_reference = build_generation_input_source_reference(data_file)
+        # This preflight is intentionally before paper filtering and Markdown
+        # generation: a daily API record that claims fresh provenance must
+        # prove the full sealed selected set, not only a later subset.
+        validate_daily_fresh_sources_for_publish(data_file, today)
         papers = load_papers(data_file)
         # 优先使用抓取器写入的不可变 fetchBatchDate，旧数据才回退严格北京 fetchedAt。
         if not publish_all:
@@ -10025,6 +10588,7 @@ def generate_main(options=None):
 
     input_fingerprint = generation_input_fingerprint(
         papers, today, category, publish_all, normalized_include,
+        input_source_reference=input_source_reference,
     )
     template_fingerprint = generation_template_fingerprint()
     base_head = validate_git_publish_branch()
@@ -10195,6 +10759,7 @@ def generate_main(options=None):
         publish_all=publish_all,
         include_id=normalized_include,
         publication_mode=publication_mode,
+        input_source_reference=input_source_reference,
     )
     generation_journal_path(today).unlink(missing_ok=True)
     shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)

@@ -7,37 +7,39 @@ const Config = require('./config.js');
 const api = require('./lib/historical-arxiv-batch.js');
 const crosswalkApi = require('./lib/page-source-crosswalk.js');
 
-const USAGE = '--dry-run|--apply --crosswalk UUID --owner OWNER [--limit pilot|N] [--concurrency 1-3]';
+const USAGE = '--dry-run|--apply --crosswalk UUID --owner OWNER --handoffs NAME.json[,NAME.json...] [--concurrency 1-3]';
 function parseArgs(argv) {
     const [mode, ...rest] = argv;
     if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`Use ${USAGE}`);
     const values = {};
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
-        if (!['--crosswalk', '--owner', '--limit', '--concurrency'].includes(flag) || value === undefined || Object.hasOwn(values, flag)) {
+        if (!['--crosswalk', '--owner', '--handoffs', '--concurrency'].includes(flag) || value === undefined || Object.hasOwn(values, flag)) {
             throw new Error(`Use ${USAGE}`);
         }
         values[flag] = value;
     }
+    const handoffNames = String(values['--handoffs'] || '').split(',').filter(Boolean);
     if (!crosswalkApi.UUID_RE.test(String(values['--crosswalk'] || ''))
         || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(String(values['--owner'] || ''))
-        || (values['--limit'] !== undefined && values['--limit'] !== 'pilot'
-            && !/^[1-9]\d{0,4}$/.test(values['--limit']))
+        || !handoffNames.length || new Set(handoffNames).size !== handoffNames.length
+        || handoffNames.some(name => !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(name)
+            || !name.startsWith('arxiv-fresh-failure-'))
         || (values['--concurrency'] !== undefined && !/^[1-3]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
-    return { apply: mode === '--apply', crosswalkId: values['--crosswalk'], owner: values['--owner'],
-        limit: values['--limit'] === undefined ? null : values['--limit'] === 'pilot' ? 'pilot' : Number(values['--limit']),
+    return { apply: mode === '--apply', crosswalkId: values['--crosswalk'], owner: values['--owner'], handoffNames,
         concurrency: values['--concurrency'] === undefined ? 2 : Number(values['--concurrency']) };
 }
 
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-arxiv-batch.js');
     const options = parseArgs(argv); const files = runtime.files || Config.FILES;
-    for (const key of ['pageSourceCrosswalkDir', 'paperSourceAuthorityDir', 'historicalArxivBatchDir']) {
+    for (const key of ['pageSourceCrosswalkDir', 'paperSourceAuthorityDir', 'historicalArxivBatchDir',
+        'historicalArxivFreshFailureHandoffDir']) {
         if (typeof files[key] !== 'string' || !path.isAbsolute(files[key])) throw new Error(`${key} must be a configured absolute path`);
     }
     const result = await (runtime.runBatch || api.runSingleHintBatch)({ ...options,
         crosswalkRoot: files.pageSourceCrosswalkDir, authorityRoot: files.paperSourceAuthorityDir,
-        batchRoot: files.historicalArxivBatchDir });
+        handoffRoot: files.historicalArxivFreshFailureHandoffDir, batchRoot: files.historicalArxivBatchDir });
     console.log(JSON.stringify(result)); return result;
 }
 

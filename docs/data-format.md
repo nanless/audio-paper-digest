@@ -45,9 +45,28 @@ Node 与 Python 使用同一目录锁协议和耐久原子写；锁只覆盖选�
 
 默认 API canonical。每篇至少包含 metadata、analysis、parsed、source identity、stage checkpoints、analysis manifest、评分与 Reader production bindings。完整性要求 deep 论文集精确覆盖 filtered，且每篇所有必需阶段终态闭合。
 
+当 payload 声明 `dailyFreshSourceRun` 时，它必须是 `daily-fresh-source-reference-v1`，精确绑定 batchDate、
+完整的 canonical paper set、run manifest SHA 和 source-set SHA。每篇 `freshRewriteProvenance` 以及
+`analysisManifest.freshRewriteProvenance` 都必须逐字匹配该 run 中的 `source.txt`、`source.pdf`、
+`source-runtime.json` 与 `source-manifest.json` SHA。少一份文件、存在额外文件、来源/集合漂移或混入 legacy
+provenance 都不能成为默认 API production。
+
+## 日更 sealed source run
+
+日更 run 位于 `data/runtime/daily-fresh-source-runs/<runId>/`。它的计划合同为
+`daily-fresh-source-run-v1`，每个 `<arxivId>/generation-000001/` 只能包含四个私有文件：
+
+- `source.txt`：本次官方全文文本；
+- `source.pdf`：本次官方 PDF 原字节；
+- `source-runtime.json`：结构化 artifacts、作者/图像 URL 等无像素 metadata，并绑定 TXT SHA；
+- `source-manifest.json`：四件 source 文件、官方 URL、提取器、字节数和 SHA 的封口。
+
+这些是可重放证据，不是可按日期归档轮换的缓存。图像字节、base64、缓存路径和临时文件名不得写进该目录。
+
 ## 分析来源与恢复
 
-`analysisSource` 记录来源类型、请求 ID、原始/全文/实际输入长度、截断、SHA、警告和置信度。来源 SHA 变化会失效主分析及下游。
+`analysisSource` 记录来源类型、请求 ID、原始/全文/实际输入长度、截断、SHA、警告和置信度。默认 API 的
+`analysisSource` 必须与上节 sealed source generation 一致；来源 SHA 变化会失效主分析及下游。
 
 失败时保留：
 

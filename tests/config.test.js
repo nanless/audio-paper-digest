@@ -148,6 +148,27 @@ describe('config', () => {
         assert.strictEqual(path.basename(Config.FILES.digestCoverManifestDir), 'digest-cover-manifests');
         assert.strictEqual(Config.FILES.digestCoverAssetDir, Config.ARCHIVE_DIR);
         assert.strictEqual(path.basename(Config.FILES.visualSummaryManifest), 'visual-summary-manifest.json');
+        for (const key of ['dailyFreshSourceRunsDir', 'freshArxivFetchedSourcesDir',
+            'historicalDirectRewriteInputCatalogDir',
+            'historicalDirectRewritePlanDir', 'historicalDirectRewriteRegistryDir',
+            'historicalDirectRewriteExecutionDir', 'historicalDirectRewriteStagingDir',
+            'historicalDirectAggregateDir', 'historicalConferenceLocalSourcesDir']) {
+            assert.ok(path.isAbsolute(Config.FILES[key]), `${key} must be an absolute runtime path`);
+            assert.ok(Config.FILES[key].includes(`${path.sep}runtime${path.sep}`), `${key} must remain in runtime`);
+        }
+        assert.strictEqual(path.basename(Config.FILES.historicalDirectRewriteInputCatalogDir), 'direct-local-inputs');
+        assert.strictEqual(Object.hasOwn(Config.FILES, 'historicalDirectRewriteInputCatalogDir'), true);
+    });
+
+    it('历史 ICLR accepted metadata/PDF 根目录有稳定默认值且可由项目 .env 覆写', () => {
+        withProjectEnv('', (Config) => {
+            assert.strictEqual(Config.HISTORICAL_CONFERENCE_CONFIG.iclr2026AcceptedRoot,
+                path.join(os.homedir(), 'code/github_repos/iclr2026-paper-scraper'));
+        });
+        withProjectEnv('PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=~/retained/iclr-2026', (Config) => {
+            assert.strictEqual(Config.HISTORICAL_CONFERENCE_CONFIG.iclr2026AcceptedRoot,
+                path.join(os.homedir(), 'retained/iclr-2026'));
+        });
     });
 
     it('项目 .env 覆写 PD_ANALYSIS_CONCURRENCY', () => {

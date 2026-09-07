@@ -27,9 +27,13 @@ PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
 PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
+# Optional: local accepted metadata/PDF root for the historical ICLR 2026 direct route
+PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```
 
 The documented default is OpenCode Go Muse Spark 1.2 Contributor over OpenAI Responses. Public endpoints must use HTTPS; HTTP is accepted only for loopback test services.
+
+`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` is only for the historical ICLR 2026 direct route. It must identify the retained local official accepted metadata/PDF root. When unset, it defaults to `~/code/github_repos/iclr2026-paper-scraper`; it is neither a daily-fetch input nor a download trigger.
 
 `PAPER_ANALYZER_FALLBACK_API_KEYS` is not load balancing. The current account remains sticky until OpenCode Go returns HTTP 429 with an explicit structured `GoUsageLimitError`; only then is the next account tried immediately. `PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` is a fixed trailing third-priority account, used after every normal fallback account. Active/cooldown state persists across Node, Python, and dates in `data/runtime/llm-account-pool.json`, and an expired earlier account does not automatically take traffic back. The file contains no raw key but does contain stable credential fingerprints, so it remains `0600` sensitive operational metadata. Generic 429, 5xx, network/proxy errors, truncation, and content-contract failures never switch accounts. Use `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS` only when an explicitly configured secondary model needs its own pool. A secondary route without its own key inherits the primary pool only when both normalized endpoints identify the same canonical OpenCode Go service; a different service must provide its own key and never inherits the primary pool. Before credentials are attached, the actual request URL must exactly match the canonical API route derived from the endpoint and model.
 
@@ -50,6 +54,19 @@ Do not rely on `.zshrc`, IDE, Trae, or Codex variables to fill missing project c
 | external images/demos | HTTPS only; public-IP validation per hop |
 
 A missing proxy is an explicit failure, never a direct fallback. Project scripts that reach a local proxy must run outside the sandbox.
+
+## PDF/TXT source storage
+
+The default daily route never treats an old capture cache as analysis input. After filtering, `full-fetch.js`
+uses the project proxy to freshly capture official arXiv HTML text and PDF for every selected ID, sealing a
+private four-file generation (TXT, PDF, runtime metadata, manifest) under
+`data/runtime/daily-fresh-source-runs/`. This directory is production replay evidence and `storage:prune`
+never removes it. Figure pixels exist only in the active model call's OS-temporary directory.
+
+The historical direct route likewise freshly captures every arXiv generation under
+`data/runtime/fetched-arxiv-sources/`; only pure conference entries replay retained local metadata/PDF SHA.
+`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` may explicitly locate a local ICLR accepted corpus for the conference
+local-source collector. It is never an arXiv writing input.
 
 ## Capacity Defaults
 

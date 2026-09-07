@@ -15,6 +15,7 @@ const {
     apiReaderV3BindsCanonical
 } = require('./analysis-engine.js');
 const { setupScriptLogging } = require('./log-setup.js');
+const { validateDailyFreshSourceRun } = require('./validate-data-files.js');
 const {
     cardTaskToken,
     validateCompletedCard,
@@ -457,10 +458,16 @@ function buildDigestRunReport(targetDate, options = {}) {
         && deepBatch.every(productionV6PaperComplete);
     const llmApiComplete = deepBatch.length > 0
         && deepBatch.every(llmApiPaperComplete);
+    const dailySourceIssues = [];
+    if (deep && !Array.isArray(deep)) {
+        validateDailyFreshSourceRun(deepSnapshot.path || Config.FILES.deepAnalysisResult, deep, deepBatch, dailySourceIssues);
+    }
+    const dailySourceComplete = llmApiComplete && dailySourceIssues.length === 0
+        && Boolean(deep?.dailyFreshSourceRun);
     const analysisPublicationMode = productionV6Complete
         ? 'manual_v6_production'
         : (llmApiComplete ? 'llm_api_production' : 'invalid_or_legacy');
-    const productionAnalysisComplete = productionV6Complete || llmApiComplete;
+    const productionAnalysisComplete = productionV6Complete || (llmApiComplete && dailySourceComplete);
     const unresolvedScoringIds = deepBatch.filter(paper => {
         const scoring = paper?.analysisManifest?.stages?.scoringAudit;
         return scoring?.scoringContract === 'api-scoring-audit-v2'
@@ -482,6 +489,9 @@ function buildDigestRunReport(targetDate, options = {}) {
             ? '深度分析集合未精确覆盖筛选结果'
             : '正式 current canonical 既不是完整 Manual v6，也不是完整 LLM API production'
     );
+    if (llmApiComplete && !dailySourceComplete) {
+        errors.push(`日更 sealed TXT/PDF source run 不完整: ${dailySourceIssues.join('; ') || '缺少 dailyFreshSourceRun'}`);
+    }
     if (!reviewComplete) errors.push('博客严格 review 或远端发布验证未完成');
     if (!visualGateComplete) errors.push('TOP 10 论文长图状态或资产校验未完成');
     if (!coverGateComplete) errors.push('汇总封面状态或资产校验未完成');
@@ -526,7 +536,12 @@ function buildDigestRunReport(targetDate, options = {}) {
             successful: successful.length,
             failed: failed.length,
             failedIds: failed.map(normalizedId).filter(Boolean),
-            scoringStabilityUnresolvedIds: unresolvedScoringIds
+            scoringStabilityUnresolvedIds: unresolvedScoringIds,
+            dailyFreshSource: {
+                complete: dailySourceComplete,
+                reference: deep?.dailyFreshSourceRun || null,
+                issues: dailySourceIssues
+            }
         },
         blog: {
             complete: reviewComplete,

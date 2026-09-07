@@ -1,0 +1,48 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const api = require('../scripts/lib/historical-conference-crawl-authority.js');
+function pdf() { return Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n'); }
+function fixture(t) { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-crawl-authority-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); const dataRoot = path.join(root, 'data'); const current = path.join(dataRoot, 'current'); const pdfRoot = path.join(dataRoot, 'pdfs', 'icml2026'); fs.mkdirSync(current, { recursive: true, mode: 0o700 }); fs.mkdirSync(pdfRoot, { recursive: true, mode: 0o700 }); const id = 'AbCdef_12'; fs.writeFileSync(path.join(current, 'icml_2026_deep_analysis.json'), JSON.stringify({ papers: [{ id, title: 'Metadata title only', fullText: 'must not enter identity authority' }] }), { mode: 0o600 }); fs.writeFileSync(path.join(pdfRoot, `${id}.pdf`), pdf(), { mode: 0o600 }); for (const name of ['icassp_2026_deep_analyzers.json', 'iclr_2026_deep_analyzers.json']) fs.writeFileSync(path.join(current, name), JSON.stringify({ papers: [] }), { mode: 0o600 }); return { root, dataRoot, identityRoot: path.join(root, 'identities'), id, pdf: path.join(pdfRoot, `${id}.pdf`) }; }
+test('retained current ICML metadata plus ID-named local PDF creates a replayable identity-only authority', t => { const f = fixture(t); const index = api.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const match = index.matches.get(`openreview-forum-id:${f.id}`)[0]; assert.equal(match.metadataRelativePath, 'current/icml_2026_deep_analysis.json'); assert.equal(match.pdfAbsolutePath, f.pdf); const prepared = api.prepareConferenceCrawlAuthority({ identityRoot: f.identityRoot, dataRoot: f.dataRoot, match, apply: true }); const snapshot = api.authorityHandleSnapshot(prepared.authorityHandle); assert.equal(snapshot.productionAuthorized, true); assert.equal(snapshot.authority.identity.kind, 'conference'); assert.equal(snapshot.authority.identity.externalId.value, f.id); assert.equal(snapshot.authority.identity.source.status, 'unavailable'); assert.equal(JSON.stringify(snapshot.authority).includes('must not enter identity authority'), false); assert.equal(api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle); fs.appendFileSync(f.pdf, 'changed'); assert.throws(() => api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), /PDF bytes no longer match/); });
+test('scanner refuses title-only records and never invents an ID-to-PDF match', t => { const f = fixture(t); const file = path.join(f.dataRoot, 'current', 'icml_2026_deep_analysis.json'); fs.writeFileSync(file, JSON.stringify({ papers: [{ title: 'Same title', fullText: 'x' }] }), { mode: 0o600 }); const index = api.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); assert.equal(index.matches.size, 0); });
+
+test('exact normalized frontmatter title fingerprints bind a frozen page to one retained conference identity without retaining either title', t => {
+    const f = fixture(t); const blogRoot = path.join(f.root, 'blog'); const pagePath = 'content/posts/icassp2026-paper.md'; const pageFile = path.join(blogRoot, pagePath);
+    fs.mkdirSync(path.dirname(pageFile), { recursive: true, mode: 0o700 });
+    const pageBytes = Buffer.from('---\ntitle: "Ａudio  Paper"\ndate: 2026-05-01\n---\nBody must never become title evidence.\n', 'utf8');
+    fs.writeFileSync(pageFile, pageBytes, { mode: 0o600 }); const pageKey = `page:${'a'.repeat(64)}`;
+    const id = '100'; const pdfPath = path.join(f.root, 'icassp.pdf'); fs.writeFileSync(pdfPath, pdf(), { mode: 0o600 });
+    fs.writeFileSync(path.join(f.dataRoot, 'current', 'icassp_2026_deep_analyzers.json'), JSON.stringify({ papers: [
+        { arnumber: id, paper_id: id, title: 'audio paper', pdfPath, analysis: 'must not enter authority' }
+    ] }), { mode: 0o600 });
+    const index = api.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const match = index.matches.get(`icassp-arnumber:${id}`)[0];
+    const state = { source: { papers: [{ pageKey, pagePath, pageContentSha256: crypto.createHash('sha256').update(pageBytes).digest('hex'),
+        scope: { type: 'conference', key: 'icassp-2026' }, identityHints: { status: 'none', candidates: [] } }] }, assignments: { [pageKey]: { status: 'pending' } } };
+    const groups = api.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); assert.deepEqual(groups[0].pageKeys, [pageKey]);
+    const prepared = api.prepareConferenceCrawlAuthority({ identityRoot: f.identityRoot, dataRoot: f.dataRoot, blogRoot,
+        match, titleBindings: groups[0].titleBindings, apply: true }); const stored = api.authorityHandleSnapshot(prepared.authorityHandle).authority;
+    assert.equal(stored.titleBindings.length, 1); assert.equal(JSON.stringify(stored).includes('Ａudio  Paper'), false); assert.equal(JSON.stringify(stored).includes('audio paper'), false);
+    assert.equal(api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle);
+    fs.writeFileSync(pageFile, Buffer.from('---\ntitle: Changed\ndate: 2026-05-01\n---\nBody\n', 'utf8'), { mode: 0o600 });
+    assert.throws(() => api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), /frozen crosswalk page|title binding changed/);
+});
+
+test('an ICASSP conflict hint is eligible only when its frozen title binding agrees exactly with retained metadata and PDF', t => {
+    const f = fixture(t); const blogRoot = path.join(f.root, 'blog'); const pagePath = 'content/posts/icassp2026-conflict.md'; const pageFile = path.join(blogRoot, pagePath);
+    fs.mkdirSync(path.dirname(pageFile), { recursive: true, mode: 0o700 }); const pageBytes = Buffer.from('---\ntitle: Agreement Paper\ndate: 2026-05-01\n---\nNo body input.\n'); fs.writeFileSync(pageFile, pageBytes, { mode: 0o600 });
+    const id = '101'; const pdfPath = path.join(f.root, 'agreement.pdf'); fs.writeFileSync(pdfPath, pdf(), { mode: 0o600 }); fs.writeFileSync(path.join(f.dataRoot, 'current', 'icassp_2026_deep_analyzers.json'), JSON.stringify({ papers: [{ arnumber: id, paper_id: id, title: 'agreement paper', pdfPath }] }), { mode: 0o600 });
+    const pageKey = `page:${'b'.repeat(64)}`; const state = { source: { papers: [{ pageKey, pagePath, pageContentSha256: crypto.createHash('sha256').update(pageBytes).digest('hex'), scope: { type: 'conference', key: 'icassp-2026' }, identityHints: { status: 'conflict', candidates: [{ scheme: 'arxiv', value: '2601.00001', sources: ['body:arxiv-link'] }, { scheme: 'arxiv', value: '2601.00002', sources: ['body:arxiv-link'] }] } }] }, assignments: { [pageKey]: { status: 'pending' } } };
+    const index = api.scanRetainedConferenceCrawlers({ dataRoot: f.dataRoot }); const groups = api.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); assert.equal(groups[0].externalId.value, id);
+    fs.writeFileSync(pageFile, Buffer.from('---\ntitle: Different Paper\ndate: 2026-05-01\n---\nNo body input.\n'), { mode: 0o600 }); assert.throws(() => api.titleRecoveryGroups({ state, blogRoot, matches: index.matches }), /frozen crosswalk page/);
+});
+
+test('external local ICLR accepted metadata plus its ID-named PDF creates a replayable title-bound authority', t => {
+    const f = fixture(t); const acceptedRoot = path.join(f.root, 'iclr'); const metadata = path.join(acceptedRoot, 'data', 'iclr2026_accepted.json'); const pdfRoot = path.join(acceptedRoot, 'data', 'pdfs'); fs.mkdirSync(pdfRoot, { recursive: true, mode: 0o700 }); const id = 'q05hC1Pzkr'; fs.writeFileSync(path.join(pdfRoot, `${id}.pdf`), pdf(), { mode: 0o600 }); fs.writeFileSync(metadata, JSON.stringify([{ forum_id: id, title: 'ICLR Accepted Local Paper' }]), { mode: 0o600 });
+    const blogRoot = path.join(f.root, 'blog'); const pagePath = 'content/posts/iclr2026-paper.md'; const pageFile = path.join(blogRoot, pagePath); fs.mkdirSync(path.dirname(pageFile), { recursive: true, mode: 0o700 }); const pageBytes = Buffer.from('---\ntitle: iclr accepted local paper\ndate: 2026-05-01\n---\nNo body input.\n'); fs.writeFileSync(pageFile, pageBytes, { mode: 0o600 }); const pageKey = `page:${'c'.repeat(64)}`;
+    const state = { source: { papers: [{ pageKey, pagePath, pageContentSha256: crypto.createHash('sha256').update(pageBytes).digest('hex'), scope: { type: 'conference', key: 'iclr-2026' }, identityHints: { status: 'none', candidates: [] } }] }, assignments: { [pageKey]: { status: 'pending' } } }; const fingerprints = new Set([api.pageTitleBinding({ blogRoot, pageKey, pagePath, pageContentSha256: state.source.papers[0].pageContentSha256 }).titleFingerprintSha256]); const index = api.scanIclrAcceptedMatches({ iclrAcceptedRoot: acceptedRoot, titleFingerprintSha256s: fingerprints }); const groups = api.titleRecoveryGroups({ state, blogRoot, matches: index.matches }); assert.equal(groups.length, 1); const prepared = api.prepareConferenceCrawlAuthority({ identityRoot: f.identityRoot, dataRoot: f.dataRoot, blogRoot, iclrAcceptedRoot: acceptedRoot, match: groups[0].match, titleBindings: groups[0].titleBindings, apply: true }); assert.equal(api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle); assert.equal(JSON.stringify(api.authorityHandleSnapshot(prepared.authorityHandle).authority).includes('ICLR Accepted Local Paper'), false);
+});

@@ -21,6 +21,7 @@ const {
     canReclaimFileLock,
     inspectFileLockState,
     withFileLock,
+    HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY,
     mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
     scoringStabilityIsResolved,
@@ -1171,6 +1172,17 @@ describe('analyzePaperWithRetry', () => {
         assert.match(contract.validateCoreSummaryStageBinding(paper), /中文字符不足/);
     });
 
+    it('核心摘要在 taxonomySeal 后绑定 taxonomy 输出而不是更早的 structureRepair 输出', () => {
+        const contract = require('../scripts/analysis-contract.js');
+        const paper = validAnalysisPaper('2604.00023');
+        paper.analysisManifest.stages.structureRepair.outputAnalysisSha256 = '0'.repeat(64);
+
+        assert.strictEqual(
+            contract.validateCoreSummaryStageBinding(paper),
+            null
+        );
+    });
+
     it('失败重试不覆盖旧成功正文，但合并恢复元数据供下次续跑', () => {
         const complete = {
             arxivId: '2604.00024', title: 'Existing', analysis: validAnalysisText(),
@@ -1616,6 +1628,40 @@ describe('analysis run status', () => {
         }), { mode: 0o600 });
         assert.throws(() => acquireFileLockSync(target, { timeoutMs: 20, staleMs: 60_000 }), /超时/);
         assert.strictEqual(fs.existsSync(path.join(lockPath, 'owner.json')), true);
+    });
+
+    it('scheduler recovery 只立即回收严格格式的本机 dead owner，其他锁仍受租约保护', () => {
+        const makeLock = (name, owner) => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), `paper-lock-scheduler-recovery-${name}-`));
+            const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+            fs.mkdirSync(lockPath, { mode: 0o700 }); fs.chmodSync(lockPath, 0o700);
+            if (owner) {
+                fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify(owner), { mode: 0o600 });
+                fs.chmodSync(path.join(lockPath, 'owner.json'), 0o600);
+            }
+            return { target, lockPath };
+        };
+        const lockOptions = { timeoutMs: 25, staleMs: 60_000,
+            recoveryPolicy: HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY };
+        const deadOwner = { pid: 2147483647, hostname: os.hostname(),
+            token: '98989898-9898-4898-8898-989898989898', acquiredAt: new Date().toISOString() };
+        const dead = makeLock('dead', deadOwner);
+        assert.throws(() => acquireFileLockSync(dead.target, { timeoutMs: 25, staleMs: 60_000 }), /超时/);
+        const release = acquireFileLockSync(dead.target, lockOptions);
+        assert.strictEqual(release(), true);
+        assert.strictEqual(fs.existsSync(dead.lockPath), false);
+
+        const live = makeLock('live', { ...deadOwner, pid: process.pid,
+            token: '97979797-9797-4797-8797-979797979797' });
+        assert.throws(() => acquireFileLockSync(live.target, lockOptions), /超时/);
+        const remote = makeLock('remote', { ...deadOwner, hostname: `${os.hostname()}-remote`,
+            token: '96969696-9696-4696-8696-969696969696' });
+        assert.throws(() => acquireFileLockSync(remote.target, lockOptions), /超时/);
+        const empty = makeLock('empty', null);
+        assert.throws(() => acquireFileLockSync(empty.target, lockOptions), /超时/);
+        const malformed = makeLock('malformed', { ...deadOwner,
+            token: 'not-a-uuid' });
+        assert.throws(() => acquireFileLockSync(malformed.target, lockOptions), /超时/);
     });
 
     it('只兼容回收冻结的旧式 0755/0644 本机 stale-dead owner', () => {

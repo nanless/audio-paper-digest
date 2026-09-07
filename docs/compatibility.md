@@ -6,6 +6,7 @@
 |---|---|---|---|
 | filter decision | decision contract v3 | 只在输入、模型和 Prompt 指纹匹配时复用 | 必须完整覆盖 raw candidates |
 | analysis manifest | manifest v1 + 当前阶段契约 | 旧阶段可用于显式恢复或迁移 | 必须满足 API 或 Manual 对应终态集合 |
+| 日更 source run | `daily-fresh-source-run-v1` + `daily-fresh-source-reference-v1` | 旧文本/PDF cache 只读，不能迁成 sealed run | 须重放当前 batch、完整 paper set 和每篇四文件 PDF/TXT/runtime/manifest 封口 |
 | API Reader | Reader v3 + source v4 + author/resource identity v1 | v1/v2 和缺任一当前来源合同的 v3 只读 | 只接受 article/plan/Figure/作者机构/资源状态及其来源 SHA 闭环 |
 | scoring audit | `api-scoring-audit-v2` | 旧评分可显示 | 必须重算八维总分并绑定最终 analysis |
 | generation manifest | schema v3 | v1/v2 仅显式历史维护 | 新日更只接受 v3、`publishedPapers` 和同质 proof |
@@ -14,6 +15,8 @@
 | visual summary | v3 TOP 10 | v1/v2 由显式迁移命令处理 | 必须绑定 publication commit/OID 与当前 token |
 | Manual canonical | production v6 | v5/shadow/sealed preview 只作历史维护 | 默认 API 不读取为自动分析证明 |
 | OpenCode Go account pool | `opencode-go-sticky-quota-failover-v1` | 未知版本拒绝覆盖 | 仅明确 `GoUsageLimitError` 改变 active/cooldown；不保存原始 key |
+| 历史 direct catalog/plan | `merged-good-historical-local-data-v3` / `historical-direct-rewrite-plan-v2` | legacy crosswalk/fresh run 仅 fallback 审计 | arXiv 必须是本 generation 新鲜官方 PDF/TXT；会议必须重放绑定的本地 metadata/PDF SHA；不读取旧博客正文 |
+| 历史 direct staging/aggregate | `historical-direct-*-v1` | 私有 runtime 工件可审计 | 只能 private staging；全历史 review、activation、commit/push receipt 和远端 OID 尚未实现 |
 
 ## 迁移原则
 
