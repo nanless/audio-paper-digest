@@ -11,6 +11,7 @@ const conferenceProjections = require('./historical-conference-page-projections.
 const localSources = require('./historical-conference-local-sources.js');
 const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 const icmlPosterApi = require('./historical-icml-poster-authority.js');
+const inputCatalogApi = require('./historical-direct-rewrite-input-catalog.js');
 
 const CONTRACT = 'historical-direct-rewrite-plan-v5';
 const VERSION = 5;
@@ -164,15 +165,34 @@ function sourceRoute(entry) {
     const sources = entry.sources.map(source => {
         try { return localSources.validateSource(source, entry.paperId); }
         catch (error) { fail(`${entry.paperId} local source binding is invalid: ${error.message}`); }
-    }).filter(source => source.pdf.availability === 'available'
-        && source.pdf.acquisition?.versionRelation !== 'author-prior-preprint-with-different-title')
+    }).filter(source => inputCatalogApi.directEligibleConferenceSource(source, entry.paperId))
         .map(source => ({ sourceSet: String(source.sourceSet || ''), provenance: String(source.provenance || ''),
             metadata: clone(source.metadata), pdf: clone(source.pdf), sourceBindingSha256: source.sourceBindingSha256 }))
         .sort((left, right) => stableHash(left).localeCompare(stableHash(right)));
     if (!sources.length) fail(`${entry.paperId} does not have a usable local conference PDF`);
+    const sourceDisclosure = conferenceSourceDisclosure(entry.paperId, sources);
     return { kind: 'conference-local-pdf', writerInputs: sources,
+        ...(sourceDisclosure ? { sourceDisclosure } : {}),
         failurePolicy: { kind: 'local-conference-source-failure', crosswalkPrerequisite: false,
             historicalLinkUse: 'never' } };
+}
+
+function conferenceSourceDisclosure(paperId, sources) {
+    const disclosures = sources.map(source => inputCatalogApi.priorPreprintSourceDisclosure(source, paperId))
+        .filter(Boolean);
+    if (disclosures.length > 1) fail(`${paperId} has multiple prior-preprint disclosures`);
+    return disclosures[0] || null;
+}
+
+function normalizeConferenceSourceDisclosure(value, paperId, sources) {
+    const expected = conferenceSourceDisclosure(paperId, sources);
+    if (expected === null) {
+        if (value !== undefined && value !== null) fail('conference source disclosure drifted');
+        return null;
+    }
+    if (value === undefined || value === null) fail('conference source disclosure is required');
+    if (stableHash(value) !== stableHash(expected)) fail('conference source disclosure drifted');
+    return expected;
 }
 
 function normalizeHistoricalArxivLink(value, expectedArxivId) {
@@ -344,6 +364,11 @@ function normalizePlan(value) {
         paperIds.add(item.paperId);
         const route = clone(item.route);
         const expectedRoute = item.paperId.startsWith('arxiv:') ? 'arxiv-fresh-fetch' : 'conference-local-pdf';
+        const hasSourceDisclosure = Object.hasOwn(route, 'sourceDisclosure');
+        exact(route, expectedRoute === 'arxiv-fresh-fetch'
+            ? ['kind', 'arxivId', 'writerInputs', 'freshFetch', 'failurePolicy']
+            : ['kind', 'writerInputs', ...(hasSourceDisclosure ? ['sourceDisclosure'] : []), 'failurePolicy'],
+        'direct rewrite route');
         if (route.kind !== expectedRoute || !Array.isArray(route.writerInputs)
             || route.failurePolicy?.crosswalkPrerequisite !== false) fail('direct rewrite route is malformed');
         if (expectedRoute === 'arxiv-fresh-fetch' && (route.writerInputs.length !== 0
@@ -362,9 +387,13 @@ function normalizePlan(value) {
                 catch (error) { fail(`conference writer source binding is invalid: ${error.message}`); }
             });
             if (route.writerInputs.some(source =>
-                source.pdf.acquisition?.versionRelation === 'author-prior-preprint-with-different-title')) {
-                fail('cross-version prior preprint cannot enter a direct writer route');
+                !inputCatalogApi.directEligibleConferenceSource(source, item.paperId))) {
+                fail('conference writer source is not eligible for the direct route');
             }
+            const sourceDisclosure = normalizeConferenceSourceDisclosure(route.sourceDisclosure,
+                item.paperId, route.writerInputs);
+            if (sourceDisclosure) route.sourceDisclosure = sourceDisclosure;
+            else if (hasSourceDisclosure) fail('ordinary conference route must not carry a source disclosure field');
         }
         const pages = item.pages.map((page, pageIndex) => {
             exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'scope', 'pageContentSha256', 'mapping',
@@ -1046,6 +1075,7 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
 
 module.exports = { CONTRACT, VERSION, CATALOG_CONTRACT, SAFE_NAME_RE, HistoricalDirectRewritePlanError,
     stableHash, deterministicRunId, normalizeCatalog, normalizeInventory, arxivPageProjections, sourceRoute,
+    conferenceSourceDisclosure, normalizeConferenceSourceDisclosure,
     normalizeHistoricalArxivLink, buildDirectRewritePlan, normalizePlan, writePlan,
     UNPROJECTED_REPORT_CONTRACT, UNPROJECTED_REPORT_VERSION, UNPROJECTED_REPORT_PREFIX,
     buildUnprojectedCatalogReport, normalizeUnprojectedCatalogReport, unprojectedCatalogReportName,

@@ -13,6 +13,9 @@ const renderer = require('./historical-page-staging.js');
 
 const CONTRACT = 'historical-direct-paper-page-staging-v1';
 const VERSION = 1;
+const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
+const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = 'historical-author-prior-preprint-disclosure-v1';
+const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
 const SHA = /^[a-f0-9]{64}$/;
 
 class HistoricalDirectPageStagingError extends Error {
@@ -135,11 +138,70 @@ function normalizeRendererResult(value, page) {
         return { bytes, record: { path: asset.path, sha256: sha256(bytes), size: bytes.length } };
     }) };
 }
-function buildManifest({ item, projection, source, analysis, stagingInputSha256, stagingBindingSha256,
+function markdownInline(value) {
+    return String(value).replace(/\s+/g, ' ').trim().replace(/([\\`*_[\]<>])/g, '\\$1');
+}
+function priorPreprintDisclosureProof(item) {
+    const acquisition = item?.route?.writerInputs?.[0]?.pdf?.acquisition;
+    const disclosure = item?.route?.sourceDisclosure;
+    if (acquisition?.versionRelation !== PRIOR_PREPRINT_VERSION_RELATION) {
+        if (Object.hasOwn(item?.route || {}, 'sourceDisclosure')) fail(`${item.paperId} ordinary source cannot carry a prior-preprint disclosure`);
+        return null;
+    }
+    exact(disclosure, ['contract', 'version', 'paperId', 'icmlTitle', 'preprintTitle', 'doi', 'versionRelation',
+        'sourceKind', 'receiptSelfSha256', 'sourceBindingSha256', 'cameraReady', 'openreviewResponseBytes',
+        'statement', 'disclosureSha256'], `${item.paperId} prior-preprint disclosure`);
+    const body = clone(disclosure); delete body.disclosureSha256;
+    if (item.paperId !== PRIOR_PREPRINT_PAPER_ID || disclosure.contract !== PRIOR_PREPRINT_DISCLOSURE_CONTRACT
+        || disclosure.version !== 1 || disclosure.paperId !== item.paperId
+        || typeof disclosure.icmlTitle !== 'string' || !disclosure.icmlTitle.trim()
+        || disclosure.preprintTitle !== acquisition.sourceTitle || disclosure.doi !== acquisition.sourceDoi
+        || disclosure.versionRelation !== acquisition.versionRelation || disclosure.sourceKind !== acquisition.sourceKind
+        || disclosure.receiptSelfSha256 !== acquisition.receipt?.selfSha256
+        || disclosure.sourceBindingSha256 !== item.route.writerInputs[0].sourceBindingSha256
+        || disclosure.cameraReady !== false || disclosure.openreviewResponseBytes !== false
+        || disclosure.statement !== 'This input is an author prior preprint with a different title; it is neither the ICML camera-ready paper nor OpenReview response bytes.'
+        || !SHA.test(String(disclosure.disclosureSha256 || ''))
+        || disclosure.disclosureSha256 !== stableHash(body)) {
+        fail(`${item.paperId} prior-preprint disclosure is not bound to its source route`);
+    }
+    return clone(disclosure);
+}
+function priorPreprintPageDisclosure(item) {
+    const disclosure = priorPreprintDisclosureProof(item);
+    if (!disclosure) return null;
+    const sourceTitle = markdownInline(disclosure.preprintTitle);
+    const sourceDoi = markdownInline(disclosure.doi);
+    if (!sourceTitle || !sourceDoi) fail(`${item.paperId} prior-preprint disclosure lacks its source title or DOI`);
+    return [
+        '> **⚠️ 来源版本说明（非 Camera-ready）**',
+        '>',
+        '> 本页分析使用可访问的作者早期预印本，**不是会议 camera-ready 定稿**。',
+        `> 预印本标题：${sourceTitle}`,
+        `> DOI：${sourceDoi}`,
+        '> 标题、内容、实验结果和结论可能与会议最终版本不同；本文不代表已核验 camera-ready 版本。'
+    ].join('\n');
+}
+function injectTopDisclosure(markdown, disclosure) {
+    if (!disclosure) return markdown;
+    const newline = markdown.startsWith('---\r\n') ? '\r\n' : '\n';
+    if (markdown.startsWith(`---${newline}`)) {
+        const delimiter = `${newline}---${newline}`;
+        const closing = markdown.indexOf(delimiter, 3 + newline.length);
+        if (closing >= 0) {
+            const offset = closing + delimiter.length;
+            return `${markdown.slice(0, offset)}${disclosure.replace(/\n/g, newline)}${newline}${newline}${markdown.slice(offset)}`;
+        }
+        fail('renderer emitted an unterminated Hugo front matter block');
+    }
+    return `${disclosure.replace(/\n/g, newline)}${newline}${newline}${markdown}`;
+}
+function buildManifest({ item, projection, source, analysis, sourceDisclosure = null, stagingInputSha256, stagingBindingSha256,
     rendererImplementationSha256, pages, assets }) {
     const body = { contract: CONTRACT, version: VERSION, status: 'complete', paperId: item.paperId, runId: item.runId,
         route: item.route.kind, rendererImplementationSha256, stagingInputSha256, stagingBindingSha256,
-        source, analysis, projection: { projectionSha256: projection.projectionSha256, pageSetSha256: projection.pageSetSha256 },
+        source, analysis, ...(sourceDisclosure ? { sourceDisclosure } : {}),
+        projection: { projectionSha256: projection.projectionSha256, pageSetSha256: projection.pageSetSha256 },
         pages: pages.slice().sort((left, right) => left.pagePath.localeCompare(right.pagePath)),
         pageSetSha256: stableHash(pages.slice().sort((left, right) => left.pagePath.localeCompare(right.pagePath))),
         assets: assets.slice().sort((left, right) => left.path.localeCompare(right.path)),
@@ -154,8 +216,11 @@ function validateManifest({ value, item, sourceDescriptor, artifact, analysis, s
     directory, rendererImplementationSha256, assertCompleteAnalysis } = {}) {
     const projection = pageProjection(item); const source = sourceProof(item, sourceDescriptor, artifact);
     const reader = readerProof(item, analysis, artifact, { assertCompleteAnalysis });
+    const sourceDisclosure = priorPreprintDisclosureProof(item);
+    const hasSourceDisclosure = Object.hasOwn(value || {}, 'sourceDisclosure');
     exact(value, ['contract', 'version', 'status', 'paperId', 'runId', 'route', 'rendererImplementationSha256', 'stagingInputSha256',
-        'stagingBindingSha256', 'source', 'analysis', 'projection', 'pages', 'pageSetSha256', 'assets', 'assetSetSha256', 'manifestSha256'],
+        'stagingBindingSha256', 'source', 'analysis', ...(hasSourceDisclosure ? ['sourceDisclosure'] : []),
+        'projection', 'pages', 'pageSetSha256', 'assets', 'assetSetSha256', 'manifestSha256'],
     `${item.paperId} direct page manifest`);
     if (value.contract !== CONTRACT || value.version !== VERSION || value.status !== 'complete' || value.paperId !== item.paperId
         || value.runId !== item.runId || value.route !== item.route.kind || value.rendererImplementationSha256 !== rendererImplementationSha256
@@ -163,6 +228,10 @@ function validateManifest({ value, item, sourceDescriptor, artifact, analysis, s
         || !SHA.test(String(value.manifestSha256 || '')) || !SHA.test(String(value.pageSetSha256 || ''))
         || !SHA.test(String(value.assetSetSha256 || '')) || !Array.isArray(value.pages) || !Array.isArray(value.assets)) {
         fail(`${item.paperId} direct page manifest envelope is invalid`);
+    }
+    if (Boolean(sourceDisclosure) !== hasSourceDisclosure
+        || sourceDisclosure && stableHash(value.sourceDisclosure) !== stableHash(sourceDisclosure)) {
+        fail(`${item.paperId} direct page manifest source disclosure drifted`);
     }
     const body = { ...value }; delete body.manifestSha256;
     if (stableHash(body) !== value.manifestSha256 || stableHash(value.source) !== stableHash(source)
@@ -208,6 +277,8 @@ function stageDirectPages({ item, sourceDescriptor, artifact, analysis, director
     const projection = pageProjection(item); const source = sourceProof(item, sourceDescriptor, artifact);
     const analysisProof = readerProof(item, analysis, artifact, { assertCompleteAnalysis: dependencies.assertCompleteAnalysis });
     const render = dependencies.renderDirectPage || renderer.defaultRender; const assets = new Map(); const pages = [];
+    const sourceDisclosure = priorPreprintDisclosureProof(item);
+    const pageDisclosure = priorPreprintPageDisclosure(item);
     for (const page of projection.pages) {
         const result = normalizeRendererResult(render({ directStaging: true, paper: directPaper(item, analysis), cohortDate: page.cohortDate }), page);
         for (const asset of result.assets) {
@@ -215,7 +286,8 @@ function stageDirectPages({ item, sourceDescriptor, artifact, analysis, director
             if (previous && previous.record.sha256 !== asset.record.sha256) fail(`${item.paperId} direct renderer emitted conflicting asset bytes`);
             assets.set(asset.record.path, asset);
         }
-        const relative = renderedPath(page); const bytes = Buffer.from(result.markdown, 'utf8'); const contentSha256 = sha256(bytes);
+        const markdown = injectTopDisclosure(result.markdown, pageDisclosure);
+        const relative = renderedPath(page); const bytes = Buffer.from(markdown, 'utf8'); const contentSha256 = sha256(bytes);
         if (renderer.writeExact(safeTarget(root, relative, `${item.paperId} rendered page`), bytes) !== contentSha256) {
             fail(`${item.paperId} direct rendered page write drifted`);
         }
@@ -231,7 +303,8 @@ function stageDirectPages({ item, sourceDescriptor, artifact, analysis, director
     if (renderer.currentRendererImplementationSha256(dependencies) !== rendererImplementationSha256) {
         fail(`${item.paperId} historical renderer changed while direct pages were rendering`);
     }
-    const manifest = buildManifest({ item, projection, source, analysis: analysisProof, stagingInputSha256, stagingBindingSha256,
+    const manifest = buildManifest({ item, projection, source, analysis: analysisProof, sourceDisclosure,
+        stagingInputSha256, stagingBindingSha256,
         rendererImplementationSha256, pages, assets: [...assets.values()].map(asset => asset.record) });
     renderer.writeExact(manifestFile, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8'));
     return validateManifest({ value: manifest, item, sourceDescriptor, artifact, analysis, stagingInputSha256, stagingBindingSha256,
@@ -239,4 +312,5 @@ function stageDirectPages({ item, sourceDescriptor, artifact, analysis, director
 }
 
 module.exports = { CONTRACT, VERSION, HistoricalDirectPageStagingError, stableHash, pageProjection, directPaper,
-    sourceProof, readerProof, buildManifest, receipt, validateManifest, stageDirectPages };
+    sourceProof, readerProof, priorPreprintDisclosureProof, priorPreprintPageDisclosure, injectTopDisclosure,
+    buildManifest, receipt, validateManifest, stageDirectPages };

@@ -57,7 +57,7 @@ function buildChain({ root, blogRoot, inventoryFile, snapshotFile, pdfRoot, fres
     return { manifest, catalog, projection, plan };
 }
 
-test('a receipt-bound same-paper official arXiv PDF closes the v5 catalog, projection, and plan gap', async t => {
+test('the exact receipt-bound n1m author preprint closes the v5 gap with a mandatory disclosure', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-icml-coverage-closure-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blogRoot = path.join(root, 'blog'); const pdfRoot = path.join(root, 'icml-retained-pdfs');
@@ -66,11 +66,12 @@ test('a receipt-bound same-paper official arXiv PDF closes the v5 catalog, proje
     for (const directory of [pdfRoot, freshPdfRoot, receiptRoot, alternateReceiptRoot]) {
         fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     }
-    const forumId = 'jfpkqjhex4'; const posterId = 67095;
+    const forumId = 'n1mAjfRDZ6'; const posterId = 67080;
     const snapshotFile = writeJson(path.join(root, 'icml-papers.json'), { count: 1, next: null, previous: null,
-        results: [{ id: posterId, name: 'Position: Towards Responsible Evaluation for Text-to-Speech',
-            authors: ['Yifan Yang', 'Hui Wang', 'Bing Han', 'Shujie Liu', 'Jinyu Li', 'Yong Qin', 'Xie Chen']
-                .map((fullname, index) => ({ id: index + 1, fullname })), decision: 'Accept (regular)',
+        results: [{ id: posterId,
+            name: 'Position: *Beyond Text* The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future',
+            authors: ['Deepak Piskala'].map((fullname, index) => ({ id: index + 1, fullname })),
+            decision: 'Accept (spotlight)',
             eventtype: 'Poster', event_type: 'Poster', visible: true,
             virtualsite_url: `/virtual/2026/poster/${posterId}`,
             paper_url: `https://openreview.net/forum?id=${forumId}`,
@@ -104,13 +105,12 @@ test('a receipt-bound same-paper official arXiv PDF closes the v5 catalog, proje
         'content/posts/2026-05-23-beyond-text.md');
     assert.equal(before.plan.paperPageCoverage.coverageComplete, false);
 
-    const requestedUrl = pdfSource.profileForForum(forumId).requestedUrl;
-    const sealed = await pdfSource.sealAlternatePdf({ apply: true, snapshotFile, forumId, pdfRoot: freshPdfRoot,
-        receiptRoot: alternateReceiptRoot, observedAt: '2026-09-08T00:00:00.000Z' }, { fetchPdf: async options => {
-        assert.equal(options.profile.forumId, forumId);
-        return { bytes: PDF, requestedUrl, finalUrl: requestedUrl, redirects: [], responseStatus: 200,
-            contentType: 'application/pdf' };
-    } });
+    const profile = pdfSource.profileForForum(forumId);
+    const importFile = writeBytes(path.join(root, 'browser-download.pdf'), PDF);
+    const extracted = `${profile.sourceTitle}\n${profile.sourceAuthors.join(', ')}\n${profile.sourceDoi}\n${'body '.repeat(300)}`;
+    const sealed = await pdfSource.sealImportedAlternatePdf({ apply: true, snapshotFile, forumId,
+        importFile, pdfRoot: freshPdfRoot, receiptRoot: alternateReceiptRoot,
+        importedAt: '2026-09-08T00:00:00.000Z' }, { extractPdfText: async () => extracted });
     assert.equal(sealed.status, 'created');
     assert.equal(pdfSource.readReceipt(sealed.receiptFile).pdf.sha256, sha256(PDF));
 
@@ -126,7 +126,11 @@ test('a receipt-bound same-paper official arXiv PDF closes the v5 catalog, proje
     const routed = after.plan.queue.find(item => item.paperId.endsWith(`:${forumId}`));
     assert.equal(routed.route.kind, 'conference-local-pdf');
     assert.equal(routed.route.writerInputs[0].pdf.sha256, sealed.receipt.pdf.sha256);
-    assert.equal(routed.route.writerInputs[0].pdf.acquisition.sourceKind, 'official-arxiv-versioned-pdf');
+    assert.equal(routed.route.writerInputs[0].pdf.acquisition.sourceKind, 'author-prior-preprint-cross-version');
     assert.equal(routed.route.writerInputs[0].pdf.acquisition.receipt.selfSha256,
         sealed.receipt.receiptSha256);
+    assert.equal(routed.route.sourceDisclosure.paperId, routed.paperId);
+    assert.equal(routed.route.sourceDisclosure.preprintTitle, profile.sourceTitle);
+    assert.equal(routed.route.sourceDisclosure.cameraReady, false);
+    assert.equal(routed.route.sourceDisclosure.openreviewResponseBytes, false);
 });

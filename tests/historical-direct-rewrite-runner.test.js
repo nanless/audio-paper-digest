@@ -99,6 +99,27 @@ test('direct analysis input carries only the fresh-source title, never a frozen 
     assert.doesNotMatch(JSON.stringify(input), /ArXiv page|POISON_OLD_BLOG_BODY/);
 });
 
+test('different-title prior preprint produces an explicit source title, DOI, and non-camera-ready analysis notice only for that relation', () => {
+    const item = { paperId: 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6' };
+    const acquisition = {
+        versionRelation: 'author-prior-preprint-with-different-title',
+        sourceTitle: 'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction',
+        sourceDoi: '10.36227/techrxiv.177222989.90971634/v1'
+    };
+    const disclosure = runner.priorPreprintAnalysisDisclosure({ pdf: { acquisition } }, item);
+    assert.equal(disclosure.sourceTitle, acquisition.sourceTitle);
+    assert.equal(disclosure.sourceDoi, acquisition.sourceDoi);
+    assert.match(disclosure.analysisInputNotice, /不是会议 camera-ready 定稿/);
+    assert.match(disclosure.analysisInputNotice, new RegExp(acquisition.sourceTitle));
+    assert.match(disclosure.analysisInputNotice, new RegExp(acquisition.sourceDoi.replaceAll('.', '\\.')));
+    assert.equal(runner.priorPreprintAnalysisDisclosure({ pdf: { acquisition: {
+        ...acquisition, versionRelation: 'same-paper-versioned-official-preprint'
+    } } }, item), null);
+    assert.throws(() => runner.priorPreprintAnalysisDisclosure({ pdf: { acquisition } }, {
+        paperId: 'conference:icml:2026:openreview-forum-id:notAllowed'
+    }), /not the reviewed exception/);
+});
+
 // Use the real current analysis and Reader predicates. This gives direct-runner
 // tests a sealed record without making an LLM/API request.
 function sealedAnalysis(item, sourceDescriptor, sourceDetails) {

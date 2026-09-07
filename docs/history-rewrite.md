@@ -269,8 +269,17 @@ sealer 封存并重建 manifest 后才自动进入 route。旧正文只贡献字
 `jfpkqjhex4` 绑定同标题同作者的官方 arXiv v3；`n1mAjfRDZ6` 只有作者 TechRxiv v1 早期预印本，
 receipt 必须保留两个标题、作者显示名差异、DOI 和 `author-prior-preprint-cross-version`，
 不得声称该字节是 OpenReview 响应或 ICML camera-ready。
-这种“标题不同的作者早期预印本”只作身份与来源谱系审计，不进入 direct writer route，
-页面继续保持 uncovered；只有同篇同标题的版本或精确 camera-ready 才能关闭该缺口。
+默认情况下，这种“标题不同的作者早期预印本”仍不进入 direct writer route。唯一例外是用户明确授权、
+代码精确白名单的 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：来源必须重放 poster/forum、
+receipt、PDF SHA、固定预印本标题/作者/DOI 和 source binding；plan 必须附带自哈希 `sourceDisclosure`。
+runner 会把非 camera-ready 警告写入所有模型实际消费的全文前缀，单篇 staging 会在 Hugo front matter
+之后插入同样的中文醒目提示，并把 disclosure 与最终页面字节一起纳入 manifest/pageSet/manifest SHA。
+任一字段缺失或漂移即失败关闭，其他 forum 不能套用这项例外。
+
+TechRxiv CDN 若被本机代理阻断，但浏览器能取得 PDF，可用 `--import-file ABSOLUTE.pdf` 走受控导入。
+该入口只对白名单 `n1mAjfRDZ6` 开放，会重新提取 PDF 文本并要求固定来源标题、作者和 DOI 全部命中；
+import receipt 记录 `operator-browser-download` 与 `networkResponseObserved: false`，不伪造网络响应状态。
+旧的网络下载 receipt 和普通 plan v5 路由继续原样重放，避免破坏长任务暂停、状态查询和恢复。
 
 顺序是强约束：缺失 PDF 必须在 `history:conference-local-sources --apply` 之前封存。local manifest、
 catalog、projection 和 plan 都是 immutable 证明；如果已签发过含缺失 PDF 的旧一轮，必须使用新的、

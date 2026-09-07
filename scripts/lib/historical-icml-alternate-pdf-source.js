@@ -12,6 +12,9 @@ const posterApi = require('./historical-icml-poster-authority.js');
 
 const CONTRACT = 'historical-icml-alternate-pdf-source-v1';
 const VERSION = 1;
+const IMPORT_CONTRACT = 'historical-icml-alternate-pdf-import-v1';
+const IMPORT_VERSION = 1;
+const IMPORT_METHOD = 'operator-browser-download';
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const MAX_REDIRECTS = 2;
@@ -299,6 +302,7 @@ function validateRedirects(redirects, profile, requestedUrl, finalUrl) {
 }
 
 function normalizeReceipt(value) {
+    if (value?.contract === IMPORT_CONTRACT) return normalizeImportReceipt(value);
     const fields = ['contract', 'version', 'profileId', 'forumId', 'posterId', 'forumUrl', 'title', 'authors',
         'sourceKind', 'sourceTitle', 'sourceAuthors', 'sourceDoi', 'versionRelation', 'provenanceStatement',
         'openreviewResponseBytes', 'requestedUrl', 'finalUrl', 'redirects',
@@ -330,6 +334,52 @@ function normalizeReceipt(value) {
     const body = clone(value); delete body.receiptSha256;
     if (!SHA_RE.test(String(value.receiptSha256 || '')) || value.receiptSha256 !== stableHash(body)) {
         fail('alternate PDF receipt self-SHA is invalid');
+    }
+    return clone(value);
+}
+
+function normalizeImportReceipt(value) {
+    const fields = ['contract', 'version', 'profileId', 'forumId', 'posterId', 'forumUrl', 'title', 'authors',
+        'sourceKind', 'sourceTitle', 'sourceAuthors', 'sourceDoi', 'versionRelation', 'provenanceStatement',
+        'openreviewResponseBytes', 'sourceUrl', 'acquisitionMethod', 'networkResponseObserved', 'importedAt',
+        'sourceValidation', 'snapshotSha256', 'authoritySha256', 'recordBindingSha256',
+        'sourceIdentityBindingSha256', 'pdf', 'receiptSha256'];
+    exact(value, fields, 'imported alternate PDF receipt');
+    const profile = profileForForum(value.forumId);
+    if (profile.forumId !== 'n1mAjfRDZ6'
+        || value.contract !== IMPORT_CONTRACT || value.version !== IMPORT_VERSION
+        || value.profileId !== profile.profileId || value.posterId !== profile.posterId
+        || value.forumUrl !== `https://openreview.net/forum?id=${profile.forumId}`
+        || value.title !== profile.title || stableHash(value.authors) !== stableHash(profile.authors)
+        || value.sourceKind !== profile.sourceKind || value.sourceTitle !== profile.sourceTitle
+        || stableHash(value.sourceAuthors) !== stableHash(profile.sourceAuthors) || value.sourceDoi !== profile.sourceDoi
+        || value.versionRelation !== profile.versionRelation || value.provenanceStatement !== profile.provenanceStatement
+        || value.openreviewResponseBytes !== false || value.sourceUrl !== profile.requestedUrl
+        || value.acquisitionMethod !== IMPORT_METHOD || value.networkResponseObserved !== false
+        || !Number.isFinite(Date.parse(value.importedAt)) || new Date(value.importedAt).toISOString() !== value.importedAt
+        || !SHA_RE.test(String(value.snapshotSha256 || '')) || !SHA_RE.test(String(value.authoritySha256 || ''))
+        || !SHA_RE.test(String(value.recordBindingSha256 || ''))
+        || !SHA_RE.test(String(value.sourceIdentityBindingSha256 || ''))) {
+        fail('imported alternate PDF receipt envelope is invalid');
+    }
+    exact(value.sourceValidation, ['method', 'extractedTextSha256', 'extractedTextChars', 'matchedMarkers'],
+        'imported alternate PDF source validation');
+    const expectedMarkers = [profile.sourceTitle, ...profile.sourceAuthors, profile.sourceDoi];
+    if (value.sourceValidation.method !== 'pdf-text-profile-markers-v1'
+        || !SHA_RE.test(String(value.sourceValidation.extractedTextSha256 || ''))
+        || !Number.isSafeInteger(value.sourceValidation.extractedTextChars)
+        || value.sourceValidation.extractedTextChars < 1000
+        || stableHash(value.sourceValidation.matchedMarkers) !== stableHash(expectedMarkers)) {
+        fail('imported alternate PDF source validation is invalid');
+    }
+    exact(value.pdf, ['absolutePath', 'bytes', 'sha256'], 'imported alternate PDF receipt PDF binding');
+    if (!path.isAbsolute(value.pdf.absolutePath) || !Number.isSafeInteger(value.pdf.bytes) || value.pdf.bytes < 5
+        || value.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(String(value.pdf.sha256 || ''))) {
+        fail('imported alternate PDF receipt PDF binding is invalid');
+    }
+    const body = clone(value); delete body.receiptSha256;
+    if (!SHA_RE.test(String(value.receiptSha256 || '')) || value.receiptSha256 !== stableHash(body)) {
+        fail('imported alternate PDF receipt self-SHA is invalid');
     }
     return clone(value);
 }
@@ -444,7 +494,94 @@ async function sealAlternatePdf({ apply = false, snapshotFile, forumId, pdfRoot,
         ...plan, receipt: replayed };
 }
 
+function normalizedSearchText(value) {
+    return String(value || '').normalize('NFKC').toLocaleLowerCase('en-US')
+        .replace(/[\u0000-\u001f\u007f\u00ad]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+async function validateImportedPdf(bytes, profile, dependencies = {}) {
+    if (profile.forumId !== 'n1mAjfRDZ6'
+        || profile.versionRelation !== 'author-prior-preprint-with-different-title') {
+        fail('operator import is allowed only for the reviewed n1mAjfRDZ6 prior-preprint profile');
+    }
+    const extractPdfText = dependencies.extractPdfText || (async value => {
+        const { PDFParse } = require('pdf-parse');
+        const parser = new PDFParse({ data: new Uint8Array(value) });
+        try { return String((await parser.getText())?.text || ''); }
+        finally { await parser.destroy().catch(() => {}); }
+    });
+    let text;
+    try { text = String(await extractPdfText(bytes) || '').replace(/\r\n?/g, '\n').trim(); }
+    catch (error) { fail(`imported PDF text extraction failed: ${error.code || error.message}`); }
+    if (text.length < 1000) fail('imported PDF text is unusably short');
+    const searchable = normalizedSearchText(text);
+    const markers = [profile.sourceTitle, ...profile.sourceAuthors, profile.sourceDoi];
+    if (markers.some(marker => !searchable.includes(normalizedSearchText(marker)))) {
+        fail('imported PDF does not contain every fixed title, author, and DOI marker');
+    }
+    return { method: 'pdf-text-profile-markers-v1', extractedTextSha256: sha256(Buffer.from(text, 'utf8')),
+        extractedTextChars: text.length, matchedMarkers: markers };
+}
+
+async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, importFile, pdfRoot, receiptRoot,
+    maxBytes = MAX_PDF_BYTES, importedAt = null } = {}, dependencies = {}) {
+    if (typeof apply !== 'boolean' || typeof importFile !== 'string' || !path.isAbsolute(importFile)
+        || !Number.isSafeInteger(maxBytes) || maxBytes < 5 || maxBytes > MAX_PDF_BYTES) {
+        fail('import sealer options are invalid');
+    }
+    const identity = authenticateSourceIdentity({ snapshotFile, forumId });
+    if (identity.profile.forumId !== 'n1mAjfRDZ6') {
+        fail('operator import is allowed only for the reviewed n1mAjfRDZ6 prior-preprint profile');
+    }
+    const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: apply });
+    const plan = { profileId: identity.profile.profileId, forumId: identity.profile.forumId,
+        posterId: identity.profile.posterId, title: identity.profile.title, authors: clone(identity.profile.authors),
+        forumUrl: identity.authorityRecord.openreviewUrl, sourceKind: identity.profile.sourceKind,
+        sourceTitle: identity.profile.sourceTitle, sourceAuthors: clone(identity.profile.sourceAuthors),
+        sourceDoi: identity.profile.sourceDoi, versionRelation: identity.profile.versionRelation,
+        sourceUrl: identity.profile.requestedUrl, provenanceStatement: identity.profile.provenanceStatement,
+        acquisitionMethod: IMPORT_METHOD, networkResponseObserved: false, openreviewResponseBytes: false,
+        importFile: path.resolve(importFile), pdfFile: paths.pdfFile, receiptFile: paths.receiptFile,
+        snapshotSha256: identity.authority.snapshot.sha256, authoritySha256: identity.authority.authoritySha256,
+        recordBindingSha256: identity.authorityRecord.recordBindingSha256,
+        sourceIdentityBindingSha256: identity.sourceIdentityBindingSha256 };
+    if (!apply) return { status: 'dry-run', ...plan };
+    if (fs.existsSync(paths.receiptFile)) {
+        return { status: 'recovered', ...plan, receipt: replayReceipt({ ...paths, identity }) };
+    }
+    const imported = readStableFile(importFile, 'operator-provided alternate PDF', maxBytes);
+    if (imported.bytes.length < 5 || imported.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+        fail('operator-provided alternate source is not a bounded PDF');
+    }
+    const sourceValidation = await validateImportedPdf(imported.bytes, identity.profile, dependencies);
+    posterApi.authorityHandleSnapshot(identity.authorityHandle);
+    const observed = importedAt || new Date().toISOString();
+    if (!Number.isFinite(Date.parse(observed)) || new Date(observed).toISOString() !== observed) fail('importedAt is invalid');
+    const pdfBody = { absolutePath: paths.pdfFile, bytes: imported.bytes.length, sha256: imported.sha256 };
+    const body = { contract: IMPORT_CONTRACT, version: IMPORT_VERSION, profileId: identity.profile.profileId,
+        forumId: identity.profile.forumId, posterId: identity.profile.posterId,
+        forumUrl: identity.authorityRecord.openreviewUrl, title: identity.profile.title,
+        authors: clone(identity.profile.authors), sourceKind: identity.profile.sourceKind,
+        sourceTitle: identity.profile.sourceTitle, sourceAuthors: clone(identity.profile.sourceAuthors),
+        sourceDoi: identity.profile.sourceDoi, versionRelation: identity.profile.versionRelation,
+        provenanceStatement: identity.profile.provenanceStatement, openreviewResponseBytes: false,
+        sourceUrl: identity.profile.requestedUrl, acquisitionMethod: IMPORT_METHOD,
+        networkResponseObserved: false, importedAt: observed, sourceValidation,
+        snapshotSha256: identity.authority.snapshot.sha256, authoritySha256: identity.authority.authoritySha256,
+        recordBindingSha256: identity.authorityRecord.recordBindingSha256,
+        sourceIdentityBindingSha256: identity.sourceIdentityBindingSha256, pdf: pdfBody };
+    const receipt = normalizeReceipt({ ...body, receiptSha256: stableHash(body) });
+    const pdfStatus = writeOrCompare(paths.pdfFile, imported.bytes, 'existing alternate PDF', MAX_PDF_BYTES);
+    let receiptStatus = 'created';
+    try { writeExclusive(paths.receiptFile, prettyBytes(receipt)); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; receiptStatus = 'recovered'; }
+    const replayed = replayReceipt({ ...paths, identity });
+    return { status: pdfStatus === 'recovered' && receiptStatus === 'recovered' ? 'recovered' : 'created',
+        ...plan, receipt: replayed };
+}
+
 module.exports = { CONTRACT, VERSION, MAX_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, RECEIPT_NAME_RE,
+    IMPORT_CONTRACT, IMPORT_VERSION, IMPORT_METHOD,
     HistoricalIcmlAlternatePdfSourceError, stableHash, profileForForum, validateProfileUrl,
     authenticateSourceIdentity, validPdfContentType, normalizeReceipt, readReceipt, replayReceipt,
-    defaultFetchPdf, sealAlternatePdf };
+    defaultFetchPdf, validateImportedPdf, sealImportedAlternatePdf, sealAlternatePdf };

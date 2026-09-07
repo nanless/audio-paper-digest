@@ -50,6 +50,34 @@ function source(paperId, metadataPath, metadataSha256, recordIndex, pdfPath, pdf
     sourceBindingSha256: catalogApi.stableHash({ paperId, provenance, sourceSet,
         metadataIdentityBindingSha256, pdfIdentityBindingSha256 }) };
 }
+
+function authorizedPriorPreprintSource() {
+    const profile = require('../scripts/lib/historical-icml-alternate-pdf-source.js').profileForForum('n1mAjfRDZ6');
+    return { sourceSet: 'workspace-icml-official-poster-2026', sourceBindingSha256: sha('prior source binding'),
+        metadata: { posterBinding: { posterId: profile.posterId,
+            openreviewUrl: `https://openreview.net/forum?id=${profile.forumId}` } },
+        pdf: { availability: 'available', acquisition: { receipt: { absolutePath: '/tmp/alternate-n1mAjfRDZ6.json',
+            fileSha256: sha('prior receipt file'), selfSha256: sha('prior receipt self') }, sourceKind: profile.sourceKind,
+            versionRelation: profile.versionRelation, sourceTitle: profile.sourceTitle,
+            sourceAuthors: profile.sourceAuthors, sourceDoi: profile.sourceDoi,
+            provenanceStatement: profile.provenanceStatement, openreviewResponseBytes: false } } };
+}
+
+test('prior-preprint route disclosure replays exactly and rejects any title or hash drift', () => {
+    const paperId = catalogApi.AUTHORIZED_PRIOR_PREPRINT_PAPER_ID;
+    const sources = [authorizedPriorPreprintSource()];
+    const disclosure = planner.conferenceSourceDisclosure(paperId, sources);
+    assert.equal(planner.normalizeConferenceSourceDisclosure(disclosure, paperId, sources).disclosureSha256,
+        disclosure.disclosureSha256);
+    const changedTitle = structuredClone(disclosure); changedTitle.preprintTitle = 'Changed title';
+    assert.throws(() => planner.normalizeConferenceSourceDisclosure(changedTitle, paperId, sources),
+        /source disclosure drifted/);
+    const changedHash = structuredClone(disclosure); changedHash.disclosureSha256 = sha('changed');
+    assert.throws(() => planner.normalizeConferenceSourceDisclosure(changedHash, paperId, sources),
+        /source disclosure drifted/);
+    assert.equal(planner.normalizeConferenceSourceDisclosure(null,
+        'conference:icml:2026:openreview-forum-id:regular', [{ pdf: { acquisition: { versionRelation: null } } }]), null);
+});
 function currentCatalog({ root, inventory, inventoryPath, inventoryFileSha256, entries, dailyPrimaryArxivBindings = [],
     dailyIcmlPosterBindings = [], dailyIcmlPosterRoutableBindings = dailyIcmlPosterBindings,
     icmlPosterAuthoritySha256 = null }) {
@@ -159,7 +187,10 @@ test('conference title projections cover all 898 ICASSP and 267 ICLR pages while
     const icassp = plan.queue.find(item => item.paperId.includes(':icassp:'));
     const iclr = plan.queue.find(item => item.paperId.includes(':iclr:'));
     assert.equal(icassp.pageKeys.length, 898); assert.equal(iclr.pageKeys.length, 267);
-    assert.notEqual(icassp.runId, iclr.runId); assert.equal(planner.normalizePlan(plan).planSha256, plan.planSha256);
+    assert.notEqual(icassp.runId, iclr.runId);
+    assert.equal(Object.hasOwn(icassp.route, 'sourceDisclosure'), false,
+        'ordinary v5 conference routes retain the legacy byte shape for resumability');
+    assert.equal(planner.normalizePlan(plan).planSha256, plan.planSha256);
     const registry = planner.buildRegistry(plan); const stage = planner.directStagingBinding({ plan, registry,
         paperId: icassp.paperId, analysisArtifact: { paperId: icassp.paperId, runId: icassp.runId,
             route: 'conference-local-pdf', analysisFileSha256: sha('analysis file'),

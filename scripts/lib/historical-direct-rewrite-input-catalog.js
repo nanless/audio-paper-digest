@@ -15,6 +15,7 @@ const conferenceManifestApi = require('./historical-conference-local-sources.js'
 const projectionApi = require('./historical-conference-page-projections.js');
 const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 const icmlPosterApi = require('./historical-icml-poster-authority.js');
+const alternatePdfApi = require('./historical-icml-alternate-pdf-source.js');
 
 const CONTRACT = 'merged-good-historical-local-data-v5';
 const VERSION = 5;
@@ -24,6 +25,8 @@ const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 const BLOCKED_CROSS_VERSION_RELATION = 'author-prior-preprint-with-different-title';
+const AUTHORIZED_PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
+const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = 'historical-author-prior-preprint-disclosure-v1';
 
 class HistoricalDirectRewriteInputCatalogError extends Error {
     constructor(message) {
@@ -46,8 +49,46 @@ const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
 const validSha = value => SHA_RE.test(String(value || ''));
-const directEligibleConferenceSource = source => source?.pdf?.availability === 'available'
-    && source.pdf.acquisition?.versionRelation !== BLOCKED_CROSS_VERSION_RELATION;
+function authorizedPriorPreprintProfile(source, paperId) {
+    if (paperId !== AUTHORIZED_PRIOR_PREPRINT_PAPER_ID
+        || source?.sourceSet !== 'workspace-icml-official-poster-2026'
+        || source?.pdf?.availability !== 'available') return null;
+    let profile;
+    try { profile = alternatePdfApi.profileForForum('n1mAjfRDZ6'); } catch { return null; }
+    const acquisition = source.pdf.acquisition; const poster = source.metadata?.posterBinding;
+    if (!plain(acquisition) || !plain(acquisition.receipt)
+        || !path.isAbsolute(String(acquisition.receipt.absolutePath || ''))
+        || !validSha(acquisition.receipt.fileSha256) || !validSha(acquisition.receipt.selfSha256)
+        || acquisition.sourceKind !== profile.sourceKind
+        || acquisition.versionRelation !== BLOCKED_CROSS_VERSION_RELATION
+        || acquisition.sourceTitle !== profile.sourceTitle
+        || stableHash(acquisition.sourceAuthors) !== stableHash(profile.sourceAuthors)
+        || acquisition.sourceDoi !== profile.sourceDoi
+        || acquisition.provenanceStatement !== profile.provenanceStatement
+        || acquisition.openreviewResponseBytes !== false
+        || poster?.posterId !== profile.posterId
+        || poster?.openreviewUrl !== `https://openreview.net/forum?id=${profile.forumId}`
+        || !validSha(source.sourceBindingSha256)) return null;
+    return profile;
+}
+
+const directEligibleConferenceSource = (source, paperId = null) => source?.pdf?.availability === 'available'
+    && (source.pdf.acquisition?.versionRelation !== BLOCKED_CROSS_VERSION_RELATION
+        || authorizedPriorPreprintProfile(source, paperId) !== null);
+
+function priorPreprintSourceDisclosure(source, paperId) {
+    if (source?.pdf?.acquisition?.versionRelation !== BLOCKED_CROSS_VERSION_RELATION) return null;
+    const profile = authorizedPriorPreprintProfile(source, paperId);
+    if (!profile) fail('cross-version prior preprint is not the code-reviewed exception');
+    const body = { contract: PRIOR_PREPRINT_DISCLOSURE_CONTRACT, version: 1, paperId,
+        icmlTitle: profile.title, preprintTitle: profile.sourceTitle, doi: profile.sourceDoi,
+        versionRelation: profile.versionRelation, sourceKind: profile.sourceKind,
+        receiptSelfSha256: source.pdf.acquisition.receipt.selfSha256,
+        sourceBindingSha256: source.sourceBindingSha256, cameraReady: false,
+        openreviewResponseBytes: false,
+        statement: 'This input is an author prior preprint with a different title; it is neither the ICML camera-ready paper nor OpenReview response bytes.' };
+    return { ...body, disclosureSha256: stableHash(body) };
+}
 
 function exact(value, fields, label) {
     if (!plain(value)) fail(`${label} must be an object`);
@@ -188,7 +229,7 @@ function dailyIcmlPosterEntries({ conferenceManifest, inventory, blogRoot } = {}
     for (const binding of bindings) {
         const paperId = `conference:icml:2026:openreview-forum-id:${binding.poster.forumId}`;
         const source = posterSources.get(paperId);
-        if (directEligibleConferenceSource(source)) {
+        if (directEligibleConferenceSource(source, paperId)) {
             entriesByPaperId.set(paperId, { paperId, sources: [clone(source)] });
         }
     }
@@ -368,8 +409,8 @@ function normalizeCatalog(value) {
         let source;
         try { source = conferenceManifestApi.validateSource(entry.sources[0], entry.paperId); }
         catch (error) { fail(`catalog conference source binding is invalid: ${error.message}`); }
-        if (!directEligibleConferenceSource(source)) {
-            fail('cross-version prior preprint cannot enter a direct writer route');
+        if (!directEligibleConferenceSource(source, entry.paperId)) {
+            fail('cross-version prior preprint is not an authorized direct writer route');
         }
         sourceSets[source.sourceSet] = (sourceSets[source.sourceSet] || 0) + 1;
         return { paperId: entry.paperId, sources: [{ sourceSet: source.sourceSet, provenance: source.provenance,
@@ -454,6 +495,8 @@ function buildAndWrite(options, overrides = {}) {
 }
 
 module.exports = { CONTRACT, VERSION, SCOPE, SAFE_NAME_RE, BLOCKED_CROSS_VERSION_RELATION,
+    AUTHORIZED_PRIOR_PREPRINT_PAPER_ID, PRIOR_PREPRINT_DISCLOSURE_CONTRACT,
     HistoricalDirectRewriteInputCatalogError, stableHash, prettyBytes, directEligibleConferenceSource,
+    priorPreprintSourceDisclosure,
     dailyPrimaryArxivBindingsFromFrozenInventory, dailyIcmlPosterEntries, arxivEntriesFromFrozenInventory, scopeConferenceEntries,
     buildScopedCatalog, normalizeCatalog, writeCatalog, buildAndWrite };

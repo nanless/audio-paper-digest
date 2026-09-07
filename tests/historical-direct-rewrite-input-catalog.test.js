@@ -21,11 +21,40 @@ function write(filename, value) { fs.mkdirSync(path.dirname(filename), { recursi
 function pageId(value) { return `page:${sha(value)}`; }
 function frontmatter(title) { return Buffer.from(`---\ntitle: ${JSON.stringify(title)}\ndate: 2026-05-01\n---\nThis historical body must never be a direct-input source.\n`, 'utf8'); }
 
-test('a title-different author prior preprint remains auditable but is never direct-routable', () => {
+function authorizedPriorPreprintSource() {
+    const profile = require('../scripts/lib/historical-icml-alternate-pdf-source.js').profileForForum('n1mAjfRDZ6');
+    return { sourceSet: 'workspace-icml-official-poster-2026', sourceBindingSha256: sha('source binding'),
+        metadata: { posterBinding: { posterId: profile.posterId,
+            openreviewUrl: `https://openreview.net/forum?id=${profile.forumId}` } },
+        pdf: { availability: 'available', acquisition: { receipt: { absolutePath: '/tmp/alternate-n1mAjfRDZ6.json',
+            fileSha256: sha('receipt file'), selfSha256: sha('receipt self') }, sourceKind: profile.sourceKind,
+            versionRelation: profile.versionRelation, sourceTitle: profile.sourceTitle,
+            sourceAuthors: profile.sourceAuthors, sourceDoi: profile.sourceDoi,
+            provenanceStatement: profile.provenanceStatement, openreviewResponseBytes: false } } };
+}
+
+test('only the code-reviewed title-different prior preprint is direct-routable with a self-hashed disclosure', () => {
     assert.equal(catalog.directEligibleConferenceSource({ pdf: { availability: 'available',
         acquisition: { versionRelation: catalog.BLOCKED_CROSS_VERSION_RELATION } } }), false);
     assert.equal(catalog.directEligibleConferenceSource({ pdf: { availability: 'available',
         acquisition: { versionRelation: 'same-paper-versioned-official-preprint' } } }), true);
+    const source = authorizedPriorPreprintSource();
+    assert.equal(catalog.directEligibleConferenceSource(source, catalog.AUTHORIZED_PRIOR_PREPRINT_PAPER_ID), true);
+    assert.equal(catalog.directEligibleConferenceSource(source,
+        'conference:icml:2026:openreview-forum-id:AnotherForum'), false);
+    const disclosure = catalog.priorPreprintSourceDisclosure(source, catalog.AUTHORIZED_PRIOR_PREPRINT_PAPER_ID);
+    assert.deepEqual({ icmlTitle: disclosure.icmlTitle, preprintTitle: disclosure.preprintTitle,
+        doi: disclosure.doi, versionRelation: disclosure.versionRelation, cameraReady: disclosure.cameraReady,
+        openreviewResponseBytes: disclosure.openreviewResponseBytes }, {
+        icmlTitle: 'Position: *Beyond Text* The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future',
+        preprintTitle: 'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction',
+        doi: '10.36227/techrxiv.177222989.90971634/v1',
+        versionRelation: catalog.BLOCKED_CROSS_VERSION_RELATION, cameraReady: false,
+        openreviewResponseBytes: false });
+    const { disclosureSha256, ...body } = disclosure;
+    assert.equal(disclosureSha256, catalog.stableHash(body));
+    const tampered = structuredClone(source); tampered.pdf.acquisition.sourceTitle = 'Another preprint';
+    assert.equal(catalog.directEligibleConferenceSource(tampered, catalog.AUTHORIZED_PRIOR_PREPRINT_PAPER_ID), false);
 });
 
 function fixture(t) {

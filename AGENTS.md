@@ -103,6 +103,10 @@ npm run digest:prepare -- YYYY-MM-DD
 - 历史日期不能从 fetch 开始；只可从已有安全阶段运行 `./run-daily-digest.sh DATE --from generate|review|push|visual` 等代码允许的阶段。
 - 失败记录必须保留 `analysisManifest`、checkpoint 和恢复图片清单。旧成功正文可保留，但最新失败必须强制后续重试；成功后才清除失败标记。
 - 同篇分析必须持有规范化 arXiv ID 锁，并在锁内重读、合并、递增 generation，禁止用锁外陈旧对象覆盖 canonical。
+- ICML/OpenReview 替代 PDF 默认失败关闭。唯一经用户授权的跨标题预印本例外是
+  `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：必须由代码白名单 sealer 绑定 poster/forum、
+  固定 TechRxiv 标题、作者、DOI、PDF/receipt/source SHA；浏览器下载只能经 `--import-file` 导入并记录
+  `networkResponseObserved: false`。plan、模型输入和最终页面必须显式显示非 camera-ready 提示；不得推广到其他论文。
 
 ## 内容与评分门禁
 

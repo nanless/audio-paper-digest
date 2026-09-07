@@ -22,6 +22,8 @@ const execFileAsync = promisify(execFile);
 const CONTRACT = 'historical-direct-rewrite-execution-v1';
 const REGISTRY_CONTRACT = 'historical-direct-rewrite-execution-registry-v1';
 const STAGING_CONTRACT = 'historical-direct-rewrite-staging-v1';
+const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
+const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
 const SHA = /^[a-f0-9]{64}$/;
 const STATES = new Set(['pending', 'sourcing', 'source_ready', 'analyzing', 'analysis_partial', 'analysis_complete', 'staged', 'failed']);
 const TRANSITIONS = new Map([
@@ -267,14 +269,41 @@ function titleFromConferenceMetadata(source, item) {
     return title;
 }
 
+function priorPreprintAnalysisDisclosure(source, item) {
+    const acquisition = source?.pdf?.acquisition;
+    if (acquisition?.versionRelation !== PRIOR_PREPRINT_VERSION_RELATION) return null;
+    if (item?.paperId !== PRIOR_PREPRINT_PAPER_ID) {
+        fail(`${item?.paperId || 'unknown paper'} cross-version prior preprint is not the reviewed exception`);
+    }
+    const sourceTitle = typeof acquisition.sourceTitle === 'string'
+        ? acquisition.sourceTitle.replace(/\s+/g, ' ').trim() : '';
+    const sourceDoi = typeof acquisition.sourceDoi === 'string'
+        ? acquisition.sourceDoi.replace(/\s+/g, ' ').trim() : '';
+    if (!sourceTitle || !sourceDoi) {
+        fail(`${item.paperId} cross-version prior preprint lacks its source title or DOI`);
+    }
+    const warning = '本次分析使用可访问的作者早期预印本，不是会议 camera-ready 定稿；标题、内容、实验结果和结论可能与会议最终版本不同。';
+    return {
+        versionRelation: PRIOR_PREPRINT_VERSION_RELATION,
+        sourceTitle,
+        sourceDoi,
+        warning,
+        analysisInputNotice: [
+            '【来源版本警告】',
+            warning,
+            `实际分析来源标题：${sourceTitle}`,
+            `实际分析来源 DOI：${sourceDoi}`,
+            '以下正文来自该早期预印本，只能据此分析，不得声称已核对会议 camera-ready 版本。'
+        ].join('\n')
+    };
+}
+
 async function extractConferenceSource(item, dependencies = {}) {
     let source = item.route.writerInputs[0];
     if (!source) fail(`${item.paperId} has no local conference PDF`);
     try { source = conferenceLocalSources.validateSource(source, item.paperId); }
     catch (error) { fail(`${item.paperId} local conference source binding is invalid: ${error.message}`); }
-    if (source.pdf.acquisition?.versionRelation === 'author-prior-preprint-with-different-title') {
-        fail(`${item.paperId} cross-version prior preprint is not eligible for direct analysis`);
-    }
+    const priorPreprint = priorPreprintAnalysisDisclosure(source, item);
     const pdf = readRegular(source.pdf.absolutePath, 512 * 1024 * 1024);
     if (pdf.sha256 !== source.pdf.sha256 || pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail(`${item.paperId} PDF changed after planning`);
     const extractPdfText = dependencies.extractPdfText || (async bytes => {
@@ -282,15 +311,25 @@ async function extractConferenceSource(item, dependencies = {}) {
         try { const result = await parser.getText(); return String(result?.text || ''); }
         finally { await parser.destroy().catch(() => {}); }
     });
-    const text = String(await extractPdfText(pdf.bytes) || '').replace(/\r\n?/g, '\n').trim();
-    if (text.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
+    const extractedText = String(await extractPdfText(pdf.bytes) || '').replace(/\r\n?/g, '\n').trim();
+    if (extractedText.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
+    // Put the identity warning in the actual text consumed by every primary,
+    // repair, scoring, and Reader request. Merely retaining it as manifest
+    // metadata would not prevent a model from mistaking these bytes for the
+    // differently titled conference camera-ready paper.
+    const text = priorPreprint ? `${priorPreprint.analysisInputNotice}\n\n${extractedText}` : extractedText;
     const artifactsBody = { version: 1, source: 'direct_conference_pdf_text', tables: [], formulas: [], figures: [],
         flattenedTextSha256: sha256(Buffer.from(text, 'utf8')) };
     return { paperId: item.paperId, pdfSha256: pdf.sha256, sourceTitle: titleFromConferenceMetadata(source, item), sourceDetails: { paperId: item.paperId,
         source: 'conference_pdf_text', sourceId: item.paperId, text, imageInfos: [],
         structuredArtifacts: { ...artifactsBody, payloadSha256: sha256(JSON.stringify(artifactsBody)) },
         htmlAvailability: 'not_applicable', htmlAttempts: 0,
-        warnings: ['会议本地 PDF 的图像只在本次 Reader 临时物化，不写入 runtime。'] } };
+        ...(priorPreprint ? { sourceTitle: priorPreprint.sourceTitle, sourceDoi: priorPreprint.sourceDoi,
+            versionRelation: priorPreprint.versionRelation, sourceVersionWarning: priorPreprint.warning } : {}),
+        warnings: [
+            ...(priorPreprint ? [priorPreprint.warning] : []),
+            '会议本地 PDF 的图像只在本次 Reader 临时物化，不写入 runtime。'
+        ] } };
 }
 
 async function ephemeralArxivMaterializer(arxivId, figures, dependencies = {}) {
@@ -756,7 +795,7 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
 module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, HistoricalDirectRewriteRunnerError, stableHash,
     STATES, registryName, registryPath, defaultPauseFilePath, operationLockTarget, pauseFileRequested, selectDirectItems,
     initialRegistry, normalizeRegistry, loadOrCreateRegistry, transition, registryCounts, directPaper, fallbackArxivDetails,
-    extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
+    priorPreprintAnalysisDisclosure, extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
     withEphemeralConferenceFigures, renderConferencePdfPages,
     directProvenanceFor, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
     stageDirectExecution, defaultAnalyze, sealedFailureHandoff, runDirectRewrite };

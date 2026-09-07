@@ -51,6 +51,8 @@ test('sealed direct source/Reader packet materializes every projected historical
     for (const page of result.pages) {
         const bytes = fs.readFileSync(path.join(f.root, 'staging', page.stagedPath), 'utf8');
         assert.match(bytes, /FRESH_READER_ONLY/); assert.doesNotMatch(bytes, /OLD|POISON/);
+        assert.equal(bytes, `---\ndate: ${page.cohortDate}\n---\nFRESH_READER_ONLY`,
+            'ordinary source routes must retain the renderer bytes exactly');
     }
     const disk = JSON.stringify(result);
     assert.doesNotMatch(disk, /crosswalk|taxonomyAssignment|POISON_OLD_BODY/i);
@@ -64,3 +66,56 @@ test('direct page staging fails closed when a rendered page byte changes after i
     assert.throws(() => api.stageDirectPages(options(f)), /rendered page bytes drifted/);
 });
 
+test('different-title prior preprint adds a visible top disclosure whose bytes are sealed by the page and manifest SHAs', t => {
+    const f = fixture(t);
+    const paperId = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
+    f.item.paperId = paperId;
+    const sourceBindingSha256 = sha('source binding');
+    const receiptSelfSha256 = sha('receipt self');
+    const acquisition = {
+        versionRelation: 'author-prior-preprint-with-different-title',
+        sourceKind: 'author-prior-preprint-cross-version',
+        sourceTitle: 'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction',
+        sourceDoi: '10.36227/techrxiv.177222989.90971634/v1',
+        receipt: { selfSha256: receiptSelfSha256 }
+    };
+    const disclosureBody = { contract: 'historical-author-prior-preprint-disclosure-v1', version: 1, paperId,
+        icmlTitle: 'Position: *Beyond Text* The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future',
+        preprintTitle: acquisition.sourceTitle, doi: acquisition.sourceDoi,
+        versionRelation: acquisition.versionRelation, sourceKind: acquisition.sourceKind,
+        receiptSelfSha256, sourceBindingSha256, cameraReady: false, openreviewResponseBytes: false,
+        statement: 'This input is an author prior preprint with a different title; it is neither the ICML camera-ready paper nor OpenReview response bytes.' };
+    f.item.route = { kind: 'conference-local-pdf', writerInputs: [{ sourceBindingSha256, pdf: { acquisition } }],
+        sourceDisclosure: { ...disclosureBody, disclosureSha256: api.stableHash(disclosureBody) } };
+    f.analysis.directPaperId = paperId;
+    f.artifact.paperId = paperId;
+    f.artifact.route = f.item.route.kind;
+    f.sourceDescriptor.paperId = paperId;
+    f.sourceDescriptor.kind = f.item.route.kind;
+    f.artifact.analysisRecordSha256 = api.stableHash(f.analysis);
+    const result = api.stageDirectPages(options(f));
+    for (const page of result.pages) {
+        const filename = path.join(f.root, 'staging', page.stagedPath);
+        const bytes = fs.readFileSync(filename);
+        const markdown = bytes.toString('utf8');
+        assert.match(markdown, /^---\ndate: \d{4}-\d{2}-\d{2}\n---\n> \*\*⚠️ 来源版本说明（非 Camera-ready）\*\*/);
+        assert.match(markdown, /不是会议 camera-ready 定稿/);
+        assert.match(markdown, /Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction/);
+        assert.match(markdown, /10\.36227\/techrxiv\.177222989\.90971634\/v1/);
+        assert.equal(page.contentSha256, sha(bytes));
+    }
+    assert.equal(result.pageSetSha256, api.stableHash(result.pages));
+    assert.equal(result.sourceDisclosure.disclosureSha256, f.item.route.sourceDisclosure.disclosureSha256);
+    const manifestBody = { ...result }; delete manifestBody.manifestSha256;
+    assert.equal(result.manifestSha256, api.stableHash(manifestBody));
+});
+
+test('prior-preprint staging rejects a missing route disclosure and an unterminated front matter block', t => {
+    const f = fixture(t);
+    f.item.paperId = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
+    f.item.route = { kind: 'conference-local-pdf', writerInputs: [{ pdf: { acquisition: {
+        versionRelation: 'author-prior-preprint-with-different-title', sourceTitle: 'title', sourceDoi: 'doi'
+    } } }] };
+    assert.throws(() => api.priorPreprintDisclosureProof(f.item), /must be an object/);
+    assert.throws(() => api.injectTopDisclosure('---\ntitle: broken\nbody', '> warning'), /unterminated Hugo front matter/);
+});

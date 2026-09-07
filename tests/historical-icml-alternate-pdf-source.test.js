@@ -106,6 +106,43 @@ test('apply seals a 0600 forum-ID PDF and recoverable self-hashed alternate-sour
     assert.equal(second.status, 'recovered'); assert.equal(calls, 1);
 });
 
+test('reviewed n1m prior preprint can be imported from a browser download without inventing HTTP evidence', async t => {
+    const f = fixture(t, BEYOND); fs.mkdirSync(f.pdfRoot); fs.mkdirSync(f.receiptRoot);
+    const importFile = path.join(f.root, 'browser-download.pdf'); fs.writeFileSync(importFile, PDF);
+    const profile = api.profileForForum(f.forumId);
+    const extracted = `${profile.sourceTitle}\n${profile.sourceAuthors.join(', ')}\n${profile.sourceDoi}\n${'body '.repeat(300)}`;
+    const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId, importFile,
+        pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, importedAt: '2026-09-08T01:00:00.000Z' };
+    const first = await api.sealImportedAlternatePdf(options, { extractPdfText: async () => extracted });
+    assert.equal(first.status, 'created'); assert.equal(first.receipt.contract, api.IMPORT_CONTRACT);
+    assert.equal(first.receipt.acquisitionMethod, 'operator-browser-download');
+    assert.equal(first.receipt.networkResponseObserved, false);
+    assert.equal(Object.hasOwn(first.receipt, 'responseStatus'), false);
+    assert.deepEqual(first.receipt.sourceValidation.matchedMarkers,
+        [profile.sourceTitle, ...profile.sourceAuthors, profile.sourceDoi]);
+    assert.equal(api.readReceipt(first.receiptFile).receiptSha256, first.receipt.receiptSha256);
+    fs.unlinkSync(importFile);
+    const recovered = await api.sealImportedAlternatePdf(options, {
+        extractPdfText: async () => { throw new Error('must not re-import'); }
+    });
+    assert.equal(recovered.status, 'recovered');
+});
+
+test('operator import rejects the wrong profile and PDFs missing fixed identity markers', async t => {
+    const f = fixture(t, BEYOND); const importFile = path.join(f.root, 'browser-download.pdf');
+    fs.writeFileSync(importFile, PDF);
+    const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId, importFile,
+        pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot };
+    await assert.rejects(api.sealImportedAlternatePdf(options, {
+        extractPdfText: async () => 'unrelated '.repeat(300)
+    }), /does not contain every fixed title, author, and DOI marker/);
+    const tts = fixture(t, TTS); const ttsImport = path.join(tts.root, 'browser-download.pdf');
+    fs.writeFileSync(ttsImport, PDF);
+    await assert.rejects(api.sealImportedAlternatePdf({ ...options, snapshotFile: tts.snapshotFile,
+        forumId: tts.forumId, importFile: ttsImport, pdfRoot: tts.pdfRoot, receiptRoot: tts.receiptRoot }),
+    /allowed only for the reviewed n1mAjfRDZ6/);
+});
+
 test('receipt/PDF recovery fails closed on missing bytes, authority drift, and orphan byte mismatch', async t => {
     const f = fixture(t); const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-08T00:00:00.000Z' };
@@ -163,7 +200,8 @@ test('download metadata, source identity, and CLI inputs are strict', async t =>
         { finalUrl: 'https://arxiv.org/pdf/2510.06927v2' }) }), /fixed profile/);
 
     const parsed = cli.parseArgs(['--apply', '--snapshot', f.snapshotFile, '--forum-id', f.forumId,
-        '--pdf-root', f.pdfRoot, '--receipt-root', f.receiptRoot]);
+        '--import-file', path.join(f.root, 'download.pdf'), '--pdf-root', f.pdfRoot, '--receipt-root', f.receiptRoot]);
     assert.equal(parsed.apply, true); assert.equal(parsed.forumId, f.forumId);
+    assert.equal(parsed.importFile, path.join(f.root, 'download.pdf'));
     assert.throws(() => cli.parseArgs(['--apply', '--snapshot', 'relative.json', '--forum-id', f.forumId]), /Use/);
 });

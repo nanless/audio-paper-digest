@@ -6,27 +6,29 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const api = require('./lib/historical-icml-alternate-pdf-source.js');
 
-const USAGE = '--dry-run|--apply --snapshot ABSOLUTE.json --forum-id ALLOWLISTED_ID [--pdf-root ABSOLUTE_DIR] [--receipt-root ABSOLUTE_DIR]';
+const USAGE = '--dry-run|--apply --snapshot ABSOLUTE.json --forum-id ALLOWLISTED_ID [--import-file ABSOLUTE.pdf] [--pdf-root ABSOLUTE_DIR] [--receipt-root ABSOLUTE_DIR]';
 
 function parseArgs(argv) {
     const [mode, ...rest] = argv; const values = {};
-    if (!['--dry-run', '--apply'].includes(mode) || rest.length < 4 || rest.length > 8 || rest.length % 2) {
+    if (!['--dry-run', '--apply'].includes(mode) || rest.length < 4 || rest.length > 10 || rest.length % 2) {
         throw new Error(`Use ${USAGE}`);
     }
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
-        if (!['--snapshot', '--forum-id', '--pdf-root', '--receipt-root'].includes(flag)
+        if (!['--snapshot', '--forum-id', '--import-file', '--pdf-root', '--receipt-root'].includes(flag)
             || !value || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
         values[flag] = value;
     }
     if (!path.isAbsolute(values['--snapshot'] || '') || !/^[A-Za-z0-9_-]{6,128}$/.test(values['--forum-id'] || '')
         || (values['--pdf-root'] !== undefined && !path.isAbsolute(values['--pdf-root']))
-        || (values['--receipt-root'] !== undefined && !path.isAbsolute(values['--receipt-root']))) {
+        || (values['--receipt-root'] !== undefined && !path.isAbsolute(values['--receipt-root']))
+        || (values['--import-file'] !== undefined && !path.isAbsolute(values['--import-file']))) {
         throw new Error(`Use ${USAGE}`);
     }
     return { apply: mode === '--apply', snapshotFile: path.resolve(values['--snapshot']), forumId: values['--forum-id'],
         pdfRoot: values['--pdf-root'] && path.resolve(values['--pdf-root']),
-        receiptRoot: values['--receipt-root'] && path.resolve(values['--receipt-root']) };
+        receiptRoot: values['--receipt-root'] && path.resolve(values['--receipt-root']),
+        importFile: values['--import-file'] && path.resolve(values['--import-file']) };
 }
 
 async function main(argv = process.argv.slice(2), runtime = {}) {
@@ -38,7 +40,8 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     if (!path.isAbsolute(String(pdfRoot || '')) || !path.isAbsolute(String(receiptRoot || ''))) {
         throw new Error('historical ICML alternate PDF and receipt roots must be configured absolute paths');
     }
-    const result = await (runtime.seal || api.sealAlternatePdf)({ ...options, pdfRoot, receiptRoot }, runtime.dependencies);
+    const seal = runtime.seal || (options.importFile ? api.sealImportedAlternatePdf : api.sealAlternatePdf);
+    const result = await seal({ ...options, pdfRoot, receiptRoot }, runtime.dependencies);
     console.log(JSON.stringify(result)); return result;
 }
 
