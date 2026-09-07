@@ -39,7 +39,7 @@ arXiv + HuggingFace
 全历史工作只在 `audio-paper-digest-rewrite-all` 工作区执行，采用 **direct-local-first**：arXiv 每个
 generation 重取官方 TXT/PDF，会议重放已绑定 SHA 的本地 metadata/PDF；旧博客正文和旧分析不进入写作输入。
 OpenReview 不可达时，替代来源仍默认失败关闭；唯一经代码白名单和用户授权的跨标题例外
-`n1mAjfRDZ6` 可导入作者 TechRxiv v1 预印本，但分析输入、页面顶部和 staging manifest 都必须明示
+`n1mAjfRDZ6` 可导入作者发布在 SSRN 的早期预印本，但分析输入、页面顶部和 staging manifest 都必须明示
 “非 camera-ready”，并绑定来源标题、DOI、receipt 与 source SHA。
 
 ```text

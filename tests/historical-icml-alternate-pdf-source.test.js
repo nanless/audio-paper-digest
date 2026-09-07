@@ -69,14 +69,14 @@ test('dry-run replays poster authority plus exact snapshot title and ordered aut
         forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot }), /ordered authors differ/);
 });
 
-test('the cross-version TechRxiv profile also requires its exact authenticated poster identity', async t => {
+test('the cross-version SSRN profile also requires its exact authenticated poster identity', async t => {
     const f = fixture(t, BEYOND);
     const result = await api.sealAlternatePdf({ apply: false, snapshotFile: f.snapshotFile,
         forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot });
     assert.equal(result.posterId, String(BEYOND.posterId));
     assert.equal(result.sourceKind, 'author-prior-preprint-cross-version');
     assert.equal(result.sourceTitle, 'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction');
-    assert.equal(result.sourceDoi, '10.36227/techrxiv.177222989.90971634/v1');
+    assert.equal(result.sourceDoi, '10.2139/ssrn.6288899');
     assert.equal(result.versionRelation, 'author-prior-preprint-with-different-title');
     assert.notEqual(result.title, result.sourceTitle);
     assert.match(result.provenanceStatement, /neither the ICML camera-ready paper nor OpenReview response bytes/);
@@ -110,7 +110,7 @@ test('reviewed n1m prior preprint can be imported from a browser download withou
     const f = fixture(t, BEYOND); fs.mkdirSync(f.pdfRoot); fs.mkdirSync(f.receiptRoot);
     const importFile = path.join(f.root, 'browser-download.pdf'); fs.writeFileSync(importFile, PDF);
     const profile = api.profileForForum(f.forumId);
-    const extracted = `${profile.sourceTitle}\n${profile.sourceAuthors.join(', ')}\n${profile.sourceDoi}\n${'body '.repeat(300)}`;
+    const extracted = `${profile.importPdfMarkers.join('\n')}\n${'body '.repeat(300)}`;
     const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId, importFile,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, importedAt: '2026-09-08T01:00:00.000Z' };
     const first = await api.sealImportedAlternatePdf(options, { extractPdfText: async () => extracted });
@@ -119,7 +119,7 @@ test('reviewed n1m prior preprint can be imported from a browser download withou
     assert.equal(first.receipt.networkResponseObserved, false);
     assert.equal(Object.hasOwn(first.receipt, 'responseStatus'), false);
     assert.deepEqual(first.receipt.sourceValidation.matchedMarkers,
-        [profile.sourceTitle, ...profile.sourceAuthors, profile.sourceDoi]);
+        profile.importPdfMarkers);
     assert.equal(api.readReceipt(first.receiptFile).receiptSha256, first.receipt.receiptSha256);
     fs.unlinkSync(importFile);
     const recovered = await api.sealImportedAlternatePdf(options, {
@@ -135,7 +135,7 @@ test('operator import rejects the wrong profile and PDFs missing fixed identity 
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot };
     await assert.rejects(api.sealImportedAlternatePdf(options, {
         extractPdfText: async () => 'unrelated '.repeat(300)
-    }), /does not contain every fixed title, author, and DOI marker/);
+    }), /does not contain every fixed title, author, date, and cross-page text marker/);
     const tts = fixture(t, TTS); const ttsImport = path.join(tts.root, 'browser-download.pdf');
     fs.writeFileSync(ttsImport, PDF);
     await assert.rejects(api.sealImportedAlternatePdf({ ...options, snapshotFile: tts.snapshotFile,

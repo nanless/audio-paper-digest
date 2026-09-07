@@ -110,7 +110,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/historical-daily-primary-arxiv-binding.js` | Node 库 | 重放冻结 Daily 页面 SHA，只接受唯一合法评分元数据行中的规范 `[arxiv]` 主身份；签发字节区间/行哈希绑定并拒绝把正文引用链接误当 canonical。 |
 | `lib/historical-icml-poster-authority.js` | Node 库 | 严格认证 ICML 2026 raw poster→OpenReview forum 快照，签发 Daily child/汇总 section 身份绑定并重放 forum-ID 本地 PDF；不把旧页面正文作为写作输入。 |
 | `lib/historical-openreview-pdf-source.js` | Node 库 | 从 authenticated ICML poster authority 固定 OpenReview forum 身份，经项目 HTTP CONNECT、手动受限重定向和流式字节上限抓取缺失 PDF；以 O_EXCL/0600 封存 forum-ID PDF 和自哈希 receipt，恢复时先重放现有字节。 |
-| `lib/historical-icml-alternate-pdf-source.js` | Node 库 | OpenReview 被挑战页阻断时，仅对代码白名单的 ICML poster/forum 使用固定替代 PDF；精确重放快照标题和作者顺序。`n1mAjfRDZ6` 还可受控导入浏览器下载的 TechRxiv PDF，重新核验标题/作者/DOI，并用非网络 receipt 明示来源；绝不冒充 OpenReview/camera-ready 字节。 |
+| `lib/historical-icml-alternate-pdf-source.js` | Node 库 | OpenReview 被挑战页阻断时，仅对代码白名单的 ICML poster/forum 使用固定替代 PDF；精确重放快照标题和作者顺序。`n1mAjfRDZ6` 还可受控导入浏览器下载的 SSRN PDF，重新核验标题、作者、日期和跨页特征文本并绑定固定 SSRN DOI，以非网络 receipt 明示来源；绝不冒充 OpenReview/camera-ready 字节。 |
 | `lib/historical-direct-rewrite-plan.js` | Node 库 | 从 strict current catalog、inventory 与会议 projections 生成可重放路由计划，并自哈希记录所有未覆盖 frozen paper pages 及 scope/hint-status 汇总；唯一白名单跨标题预印本必须带自哈希 source disclosure，普通 v5 路由保持旧字节结构以兼容长任务恢复；不调用 LLM、网络、crosswalk 或旧正文。 |
 | `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行 direct plan：arXiv 每 generation 重新获取并封存 TXT/PDF，会议使用本地 PDF；支持稳定 paper 集合/上限、plan+generation 独占锁、pause marker、信号安全暂停和逐篇进度，以 source-only analysis/Reader 结果写隔离 registry 和 staging。 |
 | `lib/historical-direct-control.js` | Node 库 | 提供 source/analysis 两阶段 plan+generation 绑定的 immutable pause request、安全 resume、source checkpoint、registry/aggregate/task/publication blocker 只读汇总；不调用模型或修改博客。 |
@@ -154,7 +154,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-conference-crawl-batch.js` | retired fail-closed compatibility endpoint；会议 metadata/PDF 和 exact title fingerprint 只能进入 direct local-source/projection 路线，不能写 crosswalk。 |
 | `historical-conference-local-sources.js` | 只读生成本地会议 source manifest v2；必须显式传入绝对 `--icml-poster-snapshot` 和 retained `--icml-pdf-root`，fresh PDF/receipt 根从参数或集中配置取得；不接触历史页、crosswalk、LLM、网络或发布。 |
 | `historical-openreview-pdf-source.js` | 为一个 authenticated ICML/OpenReview forum ID 规划或封存缺失官方 PDF；dry-run 零网络零写入，PDF 写入 local-sources 已消费的 ICML PDF 根，receipt 单独进入 runtime。 |
-| `historical-icml-alternate-pdf-source.js` | 只封存代码白名单中的 ICML 替代来源；固定 poster/forum/标题/作者/来源 URL。`--import-file` 仅允许 `n1mAjfRDZ6`，重提取并匹配标题/作者/DOI，以非网络 receipt 记录浏览器下载导入。 |
+| `historical-icml-alternate-pdf-source.js` | 只封存代码白名单中的 ICML 替代来源；固定 poster/forum/标题/作者/来源 URL。`--import-file` 仅允许 `n1mAjfRDZ6`，重提取并匹配标题、作者、日期和跨页特征文本，以非网络 receipt 记录浏览器下载导入。 |
 | `historical-conference-page-projections.js` | 从显式本地 catalog 和冻结 inventory 建立会议页 projection；不读取历史正文。 |
 | `historical-direct-rewrite-inputs.js` | 从冻结 inventory 的 single hint、严格主评分行 arXiv binding、ICML poster total/routable binding、conference manifest 与 blog root 写出 scoped v5 direct-input catalog；不要求额外 arXiv manifest。 |
 | `historical-direct-rewrite-plan.js` | 从 v5 direct catalog、inventory 与 conference projection v3 签发 source-only rewrite route plan；精确重放 primary arXiv 与 ICML routable binding，旧 v4/v3 文件失败关闭，并报告 frozen paper page 覆盖缺口。 |

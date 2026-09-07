@@ -104,7 +104,7 @@ test('different-title prior preprint produces an explicit source title, DOI, and
     const acquisition = {
         versionRelation: 'author-prior-preprint-with-different-title',
         sourceTitle: 'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction',
-        sourceDoi: '10.36227/techrxiv.177222989.90971634/v1'
+        sourceDoi: '10.2139/ssrn.6288899'
     };
     const disclosure = runner.priorPreprintAnalysisDisclosure({ pdf: { acquisition } }, item);
     assert.equal(disclosure.sourceTitle, acquisition.sourceTitle);

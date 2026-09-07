@@ -107,7 +107,7 @@ test('the exact receipt-bound n1m author preprint closes the v5 gap with a manda
 
     const profile = pdfSource.profileForForum(forumId);
     const importFile = writeBytes(path.join(root, 'browser-download.pdf'), PDF);
-    const extracted = `${profile.sourceTitle}\n${profile.sourceAuthors.join(', ')}\n${profile.sourceDoi}\n${'body '.repeat(300)}`;
+    const extracted = `${profile.importPdfMarkers.join('\n')}\n${'body '.repeat(300)}`;
     const sealed = await pdfSource.sealImportedAlternatePdf({ apply: true, snapshotFile, forumId,
         importFile, pdfRoot: freshPdfRoot, receiptRoot: alternateReceiptRoot,
         importedAt: '2026-09-08T00:00:00.000Z' }, { extractPdfText: async () => extracted });

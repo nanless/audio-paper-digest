@@ -43,7 +43,7 @@ const PROFILE_DEFINITIONS = Object.freeze({
         provenanceStatement: 'PDF bytes were fetched from the versioned official arXiv PDF endpoint; they are not OpenReview response bytes.'
     }),
     n1mAjfRDZ6: Object.freeze({
-        profileId: 'icml-2026-n1mAjfRDZ6-techrxiv-177222989-v1-cross-version',
+        profileId: 'icml-2026-n1mAjfRDZ6-ssrn-6288899-cross-version',
         forumId: 'n1mAjfRDZ6',
         posterId: '67080',
         title: 'Position: *Beyond Text* The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future',
@@ -51,13 +51,21 @@ const PROFILE_DEFINITIONS = Object.freeze({
         sourceKind: 'author-prior-preprint-cross-version',
         sourceTitle: 'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction',
         sourceAuthors: Object.freeze(['Deepak Babu Piskala']),
-        sourceDoi: '10.36227/techrxiv.177222989.90971634/v1',
+        sourceDoi: '10.2139/ssrn.6288899',
         versionRelation: 'author-prior-preprint-with-different-title',
-        requestedUrl: 'https://d197for5662m48.cloudfront.net/documents/publicationstatus/309719/preprint_pdf/558b4fa5fcb7119fe0fb4b6bac999479.pdf',
+        requestedUrl: 'https://papers.ssrn.com/sol3/Delivery.cfm/6288899.pdf?abstractid=6288899&mirid=1',
         allowedUrls: Object.freeze([
-            'https://d197for5662m48.cloudfront.net/documents/publicationstatus/309719/preprint_pdf/558b4fa5fcb7119fe0fb4b6bac999479.pdf'
+            'https://papers.ssrn.com/sol3/Delivery.cfm/6288899.pdf?abstractid=6288899&mirid=1',
+            'https://papers.ssrn.com/sol3/Delivery.cfm/6288899.pdf?abstractid=6288899&mirid=1&type=2'
         ]),
-        provenanceStatement: 'PDF bytes were fetched from the author prior TechRxiv v1 preprint. Its title differs from the ICML record; it is neither the ICML camera-ready paper nor OpenReview response bytes.'
+        importPdfMarkers: Object.freeze([
+            'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction',
+            'Deepak Babu Piskala',
+            'Preprint. January 26, 2026.',
+            'Audio-Language Model Architecture',
+            'The Asymmetry Problem'
+        ]),
+        provenanceStatement: 'PDF bytes were obtained from the author prior preprint through the fixed SSRN record. Its title differs from the ICML record; it is neither the ICML camera-ready paper nor OpenReview response bytes.'
     })
 });
 
@@ -205,7 +213,8 @@ function authenticateSourceIdentity({ snapshotFile, forumId } = {}) {
         profileId: profile.profileId, sourceKind: profile.sourceKind, sourceTitle: profile.sourceTitle,
         sourceAuthors: clone(profile.sourceAuthors), sourceDoi: profile.sourceDoi,
         versionRelation: profile.versionRelation, requestedUrl: profile.requestedUrl,
-        provenanceStatement: profile.provenanceStatement };
+        provenanceStatement: profile.provenanceStatement,
+        ...(profile.forumId === 'n1mAjfRDZ6' ? { importPdfMarkers: clone(profile.importPdfMarkers) } : {}) };
     return { profile, authorityHandle, authority, authorityRecord, evidence,
         sourceIdentityBindingSha256: stableHash(evidence) };
 }
@@ -364,8 +373,8 @@ function normalizeImportReceipt(value) {
     }
     exact(value.sourceValidation, ['method', 'extractedTextSha256', 'extractedTextChars', 'matchedMarkers'],
         'imported alternate PDF source validation');
-    const expectedMarkers = [profile.sourceTitle, ...profile.sourceAuthors, profile.sourceDoi];
-    if (value.sourceValidation.method !== 'pdf-text-profile-markers-v1'
+    const expectedMarkers = clone(profile.importPdfMarkers);
+    if (value.sourceValidation.method !== 'pdf-text-profile-markers-v2'
         || !SHA_RE.test(String(value.sourceValidation.extractedTextSha256 || ''))
         || !Number.isSafeInteger(value.sourceValidation.extractedTextChars)
         || value.sourceValidation.extractedTextChars < 1000
@@ -496,7 +505,8 @@ async function sealAlternatePdf({ apply = false, snapshotFile, forumId, pdfRoot,
 
 function normalizedSearchText(value) {
     return String(value || '').normalize('NFKC').toLocaleLowerCase('en-US')
-        .replace(/[\u0000-\u001f\u007f\u00ad]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+        .replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\u00ad/g, '')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
 async function validateImportedPdf(bytes, profile, dependencies = {}) {
@@ -515,11 +525,11 @@ async function validateImportedPdf(bytes, profile, dependencies = {}) {
     catch (error) { fail(`imported PDF text extraction failed: ${error.code || error.message}`); }
     if (text.length < 1000) fail('imported PDF text is unusably short');
     const searchable = normalizedSearchText(text);
-    const markers = [profile.sourceTitle, ...profile.sourceAuthors, profile.sourceDoi];
+    const markers = clone(profile.importPdfMarkers);
     if (markers.some(marker => !searchable.includes(normalizedSearchText(marker)))) {
-        fail('imported PDF does not contain every fixed title, author, and DOI marker');
+        fail('imported PDF does not contain every fixed title, author, date, and cross-page text marker');
     }
-    return { method: 'pdf-text-profile-markers-v1', extractedTextSha256: sha256(Buffer.from(text, 'utf8')),
+    return { method: 'pdf-text-profile-markers-v2', extractedTextSha256: sha256(Buffer.from(text, 'utf8')),
         extractedTextChars: text.length, matchedMarkers: markers };
 }
 

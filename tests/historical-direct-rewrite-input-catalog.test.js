@@ -48,7 +48,7 @@ test('only the code-reviewed title-different prior preprint is direct-routable w
         openreviewResponseBytes: disclosure.openreviewResponseBytes }, {
         icmlTitle: 'Position: *Beyond Text* The Text-Centric Bias in Foundation Models Must Be Revisited for a Speech-First Future',
         preprintTitle: 'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction',
-        doi: '10.36227/techrxiv.177222989.90971634/v1',
+        doi: '10.2139/ssrn.6288899',
         versionRelation: catalog.BLOCKED_CROSS_VERSION_RELATION, cameraReady: false,
         openreviewResponseBytes: false });
     const { disclosureSha256, ...body } = disclosure;

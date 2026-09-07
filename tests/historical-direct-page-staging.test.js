@@ -76,7 +76,7 @@ test('different-title prior preprint adds a visible top disclosure whose bytes a
         versionRelation: 'author-prior-preprint-with-different-title',
         sourceKind: 'author-prior-preprint-cross-version',
         sourceTitle: 'Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction',
-        sourceDoi: '10.36227/techrxiv.177222989.90971634/v1',
+        sourceDoi: '10.2139/ssrn.6288899',
         receipt: { selfSha256: receiptSelfSha256 }
     };
     const disclosureBody = { contract: 'historical-author-prior-preprint-disclosure-v1', version: 1, paperId,
@@ -101,7 +101,7 @@ test('different-title prior preprint adds a visible top disclosure whose bytes a
         assert.match(markdown, /^---\ndate: \d{4}-\d{2}-\d{2}\n---\n> \*\*⚠️ 来源版本说明（非 Camera-ready）\*\*/);
         assert.match(markdown, /不是会议 camera-ready 定稿/);
         assert.match(markdown, /Beyond Words: Toward Audio-First Foundation Models for Effortless Human-Computer Interaction/);
-        assert.match(markdown, /10\.36227\/techrxiv\.177222989\.90971634\/v1/);
+        assert.match(markdown, /10\.2139\/ssrn\.6288899/);
         assert.equal(page.contentSha256, sha(bytes));
     }
     assert.equal(result.pageSetSha256, api.stableHash(result.pages));

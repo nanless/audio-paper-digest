@@ -105,7 +105,7 @@ npm run digest:prepare -- YYYY-MM-DD
 - 同篇分析必须持有规范化 arXiv ID 锁，并在锁内重读、合并、递增 generation，禁止用锁外陈旧对象覆盖 canonical。
 - ICML/OpenReview 替代 PDF 默认失败关闭。唯一经用户授权的跨标题预印本例外是
   `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：必须由代码白名单 sealer 绑定 poster/forum、
-  固定 TechRxiv 标题、作者、DOI、PDF/receipt/source SHA；浏览器下载只能经 `--import-file` 导入并记录
+  固定 SSRN 标题、作者、DOI、PDF/receipt/source SHA；浏览器下载只能经 `--import-file` 导入并记录
   `networkResponseObserved: false`。plan、模型输入和最终页面必须显式显示非 camera-ready 提示；不得推广到其他论文。
 
 ## 内容与评分门禁

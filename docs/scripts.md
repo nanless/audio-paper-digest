@@ -101,7 +101,7 @@ npm run history:icml-alternate-pdf-source -- --apply \
   --snapshot /abs/data/icml2026/papers.json --forum-id jfpkqjhex4
 npm run history:icml-alternate-pdf-source -- --apply \
   --snapshot /abs/data/icml2026/papers.json --forum-id n1mAjfRDZ6 \
-  --import-file /abs/downloads/558b4fa5fcb7119fe0fb4b6bac999479.pdf
+  --import-file /abs/downloads/ssrn-6288899.pdf
 npm run history:conference-local-sources -- --apply \
   --icml-poster-snapshot /abs/data/icml2026/papers.json \
   --icml-pdf-root /abs/data/pdfs/icml2026 \
@@ -132,9 +132,10 @@ npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-re
   (--daily YYYY-MM-DD|--conference conference-key)
 ```
 
-`n1mAjfRDZ6` 的 TechRxiv CDN 若能由项目代理直接访问，可省略 `--import-file`；若只能由浏览器下载，
+`n1mAjfRDZ6` 的 SSRN 下载若能由项目代理直接访问，可省略 `--import-file`；若遇到 Cloudflare、只能由浏览器下载，
 必须用上面的显式导入参数。导入器只接受这一条代码白名单，重新提取 PDF 文本并逐项匹配固定预印本标题、
-作者和 DOI，receipt 明示 `operator-browser-download`、`networkResponseObserved: false`，不会伪造 HTTP 200。
+作者、日期和多个跨页特征文本；SSRN DOI 由代码白名单来源记录绑定。receipt 明示
+`operator-browser-download`、`networkResponseObserved: false`，不会伪造 HTTP 200。
 导入文件只作为一次性输入，封存后可删除；恢复时重放 runtime PDF 与自哈希 receipt。普通会议来源的
 plan v5 字节结构保持不变，既有 status/pause/resume checkpoint 可继续读取。
 
