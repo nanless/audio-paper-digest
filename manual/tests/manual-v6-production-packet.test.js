@@ -92,6 +92,9 @@ describe('Manual v6 production packet materializer', () => {
         assert.ok(blank.reviewReceipt.requiredBindings.includes('revision'));
         assert.match(blank.fields.evidenceLedger.idContract, /E\\d\{2,3\}/);
         assert.ok(blank.roleOwnership.author_revision.some(item => /dependent binding/.test(item)));
+        assert.ok(blank.roleOwnership.author.includes('primaryMethodTag'));
+        assert.ok(blank.authorOwnedRequiredFields.includes('primaryMethodTag'));
+        assert.match(blank.fields.authorOwnedBase.primaryMethodTag, /explicit current method-facet/);
         assert.match(blank.outputContract.figureEvidencePolicy, /pixel facts/);
         assert.throws(() => parseArgs([
             '--date', '2026-08-29', '--paper', '2608.12345', '--role', 'broker'
@@ -105,6 +108,7 @@ describe('Manual v6 production packet materializer', () => {
         const draft = populateAuthorMinimums(buildBlankRecordSkeleton('2608.12345'));
         Object.assign(draft, {
             type: '方法研究', task: '#语音识别',
+            primaryMethodTag: '#Transformer',
             tags: '#语音识别 #Transformer #鲁棒性'
         });
         fs.writeFileSync(path.join(root, 'draft', 'author-article.md'), article);
@@ -136,6 +140,7 @@ describe('Manual v6 production packet materializer', () => {
     it('author-owned 基础字段只接受受控类型/无歧义别名和规范标签字符串', () => {
         const valid = {
             type: '方法研究', task: '#语音识别',
+            primaryMethodTag: '#Transformer',
             tags: '#语音识别 #Transformer #鲁棒性'
         };
         assert.deepEqual(normalizeAuthorOwnedBaseFields(valid), valid);
@@ -150,13 +155,23 @@ describe('Manual v6 production packet materializer', () => {
         }), /type 必须是受控文档类型/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...valid, task: '语音识别'
-        }), /task 必须是单个合法/);
+        }), /task 必须是 current registry/);
+        assert.throws(() => normalizeAuthorOwnedBaseFields({
+            ...valid, task: '#数据集'
+        }), /task 必须是 current registry/);
+        assert.throws(() => normalizeAuthorOwnedBaseFields({
+            ...valid, primaryMethodTag: '#语音识别'
+        }), /primaryMethodTag 必须是 current registry/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...valid, tags: ['#语音识别', '#Transformer', '#鲁棒性']
         }), /tags 必须是 3-5 个空格分隔/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...valid, tags: '#Transformer #鲁棒性 #低资源'
-        }), /并覆盖 task/);
+        }), /覆盖主任务和主方法/);
+        assert.deepEqual(normalizeAuthorOwnedBaseFields({
+            ...valid,
+            tags: '#语音识别 #Transformer #CNN #鲁棒性'
+        }).tags, '#语音识别 #Transformer #CNN #鲁棒性');
         const complete = populateAuthorMinimums(buildBlankRecordSkeleton('2608.12345'));
         Object.assign(complete, valid);
         assert.doesNotThrow(() => validateAuthorOwnedRecordDraft(complete));

@@ -20,6 +20,7 @@ const {
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
     validateCoreSummaryStageBinding,
+    validateTaxonomyStageBinding,
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 
@@ -708,6 +709,8 @@ function isCompleteAnalysisContent(paper) {
         !isRecoveryStageTerminal(stage, stages[stage]?.status))) {
         return false;
     }
+    if (!paper.analysisManifest.manualTakeover
+        && validateTaxonomyStageBinding(paper, { parsed: parseAnalysis(paper.analysis) })) return false;
     if (validateCoreSummaryStageBinding(paper)) return false;
     if (validateManualTakeoverManifest(
         paper.analysisManifest,
@@ -724,7 +727,9 @@ function isCompleteAnalysisContent(paper) {
 }
 
 const LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES = Object.freeze(
-    REQUIRED_RECOVERY_STAGES.filter(stage => stage !== 'coreSummaryRepair')
+    REQUIRED_RECOVERY_STAGES.filter(stage => (
+        stage !== 'coreSummaryRepair' && stage !== 'taxonomySeal'
+    ))
 );
 const CORE_SUMMARY_V3_READ_ONLY_COMPATIBILITY_CUTOFF_MS = Date.parse(
     '2026-09-07T00:00:00.000+08:00'
@@ -741,13 +746,15 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
     const contracts = manifest?.contracts;
     if (paper?.latestAnalysisAttemptError
         || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed'
-        || !hasValidAnalysisBody(paper)
+        || !hasValidAnalysisBody(paper, { legacyTags: true })
         || !manifest || manifest.version !== 1
         || !stages || typeof stages !== 'object' || Array.isArray(stages)
         || manifest.manualTakeover
         || (contracts && (typeof contracts !== 'object' || Array.isArray(contracts)))
         || Object.prototype.hasOwnProperty.call(contracts || {}, 'coreSummary')
         || Object.prototype.hasOwnProperty.call(stages, 'coreSummaryRepair')
+        || Object.prototype.hasOwnProperty.call(contracts || {}, 'taxonomy')
+        || Object.prototype.hasOwnProperty.call(stages, 'taxonomySeal')
         || LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES.some(stage => {
             const completedAt = Date.parse(stages[stage]?.updatedAt || '');
             return !isRecoveryStageTerminal(stage, stages[stage]?.status)
@@ -781,6 +788,7 @@ function isSealedApiAnalysisEligibleForCoreSummaryRecovery(paper) {
         || REQUIRED_RECOVERY_STAGES.some(stage =>
             !isRecoveryStageTerminal(stage, stages[stage]?.status))
         || validateCoreSummaryStageBinding(paper, { skipSemantic: true })
+        || validateTaxonomyStageBinding(paper, { parsed: parseAnalysis(paper.analysis) })
         || validateManualTakeoverManifest(
             manifest,
             manifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
@@ -1024,12 +1032,14 @@ function isSuccessfulAnalysisRecord(paper) {
     return isCompleteAnalysisContent(paper);
 }
 
-function hasValidAnalysisBody(paper) {
+function hasValidAnalysisBody(paper, options = {}) {
     if (!paper || typeof paper.analysis !== 'string' || !paper.analysis.trim()) return false;
     // Recovery manifests describe the latest attempt, not whether an older body is usable.
     // Re-parse the body independently so repeated failed saves cannot erase valid content.
     try {
-        const parsed = parseAnalysis(paper.analysis);
+        const parsed = parseAnalysis(paper.analysis, {
+            legacyTags: options.legacyTags === true
+        });
         return !getInvalidAnalysisReason(paper.analysis, parsed, {
             enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
                 paper.analysisManifest
@@ -1037,7 +1047,8 @@ function hasValidAnalysisBody(paper) {
             experimentTableContractVersion: paper.analysisManifest?.contracts?.experimentTables,
             enforceMethodDetailContract: analysisManifestRequiresMethodDetailContract(
                 paper.analysisManifest
-            )
+            ),
+            legacyTagSurface: options.legacyTags === true
         });
     } catch (error) {
         return false;

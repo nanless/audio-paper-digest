@@ -116,7 +116,7 @@ function buildBlankRecordSkeleton(paperId) {
         manualDepth: 'full-text-evidence-v6',
         paperId,
         arxivId: paperId,
-        type: '', task: '', tags: '', dims: Array(8).fill(null), confidence: '',
+        type: '', task: '', primaryMethodTag: '', tags: '', dims: Array(8).fill(null), confidence: '',
         authorInfo: {
             firstAuthorAffiliation: '', correspondingAuthors: '', affiliations: '', sourceQuote: ''
         },
@@ -215,7 +215,7 @@ function buildBlankRecordSchema(paperId) {
         ],
         roleOwnership: {
             author: [
-                'sourceSnapshot', 'type', 'task', 'tags', 'authorInfo', 'question',
+                'sourceSnapshot', 'type', 'task', 'primaryMethodTag', 'tags', 'authorInfo', 'question',
                 'method', 'method2', 'method3', 'innovations', 'results', 'details',
                 'limits', 'open', 'review', 'evidenceLedger', 'resultClaims',
                 'researchBrief', 'manualAudit', 'stageReviewAttemptsByStage',
@@ -385,8 +385,9 @@ function buildBlankRecordSchema(paperId) {
         fields: {
             authorOwnedBase: {
                 type: `exactly one of ${DOCUMENT_TYPES.join(' / ')}; only utils.normalizeDocumentType one-to-one aliases are accepted at submit and canonicalized by the revision binder`,
-                task: 'one whitespace-free #tag from the repository ALLOWED_TAGS whitelist',
-                tags: 'one string containing 3-5 unique whitespace-separated ALLOWED_TAGS entries and including task; arrays are forbidden',
+                task: 'one current task-facet preferred #tag included in tags',
+                primaryMethodTag: 'one explicit current method-facet preferred #tag included in tags; peer method tags remain allowed',
+                tags: 'one string containing 3-5 unique current preferred tags, including task and primaryMethodTag, without ancestor duplication; arrays are forbidden',
                 title: 'the authoritative title is bound through evidence/paper-metadata.json; titleOverride remains optional and may only repair whitespace'
             },
             sourceSnapshot: {
@@ -716,6 +717,7 @@ function validateAuthorOutputDescriptor(output, artifactRoot, expected = {}) {
             ...draft,
             type: expected.metadataCorrection.type,
             task: expected.metadataCorrection.task,
+            primaryMethodTag: expected.metadataCorrection.primaryMethodTag,
             tags: expected.metadataCorrection.tags
         }
         : draft;

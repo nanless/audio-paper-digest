@@ -20,12 +20,14 @@ function fail(message) { const error = new Error(`Historical postprocess rejecte
 function uuidFrom(value) { const bytes = Buffer.from(sha256(value).slice(0, 32), 'hex');
     bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80; const hex = bytes.toString('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`; }
-function deterministicStagingRunId(crosswalkId, item, registrySha256, rendererImplementationSha256) {
+function deterministicStagingRunId(crosswalkId, item, registrySha256, rendererImplementationSha256,
+    assignmentSha256) {
     if (!UUID_RE.test(crosswalkId || '') || !SHA_RE.test(registrySha256 || '')
         || !SHA_RE.test(rendererImplementationSha256 || '')
-        || !item || !/^arxiv:\d{4}\.\d{4,5}$/.test(item.paperId || '') || !UUID_RE.test(item.runId || '')) fail('staging identity is invalid');
+        || !SHA_RE.test(assignmentSha256 || '') || !item
+        || !/^arxiv:\d{4}\.\d{4,5}$/.test(item.paperId || '') || !UUID_RE.test(item.runId || '')) fail('staging identity is invalid');
     if (!SHA_RE.test(item.analysisSchedulerItemSha256 || '')) fail('analysis scheduler item binding SHA is invalid');
-    return uuidFrom(`historical-postprocess-staging-v2\0${crosswalkId}\0${item.paperId}\0${item.runId}\0${registrySha256}\0${rendererImplementationSha256}\0${item.analysisSchedulerItemSha256}`);
+    return uuidFrom(`historical-postprocess-staging-v3\0${crosswalkId}\0${item.paperId}\0${item.runId}\0${registrySha256}\0${rendererImplementationSha256}\0${item.analysisSchedulerItemSha256}\0${assignmentSha256}`);
 }
 function checkpointPath(root, crosswalkId, registrySha256, rendererImplementationSha256, create = false) {
     if (typeof root !== 'string' || !path.isAbsolute(root) || !UUID_RE.test(crosswalkId || '')
@@ -71,6 +73,66 @@ function completeItems(snapshot) {
     return Object.entries(snapshot.value.items).map(([paperId, item]) => ({ ...structuredClone(item), paperId,
         analysisSchedulerItemSha256: stableHash(analysisSchedulerItemBinding(paperId, item)) }))
         .filter(item => item.status === 'complete').sort((a, b) => a.paperId.localeCompare(b.paperId));
+}
+
+function prepareCurrentAssignment(item, taxonomy, files, deps) {
+    const recovered = deps.recoverRun({ runId: item.runId, date: item.analysisDate,
+        arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir,
+        now: deps.now() });
+    if (!(recovered?.storageSealed === true && recovered.currentContractComplete === true)) {
+        fail(`${item.paperId} analysis run is not current-contract complete`);
+    }
+    const handle = deps.loadAnalysisRun({ analysisRoot: files.freshRewriteRunsDir, runId: item.runId });
+    const assignments = deps.buildAssignments({ runHandle: handle, taxonomy, paperId: item.paperId });
+    if (assignments.length !== 1) fail(`${item.paperId} taxonomy assignment result is not singular`);
+    return assignments[0];
+}
+
+function assignmentIdentity(assignment, taxonomyFileSha256 = null) {
+    return {
+        paperId: assignment.paperId,
+        analysisRunId: assignment.analysisRunId,
+        analysisFileSha256: assignment.analysisFileSha256,
+        analysisRecordSha256: assignment.analysisRecordSha256,
+        analysisSha256: assignment.analysisSha256,
+        registrySha256: assignment.registrySha256,
+        assignmentSha256: assignment.assignmentSha256,
+        ...(taxonomyFileSha256 ? { taxonomyFileSha256 } : {})
+    };
+}
+
+function assertStagedManifestProof(staged, stagingRunId, rendererImplementationSha256,
+    expected) {
+    const manifest = staged?.manifest;
+    if (!manifest || manifest.stagingRunId !== stagingRunId
+        || manifest.rendererImplementationSha256 !== rendererImplementationSha256
+        || staged.manifestSha256 !== manifest.manifestSha256
+        || !Array.isArray(manifest.pages) || !manifest.pages.length) {
+        fail('page staging did not return its authenticated manifest proof');
+    }
+    for (const page of manifest.pages) {
+        const actual = {
+            paperId: page.paperId,
+            analysisRunId: page.analysisRunId,
+            analysisFileSha256: page.analysisFileSha256,
+            analysisRecordSha256: page.analysisRecordSha256,
+            analysisSha256: page.analysisSha256,
+            taxonomyAssignmentSha256: page.taxonomyAssignmentSha256,
+            taxonomyFileSha256: page.taxonomyFileSha256
+        };
+        const wanted = {
+            paperId: expected.paperId,
+            analysisRunId: expected.analysisRunId,
+            analysisFileSha256: expected.analysisFileSha256,
+            analysisRecordSha256: expected.analysisRecordSha256,
+            analysisSha256: expected.analysisSha256,
+            taxonomyAssignmentSha256: expected.assignmentSha256,
+            taxonomyFileSha256: expected.taxonomyFileSha256
+        };
+        if (stableHash(actual) !== stableHash(wanted)) {
+            fail(`${expected.paperId} staging manifest differs from prepared taxonomy/analysis proof`);
+        }
+    }
 }
 function defaultDependencies() {
     const Config = require('../config.js'); const taxonomy = require('./historical-taxonomy-assignment.js');
@@ -126,55 +188,56 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     const crosswalk = deps.readCrosswalk({ crosswalkRoot: files.pageSourceCrosswalkDir, crosswalkId: options.crosswalkId });
     const allComplete = completeItems(analysisScheduler);
     const relevantComplete = options.date ? allComplete.filter(item => (item.cohortDates || []).includes(options.date)) : allComplete;
-    const drySealed = options.apply ? relevantComplete : relevantComplete.filter(item => {
-        try { const recovered = deps.recoverRun({ runId: item.runId, date: item.analysisDate,
-            arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir,
-            now: deps.now() });
-            return recovered?.storageSealed === true
-                && recovered.currentContractComplete === true; }
-        catch { return false; }
+    const dryPrepared = options.apply ? [] : relevantComplete.flatMap(item => {
+        try { return [{ ...item, currentAssignment: prepareCurrentAssignment(item, taxonomy, files, deps) }]; }
+        catch { return []; }
     });
-    const available = options.apply ? relevantComplete : drySealed; const maximum = options.limit === 'pilot' ? 1
+    const available = options.apply ? relevantComplete : dryPrepared; const maximum = options.limit === 'pilot' ? 1
         : options.limit === null ? available.length : options.limit; const selected = available.slice(0, maximum);
-    const plan = selected.map(item => ({ paperId: item.paperId, analysisRunId: item.runId,
+    const plan = options.apply ? [] : selected.map(item => ({ paperId: item.paperId, analysisRunId: item.runId,
         rendererImplementationSha256,
         stagingRunId: deterministicStagingRunId(options.crosswalkId, item, taxonomy.registrySha256,
-            rendererImplementationSha256),
+            rendererImplementationSha256, item.currentAssignment?.assignmentSha256),
+        analysisFileSha256: item.currentAssignment?.analysisFileSha256,
+        analysisRecordSha256: item.currentAssignment?.analysisRecordSha256,
+        taxonomyAssignmentSha256: item.currentAssignment?.assignmentSha256,
         cohortDates: item.cohortDates || [] }));
     if (!options.apply) return { status: 'dry-run', crosswalkId: options.crosswalkId,
         registrySha256: taxonomy.registrySha256, analysisSchedulerFileSha256: analysisScheduler.fileSha256,
         rendererImplementationSha256,
         checkpointComplete: allComplete.length, relevantComplete: relevantComplete.length,
-        completeAvailable: drySealed.length, unsealed: relevantComplete.length - drySealed.length, selected: plan };
+        completeAvailable: dryPrepared.length, unsealed: relevantComplete.length - dryPrepared.length, selected: plan };
     const filename = checkpointPath(files.historicalPostprocessSchedulerDir, options.crosswalkId,
         taxonomy.registrySha256, rendererImplementationSha256, true);
     updateCheckpoint(filename, options.crosswalkId, taxonomy.registrySha256,
         rendererImplementationSha256, deps, value => value);
     const outcomes = await mapConcurrent(selected, options.concurrency, async item => {
-        const stagingRunId = deterministicStagingRunId(options.crosswalkId, item, taxonomy.registrySha256,
-            rendererImplementationSha256);
-        let assignmentProof = null;
+        let stagingRunId = null; let assignmentProof = null;
         try {
-            const recovered = deps.recoverRun({ runId: item.runId, date: item.analysisDate,
-                arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir,
-                now: deps.now() });
-            if (!(recovered?.storageSealed === true
-                && recovered.currentContractComplete === true)) {
-                fail(`${item.paperId} analysis run is not current-contract complete`);
-            }
-            const handle = deps.loadAnalysisRun({ analysisRoot: files.freshRewriteRunsDir, runId: item.runId });
-            const assignments = deps.buildAssignments({ runHandle: handle, taxonomy, paperId: item.paperId });
-            if (assignments.length !== 1) fail(`${item.paperId} taxonomy assignment result is not singular`);
+            const assignments = [prepareCurrentAssignment(item, taxonomy, files, deps)];
+            stagingRunId = deterministicStagingRunId(options.crosswalkId, item, taxonomy.registrySha256,
+                rendererImplementationSha256, assignments[0].assignmentSha256);
             const assignmentOutput = deps.writeAssignments({ outputRoot: files.historicalTaxonomyAssignmentDir, assignments })[0];
-            assignmentProof = { taxonomyAssignmentSha256: assignments[0].assignmentSha256,
+            assignmentProof = { analysisFileSha256: assignments[0].analysisFileSha256,
+                analysisRecordSha256: assignments[0].analysisRecordSha256,
+                analysisSha256: assignments[0].analysisSha256,
+                taxonomyAssignmentSha256: assignments[0].assignmentSha256,
                 taxonomyFileSha256: assignmentOutput.fileSha256 };
             if (assignments[0].status !== 'assigned') fail(`${item.paperId} taxonomy assignment is blocked`);
             const staged = await deps.stagePages({ apply: true, crosswalkId: options.crosswalkId,
                 analysisRunId: item.runId, stagingRunId, limit: null,
                 rendererImplementationSha256,
+                expectedStagingRunId: stagingRunId,
+                expectedAssignment: assignmentIdentity(assignments[0], assignmentOutput.fileSha256),
                 crosswalkRoot: files.pageSourceCrosswalkDir, analysisRoot: files.freshRewriteRunsDir,
                 taxonomyRoot: files.historicalTaxonomyAssignmentDir, taxonomyRegistry: files.taxonomyRegistry,
                 stagingRoot: files.historicalPageStagingDir });
+            assertStagedManifestProof(staged, stagingRunId, rendererImplementationSha256,
+                assignmentIdentity(assignments[0], assignmentOutput.fileSha256));
+            const replayed = prepareCurrentAssignment(item, taxonomy, files, deps);
+            if (stableHash(assignmentIdentity(replayed)) !== stableHash(assignmentIdentity(assignments[0]))) {
+                fail(`${item.paperId} analysis/taxonomy changed while staging`);
+            }
             const record = { status: 'staged', paperId: item.paperId, analysisRunId: item.runId,
                 analysisSchedulerItemSha256: item.analysisSchedulerItemSha256,
                 registrySha256: taxonomy.registrySha256, rendererImplementationSha256,
@@ -200,15 +263,43 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     const pages = new Map(crosswalk.source.papers.map(page => [page.pageKey, page]));
     const pageOwners = new Map();
     for (const group of crosswalk.identityGroups) for (const pageKey of group.pageKeys) pageOwners.set(pageKey, group.paperId);
-    const dates = options.date ? [options.date] : [...new Set([...pages.values()]
-        .filter(page => page.scope.type === 'daily').map(page => page.cohortDate))].sort();
+    const impactedDates = selected.flatMap(item => item.cohortDates || []);
+    const dates = options.date ? [...new Set([options.date, ...impactedDates])].sort()
+        : [...new Set([...pages.values()].filter(page => page.scope.type === 'daily')
+            .map(page => page.cohortDate))].sort();
+    const dateSet = new Set(dates);
+    const requiredPaperIds = new Set([...pages.values()]
+        .filter(page => page.scope.type === 'daily' && dateSet.has(page.cohortDate))
+        .map(page => pageOwners.get(page.pageKey)).filter(Boolean));
+    const currentItems = new Map();
+    for (const item of allComplete.filter(candidate => requiredPaperIds.has(candidate.paperId))) {
+        try {
+            const assignment = prepareCurrentAssignment(item, taxonomy, files, deps);
+            currentItems.set(item.paperId, { item, assignment,
+                stagingRunId: deterministicStagingRunId(options.crosswalkId, item,
+                    taxonomy.registrySha256, rendererImplementationSha256,
+                    assignment.assignmentSha256) });
+        } catch { /* A stale or unsealed member blocks its dates below. */ }
+    }
     const daily = [];
     for (const date of dates) {
         const datePages = [...pages.values()].filter(page => page.scope.type === 'daily' && page.cohortDate === date);
         const paperIds = [...new Set(datePages.map(page => pageOwners.get(page.pageKey)))];
         const ready = datePages.length > 0 && !paperIds.includes(undefined)
-            && paperIds.every(paperId => checkpoint.items[paperId]?.status === 'staged'
-                && checkpoint.items[paperId].rendererImplementationSha256 === rendererImplementationSha256);
+            && paperIds.every(paperId => {
+                const checkpointItem = checkpoint.items[paperId];
+                const current = currentItems.get(paperId);
+                return checkpointItem?.status === 'staged' && current
+                    && checkpointItem.rendererImplementationSha256 === rendererImplementationSha256
+                    && checkpointItem.analysisRunId === current.item.runId
+                    && checkpointItem.analysisSchedulerItemSha256
+                        === current.item.analysisSchedulerItemSha256
+                    && checkpointItem.analysisFileSha256 === current.assignment.analysisFileSha256
+                    && checkpointItem.analysisRecordSha256 === current.assignment.analysisRecordSha256
+                    && checkpointItem.analysisSha256 === current.assignment.analysisSha256
+                    && checkpointItem.taxonomyAssignmentSha256 === current.assignment.assignmentSha256
+                    && checkpointItem.stagingRunId === current.stagingRunId;
+            });
         if (!ready) {
             const record = { date, status: 'blocked', rendererImplementationSha256,
                 reason: 'not-all-date-papers-staged' };

@@ -45,7 +45,7 @@ registry版本为 `paper-taxonomy-v1`。记录含 `id/facet/preferredLabel{zh,en
 
 ### 已实现的第一批
 
-- `config/paper-taxonomy.json`：204概念、9分面，含90任务、51方法；每个概念都有中英文名、严格别名、定义与范围说明。原125个表内历史词中124个可精确映射，裸“离线”因语义不明保留待核。
+- `config/paper-taxonomy.json`：228 概念、9 分面，含 90 任务、72 方法；补充众包/主观/用户评测、数据集构建与标注、基准设计、综述、形式化/统计分析及常见建模方法，并细化麦克风阵列、语音生物标志物和对抗鲁棒性。每个概念都有中英文名、严格别名、定义与范围说明。原历史词的只读映射仍保留审计，production current 只输出 active 中文首选标签。
 - Node/Python共享加载器逐项一致；所有名称、别名、祖先及展示去重进行跨语言回放。不再在新映射层将PEFT收窄为LoRA，也不混淆说话人识别/验证。
 - Python新路径集中于 `taxonomy_paths.py`，仅引用既有项目根；正式 `path_config.py` 保持原字节，避免预览功能使已发布模板指纹无关失效。
 - 历史构建器只读扫描4490个Markdown，得到4185个论文页、4069条显示记录、2651个可核唯一arXiv ID及1418个未定ID页面。全部1243种原标签都进入处置表，不按标题猜去重。
@@ -55,7 +55,7 @@ registry版本为 `paper-taxonomy-v1`。记录含 `id/facet/preferredLabel{zh,en
 
 ### 实际验收
 
-正式索引原字SHA为 `11fd0fa81cd71e5722305e8f57ca3b7a3a92b6809ba37438d7b33c90cff40517`，registry SHA为 `dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf`，绑定博客 `bf263b803bd353f1411d94f27c621edb33dbb898`。数据位于 `data/runtime/taxonomy-preview/`，包括 `index.json`、`migration-report.json`、`tag-disposition.csv`、`bundle-manifest.json`，权限0600。
+旧预览快照记录过索引、registry 与博客提交 SHA；这些值只证明当次只读预览，registry 新增或修订后不得当成 current production SHA。当前 SHA 必须由严格 loader 从 `config/paper-taxonomy.json` 原始字节实时计算。预览数据位于 `data/runtime/taxonomy-preview/`，包括 `index.json`、`migration-report.json`、`tag-disposition.csv`、`bundle-manifest.json`，权限 0600。
 
 实际数据联验：ASR含子节点600条、AV-ASR4条；LoRA13条被PEFT父查询178条包含；未映射/主任务待核筛选1370条，等于1044部分映射加326尚无映射。30条显式主任务保留来源，4039条缺失主任务未从首标签猜测。Edge成功加载真实4069记录；非空渲染、手机/桌面初始折叠与去重复由回归用例覆盖。
 

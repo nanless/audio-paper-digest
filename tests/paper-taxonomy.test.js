@@ -14,7 +14,7 @@ test('v1 registry is a complete nine-facet, bounded, defined vocabulary', () => 
     const r = loadTaxonomy(registryPath);
     assert.equal(r.version, 'paper-taxonomy-v1');
     assert.equal(r.facets.length, 9);
-    assert.ok(r.concepts.length >= 150 && r.concepts.length <= 220);
+    assert.ok(r.concepts.length >= 150 && r.concepts.length <= 260);
     assert.equal(r.registrySha256, crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex'));
     assert.equal(validateTaxonomy(raw()).version, r.version);
 });
@@ -68,11 +68,12 @@ test('ancestry and pruning preserve leaf order and unrelated branches', () => {
     assert.throws(() => pruneAncestors(r, 'task.asr'), /array/);
 });
 
-test('cross-facet ambiguity returns null until the facet is supplied', () => {
+test('bare end-to-end belongs only to setting; explicit learning label resolves method', () => {
     const r = raw();
-    assert.equal(resolveLabel(r, '#端到端'), null);
-    assert.equal(resolveLabel(r, '#端到端', 'method').id, 'method.end-to-end-learning');
+    assert.equal(resolveLabel(r, '#端到端').id, 'setting.end-to-end');
+    assert.equal(resolveLabel(r, '#端到端', 'method'), null);
     assert.equal(resolveLabel(r, '#端到端', 'setting').id, 'setting.end-to-end');
+    assert.equal(resolveLabel(r, '#端到端训练', 'method').id, 'method.end-to-end-learning');
     concept(r, 'method.transformer').aliases.push('shared-test-label');
     concept(r, 'task.asr').aliases.push('shared-test-label');
     validateTaxonomy(r);

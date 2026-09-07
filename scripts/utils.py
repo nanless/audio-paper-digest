@@ -10,6 +10,10 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
 
+from paper_taxonomy import (LABEL_MODE_LEGACY,
+                            active_preferred_labels, ancestors, load_taxonomy,
+                            prune_ancestors, resolve_label_candidates)
+
 BJ_TZ = timezone(timedelta(hours=8))
 SCORING_RUBRIC_VERSION = 'type-aware-v1'
 DOCUMENT_TYPES = (
@@ -176,191 +180,115 @@ def parse_machine_summary(analysis):
     return result
 
 
-def _normalize_tag(raw):
-    """标准化标签：加 # 前缀，清理分隔符和多余空格"""
-    if not raw:
-        return ''
-    t = raw.strip().strip('`').strip()
-    # 如果有分号/逗号/顿号，只取第一部分
-    t = re.split(r'[,，;；、]', t)[0].strip()
-    # 如果还没有 # 前缀，加上
-    if t and not t.startswith('#'):
-        t = '#' + t
-    return t
+_DEFAULT_TAXONOMY = load_taxonomy()
+
+# These compatibility exports are projections of the registry, never a second
+# hand-maintained vocabulary.  A model family remains a supplementary tag and
+# cannot occupy the primary method role.
+ALLOWED_TAGS = set(active_preferred_labels(_DEFAULT_TAXONOMY))
+PRIMARY_TASK_TAGS = set(active_preferred_labels(_DEFAULT_TAXONOMY, ('task',)))
+PRIMARY_METHOD_TAGS = set(active_preferred_labels(
+    _DEFAULT_TAXONOMY, ('method',)))
 
 
-# 允许的标签表（必须与 deep-analysis.md 中的标签表 + JS ALLOWED_TAGS 严格一致）
-ALLOWED_TAGS = {
-    # 任务 — 语音（19个）
-    '语音交互', '语音合成', '语音识别', '语音增强', '语音分离',
-    '语音克隆', '语音转换', '语音翻译', '语音情感识别', '语音活动检测',
-    '说话人验证', '说话人日志', '语音伪造检测', '语音编辑', '语音质量评估',
-    '语音超分', '语音编码', '语音唤醒', '语音属性识别',
-    # 任务 — 音频（18个）
-    '音频交互', '音频生成', '音频分类', '音频事件检测', '音频理解', '音频检索',
-    '音频分离', '音频伪造检测', '空间音频', '声源定位', '音频编码', '音频修复', '音频水印', '音频质量评估',
-    '音频超分辨', '音频指纹', '主动降噪', '回声消除',
-    # 任务 — 音乐（8个）
-    '音乐生成', '音乐检索', '音乐理解', '歌唱生成', '音乐转录', '音乐源分离', '音乐推荐', '音乐超分辨',
-    # 任务 — 多模态（10个）
-    '音视频理解', '音视频生成', '音视频交互', '音视频语音识别', '音视频语音合成', '音视频语音分离',
-    '音视频问答', '音视频声源分离', '音频字幕生成', '音乐文本检索',
-    # 方法 — 神经网络架构（17个）
-    '自回归模型', '扩散模型', '流匹配', 'Transformer', 'CNN', 'RNN', '图神经网络', '胶囊网络',
-    '生成对抗网络', '变分自编码器', '音频大模型', '语音大模型', '多模态模型', '统一音频模型',
-    '大语言模型', '生成模型', '端到端',
-    # 方法 — 训练策略（28个）
-    '预训练', '后训练', 'SFT', '自监督学习', '无监督学习', '对比学习', '强化学习',
-    '知识蒸馏', '迁移学习', '领域适应', '测试时自适应', '元学习', '持续学习', '课程学习', '对抗训练',
-    '多任务学习', '模型压缩', '模型剪枝', '模型融合', '模型集成', '集成学习', '参数高效微调',
-    'LoRA', 'Adapter', '前缀微调', '提示学习', '指令微调', '联邦学习',
-    # 属性/设置（12个）
-    '多语言', '零样本', '少样本', '低资源',
-    '流式处理', '实时处理', '多通道', '在线', '离线',
-    '鲁棒性', '高效推理', '长音频处理', '理论分析',
-    # 数据/工具/评估（6个）
-    '基准测试', '数据集', '开源工具', '模型评估', '模型比较', '数据清洗',
-    # 领域/应用（11个）
-    '音视频', '工业应用', '医疗音频', '智能座舱', '内容审核', '游戏音频', '智能音箱', '助听器', '会议转录', '教育',
-    '可解释性',
-}
-
-# Primary task/method roles are stricter than general tag membership.  Keep
-# these sets aligned with the four task tables and two method tables in
-# prompts/deep-analysis.md and with Node ``parseAnalysis()``.  Publication must
-# not reinterpret a benchmark/property/architecture tag as the primary task
-# merely because a stale machine-summary line labels it that way.
-PRIMARY_TASK_TAGS = {
-    '语音交互', '语音合成', '语音识别', '语音增强', '语音分离',
-    '语音克隆', '语音转换', '语音翻译', '语音情感识别', '语音活动检测',
-    '说话人验证', '说话人日志', '语音伪造检测', '语音编辑', '语音质量评估',
-    '语音超分', '语音编码', '语音唤醒', '语音属性识别',
-    '音频交互', '音频生成', '音频分类', '音频事件检测', '音频理解', '音频检索',
-    '音频分离', '音频伪造检测', '空间音频', '声源定位', '音频编码', '音频修复',
-    '音频水印', '音频质量评估', '音频超分辨', '音频指纹', '主动降噪', '回声消除',
-    '音乐生成', '音乐检索', '音乐理解', '歌唱生成', '音乐转录', '音乐源分离',
-    '音乐推荐', '音乐超分辨',
-    '音视频理解', '音视频生成', '音视频交互', '音视频语音识别', '音视频语音合成',
-    '音视频语音分离', '音视频问答', '音视频声源分离', '音频字幕生成', '音乐文本检索',
-}
-
-PRIMARY_METHOD_TAGS = {
-    '自回归模型', '扩散模型', '流匹配', 'Transformer', 'CNN', 'RNN', '图神经网络',
-    '胶囊网络', '生成对抗网络', '变分自编码器', '音频大模型', '语音大模型',
-    '多模态模型', '统一音频模型', '大语言模型', '生成模型', '端到端',
-    '预训练', '后训练', 'SFT', '自监督学习', '无监督学习', '对比学习', '强化学习',
-    '知识蒸馏', '迁移学习', '领域适应', '测试时自适应', '元学习', '持续学习',
-    '课程学习', '对抗训练', '多任务学习', '模型压缩', '模型剪枝', '模型融合',
-    '模型集成', '集成学习', '参数高效微调', 'LoRA', 'Adapter', '前缀微调',
-    '提示学习', '指令微调', '联邦学习',
-}
+def _taxonomy_tag(raw, taxonomy, *, facets=None, legacy_tags=False):
+    """Return ``(concept, error)`` for one explicit taxonomy token."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None, '标签为空'
+    token = raw.strip()
+    if legacy_tags and facets == ('method',) \
+            and token.removeprefix('#') == '端到端':
+        candidates = [concept for concept in taxonomy['concepts']
+                      if concept['status'] == 'active'
+                      and concept['id'] == 'method.end-to-end-learning']
+    elif not legacy_tags:
+        if not token.startswith('#') or token.count('#') != 1:
+            return None, f'current 标签必须精确写成 #preferredLabel.zh: {token}'
+        label = token[1:]
+        candidates = [concept for concept in taxonomy['concepts']
+                      if concept['status'] == 'active'
+                      and concept['preferredLabel']['zh'] == label]
+    else:
+        candidates = resolve_label_candidates(
+            taxonomy, token, mode=LABEL_MODE_LEGACY)
+    if facets is not None:
+        candidates = [concept for concept in candidates if concept['facet'] in facets]
+    if len(candidates) != 1:
+        role = '/'.join(facets) if facets else 'taxonomy'
+        reason = '歧义' if len(candidates) > 1 else '未知或角色不匹配'
+        return None, f'{role} 标签{reason}: {token}'
+    concept = candidates[0]
+    if concept['status'] != 'active':
+        return None, f'legacy deprecated 标签不得自动迁移: {token}'
+    return concept, None
 
 
-def _tag_in_role(tag, allowed_names):
-    normalized = _normalize_tag(tag)
-    name = normalized[1:] if normalized.startswith('#') else normalized
-    return name in allowed_names
-
-_BAD_TASK_TAG_PATTERNS = [
-    r'^#[a-z]+_[a-z]+',           # snake_case
-    r'^#cs\.[A-Z]{2}$',            # arXiv 类别
-    r'^#eess\.[A-Z]{2}$',
-]
-_BAD_TASK_TAG_RE = [re.compile(p, re.I) for p in _BAD_TASK_TAG_PATTERNS]
+def _tag_tokens(raw_line, *, legacy_tags=False):
+    """Extract explicit hashtags; only legacy mode may add omitted hashes."""
+    if not isinstance(raw_line, str):
+        return []
+    hashtags = re.findall(r'#\S+', raw_line)
+    if hashtags or not legacy_tags:
+        return hashtags
+    return [f'#{token}' for token in re.split(r'[,，;；、\s]+', raw_line.strip())
+            if token]
 
 
-def _is_bad_task_tag(tag):
-    """判断标签是否不合格（不在白名单或匹配坏模式）"""
-    if not tag:
-        return True
-    for pat in _BAD_TASK_TAG_RE:
-        if pat.search(tag):
-            return True
-    # 不在允许标签表中
-    tag_name = tag[1:] if tag.startswith('#') else tag
-    if tag_name not in ALLOWED_TAGS:
-        return True
-    return False
+def _canonical_tag(concept):
+    return f"#{concept['preferredLabel']['zh']}"
 
 
-# 已知错误标签 → 正确标签映射表（LLM 常犯的自创/英文标签）
-_TAG_FIX_MAP = {
-    # 英文标签 → 中文
-    '#DiffusionModels': '#扩散模型',
-    '#FlowMatching': '#流匹配',
-    '#Benchmark': '#基准测试',
-    '#MusicGeneration': '#音乐生成',
-    '#RealTimeSystem': '#实时处理',
-    '#KV-Caching': '#高效推理',
-    '#InteractiveMusicGeneration': '#音乐生成',
-    '#AutoregressiveGeneration': '#自回归模型',
-    # 旧标签 → 新标签（LLM 可能还在用旧版标签表中的名称）
-    '#语音超分辨': '#语音超分',
-    '#语音对话系统': '#语音交互',
-    '#音频场景理解': '#音频理解',
-    '#音频深度伪造检测': '#音频伪造检测',
-    '#歌唱语音合成': '#歌唱生成',
-    '#音乐信息检索': '#音乐检索',
-    '#说话人识别': '#说话人验证',
-    '#说话人分离': '#说话人日志',
-    '#语音去噪': '#语音增强',
-    '#语音检索': '#音频检索',
-    '#风格迁移': '#语音合成',
-    '#数据增强': '#预训练',
-    '#跨模态': '#多模态模型',
-    '#声纹识别': '#说话人验证',
-    '#语音驱动': '#音视频生成',
-    '#3D音频': '#空间音频',
-    '#关键词检测': '#语音唤醒',
-    '#信号处理': '#音频理解',
-    '#深度学习': '#预训练',
-    '#神经网络': '#自监督学习',
-    '#GAN': '#生成对抗网络',
-    '#VAE': '#变分自编码器',
-    '#对抗样本': '#鲁棒性',
-    '#模型量化': '#高效推理',
-    '#评测协议': '#模型评估',
-    '#数据隐私': '#可解释性',
-    '#注意力机制': '#Transformer',
-    # 常见自创标签
-    '#盲源分离': '#音频分离',
-    '#语音问答': '#语音交互',
-    '#语音摘要': '#语音交互',
-    '#语音属性编辑': '#语音编辑',
-    '#文本到音乐生成': '#音乐生成',
-    '#多模态情感识别': '#语音情感识别',
-    '#多模态联合推理': '#音视频理解',
-    '#音频推理': '#音频理解',
-    '#长期助手': '#语音交互',
-    '#伪标签学习': '#自监督学习',
-    '#参数高效微调': '#LoRA',
-    '#多阶段管线': '#模型融合',
-}
+def _current_tag_concept(taxonomy, raw, facet=None):
+    if not isinstance(raw, str):
+        return None
+    token = raw.strip()
+    matches = [concept for concept in taxonomy['concepts']
+               if concept['status'] == 'active'
+               and _canonical_tag(concept) == token
+               and (facet is None or concept['facet'] == facet)]
+    return matches[0] if len(matches) == 1 else None
 
 
-def _fix_tag(tag):
-    """将已知错误标签映射到正确标签，未知标签原样返回"""
-    if not tag:
-        return tag
-    # 先精确匹配
-    fixed = _TAG_FIX_MAP.get(tag)
-    if fixed:
-        return fixed
-    # 处理空格分隔的多个标签，取第一个可映射的
-    if ' ' in tag:
-        parts = tag.split()
-        for p in parts:
-            fixed = _TAG_FIX_MAP.get(p)
-            if fixed:
-                return fixed
-        # 如果都没映射到，取第一个已在 ALLOWED_TAGS 中的
-        for p in parts:
-            nt = _normalize_tag(p)
-            if nt and not _is_bad_task_tag(nt):
-                return nt
-        # 全部都不在列表，取第一个
-        return _normalize_tag(parts[0]) if parts else ''
-    return tag
+def _validate_tag_selection(taxonomy, tags, primary_task_tag, primary_method_tag):
+    raw_tags = tags if isinstance(tags, list) else []
+    errors = []
+    if len(raw_tags) < 3 or len(raw_tags) > 5:
+        errors.append('标签总数必须为 3-5 个')
+    concepts = [_current_tag_concept(taxonomy, tag) for tag in raw_tags]
+    for tag, concept in zip(raw_tags, concepts):
+        if concept is None:
+            errors.append(f'标签不是 active 中文首选标签: {tag}')
+    ids = [concept['id'] for concept in concepts if concept is not None]
+    if len(set(ids)) != len(ids):
+        errors.append('标签包含重复概念')
+
+    task = _current_tag_concept(taxonomy, primary_task_tag, 'task')
+    method = _current_tag_concept(taxonomy, primary_method_tag, 'method')
+    if task is None:
+        errors.append('主任务标签必须是 active task 中文首选标签')
+    if method is None:
+        errors.append('主方法标签必须是 active method 中文首选标签')
+    if task is not None and task['id'] not in ids:
+        errors.append('主任务标签必须出现在完整标签列表')
+    if method is not None and method['id'] not in ids:
+        errors.append('主方法标签必须出现在完整标签列表')
+    if task is not None and any(
+            task['id'] in ancestors(taxonomy, cid) for cid in ids):
+        errors.append('主任务标签不是所选任务中的最具体概念')
+    if ids and len(prune_ancestors(taxonomy, ids)) != len(ids):
+        errors.append('标签不得同时包含祖先与后代概念')
+
+    # Match Node's Set-based diagnostic de-duplication while preserving order.
+    errors = list(dict.fromkeys(errors))
+    return {
+        'valid': not errors,
+        'errors': errors,
+        'registryVersion': taxonomy['version'],
+        'registrySha256': taxonomy.get('registrySha256'),
+        'primaryTaskId': task['id'] if task is not None else None,
+        'primaryMethodId': method['id'] if method is not None else None,
+        'conceptIds': [] if errors else ids,
+    }
 
 
 SCORE_DIMENSIONS = {
@@ -482,10 +410,16 @@ def parse_scoring_dimensions(scoring_text):
     return {'valid': not errors, 'scores': scores, 'errors': errors}
 
 
-def parse_analysis(analysis):
+def parse_analysis(analysis, *, taxonomy=None, legacy_tags=False):
     """解析深度分析文本为结构化字典"""
     if not analysis:
         return None
+    if type(legacy_tags) is not bool:
+        raise ValueError('legacy_tags must be bool')
+    registry = _DEFAULT_TAXONOMY if taxonomy is None else taxonomy
+    # Validation happens before parsing so a malformed registry can never turn
+    # an unknown production label into an accepted string by accident.
+    active_preferred_labels(registry)
     r = {
         'machineSummary': None,
         'documentType': '',
@@ -507,43 +441,58 @@ def parse_analysis(analysis):
         'hasModel': '',
         'hasDataset': '',
         'scoreValidation': {'valid': False, 'scores': {}, 'errors': ['缺少评分理由']},
+        'taxonomyValidation': {
+            'valid': False,
+            'errors': ['缺少标签章节'],
+            'registryVersion': registry['version'],
+            'registrySha256': registry.get('registrySha256'),
+            'primaryTaskId': None,
+            'primaryMethodId': None,
+            'conceptIds': [],
+        },
     }
 
     m = re.search(r'##\s*评分\s*\n\s*\*?(\d+\.?\d*)\*?', analysis)
     r['score'] = m.group(1) if m else ''
 
-    # 先尝试从 ## 标签 部分提取"主任务标签"和"主方法标签"行
-    extracted_task_tag = ''
-    extracted_method_tag = ''
+    # Only explicit role fields are authoritative.  The general tag list is
+    # never interpreted as first=task/second=method.
+    extracted_task_tag = None
+    extracted_method_tag = None
     tag_section_match = re.search(r'##\s*标签\s*\n([\s\S]*?)(?=\n##\s|\n【|$)', analysis)
     if tag_section_match:
         tag_section = tag_section_match.group(1)
         task_line = re.search(r'主任务标签\s*[：:]\s*(.+)', tag_section)
         if task_line:
-            extracted_task_tag = _normalize_tag(task_line.group(1))
+            extracted_task_tag = strip_md(task_line.group(1)).strip()
         method_line = re.search(r'主方法标签\s*[：:]\s*(.+)', tag_section)
         if method_line:
-            extracted_method_tag = _normalize_tag(method_line.group(1))
+            extracted_method_tag = strip_md(method_line.group(1)).strip()
 
-    m = re.search(r'##\s*标签\s*\n\s*([^\n]+)', analysis)
-    if m:
-        raw = m.group(1)
-        # 先尝试匹配带 # 前缀的标签
-        hash_tags = re.findall(r'#\S+', raw)
-        if hash_tags:
-            r['tags'] = [t for t in (_normalize_tag(tag) for tag in hash_tags) if not _is_bad_task_tag(t)]
-        else:
-            # 没有 # 前缀时，按分隔符拆分并自动添加 # 前缀
-            parts = re.split(r'[,，;；、\s]+', raw)
-            r['tags'] = []
-            for p in parts:
-                trimmed = p.strip().strip('`').strip()
-                if trimmed:
-                    tag = _normalize_tag(trimmed)
-                    if not _is_bad_task_tag(tag):
-                        r['tags'].append(tag)
-    else:
-        r['tags'] = []
+    raw_tag_list = []
+    r['tags'] = []
+    if tag_section_match:
+        first_line = next((line.strip() for line in tag_section_match.group(1).splitlines()
+                           if line.strip()), '')
+        if not re.match(r'^(?:主任务标签|主方法标签|补充标签)\s*[：:]', first_line):
+            raw_tag_list = _tag_tokens(first_line, legacy_tags=legacy_tags)
+            for token in raw_tag_list:
+                if legacy_tags:
+                    concept, _error = _taxonomy_tag(
+                        token, registry, legacy_tags=True)
+                    # Legacy aliases can be globally ambiguous while an exact
+                    # explicit task/method role line disambiguates them.  Do
+                    # not extend this exception to supplemental tags.
+                    if concept is None and token.strip() == str(extracted_task_tag or '').strip():
+                        concept, _error = _taxonomy_tag(
+                            token, registry, facets=('task',), legacy_tags=True)
+                    if concept is None and token.strip() == str(extracted_method_tag or '').strip():
+                        concept, _error = _taxonomy_tag(
+                            token, registry, facets=('method',), legacy_tags=True)
+                else:
+                    concept = _current_tag_concept(registry, token)
+                if concept is not None:
+                    r['tags'].append(_canonical_tag(concept))
 
     machine_summary = parse_machine_summary(analysis)
     r['machineSummary'] = machine_summary
@@ -559,47 +508,23 @@ def parse_analysis(analysis):
     r['reproducibilityScore'] = machine_summary['reproducibility']
     r['engineeringScore'] = machine_summary['engineeringScore']
     r['confidence'] = machine_summary['confidence']
-    # 主任务/主方法标签必须同时满足白名单与角色分类。顺序与 Node
-    # ``parseAnalysis()`` 一致：显式标签行 → 机器摘要 → 标签列表中的首个
-    # 合法角色；最后才保守回退到普通标签。
-    ms_task = _normalize_tag(machine_summary['primaryTaskTag'])
-    ms_method = _normalize_tag(machine_summary['primaryMethodTag'])
-    first_tag = _normalize_tag(r['tags'][0]) if r['tags'] else ''
-    second_tag = _normalize_tag(r['tags'][1]) if len(r['tags']) > 1 else first_tag
-
-    first_task_tag = next((
-        _normalize_tag(tag) for tag in r['tags']
-        if _tag_in_role(tag, PRIMARY_TASK_TAGS)
-    ), '')
-    first_method_tag = next((
-        _normalize_tag(tag) for tag in r['tags']
-        if _tag_in_role(tag, PRIMARY_METHOD_TAGS)
-    ), '')
-
-    if not _is_bad_task_tag(extracted_task_tag) \
-            and _tag_in_role(extracted_task_tag, PRIMARY_TASK_TAGS):
-        r['primaryTaskTag'] = extracted_task_tag
-    elif not _is_bad_task_tag(ms_task) and _tag_in_role(ms_task, PRIMARY_TASK_TAGS):
-        r['primaryTaskTag'] = ms_task
-    elif first_task_tag:
-        r['primaryTaskTag'] = first_task_tag
+    if legacy_tags:
+        task_concept, _task_error = _taxonomy_tag(
+            extracted_task_tag, registry, facets=('task',), legacy_tags=True)
+        method_concept, _method_error = _taxonomy_tag(
+            extracted_method_tag, registry, facets=('method',), legacy_tags=True)
     else:
-        r['primaryTaskTag'] = ms_task or first_tag
-    r['primaryTaskTag'] = _fix_tag(r['primaryTaskTag'])
-
-    if not _is_bad_task_tag(extracted_method_tag) \
-            and _tag_in_role(extracted_method_tag, PRIMARY_METHOD_TAGS):
-        r['primaryMethodTag'] = extracted_method_tag
-    elif not _is_bad_task_tag(ms_method) and _tag_in_role(ms_method, PRIMARY_METHOD_TAGS):
-        r['primaryMethodTag'] = ms_method
-    elif first_method_tag:
-        r['primaryMethodTag'] = first_method_tag
-    else:
-        r['primaryMethodTag'] = next((
-            _normalize_tag(tag) for tag in r['tags']
-            if _normalize_tag(tag) != r['primaryTaskTag']
-        ), ms_method or second_tag)
-    r['primaryMethodTag'] = _fix_tag(r['primaryMethodTag'])
+        task_concept = _current_tag_concept(registry, extracted_task_tag, 'task')
+        method_concept = _current_tag_concept(registry, extracted_method_tag, 'method')
+    if task_concept is not None:
+        r['primaryTaskTag'] = _canonical_tag(task_concept)
+    if method_concept is not None:
+        r['primaryMethodTag'] = _canonical_tag(method_concept)
+    selection_tags = r['tags'] if legacy_tags else raw_tag_list
+    selection_task = r['primaryTaskTag'] if legacy_tags else extracted_task_tag
+    selection_method = r['primaryMethodTag'] if legacy_tags else extracted_method_tag
+    r['taxonomyValidation'] = _validate_tag_selection(
+        registry, selection_tags, selection_task, selection_method)
 
     r['sotaClaim'] = machine_summary['sotaClaim']
     r['hasCode'] = machine_summary['hasCode']

@@ -94,6 +94,11 @@ function buildAssignment({ runHandle, paper, taxonomy } = {}) {
     if (!taxonomy || !SHA_RE.test(String(taxonomy.registrySha256 || ''))) fail('loaded taxonomy with registry SHA is required');
     taxonomyApi.validateTaxonomy({ version: taxonomy.version, facets: taxonomy.facets, concepts: taxonomy.concepts });
     const input = labelProjection(paper); const reasons = []; const concepts = new Map();
+    const currentTaxonomyValidation = require('../utils.js')
+        .parseAnalysis(paper.analysis)?.taxonomyValidation;
+    if (currentTaxonomyValidation?.valid === false) {
+        reasons.push(`canonical-taxonomy:${currentTaxonomyValidation.errors?.[0] || 'invalid'}`);
+    }
     const task = resolveOne(taxonomy, input.primaryTaskTag, 'task', reasons, 'primary-task');
     const method = resolveOne(taxonomy, input.primaryMethodTag, 'method', reasons, 'primary-method');
     for (const label of input.tags) {
@@ -132,10 +137,16 @@ function buildAssignments({ runHandle, taxonomy, paperId = null } = {}) {
         .sort((a, b) => a.paperId.localeCompare(b.paperId));
 }
 
-function assignmentFilename(paperId, registrySha256) {
+function legacyAssignmentFilename(paperId, registrySha256) {
     const match = String(paperId || '').match(/^arxiv:(\d{4}\.\d{4,5})$/);
     if (!match || !SHA_RE.test(String(registrySha256 || ''))) fail('canonical arXiv paper ID and registry SHA are required');
     return `arxiv-${match[1]}.taxonomy.${registrySha256}.json`;
+}
+
+function assignmentFilename(paperId, registrySha256, assignmentSha256) {
+    const legacy = legacyAssignmentFilename(paperId, registrySha256);
+    if (!SHA_RE.test(String(assignmentSha256 || ''))) fail('assignment SHA is required');
+    return `${legacy.slice(0, -5)}.${assignmentSha256}.json`;
 }
 
 function writeAssignments({ outputRoot, assignments } = {}) {
@@ -145,7 +156,9 @@ function writeAssignments({ outputRoot, assignments } = {}) {
     const root = fresh.assertSafeDirectory(outputRoot, true);
     const runRoot = fresh.assertSafeDirectory(path.join(root, runIds[0]), true); const outputs = [];
     for (const assignment of assignments) {
-        const filename = path.join(runRoot, assignmentFilename(assignment.paperId, assignment.registrySha256));
+        const filename = path.join(runRoot, assignmentFilename(
+            assignment.paperId, assignment.registrySha256, assignment.assignmentSha256
+        ));
         const bytes = canonicalBytes(assignment); let fd;
         try {
             fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
@@ -168,4 +181,4 @@ function writeAssignments({ outputRoot, assignments } = {}) {
 
 module.exports = { CONTRACT, VERSION, HISTORICAL_BASELINE_CONTRACT, stableHash, canonicalBytes,
     loadCompletedHistoricalAnalysisRun, runSnapshot, labelProjection, buildAssignment, buildAssignments,
-    assignmentFilename, writeAssignments };
+    legacyAssignmentFilename, assignmentFilename, writeAssignments };

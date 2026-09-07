@@ -83,7 +83,7 @@ function validAnalysisPaper(arxivId, extra = {}) {
     const contract = require('../scripts/analysis-contract.js');
     const stages = Object.fromEntries([
         'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
-        'tableRepair', 'methodRepair', 'structureRepair', 'coreSummaryRepair',
+        'tableRepair', 'methodRepair', 'structureRepair', 'taxonomySeal', 'coreSummaryRepair',
         'scoringAudit', 'imageSupplement'
     ].map(stage => [stage, {
         status: stage === 'imageSupplement' ? 'no_candidates' : 'complete'
@@ -93,6 +93,31 @@ function validAnalysisPaper(arxivId, extra = {}) {
     const summarySha256 = crypto.createHash('sha256').update(summary).digest('hex');
     const projectionSha256 = contract.coreSummaryProjectionSha256(analysis);
     stages.structureRepair.outputAnalysisSha256 = analysisSha256;
+    const taxonomyRuntime = require('../scripts/lib/taxonomy-runtime.js')
+        .getDefaultTaxonomyRuntime();
+    const taxonomyValidation = require('../scripts/utils.js').parseAnalysis(analysis)
+        .taxonomyValidation;
+    const taxonomyProjectionSha256 = crypto.createHash('sha256')
+        .update(contract.taxonomyProtectedProjection(analysis)).digest('hex');
+    const taxonomyBinding = {
+        registryVersion: taxonomyRuntime.registryVersion,
+        registrySha256: taxonomyRuntime.registrySha256,
+        projectionContract: taxonomyRuntime.projectionContract,
+        projectionSha256: taxonomyRuntime.projectionSha256,
+        selectionContract: taxonomyRuntime.selectionContract,
+        inputAnalysisSha256: analysisSha256,
+        outputAnalysisSha256: analysisSha256,
+        inputProtectedProjectionSha256: taxonomyProjectionSha256,
+        outputProtectedProjectionSha256: taxonomyProjectionSha256,
+        taxonomySurfaceSha256: contract.taxonomySurfaceSha256(analysis),
+        primaryTaskId: taxonomyValidation.primaryTaskId,
+        primaryMethodId: taxonomyValidation.primaryMethodId,
+        conceptIds: taxonomyValidation.conceptIds
+    };
+    stages.taxonomySeal = {
+        status: 'not_needed', ...taxonomyBinding,
+        bindingSha256: contract.manualSha256(taxonomyBinding)
+    };
     const summaryBinding = {
         contractVersion: 'core-summary-detailed-v3',
         inputAnalysisSha256: analysisSha256,
@@ -114,8 +139,12 @@ function validAnalysisPaper(arxivId, extra = {}) {
     return {
         arxivId,
         analysis,
+        analysisStageCheckpoints: { taxonomySeal: analysis },
         analysisManifest: { version: 1, stages,
-            contracts: { coreSummary: 'core-summary-detailed-v3' } },
+            contracts: {
+                coreSummary: 'core-summary-detailed-v3',
+                taxonomy: taxonomyRuntime.selectionContract
+            } },
         ...extra
     };
 }
@@ -214,6 +243,8 @@ function validLegacyApiAnalysisPaper(arxivId) {
     };
     delete paper.analysisManifest.stages.coreSummaryRepair;
     delete paper.analysisManifest.contracts.coreSummary;
+    delete paper.analysisManifest.stages.taxonomySeal;
+    delete paper.analysisManifest.contracts.taxonomy;
     for (const field of ['coreSummaryInputAnalysisSha256', 'inputCoreSummarySha256', 'outputCoreSummarySha256']) {
         delete paper.analysisManifest.stages.scoringAudit[field];
     }

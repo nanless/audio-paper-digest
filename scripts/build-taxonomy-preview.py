@@ -18,7 +18,8 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import path_config
 import taxonomy_paths
 from markdown_hugo_gate import parse_frontmatter_content
-from paper_taxonomy import FACET_IDS, ancestors, load_taxonomy, prune_ancestors, resolve_label
+from paper_taxonomy import (FACET_IDS, LABEL_MODE_LEGACY, ancestors,
+                            load_taxonomy, prune_ancestors, resolve_label)
 from project_env import build_child_process_env, load_project_env
 from runtime_guard import require_external_runtime
 
@@ -213,7 +214,9 @@ def classify_page(page, taxonomy, resolved_labels):
                 unresolved.append(tag)
         elif concept['id'] not in mapped:
             mapped.append(concept['id'])
-    primary_matches = [resolve_label(taxonomy, value['value'], 'task') for value in page['_primaryValues']]
+    primary_matches = [resolve_label(
+        taxonomy, value['value'], 'task', mode=LABEL_MODE_LEGACY)
+        for value in page['_primaryValues']]
     primary_ids = {concept['id'] for concept in primary_matches if concept is not None}
     primary = next(iter(primary_ids)) if len(primary_ids) == 1 and all(primary_matches) else None
     primary_unresolved = [{**item, 'reason': 'conflicting_explicit_tasks' if len(primary_ids) > 1
@@ -282,7 +285,10 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     if not pages:
         raise ValueError('No paper pages found')
     counts = collections.Counter(tag for page in pages for tag in set(page['tags']))
-    resolved = {tag: resolve_label(taxonomy, tag) for tag in counts}
+    # This tool is an audit of historical Hugo metadata, so aliases are
+    # intentionally enabled here and nowhere in the production parser.
+    resolved = {tag: resolve_label(
+        taxonomy, tag, mode=LABEL_MODE_LEGACY) for tag in counts}
     groups, unknown = collections.defaultdict(list), []
     for page in pages:
         (groups[page['id']] if page['id'] else unknown).append(page)

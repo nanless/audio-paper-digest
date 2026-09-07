@@ -80,13 +80,15 @@ function normalizePageStagingManifest(value, stagingRunId) {
     if (Number.isNaN(Date.parse(value.createdAt)) || new Date(value.createdAt).toISOString() !== value.createdAt) fail('page staging createdAt is invalid');
     const pages = value.pages.map((page, index) => {
         exact(page, ['paperId', 'pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'sourcePageContentSha256',
-            'stagedPath', 'contentSha256', 'analysisRunId', 'analysisFileSha256', 'taxonomyAssignmentSha256',
+            'stagedPath', 'contentSha256', 'analysisRunId', 'analysisFileSha256',
+            'analysisRecordSha256', 'analysisSha256', 'taxonomyAssignmentSha256',
             'taxonomyFileSha256'], `page staging pages[${index}]`);
         if (!/^arxiv:\d{4}\.\d{4,5}$/.test(page.paperId) || !/^page:[a-f0-9]{64}$/.test(page.pageKey)
             || !/^content\/posts\/[a-zA-Z0-9._/-]+\.md$/.test(page.pagePath)
             || page.stagedPath !== path.posix.join('pages', page.pagePath)
             || !/^\d{4}-\d{2}-\d{2}$/.test(page.cohortDate) || !UUID_RE.test(page.analysisRunId)) fail(`page staging pages[${index}] identity is invalid`);
         for (const field of ['sourcePageContentSha256', 'contentSha256', 'analysisFileSha256',
+            'analysisRecordSha256', 'analysisSha256',
             'taxonomyAssignmentSha256', 'taxonomyFileSha256']) if (!SHA_RE.test(page[field])) fail(`page staging pages[${index}].${field} is invalid`);
         let url; try { url = new URL(page.primaryUrl); } catch { fail(`page staging pages[${index}] primaryUrl is invalid`); }
         if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) fail(`page staging pages[${index}] primaryUrl is unsafe`);
@@ -202,6 +204,8 @@ function loadAggregateInputs(options, dependencies = {}) {
             if (!group || !projectedPage || projectedPage.pagePath !== page.pagePath || projectedPage.primaryUrl !== page.primaryUrl
                 || projectedPage.cohortDate !== page.cohortDate || projectedPage.pageContentSha256 !== page.sourcePageContentSha256
                 || group.analysisRunId !== page.analysisRunId || group.analysisFileSha256 !== page.analysisFileSha256
+                || group.analysisRecordSha256 !== page.analysisRecordSha256
+                || group.analysisSha256 !== page.analysisSha256
                 || group.taxonomy.assignmentSha256 !== page.taxonomyAssignmentSha256
                 || group.taxonomyFileSha256 !== page.taxonomyFileSha256) fail(`staging/canonical projection drifted for ${page.pageKey}`);
             stagedPages.push({ ...page, stagingRunId: staged.manifest.stagingRunId,

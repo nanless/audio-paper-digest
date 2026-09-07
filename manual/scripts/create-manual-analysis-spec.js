@@ -14,6 +14,8 @@ const {
     normalizedId,
     parseAnalysis,
     ALLOWED_TAGS,
+    PRIMARY_TASK_TAGS,
+    PRIMARY_METHOD_TAGS,
     writeFileAtomic,
     getBeijingISOString
 } = require('../../scripts/utils.js');
@@ -264,6 +266,24 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
     if (invalidTags.length > 0) {
         throw new Error(`${label}.tags 含非白名单标签: ${invalidTags.join(' ')}`);
     }
+    if (!PRIMARY_TASK_TAGS.has(task)) {
+        throw new Error(`${label}.task 必须是 current registry 的 task facet 标签`);
+    }
+    const primaryMethodTag = assertString(
+        record.primaryMethodTag, `${label}.primaryMethodTag`, 2
+    );
+    if (!PRIMARY_METHOD_TAGS.has(primaryMethodTag) || !tagList.includes(primaryMethodTag)) {
+        throw new Error(`${label}.primaryMethodTag 必须是 tags 中显式包含的 current method facet 标签`);
+    }
+    const taxonomyValidation = require('../../scripts/lib/taxonomy-runtime.js')
+        .getDefaultTaxonomyRuntime().validateTagSelection({
+            tags: tagList,
+            primaryTaskTag: task,
+            primaryMethodTag
+        });
+    if (!taxonomyValidation.valid) {
+        throw new Error(`${label}.tags 不符合 current taxonomy: ${taxonomyValidation.errors.join('；')}`);
+    }
     const dims = validateScoreDimensions(record.dims, `${label}.dims`);
     if (!record.authorInfo || typeof record.authorInfo !== 'object' || Array.isArray(record.authorInfo)) {
         throw new Error(`${label}.authorInfo 必须是对象`);
@@ -503,6 +523,7 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
         authorInfo,
         arxivId: id,
         task,
+        primaryMethodTag,
         tags: tagList.join(' '),
         dims,
         manualAudit,
@@ -982,7 +1003,10 @@ function buildAnalysis(paper, record, options = {}) {
     const [innovation, rigor, experiment, clarity, impact, openSource, reproducibility, engineering] = record.dims;
     const score = scoreFromDims(record.dims);
     const tags = record.tags.split(/\s+/);
-    const methodTag = tags.find(tag => tag !== record.task) || '#端到端';
+    const methodTag = record.primaryMethodTag;
+    if (!PRIMARY_METHOD_TAGS.has(methodTag) || !tags.includes(methodTag)) {
+        throw new Error(`${record.arxivId || paper.arxivId || paper.title}.primaryMethodTag 必须是 tags 中的 current method facet 标签`);
+    }
     const authorInfo = record.authorInfo || {};
     const authorNames = Array.isArray(authorInfo.authorList) && authorInfo.authorList.length
         ? authorInfo.authorList

@@ -3358,9 +3358,14 @@ title: "Bad table"
 document_type: 方法研究
 rank_bucket: 前50%
 confidence: 中
+primary_task_tag: #音视频语音识别
+primary_method_tag: #Transformer
 
 ## 标签
-#音视频语音识别 #大语言模型
+#音视频语音识别 #Transformer #大语言模型
+主任务标签：#音视频语音识别
+主方法标签：#Transformer
+补充标签：#大语言模型
 
 ## 核心摘要
 {summary}

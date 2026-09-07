@@ -1,4 +1,4 @@
-"""Read-only shared paper taxonomy registry; no legacy tag-parser mutation."""
+"""Read-only shared paper taxonomy registry and explicit label resolution."""
 
 import hashlib
 import json
@@ -8,6 +8,11 @@ from pathlib import Path
 
 FACET_IDS = ('task', 'method', 'setting', 'signal', 'application',
              'research_focus', 'artifact', 'scientific_topic', 'model_family')
+LABEL_MODE_CURRENT = 'current'
+LABEL_MODE_LEGACY = 'legacy'
+LABEL_MODES = (LABEL_MODE_CURRENT, LABEL_MODE_LEGACY)
+TAXONOMY_PROJECTION_CONTRACT = 'paper-taxonomy-prompt-projection-v1'
+TAXONOMY_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1'
 CONCEPT_KEYS = {'id', 'facet', 'preferredLabel', 'aliases', 'broaderId',
                 'definition', 'scopeNote', 'status', 'replacedBy'}
 # ECMAScript String.trim whitespace, including BOM (Python str.strip differs).
@@ -143,18 +148,101 @@ def load_taxonomy(file_path=None):
     return {**data, 'registrySha256': hashlib.sha256(raw).hexdigest()}
 
 
-def resolve_label(taxonomy, label, facet=None):
+def active_preferred_labels(taxonomy, facets=None):
+    """Return the canonical Chinese publication labels for active concepts."""
+    data = _registry_data(taxonomy)
+    if facets is None:
+        selected_facets = set(FACET_IDS)
+    else:
+        if (not isinstance(facets, (list, tuple, set, frozenset))
+                or any(facet not in FACET_IDS for facet in facets)):
+            raise ValueError('facets must contain known facet IDs')
+        selected_facets = set(facets)
+    labels = tuple(concept['preferredLabel']['zh'] for concept in data['concepts']
+                   if concept['status'] == 'active'
+                   and concept['facet'] in selected_facets)
+    if len(set(labels)) != len(labels):
+        raise ValueError('active preferred Chinese labels must be globally unique')
+    return labels
+
+
+def build_prompt_projection(taxonomy):
+    """Replay the compact prompt projection produced by the Node runtime."""
+    data = _registry_data(taxonomy)
+    registry_sha = taxonomy.get('registrySha256')
+    if not isinstance(registry_sha, str) or not re.fullmatch(r'[a-f0-9]{64}', registry_sha):
+        raise ValueError('taxonomy projection requires registrySha256')
+    facet_order = {facet['id']: index for index, facet in enumerate(data['facets'])}
+    active = sorted(
+        (concept for concept in data['concepts'] if concept['status'] == 'active'),
+        key=lambda concept: (facet_order[concept['facet']], concept['id']),
+    )
+    lines = [
+        f'contract={TAXONOMY_PROJECTION_CONTRACT}',
+        f'registry_version={data["version"]}',
+        f'registry_sha256={registry_sha}',
+        '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。',
+    ]
+    current_facet = None
+    for concept in active:
+        if concept['facet'] != current_facet:
+            current_facet = concept['facet']
+            lines.append(f'[{current_facet}]')
+        compact = lambda value: re.sub(
+            r'\s+', ' ', re.sub(r'[\r\n|]+', ' ', str(value or ''))).strip()
+        lines.append('|'.join((
+            concept['id'], f'#{concept["preferredLabel"]["zh"]}',
+            compact(concept['definition']), compact(concept['scopeNote']),
+        )))
+    return '\n'.join(lines) + '\n'
+
+
+def prompt_projection_sha256(taxonomy):
+    return hashlib.sha256(build_prompt_projection(taxonomy).encode('utf-8')).hexdigest()
+
+
+def resolve_label_candidates(taxonomy, label, facet=None, *, mode=LABEL_MODE_LEGACY):
+    """Resolve a label without guessing across concepts.
+
+    ``current`` is the production-safe namespace: only the normalized Chinese
+    preferred label of an active concept is visible.  English labels, aliases,
+    and deprecated concepts belong to ``legacy`` mode.  The generic resolver
+    retains legacy as its default for historical audit callers; production code
+    must use ``resolve_current_label`` or pass ``mode='current'``.  Callers also
+    remain responsible for rejecting deprecated concepts rather than silently
+    following ``replacedBy``.
+    """
     data = _registry_data(taxonomy)
     if facet is not None and facet not in FACET_IDS:
         raise ValueError(f'Unknown facet: {facet}')
+    if mode not in LABEL_MODES:
+        raise ValueError(f'Unknown label resolution mode: {mode}')
     normalized = normalize_label(label)
     if not normalized:
-        return None
-    matches = [concept for concept in data['concepts']
-               if (facet is None or concept['facet'] == facet)
-               and any(normalize_label(value) == normalized
-                       for value in [*concept['preferredLabel'].values(), *concept['aliases']])]
+        return []
+    matches = []
+    for concept in data['concepts']:
+        if facet is not None and concept['facet'] != facet:
+            continue
+        if mode == LABEL_MODE_CURRENT:
+            if concept['status'] != 'active':
+                continue
+            labels = (concept['preferredLabel']['zh'],)
+        else:
+            labels = (*concept['preferredLabel'].values(), *concept['aliases'])
+        if any(normalize_label(value) == normalized for value in labels):
+            matches.append(concept)
+    return matches
+
+
+def resolve_label(taxonomy, label, facet=None, *, mode=LABEL_MODE_LEGACY):
+    matches = resolve_label_candidates(taxonomy, label, facet, mode=mode)
     return matches[0] if len(matches) == 1 else None
+
+
+def resolve_current_label(taxonomy, label, facet=None):
+    """Resolve only an active Chinese preferred label."""
+    return resolve_label(taxonomy, label, facet, mode=LABEL_MODE_CURRENT)
 
 
 def ancestors(taxonomy, cid):

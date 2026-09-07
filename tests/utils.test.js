@@ -252,14 +252,16 @@ innovation: 2.0
         assert.strictEqual(parseAnalysis(null), null);
     });
 
-    it('按精确任务表保留空间音频并拒绝评估标签冒充主任务', () => {
+    it('主任务和主方法严格按 taxonomy facet 验证且不再危险兜底', () => {
         const spatial = parseAnalysis(`## 评分\n6.0/10\n\n## 机器摘要\nprimary_task_tag: #空间音频\nprimary_method_tag: #CNN\n\n## 标签\n#空间音频 #音视频生成 #CNN\n主任务标签：#空间音频\n主方法标签：#CNN`);
-        assert.strictEqual(spatial.primaryTaskTag, '#空间音频');
+        assert.strictEqual(spatial.primaryTaskTag, '');
         assert.strictEqual(spatial.primaryMethodTag, '#CNN');
+        assert.strictEqual(spatial.taxonomyValidation.valid, false);
 
         const benchmark = parseAnalysis(`## 评分\n6.0/10\n\n## 机器摘要\nprimary_task_tag: #模型评估\nprimary_method_tag: #基准测试\n\n## 标签\n#模型评估 #基准测试 #音频理解\n主任务标签：#模型评估\n主方法标签：#基准测试`);
-        assert.strictEqual(benchmark.primaryTaskTag, '#音频理解');
-        assert.strictEqual(benchmark.primaryMethodTag, '#模型评估');
+        assert.strictEqual(benchmark.primaryTaskTag, '');
+        assert.strictEqual(benchmark.primaryMethodTag, '');
+        assert.strictEqual(benchmark.taxonomyValidation.valid, false);
     });
 
     it('从八维评分理由重算总分并修正开源矛盾', () => {
@@ -1201,7 +1203,8 @@ describe('loadPrompt', () => {
             summaryIssue: '核心摘要未达到新默认深度',
             existingSummary: '已有核心摘要。',
             methodSection: '## 方法概述和架构\n已有方法。',
-            resultsSection: '## 实验结果\n已有结果。'
+            resultsSection: '## 实验结果\n已有结果。',
+            taxonomyProjection: 'contract=test\n[task]\ntask.asr|#语音识别'
         };
         const promptFiles = [
             'prompts/filter.md',
@@ -1249,7 +1252,8 @@ describe('loadPrompt', () => {
             summaryIssue: '核心摘要未达到新默认深度',
             existingSummary: '已有核心摘要。',
             methodSection: '## 方法概述和架构\n已有方法。',
-            resultsSection: '## 实验结果\n已有结果。'
+            resultsSection: '## 实验结果\n已有结果。',
+            taxonomyProjection: 'contract=test\n[task]\ntask.asr|#语音识别'
         };
         const promptFiles = [
             'prompts/filter.md',

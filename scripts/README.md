@@ -50,11 +50,12 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `digest-status.js` | Node 共享 | `papers.json` 的分析状态、批次日期和恢复状态同步。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按 host 串行调度、冷却和失败类型判定。 |
 | `lib/filter-input-contract.js` | Node 库 | 筛选决定所绑定的最小输入 SHA。 |
-| `lib/paper-taxonomy.js` | Node 库 | 共享标签registry的严格加载、同义解析、候选枚举、祖先查询与展示去重；不修改旧canonical标签。 |
-| `lib/historical-taxonomy-assignment.js` | Node 库 | 从完成且来源绑定的历史 analysis run 重放 canonical 标签，精确映射 concept ID、裁剪祖先，并生成逐论文 assignment；文件名绑定 registry SHA，升级后保留旧 blocked/assigned 审计件。 |
+| `lib/paper-taxonomy.js` | Node 库 | 共享标签 registry 的严格加载、同义解析、候选枚举与祖先查询；raw registry 字节是 Prompt、Node/Python parser 和发布门禁的唯一标签权威。 |
+| `lib/taxonomy-runtime.js` | Node 库 | 从 active 中文首选标签派生白名单、task/method 角色、紧凑 Prompt 投影与 SHA，并验证 3–5 标签、最具体任务和祖先去重；alias 只供显式 legacy 解析。 |
+| `lib/historical-taxonomy-assignment.js` | Node 库 | 从完成且来源绑定的历史 analysis run 重放 canonical 标签，精确映射 concept ID、裁剪祖先，并生成逐论文 assignment；新文件名同时绑定 registry SHA 与 assignment SHA，同一 run 的分析升级不会覆盖旧审计件；旧 registry-only 文件仅在逐字段等于当前重建 assignment 时兼容读取。 |
 | `lib/historical-page-staging.js` | Node 库 | 将完成 canonical 与新 taxonomy 投影到 crosswalk 保留的单篇路径；同一论文的重复历史页面共用新分析，输出隔离 staging run 与逐页 SHA。 |
 | `lib/historical-daily-aggregate.js` | Node 库 | 完整重放并合并多份 per-paper staging、crosswalk/inventory 与新 canonical/taxonomy，按稳定次序重建每日汇总 staging manifest；旧汇总正文从不进入输入。 |
-| `lib/historical-postprocess-scheduler.js` | Node 库 | 从 sealed-complete 历史 analysis scheduler 确定性执行重标、单篇 staging 与完整日期 daily aggregate；checkpoint 绑定逐项 SHA，最多并发 3，不写博客仓库。 |
+| `lib/historical-postprocess-scheduler.js` | Node 库 | 从 sealed-complete 历史 analysis scheduler 确定性执行重标、单篇 staging 与完整日期 daily aggregate；staging identity/checkpoint 绑定当前 analysis record/file 与 assignment SHA，每次聚合重放同日全部当前成员，多日期论文升级会同步失效其全部日期；最多并发 3，不写博客仓库。 |
 | `lib/conference-postprocess.js` | Node 库 | 只接受 authenticated conference plan handle，逐篇重放 plan/source/completion/current taxonomy 与页面渲染；单篇目录同时绑定 registry 与 renderer/projection 实现指纹，代码升级不会覆盖旧 staging；仅在 execution 精确覆盖完整 selected member set 时生成隔离会议汇总。 |
 | `lib/historical-publication.js` | Node 库 | 重放 page/daily producer 权威链，冻结 clean-main/remote/Hugo/baseline 与批次 DAG，并先生成不可变私有 bundle；本阶段不写博客、不 review、不 commit/push。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
@@ -128,7 +129,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `conference-page-render.py` | 从已封存 conference Reader 与 assigned taxonomy 渲染无 arXiv 别名的弱结构会议单篇页；不生成资产，不读取旧博客正文。 |
 | `historical-arxiv-batch.js` | 对 pending single-hint arXiv 页面按唯一论文分组抓取与 verified 映射；支持 pilot/数值 limit 和可恢复全量续跑，不调用 LLM。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
-| `paper_taxonomy.py` | 与Node共用registry的Python加载、验证和精确映射；未知/歧义不自动收窄。 |
+| `paper_taxonomy.py` | 与 Node 共用 registry 的 Python 加载、current/legacy 显式解析和精确映射；production current 只接受 active 中文首选标签，未知/歧义不自动收窄。 |
 | `taxonomy_paths.py` | 集中管理独立标签预览的Python路径，复用项目根与环境；不改变正式发布path_config模板指纹。 |
 | `build-taxonomy-preview.py` | 只读扫描Hugo历史论文，生成有来源指纹的映射预览、完整旧词处置与待核报告；不修改博客或current。 |
 | `deep-analysis-only.js` | 从 complete 筛选结果安全续跑未完成分析。 |

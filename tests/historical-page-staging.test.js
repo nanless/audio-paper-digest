@@ -42,7 +42,7 @@ function fixture(t) {
         buildAssignment: () => assignment,
         render: packet => { assert.equal(packet.paper.apiReaderArticle, 'NEW_READER_ONLY'); return `---\ndate: ${packet.cohortDate}\n---\nNEW PAGE`; },
         now: () => '2026-09-07T00:00:00.000Z' };
-    return { root, dependencies, state };
+    return { root, dependencies, state, paper, assignment };
 }
 
 test('one canonical projects to every verified duplicate page while preserving path/date/url', t => {
@@ -138,20 +138,29 @@ test('selected binding replay tolerates later unrelated or same-identity pages b
     assert.throws(() => api.replaySelectedBindings(manifest, advanced), /changed/);
 });
 
-test('staging selects exact analysis run + current registry while retaining old blocked audit artifact', t => {
-    const f = fixture(t); const paperId = 'arxiv:2604.12527'; const oldSha = '5'.repeat(64);
+test('staging selects the rebuilt current assignment and accepts a legacy name only when exact', t => {
+    const f = fixture(t); const paperId = 'arxiv:2604.12527';
     const dir = path.join(f.root, 'taxonomy', ANALYSIS_RUN); fs.mkdirSync(dir, { recursive: true });
-    for (const [registrySha256, status] of [[oldSha, 'blocked'], [REGISTRY_SHA, 'assigned']]) {
-        const body = { contract: 'paper-taxonomy-assignment-v1', version: 1, status, paperId,
-            analysisRunId: ANALYSIS_RUN, registrySha256 };
-        const name = `arxiv-2604.12527.taxonomy.${registrySha256}.json`;
-        fs.writeFileSync(path.join(dir, name), JSON.stringify({ ...body, assignmentSha256: stableHash(body) }));
-    }
+    const legacy = path.join(dir, `arxiv-2604.12527.taxonomy.${REGISTRY_SHA}.json`);
+    fs.writeFileSync(legacy, JSON.stringify(f.assignment));
     assert.equal(api.findAssignment(path.join(f.root, 'taxonomy'), paperId, ANALYSIS_RUN,
-        REGISTRY_SHA).value.registrySha256, REGISTRY_SHA);
-    assert.equal(api.findAssignment(path.join(f.root, 'taxonomy'), paperId, ANALYSIS_RUN, oldSha), null);
-    assert.equal(fs.existsSync(path.join(dir, `arxiv-2604.12527.taxonomy.${oldSha}.json`)), true);
-    assert.throws(() => api.findAssignment(path.join(f.root, 'taxonomy'), paperId, null, REGISTRY_SHA), /required/);
+        REGISTRY_SHA, f.assignment).value.registrySha256, REGISTRY_SHA);
+
+    const staleBody = structuredClone(f.assignment); delete staleBody.assignmentSha256;
+    staleBody.analysisFileSha256 = '4'.repeat(64);
+    const stale = { ...staleBody, assignmentSha256: stableHash(staleBody) };
+    fs.writeFileSync(legacy, JSON.stringify(stale));
+    assert.equal(api.findAssignment(path.join(f.root, 'taxonomy'), paperId, ANALYSIS_RUN,
+        REGISTRY_SHA, f.assignment), null, 'a stale legacy artifact must not shadow the current analysis');
+
+    const canonical = path.join(dir,
+        `arxiv-2604.12527.taxonomy.${REGISTRY_SHA}.${f.assignment.assignmentSha256}.json`);
+    fs.writeFileSync(canonical, JSON.stringify(f.assignment));
+    assert.equal(api.findAssignment(path.join(f.root, 'taxonomy'), paperId, ANALYSIS_RUN,
+        REGISTRY_SHA, f.assignment).legacyFilename, false);
+    assert.equal(fs.existsSync(legacy), true, 'the stale legacy audit remains immutable');
+    assert.throws(() => api.findAssignment(path.join(f.root, 'taxonomy'), paperId, null,
+        REGISTRY_SHA, f.assignment), /required/);
 });
 
 test('dry-run validates inputs but writes no staging directory', t => {
@@ -197,6 +206,26 @@ test('page staging rejects a self-hashed assignment that differs from determinis
         taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root }, {
         ...f.dependencies, buildAssignment: () => ({ forged: true, assignmentSha256: 'f'.repeat(64) })
     }), /not the deterministic current-registry projection/);
+});
+
+test('prepared assignment A cannot stage analysis B under A staging identity', t => {
+    const f = fixture(t); const staleExpected = {
+        paperId: f.assignment.paperId,
+        analysisRunId: f.assignment.analysisRunId,
+        analysisFileSha256: '4'.repeat(64),
+        analysisRecordSha256: '3'.repeat(64),
+        analysisSha256: '2'.repeat(64),
+        registrySha256: f.assignment.registrySha256,
+        assignmentSha256: '1'.repeat(64),
+        taxonomyFileSha256: 'e'.repeat(64)
+    };
+    assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
+        stagingRunId: STAGING, expectedStagingRunId: STAGING,
+        expectedAssignment: staleExpected, analysisRunId: ANALYSIS_RUN, limit: 'pilot',
+        crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
+        taxonomyRegistry: '/unused', stagingRoot: f.root }, f.dependencies), /identity drifted/);
+    assert.equal(fs.existsSync(path.join(f.root, STAGING)), false,
+        'assignment drift must fail before writing staging intent or directories');
 });
 
 test('writeExact rejects leaf and parent symlinks on recovery paths', t => {

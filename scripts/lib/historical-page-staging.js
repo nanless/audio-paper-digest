@@ -113,26 +113,47 @@ function readAssignment(filename) {
     if (value.contract !== taxonomyApi.CONTRACT || value.version !== taxonomyApi.VERSION
         || !['assigned', 'blocked'].includes(value.status) || !SHA_RE.test(value.assignmentSha256 || '')
         || !SHA_RE.test(value.registrySha256 || '') || value.assignmentSha256 !== stableHash(body)
-        || !/^[a-f0-9-]{36}$/i.test(value.analysisRunId || '')
-        || path.basename(filename) !== taxonomyApi.assignmentFilename(value.paperId, value.registrySha256)) {
+        || !/^[a-f0-9-]{36}$/i.test(value.analysisRunId || '')) {
         throw new Error(`Invalid assigned taxonomy artifact: ${filename}`);
     }
-    return { value, bytes, fileSha256: sha256(bytes), filename };
+    const basename = path.basename(filename);
+    const canonicalName = taxonomyApi.assignmentFilename(
+        value.paperId, value.registrySha256, value.assignmentSha256
+    );
+    const legacyName = taxonomyApi.legacyAssignmentFilename(value.paperId, value.registrySha256);
+    if (basename !== canonicalName && basename !== legacyName) {
+        throw new Error(`Invalid assigned taxonomy artifact: ${filename}`);
+    }
+    return { value, bytes, fileSha256: sha256(bytes), filename,
+        legacyFilename: basename === legacyName };
 }
 
-function findAssignment(root, paperId, analysisRunId, registrySha256) {
+function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAssignment) {
     if (typeof root !== 'string' || !path.isAbsolute(root) || !UUID_RE.test(analysisRunId || '')
-        || !SHA_RE.test(registrySha256 || '')) throw new Error('analysisRunId and current registry SHA are required');
-    const name = taxonomyApi.assignmentFilename(paperId, registrySha256);
+        || !SHA_RE.test(registrySha256 || '') || !expectedAssignment
+        || expectedAssignment.paperId !== paperId || expectedAssignment.analysisRunId !== analysisRunId
+        || expectedAssignment.registrySha256 !== registrySha256
+        || !SHA_RE.test(expectedAssignment.assignmentSha256 || '')) {
+        throw new Error('analysisRunId, current registry SHA, and rebuilt assignment are required');
+    }
     if (!fs.existsSync(root)) return null;
     const safeRoot = fresh.assertSafeDirectory(root); const runRoot = path.join(safeRoot, analysisRunId);
     if (!fs.existsSync(runRoot)) return null;
     fresh.assertSafeDirectory(runRoot);
-    const filename = path.join(runRoot, name);
-    if (!fs.existsSync(filename)) return null;
+    const canonical = path.join(runRoot, taxonomyApi.assignmentFilename(
+        paperId, registrySha256, expectedAssignment.assignmentSha256
+    ));
+    const legacy = path.join(runRoot, taxonomyApi.legacyAssignmentFilename(paperId, registrySha256));
+    const filename = fs.existsSync(canonical) ? canonical : fs.existsSync(legacy) ? legacy : null;
+    if (!filename) return null;
     const loaded = readAssignment(filename);
     if (loaded.value.analysisRunId !== analysisRunId || loaded.value.paperId !== paperId
         || loaded.value.registrySha256 !== registrySha256) throw new Error(`${paperId} taxonomy artifact differs from requested analysis run/registry`);
+    if (stableHash(loaded.value) !== stableHash(expectedAssignment)
+        || loaded.value.assignmentSha256 !== expectedAssignment.assignmentSha256) {
+        if (loaded.legacyFilename) return null;
+        throw new Error(`${paperId} taxonomy artifact differs from the rebuilt current assignment`);
+    }
     return loaded.value.status === 'assigned' ? loaded : null;
 }
 
@@ -141,20 +162,22 @@ function loadProjectionInputs({ crosswalkRoot, crosswalkId, analysisRoot, taxono
     if (!SHA_RE.test(taxonomy?.registrySha256 || '')) throw new Error('Current taxonomy registry SHA is required');
     const state = (dependencies.readCrosswalk || crosswalkApi.readCrosswalk)({ crosswalkRoot, crosswalkId });
     const pages = new Map(state.source.papers.map(page => [page.pageKey, page])); const results = [];
+    const handle = (dependencies.loadRun || taxonomyApi.loadCompletedHistoricalAnalysisRun)({
+        analysisRoot, runId: analysisRunId }, dependencies.analysisDependencies || {});
+    const run = (dependencies.runSnapshot || taxonomyApi.runSnapshot)(handle);
     for (const group of state.identityGroups.filter(item => item.paperId.startsWith('arxiv:'))) {
-        const assignment = (dependencies.findAssignment || findAssignment)(taxonomyRoot, group.paperId, analysisRunId, taxonomy.registrySha256);
-        if (!assignment) continue;
-        const handle = (dependencies.loadRun || taxonomyApi.loadCompletedHistoricalAnalysisRun)({
-            analysisRoot, runId: assignment.value.analysisRunId }, dependencies.analysisDependencies || {});
-        const run = (dependencies.runSnapshot || taxonomyApi.runSnapshot)(handle);
         const paper = run.papers.find(item => `arxiv:${fresh.paperId(item)}` === group.paperId);
+        if (!paper) continue;
+        const rebuilt = (dependencies.buildAssignment || taxonomyApi.buildAssignment)({ runHandle: handle, paper, taxonomy });
+        const assignment = (dependencies.findAssignment || findAssignment)(taxonomyRoot, group.paperId,
+            analysisRunId, taxonomy.registrySha256, rebuilt);
+        if (!assignment) continue;
         if (!paper || assignment.value.analysisFileSha256 !== run.analysisFileSha256
             || assignment.value.registrySha256 !== taxonomy.registrySha256
             || assignment.value.analysisRecordSha256 !== stableHash(paper)
             || assignment.value.analysisSha256 !== sha256(Buffer.from(paper.analysis, 'utf8'))) {
             throw new Error(`${group.paperId} taxonomy does not bind the completed analysis`);
         }
-        const rebuilt = (dependencies.buildAssignment || taxonomyApi.buildAssignment)({ runHandle: handle, paper, taxonomy });
         if (stableHash(rebuilt) !== stableHash(assignment.value)
             || rebuilt.assignmentSha256 !== assignment.value.assignmentSha256) {
             throw new Error(`${group.paperId} taxonomy artifact is not the deterministic current-registry projection`);
@@ -172,6 +195,8 @@ function loadProjectionInputs({ crosswalkRoot, crosswalkId, analysisRoot, taxono
         results.push({ paperId: group.paperId, identitySha256: group.identitySha256,
             identityRecordSha256: group.identityRecordSha256, paper,
             analysisRunId: assignment.value.analysisRunId, analysisFileSha256: run.analysisFileSha256,
+            analysisRecordSha256: assignment.value.analysisRecordSha256,
+            analysisSha256: assignment.value.analysisSha256,
             taxonomy: assignment.value, taxonomyFileSha256: assignment.fileSha256, pages: projectedPages });
     }
     return { crosswalk: state, groups: results.sort((a, b) => a.paperId.localeCompare(b.paperId)) };
@@ -215,6 +240,8 @@ function pageInputBindings(groups) {
         cohortDate: page.cohortDate, sourcePageContentSha256: page.pageContentSha256,
         stagedPath: path.posix.join('pages', page.pagePath), analysisRunId: group.analysisRunId,
         analysisFileSha256: group.analysisFileSha256,
+        analysisRecordSha256: group.analysisRecordSha256,
+        analysisSha256: group.analysisSha256,
         taxonomyAssignmentSha256: group.taxonomy.assignmentSha256,
         taxonomyFileSha256: group.taxonomyFileSha256 }))).sort((a, b) => a.pagePath.localeCompare(b.pagePath));
 }
@@ -317,6 +344,25 @@ function stageHistoricalPages(options, dependencies = {}) {
     }
     const loaded = loadProjectionInputs(options, dependencies); const maximum = options.limit === 'pilot' ? 1 : options.limit === null ? loaded.groups.length : options.limit;
     const selected = loaded.groups.slice(0, maximum);
+    if (options.expectedAssignment !== undefined) {
+        const expected = options.expectedAssignment;
+        const group = selected.length === 1 ? selected[0] : null;
+        const actual = group && {
+            paperId: group.paperId,
+            analysisRunId: group.analysisRunId,
+            analysisFileSha256: group.analysisFileSha256,
+            analysisRecordSha256: group.analysisRecordSha256,
+            analysisSha256: group.analysisSha256,
+            registrySha256: group.taxonomy.registrySha256,
+            assignmentSha256: group.taxonomy.assignmentSha256,
+            taxonomyFileSha256: group.taxonomyFileSha256
+        };
+        if (!expected || typeof expected !== 'object' || Array.isArray(expected)
+            || stableHash(actual) !== stableHash(expected)
+            || options.expectedStagingRunId !== options.stagingRunId) {
+            throw new Error('Historical staging expected assignment/staging identity drifted');
+        }
+    }
     const plan = { status: options.apply ? 'staging' : 'dry-run', rendererImplementationSha256,
         availableIdentities: loaded.groups.length,
         selectedIdentities: selected.length, selectedPages: selected.reduce((sum, group) => sum + group.pages.length, 0),
@@ -356,7 +402,8 @@ function stageHistoricalPages(options, dependencies = {}) {
             if (found.fileSha256 !== asset.sha256 || found.bytes.length !== asset.size) throw new Error('Recovered staged asset drifted');
         }
         return { ...plan, status: 'recovered', stagingRunId: options.stagingRunId, stagingRoot: runRoot,
-            pageCount: manifest.pages.length, manifestSha256: manifest.manifestSha256 };
+            pageCount: manifest.pages.length, manifestSha256: manifest.manifestSha256,
+            manifest: structuredClone(manifest) };
     }
     const priorEntries = fs.readdirSync(runRoot).sort();
     if (priorEntries.some(name => !['intent.json', 'pages', 'assets'].includes(name))) {
@@ -395,7 +442,10 @@ function stageHistoricalPages(options, dependencies = {}) {
             record: { paperId: group.paperId, pageKey: page.pageKey, pagePath: page.pagePath,
             primaryUrl: page.primaryUrl, cohortDate: page.cohortDate, sourcePageContentSha256: page.pageContentSha256,
             stagedPath: relative, contentSha256: sha256(bytes), analysisRunId: group.analysisRunId,
-            analysisFileSha256: group.analysisFileSha256, taxonomyAssignmentSha256: group.taxonomy.assignmentSha256,
+            analysisFileSha256: group.analysisFileSha256,
+            analysisRecordSha256: group.analysisRecordSha256,
+            analysisSha256: group.analysisSha256,
+            taxonomyAssignmentSha256: group.taxonomy.assignmentSha256,
             taxonomyFileSha256: group.taxonomyFileSha256 } });
     }
     if (currentRendererImplementationSha256(dependencies) !== rendererImplementationSha256) {
@@ -433,7 +483,8 @@ function stageHistoricalPages(options, dependencies = {}) {
     const manifest = { ...body, manifestSha256: stableHash(body) };
     writeExact(path.join(runRoot, 'manifest.json'), Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`));
     return { ...plan, status: 'staged', stagingRunId: options.stagingRunId, stagingRoot: runRoot,
-        pageCount: records.length, manifestSha256: manifest.manifestSha256 };
+        pageCount: records.length, manifestSha256: manifest.manifestSha256,
+        manifest: structuredClone(manifest) };
 }
 
 module.exports = { CONTRACT, INTENT_CONTRACT, RENDERER_IMPLEMENTATION_CONTRACT, RENDERER_IMPLEMENTATION_FILES,

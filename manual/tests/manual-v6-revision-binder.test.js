@@ -269,8 +269,8 @@ describe('Manual v6 deterministic revision binder', () => {
 
     it('签名 revision payload 前只规范化无歧义 type alias，并对未知/缺失基础字段 fail closed', () => {
         const base = {
-            type: 'dataset', task: '#数据集',
-            tags: '#数据集 #语音识别 #多语言'
+            type: 'dataset', task: '#语音识别', primaryMethodTag: '#数据集构建',
+            tags: '#语音识别 #数据集构建 #多语言'
         };
         const normalized = normalizeAuthorOwnedBaseFields(base, 'revision base payload');
         assert.equal(normalized.type, '数据集与基准');
@@ -280,7 +280,7 @@ describe('Manual v6 deterministic revision binder', () => {
         }, 'revision base payload'), /type 必须是受控文档类型/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...base, task: ''
-        }, 'revision base payload'), /task 必须是单个合法/);
+        }, 'revision base payload'), /task 必须是 current registry/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...base, tags: ['#数据集', '#语音识别', '#多语言']
         }, 'revision base payload'), /tags 必须是 3-5 个空格分隔/);

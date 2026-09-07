@@ -195,6 +195,7 @@ const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
     revision: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
     tableRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     methodRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
+    taxonomySeal: Object.freeze(['complete', 'not_needed']),
     coreSummaryRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     structureRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     scoringAudit: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
@@ -1023,6 +1024,128 @@ function coreSummaryProjectionSha256(analysis) {
         .digest('hex');
 }
 
+function taxonomySurfaceSha256(analysis) {
+    const source = String(analysis || '');
+    const tagBlock = extractSection(source, '标签');
+    const machine = extractSection(source, '机器摘要');
+    const task = machine.match(/^primary_task_tag\s*[:：]\s*(\S+)\s*$/m)?.[1] || '';
+    const method = machine.match(/^primary_method_tag\s*[:：]\s*(\S+)\s*$/m)?.[1] || '';
+    if (!tagBlock || !task || !method) return '';
+    return crypto.createHash('sha256')
+        .update(`primary_task_tag=${task}\nprimary_method_tag=${method}\n${tagBlock}`)
+        .digest('hex');
+}
+
+function taxonomySectionBounds(analysis, title) {
+    const match = new RegExp(
+        `(^|\\n)((#{2,3})\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)`,
+        'm'
+    ).exec(analysis);
+    if (!match) return null;
+    const start = match.index + match[1].length;
+    const contentStart = start + match[2].length;
+    const rest = analysis.slice(contentStart);
+    const level = match[3].length;
+    const next = new RegExp(`\\n#{2,${level}}\\s`).exec(rest);
+    return { contentStart, end: next ? contentStart + next.index : analysis.length };
+}
+
+function taxonomyProtectedProjection(analysis) {
+    let source = String(analysis || '');
+    const machine = taxonomySectionBounds(source, '机器摘要');
+    if (!machine) return '';
+    let body = source.slice(machine.contentStart, machine.end);
+    for (const [key, value] of [
+        ['primary_task_tag', '__PRIMARY_TASK__'],
+        ['primary_method_tag', '__PRIMARY_METHOD__']
+    ]) {
+        const pattern = new RegExp(`^${key}\\s*[:：]\\s*.*$`, 'gm');
+        if ((body.match(pattern) || []).length !== 1) return '';
+        body = body.replace(pattern, `${key}: ${value}`);
+    }
+    source = `${source.slice(0, machine.contentStart)}${body}${source.slice(machine.end)}`;
+    const tags = taxonomySectionBounds(source, '标签');
+    if (!tags) return '';
+    return `${source.slice(0, tags.contentStart)}__TAXONOMY_SECTION__${source.slice(tags.end)}`;
+}
+
+function validateTaxonomyStageBinding(paper, options = {}) {
+    const manifest = paper?.analysisManifest;
+    const stage = manifest?.stages?.taxonomySeal;
+    if (!isRecoveryStageTerminal('taxonomySeal', stage?.status)) return 'taxonomySeal 未完成';
+    const runtime = options.taxonomyRuntime
+        || require('./lib/taxonomy-runtime.js').getDefaultTaxonomyRuntime();
+    if (manifest?.contracts?.taxonomy !== runtime.selectionContract
+        || stage.registryVersion !== runtime.registryVersion
+        || stage.registrySha256 !== runtime.registrySha256
+        || stage.projectionContract !== runtime.projectionContract
+        || stage.projectionSha256 !== runtime.projectionSha256
+        || stage.selectionContract !== runtime.selectionContract) {
+        return 'taxonomySeal registry/projection/selection 合同不是 current';
+    }
+    const parsed = options.parsed;
+    const validation = parsed?.taxonomyValidation;
+    if (!validation?.valid
+        || stage.primaryTaskId !== validation.primaryTaskId
+        || stage.primaryMethodId !== validation.primaryMethodId
+        || manualSha256(stage.conceptIds) !== manualSha256(validation.conceptIds)) {
+        return 'taxonomySeal concept IDs 与最终 canonical 标签不一致';
+    }
+    const structure = manifest.stages?.structureRepair;
+    if (!/^[a-f0-9]{64}$/.test(String(stage.inputAnalysisSha256 || ''))
+        || !/^[a-f0-9]{64}$/.test(String(stage.outputAnalysisSha256 || ''))
+        || !/^[a-f0-9]{64}$/.test(String(stage.inputProtectedProjectionSha256 || ''))
+        || structure?.outputAnalysisSha256 !== stage.inputAnalysisSha256
+        || stage.inputProtectedProjectionSha256 !== stage.outputProtectedProjectionSha256
+        || stage.taxonomySurfaceSha256 !== taxonomySurfaceSha256(paper.analysis)
+        || manifest.stages?.coreSummaryRepair?.inputAnalysisSha256 !== stage.outputAnalysisSha256) {
+        return 'taxonomySeal 输入/输出/受保护字节或下游链无法重放';
+    }
+    if (stage.status === 'not_needed' && stage.inputAnalysisSha256 !== stage.outputAnalysisSha256) {
+        return 'taxonomySeal=not_needed 时输入与输出正文必须相同';
+    }
+    const checkpoints = paper?.analysisStageCheckpoints;
+    const taxonomyCheckpoint = checkpoints?.taxonomySeal;
+    const taxonomyProjection = typeof taxonomyCheckpoint === 'string'
+        ? taxonomyProtectedProjection(taxonomyCheckpoint) : '';
+    if (typeof taxonomyCheckpoint !== 'string' || !taxonomyProjection
+        || crypto.createHash('sha256').update(taxonomyCheckpoint).digest('hex') !== stage.outputAnalysisSha256
+        || crypto.createHash('sha256').update(taxonomyProjection).digest('hex')
+            !== stage.outputProtectedProjectionSha256
+        || taxonomySurfaceSha256(taxonomyCheckpoint) !== stage.taxonomySurfaceSha256) {
+        return 'taxonomySeal 成功态缺少可逐字重放的 taxonomy checkpoint';
+    }
+    if (stage.status === 'complete') {
+        const structureCheckpoint = checkpoints?.structureRepair;
+        const structureProjection = typeof structureCheckpoint === 'string'
+            ? taxonomyProtectedProjection(structureCheckpoint) : '';
+        if (typeof structureCheckpoint !== 'string' || !structureProjection
+            || crypto.createHash('sha256').update(structureCheckpoint).digest('hex') !== stage.inputAnalysisSha256
+            || crypto.createHash('sha256').update(structureProjection).digest('hex')
+                !== stage.inputProtectedProjectionSha256
+        ) {
+            return 'taxonomySeal=complete 缺少可逐字重放的 structure/taxonomy checkpoint';
+        }
+    }
+    const binding = {
+        registryVersion: stage.registryVersion,
+        registrySha256: stage.registrySha256,
+        projectionContract: stage.projectionContract,
+        projectionSha256: stage.projectionSha256,
+        selectionContract: stage.selectionContract,
+        inputAnalysisSha256: stage.inputAnalysisSha256,
+        outputAnalysisSha256: stage.outputAnalysisSha256,
+        inputProtectedProjectionSha256: stage.inputProtectedProjectionSha256,
+        outputProtectedProjectionSha256: stage.outputProtectedProjectionSha256,
+        taxonomySurfaceSha256: stage.taxonomySurfaceSha256,
+        primaryTaskId: stage.primaryTaskId,
+        primaryMethodId: stage.primaryMethodId,
+        conceptIds: stage.conceptIds
+    };
+    if (stage.bindingSha256 !== manualSha256(binding)) return 'taxonomySeal bindingSha256 闭环失败';
+    return null;
+}
+
 function validateCoreSummaryStageBinding(paper, options = {}) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.coreSummaryRepair;
@@ -1754,7 +1877,7 @@ function validateMachineSummaryContract(analysis, parsed, options = {}) {
     return null;
 }
 
-function validateTagSectionContract(analysis, parsed) {
+function validateTagSectionContract(analysis, parsed, options = {}) {
     const block = extractSection(analysis, '标签');
     const lines = block.split('\n').map(line => line.trim()).filter(Boolean);
     if (lines.length !== 4) return '标签章节必须恰好四行';
@@ -1764,18 +1887,38 @@ function validateTagSectionContract(analysis, parsed) {
     if (!/^主任务标签\s*[:：]\s*#\S+$/.test(lines[1])) return '标签章节缺少合法主任务标签行';
     if (!/^主方法标签\s*[:：]\s*#\S+$/.test(lines[2])) return '标签章节缺少合法主方法标签行';
     if (!/^补充标签\s*[:：]\s*#\S+(?:\s+#\S+)*$/.test(lines[3])) return '标签章节缺少合法补充标签行';
-    if (!Array.isArray(parsed?.tags) || parsed.tags.length < 3 || parsed.tags.length > 5) return '标签首行包含非白名单标签';
-    if (!parsed.primaryTaskTag) return '标签章节缺少可解析的主任务标签';
-    if (!parsed.primaryMethodTag) return '标签章节缺少可解析的主方法标签';
     const allTags = lines[0].match(/#[^\s]+/g) || [];
     const taskTag = lines[1].match(/#[^\s]+/)?.[0];
     const methodTag = lines[2].match(/#[^\s]+/)?.[0];
     const supplemental = lines[3].match(/#[^\s]+/g) || [];
     if (!allTags.includes(taskTag) || !allTags.includes(methodTag)) return '主任务/主方法标签必须出现在标签首行';
+    if (options.legacyTagSurface === true) {
+        if (!Array.isArray(parsed?.tags) || allTags.length !== parsed.tags.length
+            || new Set(parsed.tags).size !== parsed.tags.length) {
+            return '旧标签首行包含未知、歧义或角色不匹配标签';
+        }
+    } else {
+        if (!Array.isArray(parsed?.tags) || parsed.tags.length < 3 || parsed.tags.length > 5) {
+            return '标签首行包含非白名单标签';
+        }
+        if (!parsed.primaryTaskTag) return '标签章节缺少可解析的主任务标签';
+        if (!parsed.primaryMethodTag) return '标签章节缺少可解析的主方法标签';
+        if (parsed?.taxonomyValidation?.valid !== true) {
+            return `标签不符合当前 taxonomy: ${parsed?.taxonomyValidation?.errors?.[0] || '缺少验证结果'}`;
+        }
+        if (allTags.length !== parsed.tags.length
+        || allTags.some((tag, index) => tag !== parsed.tags[index])) {
+            return '标签首行必须逐字使用当前 taxonomy 的 active 中文首选标签';
+        }
+    }
+    if (parsed.machineSummary?.primaryTaskTag !== taskTag
+        || parsed.machineSummary?.primaryMethodTag !== methodTag) {
+        return '机器摘要与标签章节的主任务/主方法标签不一致';
+    }
     const expectedSupplemental = allTags.filter(tag => tag !== taskTag && tag !== methodTag);
-    if (new Set(supplemental).size !== supplemental.length ||
-        supplemental.length !== expectedSupplemental.length ||
-        supplemental.some(tag => !expectedSupplemental.includes(tag))) {
+    if (new Set(supplemental).size !== supplemental.length
+        || supplemental.length !== expectedSupplemental.length
+        || supplemental.some((tag, index) => tag !== expectedSupplemental[index])) {
         return '补充标签必须恰好列出首行中除主任务/主方法外的标签';
     }
     return null;
@@ -1801,7 +1944,7 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
     if (!parsed) return '分析结果无法解析';
     const machineSummaryIssue = validateMachineSummaryContract(analysis, parsed);
     if (machineSummaryIssue) return `分析结果机器摘要契约无效: ${machineSummaryIssue}`;
-    const tagIssue = validateTagSectionContract(analysis, parsed);
+    const tagIssue = validateTagSectionContract(analysis, parsed, options);
     if (tagIssue) return `分析结果标签契约无效: ${tagIssue}`;
     if (options.enforceExperimentTableContract === true) {
         const tableIssue = validateExperimentTableContract(analysis, {
@@ -1897,6 +2040,9 @@ module.exports = {
     CORE_SUMMARY_MAX_SENTENCES,
     validateCoreSummarySemanticContract,
     coreSummaryProjectionSha256,
+    taxonomySurfaceSha256,
+    taxonomyProtectedProjection,
+    validateTaxonomyStageBinding,
     validateCoreSummaryStageBinding,
     manualSha256,
     manualTextSha256,

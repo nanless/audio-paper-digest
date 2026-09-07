@@ -1047,72 +1047,13 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     );
 }
 
-// ═══════════════════════════════════════════════════════
-// 允许的标签白名单（与 prompts/deep-analysis.md 标签表同步）
-// ═══════════════════════════════════════════════════════
-const ALLOWED_TAGS = new Set([
-    // 模型/架构
-    '#音频大模型','#语音大模型','#多模态模型','#统一音频模型',
-    '#大语言模型','#生成模型','#端到端',
-    // 任务 — 语音
-    '#语音交互','#语音合成','#语音识别','#语音增强','#语音分离',
-    '#语音克隆','#语音转换','#语音翻译','#语音情感识别','#语音活动检测',
-    '#说话人验证','#说话人日志','#语音伪造检测','#语音编辑','#语音质量评估',
-    '#语音超分','#语音编码','#语音唤醒','#语音属性识别',
-    // 任务 — 音频
-    '#音频交互','#音频生成','#音频分类','#音频事件检测','#音频理解','#音频检索',
-    '#音频分离','#音频伪造检测','#空间音频','#声源定位','#音频编码','#音频修复','#音频水印','#音频质量评估',
-    '#音频超分辨','#音频指纹','#主动降噪','#回声消除',
-    // 任务 — 音乐
-    '#音乐生成','#音乐检索','#音乐理解','#歌唱生成','#音乐转录','#音乐源分离','#音乐推荐','#音乐超分辨',
-    // 任务 — 多模态
-    '#音视频理解','#音视频生成','#音视频交互','#音视频语音识别','#音视频语音合成','#音视频语音分离',
-    '#音视频问答','#音频字幕生成','#音视频声源分离','#音乐文本检索',
-    // 方法 — 神经网络架构
-    '#自回归模型','#扩散模型','#流匹配','#Transformer','#CNN','#RNN','#图神经网络','#胶囊网络',
-    '#生成对抗网络','#变分自编码器',
-    // 方法 — 训练策略
-    '#预训练','#后训练','#SFT','#自监督学习','#无监督学习','#对比学习','#强化学习',
-    '#知识蒸馏','#迁移学习','#领域适应','#测试时自适应','#元学习','#持续学习','#课程学习','#对抗训练',
-    '#多任务学习','#模型压缩','#模型剪枝','#模型融合','#模型集成','#集成学习','#参数高效微调',
-    '#LoRA','#Adapter','#前缀微调','#提示学习','#指令微调','#联邦学习',
-    // 属性/设置
-    '#多语言','#零样本','#少样本','#低资源',
-    '#流式处理','#实时处理','#多通道','#在线','#离线',
-    '#鲁棒性','#高效推理','#长音频处理','#理论分析',
-    // 数据/工具/评估
-    '#基准测试','#数据集','#开源工具','#模型评估','#模型比较','#数据清洗',
-    // 领域/应用
-    '#音视频','#工业应用','#医疗音频','#智能座舱','#内容审核','#游戏音频','#智能音箱','#助听器','#会议转录','#教育',
-    '#可解释性'
-]);
-
-// Primary roles are exact prompt-table categories, not string-prefix guesses.
-// Prefix matching missed valid tasks such as #空间音频 and #声源定位, while
-// allowing general tags to become a split-brain publication baseline.
-const PRIMARY_TASK_TAGS = new Set([
-    '#语音交互','#语音合成','#语音识别','#语音增强','#语音分离',
-    '#语音克隆','#语音转换','#语音翻译','#语音情感识别','#语音活动检测',
-    '#说话人验证','#说话人日志','#语音伪造检测','#语音编辑','#语音质量评估',
-    '#语音超分','#语音编码','#语音唤醒','#语音属性识别',
-    '#音频交互','#音频生成','#音频分类','#音频事件检测','#音频理解','#音频检索',
-    '#音频分离','#音频伪造检测','#空间音频','#声源定位','#音频编码','#音频修复',
-    '#音频水印','#音频质量评估','#音频超分辨','#音频指纹','#主动降噪','#回声消除',
-    '#音乐生成','#音乐检索','#音乐理解','#歌唱生成','#音乐转录','#音乐源分离',
-    '#音乐推荐','#音乐超分辨',
-    '#音视频理解','#音视频生成','#音视频交互','#音视频语音识别','#音视频语音合成',
-    '#音视频语音分离','#音视频问答','#音视频声源分离','#音频字幕生成','#音乐文本检索'
-]);
-
-const PRIMARY_METHOD_TAGS = new Set([
-    '#自回归模型','#扩散模型','#流匹配','#Transformer','#CNN','#RNN','#图神经网络','#胶囊网络',
-    '#生成对抗网络','#变分自编码器','#音频大模型','#语音大模型','#多模态模型','#统一音频模型',
-    '#大语言模型','#生成模型','#端到端','#预训练','#后训练','#SFT','#自监督学习','#无监督学习',
-    '#对比学习','#强化学习','#知识蒸馏','#迁移学习','#领域适应','#测试时自适应','#元学习',
-    '#持续学习','#课程学习','#对抗训练','#多任务学习','#模型压缩','#模型剪枝','#模型融合',
-    '#模型集成','#集成学习','#参数高效微调','#LoRA','#Adapter','#前缀微调','#提示学习',
-    '#指令微调','#联邦学习'
-]);
+// The raw registry is the sole tag authority.  These compatibility exports
+// remain Sets for existing consumers, but are derived from active preferred
+// Chinese labels rather than copied from a prompt table.
+const TAXONOMY_RUNTIME = require('./lib/taxonomy-runtime.js').getDefaultTaxonomyRuntime();
+const ALLOWED_TAGS = TAXONOMY_RUNTIME.allowedTags;
+const PRIMARY_TASK_TAGS = TAXONOMY_RUNTIME.taskTags;
+const PRIMARY_METHOD_TAGS = TAXONOMY_RUNTIME.methodTags;
 
 const SCORE_DIMENSIONS = Object.freeze({
     innovationScore: Object.freeze({ label: '创新性', max: 2 }),
@@ -1236,8 +1177,10 @@ function parseScoringDimensions(scoringText) {
     return { valid: errors.length === 0, scores, errors };
 }
 
-function parseAnalysis(analysis) {
+function parseAnalysis(analysis, options = {}) {
     if (!analysis) return null;
+    const taxonomyRuntime = options.taxonomyRuntime || TAXONOMY_RUNTIME;
+    const legacyTags = options.legacyTags === true;
 
     // 标准化标签：加 # 前缀，清理分隔符和多余空格
     function _normalizeTag(raw) {
@@ -1252,16 +1195,25 @@ function parseAnalysis(analysis) {
         return t;
     }
 
-    // 检查标签是否在白名单中
-    function _isAllowedTag(tag) {
-        if (!tag) return false;
-        return ALLOWED_TAGS.has(tag);
+    function _resolveAllowedTag(raw, facet) {
+        if (!raw) return null;
+        return legacyTags
+            ? taxonomyRuntime.resolveLegacyTag(_normalizeTag(raw), facet)
+            : taxonomyRuntime.resolveCurrentTag(String(raw).trim(), facet);
     }
 
-    // 过滤标签列表，只保留白名单中的标签
+    function _canonicalTag(raw, facet) {
+        const concept = _resolveAllowedTag(raw, facet);
+        return concept ? `#${concept.preferredLabel.zh}` : '';
+    }
+
+    function _isAllowedTag(tag) {
+        return Boolean(_resolveAllowedTag(tag));
+    }
+
     function _filterAllowedTags(tags) {
         if (!tags || !Array.isArray(tags)) return [];
-        return tags.map(t => _normalizeTag(t)).filter(t => _isAllowedTag(t));
+        return tags.map(tag => _canonicalTag(tag)).filter(Boolean);
     }
 
     function _isBadTaskTag(tag) {
@@ -1304,7 +1256,13 @@ function parseAnalysis(analysis) {
         hasCode: '',
         hasModel: '',
         hasDataset: '',
-        scoreValidation: { valid: false, scores: {}, errors: ['缺少评分理由'] }
+        scoreValidation: { valid: false, scores: {}, errors: ['缺少评分理由'] },
+        taxonomyValidation: {
+            valid: false, errors: ['缺少标签章节'],
+            registryVersion: taxonomyRuntime.registryVersion,
+            registrySha256: taxonomyRuntime.registrySha256,
+            primaryTaskId: null, primaryMethodId: null, conceptIds: []
+        }
     };
 
     let m;
@@ -1323,11 +1281,12 @@ function parseAnalysis(analysis) {
     if (tagSectionMatch) {
         const tagSection = tagSectionMatch[1];
         const taskLine = tagSection.match(/主任务标签\s*[：:]\s*(.+)/);
-        if (taskLine) extractedTaskTag = _normalizeTag(taskLine[1]);
+        if (taskLine) extractedTaskTag = taskLine[1].trim();
         const methodLine = tagSection.match(/主方法标签\s*[：:]\s*(.+)/);
-        if (methodLine) extractedMethodTag = _normalizeTag(methodLine[1]);
+        if (methodLine) extractedMethodTag = methodLine[1].trim();
     }
 
+    let rawTagList = [];
     m = analysis.match(/##\s*标签\s*\n\s*([^\n]+)/);
     if (!m) m = analysis.match(/(?:标签|关键词)[：:]\s*([^\n]+)/);
     if (m) {
@@ -1335,15 +1294,35 @@ function parseAnalysis(analysis) {
         // 先尝试匹配带 # 前缀的标签
         let tags = rawTags.match(/#\S+/g) || [];
         // 如果没有带 # 的标签，尝试按分隔符拆分并自动添加 # 前缀
-        if (tags.length === 0) {
+        if (tags.length === 0 && legacyTags) {
             const parts = rawTags.split(/[,，;；、\s]+/).filter(p => p.trim());
             tags = parts.map(p => {
                 const trimmed = p.trim().replace(/^[`\s]+|[`\s]+$/g, '');
                 return trimmed ? '#' + trimmed : null;
             }).filter(Boolean);
         }
-        // 强制过滤：只保留白名单中的标签
-        result.tags = _filterAllowedTags(tags);
+        rawTagList = tags;
+        if (legacyTags) {
+            const normalizedTask = _normalizeTag(extractedTaskTag);
+            const normalizedMethod = _normalizeTag(extractedMethodTag);
+            result.tags = tags.map(tag => {
+                const normalized = _normalizeTag(tag);
+                let concept = _resolveAllowedTag(tag);
+                // A legacy alias may be globally ambiguous (for example
+                // #端到端), but an exact echo of an explicit role line can be
+                // resolved inside that role.  Supplemental tags remain
+                // facet-free and therefore fail closed on ambiguity.
+                if (!concept && normalized === normalizedTask) {
+                    concept = _resolveAllowedTag(tag, 'task');
+                }
+                if (!concept && normalized === normalizedMethod) {
+                    concept = _resolveAllowedTag(tag, 'method');
+                }
+                return concept ? `#${concept.preferredLabel.zh}` : '';
+            }).filter(Boolean);
+        } else {
+            result.tags = _filterAllowedTags(tags);
+        }
     }
 
     const machineSummary = parseMachineSummary(analysis);
@@ -1365,75 +1344,25 @@ function parseAnalysis(analysis) {
     // 主任务/主方法标签解析（强制白名单验证）
     // ═══════════════════════════════════════════════════════
 
-    // 定义任务标签和方法标签的分类（用于验证）
     function _isTaskTag(tag) {
-        if (!tag) return false;
-        if (_isMethodTag(tag)) return false;
-        return PRIMARY_TASK_TAGS.has(tag);
+        return Boolean(_resolveAllowedTag(tag, 'task'));
     }
 
     function _isMethodTag(tag) {
-        if (!tag) return false;
-        return PRIMARY_METHOD_TAGS.has(tag);
+        return Boolean(_resolveAllowedTag(tag, 'method'));
     }
 
-    // 从已过滤的 tags 中找到第一个任务标签
-    function _findFirstTaskTag(tags) {
-        for (const t of tags) {
-            const nt = _normalizeTag(t);
-            if (_isAllowedTag(nt) && _isTaskTag(nt)) return nt;
-        }
-        return '';
-    }
-
-    // 从已过滤的 tags 中找到第一个方法标签
-    function _findFirstMethodTag(tags) {
-        for (const t of tags) {
-            const nt = _normalizeTag(t);
-            if (_isAllowedTag(nt) && _isMethodTag(nt)) return nt;
-        }
-        return '';
-    }
-
-    // 验证并修正主任务标签
-    const validatedTaskTag = _isAllowedTag(extractedTaskTag) ? extractedTaskTag : '';
-    const msTask = _isAllowedTag(_normalizeTag(machineSummary.primaryTaskTag)) ? _normalizeTag(machineSummary.primaryTaskTag) : '';
-    const firstTaskFromTags = _findFirstTaskTag(result.tags);
-
-    if (validatedTaskTag && _isTaskTag(validatedTaskTag)) {
-        result.primaryTaskTag = validatedTaskTag;
-    } else if (msTask && _isTaskTag(msTask)) {
-        result.primaryTaskTag = msTask;
-    } else if (firstTaskFromTags) {
-        result.primaryTaskTag = firstTaskFromTags;
-    } else {
-        // 兜底：如果找不到任务标签，使用第一个允许的 tag（即使是方法标签）
-        result.primaryTaskTag = result.tags.length > 0 ? result.tags[0] : '';
-    }
-
-    // 验证并修正主方法标签
-    const validatedMethodTag = _isAllowedTag(extractedMethodTag) ? extractedMethodTag : '';
-    const msMethod = _isAllowedTag(_normalizeTag(machineSummary.primaryMethodTag)) ? _normalizeTag(machineSummary.primaryMethodTag) : '';
-    const firstMethodFromTags = _findFirstMethodTag(result.tags);
-
-    if (validatedMethodTag && _isMethodTag(validatedMethodTag)) {
-        result.primaryMethodTag = validatedMethodTag;
-    } else if (msMethod && _isMethodTag(msMethod)) {
-        result.primaryMethodTag = msMethod;
-    } else if (firstMethodFromTags) {
-        result.primaryMethodTag = firstMethodFromTags;
-    } else {
-        // 兜底：如果找不到方法标签，使用第一个非任务标签
-        for (const t of result.tags) {
-            if (t !== result.primaryTaskTag) {
-                result.primaryMethodTag = t;
-                break;
-            }
-        }
-        if (!result.primaryMethodTag) {
-            result.primaryMethodTag = result.tags.length > 1 ? result.tags[1] : (result.tags[0] || '');
-        }
-    }
+    // Role lines are authoritative.  Machine-summary echoes are checked by
+    // the contract but never used to invent a missing task/method role.
+    result.primaryTaskTag = _isTaskTag(extractedTaskTag)
+        ? _canonicalTag(extractedTaskTag, 'task') : '';
+    result.primaryMethodTag = _isMethodTag(extractedMethodTag)
+        ? _canonicalTag(extractedMethodTag, 'method') : '';
+    result.taxonomyValidation = taxonomyRuntime.validateTagSelection({
+        tags: legacyTags ? result.tags : rawTagList,
+        primaryTaskTag: legacyTags ? result.primaryTaskTag : extractedTaskTag,
+        primaryMethodTag: legacyTags ? result.primaryMethodTag : extractedMethodTag
+    });
     result.sotaClaim = machineSummary.sotaClaim;
     result.hasCode = machineSummary.hasCode;
     result.hasModel = machineSummary.hasModel;
@@ -1883,6 +1812,8 @@ module.exports = {
     parseAnalysis,
     parseScoringDimensions,
     ALLOWED_TAGS,
+    PRIMARY_TASK_TAGS,
+    PRIMARY_METHOD_TAGS,
     SCORE_DIMENSIONS,
     OPEN_SOURCE_SCORE_ANCHORS,
     normalizeScoreToOneDecimal,

@@ -27,6 +27,7 @@ const {
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
     validateCoreSummaryStageBinding,
+    validateTaxonomyStageBinding,
     MANUAL_COMPLETE_STATUS,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5,
@@ -438,6 +439,13 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         const coreSummaryBindingIssue = manifest.stages.coreSummaryRepair
             ? validateCoreSummaryStageBinding(options.paper) : null;
         if (coreSummaryBindingIssue) addIssue(issues, filePath, `${prefix} ${coreSummaryBindingIssue}`);
+        const taxonomyBindingIssue = !legacyCoreSummaryCompatible && !manifest.manualTakeover
+            ? validateTaxonomyStageBinding(options.paper, {
+                parsed: parseAnalysis(options.paper?.analysis)
+            }) : null;
+        if (taxonomyBindingIssue) {
+            addIssue(issues, filePath, `${prefix} ${taxonomyBindingIssue}`);
+        }
     }
     const scoring = manifest.stages.scoringAudit;
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
@@ -842,6 +850,8 @@ function validatePaperListFile(filePath, options = {}) {
         }
         if (options.deepAnalysis) {
             const hasAnalysisBody = typeof paper.analysis === 'string' && paper.analysis.trim().length > 0;
+            const legacyReadOnly = options.allowLegacyCoreSummarySuccess === true
+                && isLegacyApiAnalysisSuccessForReadOnlyValidation(paper);
             const manualSource = loadBoundManualV4SourceText(
                 filePath,
                 Array.isArray(data) ? undefined : data.batchDate,
@@ -852,7 +862,7 @@ function validatePaperListFile(filePath, options = {}) {
             const sourceText = manualSource.sourceText || '';
             let reparsed = null;
             if (hasAnalysisBody) {
-                reparsed = parseAnalysis(paper.analysis);
+                reparsed = parseAnalysis(paper.analysis, { legacyTags: legacyReadOnly });
                 const manualDepthContractVersion = paper.analysisManifest?.contracts?.manualDepth;
                 const invalidReason = getInvalidAnalysisReason(paper.analysis, reparsed, {
                     enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
@@ -868,7 +878,8 @@ function validatePaperListFile(filePath, options = {}) {
                     manualDepthContractVersion,
                     sourceText,
                     researchBrief: paper.analysisManifest?.manualTakeover?.researchBrief,
-                    openSourceEvidence: paper.analysisManifest?.manualTakeover?.openSourceEvidence
+                    openSourceEvidence: paper.analysisManifest?.manualTakeover?.openSourceEvidence,
+                    legacyTagSurface: legacyReadOnly
                 });
                 if (invalidReason) {
                     addIssue(issues, filePath, `papers[${index}] analysis 正文契约非法: ${invalidReason}`);
@@ -925,10 +936,12 @@ function validatePaperListFile(filePath, options = {}) {
                 if (reparsed) {
                     const cacheFields = [
                         'score', 'documentType', 'scoringRubricVersion', 'rankBucket',
-                        'confidence', 'primaryTaskTag', 'primaryMethodTag', 'sotaClaim',
-                        'hasCode', 'hasModel', 'hasDataset', 'tags',
+                        'confidence', 'sotaClaim', 'hasCode', 'hasModel', 'hasDataset',
                         ...Object.keys(SCORE_DIMENSIONS)
                     ];
+                    if (!legacyReadOnly) {
+                        cacheFields.push('primaryTaskTag', 'primaryMethodTag', 'tags');
+                    }
                     const comparable = value => (
                         value && typeof value === 'object'
                             ? JSON.stringify(value)

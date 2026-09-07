@@ -605,8 +605,9 @@ function validateProductionRevisionOutput(output, receipt, task, paperId, depend
                 payload, 'production revision record payload'
             );
             if (payload.type !== normalizedBase.type || payload.task !== normalizedBase.task
+                || payload.primaryMethodTag !== normalizedBase.primaryMethodTag
                 || payload.tags !== normalizedBase.tags) {
-                throw new Error('production revision record payload 的 type/task/tags 必须已规范化后再签名');
+                throw new Error('production revision record payload 的 type/task/primaryMethodTag/tags 必须已规范化后再签名');
             }
             const article = fs.readFileSync(path.join(task.artifactRoot, 'draft', 'final-article.md'), 'utf8')
                 .normalize('NFKC').replace(/\r\n?/g, '\n').trim();

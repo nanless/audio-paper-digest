@@ -58,6 +58,11 @@ from publish_common import (  # noqa: E402
     MANUAL_AUDIT_CHECKS,
     MANUAL_STAGE_EVIDENCE_STAGES,
     _manual_hash,
+    _PUBLISH_TAXONOMY,
+    _PUBLISH_TAXONOMY_PROJECTION_SHA256,
+    _taxonomy_protected_projection,
+    _taxonomy_surface_sha256,
+    _validate_taxonomy_seal,
     _manual_paper_identity_mode,
     _manual_editorial_prose_paragraphs,
     _manual_han_character_count,
@@ -81,9 +86,14 @@ def complete_analysis():
 document_type: 方法研究
 rank_bucket: 前50%
 confidence: 高
+primary_task_tag: #语音识别
+primary_method_tag: #Transformer
 
 ## 标签
-#语音识别 #Transformer
+#语音识别 #Transformer #低资源
+主任务标签：#语音识别
+主方法标签：#Transformer
+补充标签：#低资源
 
 ## 评分理由
 * 创新性 (1/2)：具体理由充分
@@ -105,6 +115,56 @@ def complete_paper():
         'parsed': parse_analysis(analysis),
         'scoringRubricVersion': 'type-aware-v1',
     }
+
+
+def attach_taxonomy_seal(paper, manifest, *, input_analysis=None, status='not_needed',
+                         with_checkpoints=False):
+    output_analysis = paper['analysis']
+    input_analysis = output_analysis if input_analysis is None else input_analysis
+    parsed = parse_analysis(output_analysis, taxonomy=_PUBLISH_TAXONOMY)
+    selection = parsed['taxonomyValidation']
+    input_sha = hashlib.sha256(input_analysis.encode('utf-8')).hexdigest()
+    output_sha = hashlib.sha256(output_analysis.encode('utf-8')).hexdigest()
+    input_projection_sha = hashlib.sha256(
+        _taxonomy_protected_projection(input_analysis).encode('utf-8')).hexdigest()
+    output_projection_sha = hashlib.sha256(
+        _taxonomy_protected_projection(output_analysis).encode('utf-8')).hexdigest()
+    binding = {
+        'registryVersion': _PUBLISH_TAXONOMY['version'],
+        'registrySha256': _PUBLISH_TAXONOMY['registrySha256'],
+        'projectionContract': 'paper-taxonomy-prompt-projection-v1',
+        'projectionSha256': _PUBLISH_TAXONOMY_PROJECTION_SHA256,
+        'selectionContract': 'paper-taxonomy-selection-v1',
+        'inputAnalysisSha256': input_sha,
+        'outputAnalysisSha256': output_sha,
+        'inputProtectedProjectionSha256': input_projection_sha,
+        'outputProtectedProjectionSha256': output_projection_sha,
+        'taxonomySurfaceSha256': _taxonomy_surface_sha256(output_analysis),
+        'primaryTaskId': selection['primaryTaskId'],
+        'primaryMethodId': selection['primaryMethodId'],
+        'conceptIds': selection['conceptIds'],
+    }
+    manifest.setdefault('contracts', {})['taxonomy'] = 'paper-taxonomy-selection-v1'
+    manifest.setdefault('stages', {}).setdefault('structureRepair', {})[
+        'outputAnalysisSha256'] = input_sha
+    manifest.setdefault('stages', {})['taxonomySeal'] = {
+        'status': status,
+        'fingerprint': '1' * 64,
+        **binding,
+        'bindingSha256': _manual_hash(binding),
+    }
+    core_summary = manifest['stages'].setdefault('coreSummaryRepair', {
+        'status': 'not_needed',
+    })
+    core_summary['inputAnalysisSha256'] = output_sha
+    core_summary['outputAnalysisSha256'] = output_sha
+    manifest['stages'].setdefault('scoringAudit', {'status': 'complete'})[
+        'coreSummaryInputAnalysisSha256'] = output_sha
+    paper['analysisStageCheckpoints'] = {
+        'taxonomySeal': output_analysis,
+        **({'structureRepair': input_analysis} if with_checkpoints else {}),
+    }
+    return manifest['stages']['taxonomySeal']
 
 
 def manual_v2_fixture(*, hardened=True, completed_at=None, v3=False):
@@ -1287,7 +1347,7 @@ confidence: 中
         self.assertIn('文档类型：系统技术报告', meta)
         self.assertIn('评分置信度：中', meta)
 
-    def test_python_tag_roles_match_node_primary_task_and_method_rules(self):
+    def test_python_tag_roles_fail_closed_without_positional_fallback(self):
         benchmark = '''## 评分
 6.0/10
 
@@ -1302,16 +1362,34 @@ primary_method_tag: #基准测试
 主方法标签：#基准测试
 '''
         parsed = parse_analysis(benchmark)
-        self.assertEqual(parsed['primaryTaskTag'], '#音频理解')
-        self.assertEqual(parsed['primaryMethodTag'], '#模型评估')
+        self.assertEqual(parsed['primaryTaskTag'], '')
+        self.assertEqual(parsed['primaryMethodTag'], '')
+        self.assertFalse(parsed['taxonomyValidation']['valid'])
+        self.assertEqual(parsed['taxonomyValidation']['conceptIds'], [])
 
-        foundation = benchmark.replace(
+        valid = benchmark.replace(
+            'primary_task_tag: #模型评估', 'primary_task_tag: #音频理解',
+        ).replace(
+            'primary_method_tag: #基准测试', 'primary_method_tag: #数据清洗',
+        ).replace(
+            '主任务标签：#模型评估', '主任务标签：#音频理解',
+        ).replace(
+            '主方法标签：#基准测试', '主方法标签：#数据清洗',
+        ).replace(
             '#模型评估 #基准测试 #音频理解',
-            '#统一音频模型 #音频大模型 #音频理解',
-        ).replace('primary_task_tag: #模型评估', 'primary_task_tag: #统一音频模型')
-        parsed = parse_analysis(foundation)
+            '#模型评估 #数据清洗 #音频理解',
+        )
+        parsed = parse_analysis(valid)
         self.assertEqual(parsed['primaryTaskTag'], '#音频理解')
-        self.assertEqual(parsed['primaryMethodTag'], '#统一音频模型')
+        self.assertEqual(parsed['primaryMethodTag'], '#数据清洗')
+        self.assertTrue(parsed['taxonomyValidation']['valid'])
+
+        model_family = valid.replace(
+            'primary_method_tag: #数据清洗', 'primary_method_tag: #统一音频模型',
+        ).replace('主方法标签：#数据清洗', '主方法标签：#统一音频模型')
+        parsed = parse_analysis(model_family)
+        self.assertEqual(parsed['primaryMethodTag'], '')
+        self.assertFalse(parsed['taxonomyValidation']['valid'])
 
     def test_empty_links_and_duplicate_alts(self):
         text = '![图]()\n![same](a.png)\n![same](b.png)\n[空]()'
@@ -2258,7 +2336,8 @@ primary_method_tag: #基准测试
         paper = complete_paper()
         validated = validate_papers_for_publish([paper])
         self.assertEqual(validated[0]['parsed']['score'], '7.0')
-        self.assertEqual(validated[0]['parsed']['tags'], ['#语音识别', '#Transformer'])
+        self.assertEqual(validated[0]['parsed']['tags'],
+                         ['#语音识别', '#Transformer', '#低资源'])
 
         incomplete = copy.deepcopy(paper)
         incomplete['parsed'].pop('engineeringScore')
@@ -2270,6 +2349,45 @@ primary_method_tag: #基准测试
         paper['analysis'] = paper['analysis'].replace('* 工程/实践价值 (1.5/1.5)：具体理由充分\n', '')
         with self.assertRaisesRegex(PublishDataValidationError, '评分维度|工程/实践价值'):
             resolve_publish_parsed(paper)
+
+    def test_publish_preflight_replays_current_taxonomy_for_manual_or_api_producers(self):
+        paper = complete_paper()
+        self.assertEqual(
+            resolve_publish_parsed(paper)['primaryMethodTag'], '#Transformer')
+
+        non_method = copy.deepcopy(paper)
+        non_method['analysis'] = non_method['analysis'].replace(
+            'primary_method_tag: #Transformer', 'primary_method_tag: #低资源').replace(
+            '主方法标签：#Transformer', '主方法标签：#低资源')
+        with self.assertRaisesRegex(PublishDataValidationError, 'taxonomy|补充标签'):
+            resolve_publish_parsed(non_method)
+
+        machine_mismatch = copy.deepcopy(paper)
+        machine_mismatch['analysis'] = machine_mismatch['analysis'].replace(
+            'primary_method_tag: #Transformer', 'primary_method_tag: #CNN')
+        with self.assertRaisesRegex(PublishDataValidationError, '机器摘要与标签角色'):
+            resolve_publish_parsed(machine_mismatch)
+
+        duplicate_machine_role = copy.deepcopy(paper)
+        duplicate_machine_role['analysis'] = duplicate_machine_role['analysis'].replace(
+            'primary_method_tag: #Transformer',
+            'primary_method_tag: #Transformer\nprimary_method_tag: #Transformer')
+        with self.assertRaisesRegex(PublishDataValidationError, '必须恰好出现一次'):
+            resolve_publish_parsed(duplicate_machine_role)
+
+        role_literal_outside_machine = copy.deepcopy(paper)
+        role_literal_outside_machine['analysis'] = role_literal_outside_machine['analysis'].replace(
+            '## 作者与机构\n',
+            '## 作者与机构\nprimary_method_tag: #Transformer\n')
+        self.assertEqual(
+            resolve_publish_parsed(role_literal_outside_machine)['primaryMethodTag'],
+            '#Transformer')
+
+        extra_line = copy.deepcopy(paper)
+        extra_line['analysis'] = extra_line['analysis'].replace(
+            '补充标签：#低资源', '补充标签：#低资源\n额外标签说明')
+        with self.assertRaisesRegex(PublishDataValidationError, '恰好四行'):
+            resolve_publish_parsed(extra_line)
 
     def test_publish_preflight_rejects_dimension_without_reason(self):
         paper = complete_paper()
@@ -2300,7 +2418,7 @@ primary_method_tag: #基准测试
         paper['parsed']['results'] = '陈旧实验结果'
         parsed = resolve_publish_parsed(paper)
         self.assertNotEqual(parsed.get('summary'), '陈旧摘要不得发布')
-        self.assertEqual(parsed['tags'], ['#语音识别', '#Transformer'])
+        self.assertEqual(parsed['tags'], ['#语音识别', '#Transformer', '#低资源'])
         self.assertNotEqual(parsed.get('results'), '陈旧实验结果')
 
     def test_manual_override_rejects_unknown_metadata_and_non_scoring_fields(self):
@@ -2369,10 +2487,113 @@ primary_method_tag: #基准测试
             'version': 1,
             'stages': {name: {'status': status} for name, status in complete_statuses.items()},
         }
+        attach_taxonomy_seal(paper, paper['analysisManifest'])
         self.assertEqual(len(validate_papers_for_publish([paper])), 1)
+        missing_taxonomy = copy.deepcopy(paper)
+        del missing_taxonomy['analysisManifest']['stages']['taxonomySeal']
+        with self.assertRaisesRegex(PublishDataValidationError, 'taxonomySeal'):
+            validate_papers_for_publish([missing_taxonomy])
         paper['analysisManifest']['stages']['scoringAudit']['status'] = 'transient_failure'
         with self.assertRaisesRegex(PublishDataValidationError, 'scoringAudit'):
             validate_papers_for_publish([paper])
+
+    def test_python_replays_taxonomy_seal_production_proof_and_rejects_drift(self):
+        paper = complete_paper()
+        statuses = {
+            'imageDownload': 'complete', 'primaryAnalysis': 'complete',
+            'openSourceScan': 'complete', 'demoLinkScan': 'not_needed',
+            'revision': 'complete', 'tableRepair': 'not_needed',
+            'methodRepair': 'not_needed', 'structureRepair': 'not_needed',
+            'scoringAudit': 'complete', 'imageSupplement': 'no_candidates',
+        }
+        manifest = {
+            'version': 1,
+            'stages': {name: {'status': status} for name, status in statuses.items()},
+        }
+        paper['analysisManifest'] = manifest
+        attach_taxonomy_seal(paper, manifest)
+        self.assertEqual(
+            set(paper['analysisStageCheckpoints']), {'taxonomySeal'})
+        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+        self.assertEqual(len(validate_papers_for_publish([paper])), 1)
+
+        mutations = {
+            'registrySha256': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('registrySha256', '0' * 64),
+            'projectionSha256': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('projectionSha256', '0' * 64),
+            'inputAnalysisSha256': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('inputAnalysisSha256', '0' * 64),
+            'outputAnalysisSha256': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('outputAnalysisSha256', '0' * 64),
+            'protectedProjectionSha256': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('outputProtectedProjectionSha256', '0' * 64),
+            'taxonomySurfaceSha256': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('taxonomySurfaceSha256', '0' * 64),
+            'bindingSha256': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('bindingSha256', '0' * 64),
+            'primaryTaskId': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('primaryTaskId', 'task.tts'),
+            'conceptIds': lambda candidate: candidate['analysisManifest']['stages']['taxonomySeal'].__setitem__('conceptIds', ['task.tts', 'method.transformer', 'setting.low-resource']),
+            'manifestContract': lambda candidate: candidate['analysisManifest']['contracts'].__setitem__('taxonomy', 'legacy'),
+            'structureChain': lambda candidate: candidate['analysisManifest']['stages']['structureRepair'].__setitem__('outputAnalysisSha256', '0' * 64),
+            'coreSummaryChain': lambda candidate: candidate['analysisManifest']['stages']['coreSummaryRepair'].__setitem__('inputAnalysisSha256', '0' * 64),
+            'scoringChain': lambda candidate: candidate['analysisManifest']['stages']['scoringAudit'].__setitem__('coreSummaryInputAnalysisSha256', '0' * 64),
+        }
+        for name, mutate in mutations.items():
+            candidate = copy.deepcopy(paper)
+            mutate(candidate)
+            with self.subTest(name=name), self.assertRaises(PublishDataValidationError):
+                _validate_taxonomy_seal(
+                    candidate, candidate['analysisManifest'], candidate['arxivId'])
+
+        checkpoint_drift = copy.deepcopy(paper)
+        attach_taxonomy_seal(
+            checkpoint_drift, checkpoint_drift['analysisManifest'],
+            status='complete', with_checkpoints=True)
+        checkpoint_drift['analysisStageCheckpoints']['taxonomySeal'] += '\nDRIFT'
+        with self.assertRaisesRegex(PublishDataValidationError, '输出 checkpoint'):
+            _validate_taxonomy_seal(
+                checkpoint_drift, checkpoint_drift['analysisManifest'],
+                checkpoint_drift['arxivId'])
+
+        structure_checkpoint_drift = copy.deepcopy(paper)
+        attach_taxonomy_seal(
+            structure_checkpoint_drift,
+            structure_checkpoint_drift['analysisManifest'],
+            status='complete', with_checkpoints=True)
+        structure_checkpoint_drift['analysisStageCheckpoints']['structureRepair'] += '\nDRIFT'
+        with self.assertRaisesRegex(PublishDataValidationError, '输入 checkpoint'):
+            _validate_taxonomy_seal(
+                structure_checkpoint_drift,
+                structure_checkpoint_drift['analysisManifest'],
+                structure_checkpoint_drift['arxivId'])
+
+        complete_without_checkpoints = copy.deepcopy(paper)
+        attach_taxonomy_seal(
+            complete_without_checkpoints,
+            complete_without_checkpoints['analysisManifest'],
+            status='complete', with_checkpoints=False)
+        complete_without_checkpoints.pop('analysisStageCheckpoints')
+        with self.assertRaisesRegex(PublishDataValidationError, '缺少 taxonomy checkpoint'):
+            _validate_taxonomy_seal(
+                complete_without_checkpoints,
+                complete_without_checkpoints['analysisManifest'],
+                complete_without_checkpoints['arxivId'])
+
+        # A real taxonomy-only repair changes the masked fields but preserves
+        # every protected byte and is accepted when the proof is resealed.
+        repaired = copy.deepcopy(paper)
+        legacy_input = repaired['analysis'].replace('#语音识别', '#ASR')
+        attach_taxonomy_seal(
+            repaired, repaired['analysisManifest'],
+            input_analysis=legacy_input, status='complete', with_checkpoints=True)
+        self.assertIsNone(_validate_taxonomy_seal(
+            repaired, repaired['analysisManifest'], repaired['arxivId']))
+
+        # Even a fully rehashed binding cannot authorize a non-taxonomy edit.
+        protected_drift = copy.deepcopy(paper)
+        drifted_input = protected_drift['analysis'].replace(
+            '具体理由充分', '输入阶段的其他正文已变化', 1)
+        stage = attach_taxonomy_seal(
+            protected_drift, protected_drift['analysisManifest'],
+            input_analysis=drifted_input, status='complete', with_checkpoints=True)
+        with self.assertRaisesRegex(PublishDataValidationError, '受保护正文投影'):
+            _validate_taxonomy_seal(
+                protected_drift, protected_drift['analysisManifest'],
+                protected_drift['arxivId'])
 
     def test_versioned_publish_preflight_enforces_bounded_experiment_tables(self):
         headers = ['方法', '数据集'] + [f'M{i}' for i in range(1, 9)]
@@ -2399,6 +2620,7 @@ primary_method_tag: #基准测试
             'contracts': {'experimentTables': EXPERIMENT_TABLE_CONTRACT_VERSION},
             'stages': {name: {'status': status} for name, status in statuses.items()},
         }
+        attach_taxonomy_seal(paper, paper['analysisManifest'])
 
         self.assertEqual(len(extract_markdown_tables(table)), 1)
         self.assertEqual(len(extract_markdown_tables(f'```markdown\n{table}\n```')), 0)
@@ -2407,7 +2629,7 @@ primary_method_tag: #基准测试
             validate_papers_for_publish([paper])
 
         legacy = copy.deepcopy(paper)
-        del legacy['analysisManifest']['contracts']
+        del legacy['analysisManifest']['contracts']['experimentTables']
         self.assertEqual(len(validate_papers_for_publish([legacy])), 1)
 
         mismatch = '| 方法 | 指标 |\n| --- | --- |\n| A | 1 | 多余 |'
@@ -2602,6 +2824,7 @@ primary_method_tag: #基准测试
             'contracts': {'methodDetail': METHOD_DETAIL_CONTRACT_VERSION},
             'stages': {name: {'status': status} for name, status in statuses.items()},
         }
+        attach_taxonomy_seal(paper, paper['analysisManifest'])
         with self.assertRaisesRegex(PublishDataValidationError, '方法契约无效'):
             validate_papers_for_publish([paper])
 

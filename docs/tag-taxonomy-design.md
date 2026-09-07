@@ -1,6 +1,6 @@
 # 论文标签体系设计：受控词表、任务层级与分面检索
 
-状态：设计与[第一批代码实施](tag-taxonomy-implementation.md)已完成，共享词表和只读历史检索预览可运行；正式语义重标及生产切换仍未执行，不改变现有论文、评分、标签URL或2026-09-04发布。调查日期：2026-09-06。本文的数量门槛是本站建议，不是学术界统一标准。
+状态：共享词表和只读历史检索预览已完成；生产分析现从同一 registry 运行时注入标签投影，Node/Python current parser 只接受 active 中文首选标签，并在结构修复后以独立 taxonomy stage 封口。历史页面仍须经完整重写或受来源证明约束的重标流程，不能把旧标签直接当新语义。调查日期：2026-09-07。本文的数量门槛是本站建议，不是学术界统一标准。
 
 ## 0. 全量历史盘点与证据边界
 
@@ -20,8 +20,8 @@
 
 采用“一个概念一个稳定 ID、任务有父子关系、不同性质用不同字段”的体系，不继续扩张一张平面的标签白名单。
 
-- 任务导向论文选择 **1 个主任务、0–2 个有独立证据的次任务**，选择能准确涵盖贡献的最具体概念。不为凑数添加任务。非工程任务导向的发声、感知、韵律研究允许 `primaryTask=null`，但必须提供一个有证据的 `primaryScientificTopic`，不能硬塞进ASR。
-- 方法可以为 **0–2 个**。数据集、理论、评测论文没有新方法时允许为空，不能被迫贴一个模型架构。
+- **current production 合同**要求每篇恰有 1 个显式 `primaryTaskTag` 和 1 个显式 `primaryMethodTag`；两者都必须是 active 中文首选标签，并同时出现在 3–5 个完整标签中。主任务选择能准确涵盖贡献的最具体任务；主方法选择支撑主结论的最具体方法。不得用方法充当任务，也不得靠标签顺序推导角色。
+- 完整标签可以加入有独立证据的同层次 peer 方法，但不得同时保存祖先与后代。数据集、基准、用户研究、综述与理论论文仍须从 registry 的研究方法类概念中选择真实使用的主方法（例如数据集构建、评测协议、用户研究、系统综述或理论分析），不能被迫贴一个并未贡献的模型架构。
 - 条件、研究对象、应用、产物分别存放；正文中提到某个模型或数据集，不自动等于本文研究它。
 - 父任务不与子任务重复存储；检索上级时自动包括下级。只有跨分支且有独立论证或评测的任务才同时标记；理论研究不强求工程基准。
 - 中文名称、英文名称、缩写及历史拼写都指向同一 ID。改显示名不改 ID，也不丢旧链接。
@@ -51,9 +51,9 @@
 
 | 字段 | 回答的问题 | 建议数量 | 使用约束 |
 |---|---|---:|---|
-| `primaryTask` / `secondaryTasks` | 论文主要解决什么？ | 任务型1 / 0–2 | 从任务树选择，有输入、输出、目标或评测证据；合法非任务型主任务为空 |
-| `primaryScientificTopic` | 非任务导向研究主要解释什么现象？ | 0或1 | 已审非任务型必填；未判定记录不强迫造主题；发声、韵律、感知、认知等不是任务兜底词 |
-| `methods` | 核心改进依靠什么？ | 0–2 | 只标贡献所依赖的方法，不罗列整个组件库 |
+| `primaryTaskTag` / 次任务 | 论文主要解决什么？ | current 恰好1 / 0–2 | current 必须从任务树选择显式主任务，有输入、输出、目标或评测证据；不得按首标签猜测 |
+| `primaryScientificTopic` | 非任务导向研究主要解释什么现象？ | roadmap 0或1 | nullable task/topic 分支尚未进入 current；未来升级须另立 schema 和迁移证明，不能借此绕过现行主任务门禁 |
+| `primaryMethodTag` / 补充方法 | 核心改进或研究过程依靠什么？ | current 恰好1 / 补充0–若干（总标签仍3–5） | 显式主方法必须在完整标签中；可标有独立证据的 peer 方法，不罗列组件库，不保留祖先重复 |
 | `settings` | 在什么运行或学习条件下？ | 0–3 | 流式、低资源、零样本、多通道等分别有定义 |
 | `signals` 与 `inputModalities` / `outputModalities` | 研究什么信号，输入输出是什么？ | 据事实或不适用 | 语音、音乐、环境声与文本、视频、脑信号等不要混淆；描述性研究无需虚构输入输出接口 |
 | `applications` | 主要面向什么场景？ | 0–2 | 医疗、工业、助听、会议等，不能只凭一个测试集推断 |
@@ -63,7 +63,7 @@
 
 底层字段可以多，首页不需要展示这么多分类按钮。第一屏默认只有“任务、方法、条件”，高级筛选展开其他分面。领域分类是导航入口，不是要求每篇额外贴“语音”“音频”“人工智能”。
 
-同一分面内多选按OR，不同分面之间按AND。例如“语音识别或语音翻译” AND “LoRA” AND “低资源”。搜索框继续搜标题、摘要和别名；“未分类”和“无适用方法”分别显示，不能混同。
+同一分面内多选按OR，不同分面之间按AND。例如“语音识别或语音翻译” AND “LoRA” AND “低资源”。搜索框继续搜标题、摘要和别名；current 无法可靠确定任务或方法的记录进入 taxonomy review，不能把未知状态显示成已完成分类。
 
 ### 3.2 父子关系如何实际工作
 
@@ -178,9 +178,9 @@
 
 依次回答以下问题，答案来自原文而不是旧标签：
 
-1. 输入是什么，输出是什么，主要评测衡量什么？据此选主任务。非任务导向研究则明确科学问题，选择科学主题，不虚构工程任务。
+1. 输入是什么，输出是什么，主要评测衡量什么？据此选择 current 的显式主任务。暂时不能可靠落入任务树的论文必须进入 taxonomy review，不能用 roadmap 的 nullable 设计伪装 current 成功。
 2. 是谁的改进：新模型、新方法、数据、评测协议、理论还是系统？沿用文档类型并标产物。
-3. 哪个方法与主结论直接相关？没有则留空，不能硬凑方法标签。
+3. 哪个方法与主结论直接相关？将其显式记录为 `primaryMethodTag`；非模型论文从数据构建、评测协议、用户研究、综述或理论分析等真实研究方法中选择，不能硬凑模型标签。其他有独立证据的 peer 方法可以补充。
 4. 哪些条件改变了结论适用范围？只保留最有检索价值且有证据的项。
 5. 是否只是借用别的任务当工具？例如用 ASR 评价增强，不自动增加 ASR 为次任务。
 6. 去重：别名映射到 ID；同一条祖先链只保留最具体项；不同分面正常共存。
@@ -194,6 +194,7 @@
   "paperId": "2609.03622",
   "primaryTask": "task.speech-enhancement",
   "secondaryTasks": [],
+  "primaryMethod": "method.test-time-adaptation",
   "methods": ["method.test-time-adaptation", "method.autoregressive"],
   "settings": [],
   "signals": ["speech"],
@@ -201,7 +202,7 @@
   "outputModalities": ["audio"],
   "evidence": [
     {"field": "primaryTask", "sourceSha256": "需要填入实际原文SHA", "locator": "需要填入任务定义与主实验的位置"},
-    {"field": "methods", "sourceSha256": "需要填入实际原文SHA", "locator": "需要填入适应目标和语音先验的位置"}
+    {"field": "primaryMethod", "sourceSha256": "需要填入实际原文SHA", "locator": "需要填入适应目标和语音先验的位置"}
   ],
   "reviewStatus": "human_or_agent_review_required"
 }
@@ -213,7 +214,7 @@
 
 ## 7. 唯一词表与治理
 
-共享registry已在 `config/paper-taxonomy.json` 实现，Node、Python和只读检索预览使用同一份数据；生产Prompt、legacy解析和Hugo正式导航尚未切换。
+共享 registry 已在 `config/paper-taxonomy.json` 实现，Node、Python、生产 Prompt 与只读检索预览使用同一份数据；alias/deprecated 仅允许显式 legacy 读取，生产 canonical 不再使用复制白名单或危险标签兜底。Hugo 正式导航仍由已审 taxonomy assignment 控制。
 
 正式治理设计包括稳定ID、分面、中英文名称、别名、定义、正反例、父级与相关关系、版本和弃用。已实施v1使用 `id/facet/preferredLabel/aliases/broaderId/definition/scopeNote/status/replacedBy`，正反边界写在scopeNote，全概念继承首版版本；独立相关边与逐概念引入版本留给后续协议。别名规范化限制为已审核名称、ASCII大小写、全半角与明确拼写，不用模糊相似度自动合并技术概念。
 
@@ -241,11 +242,11 @@
 | 优先级 | 改动边界 | 必须验证 |
 |---|---|---|
 | P0 | 统一registry、别名与角色；梳理 `utils.js:1053`、`utils.py:193` 和Prompt三份词表 | Node/Python/Prompt逐项一致；PEFT不能变LoRA，数据增强不能变预训练，说话人识别不能无条件变验证 |
-| P1 | 新分类schema与独立来源签名，修改 `analysis-contract.js` 四行/3–5/强制主方法约束及 `deep-analyzer.js` 语义补标签逻辑 | 旧契约保持原样，新契约明确分支；无适用方法/非任务主题/未知项都不伪造成功 |
+| P1 | current 已实施显式主任务/主方法、3–5 标签与独立 taxonomy seal；nullable task/topic 只保留为未来 schema roadmap | 旧契约只可显式 legacy 读取；current 未知/歧义项进入 review，不能伪造成功 |
 | P2 | `publish_common.py`、`publish-to-blog.py`、封面统计与Hugo搜索/主题页读取同一分类投影 | tags顺序不改变主任务；父级查询、OR/AND、去重计数和旧URL均有回归 |
 | P3 | 只读历史候选、分层评测、shadow索引、分批迁移 | 未决项透明；原正文/评分不变；每次发布仍经过generate/review与远端验证 |
 
-当前已实测：同一合法 `#参数高效微调` 在Node保留原主方法，Python `utils.py:336/602` 却映成LoRA；`utils.py:304–317` 还有非严格等价映射。这些列为实施前阻挡项，本轮设计没有擅自修改已发布分类。Hugo `research_metadata.html` 与统计代码的首标签回退也应按新版分类状态显式停用，不能让空主任务又被方法标签填回去。
+current Node/Python parser 均从共享 registry 读取 active 中文首选标签；alias/deprecated 只能经显式 legacy 路径解释，不能进入新 canonical。Hugo `research_metadata.html` 与统计代码的首标签回退也应按新版分类状态显式停用，不能再从标签顺序猜测主任务或主方法。
 
 ### 9.2 迁移步骤
 

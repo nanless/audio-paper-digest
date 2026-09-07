@@ -267,7 +267,7 @@ describe('Manual v6 production records envelope assembler', () => {
         writeJson(path.join(root, 'evidence', 'artifact-index.json'), artifactIndex);
         const payload = {
             version: 4, manualDepth: 'full-text-evidence-v6', paperId: id,
-            arxivId: id, type: '方法研究', task: '#语音识别',
+            arxivId: id, type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',
             tags: '#语音识别 #Transformer #鲁棒性',
             editorial: {
                 readerArticle: text,

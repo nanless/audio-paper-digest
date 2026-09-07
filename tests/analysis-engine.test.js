@@ -49,9 +49,11 @@ const {
 const { validAnalysisText, validAnalysisPaper } = require('./valid-analysis-fixture.js');
 
 function validAnalyzedResult(extra = {}) {
+    const fixture = validAnalysisPaper('fixture');
     return {
         analysis: validAnalysisText(),
-        analysisManifest: validAnalysisPaper('fixture').analysisManifest,
+        analysisManifest: fixture.analysisManifest,
+        analysisStageCheckpoints: fixture.analysisStageCheckpoints,
         ...extra
     };
 }
@@ -1086,11 +1088,27 @@ describe('analyzePaperWithRetry', () => {
         };
         delete legacy.analysisManifest.stages.coreSummaryRepair;
         delete legacy.analysisManifest.contracts.coreSummary;
+        delete legacy.analysisManifest.stages.taxonomySeal;
+        delete legacy.analysisManifest.contracts.taxonomy;
+        delete legacy.analysisStageCheckpoints;
         for (const stage of Object.values(legacy.analysisManifest.stages)) {
             stage.updatedAt = '2026-09-06T23:59:59.000+08:00';
         }
         assert.strictEqual(isSuccessfulAnalysisRecord(legacy), false);
         assert.strictEqual(isLegacyApiAnalysisSuccessForReadOnlyValidation(legacy), true);
+        const legacyEndToEnd = structuredClone(legacy);
+        legacyEndToEnd.analysis = legacyEndToEnd.analysis.replaceAll('#Transformer', '#端到端');
+        legacyEndToEnd.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = crypto
+            .createHash('sha256').update(legacyEndToEnd.analysis).digest('hex');
+        legacyEndToEnd.parsed = require('../scripts/utils.js').parseAnalysis(
+            legacyEndToEnd.analysis, { legacyTags: true }
+        );
+        assert.strictEqual(
+            legacyEndToEnd.parsed.taxonomyValidation.primaryMethodId,
+            'method.end-to-end-learning'
+        );
+        assert.strictEqual(isLegacyApiAnalysisSuccessForReadOnlyValidation(legacyEndToEnd), true);
+        assert.strictEqual(isSuccessfulAnalysisRecord(legacyEndToEnd), false);
         assert.strictEqual(isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacy), true);
         assert.deepStrictEqual(getCanonicalAnalysisRunSummary([legacy]), {
             success: 0, remaining: 1, status: 'failed'
@@ -1102,6 +1120,8 @@ describe('analyzePaperWithRetry', () => {
         for (const mutate of [
             paper => { paper.analysisManifest.contracts.coreSummary = 'core-summary-detailed-v3'; },
             paper => { paper.analysisManifest.stages.coreSummaryRepair = { status: 'complete' }; },
+            paper => { paper.analysisManifest.contracts.taxonomy = 'paper-taxonomy-selection-v1'; },
+            paper => { paper.analysisManifest.stages.taxonomySeal = { status: 'not_needed' }; },
             paper => { paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = '0'.repeat(64); },
             paper => { paper.apiReaderPlan.sourceBindingsSha256 = '0'.repeat(64); },
             paper => { paper.analysisManifest.stages.primaryAnalysis.updatedAt = '2026-09-07T00:00:00.000+08:00'; },
@@ -1270,10 +1290,7 @@ describe('analyzeBatch', () => {
                 : { paper, skip: false },
             analyzeFn: async () => {
                 analyzeCalls++;
-                return {
-                    analysis: validAnalysisText(),
-                    analysisManifest: validAnalysisPaper('fixture').analysisManifest
-                };
+                return validAnalyzedResult();
             },
             onPaperResultLocked: async (_paper, result) => {
                 canonical = result.result;

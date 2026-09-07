@@ -50,12 +50,26 @@ function fixture(t, secondStatus = 'complete') {
         updateLocked, loadTaxonomy: () => ({ registrySha256: REGISTRY }), readCrosswalk: () => crosswalk,
         recoverRun: () => ({ storageSealed: true, currentContractComplete: true }), loadAnalysisRun: ({ runId }) => ({ runId }),
         buildAssignments: ({ runHandle, paperId }) => [{ paperId, analysisRunId: runHandle.runId,
+            analysisFileSha256: sha(`analysis-file:${paperId}`),
+            analysisRecordSha256: sha(`analysis-record:${paperId}`), analysisSha256: sha(`analysis:${paperId}`),
             registrySha256: REGISTRY, status: 'assigned', assignmentSha256: sha(paperId) }],
         writeAssignments: ({ assignments }) => { assignmentWrites += 1; return [{ paperId: assignments[0].paperId,
             fileSha256: sha(`file:${assignments[0].paperId}`) }]; },
         stagePages: async options => { active += 1; maximumActive = Math.max(maximumActive, active);
             await new Promise(resolve => setImmediate(resolve)); active -= 1; stageCalls.push(options);
-            return { status: 'staged', manifestSha256: sha(`manifest:${options.stagingRunId}`) }; },
+            const manifestSha256 = sha(`manifest:${options.stagingRunId}`);
+            const expected = options.expectedAssignment;
+            return { status: 'staged', manifestSha256, manifest: {
+                stagingRunId: options.stagingRunId,
+                rendererImplementationSha256: options.rendererImplementationSha256,
+                manifestSha256,
+                pages: [{ paperId: expected.paperId, analysisRunId: expected.analysisRunId,
+                    analysisFileSha256: expected.analysisFileSha256,
+                    analysisRecordSha256: expected.analysisRecordSha256,
+                    analysisSha256: expected.analysisSha256,
+                    taxonomyAssignmentSha256: expected.assignmentSha256,
+                    taxonomyFileSha256: expected.taxonomyFileSha256 }]
+            } }; },
         loadAggregateInputs: options => ({ options }),
         buildAggregates: ({ inputs, date }) => [{ date, manifestSha256: sha(`aggregate:${date}`), inputs }],
         aggregateRunIdFor: () => '66666666-6666-4666-8666-666666666666',
@@ -82,7 +96,8 @@ test('sealed per-paper runs are assigned/staged concurrently and two runs aggreg
         `${CROSSWALK}.json`))).items[f.paperIds[0]], updatedAt: 'later', lastError: 'ignored while complete' };
     const rebound = { ...changedOnlyVolatile, paperId: f.paperIds[0],
         analysisSchedulerItemSha256: api.stableHash(api.analysisSchedulerItemBinding(f.paperIds[0], changedOnlyVolatile)) };
-    assert.equal(api.deterministicStagingRunId(CROSSWALK, rebound, REGISTRY, RENDERER), result.processed[0].stagingRunId);
+    assert.equal(api.deterministicStagingRunId(CROSSWALK, rebound, REGISTRY, RENDERER,
+        result.processed[0].taxonomyAssignmentSha256), result.processed[0].stagingRunId);
 });
 
 test('renderer implementation change creates a new staging run and checkpoint without reusing old proof', async t => {
@@ -105,6 +120,102 @@ test('renderer implementation change creates a new staging run and checkpoint wi
     assert.doesNotThrow(() => api.validateCheckpoint(secondCheckpoint, CROSSWALK, REGISTRY,
         replacementRenderer));
     assert.equal(f.stageCalls.at(-1).rendererImplementationSha256, replacementRenderer);
+});
+
+test('analysis assignment upgrade creates a new staging identity while retaining the old checkpoint proof', async t => {
+    const f = fixture(t); const options = { apply: true, crosswalkId: CROSSWALK,
+        date: DATE, limit: null, concurrency: 1 };
+    const first = await api.runHistoricalPostprocess(options, f.deps);
+    const oldRunId = first.processed[0].stagingRunId;
+    const originalBuild = f.deps.buildAssignments;
+    f.deps.buildAssignments = args => originalBuild(args).map(assignment => ({ ...assignment,
+        analysisFileSha256: 'a'.repeat(64), analysisRecordSha256: 'b'.repeat(64),
+        analysisSha256: 'c'.repeat(64), assignmentSha256: 'd'.repeat(64) }));
+    const second = await api.runHistoricalPostprocess(options, f.deps);
+    assert.notEqual(second.processed[0].stagingRunId, oldRunId);
+    assert.equal(second.processed[0].analysisFileSha256, 'a'.repeat(64));
+    assert.equal(second.processed[0].analysisRecordSha256, 'b'.repeat(64));
+    assert.equal(second.processed[0].taxonomyAssignmentSha256, 'd'.repeat(64));
+    assert.ok(f.aggregateCalls.at(-1).aggregates[0].inputs.options.stagingRunIds
+        .includes(second.processed[0].stagingRunId));
+    assert.ok(!f.aggregateCalls.at(-1).aggregates[0].inputs.options.stagingRunIds.includes(oldRunId));
+});
+
+test('pilot processing cannot aggregate a stale unselected sibling from the same date', async t => {
+    const f = fixture(t); const options = { apply: true, crosswalkId: CROSSWALK,
+        date: DATE, limit: null, concurrency: 1 };
+    await api.runHistoricalPostprocess(options, f.deps);
+    const aggregateCount = f.aggregateCalls.length;
+    const originalBuild = f.deps.buildAssignments;
+    f.deps.buildAssignments = args => originalBuild(args).map(assignment => (
+        assignment.paperId === f.paperIds[1]
+            ? { ...assignment, analysisFileSha256: 'a'.repeat(64),
+                analysisRecordSha256: 'b'.repeat(64), analysisSha256: 'c'.repeat(64),
+                assignmentSha256: 'd'.repeat(64) }
+            : assignment
+    ));
+    const result = await api.runHistoricalPostprocess({ ...options, limit: 'pilot' }, f.deps);
+    assert.equal(result.processed.length, 1);
+    assert.equal(result.daily[0].status, 'blocked');
+    assert.equal(f.aggregateCalls.length, aggregateCount,
+        'the old sibling staging proof must not reach the aggregate loader');
+});
+
+test('analysis A to B drift during staging fails before checkpointing A as staged', async t => {
+    const f = fixture(t); const originalBuild = f.deps.buildAssignments;
+    const originalStage = f.deps.stagePages; let drifted = false;
+    f.deps.buildAssignments = args => originalBuild(args).map(assignment => drifted
+        ? { ...assignment, analysisFileSha256: 'a'.repeat(64),
+            analysisRecordSha256: 'b'.repeat(64), analysisSha256: 'c'.repeat(64),
+            assignmentSha256: 'd'.repeat(64) }
+        : assignment);
+    f.deps.stagePages = async options => {
+        const staged = await originalStage(options);
+        drifted = true;
+        return staged;
+    };
+    const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
+        date: DATE, limit: 'pilot', concurrency: 1 }, f.deps);
+    assert.equal(result.processed[0].status, 'failed');
+    assert.match(result.processed[0].lastError, /changed while staging/);
+    assert.equal(result.daily[0].status, 'blocked');
+});
+
+test('upgrading one multi-date paper rebuilds every cohort date with its new staging run', async t => {
+    const f = fixture(t); const extraDate = '2026-04-20';
+    const extraKey = `page:${'f'.repeat(64)}`;
+    f.crosswalk.source.papers.push({ ...f.crosswalk.source.papers[0], pageKey: extraKey,
+        pagePath: 'content/posts/paper-extra.md', primaryUrl: 'https://example.test/posts/paper-extra/',
+        cohortDate: extraDate, scope: { type: 'daily', key: extraDate } });
+    f.crosswalk.assignments[extraKey] = { status: 'verified',
+        sourceAuthority: { paperId: f.paperIds[0] } };
+    f.crosswalk.identityGroups[0].pageKeys.push(extraKey);
+    const schedulerPath = path.join(f.files.historicalAnalysisSchedulerDir, `${CROSSWALK}.json`);
+    const scheduler = JSON.parse(fs.readFileSync(schedulerPath));
+    scheduler.items[f.paperIds[0]].cohortDates.push(extraDate);
+    scheduler.items[f.paperIds[0]].pageKeys.push(extraKey);
+    fs.writeFileSync(schedulerPath, JSON.stringify(scheduler));
+
+    const options = { apply: true, crosswalkId: CROSSWALK, date: DATE, limit: null, concurrency: 1 };
+    const first = await api.runHistoricalPostprocess(options, f.deps);
+    assert.deepEqual(first.daily.map(item => item.date), [DATE, extraDate]);
+    const oldRunId = first.processed.find(item => item.paperId === f.paperIds[0]).stagingRunId;
+    const originalBuild = f.deps.buildAssignments;
+    f.deps.buildAssignments = args => originalBuild(args).map(assignment => (
+        assignment.paperId === f.paperIds[0]
+            ? { ...assignment, analysisFileSha256: 'a'.repeat(64),
+                analysisRecordSha256: 'b'.repeat(64), analysisSha256: 'c'.repeat(64),
+                assignmentSha256: 'd'.repeat(64) }
+            : assignment
+    ));
+    const second = await api.runHistoricalPostprocess({ ...options, limit: 'pilot' }, f.deps);
+    assert.deepEqual(second.daily.map(item => item.date), [DATE, extraDate]);
+    const newRunId = second.processed[0].stagingRunId;
+    assert.notEqual(newRunId, oldRunId);
+    for (const call of f.aggregateCalls.slice(-2)) {
+        assert.ok(call.aggregates[0].inputs.options.stagingRunIds.includes(newRunId));
+        assert.ok(!call.aggregates[0].inputs.options.stagingRunIds.includes(oldRunId));
+    }
 });
 
 test('checkpoint self-SHA survives the production JSON updater generation field', async t => {

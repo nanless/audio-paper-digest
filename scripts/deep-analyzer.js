@@ -52,6 +52,8 @@ const {
     CORE_SUMMARY_MAX_SENTENCES,
     validateCoreSummarySemanticContract,
     coreSummaryProjectionSha256,
+    taxonomySurfaceSha256,
+    taxonomyProtectedProjection,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 loadEnvFile();
@@ -85,6 +87,18 @@ const {
 const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     assessReaderTableSelectionEligibility, findReaderTablePasteDuplication,
     readerResultTableRequirement, validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
+const { getDefaultTaxonomyRuntime } = require('./lib/taxonomy-runtime.js');
+const TAXONOMY_RUNTIME = getDefaultTaxonomyRuntime();
+
+function taxonomyFingerprintFields() {
+    return {
+        taxonomyRegistryVersion: TAXONOMY_RUNTIME.registryVersion,
+        taxonomyRegistrySha256: TAXONOMY_RUNTIME.registrySha256,
+        taxonomyProjectionContract: TAXONOMY_RUNTIME.projectionContract,
+        taxonomyProjectionSha256: TAXONOMY_RUNTIME.projectionSha256,
+        taxonomySelectionContract: TAXONOMY_RUNTIME.selectionContract
+    };
+}
 
 // 解构配置常量（便于阅读）
 const {
@@ -4279,7 +4293,8 @@ const RECOVERY_STAGE_STATUSES = new Set([
 ]);
 const RECOVERY_STAGE_ORDER = Object.freeze([
     'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision', 'tableRepair',
-    'methodRepair', 'structureRepair', 'coreSummaryRepair', 'scoringAudit', 'apiReaderArticle', 'imageSupplement'
+    'methodRepair', 'structureRepair', 'taxonomySeal', 'coreSummaryRepair',
+    'scoringAudit', 'apiReaderArticle', 'imageSupplement'
 ]);
 // Execution order is not a dependency graph.  In particular the v3 Reader is
 // authored from original source/artifacts, not from canonical analysis or its
@@ -4288,25 +4303,26 @@ const RECOVERY_STAGE_ORDER = Object.freeze([
 const RECOVERY_STAGE_DEPENDENCIES = Object.freeze({
     primaryAnalysis: Object.freeze([
         'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
-        'structureRepair', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
+        'structureRepair', 'taxonomySeal', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
     ]),
     openSourceScan: Object.freeze([
-        'revision', 'tableRepair', 'methodRepair', 'structureRepair',
+        'revision', 'tableRepair', 'methodRepair', 'structureRepair', 'taxonomySeal',
         'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
     ]),
     demoLinkScan: Object.freeze(['apiReaderArticle', 'imageSupplement']),
     revision: Object.freeze([
-        'tableRepair', 'methodRepair', 'structureRepair',
+        'tableRepair', 'methodRepair', 'structureRepair', 'taxonomySeal',
         'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
     ]),
     tableRepair: Object.freeze([
-        'methodRepair', 'structureRepair', 'coreSummaryRepair',
+        'methodRepair', 'structureRepair', 'taxonomySeal', 'coreSummaryRepair',
         'scoringAudit', 'imageSupplement'
     ]),
     methodRepair: Object.freeze([
-        'structureRepair', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
+        'structureRepair', 'taxonomySeal', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
     ]),
-    structureRepair: Object.freeze(['coreSummaryRepair', 'scoringAudit', 'imageSupplement']),
+    structureRepair: Object.freeze(['taxonomySeal', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement']),
+    taxonomySeal: Object.freeze(['coreSummaryRepair', 'scoringAudit', 'imageSupplement']),
     coreSummaryRepair: Object.freeze(['scoringAudit', 'imageSupplement']),
     scoringAudit: Object.freeze(['imageSupplement']),
     apiReaderArticle: Object.freeze(['imageSupplement']),
@@ -4333,6 +4349,7 @@ const RECOVERY_PROMPT_FILES = Object.freeze({
     revision: 'prompts/gap-fill.md',
     tableRepair: 'prompts/table-fill.md',
     methodRepair: 'prompts/method-fill.md',
+    taxonomySeal: 'prompts/taxonomy-tag-repair.md',
     coreSummaryRepair: 'prompts/core-summary-repair.md',
     structureRepair: 'prompts/structure-repair.md',
     scoringAudit: 'prompts/scoring-audit.md',
@@ -4497,6 +4514,13 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
         patterns: BROAD_EVIDENCE_PATTERNS,
         taskLabel: 'STRUCTURE',
         typeAware: true
+    },
+    taxonomySeal: {
+        maxTokens: 2500,
+        evidenceMaxChars: 30000,
+        patterns: BROAD_EVIDENCE_PATTERNS,
+        taskLabel: 'TAXONOMY',
+        typeAware: false
     }
 });
 
@@ -4544,6 +4568,8 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
         evidenceMaxChars: config.evidenceMaxChars,
         evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
         inputAnalysisSha256: crypto.createHash('sha256').update(String(inputAnalysis || '')).digest('hex'),
+        ...(['revision', 'structureRepair', 'taxonomySeal'].includes(stage)
+            ? taxonomyFingerprintFields() : {}),
         ...(stage === 'structureRepair'
             ? {
                 experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -4619,7 +4645,8 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         arxivId,
         title: paper.title || '',
         authors: paper.authors || [],
-        categories: paper.categories || []
+        categories: paper.categories || [],
+        ...taxonomyFingerprintFields()
     };
     return {
         primaryAnalysis: stableFingerprint(primaryContext),
@@ -5578,6 +5605,31 @@ function hasIncompleteRecoveryStage(manifest) {
     return Object.entries(manifest?.stages || {}).some(([stage, details]) =>
         details && !isRecoveryStageTerminal(stage, details.status)
     );
+}
+
+function retainFinalTaxonomyCheckpoints(paper, analysisManifest) {
+    const taxonomyStatus = analysisManifest?.stages?.taxonomySeal?.status;
+    if (!['complete', 'not_needed'].includes(taxonomyStatus)) {
+        delete paper.analysisStageCheckpoints;
+        return;
+    }
+    const taxonomySeal = paper.analysisStageCheckpoints?.taxonomySeal;
+    if (typeof taxonomySeal !== 'string') {
+        throw contractRejectedError(
+            'taxonomySeal 成功态必须保留 taxonomySeal 逐字 checkpoint'
+        );
+    }
+    if (taxonomyStatus === 'not_needed') {
+        paper.analysisStageCheckpoints = { taxonomySeal };
+        return;
+    }
+    const structureRepair = paper.analysisStageCheckpoints?.structureRepair;
+    if (typeof structureRepair !== 'string') {
+        throw contractRejectedError(
+            'taxonomySeal=complete 成功态必须保留 structureRepair/taxonomySeal 两份逐字 checkpoint'
+        );
+    }
+    paper.analysisStageCheckpoints = { structureRepair, taxonomySeal };
 }
 
 function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest = null) {
@@ -9288,7 +9340,8 @@ async function analyzePaperDeepInternal(paper) {
         authors: Array.isArray(paper.authors) ? paper.authors.join(', ') : (paper.authors || '未知'),
         categories: Array.isArray(paper.categories) ? paper.categories.join(', ') : (paper.categories || '未知'),
         arxivId: arxivId,
-        textForAnalysis: textForAnalysis
+        textForAnalysis: textForAnalysis,
+        taxonomyProjection: TAXONOMY_RUNTIME.projection
     });
 
     let analysis = isRecoveryStageComplete(analysisManifest, 'primaryAnalysis')
@@ -9645,7 +9698,100 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
-    // 第3.66轮：结构修复之后执行核心摘要最终门禁。结构修复可能为补齐标题
+    // 第3.66轮：结构修复只负责正文结构；taxonomy 独立使用原文证据
+    // 封口。合法标签不调用模型，非法时只替换标签节与机器摘要中的两个
+    // taxonomy 字段，避免为分类错误重写全文。
+    let taxonomySealStage = prepareTextRecoveryStage(
+        paper,
+        analysisManifest,
+        'taxonomySeal',
+        analysis,
+        rawTextForAnalysis
+    );
+    analysis = taxonomySealStage.analysis;
+    let taxonomyIssue = validateTagSectionContract(analysis, parseAnalysis(analysis));
+    if (isRecoveryStageComplete(analysisManifest, 'taxonomySeal') && taxonomyIssue) {
+        invalidateRecoveryStageIfChanged(
+            paper,
+            analysisManifest,
+            'taxonomySeal',
+            `${taxonomySealStage.fingerprint}:invalid-${TAXONOMY_RUNTIME.selectionContract}`
+        );
+        analysis = paper.analysisCheckpoint || taxonomySealStage.inputAnalysis;
+        taxonomySealStage = prepareTextRecoveryStage(
+            paper,
+            analysisManifest,
+            'taxonomySeal',
+            analysis,
+            rawTextForAnalysis
+        );
+        analysis = taxonomySealStage.analysis;
+        taxonomyIssue = validateTagSectionContract(analysis, parseAnalysis(analysis));
+    }
+    if (!isRecoveryStageComplete(analysisManifest, 'taxonomySeal')) {
+        try {
+            const before = analysis;
+            if (taxonomyIssue) {
+                console.log(`    [deep] 🏷️  taxonomy 标签执行局部修复: ${taxonomyIssue}`);
+                analysis = await repairTaxonomyTags(
+                    paper,
+                    analysis,
+                    taxonomySealStage.evidenceContext,
+                    taxonomyIssue
+                );
+            }
+            const parsedTaxonomy = parseAnalysis(analysis);
+            const finalTaxonomyIssue = validateTagSectionContract(analysis, parsedTaxonomy);
+            if (finalTaxonomyIssue) {
+                throw contractRejectedError(`taxonomy 最终门禁失败: ${finalTaxonomyIssue}`);
+            }
+            const taxonomyBinding = {
+                registryVersion: TAXONOMY_RUNTIME.registryVersion,
+                registrySha256: TAXONOMY_RUNTIME.registrySha256,
+                projectionContract: TAXONOMY_RUNTIME.projectionContract,
+                projectionSha256: TAXONOMY_RUNTIME.projectionSha256,
+                selectionContract: TAXONOMY_RUNTIME.selectionContract,
+                inputAnalysisSha256: taxonomySealStage.inputAnalysisSha256,
+                outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
+                inputProtectedProjectionSha256: crypto.createHash('sha256')
+                    .update(taxonomyProtectedProjection(before)).digest('hex'),
+                outputProtectedProjectionSha256: crypto.createHash('sha256')
+                    .update(taxonomyProtectedProjection(analysis)).digest('hex'),
+                taxonomySurfaceSha256: taxonomySurfaceSha256(analysis),
+                primaryTaskId: parsedTaxonomy.taxonomyValidation.primaryTaskId,
+                primaryMethodId: parsedTaxonomy.taxonomyValidation.primaryMethodId,
+                conceptIds: parsedTaxonomy.taxonomyValidation.conceptIds
+            };
+            analysisManifest.contracts = {
+                ...(analysisManifest.contracts || {}),
+                taxonomy: TAXONOMY_RUNTIME.selectionContract
+            };
+            markRecoveryStage(
+                analysisManifest,
+                'taxonomySeal',
+                taxonomyIssue ? 'complete' : 'not_needed',
+                {
+                    fingerprint: taxonomySealStage.fingerprint,
+                    evidenceChars: taxonomySealStage.evidenceChars,
+                    evidenceSha256: taxonomySealStage.evidenceSha256,
+                    ...taxonomyBinding,
+                    bindingSha256: stableFingerprint(taxonomyBinding)
+                }
+            );
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+        } catch (error) {
+            markRecoveryStage(
+                analysisManifest,
+                'taxonomySeal',
+                recoveryFailureStatus(error),
+                { error: error.message, fingerprint: taxonomySealStage.fingerprint }
+            );
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            throw error;
+        }
+    }
+
+    // 第3.67轮：结构与 taxonomy 封口之后执行核心摘要最终门禁。结构修复可能为补齐标题
     // 重写整篇 canonical，因此摘要合同不能在它之前封口。这里始终只替换
     // `核心摘要` 的 section body，并逐字校验其余 12 节没有变化。
     let coreSummaryRepairStage = prepareTextRecoveryStage(
@@ -10302,7 +10448,7 @@ async function analyzePaperDeepInternal(paper) {
     }
     delete paper.analysisCheckpoint;
     delete paper.analysisRecoveryImageManifest;
-    delete paper.analysisStageCheckpoints;
+    retainFinalTaxonomyCheckpoints(paper, analysisManifest);
     delete paper.analysisStaleSnapshots;
     delete paper.latestAnalysisAttemptError;
     delete paper.latestAnalysisAttemptAt;
@@ -10580,7 +10726,8 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         existingAnalysis: existingAnalysis,
-        textForAnalysis: evidence
+        textForAnalysis: evidence,
+        taxonomyProjection: TAXONOMY_RUNTIME.projection
     });
     return await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
         { usageContext: { stage: 'revision' } });
@@ -10630,52 +10777,6 @@ function inferDocumentTypeFromAnalysis(analysis) {
     return '方法研究';
 }
 
-function inferTaskTagFromAnalysis(analysis) {
-    const text = String(analysis || '');
-    const candidates = [
-        [/(?:副语言|情感识别|情绪识别|paralinguistic|emotion recognition)/i, '#语音情感识别'],
-        [/(?:音视频|流式视频|video stream|audio-visual|audiovisual)/i, '#音视频理解'],
-        [/(?:音乐生成|text-to-midi|MIDI generation)/i, '#音乐生成'],
-        [/(?:音乐|music)/i, '#音乐理解'],
-        [/(?:语音识别|speech recognition|ASR)/i, '#语音识别'],
-        [/(?:语音增强|speech enhancement)/i, '#语音增强'],
-        [/(?:语音合成|text-to-speech|TTS)/i, '#语音合成'],
-        [/(?:音频伪造|AI[- ]generated audio|deepfake audio)/i, '#音频伪造检测'],
-        [/(?:音频语言模型|audio language model|\bALM\b)/i, '#音频理解'],
-        [/(?:语音|speech)/i, '#语音属性识别'],
-        [/(?:音频|audio)/i, '#音频理解']
-    ];
-    return candidates.find(([pattern]) => pattern.test(text))?.[1] || '#音频理解';
-}
-
-function inferMethodTagFromAnalysis(analysis, taskTag, documentType) {
-    const text = String(analysis || '');
-    const candidates = [
-        [/(?:扩散模型|diffusion)/i, '#扩散模型'],
-        [/(?:流匹配|flow matching)/i, '#流匹配'],
-        [/(?:Transformer)/i, '#Transformer'],
-        [/(?:\bCNN\b|卷积神经网络)/i, '#CNN'],
-        [/(?:\bRNN\b|循环神经网络)/i, '#RNN'],
-        [/(?:图神经网络|graph neural network|\bGNN\b)/i, '#图神经网络'],
-        [/(?:变分自编码器|variational autoencoder|\bVAE\b)/i, '#变分自编码器'],
-        [/(?:大语言模型|音频语言模型|language model|\bLLM\b|\bALM\b)/i, '#大语言模型'],
-        [/(?:多模态模型|multimodal model|vision-language)/i, '#多模态模型'],
-        [/(?:端到端|end-to-end)/i, '#端到端']
-    ];
-    const inferred = candidates.find(([pattern, tag]) => tag !== taskTag && pattern.test(text))?.[1];
-    if (inferred) return inferred;
-    if (documentType === '数据集与基准' && taskTag !== '#基准测试') return '#基准测试';
-    if (documentType === '理论研究' && taskTag !== '#理论分析') return '#理论分析';
-    return taskTag === '#模型评估' ? '#端到端' : '#模型评估';
-}
-
-function getSupplementalTagFallbacks(documentType) {
-    if (documentType === '数据集与基准') return ['#基准测试', '#数据集', '#模型评估'];
-    if (documentType === '理论研究') return ['#理论分析', '#模型评估', '#鲁棒性'];
-    if (documentType === '综述') return ['#模型比较', '#模型评估', '#数据集'];
-    return ['#模型评估', '#基准测试', '#鲁棒性'];
-}
-
 function normalizeAnalysisStructure(analysis) {
     let updated = capExperimentTableMetricColumns(
         normalizeExperimentTableNumericFormatting(
@@ -10692,9 +10793,7 @@ function normalizeAnalysisStructure(analysis) {
         '是否开源模型': 'has_model', '是否开源数据': 'has_dataset'
     };
     const values = {};
-    const discoveredTags = [];
     for (const rawLine of originalMachine.split('\n')) {
-        discoveredTags.push(...(rawLine.match(/#[^\s#，,;；、]+/g) || []));
         const match = rawLine.trim().match(/^([^:：]+)\s*[:：]\s*(.*?)$/);
         if (!match) continue;
         const key = aliases[match[1].trim()] || match[1].trim();
@@ -10768,40 +10867,24 @@ function normalizeAnalysisStructure(analysis) {
     values.has_model = normalizeMachineEnum(values.has_model || parsedBefore.hasModel, ['是', '否', '未说明'], '未说明');
     values.has_dataset = normalizeMachineEnum(values.has_dataset || parsedBefore.hasDataset, ['是', '否', '未说明'], '未说明');
 
-    const oldTagSection = extractSectionByTitle(updated, '标签');
-    discoveredTags.push(...(oldTagSection.match(/#[^\s#，,;；、]+/g) || []));
-    discoveredTags.push(values.primary_task_tag, values.primary_method_tag);
-    const candidateTags = [...new Set(discoveredTags.filter(Boolean))];
-    const provisional = replaceOrInsertRequiredSection(
-        updated,
-        '标签',
-        `${candidateTags.slice(0, 5).join(' ')}\n主任务标签: ${values.primary_task_tag || candidateTags[0] || ''}\n主方法标签: ${values.primary_method_tag || candidateTags[1] || ''}\n补充标签: ${candidateTags.slice(2, 5).join(' ')}`
-    );
-    const parsedTags = parseAnalysis(provisional) || {};
-    const tags = [...new Set(parsedTags.tags || [])].slice(0, 5);
-    let taskTag = parsedTags.primaryTaskTag && tags.includes(parsedTags.primaryTaskTag)
-        ? parsedTags.primaryTaskTag
-        : (tags.find(tag => /^#(?:语音|音频|音乐|说话人|声源|歌唱|音视频)/.test(tag)) || '');
-    if (!taskTag) taskTag = inferTaskTagFromAnalysis(updated);
-    let methodTag = parsedTags.primaryMethodTag && tags.includes(parsedTags.primaryMethodTag) && parsedTags.primaryMethodTag !== taskTag
-        ? parsedTags.primaryMethodTag
-        : (tags.find(tag => tag !== taskTag) || '');
-    if (!methodTag) methodTag = inferMethodTagFromAnalysis(updated, taskTag, values.document_type);
-    const finalTags = [...new Set([taskTag, methodTag, ...tags].filter(Boolean))];
-    for (const fallbackTag of getSupplementalTagFallbacks(values.document_type)) {
-        if (finalTags.length >= 3) break;
-        if (!finalTags.includes(fallbackTag)) finalTags.push(fallbackTag);
+    // Taxonomy is semantic data, not a structure fallback.  Never infer a
+    // plausible-looking task/method from prose here: a dedicated post-
+    // structure taxonomy stage either validates the exact registry concepts
+    // or performs a source-bound, tag-only repair.
+    if (parsedBefore.taxonomyValidation?.valid) {
+        values.primary_task_tag = parsedBefore.primaryTaskTag;
+        values.primary_method_tag = parsedBefore.primaryMethodTag;
     }
-    finalTags.splice(5);
-    const supplemental = finalTags.filter(tag => tag !== taskTag && tag !== methodTag);
-    updated = replaceOrInsertRequiredSection(updated, '标签', [
-        finalTags.join(' '),
-        `主任务标签: ${taskTag}`,
-        `主方法标签: ${methodTag}`,
-        `补充标签: ${supplemental.join(' ')}`
-    ].join('\n'));
-    values.primary_task_tag = taskTag;
-    values.primary_method_tag = methodTag;
+    values.primary_task_tag = values.primary_task_tag || '#taxonomy-pending-task';
+    values.primary_method_tag = values.primary_method_tag || '#taxonomy-pending-method';
+    if (!findSectionBounds(updated, '标签')) {
+        updated = replaceOrInsertRequiredSection(updated, '标签', [
+            '#taxonomy-pending-task #taxonomy-pending-method #taxonomy-pending-supplement',
+            '主任务标签: #taxonomy-pending-task',
+            '主方法标签: #taxonomy-pending-method',
+            '补充标签: #taxonomy-pending-supplement'
+        ].join('\n'));
+    }
     updated = mergeSectionByTitle(updated, '机器摘要', REQUIRED_MACHINE_SUMMARY_KEYS
         .map(key => `${key}: ${values[key]}`)
         .join('\n'));
@@ -10816,6 +10899,127 @@ function sectionExteriorBytes(analysis, title) {
     const bounds = findSectionBounds(analysis, title);
     if (!bounds) throw contractRejectedError(`局部修复找不到 ## ${title}`);
     return `${analysis.slice(0, bounds.contentStart)}\u0000${analysis.slice(bounds.end)}`;
+}
+
+function replaceSectionBodyExact(analysis, title, content) {
+    const bounds = findSectionBounds(analysis, title);
+    if (!bounds) throw contractRejectedError(`taxonomy 修复找不到 ## ${title}`);
+    return `${analysis.slice(0, bounds.contentStart)}${String(content).trim()}${analysis.slice(bounds.end)}`;
+}
+
+function replaceMachineTaxonomyFields(analysis, taskTag, methodTag) {
+    const bounds = findSectionBounds(analysis, '机器摘要');
+    if (!bounds) throw contractRejectedError('taxonomy 修复找不到 ## 机器摘要');
+    let body = analysis.slice(bounds.contentStart, bounds.end);
+    for (const [key, value] of [
+        ['primary_task_tag', taskTag],
+        ['primary_method_tag', methodTag]
+    ]) {
+        const pattern = new RegExp(`^${key}\\s*[:：]\\s*.*$`, 'gm');
+        const matches = body.match(pattern) || [];
+        if (matches.length !== 1) {
+            throw contractRejectedError(`taxonomy 修复要求机器摘要 ${key} 恰好出现一次`);
+        }
+        body = body.replace(pattern, `${key}: ${value}`);
+    }
+    return `${analysis.slice(0, bounds.contentStart)}${body}${analysis.slice(bounds.end)}`;
+}
+
+function parseTaxonomyRepairResult(raw) {
+    const text = String(raw || '').trim();
+    if (!text.startsWith('{') || !text.endsWith('}')) {
+        throw contractRejectedError('taxonomy 修复输出必须是无前后缀的 JSON 对象');
+    }
+    for (const key of ['primaryTaskId', 'primaryMethodId', 'conceptIds']) {
+        const occurrences = text.match(new RegExp(`"${key}"\\s*:`, 'g')) || [];
+        if (occurrences.length !== 1) {
+            throw contractRejectedError(`taxonomy 修复 JSON 键 ${key} 必须恰好出现一次`);
+        }
+    }
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (error) {
+        throw contractRejectedError(`taxonomy 修复 JSON 无法解析: ${error.message}`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+        || Object.keys(parsed).sort().join(',') !== 'conceptIds,primaryMethodId,primaryTaskId'
+        || typeof parsed.primaryTaskId !== 'string'
+        || typeof parsed.primaryMethodId !== 'string'
+        || !Array.isArray(parsed.conceptIds)
+        || parsed.conceptIds.some(id => typeof id !== 'string')) {
+        throw contractRejectedError('taxonomy 修复 JSON schema 非法');
+    }
+    const activeById = new Map(TAXONOMY_RUNTIME.taxonomy.concepts
+        .filter(concept => concept.status === 'active')
+        .map(concept => [concept.id, concept]));
+    const concepts = parsed.conceptIds.map(id => activeById.get(id));
+    if (parsed.conceptIds.length < 3 || parsed.conceptIds.length > 5
+        || concepts.some(concept => !concept)
+        || new Set(parsed.conceptIds).size !== parsed.conceptIds.length
+        || !parsed.conceptIds.includes(parsed.primaryTaskId)
+        || !parsed.conceptIds.includes(parsed.primaryMethodId)
+        || activeById.get(parsed.primaryTaskId)?.facet !== 'task'
+        || activeById.get(parsed.primaryMethodId)?.facet !== 'method') {
+        throw contractRejectedError('taxonomy 修复 concept ID 集合或主角色非法');
+    }
+    const selection = {
+        tags: concepts.map(concept => `#${concept.preferredLabel.zh}`),
+        primaryTaskTag: `#${activeById.get(parsed.primaryTaskId).preferredLabel.zh}`,
+        primaryMethodTag: `#${activeById.get(parsed.primaryMethodId).preferredLabel.zh}`
+    };
+    const validation = TAXONOMY_RUNTIME.validateTagSelection(selection);
+    if (!validation.valid) {
+        throw contractRejectedError(`taxonomy 修复选择非法: ${validation.errors.join('、')}`);
+    }
+    return { ...selection, validation };
+}
+
+function applyTaxonomySelection(analysis, selection) {
+    const original = String(analysis || '');
+    const supplemental = selection.tags.filter(tag => (
+        tag !== selection.primaryTaskTag && tag !== selection.primaryMethodTag
+    ));
+    let updated = replaceSectionBodyExact(original, '标签', [
+        selection.tags.join(' '),
+        `主任务标签：${selection.primaryTaskTag}`,
+        `主方法标签：${selection.primaryMethodTag}`,
+        `补充标签：${supplemental.join(' ')}`
+    ].join('\n'));
+    updated = replaceMachineTaxonomyFields(
+        updated, selection.primaryTaskTag, selection.primaryMethodTag
+    );
+    if (taxonomyProtectedProjection(updated) !== taxonomyProtectedProjection(original)) {
+        throw contractRejectedError('taxonomy 局部修复改变了标签节和机器摘要两字段之外的字节');
+    }
+    const parsed = parseAnalysis(updated);
+    const issue = validateTagSectionContract(updated, parsed);
+    if (issue) throw contractRejectedError(`taxonomy 局部修复未通过最终门禁: ${issue}`);
+    return updated;
+}
+
+async function repairTaxonomyTags(paper, analysis, evidenceContext, issue, options = {}) {
+    const callModelFn = options.callModelFn || callModel;
+    let feedback = issue;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const prompt = loadPrompt('prompts/taxonomy-tag-repair.md', {
+            title: paper.title || '',
+            arxivId: getPaperArxivId(paper),
+            validationFeedback: feedback,
+            textForAnalysis: evidenceContext,
+            taxonomyProjection: TAXONOMY_RUNTIME.projection
+        });
+        const raw = await callModelFn(
+            [{ role: 'user', content: prompt }],
+            TEXT_RECOVERY_STAGE_CONFIG.taxonomySeal.maxTokens,
+            { usageContext: { stage: 'taxonomySeal' } }
+        );
+        try {
+            return applyTaxonomySelection(analysis, parseTaxonomyRepairResult(raw));
+        } catch (error) {
+            feedback = error.message;
+            if (attempt === 2) throw error;
+        }
+    }
+    throw contractRejectedError(`taxonomy 局部修复失败: ${feedback}`);
 }
 
 async function repairCoreSummarySection(
@@ -10967,8 +11171,9 @@ function getRepairableAnalysisStructureIssues(analysis, options = {}) {
     const parsed = parseAnalysis(analysis);
     const machineIssue = validateMachineSummaryContract(analysis, parsed, { checkScoringConsistency: false });
     if (machineIssue) issues.push(`机器摘要: ${machineIssue}`);
-    const tagIssue = validateTagSectionContract(analysis, parsed);
-    if (tagIssue) issues.push(`标签: ${tagIssue}`);
+    // Taxonomy is sealed by the dedicated post-structure stage.  Keeping it
+    // out of structural repair prevents a full-document model rewrite for a
+    // four-line semantic classification error.
     const tableIssue = validateExperimentTableContract(analysis, {
         contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         documentType: parsed?.documentType,
@@ -11504,6 +11709,12 @@ module.exports = {
     buildTaskEvidenceContext,
     buildStageEvidenceContext,
     buildTextStageFingerprint,
+    taxonomyFingerprintFields,
+    parseTaxonomyRepairResult,
+    applyTaxonomySelection,
+    repairTaxonomyTags,
+    taxonomyProtectedProjection,
+    retainFinalTaxonomyCheckpoints,
     runtimePromptTemplateSha256,
     buildLegacyCoreSummaryV2PrimaryFingerprint,
     buildLegacyCoreSummaryV2TextFingerprint,

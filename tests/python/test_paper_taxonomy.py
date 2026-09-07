@@ -14,8 +14,10 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from paper_taxonomy import (FACET_IDS, ancestors, load_taxonomy, normalize_label,
-                            prune_ancestors, resolve_label, validate_taxonomy)
+from paper_taxonomy import (FACET_IDS, LABEL_MODE_LEGACY, active_preferred_labels,
+                            ancestors, load_taxonomy, normalize_label,
+                            prune_ancestors, resolve_current_label, resolve_label,
+                            resolve_label_candidates, validate_taxonomy)
 
 SPEC = importlib.util.spec_from_file_location('build_taxonomy_preview', ROOT / 'scripts/build-taxonomy-preview.py')
 preview = importlib.util.module_from_spec(SPEC)
@@ -38,11 +40,19 @@ def registry():
 
 
 class RegistryTest(unittest.TestCase):
-    def test_literal_resolution_does_not_narrow_parent_to_lora(self):
+    def test_current_resolution_only_exposes_active_chinese_preferred_labels(self):
         data = registry()
         self.assertIs(validate_taxonomy(data), data)
-        for label in ('ASR', 'asr', ' ＃ＡＳＲ ', '\ufeff#ASR\ufeff'):
+        for label in ('语音识别', '#语音识别', ' ＃语音识别 '):
+            self.assertEqual(resolve_current_label(data, label)['id'], 'task.asr')
+        for label in ('ASR', 'asr', ' ＃ＡＳＲ ', '\ufeff#ASR\ufeff',
+                      'Automatic speech recognition'):
+            self.assertIsNone(resolve_current_label(data, label))
+            # The generic library resolver retains its historical namespace;
+            # production parsing opts into current mode independently.
             self.assertEqual(resolve_label(data, label)['id'], 'task.asr')
+            self.assertEqual(resolve_label(data, label, mode=LABEL_MODE_LEGACY)['id'],
+                             'task.asr')
         self.assertEqual(resolve_label(data, '参数高效微调')['id'], 'method.peft')
         self.assertIsNone(resolve_label(data, 'online'))
         self.assertEqual(ancestors(data, 'method.lora'), ['method.peft'])
@@ -50,17 +60,33 @@ class RegistryTest(unittest.TestCase):
                          ['method.lora', 'method.lora'])
         self.assertEqual(normalize_label('\u0085ASR\u0085'), '\u0085asr\u0085')
         self.assertIsNone(resolve_label(data, '\u0085ASR\u0085'))
+        self.assertEqual(active_preferred_labels(data, ('task',)), ('语音任务', '语音识别'))
+        self.assertEqual([item['id'] for item in resolve_label_candidates(
+            data, 'ASR', mode=LABEL_MODE_LEGACY)], ['task.asr'])
 
     def test_cross_facet_ambiguity_requires_role_and_deprecated_never_autoforwards(self):
         data = registry()
         data['concepts'][0]['aliases'] = ['shared']
         data['concepts'][2]['aliases'] = ['shared']
         self.assertIsNone(resolve_label(data, 'shared'))
-        self.assertEqual(resolve_label(data, 'shared', 'method')['id'], 'method.peft')
+        self.assertIsNone(resolve_current_label(data, 'shared', 'method'))
+        self.assertEqual(resolve_label(
+            data, 'shared', 'method', mode=LABEL_MODE_LEGACY)['id'], 'method.peft')
         old = concept('method.old-peft', '旧适配', 'Old adaptation')
         old.update(status='deprecated', replacedBy='method.peft')
         data['concepts'].append(old)
-        self.assertEqual(resolve_label(data, '旧适配')['id'], 'method.old-peft')
+        self.assertIsNone(resolve_current_label(data, '旧适配'))
+        self.assertEqual(resolve_label(
+            data, '旧适配', mode=LABEL_MODE_LEGACY)['id'], 'method.old-peft')
+
+    def test_current_projection_rejects_cross_facet_preferred_label_collision(self):
+        data = registry()
+        data['concepts'][2]['preferredLabel']['zh'] = '语音识别'
+        self.assertIs(validate_taxonomy(data), data)
+        with self.assertRaisesRegex(ValueError, 'globally unique'):
+            active_preferred_labels(data)
+        with self.assertRaisesRegex(ValueError, 'resolution mode'):
+            resolve_label(data, '语音识别', mode='automatic')
 
     def test_invalid_ids_roles_cycles_aliases_and_metadata_fail_closed(self):
         changes = [lambda d: d.update(extra=True),

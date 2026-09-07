@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const api = require('../scripts/lib/conference-postprocess.js');
 const taxonomyApi = require('../scripts/lib/paper-taxonomy.js');
+const { createTaxonomyRuntime } = require('../scripts/lib/taxonomy-runtime.js');
 const cli = require('../scripts/conference-postprocess.js');
 const executionCli = require('../scripts/conference-execution.js');
 const adapter = require('../scripts/lib/conference-analysis-adapter.js');
@@ -17,10 +18,31 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 const TAXONOMY = path.resolve(__dirname, '../config/paper-taxonomy.json');
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
+const TAXONOMY_RUNTIME = createTaxonomyRuntime({ registryPath: TAXONOMY });
+
+function currentTag(id) {
+    const concept = TAXONOMY_RUNTIME.taxonomy.concepts.find(item => item.id === id && item.status === 'active');
+    assert.ok(concept, `conference fixture requires active taxonomy concept ${id}`);
+    return `#${concept.preferredLabel.zh}`;
+}
+
+function currentSelection() {
+    const selection = {
+        tags: [currentTag('task.asr'), currentTag('method.transformer'), currentTag('research_focus.robustness')],
+        primaryTaskTag: currentTag('task.asr'),
+        primaryMethodTag: currentTag('method.transformer')
+    };
+    const validation = TAXONOMY_RUNTIME.validateTagSelection(selection);
+    assert.equal(validation.valid, true, `conference fixture taxonomy is invalid: ${validation.errors.join('; ')}`);
+    return selection;
+}
 
 function canonical(index) {
-    return `## 评分\n${8 + index / 10}/10\n\n## 机器摘要\nprimary_task_tag: #语音识别\nprimary_method_tag: #Transformer\n\n`
-        + `## 标签\n#语音识别 #Transformer\n\n## 核心摘要\n只来自会议 canonical 的摘要 ${index}。`;
+    const selection = currentSelection(); const supplemental = selection.tags
+        .filter(tag => ![selection.primaryTaskTag, selection.primaryMethodTag].includes(tag));
+    return `## 评分\n${8 + index / 10}/10\n\n## 机器摘要\nprimary_task_tag: ${selection.primaryTaskTag}\nprimary_method_tag: ${selection.primaryMethodTag}\n\n`
+        + `## 标签\n${selection.tags.join(' ')}\n主任务标签: ${selection.primaryTaskTag}\n主方法标签: ${selection.primaryMethodTag}\n补充标签: ${supplemental.join(' ')}\n\n`
+        + `## 核心摘要\n只来自会议 canonical 的摘要 ${index}。`;
 }
 
 function completed(executionId, index = 0) {

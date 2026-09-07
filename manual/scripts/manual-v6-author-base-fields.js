@@ -3,13 +3,15 @@
 /** Validate and canonically represent the author-owned classification/tag fields. */
 const {
     ALLOWED_TAGS,
+    PRIMARY_TASK_TAGS,
+    PRIMARY_METHOD_TAGS,
     DOCUMENT_TYPES,
     normalizeDocumentType
 } = require('../../scripts/utils.js');
 
 const AUTHOR_OWNED_REQUIRED_FIELDS = Object.freeze([
     'version', 'manualDepth', 'paperId', 'arxivId',
-    'type', 'task', 'tags', 'authorInfo',
+    'type', 'task', 'primaryMethodTag', 'tags', 'authorInfo',
     'question', 'method', 'method2', 'method3', 'innovations', 'results',
     'details', 'limits', 'open', 'review',
     'evidenceLedger', 'resultClaims', 'researchBrief',
@@ -44,8 +46,16 @@ function normalizeAuthorOwnedBaseFields(record, label = 'author record') {
         throw new Error(`${label}.task 必须是单个合法 #主任务标签`);
     }
     const task = record.task.trim();
-    if (!/^#[^\s#]+$/u.test(task) || !ALLOWED_TAGS.has(task)) {
-        throw new Error(`${label}.task 必须是单个合法 #主任务标签且位于标签白名单`);
+    if (!/^#[^\s#]+$/u.test(task) || !PRIMARY_TASK_TAGS.has(task)) {
+        throw new Error(`${label}.task 必须是 current registry 的单个 task facet 标签`);
+    }
+    if (typeof record.primaryMethodTag !== 'string') {
+        throw new Error(`${label}.primaryMethodTag 必须是单个合法 #主方法标签`);
+    }
+    const primaryMethodTag = record.primaryMethodTag.trim();
+    if (!/^#[^\s#]+$/u.test(primaryMethodTag)
+        || !PRIMARY_METHOD_TAGS.has(primaryMethodTag)) {
+        throw new Error(`${label}.primaryMethodTag 必须是 current registry 的单个 method facet 标签`);
     }
 
     if (typeof record.tags !== 'string') {
@@ -54,14 +64,22 @@ function normalizeAuthorOwnedBaseFields(record, label = 'author record') {
     const tags = record.tags.split(/\s+/u).filter(Boolean);
     if (tags.length < 3 || tags.length > 5 || new Set(tags).size !== tags.length
         || tags.some(tag => !/^#[^\s#]+$/u.test(tag) || !ALLOWED_TAGS.has(tag))
-        || !tags.includes(task)) {
-        throw new Error(`${label}.tags 必须含 3-5 个不重复的空格分隔白名单标签，并覆盖 task`);
+        || !tags.includes(task) || !tags.includes(primaryMethodTag)) {
+        throw new Error(`${label}.tags 必须含 3-5 个不重复的空格分隔白名单标签，并覆盖主任务和主方法`);
+    }
+    const validation = require('../../scripts/lib/taxonomy-runtime.js')
+        .getDefaultTaxonomyRuntime().validateTagSelection({
+            tags, primaryTaskTag: task, primaryMethodTag
+        });
+    if (!validation.valid) {
+        throw new Error(`${label}.tags 不符合 current taxonomy: ${validation.errors.join('；')}`);
     }
 
     return {
         ...record,
         type: documentType,
         task,
+        primaryMethodTag,
         tags: tags.join(' ')
     };
 }

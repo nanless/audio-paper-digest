@@ -23,7 +23,10 @@ function stagedPage(index, paperId, score, registry = '9'.repeat(64)) {
         primaryUrl: `https://example.test/blog/posts/fresh-${index}/`, cohortDate: DATE,
         sourcePageContentSha256: String(index + 2).repeat(64), stagedPath: `pages/content/posts/fresh-${index}.md`,
         contentSha256: String(index + 3).repeat(64), analysisRunId: `${index}${index}${index}${index}${index}${index}${index}${index}-2222-4222-8222-222222222222`,
-        analysisFileSha256: String(index + 4).repeat(64), taxonomyAssignmentSha256: String(index + 5).repeat(64),
+        analysisFileSha256: String(index + 4).repeat(64),
+        analysisRecordSha256: String(index + 8).repeat(64),
+        analysisSha256: String(index + 7).repeat(64),
+        taxonomyAssignmentSha256: String(index + 5).repeat(64),
         taxonomyFileSha256: String(index + 6).repeat(64), canonical: {
             title: `NEW TITLE ${paperId}`, summary: `NEW SUMMARY ${paperId}`, score,
             analysisSha256: String(index + 7).repeat(64), taxonomyAssignmentSha256: String(index + 5).repeat(64),
@@ -174,6 +177,8 @@ test('new unrelated crosswalk progress does not invalidate unchanged staged page
         loadProjectionInputs: () => ({ crosswalk: currentState, groups: [{ paperId: page.paperId,
             paper, taxonomy, taxonomyFileSha256: page.taxonomyFileSha256,
             analysisRunId: page.analysisRunId, analysisFileSha256: page.analysisFileSha256,
+            analysisRecordSha256: page.analysisRecordSha256,
+            analysisSha256: page.analysisSha256,
             pages: [{ pageKey: page.pageKey, pagePath: page.pagePath, primaryUrl: page.primaryUrl,
                 cohortDate: page.cohortDate, pageContentSha256: page.sourcePageContentSha256 }] }] }) });
     assert.equal(result.stagedPages[0].canonical.summary, '全新且只来自 canonical 的摘要。');

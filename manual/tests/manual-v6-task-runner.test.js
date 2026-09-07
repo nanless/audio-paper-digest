@@ -234,7 +234,7 @@ function submitReview(fx, role, taskName) {
 }
 
 describe('Manual v6 persistent task runner', () => {
-    it('production author submit 在接收签名草稿时门禁 type/task/tags', () => {
+    it('production author submit 在接收签名草稿时门禁 type/task/primaryMethodTag/tags', () => {
         const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-author-base-')));
         fs.mkdirSync(path.join(root, 'draft'));
         const articlePath = path.join(root, 'draft', 'author-article.md');
@@ -257,6 +257,7 @@ describe('Manual v6 persistent task runner', () => {
         const base = buildBlankRecordSkeleton('2608.12345');
         Object.assign(base, {
             type: '方法研究', task: '#语音识别',
+            primaryMethodTag: '#Transformer',
             tags: '#语音识别 #Transformer #鲁棒性', evidenceLedger: [{ id: 'E1' }],
             question: '研究问题完整说明了当前技术输入、预期输出与现有系统的关键局限。',
             method: '方'.repeat(80), method2: '法'.repeat(80), method3: '路'.repeat(80),
@@ -279,7 +280,8 @@ describe('Manual v6 persistent task runner', () => {
         for (const [draft, pattern] of [
             [{ ...base, type: 'system/method paper' }, /type 必须是受控文档类型/],
             [{ ...base, type: '' }, /type 必须是受控文档类型/],
-            [{ ...base, task: '语音识别' }, /task 必须是单个合法/],
+            [{ ...base, task: '语音识别' }, /task 必须是 current registry/],
+            [{ ...base, primaryMethodTag: '#语音识别' }, /primaryMethodTag 必须是 current registry/],
             [{ ...base, tags: ['#语音识别', '#Transformer', '#鲁棒性'] }, /tags 必须是 3-5 个空格分隔/]
         ]) {
             semanticSha = writeProductionAuthorDraft(root, draft, output, receipt);
@@ -404,6 +406,7 @@ describe('Manual v6 persistent task runner', () => {
         const draft = buildBlankRecordSkeleton('2608.12345');
         Object.assign(draft, {
             type: '方法研究', task: '#语音识别',
+            primaryMethodTag: '#Transformer',
             tags: '#语音识别 #Transformer #鲁棒性',
             evidenceLedger: [{ id: 'E1', claim: '当前论文的可回放局部证据。' }],
             question: '研究问题完整说明了当前技术输入、预期输出与现有系统的关键局限。',

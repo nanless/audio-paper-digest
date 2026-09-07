@@ -7,7 +7,7 @@
  * This is deliberately not a normalizer.  A Terra/high leaf must author a
  * correction and receipt.  The batch manifest then binds the original
  * revision output/payload bytes, the correction bytes, and a sorted Merkle
- * root before the records sealer may apply the three permitted fields.
+ * root before the records sealer may apply the four permitted fields.
  */
 const crypto = require('crypto');
 const fs = require('fs');
@@ -17,8 +17,10 @@ if (require.main === module) {
 }
 const Config = require('../../scripts/config.js');
 const {
-    ALLOWED_TAGS, DOCUMENT_TYPES, normalizedId, writeFileAtomic, getBeijingISOString
+    ALLOWED_TAGS, PRIMARY_TASK_TAGS, PRIMARY_METHOD_TAGS, DOCUMENT_TYPES,
+    normalizedId, writeFileAtomic, getBeijingISOString
 } = require('../../scripts/utils.js');
+const { getDefaultTaxonomyRuntime } = require('../../scripts/lib/taxonomy-runtime.js');
 const { validateRecord, RECORDS_VERSION } = require('./create-manual-analysis-spec.js');
 const { stableSignatureSha256 } = require('./manual-signature-contract.js');
 const { withFileLockSync } = require('../../scripts/analysis-engine.js');
@@ -33,7 +35,7 @@ const CORRECTION_ROLE = 'metadata_correction';
 const CORRECTION_STATE_VERSION = 1;
 const CORRECTION_STATE_MODE = 'manual_v6_metadata_correction_runner';
 const CORRECTION_ACTIVE_LIMIT = 3;
-const MUTABLE_FIELDS = Object.freeze(['/tags', '/task', '/type']);
+const MUTABLE_FIELDS = Object.freeze(['/primaryMethodTag', '/tags', '/task', '/type']);
 const SHA_RE = /^[a-f0-9]{64}$/;
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/;
 
@@ -105,8 +107,13 @@ function validateExactMetadataFields(record, label = 'record') {
         throw new Error(`${label}.type 必须精确使用受控文档类型: ${DOCUMENT_TYPES.join('/')}`);
     }
     if (typeof record.task !== 'string' || !/^#[^\s#]+$/u.test(record.task)
-        || !ALLOWED_TAGS.has(record.task)) {
-        throw new Error(`${label}.task 必须是单个 ALLOWED_TAGS #标签`);
+        || !PRIMARY_TASK_TAGS.has(record.task)) {
+        throw new Error(`${label}.task 必须是单个 current task facet 标签`);
+    }
+    if (typeof record.primaryMethodTag !== 'string'
+        || !/^#[^\s#]+$/u.test(record.primaryMethodTag)
+        || !PRIMARY_METHOD_TAGS.has(record.primaryMethodTag)) {
+        throw new Error(`${label}.primaryMethodTag 必须是单个 current method facet 标签`);
     }
     if (typeof record.tags !== 'string') {
         throw new Error(`${label}.tags 必须是 3-5 个空格分隔标签，数组不允许`);
@@ -114,10 +121,24 @@ function validateExactMetadataFields(record, label = 'record') {
     const tags = record.tags.split(/\s+/u).filter(Boolean);
     if (tags.length < 3 || tags.length > 5 || new Set(tags).size !== tags.length
         || tags.some(tag => !/^#[^\s#]+$/u.test(tag) || !ALLOWED_TAGS.has(tag))
-        || !tags.includes(record.task) || tags.join(' ') !== record.tags) {
-        throw new Error(`${label}.tags 必须是规范空格分隔的 3-5 个不重复白名单标签并包含 task`);
+        || !tags.includes(record.task) || !tags.includes(record.primaryMethodTag)
+        || tags.join(' ') !== record.tags) {
+        throw new Error(`${label}.tags 必须是规范空格分隔的 3-5 个不重复白名单标签并包含 task 与 primaryMethodTag`);
     }
-    return { type: record.type, task: record.task, tags: record.tags };
+    const selection = getDefaultTaxonomyRuntime().validateTagSelection({
+        tags,
+        primaryTaskTag: record.task,
+        primaryMethodTag: record.primaryMethodTag
+    });
+    if (!selection.valid) {
+        throw new Error(`${label}.tags 不符合 current taxonomy: ${selection.errors.join('；')}`);
+    }
+    return {
+        type: record.type,
+        task: record.task,
+        primaryMethodTag: record.primaryMethodTag,
+        tags: record.tags
+    };
 }
 
 function needsMetadataCorrection(payload) {
@@ -133,6 +154,7 @@ function applyMetadataCorrection(payload, correction) {
     const candidate = structuredClone(payload);
     candidate.type = correction.changes.type;
     candidate.task = correction.changes.task;
+    candidate.primaryMethodTag = correction.changes.primaryMethodTag;
     candidate.tags = correction.changes.tags;
     return candidate;
 }
@@ -227,7 +249,11 @@ function validateCorrection(correction, packet, payload, options = {}) {
         || value.rationale.trim().length < 20) {
         throw new Error('metadata correction output 身份、Terra-high provenance 或说明非法');
     }
-    assertExactKeys(value.changes, ['type', 'task', 'tags'], 'metadata correction output.changes');
+    assertExactKeys(
+        value.changes,
+        ['type', 'task', 'primaryMethodTag', 'tags'],
+        'metadata correction output.changes'
+    );
     validateExactMetadataFields(value.changes, 'metadata correction output.changes');
     const original = assertObject(value.originalRecordPayload, 'metadata correction output.originalRecordPayload');
     assertExactKeys(original, ['fileSha256', 'semanticSha256'], 'metadata correction output.originalRecordPayload');
@@ -241,7 +267,7 @@ function validateCorrection(correction, packet, payload, options = {}) {
     });
     if (changedFields.length === 0) throw new Error('metadata correction output 没有实际字段变化');
     if (stableSha256(value.changedFields) !== stableSha256(changedFields)) {
-        throw new Error('metadata correction output.changedFields 必须精确列出实际 /type /task /tags delta');
+        throw new Error('metadata correction output.changedFields 必须精确列出实际 /type /task /primaryMethodTag /tags delta');
     }
     const candidate = applyMetadataCorrection(payload, value);
     validateExactMetadataFields(candidate, 'metadata correction candidate');
@@ -251,7 +277,7 @@ function validateCorrection(correction, packet, payload, options = {}) {
                 recordsVersion: RECORDS_VERSION
             });
         } catch (error) {
-            throw new Error(`metadata correction 不是纯三字段可修复记录: ${error.message}`);
+            throw new Error(`metadata correction 不是纯四字段可修复记录: ${error.message}`);
         }
     }
     return value;
@@ -1040,7 +1066,7 @@ function validateManifestObject(manifest, options = {}) {
         }
         if (!Array.isArray(leaf.changedFields)
             || leaf.changedFields.some(field => !MUTABLE_FIELDS.includes(field))) {
-            throw new Error(`${leaf.paperId}.changedFields 超出 /type /task /tags`);
+            throw new Error(`${leaf.paperId}.changedFields 超出 /type /task /primaryMethodTag /tags`);
         }
         return leaf;
     });

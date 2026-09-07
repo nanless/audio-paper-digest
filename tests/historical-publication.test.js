@@ -38,7 +38,8 @@ function fixture(t) {
         pageKey: `page:${'2'.repeat(64)}`, pagePath, cohortDate: DATE, stagedPath: `pages/${pagePath}`,
         primaryUrl: `https://example.test/posts/${DATE}-paper/`,
         contentSha256: sha(newPage), sourcePageContentSha256: sha(oldPage), analysisRunId: STAGE,
-        analysisFileSha256: 'a'.repeat(64), taxonomyAssignmentSha256: 'b'.repeat(64),
+        analysisFileSha256: 'a'.repeat(64), analysisRecordSha256: '8'.repeat(64),
+        analysisSha256: '9'.repeat(64), taxonomyAssignmentSha256: 'b'.repeat(64),
         taxonomyFileSha256: 'c'.repeat(64) }];
     const stagedAssets = [{ path: assetPath, sha256: sha(newAsset), size: newAsset.length }];
     const selectedBindings = [{ paperId: stagedPages[0].paperId, pages: [stagedPages[0].pageKey] }];
@@ -384,7 +385,10 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
             scope: { type: 'daily', key: DATE }, cohortDate: DATE }] } };
     const projection = { crosswalk: state, groups: [{ paperId: page.paperId, paper, taxonomy,
         taxonomyFileSha256: page.taxonomyFileSha256, analysisRunId: page.analysisRunId,
-        analysisFileSha256: page.analysisFileSha256, pages: [{ pageKey: page.pageKey, pagePath: page.pagePath,
+        analysisFileSha256: page.analysisFileSha256,
+        analysisRecordSha256: page.analysisRecordSha256,
+        analysisSha256: page.analysisSha256,
+        pages: [{ pageKey: page.pageKey, pagePath: page.pagePath,
             primaryUrl: page.primaryUrl, cohortDate: DATE, pageContentSha256: page.sourcePageContentSha256 }] }] };
     const aggregateInputDependencies = { bindTopology: () => ({ state, inventory }), replaySelectedBindings: () => [],
         loadProjectionInputs: () => projection };

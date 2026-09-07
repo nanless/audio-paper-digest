@@ -127,9 +127,10 @@ function correctionFixture(packet) {
         changes: {
             type: '方法研究',
             task: '#语音识别',
-            tags: '#语音识别 #多语言 #低资源'
+            primaryMethodTag: '#Transformer',
+            tags: '#语音识别 #Transformer #多语言 #低资源'
         },
-        changedFields: ['/tags', '/task', '/type'],
+        changedFields: ['/primaryMethodTag', '/tags', '/task', '/type'],
         rationale: '依据当前论文题目、任务定义和全文方法证据，将自由文本分类收敛到仓库受控词表。'
     };
 }
@@ -156,41 +157,58 @@ function receiptFixture(packet, correction) {
 }
 
 describe('Manual v6 explicit metadata correction protocol', () => {
-    it('只接受 canonical type、单个白名单 task 与规范 3-5 tags 字符串', () => {
+    it('只接受 canonical type、显式 task/method 与规范 3-5 tags 字符串', () => {
         assert.deepEqual(validateExactMetadataFields({
-            type: '方法研究', task: '#语音识别', tags: '#语音识别 #多语言 #低资源'
-        }), { type: '方法研究', task: '#语音识别', tags: '#语音识别 #多语言 #低资源' });
+            type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',
+            tags: '#语音识别 #Transformer #多语言 #低资源'
+        }), {
+            type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',
+            tags: '#语音识别 #Transformer #多语言 #低资源'
+        });
         assert.throws(() => validateExactMetadataFields({
-            type: '研究论文', task: '#语音识别', tags: '#语音识别 #多语言 #低资源'
+            type: '研究论文', task: '#语音识别', primaryMethodTag: '#Transformer',
+            tags: '#语音识别 #Transformer #多语言 #低资源'
         }), /受控文档类型/);
         assert.throws(() => validateExactMetadataFields({
-            type: '方法研究', task: '语音识别', tags: '#语音识别 #多语言 #低资源'
+            type: '方法研究', task: '语音识别', primaryMethodTag: '#Transformer',
+            tags: '#语音识别 #Transformer #多语言 #低资源'
         }), /task/);
         assert.throws(() => validateExactMetadataFields({
-            type: '方法研究', task: '#语音识别', tags: ['#语音识别', '#多语言', '#低资源']
+            type: '方法研究', task: '#语音识别', primaryMethodTag: '#语音识别',
+            tags: '#语音识别 #Transformer #多语言 #低资源'
+        }), /primaryMethodTag/);
+        assert.throws(() => validateExactMetadataFields({
+            type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',
+            tags: ['#语音识别', '#Transformer', '#多语言']
         }), /数组不允许/);
     });
 
-    it('packet/correction/receipt 精确绑定 Terra-high 单篇 provenance 与三字段 delta', () => {
+    it('packet/correction/receipt 精确绑定 Terra-high 单篇 provenance 与四字段 delta', () => {
         const packet = packetFixture();
         validatePacket(packet, { date: DATE, paperId: ID });
         const payload = { paperId: ID, type: 'free text', task: 'speech', tags: ['speech'] };
         const correction = correctionFixture(packet);
         assert.equal(validateCorrection(correction, packet, payload, { fullPreflight: false }).passed, true);
         assert.equal(validateReceipt(receiptFixture(packet, correction), packet, correction).model, 'gpt-5.6-terra');
-        const extra = { ...correction, summary: '禁止夹带第四字段' };
+        const extra = { ...correction, summary: '禁止夹带第五字段' };
         assert.throws(() => validateCorrection(extra, packet, payload, { fullPreflight: false }), /字段必须精确/);
+        const unboundMethodChange = structuredClone(correction);
+        unboundMethodChange.changes.primaryMethodTag = '#CNN';
+        assert.throws(
+            () => validateCorrection(unboundMethodChange, packet, payload, { fullPreflight: false }),
+            /包含 task 与 primaryMethodTag/
+        );
         const badReceipt = { ...receiptFixture(packet, correction), model: 'gpt-5.6-sol' };
         assert.throws(() => validateReceipt(badReceipt, packet, correction), /provenance/);
     });
 
-    it('三字段修正后仍缺 author-owned 基础内容时预检 fail closed', () => {
+    it('四字段修正后仍缺 author-owned 基础内容时预检 fail closed', () => {
         const packet = packetFixture();
         const correction = correctionFixture(packet);
         const incomplete = { paperId: ID, type: 'free text', task: 'speech', tags: ['speech'] };
         assert.throws(
             () => validateCorrection(correction, packet, incomplete),
-            /不是纯三字段可修复记录/
+            /不是纯四字段可修复记录/
         );
     });
 

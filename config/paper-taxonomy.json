@@ -1374,10 +1374,9 @@
         "en": "End-to-end learning"
       },
       "aliases": [
-        "端到端",
         "端到端训练",
-        "End-to-end",
-        "E2E"
+        "端到端联合学习",
+        "E2E learning"
       ],
       "broaderId": null,
       "definition": "以输入到目标输出的统一可微目标联合学习原本可由多个独立模块完成的映射。",
@@ -2047,6 +2046,233 @@
       "replacedBy": null
     },
     {
+      "id": "method.human-evaluation",
+      "facet": "method",
+      "preferredLabel": { "zh": "人类参与评测", "en": "Human-participant evaluation" },
+      "aliases": ["人类评测", "Human evaluation"],
+      "broaderId": null,
+      "definition": "由人类参与者直接提供判断、行为或感知数据来评估研究对象。",
+      "scopeNote": "仅有人类标注训练数据不等于人类参与评测；更具体的主观评测、用户研究或心理测量应优先选其后代。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.subjective-evaluation",
+      "facet": "method",
+      "preferredLabel": { "zh": "主观评测", "en": "Subjective evaluation" },
+      "aliases": ["主观听测", "Subjective listening test"],
+      "broaderId": "method.human-evaluation",
+      "definition": "通过参与者对质量、自然度、可懂度或偏好的主观评分比较系统或刺激。",
+      "scopeNote": "与真实交互中的用户研究分开；有明确声学感知操控时优先心理声学实验。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.user-study",
+      "facet": "method",
+      "preferredLabel": { "zh": "用户研究", "en": "User study" },
+      "aliases": ["用户实验", "User evaluation"],
+      "broaderId": "method.human-evaluation",
+      "definition": "在使用或交互情境中研究目标用户的行为、体验、可用性或任务表现。",
+      "scopeNote": "单次音质打分属于主观评测；没有真实用户任务或交互协议时不要使用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.psychometrics",
+      "facet": "method",
+      "preferredLabel": { "zh": "心理测量", "en": "Psychometrics" },
+      "aliases": ["心理计量", "Psychometric analysis"],
+      "broaderId": "method.human-evaluation",
+      "definition": "使用量表、潜变量模型或信效度分析测量人的能力、态度或感知特质。",
+      "scopeNote": "普通平均主观分不自动构成心理测量，必须有测量模型、量表性质或信效度分析。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.crowdsourced-evaluation",
+      "facet": "method",
+      "preferredLabel": {
+        "zh": "众包评测",
+        "en": "Crowdsourced evaluation"
+      },
+      "aliases": [
+        "众包评估",
+        "众包测试",
+        "Crowdsourced testing"
+      ],
+      "broaderId": "method.subjective-evaluation",
+      "definition": "通过分布式受试者或标注者收集主观判断，并据此形成评测结果。",
+      "scopeNote": "仅在众包受试者组织与质量控制构成核心评测方法时使用；普通数据众包、一般人工听测或仅使用众包数据不属于本方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.psychoacoustic-experiment",
+      "facet": "method",
+      "preferredLabel": { "zh": "心理声学实验", "en": "Psychoacoustic experiment" },
+      "aliases": ["心理声学听测", "Psychoacoustic listening experiment"],
+      "broaderId": "method.subjective-evaluation",
+      "definition": "系统操控声学刺激并测量听者感知或辨别反应，以检验听觉机制或感知阈值。",
+      "scopeNote": "仅比较系统输出偏好时使用主观评测；必须存在受控刺激、感知变量或阈值设计。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.dataset-curation",
+      "facet": "method",
+      "preferredLabel": { "zh": "数据集构建", "en": "Dataset curation" },
+      "aliases": ["数据整理", "语料构建", "Corpus curation"],
+      "broaderId": null,
+      "definition": "按明确的采集、筛选、清理、组织与质量控制流程构建研究数据集。",
+      "scopeNote": "仅使用现有数据集不属于本方法；若核心贡献是标注协议与质量，应优先数据标注。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.data-annotation",
+      "facet": "method",
+      "preferredLabel": { "zh": "数据标注", "en": "Data annotation" },
+      "aliases": ["语料标注", "Annotation protocol"],
+      "broaderId": "method.dataset-curation",
+      "definition": "以明确指南、标注者组织、质量控制和一致性分析为数据赋予标签或转录。",
+      "scopeNote": "自动生成伪标签不等同人工数据标注；若论文只清洗数据，应使用数据清洗。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.evaluation-protocol",
+      "facet": "method",
+      "preferredLabel": { "zh": "评测协议", "en": "Evaluation protocol" },
+      "aliases": ["评估协议", "Evaluation methodology"],
+      "broaderId": null,
+      "definition": "规定数据划分、指标、比较条件与统计程序，使不同系统获得可重复的评测。",
+      "scopeNote": "普通按既有指标报告结果不构成新评测协议；设计可复用 benchmark 时优先基准设计。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.benchmark-design",
+      "facet": "method",
+      "preferredLabel": { "zh": "基准设计", "en": "Benchmark design" },
+      "aliases": ["基准构建", "Benchmark construction"],
+      "broaderId": "method.evaluation-protocol",
+      "definition": "联合设计任务、数据划分、指标、基线和比较规则，形成可复用研究基准。",
+      "scopeNote": "在已有 benchmark 上跑实验不是基准设计；artifact.benchmark 表示产物，本概念表示方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.literature-review",
+      "facet": "method",
+      "preferredLabel": { "zh": "文献综述方法", "en": "Literature review method" },
+      "aliases": ["文献回顾", "Literature review"],
+      "broaderId": null,
+      "definition": "通过定义范围、检索、筛选和综合规则整理已有研究证据。",
+      "scopeNote": "引言中的相关工作不是综述方法；具有系统检索或计量分析时优先更具体后代。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.systematic-review",
+      "facet": "method",
+      "preferredLabel": { "zh": "系统综述", "en": "Systematic review" },
+      "aliases": ["系统性综述", "Systematic literature review"],
+      "broaderId": "method.literature-review",
+      "definition": "使用预先规定且可重放的检索、纳排和证据综合流程完成综述。",
+      "scopeNote": "没有明确数据库、检索式或纳排标准的叙述性综述不属于系统综述。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.bibliometric-analysis",
+      "facet": "method",
+      "preferredLabel": { "zh": "文献计量分析", "en": "Bibliometric analysis" },
+      "aliases": ["科学计量分析", "Scientometric analysis"],
+      "broaderId": "method.literature-review",
+      "definition": "利用引用、作者、主题或发表关系的定量统计刻画文献结构与演化。",
+      "scopeNote": "仅统计论文数量不足以构成文献计量分析，需有明确计量变量和分析过程。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.formal-analysis",
+      "facet": "method",
+      "preferredLabel": { "zh": "形式化分析", "en": "Formal analysis" },
+      "aliases": ["形式化证明", "Formal proof"],
+      "broaderId": null,
+      "definition": "以明确定义、假设、定理和证明推导性质、界限或正确性。",
+      "scopeNote": "理论动机或公式描述不等于形式化分析，必须有可检查的推导或证明链。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.statistical-analysis",
+      "facet": "method",
+      "preferredLabel": { "zh": "统计分析", "en": "Statistical analysis" },
+      "aliases": ["统计建模", "Statistical modelling"],
+      "broaderId": null,
+      "definition": "使用统计估计、假设检验、不确定性量化或统计模型分析数据与效应。",
+      "scopeNote": "只报告均值或单个指标不构成统计分析；需有明确统计问题与方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.multimodal-learning",
+      "facet": "method",
+      "preferredLabel": { "zh": "多模态学习", "en": "Multimodal learning" },
+      "aliases": ["跨模态学习", "Multimodal representation learning"],
+      "broaderId": null,
+      "definition": "联合学习两种或更多模态的表示、对齐、融合或生成关系。",
+      "scopeNote": "输入含多模态不自动构成核心方法；model_family.multimodal 描述模型家族，不能替代本学习机制。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.attention",
+      "facet": "method",
+      "preferredLabel": { "zh": "注意力机制", "en": "Attention mechanism" },
+      "aliases": ["注意力", "Attention"],
+      "broaderId": null,
+      "definition": "根据查询与上下文相关性动态加权信息交互或聚合。",
+      "scopeNote": "Transformer 包含注意力但二者不是同义词；只有注意力设计本身是核心方法时使用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.regularization",
+      "facet": "method",
+      "preferredLabel": { "zh": "正则化", "en": "Regularization" },
+      "aliases": ["正则化训练", "Regularized training"],
+      "broaderId": null,
+      "definition": "通过损失约束、参数约束或随机扰动限制模型复杂度并改善泛化。",
+      "scopeNote": "常规 weight decay 不是论文核心方法时不应作为主方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.conformer",
+      "facet": "method",
+      "preferredLabel": { "zh": "Conformer", "en": "Conformer" },
+      "aliases": ["Conformer架构", "Conformer architecture"],
+      "broaderId": null,
+      "definition": "结合自注意力与卷积模块以同时建模长程和局部序列结构的架构。",
+      "scopeNote": "仅把 Conformer 当常规 backbone 且贡献不在架构时，应选择论文真正提出的方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "method.ctc",
+      "facet": "method",
+      "preferredLabel": { "zh": "CTC", "en": "Connectionist temporal classification" },
+      "aliases": ["连接时序分类", "连接主义时序分类", "CTC loss"],
+      "broaderId": null,
+      "definition": "通过包含 blank 的路径边缘化，在无帧级对齐条件下训练序列映射。",
+      "scopeNote": "仅使用常规 CTC 损失不一定构成主方法；需与注意力解码或转导器目标区分。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
       "id": "method.signal-processing",
       "facet": "method",
       "preferredLabel": {
@@ -2217,6 +2443,17 @@
       "broaderId": null,
       "definition": "输入或系统使用多个音频通道。",
       "scopeNote": "不能仅据此推断波束成形方法。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "setting.microphone-array",
+      "facet": "setting",
+      "preferredLabel": { "zh": "麦克风阵列", "en": "Microphone array" },
+      "aliases": ["阵列麦克风", "多麦克风阵列"],
+      "broaderId": "setting.multichannel",
+      "definition": "输入由具有明确空间布局的多个麦克风共同采集。",
+      "scopeNote": "麦克风阵列是采集设置，不自动意味着使用波束成形或声源定位方法。",
       "status": "active",
       "replacedBy": null
     },
@@ -2473,6 +2710,17 @@
       "replacedBy": null
     },
     {
+      "id": "application.speech-biomarker",
+      "facet": "application",
+      "preferredLabel": { "zh": "语音生物标志物", "en": "Speech biomarker" },
+      "aliases": ["声音生物标志物", "Vocal biomarker"],
+      "broaderId": "application.medical",
+      "definition": "利用语音或声音特征辅助刻画健康、疾病或生理状态。",
+      "scopeNote": "相关性分析不等于临床诊断有效；只有语音标志物是核心医学应用时使用。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
       "id": "application.cockpit",
       "facet": "application",
       "preferredLabel": {
@@ -2595,6 +2843,17 @@
       "broaderId": null,
       "definition": "研究方法在扰动或分布变化下的稳定表现。",
       "scopeNote": "需有相关论证或评测，不从引言愿景推断。",
+      "status": "active",
+      "replacedBy": null
+    },
+    {
+      "id": "research_focus.adversarial-robustness",
+      "facet": "research_focus",
+      "preferredLabel": { "zh": "对抗鲁棒性", "en": "Adversarial robustness" },
+      "aliases": ["对抗攻击鲁棒性", "Robustness to adversarial attacks"],
+      "broaderId": "research_focus.robustness",
+      "definition": "研究模型面对蓄意构造扰动或攻击时的稳定性与防御能力。",
+      "scopeNote": "自然噪声、域偏移或普通数据增强不属于对抗鲁棒性。",
       "status": "active",
       "replacedBy": null
     },

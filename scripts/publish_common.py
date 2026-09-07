@@ -48,6 +48,12 @@ from llm_account_pool import (
     select_api_key,
 )
 from utils import parse_analysis
+from paper_taxonomy import (
+    TAXONOMY_PROJECTION_CONTRACT,
+    TAXONOMY_SELECTION_CONTRACT,
+    load_taxonomy,
+    prompt_projection_sha256,
+)
 from llm_usage import record_llm_usage, with_llm_usage_context
 
 BJ_TZ = timezone(timedelta(hours=8))
@@ -528,6 +534,204 @@ def _validate_publish_image_exclusion_view(paper, paper_label):
 
 def _manual_hash(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+_PUBLISH_TAXONOMY = load_taxonomy()
+_PUBLISH_TAXONOMY_PROJECTION_SHA256 = prompt_projection_sha256(_PUBLISH_TAXONOMY)
+
+
+def _taxonomy_section_bounds(analysis, title):
+    heading = re.compile(
+        rf'(^|\n)((#{{2,3}})\s*(?:\d+[.\s]+)?{re.escape(title)}[：:\s]*\n)',
+        re.M,
+    )
+    match = heading.search(analysis)
+    if match is None:
+        raise PublishDataValidationError(f'taxonomy proof 找不到 ## {title}')
+    start = match.start() + len(match.group(1))
+    content_start = start + len(match.group(2))
+    remainder = analysis[content_start:]
+    level = len(match.group(3))
+    following = re.search(rf'\n#{{2,{level}}}\s', remainder)
+    end = content_start + following.start() if following else len(analysis)
+    return content_start, end
+
+
+def _replace_taxonomy_section_body(analysis, title, content):
+    content_start, end = _taxonomy_section_bounds(analysis, title)
+    return f'{analysis[:content_start]}{str(content).strip()}{analysis[end:]}'
+
+
+def _replace_machine_taxonomy_fields(analysis, task_tag, method_tag):
+    content_start, end = _taxonomy_section_bounds(analysis, '机器摘要')
+    body = analysis[content_start:end]
+    for key, value in (
+            ('primary_task_tag', task_tag),
+            ('primary_method_tag', method_tag)):
+        pattern = re.compile(rf'^{key}\s*[:：]\s*.*$', re.M)
+        if len(pattern.findall(body)) != 1:
+            raise PublishDataValidationError(
+                f'taxonomy proof 要求机器摘要 {key} 恰好出现一次')
+        body = pattern.sub(f'{key}: {value}', body)
+    return f'{analysis[:content_start]}{body}{analysis[end:]}'
+
+
+def _taxonomy_protected_projection(analysis):
+    masked = _replace_machine_taxonomy_fields(
+        str(analysis or ''), '__PRIMARY_TASK__', '__PRIMARY_METHOD__')
+    return _replace_taxonomy_section_body(masked, '标签', '__TAXONOMY_SECTION__')
+
+
+def _taxonomy_surface_sha256(analysis):
+    source = str(analysis or '')
+    tag_match = re.search(
+        r'(^|\n)##(?!#)\s*标签[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)',
+        source,
+    )
+    machine_match = re.search(
+        r'(^|\n)##(?!#)\s*机器摘要[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)',
+        source,
+    )
+    tag_block = tag_match.group(2).strip() if tag_match else ''
+    machine = machine_match.group(2).strip() if machine_match else ''
+    task_match = re.search(r'^primary_task_tag\s*[:：]\s*(\S+)\s*$', machine, re.M)
+    method_match = re.search(r'^primary_method_tag\s*[:：]\s*(\S+)\s*$', machine, re.M)
+    if not tag_block or task_match is None or method_match is None:
+        return ''
+    surface = (
+        f'primary_task_tag={task_match.group(1)}\n'
+        f'primary_method_tag={method_match.group(1)}\n{tag_block}'
+    )
+    return hashlib.sha256(surface.encode('utf-8')).hexdigest()
+
+
+def _validate_taxonomy_seal(paper, manifest, paper_label):
+    """Independently replay the Node-issued taxonomySeal production proof."""
+    contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    if not isinstance(contracts, dict) \
+            or contracts.get('taxonomy') != TAXONOMY_SELECTION_CONTRACT:
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomy selection contract 缺失或不是 current')
+    stages = manifest.get('stages') if isinstance(manifest, dict) else None
+    stage = stages.get('taxonomySeal') if isinstance(stages, dict) else None
+    if not isinstance(stage, dict) or stage.get('status') not in {'complete', 'not_needed'}:
+        raise PublishDataValidationError(f'{paper_label} taxonomySeal 未完成')
+
+    expected_static = {
+        'registryVersion': _PUBLISH_TAXONOMY['version'],
+        'registrySha256': _PUBLISH_TAXONOMY['registrySha256'],
+        'projectionContract': TAXONOMY_PROJECTION_CONTRACT,
+        'projectionSha256': _PUBLISH_TAXONOMY_PROJECTION_SHA256,
+        'selectionContract': TAXONOMY_SELECTION_CONTRACT,
+    }
+    for field, expected in expected_static.items():
+        if stage.get(field) != expected:
+            raise PublishDataValidationError(
+                f'{paper_label} taxonomySeal.{field} 与本地 registry/projection 不一致')
+
+    sha_fields = (
+        'inputAnalysisSha256', 'outputAnalysisSha256',
+        'inputProtectedProjectionSha256', 'outputProtectedProjectionSha256',
+        'taxonomySurfaceSha256', 'bindingSha256',
+    )
+    if any(not re.fullmatch(r'[a-f0-9]{64}', str(stage.get(field) or ''))
+           for field in sha_fields):
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal 缺少可重放 analysis/projection/binding SHA')
+
+    text_sha = lambda value: hashlib.sha256(value.encode('utf-8')).hexdigest()
+    structure_stage = stages.get('structureRepair')
+    if not isinstance(structure_stage, dict) \
+            or structure_stage.get('outputAnalysisSha256') \
+            != stage['inputAnalysisSha256']:
+        raise PublishDataValidationError(
+            f'{paper_label} structureRepair 输出未绑定 taxonomySeal 输入')
+    if stage['inputProtectedProjectionSha256'] \
+            != stage.get('outputProtectedProjectionSha256'):
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal 改变了受保护正文投影')
+    if stage['status'] == 'not_needed' \
+            and stage['inputAnalysisSha256'] != stage['outputAnalysisSha256']:
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal=not_needed 输入输出正文不一致')
+
+    current_analysis = str(paper.get('analysis') or '')
+    if stage['taxonomySurfaceSha256'] != _taxonomy_surface_sha256(current_analysis):
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal taxonomy surface SHA 与最终正文不一致')
+    core_summary_stage = stages.get('coreSummaryRepair')
+    scoring_stage = stages.get('scoringAudit')
+    if not isinstance(core_summary_stage, dict) \
+            or core_summary_stage.get('status') not in {'complete', 'not_needed'} \
+            or core_summary_stage.get('inputAnalysisSha256') != stage['outputAnalysisSha256']:
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal 输出未绑定 coreSummaryRepair 输入')
+    core_output_sha = core_summary_stage.get('outputAnalysisSha256')
+    if not re.fullmatch(r'[a-f0-9]{64}', str(core_output_sha or '')) \
+            or not isinstance(scoring_stage, dict) \
+            or scoring_stage.get('coreSummaryInputAnalysisSha256') != core_output_sha:
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal/coreSummary/scoring 下游 SHA 链不闭合')
+
+    checkpoints = paper.get('analysisStageCheckpoints')
+    input_analysis = checkpoints.get('structureRepair') \
+        if isinstance(checkpoints, dict) else None
+    output_analysis = checkpoints.get('taxonomySeal') \
+        if isinstance(checkpoints, dict) else None
+    if not isinstance(output_analysis, str):
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal 成功态缺少 taxonomy checkpoint')
+    output_projection = _taxonomy_protected_projection(output_analysis)
+    if (not output_projection
+            or text_sha(output_analysis) != stage['outputAnalysisSha256']
+            or text_sha(output_projection)
+            != stage['outputProtectedProjectionSha256']
+            or _taxonomy_surface_sha256(output_analysis)
+            != stage['taxonomySurfaceSha256']):
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal 输出 checkpoint 不可重放')
+    if stage['status'] == 'complete':
+        if not isinstance(input_analysis, str):
+            raise PublishDataValidationError(
+                f'{paper_label} taxonomySeal=complete 缺少 structure/taxonomy checkpoint')
+        input_projection = _taxonomy_protected_projection(input_analysis)
+        if (not input_projection
+                or text_sha(input_analysis) != stage['inputAnalysisSha256']
+                or text_sha(input_projection)
+                != stage['inputProtectedProjectionSha256']):
+            raise PublishDataValidationError(
+                f'{paper_label} taxonomySeal 输入 checkpoint 不可重放')
+
+    binding_fields = (
+        'registryVersion', 'registrySha256', 'projectionContract',
+        'projectionSha256', 'selectionContract', 'inputAnalysisSha256',
+        'outputAnalysisSha256', 'inputProtectedProjectionSha256',
+        'outputProtectedProjectionSha256', 'taxonomySurfaceSha256',
+        'primaryTaskId', 'primaryMethodId', 'conceptIds',
+    )
+    binding = {field: stage.get(field) for field in binding_fields}
+    if stage['bindingSha256'] != _manual_hash(binding):
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal binding SHA 不可重放')
+
+    current_parsed = parse_analysis(current_analysis, taxonomy=_PUBLISH_TAXONOMY)
+    current_validation = current_parsed.get('taxonomyValidation') or {}
+    expected_selection = {
+        'primaryTaskId': current_validation.get('primaryTaskId'),
+        'primaryMethodId': current_validation.get('primaryMethodId'),
+        'conceptIds': current_validation.get('conceptIds'),
+    }
+    sealed_selection = {field: stage.get(field) for field in expected_selection}
+    if not current_validation.get('valid') or expected_selection != sealed_selection:
+        raise PublishDataValidationError(
+            f'{paper_label} 当前 analysis taxonomy 与 sealed IDs 不一致')
+    if stage['status'] == 'complete':
+        output_validation = parse_analysis(
+            output_analysis, taxonomy=_PUBLISH_TAXONOMY)['taxonomyValidation']
+        output_selection = {field: output_validation.get(field) for field in expected_selection}
+        if not output_validation.get('valid') or output_selection != sealed_selection:
+            raise PublishDataValidationError(
+                f'{paper_label} taxonomySeal parsed IDs 与 checkpoint 不一致')
 
 
 def _manual_paper_identity_mode(contracts, paper_label='paper'):
@@ -3400,8 +3604,10 @@ def resolve_publish_parsed(paper):
     analysis = paper.get('analysis')
     if not isinstance(analysis, str) or not analysis.strip():
         raise PublishDataValidationError(f'{paper_label} 缺少 analysis')
+    raw_analysis_parsed = parse_analysis(analysis)
+    _validate_current_taxonomy_analysis(analysis, raw_analysis_parsed, paper_label)
     analysis_parsed = validate_publish_parsed(
-        parse_analysis(analysis),
+        raw_analysis_parsed,
         f'{paper_label}.analysis',
         require_reason_dimensions=True,
     )
@@ -3441,6 +3647,53 @@ def resolve_publish_parsed(paper):
         f'{paper_label}.publishBaseline',
         require_reason_dimensions=True,
     )
+
+
+def _validate_current_taxonomy_analysis(analysis, parsed, paper_label):
+    """Validate the exact current four-line taxonomy surface for all producers."""
+    match = re.search(r'(^|\n)##(?!#)\s*标签[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)', analysis)
+    lines = [line.strip() for line in (match.group(2) if match else '').splitlines()
+             if line.strip()]
+    if len(lines) != 4:
+        raise PublishDataValidationError(f'{paper_label} 标签章节必须恰好四行')
+    all_tags = re.findall(r'#[^\s,，;；、]+', lines[0])
+    if len(all_tags) not in range(3, 6) or ' '.join(all_tags) != lines[0]:
+        raise PublishDataValidationError(
+            f'{paper_label} 标签首行必须是 3-5 个空格分隔的 current 标签')
+    role_patterns = (
+        (r'^主任务标签\s*[：:]\s*(#\S+)$', '主任务标签'),
+        (r'^主方法标签\s*[：:]\s*(#\S+)$', '主方法标签'),
+        (r'^补充标签\s*[：:]\s*(#\S+(?:\s+#\S+)*)$', '补充标签'),
+    )
+    values = []
+    for line, (pattern, label) in zip(lines[1:], role_patterns):
+        role_match = re.fullmatch(pattern, line)
+        if role_match is None:
+            raise PublishDataValidationError(f'{paper_label} 标签章节缺少合法{label}行')
+        values.append(role_match.group(1))
+    task_tag, method_tag, supplemental_text = values
+    supplemental = supplemental_text.split()
+    expected_supplemental = [tag for tag in all_tags if tag not in {task_tag, method_tag}]
+    if supplemental != expected_supplemental:
+        raise PublishDataValidationError(f'{paper_label} 补充标签未精确覆盖其余标签')
+    validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
+    if not isinstance(validation, dict) or validation.get('valid') is not True:
+        detail = (validation or {}).get('errors', ['缺少 taxonomy 验证'])[0]
+        raise PublishDataValidationError(f'{paper_label} current taxonomy 非法: {detail}')
+    if parsed.get('tags') != all_tags \
+            or parsed.get('primaryTaskTag') != task_tag \
+            or parsed.get('primaryMethodTag') != method_tag:
+        raise PublishDataValidationError(f'{paper_label} 标签 surface 与 registry 解析不一致')
+    machine = parsed.get('machineSummary') or {}
+    machine_start, machine_end = _taxonomy_section_bounds(analysis, '机器摘要')
+    machine_body = analysis[machine_start:machine_end]
+    for key in ('primary_task_tag', 'primary_method_tag'):
+        if len(re.findall(rf'^{key}\s*[:：]\s*\S+\s*$', machine_body, re.M)) != 1:
+            raise PublishDataValidationError(
+                f'{paper_label} 机器摘要 {key} 必须恰好出现一次')
+    if machine.get('primaryTaskTag') != task_tag \
+            or machine.get('primaryMethodTag') != method_tag:
+        raise PublishDataValidationError(f'{paper_label} 机器摘要与标签角色不一致')
 
 
 def normalize_publish_arxiv_id(arxiv_id):
@@ -3524,11 +3777,21 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                 )
             manifest = paper.get('analysisManifest')
             if manifest is not None:
-                required_stages = (
+                stages = manifest.get('stages') if isinstance(manifest, dict) else None
+                uses_manual_manifest = (
+                    isinstance(manifest, dict)
+                    and (isinstance(manifest.get('manualTakeover'), dict)
+                         or any(isinstance(stage, dict)
+                                and stage.get('status') == MANUAL_COMPLETE_STATUS
+                                for stage in (stages or {}).values()))
+                )
+                required_stages = [
                     'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan',
                     'revision', 'tableRepair', 'methodRepair', 'structureRepair',
                     'scoringAudit', 'imageSupplement',
-                )
+                ]
+                if not uses_manual_manifest:
+                    required_stages.insert(8, 'taxonomySeal')
                 terminal_statuses = {
                     'imageDownload': {'complete', 'skipped', 'no_candidates', 'no_downloadable_images', MANUAL_COMPLETE_STATUS},
                     'primaryAnalysis': {'complete', MANUAL_COMPLETE_STATUS},
@@ -3538,13 +3801,13 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                     'tableRepair': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
                     'methodRepair': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
                     'structureRepair': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
+                    'taxonomySeal': {'complete', 'not_needed'},
                     'scoringAudit': {'complete', MANUAL_COMPLETE_STATUS},
                     'imageSupplement': {
                         'complete', 'skipped', 'no_candidates',
                         'no_high_value_images', 'no_downloadable_images', MANUAL_COMPLETE_STATUS,
                     },
                 }
-                stages = manifest.get('stages') if isinstance(manifest, dict) else None
                 incomplete = [
                     stage for stage in required_stages
                     if not isinstance(stages, dict)
@@ -3558,6 +3821,8 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                     )
                 if validate_manual_provenance:
                     _validate_manual_takeover_manifest(paper, manifest, paper_label)
+                if not uses_manual_manifest:
+                    _validate_taxonomy_seal(paper, manifest, paper_label)
                 signed_v6_compatibility = _manual_v6_signed_compatibility(
                     paper, manifest,
                 )

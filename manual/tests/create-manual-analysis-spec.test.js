@@ -122,6 +122,7 @@ function validRecord() {
         arxivId: ID,
         type: '方法研究',
         task: '#语音识别',
+        primaryMethodTag: '#Transformer',
         tags: '#语音识别 #Transformer #鲁棒性',
         dims: [1.5, 1.2, 1.1, 0.8, 1.0, 0, 0.3, 1.0],
         authorInfo: {
@@ -586,6 +587,15 @@ describe('strict reusable manual v4 spec assembler', () => {
         const invalidTags = validRecord();
         invalidTags.tags = '#语音识别 #Transformer #自造标签';
         assert.throws(() => validateRecord(invalidTags, ID), /非白名单标签/);
+        const missingMethod = validRecord();
+        missingMethod.tags = '#语音识别 #低资源 #鲁棒性';
+        assert.throws(() => validateRecord(missingMethod, ID), /primaryMethodTag 必须是 tags/);
+        const wrongMethodRole = validRecord();
+        wrongMethodRole.primaryMethodTag = '#语音识别';
+        assert.throws(() => validateRecord(wrongMethodRole, ID), /primaryMethodTag 必须是 tags/);
+        const multipleMethods = validRecord();
+        multipleMethods.tags = '#语音识别 #Transformer #CNN #鲁棒性';
+        assert.doesNotThrow(() => validateRecord(multipleMethods, ID));
         const invalidAudit = validRecord();
         invalidAudit.manualAudit.attempts = 2;
         assert.throws(() => validateRecord(invalidAudit, ID), /实际 passes/);

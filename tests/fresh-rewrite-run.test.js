@@ -360,6 +360,38 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
             manifest.sourceAcquisition, sourceText), true);
         assert.equal(deep.sealedCoreSummaryRecoveryIsValid(
             locked, manifest, sourceText, 'structureRepair'), true);
+        const taxonomyRuntime = require('../scripts/lib/taxonomy-runtime.js')
+            .getDefaultTaxonomyRuntime();
+        const taxonomyParsed = require('../scripts/utils.js').parseAnalysis(locked.analysis);
+        const taxonomyInputSha = runner.sha256(locked.analysis);
+        const taxonomyProjectionSha = runner.sha256(
+            contract.taxonomyProtectedProjection(locked.analysis)
+        );
+        const taxonomyBinding = {
+            registryVersion: taxonomyRuntime.registryVersion,
+            registrySha256: taxonomyRuntime.registrySha256,
+            projectionContract: taxonomyRuntime.projectionContract,
+            projectionSha256: taxonomyRuntime.projectionSha256,
+            selectionContract: taxonomyRuntime.selectionContract,
+            inputAnalysisSha256: taxonomyInputSha,
+            outputAnalysisSha256: taxonomyInputSha,
+            inputProtectedProjectionSha256: taxonomyProjectionSha,
+            outputProtectedProjectionSha256: taxonomyProjectionSha,
+            taxonomySurfaceSha256: contract.taxonomySurfaceSha256(locked.analysis),
+            primaryTaskId: taxonomyParsed.taxonomyValidation.primaryTaskId,
+            primaryMethodId: taxonomyParsed.taxonomyValidation.primaryMethodId,
+            conceptIds: taxonomyParsed.taxonomyValidation.conceptIds
+        };
+        manifest.stages.structureRepair.outputAnalysisSha256 = taxonomyInputSha;
+        manifest.stages.taxonomySeal = {
+            status: 'not_needed', fingerprint: 'b'.repeat(64), ...taxonomyBinding,
+            bindingSha256: contract.manualSha256(taxonomyBinding)
+        };
+        manifest.contracts = {
+            ...manifest.contracts,
+            taxonomy: taxonomyRuntime.selectionContract
+        };
+        locked.analysisStageCheckpoints.taxonomySeal = locked.analysis;
         const repaired = await deep.repairCoreSummarySection(locked, locked.analysis, sourceText, null, {
             callModelFn: async () => { summaryCalls += 1;
                 return `## 核心摘要\n${contract.extractSection(validAnalysisText(), '核心摘要')}`; }

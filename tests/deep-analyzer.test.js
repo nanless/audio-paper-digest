@@ -11,6 +11,62 @@ before(() => {
     process.env.PAPER_ANALYZER_MODEL = process.env.PAPER_ANALYZER_MODEL || 'gpt-4o-mini';
 });
 
+describe('taxonomy runtime analysis integration', () => {
+    it('taxonomy repair retries with the first validation error and changes only allowed spans', async () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const prompts = [];
+        const repaired = await deep.repairTaxonomyTags(
+            { arxivId: '2403.01900', title: 'Crowdsourced test' },
+            validAnalysisText(),
+            'The paper evaluates multilingual speech intelligibility with crowdsourced listeners.',
+            '主方法不属于 method facet',
+            {
+                callModelFn: async messages => {
+                    prompts.push(messages[0].content);
+                    if (prompts.length === 1) {
+                        return '{"primaryTaskId":"task.intelligibility","primaryMethodId":"method.missing","conceptIds":["task.intelligibility","method.missing","setting.multilingual"]}';
+                    }
+                    return '{"primaryTaskId":"task.intelligibility","primaryMethodId":"method.crowdsourced-evaluation","conceptIds":["task.intelligibility","method.crowdsourced-evaluation","setting.multilingual","artifact.benchmark"]}';
+                }
+            }
+        );
+        assert.strictEqual(prompts.length, 2);
+        assert.match(prompts[1], /concept ID 集合或主角色非法/);
+        assert.strictEqual(
+            deep.taxonomyProtectedProjection(repaired),
+            deep.taxonomyProtectedProjection(validAnalysisText())
+        );
+        const parsed = deep.parseAnalysis(repaired);
+        assert.strictEqual(parsed.taxonomyValidation.valid, true);
+        assert.strictEqual(parsed.taxonomyValidation.primaryTaskId, 'task.intelligibility');
+        assert.strictEqual(parsed.taxonomyValidation.primaryMethodId,
+            'method.crowdsourced-evaluation');
+    });
+
+    it('taxonomy prompt has no paper-specific 2403 answer example', () => {
+        const prompt = fs.readFileSync(
+            path.join(__dirname, '../prompts/taxonomy-tag-repair.md'), 'utf8'
+        );
+        assert.doesNotMatch(prompt, /task\.intelligibility|method\.crowdsourced-evaluation/);
+    });
+
+    it('current fingerprints bind taxonomy while legacy summary fingerprints do not', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const fields = deep.taxonomyFingerprintFields();
+        assert.match(fields.taxonomyRegistrySha256, /^[a-f0-9]{64}$/);
+        assert.match(fields.taxonomyProjectionSha256, /^[a-f0-9]{64}$/);
+        assert.strictEqual(fields.taxonomySelectionContract, 'paper-taxonomy-selection-v1');
+        const input = validAnalysisText();
+        const evidence = deep.buildStageEvidenceContext('revision', input, 'speech evidence');
+        assert.notStrictEqual(
+            deep.buildTextStageFingerprint('revision', input, evidence),
+            deep.buildLegacyCoreSummaryV2TextFingerprint('revision', input, evidence)
+        );
+        assert.strictEqual(deep.currentCoreSummaryV3MigrationPromptsAreExact(), false,
+            'taxonomy prompt rollout must not be admitted by the old summary-only allowlist');
+    });
+});
+
 describe('API reanalysis provenance boundary', () => {
     it('剥离旧 Manual 字段与合同但保留 API 恢复合同', () => {
         const {
@@ -3245,7 +3301,7 @@ has_dataset: 否
         assert.strictEqual(manifest.contracts.experimentTables, 'bounded-v1');
     });
 
-    it('精确旧指纹可从请求失败前封存快照迁移且不重跑主分析', () => {
+    it('taxonomy Prompt 上线后旧摘要迁移快照仍保留但不得冒充当前主分析', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const textForAnalysis = 'actual primary input with sufficient source evidence';
         const sourceText = 'source evidence without experimental tables';
@@ -3316,42 +3372,10 @@ has_dataset: 否
         ).primaryAnalysis;
         assert.strictEqual(deep.tryMigrateCoreSummaryV3LegacyCheckpoints(
             paper, manifest, textForAnalysis, sourceText, arxivId, currentPrimary
-        ), true);
-        assert.strictEqual(manifest.stages.primaryAnalysis.status, 'complete');
-        assert.strictEqual(manifest.stages.primaryAnalysis.fingerprint, currentPrimary);
-        assert.strictEqual(paper.analysisCheckpoint, body);
-        assert.strictEqual(manifest.stages.structureRepair.status, 'not_needed');
-        assert.strictEqual(manifest.stages.structureRepair.fingerprint,
-            deep.buildLegacyCoreSummaryV2TextFingerprint('structureRepair', body,
-                deep.buildLegacyCoreSummaryV2EvidenceContext('structureRepair', body, sourceText)));
-        assert.strictEqual(deep.legacyStructureCompatibilityIsValid(
-            paper, manifest, sourceText), true);
-        assert.notStrictEqual(manifest.stages.structureRepair.fingerprint,
-            deep.buildTextStageFingerprint('structureRepair', body,
-                deep.buildStageEvidenceContext('structureRepair', body, sourceText)),
-        'compatibility reuse must not masquerade as a current structure execution');
-        const exactStructure = paper.analysisStageCheckpoints.structureRepair;
-        paper.analysisStageCheckpoints.structureRepair += '\n篡改';
-        assert.strictEqual(deep.legacyStructureCompatibilityIsValid(paper, manifest, sourceText), false);
-        paper.analysisStageCheckpoints.structureRepair = exactStructure;
-        assert.strictEqual(deep.legacyStructureCompatibilityIsValid(
-            paper, manifest, `${sourceText} drift`), false);
-        const proofSnapshotIndex = paper.analysisStaleSnapshots.findIndex(item => (
-            item.payloadSha256
-            === manifest.stages.structureRepair.compatibilityProof.legacySnapshotPayloadSha256
-        ));
-        const exactSnapshot = structuredClone(paper.analysisStaleSnapshots[proofSnapshotIndex]);
-        paper.analysisStaleSnapshots[proofSnapshotIndex].payload.analysisStageCheckpoints.coreSummaryRepair += '\n伪造前序';
-        paper.analysisStaleSnapshots[proofSnapshotIndex].payloadSha256 = deep.stableFingerprint(
-            paper.analysisStaleSnapshots[proofSnapshotIndex].payload
-        );
-        assert.strictEqual(deep.legacyStructureCompatibilityIsValid(
-            paper, manifest, sourceText), false,
-        'self-resigned stale envelope cannot change the recomputed legacy structure input');
-        paper.analysisStaleSnapshots[proofSnapshotIndex] = exactSnapshot;
-        assert.strictEqual(manifest.stages.coreSummaryRepair, undefined);
-        assert.strictEqual(manifest.stages.scoringAudit, undefined);
-        assert.strictEqual(manifest.compatibilityMigrations.at(-1).restoredFromSnapshot, true);
+        ), false);
+        assert.strictEqual(manifest.stages.primaryAnalysis.status, 'transient_failure');
+        assert.strictEqual(paper.analysisStaleSnapshots.length, 2);
+        assert.strictEqual(deep.currentCoreSummaryV3MigrationPromptsAreExact(), false);
     });
 
     it('迁移 allowlist 拒绝任何非摘要 Prompt 漂移', () => {
@@ -3369,7 +3393,7 @@ has_dataset: 否
             ),
             structureRepair: deep.runtimePromptTemplateSha256('prompts/structure-repair.md')
         };
-        assert.strictEqual(deep.coreSummaryV3MigrationPromptSetIsAllowed(observed), true);
+        assert.strictEqual(deep.coreSummaryV3MigrationPromptSetIsAllowed(observed), false);
         assert.strictEqual(deep.coreSummaryV3MigrationPromptSetIsAllowed({
             ...observed,
             structureRepair: 'f'.repeat(64)
@@ -3675,7 +3699,7 @@ has_dataset: 否
         );
     });
 
-    it('确定性规范化额外标题、机器摘要杂项和破损标签', () => {
+    it('确定性结构规范化不再猜标签，缺失标签交给 taxonomy stage', () => {
         const {
             normalizeAnalysisStructure,
             getRepairableAnalysisStructureIssues,
@@ -3697,18 +3721,21 @@ has_dataset: 否
         const parsed = parseAnalysis(normalized);
         assert.strictEqual(validateTopLevelSectionContract(normalized), null);
         assert.strictEqual(validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }), null);
-        assert.strictEqual(validateTagSectionContract(normalized, parsed), null);
+        assert.ok(validateTagSectionContract(normalized, parsed));
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
         assert.match(normalized, /### 表 I：对比结果/);
         assert.match(normalized, /### 关键结论/);
         assert.doesNotMatch(normalized, /total_score:/);
+        assert.match(normalized, /#taxonomy-pending-task/);
     });
 
-    it('确定性规范化为双标签补足白名单补充标签', () => {
+    it('双标签不会被结构规范化伪造补充标签，可由 taxonomy stage 局部修复', () => {
         const {
             normalizeAnalysisStructure,
             getRepairableAnalysisStructureIssues,
-            parseAnalysis
+            parseAnalysis,
+            applyTaxonomySelection,
+            taxonomyProtectedProjection
         } = require('../scripts/deep-analyzer.js');
         const { validateTagSectionContract } = require('../scripts/analysis-contract.js');
         const malformed = validAnalysisText()
@@ -3721,12 +3748,20 @@ has_dataset: 否
 
         const normalized = normalizeAnalysisStructure(malformed);
         const parsed = parseAnalysis(normalized);
-        assert.match(normalized, /#音频伪造检测 #CNN #模型评估/);
-        assert.strictEqual(validateTagSectionContract(normalized, parsed), null);
+        assert.doesNotMatch(normalized, /#音频伪造检测 #CNN #模型评估/);
+        assert.ok(validateTagSectionContract(normalized, parsed));
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
+        const repaired = applyTaxonomySelection(normalized, {
+            tags: ['#音频伪造检测', '#CNN', '#模型评估'],
+            primaryTaskTag: '#音频伪造检测',
+            primaryMethodTag: '#CNN'
+        });
+        assert.strictEqual(validateTagSectionContract(repaired, parseAnalysis(repaired)), null);
+        assert.strictEqual(taxonomyProtectedProjection(repaired),
+            taxonomyProtectedProjection(normalized));
     });
 
-    it('确定性规范化为空文档类型和空标签推断安全兜底', () => {
+    it('确定性规范化只修文档类型，不从正文猜空主任务和主方法', () => {
         const {
             normalizeAnalysisStructure,
             getRepairableAnalysisStructureIssues,
@@ -3751,10 +3786,10 @@ has_dataset: 否
         const parsed = parseAnalysis(normalized);
         assert.match(normalized, /document_type: (?:方法研究|数据集与基准|理论研究|综述|模型报告|系统技术报告)/);
         assert.notStrictEqual(parsed.documentType, '');
-        assert.match(normalized, /primary_task_tag: #语音情感识别/);
-        assert.match(normalized, /primary_method_tag: #大语言模型/);
+        assert.doesNotMatch(normalized, /primary_task_tag: #语音情感识别/);
+        assert.doesNotMatch(normalized, /primary_method_tag: #大语言模型/);
         assert.strictEqual(validateMachineSummaryContract(normalized, parsed, { checkScoringConsistency: false }), null);
-        assert.strictEqual(validateTagSectionContract(normalized, parsed), null);
+        assert.ok(validateTagSectionContract(normalized, parsed));
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
     });
 
@@ -4194,6 +4229,38 @@ has_dataset: 否
         assert.strictEqual(manifest.stages.revision, undefined);
         assert.strictEqual(manifest.stages.scoringAudit, undefined);
         assert.strictEqual(manifest.stages.imageSupplement, undefined);
+    });
+
+    it('成功态只为 complete taxonomy 保留精确两份证明 checkpoint', () => {
+        const { retainFinalTaxonomyCheckpoints } = require('../scripts/deep-analyzer.js');
+        const paper = { analysisStageCheckpoints: {
+            structureRepair: 'structure bytes',
+            taxonomySeal: 'taxonomy bytes',
+            coreSummaryRepair: 'summary bytes',
+            scoringAudit: 'scoring bytes'
+        } };
+        retainFinalTaxonomyCheckpoints(paper, {
+            stages: { taxonomySeal: { status: 'complete' } }
+        });
+        assert.deepStrictEqual(paper.analysisStageCheckpoints, {
+            structureRepair: 'structure bytes',
+            taxonomySeal: 'taxonomy bytes'
+        });
+
+        const notNeeded = { analysisStageCheckpoints: {
+            structureRepair: 'same bytes', taxonomySeal: 'same bytes'
+        } };
+        retainFinalTaxonomyCheckpoints(notNeeded, {
+            stages: { taxonomySeal: { status: 'not_needed' } }
+        });
+        assert.deepStrictEqual(notNeeded.analysisStageCheckpoints, {
+            taxonomySeal: 'same bytes'
+        });
+
+        assert.throws(() => retainFinalTaxonomyCheckpoints({
+            analysisStageCheckpoints: { structureRepair: 'structure bytes' }
+        }, { stages: { taxonomySeal: { status: 'complete' } } }),
+        /必须保留 taxonomySeal/);
     });
 
     it('failed scoring cleanup follows dependency DAG and does not erase source-only Reader', () => {

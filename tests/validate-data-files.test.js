@@ -484,7 +484,8 @@ describe('validate-data-files', () => {
             }
         }));
         const analysis = validAnalysisText();
-        const validManifest = validAnalysisPaper('2607.00001').analysisManifest;
+        const validFixture = validAnalysisPaper('2607.00001');
+        const validManifest = validFixture.analysisManifest;
         fs.writeFileSync(resultFile, JSON.stringify({
             stats: {
                 totalAfterMerge: 1
@@ -500,7 +501,8 @@ describe('validate-data-files', () => {
                 parsed: parseAnalysis(analysis),
                 selectedImageUrls: [],
                 imageManifest: { selected: [] },
-                analysisManifest: validManifest
+                analysisManifest: validManifest,
+                analysisStageCheckpoints: validFixture.analysisStageCheckpoints
             }]
         }));
 
@@ -934,7 +936,8 @@ describe('validate-data-files', () => {
             '\n## 细节详述',
             `\n\n| 方法 | WER |\n| --- | --- |\n${rows}\n\n## 细节详述`
         );
-        const baseManifest = validAnalysisPaper('2607.00004').analysisManifest;
+        const baseFixture = validAnalysisPaper('2607.00004');
+        const baseManifest = baseFixture.analysisManifest;
         const stages = structuredClone(baseManifest.stages);
         const paper = {
             arxivId: '2607.00004',
@@ -946,7 +949,8 @@ describe('validate-data-files', () => {
                 contracts: { ...baseManifest.contracts,
                     experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION },
                 stages
-            }
+            },
+            analysisStageCheckpoints: baseFixture.analysisStageCheckpoints
         };
         fs.writeFileSync(resultFile, JSON.stringify({ papers: [paper] }));
         assert.match(
@@ -963,7 +967,8 @@ describe('validate-data-files', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-method-status-'));
         const resultFile = path.join(dir, 'deep-analysis-result.json');
         const analysis = validAnalysisText();
-        const baseManifest = validAnalysisPaper('2607.00005').analysisManifest;
+        const baseFixture = validAnalysisPaper('2607.00005');
+        const baseManifest = baseFixture.analysisManifest;
         const stages = structuredClone(baseManifest.stages);
         stages.primaryAnalysis.status = 'skipped';
         fs.writeFileSync(resultFile, JSON.stringify({
@@ -995,7 +1000,8 @@ describe('validate-data-files', () => {
             papers: [{
                 arxivId: '2607.00005', analysis, parsed: parseAnalysis(analysis),
                 scoringRubricVersion: 'type-aware-v1',
-                analysisManifest: { version: 1, contracts: baseManifest.contracts, stages }
+                analysisManifest: { version: 1, contracts: baseManifest.contracts, stages },
+                analysisStageCheckpoints: baseFixture.analysisStageCheckpoints
             }]
         }));
         const remainingIssues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
@@ -1014,7 +1020,8 @@ describe('validate-data-files', () => {
             innovationScore: '1.4',
             score: '6.8'
         };
-        const baseManifest = validAnalysisPaper('2607.00004').analysisManifest;
+        const baseFixture = validAnalysisPaper('2607.00004');
+        const baseManifest = baseFixture.analysisManifest;
         const stages = structuredClone(baseManifest.stages);
         fs.writeFileSync(resultFile, JSON.stringify({
             papers: [{
@@ -1028,7 +1035,8 @@ describe('validate-data-files', () => {
                     reason: '人工复核创新性证据后调整',
                     fields: ['innovationScore', 'score']
                 },
-                analysisManifest: { version: 1, contracts: baseManifest.contracts, stages }
+                analysisManifest: { version: 1, contracts: baseManifest.contracts, stages },
+                analysisStageCheckpoints: baseFixture.analysisStageCheckpoints
             }]
         }));
 
