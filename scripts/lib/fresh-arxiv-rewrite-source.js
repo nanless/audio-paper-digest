@@ -158,7 +158,9 @@ function officialUrl(url, kind, arxivId, sourceId = null) {
     }
     const pathname = decodeURIComponent(parsed.pathname);
     if (kind === 'pdf') {
-        const match = pathname.match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\.pdf$/);
+        // arXiv keeps both official spellings live and may redirect a
+        // versioned `/pdf/<id>vN.pdf` request to `/pdf/<id>vN`.
+        const match = pathname.match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?$/);
         if (!match || match[1].replace(/v\d+$/i, '') !== id || match[1] !== boundSourceId) {
             fail('PDF URL does not bind the requested canonical/version arXiv ID');
         }
@@ -197,7 +199,7 @@ function validatePdfResponse(value, arxivId, capturedAt) {
     let sourceId = String(candidate.sourceId || '').trim();
     if (!sourceId && candidate.url) {
         try { sourceId = decodeURIComponent(new URL(String(candidate.url)).pathname)
-            .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\.pdf$/)?.[1] || ''; }
+            .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?$/)?.[1] || ''; }
         catch { /* officialUrl below emits the canonical rejection */ }
     }
     sourceId = normalizedSourceId(sourceId || arxivId, arxivId, 'official PDF source ID');
@@ -403,7 +405,7 @@ function validateManifest(manifest, arxivId, generation) {
         || !SHA_RE.test(pdf.responseSha256)) fail('PDF manifest is invalid');
     let pdfSourceId;
     try { pdfSourceId = decodeURIComponent(new URL(pdf.url).pathname)
-        .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\.pdf$/)?.[1]; }
+        .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?$/)?.[1]; }
     catch { /* officialUrl emits the canonical rejection */ }
     officialUrl(pdf.url, 'pdf', arxivId, pdfSourceId || arxivId); asIso(pdf.fetchedAt, 'PDF fetchedAt');
     if (!runtimeMetadata || typeof runtimeMetadata !== 'object' || Array.isArray(runtimeMetadata)
@@ -441,7 +443,7 @@ function readFreshArxivRewriteSource({ rootDir, arxivId, generation } = {}) {
     catch (error) { fail(`runtime metadata is invalid JSON: ${error.message}`); }
     if (!runtimeMetadataBytes.equals(Buffer.from(canonicalJson(runtimeMetadata), 'utf8'))) fail('runtime metadata must be canonical JSON');
     const pdfSourceId = decodeURIComponent(new URL(manifest.pdf.url).pathname)
-        .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\.pdf$/)?.[1] || '';
+        .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?$/)?.[1] || '';
     if (pdfSourceId !== id) {
         const identity = normalizeHistoricalVersionIdentity(runtimeMetadata.sourceVersion, id);
         if (identity.selectedSourceId !== pdfSourceId || manifest.text.source !== 'pdf'

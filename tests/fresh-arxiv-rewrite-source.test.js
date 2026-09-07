@@ -132,6 +132,23 @@ test('versioned PDF validation rejects cross-paper URLs, query/fragment smugglin
     }), /requires a sealed current unversioned PDF HTTP 404/);
 });
 
+test('versioned PDF validation accepts the official arXiv redirect spelling without a .pdf suffix', async t => {
+    const f = fixture(t); const id = '2604.14654'; const selected = `${id}v1`;
+    const result = await source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1,
+        now: '2026-09-07T00:00:00.000Z' }, {
+        fetchText: async () => ({ ...textResponse(id), sourceId: selected,
+            url: `https://arxiv.org/html/${selected}` }),
+        fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\nofficial redirect spelling\n%%EOF\n'),
+            sourceId: selected, url: `https://arxiv.org/pdf/${selected}`,
+            currentPdfUnavailable: true, currentPdfStatus: 404 }),
+        extractPdfText: async () => ({ text: 'Historical PDF text with an official redirect URL. '.repeat(40) })
+    });
+    assert.equal(result.manifest.pdf.url, `https://arxiv.org/pdf/${selected}`);
+    assert.equal(result.runtimeDetails.sourceVersion.selectedPdfUrl, `https://arxiv.org/pdf/${selected}`);
+    assert.equal(source.readFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1 })
+        .runtimeDetails.sourceVersion.selectedSourceId, selected);
+});
+
 test('each new generation fetches a fresh text/PDF pair while same-generation resume replays only its sealed pair', async t => {
     const f = fixture(t); const id = '2403.14817'; let textCalls = 0; let pdfCalls = 0;
     const deps = {
