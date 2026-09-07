@@ -144,6 +144,7 @@ LLM_API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4'
 LLM_API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1'
 LLM_API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1'
 LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
+CORE_SUMMARY_DETAILED_CONTRACT = 'core-summary-detailed-v3'
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
 MANUAL_REVIEW_MODE = 'manual_complete'
@@ -2614,7 +2615,145 @@ def compact_index_opensource(pa, paper, limit=4):
     return '\n'.join(lines)
 
 
-API_READER_DECISION_PROJECTION_CONTRACT = 'api-reader-decision-projection-v1'
+API_READER_DECISION_PROJECTION_CONTRACT = 'api-reader-decision-projection-v2'
+
+
+def _core_summary_projection_sha256(analysis):
+    matches = list(re.finditer(r'^##\s*核心摘要\s*\r?\n', str(analysis or ''), re.MULTILINE))
+    if len(matches) != 1:
+        return None
+    start = matches[0].end()
+    following = re.search(r'^##\s+', analysis[start:], re.MULTILINE)
+    end = start + following.start() if following else len(analysis)
+    projected = analysis[:start] + '<CORE_SUMMARY_BODY>' + analysis[end:]
+    return hashlib.sha256(projected.encode('utf-8')).hexdigest()
+
+
+def _detailed_core_summary_semantic_issue(summary):
+    summary = str(summary or '')
+    count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
+    sentences = len(re.findall(r'[。！？!?]', summary))
+    issues = []
+    if count < 320 or count > 600:
+        issues.append(f'中文字符必须为 320–600，当前 {count}')
+    if sentences < 6 or sentences > 9:
+        issues.append(f'句数必须为 6–9，当前 {sentences}')
+    if not re.search(r'(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)', summary):
+        issues.append('缺少任务问题、输入输出或实际难点')
+    chain = re.findall(r'(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件)', summary)
+    roles = re.findall(r'(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入)', summary)
+    if len(chain) < 2 or len(roles) < 2:
+        issues.append('缺少 2–4 步方法链的分工与衔接')
+    metric = re.compile(
+        r'(?:WER|CER|PER|F1|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|accuracy|error rate|score|latency|throughput|RTF|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)',
+        re.IGNORECASE,
+    )
+    comparison = re.compile(
+        r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)',
+        re.IGNORECASE,
+    )
+    number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
+    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|同一|相同|公开|内部|外部|on\b)', re.IGNORECASE)
+    has_complete_result = False
+    for sentence in re.split(r'[。！？!?\n]', summary):
+        numbers = number.findall(sentence)
+        if metric.search(sentence) and comparison.search(sentence) and numbers \
+                and setting.search(sentence) \
+                and (len(numbers) >= 2 or re.search(
+                    r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)', sentence
+                )):
+            has_complete_result = True
+            break
+    if not has_complete_result and '原文未提供可核对的关键定量结果' not in summary:
+        issues.append('缺少完整关键定量结果或明确不可得声明')
+    if not re.search(r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)', summary):
+        issues.append('缺少结论适用边界、失败条件或未验证范围')
+    cost = '原文未披露训练、推理或部署成本' in summary \
+        or re.search(r'(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)', summary) \
+        or re.search(r'(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)', summary)
+    if not cost:
+        issues.append('缺少训练、推理或部署成本或未披露声明')
+    return '；'.join(issues) if issues else None
+
+
+def _sealed_detailed_core_summary(paper, parsed):
+    """Return the current detailed summary, or None for pre-v3 records.
+
+    The reader plan's one-sentence thesis remains page metadata/description.
+    Once the analysis declares the v3 summary contract, however, the visible
+    ``核心摘要`` must replay the separately sealed canonical section instead
+    of collapsing it back to that short thesis.
+    """
+    manifest = paper.get('analysisManifest')
+    contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    if not isinstance(contracts, dict) \
+            or contracts.get('coreSummary') != CORE_SUMMARY_DETAILED_CONTRACT:
+        return None
+    stages = manifest.get('stages')
+    stage = stages.get('coreSummaryRepair') if isinstance(stages, dict) else None
+    scoring = stages.get('scoringAudit') if isinstance(stages, dict) else None
+    if not isinstance(stage, dict) \
+            or stage.get('status') not in {'complete', 'not_needed'} \
+            or stage.get('contractVersion') != CORE_SUMMARY_DETAILED_CONTRACT:
+        raise PublishDataValidationError('现代 Reader 的详细核心摘要阶段未按 v3 封口')
+    analysis = paper.get('analysis')
+    canonical = parse_analysis(analysis) if isinstance(analysis, str) else None
+    summary = canonical.get('summary') if isinstance(canonical, dict) else None
+    if not isinstance(summary, str) or not summary.strip():
+        raise PublishDataValidationError('现代 Reader 缺少详细核心摘要正文')
+    summary = summary.strip()
+    semantic_issue = _detailed_core_summary_semantic_issue(summary)
+    if semantic_issue:
+        raise PublishDataValidationError(
+            f'现代 Reader 的详细核心摘要未达到 {CORE_SUMMARY_DETAILED_CONTRACT}: '
+            f'{semantic_issue}'
+        )
+    if isinstance(parsed, dict) and parsed.get('summary') != summary:
+        raise PublishDataValidationError('现代 Reader 的 parsed 核心摘要与 canonical 不一致')
+    summary_sha = hashlib.sha256(summary.encode('utf-8')).hexdigest()
+    if stage.get('summarySha256') != summary_sha:
+        raise PublishDataValidationError('现代 Reader 的详细核心摘要与阶段 SHA 不一致')
+    required_stage_shas = (
+        'fingerprint', 'inputAnalysisSha256', 'outputAnalysisSha256',
+        'inputSummarySha256', 'inputStructureProjectionSha256',
+        'outputStructureProjectionSha256', 'bindingSha256',
+    )
+    if any(not re.fullmatch(r'[0-9a-f]{64}', str(stage.get(field) or ''))
+           for field in required_stage_shas):
+        raise PublishDataValidationError('现代 Reader 的详细核心摘要缺少可重放 SHA 链')
+    if stage.get('inputStructureProjectionSha256') \
+            != stage.get('outputStructureProjectionSha256'):
+        raise PublishDataValidationError('现代 Reader 的详细核心摘要改变了其他章节投影')
+    binding_body = {
+        'contractVersion': stage['contractVersion'],
+        'inputAnalysisSha256': stage['inputAnalysisSha256'],
+        'outputAnalysisSha256': stage['outputAnalysisSha256'],
+        'inputSummarySha256': stage['inputSummarySha256'],
+        'summarySha256': stage['summarySha256'],
+        'inputStructureProjectionSha256': stage['inputStructureProjectionSha256'],
+        'outputStructureProjectionSha256': stage['outputStructureProjectionSha256'],
+    }
+    if stage.get('bindingSha256') != _stable_json_sha256(binding_body):
+        raise PublishDataValidationError('现代 Reader 的详细核心摘要 binding SHA 不可重放')
+    structure = stages.get('structureRepair') if isinstance(stages, dict) else None
+    if not isinstance(structure, dict) \
+            or structure.get('outputAnalysisSha256') != stage.get('inputAnalysisSha256'):
+        raise PublishDataValidationError('现代 Reader 的详细核心摘要未绑定结构阶段输出')
+    if not isinstance(scoring, dict):
+        raise PublishDataValidationError('现代 Reader 的评分阶段未绑定详细核心摘要')
+    if scoring.get('status') != MANUAL_REVIEW_MODE:
+        analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+        # Modern Reader pages already materialize source-bound official figures.
+        # A legacy imageSupplement=complete has no retained pre-image bytes in
+        # the final success record, so Python cannot prove it changed only image
+        # spans. Fail closed instead of accepting a three-SHA self-assertion.
+        scoring_binds_final = scoring.get('outputAnalysisSha256') == analysis_sha
+        if not scoring_binds_final \
+                or scoring.get('coreSummaryInputAnalysisSha256') != stage.get('outputAnalysisSha256') \
+                or scoring.get('inputCoreSummarySha256') != summary_sha \
+                or scoring.get('outputCoreSummarySha256') != summary_sha:
+            raise PublishDataValidationError('现代 Reader 的评分阶段未绑定详细核心摘要')
+    return summary
 
 
 def _modern_api_reader_projection(paper, payload=None):
@@ -2656,8 +2795,9 @@ def _modern_api_reader_projection(paper, payload=None):
         if isinstance(value, str) and value.strip():
             safe_value = html.escape(re.sub(r'\s+', ' ', value.strip()))
             ledger.append(f'- {label}：{safe_value}')
+    detailed_summary = _sealed_detailed_core_summary(paper, parsed)
     return {
-        'summary': payload['plan']['oneSentenceThesis'].strip(),
+        'summary': detailed_summary or payload['plan']['oneSentenceThesis'].strip(),
         'opensource': '\n\n'.join(lines),
         'scoringReason': '\n\n'.join(ledger),
     }
@@ -7068,6 +7208,10 @@ def llm_api_publication_bindings(published_papers):
         if not isinstance(contracts, dict) \
                 or contracts.get('apiReaderArticle') != LLM_API_READER_CONTRACT:
             continue
+        if contracts.get('coreSummary') != CORE_SUMMARY_DETAILED_CONTRACT:
+            raise PublishDataValidationError(
+                'LLM API production 必须绑定 core-summary-detailed-v3'
+            )
         reader = _api_reader_payload(paper)
         analysis = paper.get('analysis')
         stages = manifest.get('stages') if isinstance(manifest.get('stages'), dict) else {}
@@ -7084,14 +7228,7 @@ def llm_api_publication_bindings(published_papers):
         if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
                 or paper_source_sha != source_sha:
             raise PublishDataValidationError('LLM API production 来源 SHA 未闭环')
-        image_supplement = stages.get('imageSupplement') \
-            if isinstance(stages.get('imageSupplement'), dict) else {}
-        scoring_binds_final = scoring.get('outputAnalysisSha256') == analysis_sha or (
-            image_supplement.get('status') == 'complete'
-            and image_supplement.get('inputAnalysisSha256')
-            == scoring.get('outputAnalysisSha256')
-            and image_supplement.get('outputAnalysisSha256') == analysis_sha
-        )
+        scoring_binds_final = scoring.get('outputAnalysisSha256') == analysis_sha
         if (
             scoring.get('status') != 'complete'
             or scoring.get('scoringContract') != LLM_API_SCORING_CONTRACT
@@ -7115,6 +7252,10 @@ def llm_api_publication_bindings(published_papers):
         if not math.isfinite(parsed_score) or not math.isfinite(final_score_number) \
                 or abs(parsed_score - final_score_number) > 1e-9:
             raise PublishDataValidationError('LLM API production parsed 与评分审计总分不一致')
+        core_summary = _sealed_detailed_core_summary(paper, parsed)
+        if core_summary is None:
+            raise PublishDataValidationError('LLM API production 缺少已封口的详细核心摘要')
+        core_summary_stage = stages.get('coreSummaryRepair')
         paper_id = normalize_publish_arxiv_id(
             paper.get('arxivId') or paper.get('paper_id')
         )
@@ -7140,6 +7281,11 @@ def llm_api_publication_bindings(published_papers):
             'readerFiguresSha256': _stable_json_sha256(reader['figures']),
             'readerAuthorsSha256': _stable_json_sha256(reader['readerAuthors']),
             'analysisSha256': analysis_sha,
+            'coreSummaryContract': CORE_SUMMARY_DETAILED_CONTRACT,
+            'coreSummarySha256': hashlib.sha256(
+                core_summary.encode('utf-8')
+            ).hexdigest(),
+            'coreSummaryBindingSha256': core_summary_stage['bindingSha256'],
             'sourceSha256': source_sha,
             'scoringContract': LLM_API_SCORING_CONTRACT,
             'scoringAuditSha256': scoring['auditSha256'],

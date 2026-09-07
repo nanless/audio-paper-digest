@@ -313,12 +313,13 @@ describe('mergeAndSaveResults', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-dead-lock-'));
         const file = path.join(dir, 'result.json');
         const lockDir = `${file}.lock`;
-        fs.mkdirSync(lockDir);
+        fs.mkdirSync(lockDir, { mode: 0o700 });
         fs.writeFileSync(path.join(lockDir, 'owner.json'), JSON.stringify({
             pid: 2147483647,
             hostname: os.hostname(),
-            token: 'dead-owner'
-        }));
+            token: '11111111-1111-4111-8111-111111111111',
+            acquiredAt: '2026-09-01T00:00:00.000Z'
+        }), { mode: 0o600 });
         const old = new Date(Date.now() - 60_000);
         fs.utimesSync(path.join(lockDir, 'owner.json'), old, old);
         updateJsonFileLocked(file, () => ({ papers: [] }), { timeoutMs: 100, staleMs: 1000 });
@@ -1467,12 +1468,13 @@ describe('analysis run status', () => {
     it('活着的本机 PID 不会仅因锁超龄而被回收', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-live-'));
         const lockPath = path.join(dir, 'result.json.lock');
-        fs.mkdirSync(lockPath);
+        fs.mkdirSync(lockPath, { mode: 0o700 });
         fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
             pid: process.pid,
             hostname: os.hostname(),
-            token: 'live-owner'
-        }));
+            token: '22222222-2222-4222-8222-222222222222',
+            acquiredAt: '2026-09-01T00:00:00.000Z'
+        }), { mode: 0o600 });
         const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
         fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
 
@@ -1482,12 +1484,13 @@ describe('analysis run status', () => {
     it('远端主机锁只有租约超龄后才可回收', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-remote-'));
         const lockPath = path.join(dir, 'result.json.lock');
-        fs.mkdirSync(lockPath);
+        fs.mkdirSync(lockPath, { mode: 0o700 });
         fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
             pid: 12345,
             hostname: `${os.hostname()}-remote`,
-            token: 'remote-owner'
-        }));
+            token: '33333333-3333-4333-8333-333333333333',
+            acquiredAt: '2026-09-01T00:00:00.000Z'
+        }), { mode: 0o600 });
         const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
         fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
 
@@ -1534,10 +1537,12 @@ describe('analysis run status', () => {
         const target = path.join(dir, '.operation');
         assert.deepStrictEqual(inspectFileLockState(target, { staleMs: 1000 }).reclaimable, true);
         const lockPath = `${target}.lock`;
-        fs.mkdirSync(lockPath);
+        fs.mkdirSync(lockPath, { mode: 0o700 });
         fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
-            pid: process.pid, hostname: os.hostname(), token: 'live'
-        }));
+            pid: process.pid, hostname: os.hostname(),
+            token: '44444444-4444-4444-8444-444444444444',
+            acquiredAt: '2026-09-01T00:00:00.000Z'
+        }), { mode: 0o600 });
         const nowMs = Date.now();
         fs.utimesSync(path.join(lockPath, 'owner.json'), new Date(nowMs - 5000), new Date(nowMs - 5000));
         let state = inspectFileLockState(target, { staleMs: 1000, nowMs });
@@ -1545,7 +1550,9 @@ describe('analysis run status', () => {
         assert.strictEqual(state.reclaimable, false);
 
         fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
-            pid: 2147483647, hostname: os.hostname(), token: 'dead'
+            pid: 2147483647, hostname: os.hostname(),
+            token: '55555555-5555-4555-8555-555555555555',
+            acquiredAt: '2026-09-01T00:00:00.000Z'
         }));
         fs.utimesSync(path.join(lockPath, 'owner.json'), new Date(nowMs - 500), new Date(nowMs - 500));
         state = inspectFileLockState(target, { staleMs: 1000, nowMs });
@@ -1562,7 +1569,9 @@ describe('analysis run status', () => {
         const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
         fs.mkdirSync(lockPath, { mode: 0o700 });
         fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
-            pid: 2147483647, hostname: os.hostname(), token: 'stale-owner'
+            pid: 2147483647, hostname: os.hostname(),
+            token: '66666666-6666-4666-8666-666666666666',
+            acquiredAt: '2026-09-01T00:00:00.000Z'
         }), { mode: 0o600 });
         const old = new Date(Date.now() - 60_000);
         fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
@@ -1582,10 +1591,94 @@ describe('analysis run status', () => {
         const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
         fs.mkdirSync(lockPath, { mode: 0o700 });
         fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
-            pid: 2147483647, hostname: os.hostname(), token: 'young-dead'
+            pid: 2147483647, hostname: os.hostname(),
+            token: '77777777-7777-4777-8777-777777777777',
+            acquiredAt: '2026-09-01T00:00:00.000Z'
         }), { mode: 0o600 });
         assert.throws(() => acquireFileLockSync(target, { timeoutMs: 20, staleMs: 60_000 }), /超时/);
         assert.strictEqual(fs.existsSync(path.join(lockPath, 'owner.json')), true);
+    });
+
+    it('只兼容回收冻结的旧式 0755/0644 本机 stale-dead owner', () => {
+        const parsed = { pid: 2147483647, hostname: os.hostname(),
+            token: '3d87932f-730b-4f56-be1c-be499a2027a3',
+            acquiredAt: '2026-09-06T20:58:51.831Z' };
+        assert.deepStrictEqual(Object.keys(parsed).sort(), ['acquiredAt', 'hostname', 'pid', 'token']);
+        const makeLegacy = (name, owner = parsed, extra = false) => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), `paper-lock-legacy-${name}-`));
+            const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+            fs.mkdirSync(lockPath, { mode: 0o755 });
+            fs.chmodSync(lockPath, 0o755);
+            fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify(owner), { mode: 0o644 });
+            fs.chmodSync(path.join(lockPath, 'owner.json'), 0o644);
+            if (extra) fs.writeFileSync(path.join(lockPath, 'unexpected'), 'x');
+            return { target, lockPath };
+        };
+        const old = new Date(Date.now() - 60_000);
+        const accepted = makeLegacy('accepted');
+        fs.utimesSync(path.join(accepted.lockPath, 'owner.json'), old, old);
+        const release = acquireFileLockSync(accepted.target, { timeoutMs: 200, staleMs: 1000 });
+        assert.strictEqual((fs.statSync(`${accepted.target}.lock`).mode & 0o777), 0o700);
+        assert.strictEqual((fs.statSync(`${accepted.target}.lock/owner.json`).mode & 0o777), 0o600);
+        assert.strictEqual(release(), true);
+
+        const remote = makeLegacy('remote', { ...parsed, hostname: `${os.hostname()}-remote` });
+        fs.utimesSync(path.join(remote.lockPath, 'owner.json'), old, old);
+        assert.strictEqual(canReclaimFileLock(remote.lockPath, 1000), false);
+        const live = makeLegacy('live', { ...parsed, pid: process.pid, hostname: os.hostname() });
+        fs.utimesSync(path.join(live.lockPath, 'owner.json'), old, old);
+        assert.strictEqual(canReclaimFileLock(live.lockPath, 1000), false);
+        const young = makeLegacy('young');
+        assert.strictEqual(canReclaimFileLock(young.lockPath, 60_000), false);
+        const extra = makeLegacy('extra', parsed, true);
+        fs.utimesSync(path.join(extra.lockPath, 'owner.json'), old, old);
+        assert.strictEqual(canReclaimFileLock(extra.lockPath, 1000), false);
+    });
+
+    it('owner duplicate keys、非法 schema、混合权限和 hardlink 全部拒绝回收', () => {
+        const old = new Date(Date.now() - 60_000);
+        const make = (name, bytes, dirMode = 0o700, ownerMode = 0o600) => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), `paper-lock-invalid-${name}-`));
+            const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+            fs.mkdirSync(lockPath, { mode: dirMode }); fs.chmodSync(lockPath, dirMode);
+            const ownerPath = path.join(lockPath, 'owner.json');
+            fs.writeFileSync(ownerPath, bytes, { mode: ownerMode }); fs.chmodSync(ownerPath, ownerMode);
+            fs.utimesSync(ownerPath, old, old);
+            return { target, lockPath, ownerPath };
+        };
+        const valid = JSON.stringify({ pid: 2147483647, hostname: os.hostname(),
+            token: '88888888-8888-4888-8888-888888888888',
+            acquiredAt: '2026-09-01T00:00:00.000Z' });
+        const duplicate = make('duplicate', valid.replace('"pid":2147483647',
+            '"pid":123,"pid":2147483647'), 0o755, 0o644);
+        assert.strictEqual(canReclaimFileLock(duplicate.lockPath, 1000), false);
+        const missing = make('missing', JSON.stringify({ pid: 2147483647,
+            hostname: os.hostname(), token: '88888888-8888-4888-8888-888888888888' }));
+        assert.strictEqual(canReclaimFileLock(missing.lockPath, 1000), false);
+        const invalidToken = make('token', valid.replace(
+            '88888888-8888-4888-8888-888888888888', 'not-a-uuid'));
+        assert.strictEqual(canReclaimFileLock(invalidToken.lockPath, 1000), false);
+        const mixed = make('mixed', valid, 0o755, 0o600);
+        assert.strictEqual(canReclaimFileLock(mixed.lockPath, 1000), false);
+        const linked = make('hardlink', valid);
+        const alias = path.join(path.dirname(linked.lockPath), 'owner-alias.json');
+        fs.linkSync(linked.ownerPath, alias);
+        assert.strictEqual(canReclaimFileLock(linked.lockPath, 1000), false);
+        assert.throws(() => acquireFileLockSync(linked.target,
+            { timeoutMs: 20, staleMs: 1000 }), /超时/);
+        assert.strictEqual(fs.existsSync(linked.ownerPath), true);
+        assert.strictEqual(fs.existsSync(alias), true);
+    });
+
+    it('异常 umask 下新锁仍被强制收紧为 0700/0600', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-umask-'));
+        const target = path.join(dir, 'result.json'); const previous = process.umask(0o777);
+        let release;
+        try { release = acquireFileLockSync(target); }
+        finally { process.umask(previous); }
+        assert.strictEqual(fs.statSync(`${target}.lock`).mode & 0o777, 0o700);
+        assert.strictEqual(fs.statSync(`${target}.lock/owner.json`).mode & 0o777, 0o600);
+        assert.strictEqual(release(), true);
     });
 
     it('异步锁在 callback 完成前保持持有', async () => {

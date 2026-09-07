@@ -11,6 +11,7 @@ const cli = require('../scripts/historical-postprocess-scheduler.js');
 
 const CROSSWALK = '11111111-1111-4111-8111-111111111111';
 const REGISTRY = '9'.repeat(64); const DATE = '2026-04-19';
+const RENDERER = '8'.repeat(64);
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function fixture(t, secondStatus = 'complete') {
@@ -45,6 +46,7 @@ function fixture(t, secondStatus = 'complete') {
         fs.writeFileSync(filename, `${JSON.stringify(next, null, 2)}\n`); return next;
     };
     const deps = { files, now: () => `2026-09-07T00:00:${String(tick++).padStart(2, '0')}.000Z`,
+        rendererImplementationSha256: () => RENDERER,
         updateLocked, loadTaxonomy: () => ({ registrySha256: REGISTRY }), readCrosswalk: () => crosswalk,
         recoverRun: () => ({ storageSealed: true, currentContractComplete: true }), loadAnalysisRun: ({ runId }) => ({ runId }),
         buildAssignments: ({ runHandle, paperId }) => [{ paperId, analysisRunId: runHandle.runId,
@@ -80,7 +82,29 @@ test('sealed per-paper runs are assigned/staged concurrently and two runs aggreg
         `${CROSSWALK}.json`))).items[f.paperIds[0]], updatedAt: 'later', lastError: 'ignored while complete' };
     const rebound = { ...changedOnlyVolatile, paperId: f.paperIds[0],
         analysisSchedulerItemSha256: api.stableHash(api.analysisSchedulerItemBinding(f.paperIds[0], changedOnlyVolatile)) };
-    assert.equal(api.deterministicStagingRunId(CROSSWALK, rebound, REGISTRY), result.processed[0].stagingRunId);
+    assert.equal(api.deterministicStagingRunId(CROSSWALK, rebound, REGISTRY, RENDERER), result.processed[0].stagingRunId);
+});
+
+test('renderer implementation change creates a new staging run and checkpoint without reusing old proof', async t => {
+    const f = fixture(t); const options = { apply: true, crosswalkId: CROSSWALK,
+        date: DATE, limit: null, concurrency: 1 };
+    const first = await api.runHistoricalPostprocess(options, f.deps);
+    const firstCheckpoint = JSON.parse(fs.readFileSync(first.checkpoint));
+    const oldRunId = first.processed[0].stagingRunId;
+    const replacementRenderer = '7'.repeat(64);
+    f.deps.rendererImplementationSha256 = () => replacementRenderer;
+    const second = await api.runHistoricalPostprocess(options, f.deps);
+    const secondCheckpoint = JSON.parse(fs.readFileSync(second.checkpoint));
+    assert.notEqual(second.checkpoint, first.checkpoint);
+    assert.notEqual(second.processed[0].stagingRunId, oldRunId);
+    assert.equal(fs.existsSync(first.checkpoint), true);
+    assert.equal(firstCheckpoint.items[f.paperIds[0]].rendererImplementationSha256, RENDERER);
+    assert.equal(secondCheckpoint.items[f.paperIds[0]].rendererImplementationSha256, replacementRenderer);
+    assert.throws(() => api.validateCheckpoint(firstCheckpoint, CROSSWALK, REGISTRY,
+        replacementRenderer), /checkpoint identity\/schema drifted/);
+    assert.doesNotThrow(() => api.validateCheckpoint(secondCheckpoint, CROSSWALK, REGISTRY,
+        replacementRenderer));
+    assert.equal(f.stageCalls.at(-1).rendererImplementationSha256, replacementRenderer);
 });
 
 test('checkpoint self-SHA survives the production JSON updater generation field', async t => {
@@ -88,7 +112,7 @@ test('checkpoint self-SHA survives the production JSON updater generation field'
     const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 }, f.deps);
     const checkpoint = JSON.parse(fs.readFileSync(result.checkpoint));
-    assert.doesNotThrow(() => api.validateCheckpoint(checkpoint, CROSSWALK, REGISTRY));
+    assert.doesNotThrow(() => api.validateCheckpoint(checkpoint, CROSSWALK, REGISTRY, RENDERER));
     assert.ok(checkpoint.generation >= 2);
 });
 
@@ -112,7 +136,8 @@ test('a date remains blocked until every historical paper has completed single-p
     const f = fixture(t, 'pending'); const result = await api.runHistoricalPostprocess({ apply: true,
         crosswalkId: CROSSWALK, date: DATE, limit: null, concurrency: 3 }, f.deps);
     assert.equal(result.status, 'partial'); assert.deepEqual(result.daily, [
-        { date: DATE, status: 'blocked', reason: 'not-all-date-papers-staged' }
+        { date: DATE, status: 'blocked', rendererImplementationSha256: RENDERER,
+            reason: 'not-all-date-papers-staged' }
     ]); assert.equal(f.aggregateCalls.length, 0);
 });
 

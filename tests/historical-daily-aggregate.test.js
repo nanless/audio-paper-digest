@@ -13,6 +13,7 @@ const pageStagingApi = require('../scripts/lib/historical-page-staging.js');
 const RUN = '22222222-2222-4222-8222-222222222222';
 const CROSSWALK = '11111111-1111-4111-8111-111111111111';
 const DATE = '2026-04-19';
+const RENDERER = '8'.repeat(64);
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function stagedPage(index, paperId, score, registry = '9'.repeat(64)) {
@@ -43,6 +44,7 @@ function aggregateFixture() {
                 path: `content/posts/${DATE}.md`, primaryUrl: `https://example.test/blog/posts/${DATE}/`,
                 contentSha256: 'd'.repeat(64), kind: 'daily-summary', scope: { type: 'daily', key: DATE },
                 cohortDate: DATE }] } } }, stagedRuns: [{ manifest: { stagingRunId: RUN,
+        rendererImplementationSha256: RENDERER,
         manifestSha256: 'e'.repeat(64) }, manifestFileSha256: 'f'.repeat(64) }] };
 }
 
@@ -129,6 +131,8 @@ test('two real per-paper staging producers merge into one complete daily aggrega
     assert.equal(aggregate.members.length, 2);
     assert.deepEqual(aggregate.members.map(item => item.paperId), ['arxiv:2604.00002', 'arxiv:2604.00001']);
     assert.equal(aggregate.source.stagingRuns.length, 2);
+    assert.equal(aggregate.source.rendererImplementationSha256,
+        pageStagingApi.currentRendererImplementationSha256());
     assert.equal(api.aggregateRunIdFor(stagingRunIds), api.aggregateRunIdFor([...stagingRunIds].reverse()));
     assert.doesNotMatch(aggregate.markdown, /OLD|legacy/i);
 });
@@ -138,6 +142,15 @@ test('mixed taxonomy registries and verified identity drift fail closed', () => 
     assert.throws(() => api.buildDailyAggregates({ inputs: mixed, date: DATE }), /taxonomy registry differs/);
     const drifted = aggregateFixture(); drifted.topology.state.assignments[drifted.stagedPages[0].pageKey].sourceAuthority.paperId = 'arxiv:2604.99999';
     assert.throws(() => api.buildDailyAggregates({ inputs: drifted, date: DATE }), /identity\/path differs/);
+});
+
+test('mixed renderer implementations cannot form one daily aggregate', () => {
+    const mixed = aggregateFixture();
+    mixed.stagedRuns.push({ manifest: { stagingRunId: '33333333-3333-4333-8333-333333333333',
+        rendererImplementationSha256: '7'.repeat(64), manifestSha256: '6'.repeat(64) },
+    manifestFileSha256: '5'.repeat(64) });
+    assert.throws(() => api.buildDailyAggregates({ inputs: mixed, date: DATE }),
+        /renderer implementation binding is missing or mixed/);
 });
 
 test('new unrelated crosswalk progress does not invalidate unchanged staged page/group binding', () => {
@@ -153,7 +166,8 @@ test('new unrelated crosswalk progress does not invalidate unchanged staged page
     const result = api.loadAggregateInputs({ stagingRoot: '/unused', stagingRunIds: [RUN], crosswalkRoot: '/unused',
         inventoryRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused' }, {
         loadCompletedPageStaging: () => ({ manifest: { stagingRunId: RUN, crosswalkId: CROSSWALK,
-            crosswalkStateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64), pages: [page] },
+            crosswalkStateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64),
+            rendererImplementationSha256: RENDERER, pages: [page] },
         manifestFileSha256: 'c'.repeat(64) }),
         bindTopology: () => ({ state: currentState, inventory: {} }),
         replaySelectedBindings: () => [],
@@ -176,6 +190,7 @@ test('completed page staging loader replays manifest and every rendered page SHA
     fs.writeFileSync(path.join(runRoot, page.stagedPath), bytes);
     const body = { contract: api.PAGE_STAGING_CONTRACT, version: 1, stagingRunId: RUN,
         crosswalkId: CROSSWALK, crosswalkStateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64),
+        rendererImplementationSha256: RENDERER,
         createdAt: '2026-09-07T00:00:00.000Z', pages: [page], pageSetSha256: api.stableHash([page]),
         assets: [], assetSetSha256: api.stableHash([]), selectedBindings: [{ paperId: page.paperId }],
         selectedBindingSha256: api.stableHash([{ paperId: page.paperId }]) };
@@ -200,6 +215,7 @@ test('completed page staging loader replays every asset size/SHA', t => {
     fs.writeFileSync(path.join(runRoot, 'assets', asset.path), assetBytes);
     const body = { contract: api.PAGE_STAGING_CONTRACT, version: 1, stagingRunId: RUN,
         crosswalkId: CROSSWALK, crosswalkStateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64),
+        rendererImplementationSha256: RENDERER,
         createdAt: '2026-09-07T00:00:00.000Z', pages: [page], pageSetSha256: api.stableHash([page]),
         assets: [asset], assetSetSha256: api.stableHash([asset]), selectedBindings: [{ paperId: page.paperId }],
         selectedBindingSha256: api.stableHash([{ paperId: page.paperId }]) };

@@ -105,7 +105,11 @@ npm run history:postprocess -- --apply --crosswalk UUID --date YYYY-MM-DD --conc
 该入口只接受 analysis scheduler 中状态为 complete、且实际 run 可重放为 sealed-complete 的
 per-paper 项。每篇先按当前 registry 确定性生成 SHA 命名的 taxonomy assignment；blocked assignment
 仍保留审计，但不会进入页面。随后由 crosswalk、analysis run、registry 与 scheduler item SHA
-稳定派生单篇 staging run ID。每日汇总只有在该日期的全部历史论文页面都能由已验证 staging 覆盖时
+以及 renderer implementation SHA 稳定派生单篇 staging run ID。该实现身份覆盖页面 renderer、
+发布投影、taxonomy producer、daily aggregate 及其直接配置；代码变化会创建新的不可变 staging 与
+checkpoint，旧产物保留但不能冒充当前。渲染先在内存完成并复验实现身份，再原子写入；进程在文件
+写完、manifest 签发前中断时，同一 intent/run 只可续用逐字一致的部分文件，未知或漂移内容失败关闭。
+每日汇总还要求所有成员绑定同一 renderer SHA。每日汇总只有在该日期的全部历史论文页面都能由已验证 staging 覆盖时
 才生成；它合并多份 per-paper manifest，仍只写受保护的 runtime staging。postprocess checkpoint
 按 crosswalk 与 registry SHA 隔离，自带 self-SHA，registry 升级不会覆盖旧审计链。
 

@@ -15,6 +15,7 @@ const PLAN = '11111111-1111-4111-8111-111111111111';
 const STAGE = '22222222-2222-4222-8222-222222222222';
 const AGG = daily.aggregateRunIdFor([STAGE]);
 const DATE = '2026-09-04'; const HEAD = 'a'.repeat(40); const TREE = 'b'.repeat(40); const CONTENT_TREE = 'c'.repeat(40);
+const RENDERER = '8'.repeat(64);
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'history-publication-'));
@@ -42,7 +43,8 @@ function fixture(t) {
     const stagedAssets = [{ path: assetPath, sha256: sha(newAsset), size: newAsset.length }];
     const selectedBindings = [{ paperId: stagedPages[0].paperId, pages: [stagedPages[0].pageKey] }];
     const stageBody = { contract: daily.PAGE_STAGING_CONTRACT, version: 1, stagingRunId: STAGE, crosswalkId: PLAN,
-        crosswalkStateSha256: 'd'.repeat(64), identityGroupsSha256: '1'.repeat(64), createdAt: '2026-09-07T00:00:00.000Z',
+        crosswalkStateSha256: 'd'.repeat(64), identityGroupsSha256: '1'.repeat(64),
+        rendererImplementationSha256: RENDERER, createdAt: '2026-09-07T00:00:00.000Z',
         pages: stagedPages, pageSetSha256: daily.stableHash(stagedPages), assets: stagedAssets,
         assetSetSha256: daily.stableHash(stagedAssets), selectedBindings,
         selectedBindingSha256: daily.stableHash(selectedBindings) };
@@ -52,6 +54,7 @@ function fixture(t) {
     const stagingRuns = [{ stagingRunId: STAGE, stagingManifestSha256: stageManifest.manifestSha256,
         stagingManifestFileSha256: stageManifestFileSha256 }];
     const aggregateSource = { stagingRuns, stagingSetSha256: daily.stableHash(stagingRuns), crosswalkId: PLAN,
+        rendererImplementationSha256: RENDERER,
         crosswalkStateSha256: 'd'.repeat(64), ledgerSha256: 'e'.repeat(64), pageSetSha256: 'f'.repeat(64),
         taxonomyRegistrySha256: '0'.repeat(64) };
     const members = [{ pageKey: stageManifest.pages[0].pageKey, pagePath, singlePageContentSha256: sha(newPage) }];
@@ -70,13 +73,15 @@ function fixture(t) {
         remoteIdentitySha256: '5'.repeat(64), remoteOid: HEAD,
         hugoConfig: { path: 'hugo.yaml', sha256: '6'.repeat(64) } });
     const stagingProof = [{ stagingRunId: STAGE, manifestSha256: stageManifest.manifestSha256,
-        manifestFileSha256: stageManifestFileSha256, crosswalkId: PLAN, selectedBindingSha256: stageManifest.selectedBindingSha256,
+        manifestFileSha256: stageManifestFileSha256, rendererImplementationSha256: RENDERER,
+        crosswalkId: PLAN, selectedBindingSha256: stageManifest.selectedBindingSha256,
         pageSetSha256: stageManifest.pageSetSha256, assetSetSha256: stageManifest.assetSetSha256,
         analysisBindingsSha256: api.stableHash(stageManifest.pages.map(page => ({ paperId: page.paperId, pageKey: page.pageKey,
             analysisRunId: page.analysisRunId, analysisFileSha256: page.analysisFileSha256,
             taxonomyAssignmentSha256: page.taxonomyAssignmentSha256, taxonomyFileSha256: page.taxonomyFileSha256 }))) }];
     const dailyProof = [{ aggregateRunId: AGG, date: DATE, manifestSha256: aggregate.manifestSha256,
         manifestFileSha256: sha(fs.readFileSync(aggFile)), stagingSetSha256: aggregateSource.stagingSetSha256,
+        rendererImplementationSha256: RENDERER,
         memberSetSha256: aggregate.memberSetSha256, markdownSha256: aggregate.markdownSha256 }];
     const analysisSources = [{ paperId: stageManifest.pages[0].paperId, pageKey: stageManifest.pages[0].pageKey,
         analysisRunId: STAGE, analysisFileSha256: 'a'.repeat(64), authorityName: 'authority.json',
@@ -87,6 +92,7 @@ function fixture(t) {
         inventoryHugoConfig: blogState().hugoConfig, inventoryHead: HEAD, inventoryContentTreeOid: CONTENT_TREE,
         inventoryRemoteName: 'origin', inventoryRemoteIdentitySha256: '5'.repeat(64),
         inventoryRemoteMain: { availability: 'available', oid: HEAD, ref: 'refs/remotes/origin/main' },
+        rendererImplementationSha256: RENDERER,
         pageStagingRuns: stagingProof, pageStagingSetSha256: api.stableHash(stagingProof), dailyRuns: dailyProof,
         dailyRunSetSha256: api.stableHash(dailyProof), analysisSources,
         analysisSourceSetSha256: api.stableHash(analysisSources) };
@@ -333,6 +339,7 @@ test('successor generation requires an intact authenticated predecessor bundle',
     plan.batchSetSha256 = api.stableHash(plan.batches);
     const dailyProof = { aggregateRunId: AGG, date: date2, manifestSha256: producer.manifestSha256,
         manifestFileSha256: producer.manifestFileSha256, stagingSetSha256: '9'.repeat(64),
+        rendererImplementationSha256: RENDERER,
         memberSetSha256: 'a'.repeat(64), markdownSha256: sha(fresh2) };
     plan.producerReplay.dailyRuns.push(dailyProof);
     plan.producerReplay.dailyRuns.sort((a, b) => `${a.date}\0${a.aggregateRunId}`.localeCompare(`${b.date}\0${b.aggregateRunId}`));

@@ -17,9 +17,18 @@ const OBSERVATION_CONTRACT = 'arxiv-paper-source-observation-v1';
 const FETCHER_CONTRACT = 'deep-analyzer-official-arxiv-fulltext-v1';
 const VERSION = 1;
 const LOCK_STALE_MS = 15 * 60 * 1000;
+const LOCK_HEARTBEAT_MS = 30 * 1000;
+const LOCK_OWNER_CONTRACT = 'arxiv-source-authority-lock-owner-v1';
 const SAFE_AUTHORITY_NAME = /^arxiv-[0-9]{4}\.[0-9]{4,5}(?:-[a-z0-9][a-z0-9._-]{0,80})?\.json$/;
 const PRODUCTION_HANDLES = new WeakSet();
 const PRODUCTION_HANDLE_DATA = new WeakMap();
+const LOCK_HANDLES = new WeakSet();
+const LOCK_HANDLE_DATA = new WeakMap();
+const STOPPING_LOCK_HANDLES = new WeakSet();
+const ACTIVE_LOCK_HANDLES = new Set();
+const LOCK_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM']);
+let lockSignalHandlersInstalled = false;
+let handlingLockSignal = false;
 
 class ArxivSourceAuthorityError extends Error {
     constructor(message) {
@@ -80,6 +89,10 @@ function readBytes(filename, max = 64 * 1024 * 1024) {
         if (bytes.length !== stat.size) fail(`artifact changed while read: ${path.basename(filename)}`);
         return bytes;
     } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+function syncDirectory(directory) {
+    const fd = fs.openSync(directory, fs.constants.O_RDONLY);
+    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 function writeExact(filename, bytes) {
     const payload = Buffer.from(bytes); let fd;
@@ -185,24 +198,262 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
     };
     return { text: details.text, observation, sourceDetails };
 }
-function acquireLock(root, arxivId) {
-    const lock = path.join(root, `.arxiv-${arxivId}.lock`);
-    try { fs.mkdirSync(lock, { mode: 0o700 }); }
-    catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const stat = fs.lstatSync(lock);
-        if (!stat.isDirectory() || stat.isSymbolicLink() || Date.now() - stat.mtimeMs < LOCK_STALE_MS) fail(`source operation is locked: ${arxivId}`);
-        let owner = null;
-        try { owner = JSON.parse(readBytes(path.join(lock, 'owner.json'), 4096).toString('utf8')); } catch { fail('stale lock has invalid owner evidence'); }
-        if (owner.hostname !== os.hostname() || (Number.isSafeInteger(owner.pid) && owner.pid > 0 && (() => { try { process.kill(owner.pid, 0); return true; } catch (caught) { return caught.code !== 'ESRCH'; } })())) {
-            fail('stale lock ownership cannot be safely reclaimed');
-        }
-        fs.rmSync(lock, { recursive: true }); fs.mkdirSync(lock, { mode: 0o700 });
+function lockOwnerRecord(arxivId, token = crypto.randomUUID()) {
+    if (!identityApi.ARXIV_ID_RE.test(String(arxivId || ''))) fail('lock arxivId must be normalized');
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(token)) {
+        fail('lock token must be a UUID v4');
     }
-    writeExact(path.join(lock, 'owner.json'), prettyBytes({ pid: process.pid, hostname: os.hostname(), createdAt: new Date().toISOString() }));
-    return lock;
+    const startedAt = new Date().toISOString();
+    const body = { contract: LOCK_OWNER_CONTRACT, version: VERSION, arxivId, pid: process.pid,
+        hostname: os.hostname(), token, startedAt, leaseMs: LOCK_STALE_MS };
+    return { ...body, ownerSha256: stableHash(body) };
 }
-function releaseLock(lock) { fs.rmSync(lock, { recursive: true }); }
+function validateLockOwner(value, arxivId) {
+    const keys = ['contract', 'version', 'arxivId', 'pid', 'hostname', 'token', 'startedAt', 'leaseMs', 'ownerSha256'];
+    const body = value && { ...value }; if (body) delete body.ownerSha256;
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join('\0') !== keys.sort().join('\0')
+        || value.contract !== LOCK_OWNER_CONTRACT || value.version !== VERSION
+        || value.arxivId !== arxivId || !Number.isSafeInteger(value.pid) || value.pid < 1
+        || typeof value.hostname !== 'string' || !value.hostname || value.hostname.length > 255
+        || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value.token || '')
+        || Number.isNaN(Date.parse(value.startedAt || ''))
+        || new Date(value.startedAt).toISOString() !== value.startedAt
+        || value.leaseMs !== LOCK_STALE_MS || value.ownerSha256 !== stableHash(body)) {
+        fail('source lock owner evidence is invalid');
+    }
+    return value;
+}
+function inspectLockDirectory(lockPath, arxivId, label = 'source operation lock') {
+    const directory = fs.lstatSync(lockPath);
+    if (!directory.isDirectory() || directory.isSymbolicLink() || fs.realpathSync(lockPath) !== lockPath) {
+        fail(`${label} is not a canonical directory`);
+    }
+    if (process.platform !== 'win32' && (directory.mode & 0o777) !== 0o700) {
+        fail(`${label} permissions must be 0700`);
+    }
+    const entries = fs.readdirSync(lockPath).sort();
+    if (entries.length > 1 || entries.length === 1 && entries[0] !== 'owner.json') {
+        fail(`${label} contains unexpected entries`);
+    }
+    if (!entries.length) return { kind: 'empty', lockPath, arxivId, directoryDev: directory.dev,
+        directoryIno: directory.ino, directoryMtimeMs: directory.mtimeMs, entries };
+    const ownerPath = path.join(lockPath, 'owner.json'); const ownerInfo = fs.lstatSync(ownerPath);
+    if (!ownerInfo.isFile() || ownerInfo.isSymbolicLink() || ownerInfo.nlink !== 1) {
+        fail(`${label} owner is not a private regular file`);
+    }
+    if (process.platform !== 'win32' && (ownerInfo.mode & 0o777) !== 0o600) {
+        fail(`${label} owner permissions must be 0600`);
+    }
+    let bytes; let record = null;
+    try {
+        bytes = readBytes(ownerPath, 64 * 1024);
+        const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        const parsed = JSON.parse(decoded);
+        if (!bytes.equals(prettyBytes(parsed))) fail('source lock owner bytes are not canonical');
+        record = validateLockOwner(parsed, arxivId);
+    } catch (error) {
+        if (error instanceof ArxivSourceAuthorityError) {
+            try { bytes = bytes || readBytes(ownerPath, 64 * 1024); }
+            catch { throw error; }
+        } else {
+            try { bytes = readBytes(ownerPath, 64 * 1024); }
+            catch { throw error; }
+        }
+    }
+    return { kind: record ? 'valid' : 'invalid-owner', lockPath, arxivId,
+        directoryDev: directory.dev, directoryIno: directory.ino, directoryMtimeMs: directory.mtimeMs,
+        entries, ownerDev: ownerInfo.dev, ownerIno: ownerInfo.ino, ownerMtimeMs: ownerInfo.mtimeMs,
+        ownerFileSha256: sha256(bytes), record };
+}
+function sameLockSnapshot(left, right, { includeLeaseMtime = false } = {}) {
+    return left.kind === right.kind && left.lockPath === right.lockPath
+        && left.directoryDev === right.directoryDev && left.directoryIno === right.directoryIno
+        && (!includeLeaseMtime || left.directoryMtimeMs === right.directoryMtimeMs)
+        && JSON.stringify(left.entries) === JSON.stringify(right.entries)
+        && left.ownerDev === right.ownerDev && left.ownerIno === right.ownerIno
+        && (!includeLeaseMtime || left.ownerMtimeMs === right.ownerMtimeMs)
+        && left.ownerFileSha256 === right.ownerFileSha256
+        && (left.record?.ownerSha256 || null) === (right.record?.ownerSha256 || null);
+}
+function lockSnapshotIsStale(snapshot, now = Date.now()) {
+    const heartbeat = Math.max(snapshot.directoryMtimeMs, snapshot.ownerMtimeMs || 0);
+    return now - heartbeat >= LOCK_STALE_MS;
+}
+function lockSnapshotIsReclaimable(snapshot, dependencies = {}) {
+    const now = dependencies.nowMs ? dependencies.nowMs() : Date.now();
+    if (!lockSnapshotIsStale(snapshot, now)) return false;
+    if (snapshot.kind !== 'valid') return true;
+    if (snapshot.record.hostname !== os.hostname()) return true;
+    const processKill = dependencies.processKill || process.kill.bind(process);
+    try {
+        processKill(snapshot.record.pid, 0);
+        return false;
+    } catch (error) {
+        // EPERM proves that a process occupies the PID even though we cannot
+        // signal it.  Only ESRCH is positive evidence that the local owner is
+        // gone; every other platform error fails closed.
+        return error?.code === 'ESRCH';
+    }
+}
+function removeExactLockDirectory(snapshot, label, options = {}) {
+    options.beforeInspect?.(snapshot, label);
+    const current = inspectLockDirectory(snapshot.lockPath, snapshot.arxivId, label);
+    if (!sameLockSnapshot(snapshot, current, { includeLeaseMtime: options.includeLeaseMtime === true })) {
+        fail(`${label} changed before removal`);
+    }
+    if (options.requireReclaimable === true
+        && !lockSnapshotIsReclaimable(current, options.dependencies || {})) {
+        fail(`${label} renewed or has a live local owner before removal`);
+    }
+    if (current.entries.length === 1) fs.unlinkSync(path.join(current.lockPath, 'owner.json'));
+    fs.rmdirSync(current.lockPath); syncDirectory(path.dirname(current.lockPath));
+}
+function writeLockOwner(ownerPath, bytes, dependencies = {}) {
+    const io = dependencies.io || fs; const payload = Buffer.from(bytes); let fd; let created;
+    try {
+        fd = io.openSync(ownerPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+        created = (io.fstatSync || fs.fstatSync)(fd, { bigint: true }); let offset = 0;
+        while (offset < payload.length) {
+            const written = io.writeSync(fd, payload, offset, payload.length - offset, offset);
+            if (!Number.isSafeInteger(written) || written <= 0 || written > payload.length - offset) {
+                fail('short source lock owner write');
+            }
+            offset += written;
+        }
+        io.fsyncSync(fd); io.closeSync(fd); fd = undefined;
+    } catch (error) {
+        if (fd !== undefined) { try { io.closeSync(fd); } finally { fd = undefined; } }
+        if (created) {
+            try {
+                const named = fs.lstatSync(ownerPath, { bigint: true });
+                if (named.isFile() && !named.isSymbolicLink() && named.nlink === 1n
+                    && named.dev === created.dev && named.ino === created.ino) fs.unlinkSync(ownerPath);
+            } catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
+        }
+        throw error;
+    } finally { if (fd !== undefined) io.closeSync(fd); }
+    syncDirectory(path.dirname(ownerPath));
+}
+function createLockDirectory(lockPath, arxivId, dependencies = {}) {
+    fs.mkdirSync(lockPath, { mode: 0o700 }); const owner = lockOwnerRecord(arxivId);
+    try { writeLockOwner(path.join(lockPath, 'owner.json'), prettyBytes(owner), dependencies); }
+    catch (error) {
+        try { if (fs.readdirSync(lockPath).length === 0) fs.rmdirSync(lockPath); } catch {}
+        throw error;
+    }
+    return inspectLockDirectory(lockPath, arxivId);
+}
+function clearOrRejectReclaimMarker(reclaimPath, arxivId, dependencies = {}) {
+    let marker;
+    try { marker = inspectLockDirectory(reclaimPath, arxivId, 'source lock reclaim marker'); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    if (!lockSnapshotIsReclaimable(marker, dependencies)) fail(`source lock reclaim is active: ${arxivId}`);
+    removeExactLockDirectory(marker, 'source lock reclaim marker', {
+        includeLeaseMtime: true, requireReclaimable: true, dependencies
+    });
+}
+function uninstallLockSignalHandlers() {
+    if (!lockSignalHandlersInstalled) return;
+    for (const signal of LOCK_SIGNALS) process.removeListener(signal, handleLockSignal);
+    lockSignalHandlersInstalled = false;
+}
+function handleLockSignal(signal) {
+    if (handlingLockSignal) return;
+    handlingLockSignal = true;
+    const otherListeners = process.listeners(signal).filter(listener => listener !== handleLockSignal);
+    for (const handle of [...ACTIVE_LOCK_HANDLES]) {
+        STOPPING_LOCK_HANDLES.add(handle);
+        const state = LOCK_HANDLE_DATA.get(handle);
+        // With a caller-owned handler an asynchronous fetch may continue after
+        // this callback.  Retain its lock until the operation observes the
+        // stopping flag and unwinds; idle/raw handles are safe to release now.
+        if (otherListeners.length && state?.operationActive) continue;
+        try { releaseLock(handle); }
+        catch (error) { try { process.stderr.write(`[arxiv-source-lock] ${signal} cleanup refused: ${error.message}\n`); } catch {} }
+    }
+    uninstallLockSignalHandlers(); handlingLockSignal = false;
+    if (!otherListeners.length) setImmediate(() => process.kill(process.pid, signal));
+}
+function installLockSignalHandlers() {
+    if (lockSignalHandlersInstalled) return;
+    // Run before caller-installed once/on handlers so their presence remains
+    // observable and cleanup never re-emits a signal they intended to handle.
+    for (const signal of LOCK_SIGNALS) process.prependListener(signal, handleLockSignal);
+    lockSignalHandlersInstalled = true;
+}
+function startLockHeartbeat(handle) {
+    const timer = setInterval(() => {
+        const expected = LOCK_HANDLE_DATA.get(handle); if (!expected) return clearInterval(timer);
+        try {
+            const current = inspectLockDirectory(expected.lockPath, expected.arxivId);
+            if (!sameLockSnapshot(expected.snapshot, current)) return clearInterval(timer);
+            const now = new Date(); fs.utimesSync(path.join(expected.lockPath, 'owner.json'), now, now);
+        } catch { clearInterval(timer); }
+    }, LOCK_HEARTBEAT_MS);
+    timer.unref?.(); return timer;
+}
+function acquireLock(root, arxivId, dependencies = {}) {
+    const lockPath = path.join(root, `.arxiv-${arxivId}.lock`);
+    const reclaimPath = `${lockPath}.reclaim`;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+        clearOrRejectReclaimMarker(reclaimPath, arxivId, dependencies);
+        try {
+            const snapshot = createLockDirectory(lockPath, arxivId, dependencies);
+            const handle = Object.freeze(Object.create(null)); LOCK_HANDLES.add(handle);
+            LOCK_HANDLE_DATA.set(handle, { lockPath, arxivId, snapshot, heartbeat: null,
+                operationActive: false });
+            LOCK_HANDLE_DATA.get(handle).heartbeat = startLockHeartbeat(handle);
+            ACTIVE_LOCK_HANDLES.add(handle); installLockSignalHandlers(); return handle;
+        } catch (error) { if (error.code !== 'EEXIST') throw error; }
+        const stale = inspectLockDirectory(lockPath, arxivId);
+        if (!lockSnapshotIsReclaimable(stale, dependencies)) fail(`source operation is locked: ${arxivId}`);
+        let reclaim;
+        try { reclaim = createLockDirectory(reclaimPath, arxivId, dependencies); }
+        catch (error) { if (error.code === 'EEXIST') continue; throw error; }
+        try {
+            let current;
+            try { current = inspectLockDirectory(lockPath, arxivId); }
+            catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+            if (!sameLockSnapshot(stale, current, { includeLeaseMtime: true })
+                || !lockSnapshotIsReclaimable(current, dependencies)) {
+                fail('source operation lock changed during stale reclaim');
+            }
+            removeExactLockDirectory(current, 'source operation lock', {
+                includeLeaseMtime: true,
+                requireReclaimable: true,
+                dependencies,
+                beforeInspect: dependencies.beforeReclaimRemoval
+            });
+        } finally { removeExactLockDirectory(reclaim, 'source lock reclaim marker'); }
+    }
+    fail(`source lock acquisition exceeded bounded reclaim attempts: ${arxivId}`);
+}
+function beginLockOperation(handle) {
+    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) {
+        fail('authenticated source lock handle required');
+    }
+    LOCK_HANDLE_DATA.get(handle).operationActive = true;
+}
+function assertLockWritable(handle) {
+    if (STOPPING_LOCK_HANDLES.has(handle)) fail('source operation is stopping after process signal');
+    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) {
+        fail('source operation lock is no longer held');
+    }
+}
+function releaseLock(handle) {
+    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('authenticated source lock handle required');
+    const expected = LOCK_HANDLE_DATA.get(handle); const current = inspectLockDirectory(expected.lockPath, expected.arxivId);
+    if (!sameLockSnapshot(expected.snapshot, current) || current.record?.token !== expected.snapshot.record?.token
+        || current.record?.pid !== process.pid || current.record?.hostname !== os.hostname()) {
+        fail('source operation lock changed while held');
+    }
+    clearInterval(expected.heartbeat); removeExactLockDirectory(current, 'source operation lock');
+    ACTIVE_LOCK_HANDLES.delete(handle); LOCK_HANDLES.delete(handle); LOCK_HANDLE_DATA.delete(handle);
+    if (ACTIVE_LOCK_HANDLES.size === 0 && !handlingLockSignal) setImmediate(() => {
+        if (ACTIVE_LOCK_HANDLES.size === 0 && !handlingLockSignal) uninstallLockSignalHandlers();
+    });
+}
 
 function liveProductionHandle(genericHandle, sourceDetails) {
     const base = authorityApi.authorityHandleSnapshot(genericHandle);
@@ -250,7 +501,13 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         officialUrl: `https://arxiv.org/abs/${arxivId}`, artifacts: clone(names) };
     if (!apply) return planned;
     const lock = acquireLock(root, arxivId);
+    beginLockOperation(lock);
+    const writeArtifact = (filename, bytes) => {
+        assertLockWritable(lock);
+        return writeExact(filename, bytes);
+    };
     try {
+        assertLockWritable(lock);
         const authorityFile = path.join(root, authorityName);
         if (fs.existsSync(authorityFile)) {
             const generic = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName });
@@ -258,7 +515,8 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             if (snapshot.authority.paperId !== planned.paperId) fail('existing authority belongs to another arXiv source');
             if (!requireLiveAuthorization) return { ...planned, status: 'recovered', authorityHandle: generic, authority: snapshot };
             const fetched = normalizeFetchedSource(
-                await require('../deep-analyzer.js').fetchArxivTextDetailed(arxivId), arxivId, now);
+                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
+            assertLockWritable(lock);
             const persistedText = readBytes(path.join(root, names.fulltextName));
             const persistedObservation = readCanonicalJson(path.join(root, names.observationName)).value;
             const comparable = value => { const copy = clone(value); delete copy.fetchedAt; delete copy.observationSha256; return copy; };
@@ -274,7 +532,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         if (fs.existsSync(requestFile)) request = validateRequest(readCanonicalJson(requestFile).value, { arxivId, authorityName });
         else {
             request = requestFor({ arxivId, authorityName, operationId: operationId || crypto.randomUUID(), now });
-            writeExact(requestFile, prettyBytes(request));
+            writeArtifact(requestFile, prettyBytes(request));
         }
         const observationFile = path.join(root, names.observationName); const fulltextFile = path.join(root, names.fulltextName);
         let observation; let text; let liveSourceDetails = null;
@@ -284,9 +542,11 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             if (observation.paperId !== planned.paperId || observation.observationSha256 !== stableHash((({ observationSha256: _, ...body }) => body)(observation))) fail('cached source observation drifted');
         } else {
             const fetched = normalizeFetchedSource(
-                await require('../deep-analyzer.js').fetchArxivTextDetailed(arxivId), arxivId, now);
+                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
+            assertLockWritable(lock);
             observation = fetched.observation; text = fetched.text; liveSourceDetails = fetched.sourceDetails;
-            writeExact(observationFile, prettyBytes(observation)); writeExact(fulltextFile, Buffer.from(text, 'utf8'));
+            writeArtifact(observationFile, prettyBytes(observation));
+            writeArtifact(fulltextFile, Buffer.from(text, 'utf8'));
         }
         const requestRead = readCanonicalJson(requestFile); const observationRead = readCanonicalJson(observationFile);
         const fulltextBytes = readBytes(fulltextFile); const fulltextSha256 = sha256(fulltextBytes);
@@ -297,7 +557,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             observationFileSha256: observationRead.sha256, observationSha256: observation.observationSha256,
             fulltextName: names.fulltextName, fulltextSha256 };
         const sourceSnapshot = seal(snapshotBody, 'snapshotSha256');
-        const snapshotFileSha256 = writeExact(path.join(root, names.snapshotName), prettyBytes(sourceSnapshot));
+        const snapshotFileSha256 = writeArtifact(path.join(root, names.snapshotName), prettyBytes(sourceSnapshot));
         const receiptBody = { contract: RECEIPT_CONTRACT, version: VERSION, operationId: request.operationId,
             requestName: names.requestName, requestFileSha256: requestRead.sha256, requestSha256: request.requestSha256,
             snapshotName: names.snapshotName, snapshotFileSha256, snapshotSha256: sourceSnapshot.snapshotSha256,
@@ -305,7 +565,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             observationSha256: observation.observationSha256, fulltextName: names.fulltextName, fulltextSha256,
             fetcherContract: FETCHER_CONTRACT };
         const receipt = seal(receiptBody, 'receiptSha256');
-        const receiptFileSha256 = writeExact(path.join(root, names.receiptName), prettyBytes(receipt));
+        const receiptFileSha256 = writeArtifact(path.join(root, names.receiptName), prettyBytes(receipt));
         const identity = identityFor(arxivId);
         const authorityBody = { contract: authorityApi.CONTRACT, version: authorityApi.VERSION,
             paperId: identity.canonicalId, identity, identitySha256: identityApi.identitySha256(identity),
@@ -316,11 +576,12 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
                 snapshotName: names.snapshotName, snapshotFileSha256, snapshotSha256: sourceSnapshot.snapshotSha256,
                 receiptName: names.receiptName, receiptFileSha256, receiptSha256: receipt.receiptSha256,
                 fulltextName: names.fulltextName, fulltextSha256 } };
-        const authority = seal(authorityBody, 'authoritySha256'); writeExact(authorityFile, prettyBytes(authority));
+        const authority = seal(authorityBody, 'authoritySha256'); writeArtifact(authorityFile, prettyBytes(authority));
         const generic = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName });
         if (!liveSourceDetails && requireLiveAuthorization) {
             const fetched = normalizeFetchedSource(
-                await require('../deep-analyzer.js').fetchArxivTextDetailed(arxivId), arxivId, now);
+                await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
+            assertLockWritable(lock);
             const comparable = value => { const copy = clone(value); delete copy.fetchedAt; delete copy.observationSha256; return copy; };
             if (!fulltextBytes.equals(Buffer.from(fetched.text, 'utf8'))
                 || stableHash(comparable(observation)) !== stableHash(comparable(fetched.observation))) {
@@ -331,10 +592,14 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         const handle = liveSourceDetails ? liveProductionHandle(generic, liveSourceDetails) : generic;
         return { ...planned, status: 'created', authorityHandle: handle,
             authority: authorityApi.authorityHandleSnapshot(handle) };
-    } finally { releaseLock(lock); }
+    } finally { if (LOCK_HANDLES.has(lock)) releaseLock(lock); }
 }
 
 module.exports = { REQUEST_CONTRACT, SNAPSHOT_CONTRACT, RECEIPT_CONTRACT, OBSERVATION_CONTRACT,
-    FETCHER_CONTRACT, VERSION, SAFE_AUTHORITY_NAME, ArxivSourceAuthorityError, identityFor, namesFor,
+    FETCHER_CONTRACT, LOCK_OWNER_CONTRACT, LOCK_STALE_MS, VERSION, SAFE_AUTHORITY_NAME,
+    ArxivSourceAuthorityError, identityFor, namesFor,
     requestFor, validateRequest, normalizeFetchedSource, prepareArxivSourceAuthority,
+    lockOwnerRecord, inspectLockDirectory, sameLockSnapshot, lockSnapshotIsStale,
+    lockSnapshotIsReclaimable,
+    acquireLock, releaseLock,
     productionAuthorityHandleSnapshot, replayProductionAuthorityHandle, readLiveProductionSourceDetails };

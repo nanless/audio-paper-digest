@@ -24,11 +24,68 @@ function source() {
         structuredArtifacts: { ...body, payloadSha256: crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex') } };
 }
 
+function frozenHistoricalRun(t, { runId, arxivId, runStatus, analysisStatus, legacyAnalysis = false }) {
+    const rootDir = fixture(t); const runDir = path.join(rootDir, runId);
+    fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
+    const metadata = { arxivId, paper_id: arxivId, title: `Frozen ${arxivId}`,
+        abstract: 'Frozen original abstract.', authors: ['Frozen Author'], categories: ['cs.SD'],
+        source: 'arxiv', sources: ['arxiv'] };
+    const metadataProof = { contract: history.METADATA_CONTRACT, paperId: `arxiv:${arxivId}`,
+        sourceName: 'tests/fixtures/frozen-historical-metadata.json', fileSha256: 'b'.repeat(64),
+        recordSha256: fresh.stableHash(metadata) };
+    const sourceSha256 = 'c'.repeat(64); const structuredArtifactsSha256 = 'd'.repeat(64);
+    const sourceSnapshotSha256 = 'e'.repeat(64);
+    const sourceExpectations = { [arxivId]: { sourceId: `${arxivId}v1`, sourceSha256,
+        structuredArtifactsSha256, authoritySha256: '1'.repeat(64),
+        authorityFileSha256: '2'.repeat(64), authoritySourceSnapshotSha256: '3'.repeat(64) } };
+    const provenance = { contract: fresh.FRESHNESS_CONTRACT, runId, sourceSha256,
+        structuredArtifactsSha256, sourceSnapshotSha256, sourceOnly: true,
+        oldGeneratedTextIncluded: false };
+    const paper = { ...metadata, freshRewriteProvenance: provenance,
+        analysisManifest: { version: 1, stages: legacyAnalysis ? {
+            primaryAnalysis: { status: 'complete', fingerprint: '4'.repeat(64) }
+        } : {}, freshRewriteProvenance: provenance } };
+    if (legacyAnalysis) paper.analysis = '冻结的旧版 v2 canonical，仅用于确认当前合同会要求升级。';
+    else { paper.analysisCheckpoint = ''; paper.analysisStageCheckpoints = {}; }
+    const inputs = { version: 1, contract: fresh.INPUT_CONTRACT, runId,
+        date: '2026-05-23', papers: [metadata] };
+    const inputsPath = path.join(runDir, 'inputs.json');
+    fs.writeFileSync(inputsPath, `${JSON.stringify(inputs, null, 2)}\n`, { mode: 0o600 });
+    const analysis = { version: 1, contract: fresh.ANALYSIS_CONTRACT, runId,
+        batchDate: '2026-05-23', status: analysisStatus, generation: 1, papers: [paper] };
+    const analysisPath = path.join(runDir, 'analysis.json');
+    fs.writeFileSync(analysisPath, JSON.stringify(analysis), { mode: 0o600 });
+    const baseline = { version: 1, contract: history.BASELINE_CONTRACT,
+        paperId: `arxiv:${arxivId}`, authorityName: `arxiv-${arxivId}.json`,
+        authorityFileSha256: '2'.repeat(64), authoritySha256: '1'.repeat(64),
+        authoritySourceSnapshotSha256: '3'.repeat(64), fulltextSha256: sourceSha256,
+        metadata: metadataProof };
+    const descriptor = { version: 1, contract: 'fresh-source-cache-v1', runId,
+        paperId: arxivId, sourceSha256, structuredArtifactsSha256, sourceSnapshotSha256 };
+    const run = { version: 1, contract: fresh.RUN_CONTRACT, freshnessContract: fresh.FRESHNESS_CONTRACT,
+        runId, date: '2026-05-23', createdAt: '2026-09-01T00:00:00.000Z', paperIds: [arxivId],
+        paperSetSha256: fresh.stableHash([arxivId]),
+        inputsSha256: crypto.createHash('sha256').update(fs.readFileSync(inputsPath)).digest('hex'),
+        baseline, sourceExpectations, metadataSources: { historicalRawMetadata: metadataProof },
+        sourceRecords: { [arxivId]: descriptor }, status: runStatus, generation: 1,
+        diagnostics: { analysisInvocations: 1, outerAnalysisEntries: {} } };
+    if (runStatus === 'complete') {
+        run.analysisSha256 = crypto.createHash('sha256').update(fs.readFileSync(analysisPath)).digest('hex');
+    }
+    run.identitySha256 = fresh.stableHash({ version: run.version, contract: run.contract,
+        runId: run.runId, date: run.date, paperIds: run.paperIds,
+        paperSetSha256: run.paperSetSha256, inputsSha256: run.inputsSha256,
+        baseline: run.baseline, sourceExpectations: run.sourceExpectations,
+        metadataSources: run.metadataSources });
+    fs.writeFileSync(path.join(runDir, 'run.json'), `${JSON.stringify(run, null, 2)}\n`, { mode: 0o600 });
+    return { rootDir, runDir, run, paper };
+}
+
 test('live authority creates an isolated fresh-engine run without old generated fields', async t => {
     const root = fixture(t); const authorityRoot = path.join(root, 'authority'); fs.mkdirSync(authorityRoot);
     const runRoot = path.join(root, 'runs');
-    const original = deep.fetchArxivTextDetailed; deep.fetchArxivTextDetailed = async () => source();
-    t.after(() => { deep.fetchArxivTextDetailed = original; });
+    const original = deep.fetchArxivTextDetailedUncached; deep.fetchArxivTextDetailedUncached = async () => source();
+    t.after(() => { deep.fetchArxivTextDetailedUncached = original; });
     const prepared = await arxiv.prepareArxivSourceAuthority({ authorityRoot, arxivId: '2609.03622',
         authorityName: 'arxiv-2609.03622.json', apply: true, now: '2026-09-07T00:00:00Z' });
     const metadata = { arxivId: '2609.03622', paper_id: '2609.03622', title: 'Official title',
@@ -80,8 +137,8 @@ test('prepare CLI requires an explicit stable run ID for recovery', () => {
 test('isolated run executes the fresh analysis callbacks and persists its own canonical', async t => {
     const root = fixture(t); const authorityRoot = path.join(root, 'authority'); fs.mkdirSync(authorityRoot);
     const runRoot = path.join(root, 'runs');
-    const original = deep.fetchArxivTextDetailed; deep.fetchArxivTextDetailed = async () => source();
-    t.after(() => { deep.fetchArxivTextDetailed = original; });
+    const original = deep.fetchArxivTextDetailedUncached; deep.fetchArxivTextDetailedUncached = async () => source();
+    t.after(() => { deep.fetchArxivTextDetailedUncached = original; });
     const prepared = await arxiv.prepareArxivSourceAuthority({ authorityRoot, arxivId: '2609.03622',
         authorityName: 'arxiv-2609.03622.json', apply: true, now: '2026-09-07T00:00:00Z' });
     const metadata = { arxivId: '2609.03622', paper_id: '2609.03622', title: 'Official title',
@@ -132,20 +189,16 @@ test('isolated run executes the fresh analysis callbacks and persists its own ca
         arxivId: '2609.03622', rootDir: runRoot }), /does not seal/);
 });
 
-test('real 2403/2512 v2 storage seals are explicitly queued for full contract upgrade', t => {
-    const rootDir = path.resolve(__dirname, '..', 'data', 'runtime', 'fresh-rewrites');
+test('frozen 2403/2512 v2 storage seals are explicitly queued for full contract upgrade', t => {
     const fixtures = [
         ['66759276-f030-4e3c-886e-6f5ca858b278', '2403.14817'],
         ['2a95c85b-f493-4d82-9ef1-758d7dfe2705', '2512.14629']
     ];
-    if (fixtures.some(([runId]) => !fs.existsSync(path.join(rootDir, runId, 'run.json')))) {
-        t.skip('real historical v2 fixtures are not present in this checkout');
-        return;
-    }
     for (const [runId, arxivId] of fixtures) {
-        const run = JSON.parse(fs.readFileSync(path.join(rootDir, runId, 'run.json')));
+        const frozen = frozenHistoricalRun(t, { runId, arxivId, runStatus: 'complete',
+            analysisStatus: 'complete', legacyAnalysis: true });
         const recovered = history.recoverHistoricalArxivRun({
-            runId, date: run.date, arxivId, rootDir,
+            runId, date: frozen.run.date, arxivId, rootDir: frozen.rootDir,
             now: '2026-09-07T00:00:00.000Z'
         });
         assert.equal(recovered.storageSealed, true, arxivId);
@@ -156,57 +209,46 @@ test('real 2403/2512 v2 storage seals are explicitly queued for full contract up
     }
 });
 
-test('real interrupted 2602 run with no operation owner is recoverable as full analysis', t => {
-    const rootDir = path.resolve(__dirname, '..', 'data', 'runtime', 'fresh-rewrites');
+test('frozen interrupted 2602 run without an operation lock is recoverable', t => {
     const runId = 'd663ab14-abae-4196-a363-a8d295befce5';
-    if (!fs.existsSync(path.join(rootDir, runId, 'run.json'))) {
-        t.skip('real interrupted 2602 fixture is not present in this checkout');
-        return;
-    }
-    const run = JSON.parse(fs.readFileSync(path.join(rootDir, runId, 'run.json')));
-    const recovered = history.recoverHistoricalArxivRun({ runId, date: run.date,
-        arxivId: run.paperIds[0], rootDir, now: '2026-09-07T00:00:00.000Z' });
+    const frozen = frozenHistoricalRun(t, { runId, arxivId: '2602.05847',
+        runStatus: 'analyzing', analysisStatus: 'running' });
+    const recovered = history.recoverHistoricalArxivRun({ runId, date: frozen.run.date,
+        arxivId: '2602.05847', rootDir: frozen.rootDir, now: '2026-09-07T00:00:00.000Z' });
     assert.equal(recovered.storedStatus, 'analyzing');
-    assert.ok(['missing', 'stale_non_live_owner', 'stale_unowned'].includes(
-        recovered.operationLock.reason
-    ));
+    assert.equal(recovered.operationLock.reason, 'missing');
     assert.equal(recovered.operationLock.reclaimable, true);
     assert.equal(recovered.interruptedRecoverable, true);
     assert.equal(recovered.status, 'analysis_partial');
     assert.equal(recovered.recoveryKind, 'full');
 });
 
-test('interrupted 2602 recovery blocks a live operation owner and accepts only an old dead owner', t => {
-    const sourceRoot = path.resolve(__dirname, '..', 'data', 'runtime', 'fresh-rewrites');
+test('frozen interrupted 2602 recovery blocks a live operation owner and accepts only an old dead owner', t => {
     const runId = 'd663ab14-abae-4196-a363-a8d295befce5';
-    const sourceDir = path.join(sourceRoot, runId);
-    if (!fs.existsSync(path.join(sourceDir, 'run.json'))) {
-        t.skip('real interrupted 2602 fixture is not present in this checkout');
-        return;
-    }
-    const rootDir = fixture(t);
-    const runDir = path.join(rootDir, runId);
-    fs.cpSync(sourceDir, runDir, { recursive: true });
-    const run = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json')));
-    const lockPath = path.join(runDir, '.operation.lock');
+    const frozen = frozenHistoricalRun(t, { runId, arxivId: '2602.05847',
+        runStatus: 'analyzing', analysisStatus: 'running' });
+    const lockPath = path.join(frozen.runDir, '.operation.lock');
     fs.mkdirSync(lockPath, { mode: 0o700, recursive: true });
+    fs.chmodSync(lockPath, 0o700);
     fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
-        pid: process.pid, hostname: os.hostname(), token: 'active-owner'
+        pid: process.pid, hostname: os.hostname(), token: '11111111-1111-4111-8111-111111111111',
+        acquiredAt: '2026-09-06T00:00:00.000Z'
     }), { mode: 0o600 });
     const old = new Date('2026-09-06T00:00:00.000Z');
     fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
-    let recovered = history.recoverHistoricalArxivRun({ runId, date: run.date,
-        arxivId: run.paperIds[0], rootDir, now: '2026-09-07T00:00:00.000Z' });
+    let recovered = history.recoverHistoricalArxivRun({ runId, date: frozen.run.date,
+        arxivId: '2602.05847', rootDir: frozen.rootDir, now: '2026-09-07T00:00:00.000Z' });
     assert.equal(recovered.operationLock.reason, 'live_local_owner');
     assert.equal(recovered.operationBlocked, true);
     assert.equal(recovered.status, 'analyzing');
 
     fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
-        pid: 2147483647, hostname: os.hostname(), token: 'dead-owner'
+        pid: 2147483647, hostname: os.hostname(), token: '22222222-2222-4222-8222-222222222222',
+        acquiredAt: '2026-09-06T00:00:00.000Z'
     }), { mode: 0o600 });
     fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
-    recovered = history.recoverHistoricalArxivRun({ runId, date: run.date,
-        arxivId: run.paperIds[0], rootDir, now: '2026-09-07T00:00:00.000Z' });
+    recovered = history.recoverHistoricalArxivRun({ runId, date: frozen.run.date,
+        arxivId: '2602.05847', rootDir: frozen.rootDir, now: '2026-09-07T00:00:00.000Z' });
     assert.equal(recovered.operationLock.reclaimable, true);
     assert.equal(recovered.interruptedRecoverable, true);
     assert.equal(recovered.status, 'analysis_partial');

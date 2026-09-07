@@ -2473,6 +2473,28 @@ primary_task_tag: #音视频生成
         assert.throws(() => bindApiReaderSourceEvidence(article, quoteBinding, [], options),
             error => /关键数字缺少 exact quote\/cell 证据: 9.99/.test(error.message)
                 && /row=2,column=1 text="9.99" missing=9.99/.test(error.message));
+        const secondSource = 'A second held-out evaluation reports 0.812 for the verified condition.';
+        const multiArticle = `${article}\n\n另一张表使用独立评测口径核对第二组结果。\n\n`
+            + '| 第二条件 | 数值 |\n| --- | --- |\n| 原文报告 | 0.812 |\n| 草稿推断 | 1.4% |'
+            + '\n\n第二组结论同样只能保留可以逐字回放的数字。';
+        const multiSource = `${sourceText}\n${secondSource}`;
+        const multiOptions = { sourceText: multiSource,
+            structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, multiSource),
+            allowDeterministicQuoteRepair: true };
+        assert.throws(() => bindApiReaderSourceEvidence(multiArticle, [
+            quoteBinding[0],
+            { tableIndex: 2, sourceType: 'source_quotes', sourceTableOrdinal: null,
+                cellBindings: [], sourceQuotes: [secondSource] }
+        ], [], multiOptions), error => /tableBindings\[0\][\s\S]*9\.99/.test(error.message)
+            && /tableBindings\[1\][\s\S]*1\.4%/.test(error.message));
+        const validMultiArticle = multiArticle
+            .replace('| 草稿推断 | 9.99 |\n', '')
+            .replace('| 草稿推断 | 1.4% |', '');
+        assert.strictEqual(bindApiReaderSourceEvidence(validMultiArticle, [
+            quoteBinding[0],
+            { tableIndex: 2, sourceType: 'source_quotes', sourceTableOrdinal: null,
+                cellBindings: [], sourceQuotes: [secondSource] }
+        ], [], multiOptions).article, validMultiArticle);
         assert.match(article, /\| 草稿推断 \| 9\.99 \|/);
         assert.throws(() => bindApiReaderSourceEvidence(article,
             [{ tableIndex: 1, sourceType: 'artifact_table', sourceTableOrdinal: 1,

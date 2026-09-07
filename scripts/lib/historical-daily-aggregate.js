@@ -69,11 +69,12 @@ function readRegular(filename, maximum, label) {
 
 function normalizePageStagingManifest(value, stagingRunId) {
     exact(value, ['contract', 'version', 'stagingRunId', 'crosswalkId', 'crosswalkStateSha256',
-        'identityGroupsSha256', 'createdAt', 'pages', 'pageSetSha256', 'assets', 'assetSetSha256',
+        'identityGroupsSha256', 'rendererImplementationSha256', 'createdAt', 'pages', 'pageSetSha256', 'assets', 'assetSetSha256',
         'selectedBindings', 'selectedBindingSha256', 'manifestSha256'], 'page staging manifest');
     if (value.contract !== PAGE_STAGING_CONTRACT || value.version !== pageStagingApi.VERSION
         || value.stagingRunId !== stagingRunId || !UUID_RE.test(value.crosswalkId)
         || !SHA_RE.test(value.crosswalkStateSha256) || !SHA_RE.test(value.identityGroupsSha256)
+        || !SHA_RE.test(value.rendererImplementationSha256)
         || !SHA_RE.test(value.assetSetSha256) || !SHA_RE.test(value.selectedBindingSha256)
         || !Array.isArray(value.pages) || !value.pages.length) fail('page staging manifest identity/version is invalid');
     if (Number.isNaN(Date.parse(value.createdAt)) || new Date(value.createdAt).toISOString() !== value.createdAt) fail('page staging createdAt is invalid');
@@ -178,6 +179,11 @@ function loadAggregateInputs(options, dependencies = {}) {
         stagingRoot: options.stagingRoot, stagingRunId }));
     const crosswalkIds = [...new Set(stagedRuns.map(item => item.manifest.crosswalkId))];
     if (crosswalkIds.length !== 1) fail('all page staging runs must bind the same crosswalk');
+    const rendererImplementationShas = [...new Set(stagedRuns
+        .map(item => item.manifest.rendererImplementationSha256))];
+    if (rendererImplementationShas.length !== 1 || !SHA_RE.test(rendererImplementationShas[0] || '')) {
+        fail('all page staging runs must bind the same renderer implementation');
+    }
     const topology = (dependencies.bindTopology || bindTopology)({ crosswalkRoot: options.crosswalkRoot,
         crosswalkId: crosswalkIds[0], inventoryRoot: options.inventoryRoot });
     const stagedPages = [];
@@ -200,11 +206,13 @@ function loadAggregateInputs(options, dependencies = {}) {
                 || group.taxonomyFileSha256 !== page.taxonomyFileSha256) fail(`staging/canonical projection drifted for ${page.pageKey}`);
             stagedPages.push({ ...page, stagingRunId: staged.manifest.stagingRunId,
                 stagingManifestSha256: staged.manifest.manifestSha256,
+                rendererImplementationSha256: staged.manifest.rendererImplementationSha256,
                 canonical: canonicalProjection(group.paper, group.taxonomy) });
         }
     }
     if (new Set(stagedPages.map(page => page.pageKey)).size !== stagedPages.length) fail('page appears in multiple staging manifests');
-    return { topology, stagedRuns, stagedPages };
+    return { topology, stagedRuns, stagedPages,
+        rendererImplementationSha256: rendererImplementationShas[0] };
 }
 
 function aggregateRunIdFor(stagingRunIds) {
@@ -237,6 +245,13 @@ function renderDaily(date, members, labels) {
 
 function buildDailyAggregates({ inputs, date = null } = {}) {
     const { state, inventory } = inputs.topology; const pages = inventory.ledger.pages;
+    const rendererImplementationShas = [...new Set(inputs.stagedRuns
+        .map(item => item.manifest.rendererImplementationSha256))];
+    if (rendererImplementationShas.length !== 1 || !SHA_RE.test(rendererImplementationShas[0] || '')
+        || inputs.rendererImplementationSha256 !== undefined
+            && inputs.rendererImplementationSha256 !== rendererImplementationShas[0]) {
+        fail('daily aggregate renderer implementation binding is missing or mixed');
+    }
     const cohorts = [...new Set(state.source.papers.filter(page => page.scope.type === 'daily').map(page => page.cohortDate))].sort();
     const dates = date === null ? cohorts : cohorts.includes(date) ? [date] : [];
     if (!dates.length) fail('requested daily cohort is absent from crosswalk');
@@ -273,6 +288,7 @@ function buildDailyAggregates({ inputs, date = null } = {}) {
             outputPage: { pageKey: summary.pageId, path: summary.path, primaryUrl: summary.primaryUrl,
                 previousContentSha256: summary.contentSha256 },
             source: { stagingRuns, stagingSetSha256: stableHash(stagingRuns),
+                rendererImplementationSha256: rendererImplementationShas[0],
                 crosswalkId: state.crosswalkId, crosswalkStateSha256: state.stateSha256,
                 ledgerSha256: inventory.ledger.ledgerSha256, pageSetSha256: inventory.ledger.pageSetSha256,
                 taxonomyRegistrySha256: [...registryShas][0] },

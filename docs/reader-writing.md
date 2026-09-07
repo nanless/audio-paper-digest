@@ -23,8 +23,14 @@ Reader 的目标是让读者能够复述方法的执行过程，并判断实验�
 canonical 的 13 标题、评分和 provenance 继续保留，API 函数签名保持兼容，但它不再是默认 Reader 的写作素材。
 显式反馈修订另用 `reader-source-signed-revision-v1`；内容模式进入阶段与失败候选指纹，不能跨模式借用旧稿。
 
-现代 `beginner-researcher-v3` 的单篇和汇总页共用签名 `plan.oneSentenceThesis` 作为核心摘要；
-不再展示 canonical 的独立摘要、毒舌点评、资源复现配置或自然语言评分理由，以免与已核查 Reader 形成两套解释。
+现代 `beginner-researcher-v3` 的 `plan.oneSentenceThesis` 只用于 frontmatter、检索描述和一句话主线；
+当分析声明 `core-summary-detailed-v3` 时，单篇和汇总页的“核心摘要”必须逐字重放该阶段 SHA 封口、
+并由评分阶段再次绑定的 canonical 详细摘要，不能再退化成一句话。旧记录尚未升级到该合同时才维持
+兼容投影；这种兼容记录不能取得新的 LLM API production 发布证明。production binding 会同时封存
+摘要合同、摘要正文 SHA、摘要阶段 binding SHA，以及评分阶段的摘要输入/输出 SHA；受控插图只能通过
+Reader 的 source-bound Figure 物化进入最终页面。旧 `imageSupplement=complete` 成功记录没有保留可供
+Python 发布门禁重放的插图前正文，因此不能仅凭三个自声明 SHA 取得新的 production proof，必须升级
+为当前 Reader 流程。页面不再展示 canonical 的毒舌点评、资源复现配置或自然语言评分理由，以免与已核查 Reader 形成两套解释。
 资源区只按已封存的 resource identity 输出类型、原链接/重定向终点与可达状态；“模型相关资源”不等于本文权重，
 链接可访问不证明许可证、下载内容或运行复现。没有记录只说明本次开放状态尚未核实，不等于论文没有开源。
 八维分数与总分仅在页首显示；页尾评分来源由评分模型/协议元数据确定性生成，明确属于系统判断而非论文实验事实；

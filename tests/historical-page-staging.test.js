@@ -14,6 +14,7 @@ const CROSSWALK = '11111111-1111-4111-8111-111111111111';
 const STAGING = '22222222-2222-4222-8222-222222222222';
 const ANALYSIS_RUN = '33333333-3333-4333-8333-333333333333';
 const REGISTRY_SHA = '6'.repeat(64);
+const RENDERER_SHA = '5'.repeat(64);
 
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'page-staging-'));
@@ -35,6 +36,7 @@ function fixture(t) {
         identityGroups: [{ paperId: 'arxiv:2604.12527', identitySha256: '7'.repeat(64),
             identityRecordSha256: '8'.repeat(64), groupSha256: 'd'.repeat(64), pageKeys: keys }] };
     const dependencies = { readCrosswalk: () => state, findAssignment: () => ({ value: assignment, fileSha256: 'e'.repeat(64) }),
+        rendererImplementationSha256: () => RENDERER_SHA,
         loadTaxonomy: () => ({ registrySha256: REGISTRY_SHA }),
         loadRun: () => ({}), runSnapshot: () => ({ analysisFileSha256: 'a'.repeat(64), papers: [paper] }),
         buildAssignment: () => assignment,
@@ -51,12 +53,74 @@ test('one canonical projects to every verified duplicate page while preserving p
     assert.equal(result.selectedIdentities, 1); assert.equal(result.pageCount, 2);
     const manifest = JSON.parse(fs.readFileSync(path.join(f.root, STAGING, 'manifest.json')));
     assert.equal(api.normalizeStagingManifest(manifest).assets.length, 0);
+    assert.equal(manifest.rendererImplementationSha256, RENDERER_SHA);
     assert.equal(manifest.selectedBindingSha256, stableHash(manifest.selectedBindings));
     assert.deepEqual(manifest.pages.map(page => page.cohortDate), ['2026-04-19', '2026-04-21']);
     assert.deepEqual(manifest.pages.map(page => page.pagePath), ['content/posts/page-0.md', 'content/posts/page-1.md']);
     assert.match(fs.readFileSync(path.join(f.root, STAGING, 'pages/content/posts/page-0.md'), 'utf8'), /NEW PAGE/);
     assert.doesNotMatch(JSON.stringify(manifest), /old body|OLD_/);
     assert.equal(api.stageHistoricalPages(args, f.dependencies).status, 'recovered');
+});
+
+test('staging intent and manifest reject a renderer implementation change under the same immutable run id', t => {
+    const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: STAGING,
+        limit: 'pilot', analysisRunId: ANALYSIS_RUN, crosswalkRoot: '/unused', analysisRoot: '/unused',
+        taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root,
+        rendererImplementationSha256: RENDERER_SHA };
+    api.stageHistoricalPages(args, f.dependencies);
+    const intent = JSON.parse(fs.readFileSync(path.join(f.root, STAGING, 'intent.json')));
+    assert.equal(api.normalizeStagingIntent(intent).rendererImplementationSha256, RENDERER_SHA);
+    const replacement = '4'.repeat(64);
+    assert.throws(() => api.stageHistoricalPages({ ...args,
+        rendererImplementationSha256: replacement }, { ...f.dependencies,
+        rendererImplementationSha256: () => replacement }), /different selected inputs|implementation/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, STAGING, 'manifest.json')))
+        .rendererImplementationSha256, RENDERER_SHA);
+});
+
+test('renderer implementation drift during rendering cannot produce a manifest', t => {
+    const f = fixture(t); let reads = 0;
+    assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
+        stagingRunId: STAGING, limit: 'pilot', analysisRunId: ANALYSIS_RUN,
+        crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
+        taxonomyRegistry: '/unused', stagingRoot: f.root }, { ...f.dependencies,
+        rendererImplementationSha256: () => reads++ === 0 ? RENDERER_SHA : '4'.repeat(64) }),
+    /changed while rendering/);
+    assert.equal(fs.existsSync(path.join(f.root, STAGING, 'manifest.json')), false);
+});
+
+test('exact page left after an interrupted write resumes under the same intent and run id', t => {
+    const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK,
+        stagingRunId: STAGING, limit: 'pilot', analysisRunId: ANALYSIS_RUN,
+        crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
+        taxonomyRegistry: '/unused', stagingRoot: f.root };
+    let reads = 0;
+    assert.throws(() => api.stageHistoricalPages(args, { ...f.dependencies,
+        rendererImplementationSha256: () => reads++ === 0 ? RENDERER_SHA : '4'.repeat(64) }),
+    /changed while rendering/);
+    const partial = path.join(f.root, STAGING, 'pages/content/posts/page-0.md');
+    fs.mkdirSync(path.dirname(partial), { recursive: true });
+    fs.writeFileSync(partial, '---\ndate: 2026-04-19\n---\nNEW PAGE');
+    const resumed = api.stageHistoricalPages(args, f.dependencies);
+    assert.equal(resumed.status, 'staged');
+    assert.equal(fs.existsSync(path.join(f.root, STAGING, 'manifest.json')), true);
+});
+
+test('renderer implementation identity binds source files and output base-path configuration', () => {
+    const real = api.rendererImplementationIdentity();
+    assert.match(real.rendererImplementationSha256, /^[a-f0-9]{64}$/);
+    const fileBytes = relative => Buffer.from(`implementation:${relative}`);
+    const first = api.rendererImplementationIdentity({ blogBasePath: '/audio-paper-digest-blog',
+        readImplementationFile: (_absolute, relative) => fileBytes(relative) });
+    const changedFile = api.rendererImplementationIdentity({ blogBasePath: '/audio-paper-digest-blog',
+        readImplementationFile: (_absolute, relative) => Buffer.concat([
+            fileBytes(relative), Buffer.from(relative === 'scripts/publish-to-blog.py' ? ':changed' : '')
+        ]) });
+    const changedConfig = api.rendererImplementationIdentity({ blogBasePath: '/another-base',
+        readImplementationFile: (_absolute, relative) => fileBytes(relative) });
+    assert.notEqual(first.rendererImplementationSha256, changedFile.rendererImplementationSha256);
+    assert.notEqual(first.rendererImplementationSha256, changedConfig.rendererImplementationSha256);
+    assert.deepEqual(first.files.map(item => item.relativePath), api.RENDERER_IMPLEMENTATION_FILES);
 });
 
 test('selected binding replay tolerates later unrelated or same-identity pages but rejects selected-page drift', t => {

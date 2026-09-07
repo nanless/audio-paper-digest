@@ -1203,6 +1203,65 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             + ` 与正文表格数量 ${renderedTables.length} 不一致`
         );
     }
+    // Surface every otherwise well-formed source-quote table that is missing
+    // numeric evidence in one parser pass.  The repair protocol can patch up
+    // to eight independent nodes, so returning only the first table here made
+    // the model spend one request per table even when all deficits were known
+    // deterministically before the first repair.
+    const numericEvidenceFailures = [];
+    for (let index = 0; index < effectiveTableBindings.length; index += 1) {
+        const declared = effectiveTableBindings[index];
+        const rendered = renderedTables[index];
+        const renderedRows = [rendered.header, ...rendered.rows];
+        let binding = declared;
+        if (options.allowDeterministicQuoteRepair === true
+            && binding?.sourceType === 'artifact_table'
+            && !(options.selectionTableIndexes || []).includes(binding.tableIndex)
+            && !artifactTableBindingCanReplay(binding, renderedRows, structuredArtifacts)) {
+            const derived = deriveExactTableSourceQuotes(rendered.markdown, sourceText);
+            if (derived.length > 0) binding = { tableIndex: binding.tableIndex,
+                sourceType: 'source_quotes', sourceTableOrdinal: null,
+                cellBindings: [], sourceQuotes: derived };
+        }
+        if (!binding || binding.sourceType !== 'source_quotes'
+            || binding.sourceTableOrdinal !== null || !Array.isArray(binding.cellBindings)
+            || binding.cellBindings.length !== 0 || !Array.isArray(binding.sourceQuotes)
+            || binding.sourceQuotes.length < 1) continue;
+        const validDeclaredQuotes = binding.sourceQuotes.filter(quote => (
+            typeof quote === 'string' && quote.length >= 12 && quote.length <= 4000
+            && sourceText.includes(quote)
+        ));
+        const repairedQuotes = options.allowDeterministicQuoteRepair === true
+            ? deriveExactTableSourceQuotes(rendered.markdown, sourceText) : [];
+        const exactQuotes = [...new Set([...validDeclaredQuotes, ...repairedQuotes])];
+        if (exactQuotes.length === 0) continue;
+        const quoteCorpus = exactQuotes.join('\n');
+        const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
+            !readerNumericTokens(quoteCorpus).includes(token)
+        ));
+        if (!missingNumbers.length) continue;
+        const missingSet = new Set(missingNumbers);
+        const affectedCells = renderedRows.flatMap((row, rowIndex) => row.map((cell, columnIndex) => {
+            const missing = [...new Set(readerNumericTokens(cell))]
+                .filter(token => missingSet.has(token));
+            if (!missing.length) return null;
+            return `row=${rowIndex},column=${columnIndex}`
+                + ` text=${JSON.stringify(String(cell).slice(0, 120))}`
+                + ` missing=${missing.join(',')}`;
+        }).filter(Boolean)).slice(0, 6);
+        numericEvidenceFailures.push(
+            `tableBindings[${index}] 关键数字缺少 exact quote/cell 证据: `
+            + `${[...new Set(missingNumbers)].join(', ')}；未绑定单元格（行列从 0 开始，表头为第 0 行）：`
+            + affectedCells.join('；')
+        );
+    }
+    if (numericEvidenceFailures.length > 0) {
+        throw new Error(
+            `读者文章 ${numericEvidenceFailures.join('；另有 ')}`
+            + '。请一次核对并修复上述全部表格的数字、完整单位与对应来源句；时长应保留如“1 s”的单位写法，'
+            + '不要只写“1”或改成“1 秒”，也不要用其他语境中的同一数字补证据。'
+        );
+    }
     const tableIndexes = new Set();
     const tableBindings = effectiveTableBindings.map((declaredBinding, index) => {
         assertExactObjectKeys(
@@ -7134,6 +7193,13 @@ async function fetchArxivTextDetailed(arxivId) {
     return require('./lib/fresh-analysis-context.js').fetchFreshSource(arxivId, fetchArxivTextDetailedOriginal);
 }
 
+// Source-authority creation must prove a live official fetch even when called
+// from inside a fresh-analysis AsyncLocalStorage scope. Ordinary analysis keeps
+// using the cache-aware function above.
+async function fetchArxivTextDetailedUncached(arxivId) {
+    return fetchArxivTextDetailedOriginal(arxivId);
+}
+
 async function fetchArxivTextDetailedOriginal(arxivId) {
     const maxRetries = 6;
     const warnings = [];
@@ -11057,6 +11123,7 @@ module.exports = {
     getRemainingTimeoutMs,
     fetchArxivText,
     fetchArxivTextDetailed,
+    fetchArxivTextDetailedUncached,
     fetchArxivImageUrls,
     parseArxivImageInfosFromHtml,
     parseArxivStructuredArtifactsFromHtml,

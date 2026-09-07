@@ -67,6 +67,38 @@ function sleepSync(ms) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+const FILE_LOCK_OWNER_KEYS = Object.freeze(['acquiredAt', 'hostname', 'pid', 'token']);
+const FILE_LOCK_TOKEN_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+
+function jsonHasDuplicateObjectKeys(source) {
+    const stack = [];
+    for (const match of String(source).matchAll(/"(?:\\[\s\S]|[^"\\])*"|[{}\[\]:,]/g)) {
+        const token = match[0]; const top = stack.at(-1);
+        if (token === '{') stack.push({ object: true, keys: new Set(), expectKey: true });
+        else if (token === '[') stack.push({ object: false });
+        else if (token === '}' || token === ']') stack.pop();
+        else if (token === ',' && top?.object) top.expectKey = true;
+        else if (token.startsWith('"') && top?.object && top.expectKey) {
+            const key = JSON.parse(token);
+            if (top.keys.has(key)) return true;
+            top.keys.add(key); top.expectKey = false;
+        }
+    }
+    return false;
+}
+
+function exactFileLockOwner(owner) {
+    if (!owner || typeof owner !== 'object' || Array.isArray(owner)
+        || JSON.stringify(Object.keys(owner).sort()) !== JSON.stringify(FILE_LOCK_OWNER_KEYS)
+        || !Number.isInteger(owner.pid) || owner.pid <= 0
+        || typeof owner.hostname !== 'string' || !owner.hostname.trim()
+        || typeof owner.token !== 'string' || !FILE_LOCK_TOKEN_RE.test(owner.token)
+        || typeof owner.acquiredAt !== 'string') return false;
+    const acquiredAt = new Date(owner.acquiredAt);
+    return Number.isFinite(acquiredAt.getTime())
+        && acquiredAt.toISOString() === owner.acquiredAt;
+}
+
 function readFileLockSnapshot(lockPath) {
     let directory;
     try { directory = fs.lstatSync(lockPath); }
@@ -87,21 +119,33 @@ function readFileLockSnapshot(lockPath) {
         const fd = fs.openSync(ownerPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
         try {
             const opened = fs.fstatSync(fd);
-            if (opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size) {
+            if (opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
+                || opened.nlink !== 1) {
                 return { exists: true, consistent: false, lockPath, reason: 'owner_changed' };
             }
             ownerBytes = fs.readFileSync(fd);
             const after = fs.fstatSync(fd); const finalNamed = fs.lstatSync(ownerPath);
             if (ownerBytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
+                || after.nlink !== 1
                 || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs
                 || finalNamed.dev !== opened.dev || finalNamed.ino !== opened.ino
-                || finalNamed.size !== opened.size || finalNamed.mtimeMs !== opened.mtimeMs) {
+                || finalNamed.nlink !== 1 || finalNamed.size !== opened.size
+                || finalNamed.mtimeMs !== opened.mtimeMs) {
                 return { exists: true, consistent: false, lockPath, reason: 'owner_changed' };
             }
             ownerStat = opened;
         } finally { fs.closeSync(fd); }
-        try { owner = JSON.parse(ownerBytes.toString('utf8')); }
+        let ownerSource;
+        try { ownerSource = new TextDecoder('utf-8', { fatal: true }).decode(ownerBytes); }
+        catch { return { exists: true, consistent: false, lockPath, reason: 'invalid_owner_encoding' }; }
+        if (jsonHasDuplicateObjectKeys(ownerSource)) {
+            return { exists: true, consistent: false, lockPath, reason: 'duplicate_owner_key' };
+        }
+        try { owner = JSON.parse(ownerSource); }
         catch { return { exists: true, consistent: false, lockPath, reason: 'invalid_owner_json' }; }
+        if (!exactFileLockOwner(owner)) {
+            return { exists: true, consistent: false, lockPath, reason: 'invalid_owner_schema' };
+        }
     } catch (error) {
         if (error.code !== 'ENOENT') throw error;
     }
@@ -133,17 +177,21 @@ function readFileLockSnapshot(lockPath) {
         exists: true,
         consistent: true,
         lockPath,
-        directory: { dev: directory.dev, ino: directory.ino, mtimeMs: directory.mtimeMs },
+        directory: { dev: directory.dev, ino: directory.ino, mtimeMs: directory.mtimeMs,
+            mode: directory.mode & 0o777 },
         entryNames,
         owner: owner && typeof owner === 'object' ? {
             pid: owner.pid,
             hostname: owner.hostname,
             token: owner.token,
-            acquiredAt: owner.acquiredAt
+            acquiredAt: owner.acquiredAt,
+            keys: Object.keys(owner).sort()
         } : null,
         ownerFile: ownerStat ? {
             dev: ownerStat.dev,
             ino: ownerStat.ino,
+            nlink: ownerStat.nlink,
+            mode: ownerStat.mode & 0o777,
             size: ownerStat.size,
             mtimeMs: ownerStat.mtimeMs,
             sha256: crypto.createHash('sha256').update(ownerBytes).digest('hex')
@@ -160,11 +208,14 @@ function sameFileLockSnapshot(left, right, {
         || left.ownerFile && right.ownerFile
             && left.ownerFile.dev === right.ownerFile.dev
             && left.ownerFile.ino === right.ownerFile.ino
+            && left.ownerFile.nlink === right.ownerFile.nlink
+            && left.ownerFile.mode === right.ownerFile.mode
             && left.ownerFile.size === right.ownerFile.size
             && left.ownerFile.sha256 === right.ownerFile.sha256
             && (ignoreLeaseMtime || left.ownerFile.mtimeMs === right.ownerFile.mtimeMs);
     return left.directory.dev === right.directory.dev
         && left.directory.ino === right.directory.ino
+        && left.directory.mode === right.directory.mode
         && (ignoreDirectoryMtime || left.directory.mtimeMs === right.directory.mtimeMs)
         && JSON.stringify(left.owner) === JSON.stringify(right.owner)
         && Boolean(sameOwnerFile);
@@ -175,9 +226,22 @@ function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now()) {
     const ageMs = nowMs - (snapshot.ownerFile?.mtimeMs ?? snapshot.directory.mtimeMs);
     if (!(ageMs > staleMs)) return false;
     const owner = snapshot.owner;
-    if (!owner) return true;
+    if (!owner) return snapshot.directory.mode === 0o700 && snapshot.ownerFile === null;
     if (typeof owner.hostname !== 'string' || !owner.hostname
         || !Number.isInteger(owner.pid) || owner.pid <= 0) return false;
+    const strictCurrent = snapshot.directory.mode === 0o700
+        && snapshot.ownerFile?.mode === 0o600;
+    const exactLegacy = snapshot.directory.mode === 0o755
+        && snapshot.ownerFile?.mode === 0o644
+        && JSON.stringify(owner.keys) === JSON.stringify(['acquiredAt', 'hostname', 'pid', 'token'])
+        && typeof owner.token === 'string' && owner.token.length > 0
+        && typeof owner.acquiredAt === 'string'
+        && Number.isFinite(new Date(owner.acquiredAt).getTime());
+    if (!strictCurrent && !exactLegacy) return false;
+    // Legacy 0755/0644 locks predate the hardened protocol.  They are accepted
+    // only for this exact local-dead upgrade path; remote/unknown legacy owners
+    // are deliberately never reclaimed.
+    if (exactLegacy && owner.hostname !== os.hostname()) return false;
     if (owner.hostname !== os.hostname()) return true;
     try {
         process.kill(owner.pid, 0);
@@ -200,10 +264,15 @@ function readReclaimMarker(filename) {
         const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
         try {
             const opened = fs.fstatSync(fd); const bytes = fs.readFileSync(fd);
+            const after = fs.fstatSync(fd);
             const finalNamed = fs.lstatSync(filename);
-            if (opened.dev !== named.dev || opened.ino !== named.ino || bytes.length !== opened.size
+            if (opened.dev !== named.dev || opened.ino !== named.ino || opened.nlink !== 1
+                || bytes.length !== opened.size
+                || after.dev !== opened.dev || after.ino !== opened.ino || after.nlink !== 1
+                || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs
                 || finalNamed.dev !== opened.dev || finalNamed.ino !== opened.ino
-                || finalNamed.size !== opened.size || finalNamed.mtimeMs !== opened.mtimeMs) return null;
+                || finalNamed.nlink !== 1 || finalNamed.size !== opened.size
+                || finalNamed.mtimeMs !== opened.mtimeMs) return null;
             const value = JSON.parse(bytes.toString('utf8'));
             return { filename, dev: opened.dev, ino: opened.ino, size: opened.size,
                 mtimeMs: opened.mtimeMs,
@@ -353,7 +422,8 @@ function inspectFileLockState(filePath, options = {}) {
         reclaimable,
         reason: ownerActive === true ? 'live_local_owner'
             : ageMs <= staleMs ? 'within_stale_threshold'
-                : snapshot.owner ? 'stale_non_live_owner' : 'stale_unowned',
+                : reclaimable ? snapshot.owner ? 'stale_non_live_owner' : 'stale_unowned'
+                    : 'unreclaimable_owner',
         ageMs
     };
 }
@@ -405,11 +475,65 @@ function installFileLockOwner(lockPath, owner) {
     const ownerPath = path.join(lockPath, 'owner.json');
     const fd = fs.openSync(ownerPath, fs.constants.O_WRONLY | fs.constants.O_CREAT
         | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-    try { fs.writeFileSync(fd, JSON.stringify(owner)); fs.fsyncSync(fd); }
+    try {
+        fs.fchmodSync(fd, 0o600);
+        fs.writeFileSync(fd, JSON.stringify(owner)); fs.fsyncSync(fd);
+    } catch (error) {
+        try {
+            const opened = fs.fstatSync(fd); const named = fs.lstatSync(ownerPath);
+            if (opened.isFile() && opened.nlink === 1 && named.nlink === 1
+                && opened.dev === named.dev && opened.ino === named.ino) {
+                fs.unlinkSync(ownerPath);
+            }
+        } catch {}
+        throw error;
+    }
     finally { fs.closeSync(fd); }
     const directoryFd = fs.openSync(lockPath, fs.constants.O_RDONLY);
     try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
     return readFileLockSnapshot(lockPath);
+}
+
+function hardenNewFileLockDirectory(lockPath) {
+    // mkdir(2) applies umask before Node can open the directory descriptor.
+    // Restore owner-only access, then bind the descriptor inode to the one
+    // captured immediately after our exclusive mkdir.
+    fs.chmodSync(lockPath, 0o700);
+    const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+        | (fs.constants.O_DIRECTORY || 0);
+    const fd = fs.openSync(lockPath, flags);
+    try {
+        fs.fchmodSync(fd, 0o700); fs.fsyncSync(fd);
+        const stat = fs.fstatSync(fd);
+        if (!stat.isDirectory() || (stat.mode & 0o777) !== 0o700) {
+            throw new Error(`文件锁目录权限无法收紧到 0700: ${lockPath}`);
+        }
+        return { dev: stat.dev, ino: stat.ino };
+    } finally { fs.closeSync(fd); }
+}
+
+function cleanupCreatedFileLock(lockPath, createdDirectory, ownerToken) {
+    if (!createdDirectory) return false;
+    try {
+        const snapshot = readFileLockSnapshot(lockPath);
+        if (!snapshot.exists || !snapshot.consistent
+            || snapshot.directory.dev !== createdDirectory.dev
+            || snapshot.directory.ino !== createdDirectory.ino) return false;
+        if (snapshot.ownerFile) {
+            if (JSON.stringify(snapshot.entryNames) !== JSON.stringify(['owner.json'])
+                || snapshot.owner?.token !== ownerToken
+                || snapshot.owner?.pid !== process.pid
+                || snapshot.owner?.hostname !== os.hostname()) return false;
+            fs.unlinkSync(path.join(lockPath, 'owner.json'));
+        } else if (snapshot.entryNames.length !== 0) return false;
+        const directory = fs.lstatSync(lockPath);
+        if (directory.dev !== createdDirectory.dev || directory.ino !== createdDirectory.ino
+            || fs.readdirSync(lockPath).length !== 0) return false;
+        fs.rmdirSync(lockPath); return true;
+    } catch (error) {
+        if (['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) return false;
+        throw error;
+    }
 }
 
 function acquireFileLockSync(filePath, options = {}) {
@@ -423,7 +547,14 @@ function acquireFileLockSync(filePath, options = {}) {
         try {
             fs.mkdirSync(lockPath, { mode: 0o700 });
             const ownerToken = crypto.randomUUID();
+            const createdStat = fs.lstatSync(lockPath);
+            let createdDirectory = { dev: createdStat.dev, ino: createdStat.ino };
             try {
+                const hardened = hardenNewFileLockDirectory(lockPath);
+                if (hardened.dev !== createdDirectory.dev || hardened.ino !== createdDirectory.ino) {
+                    throw new Error(`文件锁目录创建后身份变化: ${lockPath}`);
+                }
+                createdDirectory = hardened;
                 const acquiredSnapshot = installFileLockOwner(lockPath, {
                     pid: process.pid,
                     hostname: os.hostname(),
@@ -433,12 +564,16 @@ function acquireFileLockSync(filePath, options = {}) {
                 if (!acquiredSnapshot.consistent || acquiredSnapshot.owner?.token !== ownerToken
                     || acquiredSnapshot.owner?.pid !== process.pid
                     || acquiredSnapshot.owner?.hostname !== os.hostname()
+                    || acquiredSnapshot.directory.mode !== 0o700
+                    || acquiredSnapshot.ownerFile?.mode !== 0o600
+                    || acquiredSnapshot.directory.dev !== createdDirectory.dev
+                    || acquiredSnapshot.directory.ino !== createdDirectory.ino
                     || JSON.stringify(acquiredSnapshot.entryNames) !== JSON.stringify(['owner.json'])) {
                     throw new Error(`文件锁 owner 写入后身份不稳定: ${lockPath}`);
                 }
                 return createLockRelease(lockPath, ownerToken, acquiredSnapshot);
             } catch (ownerError) {
-                try { fs.rmdirSync(lockPath); } catch {}
+                try { cleanupCreatedFileLock(lockPath, createdDirectory, ownerToken); } catch {}
                 throw ownerError;
             }
         } catch (error) {
@@ -467,7 +602,14 @@ async function acquireFileLock(filePath, options = {}) {
         try {
             fs.mkdirSync(lockPath, { mode: 0o700 });
             const ownerToken = crypto.randomUUID();
+            const createdStat = fs.lstatSync(lockPath);
+            let createdDirectory = { dev: createdStat.dev, ino: createdStat.ino };
             try {
+                const hardened = hardenNewFileLockDirectory(lockPath);
+                if (hardened.dev !== createdDirectory.dev || hardened.ino !== createdDirectory.ino) {
+                    throw new Error(`文件锁目录创建后身份变化: ${lockPath}`);
+                }
+                createdDirectory = hardened;
                 const acquiredSnapshot = installFileLockOwner(lockPath, {
                     pid: process.pid,
                     hostname: os.hostname(),
@@ -477,12 +619,16 @@ async function acquireFileLock(filePath, options = {}) {
                 if (!acquiredSnapshot.consistent || acquiredSnapshot.owner?.token !== ownerToken
                     || acquiredSnapshot.owner?.pid !== process.pid
                     || acquiredSnapshot.owner?.hostname !== os.hostname()
+                    || acquiredSnapshot.directory.mode !== 0o700
+                    || acquiredSnapshot.ownerFile?.mode !== 0o600
+                    || acquiredSnapshot.directory.dev !== createdDirectory.dev
+                    || acquiredSnapshot.directory.ino !== createdDirectory.ino
                     || JSON.stringify(acquiredSnapshot.entryNames) !== JSON.stringify(['owner.json'])) {
                     throw new Error(`文件锁 owner 写入后身份不稳定: ${lockPath}`);
                 }
                 return createLockRelease(lockPath, ownerToken, acquiredSnapshot);
             } catch (ownerError) {
-                try { fs.rmdirSync(lockPath); } catch {}
+                try { cleanupCreatedFileLock(lockPath, createdDirectory, ownerToken); } catch {}
                 throw ownerError;
             }
         } catch (error) {

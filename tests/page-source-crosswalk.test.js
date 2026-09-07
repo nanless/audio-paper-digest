@@ -666,12 +666,12 @@ test('self-authored arXiv fixtures cannot authorize verified decisions in the co
 
 test('official arXiv adapter authority can drive the verified crosswalk CLI path', async t => {
     const f = fixture(t); const authorityRoot = path.join(f.root, 'authorities');
-    const originalFetch = deep.fetchArxivTextDetailed;
-    t.after(() => { deep.fetchArxivTextDetailed = originalFetch; });
+    const originalFetch = deep.fetchArxivTextDetailedUncached;
+    t.after(() => { deep.fetchArxivTextDetailedUncached = originalFetch; });
     const text = `${'official methods experiments results limitations and references '.repeat(300)}\n`;
     const flattenedTextSha256 = sha(text);
     const artifactBody = { version: 1, source: 'arxiv_html', tables: [], formulas: [], flattenedTextSha256 };
-    deep.fetchArxivTextDetailed = async () => ({ text, source: 'html', sourceId: '2601.00001',
+    deep.fetchArxivTextDetailedUncached = async () => ({ text, source: 'html', sourceId: '2601.00001',
         htmlAvailability: 'available', htmlAttempts: 1, warnings: [], imageInfos: [],
         structuredArtifacts: { ...artifactBody, payloadSha256: sha(JSON.stringify(artifactBody)) } });
     const produced = await arxivAdapter.prepareArxivSourceAuthority({ authorityRoot, arxivId: '2601.00001',
@@ -692,12 +692,12 @@ test('explicit conflict resolver accepts only an existing non-title hint with ex
     const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true });
     const pageKey = Object.keys(state.assignments)[0];
-    const originalFetch = deep.fetchArxivTextDetailed;
-    t.after(() => { deep.fetchArxivTextDetailed = originalFetch; });
+    const originalFetch = deep.fetchArxivTextDetailedUncached;
+    t.after(() => { deep.fetchArxivTextDetailedUncached = originalFetch; });
     let calls = 0; const text = `${'official conflict resolution source evidence '.repeat(400)}\n`;
     const flattenedTextSha256 = sha(text);
     const artifactBody = { version: 1, source: 'arxiv_html', tables: [], formulas: [], flattenedTextSha256 };
-    deep.fetchArxivTextDetailed = async id => {
+    deep.fetchArxivTextDetailedUncached = async id => {
         calls += 1;
         return { text, source: 'html', sourceId: id, htmlAvailability: 'available', htmlAttempts: 1,
             warnings: [], imageInfos: [], structuredArtifacts: { ...artifactBody,
@@ -738,11 +738,11 @@ test('conflict resolver rejects single pages, durable-only authority, and author
         operationId: ids[3], actorId: 'operator.2', now: stamp }), /production-authorized/);
 
     const authorityRoot = path.join(f.root, 'production-authority');
-    const originalFetch = deep.fetchArxivTextDetailed;
-    t.after(() => { deep.fetchArxivTextDetailed = originalFetch; });
+    const originalFetch = deep.fetchArxivTextDetailedUncached;
+    t.after(() => { deep.fetchArxivTextDetailedUncached = originalFetch; });
     const text = `${'official mismatch source evidence '.repeat(500)}\n`; const flattenedTextSha256 = sha(text);
     const artifactBody = { version: 1, source: 'arxiv_html', tables: [], formulas: [], flattenedTextSha256 };
-    deep.fetchArxivTextDetailed = async id => ({ text, source: 'html', sourceId: id,
+    deep.fetchArxivTextDetailedUncached = async id => ({ text, source: 'html', sourceId: id,
         htmlAvailability: 'available', htmlAttempts: 1, warnings: [], imageInfos: [],
         structuredArtifacts: { ...artifactBody, payloadSha256: sha(JSON.stringify(artifactBody)) } });
     const production = await arxivAdapter.prepareArxivSourceAuthority({ authorityRoot, arxivId: '2601.00001',

@@ -19,6 +19,9 @@ SPEC.loader.exec_module(renderer)
 class HistoricalPageRenderTests(unittest.TestCase):
     def test_real_publish_helpers_render_reader_formula_and_sidecars(self):
         paper = llm_api_publication_fixture()
+        sealed_summary = paper['parsed']['summary']
+        paper['parsed']['summary'] = 'STALE PARSED SUMMARY'
+        paper['parsed']['score'] = '0.1'
         assignment = {
             'status': 'assigned',
             'paperId': f'arxiv:{paper["arxivId"]}',
@@ -34,6 +37,10 @@ class HistoricalPageRenderTests(unittest.TestCase):
             'paper': paper, 'taxonomy': assignment, 'cohortDate': '2026-09-04',
         })
         self.assertIn('tags: [空间音频, Transformer]', result['markdown'])
+        self.assertIn(sealed_summary, result['markdown'])
+        self.assertNotIn('STALE PARSED SUMMARY', result['markdown'])
+        self.assertIn('评分：**6.1/10**', result['markdown'])
+        self.assertNotIn('评分：**0.1/10**', result['markdown'])
         self.assertIn('\\[', result['markdown'])
         paths = {asset['path'] for asset in result['assets']}
         self.assertTrue(any(path.endswith('/citation.json') for path in paths))

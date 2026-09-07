@@ -28,11 +28,17 @@ def render_packet(packet):
         raise ValueError('taxonomy concept labels are incomplete')
     labels = [f'#{concepts[concept_id]["preferredLabel"]["zh"]}' for concept_id in ordered]
     projected = dict(paper)
-    projected['parsed'] = dict(paper.get('parsed') or {})
+    publisher = load_publish_to_blog()
+    # Historical staging must not trust a cached ``parsed`` object for scores,
+    # summaries, dimensions, or prose.  Rebuild every publication field from
+    # the sealed canonical analysis, then apply only the deterministic current
+    # taxonomy projection below.
+    projected['parsed'] = publisher.parse_analysis(paper.get('analysis', ''))
+    if not isinstance(projected['parsed'], dict):
+        raise ValueError('sealed canonical analysis cannot be reparsed for publication')
     projected['parsed']['tags'] = labels
     projected['parsed']['primaryTaskTag'] = f'#{concepts[assignment["primaryTaskId"]]["preferredLabel"]["zh"]}'
     projected['parsed']['primaryMethodTag'] = f'#{concepts[assignment["primaryMethodId"]]["preferredLabel"]["zh"]}'
-    publisher = load_publish_to_blog()
     markdown, _ = publisher.generate_paper_page(projected, date, '论文速递')
     assets = []
     with tempfile.TemporaryDirectory(prefix='historical-page-render-') as temporary:

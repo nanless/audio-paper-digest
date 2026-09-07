@@ -178,6 +178,7 @@ function replayAnalysisSources(inputs, analysisRoot) {
 function producerProofFor(inputs, staged, aggregates, analysisSources) {
     const pageStagingRuns = staged.map(item => ({ stagingRunId: item.manifest.stagingRunId,
         manifestSha256: item.manifest.manifestSha256, manifestFileSha256: item.manifestFileSha256,
+        rendererImplementationSha256: item.manifest.rendererImplementationSha256,
         crosswalkId: item.manifest.crosswalkId, selectedBindingSha256: item.manifest.selectedBindingSha256,
         pageSetSha256: item.manifest.pageSetSha256, assetSetSha256: item.manifest.assetSetSha256,
         analysisBindingsSha256: stableHash(item.manifest.pages.map(page => ({ paperId: page.paperId,
@@ -188,6 +189,7 @@ function producerProofFor(inputs, staged, aggregates, analysisSources) {
     const dailyRuns = aggregates.map(item => ({ aggregateRunId: path.basename(item.runRoot), date: item.manifest.date,
         manifestSha256: item.manifest.manifestSha256, manifestFileSha256: item.fileSha256,
         stagingSetSha256: item.manifest.source.stagingSetSha256,
+        rendererImplementationSha256: item.manifest.source.rendererImplementationSha256,
         memberSetSha256: item.manifest.memberSetSha256, markdownSha256: item.manifest.markdownSha256
     })).sort((a, b) => `${a.date}\0${a.aggregateRunId}`.localeCompare(`${b.date}\0${b.aggregateRunId}`));
     const proof = { crosswalkId: inputs.topology.state.crosswalkId,
@@ -202,6 +204,7 @@ function producerProofFor(inputs, staged, aggregates, analysisSources) {
         inventoryRemoteName: inputs.topology.inventory.ledger.source.remoteName,
         inventoryRemoteIdentitySha256: inputs.topology.inventory.ledger.source.remoteIdentitySha256,
         inventoryRemoteMain: clone(inputs.topology.inventory.ledger.source.remoteMain),
+        rendererImplementationSha256: inputs.rendererImplementationSha256,
         pageStagingRuns, pageStagingSetSha256: stableHash(pageStagingRuns),
         dailyRuns, dailyRunSetSha256: stableHash(dailyRuns), analysisSources,
         analysisSourceSetSha256: stableHash(analysisSources) };
@@ -230,7 +233,10 @@ function replayProducerSet({ pageStagingRunIds, dailyAggregates, stagingRoot, ag
             stagingManifestSha256: item.manifest.manifestSha256,
             stagingManifestFileSha256: item.manifestFileSha256 })).sort((a, b) => a.stagingRunId.localeCompare(b.stagingRunId));
         if (stableHash(loaded.manifest.source.stagingRuns) !== stableHash(expectedStaging)
-            || loaded.manifest.source.stagingSetSha256 !== stableHash(expectedStaging)) fail(`${ref.date} daily aggregate staging producer set drifted`);
+            || loaded.manifest.source.stagingSetSha256 !== stableHash(expectedStaging)
+            || loaded.manifest.source.rendererImplementationSha256 !== inputs.rendererImplementationSha256) {
+            fail(`${ref.date} daily aggregate staging producer set drifted`);
+        }
         return loaded;
     });
     return { staged: inputs.stagedRuns, aggregates, inputs,
@@ -417,13 +423,13 @@ function validateProducerReplay(proof) {
     exactKeys(proof, ['crosswalkId', 'crosswalkStateSha256', 'identityGroupsSha256', 'inventoryLedgerSha256',
         'inventoryPageSetSha256', 'inventorySourceSha256', 'inventoryHugoConfig', 'inventoryHead',
         'inventoryContentTreeOid', 'inventoryRemoteName', 'inventoryRemoteIdentitySha256', 'inventoryRemoteMain',
-        'pageStagingRuns', 'pageStagingSetSha256', 'dailyRuns',
+        'rendererImplementationSha256', 'pageStagingRuns', 'pageStagingSetSha256', 'dailyRuns',
         'dailyRunSetSha256', 'analysisSources', 'analysisSourceSetSha256', 'proofSha256'], 'producer replay proof');
     exactKeys(proof.inventoryHugoConfig, ['path', 'sha256'], 'producer replay inventoryHugoConfig');
     exactKeys(proof.inventoryRemoteMain, ['availability', 'oid', 'ref'], 'producer replay inventoryRemoteMain');
     for (const field of ['crosswalkStateSha256', 'identityGroupsSha256', 'inventoryLedgerSha256', 'inventoryPageSetSha256',
         'inventorySourceSha256', 'inventoryRemoteIdentitySha256', 'pageStagingSetSha256', 'dailyRunSetSha256',
-        'analysisSourceSetSha256', 'proofSha256']) if (!SHA_RE.test(proof[field] || '')) fail(`producer replay ${field} is invalid`);
+        'analysisSourceSetSha256', 'rendererImplementationSha256', 'proofSha256']) if (!SHA_RE.test(proof[field] || '')) fail(`producer replay ${field} is invalid`);
     if (!UUID_RE.test(proof.crosswalkId || '') || !/^[a-f0-9]{40,64}$/.test(proof.inventoryHead || '')
         || !/^[a-f0-9]{40,64}$/.test(proof.inventoryContentTreeOid || '')
         || proof.inventoryContentTreeOid.length !== proof.inventoryHead.length
@@ -438,13 +444,14 @@ function validateProducerReplay(proof) {
         || !Array.isArray(proof.analysisSources) || !proof.analysisSources.length) fail('producer replay identity/set is invalid');
     proof.pageStagingRuns.forEach((item, index) => {
         exactKeys(item, ['stagingRunId', 'manifestSha256', 'manifestFileSha256', 'crosswalkId',
-            'selectedBindingSha256', 'pageSetSha256', 'assetSetSha256', 'analysisBindingsSha256'], `producer replay staging[${index}]`);
+            'rendererImplementationSha256', 'selectedBindingSha256', 'pageSetSha256', 'assetSetSha256',
+            'analysisBindingsSha256'], `producer replay staging[${index}]`);
         if (!UUID_RE.test(item.stagingRunId || '') || item.crosswalkId !== proof.crosswalkId
             || Object.entries(item).filter(([key]) => key.endsWith('Sha256')).some(([, value]) => !SHA_RE.test(value || ''))) fail(`producer replay staging[${index}] is invalid`);
     });
     proof.dailyRuns.forEach((item, index) => {
         exactKeys(item, ['aggregateRunId', 'date', 'manifestSha256', 'manifestFileSha256', 'stagingSetSha256',
-            'memberSetSha256', 'markdownSha256'], `producer replay daily[${index}]`);
+            'rendererImplementationSha256', 'memberSetSha256', 'markdownSha256'], `producer replay daily[${index}]`);
         if (!UUID_RE.test(item.aggregateRunId || '') || !validDate(item.date)
             || Object.entries(item).filter(([key]) => key.endsWith('Sha256')).some(([, value]) => !SHA_RE.test(value || ''))) fail(`producer replay daily[${index}] is invalid`);
     });
@@ -456,8 +463,10 @@ function validateProducerReplay(proof) {
             || Object.entries(item).filter(([key]) => key.endsWith('Sha256')).some(([, value]) => !SHA_RE.test(value || ''))) fail(`producer replay analysis[${index}] is invalid`);
     });
     if (new Set(proof.pageStagingRuns.map(item => item.stagingRunId)).size !== proof.pageStagingRuns.length
+        || proof.pageStagingRuns.some(item => item.rendererImplementationSha256 !== proof.rendererImplementationSha256)
         || proof.pageStagingRuns.some((item, index) => index && proof.pageStagingRuns[index - 1].stagingRunId.localeCompare(item.stagingRunId) >= 0)
         || new Set(proof.dailyRuns.map(item => item.date)).size !== proof.dailyRuns.length
+        || proof.dailyRuns.some(item => item.rendererImplementationSha256 !== proof.rendererImplementationSha256)
         || proof.dailyRuns.some((item, index) => index && `${proof.dailyRuns[index - 1].date}\0${proof.dailyRuns[index - 1].aggregateRunId}`.localeCompare(`${item.date}\0${item.aggregateRunId}`) >= 0)
         || new Set(proof.analysisSources.map(item => item.pageKey)).size !== proof.analysisSources.length
         || proof.analysisSources.some((item, index) => index && proof.analysisSources[index - 1].pageKey.localeCompare(item.pageKey) >= 0)) {

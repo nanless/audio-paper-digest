@@ -468,6 +468,15 @@ def llm_api_publication_fixture():
     resource_url = 'https://github.com/example/audio-model'
     resource_line = f'- 代码：{resource_url}'
     resource_summary = '- 资源可达性验证：code=available(HTTP 200)'
+    detailed_summary = (
+        '输入是带空间线索的双通道混合音频，输出是分离后的目标声源，实际难点是频率相关线索既要增强可分性又不能破坏原始听觉结构。'
+        '方法首先估计各频带的双耳差异并形成稳定表征，负责把原始波形转换为可比较的空间证据。'
+        '随后增强器按频带调节线索强度并把结果送入分离网络，前者负责扩大声源差异，后者负责恢复目标信号。'
+        '最后训练目标联合波形重建与空间一致性约束，使数值收益不会以完全丢失双耳关系为代价。'
+        '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        '这一结论只适用于论文覆盖的受控混合与听损条件，对真实房间中的移动声源、未知设备和更长混响尚未验证。'
+        '原文未披露训练、推理或部署成本，因此不能据此判断实时运行所需算力与延迟。'
+    )
     analysis = (
         '## 机器摘要\n'
         'document_type: 方法研究\n'
@@ -475,8 +484,9 @@ def llm_api_publication_fixture():
         'has_code: 是\n'
         'has_model: 否\n'
         'has_dataset: 否\n\n'
-        '## 评分\n**总分：6.1/10**\n\n'
-        '## 核心摘要\n最终兼容 canonical。\n\n'
+        '## 评分\n6.1/10\n\n'
+        f'## 核心摘要\n{detailed_summary}\n\n'
+        '## 方法概述和架构\n测试方法。\n\n'
         '## 开源详情\n'
         f'{resource_line}\n'
         '- 模型权重：论文中未提及\n'
@@ -486,6 +496,17 @@ def llm_api_publication_fixture():
     article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
     plan_sha = publish_to_blog._stable_json_sha256(plan)
     analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+    summary_sha = hashlib.sha256(detailed_summary.encode('utf-8')).hexdigest()
+    summary_projection_sha = publish_to_blog._core_summary_projection_sha256(analysis)
+    core_summary_binding = {
+        'contractVersion': 'core-summary-detailed-v3',
+        'inputAnalysisSha256': analysis_sha,
+        'outputAnalysisSha256': analysis_sha,
+        'inputSummarySha256': summary_sha,
+        'summarySha256': summary_sha,
+        'inputStructureProjectionSha256': summary_projection_sha,
+        'outputStructureProjectionSha256': summary_projection_sha,
+    }
     source_sha = '1' * 64
     figures = []
     author_identity = {
@@ -552,7 +573,7 @@ def llm_api_publication_fixture():
             'score': '6.1', 'tags': ['#空间音频'],
             'primaryTaskTag': '#空间音频',
             'rankBucket': '前25%', 'documentType': '方法研究',
-            'summary': '最终兼容 canonical 摘要。',
+            'summary': detailed_summary,
             'roast': '预测证据完整，但仍缺真人听音。',
             'opensource': (
                 f'{resource_line}\n'
@@ -568,6 +589,7 @@ def llm_api_publication_fixture():
                 'apiReaderSourceBindings': 'api-reader-source-bindings-v4',
                 'apiReaderAuthorIdentity': 'api-reader-author-identity-v1',
                 'apiReaderResourceIdentity': 'api-reader-resource-identity-v1',
+                'coreSummary': 'core-summary-detailed-v3',
             },
             'sourceAcquisition': {
                 'sourceSha256': source_sha,
@@ -585,6 +607,21 @@ def llm_api_publication_fixture():
                     'auditSha256': '2' * 64,
                     'evidenceSha256': '3' * 64,
                     'finalScore': 6.1,
+                    'coreSummaryInputAnalysisSha256': analysis_sha,
+                    'inputCoreSummarySha256': summary_sha,
+                    'outputCoreSummarySha256': summary_sha,
+                },
+                'structureRepair': {
+                    'status': 'complete',
+                    'outputAnalysisSha256': analysis_sha,
+                },
+                'coreSummaryRepair': {
+                    'status': 'not_needed',
+                    'fingerprint': '5' * 64,
+                    **core_summary_binding,
+                    'bindingSha256': publish_to_blog._stable_json_sha256(
+                        core_summary_binding
+                    ),
                 },
                 'apiReaderArticle': {
                     'status': 'complete',
@@ -647,6 +684,9 @@ def reseal_llm_api_resource_identity(paper):
     reader_stage['resourceCount'] = len(payload['resources'])
     open_stage = paper['analysisManifest']['stages']['openSourceScan']
     open_stage['resourceEvidenceSha256'] = identity_sha
+    paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = (
+        hashlib.sha256(paper['analysis'].encode('utf-8')).hexdigest()
+    )
     return paper
 
 
@@ -787,7 +827,7 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 class PublishToBlogReviewTest(unittest.TestCase):
     def test_modern_reader_projection_excludes_all_unreviewed_canonical_prose(self):
         paper = llm_api_publication_fixture()
-        for key in ('summary', 'roast', 'opensource', 'scoringReason'):
+        for key in ('roast', 'opensource', 'scoringReason'):
             paper['parsed'][key] = f'UNREVIEWED_{key}_SENTINEL'
         page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
         index = publish_to_blog.generate_index_page(
@@ -797,8 +837,12 @@ class PublishToBlogReviewTest(unittest.TestCase):
         thesis = publish_to_blog.sanitize_markdown_for_publish(
             paper['apiReaderPlan']['oneSentenceThesis']
         )
+        summary = publish_to_blog.sanitize_markdown_for_publish(
+            paper['parsed']['summary']
+        )
+        self.assertIn(thesis, page)
         for output in (page, index):
-            self.assertIn(thesis, output)
+            self.assertIn(summary, output)
             self.assertNotIn('UNREVIEWED_', output)
             self.assertNotIn('毒舌点评', output)
             self.assertIn('链接可访问', output)
@@ -810,13 +854,67 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
         self.assertIsNone(publish_to_blog._api_reader_index_projection_issue(index, [paper]))
         for changed in (
-                page.replace('## 📌 核心摘要\n\n' + thesis, '## 📌 核心摘要\n\n虚构摘要'),
+                page.replace('## 📌 核心摘要\n\n' + summary, '## 📌 核心摘要\n\n虚构摘要'),
                 page.replace('## ⚖️ 评分明细', '## ⚖️ 未绑定评分解释'),
                 page.replace('## 🧭 深度解读', '## 💬 毒舌点评\n\n错误前言\n\n## 🧭 深度解读')):
             self.assertIsNotNone(publish_to_blog._api_reader_page_binding_issue(changed, paper))
         self.assertIsNotNone(publish_to_blog._api_reader_index_projection_issue(
-            index.replace(thesis, '未经事实核查的旧摘要'), [paper],
+            index.replace(summary, '未经事实核查的旧摘要'), [paper],
         ))
+
+    def test_current_v3_core_summary_is_replayed_instead_of_one_sentence_thesis(self):
+        paper = llm_api_publication_fixture()
+        summary = paper['parsed']['summary']
+
+        page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        self.assertIn(
+            'paper_digest_api_reader_decision_projection: '
+            '"api-reader-decision-projection-v2"', page,
+        )
+        match = re.search(
+            r'^## 📌 核心摘要\n\n([\s\S]*?)(?=^## )',
+            page, flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1).strip(), summary)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
+
+        paper['analysisManifest']['stages']['coreSummaryRepair']['summarySha256'] = '0' * 64
+        with self.assertRaisesRegex(PublishDataValidationError, '详细核心摘要与阶段 SHA'):
+            publish_to_blog.generate_paper_page(paper, '2026-08-31')
+
+        shallow = llm_api_publication_fixture()
+        old_summary = shallow['parsed']['summary']
+        new_summary = '本文提出一个方法并在实验中有效。'
+        shallow['analysis'] = shallow['analysis'].replace(old_summary, new_summary)
+        shallow['parsed']['summary'] = new_summary
+        analysis_sha = hashlib.sha256(shallow['analysis'].encode('utf-8')).hexdigest()
+        summary_sha = hashlib.sha256(new_summary.encode('utf-8')).hexdigest()
+        projection_sha = publish_to_blog._core_summary_projection_sha256(
+            shallow['analysis']
+        )
+        stage = shallow['analysisManifest']['stages']['coreSummaryRepair']
+        binding = {
+            'contractVersion': 'core-summary-detailed-v3',
+            'inputAnalysisSha256': analysis_sha,
+            'outputAnalysisSha256': analysis_sha,
+            'inputSummarySha256': summary_sha,
+            'summarySha256': summary_sha,
+            'inputStructureProjectionSha256': projection_sha,
+            'outputStructureProjectionSha256': projection_sha,
+        }
+        stage.update(binding)
+        stage['bindingSha256'] = publish_to_blog._stable_json_sha256(binding)
+        shallow['analysisManifest']['stages']['structureRepair'][
+            'outputAnalysisSha256'
+        ] = analysis_sha
+        scoring = shallow['analysisManifest']['stages']['scoringAudit']
+        scoring['outputAnalysisSha256'] = analysis_sha
+        scoring['coreSummaryInputAnalysisSha256'] = analysis_sha
+        scoring['inputCoreSummarySha256'] = summary_sha
+        scoring['outputCoreSummarySha256'] = summary_sha
+        with self.assertRaisesRegex(PublishDataValidationError, '未达到 core-summary-detailed-v3'):
+            publish_to_blog.llm_api_production_proof([shallow])
 
     def test_modern_resources_show_identity_type_and_status_without_weight_claims(self):
         paper = llm_api_publication_fixture()
@@ -839,7 +937,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIsNone(publish_to_blog._api_reader_index_projection_issue(markdown, [paper]))
         with tempfile.TemporaryDirectory() as tmp:
             index = Path(tmp) / '2026-08-31.md'
-            index.write_text(markdown.replace(paper['apiReaderPlan']['oneSentenceThesis'],
+            index.write_text(markdown.replace(paper['parsed']['summary'],
                                              '未审查的摘要替换'), encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'llm_review_post') as llm:
                 with self.assertRaisesRegex(PublishDataValidationError, '决策投影不一致'):
@@ -1929,7 +2027,6 @@ title: "Score rows"
 
     def test_index_uses_modern_reader_title_and_signed_decision_blocks(self):
         paper = llm_api_publication_fixture()
-        paper['parsed']['summary'] += ' 下游调用下降约 41%。'
         paper['parsed']['opensource'] += '\n- 数据集：FSD50K'
         paper['parsed']['roast'] = '亮点清楚，短板是只在两套基准上验证。'
         markdown = publish_to_blog.generate_index_page(
@@ -1939,8 +2036,8 @@ title: "Score rows"
             {paper['arxivId']: 'llm-api-publisher-fixture-2608-30002'},
         )
         self.assertIn(paper['apiReaderPlan']['readerTitle'], markdown)
-        self.assertIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
-        self.assertNotIn('最终兼容 canonical 摘要。', markdown)
+        self.assertIn(paper['parsed']['summary'], markdown)
+        self.assertNotIn(paper['apiReaderPlan']['oneSentenceThesis'], markdown)
         self.assertNotIn(
             publish_to_blog.sanitize_markdown_for_publish(
                 paper['parsed']['opensource']
@@ -3045,6 +3142,11 @@ title: "Bad table"
         self.assertEqual(len(bindings), 1)
         self.assertEqual(bindings[0]['readerContract'], 'beginner-researcher-v3')
         self.assertEqual(bindings[0]['scoringContract'], 'api-scoring-audit-v2')
+        self.assertEqual(bindings[0]['coreSummaryContract'], 'core-summary-detailed-v3')
+        self.assertEqual(
+            bindings[0]['coreSummarySha256'],
+            hashlib.sha256(paper['parsed']['summary'].encode('utf-8')).hexdigest(),
+        )
         self.assertEqual(bindings[0]['model'], 'muse-spark-1.2-contributor')
         self.assertEqual(
             publish_to_blog.infer_generation_publication_mode([paper]),
@@ -3065,10 +3167,6 @@ title: "Bad table"
             'inputAnalysisSha256': scoring_sha,
             'outputAnalysisSha256': final_sha,
         }
-        publish_to_blog.llm_api_production_proof([supplemented])
-        supplemented['analysisManifest']['stages']['imageSupplement'][
-            'outputAnalysisSha256'
-        ] = '0' * 64
         with self.assertRaisesRegex(PublishDataValidationError, '评分审计'):
             publish_to_blog.llm_api_production_proof([supplemented])
         with tempfile.TemporaryDirectory() as tmp:
@@ -3114,6 +3212,10 @@ title: "Bad table"
         ] = '0' * 64
         with self.assertRaisesRegex(PublishDataValidationError, '评分审计'):
             publish_to_blog.llm_api_production_proof([tampered])
+        missing_summary = llm_api_publication_fixture()
+        del missing_summary['analysisManifest']['contracts']['coreSummary']
+        with self.assertRaisesRegex(PublishDataValidationError, 'core-summary-detailed-v3'):
+            publish_to_blog.llm_api_production_proof([missing_summary])
 
     def test_manual_v5_renders_selected_figure_only_from_reader_article(self):
         url = 'https://arxiv.org/html/2608.29999/figure-1.png'
