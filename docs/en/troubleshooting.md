@@ -48,9 +48,14 @@ If a recovery command reports a missing or drifted sealed daily source, do not e
 Identify the route before starting a crosswalk. An arXiv direct item's current generation must contain TXT,
 PDF, runtime metadata, and manifest at
 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`. Re-running the same
-`history:direct-scheduler` or `history:direct-run` verifies and resumes identical artifacts. A failed fresh
+Run `history:direct-scheduler` until every selected paper is `ready` in the same plan/generation status.
+`history:direct-run --apply` is replay-only and rejects missing/handoff/failed scheduler state before any model call;
+rerunning it then reuses matching source-bound analysis checkpoints. A failed fresh
 acquisition writes only an immutable handoff; it does not mutate crosswalk automatically or block the local
 conference queue.
+
+Use one `history:status ... --verify-sources true` invocation to rehash external conference metadata/PDF files when
+path drift is suspected. Do not combine deep verification with watch; normal/watch status uses path/type/size checks.
 
 For a conference direct item, check the local-source manifest metadata/PDF paths and SHA, frozen inventory SHA,
 and conference projection. Do not substitute old post prose, old analysis, filename similarity, or an ad-hoc

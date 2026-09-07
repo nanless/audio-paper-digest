@@ -145,6 +145,27 @@ describe('env-loader', () => {
         });
     });
 
+    it('重复 key 保持 last-wins，并且警告只包含 key 与行号、不泄露值', () => {
+        withSavedEnv(() => withTempEnv([
+            'PAPER_ANALYZER_API_KEY=first-secret-value',
+            '# line two',
+            'PAPER_ANALYZER_MODEL=model-one',
+            'PAPER_ANALYZER_API_KEY=second-secret-value'
+        ], envPath => {
+            const warnings = []; const originalWarn = console.warn;
+            console.warn = message => warnings.push(String(message));
+            try {
+                const parsed = loadProjectEnv(envPath);
+                assert.strictEqual(parsed.PAPER_ANALYZER_API_KEY, 'second-secret-value');
+                assert.strictEqual(process.env.PAPER_ANALYZER_API_KEY, 'second-secret-value');
+            } finally { console.warn = originalWarn; }
+            assert.deepStrictEqual(warnings, [
+                '[env-loader] duplicate key PAPER_ANALYZER_API_KEY at lines 1 and 4; last value wins'
+            ]);
+            assert.doesNotMatch(warnings.join('\n'), /first-secret-value|second-secret-value|model-one/);
+        }));
+    });
+
     it('代理只接受项目 .env，子进程环境不携带项目凭据', () => {
         withSavedEnv(() => {
             process.env.HTTPS_PROXY = 'http://outer-proxy.invalid';

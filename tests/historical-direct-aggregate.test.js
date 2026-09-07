@@ -11,6 +11,7 @@ const direct = require('../scripts/lib/historical-direct-aggregate.js');
 const catalogApi = require('../scripts/lib/historical-direct-rewrite-input-catalog.js');
 const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
+const directControl = require('../scripts/lib/historical-direct-control.js');
 const conferenceProjections = require('../scripts/lib/historical-conference-page-projections.js');
 const icmlPosterApi = require('../scripts/lib/historical-icml-poster-authority.js');
 const engine = require('../scripts/analysis-engine.js');
@@ -96,14 +97,24 @@ async function fixture(t, { mixedDailyConference = false } = {}) {
     const blog = path.join(root, 'blog'); const metadata = path.join(root, 'metadata.json'); const pdf = path.join(root, 'conference.pdf');
     const arxivOne = '2608.00001'; const arxivTwo = '2608.00002';
     const icmlMetadata = path.join(root, 'icml-metadata.json'); const icmlPdf = path.join(root, 'icml.pdf');
+    const conferencePaperPage = page(blog, 'content/posts/conference-paper.md', 'Conference fresh title', 'paper',
+        { type: 'conference', key: CONFERENCE }, DATE);
+    const taskPage = { ...page(blog, 'content/posts/icassp2026-task-001.md', 'Conference task', 'conference-task',
+        { type: 'conference', key: CONFERENCE }, DATE), legacyTaskKey: 'task-001',
+        legacy: { tags: ['语音识别'] }, outboundPostLinks: [{ ordinal: 1, status: 'resolved',
+            targetPageId: conferencePaperPage.pageId, targetRecordSha256: sha('conference-record'),
+            targetRawSha256: sha('conference-raw') }] };
     const pages = [
         page(blog, 'content/posts/arxiv-one.md', `arXiv ${arxivOne}`, 'paper', { type: 'daily', key: DATE }, DATE),
         page(blog, 'content/posts/arxiv-two.md', `arXiv ${arxivTwo}`, 'paper', { type: 'daily', key: DATE }, DATE),
         page(blog, `content/posts/${DATE}.md`, 'Daily summary', 'daily-summary', { type: 'daily', key: DATE }, DATE),
-        page(blog, 'content/posts/conference-paper.md', 'Conference fresh title', 'paper', { type: 'conference', key: CONFERENCE }, DATE),
+        page(blog, 'content/posts/2026-04-18.md', 'Empty daily summary', 'daily-summary',
+            { type: 'daily', key: '2026-04-18' }, '2026-04-18'),
+        page(blog, 'content/posts/2026-05-03.md', 'Conference-only navigation summary', 'daily-summary',
+            { type: 'daily', key: '2026-05-03' }, '2026-05-03'),
+        conferencePaperPage,
         page(blog, 'content/posts/icassp-2026.md', 'Conference summary', 'conference-summary', { type: 'conference', key: CONFERENCE }, DATE),
-        { ...page(blog, 'content/posts/icassp2026-task-001.md', 'Conference task', 'conference-task',
-            { type: 'conference', key: CONFERENCE }, DATE), legacyTaskKey: 'task-001' }
+        taskPage
     ];
     if (mixedDailyConference) pages.push(
         page(blog, 'content/posts/icml-paper.md', 'ICML daily title', 'paper', { type: 'conference', key: 'icml-2026' }, DATE),
@@ -192,8 +203,16 @@ async function fixture(t, { mixedDailyConference = false } = {}) {
     const deps = { captureFreshArxivRewriteSource: capture, analyze, extractPdfText: async () => 'fresh conference source text '.repeat(10),
         materializeConferenceFigures: async () => [], rendererImplementationSha256: () => sha('direct-mock-renderer-v1'),
         renderDirectPage: packet => ({ markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }) };
+    const markSourcesReady = generation => {
+        directControl.loadOrCreateSourceStatus({ sourceRoot: paths.sourceRoot, plan, generation, apply: true,
+            now: `2026-08-08T00:00:0${generation}.000Z` });
+        for (const item of plan.queue) directControl.updateSourceStatus({ sourceRoot: paths.sourceRoot, plan, generation,
+            event: { paperId: item.paperId, status: 'ready' }, now: `2026-08-08T00:00:1${generation}.000Z` });
+    };
+    markSourcesReady(1);
     const first = await runner.runDirectRewrite({ ...options, arxivGeneration: 1 }, deps);
     assert.equal(first.status, 'complete', JSON.stringify(first.results));
+    markSourcesReady(2);
     const second = await runner.runDirectRewrite({ ...options, queue: 'arxiv', arxivGeneration: 2 }, deps);
     assert.equal(second.status, 'complete', JSON.stringify(second.results));
     return { root, inventory, plan, projection, paths, firstRegistry: first.registryFile, secondRegistry: second.registryFile };
@@ -209,10 +228,10 @@ function rebasedRegistry(registry, entries) {
     return { ...body, registrySha256: runner.stableHash(body) };
 }
 
-test('aggregate projection audits retained conference task pages as unsupported publication blockers', async t => {
+test('aggregate projection closes task rendering and retain-unchanged coverage for every frozen page', async t => {
     const f = await fixture(t); const projection = f.projection;
-    assert.equal(projection.contract, 'historical-direct-aggregate-projection-v2');
-    assert.equal(projection.version, 2);
+    assert.equal(projection.contract, 'historical-direct-aggregate-projection-v3');
+    assert.equal(projection.version, 3);
     assert.equal(projection.conferenceTaskPages.length, 1);
     assert.deepEqual(projection.conferenceTaskPages[0], {
         pageKey: pageKey('content/posts/icassp2026-task-001.md'),
@@ -221,22 +240,32 @@ test('aggregate projection audits retained conference task pages as unsupported 
         previousContentSha256: f.inventory.pages.find(page => page.kind === 'conference-task').contentSha256,
         conferenceKey: CONFERENCE,
         legacyTaskKey: 'task-001',
-        status: 'pending',
-        rendererSupport: 'unsupported',
-        publicationDisposition: 'blocked',
-        reason: 'conference-task-renderer-not-implemented'
+        displayLabel: '语音识别',
+        requiredPaperIds: ['conference:icassp:2026:icassp-arnumber:100'],
+        requiredPageKeys: [pageKey('content/posts/conference-paper.md')],
+        membershipEvidence: { contract: 'frozen-conference-task-link-topology-v1',
+            inventoryPageSha256: f.inventory.pages.find(page => page.kind === 'conference-task').contentSha256,
+            links: [{ ordinal: 1, targetPageKey: pageKey('content/posts/conference-paper.md'),
+                targetRecordSha256: sha('conference-record'), targetRawSha256: sha('conference-raw') }],
+            linkSetSha256: direct.stableHash([{ ordinal: 1,
+                targetPageKey: pageKey('content/posts/conference-paper.md'),
+                targetRecordSha256: sha('conference-record'), targetRawSha256: sha('conference-raw') }]) },
+        status: 'planned',
+        rendererSupport: 'historical-conference-task-reader-facing-v1',
+        publicationDisposition: 'rewrite',
+        reason: null
     });
     assert.equal(projection.conferenceTaskPageSetSha256, direct.stableHash(projection.conferenceTaskPages));
-    assert.equal(projection.conferenceTaskCoverage.status, 'pending');
-    assert.equal(projection.conferenceTaskCoverage.rendererSupport, 'unsupported');
-    assert.equal(projection.conferenceTaskCoverage.publicationReady, false);
+    assert.equal(projection.conferenceTaskCoverage.status, 'complete');
+    assert.equal(projection.conferenceTaskCoverage.rendererSupport, 'historical-conference-task-reader-facing-v1');
+    assert.equal(projection.conferenceTaskCoverage.publicationReady, true);
     assert.equal(projection.conferenceTaskCoverage.total, 1);
-    assert.equal(projection.conferenceTaskCoverage.pending, 1);
-    assert.equal(projection.conferenceTaskCoverage.unsupported, 1);
+    assert.equal(projection.conferenceTaskCoverage.pending, 0);
+    assert.equal(projection.conferenceTaskCoverage.unsupported, 0);
     assert.equal(projection.conferenceTaskCoverage.inventoryPageSetSha256, f.inventory.pageSetSha256);
     assert.equal(projection.conferenceTaskCoverage.taskPageSetSha256, projection.conferenceTaskPageSetSha256);
     assert.deepEqual(projection.conferenceTaskCoverage.conferences, [{ conferenceKey: CONFERENCE,
-        total: 1, pending: 1, unsupported: 1, taskPageSetSha256: projection.conferenceTaskPageSetSha256 }]);
+        total: 1, planned: 1, supported: 1, taskPageSetSha256: projection.conferenceTaskPageSetSha256 }]);
     assert.equal(projection.conferenceTaskCoverage.conferenceSetSha256,
         direct.stableHash(projection.conferenceTaskCoverage.conferences));
     assert.equal(projection.conferenceTaskCoverageSha256, direct.stableHash(projection.conferenceTaskCoverage));
@@ -244,8 +273,16 @@ test('aggregate projection audits retained conference task pages as unsupported 
     assert.deepEqual(direct.normalizeAggregateProjection(projection, f.plan), projection);
 
     const forged = structuredClone(projection);
-    forged.conferenceTaskCoverage.status = 'complete';
-    forged.conferenceTaskCoverage.publicationReady = true;
+    assert.equal(projection.retainedPages.length, 2);
+    assert.deepEqual(projection.retainedPages.map(page => page.scope.key), ['2026-04-18', '2026-05-03']);
+    assert.ok(projection.retainedPages.every(page => page.publicationDisposition === 'retain-unchanged'));
+    assert.equal(projection.pageCoverage.inventoryPageCount, f.inventory.pages.length);
+    assert.equal(projection.pageCoverage.coveredPageCount, f.inventory.pages.length);
+    assert.equal(projection.pageCoverage.publicationReady, true);
+    assert.deepEqual(projection.pageCoverage.uncoveredPageKeys, []);
+
+    forged.conferenceTaskCoverage.status = 'pending';
+    forged.conferenceTaskCoverage.publicationReady = false;
     forged.conferenceTaskCoverageSha256 = direct.stableHash(forged.conferenceTaskCoverage);
     const forgedBody = { ...forged }; delete forgedBody.projectionSha256;
     forged.projectionSha256 = direct.stableHash(forgedBody);
@@ -260,11 +297,18 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.deepEqual(aggregate.members.map(item => item.paperId), ['arxiv:2608.00001', 'arxiv:2608.00002']);
     assert.equal(aggregate.source.sourceGeneration.generation, 1);
     assert.equal(aggregate.source.conferenceTaskCoverageSha256, f.projection.conferenceTaskCoverageSha256);
-    assert.equal(aggregate.source.conferenceTaskPublicationReady, false);
+    assert.equal(aggregate.source.conferenceTaskPublicationReady, true);
     assert.match(aggregate.markdown, /FRESH_READER|source-only/);
     assert.match(aggregate.markdown, /paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"/);
     assert.match(aggregate.markdown, /paper_digest_taxonomy_registry_sha256: "[a-f0-9]{64}"/);
     assert.match(aggregate.markdown, /站点标签页暂时兼容展示历史标签与新标签/);
+    assert.match(aggregate.markdown, /paper_digest_reader_quality: "reader-facing-v3"/);
+    assert.match(aggregate.markdown, /## ⚡ 今日概览[\s\S]*## 📋 论文列表/);
+    assert.match(aggregate.markdown, /英文题目：\*\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)\*/);
+    assert.match(aggregate.markdown, /评分：[\s\S]*排名：前50% \| 文档类型：方法研究 \| \[arXiv 原文\]\(https:\/\/arxiv\.org\/abs\/2608\.00001\)[\s\S]*👥 \*\*作者与机构\*\*/);
+    assert.match(aggregate.markdown, /🔗 \*\*开源资源\*\*[\s\S]*未发现已由来源证据绑定的公开资源/);
+    assert.equal((aggregate.markdown.match(/^标签：/gm) || []).length, 2,
+        'each paper has one tag row and no legacy duplicate footer');
     assert.doesNotMatch(JSON.stringify(aggregate), /POISON_OLD_BODY/);
     const output = direct.writeDirectAggregates({ outputRoot: path.join(f.root, 'aggregates'),
         aggregateRunId: direct.aggregateRunIdFor([aggregate]), aggregates: [aggregate] });
@@ -326,7 +370,13 @@ test('direct aggregate rejects a projection that omits a planned cohort', async 
 });
 
 test('direct aggregate creates a complete retained-local conference aggregate', async t => {
-    const f = await fixture(t); const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), conference: CONFERENCE });
+    const f = await fixture(t); const aggregates = direct.buildDirectAggregates({ inputs: inputs(f), conference: CONFERENCE });
+    assert.deepEqual(aggregates.map(item => item.scope), ['conference-task', 'conference']);
+    const task = aggregates[0]; const aggregate = aggregates[1];
+    assert.equal(task.outputPage.path, 'content/posts/icassp2026-task-001.md');
+    assert.equal(task.legacyTaskKey, 'task-001'); assert.equal(task.displayLabel, '语音识别');
+    assert.equal(task.members.length, 1); assert.equal(task.members[0].paperId, 'conference:icassp:2026:icassp-arnumber:100');
+    assert.match(task.markdown, /ICASSP-2026 · 语音识别/);
     assert.equal(aggregate.scope, 'conference'); assert.equal(aggregate.key, CONFERENCE);
     assert.equal(aggregate.outputPage.path, 'content/posts/icassp-2026.md');
     assert.equal(aggregate.members.length, 1);
@@ -334,6 +384,10 @@ test('direct aggregate creates a complete retained-local conference aggregate', 
     assert.equal(aggregate.source.sourceGeneration.contract, 'retained-local-conference-pdf-v1');
     assert.equal(aggregate.source.sourceGeneration.generation, null);
     assert.equal(aggregate.source.conferenceTaskCoverageSha256, f.projection.conferenceTaskCoverageSha256);
-    assert.equal(aggregate.source.conferenceTaskPublicationReady, false);
-    assert.doesNotMatch(aggregate.markdown, /Conference task|task-001|POISON_OLD_BODY/);
+    assert.equal(aggregate.source.conferenceTaskPublicationReady, true);
+    assert.doesNotMatch(aggregate.markdown, /POISON_OLD_BODY/);
+    const output = direct.writeDirectAggregates({ outputRoot: path.join(f.root, 'conference-aggregates'),
+        aggregateRunId: direct.aggregateRunIdFor(aggregates), aggregates });
+    assert.deepEqual(output.map(item => item.scope), ['conference-task', 'conference']);
+    assert.match(fs.readFileSync(output[0].pageFilename, 'utf8'), /英文题目/);
 });

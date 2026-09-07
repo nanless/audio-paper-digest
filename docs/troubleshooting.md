@@ -19,7 +19,7 @@ node scripts/test-api-key.js
 
 确认：
 
-- model 精确为 `muse-spark-1.2-contributor`；
+- model 精确为项目当前配置的 `muse-spark-1.3-contributor`；
 - `HTTPS_PROXY` 或 `HTTP_PROXY` 是 `http(s)://` CONNECT 地址；
 - 命令在沙箱外；
 - 代理出口和地区符合账户要求；
@@ -76,8 +76,13 @@ npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-
 
 先确认失败路由，而不是启动 crosswalk：arXiv direct item 的当前 generation 应在
 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/` 中有 TXT、PDF、runtime 和 manifest；
-重新运行同一 `history:direct-scheduler` 或 `history:direct-run` 会验证并恢复一致的工件。fresh acquisition
+先重新运行同一 `history:direct-scheduler`，直到所选 paper 在同一 plan/generation status 中全部为 ready；
+`history:direct-run --apply` 不补建来源，并会在模型调用前拒绝缺失、handoff 或 failed status。随后重跑
+direct-run 会验证来源并恢复 source-bound `analysis-recovery.json` 中的一致阶段 checkpoint。fresh acquisition
 失败只会写 immutable handoff，不自动修改 crosswalk，也不应阻断本地会议队列。
+
+会议外部路径可能漂移时，用一次 `history:status ... --verify-sources true` 重算 metadata/PDF SHA；不要把
+该深核选项放进 watch。普通 status 只检查路径、文件类型和 PDF size，以保持长期监控廉价。
 
 会议 direct item 先检查 local-source manifest 中 metadata/PDF 的路径和 SHA、冻结 inventory SHA 以及
 conference projection。不要用旧博客正文、旧分析、文件名相似度或随意标题搜索补齐；只有本地会议输入缺失/损坏，

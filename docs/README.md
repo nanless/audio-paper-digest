@@ -17,6 +17,7 @@
 | 完整离线验收、CI 与故障回放 | [维护指南：验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
 | 完全不用旧生成文本重写一个既有日批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 分阶段入口 |
 | 全历史重写：本地会议 PDF 与 fresh arXiv PDF/TXT 直达私有 staging | [历史重写底座](history-rewrite.md) | `conference-local-sources → direct-inputs → direct-plan → direct-run` |
+| 审查并发布完成的 direct 全历史重写 | [全历史 direct publication 闭环](history-direct-publication.md) | immutable plan/generation → historical review → locked activation/commit/push → live OID status |
 | 接管 2026-09-07 全历史重写现场 | [全历史重写交接](historical-rewrite-handoff-2026-09-07.md) | 先生成 local-direct catalog/plan；crosswalk 只处理 named arXiv fresh-failure handoff |
 | 改进解读写法并比较重跑效果 | [Reader 写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
 | 整理历史标签、任务层级与分面检索 | [标签体系设计](tag-taxonomy-design.md) | [实施与验收计划](tag-taxonomy-implementation.md)、`npm run taxonomy:preview` |

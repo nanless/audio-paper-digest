@@ -235,6 +235,7 @@ npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-
 # 只读进度快照；--watch-seconds 5 可持续输出 NDJSON 快照
 npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1
 npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1 --watch-seconds 5
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1 --publication-id UUID
 
 # 请求安全暂停；活动论文完成原子落盘并释放 operation lock 后，才允许 resume
 npm run history:pause -- --plan /absolute/path/direct-rewrite-plan-v5.json --phase source --generation 1
@@ -245,11 +246,11 @@ npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v5.json --ph
 npm run history:direct-aggregate -- projection --apply \
   --plan-file /absolute/path/direct-rewrite-plan-v5.json \
   --inventory-file /absolute/path/all-history.json \
-  --output-name direct-aggregate-projection-v2.json
+  --output-name direct-aggregate-projection-v3.json
 npm run history:direct-aggregate -- aggregate --apply \
   --plan-file /absolute/path/direct-rewrite-plan-v5.json \
   --registry-file /absolute/path/direct-rewrite-registry.json \
-  --projection-file /absolute/path/direct-aggregate-projection-v2.json \
+  --projection-file /absolute/path/direct-aggregate-projection-v3.json \
   --daily YYYY-MM-DD
 # 或把最后一项替换为 --conference conference-key
 ```
@@ -313,7 +314,10 @@ bounded 续跑会先严格重放并跳过同 generation 已封存的 arXiv 四�
 只阻止领取下一项；stderr 逐项输出 `historical-direct-source-progress-v1`，最终 JSON 报告 selected、processed、
 remaining 及 pause/lock 路径。每项结果还会在同一 scheduler lock 内更新自哈希
 `historical-direct-source-status-v1`；因此会议 SHA 验证和 arXiv sealed bundle 都可由 `history:status` 跨进程查看，
-重复 bounded 命令会推进下一批。该 checkpoint 是进度证据，direct-run 仍会现场重放来源字节后才使用。
+重复 bounded 命令会推进下一批。该 checkpoint 同时是 direct-run 的强制前置证明：
+`history:direct-run --apply` 会在任何来源抓取、PDF 提取或模型调用前，要求所选 paper 在同一 plan/generation
+的自哈希 source status 中全部为 `ready`；缺失、handoff 或 failed 都失败关闭。direct-run 随后仍会现场重放
+来源字节，不能只信 checkpoint。
 
 `history:direct-run --apply` 只有在 canonical analysis、API Reader 和 direct source provenance 都完成并
 逐项绑定同一 source snapshot 后，才会把一个 canonical paper 标为 `staged`。它同时在该 paper 的
@@ -321,6 +325,11 @@ direct staging 目录生成 `historical-direct-paper-page-staging-v1`：每个�
 字节、逐页 SHA，以及 source / analysis / Reader / projection / renderer implementation 的闭环 manifest。
 这里不读取 crosswalk、旧 fresh run、旧 taxonomy assignment 或任何旧博客正文。Renderer 实现变更、Reader
 SHA 漂移、历史页 projection 漂移和任何单页字节替换都会拒绝恢复。
+
+分析过程中每次阶段 checkpoint 都同步原子写入 execution 目录的 `analysis-recovery.json`，并绑定 paper ID、
+run ID 与当前 source snapshot SHA。失败但存在 `analysisManifest`、`analysisCheckpoint`、
+`analysisStageCheckpoints` 或 `analysisRecoveryImageManifest` 等状态时，registry 进入 `analysis_partial` 并记录
+recovery 文件 SHA，不写 staging。相同来源的后续进程重放该文件并按阶段指纹续跑；来源身份或文件自哈希漂移会失败关闭。
 
 长任务使用 `--paper-ids ID[,ID...]` 做显式集合，或用 `--max-papers N`（兼容别名 `--limit N`）按
 `plan.queue` 的稳定顺序截取；两者同时使用时先限定 ID 集合、再稳定截取。重复、未知或不属于所选
@@ -342,10 +351,19 @@ operation-lock 路径。未显式给 ID 的 `--max-papers` 会跳过 registry �
 “暂停尚未落稳就继续领任务”。`history:status` 不写 runtime，可单次输出或用 `--watch-seconds N`
 持续输出；它汇总 registry 全状态、完成百分比、最近失败、pause/lock、daily/conference aggregate
 缺口、conference-task 阻断和 publication 收尾 blocker。`staged`、aggregate complete 或私有 bundle
-存在都不会单独把全历史状态标成 complete。
+存在都不会单独把全历史状态标成 complete。状态扫描会按 projection v3 的精确 conference-task key
+集合核对 manifest，并重放每个 aggregate 的实际页面字节 SHA；同 plan 的额外 task、缺失 task、页面
+丢失/漂移或不足 4490 页的 `pageCoverage` 都会形成 blocker。
+普通/watch status 对会议来源只做廉价的路径、普通文件和 PDF size 检查；单次使用
+`--verify-sources true` 才重算全部 metadata/PDF SHA，该选项禁止与 watch 同用。
+没有 `--publication-id` 时 status 不读取 publication transaction，也不访问远端；指定后默认 live remote 验证，
+并要求 publication 的 plan SHA 与当前 history plan 相同，同时深核全部 source 字节。publication 终验不能与
+watch 同用；`--live-remote false` 仅用于离线诊断，不能产生 complete。
+最终 complete 同时要求 source status 全 ready、全部 sealed/local source 仍存在、全部论文 staged、107+3 个普通汇总、
+projection 中精确的 193 个 conference-task aggregate，以及 publication live remote/OID 闭合。
 
 `history:direct-aggregate projection` 先从 plan 与冻结 inventory 签发
-`historical-direct-aggregate-projection-v2`；`aggregate` 只消费该 projection、direct-run registry 和上述
+`historical-direct-aggregate-projection-v3`；`aggregate` 只消费该 projection、direct-run registry 和上述
 完成的单页 staging manifest，先重放同一 daily 或 conference cohort
 的完整成员集合和单页 SHA，再渲染汇总页。排行榜和二级条目都使用冻结历史页的内部 URL，因此链接可点击；
 汇总 Markdown 及其真实 `pages/content/posts/...` staging 字节会一起写入 aggregate run。它不从旧汇总正文
@@ -356,11 +374,14 @@ Daily cohort 可以由 fresh arXiv 与已认证 conference-local PDF 成员共�
 source manifest 集合和逐篇会议 PDF SHA 集合。Conference cohort 仍只允许 conference-local PDF；任一 arXiv
 generation、manifest、PDF 或成员身份漂移都会拒绝生成汇总。
 
-projection v2 还逐页保留冻结 inventory 中的 `conference-task` 路径、URL、旧字节 SHA、会议 key 与 task key，
-并以 `conferenceTaskPageSetSha256`、`conferenceTaskCoverageSha256` 和 projection self-SHA 封口。当前没有 task
-renderer，因此这些页面明确记录为 `pending` / `unsupported` / publication `blocked`；它们不进入 daily 或
-conference 汇总的论文成员、排名和正文，也不能因汇总 staging 完成而冒充已重写。后续历史 publication 必须
-重放该 coverage，并在 `publicationReady=false` 时失败关闭。
+projection v3 逐页保留冻结 inventory 中的 `conference-task` 路径、URL、旧字节 SHA、会议/task key，并只用冻结
+链接拓扑确定其 direct 论文成员；链接集合、目标页 SHA、renderer 和 task coverage 均自哈希。会议 aggregate 会先
+生成全部 task 页，再生成会议总页作为同一 run 的完成标记。无 direct 论文成员的冻结日汇总页签发
+`retain-unchanged`；`pageCoverage` 必须覆盖 inventory 的每一页才可 `publicationReady=true`。
+
+所有 direct 汇总页使用 `reader-facing-v3`：排行榜与中英文标题均链接独立页；详情只显示一次标签和八维评分，
+评分后依次显示分档、文档类型和可用的 arXiv 原文，再显示作者机构、核心摘要与逐项 HTTPS 可点击资源状态。
+“热门方向”严格只按每篇 current taxonomy 的主任务统计。
 
 catalog 中没有任何冻结历史页投影的记录绝不进入 fresh fetch、crosswalk 或 LLM 队列。反方向上，
 frozen paper page 没有 direct source route 时也必须出现在 plan 的 `uncoveredFrozenPaperPages` 与

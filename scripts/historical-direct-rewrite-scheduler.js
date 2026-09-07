@@ -79,7 +79,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     result = { ...result, pauseFile, operationLockTarget: lockTarget, operationLockPath: `${lockTarget}.lock`,
         sourceStatusFile: sourceStatus?.filename || null,
         sourceStatusSha256: sourceStatus?.status.statusSha256 || null,
-        sourceStatusCounts: control.sourceStatusCounts(sourceStatus?.status || null) };
+        sourceStatusCounts: control.sourceStatusCounts(sourceStatus?.status || null, plan) };
     console.log(JSON.stringify(result)); return result;
 }
 if (require.main === module) main().catch(error => { console.error(`[historical-direct-rewrite-scheduler] ${error.message}`); process.exitCode = 1; });

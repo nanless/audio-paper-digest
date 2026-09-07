@@ -35,9 +35,13 @@ function writeFileAtomic(filePath, content) {
             const stat = fs.lstatSync(filePath);
             if (stat.isFile()) previousMode = stat.mode & 0o777;
         } catch (error) { if (error.code !== 'ENOENT') throw error; }
-        // Replacing a private run/checkpoint must not reset its mode to 0644.
-        fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: previousMode });
-        if (previousMode !== undefined) fs.chmodSync(tmpPath, previousMode);
+        // Runtime JSON can contain model responses, paper excerpts and recovery
+        // metadata.  New files therefore default to private permissions; an
+        // existing file keeps its exact prior mode for backwards-compatible
+        // replacements.
+        const targetMode = previousMode ?? 0o600;
+        fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: targetMode });
+        fs.chmodSync(tmpPath, targetMode);
         fs.renameSync(tmpPath, filePath);
     } catch (err) {
         if (fs.existsSync(tmpPath)) {

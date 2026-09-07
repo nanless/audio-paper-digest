@@ -59,12 +59,15 @@ test('unknown roles, marker schema drift, weak permissions and symlink roots fai
 
 test('direct command inference and package entrypoints cover daily/history boundaries', () => {
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('full-fetch.js'), 'daily');
+    for (const name of ['deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js', 'refresh-api-reader.js']) {
+        assert.equal(envLoader.requiredWorkspaceRoleForCommand(name), 'daily', name);
+    }
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('historical-page-staging.js'), 'history');
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('conference-analyze.js'), 'history');
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('validate-data-files.js'), null);
     const scripts = require('../package.json').scripts;
-    for (const name of ['digest:prepare', 'digest:api', 'digest:manual', 'fetch',
-        'blog:generate', 'blog:review', 'blog:push']) {
+    for (const name of ['digest:prepare', 'digest:api', 'digest:manual', 'fetch', 'deep', 'batch',
+        'reanalyze', 'api:reader:refresh', 'blog:generate', 'blog:review', 'blog:push']) {
         assert.match(scripts[name], /workspace-role\.js exec daily --/, name);
     }
     for (const [name, command] of Object.entries(scripts)) {
@@ -91,6 +94,14 @@ test('direct daily and history entry guards reject the opposite workspace role',
     assert.doesNotThrow(() => envLoader.requireExternalRuntime('full-fetch.js', {
         workspaceRoot: dailyRoot, enforceWorkspaceRole: true
     }));
+    for (const name of ['deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js', 'refresh-api-reader.js']) {
+        assert.throws(() => envLoader.requireExternalRuntime(name, {
+            workspaceRoot: historyRoot, enforceWorkspaceRole: true
+        }), /只允许 role=daily/, name);
+        assert.doesNotThrow(() => envLoader.requireExternalRuntime(name, {
+            workspaceRoot: dailyRoot, enforceWorkspaceRole: true
+        }), name);
+    }
 });
 
 test('CLI parser rejects malformed role commands', () => {

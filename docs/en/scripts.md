@@ -77,9 +77,23 @@ npm run history:conference-projections -- --dry-run|--apply --catalog /abs/FILE.
 npm run history:direct-plan -- --dry-run|--apply --catalog /abs/FILE.json --inventory /abs/FILE.json --conference-projections /abs/FILE.json [--output NAME.json]
 npm run history:direct-scheduler -- --dry-run|--apply --plan /abs/FILE.json [--queue all|arxiv|conference] [--generation N] [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
 npm run history:direct-run -- --dry-run|--apply --plan /abs/FILE.json [--queue all|arxiv|conference] [--generation N] [--concurrency 1-8]
+npm run history:status -- --plan /abs/FILE.json [--generation N] [--watch-seconds N]
+npm run history:status -- --plan /abs/FILE.json [--generation N] --verify-sources true
+npm run history:status -- --plan /abs/FILE.json [--generation N] --publication-id UUID
 npm run history:direct-aggregate -- projection --dry-run|--apply --plan-file /abs/FILE.json --inventory-file /abs/FILE.json --output-name NAME.json
 npm run history:direct-aggregate -- aggregate --dry-run|--apply --plan-file /abs/FILE.json --registry-file /abs/FILE.json --projection-file /abs/FILE.json (--daily YYYY-MM-DD|--conference KEY)
 ```
+
+`direct-run --apply` is replay-only: every selected paper must already be `ready` in the scheduler's self-hashed
+status for the same plan/generation. It neither fetches a missing bundle nor creates a scheduler handoff. Recoverable
+analysis failures retain a source-bound `analysis-recovery.json` for cross-process stage reuse, but cannot stage.
+Normal/watch status checks conference paths and PDF sizes cheaply; the one-shot `--verify-sources true` mode rehashes
+all metadata/PDF inputs and cannot be combined with watch.
+Without `--publication-id`, normal/watch status stays offline and does not inspect a publication transaction or remote.
+Selecting a publication enables live remote verification by default; `--live-remote false` is diagnostic-only and can
+never complete. Publication status is a one-shot final audit (not watch-compatible) and deeply replays every arXiv
+bundle and conference metadata/PDF SHA. Unified completion requires all scheduler/source checks, every staged paper, all 107 daily plus 3
+conference aggregates, the exact 193 projected task aggregates, and a live publication bound to the same plan SHA.
 
 `history:crosswalk` remains read-only/audit state for the active route. `history:arxiv-batch` requires explicit named
 immutable failure handoffs; it does not enumerate pending hints. `history:local-crawl-batch` (the

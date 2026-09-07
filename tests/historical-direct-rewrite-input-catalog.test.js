@@ -144,6 +144,11 @@ test('CLI produces a scoped v5 catalog and its projection-to-plan dry-run succee
     assert.equal(parsed.apply, false); assert.equal(parsed.name, 'scoped-historical-local-data-v5.json');
     const written = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
     assert.equal(written.status, 'created'); assert.equal(written.filename, path.join(f.catalogRoot, 'scoped-historical-local-data-v5.json'));
+    const pointer = JSON.parse(fs.readFileSync(path.join(f.catalogRoot, 'current.json'), 'utf8'));
+    assert.deepEqual(pointer, { contract: 'direct-local-input-catalog-pointer-v1', version: 1,
+        activeCatalog: 'scoped-historical-local-data-v5.json', sha256: sha(fs.readFileSync(written.filename)),
+        scope: 'historical-direct-local-first-v5' });
+    if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(f.catalogRoot, 'current.json')).mode & 0o777, 0o600);
     const second = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
     assert.equal(second.status, 'recovered');
     const projection = projectionsCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile], {

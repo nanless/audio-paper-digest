@@ -75,7 +75,8 @@ function requireExternalRuntime(commandName = path.basename(process.argv[1] || '
 
 function requiredWorkspaceRoleForCommand(commandName) {
     const name = path.basename(String(commandName || ''));
-    if (name === 'full-fetch.js') return 'daily';
+    if (['full-fetch.js', 'deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js',
+        'refresh-api-reader.js'].includes(name)) return 'daily';
     if (name.startsWith('conference-') || name.startsWith('historical-')
         || name.startsWith('history-') || name === 'page-source-crosswalk.js'
         || name === 'arxiv-source-authority.js') return 'history';
@@ -103,7 +104,8 @@ function parseEnvFile(envFile) {
     }
 
     const envContent = fs.readFileSync(envFile, 'utf8');
-    envContent.split('\n').forEach(line => {
+    const firstDefinitionLines = new Map();
+    envContent.split('\n').forEach((line, index) => {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) return;
         const eq = trimmed.indexOf('=');
@@ -115,6 +117,15 @@ function parseEnvFile(envFile) {
             val = val.slice(1, -1);
         }
         if (key) {
+            const lineNumber = index + 1;
+            if (firstDefinitionLines.has(key)) {
+                // Never include either value in diagnostics: duplicate keys are
+                // especially likely to contain credentials. Parsing remains
+                // deliberately last-wins for backwards compatibility.
+                console.warn(`[env-loader] duplicate key ${key} at lines ${firstDefinitionLines.get(key)} and ${lineNumber}; last value wins`);
+            } else {
+                firstDefinitionLines.set(key, lineNumber);
+            }
             parsed[key] = val;
         }
     });

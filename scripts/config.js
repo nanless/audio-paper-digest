@@ -221,6 +221,10 @@ const FILES = {
     historicalDirectRewriteStagingDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-staging'),
     historicalDirectAggregateProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregate-projections'),
     historicalDirectAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregates'),
+    // Full-history publication receipts are intentionally isolated from the
+    // legacy crosswalk publication prototype and from daily schema-v3 state.
+    historicalDirectPublicationDir: path.join(DATA_DIR, 'runtime', 'historical-direct-publications'),
+    historicalDirectVisualDispositionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-visual-dispositions'),
     pageSourceCrosswalkDir: path.join(DATA_DIR, 'runtime', 'page-source-crosswalks'),
     historicalArxivBatchDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-batches'),
     // Identity-only authorities derived from retained local crawler snapshots.

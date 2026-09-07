@@ -30,7 +30,7 @@ npm run digest:prepare -- YYYY-MM-DD
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
    默认博客/视觉 Python 入口还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，权限由 loader 收紧为 `0600`。
-3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；默认文档配置是 OpenCode Go `muse-spark-1.2-contributor`。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 只提供同一路由的长期 sticky 备用账号，不能替代副模型变量。
+3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；当前默认文档配置是 OpenCode Go `muse-spark-1.3-contributor`。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 只提供同一路由的长期 sticky 备用账号，不能替代副模型变量。
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；Muse 与 arXiv 缺代理立即失败。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 

@@ -112,10 +112,11 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/historical-openreview-pdf-source.js` | Node 库 | 从 authenticated ICML poster authority 固定 OpenReview forum 身份，经项目 HTTP CONNECT、手动受限重定向和流式字节上限抓取缺失 PDF；以 O_EXCL/0600 封存 forum-ID PDF 和自哈希 receipt，恢复时先重放现有字节。 |
 | `lib/historical-icml-alternate-pdf-source.js` | Node 库 | OpenReview 被挑战页阻断时，仅对代码白名单的 ICML poster/forum 使用固定替代 PDF；精确重放快照标题和作者顺序。`n1mAjfRDZ6` 还可受控导入浏览器下载的 SSRN PDF，重新核验标题、作者、日期和跨页特征文本并绑定固定 SSRN DOI，以非网络 receipt 明示来源；绝不冒充 OpenReview/camera-ready 字节。 |
 | `lib/historical-direct-rewrite-plan.js` | Node 库 | 从 strict current catalog、inventory 与会议 projections 生成可重放路由计划，并自哈希记录所有未覆盖 frozen paper pages 及 scope/hint-status 汇总；唯一白名单跨标题预印本必须带自哈希 source disclosure，普通 v5 路由保持旧字节结构以兼容长任务恢复；不调用 LLM、网络、crosswalk 或旧正文。 |
-| `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行 direct plan：arXiv 每 generation 重新获取并封存 TXT/PDF，会议使用本地 PDF；支持稳定 paper 集合/上限、plan+generation 独占锁、pause marker、信号安全暂停和逐篇进度，以 source-only analysis/Reader 结果写隔离 registry 和 staging。 |
+| `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行 direct plan：强制重放同 plan/generation scheduler-ready 前置证明与来源字节；持久化 source-bound analysis recovery checkpoint，支持跨进程阶段续跑；仅完整 source-only analysis/Reader 写隔离 staging。 |
 | `lib/historical-direct-control.js` | Node 库 | 提供 source/analysis 两阶段 plan+generation 绑定的 immutable pause request、安全 resume、source checkpoint、registry/aggregate/task/publication blocker 只读汇总；不调用模型或修改博客。 |
 | `lib/historical-direct-page-staging.js` | Node 库 | 将 sealed direct source/analysis/Reader packet 投影成历史单篇 staging 页面；跨标题预印本在 front matter 后强制显示非 camera-ready 中文提示并把 disclosure 纳入 manifest/page SHA，不冒充 legacy crosswalk 路径。 |
-| `lib/historical-direct-aggregate.js` | Node 库 | 从 direct registry 与 page projections 可重放地产生日汇总和会议汇总 staging，不读取旧汇总正文；Daily 可用自哈希 mixed-source 合同绑定同 generation arXiv manifests 与会议 PDF SHA；projection v2 独立封存 conference-task coverage，未实现 renderer 时明确阻断后续 publication，但不污染汇总成员。 |
+| `lib/historical-direct-aggregate.js` | Node 库 | 从 direct registry 与 page projections 可重放地产生日汇总、会议汇总和 conference-task staging，不读取旧正文；projection v3 用冻结链接拓扑绑定 task 成员，为无论文汇总签 `retain-unchanged`，并闭合 inventory 全页面 coverage；reader-facing-v3 输出只按主任务统计热门方向，并显示双语链接标题、八维评分、分档/文档类型/arXiv、作者机构和资源状态。 |
+| `lib/historical-direct-publication.js` | Node 库 | 对完整 direct staging、aggregate projection v3、aggregate v2 与显式视觉处置执行可恢复的历史发布事务；绑定博客基线、逐页 SHA、确定性/Hugo/语义审查、激活回滚、Git 提交及远端 OID。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
@@ -159,9 +160,11 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-direct-rewrite-inputs.js` | 从冻结 inventory 的 single hint、严格主评分行 arXiv binding、ICML poster total/routable binding、conference manifest 与 blog root 写出 scoped v5 direct-input catalog；不要求额外 arXiv manifest。 |
 | `historical-direct-rewrite-plan.js` | 从 v5 direct catalog、inventory 与 conference projection v3 签发 source-only rewrite route plan；精确重放 primary arXiv 与 ICML routable binding，旧 v4/v3 文件失败关闭，并报告 frozen paper page 覆盖缺口。 |
 | `historical-direct-rewrite-scheduler.js` | 只准备 direct plan 的 arXiv/会议来源队列和 sealed source 工件；支持稳定 paper 集合/上限、plan+generation 来源锁、pause marker、信号安全停点和逐项进度；arXiv 原子写 TXT、PDF、runtime metadata、manifest，失败只写 immutable crosswalk handoff；不调用分析、Reader、crosswalk 或发布。 |
-| `historical-direct-rewrite-run.js` | 显式运行 source-only direct analysis、Reader 与单篇 staging；支持 `--paper-ids`、`--max-papers`、plan+generation 独占锁、pause marker、SIGINT/SIGTERM 安全停点和逐篇进度；arXiv 重放本次四文件官方 bundle，会议重放本地 metadata/PDF SHA。 |
+| `historical-direct-rewrite-run.js` | 显式运行 source-only direct analysis、Reader 与单篇 staging；apply 强制所选项已有同 plan/generation scheduler-ready 状态；失败阶段以 source-bound recovery 文件跨进程续跑而不冒充 staging。 |
 | `historical-direct-aggregate.js` | 为完成的 direct registry 生成可重放 daily 或 conference aggregate staging。 |
 | `historical-direct-control.js` | 全历史长任务控制面：`history:status` 单次/持续只读汇总 registry、pause/lock、覆盖率、汇总和 publication blockers；`history:pause` 写入 plan+generation 绑定的停机请求；`history:resume` 只在 operation lock 释放后恢复。 |
+| `historical-direct-publication.js` | 全历史 direct 发布入口：按 `plan → generate → review → publish → status` 驱动单一 publication UUID；发布阶段独占共享博客锁并验证远端 `main` OID。 |
+| `historical-direct-review.py` | 全历史 direct 语义审查协调器：逐页复用正式发布 LLM 与多模态审查，持久化输入/模型/prompt/代码绑定 checkpoint，只允许全页通过后签发最终 receipt。 |
 | `paper_identity.py` | `paper-identity-v1` 的 Python 同构实现，使用共享向量防止发布侧与 Node 身份/SHA 漂移。 |
 | `paper_taxonomy.py` | 与 Node 共用 registry 的 Python 加载、current/legacy 显式解析和精确映射；production current 只接受 active 中文首选标签，未知/歧义不自动收窄。 |
 | `taxonomy_paths.py` | 集中管理独立标签预览的Python路径，复用项目根与环境；不改变正式发布path_config模板指纹。 |

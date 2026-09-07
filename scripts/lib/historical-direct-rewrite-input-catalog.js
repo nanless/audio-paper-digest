@@ -467,13 +467,40 @@ function writeCatalog({ catalogRoot, name, catalog } = {}) {
     try {
         fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
         fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
-        return { status: 'created', filename, catalog: normalized };
+        return { status: 'created', filename, fileSha256: sha256(bytes), catalog: normalized };
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
         const existing = projectionApi.readStableFile(filename, 'existing direct v5 catalog');
         if (!existing.bytes.equals(bytes)) fail(`refuses to overwrite a different scoped local input catalog: ${name}`);
-        return { status: 'recovered', filename, catalog: normalized };
+        return { status: 'recovered', filename, fileSha256: sha256(bytes), catalog: normalized };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+function writeCurrentCatalogPointer({ catalogRoot, catalogName, fileSha256 } = {}) {
+    if (!SAFE_NAME_RE.test(String(catalogName || '')) || !validSha(fileSha256)) {
+        fail('current catalog pointer requires a safe v5 catalog name and file SHA');
+    }
+    const root = safeDirectory(catalogRoot, 'catalogRoot', true);
+    const target = path.join(root, 'current.json');
+    const existing = fs.lstatSync(target, { throwIfNoEntry: false });
+    if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1)) {
+        fail('current catalog pointer target is unsafe');
+    }
+    const pointer = { contract: 'direct-local-input-catalog-pointer-v1', version: 1,
+        activeCatalog: catalogName, sha256: fileSha256, scope: 'historical-direct-local-first-v5' };
+    const bytes = prettyBytes(pointer);
+    const temporary = path.join(root, `.current.json.${crypto.randomUUID()}.tmp`);
+    let fd;
+    try {
+        fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
+            | fs.constants.O_NOFOLLOW, 0o600);
+        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600); fs.closeSync(fd); fd = undefined;
+        fs.renameSync(temporary, target);
+        return { filename: target, pointer };
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+        try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
 }
 
 function buildAndWrite(options, overrides = {}) {
@@ -491,7 +518,9 @@ function buildAndWrite(options, overrides = {}) {
         dailyIcmlPosterBindingCount: catalog.scopeBinding.dailyIcmlPosterBindingCount, catalog };
     if (!options.apply) return result;
     const written = writeCatalog({ catalogRoot: files.historicalDirectRewriteInputCatalogDir, name: options.name, catalog });
-    return { ...result, status: written.status, filename: written.filename };
+    const current = writeCurrentCatalogPointer({ catalogRoot: files.historicalDirectRewriteInputCatalogDir,
+        catalogName: options.name, fileSha256: written.fileSha256 });
+    return { ...result, status: written.status, filename: written.filename, currentCatalogPointer: current.filename };
 }
 
 module.exports = { CONTRACT, VERSION, SCOPE, SAFE_NAME_RE, BLOCKED_CROSS_VERSION_RELATION,
@@ -499,4 +528,4 @@ module.exports = { CONTRACT, VERSION, SCOPE, SAFE_NAME_RE, BLOCKED_CROSS_VERSION
     HistoricalDirectRewriteInputCatalogError, stableHash, prettyBytes, directEligibleConferenceSource,
     priorPreprintSourceDisclosure,
     dailyPrimaryArxivBindingsFromFrozenInventory, dailyIcmlPosterEntries, arxivEntriesFromFrozenInventory, scopeConferenceEntries,
-    buildScopedCatalog, normalizeCatalog, writeCatalog, buildAndWrite };
+    buildScopedCatalog, normalizeCatalog, writeCatalog, writeCurrentCatalogPointer, buildAndWrite };

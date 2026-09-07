@@ -38,7 +38,7 @@ PAPER_ANALYZER_API_KEY=your-key
 # 可选；同一 OpenCode Go 路由的备用账号，逗号分隔
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
-PAPER_ANALYZER_MODEL=muse-spark-1.2-contributor
+PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897

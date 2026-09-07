@@ -122,7 +122,7 @@ filter spec 放在 `data/runtime/conference-filter-specs/`。最小 v2 形状如
   "version": 3,
   "filterPolicySha256": "2b96a65d4069a84ec1592d5d6893af6a84107ab30822ebd0ff8a2b305946ffde",
   "promptSha256": "657342ff5deae423d50bbd4835c7e479b2d1abe3f88d1d8bcd8950483c95f396",
-  "model": "muse-spark-1.2-contributor",
+  "model": "muse-spark-1.3-contributor",
   "endpointProtocol": "openai-responses",
   "endpointIdentitySha256": "4de319c45169889bd6be02e65d8a8eec1003647910ba0a54490345ae52276af3",
   "taxonomyRegistrySha256": "<64-hex-current-registry-bytes-sha256>"

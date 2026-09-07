@@ -79,6 +79,17 @@ function fixture(t) {
     const catalogSha = sha(Buffer.from(JSON.stringify(catalog)));
     const conferencePageProjections = projections.buildConferencePageProjections({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
     const plan = planner.buildDirectRewritePlan({ catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections });
+    // Most runner tests exercise analysis behavior and therefore start after a
+    // simulated successful scheduler phase. Dedicated prerequisite tests below
+    // remove or alter this self-hashed status explicitly.
+    const sourceRoot = path.join(root, 'runtime', 'fetched-arxiv');
+    for (const generation of [1, 2]) {
+        directControl.loadOrCreateSourceStatus({ sourceRoot, plan, generation, apply: true,
+            now: '2026-09-06T23:59:00.000Z' });
+        for (const item of plan.queue) directControl.updateSourceStatus({ sourceRoot, plan, generation,
+            event: { paperId: item.paperId, status: 'ready', schedulerFixture: true },
+            now: '2026-09-06T23:59:01.000Z' });
+    }
     return { root, plan };
 }
 function files(root) { return { registryRoot: path.join(root, 'runtime', 'registry'), executionRoot: path.join(root, 'runtime', 'executions'),
@@ -251,6 +262,41 @@ test('direct-run selection is plan-ordered, bounded, and rejects duplicate or ou
     assert.equal(fs.existsSync(roots.registryRoot), false, 'dry-run must not create the registry/control directory');
 });
 
+test('direct-run apply fails before source/model work unless scheduler marked every selected paper ready', async t => {
+    const f = fixture(t); const roots = files(f.root); let captures = 0; let analyses = 0;
+    const statusFile = directControl.sourceControlPaths({ sourceRoot: roots.freshArxivSourceRoot,
+        plan: f.plan, generation: 1 }).statusFile;
+    fs.unlinkSync(statusFile);
+    await assert.rejects(runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: async () => { captures++; return {}; },
+        analyze: async () => { analyses++; return {}; }
+    }), /source scheduler checkpoint is missing/);
+    assert.equal(captures, 0); assert.equal(analyses, 0);
+    assert.equal(fs.existsSync(roots.registryRoot), false, 'prerequisite fails before registry mutation');
+    const dry = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 });
+    assert.equal(dry.sourcePrerequisite.status, 'missing');
+    assert.deepEqual(dry.sourcePrerequisite.notReadyPaperIds, ['arxiv:2601.00001']);
+});
+
+test('source status reports lightweight conference path/size drift and opt-in deep SHA drift', t => {
+    const f = fixture(t); const roots = files(f.root); const pdf = path.join(f.root, 'conference.pdf');
+    const healthy = directControl.sourceSnapshot({ sourceRoot: roots.freshArxivSourceRoot, plan: f.plan });
+    assert.deepEqual({ ready: healthy.conference.ready, failed: healthy.conference.failed,
+        missing: healthy.conference.missing, deepShaVerified: healthy.conference.deepShaVerified },
+    { ready: 1, failed: 0, missing: 0, deepShaVerified: false });
+    const bytes = fs.readFileSync(pdf); bytes[bytes.length - 2] ^= 1; fs.writeFileSync(pdf, bytes);
+    assert.equal(directControl.sourceSnapshot({ sourceRoot: roots.freshArxivSourceRoot,
+        plan: f.plan }).conference.ready, 1, 'normal/watch status remains cheap and checks size only');
+    const deep = directControl.sourceSnapshot({ sourceRoot: roots.freshArxivSourceRoot,
+        plan: f.plan, verifySources: true });
+    assert.equal(deep.conference.failed, 1); assert.equal(deep.conference.deepShaVerified, true);
+    fs.unlinkSync(pdf);
+    const missing = directControl.sourceSnapshot({ sourceRoot: roots.freshArxivSourceRoot, plan: f.plan });
+    assert.equal(missing.conference.missing, 1);
+});
+
 test('direct-run CLI parses stable scopes and rejects ambiguous limits or malformed paper sets', () => {
     const plan = '/tmp/direct-plan.json';
     const parsed = runnerCli.parseArgs(['--apply', '--plan', plan, '--paper-ids',
@@ -379,6 +425,67 @@ test('defaultAnalyze incomplete result is failed and never persisted or staged',
     assert.deepEqual(allFiles(path.join(f.root, 'runtime', 'executions')).filter(name => path.basename(name) === 'analysis.json'), []);
 });
 
+test('defaultAnalyze persists recoverable checkpoints across processes and resumes without staging the partial attempt', async t => {
+    const f = fixture(t); const roots = files(f.root); let engineRuns = 0;
+    const partial = { directPaperId: 'arxiv:2601.00001', arxivId: '2601.00001',
+        analysis: null, parsed: null, analysisCheckpoint: 'recoverable canonical checkpoint',
+        analysisStageCheckpoints: { primaryAnalysis: 'recoverable canonical checkpoint' },
+        analysisRecoveryImageManifest: { candidates: [], selected: [] },
+        analysisManifest: { version: 1, stages: { primaryAnalysis: { status: 'complete' } } },
+        error: 'simulated crash after primary analysis' };
+    const dependencies = { captureFreshArxivRewriteSource: directArxivCapture(), renderDirectPage,
+        engine: { analyzeBatch: async (papers, options) => {
+            engineRuns += 1;
+            if (engineRuns === 1) {
+                options.onPaperCheckpointLocked(structuredClone(partial));
+                await options.onPaperResultLocked(papers[0], { result: structuredClone(partial) });
+                return;
+            }
+            assert.equal(papers[0].analysisCheckpoint, partial.analysisCheckpoint);
+            assert.deepEqual(papers[0].analysisStageCheckpoints, partial.analysisStageCheckpoints);
+            assert.deepEqual(papers[0].analysisRecoveryImageManifest, partial.analysisRecoveryImageManifest);
+            assert.deepEqual(papers[0].analysisManifest, partial.analysisManifest);
+            const active = context.getDirectRewriteAnalysisContext();
+            const sourceDetails = context.getDirectRewriteSource(papers[0]);
+            const descriptor = { textSha256: active.sourceSha256,
+                structuredArtifactsSha256: active.structuredArtifactsSha256,
+                sourceSnapshotSha256: active.sourceSnapshotSha256,
+                generation: active.sourceGeneration, sourceManifestSha256: active.sourceManifestSha256 };
+            await options.onPaperResultLocked(papers[0], {
+                result: sealedAnalysis(f.plan.queue.find(item => item.paperId === papers[0].directPaperId),
+                    descriptor, sourceDetails)
+            });
+        } } };
+    const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, dependencies);
+    assert.equal(first.status, 'partial'); assert.equal(first.results[0].status, 'analysis_partial');
+    assert.equal(first.registryCounts.analysis_partial, 1); assert.equal(first.analysisPartial, 1);
+    assert.equal(stageFiles(f.root).length, 0);
+    const firstRegistry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8'));
+    const partialEntry = firstRegistry.entries.find(entry => entry.paperId === partial.directPaperId);
+    assert.equal(partialEntry.status, 'analysis_partial');
+    const recoveryFile = partialEntry.analysisRecovery.filename;
+    const recovery = JSON.parse(fs.readFileSync(recoveryFile, 'utf8'));
+    assert.equal(recovery.record.analysisCheckpoint, partial.analysisCheckpoint);
+    assert.deepEqual(recovery.record.analysisStageCheckpoints, partial.analysisStageCheckpoints);
+    assert.deepEqual(recovery.record.analysisRecoveryImageManifest, partial.analysisRecoveryImageManifest);
+    assert.deepEqual(recovery.record.analysisManifest, partial.analysisManifest);
+
+    const replayFailure = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, { ...dependencies,
+        captureFreshArxivRewriteSource: async () => { throw new Error('simulated sealed source replay interruption'); } });
+    assert.equal(replayFailure.results[0].status, 'failed');
+    const failedRegistry = JSON.parse(fs.readFileSync(replayFailure.registryFile, 'utf8'));
+    assert.equal(failedRegistry.entries.find(entry => entry.paperId === partial.directPaperId)
+        .analysisRecovery.recoverySha256, partialEntry.analysisRecovery.recoverySha256,
+    'a retry that fails before analysis must not orphan the earlier recoverable checkpoint');
+
+    const second = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, dependencies);
+    assert.equal(second.status, 'complete'); assert.equal(second.results[0].status, 'staged');
+    assert.equal(second.registryCounts.staged, 1); assert.equal(engineRuns, 2);
+});
+
 test('missing current Reader blocks staging even when canonical analysis otherwise parses', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
@@ -460,29 +567,23 @@ test('a new arXiv generation receives an isolated direct registry and cannot rec
     assert.match(path.basename(second.registryFile), /arxiv-generation-000002/);
 });
 
-test('direct arXiv capture failure writes the immutable frozen failure handoff and does not invoke analysis', async t => {
+test('direct-run never turns a missing scheduler-owned arXiv bundle into a network retry or handoff', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0;
-    const capture = async () => { const error = new Error('official arXiv source was unavailable'); error.code = 'ARXIV_TRANSPORT'; throw error; };
     const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
-        now: () => '2026-09-07T00:00:00.000Z', captureFreshArxivRewriteSource: capture,
+        now: () => '2026-09-07T00:00:00.000Z',
         analyze: async () => { analyses += 1; return {}; }
     });
-    assert.equal(first.status, 'partial'); assert.equal(first.results[0].status, 'handoff'); assert.equal(analyses, 0);
-    const names = fs.readdirSync(roots.freshArxivFailureHandoffRoot); assert.equal(names.length, 1);
-    const stored = planner.readArxivFreshFailureHandoff({ root: roots.freshArxivFailureHandoffRoot, handoffName: names[0] }).handoff;
-    assert.equal(stored.paperId, 'arxiv:2601.00001'); assert.equal(stored.generation, 1);
-    assert.equal(stored.failure.errorCode, 'ARXIV_TRANSPORT'); assert.deepEqual(stored.pageBindings[0].historicalArxivLink, {
-        arxivId: '2601.00001', canonicalUrl: 'https://arxiv.org/abs/2601.00001', hintSources: ['body:arxiv-link']
-    });
-    assert.doesNotMatch(JSON.stringify(stored), /POISON_OLD_BLOG_BODY|official arXiv source was unavailable/);
+    assert.equal(first.status, 'partial'); assert.equal(first.results[0].status, 'failed'); assert.equal(analyses, 0);
+    assert.equal(fs.existsSync(roots.freshArxivFailureHandoffRoot), false,
+        'direct-run cannot create a scheduler failure handoff');
     const registry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8'));
-    assert.equal(registry.entries[0].status, 'failed'); assert.equal(registry.entries[0].failureHandoff.handoffSha256, stored.handoffSha256);
+    assert.equal(registry.entries[0].status, 'failed');
+    assert.equal(Object.hasOwn(registry.entries[0], 'failureHandoff'), false);
     const second = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
-        now: () => '2026-09-07T00:01:00.000Z', captureFreshArxivRewriteSource: capture,
+        now: () => '2026-09-07T00:01:00.000Z',
         analyze: async () => { analyses += 1; return {}; }
     });
-    assert.equal(second.results[0].status, 'handoff'); assert.equal(second.results[0].handoff.status, 'recovered');
-    assert.equal(fs.readdirSync(roots.freshArxivFailureHandoffRoot).length, 1); assert.equal(analyses, 0);
+    assert.equal(second.results[0].status, 'failed'); assert.equal(analyses, 0);
 });
 
 test('conference staged recovery rejects post-stage PDF and metadata mutations before returning recovered', async t => {

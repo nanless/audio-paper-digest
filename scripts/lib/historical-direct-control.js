@@ -151,9 +151,10 @@ function updateSourceStatus({ sourceRoot, plan, generation = 1, event, now = new
     const status = { ...body, statusSha256: stableHash(body) }; writeAtomicStatus(loaded.filename, status);
     return { filename: loaded.filename, status };
 }
-function sourceStatusCounts(status) {
+function sourceStatusCounts(status, plan = null) {
     const counts = { pending: 0, ready: 0, handoff: 0, failed: 0 };
     if (status) for (const entry of status.entries) counts[entry.status] += 1;
+    else if (plan) counts.pending = plan.queue.length;
     return counts;
 }
 function sourceStatusCountsByRoute(status, plan) {
@@ -263,11 +264,11 @@ function safeChildren(root) {
     configuredRoot(root, 'status scan root');
     return fs.readdirSync(root, { withFileTypes: true }).filter(entry => !entry.isSymbolicLink());
 }
-function aggregateSnapshot({ aggregateRoot, plan } = {}) {
+function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) {
     const expected = expectedCohorts(plan); const found = new Map(); const errors = [];
     for (const directory of safeChildren(aggregateRoot).filter(entry => entry.isDirectory())) {
         const runRoot = path.join(aggregateRoot, directory.name);
-        for (const entry of safeChildren(runRoot).filter(item => item.isFile() && /^(?:daily|conference)-[a-z0-9-]+\.json$/.test(item.name))) {
+        for (const entry of safeChildren(runRoot).filter(item => item.isFile() && /^(?:daily|conference|conference-task)-[a-z0-9-]+\.json$/.test(item.name))) {
             const filename = path.join(runRoot, entry.name);
             try {
                 const loaded = projectionIo.readStableJson(filename, 'direct aggregate status input'); const value = loaded.value;
@@ -277,6 +278,14 @@ function aggregateSnapshot({ aggregateRoot, plan } = {}) {
                 if (!SHA_RE.test(manifestSha256 || '') || aggregateApi.stableHash(body) !== manifestSha256) {
                     fail('direct aggregate manifest SHA drifted');
                 }
+                const stagedPath = value.outputPage?.stagedPath;
+                if (typeof stagedPath !== 'string' || !stagedPath.startsWith('pages/content/posts/')
+                    || !SHA_RE.test(value.outputPage?.contentSha256 || '')) fail('direct aggregate output page binding is invalid');
+                const pageFile = path.resolve(runRoot, ...stagedPath.split('/'));
+                if (!pageFile.startsWith(`${path.resolve(runRoot, 'pages')}${path.sep}`)
+                    || projectionIo.readStableFile(pageFile, 'direct aggregate status page').fileSha256 !== value.outputPage.contentSha256) {
+                    fail('direct aggregate output page bytes drifted');
+                }
                 const key = `${value.scope}:${value.key}`; const prior = found.get(key);
                 if (prior && prior.manifestSha256 !== manifestSha256) fail(`multiple direct aggregates disagree for ${key}`);
                 found.set(key, { scope: value.scope, key: value.key, manifestSha256, filename });
@@ -285,10 +294,22 @@ function aggregateSnapshot({ aggregateRoot, plan } = {}) {
     }
     const completeDaily = expected.daily.filter(key => found.has(`daily:${key}`));
     const completeConference = expected.conference.filter(key => found.has(`conference:${key}`));
-    return { expected: { daily: expected.daily.length, conference: expected.conference.length },
-        complete: { daily: completeDaily.length, conference: completeConference.length },
+    const expectedTaskSet = new Set(expectedTaskKeys.map(key => `conference-task:${key}`));
+    const observedTaskKeys = [...found.keys()].filter(key => key.startsWith('conference-task:'));
+    const unexpectedTaskKeys = observedTaskKeys.filter(key => !expectedTaskSet.has(key));
+    if (unexpectedTaskKeys.length) errors.push({ filename: null,
+        error: `unexpected conference-task aggregates: ${unexpectedTaskKeys.slice(0, 20).join(', ')}` });
+    const completeTasks = [...expectedTaskSet].filter(key => found.has(key)).length;
+    return { expected: { daily: expected.daily.length, conference: expected.conference.length,
+        conferenceTask: expectedTaskSet.size, aggregate: expected.daily.length + expected.conference.length,
+        total: expected.daily.length + expected.conference.length + expectedTaskSet.size },
+        complete: { daily: completeDaily.length, conference: completeConference.length, conferenceTask: completeTasks,
+            aggregate: completeDaily.length + completeConference.length,
+            total: completeDaily.length + completeConference.length + completeTasks },
         missing: { daily: expected.daily.filter(key => !found.has(`daily:${key}`)),
-            conference: expected.conference.filter(key => !found.has(`conference:${key}`)) }, errors };
+            conference: expected.conference.filter(key => !found.has(`conference:${key}`)),
+            conferenceTask: [...expectedTaskSet].filter(key => !found.has(key)).map(key => key.slice('conference-task:'.length)) },
+        unexpectedTaskKeys, errors };
 }
 
 function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
@@ -301,82 +322,162 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
                 || value?.planSha256 !== plan.planSha256) continue;
             const normalized = aggregateApi.normalizeAggregateProjection(value, plan);
             matches.push({ filename, coverage: normalized.conferenceTaskCoverage || null,
+                pageCoverage: normalized.pageCoverage || null,
+                expectedTaskKeys: normalized.conferenceTaskPages.map(page => `${page.conferenceKey}-${page.legacyTaskKey}`).sort(),
                 projectionSha256: normalized.projectionSha256 });
         } catch { /* unrelated or incomplete diagnostic file */ }
     }
     if (!matches.length) return { projectionPresent: false, total: null, pending: null, publicationReady: false };
-    const identities = new Set(matches.map(item => stableHash(item.coverage)));
-    if (identities.size !== 1) fail('multiple aggregate projections disagree on conference task coverage');
-    const coverage = matches[0].coverage;
+    const identities = new Set(matches.map(item => item.projectionSha256));
+    if (identities.size !== 1) fail('multiple aggregate projections disagree for the same direct plan');
+    const coverage = matches[0].coverage; const pageCoverage = matches[0].pageCoverage;
     return { projectionPresent: true, total: coverage?.total ?? 0, pending: coverage?.pending ?? 0,
         publicationReady: coverage?.publicationReady === true, reason: coverage?.reason ?? null,
+        expectedTaskKeys: matches[0].expectedTaskKeys, pageCoverage,
         projectionFile: matches[0].filename };
 }
 
-function sourceSnapshot({ sourceRoot, plan, generation = 1 } = {}) {
+function inspectConferenceSource(item, verifySha = false) {
+    const paths = item.route.writerInputs.flatMap(source => [source?.metadata?.absolutePath, source?.pdf?.absolutePath]);
+    if (!paths.length || paths.some(filename => typeof filename !== 'string' || !path.isAbsolute(filename))) {
+        return { status: 'failed', error: 'conference source paths are incomplete' };
+    }
+    for (const filename of paths) {
+        let stat;
+        try { stat = fs.lstatSync(filename); }
+        catch (error) {
+            if (error.code === 'ENOENT') return { status: 'missing', error: `missing source: ${filename}` };
+            return { status: 'failed', error: String(error.message).slice(0, 500) };
+        }
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
+            return { status: 'failed', error: `unsafe source: ${filename}` };
+        }
+    }
+    if (item.route.writerInputs.some(source => fs.statSync(source.pdf.absolutePath).size !== source.pdf.bytes)) {
+        return { status: 'failed', error: 'conference PDF size drifted' };
+    }
+    if (verifySha) {
+        try { planApi.verifyConferenceWriterInputs(item); }
+        catch (error) { return { status: 'failed', error: String(error.message).slice(0, 500) }; }
+    }
+    return { status: 'ready', error: null };
+}
+
+function sourceSnapshot({ sourceRoot, plan, generation = 1, verifySources = false } = {}) {
     const checked = generationNumber(generation); const fresh = require('./fresh-arxiv-rewrite-source.js');
     const arxiv = plan.queue.filter(item => item.route.kind === 'arxiv-fresh-fetch'); let observedSealedBundles = 0;
+    const conferenceItems = plan.queue.filter(item => item.route.kind === 'conference-local-pdf');
     const incompleteBundlePaperIds = [];
     const progress = fs.existsSync(sourceRoot) ? readSourceStatus({ sourceRoot, plan, generation }) : null;
     const counts = progress ? sourceStatusCounts(progress.status)
         : { pending: plan.queue.length, ready: 0, handoff: 0, failed: 0 };
     const byRoute = sourceStatusCountsByRoute(progress?.status || null, plan);
-    if (!fs.existsSync(sourceRoot)) return { checkpoint: { present: false, counts }, arxiv: { total: arxiv.length, observedSealedBundles: 0,
-        remaining: arxiv.length, incompleteBundlePaperIds: [], observationOnly: true },
-    conference: { total: plan.queue.filter(item => item.route.kind === 'conference-local-pdf').length,
-        durableSchedulerProgressAvailable: false }, progressByRoute: byRoute };
-    configuredRoot(sourceRoot, 'fresh arXiv source root');
-    for (const item of arxiv) {
-        const directory = fresh.sourceDirectory(sourceRoot, item.route.arxivId, checked);
-        const entry = fs.lstatSync(directory, { throwIfNoEntry: false });
-        if (!entry) continue;
-        if (!entry.isDirectory() || entry.isSymbolicLink()) { incompleteBundlePaperIds.push(item.paperId); continue; }
-        const names = fs.readdirSync(directory).sort();
-        if (names.join('\0') !== fresh.SOURCE_FILES.slice().sort().join('\0')) {
-            incompleteBundlePaperIds.push(item.paperId); continue;
+    if (fs.existsSync(sourceRoot)) {
+        configuredRoot(sourceRoot, 'fresh arXiv source root');
+        for (const item of arxiv) {
+            const directory = fresh.sourceDirectory(sourceRoot, item.route.arxivId, checked);
+            const entry = fs.lstatSync(directory, { throwIfNoEntry: false });
+            if (!entry) continue;
+            if (!entry.isDirectory() || entry.isSymbolicLink()) { incompleteBundlePaperIds.push(item.paperId); continue; }
+            const names = fs.readdirSync(directory).sort();
+            if (names.join('\0') !== fresh.SOURCE_FILES.slice().sort().join('\0')) {
+                incompleteBundlePaperIds.push(item.paperId); continue;
+            }
+            const safe = names.every(name => { const stat = fs.lstatSync(path.join(directory, name));
+                return stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1; });
+            if (!safe) { incompleteBundlePaperIds.push(item.paperId); continue; }
+            if (verifySources) {
+                try { fresh.readFreshArxivRewriteSource({ rootDir: sourceRoot,
+                    arxivId: item.route.arxivId, generation: checked }); observedSealedBundles += 1; }
+                catch { incompleteBundlePaperIds.push(item.paperId); }
+            } else observedSealedBundles += 1;
         }
-        const safe = names.every(name => { const stat = fs.lstatSync(path.join(directory, name));
-            return stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1; });
-        if (safe) observedSealedBundles += 1; else incompleteBundlePaperIds.push(item.paperId);
     }
+    const conferenceResults = conferenceItems.map(item => ({ paperId: item.paperId,
+        ...inspectConferenceSource(item, verifySources) }));
+    const conferenceCounts = { ready: 0, failed: 0, missing: 0 };
+    for (const result of conferenceResults) conferenceCounts[result.status] += 1;
     return { checkpoint: { present: Boolean(progress), filename: progress?.filename || null,
         statusSha256: progress?.status.statusSha256 || null, counts }, arxiv: { total: arxiv.length, observedSealedBundles,
         remaining: arxiv.length - observedSealedBundles, incompleteBundlePaperIds: incompleteBundlePaperIds.slice(0, 20),
-        observationOnly: true }, conference: { total: plan.queue.filter(item => item.route.kind === 'conference-local-pdf').length,
-            durableSchedulerProgressAvailable: Boolean(progress) }, progressByRoute: byRoute };
+        observationOnly: !verifySources, deepShaVerified: verifySources }, conference: { total: conferenceItems.length, ...conferenceCounts,
+            missingPaperIds: conferenceResults.filter(item => item.status === 'missing').map(item => item.paperId).slice(0, 20),
+            failedPaperIds: conferenceResults.filter(item => item.status === 'failed').map(item => item.paperId).slice(0, 20),
+            deepShaVerified: verifySources, durableSchedulerProgressAvailable: Boolean(progress) }, progressByRoute: byRoute };
 }
 
 function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, aggregateProjectionRoot,
-    sourceRoot, observedAt = new Date().toISOString() } = {}) {
+    sourceRoot, publicationRoot, publicationId = null, blogRepo = null, remoteName = 'origin', liveRemote = null,
+    verifySources = false, observedAt = new Date().toISOString() } = {}, dependencies = {}) {
     const loaded = projectionIo.readStableJson(planFile, 'direct rewrite status plan');
     const plan = planApi.normalizePlan(loaded.value); const paths = controlPaths({ registryRoot, plan, generation });
     const pause = readPauseFile(paths.pauseFile, plan, generation); const sourcePaths = sourceControlPaths({ sourceRoot, plan, generation });
     const sourcePause = readPauseFile(sourcePaths.pauseFile, plan, generation);
     const execution = registrySnapshot({ registryFile: paths.registryFile, plan });
     const running = lockPresent(paths.operationLockDirectory); const sourceRunning = lockPresent(sourcePaths.operationLockDirectory);
-    const sources = sourceSnapshot({ sourceRoot, plan, generation }); const aggregates = aggregateSnapshot({ aggregateRoot, plan });
+    const sources = sourceSnapshot({ sourceRoot, plan, generation,
+        verifySources: verifySources || publicationId !== null });
     const tasks = taskSnapshot({ aggregateProjectionRoot, plan });
+    const aggregates = aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys: tasks.expectedTaskKeys || [] });
     const total = plan.queue.length; const staged = execution.counts.staged || 0;
     const coverage = plan.paperPageCoverage || { frozenPaperPages: null, projectedPaperPages: plan.projectedPages.length,
         uncoveredFrozenPaperPages: null, coverageComplete: false };
     const blockers = [];
     if (coverage.coverageComplete !== true) blockers.push({ code: 'uncovered-paper-pages', count: coverage.uncoveredFrozenPaperPages });
+    if (total && !sources.checkpoint.present) blockers.push({ code: 'source-checkpoint-missing', count: total });
+    for (const status of ['pending', 'handoff', 'failed']) {
+        const count = sources.checkpoint.counts[status] || 0;
+        if (count) blockers.push({ code: `source-${status}`, count });
+    }
+    if ((sources.checkpoint.counts.ready || 0) !== total) blockers.push({ code: 'sources-not-ready',
+        count: total - (sources.checkpoint.counts.ready || 0) });
+    if (sources.arxiv.remaining) blockers.push({ code: 'arxiv-source-bundles-missing', count: sources.arxiv.remaining });
+    if (sources.conference.missing) blockers.push({ code: 'conference-sources-missing', count: sources.conference.missing });
+    if (sources.conference.failed) blockers.push({ code: 'conference-sources-failed', count: sources.conference.failed });
     if (!execution.present) blockers.push({ code: 'execution-not-started', count: total });
     else {
         if ((execution.counts.failed || 0) > 0) blockers.push({ code: 'failed-papers', count: execution.counts.failed });
         if (staged !== total) blockers.push({ code: 'papers-not-staged', count: total - staged });
     }
     if (!tasks.projectionPresent) blockers.push({ code: 'aggregate-projection-missing' });
+    else if (tasks.pageCoverage?.publicationReady !== true || tasks.pageCoverage?.uncoveredPageKeys?.length !== 0
+        || tasks.pageCoverage?.coveredPageCount !== tasks.pageCoverage?.inventoryPageCount) {
+        blockers.push({ code: 'aggregate-page-coverage-incomplete',
+            count: tasks.pageCoverage?.inventoryPageCount - tasks.pageCoverage?.coveredPageCount || null });
+    }
     else if (!tasks.publicationReady) blockers.push({ code: 'conference-task-pages-pending', count: tasks.pending });
+    else if (aggregates.missing.conferenceTask.length) {
+        blockers.push({ code: 'conference-task-aggregates-missing', count: aggregates.missing.conferenceTask.length });
+    }
     const missingAggregates = aggregates.missing.daily.length + aggregates.missing.conference.length;
     if (missingAggregates) blockers.push({ code: 'aggregates-missing', count: missingAggregates });
     if (aggregates.errors.length) blockers.push({ code: 'aggregate-artifact-errors', count: aggregates.errors.length });
-    blockers.push({ code: 'direct-history-publication-not-implemented' });
+    let publication;
+    if (publicationId === null) {
+        publication = { supported: true, selected: false, complete: false,
+            outputRoot: publicationRoot || null, publicationId: null, liveRemoteRequested: false };
+        blockers.push({ code: 'historical-publication-not-selected' });
+    } else {
+        const effectiveLiveRemote = liveRemote !== false;
+        const publicationStatus = dependencies.publicationStatus || require('./historical-direct-publication.js').status;
+        publication = publicationStatus({ outputRoot: publicationRoot,
+            publicationId, liveRemote: effectiveLiveRemote, blogRepo, remoteName }, dependencies.publicationDependencies || {});
+        publication = { supported: true, selected: true, outputRoot: publicationRoot,
+            liveRemoteRequested: effectiveLiveRemote, ...publication };
+        if (publication.planSha256 && publication.planSha256 !== plan.planSha256) {
+            publication = { ...publication, complete: false, planMatchesHistory: false };
+            blockers.push({ code: 'historical-publication-plan-mismatch' });
+        } else {
+            publication.planMatchesHistory = publication.planSha256 === plan.planSha256;
+            if (!publication.complete) blockers.push({ code: 'historical-publication-incomplete', phase: publication.phase });
+        }
+    }
     const pauseRequested = Boolean(pause || sourcePause); const operationRunning = running || sourceRunning;
     const phase = pauseRequested && operationRunning ? 'pausing' : pauseRequested ? 'paused' : operationRunning ? 'running'
         : !execution.present ? 'not-started'
-        : staged < total ? 'idle-incomplete' : missingAggregates ? 'awaiting-aggregates'
+        : staged < total ? 'idle-incomplete' : missingAggregates || aggregates.missing.conferenceTask.length ? 'awaiting-aggregates'
             : blockers.length ? 'awaiting-closeout' : 'complete';
+    const complete = blockers.length === 0;
     return { contract: STATUS_CONTRACT, version: 1, observedAt, plan: { filename: planFile,
         fileSha256: loaded.fileSha256, planSha256: plan.planSha256, canonicalPapers: total,
         projectedPages: plan.projectedPages.length, coverage }, execution: { generation: generationNumber(generation),
@@ -385,7 +486,7 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
         ...execution }, sources: { ...sources, pauseFile: sourcePaths.pauseFile,
             operationLockDirectory: sourcePaths.operationLockDirectory, running: sourceRunning,
             pauseRequested: Boolean(sourcePause) }, aggregates, conferenceTasks: tasks,
-    publication: { supported: false, complete: false }, completion: { phase, complete: false, blockers } };
+    publication, completion: { phase: complete ? 'complete' : phase, complete, blockers } };
 }
 
 module.exports = { PAUSE_CONTRACT, STATUS_CONTRACT, SOURCE_STATUS_CONTRACT, HistoricalDirectControlError, stableHash, generationNumber,

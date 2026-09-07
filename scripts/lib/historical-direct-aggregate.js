@@ -14,17 +14,18 @@ const projectionIo = require('./historical-conference-page-projections.js');
 const { parseAnalysis } = require('../utils.js');
 const taxonomyRuntime = require('./taxonomy-runtime.js').getDefaultTaxonomyRuntime();
 
-const CONTRACT = 'historical-direct-aggregate-v1';
-const VERSION = 1;
-const PROJECTION_CONTRACT = 'historical-direct-aggregate-projection-v2';
-const PROJECTION_VERSION = 2;
+const CONTRACT = 'historical-direct-aggregate-v2';
+const VERSION = 2;
+const PROJECTION_CONTRACT = 'historical-direct-aggregate-projection-v3';
+const PROJECTION_VERSION = 3;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const CONFERENCE_KEY_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const CONFERENCE_TASK_KEY_RE = /^task-[a-z0-9._-]+$/;
-const CONFERENCE_TASK_UNSUPPORTED_REASON = 'conference-task-renderer-not-implemented';
+const TASK_RENDERER = 'historical-conference-task-reader-facing-v1';
+const RETAIN_UNCHANGED_REASON = 'frozen-summary-has-no-direct-paper-members';
 
 class HistoricalDirectAggregateError extends Error {
     constructor(message) {
@@ -103,40 +104,70 @@ function projectionOutputPage(page, label) {
 }
 function projectionConferenceTaskPage(page, label) {
     exact(page, ['pageKey', 'path', 'primaryUrl', 'previousContentSha256', 'conferenceKey', 'legacyTaskKey',
-        'status', 'rendererSupport', 'publicationDisposition', 'reason'], label);
+        'displayLabel', 'requiredPaperIds', 'requiredPageKeys', 'membershipEvidence', 'status',
+        'rendererSupport', 'publicationDisposition', 'reason'], label);
     const output = projectionOutputPage({ pageKey: page.pageKey, path: page.path, primaryUrl: page.primaryUrl,
         previousContentSha256: page.previousContentSha256 }, label);
     if (output.primaryUrl === null || path.posix.normalize(output.path) !== output.path || output.path.split('/').includes('..')
         || !CONFERENCE_KEY_RE.test(String(page.conferenceKey || ''))
         || !CONFERENCE_TASK_KEY_RE.test(String(page.legacyTaskKey || ''))
-        || page.status !== 'pending' || page.rendererSupport !== 'unsupported'
-        || page.publicationDisposition !== 'blocked' || page.reason !== CONFERENCE_TASK_UNSUPPORTED_REASON) {
+        || text(page.displayLabel, `${label}.displayLabel`, 200) === ''
+        || !Array.isArray(page.requiredPaperIds) || !page.requiredPaperIds.length
+        || new Set(page.requiredPaperIds).size !== page.requiredPaperIds.length
+        || page.requiredPaperIds.some(value => typeof value !== 'string' || !value)
+        || !Array.isArray(page.requiredPageKeys) || !page.requiredPageKeys.length
+        || new Set(page.requiredPageKeys).size !== page.requiredPageKeys.length
+        || page.requiredPageKeys.some(value => !PAGE_KEY_RE.test(String(value || '')))
+        || !plain(page.membershipEvidence)
+        || Object.keys(page.membershipEvidence).sort().join('\0') !== ['contract', 'inventoryPageSha256', 'links', 'linkSetSha256'].sort().join('\0')
+        || !validSha(page.membershipEvidence.inventoryPageSha256)
+        || !validSha(page.membershipEvidence.linkSetSha256)
+        || page.status !== 'planned' || page.rendererSupport !== TASK_RENDERER
+        || page.publicationDisposition !== 'rewrite' || page.reason !== null) {
         fail(`${label} support state is invalid`);
     }
+    if (!Array.isArray(page.membershipEvidence.links) || page.membershipEvidence.links.some(link => !plain(link)
+        || Object.keys(link).sort().join('\0') !== ['ordinal', 'targetPageKey', 'targetRawSha256', 'targetRecordSha256'].sort().join('\0'))) {
+        fail(`${label} membership evidence is invalid`);
+    }
     return { ...output, conferenceKey: page.conferenceKey, legacyTaskKey: page.legacyTaskKey,
-        status: 'pending', rendererSupport: 'unsupported', publicationDisposition: 'blocked',
-        reason: CONFERENCE_TASK_UNSUPPORTED_REASON };
+        displayLabel: page.displayLabel, requiredPaperIds: page.requiredPaperIds.slice().sort(),
+        requiredPageKeys: page.requiredPageKeys.slice().sort(), membershipEvidence: clone(page.membershipEvidence),
+        status: 'planned', rendererSupport: TASK_RENDERER, publicationDisposition: 'rewrite', reason: null };
 }
 function conferenceTaskCoverageFor(taskPages, inventoryPageSetSha256) {
     if (!Array.isArray(taskPages) || !validSha(inventoryPageSetSha256)) fail('conference task coverage inputs are invalid');
     const conferences = [...new Set(taskPages.map(page => page.conferenceKey))].sort().map(conferenceKey => {
         const pages = taskPages.filter(page => page.conferenceKey === conferenceKey);
-        return { conferenceKey, total: pages.length, pending: pages.length, unsupported: pages.length,
+        return { conferenceKey, total: pages.length, planned: pages.length, supported: pages.length,
             taskPageSetSha256: stableHash(pages) };
     });
     return {
-        status: taskPages.length ? 'pending' : 'complete',
-        rendererSupport: taskPages.length ? 'unsupported' : 'not-required',
-        publicationReady: taskPages.length === 0,
-        reason: taskPages.length ? CONFERENCE_TASK_UNSUPPORTED_REASON : null,
+        status: 'complete',
+        rendererSupport: taskPages.length ? TASK_RENDERER : 'not-required',
+        publicationReady: true,
+        reason: null,
         total: taskPages.length,
-        pending: taskPages.length,
-        unsupported: taskPages.length,
+        pending: 0,
+        unsupported: 0,
+        planned: taskPages.length,
+        supported: taskPages.length,
         inventoryPageSetSha256,
         taskPageSetSha256: stableHash(taskPages),
         conferences,
         conferenceSetSha256: stableHash(conferences)
     };
+}
+function projectionRetainedPage(page, label) {
+    exact(page, ['pageKey', 'path', 'primaryUrl', 'previousContentSha256', 'kind', 'scope',
+        'publicationDisposition', 'reason'], label);
+    const output = projectionOutputPage({ pageKey: page.pageKey, path: page.path, primaryUrl: page.primaryUrl,
+        previousContentSha256: page.previousContentSha256 }, label);
+    if (page.kind !== 'daily-summary' || !plain(page.scope) || page.scope.type !== 'daily'
+        || !DATE_RE.test(String(page.scope.key || '')) || page.publicationDisposition !== 'retain-unchanged'
+        || page.reason !== RETAIN_UNCHANGED_REASON) fail(`${label} retain-unchanged disposition is invalid`);
+    return { ...output, kind: page.kind, scope: clone(page.scope), publicationDisposition: 'retain-unchanged',
+        reason: RETAIN_UNCHANGED_REASON };
 }
 function normalizeInventoryForAggregateProjection(value, plan) {
     if (!plain(value) || !validSha(value.ledgerSha256) || !validSha(value.pageSetSha256) || !Array.isArray(value.pages)
@@ -160,9 +191,16 @@ function normalizeInventoryForAggregateProjection(value, plan) {
             fail(`aggregate projection inventory conference task page ${index} is invalid`);
         }
         seen.add(page.pageId);
+        const taskTags = page.kind === 'conference-task' ? page.legacy?.tags : null;
+        const taskLinks = page.kind === 'conference-task' ? page.outboundPostLinks : null;
+        if (page.kind === 'conference-task' && (!Array.isArray(taskTags) || taskTags.length !== 1
+            || !Array.isArray(taskLinks))) fail(`aggregate projection inventory conference task identity ${index} is invalid`);
         return { pageKey: page.pageId, path: page.path, primaryUrl: validUrl(page.primaryUrl, `inventory page ${page.pageId} URL`),
             previousContentSha256: page.contentSha256, kind: page.kind, scope: { type: page.scope.type, key: page.scope.key },
-            cohortDate: page.cohortDate, ...(page.kind === 'conference-task' ? { legacyTaskKey: page.legacyTaskKey } : {}) };
+            cohortDate: page.cohortDate, ...(page.kind === 'conference-task' ? {
+                legacyTaskKey: page.legacyTaskKey, displayLabel: text(taskTags[0], `conference task ${index} label`, 200),
+                outboundPostLinks: clone(taskLinks)
+            } : {}) };
     });
 }
 function cohortEntries(plan, scope, key) {
@@ -190,32 +228,71 @@ function buildAggregateProjection({ plan, inventory } = {}) {
     };
     const daily = dailyKeys.map(key => build('daily', key, 'daily-summary'));
     const conference = conferenceKeys.map(key => build('conference', key, 'conference-summary'));
-    const conferenceTaskPages = pages.filter(page => page.kind === 'conference-task').map(page =>
-        projectionConferenceTaskPage({ pageKey: page.pageKey, path: page.path, primaryUrl: page.primaryUrl,
+    const paperByPageKey = new Map(normalizedPlan.queue.flatMap(item => item.pages.map(page => [page.pageKey, item])));
+    const conferenceTaskPages = pages.filter(page => page.kind === 'conference-task').map(page => {
+        const links = page.outboundPostLinks.filter(link => plain(link) && link.status === 'resolved'
+            && PAGE_KEY_RE.test(String(link.targetPageId || '')) && paperByPageKey.has(link.targetPageId)
+            && paperByPageKey.get(link.targetPageId).pages.some(projected => projected.pageKey === link.targetPageId
+                && projected.scope.type === 'conference' && projected.scope.key === page.scope.key))
+            .map(link => ({ ordinal: link.ordinal, targetPageKey: link.targetPageId,
+                targetRecordSha256: link.targetRecordSha256, targetRawSha256: link.targetRawSha256 }))
+            .sort((left, right) => left.ordinal - right.ordinal);
+        const requiredPageKeys = [...new Set(links.map(link => link.targetPageKey))].sort();
+        const requiredPaperIds = [...new Set(requiredPageKeys.map(pageKey => paperByPageKey.get(pageKey).paperId))].sort();
+        if (!requiredPageKeys.length || links.some(link => !Number.isSafeInteger(link.ordinal) || link.ordinal < 1
+            || !validSha(link.targetRecordSha256) || !validSha(link.targetRawSha256))) {
+            fail(`conference task ${page.pageKey} has no complete frozen link-topology membership`);
+        }
+        return projectionConferenceTaskPage({ pageKey: page.pageKey, path: page.path, primaryUrl: page.primaryUrl,
             previousContentSha256: page.previousContentSha256, conferenceKey: page.scope.key,
-            legacyTaskKey: page.legacyTaskKey, status: 'pending', rendererSupport: 'unsupported',
-            publicationDisposition: 'blocked', reason: CONFERENCE_TASK_UNSUPPORTED_REASON },
-        `conference task ${page.pageKey}`)).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+            legacyTaskKey: page.legacyTaskKey, displayLabel: page.displayLabel, requiredPaperIds, requiredPageKeys,
+            membershipEvidence: { contract: 'frozen-conference-task-link-topology-v1',
+                inventoryPageSha256: page.previousContentSha256, links,
+                linkSetSha256: stableHash(links) }, status: 'planned', rendererSupport: TASK_RENDERER,
+            publicationDisposition: 'rewrite', reason: null }, `conference task ${page.pageKey}`);
+    }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     const conferenceTaskCoverage = conferenceTaskCoverageFor(conferenceTaskPages, normalizedPlan.inventory.pageSetSha256);
+    const selectedAggregatePageKeys = new Set([...daily, ...conference].map(item => item.outputPage.pageKey));
+    const retainedPages = pages.filter(page => ['daily-summary', 'conference-summary'].includes(page.kind)
+        && !selectedAggregatePageKeys.has(page.pageKey)).map(page => projectionRetainedPage({
+        pageKey: page.pageKey, path: page.path, primaryUrl: page.primaryUrl,
+        previousContentSha256: page.previousContentSha256, kind: page.kind, scope: page.scope,
+        publicationDisposition: 'retain-unchanged', reason: RETAIN_UNCHANGED_REASON
+    }, `retained page ${page.pageKey}`)).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    const coveredPageKeys = [...new Set([...normalizedPlan.projectedPages.map(page => page.pageKey),
+        ...daily.map(item => item.outputPage.pageKey), ...conference.map(item => item.outputPage.pageKey),
+        ...conferenceTaskPages.map(page => page.pageKey), ...retainedPages.map(page => page.pageKey)])].sort();
+    const inventoryPageKeys = pages.map(page => page.pageKey).sort();
+    const pageCoverage = { inventoryPageCount: inventoryPageKeys.length, coveredPageCount: coveredPageKeys.length,
+        paperPageCount: normalizedPlan.projectedPages.length, aggregatePageCount: daily.length + conference.length,
+        conferenceTaskPageCount: conferenceTaskPages.length, retainedUnchangedPageCount: retainedPages.length,
+        uncoveredPageKeys: inventoryPageKeys.filter(pageKey => !coveredPageKeys.includes(pageKey)),
+        coveredPageSetSha256: stableHash(coveredPageKeys), publicationReady: false };
+    pageCoverage.publicationReady = pageCoverage.uncoveredPageKeys.length === 0
+        && pageCoverage.coveredPageCount === pageCoverage.inventoryPageCount;
     const body = { contract: PROJECTION_CONTRACT, version: PROJECTION_VERSION, planSha256: normalizedPlan.planSha256,
         inventory: clone(normalizedPlan.inventory), daily, dailySetSha256: stableHash(daily),
         conference, conferenceSetSha256: stableHash(conference), conferenceTaskPages,
         conferenceTaskPageSetSha256: stableHash(conferenceTaskPages), conferenceTaskCoverage,
-        conferenceTaskCoverageSha256: stableHash(conferenceTaskCoverage) };
+        conferenceTaskCoverageSha256: stableHash(conferenceTaskCoverage), retainedPages,
+        retainedPageSetSha256: stableHash(retainedPages), pageCoverage,
+        pageCoverageSha256: stableHash(pageCoverage) };
     return { ...body, projectionSha256: stableHash(body) };
 }
 function normalizeAggregateProjection(value, plan) {
     const normalizedPlan = planApi.normalizePlan(plan);
     exact(value, ['contract', 'version', 'planSha256', 'inventory', 'daily', 'dailySetSha256',
         'conference', 'conferenceSetSha256', 'conferenceTaskPages', 'conferenceTaskPageSetSha256',
-        'conferenceTaskCoverage', 'conferenceTaskCoverageSha256', 'projectionSha256'], 'direct aggregate projection');
+        'conferenceTaskCoverage', 'conferenceTaskCoverageSha256', 'retainedPages', 'retainedPageSetSha256',
+        'pageCoverage', 'pageCoverageSha256', 'projectionSha256'], 'direct aggregate projection');
     if (value.contract !== PROJECTION_CONTRACT || value.version !== PROJECTION_VERSION || value.planSha256 !== normalizedPlan.planSha256
         || !plain(value.inventory) || Object.keys(value.inventory).sort().join('\0') !== ['ledgerSha256', 'pageSetSha256'].join('\0')
         || value.inventory.ledgerSha256 !== normalizedPlan.inventory.ledgerSha256
         || value.inventory.pageSetSha256 !== normalizedPlan.inventory.pageSetSha256 || !Array.isArray(value.daily)
-        || !Array.isArray(value.conference) || !Array.isArray(value.conferenceTaskPages)
+        || !Array.isArray(value.conference) || !Array.isArray(value.conferenceTaskPages) || !Array.isArray(value.retainedPages)
         || !validSha(value.dailySetSha256) || !validSha(value.conferenceSetSha256)
         || !validSha(value.conferenceTaskPageSetSha256) || !validSha(value.conferenceTaskCoverageSha256)
+        || !validSha(value.retainedPageSetSha256) || !validSha(value.pageCoverageSha256)
         || !validSha(value.projectionSha256)) fail('direct aggregate projection envelope is invalid');
     const seenPages = new Set();
     const normalizeCohort = (item, index, scope) => {
@@ -250,6 +327,26 @@ function normalizeAggregateProjection(value, plan) {
         || stableHash(value.conferenceTaskCoverage) !== stableHash(expectedTaskCoverage)) {
         fail('conference task coverage report drifted');
     }
+    for (const task of conferenceTaskPages) {
+        const expectedPageKeys = [...new Set(normalizedPlan.queue.filter(item => task.requiredPaperIds.includes(item.paperId))
+            .flatMap(item => item.pages.filter(page => page.scope.type === 'conference' && page.scope.key === task.conferenceKey)
+                .map(page => page.pageKey)).filter(pageKey => task.requiredPageKeys.includes(pageKey)))].sort();
+        const expectedPaperIds = [...new Set(task.requiredPageKeys.map(pageKey => normalizedPlan.queue.find(item =>
+            item.pages.some(page => page.pageKey === pageKey && page.scope.type === 'conference'
+                && page.scope.key === task.conferenceKey))?.paperId))].sort();
+        if (expectedPageKeys.join('\0') !== task.requiredPageKeys.join('\0')
+            || expectedPaperIds.some(value => !value) || expectedPaperIds.join('\0') !== task.requiredPaperIds.join('\0')
+            || task.membershipEvidence.contract !== 'frozen-conference-task-link-topology-v1'
+            || !Array.isArray(task.membershipEvidence.links)
+            || stableHash(task.membershipEvidence.links) !== task.membershipEvidence.linkSetSha256
+            || task.membershipEvidence.inventoryPageSha256 !== task.previousContentSha256) {
+            fail(`conference task ${task.pageKey} membership differs from direct plan or frozen topology`);
+        }
+    }
+    const retainedPages = value.retainedPages.map((item, index) => projectionRetainedPage(item, `retainedPages[${index}]`));
+    if (new Set(retainedPages.map(item => item.pageKey)).size !== retainedPages.length
+        || retainedPages.some((item, index) => index && retainedPages[index - 1].pageKey.localeCompare(item.pageKey) >= 0)
+        || stableHash(retainedPages) !== value.retainedPageSetSha256) fail('retained page dispositions are duplicate, unsorted, or hash-drifted');
     const expectedDailyKeys = [...new Set(normalizedPlan.projectedPages.filter(page => page.scope.type === 'daily')
         .map(page => page.scope.key))].sort();
     const expectedConferenceKeys = [...new Set(normalizedPlan.projectedPages.filter(page => page.scope.type === 'conference')
@@ -261,12 +358,25 @@ function normalizeAggregateProjection(value, plan) {
         || stableHash(daily) !== value.dailySetSha256 || stableHash(conference) !== value.conferenceSetSha256) {
         fail('direct aggregate projection cohort coverage, ordering, or hash drifted');
     }
+    const coveredPageKeys = [...new Set([...normalizedPlan.projectedPages.map(page => page.pageKey),
+        ...daily.map(item => item.outputPage.pageKey), ...conference.map(item => item.outputPage.pageKey),
+        ...conferenceTaskPages.map(page => page.pageKey), ...retainedPages.map(page => page.pageKey)])].sort();
+    const expectedCoverage = { inventoryPageCount: value.pageCoverage?.inventoryPageCount,
+        coveredPageCount: coveredPageKeys.length, paperPageCount: normalizedPlan.projectedPages.length,
+        aggregatePageCount: daily.length + conference.length, conferenceTaskPageCount: conferenceTaskPages.length,
+        retainedUnchangedPageCount: retainedPages.length, uncoveredPageKeys: [],
+        coveredPageSetSha256: stableHash(coveredPageKeys), publicationReady: true };
+    if (!plain(value.pageCoverage) || value.pageCoverage.inventoryPageCount !== coveredPageKeys.length
+        || stableHash(value.pageCoverage) !== value.pageCoverageSha256
+        || stableHash(value.pageCoverage) !== stableHash(expectedCoverage)) fail('aggregate projection full-page coverage drifted');
     const body = { contract: value.contract, version: value.version, planSha256: value.planSha256,
         inventory: clone(value.inventory), daily, dailySetSha256: value.dailySetSha256,
         conference, conferenceSetSha256: value.conferenceSetSha256, conferenceTaskPages,
         conferenceTaskPageSetSha256: value.conferenceTaskPageSetSha256,
         conferenceTaskCoverage: clone(value.conferenceTaskCoverage),
-        conferenceTaskCoverageSha256: value.conferenceTaskCoverageSha256 };
+        conferenceTaskCoverageSha256: value.conferenceTaskCoverageSha256,
+        retainedPages, retainedPageSetSha256: value.retainedPageSetSha256,
+        pageCoverage: clone(value.pageCoverage), pageCoverageSha256: value.pageCoverageSha256 };
     if (stableHash(body) !== value.projectionSha256) fail('direct aggregate projection self-SHA drifted');
     return { ...body, projectionSha256: value.projectionSha256 };
 }
@@ -320,12 +430,25 @@ function expectedSource(entry, item) {
     return clone(entry.source);
 }
 function expectedArtifact(entry, item, source) {
-    exact(entry.analysis, ['directory', 'analysisFileSha256', 'analysisRecordSha256', 'sourceSnapshotSha256'], `${item.paperId} analysis record`);
+    const analysisFields = ['directory', 'analysisFileSha256', 'analysisRecordSha256', 'sourceSnapshotSha256'];
+    if (Object.hasOwn(entry.analysis || {}, 'recovery')) analysisFields.push('recovery');
+    exact(entry.analysis, analysisFields, `${item.paperId} analysis record`);
     exact(entry.staging, ['directory', 'stagingBindingSha256', 'analysisArtifact', 'pageStaging'], `${item.paperId} staging record`);
     if (typeof entry.analysis.directory !== 'string' || !validSha(entry.analysis.analysisFileSha256)
         || !validSha(entry.analysis.analysisRecordSha256) || entry.analysis.sourceSnapshotSha256 !== source.sourceSnapshotSha256
         || typeof entry.staging.directory !== 'string' || !validSha(entry.staging.stagingBindingSha256)
         || !plain(entry.staging.analysisArtifact)) fail(`${item.paperId} execution/staging record is invalid`);
+    if (entry.analysis.recovery) {
+        exact(entry.analysis.recovery, ['filename', 'fileSha256', 'recoverySha256', 'recordSha256', 'updatedAt'],
+            `${item.paperId} analysis recovery receipt`);
+        if (typeof entry.analysis.recovery.filename !== 'string' || !path.isAbsolute(entry.analysis.recovery.filename)
+            || !validSha(entry.analysis.recovery.fileSha256) || !validSha(entry.analysis.recovery.recoverySha256)
+            || !validSha(entry.analysis.recovery.recordSha256)
+            || Number.isNaN(Date.parse(entry.analysis.recovery.updatedAt || ''))
+            || new Date(entry.analysis.recovery.updatedAt).toISOString() !== entry.analysis.recovery.updatedAt) {
+            fail(`${item.paperId} analysis recovery receipt is invalid`);
+        }
+    }
     const required = ['paperId', 'runId', 'route', 'analysisFileSha256', 'analysisRecordSha256', 'sourceSnapshotSha256'];
     if (item.route.kind === 'arxiv-fresh-fetch') required.push('sourceGeneration', 'sourceManifestSha256',
         'sourceTextSha256', 'sourcePdfSha256', 'sourceRunIdentitySha256');
@@ -346,13 +469,20 @@ function expectedArtifact(entry, item, source) {
     }
     return artifact;
 }
-function readAnalysis(entry, item, artifact, executionRoot) {
+function readAnalysis(entry, item, artifact, executionRoot, source) {
     const directory = inside(executionRoot, entry.analysis.directory, `${item.paperId} analysis directory`);
     const sourceSegment = item.route.kind === 'arxiv-fresh-fetch' ? artifact.sourceRunIdentitySha256 : 'conference-local';
     if (directory !== path.join(executionRoot, item.runId, sourceSegment)) fail(`${item.paperId} analysis directory differs from direct route`);
     const loaded = readJson(path.join(directory, 'analysis.json'), `${item.paperId} direct analysis`);
     if (loaded.fileSha256 !== artifact.analysisFileSha256 || stableHash(loaded.value) !== artifact.analysisRecordSha256) {
         fail(`${item.paperId} direct analysis bytes drifted from staging artifact`);
+    }
+    if (entry.analysis.recovery) {
+        const recovery = runnerApi.readAnalysisRecovery({ executionDirectory: directory, item, sourceDescriptor: source });
+        const expected = entry.analysis.recovery;
+        if (recovery.filename !== expected.filename || recovery.fileSha256 !== expected.fileSha256
+            || recovery.recoverySha256 !== expected.recoverySha256 || recovery.recordSha256 !== expected.recordSha256
+            || recovery.updatedAt !== expected.updatedAt) fail(`${item.paperId} analysis recovery receipt drifted`);
     }
     const analysis = loaded.value;
     if (!plain(analysis) || text(analysis.title, `${item.paperId} analysis title`, 2000) === ''
@@ -373,10 +503,39 @@ function readAnalysis(entry, item, artifact, executionRoot) {
         || taxonomyValidation.registrySha256 !== taxonomyRuntime.registrySha256) {
         fail(`${item.paperId} direct canonical taxonomy differs from current registry`);
     }
+    const articleHeading = analysis.apiReaderArticle.match(/^#{1,6}\s+([^\n]+)$/m)?.[1]?.trim();
+    const readerTitle = text(String(analysis.apiReaderPlan?.readerTitle || articleHeading || analysis.title).trim(),
+        `${item.paperId} Reader title`, 500);
+    const documentType = text(String(parsed.documentType || '').trim(), `${item.paperId} document type`, 100);
+    const rankBucket = text(String(parsed.rankBucket || '').trim(), `${item.paperId} rank bucket`, 100);
+    const authors = analysis.apiReaderAuthors?.authors;
+    if (!Array.isArray(authors) || !authors.length || authors.some(author => !plain(author)
+        || typeof author.name !== 'string' || !author.name.trim() || !Array.isArray(author.affiliations)
+        || !author.affiliations.length || author.affiliations.some(value => typeof value !== 'string' || !value.trim()))) {
+        fail(`${item.paperId} Reader author/affiliation projection is invalid`);
+    }
+    const resources = analysis.apiReaderResources?.resources;
+    if (!Array.isArray(resources) || resources.some(resource => !plain(resource)
+        || typeof resource.type !== 'string'
+        || !(resource.status === null || typeof resource.status === 'string'
+            || Number.isSafeInteger(resource.status))
+        || typeof resource.availability !== 'string' || typeof (resource.finalUrl || resource.originalUrl) !== 'string')) {
+        fail(`${item.paperId} Reader resource projection is invalid`);
+    }
+    const scoreDimensions = [['创新性', parsed.innovationScore], ['技术严谨性', parsed.technicalRigorScore],
+        ['实验充分性', parsed.experimentalSufficiencyScore], ['清晰度', parsed.clarityScore],
+        ['影响力', parsed.impactScore], ['开源', parsed.openSourceScore], ['可复现性', parsed.reproducibilityScore],
+        ['工程/实践价值', parsed.engineeringScore]].map(([label, value]) => ({ label, value: Number(value) }));
+    if (scoreDimensions.some(dimension => !Number.isFinite(dimension.value))) fail(`${item.paperId} eight-dimensional score is incomplete`);
     return { analysis, analysisFileSha256: loaded.fileSha256, analysisRecordSha256: stableHash(analysis),
-        readerArticleSha256: analysis.apiReaderArticleSha256, title: analysis.title.trim(), summary: parsed.summary.trim(), score,
+        readerArticleSha256: analysis.apiReaderArticleSha256, title: analysis.title.trim(), readerTitle,
+        summary: parsed.summary.trim(), score, documentType, rankBucket, scoreDimensions,
         labels: labels.map(label => label.replace(/^#/, '')).sort(), primaryTaskLabel: parsed.primaryTaskTag.replace(/^#/, ''),
         primaryMethodLabel: parsed.primaryMethodTag.replace(/^#/, ''),
+        authors: authors.map(author => ({ name: author.name.trim(), affiliations: author.affiliations.map(value => value.trim()) })),
+        resources: resources.map(resource => ({ type: resource.type,
+            status: resource.status === null ? '未取得 HTTP 状态' : String(resource.status),
+            availability: resource.availability, url: resource.finalUrl || resource.originalUrl })),
         taxonomy: { selectionContract: taxonomyRuntime.selectionContract,
             registryVersion: taxonomyRuntime.registryVersion, registrySha256: taxonomyRuntime.registrySha256 } };
 }
@@ -398,7 +557,7 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
     const stageRegistry = planApi.buildRegistry(plan, item.route.kind === 'arxiv-fresh-fetch' ? { sourceBindings: [source.sourceBinding] } : {});
     const expectedBinding = planApi.directStagingBinding({ plan, registry: stageRegistry, paperId: item.paperId, analysisArtifact: artifact });
     if (stableHash(stage.stagingBinding) !== stableHash(expectedBinding)) fail(`${item.paperId} staging binding cannot replay direct source contract`);
-    const canonical = readAnalysis(entry, item, artifact, executionRoot);
+    const canonical = readAnalysis(entry, item, artifact, executionRoot, source);
     const pageManifestFile = path.join(directory, 'page-staging-manifest.json');
     const pageManifest = directPages.validateManifest({
         value: readJson(pageManifestFile, `${item.paperId} direct page manifest`).value,
@@ -435,15 +594,27 @@ function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, sta
 }
 
 function md(value) { return String(value).replace(/([\\`*_[\]<>|])/g, '\\$1').replace(/\s+/g, ' ').trim(); }
-function renderAggregate(scope, key, members) {
-    const display = scope === 'daily' ? `语音/音乐/音频论文速递 ${key}` : `${key.toUpperCase()} 论文汇总`;
+function publicHttps(value, label) {
+    let url;
+    try { url = new URL(value); } catch { fail(`${label} is invalid`); }
+    if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) fail(`${label} is not public HTTPS`);
+    return url.href;
+}
+function renderAggregate(scope, key, members, options = {}) {
+    const display = scope === 'daily' ? `语音/音乐/音频论文速递 ${key}`
+        : scope === 'conference-task' ? `${options.conferenceKey.toUpperCase()} · ${options.displayLabel}`
+            : `${key.toUpperCase()} 论文汇总`;
     const tags = [...new Set(members.flatMap(item => item.canonical.labels))].sort();
+    const directionCounts = [...members.reduce((counts, item) => counts.set(item.canonical.primaryTaskLabel,
+        (counts.get(item.canonical.primaryTaskLabel) || 0) + 1), new Map()).entries()]
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-CN'));
     const taxonomy = members[0]?.canonical.taxonomy;
     if (!taxonomy || members.some(item => stableHash(item.canonical.taxonomy) !== stableHash(taxonomy))) {
         fail(`${scope}:${key} aggregate taxonomy metadata is missing or mixed`);
     }
     let output = `---\ntitle: "${display}"\ndraft: false\n`;
     output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;
+    output += 'paper_digest_reader_quality: "reader-facing-v3"\n';
     output += `paper_digest_taxonomy_contract: "${taxonomyRuntime.flatCompatContract}"\n`;
     output += `paper_digest_taxonomy_selection_contract: "${taxonomy.selectionContract}"\n`;
     output += `paper_digest_taxonomy_registry_version: "${taxonomy.registryVersion}"\n`;
@@ -452,13 +623,31 @@ function renderAggregate(scope, key, members) {
     output += `# ${display}\n\n`;
     output += `本期共收录 **${members.length}** 篇完成 source-only 重写的论文。\n\n`;
     output += '🏷️ 标签说明：本期使用新版受控 taxonomy；站点标签页暂时兼容展示历史标签与新标签。\n\n';
+    output += '## ⚡ 今日概览\n\n';
+    output += '### 🏷️ 热门方向\n\n| 方向（仅主任务） | 数量 |\n|---|---:|\n';
+    for (const [label, count] of directionCounts) output += `| #${md(label)} | ${count} 篇 |\n`;
+    output += '\n### 📊 论文评分排行榜\n\n';
     output += '| 排名 | 论文 | 评分 | 主任务 | 主方法 |\n|---:|---|---:|---|---|\n';
-    for (const member of members) output += `| ${member.rank} | [${md(member.canonical.title)}](${internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`)}) | ${member.canonical.score.toFixed(1)} | ${md(member.canonical.primaryTaskLabel)} | ${md(member.canonical.primaryMethodLabel)} |\n`;
-    output += '\n---\n';
+    for (const member of members) output += `| ${member.rank} | [${md(member.canonical.readerTitle)}](${internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`)}) | ${member.canonical.score.toFixed(1)} | ${md(member.canonical.primaryTaskLabel)} | ${md(member.canonical.primaryMethodLabel)} |\n`;
+    output += '\n---\n\n## 📋 论文列表\n';
     for (const member of members) {
-        output += `\n## ${member.rank}. [${md(member.canonical.title)}](${internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`)})\n\n`;
+        const blogUrl = internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`);
+        output += `\n### ${member.rank}. [${md(member.canonical.readerTitle)}](${blogUrl})\n\n`;
+        output += `> 英文题目：*[${md(member.canonical.title)}](${blogUrl})*\n\n`;
         output += `标签：${member.canonical.labels.map(label => `#${md(label)}`).join(' ')}\n\n`;
-        output += `评分：${member.canonical.score.toFixed(1)}/10\n\n${member.canonical.summary}\n`;
+        output += `评分：${member.canonical.score.toFixed(1)}/10（${member.canonical.scoreDimensions.map(item => `${item.label} ${item.value}`).join('；')}）\n\n`;
+        const source = member.item.route.kind === 'arxiv-fresh-fetch'
+            ? ` | [arXiv 原文](https://arxiv.org/abs/${member.item.route.arxivId})` : '';
+        output += `排名：${md(member.canonical.rankBucket)} | 文档类型：${md(member.canonical.documentType)}${source}\n\n`;
+        output += '👥 **作者与机构**\n\n';
+        for (const author of member.canonical.authors) output += `- ${md(author.name)}：${author.affiliations.map(md).join('；')}\n`;
+        output += `\n📌 **核心摘要**\n\n${member.canonical.summary}\n\n`;
+        output += '🔗 **开源资源**\n\n';
+        if (!member.canonical.resources.length) output += '未发现已由来源证据绑定的公开资源。\n';
+        for (const resource of member.canonical.resources) {
+            output += `- ${md(resource.type)} · ${md(resource.status)} · ${md(resource.availability)}：<${publicHttps(resource.url, `${member.item.paperId} resource URL`)}>\n`;
+        }
+        output += '\n---\n';
     }
     return output;
 }
@@ -466,7 +655,7 @@ function sourceGenerationFor(scope, key, staged) {
     const arxiv = staged.filter(member => member.item.route.kind === 'arxiv-fresh-fetch');
     const conference = staged.filter(member => member.item.route.kind === 'conference-local-pdf');
     if (arxiv.length + conference.length !== staged.length) fail(`${scope}:${key} has an unsupported source route`);
-    if (scope === 'conference' && (arxiv.length || !conference.length)) {
+    if (['conference', 'conference-task'].includes(scope) && (arxiv.length || !conference.length)) {
         fail(`${scope}:${key} must use retained local conference PDFs`);
     }
     if (scope === 'daily' && !arxiv.length && !conference.length) fail(`${scope}:${key} has no source-bound members`);
@@ -496,12 +685,16 @@ function buildCohort(inputs, cohort) {
     if (selected.some(item => !item)) fail(`${cohort.scope}:${cohort.key} is missing a direct plan member`);
     const staged = selected.map(({ item, entry }) => loadStagedMember({ plan: inputs.plan, registryEntry: entry, item,
         stagingRoot: inputs.stagingRoot, executionRoot: inputs.executionRoot }));
-    const pages = staged.flatMap(member => member.item.pages.filter(page => page.scope.type === cohort.scope && page.scope.key === cohort.key));
+    const memberScope = cohort.scope === 'conference-task' ? 'conference' : cohort.scope;
+    const memberKey = cohort.scope === 'conference-task' ? cohort.conferenceKey : cohort.key;
+    const pages = staged.flatMap(member => member.item.pages.filter(page => page.scope.type === memberScope
+        && page.scope.key === memberKey && cohort.requiredPageKeys.includes(page.pageKey)));
     const actualKeys = pages.map(page => page.pageKey).sort();
     if (actualKeys.join('\0') !== cohort.requiredPageKeys.join('\0')) fail(`${cohort.scope}:${cohort.key} staging does not exactly cover the complete cohort`);
     const sourceGeneration = sourceGenerationFor(cohort.scope, cohort.key, staged);
     const members = staged.map(member => {
-        const pages = member.item.pages.filter(page => page.scope.type === cohort.scope && page.scope.key === cohort.key);
+        const pages = member.item.pages.filter(page => page.scope.type === memberScope && page.scope.key === memberKey
+            && cohort.requiredPageKeys.includes(page.pageKey));
         const rendered = new Map(member.pageStaging.pages.map(page => [page.pageKey, page]));
         const renderedPages = pages.map(page => rendered.get(page.pageKey));
         if (renderedPages.some(page => !page)) fail(`${member.item.paperId} aggregate member has an unrendered projected page`);
@@ -509,7 +702,7 @@ function buildCohort(inputs, cohort) {
     })
         .sort((left, right) => right.canonical.score - left.canonical.score || left.item.paperId.localeCompare(right.item.paperId))
         .map((member, index) => ({ rank: index + 1, ...member }));
-    const markdown = renderAggregate(cohort.scope, cohort.key, members);
+    const markdown = renderAggregate(cohort.scope, cohort.key, members, cohort);
     const memberRecords = members.map(member => ({ rank: member.rank, paperId: member.item.paperId, runId: member.item.runId, route: member.item.route.kind,
         pageKeys: member.pages.map(page => page.pageKey).sort(), pagePaths: member.pages.map(page => page.pagePath).sort(),
         renderedPages: member.renderedPages.map(page => ({ pageKey: page.pageKey, stagedPath: page.stagedPath,
@@ -520,10 +713,16 @@ function buildCohort(inputs, cohort) {
         analysisRecordSha256: member.canonical.analysisRecordSha256, readerArticleSha256: member.canonical.readerArticleSha256,
         stagingBindingSha256: member.stagingBindingSha256, score: member.canonical.score, title: member.canonical.title, summary: member.canonical.summary,
         labels: member.canonical.labels, primaryTaskLabel: member.canonical.primaryTaskLabel,
-        primaryMethodLabel: member.canonical.primaryMethodLabel }));
+        primaryMethodLabel: member.canonical.primaryMethodLabel, readerTitle: member.canonical.readerTitle,
+        documentType: member.canonical.documentType, rankBucket: member.canonical.rankBucket,
+        scoreDimensions: member.canonical.scoreDimensions, authors: member.canonical.authors,
+        resources: member.canonical.resources }));
     const outputPage = { ...cohort.outputPage, stagedPath: path.posix.join('pages', cohort.outputPage.path),
         contentSha256: sha256(Buffer.from(markdown, 'utf8')) };
     const body = { contract: CONTRACT, version: VERSION, status: 'complete', scope: cohort.scope, key: cohort.key,
+        ...(cohort.scope === 'conference-task' ? { conferenceKey: cohort.conferenceKey,
+            legacyTaskKey: cohort.legacyTaskKey, displayLabel: cohort.displayLabel,
+            membershipEvidence: clone(cohort.membershipEvidence) } : {}),
         outputPage, source: { planSha256: inputs.plan.planSha256, planFileSha256: inputs.planFileSha256,
             registrySha256: inputs.registry.registrySha256, registryFileSha256: inputs.registryFileSha256,
             aggregateProjectionSha256: inputs.projection.projectionSha256, aggregateProjectionFileSha256: inputs.projectionFileSha256,
@@ -544,8 +743,15 @@ function buildDirectAggregates({ inputs, daily = null, conference = null } = {})
     if (daily !== null && conference !== null) fail('select either one daily or one conference cohort per aggregate run');
     const dailyCohorts = conference !== null ? [] : pick(inputs.projection.daily, daily, 'daily');
     const conferenceCohorts = daily !== null ? [] : pick(inputs.projection.conference, conference, 'conference');
+    const taskCohorts = daily !== null ? [] : inputs.projection.conferenceTaskPages
+        .filter(task => conference === null || task.conferenceKey === conference)
+        .map(task => ({ ...task, scope: 'conference-task', key: `${task.conferenceKey}-${task.legacyTaskKey}`,
+            outputPage: projectionOutputPage({ pageKey: task.pageKey, path: task.path, primaryUrl: task.primaryUrl,
+                previousContentSha256: task.previousContentSha256 }, `conference task ${task.pageKey} output page`) }));
     if (!dailyCohorts.length && !conferenceCohorts.length) fail('direct aggregate projection has no selected cohort');
-    return [...dailyCohorts, ...conferenceCohorts].map(cohort => buildCohort(inputs, cohort));
+    // Task pages are written before their conference summary.  The summary is
+    // therefore the completion marker for an atomic, restartable conference run.
+    return [...dailyCohorts, ...taskCohorts, ...conferenceCohorts].map(cohort => buildCohort(inputs, cohort));
 }
 function aggregateRunIdFor(aggregates) {
     if (!Array.isArray(aggregates) || !aggregates.length || aggregates.some(item => !validSha(item?.manifestSha256))) fail('complete aggregate manifests are required');
@@ -572,11 +778,11 @@ function writeDirectAggregates({ outputRoot, aggregateRunId, aggregates } = {}) 
     for (const aggregate of aggregates) {
         const expected = { ...aggregate }; const manifestSha256 = expected.manifestSha256; delete expected.manifestSha256;
         if (aggregate.contract !== CONTRACT || aggregate.version !== VERSION || aggregate.status !== 'complete'
-            || !['daily', 'conference'].includes(aggregate.scope) || !validSha(manifestSha256) || stableHash(expected) !== manifestSha256) {
+            || !['daily', 'conference', 'conference-task'].includes(aggregate.scope) || !validSha(manifestSha256) || stableHash(expected) !== manifestSha256) {
             fail('refuses to write an invalid direct aggregate manifest');
         }
         const name = `${aggregate.scope}-${aggregate.key}.json`;
-        if (!/^(?:daily|conference)-[a-z0-9-]{1,128}\.json$/.test(name)) fail('direct aggregate output name is unsafe');
+        if (!/^(?:daily|conference|conference-task)-[a-z0-9-]{1,160}\.json$/.test(name)) fail('direct aggregate output name is unsafe');
         if (typeof aggregate.outputPage?.stagedPath !== 'string' || !aggregate.outputPage.stagedPath.startsWith('pages/content/posts/')
             || !validSha(aggregate.outputPage.contentSha256) || aggregate.outputPage.contentSha256 !== aggregate.markdownSha256) {
             fail(`direct aggregate ${aggregate.scope}:${aggregate.key} output-page staging binding is invalid`);

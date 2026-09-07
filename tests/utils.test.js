@@ -5,8 +5,10 @@ const path = require('node:path');
 const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
+const os = require('node:os');
 
 const {
+    writeFileAtomic,
     stripMd,
     parseMachineSummary,
     parseAnalysis,
@@ -70,6 +72,25 @@ ${dimensions.join('\n')}
 ## 开源详情
 未提供。`;
 }
+
+describe('writeFileAtomic', () => {
+    it('creates new runtime files with private permissions and preserves an existing mode', () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-atomic-'));
+        const filename = path.join(directory, 'state.json');
+        try {
+            writeFileAtomic(filename, '{"generation":1}\n');
+            if (process.platform !== 'win32') {
+                assert.strictEqual(fs.statSync(filename).mode & 0o777, 0o600);
+                fs.chmodSync(filename, 0o640);
+            }
+            writeFileAtomic(filename, '{"generation":2}\n');
+            assert.strictEqual(fs.readFileSync(filename, 'utf8'), '{"generation":2}\n');
+            if (process.platform !== 'win32') assert.strictEqual(fs.statSync(filename).mode & 0o777, 0o640);
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+});
 
 describe('stripMd', () => {
     it('去除加粗标记', () => {

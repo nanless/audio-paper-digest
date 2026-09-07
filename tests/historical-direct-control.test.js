@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const control = require('../scripts/lib/historical-direct-control.js');
 const cli = require('../scripts/historical-direct-control.js');
+const aggregateApi = require('../scripts/lib/historical-direct-aggregate.js');
 
 function minimalPlan() {
     const body = { contract: 'historical-direct-rewrite-plan-v5', version: 5,
@@ -79,10 +80,52 @@ test('status reports pause, progress and explicit unfinished publication closeou
     fs.writeFileSync(planFile, `${JSON.stringify(plan, null, 2)}\n`);
     control.writePauseRequest({ registryRoot, plan, requestedAt: '2026-09-07T00:00:00.000Z' });
     const status = control.buildStatus({ planFile, registryRoot, sourceRoot, aggregateRoot, aggregateProjectionRoot,
-        observedAt: '2026-09-07T00:00:01.000Z' });
+        observedAt: '2026-09-07T00:00:01.000Z' }, {
+        publicationStatus: () => { throw new Error('ordinary status must not inspect publication or remote'); }
+    });
     assert.equal(status.completion.phase, 'paused'); assert.equal(status.execution.pauseRequested, true);
     assert.equal(status.execution.progressPercent, 100);
-    assert.ok(status.completion.blockers.some(item => item.code === 'direct-history-publication-not-implemented'));
+    assert.equal(status.publication.supported, true);
+    assert.equal(status.publication.liveRemoteRequested, false);
+    assert.ok(status.completion.blockers.some(item => item.code === 'historical-publication-not-selected'));
+});
+
+test('selected publication defaults to live remote and must bind the current history plan', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-status-publication-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const plan = minimalPlan(); const planFile = path.join(root, 'plan.json');
+    fs.writeFileSync(planFile, `${JSON.stringify(plan, null, 2)}\n`);
+    const roots = Object.fromEntries(['registryRoot', 'sourceRoot', 'aggregateRoot', 'aggregateProjectionRoot', 'publicationRoot']
+        .map(name => [name, path.join(root, name)]));
+    for (const value of Object.values(roots)) fs.mkdirSync(value);
+    let observed = null;
+    const selected = control.buildStatus({ planFile, ...roots,
+        publicationId: '12345678-1234-4123-8123-123456789abc' }, {
+        publicationStatus: options => { observed = options; return { contract: 'fixture', phase: 'published',
+            complete: true, planSha256: plan.planSha256 }; }
+    });
+    assert.equal(observed.liveRemote, true);
+    assert.equal(selected.publication.outputRoot, roots.publicationRoot);
+    assert.equal(selected.publication.planMatchesHistory, true);
+    const mismatch = control.buildStatus({ planFile, ...roots,
+        publicationId: '12345678-1234-4123-8123-123456789abc' }, {
+        publicationStatus: () => ({ contract: 'fixture', phase: 'published', complete: true,
+            planSha256: 'f'.repeat(64) })
+    });
+    assert.equal(mismatch.publication.complete, false);
+    assert.ok(mismatch.completion.blockers.some(item => item.code === 'historical-publication-plan-mismatch'));
+});
+
+test('aggregate snapshot reports exact ordinary and conference-task totals', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-status-aggregate-counts-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const snapshot = control.aggregateSnapshot({ aggregateRoot: root, plan: minimalPlan(),
+        expectedTaskKeys: ['icassp-2026-asr', 'iclr-2026-audio'] });
+    assert.deepEqual(snapshot.expected, { daily: 0, conference: 0, conferenceTask: 2,
+        aggregate: 0, total: 2 });
+    assert.deepEqual(snapshot.complete, { daily: 0, conference: 0, conferenceTask: 0,
+        aggregate: 0, total: 0 });
+    assert.deepEqual(snapshot.missing.conferenceTask, ['icassp-2026-asr', 'iclr-2026-audio']);
 });
 
 test('status reports pausing until each requested phase releases its operation lock', t => {
@@ -110,12 +153,45 @@ test('status reports pausing until each requested phase releases its operation l
     }
 });
 
+test('aggregate status replays page bytes and requires exact projection task keys', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-aggregate-status-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const aggregateRoot = path.join(root, 'aggregates'); const runId = '12345678-1234-4123-8123-123456789abc';
+    const runRoot = path.join(aggregateRoot, runId); const stagedPath = 'pages/content/posts/task.md';
+    fs.mkdirSync(path.join(runRoot, 'pages', 'content', 'posts'), { recursive: true });
+    const bytes = Buffer.from('task page\n'); fs.writeFileSync(path.join(runRoot, stagedPath), bytes);
+    const body = { contract: aggregateApi.CONTRACT, version: aggregateApi.VERSION, status: 'complete',
+        scope: 'conference-task', key: 'icassp-2026-task-unexpected',
+        source: { planSha256: minimalPlan().planSha256 },
+        outputPage: { stagedPath, contentSha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex') } };
+    const manifest = { ...body, manifestSha256: aggregateApi.stableHash(body) };
+    fs.writeFileSync(path.join(runRoot, 'conference-task-icassp-2026-task-unexpected.json'), `${JSON.stringify(manifest)}\n`);
+    const snapshot = control.aggregateSnapshot({ aggregateRoot, plan: minimalPlan(),
+        expectedTaskKeys: ['icassp-2026-task-required'] });
+    assert.deepEqual(snapshot.missing.conferenceTask, ['icassp-2026-task-required']);
+    assert.deepEqual(snapshot.unexpectedTaskKeys, ['conference-task:icassp-2026-task-unexpected']);
+    fs.writeFileSync(path.join(runRoot, stagedPath), 'drifted page\n');
+    assert.equal(control.aggregateSnapshot({ aggregateRoot, plan: minimalPlan(),
+        expectedTaskKeys: ['icassp-2026-task-required'] }).errors.some(item => /page bytes drifted/.test(item.error)), true);
+});
+
 test('control CLI accepts status watch only and rejects unsafe combinations', () => {
     assert.deepEqual(cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--generation', '2', '--watch-seconds', '5']), {
-        action: 'status', planFile: '/tmp/plan.json', generation: 2, watchSeconds: 5, phase: null });
+        action: 'status', planFile: '/tmp/plan.json', generation: 2, watchSeconds: 5, phase: null,
+        publicationId: null, liveRemote: false });
     assert.throws(() => cli.parseArgs(['pause', '--plan', '/tmp/plan.json', '--watch-seconds', '5']), /Use/);
     assert.deepEqual(cli.parseArgs(['pause', '--plan', '/tmp/plan.json', '--phase', 'source']), {
         action: 'pause', planFile: '/tmp/plan.json', generation: 1, watchSeconds: null, phase: 'source' });
     assert.throws(() => cli.parseArgs(['resume', '--plan', '/tmp/plan.json']), /Use/);
     assert.throws(() => cli.parseArgs(['status', '--plan', 'relative.json']), /Use/);
+    assert.equal(cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--verify-sources', 'true']).verifySources, true);
+    const publication = cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--publication-id',
+        '12345678-1234-4123-8123-123456789abc']);
+    assert.equal(publication.liveRemote, true);
+    assert.equal(publication.publicationId, '12345678-1234-4123-8123-123456789abc');
+    assert.throws(() => cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--live-remote', 'true']), /Use/);
+    assert.throws(() => cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--publication-id',
+        '12345678-1234-4123-8123-123456789abc', '--watch-seconds', '5']), /Use/);
+    assert.throws(() => cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--verify-sources', 'true',
+        '--watch-seconds', '5']), /Use/);
 });

@@ -253,6 +253,10 @@ test('source scheduler CLI persists progress and passes ready members into the n
     const sourceRoot = path.join(f.root, 'source-root'); const handoffRoot = path.join(f.root, 'handoff-root');
     fs.mkdirSync(sourceRoot); fs.mkdirSync(handoffRoot); const paperId = plan.queue[0].paperId; const observed = [];
     const files = { freshArxivFetchedSourcesDir: sourceRoot, historicalArxivFreshFailureHandoffDir: handoffRoot };
+    const dry = await schedulerCli.main(['--dry-run', '--plan', planFile], { files,
+        prepare: planner.prepareDirectSources });
+    assert.deepEqual(dry.sourceStatusCounts, { pending: plan.queue.length, ready: 0, handoff: 0, failed: 0 });
+    assert.equal(dry.sourceStatusFile, null, 'dry-run reports planned pending work without creating a checkpoint');
     const run = () => schedulerCli.main(['--apply', '--plan', planFile, '--max-papers', '1'], { files,
         prepare: async options => { observed.push(options.completedPaperIds.slice());
             if (!options.completedPaperIds.includes(paperId)) await options.onProgress({ paperId, status: 'ready', result: {} });

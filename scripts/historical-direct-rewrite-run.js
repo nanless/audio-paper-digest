@@ -43,10 +43,6 @@ function parseArgs(argv) {
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-direct-rewrite-run.js');
     const options = parseArgs(argv); const files = runtime.files || Config.FILES;
-    if (typeof files.historicalArxivFreshFailureHandoffDir !== 'string'
-        || !path.isAbsolute(files.historicalArxivFreshFailureHandoffDir)) {
-        throw new Error('historicalArxivFreshFailureHandoffDir must be a configured absolute path');
-    }
     const loaded = projections.readStableJson(options.planFile, 'direct rewrite plan'); const plan = planApi.normalizePlan(loaded.value);
     let stopSignal = null;
     const onSignal = signal => {
@@ -60,8 +56,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
             registryRoot: files.historicalDirectRewriteRegistryDir,
             executionRoot: files.historicalDirectRewriteExecutionDir,
             stagingRoot: files.historicalDirectRewriteStagingDir,
-            freshArxivSourceRoot: files.freshArxivFetchedSourcesDir,
-            freshArxivFailureHandoffRoot: files.historicalArxivFreshFailureHandoffDir }, {
+            freshArxivSourceRoot: files.freshArxivFetchedSourcesDir }, {
             ...(runtime.dependencies || {}),
             shouldPause: async () => stopSignal !== null || Boolean(await runtime.dependencies?.shouldPause?.()),
             onProgress: runtime.dependencies?.onProgress || (event => console.error(JSON.stringify(event)))

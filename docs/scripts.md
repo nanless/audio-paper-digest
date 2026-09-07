@@ -123,14 +123,27 @@ npm run history:direct-run -- --apply --plan /abs/direct-rewrite-plan-v5.json \
   [--queue all|arxiv|conference] [--generation N] [--paper-ids ID[,ID...]] \
   [--max-papers N] [--concurrency 1-8]
 npm run history:status -- --plan /abs/direct-rewrite-plan-v5.json [--generation N] [--watch-seconds N]
+npm run history:status -- --plan /abs/direct-rewrite-plan-v5.json [--generation N] --verify-sources true
+npm run history:status -- --plan /abs/direct-rewrite-plan-v5.json --publication-id UUID
 npm run history:pause -- --plan /abs/direct-rewrite-plan-v5.json --phase source|analysis [--generation N]
 npm run history:resume -- --plan /abs/direct-rewrite-plan-v5.json --phase source|analysis [--generation N]
 npm run history:direct-aggregate -- projection --apply --plan-file /abs/direct-rewrite-plan-v5.json \
-  --inventory-file /abs/all-history.json --output-name direct-aggregate-projection-v2.json
+  --inventory-file /abs/all-history.json --output-name direct-aggregate-projection-v3.json
 npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-rewrite-plan-v5.json \
-  --registry-file /abs/direct-rewrite-registry.json --projection-file /abs/direct-aggregate-projection-v2.json \
+  --registry-file /abs/direct-rewrite-registry.json --projection-file /abs/direct-aggregate-projection-v3.json \
   (--daily YYYY-MM-DD|--conference conference-key)
 ```
+
+`direct-run --apply` 必须先看到同一 plan/generation 的 scheduler status，且所选 paper 全部为 `ready`；
+它不会补做 scheduler。分析 partial 会保留 source-bound checkpoint 并跨进程续跑，但只有完整
+analysis/Reader/provenance 才能 staging。普通 status 仅轻量检查会议路径和 PDF size；
+`--verify-sources true` 单次深核全部本地来源 SHA，不能与 watch 同用。
+未指定 `--publication-id` 的普通/watch 状态完全离线，只报告 publication 未选择；指定后默认现场查询远端
+`main` 并将 receipt 的 remote identity/OID 与 live remote 对齐，可显式用 `--live-remote false` 只做离线诊断，
+但离线结果绝不会 complete。publication 状态是单次终验，不能与 watch 同用，并会顺带深核全部 arXiv bundle
+及会议 metadata/PDF SHA。统一完成态还要求 scheduler 全部 ready、arXiv bundle 与会议来源仍闭合、3824 篇
+全部 staged、107 个日汇总与 3 个会议汇总（`aggregates.expected.aggregate=110`）、193 个精确 projection task
+aggregate，以及绑定同一 plan SHA 的 publication live status 全部完成。
 
 `n1mAjfRDZ6` 的 SSRN 下载若能由项目代理直接访问，可省略 `--import-file`；若遇到 Cloudflare、只能由浏览器下载，
 必须用上面的显式导入参数。导入器只接受这一条代码白名单，重新提取 PDF 文本并逐项匹配固定预印本标题、
@@ -139,9 +152,9 @@ npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-re
 导入文件只作为一次性输入，封存后可删除；恢复时重放 runtime PDF 与自哈希 receipt。普通会议来源的
 plan v5 字节结构保持不变，既有 status/pause/resume checkpoint 可继续读取。
 
-aggregate projection v2 会把 inventory 中的会议 task 页作为独立 coverage report 保存并自哈希；在 task renderer
-实现前，它们保持 `pending`、`unsupported`、`publicationReady=false`。task 页不参与 daily/conference 汇总成员或
-排名，后续历史 publication 必须消费该阻断状态，不能把汇总 staging 完成解释为 task 页已重写。
+aggregate projection v3 会把 inventory 中的会议 task 页按冻结 `outboundPostLinks` 拓扑绑定到 direct 论文成员，
+并签发确定性 task renderer、逐页来源 SHA 和完整 coverage；选择会议 aggregate 时 task 页与会议总页在同一 run
+生成，task 页先写、会议总页最后写。没有 direct 论文成员的日汇总页显式签 `retain-unchanged`，不再游离于页面闭环之外。
 
 长任务通过 `history:pause --phase source|analysis` 请求在活动来源/论文完成后安全暂停；看到相应 operation lock
 已释放后才运行同 phase 的 `history:resume`。`history:status` 是只读快照，`--watch-seconds` 持续输出 NDJSON；最终 `completion.blockers`
