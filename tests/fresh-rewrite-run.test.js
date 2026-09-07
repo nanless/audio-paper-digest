@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const runner = require('../scripts/lib/fresh-rewrite-run.js');
 const RUN_ID = '11111111-2222-4333-8444-555555555555';
@@ -175,6 +176,235 @@ test('subsets retain whole-run success counting and complete only when the last 
     assert.deepEqual(status.analysisRemainingIds, []);
     assert.equal(status.diagnostics.outerAnalysisEntries['2609.00001'].count, 1);
     assert.equal(status.diagnostics.outerAnalysisEntries['2609.00002'].count, 1);
+});
+
+test('sealed recovery capabilities mint only from an exact complete run and bind one opaque record identity', async t => {
+    const f = fixture(t);
+    await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+    await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
+    await runner.analyzeRewrite({ runId: RUN_ID }, f.deps);
+    const sealedBefore = runner.loadRun(RUN_ID, f.deps);
+    let observed = null;
+    const inspectContext = async (identity, callback) => {
+        observed = identity.sealedRecoveryCapabilities;
+        return callback();
+    };
+    const Config = require('../scripts/config.js');
+    const engine = require('../scripts/analysis-engine.js');
+    const freshContext = require('../scripts/lib/fresh-analysis-context.js');
+    const originalRoot = Config.FILES.freshRewriteRunsDir;
+    const originalRead = freshContext.readFreshSource;
+    const originalContext = freshContext.withFreshAnalysisContext;
+    const originalAnalyze = engine.analyzeBatch;
+    const originalSuccessful = engine.isSuccessfulAnalysisRecord;
+    Config.FILES.freshRewriteRunsDir = f.deps.rootDir;
+    freshContext.readFreshSource = f.deps.readFreshSource;
+    freshContext.withFreshAnalysisContext = inspectContext;
+    engine.analyzeBatch = f.deps.analyzeBatch;
+    engine.isSuccessfulAnalysisRecord = f.deps.isSuccessfulAnalysisRecord;
+    t.after(() => {
+        Config.FILES.freshRewriteRunsDir = originalRoot;
+        freshContext.readFreshSource = originalRead;
+        freshContext.withFreshAnalysisContext = originalContext;
+        engine.analyzeBatch = originalAnalyze;
+        engine.isSuccessfulAnalysisRecord = originalSuccessful;
+    });
+    await runner.analyzeRewrite({ runId: RUN_ID });
+    assert.ok(observed instanceof Map);
+    assert.equal(observed.size, 2);
+    const handle = observed.get('2609.00001');
+    const snapshot = runner.sealedRecoveryCapabilitySnapshot(handle);
+    const complete = runner.loadRun(RUN_ID, f.deps);
+    assert.equal(snapshot.runId, RUN_ID);
+    assert.equal(snapshot.paperId, '2609.00001');
+    assert.equal(snapshot.analysisFileSha256, sealedBefore.run.analysisSha256);
+    assert.equal(snapshot.recordSha256,
+        runner.stableHash(complete.analysis.papers.find(paper => paper.arxivId === '2609.00001')));
+    assert.equal(runner.consumeSealedRecoveryCapability(handle, {
+        runId: crypto.randomUUID()
+    }), false, 'a capability cannot be copied to another run identity');
+    assert.equal(runner.consumeSealedRecoveryCapability(handle, {
+        runId: RUN_ID, paperId: '2609.00001', recordSha256: snapshot.recordSha256
+    }), true);
+    assert.equal(runner.sealedRecoveryCapabilitySnapshot(handle), null, 'one-shot capability is spent');
+    assert.equal(runner.sealedRecoveryCapabilitySnapshot(handle, { allowConsumed: true }).consumed, true);
+
+    observed = null;
+    await runner.analyzeRewrite({ runId: RUN_ID }, {
+        ...f.deps, withFreshAnalysisContext: inspectContext
+    });
+    assert.equal(observed.size, 0,
+        'trusted test dependency overrides must never mint a production capability');
+
+    const runPath = path.join(f.deps.rootDir, RUN_ID, 'run.json');
+    const run = runner.readRegularJson(runPath).value;
+    run.analysisSha256 = '0'.repeat(64);
+    fs.writeFileSync(runPath, JSON.stringify(run));
+    observed = null;
+    await runner.analyzeRewrite({ runId: RUN_ID });
+    assert.equal(observed.size, 0, 'analysis SHA drift cannot mint a capability');
+});
+
+test('partial analysis runs never mint sealed recovery capabilities', async t => {
+    const f = fixture(t);
+    await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+    await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
+    await runner.analyzeRewrite({ runId: RUN_ID, ids: ['2609.00001'] }, f.deps);
+    let observed;
+    await runner.analyzeRewrite({ runId: RUN_ID, ids: ['2609.00002'] }, {
+        ...f.deps,
+        withFreshAnalysisContext: async (identity, callback) => {
+            observed = identity.sealedRecoveryCapabilities;
+            return callback();
+        }
+    });
+    assert.ok(observed instanceof Map);
+    assert.equal(observed.size, 0);
+});
+
+test('complete fresh run mints one-shot capability for summary plus scoring while preserving Reader', async t => {
+    const f = fixture(t);
+    const contract = require('../scripts/analysis-contract.js');
+    const engine = require('../scripts/analysis-engine.js');
+    const deep = require('../scripts/deep-analyzer.js');
+    const freshContext = require('../scripts/lib/fresh-analysis-context.js');
+    const { validAnalysisText, validLegacyApiAnalysisPaper } = require('./valid-analysis-fixture.js');
+    const sourceText = `${contract.extractSection(validAnalysisText(), '实验结果')}\n`
+        + 'Experiment on a public test set reports WER from 12.4% to 9.8% compared with baseline.';
+    f.sourceExpectations['2609.00001'].sourceSha256 = runner.sha256(sourceText);
+    const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+    await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
+    const base = validLegacyApiAnalysisPaper('2609.00001');
+    const original = f.originals[0];
+    Object.assign(base, original);
+    const method = contract.extractSection(base.analysis, '方法概述和架构');
+    const shallow = '本文针对噪声语音识别任务中输入线索受损与输出错误累积的问题展开研究。方法先编码局部声学特征，再融合长程上下文并由解码器输出文字序列，各模块分别承担表征、融合与预测职责。实验显示方法有效，但摘要没有完整交代定量设置、适用边界与训练推理成本。';
+    base.analysis = base.analysis.replace(`## 方法概述和架构\n${method}`,
+        `## 方法概述和架构\n${Array.from({ length: 5 }, () => method).join('\n\n')}`)
+        .replace(/## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${shallow}\n`);
+    base.parsed = require('../scripts/utils.js').parseAnalysis(base.analysis);
+    const descriptor = f.descriptor(base.arxivId);
+    const provenance = { contract: runner.FRESHNESS_CONTRACT, runId: RUN_ID,
+        ...f.sourceExpectations[base.arxivId], sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+        sourceOnly: true, oldGeneratedTextIncluded: false };
+    base.freshRewriteProvenance = provenance;
+    base.analysisManifest.freshRewriteProvenance = { ...provenance };
+    Object.assign(base.analysisManifest.sourceAcquisition, {
+        analysisSource: 'html', sourceId: `${base.arxivId}v1`, sourceTextChars: sourceText.length,
+        usedTextChars: sourceText.length, fullTextChars: sourceText.length, fullTextAvailable: true,
+        truncated: false, sourceSha256: provenance.sourceSha256,
+        usedTextSha256: runner.sha256(sourceText), structuredArtifactsSha256: provenance.structuredArtifactsSha256
+    });
+    base.sourceSha256 = provenance.sourceSha256;
+    const authorIdentity = base.apiReaderAuthors.identity;
+    authorIdentity.sourceTextSha256 = provenance.sourceSha256;
+    authorIdentity.metadataSha256 = runner.stableHash(base.authors);
+    authorIdentity.authors[0].nameBinding.metadataSha256 = authorIdentity.metadataSha256;
+    authorIdentity.authors[0].affiliationBindings[0].sourceTextSha256 = provenance.sourceSha256;
+    base.apiReaderAuthors.sourceDomSha256 = provenance.sourceSha256;
+    base.apiReaderAuthors.identitySha256 = runner.stableHash(authorIdentity);
+    base.apiReaderResources.sourceTextSha256 = provenance.sourceSha256;
+    const resourceBody = { contract: base.apiReaderResources.contract,
+        sourceTextSha256: provenance.sourceSha256, resources: base.apiReaderResources.resources };
+    base.apiReaderResources.identitySha256 = runner.stableHash(resourceBody);
+    const readerStage = base.analysisManifest.stages.apiReaderArticle;
+    Object.assign(readerStage, { readerAuthorsSha256: runner.stableHash(base.apiReaderAuthors),
+        readerAuthorIdentitySha256: base.apiReaderAuthors.identitySha256,
+        resourceIdentitySha256: base.apiReaderResources.identitySha256,
+        sourceBindingsSourceTextSha256: provenance.sourceSha256,
+        structuredArtifactsSha256: provenance.structuredArtifactsSha256 });
+    Object.assign(base.analysisManifest.stages.openSourceScan, {
+        resourceEvidenceSha256: base.apiReaderResources.identitySha256
+    });
+    base.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = runner.sha256(base.analysis);
+    const analysisPath = path.join(prepared.runDir, 'analysis.json');
+    const envelope = runner.readRegularJson(analysisPath).value;
+    envelope.status = 'complete';
+    envelope.papers[0] = base;
+    fs.writeFileSync(analysisPath, JSON.stringify(envelope));
+    const runPath = path.join(prepared.runDir, 'run.json');
+    const run = runner.readRegularJson(runPath).value;
+    run.status = 'complete';
+    run.analysisSha256 = runner.readRegularJson(analysisPath).sha256;
+    fs.writeFileSync(runPath, JSON.stringify(run));
+    let primaryCalls = 0, readerCalls = 0, summaryCalls = 0, scoringCalls = 0;
+    const Config = require('../scripts/config.js');
+    const originalRoot = Config.FILES.freshRewriteRunsDir;
+    const originalReadSource = freshContext.readFreshSource;
+    const originalContext = freshContext.withFreshAnalysisContext;
+    const originalGetCapability = freshContext.getSealedRecoveryCapability;
+    const originalFreshIdentity = freshContext.freshAnalysisIdentity;
+    const originalAnalyzeBatch = engine.analyzeBatch;
+    const originalSuccessful = engine.isSuccessfulAnalysisRecord;
+    Config.FILES.freshRewriteRunsDir = f.deps.rootDir;
+    freshContext.readFreshSource = f.deps.readFreshSource;
+    freshContext.withFreshAnalysisContext = async (identity, callback) => {
+        const handle = identity.sealedRecoveryCapabilities.get(base.arxivId);
+        freshContext.getSealedRecoveryCapability = () => handle;
+        freshContext.freshAnalysisIdentity = () => ({ ...provenance,
+            paperId: base.arxivId, inputSetSha256: runner.stableHash(run.paperIds) });
+        return callback();
+    };
+    engine.isSuccessfulAnalysisRecord = () => false;
+    engine.analyzeBatch = async (papers, options) => {
+        const locked = options.preparePaperLocked(papers[0]).paper;
+        const candidate = deep.captureSealedCoreSummaryRecoveryCandidate(locked);
+        assert.ok(candidate, 'complete file-bound run must mint a candidate');
+        const manifest = deep.createAnalysisRecoveryManifest(locked);
+        manifest.sourceAcquisition = { ...base.analysisManifest.sourceAcquisition };
+        manifest.freshRewriteProvenance = { ...provenance };
+        const readerBefore = JSON.stringify({ article: locked.apiReaderArticle,
+            plan: locked.apiReaderPlan, stage: manifest.stages.apiReaderArticle });
+        assert.equal(deep.adoptSealedCoreSummaryRecoveryCandidate(candidate, locked, manifest,
+            manifest.sourceAcquisition, sourceText), true);
+        assert.equal(deep.sealedCoreSummaryRecoveryIsValid(
+            locked, manifest, sourceText, 'structureRepair'), true);
+        const repaired = await deep.repairCoreSummarySection(locked, locked.analysis, sourceText, null, {
+            callModelFn: async () => { summaryCalls += 1;
+                return `## 核心摘要\n${contract.extractSection(validAnalysisText(), '核心摘要')}`; }
+        });
+        scoringCalls += 1;
+        const inputSha = runner.sha256(locked.analysis);
+        const outputSha = runner.sha256(repaired);
+        const inputSummary = contract.extractSection(locked.analysis, '核心摘要');
+        const outputSummary = contract.extractSection(repaired, '核心摘要');
+        const binding = { contractVersion: 'core-summary-detailed-v3',
+            inputAnalysisSha256: inputSha, outputAnalysisSha256: outputSha,
+            inputSummarySha256: runner.sha256(inputSummary), summarySha256: runner.sha256(outputSummary),
+            inputStructureProjectionSha256: contract.coreSummaryProjectionSha256(locked.analysis),
+            outputStructureProjectionSha256: contract.coreSummaryProjectionSha256(repaired) };
+        manifest.stages.structureRepair.outputAnalysisSha256 = inputSha;
+        manifest.stages.coreSummaryRepair = { status: 'complete', fingerprint: 'a'.repeat(64),
+            ...binding, bindingSha256: contract.manualSha256(binding) };
+        manifest.stages.scoringAudit = { status: 'complete', scoringContract: 'api-scoring-audit-v2',
+            outputAnalysisSha256: outputSha, stabilityWarning: false,
+            coreSummaryInputAnalysisSha256: outputSha,
+            inputCoreSummarySha256: binding.summarySha256,
+            outputCoreSummarySha256: binding.summarySha256 };
+        manifest.stages.imageSupplement = { status: 'skipped' };
+        manifest.contracts = { ...manifest.contracts, coreSummary: 'core-summary-detailed-v3' };
+        locked.analysis = repaired; locked.parsed = require('../scripts/utils.js').parseAnalysis(repaired);
+        locked.analysisManifest = manifest;
+        locked.analysisStageCheckpoints.coreSummaryRepair = repaired;
+        assert.equal(originalSuccessful(locked), true);
+        assert.equal(JSON.stringify({ article: locked.apiReaderArticle,
+            plan: locked.apiReaderPlan, stage: manifest.stages.apiReaderArticle }), readerBefore);
+        return { stats: {} };
+    };
+    try {
+        await runner.analyzeRewrite({ runId: RUN_ID, ids: [base.arxivId] });
+    } finally {
+        Config.FILES.freshRewriteRunsDir = originalRoot;
+        freshContext.readFreshSource = originalReadSource;
+        freshContext.withFreshAnalysisContext = originalContext;
+        freshContext.getSealedRecoveryCapability = originalGetCapability;
+        freshContext.freshAnalysisIdentity = originalFreshIdentity;
+        engine.analyzeBatch = originalAnalyzeBatch;
+        engine.isSuccessfulAnalysisRecord = originalSuccessful;
+    }
+    assert.deepEqual({ primaryCalls, readerCalls, summaryCalls, scoringCalls },
+        { primaryCalls: 0, readerCalls: 0, summaryCalls: 1, scoringCalls: 1 });
 });
 
 test('prepare uses only raw metadata, pins exact inputs, preserves canonical, and status never fetches', async t => {

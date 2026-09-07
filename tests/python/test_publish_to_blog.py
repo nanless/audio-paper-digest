@@ -916,6 +916,28 @@ class PublishToBlogReviewTest(unittest.TestCase):
         with self.assertRaisesRegex(PublishDataValidationError, '未达到 core-summary-detailed-v3'):
             publish_to_blog.llm_api_production_proof([shallow])
 
+    def test_core_summary_setting_does_not_treat_pearson_suffix_as_on(self):
+        summary = (
+            '语音可懂度评估输入为不同算法处理后的语音，输出为听者能否辨别音位的可懂度分数，难点在于生成式方法不保真参考且实验室测试昂贵难扩展。'
+            '该工作方法链分三环：先整理英西法德汉五语诊断押韵测试词表并众包录制多说话人平衡语料，再以问卷加众包筛选实现预筛、耳机校验、数字噪声听力检查与练习加陷阱题过滤，最后按校正猜测公式计算逐文件得分并聚合到词对与区别性特征层面。'
+            '第二步负责筛除无效作答，随后将保留结果送入聚合模块，确保三个环节有明确分工而不是简单堆叠。'
+            '与转写式众包相比，该机制用二选一闭集辨别避免拼写与记忆效应，并支持材料复用与细粒度音位诊断。'
+            '窄带编码众包得分为91.2分而宽带干净录音更高且差异显著，重测逐文件Pearson相关系数达0.87，绝对值低于实验室但相对排序稳定。'
+            '结论仅适用于无噪声弱退化下的辅音对比，未验证强噪声、生成式伪影与多平台泛化。'
+            '原文未披露训练、推理或部署成本，因此不能据此判断规模化运行所需算力与延迟。'
+        )
+        self.assertIn(
+            '缺少完整关键定量结果',
+            publish_to_blog._detailed_core_summary_semantic_issue(summary),
+        )
+        explicit = summary.replace(
+            '窄带编码众包得分',
+            '在 DRT 众包评测设置下，窄带编码众包得分',
+        )
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(explicit)
+        )
+
     def test_modern_resources_show_identity_type_and_status_without_weight_claims(self):
         paper = llm_api_publication_fixture()
         resource = paper['apiReaderResources']['resources'][0]

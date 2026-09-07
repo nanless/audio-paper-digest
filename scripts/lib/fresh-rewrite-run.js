@@ -10,6 +10,7 @@ const ANALYSIS_CONTRACT = 'fresh-rewrite-analysis-v1';
 const FRESHNESS_CONTRACT = 'fresh-source-analysis-v1';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[0-9a-f]{64}$/;
+const SEALED_RECOVERY_CAPABILITIES = new WeakMap();
 const ORIGINAL_METADATA_FIELDS = Object.freeze([
     'arxivId', 'paper_id', 'title', 'authors', 'categories', 'abstract', 'source', 'sources', 'fetchedAt'
 ]);
@@ -18,6 +19,49 @@ function stableHash(value) {
     const normalize = item => Array.isArray(item) ? item.map(normalize)
         : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, normalize(item[key])])) : item;
     return sha256(JSON.stringify(normalize(value)));
+}
+
+function mintSealedRecoveryCapabilities(loaded, selectedIds, sourceRecords) {
+    const analysisFileSha256 = loaded.analysisFileSha256;
+    if (loaded.run.status !== 'complete' || loaded.analysis.status !== 'complete'
+        || loaded.run.analysisSha256 !== analysisFileSha256) return new Map();
+    const capabilities = new Map();
+    for (const paper of loaded.analysis.papers) {
+        const id = paperId(paper);
+        if (!selectedIds.includes(id)) continue;
+        const descriptor = sourceRecords[id];
+        assertFreshProvenance(paper, loaded.run, descriptor);
+        const handle = Object.freeze(Object.create(null));
+        SEALED_RECOVERY_CAPABILITIES.set(handle, {
+            runId: loaded.run.runId,
+            paperId: id,
+            recordSha256: stableHash(paper),
+            analysisFileSha256,
+            sourceSha256: descriptor.sourceSha256,
+            structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
+            sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+            consumed: false
+        });
+        capabilities.set(id, handle);
+    }
+    return capabilities;
+}
+
+function sealedRecoveryCapabilitySnapshot(handle, options = {}) {
+    const state = handle && SEALED_RECOVERY_CAPABILITIES.get(handle);
+    if (!state || state.consumed && options.allowConsumed !== true) return null;
+    const { consumed, ...snapshot } = state;
+    return { ...snapshot, consumed };
+}
+
+function consumeSealedRecoveryCapability(handle, expected = {}) {
+    const state = handle && SEALED_RECOVERY_CAPABILITIES.get(handle);
+    if (!state || state.consumed) return false;
+    for (const [field, value] of Object.entries(expected)) {
+        if (state[field] !== value) return false;
+    }
+    state.consumed = true;
+    return true;
 }
 
 function paperId(paper) {
@@ -236,9 +280,10 @@ function loadRun(runId, deps) {
         if (Object.keys(paper).some(key => !ORIGINAL_METADATA_FIELDS.includes(key))) throw new Error('Fresh rewrite inputs contain non-original fields');
         metadataOnly(paper);
     }
-    const analysis = readRegularJson(path.join(runDir, 'analysis.json')).value;
+    const analysisFile = readRegularJson(path.join(runDir, 'analysis.json'));
+    const analysis = analysisFile.value;
     assertAnalysisEnvelope(analysis, run, inputs);
-    return { runDir, run, inputs, analysis };
+    return { runDir, run, inputs, analysis, analysisFileSha256: analysisFile.sha256 };
 }
 
 async function prepareRewrite(options, overrides = {}) {
@@ -365,6 +410,10 @@ async function collectRewriteSources(options, overrides = {}) {
 }
 
 async function analyzeRewrite(options, overrides = {}) {
+    // `overrides` is an internal trusted test seam, never CLI/JSON input.  An
+    // opaque production recovery capability must be rooted in the complete
+    // default dependency chain; replacing even one dependency disables minting.
+    const productionCapabilityPath = Object.keys(overrides).length === 0;
     const deps = dependencies(overrides);
     return withRunOperation(options.runId, deps, async loaded => {
         if (loaded.run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
@@ -376,6 +425,9 @@ async function analyzeRewrite(options, overrides = {}) {
         const selectedPapers = loaded.analysis.papers.filter(paper => selectedSet.has(paperId(paper)));
         const sources = sourceState(loaded, deps);
         if (sources.missing.length) throw new Error(`Run sources phase first; missing ${sources.missing.length} verified sources`);
+        const sealedRecoveryCapabilities = productionCapabilityPath
+            ? mintSealedRecoveryCapabilities(loaded, selectedIds, sources.records)
+            : new Map();
         const analysisPath = path.join(loaded.runDir, 'analysis.json');
         const complete = paper => {
             if (!deps.isSuccessfulAnalysisRecord(paper)) return false;
@@ -386,6 +438,7 @@ async function analyzeRewrite(options, overrides = {}) {
         try {
             await deps.withFreshAnalysisContext({ runId: loaded.run.runId, runDir: loaded.runDir,
                 sourceExpectations: loaded.run.sourceExpectations,
+                sealedRecoveryCapabilities,
                 refreshReaderDiagnostics: options.refreshReaderDiagnostics === true
             }, () => {
                 updateRun(loaded, current => ({ status: 'analyzing',
@@ -536,5 +589,6 @@ async function acceptSignedReaderFactReview(request, overrides = {}) {
 module.exports = { RUN_CONTRACT, INPUT_CONTRACT, ANALYSIS_CONTRACT, FRESHNESS_CONTRACT, ORIGINAL_METADATA_FIELDS,
     stableHash, sha256, paperId, parseRewriteArgs, metadataOnly, assertSafeDirectory, readRegularJson,
     writeImmutableJson, assertAnalysisEnvelope, assertFreshProvenance, loadRun,
+    sealedRecoveryCapabilitySnapshot, consumeSealedRecoveryCapability,
     prepareRewrite, collectRewriteSources, analyzeRewrite, rewriteStatus, promoteRewrite, patchRewrite, signedPatchRewrite,
     acceptSignedReaderFactReview };

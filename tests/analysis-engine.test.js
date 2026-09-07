@@ -29,6 +29,7 @@ const {
     getCanonicalAnalysisRunSummary,
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
+    isSealedApiAnalysisEligibleForCoreSummaryRecovery,
     getAnalysisExitCode
 } = require('../scripts/analysis-engine.js');
 const {
@@ -1090,6 +1091,7 @@ describe('analyzePaperWithRetry', () => {
         }
         assert.strictEqual(isSuccessfulAnalysisRecord(legacy), false);
         assert.strictEqual(isLegacyApiAnalysisSuccessForReadOnlyValidation(legacy), true);
+        assert.strictEqual(isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacy), true);
         assert.deepStrictEqual(getCanonicalAnalysisRunSummary([legacy]), {
             success: 0, remaining: 1, status: 'failed'
         });

@@ -4583,8 +4583,9 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
     const fingerprint = buildTextStageFingerprint(stage, inputAnalysis, evidenceContext);
     const evidenceSha256 = crypto.createHash('sha256').update(evidenceContext).digest('hex');
     const inputAnalysisSha256 = crypto.createHash('sha256').update(inputAnalysis).digest('hex');
-    const compatibilityReused = stage === 'structureRepair'
-        && legacyStructureCompatibilityIsValid(paper, manifest, sourceText);
+    const compatibilityReused = (stage === 'structureRepair'
+        && legacyStructureCompatibilityIsValid(paper, manifest, sourceText))
+        || sealedCoreSummaryRecoveryIsValid(paper, manifest, sourceText, stage);
     const invalidated = compatibilityReused
         ? false : invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint);
     return {
@@ -5008,6 +5009,212 @@ function buildLegacyCoreSummaryV2EvidenceContext(stage, inputAnalysis, sourceTex
 }
 
 const LEGACY_STRUCTURE_COMPATIBILITY_CONTRACT = 'core-summary-v3-legacy-structure-reuse-v1';
+const SEALED_CORE_SUMMARY_RECOVERY_CONTRACT = 'core-summary-v3-sealed-canonical-recovery-v1';
+const SEALED_CORE_SUMMARY_REUSED_STAGES = Object.freeze([
+    'primaryAnalysis', 'openSourceScan', 'revision', 'tableRepair',
+    'methodRepair', 'structureRepair'
+]);
+
+function captureSealedCoreSummaryRecoveryCandidate(paper) {
+    const freshContext = require('./lib/fresh-analysis-context.js');
+    const freshIdentity = freshContext.freshAnalysisIdentity(
+        getPaperArxivId(paper)
+    );
+    const capability = freshContext.getSealedRecoveryCapability(getPaperArxivId(paper));
+    const capabilitySnapshot = require('./lib/fresh-rewrite-run.js')
+        .sealedRecoveryCapabilitySnapshot(capability);
+    if (!freshIdentity || !capabilitySnapshot
+        || capabilitySnapshot.recordSha256 !== stableFingerprint(paper)
+        || !require('./analysis-engine.js').isSealedApiAnalysisEligibleForCoreSummaryRecovery(paper)
+        || typeof paper?.analysis !== 'string' || !paper.analysis.trim()) return null;
+    const legacyManifest = structuredClone(paper.analysisManifest);
+    const body = {
+        contract: SEALED_CORE_SUMMARY_RECOVERY_CONTRACT,
+        paperId: getPaperArxivId(paper),
+        legacyAnalysis: paper.analysis,
+        legacyAnalysisSha256: crypto.createHash('sha256').update(paper.analysis).digest('hex'),
+        legacySummaryExteriorSha256: coreSummaryProjectionSha256(paper.analysis),
+        legacyManifest,
+        legacyManifestSha256: stableFingerprint(legacyManifest),
+        freshIdentity,
+        freshIdentitySha256: stableFingerprint(freshIdentity),
+        freshRewriteProvenance: structuredClone(paper.freshRewriteProvenance),
+        freshRewriteProvenanceSha256: stableFingerprint(paper.freshRewriteProvenance),
+        sealedRunId: capabilitySnapshot.runId,
+        sealedRecordSha256: capabilitySnapshot.recordSha256,
+        sealedAnalysisFileSha256: capabilitySnapshot.analysisFileSha256,
+        sealedSourceSnapshotSha256: capabilitySnapshot.sourceSnapshotSha256
+    };
+    return { ...body, candidateSha256: stableFingerprint(body) };
+}
+
+function validateSealedCoreSummaryRecoveryCandidate(candidate, paper, sourceProvenance, sourceText) {
+    if (!candidate || candidate.contract !== SEALED_CORE_SUMMARY_RECOVERY_CONTRACT) return false;
+    const { candidateSha256, ...body } = candidate;
+    const arxivId = getPaperArxivId(paper);
+    const freshContext = require('./lib/fresh-analysis-context.js');
+    const freshIdentity = freshContext.freshAnalysisIdentity(arxivId);
+    const capability = freshContext.getSealedRecoveryCapability(arxivId);
+    const capabilitySnapshot = require('./lib/fresh-rewrite-run.js')
+        .sealedRecoveryCapabilitySnapshot(capability);
+    const legacySource = candidate.legacyManifest?.sourceAcquisition;
+    const sourceFields = [
+        'analysisSource', 'sourceId', 'sourceSha256', 'usedTextSha256',
+        'structuredArtifactsSha256', 'fullTextAvailable'
+    ];
+    const legacyPaper = { ...paper, analysis: candidate.legacyAnalysis,
+        parsed: parseAnalysis(candidate.legacyAnalysis),
+        analysisManifest: candidate.legacyManifest };
+    return Boolean(candidate.paperId === arxivId
+        && candidateSha256 === stableFingerprint(body)
+        && candidate.legacyAnalysisSha256 === crypto.createHash('sha256')
+            .update(String(candidate.legacyAnalysis || '')).digest('hex')
+        && candidate.legacySummaryExteriorSha256
+            === coreSummaryProjectionSha256(candidate.legacyAnalysis)
+        && candidate.legacyManifestSha256 === stableFingerprint(candidate.legacyManifest)
+        && freshIdentity && candidate.freshIdentitySha256 === stableFingerprint(freshIdentity)
+        && candidate.freshIdentitySha256 === stableFingerprint(candidate.freshIdentity)
+        && candidate.freshRewriteProvenanceSha256
+            === stableFingerprint(candidate.freshRewriteProvenance)
+        && candidate.freshRewriteProvenanceSha256
+            === stableFingerprint(paper.freshRewriteProvenance)
+        && capabilitySnapshot?.runId === candidate.sealedRunId
+        && capabilitySnapshot?.paperId === candidate.paperId
+        && capabilitySnapshot?.recordSha256 === candidate.sealedRecordSha256
+        && capabilitySnapshot?.analysisFileSha256 === candidate.sealedAnalysisFileSha256
+        && capabilitySnapshot?.sourceSnapshotSha256 === candidate.sealedSourceSnapshotSha256
+        && sourceFields.every(field => legacySource?.[field] === sourceProvenance?.[field])
+        && sourceProvenance?.sourceSha256 === crypto.createHash('sha256')
+            .update(String(sourceText || '')).digest('hex')
+        && paper.sourceSha256 === sourceProvenance?.sourceSha256
+        && require('./analysis-engine.js').isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacyPaper)
+        && require('./analysis-engine.js').apiReaderV3BindsCanonical(legacyPaper)
+        && getRepairableAnalysisStructureIssues(candidate.legacyAnalysis, {
+            sourceText
+        }).length === 0
+        && Boolean(getCoreSummaryDetailIssue(candidate.legacyAnalysis, { sourceText }))
+        && !validateMethodDetailContract(candidate.legacyAnalysis));
+}
+
+function adoptSealedCoreSummaryRecoveryCandidate(
+    candidate, paper, manifest, sourceProvenance, sourceText
+) {
+    if (!validateSealedCoreSummaryRecoveryCandidate(
+        candidate, paper, sourceProvenance, sourceText
+    )) return false;
+    const capability = require('./lib/fresh-analysis-context.js')
+        .getSealedRecoveryCapability(candidate.paperId);
+    if (!require('./lib/fresh-rewrite-run.js').consumeSealedRecoveryCapability(capability, {
+        runId: candidate.sealedRunId,
+        paperId: candidate.paperId,
+        recordSha256: candidate.sealedRecordSha256,
+        analysisFileSha256: candidate.sealedAnalysisFileSha256,
+        sourceSnapshotSha256: candidate.sealedSourceSnapshotSha256
+    })) return false;
+    const preservedReaderStage = structuredClone(manifest.stages?.apiReaderArticle
+        || candidate.legacyManifest.stages.apiReaderArticle);
+    const legacyStages = structuredClone(candidate.legacyManifest.stages);
+    const legacyContracts = structuredClone(candidate.legacyManifest.contracts || {});
+    delete legacyStages.coreSummaryRepair;
+    delete legacyStages.scoringAudit;
+    delete legacyStages.imageSupplement;
+    delete legacyContracts.coreSummary;
+    delete legacyContracts.imageNarrative;
+    const auditBody = {
+        contract: SEALED_CORE_SUMMARY_RECOVERY_CONTRACT,
+        paperId: candidate.paperId,
+        legacyAnalysisSha256: candidate.legacyAnalysisSha256,
+        legacySummaryExteriorSha256: candidate.legacySummaryExteriorSha256,
+        legacyManifestSha256: candidate.legacyManifestSha256,
+        legacyManifest: candidate.legacyManifest,
+        sourceSha256: sourceProvenance.sourceSha256,
+        usedTextSha256: sourceProvenance.usedTextSha256,
+        structuredArtifactsSha256: sourceProvenance.structuredArtifactsSha256,
+        freshIdentitySha256: candidate.freshIdentitySha256,
+        freshRewriteProvenanceSha256: candidate.freshRewriteProvenanceSha256,
+        candidateSha256: candidate.candidateSha256,
+        sealedRunId: candidate.sealedRunId,
+        sealedRecordSha256: candidate.sealedRecordSha256,
+        sealedAnalysisFileSha256: candidate.sealedAnalysisFileSha256,
+        sealedSourceSnapshotSha256: candidate.sealedSourceSnapshotSha256,
+        migratedAt: getBeijingISOString()
+    };
+    const audit = { ...auditBody, auditSha256: stableFingerprint(auditBody) };
+    for (const stage of SEALED_CORE_SUMMARY_REUSED_STAGES) {
+        legacyStages[stage] = { ...legacyStages[stage],
+            sealedCanonicalRecoveryAuditSha256: audit.auditSha256 };
+    }
+    legacyStages.structureRepair.outputAnalysisSha256 = candidate.legacyAnalysisSha256;
+    manifest.stages = { ...legacyStages, apiReaderArticle: preservedReaderStage };
+    manifest.contracts = legacyContracts;
+    manifest.sourceAcquisition = { ...sourceProvenance };
+    manifest.freshRewriteProvenance = structuredClone(paper.freshRewriteProvenance);
+    manifest.compatibilityMigrations = [
+        ...(Array.isArray(manifest.compatibilityMigrations)
+            ? manifest.compatibilityMigrations : []),
+        audit
+    ].slice(-4);
+    paper.analysisCheckpoint = candidate.legacyAnalysis;
+    paper.analysisStageCheckpoints = Object.fromEntries(
+        SEALED_CORE_SUMMARY_REUSED_STAGES.map(stage => [stage, candidate.legacyAnalysis])
+    );
+    paper.analysis = candidate.legacyAnalysis;
+    paper.parsed = parseAnalysis(candidate.legacyAnalysis);
+    return true;
+}
+
+function sealedCoreSummaryRecoveryIsValid(paper, manifest, sourceText, stage) {
+    if (!SEALED_CORE_SUMMARY_REUSED_STAGES.includes(stage)) return false;
+    const audit = (manifest?.compatibilityMigrations || []).find(item => (
+        item?.contract === SEALED_CORE_SUMMARY_RECOVERY_CONTRACT
+        && item?.auditSha256 === manifest?.stages?.[stage]?.sealedCanonicalRecoveryAuditSha256
+    ));
+    if (!audit) return false;
+    const { auditSha256, ...auditBody } = audit;
+    const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity(
+        getPaperArxivId(paper)
+    );
+    const capability = require('./lib/fresh-analysis-context.js')
+        .getSealedRecoveryCapability(getPaperArxivId(paper));
+    const capabilitySnapshot = require('./lib/fresh-rewrite-run.js')
+        .sealedRecoveryCapabilitySnapshot(capability, { allowConsumed: true });
+    const checkpoint = paper?.analysisStageCheckpoints?.[stage];
+    const legacyPaper = { ...paper, analysis: checkpoint,
+        parsed: parseAnalysis(checkpoint), analysisManifest: audit.legacyManifest };
+    delete legacyPaper.analysisCheckpoint;
+    delete legacyPaper.analysisStageCheckpoints;
+    delete legacyPaper.analysisStaleSnapshots;
+    delete legacyPaper.latestAnalysisAttemptError;
+    delete legacyPaper.latestAnalysisAttemptAt;
+    if (legacyPaper.digestStatus?.latestAttemptStatus === 'analysis_failed') {
+        legacyPaper.digestStatus = { ...legacyPaper.digestStatus };
+        delete legacyPaper.digestStatus.latestAttemptStatus;
+    }
+    return Boolean(auditSha256 === stableFingerprint(auditBody)
+        && audit.paperId === getPaperArxivId(paper)
+        && audit.legacyManifestSha256 === stableFingerprint(audit.legacyManifest)
+        && crypto.createHash('sha256').update(String(checkpoint || '')).digest('hex')
+            === audit.legacyAnalysisSha256
+        && coreSummaryProjectionSha256(checkpoint) === audit.legacySummaryExteriorSha256
+        && crypto.createHash('sha256').update(String(sourceText || '')).digest('hex')
+            === audit.sourceSha256
+        && manifest?.sourceAcquisition?.sourceSha256 === audit.sourceSha256
+        && manifest?.sourceAcquisition?.usedTextSha256 === audit.usedTextSha256
+        && manifest?.sourceAcquisition?.structuredArtifactsSha256
+            === audit.structuredArtifactsSha256
+        && freshIdentity && stableFingerprint(freshIdentity) === audit.freshIdentitySha256
+        && stableFingerprint(paper.freshRewriteProvenance)
+            === audit.freshRewriteProvenanceSha256
+        && capabilitySnapshot?.consumed === true
+        && capabilitySnapshot?.runId === audit.sealedRunId
+        && capabilitySnapshot?.paperId === audit.paperId
+        && capabilitySnapshot?.recordSha256 === audit.sealedRecordSha256
+        && capabilitySnapshot?.analysisFileSha256 === audit.sealedAnalysisFileSha256
+        && capabilitySnapshot?.sourceSnapshotSha256 === audit.sealedSourceSnapshotSha256
+        && require('./analysis-engine.js').isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacyPaper)
+        && getRepairableAnalysisStructureIssues(checkpoint, { sourceText }).length === 0
+        && !validateMethodDetailContract(checkpoint));
+}
 
 function makeLegacyStructureCompatibilityProof(
     stage, legacyInput, output, sourceText, migrationAudit, legacySnapshotPayloadSha256
@@ -8757,6 +8964,7 @@ async function analyzePaperDeepInternal(paper) {
     const arxivId = getPaperArxivId(paper);
     const conferenceSource = require('./lib/conference-analysis-context.js').getConferenceAnalysisSource(paper);
     const previousScore = Number.parseFloat(paper?.parsed?.score);
+    const sealedCoreSummaryRecoveryCandidate = captureSealedCoreSummaryRecoveryCandidate(paper);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
@@ -8893,7 +9101,22 @@ async function analyzePaperDeepInternal(paper) {
     )) {
         console.log('    [deep] ♻️  已在主分析重跑前封口 source-only Reader，避免重复生成');
     }
-    const migratedCoreSummaryV3 = tryMigrateCoreSummaryV3LegacyCheckpoints(
+    const adoptedSealedCoreSummary = adoptSealedCoreSummaryRecoveryCandidate(
+        sealedCoreSummaryRecoveryCandidate,
+        paper,
+        analysisManifest,
+        sourceProvenance,
+        rawTextForAnalysis
+    );
+    const sealedCoreSummaryRecoveryActive = adoptedSealedCoreSummary
+        || sealedCoreSummaryRecoveryIsValid(
+            paper, analysisManifest, rawTextForAnalysis, 'primaryAnalysis'
+        );
+    if (adoptedSealedCoreSummary) {
+        console.log('    [deep] ♻️  已封口 legacy canonical，仅执行核心摘要单节修复与评分重审');
+    }
+    const migratedCoreSummaryV3 = sealedCoreSummaryRecoveryActive
+        || tryMigrateCoreSummaryV3LegacyCheckpoints(
         paper,
         analysisManifest,
         textForAnalysis,
@@ -8906,9 +9129,11 @@ async function analyzePaperDeepInternal(paper) {
             paper, analysisManifest, 'primaryAnalysis', recoveryFingerprints.primaryAnalysis
         );
     }
-    invalidateRecoveryStageIfChanged(
-        paper, analysisManifest, 'demoLinkScan', recoveryFingerprints.demoLinkScan
-    );
+    if (!sealedCoreSummaryRecoveryActive) {
+        invalidateRecoveryStageIfChanged(
+            paper, analysisManifest, 'demoLinkScan', recoveryFingerprints.demoLinkScan
+        );
+    }
     // 已完成的后处理阶段必须用当时上游 checkpoint 和完整正文重新构造
     // 实际有界证据后再校验指纹。这里在恢复主分析正文之前完成失效传播，
     // 避免缺少前序快照的异常 manifest 在本轮中继续使用陈旧下游正文。
@@ -9948,7 +10173,19 @@ async function analyzePaperDeepInternal(paper) {
         analysis = preImageAnalysis;
     }
     const hasBoundApiReaderFigures = hasCompleteApiReaderFigureBinding(paper, analysisManifest);
-    if (hasBoundApiReaderFigures && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
+    if (sealedCoreSummaryRecoveryActive
+        && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
+        analysis = preImageAnalysis;
+        selectedImageUrls = [];
+        markRecoveryStage(analysisManifest, 'imageSupplement', 'skipped', {
+            reason: 'sealed_core_summary_recovery_preserves_source_only_reader',
+            officialFigureCount: Array.isArray(paper.apiReaderFigures)
+                ? paper.apiReaderFigures.length : 0,
+            officialFiguresSha256: stableFingerprint(paper.apiReaderFigures || []),
+            fingerprint: imageSupplementFingerprint
+        });
+        console.log('    [deep] ℹ️  核心摘要窄恢复跳过插图重写，保留 source-only Reader 图文证据');
+    } else if (hasBoundApiReaderFigures && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         analysis = preImageAnalysis;
         selectedImageUrls = [];
         markRecoveryStage(analysisManifest, 'imageSupplement', 'skipped', {
@@ -11271,6 +11508,11 @@ module.exports = {
     buildLegacyCoreSummaryV2PrimaryFingerprint,
     buildLegacyCoreSummaryV2TextFingerprint,
     buildLegacyCoreSummaryV2EvidenceContext,
+    SEALED_CORE_SUMMARY_RECOVERY_CONTRACT,
+    captureSealedCoreSummaryRecoveryCandidate,
+    validateSealedCoreSummaryRecoveryCandidate,
+    adoptSealedCoreSummaryRecoveryCandidate,
+    sealedCoreSummaryRecoveryIsValid,
     coreSummaryV3MigrationPromptSetIsAllowed,
     currentCoreSummaryV3MigrationPromptsAreExact,
     tryMigrateCoreSummaryV3LegacyCheckpoints,

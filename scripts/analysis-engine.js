@@ -768,6 +768,30 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
         );
 }
 
+function isSealedApiAnalysisEligibleForCoreSummaryRecovery(paper) {
+    if (isLegacyApiAnalysisSuccessForReadOnlyValidation(paper)) return true;
+    const manifest = paper?.analysisManifest;
+    const stages = manifest?.stages;
+    const scoring = stages?.scoringAudit;
+    if (paper?.latestAnalysisAttemptError
+        || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed'
+        || !hasValidAnalysisBody(paper)
+        || !manifest || manifest.version !== 1
+        || !stages || typeof stages !== 'object' || Array.isArray(stages)
+        || REQUIRED_RECOVERY_STAGES.some(stage =>
+            !isRecoveryStageTerminal(stage, stages[stage]?.status))
+        || validateCoreSummaryStageBinding(paper, { skipSemantic: true })
+        || validateManualTakeoverManifest(
+            manifest,
+            manifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
+            { analysis: paper.analysis, imageManifest: paper.imageManifest }
+        )) return false;
+    return scoring?.scoringContract === 'api-scoring-audit-v2'
+        && scoringAuditBindsFinalAnalysis(paper)
+        && scoringStabilityIsResolved(scoring)
+        && apiReaderV3BindsCanonical(paper);
+}
+
 function getReadOnlyValidationAnalysisRunSummary(papers) {
     const records = Array.isArray(papers) ? papers : [];
     const remaining = records.filter(paper => !(
@@ -1635,6 +1659,7 @@ module.exports = {
     getCanonicalAnalysisRunSummary,
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
+    isSealedApiAnalysisEligibleForCoreSummaryRecovery,
     getAnalysisExitCode,
     getInvalidAnalysisReason,
     hasRequiredSections,

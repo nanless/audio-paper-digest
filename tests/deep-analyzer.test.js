@@ -3136,6 +3136,24 @@ has_dataset: 否
         }), null);
     });
 
+    it('核心摘要评测设置不把 Pearson 尾部当作 on，并接受显式 DRT 众包设置', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const summary = '语音可懂度评估输入为不同算法处理后的语音，输出为听者能否辨别音位的可懂度分数，难点在于生成式方法不保真参考且实验室测试昂贵难扩展。'
+            + '该工作方法链分三环：先整理英西法德汉五语诊断押韵测试词表并众包录制多说话人平衡语料，再以问卷加众包筛选实现预筛、耳机校验、数字噪声听力检查与练习加陷阱题过滤，最后按校正猜测公式计算逐文件得分并聚合到词对与区别性特征层面。'
+            + '第二步负责筛除无效作答，随后将保留结果送入聚合模块，确保三个环节有明确分工而不是简单堆叠。'
+            + '与转写式众包相比，该机制用二选一闭集辨别避免拼写与记忆效应，并支持材料复用与细粒度音位诊断。'
+            + '窄带编码众包得分为91.2分而宽带干净录音更高且差异显著，重测逐文件Pearson相关系数达0.87，绝对值低于实验室但相对排序稳定。'
+            + '结论仅适用于无噪声弱退化下的辅音对比，未验证强噪声、生成式伪影与多平台泛化。'
+            + '原文未披露训练、推理或部署成本，因此不能据此判断规模化运行所需算力与延迟。';
+        assert.match(getCoreSummaryDetailIssue(withSummary(summary)), /缺少完整关键定量结果/);
+        const explicit = summary.replace('窄带编码众包得分', '在 DRT 众包评测设置下，窄带编码众包得分');
+        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(explicit)), null);
+    });
+
     it('核心摘要修复证据只来自 sourceText，不含 canonical A_* 片段', () => {
         const { buildStageEvidenceContext } = require('../scripts/deep-analyzer.js');
         const evidence = buildStageEvidenceContext('coreSummaryRepair', validAnalysisText(),
@@ -3360,6 +3378,78 @@ has_dataset: 否
             ...observed,
             primaryAnalysis: 'e'.repeat(64)
         }), false);
+    });
+
+    it('无 opaque capability 时自签 sealed recovery audit 不能授权摘要窄恢复', async () => {
+        const crypto = require('node:crypto');
+        const deep = require('../scripts/deep-analyzer.js');
+        const engine = require('../scripts/analysis-engine.js');
+        const fresh = require('../scripts/lib/fresh-analysis-context.js');
+        const originalEligible = engine.isSealedApiAnalysisEligibleForCoreSummaryRecovery;
+        const originalReader = engine.apiReaderV3BindsCanonical;
+        const originalFreshIdentity = fresh.freshAnalysisIdentity;
+        const sourceText = `${require('../scripts/analysis-contract.js').extractSection(
+            validAnalysisText(), '实验结果'
+        )}\nExperiment on a public test set reports WER from 12.4% to 9.8% compared with baseline.`;
+        const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
+        const freshRewriteProvenance = { contract: 'fresh-source-analysis-v1',
+            runId: '11111111-1111-4111-8111-111111111111', sourceSha256,
+            structuredArtifactsSha256: '2'.repeat(64), sourceSnapshotSha256: '3'.repeat(64),
+            sourceOnly: true, oldGeneratedTextIncluded: false };
+        const freshIdentity = { ...freshRewriteProvenance, paperId: '2604.12527',
+            inputSetSha256: '4'.repeat(64) };
+        engine.isSealedApiAnalysisEligibleForCoreSummaryRecovery = paper => paper.legacyProofValid !== false;
+        engine.apiReaderV3BindsCanonical = paper => paper.readerProofValid !== false;
+        fresh.freshAnalysisIdentity = () => freshIdentity;
+        try {
+            const shallowSummary = '本文针对噪声语音识别任务中输入线索受损与输出错误累积的问题展开研究。方法先编码局部声学特征，再融合长程上下文并由解码器输出文字序列，各模块分别承担表征、融合与预测职责。实验显示方法有效，但摘要没有完整交代定量设置、适用边界与训练推理成本。';
+            const method = require('../scripts/analysis-contract.js').extractSection(
+                validAnalysisText(), '方法概述和架构'
+            );
+            const detailedAnalysis = validAnalysisText().replace(
+                `## 方法概述和架构\n${method}`,
+                `## 方法概述和架构\n${Array.from({ length: 5 }, () => method).join('\n\n')}`
+            );
+            const analysis = detailedAnalysis.replace(
+                /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+                `## 核心摘要\n${shallowSummary}\n`
+            );
+            const stages = Object.fromEntries([
+                ['imageDownload', 'no_candidates'], ['primaryAnalysis', 'complete'],
+                ['openSourceScan', 'complete'], ['demoLinkScan', 'not_needed'],
+                ['revision', 'complete'], ['tableRepair', 'not_needed'],
+                ['methodRepair', 'not_needed'], ['structureRepair', 'not_needed'],
+                ['scoringAudit', 'complete'], ['apiReaderArticle', 'complete'],
+                ['imageSupplement', 'skipped']
+            ].map(([stage, status]) => [stage, { status, fingerprint: `legacy-${stage}`,
+                updatedAt: '2026-09-06T23:59:59.000+08:00' }]));
+            const sourceAcquisition = { analysisSource: 'html', sourceId: '2604.12527v1',
+                sourceSha256, usedTextSha256: '5'.repeat(64), structuredArtifactsSha256: '2'.repeat(64),
+                fullTextAvailable: true };
+            const paper = { arxivId: '2604.12527', analysis, parsed: require('../scripts/utils.js').parseAnalysis(analysis),
+                sourceSha256, freshRewriteProvenance, apiReaderArticle: 'sealed reader bytes',
+                apiReaderPlan: { version: 3 }, readerProofValid: true, legacyProofValid: true,
+                analysisManifest: { version: 1, sourceAcquisition,
+                    freshRewriteProvenance: structuredClone(freshRewriteProvenance),
+                    contracts: { experimentTables: 'bounded-v1', methodDetail: 'detailed-v1',
+                        editorialLeakage: 'high-confidence-v1', apiReaderArticle: 'beginner-researcher-v3' },
+                    stages } };
+            const candidate = deep.captureSealedCoreSummaryRecoveryCandidate(paper);
+            assert.strictEqual(candidate, null);
+            const forgedManifest = deep.createAnalysisRecoveryManifest(paper);
+            forgedManifest.compatibilityMigrations = [{
+                contract: deep.SEALED_CORE_SUMMARY_RECOVERY_CONTRACT,
+                auditSha256: deep.stableFingerprint({ forged: true }),
+                forged: true
+            }];
+            assert.strictEqual(deep.sealedCoreSummaryRecoveryIsValid(
+                paper, forgedManifest, sourceText, 'structureRepair'
+            ), false);
+        } finally {
+            engine.isSealedApiAnalysisEligibleForCoreSummaryRecovery = originalEligible;
+            engine.apiReaderV3BindsCanonical = originalReader;
+            fresh.freshAnalysisIdentity = originalFreshIdentity;
+        }
     });
 
     it('Prompt 指纹只绑定 loadPrompt 的首个 fence 与显式合同版本', () => {

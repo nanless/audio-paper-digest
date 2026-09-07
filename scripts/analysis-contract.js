@@ -956,7 +956,7 @@ function hasCompleteCoreSummaryQuantitativeResult(text) {
             || !CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return false;
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         if (!numbers.length) return false;
-        const setting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|同一|相同|公开|内部|外部|on\b)/i.test(sentence);
+        const setting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
         const comparison = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
         return setting && comparison;
@@ -1034,8 +1034,10 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         || stage.contractVersion !== CORE_SUMMARY_CONTRACT_VERSION) return '核心摘要合同不是 current v3';
     if (!/^[a-f0-9]{64}$/.test(String(stage.fingerprint || ''))) return '核心摘要阶段缺少 sealed fingerprint';
     if (!/^[a-f0-9]{64}$/.test(String(stage.outputAnalysisSha256 || ''))) return '核心摘要阶段缺少输出 SHA';
-    const semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, options);
-    if (semanticIssue) return semanticIssue;
+    if (options.skipSemantic !== true) {
+        const semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, options);
+        if (semanticIssue) return semanticIssue;
+    }
     if (stage.summarySha256 !== summarySha256) return '核心摘要正文未绑定阶段 SHA';
     const structure = manifest?.stages?.structureRepair;
     const scoring = manifest?.stages?.scoringAudit;

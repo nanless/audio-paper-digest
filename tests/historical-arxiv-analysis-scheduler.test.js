@@ -29,6 +29,17 @@ function state() {
                 groupSha256: 'd'.repeat(64), pageKeys: [pages[2].pageKey] }
         ] };
 }
+function stateForIds(ids) {
+    const pages = ids.map((id, index) => ({ pageKey: `page:${String(index + 1).repeat(64)}`,
+        cohortDate: `2026-04-${String(index + 10).padStart(2, '0')}` }));
+    return { crosswalkId: CROSSWALK, stateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64),
+        source: { papers: pages },
+        assignments: Object.fromEntries(pages.map((page, index) => [page.pageKey,
+            { sourceAuthority: ref(ids[index], `arxiv-${ids[index]}-history.json`) }])),
+        identityGroups: ids.map((id, index) => ({ paperId: `arxiv:${id}`,
+            identitySha256: String(index + 4).repeat(64), identityRecordSha256: String(index + 5).repeat(64),
+            groupSha256: String(index + 6).repeat(64), pageKeys: [pages[index].pageKey] })) };
+}
 function fixture(t) { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'history-scheduler-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; }
 
 test('verified duplicate pages collapse to one deterministic analysis identity and earliest cohort date', () => {
@@ -109,6 +120,211 @@ test('pilot then full rerun skips complete identity and resumes the remaining un
     const second = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
         stage: 'analyze', limit: 2, concurrency: 3 }, deps);
     assert.equal(second.complete, 2); assert.deepEqual(calls, { metadata: 2, authority: 2, prepare: 2, analyze: 2 });
+});
+
+test('analyze concurrency one completes each authority preparation before fetching the next paper', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = state(); const runs = new Map(); const events = [];
+    const runToId = new Map(scheduler.groupsFromCrosswalk(current).map(group => [group.runId, group.arxivId]));
+    await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', limit: 2, concurrency: 1 }, { files,
+        readCrosswalk: () => current, recoverRun: ({ runId }) => runs.get(runId) || null,
+        fetchMetadata: async id => ({ metadata: { arxivId: id }, proof: {}, rawBytes: Buffer.from('atom') }),
+        prepareAuthority: async ({ arxivId }) => { events.push(`prepare ${arxivId}`); return { authorityHandle: {} }; },
+        prepareRun: ({ runId }) => { const value = { runId, status: 'sources_ready' }; runs.set(runId, value); return value; },
+        analyzeRun: async ({ runId }) => { events.push(`analyze ${runToId.get(runId)}`);
+            const value = { runId, status: 'complete', storageSealed: true, currentContractComplete: true };
+            runs.set(runId, value); return value; }, now: () => '2026-09-07T00:00:00.000Z' });
+    assert.deepEqual(events, [
+        'prepare 2604.12527', 'analyze 2604.12527',
+        'prepare 2609.03622', 'analyze 2609.03622'
+    ]);
+});
+
+test('analyze concurrency bounds the complete per-paper lifecycle', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = stateForIds(['2604.10001', '2604.10002', '2604.10003']);
+    const groups = scheduler.groupsFromCrosswalk(current); const runs = new Map();
+    const runToId = new Map(groups.map(group => [group.runId, group.arxivId]));
+    const active = new Set(); let maximumActive = 0;
+    await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', limit: 3, concurrency: 2 }, { files,
+        readCrosswalk: () => current, recoverRun: ({ runId }) => runs.get(runId) || null,
+        fetchMetadata: async id => { active.add(id); maximumActive = Math.max(maximumActive, active.size);
+            return { metadata: { arxivId: id }, proof: {}, rawBytes: Buffer.from('atom') }; },
+        prepareAuthority: async () => ({ authorityHandle: {} }),
+        prepareRun: ({ runId }) => { const value = { runId, status: 'sources_ready' }; runs.set(runId, value); return value; },
+        analyzeRun: async ({ runId }) => { await new Promise(resolve => setTimeout(resolve, 5));
+            active.delete(runToId.get(runId));
+            const value = { runId, status: 'complete', storageSealed: true, currentContractComplete: true };
+            runs.set(runId, value); return value; }, now: () => '2026-09-07T00:00:00.000Z' });
+    assert.equal(maximumActive, 2);
+    assert.equal(active.size, 0);
+});
+
+test('analyze continues after prepare failure without analyzing the failed paper', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = state(); const groups = scheduler.groupsFromCrosswalk(current); const runs = new Map();
+    const runToId = new Map(groups.map(group => [group.runId, group.arxivId])); const prepared = []; const analyzed = [];
+    const result = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', limit: 2, concurrency: 1 }, { files,
+        readCrosswalk: () => current, recoverRun: ({ runId }) => runs.get(runId) || null,
+        fetchMetadata: async id => ({ metadata: { arxivId: id }, proof: {}, rawBytes: Buffer.from('atom') }),
+        prepareAuthority: async ({ arxivId }) => { prepared.push(arxivId);
+            if (arxivId === groups[0].arxivId) throw new Error('source unavailable');
+            return { authorityHandle: {} }; },
+        prepareRun: ({ runId }) => { const value = { runId, status: 'sources_ready' }; runs.set(runId, value); return value; },
+        analyzeRun: async ({ runId }) => { analyzed.push(runToId.get(runId));
+            const value = { runId, status: 'complete', storageSealed: true, currentContractComplete: true };
+            runs.set(runId, value); return value; }, now: () => '2026-09-07T00:00:00.000Z' });
+    assert.deepEqual(prepared, groups.map(group => group.arxivId));
+    assert.deepEqual(analyzed, [groups[1].arxivId]);
+    assert.equal(result.complete, 1);
+    assert.equal(result.failed, 1);
+});
+
+test('durable scheduler operation lock prevents two instances from repeating one Reader attempt', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = state(); const group = scheduler.groupsFromCrosswalk(current)[0];
+    const runs = new Map([[group.runId,
+        { runId: group.runId, status: 'analysis_partial', storageSealed: false, currentContractComplete: false }]]);
+    let attempts = 0; let authorities = 0;
+    const deps = { files, readCrosswalk: () => current, recoverRun: ({ runId }) => runs.get(runId),
+        inspectRunRecovery: () => ({ recoveryKind: 'reader', upstreamReady: true,
+            recoveryFingerprint: 'reader-same', failureSignature: 'same-failure', cooldownMs: 0,
+            exhausted: attempts > 0 }),
+        prepareAuthority: async () => { authorities++; return { authorityHandle: {} }; },
+        verifyRunAuthority: () => true,
+        analyzeRun: async () => { attempts++; await new Promise(resolve => setTimeout(resolve, 20));
+            return { status: 'analysis_partial' }; }, now: () => '2026-09-07T00:00:00.000Z' };
+    const options = { apply: true, crosswalkId: CROSSWALK, stage: 'analyze', queue: 'reader-recovery',
+        paperIds: [group.paperId], limit: 'pilot', concurrency: 1 };
+    await Promise.all([
+        scheduler.runHistoricalScheduler(options, deps),
+        scheduler.runHistoricalScheduler(options, deps)
+    ]);
+    assert.equal(attempts, 1);
+    assert.equal(authorities, 1);
+});
+
+test('prepare returns the current checkpoint item instead of reusing stale recovery permission', async t => {
+    const engine = require('../scripts/analysis-engine.js');
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = state(); const groups = scheduler.groupsFromCrosswalk(current); const group = groups[0];
+    const checkpointPath = path.join(files.historicalAnalysisSchedulerDir, `${CROSSWALK}.json`);
+    fs.mkdirSync(files.historicalAnalysisSchedulerDir, { recursive: true });
+    fs.writeFileSync(checkpointPath, JSON.stringify({ contract: scheduler.CONTRACT, version: scheduler.VERSION,
+        crosswalkId: CROSSWALK, createdAt: '2026-09-07T00:00:00.000Z', generation: 1,
+        items: Object.fromEntries(groups.map(item => [item.paperId, { ...item,
+            status: item.paperId === group.paperId ? 'analysis_partial' : 'complete', lastError: null,
+            ...(item.paperId === group.paperId ? { recoveryKind: 'reader', recoveryFingerprint: 'old',
+                failureSignature: 'same', exhausted: true } : {}) }])) }));
+    const runs = new Map([[group.runId,
+        { runId: group.runId, status: 'analysis_partial', storageSealed: false, currentContractComplete: false }],
+    [groups[1].runId, { runId: groups[1].runId, status: 'complete', storageSealed: true, currentContractComplete: true }]]);
+    const refresh = [];
+    await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK, stage: 'analyze',
+        queue: 'reader-recovery', paperIds: [group.paperId], limit: 'pilot', concurrency: 1 }, { files,
+        readCrosswalk: () => current, recoverRun: ({ runId }) => runs.get(runId),
+        inspectRunRecovery: () => ({ recoveryKind: 'reader', upstreamReady: true,
+            recoveryFingerprint: 'new', failureSignature: 'same', exhausted: true, cooldownMs: 0 }),
+        prepareAuthority: async () => {
+            engine.updateJsonFileLocked(checkpointPath, value => ({ ...value, items: { ...value.items,
+                [group.paperId]: { ...value.items[group.paperId], implementationRecoveryPendingFingerprint: null } } }));
+            return { authorityHandle: {} };
+        }, verifyRunAuthority: () => true,
+        analyzeRun: async options => { refresh.push(options.refreshReaderDiagnostics);
+            const complete = { runId: group.runId, status: 'complete', storageSealed: true, currentContractComplete: true };
+            runs.set(group.runId, complete); return complete; }, now: () => '2026-09-07T00:00:00.000Z' });
+    assert.deepEqual(refresh, [false]);
+});
+
+test('a sealed current-contract run wins when analyze throws after durable completion', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = stateForIds(['2604.10001']); const group = scheduler.groupsFromCrosswalk(current)[0];
+    const partial = { runId: group.runId, status: 'analysis_partial', storageSealed: false, currentContractComplete: false };
+    let recovered = partial;
+    const result = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', limit: 'pilot', concurrency: 1 }, { files,
+        readCrosswalk: () => current, recoverRun: () => recovered,
+        inspectRunRecovery: () => ({ recoveryKind: 'full' }),
+        prepareAuthority: async () => ({ authorityHandle: {} }), verifyRunAuthority: () => true,
+        analyzeRun: async () => { recovered = { runId: group.runId, status: 'complete',
+            storageSealed: true, currentContractComplete: true }; throw new Error('post-seal callback failed'); },
+        now: () => '2026-09-07T00:00:00.000Z' });
+    assert.equal(result.complete, 1);
+    assert.equal(result.failed, 0);
+});
+
+test('prepare-time race to complete is re-read and never enters analyze', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = stateForIds(['2604.10001']); const group = scheduler.groupsFromCrosswalk(current)[0];
+    let recoverCalls = 0; let analyzed = 0;
+    const result = await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', limit: 'pilot', concurrency: 1 }, { files,
+        readCrosswalk: () => current, recoverRun: () => {
+            recoverCalls++;
+            return recoverCalls === 1 ? null : { runId: group.runId, status: 'complete',
+                storageSealed: true, currentContractComplete: true };
+        }, prepareAuthority: async () => ({ authorityHandle: {} }), verifyRunAuthority: () => true,
+        analyzeRun: async () => { analyzed++; }, now: () => '2026-09-07T00:00:00.000Z' });
+    assert.equal(analyzed, 0);
+    assert.equal(result.complete, 1);
+});
+
+test('worker recovery failure waits for sibling completion before rejecting', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = stateForIds(['2604.10001', '2604.10002']); const groups = scheduler.groupsFromCrosswalk(current);
+    const runs = new Map(groups.map(group => [group.runId,
+        { runId: group.runId, status: 'sources_ready', storageSealed: false, currentContractComplete: false }]));
+    let recoveryBroken = false; let siblingFinished = false;
+    await assert.rejects(scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', limit: 2, concurrency: 2 }, { files,
+        readCrosswalk: () => current, recoverRun: ({ runId }) => {
+            if (runId === groups[0].runId && recoveryBroken) throw new Error('recovery unreadable');
+            return runs.get(runId);
+        }, prepareAuthority: async () => ({ authorityHandle: {} }), verifyRunAuthority: () => true,
+        analyzeRun: async ({ runId }) => {
+            if (runId === groups[0].runId) { recoveryBroken = true; throw new Error('analysis failed'); }
+            await new Promise(resolve => setTimeout(resolve, 30)); siblingFinished = true;
+            const complete = { runId, status: 'complete', storageSealed: true, currentContractComplete: true };
+            runs.set(runId, complete); return complete;
+        }, now: () => '2026-09-07T00:00:00.000Z' }), AggregateError);
+    assert.equal(siblingFinished, true);
+});
+
+test('prepare-only honors concurrency and never enters analysis', async t => {
+    const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    const current = stateForIds(['2604.10001', '2604.10002', '2604.10003']);
+    const runs = new Map(); let active = 0; let maximum = 0; let analyzed = 0;
+    await scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
+        stage: 'prepare-only', queue: 'all', limit: 3, concurrency: 2 }, { files,
+        readCrosswalk: () => current, recoverRun: ({ runId }) => runs.get(runId) || null,
+        fetchMetadata: async id => ({ metadata: { arxivId: id }, proof: {}, rawBytes: Buffer.from('atom') }),
+        prepareAuthority: async () => { active++; maximum = Math.max(maximum, active);
+            await new Promise(resolve => setTimeout(resolve, 10)); active--; return { authorityHandle: {} }; },
+        prepareRun: ({ runId }) => { const value = { runId, status: 'sources_ready' }; runs.set(runId, value); return value; },
+        analyzeRun: async () => { analyzed++; }, now: () => '2026-09-07T00:00:00.000Z' });
+    assert.equal(maximum, 2);
+    assert.equal(analyzed, 0);
 });
 
 test('scheduler CLI is dry-run by default only when explicitly requested and caps concurrency at three', () => {

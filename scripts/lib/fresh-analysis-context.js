@@ -93,15 +93,34 @@ function withFreshAnalysisContext(identity, callback) {
     }
     for (const expectation of Object.values(checked.sourceExpectations)) Object.freeze(expectation);
     Object.freeze(checked.sourceExpectations);
+    const capabilities = identity.sealedRecoveryCapabilities === undefined
+        ? new Map() : identity.sealedRecoveryCapabilities;
+    if (!(capabilities instanceof Map)
+        || [...capabilities.entries()].some(([id, handle]) => {
+            const snapshot = require('./fresh-rewrite-run.js')
+                .sealedRecoveryCapabilitySnapshot(handle);
+            const expected = checked.sourceExpectations[id];
+            return !expected || snapshot?.runId !== checked.runId
+                || snapshot.paperId !== id
+                || snapshot.sourceSha256 !== expected.sourceSha256
+                || snapshot.structuredArtifactsSha256 !== expected.structuredArtifactsSha256;
+        })) throw fail('Fresh sealed recovery capabilities are invalid or forged');
     const { withLlmUsageContext } = require('./llm-usage.js');
     const context = Object.freeze({ ...checked,
         refreshReaderDiagnostics: identity.refreshReaderDiagnostics === true,
+        sealedRecoveryCapabilities: new Map(capabilities),
         pendingSources: new Map() });
     return scope.run(context,
         () => withLlmUsageContext({ runId: checked.runId }, callback));
 }
 
 function getFreshAnalysisContext() { return scope.getStore() || null; }
+
+function getSealedRecoveryCapability(id = getFreshAnalysisContext()?.paperId) {
+    const context = getFreshAnalysisContext();
+    if (!context || !id) return null;
+    return context.sealedRecoveryCapabilities.get(paperId(id)) || null;
+}
 
 function validateSource(details, id, expectation) {
     if (!details || typeof details !== 'object' || Array.isArray(details)
@@ -277,5 +296,6 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
 }
 
 module.exports = { CONTRACT, CACHE_CONTRACT, withFreshAnalysisContext, getFreshAnalysisContext,
+    getSealedRecoveryCapability,
     readFreshSource, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
     withFreshPaperContext, attachFreshSourceProvenance, freshReaderAttemptsDirectory };

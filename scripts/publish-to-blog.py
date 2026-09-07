@@ -2653,7 +2653,7 @@ def _detailed_core_summary_semantic_issue(summary):
         re.IGNORECASE,
     )
     number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
-    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|同一|相同|公开|内部|外部|on\b)', re.IGNORECASE)
+    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|同一|相同|公开|内部|外部|\bon\b)', re.IGNORECASE)
     has_complete_result = False
     for sentence in re.split(r'[。！？!?\n]', summary):
         numbers = number.findall(sentence)
