@@ -95,24 +95,24 @@ acquisition handoff；本地会议输入缺失/损坏使 direct item 失败关�
 # 所有文件参数均为绝对路径；先用 --dry-run，确认后才改为 --apply
 npm run history:conference-local-sources -- --apply [--output conference-local-sources-v1.json]
 npm run history:direct-inputs -- --apply --conference-manifest /abs/conference-local-sources-v1.json \
-  --inventory /abs/all-history.json --blog-root /abs/audio-paper-digest-blog [--name scoped-historical-local-data-v3.json]
-npm run history:conference-projections -- --apply --catalog /abs/scoped-historical-local-data-v3.json \
+  --inventory /abs/all-history.json --blog-root /abs/audio-paper-digest-blog [--name scoped-historical-local-data-v4.json]
+npm run history:conference-projections -- --apply --catalog /abs/scoped-historical-local-data-v4.json \
   --inventory /abs/all-history.json [--output conference-page-projections-v2.json]
-npm run history:direct-plan -- --apply --catalog /abs/scoped-historical-local-data-v3.json \
+npm run history:direct-plan -- --apply --catalog /abs/scoped-historical-local-data-v4.json \
   --inventory /abs/all-history.json --conference-projections /abs/conference-page-projections-v2.json \
-  [--output direct-rewrite-plan-v3.json]
-npm run history:direct-scheduler -- --apply --plan /abs/direct-rewrite-plan-v3.json \
+  [--output direct-rewrite-plan-v4.json]
+npm run history:direct-scheduler -- --apply --plan /abs/direct-rewrite-plan-v4.json \
   [--queue all|arxiv|conference] [--generation N] [--paper-ids ID[,ID...]] [--max-papers N] \
   [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
-npm run history:direct-run -- --apply --plan /abs/direct-rewrite-plan-v3.json \
+npm run history:direct-run -- --apply --plan /abs/direct-rewrite-plan-v4.json \
   [--queue all|arxiv|conference] [--generation N] [--paper-ids ID[,ID...]] \
   [--max-papers N] [--concurrency 1-8]
-npm run history:status -- --plan /abs/direct-rewrite-plan-v3.json [--generation N] [--watch-seconds N]
-npm run history:pause -- --plan /abs/direct-rewrite-plan-v3.json --phase source|analysis [--generation N]
-npm run history:resume -- --plan /abs/direct-rewrite-plan-v3.json --phase source|analysis [--generation N]
-npm run history:direct-aggregate -- projection --apply --plan-file /abs/direct-rewrite-plan-v3.json \
+npm run history:status -- --plan /abs/direct-rewrite-plan-v4.json [--generation N] [--watch-seconds N]
+npm run history:pause -- --plan /abs/direct-rewrite-plan-v4.json --phase source|analysis [--generation N]
+npm run history:resume -- --plan /abs/direct-rewrite-plan-v4.json --phase source|analysis [--generation N]
+npm run history:direct-aggregate -- projection --apply --plan-file /abs/direct-rewrite-plan-v4.json \
   --inventory-file /abs/all-history.json --output-name direct-aggregate-projection-v2.json
-npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-rewrite-plan-v3.json \
+npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-rewrite-plan-v4.json \
   --registry-file /abs/direct-rewrite-registry.json --projection-file /abs/direct-aggregate-projection-v2.json \
   (--daily YYYY-MM-DD|--conference conference-key)
 ```

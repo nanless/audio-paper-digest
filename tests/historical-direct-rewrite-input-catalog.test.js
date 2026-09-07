@@ -67,13 +67,14 @@ function fixture(t) {
 
 function inputArgs(f, mode = '--dry-run') {
     return [mode, '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile,
-        '--blog-root', f.blog, '--name', 'merged-good-historical-local-data-v3.json'];
+        '--blog-root', f.blog, '--name', 'scoped-historical-local-data-v4.json'];
 }
 
-test('scoped v3 builder derives fresh arXiv identities from frozen hints and retains only exact local conference records', t => {
+test('scoped v4 builder derives fresh arXiv identities from frozen evidence and retains only exact local conference records', t => {
     const f = fixture(t); const value = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest, inventoryFile: f.inventoryFile, blogRoot: f.blog });
-    assert.equal(value.contract, 'merged-good-historical-local-data-v3');
-    assert.deepEqual(value.summary, { arxivPapers: 1, arxivPages: 2, conferencePapers: 4, canonicalRecords: 5, sourceRecords: 4,
+    assert.equal(value.contract, 'merged-good-historical-local-data-v4');
+    assert.deepEqual(value.summary, { arxivPapers: 1, arxivPages: 2, singleArxivPages: 2,
+        dailyPrimaryArxivBindings: 0, conferencePapers: 4, canonicalRecords: 5, sourceRecords: 4,
         conferenceSourceSets: { 'accepted-local-iclr-2026': 1, 'workspace-icassp-2026': 1, 'workspace-iclr-2026': 1, 'workspace-icml-2026': 1 } });
     assert.equal(value.scopeBinding.conferencePageCount, 5);
     assert.equal(value.scopeBinding.arxivPageCount, 2);
@@ -86,11 +87,11 @@ test('scoped v3 builder derives fresh arXiv identities from frozen hints and ret
     assert.deepEqual(catalog.normalizeCatalog(value), value);
 });
 
-test('CLI produces a scoped v3 catalog and its projection-to-plan dry-run succeeds', t => {
+test('CLI produces a scoped v4 catalog and its projection-to-plan dry-run succeeds', t => {
     const f = fixture(t); const parsed = inputsCli.parseArgs(inputArgs(f));
-    assert.equal(parsed.apply, false); assert.equal(parsed.name, 'merged-good-historical-local-data-v3.json');
+    assert.equal(parsed.apply, false); assert.equal(parsed.name, 'scoped-historical-local-data-v4.json');
     const written = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
-    assert.equal(written.status, 'created'); assert.equal(written.filename, path.join(f.catalogRoot, 'merged-good-historical-local-data-v3.json'));
+    assert.equal(written.status, 'created'); assert.equal(written.filename, path.join(f.catalogRoot, 'scoped-historical-local-data-v4.json'));
     const second = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
     assert.equal(second.status, 'recovered');
     const projection = projectionsCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile], {
@@ -114,10 +115,14 @@ test('CLI rejects the removed arXiv-manifest prerequisite and incomplete scope',
     assert.throws(() => inputsCli.parseArgs(['--dry-run', '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile]), /Use/);
 });
 
-test('projection and plan reject legacy v3 collector bytes through the producer strict validator', t => {
+test('projection and plan reject legacy v3 and malformed v4 bytes through the producer strict validator', t => {
     const f = fixture(t);
     const current = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
         inventoryFile: f.inventoryFile, blogRoot: f.blog });
+    const legacyV3 = { contract: 'merged-good-historical-local-data-v3', version: 3,
+        scope: current.scope, inputs: current.inputs, summary: current.summary, entries: current.entries };
+    assert.throws(() => projectionApi.normalizeCatalog(legacyV3), /current scoped v4 local source catalog/);
+    assert.throws(() => planApi.normalizeCatalog(legacyV3), /current scoped v4 local source catalog/);
     const cases = [
         value => { delete value.scopeBinding; },
         value => { value.inputs.unshift({ path: '/tmp/legacy-arxiv-good-data.json',
@@ -129,7 +134,34 @@ test('projection and plan reject legacy v3 collector bytes through the producer 
     ];
     for (const mutate of cases) {
         const legacy = structuredClone(current); mutate(legacy);
-        assert.throws(() => projectionApi.normalizeCatalog(legacy), /current scoped v3 local source catalog/);
-        assert.throws(() => planApi.normalizeCatalog(legacy), /current scoped v3 local source catalog/);
+        assert.throws(() => projectionApi.normalizeCatalog(legacy), /current scoped v4 local source catalog/);
+        assert.throws(() => planApi.normalizeCatalog(legacy), /current scoped v4 local source catalog/);
     }
+});
+
+test('catalog seals qualified multiple-hint primary arXiv bindings and merges their IDs without local writer sources', t => {
+    const f = fixture(t); const relative = 'content/posts/multiple-primary.md';
+    const bytes = Buffer.from('---\ntitle: "Multiple primary"\ndate: 2026-05-03\n---\n\n# Multiple primary\n\n'
+        + '✅ **7.0/10** | 前50% | #语音识别 | [arxiv](https://arxiv.org/abs/2605.28508v1)\n\n'
+        + 'Reference only: https://openreview.net/forum?id=D0LuQNZfEl\nPOISON_OLD_BODY\n');
+    fs.mkdirSync(path.dirname(path.join(f.blog, relative)), { recursive: true });
+    fs.writeFileSync(path.join(f.blog, relative), bytes, { mode: 0o600 });
+    f.inventory.pages.push({ pageId: pageId(relative), kind: 'paper', path: relative,
+        primaryUrl: 'https://example.test/multiple-primary/', contentSha256: sha(bytes),
+        scope: { type: 'daily', key: '2026-05-03' }, cohortDate: '2026-05-03', identityHints: {
+            status: 'multiple', candidates: [
+                { scheme: 'arxiv', value: '2605.28508', sources: ['body:arxiv-link'] },
+                { scheme: 'openreview-forum-id', value: 'D0LuQNZfEl', sources: ['body:openreview-link'] }
+            ] } });
+    fs.writeFileSync(f.inventoryFile, JSON.stringify(f.inventory), { mode: 0o600 });
+    const value = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
+        inventoryFile: f.inventoryFile, blogRoot: f.blog });
+    assert.equal(value.contract, 'merged-good-historical-local-data-v4');
+    assert.equal(value.dailyPrimaryArxivBindings.length, 1);
+    assert.equal(value.summary.dailyPrimaryArxivBindings, 1);
+    assert.equal(value.scopeBinding.dailyPrimaryArxivBindingCount, 1);
+    assert.equal(value.summary.arxivPages, 3);
+    assert.deepEqual(value.entries.find(entry => entry.paperId === 'arxiv:2605.28508').sources, []);
+    assert.equal(JSON.stringify(value).includes('POISON_OLD_BODY'), false);
+    assert.deepEqual(catalog.normalizeCatalog(value), value);
 });

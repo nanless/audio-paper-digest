@@ -27,10 +27,10 @@ npm run history:direct-inputs -- --apply \
   --blog-root /absolute/path/audio-paper-digest-blog
 
 npm run history:conference-projections -- --apply \
-  --catalog /absolute/path/scoped-historical-local-data-v3.json \
+  --catalog /absolute/path/scoped-historical-local-data-v4.json \
   --inventory /absolute/path/all-history.json
 npm run history:direct-plan -- --apply \
-  --catalog /absolute/path/scoped-historical-local-data-v3.json \
+  --catalog /absolute/path/scoped-historical-local-data-v4.json \
   --inventory /absolute/path/all-history.json \
   --conference-projections /absolute/path/conference-page-projections-v2.json
 ```
@@ -204,9 +204,9 @@ crosswalk assignment。
 generation 才重新获取官方文本/PDF 并封存。会议部分读取 conference local-source manifest、重放 inventory
 页面 SHA，并只读取会议页 frontmatter title fingerprint 来选择精确的 canonical conference record；它不会读取
 正文。workspace crawler 来源优先；`accepted-local-iclr-*` 只有在它是某个冻结 ICLR 页唯一的精确 title-bound
-来源时才保留，不能把外部 accepted corpus 的其余记录带入。输出是 `merged-good-historical-local-data-v3`，只保存
+来源时才保留，不能把外部 accepted corpus 的其余记录带入。输出是 `merged-good-historical-local-data-v4`，只保存
 source route、路径和 SHA，不把旧博客正文、旧 analysis 或旧 Reader 内容交给写作链路。默认写到
-`data/runtime/direct-local-inputs/scoped-historical-local-data-v3.json`；旧的
+`data/runtime/direct-local-inputs/scoped-historical-local-data-v4.json`；旧的
 `historical-direct-rewrite-input-catalog-v1` collector merger 不能用于 direct plan。
 
 ```bash
@@ -216,36 +216,36 @@ npm run history:direct-inputs -- --dry-run \
   --blog-root /absolute/path/audio-paper-digest-blog
 
 npm run history:conference-projections -- --dry-run \
-  --catalog /absolute/path/scoped-historical-local-data-v3.json \
+  --catalog /absolute/path/scoped-historical-local-data-v4.json \
   --inventory /absolute/path/all-history.json
 
 npm run history:direct-plan -- --dry-run \
-  --catalog /absolute/path/scoped-historical-local-data-v3.json \
+  --catalog /absolute/path/scoped-historical-local-data-v4.json \
   --inventory /absolute/path/all-history.json \
   --conference-projections /absolute/path/conference-page-projections-v2.json
 
 # source phase 与 LLM/staging 分离；两条队列可并发，单篇 canonical 只由一个 writer 执行
-npm run history:direct-scheduler -- --apply --plan /absolute/path/direct-rewrite-plan-v3.json \
+npm run history:direct-scheduler -- --apply --plan /absolute/path/direct-rewrite-plan-v4.json \
   --queue all --generation 1 --max-papers 100 --arxiv-concurrency 3 --conference-concurrency 5
-npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-v3.json \
+npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-v4.json \
   --queue all --generation 1 --max-papers 50 --concurrency 3
 
 # 只读进度快照；--watch-seconds 5 可持续输出 NDJSON 快照
-npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v3.json --generation 1
-npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v3.json --generation 1 --watch-seconds 5
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v4.json --generation 1
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v4.json --generation 1 --watch-seconds 5
 
 # 请求安全暂停；活动论文完成原子落盘并释放 operation lock 后，才允许 resume
-npm run history:pause -- --plan /absolute/path/direct-rewrite-plan-v3.json --phase source --generation 1
-npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v3.json --phase source --generation 1
+npm run history:pause -- --plan /absolute/path/direct-rewrite-plan-v4.json --phase source --generation 1
+npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v4.json --phase source --generation 1
 # LLM/direct-run 阶段把 --phase source 换成 --phase analysis
 
 # direct-run 输出的 registryFile 与 aggregate projection 均使用命令实际输出的绝对路径
 npm run history:direct-aggregate -- projection --apply \
-  --plan-file /absolute/path/direct-rewrite-plan-v3.json \
+  --plan-file /absolute/path/direct-rewrite-plan-v4.json \
   --inventory-file /absolute/path/all-history.json \
   --output-name direct-aggregate-projection-v2.json
 npm run history:direct-aggregate -- aggregate --apply \
-  --plan-file /absolute/path/direct-rewrite-plan-v3.json \
+  --plan-file /absolute/path/direct-rewrite-plan-v4.json \
   --registry-file /absolute/path/direct-rewrite-registry.json \
   --projection-file /absolute/path/direct-aggregate-projection-v2.json \
   --daily YYYY-MM-DD
@@ -264,9 +264,10 @@ conference canonical 的额外页面投影。正文只用于提取并封存该 i
 不能只凭标题，也不能从汇总页反推。当前 inventory 预期 116 个此类 `none` 页面中 97 个闭合、19 个继续留在
 plan 的 uncovered audit；实际数字仍以新 projection/plan 的自哈希输出为准。
 
-`history:direct-plan` 生成 `historical-direct-rewrite-plan-v3`。projection 与 plan 都复用
-`history:direct-inputs` producer 的完整 strict catalog validator；旧式虽同名为 v3、但缺少 `scopeBinding`、
-包含双 input manifest 或给 arXiv 保留本地 writer source 的 collector 产物会失败关闭。plan 除了 catalog
+`history:direct-plan` 生成 `historical-direct-rewrite-plan-v4`。projection 与 plan 都复用
+`history:direct-inputs` producer 的完整 strict catalog validator；所有 v3 及更旧 catalog 都会失败关闭。
+v4 另把 conflict/multiple daily 页中唯一严格评分行的主 arXiv 链接封存为只含字节区间与 SHA 的 binding；
+plan 会重放 binding self-SHA、page SHA、原 identity status/candidates，绝不按候选优先级猜测。plan 除了 catalog
 中无历史投影的 source 记录，还会把每个未进入 direct route 的 frozen paper page 及其 page/content SHA、
 scope 和 identity-hint 状态写入自哈希覆盖审计，并汇总逐 scope 与逐 hint-status 数量；它只报告
 `none/conflict/multiple` 等缺口，不据此猜测或自动解决身份。

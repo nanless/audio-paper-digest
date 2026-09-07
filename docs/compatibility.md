@@ -15,7 +15,7 @@
 | visual summary | v3 TOP 10 | v1/v2 由显式迁移命令处理 | 必须绑定 publication commit/OID 与当前 token |
 | Manual canonical | production v6 | v5/shadow/sealed preview 只作历史维护 | 默认 API 不读取为自动分析证明 |
 | OpenCode Go account pool | `opencode-go-sticky-quota-failover-v1` | 未知版本拒绝覆盖 | 仅明确 `GoUsageLimitError` 改变 active/cooldown；不保存原始 key |
-| 历史 direct catalog/plan | `merged-good-historical-local-data-v3` / `historical-direct-rewrite-plan-v3` | legacy crosswalk/fresh run 仅 fallback 审计 | 下游复用 current catalog strict validator；plan 自哈希审计所有未覆盖 frozen paper pages；arXiv 必须是本 generation 新鲜官方 PDF/TXT；会议必须重放绑定的本地 metadata/PDF SHA；不读取旧博客正文 |
+| 历史 direct catalog/plan | `merged-good-historical-local-data-v4` / `historical-direct-rewrite-plan-v4` | v3 与 legacy crosswalk/fresh run 仅 fallback 审计 | catalog 封存 conflict/multiple daily 页的严格 primary-score-row arXiv binding；plan 重放其 self-SHA 与 frozen hints，并审计所有未覆盖页；arXiv 必须是本 generation 新鲜官方 PDF/TXT；不读取旧博客正文 |
 | 历史 direct staging/aggregate | `historical-direct-*-v1` | 私有 runtime 工件可审计 | 只能 private staging；全历史 review、activation、commit/push receipt 和远端 OID 尚未实现 |
 
 ## 迁移原则

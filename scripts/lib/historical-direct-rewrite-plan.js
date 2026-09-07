@@ -8,10 +8,11 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const conferenceProjections = require('./historical-conference-page-projections.js');
+const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 
-const CONTRACT = 'historical-direct-rewrite-plan-v3';
-const VERSION = 3;
-const CATALOG_CONTRACT = 'merged-good-historical-local-data-v3';
+const CONTRACT = 'historical-direct-rewrite-plan-v4';
+const VERSION = 4;
+const CATALOG_CONTRACT = 'merged-good-historical-local-data-v4';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
@@ -61,13 +62,13 @@ function deterministicRunId(catalogFileSha256, paperId) {
 }
 
 function normalizeCurrentCatalog(value) {
-    // The producer owns the complete current v3 contract.  Do not maintain a
+    // The producer owns the complete current v4 contract.  Do not maintain a
     // second, weaker validator here: legacy v3 collector files used the same
     // headline version while allowing retained arXiv prose/PDF inputs.
     try {
         return require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
-        fail(`current scoped v3 local source catalog is invalid: ${error.message}`);
+        fail(`current scoped v4 local source catalog is invalid: ${error.message}`);
     }
 }
 
@@ -91,7 +92,7 @@ function normalizeInventory(value) {
     return { ledgerSha256: value.ledgerSha256, pageSetSha256: value.pageSetSha256, pages };
 }
 
-function arxivPageProjections(inventory, knownPaperIds) {
+function arxivPageProjections(inventory, knownPaperIds, primaryBindings = []) {
     const byPaperId = new Map();
     for (const page of inventory.pages) {
         const hints = page.identityHints;
@@ -111,6 +112,36 @@ function arxivPageProjections(inventory, knownPaperIds) {
             cohortDate: page.cohortDate, scope: page.scope, pageContentSha256: page.pageContentSha256,
             mapping: 'frozen-single-arxiv-identity-hint', historicalArxivLink });
         byPaperId.set(paperId, values);
+    }
+    const historyByPageKey = new Map(inventory.pages.map(page => [page.pageKey, page]));
+    for (const rawBinding of primaryBindings) {
+        let binding;
+        try { binding = dailyPrimaryArxiv.normalize(rawBinding); }
+        catch (error) { fail(`daily primary arXiv binding is invalid: ${error.message}`); }
+        const page = historyByPageKey.get(binding.pageKey); const paperId = `arxiv:${binding.arxivId}`;
+        const frozenCandidates = page?.identityHints?.candidates;
+        if (!Array.isArray(frozenCandidates) || !frozenCandidates.length || frozenCandidates.some(item => !plain(item)
+            || typeof item.scheme !== 'string' || typeof item.value !== 'string' || !Array.isArray(item.sources)
+            || !item.sources.length || item.sources.some(source => typeof source !== 'string' || !source)
+            || new Set(item.sources).size !== item.sources.length)) {
+            fail(`${binding.pageKey} daily primary arXiv binding has malformed frozen candidates`);
+        }
+        const candidate = frozenCandidates.filter(item => item.scheme === 'arxiv'
+            && item.value === binding.arxivId) || [];
+        if (!page || page.pagePath !== binding.pagePath || page.pageContentSha256 !== binding.pageContentSha256
+            || page.scope.type !== 'daily' || !['conflict', 'multiple'].includes(page.identityHints?.status)
+            || candidate.length !== 1 || stableHash(candidate[0].sources) !== stableHash(binding.candidateSources)
+            || !knownPaperIds.has(paperId)) {
+            fail(`${binding.pageKey} daily primary arXiv binding drifted from frozen inventory or catalog entries`);
+        }
+        const historicalArxivLink = { arxivId: binding.arxivId,
+            canonicalUrl: `https://arxiv.org/abs/${binding.arxivId}`, hintSources: binding.candidateSources.slice() };
+        const values = byPaperId.get(paperId) || [];
+        if (values.some(item => item.pageKey === page.pageKey)) fail(`${page.pageKey} has duplicate arXiv projections`);
+        values.push({ pageKey: page.pageKey, pagePath: page.pagePath, primaryUrl: page.primaryUrl,
+            cohortDate: page.cohortDate, scope: page.scope, pageContentSha256: page.pageContentSha256,
+            mapping: dailyPrimaryArxiv.MAPPING, historicalArxivLink });
+        values.sort((left, right) => left.pageKey.localeCompare(right.pageKey)); byPaperId.set(paperId, values);
     }
     for (const pages of byPaperId.values()) pages.sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     return byPaperId;
@@ -210,14 +241,14 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
     const history = normalizeInventory(inventory);
     if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
         || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
-        fail('current scoped v3 catalog belongs to a different frozen inventory');
+        fail('current scoped v4 catalog belongs to a different frozen inventory');
     }
     const conferenceArtifact = normalizedConferenceProjections(conferencePageProjections, {
         catalogFileSha256, inventory: history
     });
     const conferenceByPaperId = new Map(conferenceArtifact.projections.map(item => [item.paperId, item]));
     const knownArxiv = new Set(entries.filter(item => item.paperId.startsWith('arxiv:')).map(item => item.paperId));
-    const arxivByPaperId = arxivPageProjections(history, knownArxiv);
+    const arxivByPaperId = arxivPageProjections(history, knownArxiv, currentCatalog.dailyPrimaryArxivBindings);
     const allPageKeys = new Set(); const queue = []; const unprojectedCatalogEntries = [];
     for (const entry of entries) {
         const route = sourceRoute(entry); const isArxiv = route.kind === 'arxiv-fresh-fetch';
@@ -267,6 +298,8 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
         inventory: { ledgerSha256: history.ledgerSha256, pageSetSha256: history.pageSetSha256 },
         conferenceProjectionArtifactSha256: conferenceArtifact.artifactSha256,
         queue, queueSha256: stableHash(queue), projectedPages,
+        dailyPrimaryArxivBindings: clone(currentCatalog.dailyPrimaryArxivBindings),
+        dailyPrimaryArxivBindingSetSha256: currentCatalog.dailyPrimaryArxivBindingSetSha256,
         unprojectedCatalogEntries, unprojectedCatalogEntrySetSha256: stableHash(unprojectedCatalogEntries),
         projectedPageSetSha256: stableHash(projectedPages), uncoveredFrozenPaperPages,
         uncoveredFrozenPaperPageSetSha256: stableHash(uncoveredFrozenPaperPages), paperPageCoverage };
@@ -276,12 +309,14 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
 function normalizePlan(value) {
     exact(value, ['contract', 'version', 'catalogFileSha256', 'inventory', 'conferenceProjectionArtifactSha256',
         'queue', 'queueSha256', 'projectedPages', 'unprojectedCatalogEntries', 'unprojectedCatalogEntrySetSha256',
+        'dailyPrimaryArxivBindings', 'dailyPrimaryArxivBindingSetSha256',
         'projectedPageSetSha256', 'uncoveredFrozenPaperPages', 'uncoveredFrozenPaperPageSetSha256',
         'paperPageCoverage', 'planSha256'], 'direct rewrite plan');
     if (value.contract !== CONTRACT || value.version !== VERSION || !validSha(value.catalogFileSha256)
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
         || !validSha(value.conferenceProjectionArtifactSha256) || !Array.isArray(value.queue)
         || !validSha(value.queueSha256) || !Array.isArray(value.projectedPages)
+        || !Array.isArray(value.dailyPrimaryArxivBindings) || !validSha(value.dailyPrimaryArxivBindingSetSha256)
         || !Array.isArray(value.unprojectedCatalogEntries) || !validSha(value.unprojectedCatalogEntrySetSha256)
         || !validSha(value.projectedPageSetSha256) || !Array.isArray(value.uncoveredFrozenPaperPages)
         || !validSha(value.uncoveredFrozenPaperPageSetSha256) || !plain(value.paperPageCoverage)
@@ -316,18 +351,19 @@ function normalizePlan(value) {
             if (!PAGE_KEY_RE.test(page.pageKey) || typeof page.pagePath !== 'string' || !page.pagePath
                 || !(page.primaryUrl === null || typeof page.primaryUrl === 'string') || typeof page.cohortDate !== 'string'
                 || !plain(page.scope) || typeof page.scope.type !== 'string' || typeof page.scope.key !== 'string'
-                || !validSha(page.pageContentSha256) || !['frozen-single-arxiv-identity-hint', 'retained-local-title-fingerprint',
-                    conferenceProjections.DAILY_ICML_MAPPING].includes(page.mapping)
+                || !validSha(page.pageContentSha256) || !['frozen-single-arxiv-identity-hint', dailyPrimaryArxiv.MAPPING,
+                    'retained-local-title-fingerprint', conferenceProjections.DAILY_ICML_MAPPING].includes(page.mapping)
                 || pageKeys.has(page.pageKey)) fail('direct rewrite projected page is malformed or duplicated');
             const historicalArxivLink = route.kind === 'arxiv-fresh-fetch'
                 ? normalizeHistoricalArxivLink(page.historicalArxivLink, route.arxivId)
                 : page.historicalArxivLink === null ? null : fail('conference projection cannot carry an arXiv link');
-            if ((route.kind === 'arxiv-fresh-fetch') !== (page.mapping === 'frozen-single-arxiv-identity-hint')
+            const arxivMapping = ['frozen-single-arxiv-identity-hint', dailyPrimaryArxiv.MAPPING].includes(page.mapping);
+            if ((route.kind === 'arxiv-fresh-fetch') !== arxivMapping
                 || page.mapping === conferenceProjections.DAILY_ICML_MAPPING
                     && (route.kind !== 'conference-local-pdf' || page.scope.type !== 'daily'
                         || !item.paperId.startsWith('conference:icml:2026:'))
                 || page.mapping === 'retained-local-title-fingerprint' && page.scope.type !== 'conference'
-                || page.mapping === 'frozen-single-arxiv-identity-hint' && page.scope.type !== 'daily') {
+                || arxivMapping && page.scope.type !== 'daily') {
                 fail('direct rewrite route/page mapping kind drifted');
             }
             pageKeys.add(page.pageKey); return { ...clone(page), historicalArxivLink };
@@ -369,6 +405,24 @@ function normalizePlan(value) {
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     const expectedProjected = queue.flatMap(item => item.pages.map(page => ({ paperId: item.paperId,
         runId: item.runId, route: item.route.kind, ...page }))).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    const bindingPageKeys = new Set(); const dailyPrimaryArxivBindings = value.dailyPrimaryArxivBindings.map((binding, index) => {
+        let normalized;
+        try { normalized = dailyPrimaryArxiv.normalize(binding); }
+        catch (error) { fail(`daily primary arXiv binding ${index} is invalid: ${error.message}`); }
+        if (bindingPageKeys.has(normalized.pageKey)) fail('daily primary arXiv bindings duplicate a page');
+        bindingPageKeys.add(normalized.pageKey); return normalized;
+    }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    const mappedPrimaryPages = projectedPages.filter(page => page.mapping === dailyPrimaryArxiv.MAPPING);
+    if (value.dailyPrimaryArxivBindings.some((binding, index) => binding.pageKey !== dailyPrimaryArxivBindings[index].pageKey)
+        || stableHash(dailyPrimaryArxivBindings) !== value.dailyPrimaryArxivBindingSetSha256
+        || mappedPrimaryPages.length !== dailyPrimaryArxivBindings.length
+        || mappedPrimaryPages.some(page => {
+            const binding = dailyPrimaryArxivBindings.find(item => item.pageKey === page.pageKey);
+            return !binding || page.paperId !== `arxiv:${binding.arxivId}` || page.pagePath !== binding.pagePath
+                || page.pageContentSha256 !== binding.pageContentSha256
+                || page.historicalArxivLink?.arxivId !== binding.arxivId
+                || stableHash(page.historicalArxivLink?.hintSources) !== stableHash(binding.candidateSources);
+        })) fail('daily primary arXiv binding projection drifted');
     const uncoveredPageKeys = new Set();
     const uncoveredFrozenPaperPages = value.uncoveredFrozenPaperPages.map((page, index) => {
         exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'scope', 'pageContentSha256',
@@ -394,7 +448,8 @@ function normalizePlan(value) {
     }
     const body = { contract: CONTRACT, version: VERSION, catalogFileSha256: value.catalogFileSha256,
         inventory: clone(value.inventory), conferenceProjectionArtifactSha256: value.conferenceProjectionArtifactSha256,
-        queue, queueSha256: value.queueSha256, projectedPages, unprojectedCatalogEntries,
+        queue, queueSha256: value.queueSha256, projectedPages, dailyPrimaryArxivBindings,
+        dailyPrimaryArxivBindingSetSha256: value.dailyPrimaryArxivBindingSetSha256, unprojectedCatalogEntries,
         unprojectedCatalogEntrySetSha256: value.unprojectedCatalogEntrySetSha256,
         projectedPageSetSha256: value.projectedPageSetSha256, uncoveredFrozenPaperPages,
         uncoveredFrozenPaperPageSetSha256: value.uncoveredFrozenPaperPageSetSha256,
@@ -648,7 +703,7 @@ function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile }
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
-        fail('current scoped v3 catalog inventory file binding drifted');
+        fail('current scoped v4 catalog inventory file binding drifted');
     }
     return buildDirectRewritePlan({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, conferencePageProjections: projection.value });

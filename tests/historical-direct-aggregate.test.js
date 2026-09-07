@@ -100,11 +100,14 @@ async function fixture(t, { mixedDailyConference = false } = {}) {
     const catalog = catalogApi.normalizeCatalog({ contract: catalogApi.CONTRACT, version: catalogApi.VERSION, scope: catalogApi.SCOPE,
         scopeBinding: { inventoryPath: path.join(root, 'inventory.json'), inventorySha256: sha('inventory file'),
             inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
-            arxivPageCount: 2, conferencePageCount: mixedDailyConference ? 2 : 1 },
+            arxivPageCount: 2, singleArxivPageCount: 2, dailyPrimaryArxivBindingCount: 0,
+            conferencePageCount: mixedDailyConference ? 2 : 1 },
         inputs: [{ path: path.join(root, 'conference-local-sources.json'), sha256: sha('conference manifest'), selectedPapers: mixedDailyConference ? 2 : 1 }],
-        summary: { arxivPapers: 2, arxivPages: 2, conferencePapers: mixedDailyConference ? 2 : 1,
+        summary: { arxivPapers: 2, arxivPages: 2, singleArxivPages: 2, dailyPrimaryArxivBindings: 0,
+            conferencePapers: mixedDailyConference ? 2 : 1,
             canonicalRecords: mixedDailyConference ? 4 : 3, sourceRecords: mixedDailyConference ? 2 : 1,
-            conferenceSourceSets: mixedDailyConference ? { 'retained-local': 1, 'workspace-icml-2026': 1 } : { 'retained-local': 1 } }, entries: [
+            conferenceSourceSets: mixedDailyConference ? { 'retained-local': 1, 'workspace-icml-2026': 1 } : { 'retained-local': 1 } },
+        dailyPrimaryArxivBindings: [], dailyPrimaryArxivBindingSetSha256: catalogApi.stableHash([]), entries: [
         { paperId: `arxiv:${arxivOne}`, sources: [] },
         { paperId: `arxiv:${arxivTwo}`, sources: [] },
         { paperId: 'conference:icassp:2026:icassp-arnumber:100', sources: [{ sourceSet: 'retained-local', provenance: 'retained-local',

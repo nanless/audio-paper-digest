@@ -15,7 +15,7 @@
 | Visual summary | v3 TOP 10 | v1/v2 require explicit migration | binds publication commit/OID and the current visual token |
 | Manual canonical | production v6 | v5, shadow, and sealed preview are historical maintenance | default API cannot use Manual lineage as automatic-analysis proof |
 | OpenCode Go account pool | `opencode-go-sticky-quota-failover-v1` | unknown versions fail closed | only explicit `GoUsageLimitError` changes active/cooldown; raw keys are never persisted |
-| Historical direct catalog/plan | `merged-good-historical-local-data-v3` / `historical-direct-rewrite-plan-v3` | legacy crosswalk/fresh runs are fallback audit only | downstream consumers reuse the current catalog's strict validator; the plan self-hashes every uncovered frozen paper page; arXiv uses a freshly captured official PDF/TXT generation; conference replays bound local metadata/PDF SHA; old blog prose is excluded |
+| Historical direct catalog/plan | `merged-good-historical-local-data-v4` / `historical-direct-rewrite-plan-v4` | v3 and legacy crosswalk/fresh runs are audit-only | the catalog seals strict primary-score-row arXiv bindings for qualifying conflict/multiple daily pages; the plan replays their self-SHA and frozen hints and audits all uncovered pages; old blog prose is excluded |
 | Historical direct staging/aggregate | `historical-direct-*-v1` | private runtime artifacts remain auditable | private staging only; historical review, activation, commit/push receipt, and remote OID are unimplemented |
 
 ## Migration rules

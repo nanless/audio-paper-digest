@@ -23,7 +23,7 @@ function parseArgs(argv) {
     return { apply: mode === '--apply', catalogFile: path.resolve(values['--catalog']),
         inventoryFile: path.resolve(values['--inventory']),
         conferenceProjectionFile: path.resolve(values['--conference-projections']),
-        outputName: values['--output'] || 'direct-rewrite-plan-v3.json' };
+        outputName: values['--output'] || 'direct-rewrite-plan-v4.json' };
 }
 function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-direct-rewrite-plan.js');

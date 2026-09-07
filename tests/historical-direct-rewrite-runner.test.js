@@ -38,14 +38,17 @@ function fixture(t) {
     const inventory = { counts: { pages: pages.length, papers: pages.length }, ledgerSha256: sha('ledger'), pageSetSha256: sha('pages'), pages };
     const inventoryPath = path.join(root, 'inventory.json'); json(inventoryPath, inventory);
     const conferenceManifestPath = path.join(root, 'conference-manifest.json'); const conferenceManifestSha256 = json(conferenceManifestPath, { fixture: true });
-    const catalog = { contract: 'merged-good-historical-local-data-v3', version: 3,
+    const dailyPrimaryArxivBindings = [];
+    const catalog = { contract: 'merged-good-historical-local-data-v4', version: 4,
         scope: 'historical-corresponding-local-sources-only',
         scopeBinding: { inventoryPath, inventorySha256: sha(fs.readFileSync(inventoryPath)),
             inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
-            arxivPageCount: 1, conferencePageCount: 1 },
+            arxivPageCount: 1, singleArxivPageCount: 1, dailyPrimaryArxivBindingCount: 0, conferencePageCount: 1 },
         inputs: [{ path: conferenceManifestPath, sha256: conferenceManifestSha256, selectedPapers: 1 }],
-        summary: { arxivPapers: 1, arxivPages: 1, conferencePapers: 1, canonicalRecords: 2,
-            sourceRecords: 1, conferenceSourceSets: { 'retained-local': 1 } }, entries: [
+        summary: { arxivPapers: 1, arxivPages: 1, singleArxivPages: 1, dailyPrimaryArxivBindings: 0,
+            conferencePapers: 1, canonicalRecords: 2, sourceRecords: 1,
+            conferenceSourceSets: { 'retained-local': 1 } },
+        dailyPrimaryArxivBindings, dailyPrimaryArxivBindingSetSha256: planner.stableHash(dailyPrimaryArxivBindings), entries: [
         { paperId: 'arxiv:2601.00001', sources: [] },
         { paperId: 'conference:icassp:2026:icassp-arnumber:100', sources: [{ sourceSet: 'retained-local', provenance: 'retained-local',
             metadata: { absolutePath: metadata, sha256: metadataSha256, recordIndex: 0, metadataIdentityBindingSha256: sha('binding') },

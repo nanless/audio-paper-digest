@@ -14,7 +14,7 @@ const conference = require('./historical-conference-crawl-authority.js');
 
 const CONTRACT = 'historical-conference-page-projections-v2';
 const VERSION = 2;
-const CATALOG_CONTRACT = 'merged-good-historical-local-data-v3';
+const CATALOG_CONTRACT = 'merged-good-historical-local-data-v4';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const MAX_JSON_BYTES = 128 * 1024 * 1024;
@@ -126,7 +126,7 @@ function normalizeCurrentCatalog(value) {
     try {
         normalized = require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
-        fail(`current scoped v3 local source catalog is invalid: ${error.message}`);
+        fail(`current scoped v4 local source catalog is invalid: ${error.message}`);
     }
     return normalized;
 }
@@ -264,7 +264,7 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
     const history = normalizeInventory(inventory);
     if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
         || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
-        fail('current scoped v3 catalog belongs to a different frozen inventory');
+        fail('current scoped v4 catalog belongs to a different frozen inventory');
     }
     const cache = new Map(); const candidatesByScopeAndTitle = new Map();
     const icmlCandidatesByTitle = new Map();
@@ -408,7 +408,7 @@ function buildFromFiles({ catalogFile, inventoryFile, blogRoot } = {}) {
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
-        fail('current scoped v3 catalog inventory file binding drifted');
+        fail('current scoped v4 catalog inventory file binding drifted');
     }
     return buildConferencePageProjections({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, blogRoot });

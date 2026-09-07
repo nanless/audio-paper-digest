@@ -1,8 +1,9 @@
 'use strict';
 
-// Builds the scoped v3 catalog for direct historical rewriting. It consumes
+// Builds the scoped v4 catalog for direct historical rewriting. It consumes
 // one approved local content manifest (conference PDF/metadata) and the frozen
-// inventory. arXiv entries come only from frozen single arXiv identity hints;
+// inventory. arXiv entries come from frozen single hints plus sealed primary
+// score-row bindings for otherwise conflict/multiple daily pages;
 // they deliberately have no retained local writer input because every run must
 // fetch and seal fresh official text/PDF before analysis.
 
@@ -12,9 +13,10 @@ const path = require('node:path');
 const conferenceAuthority = require('./historical-conference-crawl-authority.js');
 const conferenceManifestApi = require('./historical-conference-local-sources.js');
 const projectionApi = require('./historical-conference-page-projections.js');
+const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 
-const CONTRACT = 'merged-good-historical-local-data-v3';
-const VERSION = 3;
+const CONTRACT = 'merged-good-historical-local-data-v4';
+const VERSION = 4;
 const SCOPE = 'historical-corresponding-local-sources-only';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
@@ -129,10 +131,22 @@ function scopeConferenceEntries({ conferenceManifest, inventory, blogRoot } = {}
     return { entries, conferencePageCount: history.pages.filter(item => item.scope.type === 'conference').length };
 }
 
-function arxivEntriesFromFrozenInventory(value) {
+function dailyPrimaryArxivBindingsFromFrozenInventory(value, blogRoot) {
+    const history = projectionApi.normalizeInventory(value); const bindings = [];
+    for (const page of history.pages) {
+        if (page.scope.type !== 'daily' || !['conflict', 'multiple'].includes(page.identityHints?.status)) continue;
+        try { bindings.push(dailyPrimaryArxiv.build({ blogRoot, page, identityHints: page.identityHints })); }
+        catch (error) {
+            if (error?.code !== 'HISTORICAL_DAILY_PRIMARY_ARXIV_BINDING_INTEGRITY') throw error;
+        }
+    }
+    return bindings.map(dailyPrimaryArxiv.normalize).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+}
+
+function arxivEntriesFromFrozenInventory(value, dailyPrimaryArxivBindings = []) {
     const history = projectionApi.normalizeInventory(value);
     const rawPages = new Map(value.pages.filter(page => page?.kind === 'paper').map(page => [page.pageId, page]));
-    const paperIds = new Set(); let pageCount = 0;
+    const paperIds = new Set(); let singlePageCount = 0;
     for (const page of history.pages) {
         // Conference pages already have their exact retained conference-PDF
         // route. Routing them through fresh arXiv too would duplicate a page.
@@ -145,9 +159,12 @@ function arxivEntriesFromFrozenInventory(value) {
             || new Set(hint.sources).size !== hint.sources.length) {
             fail(`${page.pageKey} frozen arXiv identity hint has no exact source mapping`);
         }
-        paperIds.add(`arxiv:${hint.value}`); pageCount += 1;
+        paperIds.add(`arxiv:${hint.value}`); singlePageCount += 1;
     }
-    return { entries: [...paperIds].sort().map(paperId => ({ paperId, sources: [] })), pageCount };
+    const bindings = dailyPrimaryArxivBindings.map(dailyPrimaryArxiv.normalize);
+    for (const binding of bindings) paperIds.add(`arxiv:${binding.arxivId}`);
+    return { entries: [...paperIds].sort().map(paperId => ({ paperId, sources: [] })),
+        pageCount: singlePageCount + bindings.length, singlePageCount, bindingPageCount: bindings.length };
 }
 
 function inputDescriptor(loaded, selectedPapers) {
@@ -158,7 +175,8 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
     const conference = typeof conferenceManifest?.filename === 'string' ? conferenceManifest : readStableJson(conferenceManifest, 'approved conference local-source manifest');
     const inventory = typeof inventoryFile?.filename === 'string' ? inventoryFile : readStableJson(inventoryFile, 'frozen historical inventory');
     const normalizedInventory = projectionApi.normalizeInventory(inventory.value);
-    const arxiv = arxivEntriesFromFrozenInventory(inventory.value);
+    const dailyPrimaryArxivBindings = dailyPrimaryArxivBindingsFromFrozenInventory(inventory.value, blogRoot);
+    const arxiv = arxivEntriesFromFrozenInventory(inventory.value, dailyPrimaryArxivBindings);
     const scopedConference = scopeConferenceEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });
     const entries = [...arxiv.entries, ...scopedConference.entries].sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (new Set(entries.map(entry => entry.paperId)).size !== entries.length) fail('scoped local inputs duplicate a canonical paper ID');
@@ -167,27 +185,50 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
         sourceSets[source.sourceSet] = (sourceSets[source.sourceSet] || 0) + 1;
     }
     const summary = { arxivPapers: arxiv.entries.length, arxivPages: arxiv.pageCount,
+        singleArxivPages: arxiv.singlePageCount, dailyPrimaryArxivBindings: arxiv.bindingPageCount,
         conferencePapers: scopedConference.entries.length, canonicalRecords: entries.length,
         sourceRecords: scopedConference.entries.length,
         conferenceSourceSets: Object.fromEntries(Object.entries(sourceSets).sort(([left], [right]) => left.localeCompare(right))) };
     return { contract: CONTRACT, version: VERSION, scope: SCOPE,
         scopeBinding: { inventoryPath: inventory.filename, inventorySha256: inventory.fileSha256,
             inventoryLedgerSha256: normalizedInventory.ledgerSha256, inventoryPageSetSha256: normalizedInventory.pageSetSha256,
-            arxivPageCount: arxiv.pageCount, conferencePageCount: scopedConference.conferencePageCount },
-        inputs: [inputDescriptor(conference, scopedConference.entries.length)], summary, entries };
+            arxivPageCount: arxiv.pageCount, singleArxivPageCount: arxiv.singlePageCount,
+            dailyPrimaryArxivBindingCount: arxiv.bindingPageCount,
+            conferencePageCount: scopedConference.conferencePageCount },
+        inputs: [inputDescriptor(conference, scopedConference.entries.length)], summary,
+        dailyPrimaryArxivBindings, dailyPrimaryArxivBindingSetSha256: stableHash(dailyPrimaryArxivBindings), entries };
 }
 
 function normalizeCatalog(value) {
     if (!plain(value) || value.contract !== CONTRACT || value.version !== VERSION || value.scope !== SCOPE
         || !plain(value.scopeBinding) || !Array.isArray(value.inputs) || !plain(value.summary) || !Array.isArray(value.entries)) {
-        fail('scoped v3 direct rewrite catalog contract is invalid');
+        fail('scoped v4 direct rewrite catalog contract is invalid');
     }
-    exact(value.scopeBinding, ['inventoryPath', 'inventorySha256', 'inventoryLedgerSha256', 'inventoryPageSetSha256', 'arxivPageCount', 'conferencePageCount'], 'catalog scope binding');
+    exact(value, ['contract', 'version', 'scope', 'scopeBinding', 'inputs', 'summary', 'dailyPrimaryArxivBindings',
+        'dailyPrimaryArxivBindingSetSha256', 'entries'], 'scoped v4 direct rewrite catalog');
+    exact(value.scopeBinding, ['inventoryPath', 'inventorySha256', 'inventoryLedgerSha256', 'inventoryPageSetSha256',
+        'arxivPageCount', 'singleArxivPageCount', 'dailyPrimaryArxivBindingCount', 'conferencePageCount'], 'catalog scope binding');
     if (typeof value.scopeBinding.inventoryPath !== 'string' || !path.isAbsolute(value.scopeBinding.inventoryPath)
         || !validSha(value.scopeBinding.inventorySha256) || !validSha(value.scopeBinding.inventoryLedgerSha256)
         || !validSha(value.scopeBinding.inventoryPageSetSha256) || !Number.isSafeInteger(value.scopeBinding.arxivPageCount)
-        || value.scopeBinding.arxivPageCount < 0 || !Number.isSafeInteger(value.scopeBinding.conferencePageCount)
+        || value.scopeBinding.arxivPageCount < 0 || !Number.isSafeInteger(value.scopeBinding.singleArxivPageCount)
+        || value.scopeBinding.singleArxivPageCount < 0 || !Number.isSafeInteger(value.scopeBinding.dailyPrimaryArxivBindingCount)
+        || value.scopeBinding.dailyPrimaryArxivBindingCount < 0 || !Number.isSafeInteger(value.scopeBinding.conferencePageCount)
         || value.scopeBinding.conferencePageCount < 0) fail('catalog scope binding is malformed');
+    if (!Array.isArray(value.dailyPrimaryArxivBindings) || !validSha(value.dailyPrimaryArxivBindingSetSha256)) {
+        fail('daily primary arXiv binding set is malformed');
+    }
+    const bindingPageKeys = new Set(); const dailyPrimaryArxivBindings = value.dailyPrimaryArxivBindings.map((binding, index) => {
+        let normalized;
+        try { normalized = dailyPrimaryArxiv.normalize(binding); }
+        catch (error) { fail(`daily primary arXiv binding ${index} is invalid: ${error.message}`); }
+        if (bindingPageKeys.has(normalized.pageKey)) fail('daily primary arXiv bindings duplicate a frozen page');
+        bindingPageKeys.add(normalized.pageKey); return normalized;
+    }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
+    if (value.dailyPrimaryArxivBindings.some((binding, index) => binding.pageKey !== dailyPrimaryArxivBindings[index].pageKey)
+        || stableHash(dailyPrimaryArxivBindings) !== value.dailyPrimaryArxivBindingSetSha256) {
+        fail('daily primary arXiv binding set drifted');
+    }
     if (value.inputs.length !== 1 || !plain(value.inputs[0]) || typeof value.inputs[0].path !== 'string'
         || !path.isAbsolute(value.inputs[0].path) || !validSha(value.inputs[0].sha256)
         || !Number.isSafeInteger(value.inputs[0].selectedPapers) || value.inputs[0].selectedPapers < 0) {
@@ -223,14 +264,23 @@ function normalizeCatalog(value) {
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (value.entries.some((entry, index) => entry.paperId !== entries[index].paperId)) fail('catalog entries are unordered');
     arxivPages = value.scopeBinding.arxivPageCount;
-    const expectedSummary = { arxivPapers, arxivPages, conferencePapers, canonicalRecords: entries.length,
+    const expectedSummary = { arxivPapers, arxivPages, singleArxivPages: value.scopeBinding.singleArxivPageCount,
+        dailyPrimaryArxivBindings: dailyPrimaryArxivBindings.length,
+        conferencePapers, canonicalRecords: entries.length,
         sourceRecords: conferencePapers,
         conferenceSourceSets: Object.fromEntries(Object.entries(sourceSets).sort(([left], [right]) => left.localeCompare(right))) };
     if (JSON.stringify(canonical(value.summary)) !== JSON.stringify(canonical(expectedSummary))) fail('catalog summary drifted');
-    if (value.inputs[0].selectedPapers !== conferencePapers || value.scopeBinding.conferencePageCount < conferencePapers
-        || value.scopeBinding.arxivPageCount < arxivPapers) fail('catalog scope counts drifted');
+    const arxivPaperIds = new Set(entries.filter(entry => entry.paperId.startsWith('arxiv:')).map(entry => entry.paperId));
+    if (dailyPrimaryArxivBindings.some(binding => !arxivPaperIds.has(`arxiv:${binding.arxivId}`))
+        || value.inputs[0].selectedPapers !== conferencePapers || value.scopeBinding.conferencePageCount < conferencePapers
+        || value.scopeBinding.arxivPageCount < arxivPapers
+        || value.scopeBinding.dailyPrimaryArxivBindingCount !== dailyPrimaryArxivBindings.length
+        || value.scopeBinding.arxivPageCount !== value.scopeBinding.singleArxivPageCount + dailyPrimaryArxivBindings.length) {
+        fail('catalog scope counts drifted');
+    }
     return { contract: CONTRACT, version: VERSION, scope: SCOPE, scopeBinding: clone(value.scopeBinding),
-        inputs: [clone(value.inputs[0])], summary: expectedSummary, entries };
+        inputs: [clone(value.inputs[0])], summary: expectedSummary, dailyPrimaryArxivBindings,
+        dailyPrimaryArxivBindingSetSha256: value.dailyPrimaryArxivBindingSetSha256, entries };
 }
 
 function safeDirectory(directory, label, create = false) {
@@ -255,7 +305,7 @@ function writeCatalog({ catalogRoot, name, catalog } = {}) {
         return { status: 'created', filename, catalog: normalized };
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        const existing = projectionApi.readStableFile(filename, 'existing direct v3 catalog');
+        const existing = projectionApi.readStableFile(filename, 'existing direct v4 catalog');
         if (!existing.bytes.equals(bytes)) fail(`refuses to overwrite a different scoped local input catalog: ${name}`);
         return { status: 'recovered', filename, catalog: normalized };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
@@ -271,11 +321,13 @@ function buildAndWrite(options, overrides = {}) {
     const result = { status: options.apply ? null : 'dry-run', paperCount: catalog.summary.canonicalRecords,
         arxivPaperCount: catalog.summary.arxivPapers, arxivPageCount: catalog.summary.arxivPages,
         conferencePaperCount: catalog.summary.conferencePapers, localInputCount: catalog.summary.sourceRecords,
-        conferencePageCount: catalog.scopeBinding.conferencePageCount, catalog };
+        conferencePageCount: catalog.scopeBinding.conferencePageCount,
+        dailyPrimaryArxivBindingCount: catalog.scopeBinding.dailyPrimaryArxivBindingCount, catalog };
     if (!options.apply) return result;
     const written = writeCatalog({ catalogRoot: files.historicalDirectRewriteInputCatalogDir, name: options.name, catalog });
     return { ...result, status: written.status, filename: written.filename };
 }
 
 module.exports = { CONTRACT, VERSION, SCOPE, SAFE_NAME_RE, HistoricalDirectRewriteInputCatalogError, stableHash, prettyBytes,
-    arxivEntriesFromFrozenInventory, scopeConferenceEntries, buildScopedCatalog, normalizeCatalog, writeCatalog, buildAndWrite };
+    dailyPrimaryArxivBindingsFromFrozenInventory, arxivEntriesFromFrozenInventory, scopeConferenceEntries,
+    buildScopedCatalog, normalizeCatalog, writeCatalog, buildAndWrite };

@@ -9,10 +9,11 @@ const control = require('../scripts/lib/historical-direct-control.js');
 const cli = require('../scripts/historical-direct-control.js');
 
 function minimalPlan() {
-    const body = { contract: 'historical-direct-rewrite-plan-v3', version: 3,
+    const body = { contract: 'historical-direct-rewrite-plan-v4', version: 4,
         catalogFileSha256: 'a'.repeat(64), inventory: { ledgerSha256: 'b'.repeat(64), pageSetSha256: 'c'.repeat(64) },
         conferenceProjectionArtifactSha256: 'd'.repeat(64), queue: [], queueSha256: control.stableHash([]),
-        projectedPages: [], unprojectedCatalogEntries: [], unprojectedCatalogEntrySetSha256: control.stableHash([]),
+        projectedPages: [], dailyPrimaryArxivBindings: [], dailyPrimaryArxivBindingSetSha256: control.stableHash([]),
+        unprojectedCatalogEntries: [], unprojectedCatalogEntrySetSha256: control.stableHash([]),
         projectedPageSetSha256: control.stableHash([]), uncoveredFrozenPaperPages: [],
         uncoveredFrozenPaperPageSetSha256: control.stableHash([]), paperPageCoverage: {
             frozenPaperPages: 0, projectedPaperPages: 0, uncoveredFrozenPaperPages: 0,
