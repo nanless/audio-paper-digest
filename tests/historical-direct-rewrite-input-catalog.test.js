@@ -21,8 +21,15 @@ function write(filename, value) { fs.mkdirSync(path.dirname(filename), { recursi
 function pageId(value) { return `page:${sha(value)}`; }
 function frontmatter(title) { return Buffer.from(`---\ntitle: ${JSON.stringify(title)}\ndate: 2026-05-01\n---\nThis historical body must never be a direct-input source.\n`, 'utf8'); }
 
+test('a title-different author prior preprint remains auditable but is never direct-routable', () => {
+    assert.equal(catalog.directEligibleConferenceSource({ pdf: { availability: 'available',
+        acquisition: { versionRelation: catalog.BLOCKED_CROSS_VERSION_RELATION } } }), false);
+    assert.equal(catalog.directEligibleConferenceSource({ pdf: { availability: 'available',
+        acquisition: { versionRelation: 'same-paper-versioned-official-preprint' } } }), true);
+});
+
 function fixture(t) {
-    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-input-v3-'));
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-input-v5-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blog = path.join(root, 'blog'); const sourceDir = path.join(root, 'sources'); fs.mkdirSync(sourceDir, { recursive: true, mode: 0o700 });
     const records = [
@@ -44,7 +51,22 @@ function fixture(t) {
         }
         return { ...spec, metadataPath, pdfPath: (_record, externalId) => pdfPaths.get(externalId.value) };
     });
-    const conference = conferenceSources.buildLocalSourcesManifest({ sourceSets });
+    const posterPdfRoot = path.join(root, 'poster-pdfs'); const freshPdfRoot = path.join(root, 'fresh-pdfs');
+    const openreviewReceiptRoot = path.join(root, 'openreview-receipts');
+    const alternateReceiptRoot = path.join(root, 'alternate-receipts');
+    for (const directory of [posterPdfRoot, freshPdfRoot, openreviewReceiptRoot, alternateReceiptRoot]) {
+        fs.mkdirSync(directory, { mode: 0o700 });
+    }
+    const posterSnapshot = write(path.join(root, 'poster-snapshot.json'), { count: 1, next: null, previous: null, results: [{
+        id: 60946, name: 'Unrelated Poster Source', decision: 'Accept (regular)', eventtype: 'Poster', event_type: 'Poster',
+        visible: true, virtualsite_url: '/virtual/2026/poster/60946',
+        paper_url: 'https://openreview.net/forum?id=Poster_1',
+        sourceurl: 'https://openreview.net/group?id=ICML.cc/2026/Conference'
+    }] });
+    fs.writeFileSync(path.join(posterPdfRoot, 'Poster_1.pdf'), pdf(), { mode: 0o600 });
+    const conference = conferenceSources.buildLocalSourcesManifest({ sourceSets,
+        icmlPosterSnapshotFile: posterSnapshot, icmlPdfRoot: posterPdfRoot,
+        icmlFreshPdfRoot: freshPdfRoot, openreviewReceiptRoot, alternateReceiptRoot });
     const conferenceManifest = write(path.join(root, 'conference-local-sources.json'), conference);
     const pages = [];
     const addPage = ({ name, title, scope, identityHints = { status: 'none', candidates: [] } }) => {
@@ -67,14 +89,15 @@ function fixture(t) {
 
 function inputArgs(f, mode = '--dry-run') {
     return [mode, '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile,
-        '--blog-root', f.blog, '--name', 'scoped-historical-local-data-v4.json'];
+        '--blog-root', f.blog, '--name', 'scoped-historical-local-data-v5.json'];
 }
 
-test('scoped v4 builder derives fresh arXiv identities from frozen evidence and retains only exact local conference records', t => {
+test('scoped v5 builder derives fresh arXiv identities from frozen evidence and retains only exact local conference records', t => {
     const f = fixture(t); const value = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest, inventoryFile: f.inventoryFile, blogRoot: f.blog });
-    assert.equal(value.contract, 'merged-good-historical-local-data-v4');
+    assert.equal(value.contract, 'merged-good-historical-local-data-v5');
     assert.deepEqual(value.summary, { arxivPapers: 1, arxivPages: 2, singleArxivPages: 2,
-        dailyPrimaryArxivBindings: 0, conferencePapers: 4, canonicalRecords: 5, sourceRecords: 4,
+        dailyPrimaryArxivBindings: 0, dailyIcmlPosterBindings: 0, dailyIcmlPosterRoutableBindings: 0,
+        conferencePapers: 4, canonicalRecords: 5, sourceRecords: 4,
         conferenceSourceSets: { 'accepted-local-iclr-2026': 1, 'workspace-icassp-2026': 1, 'workspace-iclr-2026': 1, 'workspace-icml-2026': 1 } });
     assert.equal(value.scopeBinding.conferencePageCount, 5);
     assert.equal(value.scopeBinding.arxivPageCount, 2);
@@ -87,11 +110,11 @@ test('scoped v4 builder derives fresh arXiv identities from frozen evidence and 
     assert.deepEqual(catalog.normalizeCatalog(value), value);
 });
 
-test('CLI produces a scoped v4 catalog and its projection-to-plan dry-run succeeds', t => {
+test('CLI produces a scoped v5 catalog and its projection-to-plan dry-run succeeds', t => {
     const f = fixture(t); const parsed = inputsCli.parseArgs(inputArgs(f));
-    assert.equal(parsed.apply, false); assert.equal(parsed.name, 'scoped-historical-local-data-v4.json');
+    assert.equal(parsed.apply, false); assert.equal(parsed.name, 'scoped-historical-local-data-v5.json');
     const written = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
-    assert.equal(written.status, 'created'); assert.equal(written.filename, path.join(f.catalogRoot, 'scoped-historical-local-data-v4.json'));
+    assert.equal(written.status, 'created'); assert.equal(written.filename, path.join(f.catalogRoot, 'scoped-historical-local-data-v5.json'));
     const second = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
     assert.equal(second.status, 'recovered');
     const projection = projectionsCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile], {
@@ -99,8 +122,8 @@ test('CLI produces a scoped v4 catalog and its projection-to-plan dry-run succee
     });
     assert.deepEqual({ projections: projection.projections, projectedPages: projection.projectedPages, unmatchedPages: projection.unmatchedPages }, { projections: 4, projectedPages: 5, unmatchedPages: 0 });
     const projectionArtifact = require('../scripts/lib/historical-conference-page-projections.js').buildFromFiles({ catalogFile: written.filename, inventoryFile: f.inventoryFile, blogRoot: f.blog });
-    const projectionFile = path.join(f.projectionRoot, 'conference-page-projections-v2.json');
-    require('../scripts/lib/historical-conference-page-projections.js').writeProjectionArtifact({ root: f.projectionRoot, outputName: 'conference-page-projections-v2.json', artifact: projectionArtifact });
+    const projectionFile = path.join(f.projectionRoot, 'conference-page-projections-v3.json');
+    require('../scripts/lib/historical-conference-page-projections.js').writeProjectionArtifact({ root: f.projectionRoot, outputName: 'conference-page-projections-v3.json', artifact: projectionArtifact });
     const plan = planCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile, '--conference-projections', projectionFile], {
         files: { historicalDirectRewritePlanDir: f.planRoot, historicalDirectRewriteUnprojectedReportDir: f.reportRoot }
     });
@@ -115,14 +138,17 @@ test('CLI rejects the removed arXiv-manifest prerequisite and incomplete scope',
     assert.throws(() => inputsCli.parseArgs(['--dry-run', '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile]), /Use/);
 });
 
-test('projection and plan reject legacy v3 and malformed v4 bytes through the producer strict validator', t => {
+test('projection and plan reject legacy v3/v4 and malformed v5 bytes through the producer strict validator', t => {
     const f = fixture(t);
     const current = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
         inventoryFile: f.inventoryFile, blogRoot: f.blog });
     const legacyV3 = { contract: 'merged-good-historical-local-data-v3', version: 3,
         scope: current.scope, inputs: current.inputs, summary: current.summary, entries: current.entries };
-    assert.throws(() => projectionApi.normalizeCatalog(legacyV3), /current scoped v4 local source catalog/);
-    assert.throws(() => planApi.normalizeCatalog(legacyV3), /current scoped v4 local source catalog/);
+    assert.throws(() => projectionApi.normalizeCatalog(legacyV3), /current scoped v5 local source catalog/);
+    assert.throws(() => planApi.normalizeCatalog(legacyV3), /current scoped v5 local source catalog/);
+    const legacyV4 = structuredClone(current); legacyV4.contract = 'merged-good-historical-local-data-v4'; legacyV4.version = 4;
+    assert.throws(() => projectionApi.normalizeCatalog(legacyV4), /current scoped v5 local source catalog/);
+    assert.throws(() => planApi.normalizeCatalog(legacyV4), /current scoped v5 local source catalog/);
     const cases = [
         value => { delete value.scopeBinding; },
         value => { value.inputs.unshift({ path: '/tmp/legacy-arxiv-good-data.json',
@@ -134,8 +160,8 @@ test('projection and plan reject legacy v3 and malformed v4 bytes through the pr
     ];
     for (const mutate of cases) {
         const legacy = structuredClone(current); mutate(legacy);
-        assert.throws(() => projectionApi.normalizeCatalog(legacy), /current scoped v4 local source catalog/);
-        assert.throws(() => planApi.normalizeCatalog(legacy), /current scoped v4 local source catalog/);
+        assert.throws(() => projectionApi.normalizeCatalog(legacy), /current scoped v5 local source catalog/);
+        assert.throws(() => planApi.normalizeCatalog(legacy), /current scoped v5 local source catalog/);
     }
 });
 
@@ -156,7 +182,7 @@ test('catalog seals qualified multiple-hint primary arXiv bindings and merges th
     fs.writeFileSync(f.inventoryFile, JSON.stringify(f.inventory), { mode: 0o600 });
     const value = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
         inventoryFile: f.inventoryFile, blogRoot: f.blog });
-    assert.equal(value.contract, 'merged-good-historical-local-data-v4');
+    assert.equal(value.contract, 'merged-good-historical-local-data-v5');
     assert.equal(value.dailyPrimaryArxivBindings.length, 1);
     assert.equal(value.summary.dailyPrimaryArxivBindings, 1);
     assert.equal(value.scopeBinding.dailyPrimaryArxivBindingCount, 1);

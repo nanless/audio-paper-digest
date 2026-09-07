@@ -2,25 +2,24 @@
 
 // Build the page side of the retained-local conference route.  This module
 // deliberately consumes only frozen inventory metadata, a local collector
-// record's title, and a frontmatter title fingerprint.  A narrowly-scoped
-// daily ICML recovery also inspects the frozen bytes for one official poster
-// URL as identity evidence. It never exposes a historical page body or a
-// retained generated analysis as a rewrite input.
+// record's title, and a frontmatter title fingerprint. Daily ICML ownership
+// comes only from the catalog's independently sealed official-poster authority
+// bindings. It never exposes a historical page body or retained generated
+// analysis as a rewrite input.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const conference = require('./historical-conference-crawl-authority.js');
+const icmlPosterApi = require('./historical-icml-poster-authority.js');
 
-const CONTRACT = 'historical-conference-page-projections-v2';
-const VERSION = 2;
-const CATALOG_CONTRACT = 'merged-good-historical-local-data-v4';
+const CONTRACT = 'historical-conference-page-projections-v3';
+const VERSION = 3;
+const CATALOG_CONTRACT = 'merged-good-historical-local-data-v5';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const MAX_JSON_BYTES = 128 * 1024 * 1024;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
-const DAILY_ICML_BINDING_CONTRACT = 'historical-daily-icml-page-binding-v1';
-const DAILY_ICML_MAPPING = 'frozen-daily-icml-official-link-and-title-fingerprint';
 
 class HistoricalConferencePageProjectionError extends Error {
     constructor(message) {
@@ -126,7 +125,7 @@ function normalizeCurrentCatalog(value) {
     try {
         normalized = require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
-        fail(`current scoped v4 local source catalog is invalid: ${error.message}`);
+        fail(`current scoped v5 local source catalog is invalid: ${error.message}`);
     }
     return normalized;
 }
@@ -185,12 +184,12 @@ function metadataTitle(source, paperId, cache) {
         cache.set(metadata.absolutePath, snapshot);
     }
     if (snapshot.fileSha256 !== metadata.sha256) fail(`${paperId} conference metadata snapshot SHA drifted`);
-    const records = Array.isArray(snapshot.value) ? snapshot.value : snapshot.value?.papers;
+    const records = Array.isArray(snapshot.value) ? snapshot.value : snapshot.value?.papers || snapshot.value?.results;
     if (!Array.isArray(records) || !plain(records[metadata.recordIndex])
-        || typeof records[metadata.recordIndex].title !== 'string') {
+        || typeof (records[metadata.recordIndex].title || records[metadata.recordIndex].name) !== 'string') {
         fail(`${paperId} conference metadata record has no source title`);
     }
-    const title = records[metadata.recordIndex].title;
+    const title = records[metadata.recordIndex].title || records[metadata.recordIndex].name;
     return { exact: conference.titleFingerprint(title, 'conference metadata title'),
         projections: titleProjectionFingerprintSha256s(title, 'conference metadata title') };
 }
@@ -202,7 +201,8 @@ function selectConferenceSources(entry, cache) {
         if (!fingerprints) continue;
         selected.push({ sourceSet: String(source.sourceSet || ''), provenance: String(source.provenance || ''),
             metadata: clone(source.metadata), pdf: clone(source.pdf), metadataTitleFingerprintSha256: fingerprints.exact,
-            titleProjectionFingerprintSha256s: fingerprints.projections });
+            titleProjectionFingerprintSha256s: fingerprints.projections,
+            sourceBindingSha256: source.sourceBindingSha256 });
     }
     if (!selected.length) fail(`${entry.paperId} has no usable retained local conference PDF source`);
     return selected.sort((left, right) => stableHash(left).localeCompare(stableHash(right)));
@@ -214,49 +214,6 @@ function conferenceScopeFor(paperId) {
     return { type: 'conference', key: `${match[1]}-${match[2]}` };
 }
 
-function dailyIcmlOfficialLinkBinding({ blogRoot, page, titleBinding } = {}) {
-    if (!page || page.scope?.type !== 'daily' || page.identityHints?.status !== 'none'
-        || !titleBinding || titleBinding.pageKey !== page.pageKey
-        || titleBinding.pageContentSha256 !== page.pageContentSha256) return null;
-    const root = safeDirectory(blogRoot, 'blogRoot'); const filename = path.resolve(root, page.pagePath);
-    if (!filename.startsWith(`${root}${path.sep}`)) fail('daily ICML page escapes blogRoot');
-    const loaded = readStableFile(filename, 'daily ICML historical page', 8 * 1024 * 1024);
-    if (loaded.fileSha256 !== page.pageContentSha256) fail('daily ICML page bytes differ from frozen inventory');
-    let text;
-    try { text = new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes); }
-    catch { fail('daily ICML historical page is not strict UTF-8'); }
-    const frontmatter = text.match(/^---\n[\s\S]*?\n---\n/);
-    if (!frontmatter) fail('daily ICML historical page lacks strict frontmatter');
-    const body = text.slice(frontmatter[0].length);
-    const candidates = new Set();
-    for (const match of body.matchAll(/https:\/\/icml\.cc\/virtual\/2026\/poster\/[^\s<>"'\])]+/gu)) {
-        let url;
-        try { url = new URL(match[0]); } catch { continue; }
-        const poster = url.pathname.match(/^\/virtual\/2026\/poster\/([1-9]\d*)\/?$/u);
-        if (url.protocol !== 'https:' || url.hostname !== 'icml.cc' || url.port || url.username || url.password
-            || url.search || url.hash || !poster) continue;
-        candidates.add(`https://icml.cc/virtual/2026/poster/${poster[1]}`);
-    }
-    if (candidates.size !== 1) return null;
-    const officialUrl = [...candidates][0]; const posterId = officialUrl.slice(officialUrl.lastIndexOf('/') + 1);
-    const bodyRecord = { contract: DAILY_ICML_BINDING_CONTRACT, version: 1, pageKey: page.pageKey,
-        pageContentSha256: page.pageContentSha256, officialUrl, posterId,
-        titleFingerprintSha256: titleBinding.titleFingerprintSha256 };
-    return { ...bodyRecord, bindingSha256: stableHash(bodyRecord) };
-}
-
-function normalizeDailyIcmlBinding(value, page) {
-    exact(value, ['contract', 'version', 'pageKey', 'pageContentSha256', 'officialUrl', 'posterId',
-        'titleFingerprintSha256', 'bindingSha256'], 'daily ICML page binding');
-    const body = { ...clone(value) }; delete body.bindingSha256;
-    if (value.contract !== DAILY_ICML_BINDING_CONTRACT || value.version !== 1 || value.pageKey !== page.pageKey
-        || value.pageContentSha256 !== page.pageContentSha256 || !/^[1-9]\d*$/.test(String(value.posterId || ''))
-        || value.officialUrl !== `https://icml.cc/virtual/2026/poster/${value.posterId}`
-        || !validSha(value.titleFingerprintSha256) || !validSha(value.bindingSha256)
-        || stableHash(body) !== value.bindingSha256) fail('daily ICML page binding is invalid');
-    return clone(value);
-}
-
 function buildConferencePageProjections({ catalog, catalogFileSha256, inventory, blogRoot } = {}) {
     if (!validSha(catalogFileSha256)) fail('catalog file SHA is required');
     const currentCatalog = normalizeCurrentCatalog(catalog); const entries = currentCatalog.entries
@@ -264,10 +221,9 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
     const history = normalizeInventory(inventory);
     if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
         || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
-        fail('current scoped v4 catalog belongs to a different frozen inventory');
+        fail('current scoped v5 catalog belongs to a different frozen inventory');
     }
     const cache = new Map(); const candidatesByScopeAndTitle = new Map();
-    const icmlCandidatesByTitle = new Map();
     const sourceByPaperId = new Map();
     for (const entry of entries) {
         const sources = selectConferenceSources(entry, cache); sourceByPaperId.set(entry.paperId, sources);
@@ -277,11 +233,6 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
                 const key = `${scope.key}\0${fingerprint}`;
                 const candidates = candidatesByScopeAndTitle.get(key) || new Set();
                 candidates.add(entry.paperId); candidatesByScopeAndTitle.set(key, candidates);
-            }
-            if (scope.key === 'icml-2026') {
-                const fingerprint = source.metadataTitleFingerprintSha256;
-                const icmlCandidates = icmlCandidatesByTitle.get(fingerprint) || new Set();
-                icmlCandidates.add(entry.paperId); icmlCandidatesByTitle.set(fingerprint, icmlCandidates);
             }
         }
     }
@@ -298,16 +249,23 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
         values.push({ ...page, titleFingerprintSha256: binding.titleFingerprintSha256,
             mapping: 'retained-local-title-fingerprint', dailyIcmlBinding: null }); pagesByPaperId.set(paperId, values);
     }
-    for (const page of history.pages.filter(item => item.scope.type === 'daily' && item.identityHints?.status === 'none')) {
-        const titleBinding = conference.pageTitleBinding({ blogRoot, pageKey: page.pageKey,
-            pagePath: page.pagePath, pageContentSha256: page.pageContentSha256 });
-        const linkBinding = dailyIcmlOfficialLinkBinding({ blogRoot, page, titleBinding });
-        if (!linkBinding) continue;
-        const candidates = icmlCandidatesByTitle.get(titleBinding.titleFingerprintSha256) || new Set();
-        if (candidates.size !== 1) continue;
-        const paperId = [...candidates][0]; const values = pagesByPaperId.get(paperId) || [];
-        values.push({ ...page, titleFingerprintSha256: titleBinding.titleFingerprintSha256,
-            mapping: DAILY_ICML_MAPPING, dailyIcmlBinding: linkBinding }); pagesByPaperId.set(paperId, values);
+    const dailyPages = new Map(history.pages.filter(item => item.scope.type === 'daily').map(page => [page.pageKey, page]));
+    const knownConferenceIds = new Set(entries.map(entry => entry.paperId));
+    for (const rawBinding of currentCatalog.dailyIcmlPosterRoutableBindings) {
+        const binding = icmlPosterApi.normalizeDailyPageBinding(rawBinding); const page = dailyPages.get(binding.page.pageKey);
+        const paperId = `conference:icml:2026:openreview-forum-id:${binding.poster.forumId}`;
+        if (!page || page.identityHints?.status !== 'none' || page.pagePath !== binding.page.pagePath
+            || page.pageContentSha256 !== binding.page.pageContentSha256 || stableHash(page.scope) !== stableHash(binding.page.scope)) {
+            fail('daily ICML poster binding drifted from frozen inventory');
+        }
+        // A binding with a currently unavailable PDF remains sealed in the
+        // catalog but outside the projection/plan until the next v2 manifest
+        // binds the downloaded bytes as available.
+        if (!knownConferenceIds.has(paperId)) continue;
+        const values = pagesByPaperId.get(paperId) || [];
+        if (values.some(item => item.pageKey === page.pageKey)) fail(`${page.pageKey} is already projected`);
+        values.push({ ...page, titleFingerprintSha256: null, mapping: binding.mapping,
+            dailyIcmlBinding: binding }); pagesByPaperId.set(paperId, values);
     }
     const projections = entries.map(entry => {
         const pages = (pagesByPaperId.get(entry.paperId) || []).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
@@ -345,13 +303,17 @@ function normalizeProjectionArtifact(value) {
             if (!PAGE_KEY_RE.test(page.pageKey) || typeof page.pagePath !== 'string' || !page.pagePath
                 || !(page.primaryUrl === null || typeof page.primaryUrl === 'string') || !validSha(page.pageContentSha256) || typeof page.cohortDate !== 'string' || !plain(page.scope)
                 || typeof page.scope.type !== 'string' || typeof page.scope.key !== 'string'
-                || !validSha(page.titleFingerprintSha256) || seenPages.has(page.pageKey)
-                || !['retained-local-title-fingerprint', DAILY_ICML_MAPPING].includes(page.mapping)) {
+                || !(page.titleFingerprintSha256 === null || validSha(page.titleFingerprintSha256)) || seenPages.has(page.pageKey)
+                || !['retained-local-title-fingerprint', icmlPosterApi.DIRECT_PAGE_MAPPING,
+                    icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping)) {
                 fail('conference projected page is malformed or duplicated');
             }
-            if (page.mapping === DAILY_ICML_MAPPING) {
+            if ([icmlPosterApi.DIRECT_PAGE_MAPPING, icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping)) {
+                const binding = icmlPosterApi.normalizeDailyPageBinding(page.dailyIcmlBinding);
                 if (page.scope.type !== 'daily' || !String(item.paperId).startsWith('conference:icml:2026:')
-                    || normalizeDailyIcmlBinding(page.dailyIcmlBinding, page).titleFingerprintSha256 !== page.titleFingerprintSha256) {
+                    || page.titleFingerprintSha256 !== null || binding.page.pageKey !== page.pageKey
+                    || binding.page.pagePath !== page.pagePath || binding.page.pageContentSha256 !== page.pageContentSha256
+                    || item.paperId !== `conference:icml:2026:openreview-forum-id:${binding.poster.forumId}`) {
                     fail('daily ICML projection evidence is invalid');
                 }
             } else if (page.scope.type !== 'conference' || page.dailyIcmlBinding !== null) {
@@ -408,15 +370,14 @@ function buildFromFiles({ catalogFile, inventoryFile, blogRoot } = {}) {
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
-        fail('current scoped v4 catalog inventory file binding drifted');
+        fail('current scoped v5 catalog inventory file binding drifted');
     }
     return buildConferencePageProjections({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, blogRoot });
 }
 
 module.exports = { CONTRACT, VERSION, CATALOG_CONTRACT, SAFE_NAME_RE, HistoricalConferencePageProjectionError,
-    DAILY_ICML_BINDING_CONTRACT, DAILY_ICML_MAPPING,
     stableHash, prettyBytes, safeDirectory, readStableFile, readStableJson, normalizeCatalog, normalizeInventory,
-    titleProjectionFingerprintSha256s, selectConferenceSources, dailyIcmlOfficialLinkBinding,
+    titleProjectionFingerprintSha256s, selectConferenceSources,
     buildConferencePageProjections, normalizeProjectionArtifact,
     writeProjectionArtifact, buildFromFiles };

@@ -9,10 +9,13 @@ const control = require('../scripts/lib/historical-direct-control.js');
 const cli = require('../scripts/historical-direct-control.js');
 
 function minimalPlan() {
-    const body = { contract: 'historical-direct-rewrite-plan-v4', version: 4,
+    const body = { contract: 'historical-direct-rewrite-plan-v5', version: 5,
         catalogFileSha256: 'a'.repeat(64), inventory: { ledgerSha256: 'b'.repeat(64), pageSetSha256: 'c'.repeat(64) },
         conferenceProjectionArtifactSha256: 'd'.repeat(64), queue: [], queueSha256: control.stableHash([]),
         projectedPages: [], dailyPrimaryArxivBindings: [], dailyPrimaryArxivBindingSetSha256: control.stableHash([]),
+        dailyIcmlPosterBindings: [], dailyIcmlPosterBindingSetSha256: control.stableHash([]),
+        dailyIcmlPosterRoutableBindings: [], dailyIcmlPosterRoutableBindingSetSha256: control.stableHash([]),
+        icmlPosterAuthoritySha256: null,
         unprojectedCatalogEntries: [], unprojectedCatalogEntrySetSha256: control.stableHash([]),
         projectedPageSetSha256: control.stableHash([]), uncoveredFrozenPaperPages: [],
         uncoveredFrozenPaperPageSetSha256: control.stableHash([]), paperPageCoverage: {
@@ -51,6 +54,7 @@ test('source status checkpoint is immutable in shape and advances resumable conf
     const created = control.loadOrCreateSourceStatus({ sourceRoot: root, plan, apply: true,
         now: '2026-09-07T00:00:00.000Z' });
     assert.deepEqual(control.sourceStatusCounts(created.status), { pending: 0, ready: 0, handoff: 0, failed: 0 });
+    assert.equal(control.sourceSnapshot({ sourceRoot: root, plan }).conference.durableSchedulerProgressAvailable, true);
     assert.equal(control.normalizeSourceStatus(created.status, plan, 1).statusSha256, created.status.statusSha256);
     const tampered = structuredClone(created.status); tampered.planSha256 = 'f'.repeat(64);
     assert.throws(() => control.normalizeSourceStatus(tampered, plan, 1), /source status envelope/);
@@ -79,6 +83,31 @@ test('status reports pause, progress and explicit unfinished publication closeou
     assert.equal(status.completion.phase, 'paused'); assert.equal(status.execution.pauseRequested, true);
     assert.equal(status.execution.progressPercent, 100);
     assert.ok(status.completion.blockers.some(item => item.code === 'direct-history-publication-not-implemented'));
+});
+
+test('status reports pausing until each requested phase releases its operation lock', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-status-pausing-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const plan = minimalPlan(); const planFile = path.join(root, 'plan.json');
+    fs.writeFileSync(planFile, `${JSON.stringify(plan, null, 2)}\n`);
+    for (const phase of ['source', 'analysis']) {
+        const registryRoot = path.join(root, `${phase}-registries`);
+        const aggregateRoot = path.join(root, `${phase}-aggregates`);
+        const aggregateProjectionRoot = path.join(root, `${phase}-aggregate-projections`);
+        const sourceRoot = path.join(root, `${phase}-sources`);
+        for (const value of [registryRoot, aggregateRoot, aggregateProjectionRoot, sourceRoot]) fs.mkdirSync(value);
+        const request = control.writePauseRequest({ phase, registryRoot, sourceRoot, plan,
+            requestedAt: '2026-09-07T00:00:00.000Z' });
+        fs.mkdirSync(request.operationLockDirectory);
+        const active = control.buildStatus({ planFile, registryRoot, sourceRoot, aggregateRoot,
+            aggregateProjectionRoot, observedAt: '2026-09-07T00:00:01.000Z' });
+        assert.equal(active.completion.phase, 'pausing');
+        assert.equal(phase === 'source' ? active.sources.running : active.execution.running, true);
+        fs.rmdirSync(request.operationLockDirectory);
+        const settled = control.buildStatus({ planFile, registryRoot, sourceRoot, aggregateRoot,
+            aggregateProjectionRoot, observedAt: '2026-09-07T00:00:02.000Z' });
+        assert.equal(settled.completion.phase, 'paused');
+    }
 });
 
 test('control CLI accepts status watch only and rejects unsafe combinations', () => {

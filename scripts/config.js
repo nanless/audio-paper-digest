@@ -237,6 +237,13 @@ const FILES = {
     // Local conference source manifests are source-only rewrite inputs.  They
     // do not contain historical page material or crosswalk assignments.
     historicalConferenceLocalSourcesDir: path.join(DATA_DIR, 'runtime', 'historical-conference-local-sources'),
+    // Fresh OpenReview PDFs are written where the ICML local-source collector
+    // already expects forum-ID files; receipts remain isolated in runtime/.
+    historicalIcmlRetainedPdfRoot: path.join(DATA_DIR, 'pdfs', 'icml2026'),
+    historicalIcmlFreshPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
+    historicalOpenreviewPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
+    historicalOpenreviewPdfSourceDir: path.join(DATA_DIR, 'runtime', 'historical-openreview-pdf-sources'),
+    historicalIcmlAlternatePdfSourceDir: path.join(DATA_DIR, 'runtime', 'historical-icml-alternate-pdf-sources'),
     historicalTaxonomyAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-taxonomy-assignments'),
     historicalPageStagingDir: path.join(DATA_DIR, 'runtime', 'historical-page-staging'),
     historicalDailyAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-daily-aggregates'),

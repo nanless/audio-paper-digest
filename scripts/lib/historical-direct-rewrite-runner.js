@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { PDFParse } = require('pdf-parse');
+const conferenceLocalSources = require('./historical-conference-local-sources.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
 const directContext = require('./direct-rewrite-analysis-context.js');
@@ -250,17 +251,30 @@ function titleFromConferenceMetadata(source, item) {
     let value;
     try { value = JSON.parse(metadata.bytes.toString('utf8')); }
     catch { fail(`${item.paperId} conference metadata is invalid JSON`); }
+    const posterBinding = source.metadata.posterBinding;
+    const isIcmlPoster = source.sourceSet === 'workspace-icml-official-poster-2026' && posterBinding;
     const records = Array.isArray(value) ? value : Array.isArray(value?.papers) ? value.papers
-        : Array.isArray(value?.items) ? value.items : null;
+        : Array.isArray(value?.items) ? value.items : isIcmlPoster && Array.isArray(value?.results) ? value.results : null;
     const record = records?.[source.metadata.recordIndex];
-    const title = typeof record?.title === 'string' ? record.title.replace(/\s+/g, ' ').trim() : '';
+    if (isIcmlPoster && (String(record?.id) !== posterBinding.posterId
+        || record?.paper_url !== posterBinding.openreviewUrl
+        || record?.virtualsite_url !== `/virtual/2026/poster/${posterBinding.posterId}`)) {
+        fail(`${item.paperId} ICML poster metadata identity drifted`);
+    }
+    const rawTitle = isIcmlPoster ? record?.name : record?.title;
+    const title = typeof rawTitle === 'string' ? rawTitle.replace(/\s+/g, ' ').trim() : '';
     if (!title || title.length > 2000) fail(`${item.paperId} retained conference metadata title is unavailable`);
     return title;
 }
 
 async function extractConferenceSource(item, dependencies = {}) {
-    const source = item.route.writerInputs[0];
+    let source = item.route.writerInputs[0];
     if (!source) fail(`${item.paperId} has no local conference PDF`);
+    try { source = conferenceLocalSources.validateSource(source, item.paperId); }
+    catch (error) { fail(`${item.paperId} local conference source binding is invalid: ${error.message}`); }
+    if (source.pdf.acquisition?.versionRelation === 'author-prior-preprint-with-different-title') {
+        fail(`${item.paperId} cross-version prior preprint is not eligible for direct analysis`);
+    }
     const pdf = readRegular(source.pdf.absolutePath, 512 * 1024 * 1024);
     if (pdf.sha256 !== source.pdf.sha256 || pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail(`${item.paperId} PDF changed after planning`);
     const extractPdfText = dependencies.extractPdfText || (async bytes => {

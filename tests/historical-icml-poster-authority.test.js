@@ -34,6 +34,8 @@ function fixture(t) {
     const direct = page('2026-05-23-scaling', '[paper](https://icml.cc/virtual/2026/poster/60632)\n');
     const tau = page('2026-05-23-tau-voice', '');
     const summary = page('2026-05-23', [
+        '### 📊 论文评分排行榜',
+        '', '| 2 | [tau](/audio-paper-digest-blog/posts/2026-05-23-tau-voice) |', '',
         '### 1. [Scaling](/audio-paper-digest-blog/posts/2026-05-23-scaling)',
         '', 'Source: https://icml.cc/virtual/2026/poster/60632', '',
         '### 2. [\\(\\tau\\)-Voice](/audio-paper-digest-blog/posts/2026-05-23-tau-voice)',

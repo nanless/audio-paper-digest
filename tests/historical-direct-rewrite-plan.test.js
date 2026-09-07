@@ -9,6 +9,7 @@ const test = require('node:test');
 const Config = require('../scripts/config.js');
 const catalogApi = require('../scripts/lib/historical-direct-rewrite-input-catalog.js');
 const primaryArxiv = require('../scripts/lib/historical-daily-primary-arxiv-binding.js');
+const icmlPosterApi = require('../scripts/lib/historical-icml-poster-authority.js');
 const projections = require('../scripts/lib/historical-conference-page-projections.js');
 const planner = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const directControl = require('../scripts/lib/historical-direct-control.js');
@@ -32,12 +33,26 @@ function inventoryPage({ blog, relativePath, title, scope, hint = { status: 'non
         primaryUrl: `https://example.test/${number}/`, cohortDate: '2026-01-01', kind: 'paper', scope,
         identityHints: hint };
 }
-function source(metadataPath, metadataSha256, recordIndex, pdfPath, pdfSha256, sourceSet) {
-    return { sourceSet, provenance: 'retained-local-crawler', metadata: { absolutePath: metadataPath,
-        sha256: metadataSha256, recordIndex, metadataIdentityBindingSha256: sha(`metadata\0${sourceSet}\0${recordIndex}`) },
-    pdf: { absolutePath: pdfPath, availability: 'available', bytes: 42, sha256: pdfSha256 } };
+function source(paperId, metadataPath, metadataSha256, recordIndex, pdfPath, pdfSha256, sourceSet) {
+    const provenance = 'retained-local-crawler'; const posterBinding = null;
+    const acquisition = { receipt: null, sourceKind: 'retained-local-no-network-receipt', versionRelation: null,
+        sourceTitle: null, sourceAuthors: null, sourceDoi: null,
+        provenanceStatement: 'PDF bytes predate the network receipt system and are retained local crawler input.',
+        openreviewResponseBytes: null };
+    const metadataIdentityBindingSha256 = catalogApi.stableHash({ paperId, sourceSet,
+        metadataSnapshotSha256: metadataSha256, recordIndex, posterBinding });
+    const pdfIdentityBindingSha256 = catalogApi.stableHash({ paperId, sourceSet, availability: 'available',
+        absolutePath: pdfPath, bytes: 42, sha256: pdfSha256, acquisition, metadataIdentityBindingSha256 });
+    return { sourceSet, provenance, metadata: { absolutePath: metadataPath,
+        sha256: metadataSha256, recordIndex, metadataIdentityBindingSha256, posterBinding },
+    pdf: { absolutePath: pdfPath, availability: 'available', bytes: 42, sha256: pdfSha256,
+        acquisition, pdfIdentityBindingSha256 },
+    sourceBindingSha256: catalogApi.stableHash({ paperId, provenance, sourceSet,
+        metadataIdentityBindingSha256, pdfIdentityBindingSha256 }) };
 }
-function currentCatalog({ root, inventory, inventoryPath, inventoryFileSha256, entries, dailyPrimaryArxivBindings = [] }) {
+function currentCatalog({ root, inventory, inventoryPath, inventoryFileSha256, entries, dailyPrimaryArxivBindings = [],
+    dailyIcmlPosterBindings = [], dailyIcmlPosterRoutableBindings = dailyIcmlPosterBindings,
+    icmlPosterAuthoritySha256 = null }) {
     const arxivEntries = entries.filter(entry => entry.paperId.startsWith('arxiv:'));
     const conferenceEntries = entries.filter(entry => entry.paperId.startsWith('conference:'));
     const conferenceSourceSets = {};
@@ -53,14 +68,22 @@ function currentCatalog({ root, inventory, inventoryPath, inventoryFileSha256, e
         scopeBinding: { inventoryPath, inventorySha256: inventoryFileSha256,
             inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
             arxivPageCount: arxivPages, singleArxivPageCount: singleArxivPages,
-            dailyPrimaryArxivBindingCount: dailyPrimaryArxivBindings.length, conferencePageCount },
+            dailyPrimaryArxivBindingCount: dailyPrimaryArxivBindings.length,
+            dailyIcmlPosterBindingCount: dailyIcmlPosterBindings.length,
+            dailyIcmlPosterRoutableBindingCount: dailyIcmlPosterRoutableBindings.length, conferencePageCount },
         inputs: [{ path: path.join(root, 'conference-local-sources.json'), sha256: sha('conference manifest'),
             selectedPapers: conferenceEntries.length }],
         summary: { arxivPapers: arxivEntries.length, arxivPages, singleArxivPages,
             dailyPrimaryArxivBindings: dailyPrimaryArxivBindings.length, conferencePapers: conferenceEntries.length,
+            dailyIcmlPosterBindings: dailyIcmlPosterBindings.length,
+            dailyIcmlPosterRoutableBindings: dailyIcmlPosterRoutableBindings.length,
             canonicalRecords: entries.length, sourceRecords: conferenceEntries.length,
             conferenceSourceSets: Object.fromEntries(Object.entries(conferenceSourceSets).sort(([a], [b]) => a.localeCompare(b))) },
         dailyPrimaryArxivBindings, dailyPrimaryArxivBindingSetSha256: catalogApi.stableHash(dailyPrimaryArxivBindings),
+        dailyIcmlPosterBindings, dailyIcmlPosterBindingSetSha256: catalogApi.stableHash(dailyIcmlPosterBindings),
+        dailyIcmlPosterRoutableBindings,
+        dailyIcmlPosterRoutableBindingSetSha256: catalogApi.stableHash(dailyIcmlPosterRoutableBindings),
+        icmlPosterAuthoritySha256,
         entries: entries.slice().sort((a, b) => a.paperId.localeCompare(b.paperId)) });
 }
 function fixture(t, { icasspPages = 898, iclrPages = 267, uncoveredDailyPages = 0,
@@ -103,12 +126,15 @@ function fixture(t, { icasspPages = 898, iclrPages = 267, uncoveredDailyPages = 
     const entries = [
         { paperId: 'arxiv:2601.00001', sources: [] },
         { paperId: 'conference:icassp:2026:icassp-arnumber:100',
-            sources: [source(icasspMetadata, icasspSha, 0, icasspPdf, icasspPdfSha, 'workspace-icassp-2026')] },
+            sources: [source('conference:icassp:2026:icassp-arnumber:100', icasspMetadata, icasspSha, 0,
+                icasspPdf, icasspPdfSha, 'workspace-icassp-2026')] },
         { paperId: 'conference:iclr:2026:openreview-forum-id:AbCdef_12',
-            sources: [source(iclrMetadata, iclrSha, 0, iclrPdf, iclrPdfSha, 'workspace-iclr-2026')] }
+            sources: [source('conference:iclr:2026:openreview-forum-id:AbCdef_12', iclrMetadata, iclrSha, 0,
+                iclrPdf, iclrPdfSha, 'workspace-iclr-2026')] }
     ];
     if (includeIcml) entries.push({ paperId: 'conference:icml:2026:openreview-forum-id:Icml_123',
-        sources: [source(icmlMetadata, icmlSha, 0, icmlPdf, icmlPdfSha, 'workspace-icml-2026')] });
+        sources: [source('conference:icml:2026:openreview-forum-id:Icml_123', icmlMetadata, icmlSha, 0,
+            icmlPdf, icmlPdfSha, 'workspace-icml-2026')] });
     const catalogPath = path.join(root, 'catalog.json'); const inventoryPath = path.join(root, 'inventory.json');
     const inventoryFileSha256 = writeJson(inventoryPath, inventory);
     const catalog = currentCatalog({ root, inventory, inventoryPath, inventoryFileSha256, entries });
@@ -205,6 +231,31 @@ test('source scheduler CLI persists progress and passes ready members into the n
     const stored = directControl.readSourceStatus({ sourceRoot, plan, generation: 1 });
     assert.equal(stored.status.entries.find(item => item.paperId === paperId).status, 'ready');
     await run(); assert.deepEqual(observed, [[], [paperId]]);
+});
+
+test('source scheduler accepts only a signed pause marker bound to its plan and generation', async t => {
+    const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
+    const artifact = projections.buildConferencePageProjections({ catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+        inventory: f.inventory, conferencePageProjections: artifact });
+    const planFile = path.join(f.root, 'direct-plan-pause.json');
+    fs.writeFileSync(planFile, `${JSON.stringify(plan, null, 2)}\n`);
+    const sourceRoot = path.join(f.root, 'source-pause-root'); const handoffRoot = path.join(f.root, 'handoff-pause-root');
+    fs.mkdirSync(sourceRoot); fs.mkdirSync(handoffRoot);
+    const files = { freshArxivFetchedSourcesDir: sourceRoot, historicalArxivFreshFailureHandoffDir: handoffRoot };
+    const pauseFile = path.join(sourceRoot, `.${plan.planSha256}.generation-000001.source.pause`);
+    fs.writeFileSync(pauseFile, '', { mode: 0o600 });
+    await assert.rejects(schedulerCli.main(['--apply', '--plan', planFile], { files,
+        prepare: async options => { options.shouldPause(); throw new Error('unsigned marker was accepted'); } }),
+    /pause request|strict UTF-8 JSON/);
+    fs.unlinkSync(pauseFile);
+    directControl.writePauseRequest({ phase: 'source', sourceRoot, plan,
+        requestedAt: '2026-09-07T00:00:00.000Z' });
+    const paused = await schedulerCli.main(['--apply', '--plan', planFile], { files,
+        prepare: async options => ({ status: options.shouldPause() ? 'paused' : 'ready', selectedCount: 0,
+            processedCount: 0, remainingCount: plan.queue.length, selectedPaperIds: [], arxiv: [], conference: [] }) });
+    assert.equal(paused.status, 'paused');
 });
 
 test('a fresh arXiv acquisition failure writes one immutable frozen link/page handoff and never blocks conference direct sources', async t => {
@@ -365,49 +416,88 @@ test('conference source adapter replays the planned metadata/PDF hashes before i
     assert.throws(() => planner.verifyConferenceWriterInputs(icassp), /PDF changed after planning/);
 });
 
+test('catalog and plan replay internal source bindings instead of trusting hash-shaped fields', t => {
+    const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
+    for (const mutate of [
+        source => { source.metadata.recordIndex += 1; },
+        source => { source.sourceSet = 'retained-local-drift'; },
+        source => { source.provenance = 'retained-local-drift'; }
+    ]) {
+        const entries = structuredClone(f.catalog.entries); const target = entries.find(item => item.paperId.includes(':icassp:'));
+        mutate(target.sources[0]);
+        assert.throws(() => currentCatalog({ root: f.root, inventory: f.inventory,
+            inventoryPath: f.inventoryPath, inventoryFileSha256: f.inventoryFileSha256, entries }), /binding/);
+    }
+    const artifact = projections.buildConferencePageProjections({ catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+        inventory: f.inventory, conferencePageProjections: artifact });
+    const drifted = structuredClone(plan); const item = drifted.queue.find(entry => entry.paperId.includes(':icassp:'));
+    item.route.writerInputs[0].metadata.recordIndex += 1;
+    assert.throws(() => planner.normalizePlan(drifted), /source binding|metadata identity binding/);
+});
+
 test('ambiguous retained metadata titles fail instead of guessing a conference page owner', t => {
     const f = fixture(t, { icasspPages: 2, iclrPages: 1 });
     const duplicate = structuredClone(f.catalog.entries.find(item => item.paperId.includes(':icassp:')));
     duplicate.paperId = 'conference:icassp:2026:icassp-arnumber:101';
+    const original = duplicate.sources[0];
+    duplicate.sources = [source(duplicate.paperId, original.metadata.absolutePath, original.metadata.sha256,
+        original.metadata.recordIndex, original.pdf.absolutePath, original.pdf.sha256, original.sourceSet)];
     const ambiguousCatalog = currentCatalog({ root: f.root, inventory: f.inventory, inventoryPath: f.inventoryPath,
         inventoryFileSha256: f.inventoryFileSha256, entries: [...f.catalog.entries, duplicate] });
     assert.throws(() => projections.buildConferencePageProjections({ catalog: ambiguousCatalog,
         catalogFileSha256: sha('ambiguous catalog'), inventory: f.inventory, blogRoot: f.blog }), /multiple retained conference identities/);
 });
 
-test('daily ICML page needs one frozen official poster link and one unique authenticated metadata title', t => {
+test('daily ICML projection consumes a sealed poster authority binding without title matching', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1, includeIcml: true, dailyIcmlPages: [
         { title: 'ICML Daily Title', body: '[paper](https://icml.cc/virtual/2026/poster/60946)' },
         { title: 'ICML Daily Title', body: '[one](https://icml.cc/virtual/2026/poster/60946) [two](https://icml.cc/virtual/2026/poster/61140)' },
         { title: 'Different ICML Title', body: '[paper](https://icml.cc/virtual/2026/poster/60946)' }
     ] });
-    const artifact = projections.buildConferencePageProjections({ catalog: f.catalog,
-        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+    const snapshot = path.join(f.root, 'icml-poster-snapshot.json');
+    writeJson(snapshot, { count: 1, next: null, previous: null, results: [{ id: 60946,
+        name: 'Authority title deliberately differs', decision: 'Accept (regular)', eventtype: 'Poster', event_type: 'Poster',
+        visible: true, virtualsite_url: '/virtual/2026/poster/60946',
+        paper_url: 'https://openreview.net/forum?id=Icml_123',
+        sourceurl: 'https://openreview.net/group?id=ICML.cc/2026/Conference' }] });
+    const handle = icmlPosterApi.loadPosterAuthority({ snapshotFile: snapshot });
+    const authority = icmlPosterApi.authorityHandleSnapshot(handle);
+    const directPage = f.inventory.pages.find(page => page.path.endsWith('icml-daily-0.md'));
+    const binding = icmlPosterApi.bindDailyPage({ authorityHandle: handle, blogRoot: f.blog, page: directPage });
+    const catalog = currentCatalog({ root: f.root, inventory: f.inventory, inventoryPath: f.inventoryPath,
+        inventoryFileSha256: f.inventoryFileSha256, entries: f.catalog.entries,
+        dailyIcmlPosterBindings: [binding], dailyIcmlPosterRoutableBindings: [binding],
+        icmlPosterAuthoritySha256: authority.authoritySha256 });
+    const catalogFileSha256 = sha(JSON.stringify(catalog));
+    const artifact = projections.buildConferencePageProjections({ catalog,
+        catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     const icml = artifact.projections.find(item => item.paperId.startsWith('conference:icml:2026:'));
     assert.equal(icml.pages.length, 2, 'one conference page plus exactly one eligible daily page');
     const daily = icml.pages.find(page => page.scope.type === 'daily');
-    assert.equal(daily.mapping, projections.DAILY_ICML_MAPPING);
-    assert.equal(daily.dailyIcmlBinding.officialUrl, 'https://icml.cc/virtual/2026/poster/60946');
+    assert.equal(daily.mapping, icmlPosterApi.DIRECT_PAGE_MAPPING);
+    assert.equal(daily.dailyIcmlBinding.poster.officialUrl, 'https://icml.cc/virtual/2026/poster/60946');
     assert.equal(projections.normalizeProjectionArtifact(artifact).artifactSha256, artifact.artifactSha256);
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ catalog, catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
-    assert.equal(plan.projectedPages.filter(page => page.mapping === projections.DAILY_ICML_MAPPING).length, 1);
+    assert.equal(plan.projectedPages.filter(page => page.mapping === icmlPosterApi.DIRECT_PAGE_MAPPING).length, 1);
     assert.equal(plan.uncoveredFrozenPaperPages.length, 2);
     assert.ok(plan.uncoveredFrozenPaperPages.every(page => page.identityHintStatus === 'none'));
 });
 
-test('actual frozen inventory and v4 catalog project every retained conference canonical exactly once', {
+test('actual frozen inventory and v5 catalog project every retained conference canonical exactly once', {
     skip: (() => {
         const root = path.resolve(__dirname, '..');
-        const catalog = path.join(root, 'data/runtime/direct-local-inputs/scoped-historical-local-data-v4.json');
+        const catalog = path.join(root, 'data/runtime/direct-local-inputs/scoped-historical-local-data-v5.json');
         const inventory = path.join(root, 'data/runtime/historical-page-inventories/all-history-2026-09-06.json');
         const blog = Config.PUBLISH_CONFIG.blogRepo;
         return [catalog, inventory, blog].every(filename => fs.existsSync(filename))
-            ? false : 'requires the private frozen inventory, v4 catalog, and local blog checkout';
+            ? false : 'requires the private frozen inventory, v5 catalog, and local blog checkout';
     })()
 }, () => {
     const root = path.resolve(__dirname, '..');
-    const catalogFile = path.join(root, 'data/runtime/direct-local-inputs/scoped-historical-local-data-v4.json');
+    const catalogFile = path.join(root, 'data/runtime/direct-local-inputs/scoped-historical-local-data-v5.json');
     const inventoryFile = path.join(root, 'data/runtime/historical-page-inventories/all-history-2026-09-06.json');
     const blogRoot = Config.PUBLISH_CONFIG.blogRepo;
     const artifact = projections.buildFromFiles({ catalogFile, inventoryFile, blogRoot });
@@ -417,16 +507,24 @@ test('actual frozen inventory and v4 catalog project every retained conference c
     };
     assert.equal(count('icassp').pages, 898);
     assert.equal(count('iclr').pages, 267);
-    assert.equal(count('icml').pages, 137);
+    assert.equal(artifact.projections.filter(row => row.paperId.startsWith('conference:icml:2026:'))
+        .flatMap(row => row.pages).filter(page => page.scope.type === 'conference').length, 137);
     assert.ok(['icassp', 'iclr', 'icml'].every(name => count(name).canonicals > 0));
     assert.equal(artifact.unmatchedPages.length, 0);
     const conferencePages = artifact.projections.flatMap(row => row.pages).filter(page => page.scope.type === 'conference');
-    const dailyIcmlPages = artifact.projections.flatMap(row => row.pages).filter(page => page.mapping === projections.DAILY_ICML_MAPPING);
+    const dailyIcmlPages = artifact.projections.flatMap(row => row.pages).filter(page =>
+        [icmlPosterApi.DIRECT_PAGE_MAPPING, icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping));
     assert.equal(conferencePages.length, 1302);
-    assert.equal(dailyIcmlPages.length, 97);
+    const catalog = projections.readStableJson(catalogFile, 'v5 catalog');
+    assert.equal(dailyIcmlPages.length, catalog.value.dailyIcmlPosterRoutableBindings.length);
+    const routedKeys = new Set(dailyIcmlPages.map(page => page.pageKey));
+    assert.ok(catalog.value.dailyIcmlPosterBindings
+        .filter(binding => !catalog.value.dailyIcmlPosterRoutableBindings.some(item =>
+            item.page.pageKey === binding.page.pageKey))
+        .every(binding => !routedKeys.has(binding.page.pageKey)),
+    'unavailable local PDFs remain auditable but never enter the projection');
     const projectedPageKeys = artifact.projections.flatMap(row => row.pageKeys);
     assert.equal(new Set(projectedPageKeys).size, projectedPageKeys.length, 'a frozen page cannot project to two canonicals');
-    const catalog = projections.readStableJson(catalogFile, 'v4 catalog');
     const inventory = projections.readStableJson(inventoryFile, 'frozen historical inventory');
     const plan = planner.buildDirectRewritePlan({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, conferencePageProjections: artifact });

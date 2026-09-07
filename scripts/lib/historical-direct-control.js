@@ -156,6 +156,18 @@ function sourceStatusCounts(status) {
     if (status) for (const entry of status.entries) counts[entry.status] += 1;
     return counts;
 }
+function sourceStatusCountsByRoute(status, plan) {
+    const empty = () => ({ pending: 0, ready: 0, handoff: 0, failed: 0 });
+    const byRoute = { arxiv: empty(), conference: empty() };
+    const entries = status?.entries || plan.queue.map(item => ({ route: item.route.kind, status: 'pending' }));
+    for (const entry of entries) {
+        const bucket = entry.route === 'arxiv-fresh-fetch' ? byRoute.arxiv
+            : entry.route === 'conference-local-pdf' ? byRoute.conference : null;
+        if (!bucket || !Object.hasOwn(bucket, entry.status)) fail('source status route is invalid');
+        bucket[entry.status] += 1;
+    }
+    return byRoute;
+}
 function phasePaths({ phase = 'analysis', registryRoot, sourceRoot, plan, generation = 1 } = {}) {
     if (phase === 'analysis') return controlPaths({ registryRoot, plan, generation });
     if (phase === 'source') return sourceControlPaths({ sourceRoot, plan, generation });
@@ -306,11 +318,13 @@ function sourceSnapshot({ sourceRoot, plan, generation = 1 } = {}) {
     const arxiv = plan.queue.filter(item => item.route.kind === 'arxiv-fresh-fetch'); let observedSealedBundles = 0;
     const incompleteBundlePaperIds = [];
     const progress = fs.existsSync(sourceRoot) ? readSourceStatus({ sourceRoot, plan, generation }) : null;
-    const counts = sourceStatusCounts(progress?.status || null);
+    const counts = progress ? sourceStatusCounts(progress.status)
+        : { pending: plan.queue.length, ready: 0, handoff: 0, failed: 0 };
+    const byRoute = sourceStatusCountsByRoute(progress?.status || null, plan);
     if (!fs.existsSync(sourceRoot)) return { checkpoint: { present: false, counts }, arxiv: { total: arxiv.length, observedSealedBundles: 0,
         remaining: arxiv.length, incompleteBundlePaperIds: [], observationOnly: true },
     conference: { total: plan.queue.filter(item => item.route.kind === 'conference-local-pdf').length,
-        durableSchedulerProgressAvailable: false } };
+        durableSchedulerProgressAvailable: false }, progressByRoute: byRoute };
     configuredRoot(sourceRoot, 'fresh arXiv source root');
     for (const item of arxiv) {
         const directory = fresh.sourceDirectory(sourceRoot, item.route.arxivId, checked);
@@ -329,11 +343,11 @@ function sourceSnapshot({ sourceRoot, plan, generation = 1 } = {}) {
         statusSha256: progress?.status.statusSha256 || null, counts }, arxiv: { total: arxiv.length, observedSealedBundles,
         remaining: arxiv.length - observedSealedBundles, incompleteBundlePaperIds: incompleteBundlePaperIds.slice(0, 20),
         observationOnly: true }, conference: { total: plan.queue.filter(item => item.route.kind === 'conference-local-pdf').length,
-            durableSchedulerProgressAvailable: false } };
+            durableSchedulerProgressAvailable: Boolean(progress) }, progressByRoute: byRoute };
 }
 
 function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, aggregateProjectionRoot,
-    sourceRoot, publicationSupported = false, observedAt = new Date().toISOString() } = {}) {
+    sourceRoot, observedAt = new Date().toISOString() } = {}) {
     const loaded = projectionIo.readStableJson(planFile, 'direct rewrite status plan');
     const plan = planApi.normalizePlan(loaded.value); const paths = controlPaths({ registryRoot, plan, generation });
     const pause = readPauseFile(paths.pauseFile, plan, generation); const sourcePaths = sourceControlPaths({ sourceRoot, plan, generation });
@@ -357,8 +371,10 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
     const missingAggregates = aggregates.missing.daily.length + aggregates.missing.conference.length;
     if (missingAggregates) blockers.push({ code: 'aggregates-missing', count: missingAggregates });
     if (aggregates.errors.length) blockers.push({ code: 'aggregate-artifact-errors', count: aggregates.errors.length });
-    if (!publicationSupported) blockers.push({ code: 'direct-history-publication-not-implemented' });
-    const phase = pause || sourcePause ? 'paused' : running || sourceRunning ? 'running' : !execution.present ? 'not-started'
+    blockers.push({ code: 'direct-history-publication-not-implemented' });
+    const pauseRequested = Boolean(pause || sourcePause); const operationRunning = running || sourceRunning;
+    const phase = pauseRequested && operationRunning ? 'pausing' : pauseRequested ? 'paused' : operationRunning ? 'running'
+        : !execution.present ? 'not-started'
         : staged < total ? 'idle-incomplete' : missingAggregates ? 'awaiting-aggregates'
             : blockers.length ? 'awaiting-closeout' : 'complete';
     return { contract: STATUS_CONTRACT, version: 1, observedAt, plan: { filename: planFile,
@@ -369,10 +385,11 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
         ...execution }, sources: { ...sources, pauseFile: sourcePaths.pauseFile,
             operationLockDirectory: sourcePaths.operationLockDirectory, running: sourceRunning,
             pauseRequested: Boolean(sourcePause) }, aggregates, conferenceTasks: tasks,
-    publication: { supported: publicationSupported, complete: false }, completion: { phase, complete: blockers.length === 0, blockers } };
+    publication: { supported: false, complete: false }, completion: { phase, complete: false, blockers } };
 }
 
 module.exports = { PAUSE_CONTRACT, STATUS_CONTRACT, SOURCE_STATUS_CONTRACT, HistoricalDirectControlError, stableHash, generationNumber,
     controlPaths, sourceControlPaths, phasePaths, pauseRecord, normalizePauseRecord, readPauseFile,
     sourceStatusRecord, normalizeSourceStatus, readSourceStatus, loadOrCreateSourceStatus, updateSourceStatus, sourceStatusCounts,
+    sourceStatusCountsByRoute,
     writePauseRequest, resumeRewrite, registrySnapshot, sourceSnapshot, aggregateSnapshot, taskSnapshot, buildStatus };

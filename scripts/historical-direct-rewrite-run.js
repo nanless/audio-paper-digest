@@ -12,7 +12,7 @@ const planApi = require('./lib/historical-direct-rewrite-plan.js');
 const runner = require('./lib/historical-direct-rewrite-runner.js');
 const projections = require('./lib/historical-conference-page-projections.js');
 
-const USAGE = '--dry-run|--apply --plan ABSOLUTE.json [--queue all|arxiv|conference] [--generation N] [--concurrency 1-8] [--paper-ids ID[,ID...]] [--max-papers N|--limit N] [--pause-file ABSOLUTE]';
+const USAGE = '--dry-run|--apply --plan ABSOLUTE.json [--queue all|arxiv|conference] [--generation N] [--concurrency 1-8] [--paper-ids ID[,ID...]] [--max-papers N|--limit N]';
 function parsePaperIds(value) {
     if (value === undefined) return [];
     const paperIds = value.split(',').map(item => item.trim());
@@ -26,7 +26,7 @@ function parseArgs(argv) {
     if (!['--dry-run', '--apply'].includes(mode) || rest.length < 2 || rest.length > 14 || rest.length % 2) throw new Error(`Use ${USAGE}`);
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
-        if (!['--plan', '--queue', '--generation', '--concurrency', '--paper-ids', '--max-papers', '--limit', '--pause-file'].includes(flag)
+        if (!['--plan', '--queue', '--generation', '--concurrency', '--paper-ids', '--max-papers', '--limit'].includes(flag)
             || !value || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
         values[flag] = value;
     }
@@ -35,12 +35,10 @@ function parseArgs(argv) {
     if (!path.isAbsolute(values['--plan'] || '') || (values['--queue'] !== undefined && !['all', 'arxiv', 'conference'].includes(values['--queue']))
         || (values['--generation'] !== undefined && !/^[1-9]\d{0,8}$/.test(values['--generation']))
         || (values['--concurrency'] !== undefined && !/^[1-8]$/.test(values['--concurrency']))
-        || (maximum !== undefined && !/^[1-9]\d{0,8}$/.test(maximum))
-        || (values['--pause-file'] !== undefined && !path.isAbsolute(values['--pause-file']))) throw new Error(`Use ${USAGE}`);
+        || (maximum !== undefined && !/^[1-9]\d{0,8}$/.test(maximum))) throw new Error(`Use ${USAGE}`);
     return { apply: mode === '--apply', planFile: path.resolve(values['--plan']), queue: values['--queue'] || 'all',
         arxivGeneration: Number(values['--generation'] || 1), concurrency: Number(values['--concurrency'] || 3),
-        paperIds: parsePaperIds(values['--paper-ids']), maxPapers: maximum === undefined ? null : Number(maximum),
-        pauseFile: values['--pause-file'] === undefined ? null : path.resolve(values['--pause-file']) };
+        paperIds: parsePaperIds(values['--paper-ids']), maxPapers: maximum === undefined ? null : Number(maximum) };
 }
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-direct-rewrite-run.js');

@@ -46,6 +46,8 @@
     "history:archive-crawl-batch": "node scripts/workspace-role.js exec history -- node scripts/historical-archive-crawl-batch.js",
     "history:conference-crawl-batch": "node scripts/workspace-role.js exec history -- node scripts/historical-conference-crawl-batch.js",
     "history:conference-local-sources": "node scripts/workspace-role.js exec history -- node scripts/historical-conference-local-sources.js",
+    "history:openreview-pdf-source": "node scripts/workspace-role.js exec history -- node scripts/historical-openreview-pdf-source.js",
+    "history:icml-alternate-pdf-source": "node scripts/workspace-role.js exec history -- node scripts/historical-icml-alternate-pdf-source.js",
     "history:local-crawl-batch": "node scripts/workspace-role.js exec history -- node scripts/historical-local-crawl-batch.js",
     "history:resolve-conflict": "node scripts/workspace-role.js exec history -- node scripts/history-conflict-identity.js",
     "history:arxiv-analyze": "node scripts/workspace-role.js exec history -- node scripts/historical-arxiv-analysis.js",

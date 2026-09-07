@@ -300,7 +300,10 @@ function summarySectionBinding({ blogRoot, summaryPage, childPage, blogBasePath 
     for (let index = 0; index < headings.length; index += 1) {
         const start = headings[index].index; const end = headings[index + 1]?.index ?? body.length;
         const section = body.slice(start, end);
-        const childLinks = [...section.matchAll(new RegExp(`\\]\\(${regexEscape(childUrl)}\\)`, 'gu'))];
+        // The same child may also appear in the summary leaderboard. Only a
+        // level-3 detail heading owns the poster-bearing paper section.
+        const headingLine = section.slice(0, section.indexOf('\n') < 0 ? section.length : section.indexOf('\n'));
+        const childLinks = [...headingLine.matchAll(new RegExp(`\\]\\(${regexEscape(childUrl)}\\)`, 'gu'))];
         if (childLinks.length) matching.push({ start, end, section, childLinks: childLinks.length });
     }
     if (matching.length !== 1 || matching[0].childLinks !== 1) {

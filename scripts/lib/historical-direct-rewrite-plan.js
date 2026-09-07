@@ -8,11 +8,13 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const conferenceProjections = require('./historical-conference-page-projections.js');
+const localSources = require('./historical-conference-local-sources.js');
 const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
+const icmlPosterApi = require('./historical-icml-poster-authority.js');
 
-const CONTRACT = 'historical-direct-rewrite-plan-v4';
-const VERSION = 4;
-const CATALOG_CONTRACT = 'merged-good-historical-local-data-v4';
+const CONTRACT = 'historical-direct-rewrite-plan-v5';
+const VERSION = 5;
+const CATALOG_CONTRACT = 'merged-good-historical-local-data-v5';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
@@ -62,13 +64,13 @@ function deterministicRunId(catalogFileSha256, paperId) {
 }
 
 function normalizeCurrentCatalog(value) {
-    // The producer owns the complete current v4 contract.  Do not maintain a
+    // The producer owns the complete current v5 contract.  Do not maintain a
     // second, weaker validator here: legacy v3 collector files used the same
     // headline version while allowing retained arXiv prose/PDF inputs.
     try {
         return require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
-        fail(`current scoped v4 local source catalog is invalid: ${error.message}`);
+        fail(`current scoped v5 local source catalog is invalid: ${error.message}`);
     }
 }
 
@@ -159,14 +161,13 @@ function sourceRoute(entry) {
             failurePolicy: { kind: 'crosswalk-arxiv-fresh-fetch-failure-only',
                 crosswalkPrerequisite: false, historicalLinkUse: 'only-after-fresh-fetch-failure' } };
     }
-    const sources = entry.sources.filter(source => plain(source) && plain(source.metadata) && plain(source.pdf)
-        && source.pdf.availability === 'available' && validSha(source.pdf.sha256)
-        && typeof source.pdf.absolutePath === 'string' && path.isAbsolute(source.pdf.absolutePath)
-        && typeof source.metadata.absolutePath === 'string' && path.isAbsolute(source.metadata.absolutePath)
-        && validSha(source.metadata.sha256) && Number.isSafeInteger(source.metadata.recordIndex)
-        && source.metadata.recordIndex >= 0 && validSha(source.metadata.metadataIdentityBindingSha256))
+    const sources = entry.sources.map(source => {
+        try { return localSources.validateSource(source, entry.paperId); }
+        catch (error) { fail(`${entry.paperId} local source binding is invalid: ${error.message}`); }
+    }).filter(source => source.pdf.availability === 'available'
+        && source.pdf.acquisition?.versionRelation !== 'author-prior-preprint-with-different-title')
         .map(source => ({ sourceSet: String(source.sourceSet || ''), provenance: String(source.provenance || ''),
-            metadata: clone(source.metadata), pdf: clone(source.pdf) }))
+            metadata: clone(source.metadata), pdf: clone(source.pdf), sourceBindingSha256: source.sourceBindingSha256 }))
         .sort((left, right) => stableHash(left).localeCompare(stableHash(right)));
     if (!sources.length) fail(`${entry.paperId} does not have a usable local conference PDF`);
     return { kind: 'conference-local-pdf', writerInputs: sources,
@@ -241,7 +242,7 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
     const history = normalizeInventory(inventory);
     if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
         || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
-        fail('current scoped v4 catalog belongs to a different frozen inventory');
+        fail('current scoped v5 catalog belongs to a different frozen inventory');
     }
     const conferenceArtifact = normalizedConferenceProjections(conferencePageProjections, {
         catalogFileSha256, inventory: history
@@ -300,6 +301,11 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
         queue, queueSha256: stableHash(queue), projectedPages,
         dailyPrimaryArxivBindings: clone(currentCatalog.dailyPrimaryArxivBindings),
         dailyPrimaryArxivBindingSetSha256: currentCatalog.dailyPrimaryArxivBindingSetSha256,
+        dailyIcmlPosterBindings: clone(currentCatalog.dailyIcmlPosterBindings),
+        dailyIcmlPosterBindingSetSha256: currentCatalog.dailyIcmlPosterBindingSetSha256,
+        dailyIcmlPosterRoutableBindings: clone(currentCatalog.dailyIcmlPosterRoutableBindings),
+        dailyIcmlPosterRoutableBindingSetSha256: currentCatalog.dailyIcmlPosterRoutableBindingSetSha256,
+        icmlPosterAuthoritySha256: currentCatalog.icmlPosterAuthoritySha256,
         unprojectedCatalogEntries, unprojectedCatalogEntrySetSha256: stableHash(unprojectedCatalogEntries),
         projectedPageSetSha256: stableHash(projectedPages), uncoveredFrozenPaperPages,
         uncoveredFrozenPaperPageSetSha256: stableHash(uncoveredFrozenPaperPages), paperPageCoverage };
@@ -310,6 +316,8 @@ function normalizePlan(value) {
     exact(value, ['contract', 'version', 'catalogFileSha256', 'inventory', 'conferenceProjectionArtifactSha256',
         'queue', 'queueSha256', 'projectedPages', 'unprojectedCatalogEntries', 'unprojectedCatalogEntrySetSha256',
         'dailyPrimaryArxivBindings', 'dailyPrimaryArxivBindingSetSha256',
+        'dailyIcmlPosterBindings', 'dailyIcmlPosterBindingSetSha256', 'icmlPosterAuthoritySha256',
+        'dailyIcmlPosterRoutableBindings', 'dailyIcmlPosterRoutableBindingSetSha256',
         'projectedPageSetSha256', 'uncoveredFrozenPaperPages', 'uncoveredFrozenPaperPageSetSha256',
         'paperPageCoverage', 'planSha256'], 'direct rewrite plan');
     if (value.contract !== CONTRACT || value.version !== VERSION || !validSha(value.catalogFileSha256)
@@ -317,6 +325,10 @@ function normalizePlan(value) {
         || !validSha(value.conferenceProjectionArtifactSha256) || !Array.isArray(value.queue)
         || !validSha(value.queueSha256) || !Array.isArray(value.projectedPages)
         || !Array.isArray(value.dailyPrimaryArxivBindings) || !validSha(value.dailyPrimaryArxivBindingSetSha256)
+        || !Array.isArray(value.dailyIcmlPosterBindings) || !validSha(value.dailyIcmlPosterBindingSetSha256)
+        || !Array.isArray(value.dailyIcmlPosterRoutableBindings)
+        || !validSha(value.dailyIcmlPosterRoutableBindingSetSha256)
+        || !(value.icmlPosterAuthoritySha256 === null || validSha(value.icmlPosterAuthoritySha256))
         || !Array.isArray(value.unprojectedCatalogEntries) || !validSha(value.unprojectedCatalogEntrySetSha256)
         || !validSha(value.projectedPageSetSha256) || !Array.isArray(value.uncoveredFrozenPaperPages)
         || !validSha(value.uncoveredFrozenPaperPageSetSha256) || !plain(value.paperPageCoverage)
@@ -344,6 +356,16 @@ function normalizePlan(value) {
             || route.failurePolicy?.kind !== 'local-conference-source-failure')) {
             fail('conference direct route requires retained local PDF input');
         }
+        if (expectedRoute === 'conference-local-pdf') {
+            route.writerInputs = route.writerInputs.map(source => {
+                try { return localSources.validateSource(source, item.paperId); }
+                catch (error) { fail(`conference writer source binding is invalid: ${error.message}`); }
+            });
+            if (route.writerInputs.some(source =>
+                source.pdf.acquisition?.versionRelation === 'author-prior-preprint-with-different-title')) {
+                fail('cross-version prior preprint cannot enter a direct writer route');
+            }
+        }
         const pages = item.pages.map((page, pageIndex) => {
             exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'scope', 'pageContentSha256', 'mapping',
                 'historicalArxivLink'],
@@ -352,14 +374,15 @@ function normalizePlan(value) {
                 || !(page.primaryUrl === null || typeof page.primaryUrl === 'string') || typeof page.cohortDate !== 'string'
                 || !plain(page.scope) || typeof page.scope.type !== 'string' || typeof page.scope.key !== 'string'
                 || !validSha(page.pageContentSha256) || !['frozen-single-arxiv-identity-hint', dailyPrimaryArxiv.MAPPING,
-                    'retained-local-title-fingerprint', conferenceProjections.DAILY_ICML_MAPPING].includes(page.mapping)
+                    'retained-local-title-fingerprint', icmlPosterApi.DIRECT_PAGE_MAPPING,
+                    icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping)
                 || pageKeys.has(page.pageKey)) fail('direct rewrite projected page is malformed or duplicated');
             const historicalArxivLink = route.kind === 'arxiv-fresh-fetch'
                 ? normalizeHistoricalArxivLink(page.historicalArxivLink, route.arxivId)
                 : page.historicalArxivLink === null ? null : fail('conference projection cannot carry an arXiv link');
             const arxivMapping = ['frozen-single-arxiv-identity-hint', dailyPrimaryArxiv.MAPPING].includes(page.mapping);
             if ((route.kind === 'arxiv-fresh-fetch') !== arxivMapping
-                || page.mapping === conferenceProjections.DAILY_ICML_MAPPING
+                || [icmlPosterApi.DIRECT_PAGE_MAPPING, icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping)
                     && (route.kind !== 'conference-local-pdf' || page.scope.type !== 'daily'
                         || !item.paperId.startsWith('conference:icml:2026:'))
                 || page.mapping === 'retained-local-title-fingerprint' && page.scope.type !== 'conference'
@@ -423,6 +446,46 @@ function normalizePlan(value) {
                 || page.historicalArxivLink?.arxivId !== binding.arxivId
                 || stableHash(page.historicalArxivLink?.hintSources) !== stableHash(binding.candidateSources);
         })) fail('daily primary arXiv binding projection drifted');
+    const icmlPageKeys = new Set(); const dailyIcmlPosterBindings = value.dailyIcmlPosterBindings.map((binding, index) => {
+        let normalized;
+        try { normalized = icmlPosterApi.normalizeDailyPageBinding(binding); }
+        catch (error) { fail(`daily ICML poster binding ${index} is invalid: ${error.message}`); }
+        if (icmlPageKeys.has(normalized.page.pageKey)
+            || normalized.poster.authoritySha256 !== value.icmlPosterAuthoritySha256) {
+            fail('daily ICML poster bindings duplicate a page or authority');
+        }
+        icmlPageKeys.add(normalized.page.pageKey); return normalized;
+    }).sort((left, right) => left.page.pageKey.localeCompare(right.page.pageKey));
+    const mappedIcmlPages = projectedPages.filter(page => [icmlPosterApi.DIRECT_PAGE_MAPPING,
+        icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping));
+    const allIcmlBindingsByPage = new Map(dailyIcmlPosterBindings.map(binding => [binding.page.pageKey, binding]));
+    const routableIcmlPageKeys = new Set(); const dailyIcmlPosterRoutableBindings =
+        value.dailyIcmlPosterRoutableBindings.map((binding, index) => {
+            let normalized;
+            try { normalized = icmlPosterApi.normalizeDailyPageBinding(binding); }
+            catch (error) { fail(`daily ICML routable poster binding ${index} is invalid: ${error.message}`); }
+            const sealed = allIcmlBindingsByPage.get(normalized.page.pageKey);
+            if (!sealed || stableHash(sealed) !== stableHash(normalized)
+                || routableIcmlPageKeys.has(normalized.page.pageKey)) {
+                fail('daily ICML routable poster bindings are not a unique subset of sealed bindings');
+            }
+            routableIcmlPageKeys.add(normalized.page.pageKey); return normalized;
+        }).sort((left, right) => left.page.pageKey.localeCompare(right.page.pageKey));
+    const mappedIcmlByPage = new Map(mappedIcmlPages.map(page => [page.pageKey, page]));
+    if (value.dailyIcmlPosterBindings.some((binding, index) => binding.page.pageKey !== dailyIcmlPosterBindings[index].page.pageKey)
+        || stableHash(dailyIcmlPosterBindings) !== value.dailyIcmlPosterBindingSetSha256
+        || value.dailyIcmlPosterRoutableBindings.some((binding, index) =>
+            binding.page.pageKey !== dailyIcmlPosterRoutableBindings[index].page.pageKey)
+        || stableHash(dailyIcmlPosterRoutableBindings) !== value.dailyIcmlPosterRoutableBindingSetSha256
+        || (dailyIcmlPosterBindings.length > 0 && value.icmlPosterAuthoritySha256 === null)
+        || mappedIcmlPages.length !== dailyIcmlPosterRoutableBindings.length
+        || mappedIcmlPages.some(page => !routableIcmlPageKeys.has(page.pageKey))
+        || dailyIcmlPosterRoutableBindings.some(binding => {
+            const page = mappedIcmlByPage.get(binding.page.pageKey);
+            return !page || page.paperId !== `conference:icml:2026:openreview-forum-id:${binding.poster.forumId}`
+                || page.pagePath !== binding.page.pagePath || page.pageContentSha256 !== binding.page.pageContentSha256
+                || page.mapping !== binding.mapping;
+        })) fail('daily ICML poster binding projection drifted');
     const uncoveredPageKeys = new Set();
     const uncoveredFrozenPaperPages = value.uncoveredFrozenPaperPages.map((page, index) => {
         exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'scope', 'pageContentSha256',
@@ -449,7 +512,11 @@ function normalizePlan(value) {
     const body = { contract: CONTRACT, version: VERSION, catalogFileSha256: value.catalogFileSha256,
         inventory: clone(value.inventory), conferenceProjectionArtifactSha256: value.conferenceProjectionArtifactSha256,
         queue, queueSha256: value.queueSha256, projectedPages, dailyPrimaryArxivBindings,
-        dailyPrimaryArxivBindingSetSha256: value.dailyPrimaryArxivBindingSetSha256, unprojectedCatalogEntries,
+        dailyPrimaryArxivBindingSetSha256: value.dailyPrimaryArxivBindingSetSha256,
+        dailyIcmlPosterBindings, dailyIcmlPosterBindingSetSha256: value.dailyIcmlPosterBindingSetSha256,
+        dailyIcmlPosterRoutableBindings,
+        dailyIcmlPosterRoutableBindingSetSha256: value.dailyIcmlPosterRoutableBindingSetSha256,
+        icmlPosterAuthoritySha256: value.icmlPosterAuthoritySha256, unprojectedCatalogEntries,
         unprojectedCatalogEntrySetSha256: value.unprojectedCatalogEntrySetSha256,
         projectedPageSetSha256: value.projectedPageSetSha256, uncoveredFrozenPaperPages,
         uncoveredFrozenPaperPageSetSha256: value.uncoveredFrozenPaperPageSetSha256,
@@ -703,7 +770,7 @@ function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile }
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
-        fail('current scoped v4 catalog inventory file binding drifted');
+        fail('current scoped v5 catalog inventory file binding drifted');
     }
     return buildDirectRewritePlan({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, conferencePageProjections: projection.value });
@@ -767,8 +834,9 @@ function stageAdapterFor(item) {
 function verifyConferenceWriterInputs(item) {
     if (!item || item.route?.kind !== 'conference-local-pdf' || !Array.isArray(item.route.writerInputs)
         || !item.route.writerInputs.length) fail('conference source verification needs one planned local PDF route');
-    const localSources = require('./historical-conference-local-sources.js');
     for (const source of item.route.writerInputs) {
+        try { localSources.validateSource(source, item.paperId); }
+        catch (error) { fail(`${item.paperId} retained source binding changed after planning: ${error.message}`); }
         const metadata = conferenceProjections.readStableFile(source.metadata.absolutePath, 'retained conference metadata', 64 * 1024 * 1024);
         if (metadata.fileSha256 !== source.metadata.sha256) {
             fail(`${item.paperId} retained conference metadata changed after planning`);

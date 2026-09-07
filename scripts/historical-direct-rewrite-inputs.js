@@ -21,7 +21,7 @@ function parseArgs(argv) {
     for (const flag of ['--conference-manifest', '--inventory', '--blog-root']) {
         if (!path.isAbsolute(values[flag] || '')) throw new Error(`Use ${USAGE}`);
     }
-    const name = values['--name'] || 'scoped-historical-local-data-v4.json';
+    const name = values['--name'] || 'scoped-historical-local-data-v5.json';
     if (!api.SAFE_NAME_RE.test(name)) throw new Error(`Use ${USAGE}`);
     return { apply: mode === '--apply', conferenceManifest: path.resolve(values['--conference-manifest']),
         inventoryFile: path.resolve(values['--inventory']), blogRoot: path.resolve(values['--blog-root']), name };

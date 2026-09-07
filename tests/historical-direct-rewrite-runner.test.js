@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const planner = require('../scripts/lib/historical-direct-rewrite-plan.js');
+const localSources = require('../scripts/lib/historical-conference-local-sources.js');
 const projections = require('../scripts/lib/historical-conference-page-projections.js');
 const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
 const runnerCli = require('../scripts/historical-direct-rewrite-run.js');
@@ -39,20 +40,41 @@ function fixture(t) {
     const inventoryPath = path.join(root, 'inventory.json'); json(inventoryPath, inventory);
     const conferenceManifestPath = path.join(root, 'conference-manifest.json'); const conferenceManifestSha256 = json(conferenceManifestPath, { fixture: true });
     const dailyPrimaryArxivBindings = [];
-    const catalog = { contract: 'merged-good-historical-local-data-v4', version: 4,
+    const dailyIcmlPosterBindings = [];
+    const paperId = 'conference:icassp:2026:icassp-arnumber:100'; const sourceSet = 'retained-local';
+    const provenance = 'retained-local'; const recordIndex = 0; const posterBinding = null;
+    const acquisition = { receipt: null, sourceKind: 'retained-local-no-network-receipt', versionRelation: null,
+        sourceTitle: null, sourceAuthors: null, sourceDoi: null,
+        provenanceStatement: 'PDF bytes predate the network receipt system and are retained local crawler input.',
+        openreviewResponseBytes: null };
+    const metadataIdentityBindingSha256 = localSources.stableHash({ paperId, sourceSet,
+        metadataSnapshotSha256: metadataSha256, recordIndex, posterBinding });
+    const pdfIdentityBindingSha256 = localSources.stableHash({ paperId, sourceSet, availability: 'available',
+        absolutePath: pdf, bytes: fs.statSync(pdf).size, sha256: pdfSha256, acquisition,
+        metadataIdentityBindingSha256 });
+    const sourceBindingSha256 = localSources.stableHash({ paperId, provenance, sourceSet,
+        metadataIdentityBindingSha256, pdfIdentityBindingSha256 });
+    const catalog = { contract: 'merged-good-historical-local-data-v5', version: 5,
         scope: 'historical-corresponding-local-sources-only',
         scopeBinding: { inventoryPath, inventorySha256: sha(fs.readFileSync(inventoryPath)),
             inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
-            arxivPageCount: 1, singleArxivPageCount: 1, dailyPrimaryArxivBindingCount: 0, conferencePageCount: 1 },
+            arxivPageCount: 1, singleArxivPageCount: 1, dailyPrimaryArxivBindingCount: 0,
+            dailyIcmlPosterBindingCount: 0, dailyIcmlPosterRoutableBindingCount: 0, conferencePageCount: 1 },
         inputs: [{ path: conferenceManifestPath, sha256: conferenceManifestSha256, selectedPapers: 1 }],
         summary: { arxivPapers: 1, arxivPages: 1, singleArxivPages: 1, dailyPrimaryArxivBindings: 0,
+            dailyIcmlPosterBindings: 0, dailyIcmlPosterRoutableBindings: 0,
             conferencePapers: 1, canonicalRecords: 2, sourceRecords: 1,
             conferenceSourceSets: { 'retained-local': 1 } },
-        dailyPrimaryArxivBindings, dailyPrimaryArxivBindingSetSha256: planner.stableHash(dailyPrimaryArxivBindings), entries: [
+        dailyPrimaryArxivBindings, dailyPrimaryArxivBindingSetSha256: planner.stableHash(dailyPrimaryArxivBindings),
+        dailyIcmlPosterBindings, dailyIcmlPosterBindingSetSha256: planner.stableHash(dailyIcmlPosterBindings),
+        dailyIcmlPosterRoutableBindings: [], dailyIcmlPosterRoutableBindingSetSha256: planner.stableHash([]),
+        icmlPosterAuthoritySha256: null, entries: [
         { paperId: 'arxiv:2601.00001', sources: [] },
-        { paperId: 'conference:icassp:2026:icassp-arnumber:100', sources: [{ sourceSet: 'retained-local', provenance: 'retained-local',
-            metadata: { absolutePath: metadata, sha256: metadataSha256, recordIndex: 0, metadataIdentityBindingSha256: sha('binding') },
-            pdf: { absolutePath: pdf, sha256: pdfSha256, availability: 'available', bytes: fs.statSync(pdf).size } }] }
+        { paperId, sources: [{ sourceSet, provenance,
+            metadata: { absolutePath: metadata, sha256: metadataSha256, recordIndex,
+                metadataIdentityBindingSha256, posterBinding },
+            pdf: { absolutePath: pdf, sha256: pdfSha256, availability: 'available', bytes: fs.statSync(pdf).size,
+                acquisition, pdfIdentityBindingSha256 }, sourceBindingSha256 }] }
     ] };
     const catalogSha = sha(Buffer.from(JSON.stringify(catalog)));
     const conferencePageProjections = projections.buildConferencePageProjections({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
@@ -209,16 +231,16 @@ test('direct-run selection is plan-ordered, bounded, and rejects duplicate or ou
 });
 
 test('direct-run CLI parses stable scopes and rejects ambiguous limits or malformed paper sets', () => {
-    const plan = '/tmp/direct-plan.json'; const pause = '/tmp/direct-plan.pause';
+    const plan = '/tmp/direct-plan.json';
     const parsed = runnerCli.parseArgs(['--apply', '--plan', plan, '--paper-ids',
         'arxiv:2601.00001,conference:icassp:2026:icassp-arnumber:100', '--max-papers', '2',
-        '--pause-file', pause, '--concurrency', '3']);
+        '--concurrency', '3']);
     assert.deepEqual(parsed.paperIds, ['arxiv:2601.00001', 'conference:icassp:2026:icassp-arnumber:100']);
-    assert.equal(parsed.maxPapers, 2); assert.equal(parsed.pauseFile, pause);
+    assert.equal(parsed.maxPapers, 2);
     assert.equal(runnerCli.parseArgs(['--dry-run', '--plan', plan, '--limit', '1']).maxPapers, 1);
     assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--max-papers', '1', '--limit', '1']), /Use/);
     assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--paper-ids', 'arxiv:2601.00001,arxiv:2601.00001']), /Use/);
-    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--pause-file', 'relative.pause']), /Use/);
+    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--pause-file', '/tmp/custom.pause']), /Use/);
 });
 
 test('implicit max-papers advances past staged entries while explicit IDs remain replayable', async t => {

@@ -12,6 +12,7 @@ const catalogApi = require('../scripts/lib/historical-direct-rewrite-input-catal
 const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
 const conferenceProjections = require('../scripts/lib/historical-conference-page-projections.js');
+const icmlPosterApi = require('../scripts/lib/historical-icml-poster-authority.js');
 const engine = require('../scripts/analysis-engine.js');
 const { validAnalysisPaper, validLegacyApiAnalysisPaper } = require('./valid-analysis-fixture.js');
 
@@ -34,6 +35,25 @@ function page(root, relative, title, kind, scope, cohortDate, body = `POISON_OLD
         identityHints: identityHints || (kind === 'paper' && scope.type === 'daily'
             ? { status: 'single', candidates: [{ scheme: 'arxiv', value: title.replace('arXiv ', ''), sources: ['body:arxiv-link'] }] }
             : { status: 'none', candidates: [] }) };
+}
+function boundSource({ paperId, sourceSet, provenance, metadataPath, metadataSha256, recordIndex = 0,
+    pdfPath, pdfSha256, pdfBytes, posterBinding = null }) {
+    const acquisition = { receipt: null, sourceKind: 'retained-local-no-network-receipt', versionRelation: null,
+        sourceTitle: null, sourceAuthors: null, sourceDoi: null,
+        provenanceStatement: 'PDF bytes predate the network receipt system and are retained local crawler input.',
+        openreviewResponseBytes: null };
+    const metadataBody = { paperId, sourceSet, metadataSnapshotSha256: metadataSha256, recordIndex, posterBinding };
+    const metadataIdentityBindingSha256 = catalogApi.stableHash(metadataBody);
+    const pdfBody = { paperId, sourceSet, availability: 'available', absolutePath: pdfPath,
+        bytes: pdfBytes, sha256: pdfSha256, acquisition, metadataIdentityBindingSha256 };
+    const pdfIdentityBindingSha256 = catalogApi.stableHash(pdfBody);
+    const sourceBody = { paperId, provenance, sourceSet, metadataIdentityBindingSha256, pdfIdentityBindingSha256 };
+    return { sourceSet, provenance,
+        metadata: { absolutePath: metadataPath, sha256: metadataSha256, recordIndex,
+            metadataIdentityBindingSha256, posterBinding },
+        pdf: { availability: 'available', absolutePath: pdfPath, bytes: pdfBytes,
+            sha256: pdfSha256, acquisition, pdfIdentityBindingSha256 },
+        sourceBindingSha256: catalogApi.stableHash(sourceBody) };
 }
 function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     const arxivId = item.route.arxivId || '2608.00001'; const paper = validLegacyApiAnalysisPaper(arxivId);
@@ -94,30 +114,58 @@ async function fixture(t, { mixedDailyConference = false } = {}) {
     const inventory = { counts: {}, ledgerSha256: sha('inventory-ledger'), pageSetSha256: planApi.stableHash(pages), pages };
     const metadataSha = writeJson(metadata, { papers: [{ arnumber: '100', title: 'Conference fresh title' }] });
     const pdfSha = write(pdf, '%PDF-1.4\nconference bytes\n%%EOF\n');
-    const icmlMetadataSha = mixedDailyConference
-        ? writeJson(icmlMetadata, { papers: [{ id: 'Icml_123', title: 'ICML daily title' }] }) : null;
+    const icmlMetadataSha = mixedDailyConference ? writeJson(icmlMetadata, { count: 1, next: null, previous: null,
+        results: [{ id: 60946, name: 'ICML daily title', virtualsite_url: '/virtual/2026/poster/60946',
+            paper_url: 'https://openreview.net/forum?id=Icml_123', eventtype: 'Poster', event_type: 'Poster',
+            visible: true, decision: 'Accept (regular)',
+            sourceurl: 'https://openreview.net/group?id=ICML.cc/2026/Conference' }] }) : null;
     const icmlPdfSha = mixedDailyConference ? write(icmlPdf, '%PDF-1.4\nicml bytes\n%%EOF\n') : null;
+    const icasspPaperId = 'conference:icassp:2026:icassp-arnumber:100';
+    const icasspSource = boundSource({ paperId: icasspPaperId, sourceSet: 'retained-local',
+        provenance: 'retained-local', metadataPath: metadata, metadataSha256: metadataSha,
+        pdfPath: pdf, pdfSha256: pdfSha, pdfBytes: fs.statSync(pdf).size });
+    let icmlBinding = null; let icmlAuthoritySha256 = null; let icmlSource = null;
+    if (mixedDailyConference) {
+        const handle = icmlPosterApi.loadPosterAuthority({ snapshotFile: icmlMetadata });
+        const authority = icmlPosterApi.authorityHandleSnapshot(handle);
+        const record = icmlPosterApi.lookupByPoster(handle, '60946');
+        const dailyPage = pages.find(item => item.path === 'content/posts/icml-daily.md');
+        icmlBinding = icmlPosterApi.bindDailyPage({ authorityHandle: handle, blogRoot: blog, page: dailyPage });
+        icmlAuthoritySha256 = authority.authoritySha256;
+        const posterBinding = { authorityContract: authority.contract, authoritySha256: authority.authoritySha256,
+            recordBindingSha256: record.recordBindingSha256, posterId: record.posterId,
+            officialUrl: record.officialUrl, openreviewUrl: record.openreviewUrl };
+        icmlSource = boundSource({ paperId: 'conference:icml:2026:openreview-forum-id:Icml_123',
+            sourceSet: 'workspace-icml-official-poster-2026', provenance: 'retained-local-icml-miniconf-snapshot',
+            metadataPath: icmlMetadata, metadataSha256: icmlMetadataSha, pdfPath: icmlPdf,
+            pdfSha256: icmlPdfSha, pdfBytes: fs.statSync(icmlPdf).size, posterBinding });
+    }
     const catalog = catalogApi.normalizeCatalog({ contract: catalogApi.CONTRACT, version: catalogApi.VERSION, scope: catalogApi.SCOPE,
         scopeBinding: { inventoryPath: path.join(root, 'inventory.json'), inventorySha256: sha('inventory file'),
             inventoryLedgerSha256: inventory.ledgerSha256, inventoryPageSetSha256: inventory.pageSetSha256,
             arxivPageCount: 2, singleArxivPageCount: 2, dailyPrimaryArxivBindingCount: 0,
+            dailyIcmlPosterBindingCount: mixedDailyConference ? 1 : 0,
+            dailyIcmlPosterRoutableBindingCount: mixedDailyConference ? 1 : 0,
             conferencePageCount: mixedDailyConference ? 2 : 1 },
         inputs: [{ path: path.join(root, 'conference-local-sources.json'), sha256: sha('conference manifest'), selectedPapers: mixedDailyConference ? 2 : 1 }],
         summary: { arxivPapers: 2, arxivPages: 2, singleArxivPages: 2, dailyPrimaryArxivBindings: 0,
+            dailyIcmlPosterBindings: mixedDailyConference ? 1 : 0,
+            dailyIcmlPosterRoutableBindings: mixedDailyConference ? 1 : 0,
             conferencePapers: mixedDailyConference ? 2 : 1,
             canonicalRecords: mixedDailyConference ? 4 : 3, sourceRecords: mixedDailyConference ? 2 : 1,
-            conferenceSourceSets: mixedDailyConference ? { 'retained-local': 1, 'workspace-icml-2026': 1 } : { 'retained-local': 1 } },
-        dailyPrimaryArxivBindings: [], dailyPrimaryArxivBindingSetSha256: catalogApi.stableHash([]), entries: [
+            conferenceSourceSets: mixedDailyConference
+                ? { 'retained-local': 1, 'workspace-icml-official-poster-2026': 1 } : { 'retained-local': 1 } },
+        dailyPrimaryArxivBindings: [], dailyPrimaryArxivBindingSetSha256: catalogApi.stableHash([]),
+        dailyIcmlPosterBindings: mixedDailyConference ? [icmlBinding] : [],
+        dailyIcmlPosterBindingSetSha256: catalogApi.stableHash(mixedDailyConference ? [icmlBinding] : []),
+        dailyIcmlPosterRoutableBindings: mixedDailyConference ? [icmlBinding] : [],
+        dailyIcmlPosterRoutableBindingSetSha256: catalogApi.stableHash(mixedDailyConference ? [icmlBinding] : []),
+        icmlPosterAuthoritySha256: icmlAuthoritySha256, entries: [
         { paperId: `arxiv:${arxivOne}`, sources: [] },
         { paperId: `arxiv:${arxivTwo}`, sources: [] },
-        { paperId: 'conference:icassp:2026:icassp-arnumber:100', sources: [{ sourceSet: 'retained-local', provenance: 'retained-local',
-            metadata: { absolutePath: metadata, sha256: metadataSha, recordIndex: 0, metadataIdentityBindingSha256: sha('metadata-binding') },
-            pdf: { absolutePath: pdf, sha256: pdfSha, availability: 'available', bytes: fs.statSync(pdf).size } }] }
+        { paperId: icasspPaperId, sources: [icasspSource] }
     ].concat(mixedDailyConference ? [{ paperId: 'conference:icml:2026:openreview-forum-id:Icml_123',
-        sources: [{ sourceSet: 'workspace-icml-2026', provenance: 'retained-local-crawler',
-            metadata: { absolutePath: icmlMetadata, sha256: icmlMetadataSha, recordIndex: 0,
-                metadataIdentityBindingSha256: sha('icml-metadata-binding') },
-            pdf: { absolutePath: icmlPdf, sha256: icmlPdfSha, availability: 'available', bytes: fs.statSync(icmlPdf).size } }] }] : []) });
+        sources: [icmlSource] }] : []) });
     const catalogSha = jsonSha(catalog);
     const conference = conferenceProjections.buildConferencePageProjections({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
     const plan = planApi.buildDirectRewritePlan({ catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections: conference });

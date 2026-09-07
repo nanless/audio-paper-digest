@@ -18,21 +18,23 @@ frozen inventory arXiv links ─┘                                      ├→ 
 
 ```bash
 # 只建本地会议来源 manifest；不联网、不读博客正文、不调用模型
-npm run history:conference-local-sources -- --apply
+npm run history:conference-local-sources -- --apply \
+  --icml-poster-snapshot /absolute/path/data/icml2026/papers.json \
+  --icml-pdf-root /absolute/path/data/pdfs/icml2026
 
 # arXiv route 从 inventory 内已有链接建立；不传 --arxiv-manifest
 npm run history:direct-inputs -- --apply \
-  --conference-manifest /absolute/path/conference-local-sources-v1.json \
+  --conference-manifest /absolute/path/conference-local-sources-v2.json \
   --inventory /absolute/path/all-history.json \
   --blog-root /absolute/path/audio-paper-digest-blog
 
 npm run history:conference-projections -- --apply \
-  --catalog /absolute/path/scoped-historical-local-data-v4.json \
+  --catalog /absolute/path/scoped-historical-local-data-v5.json \
   --inventory /absolute/path/all-history.json
 npm run history:direct-plan -- --apply \
-  --catalog /absolute/path/scoped-historical-local-data-v4.json \
+  --catalog /absolute/path/scoped-historical-local-data-v5.json \
   --inventory /absolute/path/all-history.json \
-  --conference-projections /absolute/path/conference-page-projections-v2.json
+  --conference-projections /absolute/path/conference-page-projections-v3.json
 ```
 
 `history:direct-scheduler` 对 arXiv 每个 generation 重新拉取官方文本/PDF，原子封存
@@ -204,48 +206,48 @@ crosswalk assignment。
 generation 才重新获取官方文本/PDF 并封存。会议部分读取 conference local-source manifest、重放 inventory
 页面 SHA，并只读取会议页 frontmatter title fingerprint 来选择精确的 canonical conference record；它不会读取
 正文。workspace crawler 来源优先；`accepted-local-iclr-*` 只有在它是某个冻结 ICLR 页唯一的精确 title-bound
-来源时才保留，不能把外部 accepted corpus 的其余记录带入。输出是 `merged-good-historical-local-data-v4`，只保存
+来源时才保留，不能把外部 accepted corpus 的其余记录带入。输出是 `merged-good-historical-local-data-v5`，只保存
 source route、路径和 SHA，不把旧博客正文、旧 analysis 或旧 Reader 内容交给写作链路。默认写到
-`data/runtime/direct-local-inputs/scoped-historical-local-data-v4.json`；旧的
+`data/runtime/direct-local-inputs/scoped-historical-local-data-v5.json`；旧的
 `historical-direct-rewrite-input-catalog-v1` collector merger 不能用于 direct plan。
 
 ```bash
 npm run history:direct-inputs -- --dry-run \
-  --conference-manifest /absolute/path/conference-local-sources-v1.json \
+  --conference-manifest /absolute/path/conference-local-sources-v2.json \
   --inventory /absolute/path/all-history.json \
   --blog-root /absolute/path/audio-paper-digest-blog
 
 npm run history:conference-projections -- --dry-run \
-  --catalog /absolute/path/scoped-historical-local-data-v4.json \
+  --catalog /absolute/path/scoped-historical-local-data-v5.json \
   --inventory /absolute/path/all-history.json
 
 npm run history:direct-plan -- --dry-run \
-  --catalog /absolute/path/scoped-historical-local-data-v4.json \
+  --catalog /absolute/path/scoped-historical-local-data-v5.json \
   --inventory /absolute/path/all-history.json \
-  --conference-projections /absolute/path/conference-page-projections-v2.json
+  --conference-projections /absolute/path/conference-page-projections-v3.json
 
 # source phase 与 LLM/staging 分离；两条队列可并发，单篇 canonical 只由一个 writer 执行
-npm run history:direct-scheduler -- --apply --plan /absolute/path/direct-rewrite-plan-v4.json \
+npm run history:direct-scheduler -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
   --queue all --generation 1 --max-papers 100 --arxiv-concurrency 3 --conference-concurrency 5
-npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-v4.json \
+npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
   --queue all --generation 1 --max-papers 50 --concurrency 3
 
 # 只读进度快照；--watch-seconds 5 可持续输出 NDJSON 快照
-npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v4.json --generation 1
-npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v4.json --generation 1 --watch-seconds 5
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1
+npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --generation 1 --watch-seconds 5
 
 # 请求安全暂停；活动论文完成原子落盘并释放 operation lock 后，才允许 resume
-npm run history:pause -- --plan /absolute/path/direct-rewrite-plan-v4.json --phase source --generation 1
-npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v4.json --phase source --generation 1
+npm run history:pause -- --plan /absolute/path/direct-rewrite-plan-v5.json --phase source --generation 1
+npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v5.json --phase source --generation 1
 # LLM/direct-run 阶段把 --phase source 换成 --phase analysis
 
 # direct-run 输出的 registryFile 与 aggregate projection 均使用命令实际输出的绝对路径
 npm run history:direct-aggregate -- projection --apply \
-  --plan-file /absolute/path/direct-rewrite-plan-v4.json \
+  --plan-file /absolute/path/direct-rewrite-plan-v5.json \
   --inventory-file /absolute/path/all-history.json \
   --output-name direct-aggregate-projection-v2.json
 npm run history:direct-aggregate -- aggregate --apply \
-  --plan-file /absolute/path/direct-rewrite-plan-v4.json \
+  --plan-file /absolute/path/direct-rewrite-plan-v5.json \
   --registry-file /absolute/path/direct-rewrite-registry.json \
   --projection-file /absolute/path/direct-aggregate-projection-v2.json \
   --daily YYYY-MM-DD
@@ -257,16 +259,31 @@ npm run history:direct-aggregate -- aggregate --apply \
 提供该省略形式的指纹。两种形式只要映射到多个 conference identity 就失败，不做标题相似度匹配；projection 是 direct
 route 的页面投影证据，绝不是 crosswalk identity recovery。
 
-projection v2 还处理一条严格的 ICML 2026 例外：daily-scope、`identityHints=none` 的冻结论文页只有在
-逐字重放 page SHA 后，正文恰有一个规范 `https://icml.cc/virtual/2026/poster/<numeric>` 官方目标，且
-frontmatter title fingerprint 在已认证的 ICML 本地 metadata 中只对应一个 canonical identity 时，才作为该
-conference canonical 的额外页面投影。正文只用于提取并封存该 identity binding，绝不进入分析、Reader 或新稿；
-不能只凭标题，也不能从汇总页反推。当前 inventory 预期 116 个此类 `none` 页面中 97 个闭合、19 个继续留在
-plan 的 uncovered audit；实际数字仍以新 projection/plan 的自哈希输出为准。
+projection v3 对 ICML Daily 页只消费 catalog v5 已封存的 poster authority binding：冻结 child 页必须含唯一
+官方 poster URL；`tau-Voice` 的空 child 页只允许由同一冻结 Daily 汇总中“精确 child URL section → 唯一 poster”
+桥接。poster 再唯一绑定 OpenReview forum ID 与 forum-ID PDF，不按标题猜测。catalog 同时保存全部身份 binding 和
+当前 PDF-routable 子集；projection/plan 只投影后者。PDF 缺失时身份仍可审计但页面继续留在 uncovered，PDF 经专用
+sealer 封存并重建 manifest 后才自动进入 route。旧正文只贡献字节区间和 SHA，绝不进入分析、Reader 或新稿。
+默认优先使用 OpenReview 官方 sealer。公开端点被浏览器挑战页阻断时，
+`history:icml-alternate-pdf-source` 只允许代码内审查过的固定 poster/forum/来源 URL 组合。
+`jfpkqjhex4` 绑定同标题同作者的官方 arXiv v3；`n1mAjfRDZ6` 只有作者 TechRxiv v1 早期预印本，
+receipt 必须保留两个标题、作者显示名差异、DOI 和 `author-prior-preprint-cross-version`，
+不得声称该字节是 OpenReview 响应或 ICML camera-ready。
+这种“标题不同的作者早期预印本”只作身份与来源谱系审计，不进入 direct writer route，
+页面继续保持 uncovered；只有同篇同标题的版本或精确 camera-ready 才能关闭该缺口。
 
-`history:direct-plan` 生成 `historical-direct-rewrite-plan-v4`。projection 与 plan 都复用
+顺序是强约束：缺失 PDF 必须在 `history:conference-local-sources --apply` 之前封存。local manifest、
+catalog、projection 和 plan 都是 immutable 证明；如果已签发过含缺失 PDF 的旧一轮，必须使用新的、
+唯一的 artifact 名称从 local manifest 开始重放整条链，不得覆盖或只改下游文件。
+历史保留 PDF 只从显式 `--icml-pdf-root` 读取；本轮新下载只写
+`data/runtime/historical-icml-pdf-sources/`，由 `--icml-fresh-pdf-root` 作为 overlay 重放，不回写 legacy `data/pdfs/`。
+fresh overlay 中的每个 PDF 必须有且只有一份 OpenReview 或 alternate receipt；无 receipt、双 receipt、
+receipt 孤儿或 retained/fresh 字节冲突都失败关闭。receipt 文件 SHA、self-SHA、版本关系和 PDF SHA
+进入 PDF identity/source binding，catalog、plan 和 runner 每层都重放，不只检查它“长得像 SHA”。
+
+`history:direct-plan` 生成 `historical-direct-rewrite-plan-v5`。projection 与 plan 都复用
 `history:direct-inputs` producer 的完整 strict catalog validator；所有 v3 及更旧 catalog 都会失败关闭。
-v4 另把 conflict/multiple daily 页中唯一严格评分行的主 arXiv 链接封存为只含字节区间与 SHA 的 binding；
+v5 另把 conflict/multiple daily 页中唯一严格评分行的主 arXiv 链接封存为只含字节区间与 SHA 的 binding；
 plan 会重放 binding self-SHA、page SHA、原 identity status/candidates，绝不按候选优先级猜测。plan 除了 catalog
 中无历史投影的 source 记录，还会把每个未进入 direct route 的 frozen paper page 及其 page/content SHA、
 scope 和 identity-hint 状态写入自哈希覆盖审计，并汇总逐 scope 与逐 hint-status 数量；它只报告
@@ -279,7 +296,7 @@ fresh source 的标题进入 runtime metadata，供新稿
 identity 使用；它不来自冻结博客页面。队列中的 conference paper 只重放 catalog 已绑定的本地
 metadata/PDF SHA，并从该 metadata record 取得标题。两条队列都不以 legacy crosswalk 为前置条件。
 
-来源阶段也支持 `--paper-ids`、`--max-papers`（或 `--limit`）和 `--pause-file`；未显式指定 ID 的
+来源阶段也支持 `--paper-ids`和 `--max-papers`（或 `--limit`）；未显式指定 ID 的
 bounded 续跑会先严格重放并跳过同 generation 已封存的 arXiv 四文件 bundle，会议项则按稳定 plan 顺序分批
 重放 metadata/PDF SHA。默认 source pause marker 与 scheduler operation lock 位于
 `fetched-arxiv-sources` 根，文件名绑定 plan SHA 与 generation。SIGINT/SIGTERM 或安全普通 pause marker
@@ -300,7 +317,7 @@ SHA 漂移、历史页 projection 漂移和任何单页字节替换都会拒绝�
 `--queue` 的 ID 都会在来源和模型请求前失败。dry-run 会报告最终 `selectedPaperIds`、默认 pause marker 和
 operation-lock 路径。未显式给 ID 的 `--max-papers` 会跳过 registry 中已经 `staged` 的前项，因此原命令
 重复运行会稳定推进下一批；显式 ID 仍会重放已完成工件以支持定向复验。默认 pause marker 是同一 plan SHA 与 arXiv generation 的 registry 文件加 `.pause`；
-也可用 `--pause-file ABSOLUTE` 覆写。marker 必须是由 `history:pause` 签发、绑定同一 plan/generation 的
+不允许覆写 pause 路径，避免脱离 `history:pause/resume/status` 控制面。marker 必须是由 `history:pause` 签发、绑定同一 plan/generation 的
 自哈希私有普通文件，不能用空文件伪造。签发 marker，或向运行进程发送
 一次 `SIGINT`/`SIGTERM`，只会阻止领取下一篇；已经开始的并发论文会完成其原子 registry/staging 边界后退出为
 `paused`。移走 marker 后原样重跑即可续跑。

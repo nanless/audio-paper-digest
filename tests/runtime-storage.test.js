@@ -37,6 +37,7 @@ const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-cros
     'historical-direct-rewrite-plans', 'historical-direct-rewrite-unprojected-reports',
     'historical-direct-rewrite-registries', 'historical-direct-rewrite-executions', 'historical-direct-rewrite-staging',
     'historical-direct-aggregate-projections', 'historical-direct-aggregates', 'historical-local-crawl-identities',
+    'historical-icml-pdf-sources', 'historical-openreview-pdf-sources', 'historical-icml-alternate-pdf-sources',
     'historical-local-crawl-identity-snapshots', 'historical-local-crawl-batches', 'historical-archive-crawl-identities',
     'historical-archive-crawl-batches', 'historical-conference-crawl-identities', 'historical-conference-crawl-batches'];
 
