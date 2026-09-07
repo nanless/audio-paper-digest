@@ -14,7 +14,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from paper_taxonomy import (FACET_IDS, LABEL_MODE_LEGACY, active_preferred_labels,
+from paper_taxonomy import (FACET_IDS, LABEL_MODE_LEGACY, TAXONOMY_FLAT_COMPAT_CONTRACT,
+                            active_preferred_labels,
                             ancestors, load_taxonomy, normalize_label,
                             prune_ancestors, resolve_current_label, resolve_label,
                             resolve_label_candidates, validate_taxonomy)
@@ -40,6 +41,12 @@ def registry():
 
 
 class RegistryTest(unittest.TestCase):
+    def test_flat_hugo_compat_contract_is_versioned(self):
+        self.assertEqual(
+            TAXONOMY_FLAT_COMPAT_CONTRACT,
+            'paper-taxonomy-flat-tags-compat-v1',
+        )
+
     def test_current_resolution_only_exposes_active_chinese_preferred_labels(self):
         data = registry()
         self.assertIs(validate_taxonomy(data), data)

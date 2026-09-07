@@ -78,4 +78,4 @@ npm run taxonomy:serve -- --port 8999
 
 运行仍必须沙箱外；构建不联网。更改词表后先重新preview，旧bundle将因registry SHA不匹配而被拒绝。没有Hugo仓库的干净CI只需运行词表/fixture测试，不可把无数据当真实历史验收。本预览是短时静态工作台，不是博客功能依赖的本机AI助手，不常驻或自动启动。
 
-旧日更Prompt、四行标签契约及legacy解析默认行为尚未切换到新分类。下一批需要源证据语义审核、正式分类schema和Hugo发布投影接入，再独立完成旧URL迁移及发布；本轮不得称全站已重标。
+本节此前记录的是第一批只读预览边界。后续生产提交已经把日更 Prompt、四行标签契约、taxonomy seal 和历史 source-only 重写切到共享 registry。当前采用 `paper-taxonomy-flat-tags-compat-v1` 临时发布投影：新页面保留 Hugo `tags`，并绑定 registry/concept/facet/主任务/主方法；旧页面及 URL 不改写，标签网页明确是新旧混合索引。完整九分面 Hugo 导航、父级检索、历史语义重标和旧 URL 迁移仍是后续工作，不得称全站已重标。

@@ -1,6 +1,6 @@
 # 论文标签体系设计：受控词表、任务层级与分面检索
 
-状态：共享词表和只读历史检索预览已完成；生产分析现从同一 registry 运行时注入标签投影，Node/Python current parser 只接受 active 中文首选标签，并在结构修复后以独立 taxonomy stage 封口。历史页面仍须经完整重写或受来源证明约束的重标流程，不能把旧标签直接当新语义。调查日期：2026-09-07。本文的数量门槛是本站建议，不是学术界统一标准。
+状态：共享词表和只读历史检索预览已完成；生产分析现从同一 registry 运行时注入标签投影，Node/Python current parser 只接受 active 中文首选标签，并在结构修复后以独立 taxonomy stage 封口。发布层已启用临时扁平兼容合同：新页面保留 Hugo `tags`，同时携带 registry、concept/facet、主任务和主方法；现有标签页明确显示为新旧混合索引。完整九分面导航、旧 URL 迁移和历史语义重标仍未完成。历史页面仍须经完整重写或受来源证明约束的重标流程，不能把旧标签直接当新语义。调查日期：2026-09-07。本文的数量门槛是本站建议，不是学术界统一标准。
 
 ## 0. 全量历史盘点与证据边界
 
@@ -243,7 +243,7 @@
 |---|---|---|
 | P0 | 统一registry、别名与角色；梳理 `utils.js:1053`、`utils.py:193` 和Prompt三份词表 | Node/Python/Prompt逐项一致；PEFT不能变LoRA，数据增强不能变预训练，说话人识别不能无条件变验证 |
 | P1 | current 已实施显式主任务/主方法、3–5 标签与独立 taxonomy seal；nullable task/topic 只保留为未来 schema roadmap | 旧契约只可显式 legacy 读取；current 未知/歧义项进入 review，不能伪造成功 |
-| P2 | `publish_common.py`、`publish-to-blog.py`、封面统计与Hugo搜索/主题页读取同一分类投影 | tags顺序不改变主任务；父级查询、OR/AND、去重计数和旧URL均有回归 |
+| P2 | 临时扁平发布投影已实施；完整 Hugo 分面搜索、父级查询与旧 URL 迁移仍待完成 | 新页显式绑定 registry/concept/facet/主角色；兼容期不把扁平计数冒充九分面统计 |
 | P3 | 只读历史候选、分层评测、shadow索引、分批迁移 | 未决项透明；原正文/评分不变；每次发布仍经过generate/review与远端验证 |
 
 current Node/Python parser 均从共享 registry 读取 active 中文首选标签；alias/deprecated 只能经显式 legacy 路径解释，不能进入新 canonical。Hugo `research_metadata.html` 与统计代码的首标签回退也应按新版分类状态显式停用，不能再从标签顺序猜测主任务或主方法。

@@ -76,6 +76,11 @@ from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_require
 from runtime_guard import require_external_runtime
 from llm_usage import with_llm_usage_context
 from utils import strip_md, parse_analysis
+from paper_taxonomy import (
+    TAXONOMY_FLAT_COMPAT_CONTRACT,
+    TAXONOMY_SELECTION_CONTRACT,
+    load_taxonomy,
+)
 from tutorial_payload_verifier import (
     TUTORIAL_FORMAT_CONTRACT,
     FRESH_AUTHORING_CONTRACT,
@@ -156,6 +161,12 @@ MANUAL_REVIEW_MODE = 'manual_complete'
 FINAL_PAGE_ARTIFACT_VERSION = 1
 RESEARCHER_WORKBENCH_CONTRACT = 'researcher-workbench-v1'
 RESEARCHER_SIDECAR_CONTRACT = 'researcher-sidecars-v1'
+FLAT_TAXONOMY_COMPAT_CONTRACT = TAXONOMY_FLAT_COMPAT_CONTRACT
+_PAGE_TAXONOMY = load_taxonomy()
+_PAGE_TAXONOMY_BY_ID = {
+    item['id']: item for item in _PAGE_TAXONOMY['concepts']
+    if item['status'] == 'active'
+}
 RESEARCHER_SIDECAR_FILENAMES = (
     'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json',
 )
@@ -2200,6 +2211,62 @@ def _researcher_public_url(relative):
     return f'{base_path}/{relative.relative_to("static").as_posix()}'
 
 
+def build_flat_taxonomy_compat_metadata(parsed, *, required=False):
+    """Bind current taxonomy semantics while retaining Hugo's flat ``tags`` field.
+
+    Legacy maintenance callers may omit current taxonomy proof. New production
+    inputs are validated before rendering and therefore always take this path.
+    Once a payload claims current validity, every ID, label, facet and role is
+    replayed against the exact registry bytes instead of trusting cached fields.
+    """
+    validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
+    if not isinstance(validation, dict) or validation.get('valid') is not True:
+        if required:
+            raise PublishDataValidationError('新页面缺少有效 current taxonomy selection')
+        return None
+    if validation.get('registryVersion') != _PAGE_TAXONOMY['version'] \
+            or validation.get('registrySha256') != _PAGE_TAXONOMY['registrySha256']:
+        raise PublishDataValidationError('页面 taxonomy selection 与当前 registry 不一致')
+    tags = parsed.get('tags')
+    concept_ids = validation.get('conceptIds')
+    if not isinstance(tags, list) or not isinstance(concept_ids, list) \
+            or len(tags) != len(concept_ids) or len(tags) not in range(3, 6):
+        raise PublishDataValidationError('页面 taxonomy 标签与 concept ID 集合不闭合')
+    concepts = []
+    for tag, concept_id in zip(tags, concept_ids):
+        concept = _PAGE_TAXONOMY_BY_ID.get(concept_id)
+        label = str(tag or '').removeprefix('#')
+        if not concept or concept['preferredLabel']['zh'] != label:
+            raise PublishDataValidationError('页面 taxonomy concept ID 与中文首选标签不一致')
+        concepts.append({
+            'id': concept_id,
+            'facet': concept['facet'],
+            'label': label,
+        })
+    primary_task_id = validation.get('primaryTaskId')
+    primary_method_id = validation.get('primaryMethodId')
+    primary_task = str(parsed.get('primaryTaskTag') or '').removeprefix('#')
+    primary_method = str(parsed.get('primaryMethodTag') or '').removeprefix('#')
+    task = _PAGE_TAXONOMY_BY_ID.get(primary_task_id)
+    method = _PAGE_TAXONOMY_BY_ID.get(primary_method_id)
+    if not task or task['facet'] != 'task' or task['preferredLabel']['zh'] != primary_task \
+            or not method or method['facet'] != 'method' \
+            or method['preferredLabel']['zh'] != primary_method \
+            or primary_task_id not in concept_ids or primary_method_id not in concept_ids:
+        raise PublishDataValidationError('页面 taxonomy 主任务/主方法角色无法重放')
+    return {
+        'contract': FLAT_TAXONOMY_COMPAT_CONTRACT,
+        'selectionContract': TAXONOMY_SELECTION_CONTRACT,
+        'registryVersion': _PAGE_TAXONOMY['version'],
+        'registrySha256': _PAGE_TAXONOMY['registrySha256'],
+        'primaryTaskId': primary_task_id,
+        'primaryMethodId': primary_method_id,
+        'primaryTask': primary_task,
+        'primaryMethod': primary_method,
+        'concepts': concepts,
+    }
+
+
 def build_researcher_workbench_bundle(
         paper, date_str, *, parsed=None, reader_plan=None,
         api_reader_payload=None, require_reader=False):
@@ -2252,6 +2319,8 @@ def build_researcher_workbench_bundle(
         raw_primary_task.lstrip('#'),
         'researcher workbench primaryTask', maximum=200,
     )
+    taxonomy = build_flat_taxonomy_compat_metadata(pa)
+    primary_method = taxonomy['primaryMethod'] if taxonomy else None
     rank_bucket = _validated_workbench_text(
         pa.get('rankBucket'), 'researcher workbench rankBucket', maximum=100,
     )
@@ -2282,6 +2351,7 @@ def build_researcher_workbench_bundle(
         'abstractSha256': abstract_sha,
         'assessment': {
             'primaryTask': primary_task,
+            **({'primaryMethod': primary_method, 'taxonomy': taxonomy} if taxonomy else {}),
             'score': score,
             'rankBucket': rank_bucket,
             'documentType': document_type,
@@ -2335,6 +2405,8 @@ def build_researcher_workbench_bundle(
         'identity': identity,
         'authors': authors,
         'primaryTask': primary_task,
+        'primaryMethod': primary_method,
+        'taxonomy': taxonomy,
         'score': score,
         'rankBucket': rank_bucket,
         'documentType': document_type,
@@ -2360,6 +2432,18 @@ def _researcher_workbench_frontmatter(bundle):
         'null' if identity['versionedId'] is None
         else json.dumps(identity['versionedId'], ensure_ascii=False)
     )
+    taxonomy = bundle.get('taxonomy')
+    taxonomy_marker = ''
+    if taxonomy:
+        taxonomy_marker = (
+            f'paper_digest_taxonomy_contract: "{taxonomy["contract"]}"\n'
+            f'paper_digest_taxonomy_selection_contract: "{taxonomy["selectionContract"]}"\n'
+            f'paper_digest_taxonomy_registry_version: "{taxonomy["registryVersion"]}"\n'
+            f'paper_digest_taxonomy_registry_sha256: "{taxonomy["registrySha256"]}"\n'
+            f'paper_digest_taxonomy_concepts: '
+            f'{json.dumps(taxonomy["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}\n'
+            f'paper_digest_primary_method: {json.dumps(taxonomy["primaryMethod"], ensure_ascii=False)}\n'
+        )
     return (
         f'paper_digest_workbench_contract: "{RESEARCHER_WORKBENCH_CONTRACT}"\n'
         f'paper_digest_reader_title: {json.dumps(bundle["readerTitle"], ensure_ascii=False)}\n'
@@ -2369,6 +2453,7 @@ def _researcher_workbench_frontmatter(bundle):
         f'paper_digest_arxiv_abs_url: {json.dumps(identity["absUrl"], ensure_ascii=False)}\n'
         f'paper_digest_arxiv_pdf_url: {json.dumps(identity["pdfUrl"], ensure_ascii=False)}\n'
         f'paper_digest_primary_task: {json.dumps(bundle["primaryTask"], ensure_ascii=False)}\n'
+        f'{taxonomy_marker}'
         f'paper_digest_score: {json.dumps(bundle["score"], allow_nan=False)}\n'
         f'paper_digest_rank_bucket: {json.dumps(bundle["rankBucket"], ensure_ascii=False)}\n'
         f'paper_digest_document_type: {json.dumps(bundle["documentType"], ensure_ascii=False)}\n'
@@ -2416,6 +2501,16 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
         'paper_digest_sidecars': bundle['sidecarRecords'],
         'description': bundle['oneSentenceThesis'],
     }
+    taxonomy = bundle.get('taxonomy')
+    if taxonomy:
+        expected.update({
+            'paper_digest_taxonomy_contract': taxonomy['contract'],
+            'paper_digest_taxonomy_selection_contract': taxonomy['selectionContract'],
+            'paper_digest_taxonomy_registry_version': taxonomy['registryVersion'],
+            'paper_digest_taxonomy_registry_sha256': taxonomy['registrySha256'],
+            'paper_digest_taxonomy_concepts': taxonomy['concepts'],
+            'paper_digest_primary_method': taxonomy['primaryMethod'],
+        })
     for field, value in expected.items():
         if frontmatter.get(field) != value:
             raise PublishDataValidationError(
@@ -2919,11 +3014,53 @@ def build_index_context_line(pa, aurl=''):
     return ' | '.join(bits)
 
 
+def _current_taxonomy_aggregate_metadata(papers):
+    if not papers:
+        return None
+    selections = []
+    for paper in papers:
+        parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
+        metadata = build_flat_taxonomy_compat_metadata(parsed)
+        if metadata is None:
+            return None
+        selections.append(metadata)
+    first = selections[0]
+    if any(item['registryVersion'] != first['registryVersion']
+           or item['registrySha256'] != first['registrySha256']
+           or item['selectionContract'] != first['selectionContract']
+           for item in selections[1:]):
+        raise PublishDataValidationError('汇总页混入不同 taxonomy registry/selection')
+    counts = {}
+    for item in selections:
+        tag = f'#{item["primaryTask"]}'
+        counts[tag] = counts.get(tag, 0) + 1
+    primary_tasks = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return {
+        'contract': FLAT_TAXONOMY_COMPAT_CONTRACT,
+        'selectionContract': first['selectionContract'],
+        'registryVersion': first['registryVersion'],
+        'registrySha256': first['registrySha256'],
+        'primaryTasks': primary_tasks,
+    }
+
+
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
-    tag_set = extract_all_tags([p for _, p, _ in scored] + unscored, limit=10)
-    top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
+    papers = [p for _, p, _ in scored] + unscored
+    tag_set = extract_all_tags(papers, limit=10)
+    taxonomy = _current_taxonomy_aggregate_metadata(papers)
+    top_tags = taxonomy['primaryTasks'][:8] if taxonomy \
+        else extract_top_tags(papers, limit=8)
+    taxonomy_marker = ''
+    if taxonomy:
+        taxonomy_marker = (
+            f'paper_digest_taxonomy_contract: "{taxonomy["contract"]}"\n'
+            f'paper_digest_taxonomy_selection_contract: "{taxonomy["selectionContract"]}"\n'
+            f'paper_digest_taxonomy_registry_version: "{taxonomy["registryVersion"]}"\n'
+            f'paper_digest_taxonomy_registry_sha256: "{taxonomy["registrySha256"]}"\n'
+            'paper_digest_taxonomy_scope: "aggregate-primary-task-counts"\n'
+        )
 
     conference_title = f'ICML 2026 论文速递' if category == 'icml-2026' else f'语音/音乐/音频论文速递 {date_str}'
     md = f"""---
@@ -2937,7 +3074,7 @@ layout: "posts"
 paper_digest_pipeline_owned: true
 paper_digest_page_type: index
 paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
----
+{taxonomy_marker}---
 
 # {conference_title}
 
@@ -2948,6 +3085,8 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
 ## ⚡ 今日概览
 
 ✅ 筛选入选 {total} 篇 → 🔬 深度分析完成
+
+{'🏷️ 标签说明：本期使用新版受控 taxonomy；站点标签页暂时兼容展示历史标签与新标签。' if taxonomy else ''}
 
 ### 🏷️ 热门方向
 

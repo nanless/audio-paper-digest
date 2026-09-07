@@ -59,6 +59,12 @@ class HistoricalPageScanTest(unittest.TestCase):
             'paper_digest_arxiv_id: "2601.00001"\n'
             'paper_digest_api_reader_contract: "beginner-researcher-v3"\n'
             f'paper_digest_api_reader_article_sha256: "{"a" * 64}"\n'
+            'paper_digest_primary_method: "Transformer"\n'
+            'paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\n'
+            'paper_digest_taxonomy_registry_version: "paper-taxonomy-v1"\n'
+            f'paper_digest_taxonomy_registry_sha256: "{"b" * 64}"\n'
+            'paper_digest_taxonomy_selection_contract: "paper-taxonomy-selection-v1"\n'
+            'paper_digest_taxonomy_concepts: [{id: task.asr, facet: task, label: 语音识别}]\n'
             'paper_digest_private_token: "sk-this-must-never-leave-frontmatter"\n'
             'paper_digest_sidecars: {unsafe: {sha256: "bad", url: "/Users/private/secret"}}\n'
             "---\n"
@@ -158,6 +164,9 @@ class HistoricalPageScanTest(unittest.TestCase):
         self.assertIsNone(evidence["paper_digest_api_reader_contract"]["value"])
         self.assertEqual(evidence["paper_digest_arxiv_id"]["value"], "2601.00001")
         self.assertEqual(evidence["paper_digest_page_type"]["value"], "paper")
+        self.assertIsNone(evidence["paper_digest_primary_method"]["value"])
+        self.assertIsNone(evidence["paper_digest_taxonomy_contract"]["value"])
+        self.assertIsNone(evidence["paper_digest_taxonomy_concepts"]["value"])
         self.assertEqual(ledger["source"]["remoteMain"]["availability"], "unavailable")
         self.assertEqual(ledger["source"]["trackedPages"]["count"], 4)
         self.assertEqual(validate_ledger(json.loads(serialized)), ledger)

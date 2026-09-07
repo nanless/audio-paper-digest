@@ -29,18 +29,22 @@ class HistoricalPageRenderTests(unittest.TestCase):
         assignment = {
             'status': 'assigned',
             'paperId': f'arxiv:{paper["arxivId"]}',
-            'primaryTaskId': 'task.spatial-audio',
+            'registryVersion': renderer.load_publish_to_blog()._PAGE_TAXONOMY['version'],
+            'registrySha256': renderer.load_publish_to_blog()._PAGE_TAXONOMY['registrySha256'],
+            'primaryTaskId': 'task.localization',
             'primaryMethodId': 'method.transformer',
-            'conceptIds': ['task.spatial-audio', 'method.transformer'],
+            'conceptIds': ['task.localization', 'method.transformer', 'research_focus.robustness'],
             'concepts': [
-                {'id': 'task.spatial-audio', 'preferredLabel': {'zh': '空间音频'}},
-                {'id': 'method.transformer', 'preferredLabel': {'zh': 'Transformer'}},
+                {'id': 'task.localization', 'facet': 'task', 'preferredLabel': {'zh': '声源定位'}},
+                {'id': 'method.transformer', 'facet': 'method', 'preferredLabel': {'zh': 'Transformer'}},
+                {'id': 'research_focus.robustness', 'facet': 'research_focus', 'preferredLabel': {'zh': '鲁棒性'}},
             ],
         }
         result = renderer.render_packet({
             'paper': paper, 'taxonomy': assignment, 'cohortDate': '2026-09-04',
         })
-        self.assertIn('tags: [空间音频, Transformer]', result['markdown'])
+        self.assertIn('tags: [声源定位, Transformer, 鲁棒性]', result['markdown'])
+        self.assertIn('paper_digest_primary_method: "Transformer"', result['markdown'])
         self.assertIn(sealed_summary, result['markdown'])
         self.assertNotIn('STALE PARSED SUMMARY', result['markdown'])
         self.assertIn('评分：**6.1/10**', result['markdown'])
@@ -54,10 +58,16 @@ class HistoricalPageRenderTests(unittest.TestCase):
         paper = llm_api_publication_fixture()
         paper.pop('arxivId', None)
         paper['directPaperId'] = 'conference:icassp:2026:icassp-arnumber:100'
+        paper['analysis'] += (
+            '\n\n## 标签\n#语音识别 #Transformer #低资源\n'
+            '主任务标签: #语音识别\n主方法标签: #Transformer\n补充标签: #低资源'
+        )
         result = renderer.render_packet({
             'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04',
         })
         self.assertIn('paper_digest_direct_paper_id:', result['markdown'])
+        self.assertIn('paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"', result['markdown'])
+        self.assertIn('paper_digest_primary_method: "Transformer"', result['markdown'])
         self.assertIn('conference:icassp:2026:icassp-arnumber:100', result['markdown'])
         self.assertIn('## 🧭 深度解读', result['markdown'])
         self.assertNotIn('paper_digest_arxiv_id:', result['markdown'])

@@ -39,6 +39,9 @@ def render_packet(packet):
                 ordered.append(concept_id)
         if any(concept_id not in concepts for concept_id in ordered):
             raise ValueError('taxonomy concept labels are incomplete')
+        if not isinstance(assignment.get('registryVersion'), str) \
+                or not isinstance(assignment.get('registrySha256'), str):
+            raise ValueError('taxonomy assignment registry identity is incomplete')
         labels = [f'#{concepts[concept_id]["preferredLabel"]["zh"]}' for concept_id in ordered]
         projected = dict(paper)
     publisher = load_publish_to_blog()
@@ -52,6 +55,7 @@ def render_packet(packet):
         parsed = publisher.parse_analysis(projected.get('analysis', ''))
         if not isinstance(parsed, dict):
             raise ValueError('sealed direct conference analysis cannot be reparsed')
+        taxonomy = publisher.build_flat_taxonomy_compat_metadata(parsed, required=True)
         title = publisher.plain_title_for_publish(projected.get('title', ''))
         if not title:
             raise ValueError('direct conference title is required')
@@ -71,6 +75,13 @@ def render_packet(packet):
             'draft: false', f'tags: {json.dumps(tags, ensure_ascii=False)}',
             'categories: [论文速递]', 'paper_digest_pipeline_owned: true',
             'paper_digest_page_type: paper', f'paper_digest_direct_paper_id: {json.dumps(projected["directPaperId"], ensure_ascii=False)}',
+            f'paper_digest_taxonomy_contract: {json.dumps(taxonomy["contract"])}',
+            f'paper_digest_taxonomy_selection_contract: {json.dumps(taxonomy["selectionContract"])}',
+            f'paper_digest_taxonomy_registry_version: {json.dumps(taxonomy["registryVersion"])}',
+            f'paper_digest_taxonomy_registry_sha256: {json.dumps(taxonomy["registrySha256"])}',
+            f'paper_digest_taxonomy_concepts: {json.dumps(taxonomy["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}',
+            f'paper_digest_primary_task: {json.dumps(taxonomy["primaryTask"], ensure_ascii=False)}',
+            f'paper_digest_primary_method: {json.dumps(taxonomy["primaryMethod"], ensure_ascii=False)}',
             '---', '', f'# 📄 {reader_title}', '', f'> 会议论文 ID：`{projected["directPaperId"]}`', ''
         ]
         if tags:
@@ -93,6 +104,15 @@ def render_packet(packet):
         projected['parsed']['tags'] = labels
         projected['parsed']['primaryTaskTag'] = f'#{concepts[assignment["primaryTaskId"]]["preferredLabel"]["zh"]}'
         projected['parsed']['primaryMethodTag'] = f'#{concepts[assignment["primaryMethodId"]]["preferredLabel"]["zh"]}'
+        projected['parsed']['taxonomyValidation'] = {
+            'valid': True,
+            'errors': [],
+            'registryVersion': assignment['registryVersion'],
+            'registrySha256': assignment['registrySha256'],
+            'primaryTaskId': assignment['primaryTaskId'],
+            'primaryMethodId': assignment['primaryMethodId'],
+            'conceptIds': ordered,
+        }
     markdown, _ = publisher.generate_paper_page(projected, date, '论文速递')
     assets = []
     with tempfile.TemporaryDirectory(prefix='historical-page-render-') as temporary:

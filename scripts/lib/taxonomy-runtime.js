@@ -6,6 +6,7 @@ const taxonomyApi = require('./paper-taxonomy.js');
 
 const TAXONOMY_PROJECTION_CONTRACT = 'paper-taxonomy-prompt-projection-v1';
 const TAXONOMY_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1';
+const TAXONOMY_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1';
 const DEFAULT_REGISTRY_PATH = path.resolve(__dirname, '../../config/paper-taxonomy.json');
 
 function sha256(value) {
@@ -136,6 +137,7 @@ function createTaxonomyRuntime(options = {}) {
         projectionSha256: sha256(projection),
         projectionContract: TAXONOMY_PROJECTION_CONTRACT,
         selectionContract: TAXONOMY_SELECTION_CONTRACT,
+        flatCompatContract: TAXONOMY_FLAT_COMPAT_CONTRACT,
         allowedTags,
         taskTags,
         methodTags,
@@ -154,6 +156,7 @@ function getDefaultTaxonomyRuntime() {
 module.exports = {
     TAXONOMY_PROJECTION_CONTRACT,
     TAXONOMY_SELECTION_CONTRACT,
+    TAXONOMY_FLAT_COMPAT_CONTRACT,
     DEFAULT_REGISTRY_PATH,
     buildPromptProjection,
     createTaxonomyRuntime,

@@ -9,7 +9,8 @@ const contract = require('../scripts/analysis-contract.js');
 const {
     createTaxonomyRuntime,
     TAXONOMY_PROJECTION_CONTRACT,
-    TAXONOMY_SELECTION_CONTRACT
+    TAXONOMY_SELECTION_CONTRACT,
+    TAXONOMY_FLAT_COMPAT_CONTRACT
 } = require('../scripts/lib/taxonomy-runtime.js');
 
 const registryPath = path.resolve(__dirname, '../config/paper-taxonomy.json');
@@ -18,6 +19,8 @@ test('runtime derives all active preferred labels, roles and compact projection 
     const runtime = createTaxonomyRuntime({ registryPath });
     assert.equal(runtime.projectionContract, TAXONOMY_PROJECTION_CONTRACT);
     assert.equal(runtime.selectionContract, TAXONOMY_SELECTION_CONTRACT);
+    assert.equal(runtime.flatCompatContract, TAXONOMY_FLAT_COMPAT_CONTRACT);
+    assert.equal(runtime.flatCompatContract, 'paper-taxonomy-flat-tags-compat-v1');
     assert.match(runtime.projectionSha256, /^[a-f0-9]{64}$/);
     assert.ok(runtime.allowedTags.has('#众包评测'));
     assert.ok(runtime.methodTags.has('#众包评测'));
