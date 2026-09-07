@@ -7764,27 +7764,43 @@ async function fetchArxivText(arxivId) {
 // including on the healthy HTML path.  This deliberately bypasses the normal
 // fresh-source cache and uses the same mandatory arXiv CONNECT dispatcher as
 // the full-text fetcher above.
-async function fetchArxivPdfUncached(arxivId) {
+async function fetchArxivPdfUncached(arxivId, options = {}) {
     const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
     if (!/^\d{4}\.\d{4,5}$/.test(normalized)) {
         throw new Error('arXiv PDF fetch requires a normalized modern arXiv ID');
     }
-    const url = `https://arxiv.org/pdf/${normalized}.pdf`;
-    const response = await fetch(url, {
-        headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
-        signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
-        dispatcher: getArxivFetchDispatcher()
-    });
-    if (!response.ok) throw new Error(`arXiv PDF ${normalized} download failed: HTTP ${response.status}`);
-    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-    if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
-        throw new Error(`arXiv PDF ${normalized} returned unexpected Content-Type ${contentType}`);
+    const preferred = String(options.preferredSourceId || '').trim();
+    if (preferred && (!/^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/.test(preferred)
+        || preferred.replace(/v\d+$/i, '') !== normalized)) {
+        throw new Error('arXiv PDF preferred source ID belongs to another paper or is malformed');
     }
-    const bytes = await readResponseBufferWithLimit(response, ARXIV_PDF_MAX_BYTES);
-    if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
-        throw new Error(`arXiv PDF ${normalized} returned an invalid PDF header`);
+    const candidates = [...new Set([normalized, preferred, ...getArxivHtmlIds(normalized)].filter(Boolean))];
+    const fetchImpl = options.fetchImpl || fetch; let currentPdfStatus = null;
+    for (const candidate of candidates) {
+        const requestedUrl = `https://arxiv.org/pdf/${candidate}.pdf`;
+        const response = await fetchImpl(requestedUrl, {
+            headers: { 'User-Agent': ARXIV_CONFIG.userAgent },
+            signal: AbortSignal.timeout(ARXIV_PDF_FETCH_TIMEOUT_MS),
+            dispatcher: options.dispatcher || getArxivFetchDispatcher()
+        });
+        if (!response.ok) {
+            if (candidate === normalized) currentPdfStatus = response.status;
+            if (response.status === 404) continue;
+            throw new Error(`arXiv PDF ${candidate} download failed: HTTP ${response.status}`);
+        }
+        const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+        if (contentType && !contentType.includes('pdf') && !contentType.includes('octet-stream')) {
+            throw new Error(`arXiv PDF ${candidate} returned unexpected Content-Type ${contentType}`);
+        }
+        const bytes = await readResponseBufferWithLimit(response, ARXIV_PDF_MAX_BYTES);
+        if (bytes.length < 5 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+            throw new Error(`arXiv PDF ${candidate} returned an invalid PDF header`);
+        }
+        const actualUrl = String(response.url || requestedUrl);
+        return { bytes, url: actualUrl, sourceId: candidate, fetchedAt: new Date().toISOString(),
+            currentPdfUnavailable: candidate !== normalized, currentPdfStatus };
     }
-    return { bytes, url, fetchedAt: new Date().toISOString() };
+    throw new Error(`arXiv PDF ${normalized} download failed: HTTP ${currentPdfStatus || 404}`);
 }
 
 // Figure evidence for a historical fresh rewrite is intentionally not routed

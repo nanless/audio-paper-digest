@@ -8,6 +8,8 @@ const path = require('node:path');
 const test = require('node:test');
 const api = require('../scripts/lib/historical-direct-publication.js');
 const cli = require('../scripts/historical-direct-publication.js');
+const freshSource = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
+const directPageStaging = require('../scripts/lib/historical-direct-page-staging.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const oid = char => char.repeat(40);
@@ -137,4 +139,57 @@ test('CLI rejects ambiguous modes and parses explicit publication scope', () => 
     const parsed = cli.parseArgs(['status', '--publication-id', publicationId, '--live-remote', 'true']);
     assert.deepEqual(parsed, { action: 'status', publicationId, liveRemote: true });
     assert.equal(cli.parseArgs(['status', '--publication-id', publicationId]).liveRemote, true);
+});
+
+function versionedFixture() {
+    const arxivId = '2403.14817'; const selectedSourceId = `${arxivId}v1`;
+    const sourceVersion = freshSource.historicalVersionIdentity({ arxivId, textSourceId: selectedSourceId,
+        pdf: { sourceId: selectedSourceId, url: `https://arxiv.org/pdf/${selectedSourceId}.pdf`,
+            currentPdfUnavailable: true, currentPdfStatus: 404 } });
+    const item = { paperId: `arxiv:${arxivId}`, route: { kind: 'arxiv-fresh-fetch', arxivId } };
+    const source = { sourceId: selectedSourceId, sourceManifestSha256: hash('8'), sourceVersion };
+    return { arxivId, selectedSourceId, sourceVersion, item, source };
+}
+
+test('publication authority explicitly binds registry and staging historical-version identity', () => {
+    const f = versionedFixture();
+    const proof = api.historicalSourceVersionProof(f.item, { source: f.source }, { sourceDisclosure: f.sourceVersion });
+    assert.equal(proof.sourceVersionIdentitySha256, f.sourceVersion.identitySha256);
+    assert.equal(proof.sourceManifestSha256, f.source.sourceManifestSha256);
+    assert.deepEqual(proof.sourceVersion, f.sourceVersion);
+    const drifted = structuredClone(f.sourceVersion); drifted.selectedSourceId = `${f.arxivId}v2`;
+    assert.throws(() => api.historicalSourceVersionProof(f.item, { source: f.source }, { sourceDisclosure: drifted }),
+        /historical-version proof drifted|identity evidence\/SHA drifted/);
+    assert.throws(() => api.historicalSourceVersionProof(f.item, { source: { ...f.source, sourceVersion: undefined } },
+        { sourceDisclosure: f.sourceVersion }), /has no registry source proof/);
+});
+
+test('deterministic publication review requires one exact top warning for a versioned direct page', () => {
+    const f = versionedFixture();
+    const producer = { kind: 'direct-page-staging', paperId: f.item.paperId, runId: publicationId,
+        manifestSha256: hash('9'), sourceVersion: f.sourceVersion,
+        sourceVersionIdentitySha256: f.sourceVersion.identitySha256,
+        sourceManifestSha256: f.source.sourceManifestSha256 };
+    const disclosure = directPageStaging.arxivHistoricalVersionPageDisclosure(f.item, f.source);
+    const frontMatter = '---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\ndraft: false\n---\n';
+    const check = text => api.deterministicReview({ path: 'content/posts/versioned.md', sha256: sha(Buffer.from(text)),
+        producers: [producer] }, Buffer.from(text));
+    const exact = `${frontMatter}${disclosure}\n\n# body\n`;
+    assert.equal(check(exact).sourceVersionIdentitySha256, f.sourceVersion.identitySha256);
+    assert.throws(() => check(`${frontMatter}# body\n`), /lost or duplicated its exact top disclosure/);
+    assert.throws(() => check(`${frontMatter}# body\n\n${disclosure}\n`), /lost or duplicated its exact top disclosure/);
+    assert.throws(() => check(`${frontMatter}${disclosure}\n\n${disclosure}\n`), /lost or duplicated its exact top disclosure/);
+
+    const ordinaryProducer = { kind: 'direct-page-staging', paperId: f.item.paperId, runId: publicationId,
+        manifestSha256: hash('9') };
+    assert.throws(() => api.deterministicReview({ path: 'content/posts/ordinary.md', sha256: sha(Buffer.from(exact)),
+        producers: [ordinaryProducer] }, Buffer.from(exact)), /ordinary direct page forged/);
+});
+
+test('review protocol fingerprints fresh source, runner and page-staging implementations', () => {
+    const names = api.reviewProtocolImplementationFiles().map(filename => path.basename(filename));
+    assert.ok(names.includes('fresh-arxiv-rewrite-source.js'));
+    assert.ok(names.includes('historical-direct-rewrite-runner.js'));
+    assert.ok(names.includes('historical-direct-page-staging.js'));
+    assert.match(api.reviewProtocolFingerprint({ hugoVersion: 'hugo v0.fixture' }), /^[a-f0-9]{64}$/);
 });

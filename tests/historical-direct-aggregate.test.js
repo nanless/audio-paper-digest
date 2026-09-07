@@ -12,6 +12,7 @@ const catalogApi = require('../scripts/lib/historical-direct-rewrite-input-catal
 const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
 const directControl = require('../scripts/lib/historical-direct-control.js');
+const freshArxiv = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
 const conferenceProjections = require('../scripts/lib/historical-conference-page-projections.js');
 const icmlPosterApi = require('../scripts/lib/historical-icml-poster-authority.js');
 const engine = require('../scripts/analysis-engine.js');
@@ -91,7 +92,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
     return paper;
 }
-async function fixture(t, { mixedDailyConference = false } = {}) {
+async function fixture(t, { mixedDailyConference = false, historicalVersion = false } = {}) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-aggregate-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blog = path.join(root, 'blog'); const metadata = path.join(root, 'metadata.json'); const pdf = path.join(root, 'conference.pdf');
@@ -186,15 +187,22 @@ async function fixture(t, { mixedDailyConference = false } = {}) {
         sourceRoot: path.join(root, 'sources'), failureRoot: path.join(root, 'failure-handoffs') };
     writeJson(paths.planFile, plan); writeJson(paths.projectionFile, projection);
     const capture = async ({ arxivId, generation }) => {
-        const text = `fresh official text ${arxivId} generation ${generation}`;
+        const sourceVersion = historicalVersion && arxivId === arxivOne ? freshArxiv.historicalVersionIdentity({
+            arxivId, textSourceId: `${arxivId}v2`, pdf: { sourceId: `${arxivId}v2`,
+                url: `https://arxiv.org/pdf/${arxivId}v2.pdf`, currentPdfUnavailable: true, currentPdfStatus: 404 }
+        }) : null;
+        const text = `${sourceVersion ? `【来源版本警告】${sourceVersion.warning}\n\n` : ''}fresh official text ${arxivId} generation ${generation}`;
         const pdfBytes = Buffer.from(`%PDF-1.4\n${arxivId}/${generation}\n%%EOF\n`);
         const structuredArtifacts = { version: 1, tables: [], formulas: [], figures: [], flattenedTextSha256: sha(text) };
         structuredArtifacts.payloadSha256 = sha(JSON.stringify(structuredArtifacts));
         return { arxivId, generation, sourceManifestSha256: sha(`manifest:${arxivId}:${generation}`), text,
-            runtimeDetails: { paperId: `arxiv:${arxivId}`, source: 'html', sourceId: arxivId, text, imageInfos: [],
+            runtimeDetails: { paperId: `arxiv:${arxivId}`, source: sourceVersion ? 'pdf' : 'html',
+                sourceId: sourceVersion?.selectedSourceId || arxivId, text, imageInfos: [],
                 structuredArtifacts,
-                htmlAvailability: 'available', htmlAttempts: 1, warnings: [] },
-            manifest: { text: { responseSha256: sha(text), source: 'html', sourceId: arxivId },
+                htmlAvailability: sourceVersion ? 'permanent_miss' : 'available', htmlAttempts: 1,
+                warnings: sourceVersion ? [sourceVersion.warning] : [], ...(sourceVersion ? { sourceVersion } : {}) },
+            manifest: { text: { responseSha256: sha(text), source: sourceVersion ? 'pdf' : 'html',
+                sourceId: sourceVersion?.selectedSourceId || arxivId },
                 pdf: { responseSha256: sha(pdfBytes) } } };
     };
     const analyze = async ({ item, sourceDescriptor, sourceDetails }) => sealedAnalysis(item, sourceDescriptor, sourceDetails);
@@ -298,6 +306,9 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.equal(aggregate.source.sourceGeneration.generation, 1);
     assert.equal(aggregate.source.conferenceTaskCoverageSha256, f.projection.conferenceTaskCoverageSha256);
     assert.equal(aggregate.source.conferenceTaskPublicationReady, true);
+    assert.equal(Object.hasOwn(aggregate.source.sourceGeneration, 'historicalVersions'), false);
+    assert.ok(aggregate.members.every(member => !Object.hasOwn(member, 'sourceVersion')));
+    assert.doesNotMatch(aggregate.markdown, /当前稿不可用|分析官方历史版本/);
     assert.match(aggregate.markdown, /FRESH_READER|source-only/);
     assert.match(aggregate.markdown, /paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"/);
     assert.match(aggregate.markdown, /paper_digest_taxonomy_registry_sha256: "[a-f0-9]{64}"/);
@@ -315,6 +326,43 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.equal(output.length, 1); assert.equal(fs.statSync(output[0].filename).mode & 0o777, 0o600);
     assert.equal(fs.statSync(output[0].pageFilename).mode & 0o777, 0o600);
     assert.match(fs.readFileSync(output[0].pageFilename, 'utf8'), /\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)/);
+});
+
+test('direct aggregate makes a sealed historical arXiv version visible and rejects identity warning drift', async t => {
+    const f = await fixture(t, { historicalVersion: true });
+    const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
+    const versioned = aggregate.members.find(member => member.paperId === 'arxiv:2608.00001');
+    const ordinary = aggregate.members.find(member => member.paperId === 'arxiv:2608.00002');
+    assert.equal(versioned.sourceVersion.contract, 'arxiv-historical-version-source-v1');
+    assert.equal(versioned.sourceVersion.selectedSourceId, '2608.00001v2');
+    assert.equal(versioned.sourceVersion.selectedPdfUrl, 'https://arxiv.org/pdf/2608.00001v2.pdf');
+    assert.equal(Object.hasOwn(ordinary, 'sourceVersion'), false);
+    const binding = aggregate.source.sourceGeneration;
+    assert.deepEqual(binding.historicalVersions, [{ paperId: 'arxiv:2608.00001',
+        identitySha256: versioned.sourceVersion.identitySha256, selectedSourceId: '2608.00001v2',
+        selectedPdfUrl: 'https://arxiv.org/pdf/2608.00001v2.pdf' }]);
+    assert.equal(binding.historicalVersionSetSha256, direct.stableHash(binding.historicalVersions));
+    assert.match(aggregate.markdown, /论文评分排行榜[\s\S]*当前稿不可用；分析官方历史版本 \[2608\.00001v2\]\(https:\/\/arxiv\.org\/pdf\/2608\.00001v2\.pdf\)/);
+    assert.match(aggregate.markdown, /英文题目：[\s\S]*\*\*当前稿不可用\*\*：本条目只封存并分析官方历史版本/);
+    assert.match(aggregate.markdown, /\[arXiv 当前条目\]\(https:\/\/arxiv\.org\/abs\/2608\.00001\) \| \[分析所用官方历史版本 2608\.00001v2\]\(https:\/\/arxiv\.org\/pdf\/2608\.00001v2\.pdf\)/);
+
+    const registry = JSON.parse(fs.readFileSync(f.firstRegistry, 'utf8'));
+    const entries = registry.entries.map(entry => entry.paperId !== 'arxiv:2608.00001' ? entry : {
+        ...entry, source: { ...entry.source, sourceVersion: { ...entry.source.sourceVersion,
+            warning: `${entry.source.sourceVersion.warning} drift` } }
+    });
+    const filename = path.join(f.root, 'drifted-version-registry.json');
+    writeRegistry(filename, rebasedRegistry(registry, entries));
+    assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f, filename), daily: DATE }),
+        /historical-version identity evidence\/SHA drifted/);
+    const removedEntries = registry.entries.map(entry => {
+        if (entry.paperId !== 'arxiv:2608.00001') return entry;
+        const source = { ...entry.source }; delete source.sourceVersion; return { ...entry, source };
+    });
+    const removedFilename = path.join(f.root, 'removed-version-registry.json');
+    writeRegistry(removedFilename, rebasedRegistry(registry, removedEntries));
+    assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f, removedFilename), daily: DATE }),
+        /source ID\/disclosure presence drifted/);
 });
 
 test('direct aggregate signs an explicit mixed source binding for a daily arXiv and ICML cohort', async t => {
@@ -339,6 +387,19 @@ test('direct aggregate signs an explicit mixed source binding for a daily arXiv 
     assert.equal(binding.conference.sourceSetSha256, direct.stableHash(binding.conference.sources));
     const body = structuredClone(binding); delete body.bindingSha256;
     assert.equal(binding.bindingSha256, direct.stableHash(body));
+});
+
+test('mixed daily source receipt retains the conditional historical-version identity', async t => {
+    const f = await fixture(t, { mixedDailyConference: true, historicalVersion: true });
+    const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
+    const binding = aggregate.source.sourceGeneration;
+    assert.equal(binding.contract, 'historical-direct-mixed-source-v1');
+    assert.equal(binding.arxiv.historicalVersions.length, 1);
+    assert.equal(binding.arxiv.historicalVersions[0].selectedSourceId, '2608.00001v2');
+    const source = binding.arxiv.sources.find(item => item.paperId === 'arxiv:2608.00001');
+    assert.equal(source.sourceVersionIdentitySha256, binding.arxiv.historicalVersions[0].identitySha256);
+    assert.equal(source.selectedPdfUrl, 'https://arxiv.org/pdf/2608.00001v2.pdf');
+    assert.equal(binding.arxiv.sourceSetSha256, direct.stableHash(binding.arxiv.sources));
 });
 
 test('direct aggregate rejects a partial daily cohort', async t => {

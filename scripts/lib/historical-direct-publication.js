@@ -14,6 +14,8 @@ const legacyPublication = require('./historical-publication.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const runnerApi = require('./historical-direct-rewrite-runner.js');
 const aggregateApi = require('./historical-direct-aggregate.js');
+const directPageStagingApi = require('./historical-direct-page-staging.js');
+const freshArxivSourceApi = require('./fresh-arxiv-rewrite-source.js');
 const projectionIo = require('./historical-conference-page-projections.js');
 
 const PLAN_CONTRACT = 'historical-direct-publication-plan-v1';
@@ -32,6 +34,7 @@ const GIT_OID_RE = /^[a-f0-9]{40,64}$/;
 const SAFE_ARTIFACT_RE = /^(?:content\/posts\/[A-Za-z0-9._/-]+\.md|static\/(?:images|data)\/papers\/[A-Za-z0-9._/-]+)$/;
 const MAX_ARTIFACT_BYTES = 128 * 1024 * 1024;
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
+const HISTORICAL_VERSION_NOTICE_MARKER = '来源版本说明（当前稿不可用）';
 
 class HistoricalDirectPublicationError extends Error {
     constructor(message) {
@@ -163,6 +166,30 @@ function absorbArtifact(byPath, record) {
     }
     byPath.set(record.path, record);
 }
+function historicalSourceVersionProof(item, active, manifest) {
+    const sourceVersion = active?.source?.sourceVersion;
+    const manifestVersion = manifest?.sourceDisclosure?.contract === freshArxivSourceApi.HISTORICAL_VERSION_CONTRACT
+        ? manifest.sourceDisclosure : null;
+    if (!sourceVersion) {
+        if (manifestVersion) fail(`${item.paperId} staged historical-version disclosure has no registry source proof`);
+        return null;
+    }
+    if (item.route?.kind !== 'arxiv-fresh-fetch') fail(`${item.paperId} non-arXiv registry source carries historical-version proof`);
+    let normalized;
+    try {
+        normalized = freshArxivSourceApi.normalizeHistoricalVersionIdentity(sourceVersion, item.route.arxivId);
+    } catch (error) {
+        fail(`${item.paperId} registry historical-version proof is invalid: ${error.message}`);
+    }
+    if (!manifestVersion || stableHash(manifestVersion) !== stableHash(normalized)
+        || active.source.sourceId !== normalized.selectedSourceId
+        || !SHA_RE.test(String(active.source.sourceManifestSha256 || ''))
+        || normalized.identitySha256 !== sourceVersion.identitySha256) {
+        fail(`${item.paperId} registry/staging historical-version proof drifted`);
+    }
+    return { sourceVersion: clone(normalized), sourceVersionIdentitySha256: normalized.identitySha256,
+        sourceManifestSha256: active.source.sourceManifestSha256 };
+}
 function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDispositionFile,
     stagingRoot, executionRoot, aggregateRoot } = {}) {
     for (const [label, filename] of Object.entries({ planFile, registryFile, projectionFile, visualDispositionFile })) {
@@ -184,11 +211,14 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
         const active = byEntry.get(item.paperId); const manifest = runnerApi.replayDirectPageStaging({ item, active, stagingRoot, executionRoot });
         const relativeDirectory = path.relative(path.resolve(stagingRoot), path.resolve(active.staging.directory)).split(path.sep).join('/');
         if (!relativeDirectory || relativeDirectory.startsWith('..')) fail(`${item.paperId} staging directory escaped configured root`);
+        const sourceVersionProof = historicalSourceVersionProof(item, active, manifest);
         stageProofs.push({ paperId: item.paperId, runId: item.runId, manifestSha256: manifest.manifestSha256,
             pageSetSha256: manifest.pageSetSha256, assetSetSha256: manifest.assetSetSha256,
-            stagingBindingSha256: active.staging.stagingBindingSha256 });
+            stagingBindingSha256: active.staging.stagingBindingSha256,
+            ...(sourceVersionProof ? { sourceVersionIdentitySha256: sourceVersionProof.sourceVersionIdentitySha256 } : {}) });
         const producer = { kind: 'direct-page-staging', paperId: item.paperId, runId: item.runId,
-            manifestSha256: manifest.manifestSha256 };
+            manifestSha256: manifest.manifestSha256,
+            ...(sourceVersionProof || {}) };
         for (const page of manifest.pages) absorbArtifact(byPath, { path: page.pagePath, sha256: page.contentSha256,
             baselineSha256: page.sourcePageContentSha256, producers: [producer],
             source: { kind: 'direct-page-staging', directory: relativeDirectory, stagedPath: page.stagedPath } });
@@ -434,9 +464,14 @@ function loadGeneration(loadedPlan) {
     return { root, manifest: value, fileSha256: loaded.fileSha256 };
 }
 
+function reviewProtocolImplementationFiles() {
+    return [__filename, require.resolve('./historical-direct-aggregate.js'),
+        require.resolve('./fresh-arxiv-rewrite-source.js'), require.resolve('./historical-direct-rewrite-runner.js'),
+        require.resolve('./historical-direct-page-staging.js'), path.resolve(__dirname, '../historical-direct-review.py'),
+        path.resolve(__dirname, '../publish-to-blog.py')];
+}
 function reviewProtocolFingerprint(dependencies = {}) {
-    const files = [__filename, require.resolve('./historical-direct-aggregate.js'), require.resolve('./historical-direct-page-staging.js'),
-        path.resolve(__dirname, '../historical-direct-review.py'), path.resolve(__dirname, '../publish-to-blog.py')];
+    const files = reviewProtocolImplementationFiles();
     const code = files.map(filename => ({ filename: path.basename(filename), sha256: sha256(fs.readFileSync(filename)) }));
     return stableHash({ contract: REVIEW_CONTRACT, version: VERSION, code,
         semanticReview: semanticReviewProtocol(),
@@ -480,10 +515,50 @@ function deterministicReview(record, bytes) {
                 fail(`historical Markdown contains unsafe/noncanonical link: ${record.path}`);
             }
         }
-        const priorPreprint = record.producers.some(producer => producer.paperId === PRIOR_PREPRINT_PAPER_ID);
+        const producers = Array.isArray(record.producers) ? record.producers : [];
+        const directProducers = producers.filter(producer => producer?.kind === 'direct-page-staging');
+        let reviewedSourceVersionIdentitySha256 = null;
+        for (const producer of directProducers) {
+            const versionFields = ['sourceVersion', 'sourceVersionIdentitySha256', 'sourceManifestSha256'];
+            const present = versionFields.filter(field => Object.hasOwn(producer, field));
+            if (present.length && present.length !== versionFields.length) {
+                fail(`historical-version producer proof is incomplete: ${record.path}`);
+            }
+        }
+        const versioned = directProducers.filter(producer => Object.hasOwn(producer, 'sourceVersion'));
+        if (versioned.length > 1) fail(`multiple historical-version producers claim one page: ${record.path}`);
+        if (versioned.length === 1) {
+            const producer = versioned[0]; let sourceVersion;
+            try {
+                sourceVersion = freshArxivSourceApi.normalizeHistoricalVersionIdentity(
+                    producer.sourceVersion, producer.sourceVersion.canonicalArxivId);
+            } catch (error) {
+                fail(`historical-version producer proof is invalid: ${record.path}: ${error.message}`);
+            }
+            if (producer.paperId !== `arxiv:${sourceVersion.canonicalArxivId}`
+                || producer.sourceVersionIdentitySha256 !== sourceVersion.identitySha256
+                || !SHA_RE.test(String(producer.sourceManifestSha256 || ''))) {
+                fail(`historical-version producer identity drifted: ${record.path}`);
+            }
+            const expected = directPageStagingApi.arxivHistoricalVersionPageDisclosure({
+                paperId: producer.paperId,
+                route: { kind: 'arxiv-fresh-fetch', arxivId: sourceVersion.canonicalArxivId }
+            }, { sourceVersion, sourceId: sourceVersion.selectedSourceId,
+                sourceManifestSha256: producer.sourceManifestSha256 });
+            const occurrences = text.split(HISTORICAL_VERSION_NOTICE_MARKER).length - 1;
+            if (occurrences !== 1 || !directPageStagingApi.hasExactTopDisclosure(text, expected)) {
+                fail(`historical-version page lost or duplicated its exact top disclosure: ${record.path}`);
+            }
+            reviewedSourceVersionIdentitySha256 = sourceVersion.identitySha256;
+        } else if (directProducers.length && text.includes(HISTORICAL_VERSION_NOTICE_MARKER)) {
+            fail(`ordinary direct page forged a historical-version disclosure: ${record.path}`);
+        }
+        const priorPreprint = producers.some(producer => producer.paperId === PRIOR_PREPRINT_PAPER_ID);
         if (priorPreprint && (!text.includes('非 Camera-ready') || !text.includes('作者早期预印本'))) {
             fail('authorized prior-preprint page lost its visible disclosure');
         }
+        return { path: record.path, sha256: record.sha256, gate: 'deterministic-pass',
+            ...(reviewedSourceVersionIdentitySha256 ? { sourceVersionIdentitySha256: reviewedSourceVersionIdentitySha256 } : {}) };
     }
     return { path: record.path, sha256: record.sha256, gate: 'deterministic-pass' };
 }
@@ -926,8 +1001,8 @@ module.exports = {
     PLAN_CONTRACT, GENERATION_CONTRACT, REVIEW_CONTRACT, ACTIVATION_INTENT_CONTRACT, ACTIVATION_CONTRACT,
     COMMIT_CONTRACT, PUBLICATION_CONTRACT, VISUAL_DISPOSITION_CONTRACT, STATUS_CONTRACT,
     VERSION, UUID_RE, HistoricalDirectPublicationError, stableHash, safeRelative,
-    normalizeVisualDisposition, buildVisualDisposition, loadDirectAuthority,
-    buildPlan, validatePlan, writePlan, loadPlan, generate, loadGeneration, reviewProtocolFingerprint,
+    normalizeVisualDisposition, buildVisualDisposition, historicalSourceVersionProof, loadDirectAuthority,
+    buildPlan, validatePlan, writePlan, loadPlan, generate, loadGeneration, reviewProtocolImplementationFiles, reviewProtocolFingerprint,
     semanticReviewProtocol, historicalReviewConcurrency, defaultSemanticReview,
     deterministicReview, review, loadReview, activate, loadActivation, publish, loadPublication, status,
     defaultBlogState, defaultGitBlob, defaultValidateActivatedWorktree, defaultValidateActivationRecovery,

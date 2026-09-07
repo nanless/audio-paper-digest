@@ -10,6 +10,7 @@ const path = require('node:path');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const runnerApi = require('./historical-direct-rewrite-runner.js');
 const directPages = require('./historical-direct-page-staging.js');
+const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
 const projectionIo = require('./historical-conference-page-projections.js');
 const { parseAnalysis } = require('../utils.js');
 const taxonomyRuntime = require('./taxonomy-runtime.js').getDefaultTaxonomyRuntime();
@@ -408,8 +409,9 @@ function exactRegistryEntry(entry, item) {
 }
 function expectedSource(entry, item) {
     if (item.route.kind === 'arxiv-fresh-fetch') {
+        const hasSourceVersion = Object.hasOwn(entry.source || {}, 'sourceVersion');
         exact(entry.source, ['kind', 'paperId', 'generation', 'sourceId', 'textSha256', 'structuredArtifactsSha256', 'pdfSha256', 'sourceManifestSha256',
-            'sourceBinding', 'sourceRunIdentitySha256', 'sourceSnapshotSha256'], `${item.paperId} arXiv source`);
+            'sourceBinding', 'sourceRunIdentitySha256', 'sourceSnapshotSha256', ...(hasSourceVersion ? ['sourceVersion'] : [])], `${item.paperId} arXiv source`);
         if (entry.source.kind !== item.route.kind || entry.source.paperId !== item.paperId || !Number.isSafeInteger(entry.source.generation)
             || entry.source.generation < 1 || !validSha(entry.source.textSha256) || !validSha(entry.source.pdfSha256)
             || !validSha(entry.source.structuredArtifactsSha256) || typeof entry.source.sourceId !== 'string' || !entry.source.sourceId
@@ -420,6 +422,16 @@ function expectedSource(entry, item) {
             || sourceBinding.pdfSha256 !== entry.source.pdfSha256 || sourceBinding.sourceManifestSha256 !== entry.source.sourceManifestSha256
             || planApi.directSourceRunIdentity(item, sourceBinding) !== entry.source.sourceRunIdentitySha256) {
             fail(`${item.paperId} arXiv source descriptor drifted`);
+        }
+        if (/v[1-9]\d*$/i.test(entry.source.sourceId) !== hasSourceVersion) {
+            fail(`${item.paperId} historical arXiv source ID/disclosure presence drifted`);
+        }
+        if (hasSourceVersion) {
+            const normalized = freshArxiv.normalizeHistoricalVersionIdentity(entry.source.sourceVersion, item.route.arxivId);
+            if (normalized.selectedSourceId !== entry.source.sourceId) {
+                fail(`${item.paperId} historical arXiv version differs from the analyzed source ID`);
+            }
+            return { ...clone(entry.source), sourceVersion: normalized };
         }
         return clone(entry.source);
     }
@@ -491,6 +503,12 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
         || !validSha(analysis.apiReaderArticleSha256)
         || analysis.apiReaderArticleSha256 !== sha256(Buffer.from(analysis.apiReaderArticle, 'utf8'))) {
         fail(`${item.paperId} direct analysis/Reader proof is incomplete`);
+    }
+    const versionIdentitySha256 = source.sourceVersion?.identitySha256 || null;
+    const analysisVersionSha256 = analysis.freshRewriteProvenance?.sourceVersionIdentitySha256 || null;
+    const manifestVersionSha256 = analysis.analysisManifest?.freshRewriteProvenance?.sourceVersionIdentitySha256 || null;
+    if (analysisVersionSha256 !== versionIdentitySha256 || manifestVersionSha256 !== versionIdentitySha256) {
+        fail(`${item.paperId} analysis provenance does not bind its historical arXiv version identity`);
     }
     const parsed = parseAnalysis(analysis.analysis);
     const score = Number(parsed?.score); const labels = Array.isArray(parsed?.tags) ? parsed.tags.slice() : [];
@@ -628,16 +646,29 @@ function renderAggregate(scope, key, members, options = {}) {
     for (const [label, count] of directionCounts) output += `| #${md(label)} | ${count} 篇 |\n`;
     output += '\n### 📊 论文评分排行榜\n\n';
     output += '| 排名 | 论文 | 评分 | 主任务 | 主方法 |\n|---:|---|---:|---|---|\n';
-    for (const member of members) output += `| ${member.rank} | [${md(member.canonical.readerTitle)}](${internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`)}) | ${member.canonical.score.toFixed(1)} | ${md(member.canonical.primaryTaskLabel)} | ${md(member.canonical.primaryMethodLabel)} |\n`;
+    for (const member of members) {
+        const version = member.source.sourceVersion;
+        const visibleVersion = version
+            ? ` · ⚠️ 当前稿不可用；分析官方历史版本 [${md(version.selectedSourceId)}](${publicHttps(version.selectedPdfUrl, `${member.item.paperId} historical PDF URL`)})`
+            : '';
+        output += `| ${member.rank} | [${md(member.canonical.readerTitle)}](${internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`)})${visibleVersion} | ${member.canonical.score.toFixed(1)} | ${md(member.canonical.primaryTaskLabel)} | ${md(member.canonical.primaryMethodLabel)} |\n`;
+    }
     output += '\n---\n\n## 📋 论文列表\n';
     for (const member of members) {
         const blogUrl = internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`);
         output += `\n### ${member.rank}. [${md(member.canonical.readerTitle)}](${blogUrl})\n\n`;
         output += `> 英文题目：*[${md(member.canonical.title)}](${blogUrl})*\n\n`;
+        const version = member.source.sourceVersion;
+        if (version) {
+            output += `> ⚠️ **当前稿不可用**：本条目只封存并分析官方历史版本 **[${md(version.selectedSourceId)}](${publicHttps(version.selectedPdfUrl, `${member.item.paperId} historical PDF URL`)})**，不得暗示当前稿仍有效。\n\n`;
+        }
         output += `标签：${member.canonical.labels.map(label => `#${md(label)}`).join(' ')}\n\n`;
         output += `评分：${member.canonical.score.toFixed(1)}/10（${member.canonical.scoreDimensions.map(item => `${item.label} ${item.value}`).join('；')}）\n\n`;
         const source = member.item.route.kind === 'arxiv-fresh-fetch'
-            ? ` | [arXiv 原文](https://arxiv.org/abs/${member.item.route.arxivId})` : '';
+            ? version
+                ? ` | [arXiv 当前条目](https://arxiv.org/abs/${member.item.route.arxivId}) | [分析所用官方历史版本 ${md(version.selectedSourceId)}](${publicHttps(version.selectedPdfUrl, `${member.item.paperId} historical PDF URL`)})`
+                : ` | [arXiv 原文](https://arxiv.org/abs/${member.item.route.arxivId})`
+            : '';
         output += `排名：${md(member.canonical.rankBucket)} | 文档类型：${md(member.canonical.documentType)}${source}\n\n`;
         output += '👥 **作者与机构**\n\n';
         for (const author of member.canonical.authors) output += `- ${md(author.name)}：${author.affiliations.map(md).join('；')}\n`;
@@ -661,9 +692,16 @@ function sourceGenerationFor(scope, key, staged) {
     if (scope === 'daily' && !arxiv.length && !conference.length) fail(`${scope}:${key} has no source-bound members`);
     const generations = new Set(arxiv.map(member => member.source.generation));
     if (generations.size > 1) fail(`${scope}:${key} has mixed arXiv source generations`);
+    const historicalVersions = arxiv.filter(member => member.source.sourceVersion).map(member => ({
+        paperId: member.item.paperId, identitySha256: member.source.sourceVersion.identitySha256,
+        selectedSourceId: member.source.sourceVersion.selectedSourceId,
+        selectedPdfUrl: member.source.sourceVersion.selectedPdfUrl
+    })).sort((left, right) => left.paperId.localeCompare(right.paperId));
     const arxivBinding = arxiv.length ? {
         contract: 'fresh-arxiv-generation-v1', generation: [...generations][0],
-        sourceManifestSetSha256: stableHash(arxiv.map(member => member.source.sourceManifestSha256).sort())
+        sourceManifestSetSha256: stableHash(arxiv.map(member => member.source.sourceManifestSha256).sort()),
+        ...(historicalVersions.length ? { historicalVersions,
+            historicalVersionSetSha256: stableHash(historicalVersions) } : {})
     } : null;
     const conferenceBinding = conference.length ? {
         contract: 'retained-local-conference-pdf-v1', generation: null,
@@ -672,7 +710,11 @@ function sourceGenerationFor(scope, key, staged) {
     if (!arxivBinding) return conferenceBinding;
     if (!conferenceBinding) return arxivBinding;
     const arxivSources = arxiv.map(member => ({ paperId: member.item.paperId,
-        sourceManifestSha256: member.source.sourceManifestSha256 })).sort((left, right) => left.paperId.localeCompare(right.paperId));
+        sourceManifestSha256: member.source.sourceManifestSha256,
+        ...(member.source.sourceVersion ? { sourceVersionIdentitySha256: member.source.sourceVersion.identitySha256,
+            selectedSourceId: member.source.sourceVersion.selectedSourceId,
+            selectedPdfUrl: member.source.sourceVersion.selectedPdfUrl } : {})
+    })).sort((left, right) => left.paperId.localeCompare(right.paperId));
     const conferenceSources = conference.map(member => ({ paperId: member.item.paperId,
         pdfSha256: member.source.pdfSha256 })).sort((left, right) => left.paperId.localeCompare(right.paperId));
     const body = { contract: 'historical-direct-mixed-source-v1', version: 1,
@@ -716,7 +758,8 @@ function buildCohort(inputs, cohort) {
         primaryMethodLabel: member.canonical.primaryMethodLabel, readerTitle: member.canonical.readerTitle,
         documentType: member.canonical.documentType, rankBucket: member.canonical.rankBucket,
         scoreDimensions: member.canonical.scoreDimensions, authors: member.canonical.authors,
-        resources: member.canonical.resources }));
+        resources: member.canonical.resources,
+        ...(member.source.sourceVersion ? { sourceVersion: clone(member.source.sourceVersion) } : {}) }));
     const outputPage = { ...cohort.outputPage, stagedPath: path.posix.join('pages', cohort.outputPage.path),
         contentSha256: sha256(Buffer.from(markdown, 'utf8')) };
     const body = { contract: CONTRACT, version: VERSION, status: 'complete', scope: cohort.scope, key: cohort.key,

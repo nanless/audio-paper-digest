@@ -64,9 +64,72 @@ test('fresh arXiv generation atomically persists official text/PDF plus non-pixe
     assert.equal(result.manifest.pdf.responseSha256, sha256(result.pdf));
     assert.equal(result.manifest.text.extractor.version, 'test-extractor-v9');
     assert.equal(result.manifest.runtimeMetadata.filename, 'source-runtime.json');
+    assert.deepEqual(Object.keys(result.manifest).sort(), ['arxivId', 'capturedAt', 'contract', 'generation',
+        'paperId', 'pdf', 'runtimeMetadata', 'text', 'version']);
+    assert.equal(Object.hasOwn(result.runtimeDetails, 'sourceVersion'), false,
+        'ordinary current-version bundles retain their existing shape');
     assert.equal(result.runtimeDetails.title, textResponse(id).text.slice(0, 2000), 'source title is persisted from fresh source text when HTML has no explicit title field');
     assert.doesNotMatch(fs.readFileSync(path.join(directory, 'source-runtime.json'), 'utf8'), /(?:cachePath|tempPath|rawBytes|assetBytes|base64|buffer)/);
     assert.equal(fs.existsSync(f.currentRoot), false, 'source capture must not touch data/current');
+});
+
+test('withdrawn current PDF seals a self-hashed same-version fallback and forces source text from those PDF bytes', async t => {
+    const f = fixture(t); const id = '2604.14654'; const selected = `${id}v1`;
+    const rawPdf = { bytes: Buffer.from('%PDF-1.7\nwithdrawn historical version\n%%EOF\n'),
+        sourceId: selected, url: `https://arxiv.org/pdf/${selected}.pdf`,
+        fetchedAt: '2026-09-07T00:00:02.000Z', currentPdfUnavailable: true, currentPdfStatus: 404 };
+    let extracted = 0;
+    const result = await source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1,
+        now: '2026-09-07T00:00:00.000Z' }, {
+        fetchText: async () => ({ ...textResponse(id), title: 'Historical paper title', sourceId: selected,
+            url: `https://arxiv.org/html/${selected}`, htmlAvailability: 'available', htmlAttempts: 1,
+            structuredArtifacts: { forbiddenMixedHtmlEvidence: true } }),
+        fetchPdf: async (requested, options) => {
+            assert.equal(requested, id); assert.equal(options.preferredSourceId, selected); return rawPdf;
+        },
+        extractPdfText: async (requested, bytes, options) => {
+            extracted += 1; assert.equal(requested, id); assert.deepEqual(bytes, rawPdf.bytes);
+            assert.equal(options.sourceId, selected);
+            return { text: 'Text extracted exclusively from the selected historical PDF bytes. '.repeat(20) };
+        }
+    });
+    assert.equal(extracted, 1, 'version fallback must not analyze an HTML withdrawal/current page');
+    assert.equal(result.manifest.text.source, 'pdf');
+    assert.equal(result.manifest.text.sourceId, selected);
+    assert.equal(result.manifest.text.url, rawPdf.url);
+    assert.equal(result.manifest.pdf.url, rawPdf.url);
+    assert.equal(result.runtimeDetails.title, 'Historical paper title');
+    assert.doesNotMatch(result.runtimeDetails.title, /来源版本警告/,
+        'the mandatory source warning must not replace the paper title');
+    assert.equal(result.runtimeDetails.sourceVersion.selectedSourceId, selected);
+    assert.equal(result.runtimeDetails.sourceVersion.attemptedCurrentPdfStatus, 404);
+    assert.match(result.text, /^【来源版本警告】arXiv 当前无版本 PDF/);
+    assert.match(result.text, /当前稿不可用/);
+    assert.doesNotMatch(JSON.stringify(result.runtimeDetails.structuredArtifacts), /forbiddenMixedHtmlEvidence/);
+    const runtime = JSON.parse(fs.readFileSync(path.join(result.directory, 'source-runtime.json'), 'utf8'));
+    assert.equal(runtime.sourceVersion.identitySha256, result.runtimeDetails.sourceVersion.identitySha256);
+    assert.ok(runtime.warnings.includes(runtime.sourceVersion.warning));
+    const replay = source.readFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1 });
+    assert.deepEqual(replay.runtimeDetails.sourceVersion, result.runtimeDetails.sourceVersion);
+    assert.equal(replay.sourceManifestSha256, result.sourceManifestSha256);
+});
+
+test('versioned PDF validation rejects cross-paper URLs, query/fragment smuggling, and unproved current availability', async t => {
+    const f = fixture(t); const id = '2604.14654'; const common = { rootDir: f.sourceRoot, arxivId: id,
+        now: '2026-09-07T00:00:00.000Z' };
+    const text = async () => ({ ...textResponse(id), sourceId: `${id}v1`, url: `https://arxiv.org/html/${id}v1` });
+    const candidate = url => ({ bytes: Buffer.from('%PDF-1.7\nversion\n%%EOF\n'), sourceId: `${id}v1`, url,
+        currentPdfUnavailable: true, currentPdfStatus: 404 });
+    await assert.rejects(source.captureFreshArxivRewriteSource({ ...common, generation: 1 }, {
+        fetchText: text, fetchPdf: async () => candidate('https://arxiv.org/pdf/2605.03462v1.pdf')
+    }), /requested canonical\/version|belongs to another/);
+    await assert.rejects(source.captureFreshArxivRewriteSource({ ...common, generation: 2 }, {
+        fetchText: text, fetchPdf: async () => candidate(`https://arxiv.org/pdf/${id}v1.pdf?download=1`)
+    }), /query or fragment/);
+    await assert.rejects(source.captureFreshArxivRewriteSource({ ...common, generation: 3 }, {
+        fetchText: text, fetchPdf: async () => ({ ...candidate(`https://arxiv.org/pdf/${id}v1.pdf`),
+            currentPdfUnavailable: false, currentPdfStatus: null })
+    }), /requires a sealed current unversioned PDF HTTP 404/);
 });
 
 test('each new generation fetches a fresh text/PDF pair while same-generation resume replays only its sealed pair', async t => {

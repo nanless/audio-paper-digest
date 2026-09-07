@@ -8,6 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const api = require('../scripts/lib/historical-direct-page-staging.js');
+const freshSource = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const pageKey = value => `page:${sha(value)}`;
@@ -108,6 +109,33 @@ test('different-title prior preprint adds a visible top disclosure whose bytes a
     assert.equal(result.sourceDisclosure.disclosureSha256, f.item.route.sourceDisclosure.disclosureSha256);
     const manifestBody = { ...result }; delete manifestBody.manifestSha256;
     assert.equal(result.manifestSha256, api.stableHash(manifestBody));
+});
+
+test('withdrawn arXiv historical version evidence injects an exact top warning and deterministic replay rejects its removal', t => {
+    const f = fixture(t); const selected = `${f.item.route.arxivId}v1`;
+    f.sourceDescriptor.sourceId = selected;
+    f.sourceDescriptor.sourceVersion = freshSource.historicalVersionIdentity({ arxivId: f.item.route.arxivId,
+        textSourceId: selected, pdf: { sourceId: selected, url: `https://arxiv.org/pdf/${selected}.pdf`,
+            currentPdfUnavailable: true, currentPdfStatus: 404 } });
+    const result = api.stageDirectPages(options(f));
+    assert.equal(result.sourceDisclosure.identitySha256, f.sourceDescriptor.sourceVersion.identitySha256);
+    for (const page of result.pages) {
+        const markdown = fs.readFileSync(path.join(f.root, 'staging', page.stagedPath), 'utf8');
+        assert.match(markdown, /^---\ndate: \d{4}-\d{2}-\d{2}\n---\n> \*\*⚠️ 来源版本说明（当前稿不可用）\*\*/);
+        assert.match(markdown, new RegExp(selected));
+        assert.match(markdown, /不得暗示当前稿仍有效/);
+    }
+    const manifestFile = path.join(f.root, 'staging', 'page-staging-manifest.json');
+    const forged = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    const page = forged.pages[0]; const filename = path.join(f.root, 'staging', page.stagedPath);
+    const disclosure = api.arxivHistoricalVersionPageDisclosure(f.item, f.sourceDescriptor);
+    const stripped = fs.readFileSync(filename, 'utf8').replace(`${disclosure}\n\n`, '');
+    fs.writeFileSync(filename, stripped);
+    page.contentSha256 = sha(Buffer.from(stripped));
+    forged.pageSetSha256 = api.stableHash(forged.pages);
+    const body = { ...forged }; delete body.manifestSha256; forged.manifestSha256 = api.stableHash(body);
+    fs.writeFileSync(manifestFile, `${JSON.stringify(forged, null, 2)}\n`);
+    assert.throws(() => api.stageDirectPages(options(f)), /disclosure is absent or not at the top/);
 });
 
 test('prior-preprint staging rejects a missing route disclosure and an unterminated front matter block', t => {

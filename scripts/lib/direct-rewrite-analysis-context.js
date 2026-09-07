@@ -93,6 +93,10 @@ function withDirectRewriteAnalysisSource(identity, callback) {
             || !SHA.test(String(identity.sourceManifestSha256 || '')))) {
         fail('arXiv direct source provenance lacks its sealed generation/manifest');
     }
+    if (identity.sourceVersionIdentitySha256 !== undefined
+        && (identity.route !== 'arxiv-fresh-fetch' || !SHA.test(String(identity.sourceVersionIdentitySha256 || '')))) {
+        fail('direct source version provenance is invalid');
+    }
     const readerAttemptsDir = safeReaderAttemptsDirectory(identity.readerAttemptsDir);
     if (identity.materializeReaderFigures !== undefined && typeof identity.materializeReaderFigures !== 'function') {
         fail('Reader figure materializer must be a function');
@@ -119,7 +123,10 @@ function withDirectRewriteAnalysisSource(identity, callback) {
         ...(hasSealedProvenance ? { runId: identity.runId, sourceSha256: identity.sourceSha256,
             structuredArtifactsSha256: identity.structuredArtifactsSha256,
             ...(identity.route === 'arxiv-fresh-fetch' ? { sourceGeneration: identity.sourceGeneration,
-                sourceManifestSha256: identity.sourceManifestSha256 } : {}) } : {}),
+                sourceManifestSha256: identity.sourceManifestSha256,
+                ...(identity.sourceVersionIdentitySha256 ? {
+                    sourceVersionIdentitySha256: identity.sourceVersionIdentitySha256
+                } : {}) } : {}) } : {}),
         route: identity.route === 'arxiv-fresh-fetch' || identity.route === 'conference-local-pdf'
             ? identity.route : fail('source route is invalid') });
     return scope.run(context, callback);
@@ -156,7 +163,10 @@ function directFreshAnalysisIdentity(paper = getDirectRewriteAnalysisContext()?.
         structuredArtifactsSha256: context.structuredArtifactsSha256,
         sourceSnapshotSha256: context.sourceSnapshotSha256,
         ...(context.route === 'arxiv-fresh-fetch' ? { sourceGeneration: context.sourceGeneration,
-            sourceManifestSha256: context.sourceManifestSha256 } : {}),
+            sourceManifestSha256: context.sourceManifestSha256,
+            ...(context.sourceVersionIdentitySha256 ? {
+                sourceVersionIdentitySha256: context.sourceVersionIdentitySha256
+            } : {}) } : {}),
         sourceOnly: true, oldGeneratedTextIncluded: false };
 }
 

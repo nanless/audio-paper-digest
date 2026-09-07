@@ -323,7 +323,9 @@ function compactSourceDescriptor(route, source, item = null) {
             sourceId: details.sourceId, textSha256: source.manifest.text.responseSha256,
             structuredArtifactsSha256: structuredArtifactsSha(details), pdfSha256: source.manifest.pdf.responseSha256, sourceManifestSha256,
             sourceBinding, sourceRunIdentitySha256: planApi.directSourceRunIdentity(item, sourceBinding),
-            sourceSnapshotSha256: sourceSnapshotSha(details) };
+            sourceSnapshotSha256: sourceSnapshotSha(details),
+            ...(details.sourceVersion ? { sourceVersion: freshArxiv.normalizeHistoricalVersionIdentity(
+                details.sourceVersion, source.arxivId) } : {}) };
     }
     return { kind: route, paperId: source.paperId, sourceId: source.sourceDetails.sourceId, pdfSha256: source.pdfSha256,
         textSha256: sha256(Buffer.from(source.sourceDetails.text, 'utf8')),
@@ -331,7 +333,8 @@ function compactSourceDescriptor(route, source, item = null) {
         sourceSnapshotSha256: sourceSnapshotSha(source.sourceDetails) };
 }
 function sourceSnapshotSha(details) { return stableHash({ paperId: details.paperId, source: details.source, sourceId: details.sourceId,
-    textSha256: sha256(Buffer.from(details.text, 'utf8')), structuredArtifacts: details.structuredArtifacts }); }
+    textSha256: sha256(Buffer.from(details.text, 'utf8')), structuredArtifacts: details.structuredArtifacts,
+    ...(details.sourceVersion ? { sourceVersion: details.sourceVersion } : {}) }); }
 function fallbackArxivDetails(source) {
     const text = source.text; const body = { version: 1, source: 'fresh_arxiv_text_without_layout', tables: [], formulas: [], figures: [],
         flattenedTextSha256: sha256(Buffer.from(text, 'utf8')) };
@@ -589,7 +592,10 @@ function directProvenanceFor(item, sourceDescriptor) {
         structuredArtifactsSha256: sourceDescriptor.structuredArtifactsSha256,
         sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
         ...(item.route.kind === 'arxiv-fresh-fetch' ? { sourceGeneration: sourceDescriptor.generation,
-            sourceManifestSha256: sourceDescriptor.sourceManifestSha256 } : {}),
+            sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
+            ...(sourceDescriptor.sourceVersion ? {
+                sourceVersionIdentitySha256: sourceDescriptor.sourceVersion.identitySha256
+            } : {}) } : {}),
         sourceOnly: true, oldGeneratedTextIncluded: false };
 }
 
@@ -796,7 +802,10 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 sourceSha256: descriptor.textSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
                 sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
                 ...(item.route.kind === 'arxiv-fresh-fetch' ? { sourceGeneration: descriptor.generation,
-                    sourceManifestSha256: descriptor.sourceManifestSha256 } : {}),
+                    sourceManifestSha256: descriptor.sourceManifestSha256,
+                    ...(descriptor.sourceVersion ? {
+                        sourceVersionIdentitySha256: descriptor.sourceVersion.identitySha256
+                    } : {}) } : {}),
                 readerAttemptsDir, materializeReaderFigures, downloadPrimaryImage, supplementaryReaderImages }, () => analyze({ item,
                 sourceDetails: clone(sourceDetails), sourceDescriptor: descriptor, executionDirectory: executionDir,
                 dependencies: executionDependencies }));

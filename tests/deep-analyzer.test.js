@@ -4820,6 +4820,29 @@ has_dataset: 否
         assert.deepStrictEqual(getArxivHtmlIds('2604.12345'), ['2604.12345', '2604.12345v2', '2604.12345v1']);
         assert.deepStrictEqual(getArxivHtmlIds('2604.12345v2'), ['2604.12345v2']);
     });
+
+    it('撤稿 PDF 先证明 current 404，再优先使用 HTML 选中的同 canonical version', async () => {
+        const { fetchArxivPdfUncached } = require('../scripts/deep-analyzer.js');
+        const requested = []; const bytes = Buffer.from('%PDF-1.7\nversion one\n%%EOF\n');
+        const response = (url, status, payload = Buffer.alloc(0)) => ({ ok: status === 200, status, url,
+            headers: { get: key => key.toLowerCase() === 'content-type' ? 'application/pdf' : null }, body: null,
+            arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) });
+        const result = await fetchArxivPdfUncached('2604.14654', { preferredSourceId: '2604.14654v1', dispatcher: {},
+            fetchImpl: async url => { requested.push(url); return url.endsWith('2604.14654.pdf')
+                ? response(url, 404) : response(url, 200, bytes); } });
+        assert.deepStrictEqual(requested, [
+            'https://arxiv.org/pdf/2604.14654.pdf',
+            'https://arxiv.org/pdf/2604.14654v1.pdf'
+        ]);
+        assert.equal(result.sourceId, '2604.14654v1');
+        assert.equal(result.url, 'https://arxiv.org/pdf/2604.14654v1.pdf');
+        assert.equal(result.currentPdfUnavailable, true);
+        assert.equal(result.currentPdfStatus, 404);
+        assert.deepStrictEqual(result.bytes, bytes);
+        await assert.rejects(fetchArxivPdfUncached('2604.14654', {
+            preferredSourceId: '2605.03462v1', dispatcher: {}, fetchImpl: async () => response('', 404)
+        }), /belongs to another paper/);
+    });
 });
 
 describe('open-source evidence request safety', () => {

@@ -40,6 +40,10 @@ npm run history:direct-plan -- --apply \
 `history:direct-scheduler` 对 arXiv 每个 generation 重新拉取官方文本/PDF，原子封存
 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-000001/source.txt`、`source.pdf`、runtime metadata 与
 manifest；像素只在本次调用的 OS 临时目录存在。会议 route 只重放其 catalog 已绑定的本地 PDF/metadata SHA。
+正常论文继续封存 current、无版本号的官方 PDF，既有普通 v2 bundle 的字段和字节保持兼容。只有 current PDF
+明确返回 HTTP 404 时，scheduler 才可尝试同一 canonical arXiv ID 的官方 `vN` PDF；跨 ID、query、fragment、
+非官方主机和没有 current-404 证明的版本回退全部拒绝。命中历史版本后，`source.txt` 必须从所选 PDF 字节重新
+提取，不能分析撤稿/current HTML 页面或混用另一版本 HTML 证据。
 本地会议文件缺失/损坏会令该 direct item 失败关闭；它不能写 crosswalk。只有 arXiv fresh fetch 失败后由
 direct scheduler/run 写出的 named immutable handoff 才可进入 crosswalk；它不会阻断其余 direct items。
 
@@ -307,6 +311,12 @@ fresh source 的标题进入 runtime metadata，供新稿
 identity 使用；它不来自冻结博客页面。队列中的 conference paper 只重放 catalog 已绑定的本地
 metadata/PDF SHA，并从该 metadata record 取得标题。两条队列都不以 legacy crosswalk 为前置条件。
 
+若 current PDF=404 后选择同 canonical 的官方历史版本，`source-runtime.json` 条件性封存自哈希
+`sourceVersion`：current URL/status、所选 `vN` identity/URL、text/PDF 同版本和“当前稿不可用”的明确说明；
+runtime SHA 再进入 source manifest、direct descriptor、analysis provenance 与页面 manifest。版本说明同时作为
+`source.txt` 顶部的真实分析输入，并在最终单篇页 front matter 后第一位置显示中文警示。确定性 page gate 会拒绝
+删除、移动或改写提示；普通 current bundle 不增加该字段，也不会因兼容 validator 失效。
+
 来源阶段也支持 `--paper-ids`和 `--max-papers`（或 `--limit`）；未显式指定 ID 的
 bounded 续跑会先严格重放并跳过同 generation 已封存的 arXiv 四文件 bundle，会议项则按稳定 plan 顺序分批
 重放 metadata/PDF SHA。默认 source pause marker 与 scheduler operation lock 位于
@@ -382,6 +392,9 @@ projection v3 逐页保留冻结 inventory 中的 `conference-task` 路径、URL
 所有 direct 汇总页使用 `reader-facing-v3`：排行榜与中英文标题均链接独立页；详情只显示一次标签和八维评分，
 评分后依次显示分档、文档类型和可用的 arXiv 原文，再显示作者机构、核心摘要与逐项 HTTPS 可点击资源状态。
 “热门方向”严格只按每篇 current taxonomy 的主任务统计。
+若 arXiv source descriptor 携带经过重放的 `arxiv-historical-version-source-v1`，汇总会条件性封存其
+`identitySha256`、实际 `vN` 与官方 versioned PDF URL，并在排行榜及双语标题条目旁明确显示
+“当前稿不可用/分析官方历史版本 vN”。普通 source descriptor 不增加字段，现有汇总字节路径保持原分支。
 
 catalog 中没有任何冻结历史页投影的记录绝不进入 fresh fetch、crosswalk 或 LLM 队列。反方向上，
 frozen paper page 没有 direct source route 时也必须出现在 plan 的 `uncoveredFrozenPaperPages` 与

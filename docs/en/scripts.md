@@ -70,6 +70,13 @@ bound retained metadata/PDF SHA. Crosswalk accepts only a named immutable fresh-
 missing local conference source fails its direct item closed. Historical review, activation, commit/push receipt, and remote-OID publication
 are not implemented.
 
+Ordinary papers retain the existing current-PDF v2 bundle shape. Only an explicit HTTP 404 from the unversioned current
+PDF permits an official historical `vN` PDF for the same canonical arXiv ID. Version fallback rejects cross-ID URLs,
+queries, fragments, and non-official hosts; it forces `source.txt` extraction from the selected PDF bytes instead of a
+withdrawal/current HTML page. A self-hashed `sourceVersion` record seals the attempted current URL/status and selected
+version URL through the source manifest, direct provenance, and page manifest. The warning is part of the actual analysis
+text and appears immediately below final-page front matter; ordinary sealed bundles remain byte/schema compatible.
+
 ```bash
 npm run history:conference-local-sources -- --dry-run|--apply [--output NAME.json]
 npm run history:direct-inputs -- --dry-run|--apply --conference-manifest /abs/FILE.json --inventory /abs/FILE.json --blog-root /abs/DIR [--name NAME.json]

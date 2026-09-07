@@ -81,6 +81,13 @@ npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-
 direct-run 会验证来源并恢复 source-bound `analysis-recovery.json` 中的一致阶段 checkpoint。fresh acquisition
 失败只会写 immutable handoff，不自动修改 crosswalk，也不应阻断本地会议队列。
 
+若 handoff 的精确原因是 current、无版本号 arXiv PDF 返回 HTTP 404，可原样重跑同 generation：实现会先保留
+current-404 观察，再只尝试同 canonical ID 的官方历史版本。成功时必须看到 source runtime 中绑定的自哈希
+`sourceVersion`、由所选 PDF 字节提取且带顶部版本警告的 `source.txt`，以及最终单篇页的“当前稿不可用”提示。
+版本 URL 属于另一论文、带 query/fragment，或未先证明 current PDF=404 时不要手工导入或改 checkpoint。
+普通 current PDF 与既有普通 bundle 不走此分支。若所有同 canonical 版本仍不可用，再进入 named handoff
+fallback；不得猜测替换 arXiv ID。
+
 会议外部路径可能漂移时，用一次 `history:status ... --verify-sources true` 重算 metadata/PDF SHA；不要把
 该深核选项放进 watch。普通 status 只检查路径、文件类型和 PDF size，以保持长期监控廉价。
 

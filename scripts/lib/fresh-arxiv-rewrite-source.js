@@ -23,6 +23,8 @@ const RUNTIME_METADATA_NAME = 'source-runtime.json';
 const RUNTIME_METADATA_CONTRACT = 'fresh-arxiv-rewrite-runtime-metadata-v1';
 const SOURCE_FILES = Object.freeze([MANIFEST_NAME, PDF_NAME, RUNTIME_METADATA_NAME, TEXT_NAME]);
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
+const ARXIV_SOURCE_ID_RE = /^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/;
+const HISTORICAL_VERSION_CONTRACT = 'arxiv-historical-version-source-v1';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const MAX_TEXT_BYTES = 64 * 1024 * 1024;
 const MAX_PDF_BYTES = 512 * 1024 * 1024;
@@ -53,6 +55,14 @@ function normalizedArxivId(value) {
     const id = String(value || '').trim().replace(/v\d+$/i, '');
     if (!ARXIV_ID_RE.test(id)) fail('arxivId must be a normalized modern versionless ID');
     return id;
+}
+
+function normalizedSourceId(value, arxivId, label = 'arXiv source ID') {
+    const sourceId = String(value || '').trim(); const canonicalId = normalizedArxivId(arxivId);
+    if (!ARXIV_SOURCE_ID_RE.test(sourceId) || sourceId.replace(/v\d+$/i, '') !== canonicalId) {
+        fail(`${label} belongs to another paper or is malformed`);
+    }
+    return sourceId;
 }
 
 function normalizedGeneration(value) {
@@ -137,17 +147,21 @@ function fsyncDirectory(directory) {
 
 function officialUrl(url, kind, arxivId, sourceId = null) {
     const id = normalizedArxivId(arxivId);
+    const boundSourceId = sourceId ? normalizedSourceId(sourceId, id) : id;
     const requested = String(url || '').trim();
     const fallback = kind === 'pdf'
-        ? `https://arxiv.org/pdf/${id}.pdf`
-        : `https://arxiv.org/html/${sourceId || id}`;
+        ? `https://arxiv.org/pdf/${boundSourceId}.pdf`
+        : `https://arxiv.org/html/${boundSourceId}`;
     const parsed = new URL(requested || fallback);
     if (parsed.protocol !== 'https:' || parsed.hostname !== 'arxiv.org' || parsed.port || parsed.username || parsed.password) {
         fail(`${kind} URL is not a direct official arXiv HTTPS URL`);
     }
     const pathname = decodeURIComponent(parsed.pathname);
     if (kind === 'pdf') {
-        if (pathname !== `/pdf/${id}.pdf`) fail('PDF URL does not bind the canonical arXiv ID');
+        const match = pathname.match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\.pdf$/);
+        if (!match || match[1].replace(/v\d+$/i, '') !== id || match[1] !== boundSourceId) {
+            fail('PDF URL does not bind the requested canonical/version arXiv ID');
+        }
     } else {
         const match = pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v\d+)?\/?$/);
         if (!match || match[1] !== id) fail('text URL does not bind the canonical arXiv ID');
@@ -180,9 +194,62 @@ function validatePdfResponse(value, arxivId, capturedAt) {
     if (bytes.length < 5 || bytes.length > MAX_PDF_BYTES || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
         fail('official PDF response is missing a valid PDF header or exceeds the size limit');
     }
-    const url = officialUrl(candidate.url, 'pdf', arxivId);
+    let sourceId = String(candidate.sourceId || '').trim();
+    if (!sourceId && candidate.url) {
+        try { sourceId = decodeURIComponent(new URL(String(candidate.url)).pathname)
+            .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\.pdf$/)?.[1] || ''; }
+        catch { /* officialUrl below emits the canonical rejection */ }
+    }
+    sourceId = normalizedSourceId(sourceId || arxivId, arxivId, 'official PDF source ID');
+    const url = officialUrl(candidate.url, 'pdf', arxivId, sourceId);
+    const versioned = sourceId !== arxivId;
+    if (versioned && (candidate.currentPdfUnavailable !== true || candidate.currentPdfStatus !== 404)) {
+        fail('versioned PDF requires a sealed current unversioned PDF HTTP 404 observation');
+    }
+    if (!versioned && (candidate.currentPdfUnavailable === true || candidate.currentPdfStatus !== undefined
+        && candidate.currentPdfStatus !== null)) fail('current PDF cannot claim historical-version fallback');
     const fetchedAt = candidate.fetchedAt === undefined ? capturedAt : asIso(candidate.fetchedAt, 'PDF fetchedAt');
-    return { bytes, url, fetchedAt, responseSha256: sha256(bytes) };
+    return { bytes, url, sourceId, fetchedAt, responseSha256: sha256(bytes),
+        currentPdfUnavailable: versioned, currentPdfStatus: versioned ? 404 : null };
+}
+
+function historicalVersionWarning(identity) {
+    return `arXiv 当前无版本 PDF ${identity.attemptedCurrentPdfUrl} 返回 HTTP 404，当前稿不可用；本次只封存并分析官方历史版本 ${identity.selectedSourceId}（${identity.selectedPdfUrl}），不得暗示当前稿仍有效。`;
+}
+function historicalVersionIdentity({ arxivId, textSourceId, pdf, warnings = [] } = {}) {
+    const id = normalizedArxivId(arxivId); const selectedSourceId = normalizedSourceId(pdf?.sourceId || id, id);
+    if (selectedSourceId === id) return null;
+    if (pdf.currentPdfUnavailable !== true || pdf.currentPdfStatus !== 404
+        || normalizedSourceId(textSourceId, id, 'versioned text source ID') !== selectedSourceId) {
+        fail('historical-version text/PDF/current-unavailable identity is incomplete or mixed');
+    }
+    const body = { contract: HISTORICAL_VERSION_CONTRACT, version: 1, canonicalArxivId: id,
+        selectedSourceId, textSourceId: selectedSourceId, selectedPdfUrl: officialUrl(pdf.url, 'pdf', id, selectedSourceId),
+        currentPdfAvailable: false, attemptedCurrentPdfStatus: 404,
+        attemptedCurrentPdfUrl: officialUrl('', 'pdf', id, id) };
+    const warning = historicalVersionWarning(body);
+    if (warnings.length && !warnings.includes(warning)) fail('historical-version current-unavailable warning is missing');
+    const sealed = { ...body, warning };
+    return { ...sealed, identitySha256: sha256(JSON.stringify(canonical(sealed))) };
+}
+function normalizeHistoricalVersionIdentity(value, arxivId) {
+    const fields = ['contract', 'version', 'canonicalArxivId', 'selectedSourceId', 'textSourceId', 'selectedPdfUrl',
+        'currentPdfAvailable', 'attemptedCurrentPdfStatus', 'attemptedCurrentPdfUrl', 'warning', 'identitySha256'];
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join('\0') !== fields.sort().join('\0')) fail('historical-version identity schema is invalid');
+    const id = normalizedArxivId(arxivId); const selected = normalizedSourceId(value.selectedSourceId, id);
+    const body = { contract: HISTORICAL_VERSION_CONTRACT, version: 1, canonicalArxivId: id,
+        selectedSourceId: selected, textSourceId: normalizedSourceId(value.textSourceId, id),
+        selectedPdfUrl: officialUrl(value.selectedPdfUrl, 'pdf', id, selected), currentPdfAvailable: false,
+        attemptedCurrentPdfStatus: 404, attemptedCurrentPdfUrl: officialUrl(value.attemptedCurrentPdfUrl, 'pdf', id, id) };
+    const warning = historicalVersionWarning(body); const sealed = { ...body, warning };
+    if (selected === id || value.contract !== HISTORICAL_VERSION_CONTRACT || value.version !== 1
+        || value.canonicalArxivId !== id || value.textSourceId !== selected || value.currentPdfAvailable !== false
+        || value.attemptedCurrentPdfStatus !== 404 || value.warning !== warning
+        || value.identitySha256 !== sha256(JSON.stringify(canonical(sealed)))) {
+        fail('historical-version identity evidence/SHA drifted');
+    }
+    return { ...sealed, identitySha256: value.identitySha256 };
 }
 
 // Structured source evidence is durable only as JSON metadata. It may carry
@@ -232,7 +299,8 @@ function runtimeDetailsFromFreshCapture(rawText, text, arxivId) {
             ? structuredClone(rawText.readerAuthors) : null,
         htmlAvailability: rawText?.htmlAvailability || (text.source === 'html' ? 'available' : 'not_applicable'),
         htmlAttempts: Number.isSafeInteger(rawText?.htmlAttempts) ? rawText.htmlAttempts : 0,
-        warnings: Array.isArray(rawText?.warnings) ? rawText.warnings.map(String) : []
+        warnings: Array.isArray(rawText?.warnings) ? rawText.warnings.map(String) : [],
+        ...(rawText?.sourceVersion ? { sourceVersion: normalizeHistoricalVersionIdentity(rawText.sourceVersion, arxivId) } : {})
     };
 }
 function runtimeMetadataFromDetails(details, text, arxivId) {
@@ -240,14 +308,16 @@ function runtimeMetadataFromDetails(details, text, arxivId) {
         title: sourceTitle(details.title), textSha256: text.responseSha256, structuredArtifacts: clone(details.structuredArtifacts),
         imageInfos: clone(details.imageInfos), readerAuthors: details.readerAuthors === null ? null : clone(details.readerAuthors),
         htmlAvailability: String(details.htmlAvailability || ''), htmlAttempts: details.htmlAttempts,
-        warnings: Array.isArray(details.warnings) ? details.warnings.map(String) : [] };
+        warnings: Array.isArray(details.warnings) ? details.warnings.map(String) : [],
+        ...(details.sourceVersion ? { sourceVersion: normalizeHistoricalVersionIdentity(details.sourceVersion, arxivId) } : {}) };
     return assertNoPersistentImageBytes(metadata);
 }
 function validateRuntimeMetadata(metadata, text, arxivId) {
     const keys = ['contract', 'htmlAttempts', 'htmlAvailability', 'imageInfos', 'paperId', 'readerAuthors',
-        'structuredArtifacts', 'textSha256', 'title', 'version', 'warnings'];
+        'structuredArtifacts', 'textSha256', 'title', 'version', 'warnings',
+        ...(Object.hasOwn(metadata || {}, 'sourceVersion') ? ['sourceVersion'] : [])];
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
-        || Object.keys(metadata).sort().join('\0') !== keys.join('\0')
+        || Object.keys(metadata).sort().join('\0') !== keys.sort().join('\0')
         || metadata.contract !== RUNTIME_METADATA_CONTRACT || metadata.version !== 1
         || metadata.paperId !== `arxiv:${arxivId}` || metadata.textSha256 !== text.responseSha256
         || typeof metadata.title !== 'string' || metadata.title !== sourceTitle(metadata.title)
@@ -259,6 +329,10 @@ function validateRuntimeMetadata(metadata, text, arxivId) {
         fail('runtime metadata is invalid');
     }
     assertNoPersistentImageBytes(metadata);
+    if (metadata.sourceVersion) {
+        const identity = normalizeHistoricalVersionIdentity(metadata.sourceVersion, arxivId);
+        if (!metadata.warnings.includes(identity.warning)) fail('runtime historical-version warning is not bound to its evidence');
+    }
     return metadata;
 }
 function runtimeDetailsFromMetadata(metadata, text, arxivId) {
@@ -266,7 +340,8 @@ function runtimeDetailsFromMetadata(metadata, text, arxivId) {
     return { paperId: `arxiv:${arxivId}`, title: verified.title, source: text.source, sourceId: text.sourceId,
         text: text.bytes.toString('utf8'), imageInfos: clone(verified.imageInfos),
         structuredArtifacts: clone(verified.structuredArtifacts), readerAuthors: verified.readerAuthors === null ? null : clone(verified.readerAuthors),
-        htmlAvailability: verified.htmlAvailability, htmlAttempts: verified.htmlAttempts, warnings: verified.warnings.map(String) };
+        htmlAvailability: verified.htmlAvailability, htmlAttempts: verified.htmlAttempts, warnings: verified.warnings.map(String),
+        ...(verified.sourceVersion ? { sourceVersion: normalizeHistoricalVersionIdentity(verified.sourceVersion, arxivId) } : {}) };
 }
 
 function manifestFor({ arxivId, generation, capturedAt, text, pdf, runtimeMetadataBytes }) {
@@ -326,7 +401,11 @@ function validateManifest(manifest, arxivId, generation) {
         || Object.keys(pdf).sort().join('\0') !== pdfKeys.join('\0') || pdf.filename !== PDF_NAME
         || !Number.isSafeInteger(pdf.responseBytes) || pdf.responseBytes < 5 || pdf.responseBytes > MAX_PDF_BYTES
         || !SHA_RE.test(pdf.responseSha256)) fail('PDF manifest is invalid');
-    officialUrl(pdf.url, 'pdf', arxivId); asIso(pdf.fetchedAt, 'PDF fetchedAt');
+    let pdfSourceId;
+    try { pdfSourceId = decodeURIComponent(new URL(pdf.url).pathname)
+        .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\.pdf$/)?.[1]; }
+    catch { /* officialUrl emits the canonical rejection */ }
+    officialUrl(pdf.url, 'pdf', arxivId, pdfSourceId || arxivId); asIso(pdf.fetchedAt, 'PDF fetchedAt');
     if (!runtimeMetadata || typeof runtimeMetadata !== 'object' || Array.isArray(runtimeMetadata)
         || Object.keys(runtimeMetadata).sort().join('\0') !== ['filename', 'responseBytes', 'responseSha256'].join('\0')
         || runtimeMetadata.filename !== RUNTIME_METADATA_NAME || !Number.isSafeInteger(runtimeMetadata.responseBytes)
@@ -361,6 +440,15 @@ function readFreshArxivRewriteSource({ rootDir, arxivId, generation } = {}) {
     try { runtimeMetadata = JSON.parse(runtimeMetadataBytes.toString('utf8')); }
     catch (error) { fail(`runtime metadata is invalid JSON: ${error.message}`); }
     if (!runtimeMetadataBytes.equals(Buffer.from(canonicalJson(runtimeMetadata), 'utf8'))) fail('runtime metadata must be canonical JSON');
+    const pdfSourceId = decodeURIComponent(new URL(manifest.pdf.url).pathname)
+        .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)\.pdf$/)?.[1] || '';
+    if (pdfSourceId !== id) {
+        const identity = normalizeHistoricalVersionIdentity(runtimeMetadata.sourceVersion, id);
+        if (identity.selectedSourceId !== pdfSourceId || manifest.text.source !== 'pdf'
+            || manifest.text.sourceId !== pdfSourceId) fail('versioned PDF source is mixed with another text version');
+    } else if (runtimeMetadata.sourceVersion !== undefined) {
+        fail('current PDF bundle cannot carry historical-version evidence');
+    }
     const textInfo = { source: manifest.text.source, sourceId: manifest.text.sourceId, bytes: text,
         responseSha256: manifest.text.responseSha256 };
     const runtimeDetails = runtimeDetailsFromMetadata(runtimeMetadata, textInfo, id);
@@ -422,12 +510,17 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
     if (!extractorVersion || extractorVersion.length > 200) fail('extractorVersion is invalid');
     let temporary = null;
     try {
-        // The two official responses are intentionally independent: the PDF
-        // must be retained even when the HTML text path succeeds.
-        const [rawText, rawPdf] = await Promise.all([fetchText(id), fetchPdf(id)]);
+        // Resolve HTML first so a selected official version can be preferred
+        // by the PDF fallback. The current unversioned PDF is still probed
+        // first so a version fallback carries a replayable HTTP 404 fact.
+        const rawText = await fetchText(id);
+        const preferredSourceId = rawText?.source === 'html' ? rawText.sourceId : null;
+        const rawPdf = await fetchPdf(id, { preferredSourceId });
         const pdf = validatePdfResponse(rawPdf, id, capturedAt);
-        let text;
-        if (rawText?.source === 'html') {
+        const sourceVersion = historicalVersionIdentity({ arxivId: id,
+            textSourceId: pdf.sourceId, pdf });
+        let text; let runtimeSource = rawText;
+        if (rawText?.source === 'html' && !sourceVersion) {
             text = validateTextResponse(rawText, id, capturedAt, extractorVersion);
         } else {
             // A PDF text result returned by fetchText would prove that the
@@ -440,12 +533,27 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
                 htmlAttempts: rawText?.htmlAttempts || 0,
                 warnings: Array.isArray(rawText?.warnings) ? rawText.warnings.slice() : [],
                 url: pdf.url,
-                fetchedAt: pdf.fetchedAt
+                fetchedAt: pdf.fetchedAt,
+                sourceId: pdf.sourceId
             });
-            text = validateTextResponse({ ...extracted, source: 'pdf', sourceId: id,
+            const versionNotice = sourceVersion ? `【来源版本警告】${sourceVersion.warning}\n\n` : '';
+            text = validateTextResponse({ ...extracted, text: `${versionNotice}${String(extracted?.text || '')}`,
+                source: 'pdf', sourceId: pdf.sourceId,
                 url: pdf.url, fetchedAt: pdf.fetchedAt }, id, capturedAt, extractorVersion);
+            // Keep the paper title sourced from the matching historical HTML
+            // when available, otherwise derive it from the unprefixed PDF
+            // text.  The mandatory warning prefix must never become the title.
+            const versionTitle = rawText?.sourceId === pdf.sourceId && rawText?.title
+                ? rawText.title : (extracted?.title || sourceTitle('', extracted?.text));
+            runtimeSource = { title: versionTitle, source: 'pdf', sourceId: pdf.sourceId,
+                imageInfos: [], structuredArtifacts: null, readerAuthors: null,
+                htmlAvailability: rawText?.htmlAvailability || 'unavailable',
+                htmlAttempts: Number.isSafeInteger(rawText?.htmlAttempts) ? rawText.htmlAttempts : 0,
+                warnings: [...(Array.isArray(rawText?.warnings) ? rawText.warnings.map(String) : []),
+                    ...(sourceVersion ? [sourceVersion.warning] : [])],
+                ...(sourceVersion ? { sourceVersion } : {}) };
         }
-        const runtimeDetails = runtimeDetailsFromFreshCapture(rawText, text, id);
+        const runtimeDetails = runtimeDetailsFromFreshCapture(runtimeSource, text, id);
         const runtimeMetadataBytes = Buffer.from(canonicalJson(runtimeMetadataFromDetails(runtimeDetails, text, id)), 'utf8');
         const manifest = manifestFor({ arxivId: id, generation, capturedAt, text, pdf, runtimeMetadataBytes });
         temporary = temporaryGenerationDirectory(paperDirectory, generationName(generation));
@@ -555,10 +663,11 @@ async function withEphemeralArxivFigures(options = {}, callback, overrides = {})
 }
 
 module.exports = {
-    CONTRACT, VERSION, EXTRACTOR_CONTRACT, DEFAULT_EXTRACTOR_VERSION,
+    CONTRACT, VERSION, EXTRACTOR_CONTRACT, DEFAULT_EXTRACTOR_VERSION, HISTORICAL_VERSION_CONTRACT,
     MANIFEST_NAME, TEXT_NAME, PDF_NAME, RUNTIME_METADATA_NAME, SOURCE_FILES, FreshArxivRewriteSourceError,
     sha256, normalizedArxivId, normalizedGeneration, generationName, sourceDirectory,
-    readFreshArxivRewriteSource, captureFreshArxivRewriteSource,
+    readFreshArxivRewriteSource, captureFreshArxivRewriteSource, officialUrl,
     withEphemeralArxivFigures, officialFigureUrl, generationExists, runtimeDetailsFromFreshCapture,
-    runtimeMetadataFromDetails, runtimeDetailsFromMetadata, assertNoPersistentImageBytes
+    runtimeMetadataFromDetails, runtimeDetailsFromMetadata, historicalVersionIdentity,
+    normalizeHistoricalVersionIdentity, historicalVersionWarning, assertNoPersistentImageBytes
 };

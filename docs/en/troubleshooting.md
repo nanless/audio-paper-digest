@@ -54,6 +54,13 @@ rerunning it then reuses matching source-bound analysis checkpoints. A failed fr
 acquisition writes only an immutable handoff; it does not mutate crosswalk automatically or block the local
 conference queue.
 
+When the exact failure is HTTP 404 for the current unversioned arXiv PDF, rerunning the same generation may use an
+official historical `vN` PDF only for that canonical ID. A successful fallback must seal self-hashed `sourceVersion`
+evidence, derive `source.txt` from the selected PDF bytes, include the current-unavailable warning in analysis input,
+and render the same warning at the top of the final paper page. Never import a cross-ID/query/fragment URL or patch the
+checkpoint. Ordinary current-PDF bundles do not enter this conditional path; if every same-ID version remains
+unavailable, use the named handoff fallback without guessing a replacement identity.
+
 Use one `history:status ... --verify-sources true` invocation to rehash external conference metadata/PDF files when
 path drift is suspected. Do not combine deep verification with watch; normal/watch status uses path/type/size checks.
 

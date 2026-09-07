@@ -16,6 +16,7 @@ const VERSION = 1;
 const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
 const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = 'historical-author-prior-preprint-disclosure-v1';
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
+const HISTORICAL_ARXIV_VERSION_CONTRACT = 'arxiv-historical-version-source-v1';
 const SHA = /^[a-f0-9]{64}$/;
 
 class HistoricalDirectPageStagingError extends Error {
@@ -182,6 +183,36 @@ function priorPreprintPageDisclosure(item) {
         '> 标题、内容、实验结果和结论可能与会议最终版本不同；本文不代表已核验 camera-ready 版本。'
     ].join('\n');
 }
+function arxivHistoricalVersionDisclosureProof(item, sourceDescriptor) {
+    const value = sourceDescriptor?.sourceVersion;
+    if (!value) return null;
+    if (item?.route?.kind !== 'arxiv-fresh-fetch') fail(`${item?.paperId || 'unknown paper'} non-arXiv source carries arXiv version evidence`);
+    const normalized = require('./fresh-arxiv-rewrite-source.js')
+        .normalizeHistoricalVersionIdentity(value, item.route.arxivId);
+    if (normalized.contract !== HISTORICAL_ARXIV_VERSION_CONTRACT
+        || sourceDescriptor.sourceId !== normalized.selectedSourceId
+        || !SHA.test(String(sourceDescriptor.sourceManifestSha256 || ''))) {
+        fail(`${item.paperId} historical arXiv version evidence is not bound to its source descriptor`);
+    }
+    return normalized;
+}
+function arxivHistoricalVersionPageDisclosure(item, sourceDescriptor) {
+    const disclosure = arxivHistoricalVersionDisclosureProof(item, sourceDescriptor);
+    if (!disclosure) return null;
+    return [
+        '> **⚠️ 来源版本说明（当前稿不可用）**',
+        '>',
+        `> arXiv 当前无版本 PDF（${markdownInline(disclosure.attemptedCurrentPdfUrl)}）返回 HTTP 404，不能视为当前有效稿件。`,
+        `> 本页只封存并分析官方历史版本 **${markdownInline(disclosure.selectedSourceId)}**：${markdownInline(disclosure.selectedPdfUrl)}`,
+        '> 文中结论仅对应该历史版本，不得暗示当前稿仍有效或已恢复。'
+    ].join('\n');
+}
+function sourceDisclosureProof(item, sourceDescriptor) {
+    return priorPreprintDisclosureProof(item) || arxivHistoricalVersionDisclosureProof(item, sourceDescriptor);
+}
+function pageDisclosureFor(item, sourceDescriptor) {
+    return priorPreprintPageDisclosure(item) || arxivHistoricalVersionPageDisclosure(item, sourceDescriptor);
+}
 function injectTopDisclosure(markdown, disclosure) {
     if (!disclosure) return markdown;
     const newline = markdown.startsWith('---\r\n') ? '\r\n' : '\n';
@@ -195,6 +226,16 @@ function injectTopDisclosure(markdown, disclosure) {
         fail('renderer emitted an unterminated Hugo front matter block');
     }
     return `${disclosure.replace(/\n/g, newline)}${newline}${newline}${markdown}`;
+}
+function hasExactTopDisclosure(markdown, disclosure) {
+    if (!disclosure) return true;
+    const newline = markdown.startsWith('---\r\n') ? '\r\n' : '\n';
+    const normalized = disclosure.replace(/\n/g, newline);
+    if (!markdown.startsWith(`---${newline}`)) return markdown.startsWith(`${normalized}${newline}${newline}`);
+    const delimiter = `${newline}---${newline}`;
+    const closing = markdown.indexOf(delimiter, 3 + newline.length);
+    if (closing < 0) return false;
+    return markdown.slice(closing + delimiter.length).startsWith(`${normalized}${newline}${newline}`);
 }
 function buildManifest({ item, projection, source, analysis, sourceDisclosure = null, stagingInputSha256, stagingBindingSha256,
     rendererImplementationSha256, pages, assets }) {
@@ -216,7 +257,8 @@ function validateManifest({ value, item, sourceDescriptor, artifact, analysis, s
     directory, rendererImplementationSha256, assertCompleteAnalysis } = {}) {
     const projection = pageProjection(item); const source = sourceProof(item, sourceDescriptor, artifact);
     const reader = readerProof(item, analysis, artifact, { assertCompleteAnalysis });
-    const sourceDisclosure = priorPreprintDisclosureProof(item);
+    const sourceDisclosure = sourceDisclosureProof(item, sourceDescriptor);
+    const pageDisclosure = pageDisclosureFor(item, sourceDescriptor);
     const hasSourceDisclosure = Object.hasOwn(value || {}, 'sourceDisclosure');
     exact(value, ['contract', 'version', 'status', 'paperId', 'runId', 'route', 'rendererImplementationSha256', 'stagingInputSha256',
         'stagingBindingSha256', 'source', 'analysis', ...(hasSourceDisclosure ? ['sourceDisclosure'] : []),
@@ -251,6 +293,9 @@ function validateManifest({ value, item, sourceDescriptor, artifact, analysis, s
         const bytes = readFile(safeTarget(directory, page.stagedPath, `${item.paperId} direct page`), 64 * 1024 * 1024,
             `${item.paperId} direct rendered page`);
         if (bytes.fileSha256 !== page.contentSha256) fail(`${item.paperId} direct rendered page bytes drifted`);
+        if (!hasExactTopDisclosure(bytes.bytes.toString('utf8'), pageDisclosure)) {
+            fail(`${item.paperId} source-version disclosure is absent or not at the top of the page`);
+        }
         seen.add(page.pageKey);
     }
     if (seen.size !== expectedByKey.size) fail(`${item.paperId} direct rendered page set is incomplete`);
@@ -277,8 +322,8 @@ function stageDirectPages({ item, sourceDescriptor, artifact, analysis, director
     const projection = pageProjection(item); const source = sourceProof(item, sourceDescriptor, artifact);
     const analysisProof = readerProof(item, analysis, artifact, { assertCompleteAnalysis: dependencies.assertCompleteAnalysis });
     const render = dependencies.renderDirectPage || renderer.defaultRender; const assets = new Map(); const pages = [];
-    const sourceDisclosure = priorPreprintDisclosureProof(item);
-    const pageDisclosure = priorPreprintPageDisclosure(item);
+    const sourceDisclosure = sourceDisclosureProof(item, sourceDescriptor);
+    const pageDisclosure = pageDisclosureFor(item, sourceDescriptor);
     for (const page of projection.pages) {
         const result = normalizeRendererResult(render({ directStaging: true, paper: directPaper(item, analysis), cohortDate: page.cohortDate }), page);
         for (const asset of result.assets) {
@@ -312,5 +357,7 @@ function stageDirectPages({ item, sourceDescriptor, artifact, analysis, director
 }
 
 module.exports = { CONTRACT, VERSION, HistoricalDirectPageStagingError, stableHash, pageProjection, directPaper,
-    sourceProof, readerProof, priorPreprintDisclosureProof, priorPreprintPageDisclosure, injectTopDisclosure,
+    sourceProof, readerProof, priorPreprintDisclosureProof, priorPreprintPageDisclosure,
+    arxivHistoricalVersionDisclosureProof, arxivHistoricalVersionPageDisclosure,
+    sourceDisclosureProof, pageDisclosureFor, injectTopDisclosure, hasExactTopDisclosure,
     buildManifest, receipt, validateManifest, stageDirectPages };

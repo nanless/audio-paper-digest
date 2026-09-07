@@ -42,8 +42,8 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 |---|---|---|
 | `full-fetch.js` | Node 入口 | 默认数据总编排：归档、抓取、筛选、去重、深度分析和增量落盘。 |
 | `lib/daily-fresh-source-plan.js` | Node 库 | 日更筛选结束后为每个 arXiv 论文封存本次官方 TXT/PDF/manifest；分析只重放 sealed bundle，图像只在请求期间临时物化。 |
-| `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 为 fresh arXiv generation 原子封存官方文本、PDF、无像素 runtime metadata 和 manifest；图像字节仅在 OS 临时目录回调中可见并清理。 |
-| `lib/direct-rewrite-analysis-context.js` | Node 库 | 将 direct historical 与日更 source bundle 放入隔离 AsyncLocalStorage，阻止旧正文/缓存进入分析，并约束 Reader 临时图像不跨持久化边界。 |
+| `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 为 fresh arXiv generation 原子封存官方文本、PDF、无像素 runtime metadata 和 manifest；仅在 current PDF 明确 404 后接受同 canonical 官方 `vN` PDF，强制由该 PDF 提取文本并条件性签发自哈希 `sourceVersion`；普通 bundle 保持原结构兼容。 |
+| `lib/direct-rewrite-analysis-context.js` | Node 库 | 将 direct historical 与日更 source bundle 放入隔离 AsyncLocalStorage，阻止旧正文/缓存进入分析，并约束 Reader 临时图像不跨持久化边界；历史版本 identity SHA 随 source provenance 进入所有分析阶段。 |
 | `fetch-papers.js` | Node 模块/入口 | arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选。 |
 | `fetch-huggingface-papers.js` | Node 模块/入口 | 通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
 | `deep-analyzer.js` | Node 核心 | 单篇全文获取、多阶段分析、评分审计、API reader 长文和图片计划；结构修复后以 source-only 证据封口 `core-summary-detailed-v3`，并用显式阶段 DAG、SHA 投影和 stale snapshot 减少安全恢复时的整篇返工。 |
@@ -114,8 +114,8 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/historical-direct-rewrite-plan.js` | Node 库 | 从 strict current catalog、inventory 与会议 projections 生成可重放路由计划，并自哈希记录所有未覆盖 frozen paper pages 及 scope/hint-status 汇总；唯一白名单跨标题预印本必须带自哈希 source disclosure，普通 v5 路由保持旧字节结构以兼容长任务恢复；不调用 LLM、网络、crosswalk 或旧正文。 |
 | `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行 direct plan：强制重放同 plan/generation scheduler-ready 前置证明与来源字节；持久化 source-bound analysis recovery checkpoint，支持跨进程阶段续跑；仅完整 source-only analysis/Reader 写隔离 staging。 |
 | `lib/historical-direct-control.js` | Node 库 | 提供 source/analysis 两阶段 plan+generation 绑定的 immutable pause request、安全 resume、source checkpoint、registry/aggregate/task/publication blocker 只读汇总；不调用模型或修改博客。 |
-| `lib/historical-direct-page-staging.js` | Node 库 | 将 sealed direct source/analysis/Reader packet 投影成历史单篇 staging 页面；跨标题预印本在 front matter 后强制显示非 camera-ready 中文提示并把 disclosure 纳入 manifest/page SHA，不冒充 legacy crosswalk 路径。 |
-| `lib/historical-direct-aggregate.js` | Node 库 | 从 direct registry 与 page projections 可重放地产生日汇总、会议汇总和 conference-task staging，不读取旧正文；projection v3 用冻结链接拓扑绑定 task 成员，为无论文汇总签 `retain-unchanged`，并闭合 inventory 全页面 coverage；reader-facing-v3 输出只按主任务统计热门方向，并显示双语链接标题、八维评分、分档/文档类型/arXiv、作者机构和资源状态。 |
+| `lib/historical-direct-page-staging.js` | Node 库 | 将 sealed direct source/analysis/Reader packet 投影成历史单篇 staging 页面；跨标题预印本显示非 camera-ready 提示；current PDF=404 的同 canonical 历史版本显示“当前稿不可用”提示，并确定性重放 disclosure、manifest 与页面 SHA。 |
+| `lib/historical-direct-aggregate.js` | Node 库 | 从 direct registry 与 page projections 可重放地产生日汇总、会议汇总和 conference-task staging，不读取旧正文；projection v3 用冻结链接拓扑绑定 task 成员，为无论文汇总签 `retain-unchanged`，并闭合 inventory 全页面 coverage；reader-facing-v3 输出只按主任务统计热门方向，并显示双语链接标题、八维评分、分档/文档类型/arXiv、作者机构和资源状态；条件重放历史 arXiv version identity，在排行榜和条目中显式显示当前稿不可用及实际官方 `vN` 链接。 |
 | `lib/historical-direct-publication.js` | Node 库 | 对完整 direct staging、aggregate projection v3、aggregate v2 与显式视觉处置执行可恢复的历史发布事务；绑定博客基线、逐页 SHA、确定性/Hugo/语义审查、激活回滚、Git 提交及远端 OID。 |
 
 ## 默认 LLM/API：恢复与维护入口
