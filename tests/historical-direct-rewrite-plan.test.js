@@ -244,6 +244,36 @@ test('direct source scheduler uses the new arXiv source store and keeps arXiv lo
     assert.deepEqual(advanced, [conferenceIds[1]], 'durable ready checkpoint advances the next conference batch');
 });
 
+test('source worker pool rechecks the cursor after async pause checks at a non-divisible queue tail', async t => {
+    const f = fixture(t, { icasspPages: 1, iclrPages: 1, includeIcml: true });
+    const artifact = projections.buildConferencePageProjections({ catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory,
+        conferencePageProjections: artifact });
+    const observed = []; let pauseChecks = 0; let releaseTail;
+    const tailBarrier = new Promise(resolve => { releaseTail = resolve; });
+    const shouldPause = async () => {
+        pauseChecks += 1;
+        if (pauseChecks <= 2) return false;
+        if (pauseChecks <= 4) {
+            if (pauseChecks === 4) releaseTail();
+            await tailBarrier;
+        }
+        return false;
+    };
+    const result = await planner.prepareDirectSources({ plan, apply: true, queue: 'conference',
+        conferenceConcurrency: 2, shouldPause }, {
+        verifyConferenceSource: async item => { observed.push(item.paperId); return { sourceCount: 1 }; }
+    });
+    assert.equal(3 % 2, 1, 'fixture must keep a non-divisible worker tail');
+    assert.equal(result.status, 'ready');
+    assert.equal(result.processedCount, 3);
+    assert.deepEqual(observed.slice().sort(), plan.queue.filter(item => item.route.kind === 'conference-local-pdf')
+        .map(item => item.paperId).sort());
+    assert.ok(pauseChecks >= 4, 'both workers crossed the asynchronous tail pause check');
+});
+
 test('source scheduler CLI persists progress and passes ready members into the next bounded selection', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = projections.buildConferencePageProjections({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });

@@ -957,14 +957,23 @@ async function bounded(work, concurrency, shouldPause = () => false, onProgress 
         const output = [];
         while (cursor < work.length) {
             if (await shouldPause()) break;
+            // Another worker may consume the final item while this worker is
+            // suspended in the asynchronous pause check. Re-check before
+            // claiming so queue lengths that are not divisible by concurrency
+            // can never dispatch undefined work.
+            if (cursor >= work.length) break;
             const value = work[cursor++];
+            const paperId = value?.paperId;
+            if (!value || typeof value.run !== 'function' || typeof paperId !== 'string' || !paperId) {
+                fail('direct source queue produced an invalid work item');
+            }
             try {
                 const result = await value.run();
-                const record = { paperId: value.paperId,
+                const record = { paperId,
                     status: result?.outcome === 'crosswalk-handoff' ? 'handoff' : 'ready', result };
                 output.push(record); if (onProgress) await onProgress(record);
             }
-            catch (error) { const record = { paperId: value.paperId, status: 'failed', error: String(error.message).slice(0, 2000) };
+            catch (error) { const record = { paperId, status: 'failed', error: String(error.message).slice(0, 2000) };
                 output.push(record); if (onProgress) await onProgress(record); }
         }
         return output;
