@@ -304,8 +304,12 @@ state 继续推进。创建顺序固定为 `patches/ → 初始 state.json → a
 失败关闭，绝不重建 pending；未知文件、非空孤立 patch、symlink 或任一字节漂移也都会失败关闭。
 并发 writer 已经落下同一 authority 时，失败方只重放完整 bundle，绝不回滚共享文件；其他创建
 错误的 cleanup 只删除本进程记录且当前 `dev/ino/size/SHA` 仍与写入描述符一致的文件和目录。
-目录使用锁、状态 SHA CAS 和受控 patch 保证可恢复。当前仍没有模型分析、Reader、production taxonomy、completion proof
-或会议博客发布器；`completed` transition 和 publishable aggregate 会主动失败关闭。
+目录使用锁、状态 SHA CAS 和受控 patch 保证可恢复。主分支现已通过
+`conference:analyze` 复用共享深度分析/Reader，并由 `conference:postprocess paper|aggregate`
+重放 completion、current taxonomy 和完整 selected member set。但这些新页仍使用 generic
+conference 路径，没有绑定历史 inventory 保留的旧 URL/task 页；conference aggregate 也尚未接入
+historical publication，且没有会议历史 review/push/remote-OID 闭环。因此可运行隔离试点，
+但不能直接发布或声称已重写历史会议页。
 
 `transition` 只读取 `data/runtime/conference-executions/<UUID>/patches/` 下的直接 JSON 文件。
 首个来源就绪 patch 的最小形状如下；`expectedStateSha256` 必须取当前 status 输出对应状态，

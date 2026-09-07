@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -137,10 +138,14 @@ class ActivationTransactionTest(unittest.TestCase):
         module = load_publish_to_blog()
         with tempfile.TemporaryDirectory() as tmp:
             current = Path(tmp).resolve()
+            blog_repo = current / 'blog-repo'
+            blog_repo.mkdir()
+            subprocess.run(['git', 'init', '-q', str(blog_repo)], check=True)
             marker = activation.marker_path(current, '2026-09-04')
             activation.write(marker, activation.encoded({'contract': activation.CONTRACT,
                 'date': '2026-09-04', 'status': 'pending'}))
-            with mock.patch.object(module, 'CURRENT_DIR', current):
+            with mock.patch.object(module, 'CURRENT_DIR', current), \
+                    mock.patch.object(module, 'BLOG_REPO', str(blog_repo)):
                 for stage in ('generate', 'review', 'push'):
                     body = mock.Mock(name=stage)
                     with self.assertRaises(module.PublishDataValidationError):

@@ -9,8 +9,17 @@ from conference_extractor import ConferenceExtractionError, parse_args, run_extr
 
 
 def main(argv=None):
-    require_external_runtime("conference-extract.py")
+    # Reject a sandboxed direct invocation before even parsing CLI arguments.
+    # The second, mode-aware check below adds the history role for mutating
+    # modes while allowing pinned read-only replay from an already guarded flow.
+    require_external_runtime("conference-extraction-replay")
     mode, manifest_name, source_root = parse_args(list(sys.argv[1:] if argv is None else argv))
+    # Verification is also used as a pinned, read-only replay inside already
+    # role-gated Node production flows.  Apply/dry-run remain direct history
+    # entrypoints; npm wrappers additionally bind every mode to history.
+    require_external_runtime(
+        "conference-extract.py" if mode != "verify" else "conference-extraction-replay"
+    )
     result = (verify_extraction(manifest_name, source_root=source_root)
               if mode == "verify"
               else run_extraction(manifest_name, apply=mode == "apply", source_root=source_root))

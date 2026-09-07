@@ -92,6 +92,7 @@ class BlogStageEntryTest(unittest.TestCase):
             repo = Path(tmp) / 'blog'
             posts = repo / 'content' / 'posts'
             posts.mkdir(parents=True)
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
             current = Path(tmp) / 'current'
             current.mkdir()
             page = posts / '2026-07-10.md'

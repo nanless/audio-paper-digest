@@ -71,6 +71,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/reader-tables.js` | Node 库 | 将 TABLE marker 与原表行列选择确定性展开为 Markdown 和既有逐格来源绑定，保留表头身份并拒绝错位/越界。 |
 | `lib/llm-usage.js` | Node 库 | 请求级真实 usage 规范化与按论文/阶段归因；服务未提供的计费用量保持不可得。 |
 | `lib/fresh-rewrite-run.js` | Node 库 | 从 raw 元数据白名单创建隔离重写 run，编排同源缓存、仅本 run 分析恢复和完整结果提升。 |
+| `workspace-role.js` | CLI/公共门禁 | 用 gitignored、`0600`、仓库 realpath 绑定的 marker 将完整工作区显式分为 `daily` 或 `history`；`set` 原子签发/显式切换，`exec` 在 npm 生产入口启动前校验角色，Node/Python 直接入口再由公共 runtime guard 重放。 |
 | `lib/fresh-analysis-context.js` | Node 库 | fresh run 的原文缓存、来源 SHA 重放与深分析上下文隔离；拒绝旧生成正文和跨 run checkpoint。 |
 | `lib/fresh-rewrite-publication.js` | Node 库 | fresh 重写前精确备份 canonical/博客基线，完整新结果通过来源与基线 CAS 后才提升 canonical。 |
 | `lib/conference-source-ledger.js` | Node 库 | 会议来源账本的身份、四类工件 SHA、审查证据、不可变读写和本地文件重放；标题绝不作为身份。 |
@@ -161,6 +162,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `runtime-storage.js` | Node 只读统计运行存储，并对受控缓存/日志执行引用感知的 dry-run 或显式 `--apply` 清理。 |
 | `project_env.py` | Python 项目环境、最小子进程环境与代理加载。 |
 | `path_config.py` | Python 共享路径、日期与原子写配置。 |
+| `blog_repository_lock.py` | Python 共享博客仓库锁；以 Git common-dir 作为跨项目工作区共同根，使用 PID/hostname/token/lease 与 inode/SHA 精确回收和释放，不污染博客 Git。 |
 | `llm_account_pool.py` | Python 与 Node 共享同一 OpenCode Go 账号池 schema/锁协议。 |
 | `llm_usage.py` | Python 发布侧请求 usage 与失败事件记录，复用跨运行用量归因格式。 |
 | `utils.py` | Python 评分解析与发布侧通用文本工具。 |

@@ -6,6 +6,13 @@
 
 ## 默认目标与最短路径
 
+### 工作区分工（必须先核对 `pwd`）
+
+- `/Users/francis7999/code/github_repos/audio-paper-digest` 专用于新论文筛选、日更博客生成、review 和推送；不在这个工作区运行长时间全历史重写。
+- `/Users/francis7999/code/github_repos/audio-paper-digest-rewrite-all` 专用于全历史单篇、每日汇总和会议汇总的来源闭合、重写、重标、staging 与最终历史发布。
+- 两个工作区不得同时执行博客 generate/review/push 或修改同一远端 `main`。历史工作区真正发布前，必须停止日更发布，同步代码仓库和博客仓库的最新远端 `main`，并重新生成绑定最新基线的发布证明。
+- 长时间历史运行只保存在 `audio-paper-digest-rewrite-all/data/runtime/`；不把 checkpoint 反向复制回日更工作区，不手工合并两边的 runtime JSON。
+
 用户说“运行/进行 YYYY-MM-DD 论文速递”时，默认且唯一隐含路线是完整 LLM/API 日更：
 
 ```bash
@@ -17,8 +24,9 @@ npm run digest:prepare -- YYYY-MM-DD
 
 只有用户明确说“Manual/人工流程”时才运行 `npm run digest:manual -- YYYY-MM-DD`。进入前完整阅读 [manual/README.md](manual/README.md)；API、网络或配额失败绝不自动切换 Manual。微信、飞书、小红书不属于默认日更。
 
-## 运行前五项检查
+## 运行前六项检查
 
+0. 先运行 `npm run workspace:role -- status`。原日更目录必须是 `daily`，全历史副本必须是 `history`；marker 缺失或 realpath 不匹配时先停止，只在确认工作区用途后用 `npm run workspace:role -- set daily|history [--force]` 绑定。
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
    默认博客/视觉 Python 入口还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，权限由 loader 收紧为 `0600`。
@@ -26,7 +34,7 @@ npm run digest:prepare -- YYYY-MM-DD
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；Muse 与 arXiv 缺代理立即失败。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 
-所有项目脚本、测试、语法检查和数据校验必须在沙箱外执行。脚本会在业务逻辑、日志、网络和写入前拒绝可靠的 `CODEX_SANDBOX` 标志；不得绕过或伪造结果。
+所有项目脚本、测试、语法检查和数据校验必须在沙箱外执行。脚本会在业务逻辑、日志、网络和写入前拒绝可靠的 `CODEX_SANDBOX` 标志；生产 npm 入口和直接 Node/Python 入口还会重放工作区角色。不得绕过或伪造结果。
 
 ## 权威来源
 

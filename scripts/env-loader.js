@@ -34,6 +34,12 @@ const TRANSPORT_ENV_KEYS = Object.freeze([
 
 function isScriptsEntrypoint(scriptPath = process.argv[1]) {
     if (!scriptPath) return false;
+    // Under `node -e`, argv[1] is the first user argument rather than the
+    // executed module.  Treating it as an entrypoint breaks isolated worker
+    // tests and would assign a role to a module that was only imported.
+    if (process.execArgv.some(arg => arg === '-e' || arg === '--eval' || arg.startsWith('--eval='))) {
+        return false;
+    }
     const resolved = path.resolve(scriptPath);
     const entryRoots = [
         path.resolve(__dirname),
@@ -43,14 +49,37 @@ function isScriptsEntrypoint(scriptPath = process.argv[1]) {
         && path.extname(resolved) === '.js';
 }
 
-function requireExternalRuntime(commandName = path.basename(process.argv[1] || 'script')) {
+function requireExternalRuntime(commandName = path.basename(process.argv[1] || 'script'), options = {}) {
     const sandbox = String(process.env.CODEX_SANDBOX || '').trim();
-    if (!sandbox) return;
-    throw new Error(
-        `${commandName} 必须在沙箱外运行（检测到 CODEX_SANDBOX=${sandbox}）。`
-        + '项目脚本可能访问本机代理、LLM、外部站点、Hugo 或 Git；'
-        + '请以沙箱外权限重新执行，禁止在沙箱内降级、跳过或伪造运行结果。'
+    if (sandbox) {
+        throw new Error(
+            `${commandName} 必须在沙箱外运行（检测到 CODEX_SANDBOX=${sandbox}）。`
+            + '项目脚本可能访问本机代理、LLM、外部站点、Hugo 或 Git；'
+            + '请以沙箱外权限重新执行，禁止在沙箱内降级、跳过或伪造运行结果。'
+        );
+    }
+    const inferredRole = requiredWorkspaceRoleForCommand(commandName);
+    const wrappedRole = String(process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE || '').trim();
+    const enforceRole = Boolean(wrappedRole) || isScriptsEntrypoint()
+        || options.enforceWorkspaceRole === true;
+    if (enforceRole && wrappedRole && inferredRole && wrappedRole !== inferredRole) {
+        throw new Error(`${commandName} 的固定 workspace role=${inferredRole} 与 wrapper=${wrappedRole} 冲突`);
+    }
+    const requiredRole = enforceRole ? inferredRole || wrappedRole : null;
+    // workspaceRoot is an internal test injection; production entrypoints
+    // never accept it from CLI or environment.
+    if (requiredRole) require('./workspace-role.js').requireWorkspaceRole(
+        requiredRole, options.workspaceRoot || PROJECT_ROOT
     );
+}
+
+function requiredWorkspaceRoleForCommand(commandName) {
+    const name = path.basename(String(commandName || ''));
+    if (name === 'full-fetch.js') return 'daily';
+    if (name.startsWith('conference-') || name.startsWith('historical-')
+        || name.startsWith('history-') || name === 'page-source-crosswalk.js'
+        || name === 'arxiv-source-authority.js') return 'history';
+    return null;
 }
 
 function resolveEnvFile(envFile) {
@@ -130,6 +159,7 @@ module.exports = {
     VCS_CHILD_ENV_KEYS,
     TRANSPORT_ENV_KEYS,
     isScriptsEntrypoint,
+    requiredWorkspaceRoleForCommand,
     requireExternalRuntime,
     resolveEnvFile,
     isProjectEnvKey,

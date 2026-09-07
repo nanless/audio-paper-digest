@@ -6016,16 +6016,18 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 
     def test_repository_lock_serializes_different_publication_dates(self):
         with tempfile.TemporaryDirectory() as tmp:
-            current_dir = Path(tmp) / 'current'
-            repo = Path(tmp) / 'blog'
-            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+            current_a = Path(tmp) / 'workspace-a' / 'data' / 'current'
+            current_b = Path(tmp) / 'workspace-b' / 'data' / 'current'
+            repo, _posts, _remote = init_blog_repo(tmp)
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_a), \
                     mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
                 with publish_to_blog.blog_publication_lock('2026-07-10'):
-                    with self.assertRaises(TimeoutError):
-                        with publish_to_blog.blog_publication_lock(
-                            '2026-07-11', timeout_seconds=0.05,
-                        ):
-                            self.fail('repository lock must serialize different dates')
+                    with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_b):
+                        with self.assertRaises(TimeoutError):
+                            with publish_to_blog.blog_publication_lock(
+                                '2026-07-11', timeout_seconds=0.05,
+                            ):
+                                self.fail('shared blog repository must serialize different workspaces')
 
     def test_corrupt_review_failure_kind_falls_back_to_full_review(self):
         with tempfile.TemporaryDirectory() as tmp:

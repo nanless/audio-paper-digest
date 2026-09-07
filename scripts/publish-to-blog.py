@@ -70,6 +70,7 @@ from path_config import (
     atomic_write_text,
     file_lock,
 )
+from blog_repository_lock import shared_blog_repository_lock
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_required_fetch_proxy
 from runtime_guard import require_external_runtime
 from llm_usage import with_llm_usage_context
@@ -460,12 +461,10 @@ def blog_transaction_lock(date_str, *, timeout_seconds=30):
 
 
 def blog_repository_lock(*, timeout_seconds=30):
-    """Serialize all operations that touch the shared blog worktree/index/HEAD."""
-    repo_key = hashlib.sha256(
-        str(Path(BLOG_REPO).expanduser().resolve()).encode('utf-8')
-    ).hexdigest()[:16]
-    return file_lock(
-        CURRENT_DIR / f'blog-repository-{repo_key}.transaction',
+    """Serialize writers through the blog repository's shared Git common-dir."""
+    return shared_blog_repository_lock(
+        BLOG_REPO,
+        owner=f'paper-digest-blog-stage:{os.getpid()}',
         timeout_seconds=timeout_seconds,
     )
 

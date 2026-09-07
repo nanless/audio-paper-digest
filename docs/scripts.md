@@ -4,6 +4,16 @@
 
 面向操作者，按“我要完成什么”列命令。逐文件依赖图见 [scripts/README.md](../scripts/README.md)，命令别名以 `package.json` 为准。Manual 内部命令只见 [manual/README.md](../manual/README.md)。
 
+## 工作区角色
+
+生产命令运行前先检查：
+
+```bash
+npm run workspace:role -- status
+```
+
+`digest:*`、`fetch`、`blog:generate/review/push` 只允许 `daily`；`history:*`、`conference:*`、`rewrite:source` 与 `blog:activate-fresh` 只允许 `history`。首次绑定用 `npm run workspace:role -- set daily|history`；整库复制后 marker 仍绑定旧 realpath，必须在确认副本用途后显式执行 `npm run workspace:role -- set history --force`。marker 为 Git 忽略的 `0600` 本机文件。
+
 ## 日更脚本阶段与业务终态
 
 | 命令 | 用途 |
@@ -48,14 +58,13 @@
 | `--exclude-id ID` | generate 阶段显式排除，可重复 |
 
 不得把三个入口合并为一个模糊的“发布脚本”。`publish-to-blog.py` 是共享实现与生成兼容入口，不替代三阶段门禁。
+三个入口都会先取得博客仓库 Git common-dir 下的私有共享锁，再取得本项目的日期事务锁；因此即使两个
+`audio-paper-digest` 工作区指向同一个 `PAPER_DIGEST_BLOG_REPO`，也不能同时修改其 worktree、index 或 HEAD。
+共享锁位于 Git 私有目录，不进入博客工作树或提交内容；失效回收和释放只删除 inode/token/SHA 仍精确匹配的锁文件。
 
-## 会议论文（建设中）
+## 会议论文（生产链已接通，历史发布仍建设中）
 
-会议命令按 `discover → filter → extract → staging → import → plan → execution` 顺序运行，
-所有写入阶段都有显式 dry-run/apply 或 receipt/CAS 门禁。当前主分支只接通到可信来源与
-隔离执行状态；实际 LLM 筛选 runner 已接通，尚未提供会议分析/Reader、completion proof 或会议
-博客发布器，因此不能把 `conference:*` 当成已完成的端到端发布入口。准确参数、运行目录
-和人工工件格式见[会议论文工作流](conference-workflow.md)。
+会议命令按 `discover → filter/filter:run → extract → reviewed staging → import → plan/execution → analyze → postprocess` 顺序运行，所有写入阶段都有显式 dry-run/apply 或 receipt/CAS 门禁。当前主分支已有真实 LLM 筛选、共用深度分析/Reader 和确定性单篇/会议汇总 postprocess。仍未完成的是旧会议 URL/task 页映射、conference aggregate 接入 historical publication，以及会议历史 review/push/remote-OID 闭环。因此 `conference:*` 仍不是可直接发布全历史的一键入口。准确参数、运行目录和人工工件格式见[会议论文工作流](conference-workflow.md)。
 
 ## 全历史重写（建设中）
 
@@ -72,8 +81,7 @@ npm run history:inventory -- --apply \
 审核状态，通过受控 decision/CAS 记录待核、阻断、冲突，或在现场重放 authenticated
 production-authorized `paper-source-authority-v1` 后记录 verified；全部 verified 且每次读取均可重新
 解析当前 authority handle，才能生成或消费不可变 final receipt。
-真实 arXiv authority 采集 runner、会议 authority 跨进程装载、历史分析与发布仍未实现。
-准确命令和当前预期失败边界见[历史重写底座](history-rewrite.md)。
+真实 arXiv authority 批处理、已验证 arXiv identity 的历史分析、taxonomy/单篇/daily 确定性后处理已实现。仍未完成的是全部来源身份闭合、会议历史路径映射，以及历史专属 review/install/commit/push 交易。准确命令和当前运行快照见[历史重写底座](history-rewrite.md)与[全历史重写交接](historical-rewrite-handoff-2026-09-07.md)。
 
 ## 视觉状态机
 

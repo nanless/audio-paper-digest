@@ -64,9 +64,9 @@ test('显式 Manual 边界只声明生产 records v4/spec v6，不伪装自动 s
 
 test('package 默认 manual 命令进入 production v6，legacy v5 和 shadow 都必须显式命名', () => {
     const scripts = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')).scripts;
-    assert.equal(scripts['digest:prepare'], 'PD_DAILY_API_MODE=1 bash run-daily-digest.sh');
-    assert.equal(scripts['digest:api'], 'PD_DAILY_API_MODE=1 bash run-daily-digest.sh');
-    assert.equal(scripts['digest:manual'], 'PD_DAILY_API_MODE=0 bash run-daily-digest.sh');
+    assert.equal(scripts['digest:prepare'], 'PD_DAILY_API_MODE=1 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh');
+    assert.equal(scripts['digest:api'], 'PD_DAILY_API_MODE=1 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh');
+    assert.equal(scripts['digest:manual'], 'PD_DAILY_API_MODE=0 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh');
     assert.equal(scripts['manual:spec'], 'node manual/scripts/create-manual-analysis-spec-v6.js --production');
     assert.equal(scripts['manual:analyze'], 'node manual/scripts/manual-deep-analysis.js --v6-production');
     assert.equal(scripts['manual:packet'], 'node manual/scripts/manual-v6-production-packet.js');

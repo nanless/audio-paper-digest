@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
-from runtime_guard import ExternalRuntimeRequired, require_external_runtime  # noqa: E402
+from runtime_guard import (ExternalRuntimeRequired, require_external_runtime,
+                           require_workspace_role)  # noqa: E402
 
 
 class ExternalRuntimeGuardTest(unittest.TestCase):
@@ -47,7 +48,27 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
 
     def test_allows_external_runtime(self):
         with mock.patch.dict(os.environ, {'CODEX_SANDBOX_NETWORK_DISABLED': '1'}, clear=True):
-            require_external_runtime('push-blog.py')
+            require_external_runtime('runtime_guard.py')
+
+    def test_python_direct_role_gate_replays_private_realpath_marker(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            marker = root / '.paper-digest-workspace-role.json'
+            marker.write_text(json.dumps({
+                'contract': 'paper-digest-workspace-role-v1',
+                'version': 1,
+                'role': 'daily',
+                'workspaceRealpath': str(root),
+            }), encoding='utf-8')
+            marker.chmod(0o600)
+            require_workspace_role('daily', root)
+            with self.assertRaisesRegex(ExternalRuntimeRequired, 'role=history'):
+                require_workspace_role('history', root)
+            with self.assertRaisesRegex(ExternalRuntimeRequired, 'role=history'):
+                require_external_runtime(
+                    'history-inventory.py', root, enforce_workspace_role=True)
 
 
 if __name__ == '__main__':

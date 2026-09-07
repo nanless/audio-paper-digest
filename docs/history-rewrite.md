@@ -89,7 +89,7 @@ npm run history:analyze-batch -- --apply --crosswalk UUID --stage analyze \
 API 分析的核心摘要使用 `core-summary-detailed-v3`：6–9 句、320–600 个中文/标点字符，必须交代
 实际问题、2–4 步方法链及分工、原文关键定量结果（原文确无时显式声明不可得）、结论边界以及
 训练/推理/部署成本（未披露时显式说明）。摘要修复只读取 source-only 证据，只替换该节并逐字
-保护其余 12 节；顺序固定为 structure repair → core summary → scoring。旧 v2 fresh checkpoint 只有
+保护其余 12 节；顺序固定为 structure repair → taxonomy seal → core summary → scoring。旧 v2 fresh checkpoint 只有
 在旧/新 Prompt 双 allowlist、模型、来源、证据和阶段 SHA 全部可重放时才做摘要-only 迁移；阶段
 失效前保存最多两份 SHA 封口的 fresh-analysis stale snapshot，替代全链成功后再清除。
 
@@ -165,9 +165,8 @@ symlink 或不可重放状态都会失败关闭。decision apply 使用目录锁
 只有同机死 PID、owner 证据完整且文件时间和 heartbeat 都超过 lease 时，才在独占 reclaim
 marker 下回收。跨主机、刚死亡、被篡改或带额外内容的锁都不会被猜测删除。
 
-后续仍需实现批量 arXiv authority/decision 编排、会议 plan authority 的耐久跨进程装载，以及按
-final receipt 中唯一 identity group 获取完整来源。完成这些以后，才能按唯一论文分析一次，再向
-重复页面和各类汇总做确定性投影。
+`history:arxiv-batch` 已实现唯一 arXiv hint 页面的批量 authority/decision 编排；
+`history:analyze-batch` 可按已验证 identity group 只分析一次，`history:postprocess` 再向重复页面和 daily 汇总做确定性投影。尚未闭合的是冲突/无 hint 页面、会议历史路径映射和全历史 publication review/push；准确运行快照见 [全历史重写交接](historical-rewrite-handoff-2026-09-07.md)。
 
 历史 publication transaction 的第一阶段只生成 plan 与私有 bundle，不写博客，也不执行 review、
 commit 或 push：
