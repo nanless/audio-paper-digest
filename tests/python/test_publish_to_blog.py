@@ -1110,6 +1110,27 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     publish_to_blog._detailed_core_summary_semantic_issue(candidate),
                 )
 
+    def test_core_summary_accepts_exact_msr_metric_but_rejects_unknown_acronym(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original_result = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        actual_2407_msr = (
+            '在 GPT-4-turbo 数字基准评测设置和相同物理危害查询口径下，BadRobot 的平均 MSR '
+            '从 Vanilla 基线的 0.25 提升至 0.83，比较对象、数值与方向均可由原文核对。'
+        )
+        candidate = summary.replace(original_result, actual_2407_msr)
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(candidate)
+        )
+
+        unknown_metric = candidate.replace(' MSR ', ' XYZ ')
+        self.assertIn(
+            '缺少完整关键定量结果',
+            publish_to_blog._detailed_core_summary_semantic_issue(unknown_metric),
+        )
+
     def test_modern_resources_show_identity_type_and_status_without_weight_claims(self):
         paper = llm_api_publication_fixture()
         resource = paper['apiReaderResources']['resources'][0]

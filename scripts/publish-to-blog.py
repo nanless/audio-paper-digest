@@ -2743,7 +2743,7 @@ def _detailed_core_summary_semantic_issue(summary):
     if len(chain) < 2 or len(roles) < 2:
         issues.append('缺少 2–4 步方法链的分工与衔接')
     metric = re.compile(
-        r'(?:WER|CER|PER|F1|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|Pearson|Spearman|Kendall|accuracy|error rate|score|latency|throughput|RTF|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)',
+        r'(?:WER|CER|PER|F1|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|Pearson|Spearman|Kendall|\bMSR\b|accuracy|error rate|score|latency|throughput|RTF|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)',
         re.IGNORECASE,
     )
     comparison = re.compile(

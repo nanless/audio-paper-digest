@@ -3593,11 +3593,20 @@ has_dataset: 否
             '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
             sentence
         );
+        const sourceOptions = { sourceText:
+            'Experiment on the benchmark reports success rate 0.83 for BadRobot and 0.25 for Vanilla.' };
         const accepted = '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标为 0.83，'
             + '高于 Vanilla 基线的 0.25，比较对象、数值与方向均可由原文核对。';
         assert.strictEqual(getCoreSummaryDetailIssue(withResult(accepted)), null);
-        const sourceOptions = { sourceText:
-            'Experiment on the benchmark reports success rate 0.83 for BadRobot and 0.25 for Vanilla.' };
+        const actual2407Msr = '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的平均 MSR 从 Vanilla 基线的 0.25 提升至 0.83，'
+            + '比较对象、数值与方向均可由原文核对。';
+        assert.strictEqual(getCoreSummaryDetailIssue(withResult(actual2407Msr)), null);
+        assert.match(
+            getCoreSummaryDetailIssue(
+                withResult(actual2407Msr.replace(/\bMSR\b/, 'XYZ')), sourceOptions
+            ),
+            /最接近的同句量化候选缺少：指标名称/
+        );
         for (const rejected of [
             '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标相对 Vanilla 基线的 0.25 升至 0.83。',
             '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标相对 Vanilla 基线为 0.25 降至 0.83。'
