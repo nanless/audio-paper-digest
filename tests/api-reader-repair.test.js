@@ -128,6 +128,17 @@ test('deterministic table selections expose the binding and its marker section a
     assert.ok(collectDraftIssues(draft).some(issue => issue.path === '/tableBindings/0'));
 });
 
+test('ambiguous selection-header repair targets only the small binding node', () => {
+    const draft = fixture();
+    draft.tableBindings.push({ tableIndex: 1, selection: {
+        sourceTableOrdinal: 4, sourceRows: [3, 4], sourceColumns: [0, 1] } });
+    draft.sections[7].body += '\n\n[[TABLE_1]]';
+    const issue = '读者文章 tableBindings[0] selection 第一行必须是原表头，其余行必须是数据行；'
+        + 'sourceTableOrdinal=4，原表明示表头行=[0,1]，当前选择行=[3,4]。只修改本 binding 的 sourceRows，不能改写正文或原表。';
+    const targets = buildRepairTargets(draft, [{ path: null, message: issue }]);
+    assert.deepEqual(targets.map(target => target.path), ['/tableBindings/0']);
+});
+
 test('all malformed quote bindings, marker-only tables and insufficient length are diagnosed in one pass', () => {
     const draft = fixture();
     draft.tableBindings = [1, 2].map(tableIndex => ({ tableIndex, sourceType: 'source_quotes', sourceTableOrdinal: null,

@@ -16,6 +16,7 @@ const {
     parseResponseText,
     getResponsesOutputTruncationError,
     requestLlmJson,
+    withRequestDeadline,
     loadPrompt,
     normalizeDocumentType,
     normalizeScoreToOneDecimal,
@@ -805,6 +806,14 @@ const API_READER_REPAIR_TEMPERATURE = 0.1;
 const API_READER_FIGURE_MAX_BYTES = 16 * 1024 * 1024;
 const API_READER_FIGURE_LIMIT = 8;
 const API_READER_FIGURE_SELECTION_LIMIT = READER_LIMITS.maximumFigures;
+const API_READER_MODEL_IMAGE_MAX_DIMENSION = 2048;
+const API_READER_MODEL_IMAGE_MAX_PIXELS = 4 * 1024 * 1024;
+const API_READER_MODEL_IMAGE_SOURCE_MAX_PIXELS = 64 * 1024 * 1024;
+const API_READER_MODEL_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+const API_READER_MODEL_IMAGE_TOTAL_BYTES = 12 * 1024 * 1024;
+const API_READER_MODEL_IMAGE_TOTAL_PIXELS = 16 * 1024 * 1024;
+const API_READER_MODEL_IMAGE_TRANSFORM = 'decoded-white-background-fit-jpeg-v1';
+const API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT = 'api-reader-provider-image-exclusion-v1';
 const SCORING_STABILITY_RESOLUTION_CONTRACT = 'api-scoring-stability-resolution-v1';
 const SCORING_STABILITY_THRESHOLD = 0.5;
 const SCORING_STABILITY_CONSENSUS_TOLERANCE = 0.3;
@@ -1113,6 +1122,112 @@ function artifactTableBindingCanReplay(binding, renderedRows, structuredArtifact
     }) && seen.size === expectedCount;
 }
 
+function exactObjectInOrder(value, keys) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).length !== keys.length
+        || keys.some(key => !Object.prototype.hasOwnProperty.call(value, key))) return null;
+    return Object.fromEntries(keys.map(key => [key, value[key]]));
+}
+
+/**
+ * Early historical arXiv bundles retained the payload SHA computed over the
+ * parser's schema order, while their durable JSON writer recursively sorted
+ * object keys. JSON member order is not semantic, but a raw JSON.stringify()
+ * replay therefore differs after reload. Rebuild only the exact public v4
+ * schema order; unknown/missing fields or any changed value still fail the
+ * declared SHA gate.
+ */
+function replayPersistedArxivHtmlDomV4PayloadSha(structuredArtifacts) {
+    if (structuredArtifacts?.parserVersion !== 'arxiv-html-dom-v4') return '';
+    const artifact = exactObjectInOrder(structuredArtifacts, [
+        'version', 'parserVersion', 'sourceKind', 'sourceId', 'paperId',
+        'sourceHtmlSha256', 'tables', 'formulas', 'figures', 'references',
+        'health', 'flattenedTextSha256', 'payloadSha256'
+    ]);
+    if (!artifact || !Array.isArray(artifact.tables) || !Array.isArray(artifact.formulas)
+        || !Array.isArray(artifact.figures) || !Array.isArray(artifact.references)) return '';
+    const tables = artifact.tables.map(table => {
+        const ordered = exactObjectInOrder(table, [
+            'ordinal', 'label', 'caption', 'sourceDomSha256', 'headerRows',
+            'bodyRows', 'cells', 'matrix', 'recoveryStatus'
+        ]);
+        if (!ordered || !Array.isArray(ordered.cells)) return null;
+        const cells = ordered.cells.map(cell => exactObjectInOrder(cell, [
+            'row', 'column', 'header', 'rowspan', 'colspan', 'text', 'sourceDomSha256'
+        ]));
+        return cells.some(cell => !cell) ? null : { ...ordered, cells };
+    });
+    const formulas = artifact.formulas.map(formula => exactObjectInOrder(formula, [
+        'ordinal', 'label', 'latex', 'mathml', 'text', 'sourceDomSha256', 'recoveryStatus'
+    ]));
+    const figures = artifact.figures.map(figure => {
+        const ordered = exactObjectInOrder(figure, [
+            'ordinal', 'label', 'caption', 'images', 'sourceDomSha256', 'recoveryStatus'
+        ]);
+        if (!ordered || !Array.isArray(ordered.images)) return null;
+        const images = ordered.images.map(image => {
+            const optional = image?.kind === 'inline_svg'
+                ? ['inlineSvg', 'inlineSvgBytes', 'inlineSvgSha256']
+                : image?.kind === 'inline_html'
+                    ? ['inlineHtml', 'inlineHtmlBytes', 'inlineHtmlSha256'] : [];
+            return exactObjectInOrder(image, [
+                'kind', 'url', 'alt', 'mediaType', 'rasterDownloadEligible', ...optional
+            ]);
+        });
+        return images.some(image => !image) ? null : { ...ordered, images };
+    });
+    const references = artifact.references.map(reference => exactObjectInOrder(reference, [
+        'ordinal', 'label', 'text', 'hrefs', 'sourceDomSha256'
+    ]));
+    const health = exactObjectInOrder(artifact.health, [
+        'status', 'detected', 'recovered', 'truncated', 'issues'
+    ]);
+    if (tables.some(item => !item) || formulas.some(item => !item)
+        || figures.some(item => !item) || references.some(item => !item) || !health) return '';
+    const detected = exactObjectInOrder(health.detected, [
+        'tables', 'formulas', 'figures', 'references', 'bibliographies'
+    ]);
+    const recovered = exactObjectInOrder(health.recovered, [
+        'tables', 'formulas', 'figures', 'references'
+    ]);
+    if (!detected || !recovered) return '';
+    const body = {
+        version: artifact.version,
+        parserVersion: artifact.parserVersion,
+        sourceKind: artifact.sourceKind,
+        sourceId: artifact.sourceId,
+        paperId: artifact.paperId,
+        sourceHtmlSha256: artifact.sourceHtmlSha256,
+        tables,
+        formulas,
+        figures,
+        references,
+        health: { ...health, detected, recovered },
+        flattenedTextSha256: artifact.flattenedTextSha256
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
+}
+
+function replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts) {
+    const artifact = exactObjectInOrder(structuredArtifacts, [
+        'version', 'source', 'tables', 'formulas', 'figures',
+        'flattenedTextSha256', 'payloadSha256'
+    ]);
+    if (!artifact || artifact.source !== 'fresh_arxiv_text_without_layout'
+        || !Array.isArray(artifact.tables) || artifact.tables.length !== 0
+        || !Array.isArray(artifact.formulas) || artifact.formulas.length !== 0
+        || !Array.isArray(artifact.figures) || artifact.figures.length !== 0) return '';
+    const body = {
+        version: artifact.version,
+        source: artifact.source,
+        tables: artifact.tables,
+        formulas: artifact.formulas,
+        figures: artifact.figures,
+        flattenedTextSha256: artifact.flattenedTextSha256
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
+}
+
 function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFormulaBindings, options = {}) {
     const structuredArtifacts = options.structuredArtifacts;
     const sourceText = String(options.sourceText || '');
@@ -1126,7 +1241,11 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     const replayedArtifactsSha256 = crypto.createHash('sha256')
         .update(JSON.stringify(artifactBody)).digest('hex');
     const sourceTextSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
-    if (declaredArtifactsSha256 !== replayedArtifactsSha256
+    const persistedParserOrderSha256 = replayPersistedArxivHtmlDomV4PayloadSha(
+        structuredArtifacts
+    ) || replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts);
+    if ((declaredArtifactsSha256 !== replayedArtifactsSha256
+            && declaredArtifactsSha256 !== persistedParserOrderSha256)
         || structuredArtifacts.flattenedTextSha256 !== sourceTextSha256) {
         throw new Error('Reader source-binding v4 的 structuredArtifacts/fulltext SHA 无法重放');
     }
@@ -3394,8 +3513,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const materializeFigures = options.readerMaterializeFigures
         || direct.directReaderMaterializer() || materializeApiReaderFigures;
     const directSupplementaryImages = direct.directSupplementaryReaderImages();
-    const directSupplementaryEvidence = directSupplementaryImages.map(image => ({ ordinal: image.ordinal,
-        sha256: image.assetSha256, mediaType: image.mediaType, caption: image.caption || null }));
+    const supplementaryPreflight = await preflightReaderModelImages(directSupplementaryImages.map(image => ({
+        ...image, kind: 'supplementary', inputId: `supplementary:${image.ordinal}:${image.assetSha256}`,
+        label: `conference-pdf-page-${image.ordinal}.png`
+    })));
+    const directSupplementaryPreflightEvidence = [
+        ...supplementaryPreflight.ready.map(image => modelImageEvidence(image)),
+        ...supplementaryPreflight.rejected
+    ];
     const conference = require('./lib/conference-analysis-context.js');
     const candidateDirectory = direct.getDirectRewriteAnalysisContext()
         ? direct.directReaderAttemptsDirectory(options.readerAttemptsDir)
@@ -3415,7 +3540,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         inputFingerprint: stableFingerprint({ contentMode, sourceEvidence,
             reviewFeedback: options.reviewFeedback || '', initialDraft: start.previousDraft,
             structuredArtifacts: options.structuredArtifacts?.payloadSha256 || '',
-            directSupplementaryEvidence }),
+            directSupplementaryEvidence: directSupplementaryPreflightEvidence }),
         sourceSha256: repair.shaText(options.sourceText || ''),
         model: modelFingerprint(DEEP_CONFIG, start.temperature, API_READER_MAX_TOKENS),
         promptSha256: promptTemplateSha256('prompts/api-reader-article.md'),
@@ -3428,6 +3553,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         draftOrderContract: READER_DRAFT_ORDER_CONTRACT,
         draftOrderImplementationSha256: promptTemplateSha256('scripts/lib/reader-draft-order.js'),
         sourceDiagnosticsImplementationSha256: promptTemplateSha256('scripts/lib/reader-source-diagnostics.js'),
+        modelImagePayloadTransform: API_READER_MODEL_IMAGE_TRANSFORM,
+        modelImagePayloadLimitsSha256: stableFingerprint({ maxDimension: API_READER_MODEL_IMAGE_MAX_DIMENSION,
+            maxPixels: API_READER_MODEL_IMAGE_MAX_PIXELS, sourceMaxPixels: API_READER_MODEL_IMAGE_SOURCE_MAX_PIXELS,
+            maxBytes: API_READER_MODEL_IMAGE_MAX_BYTES, totalBytes: API_READER_MODEL_IMAGE_TOTAL_BYTES,
+            totalPixels: API_READER_MODEL_IMAGE_TOTAL_PIXELS }),
+        providerImageExclusionContract: API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT,
         readerContract: API_READER_ARTICLE_CONTRACT,
         sourceBindingContract: API_READER_SOURCE_BINDING_CONTRACT,
         repairVersion: repair.REPAIR_VERSION,
@@ -3510,8 +3641,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             getPaperArxivId(paper)
         )
         : [];
-    const downloadedReaderImages = [];
-    let readerImageBase64Chars = 0;
+    const figurePayloadCandidates = [];
     for (const image of materializedReaderImages) {
         const raw = image.rawBytes === undefined
             ? fs.readFileSync(image.cachePath)
@@ -3523,50 +3653,29 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         if (actualPixelSha256 !== image.assetSha256) {
             throw new Error(`Reader Figure ${image.ordinal} cache bytes differ from materialized pixel SHA`);
         }
-        const base64 = raw.toString('base64');
-        if (base64.length > IMAGE_MAX_BASE64_CHARS
-            || readerImageBase64Chars + base64.length > IMAGE_TOTAL_BASE64_CHARS) {
-            console.log(
-                `    [deep] 跳过超出 Muse 图像输入预算的论文图 ${image.ordinal}`
-            );
-            continue;
-        }
-        readerImageBase64Chars += base64.length;
-        downloadedReaderImages.push({
-            url: image.url,
-            base64,
-            mime: image.assetMediaType || image.mediaType || 'image/png',
-            sha256: image.assetSha256
-        });
+        const figure = figureEvidenceEntries.find(item => item.url === image.url);
+        if (!figure) continue;
+        figurePayloadCandidates.push({ ...image, rawBytes: raw, kind: 'figure',
+            inputId: `figure:${image.ordinal}:${image.assetSha256}`, label: image.url,
+            caption: figure.caption, url: image.url });
     }
-    const readerImageBlocks = downloadedReaderImages.flatMap(image => {
-        const figure = figureEvidenceEntries.find(item => item.url === image.url);
-        if (!figure) return [];
-        return [
-            {
-                type: 'text',
-                text: `以下图像与证据清单 FIGURE_${figure.ordinal} 一一对应。图注：${figure.caption}`
-            },
-            buildImageContent(image.url, image.base64, image.mime)
-        ];
-    }).concat(directSupplementaryImages.flatMap(image => {
-        const base64 = Buffer.from(image.rawBytes).toString('base64');
-        if (base64.length > IMAGE_MAX_BASE64_CHARS) return [];
-        return [{ type: 'text', text: `以下是论文 PDF 的临时渲染页 ${image.ordinal}。它只在本次请求中可见，`
-            + '不能在文章中生成图片链接；可用它辅助理解，但正文涉及坐标、曲线或布局时仍须有可重放的文本/表格证据。' },
-        buildImageContent(`conference-pdf-page-${image.ordinal}.png`, base64, image.mediaType)];
-    }));
-    const imageEvidence = downloadedReaderImages.map(image => {
-        const figure = figureEvidenceEntries.find(item => item.url === image.url);
-        return {
-            ordinal: figure?.ordinal || null,
-            url: image.url,
-            sha256: image.sha256
-        };
-    });
-    const ephemeralImageEvidence = { imageEvidence, directSupplementaryEvidence };
+    const figurePreflight = await preflightReaderModelImages(figurePayloadCandidates);
+    const budgeted = selectReaderModelImagesWithinBudget([
+        ...figurePreflight.ready, ...supplementaryPreflight.ready
+    ]);
+    const allImageInputs = budgeted.ready;
+    const budgetRejectedByKind = kind => budgeted.rejected.filter(item => item.kind === kind);
+    const figurePreflightEvidence = [
+        ...figurePreflight.ready.map(image => modelImageEvidence(image)),
+        ...figurePreflight.rejected, ...budgetRejectedByKind('figure')
+    ];
+    const directSupplementaryEvidence = [
+        ...directSupplementaryPreflightEvidence, ...budgetRejectedByKind('supplementary')
+    ];
+    const ephemeralImageEvidence = { imageEvidence: figurePreflightEvidence, directSupplementaryEvidence };
+    const modelImagePreflightEvidenceSha256 = repair.hashDraft(ephemeralImageEvidence);
     const recoveryOptions = useEphemeralFigureEvidence
-        ? { ephemeralImageEvidenceSha256: repair.hashDraft(ephemeralImageEvidence) } : undefined;
+        ? { ephemeralImageEvidenceSha256: modelImagePreflightEvidenceSha256 } : undefined;
     recovered = require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
         candidateDirectory, identity, recoveryOptions
     );
@@ -3585,12 +3694,29 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     attemptErrorHistory.push(...currentIssues.map(issue => issue.message));
     validationFeedback = buildAttemptFeedback();
     previousDraft = recovered?.rawDraft || start.previousDraft;
-    const pixelFigureOrdinals = imageEvidence.map(item => item.ordinal).filter(Number.isInteger);
-    const readerImageVisibilityNotice = imageEvidence.length > 0
-        ? `模型本次真正收到像素的图为：${imageEvidence.map(
-            item => `FIGURE_${item.ordinal}`
-        ).join(', ')}。只有这些图可以解读坐标轴、曲线、面板、颜色和箭头等像素细节。`
-        : '模型本次没有收到任何 Figure 像素；只能依据图注和正文，禁止声称看到坐标轴、曲线、颜色或模块位置。';
+    let providerImageExclusions = normalizeProviderImageExclusions(recovered?.providerImageExclusions, allImageInputs);
+    let activeImageInputs; let imageEvidence; let pixelFigureOrdinals;
+    const refreshActiveImageState = () => {
+        const excluded = new Set(providerImageExclusions.map(item => item.inputId));
+        activeImageInputs = allImageInputs.filter(image => !excluded.has(image.inputId));
+        imageEvidence = activeImageInputs.filter(image => image.kind === 'figure').map(image => modelImageEvidence(image));
+        pixelFigureOrdinals = imageEvidence.map(item => item.ordinal).filter(Number.isInteger);
+    };
+    refreshActiveImageState();
+    const visibilityNoticeFor = (inputs, repairContext = null) => {
+        const ordinals = inputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
+        return repairContext
+            ? `本次局部修复真正收到像素的图：${ordinals.map(ordinal => `FIGURE_${ordinal}`).join(', ') || '无'}。其他图保持已有绑定，不得改写其像素事实。`
+            : ordinals.length > 0
+                ? `模型本次真正收到像素的图为：${ordinals.map(ordinal => `FIGURE_${ordinal}`).join(', ')}。只有这些图可以解读坐标轴、曲线、面板、颜色和箭头等像素细节。`
+                : '模型本次没有收到任何 Figure 像素；只能依据图注和正文，禁止声称看到坐标轴、曲线、颜色或模块位置。';
+    };
+    const blocksForImage = (image, repairContext = null) => image.kind === 'figure'
+        ? [{ type: 'text', text: `${repairContext ? '以下是真实' : '以下图像与证据清单'} FIGURE_${image.ordinal} ${repairContext ? '像素' : '一一对应'}。图注：${image.caption}` },
+            buildImageContent(image.url, image.base64, image.mime)]
+        : [{ type: 'text', text: `以下是论文 PDF 的临时渲染页 ${image.ordinal}。它只在本次请求中可见，`
+            + '不能在文章中生成图片链接；可用它辅助理解，但正文涉及坐标、曲线或布局时仍须有可重放的文本/表格证据。' },
+            buildImageContent(image.label, image.base64, image.mime)];
     const parseCandidate = raw => parseApiReaderArticleResult(raw, {
         availableFigureOrdinals: pixelFigureOrdinals,
         requireIntegratedTables: true,
@@ -3608,8 +3734,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             normalizeCandidate();
             const parsed = parseCandidate(JSON.stringify(candidate));
             const retiredCandidate = repair.retireFailedCandidate(candidateDirectory, identity);
-            return { ...parsed, contentMode, attempts: completedAttempts, imageEvidence, resumedCandidate: true,
-                retiredCandidate, draftOrderMappings };
+            return { ...parsed, contentMode, attempts: completedAttempts, imageEvidence,
+                modelImagePreflightEvidenceSha256,
+                providerImageExclusions, resumedCandidate: true, retiredCandidate, draftOrderMappings };
         }
         catch (error) { currentIssues = repair.collectDraftIssues(candidate, error, {
             sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
@@ -3646,40 +3773,44 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 `读者文章完整请求上下文超限: ${prompt.length}/${API_READER_CONTEXT_MAX_CHARS} 字符`
             );
         }
-        const selectedImageBlocks = repairContext ? downloadedReaderImages.flatMap(image => {
-            const figure = figureEvidenceEntries.find(item => item.url === image.url);
-            return figure && repairContext.figureOrdinals.includes(figure.ordinal)
-                ? [{ type: 'text', text: `以下是真实 FIGURE_${figure.ordinal} 像素。图注：${figure.caption}` },
-                    buildImageContent(image.url, image.base64, image.mime)] : [];
-        }) : readerImageBlocks;
-        const selectedOrdinals = repairContext
-            ? pixelFigureOrdinals.filter(ordinal => repairContext.figureOrdinals.includes(ordinal)) : pixelFigureOrdinals;
-        const visibilityNotice = repairContext
-            ? `本次局部修复真正收到像素的图：${selectedOrdinals.map(ordinal => `FIGURE_${ordinal}`).join(', ') || '无'}。其他图保持已有绑定，不得改写其像素事实。`
-            : readerImageVisibilityNotice;
+        const selectedInputs = repairContext
+            ? activeImageInputs.filter(image => image.kind === 'figure'
+                && repairContext.figureOrdinals.includes(image.ordinal))
+            : activeImageInputs;
+        let selectedOrdinals = selectedInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
         let raw;
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';
         try {
-            raw = await requestModel(
-            [{
-                role: 'user',
-                content: [
-                    { type: 'text', text: prompt },
-                    { type: 'text', text: visibilityNotice },
-                    ...selectedImageBlocks
-                ]
-            }],
-            repairContext ? repairMaxTokens : API_READER_MAX_TOKENS,
-            {
+            const requestOptions = {
                 temperature: attempt === 1 && !repairContext
                     ? start.temperature : API_READER_REPAIR_TEMPERATURE,
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
                 maxRetries: API_READER_TRANSPORT_MAX_RETRIES,
                 usageContext: { paperId: getPaperArxivId(paper),
                     stage: repairContext ? 'apiReaderRepair' : 'apiReaderArticle', contentAttempt: attempt }
+            };
+            const isolated = await requestReaderModelWithImageIsolation({ requestModel,
+                buildMessages: inputs => [{ role: 'user', content: [
+                    { type: 'text', text: prompt },
+                    { type: 'text', text: visibilityNoticeFor(inputs, repairContext) },
+                    ...inputs.flatMap(image => blocksForImage(image, repairContext))
+                ] }], imageInputs: selectedInputs,
+                maxTokens: repairContext ? repairMaxTokens : API_READER_MAX_TOKENS, requestOptions });
+            raw = isolated.raw;
+            if (isolated.exclusions.length) {
+                providerImageExclusions = normalizeProviderImageExclusions([
+                    ...providerImageExclusions, ...isolated.exclusions
+                ], allImageInputs);
+                refreshActiveImageState();
+                selectedOrdinals = isolated.activeInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
             }
-            );
         } catch (error) {
+            if (Array.isArray(error?.providerImageExclusions)) {
+                providerImageExclusions = normalizeProviderImageExclusions([
+                    ...providerImageExclusions, ...error.providerImageExclusions
+                ], allImageInputs);
+                refreshActiveImageState();
+            }
             if (['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE'].includes(error?.code)) {
                 // The provider returned a terminated output, even though the
                 // public call deliberately did not expose its partial text.
@@ -3694,7 +3825,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
                     issues: currentIssues, attempts: attempt, fullAttempts, noProgress,
                     failureSignature, validationFailureSignature: previousValidationFailureSignature,
-                    validationFailureStreak, implementationRepairAllowanceProof, imageEvidence,
+                    validationFailureStreak, implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
                     ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}), transportFailures,
                     lastContentError: { code: error.code, message: String(error.message || error),
                         outputTokens: Number.isFinite(error.outputTokens) ? error.outputTokens : null,
@@ -3711,7 +3842,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 issues: currentIssues, attempts: attempt - 1, fullAttempts,
                 noProgress, failureSignature: previousFailureSignature,
                 validationFailureSignature: previousValidationFailureSignature,
-                validationFailureStreak, implementationRepairAllowanceProof, imageEvidence,
+                validationFailureStreak, implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                 transportFailures, lastTransportError: String(error?.message || error)
             });
@@ -3745,6 +3876,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 contentMode,
                 attempts: attempt,
                 imageEvidence,
+                modelImagePreflightEvidenceSha256,
+                providerImageExclusions,
                 repairVersion: repair.REPAIR_VERSION,
                 draftOrderMappings,
                 fullAttempts,
@@ -3774,6 +3907,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             repair.saveFailedCandidate(candidateDirectory, identity, {
                 status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
                 issues: currentIssues, attempts: attempt, fullAttempts, noProgress, failureSignature, imageEvidence,
+                providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                 transportFailures, validationFailureSignature: normalizedFailureSignature,
                 validationFailureStreak, implementationRepairAllowanceProof
@@ -4023,6 +4157,12 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         figureContractVersion: API_READER_FIGURE_CONTRACT_VERSION,
         imageEvidenceCount: readerResult.imageEvidence?.length || 0,
         imageEvidenceSha256: stableFingerprint(readerResult.imageEvidence || []),
+        ...(readerResult.modelImagePreflightEvidenceSha256 ? {
+            modelImagePreflightEvidenceSha256: readerResult.modelImagePreflightEvidenceSha256,
+            providerImageExclusions: structuredClone(readerResult.providerImageExclusions || []),
+            providerImageExclusionCount: readerResult.providerImageExclusions?.length || 0,
+            providerImageExclusionSha256: stableFingerprint(readerResult.providerImageExclusions || [])
+        } : {}),
         refreshedAt: options.execution.executionKind === 'operator'
             ? options.execution.operatorProvenance.appliedAt : getBeijingISOString()
     };
@@ -4710,6 +4850,14 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             resourceIdentityContractVersion: API_READER_RESOURCE_IDENTITY_CONTRACT,
             imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
             imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS,
+            modelImagePayloadTransform: API_READER_MODEL_IMAGE_TRANSFORM,
+            modelImageMaxDimension: API_READER_MODEL_IMAGE_MAX_DIMENSION,
+            modelImageMaxPixels: API_READER_MODEL_IMAGE_MAX_PIXELS,
+            modelImageSourceMaxPixels: API_READER_MODEL_IMAGE_SOURCE_MAX_PIXELS,
+            modelImageMaxBytes: API_READER_MODEL_IMAGE_MAX_BYTES,
+            modelImageTotalBytes: API_READER_MODEL_IMAGE_TOTAL_BYTES,
+            modelImageTotalPixels: API_READER_MODEL_IMAGE_TOTAL_PIXELS,
+            providerImageExclusionContract: API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT,
             promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
             repairPromptSha256: promptTemplateSha256('prompts/api-reader-repair.md'),
             repairImplementationSha256: promptTemplateSha256('scripts/lib/reader-repair.js'),
@@ -6034,7 +6182,11 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                 }
             }
         }
-        if (budget.elapsedMs() >= overallTimeoutMs || lastError?.code === 'MODEL_OVERALL_TIMEOUT') {
+        // Preserve the concrete attempt-layer timeout when that deadline is
+        // what settled the request.  MODEL_OVERALL_TIMEOUT is reserved for a
+        // budget exhausted before another attempt/backoff can start.  Timer
+        // scheduling jitter must not randomly relabel the same failed request.
+        if (lastError?.code === 'MODEL_OVERALL_TIMEOUT') {
             throw createOverallTimeoutError(budget.elapsedMs(), lastError, overallTimeoutMs);
         }
         lastError.attempts = maxRetries;
@@ -6129,22 +6281,25 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
     const requestFn = typeof config.requestFn === 'function' ? config.requestFn : requestLlmJson;
 
     try {
-        const response = await requestFn(
-            apiUrl,
-            config.endpoint,
-            config.model,
-            bodyObj,
-            headers,
-            {
-                timeoutMs,
-                maxResponseBytes,
-                apiKeys: Array.isArray(config.apiKeys) ? config.apiKeys : [config.key].filter(Boolean),
-                accountPoolStateFile: require('./config.js').FILES.llmAccountPoolState,
-                usageContext: config.usageContext,
-                usageSink: config.usageSink,
-                usageDirectory: config.usageDirectory,
-                recordUsage: config.recordUsage
-            }
+        const response = await withRequestDeadline(
+            () => requestFn(
+                apiUrl,
+                config.endpoint,
+                config.model,
+                bodyObj,
+                headers,
+                {
+                    timeoutMs,
+                    maxResponseBytes,
+                    apiKeys: Array.isArray(config.apiKeys) ? config.apiKeys : [config.key].filter(Boolean),
+                    accountPoolStateFile: require('./config.js').FILES.llmAccountPoolState,
+                    usageContext: config.usageContext,
+                    usageSink: config.usageSink,
+                    usageDirectory: config.usageDirectory,
+                    recordUsage: config.recordUsage
+                }
+            ),
+            timeoutMs
         );
         const duration = (budget.elapsedMs() / 1000).toFixed(1);
         if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -8552,32 +8707,220 @@ function buildImageContent(imageUrl, base64, detectedMime = '') {
 }
 
 /**
- * 部分兼容 Anthropic 协议的多模态端点会拒绝浏览器可正常解码的 PNG
- * （常见于带透明通道或非常规 PNG chunk）。只在端点明确报告图片损坏后，
- * 将请求载荷铺白底并转为标准 RGB JPEG；原始缓存、URL 和正文引用保持不变。
+ * Every Reader image is decoded locally before request assembly, then derived
+ * from those exact pixels as a bounded white-background JPEG. The source SHA
+ * and request-payload SHA are both retained; no replacement pixels or URLs are
+ * introduced when an input cannot be decoded.
  */
-async function normalizeModelImagePayload(image) {
+function modelImageSourceBytes(image) {
+    if (image?.rawBytes !== undefined) return Buffer.from(image.rawBytes);
+    const encoded = String(image?.base64 || '');
+    if (!encoded || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+        const error = new Error('图片 base64 为空或不规范');
+        error.code = 'READER_IMAGE_SOURCE_INTEGRITY';
+        throw error;
+    }
+    const bytes = Buffer.from(encoded, 'base64');
+    if (bytes.toString('base64') !== encoded) {
+        const error = new Error('图片 base64 不可精确重放');
+        error.code = 'READER_IMAGE_SOURCE_INTEGRITY';
+        throw error;
+    }
+    return bytes;
+}
+
+async function prepareApiReaderModelImagePayload(image) {
     const { createCanvas, loadImage } = require('@napi-rs/canvas');
-    const source = Buffer.from(String(image?.base64 || ''), 'base64');
-    if (source.length === 0) throw new Error('图片 base64 为空');
-    const decoded = await loadImage(source);
-    if (!decoded.width || !decoded.height) throw new Error('图片尺寸无效');
-    const canvas = createCanvas(decoded.width, decoded.height);
-    const context = canvas.getContext('2d');
-    context.fillStyle = '#ffffff';
-    context.fillRect(0, 0, decoded.width, decoded.height);
-    context.drawImage(decoded, 0, 0, decoded.width, decoded.height);
-    const encoded = canvas.toBuffer('image/jpeg', 90);
-    return {
-        ...image,
-        base64: encoded.toString('base64'),
-        mime: 'image/jpeg',
-        modelPayloadNormalized: true
-    };
+    const source = modelImageSourceBytes(image);
+    if (source.length === 0 || source.length > API_READER_FIGURE_MAX_BYTES) {
+        const error = new Error('Reader 图片源字节为空或超限');
+        error.code = 'READER_IMAGE_SOURCE_INTEGRITY';
+        throw error;
+    }
+    const sourceSha256 = crypto.createHash('sha256').update(source).digest('hex');
+    const declaredSha256 = image?.assetSha256 || image?.sha256;
+    if (declaredSha256 && declaredSha256 !== sourceSha256) {
+        const error = new Error('Reader 图片源字节与声明 SHA 不一致');
+        error.code = 'READER_IMAGE_SOURCE_INTEGRITY';
+        throw error;
+    }
+    let decoded;
+    try { decoded = await loadImage(source); }
+    catch (cause) {
+        const error = new Error(`Reader 图片无法真实解码: ${String(cause?.message || cause).slice(0, 300)}`);
+        error.code = 'READER_IMAGE_PREFLIGHT_REJECTED';
+        error.sourceSha256 = sourceSha256; error.sourceBytes = source.length;
+        throw error;
+    }
+    const sourceWidth = Number(decoded.width); const sourceHeight = Number(decoded.height);
+    const sourcePixels = sourceWidth * sourceHeight;
+    if (!Number.isSafeInteger(sourceWidth) || !Number.isSafeInteger(sourceHeight)
+        || sourceWidth < 1 || sourceHeight < 1 || !Number.isSafeInteger(sourcePixels)
+        || sourcePixels > API_READER_MODEL_IMAGE_SOURCE_MAX_PIXELS) {
+        const error = new Error(`Reader 图片解码尺寸超出安全上限: ${sourceWidth}x${sourceHeight}`);
+        error.code = 'READER_IMAGE_PREFLIGHT_REJECTED';
+        error.sourceSha256 = sourceSha256; error.sourceBytes = source.length;
+        error.sourceWidth = sourceWidth; error.sourceHeight = sourceHeight;
+        throw error;
+    }
+    const scale = Math.min(1, API_READER_MODEL_IMAGE_MAX_DIMENSION / sourceWidth,
+        API_READER_MODEL_IMAGE_MAX_DIMENSION / sourceHeight,
+        Math.sqrt(API_READER_MODEL_IMAGE_MAX_PIXELS / sourcePixels));
+    let width = Math.max(1, Math.floor(sourceWidth * scale));
+    let height = Math.max(1, Math.floor(sourceHeight * scale));
+    let encoded = null;
+    for (let pass = 0; pass < 4; pass += 1) {
+        const canvas = createCanvas(width, height); const context = canvas.getContext('2d');
+        context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
+        context.drawImage(decoded, 0, 0, width, height);
+        encoded = canvas.toBuffer('image/jpeg', Math.max(60, 90 - pass * 10));
+        if (encoded.length <= API_READER_MODEL_IMAGE_MAX_BYTES) break;
+        width = Math.max(1, Math.floor(width * 0.8)); height = Math.max(1, Math.floor(height * 0.8));
+    }
+    if (!encoded || encoded.length > API_READER_MODEL_IMAGE_MAX_BYTES) {
+        const error = new Error(`Reader 图片规范化后仍超出字节上限: ${encoded?.length || 0}`);
+        error.code = 'READER_IMAGE_PREFLIGHT_REJECTED';
+        error.sourceSha256 = sourceSha256; error.sourceBytes = source.length;
+        error.sourceWidth = sourceWidth; error.sourceHeight = sourceHeight;
+        throw error;
+    }
+    const verified = await loadImage(encoded);
+    if (verified.width !== width || verified.height !== height) {
+        const error = new Error('Reader 图片规范化后无法精确重放尺寸');
+        error.code = 'READER_IMAGE_PREFLIGHT_REJECTED';
+        throw error;
+    }
+    const modelPayloadSha256 = crypto.createHash('sha256').update(encoded).digest('hex');
+    return { ...image, base64: encoded.toString('base64'), mime: 'image/jpeg', sha256: sourceSha256,
+        sourceSha256, sourceBytes: source.length, sourceWidth, sourceHeight,
+        modelPayloadSha256, modelPayloadBytes: encoded.length, modelPayloadWidth: width,
+        modelPayloadHeight: height, modelPayloadTransform: API_READER_MODEL_IMAGE_TRANSFORM,
+        modelPayloadNormalized: true };
+}
+
+async function normalizeModelImagePayload(image) {
+    const prepared = await prepareApiReaderModelImagePayload(image);
+    const { rawBytes, ...result } = prepared;
+    return result;
+}
+
+function isDeterministicProviderImageError(error) {
+    return /image decode limit exceeded|invalid image data|multimodal data is corrupted|image.*(?:corrupt|cannot be processed|decode.*limit)/i
+        .test(String(error?.message || error || ''));
 }
 
 function isCorruptedMultimodalError(error) {
-    return /multimodal data is corrupted|image.*(?:corrupt|cannot be processed)/i.test(String(error?.message || error || ''));
+    return isDeterministicProviderImageError(error);
+}
+
+function modelImageEvidence(image, status = 'ready') {
+    return { inputId: image.inputId, kind: image.kind, ordinal: image.ordinal,
+        ...(image.url ? { url: image.url } : {}), sha256: image.sourceSha256, sourceSha256: image.sourceSha256,
+        sourceBytes: image.sourceBytes, sourceWidth: image.sourceWidth, sourceHeight: image.sourceHeight,
+        modelPayloadSha256: image.modelPayloadSha256, modelPayloadBytes: image.modelPayloadBytes,
+        modelPayloadWidth: image.modelPayloadWidth, modelPayloadHeight: image.modelPayloadHeight,
+        modelPayloadTransform: image.modelPayloadTransform, status };
+}
+
+async function preflightReaderModelImages(images) {
+    const ready = []; const rejected = [];
+    for (const image of images) {
+        try { ready.push(await prepareApiReaderModelImagePayload(image)); }
+        catch (error) {
+            if (error?.code !== 'READER_IMAGE_PREFLIGHT_REJECTED') throw error;
+            console.log(`    [deep] ⚠️  Reader 图片预检排除 ${sanitizeLogField(image.inputId, 180)}: ${sanitizeLogField(error.message, 240)}`);
+            rejected.push({ inputId: image.inputId, kind: image.kind, ordinal: image.ordinal,
+                ...(image.url ? { url: image.url } : {}), sourceSha256: error.sourceSha256,
+                sourceBytes: error.sourceBytes, ...(Number.isSafeInteger(error.sourceWidth)
+                    ? { sourceWidth: error.sourceWidth, sourceHeight: error.sourceHeight } : {}),
+                status: 'preflight-rejected', reason: 'decode-or-dimension-limit' });
+        }
+    }
+    return { ready, rejected };
+}
+
+function selectReaderModelImagesWithinBudget(images) {
+    const ready = []; const rejected = []; let totalBytes = 0; let totalPixels = 0;
+    for (const image of images) {
+        const pixels = image.modelPayloadWidth * image.modelPayloadHeight;
+        if (totalBytes + image.modelPayloadBytes > API_READER_MODEL_IMAGE_TOTAL_BYTES
+            || totalPixels + pixels > API_READER_MODEL_IMAGE_TOTAL_PIXELS) {
+            rejected.push({ ...modelImageEvidence(image, 'preflight-rejected'), reason: 'total-payload-budget' });
+            continue;
+        }
+        totalBytes += image.modelPayloadBytes; totalPixels += pixels; ready.push(image);
+    }
+    return { ready, rejected };
+}
+
+function providerImageExclusion(image) {
+    return { contract: API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT, inputId: image.inputId,
+        sourceSha256: image.sourceSha256, modelPayloadSha256: image.modelPayloadSha256,
+        reason: 'provider-deterministic-image-error' };
+}
+
+function normalizeProviderImageExclusions(value, available) {
+    const entries = value === undefined ? [] : value;
+    if (!Array.isArray(entries)) throw new Error('Reader provider 图片排除证据必须是数组');
+    const byId = new Map(available.map(image => [image.inputId, image])); const seen = new Set();
+    return entries.map(entry => {
+        const image = byId.get(entry?.inputId);
+        if (!image || seen.has(entry.inputId)
+            || Object.keys(entry).sort().join('\0') !== ['contract', 'inputId', 'modelPayloadSha256', 'reason', 'sourceSha256'].sort().join('\0')
+            || entry.contract !== API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT
+            || entry.sourceSha256 !== image.sourceSha256 || entry.modelPayloadSha256 !== image.modelPayloadSha256
+            || entry.reason !== 'provider-deterministic-image-error') {
+            throw new Error('Reader provider 图片排除证据无法与当前像素载荷重放');
+        }
+        seen.add(entry.inputId); return structuredClone(entry);
+    }).sort((left, right) => left.inputId.localeCompare(right.inputId));
+}
+
+async function requestReaderModelWithImageIsolation({ requestModel, buildMessages, imageInputs, maxTokens,
+    requestOptions, existingExclusions = [] } = {}) {
+    if (typeof requestModel !== 'function' || typeof buildMessages !== 'function' || !Array.isArray(imageInputs)) {
+        throw new Error('Reader 图片隔离请求参数不完整');
+    }
+    let exclusions = normalizeProviderImageExclusions(existingExclusions, imageInputs);
+    const excludedIds = () => new Set(exclusions.map(item => item.inputId));
+    const failWithExclusions = error => {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        failure.providerImageExclusions = structuredClone(exclusions);
+        throw failure;
+    };
+    for (let round = 0; round <= imageInputs.length; round += 1) {
+        const active = imageInputs.filter(image => !excludedIds().has(image.inputId));
+        try {
+            const raw = await requestModel(buildMessages(active), maxTokens, requestOptions);
+            return { raw, activeInputs: active, exclusions };
+        } catch (error) {
+            if (!isDeterministicProviderImageError(error) || active.length === 0) failWithExclusions(error);
+            const rejected = [];
+            if (active.length === 1) rejected.push(active[0]);
+            else {
+                for (const image of active) {
+                    try {
+                        await requestModel([{ role: 'user', content: [
+                            { type: 'text', text: '仅验证附件图像是否可被当前模型端点解码；不需要分析内容。' },
+                            buildImageContent(image.label, image.base64, image.mime)
+                        ] }], 32, { ...requestOptions, maxRetries: 1,
+                            usageContext: { ...(requestOptions?.usageContext || {}), stage: 'apiReaderImageProbe',
+                                imageInputId: image.inputId } });
+                    } catch (probeError) {
+                        if (isDeterministicProviderImageError(probeError)) rejected.push(image);
+                        else if (!['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE'].includes(probeError?.code)) {
+                            failWithExclusions(probeError);
+                        }
+                    }
+                }
+            }
+            if (rejected.length === 0) failWithExclusions(error);
+            console.log(`    [deep] ⚠️  Reader provider 拒绝图片，隔离后重试: ${rejected.map(
+                image => sanitizeLogField(image.inputId, 120)).join(', ')}`);
+            exclusions = normalizeProviderImageExclusions([...exclusions, ...rejected.map(providerImageExclusion)], imageInputs);
+        }
+    }
+    throw new Error('Reader provider 图片隔离超出有界尝试');
 }
 
 function removeUnapprovedMarkdownImages(text, allowedUrls) {
@@ -10471,7 +10814,13 @@ async function analyzePaperDeepInternal(paper) {
                 tableContractVersion: API_READER_TABLE_CONTRACT_VERSION,
                 figureContractVersion: API_READER_FIGURE_CONTRACT_VERSION,
                 imageEvidenceCount: readerResult.imageEvidence?.length || 0,
-                imageEvidenceSha256: stableFingerprint(readerResult.imageEvidence || [])
+                imageEvidenceSha256: stableFingerprint(readerResult.imageEvidence || []),
+                ...(readerResult.modelImagePreflightEvidenceSha256 ? {
+                    modelImagePreflightEvidenceSha256: readerResult.modelImagePreflightEvidenceSha256,
+                    providerImageExclusions: structuredClone(readerResult.providerImageExclusions || []),
+                    providerImageExclusionCount: readerResult.providerImageExclusions?.length || 0,
+                    providerImageExclusionSha256: stableFingerprint(readerResult.providerImageExclusions || [])
+                } : {})
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 初学研究者读者文章已生成`);
@@ -11800,8 +12149,13 @@ module.exports = {
     getArxivHtmlIds,
     isSupportedImageUrl,
     safeImageLabel,
+    prepareApiReaderModelImagePayload,
+    preflightReaderModelImages,
+    selectReaderModelImagesWithinBudget,
+    requestReaderModelWithImageIsolation,
     normalizeModelImagePayload,
     buildImageContent,
+    isDeterministicProviderImageError,
     isCorruptedMultimodalError,
     downloadImageBase64,
     downloadImagesSerial,

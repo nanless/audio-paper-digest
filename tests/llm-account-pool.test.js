@@ -30,6 +30,23 @@ function tempState() {
 }
 
 describe('OpenCode Go sticky account state', () => {
+    it('logical LLM deadline rejects a transport promise that never settles', async () => {
+        const startedAt = Date.now();
+        await assert.rejects(
+            requestLlmJson(
+                'https://opencode.ai/zen/go/v1/chat/completions', ENDPOINT, 'test-model', {},
+                { Authorization: 'Bearer test-key' },
+                {
+                    timeoutMs: 30,
+                    apiKeys: ['test-key'],
+                    transportRequestFn: async () => new Promise(() => {})
+                }
+            ),
+            error => error.code === 'REQUEST_DEADLINE_EXCEEDED'
+        );
+        assert.ok(Date.now() - startedAt < 1000, 'deadline must not inherit a hanging transport lifetime');
+    });
+
     it('rejects duplicate primary and fallback credentials', () => {
         assert.throws(
             () => resolveApiKeyPool('same-key', 'same-key'),

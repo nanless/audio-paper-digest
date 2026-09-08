@@ -244,6 +244,27 @@ function directArxivCapture() {
 }
 function stageFiles(root) { return allFiles(path.join(root, 'runtime', 'staging')).filter(name => path.basename(name) === 'staging-input.json'); }
 function renderDirectPage() { return { markdown: '---\ntitle: Direct fixture\n---\nFresh staged page.\n', assets: [] }; }
+async function seedFailedArxivExecution(f, roots) {
+    const seeded = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: directArxivCapture(),
+        analyze: async () => { throw new Error('seed interrupted execution source descriptor'); }
+    });
+    assert.equal(seeded.results[0].status, 'failed');
+    const registry = JSON.parse(fs.readFileSync(seeded.registryFile, 'utf8'));
+    const entry = registry.entries.find(value => value.paperId === 'arxiv:2601.00001');
+    assert.equal(entry.status, 'failed');
+    assert.ok(entry.source?.sourceSnapshotSha256);
+    return { registry, registryFile: seeded.registryFile, entry };
+}
+function asInterruptedAnalysisComplete(registry, plan, paperId, at = '2026-09-08T02:30:00.000Z') {
+    const staged = registry.entries.find(entry => entry.paperId === paperId);
+    let next = runner.transition(registry, plan, paperId, 'failed', { staging: null }, at);
+    next = runner.transition(next, plan, paperId, 'sourcing', {}, at);
+    next = runner.transition(next, plan, paperId, 'source_ready', { source: staged.source }, at);
+    next = runner.transition(next, plan, paperId, 'analyzing', {}, at);
+    return runner.transition(next, plan, paperId, 'analysis_complete', { analysis: staged.analysis }, at);
+}
 
 test('direct-run selection is plan-ordered, bounded, and rejects duplicate or out-of-queue IDs', async t => {
     const f = fixture(t); const roots = files(f.root);
@@ -486,6 +507,227 @@ test('defaultAnalyze persists recoverable checkpoints across processes and resum
     assert.equal(second.registryCounts.staged, 1); assert.equal(engineRuns, 2);
 });
 
+test('analyzing crash replays a same-source recovery receipt before continuing in the same run', async t => {
+    const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+        .find(entry => entry.paperId === 'arxiv:2601.00001');
+    const seeded = await seedFailedArxivExecution(f, roots);
+    const executionDirectory = path.join(roots.executionRoot, item.runId,
+        seeded.entry.source.sourceRunIdentitySha256);
+    const partial = { directPaperId: item.paperId, arxivId: item.route.arxivId,
+        analysisCheckpoint: 'crash recovery checkpoint',
+        analysisStageCheckpoints: { primaryAnalysis: 'crash recovery checkpoint' },
+        analysisManifest: { version: 1, stages: { primaryAnalysis: { status: 'complete' } } } };
+    const receipt = runner.writeAnalysisRecovery({ executionDirectory, item,
+        sourceDescriptor: seeded.entry.source, record: partial, updatedAt: '2026-09-08T02:00:00.000Z' });
+    const interrupted = runner.transition(seeded.registry, f.plan, item.paperId, 'analyzing', {
+        latestError: null, analysisRecovery: undefined
+    }, '2026-09-08T02:01:00.000Z');
+    write(seeded.registryFile, `${JSON.stringify(interrupted, null, 2)}\n`);
+    const audits = [];
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: directArxivCapture(), renderDirectPage,
+        onCrashRecoveryAudit: audit => {
+            audits.push(audit);
+            const persisted = JSON.parse(fs.readFileSync(seeded.registryFile, 'utf8')).entries
+                .find(entry => entry.paperId === item.paperId);
+            assert.equal(persisted.status, 'analysis_partial');
+            assert.equal(persisted.analysisRecovery.recoverySha256, receipt.recoverySha256);
+            assert.deepEqual(persisted.source, seeded.entry.source);
+        },
+        engine: { analyzeBatch: async (papers, options) => {
+            assert.equal(papers[0].analysisCheckpoint, partial.analysisCheckpoint);
+            assert.deepEqual(papers[0].analysisStageCheckpoints, partial.analysisStageCheckpoints);
+            assert.deepEqual(options.paperLockOptions, { timeoutMs: 5 * 60 * 1000 });
+            const active = context.getDirectRewriteAnalysisContext();
+            const sourceDetails = context.getDirectRewriteSource(papers[0]);
+            await options.onPaperResultLocked(papers[0], { result: sealedAnalysis(item, {
+                textSha256: active.sourceSha256,
+                structuredArtifactsSha256: active.structuredArtifactsSha256,
+                sourceSnapshotSha256: active.sourceSnapshotSha256,
+                generation: active.sourceGeneration,
+                sourceManifestSha256: active.sourceManifestSha256
+            }, sourceDetails) });
+        } }
+    });
+    assert.equal(resumed.status, 'complete');
+    assert.equal(resumed.results[0].status, 'staged');
+    assert.deepEqual(audits.map(audit => ({ fromStatus: audit.fromStatus,
+        normalizedStatus: audit.normalizedStatus, recoveryStatus: audit.recoveryStatus,
+        recoverySha256: audit.recoverySha256 })), [{ fromStatus: 'analyzing',
+        normalizedStatus: 'analysis_partial', recoveryStatus: 'valid',
+        recoverySha256: receipt.recoverySha256 }]);
+});
+
+test('analyzing crash without recovery is persisted as failed before the same run sources again', async t => {
+    const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+        .find(entry => entry.paperId === 'arxiv:2601.00001');
+    const seeded = await seedFailedArxivExecution(f, roots);
+    const interrupted = runner.transition(seeded.registry, f.plan, item.paperId, 'analyzing', {
+        latestError: null
+    }, '2026-09-08T02:10:00.000Z');
+    write(seeded.registryFile, `${JSON.stringify(interrupted, null, 2)}\n`);
+    const audits = [];
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: directArxivCapture(), renderDirectPage,
+        onCrashRecoveryAudit: audit => {
+            audits.push(audit);
+            const persisted = JSON.parse(fs.readFileSync(seeded.registryFile, 'utf8')).entries
+                .find(entry => entry.paperId === item.paperId);
+            assert.equal(persisted.status, 'failed');
+            assert.match(persisted.latestError, /before a recovery envelope was persisted/);
+            assert.deepEqual(persisted.source, seeded.entry.source);
+            assert.deepEqual(persisted.analysis, seeded.entry.analysis);
+        },
+        analyze: async ({ sourceDescriptor, sourceDetails }) => sealedAnalysis(item, sourceDescriptor, sourceDetails)
+    });
+    assert.equal(resumed.status, 'complete');
+    assert.equal(resumed.results[0].status, 'staged');
+    assert.deepEqual(audits.map(audit => [audit.fromStatus, audit.normalizedStatus, audit.recoveryStatus]),
+        [['analyzing', 'failed', 'missing']]);
+});
+
+test('analyzing crash rejects a recovery envelope bound to another source snapshot', async t => {
+    const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+        .find(entry => entry.paperId === 'arxiv:2601.00001');
+    const seeded = await seedFailedArxivExecution(f, roots);
+    const executionDirectory = path.join(roots.executionRoot, item.runId,
+        seeded.entry.source.sourceRunIdentitySha256);
+    runner.writeAnalysisRecovery({ executionDirectory, item,
+        sourceDescriptor: { ...seeded.entry.source, sourceSnapshotSha256: sha('another source snapshot') },
+        record: { directPaperId: item.paperId, analysisCheckpoint: 'must not be adopted' },
+        updatedAt: '2026-09-08T02:15:00.000Z' });
+    const interrupted = runner.transition(seeded.registry, f.plan, item.paperId, 'analyzing', {
+        latestError: null
+    }, '2026-09-08T02:15:01.000Z');
+    const recovered = runner.recoverInterruptedRegistryEntry({ registry: interrupted,
+        plan: f.plan, item, generation: 1, executionRoot: roots.executionRoot,
+        now: '2026-09-08T02:15:02.000Z' });
+    const entry = recovered.registry.entries.find(value => value.paperId === item.paperId);
+    assert.equal(entry.status, 'failed');
+    assert.equal(recovered.audit.recoveryStatus, 'invalid');
+    assert.equal(recovered.audit.recoverySha256, null);
+    assert.match(recovered.audit.detail, /belongs to another source/);
+    assert.equal(Object.hasOwn(entry, 'analysisRecovery'), false);
+    assert.deepEqual(entry.source, seeded.entry.source);
+});
+
+test('sourcing and source_ready crash states normalize through failed and retry in the same run', async t => {
+    for (const crashStatus of ['sourcing', 'source_ready']) {
+        const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+            .find(entry => entry.paperId === 'arxiv:2601.00001');
+        const seeded = await seedFailedArxivExecution(f, roots);
+        let interrupted = runner.transition(seeded.registry, f.plan, item.paperId, 'sourcing', {
+            latestError: null
+        }, '2026-09-08T02:20:00.000Z');
+        if (crashStatus === 'source_ready') {
+            interrupted = runner.transition(interrupted, f.plan, item.paperId, 'source_ready', {
+                source: seeded.entry.source
+            }, '2026-09-08T02:20:01.000Z');
+        }
+        write(seeded.registryFile, `${JSON.stringify(interrupted, null, 2)}\n`);
+        const audits = [];
+        const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+            queue: 'arxiv', arxivGeneration: 1 }, {
+            captureFreshArxivRewriteSource: directArxivCapture(), renderDirectPage,
+            onCrashRecoveryAudit: audit => {
+                audits.push(audit);
+                const persisted = JSON.parse(fs.readFileSync(seeded.registryFile, 'utf8')).entries
+                    .find(entry => entry.paperId === item.paperId);
+                assert.equal(persisted.status, 'failed');
+                assert.deepEqual(persisted.source, seeded.entry.source);
+                assert.deepEqual(persisted.analysis, seeded.entry.analysis);
+            },
+            analyze: async ({ sourceDescriptor, sourceDetails }) => sealedAnalysis(item, sourceDescriptor, sourceDetails)
+        });
+        assert.equal(resumed.status, 'complete', crashStatus);
+        assert.equal(resumed.results[0].status, 'staged', crashStatus);
+        assert.deepEqual(audits.map(audit => [audit.fromStatus, audit.normalizedStatus]),
+            [[crashStatus, 'failed']]);
+    }
+});
+
+test('analysis_complete crash strictly replays source and analysis receipts directly into staging', async t => {
+    const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+        .find(entry => entry.paperId === 'arxiv:2601.00001');
+    let captures = 0; let analyses = 0;
+    const capture = directArxivCapture();
+    const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: async input => { captures += 1; return capture(input); },
+        renderDirectPage,
+        analyze: async ({ sourceDescriptor, sourceDetails }) => {
+            analyses += 1;
+            return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }
+    });
+    assert.equal(first.status, 'complete');
+    const completed = asInterruptedAnalysisComplete(
+        JSON.parse(fs.readFileSync(first.registryFile, 'utf8')), f.plan, item.paperId);
+    const completedEntry = completed.entries.find(entry => entry.paperId === item.paperId);
+    write(first.registryFile, `${JSON.stringify(completed, null, 2)}\n`);
+    const audits = [];
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: async input => { captures += 1; return capture(input); },
+        renderDirectPage,
+        analyze: async () => { analyses += 1; throw new Error('completed analysis must not call the LLM path'); },
+        onCrashRecoveryAudit: audit => {
+            audits.push(audit);
+            const persisted = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
+                .find(entry => entry.paperId === item.paperId);
+            assert.equal(persisted.status, 'staged');
+            assert.deepEqual(persisted.source, completedEntry.source);
+            assert.deepEqual(persisted.analysis, completedEntry.analysis);
+        }
+    });
+    assert.equal(resumed.status, 'complete');
+    assert.equal(resumed.results[0].status, 'staged');
+    assert.equal(analyses, 1, 'verified analysis_complete must not repeat expensive analysis');
+    assert.equal(captures, 2, 'recovery replays the sealed source before direct staging');
+    assert.deepEqual(audits.map(audit => [audit.fromStatus, audit.normalizedStatus,
+        audit.recoveryStatus]), [['analysis_complete', 'staged', 'completed-analysis-replayed']]);
+});
+
+test('analysis_complete with drifted analysis bytes fails closed before normal same-run reanalysis', async t => {
+    const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+        .find(entry => entry.paperId === 'arxiv:2601.00001');
+    let analyses = 0; const capture = directArxivCapture();
+    const dependencies = { captureFreshArxivRewriteSource: capture, renderDirectPage,
+        analyze: async ({ sourceDescriptor, sourceDetails }) => {
+            analyses += 1;
+            return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        } };
+    const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, dependencies);
+    const completed = asInterruptedAnalysisComplete(
+        JSON.parse(fs.readFileSync(first.registryFile, 'utf8')), f.plan, item.paperId);
+    const completedEntry = completed.entries.find(entry => entry.paperId === item.paperId);
+    const analysisFile = path.join(completedEntry.analysis.directory, 'analysis.json');
+    const driftedAnalysis = JSON.parse(fs.readFileSync(analysisFile, 'utf8'));
+    driftedAnalysis.title = `${driftedAnalysis.title || ''} drifted`;
+    write(analysisFile, `${JSON.stringify(driftedAnalysis, null, 2)}\n`);
+    write(first.registryFile, `${JSON.stringify(completed, null, 2)}\n`);
+    const audits = [];
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, { ...dependencies,
+        onCrashRecoveryAudit: audit => {
+            audits.push(audit);
+            const persisted = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
+                .find(entry => entry.paperId === item.paperId);
+            assert.equal(persisted.status, 'failed');
+            assert.match(persisted.latestError, /analysis bytes drifted/);
+            assert.deepEqual(persisted.source, completedEntry.source);
+            assert.deepEqual(persisted.analysis, completedEntry.analysis);
+        } });
+    assert.equal(resumed.status, 'complete');
+    assert.equal(resumed.results[0].status, 'staged');
+    assert.equal(analyses, 2, 'invalid completed bytes must use the normal analysis path exactly once');
+    assert.deepEqual(audits.map(audit => [audit.normalizedStatus, audit.recoveryStatus]),
+        [['failed', 'completed-analysis-invalid']]);
+});
+
 test('missing current Reader blocks staging even when canonical analysis otherwise parses', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
@@ -620,7 +862,9 @@ test('default runner engine preserves conference PDF pages through nested analys
             materializeReaderFigures: async () => [] }, async () => {
             const result = await runner.defaultAnalyze({ item, sourceDetails: extracted.sourceDetails,
                 sourceDescriptor: descriptor, executionDirectory, dependencies: {
+                    paperLockTimeoutMs: 37,
                     engine: { analyzeBatch: async (papers, options) => {
+                        assert.deepEqual(options.paperLockOptions, { timeoutMs: 37 });
                         await Promise.resolve(); // cross an async boundary as Reader generation does
                         const active = context.getDirectRewriteAnalysisContext();
                         const readerPages = context.directSupplementaryReaderImages();
@@ -722,7 +966,7 @@ test('actual Reader request receives a conference PDF page from the direct scope
                 readerMaxAttempts: 1, readerRecordDisposition: () => {}, readerCallModel: async messages => {
                     const flattened = JSON.stringify(messages);
                     assert.match(flattened, /论文 PDF 的临时渲染页 1/);
-                    assert.match(flattened, /Y29uZmVyZW5jZS1yZWFkZXItcGFnZQ==/);
+                    assert.match(flattened, /data:image\/jpeg;base64,/);
                     requestSawPage = true;
                     return 'invalid JSON';
                 }
@@ -731,7 +975,9 @@ test('actual Reader request receives a conference PDF page from the direct scope
             assert.equal(fs.existsSync(temporaryDirectory), true);
         });
     }, { temporaryRoot, materializeConferenceFigures: async ({ directory }) => {
-        temporaryDirectory = directory; const bytes = Buffer.from('conference-reader-page');
+        temporaryDirectory = directory; const { createCanvas } = require('@napi-rs/canvas');
+        const canvas = createCanvas(8, 6); const draw = canvas.getContext('2d');
+        draw.fillStyle = '#224466'; draw.fillRect(0, 0, 8, 6); const bytes = canvas.toBuffer('image/png');
         write(path.join(directory, 'page-1.png'), bytes);
         return [{ ordinal: 1, caption: 'page', rawBytes: bytes, assetSha256: sha(bytes), mediaType: 'image/png' }];
     } });

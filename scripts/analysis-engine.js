@@ -1318,6 +1318,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
  * @param {Function} options.onSave - 保存回调 (results, stats) => Promise<void> | void
  * @param {Function} options.shouldSkip - 是否跳过某篇 (paper) => boolean
  * @param {Function} options.analyzeFn - 可选自定义单篇分析函数，默认使用 deep-analyzer.js
+ * @param {Object} options.paperLockOptions - 可选 canonical 单篇锁等待/陈旧策略
  * @returns {Promise<Object>} { results: Object[], stats: Object }
  */
 async function analyzeBatch(papers, options = {}) {
@@ -1336,7 +1337,8 @@ async function analyzeBatch(papers, options = {}) {
         preparePaperLocked = null,
         onPaperResultLocked = null,
         onPaperCheckpointLocked = null,
-        checkpointFilePath = null
+        checkpointFilePath = null,
+        paperLockOptions = null
     } = options;
 
     if (!Number.isInteger(concurrency) || concurrency < 1) {
@@ -1419,7 +1421,7 @@ async function analyzeBatch(papers, options = {}) {
                 await onPaperResultLocked(paperForAnalysis, result);
             }
             return result;
-        });
+        }, paperLockOptions || {});
         const duration = Date.now() - startTime;
         if (r.skipped) {
             stats.skipped++;

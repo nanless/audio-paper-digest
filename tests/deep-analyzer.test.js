@@ -1,5 +1,6 @@
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 const cheerio = require('cheerio');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -241,6 +242,47 @@ describe('arXiv HTML full-text health gate', () => {
         assert.strictEqual(bound.tableBindings[2].sourceQuotes[0].sourceQuoteSha256.length, 64);
         assert.match(bound.sourceBindingsSha256, /^[a-f0-9]{64}$/);
 
+        const sortKeys = value => Array.isArray(value) ? value.map(sortKeys)
+            : value && typeof value === 'object'
+                ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sortKeys(value[key])]))
+                : value;
+        const persistedArtifacts = JSON.parse(JSON.stringify(sortKeys(artifacts)));
+        const replayedPersisted = bindApiReaderSourceEvidence(
+            article, tableBindings, formulaBindings,
+            { structuredArtifacts: persistedArtifacts, sourceText, sections }
+        );
+        assert.strictEqual(replayedPersisted.sourceBindingsSha256, bound.sourceBindingsSha256);
+        const driftedPersisted = structuredClone(persistedArtifacts);
+        driftedPersisted.tables[0].cells[0].text = 'forged cell';
+        assert.throws(() => bindApiReaderSourceEvidence(
+            article, tableBindings, formulaBindings,
+            { structuredArtifacts: driftedPersisted, sourceText, sections }
+        ), /structuredArtifacts\/fulltext SHA 无法重放/);
+        const extendedPersisted = structuredClone(persistedArtifacts);
+        extendedPersisted.tables[0].unexpected = true;
+        assert.throws(() => bindApiReaderSourceEvidence(
+            article, tableBindings, formulaBindings,
+            { structuredArtifacts: extendedPersisted, sourceText, sections }
+        ), /structuredArtifacts\/fulltext SHA 无法重放/);
+
+        const unstructuredBody = {
+            version: 1,
+            source: 'fresh_arxiv_text_without_layout',
+            tables: [],
+            formulas: [],
+            figures: [],
+            flattenedTextSha256: crypto.createHash('sha256').update(sourceText).digest('hex')
+        };
+        const unstructuredArtifacts = sortKeys({
+            ...unstructuredBody,
+            payloadSha256: crypto.createHash('sha256')
+                .update(JSON.stringify(unstructuredBody)).digest('hex')
+        });
+        assert.doesNotThrow(() => bindApiReaderSourceEvidence(
+            '无布局全文的证据重放检查。', [], [],
+            { structuredArtifacts: unstructuredArtifacts, sourceText, sections: [] }
+        ));
+
         assert.throws(() => bindApiReaderSourceEvidence(
             article.replace('| Proposed | 4.1 | 9.3 |', '| Proposed | 4.2 | 9.3 |'),
             tableBindings, formulaBindings,
@@ -458,6 +500,33 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(result, 'complete response');
         assert.strictEqual(calls, 2);
         assert.deepStrictEqual(seenOptions.map(item => item.maxResponseBytes), [1024, 1024]);
+    });
+
+    it('分析层的绝对 deadline 不依赖自定义 requestFn 自行实现超时', async () => {
+        const { callModelWithConfig } = require('../scripts/deep-analyzer.js');
+        for (let run = 0; run < 5; run++) {
+            const startedAt = Date.now();
+            await assert.rejects(callModelWithConfig([], 100, 1, {
+                endpoint: 'https://model.example/v1',
+                key: 'test-key',
+                model: 'test-model',
+                overallTimeoutMs: 30,
+                requestFn: async () => new Promise(() => {})
+            }), error => error.code === 'REQUEST_DEADLINE_EXCEEDED');
+            assert.ok(Date.now() - startedAt < 1000, '分析 worker 不得被未结算 Promise 无限占用');
+        }
+    });
+
+    it('整体预算仅在无法开始下一次重试时返回 MODEL_OVERALL_TIMEOUT', async () => {
+        const { callModelWithConfig } = require('../scripts/deep-analyzer.js');
+        await assert.rejects(callModelWithConfig([], 100, 2, {
+            endpoint: 'https://model.example/v1',
+            key: 'test-key',
+            model: 'test-model',
+            overallTimeoutMs: 30,
+            requestFn: async () => { throw Object.assign(new Error('reset'), { code: 'ECONNRESET' }); }
+        }), error => error.code === 'MODEL_OVERALL_TIMEOUT'
+            && error.cause?.code === 'ECONNRESET');
     });
 
     it('响应超限不会返回截断正文，并保留可恢复错误码', async () => {
@@ -928,10 +997,10 @@ describe('deep-analyzer section helpers', () => {
     });
 
     it('将模型拒绝的透明 PNG 载荷标准化为 RGB JPEG', async () => {
-        const { createCanvas } = require('@napi-rs/canvas');
+        const { createCanvas, loadImage } = require('@napi-rs/canvas');
         const {
-            normalizeModelImagePayload,
-            isCorruptedMultimodalError
+            normalizeModelImagePayload, prepareApiReaderModelImagePayload,
+            preflightReaderModelImages, isCorruptedMultimodalError
         } = require('../scripts/deep-analyzer.js');
         const canvas = createCanvas(4, 3);
         const context = canvas.getContext('2d');
@@ -946,9 +1015,60 @@ describe('deep-analyzer section helpers', () => {
 
         assert.strictEqual(normalized.mime, 'image/jpeg');
         assert.strictEqual(normalized.modelPayloadNormalized, true);
+        assert.match(normalized.sourceSha256, /^[a-f0-9]{64}$/);
+        assert.match(normalized.modelPayloadSha256, /^[a-f0-9]{64}$/);
         assert.ok(Buffer.from(normalized.base64, 'base64').subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])));
         assert.strictEqual(isCorruptedMultimodalError(new Error('Multimodal data is corrupted or cannot be processed.')), true);
+        assert.strictEqual(isCorruptedMultimodalError(new Error('HTTP 400: image decode limit exceeded')), true);
+        assert.strictEqual(isCorruptedMultimodalError(new Error('HTTP 400: invalid image data')), true);
         assert.strictEqual(isCorruptedMultimodalError(new Error('HTTP 429')), false);
+
+        const wide = createCanvas(3000, 1000); wide.getContext('2d').fillRect(0, 0, 3000, 1000);
+        const prepared = await prepareApiReaderModelImagePayload({ inputId: 'figure:1', kind: 'figure', ordinal: 1,
+            url: 'https://example.com/wide.png', rawBytes: wide.toBuffer('image/png') });
+        const decoded = await loadImage(Buffer.from(prepared.base64, 'base64'));
+        assert.ok(decoded.width <= 2048 && decoded.height <= 2048);
+        assert.ok(decoded.width * decoded.height <= 4 * 1024 * 1024);
+        assert.ok(prepared.modelPayloadBytes <= 4 * 1024 * 1024);
+
+        const preflight = await preflightReaderModelImages([{ inputId: 'figure:broken', kind: 'figure', ordinal: 2,
+            url: 'https://example.com/broken.png', rawBytes: Buffer.from('not an image') }]);
+        assert.strictEqual(preflight.ready.length, 0);
+        assert.deepStrictEqual(preflight.rejected.map(item => item.status), ['preflight-rejected']);
+    });
+
+    it('Reader 在 provider 确定性单图错误后隔离 offending image 并重试同一请求', async () => {
+        const { requestReaderModelWithImageIsolation } = require('../scripts/deep-analyzer.js');
+        const image = (id, marker) => ({ inputId: id, kind: 'figure', ordinal: Number(id.slice(-1)),
+            label: `${id}.jpg`, base64: Buffer.from(marker).toString('base64'), mime: 'image/jpeg',
+            sourceSha256: marker.repeat(64).slice(0, 64), modelPayloadSha256: (marker === 'a' ? 'b' : 'c').repeat(64) });
+        const good = image('figure:1', 'a'); const bad = image('figure:2', 'd'); const calls = [];
+        const requestModel = async (messages, _tokens, options) => {
+            const serialized = JSON.stringify(messages); calls.push({ stage: options.usageContext.stage, serialized });
+            if (serialized.includes(bad.base64)) {
+                const error = new Error('HTTP 400: invalid image data'); error.status = 400; throw error;
+            }
+            return '{"accepted":true}';
+        };
+        const buildMessages = inputs => [{ role: 'user', content: [
+            { type: 'text', text: 'sealed source prompt' },
+            ...inputs.map(item => ({ type: 'image_url', image_url: { url: `data:${item.mime};base64,${item.base64}` } }))
+        ] }];
+        const first = await requestReaderModelWithImageIsolation({ requestModel, buildMessages,
+            imageInputs: [good, bad], maxTokens: 100, requestOptions: { usageContext: { stage: 'apiReaderArticle' } } });
+        assert.deepStrictEqual(first.activeInputs.map(item => item.inputId), ['figure:1']);
+        assert.deepStrictEqual(first.exclusions.map(item => item.inputId), ['figure:2']);
+        assert.strictEqual(first.raw, '{"accepted":true}');
+        assert.deepStrictEqual(calls.map(item => item.stage), [
+            'apiReaderArticle', 'apiReaderImageProbe', 'apiReaderImageProbe', 'apiReaderArticle'
+        ]);
+
+        calls.length = 0;
+        const replay = await requestReaderModelWithImageIsolation({ requestModel, buildMessages,
+            imageInputs: [good, bad], maxTokens: 100, existingExclusions: first.exclusions,
+            requestOptions: { usageContext: { stage: 'apiReaderArticle' } } });
+        assert.deepStrictEqual(replay.activeInputs.map(item => item.inputId), ['figure:1']);
+        assert.deepStrictEqual(calls.map(item => item.stage), ['apiReaderArticle']);
     });
 
     it('arXiv figure 内多张图片会全部提取并按 URL 去重', () => {
@@ -3175,6 +3295,13 @@ has_dataset: 否
         ].join('');
         const source = '公开测试集使用相同协议，基线词错误率为 12.4%，本文方法词错误率为 9.8%。';
         assert.strictEqual(getCoreSummaryDetailIssue(withSummary(detailed), { sourceText: source }), null);
+        const explicitObservationSetting = detailed.replace(
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            '在包含1700个数据点的完整评测样本上，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。'
+        );
+        assert.strictEqual(getCoreSummaryDetailIssue(
+            withSummary(explicitObservationSetting), { sourceText: source }
+        ), null);
         assert.match(getCoreSummaryDetailIssue(withSummary(detailed.replace(/。/g, '，')), { sourceText: source }), /当前 0/);
         assert.match(getCoreSummaryDetailIssue(withSummary(`${detailed}${'补充说明。'.repeat(3)}`), { sourceText: source }), /当前 10/);
         assert.match(getCoreSummaryDetailIssue(withSummary(`${detailed}${'扩展证据'.repeat(100)}`), { sourceText: source }), /中文字符过多/);

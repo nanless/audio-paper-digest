@@ -6,7 +6,7 @@ const path = require('node:path');
 const cheerio = require('cheerio');
 const { renderReaderTableSelection, compileReaderTableSelections,
     assessReaderTableSelectionEligibility, findReaderTablePasteDuplication,
-    hasExplicitRepeatedScientificMeasurement } = require('../scripts/lib/reader-tables.js');
+    hasExplicitRepeatedScientificMeasurement, canonicalizeReaderSelectionRows } = require('../scripts/lib/reader-tables.js');
 
 function artifactsFixture() {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
@@ -129,6 +129,21 @@ test('source row/column selection preserves multilevel headers, spanning DOM ide
     assert.equal(bound.tableBindings[0].cellBindings[0].sourceDomSha256, artifacts.tables[0].cells[0].sourceDomSha256);
     assert.ok(bound.tableBindings.every(binding => !('selection' in binding)));
     assert.match(bound.sourceBindingsSha256, /^[a-f0-9]{64}$/);
+});
+
+test('selection deterministically moves or prepends an unambiguous source header without changing data cells', () => {
+    const { artifacts } = artifactsFixture();
+    assert.deepEqual(canonicalizeReaderSelectionRows([2, 1, 3], [0, 1]), [1, 2, 3]);
+    assert.deepEqual(canonicalizeReaderSelectionRows([1, 2], [0]), [0, 1, 2]);
+    assert.deepEqual(canonicalizeReaderSelectionRows([2, 3], [0, 1]), [2, 3],
+        'multiple absent header candidates remain ambiguous');
+
+    const moved = selected(); moved.selection.sourceRows = [2, 1, 3];
+    const movedResult = renderReaderTableSelection(moved, artifacts);
+    assert.deepEqual([...new Set(movedResult.binding.cellBindings.map(cell => cell.sourceRow))], [1, 2, 3]);
+    const prepended = selected(1, 2); prepended.selection.sourceRows = [1, 2];
+    const prependedResult = renderReaderTableSelection(prepended, artifacts);
+    assert.deepEqual([...new Set(prependedResult.binding.cellBindings.map(cell => cell.sourceRow))], [0, 1, 2]);
 });
 
 test('selection rejects duplicate/out-of-range coordinates, fake headers, mixed payload and malformed source matrices', () => {

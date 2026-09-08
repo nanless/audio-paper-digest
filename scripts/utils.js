@@ -873,6 +873,36 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
     });
 }
 
+function withRequestDeadline(requestFactory, timeoutMs) {
+    if (typeof requestFactory !== 'function') {
+        throw new TypeError('requestFactory must be a function');
+    }
+    if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+        throw new Error(`timeoutMs 必须是正整数，收到: ${timeoutMs}`);
+    }
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (handler, value) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            handler(value);
+        };
+        const timer = setTimeout(() => {
+            const error = new Error(`Request deadline exceeded after ${timeoutMs}ms`);
+            error.code = 'REQUEST_DEADLINE_EXCEEDED';
+            finish(reject, error);
+        }, timeoutMs);
+        // Keep this timer referenced.  A custom/injected transport may own no
+        // socket or other event-loop handle; the logical request still has to
+        // stay alive long enough to fail closed at its declared deadline.
+        Promise.resolve().then(requestFactory).then(
+            value => finish(resolve, value),
+            error => finish(reject, error)
+        );
+    });
+}
+
 function requiresLlmProxy(endpoint, model) {
     const m = String(model || '').toLowerCase();
     return m.startsWith('muse-spark-');
@@ -925,7 +955,11 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
         let response;
         let failure;
         try {
-            response = await transportRequestFn(apiUrl, bodyObj, headers, { ...options, agent });
+            const timeoutMs = options.timeoutMs ?? 60000;
+            response = await withRequestDeadline(
+                () => transportRequestFn(apiUrl, bodyObj, headers, { ...options, timeoutMs, agent }),
+                timeoutMs
+            );
             return response;
         } catch (error) {
             failure = error;
@@ -1837,6 +1871,7 @@ module.exports = {
     getResponsesOutputTruncationError,
     parseSseResponse,
     requestJson,
+    withRequestDeadline,
     requiresLlmProxy,
     requestLlmJson,
     // 代理

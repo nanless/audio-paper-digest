@@ -523,8 +523,17 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     let result = paper;
     const persistRecovery = record => writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,
         record, updatedAt: (dependencies.now || (() => new Date().toISOString()))() });
+    // The global analysis engine tolerates long-lived interactive contention,
+    // but a bounded historical worker must not occupy one of its queue slots
+    // for four hours when an old canonical paper lock cannot be reclaimed.
+    // Fail closed and let the durable registry/recovery state drive a retry.
+    const paperLockTimeoutMs = dependencies.paperLockTimeoutMs ?? 5 * 60 * 1000;
+    if (!Number.isInteger(paperLockTimeoutMs) || paperLockTimeoutMs <= 0) {
+        fail('paperLockTimeoutMs must be a positive integer');
+    }
     const runEngine = async () => engine.analyzeBatch([paper], {
         concurrency: 1, maxRetries: dependencies.maxRetries ?? 2, saveInterval: 0,
+        paperLockOptions: { timeoutMs: paperLockTimeoutMs },
         preparePaperLocked: () => ({ paper, skip: false }),
         onPaperCheckpointLocked: checkpoint => { persistRecovery(checkpoint); },
         onPaperResultLocked: async (_paper, event) => {
@@ -597,6 +606,160 @@ function directProvenanceFor(item, sourceDescriptor) {
                 sourceVersionIdentitySha256: sourceDescriptor.sourceVersion.identitySha256
             } : {}) } : {}),
         sourceOnly: true, oldGeneratedTextIncluded: false };
+}
+
+function validateInterruptedSourceDescriptor(item, sourceDescriptor, generation) {
+    directProvenanceFor(item, sourceDescriptor);
+    const sourceFields = item.route.kind === 'arxiv-fresh-fetch'
+        ? ['kind', 'paperId', 'generation', 'sourceId', 'textSha256', 'structuredArtifactsSha256',
+            'pdfSha256', 'sourceManifestSha256', 'sourceBinding', 'sourceRunIdentitySha256',
+            'sourceSnapshotSha256', ...(Object.hasOwn(sourceDescriptor || {}, 'sourceVersion') ? ['sourceVersion'] : [])]
+        : ['kind', 'paperId', 'sourceId', 'pdfSha256', 'textSha256',
+            'structuredArtifactsSha256', 'sourceSnapshotSha256'];
+    exactObjectKeys(sourceDescriptor, sourceFields, `${item.paperId} interrupted source descriptor`);
+    if (sourceDescriptor.kind !== item.route.kind || sourceDescriptor.paperId !== item.paperId
+        || typeof sourceDescriptor.sourceId !== 'string' || !sourceDescriptor.sourceId
+        || !SHA.test(String(sourceDescriptor.pdfSha256 || ''))) {
+        fail(`${item.paperId} interrupted source descriptor is invalid`);
+    }
+    if (item.route.kind !== 'arxiv-fresh-fetch') return clone(sourceDescriptor);
+    if (sourceDescriptor.generation !== generation
+        || !SHA.test(String(sourceDescriptor.sourceManifestSha256 || ''))
+        || !SHA.test(String(sourceDescriptor.sourceRunIdentitySha256 || ''))) {
+        fail(`${item.paperId} interrupted arXiv source belongs to another generation`);
+    }
+    const binding = planApi.normalizeFreshArxivSourceBinding(item, sourceDescriptor.sourceBinding);
+    if (binding.generation !== generation || binding.textSha256 !== sourceDescriptor.textSha256
+        || binding.pdfSha256 !== sourceDescriptor.pdfSha256
+        || binding.sourceManifestSha256 !== sourceDescriptor.sourceManifestSha256
+        || planApi.directSourceRunIdentity(item, binding) !== sourceDescriptor.sourceRunIdentitySha256) {
+        fail(`${item.paperId} interrupted arXiv source binding drifted`);
+    }
+    const hasVersion = Object.hasOwn(sourceDescriptor, 'sourceVersion');
+    if (/v[1-9]\d*$/i.test(sourceDescriptor.sourceId) !== hasVersion) {
+        fail(`${item.paperId} interrupted arXiv version disclosure drifted`);
+    }
+    if (hasVersion && freshArxiv.normalizeHistoricalVersionIdentity(
+        sourceDescriptor.sourceVersion, item.route.arxivId
+    ).selectedSourceId !== sourceDescriptor.sourceId) {
+        fail(`${item.paperId} interrupted arXiv version differs from its source ID`);
+    }
+    return clone(sourceDescriptor);
+}
+
+function exactObjectKeys(value, fields, label) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join('\0') !== fields.slice().sort().join('\0')) {
+        fail(`${label} fields are invalid`);
+    }
+}
+
+function analysisRecoveryReceipt(recovery) {
+    return { filename: recovery.filename, fileSha256: recovery.fileSha256,
+        recoverySha256: recovery.recoverySha256, recordSha256: recovery.recordSha256,
+        updatedAt: recovery.updatedAt };
+}
+
+function recoverInterruptedRegistryEntry({ registry, plan, item, generation, executionRoot, now }) {
+    const active = registry.entries.find(entry => entry.paperId === item.paperId);
+    if (!['sourcing', 'source_ready', 'analyzing'].includes(active?.status)) {
+        return null;
+    }
+    const fromStatus = active.status;
+    let recovery = null;
+    let recoveryStatus = 'not-applicable';
+    let detail = `${fromStatus} was left by an interrupted direct process`;
+    if (fromStatus === 'analyzing') {
+        recoveryStatus = 'missing';
+        try {
+            const sourceDescriptor = validateInterruptedSourceDescriptor(item, active.source, generation);
+            const directory = executionDirectory(executionRoot, item, sourceDescriptor);
+            const loaded = readAnalysisRecovery({ executionDirectory: directory, item,
+                sourceDescriptor, allowMissing: true });
+            if (loaded && hasRecoverableAnalysisState(loaded)) {
+                const receipt = analysisRecoveryReceipt(loaded);
+                if (active.analysisRecovery
+                    && stableHash(active.analysisRecovery) !== stableHash(receipt)) {
+                    fail(`${item.paperId} interrupted registry recovery receipt drifted from its file`);
+                }
+                recovery = receipt;
+                recoveryStatus = 'valid';
+                detail = 'analyzing was interrupted; a same-source recovery envelope was replayed';
+            } else if (loaded) {
+                recoveryStatus = 'empty';
+                detail = 'analyzing was interrupted; its recovery envelope has no recoverable stage state';
+            } else {
+                detail = 'analyzing was interrupted before a recovery envelope was persisted';
+            }
+        } catch (error) {
+            recoveryStatus = 'invalid';
+            detail = `analyzing was interrupted; recovery rejected: ${String(error.message || error).slice(0, 1200)}`;
+        }
+    }
+    const normalizedStatus = recovery ? 'analysis_partial' : 'failed';
+    const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
+        paperId: item.paperId, runId: item.runId, generation, fromStatus, normalizedStatus,
+        recoveryStatus, sourceSnapshotSha256: SHA.test(String(active.source?.sourceSnapshotSha256 || ''))
+            ? active.source.sourceSnapshotSha256 : null,
+        recoverySha256: recovery?.recoverySha256 || null, recoveredAt: now, detail };
+    const next = transition(registry, plan, item.paperId, normalizedStatus, {
+        latestError: `[crash-recovery] ${detail}`,
+        ...(recovery ? { analysisRecovery: recovery }
+            : fromStatus === 'analyzing' && active.analysisRecovery ? { analysisRecovery: undefined } : {})
+    }, now);
+    return { registry: next, audit };
+}
+
+async function replayCompletedAnalysisForStaging({ item, active, generation, executionRoot,
+    freshArxivSourceRoot, readFreshArxivSource }) {
+    const sourceDescriptor = validateInterruptedSourceDescriptor(item, active.source, generation);
+    if (item.route.kind === 'arxiv-fresh-fetch') {
+        const stored = await readFreshArxivSource({ rootDir: freshArxivSourceRoot,
+            arxivId: item.route.arxivId, generation });
+        if (!stored || stored.arxivId !== item.route.arxivId || stored.generation !== generation) {
+            fail(`${item.paperId} completed analysis source generation cannot be replayed`);
+        }
+        stored.paperId = item.paperId;
+        const replayedDescriptor = compactSourceDescriptor(item.route.kind, stored, item);
+        if (stableHash(replayedDescriptor) !== stableHash(sourceDescriptor)) {
+            fail(`${item.paperId} completed analysis source descriptor drifted from sealed bytes`);
+        }
+    } else {
+        planApi.verifyConferenceWriterInputs(item);
+    }
+    const analysisFields = ['directory', 'analysisFileSha256', 'analysisRecordSha256',
+        'sourceSnapshotSha256', ...(Object.hasOwn(active.analysis || {}, 'recovery') ? ['recovery'] : [])];
+    exactObjectKeys(active.analysis, analysisFields, `${item.paperId} completed analysis receipt`);
+    if (!SHA.test(String(active.analysis.analysisFileSha256 || ''))
+        || !SHA.test(String(active.analysis.analysisRecordSha256 || ''))
+        || active.analysis.sourceSnapshotSha256 !== sourceDescriptor.sourceSnapshotSha256) {
+        fail(`${item.paperId} completed analysis receipt is not bound to its source`);
+    }
+    const expectedDirectory = executionDirectory(executionRoot, item, sourceDescriptor);
+    if (typeof active.analysis.directory !== 'string' || !path.isAbsolute(active.analysis.directory)
+        || path.resolve(active.analysis.directory) !== expectedDirectory) {
+        fail(`${item.paperId} completed analysis directory drifted`);
+    }
+    const loaded = readRegular(path.join(expectedDirectory, 'analysis.json'));
+    let analysis;
+    try { analysis = JSON.parse(loaded.bytes.toString('utf8')); }
+    catch { fail(`${item.paperId} completed analysis file is invalid JSON`); }
+    if (loaded.sha256 !== active.analysis.analysisFileSha256
+        || stableHash(analysis) !== active.analysis.analysisRecordSha256) {
+        fail(`${item.paperId} completed analysis bytes drifted from its receipt`);
+    }
+    if (active.analysis.recovery) {
+        exactObjectKeys(active.analysis.recovery,
+            ['filename', 'fileSha256', 'recoverySha256', 'recordSha256', 'updatedAt'],
+            `${item.paperId} completed analysis recovery receipt`);
+        const recovery = readAnalysisRecovery({ executionDirectory: expectedDirectory, item,
+            sourceDescriptor, allowMissing: false });
+        if (stableHash(analysisRecoveryReceipt(recovery)) !== stableHash(active.analysis.recovery)) {
+            fail(`${item.paperId} completed analysis recovery receipt drifted`);
+        }
+    }
+    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis });
+    return { sourceDescriptor, analysis };
 }
 
 function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis }) {
@@ -732,6 +895,62 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
     const runOne = async item => {
         let active = registry.entries.find(entry => entry.paperId === item.paperId);
         let executionDir = null; let descriptor = null;
+        if (active.status === 'analysis_complete') {
+            try {
+                const completed = await replayCompletedAnalysisForStaging({ item, active,
+                    generation: arxivGeneration, executionRoot: options.executionRoot,
+                    freshArxivSourceRoot: options.freshArxivSourceRoot, readFreshArxivSource });
+                const staging = stageDirectExecution({ plan, registry, item,
+                    sourceDescriptor: completed.sourceDescriptor, analysis: completed.analysis,
+                    stagingRoot: options.stagingRoot, dependencies });
+                registry = transition(registry, plan, item.paperId, 'staged', {
+                    staging, latestError: null
+                }, now);
+                persist();
+                const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
+                    paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
+                    fromStatus: 'analysis_complete', normalizedStatus: 'staged',
+                    recoveryStatus: 'completed-analysis-replayed',
+                    sourceSnapshotSha256: completed.sourceDescriptor.sourceSnapshotSha256,
+                    recoverySha256: active.analysis?.recovery?.recoverySha256 || null,
+                    recoveredAt: now, detail: 'analysis_complete bytes and source were replayed; LLM analysis was not repeated' };
+                console.warn(`[historical-direct-rewrite] ${JSON.stringify(audit)}`);
+                if (typeof dependencies.onCrashRecoveryAudit === 'function') {
+                    dependencies.onCrashRecoveryAudit(clone(audit));
+                }
+                return { paperId: item.paperId, status: 'staged' };
+            } catch (error) {
+                const detail = `analysis_complete replay rejected: ${String(error.message || error).slice(0, 1200)}`;
+                registry = transition(registry, plan, item.paperId, 'failed', {
+                    latestError: `[crash-recovery] ${detail}`
+                }, now);
+                persist();
+                const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
+                    paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
+                    fromStatus: 'analysis_complete', normalizedStatus: 'failed',
+                    recoveryStatus: 'completed-analysis-invalid',
+                    sourceSnapshotSha256: SHA.test(String(active.source?.sourceSnapshotSha256 || ''))
+                        ? active.source.sourceSnapshotSha256 : null,
+                    recoverySha256: active.analysis?.recovery?.recoverySha256 || null,
+                    recoveredAt: now, detail };
+                console.warn(`[historical-direct-rewrite] ${JSON.stringify(audit)}`);
+                if (typeof dependencies.onCrashRecoveryAudit === 'function') {
+                    dependencies.onCrashRecoveryAudit(clone(audit));
+                }
+                active = registry.entries.find(entry => entry.paperId === item.paperId);
+            }
+        }
+        const interrupted = recoverInterruptedRegistryEntry({ registry, plan, item,
+            generation: arxivGeneration, executionRoot: options.executionRoot, now });
+        if (interrupted) {
+            registry = interrupted.registry;
+            persist();
+            console.warn(`[historical-direct-rewrite] ${JSON.stringify(interrupted.audit)}`);
+            if (typeof dependencies.onCrashRecoveryAudit === 'function') {
+                dependencies.onCrashRecoveryAudit(clone(interrupted.audit));
+            }
+            active = registry.entries.find(entry => entry.paperId === item.paperId);
+        }
         if (active.status === 'staged') {
             try {
                 if (item.route.kind === 'arxiv-fresh-fetch') {
@@ -940,4 +1159,6 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     priorPreprintAnalysisDisclosure, extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
     withEphemeralConferenceFigures, renderConferencePdfPages,
     directProvenanceFor, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
+    validateInterruptedSourceDescriptor, recoverInterruptedRegistryEntry,
+    replayCompletedAnalysisForStaging,
     stageDirectExecution, defaultAnalyze, sealedFailureHandoff, runDirectRewrite };

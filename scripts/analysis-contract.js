@@ -957,7 +957,7 @@ function hasCompleteCoreSummaryQuantitativeResult(text) {
             || !CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return false;
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         if (!numbers.length) return false;
-        const setting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
+        const setting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
         const comparison = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
         return setting && comparison;

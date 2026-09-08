@@ -1305,7 +1305,8 @@ describe('LLM request invariants', () => {
         assert.match(fetchPapers, /requestFn\s*=\s*options\.requestFn\s*\|\|\s*requestLlmJson/);
         assert.match(fetchPapers, /await\s+requestFn\(/);
         assert.match(deepAnalyzer, /requestFn\s*=\s*typeof\s+config\.requestFn[^\n]+requestLlmJson/);
-        assert.match(deepAnalyzer, /await\s+requestFn\(/);
+        assert.match(deepAnalyzer, /await\s+withRequestDeadline\(/);
+        assert.match(deepAnalyzer, /\(\)\s*=>\s*requestFn\(/);
         assert.doesNotMatch(fetchPapers, /requestJson\([^)]*agent:\s*false/s);
         assert.doesNotMatch(deepAnalyzer, /requestJson\([^)]*agent:\s*false/s);
     });

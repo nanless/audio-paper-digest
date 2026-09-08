@@ -130,13 +130,28 @@ function assessReaderTableSelectionEligibility(table) {
         ...(!reasons.length ? {} : { action: 'Do not use selection. Use source_quotes only with exact full-text quotes and the existing numeric/unit gate; do not invent header names or normalize source evidence.' }) };
 }
 
+// Selection rows are model-authored coordinates, but the source explicitly
+// identifies header rows.  Two mistakes are therefore safe to repair without
+// inventing a cell: move the sole selected header to the front, or prepend the
+// sole declared header when the model selected data rows only.  Multiple
+// possible headers remain ambiguous and must go through a bounded local repair.
+function canonicalizeReaderSelectionRows(sourceRows, headerRows) {
+    if (!Array.isArray(sourceRows) || !Array.isArray(headerRows)) return sourceRows;
+    const headers = new Set(headerRows); const selectedHeaders = sourceRows.filter(row => headers.has(row));
+    if (selectedHeaders.length === 1) {
+        return [selectedHeaders[0], ...sourceRows.filter(row => row !== selectedHeaders[0])];
+    }
+    if (selectedHeaders.length === 0 && headerRows.length === 1) return [headerRows[0], ...sourceRows];
+    return sourceRows;
+}
+
 function renderReaderTableSelection(binding, artifacts) {
     const label = `读者文章 tableBindings[${Number(binding?.tableIndex) - 1}] selection`;
     if (!exactKeys(binding, ['tableIndex', 'selection']) || !Number.isInteger(binding.tableIndex) || binding.tableIndex < 1
         || !exactKeys(binding.selection, ['sourceTableOrdinal', 'sourceRows', 'sourceColumns'])) {
         throw new Error(`${label} 字段非法或混合手写数据`);
     }
-    const { sourceTableOrdinal, sourceRows, sourceColumns } = binding.selection;
+    const { sourceTableOrdinal, sourceRows: requestedSourceRows, sourceColumns } = binding.selection;
     const tables = (artifacts?.tables || []).filter(table => table?.ordinal === sourceTableOrdinal);
     const table = tables[0];
     if (!Number.isInteger(sourceTableOrdinal) || tables.length !== 1 || table.recoveryStatus !== 'complete'
@@ -153,15 +168,18 @@ function renderReaderTableSelection(binding, artifacts) {
         throw new Error(`${label} selection eligible=false: ${eligibility.reasonCodes.join(', ')}。`
             + '原表不能逐字安全渲染为 Markdown；仅可使用有完整逐字证据的 source_quotes 路线，不得编造表头或改写来源。');
     }
-    for (const [values, limit, minimum] of [[sourceRows, table.matrix.length, 2], [sourceColumns, width, 2]]) {
+    for (const [values, limit, minimum] of [[requestedSourceRows, table.matrix.length, 2], [sourceColumns, width, 2]]) {
         if (!Array.isArray(values) || values.length < minimum || new Set(values).size !== values.length
             || values.some(index => !Number.isInteger(index) || index < 0 || index >= limit)) {
             throw new Error(`${label} 行列重复、越界或数量不足`);
         }
     }
+    const sourceRows = canonicalizeReaderSelectionRows(requestedSourceRows, table.headerRows);
     if (!Array.isArray(table.headerRows) || !table.headerRows.includes(sourceRows[0])
         || sourceRows.slice(1).some(row => table.headerRows.includes(row))) {
-        throw new Error(`${label} 第一行必须是原表头，其余行必须是数据行`);
+        throw new Error(`${label} 第一行必须是原表头，其余行必须是数据行；`
+            + `sourceTableOrdinal=${sourceTableOrdinal}，原表明示表头行=${JSON.stringify(table.headerRows)}，`
+            + `当前选择行=${JSON.stringify(requestedSourceRows)}。只修改本 binding 的 sourceRows，不能改写正文或原表。`);
     }
     const cellBindings = [];
     const matrix = sourceRows.map((sourceRow, renderedRow) => sourceColumns.map((sourceColumn, renderedColumn) => {
@@ -229,4 +247,4 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
 module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
     hasExplicitRepeatedScientificMeasurement, findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
-    renderReaderTableSelection, compileReaderTableSelections };
+    canonicalizeReaderSelectionRows, renderReaderTableSelection, compileReaderTableSelections };

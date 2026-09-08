@@ -12,6 +12,7 @@ const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompil
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256']);
 const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256'));
+const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const withoutRevisionFields = identity => Object.fromEntries(Object.entries(identity)
     .filter(([key]) => !ALLOWED_FIELDS.includes(key)));
 
@@ -31,7 +32,19 @@ function readEnvelope(filename) {
 
 function finishRevisionArchives(directory, identity, payload) {
     for (const audit of payload.readerRecoveryRevisions || []) {
-        if (audit.contract !== CONTRACT || audit.runId !== identity.freshAnalysis?.runId
+        const expectedRunId = identity.freshAnalysis?.runId || null;
+        const direct = expectedRunId ? null
+            : require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
+        const directPaperId = String(direct?.paperId || '').replace(/^arxiv:/, '');
+        const directScopeValid = Boolean(direct?.runId)
+            && audit.scope === 'historical-direct'
+            && audit.runId === direct.runId
+            && audit.paperId === directPaperId
+            && identity.paperId === directPaperId
+            && identity.sourceSha256 === direct.sourceSha256
+            && path.resolve(directory) === path.resolve(direct.readerAttemptsDir);
+        if (audit.contract !== CONTRACT || expectedRunId && audit.runId !== expectedRunId
+            || !expectedRunId && (!UUID_RE.test(String(audit.runId || '')) || !directScopeValid)
             || audit.fromIdentitySha256 === hashDraft(identity)
             || !/^[a-f0-9]{64}$/.test(audit.fromIdentitySha256 || '')
             || !/^[a-f0-9]{64}$/.test(audit.oldPayloadSha256 || '')
@@ -93,15 +106,27 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     const exact = loadFailedCandidate(directory, identity);
     if (exact) { verifyPixels(exact); return finishRevisionArchives(directory, identity, exact); }
     const context = getFreshAnalysisContext();
-    if (context?.refreshReaderDiagnostics !== true) return null;
-    if (path.resolve(directory) !== path.join(context.runDir, 'reader-attempts')
-        || identity?.freshAnalysis?.runId !== context.runId
-        || identity.freshAnalysis.paperId !== identity.paperId
-        || identity.sourceSha256 !== context.sourceExpectations[identity.paperId]?.sourceSha256
-        || identity.freshAnalysis.sourceSha256 !== identity.sourceSha256
-        || identity.freshAnalysis.structuredArtifactsSha256 !== context.sourceExpectations[identity.paperId]?.structuredArtifactsSha256) {
-        throw new Error('Reader diagnostic revision must remain in the exact fresh run/source scope');
-    }
+    const direct = require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
+    let revisionRunId; let revisionScope;
+    if (context?.refreshReaderDiagnostics === true) {
+        if (path.resolve(directory) !== path.join(context.runDir, 'reader-attempts')
+            || identity?.freshAnalysis?.runId !== context.runId
+            || identity.freshAnalysis.paperId !== identity.paperId
+            || identity.sourceSha256 !== context.sourceExpectations[identity.paperId]?.sourceSha256
+            || identity.freshAnalysis.sourceSha256 !== identity.sourceSha256
+            || identity.freshAnalysis.structuredArtifactsSha256 !== context.sourceExpectations[identity.paperId]?.structuredArtifactsSha256) {
+            throw new Error('Reader diagnostic revision must remain in the exact fresh run/source scope');
+        }
+        revisionRunId = context.runId; revisionScope = 'fresh-run';
+    } else if (direct?.runId) {
+        const directPaperId = String(direct.paperId || '').replace(/^arxiv:/, '');
+        if (path.resolve(directory) !== path.resolve(direct.readerAttemptsDir)
+            || identity?.freshAnalysis !== undefined || identity?.paperId !== directPaperId
+            || identity.sourceSha256 !== direct.sourceSha256) {
+            throw new Error('Reader diagnostic revision must remain in the exact historical direct run/source scope');
+        }
+        revisionRunId = direct.runId; revisionScope = 'historical-direct';
+    } else return null;
     let names;
     try { names = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort(); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -136,8 +161,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     }
     const diagnosticImplementationChanged = implementationFields.some(field => old.changedFields.includes(field));
     const archivedName = `${hashDraft(old.identity)}.migrated-${crypto.randomUUID()}.json`;
-    const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(),
-        runId: context.runId, paperId: identity.paperId,
+    const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(), scope: revisionScope,
+        runId: revisionRunId, paperId: identity.paperId,
         fromIdentitySha256: hashDraft(old.identity), toIdentitySha256: hashDraft(identity),
         changedFields: old.changedFields, archivedName,
         oldPayloadSha256: hashDraft(old.payload), oldEnvelopeSha256: old.envelopeSha256,

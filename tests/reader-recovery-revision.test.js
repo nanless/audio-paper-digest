@@ -9,6 +9,7 @@ const { withFreshAnalysisContext } = require('../scripts/lib/fresh-analysis-cont
 const { loadReaderRecoveryRevision } = require('../scripts/lib/reader-recovery-revision.js');
 const { saveFailedCandidate, loadFailedCandidate, hashDraft } = require('../scripts/lib/reader-repair.js');
 const { READER_SECTION_KINDS, normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
+const directContext = require('../scripts/lib/direct-rewrite-analysis-context.js');
 
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-revision-'));
@@ -120,6 +121,57 @@ test('a table-compiler implementation change migrates the draft for full revalid
     assert.equal(loaded.noProgress, 0); assert.equal(loaded.validationFailureStreak, 0);
     assert.match(loaded.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
     assert.ok(loaded.readerRecoveryRevisions[0].changedFields.includes('tableCompilerSha256'));
+});
+
+test('historical direct scope migrates the same source-bound failed candidate after table compiler repair', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-direct-revision-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const directory = path.join(root, 'reader-attempts'); const runId = crypto.randomUUID();
+    const paperId = '2609.99970'; const text = 'sealed historical direct source';
+    const sourceSha256 = crypto.createHash('sha256').update(text).digest('hex');
+    const oldIdentity = { paperId, sourceSha256, inputFingerprint: 'same direct input',
+        model: { model: 'test-model', maxTokens: 48000 }, promptSha256: 'p', repairPromptSha256: 'q',
+        maxAttempts: 6, repairMaxTokens: 8000, tableCompilerSha256: '1'.repeat(64),
+        repairImplementationSha256: '2'.repeat(64) };
+    const identity = { ...oldIdentity, tableCompilerSha256: '3'.repeat(64),
+        repairImplementationSha256: '4'.repeat(64) };
+    const base = fixture(t); saveFailedCandidate(directory, oldIdentity, base.payload);
+    const sourceDetails = { paperId: `arxiv:${paperId}`, source: 'pdf', sourceId: paperId, text,
+        structuredArtifacts: { payloadSha256: 'b'.repeat(64) } };
+    const enabled = (callback, overrides = {}) => {
+        const scopedDetails = overrides.sourceDetails || sourceDetails;
+        return directContext.withDirectRewriteAnalysisSource({ paperId: overrides.paperId || `arxiv:${paperId}`,
+            runId: overrides.runId || runId, route: 'arxiv-fresh-fetch', sourceDetails: scopedDetails,
+            sourceSha256: overrides.sourceSha256 || sourceSha256,
+            structuredArtifactsSha256: scopedDetails.structuredArtifacts.payloadSha256,
+            sourceSnapshotSha256: 'c'.repeat(64), sourceGeneration: 1,
+            sourceManifestSha256: 'd'.repeat(64), readerAttemptsDir: overrides.readerAttemptsDir || directory }, callback);
+    };
+    const migrated = enabled(() => loadReaderRecoveryRevision(directory, identity));
+    assert.equal(migrated.attempts, base.payload.attempts);
+    assert.equal(migrated.validationFailureStreak, 0);
+    assert.equal(migrated.readerRecoveryRevisions.at(-1).scope, 'historical-direct');
+    assert.equal(migrated.readerRecoveryRevisions.at(-1).runId, runId);
+    assert.match(migrated.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(enabled(() => loadReaderRecoveryRevision(directory, identity)), migrated);
+    const wrong = { ...identity, sourceSha256: '0'.repeat(64) };
+    assert.throws(() => enabled(() => loadReaderRecoveryRevision(directory, wrong)), /historical direct run\/source scope/);
+    assert.throws(() => enabled(() => loadReaderRecoveryRevision(directory, identity), { runId: crypto.randomUUID() }),
+        /implementation repair allowance|historical direct/i);
+    const otherPaper = '2609.99969'; const otherDetails = { ...sourceDetails, paperId: `arxiv:${otherPaper}` };
+    assert.throws(() => enabled(() => loadReaderRecoveryRevision(directory, identity), {
+        paperId: `arxiv:${otherPaper}`, sourceDetails: otherDetails }), /implementation repair allowance|historical direct/i);
+    const differentText = 'different sealed historical source';
+    const differentDetails = { ...sourceDetails, text: differentText };
+    assert.throws(() => enabled(() => loadReaderRecoveryRevision(directory, identity), {
+        sourceDetails: differentDetails,
+        sourceSha256: crypto.createHash('sha256').update(differentText).digest('hex')
+    }), /implementation repair allowance|historical direct/i);
+    const moved = path.join(root, 'moved-reader-attempts'); fs.cpSync(directory, moved, { recursive: true });
+    assert.throws(() => enabled(() => loadReaderRecoveryRevision(moved, identity)),
+        /implementation repair allowance|historical direct/i);
+    assert.throws(() => loadReaderRecoveryRevision(directory, identity),
+        /implementation repair allowance|historical direct/i);
 });
 
 test('an exhausted paid budget retains its counters but receives exactly one implementation repair slot', t => {

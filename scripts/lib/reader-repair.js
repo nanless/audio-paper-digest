@@ -126,6 +126,17 @@ function validateImplementationAllowance(payload, identity, directory) {
     const audit = audits.at(-1); const body = proof && { ...proof }; if (body) delete body.allowanceSha256;
     const fromIdentity = String(proof?.fromIdentitySha256 || '');
     const archivePattern = new RegExp(`^${fromIdentity}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`);
+    const direct = identity?.freshAnalysis?.runId ? null
+        : require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
+    const directPaperId = String(direct?.paperId || '').replace(/^arxiv:/, '');
+    const directScopeValid = Boolean(direct?.runId)
+        && audit?.scope === 'historical-direct'
+        && audit?.runId === direct.runId
+        && audit?.paperId === directPaperId
+        && identity?.paperId === directPaperId
+        && identity?.sourceSha256 === direct.sourceSha256
+        && typeof directory === 'string'
+        && path.resolve(directory) === path.resolve(direct.readerAttemptsDir);
     if (!proof || typeof proof !== 'object' || Array.isArray(proof)
         || Object.keys(proof).sort().join('\0') !== keys.sort().join('\0')
         || proof.contract !== IMPLEMENTATION_ALLOWANCE_CONTRACT
@@ -133,7 +144,10 @@ function validateImplementationAllowance(payload, identity, directory) {
         || proof.changedFields.some(field => !IMPLEMENTATION_ALLOWANCE_FIELDS.has(field))
         || proof.changedFields.some((field, index) => index && proof.changedFields[index - 1].localeCompare(field) >= 0)
         || !audit || audit.contract !== 'reader-recovery-diagnostics-revision-v1'
-        || audit.runId !== identity?.freshAnalysis?.runId || audit.paperId !== identity?.paperId
+        || (identity?.freshAnalysis?.runId ? audit.runId !== identity.freshAnalysis.runId
+            : !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(audit.runId || ''))
+                || !directScopeValid)
+        || audit.paperId !== identity?.paperId
         || audit.toIdentitySha256 !== hashDraft(identity) || audit.fromIdentitySha256 !== fromIdentity
         || !archivePattern.test(String(audit.archivedName || ''))
         || !/^[a-f0-9]{64}$/.test(String(audit.oldEnvelopeSha256 || ''))
@@ -428,6 +442,14 @@ function buildRepairTargets(draft, issues) {
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
         const message = issue.message || '';
+        if (/selection[\s\S]*第一行必须是原表头，其余行必须是数据行/.test(message)) {
+            const index = Number(/tableBindings\[(\d+)\]/.exec(message)?.[1]);
+            if (Number.isInteger(index)) add(`/tableBindings/${index}`);
+            // The marker and surrounding section are already structurally
+            // valid. Requesting a whole section body here bloats a one-object
+            // repair and was the main source of truncated repair JSON.
+            continue;
+        }
         if (/主结果表覆盖不足/.test(message)) {
             draft.sections.forEach((section, index) => {
                 if (['result', 'ablation'].includes(section?.kind)) add(`/sections/${index}/body`);
