@@ -50,6 +50,8 @@ PDF, runtime metadata, and manifest at
 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`. Re-running the same
 Run `history:direct-scheduler` until every selected paper is `ready` in the same plan/generation status.
 `history:direct-run --apply` is replay-only and rejects missing/handoff/failed scheduler state before any model call;
+staged pages whose renderer identity is stale are selected again for source/analysis replay and page-only
+restaging under a renderer-specific directory, without another LLM call or overwriting the older staging packet;
 rerunning it then reuses matching source-bound analysis checkpoints. A failed fresh
 acquisition writes only an immutable handoff; it does not mutate crosswalk automatically or block the local
 conference queue.

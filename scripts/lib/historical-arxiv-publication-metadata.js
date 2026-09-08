@@ -268,14 +268,18 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
         fail('official Atom query is not bound to the exact sealed source ID');
     }
     if (!Array.isArray(metadata.authors) || metadata.authors.length === 0
-        || metadata.authors.some(author => typeof author !== 'string' || !author.trim()
-            || author !== author.trim())) {
+        || metadata.authors.some(author => typeof author !== 'string' || !author.trim())) {
         fail('publication metadata authors are empty or invalid');
     }
+    // The raw Atom response, canonical metadata bytes, manifest and sealed
+    // source have all replayed above. Older official Atom entries can retain
+    // boundary whitespace inside <name>; normalize only the returned author
+    // view, never the immutable sidecar or its hashes.
+    const authors = metadata.authors.map(author => author.trim());
     return { directory, sourceManifestSha256: manifest.source.sourceManifestSha256,
         sourceSnapshotSha256: manifest.source.sourceSnapshotSha256,
         sourceTextSha256: manifest.source.sourceTextSha256, abstract: metadata.abstract,
-        authors: metadata.authors.slice(),
+        authors,
         proof: { contract: CONTRACT, paperId: `arxiv:${id}`, manifestSha256: sha256(manifestBytes),
             atomResponseSha256: manifest.atom.responseSha256,
             metadataRecordSha256: manifest.metadata.recordSha256, abstractSha256: manifest.metadata.abstractSha256,

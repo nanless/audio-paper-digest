@@ -558,6 +558,47 @@ test('implicit max-papers advances past staged entries while explicit IDs remain
     assert.deepEqual(explicit.paperIds, [conferenceId]); assert.equal(explicit.selection.skippedCompletedCount, 0);
 });
 
+test('stale renderer staging is requeued and page-only restaged without overwriting analysis or old pages', async t => {
+    const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+        .find(entry => entry.route.kind === 'conference-local-pdf');
+    const firstRenderer = 'a'.repeat(64); const secondRenderer = 'b'.repeat(64); let analyses = 0;
+    const base = { extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item: selected, sourceDescriptor, sourceDetails }) => {
+            analyses += 1; return sealedAnalysis(selected, sourceDescriptor, sourceDetails);
+        } };
+    const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'conference', maxPapers: 1 }, { ...base, rendererImplementationSha256: firstRenderer });
+    assert.equal(first.results[0].status, 'staged'); assert.equal(analyses, 1);
+    const firstRegistry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8'));
+    const firstEntry = firstRegistry.entries.find(entry => entry.paperId === item.paperId);
+    const oldDirectory = firstEntry.staging.directory;
+    const oldManifest = fs.readFileSync(path.join(oldDirectory, 'page-staging-manifest.json'));
+    assert.match(oldDirectory, new RegExp(`renderer-${firstRenderer}$`));
+
+    const dry = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
+        queue: 'conference', maxPapers: 1 }, { ...base, rendererImplementationSha256: secondRenderer });
+    assert.deepEqual(dry.paperIds, [item.paperId]);
+    assert.equal(dry.selection.staleStagedCount, 1);
+    assert.equal(dry.selection.skippedCompletedCount, 0);
+    assert.equal(JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).registrySha256,
+        firstRegistry.registrySha256, 'dry-run must not mutate a stale staged registry');
+
+    const restaged = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'conference', maxPapers: 1 }, { ...base, rendererImplementationSha256: secondRenderer,
+        analyze: async () => { throw new Error('renderer-only restaging must not call analysis'); } });
+    assert.equal(restaged.results[0].status, 'restaged'); assert.equal(analyses, 1);
+    const finalRegistry = JSON.parse(fs.readFileSync(restaged.registryFile, 'utf8'));
+    const finalEntry = finalRegistry.entries.find(entry => entry.paperId === item.paperId);
+    assert.equal(finalEntry.status, 'staged'); assert.equal(finalEntry.attempts, firstEntry.attempts);
+    assert.equal(finalEntry.analysis.analysisFileSha256, firstEntry.analysis.analysisFileSha256);
+    assert.equal(finalEntry.staging.pageStaging.rendererImplementationSha256, secondRenderer);
+    assert.match(finalEntry.staging.directory, new RegExp(`renderer-${secondRenderer}$`));
+    assert.notEqual(finalEntry.staging.directory, oldDirectory);
+    assert.deepEqual(fs.readFileSync(path.join(oldDirectory, 'page-staging-manifest.json')), oldManifest);
+    assert.equal(stageFiles(f.root).length, 2);
+});
+
 test('persistent pause marker stops before new work and the same selection resumes after marker removal', async t => {
     const f = fixture(t); const roots = files(f.root);
     const pauseFile = runner.defaultPauseFilePath(roots.registryRoot, f.plan, 1);

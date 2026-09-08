@@ -75,6 +75,27 @@ test('publication metadata sidecar seals raw Atom and replays every source/recor
     assert.deepEqual(recovered.authors, ['Author One']);
 });
 
+test('verified legacy Atom author whitespace is normalized only in the returned view', async t => {
+    const f = await fixture(t, 'author-whitespace');
+    const raw = atom().replace('<name>Author One</name>', '<name>  Author One  </name>');
+    const parsed = metadataApi.parseOfficialArxivMetadataResponse(ID, raw, { querySourceId: ID });
+    const officialResult = { ...parsed, proof: { ...parsed.proof,
+        observedAt: '2026-01-04T00:00:00.000Z' } };
+    const sealed = sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult,
+        now: '2026-01-04T00:00:00.000Z' });
+    const atomFile = path.join(sealed.directory, sidecars.ATOM_NAME);
+    const metadataFile = path.join(sealed.directory, sidecars.METADATA_NAME);
+    const before = { atom: fs.readFileSync(atomFile), metadata: fs.readFileSync(metadataFile) };
+    assert.deepEqual(sealed.authors, ['Author One']);
+    assert.deepEqual(sealed.metadata.authors, ['  Author One  ']);
+    const replayed = sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 });
+    assert.deepEqual(replayed.authors, ['Author One']);
+    assert.deepEqual(fs.readFileSync(atomFile), before.atom);
+    assert.deepEqual(fs.readFileSync(metadataFile), before.metadata);
+});
+
 test('publication metadata sidecar rejects semantic observed-time and raw entry-version drift', async t => {
     const observed = await fixture(t, 'observed-drift');
     sidecars.sealPublicationMetadata({ rootDir: observed.sidecarRoot, sourceRoot: observed.sourceRoot,

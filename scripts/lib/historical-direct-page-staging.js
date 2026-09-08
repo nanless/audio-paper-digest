@@ -369,10 +369,14 @@ function validateManifest({ value, item, sourceDescriptor, publicationSource, ar
     return clone(value);
 }
 function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact, analysis, directory, stagingInputSha256, stagingBindingSha256,
-    dependencies = {} } = {}) {
+    expectedRendererImplementationSha256 = null, dependencies = {} } = {}) {
     const root = safeDirectory(directory, 'direct page staging directory', true);
     if (!SHA.test(String(stagingInputSha256 || '')) || !SHA.test(String(stagingBindingSha256 || ''))) fail('direct staging input/binding SHA is invalid');
     const rendererImplementationSha256 = renderer.currentRendererImplementationSha256(dependencies);
+    if (expectedRendererImplementationSha256 !== null
+        && expectedRendererImplementationSha256 !== rendererImplementationSha256) {
+        fail(`${item?.paperId || 'paper'} historical renderer changed before direct pages were rendered`);
+    }
     const manifestFile = path.join(root, 'page-staging-manifest.json');
     if (fs.existsSync(manifestFile)) return validateManifest({ value: parseJson(readFile(manifestFile, 64 * 1024 * 1024,
         `${item.paperId} direct page manifest`).bytes, `${item.paperId} direct page manifest`), item, sourceDescriptor, publicationSource, artifact, analysis,
@@ -423,4 +427,5 @@ module.exports = { CONTRACT, VERSION, PUBLICATION_SOURCE_CONTRACT, HistoricalDir
     sourceProof, readerProof, priorPreprintDisclosureProof, priorPreprintPageDisclosure,
     arxivHistoricalVersionDisclosureProof, arxivHistoricalVersionPageDisclosure,
     sourceDisclosureProof, pageDisclosureFor, injectTopDisclosure, hasExactTopDisclosure,
-    buildManifest, receipt, validateManifest, stageDirectPages };
+    buildManifest, receipt, validateManifest, stageDirectPages,
+    currentRendererImplementationSha256: dependencies => renderer.currentRendererImplementationSha256(dependencies) };

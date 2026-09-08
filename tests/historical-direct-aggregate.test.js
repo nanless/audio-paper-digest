@@ -252,8 +252,9 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
         stagingRoot: paths.stagingRoot, freshArxivSourceRoot: paths.sourceRoot,
         publicationMetadataRoot: paths.publicationRoot,
         freshArxivFailureHandoffRoot: paths.failureRoot, concurrency: 3 };
+    const rendererSha256 = sha('direct-mock-renderer-v1');
     const deps = { captureFreshArxivRewriteSource: capture, analyze, extractPdfText: async () => 'fresh conference source text '.repeat(10),
-        materializeConferenceFigures: async () => [], rendererImplementationSha256: () => sha('direct-mock-renderer-v1'),
+        materializeConferenceFigures: async () => [], rendererImplementationSha256: () => rendererSha256,
         assertPublicationMetadataReady: () => {},
         renderDirectPage: packet => ({ markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }),
         readPublicationMetadata };
@@ -270,13 +271,14 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
     const second = await runner.runDirectRewrite({ ...options, queue: 'arxiv', arxivGeneration: 2 }, deps);
     assert.equal(second.status, 'complete', JSON.stringify(second.results));
     return { root, inventory, plan, projection, paths, firstRegistry: first.registryFile,
-        secondRegistry: second.registryFile, sidecarState, readPublicationMetadata };
+        secondRegistry: second.registryFile, sidecarState, readPublicationMetadata, rendererSha256 };
 }
 function inputs(f, registryFile = f.firstRegistry) {
     return direct.loadDirectAggregateInputs({ planFile: f.paths.planFile, registryFile, projectionFile: f.paths.projectionFile,
         stagingRoot: f.paths.stagingRoot, executionRoot: f.paths.executionRoot,
         freshArxivSourceRoot: f.paths.sourceRoot, publicationMetadataRoot: f.paths.publicationRoot,
-        readPublicationMetadata: f.readPublicationMetadata });
+        readPublicationMetadata: f.readPublicationMetadata,
+        currentRendererImplementationSha256: f.rendererSha256 });
 }
 function writeRegistry(filename, registry) { writeJson(filename, registry); }
 function rebasedRegistry(registry, entries) {
@@ -488,6 +490,18 @@ test('direct aggregate rejects a partial daily cohort', async t => {
         ? { ...entry, status: 'failed' } : entry);
     const filename = path.join(f.root, 'partial-registry.json'); writeRegistry(filename, rebasedRegistry(registry, entries));
     assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f, filename), daily: DATE }), /not staged; aggregate requires complete cohort staging/);
+});
+
+test('direct aggregate rejects internally valid staging from a stale renderer', async t => {
+    const f = await fixture(t);
+    const stale = direct.loadDirectAggregateInputs({ planFile: f.paths.planFile,
+        registryFile: f.firstRegistry, projectionFile: f.paths.projectionFile,
+        stagingRoot: f.paths.stagingRoot, executionRoot: f.paths.executionRoot,
+        freshArxivSourceRoot: f.paths.sourceRoot, publicationMetadataRoot: f.paths.publicationRoot,
+        readPublicationMetadata: f.readPublicationMetadata,
+        currentRendererImplementationSha256: 'f'.repeat(64) });
+    assert.throws(() => direct.buildDirectAggregates({ inputs: stale, daily: DATE }),
+        /staged renderer is not current/);
 });
 
 test('direct aggregate rejects a daily cohort mixed across arXiv source generations', async t => {

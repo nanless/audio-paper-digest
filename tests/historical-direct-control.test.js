@@ -8,6 +8,7 @@ const path = require('node:path');
 const control = require('../scripts/lib/historical-direct-control.js');
 const cli = require('../scripts/historical-direct-control.js');
 const aggregateApi = require('../scripts/lib/historical-direct-aggregate.js');
+const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
 
 function minimalPlan() {
     const body = { contract: 'historical-direct-rewrite-plan-v5', version: 5,
@@ -59,6 +60,28 @@ test('source status checkpoint is immutable in shape and advances resumable conf
     assert.equal(control.normalizeSourceStatus(created.status, plan, 1).statusSha256, created.status.statusSha256);
     const tampered = structuredClone(created.status); tampered.planSha256 = 'f'.repeat(64);
     assert.throws(() => control.normalizeSourceStatus(tampered, plan, 1), /source status envelope/);
+});
+
+test('status counts a staged page with an old renderer as unfinished', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-renderer-status-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const item = { paperId: 'arxiv:2601.00001', runId: '11111111-1111-4111-8111-111111111111',
+        route: { kind: 'arxiv-fresh-fetch' }, projectionSha256: 'd'.repeat(64) };
+    const plan = { ...minimalPlan(), queue: [item] };
+    const entry = { paperId: item.paperId, runId: item.runId, route: item.route.kind,
+        projectionSha256: item.projectionSha256, status: 'staged', source: {}, analysis: {},
+        staging: { pageStaging: { rendererImplementationSha256: 'a'.repeat(64) } },
+        attempts: 1, latestError: null, updatedAt: '2026-09-08T00:00:00.000Z' };
+    const body = { contract: runner.REGISTRY_CONTRACT, version: 1, planSha256: plan.planSha256,
+        createdAt: '2026-09-08T00:00:00.000Z', entries: [entry] };
+    const registryFile = path.join(root, 'registry.json');
+    fs.writeFileSync(registryFile, `${JSON.stringify({ ...body, registrySha256: runner.stableHash(body) })}\n`);
+    const snapshot = control.registrySnapshot({ registryFile, plan,
+        currentRendererImplementationSha256: 'b'.repeat(64) });
+    assert.equal(snapshot.counts.staged, 1);
+    assert.equal(snapshot.currentStagedCount, 0);
+    assert.equal(snapshot.staleStagedCount, 1);
+    assert.deepEqual(snapshot.staleStagedPaperIds, [item.paperId]);
 });
 
 test('resume refuses to remove pause request while direct-run lock exists', t => {

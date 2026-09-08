@@ -558,13 +558,22 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
             registryVersion: taxonomyRuntime.registryVersion, registrySha256: taxonomyRuntime.registrySha256 } };
 }
 function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoot,
-    freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null }) {
+    freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null,
+    currentRendererImplementationSha256 }) {
     const entry = exactRegistryEntry(registryEntry, item);
     if (entry.status !== 'staged') fail(`${item.paperId} is not staged; aggregate requires complete cohort staging`);
+    if (!validSha(currentRendererImplementationSha256)
+        || entry.staging?.pageStaging?.rendererImplementationSha256 !== currentRendererImplementationSha256) {
+        fail(`${item.paperId} staged renderer is not current; direct page restaging is required`);
+    }
     const source = expectedSource(entry, item); const artifact = expectedArtifact(entry, item, source);
     const directory = inside(stagingRoot, entry.staging.directory, `${item.paperId} staging directory`);
     const segment = item.route.kind === 'arxiv-fresh-fetch' ? source.sourceRunIdentitySha256 : 'conference-local';
-    if (directory !== path.join(stagingRoot, item.runId, segment)) fail(`${item.paperId} staging directory differs from direct route`);
+    const routeDirectory = path.join(stagingRoot, item.runId, segment);
+    const rendererDirectory = path.join(routeDirectory, `renderer-${currentRendererImplementationSha256}`);
+    if (directory !== routeDirectory && directory !== rendererDirectory) {
+        fail(`${item.paperId} staging directory differs from direct route/renderer`);
+    }
     const loaded = readJson(path.join(directory, 'staging-input.json'), `${item.paperId} staging input`);
     const stage = loaded.value;
     exact(stage, ['contract', 'version', 'paperId', 'runId', 'analysisArtifact', 'publicationSource',
@@ -610,7 +619,8 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
         pageStaging: pageManifest, canonical };
 }
 function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot,
-    freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null } = {}) {
+    freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null,
+    currentRendererImplementationSha256 = null } = {}) {
     if (typeof planFile !== 'string' || typeof registryFile !== 'string' || typeof projectionFile !== 'string') {
         fail('plan, registry, and aggregate projection files are required');
     }
@@ -618,6 +628,9 @@ function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, sta
     const registryLoaded = readJson(registryFile, 'direct execution registry'); const registry = runnerApi.normalizeRegistry(registryLoaded.value, plan);
     const projectionLoaded = readJson(projectionFile, 'direct aggregate projection');
     const projection = normalizeAggregateProjection(projectionLoaded.value, plan);
+    const rendererSha256 = currentRendererImplementationSha256
+        || directPages.currentRendererImplementationSha256();
+    if (!validSha(rendererSha256)) fail('current direct renderer implementation SHA is invalid');
     const staging = safeRoot(stagingRoot, 'direct staging root'); const executions = safeRoot(executionRoot, 'direct execution root');
     const byId = new Map(registry.entries.map(entry => [entry.paperId, entry]));
     if (byId.size !== registry.entries.length) fail('direct execution registry has duplicate paper IDs');
@@ -630,7 +643,8 @@ function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, sta
     }
     return { plan, planFileSha256: planLoaded.fileSha256, registry, registryFileSha256: registryLoaded.fileSha256,
         projection, projectionFileSha256: projectionLoaded.fileSha256, stagingRoot: staging, executionRoot: executions,
-        freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata, members };
+        freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata,
+        currentRendererImplementationSha256: rendererSha256, members };
 }
 
 function md(value) { return String(value).replace(/([\\`*_[\]<>|])/g, '\\$1').replace(/\s+/g, ' ').trim(); }
@@ -751,7 +765,8 @@ function buildCohort(inputs, cohort) {
         stagingRoot: inputs.stagingRoot, executionRoot: inputs.executionRoot,
         freshArxivSourceRoot: inputs.freshArxivSourceRoot,
         publicationMetadataRoot: inputs.publicationMetadataRoot,
-        readPublicationMetadata: inputs.readPublicationMetadata }));
+        readPublicationMetadata: inputs.readPublicationMetadata,
+        currentRendererImplementationSha256: inputs.currentRendererImplementationSha256 }));
     const memberScope = cohort.scope === 'conference-task' ? 'conference' : cohort.scope;
     const memberKey = cohort.scope === 'conference-task' ? cohort.conferenceKey : cohort.key;
     const pages = staged.flatMap(member => member.item.pages.filter(page => page.scope.type === memberScope

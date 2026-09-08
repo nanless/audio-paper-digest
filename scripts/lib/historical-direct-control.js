@@ -11,6 +11,7 @@ const path = require('node:path');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const runner = require('./historical-direct-rewrite-runner.js');
 const aggregateApi = require('./historical-direct-aggregate.js');
+const directPages = require('./historical-direct-page-staging.js');
 const projectionIo = require('./historical-conference-page-projections.js');
 
 const PAUSE_CONTRACT = 'historical-direct-rewrite-pause-request-v1';
@@ -236,12 +237,17 @@ function resumeRewrite({ phase = 'analysis', registryRoot, sourceRoot, plan, gen
     return { status: 'resumed', phase, ...paths, removedRequestSha256: existing.record.requestSha256 };
 }
 
-function registrySnapshot({ registryFile, plan } = {}) {
+function registrySnapshot({ registryFile, plan, currentRendererImplementationSha256 = null } = {}) {
+    if (!SHA_RE.test(String(currentRendererImplementationSha256 || ''))) {
+        fail('current direct renderer implementation SHA is invalid');
+    }
     if (!fs.existsSync(registryFile)) {
         const counts = Object.fromEntries([...runner.STATES || []].sort().map(status => [status, 0]));
         if (!Object.keys(counts).length) for (const status of ['pending', 'sourcing', 'source_ready', 'analyzing', 'analysis_partial', 'analysis_complete', 'staged', 'failed']) counts[status] = 0;
         counts.pending = plan.queue.length;
-        return { present: false, registrySha256: null, counts, lastUpdatedAt: null, recentFailures: [] };
+        return { present: false, registrySha256: null, counts,
+            currentRendererImplementationSha256, currentStagedCount: 0,
+            staleStagedCount: 0, staleStagedPaperIds: [], lastUpdatedAt: null, recentFailures: [] };
     }
     const loaded = projectionIo.readStableJson(registryFile, 'direct rewrite registry');
     const registry = runner.normalizeRegistry(loaded.value, plan); const counts = runner.registryCounts(registry);
@@ -250,8 +256,14 @@ function registrySnapshot({ registryFile, plan } = {}) {
         .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
         .slice(0, 20).map(item => ({ paperId: item.paperId, route: item.route,
             updatedAt: item.updatedAt || null, error: item.latestError || null }));
+    const staleStaged = registry.entries.filter(item => item.status === 'staged'
+        && item.staging?.pageStaging?.rendererImplementationSha256 !== currentRendererImplementationSha256);
     return { present: true, fileSha256: loaded.fileSha256, registrySha256: registry.registrySha256,
-        counts, lastUpdatedAt: updates.at(-1) || null, recentFailures };
+        counts, currentRendererImplementationSha256,
+        currentStagedCount: (counts.staged || 0) - staleStaged.length,
+        staleStagedCount: staleStaged.length,
+        staleStagedPaperIds: staleStaged.map(item => item.paperId).slice(0, 20),
+        lastUpdatedAt: updates.at(-1) || null, recentFailures };
 }
 
 function expectedCohorts(plan) {
@@ -413,13 +425,17 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
     const plan = planApi.normalizePlan(loaded.value); const paths = controlPaths({ registryRoot, plan, generation });
     const pause = readPauseFile(paths.pauseFile, plan, generation); const sourcePaths = sourceControlPaths({ sourceRoot, plan, generation });
     const sourcePause = readPauseFile(sourcePaths.pauseFile, plan, generation);
-    const execution = registrySnapshot({ registryFile: paths.registryFile, plan });
+    const currentRendererImplementationSha256 = directPages.currentRendererImplementationSha256({
+        rendererImplementationSha256: dependencies.currentRendererImplementationSha256
+    });
+    const execution = registrySnapshot({ registryFile: paths.registryFile, plan,
+        currentRendererImplementationSha256 });
     const running = lockPresent(paths.operationLockDirectory); const sourceRunning = lockPresent(sourcePaths.operationLockDirectory);
     const sources = sourceSnapshot({ sourceRoot, plan, generation,
         verifySources: verifySources || publicationId !== null });
     const tasks = taskSnapshot({ aggregateProjectionRoot, plan });
     const aggregates = aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys: tasks.expectedTaskKeys || [] });
-    const total = plan.queue.length; const staged = execution.counts.staged || 0;
+    const total = plan.queue.length; const staged = execution.currentStagedCount || 0;
     const coverage = plan.paperPageCoverage || { frozenPaperPages: null, projectedPaperPages: plan.projectedPages.length,
         uncoveredFrozenPaperPages: null, coverageComplete: false };
     const blockers = [];
@@ -437,6 +453,7 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
     if (!execution.present) blockers.push({ code: 'execution-not-started', count: total });
     else {
         if ((execution.counts.failed || 0) > 0) blockers.push({ code: 'failed-papers', count: execution.counts.failed });
+        if (execution.staleStagedCount > 0) blockers.push({ code: 'stale-staged-renderer', count: execution.staleStagedCount });
         if (staged !== total) blockers.push({ code: 'papers-not-staged', count: total - staged });
     }
     if (!tasks.projectionPresent) blockers.push({ code: 'aggregate-projection-missing' });

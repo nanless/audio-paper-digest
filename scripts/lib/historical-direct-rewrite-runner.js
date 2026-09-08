@@ -416,8 +416,20 @@ function selectDirectItems(plan, options = {}, registry = null) {
     if (unknownPaperIds.length) fail(`paper IDs are unknown or outside queue=${queue}: ${unknownPaperIds.join(', ')}`);
     const requested = new Set(requestedPaperIds);
     const scoped = requested.size ? available.filter(item => requested.has(item.paperId)) : available;
-    const completed = registry === null ? new Set() : new Set(normalizeRegistry(registry, normalized).entries
-        .filter(entry => entry.status === 'staged').map(entry => entry.paperId));
+    const currentRendererImplementationSha256 = options.currentRendererImplementationSha256;
+    if (currentRendererImplementationSha256 !== undefined
+        && !SHA.test(String(currentRendererImplementationSha256 || ''))) {
+        fail('current renderer implementation SHA is invalid');
+    }
+    const stagedEntries = registry === null ? [] : normalizeRegistry(registry, normalized).entries
+        .filter(entry => entry.status === 'staged');
+    const scopedPaperIds = new Set(scoped.map(item => item.paperId));
+    const staleStaged = stagedEntries.filter(entry => scopedPaperIds.has(entry.paperId)
+        && currentRendererImplementationSha256 !== undefined
+        && entry.staging?.pageStaging?.rendererImplementationSha256 !== currentRendererImplementationSha256);
+    const completed = new Set(stagedEntries.filter(entry => currentRendererImplementationSha256 === undefined
+        || entry.staging?.pageStaging?.rendererImplementationSha256 === currentRendererImplementationSha256)
+        .map(entry => entry.paperId));
     // A bounded implicit batch must advance on resume instead of repeatedly
     // selecting the same already-staged prefix. Explicit IDs remain replayable
     // so an operator can deliberately re-verify their sealed artifacts.
@@ -426,6 +438,7 @@ function selectDirectItems(plan, options = {}, registry = null) {
     const items = maxPapers === null ? candidates : candidates.slice(0, maxPapers);
     return { items, selection: { queue, requestedPaperIds: requestedPaperIds.slice().sort(), maxPapers,
         availableCount: available.length, scopedCount: scoped.length,
+        staleStagedCount: staleStaged.length,
         skippedCompletedCount: scoped.length - candidates.length, selectedCount: items.length,
         selectedPaperIds: items.map(item => item.paperId) } };
 }
@@ -1214,8 +1227,10 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
         ? { sourceBindings: [sourceDescriptor.sourceBinding] } : {});
     const binding = planApi.directStagingBinding({ plan, registry: stageRegistry, paperId: item.paperId, analysisArtifact: artifact });
     directContext.assertNoPersistentFigureFields(binding);
+    const rendererImplementationSha256 = directPages.currentRendererImplementationSha256(dependencies);
     const directory = path.join(safeDirectory(stagingRoot, true, 'staging root'), item.runId,
-        item.route.kind === 'arxiv-fresh-fetch' ? sourceDescriptor.sourceRunIdentitySha256 : 'conference-local');
+        item.route.kind === 'arxiv-fresh-fetch' ? sourceDescriptor.sourceRunIdentitySha256 : 'conference-local',
+        `renderer-${rendererImplementationSha256}`);
     safeDirectory(directory, true, 'direct staging directory');
     const body = { contract: STAGING_CONTRACT, version: 1, paperId: item.paperId, runId: item.runId,
         analysisArtifact: artifact, publicationSource,
@@ -1224,6 +1239,7 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
     const pageManifest = directPages.stageDirectPages({ item, sourceDescriptor, publicationSource,
         artifact, analysis, directory,
         stagingInputSha256, stagingBindingSha256: body.stagingBindingSha256,
+        expectedRendererImplementationSha256: rendererImplementationSha256,
         dependencies: { ...dependencies, assertCompleteAnalysis: candidate =>
             assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis: candidate }) } });
     return { directory, stagingBindingSha256: body.stagingBindingSha256, analysisArtifact: artifact,
@@ -1236,10 +1252,14 @@ function replayDirectPageStaging({ item, active, stagingRoot, executionRoot,
     if (!staging?.pageStaging || !staging.analysisArtifact || !active?.source || !active?.analysis) {
         fail(`${item.paperId} staged execution lacks a direct page staging receipt`);
     }
-    const directory = path.join(safeDirectory(stagingRoot, false, 'staging root'), item.runId,
+    const routeDirectory = path.join(safeDirectory(stagingRoot, false, 'staging root'), item.runId,
         item.route.kind === 'arxiv-fresh-fetch' ? active.source.sourceRunIdentitySha256 : 'conference-local');
-    safeDirectory(directory, false, 'direct staging directory');
-    if (path.resolve(staging.directory) !== directory) fail(`${item.paperId} staged page directory drifted`);
+    const currentDirectory = path.join(routeDirectory,
+        `renderer-${staging.pageStaging.rendererImplementationSha256}`);
+    const directory = safeDirectory(staging.directory, false, 'direct staging directory');
+    if (directory !== routeDirectory && directory !== currentDirectory) {
+        fail(`${item.paperId} staged page directory drifted`);
+    }
     const stagingInput = readRegular(path.join(directory, 'staging-input.json'));
     const body = JSON.parse(stagingInput.bytes.toString('utf8'));
     if (body?.stagingBindingSha256 !== staging.stagingBindingSha256
@@ -1329,6 +1349,21 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
     const runOne = async item => {
         let active = registry.entries.find(entry => entry.paperId === item.paperId);
         let executionDir = null; let descriptor = null;
+        let rendererRestaging = false; let previousRendererImplementationSha256 = null;
+        if (active.status === 'staged'
+            && active.staging?.pageStaging?.rendererImplementationSha256
+                !== options.currentRendererImplementationSha256) {
+            const previousRenderer = active.staging?.pageStaging?.rendererImplementationSha256 || null;
+            rendererRestaging = true;
+            previousRendererImplementationSha256 = previousRenderer;
+            registry = transition(registry, plan, item.paperId, 'failed', {
+                latestError: `[renderer-drift] staged renderer ${previousRenderer || 'missing'} `
+                    + `differs from current ${options.currentRendererImplementationSha256}; `
+                    + 'sealed analysis will be replayed without an LLM call'
+            }, now);
+            persist();
+            active = registry.entries.find(entry => entry.paperId === item.paperId);
+        }
         const replayableCompletedAnalysis = active.status === 'analysis_complete'
             || active.status === 'failed' && active.analysis;
         if (replayableCompletedAnalysis) {
@@ -1371,16 +1406,19 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 persist();
                 const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
                     paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
-                    fromStatus: replayFromStatus, normalizedStatus: 'staged',
-                    recoveryStatus: 'completed-analysis-replayed',
+                    fromStatus: rendererRestaging ? 'staged' : replayFromStatus, normalizedStatus: 'staged',
+                    recoveryStatus: rendererRestaging ? 'renderer-restaged' : 'completed-analysis-replayed',
                     sourceSnapshotSha256: completed.sourceDescriptor.sourceSnapshotSha256,
                     recoverySha256: active.analysis?.recovery?.recoverySha256 || null,
-                    recoveredAt: now, detail: 'analysis_complete bytes and source were replayed; LLM analysis was not repeated' };
+                    recoveredAt: now, detail: rendererRestaging
+                        ? `renderer ${previousRendererImplementationSha256 || 'missing'} was replaced by `
+                            + `${options.currentRendererImplementationSha256}; sealed analysis was replayed without an LLM call`
+                        : 'analysis_complete bytes and source were replayed; LLM analysis was not repeated' };
                 console.warn(`[historical-direct-rewrite] ${JSON.stringify(audit)}`);
                 if (typeof dependencies.onCrashRecoveryAudit === 'function') {
                     dependencies.onCrashRecoveryAudit(clone(audit));
                 }
-                return { paperId: item.paperId, status: 'staged' };
+                return { paperId: item.paperId, status: rendererRestaging ? 'restaged' : 'staged' };
             } catch (error) {
                 const detail = `${replayFromStatus} completed-analysis staging failed: ${String(error.message || error).slice(0, 1200)}`;
                 registry = transition(registry, plan, item.paperId, 'failed', {
@@ -1600,6 +1638,8 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
             publicationMetadataRoot: require('../config.js').FILES.historicalArxivPublicationMetadataDir };
     }
     const plan = planApi.normalizePlan(options.plan);
+    options = { ...options,
+        currentRendererImplementationSha256: directPages.currentRendererImplementationSha256(dependencies) };
     const arxivGeneration = checkedArxivGeneration(options.arxivGeneration || 1);
     const hasRegistryRoot = typeof options.registryRoot === 'string' && path.isAbsolute(options.registryRoot);
     const registryFile = hasRegistryRoot ? registryPath(options.registryRoot, plan, arxivGeneration) : null;

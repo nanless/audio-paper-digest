@@ -344,6 +344,11 @@ direct staging 目录生成 `historical-direct-paper-page-staging-v1`：每个�
 这里不读取 crosswalk、旧 fresh run、旧 taxonomy assignment 或任何旧博客正文。Renderer 实现变更、Reader
 SHA 漂移、历史页 projection 漂移和任何单页字节替换都会拒绝恢复。
 
+单篇 staging 目录按 `runId/sourceIdentity/renderer-<renderer SHA>/` 隔离。状态为 `staged` 但 renderer SHA
+不是当前实现的条目会在 status 中计为未完成，并重新进入 bounded implicit 队列；direct-run 只重放已封存
+source/analysis 后生成新页面，不再次调用 LLM、不增加分析 attempts，也不覆盖或删除旧 renderer 目录。
+aggregate 在读取页面前再次要求全部成员绑定当前 renderer，避免直到最终混合聚合时才暴露漂移。
+
 单篇页 researcher workbench 所需的原始摘要统一来自官方 arXiv Atom sidecar；sealed `source.txt` 的
 有界 Abstract parser 只保留为诊断工具，不再作为 production 摘要权威。所有 direct plan arXiv 都不得读取
 旧博客、crawler 摘要或 LLM 摘要；先运行（未写 selector 时也默认等价于 `--all-plan-arxiv`）：
