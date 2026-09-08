@@ -970,12 +970,14 @@ function coreSummaryQuantitativeResultState(text) {
         return {
             complete: Boolean(sentence) && missing.length === 0,
             missing,
+            hasNumbers: numbers.length > 0,
             signalCount: Number(hasSetting) + Number(hasMetric) + Number(numbers.length > 0)
                 + Number(hasDirection) + Number(hasComparisonObjects)
         };
     });
     if (candidates.some(candidate => candidate.complete)) return { complete: true, missing: [] };
-    const best = candidates.sort((left, right) => right.signalCount - left.signalCount)[0];
+    const best = candidates.sort((left, right) => right.signalCount - left.signalCount
+        || Number(right.hasNumbers) - Number(left.hasNumbers))[0];
     return { complete: false, missing: best?.missing || [
         '评测设置', '指标名称', '数值', '比较方向', '比较对象'
     ] };

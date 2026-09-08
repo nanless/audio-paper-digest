@@ -3710,6 +3710,49 @@ has_dataset: 否
         assert.strictEqual(getCoreSummaryDetailIssue(withSummary(complete), sourceOptions), null);
     });
 
+    it('2512.14629 并列候选优先诊断含数字句且不放宽完整比较门禁', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const originalResult = '客观验证显示移调 7 个半音时五度圈距离为 $0.18$ 且节拍 F 值为 $0.90$，证明指标对目标面敏感而对非目标面稳定；人类听感对照中节奏与节拍面指标与金标签一致率达 $100.0\\%$。';
+        const summary = '音乐编辑任务输入为原始音乐音频 $x$ 与文本编辑指令，输出为已按指令修改目标属性但应保持其余音乐上下文不变的音频 $x\' $，难点在于如何量化未被编辑的和声、节奏、结构与旋律是否被无意破坏。'
+            + 'MuseCPEval 先将需保持的上下文重组为四个音乐面，再为每面定制细粒度度量并计算输入与输出间的相似度，和声面、节奏与节拍面、结构面、旋律与动机面分别由对应组件负责评估并把结果送入统一诊断。'
+            + '相较以往仅报告和声或结构单一指标的做法，该框架首次提供覆盖四面的统一测试床与诊断视角，使不同编辑范式在同一语义下可被拆解分析。'
+            + originalResult
+            + '结论适用于基于扩散或自回归生成器的乐器与风格编辑诊断，对歌声、长时曲式或强交互式编辑的外推尚未验证。'
+            + '原文未披露训练、推理或部署成本。';
+        const sourceOptions = { sourceText:
+            'Experiment result on the human evaluation benchmark: Harmony Metric-Human agreement is 65.9% versus Human-Gold at 72.7%; the objective table reports CoF 0.18, BeatF 0.90, and rhythm agreement 100.0%.' };
+
+        const issue = getCoreSummaryDetailIssue(withSummary(summary), sourceOptions);
+        assert.match(issue, /最接近的同句量化候选缺少：比较方向/);
+        assert.doesNotMatch(issue, /最接近的同句量化候选缺少：数值/);
+
+        const validSameRow = summary.replace(
+            originalResult,
+            '在人类听感评测设置下，和声面的 Metric–Human 一致率指标为 65.9%，低于同面 Human–Gold 的 72.7%。'
+        );
+        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(validSameRow), sourceOptions), null);
+
+        const crossMetricWithoutDirection = summary.replace(
+            originalResult,
+            '在客观验证评测设置下，移调 7 个半音时 CoF 指标为 0.18，Beat F 指标为 0.90。'
+        );
+        assert.match(getCoreSummaryDetailIssue(
+            withSummary(crossMetricWithoutDirection), sourceOptions
+        ), /比较方向/);
+
+        const missingSecondValue = summary.replace(
+            originalResult,
+            '在人类听感评测设置下，和声面的 Metric–Human 一致率指标为 65.9%，低于同面 Human–Gold。'
+        );
+        assert.match(getCoreSummaryDetailIssue(
+            withSummary(missingSecondValue), sourceOptions
+        ), /比较对象/);
+    });
+
     it('核心摘要识别条件化的真实失败现象，不把普通转折当边界', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const replaceBoundary = sentence => validAnalysisText().replace(
