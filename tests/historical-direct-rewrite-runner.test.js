@@ -427,6 +427,63 @@ test('plan-generation operation lock prevents concurrent direct runners from loa
     assert.equal(fs.existsSync(`${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`), false);
 });
 
+test('direct runner wires the opaque local-dead recovery policy only to its outer operation lock', async t => {
+    const f = fixture(t); const roots = files(f.root); let receivedOptions = null;
+    const forgedPolicy = Symbol('not-the-internal-capability');
+    const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'conference', arxivGeneration: 1 }, {
+        lockOptions: { timeoutMs: 37, recoveryPolicy: forgedPolicy },
+        withOperationLock: async (_target, callback, options) => {
+            receivedOptions = options; return callback();
+        },
+        extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) =>
+            sealedAnalysis(item, sourceDescriptor, sourceDetails)
+    });
+    assert.equal(result.status, 'complete');
+    assert.equal(receivedOptions.timeoutMs, 37);
+    assert.notEqual(receivedOptions.recoveryPolicy, forgedPolicy);
+    assert.equal(receivedOptions.recoveryPolicy, engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY);
+});
+
+test('two direct runners atomically replay after immediately reclaiming one fresh same-host dead operation owner', async t => {
+    const f = fixture(t); const roots = files(f.root);
+    const lockPath = `${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`;
+    fs.mkdirSync(lockPath, { recursive: true, mode: 0o700 }); fs.chmodSync(lockPath, 0o700);
+    fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+        pid: 2147483647,
+        hostname: os.hostname(),
+        token: '83838383-8383-4383-8383-838383838383',
+        acquiredAt: new Date().toISOString()
+    }), { mode: 0o600 });
+    fs.chmodSync(path.join(lockPath, 'owner.json'), 0o600);
+    let analyses = 0;
+    const dependencies = {
+        extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => {
+            analyses += 1;
+            await new Promise(resolve => setTimeout(resolve, 20));
+            return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }
+    };
+    const options = { apply: true, plan: f.plan, ...roots,
+        queue: 'conference', arxivGeneration: 1 };
+    const results = await Promise.all([
+        runner.runDirectRewrite(options, dependencies),
+        runner.runDirectRewrite(options, dependencies)
+    ]);
+    assert.deepEqual(results.map(result => result.status), ['complete', 'complete']);
+    assert.equal(analyses, 1);
+    assert.equal(results.flatMap(result => result.results)
+        .filter(result => result.status === 'staged').length, 1);
+    assert.equal(results.flatMap(result => result.results)
+        .filter(result => result.status === 'recovered').length, 1);
+    assert.equal(fs.existsSync(lockPath), false);
+    assert.equal(stageFiles(f.root).length, 1);
+});
+
 // A defaultAnalyze result can contain a per-paper error without throwing. It
 // must still fail the registry/run and must never write an analysis or stage.
 test('defaultAnalyze incomplete result is failed and never persisted or staged', async t => {

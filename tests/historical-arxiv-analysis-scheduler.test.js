@@ -230,7 +230,7 @@ test('scheduler wires its local-dead recovery capability only to the outer opera
         prepareAuthority: async () => ({ authorityHandle: {} }),
         prepareRun: () => ({ status: 'recovered' }), now: () => '2026-09-07T00:00:00.000Z' });
     const engine = require('../scripts/analysis-engine.js');
-    assert.equal(received.recoveryPolicy, engine.HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY);
+    assert.equal(received.recoveryPolicy, engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY);
     assert.equal(result.prepared, 1);
 });
 

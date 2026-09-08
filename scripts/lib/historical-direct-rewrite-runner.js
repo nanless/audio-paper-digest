@@ -1145,8 +1145,12 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
     const engine = require('../analysis-engine.js');
     const withOperationLock = dependencies.withOperationLock
         || ((target, callback, lockOptions) => engine.withFileLock(target, callback, lockOptions));
+    const operationLockOptions = {
+        ...(dependencies.lockOptions || {}),
+        recoveryPolicy: engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY
+    };
     const result = await withOperationLock(lockTarget, () => runDirectRewriteLocked({ options, plan,
-        registryFile, pauseFile, lockTarget }, dependencies), dependencies.lockOptions || {});
+        registryFile, pauseFile, lockTarget }, dependencies), operationLockOptions);
     return { ...result, sourcePrerequisite };
 }
 

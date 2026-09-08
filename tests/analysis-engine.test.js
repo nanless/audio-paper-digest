@@ -21,7 +21,7 @@ const {
     canReclaimFileLock,
     inspectFileLockState,
     withFileLock,
-    HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY,
+    LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
     mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
     scoringStabilityIsResolved,
@@ -1630,7 +1630,7 @@ describe('analysis run status', () => {
         assert.strictEqual(fs.existsSync(path.join(lockPath, 'owner.json')), true);
     });
 
-    it('scheduler recovery 只立即回收严格格式的本机 dead owner，其他锁仍受租约保护', () => {
+    it('operation recovery 只立即回收严格格式的本机 dead owner，其他锁仍受租约保护', () => {
         const makeLock = (name, owner) => {
             const dir = fs.mkdtempSync(path.join(os.tmpdir(), `paper-lock-scheduler-recovery-${name}-`));
             const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
@@ -1642,7 +1642,7 @@ describe('analysis run status', () => {
             return { target, lockPath };
         };
         const lockOptions = { timeoutMs: 25, staleMs: 60_000,
-            recoveryPolicy: HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY };
+            recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY };
         const deadOwner = { pid: 2147483647, hostname: os.hostname(),
             token: '98989898-9898-4898-8898-989898989898', acquiredAt: new Date().toISOString() };
         const dead = makeLock('dead', deadOwner);
@@ -1662,6 +1662,15 @@ describe('analysis run status', () => {
         const malformed = makeLock('malformed', { ...deadOwner,
             token: 'not-a-uuid' });
         assert.throws(() => acquireFileLockSync(malformed.target, lockOptions), /超时/);
+
+        const weakDirectory = makeLock('weak-directory', { ...deadOwner,
+            token: '95959595-9595-4595-8595-959595959595' });
+        fs.chmodSync(weakDirectory.lockPath, 0o755);
+        assert.throws(() => acquireFileLockSync(weakDirectory.target, lockOptions), /超时/);
+        const weakOwner = makeLock('weak-owner', { ...deadOwner,
+            token: '94949494-9494-4494-8494-949494949494' });
+        fs.chmodSync(path.join(weakOwner.lockPath, 'owner.json'), 0o644);
+        assert.throws(() => acquireFileLockSync(weakOwner.target, lockOptions), /超时/);
     });
 
     it('只兼容回收冻结的旧式 0755/0644 本机 stale-dead owner', () => {

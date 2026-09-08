@@ -70,12 +70,11 @@ function sleepSync(ms) {
 
 const FILE_LOCK_OWNER_KEYS = Object.freeze(['acquiredAt', 'hostname', 'pid', 'token']);
 const FILE_LOCK_TOKEN_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
-// This capability is intentionally opaque.  It is passed only by the
-// historical analysis scheduler for its outer operation lock: that process
-// has no work to protect once its same-host owner PID is confirmed gone.  All
-// other file locks keep their lease-based reclaim policy.
-const HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY = Symbol(
-    'historical-analysis-scheduler-local-dead-owner-recovery-v1'
+// This capability is intentionally opaque.  It is passed only by durable
+// outer operation locks whose process owns no protected work after it exits.
+// All canonical paper and ordinary file locks keep their lease-based policy.
+const LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY = Symbol(
+    'local-dead-process-operation-lock-recovery-v1'
 );
 
 function jsonHasDuplicateObjectKeys(source) {
@@ -257,8 +256,8 @@ function localOwnerIsConfirmedDead(owner) {
     }
 }
 
-function schedulerMayImmediatelyReclaimLocalDeadOwner(snapshot, options = {}) {
-    if (options.recoveryPolicy !== HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY
+function operationLockMayImmediatelyReclaimLocalDeadOwner(snapshot, options = {}) {
+    if (options.recoveryPolicy !== LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY
         || !strictCurrentFileLockOwner(snapshot)
         || snapshot.owner.hostname !== os.hostname()) return false;
     return localOwnerIsConfirmedDead(snapshot.owner);
@@ -266,10 +265,10 @@ function schedulerMayImmediatelyReclaimLocalDeadOwner(snapshot, options = {}) {
 
 function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), options = {}) {
     if (!snapshot?.exists || !snapshot.consistent) return false;
-    // The scheduler-only policy does not apply to empty, malformed, legacy,
+    // The operation-lock policy does not apply to empty, malformed, legacy,
     // remote, live, or permission-indeterminate locks.  Those all continue
     // through the ordinary lease gate below.
-    if (schedulerMayImmediatelyReclaimLocalDeadOwner(snapshot, options)) return true;
+    if (operationLockMayImmediatelyReclaimLocalDeadOwner(snapshot, options)) return true;
     const ageMs = nowMs - (snapshot.ownerFile?.mtimeMs ?? snapshot.directory.mtimeMs);
     if (!(ageMs > staleMs)) return false;
     const owner = snapshot.owner;
@@ -1711,7 +1710,7 @@ module.exports = {
     loadCanonicalAnalysisRecord,
     readJsonFileStrict,
     initializeJsonFileLocked,
-    HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY,
+    LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
     acquireFileLockSync,
     acquireFileLock,
     canReclaimFileLock,

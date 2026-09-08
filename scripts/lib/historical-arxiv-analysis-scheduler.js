@@ -468,7 +468,7 @@ async function runHistoricalScheduler(options, overrides = {}) {
         || ((lockPath, callback, lockOptions) => engine.withFileLock(lockPath, callback, lockOptions));
     return withSchedulerLock(`${filename}.scheduler-operation`,
         () => runHistoricalSchedulerUnlocked(options, deps, filename), {
-            recoveryPolicy: engine.HISTORICAL_ANALYSIS_SCHEDULER_LOCK_RECOVERY
+            recoveryPolicy: engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY
         });
 }
 
