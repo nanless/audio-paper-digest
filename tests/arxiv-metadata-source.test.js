@@ -19,12 +19,44 @@ test('official Atom adapter uses mandatory proxy and returns source-only stable 
                 abstract: 'Official abstract with evidence.', authors: ['Author One'], categories: ['cs.SD'],
                 published: '2026-09-04T08:00:00+08:00' }], { _meta: { entryCount: 1, legalEntryCount: 1 } }) },
         requestFn: async (...args) => { requested = args; return { status: 200, data: atom }; }
+        , now: () => '2026-09-05T00:00:00.000Z'
     });
     assert.match(requested[0], /export\.arxiv\.org\/api\/query\?id_list=2609\.03622/);
     assert.equal(requested[2], 'http://127.0.0.1:7897');
     assert.equal(result.metadata.fetchedAt, '2026-09-04T08:00:00+08:00');
     assert.equal(result.proof.contract, api.CONTRACT);
+    assert.equal(result.proof.querySourceId, '2609.03622');
+    assert.equal(result.proof.entryVersion, 1);
+    assert.equal(result.proof.observedAt, '2026-09-05T00:00:00.000Z');
     assert.doesNotMatch(JSON.stringify(result.metadata), /analysis|apiReader|blog/i);
+});
+
+test('official Atom adapter binds an exact version query and rejects ambiguous raw identity fields', async () => {
+    const versioned = api.parseOfficialArxivMetadataResponse('2609.03622', atom, {
+        querySourceId: '2609.03622v1', hasSignature: () => true,
+        parseXml: () => Object.assign([{ arxivId: '2609.03622v1', title: 'Official title',
+            abstract: 'Official abstract with evidence.', authors: ['Author One'], categories: ['cs.SD'],
+            published: '2026-09-04T00:00:00Z' }], { _meta: { entryCount: 1, legalEntryCount: 1 } })
+    });
+    assert.equal(versioned.proof.querySourceId, '2609.03622v1');
+    assert.match(versioned.proof.sourceName, /id_list=2609\.03622v1/);
+    assert.throws(() => api.parseOfficialArxivMetadataResponse('2609.03622', atom, {
+        querySourceId: '2609x03622v1'
+    }), /query source ID/);
+    const duplicateId = atom.replace('</id>', '</id><id>http://arxiv.org/abs/2609.03622v9</id>');
+    assert.throws(() => api.parseOfficialArxivMetadataResponse('2609.03622', duplicateId, {
+        hasSignature: () => true,
+        parseXml: () => Object.assign([{ arxivId: '2609.03622v1', title: 'Official title',
+            abstract: 'Official abstract with evidence.', authors: ['Author One'], categories: ['cs.SD'],
+            published: '2026-09-04T00:00:00Z' }], { _meta: { entryCount: 1, legalEntryCount: 1 } })
+    }), /identity\/version\/timestamps/);
+    const duplicateUpdated = atom.replace('</updated>', '</updated><updated>2026-09-05T00:00:00Z</updated>');
+    assert.throws(() => api.parseOfficialArxivMetadataResponse('2609.03622', duplicateUpdated, {
+        hasSignature: () => true,
+        parseXml: () => Object.assign([{ arxivId: '2609.03622v1', title: 'Official title',
+            abstract: 'Official abstract with evidence.', authors: ['Author One'], categories: ['cs.SD'],
+            published: '2026-09-04T00:00:00Z' }], { _meta: { entryCount: 1, legalEntryCount: 1 } })
+    }), /identity\/version\/timestamps/);
 });
 
 test('official Atom adapter fails closed without proxy or exact identity coverage', async () => {

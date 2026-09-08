@@ -7,6 +7,7 @@ import hashlib
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
@@ -14,7 +15,20 @@ from runtime_guard import require_external_runtime
 
 
 DIRECT_PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1'
+DIRECT_PUBLICATION_METADATA_CONTRACT = 'historical-arxiv-publication-metadata-v1'
 SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
+
+
+def canonical_iso_z(value):
+    if not isinstance(value, str) or not value.endswith('Z'):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + '+00:00')
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None \
+        and parsed.astimezone(timezone.utc).isoformat(timespec='milliseconds') \
+        .replace('+00:00', 'Z') == value
 
 
 def inject_direct_publication_source(projected, publication_source):
@@ -27,6 +41,9 @@ def inject_direct_publication_source(projected, publication_source):
         'contract', 'version', 'paperId', 'sourceSnapshotSha256',
         'sourceTextSha256', 'abstract', 'abstractSha256',
     }
+    has_metadata_sidecar = isinstance(publication_source, dict) \
+        and 'metadataSidecar' in publication_source
+    fields.add('metadataSidecar')
     if not isinstance(publication_source, dict) \
             or set(publication_source) != fields:
         raise ValueError('direct arXiv publication source proof is required')
@@ -50,6 +67,65 @@ def inject_direct_publication_source(projected, publication_source):
             or not SHA256_RE.fullmatch(str(abstract_sha or '')) \
             or hashlib.sha256(abstract.encode('utf-8')).hexdigest() != abstract_sha:
         raise ValueError('direct arXiv publication source proof is invalid')
+    if not has_metadata_sidecar:
+        raise ValueError('direct arXiv publication metadata sidecar proof is required')
+    if has_metadata_sidecar:
+        sidecar = publication_source.get('metadataSidecar')
+        sidecar_fields = {
+            'contract', 'paperId', 'manifestSha256', 'atomResponseSha256',
+            'metadataRecordSha256', 'abstractSha256', 'sourceName', 'querySourceId',
+            'sourceManifestSha256', 'sourceSnapshotSha256',
+            'sourceTextSha256', 'sourceId', 'entryVersion', 'entryUpdatedAt',
+            'publishedAt', 'observedAt', 'sourceCapturedAt', 'sourceEarliestCapturedAt',
+            'sourceLatestCapturedAt',
+            'generation',
+        }
+        expected_source_name = (
+            'https://export.arxiv.org/api/query?'
+            f'id_list={sidecar.get("querySourceId")}&max_results=1'
+        )
+        if not isinstance(sidecar, dict) or set(sidecar) != sidecar_fields \
+                or sidecar.get('contract') != DIRECT_PUBLICATION_METADATA_CONTRACT \
+                or sidecar.get('paperId') != publication_source.get('paperId') \
+                or not isinstance(sidecar.get('entryVersion'), int) \
+                or isinstance(sidecar.get('entryVersion'), bool) \
+                or sidecar.get('entryVersion') < 1 \
+                or any(not SHA256_RE.fullmatch(str(sidecar.get(field) or ''))
+                       for field in (
+                           'manifestSha256', 'atomResponseSha256',
+                           'metadataRecordSha256', 'abstractSha256',
+                           'sourceManifestSha256')) \
+                or sidecar.get('abstractSha256') != abstract_sha \
+                or sidecar.get('sourceManifestSha256') \
+                    != provenance.get('sourceManifestSha256') \
+                or sidecar.get('sourceSnapshotSha256') \
+                    != publication_source.get('sourceSnapshotSha256') \
+                or sidecar.get('sourceTextSha256') \
+                    != publication_source.get('sourceTextSha256') \
+                or any(not canonical_iso_z(sidecar.get(field))
+                       for field in ('entryUpdatedAt', 'publishedAt', 'observedAt',
+                                     'sourceCapturedAt',
+                                     'sourceEarliestCapturedAt',
+                                     'sourceLatestCapturedAt')) \
+                or sidecar.get('publishedAt') > sidecar.get('entryUpdatedAt') \
+                or sidecar.get('entryUpdatedAt') > sidecar.get('observedAt') \
+                or sidecar.get('entryUpdatedAt') \
+                    > sidecar.get('sourceEarliestCapturedAt') \
+                or sidecar.get('sourceEarliestCapturedAt') \
+                    > sidecar.get('sourceLatestCapturedAt') \
+                or not isinstance(sidecar.get('sourceId'), str) \
+                or not re.fullmatch(rf'{re.escape(arxiv_id)}(?:v[1-9]\d*)?',
+                                    sidecar.get('sourceId')) \
+                or (re.search(r'v([1-9]\d*)$', sidecar.get('sourceId')) is not None
+                    and int(re.search(r'v([1-9]\d*)$', sidecar.get('sourceId')).group(1))
+                    != sidecar.get('entryVersion')) \
+                or (re.search(r'v([1-9]\d*)$', sidecar.get('sourceId')) is None
+                    and sidecar.get('observedAt')
+                    < sidecar.get('sourceLatestCapturedAt')) \
+                or sidecar.get('querySourceId') != sidecar.get('sourceId') \
+                or sidecar.get('generation') != provenance.get('sourceGeneration') \
+                or sidecar.get('sourceName') != expected_source_name:
+            raise ValueError('direct arXiv publication metadata sidecar proof is invalid')
     if projected.get('abstract') not in (None, abstract):
         raise ValueError('direct arXiv publication source conflicts with analysis abstract')
     projected['abstract'] = abstract

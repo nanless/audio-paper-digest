@@ -191,7 +191,8 @@ function historicalSourceVersionProof(item, active, manifest) {
         sourceManifestSha256: active.source.sourceManifestSha256 };
 }
 function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDispositionFile,
-    stagingRoot, executionRoot, aggregateRoot } = {}) {
+    stagingRoot, executionRoot, aggregateRoot, freshArxivSourceRoot = null,
+    publicationMetadataRoot = null, readPublicationMetadata = null } = {}) {
     for (const [label, filename] of Object.entries({ planFile, registryFile, projectionFile, visualDispositionFile })) {
         if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} must be an absolute file`);
     }
@@ -208,7 +209,8 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
     const visualDisposition = normalizeVisualDisposition(visualLoaded.value, plan);
     const byEntry = new Map(registry.entries.map(entry => [entry.paperId, entry])); const byPath = new Map(); const stageProofs = [];
     for (const item of plan.queue) {
-        const active = byEntry.get(item.paperId); const manifest = runnerApi.replayDirectPageStaging({ item, active, stagingRoot, executionRoot });
+        const active = byEntry.get(item.paperId); const manifest = runnerApi.replayDirectPageStaging({ item, active,
+            stagingRoot, executionRoot, freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
         const relativeDirectory = path.relative(path.resolve(stagingRoot), path.resolve(active.staging.directory)).split(path.sep).join('/');
         if (!relativeDirectory || relativeDirectory.startsWith('..')) fail(`${item.paperId} staging directory escaped configured root`);
         const sourceVersionProof = historicalSourceVersionProof(item, active, manifest);
@@ -227,7 +229,8 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
             source: { kind: 'direct-page-asset', directory: relativeDirectory, path: asset.path } });
     }
     stageProofs.sort((a, b) => a.paperId.localeCompare(b.paperId));
-    const inputs = aggregateApi.loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot });
+    const inputs = aggregateApi.loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot,
+        freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
     const rebuilt = aggregateApi.buildDirectAggregates({ inputs }); const stored = scanDirectAggregates(aggregateRoot, plan);
     if (stored.size !== rebuilt.length) fail(`direct aggregate set is incomplete: ${stored.size}/${rebuilt.length}`);
     const aggregateProofs = [];
@@ -467,7 +470,9 @@ function loadGeneration(loadedPlan) {
 function reviewProtocolImplementationFiles() {
     return [__filename, require.resolve('./historical-direct-aggregate.js'),
         require.resolve('./fresh-arxiv-rewrite-source.js'), require.resolve('./historical-direct-rewrite-runner.js'),
-        require.resolve('./historical-direct-page-staging.js'), path.resolve(__dirname, '../historical-direct-review.py'),
+        require.resolve('./historical-direct-page-staging.js'),
+        require.resolve('./historical-arxiv-publication-metadata.js'), require.resolve('./arxiv-metadata-source.js'),
+        path.resolve(__dirname, '../historical-direct-review.py'),
         path.resolve(__dirname, '../publish-to-blog.py')];
 }
 function reviewProtocolFingerprint(dependencies = {}) {

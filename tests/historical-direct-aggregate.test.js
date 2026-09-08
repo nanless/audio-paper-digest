@@ -92,7 +92,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
     return paper;
 }
-async function fixture(t, { mixedDailyConference = false, historicalVersion = false } = {}) {
+async function fixture(t, { mixedDailyConference = false, historicalVersion = false, publicationSidecar = false } = {}) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-aggregate-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blog = path.join(root, 'blog'); const metadata = path.join(root, 'metadata.json'); const pdf = path.join(root, 'conference.pdf');
@@ -184,14 +184,20 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
     const projection = direct.buildAggregateProjection({ plan, inventory });
     const paths = { planFile: path.join(root, 'plan.json'), projectionFile: path.join(root, 'aggregate-projection.json'),
         registryRoot: path.join(root, 'registries'), executionRoot: path.join(root, 'executions'), stagingRoot: path.join(root, 'staging'),
-        sourceRoot: path.join(root, 'sources'), failureRoot: path.join(root, 'failure-handoffs') };
+        sourceRoot: path.join(root, 'sources'), publicationRoot: path.join(root, 'publication-metadata'),
+        failureRoot: path.join(root, 'failure-handoffs') };
     writeJson(paths.planFile, plan); writeJson(paths.projectionFile, projection);
+    const capturedSources = new Map();
     const capture = async ({ arxivId, generation }) => {
         const sourceVersion = historicalVersion && arxivId === arxivOne ? freshArxiv.historicalVersionIdentity({
             arxivId, textSourceId: `${arxivId}v2`, pdf: { sourceId: `${arxivId}v2`,
                 url: `https://arxiv.org/pdf/${arxivId}v2.pdf`, currentPdfUnavailable: true, currentPdfStatus: 404 }
         }) : null;
-        const text = [
+        const text = publicationSidecar && arxivId === arxivOne ? [
+            `Fresh official title ${arxivId}`,
+            'Fresh exact full text without a unique Abstract marker.',
+            '1 Introduction', `fresh official text ${arxivId} generation ${generation}`
+        ].join('\n') : [
             sourceVersion ? `【来源版本警告】${sourceVersion.warning}\n` : '',
             `Fresh official title ${arxivId}`,
             'Abstract',
@@ -203,7 +209,7 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
         const pdfBytes = Buffer.from(`%PDF-1.4\n${arxivId}/${generation}\n%%EOF\n`);
         const structuredArtifacts = { version: 1, tables: [], formulas: [], figures: [], flattenedTextSha256: sha(text) };
         structuredArtifacts.payloadSha256 = sha(JSON.stringify(structuredArtifacts));
-        return { arxivId, generation, sourceManifestSha256: sha(`manifest:${arxivId}:${generation}`), text,
+        const captured = { arxivId, generation, sourceManifestSha256: sha(`manifest:${arxivId}:${generation}`), text,
             runtimeDetails: { paperId: `arxiv:${arxivId}`, source: sourceVersion ? 'pdf' : 'html',
                 sourceId: sourceVersion?.selectedSourceId || arxivId, text, imageInfos: [],
                 structuredArtifacts,
@@ -212,13 +218,45 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
             manifest: { text: { responseSha256: sha(text), source: sourceVersion ? 'pdf' : 'html',
                 sourceId: sourceVersion?.selectedSourceId || arxivId },
                 pdf: { responseSha256: sha(pdfBytes) } } };
+        capturedSources.set(`${arxivId}:${generation}`, captured); return captured;
     };
     const analyze = async ({ item, sourceDescriptor, sourceDetails }) => sealedAnalysis(item, sourceDescriptor, sourceDetails);
+    const sidecarState = { drift: false, reads: 0 };
+    const readPublicationMetadata = ({ arxivId, generation }) => {
+        sidecarState.reads += 1;
+        if (sidecarState.drift) throw new Error('raw Atom sidecar drifted');
+        const source = capturedSources.get(`${arxivId}:${generation}`);
+        const abstract = `Official Atom abstract for ${arxivId}.`;
+        const snapshot = runner.stableHash({ paperId: source.runtimeDetails.paperId,
+            source: source.runtimeDetails.source, sourceId: source.runtimeDetails.sourceId,
+            textSha256: sha(source.runtimeDetails.text), structuredArtifacts: source.runtimeDetails.structuredArtifacts,
+            ...(source.runtimeDetails.sourceVersion ? { sourceVersion: source.runtimeDetails.sourceVersion } : {}) });
+        const sourceId = source.runtimeDetails.sourceId;
+        const requestedVersion = String(sourceId).match(/v([1-9]\d*)$/i);
+        const proof = { contract: 'historical-arxiv-publication-metadata-v1', paperId: `arxiv:${arxivId}`,
+            manifestSha256: sha('sidecar manifest'),
+            atomResponseSha256: sha('atom'), metadataRecordSha256: sha('metadata'), abstractSha256: sha(abstract),
+            entryVersion: requestedVersion ? Number(requestedVersion[1]) : 1,
+            entryUpdatedAt: '2026-01-01T00:00:00.000Z',
+            publishedAt: '2025-12-31T00:00:00.000Z', sourceCapturedAt: '2026-01-02T00:00:00.000Z',
+            sourceEarliestCapturedAt: '2026-01-02T00:00:00.000Z',
+            sourceLatestCapturedAt: '2026-01-02T00:00:00.000Z', observedAt: '2026-01-03T00:00:00.000Z',
+            sourceId, querySourceId: sourceId,
+            sourceName: `https://export.arxiv.org/api/query?id_list=${sourceId}&max_results=1`,
+            sourceManifestSha256: source.sourceManifestSha256, sourceSnapshotSha256: snapshot,
+            sourceTextSha256: sha(source.runtimeDetails.text), generation };
+        return { abstract, proof, sourceManifestSha256: source.sourceManifestSha256,
+            sourceSnapshotSha256: snapshot, sourceTextSha256: sha(source.runtimeDetails.text) };
+    };
     const options = { apply: true, plan, registryRoot: paths.registryRoot, executionRoot: paths.executionRoot,
-        stagingRoot: paths.stagingRoot, freshArxivSourceRoot: paths.sourceRoot, freshArxivFailureHandoffRoot: paths.failureRoot, concurrency: 3 };
+        stagingRoot: paths.stagingRoot, freshArxivSourceRoot: paths.sourceRoot,
+        publicationMetadataRoot: paths.publicationRoot,
+        freshArxivFailureHandoffRoot: paths.failureRoot, concurrency: 3 };
     const deps = { captureFreshArxivRewriteSource: capture, analyze, extractPdfText: async () => 'fresh conference source text '.repeat(10),
         materializeConferenceFigures: async () => [], rendererImplementationSha256: () => sha('direct-mock-renderer-v1'),
-        renderDirectPage: packet => ({ markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }) };
+        assertPublicationMetadataReady: () => {},
+        renderDirectPage: packet => ({ markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }),
+        readPublicationMetadata };
     const markSourcesReady = generation => {
         directControl.loadOrCreateSourceStatus({ sourceRoot: paths.sourceRoot, plan, generation, apply: true,
             now: `2026-08-08T00:00:0${generation}.000Z` });
@@ -231,11 +269,14 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
     markSourcesReady(2);
     const second = await runner.runDirectRewrite({ ...options, queue: 'arxiv', arxivGeneration: 2 }, deps);
     assert.equal(second.status, 'complete', JSON.stringify(second.results));
-    return { root, inventory, plan, projection, paths, firstRegistry: first.registryFile, secondRegistry: second.registryFile };
+    return { root, inventory, plan, projection, paths, firstRegistry: first.registryFile,
+        secondRegistry: second.registryFile, sidecarState, readPublicationMetadata };
 }
 function inputs(f, registryFile = f.firstRegistry) {
     return direct.loadDirectAggregateInputs({ planFile: f.paths.planFile, registryFile, projectionFile: f.paths.projectionFile,
-        stagingRoot: f.paths.stagingRoot, executionRoot: f.paths.executionRoot });
+        stagingRoot: f.paths.stagingRoot, executionRoot: f.paths.executionRoot,
+        freshArxivSourceRoot: f.paths.sourceRoot, publicationMetadataRoot: f.paths.publicationRoot,
+        readPublicationMetadata: f.readPublicationMetadata });
 }
 function writeRegistry(filename, registry) { writeJson(filename, registry); }
 function rebasedRegistry(registry, entries) {
@@ -353,6 +394,18 @@ test('direct aggregate rejects missing, extended, or source-drifted publication 
             /staging input has unknown or missing fields|publication source is not bound/);
     }
     writeJson(filename, original);
+});
+
+test('direct aggregate replays official metadata sidecar authority and rejects later raw-byte failure', async t => {
+    const f = await fixture(t, { publicationSidecar: true });
+    const readsBeforeAggregate = f.sidecarState.reads;
+    assert.ok(readsBeforeAggregate >= 1, 'runner must read the sidecar while staging the ambiguous paper');
+    const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
+    assert.equal(aggregate.members.length, 2);
+    assert.equal(f.sidecarState.reads, readsBeforeAggregate + 2,
+        'aggregate must independently replay every arXiv sidecar before accepting staging');
+    f.sidecarState.drift = true;
+    assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE }), /raw Atom sidecar drifted/);
 });
 
 test('direct aggregate makes a sealed historical arXiv version visible and rejects identity warning drift', async t => {

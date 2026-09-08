@@ -36,6 +36,7 @@
     "history:direct-plan": "node scripts/workspace-role.js exec history -- node scripts/historical-direct-rewrite-plan.js",
     "history:direct-scheduler": "node scripts/workspace-role.js exec history -- node scripts/historical-direct-rewrite-scheduler.js",
     "history:direct-run": "node scripts/workspace-role.js exec history -- node scripts/historical-direct-rewrite-run.js",
+    "history:publication-metadata": "node scripts/workspace-role.js exec history -- node scripts/historical-arxiv-publication-metadata.js",
     "history:direct-aggregate": "node scripts/workspace-role.js exec history -- node scripts/historical-direct-aggregate.js",
     "history:direct-publication": "node scripts/workspace-role.js exec history -- node scripts/historical-direct-publication.js",
     "history:status": "node scripts/workspace-role.js exec history -- node scripts/historical-direct-control.js status",

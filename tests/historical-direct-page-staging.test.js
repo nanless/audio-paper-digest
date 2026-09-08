@@ -37,9 +37,20 @@ function fixture(t) {
         sourceTextSha256: sourceDescriptor.textSha256, sourcePdfSha256: sourceDescriptor.pdfSha256,
         sourceRunIdentitySha256: sourceDescriptor.sourceRunIdentitySha256 };
     const abstract = 'Exact sealed source abstract for publication.';
+    const metadataSidecar = { contract: 'historical-arxiv-publication-metadata-v1', paperId: item.paperId,
+        manifestSha256: sha('sidecar manifest'), atomResponseSha256: sha('atom'),
+        metadataRecordSha256: sha('metadata record'), abstractSha256: sha(abstract), entryVersion: 1,
+        entryUpdatedAt: '2026-01-01T00:00:00.000Z', publishedAt: '2025-12-31T00:00:00.000Z',
+        observedAt: '2026-01-03T00:00:00.000Z', sourceId: item.route.arxivId, querySourceId: item.route.arxivId,
+        sourceCapturedAt: '2026-01-02T00:00:00.000Z', sourceEarliestCapturedAt: '2026-01-02T00:00:00.000Z',
+        sourceLatestCapturedAt: '2026-01-02T00:00:00.000Z',
+        sourceName: `https://export.arxiv.org/api/query?id_list=${item.route.arxivId}&max_results=1`,
+        sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
+        sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
+        sourceTextSha256: sourceDescriptor.textSha256, generation: 1 };
     const publicationSource = { contract: api.PUBLICATION_SOURCE_CONTRACT, version: 1,
         paperId: item.paperId, sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
-        sourceTextSha256: sourceDescriptor.textSha256, abstract, abstractSha256: sha(abstract) };
+        sourceTextSha256: sourceDescriptor.textSha256, abstract, abstractSha256: sha(abstract), metadataSidecar };
     return { root, item, analysis, sourceDescriptor, publicationSource, artifact,
         stagingInputSha256: sha('staging input'), stagingBindingSha256: sha('staging binding') };
 }
@@ -85,6 +96,51 @@ test('direct arXiv publication source rejects identity, source, and abstract SHA
         assert.throws(() => api.stageDirectPages(options(f, { publicationSource })),
             /publication source is not bound/);
     }
+});
+
+test('direct page staging seals an exact metadata sidecar proof and rejects every outer binding drift', t => {
+    const f = fixture(t); const metadataSidecar = {
+        contract: 'historical-arxiv-publication-metadata-v1', paperId: f.item.paperId,
+        manifestSha256: sha('sidecar manifest'),
+        atomResponseSha256: sha('atom'), metadataRecordSha256: sha('metadata record'),
+        abstractSha256: f.publicationSource.abstractSha256,
+        entryVersion: 1, entryUpdatedAt: '2026-01-01T00:00:00.000Z',
+        publishedAt: '2025-12-31T00:00:00.000Z', observedAt: '2026-01-03T00:00:00.000Z',
+        sourceId: f.item.route.arxivId, querySourceId: f.item.route.arxivId,
+        sourceCapturedAt: '2026-01-02T00:00:00.000Z',
+        sourceEarliestCapturedAt: '2026-01-02T00:00:00.000Z',
+        sourceLatestCapturedAt: '2026-01-02T00:00:00.000Z',
+        sourceName: `https://export.arxiv.org/api/query?id_list=${f.item.route.arxivId}&max_results=1`,
+        sourceManifestSha256: f.sourceDescriptor.sourceManifestSha256,
+        sourceSnapshotSha256: f.sourceDescriptor.sourceSnapshotSha256,
+        sourceTextSha256: f.sourceDescriptor.textSha256, generation: 1
+    };
+    const publicationSource = { ...f.publicationSource, metadataSidecar };
+    const result = api.stageDirectPages(options(f, { publicationSource }));
+    assert.deepEqual(result.publicationSource.metadataSidecar, metadataSidecar);
+    for (const drifted of [
+        { ...metadataSidecar, abstractSha256: sha('wrong abstract') },
+        { ...metadataSidecar, sourceManifestSha256: sha('wrong source manifest') },
+        { ...metadataSidecar, generation: 2 },
+        { ...metadataSidecar, observedAt: '2026-01-01T12:00:00.000Z' },
+        { ...metadataSidecar, observedAt: '2025-12-31T12:00:00.000Z',
+            sourceId: `${f.item.route.arxivId}v1`, querySourceId: `${f.item.route.arxivId}v1`,
+            sourceName: `https://export.arxiv.org/api/query?id_list=${f.item.route.arxivId}v1&max_results=1` },
+        { ...metadataSidecar, entryUpdatedAt: '2026-01-03T00:00:00.000Z' },
+        { ...metadataSidecar, publishedAt: '2026-01-01T12:00:00.000Z' },
+        { ...metadataSidecar, sourceLatestCapturedAt: '2026-01-01T00:00:00.000Z' },
+        { ...metadataSidecar, sourceId: `${f.item.route.arxivId}v2` },
+        { ...metadataSidecar, querySourceId: `${f.item.route.arxivId}v1` },
+        { ...metadataSidecar, sourceName: 'https://example.test/not-arxiv' },
+        { ...metadataSidecar, unexpected: true }
+    ]) {
+        const other = fixture(t);
+        assert.throws(() => api.stageDirectPages(options(other, {
+            publicationSource: { ...other.publicationSource, metadataSidecar: drifted }
+        })), /sidecar|schema|not bound/);
+    }
+    const missing = { ...f.publicationSource }; delete missing.metadataSidecar;
+    assert.throws(() => api.stageDirectPages(options(f, { publicationSource: missing })), /sidecar is required/);
 });
 
 test('direct page staging fails closed when a rendered page byte changes after its source/Reader/projection seal', t => {
@@ -143,6 +199,9 @@ test('withdrawn arXiv historical version evidence injects an exact top warning a
     f.sourceDescriptor.sourceVersion = freshSource.historicalVersionIdentity({ arxivId: f.item.route.arxivId,
         textSourceId: selected, pdf: { sourceId: selected, url: `https://arxiv.org/pdf/${selected}.pdf`,
             currentPdfUnavailable: true, currentPdfStatus: 404 } });
+    Object.assign(f.publicationSource.metadataSidecar, { sourceId: selected, querySourceId: selected,
+        entryVersion: 1,
+        sourceName: `https://export.arxiv.org/api/query?id_list=${selected}&max_results=1` });
     const result = api.stageDirectPages(options(f));
     assert.equal(result.sourceDisclosure.identitySha256, f.sourceDescriptor.sourceVersion.identitySha256);
     for (const page of result.pages) {

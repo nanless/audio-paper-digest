@@ -56,7 +56,8 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
             registryRoot: files.historicalDirectRewriteRegistryDir,
             executionRoot: files.historicalDirectRewriteExecutionDir,
             stagingRoot: files.historicalDirectRewriteStagingDir,
-            freshArxivSourceRoot: files.freshArxivFetchedSourcesDir }, {
+            freshArxivSourceRoot: files.freshArxivFetchedSourcesDir,
+            publicationMetadataRoot: files.historicalArxivPublicationMetadataDir }, {
             ...(runtime.dependencies || {}),
             shouldPause: async () => stopSignal !== null || Boolean(await runtime.dependencies?.shouldPause?.()),
             onProgress: runtime.dependencies?.onProgress || (event => console.error(JSON.stringify(event)))

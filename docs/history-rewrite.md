@@ -344,6 +344,29 @@ direct staging 目录生成 `historical-direct-paper-page-staging-v1`：每个�
 这里不读取 crosswalk、旧 fresh run、旧 taxonomy assignment 或任何旧博客正文。Renderer 实现变更、Reader
 SHA 漂移、历史页 projection 漂移和任何单页字节替换都会拒绝恢复。
 
+单篇页 researcher workbench 所需的原始摘要统一来自官方 arXiv Atom sidecar；sealed `source.txt` 的
+有界 Abstract parser 只保留为诊断工具，不再作为 production 摘要权威。所有 direct plan arXiv 都不得读取
+旧博客、crawler 摘要或 LLM 摘要；先运行（未写 selector 时也默认等价于 `--all-plan-arxiv`）：
+
+```bash
+npm run history:publication-metadata -- --dry-run --plan /absolute/path/direct-rewrite-plan-v5.json \
+  --generation 1 --all-plan-arxiv
+npm run history:publication-metadata -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
+  --generation 1 --all-plan-arxiv --concurrency 3
+```
+
+该入口只复用既有且与当前 sealed source 时间/版本窗口兼容的官方 raw Atom；其余请求复用公共
+`fetchOfficialArxivMetadata()`，因此仍强制项目 HTTP CONNECT、官方 ID 单项响应、host scheduler 与 429 策略。
+普通 versionless source 要求 Atom `entryUpdatedAt` 不晚于 source 最早捕获时间，且响应 `observedAt` 不早于
+source 最晚捕获时间；显式历史 `vN` source 则必须以同一 `vN` 精确查询并匹配 Atom entry version，另要求
+`publishedAt <= entryUpdatedAt`。sidecar 独立位于
+`data/runtime/historical-arxiv-publication-metadata/<arxivId>/generation-000001/`，包含 raw Atom、canonical
+metadata 与 manifest，并绑定原 source generation、source manifest SHA、source snapshot SHA、全文 SHA、
+Atom query/source ID、entry version、published/updated/observed 时间、响应 SHA、metadata record SHA 和
+abstract SHA。它不增加或改写原 generation 的四个文件。direct-run 对每篇 arXiv 都在分析前预检并在 staging
+再次读取 sidecar；staged 恢复、aggregate 和最终 publication authority 都重新读取并
+重放 raw Atom，任何缺失、额外文件、权限、硬链接、ID、generation 或 SHA 漂移都会失败关闭。
+
 分析过程中每次阶段 checkpoint 都同步原子写入 execution 目录的 `analysis-recovery.json`，并绑定 paper ID、
 run ID 与当前 source snapshot SHA。失败但存在 `analysisManifest`、`analysisCheckpoint`、
 `analysisStageCheckpoints` 或 `analysisRecoveryImageManifest` 等状态时，registry 进入 `analysis_partial` 并记录

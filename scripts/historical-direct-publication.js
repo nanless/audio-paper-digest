@@ -57,7 +57,9 @@ function parseArgs(argv) {
 function roots(Config) {
     return { stagingRoot: Config.FILES.historicalDirectRewriteStagingDir,
         executionRoot: Config.FILES.historicalDirectRewriteExecutionDir,
-        aggregateRoot: Config.FILES.historicalDirectAggregateDir };
+        aggregateRoot: Config.FILES.historicalDirectAggregateDir,
+        freshArxivSourceRoot: Config.FILES.freshArxivFetchedSourcesDir,
+        publicationMetadataRoot: Config.FILES.historicalArxivPublicationMetadataDir };
 }
 function authorityOptions(options, Config) {
     return { planFile: options.planFile, registryFile: options.registryFile, projectionFile: options.projectionFile,

@@ -510,7 +510,7 @@ function sourceSnapshotSha(details) { return stableHash({ paperId: details.paper
     ...(details.sourceVersion ? { sourceVersion: details.sourceVersion } : {}) }); }
 
 function extractSealedArxivAbstract(text) {
-    if (typeof text !== 'string' || !text.trim() || text.includes('\0')) {
+    if (typeof text !== 'string' || !text.trim()) {
         fail('sealed arXiv source text is unavailable for publication abstract extraction');
     }
     const normalized = text.replace(/\r\n?/g, '\n');
@@ -523,32 +523,101 @@ function extractSealedArxivAbstract(text) {
     for (let index = 0; index < lines.length; index += 1) {
         if (lineOffsets[index] > maximumStartOffset) break;
         if (/^\s*Abstract\s*$/i.test(lines[index])) {
-            starts.push({ index, inline: '' });
+            starts.push({ index, inline: '', kind: 'standard' });
             continue;
         }
         const match = lines[index].match(/^\s*Abstract\s*[.:\u2014\u2013-]\s*(.*)$/i);
-        if (match) starts.push({ index, inline: match[1] });
+        if (match) {
+            starts.push({ index, inline: match[1], kind: 'standard' });
+            continue;
+        }
+        if (/^\s*A\s+B\s+S\s+T\s+R\s+A\s+C\s+T\s*$/i.test(lines[index])
+            || /^\s*1\.?\s+Abstract\s*$/i.test(lines[index])) {
+            starts.push({ index, inline: '', kind: 'bounded-heading-variant' });
+            continue;
+        }
+        if (/^\s*Article\s+Info\s+ABSTRACT\s*$/i.test(lines[index])) {
+            starts.push({ index, inline: '', kind: 'article-info' });
+            continue;
+        }
+        if (lineOffsets[index] <= 5000) {
+            const inline = lines[index].match(/^\s*Abstract\s+((?:This\s+(?:study|paper|work|article)\b).+)$/);
+            const upperInline = lines[index].match(/^\s*ABSTRACT\s+(.+)$/);
+            const report = lines[index].match(/^\s*\\reportabstract\s*(.+)$/);
+            if (inline || upperInline || report) {
+                starts.push({ index, inline: (inline || upperInline || report)[1],
+                    kind: report ? 'report-abstract' : 'bounded-inline-variant' });
+                continue;
+            }
+        }
+        if (/^\s*\{eabstract\}\s*$/.test(lines[index])) {
+            starts.push({ index, inline: '', kind: 'eabstract-environment' });
+        }
     }
-    if (starts.length !== 1) {
+    let candidates = starts;
+    if (starts.length === 2 && starts[1].index === starts[0].index + 1
+        && starts[0].kind === 'standard' && starts[0].inline === ''
+        && starts[1].kind === 'standard') {
+        candidates = [starts[1]];
+    }
+    if (candidates.length > 1) {
+        const first = candidates[0];
+        const next = candidates[1];
+        const firstIntroduction = lines.findIndex((line, index) => index > first.index
+            && lineOffsets[index] - lineOffsets[first.index] <= maximumAbstractSpan
+            && /^\s*(?:(?:\d+(?:\.\d+)*\.?|[IVXLC]+\.?)\s+Introduction\b.*|Introduction\s*[.:]?)\s*$/i.test(line));
+        const firstKeyword = lines.findIndex((line, index) => index > first.index
+            && lineOffsets[index] - lineOffsets[first.index] <= maximumAbstractSpan
+            && (/^\s*(?:keywords?|key\s+words?|index\s+terms?)\s*[:.\u2014\u2013-]/i.test(line)
+                || /^\s*keywords?[^\s:.-]/.test(line)));
+        const firstBoundary = [firstIntroduction, firstKeyword]
+            .filter(index => index > first.index).sort((left, right) => left - right)[0] ?? -1;
+        if (firstBoundary > first.index && firstBoundary < next.index) candidates = [first];
+    }
+    if (candidates.length !== 1) {
         fail(`sealed arXiv source must contain exactly one explicit Abstract marker; found ${starts.length}`);
     }
-    const start = starts[0];
+    const start = candidates[0];
     const introduction = line => /^\s*(?:(?:\d+(?:\.\d+)*\.?|[IVXLC]+\.?)\s+Introduction\b.*|Introduction\s*[.:]?)\s*$/i.test(line);
+    const strongKeyword = line => /^\s*(?:keywords?|key\s+words?|index\s+terms?)\s*[:.\u2014\u2013-]/i.test(line)
+        || /^\s*keywords?[^\s:.-]/.test(line)
+        || /^\s*(?:keywords?|index\s+terms?)[\u00a0\u2000-\u200b]/i.test(line)
+        || /^\s*Keywords[a-z][^.!?\n]{1,300},[^.!?\n]{1,300}$/.test(line)
+        || /^\s*Keywords\s+[^.!?\n]{2,300},[^.!?\n]{2,300}$/.test(line);
+    const backgroundBoundary = line => /^\s*(?:\d+(?:\.\d+)*\.?\s+Background(?:\s*&\s*Summary)?|Background\s*&\s*Summary)\s*$/i.test(line);
+    let contentStart = start.index + 1;
     let boundary = -1;
+    if (start.kind === 'eabstract-environment') {
+        boundary = lines.findIndex((line, index) => index > start.index
+            && lineOffsets[index] - lineOffsets[start.index] <= maximumAbstractSpan
+            && /^\s*\\makeabstract\s*$/.test(line));
+    } else if (start.kind === 'article-info') {
+        const accepted = lines.findIndex((line, index) => index > start.index && index <= start.index + 8
+            && /^\s*Accepted\b/i.test(line));
+        if (accepted > start.index) contentStart = accepted + 1;
+    }
+    const earlyKeyword = lines.findIndex((line, index) => index >= contentStart && index <= contentStart + 2
+        && strongKeyword(line));
+    if (boundary < 0 && earlyKeyword >= contentStart
+        && lines.slice(contentStart, earlyKeyword).every(line => !line.trim())) {
+        const laterIntroduction = lines.findIndex((line, index) => index > earlyKeyword
+            && lineOffsets[index] - lineOffsets[start.index] <= maximumAbstractSpan && introduction(line));
+        if (laterIntroduction >= 0) {
+            contentStart = earlyKeyword + 1;
+            boundary = laterIntroduction;
+        }
+    }
     for (let index = start.index + 1; index < lines.length; index += 1) {
+        if (boundary >= 0) break;
         if (lineOffsets[index] - lineOffsets[start.index] > maximumAbstractSpan) break;
-        if (introduction(lines[index])) { boundary = index; break; }
-        if (/^\s*(?:keywords?|key\s+words?|index\s+terms?)/i.test(lines[index])) {
-            const laterIntroduction = lines.findIndex((line, later) => later > index
-                && lineOffsets[later] - lineOffsets[start.index] <= maximumAbstractSpan
-                && introduction(line));
-            if (laterIntroduction >= 0) { boundary = index; break; }
+        if (introduction(lines[index]) || strongKeyword(lines[index]) || backgroundBoundary(lines[index])) {
+            boundary = index; break;
         }
     }
     if (boundary < 0) {
         fail('sealed arXiv Abstract has no explicit Keywords/Index Terms/Introduction boundary');
     }
-    const abstractLines = [start.inline, ...lines.slice(start.index + 1, boundary)];
+    const abstractLines = [start.inline, ...lines.slice(contentStart, boundary)];
     const abstract = abstractLines.join('\n').replace(/\s+/g, ' ').trim();
     if (abstract.length < 40 || Buffer.byteLength(abstract, 'utf8') > 200000 || abstract.includes('\0')) {
         fail('sealed arXiv Abstract is empty, implausibly short, or oversized');
@@ -556,7 +625,7 @@ function extractSealedArxivAbstract(text) {
     return abstract;
 }
 
-function publicationSourceFor(item, sourceDetails, sourceDescriptor) {
+function publicationSourceFor(item, sourceDetails, sourceDescriptor, options = {}) {
     if (item?.route?.kind !== 'arxiv-fresh-fetch') return null;
     if (!sourceDetails || sourceDetails.paperId !== item.paperId
         || typeof sourceDetails.text !== 'string'
@@ -564,7 +633,30 @@ function publicationSourceFor(item, sourceDetails, sourceDescriptor) {
         || sourceSnapshotSha(sourceDetails) !== sourceDescriptor?.sourceSnapshotSha256) {
         fail(`${item.paperId} publication source does not replay the sealed source descriptor`);
     }
-    const abstract = extractSealedArxivAbstract(sourceDetails.text);
+    if (typeof options.publicationMetadataRoot !== 'string' || !path.isAbsolute(options.publicationMetadataRoot)
+        || typeof options.freshArxivSourceRoot !== 'string' || !path.isAbsolute(options.freshArxivSourceRoot)) {
+        fail(`${item.paperId} official metadata sidecar roots are required for publication`);
+    }
+    let sealed;
+    try {
+        const read = options.readPublicationMetadata
+            || require('./historical-arxiv-publication-metadata.js').readPublicationMetadata;
+        sealed = read({ rootDir: options.publicationMetadataRoot, sourceRoot: options.freshArxivSourceRoot,
+            arxivId: item.route.arxivId, generation: sourceDescriptor.generation,
+            expectedSourceDescriptor: sourceDescriptor });
+    } catch (sidecarError) {
+        if (!['HISTORICAL_ARXIV_PUBLICATION_METADATA_INTEGRITY', 'ENOENT'].includes(sidecarError?.code)) {
+            throw sidecarError;
+        }
+        fail(`${item.paperId} official metadata sidecar is unavailable: ${sidecarError.message}`);
+    }
+    if (sealed.sourceManifestSha256 !== sourceDescriptor.sourceManifestSha256
+        || sealed.sourceSnapshotSha256 !== sourceDescriptor.sourceSnapshotSha256
+        || sealed.sourceTextSha256 !== sourceDescriptor.textSha256
+        || sealed.proof?.abstractSha256 !== sha256(Buffer.from(sealed.abstract, 'utf8'))) {
+        fail(`${item.paperId} official metadata sidecar is not bound to this sealed source generation`);
+    }
+    const abstract = sealed.abstract; const metadataSidecar = clone(sealed.proof);
     return {
         contract: PUBLICATION_SOURCE_CONTRACT,
         version: 1,
@@ -572,7 +664,8 @@ function publicationSourceFor(item, sourceDetails, sourceDescriptor) {
         sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
         sourceTextSha256: sourceDescriptor.textSha256,
         abstract,
-        abstractSha256: sha256(Buffer.from(abstract, 'utf8'))
+        abstractSha256: sha256(Buffer.from(abstract, 'utf8')),
+        metadataSidecar
     };
 }
 function fallbackArxivDetails(source) {
@@ -1046,9 +1139,13 @@ function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis 
 }
 
 function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDetails = null,
-    analysis, stagingRoot, dependencies = {} }) {
+    analysis, stagingRoot, freshArxivSourceRoot = null, publicationMetadataRoot = null,
+    dependencies = {} }) {
     assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis });
-    const publicationSource = publicationSourceFor(item, sourceDetails, sourceDescriptor);
+    const publicationSource = publicationSourceFor(item, sourceDetails, sourceDescriptor, {
+        freshArxivSourceRoot, publicationMetadataRoot,
+        readPublicationMetadata: dependencies.readPublicationMetadata
+    });
     const analysisRecordSha256 = stableHash(analysis);
     const analysisBytes = Buffer.from(`${JSON.stringify(canonical(analysis), null, 2)}\n`, 'utf8');
     const artifact = { paperId: item.paperId, runId: item.runId, route: item.route.kind,
@@ -1077,7 +1174,8 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
         pageStaging: directPages.receipt(pageManifest) };
 }
 
-function replayDirectPageStaging({ item, active, stagingRoot, executionRoot }) {
+function replayDirectPageStaging({ item, active, stagingRoot, executionRoot,
+    freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null }) {
     const staging = active?.staging;
     if (!staging?.pageStaging || !staging.analysisArtifact || !active?.source || !active?.analysis) {
         fail(`${item.paperId} staged execution lacks a direct page staging receipt`);
@@ -1113,6 +1211,24 @@ function replayDirectPageStaging({ item, active, stagingRoot, executionRoot }) {
     });
     if (stableHash(directPages.receipt(manifest)) !== stableHash(staging.pageStaging)) {
         fail(`${item.paperId} staged page receipt drifted`);
+    }
+    if (manifest.publicationSource?.metadataSidecar) {
+        if (typeof freshArxivSourceRoot !== 'string' || !path.isAbsolute(freshArxivSourceRoot)
+            || typeof publicationMetadataRoot !== 'string' || !path.isAbsolute(publicationMetadataRoot)) {
+            fail(`${item.paperId} staged metadata sidecar cannot be replayed`);
+        }
+        const read = readPublicationMetadata
+            || require('./historical-arxiv-publication-metadata.js').readPublicationMetadata;
+        const replayed = read({ rootDir: publicationMetadataRoot, sourceRoot: freshArxivSourceRoot,
+            arxivId: item.route.arxivId, generation: active.source.generation,
+            expectedSourceDescriptor: active.source });
+        if (stableHash(replayed.proof) !== stableHash(manifest.publicationSource.metadataSidecar)
+            || replayed.abstract !== manifest.publicationSource.abstract
+            || replayed.sourceManifestSha256 !== active.source.sourceManifestSha256
+            || replayed.sourceSnapshotSha256 !== active.source.sourceSnapshotSha256
+            || replayed.sourceTextSha256 !== active.source.textSha256) {
+            fail(`${item.paperId} staged metadata sidecar drifted`);
+        }
     }
     return manifest;
 }
@@ -1161,14 +1277,38 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             || active.status === 'failed' && active.analysis;
         if (replayableCompletedAnalysis) {
             const replayFromStatus = active.status;
+            let completed;
             try {
-                const completed = await replayCompletedAnalysisForStaging({ item, active,
+                completed = await replayCompletedAnalysisForStaging({ item, active,
                     generation: arxivGeneration, executionRoot: options.executionRoot,
                     freshArxivSourceRoot: options.freshArxivSourceRoot, readFreshArxivSource });
+            } catch (error) {
+                const detail = `${replayFromStatus} completed-analysis replay rejected: ${String(error.message || error).slice(0, 1200)}`;
+                registry = transition(registry, plan, item.paperId, 'failed', {
+                    analysis: undefined, analysisRecovery: undefined, staging: undefined,
+                    latestError: `[crash-recovery] ${detail}`
+                }, now);
+                persist();
+                const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
+                    paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
+                    fromStatus: replayFromStatus, normalizedStatus: 'failed',
+                    recoveryStatus: 'completed-analysis-invalid',
+                    sourceSnapshotSha256: SHA.test(String(active.source?.sourceSnapshotSha256 || ''))
+                        ? active.source.sourceSnapshotSha256 : null,
+                    recoverySha256: active.analysis?.recovery?.recoverySha256 || null,
+                    recoveredAt: now, detail };
+                console.warn(`[historical-direct-rewrite] ${JSON.stringify(audit)}`);
+                if (typeof dependencies.onCrashRecoveryAudit === 'function') {
+                    dependencies.onCrashRecoveryAudit(clone(audit));
+                }
+                return { paperId: item.paperId, status: 'failed', error: detail };
+            }
+            try {
                 const staging = stageDirectExecution({ plan, registry, item,
                     sourceDescriptor: completed.sourceDescriptor, sourceDetails: completed.sourceDetails,
                     analysis: completed.analysis,
-                    stagingRoot: options.stagingRoot, dependencies });
+                    stagingRoot: options.stagingRoot, freshArxivSourceRoot: options.freshArxivSourceRoot,
+                    publicationMetadataRoot: options.publicationMetadataRoot, dependencies });
                 registry = transition(registry, plan, item.paperId, 'staged', {
                     staging, latestError: null
                 }, now);
@@ -1186,7 +1326,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 }
                 return { paperId: item.paperId, status: 'staged' };
             } catch (error) {
-                const detail = `${replayFromStatus} completed-analysis replay rejected: ${String(error.message || error).slice(0, 1200)}`;
+                const detail = `${replayFromStatus} completed-analysis staging failed: ${String(error.message || error).slice(0, 1200)}`;
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     latestError: `[crash-recovery] ${detail}`
                 }, now);
@@ -1194,16 +1334,15 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
                     paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
                     fromStatus: replayFromStatus, normalizedStatus: 'failed',
-                    recoveryStatus: 'completed-analysis-invalid',
-                    sourceSnapshotSha256: SHA.test(String(active.source?.sourceSnapshotSha256 || ''))
-                        ? active.source.sourceSnapshotSha256 : null,
+                    recoveryStatus: 'completed-analysis-staging-failed',
+                    sourceSnapshotSha256: completed.sourceDescriptor.sourceSnapshotSha256,
                     recoverySha256: active.analysis?.recovery?.recoverySha256 || null,
                     recoveredAt: now, detail };
                 console.warn(`[historical-direct-rewrite] ${JSON.stringify(audit)}`);
                 if (typeof dependencies.onCrashRecoveryAudit === 'function') {
                     dependencies.onCrashRecoveryAudit(clone(audit));
                 }
-                active = registry.entries.find(entry => entry.paperId === item.paperId);
+                return { paperId: item.paperId, status: 'failed', error: detail };
             }
         }
         const interrupted = recoverInterruptedRegistryEntry({ registry, plan, item,
@@ -1239,7 +1378,10 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     // and every local PDF against the immutable plan values.
                     planApi.verifyConferenceWriterInputs(item);
                 }
-                replayDirectPageStaging({ item, active, stagingRoot: options.stagingRoot, executionRoot: options.executionRoot });
+                replayDirectPageStaging({ item, active, stagingRoot: options.stagingRoot, executionRoot: options.executionRoot,
+                    freshArxivSourceRoot: options.freshArxivSourceRoot,
+                    publicationMetadataRoot: options.publicationMetadataRoot,
+                    readPublicationMetadata: dependencies.readPublicationMetadata });
             } catch (error) {
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     latestError: String(error.message).slice(0, 2000)
@@ -1267,6 +1409,13 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             } else { source = await extractConferenceSource(item, dependencies); sourceDetails = source.sourceDetails; }
             descriptor = compactSourceDescriptor(item.route.kind, source, item);
             registry = transition(registry, plan, item.paperId, 'source_ready', { source: descriptor }, now); persist();
+            if (item.route.kind === 'arxiv-fresh-fetch') {
+                publicationSourceFor(item, sourceDetails, descriptor, {
+                    freshArxivSourceRoot: options.freshArxivSourceRoot,
+                    publicationMetadataRoot: options.publicationMetadataRoot,
+                    readPublicationMetadata: dependencies.readPublicationMetadata
+                });
+            }
             registry = transition(registry, plan, item.paperId, 'analyzing', {}, now); persist();
             executionDir = executionDirectory(options.executionRoot, item, descriptor); safeDirectory(executionDir, true, 'paper execution directory');
             const executionDependencies = { ...dependencies, freshArxivSourceRoot: options.freshArxivSourceRoot,
@@ -1315,7 +1464,9 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 analysisRecovery: undefined }, now); persist();
             const staging = stageDirectExecution({ plan, registry, item, sourceDescriptor: descriptor,
                 sourceDetails, analysis,
-                stagingRoot: options.stagingRoot, dependencies: executionDependencies });
+                stagingRoot: options.stagingRoot, freshArxivSourceRoot: options.freshArxivSourceRoot,
+                publicationMetadataRoot: options.publicationMetadataRoot,
+                dependencies: executionDependencies });
             registry = transition(registry, plan, item.paperId, 'staged', { staging }, now); persist();
             return { paperId: item.paperId, status: 'staged' };
         } catch (error) {
@@ -1383,6 +1534,10 @@ function registryCounts(registry) {
 }
 
 async function runDirectRewrite(options = {}, dependencies = {}) {
+    if (options.publicationMetadataRoot === undefined) {
+        options = { ...options,
+            publicationMetadataRoot: require('../config.js').FILES.historicalArxivPublicationMetadataDir };
+    }
     const plan = planApi.normalizePlan(options.plan);
     const arxivGeneration = checkedArxivGeneration(options.arxivGeneration || 1);
     const hasRegistryRoot = typeof options.registryRoot === 'string' && path.isAbsolute(options.registryRoot);
@@ -1404,11 +1559,20 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
     if (options.apply !== true) return { status: 'dry-run', planSha256: plan.planSha256, arxivGeneration,
         paperCount: selected.length, paperIds: selected.map(item => item.paperId), selection, pauseFile, operationLockTarget: lockTarget,
         operationLockPath: lockTarget === null ? null : `${lockTarget}.lock`, sourcePrerequisite };
-    for (const key of ['registryRoot', 'executionRoot', 'stagingRoot', 'freshArxivSourceRoot']) {
+    for (const key of ['registryRoot', 'executionRoot', 'stagingRoot', 'freshArxivSourceRoot', 'publicationMetadataRoot']) {
         if (typeof options[key] !== 'string' || !path.isAbsolute(options[key])) fail(`${key} is required`);
     }
     safeDirectory(options.registryRoot, true, 'registry root');
     if (typeof pauseFile !== 'string' || !path.isAbsolute(pauseFile)) fail('pauseFile is required');
+    const assertPublicationMetadataReady = dependencies.assertPublicationMetadataReady || (item => {
+        const read = dependencies.readPublicationMetadata
+            || require('./historical-arxiv-publication-metadata.js').readPublicationMetadata;
+        read({ rootDir: options.publicationMetadataRoot, sourceRoot: options.freshArxivSourceRoot,
+            arxivId: item.route.arxivId, generation: arxivGeneration });
+    });
+    for (const item of selected.filter(candidate => candidate.route.kind === 'arxiv-fresh-fetch')) {
+        await assertPublicationMetadataReady(item);
+    }
     const engine = require('../analysis-engine.js');
     const withOperationLock = dependencies.withOperationLock
         || ((target, callback, lockOptions) => engine.withFileLock(target, callback, lockOptions));

@@ -14,6 +14,7 @@ const renderer = require('./historical-page-staging.js');
 const CONTRACT = 'historical-direct-paper-page-staging-v1';
 const VERSION = 1;
 const PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1';
+const PUBLICATION_METADATA_CONTRACT = 'historical-arxiv-publication-metadata-v1';
 const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
 const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = 'historical-author-prior-preprint-disclosure-v1';
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
@@ -102,8 +103,10 @@ function publicationSourceProof(item, sourceDescriptor, value) {
         if (value !== null && value !== undefined) fail(`${item?.paperId || 'unknown paper'} conference source cannot carry an arXiv publication source`);
         return null;
     }
+    const hasMetadataSidecar = Object.hasOwn(value || {}, 'metadataSidecar');
+    if (!hasMetadataSidecar) fail(`${item.paperId} official publication metadata sidecar is required`);
     exact(value, ['contract', 'version', 'paperId', 'sourceSnapshotSha256', 'sourceTextSha256',
-        'abstract', 'abstractSha256'], `${item.paperId} publication source`);
+        'abstract', 'abstractSha256', ...(hasMetadataSidecar ? ['metadataSidecar'] : [])], `${item.paperId} publication source`);
     if (value.contract !== PUBLICATION_SOURCE_CONTRACT || value.version !== 1
         || value.paperId !== item.paperId
         || value.sourceSnapshotSha256 !== sourceDescriptor?.sourceSnapshotSha256
@@ -113,6 +116,39 @@ function publicationSourceProof(item, sourceDescriptor, value) {
         || Buffer.byteLength(value.abstract, 'utf8') > 200000
         || value.abstractSha256 !== sha256(Buffer.from(value.abstract, 'utf8'))) {
         fail(`${item.paperId} publication source is not bound to the sealed source abstract`);
+    }
+    if (hasMetadataSidecar) {
+        const proof = value.metadataSidecar;
+        exact(proof, ['contract', 'paperId', 'manifestSha256', 'atomResponseSha256', 'metadataRecordSha256',
+            'abstractSha256', 'sourceName', 'querySourceId', 'sourceManifestSha256', 'sourceSnapshotSha256',
+            'sourceTextSha256', 'sourceId', 'entryVersion', 'entryUpdatedAt', 'publishedAt', 'observedAt',
+            'sourceCapturedAt', 'sourceEarliestCapturedAt', 'sourceLatestCapturedAt', 'generation'], `${item.paperId} publication metadata sidecar`);
+        const sourceVersion = String(proof.sourceId || '').match(/v([1-9]\d*)$/i);
+        if (proof.contract !== PUBLICATION_METADATA_CONTRACT
+            || proof.paperId !== item.paperId
+            || !Number.isSafeInteger(proof.entryVersion) || proof.entryVersion < 1
+            || ![proof.entryUpdatedAt, proof.publishedAt, proof.observedAt, proof.sourceCapturedAt,
+                proof.sourceEarliestCapturedAt, proof.sourceLatestCapturedAt]
+                .every(item => typeof item === 'string' && Number.isFinite(Date.parse(item))
+                    && new Date(item).toISOString() === item)
+            || Date.parse(proof.publishedAt) > Date.parse(proof.entryUpdatedAt)
+            || Date.parse(proof.entryUpdatedAt) > Date.parse(proof.observedAt)
+            || Date.parse(proof.entryUpdatedAt) > Date.parse(proof.sourceEarliestCapturedAt)
+            || Date.parse(proof.sourceEarliestCapturedAt) > Date.parse(proof.sourceLatestCapturedAt)
+            || sourceVersion && Number(sourceVersion[1]) !== proof.entryVersion
+            || !sourceVersion && Date.parse(proof.observedAt) < Date.parse(proof.sourceLatestCapturedAt)
+            || ![proof.manifestSha256, proof.atomResponseSha256, proof.metadataRecordSha256,
+                proof.abstractSha256, proof.sourceManifestSha256].every(item => SHA.test(String(item || '')))
+            || proof.abstractSha256 !== value.abstractSha256
+            || proof.sourceManifestSha256 !== sourceDescriptor?.sourceManifestSha256
+            || proof.sourceSnapshotSha256 !== value.sourceSnapshotSha256
+            || proof.sourceTextSha256 !== value.sourceTextSha256
+            || proof.sourceId !== sourceDescriptor?.sourceId
+            || proof.generation !== sourceDescriptor?.generation
+            || proof.querySourceId !== proof.sourceId
+            || proof.sourceName !== `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(proof.querySourceId)}&max_results=1`) {
+            fail(`${item.paperId} publication metadata sidecar proof is invalid`);
+        }
     }
     return clone(value);
 }

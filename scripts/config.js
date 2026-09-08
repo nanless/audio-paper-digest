@@ -183,6 +183,10 @@ const FILES = {
     // source.txt, source.pdf, source-runtime.json, and source-manifest.json.
     // Figures are active-run temporary evidence, never a durable cache.
     freshArxivFetchedSourcesDir: path.join(DATA_DIR, 'runtime', 'fetched-arxiv-sources'),
+    // Publication-only official Atom sidecars required for every direct-plan
+    // historical arXiv source. They bind, but never mutate, the corresponding
+    // fresh arXiv source generation; flattened-text parsing is diagnostic only.
+    historicalArxivPublicationMetadataDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-publication-metadata'),
     // A fresh arXiv acquisition failure is recorded here with its exact
     // frozen page/link map for a later crosswalk worker.  It is not a
     // crosswalk state directory and cannot mutate page assignments.

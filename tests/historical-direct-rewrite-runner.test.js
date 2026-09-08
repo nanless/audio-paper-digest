@@ -9,7 +9,9 @@ const test = require('node:test');
 const planner = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const localSources = require('../scripts/lib/historical-conference-local-sources.js');
 const projections = require('../scripts/lib/historical-conference-page-projections.js');
-const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
+const runnerModule = require('../scripts/lib/historical-direct-rewrite-runner.js');
+const runner = { ...runnerModule, runDirectRewrite: (options, dependencies = {}) =>
+    runnerModule.runDirectRewrite(options, withPublicationMetadata(dependencies)) };
 const runnerCli = require('../scripts/historical-direct-rewrite-run.js');
 const directControl = require('../scripts/lib/historical-direct-control.js');
 const context = require('../scripts/lib/direct-rewrite-analysis-context.js');
@@ -119,6 +121,35 @@ test('sealed arXiv publication abstract extraction accepts explicit bounded layo
     assert.equal(runner.extractSealedArxivAbstract([
         'Official title', `Abstract—${expected}`, 'I. INTRODUCTION', 'Body'
     ].join('\n')), expected);
+    for (const source of [
+        ['Official title', 'A B S T R A C T', expected, 'Keywords: speech, audio', '1 Introduction'],
+        ['Official title', '1. ABSTRACT', expected, 'Index Terms: speech', 'I. INTRODUCTION'],
+        ['Official title', `ABSTRACT ${expected}`, 'INDEX TERMS: speech', 'I. INTRODUCTION'],
+        ['Official title', `\\reportabstract${expected}`, '1 Introduction'],
+        ['Official title', '{eabstract}', expected, '\\makeabstract', 'Chapter 0 Introduction'],
+        ['Official title', 'Abstract', expected, 'Background & Summary', 'Body'],
+        ['Official title', 'Abstract', expected, '1 Background', 'Body'],
+        ['Official title', 'Abstract', 'Keywords: speech', expected, '1 Introduction'],
+        ['Official title', 'Abstract', expected, 'Keywordsspeech, audio', '1 Introduction'],
+        ['Official title', 'Abstract', expected, 'keywordsvoice, audio', '1 Introduction'],
+        ['Official title', 'Abstract', expected, 'Keywords speech, audio', '1. The first section'],
+        ['Official title', 'Abstract', expected, '1 Introduction', 'Body\0with a late PDF extractor NUL']
+    ]) assert.equal(runner.extractSealedArxivAbstract(source.join('\n')), expected);
+    const inlineStudy = 'This study reports a sufficiently detailed official source result.';
+    assert.equal(runner.extractSealedArxivAbstract([
+        'Official title', `Abstract ${inlineStudy}`, 'Keywords: speech, audio', '1. Introduction'
+    ].join('\n')), inlineStudy);
+    assert.equal(runner.extractSealedArxivAbstract([
+        'Official title', 'Article Info ABSTRACT', 'Article history:', 'Received Jan 1, 2026',
+        'Revised Jan 2, 2026', 'Accepted Jan 3, 2026', expected, 'Keywords:', 'speech', '1. INTRODUCTION'
+    ].join('\n')), expected);
+    assert.equal(runner.extractSealedArxivAbstract([
+        'Official title', 'Abstract', 'Abstract.', expected, '1 Introduction'
+    ].join('\n')), expected);
+    assert.equal(runner.extractSealedArxivAbstract([
+        'Official title', 'Abstract', expected, 'Keywords: speech', '1 Introduction',
+        'Body', 'Abstract.html'
+    ].join('\n')), expected);
     assert.throws(() => runner.extractSealedArxivAbstract(
         ['Abstract', expected, 'Abstract', 'Another value', '1 Introduction'].join('\n')
     ), /exactly one explicit Abstract marker/);
@@ -134,6 +165,64 @@ test('sealed arXiv publication abstract extraction accepts explicit bounded layo
     assert.throws(() => runner.extractSealedArxivAbstract(
         ['Official title', 'Abstractness is not a section marker.', '1 Introduction'].join('\n')
     ), /exactly one explicit Abstract marker/);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Official title', 'Abstract concepts remain in this sentence.', '1 Introduction'].join('\n')
+    ), /exactly one explicit Abstract marker/);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Official title', 'Abstract', 'Main paper abstract.', 'Abstract', 'Supplement abstract.', 'Introduction'].join('\n')
+    ), /exactly one explicit Abstract marker/);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Official title', 'Abstract', `unsafe\0${expected}`, '1 Introduction'].join('\n')
+    ), /empty, implausibly short, or oversized/);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Official title', 'Abstract', 'Background', expected, 'Body without a real boundary'].join('\n')
+    ), /no explicit Keywords\/Index Terms\/Introduction boundary/);
+});
+
+test('publication source always requires an exact official metadata sidecar, independently of diagnostic text parsing', () => {
+    const item = { paperId: 'arxiv:2601.00001', route: { kind: 'arxiv-fresh-fetch', arxivId: '2601.00001' } };
+    const text = 'Official title\nBody without an Abstract marker\n1 Introduction\nBody';
+    const sourceDetails = { paperId: item.paperId, source: 'html', sourceId: '2601.00001', text,
+        structuredArtifacts: { payloadSha256: sha('artifacts') } };
+    const sourceDescriptor = { generation: 1, sourceManifestSha256: sha('manifest'), textSha256: sha(text),
+        sourceSnapshotSha256: runner.stableHash({ paperId: item.paperId, source: 'html', sourceId: '2601.00001',
+            textSha256: sha(text), structuredArtifacts: sourceDetails.structuredArtifacts }) };
+    const abstract = 'Official Atom abstract used only for the publication workbench.';
+    const sidecarProof = { contract: 'historical-arxiv-publication-metadata-v1', paperId: item.paperId,
+        manifestSha256: sha('sidecar'),
+        atomResponseSha256: sha('atom'), metadataRecordSha256: sha('record'), abstractSha256: sha(abstract),
+        entryVersion: 1, entryUpdatedAt: '2026-01-01T00:00:00.000Z',
+        publishedAt: '2025-12-31T00:00:00.000Z', observedAt: '2026-01-03T00:00:00.000Z',
+        sourceId: item.route.arxivId, querySourceId: item.route.arxivId,
+        sourceCapturedAt: '2026-01-02T00:00:00.000Z',
+        sourceEarliestCapturedAt: '2026-01-02T00:00:00.000Z',
+        sourceLatestCapturedAt: '2026-01-02T00:00:00.000Z',
+        sourceName: 'https://export.arxiv.org/api/query?id_list=2601.00001&max_results=1',
+        sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
+        sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
+        sourceTextSha256: sourceDescriptor.textSha256, generation: 1 };
+    const result = runner.publicationSourceFor(item, sourceDetails, sourceDescriptor, {
+        publicationMetadataRoot: '/tmp/metadata', freshArxivSourceRoot: '/tmp/sources',
+        readPublicationMetadata: () => ({ abstract, proof: sidecarProof,
+            sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
+            sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
+            sourceTextSha256: sourceDescriptor.textSha256 })
+    });
+    assert.equal(result.abstract, abstract); assert.deepEqual(result.metadataSidecar, sidecarProof);
+    assert.throws(() => runner.publicationSourceFor(item, sourceDetails, sourceDescriptor, {
+        publicationMetadataRoot: '/tmp/metadata', freshArxivSourceRoot: '/tmp/sources',
+        readPublicationMetadata: () => ({ abstract, proof: sidecarProof,
+            sourceManifestSha256: sha('wrong'), sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
+            sourceTextSha256: sourceDescriptor.textSha256 })
+    }), /not bound/);
+    assert.throws(() => runner.publicationSourceFor(item, sourceDetails, sourceDescriptor, {
+        publicationMetadataRoot: '/tmp/metadata', freshArxivSourceRoot: '/tmp/sources',
+        readPublicationMetadata: () => { throw new TypeError('sidecar implementation bug'); }
+    }), /sidecar implementation bug/);
+    assert.throws(() => runner.publicationSourceFor(item, sourceDetails, sourceDescriptor, {
+        publicationMetadataRoot: '/tmp/metadata', freshArxivSourceRoot: '/tmp/sources',
+        readPublicationMetadata: () => { const error = new Error('absent'); error.code = 'ENOENT'; throw error; }
+    }), /sidecar is unavailable/);
 });
 
 test('different-title prior preprint produces an explicit source title, DOI, and non-camera-ready analysis notice only for that relation', () => {
@@ -278,6 +367,44 @@ function directArxivCapture() {
         sourceManifestSha256: sha('direct-gate-manifest'), text, runtimeDetails,
         manifest: { text: { responseSha256: sha(text) }, pdf: { responseSha256: sha('direct-gate-pdf') } } });
 }
+function readPublicationMetadataFixture({ sourceRoot, arxivId, generation, expectedSourceDescriptor }) {
+    let source;
+    try { source = freshSource.readFreshArxivRewriteSource({ rootDir: sourceRoot, arxivId, generation }); }
+    catch (error) {
+        if (error?.code !== 'ENOENT') throw error;
+        source = { sourceManifestSha256: expectedSourceDescriptor.sourceManifestSha256,
+            sourceSnapshotSha256: expectedSourceDescriptor.sourceSnapshotSha256,
+            manifest: { text: { sourceId: expectedSourceDescriptor.sourceId,
+                responseSha256: expectedSourceDescriptor.textSha256 } } };
+    }
+    const sourceId = source.manifest.text.sourceId;
+    const version = String(sourceId).match(/v([1-9]\d*)$/i);
+    const entryVersion = version ? Number(version[1]) : 1;
+    const sourceSnapshotSha256 = source.sourceSnapshotSha256 || runnerModule.stableHash({
+        paperId: source.runtimeDetails.paperId, source: source.runtimeDetails.source,
+        sourceId: source.runtimeDetails.sourceId, textSha256: sha(source.runtimeDetails.text),
+        structuredArtifacts: source.runtimeDetails.structuredArtifacts,
+        ...(source.runtimeDetails.sourceVersion ? { sourceVersion: source.runtimeDetails.sourceVersion } : {})
+    });
+    const abstract = `Official Atom abstract for ${arxivId}.`;
+    const proof = { contract: 'historical-arxiv-publication-metadata-v1', paperId: `arxiv:${arxivId}`,
+        manifestSha256: sha(`sidecar:${arxivId}:${generation}`), atomResponseSha256: sha(`atom:${arxivId}`),
+        metadataRecordSha256: sha(`metadata:${arxivId}`), abstractSha256: sha(abstract),
+        entryVersion, entryUpdatedAt: '2026-01-01T00:00:00.000Z', publishedAt: '2025-12-31T00:00:00.000Z',
+        observedAt: '2026-09-08T00:00:00.000Z', sourceId, querySourceId: sourceId,
+        sourceCapturedAt: '2026-09-07T00:00:00.000Z', sourceEarliestCapturedAt: '2026-09-07T00:00:00.000Z',
+        sourceLatestCapturedAt: '2026-09-07T00:00:02.000Z',
+        sourceName: `https://export.arxiv.org/api/query?id_list=${arxivId}&max_results=1`,
+        sourceManifestSha256: source.sourceManifestSha256,
+        sourceSnapshotSha256,
+        sourceTextSha256: source.manifest.text.responseSha256, generation };
+    return { abstract, proof, sourceManifestSha256: proof.sourceManifestSha256,
+        sourceSnapshotSha256: proof.sourceSnapshotSha256, sourceTextSha256: proof.sourceTextSha256 };
+}
+function withPublicationMetadata(dependencies) {
+    return { readPublicationMetadata: readPublicationMetadataFixture,
+        assertPublicationMetadataReady: () => {}, ...dependencies };
+}
 function stageFiles(root) { return allFiles(path.join(root, 'runtime', 'staging')).filter(name => path.basename(name) === 'staging-input.json'); }
 function renderDirectPage() { return { markdown: '---\ntitle: Direct fixture\n---\nFresh staged page.\n', assets: [] }; }
 async function seedFailedArxivExecution(f, roots) {
@@ -335,6 +462,18 @@ test('direct-run apply fails before source/model work unless scheduler marked ev
         queue: 'arxiv', arxivGeneration: 1 });
     assert.equal(dry.sourcePrerequisite.status, 'missing');
     assert.deepEqual(dry.sourcePrerequisite.notReadyPaperIds, ['arxiv:2601.00001']);
+});
+
+test('direct-run rejects a missing publication sidecar before any arXiv analysis', async t => {
+    const f = fixture(t); const roots = files(f.root); let analyses = 0;
+    const missing = () => { const error = new Error('sidecar absent before analysis'); error.code = 'ENOENT'; throw error; };
+    await assert.rejects(runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        assertPublicationMetadataReady: missing, readPublicationMetadata: missing,
+        captureFreshArxivRewriteSource: directArxivCapture(),
+        analyze: async () => { analyses += 1; return {}; }
+    }), /sidecar absent before analysis/);
+    assert.equal(analyses, 0);
 });
 
 test('source status reports lightweight conference path/size drift and opt-in deep SHA drift', t => {
@@ -784,7 +923,7 @@ test('analysis_complete crash strictly replays source and analysis receipts dire
         audit.recoveryStatus]), [['analysis_complete', 'staged', 'completed-analysis-replayed']]);
 });
 
-test('failed staging with a valid completed analysis receipt retries staging without another analysis', async t => {
+test('completed analysis staging failure never falls through to analysis and the next run retries staging', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     let captures = 0; let analyses = 0; const capture = directArxivCapture();
@@ -797,13 +936,27 @@ test('failed staging with a valid completed analysis receipt retries staging wit
             return sealedAnalysis(item, sourceDescriptor, sourceDetails);
         }
     });
-    let failed = asInterruptedAnalysisComplete(
+    const completed = asInterruptedAnalysisComplete(
         JSON.parse(fs.readFileSync(first.registryFile, 'utf8')), f.plan, item.paperId);
-    failed = runner.transition(failed, f.plan, item.paperId, 'failed', {
-        staging: null, latestError: 'simulated renderer failure after analysis completion'
-    }, '2026-09-08T02:31:00.000Z');
-    write(first.registryFile, `${JSON.stringify(failed, null, 2)}\n`);
+    const completedEntry = completed.entries.find(entry => entry.paperId === item.paperId);
+    fs.rmSync(roots.stagingRoot, { recursive: true, force: true });
+    write(first.registryFile, `${JSON.stringify(completed, null, 2)}\n`);
     const audits = [];
+    const failed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: async input => { captures += 1; return capture(input); },
+        renderDirectPage: () => { throw new Error('simulated deterministic renderer failure'); },
+        analyze: async () => { analyses += 1; throw new Error('staging failure must not call analysis'); },
+        onCrashRecoveryAudit: audit => audits.push(audit)
+    });
+    assert.equal(failed.status, 'partial');
+    assert.equal(failed.results[0].status, 'failed');
+    assert.equal(analyses, 1, 'same run must stop before the analysis/Reader path');
+    const failedEntry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
+        .find(entry => entry.paperId === item.paperId);
+    assert.equal(failedEntry.status, 'failed');
+    assert.deepEqual(failedEntry.analysis, completedEntry.analysis);
+    assert.match(failedEntry.latestError, /completed-analysis staging failed.*simulated deterministic renderer failure/);
     const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
         queue: 'arxiv', arxivGeneration: 1 }, {
         captureFreshArxivRewriteSource: async input => { captures += 1; return capture(input); },
@@ -814,12 +967,15 @@ test('failed staging with a valid completed analysis receipt retries staging wit
     assert.equal(resumed.status, 'complete');
     assert.equal(resumed.results[0].status, 'staged');
     assert.equal(analyses, 1);
-    assert.equal(captures, 2);
+    assert.equal(captures, 3);
     assert.deepEqual(audits.map(audit => [audit.fromStatus, audit.normalizedStatus,
-        audit.recoveryStatus]), [['failed', 'staged', 'completed-analysis-replayed']]);
+        audit.recoveryStatus]), [
+        ['analysis_complete', 'failed', 'completed-analysis-staging-failed'],
+        ['failed', 'staged', 'completed-analysis-replayed']
+    ]);
 });
 
-test('analysis_complete with drifted analysis bytes fails closed before normal same-run reanalysis', async t => {
+test('analysis_complete with drifted analysis bytes fails closed without same-run reanalysis', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     let analyses = 0; const capture = directArxivCapture();
@@ -848,13 +1004,20 @@ test('analysis_complete with drifted analysis bytes fails closed before normal s
             assert.equal(persisted.status, 'failed');
             assert.match(persisted.latestError, /analysis bytes drifted/);
             assert.deepEqual(persisted.source, completedEntry.source);
-            assert.deepEqual(persisted.analysis, completedEntry.analysis);
+            assert.equal(Object.hasOwn(persisted, 'analysis'), false);
+            assert.equal(Object.hasOwn(persisted, 'analysisRecovery'), false);
+            assert.equal(Object.hasOwn(persisted, 'staging'), false);
         } });
-    assert.equal(resumed.status, 'complete');
-    assert.equal(resumed.results[0].status, 'staged');
-    assert.equal(analyses, 2, 'invalid completed bytes must use the normal analysis path exactly once');
+    assert.equal(resumed.status, 'partial');
+    assert.equal(resumed.results[0].status, 'failed');
+    assert.equal(analyses, 1, 'invalid completed bytes must not enter analysis in the same run');
     assert.deepEqual(audits.map(audit => [audit.normalizedStatus, audit.recoveryStatus]),
         [['failed', 'completed-analysis-invalid']]);
+    const retried = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, dependencies);
+    assert.equal(retried.status, 'complete');
+    assert.equal(retried.results[0].status, 'staged');
+    assert.equal(analyses, 2, 'the next explicit run may perform one normal analysis');
 });
 
 test('missing current Reader blocks staging even when canonical analysis otherwise parses', async t => {

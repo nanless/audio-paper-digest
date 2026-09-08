@@ -94,6 +94,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/paper-source-authority.js` | Node 库 | 重放 canonical identity、完整 identity record、来源 snapshot/receipt/fulltext SHA 并返回 source-only opaque handle；通用磁盘 arXiv loader 永远不恢复 production authorization，会议合同还要求当前进程真实 plan handle。 |
 | `lib/arxiv-source-authority.js` | Node 库 | 复用默认强制代理 arXiv 全文抓取器，把官方来源封存为 request→observation→fulltext→snapshot→receipt→authority；支持 O_EXCL 恢复且拒绝旧博客正文。 |
 | `lib/arxiv-metadata-source.js` | Node 库 | 通过项目 HTTP CONNECT 精确抓取单篇 arXiv Atom 元数据，绑定原始响应 SHA 与白名单标题、摘要、作者、类别。 |
+| `lib/historical-arxiv-publication-metadata.js` | Node 库 | 为 direct plan 的每篇历史 arXiv 论文封存独立 publication-only Atom sidecar；每次读取重放 raw Atom、metadata、摘要 SHA、精确 vN 查询或 versionless observed 时间窗，以及原 source generation/manifest/snapshot，不修改四文件来源。 |
 | `lib/page-source-crosswalk.js` | Node 库 | 跨运行时重放历史 inventory，以锁内 CAS/append-only 决策绑定 pageId/页面 SHA 与 production-authorized source authority；标题不能 verified，同 identity 多页确定性分组，finalize 与每次 final receipt 读取都重新验证来源。 |
 | `lib/history-conflict-identity.js` | Node 库 | legacy conflict resolver；当前 direct policy 不把 conflict/multiple 页面送入 production crosswalk。 |
 | `lib/historical-arxiv-analysis.js` | Node 库 | 将 live arXiv 全文 authority 和官方 Atom 元数据封装为可恢复的隔离 fresh-analysis run，不读取旧生成正文。 |
@@ -161,6 +162,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-direct-rewrite-plan.js` | 从 v5 direct catalog、inventory 与 conference projection v3 签发 source-only rewrite route plan；精确重放 primary arXiv 与 ICML routable binding，旧 v4/v3 文件失败关闭，并报告 frozen paper page 覆盖缺口。 |
 | `historical-direct-rewrite-scheduler.js` | 只准备 direct plan 的 arXiv/会议来源队列和 sealed source 工件；支持稳定 paper 集合/上限、plan+generation 来源锁、pause marker、信号安全停点和逐项进度；arXiv 原子写 TXT、PDF、runtime metadata、manifest，失败只写 immutable crosswalk handoff；不调用分析、Reader、crosswalk 或发布。 |
 | `historical-direct-rewrite-run.js` | 显式运行 source-only direct analysis、Reader 与单篇 staging；apply 强制所选项已有同 plan/generation scheduler-ready 状态；失败阶段以 source-bound recovery 文件跨进程续跑而不冒充 staging。 |
+| `historical-arxiv-publication-metadata.js` | 默认对 direct plan 全部 arXiv 执行 dry-run 或批量封存官方 Atom sidecar；只复用满足当前 source 版本/时间窗的既有 raw Atom，其余按 sealed source ID 经公共 CONNECT metadata adapter 精确抓取，不调用模型。 |
 | `historical-direct-aggregate.js` | 为完成的 direct registry 生成可重放 daily 或 conference aggregate staging。 |
 | `historical-direct-control.js` | 全历史长任务控制面：`history:status` 单次/持续只读汇总 registry、pause/lock、覆盖率、汇总和 publication blockers；`history:pause` 写入 plan+generation 绑定的停机请求；`history:resume` 只在 operation lock 释放后恢复。 |
 | `historical-direct-publication.js` | 全历史 direct 发布入口：按 `plan → generate → review → publish → status` 驱动单一 publication UUID；发布阶段独占共享博客锁并验证远端 `main` OID。 |

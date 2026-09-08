@@ -22,6 +22,34 @@ renderer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(renderer)
 
 
+def metadata_sidecar(paper, abstract_sha):
+    return {
+        'contract': renderer.DIRECT_PUBLICATION_METADATA_CONTRACT,
+        'paperId': paper['directPaperId'],
+        'manifestSha256': 'd' * 64,
+        'atomResponseSha256': 'e' * 64,
+        'metadataRecordSha256': 'f' * 64,
+        'abstractSha256': abstract_sha,
+        'entryVersion': 1,
+        'entryUpdatedAt': '2026-01-01T00:00:00.000Z',
+        'publishedAt': '2025-12-31T00:00:00.000Z',
+        'observedAt': '2026-01-03T00:00:00.000Z',
+        'sourceId': paper['arxivId'],
+        'querySourceId': paper['arxivId'],
+        'sourceCapturedAt': '2026-01-02T00:00:00.000Z',
+        'sourceEarliestCapturedAt': '2026-01-02T00:00:00.000Z',
+        'sourceLatestCapturedAt': '2026-01-02T00:00:00.000Z',
+        'sourceName': (
+            'https://export.arxiv.org/api/query?'
+            f'id_list={paper["arxivId"]}&max_results=1'
+        ),
+        'sourceManifestSha256': 'c' * 64,
+        'sourceSnapshotSha256': 'a' * 64,
+        'sourceTextSha256': 'b' * 64,
+        'generation': 1,
+    }
+
+
 class HistoricalPageRenderTests(unittest.TestCase):
     def test_real_publish_helpers_render_reader_formula_and_sidecars(self):
         paper = llm_api_publication_fixture()
@@ -120,6 +148,8 @@ class HistoricalPageRenderTests(unittest.TestCase):
         paper['freshRewriteProvenance'] = {
             'sourceSnapshotSha256': 'a' * 64,
             'sourceSha256': 'b' * 64,
+            'sourceGeneration': 1,
+            'sourceManifestSha256': 'c' * 64,
         }
         publication_source = {
             'contract': renderer.DIRECT_PUBLICATION_SOURCE_CONTRACT,
@@ -130,6 +160,9 @@ class HistoricalPageRenderTests(unittest.TestCase):
             'abstract': abstract,
             'abstractSha256': hashlib.sha256(abstract.encode('utf-8')).hexdigest(),
         }
+        publication_source['metadataSidecar'] = metadata_sidecar(
+            paper, publication_source['abstractSha256'],
+        )
         result = renderer.render_packet({
             'directStaging': True, 'paper': paper,
             'publicationSource': publication_source,
@@ -162,6 +195,8 @@ class HistoricalPageRenderTests(unittest.TestCase):
         paper['freshRewriteProvenance'] = {
             'sourceSnapshotSha256': 'a' * 64,
             'sourceSha256': 'b' * 64,
+            'sourceGeneration': 1,
+            'sourceManifestSha256': 'c' * 64,
         }
         proof = {
             'contract': renderer.DIRECT_PUBLICATION_SOURCE_CONTRACT,
@@ -172,6 +207,9 @@ class HistoricalPageRenderTests(unittest.TestCase):
             'abstract': abstract,
             'abstractSha256': hashlib.sha256(abstract.encode('utf-8')).hexdigest(),
         }
+        proof['metadataSidecar'] = metadata_sidecar(
+            paper, proof['abstractSha256'],
+        )
         for changed in (
                 {**proof, 'paperId': 'arxiv:2609.99999'},
                 {**proof, 'sourceSnapshotSha256': 'c' * 64},
@@ -184,6 +222,69 @@ class HistoricalPageRenderTests(unittest.TestCase):
         without_provenance.pop('freshRewriteProvenance')
         with self.assertRaisesRegex(ValueError, 'publication source proof'):
             renderer.inject_direct_publication_source(without_provenance, proof)
+
+    def test_direct_arxiv_renderer_validates_metadata_sidecar_binding(self):
+        paper = llm_api_ephemeral_figure_fixture()
+        paper['directPaperId'] = f'arxiv:{paper["arxivId"]}'
+        abstract = paper.pop('abstract')
+        paper['freshRewriteProvenance'] = {
+            'sourceSnapshotSha256': 'a' * 64,
+            'sourceSha256': 'b' * 64,
+            'sourceGeneration': 1,
+            'sourceManifestSha256': 'c' * 64,
+        }
+        abstract_sha = hashlib.sha256(abstract.encode('utf-8')).hexdigest()
+        sidecar = {
+            'contract': renderer.DIRECT_PUBLICATION_METADATA_CONTRACT,
+            'paperId': paper['directPaperId'],
+            'manifestSha256': 'd' * 64,
+            'atomResponseSha256': 'e' * 64,
+            'metadataRecordSha256': 'f' * 64,
+            'abstractSha256': abstract_sha,
+            'entryVersion': 1,
+            'entryUpdatedAt': '2026-01-01T00:00:00.000Z',
+            'publishedAt': '2025-12-31T00:00:00.000Z',
+            'observedAt': '2026-01-03T00:00:00.000Z',
+            'sourceId': paper['arxivId'],
+            'querySourceId': paper['arxivId'],
+            'sourceCapturedAt': '2026-01-02T00:00:00.000Z',
+            'sourceEarliestCapturedAt': '2026-01-02T00:00:00.000Z',
+            'sourceLatestCapturedAt': '2026-01-02T00:00:00.000Z',
+            'sourceName': (
+                'https://export.arxiv.org/api/query?'
+                f'id_list={paper["arxivId"]}&max_results=1'
+            ),
+            'sourceManifestSha256': 'c' * 64,
+            'sourceSnapshotSha256': 'a' * 64,
+            'sourceTextSha256': 'b' * 64,
+            'generation': 1,
+        }
+        proof = {
+            'contract': renderer.DIRECT_PUBLICATION_SOURCE_CONTRACT,
+            'version': 1,
+            'paperId': paper['directPaperId'],
+            'sourceSnapshotSha256': 'a' * 64,
+            'sourceTextSha256': 'b' * 64,
+            'abstract': abstract,
+            'abstractSha256': abstract_sha,
+            'metadataSidecar': sidecar,
+        }
+        result = renderer.inject_direct_publication_source(dict(paper), proof)
+        self.assertEqual(result['abstract'], abstract)
+        for changed in (
+                {**sidecar, 'abstractSha256': '0' * 64},
+                {**sidecar, 'sourceManifestSha256': '0' * 64},
+                {**sidecar, 'generation': 2},
+                {**sidecar, 'observedAt': '2025-12-31T12:00:00.000Z',
+                 'sourceId': f'{paper["arxivId"]}v1',
+                 'querySourceId': f'{paper["arxivId"]}v1',
+                 'sourceName': ('https://export.arxiv.org/api/query?'
+                                f'id_list={paper["arxivId"]}v1&max_results=1')},
+                {**sidecar, 'unexpected': True}):
+            with self.assertRaisesRegex(ValueError, 'metadata sidecar proof'):
+                renderer.inject_direct_publication_source(
+                    dict(paper), {**proof, 'metadataSidecar': changed},
+                )
 
     def test_direct_conference_renderer_rejects_arxiv_publication_source(self):
         paper = {

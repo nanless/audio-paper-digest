@@ -46,7 +46,9 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     }
     const inputs = api.loadDirectAggregateInputs({ planFile: options.planFile, registryFile: options.registryFile,
         projectionFile: options.projectionFile, stagingRoot: Config.FILES.historicalDirectRewriteStagingDir,
-        executionRoot: Config.FILES.historicalDirectRewriteExecutionDir });
+        executionRoot: Config.FILES.historicalDirectRewriteExecutionDir,
+        freshArxivSourceRoot: Config.FILES.freshArxivFetchedSourcesDir,
+        publicationMetadataRoot: Config.FILES.historicalArxivPublicationMetadataDir });
     const aggregates = api.buildDirectAggregates({ inputs, daily: options.daily, conference: options.conference });
     const aggregateRunId = api.aggregateRunIdFor(aggregates);
     const output = { status: options.apply ? 'written' : 'dry-run', aggregateRunId,

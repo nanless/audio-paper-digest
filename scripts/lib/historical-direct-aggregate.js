@@ -557,7 +557,8 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
         taxonomy: { selectionContract: taxonomyRuntime.selectionContract,
             registryVersion: taxonomyRuntime.registryVersion, registrySha256: taxonomyRuntime.registrySha256 } };
 }
-function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoot }) {
+function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoot,
+    freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null }) {
     const entry = exactRegistryEntry(registryEntry, item);
     if (entry.status !== 'staged') fail(`${item.paperId} is not staged; aggregate requires complete cohort staging`);
     const source = expectedSource(entry, item); const artifact = expectedArtifact(entry, item, source);
@@ -577,6 +578,23 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
     const expectedBinding = planApi.directStagingBinding({ plan, registry: stageRegistry, paperId: item.paperId, analysisArtifact: artifact });
     if (stableHash(stage.stagingBinding) !== stableHash(expectedBinding)) fail(`${item.paperId} staging binding cannot replay direct source contract`);
     const publicationSource = directPages.publicationSourceProof(item, source, stage.publicationSource);
+    if (publicationSource?.metadataSidecar) {
+        if (typeof freshArxivSourceRoot !== 'string' || !path.isAbsolute(freshArxivSourceRoot)
+            || typeof publicationMetadataRoot !== 'string' || !path.isAbsolute(publicationMetadataRoot)) {
+            fail(`${item.paperId} aggregate cannot replay its official metadata sidecar`);
+        }
+        const readSidecar = readPublicationMetadata
+            || require('./historical-arxiv-publication-metadata.js').readPublicationMetadata;
+        const replayed = readSidecar({ rootDir: publicationMetadataRoot, sourceRoot: freshArxivSourceRoot,
+            arxivId: item.route.arxivId, generation: source.generation });
+        if (stableHash(replayed.proof) !== stableHash(publicationSource.metadataSidecar)
+            || replayed.abstract !== publicationSource.abstract
+            || replayed.sourceManifestSha256 !== source.sourceManifestSha256
+            || replayed.sourceSnapshotSha256 !== source.sourceSnapshotSha256
+            || replayed.sourceTextSha256 !== source.textSha256) {
+            fail(`${item.paperId} aggregate official metadata sidecar drifted from staging`);
+        }
+    }
     const canonical = readAnalysis(entry, item, artifact, executionRoot, source);
     const pageManifestFile = path.join(directory, 'page-staging-manifest.json');
     const pageManifest = directPages.validateManifest({
@@ -591,7 +609,8 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
     return { item, source, artifact, stageFileSha256: loaded.fileSha256, stagingBindingSha256: stage.stagingBindingSha256,
         pageStaging: pageManifest, canonical };
 }
-function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot } = {}) {
+function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot,
+    freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null } = {}) {
     if (typeof planFile !== 'string' || typeof registryFile !== 'string' || typeof projectionFile !== 'string') {
         fail('plan, registry, and aggregate projection files are required');
     }
@@ -610,7 +629,8 @@ function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, sta
         members.set(item.paperId, { item, entry });
     }
     return { plan, planFileSha256: planLoaded.fileSha256, registry, registryFileSha256: registryLoaded.fileSha256,
-        projection, projectionFileSha256: projectionLoaded.fileSha256, stagingRoot: staging, executionRoot: executions, members };
+        projection, projectionFileSha256: projectionLoaded.fileSha256, stagingRoot: staging, executionRoot: executions,
+        freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata, members };
 }
 
 function md(value) { return String(value).replace(/([\\`*_[\]<>|])/g, '\\$1').replace(/\s+/g, ' ').trim(); }
@@ -728,7 +748,10 @@ function buildCohort(inputs, cohort) {
     const selected = cohort.requiredPaperIds.map(paperId => inputs.members.get(paperId));
     if (selected.some(item => !item)) fail(`${cohort.scope}:${cohort.key} is missing a direct plan member`);
     const staged = selected.map(({ item, entry }) => loadStagedMember({ plan: inputs.plan, registryEntry: entry, item,
-        stagingRoot: inputs.stagingRoot, executionRoot: inputs.executionRoot }));
+        stagingRoot: inputs.stagingRoot, executionRoot: inputs.executionRoot,
+        freshArxivSourceRoot: inputs.freshArxivSourceRoot,
+        publicationMetadataRoot: inputs.publicationMetadataRoot,
+        readPublicationMetadata: inputs.readPublicationMetadata }));
     const memberScope = cohort.scope === 'conference-task' ? 'conference' : cohort.scope;
     const memberKey = cohort.scope === 'conference-task' ? cohort.conferenceKey : cohort.key;
     const pages = staged.flatMap(member => member.item.pages.filter(page => page.scope.type === memberScope
