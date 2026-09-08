@@ -797,6 +797,35 @@ test('two initial network failures do not consume received-content or malformed-
     assert.equal(envelope.payload.transportFailures, 2);
 });
 
+test('historical pre-model Figure transient stays retryable and creates no candidate or LLM attempt', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t); const url = 'https://arxiv.org/html/2509.24457v1/conf_conv.png';
+    const sourceEvidence = `FIGURE_1: confidence intervals\nFIGURE_1_URL: ${url}`;
+    let modelCalls = 0;
+    const transient = new TypeError('fetch failed');
+    transient.code = 'EPHEMERAL_FIGURE_FETCH_TRANSIENT';
+    transient.retryable = true; transient.ephemeralFigureFetch = true; transient.attempts = 3;
+    await assert.rejects(generateApiReaderArticleDetailed(
+        { arxivId: '2509.24457', title: 'Speech quality metrics' }, 'canonical', sourceEvidence, {
+            sourceText: 'source', readerAttemptsDir: directory, readerRecordDisposition: () => {},
+            readerMaterializeFigures: async () => { throw transient; },
+            readerCallModel: async () => { modelCalls += 1; throw new Error('must not call model'); }
+        }
+    ), error => error === transient && error.retryable === true && error.attempts === 3);
+    assert.equal(modelCalls, 0);
+    assert.deepEqual(fs.readdirSync(directory), [], 'pre-model failure cannot create a Reader candidate');
+
+    const permanent = new Error('arXiv Figure download failed: HTTP 404');
+    await assert.rejects(generateApiReaderArticleDetailed(
+        { arxivId: '2509.24457', title: 'Speech quality metrics' }, 'canonical', sourceEvidence, {
+            sourceText: 'source', readerAttemptsDir: directory, readerRecordDisposition: () => {},
+            readerMaterializeFigures: async () => { throw permanent; },
+            readerCallModel: async () => { modelCalls += 1; throw new Error('must not call model'); }
+        }
+    ), error => error === permanent && error.retryable !== true);
+    assert.equal(modelCalls, 0); assert.deepEqual(fs.readdirSync(directory), []);
+});
+
 test('network failure during a patch preserves the candidate and resumes a patch with the same content attempt', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
     READABILITY_RUBRIC_DIMENSIONS,
     findQuantitativeChineseNumerals,
+    normalizeIssueBoundReaderQuantitativeNumerals,
     findDoubleNumbering,
     findReaderTemplatePhrases,
     normalizeDanglingReaderConnectors,
@@ -148,6 +149,30 @@ describe('Manual v4 editorial quality primitives', () => {
             findBrokenProse('模型具有有界目标与有限状态，功能能否启用取决于输入，性能能够稳定复现；方案 A 区别于方案 B，slimmable 共享网络区别于 3 个独立网络，现实性提高却仍需现场验证。模型真实运行 2 次，并分别记录每次运行的计算成本。'),
             []
         );
+    });
+
+    it('normalizes only issue-bound stage counts in ordinary Reader prose', () => {
+        const source = [
+            '训练采用三阶段课程。',
+            '`三阶段` 与“原文三阶段”保持逐字。',
+            '| 设置 | 三阶段 |',
+            '| --- | --- |',
+            '$三阶段$ 与 [[CONCEPT_BRIDGE_3]] 不动。',
+            '```text',
+            '三阶段',
+            '```'
+        ].join('\n');
+        const issue = [{ path: null,
+            message: '读者文章文风校验失败: quantitative_chinese_numeral:三阶段' }];
+        const normalized = normalizeIssueBoundReaderQuantitativeNumerals(source, issue);
+        assert.equal(normalized.split('3 个阶段').length - 1, 1);
+        assert.ok(normalized.includes('`三阶段` 与“原文三阶段”保持逐字。'));
+        assert.ok(normalized.includes('| 设置 | 三阶段 |'));
+        assert.ok(normalized.includes('$三阶段$ 与 [[CONCEPT_BRIDGE_3]] 不动。'));
+        assert.ok(normalized.includes('```text\n三阶段\n```'));
+        assert.equal(normalizeIssueBoundReaderQuantitativeNumerals(source, []), source);
+        assert.equal(normalizeIssueBoundReaderQuantitativeNumerals(source, [{ code:
+            'quantitative_chinese_numeral', match: '两阶段' }]), source);
     });
 
     it('does not read the scale suffix in an Arabic comparison as a Chinese count classifier', () => {

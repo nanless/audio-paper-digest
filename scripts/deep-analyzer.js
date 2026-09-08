@@ -79,6 +79,7 @@ const {
     validateEditorialQuality,
     findDuplicateLongSentences,
     normalizeDanglingReaderConnectors,
+    normalizeIssueBoundReaderQuantitativeNumerals,
     SCALED_ARABIC_MEASUREMENT_UNITS
 } = require('./editorial-quality.js');
 const {
@@ -3829,8 +3830,19 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         candidate.sections = candidate.sections.map(section => ({
             ...section,
             body: typeof section?.body === 'string'
-                ? normalizeDanglingReaderConnectors(section.body) : section?.body
+                ? normalizeIssueBoundReaderQuantitativeNumerals(
+                    normalizeDanglingReaderConnectors(section.body), currentIssues
+                ) : section?.body
         }));
+        if (Array.isArray(candidate.conceptBridges)) {
+            candidate.conceptBridges = candidate.conceptBridges.map(bridge => ({
+                ...bridge,
+                explanation: typeof bridge?.explanation === 'string'
+                    ? normalizeIssueBoundReaderQuantitativeNumerals(
+                        bridge.explanation, currentIssues
+                    ) : bridge?.explanation
+            }));
+        }
         const normalized = normalizeReaderDraftOrder(candidate);
         candidate = normalized.draft;
         if (normalized.mapping.changed) draftOrderMappings.push(normalized.mapping);
@@ -6110,6 +6122,11 @@ function isRecoveryStageComplete(manifest, stage) {
 
 function suppressOuterRetryAfterReaderExhaustion(error) {
     const exhausted = error instanceof Error ? error : new Error(String(error || 'Reader stage failed'));
+    // Figure acquisition happens before candidate loading and before any LLM
+    // attempt. A bounded, explicitly typed transport exhaustion must remain
+    // retryable so the historical scheduler can resume it; it is not Reader
+    // content-attempt exhaustion.
+    if (exhausted.ephemeralFigureFetch === true && exhausted.retryable === true) return exhausted;
     // generateApiReaderArticleDetailed already owns its bounded full/repair
     // attempts.  Do not restart the complete analysis in analyzePaperWithRetry
     // during this invocation.  Its non-terminal stage remains checkpointed, so

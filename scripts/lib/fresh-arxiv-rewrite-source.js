@@ -475,6 +475,40 @@ function defaultFetchPdf(arxivId) {
 function defaultFetchFigure(url) {
     return require('../deep-analyzer.js').fetchArxivFigureBytesUncached(url);
 }
+const EPHEMERAL_FIGURE_FETCH_MAX_ATTEMPTS = 3;
+const EPHEMERAL_FIGURE_TRANSIENT_CODES = new Set([
+    'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT',
+    'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+    'ARXIV_REQUEST_DEADLINE_EXCEEDED', 'ARXIV_REQUEST_SOCKET_TIMEOUT'
+]);
+function isTransientEphemeralFigureFetchError(error) {
+    const code = String(error?.code || error?.cause?.code || '').toUpperCase();
+    const message = `${String(error?.message || error || '')} ${String(error?.cause?.message || '')}`;
+    const status = Number.parseInt(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1] || '', 10);
+    return error?.retryable === true || EPHEMERAL_FIGURE_TRANSIENT_CODES.has(code)
+        || [408, 425, 429].includes(status) || status >= 500
+        || /(?:fetch failed|socket hang up|network|timed?\s*out|timeout|dns|connection reset)/i.test(message);
+}
+async function fetchEphemeralFigureWithRetry(fetchFigure, url, options = {}) {
+    const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    for (let attempt = 1; attempt <= EPHEMERAL_FIGURE_FETCH_MAX_ATTEMPTS; attempt++) {
+        try { return await fetchFigure(url); }
+        catch (error) {
+            if (!isTransientEphemeralFigureFetchError(error)) throw error;
+            if (attempt < EPHEMERAL_FIGURE_FETCH_MAX_ATTEMPTS) {
+                await sleep(attempt * 1000);
+                continue;
+            }
+            const failure = error instanceof Error ? error : new Error(String(error || 'ephemeral Figure fetch failed'));
+            failure.retryable = true;
+            failure.ephemeralFigureFetch = true;
+            failure.attempts = attempt;
+            if (!failure.code) failure.code = 'EPHEMERAL_FIGURE_FETCH_TRANSIENT';
+            throw failure;
+        }
+    }
+    throw new Error('ephemeral Figure fetch retry loop ended unexpectedly');
+}
 function defaultExtractPdfText(arxivId, bytes, options) {
     return require('../deep-analyzer.js').extractArxivPdfTextDetailedFromBytes(arxivId, bytes, options);
 }
@@ -648,7 +682,9 @@ async function withEphemeralArxivFigures(options = {}, callback, overrides = {})
     try {
         const materialized = [];
         for (const figure of normalizedFigures) {
-            const response = normalizeFigureResponse(await fetchFigure(figure.url));
+            const response = normalizeFigureResponse(await fetchEphemeralFigureWithRetry(
+                fetchFigure, figure.url, { sleep: overrides.figureRetrySleep }
+            ));
             const filename = `figure-${String(figure.ordinal).padStart(3, '0')}.bin`;
             writePrivateFile(directory, filename, response.bytes);
             materialized.push(Object.freeze({ ordinal: figure.ordinal, mediaType: response.mediaType,
@@ -668,6 +704,8 @@ module.exports = {
     CONTRACT, VERSION, EXTRACTOR_CONTRACT, DEFAULT_EXTRACTOR_VERSION, HISTORICAL_VERSION_CONTRACT,
     MANIFEST_NAME, TEXT_NAME, PDF_NAME, RUNTIME_METADATA_NAME, SOURCE_FILES, FreshArxivRewriteSourceError,
     sha256, normalizedArxivId, normalizedGeneration, generationName, sourceDirectory,
+    EPHEMERAL_FIGURE_FETCH_MAX_ATTEMPTS, isTransientEphemeralFigureFetchError,
+    fetchEphemeralFigureWithRetry,
     readFreshArxivRewriteSource, captureFreshArxivRewriteSource, officialUrl,
     withEphemeralArxivFigures, officialFigureUrl, generationExists, runtimeDetailsFromFreshCapture,
     runtimeMetadataFromDetails, runtimeDetailsFromMetadata, historicalVersionIdentity,

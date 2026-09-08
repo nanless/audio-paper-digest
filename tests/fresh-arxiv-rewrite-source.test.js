@@ -303,6 +303,78 @@ test('ephemeral figures are cleaned on callback and fetch failure and reject per
     /OS-temporary directory outside Config\.DATA_DIR/);
 });
 
+test('ephemeral Figure fetch retries only transient network/status failures and preserves permanent gates', async t => {
+    const f = fixture(t); const id = '2403.14817';
+    const figureUrl = `https://arxiv.org/html/${id}/x1.png`;
+    for (const status of [408, 425, 429, 500, 503]) {
+        assert.equal(source.isTransientEphemeralFigureFetchError(
+            new Error(`arXiv Figure download failed: HTTP ${status}`)
+        ), true, `HTTP ${status} is transient`);
+    }
+    for (const status of [400, 401, 403, 404]) {
+        assert.equal(source.isTransientEphemeralFigureFetchError(
+            new Error(`arXiv Figure download failed: HTTP ${status}`)
+        ), false, `HTTP ${status} is permanent`);
+    }
+    let calls = 0; const waits = [];
+    const result = await source.withEphemeralArxivFigures({ arxivId: id,
+        figures: [{ ordinal: 1, url: figureUrl }], temporaryRoot: f.temporaryRoot,
+        sourceRoot: f.sourceRoot }, async bundle => fs.readFileSync(bundle.figures[0].tempPath, 'utf8'), {
+        figureRetrySleep: async ms => { waits.push(ms); },
+        fetchFigure: async () => {
+            calls += 1;
+            if (calls < 3) {
+                const error = new TypeError('fetch failed');
+                error.cause = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+                throw error;
+            }
+            return { bytes: Buffer.from('pixels'), mediaType: 'image/png' };
+        }
+    });
+    assert.equal(result, 'pixels'); assert.equal(calls, 3);
+    assert.deepEqual(waits, [1000, 2000]);
+    assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
+
+    calls = 0;
+    await assert.rejects(source.withEphemeralArxivFigures({ arxivId: id,
+        figures: [{ ordinal: 1, url: figureUrl }], temporaryRoot: f.temporaryRoot,
+        sourceRoot: f.sourceRoot }, async () => {}, {
+        figureRetrySleep: async () => {}, fetchFigure: async () => {
+            calls += 1; throw new TypeError('fetch failed');
+        }
+    }), error => error.retryable === true && error.ephemeralFigureFetch === true
+        && error.attempts === source.EPHEMERAL_FIGURE_FETCH_MAX_ATTEMPTS);
+    assert.equal(calls, 3); assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
+
+    calls = 0;
+    await assert.rejects(source.withEphemeralArxivFigures({ arxivId: id,
+        figures: [{ ordinal: 1, url: figureUrl }], temporaryRoot: f.temporaryRoot,
+        sourceRoot: f.sourceRoot }, async () => {}, {
+        figureRetrySleep: async () => {}, fetchFigure: async () => {
+            calls += 1; throw new Error('arXiv Figure download failed: HTTP 404');
+        }
+    }), error => error.retryable !== true && /HTTP 404/.test(error.message));
+    assert.equal(calls, 1, 'ordinary 4xx is permanently rejected without retry');
+    assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
+
+    calls = 0;
+    await assert.rejects(source.withEphemeralArxivFigures({ arxivId: id,
+        figures: [{ ordinal: 1, url: 'https://arxiv.org/html/2403.99999/x1.png' }],
+        temporaryRoot: f.temporaryRoot, sourceRoot: f.sourceRoot }, async () => {}, {
+        fetchFigure: async () => { calls += 1; return { bytes: Buffer.from('pixels'), mediaType: 'image/png' }; }
+    }), /another paper/);
+    assert.equal(calls, 0, 'URL/paper identity fails before network');
+
+    calls = 0;
+    await assert.rejects(source.withEphemeralArxivFigures({ arxivId: id,
+        figures: [{ ordinal: 1, url: figureUrl }], temporaryRoot: f.temporaryRoot,
+        sourceRoot: f.sourceRoot }, async () => {}, {
+        fetchFigure: async () => { calls += 1; return { bytes: Buffer.from('not pixels'), mediaType: 'text/plain' }; }
+    }), /media type is unsupported/);
+    assert.equal(calls, 1, 'media/pixel validation is permanent and never retried');
+    assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
+});
+
 
 test('same-generation recovery replays hash-bound table/formula/figure metadata without storing pixels', async t => {
     const f = fixture(t); const id = '2403.14817';

@@ -83,6 +83,26 @@ test('diagnostic migration removes only a proven paragraph-final dangling connec
         hashDraft(migrated.draft));
 });
 
+test('diagnostic migration normalizes only an issue-bound stage count in ordinary prose', t => {
+    const f = fixture(t);
+    const protectedText = '`三阶段`、“三阶段”、$三阶段$、[[CONCEPT_BRIDGE_3]]';
+    f.payload.draft.sections[0].body = `训练采用三阶段课程。\n\n${protectedText}`;
+    f.payload.draft.sections[1].body = '未命中 issue 的两阶段流程保持原样。';
+    f.payload.draft.conceptBridges[0] = { explanation: '课程学习连接三阶段数据。' };
+    f.payload.issues = [{ path: null,
+        message: '读者文章文风校验失败: quantitative_chinese_numeral:三阶段' }];
+    f.payload.rawDraft = JSON.stringify(f.payload.draft);
+    saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    assert.equal(migrated.draft.sections[0].body,
+        `训练采用 3 个阶段课程。\n\n${protectedText}`);
+    assert.equal(migrated.draft.sections[1].body, '未命中 issue 的两阶段流程保持原样。');
+    assert.equal(migrated.draft.conceptBridges[0].explanation,
+        '课程学习连接 3 个阶段数据。');
+    assert.notEqual(migrated.readerRecoveryRevisions.at(-1).inputDraftSha256,
+        migrated.readerRecoveryRevisions.at(-1).outputDraftSha256);
+});
+
 test('ordinary calls and an unenabled fresh scope never scan or migrate an old candidate', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     assert.equal(loadReaderRecoveryRevision(f.directory, f.identity), null);

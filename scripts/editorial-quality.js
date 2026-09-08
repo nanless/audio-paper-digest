@@ -365,6 +365,60 @@ function findQuantitativeChineseNumerals(text) {
         .map(({ end, ...finding }) => finding);
 }
 
+// Recovery may repair a Chinese empirical count only when the persisted
+// authoritative issue names that exact surface.  Keep this deliberately
+// narrower than the general typography normalizer: it handles the unambiguous
+// one-digit “N阶段” form and never scans an otherwise clean draft. Literal
+// evidence and Markdown structure remain byte-exact.
+function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
+    const source = String(text || '');
+    const requested = new Set();
+    for (const issue of Array.isArray(issues) ? issues : []) {
+        const surfaces = [];
+        if (issue?.code === 'quantitative_chinese_numeral' && typeof issue.match === 'string') {
+            surfaces.push(issue.match.trim());
+        }
+        for (const match of String(issue?.message || '')
+            .matchAll(/quantitative_chinese_numeral:([^；\n]+)/gu)) {
+            surfaces.push(match[1].trim());
+        }
+        for (const surface of surfaces) {
+            if (/^[一二两三四五六七八九]阶段$/u.test(surface)
+                && findQuantitativeChineseNumerals(surface)
+                    .some(finding => finding.match === surface)) requested.add(surface);
+        }
+    }
+    if (!requested.size || source.includes('__PD_ISSUE_BOUND_NUMERAL_')) return source;
+    const protectedSpans = [];
+    const protect = value => {
+        const token = `__PD_ISSUE_BOUND_NUMERAL_${protectedSpans.length}__`;
+        protectedSpans.push(value);
+        return token;
+    };
+    let normalized = source
+        .replace(/^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]{0,3}\1[`~]*[ \t]*(?=\n|$)/gm, protect)
+        .replace(/\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$/g, protect)
+        .replace(/(`+)[^\n]*?\1/g, protect)
+        .replace(/^\s*(?:\||>)[^\n]*$/gm, protect)
+        .replace(/^[^\n]*\|[^\n]*$/gm, protect)
+        .replace(/^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)[^\n]*$/gm, protect)
+        .replace(/\[\[[A-Z][A-Z0-9_]*\d*\]\]/g, protect)
+        .replace(/!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)/g, protect)
+        .replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)/g, protect)
+        .replace(/^(?:原文|原句|逐字引语|口语(?:转录|转写|输出)|输入(?:转录)?|Transcript|Input)\s*[:：][^\n]*/gmi, protect);
+    const digits = Object.freeze({ 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
+        五: 5, 六: 6, 七: 7, 八: 8, 九: 9 });
+    for (const surface of requested) {
+        normalized = normalized.replaceAll(surface, (_match, offset, whole) => (
+            `${/[\u3400-\u9fff]$/u.test(whole.slice(0, offset)) ? ' ' : ''}`
+            + `${digits[surface[0]]} 个阶段`
+        ));
+    }
+    return protectedSpans.reduceRight((value, original, index) => value.replace(
+        `__PD_ISSUE_BOUND_NUMERAL_${index}__`, () => original
+    ), normalized);
+}
+
 function findReaderTemplatePhrases(text) {
     const value = normalizeNfkc(text);
     const findings = [];
@@ -1346,6 +1400,7 @@ module.exports = {
     normalizeEvidence,
     coerceCoreSections,
     findQuantitativeChineseNumerals,
+    normalizeIssueBoundReaderQuantitativeNumerals,
     findReaderTemplatePhrases,
     normalizeDanglingReaderConnectors,
     findBrokenProse,

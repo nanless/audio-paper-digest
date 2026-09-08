@@ -8,7 +8,8 @@ const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
 const { loadFailedCandidate, saveFailedCandidate, hashDraft, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder } = require('./reader-draft-order.js');
-const { normalizeDanglingReaderConnectors } = require('../editorial-quality.js');
+const { normalizeDanglingReaderConnectors,
+    normalizeIssueBoundReaderQuantitativeNumerals } = require('../editorial-quality.js');
 const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
@@ -157,8 +158,19 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         updated.draft.sections = updated.draft.sections.map(section => ({
             ...section,
             body: typeof section?.body === 'string'
-                ? normalizeDanglingReaderConnectors(section.body) : section?.body
+                ? normalizeIssueBoundReaderQuantitativeNumerals(
+                    normalizeDanglingReaderConnectors(section.body), updated.issues
+                ) : section?.body
         }));
+        if (Array.isArray(updated.draft.conceptBridges)) {
+            updated.draft.conceptBridges = updated.draft.conceptBridges.map(bridge => ({
+                ...bridge,
+                explanation: typeof bridge?.explanation === 'string'
+                    ? normalizeIssueBoundReaderQuantitativeNumerals(
+                        bridge.explanation, updated.issues
+                    ) : bridge?.explanation
+            }));
+        }
         const normalized = normalizeReaderDraftOrder(updated.draft);
         updated.draft = normalized.draft;
         updated.rawDraft = JSON.stringify(updated.draft);

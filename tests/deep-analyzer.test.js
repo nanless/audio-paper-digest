@@ -3928,6 +3928,11 @@ has_dataset: 否
         const relativePath = 'prompts/core-summary-repair.md';
         const raw = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
         const block = raw.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m)[2];
+        assert.match(block, /两个数值及各自单位、正负号和小数精度必须逐字来自同一原表行/);
+        assert.match(block, /同一段连续原文证据/);
+        assert.match(block, /禁止把 `0\.85` 改成 `85\.00`/);
+        assert.match(block, /禁止增删末尾零、舍入、百分数与小数互换、单位换算或自行计算差值/);
+        assert.match(block, /禁止把摘要\/引言中的概括值与表格中的基线值拼成一组比较/);
         const expected = crypto.createHash('sha256').update(JSON.stringify({
             runtimePrompt: block,
             contractVersion: 'core-summary-detailed-v3'
@@ -3944,6 +3949,45 @@ has_dataset: 否
             runtimePromptTemplateSha256(relativePath, 'core-summary-detailed-v3'),
             runtimePromptTemplateSha256(relativePath, 'core-summary-detailed-v4')
         );
+    });
+
+    it('核心摘要 Prompt 字节漂移只改变 coreSummaryRepair 阶段指纹', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const promptPath = path.resolve(__dirname, '../prompts/core-summary-repair.md');
+        const stages = [
+            'revision', 'tableRepair', 'methodRepair', 'structureRepair',
+            'coreSummaryRepair'
+        ];
+        const inputAnalysis = validAnalysisText();
+        const evidence = 'same sealed source evidence';
+        const fingerprints = () => Object.fromEntries(stages.map(stage => [
+            stage, deep.buildTextStageFingerprint(stage, inputAnalysis, evidence)
+        ]));
+        const before = fingerprints();
+        const originalReadFileSync = fs.readFileSync;
+        try {
+            fs.readFileSync = function readWithCoreSummaryPromptDrift(filename, ...args) {
+                const value = originalReadFileSync.call(this, filename, ...args);
+                if (path.resolve(String(filename)) !== promptPath || typeof value !== 'string') {
+                    return value;
+                }
+                assert.match(value, /禁止把 `0\.85` 改成 `85\.00`/);
+                return value.replace(
+                    '禁止把 `0.85` 改成 `85.00`',
+                    '禁止把 `0.85` 改成 `85.000`'
+                );
+            };
+            const after = fingerprints();
+            for (const stage of stages) {
+                if (stage === 'coreSummaryRepair') {
+                    assert.notStrictEqual(after[stage], before[stage]);
+                } else {
+                    assert.strictEqual(after[stage], before[stage]);
+                }
+            }
+        } finally {
+            fs.readFileSync = originalReadFileSync;
+        }
     });
 
     it('核心摘要局部修复使用受限的通用 repair 预算且其他 12 节逐字不变', async () => {
@@ -3989,6 +4033,10 @@ has_dataset: 否
         assert.match(prompt, /2–4 个步骤/);
         assert.match(prompt, /320–600 个中文\/中文标点字符/);
         assert.match(prompt, /同一量表上报告的两个条件或维度/);
+        assert.match(prompt, /两个数值及各自单位、正负号和小数精度必须逐字来自同一原表行/);
+        assert.match(prompt, /禁止把 `0\.85` 改成 `85\.00`/);
+        assert.match(prompt, /禁止增删末尾零、舍入、百分数与小数互换、单位换算或自行计算差值/);
+        assert.match(prompt, /禁止把摘要\/引言中的概括值与表格中的基线值拼成一组比较/);
         assert.strictEqual(maxTokens, 8000);
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
@@ -4035,6 +4083,12 @@ has_dataset: 否
         const returned = suppressOuterRetryAfterReaderExhaustion(error);
         assert.strictEqual(returned, error);
         assert.strictEqual(returned.retryable, false);
+        const preflight = new TypeError('fetch failed');
+        preflight.code = 'EPHEMERAL_FIGURE_FETCH_TRANSIENT';
+        preflight.retryable = true; preflight.ephemeralFigureFetch = true; preflight.attempts = 3;
+        assert.strictEqual(suppressOuterRetryAfterReaderExhaustion(preflight), preflight);
+        assert.strictEqual(preflight.retryable, true,
+            'bounded pre-model Figure transport exhaustion is not Reader attempt exhaustion');
     });
 
     it('历史 direct 最终 Figure 只接受本轮前置像素的精确 ordinal URL 与 source SHA', () => {
