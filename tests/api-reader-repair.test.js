@@ -819,3 +819,52 @@ test('received truncated or incomplete patch responses consume content budget wi
         assert.equal(calls, 2, 'exhausted content budget prevents another patch request');
     }
 });
+
+test('an exact 8000-token patch truncation resumes the same candidate with one bounded 16000-token patch and no full request', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t);
+    const paper = { arxivId: '2609.99987', title: '局部截断自适应预算' };
+    const draft = fixture(); draft.readerTitle = '短'; draft.sections[0].body = '太短';
+    const calls = [];
+    const options = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 3,
+        readerRecordDisposition: () => {}, readerMaterializeFigures: async () => [],
+        readerCallModel: async (_messages, tokens, requestOptions) => {
+            calls.push({ stage: requestOptions.usageContext.stage, tokens });
+            if (calls.length === 1) return JSON.stringify(draft);
+            if (calls.length === 2) {
+                throw Object.assign(new Error('repair output hit its exact token ceiling'), {
+                    code: 'MODEL_OUTPUT_TRUNCATED', retryable: false,
+                    outputTokens: tokens, maxOutputTokens: tokens,
+                    partialText: '{"version":1,"replacements":['
+                });
+            }
+            return JSON.stringify(patchFor(draft, [
+                ['/readerTitle', '声音表示如何与语义条件连接起来']
+            ]));
+        } };
+    await assert.rejects(
+        generateApiReaderArticleDetailed(paper, 'canonical', '', options),
+        error => error.code === 'MODEL_OUTPUT_TRUNCATED'
+    );
+    const active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const afterTruncation = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
+    assert.equal(afterTruncation.identity.repairMaxTokens, 8000,
+        'candidate identity keeps the base budget for implementation-only migration');
+    assert.equal(afterTruncation.payload.attempts, 2);
+    assert.equal(afterTruncation.payload.fullAttempts, 1);
+    assert.equal(afterTruncation.payload.lastContentError.requestKind, 'patch');
+    await assert.rejects(
+        generateApiReaderArticleDetailed(paper, 'canonical', '', options),
+        /body 至少/
+    );
+    assert.deepEqual(calls, [
+        { stage: 'apiReaderArticle', tokens: 48000 },
+        { stage: 'apiReaderRepair', tokens: 8000 },
+        { stage: 'apiReaderRepair', tokens: 16000 }
+    ]);
+    const afterRetry = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
+    assert.equal(afterRetry.payload.draft.readerTitle, '声音表示如何与语义条件连接起来');
+    assert.equal(afterRetry.payload.draft.sections[0].body, '太短');
+    assert.equal(afterRetry.payload.attempts, 3);
+    assert.equal(afterRetry.payload.fullAttempts, 1, 'the resumed invocation made zero full Reader requests');
+});

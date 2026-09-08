@@ -3893,7 +3893,7 @@ has_dataset: 否
         );
     });
 
-    it('核心摘要局部修复达到 320 中文字符且其他 12 节逐字不变', async () => {
+    it('核心摘要局部修复使用受限的通用 repair 预算且其他 12 节逐字不变', async () => {
         const { getCoreSummaryDetailIssue, repairCoreSummarySection } = require('../scripts/deep-analyzer.js');
         const original = validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
@@ -3936,7 +3936,7 @@ has_dataset: 否
         assert.match(prompt, /2–4 个步骤/);
         assert.match(prompt, /320–600 个中文\/中文标点字符/);
         assert.match(prompt, /同一量表上报告的两个条件或维度/);
-        assert.strictEqual(maxTokens, 2500);
+        assert.strictEqual(maxTokens, 8000);
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
         assert.match(prompts[1], /这是第 2 次局部修复/);
@@ -4027,6 +4027,16 @@ has_dataset: 否
         assert.strictEqual(drift.retryable, false);
         assert.strictEqual(preserveReaderPostProcessingRetryability(drift), drift);
         assert.strictEqual(drift.retryable, false);
+    });
+
+    it('Reader patch 截断重试预算受完整 Reader 预算和 16000 上限共同约束', () => {
+        const { resolveApiReaderRepairRetryMaxTokens } = require('../scripts/deep-analyzer.js');
+        assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(48000, 8000), 16000);
+        assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(24000, 8000), 8000);
+        assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(12000, 8000), 8000);
+        assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(6000, 8000), 6000);
+        assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(96000, 12000), 16000);
+        assert.throws(() => resolveApiReaderRepairRetryMaxTokens(0, 8000), /positive safe integer/);
     });
 
     it('结构预修复会在评分前接管模型编辑和自检批注泄漏', () => {

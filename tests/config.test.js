@@ -50,6 +50,10 @@ describe('config', () => {
             Number(process.env.PD_API_READER_MAX_TOKENS || 48000)
         );
         assert.strictEqual(
+            Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens,
+            Number(process.env.PD_API_READER_REPAIR_MAX_TOKENS || 8000)
+        );
+        assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs,
             Number(process.env.PD_API_READER_OVERALL_TIMEOUT_MS || 2400000)
         );
@@ -211,6 +215,7 @@ describe('config', () => {
         withProjectEnv(
             [
                 'PD_API_READER_MAX_TOKENS=56000',
+                'PD_API_READER_REPAIR_MAX_TOKENS=12000',
                 'PD_API_READER_OVERALL_TIMEOUT_MS=3000000',
                 'PD_API_READER_CONCURRENCY=4',
                 'PD_API_READER_EVIDENCE_MAX_CHARS=190000',
@@ -218,6 +223,7 @@ describe('config', () => {
             ].join('\n'),
             (Config) => {
                 assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderMaxTokens, 56000);
+                assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens, 12000);
                 assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs, 3000000);
                 assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderConcurrency, 4);
                 assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderEvidenceMaxChars, 190000);

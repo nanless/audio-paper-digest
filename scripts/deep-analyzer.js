@@ -136,6 +136,55 @@ const {
     structureEvidenceMaxChars: STRUCTURE_EVIDENCE_MAX_CHARS = 40000,
     fullTextMinCharsForFull: FULL_TEXT_MIN_CHARS_FOR_FULL
 } = ANALYSIS_CONFIG;
+
+const API_READER_REPAIR_TRUNCATION_RETRY_POLICY = 'bounded-patch-truncation-retry-v1';
+
+function resolveApiReaderBaseRepairMaxTokens(
+    fullMaxTokens = API_READER_MAX_TOKENS,
+    configuredRepairMaxTokens = ANALYSIS_CONFIG.apiReaderRepairMaxTokens || 8000
+) {
+    const full = Number(fullMaxTokens);
+    const configured = Number(configuredRepairMaxTokens);
+    if (!Number.isSafeInteger(full) || full < 1
+        || !Number.isSafeInteger(configured) || configured < 1) {
+        throw new Error('Reader full/base repair token budgets must be positive safe integers');
+    }
+    return Math.min(full, configured);
+}
+
+function resolveApiReaderRepairRetryMaxTokens(
+    fullMaxTokens = API_READER_MAX_TOKENS,
+    baseRepairMaxTokens = ANALYSIS_CONFIG.apiReaderRepairMaxTokens || 8000
+) {
+    const full = Number(fullMaxTokens);
+    if (!Number.isSafeInteger(full) || full < 1) {
+        throw new Error('Reader full output token budget must be a positive safe integer');
+    }
+    const base = resolveApiReaderBaseRepairMaxTokens(full, baseRepairMaxTokens);
+    // A truncated local patch may retry with at most one third of the normal
+    // 48000-token Reader budget, capped at the general 16000-token repair
+    // ceiling. The ordinary patch identity remains 8000, so existing paid
+    // candidates can migrate through the implementation-SHA path.
+    const boundedRetry = Math.min(16000, Math.max(base, Math.floor(full / 3)));
+    return Math.min(full, boundedRetry);
+}
+
+function shouldEscalateApiReaderRepairBudget(recovery, candidate, baseBudget, retryBudget) {
+    const error = recovery?.lastContentError;
+    const terminatedAt = Number(error?.maxOutputTokens);
+    return Boolean(candidate)
+        && error?.code === 'MODEL_OUTPUT_TRUNCATED'
+        && Number(recovery?.attempts) > Number(recovery?.fullAttempts)
+        && Number(error?.outputTokens) >= terminatedAt
+        && [baseBudget, retryBudget].includes(terminatedAt)
+        && (error?.requestKind === undefined || error.requestKind === 'patch');
+}
+// Muse reasoning tokens count against max_output_tokens.  The old 2500-token
+// ceiling could therefore truncate before a 320–600-character summary was
+// emitted.  Respect an operator's lower repair budget while capping this
+// narrowly scoped stage well below the general 16000-token repair default.
+const CORE_SUMMARY_REPAIR_MAX_TOKENS = Math.min(REPAIR_MAX_TOKENS, 8000);
+const LEGACY_CORE_SUMMARY_REPAIR_MAX_TOKENS = 2500;
 const IMAGE_CACHE_DIR = path.join(CURRENT_DIR, 'image-cache');
 // Reader carries the largest text+image payload. A transport failure produces
 // no reusable draft, so repeat it only on a later explicit run; all upstream
@@ -3725,7 +3774,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ? conference.conferenceReaderAttemptsDirectory(options.readerAttemptsDir)
             : options.readerAttemptsDir || FILES.apiReaderAttemptsDir;
     if (!candidateDirectory) throw new Error('Reader candidate directory is not configured');
-    const repairMaxTokens = ANALYSIS_CONFIG.apiReaderRepairMaxTokens || 8000;
+    const repairMaxTokens = resolveApiReaderBaseRepairMaxTokens();
+    const repairTruncationRetryMaxTokens = resolveApiReaderRepairRetryMaxTokens(
+        API_READER_MAX_TOKENS, repairMaxTokens
+    );
     const maxAttempts = Number.isInteger(options.readerMaxAttempts)
         ? Math.min(6, Math.max(1, options.readerMaxAttempts)) : 6;
     const identity = {
@@ -3886,6 +3938,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     validationFailureStreak = recovered?.validationFailureStreak || 0;
     previousValidationFailureSignature = recovered?.validationFailureSignature || '';
     implementationRepairAllowanceProof = recovered?.implementationRepairAllowanceProof || null;
+    let useEscalatedRepairBudget = shouldEscalateApiReaderRepairBudget(
+        recovered, candidate, repairMaxTokens, repairTruncationRetryMaxTokens
+    );
+    if (useEscalatedRepairBudget) {
+        console.log(`    [deep] ↗ Reader 局部修复在 ${repairMaxTokens} tokens 精确截断，`
+            + `本次仅将 patch 预算提升至 ${repairTruncationRetryMaxTokens}`);
+    }
     attemptErrorHistory.push(...currentIssues.map(issue => issue.message));
     validationFeedback = buildAttemptFeedback();
     previousDraft = recovered?.rawDraft || start.previousDraft;
@@ -3994,8 +4053,17 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     { type: 'text', text: visibilityNoticeFor(inputs, repairContext) },
                     ...inputs.flatMap(image => blocksForImage(image, repairContext))
                 ] }], imageInputs: selectedInputs,
-                maxTokens: repairContext ? repairMaxTokens : API_READER_MAX_TOKENS, requestOptions });
+                maxTokens: repairContext
+                    ? useEscalatedRepairBudget ? repairTruncationRetryMaxTokens : repairMaxTokens
+                    : API_READER_MAX_TOKENS,
+                requestOptions });
             raw = isolated.raw;
+            if (repairContext && useEscalatedRepairBudget) {
+                // The recovery proof purchases exactly one larger patch
+                // response. Any later validation repair in this invocation
+                // returns to the ordinary base budget.
+                useEscalatedRepairBudget = false;
+            }
             if (isolated.exclusions.length) {
                 providerImageExclusions = normalizeProviderImageExclusions([
                     ...providerImageExclusions, ...isolated.exclusions
@@ -4028,7 +4096,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}), transportFailures,
                     lastContentError: { code: error.code, message: String(error.message || error),
                         outputTokens: Number.isFinite(error.outputTokens) ? error.outputTokens : null,
-                        maxOutputTokens: Number.isFinite(error.maxOutputTokens) ? error.maxOutputTokens : null }
+                        maxOutputTokens: Number.isFinite(error.maxOutputTokens) ? error.maxOutputTokens : null,
+                        requestKind: repairContext ? 'patch' : 'full' }
                 });
                 throw error;
             }
@@ -4207,6 +4276,9 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             model: DEEP_CONFIG.model, protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
             temperature: revisionSeed ? API_READER_REPAIR_TEMPERATURE : API_READER_INITIAL_TEMPERATURE,
             repairTemperature: API_READER_REPAIR_TEMPERATURE, maxTokens: API_READER_MAX_TOKENS,
+            repairMaxTokens: resolveApiReaderBaseRepairMaxTokens(),
+            repairTruncationRetryPolicy: API_READER_REPAIR_TRUNCATION_RETRY_POLICY,
+            repairTruncationRetryMaxTokens: resolveApiReaderRepairRetryMaxTokens(),
             maxResponseBytes: API_MAX_RESPONSE_BYTES, overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
             promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.apiReaderArticle),
             evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION, evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
@@ -4826,7 +4898,9 @@ function buildLegacyCoreSummaryV2TextFingerprint(stage, inputAnalysis, evidenceC
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity();
     return stableFingerprint({
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
-        ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, config.maxTokens),
+        ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE,
+            stage === 'coreSummaryRepair'
+                ? LEGACY_CORE_SUMMARY_REPAIR_MAX_TOKENS : config.maxTokens),
         promptTemplateSha256: legacyPromptSha256,
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
         evidenceMaxChars: config.evidenceMaxChars,
@@ -4889,7 +4963,7 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
         typeAware: true
     },
     coreSummaryRepair: {
-        maxTokens: 2500,
+        maxTokens: CORE_SUMMARY_REPAIR_MAX_TOKENS,
         evidenceMaxChars: 24000,
         patterns: BROAD_EVIDENCE_PATTERNS,
         taskLabel: 'CORE_SUMMARY',
@@ -5075,7 +5149,9 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             draftOrderContract: READER_DRAFT_ORDER_CONTRACT,
             draftOrderImplementationSha256: promptTemplateSha256('scripts/lib/reader-draft-order.js'),
             sourceDiagnosticsImplementationSha256: promptTemplateSha256('scripts/lib/reader-source-diagnostics.js'),
-            repairMaxTokens: ANALYSIS_CONFIG.apiReaderRepairMaxTokens || 8000,
+            repairMaxTokens: resolveApiReaderBaseRepairMaxTokens(),
+            repairTruncationRetryPolicy: API_READER_REPAIR_TRUNCATION_RETRY_POLICY,
+            repairTruncationRetryMaxTokens: resolveApiReaderRepairRetryMaxTokens(),
             repairTemperature: API_READER_REPAIR_TEMPERATURE,
             maximumContentAttempts: 6,
             evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
@@ -5189,7 +5265,9 @@ function buildLegacyApiReaderV3ConfigurationFingerprint(arxivId) {
             LEGACY_API_READER_V3_IDENTITY_SHA256.draftOrderImplementationSha256,
         sourceDiagnosticsImplementationSha256:
             LEGACY_API_READER_V3_IDENTITY_SHA256.sourceDiagnosticsImplementationSha256,
-        repairMaxTokens: ANALYSIS_CONFIG.apiReaderRepairMaxTokens || 8000,
+        // This builder replays the pre-policy identity exactly; the current
+        // 16000-token bounded truncation retry belongs only to the new fingerprint.
+        repairMaxTokens: 8000,
         repairTemperature: API_READER_REPAIR_TEMPERATURE,
         maximumContentAttempts: 6,
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
@@ -11017,6 +11095,9 @@ async function analyzePaperDeepInternal(paper) {
                 temperature: API_READER_INITIAL_TEMPERATURE,
                 repairTemperature: API_READER_REPAIR_TEMPERATURE,
                 maxTokens: API_READER_MAX_TOKENS,
+                repairMaxTokens: resolveApiReaderBaseRepairMaxTokens(),
+                repairTruncationRetryPolicy: API_READER_REPAIR_TRUNCATION_RETRY_POLICY,
+                repairTruncationRetryMaxTokens: resolveApiReaderRepairRetryMaxTokens(),
                 maxResponseBytes: API_MAX_RESPONSE_BYTES,
                 overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
                 transportMaxRetries: API_READER_TRANSPORT_MAX_RETRIES,
@@ -12463,6 +12544,8 @@ module.exports = {
     rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
     generateApiReaderArticleDetailed,
+    resolveApiReaderBaseRepairMaxTokens,
+    resolveApiReaderRepairRetryMaxTokens,
     prepareApiReaderRevisionSeed,
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,
