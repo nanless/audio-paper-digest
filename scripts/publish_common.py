@@ -164,14 +164,14 @@ EXPERIMENT_TABLE_LIMITS = {
     'min_numeric_cells': 2,
 }
 TABLE_IDENTIFIER_HEADER_RE = re.compile(
-    r'(?:^|\b)(?:method|algorithm|approach|model|system|backbone|front[ -]?end|pipeline|'
+    r'(?:^editing(?: operation)?$|(?:^|\b)(?:method|algorithm|approach|model|system|backbone|front[ -]?end|pipeline|'
     r'variant|representation|embedding|feature|encoder|baseline|'
     r'config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|'
     r'comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|'
     r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
-    r'measure)(?:\b|$)|方法|算法|方案|模型|系统|骨干|前端|流程|变体|表征|嵌入|特征|编码器|基线|'
+    r'measure)(?:\b|$)|^编辑操作$|方法|算法|方案|模型|系统|骨干|前端|流程|变体|表征|嵌入|特征|编码器|基线|'
     r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|'
-    r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量',
+    r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量)',
     flags=re.IGNORECASE,
 )
 TABLE_VAGUE_METRIC_HEADER_RE = re.compile(
@@ -2485,7 +2485,7 @@ def _validate_experiment_table_evidence_depth(
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
         r'更差|比(?!较)[^。；\n]{0,30}差|'
-        r'未改善|没有改善|无效|负面|跨零|落后|损失|回退|'
+        r'未改善|没有改善|无效|负面|暴露短板|跨零|落后|损失|回退|'
         r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
         results,
         re.I,

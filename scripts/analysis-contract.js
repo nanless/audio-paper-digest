@@ -210,7 +210,7 @@ const EXPERIMENT_TABLE_LIMITS = Object.freeze({
     minEvidenceRows: 3,
     minNumericCells: 2
 });
-const TABLE_IDENTIFIER_HEADER_RE = /(?:^|\b)(?:method|algorithm|approach|model|system|backbone|front[ -]?end|pipeline|variant|representation|embedding|feature|encoder|baseline|config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure)(?:\b|$)|方法|算法|方案|模型|系统|骨干|前端|流程|变体|表征|嵌入|特征|编码器|基线|配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量/i;
+const TABLE_IDENTIFIER_HEADER_RE = /(?:^editing(?: operation)?$|(?:^|\b)(?:method|algorithm|approach|model|system|backbone|front[ -]?end|pipeline|variant|representation|embedding|feature|encoder|baseline|config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure)(?:\b|$)|^编辑操作$|方法|算法|方案|模型|系统|骨干|前端|流程|变体|表征|嵌入|特征|编码器|基线|配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量)/i;
 const TABLE_VAGUE_METRIC_HEADER_RE = /^(?:结果|数值|数值变化|观察|观察结果|实际观测|报告结果|主要观察|说明|解释|含义|方向|关键条件|结论|结论边界|证据边界|应如何解读|对照或说明|对照或变化|结果或结论)$/i;
 const TABLE_DIRECTION_MARK_RE = /(?:↑|↓|\\(?:uparrow|downarrow|nearrow|searrow)\b|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)/i;
 const TABLE_DIRECTIONAL_METRIC_RE = /(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)/i;
@@ -621,7 +621,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
     }
     const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(sourceText);
-    const resultHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负面|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(results);
+    const resultHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(results);
     if (empirical && sourceHasNegative && !resultHasNegative) {
         return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
     }

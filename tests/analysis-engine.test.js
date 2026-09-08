@@ -796,6 +796,37 @@ describe('analyzePaperWithRetry', () => {
                 sourceText: 'The method fails on the hardest generator.'
             }
         ), /没有保留负面证据/, '裸“微升”不能被方向盲地当作负面证据');
+
+        const actual2512 = withResults([
+            '关键比较问题是不同单面编辑下和声与节奏度量如何变化，表中保留原文客观验证的代表操作作对照。',
+            '',
+            '| 编辑操作 | CoF ↓ | ChromaSim ↑ | ΔBPM ↓ | BeatF ↑ |',
+            '|---|---:|---:|---:|---:|',
+            '| +7 半音 | 0.18 | 0.94 | 1.26 | 0.90 |',
+            '| ABC→AAA | 0.06 | 0.99 | 0.87 | 0.54 |',
+            '| 变速 +50% | 0.03 | 0.99 | 26.10 | 0.24 |',
+            '',
+            'ZETA 与 MusicMagus 的 ΔBPM 数值与两个全局适配系统分成两组，后两者在细粒度时序对齐上暴露短板；但证据只来自原文不统一的编辑设置，不能外推为跨系统排名。'
+        ].join('\n'));
+        const actual2512Options = {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究',
+            sourceText: 'Evaluation\nTable 2 reports objective editing results. '
+                + 'The case study reports clear degradation in rhythm preservation.'
+        };
+        for (const identifier of ['编辑操作', 'Editing', 'Editing Operation']) {
+            assert.strictEqual(validateExperimentTableContract(
+                actual2512.replace('编辑操作', identifier), actual2512Options
+            ), null, `2512 的原生身份列“${identifier}”应通过`);
+        }
+        for (const identifier of ['编辑结果', '编辑操作得分']) {
+            assert.match(validateExperimentTableContract(
+                actual2512.replace('编辑操作', identifier), actual2512Options
+            ), /缺少方法、数据集或设置识别列/);
+        }
+        assert.match(validateExperimentTableContract(
+            actual2512.replace('暴露短板', '存在普通代价'), actual2512Options
+        ), /没有保留负面证据/);
     });
 
     it('确定性补回 Muse 遗漏的 Markdown 表格分隔行', () => {

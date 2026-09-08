@@ -2817,6 +2817,43 @@ primary_method_tag: #基准测试
             source_text='The third configuration fails on the hard subset.',
         ), '没有保留负面证据')
 
+    def test_evidence_rich_table_accepts_exact_musecp_editing_identifiers(self):
+        template = '''## 实验结果
+关键比较问题是不同单面编辑下和声与节奏度量如何变化，表中保留原文客观验证的代表操作作对照。
+
+| {identifier} | CoF ↓ | ChromaSim ↑ | ΔBPM ↓ | BeatF ↑ |
+|---|---:|---:|---:|---:|
+| +7 半音 | 0.18 | 0.94 | 1.26 | 0.90 |
+| ABC→AAA | 0.06 | 0.99 | 0.87 | 0.54 |
+| 变速 +50% | 0.03 | 0.99 | 26.10 | 0.24 |
+
+ZETA 与 MusicMagus 的 ΔBPM 数值与两个全局适配系统分成两组，后两者在细粒度时序对齐上{negative}；但证据只来自原文不统一的编辑设置，不能外推为跨系统排名。
+'''
+        options = {
+            'contract_version': EXPERIMENT_TABLE_CONTRACT_VERSION,
+            'document_type': '方法研究',
+            'source_text': (
+                'Evaluation\nTable 2 reports objective editing results. '
+                'The case study reports clear degradation in rhythm preservation.'
+            ),
+        }
+        for identifier in ('编辑操作', 'Editing', 'Editing Operation'):
+            with self.subTest(identifier=identifier):
+                self.assertIsNone(validate_experiment_table_contract(
+                    template.format(identifier=identifier, negative='暴露短板'),
+                    **options,
+                ))
+        for identifier in ('编辑结果', '编辑操作得分'):
+            with self.subTest(identifier=identifier):
+                self.assertRegex(validate_experiment_table_contract(
+                    template.format(identifier=identifier, negative='暴露短板'),
+                    **options,
+                ), '缺少方法、数据集或设置识别列')
+        self.assertRegex(validate_experiment_table_contract(
+            template.format(identifier='编辑操作', negative='存在普通代价'),
+            **options,
+        ), '没有保留负面证据')
+
     def test_versioned_publish_preflight_enforces_detailed_method_contract(self):
         paper = complete_paper()
         self.assertRegex(validate_method_detail_contract(paper['analysis']), '中文字符不足')
