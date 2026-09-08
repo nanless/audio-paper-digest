@@ -72,13 +72,22 @@ test('default daily source plan seals PDF/TXT/manifest before its analysis callb
             const active = direct.getDirectRewriteAnalysisContext();
             assert.equal(active.readerAttemptsDir, plan.readerAttemptsDir, 'daily Reader candidates stay in the fresh run root');
             const materialized = await active.materializeReaderFigures([
-                { ordinal: 1, url: `https://arxiv.org/html/${id}/figure.png` }
+                { ordinal: 1, url: `https://arxiv.org/html/${id}/figure.png` },
+                { ordinal: 2, url: `https://arxiv.org/html/${id}/oversized.png` }
             ], id);
+            assert.equal(materialized.length, 1);
             assert.equal(materialized[0].rawBytes.toString(), 'ephemeral-daily-pixels');
             assert.equal(legacyTextCalls, 0, 'sealed source is ready before analysis; legacy text acquisition is never called');
             return { arxivId: id, analysis: 'new analysis generated from sealed source only' };
         },
-        fetchFigure: async () => ({ bytes: Buffer.from('ephemeral-daily-pixels'), mediaType: 'image/png' })
+        fetchFigure: async url => {
+            if (url.endsWith('/oversized.png')) {
+                const error = new Error('response body 6.0MB exceeds limit');
+                error.code = 'RESPONSE_TOO_LARGE';
+                throw error;
+            }
+            return { bytes: Buffer.from('ephemeral-daily-pixels'), mediaType: 'image/png' };
+        }
     });
     await daily.withDailyFreshAnalysisContext(plan, () => analyze({ arxivId: id, title: 'Daily source test' }));
     assert.equal(analysisCalls, 1);

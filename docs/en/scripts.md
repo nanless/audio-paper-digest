@@ -28,7 +28,8 @@ Run `npm run workspace:role -- status` before a production command. `digest:*`, 
 | `npm run fetch` | archive, fetch, filter, analyze; no publication |
 | `npm run deep -- --date DATE` | continue only from the current sealed PDF/TXT source run; never refetch or use legacy cache |
 | `npm run batch` | analyze unfinished canonical papers only from current sealed PDF/TXT |
-| `npm run reanalyze -- --concurrency N` | force reanalysis while replaying only current sealed PDF/TXT |
+| `npm run batch -- --retry-failed-readers` | retire failed Reader candidates for currently incomplete papers, then resume |
+| `npm run reanalyze -- --concurrency N` | retire all old failed Reader candidates, clear Reader/image-supplement state, and force reanalysis from current sealed PDF/TXT |
 | `node scripts/analyze-single-paper.js ID --force` | analyze one paper |
 | `node scripts/reanalyze-selected.js ID...` | reanalyze selected IDs |
 | `node scripts/refilter-reanalyze-by-date.js DATE` | controlled historical refilter/reanalysis |
@@ -113,7 +114,7 @@ The detailed active guide is currently
 | Command | Behavior |
 |---|---|
 | `npm run visual:post-publish -- --date DATE` | plan both visual types from verified publication |
-| `npm run visual:prepare -- --date DATE` | validate references and emit absolute paths |
+| `npm run visual:prepare -- --date DATE` | emit validated legacy reference paths; modern ephemeral runs replay Figure identity and emit an empty reference list |
 | `npm run visual:status -- --date DATE` | paper infographic status |
 | `npm run visual:record -- --date DATE --paper ID --kind infographic --file /abs/result.png --token TOKEN --qa-attested true` | record an inspected paper image; `--output-hint` may replace `--file` |
 | `npm run visual:fail -- ...` | record paper-image failure |

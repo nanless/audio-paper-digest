@@ -65,7 +65,7 @@ fallback are contained in this capture. Figure pixels are materialized only in t
 OS-temporary directory. Metadata shells cannot claim full-text provenance, and source-SHA changes invalidate
 primary analysis and downstream stages.
 
-Stages are primary analysis, open-source/demo scans, factual revision, table/method/structure repair, scoring audit, API Reader v3, source-identity replay for tables/formulas/authors/resources, and official-figure materialization. Stage fingerprints bind inputs, model, protocol, prompt, temperature, budgets, and output SHA.
+Stages are primary analysis, open-source/demo scans, factual revision, table/method/structure repair, taxonomy sealing, core-summary sealing, scoring audit, API Reader v3, source-identity replay for tables/formulas/authors/resources, and official-figure materialization. Stage fingerprints bind inputs, model, protocol, prompt, temperature, budgets, and output SHA.
 
 The canonical 13 headings serve parsers. Reader v3 serves humans: it explains term combinations, computation/training, datasets, metrics, results, counterevidence, reproduction, and limits. Tables and figures must sit next to the argument they support.
 
@@ -111,7 +111,7 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-Use only absolute paths emitted by prepare. Inspect every final image before recording it. An explicit user no-image request creates a bound waiver; pending work is never relabeled complete.
+Under `ephemeral-no-persisted-figure-assets-v1`, Reader pages preserve signed official arXiv HTTPS image URLs for browser display without copying image bytes into the blog repository. For legacy visual manifests, use only absolute paths emitted by prepare. Modern daily prepare replays the signed Figure URL, ordinal, DOM/pixel SHA, and MIME, then emits empty `referencedImagePaths`; infographic generation uses signed Reader text and never falls back to a destroyed cache. Inspect every final generated image before recording it. An explicit user no-image request creates a bound waiver; pending work is never relabeled complete.
 
 ## 8. Recovery and Final Status
 
@@ -119,6 +119,7 @@ Use only absolute paths emitted by prepare. Inspect every final image before rec
 ./run-daily-digest.sh YYYY-MM-DD --from review
 npm run deep -- --date YYYY-MM-DD
 npm run batch
+npm run batch -- --retry-failed-readers
 npm run reanalyze -- --concurrency 5
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 npm run validate:data
@@ -127,4 +128,4 @@ npm run digest:status -- --date YYYY-MM-DD
 
 Regenerate final status after the last push, record, or waiver. Reports are snapshots, not live state.
 
-`deep`, `batch`, `reanalyze`, and `api:reader:refresh` replay only the current canonical `dailyFreshSourceRun`. It binds the batch date, exact paper set, and each sealed PDF/TXT/runtime/manifest; these commands never recapture a source or read a legacy cache. Re-run `digest:prepare` when it is missing or drifted. Figures remain materialized only in the active call's OS-temporary directory.
+`deep`, `batch`, `reanalyze`, and `api:reader:refresh` replay only the current canonical `dailyFreshSourceRun`. It binds the batch date, exact paper set, and each sealed PDF/TXT/runtime/manifest; these commands never recapture a source or read a legacy cache. Re-run `digest:prepare` when it is missing or drifted. Figures remain materialized only in the active call's OS-temporary directory. `batch --retry-failed-readers` retires failed Reader candidates only for currently incomplete papers; `reanalyze` retires all old failed candidates and clears Reader/image-supplement state before forced full analysis.

@@ -16,14 +16,16 @@ describe('taxonomy runtime analysis integration', () => {
     it('taxonomy repair retries with the first validation error and changes only allowed spans', async () => {
         const deep = require('../scripts/deep-analyzer.js');
         const prompts = [];
+        const budgets = [];
         const repaired = await deep.repairTaxonomyTags(
             { arxivId: '2403.01900', title: 'Crowdsourced test' },
             validAnalysisText(),
             'The paper evaluates multilingual speech intelligibility with crowdsourced listeners.',
             '主方法不属于 method facet',
             {
-                callModelFn: async messages => {
+                callModelFn: async (messages, maxTokens) => {
                     prompts.push(messages[0].content);
+                    budgets.push(maxTokens);
                     if (prompts.length === 1) {
                         return '{"primaryTaskId":"task.intelligibility","primaryMethodId":"method.missing","conceptIds":["task.intelligibility","method.missing","setting.multilingual"]}';
                     }
@@ -32,6 +34,7 @@ describe('taxonomy runtime analysis integration', () => {
             }
         );
         assert.strictEqual(prompts.length, 2);
+        assert.deepStrictEqual(budgets, [8000, 8000]);
         assert.match(prompts[1], /concept ID 集合或主角色非法/);
         assert.strictEqual(
             deep.taxonomyProtectedProjection(repaired),
@@ -322,6 +325,25 @@ describe('arXiv HTML full-text health gate', () => {
             sourceText.includes(item.quote)
         )));
 
+        const layoutlessArtifacts = {
+            version: 1,
+            source: 'fresh_arxiv_text_without_layout',
+            flattenedTextSha256: require('node:crypto').createHash('sha256')
+                .update(sourceText).digest('hex'),
+            tables: [], formulas: [], figures: [], payloadSha256: 'b'.repeat(64)
+        };
+        bindApiReaderSourceEvidence('No structured layout is available.', [], [], {
+            structuredArtifacts: layoutlessArtifacts,
+            sourceText,
+            sections: []
+        });
+        assert.strictEqual(layoutlessArtifacts.payloadSha256, 'b'.repeat(64));
+
+    });
+
+    it('Reader 数字证据把前导小数 .119 规范为 0.119，不误读为 119', () => {
+        const { readerNumericTokens } = require('../scripts/deep-analyzer.js');
+        assert.deepStrictEqual(readerNumericTokens('| score | .119 | -.222 |'), ['0.119', '-0.222']);
     });
 
     it('保留 SVG 与 DOM 原生 framed Figure，但不把算法、表格或缺失资产伪装成图片', () => {
@@ -1049,6 +1071,7 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(isCorruptedMultimodalError(new Error('Multimodal data is corrupted or cannot be processed.')), true);
         assert.strictEqual(isCorruptedMultimodalError(new Error('HTTP 400: image decode limit exceeded')), true);
         assert.strictEqual(isCorruptedMultimodalError(new Error('HTTP 400: invalid image data')), true);
+        assert.strictEqual(isCorruptedMultimodalError(new Error('invalid image data at input[0]: the image/png payload could not be decoded')), true);
         assert.strictEqual(isCorruptedMultimodalError(new Error('HTTP 429')), false);
 
         const wide = createCanvas(3000, 1000); wide.getContext('2d').fillRect(0, 0, 3000, 1000);
@@ -1181,6 +1204,23 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(classifyImageDiscoveryStatus([], transient), 'transient_failure');
         assert.strictEqual(classifyImageDiscoveryStatus([], null), 'no_candidates');
         assert.strictEqual(classifyImageDiscoveryStatus([{ url: 'https://example.com/a.png' }], null), 'complete');
+    });
+
+    it('已有可用图片时单个候选瞬断不会拖垮整篇分析', () => {
+        const { classifyImageDownloadStatus } = require('../scripts/deep-analyzer.js');
+        const partial = {
+            isDualModel: true,
+            candidateCount: 3,
+            downloadedCount: 2,
+            outcomes: [{ status: 'complete' }, { status: 'transient_failure' }]
+        };
+        assert.strictEqual(classifyImageDownloadStatus(partial), 'complete');
+        assert.strictEqual(classifyImageDownloadStatus({
+            ...partial, downloadedCount: 0
+        }), 'transient_failure');
+        assert.strictEqual(classifyImageDownloadStatus({
+            ...partial, downloadedCount: 0, outcomes: [{ status: 'permanent_failure' }]
+        }), 'no_downloadable_images');
     });
 
     it('图片发现失败会持久化并保留已有正文 checkpoint 供下轮恢复', () => {
@@ -2701,6 +2741,34 @@ primary_task_tag: #音视频生成
         assert.throws(() => bindApiReaderSourceEvidence(article, quoteBinding, [], options),
             error => /关键数字缺少 exact quote\/cell 证据: 9.99/.test(error.message)
                 && /row=2,column=1 text="9.99" missing=9.99/.test(error.message));
+        const prunedRow = bindApiReaderSourceEvidence(article, quoteBinding, [], {
+            ...options,
+            allowDeterministicUnsupportedClaimPruning: true
+        });
+        assert.match(prunedRow.article, /原文报告 \| 0\.451/);
+        assert.doesNotMatch(prunedRow.article, /草稿推断|9\.99/);
+        const pruningSource = 'The paper reports 0.451 for A and 0.812 for B on the held-out set.';
+        const prunableArticle = [
+            '这张表直接比较两项原文结果。', '',
+            '| 条件 | 原文值 | 派生差值 |',
+            '| --- | --- | --- |',
+            '| A | 0.451 | 0 |',
+            '| B | 0.812 | -0.361 |', '',
+            '删除派生列后，原始结果与解释仍然完整。'
+        ].join('\n');
+        const pruned = bindApiReaderSourceEvidence(prunableArticle, [{
+            tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: [pruningSource]
+        }], [], {
+            sourceText: pruningSource,
+            structuredArtifacts: bindStructuredArtifactsToText(
+                { tables: [], formulas: [] }, pruningSource
+            ),
+            allowDeterministicQuoteRepair: true,
+            allowDeterministicUnsupportedClaimPruning: true
+        });
+        assert.match(pruned.article, /\| B \| 0\.812 \|/);
+        assert.doesNotMatch(pruned.article, /派生差值|-0\.361/);
         const secondSource = 'A second held-out evaluation reports 0.812 for the verified condition.';
         const multiArticle = `${article}\n\n另一张表使用独立评测口径核对第二组结果。\n\n`
             + '| 第二条件 | 数值 |\n| --- | --- |\n| 原文报告 | 0.812 |\n| 草稿推断 | 1.4% |'
@@ -2812,7 +2880,7 @@ primary_task_tag: #音视频生成
             '零命中时嵌套列表缩进必须逐字不变');
     });
 
-    it('三类声明 marker 只修正确 kind 的非 fence 唯一 exact token', () => {
+    it('声明 marker 只修非 fence 唯一 exact token，TABLE 可从唯一位置绑定', () => {
         const { normalizeDeclaredReaderMarkerParagraphs } = require('../scripts/deep-analyzer.js');
         const value = { sections: [
             { kind: 'method_overview', body: '方法导读\\n[[CONCEPT_BRIDGE_1]]\\n方法解释' },
@@ -2825,6 +2893,17 @@ primary_task_tag: #音视频生成
         for (const [index, marker] of ['[[CONCEPT_BRIDGE_1]]', '[[FIGURE_2]]', '[[FORMULA_3]]'].entries()) {
             assert.match(value.sections[index].body, new RegExp(`\\n\\n${marker.replace(/[\[\]]/g, '\\$&')}\\n\\n`));
         }
+        const tableValue = {
+            sections: [{ kind: 'result', body: '表前说明 [[TABLE_1]] 表后解释' }],
+            tableBindings: [{ tableIndex: 1, selection: {
+                sourceTableOrdinal: 1, sourceRows: [0, 1], sourceColumns: [0, 1]
+            } }]
+        };
+        normalizeDeclaredReaderMarkerParagraphs(tableValue);
+        assert.strictEqual(
+            tableValue.sections[0].body,
+            '表前说明\n\n[[TABLE_1]]\n\n表后解释'
+        );
         const protectedValue = { sections: [
             { kind: 'result', body: '```text\n\\n[[FIGURE_2]]\\n\n```' },
             { kind: 'component', body: '`\\n[[FORMULA_3]]\\n`' },
@@ -2863,6 +2942,35 @@ primary_task_tag: #音视频生成
             normalizeDeclaredReaderMarkerParagraphs(rejected);
             assert.equal(rejected.figurePlacements[0].targetKind, 'result');
         }
+    });
+
+    it('短 Figure 导读只与同节上一段合并，不跨结构块补写事实', () => {
+        const { mergeShortReaderFigureLead } = require('../scripts/deep-analyzer.js');
+        const marker = '[[FIGURE_1]]';
+        const body = ['上一段已有完整方法背景。', '这段导读略短但信息有效。', marker,
+            '图后解释足够长，逐项说明可见模块、箭头关系和输出变化。'].join('\n\n');
+        const merged = mergeShortReaderFigureLead(body, marker, 30);
+        assert.match(merged, /上一段已有完整方法背景。\n这段导读略短但信息有效。\n\n\[\[FIGURE_1\]\]/);
+        const tableBefore = ['| 条件 | 数值 |', '| --- | --- |', '| A | 1 |'].join('\n');
+        const protectedBody = [tableBefore, '短导读仍不足。', marker, '图后解释足够长。'.repeat(8)].join('\n\n');
+        assert.strictEqual(mergeShortReaderFigureLead(protectedBody, marker, 30), protectedBody);
+    });
+
+    it('只删除未绑定且独占成段的 TABLE marker', () => {
+        const { removeOrphanReaderTableMarkers } = require('../scripts/deep-analyzer.js');
+        const value = {
+            sections: [{ kind: 'result', body: [
+                '说明。', '[[TABLE_1]]', '解释。', '[[TABLE_2]]',
+                'inline [[TABLE_3]] 保持失败关闭。'
+            ].join('\n\n') }],
+            tableBindings: [{ tableIndex: 1, selection: {
+                sourceTableOrdinal: 1, sourceRows: [0, 1], sourceColumns: [0, 1]
+            } }]
+        };
+        assert.strictEqual(removeOrphanReaderTableMarkers(value), 1);
+        assert.match(value.sections[0].body, /\[\[TABLE_1\]\]/);
+        assert.doesNotMatch(value.sections[0].body, /\[\[TABLE_2\]\]/);
+        assert.match(value.sections[0].body, /inline \[\[TABLE_3\]\]/);
     });
 
     it('Reader 数值排版保护逐字引语、转录、代码与原始公式，不跨保护边界替换', () => {
@@ -2919,9 +3027,10 @@ primary_task_tag: #音视频生成
             '拐点 0.55，指数 0.45；纵轴从 0.65 到 0.95。');
         assert.equal(normalize('小数为零点九九九九九九五。'), '小数为 0.9999995。');
         for (const raw of ['采样率是否混用十六与四十八千赫。', '把千分贝级电平保留。',
-            '毫分贝与四十八千分贝。', '百分之九十五，三分之一。', '一百二段音频。']) {
+            '毫分贝与四十八千分贝。', '三分之一。', '一百二段音频。']) {
             assert.equal(normalize(raw), raw);
         }
+        assert.equal(normalize('百分之九十五。'), '95%。');
         assert.equal(normalizeReaderEditorialSurface('精确整数一百二十段与百例，alpha 三。', [
             { code: 'quantitative_chinese_numeral', match: '一百二十段' },
             { code: 'quantitative_chinese_numeral', match: '百例' },
@@ -3936,10 +4045,12 @@ has_dataset: 否
         assert.match(prompt, /2–4 个步骤/);
         assert.match(prompt, /320–600 个中文\/中文标点字符/);
         assert.match(prompt, /同一量表上报告的两个条件或维度/);
+        assert.match(prompt, /同一量表上报告的两个条件或维度/);
         assert.strictEqual(maxTokens, 8000);
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
         assert.match(prompts[1], /这是第 2 次局部修复/);
+        assert.match(prompts[1], /只编辑或补充下列未通过项/);
     });
 
     it('核心摘要 cost-only 重试传递上一候选并且不再误导修改量化句', async () => {
@@ -4185,6 +4296,23 @@ has_dataset: 否
             getRepairableAnalysisStructureIssues(oversized)
                 .filter(issue => issue.startsWith('实验表格:')),
             ['实验表格: 实验结果第 1 张表包含 13 个数据行，最多允许 12 行']
+        );
+    });
+
+    it('策略与聚合方式是实验表的有效识别列', () => {
+        const { getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
+        const tables = [
+            '| 策略 | 数据集 | 指标 ↑ |\n| --- | --- | --- |\n| 基线 | 测试集 | 1.0 |\n| 完整方法 | 测试集 | 2.0 |\n| 去除组件 | 测试集 | 1.5 |',
+            '| 谐波聚合方式 | 深度 | 指标 ↑ |\n| --- | --- | --- |\n| 无聚合 | 0 | 1.0 |\n| 单层 | 1 | 1.2 |\n| 多层 | 2 | 1.3 |'
+        ].join('\n\n这段解释统一条件、关键差异、负面结果和未评测边界，避免把单个数据集上的提高外推到其他场景。\n\n');
+        const analysis = validAnalysisText().replace(
+            '\n## 细节详述',
+            `\n\n${tables}\n\n## 细节详述`
+        );
+        assert.deepStrictEqual(
+            getRepairableAnalysisStructureIssues(analysis)
+                .filter(issue => /缺少方法、数据集或设置识别列/.test(issue)),
+            []
         );
     });
 
@@ -4489,6 +4617,10 @@ has_dataset: 否
         const { extractDemoUrls } = require('../scripts/deep-analyzer.js');
         const urls = extractDemoUrls('Demo：https://relative-fx.github.io（提供音频示例）');
         assert.deepStrictEqual(urls, ['https://relative-fx.github.io']);
+        assert.deepStrictEqual(
+            extractDemoUrls('项目主页：https://llmovoice.com，论文还给出了在线演示。'),
+            ['https://llmovoice.com']
+        );
     });
 
     it('副模型的 replacement 被代码忽略，主模型原文和评分不被重写', () => {

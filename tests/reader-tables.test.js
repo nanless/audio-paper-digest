@@ -220,6 +220,53 @@ test('selection rejects duplicate/out-of-range coordinates, fake headers, mixed 
     }
 });
 
+test('唯一原表头可确定性补回，多级表头仍失败关闭', () => {
+    const { artifacts } = artifactsFixture();
+    const narrowed = structuredClone(artifacts);
+    const binding = selected(1, 2);
+    binding.selection.sourceRows = [1, 2];
+    const compiled = compileReaderTableSelections(
+        [{ kind: 'result', body: '[[TABLE_1]]' }],
+        [binding],
+        narrowed
+    );
+    assert.deepEqual(
+        compiled.tableBindings[0].cellBindings.slice(0, 3).map(cell => cell.sourceRow),
+        [0, 0, 0]
+    );
+    const rowHeaderNoise = structuredClone(artifacts);
+    rowHeaderNoise.tables[1].headerRows = [0, 1];
+    rowHeaderNoise.tables[1].cells.forEach(cell => {
+        if (cell.row === 1) cell.header = cell.column === 0;
+    });
+    assert.doesNotThrow(() => compileReaderTableSelections(
+        [{ kind: 'result', body: '[[TABLE_1]]' }],
+        [selected(1, 2)],
+        rowHeaderNoise
+    ));
+    const highlightedWinner = structuredClone(artifacts);
+    highlightedWinner.tables[1].matrix[1] = ['Ours', '70.1', '76.9'];
+    highlightedWinner.tables[1].headerRows = [0, 1];
+    highlightedWinner.tables[1].cells.filter(cell => cell.row === 1).forEach(cell => {
+        cell.header = true;
+        cell.text = highlightedWinner.tables[1].matrix[1][cell.column];
+    });
+    assert.doesNotThrow(() => compileReaderTableSelections(
+        [{ kind: 'result', body: '[[TABLE_1]]' }],
+        [{ tableIndex: 1, selection: { sourceTableOrdinal: 2,
+            sourceRows: [0, 1, 2], sourceColumns: [0, 1, 2] } }],
+        highlightedWinner
+    ));
+    const ambiguous = structuredClone(artifacts);
+    const ambiguousBinding = selected();
+    ambiguousBinding.selection.sourceRows = [2, 3];
+    assert.throws(() => compileReaderTableSelections(
+        [{ kind: 'result', body: '[[TABLE_1]]' }],
+        [ambiguousBinding],
+        ambiguous
+    ), /第一行必须是原表头/);
+});
+
 test('table marker must be unique, standalone, correctly ordered and fully bound', () => {
     const { artifacts } = artifactsFixture();
     for (const body of ['inline [[TABLE_1]]', '[[TABLE_1]]\n\n[[TABLE_1]]', '[[TABLE_2]]\n\n[[TABLE_1]]']) {

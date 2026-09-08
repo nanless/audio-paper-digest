@@ -164,12 +164,12 @@ EXPERIMENT_TABLE_LIMITS = {
     'min_numeric_cells': 2,
 }
 TABLE_IDENTIFIER_HEADER_RE = re.compile(
-    r'(?:^|\b)(?:method|algorithm|approach|model|system|backbone|front[ -]?end|pipeline|'
+    r'(?:^|\b)(?:method|algorithm|approach|strategy|mechanism|aggregation|model|system|backbone|front[ -]?end|pipeline|'
     r'variant|representation|embedding|feature|encoder|baseline|'
     r'config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|'
     r'comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|'
     r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
-    r'measure)(?:\b|$)|方法|算法|方案|模型|系统|骨干|前端|流程|变体|表征|嵌入|特征|编码器|基线|'
+    r'measure)(?:\b|$)|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|表征|嵌入|特征|编码器|基线|'
     r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|'
     r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量',
     flags=re.IGNORECASE,
@@ -4936,7 +4936,11 @@ def format_medal(index):
 
 def is_publish_currency_literal(value):
     """A whole cell containing one explicit dollar amount, never dollar math."""
-    return bool(re.fullmatch(r'\s*\$\d+(?:,\d{3})*(?:\.\d+)?(?:/[1-9]\d*)?\s*', value))
+    return bool(re.fullmatch(
+        r'\s*\$\d+(?:,\d{3})*(?:\.\d+)?'
+        r'(?:\s*/\s*(?:[1-9]\d*|[A-Za-z][A-Za-z0-9_-]*))?\s*',
+        value,
+    ))
 
 
 def publish_table_currency_spans(text):

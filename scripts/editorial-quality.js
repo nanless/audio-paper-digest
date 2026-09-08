@@ -92,6 +92,7 @@ const SCALED_ARABIC_MEASUREMENT_UNITS = Object.freeze([
     '问答对', '参与者', '数据集', '个组件', '个任务', '个条件', '个类别', '个模型',
     'tokens', 'token', 'MACs', 'MAC', 'workers', 'worker', 'episodes', 'episode', 'epochs', 'epoch',
     '更新', '参数', '样本', '实例', '像素', '采样', '字节', '词', '条', '次', '帧', '步',
+    '小时', '分钟', '秒', '行', '句', '维',
     '个', '对', '题', '人', '名', '例', '篇', '张', '段', '轮', '组', '类', '模型'
 ]);
 
@@ -743,6 +744,14 @@ function findMissingComparisonUnits(text) {
         const numericText = sentence.text
             .replace(
                 new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:或|和|、|至|到|[-–—])\\s*\\d+(?:\\.\\d+)?\\s*${unit}`, 'giu'),
+                match => ' '.repeat(match.length)
+            )
+            // Some source tables define dimensionless metrics in the header
+            // and omit a %/point suffix in every cell. An explicitly named
+            // ASCII metric range keeps that source convention and must not be
+            // forced to invent a unit during editorial normalization.
+            .replace(
+                /\b[A-Za-z][A-Za-z0-9_.-]{1,30}\s+(?:为\s*)?\d+(?:\.\d+)?\s*[-–—至到]\s*\d+(?:\.\d+)?\b/gu,
                 match => ' '.repeat(match.length)
             )
             .replace(

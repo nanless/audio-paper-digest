@@ -183,6 +183,39 @@ function canonicalizeReaderSelectionRows(sourceRows, headerRows) {
     return sourceRows;
 }
 
+function effectiveReaderTableHeaderRows(table) {
+    const matrix = table?.matrix;
+    const cells = table?.cells;
+    if (Array.isArray(matrix) && matrix.length > 0 && Array.isArray(cells)) {
+        const derived = matrix.map((_row, row) => row).filter(row => (
+            matrix[row].every((_text, column) => {
+                const covering = cells.filter(cell => Number.isInteger(cell?.row)
+                    && Number.isInteger(cell?.column)
+                    && row >= cell.row && row < cell.row + Number(cell.rowspan || 1)
+                    && column >= cell.column && column < cell.column + Number(cell.colspan || 1));
+                return covering.length === 1 && covering[0].header === true;
+            })
+        ));
+        if (derived.length > 0) {
+            // LaTeXML commonly renders the highlighted winning method as a
+            // complete <th> row (for example "Ours" followed by bold metric
+            // values).  It is still a data row.  Older sealed v4 artifacts
+            // also promoted every cell in a row when only its row label was a
+            // <th>.  Keep the first real header, but do not misclassify this
+            // narrow, source-visible method-label pattern as a second header.
+            const hasLaterBodyRow = matrix.some((_row, row) => row > derived[0]
+                && !derived.includes(row));
+            const semantic = derived.filter((row, index) => !(index > 0 && hasLaterBodyRow
+                && /^(?:ours?|proposed|baseline|reference|ground\s*truth)\b/i
+                    .test(String(matrix[row]?.[0] || '').trim())
+                && (matrix[row].slice(1).filter(value => /\d/.test(String(value))).length
+                    >= Math.max(1, Math.ceil((matrix[row].length - 1) * 0.6)))));
+            if (semantic.length > 0) return semantic;
+        }
+    }
+    return Array.isArray(table?.headerRows) ? table.headerRows : [];
+}
+
 function renderReaderTableSelection(binding, artifacts) {
     const label = `读者文章 tableBindings[${Number(binding?.tableIndex) - 1}] selection`;
     if (!exactKeys(binding, ['tableIndex', 'selection']) || !Number.isInteger(binding.tableIndex) || binding.tableIndex < 1
@@ -213,11 +246,13 @@ function renderReaderTableSelection(binding, artifacts) {
         }
     }
     const effectiveRows = effectiveReaderTableRows(table);
-    const sourceRows = canonicalizeReaderSelectionRows(requestedSourceRows, effectiveRows.headerRows);
-    if (!effectiveRows.headerRows.includes(sourceRows[0])
-        || sourceRows.slice(1).some(row => effectiveRows.headerRows.includes(row))) {
+    const headerRows = effectiveRows.inferred
+        ? effectiveRows.headerRows : effectiveReaderTableHeaderRows(table);
+    const sourceRows = canonicalizeReaderSelectionRows(requestedSourceRows, headerRows);
+    if (!headerRows.includes(sourceRows[0])
+        || sourceRows.slice(1).some(row => headerRows.includes(row))) {
         throw new Error(`${label} 第一行必须是原表头，其余行必须是数据行；`
-            + `sourceTableOrdinal=${sourceTableOrdinal}，有效表头行=${JSON.stringify(effectiveRows.headerRows)}，`
+            + `sourceTableOrdinal=${sourceTableOrdinal}，有效表头行=${JSON.stringify(headerRows)}，`
             + `当前选择行=${JSON.stringify(requestedSourceRows)}。只修改本 binding 的 sourceRows，不能改写正文或原表。`);
     }
     const cellBindings = [];
@@ -228,7 +263,7 @@ function renderReaderTableSelection(binding, artifacts) {
         const cell = cells[0];
         const text = table.matrix[sourceRow][sourceColumn];
         if (cells.length !== 1 || !sha256(cell?.sourceDomSha256) || cell.text !== text
-            || (renderedRow === 0 && !effectiveRows.headerRows.includes(sourceRow))) {
+            || (renderedRow === 0 && !headerRows.includes(sourceRow))) {
             throw new Error(`${label} row=${sourceRow},column=${sourceColumn} 不能唯一重放到原始 DOM cell`);
         }
         // Escaping or rewriting arbitrary source markup changes the cell's
@@ -247,6 +282,35 @@ function renderReaderTableSelection(binding, artifacts) {
     };
 }
 
+function repairUniqueReaderTableSelectionHeader(binding, artifacts) {
+    if (!binding || !Object.prototype.hasOwnProperty.call(binding, 'selection')) return binding;
+    const selection = binding.selection;
+    const table = (artifacts?.tables || []).find(item => (
+        item && item.ordinal === (selection && selection.sourceTableOrdinal)
+    ));
+    if (!table || !Array.isArray(selection && selection.sourceRows)) {
+        return binding;
+    }
+    const effectiveHeaderRows = effectiveReaderTableHeaderRows(table);
+    const selectedHeaders = selection.sourceRows.filter(row => effectiveHeaderRows.includes(row));
+    const dataRows = selection.sourceRows.filter(row => !effectiveHeaderRows.includes(row));
+    if (dataRows.length === 0 || selectedHeaders.length > 1) return binding;
+    const headerCandidates = selectedHeaders.length === 1
+        ? selectedHeaders
+        : effectiveHeaderRows.length === 1 ? effectiveHeaderRows : [];
+    if (headerCandidates.length !== 1) return binding;
+    const repaired = {
+        ...binding,
+        selection: { ...selection, sourceRows: [headerCandidates[0], ...dataRows] }
+    };
+    try {
+        renderReaderTableSelection(repaired, artifacts);
+        return repaired;
+    } catch (_error) {
+        return binding;
+    }
+}
+
 function compileReaderTableSelections(sections, bindings, artifacts) {
     if (!Array.isArray(sections) || !Array.isArray(bindings)) {
         if (Array.isArray(sections) && sections.some(section => /\[\[TABLE_[^\]]*\]\]/.test(String(section?.body || '')))) {
@@ -256,7 +320,8 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
     }
     const copiedSections = sections.map(section => ({ ...section }));
     const selectionTableIndexes = [];
-    const tableBindings = bindings.map((binding, index) => {
+    const tableBindings = bindings.map((declaredBinding, index) => {
+        const binding = repairUniqueReaderTableSelectionHeader(declaredBinding, artifacts);
         if (!binding || !Object.prototype.hasOwnProperty.call(binding, 'selection')) return binding;
         if (binding.tableIndex !== index + 1) throw new Error(`读者文章 tableBindings[${index}] selection tableIndex 必须按正文顺序递增`);
         const marker = `[[TABLE_${binding.tableIndex}]]`;
@@ -286,5 +351,6 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
 module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
     hasExplicitRepeatedScientificMeasurement, findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
-    effectiveReaderTableRows, canonicalizeReaderSelectionRows, renderReaderTableSelection,
+    effectiveReaderTableRows, effectiveReaderTableHeaderRows, canonicalizeReaderSelectionRows,
+    renderReaderTableSelection, repairUniqueReaderTableSelectionHeader,
     compileReaderTableSelections };

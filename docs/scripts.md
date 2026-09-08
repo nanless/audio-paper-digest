@@ -35,7 +35,8 @@ npm run workspace:role -- status
 | `npm run fetch` | 归档、抓取、筛选、分析；不发布 |
 | `npm run deep -- --date DATE` | 从 current sealed PDF/TXT source run 续分析；不能补抓或使用 legacy cache |
 | `npm run batch` | 仅用 current sealed PDF/TXT 批量处理 canonical 中未完成论文 |
-| `npm run reanalyze -- --concurrency N` | 强制全量重分析，仍只重放 current sealed PDF/TXT |
+| `npm run batch -- --retry-failed-readers` | 退役当前未完成论文的失败 Reader 候选后续跑，不影响已完成论文 |
+| `npm run reanalyze -- --concurrency N` | 退役全部旧失败 Reader 候选并清空 Reader/图片补充状态后强制全量重分析；仍只重放 current sealed PDF/TXT |
 | `node scripts/analyze-single-paper.js ID --force` | 单篇分析 |
 | `node scripts/reanalyze-selected.js ID...` | 指定集合重分析 |
 | `node scripts/refilter-reanalyze-by-date.js DATE` | 历史日期重筛与重分析 |
@@ -171,7 +172,7 @@ recovery 见[历史重写底座](history-rewrite.md)。
 | 命令 | 行为 |
 |---|---|
 | `npm run visual:post-publish -- --date DATE` | 从已验证 publication 规划两类任务 |
-| `npm run visual:prepare -- --date DATE` | 校验参考缓存并输出绝对图片路径 |
+| `npm run visual:prepare -- --date DATE` | legacy 校验参考缓存并输出绝对图片路径；modern ephemeral 日更复验 Figure 身份后输出空引用路径 |
 | `npm run visual:status -- --date DATE` | TOP 10 长图只读状态 |
 | `npm run visual:record -- --date DATE --paper ID --kind infographic --file /abs/result.png --token TOKEN --qa-attested true` | 登记已目检论文图；`--file` 可换成 `--output-hint HINT` |
 | `npm run visual:fail -- ...` | 记录论文图失败 |

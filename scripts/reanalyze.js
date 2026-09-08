@@ -8,6 +8,7 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
+const path = require('path');
 const { loadEnvFile, getBeijingISOString, getBeijingLocaleString, normalizedId } = require('./utils.js');
 const {
     analyzeBatch,
@@ -21,6 +22,7 @@ const {
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const readerRepair = require('./lib/reader-repair.js');
 
 loadEnvFile();
 
@@ -56,6 +58,27 @@ if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) {
     process.exit(1);
 }
 
+function resetReaderForForcedReanalysis(paper) {
+    const next = structuredClone(paper);
+    const manifest = next.analysisManifest;
+    if (manifest?.stages) {
+        delete manifest.stages.apiReaderArticle;
+        delete manifest.stages.imageSupplement;
+    }
+    if (manifest?.contracts) {
+        delete manifest.contracts.apiReaderArticle;
+        delete manifest.contracts.imageNarrative;
+        if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
+    }
+    if (next.analysisStageCheckpoints) {
+        delete next.analysisStageCheckpoints.apiReaderArticle;
+        delete next.analysisStageCheckpoints.imageSupplement;
+    }
+    for (const key of ['apiReaderArticle', 'apiReaderPlan', 'apiReaderFigures', 'apiReaderAuthors',
+        'apiReaderResources', 'apiReaderArticleSha256', 'apiReaderPlanSha256']) delete next[key];
+    return next;
+}
+
 async function reanalyzeAll(options = {}) {
     console.log(`[reanalyze] 读取数据文件: ${DATA_FILE}`);
 
@@ -70,6 +93,24 @@ async function reanalyzeAll(options = {}) {
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
         papers, label: 'reanalyze recovery'
     });
+    let retiredReaderCandidates = 0;
+    try {
+        const names = fs.readdirSync(dailySourcePlan.readerAttemptsDir)
+            .filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
+        for (const name of names) {
+            const envelope = JSON.parse(fs.readFileSync(
+                path.join(dailySourcePlan.readerAttemptsDir, name), 'utf8'
+            ));
+            if (readerRepair.retireFailedCandidate(dailySourcePlan.readerAttemptsDir, envelope.identity)) {
+                retiredReaderCandidates += 1;
+            }
+        }
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+    if (retiredReaderCandidates > 0) {
+        console.log(`[reanalyze] 已保留并退休 ${retiredReaderCandidates} 个旧 Reader 失败候选`);
+    }
     console.log(`[reanalyze] 共 ${papers.length} 篇论文需要重新分析`);
     console.log(`[reanalyze] 模型: ${process.env.PAPER_ANALYZER_MODEL}`);
     console.log(`[reanalyze] 并发度: ${CONCURRENCY}`);
@@ -123,7 +164,10 @@ async function reanalyzeAll(options = {}) {
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             return {
-                paper: dailyFreshSources.prepareDailyPaper(latest ? { ...paper, ...latest } : paper, dailySourcePlan),
+                paper: dailyFreshSources.prepareDailyPaper(
+                    resetReaderForForcedReanalysis(latest ? { ...paper, ...latest } : paper),
+                    dailySourcePlan
+                ),
                 skip: false
             };
         },

@@ -171,3 +171,21 @@ test('daily recovery source plan fails closed when the canonical has no sealed b
         label: 'test recovery'
     }), /requires current dailyFreshSourceRun/);
 });
+
+test('batch 只退休显式未完成论文的 Reader 失败候选', () => {
+    const { retireIncompleteReaderCandidates } = require('../scripts/batch-analyze.js');
+    const names = ['a'.repeat(64) + '.json', 'b'.repeat(64) + '.json', 'ignored.txt'];
+    const envelopes = new Map([
+        [names[0], { identity: { paperId: '2609.00001' } }],
+        [names[1], { identity: { paperId: '2609.00002' } }]
+    ]);
+    const retired = [];
+    const count = retireIncompleteReaderCandidates('/sealed/reader-attempts',
+        new Set(['2609.00002']), {
+            readDir: () => names,
+            readFile: filename => JSON.stringify(envelopes.get(path.basename(filename))),
+            retire: (_directory, identity) => { retired.push(identity.paperId); return 'retired'; }
+        });
+    assert.equal(count, 1);
+    assert.deepEqual(retired, ['2609.00002']);
+});

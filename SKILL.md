@@ -77,9 +77,9 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 
 默认 API 日更在筛选完成后先运行 sealed source phase：每个入选 arXiv 重新请求官方 HTML 文本和 PDF，原子保存
 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/source.txt`、`source.pdf`、
-`source-runtime.json` 与 `source-manifest.json`。深度分析与 Reader 只能使用该 generation；同一日同一入选集续跑重放已封存的 pair，不走旧的 text-only 抓取或 `data/current` 图片缓存。图像仅在 OS 临时目录为当前模型调用物化并清理，runtime 永不保存像素、base64、缓存路径或图片文件。
+`source-runtime.json` 与 `source-manifest.json`。深度分析与 Reader 只能使用该 generation；同一日同一入选集续跑重放已封存的 pair，不走旧的 text-only 抓取或 `data/current` 图片缓存。图像仅在 OS 临时目录为当前模型调用物化并清理，runtime 永不保存像素、base64、缓存路径或图片文件。单张 Figure 若超过响应上限可跳过该图并继续同篇，其余图片至少成功一张时不会因个别下载失败整篇报废；provider 明确拒绝损坏或不兼容的 PNG 时，会转为白底 RGB JPEG 后重试。
 
-默认阶段包括：主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、评分审计、API Reader 和 Figure 物化。各阶段绑定输入、模型、协议、Prompt、温度、预算和输出 SHA；变化只重跑当前阶段及下游。
+默认阶段包括：主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、taxonomy 封口、核心摘要封口、评分审计、API Reader 和 Figure 物化。各阶段绑定输入、模型、协议、Prompt、温度、预算和输出 SHA；变化只重跑当前阶段及下游。
 
 主分析 canonical 保留 13 个固定中文一级标题供机器解析。真正发布给读者的是 `beginner-researcher-v3`：
 
@@ -169,6 +169,9 @@ npm run deep -- --date YYYY-MM-DD
 # 只续 canonical 中未完成论文
 npm run batch
 
+# 只退役当前未完成论文的失败 Reader 候选后续跑
+npm run batch -- --retry-failed-readers
+
 # 强制重分析
 npm run reanalyze -- --concurrency 5
 
@@ -182,7 +185,7 @@ npm run digest:status -- --date YYYY-MM-DD
 
 从 fetch 开始的日期必须是北京时间当天。历史批次只从脚本允许的安全阶段续跑。不要手改 checkpoint 伪造完成态。
 
-`deep`、`batch`、`reanalyze` 与 `api:reader:refresh` 只恢复当前 default API 日更的 sealed source run：它们重放 `deep-analysis-result.json.dailyFreshSourceRun` 所指向的精确论文集合和每篇 PDF/TXT/runtime/manifest，绝不重新抓取或退回 legacy text/cache。缺少、损坏或与 canonical batchDate/论文集不一致时，命令会在任何 LLM 或图像请求前失败；重新执行 `npm run digest:prepare -- YYYY-MM-DD` 重新建立日更 source phase。Reader 需要的图像仅在本次调用的 OS 临时目录物化。
+`deep`、`batch`、`reanalyze` 与 `api:reader:refresh` 只恢复当前 default API 日更的 sealed source run：它们重放 `deep-analysis-result.json.dailyFreshSourceRun` 所指向的精确论文集合和每篇 PDF/TXT/runtime/manifest，绝不重新抓取或退回 legacy text/cache。缺少、损坏或与 canonical batchDate/论文集不一致时，命令会在任何 LLM 或图像请求前失败；重新执行 `npm run digest:prepare -- YYYY-MM-DD` 重新建立日更 source phase。Reader 需要的图像仅在本次调用的 OS 临时目录物化。`batch --retry-failed-readers` 只退役当前仍未完成论文的失败 Reader 候选；`reanalyze` 则退役全部旧失败候选并显式清空 Reader/图片补充状态，避免旧成功或旧失败短路强制全量重分析。
 
 ## 6. 博客发布事务
 
@@ -210,7 +213,7 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-`visual:prepare` 复验 `.bin` 缓存并输出真实扩展名的绝对路径。登记前逐图检查标题、中文、结构关系、指标方向、数字与排行榜；`record` 必须带 `--qa-attested true`。用户明确说不生图时，使用 `digest:waive-visuals` 签发绑定当前 publication 与 manifest 的 waiver，不能把 pending 改成 complete。
+Reader 页面在 `ephemeral-no-persisted-figure-assets-v1` 下保留已签、已校验的 arXiv 官方 HTTPS 图片 URL 供读者直接查看，但不复制或缓存图片字节。`visual:prepare` 对 legacy manifest 复验 `.bin` 缓存并输出真实扩展名的绝对路径；modern 日更会复验官方 URL、ordinal、DOM SHA、像素 SHA 与 MIME，但返回空的 `referencedImagePaths`，只用已签 Reader 文本生图且绝不回退旧缓存。登记前逐图检查标题、中文、结构关系、指标方向、数字与排行榜；`record` 必须带 `--qa-attested true`。用户明确说不生图时，使用 `digest:waive-visuals` 签发绑定当前 publication 与 manifest 的 waiver，不能把 pending 改成 complete。
 
 ## 8. 维护与验证
 

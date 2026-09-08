@@ -172,8 +172,8 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `taxonomy_paths.py` | 集中管理独立标签预览的Python路径，复用项目根与环境；不改变正式发布path_config模板指纹。 |
 | `build-taxonomy-preview.py` | 只读扫描Hugo历史论文，生成有来源指纹的映射预览、完整旧词处置与待核报告；不修改博客或current。 |
 | `deep-analysis-only.js` | 仅重放当前 `dailyFreshSourceRun` 的 sealed PDF/TXT，续跑 complete 筛选结果中未完成分析；缺少或漂移时失败，不抓取或读取 legacy cache。 |
-| `batch-analyze.js` | 仅用当前 sealed 日更 PDF/TXT 批量分析 canonical 中的未完成论文；缺少 source run 时失败。 |
-| `reanalyze.js` | 强制全量重分析，但仍只用 canonical 精确绑定的 sealed 日更 PDF/TXT；不从 legacy result/text/cache 恢复。 |
+| `batch-analyze.js` | 仅用当前 sealed 日更 PDF/TXT 批量分析 canonical 中的未完成论文；`--retry-failed-readers` 只退役这些未完成论文的失败 Reader 候选；缺少 source run 时失败。 |
+| `reanalyze.js` | 退役全部旧失败 Reader 候选并清空 Reader/图片补充状态后强制全量重分析，但仍只用 canonical 精确绑定的 sealed 日更 PDF/TXT；不从 legacy result/text/cache 恢复。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `analyze-single-paper.js` | 从论文库取一篇论文分析并合并回 canonical。 |
 | `refilter-reanalyze-by-date.js` | 对历史日期重新筛选、分析并写入受控日期快照。 |
@@ -226,7 +226,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 
 | 文件 | 类型 | 职责 |
 |---|---|---|
-| `visual-summary-state.js` | Node 入口/状态机 | TOP 10 论文长图任务规划、校验、登记、失败和历史归档；modern v3 仅取已签 Reader thesis/完整章节及原图缓存，QA 按章节 SHA 回指，不回退 canonical 摘要。 |
+| `visual-summary-state.js` | Node 入口/状态机 | TOP 10 论文长图任务规划、校验、登记、失败和历史归档；modern v3 仅取已签 Reader thesis/完整章节，ephemeral 日更复验官方 Figure 身份后返回空引用路径、不回退旧缓存，QA 按章节 SHA 回指且不回退 canonical 摘要。 |
 | `digest-cover-state.js` | Node 入口/状态机 | 每日汇总封面任务规划、校验、登记、失败和历史归档。 |
 | `visual-summary-integration.js` | Node 共享 | 在同一发布证明下协调论文长图与汇总封面。 |
 | `plan-post-publish-visuals.py` | Python 入口 | 从已验证博客发布调用视觉规划桥。 |

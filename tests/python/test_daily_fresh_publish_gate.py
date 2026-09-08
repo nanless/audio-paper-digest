@@ -161,6 +161,38 @@ class DailyFreshPublishGateTest(unittest.TestCase):
         data_file.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         return data_file
 
+    def test_runtime_accepts_manifest_authenticated_legacy_artifact_signature(self):
+        text = b'legacy sealed full text'
+        text_sha = hashlib.sha256(text).hexdigest()
+        artifacts = {
+            'version': 1, 'parserVersion': 'arxiv-html-dom-v4',
+            'sourceKind': 'arxiv_html', 'tables': [], 'formulas': [],
+            'figures': [], 'flattenedTextSha256': text_sha,
+            'payloadSha256': 'a' * 64,
+        }
+        runtime = {
+            'contract': 'fresh-arxiv-rewrite-runtime-metadata-v1', 'version': 1,
+            'paperId': 'arxiv:2609.12340', 'title': 'Legacy artifact',
+            'textSha256': text_sha, 'structuredArtifacts': artifacts,
+            'imageInfos': [], 'readerAuthors': None,
+            'htmlAvailability': 'available', 'htmlAttempts': 1, 'warnings': [],
+        }
+        manifest = {'text': {'responseSha256': text_sha}}
+        self.assertIs(
+            publish_to_blog._daily_fresh_validate_runtime(
+                runtime, manifest, text, '2609.12340',
+            ),
+            artifacts,
+        )
+        incompatible = copy.deepcopy(runtime)
+        incompatible['structuredArtifacts'].pop('parserVersion')
+        with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError,
+                'structuredArtifacts 未绑定 sealed TXT'):
+            publish_to_blog._daily_fresh_validate_runtime(
+                incompatible, manifest, text, '2609.12340',
+            )
+
     def test_all_fresh_daily_batch_replays_and_mixed_batch_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             source_root = Path(tmp) / 'daily-fresh-source-runs'

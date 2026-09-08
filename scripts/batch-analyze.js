@@ -8,6 +8,7 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
+const path = require('path');
 const { loadEnvFile, getBeijingISOString, normalizedId } = require('./utils.js');
 const {
     analyzeBatch,
@@ -21,10 +22,31 @@ const {
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const readerRepair = require('./lib/reader-repair.js');
 
 loadEnvFile();
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
+const RETRY_FAILED_READERS = process.argv.slice(2).includes('--retry-failed-readers');
+
+function retireIncompleteReaderCandidates(directory, paperIds, options = {}) {
+    const readDir = options.readDir || fs.readdirSync;
+    const readFile = options.readFile || fs.readFileSync;
+    const retire = options.retire || readerRepair.retireFailedCandidate;
+    let retired = 0;
+    try {
+        const names = readDir(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
+        for (const name of names) {
+            const envelope = JSON.parse(readFile(path.join(directory, name), 'utf8'));
+            const paperId = normalizedId({ arxivId: envelope?.identity?.paperId });
+            if (!paperId || !paperIds.has(paperId)) continue;
+            if (retire(directory, envelope.identity)) retired += 1;
+        }
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+    return retired;
+}
 
 function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
     return updateJsonFileLocked(resultPath, current => {
@@ -83,6 +105,14 @@ async function main(options = {}) {
     const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p)
         || !dailyFreshSources.isPaperBoundToPlan(p, dailySourcePlan));
     console.log(`未分析论文: ${notAnalyzed.length}`);
+
+    if (RETRY_FAILED_READERS) {
+        const retired = retireIncompleteReaderCandidates(
+            dailySourcePlan.readerAttemptsDir,
+            new Set(notAnalyzed.map(normalizedId).filter(Boolean))
+        );
+        if (retired > 0) console.log(`已保留并退休 ${retired} 个未完成论文的旧 Reader 失败候选`);
+    }
 
     if (notAnalyzed.length === 0) {
         const finalPayload = finalizeBatchZeroWorkState(RESULT_FILE, batchDate);
@@ -237,4 +267,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, finalizeBatchZeroWorkState };
+module.exports = { main, finalizeBatchZeroWorkState, retireIncompleteReaderCandidates };

@@ -41,7 +41,7 @@ function structuredPayloadBody(value) {
 }
 
 function computeStructuredPayloadSha256(value) {
-    return sha256(Buffer.from(JSON.stringify(structuredPayloadBody(value))));
+    return stableSha256(structuredPayloadBody(value));
 }
 
 function validateStructuredArtifacts(value, expected = {}) {

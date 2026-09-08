@@ -332,6 +332,9 @@ describe('Manual v4 editorial quality primitives', () => {
             '红色 BLEU 与蓝色 CER 并非单调：HAT 上 Small BLEU 45.9 高于 Medium 43.41，但绿色 Cos Sim 0.838 低于 0.864 且 CER 更差。'
         ), []);
         assert.deepEqual(findMissingComparisonUnits(
+            '重建侧 4 种配置在 WER 4.10-4.14、SPKSIM 0.86-0.90、UTMOS 4.24-4.30、PESQ-nb 3.49-3.53、STOI 0.94-0.95 上差异微小，无系统性下降。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
             '图 3 显示 VIBE 均优于 Video-Robin 与去掉阶段 5 的消融，四项准确率呈现单调提升。'
         ), []);
         assert.deepEqual(findMissingComparisonUnits(
