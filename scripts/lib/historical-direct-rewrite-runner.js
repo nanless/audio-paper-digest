@@ -832,12 +832,27 @@ async function extractConferenceSource(item, dependencies = {}) {
 }
 
 async function ephemeralArxivMaterializer(arxivId, figures, dependencies = {}) {
-    return freshArxiv.withEphemeralArxivFigures({ arxivId, figures, sourceRoot: dependencies.freshArxivSourceRoot,
-        temporaryRoot: dependencies.temporaryRoot, persistentRoots: dependencies.persistentRoots || [] }, async temporary => temporary.figures.map(item => {
-        const bytes = readRegular(item.tempPath, 32 * 1024 * 1024).bytes;
-        return { ...figures.find(figure => figure.ordinal === item.ordinal), rawBytes: bytes,
-            assetSha256: sha256(bytes), assetMediaType: item.mediaType };
-    }), { fetchFigure: dependencies.fetchFigure });
+    const materialized = [];
+    const isPermanentFailure = dependencies.isPermanentApiReaderFigureFailure
+        || require('../deep-analyzer.js').isPermanentApiReaderFigureFailure;
+    for (const figure of figures) {
+        try {
+            const item = await freshArxiv.withEphemeralArxivFigures({ arxivId, figures: [figure],
+                sourceRoot: dependencies.freshArxivSourceRoot,
+                temporaryRoot: dependencies.temporaryRoot,
+                persistentRoots: dependencies.persistentRoots || [] }, async temporary => {
+                const stored = temporary.figures[0];
+                const bytes = readRegular(stored.tempPath, 32 * 1024 * 1024).bytes;
+                return { ...figure, rawBytes: bytes,
+                    assetSha256: sha256(bytes), assetMediaType: stored.mediaType };
+            }, { fetchFigure: dependencies.fetchFigure });
+            materialized.push(item);
+        } catch (error) {
+            if (!isPermanentFailure(error)) throw error;
+            console.warn(`[historical-direct-rewrite] skipped optional Figure ${figure.ordinal}: ${String(error.message || error).slice(0, 300)}`);
+        }
+    }
+    return materialized;
 }
 
 // The legacy image downloader reads and writes data/current/image-cache. Direct

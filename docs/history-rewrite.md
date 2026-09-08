@@ -349,6 +349,11 @@ SHA 漂移、历史页 projection 漂移和任何单页字节替换都会拒绝�
 source/analysis 后生成新页面，不再次调用 LLM、不增加分析 attempts，也不覆盖或删除旧 renderer 目录。
 aggregate 在读取页面前再次要求全部成员绑定当前 renderer，避免直到最终混合聚合时才暴露漂移。
 
+arXiv Reader 的候选 Figure 仍逐张只在本次调用的 OS 临时目录物化。单张图片若明确属于永久失败
+（例如响应超过硬字节上限、不可重试的 4xx、格式或尺寸门禁失败），direct-run 只排除该张可选图并保留
+同篇其余成功图片；socket、DNS、timeout、408/425/429/5xx 等瞬时失败仍使本次执行失败关闭，不能被
+降格为“无图继续”。无论成功或排除，都不得把像素或临时路径写入 runtime。
+
 单篇页 researcher workbench 所需的原始摘要统一来自官方 arXiv Atom sidecar；sealed `source.txt` 的
 有界 Abstract parser 只保留为诊断工具，不再作为 production 摘要权威。所有 direct plan arXiv 都不得读取
 旧博客、crawler 摘要或 LLM 摘要；先运行（未写 selector 时也默认等价于 `--all-plan-arxiv`）：

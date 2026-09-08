@@ -1143,6 +1143,28 @@ test('arXiv Reader pixels exist only during an OS-temporary callback and returne
         /evidence asset SHA is invalid/);
 });
 
+test('arXiv Reader materializer skips one permanently oversized optional Figure and keeps its peer', async t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-reader-partial-figures-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const figures = [1, 2].map(ordinal => ({ ordinal,
+        url: `https://arxiv.org/html/2602.05847v2/Figs/figure-${ordinal}.png` }));
+    const result = await runner.ephemeralArxivMaterializer('2602.05847', figures, {
+        freshArxivSourceRoot: path.join(root, 'sources'), temporaryRoot: root,
+        persistentRoots: [], figureRetrySleep: async () => {},
+        fetchFigure: async url => {
+            if (url.endsWith('figure-1.png')) {
+                const error = new Error('response body 6.0MB exceeds limit');
+                error.code = 'RESPONSE_TOO_LARGE'; throw error;
+            }
+            return { bytes: Buffer.from('valid-peer-pixels'), mediaType: 'image/png' };
+        }
+    });
+    assert.deepEqual(result.map(item => item.ordinal), [2]);
+    assert.equal(result[0].rawBytes.toString(), 'valid-peer-pixels');
+    assert.equal('tempPath' in result[0], false);
+    assert.deepEqual(fs.readdirSync(root), []);
+});
+
 test('conference PDF pixels are rendered only under OS temp and retained only as in-memory request evidence', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-conference-ephemeral-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
