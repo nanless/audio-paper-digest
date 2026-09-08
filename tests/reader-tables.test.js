@@ -157,6 +157,34 @@ test('explicit staged scientific measurements use real whitespace and digit rege
         'stage 1 lr 5e-5、2e-5、1e-5'), false);
 });
 
+test('2512.10571 repeated split sizes require an exact three-way dataset context', () => {
+    const cell = '71k / 1k / 1k clips';
+    const chineseContext = {
+        columnIndex: 2,
+        header: ['条件', '指标', '数值', '说明', '来源'],
+        row: ['数据规模', '训练/验证/测试', cell,
+            'totaling over 197 hours，approximately 10 seconds/clip，720P 24 FPS',
+            'AVISet构造']
+    };
+    assert.equal(findReaderTablePasteDuplication(cell, chineseContext), null);
+    assert.equal(findReaderTablePasteDuplication(cell, {
+        columnIndex: 2,
+        header: ['Dataset', 'Split', 'Size'],
+        row: ['AVISet', 'train / validation / test', cell]
+    }), null);
+
+    for (const [value, context] of [
+        [cell, {}],
+        [cell, { columnIndex: 2, header: ['条件', '指标', '数值'],
+            row: ['模型配置', '三个阶段', cell] }],
+        ['71k / 1k / 1k / 1k clips', chineseContext],
+        ['71k / 1k / 1k clips71k / 1k / 1k clips', chineseContext],
+        ['1k / 1k /', chineseContext]
+    ]) {
+        assert.match(findReaderTablePasteDuplication(value, context), /粘连复写/, value);
+    }
+});
+
 test('source row/column selection preserves multilevel headers, spanning DOM identity, values and legacy v4 output', () => {
     const { artifacts, sourceText } = artifactsFixture();
     const bindings = [selected(), selected(2, 2)];

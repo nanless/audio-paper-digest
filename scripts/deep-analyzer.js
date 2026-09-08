@@ -6000,6 +6000,35 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
     return true;
 }
 
+function invalidateApiReaderForResourceCountChange(
+    paper, manifest, verifiedReaderResources, apiReaderFingerprint
+) {
+    const readerStage = manifest?.stages?.apiReaderArticle;
+    if (!isRecoveryStageComplete(manifest, 'apiReaderArticle')) return false;
+    const currentResourceCount = Array.isArray(verifiedReaderResources?.resources)
+        ? verifiedReaderResources.resources.length
+        : null;
+    if (currentResourceCount === null || readerStage.resourceCount === currentResourceCount) {
+        return false;
+    }
+    const replacementFingerprint = stableFingerprint({
+        apiReaderFingerprint,
+        resourceIdentitySha256: verifiedReaderResources.identitySha256,
+        resourceCount: currentResourceCount
+    });
+    const invalidated = invalidateRecoveryStageIfChanged(
+        paper, manifest, 'apiReaderArticle', replacementFingerprint
+    );
+    if (!invalidated) {
+        throw new Error('Reader resource-count change did not invalidate the stale Reader');
+    }
+    // Stage invalidation deletes all Reader-owned fields. Preserve only the
+    // freshly verified identity so the normal generation branch seals it into
+    // the replacement Reader; no stale article/plan/figure/author bytes survive.
+    paper.apiReaderResources = verifiedReaderResources;
+    return true;
+}
+
 function createAnalysisRecoveryManifest(paper) {
     const existing = paper?.analysisManifest;
     const stages = existing && existing.version === RECOVERY_MANIFEST_VERSION && existing.stages && typeof existing.stages === 'object'
@@ -11022,6 +11051,11 @@ async function analyzePaperDeepInternal(paper) {
     )) {
         console.log('    [deep] ♻️  Reader 原文证据未漂移，已移除无效的 canonical analysis 指纹依赖');
     }
+    if (invalidateApiReaderForResourceCountChange(
+        paper, analysisManifest, verifiedReaderResources, apiReaderFingerprint
+    )) {
+        console.log('    [deep] ♻️  Reader 资源集合数量变化，已失效旧 Reader 并进入重建');
+    }
     // A recovered direct/daily Reader may predate the publication-side
     // persistence marker while already carrying the intentionally stripped
     // Figure evidence.  Seal the mode before deciding whether its Reader stage
@@ -12726,7 +12760,8 @@ module.exports = {
     migrateSealedSourceOnlyReaderBeforeAnalysis,
     buildImageSupplementFingerprint,
     hasActualAnalysisInputChanged,
-    invalidateRecoveryStageIfChanged
+    invalidateRecoveryStageIfChanged,
+    invalidateApiReaderForResourceCountChange
 };
 
 // 直接运行测试

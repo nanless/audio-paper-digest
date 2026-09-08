@@ -3806,6 +3806,65 @@ has_dataset: 否
         assert.ok(RECOVERY_STAGE_ORDER.indexOf('coreSummaryRepair') < RECOVERY_STAGE_ORDER.indexOf('scoringAudit'));
     });
 
+    it('verified Reader 资源数量变化时失效旧签名并保留当前 identity 给重建分支', () => {
+        const {
+            invalidateApiReaderForResourceCountChange,
+            isRecoveryStageComplete
+        } = require('../scripts/deep-analyzer.js');
+        const currentResources = {
+            identitySha256: '9'.repeat(64),
+            resources: Array.from({ length: 8 }, (_, index) => ({ index }))
+        };
+        const paper = {
+            analysisCheckpoint: 'body-after-reader',
+            analysisStageCheckpoints: {
+                scoringAudit: 'body-after-scoring',
+                apiReaderArticle: 'body-after-reader',
+                imageSupplement: 'body-after-image'
+            },
+            apiReaderArticle: 'stale reader bytes',
+            apiReaderPlan: { version: 3 },
+            apiReaderFigures: [{ ordinal: 1 }],
+            apiReaderAuthors: { authors: [] },
+            apiReaderResources: { identitySha256: '8'.repeat(64), resources: Array(9).fill({}) },
+            apiReaderArticleSha256: '7'.repeat(64),
+            apiReaderPlanSha256: '6'.repeat(64)
+        };
+        const manifest = {
+            version: 1,
+            contracts: { apiReaderArticle: 'beginner-researcher-v3' },
+            stages: {
+                scoringAudit: { status: 'complete', fingerprint: 'scoring' },
+                apiReaderArticle: {
+                    status: 'complete', fingerprint: 'reader', resourceCount: 9
+                },
+                imageSupplement: { status: 'skipped', fingerprint: 'image' }
+            }
+        };
+        assert.strictEqual(invalidateApiReaderForResourceCountChange(
+            paper, manifest, currentResources, 'current-reader-fingerprint'
+        ), true);
+        assert.strictEqual(isRecoveryStageComplete(manifest, 'apiReaderArticle'), false);
+        assert.strictEqual(manifest.stages.imageSupplement, undefined);
+        assert.strictEqual(paper.analysisCheckpoint, 'body-after-scoring');
+        assert.strictEqual(paper.analysisStageCheckpoints.apiReaderArticle, undefined);
+        assert.strictEqual(paper.analysisStageCheckpoints.imageSupplement, undefined);
+        for (const field of [
+            'apiReaderArticle', 'apiReaderPlan', 'apiReaderFigures', 'apiReaderAuthors',
+            'apiReaderArticleSha256', 'apiReaderPlanSha256'
+        ]) assert.strictEqual(paper[field], undefined);
+        assert.strictEqual(paper.apiReaderResources, currentResources);
+
+        const sameCountPaper = { apiReaderResources: currentResources };
+        const sameCountManifest = {
+            stages: { apiReaderArticle: { status: 'complete', fingerprint: 'reader', resourceCount: 8 } }
+        };
+        assert.strictEqual(invalidateApiReaderForResourceCountChange(
+            sameCountPaper, sameCountManifest, currentResources, 'current-reader-fingerprint'
+        ), false);
+        assert.strictEqual(sameCountManifest.stages.apiReaderArticle.status, 'complete');
+    });
+
     it('摘要合同变化只回退到结构快照并失效评分/插图，保留 source-only Reader', () => {
         const { invalidateRecoveryStageIfChanged } = require('../scripts/deep-analyzer.js');
         const paper = {

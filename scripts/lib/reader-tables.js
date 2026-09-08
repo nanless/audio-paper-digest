@@ -31,6 +31,25 @@ function hasExplicitRepeatedScientificMeasurement(cell, context = {}, duplicate 
     return localLabels || /(?:训练|阶段|stage|课程).*(?:学习率|learning rate|\blr\b)|(?:学习率|learning rate|\blr\b).*(?:训练|阶段|stage|课程)/i.test(rowContext);
 }
 
+function hasExplicitRepeatedDatasetSplitScale(cell, context = {}) {
+    const compact = String(cell || '').replace(/\s+/g, '');
+    const scalar = '(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d+)?[kKmMgG]?';
+    const unit = '(?:clips?|videos?|samples?|items?|examples?|utterances?|recordings?|files?|segments?|pairs?|cases?|条|个|段|样本|视频|片段|文件|对)';
+    const list = new RegExp(`^(${scalar})[/、，;；](${scalar})[/、，;；](${scalar})(?:${unit})?$`, 'i');
+    const match = list.exec(compact);
+    if (!match || new Set(match.slice(1, 4).map(value => value.toLowerCase())).size === 3) {
+        return false;
+    }
+    const rowContext = [context.header?.[context.columnIndex], ...(context.row || [])
+        .filter(value => value !== cell)].map(value => String(value || '')).join(' ');
+    const explicitThreeWaySplit = /(?:train(?:ing)?|训练)\s*[/、，;；]\s*(?:val(?:id(?:ation|ating)?)?|dev|验证)\s*[/、，;；]\s*(?:test(?:ing)?|测试)/i.test(rowContext);
+    const explicitDatasetSplit = /(?:dataset|data|数据集?|语料)(?:\s*(?:set))?\s*(?:split|partition|划分|拆分)|(?:数据|语料)(?:集)?划分/i.test(rowContext);
+    // Only a complete three-value list can use this exception. Concatenated
+    // extraction shadows, a fourth repeated value, or a duplicated whole cell
+    // cannot match the anchored surface even when the row mentions a split.
+    return explicitThreeWaySplit || explicitDatasetSplit;
+}
+
 function findReaderTablePasteDuplication(cell, context = {}) {
     const text = String(cell || '');
     const compact = text.replace(/\s+/g, '');
@@ -46,6 +65,7 @@ function findReaderTablePasteDuplication(cell, context = {}) {
         if (!/[\d\\=]/.test(doubled[1])) continue;
         if (hasExplicitRepeatedScientificMeasurement(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
+        if (hasExplicitRepeatedDatasetSplitScale(compact, context)) continue;
         return `单元格存在原文粘连复写“${doubled[0].slice(0, 40)}”，只保留其中一份`;
     }
     if (/([A-Za-z]+)(\d*)\1_\{[^}]*\}/.test(compact)) {
