@@ -2730,6 +2730,26 @@ primary_task_tag: #音视频生成
         assert.doesNotMatch(narrated, /下表围绕|未列出的方差|跨域表现|部署成本/);
     });
 
+    it('原表裸 Delta 只授权裸值，Reader 擅加百分号仍由完整来源门禁拒绝', () => {
+        const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
+            bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
+        const sourceText = 'Contrastive-learning ablation on AVSBench V1m:\n'
+            + 'Ours w/ SupCon\n79.08\n0.48 ↑\\uparrow\n'
+            + 'Ours w/ AudioCon\n79.85\n1.25 ↑\\uparrow\n';
+        const article = '| Method | Delta |\n| --- | --- |\n| Ours w/ SupCon | 0.48 |';
+        const quotes = deriveExactTableSourceQuotes(article, sourceText);
+        assert.ok(quotes.some(quote => quote.includes('0.48 ↑\\uparrow')));
+        const bindings = [{ tableIndex: 1, sourceType: 'source_quotes',
+            sourceTableOrdinal: null, cellBindings: [], sourceQuotes: quotes }];
+        const options = { sourceText,
+            structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, sourceText),
+            allowDeterministicQuoteRepair: true };
+        assert.strictEqual(bindApiReaderSourceEvidence(article, bindings, [], options).article, article);
+        assert.throws(() => bindApiReaderSourceEvidence(
+            article.replace('0.48 |', '0.48% |'), bindings, [], options
+        ), /关键数字缺少 exact quote\/cell 证据: 0\.48%/);
+    });
+
     it('表格叙事只分隔heading与已有说明，绝不补写比较结论或缺失证据', () => {
         const { ensureApiReaderTableNarratives, relocateExplicitReaderTableExplanations,
             validateApiReaderTableNarratives } = require('../scripts/deep-analyzer.js');
@@ -3456,6 +3476,47 @@ has_dataset: 否
         assert.match(
             getCoreSummaryDetailIssue(withSummary(compared.replace('，高于自然度得分 3.40', '，自然度得分 3.40'))),
             /缺少完整关键定量结果/
+        );
+    });
+
+    it('核心摘要对照是评测设置，但只写下降多少分仍精确报缺指标名', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const original = validAnalysisText().match(
+            /## 核心摘要\n([\s\S]*?)(?=\n## 方法概述和架构)/
+        )[1];
+        const missingMetric = original.replace(
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            '在西班牙语宽带 WB 与窄带 NB PCMU 对照中，众包组测得下降 4.3 分且差异显著，'
+                + '而内部专家组仅下降 1.2 分且不显著，比较对象、数值和方向均可由原文核对。'
+        );
+        const sourceOptions = { sourceText: 'Experiment result: the crowd NB PCMU intelligibility score was 4.3 points below WB, while the internal group dropped 1.2 score points.' };
+        assert.match(
+            getCoreSummaryDetailIssue(withSummary(missingMetric), sourceOptions),
+            /最接近的同句量化候选缺少：指标名称/
+        );
+        const complete = missingMetric.replace('众包组测得下降', '众包组的可懂度得分下降');
+        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(complete), sourceOptions), null);
+    });
+
+    it('核心摘要识别条件化的真实失败现象，不把普通转折当边界', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const replaceBoundary = sentence => validAnalysisText().replace(
+            '结论仅适用于论文覆盖的噪声类型与语种，对极低信噪比、未见录音环境和跨语言外推尚未验证。',
+            sentence
+        );
+        const conditional = replaceBoundary(
+            '该结论在无混响集上基本成立，但在强混响与训练失配时感知分预测可能失真，这一条件化现象来自原文直接报告的子集结果。'
+        );
+        assert.strictEqual(getCoreSummaryDetailIssue(conditional), null);
+        assert.match(
+            getCoreSummaryDetailIssue(replaceBoundary(
+                '该结论在无混响集上基本成立，但还需更多研究才能确定其普遍价值与实际意义，相关论证也需要继续完善。'
+            )),
+            /缺少结论适用边界/
         );
     });
 

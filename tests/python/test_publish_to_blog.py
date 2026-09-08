@@ -709,6 +709,7 @@ def llm_api_ephemeral_figure_fixture():
     figure = {
         'ordinal': 1, 'label': 'Figure 1:', 'caption': 'Main result.',
         'url': url, 'mediaType': 'image/png', 'sourceDomSha256': '5' * 64,
+        'assetSha256': '6' * 64,
         'targetKind': 'result', 'targetHeading': result_heading,
         'marker': '[[FIGURE_1]]', 'focusPoints': focus_points,
         'leadQuote': lead, 'explanationQuote': explanation,
@@ -1293,6 +1294,15 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertEqual(canon('2025 s'), '2025s')
         self.assertEqual(canon('5s'), '5s')
         self.assertEqual(canon('20 dB'), '20db')
+        grouped = publish_to_blog._api_reader_numeric_tokens(
+            'Counts are 6,005, 50,324, 1,234,567, and １，２３４.'
+        )
+        for value in ('6005', '50324', '1234567', '1234'):
+            self.assertIn(value, grouped)
+        enumerated = publish_to_blog._api_reader_numeric_tokens('Options 1,2 are separate.')
+        self.assertNotIn('12', enumerated)
+        self.assertIn('1', enumerated)
+        self.assertIn('2', enumerated)
         tokens = publish_to_blog._api_reader_numeric_tokens(
             '共 40964096 个样本，2020 年，1212 项'
         )
@@ -1312,6 +1322,43 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('2020'))
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('1212'))
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('11'))
+
+    def test_api_reader_source_quotes_bind_standard_thousands_groups_without_joining_enumerations(self):
+        source = (
+            'The released dataset contains 6,005 freeform conversations '
+            '(50,324 turns) and 2,438 scaffolded conversations (24,184 turns), '
+            'for a total of 8,443 conversations and 74,508 turns.'
+        )
+        article = (
+            '| Split | Conversations | Turns |\n| --- | --- | --- |\n'
+            '| Freeform | 6005 | 50324 |\n'
+            '| Scaffolded | 2438 | 24184 |\n'
+            '| Total | 8443 | 74508 |'
+        )
+        paper = llm_api_publication_fixture()
+        paper['apiReaderArticle'] = article
+        paper['apiReaderPlan']['formulaBindings'] = []
+        paper['apiReaderPlan']['tableBindings'] = [{
+            'tableIndex': 1, 'sourceType': 'source_quotes',
+            'sourceTableOrdinal': None,
+            'renderedTableSha256': hashlib.sha256(article.encode()).hexdigest(),
+            'cellBindings': [], 'sourceQuotes': [{
+                'quote': source,
+                'sourceQuoteSha256': hashlib.sha256(source.encode()).hexdigest(),
+            }],
+        }]
+        reseal_llm_api_reader_fixture(paper)
+        publish_to_blog._validate_api_reader_source_bindings(paper)
+
+        tampered = copy.deepcopy(paper)
+        tampered['apiReaderArticle'] = article.replace('6005', '6006')
+        tampered_binding = tampered['apiReaderPlan']['tableBindings'][0]
+        tampered_binding['renderedTableSha256'] = hashlib.sha256(
+            tampered['apiReaderArticle'].encode()
+        ).hexdigest()
+        reseal_llm_api_reader_fixture(tampered)
+        with self.assertRaisesRegex(PublishDataValidationError, '数字缺少来源 quote'):
+            publish_to_blog._validate_api_reader_source_bindings(tampered)
 
     def test_api_reader_numeric_tex_color_replay_preserves_units_and_signs(self):
         source = 'Original table values:\n\\textcolorblue58.62\n\\textcolorblue62.37\n' \
@@ -3034,6 +3081,7 @@ title: "Bad table"
             json.dumps(payload, ensure_ascii=False),
             r'(?:cachePath|assetFilename|assetBytes|assetMediaType)',
         )
+        self.assertRegex(payload['figures'][0]['assetSha256'], r'^[0-9a-f]{64}$')
         markdown, _slug = publish_to_blog.generate_paper_page(
             paper, '2026-09-07', category='论文速递',
         )
@@ -3059,6 +3107,25 @@ title: "Bad table"
         del missing_marker['analysisManifest']['contracts']['apiReaderFigurePersistence']
         with self.assertRaisesRegex(PublishDataValidationError, 'figure 字段非法'):
             publish_to_blog._api_reader_payload(missing_marker)
+
+        malformed_evidence = copy.deepcopy(paper)
+        malformed_evidence['apiReaderFigures'][0]['assetSha256'] = 'bad'
+        malformed_evidence['analysisManifest']['stages']['apiReaderArticle'][
+            'figuresSha256'
+        ] = publish_to_blog._stable_json_sha256(malformed_evidence['apiReaderFigures'])
+        with self.assertRaisesRegex(PublishDataValidationError, 'evidence SHA 非法'):
+            publish_to_blog._api_reader_payload(malformed_evidence)
+
+        legacy_without_evidence_sha = copy.deepcopy(paper)
+        legacy_without_evidence_sha['apiReaderFigures'][0].pop('assetSha256')
+        legacy_without_evidence_sha['analysisManifest']['stages']['apiReaderArticle'][
+            'figuresSha256'
+        ] = publish_to_blog._stable_json_sha256(
+            legacy_without_evidence_sha['apiReaderFigures']
+        )
+        self.assertEqual(
+            publish_to_blog._api_reader_payload(legacy_without_evidence_sha)['assets'], []
+        )
 
     def test_manual_v5_reader_plan_uses_reader_first_header_and_preserves_custom_subheads(self):
         reader_article = (

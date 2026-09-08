@@ -1108,7 +1108,9 @@ function apiReaderV3BindsCanonical(paper) {
     const figurePersistence = manifest?.contracts?.apiReaderFigurePersistence;
     const ephemeralFiguresValid = figurePersistence !== EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT
         || figures.every(figure => figure && typeof figure === 'object' && !Array.isArray(figure)
-            && Object.keys(figure).every(key => !EPHEMERAL_FIGURE_FORBIDDEN_FIELDS.has(key)));
+            && Object.keys(figure).every(key => !EPHEMERAL_FIGURE_FORBIDDEN_FIELDS.has(key))
+            && (figure.assetSha256 === undefined
+                || /^[a-f0-9]{64}$/.test(String(figure.assetSha256 || ''))));
     const figurePersistenceValid = figurePersistence === undefined
         || figurePersistence === EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT;
     return Boolean(

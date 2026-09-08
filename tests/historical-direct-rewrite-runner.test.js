@@ -824,7 +824,12 @@ test('arXiv Reader pixels exist only during an OS-temporary callback and returne
     assert.equal(fs.readdirSync(temporaryRoot).length, 0);
     const persisted = context.stripEphemeralFigureFields(rendered[0]);
     assert.equal(Object.hasOwn(persisted, 'rawBytes'), false);
+    assert.equal(persisted.assetSha256, sha(rendered[0].rawBytes));
     context.assertNoPersistentFigureFields({ figures: [persisted] });
+    assert.throws(() => context.stripEphemeralFigureFields({ ...rendered[0], assetSha256: 'bad' }),
+        /evidence asset SHA is invalid/);
+    assert.throws(() => context.assertNoPersistentFigureFields({ figures: [{ assetSha256: 'bad' }] }),
+        /evidence asset SHA is invalid/);
 });
 
 test('conference PDF pixels are rendered only under OS temp and retained only as in-memory request evidence', async t => {

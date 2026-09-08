@@ -141,6 +141,68 @@ test('Chinese row labels get table-only context with two English anchors despite
     assert.equal(singleAnchor.tableContexts, undefined);
 });
 
+test('translated labels expose one uniquely corroborated DOM table as a hint without granting a binding', () => {
+    const source = table([
+        ['Method', 'AVSBench V1m J&F', 'Delta'],
+        ['w/o CL', '78.60', '-'],
+        ['Ours w/ SupCon', '79.08', '0.48 ↑'],
+        ['Ours w/ AudioCon', '79.85', '1.25 ↑']
+    ], 4);
+    const rendered = [
+        ['条件', '指标', '方法', '变化'],
+        ['AVSBench多源', 'J&F分数', '无对比学习', '基准'],
+        ['AVSBench多源', 'J&F分数', '音频引导对比', '1.25%提升'],
+        ['AVSBench多源', 'J&F分数', '普通有监督对比', '0.48%提升']
+    ];
+    const [issue] = diagnose(rendered, source, { failures: [
+        { renderedRow: 3, renderedColumn: 3, missingTokens: ['0.48%'] }
+    ] });
+    assert.deepEqual(issue.candidates, []);
+    assert.equal(issue.tableContexts.length, 1);
+    assert.equal(issue.tableContexts[0].sourceTableOrdinal, 4);
+    assert.equal(issue.tableContexts[0].rowCorrespondenceConfirmed, false);
+    assert.equal(issue.tableContexts[0].matchBasis,
+        'one_english_anchor_plus_failed_and_sibling_numeric_surfaces_unique_dom_table');
+    assert.equal(issue.tableContexts[0].rows[2].cells[2], '0.48 ↑');
+    assert.match(issue.message, /不授予selection或quote资格/);
+
+    const onlyFailedNumber = rendered.map(row => row.slice());
+    onlyFailedNumber[2][3] = '原文未逐项报告';
+    const [single] = diagnose(onlyFailedNumber, source, { failures: [
+        { renderedRow: 3, renderedColumn: 3, missingTokens: ['0.48%'] }
+    ] });
+    assert.equal(single.tableContexts, undefined);
+
+    const duplicate = table(source.matrix.map(row => row.slice()), 5);
+    const [ambiguous] = diagnose(rendered, source, { failures: [
+        { renderedRow: 3, renderedColumn: 3, missingTokens: ['0.48%'] }
+    ], structuredArtifacts: { tables: [source, duplicate] } });
+    assert.equal(ambiguous.tableContexts, undefined);
+});
+
+test('image-estimated numbers absent from text and DOM are directed out of Markdown tables', () => {
+    const source = table([['Layer pair', 'Mean'], ['layer 1 vs layer 24', '0.060']]);
+    const rendered = [
+        ['比较对象', '均值越高越相似'],
+        ['第1层对第24层', '0.060'],
+        ['第6层对第24层', '约0.21分布中心'],
+        ['第18层对第24层', '约0.35分布中心']
+    ];
+    const issues = diagnose(rendered, source, {
+        sourceText: 'The mean is 0.060 and the similarity steadily increases with layer depth.',
+        failures: [
+            { renderedRow: 2, renderedColumn: 1, missingTokens: ['0.21'] },
+            { renderedRow: 3, renderedColumn: 1, missingTokens: ['0.35'] }
+        ]
+    });
+    assert.equal(issues.length, 2);
+    assert.ok(issues.every(issue => issue.unsupportedApproximateNumeric === true));
+    assert.ok(issues.every(issue => issue.candidates.length === 0));
+    assert.match(issues[0].message, /Figure像素估读/);
+    assert.match(issues[0].message, /不得把估读数值写进要求exact quote\/cell证据的Markdown数字表/);
+    assert.match(issues[0].message, /原文未逐项报告；图中仅显示定性趋势/);
+});
+
 test('explicit per-cell missing token diagnoses Chinese mixed prose against declared original percentage', () => {
     const quote = 'Hybrid Search further reduces average NE-ER by 3.3% while maintaining comparable WER.';
     const draft = { sections: [{ body: '| 方法 | 增量 | 单位 |\n| --- | --- | --- |\n| 方案 | 额外降低3.3 | % |' }],

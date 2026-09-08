@@ -28,6 +28,16 @@ function scalar(value) {
         unit: (match[2] || '').trim(), decimals: (match[1].split('.')[1] || '').length };
 }
 
+function numericIdentities(value) {
+    return [...clean(value).matchAll(
+        /(?<![A-Za-z0-9_])[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![A-Za-z0-9_])/g
+    )]
+        .map(match => {
+            const number = Number(match[0].replace(/,/g, ''));
+            return Number.isFinite(number) ? String(number) : '';
+        }).filter(Boolean);
+}
+
 function describeDifference(rendered, source, headers = []) {
     const left = scalar(rendered);
     const right = scalar(source);
@@ -121,16 +131,16 @@ function locateDeclaredQuote(source, declared) {
     return { quote, offset, whitespaceRecovered: quote !== declared };
 }
 
-function tableLevelContexts(tables, renderedRows) {
+function tableLevelContexts(tables, renderedRows, failures = []) {
     const ignored = new Set(['method', 'model', 'system', 'baseline', 'proposed', 'unit', 'none',
         'table', 'results', 'accuracy', 'mean', 'std', 'avg', 'downarrow', 'uparrow']);
     const englishAnchors = value => [...clean(value).matchAll(/[A-Za-z][A-Za-z0-9]*(?:[-_.][A-Za-z0-9]+)*/g)]
         .map(match => match[0].toLowerCase()).filter(word => word.length >= 3 && !ignored.has(word));
     const rendered = new Set(renderedRows.flat().flatMap(englishAnchors));
-    return tables.flatMap(table => {
+    const contexts = tables.flatMap(table => {
         const available = new Set(table.matrix.flat().flatMap(englishAnchors));
         const sharedAnchors = [...rendered].filter(word => available.has(word));
-        if (sharedAnchors.length < 2) return [];
+        if (sharedAnchors.length < 1) return [];
         let chars = 0;
         const rows = [];
         for (const [row, values] of table.matrix.entries()) {
@@ -148,7 +158,29 @@ function tableLevelContexts(tables, renderedRows) {
             sourceDeclaredHeaderRows: [...(table.headerRows || [])],
             omittedRows: table.matrix.length - rows.length, rowCorrespondenceConfirmed: false,
             matchBasis: 'at_least_two_english_table_anchors_only' }];
-    }).slice(0, 2);
+    });
+    const strong = contexts.filter(context => context.sharedAnchors.length >= 2);
+    if (strong.length) return strong.slice(0, 2);
+
+    // Translated row/column labels can hide every source anchor except the
+    // dataset name. In that case expose a table only when the failed numeric
+    // surface and another distinct numeric surface from the same rendered
+    // table jointly identify one complete DOM table. This remains a repair
+    // hint: it does not create a cell mapping or authorize a source binding.
+    const failedNumbers = new Set((failures || []).flatMap(failure => (
+        failure?.missingTokens || []
+    )).flatMap(numericIdentities));
+    const renderedNumbers = new Set(renderedRows.flat().flatMap(numericIdentities));
+    if (!failedNumbers.size || renderedNumbers.size < 2) return [];
+    const weak = contexts.filter(context => {
+        const sourceNumbers = new Set(context.rows.flatMap(row => row.cells).flatMap(numericIdentities));
+        const matched = [...renderedNumbers].filter(number => sourceNumbers.has(number));
+        return context.sharedAnchors.length >= 1 && matched.length >= 2
+            && [...failedNumbers].some(number => sourceNumbers.has(number));
+    });
+    if (weak.length !== 1) return [];
+    return [{ ...weak[0], matchBasis:
+        'one_english_anchor_plus_failed_and_sibling_numeric_surfaces_unique_dom_table' }];
 }
 
 function declaredQuoteCandidates(binding, renderedText, sourceText, missingTokens = []) {
@@ -191,7 +223,9 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
     failures, structuredArtifacts, sourceText }) {
     const tables = (structuredArtifacts?.tables || []).filter(table => table?.recoveryStatus === 'complete'
         && sha(table.sourceDomSha256) && Array.isArray(table.matrix));
-    const tableContexts = tableLevelContexts(tables, renderedRows);
+    const tableContexts = tableLevelContexts(tables, renderedRows, failures);
+    const sourceNumbers = new Set(numericIdentities(sourceText));
+    const domNumbers = new Set(tables.flatMap(table => table.matrix.flat()).flatMap(numericIdentities));
     return (failures || []).slice(0, 6).flatMap(failure => {
         const row = failure.renderedRow;
         const column = failure.renderedColumn;
@@ -235,6 +269,10 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
         const bindingPath = `/tableBindings/${bindingIndex}`;
         const sourceQuotes = found.flatMap(candidate => sourceContexts(sourceText, candidate)).slice(0, 3);
         const quoteCandidates = declaredQuoteCandidates(binding, text, sourceText, failure.missingTokens || []);
+        const failedNumbers = [...new Set((failure.missingTokens || []).flatMap(numericIdentities))];
+        const unsupportedApproximateNumeric = /(?:约|大约|近似|估计|估读|分布中心)/u.test(text)
+            && failedNumbers.length > 0
+            && failedNumbers.every(number => !sourceNumbers.has(number) && !domNumbers.has(number));
         const guidance = '候选仅用于核对，不是已验证绑定或唯一答案。必须同时核对正文单元格、表头和来源单位/拼写；'
             + '百分号仅放独立列或仅补sourceQuotes不能修复正文裸值与来源百分数不一致。'
             + readerNumericSpellingGuidance() + '不要自动换算或借文献编号补证据。';
@@ -250,15 +288,26 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
             + ` (${candidate.difference}${candidate.whitespaceRecovered ? '; 原声明空白被改写，须复制此原始字节' : ''})；`
             + '该句是否对应本行实验仍须人工/模型核对').join('');
         // Attach the bounded table context once, not six times for six cells.
+        const weakUniqueContext = tableContexts.some(context => context.matchBasis
+            === 'one_english_anchor_plus_failed_and_sibling_numeric_surfaces_unique_dom_table');
+        const contextBasis = weakUniqueContext
+            ? '一个英文锚点加失败数字及另一不同表内数字唯一锁定完整DOM表；仅供核对'
+            : '至少两个英文系统/指标锚点';
         const contextHint = failure === failures[0] && !found.length && tableContexts.length
-            ? ` 候选原表上下文（至少两个英文系统/指标锚点；逐行对应未确认，不授予selection资格）：${JSON.stringify(tableContexts)}。`
+            ? ` 候选原表上下文（${contextBasis}；逐行对应未确认，不授予selection或quote资格）：${JSON.stringify(tableContexts)}。`
                 + '请自行核对原样表头单位及数据格；确认原表把%放表头后，应同时修正文表头和裸值写法，不能只加quotes；'
                 + '不要把其他原表本已带%的数据格也去掉单位，不强制改用artifact_table。' : '';
+        const approximateHint = unsupportedApproximateNumeric
+            ? ' 这些带“约/估计”措辞的数字未出现在全文逐字证据或任何完整DOM表。若来自Figure像素估读，'
+                + '不得把估读数值写进要求exact quote/cell证据的Markdown数字表；应删除这些数值行，或改成不含新数字的'
+                + '“原文未逐项报告；图中仅显示定性趋势”，把有像素依据的趋势留在表外Figure解释中。不得猜替代值。'
+            : '';
         return [{ code: 'reader_source_cell_diagnostic', diagnosticOnly: true, path, bindingPath,
             renderedCell: { row, column, text }, candidates: found, sourceQuotes, quoteCandidates,
             ...(contextHint ? { tableContexts } : {}),
+            ...(unsupportedApproximateNumeric ? { unsupportedApproximateNumeric: true } : {}),
             message: `${bindingPath} ${path} rendered row=${row},column=${column} text=${JSON.stringify(text)}；`
-                + summary + quoteHint + declaredHint + contextHint + '。' + guidance }];
+                + summary + quoteHint + declaredHint + contextHint + approximateHint + '。' + guidance }];
     });
 }
 

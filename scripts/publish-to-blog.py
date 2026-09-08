@@ -3788,10 +3788,11 @@ def _reader_doubled_half_token(surface):
 
 
 def _api_reader_numeric_tokens(value):
+    grouped_integer = r'(?:\d{1,3}(?:,\d{3})+|\d+)'
     pattern = re.compile(
         # Consume an exact repeated decimal as one surface before half-token
         # replay; otherwise 3.093.09 is incorrectly split into 3.093 and 09.
-        r'(?<![A-Za-z0-9])(?:(\d+\.\d+)\1(?!\d|\.\d)|[-+−－]?\d+(?:\.\d+)?)'
+        rf'(?<![A-Za-z0-9])(?:(\d+\.\d+)\1(?!\d|\.\d)|[-+−－]?{grouped_integer}(?:\.\d+)?)'
         r'(?:\s*%|\s*(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)(?![A-Za-z0-9_]))?',
         flags=re.IGNORECASE,
     )
@@ -4507,6 +4508,10 @@ def _api_reader_payload(paper):
                 expected_figure_fields.update({
                     'cachePath', 'assetFilename', 'assetMediaType',
                     'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'})
+            elif 'assetSha256' in item:
+                # Direct historical runs retain only this content hash from
+                # the temporary pixels. It is evidence, not an asset path.
+                expected_figure_fields.add('assetSha256')
             if plan_version in {2, 3}:
                 expected_figure_fields.update({
                     'marker', 'leadQuote', 'explanationQuote',
@@ -4567,7 +4572,13 @@ def _api_reader_payload(paper):
                 raise PublishDataValidationError('API reader v2 figure 来源绑定非法')
             if ephemeral_figures:
                 # Cache and pixel fields are deliberately absent.  The final
-                # page retains only the sealed ordinal/caption evidence.
+                # page retains sealed metadata and may retain the temporary
+                # pixel content hash, but never a path, byte count or payload.
+                if item.get('assetSha256') is not None \
+                        and not re.fullmatch(r'[0-9a-f]{64}', str(item['assetSha256'])):
+                    raise PublishDataValidationError(
+                        'API reader ephemeral figure evidence SHA 非法'
+                    )
                 _ephemeral_figure_note(item)
                 continue
             declared_cache_path = Path(str(item['cachePath'] or '')).expanduser()

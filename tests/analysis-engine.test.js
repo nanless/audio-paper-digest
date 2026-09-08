@@ -931,6 +931,29 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
         bindValidApiReaderV3(automatic);
         assert.strictEqual(apiReaderV3BindsCanonical(automatic), true);
+        const ephemeral = structuredClone(automatic);
+        const stable = value => Array.isArray(value) ? value.map(stable)
+            : value && typeof value === 'object'
+                ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]))
+                : value;
+        const stableHash = value => crypto.createHash('sha256')
+            .update(JSON.stringify(stable(value))).digest('hex');
+        ephemeral.analysisManifest.contracts.apiReaderFigurePersistence =
+            'ephemeral-no-persisted-figure-assets-v1';
+        ephemeral.apiReaderFigures = [{ ordinal: 1, assetSha256: 'a'.repeat(64) }];
+        ephemeral.apiReaderPlan.figurePlacements = [{ figureOrdinal: 1 }];
+        ephemeral.apiReaderPlanSha256 = stableHash(ephemeral.apiReaderPlan);
+        ephemeral.analysisManifest.stages.apiReaderArticle.planSha256 = ephemeral.apiReaderPlanSha256;
+        ephemeral.analysisManifest.stages.apiReaderArticle.figureCount = 1;
+        ephemeral.analysisManifest.stages.apiReaderArticle.figuresSha256 = stableHash(
+            ephemeral.apiReaderFigures
+        );
+        assert.strictEqual(apiReaderV3BindsCanonical(ephemeral), true);
+        ephemeral.apiReaderFigures[0].assetSha256 = 'bad';
+        ephemeral.analysisManifest.stages.apiReaderArticle.figuresSha256 = stableHash(
+            ephemeral.apiReaderFigures
+        );
+        assert.strictEqual(apiReaderV3BindsCanonical(ephemeral), false);
         const deep = require('../scripts/deep-analyzer.js');
         const readerBytesBefore = JSON.stringify({
             article: automatic.apiReaderArticle,

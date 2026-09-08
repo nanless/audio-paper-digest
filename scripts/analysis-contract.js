@@ -950,18 +950,36 @@ function hasCoreSummaryQuantitativeEvidence(text) {
     });
 }
 
-function hasCompleteCoreSummaryQuantitativeResult(text) {
-    return String(text || '').split(/[。！？!?\n]/).some(rawSentence => {
+function coreSummaryQuantitativeResultState(text) {
+    const candidates = String(text || '').split(/[。！？!?\n]/).map(rawSentence => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
-        if (!sentence || !CORE_SUMMARY_METRIC_PATTERN.test(sentence)
-            || !CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return false;
+        const hasMetric = Boolean(sentence && CORE_SUMMARY_METRIC_PATTERN.test(sentence));
+        const hasDirection = Boolean(sentence && CORE_SUMMARY_COMPARISON_PATTERN.test(sentence));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
-        if (!numbers.length) return false;
-        const setting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
-        const comparison = numbers.length >= 2
+        const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
+        const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
-        return setting && comparison;
+        const missing = [
+            !hasSetting && '评测设置', !hasMetric && '指标名称',
+            numbers.length === 0 && '数值', !hasDirection && '比较方向',
+            !hasComparisonObjects && '比较对象'
+        ].filter(Boolean);
+        return {
+            complete: Boolean(sentence) && missing.length === 0,
+            missing,
+            signalCount: Number(hasSetting) + Number(hasMetric) + Number(numbers.length > 0)
+                + Number(hasDirection) + Number(hasComparisonObjects)
+        };
     });
+    if (candidates.some(candidate => candidate.complete)) return { complete: true, missing: [] };
+    const best = candidates.sort((left, right) => right.signalCount - left.signalCount)[0];
+    return { complete: false, missing: best?.missing || [
+        '评测设置', '指标名称', '数值', '比较方向', '比较对象'
+    ] };
+}
+
+function hasCompleteCoreSummaryQuantitativeResult(text) {
+    return coreSummaryQuantitativeResultState(text).complete;
 }
 
 function validateCoreSummarySemanticContract(analysis, options = {}) {
@@ -990,9 +1008,11 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
             && hasCoreSummaryQuantitativeEvidence(sentence)
         ))
         : null;
-    const completeQuantitativeResult = hasCompleteCoreSummaryQuantitativeResult(summary);
+    const quantitativeResultState = coreSummaryQuantitativeResultState(summary);
+    const completeQuantitativeResult = quantitativeResultState.complete;
     if (sourceHasQuantitativeEvidence === true && !completeQuantitativeResult) {
-        issues.push('已有证据包含关键定量结果，但摘要没有写清比较对象、评测设置、指标、数值与方向');
+        issues.push('已有证据包含关键定量结果，但摘要没有写清比较对象、评测设置、指标、数值与方向'
+            + `（最接近的同句量化候选缺少：${quantitativeResultState.missing.join('、')}）`);
     } else if (sourceHasQuantitativeEvidence === false
         && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
         issues.push(`原文无可核定量结果时必须明确写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”`);
@@ -1000,7 +1020,9 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
         issues.push(`缺少完整关键定量结果或明确的“${CORE_SUMMARY_RESULT_UNAVAILABLE}”声明`);
     }
-    if (!/(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)/.test(summary)) {
+    const explicitBoundary = /(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)/.test(summary);
+    const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(summary);
+    if (!explicitBoundary && !conditionalFailure) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const cost = summary.includes(CORE_SUMMARY_COST_UNAVAILABLE)

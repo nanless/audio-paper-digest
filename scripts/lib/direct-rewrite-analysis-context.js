@@ -185,6 +185,12 @@ function attachDirectSourceProvenance(paper, manifest, source) {
 
 function stripEphemeralFigureFields(figure) {
     if (!figure || typeof figure !== 'object' || Array.isArray(figure)) fail('Reader figure is malformed');
+    // assetSha256 is an integrity receipt for pixels observed during this
+    // invocation, not a persisted asset locator. Keep it after removing all
+    // paths/bytes, but never persist an unvalidated value under that name.
+    if (figure.assetSha256 !== undefined && !SHA.test(String(figure.assetSha256 || ''))) {
+        fail('Reader figure evidence asset SHA is invalid');
+    }
     const forbidden = new Set(['cachePath', 'tempPath', 'path', 'bytes', 'rawBytes', 'buffer', 'assetFilename',
         'assetBytes', 'assetWidth', 'assetHeight', 'assetMediaType']);
     return Object.fromEntries(Object.entries(figure).filter(([key]) => !forbidden.has(key)));
@@ -195,6 +201,15 @@ function assertNoPersistentFigureFields(value) {
     if (/(?:"(?:cachePath|tempPath|rawBytes|assetFilename|assetBytes|assetWidth|assetHeight|assetMediaType)"|image-cache|api-reader-assets)/.test(encoded)) {
         fail('direct execution tried to persist an image path or image bytes');
     }
+    const validateEvidenceSha = item => {
+        if (!item || typeof item !== 'object') return;
+        if (!Array.isArray(item) && Object.prototype.hasOwnProperty.call(item, 'assetSha256')
+            && !SHA.test(String(item.assetSha256 || ''))) {
+            fail('persisted Reader figure evidence asset SHA is invalid');
+        }
+        Object.values(item).forEach(validateEvidenceSha);
+    };
+    validateEvidenceSha(value);
     return value;
 }
 
