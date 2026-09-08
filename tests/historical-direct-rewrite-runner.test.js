@@ -945,6 +945,101 @@ test('default runner engine preserves conference PDF pages through nested analys
     assert.deepEqual(fs.readdirSync(temporaryRoot), []);
 });
 
+test('sealed historical direct scope injects the opaque legacy-lock capability and seals its audit', async t => {
+    const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
+    const executionDirectory = path.join(f.root, 'runtime', 'execution');
+    const text = 'sealed direct source '.repeat(100);
+    const artifactsBody = { version: 1, source: 'html', tables: [], formulas: [], figures: [],
+        flattenedTextSha256: sha(text) };
+    const sourceDetails = { paperId: item.paperId, source: 'html', sourceId: item.route.arxivId,
+        text, imageInfos: [], structuredArtifacts: { ...artifactsBody, payloadSha256: sha(JSON.stringify(artifactsBody)) },
+        htmlAvailability: 'available', htmlAttempts: 1, warnings: [] };
+    const sourceDescriptor = { sourceSnapshotSha256: runner.stableHash(sourceDetails) };
+    const recoveredAt = '2026-09-08T01:00:00.000Z';
+    const intent = { contract: 'historical-direct-remote-legacy-paper-lock-reclaim-intent-v1', version: 1,
+        observedAt: '2026-09-08T00:59:59.000Z', recoveryHost: os.hostname(), staleThresholdMs: 24 * 60 * 60 * 1000,
+        leaseAgeMs: 25 * 60 * 60 * 1000, owner: { pid: 12345, hostname: `${os.hostname()}-old-host`,
+            acquiredAt: '2026-09-06T00:00:00.000Z', ownerSha256: sha('legacy-owner') },
+        lockIdentity: { directoryDev: '1', directoryIno: '2', ownerDev: '1', ownerIno: '3' } };
+    const completion = { contract: 'historical-direct-remote-legacy-paper-lock-reclaim-completion-v1',
+        version: 1, recoveredAt, outcome: 'reclaimed-by-current-operation' };
+    const fakeEngine = {
+        HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY:
+            engine.HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
+        analyzeBatch: async (papers, options) => {
+            assert.equal(options.paperLockOptions.recoveryPolicy,
+                engine.HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY);
+            assert.equal(typeof options.paperLockOptions.prepareHistoricalDirectLegacyLockReclaim, 'function');
+            const finalize = options.paperLockOptions.prepareHistoricalDirectLegacyLockReclaim(intent);
+            finalize(completion);
+            await options.onPaperResultLocked(papers[0], { result: {
+                directPaperId: item.paperId, reader: 'complete'
+            } });
+        }
+    };
+    await context.withDirectRewriteAnalysisSource({ paperId: item.paperId, runId: item.runId,
+        route: item.route.kind, sourceDetails, sourceSha256: sha(text),
+        structuredArtifactsSha256: sourceDetails.structuredArtifacts.payloadSha256,
+        sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256, sourceGeneration: 1,
+        sourceManifestSha256: sha('source-manifest'),
+        readerAttemptsDir: path.join(executionDirectory, 'reader-attempts'), materializeReaderFigures: async () => [] },
+    async () => {
+        const result = await runner.defaultAnalyze({ item, sourceDetails, sourceDescriptor,
+            executionDirectory, dependencies: { engine: fakeEngine, paperLockTimeoutMs: 37 } });
+        assert.equal(result.reader, 'complete');
+    });
+    const eventId = runner.legacyPaperLockReclaimEventId(intent);
+    const paths = runner.legacyPaperLockReclaimPaths(executionDirectory, eventId);
+    const sealedIntent = JSON.parse(fs.readFileSync(paths.intent, 'utf8'));
+    const sealedCompletion = JSON.parse(fs.readFileSync(paths.completion, 'utf8'));
+    assert.equal(sealedIntent.contract, 'historical-direct-legacy-paper-lock-reclaim-intent-v1');
+    assert.equal(sealedCompletion.contract, 'historical-direct-legacy-paper-lock-reclaim-completion-v1');
+    assert.deepEqual(sealedIntent.intent, intent); assert.deepEqual(sealedCompletion.completion, completion);
+    assert.equal(sealedCompletion.intentAuditSha256, sealedIntent.auditSha256);
+});
+
+test('legacy lock audit keeps unique repeated intents and replays missing completions after a write failure', t => {
+    const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
+    const executionDirectory = path.join(f.root, 'runtime', 'legacy-audit-replay');
+    const sourceDescriptor = { sourceSnapshotSha256: sha('source-snapshot') };
+    const base = { contract: 'historical-direct-remote-legacy-paper-lock-reclaim-intent-v1', version: 1,
+        observedAt: '2026-09-08T00:59:59.000Z', recoveryHost: os.hostname(),
+        staleThresholdMs: 24 * 60 * 60 * 1000, leaseAgeMs: 25 * 60 * 60 * 1000,
+        owner: { pid: 12345, hostname: `${os.hostname()}-old-host`,
+            acquiredAt: '2026-09-06T00:00:00.000Z', ownerSha256: sha('same-owner-bytes') } };
+    const first = { ...base, lockIdentity: { directoryDev: '1', directoryIno: '2', ownerDev: '1', ownerIno: '3' } };
+    const second = { ...base, observedAt: '2026-09-08T01:59:59.000Z',
+        lockIdentity: { directoryDev: '1', directoryIno: '4', ownerDev: '1', ownerIno: '5' } };
+    const finalizeFirst = runner.prepareLegacyPaperLockReclaimAudit({ executionDirectory,
+        item, sourceDescriptor, intent: first });
+    runner.prepareLegacyPaperLockReclaimAudit({ executionDirectory, item, sourceDescriptor, intent: first });
+    runner.prepareLegacyPaperLockReclaimAudit({ executionDirectory, item, sourceDescriptor, intent: second });
+    const firstPaths = runner.legacyPaperLockReclaimPaths(executionDirectory,
+        runner.legacyPaperLockReclaimEventId(first));
+    fs.mkdirSync(firstPaths.completion);
+    assert.throws(() => finalizeFirst({
+        contract: 'historical-direct-remote-legacy-paper-lock-reclaim-completion-v1', version: 1,
+        recoveredAt: '2026-09-08T01:00:00.000Z', outcome: 'reclaimed-by-current-operation'
+    }));
+    assert.equal(fs.existsSync(firstPaths.intent), true, 'completion failure cannot remove the immutable intent');
+    fs.rmdirSync(firstPaths.completion);
+
+    const fakeEngine = { getPaperAnalysisLockPath: () => path.join(f.root, 'absent-canonical-lock'),
+        inspectHistoricalDirectLegacyLockIntent: () => 'owner_absent' };
+    const paper = { directPaperId: item.paperId, arxivId: item.route.arxivId };
+    const reconciled = runner.reconcileLegacyPaperLockReclaimAudits({ executionDirectory,
+        item, sourceDescriptor, engine: fakeEngine, paper });
+    assert.equal(reconciled.length, 2);
+    const names = fs.readdirSync(executionDirectory).filter(name => name.startsWith('legacy-paper-lock-reclaim-'));
+    assert.equal(names.filter(name => name.endsWith('.intent.json')).length, 2,
+        'same owner bytes on replacement inodes remain separate append-only events');
+    assert.equal(names.filter(name => name.endsWith('.completion.json')).length, 2);
+    const before = names.sort().map(name => [name, sha(fs.readFileSync(path.join(executionDirectory, name)))]);
+    assert.deepEqual(runner.reconcileLegacyPaperLockReclaimAudits({ executionDirectory,
+        item, sourceDescriptor, engine: fakeEngine, paper }), []);
+    assert.deepEqual(before, names.sort().map(name => [name, sha(fs.readFileSync(path.join(executionDirectory, name)))]));
+});
+
 test('default runner engine exposes an arXiv primary downloader backed only by ephemeral bytes', async t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
     const temporaryRoot = path.join(f.root, 'os-temporary'); const executionDirectory = path.join(f.root, 'runtime', 'execution');

@@ -921,11 +921,12 @@ function readerNumericTokenMatches(value) {
     const unit = '(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)'
         + '(?![A-Za-z0-9_\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF10-\\uFF19])';
     const lookbehind = '(?<![A-Za-z0-9\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF10-\\uFF19])';
+    const groupedInteger = `(?:${digit}{1,3}(?:[,\\uFF0C]${digit}{3})+|${digit}+)`;
     // LaTeXML 的 3.093.09 必须一次取到完整双写表面，才能证明半部 3.09。
     // 普通小数模式会先截成 3.093，再截 09；精确重复及右边界避免猜拆非重复串。
     const doubledDecimal = `(${digit}+${dot}${digit}+)\\1(?!${digit}|${dot}${digit})`;
     const pattern = new RegExp(
-        `${lookbehind}(?:${doubledDecimal}|${sign}?${digit}+(?:${dot}${digit}+)?)(?:${percent}|\\s*(?:${unit}))?`,
+        `${lookbehind}(?:${doubledDecimal}|${sign}?${groupedInteger}(?:${dot}${digit}+)?)(?:${percent}|\\s*(?:${unit}))?`,
         'gi'
     );
     // LaTeXML can flatten an explicit TeX color command into
@@ -1903,7 +1904,9 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
             const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
             // An issue can name only a suffix of a longer number/fraction.
             if (/[零〇一二两三四五六七八九十百千万亿\d]$|分之$/.test(before.trimEnd())
-                || /^[零〇一二两三四五六七八九十百千万亿\d]|^点[零〇一二两三四五六七八九\d]|^分之/.test(after)
+                || ((/^[零〇一二两三四五六七八九十百千万亿\d]|^点[零〇一二两三四五六七八九\d]/.test(after))
+                    && /[零〇一二两三四五六七八九十百千万亿\d]$/.test(surface.trimEnd()))
+                || /^分之/.test(after)
                 || (/[毫千]$/.test(surface) && /^分贝/.test(after))) return surface;
             return replacement;
         });
@@ -2664,19 +2667,25 @@ function normalizeDeclaredReaderMarkerParagraphs(value) {
     if (!Array.isArray(value?.sections)) return;
     const declarations = [
         ...(Array.isArray(value.conceptBridges) ? value.conceptBridges.map((binding, index) => ({
+            binding,
             marker: binding?.marker,
             expectedMarker: `[[CONCEPT_BRIDGE_${index + 1}]]`,
-            kind: binding?.sectionKind
+            kind: binding?.sectionKind,
+            type: 'concept'
         })) : []),
         ...(Array.isArray(value.figurePlacements) ? value.figurePlacements.map(binding => ({
+            binding,
             marker: binding?.marker,
             expectedMarker: Number.isInteger(binding?.figureOrdinal) ? `[[FIGURE_${binding.figureOrdinal}]]` : null,
-            kind: binding?.targetKind
+            kind: binding?.targetKind,
+            type: 'figure'
         })) : []),
         ...(Array.isArray(value.formulaBindings) ? value.formulaBindings.map(binding => ({
+            binding,
             marker: binding?.marker,
             expectedMarker: Number.isInteger(binding?.formulaOrdinal) ? `[[FORMULA_${binding.formulaOrdinal}]]` : null,
-            kind: binding?.targetKind
+            kind: binding?.targetKind,
+            type: 'formula'
         })) : [])
     ];
     for (const declaration of declarations) {
@@ -2689,8 +2698,31 @@ function normalizeDeclaredReaderMarkerParagraphs(value) {
         const occurrences = value.sections.reduce((count, section) =>
             count + String(section?.body || '').split(marker).length - 1, 0);
         if (occurrences !== 1) continue;
-        const target = value.sections.find(section => section?.kind === declaration.kind
+        let target = value.sections.find(section => section?.kind === declaration.kind
             && String(section.body || '').split(/\r?\n/).some(line => line.trim() === marker));
+        // A Figure binding occasionally keeps a valid targetKind while the
+        // model places its unique, fully narrated marker in another valid
+        // section.  Aligning the metadata to that already-authored location is
+        // safer than moving prose or inventing a new lead/explanation.  Keep
+        // this fail-closed: only a unique exact marker with both neighbours can
+        // be normalized, and concept/formula semantics are left untouched.
+        if (!target && declaration.type === 'figure') {
+            const located = value.sections.filter(section => API_READER_KINDS.includes(section?.kind)
+                && String(section.body || '').split(/\r?\n/).some(line => line.trim() === marker));
+            if (located.length === 1) {
+                located[0].body = normalizeReaderStructuralLineBreaks(located[0].body, marker);
+                const locatedBlocks = String(located[0].body || '').split(/\n\s*\n/)
+                    .map(block => block.trim());
+                const locatedIndex = locatedBlocks.indexOf(marker);
+                if (locatedIndex > 0 && locatedIndex < locatedBlocks.length - 1
+                    && locatedBlocks[locatedIndex - 1].length >= API_READER_FIGURE_LEAD_MIN_CHARS
+                    && locatedBlocks[locatedIndex + 1].length >= API_READER_FIGURE_EXPLANATION_MIN_CHARS) {
+                    declaration.binding.targetKind = located[0].kind;
+                    declaration.kind = located[0].kind;
+                    target = located[0];
+                }
+            }
+        }
         if (!target || String(target.body).split(/\n\s*\n/).some(block => block.trim() === marker)) continue;
         const lines = String(target.body).replace(/\r\n?/g, '\n').split('\n');
         const markerLine = lines.findIndex(line => line.trim() === marker);
@@ -2861,6 +2893,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
         throw new Error('论文没有可用 Figure，figurePlacements 必须为空');
     }
     const seenFigureOrdinals = new Set();
+    const conceptNarrativeByMarker = new Map(conceptBridges.map(bridge => [
+        bridge.marker, bridge.explanation
+    ]));
     const figurePlacements = value.figurePlacements.map((placement, index) => {
         const placementKeys = value.version === 3
             ? ['figureOrdinal', 'targetKind', 'marker', 'focusPoints']
@@ -2887,10 +2922,15 @@ function parseApiReaderArticleResult(raw, options = {}) {
         const markerIndex = blocks.indexOf(marker);
         const leadQuote = blocks[markerIndex - 1] || '';
         const explanationQuote = blocks[markerIndex + 1] || '';
+        // Concept markers are replaced with their already-validated prose
+        // before the final Figure quote rebind.  Measure that real paragraph,
+        // not the short placeholder token, when the two markers are adjacent.
+        const leadNarrative = conceptNarrativeByMarker.get(leadQuote) || leadQuote;
+        const explanationNarrative = conceptNarrativeByMarker.get(explanationQuote) || explanationQuote;
         const focusPoints = value.version === 3 ? placement.focusPoints : [];
         if (!candidate || markerIndex <= 0 || markerIndex >= blocks.length - 1
-            || leadQuote.length < API_READER_FIGURE_LEAD_MIN_CHARS
-            || explanationQuote.length < API_READER_FIGURE_EXPLANATION_MIN_CHARS
+            || leadNarrative.length < API_READER_FIGURE_LEAD_MIN_CHARS
+            || explanationNarrative.length < API_READER_FIGURE_EXPLANATION_MIN_CHARS
             || !Array.isArray(focusPoints)
             || (value.version === 3 && (focusPoints.length < READER_LIMITS.minimumFocusPoints
                 || focusPoints.length > READER_LIMITS.maximumFocusPoints))
@@ -2902,8 +2942,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 + `（targetKind=${placement.targetKind}`
                 + `, markerBound=${Boolean(candidate)}`
                 + `, markerIndex=${markerIndex}`
-                + `, leadChars=${leadQuote.length}/${API_READER_FIGURE_LEAD_MIN_CHARS}`
-                + `, explanationChars=${explanationQuote.length}/${API_READER_FIGURE_EXPLANATION_MIN_CHARS}`
+                + `, leadChars=${leadNarrative.length}/${API_READER_FIGURE_LEAD_MIN_CHARS}`
+                + `, explanationChars=${explanationNarrative.length}/${API_READER_FIGURE_EXPLANATION_MIN_CHARS}`
                 + `, focusCount=${Array.isArray(focusPoints) ? focusPoints.length : 'invalid'}）`
             );
         }
@@ -2911,8 +2951,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
             figureOrdinal: placement.figureOrdinal,
             targetKind: placement.targetKind,
             marker,
-            leadQuote: normalizeReaderEditorialSurface(leadQuote),
-            explanationQuote: normalizeReaderEditorialSurface(explanationQuote),
+            leadQuote: normalizeReaderEditorialSurface(leadNarrative),
+            explanationQuote: normalizeReaderEditorialSurface(explanationNarrative),
             ...(value.version === 3
                 ? {
                     focusPoints: focusPoints.map(
@@ -4582,7 +4622,7 @@ const CORE_SUMMARY_V3_EXPECTED_RUNTIME_PROMPT_SHA256 = Object.freeze({
     revision: '8689694ecfe88420eb4c75de47ac488aeab24f9c1868cba49f8a7cec70b39fe6',
     tableRepair: '9730b06e94a33a9bd6c4c171b09dddafaaf14a1c1dcf082cbf28acbe9c3b68f3',
     methodRepair: 'e366628bab5fe93b5442e2aa34a5bf602d8bcce36d5c955dee4a49d2ee3e8815',
-    coreSummaryRepair: '56482dad912a3f2170fbbed2105107a4393a59040e9d099517a65e7c82200f1f',
+    coreSummaryRepair: '0af4b14bdd345161270989440d709522113ca0c78123b6edf99949e5fc33f963',
     structureRepair: '47f6f5028e2e110c0dc6ce237304b89a118ae6385d7981d003cf67fee66ea733'
 });
 const LEGACY_CORE_SUMMARY_RECOVERY_ORDER = Object.freeze([

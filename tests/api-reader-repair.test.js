@@ -128,6 +128,41 @@ test('deterministic table selections expose the binding and its marker section a
     assert.ok(collectDraftIssues(draft).some(issue => issue.path === '/tableBindings/0'));
 });
 
+test('a misplaced figure repair exposes the binding, declared section and actual marker section together', () => {
+    const draft = fixture();
+    draft.figurePlacements.push({ figureOrdinal: 4, marker: '[[FIGURE_4]]',
+        targetKind: 'result', focusPoints: ['先看横轴与纵轴分别编码什么', '再比较各条件的相对变化方向'] });
+    draft.sections[10].body += '\n\n图前导读已经基于真实像素说明应按什么顺序观察且长度满足要求。'
+        + '\n\n[[FIGURE_4]]\n\n图后解释只总结已经写出的观察与证据边界，不增加任何新的像素事实。';
+    const issues = collectDraftIssues(draft, new Error(
+        '读者文章 figurePlacements[0]（Figure 4）图前导读与图后解释未形成相邻闭环'
+    ));
+    const paths = buildRepairTargets(draft, issues).map(target => target.path);
+    for (const pointer of ['/figurePlacements/0', '/sections/7/body', '/sections/10/body']) {
+        assert.ok(paths.includes(pointer), pointer);
+    }
+});
+
+test('an unresolved quantitative Chinese numeral targets its attached-count section instead of every body', () => {
+    const draft = fixture();
+    draft.sections[0].body += '停顿一次后继续。';
+    draft.sections[10].body += '建议再跑一次四特征叠加实验。';
+    const targets = buildRepairTargets(draft, [{ path: null,
+        message: '读者文章文风校验失败: quantitative_chinese_numeral:一次' }]);
+    assert.deepEqual(targets.map(target => target.path), ['/sections/10/body']);
+});
+
+test('a broken prose excerpt targets the exact containing section even when other diagnostics exist', () => {
+    const draft = fixture();
+    const excerpt = '但在降级条件下受环境噪声影响更大，因此绝对分更低，但相对排序仍然合理';
+    draft.sections[7].body += `\n\n${excerpt}。`;
+    const targets = buildRepairTargets(draft, [
+        { path: null, message: `读者文章文风校验失败: broken_prose:${excerpt}` },
+        { path: '/tableBindings/0', diagnosticOnly: true, message: 'tableBindings[0] 诊断' }
+    ]);
+    assert.ok(targets.some(target => target.path === '/sections/7/body'));
+});
+
 test('ambiguous selection-header repair targets only the small binding node', () => {
     const draft = fixture();
     draft.tableBindings.push({ tableIndex: 1, selection: {

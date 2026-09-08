@@ -23,6 +23,8 @@ const CONTRACT = 'historical-direct-rewrite-execution-v1';
 const REGISTRY_CONTRACT = 'historical-direct-rewrite-execution-registry-v1';
 const STAGING_CONTRACT = 'historical-direct-rewrite-staging-v1';
 const ANALYSIS_RECOVERY_CONTRACT = 'historical-direct-analysis-recovery-v1';
+const LEGACY_PAPER_LOCK_RECLAIM_INTENT_CONTRACT = 'historical-direct-legacy-paper-lock-reclaim-intent-v1';
+const LEGACY_PAPER_LOCK_RECLAIM_COMPLETION_CONTRACT = 'historical-direct-legacy-paper-lock-reclaim-completion-v1';
 const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
 const SHA = /^[a-f0-9]{64}$/;
@@ -98,6 +100,25 @@ function writeAtomic(filename, value) {
     return sha256(bytes);
 }
 
+function writeExclusiveAtomic(filename, value) {
+    const directory = safeDirectory(path.dirname(filename), true, 'output directory');
+    const bytes = Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
+    const temporary = path.join(directory, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
+    let fd;
+    try {
+        fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT
+            | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+        fs.linkSync(temporary, filename);
+        const directoryFd = fs.openSync(directory, fs.constants.O_RDONLY);
+        try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
+        try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    return sha256(bytes);
+}
+
 function analysisRecoveryPath(executionDirectory) {
     if (typeof executionDirectory !== 'string' || !path.isAbsolute(executionDirectory)) {
         fail('analysis recovery directory must be absolute');
@@ -161,6 +182,157 @@ function readAnalysisRecovery({ executionDirectory, item, sourceDescriptor, allo
     const recovery = normalizeAnalysisRecovery(value, { item, sourceDescriptor });
     return { filename, fileSha256: loaded.sha256, recoverySha256: recovery.recoverySha256,
         recordSha256: recovery.recordSha256, updatedAt: recovery.updatedAt, record: recovery.record };
+}
+
+function normalizeLegacyPaperLockReclaimIntent(intent, item) {
+    const expectedAuditKeys = ['contract', 'leaseAgeMs', 'lockIdentity', 'observedAt', 'owner',
+        'recoveryHost', 'staleThresholdMs', 'version'];
+    const expectedOwnerKeys = ['acquiredAt', 'hostname', 'ownerSha256', 'pid'];
+    const expectedIdentityKeys = ['directoryDev', 'directoryIno', 'ownerDev', 'ownerIno'];
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent)
+        || Object.keys(intent).sort().join('\0') !== expectedAuditKeys.sort().join('\0')
+        || intent.contract !== 'historical-direct-remote-legacy-paper-lock-reclaim-intent-v1'
+        || intent.version !== 1
+        || !intent.owner || typeof intent.owner !== 'object' || Array.isArray(intent.owner)
+        || Object.keys(intent.owner).sort().join('\0') !== expectedOwnerKeys.sort().join('\0')
+        || !intent.lockIdentity || typeof intent.lockIdentity !== 'object' || Array.isArray(intent.lockIdentity)
+        || Object.keys(intent.lockIdentity).sort().join('\0') !== expectedIdentityKeys.sort().join('\0')
+        || Object.values(intent.lockIdentity).some(value => !/^[1-9]\d*$/.test(String(value || '')))
+        || intent.owner.hostname === intent.recoveryHost
+        || !Number.isInteger(intent.owner.pid) || intent.owner.pid <= 0
+        || !SHA.test(String(intent.owner.ownerSha256 || ''))
+        || !Number.isSafeInteger(intent.leaseAgeMs) || intent.leaseAgeMs <= 0
+        || !Number.isSafeInteger(intent.staleThresholdMs) || intent.staleThresholdMs <= 0
+        || intent.leaseAgeMs <= intent.staleThresholdMs
+        || Number.isNaN(Date.parse(intent.observedAt || ''))
+        || new Date(intent.observedAt).toISOString() !== intent.observedAt
+        || Number.isNaN(Date.parse(intent.owner.acquiredAt || ''))
+        || new Date(intent.owner.acquiredAt).toISOString() !== intent.owner.acquiredAt) {
+        fail(`${item.paperId} historical legacy paper-lock recovery audit is invalid`);
+    }
+    return clone(intent);
+}
+
+function legacyPaperLockReclaimEventId(intent) {
+    return stableHash({ lockIdentity: intent.lockIdentity, ownerSha256: intent.owner.ownerSha256 });
+}
+
+function legacyPaperLockReclaimPaths(executionDirectory, eventId) {
+    const directory = safeDirectory(executionDirectory, true, 'paper execution directory');
+    return {
+        intent: path.join(directory, `legacy-paper-lock-reclaim-${eventId}.intent.json`),
+        completion: path.join(directory, `legacy-paper-lock-reclaim-${eventId}.completion.json`)
+    };
+}
+
+function readSealedAudit(filename, expectedContract, item, sourceDescriptor) {
+    const loaded = readRegular(filename); let value;
+    try { value = JSON.parse(loaded.bytes.toString('utf8')); }
+    catch { fail(`${item.paperId} historical legacy paper-lock audit is invalid JSON`); }
+    const expectedKeys = expectedContract === LEGACY_PAPER_LOCK_RECLAIM_INTENT_CONTRACT
+        ? ['auditSha256', 'contract', 'eventId', 'intent', 'paperId', 'runId', 'sourceSnapshotSha256', 'version']
+        : ['auditSha256', 'completion', 'contract', 'eventId', 'intentAuditSha256', 'paperId', 'runId',
+            'sourceSnapshotSha256', 'version'];
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')
+        || value.contract !== expectedContract || value.version !== 1
+        || value.paperId !== item.paperId || value.runId !== item.runId
+        || value.sourceSnapshotSha256 !== sourceDescriptor.sourceSnapshotSha256
+        || !SHA.test(String(value.eventId || '')) || !SHA.test(String(value.auditSha256 || ''))) {
+        fail(`${item.paperId} historical legacy paper-lock audit binding is invalid`);
+    }
+    const body = { ...value }; delete body.auditSha256;
+    if (value.auditSha256 !== stableHash(body)) fail(`${item.paperId} historical legacy paper-lock audit SHA drifted`);
+    return { value, fileSha256: loaded.sha256 };
+}
+
+function normalizeLegacyPaperLockReclaimCompletion(completion, item) {
+    const keys = ['contract', 'outcome', 'recoveredAt', 'version'];
+    if (!completion || typeof completion !== 'object' || Array.isArray(completion)
+        || Object.keys(completion).sort().join('\0') !== keys.sort().join('\0')
+        || completion.contract !== 'historical-direct-remote-legacy-paper-lock-reclaim-completion-v1'
+        || completion.version !== 1
+        || !['reclaimed-by-current-operation', 'owner-absent-on-replay'].includes(completion.outcome)
+        || Number.isNaN(Date.parse(completion.recoveredAt || ''))
+        || new Date(completion.recoveredAt).toISOString() !== completion.recoveredAt) {
+        fail(`${item.paperId} historical legacy paper-lock completion is invalid`);
+    }
+    return clone(completion);
+}
+
+function writeLegacyPaperLockReclaimCompletion({ paths, eventId, intentAuditSha256,
+    item, sourceDescriptor, completion }) {
+    const normalizedCompletion = normalizeLegacyPaperLockReclaimCompletion(completion, item);
+    if (fs.existsSync(paths.completion)) {
+        const existing = readSealedAudit(paths.completion,
+            LEGACY_PAPER_LOCK_RECLAIM_COMPLETION_CONTRACT, item, sourceDescriptor);
+        if (existing.value.eventId !== eventId || existing.value.intentAuditSha256 !== intentAuditSha256) {
+            fail(`${item.paperId} historical legacy paper-lock completion belongs to another intent`);
+        }
+        normalizeLegacyPaperLockReclaimCompletion(existing.value.completion, item);
+        return existing;
+    }
+    const body = { contract: LEGACY_PAPER_LOCK_RECLAIM_COMPLETION_CONTRACT, version: 1,
+        paperId: item.paperId, runId: item.runId, sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
+        eventId, intentAuditSha256, completion: normalizedCompletion };
+    const sealed = { ...body, auditSha256: stableHash(body) };
+    return { value: sealed, fileSha256: writeExclusiveAtomic(paths.completion, sealed) };
+}
+
+function prepareLegacyPaperLockReclaimAudit({ executionDirectory, item, sourceDescriptor, intent }) {
+    const normalized = normalizeLegacyPaperLockReclaimIntent(intent, item);
+    const eventId = legacyPaperLockReclaimEventId(normalized);
+    const paths = legacyPaperLockReclaimPaths(executionDirectory, eventId);
+    const body = { contract: LEGACY_PAPER_LOCK_RECLAIM_INTENT_CONTRACT, version: 1,
+        paperId: item.paperId, runId: item.runId,
+        sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
+        eventId, intent: normalized };
+    const sealed = { ...body, auditSha256: stableHash(body) };
+    if (fs.existsSync(paths.intent)) {
+        const existing = readSealedAudit(paths.intent,
+            LEGACY_PAPER_LOCK_RECLAIM_INTENT_CONTRACT, item, sourceDescriptor);
+        if (existing.value.auditSha256 !== sealed.auditSha256) {
+            fail(`${item.paperId} historical legacy paper-lock intent event collision`);
+        }
+    } else {
+        writeExclusiveAtomic(paths.intent, sealed);
+    }
+    return completion => writeLegacyPaperLockReclaimCompletion({ paths, eventId,
+        intentAuditSha256: sealed.auditSha256, item, sourceDescriptor, completion });
+}
+
+function reconcileLegacyPaperLockReclaimAudits({ executionDirectory, item, sourceDescriptor, engine, paper }) {
+    if (typeof engine?.inspectHistoricalDirectLegacyLockIntent !== 'function') return [];
+    const directory = safeDirectory(executionDirectory, true, 'paper execution directory');
+    const names = fs.readdirSync(directory).filter(name => /^legacy-paper-lock-reclaim-[a-f0-9]{64}\.intent\.json$/.test(name));
+    const reconciled = [];
+    for (const name of names) {
+        const intentFile = path.join(directory, name);
+        const loaded = readSealedAudit(intentFile, LEGACY_PAPER_LOCK_RECLAIM_INTENT_CONTRACT,
+            item, sourceDescriptor);
+        const intent = normalizeLegacyPaperLockReclaimIntent(loaded.value.intent, item);
+        const eventId = legacyPaperLockReclaimEventId(intent);
+        if (loaded.value.eventId !== eventId) fail(`${item.paperId} historical legacy lock event ID drifted`);
+        const paths = legacyPaperLockReclaimPaths(directory, eventId);
+        if (fs.existsSync(paths.completion)) {
+            const completed = readSealedAudit(paths.completion, LEGACY_PAPER_LOCK_RECLAIM_COMPLETION_CONTRACT,
+                item, sourceDescriptor);
+            if (completed.value.eventId !== eventId
+                || completed.value.intentAuditSha256 !== loaded.value.auditSha256) {
+                fail(`${item.paperId} historical legacy lock completion binding drifted`);
+            }
+            normalizeLegacyPaperLockReclaimCompletion(completed.value.completion, item);
+            continue;
+        }
+        const target = engine.getPaperAnalysisLockPath(paper);
+        if (engine.inspectHistoricalDirectLegacyLockIntent(target, intent) !== 'owner_absent') continue;
+        const completion = { contract: 'historical-direct-remote-legacy-paper-lock-reclaim-completion-v1',
+            version: 1, recoveredAt: new Date().toISOString(), outcome: 'owner-absent-on-replay' };
+        writeLegacyPaperLockReclaimCompletion({ paths, eventId,
+            intentAuditSha256: loaded.value.auditSha256, item, sourceDescriptor, completion });
+        reconciled.push(eventId);
+    }
+    return reconciled;
 }
 
 function hasRecoverableAnalysisState(recovery) {
@@ -531,16 +703,31 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     if (!Number.isInteger(paperLockTimeoutMs) || paperLockTimeoutMs <= 0) {
         fail('paperLockTimeoutMs must be a positive integer');
     }
-    const runEngine = async () => engine.analyzeBatch([paper], {
-        concurrency: 1, maxRetries: dependencies.maxRetries ?? 2, saveInterval: 0,
-        paperLockOptions: { timeoutMs: paperLockTimeoutMs },
-        preparePaperLocked: () => ({ paper, skip: false }),
-        onPaperCheckpointLocked: checkpoint => { persistRecovery(checkpoint); },
-        onPaperResultLocked: async (_paper, event) => {
-            result = event.result || { ...paper, error: event.error || 'analysis failed' };
-            persistRecovery(result);
+    const runEngine = async () => {
+        const activeLockScope = directContext.getDirectRewriteAnalysisContext();
+        const paperLockOptions = { timeoutMs: paperLockTimeoutMs };
+        if (activeLockScope?.runId === item.runId
+            && activeLockScope.paperId === item.paperId
+            && activeLockScope.sourceSnapshotSha256 === sourceDescriptor.sourceSnapshotSha256
+            && typeof engine.HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY === 'symbol') {
+            reconcileLegacyPaperLockReclaimAudits({ executionDirectory, item, sourceDescriptor,
+                engine, paper });
+            paperLockOptions.recoveryPolicy = engine.HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY;
+            paperLockOptions.prepareHistoricalDirectLegacyLockReclaim = intent => {
+                return prepareLegacyPaperLockReclaimAudit({ executionDirectory, item, sourceDescriptor, intent });
+            };
         }
-    });
+        return engine.analyzeBatch([paper], {
+            concurrency: 1, maxRetries: dependencies.maxRetries ?? 2, saveInterval: 0,
+            paperLockOptions,
+            preparePaperLocked: () => ({ paper, skip: false }),
+            onPaperCheckpointLocked: checkpoint => { persistRecovery(checkpoint); },
+            onPaperResultLocked: async (_paper, event) => {
+                result = event.result || { ...paper, error: event.error || 'analysis failed' };
+                persistRecovery(result);
+            }
+        });
+    };
     const active = directContext.getDirectRewriteAnalysisContext();
     if (active) {
         // runDirectRewrite owns the outer scope so conference PDF page pixels
@@ -1159,7 +1346,10 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     STATES, registryName, registryPath, defaultPauseFilePath, operationLockTarget, pauseFileRequested, selectDirectItems,
     initialRegistry, normalizeRegistry, loadOrCreateRegistry, transition, registryCounts, directPaper, fallbackArxivDetails,
     analysisRecoveryPath, analysisRecoveryRecord, normalizeAnalysisRecovery, writeAnalysisRecovery,
-    readAnalysisRecovery, hasRecoverableAnalysisState, sourcePrerequisiteSnapshot,
+    readAnalysisRecovery, normalizeLegacyPaperLockReclaimIntent, normalizeLegacyPaperLockReclaimCompletion,
+    legacyPaperLockReclaimEventId,
+    legacyPaperLockReclaimPaths, prepareLegacyPaperLockReclaimAudit,
+    reconcileLegacyPaperLockReclaimAudits, hasRecoverableAnalysisState, sourcePrerequisiteSnapshot,
     priorPreprintAnalysisDisclosure, extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
     withEphemeralConferenceFigures, renderConferencePdfPages,
     directProvenanceFor, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,

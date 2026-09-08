@@ -22,6 +22,8 @@ const {
     inspectFileLockState,
     withFileLock,
     LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
+    HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
+    HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS,
     mergeCanonicalAnalysisState,
     isSuccessfulAnalysisRecord,
     scoringStabilityIsResolved,
@@ -1175,11 +1177,48 @@ describe('analyzePaperWithRetry', () => {
     it('核心摘要在 taxonomySeal 后绑定 taxonomy 输出而不是更早的 structureRepair 输出', () => {
         const contract = require('../scripts/analysis-contract.js');
         const paper = validAnalysisPaper('2604.00023');
-        paper.analysisManifest.stages.structureRepair.outputAnalysisSha256 = '0'.repeat(64);
+        const structureAnalysis = paper.analysis.replace(
+            '#语音识别 #Transformer #鲁棒性',
+            '#语音识别 #Transformer'
+        );
+        const structureSha = crypto.createHash('sha256').update(structureAnalysis).digest('hex');
+        const taxonomyStage = paper.analysisManifest.stages.taxonomySeal;
+        taxonomyStage.status = 'complete';
+        taxonomyStage.inputAnalysisSha256 = structureSha;
+        taxonomyStage.inputProtectedProjectionSha256 = crypto.createHash('sha256')
+            .update(contract.taxonomyProtectedProjection(structureAnalysis)).digest('hex');
+        taxonomyStage.bindingSha256 = contract.manualSha256({
+            registryVersion: taxonomyStage.registryVersion,
+            registrySha256: taxonomyStage.registrySha256,
+            projectionContract: taxonomyStage.projectionContract,
+            projectionSha256: taxonomyStage.projectionSha256,
+            selectionContract: taxonomyStage.selectionContract,
+            inputAnalysisSha256: taxonomyStage.inputAnalysisSha256,
+            outputAnalysisSha256: taxonomyStage.outputAnalysisSha256,
+            inputProtectedProjectionSha256: taxonomyStage.inputProtectedProjectionSha256,
+            outputProtectedProjectionSha256: taxonomyStage.outputProtectedProjectionSha256,
+            taxonomySurfaceSha256: taxonomyStage.taxonomySurfaceSha256,
+            primaryTaskId: taxonomyStage.primaryTaskId,
+            primaryMethodId: taxonomyStage.primaryMethodId,
+            conceptIds: taxonomyStage.conceptIds
+        });
+        paper.analysisStageCheckpoints.structureRepair = structureAnalysis;
 
         assert.strictEqual(
             contract.validateCoreSummaryStageBinding(paper),
             null
+        );
+
+        paper.analysisStageCheckpoints.taxonomySeal = structureAnalysis;
+        assert.match(
+            contract.validateCoreSummaryStageBinding(paper),
+            /taxonomySeal checkpoint 重放/
+        );
+
+        delete paper.analysisStageCheckpoints.taxonomySeal;
+        assert.match(
+            contract.validateCoreSummaryStageBinding(paper),
+            /缺少 taxonomySeal checkpoint/
         );
     });
 
@@ -1707,6 +1746,127 @@ describe('analysis run status', () => {
         const extra = makeLegacy('extra', parsed, true);
         fs.utimesSync(path.join(extra.lockPath, 'owner.json'), old, old);
         assert.strictEqual(canReclaimFileLock(extra.lockPath, 1000), false);
+    });
+
+    it('historical direct capability 仅审计回收超长租约的 hostname-drift exact legacy lock', async () => {
+        const makeLock = (name, { legacy = true, ageMs = HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS + 60_000,
+            extra = false, hardlink = false } = {}) => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), `paper-lock-direct-legacy-${name}-`));
+            const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+            fs.mkdirSync(lockPath, { mode: legacy ? 0o755 : 0o700 });
+            fs.chmodSync(lockPath, legacy ? 0o755 : 0o700);
+            const ownerPath = path.join(lockPath, 'owner.json');
+            fs.writeFileSync(ownerPath, JSON.stringify({ pid: 12345, hostname: `${os.hostname()}-old-host`,
+                token: 'ab898989-9898-4898-8898-989898989898', acquiredAt: '2026-09-01T00:00:00.000Z' }),
+            { mode: legacy ? 0o644 : 0o600 });
+            fs.chmodSync(ownerPath, legacy ? 0o644 : 0o600);
+            fs.utimesSync(ownerPath, new Date(Date.now() - ageMs), new Date(Date.now() - ageMs));
+            if (extra) fs.writeFileSync(path.join(lockPath, 'unexpected'), 'x');
+            if (hardlink) fs.linkSync(ownerPath, path.join(dir, 'owner-alias.json'));
+            return { target, lockPath, ownerPath };
+        };
+        const old = makeLock('old'); const intents = []; const completions = [];
+        assert.strictEqual(canReclaimFileLock(old.lockPath, 1), false,
+            'opaque capability is required even after the long threshold');
+        const options = { timeoutMs: 300, staleMs: 1,
+            recoveryPolicy: HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
+            prepareHistoricalDirectLegacyLockReclaim: intent => {
+                intents.push(intent); return completion => { completions.push(completion); };
+            } };
+        const release = acquireFileLockSync(old.target, options);
+        assert.strictEqual(intents.length, 1); assert.strictEqual(completions.length, 1);
+        assert.equal(intents[0].contract, 'historical-direct-remote-legacy-paper-lock-reclaim-intent-v1');
+        assert.equal(intents[0].owner.hostname, `${os.hostname()}-old-host`);
+        assert.ok(intents[0].leaseAgeMs > HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS);
+        assert.equal(completions[0].outcome, 'reclaimed-by-current-operation');
+        assert.strictEqual(fs.statSync(old.lockPath).mode & 0o777, 0o700);
+        assert.strictEqual(fs.statSync(old.ownerPath).mode & 0o777, 0o600);
+        assert.strictEqual(release(), true);
+
+        for (const [name, fixture] of [
+            ['no-audit', makeLock('no-audit')],
+            ['young', makeLock('young', { ageMs: HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS - 1000 })],
+            ['strict-current', makeLock('strict-current', { legacy: false })],
+            ['extra', makeLock('extra', { extra: true })],
+            ['hardlink', makeLock('hardlink', { hardlink: true })]
+        ]) {
+            const candidateOptions = { ...options, timeoutMs: 20,
+                ...(name === 'no-audit' ? { prepareHistoricalDirectLegacyLockReclaim: undefined } : {}),
+                ...(name === 'strict-current' ? { staleMs: 7 * 24 * 60 * 60 * 1000 } : {}) };
+            await assert.rejects(withFileLock(fixture.target, async () => {}, candidateOptions), /超时/,
+                `${name} must remain locked`);
+            assert.strictEqual(fs.existsSync(fixture.ownerPath), true);
+        }
+    });
+
+    it('historical direct legacy recovery races produce one audit and preserve mutual exclusion', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-direct-legacy-race-'));
+        const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+        fs.mkdirSync(lockPath, { mode: 0o755 }); fs.chmodSync(lockPath, 0o755);
+        fs.writeFileSync(path.join(lockPath, 'owner.json'), JSON.stringify({
+            pid: 12345, hostname: `${os.hostname()}-old-host`,
+            token: 'ac898989-9898-4898-8898-989898989898', acquiredAt: '2026-09-01T00:00:00.000Z'
+        }), { mode: 0o644 });
+        fs.chmodSync(path.join(lockPath, 'owner.json'), 0o644);
+        const old = new Date(Date.now() - HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS - 60_000);
+        fs.utimesSync(path.join(lockPath, 'owner.json'), old, old);
+        let intents = 0; let completions = 0; let active = 0; let maximum = 0;
+        const options = { timeoutMs: 1000,
+            recoveryPolicy: HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
+            prepareHistoricalDirectLegacyLockReclaim: () => {
+                intents += 1; return () => { completions += 1; };
+            } };
+        await Promise.all([1, 2].map(() => withFileLock(target, async () => {
+            active += 1; maximum = Math.max(maximum, active);
+            await new Promise(resolve => setTimeout(resolve, 10)); active -= 1;
+        }, options)));
+        assert.equal(intents, 1); assert.equal(completions, 1); assert.equal(maximum, 1);
+        assert.equal(fs.existsSync(lockPath), false);
+    });
+
+    it('historical direct audit prepare failure or lock mutation cannot delete the observed legacy owner', () => {
+        const makeLock = name => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), `paper-lock-direct-audit-failure-${name}-`));
+            const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
+            fs.mkdirSync(lockPath, { mode: 0o755 }); fs.chmodSync(lockPath, 0o755);
+            const ownerPath = path.join(lockPath, 'owner.json');
+            fs.writeFileSync(ownerPath, JSON.stringify({ pid: 12345, hostname: `${os.hostname()}-old-host`,
+                token: 'ad898989-9898-4898-8898-989898989898', acquiredAt: '2026-09-01T00:00:00.000Z' }),
+            { mode: 0o644 }); fs.chmodSync(ownerPath, 0o644);
+            const old = new Date(Date.now() - HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS - 60_000);
+            fs.utimesSync(ownerPath, old, old); return { target, lockPath, ownerPath };
+        };
+        const failed = makeLock('throw');
+        assert.throws(() => acquireFileLockSync(failed.target, { timeoutMs: 100,
+            recoveryPolicy: HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
+            prepareHistoricalDirectLegacyLockReclaim: () => { throw new Error('audit sink failed'); }
+        }), /audit sink failed/);
+        assert.equal(fs.existsSync(failed.ownerPath), true);
+        assert.deepEqual(fs.readdirSync(failed.lockPath), ['owner.json']);
+
+        const mutated = makeLock('mutated'); let finalized = false;
+        assert.throws(() => acquireFileLockSync(mutated.target, { timeoutMs: 30,
+            recoveryPolicy: HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
+            prepareHistoricalDirectLegacyLockReclaim: () => {
+                const now = new Date(); fs.utimesSync(mutated.ownerPath, now, now);
+                return () => { finalized = true; };
+            }
+        }), /超时/);
+        assert.equal(fs.existsSync(mutated.ownerPath), true);
+        assert.equal(finalized, false);
+
+        const incomplete = makeLock('finalize'); let retainedIntent = null;
+        assert.throws(() => acquireFileLockSync(incomplete.target, { timeoutMs: 100,
+            recoveryPolicy: HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
+            prepareHistoricalDirectLegacyLockReclaim: intent => {
+                retainedIntent = intent;
+                return () => { throw new Error('completion write failed'); };
+            }
+        }), /completion write failed/);
+        assert.equal(fs.existsSync(incomplete.lockPath), false,
+            'the owner was atomically reclaimed before completion failed');
+        assert.equal(retainedIntent.owner.ownerSha256.length, 64,
+            'a durable sink can retain the exact intent for replay');
     });
 
     it('owner duplicate keys、非法 schema、混合权限和 hardlink 全部拒绝回收', () => {

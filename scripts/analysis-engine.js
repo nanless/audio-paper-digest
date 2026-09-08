@@ -76,6 +76,14 @@ const FILE_LOCK_TOKEN_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f
 const LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY = Symbol(
     'local-dead-process-operation-lock-recovery-v1'
 );
+// This narrower capability exists only for a sealed historical-direct paper
+// execution.  It upgrades one pre-hardening 0755/0644 canonical lock whose
+// hostname no longer matches this machine, after a deliberately long lease.
+// Ordinary canonical locks and callers never receive this symbol.
+const HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY = Symbol(
+    'historical-direct-remote-legacy-paper-lock-recovery-v1'
+);
+const HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS = 24 * 60 * 60 * 1000;
 
 function jsonHasDuplicateObjectKeys(source) {
     const stack = [];
@@ -263,6 +271,28 @@ function operationLockMayImmediatelyReclaimLocalDeadOwner(snapshot, options = {}
     return localOwnerIsConfirmedDead(snapshot.owner);
 }
 
+function exactLegacyFileLockOwner(snapshot) {
+    const owner = snapshot?.owner;
+    return Boolean(snapshot?.exists && snapshot.consistent
+        && snapshot.directory?.mode === 0o755
+        && snapshot.ownerFile?.mode === 0o644
+        && JSON.stringify(owner?.keys) === JSON.stringify(['acquiredAt', 'hostname', 'pid', 'token'])
+        && Number.isInteger(owner?.pid) && owner.pid > 0
+        && typeof owner?.hostname === 'string' && owner.hostname.trim()
+        && typeof owner?.token === 'string' && FILE_LOCK_TOKEN_RE.test(owner.token)
+        && typeof owner?.acquiredAt === 'string'
+        && Number.isFinite(new Date(owner.acquiredAt).getTime()));
+}
+
+function historicalDirectRemoteLegacyLockMayReclaim(snapshot, nowMs, options = {}) {
+    if (options.recoveryPolicy !== HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY
+        || typeof options.prepareHistoricalDirectLegacyLockReclaim !== 'function'
+        || !exactLegacyFileLockOwner(snapshot)
+        || snapshot.owner.hostname === os.hostname()) return false;
+    const ageMs = nowMs - snapshot.ownerFile.mtimeMs;
+    return ageMs > HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS;
+}
+
 function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), options = {}) {
     if (!snapshot?.exists || !snapshot.consistent) return false;
     // The operation-lock policy does not apply to empty, malformed, legacy,
@@ -270,6 +300,7 @@ function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), op
     // through the ordinary lease gate below.
     if (operationLockMayImmediatelyReclaimLocalDeadOwner(snapshot, options)) return true;
     const ageMs = nowMs - (snapshot.ownerFile?.mtimeMs ?? snapshot.directory.mtimeMs);
+    if (historicalDirectRemoteLegacyLockMayReclaim(snapshot, nowMs, options)) return true;
     if (!(ageMs > staleMs)) return false;
     const owner = snapshot.owner;
     if (!owner) return snapshot.directory.mode === 0o700 && snapshot.ownerFile === null;
@@ -277,12 +308,7 @@ function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), op
         || !Number.isInteger(owner.pid) || owner.pid <= 0) return false;
     const strictCurrent = snapshot.directory.mode === 0o700
         && snapshot.ownerFile?.mode === 0o600;
-    const exactLegacy = snapshot.directory.mode === 0o755
-        && snapshot.ownerFile?.mode === 0o644
-        && JSON.stringify(owner.keys) === JSON.stringify(['acquiredAt', 'hostname', 'pid', 'token'])
-        && typeof owner.token === 'string' && owner.token.length > 0
-        && typeof owner.acquiredAt === 'string'
-        && Number.isFinite(new Date(owner.acquiredAt).getTime());
+    const exactLegacy = exactLegacyFileLockOwner(snapshot);
     if (!strictCurrent && !exactLegacy) return false;
     // Legacy 0755/0644 locks predate the hardened protocol.  They are accepted
     // only for this exact local-dead upgrade path; remote/unknown legacy owners
@@ -383,6 +409,9 @@ function acquireReclaimMarker(lockPath, staleMs, targetSnapshot, staleMarkerRemo
 function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
     const first = readFileLockSnapshot(lockPath);
     if (!fileLockSnapshotIsReclaimable(first, staleMs, Date.now(), options)) return false;
+    const historicalDirectLegacyRecovery = historicalDirectRemoteLegacyLockMayReclaim(
+        first, Date.now(), options
+    );
     const marker = acquireReclaimMarker(lockPath, staleMs, first);
     if (!marker) return false;
     try {
@@ -397,6 +426,40 @@ function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
             || JSON.stringify(second.entryNames) !== JSON.stringify(
                 second.ownerFile ? ['.reclaiming.json', 'owner.json'] : ['.reclaiming.json']
             )) return false;
+        let finalizeHistoricalAudit = null;
+        if (historicalDirectLegacyRecovery) {
+            const observedAt = new Date().toISOString();
+            const intent = Object.freeze({
+                contract: 'historical-direct-remote-legacy-paper-lock-reclaim-intent-v1',
+                version: 1,
+                observedAt,
+                recoveryHost: os.hostname(),
+                staleThresholdMs: HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS,
+                leaseAgeMs: Math.max(0, Math.floor(Date.parse(observedAt) - first.ownerFile.mtimeMs)),
+                lockIdentity: Object.freeze({
+                    directoryDev: String(first.directory.dev),
+                    directoryIno: String(first.directory.ino),
+                    ownerDev: String(first.ownerFile.dev),
+                    ownerIno: String(first.ownerFile.ino)
+                }),
+                owner: Object.freeze({
+                    pid: first.owner.pid,
+                    hostname: first.owner.hostname,
+                    acquiredAt: first.owner.acquiredAt,
+                    ownerSha256: first.ownerFile.sha256
+                })
+            });
+            finalizeHistoricalAudit = options.prepareHistoricalDirectLegacyLockReclaim(intent);
+            if (typeof finalizeHistoricalAudit !== 'function') {
+                throw new Error('historical direct legacy lock audit prepare callback must return a synchronous finalizer');
+            }
+            // The audit sink is outside the lock directory and is treated as
+            // untrusted. Re-read every inode and marker after it returns so it
+            // cannot make a changed lock look like the snapshot we reclaim.
+            const afterAudit = readFileLockSnapshot(lockPath);
+            if (!sameFileLockSnapshot(second, afterAudit, { ignoreDirectoryMtime: true })
+                || !sameReclaimMarker(marker, readReclaimMarker(marker.filename))) return false;
+        }
         if (second.ownerFile) {
             const ownerBefore = readFileLockSnapshot(lockPath);
             if (!sameFileLockSnapshot(second, ownerBefore, { ignoreDirectoryMtime: true })) return false;
@@ -411,6 +474,19 @@ function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
         if (finalDirectory.dev !== second.directory.dev || finalDirectory.ino !== second.directory.ino
             || fs.readdirSync(lockPath).length !== 0) return false;
         fs.rmdirSync(lockPath);
+        if (finalizeHistoricalAudit) {
+            const recoveredAt = new Date().toISOString();
+            const completion = Object.freeze({
+                contract: 'historical-direct-remote-legacy-paper-lock-reclaim-completion-v1',
+                version: 1,
+                recoveredAt,
+                outcome: 'reclaimed-by-current-operation'
+            });
+            const callbackResult = finalizeHistoricalAudit(completion);
+            if (callbackResult && typeof callbackResult.then === 'function') {
+                throw new Error('historical direct legacy lock audit finalizer must be synchronous');
+            }
+        }
         return true;
     } catch (error) {
         if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error;
@@ -418,6 +494,21 @@ function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
     } finally {
         try { unlinkMatchingReclaimMarker(marker); } catch {}
     }
+}
+
+function inspectHistoricalDirectLegacyLockIntent(filePath, intent) {
+    const lockPath = `${filePath}.lock`;
+    const identity = intent?.lockIdentity;
+    if (!identity || typeof identity !== 'object') return 'indeterminate';
+    const snapshot = readFileLockSnapshot(lockPath);
+    if (!snapshot.exists) return 'owner_absent';
+    if (!snapshot.consistent || snapshot.entryNames.includes('.reclaiming.json')) return 'indeterminate';
+    const present = String(snapshot.directory?.dev) === identity.directoryDev
+        && String(snapshot.directory?.ino) === identity.directoryIno
+        && String(snapshot.ownerFile?.dev) === identity.ownerDev
+        && String(snapshot.ownerFile?.ino) === identity.ownerIno
+        && snapshot.ownerFile?.sha256 === intent?.owner?.ownerSha256;
+    return present ? 'owner_present' : 'owner_absent';
 }
 
 /**
@@ -1711,10 +1802,13 @@ module.exports = {
     readJsonFileStrict,
     initializeJsonFileLocked,
     LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
+    HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
+    HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS,
     acquireFileLockSync,
     acquireFileLock,
     canReclaimFileLock,
     inspectFileLockState,
+    inspectHistoricalDirectLegacyLockIntent,
     withFileLockSync,
     withFileLock,
     withPaperAnalysisLock,

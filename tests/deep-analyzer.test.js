@@ -1973,6 +1973,30 @@ primary_task_tag: #音视频生成
         });
         assert.doesNotMatch(normalizedBridgeResult.article, /\[\[CONCEPT_BRIDGE_1\]\]/,
             'a unique marker-only line in the declared section is normalized without a model repair');
+        const conceptLeadFigurePayload = structuredClone(v3Payload);
+        const conceptLeadSection = conceptLeadFigurePayload.sections.find(
+            section => section.kind === 'method_overview'
+        );
+        conceptLeadSection.body = conceptLeadSection.body.replace(
+            '[[CONCEPT_BRIDGE_1]]\n\n[[CONCEPT_BRIDGE_2]]',
+            '[[CONCEPT_BRIDGE_1]]\n\n[[FIGURE_1]]\n\n'
+                + '图后解释依据同一小节已经陈述的结构关系，说明该图支持的机制判断、适用条件与仍需实验验证的外推边界。\n\n'
+                + '[[CONCEPT_BRIDGE_2]]'
+        );
+        conceptLeadFigurePayload.figurePlacements = [{
+            figureOrdinal: 1, targetKind: 'method_overview', marker: '[[FIGURE_1]]',
+            focusPoints: ['先核对输入如何进入两个并行分支', '再确认融合后的输出流向哪个任务头']
+        }];
+        const conceptLeadFigureResult = parseApiReaderArticleResult(
+            JSON.stringify(conceptLeadFigurePayload), {
+                requiredVersion: 3, requireIntegratedTables: true,
+                minimumIntegratedTables: 4, availableFigureOrdinals: [1]
+            }
+        );
+        assert.match(conceptLeadFigureResult.plan.figurePlacements[0].leadQuote,
+            /语义锚点 1.*声学证据 1/);
+        assert.doesNotMatch(conceptLeadFigureResult.plan.figurePlacements[0].leadQuote,
+            /CONCEPT_BRIDGE/);
         const escapedStructuralBreakPayload = structuredClone(v3Payload);
         const escapedBridgeSection = escapedStructuralBreakPayload.sections.find(
             section => section.kind === 'method_overview'
@@ -2765,6 +2789,34 @@ primary_task_tag: #音视频生成
         assert.deepStrictEqual(protectedValue.sections, beforeProtected);
     });
 
+    it('唯一且已有完整导读解释的 Figure marker 可安全对齐实际小节 kind', () => {
+        const { normalizeDeclaredReaderMarkerParagraphs } = require('../scripts/deep-analyzer.js');
+        const value = { sections: [
+            { kind: 'result', body: '结果正文足够长，但这里没有图像 marker。' },
+            { kind: 'reproduction', body: '这段图前导读已经明确给出观察顺序，并且长度超过图前门禁要求。\n\n'
+                + '[[FIGURE_4]]\n\n'
+                + '这段图后解释只概括现有证据、指标方向与复现检查点，明确说明结论成立的条件与不能外推的边界，长度也超过图后门禁要求。' }
+        ], conceptBridges: [], formulaBindings: [], figurePlacements: [{
+            marker: '[[FIGURE_4]]', figureOrdinal: 4, targetKind: 'result',
+            focusPoints: ['先观察输入与输出的对应关系', '再核对指标变化方向是否一致']
+        }] };
+        normalizeDeclaredReaderMarkerParagraphs(value);
+        assert.equal(value.figurePlacements[0].targetKind, 'reproduction');
+        assert.match(value.sections[1].body, /\n\n\[\[FIGURE_4\]\]\n\n/);
+
+        for (const mutate of [
+            draft => { draft.sections[1].body = '短导读\n\n[[FIGURE_4]]\n\n短解释'; },
+            draft => { draft.sections[0].body += '\n\n[[FIGURE_4]]'; },
+            draft => { draft.sections[1].body = '```text\n[[FIGURE_4]]\n```'; }
+        ]) {
+            const rejected = structuredClone(value);
+            rejected.figurePlacements[0].targetKind = 'result';
+            mutate(rejected);
+            normalizeDeclaredReaderMarkerParagraphs(rejected);
+            assert.equal(rejected.figurePlacements[0].targetKind, 'result');
+        }
+    });
+
     it('Reader 数值排版保护逐字引语、转录、代码与原始公式，不跨保护边界替换', () => {
         const { normalizeReaderEditorialSurface } = require('../scripts/deep-analyzer.js');
         const { findQuantitativeChineseNumerals } = require('../scripts/editorial-quality.js');
@@ -2831,6 +2883,7 @@ primary_task_tag: #音视频生成
         assert.equal(normalize(links), links);
         assert.equal(normalize('CER 从 32.56 降至 24.14，准确率为95。'),
             'CER 从 32.56 降至 24.14，准确率为 95。');
+        assert.equal(normalize('建议再跑一次四特征叠加实验。'), '建议再跑 1 次四特征叠加实验。');
     });
 
     it('2609.02941 TeX颜色前缀只解包明确修饰且保留原字quote、符号和单位', () => {
@@ -2865,6 +2918,30 @@ primary_task_tag: #音视频生成
                     `| Metric | Value |\n| --- | --- |\n| Change | ${unsafeValue} |`, signedSource), []);
             }
         }
+    });
+
+    it('千分位原文整数可与无逗号渲染值逐项精确绑定，但枚举逗号不被拼数', () => {
+        const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
+            bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
+        const sourceText = 'The released dataset contains 6,005 freeform conversations (50,324 turns) '
+            + 'and 2,438 scaffolded conversations (24,184 turns), for a total of 8,443 conversations and 74,508 turns.';
+        const article = '| Split | Conversations | Turns |\n| --- | ---: | ---: |\n'
+            + '| Freeform | 6005 | 50324 |\n| Scaffolded | 2438 | 24184 |\n| Total | 8443 | 74508 |';
+        const quotes = deriveExactTableSourceQuotes(article, sourceText);
+        assert.ok(quotes.includes(sourceText));
+        const bindings = [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: quotes }];
+        const structuredArtifacts = bindStructuredArtifactsToText(
+            { tables: [], formulas: [] }, sourceText
+        );
+        assert.strictEqual(bindApiReaderSourceEvidence(article, bindings, [], {
+            sourceText, structuredArtifacts
+        }).article, article.replaceAll('---:', '---'));
+        assert.throws(() => bindApiReaderSourceEvidence(article.replace('6005', '6006'),
+            bindings, [], { sourceText, structuredArtifacts }), /关键数字缺少 exact quote\/cell 证据/);
+        assert.deepStrictEqual(deriveExactTableSourceQuotes(
+            '| Pair | Value |\n| --- | ---: |\n| A | 12 |', 'Enumeration 1,2 is not the scalar twelve.'
+        ), []);
     });
 
     it('2609.03622 原表小数双写保留完整match，可按原字quote绑定干净值且不猜拆非重复串', () => {
@@ -3337,6 +3414,51 @@ has_dataset: 否
         assert.strictEqual(getCoreSummaryDetailIssue(withSummary(explicit)), null);
     });
 
+    it('核心摘要接受主干评测设置和论文原始 MJ 指标，但仍要求同句比较与数字', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const original = validAnalysisText().match(
+            /## 核心摘要\n([\s\S]*?)(?=\n## 方法概述和架构)/
+        )[1];
+        const recognized = original.replace(
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            '在 AVSBench V1m 公开基准的 Hiera-l 主干设置下，AuralSAM2 的 MJ 达到 75.58%，'
+                + '显著高于同主干基线的 67.70%，指标方向、比较对象与数值可由原文结果逐项核对。'
+        );
+        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(recognized)), null);
+        const missingComparison = recognized.replace(
+            '，显著高于同主干基线的 67.70%', ''
+        );
+        assert.match(
+            getCoreSummaryDetailIssue(withSummary(missingComparison)),
+            /缺少完整关键定量结果/
+        );
+    });
+
+    it('数据集论文可严格比较同一量表的两个维度，但不接受无方向并列', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const original = validAnalysisText().match(
+            /## 核心摘要\n([\s\S]*?)(?=\n## 方法概述和架构)/
+        )[1];
+        const compared = original.replace(
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            '在 30 名母语听众对 10 句训练集外句子的同一五级 Robust-MOS 主观评测设置下，'
+                + '伪造语音的可懂度得分为 4.01，高于自然度得分 3.40，两个比较维度使用相同量表且数值与方向均可核对。'
+        );
+        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(compared)), null);
+        assert.match(
+            getCoreSummaryDetailIssue(withSummary(compared.replace('，高于自然度得分 3.40', '，自然度得分 3.40'))),
+            /缺少完整关键定量结果/
+        );
+    });
+
     it('核心摘要修复证据只来自 sourceText，不含 canonical A_* 片段', () => {
         const { buildStageEvidenceContext } = require('../scripts/deep-analyzer.js');
         const evidence = buildStageEvidenceContext('coreSummaryRepair', validAnalysisText(),
@@ -3669,6 +3791,7 @@ has_dataset: 否
         assert.strictEqual(exterior(updated), exterior(original));
         assert.match(prompt, /2–4 个步骤/);
         assert.match(prompt, /320–600 个中文\/中文标点字符/);
+        assert.match(prompt, /同一量表上报告的两个条件或维度/);
         assert.strictEqual(maxTokens, 2500);
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);

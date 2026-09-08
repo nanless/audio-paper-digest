@@ -183,7 +183,7 @@ const CORE_SUMMARY_MAX_SENTENCES = 9;
 const CORE_SUMMARY_RESULT_UNAVAILABLE = '原文未提供可核对的关键定量结果';
 const CORE_SUMMARY_COST_UNAVAILABLE = '原文未披露训练、推理或部署成本';
 const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])/g;
-const CORE_SUMMARY_METRIC_PATTERN = /(?:WER|CER|PER|F1|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|accuracy|error rate|score|latency|throughput|RTF|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:WER|CER|PER|F1|F[- ]?Score|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|accuracy|error rate|score|latency|throughput|RTF|FPS|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)/i;
 const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)/i;
 const CORE_SUMMARY_NON_RESULT_PATTERN = /(?:模型|版本|参数量|样本量|训练步数|轮次|批量|batch|学习率|年份|第\s*\d+|图\s*\d+|表\s*\d+|式\s*\d+|章节|引用)/i;
 const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
@@ -957,7 +957,7 @@ function hasCompleteCoreSummaryQuantitativeResult(text) {
             || !CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return false;
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         if (!numbers.length) return false;
-        const setting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
+        const setting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
         const comparison = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
         return setting && comparison;
@@ -1183,17 +1183,18 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (stage.inputStructureProjectionSha256 !== stage.outputStructureProjectionSha256) {
         return '核心摘要局部修复改变了其他 12 节投影';
     }
-    const structureCheckpoint = paper?.analysisStageCheckpoints?.structureRepair;
-    if (typeof structureCheckpoint === 'string') {
-        const checkpointSummarySha256 = crypto.createHash('sha256')
-            .update(extractSection(structureCheckpoint, '核心摘要')).digest('hex');
-        if (crypto.createHash('sha256').update(structureCheckpoint).digest('hex')
-                !== stage.inputAnalysisSha256
-            || checkpointSummarySha256 !== stage.inputSummarySha256
-            || coreSummaryProjectionSha256(structureCheckpoint)
-                !== stage.inputStructureProjectionSha256) {
-            return '核心摘要输入不能从 structureRepair checkpoint 重放';
-        }
+    const upstreamCheckpoint = paper?.analysisStageCheckpoints?.[upstreamLabel];
+    if (typeof upstreamCheckpoint !== 'string') {
+        return `核心摘要输入缺少 ${upstreamLabel} checkpoint`;
+    }
+    const checkpointSummarySha256 = crypto.createHash('sha256')
+        .update(extractSection(upstreamCheckpoint, '核心摘要')).digest('hex');
+    if (crypto.createHash('sha256').update(upstreamCheckpoint).digest('hex')
+            !== stage.inputAnalysisSha256
+        || checkpointSummarySha256 !== stage.inputSummarySha256
+        || coreSummaryProjectionSha256(upstreamCheckpoint)
+            !== stage.inputStructureProjectionSha256) {
+        return `核心摘要输入不能从 ${upstreamLabel} checkpoint 重放`;
     }
     const summaryCheckpoint = paper?.analysisStageCheckpoints?.coreSummaryRepair;
     if (typeof summaryCheckpoint === 'string'

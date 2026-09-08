@@ -188,6 +188,14 @@ symlink 或不可重放状态都会失败关闭。decision apply 使用目录锁
 marker 下回收。远程 owner 无法以本机 PID 探测存活，但只有 owner 证据完整、heartbeat 和文件
 mtime 均已超过 lease 时，才会在独占 reclaim marker、inode 与 SHA 的 compare-and-swap 校验下
 回收；刚建立、心跳新鲜、被篡改或带额外内容的锁都不会被猜测删除。
+direct-local-first 分析另有一个不可序列化的窄 capability：它只在已封存 run/source 的
+historical direct 单篇上下文中启用，只处理超过 24 小时、hostname 已漂移且严格保持旧版
+`0755/0644` 四字段格式的 canonical paper lock。回收仍逐次复验目录与 owner inode、SHA、mtime、
+硬链、symlink、额外项和 reclaim marker；成功事件原子封存到该篇 execution 目录并绑定
+paper/run/source SHA。回收前先按锁 inode 与 owner SHA 追加不可变 intent，回收后再追加 completion；
+completion 写入中断时，下次同一 sealed direct execution 只在公共锁快照证明原 owner 已离开 canonical
+路径后补签，既不覆盖旧事件也不把仍存在或不确定的 owner 猜成已回收。近期旧锁、current
+`0700/0600` 锁和普通 canonical 调用不取得这项能力。
 当前生产 CLI 不使用 local/conference legacy lock-recovery capability；本地或会议 crawler batch 兼容入口已退休且
 失败关闭。通用 crosswalk CLI、远程、活 PID、权限不明、空或畸形锁均不能猜测删除锁。
 

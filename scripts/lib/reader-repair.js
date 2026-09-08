@@ -455,6 +455,28 @@ function buildRepairTargets(draft, issues) {
                 if (['result', 'ablation'].includes(section?.kind)) add(`/sections/${index}/body`);
             });
         }
+        for (const match of message.matchAll(/quantitative_chinese_numeral:([^；\n]+)/gu)) {
+            const surface = match[1].trim();
+            if (!surface) continue;
+            const escaped = surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const attachedNumeral = new RegExp(`${escaped}(?=[零〇一二两三四五六七八九十百千万亿])`, 'u');
+            let indexes = draft.sections.flatMap((section, index) => (
+                attachedNumeral.test(String(section?.body || '')) ? [index] : []
+            ));
+            if (!indexes.length) {
+                indexes = draft.sections.flatMap((section, index) => (
+                    String(section?.body || '').includes(surface) ? [index] : []
+                ));
+            }
+            indexes.forEach(index => add(`/sections/${index}/body`));
+        }
+        for (const match of message.matchAll(/broken_prose:([^；\n]+)/gu)) {
+            const surface = match[1].trim();
+            if (!surface) continue;
+            draft.sections.forEach((section, index) => {
+                if (String(section?.body || '').includes(surface)) add(`/sections/${index}/body`);
+            });
+        }
         for (const match of message.matchAll(/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\[(\d+)\](?:\.(body|heading|kind))?/g)) {
             add(`/${match[1]}/${match[2]}${match[1] === 'sections' && match[3] === 'body' ? '/body' : ''}`);
             sectionForBinding(match[1], Number(match[2]));
