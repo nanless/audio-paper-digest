@@ -20,6 +20,7 @@ const stableHash = fresh.stableHash;
 const RENDERER_IMPLEMENTATION_FILES = Object.freeze([
     'scripts/lib/historical-page-staging.js',
     'scripts/lib/historical-direct-page-staging.js',
+    'scripts/lib/historical-direct-rewrite-runner.js',
     'scripts/lib/historical-postprocess-scheduler.js',
     'scripts/lib/historical-daily-aggregate.js',
     'scripts/lib/historical-taxonomy-assignment.js',

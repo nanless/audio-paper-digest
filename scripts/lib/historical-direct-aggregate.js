@@ -566,7 +566,8 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
     if (directory !== path.join(stagingRoot, item.runId, segment)) fail(`${item.paperId} staging directory differs from direct route`);
     const loaded = readJson(path.join(directory, 'staging-input.json'), `${item.paperId} staging input`);
     const stage = loaded.value;
-    exact(stage, ['contract', 'version', 'paperId', 'runId', 'analysisArtifact', 'stagingBinding', 'stagingBindingSha256'], `${item.paperId} staging input`);
+    exact(stage, ['contract', 'version', 'paperId', 'runId', 'analysisArtifact', 'publicationSource',
+        'stagingBinding', 'stagingBindingSha256'], `${item.paperId} staging input`);
     if (stage.contract !== runnerApi.STAGING_CONTRACT || stage.version !== 1 || stage.paperId !== item.paperId || stage.runId !== item.runId
         || stableHash(stage.analysisArtifact) !== stableHash(artifact) || !validSha(stage.stagingBindingSha256)
         || stage.stagingBindingSha256 !== stableHash(stage.stagingBinding) || entry.staging.stagingBindingSha256 !== stage.stagingBindingSha256) {
@@ -575,11 +576,12 @@ function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoo
     const stageRegistry = planApi.buildRegistry(plan, item.route.kind === 'arxiv-fresh-fetch' ? { sourceBindings: [source.sourceBinding] } : {});
     const expectedBinding = planApi.directStagingBinding({ plan, registry: stageRegistry, paperId: item.paperId, analysisArtifact: artifact });
     if (stableHash(stage.stagingBinding) !== stableHash(expectedBinding)) fail(`${item.paperId} staging binding cannot replay direct source contract`);
+    const publicationSource = directPages.publicationSourceProof(item, source, stage.publicationSource);
     const canonical = readAnalysis(entry, item, artifact, executionRoot, source);
     const pageManifestFile = path.join(directory, 'page-staging-manifest.json');
     const pageManifest = directPages.validateManifest({
         value: readJson(pageManifestFile, `${item.paperId} direct page manifest`).value,
-        item, sourceDescriptor: source, artifact, analysis: canonical.analysis,
+        item, sourceDescriptor: source, publicationSource, artifact, analysis: canonical.analysis,
         stagingInputSha256: loaded.fileSha256, stagingBindingSha256: stage.stagingBindingSha256,
         directory, rendererImplementationSha256: entry.staging.pageStaging.rendererImplementationSha256
     });

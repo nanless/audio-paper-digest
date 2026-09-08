@@ -16,6 +16,7 @@ const sha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 function readerNumericSpellingGuidance() {
     return '数字格式：source_quotes 的数值必须与完整原文单位写在同一格（如171 ms、96.4%）；独立单位列不能替代。'
         + '若原表单位仅写在表头、数据格为裸值，应保留原表头单位与裸格，不能逐格追加%。'
+        + '若原句以“a vs. b/c dB”让末尾单位覆盖整组，正文也须保留同组写法，不能拆成“a dB”。'
         + '保留来源千分位逗号和小数精度，不自行四舍五入；sourceQuotes必须保留原文换行/空白。'
         + '只补quotes不能修复正文数字/单位拼写错误；仍须通过完整来源门禁。';
 }

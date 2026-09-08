@@ -36,17 +36,27 @@ function fixture(t) {
         sourceGeneration: 1, sourceManifestSha256: sourceDescriptor.sourceManifestSha256,
         sourceTextSha256: sourceDescriptor.textSha256, sourcePdfSha256: sourceDescriptor.pdfSha256,
         sourceRunIdentitySha256: sourceDescriptor.sourceRunIdentitySha256 };
-    return { root, item, analysis, sourceDescriptor, artifact, stagingInputSha256: sha('staging input'), stagingBindingSha256: sha('staging binding') };
+    const abstract = 'Exact sealed source abstract for publication.';
+    const publicationSource = { contract: api.PUBLICATION_SOURCE_CONTRACT, version: 1,
+        paperId: item.paperId, sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
+        sourceTextSha256: sourceDescriptor.textSha256, abstract, abstractSha256: sha(abstract) };
+    return { root, item, analysis, sourceDescriptor, publicationSource, artifact,
+        stagingInputSha256: sha('staging input'), stagingBindingSha256: sha('staging binding') };
 }
 function options(f, overrides = {}) {
-    return { item: f.item, sourceDescriptor: f.sourceDescriptor, artifact: f.artifact, analysis: f.analysis,
+    return { item: f.item, sourceDescriptor: f.sourceDescriptor,
+        publicationSource: f.item.route.kind === 'arxiv-fresh-fetch' ? f.publicationSource : null,
+        artifact: f.artifact, analysis: f.analysis,
         directory: path.join(f.root, 'staging'), stagingInputSha256: f.stagingInputSha256, stagingBindingSha256: f.stagingBindingSha256,
         dependencies: { rendererImplementationSha256: () => sha('renderer-v1'), assertCompleteAnalysis: () => {},
             renderDirectPage: packet => ({ markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }) }, ...overrides };
 }
 
 test('sealed direct source/Reader packet materializes every projected historical page without crosswalk or legacy taxonomy inputs', t => {
-    const f = fixture(t); const result = api.stageDirectPages(options(f));
+    const f = fixture(t); const packets = []; const result = api.stageDirectPages(options(f, {
+        dependencies: { rendererImplementationSha256: () => sha('renderer-v1'), assertCompleteAnalysis: () => {},
+            renderDirectPage: packet => { packets.push(packet); return { markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }; } }
+    }));
     assert.equal(result.contract, api.CONTRACT); assert.equal(result.pages.length, 2);
     assert.equal(result.analysis.readerArticleSha256, f.analysis.apiReaderArticleSha256);
     for (const page of result.pages) {
@@ -57,8 +67,24 @@ test('sealed direct source/Reader packet materializes every projected historical
     }
     const disk = JSON.stringify(result);
     assert.doesNotMatch(disk, /crosswalk|taxonomyAssignment|POISON_OLD_BODY/i);
+    assert.equal(packets.length, 2);
+    assert.deepEqual(packets[0].publicationSource, f.publicationSource);
+    assert.equal(Object.hasOwn(packets[0].paper, 'abstract'), false,
+        'Python must inject only the separately sealed publication abstract');
     const recovered = api.stageDirectPages(options(f));
     assert.equal(recovered.manifestSha256, result.manifestSha256);
+});
+
+test('direct arXiv publication source rejects identity, source, and abstract SHA drift', t => {
+    const f = fixture(t);
+    for (const publicationSource of [
+        { ...f.publicationSource, paperId: 'arxiv:2609.99999' },
+        { ...f.publicationSource, sourceSnapshotSha256: sha('another snapshot') },
+        { ...f.publicationSource, abstractSha256: sha('another abstract') },
+    ]) {
+        assert.throws(() => api.stageDirectPages(options(f, { publicationSource })),
+            /publication source is not bound/);
+    }
 });
 
 test('direct page staging fails closed when a rendered page byte changes after its source/Reader/projection seal', t => {

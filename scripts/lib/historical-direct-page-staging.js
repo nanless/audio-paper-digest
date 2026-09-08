@@ -13,6 +13,7 @@ const renderer = require('./historical-page-staging.js');
 
 const CONTRACT = 'historical-direct-paper-page-staging-v1';
 const VERSION = 1;
+const PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1';
 const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
 const PRIOR_PREPRINT_DISCLOSURE_CONTRACT = 'historical-author-prior-preprint-disclosure-v1';
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
@@ -95,6 +96,25 @@ function directPaper(item, analysis) {
     if (item.route?.kind === 'arxiv-fresh-fetch') paper.arxivId = item.route.arxivId;
     else { delete paper.arxivId; paper.id = item.paperId; }
     return paper;
+}
+function publicationSourceProof(item, sourceDescriptor, value) {
+    if (item?.route?.kind !== 'arxiv-fresh-fetch') {
+        if (value !== null && value !== undefined) fail(`${item?.paperId || 'unknown paper'} conference source cannot carry an arXiv publication source`);
+        return null;
+    }
+    exact(value, ['contract', 'version', 'paperId', 'sourceSnapshotSha256', 'sourceTextSha256',
+        'abstract', 'abstractSha256'], `${item.paperId} publication source`);
+    if (value.contract !== PUBLICATION_SOURCE_CONTRACT || value.version !== 1
+        || value.paperId !== item.paperId
+        || value.sourceSnapshotSha256 !== sourceDescriptor?.sourceSnapshotSha256
+        || value.sourceTextSha256 !== sourceDescriptor?.textSha256
+        || typeof value.abstract !== 'string' || !value.abstract.trim()
+        || value.abstract.includes('\0') || /\r/.test(value.abstract)
+        || Buffer.byteLength(value.abstract, 'utf8') > 200000
+        || value.abstractSha256 !== sha256(Buffer.from(value.abstract, 'utf8'))) {
+        fail(`${item.paperId} publication source is not bound to the sealed source abstract`);
+    }
+    return clone(value);
 }
 function sourceProof(item, sourceDescriptor, artifact) {
     if (!sourceDescriptor || sourceDescriptor.paperId !== item.paperId || !SHA.test(String(sourceDescriptor.sourceSnapshotSha256 || ''))
@@ -237,11 +257,11 @@ function hasExactTopDisclosure(markdown, disclosure) {
     if (closing < 0) return false;
     return markdown.slice(closing + delimiter.length).startsWith(`${normalized}${newline}${newline}`);
 }
-function buildManifest({ item, projection, source, analysis, sourceDisclosure = null, stagingInputSha256, stagingBindingSha256,
+function buildManifest({ item, projection, source, publicationSource, analysis, sourceDisclosure = null, stagingInputSha256, stagingBindingSha256,
     rendererImplementationSha256, pages, assets }) {
     const body = { contract: CONTRACT, version: VERSION, status: 'complete', paperId: item.paperId, runId: item.runId,
         route: item.route.kind, rendererImplementationSha256, stagingInputSha256, stagingBindingSha256,
-        source, analysis, ...(sourceDisclosure ? { sourceDisclosure } : {}),
+        source, publicationSource, analysis, ...(sourceDisclosure ? { sourceDisclosure } : {}),
         projection: { projectionSha256: projection.projectionSha256, pageSetSha256: projection.pageSetSha256 },
         pages: pages.slice().sort((left, right) => left.pagePath.localeCompare(right.pagePath)),
         pageSetSha256: stableHash(pages.slice().sort((left, right) => left.pagePath.localeCompare(right.pagePath))),
@@ -253,15 +273,16 @@ function receipt(manifest) {
     return { manifestSha256: manifest.manifestSha256, rendererImplementationSha256: manifest.rendererImplementationSha256,
         pageSetSha256: manifest.pageSetSha256, assetSetSha256: manifest.assetSetSha256 };
 }
-function validateManifest({ value, item, sourceDescriptor, artifact, analysis, stagingInputSha256, stagingBindingSha256,
+function validateManifest({ value, item, sourceDescriptor, publicationSource, artifact, analysis, stagingInputSha256, stagingBindingSha256,
     directory, rendererImplementationSha256, assertCompleteAnalysis } = {}) {
     const projection = pageProjection(item); const source = sourceProof(item, sourceDescriptor, artifact);
+    const publication = publicationSourceProof(item, sourceDescriptor, publicationSource);
     const reader = readerProof(item, analysis, artifact, { assertCompleteAnalysis });
     const sourceDisclosure = sourceDisclosureProof(item, sourceDescriptor);
     const pageDisclosure = pageDisclosureFor(item, sourceDescriptor);
     const hasSourceDisclosure = Object.hasOwn(value || {}, 'sourceDisclosure');
     exact(value, ['contract', 'version', 'status', 'paperId', 'runId', 'route', 'rendererImplementationSha256', 'stagingInputSha256',
-        'stagingBindingSha256', 'source', 'analysis', ...(hasSourceDisclosure ? ['sourceDisclosure'] : []),
+        'stagingBindingSha256', 'source', 'publicationSource', 'analysis', ...(hasSourceDisclosure ? ['sourceDisclosure'] : []),
         'projection', 'pages', 'pageSetSha256', 'assets', 'assetSetSha256', 'manifestSha256'],
     `${item.paperId} direct page manifest`);
     if (value.contract !== CONTRACT || value.version !== VERSION || value.status !== 'complete' || value.paperId !== item.paperId
@@ -277,6 +298,7 @@ function validateManifest({ value, item, sourceDescriptor, artifact, analysis, s
     }
     const body = { ...value }; delete body.manifestSha256;
     if (stableHash(body) !== value.manifestSha256 || stableHash(value.source) !== stableHash(source)
+        || stableHash(value.publicationSource) !== stableHash(publication)
         || stableHash(value.analysis) !== stableHash(reader)
         || stableHash(value.projection) !== stableHash({ projectionSha256: projection.projectionSha256, pageSetSha256: projection.pageSetSha256 })
         || stableHash(value.pages) !== value.pageSetSha256 || stableHash(value.assets) !== value.assetSetSha256) {
@@ -310,22 +332,24 @@ function validateManifest({ value, item, sourceDescriptor, artifact, analysis, s
     }
     return clone(value);
 }
-function stageDirectPages({ item, sourceDescriptor, artifact, analysis, directory, stagingInputSha256, stagingBindingSha256,
+function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact, analysis, directory, stagingInputSha256, stagingBindingSha256,
     dependencies = {} } = {}) {
     const root = safeDirectory(directory, 'direct page staging directory', true);
     if (!SHA.test(String(stagingInputSha256 || '')) || !SHA.test(String(stagingBindingSha256 || ''))) fail('direct staging input/binding SHA is invalid');
     const rendererImplementationSha256 = renderer.currentRendererImplementationSha256(dependencies);
     const manifestFile = path.join(root, 'page-staging-manifest.json');
     if (fs.existsSync(manifestFile)) return validateManifest({ value: parseJson(readFile(manifestFile, 64 * 1024 * 1024,
-        `${item.paperId} direct page manifest`).bytes, `${item.paperId} direct page manifest`), item, sourceDescriptor, artifact, analysis,
+        `${item.paperId} direct page manifest`).bytes, `${item.paperId} direct page manifest`), item, sourceDescriptor, publicationSource, artifact, analysis,
     stagingInputSha256, stagingBindingSha256, directory: root, rendererImplementationSha256, assertCompleteAnalysis: dependencies.assertCompleteAnalysis });
     const projection = pageProjection(item); const source = sourceProof(item, sourceDescriptor, artifact);
+    const publication = publicationSourceProof(item, sourceDescriptor, publicationSource);
     const analysisProof = readerProof(item, analysis, artifact, { assertCompleteAnalysis: dependencies.assertCompleteAnalysis });
     const render = dependencies.renderDirectPage || renderer.defaultRender; const assets = new Map(); const pages = [];
     const sourceDisclosure = sourceDisclosureProof(item, sourceDescriptor);
     const pageDisclosure = pageDisclosureFor(item, sourceDescriptor);
     for (const page of projection.pages) {
-        const result = normalizeRendererResult(render({ directStaging: true, paper: directPaper(item, analysis), cohortDate: page.cohortDate }), page);
+        const result = normalizeRendererResult(render({ directStaging: true, paper: directPaper(item, analysis),
+            publicationSource: publication, cohortDate: page.cohortDate }), page);
         for (const asset of result.assets) {
             const previous = assets.get(asset.record.path);
             if (previous && previous.record.sha256 !== asset.record.sha256) fail(`${item.paperId} direct renderer emitted conflicting asset bytes`);
@@ -348,15 +372,18 @@ function stageDirectPages({ item, sourceDescriptor, artifact, analysis, director
     if (renderer.currentRendererImplementationSha256(dependencies) !== rendererImplementationSha256) {
         fail(`${item.paperId} historical renderer changed while direct pages were rendering`);
     }
-    const manifest = buildManifest({ item, projection, source, analysis: analysisProof, sourceDisclosure,
+    const manifest = buildManifest({ item, projection, source, publicationSource: publication,
+        analysis: analysisProof, sourceDisclosure,
         stagingInputSha256, stagingBindingSha256,
         rendererImplementationSha256, pages, assets: [...assets.values()].map(asset => asset.record) });
     renderer.writeExact(manifestFile, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8'));
-    return validateManifest({ value: manifest, item, sourceDescriptor, artifact, analysis, stagingInputSha256, stagingBindingSha256,
+    return validateManifest({ value: manifest, item, sourceDescriptor, publicationSource: publication,
+        artifact, analysis, stagingInputSha256, stagingBindingSha256,
         directory: root, rendererImplementationSha256, assertCompleteAnalysis: dependencies.assertCompleteAnalysis });
 }
 
-module.exports = { CONTRACT, VERSION, HistoricalDirectPageStagingError, stableHash, pageProjection, directPaper,
+module.exports = { CONTRACT, VERSION, PUBLICATION_SOURCE_CONTRACT, HistoricalDirectPageStagingError,
+    stableHash, pageProjection, directPaper, publicationSourceProof,
     sourceProof, readerProof, priorPreprintDisclosureProof, priorPreprintPageDisclosure,
     arxivHistoricalVersionDisclosureProof, arxivHistoricalVersionPageDisclosure,
     sourceDisclosureProof, pageDisclosureFor, injectTopDisclosure, hasExactTopDisclosure,

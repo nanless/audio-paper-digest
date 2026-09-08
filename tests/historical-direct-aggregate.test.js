@@ -191,7 +191,15 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
             arxivId, textSourceId: `${arxivId}v2`, pdf: { sourceId: `${arxivId}v2`,
                 url: `https://arxiv.org/pdf/${arxivId}v2.pdf`, currentPdfUnavailable: true, currentPdfStatus: 404 }
         }) : null;
-        const text = `${sourceVersion ? `【来源版本警告】${sourceVersion.warning}\n\n` : ''}fresh official text ${arxivId} generation ${generation}`;
+        const text = [
+            sourceVersion ? `【来源版本警告】${sourceVersion.warning}\n` : '',
+            `Fresh official title ${arxivId}`,
+            'Abstract',
+            `Fresh exact abstract for ${arxivId} generation ${generation}. `.repeat(6),
+            'Keywords: speech, audio',
+            '1 Introduction',
+            `fresh official text ${arxivId} generation ${generation}`,
+        ].filter(Boolean).join('\n');
         const pdfBytes = Buffer.from(`%PDF-1.4\n${arxivId}/${generation}\n%%EOF\n`);
         const structuredArtifacts = { version: 1, tables: [], formulas: [], figures: [], flattenedTextSha256: sha(text) };
         structuredArtifacts.payloadSha256 = sha(JSON.stringify(structuredArtifacts));
@@ -326,6 +334,25 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.equal(output.length, 1); assert.equal(fs.statSync(output[0].filename).mode & 0o777, 0o600);
     assert.equal(fs.statSync(output[0].pageFilename).mode & 0o777, 0o600);
     assert.match(fs.readFileSync(output[0].pageFilename, 'utf8'), /\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)/);
+});
+
+test('direct aggregate rejects missing, extended, or source-drifted publication proof', async t => {
+    const f = await fixture(t); const registry = JSON.parse(fs.readFileSync(f.firstRegistry, 'utf8'));
+    const entry = registry.entries.find(value => value.paperId === 'arxiv:2608.00001');
+    const filename = path.join(entry.staging.directory, 'staging-input.json');
+    const original = JSON.parse(fs.readFileSync(filename, 'utf8'));
+    const variants = [];
+    const missing = structuredClone(original); delete missing.publicationSource; variants.push(missing);
+    variants.push({ ...structuredClone(original), unexpected: true });
+    variants.push({ ...structuredClone(original), publicationSource: {
+        ...original.publicationSource, sourceTextSha256: sha('another sealed source')
+    } });
+    for (const variant of variants) {
+        writeJson(filename, variant);
+        assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE }),
+            /staging input has unknown or missing fields|publication source is not bound/);
+    }
+    writeJson(filename, original);
 });
 
 test('direct aggregate makes a sealed historical arXiv version visible and rejects identity warning drift', async t => {

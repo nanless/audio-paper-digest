@@ -110,6 +110,32 @@ test('direct analysis input carries only the fresh-source title, never a frozen 
     assert.doesNotMatch(JSON.stringify(input), /ArXiv page|POISON_OLD_BLOG_BODY/);
 });
 
+test('sealed arXiv publication abstract extraction accepts explicit bounded layouts and rejects ambiguity', () => {
+    const expected = 'First exact sentence. Second exact sentence.';
+    assert.equal(runner.extractSealedArxivAbstract([
+        'Official title', 'Abstract', 'First exact sentence.\nSecond exact sentence.', 'Keywordsspeech, audio',
+        '1 Introduction', 'Body'
+    ].join('\n')), expected);
+    assert.equal(runner.extractSealedArxivAbstract([
+        'Official title', `Abstract—${expected}`, 'I. INTRODUCTION', 'Body'
+    ].join('\n')), expected);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Abstract', expected, 'Abstract', 'Another value', '1 Introduction'].join('\n')
+    ), /exactly one explicit Abstract marker/);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Official title', 'Abstract', expected, 'Body without a boundary'].join('\n')
+    ), /no explicit Keywords\/Index Terms\/Introduction boundary/);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Official title', 'Abstract', 'A'.repeat(20001), '1 Introduction'].join('\n')
+    ), /no explicit Keywords\/Index Terms\/Introduction boundary/);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Preamble '.repeat(6000), 'Abstract', expected, '1 Introduction'].join('\n')
+    ), /exactly one explicit Abstract marker/);
+    assert.throws(() => runner.extractSealedArxivAbstract(
+        ['Official title', 'Abstractness is not a section marker.', '1 Introduction'].join('\n')
+    ), /exactly one explicit Abstract marker/);
+});
+
 test('different-title prior preprint produces an explicit source title, DOI, and non-camera-ready analysis notice only for that relation', () => {
     const item = { paperId: 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6' };
     const acquisition = {
@@ -189,7 +215,12 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
 
 test('generic direct runner captures model payloads from fresh sources only and stages without runtime image assets', async t => {
     const f = fixture(t); const capturedModelPayloads = [];
-    const freshText = 'FRESH_ARXIV_SOURCE_TEXT '.repeat(20);
+    const freshText = [
+        'Fresh official title', 'Abstract',
+        'FRESH_ARXIV_SOURCE_TEXT '.repeat(20),
+        'Keywords: speech, audio', '1 Introduction',
+        'FRESH_ARXIV_SOURCE_TEXT '.repeat(20),
+    ].join('\n');
     const freshArtifactBody = { version: 1, tables: [], formulas: [], figures: [], flattenedTextSha256: sha(freshText) };
     const freshDetails = {
         paperId: 'arxiv:2601.00001', source: 'html', sourceId: '2601.00001', text: freshText, imageInfos: [],
@@ -233,7 +264,12 @@ test('generic direct runner captures model payloads from fresh sources only and 
 });
 
 function directArxivCapture() {
-    const text = 'DIRECT_GATE_FRESH_ARXIV_TEXT '.repeat(80);
+    const text = [
+        'Fresh official title', 'Abstract',
+        'DIRECT_GATE_FRESH_ARXIV_ABSTRACT '.repeat(8),
+        'Keywordsspeech, audio', '1 Introduction',
+        'DIRECT_GATE_FRESH_ARXIV_TEXT '.repeat(80),
+    ].join('\n');
     const artifactBody = { version: 1, tables: [], formulas: [], figures: [], flattenedTextSha256: sha(text) };
     const runtimeDetails = { paperId: 'arxiv:2601.00001', source: 'html', sourceId: '2601.00001', text,
         imageInfos: [], structuredArtifacts: { ...artifactBody, payloadSha256: sha(JSON.stringify(artifactBody)) },
@@ -374,7 +410,8 @@ test('persistent pause marker stops before new work and the same selection resum
 
 test('a pause requested by progress finishes the active paper and resumes without redoing sealed work', async t => {
     const f = fixture(t); const roots = files(f.root); const pauseFile = runner.defaultPauseFilePath(roots.registryRoot, f.plan, 1);
-    const sourceText = 'PAUSE_BOUNDARY_FRESH_ARXIV_TEXT '.repeat(80); let analyses = 0;
+    const sourceText = ['Official title', 'Abstract', 'Pause boundary exact abstract. '.repeat(8),
+        'Keywords: speech', '1 Introduction', 'PAUSE_BOUNDARY_FRESH_ARXIV_TEXT '.repeat(80)].join('\n'); let analyses = 0;
     const capture = options => freshSource.captureFreshArxivRewriteSource(options, {
         fetchText: async id => ({ text: sourceText, source: 'html', sourceId: id,
             url: `https://arxiv.org/html/${id}`, fetchedAt: '2026-09-07T00:00:01.000Z' }),
@@ -747,6 +784,41 @@ test('analysis_complete crash strictly replays source and analysis receipts dire
         audit.recoveryStatus]), [['analysis_complete', 'staged', 'completed-analysis-replayed']]);
 });
 
+test('failed staging with a valid completed analysis receipt retries staging without another analysis', async t => {
+    const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+        .find(entry => entry.paperId === 'arxiv:2601.00001');
+    let captures = 0; let analyses = 0; const capture = directArxivCapture();
+    const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: async input => { captures += 1; return capture(input); },
+        renderDirectPage,
+        analyze: async ({ sourceDescriptor, sourceDetails }) => {
+            analyses += 1;
+            return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }
+    });
+    let failed = asInterruptedAnalysisComplete(
+        JSON.parse(fs.readFileSync(first.registryFile, 'utf8')), f.plan, item.paperId);
+    failed = runner.transition(failed, f.plan, item.paperId, 'failed', {
+        staging: null, latestError: 'simulated renderer failure after analysis completion'
+    }, '2026-09-08T02:31:00.000Z');
+    write(first.registryFile, `${JSON.stringify(failed, null, 2)}\n`);
+    const audits = [];
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: async input => { captures += 1; return capture(input); },
+        renderDirectPage,
+        analyze: async () => { analyses += 1; throw new Error('failed-after-analysis must not call analysis'); },
+        onCrashRecoveryAudit: audit => audits.push(audit)
+    });
+    assert.equal(resumed.status, 'complete');
+    assert.equal(resumed.results[0].status, 'staged');
+    assert.equal(analyses, 1);
+    assert.equal(captures, 2);
+    assert.deepEqual(audits.map(audit => [audit.fromStatus, audit.normalizedStatus,
+        audit.recoveryStatus]), [['failed', 'staged', 'completed-analysis-replayed']]);
+});
+
 test('analysis_complete with drifted analysis bytes fails closed before normal same-run reanalysis', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
@@ -856,7 +928,9 @@ test('conference PDF pixels are rendered only under OS temp and retained only as
 test('a new arXiv generation receives an isolated direct registry and cannot recover the prior generation staging', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0;
     const capture = options => freshSource.captureFreshArxivRewriteSource(options, {
-        fetchText: async id => ({ text: `generation ${options.generation} fresh text ${id}. `.repeat(100), source: 'html',
+        fetchText: async id => ({ text: ['Official title', 'Abstract',
+            `generation ${options.generation} exact abstract ${id}. `.repeat(8), 'Keywords: speech',
+            '1 Introduction', `generation ${options.generation} fresh text ${id}. `.repeat(100)].join('\n'), source: 'html',
             sourceId: id, url: `https://arxiv.org/html/${id}`, fetchedAt: '2026-09-07T00:00:01.000Z' }),
         fetchPdf: async id => ({ bytes: Buffer.from(`%PDF-1.4\ngeneration ${options.generation} ${id}\n%%EOF\n`),
             url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: '2026-09-07T00:00:02.000Z' })
@@ -1074,7 +1148,8 @@ test('default runner engine exposes an arXiv primary downloader backed only by e
 test('direct runner retry of a failed same generation reuses table/formula/figure metadata without refetching source bytes', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
     const figureUrl = 'https://arxiv.org/html/2601.00001/figure-1.png';
-    const sourceText = 'table and formula source '.repeat(100);
+    const sourceText = ['Official title', 'Abstract', 'Table and formula exact abstract. '.repeat(8),
+        'Index Terms—speech, audio', 'I. INTRODUCTION', 'table and formula source '.repeat(100)].join('\n');
     const artifacts = { version: 1, source: 'html', flattenedTextSha256: sha(sourceText),
         tables: [{ ordinal: 1, caption: 'Table', rows: [[{ text: '0.9' }]], sourceDomSha256: sha('table') }],
         formulas: [{ ordinal: 1, latex: 'x=y', sourceDomSha256: sha('formula') }],

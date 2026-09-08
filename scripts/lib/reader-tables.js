@@ -75,6 +75,44 @@ function readerResultTableRequirement(artifacts) {
         minimumResultTables: sourceTableOrdinals.length ? 1 : 0, sourceTableOrdinals };
 }
 
+function effectiveReaderTableRows(table) {
+    const declaredHeaders = Array.isArray(table?.headerRows) ? [...table.headerRows] : [];
+    const declaredBodies = Array.isArray(table?.bodyRows) ? [...table.bodyRows] : [];
+    const matrix = table?.matrix;
+    const cells = table?.cells;
+    const width = matrix?.[0]?.length;
+    const unchanged = { headerRows: declaredHeaders, bodyRows: declaredBodies, inferred: false };
+    if (!Array.isArray(matrix) || matrix.length < 4 || !Number.isInteger(width) || width < 3
+        || matrix.some(row => !Array.isArray(row) || row.length !== width)
+        || !Array.isArray(cells)) return unchanged;
+    const dataRows = Array.from({ length: matrix.length - 2 }, (_, index) => index + 2);
+    // Compatibility for the old parser's exact row-header contagion shape:
+    // the top grouped header is explicit, its second tier is the sole declared
+    // body row, and every later model/value row was marked header merely
+    // because its first cell used <th>.  Require both DOM spans and an
+    // unambiguous label-plus-numeric matrix before deriving effective roles.
+    if (declaredBodies.length !== 1 || declaredBodies[0] !== 1
+        || declaredHeaders.length !== dataRows.length + 1
+        || !declaredHeaders.includes(0)
+        || dataRows.some(row => !declaredHeaders.includes(row))) return unchanged;
+    const topCells = cells.filter(cell => cell?.row === 0);
+    const secondTierCells = cells.filter(cell => cell?.row === 1);
+    const inherited = topCells.filter(cell => cell?.header === true && Number(cell.rowspan || 1) > 1);
+    if (!topCells.length || !topCells.every(cell => cell?.header === true)
+        || inherited.length !== 1 || Number(inherited[0].rowspan) !== 2
+        || !topCells.some(cell => cell?.header === true && Number(cell.colspan || 1) > 1)
+        || secondTierCells.length !== width - 1
+        || secondTierCells.some(cell => cell?.header !== false || cell?.column < 1)
+        || matrix[0][inherited[0].column] !== matrix[1][inherited[0].column]) return unchanged;
+    const headerLabel = value => /^\d+(?:\s*[-–]\s*\d+)?$/.test(String(value || '').trim());
+    const numericValue = value => /^[+\-\u2212]?\d+(?:\.\d+)?%?$/.test(String(value || '').trim());
+    if (matrix[1].slice(1).some(value => !headerLabel(value))
+        || dataRows.some(row => !/[A-Za-z\u3400-\u9fff]/.test(String(matrix[row][0] || ''))
+            || matrix[row].slice(1).some(value => !numericValue(value)))) return unchanged;
+    return { headerRows: [0, 1], bodyRows: dataRows, inferred: true,
+        inferenceContract: 'grouped-span-row-header-contagion-v1' };
+}
+
 function validateReaderResultTableCoverage(sections, artifacts) {
     const requirement = readerResultTableRequirement(artifacts);
     if (!requirement.minimumResultTables) return requirement;
@@ -104,7 +142,7 @@ function assessReaderTableSelectionEligibility(table) {
         add('invalid_source_matrix');
     } else {
         if (width < 2 || matrix.length < 2) add('insufficient_dimensions');
-        const headers = table.headerRows;
+        const headers = effectiveReaderTableRows(table).headerRows;
         if (!Array.isArray(headers) || headers.length === 0 || new Set(headers).size !== headers.length
             || headers.some(row => !Number.isInteger(row) || row < 0 || row >= matrix.length)) {
             add('header_identity_unavailable');
@@ -174,11 +212,12 @@ function renderReaderTableSelection(binding, artifacts) {
             throw new Error(`${label} 行列重复、越界或数量不足`);
         }
     }
-    const sourceRows = canonicalizeReaderSelectionRows(requestedSourceRows, table.headerRows);
-    if (!Array.isArray(table.headerRows) || !table.headerRows.includes(sourceRows[0])
-        || sourceRows.slice(1).some(row => table.headerRows.includes(row))) {
+    const effectiveRows = effectiveReaderTableRows(table);
+    const sourceRows = canonicalizeReaderSelectionRows(requestedSourceRows, effectiveRows.headerRows);
+    if (!effectiveRows.headerRows.includes(sourceRows[0])
+        || sourceRows.slice(1).some(row => effectiveRows.headerRows.includes(row))) {
         throw new Error(`${label} 第一行必须是原表头，其余行必须是数据行；`
-            + `sourceTableOrdinal=${sourceTableOrdinal}，原表明示表头行=${JSON.stringify(table.headerRows)}，`
+            + `sourceTableOrdinal=${sourceTableOrdinal}，有效表头行=${JSON.stringify(effectiveRows.headerRows)}，`
             + `当前选择行=${JSON.stringify(requestedSourceRows)}。只修改本 binding 的 sourceRows，不能改写正文或原表。`);
     }
     const cellBindings = [];
@@ -189,7 +228,7 @@ function renderReaderTableSelection(binding, artifacts) {
         const cell = cells[0];
         const text = table.matrix[sourceRow][sourceColumn];
         if (cells.length !== 1 || !sha256(cell?.sourceDomSha256) || cell.text !== text
-            || (renderedRow === 0 && cell.header !== true)) {
+            || (renderedRow === 0 && !effectiveRows.headerRows.includes(sourceRow))) {
             throw new Error(`${label} row=${sourceRow},column=${sourceColumn} 不能唯一重放到原始 DOM cell`);
         }
         // Escaping or rewriting arbitrary source markup changes the cell's
@@ -247,4 +286,5 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
 module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
     hasExplicitRepeatedScientificMeasurement, findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
-    canonicalizeReaderSelectionRows, renderReaderTableSelection, compileReaderTableSelections };
+    effectiveReaderTableRows, canonicalizeReaderSelectionRows, renderReaderTableSelection,
+    compileReaderTableSelections };

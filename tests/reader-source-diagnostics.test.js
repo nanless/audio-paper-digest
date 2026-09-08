@@ -242,6 +242,8 @@ test('first-attempt spelling guidance states both unit conventions without grant
     assert.match(notice, /171 ms、96.4%/);
     assert.match(notice, /独立单位列不能替代/);
     assert.match(notice, /原表头单位与裸格/);
+    assert.match(notice, /末尾单位覆盖整组/);
+    assert.match(notice, /不能拆成“a dB”/);
     assert.match(notice, /逗号和小数精度/);
     assert.match(notice, /换行\/空白/);
     assert.match(notice, /完整来源门禁/);

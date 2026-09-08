@@ -1,5 +1,7 @@
 import importlib.util
+import base64
 import hashlib
+import json
 import os
 import sys
 import unittest
@@ -114,8 +116,24 @@ class HistoricalPageRenderTests(unittest.TestCase):
             'inputCoreSummarySha256': summary_sha,
             'outputCoreSummarySha256': summary_sha,
         })
+        abstract = paper.pop('abstract')
+        paper['freshRewriteProvenance'] = {
+            'sourceSnapshotSha256': 'a' * 64,
+            'sourceSha256': 'b' * 64,
+        }
+        publication_source = {
+            'contract': renderer.DIRECT_PUBLICATION_SOURCE_CONTRACT,
+            'version': 1,
+            'paperId': paper['directPaperId'],
+            'sourceSnapshotSha256': 'a' * 64,
+            'sourceTextSha256': 'b' * 64,
+            'abstract': abstract,
+            'abstractSha256': hashlib.sha256(abstract.encode('utf-8')).hexdigest(),
+        }
         result = renderer.render_packet({
-            'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-07',
+            'directStaging': True, 'paper': paper,
+            'publicationSource': publication_source,
+            'cohortDate': '2026-09-07',
         })
         self.assertIn('论文图 1（像素未随页面持久化）', result['markdown'])
         self.assertIn(
@@ -129,6 +147,51 @@ class HistoricalPageRenderTests(unittest.TestCase):
         self.assertNotRegex(
             str(result), r'(?:cachePath|assetFilename|assetBytes|assetMediaType)',
         )
+        rethink = json.loads(next(
+            base64.b64decode(asset['base64'])
+            for asset in result['assets']
+            if asset['path'].endswith('/rethink-context.json')
+        ))
+        self.assertEqual(rethink['abstract'], abstract)
+        self.assertEqual(rethink['abstractSha256'], publication_source['abstractSha256'])
+
+    def test_direct_arxiv_renderer_rejects_unbound_publication_source(self):
+        paper = llm_api_ephemeral_figure_fixture()
+        paper['directPaperId'] = f'arxiv:{paper["arxivId"]}'
+        abstract = paper.pop('abstract')
+        paper['freshRewriteProvenance'] = {
+            'sourceSnapshotSha256': 'a' * 64,
+            'sourceSha256': 'b' * 64,
+        }
+        proof = {
+            'contract': renderer.DIRECT_PUBLICATION_SOURCE_CONTRACT,
+            'version': 1,
+            'paperId': paper['directPaperId'],
+            'sourceSnapshotSha256': 'a' * 64,
+            'sourceTextSha256': 'b' * 64,
+            'abstract': abstract,
+            'abstractSha256': hashlib.sha256(abstract.encode('utf-8')).hexdigest(),
+        }
+        for changed in (
+                {**proof, 'paperId': 'arxiv:2609.99999'},
+                {**proof, 'sourceSnapshotSha256': 'c' * 64},
+                {**proof, 'sourceTextSha256': 'c' * 64},
+                {**proof, 'abstractSha256': 'c' * 64},
+                {**proof, 'unexpected': True}):
+            with self.assertRaisesRegex(ValueError, 'publication source proof'):
+                renderer.inject_direct_publication_source(dict(paper), changed)
+        without_provenance = dict(paper)
+        without_provenance.pop('freshRewriteProvenance')
+        with self.assertRaisesRegex(ValueError, 'publication source proof'):
+            renderer.inject_direct_publication_source(without_provenance, proof)
+
+    def test_direct_conference_renderer_rejects_arxiv_publication_source(self):
+        paper = {
+            'directPaperId': 'conference:icassp:2026:icassp-arnumber:100',
+            'id': 'conference:icassp:2026:icassp-arnumber:100',
+        }
+        with self.assertRaisesRegex(ValueError, 'conference packet'):
+            renderer.inject_direct_publication_source(paper, {'contract': 'wrong'})
 
 
 if __name__ == '__main__':

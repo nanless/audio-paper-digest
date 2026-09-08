@@ -2834,9 +2834,51 @@ def _sealed_detailed_core_summary(paper, parsed):
     if stage.get('bindingSha256') != _stable_json_sha256(binding_body):
         raise PublishDataValidationError('现代 Reader 的详细核心摘要 binding SHA 不可重放')
     structure = stages.get('structureRepair') if isinstance(stages, dict) else None
-    if not isinstance(structure, dict) \
-            or structure.get('outputAnalysisSha256') != stage.get('inputAnalysisSha256'):
-        raise PublishDataValidationError('现代 Reader 的详细核心摘要未绑定结构阶段输出')
+    taxonomy = stages.get('taxonomySeal') if isinstance(stages, dict) else None
+    taxonomy_declared = contracts.get('taxonomy')
+    taxonomy_present = isinstance(stages, dict) and 'taxonomySeal' in stages
+    if taxonomy_declared is not None or taxonomy_present:
+        if taxonomy_declared != TAXONOMY_SELECTION_CONTRACT \
+                or not isinstance(taxonomy, dict) \
+                or taxonomy.get('status') not in {'complete', 'not_needed'} \
+                or not re.fullmatch(
+                    r'[0-9a-f]{64}', str(taxonomy.get('outputAnalysisSha256') or '')
+                ):
+            raise PublishDataValidationError(
+                '现代 Reader 的详细核心摘要上游 taxonomySeal 非法'
+            )
+        upstream = taxonomy
+        upstream_label = 'taxonomySeal'
+        checkpoints = paper.get('analysisStageCheckpoints')
+        upstream_checkpoint = checkpoints.get(upstream_label) \
+            if isinstance(checkpoints, dict) else None
+        checkpoint_parsed = parse_analysis(upstream_checkpoint) \
+            if isinstance(upstream_checkpoint, str) else None
+        checkpoint_summary = checkpoint_parsed.get('summary') \
+            if isinstance(checkpoint_parsed, dict) else None
+        if not isinstance(upstream_checkpoint, str) \
+                or not isinstance(checkpoint_summary, str) \
+                or hashlib.sha256(upstream_checkpoint.encode('utf-8')).hexdigest() \
+                != upstream.get('outputAnalysisSha256') \
+                or hashlib.sha256(
+                    checkpoint_summary.strip().encode('utf-8')
+                ).hexdigest() != stage.get('inputSummarySha256') \
+                or _core_summary_projection_sha256(upstream_checkpoint) \
+                != stage.get('inputStructureProjectionSha256'):
+            raise PublishDataValidationError(
+                '现代 Reader 的详细核心摘要无法从 taxonomySeal checkpoint 重放'
+            )
+    else:
+        # core-summary-detailed-v3 上线早期尚未有 taxonomySeal。只对完全没有
+        # taxonomy 合同和阶段的记录保留 structureRepair 直连兼容；任一现行
+        # taxonomy 痕迹存在时都不允许回退，避免绕过中间阶段。
+        upstream = structure
+        upstream_label = 'structureRepair'
+    if not isinstance(upstream, dict) \
+            or upstream.get('outputAnalysisSha256') != stage.get('inputAnalysisSha256'):
+        raise PublishDataValidationError(
+            f'现代 Reader 的详细核心摘要未绑定 {upstream_label} 输出'
+        )
     if not isinstance(scoring, dict):
         raise PublishDataValidationError('现代 Reader 的评分阶段未绑定详细核心摘要')
     if scoring.get('status') != MANUAL_REVIEW_MODE:

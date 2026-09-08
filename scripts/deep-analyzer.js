@@ -87,7 +87,8 @@ const {
 } = require('./lib/reader-contract.js');
 const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     assessReaderTableSelectionEligibility, findReaderTablePasteDuplication,
-    readerResultTableRequirement, validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
+    effectiveReaderTableRows, readerResultTableRequirement,
+    validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
 const { getDefaultTaxonomyRuntime } = require('./lib/taxonomy-runtime.js');
 const TAXONOMY_RUNTIME = getDefaultTaxonomyRuntime();
 
@@ -946,7 +947,58 @@ function readerNumericTokenMatches(value) {
             return ' '.repeat(prefix.length) + number;
         }
     );
-    return [...numericSurface.matchAll(pattern)];
+    const matches = [...numericSurface.matchAll(pattern)];
+    // LaTeXML sometimes flattens the visible math and its TeX annotation next
+    // to each other.  Keep a narrowly proved alias for the two exact forms we
+    // encounter in prose/table text so a trailing unit stays attached to the
+    // value it actually describes.  The original bytes and index remain the
+    // quote authority; a different value, sign, precision or unit creates no
+    // alias.
+    const exactNumber = raw => {
+        const surface = String(raw || '').normalize('NFKC')
+            .replace(/[\u2212\uFF0D]/g, '-');
+        return /^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/.test(surface)
+            ? surface : '';
+    };
+    const appendAlias = (whole, leftRaw, rightRaw, unitRaw, sourceLength = whole[0].length) => {
+        const left = exactNumber(leftRaw);
+        const right = exactNumber(rightRaw);
+        if (!left || left !== right) return;
+        const alias = [`${leftRaw} ${unitRaw}`];
+        alias.index = whole.index;
+        alias.input = originalSurface;
+        alias.sourceLength = sourceLength;
+        alias.latexmlExactDuplicateAlias = true;
+        matches.push(alias);
+    };
+    // Decimal duplicates have no separator in flattened output (10.010.0),
+    // while negative duplicates may use U+2212 for the visible copy and '-'
+    // for the TeX copy (−5.6-5.6).  Scan a bounded numeric run and accept it
+    // only when exactly one split yields byte-equivalent normalized halves.
+    const duplicateRun = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?[0-9\uFF10-\uFF19.,\uFF0C\uFF0E]+(?:[+\-\u2212\uFF0D][0-9\uFF10-\uFF19.,\uFF0C\uFF0E]+)?)\s*(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%\uFF05])(?![A-Za-z0-9_])/gi;
+    for (const whole of originalSurface.matchAll(duplicateRun)) {
+        const run = whole[1];
+        // Plain repeated integers are too easily confused with identifiers or
+        // adjacent counts.  These extraction shadows are only accepted when
+        // a decimal point or an explicit sign makes both copies auditable.
+        if (!/[.\uFF0E+\-\u2212\uFF0D]/.test(run)) continue;
+        const splits = [];
+        for (let index = 1; index < run.length; index += 1) {
+            const left = exactNumber(run.slice(0, index));
+            const right = exactNumber(run.slice(index));
+            if (left && right && left === right) splits.push([run.slice(0, index), run.slice(index)]);
+        }
+        if (splits.length === 1) appendAlias(whole, splits[0][0], splits[0][1], whole[2]);
+    }
+    // A TeX thousands separator is flattened as `{,}` and commonly follows a
+    // literal statistic name, e.g. 4,852\mu=4{,}852 ms.  Recognize only this
+    // exact \mu= bridge and require both numeric spellings to be identical
+    // after removing the TeX braces.
+    const texStatistic = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?(?:[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+|[0-9\uFF10-\uFF19]+)(?:[.\uFF0E][0-9\uFF10-\uFF19]+)?)\\mu\s*=\s*([+\-\u2212\uFF0D]?[0-9\uFF10-\uFF19{}.,\uFF0C\uFF0E]+)\s*(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%\uFF05])(?![A-Za-z0-9_])/gi;
+    for (const whole of originalSurface.matchAll(texStatistic)) {
+        appendAlias(whole, whole[1], whole[2].replace(/[{}]/g, ''), whole[3]);
+    }
+    return matches.sort((left, right) => left.index - right.index);
 }
 
 function canonicalReaderNumericToken(raw) {
@@ -1090,7 +1142,9 @@ function deriveExactTableSourceQuotes(renderedMarkdown, sourceText) {
         for (const match of sourceMatches) {
             if (!sourceNumericTokenExpansions(match[0]).has(token)
                 || !Number.isInteger(match.index)) continue;
-            const quote = exactSourceExcerpt(sourceText, match.index, match[0].length);
+            const quote = exactSourceExcerpt(
+                sourceText, match.index, match.sourceLength || match[0].length
+            );
             if (quote.length < 12 || !sourceText.includes(quote)) continue;
             if (!quotes.includes(quote)) quotes.push(quote);
             break;
@@ -1393,7 +1447,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         throw new Error(
             `读者文章 ${numericEvidenceFailures.join('；另有 ')}`
             + '。请一次核对并修复上述全部表格的数字、完整单位与对应来源句；时长应保留如“1 s”的单位写法，'
-            + '不要只写“1”或改成“1 秒”，也不要用其他语境中的同一数字补证据。'
+            + '不要只写“1”或改成“1 秒”；若原句仅在比较组末尾写单位，正文必须保留同组写法，不能逐值补单位；'
+            + '也不要用其他语境中的同一数字补证据。'
         );
     }
     const tableIndexes = new Set();
@@ -1547,7 +1602,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 + [...new Set(missingNumbers)].join(', ')
                 + `；未绑定单元格（行列从 0 开始，表头为第 0 行）：${affectedCells.join('；')}`
                 + '。请核对这些单元格的数字及完整单位与对应来源句；时长应保留如“1 s”的单位写法，'
-                + '不要只写“1”或改成“1 秒”，也不要用其他语境中的同一数字补证据。'
+                + '不要只写“1”或改成“1 秒”；若原句仅在比较组末尾写单位，正文必须保留同组写法，不能逐值补单位；'
+                + '也不要用其他语境中的同一数字补证据。'
             );
         }
         return {
@@ -2027,12 +2083,13 @@ function buildApiReaderArtifactEvidence(
     const tables = (structuredArtifacts.tables || []).slice(0, 12);
     for (let index = 0; index < tables.length; index++) {
         const table = tables[index];
+        const effectiveRows = effectiveReaderTableRows(table);
         const matrix = Array.isArray(table?.matrix) ? table.matrix.slice(0, 40) : [];
         const header = `TABLE_${table.ordinal}: ${String(table?.caption || '').replace(/\s+/g, ' ').trim()}`;
         if (!appendLine(header, 24)) break;
         const tableMetadata = [
             `TABLE_${table.ordinal}_SELECTION: ${JSON.stringify(assessReaderTableSelectionEligibility(table))}`,
-            `TABLE_${table.ordinal}_HEADER_ROWS: ${JSON.stringify(table.headerRows || [])}`,
+            `TABLE_${table.ordinal}_HEADER_ROWS: ${JSON.stringify(effectiveRows.headerRows)}`,
             `TABLE_${table.ordinal}_SHAPE: ${JSON.stringify({
                 rows: Array.isArray(table.matrix) ? table.matrix.length : 0,
                 columns: Array.isArray(table.matrix?.[0]) ? table.matrix[0].length : 0,
@@ -6853,9 +6910,25 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         matrix[rowIndex] ||= [];
         let columnIndex = 0;
         const row = $(rowElement);
-        const isHeaderRow = row.closest('thead').length > 0 || row.children('th, .ltx_th').length > 0;
+        const directCells = row.children('th, td, .ltx_th, .ltx_td').toArray();
+        const explicitHeaderCell = cellElement => (
+            cellElement.tagName?.toLowerCase() === 'th' || $(cellElement).hasClass('ltx_th')
+        );
+        const inheritedGroupedHeader = cells.some(cell => (
+            cell.header === true && cell.row < rowIndex
+            && rowIndex < cell.row + Number(cell.rowspan || 1)
+        )) && cells.some(cell => (
+            cell.header === true && cell.row === rowIndex - 1 && Number(cell.colspan || 1) > 1
+        ));
+        // A row-label <th> inside a data row must not turn every numeric <td>
+        // into a header.  Conversely, LaTeXML sometimes emits the second tier
+        // of a grouped rowspan/colspan header as <td>; the inherited span is
+        // sufficient DOM evidence to retain that tier as a header row.
+        const isHeaderRow = row.closest('thead').length > 0
+            || (directCells.length > 0 && directCells.every(explicitHeaderCell))
+            || inheritedGroupedHeader;
         (isHeaderRow ? headerRows : bodyRows).add(rowIndex);
-        for (const cellElement of row.children('th, td, .ltx_th, .ltx_td').toArray()) {
+        for (const cellElement of directCells) {
             while (matrix[rowIndex][columnIndex] !== undefined) columnIndex++;
             const cell = $(cellElement);
             const rowspan = positiveSpan(cell.attr('rowspan'));
@@ -6867,7 +6940,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
             const cellRecord = {
                 row: rowIndex,
                 column: columnIndex,
-                header: cellElement.tagName?.toLowerCase() === 'th' || cell.hasClass('ltx_th') || isHeaderRow,
+                header: explicitHeaderCell(cellElement) || isHeaderRow,
                 rowspan,
                 colspan,
                 text,

@@ -6,7 +6,8 @@ const path = require('node:path');
 const cheerio = require('cheerio');
 const { renderReaderTableSelection, compileReaderTableSelections,
     assessReaderTableSelectionEligibility, findReaderTablePasteDuplication,
-    hasExplicitRepeatedScientificMeasurement, canonicalizeReaderSelectionRows } = require('../scripts/lib/reader-tables.js');
+    hasExplicitRepeatedScientificMeasurement, effectiveReaderTableRows,
+    canonicalizeReaderSelectionRows } = require('../scripts/lib/reader-tables.js');
 
 function artifactsFixture() {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
@@ -74,6 +75,53 @@ test('cleanup eligibility is conservative and does not convert arbitrary values 
         table.matrix[1][1] = text;
         assert.equal(assessReaderTableSelectionEligibility(table).eligible, true, text);
         assert.equal(table.matrix[1][1], text);
+    }
+});
+
+test('legacy row-header contagion is repaired only with grouped DOM spans and numeric body semantics', () => {
+    const sha = 'a'.repeat(64);
+    const matrix = [
+        ['SLM', 'Smooth', 'Smooth'],
+        ['SLM', '1', '1-2'],
+        ['Moshi', '68.0', '61.3'],
+        ['VocalNet', '92.0', '94.0']
+    ];
+    const cells = [
+        { row: 0, column: 0, rowspan: 2, colspan: 1, text: 'SLM', header: true, sourceDomSha256: sha },
+        { row: 0, column: 1, rowspan: 1, colspan: 2, text: 'Smooth', header: true, sourceDomSha256: sha },
+        { row: 1, column: 1, rowspan: 1, colspan: 1, text: '1', header: false, sourceDomSha256: sha },
+        { row: 1, column: 2, rowspan: 1, colspan: 1, text: '1-2', header: false, sourceDomSha256: sha },
+        ...matrix.slice(2).flatMap((row, offset) => row.map((text, column) => ({
+            row: offset + 2, column, rowspan: 1, colspan: 1, text,
+            header: true, sourceDomSha256: sha
+        })))
+    ];
+    const legacy = { ordinal: 6, matrix, cells, headerRows: [0, 2, 3], bodyRows: [1],
+        recoveryStatus: 'complete', sourceDomSha256: sha };
+    const before = JSON.stringify(legacy);
+    assert.deepStrictEqual(effectiveReaderTableRows(legacy), {
+        headerRows: [0, 1], bodyRows: [2, 3], inferred: true,
+        inferenceContract: 'grouped-span-row-header-contagion-v1'
+    });
+    assert.equal(assessReaderTableSelectionEligibility(legacy).eligible, true);
+    const rendered = renderReaderTableSelection({ tableIndex: 1, selection: {
+        sourceTableOrdinal: 6, sourceRows: [1, 2, 3], sourceColumns: [0, 1, 2]
+    } }, { tables: [legacy] });
+    assert.match(rendered.markdown, /^\| SLM \| 1 \| 1-2 \|/);
+    assert.equal(rendered.binding.cellBindings.length, 9);
+    assert.equal(JSON.stringify(legacy), before, 'compatibility projection must not mutate sealed evidence');
+
+    const counterexamples = [
+        value => { value.cells.find(cell => cell.row === 0 && cell.column === 1).colspan = 1; },
+        value => { value.cells.find(cell => cell.row === 1 && cell.column === 1).header = true; },
+        value => { value.matrix[2][1] = 'not-a-number'; },
+        value => { value.headerRows = [0, 2]; },
+        value => { value.bodyRows = [1, 3]; }
+    ];
+    for (const mutate of counterexamples) {
+        const value = structuredClone(legacy);
+        mutate(value);
+        assert.equal(effectiveReaderTableRows(value).inferred, false);
     }
 });
 

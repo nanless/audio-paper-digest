@@ -27,6 +27,7 @@ const LEGACY_PAPER_LOCK_RECLAIM_INTENT_CONTRACT = 'historical-direct-legacy-pape
 const LEGACY_PAPER_LOCK_RECLAIM_COMPLETION_CONTRACT = 'historical-direct-legacy-paper-lock-reclaim-completion-v1';
 const PRIOR_PREPRINT_VERSION_RELATION = 'author-prior-preprint-with-different-title';
 const PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
+const PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1';
 const SHA = /^[a-f0-9]{64}$/;
 const STATES = new Set(['pending', 'sourcing', 'source_ready', 'analyzing', 'analysis_partial', 'analysis_complete', 'staged', 'failed']);
 const TRANSITIONS = new Map([
@@ -41,7 +42,7 @@ const TRANSITIONS = new Map([
     // for diagnosis and make the latest execution state failed so a later
     // retry cannot silently treat it as current.
     ['staged', new Set(['failed'])],
-    ['failed', new Set(['sourcing', 'analyzing'])]
+    ['failed', new Set(['sourcing', 'analyzing', 'staged'])]
 ]);
 
 class HistoricalDirectRewriteRunnerError extends Error {
@@ -507,6 +508,73 @@ function compactSourceDescriptor(route, source, item = null) {
 function sourceSnapshotSha(details) { return stableHash({ paperId: details.paperId, source: details.source, sourceId: details.sourceId,
     textSha256: sha256(Buffer.from(details.text, 'utf8')), structuredArtifacts: details.structuredArtifacts,
     ...(details.sourceVersion ? { sourceVersion: details.sourceVersion } : {}) }); }
+
+function extractSealedArxivAbstract(text) {
+    if (typeof text !== 'string' || !text.trim() || text.includes('\0')) {
+        fail('sealed arXiv source text is unavailable for publication abstract extraction');
+    }
+    const normalized = text.replace(/\r\n?/g, '\n');
+    const lines = normalized.split('\n');
+    const lineOffsets = []; let offset = 0;
+    for (const line of lines) { lineOffsets.push(offset); offset += line.length + 1; }
+    const maximumStartOffset = 50000;
+    const maximumAbstractSpan = 20000;
+    const starts = [];
+    for (let index = 0; index < lines.length; index += 1) {
+        if (lineOffsets[index] > maximumStartOffset) break;
+        if (/^\s*Abstract\s*$/i.test(lines[index])) {
+            starts.push({ index, inline: '' });
+            continue;
+        }
+        const match = lines[index].match(/^\s*Abstract\s*[.:\u2014\u2013-]\s*(.*)$/i);
+        if (match) starts.push({ index, inline: match[1] });
+    }
+    if (starts.length !== 1) {
+        fail(`sealed arXiv source must contain exactly one explicit Abstract marker; found ${starts.length}`);
+    }
+    const start = starts[0];
+    const introduction = line => /^\s*(?:(?:\d+(?:\.\d+)*\.?|[IVXLC]+\.?)\s+Introduction\b.*|Introduction\s*[.:]?)\s*$/i.test(line);
+    let boundary = -1;
+    for (let index = start.index + 1; index < lines.length; index += 1) {
+        if (lineOffsets[index] - lineOffsets[start.index] > maximumAbstractSpan) break;
+        if (introduction(lines[index])) { boundary = index; break; }
+        if (/^\s*(?:keywords?|key\s+words?|index\s+terms?)/i.test(lines[index])) {
+            const laterIntroduction = lines.findIndex((line, later) => later > index
+                && lineOffsets[later] - lineOffsets[start.index] <= maximumAbstractSpan
+                && introduction(line));
+            if (laterIntroduction >= 0) { boundary = index; break; }
+        }
+    }
+    if (boundary < 0) {
+        fail('sealed arXiv Abstract has no explicit Keywords/Index Terms/Introduction boundary');
+    }
+    const abstractLines = [start.inline, ...lines.slice(start.index + 1, boundary)];
+    const abstract = abstractLines.join('\n').replace(/\s+/g, ' ').trim();
+    if (abstract.length < 40 || Buffer.byteLength(abstract, 'utf8') > 200000 || abstract.includes('\0')) {
+        fail('sealed arXiv Abstract is empty, implausibly short, or oversized');
+    }
+    return abstract;
+}
+
+function publicationSourceFor(item, sourceDetails, sourceDescriptor) {
+    if (item?.route?.kind !== 'arxiv-fresh-fetch') return null;
+    if (!sourceDetails || sourceDetails.paperId !== item.paperId
+        || typeof sourceDetails.text !== 'string'
+        || sha256(Buffer.from(sourceDetails.text, 'utf8')) !== sourceDescriptor?.textSha256
+        || sourceSnapshotSha(sourceDetails) !== sourceDescriptor?.sourceSnapshotSha256) {
+        fail(`${item.paperId} publication source does not replay the sealed source descriptor`);
+    }
+    const abstract = extractSealedArxivAbstract(sourceDetails.text);
+    return {
+        contract: PUBLICATION_SOURCE_CONTRACT,
+        version: 1,
+        paperId: item.paperId,
+        sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256,
+        sourceTextSha256: sourceDescriptor.textSha256,
+        abstract,
+        abstractSha256: sha256(Buffer.from(abstract, 'utf8'))
+    };
+}
 function fallbackArxivDetails(source) {
     const text = source.text; const body = { version: 1, source: 'fresh_arxiv_text_without_layout', tables: [], formulas: [], figures: [],
         flattenedTextSha256: sha256(Buffer.from(text, 'utf8')) };
@@ -900,6 +968,7 @@ function recoverInterruptedRegistryEntry({ registry, plan, item, generation, exe
 async function replayCompletedAnalysisForStaging({ item, active, generation, executionRoot,
     freshArxivSourceRoot, readFreshArxivSource }) {
     const sourceDescriptor = validateInterruptedSourceDescriptor(item, active.source, generation);
+    let sourceDetails = null;
     if (item.route.kind === 'arxiv-fresh-fetch') {
         const stored = await readFreshArxivSource({ rootDir: freshArxivSourceRoot,
             arxivId: item.route.arxivId, generation });
@@ -911,6 +980,7 @@ async function replayCompletedAnalysisForStaging({ item, active, generation, exe
         if (stableHash(replayedDescriptor) !== stableHash(sourceDescriptor)) {
             fail(`${item.paperId} completed analysis source descriptor drifted from sealed bytes`);
         }
+        sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
     } else {
         planApi.verifyConferenceWriterInputs(item);
     }
@@ -946,7 +1016,7 @@ async function replayCompletedAnalysisForStaging({ item, active, generation, exe
         }
     }
     assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis });
-    return { sourceDescriptor, analysis };
+    return { sourceDescriptor, sourceDetails, analysis };
 }
 
 function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis }) {
@@ -975,8 +1045,10 @@ function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis 
     return expected;
 }
 
-function stageDirectExecution({ plan, registry, item, sourceDescriptor, analysis, stagingRoot, dependencies = {} }) {
+function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDetails = null,
+    analysis, stagingRoot, dependencies = {} }) {
     assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis });
+    const publicationSource = publicationSourceFor(item, sourceDetails, sourceDescriptor);
     const analysisRecordSha256 = stableHash(analysis);
     const analysisBytes = Buffer.from(`${JSON.stringify(canonical(analysis), null, 2)}\n`, 'utf8');
     const artifact = { paperId: item.paperId, runId: item.runId, route: item.route.kind,
@@ -993,9 +1065,11 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, analysis
         item.route.kind === 'arxiv-fresh-fetch' ? sourceDescriptor.sourceRunIdentitySha256 : 'conference-local');
     safeDirectory(directory, true, 'direct staging directory');
     const body = { contract: STAGING_CONTRACT, version: 1, paperId: item.paperId, runId: item.runId,
-        analysisArtifact: artifact, stagingBinding: binding, stagingBindingSha256: stableHash(binding) };
+        analysisArtifact: artifact, publicationSource,
+        stagingBinding: binding, stagingBindingSha256: stableHash(binding) };
     const stagingInputSha256 = writeAtomic(path.join(directory, 'staging-input.json'), body);
-    const pageManifest = directPages.stageDirectPages({ item, sourceDescriptor, artifact, analysis, directory,
+    const pageManifest = directPages.stageDirectPages({ item, sourceDescriptor, publicationSource,
+        artifact, analysis, directory,
         stagingInputSha256, stagingBindingSha256: body.stagingBindingSha256,
         dependencies: { ...dependencies, assertCompleteAnalysis: candidate =>
             assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis: candidate }) } });
@@ -1031,7 +1105,8 @@ function replayDirectPageStaging({ item, active, stagingRoot, executionRoot }) {
     }
     const manifest = directPages.validateManifest({
         value: JSON.parse(readRegular(path.join(directory, 'page-staging-manifest.json')).bytes.toString('utf8')),
-        item, sourceDescriptor: active.source, artifact: staging.analysisArtifact, analysis,
+        item, sourceDescriptor: active.source, publicationSource: body.publicationSource,
+        artifact: staging.analysisArtifact, analysis,
         stagingInputSha256: stagingInput.sha256, stagingBindingSha256: body.stagingBindingSha256, directory,
         rendererImplementationSha256: staging.pageStaging.rendererImplementationSha256,
         assertCompleteAnalysis: candidate => assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: active.source, analysis: candidate })
@@ -1082,13 +1157,17 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
     const runOne = async item => {
         let active = registry.entries.find(entry => entry.paperId === item.paperId);
         let executionDir = null; let descriptor = null;
-        if (active.status === 'analysis_complete') {
+        const replayableCompletedAnalysis = active.status === 'analysis_complete'
+            || active.status === 'failed' && active.analysis;
+        if (replayableCompletedAnalysis) {
+            const replayFromStatus = active.status;
             try {
                 const completed = await replayCompletedAnalysisForStaging({ item, active,
                     generation: arxivGeneration, executionRoot: options.executionRoot,
                     freshArxivSourceRoot: options.freshArxivSourceRoot, readFreshArxivSource });
                 const staging = stageDirectExecution({ plan, registry, item,
-                    sourceDescriptor: completed.sourceDescriptor, analysis: completed.analysis,
+                    sourceDescriptor: completed.sourceDescriptor, sourceDetails: completed.sourceDetails,
+                    analysis: completed.analysis,
                     stagingRoot: options.stagingRoot, dependencies });
                 registry = transition(registry, plan, item.paperId, 'staged', {
                     staging, latestError: null
@@ -1096,7 +1175,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 persist();
                 const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
                     paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
-                    fromStatus: 'analysis_complete', normalizedStatus: 'staged',
+                    fromStatus: replayFromStatus, normalizedStatus: 'staged',
                     recoveryStatus: 'completed-analysis-replayed',
                     sourceSnapshotSha256: completed.sourceDescriptor.sourceSnapshotSha256,
                     recoverySha256: active.analysis?.recovery?.recoverySha256 || null,
@@ -1107,14 +1186,14 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 }
                 return { paperId: item.paperId, status: 'staged' };
             } catch (error) {
-                const detail = `analysis_complete replay rejected: ${String(error.message || error).slice(0, 1200)}`;
+                const detail = `${replayFromStatus} completed-analysis replay rejected: ${String(error.message || error).slice(0, 1200)}`;
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     latestError: `[crash-recovery] ${detail}`
                 }, now);
                 persist();
                 const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
                     paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
-                    fromStatus: 'analysis_complete', normalizedStatus: 'failed',
+                    fromStatus: replayFromStatus, normalizedStatus: 'failed',
                     recoveryStatus: 'completed-analysis-invalid',
                     sourceSnapshotSha256: SHA.test(String(active.source?.sourceSnapshotSha256 || ''))
                         ? active.source.sourceSnapshotSha256 : null,
@@ -1234,7 +1313,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     fileSha256: analysisRecovery.fileSha256, recoverySha256: analysisRecovery.recoverySha256,
                     recordSha256: analysisRecovery.recordSha256, updatedAt: analysisRecovery.updatedAt } } : {}) },
                 analysisRecovery: undefined }, now); persist();
-            const staging = stageDirectExecution({ plan, registry, item, sourceDescriptor: descriptor, analysis,
+            const staging = stageDirectExecution({ plan, registry, item, sourceDescriptor: descriptor,
+                sourceDetails, analysis,
                 stagingRoot: options.stagingRoot, dependencies: executionDependencies });
             registry = transition(registry, plan, item.paperId, 'staged', { staging }, now); persist();
             return { paperId: item.paperId, status: 'staged' };
@@ -1342,9 +1422,11 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
 }
 
 module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOVERY_CONTRACT,
+    PUBLICATION_SOURCE_CONTRACT,
     HistoricalDirectRewriteRunnerError, stableHash,
     STATES, registryName, registryPath, defaultPauseFilePath, operationLockTarget, pauseFileRequested, selectDirectItems,
     initialRegistry, normalizeRegistry, loadOrCreateRegistry, transition, registryCounts, directPaper, fallbackArxivDetails,
+    extractSealedArxivAbstract, publicationSourceFor,
     analysisRecoveryPath, analysisRecoveryRecord, normalizeAnalysisRecovery, writeAnalysisRecovery,
     readAnalysisRecovery, normalizeLegacyPaperLockReclaimIntent, normalizeLegacyPaperLockReclaimCompletion,
     legacyPaperLockReclaimEventId,

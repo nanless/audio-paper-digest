@@ -3,12 +3,57 @@
 
 import json
 import base64
+import hashlib
+import re
 import sys
 import tempfile
 from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
+
+
+DIRECT_PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1'
+SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
+
+
+def inject_direct_publication_source(projected, publication_source):
+    arxiv_id = projected.get('arxivId')
+    if not arxiv_id:
+        if publication_source is not None:
+            raise ValueError('direct conference packet cannot carry arXiv publication source')
+        return projected
+    fields = {
+        'contract', 'version', 'paperId', 'sourceSnapshotSha256',
+        'sourceTextSha256', 'abstract', 'abstractSha256',
+    }
+    if not isinstance(publication_source, dict) \
+            or set(publication_source) != fields:
+        raise ValueError('direct arXiv publication source proof is required')
+    abstract = publication_source.get('abstract')
+    abstract_sha = publication_source.get('abstractSha256')
+    provenance = projected.get('freshRewriteProvenance')
+    if publication_source.get('contract') != DIRECT_PUBLICATION_SOURCE_CONTRACT \
+            or publication_source.get('version') != 1 \
+            or publication_source.get('paperId') != projected.get('directPaperId') \
+            or publication_source.get('paperId') != f'arxiv:{arxiv_id}' \
+            or not SHA256_RE.fullmatch(str(publication_source.get('sourceSnapshotSha256') or '')) \
+            or not SHA256_RE.fullmatch(str(publication_source.get('sourceTextSha256') or '')) \
+            or not isinstance(provenance, dict) \
+            or publication_source.get('sourceSnapshotSha256') \
+                != provenance.get('sourceSnapshotSha256') \
+            or publication_source.get('sourceTextSha256') \
+                != provenance.get('sourceSha256') \
+            or not isinstance(abstract, str) or not abstract \
+            or abstract != abstract.strip() or '\r' in abstract or '\0' in abstract \
+            or len(abstract.encode('utf-8')) > 200000 \
+            or not SHA256_RE.fullmatch(str(abstract_sha or '')) \
+            or hashlib.sha256(abstract.encode('utf-8')).hexdigest() != abstract_sha:
+        raise ValueError('direct arXiv publication source proof is invalid')
+    if projected.get('abstract') not in (None, abstract):
+        raise ValueError('direct arXiv publication source conflicts with analysis abstract')
+    projected['abstract'] = abstract
+    return projected
 
 
 def render_packet(packet):
@@ -27,7 +72,12 @@ def render_packet(packet):
         if not isinstance(paper.get('directPaperId'), str) or not paper['directPaperId']:
             raise ValueError('direct staging paper identity is required')
         projected = dict(paper)
+        projected = inject_direct_publication_source(
+            projected, packet.get('publicationSource')
+        )
     else:
+        if packet.get('publicationSource') is not None:
+            raise ValueError('non-direct packet cannot carry publication source proof')
         if not isinstance(assignment, dict):
             raise ValueError('taxonomy object is required')
         if assignment.get('status') != 'assigned' or assignment.get('paperId') != f'arxiv:{paper.get("arxivId")}':

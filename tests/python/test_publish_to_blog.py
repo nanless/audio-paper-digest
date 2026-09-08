@@ -971,6 +971,50 @@ class PublishToBlogReviewTest(unittest.TestCase):
         with self.assertRaisesRegex(PublishDataValidationError, '未达到 core-summary-detailed-v3'):
             publish_to_blog.llm_api_production_proof([shallow])
 
+    def test_current_core_summary_replays_taxonomy_seal_upstream(self):
+        paper = llm_api_publication_fixture()
+        analysis_sha = hashlib.sha256(paper['analysis'].encode('utf-8')).hexdigest()
+        structure_sha = hashlib.sha256(
+            (paper['analysis'] + '\nlegacy taxonomy surface').encode('utf-8')
+        ).hexdigest()
+        paper['analysisManifest']['contracts']['taxonomy'] = (
+            publish_to_blog.TAXONOMY_SELECTION_CONTRACT
+        )
+        paper['analysisManifest']['stages']['structureRepair'][
+            'outputAnalysisSha256'
+        ] = structure_sha
+        paper['analysisManifest']['stages']['taxonomySeal'] = {
+            'status': 'complete',
+            'inputAnalysisSha256': structure_sha,
+            'outputAnalysisSha256': analysis_sha,
+        }
+        paper['analysisStageCheckpoints'] = {
+            'taxonomySeal': paper['analysis'],
+        }
+
+        self.assertEqual(
+            publish_to_blog._sealed_detailed_core_summary(
+                paper, publish_to_blog.parse_analysis(paper['analysis'])
+            ),
+            paper['parsed']['summary'],
+        )
+
+        drifted = copy.deepcopy(paper)
+        drifted['analysisStageCheckpoints']['taxonomySeal'] += '\n'
+        with self.assertRaisesRegex(
+                PublishDataValidationError, 'taxonomySeal checkpoint 重放'):
+            publish_to_blog._sealed_detailed_core_summary(
+                drifted, publish_to_blog.parse_analysis(drifted['analysis'])
+            )
+
+        incomplete = copy.deepcopy(paper)
+        del incomplete['analysisManifest']['stages']['taxonomySeal']
+        with self.assertRaisesRegex(
+                PublishDataValidationError, '上游 taxonomySeal 非法'):
+            publish_to_blog._sealed_detailed_core_summary(
+                incomplete, publish_to_blog.parse_analysis(incomplete['analysis'])
+            )
+
     def test_core_summary_setting_does_not_treat_pearson_suffix_as_on(self):
         summary = (
             '语音可懂度评估输入为不同算法处理后的语音，输出为听者能否辨别音位的可懂度分数，难点在于生成式方法不保真参考且实验室测试昂贵难扩展。'

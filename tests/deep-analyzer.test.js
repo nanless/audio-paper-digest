@@ -425,6 +425,34 @@ describe('arXiv HTML full-text health gate', () => {
         assert.ok(artifacts.tables[0].cells.every(cell => /^[a-f0-9]{64}$/.test(cell.sourceDomSha256)));
     });
 
+    it('用 grouped rowspan/colspan 区分二层表头与首列 th 数据行', () => {
+        const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
+        const html = `<article><figure class="ltx_table">
+          <figcaption><span class="ltx_tag_table">Table 1:</span> Success rates.</figcaption>
+          <table class="ltx_tabular">
+            <tr><th rowspan="2">SLM</th><th colspan="2">Smooth</th></tr>
+            <tr><td>1</td><td>1-2</td></tr>
+            <tr><th>Moshi</th><td>68.0</td><td>61.3</td></tr>
+            <tr><th>VocalNet</th><td>92.0</td><td>94.0</td></tr>
+          </table>
+        </figure></article>`;
+        const table = parseArxivStructuredArtifactsFromHtml(
+            html, '2608.00002v1', '2608.00002v1'
+        ).tables[0];
+        assert.deepStrictEqual(table.headerRows, [0, 1]);
+        assert.deepStrictEqual(table.bodyRows, [2, 3]);
+        assert.ok(table.cells.find(cell => cell.row === 1 && cell.column === 1).header);
+        assert.equal(table.cells.find(cell => cell.row === 2 && cell.column === 0).header, true);
+        assert.equal(table.cells.find(cell => cell.row === 2 && cell.column === 1).header, false);
+
+        const noGroupedSpan = html.replace(' rowspan="2"', '').replace(' colspan="2"', '');
+        const conservative = parseArxivStructuredArtifactsFromHtml(
+            noGroupedSpan, '2608.00003v1', '2608.00003v1'
+        ).tables[0];
+        assert.deepStrictEqual(conservative.headerRows, [0]);
+        assert.deepStrictEqual(conservative.bodyRows, [1, 2, 3]);
+    });
+
     it('把没有 figure wrapper 的 LaTeXML semantic tabular 纳入 inventory', () => {
         const { parseArxivStructuredArtifactsFromHtml } = require('../scripts/deep-analyzer.js');
         const html = `<article><div class="ltx_para"><span class="ltx_tabular">
@@ -3083,6 +3111,33 @@ primary_task_tag: #音视频生成
         const unitless = 'The measured score is 3.093.09 under the shared protocol.';
         for (const fabricated of ['3.09 dB', '3.09 s', '3.09%']) {
             assert.deepStrictEqual(deriveExactTableSourceQuotes(table(fabricated), unitless), []);
+        }
+    });
+
+    it('LaTeXML 同值统计双写保留末尾单位，并拒绝非同值、错符号和普通相邻数', () => {
+        const { deriveExactTableSourceQuotes } = require('../scripts/deep-analyzer.js');
+        const table = value => `| Metric | Value |\n| --- | --- |\n| Checked | ${value} |`;
+        const latency = 'Observed latency was μ=4,852\\mu=4{,}852\u2009ms on the RAG task.';
+        const latencyQuotes = deriveExactTableSourceQuotes(table('4,852 ms'), latency);
+        assert.ok(latencyQuotes.includes(latency));
+        assert.ok(latencyQuotes.every(quote => latency.includes(quote)));
+
+        for (const [surface, rendered] of [
+            ['−5.6-5.6\u2009dB', '-5.6 dB'],
+            ['10.010.0 dB', '10.0 dB'],
+            ['+0.15+0.15 dB', '+0.15 dB']
+        ]) {
+            const source = `The exact duplicated measurement is ${surface} in the source.`;
+            assert.ok(deriveExactTableSourceQuotes(table(rendered), source).includes(source));
+        }
+        for (const [source, rendered] of [
+            ['Observed latency was μ=4,852\\mu=4{,}851 ms.', '4,852 ms'],
+            ['Observed latency was μ=4,852\\mu=4{,}852 s.', '4,852 ms'],
+            ['The signed values are −5.6+5.6 dB.', '-5.6 dB'],
+            ['The decimals are 10.010.1 dB.', '10.0 dB'],
+            ['Two ordinary adjacent values are 10.0 11.0 dB.', '10.0 dB']
+        ]) {
+            assert.deepStrictEqual(deriveExactTableSourceQuotes(table(rendered), source), [], source);
         }
     });
 
