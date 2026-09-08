@@ -3587,6 +3587,39 @@ has_dataset: 否
         );
     });
 
+    it('核心摘要 Prompt 推荐的高低比较通过门禁但无“从”的升降端点仍拒绝', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withResult = sentence => validAnalysisText().replace(
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            sentence
+        );
+        const accepted = '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标为 0.83，'
+            + '高于 Vanilla 基线的 0.25，比较对象、数值与方向均可由原文核对。';
+        assert.strictEqual(getCoreSummaryDetailIssue(withResult(accepted)), null);
+        const sourceOptions = { sourceText:
+            'Experiment on the benchmark reports success rate 0.83 for BadRobot and 0.25 for Vanilla.' };
+        for (const rejected of [
+            '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标相对 Vanilla 基线的 0.25 升至 0.83。',
+            '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标相对 Vanilla 基线为 0.25 降至 0.83。'
+        ]) {
+            assert.match(getCoreSummaryDetailIssue(withResult(rejected), sourceOptions),
+                /最接近的同句量化候选缺少：比较方向/);
+        }
+        const actual2509Failure = '神经网络驱动指标全面领先传统基线，侵入式 ScoreQ-Ref 取得最高的绝对 '
+            + 'Pearson 相关 0.87，NOMAD 0.83，传统中最优的 WarpQ 与 PESQ 均为 0.73。';
+        assert.match(getCoreSummaryDetailIssue(withResult(actual2509Failure), sourceOptions),
+            /最接近的同句量化候选缺少：评测设置/);
+        const superlativeOnly2509Failure = actual2509Failure.replace(
+            '神经网络驱动指标全面领先传统基线，', ''
+        );
+        assert.match(getCoreSummaryDetailIssue(
+            withResult(superlativeOnly2509Failure), sourceOptions
+        ), /最接近的同句量化候选缺少：评测设置、比较方向/);
+        const closed2509 = '在 17 个编解码器条件的评测设置下，ScoreQ-Ref 的绝对 Pearson 相关为 0.87，'
+            + '高于 WarpQ 与 PESQ 基线的 0.73，比较对象、数值与方向均可由原文核对。';
+        assert.strictEqual(getCoreSummaryDetailIssue(withResult(closed2509)), null);
+    });
+
     it('核心摘要对照是评测设置，但只写下降多少分仍精确报缺指标名', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const withSummary = summary => validAnalysisText().replace(
@@ -3933,6 +3966,11 @@ has_dataset: 否
         assert.match(block, /禁止把 `0\.85` 改成 `85\.00`/);
         assert.match(block, /禁止增删末尾零、舍入、百分数与小数互换、单位换算或自行计算差值/);
         assert.match(block, /禁止把摘要\/引言中的概括值与表格中的基线值拼成一组比较/);
+        assert.match(block, /\[方法 A\]的\[指标\]为\[数值 A\]，高于\/低于\[基线 B\]的\[数值 B\]/);
+        assert.match(block, /方向必须字面使用“高于”“低于”“从……升至”或“从……降至”之一/);
+        assert.match(block, /不能用“最高”“最优”“最低”或“达到”代替/);
+        assert.match(block, /禁止写无“从”的“\[数值 B\]升至\/降至\[数值 A\]”/);
+        assert.doesNotMatch(block, /相对\[比较对象 B\]为\[数值\]升至\/降至\[数值\]/);
         const expected = crypto.createHash('sha256').update(JSON.stringify({
             runtimePrompt: block,
             contractVersion: 'core-summary-detailed-v3'
@@ -4041,6 +4079,7 @@ has_dataset: 否
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
         assert.match(prompts[1], /这是第 2 次局部修复/);
+        assert.match(prompts[1], /方向必须字面使用“高于”“低于”“从……升至”或“从……降至”之一/);
     });
 
     it('核心摘要 cost-only 重试传递上一候选并且不再误导修改量化句', async () => {

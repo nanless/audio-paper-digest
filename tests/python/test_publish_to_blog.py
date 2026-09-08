@@ -1073,6 +1073,43 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     publish_to_blog._detailed_core_summary_semantic_issue(no_cost),
                 )
 
+    def test_core_summary_accepts_explicit_correlation_metrics_but_keeps_other_gates(self):
+        summary = (
+            '音频问答开放式回答需判断语义等价与部分正确并建模多人标注分歧，输入为问题、参考答案、文本化依据与候选回答，输出为1至5分正确性分布的均值与方差，难点在于依据缺失时需回听音频且主观性导致均值相近但方差差异显著。'
+            '三阶段流水线先由Gemini生成依据与Whisper转录并用15个音频大模型产生候选回答，输出进入第二阶段由人类按1至5分标注正确性并以Q/A/R/U/E结构化反馈标记问题、依据与参考答案缺陷。'
+            '第三阶段由人机协同修正被标记的问题、依据与参考答案以净化基准，净化后数据与合成数据共同支撑训练。'
+            'ORCA将问题、参考答案、依据与候选回答拼接输入预训练Transformer，取末层隐状态经线性层输出Beta、Multinomial或Bernoulli似然参数以预测人类打分分布，并采用三阶段课程学习从合成评测数据逐步过渡到带依据的人标数据。'
+            '与依赖提示的LLM法官相比，ORCA直接拟合人类打分分布而非依赖大模型隐式语义，并显式预测方差以量化不确定度与识别争议样本，具备校准的绝对误差与单次前向推理效率。'
+            '在跨基准评测设置下，ORCA在未见基准上的Spearman相关性相对已见基准从0.91降至0.85。'
+            '该结论适用边界受限于文本化依据充分的英语音频问答，对依据生成错误、长音频依赖与跨语言场景尚未验证，失败条件包括依据不足需听音频判定及高度主观的情感与讽刺判断。'
+            '原文未披露训练、推理或部署成本。'
+        )
+        for metric in ('Spearman', 'Pearson', 'Kendall'):
+            with self.subTest(metric=metric):
+                candidate = summary.replace('Spearman', metric)
+                self.assertIsNone(
+                    publish_to_blog._detailed_core_summary_semantic_issue(candidate)
+                )
+
+        cases = {
+            'missing_direction': summary.replace(
+                '从0.91降至0.85', '分别为0.91和0.85'
+            ),
+            'missing_explicit_metric': summary.replace(
+                'Spearman相关性', '相关性'
+            ),
+            'missing_setting': summary.replace(
+                '在跨基准评测设置下，ORCA在未见基准上的Spearman相关性相对已见基准从0.91降至0.85。',
+                'ORCA的Spearman相关性相对参考组从0.91降至0.85。',
+            ),
+        }
+        for name, candidate in cases.items():
+            with self.subTest(name=name):
+                self.assertIn(
+                    '缺少完整关键定量结果',
+                    publish_to_blog._detailed_core_summary_semantic_issue(candidate),
+                )
+
     def test_modern_resources_show_identity_type_and_status_without_weight_claims(self):
         paper = llm_api_publication_fixture()
         resource = paper['apiReaderResources']['resources'][0]
