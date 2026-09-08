@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const { extractMarkdownTables } = require('../analysis-contract.js');
-const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v3';
+const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v4';
 const READER_SECTION_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
     'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
@@ -54,6 +54,83 @@ function completeSelectionMarkerPermutation(draft, tables) {
         if (occurrences !== 1 || standaloneBlocks !== 1) return null;
     }
     return ordinals;
+}
+
+// A bridge marker contains no authored prose; its declaration carries the
+// explanation.  Once sections and bridge ordinals are canonical, a missing or
+// misplaced marker can be placed deterministically only when its declared
+// section kind occurs exactly once and every existing bridge marker is an
+// exact, unique, standalone token. Misplaced markers are moved only from a
+// paragraph-final position, allowing the exact "\n\nMARKER" byte span to be
+// transferred without rewriting any non-marker byte.
+function normalizeConceptBridgeMarkerLocations(draft) {
+    const sections = Array.isArray(draft?.sections) ? draft.sections : [];
+    const bridges = Array.isArray(draft?.conceptBridges) ? draft.conceptBridges : [];
+    const canonicalSections = sections.every((section, index) => {
+        const rank = READER_SECTION_KINDS.indexOf(section?.kind);
+        const previousRank = index ? READER_SECTION_KINDS.indexOf(sections[index - 1]?.kind) : -1;
+        return rank >= 0 && rank >= previousRank && typeof section?.body === 'string';
+    });
+    if (!bridges.length || !canonicalSections || bridges.some((bridge, index) => (
+        bridge?.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
+        || !READER_SECTION_KINDS.includes(bridge?.sectionKind)
+    ))) return [];
+    const declared = new Set(bridges.map(bridge => bridge.marker));
+    const rawTokens = sections.flatMap((section, sectionIndex) => [
+        ...section.body.matchAll(/\[\[CONCEPT_BRIDGE_[^\]]+\]\]/g)
+    ].map(match => ({ marker: match[0], sectionIndex })));
+    const tokens = [];
+    for (const [sectionIndex, section] of sections.entries()) {
+        let fence = null;
+        for (const line of section.body.split('\n')) {
+            const boundary = line.match(/^ {0,3}(`{3,}|~{3,})/);
+            if (boundary) {
+                if (!fence) fence = boundary[1];
+                else if (boundary[1][0] === fence[0] && boundary[1].length >= fence.length
+                    && line.slice(boundary[0].length).trim() === '') fence = null;
+                continue;
+            }
+            if (fence) continue;
+            if (/^\[\[CONCEPT_BRIDGE_[^\]]+\]\]$/.test(line)) {
+                tokens.push({ marker: line, sectionIndex });
+            }
+        }
+    }
+    if (rawTokens.length !== tokens.length || tokens.some(token => !declared.has(token.marker))
+        || new Set(tokens.map(token => token.marker)).size !== tokens.length) return [];
+    const changes = [];
+    for (const [bridgeIndex, bridge] of bridges.entries()) {
+        const targetIndexes = sections.flatMap((section, index) =>
+            section.kind === bridge.sectionKind ? [index] : []);
+        if (targetIndexes.length !== 1) continue;
+        const targetIndex = targetIndexes[0];
+        const location = tokens.find(token => token.marker === bridge.marker);
+        if (!location) {
+            const before = sections[targetIndex].body;
+            if (!before || /\s$/.test(before)) continue;
+            sections[targetIndex].body = `${before}\n\n${bridge.marker}`;
+            changes.push({ bridgeIndex, marker: bridge.marker, operation: 'insert',
+                fromSectionIndex: null, toSectionIndex: targetIndex,
+                fromBodySha256: null, toBodyBeforeSha256: sha(before),
+                toBodyAfterSha256: sha(sections[targetIndex].body) });
+            continue;
+        }
+        if (location.sectionIndex === targetIndex) continue;
+        const source = sections[location.sectionIndex];
+        const span = `\n\n${bridge.marker}`;
+        if (!source.body.endsWith(span) || !sections[targetIndex].body
+            || /\s$/.test(sections[targetIndex].body)) continue;
+        const sourceBefore = source.body;
+        const targetBefore = sections[targetIndex].body;
+        source.body = source.body.slice(0, -span.length);
+        sections[targetIndex].body = targetBefore + span;
+        changes.push({ bridgeIndex, marker: bridge.marker, operation: 'move',
+            fromSectionIndex: location.sectionIndex, toSectionIndex: targetIndex,
+            fromBodyBeforeSha256: sha(sourceBefore), fromBodyAfterSha256: sha(source.body),
+            toBodyBeforeSha256: sha(targetBefore), toBodyAfterSha256: sha(sections[targetIndex].body),
+            movedSpanSha256: sha(span) });
+    }
+    return changes;
 }
 
 function normalizeReaderDraftOrder(input) {
@@ -147,10 +224,11 @@ function normalizeReaderDraftOrder(input) {
             draft.conceptBridges = bridges.map(item => item.bridge);
         }
     }
+    const conceptMarkerLocations = normalizeConceptBridgeMarkerLocations(draft);
     const outputSha256 = sha(draft);
     return { draft, mapping: { contract: READER_DRAFT_ORDER_CONTRACT, inputSha256, outputSha256,
         changed: inputSha256 !== outputSha256, sections: sectionMap, tables: tableMap,
-        conceptBridges: bridgeMap } };
+        conceptBridges: bridgeMap, conceptMarkerLocations } };
 }
 
 module.exports = { READER_DRAFT_ORDER_CONTRACT, READER_SECTION_KINDS, locateReaderDraftTables, normalizeReaderDraftOrder };

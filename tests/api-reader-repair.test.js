@@ -395,7 +395,7 @@ test('production recovery persists canonical section/table pairs with raw-to-can
     assert.deepEqual(stored.payload.draftOrderMappings, [normalized.mapping]);
     assert.equal(stored.payload.attempts, 1);
     assert.equal(stored.payload.fullAttempts, 1);
-    assert.equal(stored.identity.draftOrderContract, 'reader-draft-order-v3');
+    assert.equal(stored.identity.draftOrderContract, 'reader-draft-order-v4');
     assert.deepEqual(stored.payload.draftOrderMappings[0].conceptBridges.map(item => item.rawIndex), [3, 2, 1, 0]);
     await assert.rejects(generateApiReaderArticleDetailed(paper, '', '', { ...base, readerCallModel: async messages => {
         assert.match(messages[0].content[0].text, new RegExp(hashDraft(normalized.draft)));

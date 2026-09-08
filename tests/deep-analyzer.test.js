@@ -2044,8 +2044,9 @@ primary_task_tag: #音视频生成
         wrongBridgeKind.sections.find(section => section.kind === 'method_overview').body =
             wrongBridgeKind.sections.find(section => section.kind === 'method_overview').body.replace('\n\n[[CONCEPT_BRIDGE_4]]', '');
         wrongBridgeKind.sections.at(-1).body += '\n\n[[CONCEPT_BRIDGE_4]]';
-        assert.throws(() => parseApiReaderArticleResult(JSON.stringify(wrongBridgeKind)), /conceptBridges\[3\]/,
-            'a misplaced existing bridge must not be copied to another section and leak its original marker');
+        const movedBridgeResult = parseApiReaderArticleResult(JSON.stringify(wrongBridgeKind));
+        assert.doesNotMatch(movedBridgeResult.article, /\[\[CONCEPT_BRIDGE_4\]\]/,
+            'one unique standalone bridge marker is moved to its unique declared section and compiled away');
         const duplicateBridge = structuredClone(v3Payload);
         duplicateBridge.sections.at(-1).body += '\n\n[[CONCEPT_BRIDGE_4]]';
         assert.throws(() => parseApiReaderArticleResult(JSON.stringify(duplicateBridge)), /conceptBridges\[3\]/);
@@ -2756,6 +2757,49 @@ primary_task_tag: #音视频生成
         );
         assert.throws(() => validateApiReaderTableNarratives(narrated, 1), /前缺少独立说明段/);
         assert.doesNotMatch(narrated, /下表围绕|未列出的方差|跨域表现|部署成本/);
+    });
+
+    it('2506.01015 的 5.2% 只由 sealed source exact quote 绑定且不接受改写值', () => {
+        const { bindApiReaderSourceEvidence, bindStructuredArtifactsToText } =
+            require('../scripts/deep-analyzer.js');
+        const sourceText = 'With the Hiera_base+ backbone, our approach outperforms GAVS\u00a0[50] '
+            + 'by 5.2% in Jaccard for seen scenarios, demonstrating an enhanced ability to '
+            + 'integrate complex multi-modalities.';
+        const declaredWithCollapsedWhitespace = sourceText.replace('\u00a0', ' ');
+        const article = '| 条件 | 指标 | 基线 | 本方法 | 比较对象 |\n'
+            + '| --- | --- | --- | --- | --- |\n'
+            + '| Ref-AVS Seen Hiera_b+ | Jaccard | GAVS | 本方法高 5.2% | 适配器 |';
+        const binding = [{
+            tableIndex: 1,
+            sourceType: 'source_quotes',
+            sourceTableOrdinal: null,
+            cellBindings: [],
+            sourceQuotes: [declaredWithCollapsedWhitespace]
+        }];
+        const structuredArtifacts = bindStructuredArtifactsToText(
+            { tables: [], formulas: [] }, sourceText
+        );
+
+        assert.throws(() => bindApiReaderSourceEvidence(article, binding, [], {
+            sourceText, structuredArtifacts
+        }), /不是全文中的 exact sourceQuote/);
+        const replayed = bindApiReaderSourceEvidence(article, binding, [], {
+            sourceText, structuredArtifacts, allowDeterministicQuoteRepair: true
+        });
+        assert.strictEqual(replayed.article, article);
+        assert.deepStrictEqual(
+            replayed.tableBindings[0].sourceQuotes.map(item => item.quote),
+            [sourceText]
+        );
+        assert.ok(replayed.tableBindings[0].sourceQuotes.every(item => (
+            sourceText.includes(item.quote)
+            && /^[a-f0-9]{64}$/.test(item.sourceQuoteSha256)
+        )));
+        assert.throws(() => bindApiReaderSourceEvidence(
+            article.replace('5.2%', '5.3%'), binding, [], {
+                sourceText, structuredArtifacts, allowDeterministicQuoteRepair: true
+            }
+        ), /exact sourceQuote|关键数字缺少 exact quote\/cell 证据/);
     });
 
     it('原表裸 Delta 只授权裸值，Reader 擅加百分号仍由完整来源门禁拒绝', () => {

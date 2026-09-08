@@ -2764,11 +2764,38 @@ def _detailed_core_summary_semantic_issue(summary):
             break
     if not has_complete_result and '原文未提供可核对的关键定量结果' not in summary:
         issues.append('缺少完整关键定量结果或明确不可得声明')
-    if not re.search(r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)', summary):
+    explicit_boundary = re.search(
+        r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)',
+        summary,
+    )
+    separated_unverified_boundary = re.search(
+        r'(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)',
+        summary,
+    )
+    conditional_failure = re.search(
+        r'(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}'
+        r'(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?'
+        r'(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)',
+        summary,
+    )
+    if not any((explicit_boundary, separated_unverified_boundary, conditional_failure)):
         issues.append('缺少结论适用边界、失败条件或未验证范围')
+    scoped_resource_disclosure = any(
+        re.search(r'(?:训练|推理|部署)', sentence)
+        and re.search(r'\d', sentence)
+        and re.search(
+            r'(?:计算量|计算复杂度|MACs?|FLOPs?|GPU|CPU|TPU|NPU|RTX|显卡|'
+            r'(?:训练|推理|采样|优化|迭代)步数|'
+            r'\d\s*(?:[kKmMgG]\s*)?\s*(?:步|轮|次))',
+            sentence,
+            re.IGNORECASE,
+        )
+        for sentence in re.split(r'[。！？!?\n]', summary)
+    )
     cost = '原文未披露训练、推理或部署成本' in summary \
         or re.search(r'(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)', summary) \
-        or re.search(r'(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)', summary)
+        or re.search(r'(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)', summary) \
+        or scoped_resource_disclosure
     if not cost:
         issues.append('缺少训练、推理或部署成本或未披露声明')
     return '；'.join(issues) if issues else None
@@ -4401,7 +4428,12 @@ def render_ephemeral_api_reader_figures(article, figures):
             rf'^!\[(?:\\.|[^\]\\\n])*\]\({re.escape(figure["url"])}\)$',
             flags=re.MULTILINE,
         )
-        rendered, replaced = pattern.subn(_ephemeral_figure_note(figure), rendered)
+        note = _ephemeral_figure_note(figure)
+        # A source-bound caption may legitimately contain TeX such as \geq or
+        # literal text such as \g<name>/\1. Passing it as the replacement
+        # template would make re.sub interpret those bytes as group syntax.
+        # The callable return value is inserted literally.
+        rendered, replaced = pattern.subn(lambda _match, value=note: value, rendered)
         if replaced != 1:
             raise PublishDataValidationError(
                 f'ephemeral Figure {figure.get("ordinal")} 未唯一映射到 canonical 正文'

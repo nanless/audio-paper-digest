@@ -1037,6 +1037,42 @@ class PublishToBlogReviewTest(unittest.TestCase):
             publish_to_blog._detailed_core_summary_semantic_issue(explicit)
         )
 
+    def test_core_summary_accepts_real_pase_boundary_and_scoped_cost(self):
+        summary = (
+            '语音增强需从含噪含混响单通道波形中恢复可懂且保真的干净语音，生成式方法在低信噪比下易产生改变词内容或说话人特性的幻觉。'
+            'PASE 提出两阶段流水线：先将预训练 WavLM Large 蒸馏为去噪专家 DeWavLM，以干净语音经冻结教师在第 24 层 Transformer 输出为目标，用均方误差监督带噪输入的学生同层表示；再以双流表示驱动声码器 Vocos，将深层音素表示与经线性投影的浅层声学表示逐元素相加后重建波形。'
+            '与从带噪离散 token 中学习先验的离散语言建模范式不同，该设计直接复用已有音系先验并保持连续表示以保留韵律与音色。'
+            '在自建的 1000 条 LibriTTS 模拟测试集上，PASE 的 WER 为 7.49%，显著优于最强判别式基线 TF-GridNet 的 9.93% 与生成式基线 LLaSE-G1 的 36.58%，同时保持 SpkSim 0.80。'
+            '结论在 -5 至 15 dB 模拟加噪与 DNS1 公开集无混响子集上得到验证，但在 DNS1 有混响子集上感知质量指标出现偏差，且未在真实远场录音上验证。'
+            '原文披露 DeWavLM 训练 100k 步、声码器 200k 步于 4 张 NVIDIA RTX 4090，推理计算量约 21.42 G MACs/s，无需多步采样。'
+        )
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(summary)
+        )
+
+        no_boundary = summary.replace(
+            '结论在 -5 至 15 dB 模拟加噪与 DNS1 公开集无混响子集上得到验证，但在 DNS1 有混响子集上感知质量指标出现偏差，且未在真实远场录音上验证。',
+            '在 DNS1 有混响子集上也完成公开评测，结果与主表一致。',
+        )
+        self.assertIn(
+            '缺少结论适用边界',
+            publish_to_blog._detailed_core_summary_semantic_issue(no_boundary),
+        )
+
+        cost_sentence = (
+            '原文披露 DeWavLM 训练 100k 步、声码器 200k 步于 4 张 NVIDIA RTX 4090，'
+            '推理计算量约 21.42 G MACs/s，无需多步采样。'
+        )
+        for replacement in (
+                '名称含 RTX 4090 的公开基准用于补充主结果。',
+                '训练使用 RTX 完成，推理沿用同一流程。'):
+            with self.subTest(replacement=replacement):
+                no_cost = summary.replace(cost_sentence, replacement)
+                self.assertIn(
+                    '缺少训练、推理或部署成本',
+                    publish_to_blog._detailed_core_summary_semantic_issue(no_cost),
+                )
+
     def test_modern_resources_show_identity_type_and_status_without_weight_claims(self):
         paper = llm_api_publication_fixture()
         resource = paper['apiReaderResources']['resources'][0]
@@ -3209,6 +3245,28 @@ title: "Bad table"
         self.assertEqual(
             publish_to_blog._api_reader_payload(legacy_without_evidence_sha)['assets'], []
         )
+
+    def test_ephemeral_figure_caption_backslashes_are_inserted_literally(self):
+        url = 'https://arxiv.org/html/2509.11717v6/dnr-v2EvaluationPipe.png'
+        article = f'导读。\n\n![原论文 Figure 4：流程图]({url})\n\n解释。'
+        caption = r'Events satisfy \geq 3; keep \g<missing>, \1, and C:\tmp literally.'
+        rendered = publish_to_blog.render_ephemeral_api_reader_figures(article, [{
+            'ordinal': 4, 'caption': caption, 'url': url,
+        }])
+        expected = f'> **论文图 4（像素未随页面持久化）**：{caption}'
+        self.assertIn(expected, rendered)
+        self.assertNotIn('![原论文 Figure 4', rendered)
+        self.assertEqual(rendered.count(expected), 1)
+
+        duplicate = article + f'\n\n![重复]({url})'
+        with self.assertRaisesRegex(PublishDataValidationError, '未唯一映射'):
+            publish_to_blog.render_ephemeral_api_reader_figures(duplicate, [{
+                'ordinal': 4, 'caption': caption, 'url': url,
+            }])
+        with self.assertRaisesRegex(PublishDataValidationError, '未唯一映射'):
+            publish_to_blog.render_ephemeral_api_reader_figures('没有图片。', [{
+                'ordinal': 4, 'caption': caption, 'url': url,
+            }])
 
     def test_manual_v5_reader_plan_uses_reader_first_header_and_preserves_custom_subheads(self):
         reader_article = (

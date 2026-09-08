@@ -76,7 +76,7 @@ test('canonical sections normalize a complete selection marker permutation witho
     const frozen = JSON.stringify(input);
     const { draft, mapping } = normalizeReaderDraftOrder(input);
     assert.equal(JSON.stringify(input), frozen);
-    assert.equal(mapping.contract, 'reader-draft-order-v3');
+    assert.equal(mapping.contract, 'reader-draft-order-v4');
     assert.deepEqual(mapping.tables.map(item => [item.rawIndex, item.canonicalIndex]), [[1, 0], [0, 1]]);
     assert.deepEqual(draft.tableBindings.map(item => [item.tableIndex, item.selection.sourceTableOrdinal]),
         [[1, 2], [2, 1]]);
@@ -147,7 +147,7 @@ test('complete bridge marker permutation normalizes array only and records node 
     const before = JSON.stringify(input);
     const { draft, mapping } = normalizeReaderDraftOrder(input);
     assert.equal(JSON.stringify(input), before);
-    assert.equal(mapping.contract, 'reader-draft-order-v3');
+    assert.equal(mapping.contract, 'reader-draft-order-v4');
     assert.deepEqual(draft.sections, input.sections);
     assert.deepEqual(draft.conceptBridges, [input.conceptBridges[1], input.conceptBridges[2], input.conceptBridges[0]]);
     assert.deepEqual(mapping.conceptBridges.map(item => [item.rawIndex, item.canonicalIndex]), [[1, 0], [2, 1], [0, 2]]);
@@ -182,5 +182,50 @@ test('duplicate, missing, noncanonical and malformed bridge markers are not gues
     for (const conceptBridges of [null, 'invalid', [{ marker: '[[CONCEPT_BRIDGE_1]]' }, null]]) {
         const input = { sections: [], conceptBridges };
         assert.deepEqual(normalizeReaderDraftOrder(input).draft, input);
+    }
+});
+
+test('unique concept markers move or insert into one canonical declared section without rewriting prose', () => {
+    const bridge = (ordinal, sectionKind) => ({ marker: `[[CONCEPT_BRIDGE_${ordinal}]]`,
+        terms: [`term ${ordinal}`, `other ${ordinal}`], sectionKind, explanation: 'unchanged explanation' });
+    const input = { sections: [
+        { kind: 'problem', body: 'problem prose remains byte exact' },
+        { kind: 'component', body: 'component prose remains byte exact\n\n[[CONCEPT_BRIDGE_1]]' },
+        { kind: 'training', body: 'training prose remains byte exact' }
+    ], conceptBridges: [bridge(1, 'problem'), bridge(2, 'training')] };
+    const before = structuredClone(input);
+    const { draft, mapping } = normalizeReaderDraftOrder(input);
+    assert.deepEqual(input, before);
+    assert.equal(draft.sections[0].body, `${before.sections[0].body}\n\n[[CONCEPT_BRIDGE_1]]`);
+    assert.equal(draft.sections[1].body, 'component prose remains byte exact');
+    assert.equal(draft.sections[2].body, `${before.sections[2].body}\n\n[[CONCEPT_BRIDGE_2]]`);
+    assert.deepEqual(mapping.conceptMarkerLocations.map(item => [item.operation,
+        item.fromSectionIndex, item.toSectionIndex]), [['move', 1, 0], ['insert', null, 2]]);
+    assert.equal(mapping.contract, 'reader-draft-order-v4');
+    assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
+});
+
+test('concept marker location normalization refuses ambiguous, inline and non-final moves', () => {
+    const bridge = { marker: '[[CONCEPT_BRIDGE_1]]', terms: ['term one', 'term two'],
+        sectionKind: 'problem', explanation: 'unchanged explanation' };
+    const cases = [
+        [{ kind: 'problem', body: 'first' }, { kind: 'problem', body: 'second' },
+            { kind: 'component', body: 'source\n\n[[CONCEPT_BRIDGE_1]]' }],
+        [{ kind: 'problem', body: 'target' },
+            { kind: 'component', body: 'inline [[CONCEPT_BRIDGE_1]]' }],
+        [{ kind: 'problem', body: 'target' },
+            { kind: 'component', body: 'before\n\n[[CONCEPT_BRIDGE_1]]\n\nafter' }],
+        [{ kind: 'problem', body: 'target ' },
+            { kind: 'component', body: 'source\n\n[[CONCEPT_BRIDGE_1]]' }],
+        [{ kind: 'problem', body: 'target' },
+            { kind: 'component', body: 'source\n\n[[CONCEPT_BRIDGE_1]]\n\n[[CONCEPT_BRIDGE_9]]' }],
+        [{ kind: 'problem', body: 'target' },
+            { kind: 'component', body: '```text\n[[CONCEPT_BRIDGE_1]]\n```' }]
+    ];
+    for (const sections of cases) {
+        const input = { sections, conceptBridges: [bridge] };
+        const normalized = normalizeReaderDraftOrder(input);
+        assert.deepEqual(normalized.draft, input);
+        assert.deepEqual(normalized.mapping.conceptMarkerLocations, []);
     }
 });
