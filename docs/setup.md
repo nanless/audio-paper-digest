@@ -79,14 +79,14 @@ collector，不会成为 arXiv 写作输入。
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
-| `PD_API_READER_REPAIR_MAX_TOKENS` | 8000；仅当已有 patch 在上限精确截断时，下次显式续跑受限提升至最高 16000 |
+| `PD_API_READER_REPAIR_MAX_TOKENS` | 8000；仅当最后一个已付 patch 槽在上限精确截断且尚未使用 implementation allowance lineage 时，下次显式续跑获得恰好一次最高 16000 的受限槽 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 |
 | `PD_API_READER_CONCURRENCY` | 5（单进程 Reader generation slot） |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 |
 
 Muse 筛选使用 `PD_FILTER_BATCH_SIZE`；整篇分析按 `PD_ANALYSIS_CONCURRENCY` 并发。账号池状态更新使用短锁，网络请求不持锁。Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE。
-Reader 局部修复的提升预算还受 `PD_API_READER_MAX_TOKENS` 约束；半截 JSON 永远不会进入候选或绕过正文门禁。
+Reader 局部修复的单次提升预算还受 `PD_API_READER_MAX_TOKENS` 约束；收到 16000-token 响应后会消费同一条 allowance lineage，transport-only 失败不消费；半截 JSON 永远不会进入候选或绕过正文门禁。
 
 ## 可选副模型
 

@@ -561,6 +561,14 @@ class PublishCommonSanitizerTest(unittest.TestCase):
 方案 A 区别于方案 B；slimmable 共享网络区别于 3 个独立网络。
 '''
         self.assertIsNone(validate_manual_editorial_quality_v4(legal_comparisons))
+        complete_double_contrast = '''## 核心摘要
+3 类改写均导致性能下降，但 CodecSep 的回落更平缓且在 2 类上保持小幅领先，说明通道级掩蔽对词汇级变化有一定鲁棒性，但未测试含时序或关系结构的提示。
+'''
+        self.assertIsNone(validate_manual_editorial_quality_v4(complete_double_contrast))
+        dangling = validate_manual_editorial_quality_v4(
+            '## 核心摘要\n模型在 2 个数据集上有一定鲁棒性，但\n',
+        )
+        self.assertIn('悬空连接词', dangling)
 
     def test_manual_v4_quantity_audit_ignores_headings_and_indefinite_one_phrases(self):
         """Keep the Python publication mirror aligned with editorial-quality.js."""

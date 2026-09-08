@@ -4039,13 +4039,40 @@ has_dataset: 否
     });
 
     it('Reader patch 截断重试预算受完整 Reader 预算和 16000 上限共同约束', () => {
-        const { resolveApiReaderRepairRetryMaxTokens } = require('../scripts/deep-analyzer.js');
+        const { resolveApiReaderRepairRetryMaxTokens,
+            shouldEscalateApiReaderRepairBudget } = require('../scripts/deep-analyzer.js');
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(48000, 8000), 16000);
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(24000, 8000), 8000);
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(12000, 8000), 8000);
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(6000, 8000), 6000);
         assert.strictEqual(resolveApiReaderRepairRetryMaxTokens(96000, 12000), 16000);
         assert.throws(() => resolveApiReaderRepairRetryMaxTokens(0, 8000), /positive safe integer/);
+        const finalBaseTruncation = { attempts: 7, fullAttempts: 2,
+            lastContentError: { code: 'MODEL_OUTPUT_TRUNCATED', requestKind: 'patch',
+                outputTokens: 8000, maxOutputTokens: 8000 } };
+        const candidate = { version: 3 };
+        assert.strictEqual(shouldEscalateApiReaderRepairBudget(
+            finalBaseTruncation, candidate, 8000, 16000, 6,
+            { lineageIssued: false, activeProof: false }
+        ), true);
+        assert.strictEqual(shouldEscalateApiReaderRepairBudget(
+            finalBaseTruncation, candidate, 8000, 16000, 6,
+            { lineageIssued: true, activeProof: true }
+        ), true, 'an active implementation proof shares the same one extra slot at the larger budget');
+        assert.strictEqual(shouldEscalateApiReaderRepairBudget(
+            finalBaseTruncation, candidate, 8000, 16000, 6,
+            { lineageIssued: true, activeProof: false }
+        ), false, 'a consumed lineage cannot stack another slot');
+        assert.strictEqual(shouldEscalateApiReaderRepairBudget(
+            { ...finalBaseTruncation, attempts: 5 }, candidate, 8000, 16000, 6,
+            { lineageIssued: false, activeProof: false }
+        ), false, 'a non-final paid slot stays at the base budget');
+        assert.strictEqual(shouldEscalateApiReaderRepairBudget(
+            { ...finalBaseTruncation, lastContentError: {
+                ...finalBaseTruncation.lastContentError, outputTokens: 7999
+            } }, candidate, 8000, 16000, 6,
+            { lineageIssued: false, activeProof: false }
+        ), false, 'only an exact provider ceiling can buy the slot');
     });
 
     it('结构预修复会在评分前接管模型编辑和自检批注泄漏', () => {

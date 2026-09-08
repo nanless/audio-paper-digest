@@ -5,8 +5,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
-const { loadFailedCandidate, saveFailedCandidate, hashDraft, IMPLEMENTATION_ALLOWANCE_CONTRACT } = require('./reader-repair.js');
+const { loadFailedCandidate, saveFailedCandidate, hashDraft, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder } = require('./reader-draft-order.js');
+const { normalizeDanglingReaderConnectors } = require('../editorial-quality.js');
 const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
@@ -152,6 +154,11 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     const old = compatible[0];
     const updated = structuredClone(old.payload);
     if (updated.draft) {
+        updated.draft.sections = updated.draft.sections.map(section => ({
+            ...section,
+            body: typeof section?.body === 'string'
+                ? normalizeDanglingReaderConnectors(section.body) : section?.body
+        }));
         const normalized = normalizeReaderDraftOrder(updated.draft);
         updated.draft = normalized.draft;
         updated.rawDraft = JSON.stringify(updated.draft);
@@ -160,6 +167,14 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         }
     }
     const diagnosticImplementationChanged = implementationFields.some(field => old.changedFields.includes(field));
+    const lineageAlreadyIssued = updated.implementationRepairAllowanceLineage
+        === IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
+    const previousActiveAllowance = updated.implementationRepairAllowanceProof || null;
+    // One lineage receives at most one extra content attempt. An unused proof
+    // may be transferred to a newer implementation identity, but once a model
+    // request consumes it, later implementation churn cannot mint more calls.
+    const grantOrTransferAllowance = diagnosticImplementationChanged
+        && (!lineageAlreadyIssued || Boolean(previousActiveAllowance));
     const archivedName = `${hashDraft(old.identity)}.migrated-${crypto.randomUUID()}.json`;
     const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(), scope: revisionScope,
         runId: revisionRunId, paperId: identity.paperId,
@@ -180,7 +195,16 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     }
     updated.readerRecoveryRevisions = [...(updated.readerRecoveryRevisions || []), audit];
     delete updated.implementationRepairAllowance;
-    updated.implementationRepairAllowanceProof = diagnosticImplementationChanged
+    if (grantOrTransferAllowance) {
+        updated.implementationRepairAllowanceLineage = IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
+    }
+    if (previousActiveAllowance) {
+        updated.consumedImplementationAllowanceSha256 = [...new Set([
+            ...(updated.consumedImplementationAllowanceSha256 || []),
+            previousActiveAllowance.allowanceSha256
+        ])].sort();
+    }
+    updated.implementationRepairAllowanceProof = grantOrTransferAllowance
         ? implementationAllowanceProof(identity, audit) : null;
     // The normal per-paper lock surrounds the caller. Recheck anyway before
     // installing: never overwrite an exact newer candidate or stale budgets.

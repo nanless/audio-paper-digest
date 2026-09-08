@@ -14,6 +14,7 @@ const ROOT_FIELDS = ['version', 'readerTitle', 'oneSentenceThesis', ...ARRAY_FIE
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const VALIDATION_SIGNATURE_PREFIX = 'reader-validation-v2:';
 const IMPLEMENTATION_ALLOWANCE_CONTRACT = 'reader-implementation-repair-allowance-v1';
+const IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT = 'reader-implementation-repair-lineage-v1';
 const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', 'tableCompilerSha256',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256']);
@@ -449,7 +450,14 @@ function buildRepairTargets(draft, issues) {
                 || section?.kind === (binding.targetKind || binding.sectionKind)) add(`/sections/${sectionIndex}/body`);
         });
     };
-    for (const issue of issues) {
+    // Source diagnostics explain the authoritative parser failure; they are
+    // not an instruction to rewrite every related table at the same time. If
+    // at least one blocking issue exists, target only blocking issues. This
+    // keeps a local marker/prose repair below the eight-node patch contract and
+    // lets the full parser surface any remaining source problem afterward.
+    const blockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true);
+    const actionableIssues = blockingIssues.length ? blockingIssues : issues;
+    for (const issue of actionableIssues) {
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
         const message = issue.message || '';
@@ -593,6 +601,9 @@ function loadFailedCandidate(directory, identity) {
                 && (!Number.isInteger(envelope.payload.validationFailureStreak)
                     || envelope.payload.validationFailureStreak < 0))
             || Object.prototype.hasOwnProperty.call(envelope.payload, 'implementationRepairAllowance')
+            || (envelope.payload.implementationRepairAllowanceLineage !== undefined
+                && envelope.payload.implementationRepairAllowanceLineage
+                    !== IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT)
             || (envelope.payload.consumedImplementationAllowanceSha256 !== undefined
                 && (!Array.isArray(envelope.payload.consumedImplementationAllowanceSha256)
                     || envelope.payload.consumedImplementationAllowanceSha256.some(value => !/^[a-f0-9]{64}$/.test(value))
@@ -622,6 +633,15 @@ function saveFailedCandidate(directory, identity, payload) {
     const filename = candidatePath(absolute, identity);
     const previous = loadFailedCandidate(absolute, identity);
     const storedPayload = structuredClone(payload);
+    if (previous?.implementationRepairAllowanceLineage) {
+        if (storedPayload.implementationRepairAllowanceLineage !== undefined
+            && storedPayload.implementationRepairAllowanceLineage
+                !== previous.implementationRepairAllowanceLineage) {
+            throw new Error('Reader implementation repair allowance lineage cannot change');
+        }
+        storedPayload.implementationRepairAllowanceLineage
+            = previous.implementationRepairAllowanceLineage;
+    }
     const consumed = new Set(storedPayload.consumedImplementationAllowanceSha256 || []);
     for (const value of previous?.consumedImplementationAllowanceSha256 || []) consumed.add(value);
     const previousProof = previous?.implementationRepairAllowanceProof;
@@ -669,7 +689,8 @@ function retireFailedCandidate(directory, identity) {
     return retired;
 }
 
-module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
+module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,
     parseRepairableDraft, collectDraftIssues,

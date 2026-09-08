@@ -76,14 +76,14 @@ local-source collector. It is never an arXiv writing input.
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
-| `PD_API_READER_REPAIR_MAX_TOKENS` | 8000; only an exact patch truncation gets a bounded explicit-resume retry, capped at 16000 |
+| `PD_API_READER_REPAIR_MAX_TOKENS` | 8000; only an exact truncation in the final paid patch slot, before the implementation allowance lineage is used, grants exactly one explicit-resume slot capped at 16000 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 |
 | `PD_API_READER_CONCURRENCY` | 5 (in-process Reader generation slots) |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 |
 
 Muse filtering uses `PD_FILTER_BATCH_SIZE`, while whole-paper analysis keeps configured concurrency. Pool state uses short locks and never holds a lock across network I/O. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`. Reader v3 sends safely materialized official Figures to the primary model; the optional secondary model only enables the legacy canonical image-supplement path. The refresh CLI `--concurrency` controls paper workers and is distinct from `PD_API_READER_CONCURRENCY`.
-The elevated Reader patch retry remains capped by `PD_API_READER_MAX_TOKENS`; a truncated JSON response is never accepted as a candidate and never bypasses content gates.
+The one elevated Reader patch slot remains capped by `PD_API_READER_MAX_TOKENS` and consumes the shared allowance lineage once model content is received; a transport-only failure does not consume it. Truncated JSON is never accepted as a candidate and never bypasses content gates.
 
 ## Optional Secondary Model
 

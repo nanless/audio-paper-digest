@@ -357,6 +357,10 @@ npm run history:publication-metadata -- --apply --plan /absolute/path/direct-rew
 
 该入口只复用既有且与当前 sealed source 时间/版本窗口兼容的官方 raw Atom；其余请求复用公共
 `fetchOfficialArxivMetadata()`，因此仍强制项目 HTTP CONNECT、官方 ID 单项响应、host scheduler 与 429 策略。
+明确的 socket/DNS/timeout 以及 HTTP 408/425/429/5xx 会在共享 host scheduler 内最多尝试三次。单篇瞬时错误
+耗尽后只把该篇记为 `failed`，继续完成同批其他 sidecar；最终 stdout 为 `partial` 且进程非零退出。失败项不会
+创建 generation 目录，原命令重跑会复验已封存项为 `recovered`，只重新抓取仍缺失的论文。身份、解析、代理配置
+或 sidecar 完整性错误仍立即失败关闭，不会被降格成可忽略的批处理失败。
 普通 versionless source 要求 Atom `entryUpdatedAt` 不晚于 source 最早捕获时间，且响应 `observedAt` 不早于
 source 最晚捕获时间；显式历史 `vN` source 则必须以同一 `vN` 精确查询并匹配 Atom entry version，另要求
 `publishedAt <= entryUpdatedAt`。sidecar 独立位于

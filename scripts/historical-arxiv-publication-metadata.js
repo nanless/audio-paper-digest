@@ -68,6 +68,9 @@ async function mapConcurrent(items, concurrency, worker) {
     await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, run));
     return results;
 }
+function partialExitCode(output) {
+    return output?.status === 'partial' ? 1 : 0;
+}
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-arxiv-publication-metadata.js');
     const options = parseArgs(argv); const Config = runtime.config || require('./config.js');
@@ -122,29 +125,43 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         console.log(JSON.stringify(output)); return output;
     }
     const results = await mapConcurrent(ids, options.concurrency, async id => {
-        const inspected = inspect(id);
-        if (inspected.status === 'recovered') return inspected;
-        const reusable = inspected.status === 'reusable_atom' ? reusableById.get(id) : null;
-        const querySourceId = sidecars.querySourceIdForSource({ sourceRoot: files.freshArxivFetchedSourcesDir,
-            arxivId: id, generation: options.generation });
-        const official = reusable || await (runtime.fetchOfficialArxivMetadata
-            || metadata.fetchOfficialArxivMetadata)(id, { querySourceId });
-        const sealed = sidecars.sealPublicationMetadata({ rootDir: files.historicalArxivPublicationMetadataDir,
-            sourceRoot: files.freshArxivFetchedSourcesDir, arxivId: id, generation: options.generation,
-            officialResult: official });
-        return { paperId: `arxiv:${id}`, status: sealed.status,
-            source: reusable ? 'reused_official_atom' : 'live_official_atom',
-            manifestSha256: sealed.proof.manifestSha256 };
+        try {
+            const inspected = inspect(id);
+            if (inspected.status === 'recovered') return inspected;
+            const reusable = inspected.status === 'reusable_atom' ? reusableById.get(id) : null;
+            const querySourceId = sidecars.querySourceIdForSource({ sourceRoot: files.freshArxivFetchedSourcesDir,
+                arxivId: id, generation: options.generation });
+            const official = reusable || await (runtime.fetchOfficialArxivMetadata
+                || metadata.fetchOfficialArxivMetadata)(id, { querySourceId });
+            const sealed = sidecars.sealPublicationMetadata({ rootDir: files.historicalArxivPublicationMetadataDir,
+                sourceRoot: files.freshArxivFetchedSourcesDir, arxivId: id, generation: options.generation,
+                officialResult: official });
+            return { paperId: `arxiv:${id}`, status: sealed.status,
+                source: reusable ? 'reused_official_atom' : 'live_official_atom',
+                manifestSha256: sealed.proof.manifestSha256 };
+        } catch (error) {
+            // Only a typed, exhausted transient is a per-paper batch outcome.
+            // Integrity/configuration/programming failures still abort the run
+            // instead of being diluted into thousands of misleading failures.
+            if (error?.retryable !== true) throw error;
+            return { paperId: `arxiv:${id}`, status: 'failed', retryable: true,
+                errorCode: String(error.code || 'ARXIV_METADATA_TRANSIENT'),
+                attempts: Number.isSafeInteger(error.attempts) ? error.attempts : null };
+        }
     });
-    const output = { status: 'complete', generation: options.generation, total: results.length,
+    const failed = results.filter(item => item.status === 'failed').length;
+    const output = { status: failed ? 'partial' : 'complete', generation: options.generation, total: results.length,
         sealed: results.filter(item => item.status === 'sealed').length,
         recovered: results.filter(item => item.status === 'recovered').length,
         reused: results.filter(item => item.source === 'reused_official_atom').length,
-        fetched: results.filter(item => item.source === 'live_official_atom').length, results };
+        fetched: results.filter(item => item.source === 'live_official_atom').length,
+        failed, results };
     console.log(JSON.stringify(output)); return output;
 }
 
-if (require.main === module) main().catch(error => {
+if (require.main === module) main().then(output => {
+    process.exitCode = partialExitCode(output);
+}).catch(error => {
     console.error(`[historical-arxiv-publication-metadata] ${error.message}`); process.exitCode = 1;
 });
-module.exports = { USAGE, parsePaperIds, parseArgs, parserFailureIds, mapConcurrent, main };
+module.exports = { USAGE, parsePaperIds, parseArgs, parserFailureIds, mapConcurrent, partialExitCode, main };

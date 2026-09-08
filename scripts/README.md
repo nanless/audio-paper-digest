@@ -162,7 +162,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-direct-rewrite-plan.js` | 从 v5 direct catalog、inventory 与 conference projection v3 签发 source-only rewrite route plan；精确重放 primary arXiv 与 ICML routable binding，旧 v4/v3 文件失败关闭，并报告 frozen paper page 覆盖缺口。 |
 | `historical-direct-rewrite-scheduler.js` | 只准备 direct plan 的 arXiv/会议来源队列和 sealed source 工件；支持稳定 paper 集合/上限、plan+generation 来源锁、pause marker、信号安全停点和逐项进度；arXiv 原子写 TXT、PDF、runtime metadata、manifest，失败只写 immutable crosswalk handoff；不调用分析、Reader、crosswalk 或发布。 |
 | `historical-direct-rewrite-run.js` | 显式运行 source-only direct analysis、Reader 与单篇 staging；apply 强制所选项已有同 plan/generation scheduler-ready 状态；失败阶段以 source-bound recovery 文件跨进程续跑而不冒充 staging。 |
-| `historical-arxiv-publication-metadata.js` | 默认对 direct plan 全部 arXiv 执行 dry-run 或批量封存官方 Atom sidecar；只复用满足当前 source 版本/时间窗的既有 raw Atom，其余按 sealed source ID 经公共 CONNECT metadata adapter 精确抓取，不调用模型。 |
+| `historical-arxiv-publication-metadata.js` | 默认对 direct plan 全部 arXiv 执行 dry-run 或批量封存官方 Atom sidecar；只复用满足当前 source 版本/时间窗的既有 raw Atom，其余按 sealed source ID 经公共 CONNECT metadata adapter 精确抓取，不调用模型。明确瞬时请求有界重试三次；单篇耗尽后继续同批并最终输出 `partial`/非零退出，失败项不生成 sidecar，重跑只补缺失项。 |
 | `historical-direct-aggregate.js` | 为完成的 direct registry 生成可重放 daily 或 conference aggregate staging。 |
 | `historical-direct-control.js` | 全历史长任务控制面：`history:status` 单次/持续只读汇总 registry、pause/lock、覆盖率、汇总和 publication blockers；`history:pause` 写入 plan+generation 绑定的停机请求；`history:resume` 只在 operation lock 释放后恢复。 |
 | `historical-direct-publication.js` | 全历史 direct 发布入口：按 `plan → generate → review → publish → status` 驱动单一 publication UUID；发布阶段独占共享博客锁并验证远端 `main` OID。 |

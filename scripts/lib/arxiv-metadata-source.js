@@ -6,6 +6,12 @@ const { createHostTaskScheduler, getAdaptiveHostCooldownMs } = require('./fetch-
 
 const CONTRACT = 'official-arxiv-atom-metadata-v1';
 const MAX_BYTES = 2 * 1024 * 1024;
+const MAX_FETCH_ATTEMPTS = 3;
+const TRANSIENT_NETWORK_CODES = new Set([
+    'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT',
+    'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+    'ARXIV_REQUEST_DEADLINE_EXCEEDED', 'ARXIV_REQUEST_SOCKET_TIMEOUT'
+]);
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const SHARED_METADATA_SCHEDULER = createHostTaskScheduler({
     cooldownAfter: outcome => getAdaptiveHostCooldownMs(outcome, {
@@ -17,6 +23,31 @@ const SHARED_METADATA_SCHEDULER = createHostTaskScheduler({
 function fail(message) {
     const error = new Error(`Official arXiv metadata rejected: ${message}`);
     error.code = 'ARXIV_METADATA_INTEGRITY'; error.retryable = false; throw error;
+}
+
+function isTransientAtomFetchError(error) {
+    const code = String(error?.code || '').toUpperCase();
+    const message = String(error?.message || error || '');
+    return error?.retryable === true || TRANSIENT_NETWORK_CODES.has(code)
+        || /(?:socket hang up|socket|network|timed?\s*out|timeout|dns|econnreset|econnrefused|eai_again|enotfound)/i.test(message);
+}
+
+function exhaustedTransientError(error, attempts) {
+    const wrapped = new Error(`Official arXiv metadata transient request failed after ${attempts} attempts`,
+        { cause: error });
+    wrapped.code = 'ARXIV_METADATA_NETWORK_TRANSIENT';
+    wrapped.retryable = true;
+    wrapped.attempts = attempts;
+    return wrapped;
+}
+
+function transientHttpError(status, attempts) {
+    const error = new Error(`Official arXiv metadata transient HTTP ${status} after ${attempts} attempts`);
+    error.code = 'ARXIV_METADATA_HTTP_TRANSIENT';
+    error.retryable = true;
+    error.httpStatus = status;
+    error.attempts = attempts;
+    return error;
 }
 
 function rawAtomEntryIdentity(arxivId, responseData) {
@@ -104,12 +135,21 @@ async function fetchOfficialArxivMetadata(arxivId, dependencies = {}) {
     const scheduler = dependencies.requestScheduler || (dependencies.requestFn
         ? { run: (_host, task) => task() } : SHARED_METADATA_SCHEDULER);
     let response;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-        response = await scheduler.run('export.arxiv.org', () => requestFn(url, {
-            'User-Agent': dependencies.userAgent || 'audio-paper-digest historical metadata/1.0',
-            Accept: 'application/atom+xml,application/xml,text/xml;q=0.9'
-        }, proxyUrl, dependencies.timeoutMs || 60000, MAX_BYTES));
-        if (response?.status !== 429 || attempt === 3) break;
+    for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+        try {
+            response = await scheduler.run('export.arxiv.org', () => requestFn(url, {
+                'User-Agent': dependencies.userAgent || 'audio-paper-digest historical metadata/1.0',
+                Accept: 'application/atom+xml,application/xml,text/xml;q=0.9'
+            }, proxyUrl, dependencies.timeoutMs || 60000, MAX_BYTES));
+        } catch (error) {
+            if (!isTransientAtomFetchError(error)) throw error;
+            if (attempt === MAX_FETCH_ATTEMPTS) throw exhaustedTransientError(error, attempt);
+            continue;
+        }
+        const status = Number(response?.status);
+        const transientStatus = [408, 425, 429].includes(status) || status >= 500;
+        if (!transientStatus) break;
+        if (attempt === MAX_FETCH_ATTEMPTS) throw transientHttpError(status, attempt);
     }
     if (response?.status !== 200 || typeof response.data !== 'string') {
         fail(`Atom API returned HTTP ${response?.status ?? 'unknown'}`);
@@ -123,5 +163,5 @@ async function fetchOfficialArxivMetadata(arxivId, dependencies = {}) {
     return { ...parsed, proof: { ...parsed.proof, observedAt: observedValue } };
 }
 
-module.exports = { CONTRACT, MAX_BYTES, rawAtomEntryIdentity,
+module.exports = { CONTRACT, MAX_BYTES, MAX_FETCH_ATTEMPTS, isTransientAtomFetchError, rawAtomEntryIdentity,
     parseOfficialArxivMetadataResponse, fetchOfficialArxivMetadata };

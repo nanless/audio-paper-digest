@@ -374,6 +374,36 @@ function findReaderTemplatePhrases(text) {
     return findings;
 }
 
+function normalizeDanglingReaderConnectors(text) {
+    const protectedSpans = [];
+    const protect = value => {
+        const token = `__PD_DANGLING_CONNECTOR_${protectedSpans.length}__`;
+        protectedSpans.push(value);
+        return token;
+    };
+    const normalizeParagraph = paragraph => {
+        const trimmed = paragraph.trim();
+        if (!trimmed || /^(?:```|~~~|#{1,6}\s|\||>|[-*+]\s|\d+[.)]\s|\[\[[A-Z_]+\d*\]\]|\$\$|\\\[)/u.test(trimmed)) {
+            return paragraph;
+        }
+        let candidate = paragraph
+            .replace(/(`+)[^\n]*?\1/g, protect)
+            .replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)/g, protect);
+        candidate = candidate
+            .replace(/[，,][ \t]*(?:但是|不过|然而|但)[ \t]*([。！？!?])/gu, '$1')
+            .replace(/[，,][ \t]*(?:但是|不过|然而|但)[ \t]*$/u, '。');
+        return protectedSpans.reduceRight(
+            (value, original, index) => value.replace(
+                `__PD_DANGLING_CONNECTOR_${index}__`, () => original
+            ),
+            candidate
+        );
+    };
+    return String(text ?? '').split(/(\n\s*\n)/u)
+        .map(part => /^\n\s*\n$/u.test(part) ? part : normalizeParagraph(part))
+        .join('');
+}
+
 function findBrokenProse(text) {
     const findings = [];
     const value = String(text ?? '');
@@ -382,14 +412,16 @@ function findBrokenProse(text) {
         if (trimmed && /[；;]$/.test(trimmed)) {
             findings.push({ match: trimmed.slice(-40), line: index + 1, reason: 'dangling_semicolon' });
         }
+        if (/[，,][ \t]*(?:但是|不过|然而|但)[ \t]*(?:[。！？!?])?$/u.test(trimmed)) {
+            findings.push({ match: trimmed.slice(-80), line: index + 1, reason: 'dangling_connector' });
+        }
     });
     // Markdown tables can legitimately repeat conjunctions across adjacent
     // cells. Preserve byte offsets while excluding table rows from prose-only
     // repetition checks.
     const proseValue = value.replace(/^\s*\|.*\|\s*$/gmu, match => ' '.repeat(match.length));
     for (const regex of [
-        /(?:尚尚|只只|分别分别|只有仅有|单单个|能能(?!否|够)|具有有(?:吸引力|优势|价值|能力|作用|意义|效果|潜力|特点|必要性)|更接近区别于|存在也区别于其|无明显退化区别于|却区别于|提高现实性却区别于|2\s*次计算成本)/gu,
-        /但[^。！？!?；;]{0,80}[，,]但/gu
+        /(?:尚尚|只只|分别分别|只有仅有|单单个|能能(?!否|够)|具有有(?:吸引力|优势|价值|能力|作用|意义|效果|潜力|特点|必要性)|更接近区别于|存在也区别于其|无明显退化区别于|却区别于|提高现实性却区别于|2\s*次计算成本)/gu
     ]) {
         findings.push(...collectRegexMatches(proseValue, regex, 'broken_repetition'));
     }
@@ -1315,6 +1347,7 @@ module.exports = {
     coerceCoreSections,
     findQuantitativeChineseNumerals,
     findReaderTemplatePhrases,
+    normalizeDanglingReaderConnectors,
     findBrokenProse,
     findNumericTypographyDefects,
     findDoubleNumbering,

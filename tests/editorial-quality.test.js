@@ -6,6 +6,7 @@ const {
     findQuantitativeChineseNumerals,
     findDoubleNumbering,
     findReaderTemplatePhrases,
+    normalizeDanglingReaderConnectors,
     findBrokenProse,
     findNumericTypographyDefects,
     findBareEditorialLabels,
@@ -98,7 +99,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.ok(findings.some(item => item.reason === 'exact_rank'));
         assert.equal(findReaderTemplatePhrases('关键比较问题是：下图用于核对。证据边界在于此。').length, 3);
         assert.equal(findBrokenProse('这段以分号结束；\n\n下一段。').length, 1);
-        assert.ok(findBrokenProse('该方法具有有吸引力，但结果有限，但仍可分析。').length >= 2);
+        assert.ok(findBrokenProse('该方法具有有吸引力，但结果有限，但仍可分析。').length >= 1);
         assert.ok(findBrokenProse('只只报告结果，分别分别比较；只有仅有一组，更接近区别于基线。').length >= 4);
         assert.ok(findBrokenProse('收益存在也区别于其基线，无明显退化区别于旧版，却区别于主结果；提高现实性却区别于现场验证。').length >= 1);
         assert.ok(findBrokenProse('长度分组没有消除长上下文的 2 次计算成本。').length >= 1);
@@ -112,6 +113,28 @@ describe('Manual v4 editorial quality primitives', () => {
             [],
             '分号分隔的平行对照不应被重复“但”规则误杀'
         );
+        assert.deepStrictEqual(
+            findBrokenProse('三类改写均导致性能下降，但 CodecSep 的回落更平缓且在两类上保持小幅领先，说明通道级掩蔽对词汇级变化有一定鲁棒性，但未测试含时序或关系结构的提示。'),
+            [],
+            '完整的二次转折不是残句'
+        );
+        const dangling = '模型在 2 个数据集上有一定鲁棒性，但';
+        assert.ok(findBrokenProse(dangling).some(item => item.reason === 'dangling_connector'));
+        const normalizedDangling = normalizeDanglingReaderConnectors(dangling);
+        assert.strictEqual(normalizedDangling, '模型在 2 个数据集上有一定鲁棒性。');
+        assert.deepStrictEqual(numericLexemes(normalizedDangling), numericLexemes(dangling));
+        assert.strictEqual(
+            normalizeDanglingReaderConnectors('完整句，但。\n\n后续完整句。'),
+            '完整句。\n\n后续完整句。'
+        );
+        for (const protectedOrComplete of [
+            '有一定鲁棒性，但未测试更复杂条件。',
+            '“原句有一定鲁棒性，但”',
+            '`literal，但`',
+            '| 条件 | 结论，但 |'
+        ]) {
+            assert.strictEqual(normalizeDanglingReaderConnectors(protectedOrComplete), protectedOrComplete);
+        }
         for (const malformed of [
             '“听懂内容”区别于能辨别音频质量。',
             '参数高效区别于推理廉价。',

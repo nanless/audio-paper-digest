@@ -280,3 +280,71 @@ test('publication metadata CLI dry-run/apply stay plan-scoped and use only injec
         metadata: { fetchOfficialArxivMetadata: () => { throw new Error('wrong transport'); } } });
     assert.equal(fetches, 1); assert.equal(applied.fetched, 1); assert.equal(applied.status, 'complete');
 });
+
+test('publication metadata batch retains a transient failure, seals peers, exits partial, and resumes idempotently', async t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'publication-metadata-partial-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const planFile = path.join(root, 'plan.json'); fs.writeFileSync(planFile, '{}', { mode: 0o600 });
+    const ids = ['2601.00001', '2601.00002'];
+    const plan = { queue: ids.map(arxivId => ({ paperId: `arxiv:${arxivId}`,
+        route: { kind: 'arxiv-fresh-fetch', arxivId } })) };
+    const files = { freshArxivFetchedSourcesDir: path.join(root, 'sources'),
+        historicalArxivPublicationMetadataDir: path.join(root, 'sidecars'),
+        freshRewriteRunsDir: path.join(root, 'runs') };
+    for (const directory of Object.values(files)) fs.mkdirSync(directory, { mode: 0o700 });
+    const directoryFor = id => path.join(files.historicalArxivPublicationMetadataDir, id, 'generation-000001');
+    const sealedIds = [];
+    const fakeSidecars = {
+        sidecarDirectory: (_root, id) => directoryFor(id),
+        readPublicationMetadata: ({ arxivId }) => ({ proof: { paperId: `arxiv:${arxivId}` } }),
+        findReusableOfficialAtom: () => null,
+        querySourceIdForSource: ({ arxivId }) => arxivId,
+        sealPublicationMetadata: ({ arxivId }) => {
+            fs.mkdirSync(directoryFor(arxivId), { recursive: true, mode: 0o700 });
+            sealedIds.push(arxivId);
+            return { status: 'sealed', proof: { manifestSha256: sha(`manifest:${arxivId}`) } };
+        }
+    };
+    const common = { files, config: { FILES: files }, sidecars: fakeSidecars,
+        projections: { readStableJson: () => ({ value: plan }) }, planApi: { normalizePlan: value => value } };
+    let failFirst = true; const fetched = [];
+    const fetchOfficialArxivMetadata = async id => {
+        fetched.push(id);
+        if (id === ids[0] && failFirst) {
+            const error = new Error('bounded Atom transport failure');
+            error.code = 'ARXIV_METADATA_NETWORK_TRANSIENT'; error.retryable = true; error.attempts = 3;
+            throw error;
+        }
+        return { official: id };
+    };
+    const oldLog = console.log; console.log = () => {};
+    t.after(() => { console.log = oldLog; });
+    const first = await cli.main(['--apply', '--plan', planFile, '--generation', '1', '--concurrency', '2'], {
+        ...common, fetchOfficialArxivMetadata
+    });
+    assert.equal(first.status, 'partial'); assert.equal(first.failed, 1);
+    assert.equal(first.sealed, 1); assert.equal(first.fetched, 1);
+    assert.deepEqual(first.results.map(item => [item.paperId, item.status]), [
+        [`arxiv:${ids[0]}`, 'failed'], [`arxiv:${ids[1]}`, 'sealed']
+    ]);
+    assert.equal(first.results[0].retryable, true); assert.equal(first.results[0].attempts, 3);
+    assert.equal(cli.partialExitCode(first), 1);
+    assert.equal(fs.existsSync(directoryFor(ids[0])), false, 'failed paper cannot leave a sidecar directory');
+    assert.equal(fs.existsSync(directoryFor(ids[1])), true);
+
+    failFirst = false;
+    const second = await cli.main(['--apply', '--plan', planFile, '--generation', '1', '--concurrency', '2'], {
+        ...common, fetchOfficialArxivMetadata
+    });
+    assert.equal(second.status, 'complete'); assert.equal(second.failed, 0);
+    assert.equal(second.sealed, 1); assert.equal(second.recovered, 1);
+    assert.equal(cli.partialExitCode(second), 0);
+    assert.deepEqual(sealedIds, [ids[1], ids[0]], 'the recovered peer is never resealed');
+    assert.deepEqual(fetched, [ids[0], ids[1], ids[0]], 'resume fetches only the previously failed paper');
+
+    fs.rmSync(directoryFor(ids[0]), { recursive: true, force: true });
+    await assert.rejects(cli.main(['--apply', '--plan', planFile, '--generation', '1',
+        '--paper-ids', ids[0]], { ...common,
+        fetchOfficialArxivMetadata: async () => { throw new TypeError('implementation bug'); } }),
+    /implementation bug/, 'unexpected implementation failures remain fail-closed');
+});

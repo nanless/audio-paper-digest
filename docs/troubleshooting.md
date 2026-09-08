@@ -62,7 +62,7 @@ npm run validate:data
 - Reader 重阶段默认 5；
 - Muse 筛选 batch 服从 `PD_FILTER_BATCH_SIZE`；
 - 主分析、局部修复和 Reader 使用不同 token/context 预算。
-- Reader patch 默认 8000 tokens；只有已保存候选的 patch 在该上限精确截断时，下一次显式续跑才会受限提升到最高 16000，截断正文仍失败关闭。
+- Reader patch 默认 8000 tokens；只有最后一个已付 patch 槽在该上限精确截断、且该候选尚未使用 implementation allowance lineage 时，下一次显式续跑才获得恰好一个最高 16000 的受限槽。收到该槽的任何模型内容即消费额度，transport-only 失败不消费；截断正文仍失败关闭。
 
 ```bash
 npm run deep -- --date YYYY-MM-DD

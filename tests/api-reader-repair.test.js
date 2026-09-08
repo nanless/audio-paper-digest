@@ -82,6 +82,35 @@ test('stale-node recovery rebuilds an exact target from the current candidate SH
     assert.notEqual(targets[0].oldSha256, stale);
 });
 
+test('blocking marker repairs do not expand into diagnostic-only table rewrites', () => {
+    const draft = fixture();
+    draft.conceptBridges[2].sectionKind = 'problem';
+    const marker = draft.conceptBridges[2].marker;
+    draft.sections[3].body = draft.sections[3].body.replace(marker, '');
+    draft.sections[4].body += `\n\n${marker}`;
+    draft.tableBindings = [0, 1, 2, 3].map(index => ({ tableIndex: index + 1,
+        sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
+        sourceQuotes: [`diagnostic quote ${index}`] }));
+    const issues = [
+        { path: '/conceptBridges/2', message: 'conceptBridges[2] marker 必须唯一独占一段并位于声明 kind 小节' },
+        ...draft.tableBindings.map((_binding, index) => ({ path: `/tableBindings/${index}`,
+            diagnosticOnly: true, message: `tableBindings[${index}] sourceQuotes 仅供诊断` }))
+    ];
+    const targets = buildRepairTargets(draft, issues);
+    assert.deepEqual(targets.map(target => target.path), [
+        '/conceptBridges/2', '/sections/2/body', '/sections/4/body'
+    ]);
+    assert.ok(targets.length <= 8);
+    assert.ok(targets.every(target => target.oldSha256 === hashDraft(
+        target.path === '/conceptBridges/2' ? draft.conceptBridges[2]
+            : draft.sections[Number(target.path.match(/sections\/(\d+)/)[1])].body
+    )));
+
+    const diagnosticOnly = buildRepairTargets(draft, [issues.at(-1)]);
+    assert.ok(diagnosticOnly.some(target => target.path === '/tableBindings/3'),
+        'diagnostics remain actionable when no blocking issue exists');
+});
+
 test('patch rejects duplicate, overlapping, prototype, unknown and out-of-range paths', () => {
     const draft = fixture();
     const patch = patchFor(draft, [['/sections/0/body', '修复']]);
@@ -205,13 +234,13 @@ test('all malformed quote bindings, marker-only tables and insufficient length a
     assert.ok(issues.some(issue => /实际Markdown表 0 张/.test(issue.message)));
     assert.ok(issues.some(issue => issue.code === 'reader_length_preflight' && issue.diagnosticOnly));
     const targets = buildRepairTargets(draft, issues);
-    for (const pointer of ['/tableBindings/0', '/tableBindings/1', '/sections/7/body', '/sections/8/body', '/sections/0/body']) {
+    for (const pointer of ['/tableBindings/0', '/tableBindings/1', '/sections/7/body', '/sections/8/body']) {
         assert.ok(targets.some(target => target.path === pointer), pointer);
     }
+    assert.equal(targets.some(target => target.path === '/sections/0/body'), false,
+        'diagnostic-only length expansion waits until blocking table issues are fixed');
+    assert.ok(targets.length <= 8, 'one repair request remains within the patch-node limit');
     assert.equal(targets.some(target => /^\/sections\/\d+$/.test(target.path)), false, 'body diagnostics never duplicate whole section targets');
-    assert.throws(() => applyReaderPatch(draft, patchFor(draft,
-        targets.filter(target => target.path.endsWith('/body')).slice(0, 9).map(target => [target.path, target.value])),
-    targets.map(target => target.path)), /invalid shape/, 'expanded allowlist does not raise the 8-node patch cap');
 });
 
 test('malformed internal concept values produce diagnostics rather than exceptions', () => {
@@ -507,7 +536,7 @@ test('normalized validation signatures stop the same binding issue after two cha
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t); const paper = { arxivId: '2609.99978', title: '同门禁变化草稿' };
     const draft = fixture(); draft.readerTitle = '短';
-    const changedBody = `${draft.sections[0].body}补充一个不改变标题错误的来源说明。`;
+    const changedTitle = '短短';
     let calls = 0;
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', {
         sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 6,
@@ -515,13 +544,14 @@ test('normalized validation signatures stop the same binding issue after two cha
         readerCallModel: async () => {
             calls++;
             return calls === 1 ? JSON.stringify(draft)
-                : JSON.stringify(patchFor(draft, [['/sections/0/body', changedBody]]));
+                : JSON.stringify(patchFor(draft, [['/readerTitle', changedTitle]]));
         }
     }), /同一规范化验证门禁连续 2 次无改善/);
     assert.equal(calls, 2);
     const envelope = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0])));
     assert.equal(envelope.payload.validationFailureStreak, 2);
-    assert.equal(envelope.payload.noProgress, 0, 'draft changed, so the old draft-hash heuristic did not stop it');
+    assert.equal(envelope.payload.noProgress, 1,
+        'the patch changed the draft, but the exact unchanged issue still counts as no progress');
 });
 
 test('validation signatures preserve monotonic deficit improvement while ignoring volatile wording', () => {
@@ -860,10 +890,10 @@ test('received truncated or incomplete patch responses consume content budget wi
         let calls = 0;
         const options = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 2,
             readerRecordDisposition: () => {}, readerMaterializeFigures: async () => [],
-            readerCallModel: async () => {
+            readerCallModel: async (_messages, tokens) => {
                 if (++calls === 1) return JSON.stringify(draft);
                 throw Object.assign(new Error(`${code}: simulated patch output termination`), {
-                    code, retryable: false, outputTokens: 8000, maxOutputTokens: 8000,
+                    code, retryable: false, outputTokens: tokens, maxOutputTokens: tokens,
                     partialText: '{"version":1,"replacements":['
                 });
             } };
@@ -874,12 +904,24 @@ test('received truncated or incomplete patch responses consume content budget wi
         assert.equal(envelope.payload.fullAttempts, 1, 'patch truncation is not a full-response attempt');
         assert.equal(envelope.payload.transportFailures || 0, 0);
         assert.equal(hashDraft(envelope.payload.draft), hashDraft(draft));
-        await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
-        assert.equal(calls, 2, 'exhausted content budget prevents another patch request');
+        if (code === 'MODEL_OUTPUT_TRUNCATED') {
+            await assert.rejects(generateApiReaderArticleDetailed(
+                paper, 'canonical', '', options
+            ), error => error.code === code);
+            assert.equal(calls, 3, 'an exact base truncation purchases one larger patch response');
+            const retried = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
+            assert.equal(retried.payload.attempts, 3);
+            assert.equal(retried.payload.lastContentError.maxOutputTokens, 16000);
+            await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+            assert.equal(calls, 3, 'a retry-budget truncation cannot purchase another response');
+        } else {
+            await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+            assert.equal(calls, 2, 'non-budget incomplete output has no escalation allowance');
+        }
     }
 });
 
-test('an exact 8000-token patch truncation resumes the same candidate with one bounded 16000-token patch and no full request', async t => {
+test('a non-final 8000-token patch truncation uses the remaining ordinary 8000-token slot', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99987', title: '局部截断自适应预算' };
@@ -919,11 +961,129 @@ test('an exact 8000-token patch truncation resumes the same candidate with one b
     assert.deepEqual(calls, [
         { stage: 'apiReaderArticle', tokens: 48000 },
         { stage: 'apiReaderRepair', tokens: 8000 },
-        { stage: 'apiReaderRepair', tokens: 16000 }
+        { stage: 'apiReaderRepair', tokens: 8000 }
     ]);
     const afterRetry = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
     assert.equal(afterRetry.payload.draft.readerTitle, '声音表示如何与语义条件连接起来');
     assert.equal(afterRetry.payload.draft.sections[0].body, '太短');
     assert.equal(afterRetry.payload.attempts, 3);
     assert.equal(afterRetry.payload.fullAttempts, 1, 'the resumed invocation made zero full Reader requests');
+});
+
+test('a final ordinary attempt truncated at 8000 receives exactly one bounded 16000 retry slot', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t);
+    const paper = { arxivId: '2609.99971', title: '末尾截断恢复' };
+    const draft = fixture(); draft.readerTitle = '短'; draft.sections[0].body = '太短';
+    const calls = [];
+    const options = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 2,
+        readerRecordDisposition: () => {}, readerMaterializeFigures: async () => [],
+        readerCallModel: async (_messages, tokens, requestOptions) => {
+            calls.push({ stage: requestOptions.usageContext.stage, tokens });
+            if (calls.length === 1) return JSON.stringify(draft);
+            if (calls.length === 2) {
+                throw Object.assign(new Error('final ordinary patch hit 8000'), {
+                    code: 'MODEL_OUTPUT_TRUNCATED', retryable: false,
+                    outputTokens: tokens, maxOutputTokens: tokens,
+                    partialText: '{"version":1,"replacements":['
+                });
+            }
+            return JSON.stringify(patchFor(draft, [
+                ['/readerTitle', '声音表示如何与语义条件连接起来']
+            ]));
+        } };
+    await assert.rejects(
+        generateApiReaderArticleDetailed(paper, 'canonical', '', options),
+        error => error.code === 'MODEL_OUTPUT_TRUNCATED'
+    );
+    await assert.rejects(
+        generateApiReaderArticleDetailed(paper, 'canonical', '', options),
+        /body 至少/
+    );
+    assert.deepEqual(calls, [
+        { stage: 'apiReaderArticle', tokens: 48000 },
+        { stage: 'apiReaderRepair', tokens: 8000 },
+        { stage: 'apiReaderRepair', tokens: 16000 }
+    ]);
+    const active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
+    assert.equal(envelope.payload.attempts, 3);
+    assert.equal(envelope.payload.fullAttempts, 1);
+    assert.equal(envelope.payload.lastContentError, undefined);
+    assert.equal(envelope.payload.implementationRepairAllowanceLineage,
+        'reader-implementation-repair-lineage-v1');
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+    assert.equal(calls.length, 3, 'the one larger retry cannot be repeated');
+});
+
+test('an implementation-lineage slot truncated at 8000 cannot stack a second 16000 slot', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t);
+    const paper = { arxivId: '2609.99969', title: '实现额度不得叠加' };
+    const draft = fixture(); draft.readerTitle = '短';
+    let calls = 0;
+    const options = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 2,
+        readerRecordDisposition: () => {}, readerMaterializeFigures: async () => [],
+        readerCallModel: async (_messages, tokens) => {
+            calls += 1;
+            if (calls === 1) return JSON.stringify(draft);
+            throw Object.assign(new Error('implementation slot hit its base ceiling'), {
+                code: 'MODEL_OUTPUT_TRUNCATED', retryable: false,
+                outputTokens: tokens, maxOutputTokens: tokens
+            });
+        } };
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options),
+        error => error.code === 'MODEL_OUTPUT_TRUNCATED');
+    const active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
+    saveFailedCandidate(directory, envelope.identity, {
+        ...envelope.payload,
+        implementationRepairAllowanceLineage: 'reader-implementation-repair-lineage-v1'
+    });
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+    assert.equal(calls, 2, 'the consumed implementation lineage blocks a stacked 16000 response');
+});
+
+test('a transport failure before the final-slot 16000 response preserves the same retry without consuming content', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t);
+    const paper = { arxivId: '2609.99970', title: '末尾截断网络恢复' };
+    const draft = fixture(); draft.readerTitle = '短';
+    const calls = [];
+    const options = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 2,
+        readerRecordDisposition: () => {}, readerMaterializeFigures: async () => [],
+        readerCallModel: async (_messages, tokens, requestOptions) => {
+            calls.push({ stage: requestOptions.usageContext.stage, tokens });
+            if (calls.length === 1) return JSON.stringify(draft);
+            if (calls.length === 2) {
+                throw Object.assign(new Error('final ordinary patch hit 8000'), {
+                    code: 'MODEL_OUTPUT_TRUNCATED', retryable: false,
+                    outputTokens: tokens, maxOutputTokens: tokens
+                });
+            }
+            if (calls.length === 3) throw new Error('temporary connection reset');
+            throw Object.assign(new Error('bounded 16000 output still truncated'), {
+                code: 'MODEL_OUTPUT_TRUNCATED', retryable: false,
+                outputTokens: tokens, maxOutputTokens: tokens
+            });
+        } };
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options),
+        error => error.code === 'MODEL_OUTPUT_TRUNCATED');
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options),
+        /connection reset/);
+    let active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    let envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
+    assert.equal(envelope.payload.attempts, 2, 'transport receives no content and cannot consume the extra slot');
+    assert.equal(envelope.payload.lastContentError.maxOutputTokens, 8000,
+        'the exact base truncation proof survives a transport-only failure');
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options),
+        error => error.code === 'MODEL_OUTPUT_TRUNCATED');
+    active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
+    assert.equal(envelope.payload.attempts, 3);
+    assert.equal(envelope.payload.lastContentError.maxOutputTokens, 16000);
+    assert.equal(envelope.payload.implementationRepairAllowanceLineage,
+        'reader-implementation-repair-lineage-v1');
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+    assert.deepEqual(calls.map(call => call.tokens), [48000, 8000, 16000, 16000]);
 });

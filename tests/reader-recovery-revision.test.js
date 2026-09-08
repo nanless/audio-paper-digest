@@ -65,6 +65,24 @@ test('explicit same-run revision preserves paid budgets, records mappings, archi
     assert.deepEqual(fs.readdirSync(f.directory), names);
 });
 
+test('diagnostic migration removes only a proven paragraph-final dangling connector', t => {
+    const f = fixture(t);
+    const dangling = '模型在 2 个数据集上有一定鲁棒性，但';
+    const complete = '模型虽然下降，但回落更平缓，但未测试关系型提示。';
+    f.payload.draft.sections[0].body = `${f.payload.draft.sections[0].body}\n\n${dangling}`;
+    f.payload.draft.sections[1].body = `${f.payload.draft.sections[1].body}\n\n${complete}`;
+    f.payload.rawDraft = JSON.stringify(f.payload.draft);
+    saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    assert.ok(migrated.draft.sections[0].body.endsWith('模型在 2 个数据集上有一定鲁棒性。'));
+    assert.ok(migrated.draft.sections[1].body.endsWith(complete));
+    assert.equal(migrated.draft.sections[0].body.includes(dangling), false);
+    assert.equal(migrated.readerRecoveryRevisions.at(-1).inputDraftSha256,
+        hashDraft(f.payload.draft));
+    assert.equal(migrated.readerRecoveryRevisions.at(-1).outputDraftSha256,
+        hashDraft(migrated.draft));
+});
+
 test('ordinary calls and an unenabled fresh scope never scan or migrate an old candidate', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     assert.equal(loadReaderRecoveryRevision(f.directory, f.identity), null);
@@ -181,6 +199,8 @@ test('an exhausted paid budget retains its counters but receives exactly one imp
     saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
     const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     assert.equal(loaded.attempts, 6); assert.equal(loaded.fullAttempts, 2);
+    assert.equal(loaded.implementationRepairAllowanceLineage,
+        'reader-implementation-repair-lineage-v1');
     assert.match(loaded.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
     const repair = require('../scripts/lib/reader-repair.js');
     const targets = repair.buildRepairTargets(loaded.draft, loaded.issues);
@@ -200,6 +220,46 @@ test('implementation allowance proof is consumed once and cannot be restored', t
     assert.ok(consumed.consumedImplementationAllowanceSha256.includes(proof.allowanceSha256));
     assert.throws(() => saveFailedCandidate(f.directory, f.identity,
         { ...consumed, implementationRepairAllowanceProof: proof }), /already consumed/);
+});
+
+test('later implementation changes cannot stack new attempts after the lineage allowance was consumed', t => {
+    const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
+    saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
+    const first = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    assert.match(first.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    saveFailedCandidate(f.directory, f.identity, { ...first, attempts: 7,
+        implementationRepairAllowanceProof: null });
+    const afterCall = loadFailedCandidate(f.directory, f.identity);
+    assert.equal(afterCall.implementationRepairAllowanceLineage,
+        'reader-implementation-repair-lineage-v1');
+    assert.ok(afterCall.consumedImplementationAllowanceSha256.includes(
+        first.implementationRepairAllowanceProof.allowanceSha256));
+
+    const nextIdentity = { ...f.identity, repairImplementationSha256: '9'.repeat(64) };
+    const next = f.enabled(() => loadReaderRecoveryRevision(f.directory, nextIdentity));
+    assert.equal(next.attempts, 7);
+    assert.equal(next.fullAttempts, 2);
+    assert.equal(next.implementationRepairAllowanceProof, null);
+    assert.equal(next.implementationRepairAllowanceLineage,
+        'reader-implementation-repair-lineage-v1');
+    const repair = require('../scripts/lib/reader-repair.js');
+    assert.equal(repair.readerAttemptLimit(6, next.attempts, next.draft, 0), 7);
+});
+
+test('an unused lineage allowance transfers across identity change without creating a second slot', t => {
+    const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
+    saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
+    const first = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    const firstProof = first.implementationRepairAllowanceProof;
+    const nextIdentity = { ...f.identity, repairImplementationSha256: '8'.repeat(64) };
+    const transferred = f.enabled(() => loadReaderRecoveryRevision(f.directory, nextIdentity));
+    assert.match(transferred.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    assert.notEqual(transferred.implementationRepairAllowanceProof.allowanceSha256,
+        firstProof.allowanceSha256);
+    assert.ok(transferred.consumedImplementationAllowanceSha256.includes(firstProof.allowanceSha256));
+    assert.equal(transferred.attempts, 6);
+    const repair = require('../scripts/lib/reader-repair.js');
+    assert.equal(repair.readerAttemptLimit(6, transferred.attempts, transferred.draft, 1), 7);
 });
 
 test('parser, editorial and mechanical gate implementation changes each permit one diagnostic migration', async t => {

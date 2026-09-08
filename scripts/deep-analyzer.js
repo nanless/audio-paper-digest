@@ -78,6 +78,7 @@ const {
 const {
     validateEditorialQuality,
     findDuplicateLongSentences,
+    normalizeDanglingReaderConnectors,
     SCALED_ARABIC_MEASUREMENT_UNITS
 } = require('./editorial-quality.js');
 const {
@@ -169,14 +170,20 @@ function resolveApiReaderRepairRetryMaxTokens(
     return Math.min(full, boundedRetry);
 }
 
-function shouldEscalateApiReaderRepairBudget(recovery, candidate, baseBudget, retryBudget) {
+function shouldEscalateApiReaderRepairBudget(
+    recovery, candidate, baseBudget, retryBudget, maxAttempts, implementationAllowanceState = {}
+) {
     const error = recovery?.lastContentError;
     const terminatedAt = Number(error?.maxOutputTokens);
     return Boolean(candidate)
         && error?.code === 'MODEL_OUTPUT_TRUNCATED'
         && Number(recovery?.attempts) > Number(recovery?.fullAttempts)
-        && Number(error?.outputTokens) >= terminatedAt
-        && [baseBudget, retryBudget].includes(terminatedAt)
+        && Number(recovery?.attempts) >= maxAttempts
+        && !(implementationAllowanceState.lineageIssued === true
+            && implementationAllowanceState.activeProof !== true)
+        && Number(error?.outputTokens) === terminatedAt
+        && retryBudget > baseBudget
+        && terminatedAt === baseBudget
         && (error?.requestKind === undefined || error.requestKind === 'patch');
 }
 // Muse reasoning tokens count against max_output_tokens.  The old 2500-token
@@ -3819,6 +3826,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let draftOrderMappings = [];
     const normalizeCandidate = () => {
         if (!candidate) return;
+        candidate.sections = candidate.sections.map(section => ({
+            ...section,
+            body: typeof section?.body === 'string'
+                ? normalizeDanglingReaderConnectors(section.body) : section?.body
+        }));
         const normalized = normalizeReaderDraftOrder(candidate);
         candidate = normalized.draft;
         if (normalized.mapping.changed) draftOrderMappings.push(normalized.mapping);
@@ -3939,7 +3951,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     previousValidationFailureSignature = recovered?.validationFailureSignature || '';
     implementationRepairAllowanceProof = recovered?.implementationRepairAllowanceProof || null;
     let useEscalatedRepairBudget = shouldEscalateApiReaderRepairBudget(
-        recovered, candidate, repairMaxTokens, repairTruncationRetryMaxTokens
+        recovered, candidate, repairMaxTokens, repairTruncationRetryMaxTokens, maxAttempts,
+        { lineageIssued: recovered?.implementationRepairAllowanceLineage
+                === repair.IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT,
+            activeProof: Boolean(implementationRepairAllowanceProof) }
     );
     if (useEscalatedRepairBudget) {
         console.log(`    [deep] ↗ Reader 局部修复在 ${repairMaxTokens} tokens 精确截断，`
@@ -4000,9 +4015,17 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
         }); }
     }
+    // Only an exact base-budget truncation on the final paid patch attempt
+    // purchases one larger response. It cannot repeat after
+    // a retry-budget truncation because shouldEscalate only accepts the base
+    // ceiling.  The persisted content counter remains monotonic and every
+    // returned response still consumes an attempt.
+    const boundedRecoveryAllowance = implementationRepairAllowanceProof
+        || useEscalatedRepairBudget ? 1 : 0;
     const attemptLimit = repair.readerAttemptLimit(
-        maxAttempts, completedAttempts, candidate, implementationRepairAllowanceProof ? 1 : 0);
-    if (completedAttempts >= attemptLimit || noProgress >= 2 || validationFailureStreak >= 2) {
+        maxAttempts, completedAttempts, candidate, boundedRecoveryAllowance);
+    if (completedAttempts >= attemptLimit
+        || !useEscalatedRepairBudget && (noProgress >= 2 || validationFailureStreak >= 2)) {
         throw new Error('Reader failed candidate exhausted its bounded attempts; inspect recovery evidence before changing inputs');
     }
     for (let attempt = completedAttempts + 1; attempt <= attemptLimit; attempt++) {
@@ -4038,6 +4061,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         let selectedOrdinals = selectedInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
         let raw;
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';
+        const requestUsesEscalatedRepairBudget = Boolean(repairContext && useEscalatedRepairBudget);
         try {
             const requestOptions = {
                 temperature: attempt === 1 && !repairContext
@@ -4054,14 +4078,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     ...inputs.flatMap(image => blocksForImage(image, repairContext))
                 ] }], imageInputs: selectedInputs,
                 maxTokens: repairContext
-                    ? useEscalatedRepairBudget ? repairTruncationRetryMaxTokens : repairMaxTokens
+                    ? requestUsesEscalatedRepairBudget ? repairTruncationRetryMaxTokens : repairMaxTokens
                     : API_READER_MAX_TOKENS,
                 requestOptions });
             raw = isolated.raw;
-            if (repairContext && useEscalatedRepairBudget) {
-                // The recovery proof purchases exactly one larger patch
-                // response. Any later validation repair in this invocation
-                // returns to the ordinary base budget.
+            if (requestUsesEscalatedRepairBudget) {
+                // A received 16000-token response consumes the same one-slot
+                // lineage used by implementation recovery. Later parser churn
+                // therefore cannot mint another paid attempt.
                 useEscalatedRepairBudget = false;
             }
             if (isolated.exclusions.length) {
@@ -4084,6 +4108,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 // Charge the content budget and retain the last intact draft.
                 if (!repairContext) fullAttempts += 1;
                 implementationRepairAllowanceProof = null;
+                const implementationRepairAllowanceLineage = requestUsesEscalatedRepairBudget
+                    ? repair.IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT : undefined;
+                if (requestUsesEscalatedRepairBudget) useEscalatedRepairBudget = false;
                 const failureSignature = repair.hashDraft({ code: error.code,
                     kind: repairContext ? 'patch' : 'full', draftSha256: priorCandidateSha });
                 noProgress = failureSignature === previousFailureSignature ? noProgress + 1 : 0;
@@ -4093,6 +4120,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     issues: currentIssues, attempts: attempt, fullAttempts, noProgress,
                     failureSignature, validationFailureSignature: previousValidationFailureSignature,
                     validationFailureStreak, implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
+                    ...(implementationRepairAllowanceLineage ? { implementationRepairAllowanceLineage } : {}),
                     ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}), transportFailures,
                     lastContentError: { code: error.code, message: String(error.message || error),
                         outputTokens: Number.isFinite(error.outputTokens) ? error.outputTokens : null,
@@ -4112,7 +4140,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 validationFailureSignature: previousValidationFailureSignature,
                 validationFailureStreak, implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
-                transportFailures, lastTransportError: String(error?.message || error)
+                transportFailures, lastTransportError: String(error?.message || error),
+                ...(requestUsesEscalatedRepairBudget && recovered?.lastContentError
+                    ? { lastContentError: recovered.lastContentError } : {})
             });
             throw error;
         }
@@ -4158,7 +4188,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                 transportFailures, validationFailureSignature: '', validationFailureStreak: 0,
-                implementationRepairAllowanceProof: null
+                implementationRepairAllowanceProof: null,
+                ...(requestUsesEscalatedRepairBudget
+                    ? { implementationRepairAllowanceLineage: repair.IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT }
+                    : {})
             };
             const retiredCandidate = deferOrRetireReaderCandidate(
                 result, repair, candidateDirectory, identity, acceptedRecoveryPayload
@@ -4198,7 +4231,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
                 transportFailures, validationFailureSignature: normalizedFailureSignature,
-                validationFailureStreak, implementationRepairAllowanceProof
+                validationFailureStreak, implementationRepairAllowanceProof,
+                ...(requestUsesEscalatedRepairBudget
+                    ? { implementationRepairAllowanceLineage: repair.IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT }
+                    : {})
             });
             const feedback = buildApiReaderValidationFeedback(error);
             if (!attemptErrorHistory.includes(feedback)) {
@@ -12554,6 +12590,7 @@ module.exports = {
     generateApiReaderArticleDetailed,
     resolveApiReaderBaseRepairMaxTokens,
     resolveApiReaderRepairRetryMaxTokens,
+    shouldEscalateApiReaderRepairBudget,
     prepareApiReaderRevisionSeed,
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,
