@@ -174,9 +174,16 @@ test('CLI patch phase is explicit and accepts only run-local patch names', () =>
 
 function installSignedParent(f, mutate = () => {}) {
     const hash = runner.stableHash, sourceSha256 = f.source.freshSourceDescriptor.sourceSha256;
+    const paperAuthors = ['Author One'];
+    const metadataSha256 = hash(paperAuthors);
+    const renderedAuthor = { name: 'Author One', affiliations: ['机构信息未可靠披露'] };
+    const identityAuthor = { ...renderedAuthor,
+        nameBinding: { sourceKind: 'paper_metadata', sourceValue: 'Author One', metadataSha256 },
+        affiliationBindings: [{ sourceKind: 'explicit_unavailable', sourceValue: '机构信息未可靠披露',
+            sourceTextSha256: sourceSha256 }] };
     const authorIdentity = { contract: 'api-reader-author-identity-v1', sourceTextSha256: sourceSha256,
-        sourceDomSha256: '', metadataSha256: hash([]), authors: [] };
-    const authors = { authors: [], identity: authorIdentity, identitySha256: hash(authorIdentity) };
+        sourceDomSha256: '', metadataSha256, authors: [identityAuthor] };
+    const authors = { authors: [renderedAuthor], identity: authorIdentity, identitySha256: hash(authorIdentity) };
     const resourceIdentity = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sourceSha256, resources: [] };
     const resources = { ...resourceIdentity, identitySha256: hash(resourceIdentity) };
     const plan = { version: 3, contract: 'beginner-researcher-v3', sections: [], figurePlacements: [],
@@ -187,7 +194,7 @@ function installSignedParent(f, mutate = () => {}) {
         structuredArtifactsSha256: f.source.structuredArtifacts.payloadSha256,
         sourceSnapshotSha256: f.source.freshSourceDescriptor.sourceSnapshotSha256,
         sourceOnly: true, oldGeneratedTextIncluded: false };
-    const parent = { ...f.paper, authors: [], sourceSha256, apiReaderArticle: article, apiReaderPlan: plan,
+    const parent = { ...f.paper, authors: paperAuthors, sourceSha256, apiReaderArticle: article, apiReaderPlan: plan,
         apiReaderArticleSha256: runner.sha256(article), apiReaderPlanSha256: hash(plan),
         apiReaderAuthors: authors, apiReaderResources: resources, apiReaderFigures: [], freshRewriteProvenance: provenance,
         analysisManifest: { freshRewriteProvenance: { ...provenance },

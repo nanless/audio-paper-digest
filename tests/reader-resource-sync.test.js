@@ -17,15 +17,68 @@ function fixture(type='demo',availability='temporarily_unreachable') {
     const resources={...identity,identitySha256:hash(identity)};
     const empty={contract:identity.contract,sourceTextSha256:sha(text),resources:[]};empty.identitySha256=hash(empty);
     const analysis=deep.applyApiReaderResourceAvailability(validAnalysisText(),empty);
+    const audit={dimensions:{openSource:{score:0,reason:'original audit unchanged'}},total:6.9};
     const paper={arxivId:'2609.02940',sourceSha256:sha(text),analysis,parsed:parseAnalysis(analysis),apiReaderResources:resources,
         apiReaderArticle:'unchanged signed article reference',apiReaderPlan:{unchanged:true},apiReaderFigures:[],apiReaderAuthors:{unchanged:true},
         analysisCheckpoint:analysis,analysisStageCheckpoints:{structureRepair:validAnalysisText(),scoringAudit:analysis,apiReaderArticle:analysis},
         analysisManifest:{sourceAcquisition:{sourceSha256:sha(text)},stages:{
             openSourceScan:{resourceEvidenceSha256:resources.identitySha256},
             scoringAudit:{status:'complete',attempts:1,model:'original-api-model',outputAnalysisSha256:sha(analysis),
-                audit:{dimensions:{openSource:{score:0,reason:'original audit unchanged'}},total:6.9}}
+                audit,auditSha256:hash(audit)}
         }}};
     return {paper,sourceDetails:{text},resources};
+}
+
+function sealReader(paper) {
+    const sourceBindings={tableBindings:[],formulaBindings:[]};
+    const plan={version:3,contract:'beginner-researcher-v3',figurePlacements:[],...sourceBindings,
+        sourceBindingsContract:'api-reader-source-bindings-v4',sourceBindingsSha256:hash(sourceBindings)};
+    paper.authors=['Author One'];
+    const metadataSha256=hash(paper.authors);
+    const renderedAuthor={name:'Author One',affiliations:['机构信息未可靠披露']};
+    const identityAuthor={...renderedAuthor,
+        nameBinding:{sourceKind:'paper_metadata',sourceValue:'Author One',metadataSha256},
+        affiliationBindings:[{sourceKind:'explicit_unavailable',sourceValue:'机构信息未可靠披露',
+            sourceTextSha256:paper.sourceSha256}]};
+    const identity={contract:'api-reader-author-identity-v1',sourceDomSha256:'a'.repeat(64),
+        sourceTextSha256:paper.sourceSha256,metadataSha256,authors:[identityAuthor]};
+    const authors={authors:[renderedAuthor],sourceDomSha256:'a'.repeat(64),identity,identitySha256:hash(identity)};
+    const article='unchanged signed article reference';
+    Object.assign(paper,{apiReaderArticle:article,apiReaderPlan:plan,apiReaderFigures:[],apiReaderAuthors:authors,
+        apiReaderArticleSha256:sha(article),apiReaderPlanSha256:hash(plan)});
+    paper.analysisManifest.contracts={apiReaderArticle:'beginner-researcher-v3',
+        apiReaderSourceBindings:'api-reader-source-bindings-v4',
+        apiReaderAuthorIdentity:'api-reader-author-identity-v1',
+        apiReaderResourceIdentity:'api-reader-resource-identity-v1'};
+    paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256='b'.repeat(64);
+    paper.analysisManifest.stages.openSourceScan.resourceEvidenceContract='api-reader-resource-identity-v1';
+    paper.analysisManifest.stages.apiReaderArticle={status:'complete',articleSha256:sha(article),planSha256:hash(plan),
+        figureCount:0,figuresSha256:hash([]),readerAuthorsSha256:hash(authors),
+        readerAuthorIdentityContractVersion:'api-reader-author-identity-v1',
+        readerAuthorIdentitySha256:authors.identitySha256,
+        resourceIdentityContractVersion:'api-reader-resource-identity-v1',
+        resourceIdentitySha256:paper.apiReaderResources.identitySha256,
+        resourceCount:paper.apiReaderResources.resources.length,model:'muse-spark-1.2-contributor',
+        protocol:'openai_responses',parserVersion:'api-reader-parser-v3',assemblerVersion:'api-reader-assembler-v3',
+        tableContractVersion:'api-reader-tables-v3',figureContractVersion:'api-reader-figures-v3',
+        qualityMetricsContractVersion:'api-reader-quality-metrics-v2',
+        qualityMetrics:{contract:'api-reader-quality-metrics-v2',blockingIssueCount:0},
+        sourceBindingsContractVersion:'api-reader-source-bindings-v4',
+        sourceBindingsSha256:plan.sourceBindingsSha256,sourceBindingsSourceTextSha256:paper.sourceSha256,
+        tableBindingCount:0,formulaBindingCount:0,structuredArtifactsSha256:'b'.repeat(64)};
+    assert(engine.apiReaderV3BindsCanonical(paper));
+}
+
+function refreshAvailability(f) {
+    sealReader(f.paper);
+    const previousIdentitySha256=f.paper.apiReaderResources.identitySha256;
+    const body={...f.paper.apiReaderResources,resources:f.paper.apiReaderResources.resources.map(resource=>({
+        ...resource,availability:'available',status:200,retryable:false
+    }))};
+    delete body.identitySha256;
+    f.paper.apiReaderResources={...body,identitySha256:hash(body)};
+    f.paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256=f.paper.apiReaderResources.identitySha256;
+    return previousIdentitySha256;
 }
 
 test('demo availability projection updates canonical/parsed/terminal checkpoints with explicit non-API provenance',()=>{
@@ -82,4 +135,40 @@ test('Reader invalidation cannot silently convert the execution-local verified i
     assert.equal(f.paper.apiReaderResources,undefined);
     assert.throws(()=>deep.applyApiReaderResourceAvailability(f.paper.analysis,f.paper.apiReaderResources),/缺失身份/);
     assert.match(deep.applyApiReaderResourceAvailability(f.paper.analysis,verified),/demo=temporarily_unreachable/);
+});
+
+test('Reader resource availability refresh rebinds only its identity while preserving signed bytes and audit',()=>{
+    const f=fixture(),previousIdentitySha256=refreshAvailability(f);
+    const before={article:f.paper.apiReaderArticle,plan:structuredClone(f.paper.apiReaderPlan),
+        figures:structuredClone(f.paper.apiReaderFigures),authors:structuredClone(f.paper.apiReaderAuthors),
+        audit:structuredClone(f.paper.analysisManifest.stages.scoringAudit.audit)};
+    assert(!engine.apiReaderV3BindsCanonical(f.paper));
+    const result=sync(f.paper,f.sourceDetails);
+    assert(engine.apiReaderV3BindsCanonical(result));
+    assert.equal(result.apiReaderArticle,before.article);assert.deepEqual(result.apiReaderPlan,before.plan);
+    assert.deepEqual(result.apiReaderFigures,before.figures);assert.deepEqual(result.apiReaderAuthors,before.authors);
+    assert.deepEqual(result.analysisManifest.stages.scoringAudit.audit,before.audit);
+    assert.match(result.analysisStageCheckpoints.apiReaderArticle,/demo=available\(HTTP 200\)/);
+    const rebind=result.analysisManifest.stages.scoringAudit.resourceAvailabilitySynchronizations[0]
+        .readerResourceIdentityRebind;
+    assert.deepEqual(rebind,{contract:'reader-resource-identity-rebind-v1',previousIdentitySha256,
+        currentIdentitySha256:result.apiReaderResources.identitySha256,resourceCount:1});
+});
+
+test('Reader resource identity rebind rejects signed bytes, audit, or resource-count drift',()=>{
+    const mutations=[
+        f=>{f.paper.apiReaderArticle+=' drift';},
+        f=>{f.paper.apiReaderPlan={...f.paper.apiReaderPlan,drift:true};},
+        f=>{f.paper.apiReaderFigures.push({ordinal:1});},
+        f=>{f.paper.apiReaderAuthors={...f.paper.apiReaderAuthors,drift:true};},
+        f=>{f.paper.analysisManifest.stages.scoringAudit.audit.total=7;},
+        f=>{const body={...f.paper.apiReaderResources,resources:[...f.paper.apiReaderResources.resources,
+            {...f.paper.apiReaderResources.resources[0],type:'third_party'}]};delete body.identitySha256;
+            f.paper.apiReaderResources={...body,identitySha256:hash(body)};
+            f.paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256=f.paper.apiReaderResources.identitySha256;}
+    ];
+    for(const mutate of mutations) {
+        const f=fixture();refreshAvailability(f);mutate(f);const before=JSON.stringify(f.paper);
+        assert.throws(()=>sync(f.paper,f.sourceDetails));assert.equal(JSON.stringify(f.paper),before);
+    }
 });

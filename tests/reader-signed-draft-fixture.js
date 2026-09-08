@@ -72,13 +72,20 @@ function fixture(options = {}) {
         minimumIntegratedTables:2,availableFigureOrdinals:[1],requireSourceBindings:true,
         allowDeterministicQuoteRepair:true,structuredArtifacts:artifacts,sourceText:text});
     const rendered=deep.injectApiReaderFigures(parsed,artifacts,paperId);
-    const authorIdentity={contract:'api-reader-author-identity-v1',sourceTextSha256:sha(text),metadataSha256:hash([]),authors:[]};
-    const authors={authors:[],identity:authorIdentity,identitySha256:hash(authorIdentity)};
+    const paperAuthors=['Author One'];
+    const metadataSha256=hash(paperAuthors);
+    const renderedAuthor={name:'Author One',affiliations:['机构信息未可靠披露']};
+    const identityAuthor={...renderedAuthor,
+        nameBinding:{sourceKind:'paper_metadata',sourceValue:'Author One',metadataSha256},
+        affiliationBindings:[{sourceKind:'explicit_unavailable',sourceValue:'机构信息未可靠披露',sourceTextSha256:sha(text)}]};
+    const authorIdentity={contract:'api-reader-author-identity-v1',sourceTextSha256:sha(text),
+        metadataSha256,authors:[identityAuthor]};
+    const authors={authors:[renderedAuthor],identity:authorIdentity,identitySha256:hash(authorIdentity)};
     const resourceIdentity={contract:'api-reader-resource-identity-v1',sourceTextSha256:sha(text),resources:[]};
     const resources={...resourceIdentity,identitySha256:hash(resourceIdentity)};
     const provenance={contract:'fresh-source-analysis-v1',runId,sourceSha256:sha(text),structuredArtifactsSha256:artifacts.payloadSha256,
         sourceSnapshotSha256:descriptor.sourceSnapshotSha256,sourceOnly:true,oldGeneratedTextIncluded:false};
-    const paper={arxivId:paperId,authors:[],sourceSha256:sha(text),apiReaderArticle:rendered.article,apiReaderPlan:rendered.plan,
+    const paper={arxivId:paperId,authors:paperAuthors,sourceSha256:sha(text),apiReaderArticle:rendered.article,apiReaderPlan:rendered.plan,
         apiReaderFigures:rendered.figures.map(f=>({...f,cachePath:'/not-read.png',assetFilename:'fixture.png',assetMediaType:'image/png',
             assetSha256:'c'.repeat(64),assetBytes:123,assetWidth:10,assetHeight:10})),apiReaderAuthors:authors,apiReaderResources:resources,
         freshRewriteProvenance:provenance,analysisManifest:{freshRewriteProvenance:structuredClone(provenance),

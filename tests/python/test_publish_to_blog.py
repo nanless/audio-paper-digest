@@ -1117,7 +1117,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
         )
         actual_2407_msr = (
-            '在 GPT-4-turbo 数字基准评测设置和相同物理危害查询口径下，BadRobot 的平均 MSR '
+            '在 GPT-4-turbo 数字基准评测设置和相同物理危害查询口径下，BadRobot 的平均MSR'
             '从 Vanilla 基线的 0.25 提升至 0.83，比较对象、数值与方向均可由原文核对。'
         )
         candidate = summary.replace(original_result, actual_2407_msr)
@@ -1125,10 +1125,74 @@ class PublishToBlogReviewTest(unittest.TestCase):
             publish_to_blog._detailed_core_summary_semantic_issue(candidate)
         )
 
-        unknown_metric = candidate.replace(' MSR ', ' XYZ ')
+        for unknown in ('MyMSRNet', 'XYZ'):
+            with self.subTest(unknown=unknown):
+                unknown_metric = candidate.replace('MSR', unknown)
+                self.assertIn(
+                    '缺少完整关键定量结果',
+                    publish_to_blog._detailed_core_summary_semantic_issue(unknown_metric),
+                )
+
+    def test_core_summary_accepts_bounded_fvd_but_keeps_other_result_gates(self):
+        summary = (
+            '任务以粗糙实例掩码、文本描述与原始音视频为输入，输出在保留背景与非目标音频前提下对指定实例的视听同步编辑，难点在于粗掩码导致背景泄露与音频时序不可控。'
+            '方法链分三步：自反馈音频智能体先由音频字幕器得语义摘要，再由视觉语言模型结合视频、掩码与文本推理出需保留的分离描述与需生成的生成描述，分别调度分离模型集合与生成模型集合重混，经多模态大语言模型五维阈值判别迭代重做得到精细音频令牌；粒度感知掩码精炼器以视频令牌替代文本令牌并注入精度因子与音频交叉注意力，将高斯模糊退化的粗掩码逐步精炼；音视频同步视频主干基于Wan2.2-5B扩散变换器通过帧级交叉注意力融合音频令牌并用精炼掩码做潜空间插值合成。'
+            '与AvED的场景级对比学习和Object-AVEdit的反演再生相比，机制差异在于用精度因子显式建模掩码粒度与用外部音频管线提供可指定的事件时序而非隐式对齐。'
+            '在AVISet测试集100样本评测中AVI-Edit的FVD为312.89，低于AvED的364.69与Ovi的407.08，体现视觉质量优势。'
+            '结论仅在单主发声实例、10秒720P 24FPS单镜头片段上验证，多实例需串行处理且未验证长时一致性外推。'
+            '原文披露训练在8张NVIDIA A800上进行160k步，推理在单张A100上平均311.3秒。'
+        )
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(summary)
+        )
+        result_sentence = (
+            '在AVISet测试集100样本评测中AVI-Edit的FVD为312.89，低于AvED的364.69与Ovi的407.08，体现视觉质量优势。'
+        )
+        cases = {
+            'metric_substring': summary.replace('FVD', 'MyFVDNet'),
+            'generic_visual_quality': summary.replace('FVD', '视觉质量'),
+            'missing_direction': summary.replace(
+                result_sentence,
+                '在AVISet测试集100样本评测中AVI-Edit、AvED与Ovi的FVD分别为312.89、364.69与407.08。',
+            ),
+            'missing_setting': summary.replace(
+                result_sentence,
+                'AVI-Edit的FVD为312.89，低于AvED的364.69与Ovi的407.08。',
+            ),
+        }
+        for name, candidate in cases.items():
+            with self.subTest(name=name):
+                self.assertIn(
+                    '缺少完整关键定量结果',
+                    publish_to_blog._detailed_core_summary_semantic_issue(candidate),
+                )
+
+    def test_core_summary_rejects_cross_metric_direction_but_accepts_same_metric(self):
+        prefix = (
+            '音乐编辑任务以参考音频与编辑后音频为输入，输出保持度评测，难点是不同音乐分面的变化容易混叠。'
+            '方法链分三步：第一步负责把保持目标拆为和声、节奏、结构与旋律四类；第二步提取每类特征并送入相应度量；第三步在受控编辑上校准度量，前一步输出用于下一步验证。'
+            '与单一分数相比，机制差异在于分别度量各分面，使预期变化可被独立定位。'
+            '为避免单一汇总值掩盖局部退化，评测保留每个分面的独立输出，并让研究者沿特征、度量与受控效应逐层核查变化来源及其可解释的实际意义与明确边界。'
+        )
+        suffix = (
+            '结论适用边界受限于50首合成MIDI，对真实录音与复杂复调尚未验证。'
+            '原文未披露训练、推理或部署成本。'
+            '这些边界意味着结果不能直接外推到开放场景。'
+        )
+        invalid = (
+            f'{prefix}在合成MIDI客观验证设置下，Grand Piano编辑的MMCos分数为0.78，'
+            f'高于同设置下SKLSim分数的0.16。{suffix}'
+        )
         self.assertIn(
             '缺少完整关键定量结果',
-            publish_to_blog._detailed_core_summary_semantic_issue(unknown_metric),
+            publish_to_blog._detailed_core_summary_semantic_issue(invalid),
+        )
+        valid = (
+            f'{prefix}在合成MIDI客观验证设置下，Grand Piano编辑的ChromaSim分数为0.78，'
+            f'高于同设置下Electric Piano编辑的ChromaSim分数0.16。{suffix}'
+        )
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(valid)
         )
 
     def test_modern_resources_show_identity_type_and_status_without_weight_claims(self):

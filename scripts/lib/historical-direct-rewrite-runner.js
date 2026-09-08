@@ -657,7 +657,7 @@ function publicationSourceFor(item, sourceDetails, sourceDescriptor, options = {
         fail(`${item.paperId} official metadata sidecar is not bound to this sealed source generation`);
     }
     const abstract = sealed.abstract; const metadataSidecar = clone(sealed.proof);
-    return {
+    const result = {
         contract: PUBLICATION_SOURCE_CONTRACT,
         version: 1,
         paperId: item.paperId,
@@ -667,6 +667,15 @@ function publicationSourceFor(item, sourceDetails, sourceDescriptor, options = {
         abstractSha256: sha256(Buffer.from(abstract, 'utf8')),
         metadataSidecar
     };
+    if (options.includeAuthors === true) {
+        if (!Array.isArray(sealed.authors) || sealed.authors.length === 0
+            || sealed.authors.some(author => typeof author !== 'string' || !author.trim()
+                || author !== author.trim())) {
+            fail(`${item.paperId} official metadata sidecar authors are empty or invalid`);
+        }
+        result.authors = sealed.authors.slice();
+    }
+    return result;
 }
 function fallbackArxivDetails(source) {
     const text = source.text; const body = { version: 1, source: 'fresh_arxiv_text_without_layout', tables: [], formulas: [], figures: [],
@@ -679,8 +688,49 @@ function directPaper(item, sourceDetails = {}) {
     // Do not carry catalog source pointers, page titles, historical prose, old
     // analysis, metadata, or prior Reader fields across this boundary.
     const title = typeof sourceDetails.title === 'string' ? sourceDetails.title.replace(/\s+/g, ' ').trim() : '';
-    if (item.route.kind === 'arxiv-fresh-fetch') return { directPaperId: item.paperId, arxivId: item.route.arxivId, ...(title ? { title } : {}) };
+    if (item.route.kind === 'arxiv-fresh-fetch') {
+        const authors = sourceDetails.publicationAuthors;
+        if (authors !== undefined && (!Array.isArray(authors) || authors.length === 0
+            || authors.some(author => typeof author !== 'string' || !author.trim() || author !== author.trim()))) {
+            fail(`${item.paperId} official publication authors are required for direct analysis`);
+        }
+        return { directPaperId: item.paperId, arxivId: item.route.arxivId,
+            ...(authors ? { authors: authors.slice() } : {}), ...(title ? { title } : {}) };
+    }
     return { directPaperId: item.paperId, id: item.paperId, ...(title ? { title } : {}) };
+}
+
+function refreshHistoricalDirectReaderAuthors(paper, sourceDetails, refresh) {
+    if (paper?.analysisManifest?.stages?.apiReaderArticle?.status !== 'complete') return false;
+    const expected = paper.authors;
+    if (!Array.isArray(expected) || expected.length === 0
+        || expected.some(author => typeof author !== 'string' || !author.trim() || author !== author.trim())) {
+        fail('completed historical Reader lacks official publication authors');
+    }
+    const identity = paper.apiReaderAuthors?.identity;
+    const rendered = paper.apiReaderAuthors?.authors;
+    const names = Array.isArray(rendered) ? rendered.map(author => author?.name) : [];
+    const identityNames = Array.isArray(identity?.authors) ? identity.authors.map(author => author?.name) : [];
+    const expectedMetadataSha256 = stableHash(expected);
+    if (names.length > 0 && JSON.stringify(names) === JSON.stringify(expected)
+        && JSON.stringify(identityNames) === JSON.stringify(expected)
+        && identity?.metadataSha256 === expectedMetadataSha256) return false;
+    if (typeof refresh !== 'function') fail('author-only Reader refresh implementation is unavailable');
+    const article = paper.apiReaderArticle;
+    const planSha256 = stableHash(paper.apiReaderPlan);
+    refresh(paper, sourceDetails);
+    if (paper.apiReaderArticle !== article || stableHash(paper.apiReaderPlan) !== planSha256) {
+        fail('author-only Reader refresh changed Reader article or plan');
+    }
+    const refreshedIdentity = paper.apiReaderAuthors?.identity;
+    const refreshedNames = paper.apiReaderAuthors?.authors?.map(author => author?.name);
+    const refreshedIdentityNames = refreshedIdentity?.authors?.map(author => author?.name);
+    if (JSON.stringify(refreshedNames) !== JSON.stringify(expected)
+        || JSON.stringify(refreshedIdentityNames) !== JSON.stringify(expected)
+        || refreshedIdentity?.metadataSha256 !== expectedMetadataSha256) {
+        fail('author-only Reader refresh did not bind the official publication authors');
+    }
+    return true;
 }
 
 function titleFromConferenceMetadata(source, item) {
@@ -844,7 +894,8 @@ function analysisAttemptDirectory(dependencies = {}) {
 async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, executionDirectory, dependencies }) {
     const engine = dependencies.engine || require('../analysis-engine.js');
     const sourcePaper = item.route.kind === 'conference-local-pdf'
-        ? { ...sourceDetails, title: titleFromConferenceMetadata(item.route.writerInputs[0], item) } : sourceDetails;
+        ? { ...sourceDetails, title: titleFromConferenceMetadata(item.route.writerInputs[0], item) }
+        : { ...sourceDetails, publicationAuthors: dependencies.publicationMetadataAuthors };
     const freshPaper = directPaper(item, sourcePaper);
     const recovered = readAnalysisRecovery({ executionDirectory, item, sourceDescriptor, allowMissing: true });
     // Recovery is accepted only after its envelope has replayed the same
@@ -852,6 +903,11 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     // retained fields, while analysis/Reader checkpoints remain available to
     // deep-analyzer for fingerprint-based stage reuse.
     const paper = recovered ? { ...recovered.record, ...freshPaper } : freshPaper;
+    if (item.route.kind === 'arxiv-fresh-fetch') {
+        const refresh = dependencies.refreshApiReaderAuthorsFromSource
+            || require('../deep-analyzer.js').refreshApiReaderAuthorsFromSource;
+        refreshHistoricalDirectReaderAuthors(paper, sourceDetails, refresh);
+    }
     const readerAttemptsDir = path.join(executionDirectory, 'reader-attempts');
     let result = paper;
     const persistRecovery = record => writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,
@@ -1409,16 +1465,20 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             } else { source = await extractConferenceSource(item, dependencies); sourceDetails = source.sourceDetails; }
             descriptor = compactSourceDescriptor(item.route.kind, source, item);
             registry = transition(registry, plan, item.paperId, 'source_ready', { source: descriptor }, now); persist();
+            let publicationMetadataAuthors;
             if (item.route.kind === 'arxiv-fresh-fetch') {
-                publicationSourceFor(item, sourceDetails, descriptor, {
+                const publication = publicationSourceFor(item, sourceDetails, descriptor, {
                     freshArxivSourceRoot: options.freshArxivSourceRoot,
                     publicationMetadataRoot: options.publicationMetadataRoot,
-                    readPublicationMetadata: dependencies.readPublicationMetadata
+                    readPublicationMetadata: dependencies.readPublicationMetadata,
+                    includeAuthors: true
                 });
+                publicationMetadataAuthors = publication.authors;
             }
             registry = transition(registry, plan, item.paperId, 'analyzing', {}, now); persist();
             executionDir = executionDirectory(options.executionRoot, item, descriptor); safeDirectory(executionDir, true, 'paper execution directory');
             const executionDependencies = { ...dependencies, freshArxivSourceRoot: options.freshArxivSourceRoot,
+                ...(publicationMetadataAuthors ? { publicationMetadataAuthors } : {}),
                 persistentRoots: [options.registryRoot, options.executionRoot, options.stagingRoot] };
             const readerAttemptsDir = path.join(executionDir, 'reader-attempts');
             const materializeReaderFigures = async (figures, id) => item.route.kind === 'arxiv-fresh-fetch'
@@ -1591,7 +1651,7 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     HistoricalDirectRewriteRunnerError, stableHash,
     STATES, registryName, registryPath, defaultPauseFilePath, operationLockTarget, pauseFileRequested, selectDirectItems,
     initialRegistry, normalizeRegistry, loadOrCreateRegistry, transition, registryCounts, directPaper, fallbackArxivDetails,
-    extractSealedArxivAbstract, publicationSourceFor,
+    extractSealedArxivAbstract, publicationSourceFor, refreshHistoricalDirectReaderAuthors,
     analysisRecoveryPath, analysisRecoveryRecord, normalizeAnalysisRecovery, writeAnalysisRecovery,
     readAnalysisRecovery, normalizeLegacyPaperLockReclaimIntent, normalizeLegacyPaperLockReclaimCompletion,
     legacyPaperLockReclaimEventId,

@@ -267,9 +267,15 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
     if (manifest.atom.querySourceId !== bound.sourceId) {
         fail('official Atom query is not bound to the exact sealed source ID');
     }
+    if (!Array.isArray(metadata.authors) || metadata.authors.length === 0
+        || metadata.authors.some(author => typeof author !== 'string' || !author.trim()
+            || author !== author.trim())) {
+        fail('publication metadata authors are empty or invalid');
+    }
     return { directory, sourceManifestSha256: manifest.source.sourceManifestSha256,
         sourceSnapshotSha256: manifest.source.sourceSnapshotSha256,
         sourceTextSha256: manifest.source.sourceTextSha256, abstract: metadata.abstract,
+        authors: metadata.authors.slice(),
         proof: { contract: CONTRACT, paperId: `arxiv:${id}`, manifestSha256: sha256(manifestBytes),
             atomResponseSha256: manifest.atom.responseSha256,
             metadataRecordSha256: manifest.metadata.recordSha256, abstractSha256: manifest.metadata.abstractSha256,

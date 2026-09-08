@@ -183,8 +183,9 @@ const CORE_SUMMARY_MAX_SENTENCES = 9;
 const CORE_SUMMARY_RESULT_UNAVAILABLE = '原文未提供可核对的关键定量结果';
 const CORE_SUMMARY_COST_UNAVAILABLE = '原文未披露训练、推理或部署成本';
 const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])/g;
-const CORE_SUMMARY_METRIC_PATTERN = /(?:WER|CER|PER|F1|F[- ]?Score|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|\bMSR\b|accuracy|error rate|score|latency|throughput|RTF|FPS|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:WER|CER|PER|F1|F[- ]?Score|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|(?<![A-Za-z0-9_])MSR(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FVD(?![A-Za-z0-9_])|accuracy|error rate|score|latency|throughput|RTF|FPS|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)/i;
 const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)/i;
+const CORE_SUMMARY_DIRECTION_CONNECTOR_PATTERN = /(?:高于|低于|超过|优于|领先)/g;
 const CORE_SUMMARY_NON_RESULT_PATTERN = /(?:模型|版本|参数量|样本量|训练步数|轮次|批量|batch|学习率|年份|第\s*\d+|图\s*\d+|表\s*\d+|式\s*\d+|章节|引用)/i;
 const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
     imageDiscovery: Object.freeze(['complete', 'no_candidates', MANUAL_COMPLETE_STATUS]),
@@ -959,10 +960,12 @@ function coreSummaryQuantitativeResultState(text) {
         const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
+        const crossMetricComparison = hasCrossMetricDirectionalComparison(sentence);
         const missing = [
             !hasSetting && '评测设置', !hasMetric && '指标名称',
             numbers.length === 0 && '数值', !hasDirection && '比较方向',
-            !hasComparisonObjects && '比较对象'
+            !hasComparisonObjects && '比较对象',
+            crossMetricComparison && '指标口径一致（方向连接词两侧不能是不同指标）'
         ].filter(Boolean);
         return {
             complete: Boolean(sentence) && missing.length === 0,
@@ -976,6 +979,30 @@ function coreSummaryQuantitativeResultState(text) {
     return { complete: false, missing: best?.missing || [
         '评测设置', '指标名称', '数值', '比较方向', '比较对象'
     ] };
+}
+
+function nearestCoreSummaryMetricLabel(segment, fromRight) {
+    const candidates = [];
+    // A bare token such as PESQ can name either a metric or a baseline method.
+    // Only an explicit "X分数/X得分/X指标" label is safe to compare here.
+    const custom = /(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{1,39})(?=\s*(?:分数|得分|指标))/g;
+    for (const match of String(segment || '').matchAll(custom)) {
+        candidates.push({ index: match.index, value: match[1].toLowerCase().replace(/[\s_-]+/g, '') });
+    }
+    if (!candidates.length) return '';
+    candidates.sort((left, right) => left.index - right.index);
+    return (fromRight ? candidates[candidates.length - 1] : candidates[0]).value;
+}
+
+function hasCrossMetricDirectionalComparison(sentence) {
+    const source = String(sentence || '');
+    for (const match of source.matchAll(CORE_SUMMARY_DIRECTION_CONNECTOR_PATTERN)) {
+        const left = nearestCoreSummaryMetricLabel(source.slice(Math.max(0, match.index - 80), match.index), true);
+        const rightStart = match.index + match[0].length;
+        const right = nearestCoreSummaryMetricLabel(source.slice(rightStart, rightStart + 80), false);
+        if (left && right && left !== right) return true;
+    }
+    return false;
 }
 
 function hasCompleteCoreSummaryQuantitativeResult(text) {

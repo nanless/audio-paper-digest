@@ -63,6 +63,7 @@ test('publication metadata sidecar seals raw Atom and replays every source/recor
     assert.equal(result.proof.sourceLatestCapturedAt, '2026-01-03T00:00:01.000Z');
     assert.equal(result.proof.querySourceId, ID);
     assert.equal(result.proof.abstractSha256, sha(result.abstract));
+    assert.deepEqual(result.authors, ['Author One']);
     assert.deepEqual(Object.keys(result.metadata).sort(), ['abstract', 'arxivId', 'authors', 'categories',
         'fetchedAt', 'paper_id', 'source', 'sources', 'title']);
     assert.equal(result.proof.metadataRecordSha256, freshRun.stableHash(result.metadata),
@@ -71,6 +72,7 @@ test('publication metadata sidecar seals raw Atom and replays every source/recor
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: official() });
     assert.equal(recovered.status, 'recovered');
     assert.equal(recovered.proof.manifestSha256, result.proof.manifestSha256);
+    assert.deepEqual(recovered.authors, ['Author One']);
 });
 
 test('publication metadata sidecar rejects semantic observed-time and raw entry-version drift', async t => {

@@ -112,6 +112,40 @@ test('direct analysis input carries only the fresh-source title, never a frozen 
     assert.doesNotMatch(JSON.stringify(input), /ArXiv page|POISON_OLD_BLOG_BODY/);
 });
 
+test('completed historical Reader refreshes only an empty author identity from official metadata', () => {
+    const sourceSha256 = sha('sealed source');
+    const paper = {
+        authors: ['Yash Vishe', 'Eric Xue'], sourceSha256,
+        apiReaderArticle: 'Reader bytes must not change',
+        apiReaderPlan: { version: 3, tableBindings: [] },
+        apiReaderAuthors: { authors: [], identity: { authors: [], metadataSha256: runner.stableHash([]) } },
+        analysisManifest: { stages: { apiReaderArticle: { status: 'complete' } } }
+    };
+    const before = { article: paper.apiReaderArticle, plan: structuredClone(paper.apiReaderPlan) };
+    const refreshed = runner.refreshHistoricalDirectReaderAuthors(paper, { text: 'sealed source' }, target => {
+        const authors = target.authors.map(name => ({ name, affiliations: ['机构信息未可靠披露'] }));
+        target.apiReaderAuthors = { authors, identity: {
+            authors: authors.map(author => ({ ...author })), metadataSha256: runner.stableHash(target.authors)
+        } };
+    });
+    assert.equal(refreshed, true);
+    assert.deepEqual(paper.apiReaderAuthors.authors.map(author => author.name), paper.authors);
+    assert.equal(paper.apiReaderArticle, before.article);
+    assert.deepEqual(paper.apiReaderPlan, before.plan);
+    assert.equal(runner.refreshHistoricalDirectReaderAuthors(paper, { text: 'sealed source' }, () => {
+        throw new Error('must not refresh an already bound identity');
+    }), false);
+
+    const drifted = structuredClone(paper);
+    drifted.apiReaderAuthors = { authors: [], identity: { authors: [], metadataSha256: runner.stableHash([]) } };
+    assert.throws(() => runner.refreshHistoricalDirectReaderAuthors(drifted, {}, target => {
+        target.apiReaderArticle += ' drift';
+        target.apiReaderAuthors = paper.apiReaderAuthors;
+    }), /changed Reader article or plan/);
+    assert.throws(() => runner.refreshHistoricalDirectReaderAuthors({ ...paper, authors: [] }, {}, () => {}),
+        /lacks official publication authors/);
+});
+
 test('sealed arXiv publication abstract extraction accepts explicit bounded layouts and rejects ambiguity', () => {
     const expected = 'First exact sentence. Second exact sentence.';
     assert.equal(runner.extractSealedArxivAbstract([
@@ -399,7 +433,7 @@ function readPublicationMetadataFixture({ sourceRoot, arxivId, generation, expec
         sourceManifestSha256: source.sourceManifestSha256,
         sourceSnapshotSha256,
         sourceTextSha256: source.manifest.text.responseSha256, generation };
-    return { abstract, proof, sourceManifestSha256: proof.sourceManifestSha256,
+    return { abstract, authors: ['Author One'], proof, sourceManifestSha256: proof.sourceManifestSha256,
         sourceSnapshotSha256: proof.sourceSnapshotSha256, sourceTextSha256: proof.sourceTextSha256 };
 }
 function withPublicationMetadata(dependencies) {

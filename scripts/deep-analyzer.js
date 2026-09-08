@@ -11965,10 +11965,11 @@ async function repairCoreSummarySection(
     const repairCallModel = options.callModelFn || callModel;
     for (let attempt = 1; attempt <= 3; attempt++) {
         const retryTargets = [];
-        if (/(?:定量|量化|比较对象|评测设置|指标名称|数值|比较方向)/.test(feedback)) {
+        if (/(?:定量|量化|比较对象|评测设置|指标名称|指标口径|数值|比较方向)/.test(feedback)) {
             retryTargets.push('量化句须在同一句内闭合比较对象、评测设置或数据集、指标、数值与方向，'
                 + '且方向必须字面使用“高于”“低于”“从……升至”或“从……降至”之一，'
-                + '不能用“最高”“最优”“最低”“达到”或无“从”的“升至/降至”代替');
+                + '不能用“最高”“最优”“最低”“达到”或无“从”的“升至/降至”代替；'
+                + '方向连接词两侧必须重复同一指标名，不能直接比较两个不同指标');
         }
         if (/(?:结论适用边界|失败条件|未验证范围)/.test(feedback)) {
             retryTargets.push('边界句须明确写出适用边界、失败条件或尚未验证范围');

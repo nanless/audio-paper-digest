@@ -10,6 +10,29 @@ const identityBody = identity => { const { identitySha256, ...body } = identity 
 const protectedReaderKeys = ['apiReaderArticle','apiReaderPlan','apiReaderFigures','apiReaderAuthors','apiReaderResources',
     'apiReaderArticleSha256','apiReaderPlanSha256'];
 
+function readerResourceIdentityRebind(paper, manifest, resources) {
+    const stage = manifest.stages.apiReaderArticle;
+    if (stage?.status !== 'complete' || apiReaderV3BindsCanonical(paper)) return null;
+    if (stage.resourceCount !== resources.resources.length) {
+        throw new Error('Resource synchronization cannot repair an invalid Reader signature');
+    }
+    const reboundStages = structuredClone(manifest.stages);
+    reboundStages.apiReaderArticle.resourceIdentitySha256 = resources.identitySha256;
+    const rebound = {
+        ...paper,
+        analysisManifest: { ...manifest, stages: reboundStages }
+    };
+    if (!apiReaderV3BindsCanonical(rebound)) {
+        throw new Error('Resource synchronization cannot repair an invalid Reader signature');
+    }
+    return {
+        contract: 'reader-resource-identity-rebind-v1',
+        previousIdentitySha256: stage.resourceIdentitySha256,
+        currentIdentitySha256: resources.identitySha256,
+        resourceCount: resources.resources.length
+    };
+}
+
 // Deterministic projection of an already sealed resource identity. No network,
 // no model, no score change, and no write/checkpoint callback. Caller owns locks
 // and persistence. It refuses changed scoring evidence instead of re-signing an
@@ -20,6 +43,8 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
     const resources = paper?.apiReaderResources;
     const manifest = paper?.analysisManifest;
     if (!paper || typeof paper.analysis !== 'string' || manifest?.stages?.scoringAudit?.status !== 'complete'
+        || manifest.stages.scoringAudit.auditSha256
+            !== stableHash(manifest.stages.scoringAudit.audit)
         || !scoringAuditBindsFinalAnalysis(paper)
         || !sourceText || sha(sourceText) !== paper.sourceSha256
         || sha(sourceText) !== manifest.sourceAcquisition?.sourceSha256
@@ -36,9 +61,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
         || manifest.stages.openSourceScan?.resourceEvidenceSha256 !== resources.identitySha256) {
         throw new Error('Resource synchronization requires sealed scoring/source/resource identity');
     }
-    if (manifest.stages.apiReaderArticle?.status === 'complete' && !apiReaderV3BindsCanonical(paper)) {
-        throw new Error('Resource synchronization cannot repair an invalid Reader signature');
-    }
+    const readerIdentityRebind = readerResourceIdentityRebind(paper, manifest, resources);
     const originalParsed = parseAnalysis(paper.analysis);
     const scoreFields = ['score','documentType','innovationScore','technicalRigorScore','experimentalSufficiencyScore',
         'clarityScore','impactScore','openSourceScore','reproducibilityScore','engineeringScore','scoringReason'];
@@ -57,7 +80,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
     if (stableHash(withoutOpenSource(originalParsed)) !== stableHash(withoutOpenSource(updatedParsed))) {
         throw new Error('Resource synchronization would alter scores/type/audit prose outside the availability projection');
     }
-    if (updatedAnalysis === paper.analysis) return paper;
+    if (updatedAnalysis === paper.analysis && !readerIdentityRebind) return paper;
     const beforeReader = stableHash(Object.fromEntries(protectedReaderKeys.map(key => [key, paper[key]])));
     const audit = manifest.stages.scoringAudit.audit;
     const auditSha = stableHash(audit);
@@ -83,6 +106,9 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
         checkpoint = syncCheckpoint(paper.analysisCheckpoint, 'analysisCheckpoint');
     }
     const stages = structuredClone(manifest.stages);
+    if (readerIdentityRebind) {
+        stages.apiReaderArticle.resourceIdentitySha256 = resources.identitySha256;
+    }
     const beforeSha256 = sha(paper.analysis), afterSha256 = sha(updatedAnalysis);
     const scoringBefore = stages.scoringAudit.outputAnalysisSha256;
     if (scoringBefore === beforeSha256) stages.scoringAudit.outputAnalysisSha256 = afterSha256;
@@ -97,7 +123,8 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
     const provenance = { contract: CONTRACT, executionKind: 'deterministic_resource_projection',
         sourceSha256: paper.sourceSha256, resourceIdentitySha256: resources.identitySha256,
         beforeAnalysisSha256: beforeSha256, afterAnalysisSha256: afterSha256,
-        originalScoringOutputAnalysisSha256: scoringBefore, checkpointChanges, newApiRequests: 0 };
+        originalScoringOutputAnalysisSha256: scoringBefore, checkpointChanges, newApiRequests: 0,
+        ...(readerIdentityRebind ? { readerResourceIdentityRebind: readerIdentityRebind } : {}) };
     stages.scoringAudit.resourceAvailabilitySynchronizations = [
         ...(stages.scoringAudit.resourceAvailabilitySynchronizations || []), provenance
     ];

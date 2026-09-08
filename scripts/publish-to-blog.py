@@ -2727,6 +2727,37 @@ def _core_summary_projection_sha256(analysis):
     return hashlib.sha256(projected.encode('utf-8')).hexdigest()
 
 
+def _nearest_core_summary_metric_label(segment, from_right):
+    # A bare token such as PESQ can name either a metric or a baseline method.
+    # Only an explicit "X分数/X得分/X指标" label is safe to compare here.
+    candidates = []
+    custom = re.compile(
+        r'(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{1,39})(?=\s*(?:分数|得分|指标))'
+    )
+    candidates.extend(
+        (match.start(), re.sub(r'[\s_-]+', '', match.group(1).lower()))
+        for match in custom.finditer(str(segment or ''))
+    )
+    if not candidates:
+        return ''
+    candidates.sort(key=lambda item: item[0])
+    return candidates[-1 if from_right else 0][1]
+
+
+def _has_cross_metric_directional_comparison(sentence):
+    sentence = str(sentence or '')
+    for match in re.finditer(r'(?:高于|低于|超过|优于|领先)', sentence):
+        left = _nearest_core_summary_metric_label(
+            sentence[max(0, match.start() - 80):match.start()], True
+        )
+        right = _nearest_core_summary_metric_label(
+            sentence[match.end():match.end() + 80], False
+        )
+        if left and right and left != right:
+            return True
+    return False
+
+
 def _detailed_core_summary_semantic_issue(summary):
     summary = str(summary or '')
     count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
@@ -2743,7 +2774,7 @@ def _detailed_core_summary_semantic_issue(summary):
     if len(chain) < 2 or len(roles) < 2:
         issues.append('缺少 2–4 步方法链的分工与衔接')
     metric = re.compile(
-        r'(?:WER|CER|PER|F1|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|Pearson|Spearman|Kendall|\bMSR\b|accuracy|error rate|score|latency|throughput|RTF|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)',
+        r'(?:WER|CER|PER|F1|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|Pearson|Spearman|Kendall|(?<![A-Za-z0-9_])MSR(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FVD(?![A-Za-z0-9_])|accuracy|error rate|score|latency|throughput|RTF|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)',
         re.IGNORECASE,
     )
     comparison = re.compile(
@@ -2759,7 +2790,7 @@ def _detailed_core_summary_semantic_issue(summary):
                 and setting.search(sentence) \
                 and (len(numbers) >= 2 or re.search(
                     r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)', sentence
-                )):
+                )) and not _has_cross_metric_directional_comparison(sentence):
             has_complete_result = True
             break
     if not has_complete_result and '原文未提供可核对的关键定量结果' not in summary:

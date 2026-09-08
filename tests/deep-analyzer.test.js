@@ -3566,6 +3566,62 @@ has_dataset: 否
         );
     });
 
+    it('真实 AVI-Edit 摘要识别边界化 FVD 指标且保留方向与设置门禁', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const summary = '任务以粗糙实例掩码、文本描述与原始音视频为输入，输出在保留背景与非目标音频前提下对指定实例的视听同步编辑，难点在于粗掩码导致背景泄露与音频时序不可控。'
+            + '方法链分三步：自反馈音频智能体先由音频字幕器得语义摘要，再由视觉语言模型结合视频、掩码与文本推理出需保留的分离描述与需生成的生成描述，分别调度分离模型集合与生成模型集合重混，经多模态大语言模型五维阈值判别迭代重做得到精细音频令牌；粒度感知掩码精炼器以视频令牌替代文本令牌并注入精度因子与音频交叉注意力，将高斯模糊退化的粗掩码逐步精炼；音视频同步视频主干基于Wan2.2-5B扩散变换器通过帧级交叉注意力融合音频令牌并用精炼掩码做潜空间插值合成。'
+            + '与AvED的场景级对比学习和Object-AVEdit的反演再生相比，机制差异在于用精度因子显式建模掩码粒度与用外部音频管线提供可指定的事件时序而非隐式对齐。'
+            + '在AVISet测试集100样本评测中AVI-Edit的FVD为312.89，低于AvED的364.69与Ovi的407.08，体现视觉质量优势。'
+            + '结论仅在单主发声实例、10秒720P 24FPS单镜头片段上验证，多实例需串行处理且未验证长时一致性外推。'
+            + '原文披露训练在8张NVIDIA A800上进行160k步，推理在单张A100上平均311.3秒。';
+        const sourceText = 'Experiment result in Table 1 reports FVD (lower is better) on AVISet dataset: AvED 364.69, '
+            + 'Ovi 407.08, and AVI-Edit (Ours) 312.89.';
+        assert.strictEqual(getCoreSummaryDetailIssue(
+            withSummary(summary), { sourceText }
+        ), null);
+
+        const resultSentence = '在AVISet测试集100样本评测中AVI-Edit的FVD为312.89，低于AvED的364.69与Ovi的407.08，体现视觉质量优势。';
+        const cases = [
+            [summary.replace('FVD', 'MyFVDNet'), /指标名称/],
+            [summary.replace('FVD', '视觉质量'), /指标名称/],
+            [summary.replace(resultSentence,
+                '在AVISet测试集100样本评测中AVI-Edit、AvED与Ovi的FVD分别为312.89、364.69与407.08。'), /比较方向/],
+            [summary.replace(resultSentence,
+                'AVI-Edit的FVD为312.89，低于AvED的364.69与Ovi的407.08。'), /评测设置/]
+        ];
+        for (const [candidate, expected] of cases) {
+            assert.match(getCoreSummaryDetailIssue(
+                withSummary(candidate), { sourceText }
+            ), expected);
+        }
+    });
+
+    it('核心摘要拒绝用方向连接词比较两个不同指标，但允许同一指标跨条件', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const prefix = '音乐编辑任务以参考音频与编辑后音频为输入，输出保持度评测，难点是不同音乐分面的变化容易混叠。'
+            + '方法链分三步：第一步负责把保持目标拆为和声、节奏、结构与旋律四类；第二步提取每类特征并送入相应度量；第三步在受控编辑上校准度量，前一步输出用于下一步验证。'
+            + '与单一分数相比，机制差异在于分别度量各分面，使预期变化可被独立定位。'
+            + '为避免单一汇总值掩盖局部退化，评测保留每个分面的独立输出，并让研究者沿特征、度量与受控效应逐层核查变化来源及其可解释的实际意义与明确边界。';
+        const suffix = '结论适用边界受限于50首合成MIDI，对真实录音与复杂复调尚未验证。'
+            + '原文未披露训练、推理或部署成本。'
+            + '这些边界意味着结果不能直接外推到开放场景。';
+        const invalid = `${prefix}在合成MIDI客观验证设置下，Grand Piano编辑的MMCos分数为0.78，`
+            + `高于同设置下SKLSim分数的0.16。${suffix}`;
+        const options = { sourceText: 'Experiment result on dataset reports FVD 312.89, lower than 364.69.' };
+        assert.match(getCoreSummaryDetailIssue(withSummary(invalid), options), /指标口径一致/);
+        const valid = `${prefix}在合成MIDI客观验证设置下，Grand Piano编辑的ChromaSim分数为0.78，`
+            + `高于同设置下Electric Piano编辑的ChromaSim分数0.16。${suffix}`;
+        assert.strictEqual(getCoreSummaryDetailIssue(withSummary(valid), options), null);
+    });
+
     it('数据集论文可严格比较同一量表的两个维度，但不接受无方向并列', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const withSummary = summary => validAnalysisText().replace(
@@ -3598,15 +3654,17 @@ has_dataset: 否
         const accepted = '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标为 0.83，'
             + '高于 Vanilla 基线的 0.25，比较对象、数值与方向均可由原文核对。';
         assert.strictEqual(getCoreSummaryDetailIssue(withResult(accepted)), null);
-        const actual2407Msr = '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的平均 MSR 从 Vanilla 基线的 0.25 提升至 0.83，'
+        const actual2407Msr = '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的平均MSR从 Vanilla 基线的 0.25 提升至 0.83，'
             + '比较对象、数值与方向均可由原文核对。';
         assert.strictEqual(getCoreSummaryDetailIssue(withResult(actual2407Msr)), null);
-        assert.match(
-            getCoreSummaryDetailIssue(
-                withResult(actual2407Msr.replace(/\bMSR\b/, 'XYZ')), sourceOptions
-            ),
-            /最接近的同句量化候选缺少：指标名称/
-        );
+        for (const unknown of ['MyMSRNet', 'XYZ']) {
+            assert.match(
+                getCoreSummaryDetailIssue(
+                    withResult(actual2407Msr.replace('MSR', unknown)), sourceOptions
+                ),
+                /最接近的同句量化候选缺少：指标名称/
+            );
+        }
         for (const rejected of [
             '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标相对 Vanilla 基线的 0.25 升至 0.83。',
             '在 GPT-4-turbo 数字基准评测设置下，BadRobot 的操纵成功率指标相对 Vanilla 基线为 0.25 降至 0.83。'

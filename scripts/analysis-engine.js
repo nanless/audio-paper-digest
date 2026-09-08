@@ -1011,6 +1011,7 @@ function apiReaderV3BindsCanonical(paper) {
         && authorIdentity.metadataSha256 === stableSha256(paper.authors || [])
         && Array.isArray(authors.authors)
         && Array.isArray(authorIdentity.authors)
+        && authors.authors.length > 0
         && authors.authors.length === authorIdentity.authors.length
         && authors.authors.every((author, index) => {
             const identity = authorIdentity.authors[index];

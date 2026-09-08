@@ -245,7 +245,7 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
             sourceName: `https://export.arxiv.org/api/query?id_list=${sourceId}&max_results=1`,
             sourceManifestSha256: source.sourceManifestSha256, sourceSnapshotSha256: snapshot,
             sourceTextSha256: sha(source.runtimeDetails.text), generation };
-        return { abstract, proof, sourceManifestSha256: source.sourceManifestSha256,
+        return { abstract, authors: ['Author One'], proof, sourceManifestSha256: source.sourceManifestSha256,
             sourceSnapshotSha256: snapshot, sourceTextSha256: sha(source.runtimeDetails.text) };
     };
     const options = { apply: true, plan, registryRoot: paths.registryRoot, executionRoot: paths.executionRoot,

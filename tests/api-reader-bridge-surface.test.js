@@ -48,12 +48,19 @@ function signedFixture() {
         conceptBridges: [bridge], figurePlacements: [], tableBindings: [], formulaBindings: [],
         sourceBindingsContract: 'api-reader-source-bindings-v4',
         sourceBindingsSha256: stableFingerprint({ tableBindings: [], formulaBindings: [] }) };
+    const paperAuthors = ['Author One'];
+    const metadataSha256 = stableFingerprint(paperAuthors);
+    const renderedAuthor = { name: 'Author One', affiliations: ['机构信息未可靠披露'] };
+    const identityAuthor = { ...renderedAuthor,
+        nameBinding: { sourceKind: 'paper_metadata', sourceValue: 'Author One', metadataSha256 },
+        affiliationBindings: [{ sourceKind: 'explicit_unavailable', sourceValue: '机构信息未可靠披露',
+            sourceTextSha256: sourceSha256 }] };
     const identity = { contract: 'api-reader-author-identity-v1', sourceTextSha256: sourceSha256,
-        metadataSha256: stableFingerprint([]), authors: [] };
-    const authors = { authors: [], identity, identitySha256: stableFingerprint(identity) };
+        metadataSha256, authors: [identityAuthor] };
+    const authors = { authors: [renderedAuthor], identity, identitySha256: stableFingerprint(identity) };
     const resourceBody = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sourceSha256, resources: [] };
     const resources = { ...resourceBody, identitySha256: stableFingerprint(resourceBody) };
-    const paper = { arxivId: '2609.03622', authors: [], sourceSha256,
+    const paper = { arxivId: '2609.03622', authors: paperAuthors, sourceSha256,
         apiReaderArticle: article, apiReaderPlan: plan, apiReaderFigures: [],
         apiReaderAuthors: authors, apiReaderResources: resources,
         apiReaderArticleSha256: sha(article), apiReaderPlanSha256: stableFingerprint(plan),

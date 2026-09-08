@@ -931,6 +931,29 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
         bindValidApiReaderV3(automatic);
         assert.strictEqual(apiReaderV3BindsCanonical(automatic), true);
+        const emptyAuthors = structuredClone(automatic);
+        emptyAuthors.authors = [];
+        emptyAuthors.apiReaderAuthors.authors = [];
+        emptyAuthors.apiReaderAuthors.identity.authors = [];
+        emptyAuthors.apiReaderAuthors.identity.metadataSha256 = (() => {
+            const stable = value => Array.isArray(value) ? value.map(stable)
+                : value && typeof value === 'object'
+                    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]))
+                    : value;
+            return crypto.createHash('sha256').update(JSON.stringify(stable([]))).digest('hex');
+        })();
+        const emptyIdentityStable = value => Array.isArray(value) ? value.map(emptyIdentityStable)
+            : value && typeof value === 'object'
+                ? Object.fromEntries(Object.keys(value).sort().map(key => [key, emptyIdentityStable(value[key])]))
+                : value;
+        emptyAuthors.apiReaderAuthors.identitySha256 = crypto.createHash('sha256')
+            .update(JSON.stringify(emptyIdentityStable(emptyAuthors.apiReaderAuthors.identity))).digest('hex');
+        emptyAuthors.analysisManifest.stages.apiReaderArticle.authorsSha256 = crypto.createHash('sha256')
+            .update(JSON.stringify(emptyIdentityStable(emptyAuthors.apiReaderAuthors))).digest('hex');
+        emptyAuthors.analysisManifest.stages.apiReaderArticle.authorIdentitySha256 =
+            emptyAuthors.apiReaderAuthors.identitySha256;
+        assert.strictEqual(apiReaderV3BindsCanonical(emptyAuthors), false,
+            'a self-consistent but empty author identity must fail closed');
         const ephemeral = structuredClone(automatic);
         const stable = value => Array.isArray(value) ? value.map(stable)
             : value && typeof value === 'object'
