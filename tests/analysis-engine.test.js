@@ -1254,7 +1254,7 @@ describe('analyzePaperWithRetry', () => {
     it('核心摘要在 taxonomySeal 后绑定 taxonomy 输出而不是更早的 structureRepair 输出', () => {
         const contract = require('../scripts/analysis-contract.js');
         const paper = validAnalysisPaper('2604.00023');
-        const structureAnalysis = paper.analysis.replace(
+       const structureAnalysis = paper.analysis.replace(
             '#语音识别 #Transformer #鲁棒性',
             '#语音识别 #Transformer'
         );
@@ -1279,7 +1279,7 @@ describe('analyzePaperWithRetry', () => {
             primaryMethodId: taxonomyStage.primaryMethodId,
             conceptIds: taxonomyStage.conceptIds
         });
-        paper.analysisStageCheckpoints.structureRepair = structureAnalysis;
+       paper.analysisStageCheckpoints.structureRepair = structureAnalysis;
 
         assert.strictEqual(
             contract.validateCoreSummaryStageBinding(paper),

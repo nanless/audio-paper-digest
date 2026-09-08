@@ -351,7 +351,7 @@ test('production resume requests only a patch and still rejects incomplete merge
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '完整论文证据', {
         ...base, readerMaxAttempts: 2, readerCallModel: async (messages, budget, options) => {
             calls++;
-            assert.ok(budget <= 8000);
+            assert.ok(budget <= 16000);
             assert.equal(options.usageContext.stage, 'apiReaderRepair');
             const prompt = messages[0].content[0].text;
             assert.ok(prompt.includes(require('../scripts/lib/reader-source-diagnostics.js').readerNumericSpellingGuidance()));
@@ -405,13 +405,14 @@ test('production recovery persists canonical section/table pairs with raw-to-can
 });
 
 test('an exhausted candidate receives a free full-parser replay: valid retires, invalid cannot request again', async t => {
-    const { generateApiReaderArticleDetailed, parseApiReaderArticleResult } = require('../scripts/deep-analyzer.js');
+    const { generateApiReaderArticleDetailed, parseApiReaderArticleResult,
+        stableFingerprint } = require('../scripts/deep-analyzer.js');
     const crypto = require('node:crypto');
     const directory = temporary(t), paper = { arxivId: '2609.99980', title: '离线耗尽验证' };
     const sourceText = '在统一数据协议与输入条件下，基线和完整方法的报告得分均为1.0，仅用于当前离线对照。';
-    const artifacts = { tables: [], formulas: [], figures: [],
+    const artifacts = { parserVersion: 'unstructured-text-signals-v1', tables: [], formulas: [], figures: [],
         flattenedTextSha256: crypto.createHash('sha256').update(sourceText).digest('hex') };
-    artifacts.payloadSha256 = hashDraft(artifacts);
+    artifacts.payloadSha256 = stableFingerprint(artifacts);
     const base = { sourceText, structuredArtifacts: artifacts, readerAttemptsDir: directory,
         readerMaterializeFigures: async () => [], readerRecordDisposition: () => {}, readerMaxAttempts: 1 };
     const invalid = fixture(); invalid.readerTitle = '短';

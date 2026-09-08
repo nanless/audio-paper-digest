@@ -279,6 +279,24 @@ describe('modern Reader 视觉来源闭环', () => {
         assert.equal(context.sourceIdentity.imageEvidenceCount, 0);
     }, { noFigures: true }));
 
+    it('daily ephemeral Reader 保留来源与像素 SHA，但视觉任务不伪造本地参考图', () => withReader((reader, sign) => {
+        reader.analysisManifest.contracts.apiReaderFigurePersistence =
+            'ephemeral-no-persisted-figure-assets-v1';
+        for (const figure of reader.apiReaderFigures) {
+            delete figure.assetBytes;
+            delete figure.assetFilename;
+            delete figure.assetMediaType;
+            delete figure.assetWidth;
+            delete figure.assetHeight;
+            delete figure.cachePath;
+        }
+        sign(reader);
+        assert.deepEqual(selectVisualReferenceImages(reader), []);
+        const context = buildGenerationContext(reader);
+        assert.deepEqual(context.referenceImages, []);
+        assert.equal(context.sourceIdentity.imageEvidenceCount, reader.apiReaderFigures.length);
+    }));
+
     it('离线prepare仍输出受控绝对PNG路径且保留签名原图身份', () => withReader(reader => {
         const context = buildGenerationContext(reader);
         const manifest = { batchDate: '2026-07-13', papers: { [reader.arxivId]: {

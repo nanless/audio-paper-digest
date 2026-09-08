@@ -50,7 +50,7 @@ arXiv ID：{arxivId}
 
 表格与绑定输入：
 
-14. tableBindings按最终正文顺序一一对应。仅 `TABLE_<ordinal>_SELECTION` 明示 `eligible:true` 时优先selection；`eligible:false` 的reasonCodes说明空表头、行身份不明、TeX双写等问题，不能反复尝试selection或猜表头。无法安全选择时用source_quotes整理表，说明依据正文整理；无充分逐字quote时报告具体缺项，不造证据、不把绑定失败当成作者没报告。
+14. tableBindings按最终正文顺序一一对应。仅 `TABLE_<ordinal>_SELECTION` 明示 `eligible:true` 时优先selection；只要正文表使用了该 `TABLE_<ordinal>` 矩阵中的任一数字，就必须用selection直接选择原表行列，禁止把这些DOM表格数字抄进手写Markdown后再用source_quotes绑定。flattened全文不保证包含DOM表格单元格，因此source_quotes不能替代原表绑定，也不得为原表数字自行计算差值、百分比、四舍五入值或添加单位。`eligible:false` 的reasonCodes说明空表头、行身份不明、TeX双写等问题，不能反复尝试selection或猜表头。无法安全选择时只能使用全文连续原句中实际出现的数字制作source_quotes表；无充分逐字quote时删去该无证据表，改选另一张eligible原表或报告具体缺项，不造证据、不把绑定失败当成作者没报告。
 15. 表内数字和单位保留原文写法、千分位和精度：44,000不改44000，100%不改100，19.44不四舍五入成19。叙述数量用阿拉伯数字，数字与拉丁单位留空格；原文转换出现粘连或TeX双写时不猜新数值，改用可重放的同实验表或干净连续原句。
 16. 每张表严格三选一，不混用正文形态或字段：
    - selection：正文独占 `[[TABLE_<tableIndex>]]`，不写该表Markdown；绑定项只含 `tableIndex` 和 `selection:{sourceTableOrdinal,sourceRows,sourceColumns}`。只选证据实际给出的零基行列，sourceRows首项为明示表头行，之后为数据行；行列不可重复或越界。代码渲染原表、映射和SHA。marker编号是正文表序，不是原表ordinal；不得附带手写值、sourceType、cellBindings或sourceQuotes。

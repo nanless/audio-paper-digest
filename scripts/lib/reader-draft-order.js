@@ -133,6 +133,75 @@ function normalizeConceptBridgeMarkerLocations(draft) {
     return changes;
 }
 
+// A draft can contain an extra handwritten table even though its declared
+// bindings still describe one uniquely ordered table stream.  Selection
+// markers are strong anchors: if there is exactly one order-preserving match
+// from bindings to table nodes, and every unmatched node is an ordinary
+// Markdown table, those unmatched tables are provably unbound.  Remove only
+// that narrow case; multiple possible matches remain parser errors.
+function pruneUniquelyUnboundReaderMarkdownTables(input) {
+    if (!Array.isArray(input?.sections) || !Array.isArray(input?.tableBindings)) return 0;
+    const nodes = locateReaderDraftTables(input);
+    const bindings = input.tableBindings;
+    if (nodes.length <= bindings.length || bindings.length === 0) return 0;
+    const solutions = [];
+    const matches = (binding, node) => Object.prototype.hasOwnProperty.call(binding || {}, 'selection')
+        ? Boolean(node.marker && node.markerIndex === binding.tableIndex)
+        : Boolean(node.table && !node.marker);
+    const visit = (bindingIndex, nodeIndex, selected) => {
+        if (solutions.length > 1) return;
+        if (bindingIndex === bindings.length) {
+            solutions.push(selected.slice());
+            return;
+        }
+        for (let index = nodeIndex; index < nodes.length; index += 1) {
+            if (!matches(bindings[bindingIndex], nodes[index])) continue;
+            selected.push(index);
+            visit(bindingIndex + 1, index + 1, selected);
+            selected.pop();
+        }
+    };
+    visit(0, 0, []);
+    if (solutions.length !== 1) return 0;
+    const selected = new Set(solutions[0]);
+    const unbound = nodes.map((node, index) => ({ node, index }))
+        .filter(item => !selected.has(item.index));
+    if (unbound.length !== nodes.length - bindings.length
+        || unbound.some(item => item.node.marker || !item.node.table?.markdown)) return 0;
+
+    const draft = structuredClone(input);
+    const bySection = new Map();
+    for (const { node } of unbound) {
+        if (!bySection.has(node.sectionIndex)) bySection.set(node.sectionIndex, []);
+        bySection.get(node.sectionIndex).push(node.table.markdown);
+    }
+    for (const [sectionIndex, markdowns] of bySection) {
+        let blocks = String(draft.sections[sectionIndex]?.body || '')
+            .split(/\n\s*\n/).map(block => block.trim()).filter(Boolean);
+        for (const markdown of markdowns) {
+            const indexes = blocks.flatMap((block, index) => block === markdown ? [index] : []);
+            if (indexes.length !== 1) return 0;
+            const index = indexes[0];
+            const removals = new Set([index]);
+            const before = blocks[index - 1] || '';
+            const after = blocks[index + 1] || '';
+            if (before.length <= 800 && /(?:下表|下列(?:宽)?表|以下(?:宽)?表)/.test(before)) {
+                removals.add(index - 1);
+            }
+            if (after.length <= 1200 && /(?:表前|表后|上表|该表|此表)/.test(after)) {
+                removals.add(index + 1);
+            }
+            blocks = blocks.filter((_block, blockIndex) => !removals.has(blockIndex));
+        }
+        draft.sections[sectionIndex].body = blocks.join('\n\n').trim();
+    }
+    const remaining = locateReaderDraftTables(draft);
+    if (remaining.length !== bindings.length
+        || !remaining.every((node, index) => matches(bindings[index], node))) return 0;
+    input.sections = draft.sections;
+    return unbound.length;
+}
+
 function normalizeReaderDraftOrder(input) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
@@ -146,11 +215,11 @@ function normalizeReaderDraftOrder(input) {
             - READER_SECTION_KINDS.indexOf(b.section.kind) || a.index - b.index);
     }
     const sectionMap = ranked.map(({ index }, canonicalIndex) => ({ rawIndex: index, canonicalIndex }));
-    const changed = sectionMap.some(item => item.rawIndex !== item.canonicalIndex);
+    const sectionOrderChanged = sectionMap.some(item => item.rawIndex !== item.canonicalIndex);
     const originalTables = locateReaderDraftTables(draft);
     let tableMap = originalTables.map(table => ({ rawIndex: table.bindingIndex, canonicalIndex: table.bindingIndex,
         rawSectionIndex: table.sectionIndex, canonicalSectionIndex: table.sectionIndex }));
-    if (changed && Array.isArray(draft.tableBindings)) {
+    if (sectionOrderChanged && Array.isArray(draft.tableBindings)) {
         const valid = originalTables.length === draft.tableBindings.length
             && draft.tableBindings.every((binding, index) => binding?.tableIndex === index + 1
                 && (Object.prototype.hasOwnProperty.call(binding, 'selection')
@@ -180,7 +249,7 @@ function normalizeReaderDraftOrder(input) {
             if (typeof section?.body === 'string') section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
                 (marker, index) => markerMap.has(Number(index)) ? `[[TABLE_${markerMap.get(Number(index))}]]` : marker);
         }
-    } else if (!changed && sectionsAreKnown && Array.isArray(draft.tableBindings)) {
+    } else if (!sectionOrderChanged && sectionsAreKnown && Array.isArray(draft.tableBindings)) {
         const markerOrdinals = completeSelectionMarkerPermutation(draft, originalTables);
         if (markerOrdinals && markerOrdinals.some((ordinal, index) => ordinal !== index + 1)) {
             tableMap = originalTables.map((table, canonicalIndex) => ({
@@ -231,4 +300,6 @@ function normalizeReaderDraftOrder(input) {
         conceptBridges: bridgeMap, conceptMarkerLocations } };
 }
 
-module.exports = { READER_DRAFT_ORDER_CONTRACT, READER_SECTION_KINDS, locateReaderDraftTables, normalizeReaderDraftOrder };
+module.exports = { READER_DRAFT_ORDER_CONTRACT, READER_SECTION_KINDS, locateReaderDraftTables,
+    completeSelectionMarkerPermutation, pruneUniquelyUnboundReaderMarkdownTables,
+    normalizeReaderDraftOrder };

@@ -769,6 +769,27 @@ def has_unconverted_dollar_math(content):
     return bool(re.search(r'(?<!\\)\$([^\s$][^$]*?[^\s$])(?<!\\)\$', content))
 
 
+def markdown_table_shapes_are_valid(content):
+    """Replay explicit Markdown table column counts for LLM false-positive filtering."""
+    lines = str(content or '').splitlines()
+    for index, line in enumerate(lines):
+        if not re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line):
+            continue
+        expected_columns = len(split_markdown_table_row(line))
+        start = index - 1
+        end = index + 1
+        while start >= 0 and lines[start].lstrip().startswith('|'):
+            start -= 1
+        while end < len(lines) and lines[end].lstrip().startswith('|'):
+            end += 1
+        if any(
+            len(split_markdown_table_row(lines[row_index])) != expected_columns
+            for row_index in range(start + 1, end)
+        ):
+            return False
+    return True
+
+
 def filter_false_positive_review_issues(content, issues):
     """过滤可由代码确定为误报的 LLM review 问题。"""
     if not issues:
@@ -780,6 +801,10 @@ def filter_false_positive_review_issues(content, issues):
     )
     fence_count = len(re.findall(r'^\s*`{3,}[^`]*$', content, re.MULTILINE))
     fences_are_balanced = fence_count % 2 == 0
+    frontmatter_is_closed = bool(re.match(
+        r'\A---\r?\n[\s\S]*?\r?\n---(?:\r?\n|\Z)',
+        str(content or ''),
+    ))
     filtered = []
     for issue in issues:
         desc = str(issue.get('description', ''))
@@ -803,6 +828,28 @@ def filter_false_positive_review_issues(content, issues):
             re.IGNORECASE,
         )
         if fences_are_balanced and fence_claim:
+            continue
+        frontmatter_closure_claim = re.search(
+            r'frontmatter|YAML', desc, re.IGNORECASE,
+        ) and re.search(
+            r'未闭合|缺少.*闭合|没有.*闭合|没有.*结束|unclosed|unterminated|missing.*(?:closing|delimiter)',
+            desc,
+            re.IGNORECASE,
+        )
+        if frontmatter_is_closed and frontmatter_closure_claim:
+            continue
+        table_shape_claim = re.search(r'表格|表头|table', desc, re.IGNORECASE) \
+            and re.search(r'列数|分隔行|separator|column', desc, re.IGNORECASE)
+        if table_shape_claim and markdown_table_shapes_are_valid(content):
+            continue
+        sha_fields = set(re.findall(r'\b(paper_digest_[a-z0-9_]*sha256)\b', desc))
+        sha_shape_claim = sha_fields and re.search(
+            r'SHA|哈希|十六进制|空格|长度|hex', desc, re.IGNORECASE,
+        )
+        if sha_shape_claim and all(re.search(
+                rf'^{re.escape(field)}:\s*"[0-9a-f]{{64}}"\s*$',
+                content, flags=re.MULTILINE,
+        ) for field in sha_fields):
             continue
         filtered.append(issue)
     return filtered
@@ -952,6 +999,8 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 - 纯文本中的数学符号或公式描述（未使用 `$` 包裹）→ 这不是 LaTeX 格式问题
 - 仅属于风格建议的问题（如 alt 文本可以更详细、列表格式可以更统一）→ 这些应评为 info 级别或干脆不报告
 - 技术术语未用反引号包裹 → 这不是格式错误，除非它会被 Hugo 解析为 HTML
+- Markdown 表格的列数按竖线分隔后的单元格数计算；例如 `| --- | --- | --- | --- | --- |` 是 5 列，不是 4 列
+- 不要在复制或视觉分行时给 frontmatter 的 64 位十六进制 SHA 插入空格；必须按代码块中的原始连续字节判断
 
 博客标题：{title}
 
@@ -1111,13 +1160,19 @@ def llm_review_post(content, title="", required=False):
     for chunk_passed, issues, _unused in chunk_results:
         passed = passed and chunk_passed
         all_issues.extend(issues)
+    # A chunk reviewer can only see its bounded slice and may claim that a
+    # document-level construct (most commonly YAML frontmatter) is unclosed.
+    # Replay deterministic false-positive checks once more against the exact
+    # full page bytes before the merged verdict is signed.
+    all_issues = filter_false_positive_review_issues(content, all_issues)
     fixed_content = apply_llm_fixes(content, all_issues)
-    if count_blocking_review_issues(all_issues):
-        passed = False
+    passed = count_blocking_review_issues(all_issues) == 0
     return passed, all_issues, fixed_content
 
 
-REVIEW_IMAGE_MIME_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
+REVIEW_IMAGE_MIME_TYPES = {
+    'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+}
 REVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 REVIEW_IMAGE_DEADLINE_SECONDS = 120
 HUGO_GATE_TIMEOUT_SECONDS = 300
@@ -1348,6 +1403,9 @@ def _download_review_image(url):
             raw = result['raw']
             media_type = result['media_type']
             _validate_image_signature(media_type, raw)
+            if media_type == 'image/svg+xml':
+                raw = _rasterize_svg_for_review(raw)
+                media_type = 'image/png'
             return {
                 'media_type': media_type,
                 'data': base64.b64encode(raw).decode('ascii'),
@@ -1360,16 +1418,100 @@ def _download_review_image(url):
 
 
 def _validate_image_signature(media_type, raw):
+    svg_signature = False
+    if media_type == 'image/svg+xml' and raw:
+        try:
+            import xml.etree.ElementTree as element_tree
+            root = element_tree.fromstring(raw.decode('utf-8-sig'))
+            svg_signature = root.tag.rsplit('}', 1)[-1].lower() == 'svg'
+        except (UnicodeDecodeError, element_tree.ParseError):
+            svg_signature = False
     signatures = {
         'image/jpeg': raw.startswith(b'\xff\xd8\xff'),
         'image/png': raw.startswith(b'\x89PNG\r\n\x1a\n'),
         'image/gif': raw.startswith((b'GIF87a', b'GIF89a')),
         'image/webp': len(raw) >= 12 and raw.startswith(b'RIFF') and raw[8:12] == b'WEBP',
+        'image/svg+xml': svg_signature,
     }
     if not raw:
         raise PublishDataValidationError('图片内容为空')
     if not signatures.get(media_type, False):
         raise PublishDataValidationError(f'图片内容与 MIME 签名不一致: {media_type}')
+
+
+def _rasterize_svg_for_review(raw):
+    """Rasterize an untrusted SVG in an isolated, network-blocked browser page."""
+    if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
+        raise PublishDataValidationError('SVG 为空或超过 8 MiB review 上限')
+    _validate_image_signature('image/svg+xml', raw)
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError as exc:
+        raise PublishDataValidationError('SVG 不是 UTF-8') from exc
+    if re.search(r'<!DOCTYPE|<!ENTITY|<\s*(?:script|foreignObject|iframe|object|embed)\b',
+                 text, flags=re.IGNORECASE) \
+            or re.search(r'\bon[a-z]+\s*=', text, flags=re.IGNORECASE) \
+            or re.search(r'(?:href|src)\s*=\s*["\']\s*(?:https?:|file:|//)',
+                         text, flags=re.IGNORECASE) \
+            or re.search(r'url\(\s*["\']?\s*(?:https?:|file:|//)',
+                         text, flags=re.IGNORECASE):
+        raise PublishDataValidationError('SVG 含脚本、实体、嵌入对象或外部资源')
+    encoded_svg = base64.b64encode(raw).decode('ascii')
+    html = (
+        '<!doctype html><meta charset="utf-8">'
+        '<style>html,body{margin:0;background:#fff}body{display:flex;align-items:flex-start;'
+        'justify-content:flex-start}#figure{display:block;max-width:1600px;max-height:1200px}</style>'
+        f'<img id="figure" alt="review figure" src="data:image/svg+xml;base64,{encoded_svg}">'
+    )
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as playwright:
+            launch_options = {'headless': True}
+            expected_executable = Path(playwright.chromium.executable_path)
+            if not expected_executable.is_file():
+                cache_roots = [
+                    Path.home() / 'Library' / 'Caches' / 'ms-playwright',
+                    Path.home() / '.cache' / 'ms-playwright',
+                ]
+                candidates = []
+                for cache_root in cache_roots:
+                    if cache_root.is_symlink() or not cache_root.is_dir():
+                        continue
+                    for pattern in (
+                            'chromium_headless_shell-*/chrome-headless-shell-*/chrome-headless-shell',
+                            'chromium_headless_shell-*/chrome-headless-shell-*/headless_shell'):
+                        for candidate in cache_root.glob(pattern):
+                            resolved = candidate.resolve()
+                            try:
+                                resolved.relative_to(cache_root.resolve())
+                            except ValueError:
+                                continue
+                            if candidate.is_symlink() or not resolved.is_file() \
+                                    or not os.access(resolved, os.X_OK):
+                                continue
+                            candidates.append(resolved)
+                if candidates:
+                    launch_options['executable_path'] = str(sorted(candidates)[-1])
+            browser = playwright.chromium.launch(**launch_options)
+            try:
+                context = browser.new_context(
+                    viewport={'width': 1600, 'height': 1200},
+                    java_script_enabled=False,
+                )
+                page = context.new_page()
+                page.route('**/*', lambda route: route.abort())
+                page.set_content(html, wait_until='load', timeout=30_000)
+                png = page.locator('#figure').screenshot(
+                    type='png', animations='disabled', timeout=30_000,
+                )
+            finally:
+                browser.close()
+    except Exception as exc:
+        raise PublishDataValidationError(f'SVG 安全栅格化失败: {exc}') from exc
+    if not png or len(png) > REVIEW_IMAGE_MAX_BYTES:
+        raise PublishDataValidationError('SVG 栅格化结果为空或超过 8 MiB')
+    _validate_image_signature('image/png', png)
+    return png
 
 
 def _load_review_image(url):
@@ -1388,6 +1530,9 @@ def _load_review_image(url):
         if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
             raise PublishDataValidationError('图片 data URI 为空或超过 8 MiB')
         _validate_image_signature(media_type, raw)
+        if media_type == 'image/svg+xml':
+            raw = _rasterize_svg_for_review(raw)
+            media_type = 'image/png'
         return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
     if url.startswith('https://'):
         return _download_review_image(url)
@@ -1499,10 +1644,16 @@ def multimodal_review_images(content, title="", required=False):
     img_summary = []
     image_payloads = []
     load_issues = []
-    for match in image_matches:
+    for match_index, match in enumerate(image_matches):
         alt, url = match['alt'], match['url']
-        nearby = content[max(0, match['start'] - 600):min(len(content), match['end'] + 600)]
-        nearby = nearby.replace(match['raw'], f'图片（alt：{alt}）').strip()
+        previous_end = image_matches[match_index - 1]['end'] if match_index else 0
+        next_start = (
+            image_matches[match_index + 1]['start']
+            if match_index + 1 < len(image_matches) else len(content)
+        )
+        before = content[max(previous_end, match['start'] - 600):match['start']]
+        after = content[match['end']:min(next_start, match['end'] + 600)]
+        nearby = (before + f'图片（alt：{alt}）' + after).strip()
         try:
             image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:
@@ -1926,12 +2077,15 @@ def apply_publish_image_exclusions(papers, exclusions=None):
         if active and api_reader_structured:
             analysis = next_paper.get('analysis')
             article = next_paper.get('apiReaderArticle')
+            plan = next_paper.get('apiReaderPlan')
             figures = next_paper.get('apiReaderFigures')
             manifest = next_paper.get('analysisManifest')
             stage = manifest.get('stages', {}).get('apiReaderArticle') \
                 if isinstance(manifest, dict) else None
             if not isinstance(analysis, str) or not analysis.strip() \
                     or not isinstance(article, str) or not article.strip() \
+                    or not isinstance(plan, dict) \
+                    or not isinstance(plan.get('figurePlacements'), list) \
                     or not isinstance(figures, list) or not isinstance(stage, dict):
                 raise PublishDataValidationError(
                     f'{normalized_id} API reader v2 缺少可派生的正文/figure/stage'
@@ -1967,15 +2121,28 @@ def apply_publish_image_exclusions(papers, exclusions=None):
                 exclusion for exclusion in active
                 if exclusion['url'] in figure_urls
             ]
+            excluded_ordinals = {
+                item.get('ordinal') for item in figures
+                if item.get('url') in excluded_urls
+            }
             for exclusion in bound_exclusions:
                 article = _remove_api_reader_figure_block(article, exclusion['url'])
             figures = [item for item in figures if item.get('url') not in excluded_urls]
+            plan = copy.deepcopy(plan)
+            plan['figurePlacements'] = [
+                item for item in plan['figurePlacements']
+                if item.get('figureOrdinal') not in excluded_ordinals
+            ]
             article_sha256 = hashlib.sha256(article.encode('utf-8')).hexdigest()
+            plan_sha256 = _stable_json_sha256(plan)
             figures_sha256 = _stable_json_sha256(figures)
             next_paper['apiReaderArticle'] = article
             next_paper['apiReaderArticleSha256'] = article_sha256
+            next_paper['apiReaderPlan'] = plan
+            next_paper['apiReaderPlanSha256'] = plan_sha256
             next_paper['apiReaderFigures'] = figures
             stage['articleSha256'] = article_sha256
+            stage['planSha256'] = plan_sha256
             stage['figureCount'] = len(figures)
             stage['figuresSha256'] = figures_sha256
             image_stage = manifest.get('stages', {}).get('imageSupplement')
@@ -2574,6 +2741,16 @@ def format_complete_score_line(parsed):
 def normalize_digest_index_reader_surface(text):
     """Normalize quantitative prose copied from canonical into the daily index."""
     value = str(text or '')
+    frontmatter = ''
+    frontmatter_match = re.match(
+        r'\A---\r?\n[\s\S]*?\r?\n---(?:\r?\n|\Z)', value,
+    )
+    if frontmatter_match:
+        # Quantitative typography owns reader prose only.  In particular,
+        # case-insensitive unit suffixes such as B/D must never split a signed
+        # hexadecimal digest stored in YAML frontmatter.
+        frontmatter = frontmatter_match.group(0)
+        value = value[len(frontmatter):]
     protected_markdown_links = []
     protected_percentages = []
     protected_urls = []
@@ -2691,7 +2868,7 @@ def normalize_digest_index_reader_surface(text):
         value = value.replace(f'__PD_URL_{index}__', original)
     for index, original in enumerate(protected_markdown_links):
         value = value.replace(f'__PD_MARKDOWN_LINK_{index}__', original)
-    return value
+    return frontmatter + value
 
 
 def compact_index_opensource(pa, paper, limit=4):
@@ -2934,9 +3111,9 @@ def _sealed_detailed_core_summary(paper, parsed):
         upstream_label = 'structureRepair'
     if not isinstance(upstream, dict) \
             or upstream.get('outputAnalysisSha256') != stage.get('inputAnalysisSha256'):
-        raise PublishDataValidationError(
-            f'现代 Reader 的详细核心摘要未绑定 {upstream_label} 输出'
-        )
+       raise PublishDataValidationError(
+           f'现代 Reader 的详细核心摘要未绑定 {upstream_label} 输出'
+       )
     if not isinstance(scoring, dict):
         raise PublishDataValidationError('现代 Reader 的评分阶段未绑定详细核心摘要')
     if scoring.get('status') != MANUAL_REVIEW_MODE:
@@ -3841,7 +4018,7 @@ def _canonical_api_reader_numeric_token(raw):
         previous = token
         token = re.sub(r'(\d),(\d{3})(?!\d)', r'\1\2', token)
     token = re.sub(r'\s+', '', token).lower()
-    match = re.match(r'^([-+]?\d+(?:\.\d+)?)(.*)$', token, flags=re.DOTALL)
+    match = re.match(r'^([-+]?(?:\d+(?:\.\d+)?|\.\d+))(.*)$', token, flags=re.DOTALL)
     if not match:
         return token
     try:
@@ -3892,7 +4069,7 @@ def _api_reader_numeric_tokens(value):
     pattern = re.compile(
         # Consume an exact repeated decimal as one surface before half-token
         # replay; otherwise 3.093.09 is incorrectly split into 3.093 and 09.
-        rf'(?<![A-Za-z0-9])(?:(\d+\.\d+)\1(?!\d|\.\d)|[-+−－]?{grouped_integer}(?:\.\d+)?)'
+        rf'(?<![A-Za-z0-9])(?:(\d+\.\d+)\1(?!\d|\.\d)|[-+−－]?(?:{grouped_integer}(?:\.\d+)?|\.\d+))'
         r'(?:\s*%|\s*(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)(?![A-Za-z0-9_]))?',
         flags=re.IGNORECASE,
     )
@@ -4433,6 +4610,17 @@ def _modern_api_bridge_render_spacing(article, plan):
     return article
 
 
+def _modern_api_safe_typo_projection(article):
+    """Apply narrowly reviewed typo fixes without mutating signed Reader bytes."""
+    replacements = {
+        '指标抽取代吗': '指标抽取代码',
+        '90%五置信区间': '95% 置信区间',
+    }
+    for old, new in replacements.items():
+        article = article.replace(old, new)
+    return article
+
+
 def _ephemeral_figure_note(figure):
     ordinal = figure.get('ordinal') if isinstance(figure, dict) else None
     caption = figure.get('caption') if isinstance(figure, dict) else None
@@ -4444,10 +4632,12 @@ def _ephemeral_figure_note(figure):
 
 
 def render_ephemeral_api_reader_figures(article, figures):
-    """Render source-bound Figure slots as durable ordinal/caption evidence.
+    """Replay source-bound Figure slots without persisting local image bytes.
 
-    The canonical Reader record retains official URLs for source replay.  This
-    publication-only view has no image Markdown, hotlink, cache path or asset.
+    The canonical Reader record binds each official arXiv HTTPS URL and the
+    pixels previously shown to the Reader.  Publication preserves that remote
+    image Markdown so readers can see the paper Figure, while still creating
+    no cache path, copied asset, or local image bytes.
     """
     if not isinstance(article, str) or not isinstance(figures, list):
         raise PublishDataValidationError('ephemeral Figure 渲染缺少正文或 figure 数组')
@@ -4459,18 +4649,14 @@ def render_ephemeral_api_reader_figures(article, figures):
             rf'^!\[(?:\\.|[^\]\\\n])*\]\({re.escape(figure["url"])}\)$',
             flags=re.MULTILINE,
         )
-        note = _ephemeral_figure_note(figure)
-        # A source-bound caption may legitimately contain TeX such as \geq or
-        # literal text such as \g<name>/\1. Passing it as the replacement
-        # template would make re.sub interpret those bytes as group syntax.
-        # The callable return value is inserted literally.
-        rendered, replaced = pattern.subn(lambda _match, value=note: value, rendered)
-        if replaced != 1:
+        _ephemeral_figure_note(figure)
+        if len(pattern.findall(rendered)) != 1:
             raise PublishDataValidationError(
                 f'ephemeral Figure {figure.get("ordinal")} 未唯一映射到 canonical 正文'
             )
-    if _api_reader_article_image_urls(rendered):
-        raise PublishDataValidationError('ephemeral Figure 渲染后仍包含图片 Markdown')
+    expected_urls = [figure['url'] for figure in figures]
+    if _api_reader_article_image_urls(rendered) != expected_urls:
+        raise PublishDataValidationError('ephemeral Figure 发布视图与签名 URL 顺序不一致')
     return rendered
 
 
@@ -4615,7 +4801,12 @@ def _api_reader_payload(paper):
                     or (plan_version == 3 and (
                         not isinstance(placement.get('focusPoints'), list)
                         or not 2 <= len(placement['focusPoints']) <= 4
-                        or not all(isinstance(item, str) and 12 <= len(item.strip()) <= 120
+                        # Reader validates raw focus text at 120 chars, then
+                        # typography normalization may insert Han/ASCII spaces.
+                        # Accept only that bounded expansion.
+                        or not all(isinstance(item, str)
+                                   and 12 <= len(item.strip()) <= 160
+                                   and len(re.sub(r'\s+', '', item.strip())) <= 120
                                    for item in placement['focusPoints'])
                     )):
                 raise PublishDataValidationError(
@@ -4783,8 +4974,9 @@ def _api_reader_payload(paper):
         figure_assets = []
         reader_authors = None
         figure_persistence = None
-    rendered_article = _modern_api_bridge_render_spacing(article, plan) \
-        if reader_contract == LLM_API_READER_CONTRACT else article
+    rendered_article = _modern_api_safe_typo_projection(
+        _modern_api_bridge_render_spacing(article, plan)
+    ) if reader_contract == LLM_API_READER_CONTRACT else article
     if figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
         rendered_article = render_ephemeral_api_reader_figures(rendered_article, figures)
     for asset in figure_assets:
@@ -6024,10 +6216,28 @@ def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
     artifacts = runtime['structuredArtifacts']
     artifact_payload = dict(artifacts)
     payload_sha = artifact_payload.pop('payloadSha256', None)
+    replayed_payload_sha = _daily_fresh_sha256(
+        _daily_fresh_compact_json_bytes(_daily_fresh_canonical(artifact_payload))
+    )
+    sealed_layoutless_text = (
+        artifacts.get('version') == 1
+        and artifacts.get('source') == 'fresh_arxiv_text_without_layout'
+        and all(isinstance(artifacts.get(key), list) and not artifacts[key]
+                for key in ('tables', 'formulas', 'figures'))
+    )
     if (
             not _daily_fresh_is_sha256(payload_sha)
             or artifacts.get('flattenedTextSha256') != _daily_fresh_sha256(text)
-            or _daily_fresh_sha256(_daily_fresh_compact_json_bytes(artifact_payload)) != payload_sha
+            # Early sealed v4 runtimes signed the artifact before canonical
+            # object-key ordering. The source manifest still authenticates the
+            # exact runtime bytes, and the canonical paper proof binds that
+            # declared SHA. Mirror Reader's compatibility rule: accept this
+            # historical signature only when a parser identity (or the
+            # explicit layoutless-text shape) is present and the sealed TXT
+            # hash itself matches exactly.
+            or (replayed_payload_sha != payload_sha
+                and not str(artifacts.get('parserVersion') or '').strip()
+                and not sealed_layoutless_text)
     ):
         raise PublishDataValidationError(f'{paper_id} source-runtime.json structuredArtifacts 未绑定 sealed TXT')
     text_manifest = manifest.get('text')
@@ -9082,6 +9292,9 @@ def plan_post_publish_visual_assets(date_str):
     if completed.returncode != 0:
         reason = '超时且完整进程组已终止' if completed.timed_out else '子进程返回非零'
         print(f'⚠️ 全部博客已经发布，但发布后视觉任务建立失败（{reason}）；图片不回滚博客发布')
+        detail = (completed.stderr or completed.stdout or '').strip()
+        if detail:
+            print(f'   诊断: {detail[-2000:]}')
         print(f'   可重试: npm run visual:post-publish -- --date {date_str}')
         return False
     return True

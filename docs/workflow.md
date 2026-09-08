@@ -72,9 +72,10 @@ source capture 内。图像仅在当前模型调用的 OS 临时目录物化，�
 2. 开源与 Demo 扫描；
 3. 事实审校；
 4. 表格、方法和结构修复；
-5. 类型感知评分审计；
-6. API Reader v3，并重放表格/公式、作者机构和开源资源来源身份；
-7. 官方 Figure 计划与正文物化。
+5. taxonomy 封口与核心摘要封口；
+6. 类型感知评分审计；
+7. API Reader v3，并重放表格/公式、作者机构和开源资源来源身份；
+8. 官方 Figure 计划与正文物化。
 
 主分析 canonical 的固定标题服务解析；API Reader 负责读者可见长文。它必须解释术语组合、训练/求解、数据集、指标、结果、负面证据、复现与边界，并让表格和图片紧邻支撑它们的论证。
 
@@ -119,7 +120,7 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-`visual:prepare` 将校验后的 `.bin` 缓存物化为真实扩展名路径。生成后必须目检并用任务 token 登记。用户明确“不生图”时签发视觉 waiver，不能伪造 complete。
+Reader 页面在 `ephemeral-no-persisted-figure-assets-v1` 下直接保留已签 arXiv 官方 HTTPS 图片 URL，不在博客仓库复制图片字节。`visual:prepare` 只为 legacy manifest 将校验后的 `.bin` 缓存物化为真实扩展名路径；modern 日更复验已签 Figure 的 URL、ordinal、DOM/像素 SHA 与 MIME 后输出空 `referencedImagePaths`，生图仅依据已签 Reader 文本，不回退已销毁缓存。生成后必须目检并用任务 token 登记。用户明确“不生图”时签发视觉 waiver，不能伪造 complete。
 
 ## 8. 恢复与验收
 
@@ -132,6 +133,9 @@ npm run deep -- --date YYYY-MM-DD
 
 # 只续 canonical 中未完成论文
 npm run batch
+
+# 只退役当前未完成论文的失败 Reader 候选后续跑
+npm run batch -- --retry-failed-readers
 
 # 强制重分析
 npm run reanalyze -- --concurrency 5
@@ -146,4 +150,4 @@ npm run digest:status -- --date YYYY-MM-DD
 
 最终报告必须在最后一次 push/record 之后重新生成。它是当时快照，不会随状态变化自动更新。
 
-`deep`、`batch`、`reanalyze` 和 `api:reader:refresh` 只能重放 current canonical 的 `dailyFreshSourceRun`。它精确绑定本批日期、论文集合和每篇 sealed PDF/TXT/runtime/manifest；命令不会补抓来源或读取 legacy cache。缺少或漂移时先重新运行 `digest:prepare`，图像也只能在当前调用的 OS 临时目录物化。
+`deep`、`batch`、`reanalyze` 和 `api:reader:refresh` 只能重放 current canonical 的 `dailyFreshSourceRun`。它精确绑定本批日期、论文集合和每篇 sealed PDF/TXT/runtime/manifest；命令不会补抓来源或读取 legacy cache。缺少或漂移时先重新运行 `digest:prepare`，图像也只能在当前调用的 OS 临时目录物化。`batch --retry-failed-readers` 只退役当前未完成论文的失败 Reader 候选；`reanalyze` 会退役全部旧失败候选并清空 Reader/图片补充状态后再强制全量分析。

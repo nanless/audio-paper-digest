@@ -13,6 +13,7 @@ const {
 } = require('../scripts/manual-fetch-fulltext.js');
 const {
     ARTIFACT_PARSER_VERSION,
+    computeStructuredPayloadSha256,
     validateStructuredArtifacts,
     buildArtifactIndex,
     validateArtifactIndex,
@@ -86,6 +87,12 @@ function fixture() {
 }
 
 describe('Manual ArtifactIndex v1', () => {
+    it('使用稳定键序重放 structured artifact payload SHA', () => {
+        const left = { version: 1, parserVersion: 'arxiv-html-dom-v4', nested: { b: 2, a: 1 } };
+        const right = { nested: { a: 1, b: 2 }, parserVersion: 'arxiv-html-dom-v4', version: 1 };
+        assert.equal(computeStructuredPayloadSha256(left), computeStructuredPayloadSha256(right));
+    });
+
     it('v4 表格 inventory 升级后不复用任何旧 HTML parser 快照', () => {
         assert.equal(isReusableStructuredSnapshotForCurrentParser(
             { source: 'html' },

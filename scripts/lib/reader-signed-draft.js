@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { apiReaderV3BindsCanonical } = require('../analysis-engine.js');
 const { apiReaderPreInjectionQualityView, parseApiReaderArticleResult, injectApiReaderFigures,
-    buildApiReaderEvidenceContext } = require('../deep-analyzer.js');
+    buildApiReaderEvidenceContext, stableFingerprint } = require('../deep-analyzer.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
 const { readerRequirements } = require('./reader-contract.js');
 const CONTRACT = 'reader-signed-draft-roundtrip-v1';
@@ -35,7 +35,8 @@ function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
         || !validSha(descriptor.sourceSnapshotSha256)
         || sha(JSON.stringify(sourceSnapshot)) !== descriptor.sourceSnapshotSha256
         || sha(String(sourceDetails.text || '')) !== descriptor.sourceSha256
-        || sha(JSON.stringify(artifactBody)) !== payloadSha256
+        || (stableFingerprint(artifactBody) !== payloadSha256
+            && sha(JSON.stringify(artifactBody)) !== payloadSha256)
         || payloadSha256 !== descriptor.structuredArtifactsSha256
         || artifacts.flattenedTextSha256 !== descriptor.sourceSha256
         || provenance?.contract !== 'fresh-source-analysis-v1' || provenance.runId !== runId

@@ -168,13 +168,12 @@ class HistoricalPageRenderTests(unittest.TestCase):
             'publicationSource': publication_source,
             'cohortDate': '2026-09-07',
         })
-        self.assertIn('论文图 1（像素未随页面持久化）', result['markdown'])
+        self.assertIn('![原论文 Figure 1', result['markdown'])
         self.assertIn(
             'paper_digest_api_reader_figure_persistence: '
             '"ephemeral-no-persisted-figure-assets-v1"', result['markdown'],
         )
-        self.assertNotIn(figure_url, result['markdown'])
-        self.assertNotIn('![原论文 Figure 1', result['markdown'])
+        self.assertIn(figure_url, result['markdown'])
         self.assertTrue(all(not item['path'].startswith('static/images/papers/')
                             for item in result['assets']))
         self.assertNotRegex(

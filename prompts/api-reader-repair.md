@@ -8,7 +8,7 @@ arXiv：{arxivId}
 本次代码生成的机械契约：
 {mechanicalContract}
 
-术语须讲分工及组合原因。表格有相邻论证，数字及单位必须可重放。公式只用原文ordinal marker。图像仅能描述此次实际收到的像素。
+术语须讲分工及组合原因。表格有相邻论证，数字及单位必须可重放。若数字来自 `TABLE_J` 矩阵且对应 `TABLE_J_SELECTION` 为 eligible=true，必须把绑定改成selection并在正文只留独占 `[[TABLE_N]]`；禁止把DOM表格数字手写成Markdown后用source_quotes绑定，flattened全文不保证包含这些单元格。不得自行计算差值、百分比、换算值或添加单位。公式只用原文ordinal marker。图像仅能描述此次实际收到的像素。
 
 当前校验问题和有来源的外部修订反馈：
 {validationFeedback}

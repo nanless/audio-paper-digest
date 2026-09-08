@@ -2632,6 +2632,17 @@ primary_method_tag: #基准测试
 
         self.assertEqual(len(extract_markdown_tables(table)), 1)
         self.assertEqual(len(extract_markdown_tables(f'```markdown\n{table}\n```')), 0)
+        for identifier_header in ('策略', '谐波聚合方式'):
+            synonym_table = (
+                f'| {identifier_header} | 指标 ↑ |\n'
+                '| --- | --- |\n'
+                '| 基线 | 1.0 |\n'
+                '| 完整方法 | 2.0 |'
+            )
+            self.assertGreaterEqual(
+                extract_markdown_tables(synonym_table)[0]['identifier_columns'],
+                1,
+            )
         self.assertRegex(validate_experiment_table_contract(paper['analysis']), '13 个数据行')
         with self.assertRaisesRegex(PublishDataValidationError, '表格契约无效'):
             validate_papers_for_publish([paper])

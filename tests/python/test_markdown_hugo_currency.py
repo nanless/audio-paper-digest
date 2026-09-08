@@ -12,9 +12,9 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
     def test_real_04173_separate_currency_cells_pass_without_byte_changes(self):
         table = ('| 尝试次数 | 1000 例翻译成本 | 1000 例验证成本 | 单接受例成本 | 平均规则数 |\n'
                  '| --- | --- | --- | --- | --- |\n'
-                 '| 10 | $0.2 | $1.0/1000 | 0.12 美元 | 1.9 |')
+                 '| 10 | $0.2 | $1.0/1000 | $0.003344 /trace | 1.9 |')
         self.assertEqual([table[a:b] for a, b in publish_table_currency_spans(table)],
-                         ['$0.2', '$1.0/1000'])
+                         ['$0.2', '$1.0/1000', '$0.003344 /trace'])
         self.assertEqual(sanitize_markdown_for_publish(table), table)
         self.assertEqual(math_and_emphasis_issues(table, 'Reader'), [])
 

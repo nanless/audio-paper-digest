@@ -62,9 +62,10 @@ function fixture(options = {}) {
         draft.tableBindings[1]={tableIndex:2,sourceType:'artifact_table',sourceTableOrdinal:1,
             cellBindings:cells.map(cell=>({renderedRow:cell.row,renderedColumn:cell.column,sourceRow:cell.row,sourceColumn:cell.column})),sourceQuotes:[]};
     }
-    const artifactBody={flattenedTextSha256:sha(text),tables,figures:options.noFigures?[]:[figure],formulas:[{ordinal:1,latex:'y=x.',
+    const artifactBody={version:1,parserVersion:'reader-signed-draft-fixture-v1',
+        flattenedTextSha256:sha(text),tables,figures:options.noFigures?[]:[figure],formulas:[{ordinal:1,latex:'y=x.',
         recoveryStatus:'complete',sourceDomSha256:'b'.repeat(64)}]};
-    const artifacts={...artifactBody,payloadSha256:sha(JSON.stringify(artifactBody))};
+    const artifacts={...artifactBody,payloadSha256:hash(artifactBody)};
     const snapshot={text,structuredArtifacts:artifacts};
     const descriptor={version:1,contract:'fresh-source-cache-v1',runId,paperId,sourceSha256:sha(text),
         structuredArtifactsSha256:artifacts.payloadSha256,sourceSnapshotSha256:sha(JSON.stringify(snapshot))};

@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const cheerio = require('cheerio');
-const { normalizeReaderDraftOrder, locateReaderDraftTables } = require('../scripts/lib/reader-draft-order.js');
+const { normalizeReaderDraftOrder, locateReaderDraftTables,
+    pruneUniquelyUnboundReaderMarkdownTables } = require('../scripts/lib/reader-draft-order.js');
 const { buildRepairTargets, collectDraftIssues } = require('../scripts/lib/reader-repair.js');
 const { compileReaderTableSelections } = require('../scripts/lib/reader-tables.js');
 
@@ -124,6 +125,28 @@ test('unsorted ambiguous bindings fail closed with paths on the unchanged input,
         assert.ok(error.readerIssues.some(issue => issue.path === '/sections/0/body'));
         assert.ok(error.readerIssues.some(issue => issue.path === '/tableBindings/0'));
     }
+});
+
+test('unique selection anchors prune only an unbound handwritten table and its dangling narrative', () => {
+    const select = { tableIndex: 1,
+        selection: { sourceTableOrdinal: 2, sourceRows: [0, 1], sourceColumns: [0, 1] } };
+    const input = { sections: [
+        { kind: 'experiment_setup', body: ['下表是重复配置。', markdown('extra'), '表后是重复解释。', '保留的实验设置。'].join('\n\n') },
+        { kind: 'ablation', body: '[[TABLE_1]]' },
+        { kind: 'reproduction', body: markdown('bound') }
+    ], tableBindings: [select, binding(2, 'bound quote')] };
+    assert.equal(pruneUniquelyUnboundReaderMarkdownTables(input), 1);
+    assert.doesNotMatch(input.sections[0].body, /extra|下表是重复|表后是重复/);
+    assert.match(input.sections[0].body, /保留的实验设置/);
+    assert.deepEqual(locateReaderDraftTables(input).map(item => item.markerIndex || 'markdown'), [1, 'markdown']);
+});
+
+test('ambiguous extra handwritten tables are never pruned', () => {
+    const input = { sections: [{ kind: 'result', body: [markdown('one'), markdown('two')].join('\n\n') }],
+        tableBindings: [binding(1, 'quote')] };
+    const before = structuredClone(input);
+    assert.equal(pruneUniquelyUnboundReaderMarkdownTables(input), 0);
+    assert.deepEqual(input, before);
 });
 
 test('structured table diagnostic paths include the exact binding without parsing a message', () => {

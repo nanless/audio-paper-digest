@@ -31,6 +31,7 @@ source acquisition
   → open-source / demo evidence
   → revision
   → table / method / structure repair
+  → taxonomy seal → core-summary seal
   → scoring audit
   → API Reader article + official Figures
   → optional legacy image supplement
@@ -39,13 +40,13 @@ source acquisition
 默认 API 的 source acquisition 在 LLM 筛选后一次性完成：每个入选 arXiv ID 新拉取官方 HTML 文本和 PDF，
 原子封存为 `daily-fresh-source-run-v1` 的四文件 bundle。后续分析、Reader 和 Python 发布重放其
 `dailyFreshSourceRun`；缺失或 SHA 漂移在模型/图片请求前失败。官方 Figure 像素只在当前调用的 OS 临时目录
-存在，不能成为 `data/current` 或 runtime 图片缓存。
+存在，不能成为 `data/current` 或 runtime 图片缓存。单张超限 Figure 可被跳过，损坏或 provider 不兼容的 PNG 可转为白底 RGB JPEG 重试；最终绑定实际送入模型的像素 SHA。
 
 每个阶段保存输入指纹、模型与协议、Prompt SHA、证据预算、输出 SHA 和终态。阶段输入变化时只失效该阶段及其下游。整篇论文由规范化 arXiv ID 锁保护，锁内必须重新读取 canonical 后再合并。
 
 模型响应同时受 token、绝对时间和总字节三重边界约束。Responses `incomplete`、Chat `length`、Anthropic `max_tokens`、缺失 SSE 终态或超出字节上限都在解析正文前失败，不能把半截 JSON 当成阶段成功。
 
-API Reader 是默认生产正文，不是可选装饰。它依赖最终评分后的 analysis、结构化全文证据和实际物化的 Figure；旧 13 节 analysis 继续作为机器解析层。Reader 的正文版本与来源绑定版本正交：`beginner-researcher-v3` 约束读者结构，`api-reader-source-bindings-v4` 逐格重放表格并从结构化原文注入公式，`api-reader-author-identity-v1` 绑定逐作者机构来源，`api-reader-resource-identity-v1` 绑定项目资源的原文/Demo 证据、重定向终点与可达状态。
+API Reader 是默认生产正文，不是可选装饰。它依赖最终评分后的 analysis、结构化全文证据和实际物化的 Figure；旧 13 节 analysis 继续作为机器解析层。Reader 的正文版本与来源绑定版本正交：`beginner-researcher-v3` 约束读者结构，`api-reader-source-bindings-v4` 逐格重放表格并从结构化原文注入公式，`api-reader-author-identity-v1` 绑定逐作者机构来源，`api-reader-resource-identity-v1` 绑定项目资源的原文/Demo 证据、重定向终点与可达状态。结构化 artifact 使用稳定键序 SHA；旧 sealed artifact 仅在 source manifest、TXT SHA 与 parser 版本/布局可重放时内存兼容，不改写封存字节。
 
 ## 博客事务时序
 

@@ -301,12 +301,26 @@ function prepareDailyPaper(paper, plan) {
 }
 
 async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
-    return arxivSource.withEphemeralArxivFigures({ arxivId, figures, sourceRoot: plan.sourcesDir,
-        temporaryRoot: options.temporaryRoot || os.tmpdir(), persistentRoots: [plan.runDir] }, async temporary => temporary.figures.map(item => {
-        const bytes = fs.readFileSync(item.tempPath);
-        return { ...figures.find(figure => figure.ordinal === item.ordinal), rawBytes: bytes,
-            assetSha256: sha256(bytes), assetMediaType: item.mediaType };
-    }), { fetchFigure: options.fetchFigure });
+    const materialized = [];
+    for (const figure of figures) {
+        try {
+            const current = await arxivSource.withEphemeralArxivFigures({ arxivId, figures: [figure],
+                sourceRoot: plan.sourcesDir, temporaryRoot: options.temporaryRoot || os.tmpdir(),
+                persistentRoots: [plan.runDir] }, async temporary => temporary.figures.map(item => {
+                const bytes = fs.readFileSync(item.tempPath);
+                return { ...figure, rawBytes: bytes, assetSha256: sha256(bytes),
+                    assetMediaType: item.mediaType };
+            }), { fetchFigure: options.fetchFigure });
+            materialized.push(...current);
+        } catch (error) {
+            // Match the persistent Reader materializer: an individual official
+            // Figure above the byte ceiling is unusable evidence, not a reason
+            // to discard the paper or the smaller figures already fetched.
+            if (error?.code !== 'RESPONSE_TOO_LARGE') throw error;
+            console.log(`    [deep] ⚠️  跳过超过字节上限的论文图 ${figure.ordinal}: ${error.message}`);
+        }
+    }
+    return materialized;
 }
 
 async function ephemeralPrimaryImage(arxivId, url, plan, options = {}) {

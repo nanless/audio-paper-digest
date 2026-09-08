@@ -25,6 +25,21 @@
       "normalizedArxivId": "2608.30854",
       "url": "https://arxiv.org/html/2608.30854v1/Fig/tab-example.png",
       "reason": "多模态发布审查确认图片顶部另含未在原始图注中说明的波形面板，图注所述上下位置与实际像素不一致"
+    },
+    {
+      "normalizedArxivId": "2609.04225",
+      "url": "https://arxiv.org/html/2609.04225v1/x4.png",
+      "reason": "多模态发布审查确认图片内清晰显示个人姓名与邮箱，属于不应在博客中重复展示的个人身份信息"
+    },
+    {
+      "normalizedArxivId": "2609.05281",
+      "url": "https://arxiv.org/html/2609.05281v1/KanAdapter.drawio.png",
+      "reason": "多模态发布审查确认放大分支中的 GR-KAN 标签倒置镜像，像素文字错误无法由正文修复"
+    },
+    {
+      "normalizedArxivId": "2609.04867",
+      "url": "https://arxiv.org/html/2609.04867v1/prism-bench.png",
+      "reason": "多模态发布审查确认原论文 Figure 4 多处将 Music 错写为 Muisc，像素文字错误无法由正文修复"
     }
   ]
 }

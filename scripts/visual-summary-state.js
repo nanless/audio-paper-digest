@@ -48,6 +48,7 @@ const LLM_API_PRODUCTION_CONTRACT = 'llm-api-production-publication-v1';
 const LLM_API_READER_CONTRACT = 'beginner-researcher-v3';
 const LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2';
 const READER_VISUAL_SOURCE_CONTRACT = 'signed-reader-visual-source-v1';
+const EPHEMERAL_READER_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1';
 const REFERENCE_MIME_EXTENSIONS = Object.freeze({
     'image/png': '.png',
     'image/jpeg': '.jpg',
@@ -559,6 +560,29 @@ function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
     );
     if (isModernReaderVisualPaper(paper)) {
         signedReaderVisualSource(paper);
+        if (paper?.analysisManifest?.contracts?.apiReaderFigurePersistence
+            === EPHEMERAL_READER_FIGURE_PERSISTENCE_CONTRACT) {
+            // Daily sealed-source Readers intentionally discard every cache
+            // path and pixel byte after the model call. Post-publish visual
+            // planning must not demand those absent files or fall back to old
+            // image caches. Validate the durable source/pixel identities, then
+            // generate the infographic from signed text with zero references.
+            for (const figure of paper.apiReaderFigures) {
+                const url = new URL(String(figure?.url || ''));
+                const sourceId = url.pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?\//)?.[1];
+                if (url.protocol !== 'https:' || !['arxiv.org', 'www.arxiv.org'].includes(url.hostname)
+                    || url.username || url.password || url.port || url.hash || url.search
+                    || sourceId !== normalizedId(paper)
+                    || !Number.isInteger(figure?.ordinal) || figure.ordinal < 1
+                    || !/^[a-f0-9]{64}$/.test(String(figure?.sourceDomSha256 || ''))
+                    || !/^[a-f0-9]{64}$/.test(String(figure?.assetSha256 || ''))
+                    || !/^image\/(?:png|jpeg|webp|svg\+xml)$/
+                        .test(String(figure?.mediaType || '').toLowerCase())) {
+                    throw new Error('Reader ephemeral 视觉原图 URL/ordinal/DOM/SHA 身份非法');
+                }
+            }
+            return [];
+        }
         const references = paper.apiReaderFigures.map((figure, sourceOrder) => {
             const expectedFilename = `figure-${figure.ordinal}-${String(figure.assetSha256).slice(0, 16)}.png`;
             if (figure.assetFilename !== expectedFilename) throw new Error('Reader 视觉原图文件名漂移');

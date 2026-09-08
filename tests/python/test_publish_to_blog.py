@@ -921,6 +921,29 @@ class PublishToBlogReviewTest(unittest.TestCase):
         paper = llm_api_publication_fixture()
         summary = paper['parsed']['summary']
 
+        taxonomy_chained = copy.deepcopy(paper)
+        taxonomy_chained['analysisManifest']['stages']['structureRepair'][
+            'outputAnalysisSha256'
+        ] = 'a' * 64
+        taxonomy_chained['analysisManifest']['contracts']['taxonomy'] = (
+            publish_to_blog.TAXONOMY_SELECTION_CONTRACT
+        )
+        taxonomy_chained['analysisManifest']['stages']['taxonomySeal'] = {
+            'status': 'complete',
+            'inputAnalysisSha256': 'a' * 64,
+            'outputAnalysisSha256': taxonomy_chained['analysisManifest']['stages'][
+                'coreSummaryRepair'
+            ]['inputAnalysisSha256'],
+        }
+        taxonomy_chained['analysisStageCheckpoints'] = {
+            'taxonomySeal': taxonomy_chained['analysis'],
+        }
+        self.assertIsNotNone(
+            publish_to_blog._sealed_detailed_core_summary(
+                taxonomy_chained, taxonomy_chained['parsed'],
+            )
+        )
+
         page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
         self.assertIn(
             'paper_digest_api_reader_decision_projection: '
@@ -1250,6 +1273,13 @@ class PublishToBlogReviewTest(unittest.TestCase):
             unrelated, {'conceptBridges': []},
         ), unrelated)
 
+    def test_modern_reader_projection_repairs_reviewed_metric_code_typo(self):
+        article = '公开指标抽取代吗与标注手册，误差条为 90%五置信区间。'
+        self.assertEqual(
+            publish_to_blog._modern_api_safe_typo_projection(article),
+            '公开指标抽取代码与标注手册，误差条为 95% 置信区间。',
+        )
+
     def test_modern_resource_temporary_status_is_not_an_open_weight_claim(self):
         paper = llm_api_publication_fixture()
         resource = paper['apiReaderResources']['resources'][0]
@@ -1505,6 +1535,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertNotIn('12', enumerated)
         self.assertIn('1', enumerated)
         self.assertIn('2', enumerated)
+        self.assertEqual(canon('.119'), '0.119')
         tokens = publish_to_blog._api_reader_numeric_tokens(
             '共 40964096 个样本，2020 年，1212 项'
         )
@@ -1524,6 +1555,9 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('2020'))
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('1212'))
         self.assertIsNone(publish_to_blog._reader_doubled_half_token('11'))
+        leading = publish_to_blog._api_reader_numeric_tokens('.119.119 and .222.222')
+        self.assertIn('0.119', leading)
+        self.assertIn('0.222', leading)
 
     def test_api_reader_source_quotes_bind_standard_thousands_groups_without_joining_enumerations(self):
         source = (
@@ -2476,6 +2510,18 @@ title: "Score rows"
         self.assertNotIn('3 d-talking', normalized)
         self.assertNotIn('3 D Talking', normalized)
 
+    def test_index_normalization_preserves_frontmatter_sha_bytes(self):
+        digest = '15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778'
+        markdown = (
+            '---\n'
+            f'paper_digest_taxonomy_registry_sha256: "{digest}"\n'
+            '---\n\n'
+            '正文使用300M参数。\n'
+        )
+        normalized = publish_to_blog.normalize_digest_index_reader_surface(markdown)
+        self.assertIn(f'paper_digest_taxonomy_registry_sha256: "{digest}"', normalized)
+        self.assertIn('正文使用 300 M 参数。', normalized)
+
     def test_index_uses_modern_reader_title_and_signed_decision_blocks(self):
         paper = llm_api_publication_fixture()
         paper['parsed']['opensource'] += '\n- 数据集：FSD50K'
@@ -2745,6 +2791,76 @@ title: "Bad table"
             issues,
         )
 
+    def test_review_filters_false_table_count_but_keeps_real_shape_error(self):
+        issue = [{
+            'severity': 'error', 'type': 'markdown',
+            'description': '表头有5列，但分隔行只有4个 ---，列数不一致。',
+            'auto_fixable': False,
+        }]
+        valid = '| A | B | C | D | E |\n| --- | --- | --- | --- | --- |\n| 1 | 2 | 3 | 4 | 5 |'
+        invalid = '| A | B | C |\n| --- | --- | --- |\n| 1 | 2 |'
+        self.assertTrue(publish_to_blog.markdown_table_shapes_are_valid(valid))
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(valid, issue), [],
+        )
+        self.assertFalse(publish_to_blog.markdown_table_shapes_are_valid(invalid))
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(invalid, issue), issue,
+        )
+
+    def test_review_filters_visual_sha_spacing_hallucination_only_for_exact_field(self):
+        issue = [{
+            'severity': 'error', 'type': 'yaml',
+            'description': 'YAML 字段 paper_digest_taxonomy_registry_sha256 的 SHA 值包含空格。',
+            'auto_fixable': False,
+        }]
+        valid = f'paper_digest_taxonomy_registry_sha256: "{"a" * 64}"\n'
+        invalid = 'paper_digest_taxonomy_registry_sha256: "aaaa bbbb"\n'
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(valid, issue), [],
+        )
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(invalid, issue), issue,
+        )
+
+    def test_review_filters_unclosed_frontmatter_claim_only_when_delimiter_exists(self):
+        issue = [{
+            'severity': 'error', 'type': 'yaml',
+            'description': 'YAML frontmatter 缺少闭合分隔符 ---。',
+            'auto_fixable': True,
+        }]
+        valid = '---\ntitle: "完整页面"\n---\n\n正文\n'
+        invalid = '---\ntitle: "未闭合页面"\n'
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(valid, issue), [],
+        )
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(invalid, issue), issue,
+        )
+
+    def test_chunked_review_replays_frontmatter_claim_against_full_page(self):
+        content = '---\ntitle: "完整页面"\n---\n\n第一段\n\n第二段\n'
+        issue = {
+            'severity': 'error', 'type': 'yaml',
+            'description': 'YAML frontmatter 缺少闭合分隔符 ---。',
+            'auto_fixable': True,
+        }
+
+        def fake_review(chunk, _title, required=False, chunk_label='1/1'):
+            if '第二段' in chunk:
+                return False, [issue], chunk
+            return True, [], chunk
+
+        with mock.patch.object(publish_to_blog, 'get_blog_review_chunk_chars', return_value=10), \
+                mock.patch.object(publish_to_blog, 'review_cached_unit', side_effect=lambda _kind, _payload, producer: producer()), \
+                mock.patch.object(publish_to_blog, '_llm_review_post_chunk', side_effect=fake_review):
+            passed, issues, fixed = publish_to_blog.llm_review_post(
+                content, '测试页面', required=True,
+            )
+        self.assertTrue(passed)
+        self.assertEqual(issues, [])
+        self.assertEqual(fixed, content)
+
     def test_required_text_review_fails_closed_on_non_json_and_missing_fields(self):
         with mock.patch.object(publish_to_blog, 'call_llm_api', return_value='无法判断'):
             passed, issues, _ = publish_to_blog.llm_review_post('正文', '标题', required=True)
@@ -3007,6 +3123,16 @@ title: "Bad table"
             page_path.write_text(markdown, encoding='utf-8')
             artifact = publish_to_blog.build_final_page_artifact(page_path, paper)
             self.assertIsNone(artifact['apiReaderIssue'])
+
+        escaped_caption = llm_api_ephemeral_figure_fixture()
+        escaped_caption['apiReaderFigures'][0]['caption'] = r'Main $\phi$ result.'
+        escaped_caption['analysisManifest']['stages']['apiReaderArticle']['figuresSha256'] = (
+            publish_to_blog._stable_json_sha256(escaped_caption['apiReaderFigures'])
+        )
+        self.assertIn(
+            escaped_caption['apiReaderFigures'][0]['url'],
+            publish_to_blog._api_reader_payload(escaped_caption)['renderedArticle'],
+        )
         altered_table = markdown.replace('| Baseline | 10.2 |', '| Baseline | 10.3 |')
         self.assertIn(
             '字节与 canonical',
@@ -3316,8 +3442,8 @@ title: "Bad table"
             publish_to_blog.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT,
         )
         self.assertEqual(payload['assets'], [])
-        self.assertNotIn(figure_url, payload['renderedArticle'])
-        self.assertIn('论文图 1（像素未随页面持久化）', payload['renderedArticle'])
+        self.assertIn(figure_url, payload['renderedArticle'])
+        self.assertIn('![原论文 Figure 1', payload['renderedArticle'])
         self.assertNotRegex(
             json.dumps(payload, ensure_ascii=False),
             r'(?:cachePath|assetFilename|assetBytes|assetMediaType)',
@@ -3330,8 +3456,8 @@ title: "Bad table"
             'paper_digest_api_reader_figure_persistence: '
             '"ephemeral-no-persisted-figure-assets-v1"', markdown,
         )
-        self.assertIn('论文图 1（像素未随页面持久化）', markdown)
-        self.assertNotIn(figure_url, markdown)
+        self.assertIn('![原论文 Figure 1', markdown)
+        self.assertIn(figure_url, markdown)
         self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(markdown, paper))
         with tempfile.TemporaryDirectory() as root:
             staged = publish_to_blog.prepare_api_reader_staged_assets(
@@ -3343,6 +3469,26 @@ title: "Bad table"
             page_path.write_text(markdown, encoding='utf-8')
             artifact = publish_to_blog.build_final_page_artifact(page_path, paper)
             self.assertIsNone(artifact['apiReaderIssue'])
+
+        exclusion = {
+            'normalizedArxivId': paper['arxivId'],
+            'url': figure_url,
+            'reason': '多模态发布审查确认该图含不可发布信息，必须精确排除。',
+        }
+        derived = publish_to_blog.apply_publish_image_exclusions(
+            [paper], [exclusion],
+        )[0]
+        self.assertEqual(derived['apiReaderFigures'], [])
+        self.assertEqual(derived['apiReaderPlan']['figurePlacements'], [])
+        self.assertEqual(
+            derived['apiReaderPlanSha256'],
+            publish_to_blog._stable_json_sha256(derived['apiReaderPlan']),
+        )
+        self.assertEqual(
+            derived['analysisManifest']['stages']['apiReaderArticle']['planSha256'],
+            derived['apiReaderPlanSha256'],
+        )
+        self.assertIsNotNone(publish_to_blog._api_reader_payload(derived))
 
         missing_marker = copy.deepcopy(paper)
         del missing_marker['analysisManifest']['contracts']['apiReaderFigurePersistence']
@@ -3368,17 +3514,16 @@ title: "Bad table"
             publish_to_blog._api_reader_payload(legacy_without_evidence_sha)['assets'], []
         )
 
-    def test_ephemeral_figure_caption_backslashes_are_inserted_literally(self):
+    def test_ephemeral_figure_caption_backslashes_do_not_rewrite_signed_url_markup(self):
         url = 'https://arxiv.org/html/2509.11717v6/dnr-v2EvaluationPipe.png'
         article = f'导读。\n\n![原论文 Figure 4：流程图]({url})\n\n解释。'
         caption = r'Events satisfy \geq 3; keep \g<missing>, \1, and C:\tmp literally.'
         rendered = publish_to_blog.render_ephemeral_api_reader_figures(article, [{
             'ordinal': 4, 'caption': caption, 'url': url,
         }])
-        expected = f'> **论文图 4（像素未随页面持久化）**：{caption}'
-        self.assertIn(expected, rendered)
-        self.assertNotIn('![原论文 Figure 4', rendered)
-        self.assertEqual(rendered.count(expected), 1)
+        self.assertEqual(rendered, article)
+        self.assertIn('![原论文 Figure 4', rendered)
+        self.assertNotIn(caption, rendered)
 
         duplicate = article + f'\n\n![重复]({url})'
         with self.assertRaisesRegex(PublishDataValidationError, '未唯一映射'):
@@ -3817,6 +3962,9 @@ title: "Bad table"
                 ('2608.29480', 'https://arxiv.org/html/2608.29480v1/attn6.svg'),
                 ('2608.30326', 'https://arxiv.org/html/2608.30326v1/fig2_ptbm2.png'),
                 ('2608.30854', 'https://arxiv.org/html/2608.30854v1/Fig/tab-example.png'),
+                ('2609.04225', 'https://arxiv.org/html/2609.04225v1/x4.png'),
+                ('2609.04867', 'https://arxiv.org/html/2609.04867v1/prism-bench.png'),
+                ('2609.05281', 'https://arxiv.org/html/2609.05281v1/KanAdapter.drawio.png'),
             ],
         )
         invalid_entries = (
@@ -4204,6 +4352,24 @@ primary_method_tag: #Transformer
         self.assertIn('前文指标提升 12%', prompt)
         self.assertIn('后文解释低频误差', prompt)
 
+    def test_image_review_context_does_not_leak_adjacent_figure_markup(self):
+        image = {'media_type': 'image/png', 'data': 'cG5n'}
+        content = (
+            '第一张说明。\n![第一图](https://example.com/one.png)\n第一张解释。\n\n'
+            '第二张导读。\n![第二图](https://example.com/two.png)\n第二张解释。'
+        )
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'vision-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
+                mock.patch.object(
+                    publish_to_blog, 'call_llm_api',
+                    return_value='{"passed": true, "issues": []}',
+                ) as call:
+            publish_to_blog.multimodal_review_images(content, '标题', required=True)
+        second_prompt = call.call_args_list[1].args[0]
+        self.assertIn('第二张导读', second_prompt)
+        self.assertIn('第二张解释', second_prompt)
+        self.assertNotIn('![第一图]', second_prompt)
+
     def test_image_review_keeps_payload_and_context_aligned_after_download_failure(self):
         content = (
             '![失败图](https://example.com/failed.png)\n失败图上下文\n'
@@ -4231,6 +4397,30 @@ primary_method_tag: #Transformer
         self.assertIn('alt: `成功图`', prompt)
         self.assertNotIn('alt: `失败图`', prompt)
         self.assertEqual(issues[0]['severity'], 'warning')
+
+    def test_svg_review_download_is_validated_then_rasterized_to_png(self):
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>'
+        png = valid_png()
+        response = {
+            'status': 200, 'location': None, 'media_type': 'image/svg+xml',
+            'raw': svg, 'pinned_address': '93.184.216.34',
+        }
+        with mock.patch.object(publish_to_blog, 'get_required_fetch_proxy',
+                               return_value='http://127.0.0.1:7897'), \
+                mock.patch.object(publish_to_blog, '_resolve_proxy_addresses',
+                                  return_value={'127.0.0.1'}), \
+                mock.patch.object(publish_to_blog, '_validate_public_image_url',
+                                  return_value={'93.184.216.34'}), \
+                mock.patch.object(publish_to_blog, '_read_pinned_review_image',
+                                  return_value=response), \
+                mock.patch.object(publish_to_blog, '_rasterize_svg_for_review',
+                                  return_value=png) as rasterize:
+            loaded = publish_to_blog._download_review_image(
+                'https://arxiv.org/html/2609.00001v1/figure.svg'
+            )
+        self.assertEqual(loaded['media_type'], 'image/png')
+        self.assertEqual(base64.b64decode(loaded['data']), png)
+        rasterize.assert_called_once_with(svg)
 
     def test_image_review_skips_secondary_call_when_secondary_model_is_unconfigured(self):
         content = '![结果图](https://arxiv.org/result.png)'
@@ -6820,6 +7010,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             self.assertEqual(run.call_args.kwargs['timeout_seconds'], 120)
             self.assertTrue(run.call_args.kwargs['combine_output'])
             self.assertIn('超时且完整进程组已终止', output.getvalue())
+            self.assertIn('诊断: planner timeout', output.getvalue())
 
     def test_digest_cover_local_bytes_are_allowed_for_required_review(self):
         with tempfile.TemporaryDirectory() as tmp:

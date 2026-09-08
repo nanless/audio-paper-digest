@@ -27,6 +27,7 @@ source acquisition
   → primary analysis
   → project/demo evidence
   → revision and structural repairs
+  → taxonomy seal → core-summary seal
   → scoring audit and stability resolution
   → API Reader article and official Figures
   → optional legacy image supplement
@@ -36,13 +37,13 @@ For the default API route, source acquisition completes after filtering and befo
 arXiv ID freshly captures official HTML text and PDF into a four-file `daily-fresh-source-run-v1` bundle.
 Analysis, Reader, and Python publication replay its `dailyFreshSourceRun`; a missing or drifted SHA fails before
 model or figure work. Official Figure pixels exist only in the active call's OS-temporary directory and never
-become a `data/current` or runtime image cache.
+become a `data/current` or runtime image cache. A single oversized Figure may be skipped; a corrupt or provider-incompatible PNG may be converted to a white-background RGB JPEG and retried, with the actual input-pixel SHA bound afterward.
 
 Every stage binds its inputs, model and protocol, prompt, evidence budget, output hash, and terminal state. A changed input invalidates that stage and its downstream consumers, not unrelated papers.
 
 Model output is bounded independently by tokens, an absolute deadline, and total response bytes. Responses `incomplete`, Chat `length`, Anthropic `max_tokens`, a missing SSE terminal event, or a byte-limit breach fails before article parsing, so partial JSON cannot become a successful stage.
 
-Reader contracts are orthogonal. `beginner-researcher-v3` governs tutorial structure; `api-reader-source-bindings-v4` replays every table cell to an original DOM cell or exact source quote and injects display formulas from structured source TeX. `api-reader-author-identity-v1` binds every displayed author and affiliation to HTML, paper metadata, or an explicit unavailable state. `api-reader-resource-identity-v1` binds project links to exact paper/demo evidence, redirect outcomes, and availability. Official Figures are materialized first and then bound to the final article and plan.
+Reader contracts are orthogonal. `beginner-researcher-v3` governs tutorial structure; `api-reader-source-bindings-v4` replays every table cell to an original DOM cell or exact source quote and injects display formulas from structured source TeX. `api-reader-author-identity-v1` binds every displayed author and affiliation to HTML, paper metadata, or an explicit unavailable state. `api-reader-resource-identity-v1` binds project links to exact paper/demo evidence, redirect outcomes, and availability. Official Figures are materialized first and then bound to the final article and plan. Structured artifacts use stable key-order hashes; a legacy sealed artifact is accepted only in memory when its source manifest, TXT SHA, and parser version/layout replay exactly, without rewriting sealed bytes.
 
 ## Publication transaction
 

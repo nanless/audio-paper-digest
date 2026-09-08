@@ -66,10 +66,12 @@ npm run validate:data
 
 ```bash
 npm run deep -- --date YYYY-MM-DD
+npm run batch -- --retry-failed-readers
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 ```
 
 来源 SHA、Prompt 或模型变化会按指纹失效对应阶段。旧成功正文存在但最新尝试失败时仍需重试。
+`batch --retry-failed-readers` 只退役当前未完成论文的失败 Reader 候选；需要真正强制全量重跑时使用 `reanalyze`，它会同时清空旧 Reader 与图片补充状态，不能指望旧成功记录短路。
 
 如果恢复命令报告 sealed daily source 缺失或漂移，不要改 checkpoint，也不要用旧 `data/current` 文本补跑；重新运行同日 `npm run digest:prepare -- YYYY-MM-DD`，让 source phase 重新封存 PDF/TXT。
 
@@ -107,6 +109,8 @@ conference projection。不要用旧博客正文、旧分析、文件名相似�
 - 段落中的“它/该方法/这一结果”是否唯一回指。
 
 修复 Prompt 或结构化 findings 后刷新 Reader，不在博客 review 阶段原地改正文。
+
+表格报错时先核对 `selection` 是否引用真实 DOM 行列、marker 与 binding 是否存在唯一顺序映射，以及 quote 模式裁剪后是否还剩至少两列一行。旧 structured artifact 只有 source manifest、TXT SHA 与 parser 版本/布局均可重放时才兼容；不要重写 sealed 文件伪造新 SHA。单张 Figure 的 `RESPONSE_TOO_LARGE` 会被跳过，若一张都没有成功物化才应继续排查代理、图片 URL、MIME 或源 PDF。
 
 ## 8. blog:generate 失败
 

@@ -73,6 +73,8 @@ arXiv fresh-acquisition failure handoff can enter the crosswalk fallback.
 
 Check term-pair roles and combination meaning; table question/conditions/interpretation; figure lead/viewing path/caption/explanation; no-pixel visual guesses; and ambiguous pronouns. Fix analysis/structured findings and refresh Reader. Review must not rewrite the page.
 
+For a failed Reader candidate, `npm run batch -- --retry-failed-readers` retires candidates only for currently incomplete papers; `reanalyze` additionally clears all Reader/image-supplement state for a true full retry. For tables, verify that `selection` names real DOM rows/columns, marker-to-binding order is uniquely recoverable, and quote pruning still leaves at least two columns and one data row. A single oversized Figure is skipped; investigate proxy, URL, MIME, or source PDF only when no Figure can be materialized.
+
 ## Generate Failure
 
 Check production proof, batch date, eight scores, Reader v3, authors, safe image URLs, and target blog worktree. Generate refuses to overwrite overlapping manual Git edits. Include/exclude scope mismatches are intentional failures.
@@ -95,7 +97,7 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-Use only emitted absolute reference paths. Record requires the current token, canonical asset, and `--qa-attested true`. Publication, manifest, or asset changes invalidate completion.
+Legacy manifests use emitted absolute reference paths. Modern ephemeral manifests intentionally emit an empty reference list after replaying signed Figure identity; they never fall back to old cache files. Record requires the current token, canonical asset, and `--qa-attested true`. Publication, manifest, or asset changes invalidate completion.
 
 ## Stale Status
 
