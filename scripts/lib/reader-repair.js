@@ -243,7 +243,18 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         if (seen.some(pointer => pointer === item.path || pointer.startsWith(`${item.path}/`)
             || item.path.startsWith(`${pointer}/`))) throw new Error('Reader patch has duplicate or overlapping targets');
         const old = nodeAt(draft, item.path);
-        if (item.oldSha256 !== hashDraft(old)) throw new Error(`Reader patch has stale node SHA: ${item.path}`);
+        const expectedOldSha256 = hashDraft(old);
+        if (item.oldSha256 !== expectedOldSha256) {
+            const receivedOldSha256 = /^[a-f0-9]{64}$/.test(String(item.oldSha256 || ''))
+                ? item.oldSha256 : '<invalid-sha256>';
+            const error = new Error(`Reader patch has stale node SHA: ${item.path}; `
+                + `received=${receivedOldSha256}; expected-current=${expectedOldSha256}`);
+            error.code = 'READER_PATCH_STALE_NODE_SHA';
+            error.readerIssue = { path: item.path, code: 'reader_patch_stale_node_sha',
+                message: `Reader patch rejected: ${error.message}. 旧 patch 已拒绝；`
+                    + '下一次只能使用当前 repair target 中的 expected-current SHA。' };
+            throw error;
+        }
         if ((item.path.endsWith('/body') || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
             && typeof item.value !== 'string') throw new Error('Reader patch text replacement must be a string');
         if (!item.path.endsWith('/body') && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
@@ -442,6 +453,11 @@ function buildRepairTargets(draft, issues) {
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
         const message = issue.message || '';
+        // Never replay or accept a stale patch. Older persisted failures did
+        // not carry a structured path, so recover only the exact authorized
+        // pointer from their error; add() then binds it to today's node SHA.
+        const stalePatchPath = /Reader patch has stale node SHA: (\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?)/.exec(message)?.[1];
+        if (stalePatchPath) add(stalePatchPath);
         if (/selection[\s\S]*第一行必须是原表头，其余行必须是数据行/.test(message)) {
             const index = Number(/tableBindings\[(\d+)\]/.exec(message)?.[1]);
             if (Number.isInteger(index)) add(`/tableBindings/${index}`);

@@ -175,12 +175,17 @@ test('historical direct scope migrates the same source-bound failed candidate af
 });
 
 test('an exhausted paid budget retains its counters but receives exactly one implementation repair slot', t => {
-    const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
+    const f = fixture(t); const pointer = '/sections/8/body';
+    const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2,
+        issues: [{ path: null, message: `Reader patch rejected: Reader patch has stale node SHA: ${pointer}` }] };
     saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
     const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     assert.equal(loaded.attempts, 6); assert.equal(loaded.fullAttempts, 2);
     assert.match(loaded.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
     const repair = require('../scripts/lib/reader-repair.js');
+    const targets = repair.buildRepairTargets(loaded.draft, loaded.issues);
+    assert.deepEqual(targets.map(target => target.path), [pointer]);
+    assert.equal(targets[0].oldSha256, repair.hashDraft(loaded.draft.sections[8].body));
     assert.equal(repair.readerAttemptLimit(6, loaded.attempts, loaded.draft,
         loaded.implementationRepairAllowanceProof ? 1 : 0), 7);
     assert.equal(repair.readerAttemptLimit(6, 7, loaded.draft, 0), 7);

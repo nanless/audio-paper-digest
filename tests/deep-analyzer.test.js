@@ -3115,12 +3115,21 @@ primary_task_tag: #音视频生成
     });
 
     it('LaTeXML 同值统计双写保留末尾单位，并拒绝非同值、错符号和普通相邻数', () => {
-        const { deriveExactTableSourceQuotes } = require('../scripts/deep-analyzer.js');
+        const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
+            bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
         const table = value => `| Metric | Value |\n| --- | --- |\n| Checked | ${value} |`;
         const latency = 'Observed latency was μ=4,852\\mu=4{,}852\u2009ms on the RAG task.';
         const latencyQuotes = deriveExactTableSourceQuotes(table('4,852 ms'), latency);
         assert.ok(latencyQuotes.includes(latency));
         assert.ok(latencyQuotes.every(quote => latency.includes(quote)));
+        const latencyBinding = [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: [latency] }];
+        const latencyOptions = { sourceText: latency,
+            structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, latency) };
+        assert.strictEqual(
+            bindApiReaderSourceEvidence(table('4,852 ms'), latencyBinding, [], latencyOptions).article,
+            table('4,852 ms')
+        );
 
         for (const [surface, rendered] of [
             ['−5.6-5.6\u2009dB', '-5.6 dB'],

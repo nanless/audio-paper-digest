@@ -1435,6 +1435,45 @@ class PublishToBlogReviewTest(unittest.TestCase):
         publish_to_blog._validate_api_reader_source_bindings(paper)
         self.assertEqual(paper['apiReaderPlan']['tableBindings'][0]['sourceQuotes'][0]['quote'], source)
 
+    def test_api_reader_latexml_statistic_duplicate_preserves_exact_trailing_unit(self):
+        source = (
+            'Observed latency was μ=4,852\\mu=4{,}852\u2009ms '
+            'on the RAG task under the recorded protocol.'
+        )
+        tokens = publish_to_blog._api_reader_numeric_tokens(source)
+        self.assertIn('4852ms', tokens)
+        for unsupported in (
+                'Observed latency was μ=4,852\\mu=4{,}851 ms.',
+                'Observed latency was μ=4,852\\mu=4{,}852 s.',
+                'Observed latency was μ=4,852\\sigma=4{,}852 ms.',
+                'Observed latency was μ=-4,852\\mu=4{,}852 ms.'):
+            self.assertNotIn('4852ms', publish_to_blog._api_reader_numeric_tokens(unsupported))
+
+        article = '| Task | Reasoner latency |\n| --- | ---: |\n| RAG | 4852 ms |'
+        paper = llm_api_publication_fixture()
+        paper['apiReaderArticle'] = article
+        paper['apiReaderPlan']['formulaBindings'] = []
+        paper['apiReaderPlan']['tableBindings'] = [{
+            'tableIndex': 1, 'sourceType': 'source_quotes',
+            'sourceTableOrdinal': None,
+            'renderedTableSha256': hashlib.sha256(article.encode()).hexdigest(),
+            'cellBindings': [], 'sourceQuotes': [{
+                'quote': source,
+                'sourceQuoteSha256': hashlib.sha256(source.encode()).hexdigest(),
+            }],
+        }]
+        reseal_llm_api_reader_fixture(paper)
+        publish_to_blog._validate_api_reader_source_bindings(paper)
+
+        tampered = copy.deepcopy(paper)
+        tampered['apiReaderArticle'] = article.replace('4852 ms', '4853 ms')
+        tampered['apiReaderPlan']['tableBindings'][0]['renderedTableSha256'] = hashlib.sha256(
+            tampered['apiReaderArticle'].encode()
+        ).hexdigest()
+        reseal_llm_api_reader_fixture(tampered)
+        with self.assertRaisesRegex(PublishDataValidationError, '数字缺少来源 quote'):
+            publish_to_blog._validate_api_reader_source_bindings(tampered)
+
     def test_api_reader_numeric_replay_preserves_exact_repeated_decimals(self):
         tokens = publish_to_blog._api_reader_numeric_tokens(
             'DNS Challenge\n2.222.22\n3.093.09\n3.503.50\n3.803.80\n'

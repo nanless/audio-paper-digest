@@ -60,8 +60,26 @@ test('local replacements preserve every unselected node and reject stale/unautho
     }
     assert.throws(() => applyReaderPatch(draft, { ...patch, draftSha256: '0'.repeat(64) }, [pointer]), /stale/);
     const staleNode = structuredClone(patch); staleNode.replacements[0].oldSha256 = '0'.repeat(64);
-    assert.throws(() => applyReaderPatch(draft, staleNode, [pointer]), /stale node/);
+    let staleError;
+    try { applyReaderPatch(draft, staleNode, [pointer]); } catch (error) { staleError = error; }
+    assert.equal(staleError?.code, 'READER_PATCH_STALE_NODE_SHA');
+    assert.equal(staleError?.readerIssue?.path, pointer);
+    assert.equal(staleError?.readerIssue?.code, 'reader_patch_stale_node_sha');
+    assert.match(staleError?.message || '', new RegExp(`received=${'0'.repeat(64)}`));
+    assert.match(staleError?.message || '', new RegExp(`expected-current=${patch.replacements[0].oldSha256}`));
+    assert.equal(JSON.stringify(draft), original, 'stale patch must not change any candidate byte');
     assert.throws(() => applyReaderPatch(draft, patch, []), /unauthorized/);
+});
+
+test('stale-node recovery rebuilds an exact target from the current candidate SHA', () => {
+    const draft = fixture();
+    const pointer = '/sections/8/body';
+    const stale = '0'.repeat(64);
+    const targets = buildRepairTargets(draft, [{ path: null,
+        message: `Reader patch rejected: Reader patch has stale node SHA: ${pointer}; received=${stale}` }]);
+    assert.deepEqual(targets.map(target => target.path), [pointer]);
+    assert.equal(targets[0].oldSha256, hashDraft(draft.sections[8].body));
+    assert.notEqual(targets[0].oldSha256, stale);
 });
 
 test('patch rejects duplicate, overlapping, prototype, unknown and out-of-range paths', () => {
@@ -436,6 +454,47 @@ test('production stops unchanged patches and refuses another call on exhausted r
     assert.equal(calls, 2);
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
     assert.equal(calls, 2);
+});
+
+test('distinct malformed patches consume attempts without falsely exhausting unchanged-draft no-progress', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t);
+    const paper = { arxivId: '2609.99972', title: '损坏补丁恢复' };
+    const draft = fixture(); draft.readerTitle = '短';
+    let calls = 0;
+    const base = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 6,
+        readerMaterializeFigures: async () => [], readerRecordDisposition: () => {} };
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', {
+        ...base,
+        readerCallModel: async () => {
+            calls += 1;
+            if (calls === 1) return JSON.stringify(draft);
+            if (calls === 2) return '{"version":1,"replacements":[}';
+            if (calls === 3) return '{"version":1,"replacements":[';
+            throw new Error('stop after two distinct malformed patches');
+        }
+    }), /stop after two distinct malformed patches/);
+    assert.equal(calls, 4, 'distinct malformed patches must not trip no-progress before another request');
+    const active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    let envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
+    assert.equal(envelope.payload.attempts, 3);
+    assert.equal(envelope.payload.noProgress, 0);
+    assert.equal(envelope.payload.validationFailureStreak, 1);
+
+    let resumedCalls = 0;
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', {
+        ...base,
+        readerCallModel: async (_messages, _tokens, requestOptions) => {
+            resumedCalls += 1;
+            assert.equal(requestOptions.usageContext.stage, 'apiReaderRepair');
+            assert.equal(requestOptions.usageContext.contentAttempt, 4);
+            throw new Error('resumed patch request observed');
+        }
+    }), /resumed patch request observed/);
+    assert.equal(resumedCalls, 1, 'recovery must reach the model instead of preflight exhaustion');
+    envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
+    assert.equal(envelope.payload.attempts, 3, 'transport failure does not consume a content attempt');
+    assert.equal(envelope.payload.noProgress, 0);
 });
 
 test('normalized validation signatures stop the same binding issue after two changing drafts', async t => {

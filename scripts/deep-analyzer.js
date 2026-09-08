@@ -4176,8 +4176,16 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
                 });
             const failureSignature = repair.hashDraft(currentIssues);
+            // A malformed patch response consumes its bounded content attempt,
+            // but it never mutated the candidate.  Only compare draft hashes
+            // after a patch was parsed and applied; otherwise two distinct
+            // syntax failures would falsely exhaust no-progress before the
+            // remaining paid attempts can run.  Repeated identical failures
+            // are still bounded by failureSignature, and every response is
+            // still bounded by attempts/maxAttempts.
             noProgress = failureSignature === previousFailureSignature
-                || (candidate && repair.hashDraft(candidate) === priorCandidateSha) ? noProgress + 1 : 0;
+                || (patchApplied && candidate && repair.hashDraft(candidate) === priorCandidateSha)
+                ? noProgress + 1 : 0;
             previousFailureSignature = failureSignature;
             const normalizedFailureSignature = repair.validationFailureSignature(currentIssues);
             validationFailureStreak = repair.validationFailureHasNoProgress(

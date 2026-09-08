@@ -3864,6 +3864,40 @@ def _api_reader_numeric_tokens(value):
             half_token = _canonical_api_reader_numeric_token(half)
             if half_token != canonical:
                 tokens.append(half_token)
+
+    # Match Node's exact LaTeXML statistic alias. The HTML text extractor may
+    # flatten one displayed thousands-grouped value and its TeX annotation as
+    # `4,852\mu=4{,}852 ms`. Only identical numeric spellings across that exact
+    # bridge inherit the trailing unit; a different value, sign, precision,
+    # bridge, or unit produces no alias. This operates solely inside the
+    # already SHA-bound sourceQuote bytes, never via a fuzzy full-text search.
+    tex_statistic = re.compile(
+        r'(?<![A-Za-z0-9])'
+        r'([+\-−－]?(?:[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]+)(?:[.．][0-9０-９]+)?)'
+        r'\\mu\s*=\s*'
+        r'([+\-−－]?[0-9０-９{}.,，．]+)\s*'
+        r'(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%％])'
+        r'(?![A-Za-z0-9_])',
+        flags=re.IGNORECASE,
+    )
+
+    def exact_number(raw):
+        surface = unicodedata.normalize('NFKC', str(raw or '')) \
+            .replace('−', '-').replace('－', '-')
+        if not re.fullmatch(
+                r'[+\-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?', surface):
+            return None
+        return surface
+
+    for match in tex_statistic.finditer(original_surface):
+        left = exact_number(match.group(1))
+        right = exact_number(match.group(2).replace('{', '').replace('}', ''))
+        if not left or left != right:
+            continue
+        alias = _canonical_api_reader_numeric_token(
+            f'{match.group(1)} {match.group(3)}'
+        )
+        tokens.append(alias)
     return tokens
 
 
