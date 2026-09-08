@@ -907,7 +907,7 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
             ? (url => ephemeralArxivPrimaryImageDownloader(item.route.arxivId, url, dependencies)) : undefined;
         await directContext.withDirectRewriteAnalysisSource({ paperId: item.paperId, route: item.route.kind,
             sourceDetails, sourceSnapshotSha256: sourceDescriptor.sourceSnapshotSha256, readerAttemptsDir,
-            materializeReaderFigures, downloadPrimaryImage }, runEngine);
+            materializeReaderFigures, downloadPrimaryImage, deferReaderCandidateCommit: true }, runEngine);
     }
     directContext.assertNoPersistentFigureFields(result);
     return result;
@@ -1440,7 +1440,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     ...(descriptor.sourceVersion ? {
                         sourceVersionIdentitySha256: descriptor.sourceVersion.identitySha256
                     } : {}) } : {}),
-                readerAttemptsDir, materializeReaderFigures, downloadPrimaryImage, supplementaryReaderImages }, () => analyze({ item,
+                readerAttemptsDir, materializeReaderFigures, downloadPrimaryImage, supplementaryReaderImages,
+                deferReaderCandidateCommit: true }, () => analyze({ item,
                 sourceDetails: clone(sourceDetails), sourceDescriptor: descriptor, executionDirectory: executionDir,
                 dependencies: executionDependencies }));
             const analysis = item.route.kind === 'conference-local-pdf'

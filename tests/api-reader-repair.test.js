@@ -348,7 +348,7 @@ test('production recovery persists canonical section/table pairs with raw-to-can
     assert.deepEqual(stored.payload.draftOrderMappings, [normalized.mapping]);
     assert.equal(stored.payload.attempts, 1);
     assert.equal(stored.payload.fullAttempts, 1);
-    assert.equal(stored.identity.draftOrderContract, 'reader-draft-order-v2');
+    assert.equal(stored.identity.draftOrderContract, 'reader-draft-order-v3');
     assert.deepEqual(stored.payload.draftOrderMappings[0].conceptBridges.map(item => item.rawIndex), [3, 2, 1, 0]);
     await assert.rejects(generateApiReaderArticleDetailed(paper, '', '', { ...base, readerCallModel: async messages => {
         assert.match(messages[0].content[0].text, new RegExp(hashDraft(normalized.draft)));
@@ -620,6 +620,60 @@ test('direct source scope persists a separate ephemeral pixel binding and reject
         calls += 1; throw new Error('must not make a model call after ephemeral drift');
     }), /ephemeral image evidence drifted/);
     assert.equal(calls, 1);
+});
+
+test('historical direct accepts one preflight fetch, defers candidate retirement, and resumes with zero LLM calls', async t => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
+    const signed = require('./reader-signed-draft-fixture.js').fixture();
+    const directory = temporary(t);
+    const id = signed.paper.arxivId;
+    const paperId = `arxiv:${id}`;
+    const sourceDetails = { paperId, source: 'html', sourceId: id,
+        text: signed.sourceDetails.text, imageInfos: [],
+        structuredArtifacts: signed.sourceDetails.structuredArtifacts };
+    const sourceEvidence = deep.buildApiReaderEvidenceContext(
+        '', sourceDetails.text, sourceDetails.structuredArtifacts, id
+    );
+    const png = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT9sAAAAASUVORK5CYII=',
+        'base64'
+    );
+    const pixelSha256 = require('node:crypto').createHash('sha256').update(png).digest('hex');
+    let materializations = 0;
+    const invoke = readerCallModel => direct.withDirectRewriteAnalysisSource({
+        paperId, route: 'arxiv-fresh-fetch', sourceDetails,
+        sourceSnapshotSha256: 'b'.repeat(64), readerAttemptsDir: directory,
+        deferReaderCandidateCommit: true,
+        materializeReaderFigures: async figures => {
+            materializations += 1;
+            return figures.map(figure => ({ ...figure, rawBytes: png,
+                assetSha256: pixelSha256, assetMediaType: 'image/png' }));
+        }
+    }, () => deep.generateApiReaderArticleDetailed(
+        { directPaperId: paperId, arxivId: id, title: 'Transactional Reader' },
+        '', sourceEvidence, { sourceText: sourceDetails.text,
+            structuredArtifacts: sourceDetails.structuredArtifacts,
+            readerMaxAttempts: 1, readerRecordDisposition: () => {}, readerCallModel }
+    ));
+    let modelCalls = 0;
+    const first = await invoke(async () => { modelCalls += 1; return JSON.stringify(signed.draft); });
+    assert.equal(modelCalls, 1);
+    assert.equal(materializations, 1, 'Reader preflight fetches Figure pixels exactly once');
+    const injected = deep.injectApiReaderFigures(first, sourceDetails.structuredArtifacts, id);
+    const receipts = deep.materializeDirectApiReaderFiguresFromEvidence(
+        injected.figures, first.imageEvidence
+    );
+    assert.equal(materializations, 1, 'accepted Reader post-processing performs zero additional network fetches');
+    assert.deepEqual(receipts.map(item => item.assetSha256), [pixelSha256]);
+    assert.equal(fs.readdirSync(directory).filter(name => name.endsWith('.json')).length, 1,
+        'accepted draft remains recoverable before the Reader stage checkpoint commits');
+    const second = await invoke(async () => { modelCalls += 1; throw new Error('must not call model'); });
+    assert.equal(modelCalls, 1, 'recovery replays the accepted candidate with zero LLM calls');
+    assert.equal(second.resumedCandidate, true);
+    const retired = deep.commitDeferredReaderCandidate(second);
+    assert.match(retired, /\.resolved\.json$/);
+    assert.equal(fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).length, 0);
 });
 
 test('two initial network failures do not consume received-content or malformed-root budgets', async t => {

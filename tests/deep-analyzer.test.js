@@ -3575,6 +3575,34 @@ has_dataset: 否
         );
     });
 
+    it('真实 PASE 摘要识别“子集上”失败边界与同句计算资源披露', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const paseSummary = [
+            '语音增强需从含噪含混响单通道波形中恢复可懂且保真的干净语音，生成式方法在低信噪比下易产生改变词内容或说话人特性的幻觉。',
+            'PASE 提出两阶段流水线：先将预训练 WavLM Large 蒸馏为去噪专家 DeWavLM，以干净语音经冻结教师在第 24 层 Transformer 输出为目标，用均方误差监督带噪输入的学生同层表示；再以双流表示驱动声码器 Vocos，将深层音素表示与经线性投影的浅层声学表示逐元素相加后重建波形。',
+            '与从带噪离散 token 中学习先验的离散语言建模范式不同，该设计直接复用已有音系先验并保持连续表示以保留韵律与音色。',
+            '在自建的 1000 条 LibriTTS 模拟测试集上，PASE 的 WER 为 7.49%，显著优于最强判别式基线 TF-GridNet 的 9.93% 与生成式基线 LLaSE-G1 的 36.58%，同时保持 SpkSim 0.80。',
+            '结论在 -5 至 15 dB 模拟加噪与 DNS1 公开集无混响子集上得到验证，但在 DNS1 有混响子集上感知质量指标出现偏差，且未在真实远场录音上验证。',
+            '原文披露 DeWavLM 训练 100k 步、声码器 200k 步于 4 张 NVIDIA RTX 4090，推理计算量约 21.42 G MACs/s，无需多步采样。'
+        ].join('');
+        const sourceText = 'On the LibriTTS test set, PASE achieves 7.49% WER versus TF-GridNet at 9.93%. All experiments use 4 NVIDIA RTX 4090 GPUs and inference costs 21.42 G MACs/s.';
+        assert.strictEqual(getCoreSummaryDetailIssue(
+            withSummary(paseSummary), { sourceText }
+        ), null);
+        assert.match(getCoreSummaryDetailIssue(withSummary(paseSummary.replace(
+            '结论在 -5 至 15 dB 模拟加噪与 DNS1 公开集无混响子集上得到验证，但在 DNS1 有混响子集上感知质量指标出现偏差，且未在真实远场录音上验证。',
+            '该方法在 DNS1 有混响子集上继续完成常规评测，结果用于补充主表。'
+        )), { sourceText }), /缺少结论适用边界/);
+        assert.match(getCoreSummaryDetailIssue(withSummary(paseSummary.replace(
+            '原文披露 DeWavLM 训练 100k 步、声码器 200k 步于 4 张 NVIDIA RTX 4090，推理计算量约 21.42 G MACs/s，无需多步采样。',
+            '该方法在名称含 RTX 4090 的公开基准上完成评测，结果与主表一致。'
+        )), { sourceText }), /缺少训练、推理或部署成本/);
+    });
+
     it('核心摘要修复证据只来自 sourceText，不含 canonical A_* 片段', () => {
         const { buildStageEvidenceContext } = require('../scripts/deep-analyzer.js');
         const evidence = buildStageEvidenceContext('coreSummaryRepair', validAnalysisText(),
@@ -3914,12 +3942,91 @@ has_dataset: 否
         assert.match(prompts[1], /这是第 2 次局部修复/);
     });
 
+    it('核心摘要 cost-only 重试传递上一候选并且不再误导修改量化句', async () => {
+        const { getCoreSummaryDetailIssue, repairCoreSummarySection } = require('../scripts/deep-analyzer.js');
+        const originalSummary = validAnalysisText().match(
+            /## 核心摘要\n([\s\S]*?)(?=\n## 方法概述和架构)/
+        )[1];
+        const noCost = originalSummary.replace(
+            '训练需要额外的双路编码显存与联合优化开销，论文也未报告端侧推理延迟，因此部署收益仍需在具体目标硬件、并发负载和真实数据分布下进一步实测。',
+            '该方法在论文覆盖的公开测试集上完成实验，结果与主表一致，作者还按语种、噪声类型和数据划分整理观察，并将每个现象对应到附录中的相同协议，以便读者逐项核对模型与基线的差异，相关讨论没有改变本文任务定义和方法链条。'
+        );
+        const repaired = originalSummary.replace(
+            '训练需要额外的双路编码显存与联合优化开销，论文也未报告端侧推理延迟，因此部署收益仍需在具体目标硬件、并发负载和真实数据分布下进一步实测。',
+            '原文披露训练成本为 100k 步且使用 4 张 NVIDIA RTX 4090，推理计算量为 21.42 G MACs/s，这些数字给出了当前实验规模与单次前向负担，但未报告端侧延迟、并发吞吐与完整训练时长，因此无法据此判断真实部署效率。'
+        );
+        const original = validAnalysisText().replace(originalSummary, noCost);
+        const prompts = [];
+        let calls = 0;
+        const updated = await repairCoreSummarySection(
+            { arxivId: '2511.13300', title: 'PASE' },
+            original,
+            '公开测试集使用相同协议，基线词错误率为 12.4%，本文方法词错误率为 9.8%。Training uses 4 RTX 4090 GPUs and inference costs 21.42 G MACs/s.',
+            '局部证据',
+            { callModelFn: async messages => {
+                calls += 1;
+                prompts.push(messages[0].content);
+                return `## 核心摘要\n${calls === 1 ? noCost : repaired}`;
+            } }
+        );
+        assert.strictEqual(calls, 2);
+        assert.strictEqual(getCoreSummaryDetailIssue(updated), null);
+        assert.match(prompts[1], new RegExp(noCost.slice(0, 80)));
+        assert.match(prompts[1], /成本句在原文已披露时/);
+        assert.doesNotMatch(prompts[1], /量化句须在同一句内闭合/);
+    });
+
     it('Reader 内部尝试耗尽后只抑制本次 outer retry', () => {
         const { suppressOuterRetryAfterReaderExhaustion } = require('../scripts/deep-analyzer.js');
         const error = new Error('three inner ECONNRESET attempts exhausted');
         const returned = suppressOuterRetryAfterReaderExhaustion(error);
         assert.strictEqual(returned, error);
         assert.strictEqual(returned.retryable, false);
+    });
+
+    it('历史 direct 最终 Figure 只接受本轮前置像素的精确 ordinal URL 与 source SHA', () => {
+        const { materializeDirectApiReaderFiguresFromEvidence } = require('../scripts/deep-analyzer.js');
+        const sourceSha256 = crypto.createHash('sha256').update('pixels').digest('hex');
+        const url = 'https://arxiv.org/html/2609.99971/figure.png';
+        const figure = { ordinal: 1, url, caption: 'Figure 1' };
+        const proof = { inputId: `figure:1:${sourceSha256}`, kind: 'figure', ordinal: 1,
+            url, sha256: sourceSha256, sourceSha256, status: 'ready' };
+        assert.deepStrictEqual(
+            materializeDirectApiReaderFiguresFromEvidence([figure], [proof]),
+            [{ ...figure, assetSha256: sourceSha256 }]
+        );
+        for (const drift of [
+            { ...proof, ordinal: 2, inputId: `figure:2:${sourceSha256}` },
+            { ...proof, url: `${url}.changed` },
+            { ...proof, sourceSha256: 'a'.repeat(64) },
+            { ...proof, status: 'preflight-rejected' }
+        ]) {
+            assert.throws(
+                () => materializeDirectApiReaderFiguresFromEvidence([figure], [drift]),
+                /Direct Reader Figure evidence rejected/
+            );
+        }
+    });
+
+    it('Reader 已接受后的网络错误保留可重试类型，证据漂移仍不可重试', () => {
+        const { preserveReaderPostProcessingRetryability,
+            materializeDirectApiReaderFiguresFromEvidence } = require('../scripts/deep-analyzer.js');
+        const transient = preserveReaderPostProcessingRetryability(new TypeError('fetch failed'));
+        assert.strictEqual(transient.retryable, true);
+        assert.strictEqual(transient.code, 'READER_POST_PROCESSING_TRANSIENT');
+        assert.strictEqual(
+            preserveReaderPostProcessingRetryability(new Error('arXiv Figure download failed: HTTP 503')).retryable,
+            true
+        );
+        const typed = new Error('HTTP 404'); typed.retryable = false; typed.code = 'PERMANENT';
+        assert.strictEqual(preserveReaderPostProcessingRetryability(typed), typed);
+        assert.strictEqual(typed.retryable, false);
+        let drift;
+        try { materializeDirectApiReaderFiguresFromEvidence([{ ordinal: 1, url: 'https://arxiv.org/html/2609.99971/f.png' }], []); }
+        catch (error) { drift = error; }
+        assert.strictEqual(drift.retryable, false);
+        assert.strictEqual(preserveReaderPostProcessingRetryability(drift), drift);
+        assert.strictEqual(drift.retryable, false);
     });
 
     it('结构预修复会在评分前接管模型编辑和自检批注泄漏', () => {

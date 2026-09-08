@@ -104,6 +104,10 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     if (identity.downloadPrimaryImage !== undefined && typeof identity.downloadPrimaryImage !== 'function') {
         fail('primary image downloader must be a function');
     }
+    if (identity.deferReaderCandidateCommit !== undefined
+        && typeof identity.deferReaderCandidateCommit !== 'boolean') {
+        fail('Reader candidate commit policy must be boolean');
+    }
     const supplementaryImages = identity.supplementaryReaderImages === undefined ? [] : identity.supplementaryReaderImages;
     if (!Array.isArray(supplementaryImages) || supplementaryImages.some(image => !image || typeof image !== 'object'
         || !Buffer.isBuffer(image.rawBytes) || !/^image\/(?:png|jpeg|webp)$/.test(String(image.mediaType || ''))
@@ -112,6 +116,11 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     }
     const context = Object.freeze({ paperId: id, sourceDetails: Object.freeze(sourceDetails), readerAttemptsDir,
         materializeReaderFigures: identity.materializeReaderFigures || null,
+        // Historical direct execution persists the completed Reader stage
+        // before retiring a recoverable accepted draft. Daily/legacy callers
+        // keep their existing immediate-retirement behaviour unless they opt
+        // into the same transaction explicitly.
+        deferReaderCandidateCommit: identity.deferReaderCandidateCommit === true,
         // Dual-model primary analysis must use this direct-only downloader.
         // It may return bytes/base64 but can never return data/current cache
         // paths, and remains scoped to this execution's AsyncLocal context.
@@ -151,6 +160,9 @@ function directReaderAttemptsDirectory(requested = null) {
 }
 
 function directReaderMaterializer() { return scope.getStore()?.materializeReaderFigures || null; }
+function directReaderCandidateCommitDeferred() {
+    return scope.getStore()?.deferReaderCandidateCommit === true;
+}
 function directPrimaryImageDownloader() { return scope.getStore()?.downloadPrimaryImage || null; }
 function directSupplementaryReaderImages() { return scope.getStore()?.supplementaryReaderImages || []; }
 
@@ -216,5 +228,6 @@ function assertNoPersistentFigureFields(value) {
 module.exports = { PROVENANCE_CONTRACT, EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT,
     withDirectRewriteAnalysisSource, getDirectRewriteAnalysisContext, getDirectRewriteSource,
     directReaderAttemptsDirectory, directReaderMaterializer, directPrimaryImageDownloader, stripEphemeralFigureFields,
+    directReaderCandidateCommitDeferred,
     directSupplementaryReaderImages, directFreshAnalysisIdentity, attachDirectSourceProvenance,
     assertNoPersistentFigureFields, paperId, stableHash };

@@ -94,7 +94,7 @@ function fixture(options = {}) {
                     qualityMetricsContractVersion:'api-reader-quality-metrics-v2',qualityMetrics:parsed.qualityMetrics,
                     sourceBindingsContractVersion:rendered.plan.sourceBindingsContract,sourceBindingsSourceTextSha256:sha(text),
                     tableBindingCount:2,formulaBindingCount:1,structuredArtifactsSha256:artifacts.payloadSha256}}}};
-    sign(paper);return {paper,sourceDetails:{...snapshot,freshSourceDescriptor:descriptor},runId};
+    sign(paper);return {paper,draft:structuredClone(draft),sourceDetails:{...snapshot,freshSourceDescriptor:descriptor},runId};
 }
 
 module.exports = { fixture, sign, runId };

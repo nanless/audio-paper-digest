@@ -2463,6 +2463,71 @@ function pruneUnmaterializedApiReaderFigureBlocks(article, plannedFigures, mater
     return output.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function materializeDirectApiReaderFiguresFromEvidence(figures, imageEvidence) {
+    const planned = Array.isArray(figures) ? figures : null;
+    const evidence = Array.isArray(imageEvidence) ? imageEvidence : null;
+    const reject = message => {
+        const error = new Error(`Direct Reader Figure evidence rejected: ${message}`);
+        error.code = 'HISTORICAL_DIRECT_READER_FIGURE_EVIDENCE';
+        error.retryable = false;
+        throw error;
+    };
+    if (!planned || !evidence) reject('figures and imageEvidence must be arrays');
+    const byKey = new Map();
+    const evidenceOrdinals = new Set();
+    const evidenceUrls = new Set();
+    for (const item of evidence.filter(value => value?.kind === 'figure')) {
+        const ordinal = item?.ordinal;
+        const url = String(item?.url || '');
+        const sourceSha256 = String(item?.sourceSha256 || '');
+        const key = `${ordinal}\u0000${url}`;
+        if (!Number.isSafeInteger(ordinal) || ordinal < 1 || !url
+            || item.status !== 'ready' || !/^[a-f0-9]{64}$/.test(sourceSha256)
+            || item.sha256 !== sourceSha256
+            || item.inputId !== `figure:${ordinal}:${sourceSha256}`) {
+            reject(`ordinal ${String(ordinal)} has incomplete or drifted ready evidence`);
+        }
+        if (byKey.has(key) || evidenceOrdinals.has(ordinal) || evidenceUrls.has(url)) {
+            reject(`ordinal ${ordinal} or URL is duplicated`);
+        }
+        byKey.set(key, item);
+        evidenceOrdinals.add(ordinal);
+        evidenceUrls.add(url);
+    }
+    const seen = new Set();
+    const plannedOrdinals = new Set();
+    const plannedUrls = new Set();
+    return planned.map(figure => {
+        const ordinal = figure?.ordinal;
+        const url = String(figure?.url || '');
+        const key = `${ordinal}\u0000${url}`;
+        if (!Number.isSafeInteger(ordinal) || ordinal < 1 || !url || seen.has(key)
+            || plannedOrdinals.has(ordinal) || plannedUrls.has(url)) {
+            reject('planned Figure identity is invalid or duplicated');
+        }
+        seen.add(key);
+        plannedOrdinals.add(ordinal);
+        plannedUrls.add(url);
+        const proof = byKey.get(key);
+        if (!proof) reject(`Figure ${ordinal} lacks exact ordinal/URL/source-byte evidence`);
+        return { ...figure, assetSha256: proof.sourceSha256 };
+    });
+}
+
+function preserveReaderPostProcessingRetryability(error) {
+    const failure = error instanceof Error ? error : new Error(String(error || 'Reader post-processing failed'));
+    if (typeof failure.retryable === 'boolean') return failure;
+    const code = String(failure.code || failure.cause?.code || '');
+    const message = String(failure.message || '');
+    const status = Number.parseInt(message.match(/\bHTTP\s+(\d{3})\b/i)?.[1] || '', 10);
+    const transient = /^(?:ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ETIMEDOUT|UND_ERR_)/.test(code)
+        || [408, 425, 429].includes(status) || status >= 500
+        || /(?:fetch failed|network|socket|timed?\s*out|connection reset)/i.test(message);
+    failure.retryable = transient;
+    if (transient && !failure.code) failure.code = 'READER_POST_PROCESSING_TRANSIENT';
+    return failure;
+}
+
 async function materializeApiReaderFigures(figures, arxivId = '') {
     if (!Array.isArray(figures) || figures.length === 0) return [];
     if (require('./lib/conference-analysis-context.js').getConferenceAnalysisContext()) {
@@ -3375,6 +3440,39 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
 
 const apiReaderGenerationQueue = [];
 let activeApiReaderGenerations = 0;
+const deferredReaderCandidateTransactions = new WeakMap();
+
+function deferOrRetireReaderCandidate(result, repair, candidateDirectory, identity, payload = null) {
+    const direct = require('./lib/direct-rewrite-analysis-context.js');
+    if (!direct.directReaderCandidateCommitDeferred()) {
+        return repair.retireFailedCandidate(candidateDirectory, identity);
+    }
+    // An accepted draft is still only a recovery candidate until the caller
+    // persists the complete Reader stage.  Keep it under the existing
+    // fail-closed envelope so a downstream Figure/network failure can replay
+    // the exact draft with zero additional model calls.
+    if (payload) repair.saveFailedCandidate(candidateDirectory, identity, payload);
+    else if (!repair.loadFailedCandidate(candidateDirectory, identity)) {
+        throw new Error('Deferred Reader candidate commit lacks its recovery envelope');
+    }
+    deferredReaderCandidateTransactions.set(result, {
+        candidateDirectory,
+        identity: structuredClone(identity)
+    });
+    return null;
+}
+
+function commitDeferredReaderCandidate(result) {
+    const transaction = deferredReaderCandidateTransactions.get(result);
+    if (!transaction) return null;
+    const retired = require('./lib/reader-repair.js').retireFailedCandidate(
+        transaction.candidateDirectory,
+        transaction.identity
+    );
+    deferredReaderCandidateTransactions.delete(result);
+    if (!retired) throw new Error('Deferred Reader candidate disappeared before stage commit');
+    return retired;
+}
 
 async function withApiReaderGenerationSlot(callback) {
     if (activeApiReaderGenerations >= API_READER_CONCURRENCY) {
@@ -3830,10 +3928,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         try {
             normalizeCandidate();
             const parsed = parseCandidate(JSON.stringify(candidate));
-            const retiredCandidate = repair.retireFailedCandidate(candidateDirectory, identity);
-            return { ...parsed, contentMode, attempts: completedAttempts, imageEvidence,
+            const result = { ...parsed, contentMode, attempts: completedAttempts, imageEvidence,
                 modelImagePreflightEvidenceSha256,
-                providerImageExclusions, resumedCandidate: true, retiredCandidate, draftOrderMappings };
+                providerImageExclusions, resumedCandidate: true, draftOrderMappings };
+            const retiredCandidate = deferOrRetireReaderCandidate(
+                result, repair, candidateDirectory, identity
+            );
+            if (retiredCandidate) result.retiredCandidate = retiredCandidate;
+            return result;
         }
         catch (error) { currentIssues = repair.collectDraftIssues(candidate, error, {
             sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
@@ -3967,8 +4069,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             if (candidate) raw = JSON.stringify(candidate);
             const parsed = parseCandidate(raw);
             recordDisposition({ ...dispositionBase, disposition: 'accepted' });
-            const retiredCandidate = repair.retireFailedCandidate(candidateDirectory, identity);
-            return {
+            const result = {
                 ...parsed,
                 contentMode,
                 attempts: attempt,
@@ -3979,9 +4080,22 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 draftOrderMappings,
                 fullAttempts,
                 transportFailures,
-                retiredCandidate,
                 resumedCandidate: Boolean(recovered)
             };
+            const acceptedRecoveryPayload = {
+                status: 'failed', draft: candidate, rawDraft: JSON.stringify(candidate),
+                draftOrderMappings, readerRecoveryRevisions, issues: [],
+                attempts: attempt, fullAttempts, noProgress: 0, failureSignature: '', imageEvidence,
+                providerImageExclusions,
+                ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
+                transportFailures, validationFailureSignature: '', validationFailureStreak: 0,
+                implementationRepairAllowanceProof: null
+            };
+            const retiredCandidate = deferOrRetireReaderCandidate(
+                result, repair, candidateDirectory, identity, acceptedRecoveryPayload
+            );
+            if (retiredCandidate) result.retiredCandidate = retiredCandidate;
+            return result;
         } catch (error) {
             recordDisposition({ ...dispositionBase, disposition: 'rejected', errorCode: error.code || 'READER_VALIDATION_FAILED' });
             lastError = error;
@@ -4679,7 +4793,7 @@ const CORE_SUMMARY_V3_EXPECTED_RUNTIME_PROMPT_SHA256 = Object.freeze({
     revision: '8689694ecfe88420eb4c75de47ac488aeab24f9c1868cba49f8a7cec70b39fe6',
     tableRepair: '9730b06e94a33a9bd6c4c171b09dddafaaf14a1c1dcf082cbf28acbe9c3b68f3',
     methodRepair: 'e366628bab5fe93b5442e2aa34a5bf602d8bcce36d5c955dee4a49d2ee3e8815',
-    coreSummaryRepair: '0af4b14bdd345161270989440d709522113ca0c78123b6edf99949e5fc33f963',
+    coreSummaryRepair: '71b426652305976a810d90eb7f6de0993f91d4b71054aeb3e2c0b67bec7f2362',
     structureRepair: '47f6f5028e2e110c0dc6ce237304b89a118ae6385d7981d003cf67fee66ea733'
 });
 const LEGACY_CORE_SUMMARY_RECOVERY_ORDER = Object.freeze([
@@ -10821,14 +10935,17 @@ async function analyzePaperDeepInternal(paper) {
         apiReaderFingerprint
     );
     if (!isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
+        let generatedReaderResult = null;
+        let readerGenerationCompleted = false;
         try {
             paper.apiReaderResources = verifiedReaderResources;
-            const generatedReaderResult = await generateApiReaderArticleDetailed(
+            generatedReaderResult = await generateApiReaderArticleDetailed(
                 paper, analysis, apiReaderEvidenceContext, {
                     structuredArtifacts: sourceDetails.structuredArtifacts,
                     sourceText: rawTextForAnalysis
                 }
             );
+            readerGenerationCompleted = true;
             const injectedReaderResult = injectApiReaderFigures(
                 generatedReaderResult,
                 sourceDetails.structuredArtifacts,
@@ -10836,9 +10953,14 @@ async function analyzePaperDeepInternal(paper) {
             );
             const directContext = require('./lib/direct-rewrite-analysis-context.js');
             const directMaterializer = directContext.directReaderMaterializer();
-            const materializedFigures = await (directMaterializer || materializeApiReaderFigures)(
-                injectedReaderResult.figures, arxivId
-            );
+            const materializedFigures = directContext.getDirectRewriteAnalysisContext()
+                ? materializeDirectApiReaderFiguresFromEvidence(
+                    injectedReaderResult.figures,
+                    generatedReaderResult.imageEvidence
+                )
+                : await (directMaterializer || materializeApiReaderFigures)(
+                    injectedReaderResult.figures, arxivId
+                );
             const materializedFigureOrdinals = new Set(
                 materializedFigures.map(item => item.ordinal)
             );
@@ -10936,6 +11058,7 @@ async function analyzePaperDeepInternal(paper) {
                 } : {})
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+            commitDeferredReaderCandidate(generatedReaderResult);
             console.log(`    [deep] ✅ 初学研究者读者文章已生成`);
         } catch (error) {
             markRecoveryStage(
@@ -10945,7 +11068,9 @@ async function analyzePaperDeepInternal(paper) {
                 { error: error.message, fingerprint: apiReaderFingerprint }
             );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
-            throw suppressOuterRetryAfterReaderExhaustion(error);
+            throw readerGenerationCompleted
+                ? preserveReaderPostProcessingRetryability(error)
+                : suppressOuterRetryAfterReaderExhaustion(error);
         }
     }
 
@@ -11697,10 +11822,21 @@ async function repairCoreSummarySection(
     let candidateSummary = existingSummary;
     const repairCallModel = options.callModelFn || callModel;
     for (let attempt = 1; attempt <= 3; attempt++) {
+        const retryTargets = [];
+        if (/(?:定量|量化|比较对象|评测设置|指标名称|数值|比较方向)/.test(feedback)) {
+            retryTargets.push('量化句须在同一句内闭合比较对象、评测设置或数据集、指标、数值与方向');
+        }
+        if (/(?:结论适用边界|失败条件|未验证范围)/.test(feedback)) {
+            retryTargets.push('边界句须明确写出适用边界、失败条件或尚未验证范围');
+        }
+        if (/训练、推理或部署成本/.test(feedback)) {
+            retryTargets.push('成本句在原文已披露时须写出训练成本、推理开销、计算量、硬件、延迟或吞吐中的实际证据；只有原文确实未披露时才可使用固定不可得句');
+        }
         const summaryIssue = attempt === 1
             ? feedback
-            : `这是第 ${attempt} 次局部修复。保留上一候选中已合格的句子，只编辑或补充量化句，`
-                + `使其在同一句内闭合比较对象、评测设置或数据集、指标、数值与方向。\n上次校验错误：${feedback}`;
+            : `这是第 ${attempt} 次局部修复。保留上一候选中已合格的句子，只编辑或补充下列未通过项：`
+                + `${retryTargets.length ? retryTargets.join('；') : '逐项满足上次校验错误'}。\n`
+                + `上次校验错误：${feedback}`;
         const prompt = loadPrompt('prompts/core-summary-repair.md', {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
@@ -12371,6 +12507,8 @@ module.exports = {
     prepareTrustedArxivFigureBuffer,
     isPermanentApiReaderFigureFailure,
     pruneUnmaterializedApiReaderFigureBlocks,
+    materializeDirectApiReaderFiguresFromEvidence,
+    preserveReaderPostProcessingRetryability,
     materializeApiReaderFigures,
     fitApiReaderFigureDimensions,
     CORE_SUMMARY_MIN_CHINESE_CHARS,
@@ -12424,6 +12562,7 @@ module.exports = {
     markRecoveryStage,
     isRecoveryStageComplete,
     suppressOuterRetryAfterReaderExhaustion,
+    commitDeferredReaderCandidate,
     saveAnalysisCheckpoint,
     shouldRetainFullTextCheckpoint,
     calculateScoringDelta,

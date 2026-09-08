@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const { extractMarkdownTables } = require('../analysis-contract.js');
-const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v2';
+const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v3';
 const READER_SECTION_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
     'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
@@ -27,6 +27,35 @@ function locateReaderDraftTables(draft) {
     return found;
 }
 
+// Selection markers are semantic references to tableBindings[ordinal - 1].
+// When every table is a uniquely bound selection marker, a complete marker
+// permutation can therefore be normalized without interpreting prose or table
+// contents.  Any mixed, malformed, duplicate, missing or inline marker set is
+// left untouched for the authoritative parser to reject.
+function completeSelectionMarkerPermutation(draft, tables) {
+    const sections = Array.isArray(draft?.sections) ? draft.sections : [];
+    const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
+    const count = bindings.length;
+    if (!count || tables.length !== count || tables.some(table => !table.marker)
+        || bindings.some((binding, index) => binding?.tableIndex !== index + 1
+            || !Object.prototype.hasOwnProperty.call(binding, 'selection'))) return null;
+    const allMarkerTokens = sections.flatMap(section =>
+        String(section?.body || '').match(/\[\[TABLE_[^\]]*\]\]/g) || []);
+    if (allMarkerTokens.length !== count) return null;
+    const ordinals = tables.map(table => table.markerIndex);
+    if (ordinals.some(ordinal => !Number.isSafeInteger(ordinal) || ordinal < 1 || ordinal > count)
+        || new Set(ordinals).size !== count) return null;
+    for (let ordinal = 1; ordinal <= count; ordinal += 1) {
+        const marker = `[[TABLE_${ordinal}]]`;
+        const occurrences = sections.reduce((total, section) => total
+            + String(section?.body || '').split(marker).length - 1, 0);
+        const standaloneBlocks = sections.reduce((total, section) => total
+            + String(section?.body || '').split(/\n\s*\n/).filter(block => block.trim() === marker).length, 0);
+        if (occurrences !== 1 || standaloneBlocks !== 1) return null;
+    }
+    return ordinals;
+}
+
 function normalizeReaderDraftOrder(input) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
@@ -34,7 +63,8 @@ function normalizeReaderDraftOrder(input) {
     const ranked = sections.map((section, index) => ({ section, index }));
     // Unknown/malformed kinds belong to the parser's shape gate; do not invent
     // an order or alter indices before it reports them.
-    if (ranked.every(({ section }) => READER_SECTION_KINDS.includes(section?.kind))) {
+    const sectionsAreKnown = ranked.every(({ section }) => READER_SECTION_KINDS.includes(section?.kind));
+    if (sectionsAreKnown) {
         ranked.sort((a, b) => READER_SECTION_KINDS.indexOf(a.section.kind)
             - READER_SECTION_KINDS.indexOf(b.section.kind) || a.index - b.index);
     }
@@ -72,6 +102,26 @@ function normalizeReaderDraftOrder(input) {
         for (const section of sections) {
             if (typeof section?.body === 'string') section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
                 (marker, index) => markerMap.has(Number(index)) ? `[[TABLE_${markerMap.get(Number(index))}]]` : marker);
+        }
+    } else if (!changed && sectionsAreKnown && Array.isArray(draft.tableBindings)) {
+        const markerOrdinals = completeSelectionMarkerPermutation(draft, originalTables);
+        if (markerOrdinals && markerOrdinals.some((ordinal, index) => ordinal !== index + 1)) {
+            tableMap = originalTables.map((table, canonicalIndex) => ({
+                rawIndex: table.markerIndex - 1,
+                canonicalIndex,
+                rawSectionIndex: table.sectionIndex,
+                canonicalSectionIndex: table.sectionIndex
+            }));
+            const markerMap = new Map(markerOrdinals.map((ordinal, canonicalIndex) =>
+                [ordinal, canonicalIndex + 1]));
+            draft.tableBindings = tableMap.map(item => ({
+                ...draft.tableBindings[item.rawIndex], tableIndex: item.canonicalIndex + 1
+            }));
+            for (const section of sections) {
+                if (typeof section?.body === 'string') section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
+                    (marker, index) => markerMap.has(Number(index))
+                        ? `[[TABLE_${markerMap.get(Number(index))}]]` : marker);
+            }
         }
     }
     if (Array.isArray(draft?.sections)) draft.sections = ranked.map(item => item.section);

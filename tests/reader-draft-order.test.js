@@ -1,7 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const cheerio = require('cheerio');
 const { normalizeReaderDraftOrder, locateReaderDraftTables } = require('../scripts/lib/reader-draft-order.js');
 const { buildRepairTargets, collectDraftIssues } = require('../scripts/lib/reader-repair.js');
+const { compileReaderTableSelections } = require('../scripts/lib/reader-tables.js');
 
 const markdown = value => `| Method | Value |\n| --- | --- |\n| ${value} | 12 |`;
 const binding = (tableIndex, quote) => ({ tableIndex, sourceType: 'source_quotes', sourceTableOrdinal: null,
@@ -55,6 +59,60 @@ test('mixed handwritten/selection tables retain order and simultaneous marker re
     assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
 });
 
+test('canonical sections normalize a complete selection marker permutation without changing prose bytes', () => {
+    const html = fs.readFileSync(path.join(__dirname, 'fixtures/arxiv-reader-source-bindings.html'), 'utf8');
+    const sourceText = cheerio.load(html)('body').text();
+    const analyzer = require('../scripts/deep-analyzer.js');
+    const artifacts = analyzer.bindStructuredArtifactsToText(
+        analyzer.parseArxivStructuredArtifactsFromHtml(html, '2609.00001v1', '2609.00001v1'), sourceText);
+    const select = (tableIndex, sourceTableOrdinal, sourceRows) => ({ tableIndex, selection: {
+        sourceTableOrdinal, sourceRows, sourceColumns: [0, 1, 2]
+    } });
+    const originalBody = '先解释部署资源表，保留这段文字和空行。\n\n[[TABLE_2]]\n\n'
+        + '再解释识别结果表，正文只能改 marker token。\n\n[[TABLE_1]]\n\n最后收束比较。';
+    const input = { sections: [{ kind: 'experiment_setup', heading: 'setup', body: originalBody }],
+        tableBindings: [select(1, 1, [1, 2, 3]), select(2, 2, [0, 1, 2])],
+        conceptBridges: [], figurePlacements: [], formulaBindings: [] };
+    const frozen = JSON.stringify(input);
+    const { draft, mapping } = normalizeReaderDraftOrder(input);
+    assert.equal(JSON.stringify(input), frozen);
+    assert.equal(mapping.contract, 'reader-draft-order-v3');
+    assert.deepEqual(mapping.tables.map(item => [item.rawIndex, item.canonicalIndex]), [[1, 0], [0, 1]]);
+    assert.deepEqual(draft.tableBindings.map(item => [item.tableIndex, item.selection.sourceTableOrdinal]),
+        [[1, 2], [2, 1]]);
+    assert.equal(draft.sections[0].body.replace(/\[\[TABLE_\d+\]\]/g, '[[TABLE]]'),
+        originalBody.replace(/\[\[TABLE_\d+\]\]/g, '[[TABLE]]'));
+    assert.deepEqual([...draft.sections[0].body.matchAll(/\[\[TABLE_(\d+)\]\]/g)].map(match => Number(match[1])), [1, 2]);
+    const compiled = compileReaderTableSelections(draft.sections, draft.tableBindings, artifacts);
+    assert.deepEqual(compiled.tableBindings.map(item => item.sourceTableOrdinal), [2, 1]);
+    assert.ok(compiled.sections[0].body.indexOf('| System | Memory | RTF |')
+        < compiled.sections[0].body.indexOf('| System | test-clean | test-other |'));
+    assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
+});
+
+test('canonical marker permutation normalization rejects ambiguous and mixed counterexamples', () => {
+    const select = (tableIndex, sourceTableOrdinal = tableIndex) => ({ tableIndex, selection: {
+        sourceTableOrdinal, sourceRows: [0, 1], sourceColumns: [0, 1]
+    } });
+    const ordinary = binding(1, 'source quote long enough');
+    const cases = [
+        { body: '[[TABLE_2]]\n\n[[TABLE_2]]', bindings: [select(1), select(2)] },
+        { body: '[[TABLE_2]]', bindings: [select(1), select(2)] },
+        { body: `[[TABLE_2]]\n\n${markdown('handwritten')}`, bindings: [ordinary, select(2)] },
+        { body: 'inline [[TABLE_2]]\n\n[[TABLE_1]]', bindings: [select(1), select(2)] },
+        { body: '[[TABLE_2]]\n\n[[TABLE_1]]', bindings: [ordinary, select(2)] },
+        { body: '[[TABLE_2]]\n\n[[TABLE_1]]', bindings: [select(1), { ...select(2), tableIndex: 1 }] }
+    ];
+    for (const item of cases) {
+        const input = { sections: [{ kind: 'experiment_setup', heading: 'setup', body: item.body }],
+            tableBindings: item.bindings, conceptBridges: [], figurePlacements: [], formulaBindings: [] };
+        const before = JSON.stringify(input);
+        assert.deepEqual(normalizeReaderDraftOrder(input).draft, input);
+        assert.equal(JSON.stringify(input), before);
+        assert.throws(() => compileReaderTableSelections(input.sections, input.tableBindings, { tables: [] }));
+    }
+});
+
 test('unsorted ambiguous bindings fail closed with paths on the unchanged input, never discard tables', () => {
     for (const alter of [draft => draft.tableBindings.pop(), draft => { draft.tableBindings[1].tableIndex = 1; },
         draft => { draft.sections[0].body = '[[TABLE_3]]'; }]) {
@@ -89,7 +147,7 @@ test('complete bridge marker permutation normalizes array only and records node 
     const before = JSON.stringify(input);
     const { draft, mapping } = normalizeReaderDraftOrder(input);
     assert.equal(JSON.stringify(input), before);
-    assert.equal(mapping.contract, 'reader-draft-order-v2');
+    assert.equal(mapping.contract, 'reader-draft-order-v3');
     assert.deepEqual(draft.sections, input.sections);
     assert.deepEqual(draft.conceptBridges, [input.conceptBridges[1], input.conceptBridges[2], input.conceptBridges[0]]);
     assert.deepEqual(mapping.conceptBridges.map(item => [item.rawIndex, item.canonicalIndex]), [[1, 0], [2, 1], [0, 2]]);

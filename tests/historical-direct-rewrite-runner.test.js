@@ -332,6 +332,7 @@ test('generic direct runner captures model payloads from fresh sources only and 
                 : { directPaperId: item.paperId, id: item.paperId }) });
             capturedModelPayloads.push(payload);
             assert.equal(active.paperId, item.paperId);
+            assert.equal(active.deferReaderCandidateCommit, true);
             assert.equal(sourceDetails.paperId, item.paperId);
             return sealedAnalysis(item, sourceDescriptor, sourceDetails);
         }
