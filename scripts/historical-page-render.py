@@ -4,7 +4,9 @@
 import json
 import base64
 import hashlib
+import os
 import re
+import stat
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -17,6 +19,7 @@ from runtime_guard import require_external_runtime
 DIRECT_PUBLICATION_SOURCE_CONTRACT = 'historical-direct-publication-source-v1'
 DIRECT_PUBLICATION_METADATA_CONTRACT = 'historical-arxiv-publication-metadata-v1'
 SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
+MAX_PACKET_BYTES = 64 * 1024 * 1024
 
 
 def canonical_iso_z(value):
@@ -251,11 +254,32 @@ def render_packet(packet):
     return {'markdown': markdown, 'assets': assets}
 
 
+def read_packet_bytes(argv):
+    if len(argv) == 1:
+        raw = sys.stdin.buffer.read(MAX_PACKET_BYTES + 1)
+    elif len(argv) == 3 and argv[1] == '--input-file':
+        filename = Path(argv[2])
+        if not filename.is_absolute():
+            raise ValueError('projection packet input file must be absolute')
+        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        descriptor = os.open(filename, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ValueError('projection packet input must be a regular file')
+            with os.fdopen(descriptor, 'rb', closefd=False) as handle:
+                raw = handle.read(MAX_PACKET_BYTES + 1)
+        finally:
+            os.close(descriptor)
+    else:
+        raise ValueError('use --input-file ABSOLUTE.json or stdin')
+    if len(raw) > MAX_PACKET_BYTES:
+        raise ValueError('projection packet is too large')
+    return raw
+
+
 def main():
     require_external_runtime('historical-page-render.py')
-    raw = sys.stdin.buffer.read(64 * 1024 * 1024 + 1)
-    if len(raw) > 64 * 1024 * 1024:
-        raise ValueError('projection packet is too large')
+    raw = read_packet_bytes(sys.argv)
     rendered = render_packet(json.loads(raw.decode('utf-8')))
     sys.stdout.write(json.dumps(rendered, ensure_ascii=False))
 

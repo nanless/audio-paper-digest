@@ -107,8 +107,10 @@ function normalizeConceptBridgeMarkerLocations(draft) {
         const location = tokens.find(token => token.marker === bridge.marker);
         if (!location) {
             const before = sections[targetIndex].body;
-            if (!before || /\s$/.test(before)) continue;
-            sections[targetIndex].body = `${before}\n\n${bridge.marker}`;
+            const trailingLineFeeds = before.match(/\n*$/)?.[0] || '';
+            const beforeStem = before.slice(0, before.length - trailingLineFeeds.length);
+            if (!beforeStem || /[ \t]$/.test(beforeStem)) continue;
+            sections[targetIndex].body = `${beforeStem}\n\n${bridge.marker}${trailingLineFeeds}`;
             changes.push({ bridgeIndex, marker: bridge.marker, operation: 'insert',
                 fromSectionIndex: null, toSectionIndex: targetIndex,
                 fromBodySha256: null, toBodyBeforeSha256: sha(before),
@@ -118,12 +120,17 @@ function normalizeConceptBridgeMarkerLocations(draft) {
         if (location.sectionIndex === targetIndex) continue;
         const source = sections[location.sectionIndex];
         const span = `\n\n${bridge.marker}`;
-        if (!source.body.endsWith(span) || !sections[targetIndex].body
-            || /\s$/.test(sections[targetIndex].body)) continue;
+        const sourceTrailingLineFeeds = source.body.match(/\n*$/)?.[0] || '';
+        const sourceStem = source.body.slice(0, source.body.length - sourceTrailingLineFeeds.length);
+        const targetTrailingLineFeeds = sections[targetIndex].body.match(/\n*$/)?.[0] || '';
+        const targetStem = sections[targetIndex].body.slice(
+            0, sections[targetIndex].body.length - targetTrailingLineFeeds.length
+        );
+        if (!sourceStem.endsWith(span) || !targetStem || /[ \t]$/.test(targetStem)) continue;
         const sourceBefore = source.body;
         const targetBefore = sections[targetIndex].body;
-        source.body = source.body.slice(0, -span.length);
-        sections[targetIndex].body = targetBefore + span;
+        source.body = sourceStem.slice(0, -span.length) + sourceTrailingLineFeeds;
+        sections[targetIndex].body = targetStem + span + targetTrailingLineFeeds;
         changes.push({ bridgeIndex, marker: bridge.marker, operation: 'move',
             fromSectionIndex: location.sectionIndex, toSectionIndex: targetIndex,
             fromBodyBeforeSha256: sha(sourceBefore), fromBodyAfterSha256: sha(source.body),

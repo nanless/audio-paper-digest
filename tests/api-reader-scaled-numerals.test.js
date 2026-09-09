@@ -37,12 +37,13 @@ describe('Reader 明确量级是完整数值，不是可单独替换的后缀', 
         assert.equal(repair('0.00001万词'), '0.1 词');
         assert.equal(repair('1.234567890123万词'), '12,345.67890123 词');
         assert.equal(repair('-1.25万词'), '-12,500 词');
+        assert.equal(repair('12.5万亿词'), '12,500,000,000,000 词');
         assert.equal(normalizeReaderEditorialSurface('规模为1万。',
             [{ code: 'quantitative_chinese_numeral', match: '1万' }]), '规模为 10,000。');
     });
 
     it('不可确定的复合量级/分数/科学记号/数字碎片不局部乘或换后缀', () => {
-        for (const raw of ['12.5万亿词', '5.5百万参数', '1/2万词', '1 / 2万词',
+        for (const raw of ['5.5百万参数', '1/2万词', '1 / 2万词',
                            '1e3万词', 'v2万词', '1.2.5万词']) {
             const spaced = normalizeReaderEditorialSurface(raw);
             assert.equal(repair(raw), spaced, raw);

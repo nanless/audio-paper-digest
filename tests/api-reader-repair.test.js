@@ -98,17 +98,65 @@ test('blocking marker repairs do not expand into diagnostic-only table rewrites'
     ];
     const targets = buildRepairTargets(draft, issues);
     assert.deepEqual(targets.map(target => target.path), [
-        '/conceptBridges/2', '/sections/2/body', '/sections/4/body'
+        '/sections/4/body', '/sections/2/body'
     ]);
     assert.ok(targets.length <= 8);
     assert.ok(targets.every(target => target.oldSha256 === hashDraft(
-        target.path === '/conceptBridges/2' ? draft.conceptBridges[2]
-            : draft.sections[Number(target.path.match(/sections\/(\d+)/)[1])].body
+        draft.sections[Number(target.path.match(/sections\/(\d+)/)[1])].body
     )));
 
     const diagnosticOnly = buildRepairTargets(draft, [issues.at(-1)]);
     assert.ok(diagnosticOnly.some(target => target.path === '/tableBindings/3'),
         'diagnostics remain actionable when no blocking issue exists');
+});
+
+test('multiple duplicated concept markers stay within the patch contract and only authorize bodies', () => {
+    const draft = fixture();
+    for (const bridge of draft.conceptBridges) {
+        draft.sections[3].body = draft.sections[3].body.replace(bridge.marker, '');
+    }
+    const placements = [
+        { sectionKind: 'component', sections: [3, 4] },
+        { sectionKind: 'ablation', sections: [4, 8] },
+        { sectionKind: 'reproduction', sections: [5, 10] },
+        { sectionKind: 'synthesis', sections: [5, 11] }
+    ];
+    placements.forEach((placement, index) => {
+        const bridge = draft.conceptBridges[index];
+        bridge.sectionKind = placement.sectionKind;
+        placement.sections.forEach(sectionIndex => {
+            draft.sections[sectionIndex].body += `\n\n${bridge.marker}`;
+        });
+    });
+    const issues = [
+        { path: null, message: '读者文章 conceptBridges[0] 未形成有效术语桥'
+            + '（markerOccurrences=2；已有marker必须唯一独占一段且位于声明小节）' },
+        ...draft.conceptBridges.map((_bridge, index) => ({ path: `/conceptBridges/${index}`,
+            message: `conceptBridges[${index}] marker 必须唯一独占一段并位于声明 kind 小节` })),
+        { path: null, message: 'Reader patch rejected: Reader patch has invalid shape or stale draft SHA' }
+    ];
+    const paths = buildRepairTargets(draft, issues).map(target => target.path);
+    assert.deepEqual(paths, [
+        '/sections/3/body', '/sections/4/body', '/sections/8/body',
+        '/sections/5/body', '/sections/10/body', '/sections/11/body'
+    ]);
+    assert.equal(paths.length, 6);
+    assert.ok(paths.every(pointer => pointer.startsWith('/sections/')));
+});
+
+test('mixed blocking diagnostics can never authorize more nodes than the patch protocol accepts', () => {
+    const draft = fixture();
+    ['background', 'related_work', 'problem', 'component'].forEach((sectionKind, index) => {
+        draft.conceptBridges[index].sectionKind = sectionKind;
+    });
+    const issues = [
+        { path: null, message: 'readerTitle 必须改为论文特有标题' },
+        ...draft.conceptBridges.map((_bridge, index) => ({ path: `/conceptBridges/${index}`,
+            message: `conceptBridges[${index}] marker 必须唯一独占一段并位于声明 kind 小节` }))
+    ];
+    const paths = buildRepairTargets(draft, issues).map(target => target.path);
+    assert.equal(paths.length, 8);
+    assert.equal(paths[0], '/readerTitle');
 });
 
 test('patch rejects duplicate, overlapping, prototype, unknown and out-of-range paths', () => {
@@ -197,6 +245,26 @@ test('an unresolved quantitative Chinese numeral targets its attached-count sect
     const targets = buildRepairTargets(draft, [{ path: null,
         message: '读者文章文风校验失败: quantitative_chinese_numeral:一次' }]);
     assert.deepEqual(targets.map(target => target.path), ['/sections/10/body']);
+});
+
+test('NFKC-normalized quantitative surfaces still target the exact full-width punctuation section', () => {
+    const draft = fixture();
+    draft.sections[11].body += '待验证的问题有三：一是延迟，二是成本，三是泛化。';
+    const targets = buildRepairTargets(draft, [{ path: null,
+        message: '读者文章文风校验失败: quantitative_chinese_numeral:三:一' }]);
+    assert.deepEqual(targets.map(target => target.path), ['/sections/11/body']);
+});
+
+test('comparison-unit prose localizes to its exact section without authorizing table bindings', () => {
+    const draft = fixture();
+    const excerpt = '该表后的解释是：WER 从 30.65 降至 29.41，体现可懂度提升。';
+    draft.sections[8].body += `\n\n${excerpt}`;
+    draft.tableBindings = [0, 1, 2, 3].map(index => ({ tableIndex: index + 1,
+        sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
+        sourceQuotes: [`长度足够的来源证据句 ${index} 用于验证修复目标不会扩散。`] }));
+    const targets = buildRepairTargets(draft, [{ path: null,
+        message: `读者文章文风校验失败: comparison_unit_missing:${excerpt}` }]);
+    assert.deepEqual(targets.map(target => target.path), ['/sections/8/body']);
 });
 
 test('a broken prose excerpt targets the exact containing section even when other diagnostics exist', () => {
@@ -525,6 +593,170 @@ test('distinct malformed patches consume attempts without falsely exhausting unc
     envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
     assert.equal(envelope.payload.attempts, 3, 'transport failure does not consume a content attempt');
     assert.equal(envelope.payload.noProgress, 0);
+});
+
+test('Reader patch parser only restores omitted enclosing array/root EOF delimiters', () => {
+    const { parseReaderPatchJson } = require('../scripts/lib/reader-repair.js');
+    const patch = {
+        version: 1,
+        draftSha256: 'a'.repeat(64),
+        replacements: [{
+            path: '/readerTitle', oldSha256: 'b'.repeat(64), value: '完整标题'
+        }]
+    };
+    const complete = JSON.stringify(patch);
+    assert.deepEqual(parseReaderPatchJson(complete), patch);
+    assert.deepEqual(parseReaderPatchJson(complete.slice(0, -1)), patch,
+        'a complete replacements array may receive its omitted root delimiter');
+    assert.deepEqual(parseReaderPatchJson(complete.slice(0, -2)), patch,
+        'a complete final replacement may receive only the omitted array/root delimiters');
+    assert.throws(() => parseReaderPatchJson(complete.slice(0, -3)), SyntaxError,
+        'the parser must not close an incomplete replacement object');
+    assert.throws(() => parseReaderPatchJson('{"version":1,"draftSha256":"unterminated'), SyntaxError);
+    assert.throws(() => parseReaderPatchJson('{"version":tru'), SyntaxError);
+    assert.throws(() => parseReaderPatchJson('{"version":1,"replacements":[],'), SyntaxError);
+    assert.throws(() => parseReaderPatchJson('{"version":1,"replacements":[}'), SyntaxError);
+});
+
+test('global wide-table repair targets exactly one diagnosed section and binding pair', () => {
+    const { buildRepairTargets } = require('../scripts/lib/reader-repair.js');
+    const draft = fixture();
+    draft.sections[0].body += '\n\n表 1 的比较问题与解释足够长，供局部修复定位。\n\n'
+        + '| 方法 | 条件 | 指标甲 | 指标乙 | 说明 |\n'
+        + '| --- | --- | --- | --- | --- |\n'
+        + '| A | clean | 1 | 2 | baseline |\n\n'
+        + '表 1 的结果说明保留成立范围，且不会替代完整来源门禁。';
+    draft.sections[1].body += '\n\n表 2 的比较问题与解释足够长，供局部修复定位。\n\n'
+        + '| 方法 | 条件 | 指标甲 | 指标乙 | 说明 |\n'
+        + '| --- | --- | --- | --- | --- |\n'
+        + '| B | noisy | 3 | 4 | candidate |\n\n'
+        + '表 2 的结果说明保留成立范围，且不会替代完整来源门禁。';
+    draft.tableBindings = [
+        { tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: ['first source quote is long enough'] },
+        { tableIndex: 2, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: ['second source quote is long enough'] }
+    ];
+    const targets = buildRepairTargets(draft, [
+        { path: null, message: '读者文章至少需要 2 张 5 列以上的宽表' },
+        { path: '/tableBindings/1', diagnosticOnly: true,
+            message: 'tableBindings[1] sourceQuotes 未提供全文连续原句' },
+        { path: '/tableBindings/0', diagnosticOnly: true,
+            message: 'tableBindings[0] sourceQuotes 未提供全文连续原句' }
+    ]);
+    assert.deepEqual(targets.map(target => target.path), [
+        '/tableBindings/0', '/sections/0/body'
+    ]);
+    const fallbackTargets = buildRepairTargets(draft, [
+        { path: null, message: '读者文章至少需要 2 张 5 列以上的宽表' }
+    ]);
+    assert.deepEqual(fallbackTargets.map(target => target.path), [
+        '/tableBindings/0', '/sections/0/body'
+    ], 'even without a per-table diagnostic the global gate must stay on one table pair');
+});
+
+test('global wide-table repair prefers a narrow table isolated in the smallest section', () => {
+    const { buildRepairTargets } = require('../scripts/lib/reader-repair.js');
+    const draft = fixture();
+    const table = (name, columns) => {
+        const headers = Array.from({ length: columns }, (_value, index) => `列${index + 1}`);
+        return `| ${headers.join(' | ')} |\n| ${headers.map(() => '---').join(' | ')} |\n`
+            + `| ${headers.map((header, index) => `${name}${index + 1}`).join(' | ')} |`;
+    };
+    draft.sections[0].body += `\n\n${table('甲', 4)}\n\n${table('乙', 4)}`;
+    draft.sections[1].body += `\n\n${table('丙', 5)}\n\n${table('丁', 4)}`;
+    draft.sections[2].body += `\n\n${table('戊', 4)}`;
+    draft.tableBindings = Array.from({ length: 5 }, (_value, index) => ({
+        tableIndex: index + 1,
+        sourceType: 'source_quotes',
+        sourceTableOrdinal: null,
+        cellBindings: [],
+        sourceQuotes: [`source quote ${index + 1} is long enough for binding`]
+    }));
+    const targets = buildRepairTargets(draft, [
+        { path: null, message: '读者文章至少需要 2 张 5 列以上的宽表' }
+    ]);
+    assert.deepEqual(targets.map(target => target.path), [
+        '/tableBindings/4', '/sections/2/body'
+    ]);
+});
+
+test('missing narrative table repair targets only the final table section and missing binding', () => {
+    const draft = fixture();
+    for (const [offset, sectionIndex] of [6, 7, 8].entries()) {
+        draft.sections[sectionIndex].body += `\n\n表 ${offset + 1} 的比较问题与解释足够长，供局部补表修复定位。\n\n`
+            + '| 方法 | 条件 | 指标 | 说明 |\n'
+            + '| --- | --- | --- | --- |\n'
+            + `| 方法${offset + 1} | clean | ${offset + 1} | evidence |\n\n`
+            + `表 ${offset + 1} 的结果说明保留成立范围，并交代这张表不能支持的结论。`;
+    }
+    draft.tableBindings = [0, 1, 2, 3].map(index => ({ tableIndex: index + 1,
+        sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
+        sourceQuotes: [`source quote ${index} is long enough for binding`] }));
+    const targets = buildRepairTargets(draft, [{ path: null,
+        message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' }]);
+    assert.deepEqual(targets.map(target => target.path), [
+        '/sections/8/body', '/tableBindings/3'
+    ]);
+});
+
+test('missing result table repair moves one stable experiment table/binding into result', () => {
+    const draft = fixture();
+    const table = index => `\n\n表 ${index} 的比较条件。\n\n`
+        + '| 配置项 | 数值 | 单位 |\n| --- | --- | --- |\n'
+        + `| 设置 ${index} | ${index} | 步 |\n\n表 ${index} 的解释与边界。`;
+    draft.sections[6].body += table(1) + table(2) + table(3) + table(4);
+    draft.tableBindings = [0, 1, 2, 3].map(index => ({
+        tableIndex: index + 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+        cellBindings: [], sourceQuotes: [`source quote ${index + 1} is long enough`]
+    }));
+    const targets = buildRepairTargets(draft, [
+        { path: null, message: '读者文章主结果表覆盖不足：原论文 TABLE_2/TABLE_9 明确提供定量结果' },
+        { path: null, code: 'reader_result_table_missing',
+            message: '读者文章主结果表覆盖不足：原论文 TABLE_2/TABLE_9 明确提供定量结果' },
+        { path: '/tableBindings/0', diagnosticOnly: true,
+            message: 'tableBindings[0] sourceQuotes 仅供诊断' }
+    ]);
+    assert.deepEqual(targets.map(target => target.path), [
+        '/sections/6/body', '/sections/7/body', '/tableBindings/3'
+    ]);
+    const context = buildRepairContext(draft, [
+        { path: null, code: 'reader_result_table_missing',
+            message: '读者文章主结果表覆盖不足：原论文 TABLE_2/TABLE_9 明确提供定量结果' }
+    ], '完整来源');
+    assert.equal(context.atomicOperation.kind, 'relocate_result_table_v1');
+    assert.deepEqual(context.atomicOperation.requiredReplacementPaths, targets.map(target => target.path));
+
+    const allowed = context.targets.map(target => target.path);
+    assert.throws(() => applyReaderPatch(draft, patchFor(draft, [[
+        '/sections/6/body', draft.sections[6].body.replace('配置项', '结果指标')
+    ]]), allowed, { atomicOperation: context.atomicOperation }), /every required atomic target/);
+
+    const wrongPatch = patchFor(draft, [
+        ['/sections/6/body', draft.sections[6].body.replace('配置项', '结果指标')],
+        ['/sections/7/body', `${draft.sections[7].body}\n\n这里补充结果说明，但仍未放入数字表。`],
+        ['/tableBindings/3', structuredClone(draft.tableBindings[3])]
+    ]);
+    assert.throws(() => applyReaderPatch(draft, wrongPatch, allowed, {
+        atomicOperation: context.atomicOperation
+    }), /atomic table-move postconditions/);
+
+    const donorBlock = table(4);
+    assert.ok(draft.sections[6].body.endsWith(donorBlock));
+    const resultBlock = '\n\n表 4 的主结果比较条件。\n\n'
+        + '| 方法 | 条件 | 指标 A | 指标 B |\n| --- | --- | --- | --- |\n'
+        + '| 方法 4 | 设置 40 | 400 | 4000 |\n\n表 4 的结果解释与边界。';
+    const validPatch = patchFor(draft, [
+        ['/sections/6/body', draft.sections[6].body.slice(0, -donorBlock.length)],
+        ['/sections/7/body', `${draft.sections[7].body}${resultBlock}`],
+        ['/tableBindings/3', structuredClone(draft.tableBindings[3])]
+    ]);
+    const merged = applyReaderPatch(draft, validPatch, allowed, {
+        atomicOperation: context.atomicOperation
+    });
+    assert.equal((merged.sections[6].body.match(/^\|/gm) || []).length,
+        (draft.sections[6].body.match(/^\|/gm) || []).length - 3);
+    assert.ok(merged.sections[7].body.includes('| 方法 4 | 设置 40 | 400 | 4000 |'));
 });
 
 test('normalized validation signatures stop the same binding issue after two changing drafts', async t => {
@@ -951,7 +1183,7 @@ test('received truncated or incomplete patch responses consume content budget wi
     }
 });
 
-test('a non-final 8000-token patch truncation uses the remaining ordinary 8000-token slot', async t => {
+test('a non-final exact 8000-token patch truncation immediately uses the one bounded 16000-token slot', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99987', title: '局部截断自适应预算' };
@@ -991,7 +1223,7 @@ test('a non-final 8000-token patch truncation uses the remaining ordinary 8000-t
     assert.deepEqual(calls, [
         { stage: 'apiReaderArticle', tokens: 48000 },
         { stage: 'apiReaderRepair', tokens: 8000 },
-        { stage: 'apiReaderRepair', tokens: 8000 }
+        { stage: 'apiReaderRepair', tokens: 16000 }
     ]);
     const afterRetry = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
     assert.equal(afterRetry.payload.draft.readerTitle, '声音表示如何与语义条件连接起来');

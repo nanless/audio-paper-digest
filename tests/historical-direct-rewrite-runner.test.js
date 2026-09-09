@@ -999,6 +999,52 @@ test('analysis_complete crash strictly replays source and analysis receipts dire
         audit.recoveryStatus]), [['analysis_complete', 'staged', 'completed-analysis-replayed']]);
 });
 
+test('analysis_complete Reader surface repair is atomically resealed before no-LLM staging replay', async t => {
+    const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
+        .find(entry => entry.paperId === 'arxiv:2601.00001');
+    let analyses = 0; const capture = directArxivCapture();
+    const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: capture, renderDirectPage,
+        analyze: async ({ sourceDescriptor, sourceDetails }) => {
+            analyses += 1;
+            return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }
+    });
+    const completed = asInterruptedAnalysisComplete(
+        JSON.parse(fs.readFileSync(first.registryFile, 'utf8')), f.plan, item.paperId);
+    const beforeEntry = completed.entries.find(entry => entry.paperId === item.paperId);
+    write(first.registryFile, `${JSON.stringify(completed, null, 2)}\n`);
+    const audits = [];
+    const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'arxiv', arxivGeneration: 1 }, {
+        captureFreshArxivRewriteSource: capture, renderDirectPage,
+        analyze: async () => { analyses += 1; throw new Error('surface reseal must not call analysis'); },
+        repairCompletedAnalysisSurface: analysis => {
+            analysis.warnings = [...(analysis.warnings || []), 'deterministic surface reseal fixture'];
+            return true;
+        },
+        onCrashRecoveryAudit: audit => audits.push(audit)
+    });
+    assert.equal(resumed.status, 'complete');
+    assert.equal(analyses, 1);
+    const afterEntry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
+        .find(entry => entry.paperId === item.paperId);
+    assert.equal(afterEntry.status, 'staged');
+    assert.notEqual(afterEntry.analysis.analysisFileSha256,
+        beforeEntry.analysis.analysisFileSha256);
+    assert.notEqual(afterEntry.analysis.analysisRecordSha256,
+        beforeEntry.analysis.analysisRecordSha256);
+    const stored = fs.readFileSync(path.join(afterEntry.analysis.directory, 'analysis.json'));
+    assert.equal(sha(stored), afterEntry.analysis.analysisFileSha256);
+    assert.equal(runner.stableHash(JSON.parse(stored)),
+        afterEntry.analysis.analysisRecordSha256);
+    assert.deepEqual(audits.map(audit => [audit.fromStatus, audit.normalizedStatus,
+        audit.recoveryStatus]), [[
+        'analysis_complete', 'staged', 'completed-analysis-surface-resealed'
+    ]]);
+});
+
 test('completed analysis staging failure never falls through to analysis and the next run retries staging', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
@@ -1155,6 +1201,27 @@ test('arXiv Reader materializer skips one permanently oversized optional Figure 
             if (url.endsWith('figure-1.png')) {
                 const error = new Error('response body 6.0MB exceeds limit');
                 error.code = 'RESPONSE_TOO_LARGE'; throw error;
+            }
+            return { bytes: Buffer.from('valid-peer-pixels'), mediaType: 'image/png' };
+        }
+    });
+    assert.deepEqual(result.map(item => item.ordinal), [2]);
+    assert.equal(result[0].rawBytes.toString(), 'valid-peer-pixels');
+    assert.equal('tempPath' in result[0], false);
+    assert.deepEqual(fs.readdirSync(root), []);
+});
+
+test('arXiv Reader materializer skips one permanently missing optional Figure and keeps its peer', async t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-reader-missing-figure-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const figures = [1, 2].map(ordinal => ({ ordinal,
+        url: `https://arxiv.org/html/2604.14806v1/latex/img/figure-${ordinal}.png` }));
+    const result = await runner.ephemeralArxivMaterializer('2604.14806', figures, {
+        freshArxivSourceRoot: path.join(root, 'sources'), temporaryRoot: root,
+        persistentRoots: [], figureRetrySleep: async () => {},
+        fetchFigure: async url => {
+            if (url.endsWith('figure-1.png')) {
+                throw new Error('arXiv Figure download failed: HTTP 404');
             }
             return { bytes: Buffer.from('valid-peer-pixels'), mediaType: 'image/png' };
         }

@@ -50,7 +50,7 @@ arXiv ID：{arxivId}
 
 表格与绑定输入：
 
-14. tableBindings按最终正文顺序一一对应。仅 `TABLE_<ordinal>_SELECTION` 明示 `eligible:true` 时优先selection；只要正文表使用了该 `TABLE_<ordinal>` 矩阵中的任一数字，就必须用selection直接选择原表行列，禁止把这些DOM表格数字抄进手写Markdown后再用source_quotes绑定。flattened全文不保证包含DOM表格单元格，因此source_quotes不能替代原表绑定，也不得为原表数字自行计算差值、百分比、四舍五入值或添加单位。`eligible:false` 的reasonCodes说明空表头、行身份不明、TeX双写等问题，不能反复尝试selection或猜表头。无法安全选择时只能使用全文连续原句中实际出现的数字制作source_quotes表；无充分逐字quote时删去该无证据表，改选另一张eligible原表或报告具体缺项，不造证据、不把绑定失败当成作者没报告。
+14. tableBindings按最终正文顺序一一对应。selection 的 `sourceTableOrdinal` 只能取 `TABLE_ORDINALS_AVAILABLE` 明确列出的值，并且对应的 `TABLE_<ordinal>_SELECTION` 必须明示 `eligible:true`；若清单为 `[]`，不得输出任何 TABLE marker 或 selection 绑定。只要正文表使用了该 `TABLE_<ordinal>` 矩阵中的任一数字，就必须用selection直接选择原表行列，禁止把这些DOM表格数字抄进手写Markdown后再用source_quotes绑定。flattened全文不保证包含DOM表格单元格，因此source_quotes不能替代原表绑定，也不得为原表数字自行计算差值、百分比、四舍五入值或添加单位。`eligible:false` 的reasonCodes说明空表头、行身份不明、TeX双写等问题，不能反复尝试selection或猜表头。无法安全选择时只能使用全文连续原句中实际出现的数字制作source_quotes表；无充分逐字quote时删去该无证据表，改选另一张eligible原表或报告具体缺项，不造证据、不把绑定失败当成作者没报告。
 15. 表内数字和单位保留原文写法、千分位和精度：44,000不改44000，100%不改100，19.44不四舍五入成19。叙述数量用阿拉伯数字，数字与拉丁单位留空格；原文转换出现粘连或TeX双写时不猜新数值，改用可重放的同实验表或干净连续原句。
 16. 每张表严格三选一，不混用正文形态或字段：
    - selection：正文独占 `[[TABLE_<tableIndex>]]`，不写该表Markdown；绑定项只含 `tableIndex` 和 `selection:{sourceTableOrdinal,sourceRows,sourceColumns}`。只选证据实际给出的零基行列，sourceRows首项为明示表头行，之后为数据行；行列不可重复或越界。代码渲染原表、映射和SHA。marker编号是正文表序，不是原表ordinal；不得附带手写值、sourceType、cellBindings或sourceQuotes。
@@ -127,7 +127,7 @@ background / related_work / problem / method_overview / component / training / e
 
 `figurePlacements` 质量优先，允许为空且最多 4 项。只能选择请求末尾“模型本次真正收到像素”的 Figure；只出现在 `READER_ARTIFACTS` 图注、但没有收到像素的 Figure 不得选择。不要为了凑数量加入重复曲线、界面截图或装饰图。每个 `figureOrdinal` 只能出现一次。`marker` 必须严格写成 `[[FIGURE_<figureOrdinal>]]`，并在目标小节正文中独占一个段落；`targetKind` 必须等于实际包含 marker 的小节 kind，不要照抄示例的 method_overview，结果曲线通常属于 result/ablation。marker 的前一段必须是完整图前导读，后一段必须是针对可见内容的完整解释。`focusPoints` 必须有 2–4 个针对该图可见元素的观察动作。代码会把 marker 替换成看图路径与官方原图。
 
-`tableBindings` 的 `tableIndex` 从 1 开始，严格对应最终正文第几张表。选择模式的 `sourceRows[0]` 必须来自证据明示的 `TABLE_<ordinal>_HEADER_ROWS`；`SHAPE` 给出矩阵尺寸，`role: unknown` 表示科学用途尚未判定，作者/机构表不可当成结果表。只选矩阵实际呈现的行列，不猜被预算省略的内容。手写映射中 `renderedRow=0` 是表头，`renderedRow=1` 是第一条数据行，分隔行不计数；`sourceRow/sourceColumn` 是原矩阵零基坐标。rowspan/colspan 覆盖位置仍指向被覆盖的矩阵坐标，代码反查真实 DOM cell，每个渲染单元格必须恰好绑定一次。
+`tableBindings` 的 `tableIndex` 从 1 开始，严格对应最终正文第几张表。只有 `READER_ARTIFACTS` 的 `TABLE_ORDINALS_AVAILABLE` 明确列出的原表可使用 selection；清单为 `[]` 时不得输出 TABLE marker 或 selection，但仍可在全文连续原句足以逐字覆盖全部数字与单位时使用 source_quotes 表。选择模式的 `sourceRows[0]` 必须来自证据明示的 `TABLE_<ordinal>_HEADER_ROWS`；`SHAPE` 给出矩阵尺寸，`role: unknown` 表示科学用途尚未判定，作者/机构表不可当成结果表。只选矩阵实际呈现的行列，不猜被预算省略的内容。手写映射中 `renderedRow=0` 是表头，`renderedRow=1` 是第一条数据行，分隔行不计数；`sourceRow/sourceColumn` 是原矩阵零基坐标。rowspan/colspan 覆盖位置仍指向被覆盖的矩阵坐标，代码反查真实 DOM cell，每个渲染单元格必须恰好绑定一次。
 
-`formulaBindings` 只绑定 `READER_ARTIFACTS` 中 recovery 完整且含原始 TeX 的公式。`marker` 必须严格为 `[[FORMULA_<formulaOrdinal>]]`，在 `targetKind` 小节独占一个段落且只出现一次；代码会替换成原始 `\[TeX\]` 并绑定 DOM SHA。
+`formulaBindings` 只绑定 `READER_ARTIFACTS` 的 `FORMULA_ORDINALS_AVAILABLE` 明确列出、且 recovery 完整并含原始 TeX 的公式。若该清单为 `[]`，正文不得包含任何 `FORMULA` marker，且必须输出 `"formulaBindings": []`。`marker` 必须严格为 `[[FORMULA_<formulaOrdinal>]]`，在 `targetKind` 小节独占一个段落且只出现一次；代码会替换成原始 `\[TeX\]` 并绑定 DOM SHA。
 ~~~

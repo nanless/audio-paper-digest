@@ -339,6 +339,16 @@ function findQuantitativeChineseNumerals(text) {
     const candidates = [];
     for (const [regex, reason] of patterns) {
         for (const finding of collectRegexMatches(value, regex, reason)) {
+            // NFKC turns the full-width colon in an enumerative sentence such
+            // as “问题有三：一是……；二是……” into `三:一`.  That surface is
+            // not a 3:1 measurement.  Keep real ratios (for example “配比为
+            // 三：一”) blocking by requiring the exact “有 N：一是” context.
+            if (reason === 'exact_ratio'
+                && /^[二三四五六七八九十]\s*:\s*一$/u.test(finding.match)
+                && /有\s*$/u.test(value.slice(0, finding.index))
+                && /^\s*是/u.test(value.slice(finding.index + finding.match.length))) {
+                continue;
+            }
             if (reason === 'measured_large_integer'
                 && /^[万亿]\s*对$/u.test(finding.match)
                 && /\d\s*$/u.test(value.slice(0, finding.index))
@@ -369,11 +379,16 @@ function findQuantitativeChineseNumerals(text) {
 // Recovery may repair a Chinese empirical count only when the persisted
 // authoritative issue names that exact surface.  Keep this deliberately
 // narrower than the general typography normalizer: it handles the unambiguous
-// one-digit “N阶段” form and never scans an otherwise clean draft. Literal
+// exact issue-bound “N阶段” and scaled “N万亿 unit” forms and never scans an otherwise clean draft. Literal
 // evidence and Markdown structure remain byte-exact.
 function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
     const source = String(text || '');
     const requested = new Set();
+    const requestedTrillionUnits = new Set();
+    const scaledUnitAlternation = SCALED_ARABIC_MEASUREMENT_UNITS
+        .slice().sort((a, b) => b.length - a.length)
+        .map(item => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const trillionSurface = new RegExp(`^万亿\\s*(${scaledUnitAlternation})$`, 'iu');
     for (const issue of Array.isArray(issues) ? issues : []) {
         const surfaces = [];
         if (issue?.code === 'quantitative_chinese_numeral' && typeof issue.match === 'string') {
@@ -387,9 +402,12 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
             if (/^[一二两三四五六七八九]阶段$/u.test(surface)
                 && findQuantitativeChineseNumerals(surface)
                     .some(finding => finding.match === surface)) requested.add(surface);
+            const trillion = trillionSurface.exec(surface);
+            if (trillion) requestedTrillionUnits.add(trillion[1]);
         }
     }
-    if (!requested.size || source.includes('__PD_ISSUE_BOUND_NUMERAL_')) return source;
+    if ((!requested.size && !requestedTrillionUnits.size)
+        || source.includes('__PD_ISSUE_BOUND_NUMERAL_')) return source;
     const protectedSpans = [];
     const protect = value => {
         const token = `__PD_ISSUE_BOUND_NUMERAL_${protectedSpans.length}__`;
@@ -407,6 +425,22 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
         .replace(/!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)/g, protect)
         .replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)/g, protect)
         .replace(/^(?:原文|原句|逐字引语|口语(?:转录|转写|输出)|输入(?:转录)?|Transcript|Input)\s*[:：][^\n]*/gmi, protect);
+    const expandDecimalScale = (raw, places) => {
+        const sign = /^[+-]/.test(raw) ? raw[0] : '';
+        const [integer, fraction = ''] = raw.replace(/^[+-]/, '').split('.');
+        const digits = (integer + fraction).padEnd(integer.length + places, '0');
+        const whole = digits.slice(0, integer.length + places).replace(/^0+(?=\d)/, '');
+        const decimal = digits.slice(integer.length + places).replace(/0+$/, '');
+        return sign + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+            + (decimal ? `.${decimal}` : '');
+    };
+    for (const unit of requestedTrillionUnits) {
+        const escapedUnit = unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        normalized = normalized.replace(
+            new RegExp(`(?<![A-Za-z0-9.,/])([+-]?\\d+(?:\\.\\d+)?)\\s*万亿\\s*(${escapedUnit})(?![A-Za-z])`, 'giu'),
+            (_surface, value, matchedUnit) => `${expandDecimalScale(value, 12)} ${matchedUnit}`
+        );
+    }
     const digits = Object.freeze({ 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
         五: 5, 六: 6, 七: 7, 八: 8, 九: 9 });
     for (const surface of requested) {
@@ -513,7 +547,7 @@ function findNumericTypographyDefects(text) {
         [new RegExp(`${number}(?:${alternation(READER_SPACED_QUANTIFIERS)})`, 'giu'), 'number_unit_spacing'],
         [new RegExp(`(?:${alternation(NUMERIC_CONNECTOR_PREFIXES)})${number}`, 'gu'), 'connector_number_spacing'],
         [new RegExp(`${number}(?:${alternation(NUMERIC_CONNECTOR_SUFFIXES)})`, 'gu'), 'number_connector_spacing'],
-        [/(?:下|上|这|另|哪)\s*1\s*(?:步|层|类|种|段|项|组|张|个)|(?:同|唯|统|单)\s*1\s*(?=[\p{Script=Han}])|归\s*1\s*(?=(?:化|后|组合|处理|权重))/gu, 'broken_fixed_word'],
+        [/(?:(?<!加)[下上这另哪])\s*1\s*(?:步|层|类|种|段|项|组|张|个)|(?:同|唯|统|单)\s*1\s*(?=[\p{Script=Han}])|归\s*1\s*(?=(?:化|后|组合|处理|权重))/gu, 'broken_fixed_word'],
         [/[\p{Script=Han}][\t \u3000]+一次性|一次性[\t \u3000]+[\p{Script=Han}]/gu, 'fixed_word_spacing'],
         [/[\p{Script=Han}](?:T|F|K|N|SNR|IoU|batch|beta|top-k)\s*=\s*\d|\b(?:T|F|K|N|SNR|IoU|batch|beta|top-k)\s*=\s*\d+(?:\.\d+)?(?=[\p{Script=Han}])/giu, 'technical_assignment_adhesion'],
         [/(?:\d+(?:\.\d+)?(?:D|B|K|M|G|bit|DoF|FPS|Vpp|MHz|GB|TB))(?=[\p{Script=Han}])/giu, 'technical_token_adhesion']
@@ -790,12 +824,15 @@ function stripCodeLinksAndUrls(value) {
         .replace(/`[^`]*`/g, match => ' '.repeat(match.length))
         .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
         .replace(/https?:\/\/[^\s)]+/g, match => ' '.repeat(match.length))
-        .replace(/[*_~]+/g, '');
+        // Preserve a single trailing star because it can be part of a named
+        // technical variant such as GatherMOS-ZS*. Markdown bold markers are
+        // still removed so their closing ** cannot hide a Han/ASCII boundary.
+        .replace(/\*{2,}|[_~]+/g, '');
 }
 
 function findTechnicalTermAdhesions(text) {
     const value = stripCodeLinksAndUrls(text);
-    const regex = /(?:\p{Script=Han}[A-Za-z][A-Za-z0-9.+-]{1,}|[A-Za-z][A-Za-z0-9.+-]{1,}\p{Script=Han})/gu;
+    const regex = /(?:\p{Script=Han}[A-Za-z][A-Za-z0-9.+-]{1,}|[A-Za-z][A-Za-z0-9.+-]{1,}\*?\p{Script=Han})/gu;
     return collectRegexMatches(value, regex, 'missing_space_at_han_ascii_boundary')
         .filter(finding => {
             const token = finding.match.replace(/\p{Script=Han}/gu, '');
@@ -830,6 +867,21 @@ function findMissingComparisonUnits(text) {
         const numericText = sentence.text
             .replace(
                 new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:或|和|、|至|到|[-–—])\\s*\\d+(?:\\.\\d+)?\\s*${unit}`, 'giu'),
+                match => ' '.repeat(match.length)
+            )
+            // ASVspoof names benchmark editions by year (for example
+            // "ASVspoof 2024"). The year is an identity token, not a bare
+            // error-rate value, even when the sentence also reports a
+            // qualitative error-rate direction.
+            .replace(
+                /\bASVspoof\s+(?:19|20)\d{2}\b/giu,
+                match => ' '.repeat(match.length)
+            )
+            // Lengths are already unit-bound quantities, not percentage-scale
+            // values. Mask simple values, ranges and dimensions before the
+            // percentage heuristic considers their numeric coefficients.
+            .replace(
+                /(?<![A-Za-z0-9_.-])\d+(?:\.\d+)?(?:\s*(?:[x×]|[-–—至到])\s*\d+(?:\.\d+)?)*\s*(?:km|cm|mm|[µμu]m|nm|m)(?:[²³]|\^[23])?(?=$|[^A-Za-z0-9])/giu,
                 match => ' '.repeat(match.length)
             )
             // Some source tables define dimensionless metrics in the header

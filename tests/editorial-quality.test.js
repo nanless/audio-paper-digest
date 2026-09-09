@@ -75,6 +75,11 @@ describe('Manual v4 editorial quality primitives', () => {
             .some(item => item.reason === 'exact_fraction'));
         assert.ok(findQuantitativeChineseNumerals('命中率达到五成，类别比例为三比二，系统采用七十亿主干。')
             .some(item => item.reason === 'exact_ratio'));
+        assert.deepEqual(findQuantitativeChineseNumerals(
+            '待验证的问题有三：一是延迟，二是成本，三是泛化。'
+        ).filter(item => item.reason === 'exact_ratio'), []);
+        assert.ok(findQuantitativeChineseNumerals('男女样本比例为三：一，训练集按该比例划分。')
+            .some(item => item.reason === 'exact_ratio'));
         assert.ok(findQuantitativeChineseNumerals('命中率达到五成，类别比例为三比二，系统采用七十亿主干。')
             .some(item => /七十亿主干/.test(item.match)));
         assert.ok(findQuantitativeChineseNumerals('阈值：三，系统训练三 GPU 小时，开销为三 mac、三 gb，评分范围为三至五等级。').length >= 5);
@@ -175,6 +180,16 @@ describe('Manual v4 editorial quality primitives', () => {
             'quantitative_chinese_numeral', match: '两阶段' }]), source);
     });
 
+    it('normalizes an issue-bound Arabic coefficient with the exact trillion scale', () => {
+        const source = '预训练规模约4万亿token；`4万亿token` 与“原文 4万亿token”保持逐字。';
+        const issues = [{ path: null,
+            message: '读者文章文风校验失败: quantitative_chinese_numeral:万亿 token' }];
+        assert.equal(
+            normalizeIssueBoundReaderQuantitativeNumerals(source, issues),
+            '预训练规模约4,000,000,000,000 token；`4万亿token` 与“原文 4万亿token”保持逐字。'
+        );
+    });
+
     it('does not read the scale suffix in an Arabic comparison as a Chinese count classifier', () => {
         assert.deepEqual(findQuantitativeChineseNumerals(
             '第一段约 500 万对 48 万，此外为 2,459 对 6,578。'
@@ -200,6 +215,8 @@ describe('Manual v4 editorial quality primitives', () => {
             .filter(item => item.reason === 'broken_fixed_word').length >= 4);
         assert.ok(findNumericTypographyDefects('模型从公开的T=4初始化，并在 T=2已足够时停止。')
             .some(item => item.reason === 'technical_assignment_adhesion'));
+        assert.ok(!findNumericTypographyDefects('输入是 1 段真人录制的语音加上 1 个任务提示。')
+            .some(item => item.reason === 'broken_fixed_word'));
         for (const malformed of [
             '方法与3 种基线比较。', '第2 个消融。', '模型在0.25 MHz执行5 次。',
             '4B 和9B权重。', '阈值0.96门控。', '模型采用3D记忆。'
@@ -347,6 +364,11 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.deepEqual(findTechnicalTermAdhesions('推理时使用 LoRA 缩放；详见 `Qwen-CoT在代码中的键` 和 https://example.com/LoRA缩放。'), []);
         assert.deepEqual(findTechnicalTermAdhesions('S2为音频分支，S2用反向传播更新；T5模型只作编号对照。'), []);
         assert.deepEqual(findTechnicalTermAdhesions('比较 JSD-质量、AMI-日本语料和 L1-英语说话者。'), []);
+        assert.deepEqual(
+            findTechnicalTermAdhesions('增强版记作 GatherMOS-ZS*中。').map(item => item.match),
+            ['GatherMOS-ZS*中']
+        );
+        assert.deepEqual(findTechnicalTermAdhesions('增强版记作 GatherMOS-ZS* 中。'), []);
     });
 
     it('detects percentage-score deltas and asymmetric comparisons missing nearby units', () => {
@@ -411,6 +433,26 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.deepEqual(findMissingComparisonUnits(
             '反例是 v2、v3、v4、v5 的微调即使加到 4 或 8 小时，也不降低新攻击漂移，等错误率表上 v3、v4、v5 本身起点已接近 0。'
         ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '比较 20 mm 与 100 mm 间距时，错误率的下降趋势一致。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '阵列从 2.5 m 扩展到 3 m 后，CER 的下降方向保持一致。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '房间由 4×6×3 m 缩小到 3×4×2 m，覆盖率仍有提升。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '通过在真实语音上先学习说话人条件的韵律变异，再以同一目标为辅助联合优化伪造分类，'
+            + '方法在两种训练分布下均显著降低了在 ASVspoof 2024 与情感化数据上的错误率，'
+            + '同时在标准集上保持竞争力，消融也支持了 2 阶段设计的必要性。'
+        ), []);
+        const asvspoofMissingUnits = findMissingComparisonUnits(
+            '在 ASVspoof 2024 基准上，错误率从 24.5 降至 18.2。'
+        );
+        assert.ok(asvspoofMissingUnits.some(
+            item => item.reason === 'percentage_metric_delta_without_unit'
+        ));
     });
 
     it('finds batch-wide sentence templates at the configured paper threshold', () => {

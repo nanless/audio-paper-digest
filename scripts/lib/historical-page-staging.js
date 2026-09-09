@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const crosswalkApi = require('./page-source-crosswalk.js');
@@ -283,13 +284,32 @@ function normalizeStagingIntent(value) {
     return structuredClone(value);
 }
 
-function defaultRender(packet) {
+function defaultRender(packet, dependencies = {}) {
     const script = path.join(__dirname, '..', 'historical-page-render.py');
     const runtime = path.join(__dirname, '..', 'python-runtime.sh');
-    const output = execFileSync('bash', [runtime, script], { input: JSON.stringify(packet), maxBuffer: 64 * 1024 * 1024 });
-    const parsed = JSON.parse(output.toString('utf8'));
-    if (typeof parsed.markdown !== 'string' || !parsed.markdown.trim() || !Array.isArray(parsed.assets)) throw new Error('Historical page renderer returned incomplete output');
-    return parsed;
+    const io = dependencies.io || fs;
+    const execute = dependencies.execFileSync || execFileSync;
+    const temporaryRoot = dependencies.tmpdir?.() || fs.realpathSync(os.tmpdir());
+    const temporary = io.mkdtempSync(path.join(temporaryRoot, 'historical-page-render-input-'));
+    const inputFile = path.join(temporary, 'packet.json');
+    try {
+        io.writeFileSync(inputFile, JSON.stringify(packet), {
+            encoding: 'utf8', flag: 'wx', mode: 0o600
+        });
+        const output = execute('bash', [runtime, script, '--input-file', inputFile], {
+            maxBuffer: 64 * 1024 * 1024,
+            timeout: 60 * 1000,
+            killSignal: 'SIGKILL'
+        });
+        const parsed = JSON.parse(output.toString('utf8'));
+        if (typeof parsed.markdown !== 'string' || !parsed.markdown.trim() || !Array.isArray(parsed.assets)) throw new Error('Historical page renderer returned incomplete output');
+        return parsed;
+    }
+    finally {
+        try { io.unlinkSync(inputFile); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        io.rmdirSync(temporary);
+    }
 }
 
 function writeExact(filename, bytes, dependencies = {}) {

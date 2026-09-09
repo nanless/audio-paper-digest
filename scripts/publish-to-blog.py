@@ -218,8 +218,7 @@ def _reviewed_path_set_sha256(files):
             'sha256': None if record.get('deleted') is True else record.get('sha256'),
         })
     entries.sort(key=lambda item: (str(item.get('path')), bool(item.get('deleted'))))
-    payload = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+    return _stable_json_sha256(entries)
 
 
 def _manual_review_provenance_error(receipt, *, date_str=None,
@@ -2090,8 +2089,8 @@ def apply_publish_image_exclusions(papers, exclusions=None):
                 raise PublishDataValidationError(
                     f'{normalized_id} API reader v2 缺少可派生的正文/figure/stage'
                 )
-            source_analysis_sha256 = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
-            source_article_sha256 = hashlib.sha256(article.encode('utf-8')).hexdigest()
+            source_analysis_sha256 = _javascript_string_sha256(analysis)
+            source_article_sha256 = _javascript_string_sha256(article)
             source_figures_sha256 = _stable_json_sha256(figures)
             figure_urls = [
                 item.get('url') for item in figures if isinstance(item, dict)
@@ -2133,7 +2132,7 @@ def apply_publish_image_exclusions(papers, exclusions=None):
                 item for item in plan['figurePlacements']
                 if item.get('figureOrdinal') not in excluded_ordinals
             ]
-            article_sha256 = hashlib.sha256(article.encode('utf-8')).hexdigest()
+            article_sha256 = _javascript_string_sha256(article)
             plan_sha256 = _stable_json_sha256(plan)
             figures_sha256 = _stable_json_sha256(figures)
             next_paper['apiReaderArticle'] = article
@@ -2177,7 +2176,7 @@ def apply_publish_image_exclusions(papers, exclusions=None):
                 raise PublishDataValidationError(
                     f'{normalized_id} 缺少可派生发布快照的 analysis'
                 )
-            source_analysis_sha256 = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+            source_analysis_sha256 = _javascript_string_sha256(analysis)
             image_manifest = next_paper.get('imageManifest') or {}
             plans = image_manifest.get('insertionPlan') or []
             selected_manifest = image_manifest.get('selected') or []
@@ -2220,7 +2219,7 @@ def apply_publish_image_exclusions(papers, exclusions=None):
             next_paper[PUBLISH_IMAGE_VIEW_FIELD] = {
                 'version': 1,
                 'sourceAnalysisSha256': source_analysis_sha256,
-                'analysisSha256': hashlib.sha256(analysis.encode('utf-8')).hexdigest(),
+                'analysisSha256': _javascript_string_sha256(analysis),
                 'excludedUrls': [item['url'] for item in active],
                 'effectiveSelectedImageUrls': list(
                     next_paper.get('selectedImageUrls') or []
@@ -2901,7 +2900,7 @@ def _core_summary_projection_sha256(analysis):
     following = re.search(r'^##\s+', analysis[start:], re.MULTILINE)
     end = start + following.start() if following else len(analysis)
     projected = analysis[:start] + '<CORE_SUMMARY_BODY>' + analysis[end:]
-    return hashlib.sha256(projected.encode('utf-8')).hexdigest()
+    return _javascript_string_sha256(projected)
 
 
 def _nearest_core_summary_metric_label(segment, from_right):
@@ -2935,6 +2934,26 @@ def _has_cross_metric_directional_comparison(sentence):
     return False
 
 
+def _strip_core_summary_non_result_numerals(text):
+    value = str(text or '')
+    value = re.sub(r'https?://\S+', ' ', value)
+    value = re.sub(r'\[[0-9,;\s-]+\]', ' ', value)
+    value = re.sub(r'§\s*\d+(?:\.\d+)*', ' ', value)
+    value = re.sub(
+        r'\b(?:theorem|lemma|proposition|corollary|definition|assumption|equation|fig(?:ure)?\.?|table|section|appendix)\s*\d+(?:\.\d+)*',
+        ' ', value, flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r'(?:定理|引理|命题|推论|公理|定义|假设|公式|方程|等式|式|图|表|章节|附录)\s*(?:编号)?\s*\d+(?:\.\d+)*',
+        ' ', value,
+    )
+    value = re.sub(
+        r'(?<![A-Za-z0-9_])\d+(?:,\d{3})*(?:\.\d+)?\s*(?:种\s*)?(?:languages?|语言)(?![A-Za-z0-9_])',
+        ' ', value, flags=re.IGNORECASE,
+    )
+    return re.sub(r'\b(?:19|20)\d{2}\b', ' ', value)
+
+
 def _detailed_core_summary_semantic_issue(summary):
     summary = str(summary or '')
     count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
@@ -2948,26 +2967,36 @@ def _detailed_core_summary_semantic_issue(summary):
         issues.append('缺少任务问题、输入输出或实际难点')
     chain = re.findall(r'(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件)', summary)
     roles = re.findall(r'(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入)', summary)
-    if len(chain) < 2 or len(roles) < 2:
+    tier_role_stages = {
+        match.group(1).upper()
+        for match in re.finditer(
+            r'(?<![A-Za-z0-9_])Tier[-‐‑‒–—]([LMH])(?![A-Za-z0-9_])'
+            r'[^；。！？!?\n]{0,120}'
+            r'(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|打分|匹配|投票|检索|推理|判决|路由)',
+            summary, flags=re.IGNORECASE,
+        )
+    }
+    if not (len(chain) >= 2 and len(roles) >= 2) and len(tier_role_stages) < 2:
         issues.append('缺少 2–4 步方法链的分工与衔接')
     metric = re.compile(
-        r'(?:WER|CER|PER|F1|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|Pearson|Spearman|Kendall|(?<![A-Za-z0-9_])MSR(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FVD(?![A-Za-z0-9_])|accuracy|error rate|score|latency|throughput|RTF|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)',
+        r'(?:WER|CER|PER|F1|F[- ]?Score|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|(?<![A-Za-z0-9_])AUROC(?![A-Za-z0-9_])|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|(?<![A-Za-z0-9_])MAE(?![A-Za-z0-9_])|RMSE|(?<![A-Za-z0-9_])R@\d+(?:\.\d+)?(?![A-Za-z0-9_])|SAR|DAR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|ASR|(?<![A-Za-z0-9_])(?:JSR|RSF|OH)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])n?TVD(?![A-Za-z0-9_])|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|(?<![A-Za-z0-9_])MSR(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FVD(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FID(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])Acc(?:[_ -]?(?:macro|num))?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])CLAP[_ -](?:MS|LAION)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:DeSync|IB)(?![A-Za-z0-9_])|accuracy|error rate|score|latency|throughput|RTF|FPS|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)',
         re.IGNORECASE,
     )
     comparison = re.compile(
-        r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)',
+        r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)',
         re.IGNORECASE,
     )
     number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
-    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|同一|相同|公开|内部|外部|\bon\b)', re.IGNORECASE)
+    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)', re.IGNORECASE)
     has_complete_result = False
     for sentence in re.split(r'[。！？!?\n]', summary):
-        numbers = number.findall(sentence)
-        if metric.search(sentence) and comparison.search(sentence) and numbers \
-                and setting.search(sentence) \
+        result_sentence = _strip_core_summary_non_result_numerals(sentence)
+        numbers = number.findall(result_sentence)
+        if metric.search(result_sentence) and comparison.search(result_sentence) and numbers \
+                and setting.search(result_sentence) \
                 and (len(numbers) >= 2 or re.search(
-                    r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)', sentence
-                )) and not _has_cross_metric_directional_comparison(sentence):
+                    r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)', result_sentence
+                )) and not _has_cross_metric_directional_comparison(result_sentence):
             has_complete_result = True
             break
     if not has_complete_result and '原文未提供可核对的关键定量结果' not in summary:
@@ -3043,7 +3072,7 @@ def _sealed_detailed_core_summary(paper, parsed):
         )
     if isinstance(parsed, dict) and parsed.get('summary') != summary:
         raise PublishDataValidationError('现代 Reader 的 parsed 核心摘要与 canonical 不一致')
-    summary_sha = hashlib.sha256(summary.encode('utf-8')).hexdigest()
+    summary_sha = _javascript_string_sha256(summary)
     if stage.get('summarySha256') != summary_sha:
         raise PublishDataValidationError('现代 Reader 的详细核心摘要与阶段 SHA 不一致')
     required_stage_shas = (
@@ -3093,11 +3122,11 @@ def _sealed_detailed_core_summary(paper, parsed):
             if isinstance(checkpoint_parsed, dict) else None
         if not isinstance(upstream_checkpoint, str) \
                 or not isinstance(checkpoint_summary, str) \
-                or hashlib.sha256(upstream_checkpoint.encode('utf-8')).hexdigest() \
+                or _javascript_string_sha256(upstream_checkpoint) \
                 != upstream.get('outputAnalysisSha256') \
-                or hashlib.sha256(
-                    checkpoint_summary.strip().encode('utf-8')
-                ).hexdigest() != stage.get('inputSummarySha256') \
+                or _javascript_string_sha256(
+                    checkpoint_summary.strip()
+                ) != stage.get('inputSummarySha256') \
                 or _core_summary_projection_sha256(upstream_checkpoint) \
                 != stage.get('inputStructureProjectionSha256'):
             raise PublishDataValidationError(
@@ -3117,7 +3146,7 @@ def _sealed_detailed_core_summary(paper, parsed):
     if not isinstance(scoring, dict):
         raise PublishDataValidationError('现代 Reader 的评分阶段未绑定详细核心摘要')
     if scoring.get('status') != MANUAL_REVIEW_MODE:
-        analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+        analysis_sha = _javascript_string_sha256(analysis)
         # Modern Reader pages already materialize source-bound official figures.
         # A legacy imageSupplement=complete has no retained pre-image bytes in
         # the final success record, so Python cannot prove it changed only image
@@ -3597,10 +3626,7 @@ def _visual_summary_analysis_sha256(paper):
         'analysisSourceSha256': paper.get('analysisSourceSha256') or paper.get('sourceSha256') or None,
         'scoringAudit': stages.get('scoringAudit') or None,
     }
-    encoded = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
-    ).encode('utf-8')
-    return hashlib.sha256(encoded).hexdigest()
+    return _stable_json_sha256(payload)
 
 
 def _validate_png_bytes(raw, label):
@@ -3802,9 +3828,7 @@ def load_digest_cover(papers, date_str, manifest_path=None, category='论文速�
     prompt_path = Path(__file__).resolve().parent.parent / 'prompts' / 'digest-cover.md'
     prompt_sha = _sha256_file(prompt_path)
     context = _digest_cover_context(papers, date_str, category)
-    data_sha = hashlib.sha256(json.dumps(
-        context, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
-    ).encode('utf-8')).hexdigest()
+    data_sha = _stable_json_sha256(context)
     cover = manifest.get('cover')
     if (
         manifest.get('version') != 1
@@ -4065,7 +4089,10 @@ def _reader_doubled_half_token(surface):
 
 
 def _api_reader_numeric_tokens(value):
-    grouped_integer = r'(?:\d{1,3}(?:,\d{3})+|\d+)'
+    # Require a thousands-grouped branch to consume the complete post-comma
+    # digit run. Otherwise ``10^-4,2000`` is truncated to the fabricated token
+    # ``-4,200`` / ``-4200`` instead of replaying ``-4`` and ``2000``.
+    grouped_integer = r'(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)'
     pattern = re.compile(
         # Consume an exact repeated decimal as one surface before half-token
         # replay; otherwise 3.093.09 is incorrectly split into 3.093 and 09.
@@ -4099,6 +4126,18 @@ def _api_reader_numeric_tokens(value):
             half_token = _canonical_api_reader_numeric_token(half)
             if half_token != canonical:
                 tokens.append(half_token)
+
+    # LaTeXML can concatenate a visible thousands-grouped integer with its
+    # identical annotation (``500,000500,000``). The normal grouped-number
+    # branch must keep its strict trailing boundary for ``10^-4,2000``; add
+    # only the exact repeated grouped surface as an auditable half-value alias.
+    duplicated_grouped_integer = re.compile(
+        r'(?<![A-Za-z0-9])'
+        r'([+\-−－]?[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+)\1'
+        r'(?![A-Za-z0-9０-９,，])'
+    )
+    for match in duplicated_grouped_integer.finditer(original_surface):
+        tokens.append(_canonical_api_reader_numeric_token(match.group(1)))
 
     # Match Node's exact LaTeXML statistic alias. The HTML text extractor may
     # flatten one displayed thousands-grouped value and its TeX annotation as
@@ -4194,9 +4233,9 @@ def _validate_api_reader_source_bindings(paper, article=None):
         if not isinstance(binding, dict) or set(binding) not in (required, required | {'sourceTableDomSha256'}):
             raise PublishDataValidationError(f'API reader tableBindings[{index - 1}] 字段非法')
         if binding.get('tableIndex') != index \
-                or binding.get('renderedTableSha256') != hashlib.sha256(
-                    rendered['markdown'].encode('utf-8')
-                ).hexdigest():
+                or binding.get('renderedTableSha256') != _javascript_string_sha256(
+                    rendered['markdown']
+                ):
             raise PublishDataValidationError(f'API reader 第 {index} 个表格渲染 SHA 漂移')
         rendered_rows = [rendered['header'], *rendered['rows']]
         if binding.get('sourceType') == 'artifact_table':
@@ -4253,9 +4292,8 @@ def _validate_api_reader_source_bindings(paper, article=None):
                         or set(quote_binding) != {'quote', 'sourceQuoteSha256'} \
                         or not isinstance(quote_binding.get('quote'), str) \
                         or not 12 <= len(quote_binding['quote']) <= 4000 \
-                        or quote_binding.get('sourceQuoteSha256') != hashlib.sha256(
-                            quote_binding['quote'].encode('utf-8')
-                        ).hexdigest():
+                        or quote_binding.get('sourceQuoteSha256') \
+                        != _javascript_string_sha256(quote_binding['quote']):
                     raise PublishDataValidationError(
                         f'API reader 第 {index} 个表格 sourceQuotes[{quote_index}] 非法'
                     )
@@ -4303,9 +4341,8 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 ) \
                 or not isinstance(latex, str) or not latex.strip() \
                 or not re.fullmatch(r'[0-9a-f]{64}', str(binding.get('sourceDomSha256') or '')) \
-                or binding.get('renderedBlockSha256') != hashlib.sha256(
-                    rendered_block.encode('utf-8')
-                ).hexdigest() \
+                or binding.get('renderedBlockSha256') \
+                != _javascript_string_sha256(rendered_block) \
                 or formula_occurrences != 1 \
                 or binding['marker'] in article:
             raise PublishDataValidationError(f'API reader 第 {index + 1} 个公式来源/渲染绑定非法')
@@ -4490,9 +4527,8 @@ def _validate_api_reader_resource_identity(paper):
         source_quote = resource.get('sourceQuote')
         if not isinstance(source_quote, str) or not source_quote.strip() \
                 or original_url not in source_quote \
-                or resource.get('sourceQuoteSha256') != hashlib.sha256(
-                    source_quote.encode('utf-8')
-                ).hexdigest():
+                or resource.get('sourceQuoteSha256') \
+                != _javascript_string_sha256(source_quote):
             raise PublishDataValidationError(f'API reader resources[{index}] sourceQuote SHA/URL 非法')
         if resource['origin'] == 'validated_demo' \
                 and original_url not in (discovered_links or []):
@@ -4680,7 +4716,7 @@ def _api_reader_payload(paper):
     if not isinstance(article, str) or not article.strip() or not isinstance(plan, dict):
         raise PublishDataValidationError('API reader contract 缺少读者文章或编辑计划')
     article = article.strip()
-    article_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+    article_sha = _javascript_string_sha256(article)
     plan_sha = _stable_json_sha256(plan)
     if (paper.get('apiReaderArticleSha256') != article_sha
             or paper.get('apiReaderPlanSha256') != plan_sha
@@ -5204,7 +5240,7 @@ def _manual_reader_article(paper, plan, date_str=None):
     expected_sha = takeover.get('readerArticleSha256')
     if not isinstance(article, str) or not article.strip() or not isinstance(expected_sha, str):
         return None
-    actual_sha = hashlib.sha256(article.encode('utf-8')).hexdigest()
+    actual_sha = _javascript_string_sha256(article)
     if actual_sha != expected_sha:
         return None
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
@@ -7801,13 +7837,10 @@ def _remote_identity_sha256():
     push_url = (result.stdout or '').strip()
     if not push_url or '\n' in push_url or '\x00' in push_url:
         return None, f'当前 Git remote {GITHUB_REMOTE!r} 的 push URL 非法'
-    payload = json.dumps(
-        {'remote': GITHUB_REMOTE, 'pushUrl': push_url},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(',', ':'),
-    ).encode('utf-8')
-    return hashlib.sha256(payload).hexdigest(), ''
+    return _stable_json_sha256({
+        'remote': GITHUB_REMOTE,
+        'pushUrl': push_url,
+    }), ''
 
 
 def _report_push_retry(local_head, detail):
@@ -8085,10 +8118,63 @@ def _file_fingerprint(path):
     }
 
 
-def _stable_json_sha256(value):
-    encoded = json.dumps(
+def _javascript_json_utf8(value):
+    """Encode canonical JSON like well-formed JavaScript JSON.stringify()."""
+    serialized = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
-    ).encode('utf-8')
+    )
+    normalized = []
+    index = 0
+    while index < len(serialized):
+        code_unit = ord(serialized[index])
+        if 0xD800 <= code_unit <= 0xDBFF:
+            if index + 1 < len(serialized):
+                low = ord(serialized[index + 1])
+                if 0xDC00 <= low <= 0xDFFF:
+                    normalized.append(chr(
+                        0x10000 + ((code_unit - 0xD800) << 10) + (low - 0xDC00)
+                    ))
+                    index += 2
+                    continue
+            normalized.append(f'\\u{code_unit:04x}')
+        elif 0xDC00 <= code_unit <= 0xDFFF:
+            normalized.append(f'\\u{code_unit:04x}')
+        else:
+            normalized.append(serialized[index])
+        index += 1
+    return ''.join(normalized).encode('utf-8')
+
+
+def _javascript_string_utf8(value):
+    """Encode a Python string like Node Buffer.from(value, 'utf8')."""
+    normalized = []
+    index = 0
+    while index < len(value):
+        code_unit = ord(value[index])
+        if 0xD800 <= code_unit <= 0xDBFF:
+            if index + 1 < len(value):
+                low = ord(value[index + 1])
+                if 0xDC00 <= low <= 0xDFFF:
+                    normalized.append(chr(
+                        0x10000 + ((code_unit - 0xD800) << 10) + (low - 0xDC00)
+                    ))
+                    index += 2
+                    continue
+            normalized.append('\ufffd')
+        elif 0xDC00 <= code_unit <= 0xDFFF:
+            normalized.append('\ufffd')
+        else:
+            normalized.append(value[index])
+        index += 1
+    return ''.join(normalized).encode('utf-8')
+
+
+def _javascript_string_sha256(value):
+    return hashlib.sha256(_javascript_string_utf8(value)).hexdigest()
+
+
+def _stable_json_sha256(value):
+    encoded = _javascript_json_utf8(value)
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -8237,7 +8323,7 @@ def llm_api_publication_bindings(published_papers):
             if isinstance(manifest.get('sourceAcquisition'), dict) else {}
         if not isinstance(analysis, str) or not analysis.strip():
             raise PublishDataValidationError('LLM API production canonical 缺少最终 analysis')
-        analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
+        analysis_sha = _javascript_string_sha256(analysis)
         source_sha = source.get('sourceSha256')
         paper_source_sha = paper.get('sourceSha256')
         if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
@@ -8298,9 +8384,7 @@ def llm_api_publication_bindings(published_papers):
             'readerAuthorsSha256': _stable_json_sha256(reader['readerAuthors']),
             'analysisSha256': analysis_sha,
             'coreSummaryContract': CORE_SUMMARY_DETAILED_CONTRACT,
-            'coreSummarySha256': hashlib.sha256(
-                core_summary.encode('utf-8')
-            ).hexdigest(),
+            'coreSummarySha256': _javascript_string_sha256(core_summary),
             'coreSummaryBindingSha256': core_summary_stage['bindingSha256'],
             'sourceSha256': source_sha,
             'scoringContract': LLM_API_SCORING_CONTRACT,

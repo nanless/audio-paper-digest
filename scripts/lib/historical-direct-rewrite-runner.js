@@ -1196,6 +1196,42 @@ async function replayCompletedAnalysisForStaging({ item, active, generation, exe
     return { sourceDescriptor, sourceDetails, analysis };
 }
 
+function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
+    repairCompletedAnalysisSurface = null }) {
+    const repair = repairCompletedAnalysisSurface
+        || ((analysis, manifest) => require('../deep-analyzer.js')
+            .repairApiReaderPlanSurfaceBinding(analysis, manifest));
+    const beforeRecordSha256 = stableHash(completed.analysis);
+    if (repair(completed.analysis, completed.analysis.analysisManifest) !== true) {
+        return { ...completed, surfaceRepair: null, analysisReceipt: active.analysis };
+    }
+    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: completed.sourceDescriptor,
+        analysis: completed.analysis });
+    const analysisFile = path.join(active.analysis.directory, 'analysis.json');
+    const analysisFileSha256 = writeAtomic(analysisFile, completed.analysis);
+    const analysisRecordSha256 = stableHash(completed.analysis);
+    if (analysisRecordSha256 === beforeRecordSha256) {
+        fail(`${item.paperId} completed analysis surface repair reported a no-op`);
+    }
+    const analysisReceipt = {
+        ...active.analysis,
+        analysisFileSha256,
+        analysisRecordSha256
+    };
+    return {
+        ...completed,
+        analysisReceipt,
+        surfaceRepair: {
+            contract: 'historical-direct-completed-analysis-surface-reseal-v1',
+            version: 1,
+            beforeRecordSha256,
+            afterRecordSha256: analysisRecordSha256,
+            analysisFileSha256,
+            repairedAt: now
+        }
+    };
+}
+
 function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis }) {
     if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)
         || analysis.directPaperId !== item.paperId) {
@@ -1243,13 +1279,23 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
     const binding = planApi.directStagingBinding({ plan, registry: stageRegistry, paperId: item.paperId, analysisArtifact: artifact });
     directContext.assertNoPersistentFigureFields(binding);
     const rendererImplementationSha256 = directPages.currentRendererImplementationSha256(dependencies);
-    const directory = path.join(safeDirectory(stagingRoot, true, 'staging root'), item.runId,
+    const routeDirectory = path.join(safeDirectory(stagingRoot, true, 'staging root'), item.runId,
         item.route.kind === 'arxiv-fresh-fetch' ? sourceDescriptor.sourceRunIdentitySha256 : 'conference-local',
         `renderer-${rendererImplementationSha256}`);
-    safeDirectory(directory, true, 'direct staging directory');
     const body = { contract: STAGING_CONTRACT, version: 1, paperId: item.paperId, runId: item.runId,
         analysisArtifact: artifact, publicationSource,
         stagingBinding: binding, stagingBindingSha256: stableHash(binding) };
+    let directory = routeDirectory;
+    const existingInput = path.join(routeDirectory, 'staging-input.json');
+    if (fs.existsSync(existingInput)) {
+        const expectedInputSha256 = sha256(Buffer.from(
+            `${JSON.stringify(canonical(body), null, 2)}\n`, 'utf8'
+        ));
+        if (readRegular(existingInput).sha256 !== expectedInputSha256) {
+            directory = `${routeDirectory}-analysis-${artifact.analysisRecordSha256}`;
+        }
+    }
+    safeDirectory(directory, true, 'direct staging directory');
     const stagingInputSha256 = writeAtomic(path.join(directory, 'staging-input.json'), body);
     const pageManifest = directPages.stageDirectPages({ item, sourceDescriptor, publicationSource,
         artifact, analysis, directory,
@@ -1271,8 +1317,10 @@ function replayDirectPageStaging({ item, active, stagingRoot, executionRoot,
         item.route.kind === 'arxiv-fresh-fetch' ? active.source.sourceRunIdentitySha256 : 'conference-local');
     const currentDirectory = path.join(routeDirectory,
         `renderer-${staging.pageStaging.rendererImplementationSha256}`);
+    const analysisBoundDirectory = `${currentDirectory}-analysis-${staging.analysisArtifact.analysisRecordSha256}`;
     const directory = safeDirectory(staging.directory, false, 'direct staging directory');
-    if (directory !== routeDirectory && directory !== currentDirectory) {
+    if (directory !== routeDirectory && directory !== currentDirectory
+        && directory !== analysisBoundDirectory) {
         fail(`${item.paperId} staged page directory drifted`);
     }
     const stagingInput = readRegular(path.join(directory, 'staging-input.json'));
@@ -1388,6 +1436,15 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 completed = await replayCompletedAnalysisForStaging({ item, active,
                     generation: arxivGeneration, executionRoot: options.executionRoot,
                     freshArxivSourceRoot: options.freshArxivSourceRoot, readFreshArxivSource });
+                completed = resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
+                    repairCompletedAnalysisSurface: dependencies.repairCompletedAnalysisSurface });
+                if (completed.surfaceRepair) {
+                    registry = transition(registry, plan, item.paperId, replayFromStatus, {
+                        analysis: completed.analysisReceipt
+                    }, now);
+                    persist();
+                    active = registry.entries.find(entry => entry.paperId === item.paperId);
+                }
             } catch (error) {
                 const detail = `${replayFromStatus} completed-analysis replay rejected: ${String(error.message || error).slice(0, 1200)}`;
                 registry = transition(registry, plan, item.paperId, 'failed', {
@@ -1422,13 +1479,20 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 const audit = { contract: 'historical-direct-crash-recovery-v1', version: 1,
                     paperId: item.paperId, runId: item.runId, generation: arxivGeneration,
                     fromStatus: rendererRestaging ? 'staged' : replayFromStatus, normalizedStatus: 'staged',
-                    recoveryStatus: rendererRestaging ? 'renderer-restaged' : 'completed-analysis-replayed',
+                    recoveryStatus: rendererRestaging ? 'renderer-restaged'
+                        : completed.surfaceRepair
+                            ? 'completed-analysis-surface-resealed'
+                            : 'completed-analysis-replayed',
                     sourceSnapshotSha256: completed.sourceDescriptor.sourceSnapshotSha256,
                     recoverySha256: active.analysis?.recovery?.recoverySha256 || null,
                     recoveredAt: now, detail: rendererRestaging
                         ? `renderer ${previousRendererImplementationSha256 || 'missing'} was replaced by `
                             + `${options.currentRendererImplementationSha256}; sealed analysis was replayed without an LLM call`
-                        : 'analysis_complete bytes and source were replayed; LLM analysis was not repeated' };
+                        : completed.surfaceRepair
+                            ? `analysis_complete Reader surface was deterministically resealed `
+                                + `${completed.surfaceRepair.beforeRecordSha256} -> `
+                                + `${completed.surfaceRepair.afterRecordSha256}; LLM analysis was not repeated`
+                            : 'analysis_complete bytes and source were replayed; LLM analysis was not repeated' };
                 console.warn(`[historical-direct-rewrite] ${JSON.stringify(audit)}`);
                 if (typeof dependencies.onCrashRecoveryAudit === 'function') {
                     dependencies.onCrashRecoveryAudit(clone(audit));
@@ -1716,5 +1780,5 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     withEphemeralConferenceFigures, renderConferencePdfPages,
     directProvenanceFor, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
     validateInterruptedSourceDescriptor, recoverInterruptedRegistryEntry,
-    replayCompletedAnalysisForStaging,
+    replayCompletedAnalysisForStaging, resealCompletedAnalysisSurfaceRepair,
     stageDirectExecution, defaultAnalyze, sealedFailureHandoff, runDirectRewrite };

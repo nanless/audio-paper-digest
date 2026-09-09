@@ -123,6 +123,27 @@ test('renderer implementation identity binds source files and output base-path c
     assert.deepEqual(first.files.map(item => item.relativePath), api.RENDERER_IMPLEMENTATION_FILES);
 });
 
+test('default renderer uses a private temporary input file and a bounded subprocess', () => {
+    let observedInputFile;
+    const rendered = api.defaultRender({ paper: { title: '中文' } }, {
+        execFileSync: (command, args, options) => {
+            assert.equal(command, 'bash');
+            assert.equal(options.input, undefined);
+            assert.equal(options.timeout, 60_000);
+            assert.equal(options.killSignal, 'SIGKILL');
+            assert.equal(args.at(-2), '--input-file');
+            observedInputFile = args.at(-1);
+            assert.deepEqual(JSON.parse(fs.readFileSync(observedInputFile, 'utf8')),
+                { paper: { title: '中文' } });
+            assert.equal(fs.statSync(observedInputFile).mode & 0o777, 0o600);
+            return Buffer.from('{"markdown":"rendered","assets":[]}');
+        }
+    });
+    assert.deepEqual(rendered, { markdown: 'rendered', assets: [] });
+    assert.equal(fs.existsSync(observedInputFile), false);
+    assert.equal(fs.existsSync(path.dirname(observedInputFile)), false);
+});
+
 test('selected binding replay tolerates later unrelated or same-identity pages but rejects selected-page drift', t => {
     const f = fixture(t); const selected = api.loadProjectionInputs({ crosswalkRoot: '/unused', crosswalkId: CROSSWALK,
         analysisRoot: '/unused', taxonomyRoot: '/unused', taxonomyRegistry: '/unused',

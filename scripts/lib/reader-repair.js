@@ -210,6 +210,43 @@ function parseRepairableDraft(raw) {
     return value;
 }
 
+function parseReaderPatchJson(raw) {
+    const source = String(raw || '').trim();
+    try { return JSON.parse(source); } catch (originalError) {
+        // Some providers report a response as completed after emitting a
+        // complete final replacement object but before the enclosing array/root
+        // delimiters. Recover only those two mechanically unambiguous suffixes.
+        // Never close a string, scalar, replacement object, or other nested
+        // value: semantic completeness remains the model's responsibility.
+        const stack = [];
+        let inString = false;
+        let escaped = false;
+        for (const character of source) {
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (character === '\\') escaped = true;
+                else if (character === '"') inString = false;
+                continue;
+            }
+            if (character === '"') { inString = true; continue; }
+            if (character === '{' || character === '[') { stack.push(character); continue; }
+            if (character === '}' || character === ']') {
+                const expected = character === '}' ? '{' : '[';
+                if (stack.at(-1) !== expected) throw originalError;
+                stack.pop();
+            }
+        }
+        if (inString || escaped) throw originalError;
+        const tail = source.at(-1);
+        const suffix = stack.length === 1 && stack[0] === '{' && tail === ']'
+            ? '}'
+            : stack.length === 2 && stack[0] === '{' && stack[1] === '[' && tail === '}'
+                ? ']}' : '';
+        if (!suffix) throw originalError;
+        try { return JSON.parse(source + suffix); } catch { throw originalError; }
+    }
+}
+
 function nodeAt(draft, pointer) {
     if (['/readerTitle', '/oneSentenceThesis'].includes(pointer)) {
         return draft[pointer.slice(1)];
@@ -274,6 +311,14 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         seen.push(item.path);
     }
+    const operation = options.atomicOperation;
+    if (operation?.kind === 'relocate_result_table_v1') {
+        const required = operation.requiredReplacementPaths || [];
+        if (required.some(pointer => !allowed.has(pointer))
+            || required.some(pointer => !seen.includes(pointer))) {
+            throw new Error('Reader result-table relocation patch must replace every required atomic target');
+        }
+    }
     const merged = structuredClone(draft);
     for (const item of patch.replacements) {
         const parts = item.path.slice(1).split('/');
@@ -282,6 +327,31 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         target[parts.at(-1)] = structuredClone(item.value);
     }
     assertSafeJson(merged);
+    if (operation?.kind === 'relocate_result_table_v1') {
+        const beforeTables = locateReaderDraftTables(draft);
+        const afterTables = locateReaderDraftTables(merged);
+        const countInSection = (tables, index) => tables.filter(table => table.sectionIndex === index).length;
+        const donorBefore = countInSection(beforeTables, operation.donorSectionIndex);
+        const donorAfter = countInSection(afterTables, operation.donorSectionIndex);
+        const destinationBefore = countInSection(beforeTables, operation.destinationSectionIndex);
+        const destinationAfter = countInSection(afterTables, operation.destinationSectionIndex);
+        const relocated = afterTables.find(table => table.tableIndex === operation.donorGlobalTableIndex
+            && table.sectionIndex === operation.destinationSectionIndex
+            && (String(table.table?.markdown || '').match(/\d+/g) || []).length >= 4);
+        const binding = merged.tableBindings?.[operation.bindingIndex];
+        if (hashDraft(nodeAt(draft, operation.donorSectionPath))
+                === hashDraft(nodeAt(merged, operation.donorSectionPath))
+            || hashDraft(nodeAt(draft, operation.destinationSectionPath))
+                === hashDraft(nodeAt(merged, operation.destinationSectionPath))
+            || donorAfter !== donorBefore - 1
+            || destinationAfter !== destinationBefore + 1
+            || afterTables.length !== beforeTables.length
+            || afterTables.length !== merged.tableBindings.length
+            || !relocated
+            || binding?.tableIndex !== operation.donorGlobalTableIndex) {
+            throw new Error('Reader result-table relocation patch failed its atomic table-move postconditions');
+        }
+    }
     return merged;
 }
 
@@ -432,6 +502,48 @@ function collectTableBindingIssues(draft, options = {}) {
     return issues;
 }
 
+function buildMissingResultTableOperation(draft, issues) {
+    const blockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true);
+    if (!blockingIssues.some(issue => issue?.code === 'reader_result_table_missing'
+        || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))) return null;
+    const locatedTables = locateReaderDraftTables(draft);
+    const destinationSectionIndex = draft.sections.findIndex(section => (
+        ['result', 'ablation'].includes(section?.kind)
+    ));
+    const donor = locatedTables.filter(table => (
+        Number.isInteger(table.bindingIndex)
+        && draft.tableBindings?.[table.bindingIndex]
+        && !['result', 'ablation'].includes(draft.sections?.[table.sectionIndex]?.kind)
+    )).sort((left, right) => (
+        (draft.sections?.[left.sectionIndex]?.kind === 'experiment_setup' ? 0 : 1)
+            - (draft.sections?.[right.sectionIndex]?.kind === 'experiment_setup' ? 0 : 1)
+        || right.tableIndex - left.tableIndex
+    ))[0];
+    if (!donor || destinationSectionIndex < 0) return null;
+    const donorSectionPath = donor.path;
+    const destinationSectionPath = `/sections/${destinationSectionIndex}/body`;
+    const bindingPath = `/tableBindings/${donor.bindingIndex}`;
+    return {
+        kind: 'relocate_result_table_v1',
+        donorGlobalTableIndex: donor.tableIndex,
+        donorOrdinalInSection: locatedTables.filter(table => table.sectionIndex === donor.sectionIndex
+            && table.line <= donor.line).length,
+        donorSectionIndex: donor.sectionIndex,
+        destinationSectionIndex,
+        bindingIndex: donor.bindingIndex,
+        donorSectionPath,
+        destinationSectionPath,
+        bindingPath,
+        requiredReplacementPaths: [donorSectionPath, destinationSectionPath, bindingPath],
+        requiredPostconditions: [
+            'donor section loses exactly one Markdown table',
+            'destination result/ablation section gains exactly one numeric Markdown table',
+            'the total table count and binding stream stay closed',
+            `the moved table and binding remain global table ${donor.tableIndex}`
+        ]
+    };
+}
+
 function buildRepairTargets(draft, issues) {
     const paths = new Set();
     const add = pointer => {
@@ -450,17 +562,157 @@ function buildRepairTargets(draft, issues) {
                 || section?.kind === (binding.targetKind || binding.sectionKind)) add(`/sections/${sectionIndex}/body`);
         });
     };
+    const conceptBridgePlacementGroup = issue => {
+        const message = String(issue?.message || '');
+        if (!(/marker 必须唯一独占一段并位于声明 kind 小节/.test(message)
+            || (/未形成有效术语桥/.test(message)
+                && /已有marker必须唯一独占一段且位于声明小节/.test(message)))) return null;
+        const pathIndex = /^\/conceptBridges\/(\d+)$/.exec(String(issue?.path || ''))?.[1];
+        const messageIndex = /conceptBridges\[(\d+)\]/.exec(message)?.[1];
+        const index = Number(pathIndex ?? messageIndex);
+        const binding = Number.isInteger(index) ? draft.conceptBridges?.[index] : null;
+        if (!binding || binding.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
+            || !Array.isArray(binding.terms) || binding.terms.length !== 2
+            || binding.terms.some(term => typeof term !== 'string'
+                || term.trim().length < 2 || term.trim().length > 48)
+            || typeof binding.explanation !== 'string'
+            || binding.explanation.trim().length < 45 || binding.explanation.trim().length > 320) return null;
+        const sectionIndexes = draft.sections.flatMap((section, sectionIndex) => (
+            String(section?.body || '').includes(binding.marker) ? [sectionIndex] : []
+        ));
+        const hasDeclaredStandaloneMarker = sectionIndexes.some(sectionIndex => (
+            draft.sections[sectionIndex]?.kind === binding.sectionKind
+            && String(draft.sections[sectionIndex]?.body || '').split(/\n\s*\n|\\n/)
+                .map(block => block.trim()).includes(binding.marker)
+        ));
+        if (!hasDeclaredStandaloneMarker) {
+            const declaredSectionIndex = draft.sections.findIndex(section => section?.kind === binding.sectionKind);
+            if (declaredSectionIndex >= 0) sectionIndexes.push(declaredSectionIndex);
+        }
+        return { index, paths: [...new Set(sectionIndexes)].map(sectionIndex => `/sections/${sectionIndex}/body`) };
+    };
     // Source diagnostics explain the authoritative parser failure; they are
     // not an instruction to rewrite every related table at the same time. If
     // at least one blocking issue exists, target only blocking issues. This
     // keeps a local marker/prose repair below the eight-node patch contract and
     // lets the full parser surface any remaining source problem afterward.
     const blockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true);
-    const actionableIssues = blockingIssues.length ? blockingIssues : issues;
+    let actionableIssues = blockingIssues.length ? blockingIssues : issues;
+    const firstSubstantiveIssue = actionableIssues.find(issue => (
+        !String(issue?.message || '').startsWith('Reader patch rejected:')
+    ));
+    const firstPlacementGroup = conceptBridgePlacementGroup(firstSubstantiveIssue);
+    if (firstPlacementGroup) {
+        // Bridge placement does not authorize rewriting an otherwise valid
+        // bridge definition. Several duplicated markers may be diagnosed at
+        // once, so collect body groups in stable order but stay inside the
+        // eight-node patch contract. The full parser will surface any remainder.
+        const seenBridgeIndexes = new Set();
+        for (const issue of actionableIssues) {
+            const group = conceptBridgePlacementGroup(issue);
+            if (!group || seenBridgeIndexes.has(group.index)) continue;
+            seenBridgeIndexes.add(group.index);
+            for (const pointer of group.paths) {
+                if (paths.size >= 8) break;
+                add(pointer);
+            }
+            if (paths.size >= 8) break;
+        }
+        if (paths.size) {
+            return [...paths].map(pointer => ({ path: pointer,
+                oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+        }
+    }
+    const missingNarrativeTableIssue = blockingIssues.find(issue => (
+        /至少需要\s*\d+\s*张有叙事闭环的\s*Markdown\s*表，当前\s*\d+/.test(String(issue?.message || ''))
+    ));
+    if (missingNarrativeTableIssue) {
+        // When the draft already declares the missing binding, author exactly
+        // one new table beside the last existing table. The old generic table
+        // branch authorized every experiment section and every binding, which
+        // made a one-table repair large enough to truncate before its JSON
+        // suffix. The full parser will re-check ordering and all source seals.
+        const tables = locateReaderDraftTables(draft);
+        const missingBindingIndex = tables.length;
+        if (tables.length && draft.tableBindings?.[missingBindingIndex]) {
+            add(tables.at(-1).path);
+            add(`/tableBindings/${missingBindingIndex}`);
+            actionableIssues = actionableIssues.filter(issue => issue !== missingNarrativeTableIssue);
+        }
+    }
+    const missingResultTableIssue = blockingIssues.find(issue => (
+        issue?.code === 'reader_result_table_missing'
+        || /^读者文章主结果表覆盖不足/.test(String(issue?.message || ''))
+    ));
+    const missingResultTableOperation = buildMissingResultTableOperation(draft, issues);
+    if (missingResultTableIssue && missingResultTableOperation) {
+        // Reuse one existing table ordinal instead of authorizing every table
+        // and binding. Moving/replacing the final experiment-setup table keeps
+        // all later table indexes stable: the patch edits its source section,
+        // the first result/ablation section, and exactly one matching binding.
+        add(missingResultTableOperation.donorSectionPath);
+        add(missingResultTableOperation.destinationSectionPath);
+        add(missingResultTableOperation.bindingPath);
+        actionableIssues = actionableIssues.filter(issue => !(
+            issue?.code === 'reader_result_table_missing'
+            || /^读者文章主结果表覆盖不足/.test(String(issue?.message || ''))
+        ));
+    }
+    const globalWideTableIssue = blockingIssues.find(issue => /宽表/.test(String(issue?.message || '')));
+    if (globalWideTableIssue) {
+        // A global minimum-wide-table gate used to authorize every table body
+        // and binding at once. Large five-node patches repeatedly ended before
+        // their JSON suffix. Repair one table pair, then let the authoritative
+        // full parser identify the next deficit on the following attempt.
+        const tableSpecific = issues.filter(issue => (
+            /^\/tableBindings\/(?:0|[1-9]\d*)$/.test(String(issue?.path || issue?.bindingPath || ''))
+            || /tableBindings\[(?:0|[1-9]\d*)\]/.test(String(issue?.message || ''))
+        )).sort((left, right) => {
+            const index = issue => Number(/^\/tableBindings\/(\d+)$/.exec(
+                String(issue?.path || issue?.bindingPath || '')
+            )?.[1] ?? /tableBindings\[(\d+)\]/.exec(String(issue?.message || ''))?.[1] ?? Number.MAX_SAFE_INTEGER);
+            return index(left) - index(right);
+        });
+        const locatedTables = locateReaderDraftTables(draft);
+        const sectionTableCounts = locatedTables.reduce((counts, table) => {
+            counts.set(table.sectionIndex, (counts.get(table.sectionIndex) || 0) + 1);
+            return counts;
+        }, new Map());
+        const repairableTables = locatedTables.filter(table => (
+            Number.isInteger(table.bindingIndex) && draft.tableBindings?.[table.bindingIndex]
+        ));
+        const narrowTables = repairableTables.filter(table => (
+            !Array.isArray(table.table?.header) || table.table.header.length < 5
+        ));
+        const firstTable = (narrowTables.length ? narrowTables : repairableTables).sort((left, right) => (
+            (sectionTableCounts.get(left.sectionIndex) || 0) - (sectionTableCounts.get(right.sectionIndex) || 0)
+            || String(draft.sections?.[left.sectionIndex]?.body || '').length
+                - String(draft.sections?.[right.sectionIndex]?.body || '').length
+            || left.bindingIndex - right.bindingIndex
+        ))[0];
+        const firstBindingIndex = Number.isInteger(firstTable?.bindingIndex)
+            ? firstTable.bindingIndex
+            : Number.isInteger(firstTable?.tableIndex) ? firstTable.tableIndex - 1 : null;
+        actionableIssues = tableSpecific.length ? [tableSpecific[0]]
+            : Number.isInteger(firstBindingIndex) && firstBindingIndex >= 0
+                ? [{ ...globalWideTableIssue, path: `/tableBindings/${firstBindingIndex}` }]
+                : [globalWideTableIssue];
+    }
     for (const issue of actionableIssues) {
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
         const message = issue.message || '';
+        let localizedComparisonUnit = false;
+        for (const match of message.matchAll(/comparison_unit_missing:([^；\n]+)/gu)) {
+            const surface = match[1].trim().replace(/\s+/gu, '');
+            if (!surface) continue;
+            draft.sections.forEach((section, index) => {
+                if (String(section?.body || '').replace(/\s+/gu, '').includes(surface)) {
+                    add(`/sections/${index}/body`);
+                    localizedComparisonUnit = true;
+                }
+            });
+        }
         // Never replay or accept a stale patch. Older persisted failures did
         // not carry a structured path, so recover only the exact authorized
         // pointer from their error; add() then binds it to today's node SHA.
@@ -482,14 +734,15 @@ function buildRepairTargets(draft, issues) {
         for (const match of message.matchAll(/quantitative_chinese_numeral:([^；\n]+)/gu)) {
             const surface = match[1].trim();
             if (!surface) continue;
-            const escaped = surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const normalizedSurface = surface.normalize('NFKC');
+            const escaped = normalizedSurface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             const attachedNumeral = new RegExp(`${escaped}(?=[零〇一二两三四五六七八九十百千万亿])`, 'u');
             let indexes = draft.sections.flatMap((section, index) => (
-                attachedNumeral.test(String(section?.body || '')) ? [index] : []
+                attachedNumeral.test(String(section?.body || '').normalize('NFKC')) ? [index] : []
             ));
             if (!indexes.length) {
                 indexes = draft.sections.flatMap((section, index) => (
-                    String(section?.body || '').includes(surface) ? [index] : []
+                    String(section?.body || '').normalize('NFKC').includes(normalizedSurface) ? [index] : []
                 ));
             }
             indexes.forEach(index => add(`/sections/${index}/body`));
@@ -512,7 +765,7 @@ function buildRepairTargets(draft, issues) {
         if (issue.code === 'reader_length_preflight' || /中文字数|篇幅预估/.test(message)) {
             draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
         }
-        if (/表|tableBindings|cell|quote/i.test(message)) {
+        if (!localizedComparisonUnit && /表|tableBindings|cell|quote/i.test(message)) {
             const boundIndex = /^\/tableBindings\/(\d+)$/.exec(issue.bindingPath || issue.path || '');
             const wanted = Number(boundIndex ? Number(boundIndex[1]) + 1 : message.match(/第\s*(\d+)\s*张/)?.[1]
                 || (message.match(/tableBindings\[(\d+)\]/) ? Number(message.match(/tableBindings\[(\d+)\]/)[1]) + 1 : 0));
@@ -532,11 +785,13 @@ function buildRepairTargets(draft, issues) {
     // Global readability/length errors cannot safely be localized from a regex
     // message. Keep all body targets reviewable, but cap each patch to 8 nodes.
     if (!paths.size) draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
-    return [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+    return [...paths].slice(0, 8).map(pointer => ({ path: pointer,
+        oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
 }
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const targets = buildRepairTargets(draft, issues);
+    const atomicOperation = buildMissingResultTableOperation(draft, issues);
     const targetText = JSON.stringify(targets);
     const figureOrdinals = new Set();
     for (const match of targetText.matchAll(/\[\[FIGURE_(\d+)\]\]/g)) figureOrdinals.add(Number(match[1]));
@@ -550,7 +805,7 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const evidence = String(sourceEvidence || '');
     const exactQuotes = [...new Set(targets.flatMap(target => target.value?.sourceQuotes || []))]
         .filter(quote => typeof quote === 'string' && String(sourceText).includes(quote));
-    return { draftSha256: hashDraft(draft), targets, issues, evidence,
+    return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation,
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
 }
 
@@ -693,6 +948,6 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,
-    parseRepairableDraft, collectDraftIssues,
+    parseRepairableDraft, parseReaderPatchJson, collectDraftIssues,
     buildRepairTargets, applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
     retireFailedCandidate };

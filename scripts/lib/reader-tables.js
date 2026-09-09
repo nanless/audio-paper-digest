@@ -50,6 +50,86 @@ function hasExplicitRepeatedDatasetSplitScale(cell, context = {}) {
     return explicitThreeWaySplit || explicitDatasetSplit;
 }
 
+function bracketedNumericVectors(value) {
+    const text = String(value || '');
+    const vectors = [];
+    const bracket = /\[([^\]\r\n]+)\]|\(([^)\r\n]+)\)|（([^）\r\n]+)）|【([^】\r\n]+)】/g;
+    const number = /[+\-\u2212]?\d+(?:\.\d+)?(?:[eE][+\-\u2212]?\d+)?/g;
+    for (const match of text.matchAll(bracket)) {
+        const content = match.slice(1).find(item => item !== undefined) || '';
+        const normalized = content.normalize('NFKC').replace(/\u2212/g, '-');
+        const remainder = normalized
+            .replace(number, '')
+            .replace(/\.\.\.|\u2026/g, '')
+            .replace(/[\s,\uFF0C\u3001;\uFF1B/]/g, '');
+        if (remainder) continue;
+        const tokens = normalized.match(/[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?|\.\.\.|\u2026/g)
+            ?.map(token => (/^(?:\.\.\.|\u2026)$/.test(token)
+                ? '\u2026' : token.toLowerCase())) || [];
+        const numericTokens = tokens.filter(token => token !== '\u2026');
+        if (numericTokens.length < 3 || new Set(numericTokens).size === numericTokens.length) continue;
+        vectors.push({
+            index: match.index,
+            length: match[0].length,
+            surface: match[0],
+            sequence: JSON.stringify(tokens)
+        });
+    }
+    return vectors;
+}
+
+function hasSourceBoundRepeatedNumericVector(cell, context = {}, duplicate = null) {
+    const text = String(cell || '');
+    const rowContext = [text, context.header?.[context.columnIndex], ...(context.row || [])
+        .filter(value => value !== cell)].map(value => String(value || '')).join(' ');
+    if (!/(?:loss\s*)?weights?|schedules?|layers?|layer[-\s]?wise|\bRVQ\b|权重|调度|层(?:级|数|权重)?/i
+        .test(rowContext)) return false;
+    const candidates = bracketedNumericVectors(text).filter(vector => (
+        !duplicate || duplicate.index >= vector.index
+            && duplicate.index + duplicate.length <= vector.index + vector.length
+    ));
+    if (!candidates.length) return false;
+    const sourceSequences = new Set((Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
+        .flatMap(bracketedNumericVectors).map(vector => vector.sequence));
+    // The exemption is evidence-bound: compare the complete normalized token
+    // sequence, including order, ellipses, repeated values, and multiplicity.
+    // A mere set-membership match would incorrectly accept a dropped or pasted
+    // repeated layer weight such as four 2s when the source contains five.
+    return candidates.some(vector => sourceSequences.has(vector.sequence));
+}
+
+function colonNumericVectors(value) {
+    const text = String(value || '');
+    const number = '[+\\-\\u2212]?\\d+(?:\\.\\d+)?(?:[eE][+\\-\\u2212]?\\d+)?';
+    const list = new RegExp(`${number}(?:\\s*[:\\uFF1A]\\s*${number}){2,}`, 'g');
+    return [...text.matchAll(list)].map(match => {
+        const tokens = match[0].normalize('NFKC').replace(/\u2212/g, '-')
+            .match(/[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?/g)
+            ?.map(token => token.toLowerCase()) || [];
+        return {
+            index: match.index,
+            length: match[0].length,
+            sequence: JSON.stringify(tokens)
+        };
+    }).filter(vector => {
+        const tokens = JSON.parse(vector.sequence);
+        return new Set(tokens).size < tokens.length;
+    });
+}
+
+function hasSourceBoundRepeatedColonVector(cell, context = {}, duplicate = null) {
+    const candidates = colonNumericVectors(cell);
+    // Keep this exception narrow: a duplicated whole ratio produces multiple
+    // vectors and must still fail even if one clean copy exists in the source.
+    if (candidates.length !== 1) return false;
+    const candidate = candidates[0];
+    if (duplicate && !(duplicate.index >= candidate.index
+        && duplicate.index + duplicate.length <= candidate.index + candidate.length)) return false;
+    const sourceSequences = new Set((Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
+        .flatMap(colonNumericVectors).map(vector => vector.sequence));
+    return sourceSequences.has(candidate.sequence);
+}
+
 function findReaderTablePasteDuplication(cell, context = {}) {
     const text = String(cell || '');
     const compact = text.replace(/\s+/g, '');
@@ -66,6 +146,10 @@ function findReaderTablePasteDuplication(cell, context = {}) {
         if (hasExplicitRepeatedScientificMeasurement(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasExplicitRepeatedDatasetSplitScale(compact, context)) continue;
+        if (hasSourceBoundRepeatedNumericVector(compact, context,
+            { index: doubled.index, length: doubled[0].length })) continue;
+        if (hasSourceBoundRepeatedColonVector(compact, context,
+            { index: doubled.index, length: doubled[0].length })) continue;
         return `单元格存在原文粘连复写“${doubled[0].slice(0, 40)}”，只保留其中一份`;
     }
     if (/([A-Za-z]+)(\d*)\1_\{[^}]*\}/.test(compact)) {
@@ -176,7 +260,10 @@ function assessReaderTableSelectionEligibility(table) {
         }
         for (const [row, cells] of matrix.entries()) {
             for (const [column, text] of cells.entries()) {
-                if (findReaderTablePasteDuplication(text)) add('source_display_cleanup_required', { row, column });
+                if (findReaderTablePasteDuplication(text, {
+                    header: matrix[0], row: cells, rowIndex: row, columnIndex: column,
+                    sourceTexts: [text]
+                })) add('source_display_cleanup_required', { row, column });
                 if (/\\[A-Za-z]+/.test(text)) add('unresolved_source_tex', { row, column });
                 if (unsafeMarkdownCell(text)) add('unsafe_markdown_cell', { row, column });
             }
@@ -370,7 +457,9 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
 
 module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
-    hasExplicitRepeatedScientificMeasurement, findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
+    hasExplicitRepeatedScientificMeasurement, bracketedNumericVectors,
+    hasSourceBoundRepeatedNumericVector,
+    findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
     effectiveReaderTableRows, effectiveReaderTableHeaderRows, canonicalizeReaderSelectionRows,
     renderReaderTableSelection, repairUniqueReaderTableSelectionHeader,
     compileReaderTableSelections };

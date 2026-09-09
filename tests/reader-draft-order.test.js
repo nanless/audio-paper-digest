@@ -228,6 +228,28 @@ test('unique concept markers move or insert into one canonical declared section 
     assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
 });
 
+test('concept marker moves and inserts tolerate terminal LF while still rejecting trailing spaces', () => {
+    const bridge = (ordinal, sectionKind) => ({ marker: `[[CONCEPT_BRIDGE_${ordinal}]]`,
+        terms: [`term ${ordinal}`, `other ${ordinal}`], sectionKind, explanation: 'unchanged explanation' });
+    const input = { sections: [
+        { kind: 'problem', body: 'problem prose remains byte exact\n' },
+        { kind: 'component', body: 'component prose remains byte exact\n\n[[CONCEPT_BRIDGE_1]]\n' },
+        { kind: 'training', body: 'training prose remains byte exact\n' }
+    ], conceptBridges: [bridge(1, 'problem'), bridge(2, 'training')] };
+    const { draft, mapping } = normalizeReaderDraftOrder(input);
+    assert.equal(draft.sections[0].body, 'problem prose remains byte exact\n\n[[CONCEPT_BRIDGE_1]]\n');
+    assert.equal(draft.sections[1].body, 'component prose remains byte exact\n');
+    assert.equal(draft.sections[2].body, 'training prose remains byte exact\n\n[[CONCEPT_BRIDGE_2]]\n');
+    assert.deepEqual(mapping.conceptMarkerLocations.map(item => item.operation), ['move', 'insert']);
+    assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
+
+    const trailingSpace = structuredClone(input);
+    trailingSpace.sections[0].body = 'problem prose remains byte exact \n';
+    const rejected = normalizeReaderDraftOrder(trailingSpace);
+    assert.equal(rejected.draft.sections[0].body, trailingSpace.sections[0].body);
+    assert.ok(!rejected.draft.sections[0].body.includes('[[CONCEPT_BRIDGE_1]]'));
+});
+
 test('concept marker location normalization refuses ambiguous, inline and non-final moves', () => {
     const bridge = { marker: '[[CONCEPT_BRIDGE_1]]', terms: ['term one', 'term two'],
         sectionKind: 'problem', explanation: 'unchanged explanation' };

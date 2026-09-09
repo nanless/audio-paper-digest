@@ -6,7 +6,8 @@ const path = require('node:path');
 const cheerio = require('cheerio');
 const { renderReaderTableSelection, compileReaderTableSelections,
     assessReaderTableSelectionEligibility, findReaderTablePasteDuplication,
-    hasExplicitRepeatedScientificMeasurement, effectiveReaderTableRows,
+    hasExplicitRepeatedScientificMeasurement, hasSourceBoundRepeatedNumericVector,
+    effectiveReaderTableRows,
     canonicalizeReaderSelectionRows } = require('../scripts/lib/reader-tables.js');
 
 function artifactsFixture() {
@@ -183,6 +184,59 @@ test('2512.10571 repeated split sizes require an exact three-way dataset context
     ]) {
         assert.match(findReaderTablePasteDuplication(value, context), /粘连复写/, value);
     }
+});
+
+test('2604.09371 repeated weight vectors require exact source order and multiplicity', () => {
+    const source = 'Changing the layer-wise loss weights from [2,1,...,1] to '
+        + 'a steeper schedule [8,4,3,2,2,2,2,2,1,...,1] yields comparable scores.';
+    const exact = '权重由[2,1,…,1]改为[8,4,3,2,2,2,2,2,1,…,1]';
+    const droppedRepeat = '权重由[2,1,…,1]改为[8,4,3,2,2,2,2,1,…,1]';
+    const reordered = '权重由[2,1,…,1]改为[8,4,2,3,2,2,2,2,1,…,1]';
+    const context = value => ({
+        columnIndex: 1,
+        header: ['变体', '变动', '结论'],
+        row: ['A2 Loss weight', value, '平均分相当'],
+        sourceTexts: [source]
+    });
+
+    assert.equal(hasSourceBoundRepeatedNumericVector(exact, context(exact)), true);
+    assert.equal(findReaderTablePasteDuplication(exact, context(exact)), null);
+    assert.match(findReaderTablePasteDuplication(droppedRepeat, context(droppedRepeat)), /粘连复写/);
+    assert.match(findReaderTablePasteDuplication(reordered, context(reordered)), /粘连复写/);
+    assert.match(findReaderTablePasteDuplication(exact, { ...context(exact), sourceTexts: [] }), /粘连复写/);
+    assert.match(findReaderTablePasteDuplication(
+        `${exact}${exact}`, context(`${exact}${exact}`)
+    ), /粘连复写/, 'an exact source vector cannot hide a duplicated whole cell');
+});
+
+test('source-bound vector exemption is limited to explicit weight schedule or layer semantics', () => {
+    const vector = '[8,4,3,2,2,2,2,2,1,…,1]';
+    assert.match(findReaderTablePasteDuplication(vector, {
+        columnIndex: 1, header: ['ID', '值'], row: ['sample', vector], sourceTexts: [vector]
+    }), /粘连复写/);
+    assert.equal(findReaderTablePasteDuplication(vector, {
+        columnIndex: 1, header: ['配置', '层权重'], row: ['RVQ', vector], sourceTexts: [vector]
+    }), null);
+});
+
+test('2604.15804 source-bound repeated colon ratio is not mistaken for pasted text', () => {
+    const ratio = '3.5 : 3.5 : 3';
+    const context = {
+        columnIndex: 5,
+        header: ['模块', '数据', '语言', '规模', '覆盖', '多语比例'],
+        row: ['AuT', '音频文本对', '20+ 语言', '40 million 小时', '多语', ratio],
+        sourceTexts: ['The Chinese:English:multilingual ratio comes to 3.5 : 3.5 : 3.']
+    };
+    assert.equal(findReaderTablePasteDuplication(ratio, context), null);
+    assert.match(findReaderTablePasteDuplication(ratio, {
+        ...context, sourceTexts: []
+    }), /粘连复写/, 'the ratio exception requires exact source evidence');
+    assert.match(findReaderTablePasteDuplication('3.5 : 3.5 : 4', {
+        ...context, row: [...context.row.slice(0, -1), '3.5 : 3.5 : 4']
+    }), /粘连复写/, 'order and multiplicity must match the source ratio');
+    assert.match(findReaderTablePasteDuplication(`${ratio}；${ratio}`, {
+        ...context, row: [...context.row.slice(0, -1), `${ratio}；${ratio}`]
+    }), /粘连复写/, 'a source-bound ratio cannot hide a duplicated whole cell');
 });
 
 test('source row/column selection preserves multilevel headers, spanning DOM identity, values and legacy v4 output', () => {

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -51,6 +52,20 @@ def metadata_sidecar(paper, abstract_sha):
 
 
 class HistoricalPageRenderTests(unittest.TestCase):
+    def test_packet_input_file_is_absolute_regular_and_bounded(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            packet = os.path.join(temporary, 'packet.json')
+            with open(packet, 'wb') as handle:
+                handle.write(b'{"paper":{"title":"test"}}')
+            self.assertEqual(
+                renderer.read_packet_bytes(['renderer', '--input-file', packet]),
+                b'{"paper":{"title":"test"}}',
+            )
+            with self.assertRaisesRegex(ValueError, 'must be absolute'):
+                renderer.read_packet_bytes([
+                    'renderer', '--input-file', 'relative-packet.json',
+                ])
+
     def test_real_publish_helpers_render_reader_formula_and_sidecars(self):
         paper = llm_api_publication_fixture()
         sealed_summary = paper['parsed']['summary']

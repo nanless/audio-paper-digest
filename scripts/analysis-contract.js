@@ -183,8 +183,12 @@ const CORE_SUMMARY_MAX_SENTENCES = 9;
 const CORE_SUMMARY_RESULT_UNAVAILABLE = '原文未提供可核对的关键定量结果';
 const CORE_SUMMARY_COST_UNAVAILABLE = '原文未披露训练、推理或部署成本';
 const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])/g;
-const CORE_SUMMARY_METRIC_PATTERN = /(?:WER|CER|PER|F1|F[- ]?Score|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|(?<![A-Za-z0-9_])MSR(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FVD(?![A-Za-z0-9_])|accuracy|error rate|score|latency|throughput|RTF|FPS|准确率|正确率|错误率|误差率|召回率|精确率|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)/i;
-const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)/i;
+// English metric names must be complete tokens. Without these shared boundaries,
+// short metrics such as mAP/PAR/PER match prose words including "mapping",
+// "Particle" and "performance", turning section numbers and citations into
+// apparent experimental measurements.
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:WER|CER|PER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SI-SDR|SDR|SNR|EER|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|ASR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP[_ -](?:MS|LAION)|DeSync|IB|accuracy|error rate|success rate|win rate|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)/i;
+const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)/i;
 const CORE_SUMMARY_DIRECTION_CONNECTOR_PATTERN = /(?:高于|低于|超过|优于|领先)/g;
 const CORE_SUMMARY_NON_RESULT_PATTERN = /(?:模型|版本|参数量|样本量|训练步数|轮次|批量|batch|学习率|年份|第\s*\d+|图\s*\d+|表\s*\d+|式\s*\d+|章节|引用)/i;
 const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
@@ -210,7 +214,7 @@ const EXPERIMENT_TABLE_LIMITS = Object.freeze({
     minEvidenceRows: 3,
     minNumericCells: 2
 });
-const TABLE_IDENTIFIER_HEADER_RE = /(?:^editing(?: operation)?$|(?:^|\b)(?:method|algorithm|approach|strategy|mechanism|aggregation|model|system|backbone|front[ -]?end|pipeline|variant|representation|embedding|feature|encoder|baseline|config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure)(?:\b|$)|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|表征|嵌入|特征|编码器|基线|配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量)/i;
+const TABLE_IDENTIFIER_HEADER_RE = /(?:^editing(?: operation)?$|(?:^|\b)(?:method|algorithm|approach|strategy|mechanism|aggregation|model|system|backbone|front[ -]?end|pipeline|variant|ablation|representation|embedding|feature|encoder|baseline|config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure)(?:\b|$)|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量)/i;
 const TABLE_VAGUE_METRIC_HEADER_RE = /^(?:结果|数值|数值变化|观察|观察结果|实际观测|报告结果|主要观察|说明|解释|含义|方向|关键条件|结论|结论边界|证据边界|应如何解读|对照或说明|对照或变化|结果或结论)$/i;
 const TABLE_DIRECTION_MARK_RE = /(?:↑|↓|\\(?:uparrow|downarrow|nearrow|searrow)\b|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)/i;
 const TABLE_DIRECTIONAL_METRIC_RE = /(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)/i;
@@ -548,6 +552,18 @@ function sourceExperimentEvidence(sourceText) {
     return end > 0 ? tail.slice(0, end) : tail;
 }
 
+function hasAffirmedOverfittingEvidence(text) {
+    const clauses = String(text || '').split(/[。；！？!?\n]/);
+    const positivePattern = /(?:出现|发生|呈现|表现出|暴露出|导致|造成)(?:了)?[^，,：:\n未无不没]{0,12}(?:域)?过拟合/gi;
+    for (const clause of clauses) {
+        for (const match of clause.matchAll(positivePattern)) {
+            const prefix = clause.slice(Math.max(0, match.index - 12), match.index);
+            if (!/(?:未|没有|无|不曾|并未)[^，,：:\n]{0,10}$/.test(prefix)) return true;
+        }
+    }
+    return false;
+}
+
 function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     const results = extractSection(analysis, '实验结果');
     if (!results) return null;
@@ -589,7 +605,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
                 }
             }
         }
-        const comparisonPattern = /(?:比较|检验|考察|回答|关键问题|差异|收益|代价|是否|何种|多大|哪些)/;
+        const comparisonPattern = /(?:比较|对比|检验|考察|回答|关键问题|差异|收益|代价|是否|能否|何种|多大|哪些)/;
         const boundaryPattern = /(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化)/;
         const before = resultLines.slice(0, table.startLine).join('\n').trim()
             .split(/\n\s*\n/).filter(Boolean).slice(-5).reverse()
@@ -620,8 +636,9 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     if (empirical && sourceHasAblation && !resultHasAblation) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
     }
-    const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(sourceText);
-    const resultHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(results);
+    const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效|负(?:面)?结果|性能回落|回落至|降幅|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(sourceText);
+    const resultHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|性能回落|回落至|降幅|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(results)
+        || hasAffirmedOverfittingEvidence(results);
     if (empirical && sourceHasNegative && !resultHasNegative) {
         return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
     }
@@ -927,8 +944,10 @@ function stripCoreSummaryNonResultNumerals(text) {
     return String(text || '')
         .replace(/https?:\/\/\S+/g, ' ')
         .replace(/\[[0-9,;\s-]+\]/g, ' ')
-        .replace(/\b(?:theorem|lemma|proposition|corollary|definition|assumption|equation|figure|table|section|appendix)\s*\d+(?:\.\d+)*/gi, ' ')
+        .replace(/§\s*\d+(?:\.\d+)*/g, ' ')
+        .replace(/\b(?:theorem|lemma|proposition|corollary|definition|assumption|equation|fig(?:ure)?\.?|table|section|appendix)\s*\d+(?:\.\d+)*/gi, ' ')
         .replace(/(?:定理|引理|命题|推论|公理|定义|假设|公式|方程|等式|式|图|表|章节|附录)\s*(?:编号)?\s*\d+(?:\.\d+)*/g, ' ')
+        .replace(/(?<![A-Za-z0-9_])\d+(?:,\d{3})*(?:\.\d+)?\s*(?:种\s*)?(?:languages?|语言)(?![A-Za-z0-9_])/gi, ' ')
         .replace(/\b(?:19|20)\d{2}\b/g, ' ')
         .replace(/\b\d+(?:\.\d+)?\s*[BbMmKk]\b/g, ' ')
         .replace(/\b(?:v|ver(?:sion)?\.?)[-_ ]?\d+(?:\.\d+)*\b/gi, ' ')
@@ -951,13 +970,40 @@ function hasCoreSummaryQuantitativeEvidence(text) {
     });
 }
 
+function hasSourceMeasuredLossComparison(sentences) {
+    const values = Array.isArray(sentences) ? sentences : [];
+    return values.some((rawSentence, index) => {
+        const sentence = stripCoreSummaryNonResultNumerals(rawSentence);
+        const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
+        if (numbers.length < 2
+            || !/\b(?:(?:signal|test|validation)\s+)?loss\s+function\s+values?\b|\b(?:test|validation)\s+loss(?:\s+values?)?\b/i.test(sentence)) {
+            return false;
+        }
+        const hasNamedSides = /\b(?:baseline|control|reference|comparison)\b/i.test(sentence)
+            && /\b(?:our|ours|proposed|present|this)\s+(?:approach|method|model|system|technique)\b/i.test(sentence);
+        const hasExplicitContrast = /\b(?:while|whereas|versus|vs\.?|compared\s+(?:with|to))\b/i.test(sentence);
+        if (!hasNamedSides && !hasExplicitContrast) return false;
+        const localContext = values.slice(Math.max(0, index - 2), index + 1).join(' ');
+        return /(?:ablation|experiment|evaluation|result|benchmark|test set|dataset|消融|实验|评测|结果|基准|测试集|数据集)/i.test(localContext);
+    });
+}
+
+function stripDuplicatedLineFootnoteMarkers(text) {
+    return String(text || '').replace(
+        /([^\d\r\n])[ \t]+(\d{1,3})\r?\n[ \t]*(\d{1,3})[ \t]*(?=\r?\n|$)/g,
+        (match, preceding, inline, standalone) => (
+            inline === standalone || inline === `${standalone}${standalone}` ? preceding : match
+        )
+    );
+}
+
 function coreSummaryQuantitativeResultState(text) {
     const candidates = String(text || '').split(/[。！？!?\n]/).map(rawSentence => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
         const hasMetric = Boolean(sentence && CORE_SUMMARY_METRIC_PATTERN.test(sentence));
         const hasDirection = Boolean(sentence && CORE_SUMMARY_COMPARISON_PATTERN.test(sentence));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
-        const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\bon\b)/i.test(sentence);
+        const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
         const crossMetricComparison = hasCrossMetricDirectionalComparison(sentence);
@@ -1029,13 +1075,33 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     }
     const chain = summary.match(/(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件)/g) || [];
     const roles = summary.match(/(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入)/g) || [];
-    if (chain.length < 2 || roles.length < 2) issues.push('缺少 2–4 步方法链的分工与衔接');
+    const tierRoleStages = new Set([...summary.matchAll(
+        /(?<![A-Za-z0-9_])Tier[-‐‑‒–—]([LMH])(?![A-Za-z0-9_])[^；。！？!?\n]{0,120}(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|打分|匹配|投票|检索|推理|判决|路由)/gi
+    )].map(match => match[1].toUpperCase()));
+    const hasNumberedMethodChain = chain.length >= 2 && roles.length >= 2;
+    const hasTieredMethodChain = tierRoleStages.size >= 2;
+    if (!hasNumberedMethodChain && !hasTieredMethodChain) {
+        issues.push('缺少 2–4 步方法链的分工与衔接');
+    }
     const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
+    // LaTeXML/PDF extraction can repeat a footnote marker both inline and on
+    // its own next line (including the observed "11\n1" double-rendering of
+    // marker 1). Remove only that exact pair before joining soft lines; a
+    // normal trailing measurement whose next line differs remains evidence.
+    const quantitativeSourceText = stripDuplicatedLineFootnoteMarkers(sourceText)
+        .replace(/([^\n])\r?\n(?!\r?\n)/g, '$1 ');
+    const quantitativeSourceSentences = quantitativeSourceText.trim()
+        .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)
+        .map(sentence => sentence.trim())
+        .filter(Boolean);
     const sourceHasQuantitativeEvidence = sourceText
-        ? sourceText.split(/[。！？!?\n]/).some(sentence => (
+        // PDF soft wraps have already been joined above. Split English dots
+        // only before a normal capitalized next sentence, preserving decimal
+        // points and references such as "Fig. 3" inside the evidence sentence.
+        ? quantitativeSourceSentences.some(sentence => (
             /(?:experiment|evaluation|result|benchmark|test set|dataset|实验|评测|结果|基准|测试集|数据集)/i.test(sentence)
             && hasCoreSummaryQuantitativeEvidence(sentence)
-        ))
+        )) || hasSourceMeasuredLossComparison(quantitativeSourceSentences)
         : null;
     const quantitativeResultState = coreSummaryQuantitativeResultState(summary);
     const completeQuantitativeResult = quantitativeResultState.complete;
@@ -2069,6 +2135,7 @@ module.exports = {
     EDITORIAL_QUALITY_CONTRACT_VERSION,
     ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
     CORE_SUMMARY_CONTRACT_VERSION,
+    CORE_SUMMARY_RESULT_UNAVAILABLE,
     REQUIRED_RECOVERY_STAGES,
     RECOVERY_STAGE_TERMINAL_STATUSES,
     MANUAL_COMPLETE_STATUS,

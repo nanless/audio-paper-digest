@@ -1038,6 +1038,38 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 incomplete, publish_to_blog.parse_analysis(incomplete['analysis'])
             )
 
+    def test_core_summary_accepts_auroc_only_with_distinct_action_bearing_tiers(self):
+        summary = (
+            '输入为单段听诊录音（含咳嗽、呼气、肺音），输出为对应任务的类别标签，难点在于录音质量、设备与病理细微度差异大且零样本下无目标域标注可用。'
+            'TRIAGE 构建三级流水线：Tier-L 将音频与类别名文本在冻结的音频-文本嵌入模型共享空间做余弦相似度打分并以 top-2 间隔作为置信度；未通过阈值的样本进入 Tier-M，按临床维度分组的描述子模板做组内最优匹配形成属性画像再经任务规则表投票；仍不确定则进入 Tier-H，基于 FAISS 检索音频-报告对并连同画像与 Tier-L 分数一起提示大语言模型作最终判决，门控阈值在验证集上选定。'
+            '与统一算力的零样本基线相比，该机制把额外算力集中于不确定样本而非全量扩展。'
+            '在 9 个呼吸音任务的零样本评测设置下，TRIAGE 的平均 AUROC 达到 0.744，高于 CLAP 基线的 0.573，且在 8/9 任务上超越 AcuLa 零样本。'
+            '该结论适用边界为依赖冻结 AcuLa 编码器与外部报告库质量，描述子缺失或检索失配时增益衰减，尚未验证跨设备与前瞻性临床外推。'
+            '原文未披露端到端训练成本，推理成本随阈值可调，Tier-H 单次调用以 Gemini 3 Pro 为默认后端且检索深度超过 3 篇后收益趋于饱和。'
+        )
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(summary)
+        )
+        one_tier_only = re.sub(r'Tier-[MH]', 'Tier-L', summary)
+        self.assertIn(
+            '缺少 2–4 步方法链',
+            publish_to_blog._detailed_core_summary_semantic_issue(one_tier_only),
+        )
+        names_without_roles = re.sub(
+            r'Tier-L 将.*?门控阈值在验证集上选定。',
+            '实验材料只把 Tier-L、Tier-M 与 Tier-H 作为三种名称并列罗列，但没有说明各自动作、接收材料、触发条件、结束条件或相互关系；这些名字也可能只是预算标签、实验分组或界面选项，读者无法据此判断每档查看什么证据、采用什么规则、何时结束以及何时转向另一档，故名称枚举本身不足以证明存在连续处理路径。',
+            summary,
+        )
+        self.assertIn(
+            '缺少 2–4 步方法链',
+            publish_to_blog._detailed_core_summary_semantic_issue(names_without_roles),
+        )
+        non_metric_identifier = summary.replace('AUROC', 'AUROCX')
+        self.assertIn(
+            '缺少完整关键定量结果',
+            publish_to_blog._detailed_core_summary_semantic_issue(non_metric_identifier),
+        )
+
     def test_core_summary_setting_does_not_treat_pearson_suffix_as_on(self):
         summary = (
             '语音可懂度评估输入为不同算法处理后的语音，输出为听者能否辨别音位的可懂度分数，难点在于生成式方法不保真参考且实验室测试昂贵难扩展。'
@@ -1071,6 +1103,13 @@ class PublishToBlogReviewTest(unittest.TestCase):
         )
         self.assertIsNone(
             publish_to_blog._detailed_core_summary_semantic_issue(summary)
+        )
+        miou_summary = summary.replace(
+            '在自建的 1000 条 LibriTTS 模拟测试集上，PASE 的 WER 为 7.49%，显著优于最强判别式基线 TF-GridNet 的 9.93% 与生成式基线 LLaSE-G1 的 36.58%，同时保持 SpkSim 0.80。',
+            '在 SpotSound-Bench 基准下，SpotSound-A 的 mIoU 为 57.9，高于 Audio Flamingo 3 的 mIoU 7.6，说明短时事件定位在相同协议下得到明显改善。',
+        )
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(miou_summary)
         )
 
         no_boundary = summary.replace(
@@ -1155,6 +1194,191 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     '缺少完整关键定量结果',
                     publish_to_blog._detailed_core_summary_semantic_issue(unknown_metric),
                 )
+
+    def test_core_summary_accepts_exact_jsr_metric_but_rejects_identifier_substrings(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original_result = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        result = (
+            '在 SD-QA 与 AdvBench 基准评测设置下，Kimi-Audio 的 JSR '
+            '从预训练基线的 4.62% 升至语义近端 25% 微调后的 87.12%，'
+            '比较对象、数值与方向均可核对，并用于判断主要方法是否稳定成立。'
+        )
+        candidate = summary.replace(original_result, result)
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(candidate)
+        )
+        for non_metric in ('MyJSRNet', 'JSRModel'):
+            with self.subTest(non_metric=non_metric):
+                self.assertIn(
+                    '缺少完整关键定量结果',
+                    publish_to_blog._detailed_core_summary_semantic_issue(
+                        candidate.replace('JSR', non_metric)
+                    ),
+                )
+
+    def test_core_summary_accepts_exact_ntvd_metric_but_rejects_identifier_substrings(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original_result = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        result = (
+            '在 12 个 LALM 的 CREMA-D 性别维度 Advisory 任务评测设置下，'
+            'DeSTA 的 nTVD 达 45.87，高于同任务均值 14.02，'
+            '比较对象、数值与方向均可核对，并用于判断主要方法是否稳定成立。'
+        )
+        candidate = summary.replace(original_result, result)
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(candidate)
+        )
+        for non_metric in ('MynTVDNet', 'nTVDModel', 'TVDiffusion'):
+            with self.subTest(non_metric=non_metric):
+                self.assertIn(
+                    '缺少完整关键定量结果',
+                    publish_to_blog._detailed_core_summary_semantic_issue(
+                        candidate.replace('nTVD', non_metric)
+                    ),
+                )
+
+    def test_core_summary_accepts_tpi_test_and_exact_rsf_metric(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original_result = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        result = (
+            '在 TPI-Test 上，TPI-Full 的 RSF 从 Qwen2.5-Omni-7B 基线的 0.24 '
+            '提升至 0.83，比较对象、数值与方向均可核对，并直接验证主要机制在同一任务设置下稳定成立。'
+        )
+        candidate = summary.replace(original_result, result)
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(candidate)
+        )
+        for non_metric in ('MyRSFNet', 'RSFModel'):
+            with self.subTest(non_metric=non_metric):
+                self.assertIn(
+                    '缺少完整关键定量结果',
+                    publish_to_blog._detailed_core_summary_semantic_issue(
+                        candidate.replace('RSF', non_metric)
+                    ),
+                )
+
+    def test_core_summary_rejects_figure_and_language_scale_as_metric_values(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original_result = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        fake_result = (
+            '在 ASVspoof19 LA 基准下，模型基于跨 128 语言预训练，EER 从 2019 年'
+            '基准下的低值升至高值，但未给出可核对端点。'
+        )
+        candidate = summary.replace(original_result, fake_result)
+        self.assertIn(
+            '缺少完整关键定量结果',
+            publish_to_blog._detailed_core_summary_semantic_issue(candidate),
+        )
+
+    def test_core_summary_accepts_historical_acc_and_total_score_without_substring_leak(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original_result = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        for metric in (
+                '总体分', 'Acc', 'Acc_macro', 'Accmacro', 'Acc_num',
+                'FID', 'CLAP_MS', 'DeSync', 'IB'):
+            with self.subTest(metric=metric):
+                result = (
+                    f'在公开基准评测设置下，本文方法的 {metric} 从基线的 '
+                    '95.58 提升至 98.15，比较对象、数值与方向都可核对，'
+                    '并用于判断主要方法是否稳定成立以及能否外推。'
+                )
+                self.assertIsNone(
+                    publish_to_blog._detailed_core_summary_semantic_issue(
+                        summary.replace(original_result, result)
+                    )
+                )
+
+        audio_mae = summary.replace(
+            original_result,
+            '在公开基准评测设置下，AudioMAE 从基线的 0.42 降至 0.31，比较对象、数值与方向都可核对。',
+        )
+        self.assertIn(
+            '缺少完整关键定量结果',
+            publish_to_blog._detailed_core_summary_semantic_issue(audio_mae),
+        )
+        for non_metric in ('MyFIDNet', 'fidelity'):
+            with self.subTest(non_metric=non_metric):
+                candidate = summary.replace(
+                    original_result,
+                    f'在公开基准评测设置下，{non_metric} 从基线的 22.94 降至 12.44，'
+                    '比较对象、数值、方向与实验设置都可由原文核对。',
+                )
+                self.assertIn(
+                    '缺少完整关键定量结果',
+                    publish_to_blog._detailed_core_summary_semantic_issue(candidate),
+                )
+
+    def test_core_summary_accepts_real_2604_13715_r_at_metric_and_rises_to_direction(self):
+        summary = (
+            '输入为长达30秒连续音频与自然语言查询，输出为事件对应的起始与结束时间戳及描述，难点在于大型音频语言模型缺乏显式物理时间坐标且监督微调的token级交叉熵对微小边界偏差过度惩罚。'
+            '方法链分三步：首先将时间戳编码为嵌入并以25Hz帧率交织进音频特征序列构成音频侧时间提示，为自回归解码提供可 attending 的时间坐标。'
+            '其次以语义先验均值初始化并冻结该嵌入完成监督微调，使模型学会利用邻近时间提示，其输出的策略初始化直接进入下一阶段的强化学习。'
+            '最后以组相对策略优化进行单轮强化学习后训练，依据优势方差自适应融合离散Eb-F1与连续mIoU/METEOR奖励，直接优化时序对齐质量并得到最终模型。'
+            '与仅依赖位置编码或专用时间token的已有方案相比，音频侧时间提示在输入侧显式注入绝对时间且与音频帧保持固定映射，配合面向时序对齐指标的强化学习目标直接优化边界质量。'
+            '在FTAR音频定位任务下，TimePro-RL后训练的Qwen2.5-Omni的R@0.9从SFT基线的34.1升至39.8。'
+            '该结论适用边界受限于FTAR与DESED的0至30秒受控标注分布，对更长音频、重叠事件及跨域噪声的鲁棒性尚未验证。'
+            '原文未披露训练、推理或部署成本。'
+        )
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(summary)
+        )
+        for invalid in (
+                summary.replace('R@0.9', 'XR@0.9Y'),
+                summary.replace('从SFT基线的34.1升至', '由SFT基线的34.1升至')):
+            self.assertIn(
+                '缺少完整关键定量结果',
+                publish_to_blog._detailed_core_summary_semantic_issue(invalid),
+            )
+
+        paper = llm_api_publication_fixture()
+        old_summary = paper['parsed']['summary']
+        paper['analysis'] = paper['analysis'].replace(old_summary, summary)
+        parsed = publish_to_blog.parse_analysis(paper['analysis'])
+        paper['parsed'] = parsed
+        analysis_sha = hashlib.sha256(paper['analysis'].encode('utf-8')).hexdigest()
+        summary_sha = hashlib.sha256(summary.encode('utf-8')).hexdigest()
+        projection_sha = publish_to_blog._core_summary_projection_sha256(paper['analysis'])
+        binding = {
+            'contractVersion': 'core-summary-detailed-v3',
+            'inputAnalysisSha256': analysis_sha,
+            'outputAnalysisSha256': analysis_sha,
+            'inputSummarySha256': summary_sha,
+            'summarySha256': summary_sha,
+            'inputStructureProjectionSha256': projection_sha,
+            'outputStructureProjectionSha256': projection_sha,
+        }
+        stage = paper['analysisManifest']['stages']['coreSummaryRepair']
+        stage.update(binding)
+        stage['bindingSha256'] = publish_to_blog._stable_json_sha256(binding)
+        paper['analysisManifest']['stages']['structureRepair'][
+            'outputAnalysisSha256'
+        ] = analysis_sha
+        scoring = paper['analysisManifest']['stages']['scoringAudit']
+        scoring.update({
+            'outputAnalysisSha256': analysis_sha,
+            'coreSummaryInputAnalysisSha256': analysis_sha,
+            'inputCoreSummarySha256': summary_sha,
+            'outputCoreSummarySha256': summary_sha,
+        })
+        self.assertEqual(
+            publish_to_blog._sealed_detailed_core_summary(paper, parsed),
+            summary,
+        )
 
     def test_core_summary_accepts_bounded_fvd_but_keeps_other_result_gates(self):
         summary = (
@@ -1559,6 +1783,22 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIn('0.119', leading)
         self.assertIn('0.222', leading)
 
+        exponent_and_warmup = publish_to_blog._api_reader_numeric_tokens(
+            'AdamW，5×10^-4，2000 warm-up steps，exponential decay'
+        )
+        self.assertEqual(exponent_and_warmup, ['5', '10', '-4', '2000'])
+        self.assertNotIn('-4200', exponent_and_warmup)
+        doubled_grouped = publish_to_blog._api_reader_numeric_tokens(
+            'We perform 500,000500,000 gradient steps.'
+        )
+        self.assertIn('500000', doubled_grouped)
+        self.assertNotIn(
+            '500000',
+            publish_to_blog._api_reader_numeric_tokens(
+                'Two distinct runs use 500,000600,000 samples.'
+            ),
+        )
+
     def test_api_reader_source_quotes_bind_standard_thousands_groups_without_joining_enumerations(self):
         source = (
             'The released dataset contains 6,005 freeform conversations '
@@ -1595,6 +1835,30 @@ class PublishToBlogReviewTest(unittest.TestCase):
         reseal_llm_api_reader_fixture(tampered)
         with self.assertRaisesRegex(PublishDataValidationError, '数字缺少来源 quote'):
             publish_to_blog._validate_api_reader_source_bindings(tampered)
+
+    def test_api_reader_source_quotes_bind_exact_latexml_doubled_thousands_group(self):
+        source = (
+            'We perform 500,000500,000 gradient steps with a batch size of 96 '
+            'and a learning rate fixed by the same training phase.'
+        )
+        article = (
+            '| Stage | Steps |\n| --- | --- |\n'
+            '| Coarse translation | 500,000 |'
+        )
+        paper = llm_api_publication_fixture()
+        paper['apiReaderArticle'] = article
+        paper['apiReaderPlan']['formulaBindings'] = []
+        paper['apiReaderPlan']['tableBindings'] = [{
+            'tableIndex': 1, 'sourceType': 'source_quotes',
+            'sourceTableOrdinal': None,
+            'renderedTableSha256': hashlib.sha256(article.encode()).hexdigest(),
+            'cellBindings': [], 'sourceQuotes': [{
+                'quote': source,
+                'sourceQuoteSha256': hashlib.sha256(source.encode()).hexdigest(),
+            }],
+        }]
+        reseal_llm_api_reader_fixture(paper)
+        publish_to_blog._validate_api_reader_source_bindings(paper)
 
     def test_api_reader_numeric_tex_color_replay_preserves_units_and_signs(self):
         source = 'Original table values:\n\\textcolorblue58.62\n\\textcolorblue62.37\n' \
@@ -3702,6 +3966,33 @@ title: "Bad table"
         self.assertEqual(
             _manual_v6_text_sha('中|A\n'),
             '84996bd499282e0fed65f8ddee3bf3aae24edbe1cb31bea3496c723960d96dbf',
+        )
+
+    def test_stable_json_sha_matches_javascript_for_lone_surrogates(self):
+        value = {
+            'cjk': '中文',
+            'loneHigh': 'A\ud83dZ',
+            'loneLow': 'A\udc97Z',
+            'pair': 'A\ud83d\ude00Z',
+        }
+        self.assertEqual(
+            publish_to_blog._stable_json_sha256(value),
+            'abe92dcf839cd3fdc64eb7ba4390d0dff4e487e2301045135062adf31b0c5dc1',
+        )
+
+    def test_string_sha_matches_node_for_lone_surrogates(self):
+        expected_lone = (
+            '1dbad52b4840c58a645cb742112894d0bae85b97e87e1942ec04559a72937998'
+        )
+        self.assertEqual(
+            publish_to_blog._javascript_string_sha256('A\ud83dZ'), expected_lone,
+        )
+        self.assertEqual(
+            publish_to_blog._javascript_string_sha256('A\udc97Z'), expected_lone,
+        )
+        self.assertEqual(
+            publish_to_blog._javascript_string_sha256('A\ud83d\ude00Z'),
+            '0cfdf4f787538630ab2f98a43b709fb744c6380b0cf350ef895d270a04eecd83',
         )
 
     def test_manual_v6_declared_payload_never_falls_back_on_missing_or_tampered_data(self):
