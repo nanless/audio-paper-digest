@@ -3414,13 +3414,19 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 + `, markerBound=${Boolean(candidate)}, markerOccurrences=${markerOccurrences}；已有marker必须唯一独占一段且位于声明小节）`
             );
         }
+        const exactSignedSurface = Array.isArray(options.exactSignedBridgeSurfaces)
+            && typeof options.exactSignedBridgeSurfaces[index] === 'string'
+            ? options.exactSignedBridgeSurfaces[index]
+            : null;
         return {
             terms: bridge.terms.map(term => normalizeReaderEditorialSurface(term.trim())),
             sectionKind: bridge.sectionKind,
             marker,
-            explanation: collapseRepeatedReaderBridgeHeadings(normalizeReaderEditorialSurface(
-                `**${bridge.terms[0].trim()} × ${bridge.terms[1].trim()}：** ${explanation}`
-            ))
+            explanation: exactSignedSurface || collapseRepeatedReaderBridgeHeadings(
+                normalizeReaderEditorialSurface(
+                    `**${bridge.terms[0].trim()} × ${bridge.terms[1].trim()}：** ${explanation}`
+                )
+            )
         };
     });
     if (!Array.isArray(value.figurePlacements)
@@ -3522,9 +3528,27 @@ function parseApiReaderArticleResult(raw, options = {}) {
         }
         article = article.replace(bridge.marker, bridge.explanation);
     }
+    const exactSignedSurfaces = Array.isArray(options.exactSignedBridgeSurfaces)
+        ? options.exactSignedBridgeSurfaces.filter(value => typeof value === 'string' && value.length > 0)
+        : [];
+    const protectedSignedSurfaces = [];
+    for (const surface of exactSignedSurfaces) {
+        const token = `__PD_SIGNED_BRIDGE_SURFACE_${protectedSignedSurfaces.length}__`;
+        if (article.split(surface).length !== 2) {
+            throw new Error('signed Reader bridge surface is not unique in assembled article');
+        }
+        article = article.replace(surface, token);
+        protectedSignedSurfaces.push({ token, surface });
+    }
     article = relocateExplicitReaderTableExplanations(ensureApiReaderTableNarratives(
         normalizeApiReaderTableBlockSpacing(normalizeReaderEditorialSurface(article))
     ));
+    for (const { token, surface } of protectedSignedSurfaces) {
+        if (article.split(token).length !== 2) {
+            throw new Error('signed Reader bridge surface was altered during normalization');
+        }
+        article = article.replace(token, surface);
+    }
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
     const minimumChineseChars = requirements.minimumChineseChars;
     const maximumChineseChars = requirements.maximumChineseChars;

@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { apiReaderV3BindsCanonical } = require('../analysis-engine.js');
 const { apiReaderPreInjectionQualityView, parseApiReaderArticleResult, injectApiReaderFigures,
-    buildApiReaderEvidenceContext, stableFingerprint } = require('../deep-analyzer.js');
+    buildApiReaderEvidenceContext, normalizeReaderEditorialSurface, stableFingerprint } = require('../deep-analyzer.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
 const { readerRequirements } = require('./reader-contract.js');
 const CONTRACT = 'reader-signed-draft-roundtrip-v1';
@@ -54,7 +54,21 @@ function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
         .every(key => Array.isArray(plan[key]))) fail('signed plan lacks inverse schema arrays');
     let view = apiReaderPreInjectionQualityView(paper.apiReaderArticle, plan, paper.apiReaderFigures);
     const bridges = plan.conceptBridges.map((bridge, index) => {
-        const prefix = `**${bridge.terms?.[0]} × ${bridge.terms?.[1]}：**`;
+        // The parser signs the canonical plan after applying the same surface
+        // normalization to terms that it applies to the assembled article
+        // (for example, separating an Arabic numeral from Chinese text).
+        // Rebuild the exact prefix from that canonical surface; using raw
+        // pre-normalized terms makes every otherwise valid signed bridge look
+        // non-reversible.
+        const canonicalTerms = (bridge.terms || []).map(term =>
+            normalizeReaderEditorialSurface(String(term || '').trim())
+        );
+        const rawPrefix = `**${canonicalTerms[0]} × ${canonicalTerms[1]}：**`;
+        const normalizedPrefix = normalizeReaderEditorialSurface(rawPrefix);
+        const prefix = typeof bridge.explanation === 'string'
+            && bridge.explanation.startsWith(normalizedPrefix)
+            ? normalizedPrefix
+            : rawPrefix;
         if (bridge.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
             || typeof bridge.explanation !== 'string' || !bridge.explanation.startsWith(prefix)
             || view.split(bridge.explanation).length !== 2
@@ -103,7 +117,8 @@ function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
         requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables,
         availableFigureOrdinals: paper.apiReaderFigures.map(figure => figure.ordinal),
         requireSourceBindings: true, allowDeterministicQuoteRepair: true,
-        structuredArtifacts: artifacts, sourceText: sourceDetails.text
+        structuredArtifacts: artifacts, sourceText: sourceDetails.text,
+        exactSignedBridgeSurfaces: plan.conceptBridges.map(bridge => bridge.explanation)
     });
     const roundtrip = injectApiReaderFigures(parsed, artifacts, id);
     if (roundtrip.article !== paper.apiReaderArticle) fail('production round-trip article bytes differ');
