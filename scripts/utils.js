@@ -630,6 +630,20 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
     };
 }
 
+// Keep the filter retry budget identical everywhere that replays the daily
+// filtering contract. Responses models can consume the small first budget in
+// hidden reasoning without emitting text, so every retry gets the same 4096
+// floor used by the daily fetch path.
+function getFilterAttemptMaxTokens(apiType, maxTokens, attemptNumber) {
+    if (!Number.isSafeInteger(maxTokens) || maxTokens < 1
+        || !Number.isSafeInteger(attemptNumber) || attemptNumber < 1) {
+        throw new Error('Filter attempt token policy received malformed input');
+    }
+    return apiType === 'openai_responses' && attemptNumber > 1
+        ? Math.max(maxTokens, 4096)
+        : maxTokens;
+}
+
 /**
  * 获取本地 Claude Code 版本号（用于伪装 User-Agent）
  * 通过 `claude --version` 动态获取，失败则回退到默认值
@@ -1865,6 +1879,7 @@ module.exports = {
     validateApiEndpointUrl,
     buildApiUrl,
     buildRequestBody,
+    getFilterAttemptMaxTokens,
     buildHeaders,
     getClaudeCodeVersion,
     parseResponseText,

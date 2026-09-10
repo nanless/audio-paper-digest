@@ -34,6 +34,26 @@ function sourcePayload(id) {
     };
 }
 
+test('daily Reader materializer reuses Figure bytes captured in the same invocation', async () => {
+    const bytes = Buffer.from('same-invocation-image-bytes');
+    const url = 'https://arxiv.org/html/2609.12345/figure.png';
+    const cached = {
+        base64: bytes.toString('base64'),
+        mime: 'image/png',
+        sha256: sha(bytes)
+    };
+    const materialized = await daily.ephemeralReaderFigures(
+        '2609.12345',
+        [{ ordinal: 1, url, caption: 'Architecture' }],
+        {},
+        { figureCache: new Map([[url, cached]]) }
+    );
+    assert.equal(materialized.length, 1);
+    assert.ok(materialized[0].rawBytes.equals(bytes));
+    assert.equal(materialized[0].assetSha256, cached.sha256);
+    assert.equal(materialized[0].assetMediaType, cached.mime);
+});
+
 test('default daily source plan seals PDF/TXT/manifest before its analysis callback and never invokes a legacy text path', async t => {
     const f = fixture(t); const id = '2609.12345'; let captureCalls = 0; let legacyTextCalls = 0; let analysisCalls = 0;
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'daily-mocked-batch',

@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { parseAnalysis } = require('../utils.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
 const { scoringAuditBindsFinalAnalysis, apiReaderV3BindsCanonical } = require('../analysis-engine.js');
+const { paperSourceQuoteBindsOriginalUrl } = require('./reader-resource-binding.js');
 const CONTRACT = 'reader-resource-availability-sync-v1';
 const sha = text => crypto.createHash('sha256').update(String(text)).digest('hex');
 const identityBody = identity => { const { identitySha256, ...body } = identity || {}; return body; };
@@ -54,14 +55,13 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
         || !Array.isArray(resources.resources) || resources.resources.some(resource => (
             resource.sourceQuoteSha256 !== sha(resource.sourceQuote)
             || (resource.origin === 'paper_source'
-                ? !sourceText.includes(resource.sourceQuote) || !resource.sourceQuote.includes(resource.originalUrl)
+                ? !sourceText.includes(resource.sourceQuote) || !paperSourceQuoteBindsOriginalUrl(resource)
                 : resource.origin !== 'validated_demo'
                     || !manifest.stages.demoLinkScan?.discoveredLinks?.includes(resource.originalUrl))
         ))
         || manifest.stages.openSourceScan?.resourceEvidenceSha256 !== resources.identitySha256) {
         throw new Error('Resource synchronization requires sealed scoring/source/resource identity');
     }
-    const readerIdentityRebind = readerResourceIdentityRebind(paper, manifest, resources);
     const originalParsed = parseAnalysis(paper.analysis);
     const scoreFields = ['score','documentType','innovationScore','technicalRigorScore','experimentalSufficiencyScore',
         'clarityScore','impactScore','openSourceScore','reproducibilityScore','engineeringScore','scoringReason'];
@@ -70,6 +70,11 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
         throw new Error('Stored parsed scores/type/audit prose differ from canonical; refusing an implicit score repair');
     }
     const updatedAnalysis = deep.applyApiReaderResourceAvailability(paper.analysis, resources);
+    // A freshly generated Reader already binds the same resource projection.
+    // In that no-op case there are no bytes or signatures for this helper to
+    // repair; the caller's final canonical validation remains authoritative.
+    if (updatedAnalysis === paper.analysis) return paper;
+    const readerIdentityRebind = readerResourceIdentityRebind(paper, manifest, resources);
     const updatedParsed = parseAnalysis(updatedAnalysis);
     for (const field of ['hasCode','hasModel','hasDataset']) {
         if (originalParsed?.[field] !== updatedParsed?.[field]) {
@@ -80,7 +85,6 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
     if (stableHash(withoutOpenSource(originalParsed)) !== stableHash(withoutOpenSource(updatedParsed))) {
         throw new Error('Resource synchronization would alter scores/type/audit prose outside the availability projection');
     }
-    if (updatedAnalysis === paper.analysis && !readerIdentityRebind) return paper;
     const beforeReader = stableHash(Object.fromEntries(protectedReaderKeys.map(key => [key, paper[key]])));
     const audit = manifest.stages.scoringAudit.audit;
     const auditSha = stableHash(audit);

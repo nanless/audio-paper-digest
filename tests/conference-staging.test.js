@@ -15,6 +15,7 @@ const extractionReceipt = require('../scripts/lib/conference-extraction-receipt.
 const paperIdentity = require('../scripts/lib/paper-identity.js');
 const cli = require('../scripts/conference-staging.js');
 const extractionFixture = require('./helpers/conference-extraction-fixture.js');
+const evidenceFixture = require('./helpers/conference-filter-evidence-fixture.js');
 
 const h = value => crypto.createHash('sha256').update(value).digest('hex');
 const stamp = '2026-09-06T00:00:00.000Z';
@@ -50,10 +51,10 @@ function discoveryBundle(root, suffix = '', mode = 'exact') {
 
 function completeFilter(root, discoveryHandle) {
     const filterRoot = path.join(root, 'filters'); fs.mkdirSync(filterRoot);
-    let state = filter.prepareFilter({ filterRoot, discoveryHandle,
-        spec: { contract: filter.SPEC_CONTRACT, version: filter.VERSION, filterPolicySha256: h('policy'),
-            promptSha256: h('prompt'), model: 'fixture-model', endpointProtocol: 'openai-responses',
-            endpointIdentitySha256: h('endpoint'), taxonomyRegistrySha256: h('taxonomy') }, filterId, now: stamp });
+    const { evidenceHandle } = evidenceFixture.createEvidenceHandle({ root, discoveryHandle, now: stamp });
+    let state = filter.prepareFilter({ filterRoot, discoveryHandle, evidenceHandle,
+        spec: evidenceFixture.createFilterSpec({ discoveryHandle, evidenceHandle,
+            overrides: { model: 'fixture-model', endpointIdentitySha256: h('endpoint') } }), filterId, now: stamp });
     for (const [index, value] of ['100', '200', '300'].entries()) {
         const paperId = pid(value);
         const status = value === '300' ? 'excluded' : 'included';
@@ -170,16 +171,8 @@ test('normalized, ambiguous, and unmatched discovery members cannot stage withou
     for (const mode of ['normalized', 'ambiguous', 'unmatched']) {
         const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `conference-${mode}-`));
         t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-        const bundle = discoveryBundle(root, '', mode); const filtered = completeFilter(root, bundle.handle);
-        const members = ['100', '200'].map(value => ({ paperId: pid(value),
-            sourceIdentity: `icassp-arnumber:${value}`, receiptName: `${value}-receipt.json` }));
-        const extractionManifest = { contract: staging.EXTRACTION_CONTRACT, version: staging.VERSION,
-            conference: { id: 'icassp-2026', year: 2026 }, review: { actor: 'reviewer.1', reviewedAt: stamp },
-            members, membersSha256: staging.stableHash(members) };
-        const sources = path.join(root, 'sources'); fs.mkdirSync(sources);
-        assert.throws(() => staging.bindInputs({ selectionHandle: filtered.selectionHandle,
-            discoveryHandle: bundle.handle, extractionManifest, extractionFileSha256: h('manifest'),
-            extractionSourceRoot: sources, importManifestName: 'import.json' }), /not a unique exact PDF match/);
+        const bundle = discoveryBundle(root, '', mode);
+        assert.throws(() => completeFilter(root, bundle.handle), /exact discovery match/);
     }
 });
 

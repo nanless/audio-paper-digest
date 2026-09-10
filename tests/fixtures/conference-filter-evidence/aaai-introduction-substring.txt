@@ -1,0 +1,4 @@
+AAAI 2026 negative structural fixture
+Abstract
+This bounded fixture is deliberately long enough for the evidence threshold, but its following line is prose rather than an exclusive section heading. The locator must not accept a sentence merely because it starts with the word Introduction.
+Introduction to the rest of this discussion is intentionally not a heading.

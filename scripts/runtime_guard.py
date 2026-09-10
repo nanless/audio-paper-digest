@@ -17,8 +17,14 @@ WORKSPACE_ROLE_MARKER = '.paper-digest-workspace-role.json'
 
 def required_workspace_role_for_command(command_name):
     name = Path(str(command_name or '')).name
+    wrapped = os.environ.get('AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE', '').strip()
+    if (name == 'conference-extract.py'
+            and os.environ.get('AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE') == '1'
+            and wrapped == 'daily'):
+        return 'daily'
     if name in {'full-fetch.js', 'generate-blog.py', 'review-blog.py',
-                'push-blog.py', 'publish-to-blog.py'}:
+                'push-blog.py', 'publish-to-blog.py',
+                'conference-filter-evidence-extract.py'}:
         return 'daily'
     if name in {'conference-extract.py', 'history-inventory.py'}:
         return 'history'

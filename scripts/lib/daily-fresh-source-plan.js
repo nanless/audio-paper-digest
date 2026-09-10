@@ -304,13 +304,55 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
     const materialized = [];
     for (const figure of figures) {
         try {
-            const current = await arxivSource.withEphemeralArxivFigures({ arxivId, figures: [figure],
-                sourceRoot: plan.sourcesDir, temporaryRoot: options.temporaryRoot || os.tmpdir(),
-                persistentRoots: [plan.runDir] }, async temporary => temporary.figures.map(item => {
-                const bytes = fs.readFileSync(item.tempPath);
-                return { ...figure, rawBytes: bytes, assetSha256: sha256(bytes),
-                    assetMediaType: item.mediaType };
-            }), { fetchFigure: options.fetchFigure });
+            const cached = options.figureCache instanceof Map
+                ? options.figureCache.get(figure.url) : null;
+            if (cached) {
+                const bytes = Buffer.from(cached.base64, 'base64');
+                if (sha256(bytes) !== cached.sha256
+                    || !/^image\/(?:png|jpeg|webp)$/.test(String(cached.mime || ''))) {
+                    fail(`daily Reader Figure ${figure.ordinal} invocation cache drift`);
+                }
+                materialized.push({
+                    ...figure,
+                    rawBytes: bytes,
+                    assetSha256: cached.sha256,
+                    assetMediaType: cached.mime
+                });
+                continue;
+            }
+            let current;
+            let lastError;
+            const maxAttempts = Number.isInteger(options.figureMaxAttempts)
+                ? Math.max(1, Math.min(3, options.figureMaxAttempts)) : 3;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    current = await arxivSource.withEphemeralArxivFigures({ arxivId, figures: [figure],
+                        sourceRoot: plan.sourcesDir, temporaryRoot: options.temporaryRoot || os.tmpdir(),
+                        persistentRoots: [plan.runDir] }, async temporary => temporary.figures.map(item => {
+                        const bytes = fs.readFileSync(item.tempPath);
+                        return { ...figure, rawBytes: bytes, assetSha256: sha256(bytes),
+                            assetMediaType: item.mediaType };
+                    }), { fetchFigure: options.fetchFigure });
+                    break;
+                } catch (error) {
+                    lastError = error;
+                    const transient = error?.name === 'AbortError'
+                        || /(?:timeout|timed out|fetch failed|ECONNRESET|EAI_AGAIN|socket)/i
+                            .test(String(error?.message || ''));
+                    if (!transient || attempt === maxAttempts) throw error;
+                    console.log(`    [deep] ⚠️  论文图 ${figure.ordinal} 临时下载失败，重试 ${attempt + 1}/${maxAttempts}`);
+                }
+            }
+            if (!current) throw lastError || new Error(`论文图 ${figure.ordinal} 下载未产生结果`);
+            if (options.figureCache instanceof Map) {
+                for (const item of current) {
+                    options.figureCache.set(item.url, {
+                        base64: item.rawBytes.toString('base64'),
+                        mime: item.assetMediaType,
+                        sha256: item.assetSha256
+                    });
+                }
+            }
             materialized.push(...current);
         } catch (error) {
             // Match the persistent Reader materializer: an individual official
@@ -335,6 +377,7 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
     if (typeof callback !== 'function') fail('daily recovery callback is required');
     const id = normalizedId(paper);
     const sourceDetails = readDailyFreshSource(plan, paper);
+    const figureCache = new Map();
     const result = await direct.withDirectRewriteAnalysisSource({ paperId: `arxiv:${id}`,
         route: 'arxiv-fresh-fetch', sourceDetails, runId: plan.runId,
         sourceSha256: sourceDetails.freshSourceDescriptor.sourceSha256,
@@ -343,8 +386,14 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
         sourceManifestSha256: sourceDetails.freshSourceDescriptor.sourceManifestSha256,
         sourceSnapshotSha256: sourceDetails.freshSourceDescriptor.sourceSnapshotSha256,
         readerAttemptsDir: plan.readerAttemptsDir,
-        materializeReaderFigures: (figures, requestedId) => ephemeralReaderFigures(requestedId, figures, plan, options),
-        downloadPrimaryImage: url => ephemeralPrimaryImage(id, url, plan, options) },
+        materializeReaderFigures: (figures, requestedId) => ephemeralReaderFigures(
+            requestedId, figures, plan, { ...options, figureCache }
+        ),
+        downloadPrimaryImage: async url => {
+            const image = await ephemeralPrimaryImage(id, url, plan, options);
+            figureCache.set(url, image);
+            return image;
+        } },
     () => callback(sourceDetails));
     direct.assertNoPersistentFigureFields(result);
     return result;

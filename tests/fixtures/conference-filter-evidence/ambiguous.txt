@@ -1,0 +1,5 @@
+Abstract
+This first abstract-looking block is intentionally long enough to resemble evidence, but it must never be accepted when another heading appears on the same page.
+Abstract
+This second abstract-looking block makes the source ambiguous and therefore forces the locator to fail open instead of guessing which span is authoritative.
+1 Introduction

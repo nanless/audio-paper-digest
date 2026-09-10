@@ -1,0 +1,5 @@
+CVPR 2026
+ABSTRACT
+We study a visual recognition benchmark with carefully controlled training splits, calibrated uncertainty estimates, and extensive evaluation across distribution shifts.
+1. Introduction
+The remaining paper begins here.

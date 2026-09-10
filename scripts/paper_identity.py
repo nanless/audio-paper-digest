@@ -46,8 +46,11 @@ def validate_external_id(value: Any) -> dict[str, str]:
     raw = _exact_object(value, ("scheme", "value"), "externalId")
     if raw["scheme"] not in SCHEMES:
         _fail("externalId.scheme is unsupported")
-    identifier = _text(raw["value"], "externalId.value", maximum=128)
-    valid = (re.fullmatch(r"[1-9]\d*", identifier) if raw["scheme"] in {"icassp-arnumber", "conference-paper-id"}
+    identifier = _text(raw["value"], "externalId.value",
+                       maximum=200 if raw["scheme"] == "conference-paper-id" else 128)
+    valid = (re.fullmatch(r"[1-9]\d*", identifier) if raw["scheme"] == "icassp-arnumber"
+             else re.fullmatch(r"[A-Za-z0-9._-]{1,200}", identifier)
+             if raw["scheme"] == "conference-paper-id"
              else re.fullmatch(r"[A-Za-z0-9_-]{6,128}", identifier))
     if not valid:
         _fail("externalId.value is invalid for its scheme")
@@ -81,11 +84,15 @@ def validate_official_url(value: Any, label: str) -> str:
     except ValueError:
         _fail(f"{label} is not a URL")
     if (parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or port
-            or parsed.hostname != (parsed.hostname or "").lower()
+            or parsed.netloc != (parsed.hostname or "").lower()
             or parsed.query or parsed.fragment or not _public_dns_name(parsed.hostname)):
         _fail(f"{label} must be a canonical public HTTPS URL without credentials, port, query, or fragment")
-    if (parsed.path == "/" or "//" in parsed.path or any(part in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._~-]+", part)
-            for part in parsed.path.split("/")[1:])):
+    path_segments = parsed.path.split("/")[1:]
+    if path_segments and path_segments[-1] == "":
+        path_segments.pop()
+    if (parsed.path == "/" or "//" in parsed.path or not path_segments
+            or any(not part or part in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9._~-]+", part)
+                   for part in path_segments)):
         _fail(f"{label} has an unsafe or non-canonical path")
     canonical = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
     if canonical != url:
@@ -109,8 +116,8 @@ def validate_citation(value: Any) -> dict[str, Any] | None:
         return None
     raw = _exact_object(value, ("title", "authors", "venue", "year"), "citation")
     title = _text(raw["title"], "citation.title", maximum=2048)
-    if not isinstance(raw["authors"], list) or len(raw["authors"]) > 100:
-        _fail("citation.authors must be an array of at most 100 names")
+    if not isinstance(raw["authors"], list) or len(raw["authors"]) > 1000:
+        _fail("citation.authors must be an array of at most 1000 names")
     authors = [_text(author, f"citation.authors[{index}]", maximum=512) for index, author in enumerate(raw["authors"])]
     if len(set(authors)) != len(authors):
         _fail("citation.authors must not contain duplicate names")

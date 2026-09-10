@@ -199,7 +199,7 @@ generate 安装精确页面并签发 generation manifest；review 对不可变�
 
 标签迁移期间，新 production 页面继续写 Hugo 兼容的扁平 `tags`，但必须同时写入 `paper-taxonomy-flat-tags-compat-v1`、当前 registry/version/SHA、逐标签 concept/facet、`paper_digest_primary_task` 与 `paper_digest_primary_method`。旧页面与旧标签 URL 保持不变；汇总“热门方向”只按显式主任务统计，网页标签总表明确是新旧混合索引。
 
-以下任一变化都必须阻断或重建凭证：页面字节、generation、production proof、review 协议、Hugo gate、博客基线、remote 名称或 push URL 身份。review 不修改已审页面；修复回到生成阶段。
+逐页审查通过证据的唯一失效条件是该文件内容 SHA 变化。它以“相对路径 + 内容 SHA”持久复用。发布器代码变化仍会使 generate 重新渲染以发现真实字节变化；新 generation manifest、production proof、模型、发布器代码、review 协议指纹或 Hugo 运行时变化都不得导致最终字节未变的文件重审。它们只要求重跑当前确定性/Hugo gate 并重签 receipt。博客基线、remote 名称、push URL 身份或 receipt 与当前批次不匹配仍阻断 push。review 不修改已审页面；修复回到生成阶段。
 
 单篇 `--include-id`、排除 `--exclude-id` 和历史 sealed preview 是显式维护功能，参数必须在三阶段保持一致；不要把单篇事务当成整批发布或视觉依据。
 

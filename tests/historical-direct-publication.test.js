@@ -63,15 +63,21 @@ test('publication transaction recovers through plan, generation, review, activat
         const baseline = Buffer.from('---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\ndraft: false\n---\nold\n');
         const next = Buffer.from('---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\ndraft: false\n---\nnew\n');
         const target = path.join(blogRepo, 'content', 'posts', '2026-01-01-paper.md'); fs.writeFileSync(target, baseline);
-        const authority = fakeAuthority(next, baseline); const deps = {
+        const authority = fakeAuthority(next, baseline); const semanticPasses = new Set();
+        let semanticModelCalls = 0;
+        const deps = {
             loadAuthority: () => authority, blogState, gitBlob: () => baseline,
             worktreeSha: (_repo, relative) => fs.existsSync(path.join(blogRepo, relative))
                 ? sha(fs.readFileSync(path.join(blogRepo, relative))) : null,
             sourceBytes: () => next, hugoVersion: 'hugo v0.fixture',
-            hugoGate: () => ({ status: 'passed', engine: 'fixture', version: 'hugo v0.fixture' }),
+            hugoGate: () => ({ status: 'passed', engine: 'fixture', version: deps.hugoVersion }),
             semanticReview: ({ loadedPlan, generation, protocol }) => {
                 const page = { path: 'content/posts/2026-01-01-paper.md', sha256: sha(next), textChunks: 1,
                     imageCount: 0, imageReviewMode: 'not-required', passed: true, issues: [] };
+                const contentAddress = `${page.path}\0${page.sha256}`;
+                if (!semanticPasses.has(contentAddress)) {
+                    semanticPasses.add(contentAddress); semanticModelCalls += 1;
+                }
                 page.resultSha256 = api.stableHash(page);
                 const semanticProtocol = api.semanticReviewProtocol();
                 const body = { contract: 'historical-direct-semantic-review-v1', version: 1,
@@ -93,10 +99,18 @@ test('publication transaction recovers through plan, generation, review, activat
         assert.equal(api.generate({ outputRoot, publicationId, authorityOptions: {}, blogRepo, apply: true }, deps).status, 'generated');
         assert.equal(api.generate({ outputRoot, publicationId, authorityOptions: {}, blogRepo, apply: true }, deps).status, 'generated');
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');
+        assert.equal(semanticModelCalls, 1);
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'already-reviewed');
+        deps.hugoVersion = 'hugo v0.protocol-change';
+        assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');
+        assert.equal(semanticModelCalls, 1, 'protocol/Hugo drift must reuse identical page bytes');
         assert.equal(api.activate({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'activated');
         assert.equal(fs.readFileSync(target, 'utf8'), next.toString('utf8'));
         assert.equal(api.activate({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'already-activated');
+        deps.hugoVersion = 'hugo v0.second-protocol-change';
+        assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');
+        assert.equal(semanticModelCalls, 1);
+        assert.equal(api.activate({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'activation-rebound');
         assert.equal(api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'published');
         assert.equal(api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'already-published');
         const offlineStatus = api.status({ outputRoot, publicationId, blogRepo, liveRemote: false }, deps);

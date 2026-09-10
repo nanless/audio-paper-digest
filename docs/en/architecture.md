@@ -91,5 +91,5 @@ OpenCode Go fallback is strictly long-lived sticky failover: only an explicit `G
 
 Historical `direct-local-first` is separate: a catalog/plan/scheduler/runner freshly captures each arXiv
 generation and replays retained conference metadata/PDF SHA. Crosswalk receives only named immutable fresh-arXiv failure handoffs; it is
-not a direct-queue prerequisite. Historical review, activation, commit/push receipt, and remote-OID publication
-are not implemented.
+not a direct-queue prerequisite. Complete direct projections can publish through content-addressed historical review,
+locked activation/commit/push, and remote-OID verification; missing conference-aggregate integration still fails closed.

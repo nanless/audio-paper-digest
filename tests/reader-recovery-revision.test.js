@@ -10,6 +10,7 @@ const { loadReaderRecoveryRevision } = require('../scripts/lib/reader-recovery-r
 const { saveFailedCandidate, loadFailedCandidate, hashDraft } = require('../scripts/lib/reader-repair.js');
 const { READER_SECTION_KINDS, normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
 const directContext = require('../scripts/lib/direct-rewrite-analysis-context.js');
+const conferenceContext = require('../scripts/lib/conference-analysis-context.js');
 
 function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-revision-'));
@@ -111,6 +112,23 @@ test('ordinary calls and an unenabled fresh scope never scan or migrate an old c
     assert.equal(fs.readdirSync(f.directory).length, 1);
 });
 
+test('unenabled fresh scope wins over a nested direct source context used by daily analysis', t => {
+    const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const sourceDetails = { paperId: `arxiv:${f.identity.paperId}`, source: 'html',
+        sourceId: f.identity.paperId, text: 'sealed daily source',
+        structuredArtifacts: { payloadSha256: f.context.sourceExpectations[f.identity.paperId].structuredArtifactsSha256 } };
+    const loaded = withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: false }, () =>
+        directContext.withDirectRewriteAnalysisSource({ paperId: `arxiv:${f.identity.paperId}`,
+            runId: f.context.runId, route: 'arxiv-fresh-fetch', sourceDetails,
+            sourceSha256: crypto.createHash('sha256').update(sourceDetails.text).digest('hex'),
+            structuredArtifactsSha256: sourceDetails.structuredArtifacts.payloadSha256,
+            sourceSnapshotSha256: 'c'.repeat(64), sourceGeneration: 1,
+            sourceManifestSha256: 'd'.repeat(64), readerAttemptsDir: f.directory },
+        () => loadReaderRecoveryRevision(f.directory, f.identity)));
+    assert.equal(loaded, null);
+    assert.equal(fs.readdirSync(f.directory).length, 1);
+});
+
 test('source, model, prompt, run and budget drift cannot reuse a candidate', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     for (const mutate of [id => { id.model.maxTokens = 24000; }, id => { id.maxAttempts = 5; },
@@ -124,6 +142,18 @@ test('source, model, prompt, run and budget drift cannot reuse a candidate', t =
         assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, identity)), /scope/);
     }
     assert.equal(fs.readdirSync(f.directory).length, 1);
+});
+
+test('a newly authenticated Reader capability policy cannot reuse a legacy failed candidate', t => {
+    const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const policyIdentity = {
+        ...f.oldIdentity,
+        readerCapabilityPolicyContract: conferenceContext.WEAK_READER_CAPABILITY_POLICY_CONTRACT,
+        readerCapabilityPolicySha256: conferenceContext.WEAK_READER_CAPABILITY_POLICY.policySha256
+    };
+    assert.equal(loadFailedCandidate(f.directory, policyIdentity), null);
+    assert.equal(f.enabled(() => loadReaderRecoveryRevision(f.directory, policyIdentity)), null);
+    assert.deepEqual(fs.readdirSync(f.directory), [`${hashDraft(f.oldIdentity)}.json`]);
 });
 
 test('multiple compatible candidates refuse migration instead of guessing the latest budget', t => {

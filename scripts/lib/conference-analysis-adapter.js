@@ -130,9 +130,34 @@ function normalizedPaper(source) {
     const rawAuthors = metadata.authors || metadata.author || [];
     const authors = Array.isArray(rawAuthors) ? rawAuthors.map(String)
         : typeof rawAuthors === 'string' ? rawAuthors.split(/\s*;\s*/).filter(Boolean) : [];
+    const optionalUrl = (value, label) => {
+        if (value === undefined || value === null || value === '') return null;
+        let parsed;
+        try { parsed = new URL(String(value)); } catch { throw new Error(`conference source metadata ${label} is not a URL`); }
+        if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash) {
+            throw new Error(`conference source metadata ${label} must be a credential-free HTTPS URL without a fragment`);
+        }
+        return parsed.toString();
+    };
+    const officialRecordUrl = optionalUrl(metadata.recordUrl, 'recordUrl');
+    const officialPdfUrl = optionalUrl(metadata.pdfUrl, 'pdfUrl');
+    const doi = metadata.doi === undefined || metadata.doi === null || metadata.doi === ''
+        ? null : String(metadata.doi).trim();
+    if (doi !== null && (!doi || doi.length > 500 || /[\u0000-\u001f\u007f\s]/u.test(doi))) {
+        throw new Error('conference source metadata DOI is malformed');
+    }
+    const track = metadata.track === undefined || metadata.track === null || metadata.track === ''
+        ? null : String(metadata.track).trim();
+    if (track !== null && (!track || track.length > 500 || /[\u0000-\u001f\u007f]/u.test(track))) {
+        throw new Error('conference source metadata track is malformed');
+    }
+    const conferencePublication = officialRecordUrl && officialPdfUrl ? {
+        contract: 'conference-official-publication-v1', recordUrl: officialRecordUrl, pdfUrl: officialPdfUrl
+    } : null;
     return { id: source.paperId, conferencePaperId: source.paperId, title, authors,
         categories: [`conference:${source.conference.id}`], abstract: String(metadata.abstract || '').trim(),
-        source: 'conference', conference: clone(source.conference), externalId: clone(identity.externalId) };
+        source: 'conference', conference: clone(source.conference), externalId: clone(identity.externalId),
+        officialRecordUrl, officialPdfUrl, conferencePublication, doi, conferenceTrack: track };
 }
 function sourceDetails(source) {
     if (source.structuredArtifacts.profile !== contextApi.WEAK_PROFILE
@@ -326,19 +351,39 @@ function sealCompletedRun(loaded) {
     delete runBody.runSha256; const run = { ...runBody, runSha256: stableHash(runBody) };
     replaceJson(path.join(loaded.directory, 'run.json'), run, loaded.runFileSha256); return run;
 }
+function conferencePaperLockOptions(engine) {
+    if (typeof engine?.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY !== 'symbol') {
+        throw new Error('conference analysis engine lacks the local-dead lock recovery policy');
+    }
+    return { recoveryPolicy: engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY };
+}
 async function sealCompletedRunLocked({ analysisRoot, executionId, engine, expectedAnalysisSha256 = null } = {}) {
     const before = loadConferenceAnalysis({ analysisRoot, executionId });
     if (expectedAnalysisSha256 !== null && before.analysisFileSha256 !== expectedAnalysisSha256) {
         throw new Error('conference analysis changed before acquiring completion lock');
     }
     return engine.withPaperAnalysisLock({ id: before.run.paperId }, () => {
-        const locked = loadConferenceAnalysis({ analysisRoot, executionId });
+        let locked = loadConferenceAnalysis({ analysisRoot, executionId });
         if (locked.analysisFileSha256 !== before.analysisFileSha256) {
             throw new Error('conference analysis changed while waiting for completion lock');
         }
+        if (locked.analysis.status === 'complete' && locked.analysis.stats?.analysisStatus !== 'complete') {
+            if (locked.run.status === 'complete') {
+                const runBody = { ...locked.run, status: 'partial', updatedAt: new Date().toISOString() };
+                delete runBody.analysisSha256; delete runBody.completionReceipt; delete runBody.runSha256;
+                replaceJson(path.join(locked.directory, 'run.json'),
+                    { ...runBody, runSha256: stableHash(runBody) }, locked.runFileSha256);
+                locked = loadConferenceAnalysis({ analysisRoot, executionId });
+            }
+            const normalized = { ...locked.analysis,
+                stats: { ...(locked.analysis.stats && !Array.isArray(locked.analysis.stats)
+                    ? locked.analysis.stats : {}), analysisStatus: 'complete' } };
+            replaceJson(path.join(locked.directory, 'analysis.json'), normalized, locked.analysisFileSha256);
+            locked = loadConferenceAnalysis({ analysisRoot, executionId });
+        }
         if (locked.run.status === 'complete') return locked.run;
         return sealCompletedRun(locked);
-    });
+    }, conferencePaperLockOptions(engine));
 }
 async function analyzeConference({ analysisRoot, executionId, concurrency = 1, planHandle, sourceRoot } = {}, overrides = {}) {
     const engine = overrides.engine || require('../analysis-engine.js');
@@ -346,7 +391,8 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
     verifyPlanAuthority(loaded, planHandle, sourceRoot);
     const analysisFile = path.join(loaded.directory, 'analysis.json');
     if (loaded.analysis.status === 'complete') {
-        const run = loaded.run.status === 'complete' ? loaded.run : await sealCompletedRunLocked({
+        const run = loaded.run.status === 'complete' && loaded.analysis.stats?.analysisStatus === 'complete'
+            ? loaded.run : await sealCompletedRunLocked({
             analysisRoot, executionId, engine, expectedAnalysisSha256: loaded.analysisFileSha256 });
         return { executionId, paperId: loaded.run.paperId, status: 'complete', canonicalPath: analysisFile,
             analysisSha256: run.analysisSha256, productionAuthorized: true, recovered: true };
@@ -363,10 +409,15 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
         },
         onPaperResultLocked: async (_paper, result) => {
             finalPaper = result.result || { ..._paper, error: result.error || 'conference analysis failed' };
-            const currentRecord = readJsonRecord(analysisFile); const current = currentRecord.value; replaceJson(analysisFile,
-                { ...current, status: result.success ? 'complete' : 'partial',
-                    ...(result.success ? { completedAt: new Date().toISOString() } : {}), papers: [finalPaper] }, currentRecord.sha256);
-        }
+            const currentRecord = readJsonRecord(analysisFile); const current = currentRecord.value;
+            const status = result.success ? 'complete' : 'partial';
+            const next = { ...current, status,
+                stats: { ...(current.stats && !Array.isArray(current.stats) ? current.stats : {}), analysisStatus: status },
+                ...(result.success ? { completedAt: new Date().toISOString() } : {}), papers: [finalPaper] };
+            if (!result.success) delete next.completedAt;
+            replaceJson(analysisFile, next, currentRecord.sha256);
+        },
+        paperLockOptions: conferencePaperLockOptions(engine)
     }));
     const current = readJson(analysisFile); const status = current.status === 'complete' ? 'complete' : 'partial';
     let run;

@@ -43,7 +43,11 @@ function configured(files) {
     return result;
 }
 function main(argv = process.argv.slice(2), runtime = {}) {
-    requireExternalRuntime('conference-postprocess.js'); const options = parseArgs(argv); const files = runtime.files || Config.FILES;
+    requireExternalRuntime('conference-postprocess.js');
+    if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1') {
+        throw new Error('New-conference postprocess must use conference:new:process');
+    }
+    const options = parseArgs(argv); const files = runtime.files || Config.FILES;
     const planHandle = (runtime.loadBoundPlan || executionCli.loadBoundPlan)(files, options); const roots = configured(files);
     const result = options.action === 'paper'
         ? (runtime.stagePaper || api.stagePaper)({ ...roots, executionId: options.executionId, planHandle, apply: options.apply }, runtime.dependencies || {})

@@ -68,8 +68,9 @@ The active historical route is `conference-local-sources → direct-inputs → c
 → direct-scheduler → direct-run → direct-aggregate`. It does not wait for crosswalk: arXiv derives from a frozen
 single historical hint and freshly seals official TXT/PDF/runtime/manifest per generation; conference replays
 bound retained metadata/PDF SHA. Crosswalk accepts only a named immutable fresh-arXiv failure handoff; a damaged or
-missing local conference source fails its direct item closed. Historical review, activation, commit/push receipt, and remote-OID publication
-are not implemented.
+missing local conference source fails its direct item closed. `history:publication` now provides historical review,
+locked activation/commit/push receipts, and remote-OID verification. Per-page passes reuse only path plus content SHA,
+while each current batch reruns deterministic/Hugo gates and reissues its receipt. Missing conference-aggregate integration still fails closed.
 
 Ordinary papers retain the existing current-PDF v2 bundle shape. Only an explicit HTTP 404 from the unversioned current
 PDF permits an official historical `vN` PDF for the same canonical arXiv ID. Version fallback rejects cross-ID URLs,

@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { paperSourceQuoteBindsOriginalUrl } = require('./lib/reader-resource-binding.js');
 const { parseAnalysis, writeFileAtomic, getBeijingISOString, normalizedId } = require('./utils.js');
 const { ANALYSIS_CONFIG } = require('./config.js');
 const {
@@ -1042,6 +1043,7 @@ function apiReaderV3BindsCanonical(paper) {
         && resources.resources.every(resource => (
             ['code', 'model', 'dataset', 'demo', 'reproduction', 'third_party'].includes(resource?.type)
             && ['paper_source', 'validated_demo'].includes(resource?.origin)
+            && (resource.origin !== 'paper_source' || paperSourceQuoteBindsOriginalUrl(resource))
             && (resource.origin !== 'validated_demo'
                 || manifest?.stages?.demoLinkScan?.discoveredLinks?.includes(resource.originalUrl))
             && /^https:\/\//.test(String(resource?.originalUrl || ''))
@@ -1114,6 +1116,59 @@ function apiReaderV3BindsCanonical(paper) {
                 || /^[a-f0-9]{64}$/.test(String(figure.assetSha256 || ''))));
     const figurePersistenceValid = figurePersistence === undefined
         || figurePersistence === EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT;
+    const diagnosticChecks = {
+        article_hash: paper.apiReaderArticleSha256 === articleSha256
+            && stage.articleSha256 === articleSha256,
+        plan_hash: paper.apiReaderPlanSha256 === planSha256
+            && stage.planSha256 === planSha256,
+        figures: stage.figureCount === figures.length
+            && stage.figuresSha256 === figuresSha256,
+        authors: stage.readerAuthorsSha256 === authorsSha256
+            && manifest?.contracts?.apiReaderAuthorIdentity === API_READER_AUTHOR_IDENTITY_CONTRACT
+            && stage.readerAuthorIdentityContractVersion === API_READER_AUTHOR_IDENTITY_CONTRACT
+            && stage.readerAuthorIdentitySha256 === authorIdentitySha256
+            && authorIdentityValid,
+        resources: manifest?.contracts?.apiReaderResourceIdentity === API_READER_RESOURCE_IDENTITY_CONTRACT
+            && stage.resourceIdentityContractVersion === API_READER_RESOURCE_IDENTITY_CONTRACT
+            && stage.resourceIdentitySha256 === resourceIdentitySha256
+            && stage.resourceCount === resources.resources.length
+            && manifest?.stages?.openSourceScan?.resourceEvidenceContract
+                === API_READER_RESOURCE_IDENTITY_CONTRACT
+            && manifest?.stages?.openSourceScan?.resourceEvidenceSha256 === resourceIdentitySha256
+            && resourceIdentity.sourceTextSha256 === paper.sourceSha256
+            && resourceIdentityValid,
+        execution: typeof stage.model === 'string' && stage.model.trim()
+            && typeof stage.protocol === 'string' && stage.protocol.trim()
+            && stage.parserVersion === 'api-reader-parser-v3'
+            && stage.assemblerVersion === 'api-reader-assembler-v3'
+            && stage.tableContractVersion === 'api-reader-tables-v3'
+            && stage.figureContractVersion === 'api-reader-figures-v3',
+        quality: stage.qualityMetricsContractVersion === API_READER_QUALITY_METRICS_CONTRACT
+            && stage.qualityMetrics?.contract === API_READER_QUALITY_METRICS_CONTRACT
+            && stage.qualityMetrics?.blockingIssueCount === 0,
+        source_bindings: plan.sourceBindingsContract === API_READER_SOURCE_BINDING_CONTRACT
+            && manifest?.contracts?.apiReaderSourceBindings === API_READER_SOURCE_BINDING_CONTRACT
+            && plan.sourceBindingsSha256 === sourceBindingsSha256
+            && stage.sourceBindingsContractVersion === API_READER_SOURCE_BINDING_CONTRACT
+            && stage.sourceBindingsSha256 === sourceBindingsSha256
+            && stage.sourceBindingsSourceTextSha256 === paper.sourceSha256
+            && stage.sourceBindingsSourceTextSha256 === manifest?.sourceAcquisition?.sourceSha256
+            && stage.tableBindingCount === tableBindings?.length
+            && stage.formulaBindingCount === formulaBindings?.length
+            && sourceBindingsBindArticle,
+        figure_persistence: figurePersistenceValid && ephemeralFiguresValid,
+        structured_artifacts: /^[a-f0-9]{64}$/.test(String(stage.structuredArtifactsSha256 || ''))
+            && stage.structuredArtifactsSha256 === manifest?.sourceAcquisition?.structuredArtifactsSha256,
+        placements: Boolean(placements)
+            && placementOrdinals.length === figureOrdinals.length
+            && new Set(placementOrdinals).size === placementOrdinals.length
+            && placementOrdinals.every(ordinal => figureOrdinals.includes(ordinal))
+    };
+    const failedDiagnosticChecks = Object.entries(diagnosticChecks)
+        .filter(([, passed]) => !passed).map(([name]) => name);
+    if (failedDiagnosticChecks.length > 0) {
+        console.warn(`[analysis-engine] API Reader v3 证明失败项: ${failedDiagnosticChecks.join(', ')}`);
+    }
     return Boolean(
         paper.apiReaderArticleSha256 === articleSha256
         && paper.apiReaderPlanSha256 === planSha256

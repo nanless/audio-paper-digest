@@ -93,6 +93,9 @@ function publicStatus(execution) {
 }
 function main(argv = process.argv.slice(2), dependencies = {}) {
     requireExternalRuntime('conference-execution.js');
+    if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1') {
+        throw new Error('New-conference execution must use conference:new:process');
+    }
     const options = parseArgs(argv); const files = dependencies.files || Config.FILES;
     const root = dependencies.executionRoot || executionRoot(files);
     let execution;

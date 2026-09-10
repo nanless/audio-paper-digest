@@ -4,6 +4,11 @@ const deep = require('../scripts/deep-analyzer.js');
 const { stableHash: hash, sha256: sha } = require('../scripts/lib/fresh-rewrite-run.js');
 const { apiReaderV3BindsCanonical } = require('../scripts/analysis-engine.js');
 const runId = '11111111-2222-4333-8444-555555555555', paperId = '2609.12345';
+const stableObject = value => {
+    if (Array.isArray(value)) return value.map(stableObject);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableObject(value[key])]));
+};
 
 function sign(paper) {
     const plan = paper.apiReaderPlan, stage = paper.analysisManifest.stages.apiReaderArticle;
@@ -62,9 +67,12 @@ function fixture(options = {}) {
         draft.tableBindings[1]={tableIndex:2,sourceType:'artifact_table',sourceTableOrdinal:1,
             cellBindings:cells.map(cell=>({renderedRow:cell.row,renderedColumn:cell.column,sourceRow:cell.row,sourceColumn:cell.column})),sourceQuotes:[]};
     }
-    const artifactBody={version:1,parserVersion:'reader-signed-draft-fixture-v1',
+    const artifactBody=stableObject({version:1,parserVersion:'reader-signed-draft-fixture-v1',
         flattenedTextSha256:sha(text),tables,figures:options.noFigures?[]:[figure],formulas:[{ordinal:1,latex:'y=x.',
-        recoveryStatus:'complete',sourceDomSha256:'b'.repeat(64)}]};
+        recoveryStatus:'complete',sourceDomSha256:'b'.repeat(64)}]});
+    // Production binding uses a stable object fingerprint, while the signed
+    // inverse independently replays the exact persisted JSON bytes. Canonical
+    // key order makes this shared fixture satisfy both production contracts.
     const artifacts={...artifactBody,payloadSha256:hash(artifactBody)};
     const snapshot={text,structuredArtifacts:artifacts};
     const descriptor={version:1,contract:'fresh-source-cache-v1',runId,paperId,sourceSha256:sha(text),

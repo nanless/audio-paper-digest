@@ -98,5 +98,5 @@ logs/                       脱敏日志，受年龄与容量保留策略约束
 - canonical SHA 证明“这些字节被发布”，来源级 table/formula/claim binding 才证明“这些事实来自论文”。
 - 新 generation 必须重放当前来源绑定；历史页面可读取，不得只凭旧 Reader 版本号重新取得 production 资格。
 - 历史 direct-local-first 由独立 catalog/plan/scheduler/runner 处理：arXiv 每 generation 重新拉取官方
-  PDF/TXT，会议只重放本地 metadata/PDF SHA；crosswalk 只接收 named arXiv fresh-failure handoff，会议本地输入坏掉时直接失败关闭，且历史发布事务尚未实现。
+  PDF/TXT，会议只重放本地 metadata/PDF SHA；crosswalk 只接收 named arXiv fresh-failure handoff，会议本地输入坏掉时直接失败关闭。完整 direct 投影可经内容寻址的历史 review、锁内 activation/commit/push 和远端 OID 验证发布；conference aggregate 未接入时仍失败关闭。
 - 视觉失败不撤销已验证博客，但整批只有视觉 complete 或有效 waiver 后才是业务终态。

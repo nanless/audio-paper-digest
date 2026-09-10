@@ -94,7 +94,6 @@ const FILTER_CONFIG = {
     conferenceMaxTokens: 1200,
     conferenceMaxResponseBytes: 2 * 1024 * 1024,
     conferenceTemperature: 0,
-    conferenceMaxAttempts: 3,
     conferenceRetryBackoffMs: 5 * 60 * 1000
 };
 
@@ -194,12 +193,14 @@ const FILES = {
     // Conference PDFs and their source ledgers are private runtime inputs.
     // They are isolated from current/ so incomplete imports cannot alter a
     // daily production batch.
+    officialConferenceAcquisitionDir: path.join(DATA_DIR, 'runtime', 'official-conference-acquisitions'),
     conferenceSourceLedgerDir: path.join(DATA_DIR, 'runtime', 'conference-ledgers'),
     conferenceSourceCacheDir: path.join(DATA_DIR, 'runtime', 'conference-sources'),
     conferenceDiscoveryCatalogDir: path.join(DATA_DIR, 'runtime', 'conference-discovery-catalogs'),
     conferenceDiscoveryReportDir: path.join(DATA_DIR, 'runtime', 'conference-discovery-reports'),
     conferenceFilterSpecsDir: path.join(DATA_DIR, 'runtime', 'conference-filter-specs'),
     conferenceFiltersDir: path.join(DATA_DIR, 'runtime', 'conference-filters'),
+    conferenceFilterEvidenceRunsDir: path.join(DATA_DIR, 'runtime', 'conference-filter-evidence-runs'),
     conferenceStagingSpecsDir: path.join(DATA_DIR, 'runtime', 'conference-staging-specs'),
     conferenceStagingSourceDir: path.join(DATA_DIR, 'runtime', 'conference-staging-sources'),
     conferenceStagingDir: path.join(DATA_DIR, 'runtime', 'conference-staging'),
@@ -208,6 +209,7 @@ const FILES = {
     conferenceAnalysisDir: path.join(DATA_DIR, 'runtime', 'conference-analysis-executions'),
     conferencePageStagingDir: path.join(DATA_DIR, 'runtime', 'conference-page-staging'),
     conferenceAggregateDir: path.join(DATA_DIR, 'runtime', 'conference-aggregates'),
+    conferenceProcessDir: path.join(DATA_DIR, 'runtime', 'conference-processes'),
     historicalPageInventoryDir: path.join(DATA_DIR, 'runtime', 'historical-page-inventories'),
     // Deterministic, local-only direct-input catalog for the historical rewrite.
     // It records retained crawler/PDF pointers and hashes, never blog prose.

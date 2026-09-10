@@ -1145,6 +1145,10 @@ test('received truncated or incomplete full responses consume content and full b
 
 test('received truncated or incomplete patch responses consume content budget without modifying the prior candidate', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
+    const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
+    configuration.apiReaderRepairMaxTokens = 8000;
+    t.after(() => { configuration.apiReaderRepairMaxTokens = priorRepairMaxTokens; });
     for (const code of ['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE']) {
         const directory = temporary(t);
         const paper = { arxivId: '2609.99988', title: '补丁截断内容预算' };
@@ -1185,6 +1189,10 @@ test('received truncated or incomplete patch responses consume content budget wi
 
 test('a non-final exact 8000-token patch truncation immediately uses the one bounded 16000-token slot', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
+    const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
+    configuration.apiReaderRepairMaxTokens = 8000;
+    t.after(() => { configuration.apiReaderRepairMaxTokens = priorRepairMaxTokens; });
     const directory = temporary(t);
     const paper = { arxivId: '2609.99987', title: '局部截断自适应预算' };
     const draft = fixture(); draft.readerTitle = '短'; draft.sections[0].body = '太短';
@@ -1234,6 +1242,10 @@ test('a non-final exact 8000-token patch truncation immediately uses the one bou
 
 test('a final ordinary attempt truncated at 8000 receives exactly one bounded 16000 retry slot', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
+    const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
+    configuration.apiReaderRepairMaxTokens = 8000;
+    t.after(() => { configuration.apiReaderRepairMaxTokens = priorRepairMaxTokens; });
     const directory = temporary(t);
     const paper = { arxivId: '2609.99971', title: '末尾截断恢复' };
     const draft = fixture(); draft.readerTitle = '短'; draft.sections[0].body = '太短';
@@ -1280,6 +1292,10 @@ test('a final ordinary attempt truncated at 8000 receives exactly one bounded 16
 
 test('an implementation-lineage slot truncated at 8000 cannot stack a second 16000 slot', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
+    const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
+    configuration.apiReaderRepairMaxTokens = 8000;
+    t.after(() => { configuration.apiReaderRepairMaxTokens = priorRepairMaxTokens; });
     const directory = temporary(t);
     const paper = { arxivId: '2609.99969', title: '实现额度不得叠加' };
     const draft = fixture(); draft.readerTitle = '短';
@@ -1308,6 +1324,10 @@ test('an implementation-lineage slot truncated at 8000 cannot stack a second 160
 
 test('a transport failure before the final-slot 16000 response preserves the same retry without consuming content', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
+    const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
+    configuration.apiReaderRepairMaxTokens = 8000;
+    t.after(() => { configuration.apiReaderRepairMaxTokens = priorRepairMaxTokens; });
     const directory = temporary(t);
     const paper = { arxivId: '2609.99970', title: '末尾截断网络恢复' };
     const draft = fixture(); draft.readerTitle = '短';

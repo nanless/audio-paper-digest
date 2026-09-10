@@ -6,6 +6,7 @@ const engine=require('../scripts/analysis-engine.js');
 const {parseAnalysis}=require('../scripts/utils.js');
 const {stableHash:hash,sha256:sha}=require('../scripts/lib/fresh-rewrite-run.js');
 const {synchronizeReaderResourceAvailability:sync}=require('../scripts/lib/reader-resource-sync.js');
+const binding=require('../scripts/lib/reader-resource-binding.js');
 
 function fixture(type='demo',availability='temporarily_unreachable') {
     const text='Demo: https://example.org/demo\nThis is the original source evidence.';
@@ -85,6 +86,8 @@ test('demo availability projection updates canonical/parsed/terminal checkpoints
     const f=fixture(),before=structuredClone(f.paper),oldAudit=JSON.stringify(before.analysisManifest.stages.scoringAudit.audit);
     const result=sync(f.paper,f.sourceDetails);
     assert.match(result.parsed.opensource,/demo=temporarily_unreachable/);
+    assert.match(result.analysis,/^- Demo：<https:\/\/example\.org\/demo>（本次暂时无法确认可达）$/m);
+    assert.match(result.parsed.opensource,/Demo：<https:\/\/example\.org\/demo>（本次暂时无法确认可达）/);
     assert.doesNotMatch(result.parsed.opensource,/未发现可验证的官方 HTTPS/);
     assert.equal(result.analysisStageCheckpoints.structureRepair,before.analysisStageCheckpoints.structureRepair);
     for(const value of [result.analysisCheckpoint,result.analysisStageCheckpoints.scoringAudit,result.analysisStageCheckpoints.apiReaderArticle])
@@ -107,6 +110,21 @@ test('code/model/dataset availability evidence changes refuse stale scoring with
         assert.throws(()=>sync(f.paper,f.sourceDetails),/normal scoring audit is required/);
         assert.equal(JSON.stringify(f.paper),before);
     }
+});
+
+test('already synchronized resource projection is a no-op before Reader signature repair checks',()=>{
+    const f=fixture();
+    const synchronized=deep.applyApiReaderResourceAvailability(f.paper.analysis,f.resources);
+    f.paper.analysis=synchronized;
+    f.paper.parsed=parseAnalysis(synchronized);
+    f.paper.analysisCheckpoint=synchronized;
+    f.paper.analysisStageCheckpoints.scoringAudit=synchronized;
+    f.paper.analysisStageCheckpoints.apiReaderArticle=synchronized;
+    f.paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256=sha(synchronized);
+    f.paper.analysisManifest.stages.apiReaderArticle={status:'complete',fingerprint:'incomplete-fixture'};
+    const before=JSON.stringify(f.paper);
+    assert.equal(sync(f.paper,f.sourceDetails),f.paper);
+    assert.equal(JSON.stringify(f.paper),before);
 });
 
 test('identity/source/scoring/checkpoint drift fails closed',()=>{
@@ -171,4 +189,98 @@ test('Reader resource identity rebind rejects signed bytes, audit, or resource-c
         const f=fixture();refreshAvailability(f);mutate(f);const before=JSON.stringify(f.paper);
         assert.throws(()=>sync(f.paper,f.sourceDetails));assert.equal(JSON.stringify(f.paper),before);
     }
+});
+
+test('paper-source bare repository token replays through resource synchronization',()=>{
+    const f=fixture();
+    const token='github.com/example/demo';
+    f.sourceDetails.text=`Demo: ${token}\nThis is the original source evidence.`;
+    const resource=f.resources.resources[0];
+    resource.sourceQuote=f.sourceDetails.text.split('\n')[0];
+    resource.sourceQuoteSha256=sha(resource.sourceQuote);
+    resource.originalUrl='https://github.com/example/demo';
+    resource.finalUrl=resource.originalUrl;
+    resource.sourceUrlBindingContract='paper-source-repository-url-normalization-v1';
+    resource.sourceUrlToken=token;
+    resource.sourceUrlTokenSha256=sha(token);
+    f.resources.sourceTextSha256=sha(f.sourceDetails.text);
+    f.resources.identitySha256=hash({contract:f.resources.contract,
+        sourceTextSha256:f.resources.sourceTextSha256,resources:f.resources.resources});
+    f.paper.sourceSha256=sha(f.sourceDetails.text);
+    f.paper.apiReaderResources=f.resources;
+    f.paper.analysisManifest.sourceAcquisition.sourceSha256=f.paper.sourceSha256;
+    f.paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256=f.resources.identitySha256;
+    assert.doesNotThrow(()=>sync(f.paper,f.sourceDetails));
+    assert.match(f.paper.parsed.opensource,/demo=temporarily_unreachable/);
+});
+
+test('paper-source extraction preserves every explicit typed facet for one official URL',()=>{
+    for(const [text,expected] of [
+        ['Data and code are available at https://github.com/example/project.', ['code','dataset']],
+        ['Code and checkpoints are available at github.com/example/project.', ['code','model']],
+        ['Code and model are available at https://gitlab.com/example/project.', ['code','model']]
+    ]) {
+        const candidates=binding.extractPaperSourceRepositoryCandidates(text);
+        assert.deepEqual(candidates.map(item=>item.type),expected,text);
+        assert.equal(new Set(candidates.map(item=>item.url)).size,1,text);
+        assert.doesNotMatch(candidates.map(item=>item.type).join(','),/third_party/,text);
+        for(const candidate of candidates) {
+            const resource={sourceQuote:candidate.line,originalUrl:candidate.url,
+                ...binding.normalizedSourceUrlBinding(candidate.sourceToken,candidate.url)};
+            assert.equal(binding.paperSourceQuoteBindsOriginalUrl(resource),true,text);
+        }
+    }
+    const separated=binding.extractPaperSourceRepositoryCandidates(
+        'Code is available at github.com/example/code-only. '
+        +'Model checkpoints are available at huggingface.co/example/model-only.'
+    );
+    assert.deepEqual(separated.map(item=>[item.url,item.type]),[
+        ['https://github.com/example/code-only','code'],
+        ['https://huggingface.co/example/model-only','model']
+    ]);
+    assert.deepEqual(
+        binding.extractPaperSourceRepositoryCandidates(
+            'Software is available at modelscope.cn/example/code-release.'
+        ).map(item=>item.type),
+        ['code'],
+        'repository host and slug must not manufacture model/code facets'
+    );
+});
+
+test('paper-source extraction deterministically rejoins bounded PDF URL line wraps',()=>{
+    for(const [text,expectedUrl] of [
+        ['Code is available at https://\ngithub.com/example/project.', 'https://github.com/example/project'],
+        ['Data and code are available at github.com/example/\nproject.', 'https://github.com/example/project'],
+        ['Model checkpoints are available at huggingface.co\n/example/model.', 'https://huggingface.co/example/model']
+    ]) {
+        const candidates=binding.extractPaperSourceRepositoryCandidates(text);
+        assert.ok(candidates.length>=1,text);
+        assert.ok(candidates.every(item=>item.url===expectedUrl),text);
+        assert.ok(candidates.every(item=>item.sourceToken.includes('\n')),text);
+        for(const candidate of candidates) {
+            const resource={sourceQuote:candidate.line,originalUrl:candidate.url,
+                ...binding.normalizedSourceUrlBinding(candidate.sourceToken,candidate.url)};
+            assert.equal(binding.paperSourceQuoteBindsOriginalUrl(resource),true,text);
+        }
+    }
+});
+
+test('paper-source line-wrap recovery rejects cross-paragraph and unsafe repository tokens',()=>{
+    for(const text of [
+        'Code is available at github.com/example/\n\nprivate.',
+        'Code is available at https://user:pass@\ngithub.com/example/private.',
+        'Code is available at github.com/example/\n../private.',
+        'Code is available at github.com/example/\nproject?token=secret.',
+        'Code is available at localhost/example/\nproject.',
+        'A citation ends with github.com/example/\nrepository and unrelated prose follows.'
+    ]) {
+        assert.deepEqual(binding.extractPaperSourceRepositoryCandidates(text),[],text);
+    }
+    for(const token of [
+        'github.com/example/\n\nprivate',
+        'https://user:pass@github.com/example/private',
+        'github.com/example/\n../private',
+        'github.com/example/\nproject?token=secret',
+        '127.0.0.1/example/project'
+    ]) assert.equal(binding.normalizePaperSourceRepositoryToken(token),null,token);
 });

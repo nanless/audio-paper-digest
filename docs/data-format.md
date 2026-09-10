@@ -130,7 +130,7 @@ registry version/SHA、按标签顺序排列的 `{id, facet, label}`、显式主
 
 ## review receipt 与远端发布
 
-review receipt 绑定 generation SHA、逐页实际 SHA、每页 review 协议、Git baseline、Hugo gate、Hugo 配置/布局/数据/前端代码运行时指纹和 production proof。模板或站点脚本在 review 后变化时，push 会失败关闭并要求重新 review。push 成功后追加：
+review receipt 绑定 generation SHA、逐页实际 SHA、当前 review 协议、Git baseline、Hugo gate、Hugo 配置/布局/数据/前端代码运行时指纹和 production proof。同时单独保存以“相对路径 + 页面内容 SHA”为键的逐页通过证据。发布器代码变化仍会使 generate 重新渲染，新旧页面的最终字节据此比较。模板、站点脚本、模型、发布器代码、review 协议或 generation manifest 元数据变化时，旧批次 receipt 不能直接 push，但必须复用所有内容 SHA 未变的逐页通过证据，只重跑当前批次 gate 并重签 receipt。push 成功后追加：
 
 - `publicationCommit`；
 - 相同的 `remoteVerifiedOid`；

@@ -95,6 +95,70 @@ test('ICML records an optional numeric alias but keeps OpenReview ID as sole pri
     assert.equal(result.manifest.members[1].match.kind, 'exact');
 });
 
+test('official proceedings closes conference identity and matches PDFs only by exact metadata.pdfFile', t => {
+    const f = fixture(t);
+    writeJson(f.metadata, { conference: { id: 'cvpr-2026', year: 2026 }, papers: [
+        { id: 'CVPR.2026-001_camera', title: 'Exact official PDF', authors: ['A. Author', 'B. Author'],
+            abstract: 'An official abstract.', pdfFile: 'papers/CVPR_001.pdf',
+            recordUrl: 'https://openaccess.thecvf.com/content/CVPR2026/html/Author_Exact.html',
+            pdfUrl: 'https://openaccess.thecvf.com/content/CVPR2026/papers/Author_Exact.pdf', doi: null, track: 'Main' },
+        { id: 'CVPR-2026.002', title: 'No local PDF', authors: ['C. Author'], abstract: '', pdfFile: null,
+            recordUrl: 'https://openaccess.thecvf.com/content/CVPR2026/html/Author_Missing.html',
+            pdfUrl: null, doi: '10.1109/CVPR.2026.2', track: null }
+    ] });
+    writePdf(f.pdf, 'papers/CVPR_001.pdf', 'exact official file');
+    writePdf(f.pdf, 'CVPR.2026-001_camera.pdf', 'identity-name must not match');
+    writePdf(f.pdf, 'Exact official PDF.pdf', 'title-name must not match');
+    writePdf(f.pdf, 'CVPR-2026.002.pdf', 'null pdfFile must not match');
+    const result = discovery.discoverConference({ adapter: 'official-proceedings', conferenceId: 'cvpr-2026',
+        year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
+    assert.deepEqual(result.manifest.conference, { id: 'cvpr-2026', year: 2026 });
+    assert.deepEqual(result.manifest.members.map(member => [member.identity, member.pdfFile, member.match.kind]), [
+        [{ type: 'conference-paper-id', value: 'CVPR-2026.002' }, null, 'unmatched'],
+        [{ type: 'conference-paper-id', value: 'CVPR.2026-001_camera' }, 'papers/CVPR_001.pdf', 'exact']
+    ]);
+    assert.deepEqual(result.manifest.members[1].match.candidates.map(candidate => candidate.path), ['papers/CVPR_001.pdf']);
+    assert.equal(result.report.counts.orphanPdfFiles, 3);
+    assert.throws(() => discovery.discoverConference({ adapter: 'official-proceedings', year: 2026,
+        metadataFile: f.metadata, pdfRoot: f.pdf }), /requires conferenceId/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'official-proceedings', conferenceId: 'acl-2026',
+        year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /must match conferenceId and year/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'official-proceedings', conferenceId: 'cvpr-2026',
+        year: 2025, metadataFile: f.metadata, pdfRoot: f.pdf }), /must match conferenceId and year/);
+});
+
+test('official proceedings metadata schema, identifiers, URLs, and PDF paths fail closed', t => {
+    const f = fixture(t);
+    const record = { id: 'ACL.2026-main.1', title: 'Paper', authors: ['Author'], abstract: '', pdfFile: null,
+        recordUrl: 'https://aclanthology.org/2026.acl-long.1/', pdfUrl: null, doi: null, track: 'Long' };
+    const discover = snapshot => {
+        writeJson(f.metadata, snapshot);
+        return discovery.discoverConference({ adapter: 'official-proceedings', conferenceId: 'acl-2026',
+            year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
+    };
+    assert.equal(discover({ conference: { id: 'acl-2026', year: 2026 }, papers: [record] }).manifest.members.length, 1);
+    const collaboration = structuredClone(record);
+    collaboration.authors = Array.from({ length: 102 }, (_, index) => `Author ${index + 1}`);
+    assert.equal(discover({ conference: { id: 'acl-2026', year: 2026 }, papers: [collaboration] })
+        .manifest.members.length, 1);
+    const unbounded = structuredClone(record);
+    unbounded.authors = Array.from({ length: 1001 }, (_, index) => `Author ${index + 1}`);
+    assert.throws(() => discover({ conference: { id: 'acl-2026', year: 2026 }, papers: [unbounded] }),
+        /at most 1000 names/);
+    for (const mutate of [
+        value => { value.extra = true; },
+        value => { value.papers[0].extra = true; },
+        value => { value.papers[0].id = 'ACL/2026/1'; },
+        value => { value.papers[0].pdfFile = '../paper.pdf'; },
+        value => { value.papers[0].recordUrl = 'http://aclanthology.org/2026.acl-long.1/'; },
+        value => { value.papers[0].authors = []; }
+    ]) {
+        const snapshot = { conference: { id: 'acl-2026', year: 2026 }, papers: [structuredClone(record)] };
+        mutate(snapshot);
+        assert.throws(() => discover(snapshot));
+    }
+});
+
 test('rejects duplicate identities, conflicting IDs/aliases, duplicate JSON keys, and noncanonical identities', t => {
     const f = fixture(t);
     writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }, { forum_id: 'AbCdef_12', title: 'Two' }]);
@@ -146,6 +210,17 @@ test('CLI dry-run writes nothing; apply writes bound O_EXCL artifacts and rolls 
     for (const unsafe of ['/tmp/x.json', '../x.json', 'nested/x.json', 'X.json']) {
         assert.throws(() => cli.parseCommand(['--apply', ...base, '--candidate-output', unsafe, '--report-output', 'report.json']), /safe direct/);
     }
+});
+
+test('CLI requires and forwards an exact official conference ID while preserving legacy arguments', () => {
+    const base = ['--adapter', 'official-proceedings', '--year', '2026', '--metadata', '/tmp/metadata.json', '--pdf-root', '/tmp/pdf'];
+    assert.throws(() => cli.parseCommand(['--dry-run', ...base]), /requires --conference-id/);
+    const parsed = cli.parseCommand(['--dry-run', ...base, '--conference-id', 'ijcai-ecai-2026']);
+    assert.equal(parsed.conferenceId, 'ijcai-ecai-2026');
+    assert.throws(() => cli.parseCommand(['--dry-run', ...base, '--conference-id', 'IJCAI 2026']), /normalized/);
+    assert.throws(() => cli.parseCommand(['--dry-run', ...base, '--conference-id', 'ijcai-ecai-2025']), /exact --year/);
+    assert.equal(Object.hasOwn(cli.parseCommand(['--dry-run', '--adapter', 'iclr', '--year', '2026',
+        '--metadata', '/tmp/metadata.json', '--pdf-root', '/tmp/pdf']), 'conferenceId'), false);
 });
 
 test('apply refuses outputs inside the catalog root', t => {

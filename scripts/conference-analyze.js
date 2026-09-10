@@ -25,7 +25,7 @@ function parseArgs(argv) {
     if (action === 'prepare') {
         const values = pairs(rest, PREPARE_FLAGS);
         if (PREPARE_FLAGS.some(flag => !values[flag]) || !executionApi.UUID_RE.test(values['--analysis-run'])
-            || !/^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9_-]+$/.test(values['--paper-id'])) {
+            || !/^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/.test(values['--paper-id'])) {
             throw new Error('prepare requires complete conference plan authority, canonical paperId, and analysis UUID');
         }
         const authority = executionCli.parseArgs(['status', ...executionCli.AUTHORITY_FLAGS.flatMap(flag => [flag, values[flag]]),
@@ -48,6 +48,9 @@ function parseArgs(argv) {
 }
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('conference-analyze.js');
+    if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1') {
+        throw new Error('New-conference analysis must use conference:new:process');
+    }
     const options = parseArgs(argv); const files = runtime.files || Config.FILES;
     for (const key of ['conferenceAnalysisDir', 'conferenceSourceCacheDir']) {
         if (typeof files[key] !== 'string' || !path.isAbsolute(files[key])) throw new Error(`${key} must be configured absolute path`);

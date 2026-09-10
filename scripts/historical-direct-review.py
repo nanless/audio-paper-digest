@@ -50,33 +50,45 @@ def blocking(issues):
                for item in issues if isinstance(item, dict))
 
 
-def checkpoint_path(root, page_key, unit, index):
-    identity = hashlib.sha256(f'{page_key}\0{unit}\0{index}'.encode()).hexdigest()
+def checkpoint_path(root, page_key, unit, index, input_sha=None):
+    material = f'{page_key}\0{unit}\0{index}'
+    if input_sha is not None:
+        material += f'\0{input_sha}'
+    identity = hashlib.sha256(material.encode()).hexdigest()
     return Path(root) / f'{identity}.json'
 
 
 def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
-    target = checkpoint_path(root, identity, unit, index)
-    if target.is_file():
-        value = read_json(target)
+    target = checkpoint_path(root, identity, unit, index, input_sha)
+    legacy = checkpoint_path(root, identity, unit, index)
+    for candidate in (target, legacy):
+        if not candidate.is_file():
+            continue
+        value = read_json(candidate)
         body = dict(value)
         declared = body.pop('checkpointSha256', None)
         if (value.get('contract') != CHECKPOINT_CONTRACT or value.get('version') != 1
                 or value.get('identity') != identity or value.get('unit') != unit
-                or value.get('index') != index or value.get('inputSha256') != input_sha
-                or value.get('protocol') != protocol or declared != stable(body)):
-            raise ValueError(f'stale semantic review checkpoint: {target}')
-        if value['result'].get('passed') is True:
+                or value.get('index') != index
+                or not isinstance(value.get('inputSha256'), str)
+                or not isinstance(value.get('protocol'), dict)
+                or declared != stable(body)):
+            raise ValueError(f'stale semantic review checkpoint: {candidate}')
+        if (value.get('inputSha256') == input_sha
+                and value['result'].get('passed') is True):
+            if candidate == legacy and not target.exists():
+                atomic_json(target, value)
             return value['result']
-        raise ValueError('canonical semantic checkpoint may only contain a passing result')
+        if value.get('inputSha256') == input_sha:
+            raise ValueError('canonical semantic checkpoint may only contain a passing result')
     attempt_prefix = f'{target.stem}.attempt-'
     attempts = []
     for candidate in sorted(target.parent.glob(f'{attempt_prefix}*.json')) if target.parent.exists() else []:
         try:
             attempt = read_json(candidate)
             if (attempt.get('identity') == identity and attempt.get('unit') == unit
-                    and attempt.get('index') == index and attempt.get('inputSha256') == input_sha
-                    and attempt.get('protocol') == protocol):
+                    and attempt.get('index') == index
+                    and attempt.get('inputSha256') == input_sha):
                 attempts.append(attempt)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
@@ -123,17 +135,25 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
     actual_sha = hashlib.sha256(raw).hexdigest()
     if actual_sha != page['sha256']:
         raise ValueError(f'page SHA drifted: {relative}')
-    page_checkpoint = checkpoint_path(checkpoint_root, relative, 'page', 0)
-    if page_checkpoint.is_file():
-        value = read_json(page_checkpoint)
+    page_checkpoint = checkpoint_path(checkpoint_root, relative, 'page', 0, actual_sha)
+    legacy_page_checkpoint = checkpoint_path(checkpoint_root, relative, 'page', 0)
+    for candidate in (page_checkpoint, legacy_page_checkpoint):
+        if not candidate.is_file():
+            continue
+        value = read_json(candidate)
         body = dict(value)
         declared = body.pop('checkpointSha256', None)
         if (value.get('contract') != CHECKPOINT_CONTRACT or value.get('unit') != 'page'
-                or value.get('identity') != relative or value.get('inputSha256') != actual_sha
-                or value.get('protocol') != protocol or declared != stable(body)
-                or value.get('result', {}).get('passed') is not True):
-            raise ValueError(f'stale page review checkpoint: {page_checkpoint}')
-        return value['result']
+                or value.get('identity') != relative
+                or not isinstance(value.get('inputSha256'), str)
+                or not isinstance(value.get('protocol'), dict)
+                or declared != stable(body)):
+            raise ValueError(f'stale page review checkpoint: {candidate}')
+        if (value.get('inputSha256') == actual_sha
+                and value.get('result', {}).get('passed') is True):
+            if candidate == legacy_page_checkpoint and not page_checkpoint.exists():
+                atomic_json(page_checkpoint, value)
+            return value['result']
     content = raw.decode('utf-8')
     title_match = re.search(r'^title:\s*["\']?(.*?)["\']?\s*$', content, re.MULTILINE)
     title = title_match.group(1) if title_match else relative
@@ -265,7 +285,7 @@ def run(request_path, output_path, checkpoint_root, concurrency):
     if receipt['passed']:
         if output.exists():
             if read_json(output) != receipt:
-                raise ValueError('existing semantic review receipt differs from replay')
+                atomic_json(output, receipt)
         else:
             atomic_json(output, receipt)
     return receipt

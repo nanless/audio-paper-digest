@@ -484,7 +484,7 @@ planned history:status --publication UUID
 ```
 
 `history:publish apply` 是唯一能改真实博客和推送的历史入口。它不得隐式触发 source、LLM、taxonomy
-或内容修复；任何 review 后变化必须退回相应阶段、重新冻结字节并重审。
+或内容修复。review 后页面内容 SHA 变化必须退回相应阶段、重新冻结字节并只重审变化页；模型、Prompt、代码、Hugo、协议或 manifest 元数据变化只重跑批次 gate 与 receipt 重签，不得重审内容 SHA 未变页。
 
 ### 9.4 P5 验收
 
@@ -521,7 +521,7 @@ crosswalk finalize 前仍按最坏 4,185 个 identity 规划预算，不提前�
 | scoring | canonical/Reader、rubric、audit prompt/model | score 与聚合排名 |
 | taxonomy | canonical/Reader/source、registry、assignment policy | taxonomy 与页面投影 |
 | page | Reader/score/taxonomy、pageId/cohort、renderer/template | 指定页面及依赖聚合页 |
-| review | 最终文件 SHA、review protocol/model | 只重审变化文件 |
+| review | 相对路径、最终文件内容 SHA | 只重审内容 SHA 变化文件；protocol/model/code/Hugo/manifest 只重签批次 receipt |
 
 同一 logical request 的 API key fallback 不生成新 cache identity；只有明确 usage-limit 才换账号。
 网络错误、5xx、截断和内容门禁保留原账号与 attempt。所有 provider token 使用真实回执，缺失单列。

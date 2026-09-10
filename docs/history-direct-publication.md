@@ -71,5 +71,6 @@ receipt。Git add 分批执行，避免全历史路径集合超过系统 `ARG_MA
 front matter、taxonomy contract、链接协议和特殊非 camera-ready 披露；随后真实 Hugo gate，并由独立
 Python coordinator 复用发布公共 LLM 路由执行逐页、逐文本分块和存在图片时的多模态审查。并发由
 `PD_HISTORY_REVIEW_CONCURRENCY` 控制，范围 1–5。每个通过的分块和页面保存可恢复 checkpoint；失败
-attempt 保留审计但不会冒充可复用成功。模型、endpoint SHA、Prompt/实现 SHA、预算、并发和协议 SHA
-全部进入 review fingerprint。它仍是历史专属协议，不复用或冒充日更 schema-v3 receipt。
+attempt 保留审计但不会冒充可复用成功。通过 checkpoint 永久以页面路径和实际内容 SHA 寻址；模型、endpoint SHA、Prompt/实现 SHA、预算、并发、Hugo 或 generation/plan 元数据变化时，重跑批次确定性/Hugo gate 并重签当前 review receipt，但不得重审内容 SHA 未变的页面。只有内容 SHA 变化才会重审该页。当前协议仍记入批次 review fingerprint 用于 receipt 重签与 push 前校验；它是历史专属协议，不复用或冒充日更 schema-v3 receipt。
+
+review receipt 重签后，若页面已 activation 但尚未推送，activation intent/receipt 可在逐文件 SHA 不变的前提下重绑新 review SHA；已存在的 Git commit receipt 同理只重绑新 review/activation SHA。这些恢复不放宽博客 main 工作区角色、基线 HEAD、路径白名单、每文件 SHA、Git 精确 delta、remote identity 或远端 OID 校验。

@@ -1,0 +1,7 @@
+AAAI 2026 ambiguous structural fixture
+Abstract
+This bounded fixture is deliberately long enough for the evidence threshold and contains two exclusive bare Introduction lines. The conservative locator must reject the result as ambiguous rather than silently selecting one boundary.
+Introduction
+Intermediate text.
+Introduction
+Body text.

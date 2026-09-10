@@ -43,6 +43,12 @@ class PaperIdentityTests(unittest.TestCase):
             identity.assert_canonical_conference_paper_id(
                 "icassp-2026:icassp-arnumber:10910001", conference, source_identity)
 
+    def test_official_conference_ids_preserve_dots_and_letters(self) -> None:
+        conference = {"id": "odyssey-2026", "year": 2026}
+        source_identity = {"type": "conference-paper-id", "value": "ando26_odyssey.1"}
+        expected = "conference:odyssey:2026:conference-paper-id:ando26_odyssey.1"
+        self.assertEqual(identity.canonical_conference_paper_id(conference, source_identity), expected)
+
     def test_unknown_fields_and_unsafe_url_fail_closed(self) -> None:
         record = copy.deepcopy(VECTORS["vectors"][0]["record"])
         record["title"] = "not a schema field"
@@ -54,6 +60,33 @@ class PaperIdentityTests(unittest.TestCase):
             changed["source"]["url"] = url
             with self.assertRaisesRegex(ValueError, "source.url"):
                 identity.normalize_identity(changed)
+
+    def test_official_url_accepts_one_trailing_slash_and_rejects_ambiguous_paths(self) -> None:
+        trailing = "https://aclanthology.org/2026.eacl-long.102/"
+        self.assertEqual(identity.validate_official_url(trailing, "official record URL"), trailing)
+        without_trailing = "https://aclanthology.org/2026.eacl-long.102"
+        self.assertEqual(identity.validate_official_url(
+            without_trailing, "official record URL"), without_trailing)
+        for url in (
+            "https://aclanthology.org/2026.eacl-long.102//",
+            "https://aclanthology.org/2026.eacl-long.102//appendix",
+            "https://aclanthology.org/2026.eacl-long.102/./appendix",
+            "https://aclanthology.org/2026.eacl-long.102/../appendix",
+            "https://aclanthology.org/2026.eacl-long.102/%2e%2e/appendix",
+            "https://aclanthology.org/2026.eacl-long.102/%2Fappendix",
+            "https://ACLANthology.org/2026.eacl-long.102/",
+        ):
+            with self.subTest(url=url), self.assertRaisesRegex(
+                    ValueError, "unsafe or non-canonical|canonical public HTTPS|canonical URL spelling"):
+                identity.validate_official_url(url, "official record URL")
+
+    def test_large_official_collaboration_author_lists_remain_bounded_without_truncation(self) -> None:
+        record = copy.deepcopy(VECTORS["vectors"][1]["record"])
+        record["citation"]["authors"] = [f"Author {index + 1}" for index in range(102)]
+        self.assertEqual(len(identity.normalize_identity(record)["citation"]["authors"]), 102)
+        record["citation"]["authors"] = [f"Author {index + 1}" for index in range(1001)]
+        with self.assertRaisesRegex(ValueError, "at most 1000 names"):
+            identity.normalize_identity(record)
 
 
 if __name__ == "__main__":

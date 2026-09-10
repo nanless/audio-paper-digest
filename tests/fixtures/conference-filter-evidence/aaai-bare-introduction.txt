@@ -1,0 +1,5 @@
+AAAI 2026 structural fixture derived from paper 37007
+Abstract
+This bounded fixture preserves the observed AAAI layout in which an abstract starts after an exclusive Abstract heading. The content is intentionally synthetic, but it remains long enough to exercise the production evidence threshold without copying the published paper text.
+Introduction
+The body begins here and must not enter the evidence slice.

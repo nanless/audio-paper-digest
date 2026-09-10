@@ -1339,7 +1339,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         )
         for invalid in (
                 summary.replace('R@0.9', 'XR@0.9Y'),
-                summary.replace('从SFT基线的34.1升至', '由SFT基线的34.1升至')):
+                summary.replace('从SFT基线的34.1升至', '本文方法升至')):
             self.assertIn(
                 '缺少完整关键定量结果',
                 publish_to_blog._detailed_core_summary_semantic_issue(invalid),
@@ -1442,6 +1442,57 @@ class PublishToBlogReviewTest(unittest.TestCase):
             publish_to_blog._detailed_core_summary_semantic_issue(valid)
         )
 
+    def test_core_summary_accepts_parity_as_a_comparison_direction(self):
+        summary = ''.join([
+            '该工作处理流式零样本文本到语音合成，输入为已口语化文本与至多约 60 秒参考音频，输出为连续语音，难点在于长文本韵律一致性、有界上下文与首包延迟的兼顾。',
+            '方法链条分为四步：语义阶段由大模型生成第一码本并固定时长与语调骨架；三个小模型逐级补足声学残差且不改写语义轴；文本与音频以共享逻辑位置与成对边界标记维持跨块对齐；重叠非因果重建经声学编码器转入因果解码器实现流式输出。',
+            '与单遍交织或共享残差模块的已有分解不同，该设计把韵律容量集中于语义流并让声学阶段无跨块状态，从而支持并发精炼与有界缓存。',
+            '在 400 段英文有声读物成对评测中，系统韵律偏好得分为 50.1%，与 ElevenLabs Flash v2.5 基本持平，正确性为 48.9%。',
+            '结论仅限于英文朗读韵律与词级正确性，未验证德语与多语、音色相似度、长篇连贯与流式音质。',
+            '单卡首音频约 200 ms，单路端到端实时因子约 0.08，8 路并发聚合实时因子约 0.02。',
+        ])
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(summary)
+        )
+
+    def test_core_summary_accepts_closed_transitions_but_not_single_bare_rise(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        accepted = tuple(
+            sentence[:-1] + '，该结果的比较对象、指标数值与方向均能由原文完整逐项核对。'
+            for sentence in (
+            '在 NaijaVoices 测试集下，本文方法的 WER 由 198.68% 降至 42.41%，反超 MMS 的 48.81%。',
+            '在公开测试集下，本文方法的 BLEU 从 0.18 升至 0.54，超过基线的 0.48。',
+            '在公开测试集下，本文方法的 WER 由 12.4% 降到 9.8%，低于基线的 10.1%。',
+            '在公开测试集下，本文方法的准确率从 70.0% 提升至 81.0%，高于基线的 78.0%。',
+            '在公开测试集下，本文方法的准确率由 70.0% 提高到 81.0%，高于基线的 78.0%。',
+            '在公开测试集下，基线 BLEU 为 0.18，本文方法升至 0.54。',
+            '在公开测试集下，基线 WER 为 12.4%，本文方法降至 9.8%。',
+            '在公开测试集下，本文方法的 WER 为 42.41%，反超 MMS 基线的 48.81%。',
+            )
+        )
+        for sentence in accepted:
+            with self.subTest(sentence=sentence):
+                self.assertIsNone(
+                    publish_to_blog._detailed_core_summary_semantic_issue(
+                        summary.replace(original, sentence)
+                    )
+                )
+
+        missing_start = (
+            '在公开测试集下，本文方法的 BLEU 升至 0.54，本文方法与基线均按同一协议运行，'
+            '但原文没有报告基线数值，其他评测口径与指标定义均能逐项核对。'
+        )
+        self.assertIn(
+            '缺少完整关键定量结果',
+            publish_to_blog._detailed_core_summary_semantic_issue(
+                summary.replace(original, missing_start)
+            ),
+        )
+
     def test_modern_resources_show_identity_type_and_status_without_weight_claims(self):
         paper = llm_api_publication_fixture()
         resource = paper['apiReaderResources']['resources'][0]
@@ -1498,10 +1549,14 @@ class PublishToBlogReviewTest(unittest.TestCase):
         ), unrelated)
 
     def test_modern_reader_projection_repairs_reviewed_metric_code_typo(self):
-        article = '公开指标抽取代吗与标注手册，误差条为 90%五置信区间。'
+        article = (
+            '公开指标抽取代吗与标注手册，误差条为 90%五置信区间。'
+            '集合 S_yes/S_no 聚合后由 Syes 决定。'
+        )
         self.assertEqual(
             publish_to_blog._modern_api_safe_typo_projection(article),
-            '公开指标抽取代码与标注手册，误差条为 95% 置信区间。',
+            '公开指标抽取代码与标注手册，误差条为 95% 置信区间。'
+            '集合 `S_yes`/`S_no` 聚合后由 `S_yes` 决定。',
         )
 
     def test_modern_resource_temporary_status_is_not_an_open_weight_claim(self):
@@ -1554,6 +1609,62 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
                 with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '逐文件.*协议'):
                     publish_to_blog.load_verified_review_receipt('2026-07-10')
+
+    def test_push_requires_current_batch_receipt_but_review_rebinds_old_page_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'current'
+            page = posts / '2026-07-10.md'
+            page.write_text('reviewed bytes\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog, 'review_protocol_fingerprint',
+                        return_value='1' * 64,
+                    ):
+                receipt_path = save_bound_review_receipt('2026-07-10', [page])
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog, 'review_protocol_fingerprint',
+                        return_value='2' * 64,
+                    ), self.assertRaisesRegex(
+                        publish_to_blog.PublishDataValidationError,
+                        '重跑 review.*重签',
+                    ):
+                publish_to_blog.load_verified_review_receipt('2026-07-10')
+
+            receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
+            with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+                manifest = publish_to_blog.generation_manifest_path('2026-07-10')
+            paths = [repo / record['path'] for record in receipt['files']]
+            reviewed = {
+                str(path.resolve()): {
+                    'passed': True,
+                    'reviewedSha256': publish_to_blog._sha256_file(path),
+                    'reviewProtocolFingerprint': '1' * 64,
+                }
+                for path in paths if path.is_file()
+            }
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog, 'review_protocol_fingerprint',
+                        return_value='2' * 64,
+                    ):
+                publish_to_blog.save_review_receipt(
+                    '2026-07-10', paths, 'hugo',
+                    generation_manifest=manifest,
+                    reviewed_results=reviewed,
+                )
+                publish_to_blog.load_verified_review_receipt('2026-07-10')
+            rebound = json.loads(receipt_path.read_text(encoding='utf-8'))
+            self.assertEqual(rebound['reviewProtocolFingerprint'], '2' * 64)
+            self.assertTrue(all(
+                record.get('deleted') is True
+                or record.get('reviewProtocolFingerprint') == '2' * 64
+                for record in rebound['files']
+            ))
 
     def test_review_units_resume_only_exact_passes_and_keep_structured_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3479,6 +3590,38 @@ title: "Bad table"
         with self.assertRaisesRegex(PublishDataValidationError, 'redirects'):
             publish_to_blog._api_reader_payload(redirect)
 
+        documented = llm_api_publication_fixture()
+        documented_resource = documented['apiReaderResources']['resources'][0]
+        documented_resource['documentationEvidence'] = {
+            'contract': 'repository-documentation-evidence-v1',
+            'repositoryUrl': documented_resource['originalUrl'],
+            'sourceUrl': 'https://raw.githubusercontent.com/example/audio-model/main/README.md',
+            'status': 200,
+            'sourceSha256': hashlib.sha256(b'official README').hexdigest(),
+            'capabilities': {
+                'installation': True,
+                'inference': True,
+                'fineTuning': True,
+            },
+            'completeness': 'complete',
+        }
+        reseal_llm_api_resource_identity(documented)
+        documented_payload = publish_to_blog._api_reader_payload(documented)
+        self.assertEqual(
+            documented_payload['resourceIdentityProof']['resources'][0]
+            ['documentationEvidence']['completeness'],
+            'complete',
+        )
+        documented_page, _slug = publish_to_blog.generate_paper_page(
+            documented, '2026-08-31',
+        )
+        self.assertIn('README 已验证包含安装、推理与微调文档', documented_page)
+        documented['apiReaderResources']['resources'][0][
+            'documentationEvidence']['capabilities']['fineTuning'] = False
+        reseal_llm_api_resource_identity(documented)
+        with self.assertRaisesRegex(PublishDataValidationError, 'documentationEvidence'):
+            publish_to_blog._api_reader_payload(documented)
+
         temporary = llm_api_publication_fixture()
         temporary_resource = temporary['apiReaderResources']['resources'][0]
         temporary_resource.update({
@@ -3767,15 +3910,18 @@ title: "Bad table"
         with self.assertRaisesRegex(PublishDataValidationError, 'evidence SHA 非法'):
             publish_to_blog._api_reader_payload(malformed_evidence)
 
-        legacy_without_evidence_sha = copy.deepcopy(paper)
-        legacy_without_evidence_sha['apiReaderFigures'][0].pop('assetSha256')
-        legacy_without_evidence_sha['analysisManifest']['stages']['apiReaderArticle'][
+        ephemeral_without_evidence_sha = copy.deepcopy(paper)
+        ephemeral_without_evidence_sha['apiReaderFigures'][0].pop('assetSha256')
+        ephemeral_without_evidence_sha['analysisManifest']['stages']['apiReaderArticle'][
             'figuresSha256'
         ] = publish_to_blog._stable_json_sha256(
-            legacy_without_evidence_sha['apiReaderFigures']
+            ephemeral_without_evidence_sha['apiReaderFigures']
         )
         self.assertEqual(
-            publish_to_blog._api_reader_payload(legacy_without_evidence_sha)['assets'], []
+            publish_to_blog._api_reader_payload(
+                ephemeral_without_evidence_sha
+            )['assets'],
+            [],
         )
 
     def test_ephemeral_figure_caption_backslashes_do_not_rewrite_signed_url_markup(self):
@@ -6113,7 +6259,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             self.assertIsNone(plan['reason'])
             self.assertEqual(set(plan['paths']), {passed.resolve(), failed.resolve()})
 
-    def test_incremental_review_rejects_passes_when_protocol_changes(self):
+    def test_incremental_review_reuses_exact_pass_when_manifest_and_protocol_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current_dir = Path(tmp) / 'data' / 'current'
@@ -6148,9 +6294,22 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     '2026-07-10', [passed, pending], manifest, 'b' * 40,
                 )
             self.assertEqual(plan['mode'], 'incremental')
-            self.assertEqual(set(plan['paths']), {passed.resolve(), pending.resolve()})
-            self.assertEqual(plan['reusedPassed'], 0)
-            self.assertNotIn(str(passed.resolve()), plan['priorResults'])
+            self.assertEqual(plan['paths'], [pending.resolve()])
+            self.assertEqual(plan['reusedPassed'], 1)
+            self.assertTrue(plan['priorResults'][str(passed.resolve())]['passed'])
+            self.assertEqual(
+                plan['priorResults'][str(passed.resolve())]['reviewedSha256'],
+                publish_to_blog._sha256_file(passed),
+            )
+            # The current fingerprint is recorded on the newly assembled
+            # batch receipt, but it never turns identical page bytes into a
+            # review target.  Model, publisher-code and Hugo changes all flow
+            # through this same fingerprint boundary.
+            self.assertEqual(
+                plan['priorResults'][str(passed.resolve())]
+                ['reviewProtocolFingerprint'],
+                '2' * 64,
+            )
 
     def test_successful_receipt_passes_survive_new_generation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6746,7 +6905,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertEqual(first_generation, second_generation)
         self.assertNotEqual(first_review, second_review)
 
-    def test_review_protocol_includes_manual_takeover_script_and_rejects_stale_generation_template(self):
+    def test_review_protocol_includes_manual_takeover_and_accepts_old_generation_fingerprint(self):
         completed = SimpleNamespace(
             stdout='hugo v0.test', stderr='', returncode=0,
             timed_out=False, output_truncated=False,
@@ -6774,11 +6933,15 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         })
         with mock.patch.object(
                 publish_to_blog, 'generation_template_fingerprint', return_value='b' * 64,
-        ), self.assertRaisesRegex(
-                publish_to_blog.PublishDataValidationError, '重新运行 generate-blog.py',
         ):
             publish_to_blog.validate_current_generation_template({
                 'schemaVersion': 3, 'templateFingerprint': current,
+            })
+        with self.assertRaisesRegex(
+                publish_to_blog.PublishDataValidationError, '格式标识非法',
+        ):
+            publish_to_blog.validate_current_generation_template({
+                'schemaVersion': 3, 'templateFingerprint': 'not-a-sha',
             })
 
     def test_manual_review_provenance_accepts_generation_deletion_record(self):
@@ -7677,7 +7840,7 @@ body
                     )
             self.assertTrue(receipt.is_file())
 
-    def test_content_failure_retries_when_review_protocol_changes(self):
+    def test_unchanged_content_failure_is_not_retried_for_protocol_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current = Path(tmp) / 'data' / 'current'
@@ -7700,8 +7863,67 @@ body
                 plan = publish_to_blog.plan_incremental_review(
                     '2026-07-10', [page], manifest, 'a' * 40,
                 )
-            self.assertEqual(plan['paths'], [page.resolve()])
-            self.assertEqual(plan['unchangedFailed'], [])
+            self.assertEqual(plan['paths'], [])
+            self.assertEqual(plan['unchangedFailed'], [page.resolve()])
+
+    def test_exact_page_pass_survives_model_publisher_and_hugo_fingerprint_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current = Path(tmp) / 'data' / 'current'
+            page = posts / '2026-07-10-paper.md'
+            page.write_text('content-addressed pass\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog, 'review_protocol_fingerprint',
+                        return_value='1' * 64,
+                    ):
+                manifest = publish_to_blog.save_generation_manifest(
+                    '2026-07-10', [page],
+                )
+                publish_to_blog.save_review_failure_state(
+                    '2026-07-10', [page], manifest, 'a' * 40, {
+                        str(page.resolve()): {
+                            'passed': True,
+                            'completed': True,
+                            'reviewedSha256': publish_to_blog._sha256_file(page),
+                        },
+                    },
+                )
+
+            manifest_payload = json.loads(manifest.read_text(encoding='utf-8'))
+            manifest_payload['generatedAt'] = 'new-manifest-metadata'
+            manifest.write_text(json.dumps(manifest_payload), encoding='utf-8')
+            for label, fingerprint in (
+                ('model', '2' * 64),
+                ('publisher-code', '3' * 64),
+                ('hugo-runtime', '4' * 64),
+            ):
+                with self.subTest(change=label), \
+                        mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                        mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                        mock.patch.object(
+                            publish_to_blog, 'review_protocol_fingerprint',
+                            return_value=fingerprint,
+                        ):
+                    plan = publish_to_blog.plan_incremental_review(
+                        '2026-07-10', [page], manifest, 'b' * 40,
+                    )
+                self.assertEqual(plan['paths'], [])
+                self.assertEqual(plan['reusedPassed'], 1)
+
+            page.write_text('changed content-addressed bytes\n', encoding='utf-8')
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                    mock.patch.object(
+                        publish_to_blog, 'review_protocol_fingerprint',
+                        return_value='4' * 64,
+                    ):
+                changed = publish_to_blog.plan_incremental_review(
+                    '2026-07-10', [page], manifest, 'b' * 40,
+                )
+            self.assertEqual(changed['paths'], [page.resolve()])
+            self.assertEqual(changed['reusedPassed'], 0)
 
     def test_extracted_publish_gates_keep_compatibility_facades_identical(self):
         frontmatter = {

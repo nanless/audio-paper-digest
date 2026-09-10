@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-from markdown_hugo_gate import math_and_emphasis_issues, validate_hugo_rendered_html_gate
+from markdown_hugo_gate import (
+    mask_rendered_symbolic_table_cells,
+    math_and_emphasis_issues,
+    validate_hugo_rendered_html_gate,
+)
 from publish_common import publish_table_currency_spans, sanitize_markdown_for_publish
 
 
@@ -52,6 +56,14 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
         table = '<table><tr><td>$0.2</td><td>$1.0/1000</td></tr></table>'
         self.assertTrue(math_and_emphasis_issues(table + '<p>$x$</p>', 'Reader', rendered_html=True))
         self.assertTrue(math_and_emphasis_issues(table + '<p>$0.2</p>', 'Reader', rendered_html=True))
+
+    def test_rendered_symbolic_table_cells_are_not_residual_markdown(self):
+        html = ('<table><tr><td>*******___</td><td>_*____****</td></tr></table>'
+                '<p>ordinary **broken marker</p>')
+        masked = mask_rendered_symbolic_table_cells(html)
+        self.assertNotIn('*******___', masked)
+        self.assertNotIn('_*____****', masked)
+        self.assertIn('**broken marker', masked)
 
     def test_public_html_gate_uses_cell_adapter_on_complete_reader_page(self):
         table = '<table><tr><th>翻译成本</th><th>验证成本</th></tr><tr><td>$0.2</td><td>$1.0/1000</td></tr></table>'

@@ -2480,12 +2480,25 @@ def _validate_experiment_table_evidence_depth(
         source_text,
         re.I,
     )
-    result_has_negative = re.search(
+    explicit_higher_is_better_metric = (
+        r'(?:性能|质量|得分|分数|准确率|自然度|一致性|合规率|动态幅度|'
+        r'多样性|表达力|成功率|召回率|精确率|F1)'
+    )
+    contextual_negative = re.search(
+        rf'(?:代价|牺牲)[^。；\n]{{0,80}}{explicit_higher_is_better_metric}'
+        rf'[^。；\n]{{0,40}}(?:下降|降低|降至|减少|受限|受损)',
+        results,
+    ) or re.search(
+        rf'(?:移除|去掉)[^。；\n]{{1,80}}{explicit_higher_is_better_metric}'
+        rf'[^。；\n]{{0,40}}(?:下降|降低|降至|受损)',
+        results,
+    )
+    result_has_negative = contextual_negative or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
         r'更差|比(?!较)[^。；\n]{0,30}差|'
-        r'未改善|没有改善|无效|负面|暴露短板|跨零|落后|损失|回退|'
+        r'未改善|没有改善|无效|负面|负结果|暴露短板|跨零|落后|损失|回退|'
         r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
         results,
         re.I,
@@ -5051,7 +5064,11 @@ def escape_html_like_tags(text):
         text,
         flags=re.IGNORECASE,
     )
-    text = re.sub(r'(?<![a-zA-Z])<(/?)([SEse])>(?![a-zA-Z0-9])', r'`<\1\2>`', text)
+    text = re.sub(
+        r'(?<![a-zA-Z`])<(/?)([SEse])>(?![a-zA-Z0-9`])',
+        r'`<\1\2>`',
+        text,
+    )
     text = re.sub(
         r'(?<![a-zA-Z0-9`])<(/?)(task|perception|comprehension|reasoning|agent|action|state|observation|reward|goal|intent|belief|plan|policy|environment|module|component|feature|input|output|label|class|category|type|mode|phase|stage|step|layer|block|unit|node|edge|graph|tree|path|loop|branch|condition|constraint|rule|fact|evidence|proof|hypothesis|assumption|premise|conclusion|result|finding|insight|implication|contribution|limitation|direction|extension|variant|version|update|fix|issue|error|warning|notice|info|trace|log|record|entry|item|element|object|subject|target|source|reference|cite|quote|note|comment|remark|annotation|caption|title|heading|paragraph|sentence|phrase|word|token|char|symbol|sign|mark|tag|badge|identifier|id|key|code|pin|secret|ticket|voucher|license|permit|certificate|credential|award|medal|prize|gift|bonus|benefit|advantage|edge|lead|margin|gap|difference|distance|range|scope|span|scale|size|length|width|height|depth|volume|area|surface|space|place|spot|location|site|position|point|dot|pixel|fragment|shard|piece|part|portion|section|segment|slice|chunk|block|lump|mass|body|entity|thing|article|product|goods|material|substance|matter|fabric|cloth|garment|clothing|wear|dress|costume|uniform|outfit|suit|wardrobe|closet|cabinet|cupboard|pantry|cellar|basement|attic|loft|tower|spire|dome|vault|arch|beam|column|pillar|post|pole|rod|bar|rail|track|path|way|road|route|course|direction|heading|bearing|azimuth|elevation|altitude|latitude|longitude|coordinate|interrupt|backchannel|response|free|BEsound)(?![a-zA-Z0-9`])>',
         r'`<\1\2>`',
@@ -5315,6 +5332,39 @@ def linkify_bare_https_urls(text):
     return ''.join(output)
 
 
+def escape_symbolic_markdown_table_cells(text):
+    """Escape literal ``*`` runs used as sequence symbols inside table cells.
+
+    Acoustic/biological sequence tables may encode events as ``*******___``.
+    Leaving those source symbols bare lets Markdown reinterpret them as an odd
+    number of emphasis delimiters.  Only cells made entirely of ``*``/``_``
+    are touched, so ordinary prose emphasis and mixed-content cells retain
+    their authored Markdown semantics.
+    """
+    output = []
+    fence = None
+    symbolic_cell = re.compile(r'(?<=\|)([ \t]*)([*_]+)([ \t]*)(?=\|)')
+    for line in str(text or '').splitlines(keepends=True):
+        fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence_match:
+            marker = fence_match.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            output.append(line)
+            continue
+        if fence is None and '|' in line:
+            line = symbolic_cell.sub(
+                lambda match: match.group(1)
+                + match.group(2).replace('*', r'\*').replace('_', r'\_')
+                + match.group(3),
+                line,
+            )
+        output.append(line)
+    return ''.join(output)
+
+
 def sanitize_markdown_for_publish(text):
     """发布前通用 Markdown 清洗。"""
     # LLM 输出偶尔会携带 UTF-8 替换字符；先清理后再进入 staging，
@@ -5333,6 +5383,7 @@ def sanitize_markdown_for_publish(text):
     text = truncate_base64_datauri(text)
     text = fix_yaml_double_commas(text)
     text = fix_yaml_unbalanced_quotes(text)
+    text = escape_symbolic_markdown_table_cells(text)
     # 评分审计和 manual evidence ledger 需要这些锚点来约束上游事实，
     # 但它们是内部 provenance，不应泄漏到面向读者的博客正文。这里只
     # 清理派生的发布视图，不修改 analysis / parsed canonical 数据。

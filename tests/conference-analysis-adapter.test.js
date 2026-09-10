@@ -15,7 +15,34 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 
 const EXECUTION = '77777777-7777-4777-8777-777777777777';
 
-function successfulReaderDraft(sourceText) {
+function emptyReaderResourceIdentity(text) {
+    const body = { contract: 'api-reader-resource-identity-v1',
+        sourceTextSha256: crypto.createHash('sha256').update(text).digest('hex'), resources: [] };
+    return { ...body, identitySha256: deep.stableFingerprint(body) };
+}
+
+test('official proceedings metadata survives into the conference canonical publication identity', () => {
+    const source = {
+        paperId: 'conference:iwslt:2026:conference-paper-id:2026.iwslt-1.1',
+        conference: { id: 'iwslt-2026', year: 2026 },
+        identity: { type: 'conference-paper-id', value: '2026.iwslt-1.1' },
+        metadata: { title: 'Speech Translation Paper', authors: ['Author One'], abstract: 'Abstract.',
+            recordUrl: 'https://aclanthology.org/2026.iwslt-1.1/',
+            pdfUrl: 'https://aclanthology.org/2026.iwslt-1.1.pdf',
+            doi: '10.18653/v1/2026.iwslt-1.1', track: 'Main' }
+    };
+    const paper = adapter.normalizedPaper(source);
+    assert.deepEqual(paper.conferencePublication, {
+        contract: 'conference-official-publication-v1',
+        recordUrl: source.metadata.recordUrl, pdfUrl: source.metadata.pdfUrl
+    });
+    assert.equal(paper.doi, source.metadata.doi);
+    assert.equal(paper.conferenceTrack, 'Main');
+    assert.throws(() => adapter.normalizedPaper({ ...source,
+        metadata: { ...source.metadata, pdfUrl: 'http://aclanthology.org/paper.pdf' } }), /credential-free HTTPS/);
+});
+
+function successfulReaderDraft() {
     const kinds = ['background', 'related_work', 'problem', 'method_overview', 'component',
         'training', 'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'];
     const draft = { version: 3, readerTitle: '从会议弱结构文本理解声音方法的证据链',
@@ -33,14 +60,6 @@ function successfulReaderDraft(sourceText) {
             explanation: `语义锚点${index + 1}负责限定当前候选的意义范围，声学证据${index + 1}负责核对发音与时序细节。两者搭配后才能把语义排除与声学定位连成可检验的决策链。`
         })), figurePlacements: [], tableBindings: [], formulaBindings: [] };
     draft.sections[3].body += `\n\n${draft.conceptBridges.map(item => item.marker).join('\n\n')}`;
-    [6, 7].forEach((sectionIndex, index) => {
-        draft.sections[sectionIndex].body += '\n\n下表比较统一数据协议中的报告值，输入条件和基线保持一致，得分越高越好。\n\n'
-            + '| 比较条件 | 控制变量 | 数据集 | 指标方向 | 报告值 | 解释 |\n|---|---|---|---|---:|---|\n'
-            + `| ${index ? '完整方法' : '基线'} | 统一设置 | 测试集 | 越高越好 | 1.0 | 仅支持当前口径 |\n\n`
-            + `第${index + 1}张表中数字只能支持当前数据和控制条件下的比较，原始输入范围与评估样本规模都必须保持一致。它没有覆盖的反例、方差、跨域条件和部署成本仍然是结论边界，不能从一行数字向外推广。`;
-        draft.tableBindings.push({ tableIndex: index + 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
-            cellBindings: [], sourceQuotes: [sourceText] });
-    });
     return draft;
 }
 
@@ -130,13 +149,22 @@ test('mock common analysis observes source only through authenticated context an
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
     let calls = 0;
-    const engine = { withPaperAnalysisLock: async (_paper, callback) => callback(), analyzeBatch: async (papers, options) => {
+    const recoveryPolicy = Symbol('conference-test-local-dead-recovery');
+    const engine = { LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY: recoveryPolicy,
+        withPaperAnalysisLock: async (_paper, callback, options) => {
+            assert.equal(options.recoveryPolicy, recoveryPolicy); return callback();
+        }, analyzeBatch: async (papers, options) => {
         calls += 1; const prepared = await options.preparePaperLocked(papers[0]);
+        assert.equal(options.paperLockOptions.recoveryPolicy, recoveryPolicy);
         assert.equal(prepared.paper.id, fixture.paperId); assert.equal(prepared.paper.fullText, undefined);
         const injected = context.getConferenceAnalysisSource(prepared.paper);
         assert.equal(injected.source, 'conference_pdf_text'); assert.ok(injected.text.length > 1000);
         assert.deepEqual(injected.conferenceCapabilities,
             { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' });
+        const analysisFile = path.join(analysisRoot, EXECUTION, 'analysis.json');
+        const checkpoint = JSON.parse(fs.readFileSync(analysisFile));
+        checkpoint.status = 'running'; checkpoint.stats = { analysisStatus: 'running' };
+        fs.writeFileSync(analysisFile, `${JSON.stringify(checkpoint, null, 2)}\n`);
         await options.onPaperResultLocked(prepared.paper,
             { success: true, result: { ...prepared.paper, analysis: 'mock conference analysis' } });
         return { results: [], stats: { success: 1, failed: 0 } };
@@ -146,6 +174,8 @@ test('mock common analysis observes source only through authenticated context an
     assert.equal(result.status, 'complete'); assert.equal(calls, 1);
     const loaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
     assert.equal(loaded.analysis.papers[0].analysis, 'mock conference analysis');
+    assert.equal(loaded.analysis.status, 'complete');
+    assert.equal(loaded.analysis.stats.analysisStatus, 'complete');
     assert.match(loaded.run.analysisSha256, /^[a-f0-9]{64}$/);
     assert.equal(loaded.run.completionReceipt.analysisSha256, loaded.run.analysisSha256);
     const resumed = await adapter.analyzeConference({ analysisRoot, executionId: EXECUTION,
@@ -160,6 +190,7 @@ test('completed analysis left before run sealing is deterministically recovered 
     const analysisFile = path.join(analysisRoot, EXECUTION, 'analysis.json');
     const analysis = JSON.parse(fs.readFileSync(analysisFile));
     analysis.status = 'complete'; analysis.completedAt = '2026-09-07T01:00:00.000Z';
+    analysis.stats = { analysisStatus: 'running' };
     analysis.papers[0].analysis = 'completed before run receipt';
     fs.writeFileSync(analysisFile, `${JSON.stringify(analysis, null, 2)}\n`);
     assert.equal(adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }).completionPending, true);
@@ -169,9 +200,38 @@ test('completed analysis left before run sealing is deterministically recovered 
     assert.equal(recovered.status, 'complete'); assert.equal(recovered.productionAuthorized, true);
     const sealed = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
     assert.equal(sealed.run.status, 'complete'); assert.equal(sealed.completionPending, false);
+    assert.equal(sealed.analysis.stats.analysisStatus, 'complete');
     analysis.papers[0].title = 'tampered after completion';
     fs.writeFileSync(analysisFile, `${JSON.stringify(analysis, null, 2)}\n`);
     assert.throws(() => adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }), /does not bind canonical analysis/);
+});
+
+test('legacy sealed completion with running stats is demoted, normalized, and rebound under the paper lock', async t => {
+    const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis-sealed-status-recovery');
+    adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+        sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
+    const analysisFile = path.join(analysisRoot, EXECUTION, 'analysis.json');
+    const analysis = JSON.parse(fs.readFileSync(analysisFile));
+    analysis.status = 'complete'; analysis.completedAt = '2026-09-07T01:00:00.000Z';
+    analysis.stats = { analysisStatus: 'running' }; analysis.papers[0].analysis = 'legacy completed analysis';
+    fs.writeFileSync(analysisFile, `${JSON.stringify(analysis, null, 2)}\n`);
+    const legacyRun = adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }));
+    const legacyAnalysisSha256 = legacyRun.analysisSha256;
+    let locks = 0;
+    const recoveryPolicy = Symbol('conference-test-local-dead-recovery');
+    const engine = { LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY: recoveryPolicy,
+        withPaperAnalysisLock: async (_paper, callback, options) => {
+            assert.equal(options.recoveryPolicy, recoveryPolicy); locks += 1; return callback();
+        },
+        analyzeBatch: async () => { throw new Error('completed recovery must not rerun analysis'); } };
+    const recovered = await adapter.analyzeConference({ analysisRoot, executionId: EXECUTION,
+        planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot }, { engine });
+    const sealed = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
+    assert.equal(recovered.status, 'complete'); assert.equal(recovered.recovered, true); assert.equal(locks, 1);
+    assert.equal(sealed.analysis.stats.analysisStatus, 'complete'); assert.equal(sealed.run.status, 'complete');
+    assert.notEqual(sealed.run.analysisSha256, legacyAnalysisSha256);
+    assert.equal(sealed.run.analysisSha256, sealed.analysisFileSha256);
+    assert.equal(sealed.run.completionReceipt.analysisSha256, sealed.analysisFileSha256);
 });
 
 test('conference source context rejects arXiv aliases and mismatched identities', () => {
@@ -186,12 +246,25 @@ test('conference source context rejects arXiv aliases and mismatched identities'
     /different canonical/);
 });
 
+test('conference source context preserves official paper IDs containing dots', () => {
+    const paperId = 'conference:acl:2026:conference-paper-id:2026.acl-long.17';
+    const details = { text: 'official proceedings text', source: 'conference_pdf_text' };
+    const value = context.withConferenceAnalysisSource({ executionId: EXECUTION, executionDir: '/tmp/conference-analysis',
+        paperId, sourceDetails: details }, () => context.getConferenceAnalysisSource({ id: paperId }));
+    assert.deepEqual(value, details);
+});
+
 test('conference analysis CLI requires complete authority for prepare and supports isolated status/analyze', async () => {
     const authorityPairs = executionCli.AUTHORITY_FLAGS.flatMap(flag => [flag,
         flag === '--filter' ? '11111111-1111-4111-8111-111111111111' : `${flag.slice(2)}.json`]);
     const paperId = 'conference:icassp:2026:icassp-arnumber:100';
     const prepared = cli.parseArgs(['prepare', ...authorityPairs, '--paper-id', paperId, '--analysis-run', EXECUTION]);
     assert.equal(prepared.paperId, paperId);
+    const officialPaperId = 'conference:acl:2026:conference-paper-id:2026.acl-long.17';
+    assert.equal(cli.parseArgs(['prepare', ...authorityPairs, '--paper-id', officialPaperId,
+        '--analysis-run', EXECUTION]).paperId, officialPaperId);
+    assert.throws(() => cli.parseArgs(['prepare', ...authorityPairs, '--paper-id',
+        'conference:acl:2026:conference-paper-id:2026/acl/17', '--analysis-run', EXECUTION]), /canonical paperId/);
     assert.equal(cli.parseArgs(['analyze', ...authorityPairs, '--analysis-run', EXECUTION, '--concurrency', '3']).concurrency, 3);
     assert.throws(() => cli.parseArgs(['prepare', '--paper-id', paperId, '--analysis-run', EXECUTION]), /complete/);
     assert.throws(() => cli.parseArgs(['status', '--analysis-run', EXECUTION]), /complete live plan authority/);
@@ -214,7 +287,8 @@ test('real Reader entry uses execution-local attempts, empty figures short-circu
         flattenedTextSha256: crypto.createHash('sha256').update(text).digest('hex'), capabilityProfile: 'weak-text-only-v1' };
     const artifacts = { ...artifactBody, payloadSha256: crypto.createHash('sha256').update(JSON.stringify(artifactBody)).digest('hex') };
     const details = { text, source: 'conference_pdf_text', sourceId: paperId,
-        imageInfos: [], structuredArtifacts: artifacts };
+        imageInfos: [], structuredArtifacts: artifacts,
+        conferenceCapabilities: context.WEAK_CONFERENCE_CAPABILITIES };
     await context.withConferenceAnalysisSource({ executionId: EXECUTION, executionDir: root, paperId,
         sourceDetails: details }, async () => {
         assert.deepEqual(await deep.materializeApiReaderFigures([], paperId), []);
@@ -224,21 +298,24 @@ test('real Reader entry uses execution-local attempts, empty figures short-circu
         assert.doesNotMatch(JSON.stringify(authors), /arXiv/);
         assert.equal(context.conferenceReaderAttemptsDirectory(), path.join(root, 'reader-attempts'));
         let calls = 0;
-        const readerError = await deep.generateApiReaderArticleDetailed({ id: paperId, title: '会议论文', authors: ['作者甲'] },
+        const paper = { id: paperId, title: '会议论文', authors: ['作者甲'],
+            apiReaderResources: emptyReaderResourceIdentity(text) };
+        const readerError = await deep.generateApiReaderArticleDetailed(paper,
             'canonical analysis', details.text, { sourceText: details.text,
                 structuredArtifacts: artifacts, readerMaxAttempts: 1,
                 readerRecordDisposition: () => {}, readerCallModel: async () => { calls += 1; return 'invalid JSON'; } })
             .then(() => null, error => error);
         assert.ok(readerError instanceof Error);
         assert.ok(calls > 0, `mock model was not reached: ${readerError.message}`);
-        await assert.rejects(deep.generateApiReaderArticleDetailed({ id: paperId, title: '会议论文' },
+        await assert.rejects(deep.generateApiReaderArticleDetailed(paper,
             'canonical analysis', details.text, { sourceText: details.text,
-                readerAttemptsDir: path.join(root, 'outside'), readerCallModel: async () => 'unused' }),
+                structuredArtifacts: artifacts, readerAttemptsDir: path.join(root, 'outside'),
+                readerCallModel: async () => 'unused' }),
         /must stay inside/);
     });
 });
 
-test('weak PDF with zero structured tables and figures completes the real Reader parser using source-quote tables', async t => {
+test('weak PDF Reader policy forces empty structure bindings and retries a nonempty model draft in full', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-reader-success-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const paperId = 'conference:icassp:2026:icassp-arnumber:100';
@@ -247,16 +324,94 @@ test('weak PDF with zero structured tables and figures completes the real Reader
         flattenedTextSha256: crypto.createHash('sha256').update(sourceText).digest('hex'), capabilityProfile: 'weak-text-only-v1' };
     const artifacts = { ...artifactBody, payloadSha256: crypto.createHash('sha256').update(JSON.stringify(artifactBody)).digest('hex') };
     const details = { text: sourceText, source: 'conference_pdf_text', sourceId: paperId,
-        imageInfos: [], structuredArtifacts: artifacts };
-    let calls = 0;
+        imageInfos: [], structuredArtifacts: artifacts,
+        conferenceCapabilities: context.WEAK_CONFERENCE_CAPABILITIES };
+    let calls = 0; const prompts = [];
+    const paper = { id: paperId, title: '会议论文', authors: ['作者甲'],
+        apiReaderResources: emptyReaderResourceIdentity(sourceText) };
     const result = await context.withConferenceAnalysisSource({ executionId: EXECUTION, executionDir: root, paperId,
-        sourceDetails: details }, () => deep.generateApiReaderArticleDetailed({ id: paperId, title: '会议论文', authors: ['作者甲'] },
-        'canonical analysis', sourceText, { sourceText, structuredArtifacts: artifacts, readerMaxAttempts: 1,
-            readerRecordDisposition: () => {}, readerCallModel: async () => {
-                calls += 1; return JSON.stringify(successfulReaderDraft(sourceText));
+        sourceDetails: details }, () => deep.generateApiReaderArticleDetailed(paper,
+        'canonical analysis', sourceText, { sourceText, structuredArtifacts: artifacts, readerMaxAttempts: 2,
+            readerRecordDisposition: () => {}, readerCallModel: async messages => {
+                calls += 1; prompts.push(messages[0].content[0].text);
+                const draft = successfulReaderDraft();
+                if (calls === 1) {
+                    draft.tableBindings = [{ tableIndex: 1, sourceType: 'source_quotes',
+                        sourceTableOrdinal: null, cellBindings: [], sourceQuotes: [sourceText] }];
+                    draft.formulaBindings = [{ formulaOrdinal: 1, targetKind: 'component', marker: '[[FORMULA_1]]' }];
+                    draft.figurePlacements = [{ figureOrdinal: 1, targetKind: 'component',
+                        marker: '[[FIGURE_1]]', focusPoints: ['观察输入', '观察输出'] }];
+                    draft.sections[4].body += '\n\n| 方法 | 得分 |\n|---|---:|\n| 本方法 | 1.0 |'
+                        + '\n\n\\[L=1\\]\n\n[[TABLE_1]]\n\n[[FORMULA_1]]\n\n[[FIGURE_1]]';
+                }
+                return JSON.stringify(draft);
             } }));
-    assert.equal(calls, 1); assert.equal(result.plan.figurePlacements.length, 0);
-    assert.equal(result.plan.tableBindings.length, 2);
-    assert.ok(result.plan.tableBindings.every(item => item.sourceType === 'source_quotes'));
-    assert.match(result.article, /\| 比较条件 \| 控制变量 \|/);
+    assert.equal(calls, 2); assert.equal(result.plan.figurePlacements.length, 0);
+    assert.deepEqual(result.plan.tableBindings, []);
+    assert.deepEqual(result.plan.formulaBindings, []);
+    assert.doesNotMatch(result.article, /(?:^|\n)\s*\|[^\n]*\||\\\[|\[\[(?:TABLE|FORMULA|FIGURE)_/);
+    assert.match(prompts[0], /conference-reader-weak-unavailable-structure-v1/);
+    assert.match(prompts[0], /tableBindings、formulaBindings、figurePlacements 必须全部为 \[\]/);
+    assert.match(prompts[1], /tableBindings、formulaBindings、figurePlacements 必须全部为 \[\]/);
+    assert.match(prompts[1], /请为刚进入语音\/音乐\/音频领域的研究生写一篇/);
+    assert.doesNotMatch(prompts[1], /Reader 受限局部修复/);
+
+    const policy = context.WEAK_READER_CAPABILITY_POLICY;
+    const badFormula = successfulReaderDraft();
+    badFormula.formulaBindings = [{ formulaOrdinal: 1, targetKind: 'component', marker: '[[FORMULA_1]]' }];
+    badFormula.sections[4].body += '\n\n[[FORMULA_1]]';
+    assert.throws(() => deep.parseApiReaderArticleResult(JSON.stringify(badFormula), {
+        requiredVersion: 3, requireSourceBindings: true, requireIntegratedTables: true,
+        minimumIntegratedTables: 0, structuredArtifacts: artifacts, sourceText,
+        readerCapabilityPolicy: policy
+    }), /会议 weak source 要求 .*全部为空/);
+
+    const badTable = successfulReaderDraft();
+    badTable.sections[7].body += '\n\n| 方法 | 得分 |\n|---|---:|\n| 本方法 | 1.0 |';
+    assert.throws(() => deep.parseApiReaderArticleResult(JSON.stringify(badTable), {
+        requiredVersion: 3, requireSourceBindings: true, requireIntegratedTables: true,
+        minimumIntegratedTables: 0, structuredArtifacts: artifacts, sourceText,
+        readerCapabilityPolicy: policy
+    }), /会议 weak source 正文禁止 Markdown 表格/);
+});
+
+test('authenticated weak Reader rejects an unverified open-source claim and repairs only its section', async t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-reader-resource-claim-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const paperId = 'conference:icassp:2026:icassp-arnumber:101';
+    const sourceText = '论文仅描述方法与实验，没有提供代码、模型、数据集或演示链接。';
+    const artifactBody = { version: 1, source: 'conference_pdf_weak_text', tables: [], formulas: [], figures: [],
+        flattenedTextSha256: crypto.createHash('sha256').update(sourceText).digest('hex'), capabilityProfile: 'weak-text-only-v1' };
+    const artifacts = { ...artifactBody,
+        payloadSha256: crypto.createHash('sha256').update(JSON.stringify(artifactBody)).digest('hex') };
+    const details = { text: sourceText, source: 'conference_pdf_text', sourceId: paperId,
+        imageInfos: [], structuredArtifacts: artifacts,
+        conferenceCapabilities: context.WEAK_CONFERENCE_CAPABILITIES };
+    const resources = emptyReaderResourceIdentity(sourceText);
+    const paper = { id: paperId, title: '会议资源声明门禁', authors: ['作者甲'], apiReaderResources: resources };
+    const badDraft = successfulReaderDraft();
+    const originalBody = badDraft.sections[10].body;
+    badDraft.sections[10].body += '\n\n本文代码已经开源并可下载，读者可以直接取得完整实现。';
+    assert.doesNotThrow(() => deep.parseApiReaderArticleResult(JSON.stringify(badDraft), {
+        requiredVersion: 3, requireSourceBindings: true, requireIntegratedTables: true,
+        minimumIntegratedTables: 0, structuredArtifacts: artifacts, sourceText
+    }));
+    const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    let calls = 0;
+    const evidence = deep.buildApiReaderEvidenceContext('', sourceText, artifacts, paperId,
+        context.WEAK_READER_CAPABILITY_POLICY, resources);
+    const result = await context.withConferenceAnalysisSource({
+        executionId: EXECUTION, executionDir: root, paperId, sourceDetails: details
+    }, () => deep.generateApiReaderArticleDetailed(paper, 'canonical analysis', evidence, {
+        sourceText, structuredArtifacts: artifacts, readerMaxAttempts: 2,
+        readerRecordDisposition: () => {}, readerCallModel: async () => {
+            calls += 1;
+            if (calls === 1) return JSON.stringify(badDraft);
+            return JSON.stringify({ version: 1, draftSha256: hash(badDraft), replacements: [{
+                path: '/sections/10/body', oldSha256: hash(badDraft.sections[10].body), value: originalBody
+            }] });
+        }
+    }));
+    assert.equal(calls, 2);
+    assert.doesNotMatch(result.article, /代码已经开源并可下载/);
 });

@@ -1450,6 +1450,12 @@ primary_method_tag: #基准测试
         self.assertIn('</details>', fixed)
         self.assertIn('`<task>`paper token</task>', fixed)
 
+    def test_escape_html_like_tags_is_idempotent_for_inline_control_tokens(self):
+        text = '控制符 `<O>` 与 `<S>` 已经位于行内代码中。'
+        fixed = escape_html_like_tags(text)
+        self.assertEqual(fixed, text)
+        self.assertEqual(escape_html_like_tags(fixed), fixed)
+
     def test_yaml_unbalanced_quotes(self):
         text = '---\ntitle: "Bad title\n---\nbody'
         fixed = fix_yaml_unbalanced_quotes(text)
@@ -1485,6 +1491,22 @@ primary_method_tag: #基准测试
         )
         self.assertEqual(sanitize_markdown_for_publish(table), table)
         self.assertEqual(sanitize_markdown_for_publish(sanitize_markdown_for_publish(table)), table)
+
+    def test_sanitize_escapes_literal_sequence_symbols_only_in_table_cells(self):
+        markdown = (
+            '**普通加粗**\n\n'
+            '| sequence | pattern |\n'
+            '| --- | --- |\n'
+            '| sequence 1 | *******___ |\n'
+            '| sequence 2 | *_*___**** |\n'
+            '\n```text\n| code | *******___ |\n```\n'
+        )
+        fixed = sanitize_markdown_for_publish(markdown)
+        self.assertIn('**普通加粗**', fixed)
+        self.assertIn(r'| sequence 1 | \*\*\*\*\*\*\*\_\_\_ |', fixed)
+        self.assertIn(r'| sequence 2 | \*\_\*\_\_\_\*\*\*\* |', fixed)
+        self.assertIn('| code | *******___ |', fixed)
+        self.assertEqual(sanitize_markdown_for_publish(fixed), fixed)
 
     def test_latex_delimiters_do_not_pair_currency_or_cross_table_cells(self):
         for text in ('$0.2 and $1.0', '$20, $30 and $40', r'\$20 and \$30',
@@ -2819,6 +2841,40 @@ primary_method_tag: #基准测试
                     document_type='方法研究',
                     source_text='The third configuration fails on the hard subset.',
                 ))
+        self.assertIsNone(validate_experiment_table_contract(
+            analysis_with('Voxtral Mini 等模型出现负结果'),
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='The held-out result degraded and showed negative returns.',
+        ))
+        for contextual_negative in (
+                '代价是 I2V 动态幅度从 44.58 降至 35.62',
+                '移除内容评审器后视觉得分降至 18.67'):
+            with self.subTest(contextual_negative=contextual_negative):
+                self.assertIsNone(validate_experiment_table_contract(
+                    analysis_with(contextual_negative),
+                    contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+                    document_type='方法研究',
+                    source_text='The held-out result degraded and showed negative returns.',
+                ))
+        ordinary_decline = analysis_with(
+            '配置 C 的测试误差从 0.91 下降至 0.90，其余设置保持一致')
+        self.assertRegex(validate_experiment_table_contract(
+            ordinary_decline,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='The third configuration fails on the hard subset.',
+        ), '没有保留负面证据')
+        for ambiguous_decline in (
+                '代价是测试误差从 0.91 下降至 0.90',
+                '动态幅度从 44.58 下降至 35.62'):
+            with self.subTest(ambiguous_decline=ambiguous_decline):
+                self.assertRegex(validate_experiment_table_contract(
+                    analysis_with(ambiguous_decline),
+                    contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+                    document_type='方法研究',
+                    source_text='The third configuration fails on the hard subset.',
+                ), '没有保留负面证据')
         positive_rise = analysis_with(
             '配置 C 的准确率从 0.90 微升至 0.91，其余设置保持一致')
         self.assertRegex(validate_experiment_table_contract(

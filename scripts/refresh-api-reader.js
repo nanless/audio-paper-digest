@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const crypto = require('node:crypto');
 const Config = require('./config.js');
 const {
     refreshApiReaderArticleFromSource,
@@ -15,7 +16,8 @@ const {
     updateJsonFileLocked,
     isSuccessfulAnalysisRecord,
     withPaperAnalysisLock,
-    apiReaderV3BindsCanonical
+    apiReaderV3BindsCanonical,
+    getCanonicalAnalysisRunSummary
 } = require('./analysis-engine.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const {
@@ -208,14 +210,22 @@ function canRepairScoringBinding(paper) {
     const manifest = paper?.analysisManifest;
     const scoring = manifest?.stages?.scoringAudit;
     const reader = manifest?.stages?.apiReaderArticle;
+    const article = String(paper?.apiReaderArticle || '');
+    const articleSha256 = article
+        ? crypto.createHash('sha256').update(article).digest('hex') : '';
+    const reusableRevisionSeed = article.length > 0
+        && paper?.apiReaderPlan && typeof paper.apiReaderPlan === 'object'
+        && paper.apiReaderPlan.version === 3
+        && paper.apiReaderArticleSha256 === articleSha256
+        && paper.apiReaderPlanSha256 === stableFingerprint(paper.apiReaderPlan);
     return typeof paper?.analysis === 'string' && paper.analysis.trim().length > 0
         && manifest?.version === 1
         && scoring?.status === 'complete'
         && scoring?.scoringContract === 'api-scoring-audit-v2'
-        && reader?.status === 'complete'
+        && (reader?.status === 'complete'
+            || (reader?.status === 'invalid_output' && reusableRevisionSeed))
         && ['beginner-researcher-v2', 'beginner-researcher-v3']
-            .includes(manifest?.contracts?.apiReaderArticle)
-        && !paper?.latestAnalysisAttemptError;
+            .includes(manifest?.contracts?.apiReaderArticle);
 }
 
 function canRepairSurfaceBinding(paper) {
@@ -274,7 +284,9 @@ async function refreshApiReader(targetId, options = {}) {
             : options.figuresOnly
                 ? await (refreshOperations.figures || refreshApiReaderFiguresFromSource)(canonical, sourceDetails)
                 : options.scoringAndReader
-                    ? await (refreshOperations.scoringAndReader || refreshApiScoringAndReaderFromSource)(canonical, sourceDetails)
+                    ? await (refreshOperations.scoringAndReader || refreshApiScoringAndReaderFromSource)(
+                        canonical, sourceDetails, { reviewFeedback: options.reviewFeedback }
+                    )
                     : await (refreshOperations.article || refreshApiReaderArticleFromSource)(canonical, sourceDetails, {
                         reviewFeedback: options.reviewFeedback
                     });
@@ -332,7 +344,24 @@ async function refreshApiReader(targetId, options = {}) {
             const updated = [...rows];
             updated[targetIndex] = refreshed;
             if (Array.isArray(payload)) return updated;
-            return { ...payload, papers: updated, lastUpdated: getBeijingISOString() };
+            const canonicalSummary = getCanonicalAnalysisRunSummary(updated);
+            const now = getBeijingISOString();
+            const next = {
+                ...payload,
+                papers: updated,
+                status: canonicalSummary.status,
+                stats: {
+                    ...(payload.stats || {}),
+                    analysisStatus: canonicalSummary.status,
+                    remainingFailed: canonicalSummary.remaining,
+                    analyzedSuccess: canonicalSummary.success,
+                    analyzedFailed: canonicalSummary.remaining
+                },
+                lastUpdated: now
+            };
+            if (canonicalSummary.status === 'complete') next.deepAnalysisCompletedAt = now;
+            else delete next.deepAnalysisCompletedAt;
+            return next;
         });
         const savedRows = Array.isArray(savedPayload) ? savedPayload : savedPayload.papers;
         const savedRecord = savedRows.find(paper => normalizedId(paper) === requested);
@@ -381,5 +410,6 @@ module.exports = {
     hasCurrentReaderV3,
     resolvePersistedCanonicalBatchDate,
     paperRefreshInputIdentity,
+    canRepairScoringBinding,
     MAX_REFRESH_CONCURRENCY
 };

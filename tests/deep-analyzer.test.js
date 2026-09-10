@@ -1253,8 +1253,8 @@ describe('deep-analyzer section helpers', () => {
         assert.strictEqual(classifyImageDiscoveryStatus([{ url: 'https://example.com/a.png' }], null), 'complete');
     });
 
-    it('已有可用图片时单个候选瞬断不会拖垮整篇分析', () => {
-        const { classifyImageDownloadStatus } = require('../scripts/deep-analyzer.js');
+    it('已有可用图片时单个候选瞬断不会拖垮整篇分析，超限错误按永久拒绝处理', async () => {
+        const { classifyImageDownloadStatus, downloadImagesSerial } = require('../scripts/deep-analyzer.js');
         const partial = {
             isDualModel: true,
             candidateCount: 3,
@@ -1267,6 +1267,30 @@ describe('deep-analyzer section helpers', () => {
         }), 'transient_failure');
         assert.strictEqual(classifyImageDownloadStatus({
             ...partial, downloadedCount: 0, outcomes: [{ status: 'permanent_failure' }]
+        }), 'no_downloadable_images');
+        const oversized = await downloadImagesSerial(
+            ['https://arxiv.org/html/2608.30793v1/figures/teaser-fig.png'],
+            1,
+            1024,
+            1024,
+            {
+                downloadImageDetailed: async () => {
+                    const error = new Error('response body 6.0MB exceeds limit');
+                    error.code = 'RESPONSE_TOO_LARGE';
+                    throw error;
+                }
+            }
+        );
+        assert.deepStrictEqual(oversized.outcomes, [{
+            url: 'https://arxiv.org/html/2608.30793v1/figures/teaser-fig.png',
+            status: 'permanent_reject',
+            reason: 'response body 6.0MB exceeds limit'
+        }]);
+        assert.strictEqual(classifyImageDownloadStatus({
+            isDualModel: true,
+            candidateCount: 1,
+            downloadedCount: 0,
+            outcomes: oversized.outcomes
         }), 'no_downloadable_images');
     });
 
@@ -3051,6 +3075,66 @@ primary_task_tag: #音视频生成
         );
         assert.deepStrictEqual(empty.resources, []);
 
+        const replayedDemoResources = await buildApiReaderResourceIdentity(
+            '## 开源详情\n- 代码：论文中未提及',
+            sourceText,
+            { discoveredLinks: [
+                'https://github.com/Tencent-Hunyuan/AuK',
+                'https://modelscope.cn/models/Tencent-Hunyuan/AuK'
+            ] },
+            {
+                validateUrlImpl: async raw => new URL(raw),
+                requestImpl: async () => ({ status: 200, headers: { get: () => null } })
+            }
+        );
+        assert.deepStrictEqual(replayedDemoResources.resources.map(item => [
+            item.type, item.origin, item.availability
+        ]), [
+            ['code', 'validated_demo', 'available'],
+            ['model', 'validated_demo', 'available']
+        ]);
+
+        const documentationSource = 'official README with install, inference and fine tuning';
+        const documentedResources = await buildApiReaderResourceIdentity(
+            '## 开源详情\n- 代码：论文中未提及',
+            sourceText,
+            { discoveredLinks: [
+                'https://github.com/Tencent-Hunyuan/AuK',
+                'https://modelscope.cn/models/Tencent-Hunyuan/AuK'
+            ] },
+            {
+                paper: {
+                    sources: ['huggingface'],
+                    hf_github_repo: 'https://github.com/Tencent-Hunyuan/AuK'
+                },
+                validateUrlImpl: async raw => new URL(raw),
+                requestImpl: async () => ({ status: 503, headers: { get: () => null } }),
+                documentationInspector: async repositoryUrl => ({
+                    contract: 'repository-documentation-evidence-v1',
+                    repositoryUrl,
+                    sourceUrl: 'https://raw.githubusercontent.com/Tencent-Hunyuan/AuK/main/README.md',
+                    status: 200,
+                    sourceSha256: require('node:crypto').createHash('sha256')
+                        .update(documentationSource).digest('hex'),
+                    capabilities: { installation: true, inference: true, fineTuning: true },
+                    completeness: 'complete'
+                })
+            }
+        );
+        assert.strictEqual(
+            documentedResources.resources.find(item => item.type === 'code')
+                .documentationEvidence.completeness,
+            'complete'
+        );
+        assert.strictEqual(
+            documentedResources.resources.find(item => item.type === 'code').availability,
+            'available'
+        );
+        assert.strictEqual(
+            documentedResources.resources.find(item => item.type === 'code').status,
+            200
+        );
+
         const manyUrls = Array.from({ length: 13 }, (_, index) => (
             `https://project.example/repo-${index}`
         ));
@@ -3550,6 +3634,33 @@ primary_task_tag: #音视频生成
         assert.equal(readerIssuesRequireFullSourceBindingRetry(null, candidate, 1, [
             { path: null, message: '读者文章 tableBindings[0] sourceQuote 非法' }
         ]), true);
+    });
+
+    it('另一个方向只在完整回指上下文豁免，独立精确数量仍阻断', () => {
+        const { isAllowedReaderNarrativeNumeralIssue } = require('../scripts/deep-analyzer.js');
+        const { findQuantitativeChineseNumerals } = require('../scripts/editorial-quality.js');
+        const anaphoric = '跨域评估包含2个方向，1个方向在域内训练，另一个方向相反。';
+        const anaphoricIssue = findQuantitativeChineseNumerals(anaphoric)
+            .find(issue => issue.match === '一个方向');
+        assert.ok(anaphoricIssue);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            ...anaphoricIssue,
+            code: 'quantitative_chinese_numeral'
+        }, anaphoric), true);
+
+        const standalone = '评估只包含一个方向。';
+        const standaloneIssue = findQuantitativeChineseNumerals(standalone)
+            .find(issue => issue.match === '一个方向');
+        assert.ok(standaloneIssue);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            ...standaloneIssue,
+            code: 'quantitative_chinese_numeral'
+        }, standalone), false);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            ...anaphoricIssue,
+            code: 'quantitative_chinese_numeral',
+            index: anaphoricIssue.index - 1
+        }, anaphoric), false);
     });
 
     it('03414 连续小数完整解析，03320量级歧义和分之不得局部猜改', () => {
@@ -4071,6 +4182,29 @@ has_dataset: 否
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(mismatched), []);
     });
 
+    it('负面证据门禁接受精确“负结果”但不把普通下降或微升当作负面', () => {
+        const {
+            EXPERIMENT_TABLE_CONTRACT_VERSION,
+            validateExperimentTableContract
+        } = require('../scripts/analysis-contract.js');
+        const validate = conclusion => validateExperimentTableContract(
+            `## 实验结果\n${conclusion}`,
+            {
+                contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+                documentType: '方法研究',
+                sourceText: 'The held-out result degraded and showed negative returns.'
+            }
+        );
+
+        assert.strictEqual(validate('Voxtral Mini 等模型出现负结果。'), null);
+        assert.strictEqual(validate('代价是 I2V 动态幅度从 44.58 降至 35.62。'), null);
+        assert.strictEqual(validate('移除内容评审器后视觉得分降至 18.67。'), null);
+        assert.match(validate('测试误差从 12.4% 下降至 10.8%。'), /没有保留负面证据/);
+        assert.match(validate('代价是测试误差从 12.4% 下降至 10.8%。'), /没有保留负面证据/);
+        assert.match(validate('动态幅度从 44.58 下降至 35.62。'), /没有保留负面证据/);
+        assert.match(validate('准确率从 90.0% 微升至 91.0%。'), /没有保留负面证据/);
+    });
+
     it('核心摘要新深度目标独立于历史 80 字符兼容门禁', () => {
         const { getCoreSummaryDetailIssue, getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
         const placeholder = validAnalysisText().replace(
@@ -4518,6 +4652,53 @@ has_dataset: 否
         assert.strictEqual(getCoreSummaryDetailIssue(analysis, {
             sourceText: 'Theorem 1 improves the identifiability result compared with Theorem 2; no empirical evaluation is reported.'
         }), null);
+    });
+
+    it('核心摘要把与基线持平识别为完整比较方向', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const summary = [
+            '该工作处理流式零样本文本到语音合成，输入为已口语化文本与至多约 60 秒参考音频，输出为连续语音，难点在于长文本韵律一致性、有界上下文与首包延迟的兼顾。',
+            '方法链条分为四步：语义阶段由大模型生成第一码本并固定时长与语调骨架；三个小模型逐级补足声学残差且不改写语义轴；文本与音频以共享逻辑位置与成对边界标记维持跨块对齐；重叠非因果重建经声学编码器转入因果解码器实现流式输出。',
+            '与单遍交织或共享残差模块的已有分解不同，该设计把韵律容量集中于语义流并让声学阶段无跨块状态，从而支持并发精炼与有界缓存。',
+            '在 400 段英文有声读物成对评测中，系统韵律偏好得分为 50.1%，与 ElevenLabs Flash v2.5 基本持平，正确性为 48.9%。',
+            '结论仅限于英文朗读韵律与词级正确性，未验证德语与多语、音色相似度、长篇连贯与流式音质。',
+            '单卡首音频约 200 ms，单路端到端实时因子约 0.08，8 路并发聚合实时因子约 0.02。'
+        ].join('');
+        const analysis = validAnalysisText()
+            .replace(/## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/, `## 核心摘要\n${summary}\n`);
+        assert.strictEqual(getCoreSummaryDetailIssue(analysis, {
+            sourceText: [
+                'Results.',
+                'Against ElevenLabs Flash v2.5, the prosody score is 50.1%, with an interval that includes parity; correctness is statistically indistinguishable from parity at 48.9%.'
+            ].join('\n')
+        }), null);
+    });
+
+    it('核心摘要接受闭合升降与反超句式，但拒绝无起点的单数字裸升至', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const quantitativeSentence = '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。';
+        const withSentence = sentence => validAnalysisText().replace(quantitativeSentence, sentence);
+        const sourceText = 'Evaluation result on the public test set reports WER from 12.4% to 9.8% compared with the baseline.';
+        const accepted = [
+            '在 NaijaVoices 测试集下，本文方法的 WER 由 198.68% 降至 42.41%，反超 MMS 的 48.81%。',
+            '在公开测试集下，本文方法的 BLEU 从 0.18 升至 0.54，超过基线的 0.48。',
+            '在公开测试集下，本文方法的 WER 由 12.4% 降到 9.8%，低于基线的 10.1%。',
+            '在公开测试集下，本文方法的准确率从 70.0% 提升至 81.0%，高于基线的 78.0%。',
+            '在公开测试集下，本文方法的准确率由 70.0% 提高到 81.0%，高于基线的 78.0%。',
+            '在公开测试集下，基线 BLEU 为 0.18，本文方法升至 0.54。',
+            '在公开测试集下，基线 WER 为 12.4%，本文方法降至 9.8%。',
+            '在公开测试集下，本文方法的 WER 为 42.41%，反超 MMS 基线的 48.81%。'
+        ].map(sentence => `${sentence.slice(0, -1)}，该结果的比较对象、指标数值与方向均能由原文逐项核对。`);
+        for (const sentence of accepted) {
+            assert.strictEqual(getCoreSummaryDetailIssue(withSentence(sentence), { sourceText }), null,
+                sentence);
+        }
+        const missingStart = '在公开测试集下，本文方法的 BLEU 升至 0.54，本文方法与基线均按同一协议运行，'
+            + '但原文没有报告基线数值，其他评测口径与指标定义均能逐项核对。';
+        assert.match(
+            getCoreSummaryDetailIssue(withSentence(missingStart), { sourceText }),
+            /最接近的同句量化候选缺少：比较方向/
+        );
     });
 
     it('摘要最终门禁严格位于结构修复之后、评分之前', () => {
@@ -5460,6 +5641,42 @@ has_dataset: 否
         assert.strictEqual(negativeNormalized.dimensions.openSource.score, 0);
         assert.match(negativeNormalized.dimensions.openSource.reason, /未给出明确的后续开源承诺/);
         assert.strictEqual(negativeNormalized.total, 5.6);
+
+        const sha = value => require('node:crypto').createHash('sha256')
+            .update(value).digest('hex');
+        const repositoryUrl = 'https://github.com/Tencent-Hunyuan/AuK';
+        const documentationEvidence = {
+            contract: 'repository-documentation-evidence-v1',
+            repositoryUrl,
+            sourceUrl: 'https://raw.githubusercontent.com/Tencent-Hunyuan/AuK/main/README.md',
+            status: 200,
+            sourceSha256: sha('README'),
+            capabilities: { installation: true, inference: true, fineTuning: true },
+            completeness: 'complete'
+        };
+        const resourceBody = {
+            contract: 'api-reader-resource-identity-v1',
+            sourceTextSha256: sha('source'),
+            resources: [
+                {
+                    type: 'code', availability: 'available', originalUrl: repositoryUrl,
+                    documentationEvidence
+                },
+                {
+                    type: 'model', availability: 'available',
+                    originalUrl: 'https://modelscope.cn/models/Tencent-Hunyuan/AuK'
+                }
+            ]
+        };
+        const documentedIdentity = {
+            ...resourceBody,
+            identitySha256: require('../scripts/deep-analyzer.js').stableFingerprint(resourceBody)
+        };
+        const documentedNormalized = validateScoringAuditAgainstAnalysis(
+            analysis, audit, documentedIdentity
+        );
+        assert.strictEqual(documentedNormalized.dimensions.openSource.score, 1.5);
+        assert.match(documentedNormalized.dimensions.openSource.reason, /安装、推理与微调文档/);
     });
 
     it('空开源章节仍生成 A_OPEN 账本并通过归一化后的二次校验', () => {
@@ -5568,13 +5785,50 @@ has_dataset: 否
     });
 
     it('提取 Demo URL 时截断全角括号后的中文说明，避免生成伪 punycode 主机名', () => {
-        const { extractDemoUrls } = require('../scripts/deep-analyzer.js');
+        const {
+            extractDemoUrls,
+            resolveDemoPageCandidates,
+            resolveMetadataResourceLinks,
+            isMetadataResourceDiscoveryLink
+        } = require('../scripts/deep-analyzer.js');
         const urls = extractDemoUrls('Demo：https://relative-fx.github.io（提供音频示例）');
         assert.deepStrictEqual(urls, ['https://relative-fx.github.io']);
         assert.deepStrictEqual(
             extractDemoUrls('项目主页：https://llmovoice.com，论文还给出了在线演示。'),
             ['https://llmovoice.com']
         );
+        assert.deepStrictEqual(resolveDemoPageCandidates({
+            sources: ['arxiv', 'huggingface'],
+            hf_project_page: 'https://auk-project.github.io/',
+            hf_github_repo: 'https://github.com/Tencent-Hunyuan/AuK'
+        }, '项目主页：https://llmovoice.com'), [
+            'https://llmovoice.com',
+            'https://auk-project.github.io/',
+            'https://raw.githubusercontent.com/Tencent-Hunyuan/AuK/main/README.md'
+        ]);
+        assert.deepStrictEqual(resolveDemoPageCandidates({
+            sources: ['arxiv'],
+            hf_project_page: 'https://untrusted.example/'
+        }, ''), []);
+        const paper = {
+            sources: ['arxiv', 'huggingface'],
+            hf_github_repo: 'https://github.com/Tencent-Hunyuan/AuK'
+        };
+        assert.deepStrictEqual(resolveMetadataResourceLinks(paper), [
+            'https://github.com/Tencent-Hunyuan/AuK'
+        ]);
+        assert.strictEqual(isMetadataResourceDiscoveryLink(
+            paper, 'https://huggingface.co/tencent/AuK-Flash'
+        ), true);
+        assert.strictEqual(isMetadataResourceDiscoveryLink(
+            paper, 'https://huggingface.co/spaces/tencent'
+        ), false);
+        assert.strictEqual(isMetadataResourceDiscoveryLink(
+            paper, 'https://github.com/user-attachments/assets'
+        ), false);
+        assert.strictEqual(isMetadataResourceDiscoveryLink(
+            paper, 'https://modelscope.cn/models/Tencent-Hunyuan/AuK'
+        ), true);
     });
 
     it('副模型的 replacement 被代码忽略，主模型原文和评分不被重写', () => {

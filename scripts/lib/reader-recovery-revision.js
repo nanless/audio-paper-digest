@@ -111,7 +111,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     const context = getFreshAnalysisContext();
     const direct = require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
     let revisionRunId; let revisionScope;
-    if (context?.refreshReaderDiagnostics === true) {
+    if (context) {
+        if (context.refreshReaderDiagnostics !== true) return null;
         if (path.resolve(directory) !== path.join(context.runDir, 'reader-attempts')
             || identity?.freshAnalysis?.runId !== context.runId
             || identity.freshAnalysis.paperId !== identity.paperId

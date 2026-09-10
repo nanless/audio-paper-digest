@@ -1,0 +1,5 @@
+Proceedings of Machine Learning Research
+Abstract — We propose an audio representation method for environmental sound analysis and report consistent improvements across several public acoustic datasets.
+Keywords: audio representation, environmental sound
+1 INTRODUCTION
+The remaining paper begins here.

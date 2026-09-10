@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from conference_extractor import (  # noqa: E402
     ARTIFACT_CONTRACT,
+    BLOCKED_VERIFICATION_CONTRACT,
     MINIMUM_TEXT_CHARACTERS,
     NORMALIZATION,
     OFFSET_UNIT,
@@ -25,6 +26,7 @@ from conference_extractor import (  # noqa: E402
     load_pypdf_backend,
     run_extraction,
     sha256_bytes,
+    verify_blocked_extraction,
     verify_extraction,
 )
 from paper_identity import canonical_conference_paper_id  # noqa: E402
@@ -208,6 +210,29 @@ class ConferenceExtractorTest(unittest.TestCase):
         self.assertEqual(receipt["blockedReason"]["code"], "PDF_EXTRACTION_FAILED")
         self.assertIsNone(receipt["text"])
         self.assertIsNone(receipt["artifacts"])
+
+    def test_blocked_receipt_replays_without_becoming_staging_ready(self):
+        manifest, request = self.write_request(b"%PDF-1.4\nnot a valid PDF\n%%EOF\n")
+        result = run_extraction(manifest, apply=True, source_root=self.root)
+        self.assertEqual(result["status"], "blocked")
+        verified = verify_blocked_extraction(manifest, source_root=self.root)
+        self.assertEqual(verified["contract"], BLOCKED_VERIFICATION_CONTRACT)
+        self.assertEqual(verified["status"], "verified-blocked")
+        self.assertEqual(verified["blockedReason"]["code"], "PDF_EXTRACTION_FAILED")
+        self.assertIsNone(verified["textSha256"])
+        self.assertIsNone(verified["artifactsSha256"])
+        receipt_file = self.root / request["outputs"]["receiptFile"]
+        receipt_file.write_bytes(receipt_file.read_bytes() + b" ")
+        with self.assertRaisesRegex(ConferenceExtractionIntegrityError, "fresh pinned extraction replay"):
+            verify_blocked_extraction(manifest, source_root=self.root)
+
+    def test_short_blocked_receipt_replays_derived_outputs_as_non_staging_evidence(self):
+        manifest, _ = self.write_request(build_pdf([["too short"]]))
+        run_extraction(manifest, apply=True, source_root=self.root)
+        verified = verify_blocked_extraction(manifest, source_root=self.root)
+        self.assertEqual(verified["blockedReason"]["code"], "TEXT_TOO_SHORT")
+        self.assertRegex(verified["textSha256"], r"^[a-f0-9]{64}$")
+        self.assertRegex(verified["artifactsSha256"], r"^[a-f0-9]{64}$")
 
     def test_missing_backend_raises_a_typed_dependency_error_at_loader(self):
         with mock.patch("conference_extractor.importlib.import_module", side_effect=ImportError("missing")):

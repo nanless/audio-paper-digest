@@ -31,6 +31,7 @@ REQUEST_CONTRACT = "conference-pdf-extraction-request-v2"
 ARTIFACT_CONTRACT = "conference-structured-artifacts-v2"
 RECEIPT_CONTRACT = "conference-pdf-extraction-receipt-v2"
 VERIFICATION_CONTRACT = "conference-pdf-extraction-verification-v2"
+BLOCKED_VERIFICATION_CONTRACT = "conference-pdf-extraction-blocked-verification-v1"
 CONTRACT_VERSION = 2
 EXTRACTOR_NAME = "audio-paper-digest-conference-text"
 EXTRACTOR_VERSION = "1.0.0"
@@ -664,6 +665,103 @@ def verify_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING
         "artifactsSha256": sha256_bytes(replayed_outputs["artifactsFile"]),
         "receiptFileSha256": sha256_bytes(replayed_outputs["receiptFile"]),
         "receiptSha256": _expected_sha(receipt.get("receiptSha256"), "replayed receipt.receiptSha256"),
+    }
+    return {**body, "verificationSha256": _stable_hash(body)}
+
+
+def verify_blocked_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING_SOURCE_DIR) -> dict[str, Any]:
+    """Replay a blocked extraction without promoting it to a staging-ready receipt."""
+    manifest_name = _safe_name(manifest_name, SAFE_JSON_NAME, "manifest name")
+    root_fd = _open_root(Path(source_root))
+    try:
+        manifest_bytes = _read_regular_single_link(root_fd, manifest_name, MAX_MANIFEST_BYTES, "manifest")
+        request = validate_request(_strict_json_object(manifest_bytes, "manifest"), manifest_name)
+        metadata_name = request["source"]["metadata"]["file"]
+        pdf_name = request["source"]["pdf"]["file"]
+        metadata_bytes = _read_regular_single_link(root_fd, metadata_name, MAX_METADATA_BYTES, "metadata")
+        pdf_bytes = _read_regular_single_link(root_fd, pdf_name, MAX_PDF_BYTES, "PDF")
+    finally:
+        os.close(root_fd)
+
+    with tempfile.TemporaryDirectory(prefix="conference-blocked-extraction-verify-") as temporary:
+        replay_root = Path(temporary).resolve()
+        for name, raw in ((manifest_name, manifest_bytes), (metadata_name, metadata_bytes), (pdf_name, pdf_bytes)):
+            target = replay_root / name
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                written = 0
+                while written < len(raw):
+                    count = os.write(fd, raw[written:])
+                    if count <= 0:
+                        raise OSError("short write while preparing blocked extraction replay")
+                    written += count
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        result = run_extraction(manifest_name, apply=True, source_root=replay_root)
+        if result["status"] != "blocked":
+            raise _fail("replayed extraction is not blocked")
+        produced = set(result["outputs"])
+        if request["outputs"]["receiptFile"] not in produced:
+            raise _fail("blocked extraction replay did not produce its receipt")
+        replayed_outputs = {key: (replay_root / name).read_bytes()
+            for key, name in request["outputs"].items() if name in produced}
+
+    root_fd = _open_root(Path(source_root))
+    try:
+        if (_read_regular_single_link(root_fd, manifest_name, MAX_MANIFEST_BYTES, "current manifest") != manifest_bytes
+                or _read_regular_single_link(root_fd, metadata_name, MAX_METADATA_BYTES, "current metadata") != metadata_bytes
+                or _read_regular_single_link(root_fd, pdf_name, MAX_PDF_BYTES, "current PDF") != pdf_bytes):
+            raise _fail("blocked extraction inputs changed during replay")
+        current_outputs: dict[str, bytes] = {}
+        for key, name in request["outputs"].items():
+            if name in produced:
+                current_outputs[key] = _read_regular_single_link(
+                    root_fd, name, MAX_DERIVED_BYTES, f"existing blocked {key}")
+            else:
+                try:
+                    os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                raise _fail(f"blocked extraction has unexpected output: {name}")
+    finally:
+        os.close(root_fd)
+
+    for key, replayed in replayed_outputs.items():
+        if current_outputs[key] != replayed:
+            raise _fail(f"existing blocked {key} differs from a fresh pinned extraction replay")
+    receipt = _strict_json_object(replayed_outputs["receiptFile"], "replayed blocked receipt")
+    _exact_object(receipt, ["contract", "version", "status", "textReplayable", "structuredReplayable",
+        "paperId", "sourceIdentity", "request", "source", "extractor", "options", "pageCount", "text",
+        "artifacts", "blockedReason", "receiptSha256"], "blocked extraction receipt")
+    if (receipt["contract"] != RECEIPT_CONTRACT or receipt["version"] != CONTRACT_VERSION
+            or receipt["status"] != "blocked" or receipt["textReplayable"] is not False
+            or receipt["structuredReplayable"] is not False):
+        raise _fail("blocked extraction receipt contract/status is invalid")
+    reason = _exact_object(receipt["blockedReason"], ["code", "message"], "blockedReason")
+    if reason["code"] not in {"TEXT_TOO_SHORT", "PDF_EXTRACTION_FAILED"}:
+        raise _fail("blocked extraction reason code is unsupported")
+    _plain_text(reason["message"], "blockedReason.message", 2000)
+    receipt_body = dict(receipt)
+    receipt_sha = _expected_sha(receipt_body.pop("receiptSha256"), "blocked receipt.receiptSha256")
+    if receipt_sha != _stable_hash(receipt_body):
+        raise _fail("blocked extraction receipt self-SHA drifted")
+    text_sha = None if "textFile" not in replayed_outputs else sha256_bytes(replayed_outputs["textFile"])
+    artifacts_sha = None if "artifactsFile" not in replayed_outputs else sha256_bytes(replayed_outputs["artifactsFile"])
+    body = {
+        "contract": BLOCKED_VERIFICATION_CONTRACT,
+        "version": 1,
+        "status": "verified-blocked",
+        "paperId": request["paperId"],
+        "sourceIdentity": request["sourceIdentity"],
+        "blockedReason": {"code": reason["code"], "message": reason["message"]},
+        "requestSha256": sha256_bytes(manifest_bytes),
+        "metadataSha256": sha256_bytes(metadata_bytes),
+        "pdfSha256": sha256_bytes(pdf_bytes),
+        "textSha256": text_sha,
+        "artifactsSha256": artifacts_sha,
+        "receiptFileSha256": sha256_bytes(replayed_outputs["receiptFile"]),
+        "receiptSha256": receipt_sha,
     }
     return {**body, "verificationSha256": _stable_hash(body)}
 

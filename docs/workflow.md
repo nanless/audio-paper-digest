@@ -100,10 +100,10 @@ npm run blog:push -- --date YYYY-MM-DD
   rethink-context JSON 同源 sidecar，再把页面和 sidecar 作为一个 SHA 绑定事务安装并
   签发 schema v3 generation manifest。arXiv 版本只接受输入 ID 中显式出现的 `vN`，
   base ID 不推断 v1。
-- review：汇总页先审，论文页并发；每页以不可变 SHA artifact 执行确定性、LLM、图片与 Hugo gate。
+- review：汇总页先审，论文页并发；每页以不可变 SHA artifact 执行确定性、LLM 与图片审查。已通过的“相对路径 + 页面内容 SHA”永久复用，只有页面内容 SHA 变化才重审该文件；Hugo gate 仍作为当前批次运行。
 - push：只提交 receipt 允许的精确 delta，推送后验证远端 `main` OID。
 
-review worker 不修改已审页面。任何修正都返回生成/修复阶段；页面 SHA、Git 基线、协议或 remote 漂移会阻断。
+review worker 不修改已审页面。任何修正都返回生成/修复阶段。发布器代码变化仍会让 generate 重新渲染并产生新 manifest；随后 generation manifest 元数据、模型、发布器代码、review 协议指纹或 Hugo 运行时变化都不失效最终字节未变的逐页通过证据；它们只要求重跑批次 gate 并重签 receipt。Git 基线或 remote 漂移仍会阻断 push。
 
 generation 记录实际选中的 current、日期 archive 或 `--data-file` 的绝对路径、字节数和 SHA-256；review/push
 只能重放这一 generation input reference，不能改读随后变化的 current 文件。

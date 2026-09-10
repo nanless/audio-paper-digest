@@ -42,6 +42,19 @@ test('conference ledger coordinates produce the same canonical ID and reject the
         { id: 'icassp-2025', year: 2026 }, sourceIdentity), /exact year/);
 });
 
+test('conference-paper-id accepts official stable token spellings without relaxing other identity schemes', () => {
+    for (const value of ['1', 'AAAI.2026-001_camera', 'x'.repeat(200)]) {
+        assert.deepEqual(identity.validateExternalId({ scheme: 'conference-paper-id', value }),
+            { scheme: 'conference-paper-id', value });
+    }
+    for (const value of ['contains space', 'path/segment', 'doi:10.1', 'x'.repeat(201)]) {
+        assert.throws(() => identity.validateExternalId({ scheme: 'conference-paper-id', value }), /invalid|trimmed/);
+    }
+    assert.throws(() => identity.validateExternalId({ scheme: 'icassp-arnumber', value: 'AAAI.2026-001' }), /invalid/);
+    assert.throws(() => identity.validateExternalId({ scheme: 'openreview-forum-id', value: 'short' }), /invalid/);
+    assert.throws(() => identity.validateExternalId({ scheme: 'openreview-forum-id', value: 'Forum.2026' }), /invalid/);
+});
+
 test('all unknown fields and arxiv/conference field confusion fail closed', () => {
     const arxiv = structuredClone(vectors.vectors[0].record);
     arxiv.title = 'titles are citation metadata only';
@@ -55,6 +68,14 @@ test('all unknown fields and arxiv/conference field confusion fail closed', () =
     const unknownScheme = structuredClone(vectors.vectors[1].record);
     unknownScheme.externalId.scheme = 'title';
     assert.throws(() => identity.normalizeIdentity(unknownScheme), /unsupported/);
+});
+
+test('large official collaboration author lists remain bounded without truncation', () => {
+    const record = structuredClone(vectors.vectors[1].record);
+    record.citation.authors = Array.from({ length: 102 }, (_, index) => `Author ${index + 1}`);
+    assert.equal(identity.normalizeIdentity(record).citation.authors.length, 102);
+    record.citation.authors = Array.from({ length: 1001 }, (_, index) => `Author ${index + 1}`);
+    assert.throws(() => identity.normalizeIdentity(record), /at most 1000 names/);
 });
 
 test('source URLs must be official HTTPS or explicitly unavailable, never credentials, IP literals, traversal, or loose paths', () => {
@@ -74,4 +95,25 @@ test('source URLs must be official HTTPS or explicitly unavailable, never creden
     assert.equal(identity.normalizeIdentity(base).source.status, 'unavailable');
     base.source.url = 'https://ieeexplore.ieee.org/document/10910001';
     assert.throws(() => identity.normalizeIdentity(base), /must be null/);
+});
+
+test('official URL accepts one canonical trailing slash but rejects empty, dot, encoded, and non-canonical path spellings', () => {
+    assert.equal(identity.validateOfficialUrl(
+        'https://aclanthology.org/2026.eacl-long.102/', 'official record URL'
+    ), 'https://aclanthology.org/2026.eacl-long.102/');
+    assert.equal(identity.validateOfficialUrl(
+        'https://aclanthology.org/2026.eacl-long.102', 'official record URL'
+    ), 'https://aclanthology.org/2026.eacl-long.102');
+    for (const url of [
+        'https://aclanthology.org/2026.eacl-long.102//',
+        'https://aclanthology.org/2026.eacl-long.102//appendix',
+        'https://aclanthology.org/2026.eacl-long.102/./appendix',
+        'https://aclanthology.org/2026.eacl-long.102/../appendix',
+        'https://aclanthology.org/2026.eacl-long.102/%2e%2e/appendix',
+        'https://aclanthology.org/2026.eacl-long.102/%2Fappendix',
+        'https://ACLANthology.org/2026.eacl-long.102/'
+    ]) {
+        assert.throws(() => identity.validateOfficialUrl(url, 'official record URL'),
+            /unsafe or non-canonical|canonical URL spelling/);
+    }
 });

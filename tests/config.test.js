@@ -152,7 +152,7 @@ describe('config', () => {
         assert.strictEqual(path.basename(Config.FILES.digestCoverManifestDir), 'digest-cover-manifests');
         assert.strictEqual(Config.FILES.digestCoverAssetDir, Config.ARCHIVE_DIR);
         assert.strictEqual(path.basename(Config.FILES.visualSummaryManifest), 'visual-summary-manifest.json');
-        for (const key of ['dailyFreshSourceRunsDir', 'freshArxivFetchedSourcesDir',
+        for (const key of ['dailyFreshSourceRunsDir', 'officialConferenceAcquisitionDir', 'freshArxivFetchedSourcesDir',
             'historicalDirectRewriteInputCatalogDir',
             'historicalDirectRewritePlanDir', 'historicalDirectRewriteRegistryDir',
             'historicalDirectRewriteExecutionDir', 'historicalDirectRewriteStagingDir',

@@ -14,6 +14,7 @@ const executionCli = require('../scripts/conference-execution.js');
 const adapter = require('../scripts/lib/conference-analysis-adapter.js');
 const pageApi = require('../scripts/lib/historical-page-staging.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
+const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
 
 const TAXONOMY = path.resolve(__dirname, '../config/paper-taxonomy.json');
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
@@ -38,26 +39,64 @@ function currentSelection() {
 }
 
 function canonical(index) {
-    const selection = currentSelection(); const supplemental = selection.tags
-        .filter(tag => ![selection.primaryTaskTag, selection.primaryMethodTag].includes(tag));
-    return `## 评分\n${8 + index / 10}/10\n\n## 机器摘要\nprimary_task_tag: ${selection.primaryTaskTag}\nprimary_method_tag: ${selection.primaryMethodTag}\n\n`
-        + `## 标签\n${selection.tags.join(' ')}\n主任务标签: ${selection.primaryTaskTag}\n主方法标签: ${selection.primaryMethodTag}\n补充标签: ${supplemental.join(' ')}\n\n`
-        + `## 核心摘要\n只来自会议 canonical 的摘要 ${index}。`;
+    return validAnalysisPaper(`2609.${String(10000 + index).slice(-5)}`).analysis;
 }
 
 function completed(executionId, index = 0) {
     const paperId = `conference:icassp:2026:icassp-arnumber:${100 + index}`;
+    const base = validAnalysisPaper(`2609.${String(10000 + index).slice(-5)}`);
     const analysis = canonical(index); const parsed = require('../scripts/utils.js').parseAnalysis(analysis);
     const article = `会议 Reader 全新正文 ${index}。`; const articleSha = sha256(article);
-    const plan = { contract: 'beginner-researcher-v3', readerTitle: `会议解读 ${index}`, formulaBindings: [] };
+    const plan = { version: 3, contract: 'beginner-researcher-v3', readerTitle: `会议解读 ${index}`,
+        oneSentenceThesis: '会议论文的一句话结论。', figurePlacements: [], tableBindings: [], formulaBindings: [],
+        sourceBindingsContract: 'api-reader-source-bindings-v4' };
+    plan.sourceBindingsSha256 = api.stableHash({ tableBindings: [], formulaBindings: [] });
     const planSha = api.stableHash(plan);
-    const paper = { id: paperId, conferencePaperId: paperId, title: `会议论文 ${index}`, authors: ['作者'],
+    const authors = ['作者']; const metadataSha256 = api.stableHash(authors);
+    const authorIdentity = { contract: 'api-reader-author-identity-v1', sourceDomSha256: '',
+        sourceTextSha256: base.sourceSha256 || '1'.repeat(64), metadataSha256, authors: [{ name: '作者',
+            affiliations: ['机构信息未在会议 PDF 中可靠披露'],
+            nameBinding: { sourceKind: 'paper_metadata', sourceValue: '作者', metadataSha256 },
+            affiliationBindings: [{ sourceKind: 'explicit_unavailable', sourceValue: '机构信息未在会议 PDF 中可靠披露',
+                sourceTextSha256: base.sourceSha256 || '1'.repeat(64) }] }] };
+    const readerAuthors = { authors: authorIdentity.authors.map(({ name, affiliations }) => ({ name, affiliations })),
+        sourceDomSha256: base.sourceSha256 || '1'.repeat(64), identity: authorIdentity,
+        identitySha256: api.stableHash(authorIdentity) };
+    const resourceIdentity = { contract: 'api-reader-resource-identity-v1',
+        sourceTextSha256: base.sourceSha256 || '1'.repeat(64), resources: [] };
+    const readerResources = { ...resourceIdentity, identitySha256: api.stableHash(resourceIdentity) };
+    const paper = { ...base, id: paperId, conferencePaperId: paperId, title: `会议论文 ${index}`, authors,
         abstract: '摘要', source: 'conference', conference: { id: 'icassp-2026', year: 2026 },
         externalId: { scheme: 'icassp-arnumber', value: String(100 + index) }, analysis, parsed,
         apiReaderArticle: article, apiReaderArticleSha256: articleSha, apiReaderPlan: plan, apiReaderPlanSha256: planSha,
-        apiReaderFigures: [], analysisManifest: { contracts: { apiReaderArticle: 'beginner-researcher-v3' },
-            stages: { apiReaderArticle: { status: 'complete', articleSha256: articleSha, planSha256: planSha,
-                figureCount: 0, formulaBindingCount: 0 } } } };
+        apiReaderFigures: [], apiReaderAuthors: readerAuthors, apiReaderResources: readerResources,
+        conferencePublication: { contract: 'conference-official-publication-v1',
+            recordUrl: `https://ieeexplore.ieee.org/document/${100 + index}`,
+            pdfUrl: `https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=${100 + index}` } };
+    delete paper.arxivId;
+    paper.sourceSha256 = paper.sourceSha256 || '1'.repeat(64);
+    paper.analysisManifest.sourceAcquisition = { sourceSha256: paper.sourceSha256,
+        structuredArtifactsSha256: '2'.repeat(64), analysisSource: 'conference_pdf_text',
+        fullTextAvailable: true };
+    Object.assign(paper.analysisManifest.contracts, { apiReaderArticle: 'beginner-researcher-v3',
+        apiReaderSourceBindings: 'api-reader-source-bindings-v4',
+        apiReaderAuthorIdentity: 'api-reader-author-identity-v1', apiReaderResourceIdentity: 'api-reader-resource-identity-v1' });
+    Object.assign(paper.analysisManifest.stages.openSourceScan, { resourceEvidenceContract: 'api-reader-resource-identity-v1',
+        resourceEvidenceSha256: readerResources.identitySha256 });
+    Object.assign(paper.analysisManifest.stages.scoringAudit, { status: 'complete', scoringContract: 'api-scoring-audit-v2',
+        outputAnalysisSha256: sha256(analysis), stabilityWarning: false });
+    paper.analysisManifest.stages.apiReaderArticle = { status: 'complete', model: 'fixture-model', protocol: 'openai_responses',
+        articleSha256: articleSha, planSha256: planSha, figureCount: 0, figuresSha256: api.stableHash([]),
+        readerAuthorsSha256: api.stableHash(readerAuthors), readerAuthorIdentityContractVersion: 'api-reader-author-identity-v1',
+        readerAuthorIdentitySha256: readerAuthors.identitySha256,
+        resourceIdentityContractVersion: 'api-reader-resource-identity-v1', resourceIdentitySha256: readerResources.identitySha256,
+        resourceCount: 0, parserVersion: 'api-reader-parser-v3', assemblerVersion: 'api-reader-assembler-v3',
+        tableContractVersion: 'api-reader-tables-v3', figureContractVersion: 'api-reader-figures-v3',
+        qualityMetricsContractVersion: 'api-reader-quality-metrics-v2', qualityMetrics: {
+            contract: 'api-reader-quality-metrics-v2', rawIssueCount: 0, waivedIssueCount: 0, blockingIssueCount: 0, warningCount: 0 },
+        sourceBindingsContractVersion: 'api-reader-source-bindings-v4', sourceBindingsSha256: plan.sourceBindingsSha256,
+        sourceBindingsSourceTextSha256: paper.sourceSha256, tableBindingCount: 0, formulaBindingCount: 0,
+        structuredArtifactsSha256: '2'.repeat(64) };
     const analysisRecord = { status: 'complete', papers: [paper] };
     const analysisFileSha256 = sha256(JSON.stringify(analysisRecord)); const completedAt = '2026-09-07T00:00:00.000Z';
     const receiptBody = { contract: 'conference-analysis-completion-receipt-v1', version: 1, executionId,
@@ -96,6 +135,12 @@ test('generic conference stage binds sealed completion, identity, taxonomy and r
         taxonomyFile: TAXONOMY, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
     assert.equal(result.status, 'staged'); assert.equal(result.manifest.paperId, f.runs.get(f.one).run.paperId);
     assert.equal(result.manifest.identity.kind, 'conference'); assert.equal(result.manifest.identity.arxivId, null);
+    assert.equal(result.manifest.identity.source.status, 'official');
+    assert.equal(result.manifest.taxonomy.flatCompatContract, 'paper-taxonomy-flat-tags-compat-v1');
+    assert.equal(result.manifest.readerContract, 'beginner-researcher-v3');
+    assert.equal(result.manifest.sourceBindingsContract, 'api-reader-source-bindings-v4');
+    assert.equal(result.manifest.scoringContract, 'api-scoring-audit-v2');
+    assert.equal(Object.keys(result.manifest.scoreDimensions).length, 8);
     assert.doesNotMatch(result.markdown, /arxiv/i); assert.deepEqual(result.manifest.capabilities, WEAK);
     const registry = taxonomyApi.loadTaxonomy(TAXONOMY);
     const replayed = api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
@@ -105,6 +150,31 @@ test('generic conference stage binds sealed completion, identity, taxonomy and r
         result.manifest.implementation.implementationSha256, 'page.md')));
     assert.equal(api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies).manifest.manifestSha256, result.manifest.manifestSha256);
+});
+
+test('IWSLT conference-paper-id with dots remains a conference identity', t => {
+    const f = fixture(t); const loaded = f.runs.get(f.one);
+    const paperId = 'conference:iwslt:2026:conference-paper-id:IWSLT.2026.001';
+    const paper = loaded.analysis.papers[0];
+    Object.assign(paper, { id: paperId, conferencePaperId: paperId,
+        conference: { id: 'iwslt-2026', year: 2026 },
+        externalId: { scheme: 'conference-paper-id', value: 'IWSLT.2026.001' },
+        conferencePublication: { contract: 'conference-official-publication-v1',
+            recordUrl: 'https://aclanthology.org/2026.iwslt-1.1/',
+            pdfUrl: 'https://aclanthology.org/2026.iwslt-1.1.pdf' } });
+    loaded.analysisFileSha256 = sha256(JSON.stringify(loaded.analysis));
+    Object.assign(loaded.run, { paperId, conference: { id: 'iwslt-2026', year: 2026 },
+        analysisSha256: loaded.analysisFileSha256 });
+    const receiptBody = { ...loaded.run.completionReceipt, paperId, analysisSha256: loaded.analysisFileSha256 };
+    delete receiptBody.receiptSha256;
+    loaded.run.completionReceipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
+    const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+        stagingRoot: path.join(f.root, 'staging'), planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
+    assert.equal(result.manifest.paperId, paperId);
+    assert.equal(result.manifest.identity.externalId.value, 'IWSLT.2026.001');
+    assert.equal(result.manifest.publication.recordUrl, 'https://aclanthology.org/2026.iwslt-1.1/');
+    assert.match(result.manifest.pagePath, /iwslt-2026-conference-paper-id-iwslt-2026-001-/);
+    assert.doesNotMatch(result.markdown, /arxiv/i);
 });
 
 test('completion drift, arXiv renderer leakage and weak assets fail closed', t => {
@@ -126,6 +196,16 @@ test('production Node stage invokes the generic Python renderer without an arXiv
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, dependencies);
     assert.match(result.markdown, /paper_digest_paper_id: "conference:icassp:2026:icassp-arnumber:101"/);
     assert.match(result.markdown, /表格、公式与 Figure 均不可用/);
+    assert.match(result.markdown, /paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"/);
+    assert.match(result.markdown, /paper_digest_api_reader_contract: "beginner-researcher-v3"/);
+    assert.match(result.markdown, /paper_digest_api_reader_source_binding_contract: "api-reader-source-bindings-v4"/);
+    assert.match(result.markdown, /paper_digest_api_reader_decision_projection: "api-reader-decision-projection-v2"/);
+    assert.match(result.markdown, /paper_digest_conference_record_url: "https:\/\/ieeexplore\.ieee\.org\/document\/101"/);
+    assert.match(result.markdown, /创新 1\.5\/2/);
+    assert.match(result.markdown, /## 👥 作者与机构/);
+    assert.match(result.markdown, /## 🔗 开源与复现资源/);
+    assert.match(result.markdown, /## ⚖️ 评分明细/);
+    assert.match(result.markdown, /评分属于系统判断，不是论文实验结果/);
     assert.doesNotMatch(result.markdown, /paper_digest_arxiv_id|arxiv\.org/i);
     assert.equal(fs.existsSync(stagingRoot), false);
 });
@@ -137,7 +217,18 @@ test('aggregate replays every selected stage and emits only when the full explic
         taxonomyFile: TAXONOMY, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
     const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], taxonomyFile: TAXONOMY,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
-    assert.equal(result.manifest.members.length, 2); assert.equal(result.manifest.members[0].paperId, f.runs.get(f.two).run.paperId);
+    assert.equal(result.manifest.members.length, 2); assert.equal(result.manifest.members[0].paperId, f.runs.get(f.one).run.paperId);
+    assert.equal(result.manifest.date, '2026-09-07');
+    assert.equal(result.manifest.readerQuality, 'reader-facing-v3');
+    assert.equal(result.manifest.taxonomy.scope, 'aggregate-primary-task-counts');
+    assert.deepEqual(result.manifest.primaryTaskCounts, [{ label: '语音识别', count: 2 }]);
+    assert.match(result.manifest.markdown, /paper_digest_reader_quality: "reader-facing-v3"/);
+    assert.match(result.manifest.markdown, /paper_digest_page_type: index/);
+    assert.match(result.manifest.markdown, /^date: 2026-09-07$/m);
+    assert.match(result.manifest.markdown, /## ⚡ 今日概览/);
+    assert.match(result.manifest.markdown, /👥 \*\*作者与机构\*\*/);
+    assert.match(result.manifest.markdown, /🔗 \*\*开源资源\*\*/);
+    assert.match(result.manifest.markdown, /Reader 中文题目 \| 英文题目 \| 八维评分 \| 分档 \| 文档类型/);
     assert.doesNotMatch(result.manifest.markdown, /\]\(https:\/\/evil\.invalid\)|\n# heading/);
     assert.doesNotMatch(result.manifest.markdown, /旧会议汇总正文/);
     assert.ok(fs.existsSync(path.join(aggregateRoot, 'icassp-2026', result.manifest.aggregateId, 'manifest.json')));
@@ -157,6 +248,31 @@ test('aggregate rejects a selected-member subset and executions from another aut
     f.runs.get(f.two).planKey = 'b';
     assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], taxonomyFile: TAXONOMY,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /cross-plan/);
+});
+
+test('Reader/scoring/taxonomy/publication compatibility gates cannot be bypassed by success stubs', t => {
+    const f = fixture(t); const args = { analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+        stagingRoot: path.join(f.root, 'staging'), planHandle: f.planHandle, sourceRoot: f.sourceRoot };
+    f.runs.get(f.one).analysis.papers[0].analysisManifest.contracts.apiReaderSourceBindings = 'api-reader-source-bindings-v3';
+    assert.throws(() => api.stagePaper(args, f.dependencies), /source-bindings-v4/);
+    f.runs.set(f.one, completed(f.one, 1));
+    f.runs.get(f.one).analysis.papers[0].analysisManifest.stages.scoringAudit.scoringContract = 'legacy';
+    assert.throws(() => api.stagePaper(args, f.dependencies), /api-scoring-audit-v2/);
+    f.runs.set(f.one, completed(f.one, 1));
+    delete f.runs.get(f.one).analysis.papers[0].analysisManifest.contracts.coreSummary;
+    assert.throws(() => api.stagePaper(args, f.dependencies), /core-summary-detailed-v3/);
+    f.runs.set(f.one, completed(f.one, 1));
+    f.runs.get(f.one).analysis.papers[0].analysisManifest.stages.taxonomySeal.registrySha256 = '0'.repeat(64);
+    assert.throws(() => api.stagePaper(args, f.dependencies), /taxonomy seal/);
+    f.runs.set(f.one, completed(f.one, 1));
+    f.runs.get(f.one).analysis.papers[0].conferencePublication.pdfUrl = 'https://arxiv.org/pdf/1234.5678.pdf';
+    assert.throws(() => api.stagePaper(args, f.dependencies), /conference HTTPS URL/);
+    f.runs.set(f.one, completed(f.one, 1));
+    f.runs.get(f.one).analysis.papers[0].analysis = '## 评分\n6.9/10';
+    assert.throws(() => api.stagePaper(args, f.dependencies), /canonical 13-section/);
+    f.runs.set(f.one, completed(f.one, 1));
+    f.runs.get(f.one).analysis.papers[0].analysisManifest.sourceAcquisition.analysisSource = 'abstract';
+    assert.throws(() => api.stagePaper(args, f.dependencies), /full-text analysis/);
 });
 
 test('loadStage re-renders current completion and rejects re-signed metadata or extra files', t => {
@@ -202,10 +318,10 @@ test('real plan authority, source replay and sealed analysis can stage one confe
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId, now: '2026-09-07T00:00:00.000Z' });
     const loaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId }); const generated = completed(executionId, 0).analysis.papers[0];
-    const paper = { ...loaded.analysis.papers[0], analysis: generated.analysis, parsed: generated.parsed,
-        apiReaderArticle: generated.apiReaderArticle, apiReaderArticleSha256: generated.apiReaderArticleSha256,
-        apiReaderPlan: generated.apiReaderPlan, apiReaderPlanSha256: generated.apiReaderPlanSha256,
-        apiReaderFigures: [], analysisManifest: generated.analysisManifest };
+    const paper = { ...generated, id: loaded.run.paperId, conferencePaperId: loaded.run.paperId,
+        title: loaded.analysis.papers[0].title, conference: loaded.analysis.papers[0].conference,
+        externalId: loaded.analysis.papers[0].externalId };
+    delete paper.arxivId;
     const analysis = { ...loaded.analysis, status: 'complete', completedAt: '2026-09-07T01:00:00.000Z', papers: [paper] };
     fs.writeFileSync(path.join(analysisRoot, executionId, 'analysis.json'), `${JSON.stringify(analysis, null, 2)}\n`);
     adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId }));

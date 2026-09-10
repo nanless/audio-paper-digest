@@ -59,6 +59,7 @@ test('unknown roles, marker schema drift, weak permissions and symlink roots fai
 
 test('direct command inference and package entrypoints cover daily/history boundaries', () => {
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('full-fetch.js'), 'daily');
+    assert.equal(envLoader.requiredWorkspaceRoleForCommand('official-conference-acquire.js'), 'daily');
     for (const name of ['deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js', 'refresh-api-reader.js']) {
         assert.equal(envLoader.requiredWorkspaceRoleForCommand(name), 'daily', name);
     }
@@ -71,9 +72,12 @@ test('direct command inference and package entrypoints cover daily/history bound
         assert.match(scripts[name], /workspace-role\.js exec daily --/, name);
     }
     for (const [name, command] of Object.entries(scripts)) {
-        if (name.startsWith('history:') || name.startsWith('conference:')) {
+        if (name.startsWith('history:') || (name.startsWith('conference:') && !name.startsWith('conference:new:'))) {
             assert.match(command, /workspace-role\.js exec history --/, name);
         }
+    }
+    for (const [name, command] of Object.entries(scripts)) {
+        if (name.startsWith('conference:new:')) assert.match(command, /workspace-role\.js exec daily --/, name);
     }
     for (const name of ['rewrite:source', 'blog:activate-fresh']) {
         assert.match(scripts[name], /workspace-role\.js exec history --/, name);
@@ -101,6 +105,69 @@ test('direct daily and history entry guards reject the opposite workspace role',
         assert.doesNotThrow(() => envLoader.requireExternalRuntime(name, {
             workspaceRoot: dailyRoot, enforceWorkspaceRole: true
         }), name);
+    }
+});
+
+test('new-conference aliases admit daily only with the explicit wrapped mode', () => {
+    const previousMode = process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
+    const previousRole = process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE;
+    try {
+        delete process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
+        process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE = 'daily';
+        assert.equal(envLoader.requiredWorkspaceRoleForCommand('conference-analyze.js'), 'history');
+        process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE = '1';
+        assert.equal(envLoader.requiredWorkspaceRoleForCommand('conference-analyze.js'), 'daily');
+        process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE = 'history';
+        assert.equal(envLoader.requiredWorkspaceRoleForCommand('conference-analyze.js'), 'history');
+    } finally {
+        if (previousMode === undefined) delete process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
+        else process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE = previousMode;
+        if (previousRole === undefined) delete process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE;
+        else process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE = previousRole;
+    }
+});
+
+test('conference:new:process wrapper and runtime guard agree on daily without weakening legacy history isolation', () => {
+    const scripts = require('../package.json').scripts;
+    assert.equal(scripts['conference:new:process'],
+        'AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE=1 node scripts/workspace-role.js exec daily -- node scripts/conference-process.js');
+    const dailyRoot = root();
+    const historyRoot = root();
+    role.writeWorkspaceRole('daily', { root: dailyRoot });
+    role.writeWorkspaceRole('history', { root: historyRoot });
+    const previousMode = process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
+    const previousRole = process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE;
+    try {
+        delete process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
+        delete process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE;
+        assert.equal(envLoader.requiredWorkspaceRoleForCommand('conference-process.js'), 'history');
+        assert.doesNotThrow(() => envLoader.requireExternalRuntime('conference-process.js', {
+            workspaceRoot: historyRoot, enforceWorkspaceRole: true
+        }));
+        assert.throws(() => envLoader.requireExternalRuntime('conference-process.js', {
+            workspaceRoot: dailyRoot, enforceWorkspaceRole: true
+        }), /只允许 role=history/);
+
+        process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE = '1';
+        process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE = 'daily';
+        assert.equal(envLoader.requiredWorkspaceRoleForCommand('conference-process.js'), 'daily');
+        assert.doesNotThrow(() => envLoader.requireExternalRuntime('conference-process.js', {
+            workspaceRoot: dailyRoot, enforceWorkspaceRole: true
+        }));
+        assert.throws(() => envLoader.requireExternalRuntime('conference-process.js', {
+            workspaceRoot: historyRoot, enforceWorkspaceRole: true
+        }), /只允许 role=daily/);
+
+        process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE = 'history';
+        assert.equal(envLoader.requiredWorkspaceRoleForCommand('conference-process.js'), 'history');
+        assert.doesNotThrow(() => envLoader.requireExternalRuntime('conference-process.js', {
+            workspaceRoot: historyRoot, enforceWorkspaceRole: true
+        }));
+    } finally {
+        if (previousMode === undefined) delete process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
+        else process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE = previousMode;
+        if (previousRole === undefined) delete process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE;
+        else process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE = previousRole;
     }
 });
 

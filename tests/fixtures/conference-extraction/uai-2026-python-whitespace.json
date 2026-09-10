@@ -1,0 +1,8 @@
+{
+  "conference": "uai-2026",
+  "paperId": "conference:uai:2026:conference-paper-id:amaefuna26a",
+  "observedCodePoint": "U+001E",
+  "observedOccurrences": 1,
+  "sample": "left\u001eright",
+  "expectedPythonNonWhitespaceCharacters": 9
+}

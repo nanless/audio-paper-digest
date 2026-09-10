@@ -12,6 +12,7 @@ const CONTRACT = 'conference-source-ledger-v1';
 const MAX_JSON_BYTES = 64 * 1024 * 1024;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const IDENTITY_TYPES = new Set(['icassp-arnumber', 'openreview-forum-id', 'conference-paper-id']);
+const CONFERENCE_PAPER_ID_RE = /^[A-Za-z0-9._-]{1,200}$/;
 const EVIDENCE_KINDS = new Set(['metadata', 'pdf', 'text', 'artifacts']);
 const STATUS_STATES = new Set(['verified', 'needs-review', 'blocked']);
 const AVAILABILITY_STATES = new Set(['present', 'absent']);
@@ -83,9 +84,11 @@ function validateIdentity(identity) {
     plainObject(identity, ['type', 'value'], 'member.identity');
     if (!IDENTITY_TYPES.has(identity.type)) throw new Error('member.identity.type is unsupported');
     nonemptyString(identity.value, 'member.identity.value');
-    const valid = (identity.type === 'icassp-arnumber' || identity.type === 'conference-paper-id')
+    const valid = identity.type === 'icassp-arnumber'
         ? /^[1-9]\d*$/.test(identity.value)
-        : /^[A-Za-z0-9_-]{6,128}$/.test(identity.value);
+        : identity.type === 'conference-paper-id'
+            ? CONFERENCE_PAPER_ID_RE.test(identity.value)
+            : /^[A-Za-z0-9_-]{6,128}$/.test(identity.value);
     if (!valid) throw new Error(`member.identity.value is invalid for ${identity.type}`);
     return { type: identity.type, value: identity.value };
 }

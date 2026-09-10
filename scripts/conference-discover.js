@@ -10,13 +10,13 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const discovery = require('./lib/conference-discovery.js');
 
-const USAGE = 'Use --dry-run|--apply --adapter icassp|iclr|icml --year YYYY --metadata ABS.json --pdf-root ABS [--candidate-output NAME.json --report-output NAME.json]';
+const USAGE = 'Use --dry-run|--apply --adapter icassp|iclr|icml|official-proceedings --year YYYY [--conference-id SLUG-YYYY] --metadata ABS.json --pdf-root ABS [--candidate-output NAME.json --report-output NAME.json]';
 
 function parseArgs(args) {
     const options = {};
     for (let index = 0; index < args.length; index += 2) {
         const flag = args[index]; const value = args[index + 1];
-        if (!['--adapter', '--year', '--metadata', '--pdf-root', '--candidate-output', '--report-output'].includes(flag) || value === undefined) {
+        if (!['--adapter', '--year', '--conference-id', '--metadata', '--pdf-root', '--candidate-output', '--report-output'].includes(flag) || value === undefined) {
             throw new Error(USAGE);
         }
         if (Object.hasOwn(options, flag)) throw new Error(`Duplicate argument: ${flag}`);
@@ -61,6 +61,15 @@ function parseCommand(argv) {
         if (!options[field]) throw new Error(`Missing required argument: ${field}`);
     }
     if (!/^\d{4}$/.test(options['--year'])) throw new Error('--year must be four digits');
+    if (options['--adapter'] === 'official-proceedings' && !options['--conference-id']) {
+        throw new Error('official-proceedings requires --conference-id');
+    }
+    if (options['--conference-id'] && !/^[a-z0-9]+(?:-[a-z0-9]+)*-\d{4}$/.test(options['--conference-id'])) {
+        throw new Error('--conference-id must be a normalized conference slug ending in its year');
+    }
+    if (options['--conference-id'] && !options['--conference-id'].endsWith(`-${options['--year']}`)) {
+        throw new Error('--conference-id must end with the exact --year');
+    }
     const outputs = [options['--candidate-output'], options['--report-output']];
     if (mode === '--dry-run' && outputs.some(Boolean)) throw new Error('--dry-run must not specify output files');
     if (mode === '--apply' && outputs.some(value => !value)) throw new Error('--apply requires --candidate-output and --report-output');
@@ -68,6 +77,7 @@ function parseCommand(argv) {
         throw new Error('--apply output values must be safe direct JSON filenames');
     }
     return { apply: mode === '--apply', adapter: options['--adapter'], year: Number(options['--year']),
+        ...(options['--conference-id'] ? { conferenceId: options['--conference-id'] } : {}),
         metadataFile: options['--metadata'], pdfRoot: options['--pdf-root'], candidateOutput: options['--candidate-output'],
         reportOutput: options['--report-output'] };
 }

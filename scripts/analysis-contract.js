@@ -188,8 +188,9 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // "Particle" and "performance", turning section numbers and citations into
 // apparent experimental measurements.
 const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:WER|CER|PER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SI-SDR|SDR|SNR|EER|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|ASR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP[_ -](?:MS|LAION)|DeSync|IB|accuracy|error rate|success rate|win rate|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)/i;
-const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)/i;
+const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|on par|comparable|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)/i;
 const CORE_SUMMARY_DIRECTION_CONNECTOR_PATTERN = /(?:高于|低于|超过|优于|领先)/g;
+const CORE_SUMMARY_BARE_TRANSITION_PATTERN = /(?:升至|降至)/;
 const CORE_SUMMARY_NON_RESULT_PATTERN = /(?:模型|版本|参数量|样本量|训练步数|轮次|批量|batch|学习率|年份|第\s*\d+|图\s*\d+|表\s*\d+|式\s*\d+|章节|引用)/i;
 const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
     imageDiscovery: Object.freeze(['complete', 'no_candidates', MANUAL_COMPLETE_STATUS]),
@@ -637,7 +638,14 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
     }
     const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效|负(?:面)?结果|性能回落|回落至|降幅|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(sourceText);
-    const resultHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|性能回落|回落至|降幅|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(results)
+    const explicitHigherIsBetterMetric = '(?:性能|质量|得分|分数|准确率|自然度|一致性|合规率|动态幅度|多样性|表达力|成功率|召回率|精确率|F1)';
+    const contextualNegative = new RegExp(
+        `(?:代价|牺牲)[^。；\\n]{0,80}${explicitHigherIsBetterMetric}[^。；\\n]{0,40}(?:下降|降低|降至|减少|受限|受损)`
+    ).test(results) || new RegExp(
+        `(?:移除|去掉)[^。；\\n]{1,80}${explicitHigherIsBetterMetric}[^。；\\n]{0,40}(?:下降|降低|降至|受损)`
+    ).test(results);
+    const resultHasNegative = contextualNegative
+        || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|性能回落|回落至|降幅|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
     if (empirical && sourceHasNegative && !resultHasNegative) {
         return '全文包含退化、不显著或失败结果，但实验结果没有保留负面证据';
@@ -955,6 +963,14 @@ function stripCoreSummaryNonResultNumerals(text) {
         .replace(/\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM)\s*[-_ ]?\d+(?:\.\d+)*(?:\s*[BbMmKk])?\b/gi, ' ');
 }
 
+function hasCoreSummaryComparisonDirection(sentence, numbers) {
+    if (CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return true;
+    // “基线为 12.4%，本文方法降至 9.8%”省略“从/由”仍是闭合比较；
+    // “相对基线 12.4% 升至 9.8%”仍没有独立命名终点，不能仅凭两个数字通过。
+    return numbers.length >= 2 && CORE_SUMMARY_BARE_TRANSITION_PATTERN.test(sentence)
+        && /(?:基线|对照)[^，；。]{0,80}[，；][^。]{0,80}(?:本文方法|本方法|所提方法|完整模型)[^。]{0,40}(?:升至|降至)/.test(sentence);
+}
+
 function hasCoreSummaryQuantitativeEvidence(text) {
     return String(text || '').split(/[。！？!?\n]/).some(rawSentence => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
@@ -962,7 +978,7 @@ function hasCoreSummaryQuantitativeEvidence(text) {
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         if (!numbers.length) return false;
         if (CORE_SUMMARY_METRIC_PATTERN.test(sentence)) return true;
-        if (!CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return false;
+        if (!hasCoreSummaryComparisonDirection(sentence, numbers)) return false;
         const measuredUnit = numbers.some(value => /(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分)$/i.test(value.trim()));
         const resultNoun = /(?:结果|数值|增益|差值|百分点|相对|绝对)/.test(sentence);
         return !(CORE_SUMMARY_NON_RESULT_PATTERN.test(sentence) && !measuredUnit && !resultNoun)
@@ -1001,8 +1017,9 @@ function coreSummaryQuantitativeResultState(text) {
     const candidates = String(text || '').split(/[。！？!?\n]/).map(rawSentence => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
         const hasMetric = Boolean(sentence && CORE_SUMMARY_METRIC_PATTERN.test(sentence));
-        const hasDirection = Boolean(sentence && CORE_SUMMARY_COMPARISON_PATTERN.test(sentence));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
+        const hasDirection = Boolean(sentence
+            && hasCoreSummaryComparisonDirection(sentence, numbers));
         const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
@@ -1098,10 +1115,18 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         // PDF soft wraps have already been joined above. Split English dots
         // only before a normal capitalized next sentence, preserving decimal
         // points and references such as "Fig. 3" inside the evidence sentence.
-        ? quantitativeSourceSentences.some(sentence => (
-            /(?:experiment|evaluation|result|benchmark|test set|dataset|实验|评测|结果|基准|测试集|数据集)/i.test(sentence)
-            && hasCoreSummaryQuantitativeEvidence(sentence)
-        )) || hasSourceMeasuredLossComparison(quantitativeSourceSentences)
+        ? quantitativeSourceSentences.some((sentence, index) => {
+            if (!hasCoreSummaryQuantitativeEvidence(sentence)) return false;
+            // arXiv text extraction commonly leaves a short “Results.” heading
+            // on the line immediately before the metric sentence.  Bind the
+            // evidence marker to a small local window instead of requiring it
+            // to survive on the exact same flattened line.
+            const localContext = quantitativeSourceSentences
+                .slice(Math.max(0, index - 1), Math.min(quantitativeSourceSentences.length, index + 2))
+                .join(' ');
+            return /(?:experiment|evaluation|result|benchmark|test set|dataset|实验|评测|结果|基准|测试集|数据集)/i
+                .test(localContext);
+        }) || hasSourceMeasuredLossComparison(quantitativeSourceSentences)
         : null;
     const quantitativeResultState = coreSummaryQuantitativeResultState(summary);
     const completeQuantitativeResult = quantitativeResultState.complete;

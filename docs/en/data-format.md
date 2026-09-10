@@ -101,7 +101,7 @@ never guessed to be v1.
 
 ## Review Receipt and Publication
 
-The receipt binds generation SHA, actual page SHAs, per-page review protocol, Git baseline, Hugo gate, a runtime fingerprint of Hugo configuration/layouts/data/frontend code, and production proof. A theme or site-script change after review therefore fails closed and requires review to run again. Successful push adds publication commit, matching remote-verified OID, remote identity, and Beijing verification time.
+The receipt binds generation SHA, actual page SHAs, the current review protocol, Git baseline, Hugo gate, a runtime fingerprint of Hugo configuration/layouts/data/frontend code, and production proof. Per-page pass evidence is stored separately and permanently keyed only by relative path plus exact page-content SHA. Publisher-code changes still make generation rerender so real output changes are visible. A generation-manifest metadata, model, publisher-code, protocol, theme, or site-script change therefore requires current batch gates and a new receipt, but must reuse every pass whose final page bytes remain unchanged; only changed page bytes trigger re-review. Successful push adds publication commit, matching remote-verified OID, remote identity, and Beijing verification time.
 
 Remote branch, remote name, or push-URL identity drift invalidates reuse.
 

@@ -10,6 +10,7 @@ const {
     resolveBatchRefreshIds,
     resolvePersistedCanonicalBatchDate,
     hasCurrentReaderV3,
+    canRepairScoringBinding,
     MAX_REFRESH_CONCURRENCY
 } = require('../scripts/refresh-api-reader.js');
 
@@ -150,5 +151,33 @@ describe('refresh-api-reader batch CLI', () => {
             timestamp: '2026-09-02T00:01:00+08:00'
         }), '2026-09-01');
         assert.strictEqual(resolvePersistedCanonicalBatchDate({}), '');
+    });
+
+    it('repairs scoring from a signed v3 revision seed after a transient Reader failure', () => {
+        const article = '仍可复用的完整 Reader 正文';
+        const plan = { version: 3, sections: [] };
+        const crypto = require('node:crypto');
+        const stableFingerprint = require('../scripts/deep-analyzer.js').stableFingerprint;
+        const paper = {
+            analysis: '## 核心摘要\n完整 canonical 分析',
+            apiReaderArticle: article,
+            apiReaderArticleSha256: crypto.createHash('sha256').update(article).digest('hex'),
+            apiReaderPlan: plan,
+            apiReaderPlanSha256: stableFingerprint(plan),
+            latestAnalysisAttemptError: 'temporary TLS failure',
+            analysisManifest: {
+                version: 1,
+                contracts: { apiReaderArticle: 'beginner-researcher-v3' },
+                stages: {
+                    scoringAudit: {
+                        status: 'complete', scoringContract: 'api-scoring-audit-v2'
+                    },
+                    apiReaderArticle: { status: 'invalid_output' }
+                }
+            }
+        };
+        assert.strictEqual(canRepairScoringBinding(paper), true);
+        paper.apiReaderArticleSha256 = '0'.repeat(64);
+        assert.strictEqual(canRepairScoringBinding(paper), false);
     });
 });

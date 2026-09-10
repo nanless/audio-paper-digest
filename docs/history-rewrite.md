@@ -454,11 +454,11 @@ frozen paper page 没有 direct source route 时也必须出现在 plan 的 `unc
 crosswalk；后续 `history:arxiv-batch` 必须显式传入其文件名才可重放，且不会扩大到任何其他 pending 页。该失败不会
 中断本地 conference source 队列。
 `history:analyze-batch` 与 `history:postprocess` 仍可按已验证 fallback identity group 维护旧 run，不能取代
-direct 投影。direct 路径已具有 conference page projection；尚未实现的是全历史专属 review、activation、
-commit/push receipt 与 remote-OID publication。任何 catalog 未投影条目会单独出现在 immutable unprojected
+direct 投影。direct 路径已具有 conference page projection 与全历史专属 review、activation、
+commit/push receipt 和 remote-OID publication；conference aggregate 未接入时仍失败关闭。任何 catalog 未投影条目会单独出现在 immutable unprojected
 report，不能被伪装为已重写。运行快照仅供定位旧 runtime，见[全历史重写交接](historical-rewrite-handoff-2026-09-07.md)。
 
-历史 publication transaction 的第一阶段只生成 plan 与私有 bundle，不写博客，也不执行 review、
+历史 publication transaction 的 plan/generate 阶段只生成 plan 与私有 bundle，不写博客，也不执行 review、
 commit 或 push：
 
 ```bash
@@ -477,5 +477,4 @@ plan/generate 都会重放 selectedBindings、crosswalk/inventory、sealed analy
 `oldGeneratedTextIncluded:false` 的准确含义是：旧正文不进入创作输入或任何新产物；事务只短暂读取旧
 Git/worktree 字节计算 baseline SHA。conference aggregate 尚未接入，非空 conference refs 会失败关闭。
 
-后续仍需实现历史专属 review/activation/push receipt，保证所有旧 URL 继续可达，并把新增的 ICML
-任务页或兼容 redirect 作为受授权 addition。plan/bundle complete 仍不等于允许改写或发布历史博客。
+只有后续历史 review、锁内 activation/commit/push 和远端 OID 验证才能发布。逐页通过证据永久以“相对路径+页面内容 SHA”寻址；模型、代码、Hugo、协议或 manifest 元数据变化只重跑批次 gate 并重签 receipt，内容 SHA 变化才重审该页。plan/bundle complete 仍不等于允许改写或发布历史博客。

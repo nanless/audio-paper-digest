@@ -71,13 +71,13 @@ test('conference-source-ledger-v1 accepts all supported non-title identities and
     const root = fixture(t);
     const source = ledger.createLedger({ id: 'icassp-2026', year: 2026 }, [
         member(root, 'openreview-forum-id', 'AbCdef_12'),
-        member(root, 'conference-paper-id', '27'),
+        member(root, 'conference-paper-id', 'AAAI.2026-27_camera'),
         member(root, 'icassp-arnumber', '10910001')
     ]);
     assert.equal(ledger.validateLedger(source), source);
     assert.equal(ledger.verifyMemberFiles(source, root), true);
     assert.deepEqual(source.members.map(item => ledger.identityKey(item.identity)), [
-        'conference-paper-id:27', 'icassp-arnumber:10910001', 'openreview-forum-id:AbCdef_12'
+        'conference-paper-id:AAAI.2026-27_camera', 'icassp-arnumber:10910001', 'openreview-forum-id:AbCdef_12'
     ]);
     assert.equal(ledger.memberSetSha256([...source.members].reverse()), source.memberSetSha256);
     assert.throws(() => ledger.validateIdentity({ type: 'icassp-arnumber', value: 'A paper title is never an ID' }), /invalid/);
@@ -117,7 +117,8 @@ test('schema fails closed on unbound evidence, malformed statuses, and invalid i
     badStatus.members[0].status.updatedAt = '2026-09-06';
     assert.throws(() => ledger.validateLedger(badStatus), /canonical UTC/);
     for (const [type, value] of [
-        ['icassp-arnumber', '001'], ['conference-paper-id', '0'], ['openreview-forum-id', 'short'],
+        ['icassp-arnumber', '001'], ['conference-paper-id', 'has space'], ['conference-paper-id', 'path/part'],
+        ['conference-paper-id', 'x'.repeat(201)], ['openreview-forum-id', 'short'],
         ['openreview-forum-id', 'a space 9'], ['unknown', '123']
     ]) assert.throws(() => ledger.validateIdentity({ type, value }));
 });

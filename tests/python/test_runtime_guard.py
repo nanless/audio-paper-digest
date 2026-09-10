@@ -11,7 +11,8 @@ SCRIPTS = ROOT / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
 from runtime_guard import (ExternalRuntimeRequired, require_external_runtime,
-                           require_workspace_role)  # noqa: E402
+                           require_workspace_role,
+                           required_workspace_role_for_command)  # noqa: E402
 
 
 class ExternalRuntimeGuardTest(unittest.TestCase):
@@ -49,6 +50,22 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
     def test_allows_external_runtime(self):
         with mock.patch.dict(os.environ, {'CODEX_SANDBOX_NETWORK_DISABLED': '1'}, clear=True):
             require_external_runtime('runtime_guard.py')
+
+    def test_new_conference_python_extract_requires_explicit_daily_wrapper_mode(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(required_workspace_role_for_command('conference-extract.py'), 'history')
+        with mock.patch.dict(os.environ, {
+                'AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE': '1',
+                'AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE': 'daily',
+        }, clear=True):
+            self.assertEqual(required_workspace_role_for_command('conference-extract.py'), 'daily')
+
+    def test_filter_evidence_worker_is_always_daily_role_bound(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                required_workspace_role_for_command('conference-filter-evidence-extract.py'),
+                'daily',
+            )
 
     def test_python_direct_role_gate_replays_private_realpath_marker(self):
         import json

@@ -83,7 +83,7 @@ Check production proof, batch date, eight scores, Reader v3, authors, safe image
 
 ## Review Failure
 
-Content findings return to generation or analysis. Transient API failures retry only affected pages. Page SHA, generation, protocol, or baseline drift invalidates the receipt.
+Content findings return to generation or analysis. Transient API failures retry only affected pages. Per-page passes are permanently keyed by relative path plus exact page-content SHA, so only changed bytes re-review that file. Generation-manifest metadata, model, publisher-code, protocol, or Hugo-runtime changes rerun batch gates and reissue the receipt without re-reviewing unchanged files. Baseline or remote drift still blocks push.
 
 For Hugo memory problems, first eliminate stale parallel Hugo processes and verify repository/theme selection. Never skip Hugo to issue a receipt.
 

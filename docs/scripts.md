@@ -90,7 +90,7 @@ npm run history:inventory -- --apply \
 → direct-run → direct-aggregate`。arXiv route 来自冻结页已有的单一 arXiv hint，并在每次 generation 新拉、
 封存官方 TXT/PDF/runtime/manifest；会议只重放绑定的本地 metadata/PDF SHA。crosswalk 仅处理 named fresh arXiv
 acquisition handoff；本地会议输入缺失/损坏使 direct item 失败关闭。历史专属 review、activation、commit/push receipt
-与 remote OID 仍未实现。
+与 remote OID 发布已由 `history:publication` 实现；逐页 pass 仅按路径+内容 SHA 复用，当前批次仍重跑确定性/Hugo gate 并重签 receipt。conference aggregate 未接入时仍失败关闭。
 
 ```bash
 # 所有文件参数均为绝对路径；先用 --dry-run，确认后才改为 --apply

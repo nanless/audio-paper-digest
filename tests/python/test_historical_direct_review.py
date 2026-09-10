@@ -61,8 +61,10 @@ class HistoricalDirectReviewTests(unittest.TestCase):
 
             second = MODULE.checkpoint(temporary, 'page.md', 'text', 0, 'b' * 64,
                                        protocol, pass_next)
+            changed_protocol = {'protocolSha256': 'c' * 64}
             third = MODULE.checkpoint(temporary, 'page.md', 'text', 0, 'b' * 64,
-                                      protocol, lambda: self.fail('passing checkpoint was not reused'))
+                                      changed_protocol,
+                                      lambda: self.fail('passing content checkpoint was not reused'))
             self.assertTrue(second['passed'])
             self.assertTrue(third['passed'])
             self.assertEqual(calls, ['failed', 'passed'])
@@ -122,6 +124,54 @@ class HistoricalDirectReviewTests(unittest.TestCase):
                 repeated = MODULE.run(request_path, output, checkpoints, 2)
             self.assertTrue(repeated['passed'])
             self.assertEqual(replay.calls, 0)
+
+            changed_body = dict(semantic_body)
+            changed_body['model'] = 'changed-model'
+            changed_protocol = {
+                **changed_body, 'protocolSha256': MODULE.stable(changed_body),
+            }
+            request['generationSha256'] = 'e' * 64
+            request['reviewProtocolFingerprint'] = 'f' * 64
+            request['semanticProtocol'] = changed_protocol
+            request_path.write_text(json.dumps(request), encoding='utf-8')
+            rebound = FakePublisher(fail=True)
+            with mock.patch.object(MODULE, 'load_publish_to_blog', return_value=rebound):
+                changed = MODULE.run(request_path, output, checkpoints, 2)
+            self.assertTrue(changed['passed'])
+            self.assertEqual(rebound.calls, 0)
+            self.assertEqual(changed['generationSha256'], 'e' * 64)
+            self.assertEqual(changed['reviewProtocolFingerprint'], 'f' * 64)
+            self.assertEqual(changed['semanticProtocol']['model'], 'changed-model')
+            self.assertEqual(json.loads(output.read_text()), changed)
+
+            changed_content = content.replace('正文足够长', '新内容已修改')
+            (bundle / relative).write_text(changed_content, encoding='utf-8')
+            changed_record = {
+                'path': relative.as_posix(),
+                'sha256': MODULE.hashlib.sha256(changed_content.encode()).hexdigest(),
+            }
+            request['files'] = [changed_record]
+            request['fileSetSha256'] = MODULE.stable([changed_record])
+            request['generationSha256'] = '1' * 64
+            request_path.write_text(json.dumps(request), encoding='utf-8')
+            changed_page = FakePublisher()
+            with mock.patch.object(MODULE, 'load_publish_to_blog', return_value=changed_page):
+                rereviewed = MODULE.run(request_path, output, checkpoints, 2)
+            self.assertTrue(rereviewed['passed'])
+            self.assertGreater(changed_page.calls, 0)
+            self.assertEqual(rereviewed['results'][0]['sha256'], changed_record['sha256'])
+
+            (bundle / relative).write_text(content, encoding='utf-8')
+            request['files'] = [record]
+            request['fileSetSha256'] = MODULE.stable([record])
+            request['generationSha256'] = '2' * 64
+            request_path.write_text(json.dumps(request), encoding='utf-8')
+            reverted = FakePublisher(fail=True)
+            with mock.patch.object(MODULE, 'load_publish_to_blog', return_value=reverted):
+                reused_original = MODULE.run(request_path, output, checkpoints, 2)
+            self.assertTrue(reused_original['passed'])
+            self.assertEqual(reverted.calls, 0)
+            self.assertEqual(reused_original['results'][0]['sha256'], record['sha256'])
 
 
 if __name__ == '__main__':

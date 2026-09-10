@@ -484,18 +484,26 @@ body
             module.save_review_receipt.assert_not_called()
 
             module.run_hugo_gate.side_effect = None
-            module.review_protocol_fingerprint = mock.Mock(side_effect=['a' * 64, 'b' * 64])
-            with self.assertRaisesRegex(ValueError, 'review 期间审查协议或 Hugo 运行时变化'):
-                review_blog._run_review(module, '2026-07-10')
-            module.review_all_posts.assert_called_once()
-            module.save_review_receipt.assert_not_called()
-            module.review_protocol_fingerprint.side_effect = ['a' * 64, 'b' * 64]
-            module.review_all_posts.side_effect = lambda *args, **kwargs: kwargs['result_callback'](
-                paper, {'passed': True},
+            module.review_all_posts.reset_mock()
+            module.save_review_receipt.reset_mock()
+            module.save_review_page_checkpoint.reset_mock()
+            module.review_protocol_fingerprint = mock.Mock(
+                side_effect=['a' * 64, 'b' * 64],
             )
-            with self.assertRaisesRegex(ValueError, '拒绝登记逐页通过凭证'):
-                review_blog._run_review(module, '2026-07-10')
-            module.save_review_page_checkpoint.assert_not_called()
+
+            def complete_across_protocol_change(*args, **kwargs):
+                callback = kwargs['result_callback']
+                callback(index, {'passed': True})
+                callback(paper, {'passed': True})
+                return 0, 0, {
+                    str(index.resolve()): {'passed': True},
+                    str(paper.resolve()): {'passed': True},
+                }
+
+            module.review_all_posts.side_effect = complete_across_protocol_change
+            review_blog._run_review(module, '2026-07-10')
+            self.assertEqual(module.save_review_page_checkpoint.call_count, 2)
+            module.save_review_receipt.assert_called_once()
 
     def test_review_entry_rejects_missing_manifest_before_review_or_push(self):
         with tempfile.TemporaryDirectory() as tmp:

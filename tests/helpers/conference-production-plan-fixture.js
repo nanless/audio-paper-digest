@@ -12,6 +12,7 @@ const plan = require('../../scripts/lib/conference-plan.js');
 const importCli = require('../../scripts/conference-import.js');
 const extractionFixture = require('./conference-extraction-fixture.js');
 const paperIdentity = require('../../scripts/lib/paper-identity.js');
+const evidenceFixture = require('./conference-filter-evidence-fixture.js');
 
 const NOW = '2026-09-06T12:00:00.000Z';
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -32,12 +33,11 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120 } = {}) {
     fs.writeFileSync(catalogFile, discovery.canonicalBytes(discovered.manifest), { mode: 0o600 });
     fs.writeFileSync(reportFile, discovery.canonicalBytes(discovered.report), { mode: 0o600 });
     const discoveryHandle = discovery.loadDiscoveryHandle(catalogFile, reportFile);
+    const { evidenceHandle } = evidenceFixture.createEvidenceHandle({ root, discoveryHandle, now: NOW });
     const filterId = '11111111-1111-4111-8111-111111111111';
-    let filterState = filter.prepareFilter({ filterRoot: roots.filters, discoveryHandle, filterId, now: NOW,
-        spec: { contract: filter.SPEC_CONTRACT, version: filter.VERSION, filterPolicySha256: sha256('policy'),
-            promptSha256: sha256('prompt'), model: 'fixture', endpointProtocol: 'openai-responses',
-            endpointIdentitySha256: sha256('endpoint identity'),
-            taxonomyRegistrySha256: sha256('taxonomy') } });
+    let filterState = filter.prepareFilter({ filterRoot: roots.filters, discoveryHandle, evidenceHandle,
+        filterId, now: NOW,
+        spec: evidenceFixture.createFilterSpec({ discoveryHandle, evidenceHandle }) });
     const paperId = paperIdentity.canonicalConferencePaperId(
         { id: 'icassp-2026', year: 2026 }, { type: 'icassp-arnumber', value });
     const decision = filter.buildDecisionArtifact({ state: filterState, paperId,

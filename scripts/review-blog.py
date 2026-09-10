@@ -282,10 +282,6 @@ def _run_review(module, date_str):
             print(f'🔍 开始严格全量 review: {len(paper_slugs)} 篇论文')
         combined_results = dict(plan['priorResults'])
         manifest_sha256 = module._sha256_file(manifest_path)
-        initial_protocol = (
-            module.review_protocol_fingerprint()
-            if hasattr(module, 'review_protocol_fingerprint') else None
-        )
         # Persist pending work before the first LLM call. A crash or API outage
         # can then resume only unfinished/transient files on the next run.
         module.save_review_failure_state(
@@ -310,10 +306,10 @@ def _run_review(module, date_str):
 
         def checkpoint(path, result):
             resolved = Path(path).resolve()
-            if initial_protocol is not None:
-                if module.review_protocol_fingerprint() != initial_protocol:
-                    raise module.PublishDataValidationError('review 期间审查协议变化，拒绝登记逐页通过凭证')
-                result['reviewProtocolFingerprint'] = initial_protocol
+            if hasattr(module, 'review_protocol_fingerprint'):
+                # Protocol is audit metadata.  The pass itself belongs to the
+                # exact page bytes and remains reusable across protocol drift.
+                result['reviewProtocolFingerprint'] = module.review_protocol_fingerprint()
             module.save_review_page_checkpoint(
                 date_str, resolved, result, manifest_path, base_head,
                 manifest_sha256=manifest_sha256,
@@ -358,8 +354,6 @@ def _run_review(module, date_str):
                 Path(content_dir), date_str, date_only=True, publish_paths=paths,
                 authoritative_papers=authoritative_by_filename,
             )
-            if initial_protocol is not None and module.review_protocol_fingerprint() != initial_protocol:
-                raise module.PublishDataValidationError('review 期间审查协议或 Hugo 运行时变化，请重新审查')
             module.validate_reviewed_file_hashes(
                 date_str, paths, manifest_path, combined_results,
             )

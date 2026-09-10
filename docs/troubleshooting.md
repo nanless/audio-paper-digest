@@ -120,7 +120,7 @@ conference projection。不要用旧博客正文、旧分析、文件名相似�
 
 ## 9. blog:review 失败
 
-review 是只读门禁。内容问题回到生成/分析修复；瞬时 API 失败只重试失败页。页面 SHA、generation、协议或 Git baseline 变化会使 receipt 失效。
+review 是只读门禁。内容问题回到生成/分析修复；瞬时 API 失败只重试失败页。逐页通过证据只按“相对路径 + 页面内容 SHA”复用：页面 SHA 变化才重审该文件。generation manifest 元数据、模型、发布器代码、协议或 Hugo 运行时变化时重跑批次 gate 并重签 receipt，不得重审内容 SHA 未变的文件。Git baseline 或 remote 身份漂移仍会阻断 push。
 
 Hugo 内存异常时先确认没有并行遗留 Hugo 进程、目标仓库和主题是否正确，再单独运行受控 Hugo gate；不要通过跳过 Hugo 签发 receipt。
 

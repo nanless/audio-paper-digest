@@ -17,6 +17,31 @@ test('Reader evidence is invariant to canonical prose and retains original-sourc
     assert.doesNotMatch(first, /OLD_CANONICAL_CLAIM|DIFFERENT_GENERATED_CLAIM/);
 });
 
+test('daily structured Reader evidence keeps tables and formulas without conference weak policy', () => {
+    const { buildApiReaderEvidenceContext } = require('../scripts/deep-analyzer.js');
+    const conference = require('../scripts/lib/conference-analysis-context.js');
+    const source = 'DAILY_STRUCTURED_SOURCE. Table 1 reports accuracy 91.2 and the method defines L equals CE.';
+    const artifacts = {
+        tables: [{ ordinal: 1, caption: 'Daily result', matrix: [
+            ['Method', 'Accuracy'], ['System', '91.2']
+        ], headerRows: [0], bodyRows: [1], recoveryStatus: 'complete',
+        sourceDomSha256: 'a'.repeat(64) }],
+        formulas: [{ ordinal: 1, latex: String.raw`\mathcal{L}=\mathrm{CE}`,
+            recoveryStatus: 'complete', sourceDomSha256: 'b'.repeat(64) }],
+        figures: []
+    };
+    assert.equal(conference.conferenceWeakReaderCapabilityPolicy(
+        { arxivId: '2609.88880' }, artifacts
+    ), null);
+    const evidence = buildApiReaderEvidenceContext('', source, artifacts, '2609.88880');
+    assert.match(evidence, /\[READER_ARTIFACTS\]/);
+    assert.match(evidence, /TABLE_ORDINALS_AVAILABLE: \[1\]/);
+    assert.match(evidence, /TABLE_1: Daily result/);
+    assert.match(evidence, /FORMULA_ORDINALS_AVAILABLE: \[1\]/);
+    assert.match(evidence, /FORMULA_1: \\mathcal\{L\}=\\mathrm\{CE\}/);
+    assert.doesNotMatch(evidence, /\[READER_CAPABILITY_POLICY\]/);
+});
+
 test('first actual Reader request excludes canonical and existing Reader while preserving source evidence', async t => {
     const { generateApiReaderArticleDetailed, buildApiReaderEvidenceContext } = require('../scripts/deep-analyzer.js');
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-source-only-test-'));

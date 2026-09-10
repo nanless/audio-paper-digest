@@ -9,15 +9,27 @@ const Config = require('./config.js');
 const filterApi = require('./lib/conference-filter.js');
 const ledgerApi = require('./lib/conference-source-ledger.js');
 const discoveryApi = require('./lib/conference-discovery.js');
+const evidenceApi = require('./lib/conference-filter-evidence.js');
 
 function parseArgs(argv) {
     const [command, ...rest] = argv;
+    if (command === 'spec') {
+        const valid = rest.length === 8 && rest[0] === '--catalog' && rest[2] === '--report'
+            && rest[4] === '--evidence-run' && rest[6] === '--output'
+            && [rest[1], rest[3], rest[7]].every(value => filterApi.SAFE_JSON_NAME.test(String(value || '')))
+            && evidenceApi.UUID_RE.test(String(rest[5] || ''));
+        if (!valid) throw new Error('Use spec --catalog NAME.json --report NAME.json --evidence-run UUID --output NAME.json');
+        return { command, catalogName: rest[1], reportName: rest[3], evidenceRunId: rest[5], specName: rest[7] };
+    }
     if (command === 'prepare') {
-        const valid = (rest.length === 6 || rest.length === 8) && rest[0] === '--catalog' && rest[2] === '--report'
-            && rest[4] === '--spec' && [rest[1], rest[3], rest[5]].every(value => filterApi.SAFE_JSON_NAME.test(String(value || '')))
-            && (rest.length === 6 || (rest[6] === '--filter' && filterApi.UUID_RE.test(String(rest[7] || ''))));
-        if (!valid) throw new Error('Use prepare --catalog NAME.json --report NAME.json --spec NAME.json [--filter UUID]');
-        return { command, catalogName: rest[1], reportName: rest[3], specName: rest[5], filterId: rest[7] };
+        const valid = (rest.length === 8 || rest.length === 10) && rest[0] === '--catalog' && rest[2] === '--report'
+            && rest[4] === '--evidence-run' && rest[6] === '--spec'
+            && [rest[1], rest[3], rest[7]].every(value => filterApi.SAFE_JSON_NAME.test(String(value || '')))
+            && evidenceApi.UUID_RE.test(String(rest[5] || ''))
+            && (rest.length === 8 || (rest[8] === '--filter' && filterApi.UUID_RE.test(String(rest[9] || ''))));
+        if (!valid) throw new Error('Use prepare --catalog NAME.json --report NAME.json --evidence-run UUID --spec NAME.json [--filter UUID]');
+        return { command, catalogName: rest[1], reportName: rest[3], evidenceRunId: rest[5],
+            specName: rest[7], filterId: rest[9] };
     }
     if (command === 'status' && rest.length === 2 && rest[0] === '--filter' && filterApi.UUID_RE.test(String(rest[1] || ''))) {
         return { command, filterId: rest[1] };
@@ -27,11 +39,12 @@ function parseArgs(argv) {
         && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(String(rest[5] || ''))) {
         return { command, filterId: rest[1], decisionName: rest[3], owner: rest[5] };
     }
-    throw new Error('Use prepare|status|apply with controlled direct filenames');
+    throw new Error('Use spec|prepare|status|apply with controlled direct filenames');
 }
 
 function requireFiles(files) {
-    for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir', 'conferenceFilterSpecsDir', 'conferenceFiltersDir']) {
+    for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir', 'conferenceFilterEvidenceRunsDir',
+        'conferenceFilterSpecsDir', 'conferenceFiltersDir']) {
         if (typeof files?.[field] !== 'string') throw new Error(`Configured ${field} is required`);
     }
     return files;
@@ -57,14 +70,33 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
     requireExternalRuntime('conference-filter.js');
     const options = parseArgs(argv); const files = requireFiles(dependencies.files || Config.FILES);
     let state;
-    if (options.command === 'prepare') {
+    if (options.command === 'spec') {
+        const taxonomy = ledgerApi.readRegularJson(files.taxonomyRegistry);
+        const discoveryHandle = discoveryApi.loadDiscoveryHandle({
+            catalogDir: files.conferenceDiscoveryCatalogDir, catalogName: options.catalogName,
+            reportDir: files.conferenceDiscoveryReportDir, reportName: options.reportName
+        });
+        const evidenceHandle = evidenceApi.loadEvidenceHandle({ evidenceRunsRoot: files.conferenceFilterEvidenceRunsDir,
+            runId: options.evidenceRunId, discoveryHandle });
+        const spec = filterApi.buildProductionSpec({ endpoint: (dependencies.env || process.env).PAPER_ANALYZER_ENDPOINT,
+            model: (dependencies.env || process.env).PAPER_ANALYZER_MODEL,
+            taxonomyRegistrySha256: taxonomy.sha256, discoveryHandle, evidenceHandle });
+        filterApi.writeFilterSpec({ specRoot: files.conferenceFilterSpecsDir, specName: options.specName, spec });
+        const output = { kind: 'conference-filter-spec', specName: options.specName,
+            conferenceId: spec.discovery.conferenceId, evidenceRunId: spec.evidence.runId,
+            filterPolicySha256: spec.filterPolicySha256, promptSha256: spec.promptSha256,
+            model: spec.model, endpointProtocol: spec.endpointProtocol };
+        console.log(JSON.stringify(output)); return output;
+    } else if (options.command === 'prepare') {
         const discoveryHandle = discoveryApi.loadDiscoveryHandle({
             catalogDir: files.conferenceDiscoveryCatalogDir, catalogName: options.catalogName,
             reportDir: files.conferenceDiscoveryReportDir, reportName: options.reportName
         });
         const loadedSpec = readConfiguredJson(files.conferenceFilterSpecsDir, options.specName);
         const spec = filterApi.normalizeSpec(loadedSpec.value); verifyTaxonomy(files, spec);
-        state = filterApi.prepareFilter({ filterRoot: files.conferenceFiltersDir, discoveryHandle,
+        const evidenceHandle = evidenceApi.loadEvidenceHandle({ evidenceRunsRoot: files.conferenceFilterEvidenceRunsDir,
+            runId: options.evidenceRunId, discoveryHandle });
+        state = filterApi.prepareFilter({ filterRoot: files.conferenceFiltersDir, discoveryHandle, evidenceHandle,
             spec, filterId: options.filterId, now: dependencies.now });
     } else if (options.command === 'status') {
         state = filterApi.readFilter({ filterRoot: files.conferenceFiltersDir, filterId: options.filterId });

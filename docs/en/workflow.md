@@ -96,7 +96,7 @@ artifacts for deterministic, LLM, image, sidecar, and Hugo gates, reviewing the
 digest first and paper pages concurrently. Push commits only the
 receipt-authorized delta and verifies remote `main`.
 
-Review never mutates reviewed bytes. Page, baseline, protocol, generation, or remote drift invalidates the transaction.
+Review never mutates reviewed bytes. A publisher-code change still makes generation rerender so any real byte changes are visible. A per-page pass is permanently addressed only by relative path plus exact page-content SHA; only changed page bytes make that file a review target. Generation-manifest metadata, model, publisher-code, review-protocol, or Hugo-runtime changes rerun the current batch gates and reissue the receipt without re-reviewing files whose final bytes remain unchanged. Baseline or remote drift still blocks push.
 
 Generation records the absolute path, byte count, and SHA-256 of its actual current file, dated archive, or
 `--data-file`. Review and push replay only that generation input reference and cannot switch to a later current file.

@@ -598,18 +598,23 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
     request.fileSetSha256 = stableHash(request.files);
     const requestPath = path.join(loadedPlan.directory, 'semantic-review-request.json');
     if (!fs.existsSync(requestPath)) writeExact(requestPath, prettyBytes(request));
-    else if (!readRegular(requestPath).bytes.equals(prettyBytes(request))) fail('semantic review request differs from immutable request');
+    else if (!readRegular(requestPath).bytes.equals(prettyBytes(request))) {
+        // Request metadata is batch-scoped.  Replacing it must not delete the
+        // content-addressed page checkpoints underneath this transaction.
+        atomicReplace(requestPath, prettyBytes(request));
+    }
     const outputPath = path.join(loadedPlan.directory, 'semantic-review.json');
     const checkpointDir = path.join(loadedPlan.directory, 'semantic-review-checkpoints');
-    if (!fs.existsSync(outputPath)) {
-        const result = spawnSync('bash', [path.resolve(__dirname, '../python-runtime.sh'),
-            path.resolve(__dirname, '../historical-direct-review.py'), '--request', requestPath,
-            '--output', outputPath, '--checkpoint-dir', checkpointDir,
-            '--concurrency', String(historicalReviewConcurrency())], {
-            cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', env: { ...process.env }, maxBuffer: 32 * 1024 * 1024
-        });
-        if (result.error || result.signal || ![0, 1].includes(result.status)) fail(`semantic review worker failed: ${result.error?.message || result.signal || result.status}`);
-    }
+    // Always replay the worker when batch metadata changes. Its page/unit
+    // checkpoints are content-addressed, so unchanged bytes cause zero model
+    // calls while the output envelope is rebound to this request.
+    const result = spawnSync('bash', [path.resolve(__dirname, '../python-runtime.sh'),
+        path.resolve(__dirname, '../historical-direct-review.py'), '--request', requestPath,
+        '--output', outputPath, '--checkpoint-dir', checkpointDir,
+        '--concurrency', String(historicalReviewConcurrency())], {
+        cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', env: { ...process.env }, maxBuffer: 32 * 1024 * 1024
+    });
+    if (result.error || result.signal || ![0, 1].includes(result.status)) fail(`semantic review worker failed: ${result.error?.message || result.signal || result.status}`);
     const loaded = strictJsonFile(outputPath, 'semantic review receipt'); const value = loaded.value;
     const body = clone(value); delete body.semanticReviewSha256;
     if (value.contract !== 'historical-direct-semantic-review-v1' || value.version !== VERSION
@@ -634,9 +639,10 @@ function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', ap
     const protocol = reviewProtocolFingerprint(dependencies); const filename = path.join(loaded.directory, 'review.json');
     if (apply && fs.existsSync(filename)) {
         const existing = loadReview(loaded).receipt;
-        if (existing.generationSha256 !== generation.manifest.generationSha256
-            || existing.reviewProtocolFingerprint !== protocol || existing.baseHead !== state.head) fail('existing review receipt is stale');
-        return { status: 'already-reviewed', receipt: existing, filename };
+        if (existing.generationSha256 === generation.manifest.generationSha256
+            && existing.reviewProtocolFingerprint === protocol && existing.baseHead === state.head) {
+            return { status: 'already-reviewed', receipt: existing, filename };
+        }
     }
     const plannedByPath = new Map(loaded.plan.files.map(record => [record.path, record]));
     const files = generation.manifest.files.map(record => {
@@ -666,26 +672,33 @@ function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', ap
         reviewedAt: dependencies.now?.() || new Date().toISOString() };
     if (!iso(body.reviewedAt)) fail('review time is invalid'); const receipt = seal(body, 'reviewSha256');
     if (!apply) return { status: 'dry-run', receipt };
-    writeExact(filename, prettyBytes(receipt));
+    if (fs.existsSync(filename)) atomicReplace(filename, prettyBytes(receipt));
+    else writeExact(filename, prettyBytes(receipt));
     return { status: 'reviewed', receipt, filename };
 }
 function loadReview(loadedPlan) {
     const loaded = strictJsonFile(path.join(loadedPlan.directory, 'review.json'), 'review receipt'); const value = loaded.value;
     const body = clone(value); delete body.reviewSha256;
     const generation = loadGeneration(loadedPlan);
+    const generationByPath = new Map(generation.manifest.files.map(item => [item.path, item]));
     const expectedPages = generation.manifest.files.filter(item => item.path.endsWith('.md')).map(item => item.path).sort();
     const semantic = value.semanticReview;
     if (value.contract !== REVIEW_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.strictReview !== true || value.reviewSha256 !== stableHash(body)
         || value.reviewMode !== 'historical-semantic-multimodal-v1'
         || value.fileSetSha256 !== stableHash(value.files) || value.baseHead !== loadedPlan.plan.blogBaseline.head
+        || !Array.isArray(value.files)
+        || value.files.length !== generation.manifest.files.length
+        || value.files.some(item => generationByPath.get(item.path)?.sha256 !== item.sha256)
         || !semantic || !SHA_RE.test(semantic.semanticReviewSha256 || '')
         || !SHA_RE.test(semantic.semanticReviewFileSha256 || '')
         || !SHA_RE.test(semantic.semanticProtocol?.protocolSha256 || '')
         || !Array.isArray(semantic.pageResults)
         || semantic.pageResultSetSha256 !== stableHash(semantic.pageResults)
         || semantic.pageResults.map(item => item.path).join('\0') !== expectedPages.join('\0')
-        || semantic.pageResults.some(item => item.passed !== true || !SHA_RE.test(item.resultSha256 || '')
+        || semantic.pageResults.some(item => item.passed !== true
+            || generationByPath.get(item.path)?.sha256 !== item.sha256
+            || !SHA_RE.test(item.resultSha256 || '')
             || item.resultSha256 !== stableHash(Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'resultSha256'))))) {
         fail('review receipt drifted');
     }
@@ -772,15 +785,34 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
     if (reviewReceipt.receipt.reviewProtocolFingerprint !== reviewProtocolFingerprint(dependencies)) {
         fail('historical review protocol changed before activation');
     }
+    const delta = loaded.plan.files.filter(record => record.operation !== 'unchanged');
     const existingReceipt = path.join(loaded.directory, 'activation', 'receipt.json');
     if (fs.existsSync(existingReceipt)) {
         const existing = loadActivation(loaded).receipt;
-        for (const record of loaded.plan.files.filter(item => item.operation !== 'unchanged')) {
+        for (const record of delta) {
             if ((dependencies.worktreeSha || worktreeSha)(blogRepo, record.path) !== record.sha256) fail(`recovered activation bytes drifted: ${record.path}`);
         }
-        return { status: 'already-activated', receipt: existing, filename: existingReceipt };
+        if (existing.reviewSha256 === reviewReceipt.receipt.reviewSha256
+            && existing.generationSha256 === generation.manifest.generationSha256) {
+            return { status: 'already-activated', receipt: existing, filename: existingReceipt };
+        }
+        const reboundIntentBody = { contract: ACTIVATION_INTENT_CONTRACT, version: VERSION, publicationId,
+            planSha256: loaded.plan.planSha256, generationSha256: generation.manifest.generationSha256,
+            reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: existing.baseHead,
+            exactDeltaSha256: loaded.plan.exactDeltaSha256 };
+        const reboundIntent = seal(reboundIntentBody, 'intentSha256');
+        atomicReplace(path.join(loaded.directory, 'activation', 'intent.json'), prettyBytes(reboundIntent));
+        const reboundBody = { contract: ACTIVATION_CONTRACT, version: VERSION, publicationId,
+            intentSha256: reboundIntent.intentSha256, planSha256: loaded.plan.planSha256,
+            generationSha256: generation.manifest.generationSha256,
+            reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: existing.baseHead,
+            exactDeltaSha256: loaded.plan.exactDeltaSha256, activatedFiles: existing.activatedFiles,
+            activatedAt: dependencies.now?.() || new Date().toISOString() };
+        if (!iso(reboundBody.activatedAt)) fail('activation rebound time is invalid');
+        const rebound = seal(reboundBody, 'activationSha256');
+        atomicReplace(existingReceipt, prettyBytes(rebound));
+        return { status: 'activation-rebound', receipt: rebound, filename: existingReceipt };
     }
-    const delta = loaded.plan.files.filter(record => record.operation !== 'unchanged');
     let state;
     const recoveryIntentPath = path.join(loaded.directory, 'activation', 'intent.json');
     if (apply && fs.existsSync(recoveryIntentPath)) {
@@ -827,8 +859,13 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
 function loadActivation(loadedPlan) {
     const loaded = strictJsonFile(path.join(loadedPlan.directory, 'activation', 'receipt.json'), 'activation receipt'); const value = loaded.value;
     const body = clone(value); delete body.activationSha256;
+    const expectedFiles = loadedPlan.plan.files.filter(item => item.operation !== 'unchanged')
+        .map(item => ({ path: item.path, sha256: item.sha256 }));
     if (value.contract !== ACTIVATION_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256
+        || value.baseHead !== loadedPlan.plan.blogBaseline.head
+        || !Array.isArray(value.activatedFiles)
+        || stableHash(value.activatedFiles) !== stableHash(expectedFiles)
         || value.activationSha256 !== stableHash(body)) fail('activation receipt drifted');
     return { receipt: value, fileSha256: loaded.fileSha256 };
 }
@@ -892,13 +929,6 @@ function loadCommit(loadedPlan) {
 function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', apply = false, message = null } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const generation = loadGeneration(loaded);
     const reviewReceipt = loadReview(loaded); const activation = loadActivation(loaded); const delta = loaded.plan.files.filter(item => item.operation !== 'unchanged');
-    if (reviewReceipt.receipt.reviewProtocolFingerprint !== reviewProtocolFingerprint(dependencies)) {
-        fail('historical review protocol changed before publish');
-    }
-    if (activation.receipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
-        || activation.receipt.generationSha256 !== generation.manifest.generationSha256) fail('activation does not bind current generation/review');
-    for (const record of delta) if ((dependencies.worktreeSha || worktreeSha)(blogRepo, record.path) !== record.sha256) fail(`activated worktree bytes drifted: ${record.path}`);
-    if (!apply) return { status: 'dry-run', deltaCount: delta.length, baseHead: loaded.plan.blogBaseline.head };
     const priorRemotePath = path.join(loaded.directory, 'publication.json');
     if (fs.existsSync(priorRemotePath)) {
         const existing = loadPublication(loaded); const live = (dependencies.liveRemote || ((repo, remote) => {
@@ -909,6 +939,13 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
         if (live.remoteIdentitySha256 !== existing.receipt.remoteIdentitySha256 || live.remoteOid !== existing.receipt.remoteVerifiedOid) fail('stored publication receipt fails live remote replay');
         return { status: 'already-published', receipt: existing.receipt };
     }
+    if (reviewReceipt.receipt.reviewProtocolFingerprint !== reviewProtocolFingerprint(dependencies)) {
+        fail('historical review protocol changed; rerun review to reuse unchanged content and re-sign the batch receipt');
+    }
+    if (activation.receipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
+        || activation.receipt.generationSha256 !== generation.manifest.generationSha256) fail('activation does not bind current generation/review');
+    for (const record of delta) if ((dependencies.worktreeSha || worktreeSha)(blogRepo, record.path) !== record.sha256) fail(`activated worktree bytes drifted: ${record.path}`);
+    if (!apply) return { status: 'dry-run', deltaCount: delta.length, baseHead: loaded.plan.blogBaseline.head };
     const preRemote = (dependencies.prePublishRemote || defaultPrePublishRemote)(blogRepo, remoteName);
     if (preRemote.branch !== undefined && preRemote.branch !== 'main') fail('publish requires blog main branch');
     if (preRemote.remoteIdentitySha256 !== loaded.plan.blogBaseline.remoteIdentitySha256
@@ -927,9 +964,12 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
     if (!fs.existsSync(commitPath)) writeExact(commitPath, prettyBytes(commitReceipt));
     else {
         commitReceipt = loadCommit(loaded).receipt;
-        if (commitReceipt.publicationCommit !== commit.toLowerCase()
-            || commitReceipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
-            || commitReceipt.activationSha256 !== activation.receipt.activationSha256) fail('existing commit receipt binds another transaction');
+        if (commitReceipt.publicationCommit !== commit.toLowerCase()) fail('existing commit receipt binds another transaction');
+        if (commitReceipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
+            || commitReceipt.activationSha256 !== activation.receipt.activationSha256) {
+            commitReceipt = seal(commitBody, 'commitSha256');
+            atomicReplace(commitPath, prettyBytes(commitReceipt));
+        }
     }
     const remote = (dependencies.pushAndVerify || defaultPushAndVerify)({ blogRepo, remoteName, commit: commit.toLowerCase() });
     if (remote.remoteVerifiedOid !== commit.toLowerCase() || !SHA_RE.test(remote.remoteIdentitySha256 || '')) fail('push did not return a live verified remote identity/OID');
@@ -945,10 +985,7 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
 function closeout(options = {}, dependencies = {}) {
     if (options.apply !== true) return publish({ ...options, apply: false }, dependencies);
     return withBlogPublicationLock(options.blogRepo, () => {
-        const loaded = loadPlan({ outputRoot: options.outputRoot, publicationId: options.publicationId });
-        if (!fs.existsSync(path.join(loaded.directory, 'activation', 'receipt.json'))) {
-            activate({ ...options, apply: true }, dependencies);
-        }
+        activate({ ...options, apply: true }, dependencies);
         return publish({ ...options, apply: true }, dependencies);
     }, dependencies);
 }

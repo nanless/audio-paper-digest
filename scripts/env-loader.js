@@ -75,8 +75,15 @@ function requireExternalRuntime(commandName = path.basename(process.argv[1] || '
 
 function requiredWorkspaceRoleForCommand(commandName) {
     const name = path.basename(String(commandName || ''));
+    const wrappedRole = String(process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE || '').trim();
+    const newConferenceDaily = process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1' && wrappedRole === 'daily'
+        && new Set(['conference-tools.js', 'conference-discover.js', 'conference-filter.js',
+            'conference-filter-run.js', 'conference-filter-evidence.js', 'conference-staging.js', 'conference-import.js',
+            'conference-plan.js', 'conference-execution.js', 'conference-analyze.js',
+            'conference-postprocess.js', 'conference-process.js']).has(name);
+    if (newConferenceDaily) return 'daily';
     if (['full-fetch.js', 'deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js',
-        'refresh-api-reader.js'].includes(name)) return 'daily';
+        'refresh-api-reader.js', 'official-conference-acquire.js'].includes(name)) return 'daily';
     if (name.startsWith('conference-') || name.startsWith('historical-')
         || name.startsWith('history-') || name === 'page-source-crosswalk.js'
         || name === 'arxiv-source-authority.js') return 'history';

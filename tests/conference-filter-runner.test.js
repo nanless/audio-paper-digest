@@ -9,6 +9,7 @@ const path = require('node:path');
 const test = require('node:test');
 const discovery = require('../scripts/lib/conference-discovery.js');
 const filter = require('../scripts/lib/conference-filter.js');
+const evidenceApi = require('../scripts/lib/conference-filter-evidence.js');
 const ledger = require('../scripts/lib/conference-source-ledger.js');
 const runner = require('../scripts/conference-filter-run.js');
 const Config = require('../scripts/config.js');
@@ -17,12 +18,22 @@ const paperIdentity = require('../scripts/lib/paper-identity.js');
 const filterId = '11111111-1111-4111-8111-111111111111';
 const lockToken = '22222222-2222-4222-8222-222222222222';
 const stamp = '2026-09-06T00:00:00.000Z';
+const evidenceRunId = '55555555-5555-4555-8555-555555555555';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const pid = value => paperIdentity.canonicalConferencePaperId(
     { id: 'icassp-2026', year: 2026 }, { type: 'icassp-arnumber', value });
 
 function chatResponse(text, usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }) {
     return { choices: [{ message: { content: text }, finish_reason: 'stop' }], usage };
+}
+function responsesResponse(text) {
+    return { status: 'completed', output_text: text,
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } };
+}
+function truncatedResponsesResponse() {
+    return { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [],
+        usage: { input_tokens: 10, output_tokens: 1000, total_tokens: 1010,
+            output_tokens_details: { reasoning_tokens: 997 } } };
 }
 
 async function serverFixture(t, replies = []) {
@@ -47,22 +58,28 @@ async function serverFixture(t, replies = []) {
     return { calls, endpoint: `http://127.0.0.1:${server.address().port}/v1` };
 }
 
-function fixture(t, endpoint, metadata = null) {
+function fixture(t, endpoint, metadata = null, model = 'fixture-filter-model') {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-filter-runner-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const dirs = Object.fromEntries(['catalogs', 'reports', 'specs', 'filters']
+    const dirs = Object.fromEntries(['catalogs', 'reports', 'evidence', 'specs', 'filters']
         .map(name => [name, path.join(root, name)]));
     for (const directory of Object.values(dirs)) fs.mkdirSync(directory, { mode: 0o700 });
     metadata ||= [{ arnumber: '100', title: 'Speech enhancement with diffusion' },
         { arnumber: '200', title: 'Image segmentation only' }];
     const metadataBytes = Buffer.from(JSON.stringify(metadata)); const metadataFile = path.join(root, 'metadata.json');
     fs.writeFileSync(metadataFile, metadataBytes, { mode: 0o600 });
+    const pdfCatalog = metadata.map(record => {
+        const filename = `${record.title}.pdf`; const bytes = Buffer.from(`%PDF-1.4\n${record.arnumber}\n`);
+        fs.writeFileSync(path.join(root, filename), bytes, { mode: 0o600 });
+        return { path: filename, sha256: sha(bytes), size: bytes.length };
+    }).sort((a, b) => a.path.localeCompare(b.path));
+    const pdfByTitle = new Map(pdfCatalog.map(item => [path.basename(item.path, '.pdf'), item]));
     const manifest = { contract: discovery.CONTRACT, version: discovery.VERSION, adapter: 'icassp',
         conference: { id: 'icassp-2026', year: 2026 },
         metadataSnapshot: { file: metadataFile, sha256: sha(metadataBytes), size: metadataBytes.length }, pdfRoot: root,
-        pdfCatalogSha256: ledger.stableHash([]), pdfCatalog: [], members: metadata.map((record, metadataIndex) => ({
+        pdfCatalogSha256: ledger.stableHash(pdfCatalog), pdfCatalog, members: metadata.map((record, metadataIndex) => ({
             identity: { type: 'icassp-arnumber', value: record.arnumber }, metadataIndex, title: record.title,
-            numericAlias: null, match: { kind: 'unmatched', candidates: [] }
+            numericAlias: null, match: { kind: 'exact', candidates: [pdfByTitle.get(record.title)] }
         })), memberSetSha256: '' };
     manifest.memberSetSha256 = ledger.memberSetSha256(manifest.members);
     const report = discovery.buildReport(manifest);
@@ -70,16 +87,27 @@ function fixture(t, endpoint, metadata = null) {
     fs.writeFileSync(path.join(dirs.reports, 'report.json'), discovery.canonicalBytes(report), { mode: 0o600 });
     const discoveryHandle = discovery.loadDiscoveryHandle(path.join(dirs.catalogs, 'catalog.json'),
         path.join(dirs.reports, 'report.json'));
+    evidenceApi.prepareEvidence({ evidenceRunsRoot: dirs.evidence, runId: evidenceRunId, discoveryHandle,
+        apply: true, limit: metadata.length, extract: (itemRoot, { request }) => {
+            const text = Buffer.from('Abstract\nThis audio study provides sufficiently detailed experimental evidence and reproducible evaluation for the conference filtering fixture.\nIntroduction\nBody.');
+            const artifacts = Buffer.from(`${JSON.stringify({ pages: [{ page: 1, textStart: 0, textEnd: text.length }] }, null, 2)}\n`);
+            const receipt = Buffer.from('{"fixture":true}\n');
+            fs.writeFileSync(path.join(itemRoot, 'text.txt'), text); fs.writeFileSync(path.join(itemRoot, 'artifacts.json'), artifacts);
+            fs.writeFileSync(path.join(itemRoot, 'extraction-receipt.json'), receipt);
+            return { paperId: request.paperId, sourceIdentity: request.sourceIdentity, pdf: { sha256: request.source.pdf.sha256 },
+                text: { file: 'text.txt', sha256: sha(text) }, artifacts: { file: 'artifacts.json', sha256: sha(artifacts) },
+                receipt: { file: 'extraction-receipt.json', fileSha256: sha(receipt), receiptSha256: 'a'.repeat(64) },
+                verification: { verificationSha256: 'b'.repeat(64) } };
+        } });
+    const evidenceHandle = evidenceApi.loadEvidenceHandle({ evidenceRunsRoot: dirs.evidence, runId: evidenceRunId, discoveryHandle });
     const taxonomyFile = path.join(root, 'taxonomy.json'); fs.writeFileSync(taxonomyFile, '{"version":"taxonomy-v1"}\n', { mode: 0o600 });
-    const model = 'fixture-filter-model';
-    const spec = { contract: filter.SPEC_CONTRACT, version: filter.VERSION,
-        filterPolicySha256: filter.LLM_FILTER_POLICY_SHA256, promptSha256: filter.LLM_FILTER_PROMPT_SHA256,
-        model, endpointProtocol: 'openai-chat', endpointIdentitySha256: filter.endpointIdentitySha256(endpoint, model),
-        taxonomyRegistrySha256: sha(fs.readFileSync(taxonomyFile)) };
+    const spec = filter.buildProductionSpec({ endpoint, model,
+        taxonomyRegistrySha256: sha(fs.readFileSync(taxonomyFile)), discoveryHandle, evidenceHandle });
     fs.writeFileSync(path.join(dirs.specs, 'spec.json'), `${JSON.stringify(spec)}\n`, { mode: 0o600 });
-    filter.prepareFilter({ filterRoot: dirs.filters, discoveryHandle, spec, filterId, now: stamp });
+    filter.prepareFilter({ filterRoot: dirs.filters, discoveryHandle, evidenceHandle, spec, filterId, now: stamp });
     const files = { conferenceDiscoveryCatalogDir: dirs.catalogs, conferenceDiscoveryReportDir: dirs.reports,
-        conferenceFilterSpecsDir: dirs.specs, conferenceFiltersDir: dirs.filters, taxonomyRegistry: taxonomyFile,
+        conferenceFilterEvidenceRunsDir: dirs.evidence, conferenceFilterSpecsDir: dirs.specs,
+        conferenceFiltersDir: dirs.filters, taxonomyRegistry: taxonomyFile,
         llmAccountPoolState: path.join(root, 'account-pool.json') };
     const env = { PAPER_ANALYZER_ENDPOINT: endpoint, PAPER_ANALYZER_API_KEY: 'fixture-key', PAPER_ANALYZER_MODEL: model };
     return { root, dirs, spec, files, env };
@@ -87,7 +115,7 @@ function fixture(t, endpoint, metadata = null) {
 
 function args(extra = []) {
     return ['--apply', '--catalog', 'catalog.json', '--report', 'report.json', '--spec', 'spec.json',
-        '--filter', filterId, '--owner', 'runner.1', ...extra];
+        '--evidence-run', evidenceRunId, '--filter', filterId, '--owner', 'runner.1', ...extra];
 }
 
 function onlyJson(directory) {
@@ -102,22 +130,102 @@ test('production runner uses real common transport and preserves bound intent, r
     const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
     assert.equal(result.processed[0].status, 'included'); assert.equal(service.calls.length, 1);
     assert.equal(service.calls[0].url, '/v1/chat/completions'); assert.equal(service.calls[0].headers.authorization, 'Bearer fixture-key');
-    const envelope = JSON.parse(service.calls[0].body.messages[1].content);
+    assert.equal(service.calls[0].body.messages.length, 1);
+    assert.equal(service.calls[0].body.messages[0].role, 'user');
+    const root = path.join(f.dirs.filters, filterId);
+    const intent = JSON.parse(fs.readFileSync(onlyJson(path.join(root, 'llm-intents'))));
+    const envelope = JSON.parse(Buffer.from(intent.envelope.data, 'base64'));
+    assert.equal(service.calls[0].body.messages[0].content, filter.renderDailyFilterPrompt(envelope));
+    assert.doesNotMatch(service.calls[0].body.messages[0].content, /conference-filter-llm-request/);
     assert.equal(envelope.paperId, pid('100')); assert.equal(envelope.metadataRecord.arnumber, '100');
     assert.equal(envelope.discovery.metadataIndex, 0); assert.equal(envelope.sourceSha256, state.decisions[pid('100')].sourceSha256);
-    const root = path.join(f.dirs.filters, filterId);
     const artifactFile = onlyJson(path.join(root, 'decisions')); const artifact = JSON.parse(fs.readFileSync(artifactFile));
-    const intent = JSON.parse(fs.readFileSync(onlyJson(path.join(root, 'llm-intents'))));
     const receipt = JSON.parse(fs.readFileSync(onlyJson(path.join(root, 'llm-responses'))));
     assert.equal(artifact.request.sha256, intent.request.sha256);
     assert.equal(artifact.transportReceiptSha256, receipt.transportReceiptSha256);
     assert.equal(receipt.usageLedgerBindings.length, 1);
     assert.equal(receipt.usageLedgerBindings[0].persistence, 'unavailable');
     assert.deepEqual(artifact.result.usage, { requests: 1, inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+    const legacy = { ...intent, contract: 'conference-filter-llm-intent-v1', version: 1 }; delete legacy.envelope;
+    assert.throws(() => filter.normalizeLlmIntent(legacy), /unknown or missing fields|contract\/version mismatch/);
     assert.equal(filter.runLlmDecision, undefined);
     assert.equal(runner.productionLlmConfig, undefined);
     await assert.rejects(() => runner.main(args(), { files: f.files, env: f.env, transportRequestFn: async () => ({}) }),
         /transport injection is forbidden/);
+});
+
+test('a bounded production batch fully replays filter state once and preserves per-paper durable CAS', async t => {
+    const service = await serverFixture(t, [
+        { body: chatResponse('{"decision":"included","reason":"Speech enhancement is primary."}') },
+        { body: chatResponse('{"decision":"excluded","reason":"Audio is incidental."}') },
+        { body: chatResponse('{"decision":"included","reason":"Music generation is primary."}') }
+    ]);
+    const metadata = [
+        { arnumber: '100', title: 'Speech enhancement with diffusion' },
+        { arnumber: '200', title: 'Audio tagging benchmark' },
+        { arnumber: '300', title: 'Music generation with transformers' }
+    ];
+    const f = fixture(t, service.endpoint, metadata);
+    const stateFile = path.join(f.dirs.filters, filterId, 'state.json');
+    const originalOpen = fs.openSync; let stateReads = 0;
+    fs.openSync = function (filename, flags, ...rest) {
+        if (filename === stateFile && (flags & fs.constants.O_RDONLY) === fs.constants.O_RDONLY) stateReads += 1;
+        return originalOpen.call(this, filename, flags, ...rest);
+    };
+    let result;
+    try { result = await runner.main(args(['--limit', '3']), { files: f.files, env: f.env }); }
+    finally { fs.openSync = originalOpen; }
+    assert.equal(result.processed.length, 3); assert.equal(service.calls.length, 3);
+    assert.equal(stateReads, 1, 'the authenticated state/history/artifact closure is replayed once per runner process');
+    const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
+    assert.equal(state.completion.status, 'complete');
+    assert.equal(state.attempts.length, 3);
+    for (let index = 0; index < state.attempts.length; index += 1) {
+        const attempt = state.attempts[index];
+        assert.equal(attempt.priorStateSha256,
+            index === 0 ? attempt.patch.expectedStateSha256 : state.attempts[index - 1].nextStateSha256);
+        assert.equal(attempt.nextStateSha256,
+            index === state.attempts.length - 1 ? state.stateSha256 : state.attempts[index + 1].priorStateSha256);
+    }
+    assert.equal(fs.readdirSync(path.join(f.dirs.filters, filterId, 'llm-intents')).length, 3);
+    assert.equal(fs.readdirSync(path.join(f.dirs.filters, filterId, 'llm-responses')).length, 3);
+    const noWork = await runner.main(args(['--limit', '3']), { files: f.files, env: {} });
+    assert.deepEqual(noWork.processed, [], 'a complete filter retains the previous lazy credential boundary');
+});
+
+test('OpenAI Responses durable request is also exactly one daily user prompt', async t => {
+    const service = await serverFixture(t, [{ body: responsesResponse('理由：语音增强是核心任务。\n结论：相关') }]);
+    const f = fixture(t, `${service.endpoint}/responses`, null, 'fixture-filter-model');
+    await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
+    const intent = JSON.parse(fs.readFileSync(onlyJson(path.join(f.dirs.filters, filterId, 'llm-intents'))));
+    const body = JSON.parse(Buffer.from(intent.request.data, 'base64'));
+    assert.equal(body.input.length, 1);
+    assert.equal(body.input[0].role, 'user');
+    assert.match(body.input[0].content[0].text, /论文标题：Speech enhancement with diffusion/);
+    assert.doesNotMatch(body.input[0].content[0].text, /conference-filter-llm-request/);
+});
+
+test('OpenAI Responses durable retries use the daily 4096-token floor and daily attempt limit', async t => {
+    const service = await serverFixture(t, [
+        { body: truncatedResponsesResponse() },
+        { body: truncatedResponsesResponse() },
+        { body: truncatedResponsesResponse() },
+        { body: responsesResponse('理由：语音增强是核心任务。\n结论：相关') }
+    ]);
+    const f = fixture(t, `${service.endpoint}/responses`,
+        [{ arnumber: '100', title: 'Speech enhancement with diffusion' }], 'fixture-filter-model');
+    const previousBackoff = Config.FILTER_CONFIG.conferenceRetryBackoffMs;
+    Config.FILTER_CONFIG.conferenceRetryBackoffMs = 0;
+    try {
+        await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            await runner.main(args(['--limit', '1', '--retry-failed']), { files: f.files, env: f.env });
+        }
+    } finally { Config.FILTER_CONFIG.conferenceRetryBackoffMs = previousBackoff; }
+    const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
+    assert.deepEqual(service.calls.map(call => call.body.max_output_tokens), [1000, 4096, 4096, 4096]);
+    assert.equal(state.decisions[pid('100')].status, 'included', state.decisions[pid('100')].reason);
+    assert.equal(state.attempts.filter(attempt => attempt.paperId === pid('100')).length, 4);
 });
 
 test('partial provider usage is durable failed evidence rather than a post-billing throw', async t => {
@@ -234,14 +342,18 @@ test('endpoint and request drift fail before a second transport', async t => {
     finally { fs.openSync = original; }
     const intentFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-intents'));
     const intent = JSON.parse(fs.readFileSync(intentFile)); const request = JSON.parse(Buffer.from(intent.request.data, 'base64'));
-    const envelope = JSON.parse(request.messages[1].content); envelope.metadataRecord.title = 'tampered';
+    const envelope = JSON.parse(Buffer.from(intent.envelope.data, 'base64')); envelope.metadataRecord.title = 'tampered';
     envelope.discovery.metadataRecordSha256 = filter.stableHash(envelope.metadataRecord);
     const envelopeBody = { ...envelope }; delete envelopeBody.requestSha256; envelope.requestSha256 = filter.stableHash(envelopeBody);
-    request.messages[1].content = JSON.stringify(envelope); const requestBytes = Buffer.from(JSON.stringify(request));
+    const envelopeBytes = Buffer.from(JSON.stringify(envelope));
+    intent.envelope = { encoding: 'base64', size: envelopeBytes.length, sha256: sha(envelopeBytes), data: envelopeBytes.toString('base64') };
+    request.messages[0].content = filter.renderDailyFilterPrompt(envelope);
+    const requestBytes = Buffer.from(JSON.stringify(request));
     intent.request = { encoding: 'base64', size: requestBytes.length, sha256: sha(requestBytes), data: requestBytes.toString('base64') };
     intent.requestEnvelopeSha256 = envelope.requestSha256; const intentBody = { ...intent }; delete intentBody.intentSha256;
     intent.intentSha256 = filter.stableHash(intentBody); fs.writeFileSync(intentFile, `${JSON.stringify(intent, null, 2)}\n`);
-    await assert.rejects(() => runner.main(args(['--limit', '1']), { files: f.files, env: f.env }), /source metadata/);
+    await assert.rejects(() => runner.main(args(['--limit', '1']), { files: f.files, env: f.env }),
+        /source metadata|effective metadata record/);
     assert.equal(service.calls.length, 1);
 });
 

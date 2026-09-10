@@ -16,6 +16,7 @@ const extractionReceiptApi = require('./conference-extraction-receipt.js');
 const paperIdentity = require('./paper-identity.js');
 
 const EXTRACTION_CONTRACT = 'conference-reviewed-extraction-v2';
+const AUTOMATED_EXTRACTION_CONTRACT = 'conference-deterministic-source-seal-v1';
 const RECEIPT_CONTRACT = 'conference-staging-receipt-v2';
 const VERSION = 2;
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -78,16 +79,34 @@ function authenticatedDiscovery(handle) {
 }
 
 function normalizeExtractionManifest(value) {
-    exact(value, ['contract', 'version', 'conference', 'review', 'members', 'membersSha256'], 'reviewed extraction manifest');
-    if (value.contract !== EXTRACTION_CONTRACT || value.version !== VERSION) fail('reviewed extraction contract/version is unsupported');
+    const automated = value?.contract === AUTOMATED_EXTRACTION_CONTRACT;
+    exact(value, automated
+        ? ['contract', 'version', 'conference', 'acceptance', 'members', 'membersSha256']
+        : ['contract', 'version', 'conference', 'review', 'members', 'membersSha256'],
+    automated ? 'deterministic source seal' : 'reviewed extraction manifest');
+    if (![EXTRACTION_CONTRACT, AUTOMATED_EXTRACTION_CONTRACT].includes(value.contract) || value.version !== VERSION) {
+        fail('extraction acceptance contract/version is unsupported');
+    }
     exact(value.conference, ['id', 'year'], 'reviewed extraction conference');
     if (typeof value.conference.id !== 'string' || !/^[a-z0-9][a-z0-9-]{1,79}$/.test(value.conference.id)
         || !Number.isSafeInteger(value.conference.year) || value.conference.year < 1900 || value.conference.year > 2100) {
         fail('reviewed extraction conference is malformed');
     }
-    exact(value.review, ['actor', 'reviewedAt'], 'reviewed extraction review');
-    if (typeof value.review.actor !== 'string' || !ACTOR_RE.test(value.review.actor)) fail('review actor is malformed');
-    const review = { actor: value.review.actor, reviewedAt: timestamp(value.review.reviewedAt, 'review.reviewedAt') };
+    let evidence;
+    if (automated) {
+        exact(value.acceptance, ['method', 'catalogSha256', 'selectionReceiptSha256'], 'deterministic source acceptance');
+        if (value.acceptance.method !== 'official-proceedings-exact-pdf-v1') {
+            fail('deterministic source acceptance method is unsupported');
+        }
+        evidence = { acceptance: { method: value.acceptance.method,
+            catalogSha256: assertSha(value.acceptance.catalogSha256, 'acceptance.catalogSha256'),
+            selectionReceiptSha256: assertSha(value.acceptance.selectionReceiptSha256, 'acceptance.selectionReceiptSha256') } };
+    } else {
+        exact(value.review, ['actor', 'reviewedAt'], 'reviewed extraction review');
+        if (typeof value.review.actor !== 'string' || !ACTOR_RE.test(value.review.actor)) fail('review actor is malformed');
+        evidence = { review: { actor: value.review.actor,
+            reviewedAt: timestamp(value.review.reviewedAt, 'review.reviewedAt') } };
+    }
     if (!Array.isArray(value.members) || !value.members.length) fail('reviewed extraction members must be non-empty');
     const members = value.members.map((member, index) => {
         exact(member, ['paperId', 'sourceIdentity', 'receiptName'], `reviewed extraction member[${index}]`);
@@ -104,8 +123,8 @@ function normalizeExtractionManifest(value) {
     if (assertSha(value.membersSha256, 'reviewed extraction membersSha256') !== stableHash(members)) {
         fail('reviewed extraction membersSha256 does not bind its members');
     }
-    return { contract: EXTRACTION_CONTRACT, version: VERSION,
-        conference: clone(value.conference), review, members, membersSha256: value.membersSha256 };
+    return { contract: value.contract, version: VERSION,
+        conference: clone(value.conference), ...evidence, members, membersSha256: value.membersSha256 };
 }
 
 function discoveryIdentityMap(discovery) {
@@ -161,6 +180,12 @@ function bindInputs({ selectionHandle, discoveryHandle, extractionManifest, extr
     if (extraction.conference.id !== selection.conferenceId
         || extraction.conference.year !== discovery.candidateManifest.conference.year) {
         fail('reviewed extraction conference does not match selection/discovery');
+    }
+    if (extraction.contract === AUTOMATED_EXTRACTION_CONTRACT
+        && (discovery.candidateManifest.adapter !== 'official-proceedings'
+            || extraction.acceptance.catalogSha256 !== discovery.catalogSha256
+            || extraction.acceptance.selectionReceiptSha256 !== selection.selectionReceiptSha256)) {
+        fail('deterministic source seal is not bound to this official-proceedings discovery/selection');
     }
     if (!selection.included.length) fail('a selection with no included papers cannot produce an import manifest');
     const identities = discoveryIdentityMap(discovery);
@@ -233,7 +258,8 @@ function bindInputs({ selectionHandle, discoveryHandle, extractionManifest, extr
             discoveryMemberSetSha256: discovery.candidateManifest.memberSetSha256 },
         extraction: { contract: extraction.contract, extractionFileSha256,
             extractionManifestSha256: stableHash(extraction), membersSha256: extraction.membersSha256,
-            review: clone(extraction.review) },
+            ...(extraction.review ? { review: clone(extraction.review) }
+                : { acceptance: clone(extraction.acceptance) }) },
         importManifest: { name: importManifestName, contract: importManifest.contract,
             sha256: sha256(importBytes), memberSetSha256: importManifest.memberSetSha256 },
         members: memberBindings
@@ -252,9 +278,23 @@ function normalizeReceipt(value) {
     'staging receipt selection');
     exact(value.discovery, ['contract', 'catalogSha256', 'reportSha256', 'metadataSnapshotSha256',
         'pdfCatalogSha256', 'discoveryMemberSetSha256'], 'staging receipt discovery');
-    exact(value.extraction, ['contract', 'extractionFileSha256', 'extractionManifestSha256', 'membersSha256', 'review'],
-        'staging receipt extraction');
-    exact(value.extraction.review, ['actor', 'reviewedAt'], 'staging receipt extraction review');
+    const automated = value.extraction?.contract === AUTOMATED_EXTRACTION_CONTRACT;
+    exact(value.extraction, automated
+        ? ['contract', 'extractionFileSha256', 'extractionManifestSha256', 'membersSha256', 'acceptance']
+        : ['contract', 'extractionFileSha256', 'extractionManifestSha256', 'membersSha256', 'review'],
+    'staging receipt extraction');
+    if (automated) {
+        exact(value.extraction.acceptance, ['method', 'catalogSha256', 'selectionReceiptSha256'],
+            'staging receipt deterministic acceptance');
+        if (value.extraction.acceptance.method !== 'official-proceedings-exact-pdf-v1') {
+            fail('staging receipt deterministic acceptance method is unsupported');
+        }
+        assertSha(value.extraction.acceptance.catalogSha256, 'staging receipt acceptance catalogSha256');
+        assertSha(value.extraction.acceptance.selectionReceiptSha256,
+            'staging receipt acceptance selectionReceiptSha256');
+    } else {
+        exact(value.extraction.review, ['actor', 'reviewedAt'], 'staging receipt extraction review');
+    }
     exact(value.importManifest, ['name', 'contract', 'sha256', 'memberSetSha256'], 'staging receipt import manifest');
     safeName(value.importManifest.name, 'staging receipt import manifest name');
     for (const [section, fields] of [[value.selection, ['catalogSha256', 'inputSha256', 'stateSha256',
@@ -266,12 +306,14 @@ function normalizeReceipt(value) {
     }
     if (value.selection.contract !== filterApi.SELECTION_HANDLE_CONTRACT
         || value.discovery.contract !== discoveryApi.CONTRACT
-        || value.extraction.contract !== EXTRACTION_CONTRACT
+        || ![EXTRACTION_CONTRACT, AUTOMATED_EXTRACTION_CONTRACT].includes(value.extraction.contract)
         || value.importManifest.contract !== importerApi.CONTRACT) fail('staging receipt nested contracts are unsupported');
     if (!filterApi.UUID_RE.test(String(value.selection.filterId || ''))
         || typeof value.selection.conferenceId !== 'string' || !value.selection.conferenceId) fail('staging receipt selection identity is malformed');
-    if (typeof value.extraction.review.actor !== 'string' || !ACTOR_RE.test(value.extraction.review.actor)) fail('staging receipt reviewer is malformed');
-    timestamp(value.extraction.review.reviewedAt, 'staging receipt reviewedAt');
+    if (!automated) {
+        if (typeof value.extraction.review.actor !== 'string' || !ACTOR_RE.test(value.extraction.review.actor)) fail('staging receipt reviewer is malformed');
+        timestamp(value.extraction.review.reviewedAt, 'staging receipt reviewedAt');
+    }
     if (!Array.isArray(value.members) || !value.members.length) fail('staging receipt members must be non-empty');
     const members = value.members.map((member, index) => {
         exact(member, ['paperId', 'sourceIdentity', 'sourceSha256', 'decisionArtifactSha256',
@@ -370,6 +412,12 @@ function loadStagingHandle(importManifestFile, receiptFile, selectionHandle, dis
         discoveryMemberSetSha256: discovery.candidateManifest.memberSetSha256 };
     if (stableHash(receipt.discovery) !== stableHash(expectedDiscovery)
         || selection.catalogSha256 !== catalog.catalogSha256) fail('staging receipt does not bind the authenticated discovery');
+    if (receipt.extraction.contract === AUTOMATED_EXTRACTION_CONTRACT
+        && (receipt.extraction.acceptance.catalogSha256 !== discovery.catalogSha256
+            || receipt.extraction.acceptance.selectionReceiptSha256 !== selection.selectionReceiptSha256
+            || discovery.candidateManifest.adapter !== 'official-proceedings')) {
+        fail('staging deterministic source acceptance does not bind the live official discovery/selection');
+    }
     if (receipt.importManifest.name !== path.basename(importManifestFile)
         || receipt.importManifest.sha256 !== importLoaded.sha256
         || receipt.importManifest.memberSetSha256 !== importManifest.memberSetSha256) {
@@ -480,7 +528,7 @@ function writeStagingBundle({ stagingRoot, importManifestName, receiptName, stag
 }
 
 module.exports = {
-    EXTRACTION_CONTRACT, RECEIPT_CONTRACT, VERSION, SAFE_JSON_NAME,
+    EXTRACTION_CONTRACT, AUTOMATED_EXTRACTION_CONTRACT, RECEIPT_CONTRACT, VERSION, SAFE_JSON_NAME,
     stableHash, canonicalBytes, normalizeExtractionManifest, bindInputs, normalizeReceipt,
     loadStagingHandle, stagingHandleSnapshot, replayStagingSources,
     safeDirectory, safeDirectJson, writeStagingBundle

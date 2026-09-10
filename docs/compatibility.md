@@ -11,12 +11,12 @@
 | scoring audit | `api-scoring-audit-v2` | 旧评分可显示 | 必须重算八维总分并绑定最终 analysis |
 | generation manifest | schema v3 | v1/v2 仅显式历史维护 | 新日更只接受 v3、`publishedPapers` 和同质 proof |
 | researcher workbench | `researcher-workbench-v1` + `researcher-sidecars-v1` | 无合同旧页继续可读但没有结构化工作台/下载资格 | Reader v3/Manual v6 新页必须绑定 front matter、四个 sidecar 与逐文件 SHA |
-| review receipt | 当前 review protocol | 精确页面 SHA 未变时可复用逐页 pass | 必须重绑 generation、Git baseline 和 Hugo gate |
+| review receipt | 当前 review protocol | 逐页 pass 永久以“相对路径 + 页面内容 SHA”复用；manifest/模型/代码/协议/Hugo 变化不重审未变文件 | 必须重跑批次 gate 并重绑 generation、Git baseline 和 Hugo gate |
 | visual summary | v3 TOP 10 | v1/v2 由显式迁移命令处理 | 必须绑定 publication commit/OID 与当前 token；modern ephemeral Figure 只复验身份并使用空引用路径，不回退旧缓存 |
 | Manual canonical | production v6 | v5/shadow/sealed preview 只作历史维护 | 默认 API 不读取为自动分析证明 |
 | OpenCode Go account pool | `opencode-go-sticky-quota-failover-v1` | 未知版本拒绝覆盖 | 仅明确 `GoUsageLimitError` 改变 active/cooldown；不保存原始 key |
 | 历史 direct catalog/plan | `merged-good-historical-local-data-v5` / `historical-direct-rewrite-plan-v5` | v4/v3 与 legacy crosswalk/fresh run 仅 fallback 审计 | catalog 同时封存 conflict/multiple Daily 主 arXiv binding、ICML poster authority binding 与当前 PDF-routable 子集；plan 精确重放页面、来源和子集 SHA；不读取旧博客正文 |
-| 历史 direct staging/aggregate | `historical-direct-*-v1` | 私有 runtime 工件可审计 | 只能 private staging；全历史 review、activation、commit/push receipt 和远端 OID 尚未实现 |
+| 历史 direct staging/aggregate/publication | `historical-direct-*-v1` | 私有 runtime 工件可审计；逐页 pass 按路径+内容 SHA 持久复用 | 完整 direct 投影可经独立 review、锁内 activation/commit/push 与远端 OID 验证发布；会议 aggregate 未接入时仍失败关闭 |
 
 ## 迁移原则
 

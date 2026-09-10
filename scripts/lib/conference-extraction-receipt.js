@@ -34,6 +34,10 @@ const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024 * 1024;
 const EXTRACTION_HANDLES = new WeakSet();
 const EXTRACTION_HANDLE_DATA = new WeakMap();
+// Python str.isspace() is Unicode White_Space plus the four C0 information
+// separators. ECMAScript \s omits U+001C..U+001F and includes U+FEFF, so it
+// cannot replay the extractor's receipt count exactly.
+const PYTHON_WHITESPACE_RE = /[\p{White_Space}\u001c-\u001f]/u;
 
 class ConferenceExtractionReceiptError extends Error {
     constructor(message) {
@@ -139,6 +143,12 @@ function strictJson(bytes, label) {
 function strictUtf8(bytes, label) {
     try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
     catch { fail(`${label} must contain strict UTF-8 text`); }
+}
+function pythonNonWhitespaceCharacters(value) {
+    if (typeof value !== 'string') fail('text character count requires a string');
+    let count = 0;
+    for (const character of value) if (!PYTHON_WHITESPACE_RE.test(character)) count += 1;
+    return count;
 }
 function safeRoot(root) {
     if (typeof root !== 'string' || !path.isAbsolute(root)) fail('sourceRoot must be an absolute configured directory');
@@ -370,7 +380,7 @@ function loadExtractionHandle(sourceRoot, receiptName) {
     if (!plain(metadata)) fail('metadata must contain a JSON object');
     const identity = validateMetadataIdentity(metadata, request);
     const sourceText = strictUtf8(textLoaded.bytes, 'text');
-    let nonWhitespaceCharacters = 0; for (const character of sourceText) if (!/\s/u.test(character)) nonWhitespaceCharacters += 1;
+    const nonWhitespaceCharacters = pythonNonWhitespaceCharacters(sourceText);
     if (textLoaded.bytes.length !== receipt.text.utf8Bytes
         || nonWhitespaceCharacters !== receipt.text.nonWhitespaceCharacters) fail('receipt text counts drifted');
     const artifact = validateArtifact(strictJson(artifactLoaded.bytes, 'structured artifact'), textLoaded.bytes);
@@ -406,4 +416,5 @@ function extractionHandleSnapshot(handle) {
 module.exports = { REQUEST_CONTRACT, ARTIFACT_CONTRACT, RECEIPT_CONTRACT, VERIFICATION_CONTRACT,
     VERSION, PROFILE, OFFSET_UNIT,
     EXTRACTOR_NAME, EXTRACTOR_VERSION, BACKEND_NAME, BACKEND_VERSION, OPTIONS, SAFE_JSON_NAME,
-    ConferenceExtractionReceiptError, loadExtractionHandle, extractionHandleSnapshot, stableHash };
+    ConferenceExtractionReceiptError, loadExtractionHandle, extractionHandleSnapshot, stableHash,
+    pythonNonWhitespaceCharacters };

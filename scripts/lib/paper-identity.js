@@ -11,6 +11,7 @@ const CONTRACT = 'paper-identity-v1';
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SCHEMES = new Set(['icassp-arnumber', 'openreview-forum-id', 'conference-paper-id']);
+const CONFERENCE_PAPER_ID_RE = /^[A-Za-z0-9._-]{1,200}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 
 function fail(message) { throw new Error(`Invalid paper identity: ${message}`); }
@@ -47,10 +48,12 @@ function assertYear(value, label) {
 function validateExternalId(value) {
     assertExactFields(value, ['scheme', 'value'], 'externalId');
     if (!SCHEMES.has(value.scheme)) fail('externalId.scheme is unsupported');
-    assertText(value.value, 'externalId.value', { max: 128 });
-    const valid = (value.scheme === 'icassp-arnumber' || value.scheme === 'conference-paper-id')
+    assertText(value.value, 'externalId.value', { max: value.scheme === 'conference-paper-id' ? 200 : 128 });
+    const valid = value.scheme === 'icassp-arnumber'
         ? /^[1-9]\d*$/.test(value.value)
-        : /^[A-Za-z0-9_-]{6,128}$/.test(value.value);
+        : value.scheme === 'conference-paper-id'
+            ? CONFERENCE_PAPER_ID_RE.test(value.value)
+            : /^[A-Za-z0-9_-]{6,128}$/.test(value.value);
     if (!valid) fail('externalId.value is invalid for its scheme');
     return { scheme: value.scheme, value: value.value };
 }
@@ -76,8 +79,12 @@ function validateOfficialUrl(value, label) {
     // Require a non-root, portable, unambiguous path.  Checking both the raw
     // spelling and URL form prevents URL() from normalising a traversal away.
     const rawPath = value.slice(`https://${parsed.host}`.length);
+    const pathSegments = parsed.pathname.slice(1).split('/');
+    if (pathSegments.at(-1) === '') pathSegments.pop();
     if (parsed.pathname === '/' || rawPath !== parsed.pathname || parsed.pathname.includes('//')
-        || parsed.pathname.split('/').slice(1).some(part => !/^[A-Za-z0-9._~-]+$/.test(part))) {
+        || pathSegments.length === 0
+        || pathSegments.some(part => !part || part === '.' || part === '..'
+            || !/^[A-Za-z0-9._~-]+$/.test(part))) {
         fail(`${label} has an unsafe or non-canonical path`);
     }
     if (parsed.toString() !== value) fail(`${label} must use canonical URL spelling`);
@@ -98,7 +105,7 @@ function validateCitation(value) {
     if (value === null) return null;
     assertExactFields(value, ['title', 'authors', 'venue', 'year'], 'citation');
     assertText(value.title, 'citation.title', { max: 2048 });
-    if (!Array.isArray(value.authors) || value.authors.length > 100) fail('citation.authors must be an array of at most 100 names');
+    if (!Array.isArray(value.authors) || value.authors.length > 1000) fail('citation.authors must be an array of at most 1000 names');
     const authors = value.authors.map((author, index) => assertText(author, `citation.authors[${index}]`, { max: 512 }));
     if (new Set(authors).size !== authors.length) fail('citation.authors must not contain duplicate names');
     if (value.venue !== null) assertText(value.venue, 'citation.venue', { max: 512 });
@@ -187,7 +194,7 @@ function recordSha256(value) { return stableSha256(normalizeIdentity(value)); }
 function isSha256(value) { return SHA_RE.test(String(value || '')); }
 
 module.exports = {
-    CONTRACT, ARXIV_ID_RE, SCHEMES, canonicalConferenceId, conferenceCoordinates,
+    CONTRACT, ARXIV_ID_RE, SCHEMES, CONFERENCE_PAPER_ID_RE, canonicalConferenceId, conferenceCoordinates,
     canonicalConferencePaperId, assertCanonicalConferencePaperId, validateExternalId,
     validateOfficialUrl, validateSource, validateCitation, normalizeIdentity,
     identityPayload, stableJson, sha256, stableSha256, identitySha256, recordSha256, isSha256

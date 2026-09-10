@@ -66,6 +66,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/reader-operator-patch.js` | Node 库 | 显式应用同 fresh run 的人工局部补丁；严格来源/节点 SHA 与完整 Reader parser，保存 failed 候选并保留预算、原始字节归档和重入审计，不签发成功正文。 |
 | `lib/reader-signed-draft.js` | Node 库 | 将本次同源签名 Reader 逆变换为严格等价输入；真实 parser 与原图注入后正文/计划/图片 SHA 全等才返回，不写文件、不调用模型，不把恢复稿冒充原始 API JSON。 |
 | `lib/reader-signed-operator.js` | Node 库 | 同 run 已签名 Reader 的显式局部 operator 执行；完整父稿 CAS、真实逆变换/parser/共用封存、不可变意图与输出恢复，只写隔离分析并要求事实复核，不产生 API 调用。 |
+| `lib/reader-resource-binding.js` | Node 库 | 从论文全文提取并规范化 GitHub、GitLab、Hugging Face 与 ModelScope 仓库链接，保留原始 URL token/逐字来源片段及类型判定，使换行 URL 也能被 Reader 与开源证据链精确重放。 |
 | `lib/reader-resource-sync.js` | Node 库 | 将已封存资源状态确定性同步到 canonical/parsed/末端 checkpoint 与输出 proof；保留评分和 Reader 字节，评分可用性证据变化则拒绝并要求正常评分审计，不联网、不写文件。 |
 | `lib/reader-draft-order.js` | Node 库 | 在同一候选上规范小节顺序并同步表格绑定/marker，记录原始到规范路径的 SHA 映射；歧义时拒绝重排。 |
 | `lib/reader-source-diagnostics.js` | Node 库 | 将数字/单位绑定失败定位到正文单元格与原表行列证据，给出百分号位置、千分位及可能舍入的只读修复候选；不自动改数值或放宽来源门禁。 |
@@ -85,9 +86,13 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/conference-execution.js` | Node 库 | 仅从认证 plan handle 创建隔离 execution，持久化不可变 authority receipt；每次读取/推进都重放 plan authority，以锁、CAS 和受控 patch 持久化，completion proof 上线前不接受完成态。 |
 | `lib/conference-analysis-context.js` | Node 库 | 将已认证会议 execution 的单篇来源封装为进程内 opaque 分析上下文；固定 Reader 尝试目录并拒绝 arXiv 身份、跨 execution 路径和伪造来源能力。 |
 | `lib/conference-analysis-adapter.js` | Node 库 | 重放完整会议 plan/source authority 后复用公共深度分析引擎；prepare 先写不可变 intent，再以原子文件和精确前缀恢复保存 canonical、逐阶段 checkpoint 与完成 receipt。旧版缺少 prepare intent 的 execution 不会静默迁移，必须用同一 authenticated plan 新建 execution UUID。 |
-| `lib/conference-discovery.js` | Node 库 | 从 ICASSP/ICLR/ICML 元数据快照与本机 PDF 目录生成只读候选 catalog 和匹配报告；标题匹配永不直接 verified。 |
+| `lib/conference-discovery.js` | Node 库 | 从 ICASSP/ICLR/ICML 或严格 `official-proceedings` 元数据快照与本机 PDF 目录生成只读候选 catalog 和匹配报告；新会议只按 metadata 的稳定 official ID/`pdfFile` 精确匹配，标题永不作为身份。 |
+| `lib/conference-filter-evidence.js` | Node 库 | 从 authenticated discovery 批量重放官方 exact PDF、固定 pypdf 文本与 provider-scoped 摘要定位证据；签发可恢复 evidence run/catalog/report，非 ready 状态一律 fail-open 给 LLM。 |
+| `lib/official-conference-acquisition.js` | Node 库 | 固定 2026 官方 index/record/PDF allowlist，抓取十一个新会议的严格 metadata 与 PDF；AAAI volume 40 以固定 48-issue manifest、逐 issue response receipt/SHA 和跨 issue article ID 唯一性闭合集合，其余来源使用单索引；索引和逐篇下载均支持 0600/O_EXCL 恢复及完整重放验证。 |
+| `lib/official-conference-general-providers.js` | Node 库 | 通用 AI/ML/CV/NLP 官方单篇 record 的纯解析与身份校验器；无网络、无写入，供 provider 适配与 fixture 审计。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口仅从 opaque plan handle 重放完整上游证明与会议全文；不导出 ledger/run 测试捷径。 |
-| `lib/conference-filter.js` | Node 库 | 冻结会议 catalog/Prompt/model/endpoint/taxonomy 指纹，以 durable intent→transport receipt→decision→CAS 管理决定；生产 signer 固定公共 LLM 路由，不接受 transport 注入，并以安全 stale lock 保证单飞恢复。 |
+| `lib/conference-filter.js` | Node 库 | 冻结 discovery、authenticated evidence catalog/report/逐篇 receipt、日更 Prompt/关键词策略、会议领域标签、model/endpoint/taxonomy 指纹；ready 摘要进入 keyword/Prompt，non-ready 安全放行，以 durable intent→transport receipt→decision→CAS 管理决定；生产 signer 固定公共 LLM 路由，不接受 transport 注入，并以安全 stale lock 保证单飞恢复。 |
+| `lib/conference-process.js` | Node 库 | 编排新会议 complete selection 的官方 PDF 自动封存、staging/import、共享深度分析、Reader/评分、current taxonomy 页面和 aggregate；以稳定 UUID、最多 3 并发、逐篇 checkpoint 与 completion receipt 保证恢复和闭合。 |
 | `lib/conference-extraction-receipt.js` | Node 库 | 重放请求、来源和派生工件，并在每次 handle 加载时调用固定 Python/pypdf 临时重提取验证；只有字节一致且达到门槛的 weak profile 可进入 staging。 |
 | `lib/conference-staging.js` | Node 库 | 将 authenticated filter selection 与人工复核 extraction 精确绑定为 import manifest/receipt；excluded 或身份别名不能进入。 |
 | `lib/paper-identity.js` | Node 库 | `paper-identity-v1` 的 Node 规范化、官方来源 URL 门禁与稳定 SHA；不替换既有 arXiv helper。 |
@@ -117,7 +122,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/historical-direct-control.js` | Node 库 | 提供 source/analysis 两阶段 plan+generation 绑定的 immutable pause request、安全 resume、source checkpoint、registry/aggregate/task/publication blocker 只读汇总；不调用模型或修改博客。 |
 | `lib/historical-direct-page-staging.js` | Node 库 | 将 sealed direct source/analysis/Reader packet 投影成历史单篇 staging 页面；跨标题预印本显示非 camera-ready 提示；current PDF=404 的同 canonical 历史版本显示“当前稿不可用”提示，并确定性重放 disclosure、manifest 与页面 SHA。 |
 | `lib/historical-direct-aggregate.js` | Node 库 | 从 direct registry 与 page projections 可重放地产生日汇总、会议汇总和 conference-task staging，不读取旧正文；projection v3 用冻结链接拓扑绑定 task 成员，为无论文汇总签 `retain-unchanged`，并闭合 inventory 全页面 coverage；reader-facing-v3 输出只按主任务统计热门方向，并显示双语链接标题、八维评分、分档/文档类型/arXiv、作者机构和资源状态；条件重放历史 arXiv version identity，在排行榜和条目中显式显示当前稿不可用及实际官方 `vN` 链接。 |
-| `lib/historical-direct-publication.js` | Node 库 | 对完整 direct staging、aggregate projection v3、aggregate v2 与显式视觉处置执行可恢复的历史发布事务；绑定博客基线、逐页 SHA、确定性/Hugo/语义审查、激活回滚、Git 提交及远端 OID。 |
+| `lib/historical-direct-publication.js` | Node 库 | 对完整 direct staging、aggregate projection v3、aggregate v2 与显式视觉处置执行可恢复的历史发布事务；绑定博客基线、以路径+内容 SHA 永久复用的逐页通过 checkpoint、当前批次确定性/Hugo gate 与 receipt、激活回滚、Git 提交及远端 OID。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
@@ -128,10 +133,13 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `conference-analyze.js` | 从完整会议 plan/import/filter/discovery 证明准备、执行或查看隔离的逐篇深度分析；恢复时重新验证 live authority，不写日更 `current`。 |
 | `conference-import.js` | 只接受 staging/import 双文件及完整 discovery/filter 证明，复制认证来源并成对写 ledger/import receipt；不接收任意路径。 |
 | `conference-discover.js` | 只读扫描显式会议元数据/PDF目录并生成 O_EXCL 候选 catalog/report；不确认身份、不调用模型。 |
+| `official-conference-acquire.js` | 在 daily workspace 内从集中配置根执行 `catalog/download/status/verify`；固定 provider 身份、项目 CONNECT 代理和官方 allowlist，不接受任意输出目录；`download` 可显式使用 1–5 路有界并发及 0–5 次同 URL 瞬时网络重试。 |
 | `conference-plan.js` | 重放 discovery→filter→staging→import 全链、reviewed plan 和 taxonomy SHA，成对创建不可覆盖 run/plan receipt。 |
 | `conference-execution.js` | 重放 run/plan/import/staging/filter/discovery 全链创建隔离 execution，并以受控 patch/CAS 推进；不写日更 `current`。 |
-| `conference-filter.js` | 创建、检查和应用受控会议筛选 decision；手工入口不能构造或加载 LLM actor，生产 LLM 工件只由受控 runner 内部签发。 |
-| `conference-filter-run.js` | 仅在显式 `--apply` 下从认证 discovery/filter/spec 逐篇调用固定公共 `requestLlmJson()`；pending 优先，failed 仅显式限次退避重试，崩溃先恢复已有证据且不自动重复计费。 |
+| `conference-filter.js` | 从同一会议的认证 discovery pair 与 complete evidence run 创建不可共享的 v5 spec，再创建、检查和应用受控会议筛选 decision；手工入口不能构造或加载 LLM actor，生产 LLM 工件只由受控 runner 内部签发。 |
+| `conference-filter-run.js` | 仅在显式 `--apply` 下重放与当前 catalog/report/evidence run 精确绑定的每会 v5 spec，并逐篇调用固定公共 `requestLlmJson()`；pending 优先，failed 仅显式限次退避重试，崩溃先恢复已有证据且不自动重复计费。 |
+| `conference-filter-evidence.js` | 在模型筛选前，从认证 discovery 的 sealed PDF 生成可恢复、可重放的全文提取与 `abstract-locator-v1` 原文摘要证据；只写 evidence catalog/report，不作筛选决定或模型请求。 |
+| `conference-filter-evidence-extract.py` | evidence run 的固定 pypdf worker：仅从受控 source root 读取 request/metadata/PDF，输出页级文本、摘要定位结果和可重放 receipt；不联网、不调用模型。 |
 | `conference-staging.js` | 把完整 filter included 集合与已审 extraction 工件绑定成不可覆盖 import manifest/receipt；不复制文件或调用模型。 |
 | `conference-extract.py` | 对 staging-source 中一篇显式 PDF 执行 text-only 页级提取；`--verify --source-root ABS` 用固定 pypdf 临时重提取并比较已有 bundle，仍不声明公式/表格/图片可靠。 |
 | `conference_extractor.py` | Python 会议 PDF 提取实现：严格文件/SHA、UTF-8 byte offset、pypdf 页文本、O_EXCL 和 typed blocked/integrity 状态。 |
@@ -149,6 +157,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-publication.js` | `plan` 冻结历史发布输入、博客基线与逐路径操作；`generate` 再重放 producer 并 O_EXCL 写私有 bundle。conference refs 在有 authenticated aggregate 前明确拒绝。 |
 | `historical-postprocess-scheduler.js` | legacy fallback：可恢复地编排旧 crosswalk analysis 的重标、staging 与日期汇总；direct-local 使用 `historical-direct-aggregate.js`。 |
 | `conference-postprocess.js` | 使用完整 conference plan authority flags 对单篇执行重标/staging，或对 plan 全量 selected members 生成隔离 aggregate；roots 全部来自项目配置。 |
+| `conference-process.js` | 新会议唯一生产批入口：从 complete filter selection 自动封存 official-proceedings exact PDF、导入、生成 current-taxonomy plan，以稳定逐篇 UUID 和最多 3 并发复用公共 analysis engine，完成单页与全会 aggregate staging；统一 checkpoint/completion receipt 绑定全过程且不发布博客。 |
 | `conference-page-render.py` | 从已封存 conference Reader 与 assigned taxonomy 渲染无 arXiv 别名的弱结构会议单篇页；不生成资产，不读取旧博客正文。 |
 | `historical-arxiv-batch.js` | strict fallback：只接受 `--handoffs NAME.json[,NAME.json...]` 的 named immutable fresh-arXiv failure handoff。逐页重放冻结 inventory/page SHA 与非标题链接；不扫描 crosswalk pending 页，不调用 LLM，也不阻塞 direct 队列。 |
 | `historical-archive-crawl-batch.js` | retired fail-closed compatibility endpoint；retained archive crawler 数据只能由 direct 路线消费。 |
@@ -217,7 +226,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `publication_activation.py` | Python 入口/共享库 | 复验旧提交、基线与实时远端，私有归档六个精确状态文件；pending 门禁保护三阶段，支持中断重入，不修改已提升科学状态。 |
 | `review-blog.py` | Python 入口 | 对 generation 执行确定性、LLM、图片和 Hugo 审查并签发 receipt。 |
 | `push-blog.py` | Python 入口 | 复验 receipt，提交/推送并验证远端 OID，然后规划视觉任务。 |
-| `publish-to-blog.py` | Python 核心 | 三阶段共用的生成模板、researcher-workbench-v1 front matter/citation 与 rethink sidecar、taxonomy 扁平兼容投影、Git 事务、审查缓存、receipt 与发布证明实现。 |
+| `publish-to-blog.py` | Python 核心 | 三阶段共用的生成模板、researcher-workbench-v1 front matter/citation 与 rethink sidecar、taxonomy 扁平兼容投影、Git 事务、以“相对路径 + 内容 SHA”永久复用的逐页审查缓存、批次 receipt 与发布证明实现；发布器代码变化仍重渲染，但不重审最终字节未变的文件。 |
 | `publish_common.py` | Python 共享 | 发布数据、评分、Manual/API provenance 和 LLM review 公共契约。 |
 | `blog_entry_loader.py` | Python 桥 | 以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `markdown_hugo_gate.py` | Python 共享 | Markdown、frontmatter、公式、图片和 Hugo 渲染门禁。 |

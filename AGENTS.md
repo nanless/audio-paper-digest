@@ -133,7 +133,7 @@ npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-generate 只生成并签发 schema v3 generation manifest；review 只读审查最终字节并绑定逐页 SHA、协议、Git 基线和 Hugo gate；push 只提交 receipt 精确允许的 delta，推送后验证远端 `main` OID。任何页面字节、generation、协议、基线或 remote 身份漂移都必须失败关闭。review worker 不得原地修改已审字节；修正建议返回生成/修复阶段。
+generate 只生成并签发 schema v3 generation manifest；review 只读审查最终字节并绑定逐页 SHA、协议、Git 基线和 Hugo gate；push 只提交 receipt 精确允许的 delta，推送后验证远端 `main` OID。发布器代码变化仍会使 generate 重新渲染，以便真实字节变化被发现；但逐页通过证据永久只按“相对路径 + 页面内容 SHA”复用。generation manifest 元数据、模型、发布器代码、review 协议指纹或 Hugo 运行时变化不得让最终字节未变的文件重审；它们只要求重跑当前批次 gate 并重签 receipt。只有页面内容 SHA 变化才重审该文件。基线、remote 身份或 receipt 与当前批次不匹配仍会阻断 push。review worker 不得原地修改已审字节；修正建议返回生成/修复阶段。
 
 ## 发布后视觉与完成定义
 

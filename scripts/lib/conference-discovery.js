@@ -8,11 +8,12 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
+const paperIdentity = require('./paper-identity.js');
 
 const CONTRACT = 'conference-discovery-v2';
 const REPORT_CONTRACT = 'conference-discovery-report-v2';
 const VERSION = 2;
-const ADAPTERS = new Set(['icassp', 'iclr', 'icml']);
+const ADAPTERS = new Set(['icassp', 'iclr', 'icml', 'official-proceedings']);
 const MATCH_KINDS = ['exact', 'normalized', 'ambiguous', 'unmatched'];
 const MAX_METADATA_BYTES = 64 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
@@ -174,6 +175,72 @@ function text(value, name) {
     return value;
 }
 
+function optionalText(value, name, { allowEmpty = false, max = 16384 } = {}) {
+    if (value === null) return null;
+    if (typeof value !== 'string' || value !== value.trim() || value.length > max
+        || (!allowEmpty && !value) || /[\u0000-\u001f\u007f]/u.test(value)) {
+        throw fail(`${name} must be ${allowEmpty ? 'a trimmed' : 'a non-empty trimmed'} string without controls or null`);
+    }
+    return value;
+}
+
+function publicHttpsUrl(value, name, { nullable = false } = {}) {
+    if (nullable && value === null) return null;
+    text(value, name);
+    let parsed;
+    try { parsed = new URL(value); } catch { throw fail(`${name} must be a URL`); }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.hash
+        || !parsed.hostname.includes('.') || parsed.hostname === 'localhost' || parsed.hostname.endsWith('.localhost')
+        || parsed.hostname.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname)
+        || parsed.toString() !== value) {
+        throw fail(`${name} must be a canonical public HTTPS URL without credentials, port, or fragment`);
+    }
+    return value;
+}
+
+function officialConference(value, name = 'official metadata conference') {
+    exact(value, ['id', 'year'], name);
+    let coordinates;
+    try { coordinates = paperIdentity.conferenceCoordinates(value); }
+    catch (error) { throw fail(`${name} is invalid: ${error.message}`); }
+    return { id: `${coordinates.slug}-${coordinates.year}`, year: coordinates.year };
+}
+
+function officialPdfFile(value, name) {
+    if (value === null) return null;
+    let relative;
+    try { relative = ledgerApi.assertRelativePath(value, name); }
+    catch (error) { throw fail(error.message); }
+    if (relative.length > 1024 || path.posix.extname(relative).toLowerCase() !== '.pdf') {
+        throw fail(`${name} must be a normalized relative PDF path or null`);
+    }
+    return relative;
+}
+
+function normalizeOfficialRecord(record, index) {
+    exact(record, ['id', 'title', 'authors', 'abstract', 'pdfFile', 'recordUrl', 'pdfUrl', 'doi', 'track'], `metadata[${index}]`);
+    let identity;
+    try {
+        const external = paperIdentity.validateExternalId({ scheme: 'conference-paper-id', value: record.id });
+        identity = { type: external.scheme, value: external.value };
+    } catch (error) { throw fail(`metadata[${index}].id is invalid: ${error.message}`); }
+    const title = text(record.title, `metadata[${index}].title`);
+    if (!Array.isArray(record.authors) || !record.authors.length || record.authors.length > 1000) {
+        throw fail(`metadata[${index}].authors must be a nonempty array of at most 1000 names`);
+    }
+    const authors = record.authors.map((author, authorIndex) => text(author, `metadata[${index}].authors[${authorIndex}]`));
+    if (new Set(authors).size !== authors.length) throw fail(`metadata[${index}].authors contains duplicates`);
+    const abstract = optionalText(record.abstract, `metadata[${index}].abstract`, { allowEmpty: true, max: 500000 });
+    if (abstract === null) throw fail(`metadata[${index}].abstract must be a string`);
+    const pdfFile = officialPdfFile(record.pdfFile, `metadata[${index}].pdfFile`);
+    publicHttpsUrl(record.recordUrl, `metadata[${index}].recordUrl`);
+    publicHttpsUrl(record.pdfUrl, `metadata[${index}].pdfUrl`, { nullable: true });
+    const doi = optionalText(record.doi, `metadata[${index}].doi`, { max: 1024 });
+    if (doi !== null && !/^10\.\d{4,9}\/\S+$/i.test(doi)) throw fail(`metadata[${index}].doi must be a DOI or null`);
+    optionalText(record.track, `metadata[${index}].track`, { max: 1024 });
+    return { identity, metadataIndex: index, title, numericAlias: null, pdfFile };
+}
+
 function positiveIntegerString(value, name) {
     if (typeof value === 'number') {
         if (!Number.isSafeInteger(value) || value < 1) throw fail(`${name} must be a positive safe integer`);
@@ -189,10 +256,19 @@ function forumId(value, name) {
     return value;
 }
 
-function extractRecords(adapter, snapshot) {
+function extractRecords(adapter, snapshot, expectedConference = null) {
     if (adapter === 'icassp' || adapter === 'iclr') {
         if (!Array.isArray(snapshot)) throw fail(`${adapter} metadata snapshot must be an array`);
         return snapshot;
+    }
+    if (adapter === 'official-proceedings') {
+        exact(snapshot, ['conference', 'papers'], 'official-proceedings metadata snapshot');
+        const conference = officialConference(snapshot.conference);
+        if (expectedConference && (conference.id !== expectedConference.id || conference.year !== expectedConference.year)) {
+            throw fail('official-proceedings metadata conference does not match the requested conference identity');
+        }
+        if (!Array.isArray(snapshot.papers)) throw fail('official-proceedings metadata snapshot papers must be an array');
+        return snapshot.papers;
     }
     if (!plain(snapshot) || !Array.isArray(snapshot.papers)) throw fail('icml metadata snapshot must be an object with a papers array');
     return snapshot.papers;
@@ -210,6 +286,7 @@ function optionalNumericAlias(record, index, includeId = false) {
 
 function normalizeMetadataMember(adapter, record, index) {
     if (!plain(record)) throw fail(`metadata[${index}] must be a plain object`);
+    if (adapter === 'official-proceedings') return normalizeOfficialRecord(record, index);
     const title = text(record.title, `metadata[${index}].title`);
     if (adapter === 'icassp') {
         return { identity: { type: 'icassp-arnumber', value: positiveIntegerString(record.arnumber, `metadata[${index}].arnumber`) },
@@ -255,6 +332,12 @@ function icasspMatch(member, catalog) {
 function openReviewMatch(member, catalogByPath) {
     const expected = `${member.identity.value}.pdf`;
     const candidate = catalogByPath.get(expected);
+    return candidate ? { kind: 'exact', candidates: [candidate] } : { kind: 'unmatched', candidates: [] };
+}
+
+function officialProceedingsMatch(member, catalogByPath) {
+    if (member.pdfFile === null) return { kind: 'unmatched', candidates: [] };
+    const candidate = catalogByPath.get(member.pdfFile);
     return candidate ? { kind: 'exact', candidates: [candidate] } : { kind: 'unmatched', candidates: [] };
 }
 
@@ -306,18 +389,35 @@ function sameDescriptor(left, right) {
     return left.path === right.path && left.sha256 === right.sha256 && left.size === right.size;
 }
 
+function validateConferenceForAdapter(adapter, conference) {
+    if (adapter === 'official-proceedings') return officialConference(conference, 'candidate manifest conference');
+    exact(conference, ['id', 'year'], 'candidate manifest conference');
+    if (!Number.isInteger(conference.year) || conference.year < 1900 || conference.year > 2100
+        || conference.id !== `${adapter}-${conference.year}`) {
+        throw fail('candidate manifest conference identity is inconsistent');
+    }
+    return { id: conference.id, year: conference.year };
+}
+
+function memberFields(adapter) {
+    return adapter === 'official-proceedings'
+        ? ['identity', 'metadataIndex', 'title', 'numericAlias', 'pdfFile', 'match']
+        : ['identity', 'metadataIndex', 'title', 'numericAlias', 'match'];
+}
+
+function matchMember(adapter, member, pdfCatalog, byPath) {
+    if (adapter === 'icassp') return icasspMatch(member, pdfCatalog);
+    if (adapter === 'official-proceedings') return officialProceedingsMatch(member, byPath);
+    return openReviewMatch(member, byPath);
+}
+
 function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, reportRawBytes } = {}) {
     exact(candidateManifest, ['contract', 'version', 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
         'pdfCatalogSha256', 'pdfCatalog', 'members', 'memberSetSha256'], 'candidate manifest');
     if (candidateManifest.contract !== CONTRACT || candidateManifest.version !== VERSION || !ADAPTERS.has(candidateManifest.adapter)) {
         throw fail('candidate manifest contract/version/adapter is unsupported');
     }
-    exact(candidateManifest.conference, ['id', 'year'], 'candidate manifest conference');
-    if (!Number.isInteger(candidateManifest.conference.year) || candidateManifest.conference.year < 1900
-        || candidateManifest.conference.year > 2100
-        || candidateManifest.conference.id !== `${candidateManifest.adapter}-${candidateManifest.conference.year}`) {
-        throw fail('candidate manifest conference identity is inconsistent');
-    }
+    validateConferenceForAdapter(candidateManifest.adapter, candidateManifest.conference);
     exact(candidateManifest.metadataSnapshot, ['file', 'sha256', 'size'], 'candidate manifest metadataSnapshot');
     if (typeof candidateManifest.metadataSnapshot.file !== 'string' || !path.isAbsolute(candidateManifest.metadataSnapshot.file)
         || !Number.isSafeInteger(candidateManifest.metadataSnapshot.size) || candidateManifest.metadataSnapshot.size < 1
@@ -345,11 +445,12 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
     const metadataIndexes = new Set();
     const singleCandidateOwners = new Map();
     for (const [index, member] of candidateManifest.members.entries()) {
-        exact(member, ['identity', 'metadataIndex', 'title', 'numericAlias', 'match'], `member[${index}]`);
+        exact(member, memberFields(candidateManifest.adapter), `member[${index}]`);
         let identity;
         try { identity = ledgerApi.identityKey(member.identity); }
         catch (error) { throw fail(`member[${index}] identity is invalid: ${error.message}`); }
-        const expectedIdentityType = candidateManifest.adapter === 'icassp' ? 'icassp-arnumber' : 'openreview-forum-id';
+        const expectedIdentityType = candidateManifest.adapter === 'icassp' ? 'icassp-arnumber'
+            : candidateManifest.adapter === 'official-proceedings' ? 'conference-paper-id' : 'openreview-forum-id';
         if (member.identity.type !== expectedIdentityType) {
             throw fail(`member[${index}] identity type is inconsistent with adapter ${candidateManifest.adapter}`);
         }
@@ -364,6 +465,9 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
         }
         if (candidateManifest.adapter !== 'icml' && member.numericAlias !== null) {
             throw fail(`member[${index}].numericAlias is only supported by the icml adapter`);
+        }
+        if (candidateManifest.adapter === 'official-proceedings') {
+            officialPdfFile(member.pdfFile, `member[${index}].pdfFile`);
         }
         exact(member.match, ['kind', 'candidates'], `member[${index}].match`);
         if (!MATCH_KINDS.includes(member.match.kind) || !Array.isArray(member.match.candidates)) {
@@ -407,8 +511,9 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
         throw fail('candidate manifest metadata indexes must cover every source record exactly once');
     }
     const replayMembers = candidateManifest.members.map(member => ({ identity: member.identity, title: member.title,
-        match: candidateManifest.adapter === 'icassp' ? icasspMatch(member, pdfCatalog) : openReviewMatch(member, byPath) }));
-    if (candidateManifest.adapter === 'icassp') markSharedIcasspCandidatesAmbiguous(replayMembers);
+        ...(candidateManifest.adapter === 'official-proceedings' ? { pdfFile: member.pdfFile } : {}),
+        match: matchMember(candidateManifest.adapter, member, pdfCatalog, byPath) }));
+    if (['icassp', 'official-proceedings'].includes(candidateManifest.adapter)) markSharedIcasspCandidatesAmbiguous(replayMembers);
     for (const [index, member] of candidateManifest.members.entries()) {
         const replay = replayMembers[index].match;
         if (member.match.kind !== replay.kind || member.match.candidates.length !== replay.candidates.length
@@ -502,6 +607,21 @@ function loadDiscoveryHandle(input, reportFilename) {
     const report = parseStrictJsonBytes(reportLoaded.bytes, 'discovery report file');
     const validated = validateDiscoveryBundle(catalog, report,
         { catalogRawBytes: catalogLoaded.bytes, reportRawBytes: reportLoaded.bytes });
+    const metadata = readMetadataSnapshot(validated.candidateManifest.metadataSnapshot.file);
+    if (metadata.descriptor.sha256 !== validated.candidateManifest.metadataSnapshot.sha256
+        || metadata.descriptor.size !== validated.candidateManifest.metadataSnapshot.size) {
+        throw fail('metadata snapshot bytes drifted after discovery');
+    }
+    const records = extractRecords(validated.candidateManifest.adapter, metadata.value, validated.candidateManifest.conference);
+    if (records.length !== validated.candidateManifest.members.length) throw fail('metadata snapshot record set no longer matches discovery');
+    for (const member of validated.candidateManifest.members) {
+        const normalized = normalizeMetadataMember(validated.candidateManifest.adapter, records[member.metadataIndex], member.metadataIndex);
+        if (ledgerApi.identityKey(normalized.identity) !== ledgerApi.identityKey(member.identity)
+            || normalized.title !== member.title || normalized.numericAlias !== member.numericAlias
+            || (validated.candidateManifest.adapter === 'official-proceedings' && normalized.pdfFile !== member.pdfFile)) {
+            throw fail('metadata snapshot no longer binds the discovered member catalog');
+        }
+    }
     const handle = Object.freeze(Object.create(null));
     DISCOVERY_HANDLES.add(handle);
     DISCOVERY_HANDLE_DATA.set(handle, Object.freeze({
@@ -525,6 +645,47 @@ function discoveryHandleSnapshot(handle) {
         report: JSON.parse(JSON.stringify(data.report)), catalogSha256: data.catalogSha256, reportSha256: data.reportSha256 };
 }
 
+// Revalidate the immutable metadata snapshot once and replay the complete
+// member set from those same bytes.  Bulk consumers must not call the
+// single-member replay N times: that would reread and reparse the complete
+// metadata snapshot for every paper.
+function replayDiscoveryMembers(handle) {
+    if (!handle || typeof handle !== 'object' || !DISCOVERY_HANDLES.has(handle)) {
+        throw fail('an authenticated loaded discovery handle is required');
+    }
+    const data = DISCOVERY_HANDLE_DATA.get(handle);
+    const manifest = data.candidateManifest;
+    const loaded = readMetadataSnapshot(manifest.metadataSnapshot.file);
+    if (loaded.descriptor.file !== manifest.metadataSnapshot.file
+        || loaded.descriptor.sha256 !== manifest.metadataSnapshot.sha256
+        || loaded.descriptor.size !== manifest.metadataSnapshot.size) {
+        throw fail('metadata snapshot bytes drifted after discovery');
+    }
+    const records = extractRecords(manifest.adapter, loaded.value, manifest.conference);
+    if (records.length !== manifest.members.length) {
+        throw fail('metadata snapshot record set no longer matches discovery');
+    }
+    return manifest.members.map(member => {
+        if (member.metadataIndex >= records.length) throw fail('metadata member index escaped the source record set');
+        const record = records[member.metadataIndex];
+        const normalized = normalizeMetadataMember(manifest.adapter, record, member.metadataIndex);
+        const sourceIdentity = ledgerApi.identityKey(member.identity);
+        if (ledgerApi.identityKey(normalized.identity) !== sourceIdentity || normalized.title !== member.title
+            || normalized.numericAlias !== member.numericAlias
+            || (manifest.adapter === 'official-proceedings' && normalized.pdfFile !== member.pdfFile)) {
+            throw fail('metadata record no longer binds the discovered member identity');
+        }
+        return {
+            conference: JSON.parse(JSON.stringify(manifest.conference)), adapter: manifest.adapter,
+            sourceIdentity, identity: JSON.parse(JSON.stringify(member.identity)), metadataIndex: member.metadataIndex,
+            metadataSnapshotSha256: manifest.metadataSnapshot.sha256,
+            metadataRecordSha256: ledgerApi.stableHash(record),
+            metadataRecord: JSON.parse(JSON.stringify(record)),
+            match: JSON.parse(JSON.stringify(member.match)), catalogSha256: data.catalogSha256
+        };
+    });
+}
+
 function replayDiscoveryMember(handle, sourceIdentity) {
     if (!handle || typeof handle !== 'object' || !DISCOVERY_HANDLES.has(handle)) {
         throw fail('an authenticated loaded discovery handle is required');
@@ -540,14 +701,15 @@ function replayDiscoveryMember(handle, sourceIdentity) {
         || loaded.descriptor.size !== manifest.metadataSnapshot.size) {
         throw fail('metadata snapshot bytes drifted after discovery');
     }
-    const records = extractRecords(manifest.adapter, loaded.value);
+    const records = extractRecords(manifest.adapter, loaded.value, manifest.conference);
     if (records.length !== manifest.members.length || member.metadataIndex >= records.length) {
         throw fail('metadata snapshot record set no longer matches discovery');
     }
     const record = records[member.metadataIndex];
     const normalized = normalizeMetadataMember(manifest.adapter, record, member.metadataIndex);
     if (ledgerApi.identityKey(normalized.identity) !== sourceIdentity || normalized.title !== member.title
-        || normalized.numericAlias !== member.numericAlias) {
+        || normalized.numericAlias !== member.numericAlias
+        || (manifest.adapter === 'official-proceedings' && normalized.pdfFile !== member.pdfFile)) {
         throw fail('metadata record no longer binds the discovered member identity');
     }
     return {
@@ -560,25 +722,36 @@ function replayDiscoveryMember(handle, sourceIdentity) {
     };
 }
 
-function discoverConference({ adapter, year, metadataFile, pdfRoot } = {}) {
-    if (!ADAPTERS.has(adapter)) throw fail('adapter must be one of: icassp, iclr, icml');
+function discoverConference({ adapter, year, conferenceId = null, metadataFile, pdfRoot } = {}) {
+    if (!ADAPTERS.has(adapter)) throw fail('adapter must be one of: icassp, iclr, icml, official-proceedings');
     if (!Number.isInteger(year) || year < 1900 || year > 2100) throw fail('year must be a supported four-digit integer');
     const metadata = readMetadataSnapshot(metadataFile);
     const pdfs = catalogPdfs(pdfRoot);
-    const records = extractRecords(adapter, metadata.value);
+    let conference;
+    if (adapter === 'official-proceedings') {
+        if (typeof conferenceId !== 'string' || !conferenceId) throw fail('official-proceedings requires conferenceId');
+        conference = officialConference(metadata.value?.conference);
+        if (conference.id !== conferenceId || conference.year !== year) {
+            throw fail('official-proceedings metadata conference must match conferenceId and year');
+        }
+    } else {
+        conference = { id: `${adapter}-${year}`, year };
+        if (conferenceId !== null && conferenceId !== conference.id) throw fail('conferenceId is inconsistent with adapter and year');
+    }
+    const records = extractRecords(adapter, metadata.value, conference);
     if (!records.length) throw fail('metadata snapshot must contain at least one paper');
     const members = records.map((record, index) => normalizeMetadataMember(adapter, record, index));
     const identityKeys = members.map(member => ledgerApi.identityKey(member.identity));
     if (new Set(identityKeys).size !== identityKeys.length) throw fail('metadata snapshot contains duplicate primary identities');
     const byPath = descriptorMap(pdfs.catalog);
-    for (const member of members) member.match = adapter === 'icassp' ? icasspMatch(member, pdfs.catalog) : openReviewMatch(member, byPath);
-    if (adapter === 'icassp') markSharedIcasspCandidatesAmbiguous(members);
+    for (const member of members) member.match = matchMember(adapter, member, pdfs.catalog, byPath);
+    if (['icassp', 'official-proceedings'].includes(adapter)) markSharedIcasspCandidatesAmbiguous(members);
     members.sort((left, right) => compare(ledgerApi.identityKey(left.identity), ledgerApi.identityKey(right.identity)));
     const manifest = {
         contract: CONTRACT,
         version: VERSION,
         adapter,
-        conference: { id: `${adapter}-${year}`, year },
+        conference,
         metadataSnapshot: metadata.descriptor,
         pdfRoot: pdfs.root,
         pdfCatalogSha256: pdfs.catalogSha256,
@@ -592,6 +765,7 @@ function discoverConference({ adapter, year, metadataFile, pdfRoot } = {}) {
 module.exports = {
     CONTRACT, REPORT_CONTRACT, VERSION, ADAPTERS, MATCH_KINDS, MAX_METADATA_BYTES, MAX_PDF_BYTES,
     canonicalBytes, readMetadataSnapshot, catalogPdfs, normalizedTitle, discoverConference, buildReport,
-    validateDiscoveryBundle, loadDiscoveryHandle, discoveryHandleSnapshot, replayDiscoveryMember, SAFE_JSON_NAME,
+    validateDiscoveryBundle, loadDiscoveryHandle, discoveryHandleSnapshot, replayDiscoveryMember,
+    replayDiscoveryMembers, SAFE_JSON_NAME,
     safeAbsoluteDirectory, safeAbsoluteFile
 };

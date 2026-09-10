@@ -28,6 +28,7 @@ const {
     detectApiType,
     buildApiUrl,
     buildRequestBody,
+    getFilterAttemptMaxTokens,
     buildHeaders,
     parseResponseText,
     getResponsesOutputTruncationError,
@@ -528,9 +529,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         // Muse 的 Responses API 会先消耗隐藏推理 token。首次请求保持原预算；
         // 一旦需要重试就扩大到 4096，避免连续得到 status=incomplete。
-        const attemptMaxTokens = apiType === 'openai_responses' && attempt > 1
-            ? Math.max(maxTokens, 4096)
-            : maxTokens;
+        const attemptMaxTokens = getFilterAttemptMaxTokens(apiType, maxTokens, attempt);
         const bodyObj = buildRequestBody(
             apiType,
             runtimeConfig.model,

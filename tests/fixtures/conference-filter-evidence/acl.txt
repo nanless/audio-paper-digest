@@ -1,0 +1,5 @@
+ACL 2026
+Abstract
+We introduce a speech translation system that aligns acoustic representations with spoken-language tokens and improves robustness under noisy evaluation conditions.
+1 Introduction
+The remaining paper begins here.

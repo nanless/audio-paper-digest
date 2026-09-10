@@ -25,7 +25,7 @@ import copy
 import contextvars
 import difflib
 import html
-import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib, math
+import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib, math, io
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, time, signal
 from contextlib import contextmanager
 from pathlib import Path
@@ -1173,6 +1173,8 @@ REVIEW_IMAGE_MIME_TYPES = {
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
 }
 REVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+REVIEW_IMAGE_MAX_EDGE = 4096
+REVIEW_IMAGE_MAX_PIXELS = 16 * 1024 * 1024
 REVIEW_IMAGE_DEADLINE_SECONDS = 120
 HUGO_GATE_TIMEOUT_SECONDS = 300
 HUGO_GATE_OUTPUT_TAIL_BYTES = 128 * 1024
@@ -1405,6 +1407,7 @@ def _download_review_image(url):
             if media_type == 'image/svg+xml':
                 raw = _rasterize_svg_for_review(raw)
                 media_type = 'image/png'
+            media_type, raw = _prepare_raster_for_review(media_type, raw)
             return {
                 'media_type': media_type,
                 'data': base64.b64encode(raw).decode('ascii'),
@@ -1436,6 +1439,49 @@ def _validate_image_signature(media_type, raw):
         raise PublishDataValidationError('图片内容为空')
     if not signatures.get(media_type, False):
         raise PublishDataValidationError(f'图片内容与 MIME 签名不一致: {media_type}')
+
+
+def _prepare_raster_for_review(media_type, raw):
+    """Bound decoded raster dimensions before sending bytes to the reviewer."""
+    if media_type == 'image/svg+xml':
+        return media_type, raw
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(io.BytesIO(raw)) as source:
+            width, height = source.size
+            if width <= 0 or height <= 0:
+                raise PublishDataValidationError('图片像素尺寸非法')
+            if (max(width, height) <= REVIEW_IMAGE_MAX_EDGE
+                    and width * height <= REVIEW_IMAGE_MAX_PIXELS):
+                return media_type, raw
+            scale = min(
+                REVIEW_IMAGE_MAX_EDGE / width,
+                REVIEW_IMAGE_MAX_EDGE / height,
+                math.sqrt(REVIEW_IMAGE_MAX_PIXELS / (width * height)),
+            )
+            target = (
+                max(1, int(width * scale)),
+                max(1, int(height * scale)),
+            )
+            image = ImageOps.exif_transpose(source).convert('RGBA')
+            image.thumbnail(target, Image.Resampling.LANCZOS)
+            background = Image.new('RGB', image.size, 'white')
+            background.paste(image, mask=image.getchannel('A'))
+            for quality in (90, 82, 74):
+                output = io.BytesIO()
+                background.save(
+                    output, format='JPEG', quality=quality,
+                    optimize=True, progressive=True,
+                )
+                prepared = output.getvalue()
+                if len(prepared) <= REVIEW_IMAGE_MAX_BYTES:
+                    _validate_image_signature('image/jpeg', prepared)
+                    return 'image/jpeg', prepared
+    except PublishDataValidationError:
+        raise
+    except Exception as exc:
+        raise PublishDataValidationError(f'图片审查降采样失败: {exc}') from exc
+    raise PublishDataValidationError('图片审查降采样结果超过 8 MiB')
 
 
 def _rasterize_svg_for_review(raw):
@@ -1532,6 +1578,7 @@ def _load_review_image(url):
         if media_type == 'image/svg+xml':
             raw = _rasterize_svg_for_review(raw)
             media_type = 'image/png'
+        media_type, raw = _prepare_raster_for_review(media_type, raw)
         return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
     if url.startswith('https://'):
         return _download_review_image(url)
@@ -1560,7 +1607,8 @@ def _load_review_image(url):
         if len(raw) > REVIEW_IMAGE_MAX_BYTES:
             raise PublishDataValidationError('本地受控图片超过 8 MiB review 上限')
         _validate_image_signature('image/png', raw)
-        return {'media_type': 'image/png', 'data': base64.b64encode(raw).decode('ascii')}
+        media_type, raw = _prepare_raster_for_review('image/png', raw)
+        return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
     raise PublishDataValidationError('图片 review 只允许 data URI、HTTPS 或受控本地图片 URL')
 
 
@@ -2983,16 +3031,30 @@ def _detailed_core_summary_semantic_issue(summary):
         re.IGNORECASE,
     )
     comparison = re.compile(
-        r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先)',
+        r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|on par|comparable|(?:由|从)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)',
         re.IGNORECASE,
+    )
+    baseline_transition = re.compile(
+        r'(?:基线|对照|原方法|已有方法|先前方法)'
+        r'[^。！？!?\n]{0,40}(?:为|达到)\s*[-+]?\d+(?:\.\d+)?'
+        r'[^。！？!?\n]{0,50}(?:升至|降至)\s*[-+]?\d',
     )
     number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
     setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)', re.IGNORECASE)
     has_complete_result = False
     for sentence in re.split(r'[。！？!?\n]', summary):
         result_sentence = _strip_core_summary_non_result_numerals(sentence)
-        numbers = number.findall(result_sentence)
-        if metric.search(result_sentence) and comparison.search(result_sentence) and numbers \
+        # A numeric metric qualifier such as R@0.9 or F1 identifies the
+        # metric; it is not one endpoint of an experimental transition.
+        numeric_result_sentence = metric.sub(
+            lambda match: re.sub(r'\d+(?:\.\d+)?', '', match.group(0)),
+            result_sentence,
+        )
+        numbers = number.findall(numeric_result_sentence)
+        has_direction = comparison.search(result_sentence) or (
+            len(numbers) >= 2 and baseline_transition.search(result_sentence)
+        )
+        if metric.search(result_sentence) and has_direction and numbers \
                 and setting.search(result_sentence) \
                 and (len(numbers) >= 2 or re.search(
                     r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)', result_sentence
@@ -3185,6 +3247,10 @@ def _modern_api_reader_projection(paper, payload=None):
         status = statuses[resource['availability']]
         if resource['status'] is not None:
             status += f'（HTTP {resource["status"]}）'
+        documentation = resource.get('documentationEvidence')
+        if isinstance(documentation, dict) \
+                and documentation.get('completeness') == 'complete':
+            status += '；README 已验证包含安装、推理与微调文档'
         lines.append(f'- {labels[resource["type"]]}：{url_text} — {status}')
     if not lines:
         lines.append('本次未形成可展示的已核验资源记录，开放状态尚未核实。')
@@ -3979,7 +4045,17 @@ def _api_reader_markdown_tables(article):
                 fence = (match.group(1)[0], len(match.group(1)))
                 visible_lines.append('')
             else:
-                visible_lines.append(line)
+                # Publication escapes literal acoustic/biological sequence
+                # symbols (for example ``*******___``) so Markdown does not
+                # parse them as emphasis.  Reconstruct the canonical source
+                # bytes before replaying the signed table hash and cell map.
+                visible_lines.append(re.sub(
+                    r'(?<=\|)([ \t]*)((?:\\[*_]|[*_])+)([ \t]*)(?=\|)',
+                    lambda cell: cell.group(1)
+                    + cell.group(2).replace(r'\*', '*').replace(r'\_', '_')
+                    + cell.group(3),
+                    line,
+                ))
             continue
         if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= fence[1]:
             fence = None
@@ -4511,7 +4587,7 @@ def _validate_api_reader_resource_identity(paper):
             'type', 'origin', 'sourceQuote', 'sourceQuoteSha256',
             'originalUrl', 'finalUrl', 'redirects', 'status', 'availability',
         }
-        allowed = required | {'retryable', 'failureCode'}
+        allowed = required | {'retryable', 'failureCode', 'documentationEvidence'}
         if not isinstance(resource, dict) or not required.issubset(resource) \
                 or not set(resource).issubset(allowed):
             raise PublishDataValidationError(f'API reader resources[{index}] 字段非法')
@@ -4577,6 +4653,48 @@ def _validate_api_reader_resource_identity(paper):
                 or not isinstance(failure_code, str) or not failure_code.strip()
                 or len(failure_code) > 100):
             raise PublishDataValidationError(f'API reader resources[{index}] failureCode 非法')
+        documentation = resource.get('documentationEvidence')
+        if documentation is not None:
+            documentation_keys = {
+                'contract', 'repositoryUrl', 'sourceUrl', 'status',
+                'sourceSha256', 'capabilities', 'completeness',
+            }
+            capabilities = documentation.get('capabilities') \
+                if isinstance(documentation, dict) else None
+            if not isinstance(documentation, dict) \
+                    or set(documentation) != documentation_keys \
+                    or resource.get('type') != 'code' \
+                    or availability != 'available' \
+                    or documentation.get('contract') \
+                    != 'repository-documentation-evidence-v1' \
+                    or documentation.get('repositoryUrl') != original_url \
+                    or documentation.get('status') != 200 \
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(
+                        documentation.get('sourceSha256') or '',
+                    )) \
+                    or not isinstance(capabilities, dict) \
+                    or set(capabilities) != {'installation', 'inference', 'fineTuning'} \
+                    or not all(value is True for value in capabilities.values()) \
+                    or documentation.get('completeness') != 'complete':
+                raise PublishDataValidationError(
+                    f'API reader resources[{index}] documentationEvidence 非法'
+                )
+            source_url = _validated_https_identity_url(
+                documentation.get('sourceUrl'),
+                f'API reader resources[{index}].documentationEvidence.sourceUrl',
+            )
+            parsed_repository = urlparse(original_url)
+            repository_parts = [part for part in parsed_repository.path.split('/') if part]
+            expected_source = (
+                f'https://raw.githubusercontent.com/{repository_parts[0]}/'
+                f'{repository_parts[1]}/main/README.md'
+                if parsed_repository.hostname == 'github.com'
+                and len(repository_parts) == 2 else None
+            )
+            if source_url != expected_source:
+                raise PublishDataValidationError(
+                    f'API reader resources[{index}] documentationEvidence 来源非法'
+                )
 
     parsed_analysis = parse_analysis(paper.get('analysis', '')) or {}
     for field, resource_type in (
@@ -4651,9 +4769,14 @@ def _modern_api_safe_typo_projection(article):
     replacements = {
         '指标抽取代吗': '指标抽取代码',
         '90%五置信区间': '95% 置信区间',
+        # Bare underscores are parsed as emphasis by Goldmark.  Keep the
+        # signed Reader bytes intact, but render this reviewed token pair as
+        # inline code so the semantic set names remain visible verbatim.
+        'S_yes/S_no': '`S_yes`/`S_no`',
     }
     for old, new in replacements.items():
         article = article.replace(old, new)
+    article = re.sub(r'(?<![\w`])Syes(?![\w`])', '`S_yes`', article)
     return article
 
 
@@ -8670,7 +8793,11 @@ def _expected_post_publish_visuals(manifest, publication_scope_value=None):
 
 
 def generation_template_fingerprint():
-    """Bind generated bytes to code dependencies, URL base, and persisted schemas."""
+    """Fingerprint generation inputs so generate rerenders after code changes.
+
+    This fingerprint controls generation reuse only.  Review accepts an older
+    well-formed fingerprint and decides per-page reuse from the rendered bytes.
+    """
     script_dir = Path(__file__).resolve().parent
     dependency_paths = {
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
@@ -8697,15 +8824,12 @@ def generation_template_fingerprint():
 
 
 def validate_current_generation_template(manifest):
-    """Reject schema-v3 pages generated by a different publication template."""
+    """Validate the format marker without invalidating already generated bytes."""
     if manifest.get('schemaVersion') != 3:
         return True
-    expected = generation_template_fingerprint()
     actual = str(manifest.get('templateFingerprint') or '')
-    if not re.fullmatch(r'[0-9a-f]{64}', actual) or actual != expected:
-        raise PublishDataValidationError(
-            'generation 模板/发布契约指纹已变化，请重新运行 generate-blog.py'
-        )
+    if not re.fullmatch(r'[0-9a-f]{64}', actual):
+        raise PublishDataValidationError('generation 模板格式标识非法')
     return True
 
 
@@ -10176,8 +10300,11 @@ def save_review_receipt(
         raise PublishDataValidationError('签发审查凭证必须绑定逐文件 review 字节凭证')
     current_protocol = review_protocol_fingerprint()
     for result in reviewed_results.values():
-        if result.get('passed') is True and result.get('reviewProtocolFingerprint') not in (None, current_protocol):
-            raise PublishDataValidationError('逐文件审查协议已变化，拒绝签发当前协议凭证')
+        if result.get('passed') is True:
+            # A page pass is content-addressed, not protocol-addressed.  The
+            # current batch receipt records the current protocol while exact
+            # unchanged bytes retain their prior pass.
+            result['reviewProtocolFingerprint'] = current_protocol
     validate_generation_manifest_file_bytes(generation_manifest, date_str)
     save_review_pass_cache(date_str, publish_paths, reviewed_results)
     pass_records = _collect_review_pass_records(date_str)
@@ -10348,7 +10475,7 @@ def _valid_review_pass_record(record, repo, date_str, default_protocol=None, def
 
 
 def _collect_review_pass_records(date_str):
-    """Collect durable and legacy pass evidence keyed by path plus exact bytes."""
+    """Collect passes by path plus exact bytes, preferring the durable cache."""
     date_str = validate_publish_date(date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
     collected = {}
@@ -10384,7 +10511,10 @@ def _collect_review_pass_records(date_str):
                 default_time=default_time,
             )
             if record is not None:
-                collected[(record['path'], record['sha256'])] = record
+                # The dedicated cache is first and may contain metadata rebound
+                # for the current batch.  Older receipt/failure snapshots must
+                # not overwrite that record for the same content address.
+                collected.setdefault((record['path'], record['sha256']), record)
     return collected
 
 
@@ -10707,7 +10837,6 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                 and checkpoint.get('sha256') == current['sha256']
                 and checkpoint.get('passed') is True
                 and checkpoint.get('reviewedSha256') == current['sha256']
-                and checkpoint.get('reviewProtocolFingerprint') == current_protocol
             ):
                 cached = {
                     'reviewProtocolFingerprint': checkpoint.get(
@@ -10718,11 +10847,14 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                     ),
                 }
             key = str(item.resolve())
-            if cached is not None and cached.get('reviewProtocolFingerprint') == current_protocol:
+            if cached is not None:
                 prior_results[key] = {
                     'passed': True, 'completed': True, 'failureKind': None,
                     'reviewedSha256': current['sha256'],
-                    'reviewProtocolFingerprint': cached.get('reviewProtocolFingerprint'),
+                    # Review evidence is permanently content-addressed.  A
+                    # batch manifest or implementation fingerprint change
+                    # must not invalidate unchanged file bytes.
+                    'reviewProtocolFingerprint': current_protocol,
                     'imageReviewMode': cached.get('imageReviewMode', 'deterministic_only'),
                 }
                 reused_passed += 1
@@ -10747,7 +10879,6 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
             if (
                 current == recorded
                 and failure_kind == 'content'
-                and record.get('reviewProtocolFingerprint') == current_protocol
             ):
                 unchanged_failed.append(item.resolve())
                 prior_results[key] = {
@@ -10787,7 +10918,9 @@ def load_verified_review_receipt(date_str):
     if receipt.get('hugoGate') != 'hugo':
         raise PublishDataValidationError('审查凭证未通过 Hugo staging gate')
     if receipt.get('reviewProtocolFingerprint') != review_protocol_fingerprint():
-        raise PublishDataValidationError('审查代码、模型或 Hugo 协议指纹已变化，请重新 review')
+        raise PublishDataValidationError(
+            '当前审查协议已变化；请重跑 review 复用未变页通过证据并重签批次 receipt'
+        )
     manifest_path = generation_manifest_path(date_str)
     expected_manifest_sha = receipt.get('generationManifestSha256')
     if (
@@ -10888,7 +11021,9 @@ def load_verified_review_receipt(date_str):
                 raise PublishDataValidationError(f'已审查文件缺失或哈希非法: {key}')
             evidence_protocol = record.get('reviewProtocolFingerprint')
             if evidence_protocol != receipt.get('reviewProtocolFingerprint'):
-                raise PublishDataValidationError(f'逐文件审查协议不匹配，必须重新审查: {key}')
+                raise PublishDataValidationError(
+                    f'逐文件凭证未重绑当前批次协议: {key}'
+                )
             actual = _sha256_file(target)
             if actual != expected:
                 raise PublishDataValidationError(f'文件在 review 后已变更，拒绝推送: {key}')

@@ -253,6 +253,23 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
     return issues
 
 
+def mask_rendered_symbolic_table_cells(text):
+    """Hide validated literal sequence glyphs from the rendered Markdown scan.
+
+    Reader tables can intentionally contain cells such as ``*******___``.
+    Their source asterisks are backslash-escaped, but Hugo correctly emits
+    literal ``*`` bytes in the HTML text node.  Those bytes are data rather
+    than residual Markdown, so only complete plain ``th``/``td`` cells made
+    exclusively from sequence glyphs are masked for the HTML-only gate.
+    """
+    return re.sub(
+        r'(<t[dh]\b[^>]*>)[ \t\r\n]*[*_]+[ \t\r\n]*(</t[dh]>)',
+        r'\1SEQUENCE_SYMBOLS\2',
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
 def tutorial_score_issues(text, label):
     if not re.search(r'(?:\*\*)?八维分项(?:：|:)(?:\*\*)?', text):
         return [f'{label} 缺少八维分项评分']
@@ -389,9 +406,10 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             continue
         rendered_path, rendered = candidates[0]
         reader_html = rendered_article_fragment(rendered)
+        gate_html = mask_rendered_symbolic_table_cells(reader_html)
         rendered_label = f'{source_label} -> {rendered_path.name}'
-        issues.extend(math_and_emphasis_issues(reader_html, rendered_label, rendered_html=True))
-        if '**' in reader_html:
+        issues.extend(math_and_emphasis_issues(gate_html, rendered_label, rendered_html=True))
+        if '**' in gate_html:
             issues.append(
                 f'{rendered_label} Hugo HTML 残留 Markdown 加粗标记 **'
             )
