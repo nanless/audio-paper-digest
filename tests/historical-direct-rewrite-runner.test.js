@@ -126,6 +126,18 @@ test('conference PDF author evidence parses symbol and numeric superscripts from
         'Damien Lolive', 'Pierre-François Marteau'
     ]);
     assert.deepEqual(symbol.authors[0].affiliations, ['Univ Rennes, CNRS, IRISA, Lannion, France']);
+    const multiSymbol = runner.parseConferencePdfAuthors([
+        'Dynamic Balanced Cross-Modal Attention',
+        'Rong Geng†, Qindong Sun†,‡,⋆, Han Cao†, Xiaoxiong Wang†',
+        '†Shaanxi Key Laboratory of Network Computing and Security, Xi’an University of Technology, China',
+        '‡School of Cyber Science and Engineering, Xi’an Jiaotong University, China',
+        '⋆Corresponding author',
+        'ABSTRACT', 'body'
+    ].join('\n'));
+    assert.deepEqual(multiSymbol.authors[1].affiliations, [
+        'Shaanxi Key Laboratory of Network Computing and Security, Xi’an University of Technology, China',
+        'School of Cyber Science and Engineering, Xi’an Jiaotong University, China'
+    ]);
     const numeric = runner.parseConferencePdfAuthors([
         'Mix2Morph: Learning Sound Morphing',
         'Annie Chu1,2, Hugo Flores-García2, Oriol Nieto1, Justin Salamon1, Bryan Pardo2, Prem Seetharaman1',
@@ -138,6 +150,17 @@ test('conference PDF author evidence parses symbol and numeric superscripts from
     assert.deepEqual(numeric.authors[0].affiliations, ['Adobe Research, San Francisco, USA', 'Northwestern University, Evanston, USA']);
     assert.equal(numeric.sourceTextSha256.length, 64);
     assert.equal(numeric.sourceEvidenceSha256.length, 64);
+});
+
+test('conference direct paper carries only authors parsed from the current PDF source', t => {
+    const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'conference-local-pdf');
+    const input = runner.directPaper(item, {
+        title: 'Fresh conference title',
+        publicationAuthors: ['Annie Chu', 'Hugo Flores-García']
+    });
+    assert.deepEqual(input.authors, ['Annie Chu', 'Hugo Flores-García']);
+    assert.equal(input.title, 'Fresh conference title');
+    assert.doesNotMatch(JSON.stringify(input), /POISON_OLD_BLOG_BODY|POISON_METADATA_TITLE/);
 });
 
 test('completed historical Reader refreshes only an empty author identity from official metadata', () => {

@@ -709,7 +709,13 @@ function directPaper(item, sourceDetails = {}) {
         return { directPaperId: item.paperId, arxivId: item.route.arxivId,
             ...(authors ? { authors: authors.slice() } : {}), ...(title ? { title } : {}) };
     }
-    return { directPaperId: item.paperId, id: item.paperId, ...(title ? { title } : {}) };
+    const authors = sourceDetails.publicationAuthors;
+    if (authors !== undefined && (!Array.isArray(authors) || authors.length === 0
+        || authors.some(author => typeof author !== 'string' || !author.trim() || author !== author.trim()))) {
+        fail(`${item.paperId} conference PDF authors are required for direct analysis when supplied`);
+    }
+    return { directPaperId: item.paperId, id: item.paperId,
+        ...(authors ? { authors: authors.slice() } : {}), ...(title ? { title } : {}) };
 }
 
 function refreshHistoricalDirectReaderAuthors(paper, sourceDetails, refresh) {
@@ -804,8 +810,8 @@ function parseConferencePdfAuthors(text) {
     const numericAuthors = [];
     for (const line of lines) {
         if (CONFERENCE_PDF_AFFILIATION_HINT.test(line) || /@|DOI\s*:/i.test(line)) continue;
-        const symbolMatches = [...line.matchAll(/([^,]+?)([†‡∗⋆*])(?=\s*,|\s*$)/gu)]
-            .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: [match[2]] }))
+        const symbolMatches = [...line.matchAll(/([^,]+?)([†‡∗⋆*](?:\s*,\s*[†‡∗⋆*])*)(?=\s*,|\s*$)/gu)]
+            .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: [...match[2].matchAll(/[†‡∗⋆*]/gu)].map(marker => marker[0]) }))
             .filter(item => validConferencePdfAuthorName(item.name));
         const numericMatches = [...line.matchAll(/([^,\d]+?)(\d{1,3}(?:,\d{1,3})*)(?=\s*(?:,|$))/gu)]
             .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: match[2].split(',') }))
