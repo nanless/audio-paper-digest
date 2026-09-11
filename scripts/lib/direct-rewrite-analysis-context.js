@@ -108,6 +108,10 @@ function withDirectRewriteAnalysisSource(identity, callback) {
         && typeof identity.deferReaderCandidateCommit !== 'boolean') {
         fail('Reader candidate commit policy must be boolean');
     }
+    if (identity.readerRetryEpoch !== undefined
+        && (!Number.isSafeInteger(identity.readerRetryEpoch) || identity.readerRetryEpoch < 1)) {
+        fail('Reader retry epoch must be a positive safe integer');
+    }
     const supplementaryImages = identity.supplementaryReaderImages === undefined ? [] : identity.supplementaryReaderImages;
     if (!Array.isArray(supplementaryImages) || supplementaryImages.some(image => !image || typeof image !== 'object'
         || !Buffer.isBuffer(image.rawBytes) || !/^image\/(?:png|jpeg|webp)$/.test(String(image.mediaType || ''))
@@ -121,6 +125,12 @@ function withDirectRewriteAnalysisSource(identity, callback) {
         // keep their existing immediate-retirement behaviour unless they opt
         // into the same transaction explicitly.
         deferReaderCandidateCommit: identity.deferReaderCandidateCommit === true,
+        // A new outer historical retry after an incomplete analysis gets a
+        // fresh Reader recovery identity. The previous failed candidate is
+        // intentionally retained for audit/replay, but must not exhaust the
+        // new bounded Reader attempt before it sends a request.
+        ...(identity.readerRetryEpoch !== undefined
+            ? { readerRetryEpoch: identity.readerRetryEpoch } : {}),
         // Dual-model primary analysis must use this direct-only downloader.
         // It may return bytes/base64 but can never return data/current cache
         // paths, and remains scoped to this execution's AsyncLocal context.

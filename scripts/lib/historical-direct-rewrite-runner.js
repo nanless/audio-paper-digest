@@ -1731,6 +1731,12 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             executionDir = executionDirectory(options.executionRoot, item, descriptor); safeDirectory(executionDir, true, 'paper execution directory');
             const executionDependencies = { ...dependencies, freshArxivSourceRoot: options.freshArxivSourceRoot,
                 ...(publicationMetadataAuthors ? { publicationMetadataAuthors } : {}),
+                // An incomplete historical analysis is an outer retry boundary.
+                // Keep the old Reader candidate, but bind this retry to a new
+                // identity so an exhausted candidate cannot short-circuit the
+                // next bounded model attempt.
+                ...(active.status === 'analysis_partial'
+                    ? { historicalDirectRetryEpoch: active.attempts + 1 } : {}),
                 persistentRoots: [options.registryRoot, options.executionRoot, options.stagingRoot] };
             const readerAttemptsDir = path.join(executionDir, 'reader-attempts');
             const materializeReaderFigures = async (figures, id) => item.route.kind === 'arxiv-fresh-fetch'
@@ -1747,6 +1753,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 runId: item.runId, route: item.route.kind, sourceDetails: clone(sourceDetails),
                 sourceSha256: descriptor.textSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
                 sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+                ...(executionDependencies.historicalDirectRetryEpoch !== undefined
+                    ? { readerRetryEpoch: executionDependencies.historicalDirectRetryEpoch } : {}),
                 ...(item.route.kind === 'arxiv-fresh-fetch' ? { sourceGeneration: descriptor.generation,
                     sourceManifestSha256: descriptor.sourceManifestSha256,
                     ...(descriptor.sourceVersion ? {

@@ -4882,6 +4882,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const requestModel = options.readerCallModel || callModel;
     const recordDisposition = options.readerRecordDisposition || require('./lib/llm-usage.js').recordLlmDisposition;
     const direct = require('./lib/direct-rewrite-analysis-context.js');
+    const directScope = direct.getDirectRewriteAnalysisContext();
     // Direct historical rewrites and the daily source-first route intentionally
     // keep figure pixels out of persistent source bundles.  Bind only those
     // ephemeral pixels to their failed candidates.  Legacy/durable source runs
@@ -4969,7 +4970,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         repairVersion: repair.REPAIR_VERSION,
         repairMaxTokens,
         maxAttempts,
-        repairTemperature: API_READER_REPAIR_TEMPERATURE
+        repairTemperature: API_READER_REPAIR_TEMPERATURE,
+        ...(directScope?.readerRetryEpoch !== undefined
+            ? { historicalDirectRetryEpoch: directScope.readerRetryEpoch } : {})
     };
     let recovered = null;
     let readerRecoveryRevisions = [];

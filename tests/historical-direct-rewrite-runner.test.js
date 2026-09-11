@@ -1583,7 +1583,7 @@ test('actual Reader request receives a conference PDF page from the direct scope
         await context.withDirectRewriteAnalysisSource({ paperId: item.paperId, route: item.route.kind,
             sourceDetails: extracted.sourceDetails, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
             readerAttemptsDir: path.join(executionDirectory, 'reader-attempts'), supplementaryReaderImages: pages,
-            materializeReaderFigures: async () => [] }, async () => {
+            materializeReaderFigures: async () => [], readerRetryEpoch: 7 }, async () => {
             let rejection; try { await deep.generateApiReaderArticleDetailed({ directPaperId: item.paperId, id: item.paperId,
                 title: 'conference source', authors: [] }, 'canonical analysis', 'SOURCE_EVIDENCE', {
                 sourceText: extracted.sourceDetails.text, structuredArtifacts: extracted.sourceDetails.structuredArtifacts,
@@ -1606,6 +1606,11 @@ test('actual Reader request receives a conference PDF page from the direct scope
         return [{ ordinal: 1, caption: 'page', rawBytes: bytes, assetSha256: sha(bytes), mediaType: 'image/png' }];
     } });
     assert.equal(requestSawPage, true);
+    const readerCandidates = allFiles(path.join(executionDirectory, 'reader-attempts'))
+        .filter(filename => filename.endsWith('.json') && !filename.includes('.migrated-'));
+    assert.equal(readerCandidates.length, 1);
+    const readerEnvelope = JSON.parse(fs.readFileSync(readerCandidates[0], 'utf8'));
+    assert.equal(readerEnvelope.identity.historicalDirectRetryEpoch, 7);
     assert.equal(fs.existsSync(temporaryDirectory), false);
     assert.deepEqual(fs.readdirSync(temporaryRoot), []);
     const persisted = allFiles(path.join(f.root, 'runtime')).map(filename => fs.readFileSync(filename, 'utf8')).join('\n');
