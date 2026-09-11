@@ -112,6 +112,34 @@ test('direct analysis input carries only the fresh-source title, never a frozen 
     assert.doesNotMatch(JSON.stringify(input), /ArXiv page|POISON_OLD_BLOG_BODY/);
 });
 
+test('conference PDF author evidence parses symbol and numeric superscripts from the sealed preamble', () => {
+    const symbol = runner.parseConferencePdfAuthors([
+        'A Paper Title',
+        'Hoan My Tran†, Aghilas Sini∗, David Guennec†,',
+        'Arnaud Delhay†, Damien Lolive‡, Pierre-Franc¸ois Marteau‡',
+        '†Univ Rennes, CNRS, IRISA, Lannion, France ‡Univ Bretagne Sud, CNRS, IRISA, Vannes, France',
+        '∗Univ Le Mans, LIUM, Le Mans, France',
+        'ABSTRACT', 'body'
+    ].join('\n'));
+    assert.deepEqual(symbol.authors.map(author => author.name), [
+        'Hoan My Tran', 'Aghilas Sini', 'David Guennec', 'Arnaud Delhay',
+        'Damien Lolive', 'Pierre-François Marteau'
+    ]);
+    assert.deepEqual(symbol.authors[0].affiliations, ['Univ Rennes, CNRS, IRISA, Lannion, France']);
+    const numeric = runner.parseConferencePdfAuthors([
+        'Mix2Morph: Learning Sound Morphing',
+        'Annie Chu1,2, Hugo Flores-García2, Oriol Nieto1, Justin Salamon1, Bryan Pardo2, Prem Seetharaman1',
+        '1 Adobe Research, San Francisco, USA', '2 Northwestern University, Evanston, USA',
+        'ABSTRACT', 'body'
+    ].join('\n'));
+    assert.deepEqual(numeric.authors.map(author => author.name), [
+        'Annie Chu', 'Hugo Flores-García', 'Oriol Nieto', 'Justin Salamon', 'Bryan Pardo', 'Prem Seetharaman'
+    ]);
+    assert.deepEqual(numeric.authors[0].affiliations, ['Adobe Research, San Francisco, USA', 'Northwestern University, Evanston, USA']);
+    assert.equal(numeric.sourceTextSha256.length, 64);
+    assert.equal(numeric.sourceEvidenceSha256.length, 64);
+});
+
 test('completed historical Reader refreshes only an empty author identity from official metadata', () => {
     const sourceSha256 = sha('sealed source');
     const paper = {

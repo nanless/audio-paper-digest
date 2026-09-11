@@ -9179,13 +9179,24 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
     const parsedAuthors = Array.isArray(sourceDetails?.readerAuthors?.authors)
         ? sourceDetails.readerAuthors.authors : [];
     const sourceDomSha256 = sourceDetails?.readerAuthors?.sourceDomSha256;
+    const isConferencePdf = sourceDetails?.source === 'conference_pdf_text';
+    if (isConferencePdf && sourceDetails?.readerAuthors) {
+        const evidence = sourceDetails.readerAuthors;
+        if (evidence.sourceTextSha256 !== sourceTextSha256
+            || typeof evidence.sourceEvidence !== 'string'
+            || evidence.sourceEvidenceSha256 !== crypto.createHash('sha256')
+                .update(evidence.sourceEvidence).digest('hex')
+            || !String(sourceDetails.text || '').includes(evidence.sourceEvidence)) {
+            throw new Error('会议 PDF 作者证据无法从已封存全文重放');
+        }
+    }
     const isUnavailable = value => /^机构信息未/.test(String(value || ''));
     const authors = (resolved?.authors || []).map(author => {
         const parsed = parsedAuthors.find(item => (
             readerIdentityKey(item?.name) === readerIdentityKey(author?.name)
         ));
         const nameBinding = parsed && recoverySha256(sourceDomSha256)
-            ? { sourceKind: 'html_dom', sourceValue: parsed.name, sourceDomSha256 }
+            ? { sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom', sourceValue: parsed.name, sourceDomSha256 }
             : { sourceKind: 'paper_metadata', sourceValue: author.name, metadataSha256 };
         const affiliationBindings = (author.affiliations || []).map(affiliation => {
             if (isUnavailable(affiliation)) {
@@ -9203,7 +9214,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
                 throw new Error(`作者 ${author.name} 的机构“${affiliation}”无法重放到 HTML source detail`);
             }
             return {
-                sourceKind: 'html_dom',
+                sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom',
                 association: direct ? 'direct_author' : 'single_global_affiliation',
                 sourceValue: direct || globallyUnique,
                 sourceDomSha256

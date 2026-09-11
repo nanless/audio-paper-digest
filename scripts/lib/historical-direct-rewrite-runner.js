@@ -767,6 +767,83 @@ function titleFromConferenceMetadata(source, item) {
     return title;
 }
 
+const CONFERENCE_PDF_AFFILIATION_HINT = /(?:univ(?:ersity)?|institute|research|school|college|department|laboratory|laborator(?:y|ies)|key laboratory|academy|centre|center|adobe|northwestern|xian|xi['’]an|france|china|usa|san francisco|evanston|lannion|vannes|lemans)/i;
+
+function normalizeConferencePdfAuthorName(value) {
+    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        .replace(/c¸/g, 'ç').replace(/C¸/g, 'Ç')
+        .replace(/c´ı/g, 'cí').replace(/C´ı/g, 'Cí');
+}
+
+function validConferencePdfAuthorName(value) {
+    const name = normalizeConferencePdfAuthorName(value);
+    const tokens = name.split(/\s+/).filter(Boolean);
+    return tokens.length >= 2 && tokens.length <= 8
+        && tokens.every(token => /^[\p{L}\p{M}][\p{L}\p{M}'’.'-]*$/u.test(token));
+}
+
+function normalizeConferencePdfAffiliation(value) {
+    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        .replace(/\s*(?:[|｜]|DOI\s*:).+$/i, '').replace(/[.;,]+$/, '').trim();
+}
+
+/**
+ * Recover only the author block visibly present in a retained conference PDF.
+ * This is deliberately narrower than a general name NER pass: an author line
+ * must carry the same superscript marker scheme used by the adjacent
+ * affiliation lines. The returned evidence is sealed with the full source
+ * text SHA and the exact preamble SHA before it is handed to Reader.
+ */
+function parseConferencePdfAuthors(text) {
+    const sourceText = String(text || '');
+    const abstractIndex = sourceText.search(/\n\s*ABSTRACT\b/i);
+    const preamble = abstractIndex >= 0 ? sourceText.slice(0, abstractIndex) : sourceText.slice(0, 12000);
+    const rawLines = preamble.split(/\n/);
+    const lines = rawLines.map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const symbolAuthors = [];
+    const numericAuthors = [];
+    for (const line of lines) {
+        if (CONFERENCE_PDF_AFFILIATION_HINT.test(line) || /@|DOI\s*:/i.test(line)) continue;
+        const symbolMatches = [...line.matchAll(/([^,]+?)([†‡∗⋆*])(?=\s*,|\s*$)/gu)]
+            .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: [match[2]] }))
+            .filter(item => validConferencePdfAuthorName(item.name));
+        const numericMatches = [...line.matchAll(/([^,\d]+?)(\d{1,3}(?:,\d{1,3})*)(?=\s*(?:,|$))/gu)]
+            .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: match[2].split(',') }))
+            .filter(item => validConferencePdfAuthorName(item.name));
+        if (symbolMatches.length) symbolAuthors.push(...symbolMatches);
+        else if (numericMatches.length) numericAuthors.push(...numericMatches);
+    }
+    const authors = symbolAuthors.length ? symbolAuthors : numericAuthors;
+    if (!authors.length) return null;
+    const markerSet = new Set(authors.flatMap(item => item.markers));
+    const affiliations = new Map();
+    for (const line of lines) {
+        if (!CONFERENCE_PDF_AFFILIATION_HINT.test(line)) continue;
+        for (const match of line.matchAll(/([†‡∗⋆*])\s*([^†‡∗⋆*]+?)(?=[†‡∗⋆*]|$)/gu)) {
+            const value = normalizeConferencePdfAffiliation(match[2]);
+            if (markerSet.has(match[1]) && value && !/@|DOI\s*:/i.test(value)) affiliations.set(match[1], value);
+        }
+        for (const match of line.matchAll(/(?:^|\s)([1-9]\d{0,2})\s+(.+?)(?=\s+[1-9]\d{0,2}\s+|$)/gu)) {
+            const value = normalizeConferencePdfAffiliation(match[2]);
+            if (markerSet.has(match[1]) && value && !/@|DOI\s*:/i.test(value)) affiliations.set(match[1], value);
+        }
+    }
+    const normalizedAuthors = authors.map(author => ({
+        name: author.name,
+        affiliations: [...new Set(author.markers.map(marker => affiliations.get(marker)).filter(Boolean))]
+    }));
+    const evidence = preamble.trim();
+    const sourceTextSha256 = sha256(Buffer.from(sourceText, 'utf8'));
+    return {
+        contract: 'conference-pdf-author-evidence-v1',
+        authors: normalizedAuthors,
+        sourceTextSha256,
+        sourceEvidence: evidence,
+        sourceEvidenceSha256: sha256(Buffer.from(evidence, 'utf8')),
+        sourceDomSha256: sha256(Buffer.from(evidence, 'utf8'))
+    };
+}
+
 function priorPreprintAnalysisDisclosure(source, item) {
     const acquisition = source?.pdf?.acquisition;
     if (acquisition?.versionRelation !== PRIOR_PREPRINT_VERSION_RELATION) return null;
@@ -822,6 +899,7 @@ async function extractConferenceSource(item, dependencies = {}) {
     }
     const normalizedText = extractedText.replace(/\r\n?/g, '\n').trim();
     if (normalizedText.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
+    const readerAuthors = parseConferencePdfAuthors(normalizedText);
     // Put the identity warning in the actual text consumed by every primary,
     // repair, scoring, and Reader request. Merely retaining it as manifest
     // metadata would not prevent a model from mistaking these bytes for the
@@ -831,6 +909,7 @@ async function extractConferenceSource(item, dependencies = {}) {
         flattenedTextSha256: sha256(Buffer.from(text, 'utf8')) };
     return { paperId: item.paperId, pdfSha256: pdf.sha256, sourceTitle: titleFromConferenceMetadata(source, item), sourceDetails: { paperId: item.paperId,
         source: 'conference_pdf_text', sourceId: item.paperId, text, imageInfos: [],
+        ...(readerAuthors ? { readerAuthors, publicationAuthors: readerAuthors.authors.map(author => author.name) } : {}),
         structuredArtifacts: { ...artifactsBody, payloadSha256: sha256(JSON.stringify(artifactsBody)) },
         htmlAvailability: 'not_applicable', htmlAttempts: 0,
         ...(pdfVisualAudit ? { pdfVisualAudit } : {}),
@@ -969,7 +1048,8 @@ function analysisAttemptDirectory(dependencies = {}) {
 async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, executionDirectory, dependencies }) {
     const engine = dependencies.engine || require('../analysis-engine.js');
     const sourcePaper = item.route.kind === 'conference-local-pdf'
-        ? { ...sourceDetails, title: titleFromConferenceMetadata(item.route.writerInputs[0], item) }
+        ? { ...sourceDetails, title: titleFromConferenceMetadata(item.route.writerInputs[0], item),
+            ...(sourceDetails.publicationAuthors ? { publicationAuthors: sourceDetails.publicationAuthors } : {}) }
         : { ...sourceDetails, publicationAuthors: dependencies.publicationMetadataAuthors };
     const freshPaper = directPaper(item, sourcePaper);
     const recovered = readAnalysisRecovery({ executionDirectory, item, sourceDescriptor, allowMissing: true });
@@ -1818,7 +1898,7 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     HistoricalDirectRewriteRunnerError, stableHash,
     STATES, registryName, registryPath, defaultPauseFilePath, operationLockTarget, pauseFileRequested, selectDirectItems,
     initialRegistry, normalizeRegistry, loadOrCreateRegistry, transition, registryCounts, directPaper, fallbackArxivDetails,
-    extractSealedArxivAbstract, publicationSourceFor, refreshHistoricalDirectReaderAuthors,
+    extractSealedArxivAbstract, parseConferencePdfAuthors, publicationSourceFor, refreshHistoricalDirectReaderAuthors,
     analysisRecoveryPath, analysisRecoveryRecord, normalizeAnalysisRecovery, writeAnalysisRecovery,
     readAnalysisRecovery, normalizeLegacyPaperLockReclaimIntent, normalizeLegacyPaperLockReclaimCompletion,
     legacyPaperLockReclaimEventId,
