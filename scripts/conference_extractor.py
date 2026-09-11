@@ -356,7 +356,14 @@ def _visual_text(value: str, maximum: int = 4000) -> str:
 
 
 def _bbox(value: Any) -> list[float]:
-    return [round(float(item), 3) for item in value]
+    normalized = []
+    for item in value:
+        rounded = round(float(item), 3)
+        # JSON.stringify emits 1 for an integral JavaScript Number while
+        # Python's json.dumps emits 1.0. Normalize here so the visual-audit
+        # hash replays identically across the Python extractor and Node gate.
+        normalized.append(int(rounded) if rounded.is_integer() else rounded)
+    return normalized
 
 
 def _formula_candidate(text: str) -> bool:
