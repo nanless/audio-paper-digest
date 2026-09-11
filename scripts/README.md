@@ -87,13 +87,13 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/conference-analysis-context.js` | Node 库 | 将已认证会议 execution 的单篇来源封装为进程内 opaque 分析上下文；固定 Reader 尝试目录并拒绝 arXiv 身份、跨 execution 路径和伪造来源能力。 |
 | `lib/conference-analysis-adapter.js` | Node 库 | 重放完整会议 plan/source authority 后复用公共深度分析引擎；prepare 先写不可变 intent，再以原子文件和精确前缀恢复保存 canonical、逐阶段 checkpoint 与完成 receipt。旧版缺少 prepare intent 的 execution 不会静默迁移，必须用同一 authenticated plan 新建 execution UUID。 |
 | `lib/conference-discovery.js` | Node 库 | 从 ICASSP/ICLR/ICML 或严格 `official-proceedings` 元数据快照与本机 PDF 目录生成只读候选 catalog 和匹配报告；新会议只按 metadata 的稳定 official ID/`pdfFile` 精确匹配，标题永不作为身份。 |
-| `lib/conference-filter-evidence.js` | Node 库 | 从 authenticated discovery 批量重放官方 exact PDF、固定 pypdf 文本与 provider-scoped 摘要定位证据；签发可恢复 evidence run/catalog/report，非 ready 状态一律 fail-open 给 LLM。 |
+| `lib/conference-filter-evidence.js` | Node 库 | 从 authenticated discovery 批量重放官方 exact PDF、固定 PyMuPDF 页文本/视觉审计与 provider-scoped 摘要定位证据；签发可恢复 evidence run/catalog/report，非 ready 状态一律 fail-open 给 LLM。 |
 | `lib/official-conference-acquisition.js` | Node 库 | 固定 2026 官方 index/record/PDF allowlist，抓取十一个新会议的严格 metadata 与 PDF；AAAI volume 40 以固定 48-issue manifest、逐 issue response receipt/SHA 和跨 issue article ID 唯一性闭合集合，其余来源使用单索引；索引和逐篇下载均支持 0600/O_EXCL 恢复及完整重放验证。 |
 | `lib/official-conference-general-providers.js` | Node 库 | 通用 AI/ML/CV/NLP 官方单篇 record 的纯解析与身份校验器；无网络、无写入，供 provider 适配与 fixture 审计。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口仅从 opaque plan handle 重放完整上游证明与会议全文；不导出 ledger/run 测试捷径。 |
 | `lib/conference-filter.js` | Node 库 | 冻结 discovery、authenticated evidence catalog/report/逐篇 receipt、日更 Prompt/关键词策略、会议领域标签、model/endpoint/taxonomy 指纹；ready 摘要进入 keyword/Prompt，non-ready 安全放行，以 durable intent→transport receipt→decision→CAS 管理决定；生产 signer 固定公共 LLM 路由，不接受 transport 注入，并以安全 stale lock 保证单飞恢复。 |
 | `lib/conference-process.js` | Node 库 | 编排新会议 complete selection 的官方 PDF 自动封存、staging/import、共享深度分析、Reader/评分、current taxonomy 页面和 aggregate；以稳定 UUID、最多 3 并发、逐篇 checkpoint 与 completion receipt 保证恢复和闭合。 |
-| `lib/conference-extraction-receipt.js` | Node 库 | 重放请求、来源和派生工件，并在每次 handle 加载时调用固定 Python/pypdf 临时重提取验证；只有字节一致且达到门槛的 weak profile 可进入 staging。 |
+| `lib/conference-extraction-receipt.js` | Node 库 | 重放请求、来源和派生工件，并在每次 handle 加载时调用固定 Python/PyMuPDF 临时重提取验证；视觉审计包含逐页 PNG、内嵌图片/表格/Figure/公式候选及 SHA，但没有原始 TeX 时仍禁止公式文本绑定。 |
 | `lib/conference-staging.js` | Node 库 | 将 authenticated filter selection 与人工复核 extraction 精确绑定为 import manifest/receipt；excluded 或身份别名不能进入。 |
 | `lib/paper-identity.js` | Node 库 | `paper-identity-v1` 的 Node 规范化、官方来源 URL 门禁与稳定 SHA；不替换既有 arXiv helper。 |
 | `lib/paper-source-authority.js` | Node 库 | 重放 canonical identity、完整 identity record、来源 snapshot/receipt/fulltext SHA 并返回 source-only opaque handle；通用磁盘 arXiv loader 永远不恢复 production authorization，会议合同还要求当前进程真实 plan handle。 |
@@ -139,10 +139,10 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `conference-filter.js` | 从同一会议的认证 discovery pair 与 complete evidence run 创建不可共享的 v5 spec，再创建、检查和应用受控会议筛选 decision；手工入口不能构造或加载 LLM actor，生产 LLM 工件只由受控 runner 内部签发。 |
 | `conference-filter-run.js` | 仅在显式 `--apply` 下重放与当前 catalog/report/evidence run 精确绑定的每会 v5 spec，并逐篇调用固定公共 `requestLlmJson()`；pending 优先，failed 仅显式限次退避重试，崩溃先恢复已有证据且不自动重复计费。 |
 | `conference-filter-evidence.js` | 在模型筛选前，从认证 discovery 的 sealed PDF 生成可恢复、可重放的全文提取与 `abstract-locator-v1` 原文摘要证据；只写 evidence catalog/report，不作筛选决定或模型请求。 |
-| `conference-filter-evidence-extract.py` | evidence run 的固定 pypdf worker：仅从受控 source root 读取 request/metadata/PDF，输出页级文本、摘要定位结果和可重放 receipt；不联网、不调用模型。 |
+| `conference-filter-evidence-extract.py` | evidence run 的固定 PyMuPDF worker：仅从受控 source root 读取 request/metadata/PDF，输出页级文本、逐页 PNG 视觉审计、图片/表格/Figure/公式候选、摘要定位结果和可重放 receipt；不联网、不调用模型。 |
 | `conference-staging.js` | 把完整 filter included 集合与已审 extraction 工件绑定成不可覆盖 import manifest/receipt；不复制文件或调用模型。 |
-| `conference-extract.py` | 对 staging-source 中一篇显式 PDF 执行 text-only 页级提取；`--verify --source-root ABS` 用固定 pypdf 临时重提取并比较已有 bundle，仍不声明公式/表格/图片可靠。 |
-| `conference_extractor.py` | Python 会议 PDF 提取实现：严格文件/SHA、UTF-8 byte offset、pypdf 页文本、O_EXCL 和 typed blocked/integrity 状态。 |
+| `conference-extract.py` | 对 staging-source 中一篇显式 PDF 执行页级文本与视觉审计；`--verify --source-root ABS` 用固定 PyMuPDF 临时重提取并比较已有 bundle 的所有字节，公式没有原始 TeX 时仍不可发布为公式。 |
+| `conference_extractor.py` | Python 会议 PDF 提取实现：严格文件/SHA、UTF-8 byte offset、PyMuPDF 页文本/PNG/图片与版面候选、O_EXCL 和 typed blocked/integrity 状态。 |
 | `history-inventory.py` | 只读扫描配置博客的历史页面、URL 与聚合拓扑；dry-run 零写，apply 在 clean main 上成对写不可变 ledger/receipt。 |
 | `historical_page_scan.py` | `historical-page-ledger-v1` 严格扫描：无旧正文、稳定 pageId/cohort、逐次链接目标、未核 taxonomy 候选、Git tree/remote-main proof，以及 scan→O_EXCL 写入前后 CAS。 |
 | `historical-page-render.py` | 只从完成 canonical 与 assigned taxonomy packet 渲染历史单篇页面；不读取旧页面正文。 |

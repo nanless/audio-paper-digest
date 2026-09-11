@@ -248,7 +248,7 @@ UTF-8 字节计算的 SHA-256；它不包含 API key。endpoint、协议或模�
 
 筛选前必须运行离线 evidence 批次。它认证既有 discovery
 catalog/report，逐篇把唯一 exact PDF 安全 clone/copy 到隔离 item，生成绑定原始 record 的 projection，
-复用固定 `pypdf` extractor，再由 `abstract-locator-v1` 只截取前两页中唯一且有明确结束标题的
+复用固定 `PyMuPDF` extractor，再由 `abstract-locator-v1` 只截取前两页中唯一且有明确结束标题的
 Abstract 原文。它不总结、不调用模型，也不产生 included/excluded 决定；摘要缺失、歧义或过短
 只记为不可用，提取器失败则整批失败关闭。默认一次只处理 1 篇，`--limit` 最大 500，避免误启
 16k 全量：
@@ -366,8 +366,8 @@ extraction request 与其 metadata/PDF/输出都使用 staging source 根下的�
 }
 ```
 
-`--verify` 不信任已有派生文件：它在临时目录用固定 `pypdf==6.17.0` 重新提取，并要求新旧
-text/artifact/receipt 字节完全一致。Node extraction handle 每次加载 receipt 都会内部执行
+`--verify` 不信任已有派生文件：它在临时目录用固定 `PyMuPDF==1.27.2.3` 重新提取，并要求新旧
+text/visual-artifact/receipt 字节完全一致。Node extraction handle 每次加载 receipt 都会内部执行
 这条验证；staging 创建、staging 重载以及 importer 消费 staging handle 时又会逐篇重放，
 所以人工单独运行 `--verify` 只用于诊断，不能代替后续门禁。
 
@@ -498,7 +498,7 @@ npm run conference:new:process -- --status \
 该入口只接受已经 complete、非空且来自 `official-proceedings` discovery 的 selection，
 每个 included member 还必须是唯一 `exact` PDF。它签发
 `conference-deterministic-source-seal-v1`，明确表示机器按官方 metadata 的 `pdfFile`
-自动验收，不写也不暗示人工 review。每篇仍运行固定 pypdf 提取，并在 staging、import
+自动验收，不写也不暗示人工 review。每篇仍运行固定 PyMuPDF 提取，并在 staging、import
 和后续重载时重放 request、metadata、PDF、text、artifact、receipt 与 verification SHA。
 
 process UUID 绑定 selection、current taxonomy 原始字节和实现指纹；每篇 analysis UUID
@@ -560,9 +560,11 @@ npm run conference:execution -- transition --execution UUID \
 `paperId` 和受控 source root，并把 plan/import/filter receipt 写入 production authority
 binding。生产模块不导出 ledger + run/execution 的低层 context builder，也不会返回
 `analysisReady=true` 的 test-only context。
-生产入口仍会重放 metadata/PDF/text/artifact 字节；可靠正文达到门槛即可分析。固定 pypdf
-重提取只证明 text-only weak artifact 的字节来源，不会凭空恢复 TeX、表格 DOM 或图片像素，
-因此公式、表格和图片能力仍为 unavailable。稳定 source SHA 不包含可变 execution 状态，
+生产入口仍会重放 metadata/PDF/text/artifact 字节；可靠正文达到门槛即可分析。固定 PyMuPDF
+重提取会额外证明逐页 PNG、内嵌图片摘要以及表格/Figure/公式候选的视觉证据 SHA；它不会凭空
+恢复 PDF 中不存在的原始 TeX，也不会把不完整表格候选冒充完整 DOM。因此公式文本绑定仍为
+unavailable，表格只有通过完整矩阵门禁才可进入后续复核，图片/Figure 以原页视觉证据保留。
+稳定 source SHA 不包含可变 execution 状态，
 观察状态另有独立 SHA。它不接受任意全文、旧博客文本、arXiv fallback 或外部图下载。
 
 PDF 是弱结构来源：不能可靠复原原始 TeX 时，不展示“可验证公式”；不能定位完整表格

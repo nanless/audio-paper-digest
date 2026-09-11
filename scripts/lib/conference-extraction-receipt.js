@@ -17,10 +17,10 @@ const VERIFICATION_CONTRACT = 'conference-pdf-extraction-verification-v2';
 const VERSION = 2;
 const PROFILE = 'weak-pdf-layout-v1';
 const OFFSET_UNIT = 'utf8-byte';
-const EXTRACTOR_NAME = 'audio-paper-digest-conference-text';
-const EXTRACTOR_VERSION = '1.0.0';
-const BACKEND_NAME = 'pypdf';
-const BACKEND_VERSION = '6.17.0';
+const EXTRACTOR_NAME = 'audio-paper-digest-conference-pdf-layout';
+const EXTRACTOR_VERSION = '2.0.0';
+const BACKEND_NAME = 'pymupdf';
+const BACKEND_VERSION = '1.27.2.3';
 const OPTIONS = Object.freeze({ minimumTextCharacters: 5000,
     normalization: 'unicode-nfc-lf-rstrip-v1', pageSeparator: '\n\f\n' });
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -216,6 +216,41 @@ function normalizeRequest(value, requestName) {
     if (new Set(names).size !== names.length) fail('request inputs and outputs must use distinct filenames');
     return result;
 }
+
+function validateVisualAudit(value) {
+    if (!plain(value)) fail('visualAudit must be a plain object');
+    exact(value, ['contract', 'version', 'backend', 'renderDpi', 'pages', 'embeddedImages',
+        'tableCandidates', 'formulaCandidates', 'figureCandidates', 'visualBytes', 'limitations', 'auditSha256'], 'visualAudit');
+    if (value.contract !== 'conference-pdf-visual-audit-v1' || value.version !== 1
+        || !plain(value.backend) || value.backend.name !== BACKEND_NAME
+        || value.backend.version !== BACKEND_VERSION || value.renderDpi !== 72
+        || !Array.isArray(value.pages) || !Array.isArray(value.embeddedImages)
+        || !Array.isArray(value.tableCandidates) || !Array.isArray(value.formulaCandidates)
+        || !Array.isArray(value.figureCandidates) || !Array.isArray(value.limitations)
+        || !Number.isSafeInteger(value.visualBytes) || value.visualBytes < 1
+        || value.visualBytes > 48 * 1024 * 1024 || !value.limitations.every(item => typeof item === 'string' && item.trim())) {
+        fail('visualAudit contract or bounds are invalid');
+    }
+    let total = 0;
+    for (const [index, page] of value.pages.entries()) {
+        exact(page, ['page', 'mediaType', 'dpi', 'width', 'height', 'sha256', 'bytes', 'pngBase64'], `visualAudit.pages[${index}]`);
+        if (page.page !== index + 1 || page.mediaType !== 'image/png' || page.dpi !== 72
+            || !Number.isSafeInteger(page.width) || page.width < 1 || !Number.isSafeInteger(page.height) || page.height < 1
+            || !Number.isSafeInteger(page.bytes) || page.bytes < 1 || typeof page.pngBase64 !== 'string'
+            || assertSha(page.sha256, `visualAudit.pages[${index}].sha256`) !== sha256(Buffer.from(page.pngBase64, 'base64'))
+            || Buffer.from(page.pngBase64, 'base64').length !== page.bytes) {
+            fail(`visualAudit.pages[${index}] is not a replayable PNG render`);
+        }
+        total += page.bytes;
+    }
+    if (total !== value.visualBytes || assertSha(value.auditSha256, 'visualAudit.auditSha256') !== stableHash({ ...value, auditSha256: undefined })) {
+        const body = clone(value); delete body.auditSha256;
+        if (total !== value.visualBytes || assertSha(value.auditSha256, 'visualAudit.auditSha256') !== stableHash(body)) {
+            fail('visualAudit byte count or self-SHA drifted');
+        }
+    }
+    return clone(value);
+}
 function resolvePointer(document, pointer, label) {
     let current = document;
     for (const encoded of pointer.slice(1).split('/')) {
@@ -247,8 +282,11 @@ function validateMetadataIdentity(metadata, request) {
     return { conference, identity };
 }
 function validateArtifact(value, textBytes) {
-    exact(value, ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages',
-        'tables', 'formulas', 'figures', 'payloadSha256'], 'structured artifact');
+    const allowed = ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages',
+        'tables', 'formulas', 'figures', 'payloadSha256'];
+    if (Object.keys(value).sort().join('\0') !== [...allowed, ...(Object.hasOwn(value, 'visualAudit') ? ['visualAudit'] : [])].sort().join('\0')) {
+        fail('structured artifact has unknown or missing fields');
+    }
     if (value.contract !== ARTIFACT_CONTRACT || value.version !== VERSION || value.profile !== PROFILE
         || value.offsetUnit !== OFFSET_UNIT) fail('structured artifact contract/version/profile is unsupported');
     if (assertSha(value.flattenedTextSha256, 'flattenedTextSha256') !== sha256(textBytes)) {
@@ -256,6 +294,7 @@ function validateArtifact(value, textBytes) {
     }
     const { payloadSha256, ...body } = value;
     if (assertSha(payloadSha256, 'payloadSha256') !== sha256(JSON.stringify(body))) fail('structured artifact payloadSha256 drifted');
+    if (Object.hasOwn(value, 'visualAudit')) validateVisualAudit(value.visualAudit);
     if (!Array.isArray(value.pages) || !value.pages.length
         || !Array.isArray(value.tables) || value.tables.length
         || !Array.isArray(value.formulas) || value.formulas.length

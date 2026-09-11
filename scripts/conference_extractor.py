@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""Deterministic, text-only extraction for staged conference PDFs.
+"""Deterministic, source-bound extraction for staged conference PDFs.
 
-This module deliberately produces a weak structural profile.  Page text and
-UTF-8 byte ranges are replayable, but formulas, tables, and images are always
-declared unavailable.  It never uses the network or an LLM.
+PDFs do not contain the author's original TeX or an HTML DOM.  This extractor
+therefore keeps the safe text-only publication policy, but no longer silently
+throws away the visual layer: PyMuPDF renders every page, records embedded
+image/table/formula/Figure candidates, and binds the rendered pixels to the
+PDF through SHA-256.  Candidates are evidence for later review; they are not
+treated as trustworthy semantic structure unless a complete matrix or exact
+source binding exists.
+
+The extractor never uses the network or an LLM.
 """
 
 from __future__ import annotations
 
 import hashlib
+import base64
+import contextlib
 import importlib
 import io
 import json
@@ -33,9 +41,13 @@ RECEIPT_CONTRACT = "conference-pdf-extraction-receipt-v2"
 VERIFICATION_CONTRACT = "conference-pdf-extraction-verification-v2"
 BLOCKED_VERIFICATION_CONTRACT = "conference-pdf-extraction-blocked-verification-v1"
 CONTRACT_VERSION = 2
-EXTRACTOR_NAME = "audio-paper-digest-conference-text"
-EXTRACTOR_VERSION = "1.0.0"
+EXTRACTOR_NAME = "audio-paper-digest-conference-pdf-layout"
+EXTRACTOR_VERSION = "2.0.0"
 PROFILE = "weak-pdf-layout-v1"
+VISUAL_AUDIT_CONTRACT = "conference-pdf-visual-audit-v1"
+VISUAL_AUDIT_VERSION = 1
+VISUAL_RENDER_DPI = 72
+MAX_VISUAL_AUDIT_BYTES = 48 * 1024 * 1024
 OFFSET_UNIT = "utf8-byte"
 MINIMUM_TEXT_CHARACTERS = 5000
 PAGE_SEPARATOR = "\n\f\n"
@@ -74,6 +86,7 @@ class ExtractionBackend:
     name: str
     version: str
     extract_pages: Callable[[bytes], list[str]]
+    extract_visual_audit: Callable[[bytes], dict[str, Any]] | None = None
 
 
 def _fail(message: str) -> ConferenceExtractionIntegrityError:
@@ -337,42 +350,223 @@ def _normalize_page_text(value: Any) -> str:
     return "\n".join(line.rstrip() for line in value.split("\n")).strip("\n")
 
 
+def _visual_text(value: str, maximum: int = 4000) -> str:
+    value = _normalize_page_text(value)
+    return value[:maximum]
+
+
+def _bbox(value: Any) -> list[float]:
+    return [round(float(item), 3) for item in value]
+
+
+def _formula_candidate(text: str) -> bool:
+    if not text or len(text) > 240:
+        return False
+    operators = sum(text.count(symbol) for symbol in "=±≤≥∑∏∫√×·^_")
+    greek = bool(re.search(r"[α-ωΑ-ΩλμσθφψΔΓΣΠΩ]", text))
+    return operators >= 1 and (operators >= 2 or greek)
+
+
+def _build_visual_audit(document: Any) -> dict[str, Any]:
+    """Build deterministic visual evidence using a PyMuPDF document."""
+    pages: list[dict[str, Any]] = []
+    table_candidates: list[dict[str, Any]] = []
+    formula_candidates: list[dict[str, Any]] = []
+    figure_candidates: list[dict[str, Any]] = []
+    embedded_images: list[dict[str, Any]] = []
+    visual_bytes = 0
+    for page_number, page in enumerate(document, start=1):
+        pixmap = page.get_pixmap(matrix=None, dpi=VISUAL_RENDER_DPI, alpha=False)
+        png_bytes = pixmap.tobytes("png")
+        visual_bytes += len(png_bytes)
+        if visual_bytes > MAX_VISUAL_AUDIT_BYTES:
+            raise ConferencePdfExtractionError(
+                f"visual audit exceeds the derived artifact limit ({MAX_VISUAL_AUDIT_BYTES} bytes)"
+            )
+        render_sha = sha256_bytes(png_bytes)
+        pages.append({
+            "page": page_number,
+            "mediaType": "image/png",
+            "dpi": VISUAL_RENDER_DPI,
+            "width": int(pixmap.width),
+            "height": int(pixmap.height),
+            "sha256": render_sha,
+            "bytes": len(png_bytes),
+            "pngBase64": base64.b64encode(png_bytes).decode("ascii"),
+        })
+
+        for image_index, image in enumerate(page.get_images(full=True), start=1):
+            xref = int(image[0])
+            try:
+                extracted = document.extract_image(xref)
+                image_bytes = bytes(extracted["image"])
+                embedded_images.append({
+                    "page": page_number,
+                    "ordinal": image_index,
+                    "xref": xref,
+                    "mediaType": str(extracted.get("ext", "bin")),
+                    "width": int(extracted.get("width", 0)),
+                    "height": int(extracted.get("height", 0)),
+                    "sha256": sha256_bytes(image_bytes),
+                    "bytes": len(image_bytes),
+                    "renderSha256": render_sha,
+                })
+            except Exception as exc:
+                embedded_images.append({
+                    "page": page_number,
+                    "ordinal": image_index,
+                    "xref": xref,
+                    "mediaType": "unavailable",
+                    "width": 0,
+                    "height": 0,
+                    "sha256": "0" * 64,
+                    "bytes": 0,
+                    "renderSha256": render_sha,
+                    "error": type(exc).__name__,
+                })
+
+        blocks = page.get_text("dict", sort=True).get("blocks", [])
+        for block in blocks:
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                line_text = _normalize_page_text("".join(span.get("text", "") for span in line.get("spans", [])))
+                if _formula_candidate(line_text):
+                    formula_candidates.append({
+                        "page": page_number,
+                        "bbox": _bbox(line.get("bbox", (0, 0, 0, 0))),
+                        "text": _visual_text(line_text, 240),
+                        "renderSha256": render_sha,
+                        "sourceRef": f"pdf://page/{page_number}/formula/{len(formula_candidates) + 1}",
+                        "status": "visual-only-no-tex",
+                    })
+                caption_match = re.search(r"(?i)\b(?:figure|fig\.?|table|tab\.?)[\s.:#-]*(\d+)\b|图\s*([0-9]+)", line_text)
+                if caption_match:
+                    number = next((item for item in caption_match.groups() if item), "?")
+                    label = "table" if re.search(r"(?i)\b(?:table|tab\.)", line_text) else (
+                        "figure" if re.search(r"(?i)\b(?:figure|fig\.)", line_text) else "figure")
+                    target = table_candidates if label == "table" else figure_candidates
+                    target.append({
+                        "page": page_number,
+                        "number": int(number),
+                        "bbox": _bbox(line.get("bbox", (0, 0, 0, 0))),
+                        "caption": _visual_text(line_text, 1000),
+                        "renderSha256": render_sha,
+                        "sourceRef": f"pdf://page/{page_number}/{label}/{number}",
+                        "status": "caption-detected",
+                    })
+
+        try:
+            finder = page.find_tables()
+            for table_index, table in enumerate(finder.tables, start=1):
+                matrix = table.extract()
+                rectangular = bool(matrix) and all(
+                    isinstance(row, list) and row and len(row) == len(matrix[0])
+                    and all(isinstance(cell, str) and cell.strip() for cell in row)
+                    for row in matrix
+                )
+                table_candidates.append({
+                    "page": page_number,
+                    "ordinal": table_index,
+                    "bbox": _bbox(table.bbox),
+                    "rows": len(matrix),
+                    "columns": len(matrix[0]) if matrix else 0,
+                    "matrixSha256": _stable_hash(matrix) if rectangular else None,
+                    "status": "matrix-extracted" if rectangular else "needs-review",
+                    "renderSha256": render_sha,
+                })
+        except Exception as exc:
+            table_candidates.append({
+                "page": page_number,
+                "ordinal": 1,
+                "bbox": [0, 0, 0, 0],
+                "rows": 0,
+                "columns": 0,
+                "matrixSha256": None,
+                "status": "needs-review",
+                "renderSha256": render_sha,
+                "error": type(exc).__name__,
+            })
+
+    body = {
+        "contract": VISUAL_AUDIT_CONTRACT,
+        "version": VISUAL_AUDIT_VERSION,
+        "backend": {"name": "pymupdf", "version": str(document.__class__.__module__)},
+        "renderDpi": VISUAL_RENDER_DPI,
+        "pages": pages,
+        "embeddedImages": embedded_images,
+        "tableCandidates": table_candidates,
+        "formulaCandidates": formula_candidates,
+        "figureCandidates": figure_candidates,
+        "visualBytes": visual_bytes,
+        "limitations": [
+            "PDF 没有作者原始 TeX；公式仅保存原页视觉证据和抽取文本，不转写为可发布 TeX。",
+            "表格候选只有 status=matrix-extracted 且矩阵完整时才允许后续人工/规则复核。",
+            "Figure/图片通过原页 PNG SHA 和 PDF 内嵌图片 SHA 绑定，未把坐标或曲线语义交给自动推断。",
+        ],
+    }
+    body["auditSha256"] = _stable_hash(body)
+    return body
+
+
 def load_pypdf_backend() -> ExtractionBackend:
-    """Load the pinned backend lazily so validation can fail with a typed error."""
+    """Load the pinned PyMuPDF backend lazily (legacy function name retained)."""
     try:
-        pypdf = importlib.import_module("pypdf")
+        fitz = importlib.import_module("fitz")
     except ImportError as exc:
         raise ConferenceExtractionDependencyError(
-            "pypdf is required for conference PDF extraction; install requirements.txt"
+            "PyMuPDF is required for conference PDF extraction; install requirements.txt"
         ) from exc
-    version = str(getattr(pypdf, "__version__", "unknown"))
+    version = str(getattr(fitz, "VersionBind", "unknown"))
 
     def extract_pages(pdf_bytes: bytes) -> list[str]:
         try:
-            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes), strict=True)
-            if getattr(reader, "is_encrypted", False):
-                raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
-            if len(reader.pages) > MAX_PAGES:
-                raise ConferencePdfExtractionError(f"PDF page count exceeds {MAX_PAGES}")
-            pages = []
-            extracted_bytes = 0
-            for page in reader.pages:
-                text = _normalize_page_text(page.extract_text())
-                extracted_bytes += len(text.encode("utf-8")) + len(PAGE_SEPARATOR.encode("utf-8"))
-                if extracted_bytes > MAX_DERIVED_BYTES:
-                    raise ConferencePdfExtractionError("extracted text exceeds the derived artifact limit")
-                pages.append(text)
+            with contextlib.redirect_stdout(io.StringIO()):
+                document = fitz.open(stream=pdf_bytes, filetype="pdf")
+                if document.needs_pass:
+                    raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
+                if len(document) > MAX_PAGES:
+                    raise ConferencePdfExtractionError(f"PDF page count exceeds {MAX_PAGES}")
+                pages = []
+                extracted_bytes = 0
+                for page in document:
+                    text = _normalize_page_text(page.get_text("text", sort=True))
+                    extracted_bytes += len(text.encode("utf-8")) + len(PAGE_SEPARATOR.encode("utf-8"))
+                    if extracted_bytes > MAX_DERIVED_BYTES:
+                        raise ConferencePdfExtractionError("extracted text exceeds the derived artifact limit")
+                    pages.append(text)
+                document.close()
         except ConferencePdfExtractionError:
             raise
-        except Exception as exc:  # pypdf exposes version-specific parse exceptions.
+        except Exception as exc:  # PyMuPDF exposes version-specific parse exceptions.
             raise ConferencePdfExtractionError(
-                f"pypdf could not extract the PDF ({type(exc).__name__})"
+                f"PyMuPDF could not extract the PDF ({type(exc).__name__})"
             ) from exc
         if not pages:
             raise ConferencePdfExtractionError("PDF contains no pages")
         return pages
 
-    return ExtractionBackend(name="pypdf", version=version, extract_pages=extract_pages)
+    def extract_visual_audit(pdf_bytes: bytes) -> dict[str, Any]:
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                document = fitz.open(stream=pdf_bytes, filetype="pdf")
+                if document.needs_pass:
+                    raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
+                result = _build_visual_audit(document)
+                result["backend"] = {"name": "pymupdf", "version": version}
+                result.pop("auditSha256", None)
+                result["auditSha256"] = _stable_hash(result)
+                document.close()
+            return result
+        except ConferencePdfExtractionError:
+            raise
+        except Exception as exc:
+            raise ConferencePdfExtractionError(
+                f"PyMuPDF visual audit failed ({type(exc).__name__})"
+            ) from exc
+
+    return ExtractionBackend(name="pymupdf", version=version, extract_pages=extract_pages,
+        extract_visual_audit=extract_visual_audit)
 
 
 def _page_ranges(pages: list[str]) -> tuple[bytes, list[dict[str, Any]]]:
@@ -497,10 +691,11 @@ def run_extraction(
         backend_info = None if active_backend is None else {"name": active_backend.name, "version": active_backend.version}
         text_bytes: bytes | None = None
         artifact_bytes: bytes | None = None
+        visual_audit: dict[str, Any] | None = None
         page_count: int | None = None
         non_whitespace: int | None = None
         status = "blocked"
-        blocked_reason: dict[str, str] | None
+        blocked_reason: dict[str, str] | None = None
         if pages is not None:
             if not isinstance(pages, list) or len(pages) > MAX_PAGES:
                 pages = None
@@ -519,29 +714,49 @@ def run_extraction(
                     status = "blocked"
                     blocked_reason = {"code": "PDF_EXTRACTION_FAILED", "message": str(extraction_error)}
                 else:
-                    short = non_whitespace < MINIMUM_TEXT_CHARACTERS
-                    status = "blocked" if short else "ready"
-                    blocked_reason = ({"code": "TEXT_TOO_SHORT", "message":
-                        f"extracted non-whitespace text is below {MINIMUM_TEXT_CHARACTERS} characters"}
-                        if short else None)
-                    artifact = {
-                        "contract": ARTIFACT_CONTRACT,
-                        "version": CONTRACT_VERSION,
-                        "profile": PROFILE,
-                        "offsetUnit": OFFSET_UNIT,
-                        "flattenedTextSha256": sha256_bytes(text_bytes),
-                        "pages": ranges,
-                        "tables": [],
-                        "formulas": [],
-                        "figures": [],
-                    }
-                    artifact["payloadSha256"] = sha256_bytes(_compact_json_bytes(artifact))
-                    artifact_bytes = _json_bytes(artifact)
-                    if len(artifact_bytes) > MAX_DERIVED_BYTES:
-                        raise _fail("structured artifact exceeds the derived artifact limit")
+                    if active_backend.extract_visual_audit is None:
+                        extraction_error = ConferencePdfExtractionError(
+                            "PDF backend does not provide a replayable visual audit"
+                        )
+                        status = "blocked"
+                        blocked_reason = {"code": "PDF_VISUAL_AUDIT_UNAVAILABLE", "message": str(extraction_error)}
+                        text_bytes = None
+                    else:
+                        try:
+                            visual_audit = active_backend.extract_visual_audit(pdf_bytes)
+                        except ConferenceExtractionError as exc:
+                            extraction_error = exc
+                            status = "blocked"
+                            blocked_reason = {"code": "PDF_VISUAL_AUDIT_FAILED", "message": str(exc)}
+                            text_bytes = None
+                    if text_bytes is None:
+                        status = "blocked"
+                        blocked_reason = {"code": blocked_reason["code"], "message": blocked_reason["message"]}
+                    else:
+                        short = non_whitespace < MINIMUM_TEXT_CHARACTERS
+                        status = "blocked" if short else "ready"
+                        blocked_reason = ({"code": "TEXT_TOO_SHORT", "message":
+                            f"extracted non-whitespace text is below {MINIMUM_TEXT_CHARACTERS} characters"}
+                            if short else None)
+                        artifact = {
+                            "contract": ARTIFACT_CONTRACT,
+                            "version": CONTRACT_VERSION,
+                            "profile": PROFILE,
+                            "offsetUnit": OFFSET_UNIT,
+                            "flattenedTextSha256": sha256_bytes(text_bytes),
+                            "pages": ranges,
+                            "tables": [],
+                            "formulas": [],
+                            "figures": [],
+                            "visualAudit": visual_audit,
+                        }
+                        artifact["payloadSha256"] = sha256_bytes(_compact_json_bytes(artifact))
+                        artifact_bytes = _json_bytes(artifact)
+                        if len(artifact_bytes) > MAX_DERIVED_BYTES:
+                            raise _fail("structured artifact exceeds the derived artifact limit")
         if pages is None or extraction_error is not None and artifact_bytes is None:
             status = "blocked"
-            blocked_reason = {
+            blocked_reason = blocked_reason or {
                 "code": "PDF_EXTRACTION_FAILED",
                 "message": str(extraction_error or "PDF extraction failed"),
             }
