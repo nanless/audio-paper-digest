@@ -64,10 +64,10 @@ loadEnvFile();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const pdfLayout = require('./lib/pdf-layout.js');
 const dns = require('dns').promises;
 const net = require('net');
 const https = require('https');
-const { PDFParse } = require('pdf-parse');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = require('./config.js');
 const {
@@ -2431,7 +2431,7 @@ function readerCapabilityPolicyNotice(policy) {
     if (!checked) return '';
     return [
         `[READER_CAPABILITY_POLICY] ${checked.contract} sha256=${checked.policySha256}`,
-        '当前来源是已认证的会议 weak PDF 纯文本；表格 DOM、原始公式 TeX 与 Figure 像素均不可用。',
+        '当前来源是已认证的会议 PDF：正文按页抽取，并可在本次请求中接收临时 PDF 页面像素；但没有 HTML DOM、作者原始公式 TeX 或可发布的 Figure URL，不能把视觉候选伪造成结构化绑定。',
         '硬约束：tableBindings、formulaBindings、figurePlacements 必须全部为 []；正文不得包含 Markdown 表格、展示公式、TABLE/FORMULA/FIGURE marker。',
         '这条来源能力约束覆盖通用写作说明中的表格数量要求和非空示例。定量结果、公式含义与图示结论只能依据全文连续证据改写为自然段，不得重建结构化对象。'
     ].join('\n');
@@ -8804,7 +8804,7 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
     return payload;
 }
 
-function buildUnstructuredTextArtifactSignals(text, sourceKind) {
+function buildUnstructuredTextArtifactSignals(text, sourceKind, visualAudit = null) {
     const raw = String(text || '');
     const tableCaptions = [...raw.matchAll(/^\s*(?:table|tbl\.?|表)\s*(?:[A-Z]?\d+|[IVXLCDM]+)\b[^\n]*/gim)]
         .map(match => match[0].replace(/\s+/g, ' ').trim());
@@ -8814,6 +8814,7 @@ function buildUnstructuredTextArtifactSignals(text, sourceKind) {
         parserVersion: 'unstructured-text-signals-v1',
         sourceKind,
         tables: [], formulas: [], figures: [], references: [],
+        ...(visualAudit ? { visualAudit: structuredClone(visualAudit) } : {}),
         signals: { tableCaptionCount: tableCaptions.length, tableCaptions, formulaCueCount },
         health: {
             status: 'incomplete',
@@ -8823,6 +8824,7 @@ function buildUnstructuredTextArtifactSignals(text, sourceKind) {
             issues: [
                 `${sourceKind} 不保留 DOM/布局，不能证明表格矩阵完整`,
                 `${sourceKind} 不保留 MathML/TeX，不能证明公式 inventory 完整`,
+                ...(visualAudit ? [`${sourceKind} 已保留 PyMuPDF 页级视觉审计；公式仍只有页面像素/抽取文本，未恢复原始 TeX`] : []),
                 ...(tableCaptions.length > 0 ? [`检测到 ${tableCaptions.length} 个表格标题但没有恢复矩阵`] : [])
             ]
         }
@@ -9820,16 +9822,12 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
                 warnings.push(`PDF ${pdfId}: 文件头无效`);
                 continue;
             }
-            const parser = new PDFParse({ data: buffer });
-            let result;
-            try {
-                result = await parser.getText();
-            } finally {
-                await parser.destroy().catch(() => {});
-            }
-            if (result?.text) {
-                const rawPdfText = result.text;
-                const structuredArtifacts = buildUnstructuredTextArtifactSignals(rawPdfText, 'pdf_text');
+            const layout = await pdfLayout.extractPdfLayoutFromBytes(buffer);
+            if (layout?.text) {
+                const rawPdfText = String(layout.text);
+                const structuredArtifacts = buildUnstructuredTextArtifactSignals(
+                    rawPdfText, 'pdf_text', layout.visualAudit
+                );
                 const text = rawPdfText
                     .replace(/\n\s*\n/g, '\n')
                     .replace(/[ \t]+/g, ' ')
@@ -9839,7 +9837,8 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
                     warnings.push(`PDF ${pdfId}: 提取正文过短 (${text.length} chars)`);
                     continue;
                 }
-                console.log(`    [deep] PDF fallback success for ${arxivId}, extracted ${text.length} chars`);
+                warnings.push(`PDF ${pdfId}: PyMuPDF 视觉审计 ${layout.visualAudit.pages.length} 页、${layout.visualAudit.tableCandidates.length} 个表格候选、${layout.visualAudit.formulaCandidates.length} 个公式候选、${layout.visualAudit.figureCandidates.length} 个 Figure 标题候选；公式无原始 TeX，表格未自动转为可发布结构。`);
+                console.log(`    [deep] PDF fallback success for ${arxivId}, extracted ${text.length} chars with PyMuPDF visual audit`);
                 return {
                     text,
                     source: 'pdf',
@@ -9887,12 +9886,11 @@ async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options =
     if (bytes.length < 5 || bytes.length > ARXIV_PDF_MAX_BYTES || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
         throw new Error(`arXiv PDF ${normalized} bytes are invalid for fallback extraction`);
     }
-    const parser = new PDFParse({ data: bytes });
-    let result;
-    try { result = await parser.getText(); }
-    finally { await parser.destroy().catch(() => {}); }
-    const rawPdfText = String(result?.text || '');
-    const structuredArtifacts = buildUnstructuredTextArtifactSignals(rawPdfText, 'pdf_text');
+    const layout = await pdfLayout.extractPdfLayoutFromBytes(bytes);
+    const rawPdfText = String(layout?.text || '');
+    const structuredArtifacts = buildUnstructuredTextArtifactSignals(
+        rawPdfText, 'pdf_text', layout.visualAudit
+    );
     const text = rawPdfText.replace(/\n\s*\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
     if (text.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
         throw new Error(`arXiv PDF ${normalized} fallback text is too short (${text.length} chars)`);
@@ -9902,7 +9900,10 @@ async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options =
         structuredArtifacts: bindStructuredArtifactsToText(structuredArtifacts, text),
         htmlAvailability: options.htmlAvailability || 'unavailable',
         htmlAttempts: Number.isSafeInteger(options.htmlAttempts) ? options.htmlAttempts : 0,
-        warnings: Array.isArray(options.warnings) ? options.warnings.slice() : []
+        warnings: [
+            ...(Array.isArray(options.warnings) ? options.warnings.slice() : []),
+            `PDF ${normalized}: PyMuPDF 视觉审计 ${layout.visualAudit.pages.length} 页、${layout.visualAudit.tableCandidates.length} 个表格候选、${layout.visualAudit.formulaCandidates.length} 个公式候选、${layout.visualAudit.figureCandidates.length} 个 Figure 标题候选；公式无原始 TeX，表格未自动转为可发布结构。`
+        ]
     };
 }
 

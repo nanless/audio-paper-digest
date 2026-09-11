@@ -6,18 +6,15 @@
 // reads a historical post, data/current, a crosswalk, or a legacy analysis.
 
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { PDFParse } = require('pdf-parse');
 const conferenceLocalSources = require('./historical-conference-local-sources.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
 const directContext = require('./direct-rewrite-analysis-context.js');
 const directPages = require('./historical-direct-page-staging.js');
-const execFileAsync = promisify(execFile);
+const pdfLayout = require('./pdf-layout.js');
 
 const CONTRACT = 'historical-direct-rewrite-execution-v1';
 const REGISTRY_CONTRACT = 'historical-direct-rewrite-execution-registry-v1';
@@ -520,6 +517,7 @@ function compactSourceDescriptor(route, source, item = null) {
 }
 function sourceSnapshotSha(details) { return stableHash({ paperId: details.paperId, source: details.source, sourceId: details.sourceId,
     textSha256: sha256(Buffer.from(details.text, 'utf8')), structuredArtifacts: details.structuredArtifacts,
+    ...(details.pdfVisualAudit ? { pdfVisualAudit: details.pdfVisualAudit } : {}),
     ...(details.sourceVersion ? { sourceVersion: details.sourceVersion } : {}) }); }
 
 function extractSealedArxivAbstract(text) {
@@ -805,29 +803,44 @@ async function extractConferenceSource(item, dependencies = {}) {
     const priorPreprint = priorPreprintAnalysisDisclosure(source, item);
     const pdf = readRegular(source.pdf.absolutePath, 512 * 1024 * 1024);
     if (pdf.sha256 !== source.pdf.sha256 || pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail(`${item.paperId} PDF changed after planning`);
-    const extractPdfText = dependencies.extractPdfText || (async bytes => {
-        const parser = new PDFParse({ data: bytes });
-        try { const result = await parser.getText(); return String(result?.text || ''); }
-        finally { await parser.destroy().catch(() => {}); }
-    });
-    const extractedText = String(await extractPdfText(pdf.bytes) || '').replace(/\r\n?/g, '\n').trim();
-    if (extractedText.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
+    let extractedText;
+    let pdfVisualAudit = null;
+    if (typeof dependencies.extractPdfLayout === 'function') {
+        const layout = await dependencies.extractPdfLayout(pdf.absolutePath, pdf.bytes);
+        extractedText = String(layout?.text || '');
+        pdfVisualAudit = layout?.visualAudit || null;
+    } else if (typeof dependencies.extractPdfText === 'function') {
+        // Test-only injection remains text-compatible, but production never
+        // takes this branch.  Real conference PDFs must use the shared
+        // PyMuPDF layout/audit path below.
+        extractedText = String(await dependencies.extractPdfText(pdf.bytes) || '');
+    } else {
+        const layout = await pdfLayout.extractPdfLayoutFromPath(source.pdf.absolutePath);
+        extractedText = String(layout.text || '');
+        pdfVisualAudit = layout.visualAudit;
+    }
+    const normalizedText = extractedText.replace(/\r\n?/g, '\n').trim();
+    if (normalizedText.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
     // Put the identity warning in the actual text consumed by every primary,
     // repair, scoring, and Reader request. Merely retaining it as manifest
     // metadata would not prevent a model from mistaking these bytes for the
     // differently titled conference camera-ready paper.
-    const text = priorPreprint ? `${priorPreprint.analysisInputNotice}\n\n${extractedText}` : extractedText;
+    const text = priorPreprint ? `${priorPreprint.analysisInputNotice}\n\n${normalizedText}` : normalizedText;
     const artifactsBody = { version: 1, source: 'direct_conference_pdf_text', tables: [], formulas: [], figures: [],
         flattenedTextSha256: sha256(Buffer.from(text, 'utf8')) };
     return { paperId: item.paperId, pdfSha256: pdf.sha256, sourceTitle: titleFromConferenceMetadata(source, item), sourceDetails: { paperId: item.paperId,
         source: 'conference_pdf_text', sourceId: item.paperId, text, imageInfos: [],
         structuredArtifacts: { ...artifactsBody, payloadSha256: sha256(JSON.stringify(artifactsBody)) },
         htmlAvailability: 'not_applicable', htmlAttempts: 0,
+        ...(pdfVisualAudit ? { pdfVisualAudit } : {}),
         ...(priorPreprint ? { sourceTitle: priorPreprint.sourceTitle, sourceDoi: priorPreprint.sourceDoi,
             versionRelation: priorPreprint.versionRelation, sourceVersionWarning: priorPreprint.warning } : {}),
         warnings: [
             ...(priorPreprint ? [priorPreprint.warning] : []),
-            '会议本地 PDF 的图像只在本次 Reader 临时物化，不写入 runtime。'
+            ...(pdfVisualAudit
+                ? [`会议 PDF 已通过 PyMuPDF 视觉审计：${pdfVisualAudit.pages.length} 页、${pdfVisualAudit.tableCandidates.length} 个表格候选、${pdfVisualAudit.formulaCandidates.length} 个公式候选、${pdfVisualAudit.figureCandidates.length} 个 Figure 标题候选；像素仅在本次 Reader 临时物化。`]
+                : ['测试注入文本未执行 PDF 视觉审计；生产路径禁止使用该分支。']),
+            'PDF 没有原始 TeX；公式只能以页面像素和抽取文本复核，不能自动宣称已恢复可发布 TeX。'
         ] } };
 }
 
@@ -883,28 +896,28 @@ async function withEphemeralConferenceFigures(source, callback, dependencies = {
     const directory = fs.mkdtempSync(path.join(root, 'historical-conference-figures-'));
     try {
         const materialize = dependencies.materializeConferenceFigures || renderConferencePdfPages;
-        const figures = await materialize({ pdfPath: source.pdfPath, directory });
+        const figures = await materialize({ pdfPath: source.pdfPath, directory, visualAudit: source.visualAudit });
         return await callback(Array.isArray(figures) ? figures : fail('conference figure extractor must return an array'));
     } finally { fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2 }); }
 }
 
-async function renderConferencePdfPages({ pdfPath, directory }) {
+async function renderConferencePdfPages({ pdfPath, directory, visualAudit = null }) {
     if (typeof pdfPath !== 'string' || !path.isAbsolute(pdfPath) || !path.resolve(pdfPath).endsWith('.pdf')) {
         fail('conference PDF renderer needs an absolute PDF path');
     }
-    const prefix = path.join(directory, 'page');
-    try {
-        await execFileAsync('pdftoppm', ['-png', '-f', '1', '-l', '4', '-r', '144', pdfPath, prefix], {
-            cwd: directory, timeout: 120000, maxBuffer: 1024 * 1024
-        });
-    } catch (error) {
-        fail(`conference PDF temporary figure rendering failed: ${String(error?.message || error).slice(0, 500)}`);
+    const audit = visualAudit || (await pdfLayout.extractPdfLayoutFromPath(pdfPath)).visualAudit;
+    const pageCount = Array.isArray(audit?.pages) ? audit.pages.length : 0;
+    if (!pageCount) fail('conference PDF visual audit has no pages');
+    const pages = new Set(Array.from({ length: Math.min(4, pageCount) }, (_, index) => index + 1));
+    for (const candidate of [...(audit.tableCandidates || []), ...(audit.formulaCandidates || []), ...(audit.figureCandidates || [])]) {
+        if (Number.isSafeInteger(candidate?.page) && candidate.page >= 1 && candidate.page <= pageCount) pages.add(candidate.page);
     }
-    const names = fs.readdirSync(directory).filter(name => /^page-\d+\.png$/.test(name)).sort();
-    if (!names.length) fail('conference PDF renderer produced no temporary pages');
-    return names.map((name, index) => {
-        const rawBytes = readRegular(path.join(directory, name), 32 * 1024 * 1024).bytes;
-        return { ordinal: index + 1, caption: `PDF 第 ${index + 1} 页`, rawBytes,
+    const selectedPages = [...pages].sort((left, right) => left - right).slice(0, 12);
+    const files = await pdfLayout.renderPdfPages(pdfPath, directory, selectedPages);
+    if (!files.length || files.length !== selectedPages.length) fail('conference PDF renderer produced no temporary pages');
+    return files.map((file, index) => {
+        const rawBytes = readRegular(path.join(directory, file.filename), 32 * 1024 * 1024).bytes;
+        return { ordinal: index + 1, page: file.page, caption: `PDF 第 ${file.page} 页`, rawBytes,
             assetSha256: sha256(rawBytes), mediaType: 'image/png' };
     });
 }
@@ -1622,7 +1635,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 sourceDetails: clone(sourceDetails), sourceDescriptor: descriptor, executionDirectory: executionDir,
                 dependencies: executionDependencies }));
             const analysis = item.route.kind === 'conference-local-pdf'
-                ? await withEphemeralConferenceFigures({ pdfPath: item.route.writerInputs[0]?.pdf.absolutePath },
+                ? await withEphemeralConferenceFigures({ pdfPath: item.route.writerInputs[0]?.pdf.absolutePath,
+                    visualAudit: sourceDetails.pdfVisualAudit },
                     invokeAnalysis, executionDependencies)
                 : await invokeAnalysis([]);
             // The final contract is checked before the durable analysis file
