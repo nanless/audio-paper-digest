@@ -790,7 +790,11 @@ function validConferencePdfAuthorName(value) {
 
 function normalizeConferencePdfAffiliation(value) {
     return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
-        .replace(/\s*(?:[|｜]|DOI\s*:).+$/i, '').replace(/[.;,]+$/, '').trim();
+        .replace(/\s*(?:[|｜]|DOI\s*:).+$/i, '')
+        // PyMuPDF can place a DOI immediately after the last affiliation
+        // token when the PDF line has no whitespace at the column boundary.
+        .replace(/\s*10\.\d{4,9}\/[\-._;()/:A-Z0-9]+$/i, '')
+        .replace(/[.;,]+$/, '').trim();
 }
 
 /**
@@ -1064,11 +1068,9 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     // retained fields, while analysis/Reader checkpoints remain available to
     // deep-analyzer for fingerprint-based stage reuse.
     const paper = recovered ? { ...recovered.record, ...freshPaper } : freshPaper;
-    if (item.route.kind === 'arxiv-fresh-fetch') {
-        const refresh = dependencies.refreshApiReaderAuthorsFromSource
-            || require('../deep-analyzer.js').refreshApiReaderAuthorsFromSource;
-        refreshHistoricalDirectReaderAuthors(paper, sourceDetails, refresh);
-    }
+    const refresh = dependencies.refreshApiReaderAuthorsFromSource
+        || require('../deep-analyzer.js').refreshApiReaderAuthorsFromSource;
+    refreshHistoricalDirectReaderAuthors(paper, sourceDetails, refresh);
     const readerAttemptsDir = path.join(executionDirectory, 'reader-attempts');
     let result = paper;
     const persistRecovery = record => writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,

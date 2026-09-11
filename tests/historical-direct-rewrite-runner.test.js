@@ -117,7 +117,7 @@ test('conference PDF author evidence parses symbol and numeric superscripts from
         'A Paper Title',
         'Hoan My Tran†, Aghilas Sini∗, David Guennec†,',
         'Arnaud Delhay†, Damien Lolive‡, Pierre-Franc¸ois Marteau‡',
-        '†Univ Rennes, CNRS, IRISA, Lannion, France ‡Univ Bretagne Sud, CNRS, IRISA, Vannes, France',
+        '†Univ Rennes, CNRS, IRISA, Lannion, France ‡Univ Bretagne Sud, CNRS, IRISA, Vannes, France10.1109/ICASSP55912.2026.11460320',
         '∗Univ Le Mans, LIUM, Le Mans, France',
         'ABSTRACT', 'body'
     ].join('\n'));
@@ -126,6 +126,7 @@ test('conference PDF author evidence parses symbol and numeric superscripts from
         'Damien Lolive', 'Pierre-François Marteau'
     ]);
     assert.deepEqual(symbol.authors[0].affiliations, ['Univ Rennes, CNRS, IRISA, Lannion, France']);
+    assert.deepEqual(symbol.authors[4].affiliations, ['Univ Bretagne Sud, CNRS, IRISA, Vannes, France']);
     const multiSymbol = runner.parseConferencePdfAuthors([
         'Dynamic Balanced Cross-Modal Attention',
         'Rong Geng†, Qindong Sun†,‡,⋆, Han Cao†, Xiaoxiong Wang†',
