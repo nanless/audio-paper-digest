@@ -1580,6 +1580,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     ) || replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts);
     const sealedLayoutlessText = structuredArtifacts.version === 1
         && (structuredArtifacts.source === 'fresh_arxiv_text_without_layout'
+            || structuredArtifacts.source === 'direct_conference_pdf_text'
             || (structuredArtifacts.source === 'conference_pdf_weak_text'
                 && structuredArtifacts.capabilityProfile === 'weak-text-only-v1'))
         && ['tables', 'formulas', 'figures'].every(key => (

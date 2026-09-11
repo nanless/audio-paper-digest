@@ -339,6 +339,22 @@ describe('arXiv HTML full-text health gate', () => {
         });
         assert.strictEqual(layoutlessArtifacts.payloadSha256, 'b'.repeat(64));
 
+        const directConferenceArtifacts = {
+            version: 1,
+            source: 'direct_conference_pdf_text',
+            flattenedTextSha256: require('node:crypto').createHash('sha256')
+                .update(sourceText).digest('hex'),
+            tables: [], formulas: [], figures: [], payloadSha256: 'c'.repeat(64)
+        };
+        assert.doesNotThrow(() => bindApiReaderSourceEvidence(
+            '会议 PDF 的直接文本证据重放检查。', [], [], {
+                structuredArtifacts: directConferenceArtifacts,
+                sourceText,
+                sections: []
+            }
+        ));
+        assert.strictEqual(directConferenceArtifacts.payloadSha256, 'c'.repeat(64));
+
     });
 
     it('Reader 数字证据把前导小数 .119 规范为 0.119，不误读为 119', () => {
