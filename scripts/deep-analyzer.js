@@ -11832,7 +11832,11 @@ async function analyzePaperDeepInternal(paper) {
         ? (sourceProvenance.truncated ? '以下是论文全文节选，请只依据已提供内容分析。' : '以下是论文全文，请仔细阅读所有技术细节。')
         : '以下是论文摘要；由于全文不可用，请降低事实判断和评分置信度，不得声称已经核对全文细节。';
 
-    if (directSource && isDualModel && !directPrimaryImageDownloader) {
+    // Conference PDFs intentionally have no trusted Figure URL. Their page
+    // pixels arrive through the direct supplementary-image scope instead. The
+    // ephemeral primary downloader is required only when this source route
+    // actually discovered URL-based primary image candidates.
+    if (directSource && isDualModel && candidateImageUrls.length > 0 && !directPrimaryImageDownloader) {
         throw new Error('Direct dual-model analysis requires an ephemeral primary image downloader');
     }
     // Direct historical analyses never touch the legacy data/current image
