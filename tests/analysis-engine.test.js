@@ -962,6 +962,38 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
         bindValidApiReaderV3(automatic);
         assert.strictEqual(apiReaderV3BindsCanonical(automatic), true);
+        const conferencePdf = structuredClone(automatic);
+        const pdfStableHash = value => crypto.createHash('sha256')
+            .update(JSON.stringify((function stable(item) {
+                if (Array.isArray(item)) return item.map(stable);
+                if (item && typeof item === 'object') {
+                    return Object.fromEntries(Object.keys(item).sort().map(key => [key, stable(item[key])]));
+                }
+                return item;
+            })(value))).digest('hex');
+        const pdfAuthor = conferencePdf.apiReaderAuthors.authors[0];
+        const pdfIdentityAuthor = conferencePdf.apiReaderAuthors.identity.authors[0];
+        pdfAuthor.affiliations = ['Univ Rennes, CNRS, IRISA, Lannion, France'];
+        pdfIdentityAuthor.affiliations = [...pdfAuthor.affiliations];
+        conferencePdf.apiReaderAuthors.identity.sourceDomSha256 =
+            conferencePdf.apiReaderAuthors.sourceDomSha256;
+        pdfIdentityAuthor.nameBinding = {
+            sourceKind: 'pdf_text', sourceValue: pdfAuthor.name,
+            sourceDomSha256: conferencePdf.apiReaderAuthors.sourceDomSha256
+        };
+        pdfIdentityAuthor.affiliationBindings = [{
+            sourceKind: 'pdf_text', association: 'direct_author',
+            sourceValue: pdfAuthor.affiliations[0],
+            sourceDomSha256: conferencePdf.apiReaderAuthors.sourceDomSha256
+        }];
+        conferencePdf.apiReaderAuthors.identity.metadataSha256 = pdfStableHash(conferencePdf.authors || []);
+        conferencePdf.apiReaderAuthors.identitySha256 = pdfStableHash(conferencePdf.apiReaderAuthors.identity);
+        conferencePdf.analysisManifest.stages.apiReaderArticle.readerAuthorsSha256 =
+            pdfStableHash(conferencePdf.apiReaderAuthors);
+        conferencePdf.analysisManifest.stages.apiReaderArticle.readerAuthorIdentitySha256 =
+            conferencePdf.apiReaderAuthors.identitySha256;
+        assert.strictEqual(apiReaderV3BindsCanonical(conferencePdf), true,
+            'a SHA-bound conference PDF text author identity must pass canonical proof');
         const emptyAuthors = structuredClone(automatic);
         emptyAuthors.authors = [];
         emptyAuthors.apiReaderAuthors.authors = [];

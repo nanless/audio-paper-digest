@@ -1018,9 +1018,9 @@ function apiReaderV3BindsCanonical(paper) {
             const identity = authorIdentity.authors[index];
             return identity?.name === author?.name
                 && JSON.stringify(identity?.affiliations) === JSON.stringify(author?.affiliations)
-                && ['html_dom', 'paper_metadata'].includes(identity?.nameBinding?.sourceKind)
+                && ['html_dom', 'pdf_text', 'paper_metadata'].includes(identity?.nameBinding?.sourceKind)
                 && identity.nameBinding.sourceValue === author.name
-                && (identity.nameBinding.sourceKind === 'html_dom'
+                && (['html_dom', 'pdf_text'].includes(identity.nameBinding.sourceKind)
                     ? identity.nameBinding.sourceDomSha256 === authorIdentity.sourceDomSha256
                         && /^[a-f0-9]{64}$/.test(String(identity.nameBinding.sourceDomSha256 || ''))
                     : identity.nameBinding.metadataSha256 === authorIdentity.metadataSha256)
@@ -1028,8 +1028,8 @@ function apiReaderV3BindsCanonical(paper) {
                 && identity.affiliationBindings.length === author.affiliations.length
                 && identity.affiliationBindings.every((binding, affiliationIndex) => (
                     binding?.sourceValue === author.affiliations[affiliationIndex]
-                    && ['html_dom', 'explicit_unavailable'].includes(binding?.sourceKind)
-                    && (binding.sourceKind !== 'html_dom'
+                    && ['html_dom', 'pdf_text', 'explicit_unavailable'].includes(binding?.sourceKind)
+                    && (!['html_dom', 'pdf_text'].includes(binding.sourceKind)
                         ? binding.sourceTextSha256 === authorIdentity.sourceTextSha256
                         : binding.sourceDomSha256 === authorIdentity.sourceDomSha256
                             && /^[a-f0-9]{64}$/.test(String(binding?.sourceDomSha256 || '')))
