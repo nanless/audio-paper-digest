@@ -80,7 +80,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/fresh-rewrite-publication.js` | Node 库 | fresh 重写前精确备份 canonical/博客基线，完整新结果通过来源与基线 CAS 后才提升 canonical。 |
 | `lib/conference-source-ledger.js` | Node 库 | 会议来源账本的身份、四类工件 SHA、审查证据、不可变读写和本地文件重放；标题绝不作为身份。 |
 | `lib/conference-pdf-source.js` | Node 库 | 受控本机 PDF 的字节/路径/链接安全校验和可重放来源 descriptor；无可靠结构化 TeX 时公式明确不可用。 |
-| `lib/pdf-layout.js` / `pdf-layout-extract.py` | Node/Python 库 | 所有 PDF-only 路径的公共 PyMuPDF 入口：按页正文、页级视觉审计、嵌入图片/表格/公式/Figure 候选和 OS 临时 PNG 渲染；持久化不写入像素，公式无原始 TeX 时不伪造可发布 TeX。 |
+| `lib/pdf-layout.js` / `pdf-layout-extract.py` | Node/Python 库 | 所有 PDF-only 路径的公共 PyMuPDF 入口：按页正文、页级视觉审计、嵌入图片/表格/公式/Figure 候选和 OS 临时 PNG 渲染；PDF 内嵌图像对象不等于论文 Figure，会议 Reader 按证据打分最多临时取 6 页；持久化不写入像素，公式无原始 TeX 时不伪造可发布 TeX。 |
 | `lib/conference-run.js` | Node 库 | 冻结会议成员、分片、taxonomy/选择策略版本和逐篇状态；completion proof 上线前拒绝 completed 与 publishable 聚合。 |
 | `lib/conference-plan.js` | Node 库 | 从认证 import handle、reviewed plan 和当前 taxonomy 生成强绑定 run/plan receipt；拒绝任意路径、别名和非完整成员集。 |
 | `lib/conference-importer.js` | Node 库 | 从认证 staging handle 安全导入会议 metadata/PDF/派生工件到私有 cache，并生成 ledger/import receipt；低层 manifest helper 只供隔离测试。 |

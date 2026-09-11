@@ -16,6 +16,7 @@ const directContext = require('./direct-rewrite-analysis-context.js');
 const directPages = require('./historical-direct-page-staging.js');
 const pdfLayout = require('./pdf-layout.js');
 
+const CONFERENCE_VISUAL_PAGE_LIMIT = 6;
 const CONTRACT = 'historical-direct-rewrite-execution-v1';
 const REGISTRY_CONTRACT = 'historical-direct-rewrite-execution-registry-v1';
 const STAGING_CONTRACT = 'historical-direct-rewrite-staging-v1';
@@ -838,7 +839,7 @@ async function extractConferenceSource(item, dependencies = {}) {
         warnings: [
             ...(priorPreprint ? [priorPreprint.warning] : []),
             ...(pdfVisualAudit
-                ? [`会议 PDF 已通过 PyMuPDF 视觉审计：${pdfVisualAudit.pages.length} 页、${pdfVisualAudit.tableCandidates.length} 个表格候选、${pdfVisualAudit.formulaCandidates.length} 个公式候选、${pdfVisualAudit.figureCandidates.length} 个 Figure 标题候选；像素仅在本次 Reader 临时物化。`]
+                ? [`会议 PDF 已通过 PyMuPDF 视觉审计：${pdfVisualAudit.pages.length} 页、${pdfVisualAudit.tableCandidates.length} 个表格候选、${pdfVisualAudit.formulaCandidates.length} 个公式候选、${pdfVisualAudit.figureCandidates.length} 个 Figure 标题候选；${pdfVisualAudit.embeddedImages.length} 个 PDF 内嵌图像对象仅作诊断，不等于论文 Figure，Reader 只临时选取最多 ${CONFERENCE_VISUAL_PAGE_LIMIT} 页像素。`]
                 : ['测试注入文本未执行 PDF 视觉审计；生产路径禁止使用该分支。']),
             'PDF 没有原始 TeX；公式只能以页面像素和抽取文本复核，不能自动宣称已恢复可发布 TeX。'
         ] } };
@@ -901,6 +902,43 @@ async function withEphemeralConferenceFigures(source, callback, dependencies = {
     } finally { fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2 }); }
 }
 
+function selectConferenceVisualPages(visualAudit, pageLimit = CONFERENCE_VISUAL_PAGE_LIMIT) {
+    const pageCount = Array.isArray(visualAudit?.pages) ? visualAudit.pages.length : 0;
+    if (!pageCount || !Number.isSafeInteger(pageLimit) || pageLimit < 1) return [];
+    const limit = Math.min(pageCount, pageLimit);
+    const selected = new Set([1]);
+    if (pageCount > 1 && selected.size < limit) selected.add(2);
+    const evidenceByPage = new Map();
+    const add = (items, weight, kind) => {
+        for (const item of Array.isArray(items) ? items : []) {
+            const page = Number(item?.page);
+            if (!Number.isSafeInteger(page) || page < 1 || page > pageCount) continue;
+            const entry = evidenceByPage.get(page) || { page, score: 0, figures: 0, tables: 0, formulas: 0 };
+            // Count presence strongly, but cap repeated detections on one page.
+            // A page with twenty equation text lines is not twenty times more
+            // useful than a page containing one real Figure caption.
+            entry.score += entry[kind] === 0 ? weight : Math.max(1, Math.floor(weight / 10));
+            entry[kind] += 1;
+            evidenceByPage.set(page, entry);
+        }
+    };
+    // Captioned Figures are the strongest visual evidence. Tables come next;
+    // formula-only pages are useful for glyph/layout checking but should not
+    // crowd out the paper's actual result/method figures.
+    add(visualAudit.figureCandidates, 100, 'figures');
+    add(visualAudit.tableCandidates, 60, 'tables');
+    add(visualAudit.formulaCandidates, 20, 'formulas');
+    const ranked = [...evidenceByPage.values()].sort((left, right) => (
+        right.score - left.score || right.figures - left.figures || right.tables - left.tables
+        || left.page - right.page
+    ));
+    for (const entry of ranked) {
+        if (selected.size >= limit) break;
+        selected.add(entry.page);
+    }
+    return [...selected].sort((left, right) => left - right);
+}
+
 async function renderConferencePdfPages({ pdfPath, directory, visualAudit = null }) {
     if (typeof pdfPath !== 'string' || !path.isAbsolute(pdfPath) || !path.resolve(pdfPath).endsWith('.pdf')) {
         fail('conference PDF renderer needs an absolute PDF path');
@@ -908,11 +946,7 @@ async function renderConferencePdfPages({ pdfPath, directory, visualAudit = null
     const audit = visualAudit || (await pdfLayout.extractPdfLayoutFromPath(pdfPath)).visualAudit;
     const pageCount = Array.isArray(audit?.pages) ? audit.pages.length : 0;
     if (!pageCount) fail('conference PDF visual audit has no pages');
-    const pages = new Set(Array.from({ length: Math.min(4, pageCount) }, (_, index) => index + 1));
-    for (const candidate of [...(audit.tableCandidates || []), ...(audit.formulaCandidates || []), ...(audit.figureCandidates || [])]) {
-        if (Number.isSafeInteger(candidate?.page) && candidate.page >= 1 && candidate.page <= pageCount) pages.add(candidate.page);
-    }
-    const selectedPages = [...pages].sort((left, right) => left - right).slice(0, 12);
+    const selectedPages = selectConferenceVisualPages(audit);
     const files = await pdfLayout.renderPdfPages(pdfPath, directory, selectedPages);
     if (!files.length || files.length !== selectedPages.length) fail('conference PDF renderer produced no temporary pages');
     return files.map((file, index) => {
@@ -1791,7 +1825,7 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     legacyPaperLockReclaimPaths, prepareLegacyPaperLockReclaimAudit,
     reconcileLegacyPaperLockReclaimAudits, hasRecoverableAnalysisState, sourcePrerequisiteSnapshot,
     priorPreprintAnalysisDisclosure, extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
-    withEphemeralConferenceFigures, renderConferencePdfPages,
+    withEphemeralConferenceFigures, selectConferenceVisualPages, renderConferencePdfPages,
     directProvenanceFor, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
     validateInterruptedSourceDescriptor, recoverInterruptedRegistryEntry,
     replayCompletedAnalysisForStaging, resealCompletedAnalysisSurfaceRepair,

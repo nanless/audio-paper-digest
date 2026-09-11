@@ -1253,6 +1253,18 @@ test('conference PDF pixels are rendered only under OS temp and retained only as
     }), /cannot use a persistent runtime directory/);
 });
 
+test('conference visual page selection caps PDF page pixels and prioritizes real Figure/table evidence', () => {
+    const audit = {
+        pages: Array.from({ length: 22 }, (_, index) => ({ page: index + 1 })),
+        figureCandidates: [{ page: 2 }, { page: 4 }, { page: 4 }, { page: 7 }, { page: 9 }],
+        tableCandidates: [{ page: 7 }, { page: 8 }, { page: 8 }, { page: 14 }],
+        formulaCandidates: [{ page: 3 }, { page: 6 }, { page: 16 }, { page: 16 }]
+    };
+    assert.deepEqual(runner.selectConferenceVisualPages(audit), [1, 2, 4, 7, 8, 9]);
+    assert.deepEqual(runner.selectConferenceVisualPages({ pages: [{ page: 1 }] }), [1]);
+    assert.deepEqual(runner.selectConferenceVisualPages({ pages: [] }), []);
+});
+
 test('a new arXiv generation receives an isolated direct registry and cannot recover the prior generation staging', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0;
     const capture = options => freshSource.captureFreshArxivRewriteSource(options, {

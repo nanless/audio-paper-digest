@@ -367,6 +367,30 @@ def _formula_candidate(text: str) -> bool:
     return operators >= 1 and (operators >= 2 or greek)
 
 
+def _caption_candidate(text: str) -> tuple[str, int] | None:
+    """Recognize a caption line, not a prose citation to a Figure/Table.
+
+    A PDF text layer commonly contains sentences such as ``Figure 2 presents``
+    in the body. Treating every such line as a visual candidate made page
+    selection drift toward nearly the whole paper. Captions in the supported
+    conference layouts start with their label and number; keep this heuristic
+    deliberately conservative because the page PNG remains the authoritative
+    visual evidence.
+    """
+    match = re.match(
+        r"^\s*(?:(figure|fig\.?|table|tab\.?)\s*(\d+)|([图表])\s*(\d+))"
+        r"(?:\s*[.．:：;；)）\-–—]|\s+|$)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    raw_label = (match.group(1) or match.group(3) or "figure").lower()
+    raw_number = match.group(2) or match.group(4)
+    label = "table" if raw_label in {"table", "tab.", "表"} else "figure"
+    return label, int(raw_number)
+
+
 def _build_visual_audit(document: Any) -> dict[str, Any]:
     """Build deterministic visual evidence using a PyMuPDF document."""
     pages: list[dict[str, Any]] = []
@@ -440,15 +464,13 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
                         "sourceRef": f"pdf://page/{page_number}/formula/{len(formula_candidates) + 1}",
                         "status": "visual-only-no-tex",
                     })
-                caption_match = re.search(r"(?i)\b(?:figure|fig\.?|table|tab\.?)[\s.:#-]*(\d+)\b|图\s*([0-9]+)", line_text)
-                if caption_match:
-                    number = next((item for item in caption_match.groups() if item), "?")
-                    label = "table" if re.search(r"(?i)\b(?:table|tab\.)", line_text) else (
-                        "figure" if re.search(r"(?i)\b(?:figure|fig\.)", line_text) else "figure")
+                caption = _caption_candidate(line_text)
+                if caption:
+                    label, number = caption
                     target = table_candidates if label == "table" else figure_candidates
                     target.append({
                         "page": page_number,
-                        "number": int(number),
+                        "number": number,
                         "bbox": _bbox(line.get("bbox", (0, 0, 0, 0))),
                         "caption": _visual_text(line_text, 1000),
                         "renderSha256": render_sha,
