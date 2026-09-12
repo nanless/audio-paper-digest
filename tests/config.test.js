@@ -64,7 +64,8 @@ describe('config', () => {
         assert.strictEqual(Config.ANALYSIS_CONFIG.scoringAuditTemperature, 0.1);
         assert.strictEqual(Config.ANALYSIS_CONFIG.imagePlanTemperature, 0.2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfMaxBytes, 50 * 1024 * 1024);
-        assert.strictEqual(Config.FILTER_CONFIG.batchSize, 5);
+        assert.strictEqual(Config.FILTER_CONFIG.batchSize,
+            Number(process.env.PD_FILTER_BATCH_SIZE || 5));
         assert.strictEqual(Config.FILTER_CONFIG.temperature, 0.3);
         assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
         assert.strictEqual(Config.FILTER_CONFIG.decisionContractVersion, 3);

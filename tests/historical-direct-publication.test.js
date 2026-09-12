@@ -150,6 +150,12 @@ test('plan validation rejects forged exact delta and incomplete 4490-style page 
 
 test('CLI rejects ambiguous modes and parses explicit publication scope', () => {
     assert.equal(cli.parseArgs(['publish', '--apply', '--publication-id', publicationId]).action, 'publish');
+    const sample = cli.parseArgs(['plan', '--apply', '--publication-id', publicationId,
+        '--plan-file', '/tmp/plan.json', '--registry-file', '/tmp/registry.json',
+        '--projection-file', '/tmp/projection.json', '--visual-disposition', '/tmp/visual.json',
+        '--paper-ids', 'arxiv:2605.30365,arxiv:2605.30614', '--blog-repo', '/tmp/blog']);
+    assert.deepEqual(sample.paperIds, ['arxiv:2605.30365', 'arxiv:2605.30614']);
+    assert.equal(sample.blogRepo, '/tmp/blog');
     const parsed = cli.parseArgs(['status', '--publication-id', publicationId, '--live-remote', 'true']);
     assert.deepEqual(parsed, { action: 'status', publicationId, liveRemote: true });
     assert.equal(cli.parseArgs(['status', '--publication-id', publicationId]).liveRemote, true);

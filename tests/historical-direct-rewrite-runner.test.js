@@ -112,6 +112,58 @@ test('direct analysis input carries only the fresh-source title, never a frozen 
     assert.doesNotMatch(JSON.stringify(input), /ArXiv page|POISON_OLD_BLOG_BODY/);
 });
 
+test('conference PDF author evidence parses symbol and numeric superscripts from the sealed preamble', () => {
+    const symbol = runner.parseConferencePdfAuthors([
+        'A Paper Title',
+        'Hoan My Tran†, Aghilas Sini∗, David Guennec†,',
+        'Arnaud Delhay†, Damien Lolive‡, Pierre-Franc¸ois Marteau‡',
+        '†Univ Rennes, CNRS, IRISA, Lannion, France ‡Univ Bretagne Sud, CNRS, IRISA, Vannes, France10.1109/ICASSP55912.2026.11460320',
+        '∗Univ Le Mans, LIUM, Le Mans, France',
+        'ABSTRACT', 'body'
+    ].join('\n'));
+    assert.deepEqual(symbol.authors.map(author => author.name), [
+        'Hoan My Tran', 'Aghilas Sini', 'David Guennec', 'Arnaud Delhay',
+        'Damien Lolive', 'Pierre-François Marteau'
+    ]);
+    assert.deepEqual(symbol.authors[0].affiliations, ['Univ Rennes, CNRS, IRISA, Lannion, France']);
+    assert.deepEqual(symbol.authors[4].affiliations, ['Univ Bretagne Sud, CNRS, IRISA, Vannes, France']);
+    const multiSymbol = runner.parseConferencePdfAuthors([
+        'Dynamic Balanced Cross-Modal Attention',
+        'Rong Geng†, Qindong Sun†,‡,⋆, Han Cao†, Xiaoxiong Wang†',
+        '†Shaanxi Key Laboratory of Network Computing and Security, Xi’an University of Technology, China',
+        '‡School of Cyber Science and Engineering, Xi’an Jiaotong University, China',
+        '⋆Corresponding author',
+        'ABSTRACT', 'body'
+    ].join('\n'));
+    assert.deepEqual(multiSymbol.authors[1].affiliations, [
+        'Shaanxi Key Laboratory of Network Computing and Security, Xi’an University of Technology, China',
+        'School of Cyber Science and Engineering, Xi’an Jiaotong University, China'
+    ]);
+    const numeric = runner.parseConferencePdfAuthors([
+        'Mix2Morph: Learning Sound Morphing',
+        'Annie Chu1,2, Hugo Flores-García2, Oriol Nieto1, Justin Salamon1, Bryan Pardo2, Prem Seetharaman1',
+        '1 Adobe Research, San Francisco, USA', '2 Northwestern University, Evanston, USA',
+        'ABSTRACT', 'body'
+    ].join('\n'));
+    assert.deepEqual(numeric.authors.map(author => author.name), [
+        'Annie Chu', 'Hugo Flores-García', 'Oriol Nieto', 'Justin Salamon', 'Bryan Pardo', 'Prem Seetharaman'
+    ]);
+    assert.deepEqual(numeric.authors[0].affiliations, ['Adobe Research, San Francisco, USA', 'Northwestern University, Evanston, USA']);
+    assert.equal(numeric.sourceTextSha256.length, 64);
+    assert.equal(numeric.sourceEvidenceSha256.length, 64);
+});
+
+test('conference direct paper carries only authors parsed from the current PDF source', t => {
+    const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'conference-local-pdf');
+    const input = runner.directPaper(item, {
+        title: 'Fresh conference title',
+        publicationAuthors: ['Annie Chu', 'Hugo Flores-García']
+    });
+    assert.deepEqual(input.authors, ['Annie Chu', 'Hugo Flores-García']);
+    assert.equal(input.title, 'Fresh conference title');
+    assert.doesNotMatch(JSON.stringify(input), /POISON_OLD_BLOG_BODY|POISON_METADATA_TITLE/);
+});
+
 test('completed historical Reader refreshes only an empty author identity from official metadata', () => {
     const sourceSha256 = sha('sealed source');
     const paper = {
@@ -1253,6 +1305,18 @@ test('conference PDF pixels are rendered only under OS temp and retained only as
     }), /cannot use a persistent runtime directory/);
 });
 
+test('conference visual page selection caps PDF page pixels and prioritizes real Figure/table evidence', () => {
+    const audit = {
+        pages: Array.from({ length: 22 }, (_, index) => ({ page: index + 1 })),
+        figureCandidates: [{ page: 2 }, { page: 4 }, { page: 4 }, { page: 7 }, { page: 9 }],
+        tableCandidates: [{ page: 7 }, { page: 8 }, { page: 8 }, { page: 14 }],
+        formulaCandidates: [{ page: 3 }, { page: 6 }, { page: 16 }, { page: 16 }]
+    };
+    assert.deepEqual(runner.selectConferenceVisualPages(audit), [1, 2, 4, 7, 8, 9]);
+    assert.deepEqual(runner.selectConferenceVisualPages({ pages: [{ page: 1 }] }), [1]);
+    assert.deepEqual(runner.selectConferenceVisualPages({ pages: [] }), []);
+});
+
 test('a new arXiv generation receives an isolated direct registry and cannot recover the prior generation staging', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0;
     const capture = options => freshSource.captureFreshArxivRewriteSource(options, {
@@ -1519,7 +1583,7 @@ test('actual Reader request receives a conference PDF page from the direct scope
         await context.withDirectRewriteAnalysisSource({ paperId: item.paperId, route: item.route.kind,
             sourceDetails: extracted.sourceDetails, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
             readerAttemptsDir: path.join(executionDirectory, 'reader-attempts'), supplementaryReaderImages: pages,
-            materializeReaderFigures: async () => [] }, async () => {
+            materializeReaderFigures: async () => [], readerRetryEpoch: 7 }, async () => {
             let rejection; try { await deep.generateApiReaderArticleDetailed({ directPaperId: item.paperId, id: item.paperId,
                 title: 'conference source', authors: [] }, 'canonical analysis', 'SOURCE_EVIDENCE', {
                 sourceText: extracted.sourceDetails.text, structuredArtifacts: extracted.sourceDetails.structuredArtifacts,
@@ -1542,6 +1606,11 @@ test('actual Reader request receives a conference PDF page from the direct scope
         return [{ ordinal: 1, caption: 'page', rawBytes: bytes, assetSha256: sha(bytes), mediaType: 'image/png' }];
     } });
     assert.equal(requestSawPage, true);
+    const readerCandidates = allFiles(path.join(executionDirectory, 'reader-attempts'))
+        .filter(filename => filename.endsWith('.json') && !filename.includes('.migrated-'));
+    assert.equal(readerCandidates.length, 1);
+    const readerEnvelope = JSON.parse(fs.readFileSync(readerCandidates[0], 'utf8'));
+    assert.equal(readerEnvelope.identity.historicalDirectRetryEpoch, 7);
     assert.equal(fs.existsSync(temporaryDirectory), false);
     assert.deepEqual(fs.readdirSync(temporaryRoot), []);
     const persisted = allFiles(path.join(f.root, 'runtime')).map(filename => fs.readFileSync(filename, 'utf8')).join('\n');

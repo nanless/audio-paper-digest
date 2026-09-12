@@ -82,6 +82,7 @@ function canonical(value) {
 }
 
 function stableHash(value) { return sha256(JSON.stringify(canonical(value))); }
+const clone = value => JSON.parse(JSON.stringify(value));
 
 function deepFreeze(value) {
     if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -225,8 +226,44 @@ function validateReplayableFigureRecord(item, index) {
     }
 }
 
+function validateVisualAudit(value) {
+    exact(value, ['contract', 'version', 'backend', 'renderDpi', 'pages', 'embeddedImages',
+        'tableCandidates', 'formulaCandidates', 'figureCandidates', 'visualBytes', 'limitations', 'auditSha256'], 'structuredArtifacts.visualAudit');
+    if (value.contract !== 'conference-pdf-visual-audit-v1' || value.version !== 1
+        || !plain(value.backend) || value.backend.name !== 'pymupdf'
+        || value.backend.version !== '1.27.2.3' || value.renderDpi !== 72
+        || !Array.isArray(value.pages) || !Array.isArray(value.embeddedImages)
+        || !Array.isArray(value.tableCandidates) || !Array.isArray(value.formulaCandidates)
+        || !Array.isArray(value.figureCandidates) || !Array.isArray(value.limitations)
+        || !Number.isSafeInteger(value.visualBytes) || value.visualBytes < 1
+        || value.visualBytes > 48 * 1024 * 1024 || !value.limitations.every(item => typeof item === 'string' && item.trim())) {
+        integrity('structuredArtifacts.visualAudit contract or bounds are invalid', 'invalid_visual_audit');
+    }
+    let total = 0;
+    value.pages.forEach((page, index) => {
+        exact(page, ['page', 'mediaType', 'dpi', 'width', 'height', 'sha256', 'bytes', 'pngBase64'], `structuredArtifacts.visualAudit.pages[${index}]`);
+        const png = Buffer.from(page.pngBase64, 'base64');
+        if (page.page !== index + 1 || page.mediaType !== 'image/png' || page.dpi !== 72
+            || !Number.isSafeInteger(page.width) || page.width < 1 || !Number.isSafeInteger(page.height) || page.height < 1
+            || !Number.isSafeInteger(page.bytes) || page.bytes < 1 || !SHA_RE.test(page.sha256)
+            || png.length !== page.bytes || sha256(png) !== page.sha256) {
+            integrity(`structuredArtifacts.visualAudit.pages[${index}] is not a replayable PNG render`, 'invalid_visual_audit');
+        }
+        total += page.bytes;
+    });
+    const body = clone(value); delete body.auditSha256;
+    if (total !== value.visualBytes || !SHA_RE.test(value.auditSha256) || value.auditSha256 !== stableHash(body)) {
+        integrity('structuredArtifacts.visualAudit byte count or self-SHA drifted', 'visual_audit_sha_drift');
+    }
+}
+
 function validateStructuredArtifacts(value, sourceText) {
-    exact(value, ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages', 'tables', 'formulas', 'figures', 'payloadSha256'], 'structuredArtifacts');
+    const fields = ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages', 'tables', 'formulas', 'figures', 'payloadSha256'];
+    const actual = Object.keys(value).sort();
+    const expected = [...fields, ...(Object.hasOwn(value, 'visualAudit') ? ['visualAudit'] : [])].sort();
+    if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+        integrity('structuredArtifacts has unknown or missing fields', 'invalid_artifact_schema');
+    }
     if (value.contract !== ARTIFACT_CONTRACT || value.version !== ARTIFACT_VERSION
         || ![REPLAYABLE_PROFILE, WEAK_PROFILE, UNAVAILABLE_PROFILE].includes(value.profile)) {
         integrity('structuredArtifacts contract/version/profile is unsupported', 'unsupported_artifact_profile');
@@ -237,6 +274,7 @@ function validateStructuredArtifacts(value, sourceText) {
     if (!SHA_RE.test(String(value.flattenedTextSha256 || '')) || value.flattenedTextSha256 !== sha256(sourceText)) {
         integrity('structuredArtifacts.flattenedTextSha256 does not bind source text', 'flattened_text_sha_drift');
     }
+    if (Object.hasOwn(value, 'visualAudit')) validateVisualAudit(value.visualAudit);
     const { payloadSha256, ...body } = value;
     if (!SHA_RE.test(String(payloadSha256 || '')) || payloadSha256 !== sha256(JSON.stringify(body))) {
         integrity('structuredArtifacts.payloadSha256 does not bind its payload', 'artifact_payload_sha_drift');

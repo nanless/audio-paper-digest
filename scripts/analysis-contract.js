@@ -1021,7 +1021,10 @@ function stripDuplicatedLineFootnoteMarkers(text) {
 function coreSummaryQuantitativeResultState(text) {
     const candidates = String(text || '').split(/[。！？!?\n]/).map(rawSentence => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
-        const hasMetric = Boolean(sentence && CORE_SUMMARY_METRIC_PATTERN.test(sentence));
+        // CLAP can name either a metric or the comparison model. An explicit
+        // model/baseline label cannot stand in for a missing result metric.
+        const metricText = sentence.replace(/\bCLAP\s*(?:基线|模型|baseline\b|model\b)/giu, '');
+        const hasMetric = Boolean(sentence && CORE_SUMMARY_METRIC_PATTERN.test(metricText));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
             && hasCoreSummaryComparisonDirection(sentence, numbers));

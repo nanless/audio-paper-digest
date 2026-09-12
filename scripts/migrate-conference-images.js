@@ -2,6 +2,10 @@
 
 /** Move already-published conference PNGs to the dedicated image repository. */
 
+const { requireExternalRuntime, loadEnvFile } = require('./env-loader.js');
+requireExternalRuntime('migrate-conference-images.js');
+loadEnvFile();
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');

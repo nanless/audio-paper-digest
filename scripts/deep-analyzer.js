@@ -64,10 +64,10 @@ loadEnvFile();
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const pdfLayout = require('./lib/pdf-layout.js');
 const dns = require('dns').promises;
 const net = require('net');
 const https = require('https');
-const { PDFParse } = require('pdf-parse');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { ANALYSIS_CONFIG, ARXIV_CONFIG, SECONDARY_MODEL_CONFIG, CURRENT_DIR } = require('./config.js');
 const {
@@ -1678,6 +1678,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     ) || replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts);
     const sealedLayoutlessText = structuredArtifacts.version === 1
         && (structuredArtifacts.source === 'fresh_arxiv_text_without_layout'
+            || structuredArtifacts.source === 'direct_conference_pdf_text'
             || (structuredArtifacts.source === 'conference_pdf_weak_text'
                 && structuredArtifacts.capabilityProfile === 'weak-text-only-v1'))
         && ['tables', 'formulas', 'figures'].every(key => (
@@ -2597,7 +2598,7 @@ function readerCapabilityPolicyNotice(policy) {
     if (!checked) return '';
     return [
         `[READER_CAPABILITY_POLICY] ${checked.contract} sha256=${checked.policySha256}`,
-        '当前来源是已认证的会议 weak PDF 纯文本；表格 DOM、原始公式 TeX 与 Figure 像素均不可用。',
+        '当前来源是已认证的会议 PDF：正文按页抽取，并可在本次请求中接收临时 PDF 页面像素；但没有 HTML DOM、作者原始公式 TeX 或可发布的 Figure URL，不能把视觉候选伪造成结构化绑定。',
         '硬约束：tableBindings、formulaBindings、figurePlacements 必须全部为 []；正文不得包含 Markdown 表格、展示公式、TABLE/FORMULA/FIGURE marker。',
         '这条来源能力约束覆盖通用写作说明中的表格数量要求和非空示例。定量结果、公式含义与图示结论只能依据全文连续证据改写为自然段，不得重建结构化对象。'
     ].join('\n');
@@ -5529,6 +5530,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const requestModel = options.readerCallModel || callModel;
     const recordDisposition = options.readerRecordDisposition || require('./lib/llm-usage.js').recordLlmDisposition;
     const direct = require('./lib/direct-rewrite-analysis-context.js');
+    const directScope = direct.getDirectRewriteAnalysisContext();
     // Direct historical rewrites and the daily source-first route intentionally
     // keep figure pixels out of persistent source bundles.  Bind only those
     // ephemeral pixels to their failed candidates.  Legacy/durable source runs
@@ -5624,7 +5626,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         repairVersion: repair.REPAIR_VERSION,
         repairMaxTokens,
         maxAttempts,
-        repairTemperature: API_READER_REPAIR_TEMPERATURE
+        repairTemperature: API_READER_REPAIR_TEMPERATURE,
+        ...(directScope?.readerRetryEpoch !== undefined
+            ? { historicalDirectRetryEpoch: directScope.readerRetryEpoch } : {})
     };
     let recovered = null;
     let readerRecoveryRevisions = [];
@@ -9481,7 +9485,7 @@ function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
     return payload;
 }
 
-function buildUnstructuredTextArtifactSignals(text, sourceKind) {
+function buildUnstructuredTextArtifactSignals(text, sourceKind, visualAudit = null) {
     const raw = String(text || '');
     const tableCaptions = [...raw.matchAll(/^\s*(?:table|tbl\.?|表)\s*(?:[A-Z]?\d+|[IVXLCDM]+)\b[^\n]*/gim)]
         .map(match => match[0].replace(/\s+/g, ' ').trim());
@@ -9491,6 +9495,7 @@ function buildUnstructuredTextArtifactSignals(text, sourceKind) {
         parserVersion: 'unstructured-text-signals-v1',
         sourceKind,
         tables: [], formulas: [], figures: [], references: [],
+        ...(visualAudit ? { visualAudit: structuredClone(visualAudit) } : {}),
         signals: { tableCaptionCount: tableCaptions.length, tableCaptions, formulaCueCount },
         health: {
             status: 'incomplete',
@@ -9500,6 +9505,7 @@ function buildUnstructuredTextArtifactSignals(text, sourceKind) {
             issues: [
                 `${sourceKind} 不保留 DOM/布局，不能证明表格矩阵完整`,
                 `${sourceKind} 不保留 MathML/TeX，不能证明公式 inventory 完整`,
+                ...(visualAudit ? [`${sourceKind} 已保留 PyMuPDF 页级视觉审计；公式仍只有页面像素/抽取文本，未恢复原始 TeX`] : []),
                 ...(tableCaptions.length > 0 ? [`检测到 ${tableCaptions.length} 个表格标题但没有恢复矩阵`] : [])
             ]
         }
@@ -9853,13 +9859,24 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
     const parsedAuthors = Array.isArray(sourceDetails?.readerAuthors?.authors)
         ? sourceDetails.readerAuthors.authors : [];
     const sourceDomSha256 = sourceDetails?.readerAuthors?.sourceDomSha256;
+    const isConferencePdf = sourceDetails?.source === 'conference_pdf_text';
+    if (isConferencePdf && sourceDetails?.readerAuthors) {
+        const evidence = sourceDetails.readerAuthors;
+        if (evidence.sourceTextSha256 !== sourceTextSha256
+            || typeof evidence.sourceEvidence !== 'string'
+            || evidence.sourceEvidenceSha256 !== crypto.createHash('sha256')
+                .update(evidence.sourceEvidence).digest('hex')
+            || !String(sourceDetails.text || '').includes(evidence.sourceEvidence)) {
+            throw new Error('会议 PDF 作者证据无法从已封存全文重放');
+        }
+    }
     const isUnavailable = value => /^机构信息未/.test(String(value || ''));
     const authors = (resolved?.authors || []).map(author => {
         const parsed = parsedAuthors.find(item => (
             readerIdentityKey(item?.name) === readerIdentityKey(author?.name)
         ));
         const nameBinding = parsed && recoverySha256(sourceDomSha256)
-            ? { sourceKind: 'html_dom', sourceValue: parsed.name, sourceDomSha256 }
+            ? { sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom', sourceValue: parsed.name, sourceDomSha256 }
             : { sourceKind: 'paper_metadata', sourceValue: author.name, metadataSha256 };
         const affiliationBindings = (author.affiliations || []).map(affiliation => {
             if (isUnavailable(affiliation)) {
@@ -9877,7 +9894,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
                 throw new Error(`作者 ${author.name} 的机构“${affiliation}”无法重放到 HTML source detail`);
             }
             return {
-                sourceKind: 'html_dom',
+                sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom',
                 association: direct ? 'direct_author' : 'single_global_affiliation',
                 sourceValue: direct || globallyUnique,
                 sourceDomSha256
@@ -10497,16 +10514,12 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
                 warnings.push(`PDF ${pdfId}: 文件头无效`);
                 continue;
             }
-            const parser = new PDFParse({ data: buffer });
-            let result;
-            try {
-                result = await parser.getText();
-            } finally {
-                await parser.destroy().catch(() => {});
-            }
-            if (result?.text) {
-                const rawPdfText = result.text;
-                const structuredArtifacts = buildUnstructuredTextArtifactSignals(rawPdfText, 'pdf_text');
+            const layout = await pdfLayout.extractPdfLayoutFromBytes(buffer);
+            if (layout?.text) {
+                const rawPdfText = String(layout.text);
+                const structuredArtifacts = buildUnstructuredTextArtifactSignals(
+                    rawPdfText, 'pdf_text', layout.visualAudit
+                );
                 const text = rawPdfText
                     .replace(/\n\s*\n/g, '\n')
                     .replace(/[ \t]+/g, ' ')
@@ -10516,7 +10529,8 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
                     warnings.push(`PDF ${pdfId}: 提取正文过短 (${text.length} chars)`);
                     continue;
                 }
-                console.log(`    [deep] PDF fallback success for ${arxivId}, extracted ${text.length} chars`);
+                warnings.push(`PDF ${pdfId}: PyMuPDF 视觉审计 ${layout.visualAudit.pages.length} 页、${layout.visualAudit.tableCandidates.length} 个表格候选、${layout.visualAudit.formulaCandidates.length} 个公式候选、${layout.visualAudit.figureCandidates.length} 个 Figure 标题候选；公式无原始 TeX，表格未自动转为可发布结构。`);
+                console.log(`    [deep] PDF fallback success for ${arxivId}, extracted ${text.length} chars with PyMuPDF visual audit`);
                 return {
                     text,
                     source: 'pdf',
@@ -10564,12 +10578,11 @@ async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options =
     if (bytes.length < 5 || bytes.length > ARXIV_PDF_MAX_BYTES || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
         throw new Error(`arXiv PDF ${normalized} bytes are invalid for fallback extraction`);
     }
-    const parser = new PDFParse({ data: bytes });
-    let result;
-    try { result = await parser.getText(); }
-    finally { await parser.destroy().catch(() => {}); }
-    const rawPdfText = String(result?.text || '');
-    const structuredArtifacts = buildUnstructuredTextArtifactSignals(rawPdfText, 'pdf_text');
+    const layout = await pdfLayout.extractPdfLayoutFromBytes(bytes);
+    const rawPdfText = String(layout?.text || '');
+    const structuredArtifacts = buildUnstructuredTextArtifactSignals(
+        rawPdfText, 'pdf_text', layout.visualAudit
+    );
     const text = rawPdfText.replace(/\n\s*\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
     if (text.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
         throw new Error(`arXiv PDF ${normalized} fallback text is too short (${text.length} chars)`);
@@ -10579,7 +10592,10 @@ async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options =
         structuredArtifacts: bindStructuredArtifactsToText(structuredArtifacts, text),
         htmlAvailability: options.htmlAvailability || 'unavailable',
         htmlAttempts: Number.isSafeInteger(options.htmlAttempts) ? options.htmlAttempts : 0,
-        warnings: Array.isArray(options.warnings) ? options.warnings.slice() : []
+        warnings: [
+            ...(Array.isArray(options.warnings) ? options.warnings.slice() : []),
+            `PDF ${normalized}: PyMuPDF 视觉审计 ${layout.visualAudit.pages.length} 页、${layout.visualAudit.tableCandidates.length} 个表格候选、${layout.visualAudit.formulaCandidates.length} 个公式候选、${layout.visualAudit.figureCandidates.length} 个 Figure 标题候选；公式无原始 TeX，表格未自动转为可发布结构。`
+        ]
     };
 }
 
@@ -12508,7 +12524,11 @@ async function analyzePaperDeepInternal(paper) {
         ? (sourceProvenance.truncated ? '以下是论文全文节选，请只依据已提供内容分析。' : '以下是论文全文，请仔细阅读所有技术细节。')
         : '以下是论文摘要；由于全文不可用，请降低事实判断和评分置信度，不得声称已经核对全文细节。';
 
-    if (directSource && isDualModel && !directPrimaryImageDownloader) {
+    // Conference PDFs intentionally have no trusted Figure URL. Their page
+    // pixels arrive through the direct supplementary-image scope instead. The
+    // ephemeral primary downloader is required only when this source route
+    // actually discovered URL-based primary image candidates.
+    if (directSource && isDualModel && candidateImageUrls.length > 0 && !directPrimaryImageDownloader) {
         throw new Error('Direct dual-model analysis requires an ephemeral primary image downloader');
     }
     // Direct historical analyses never touch the legacy data/current image

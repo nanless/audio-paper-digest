@@ -100,8 +100,9 @@ ICLR 页面属于同一 `iclr-2026` scope，但必须保留两个 cohort：2026-
   `conference-source-context-v2` 的 opaque plan authority；
 - paper lock、merge 和 canonical lookup 需要统一使用 `paper-identity-v1.canonicalId`，不能把
   `sourceIdentity`、标题或页面路径当论文主键；
-- conference weak PDF profile 当前只授权可靠正文，不授权可验证表格、TeX 或图片。Reader 必须
-  根据 capability 降级，不可为了统一版式伪造结构工件；
+- conference PDF profile 当前授权按页正文和可重放视觉审计；Reader 可在 OS 临时目录查看命中的 PDF 页面，
+  但 PDF 没有 HTML DOM、作者原始 TeX 或可发布 Figure URL，因此表格/公式/图片仍不能自动伪造成结构工件，
+  必须根据 capability 降级并保留“视觉可见、语义未绑定”的边界；
 - 历史分析需要独立 store 和 completion receipt，不能写进 daily current checkpoint。
 
 ### 2.4 taxonomy

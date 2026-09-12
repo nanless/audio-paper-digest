@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { detectHttpConnectProxyUrl, createProxyDispatcher } = require('../utils.js');
 const posterApi = require('./historical-icml-poster-authority.js');
+const pdfLayout = require('./pdf-layout.js');
 
 const CONTRACT = 'historical-icml-alternate-pdf-source-v1';
 const VERSION = 1;
@@ -514,14 +515,13 @@ async function validateImportedPdf(bytes, profile, dependencies = {}) {
         || profile.versionRelation !== 'author-prior-preprint-with-different-title') {
         fail('operator import is allowed only for the reviewed n1mAjfRDZ6 prior-preprint profile');
     }
-    const extractPdfText = dependencies.extractPdfText || (async value => {
-        const { PDFParse } = require('pdf-parse');
-        const parser = new PDFParse({ data: new Uint8Array(value) });
-        try { return String((await parser.getText())?.text || ''); }
-        finally { await parser.destroy().catch(() => {}); }
-    });
     let text;
-    try { text = String(await extractPdfText(bytes) || '').replace(/\r\n?/g, '\n').trim(); }
+    try {
+        const extracted = typeof dependencies.extractPdfText === 'function'
+            ? await dependencies.extractPdfText(bytes)
+            : (await pdfLayout.extractPdfLayoutFromBytes(bytes)).text;
+        text = String(extracted || '').replace(/\r\n?/g, '\n').trim();
+    }
     catch (error) { fail(`imported PDF text extraction failed: ${error.code || error.message}`); }
     if (text.length < 1000) fail('imported PDF text is unusably short');
     const searchable = normalizedSearchText(text);

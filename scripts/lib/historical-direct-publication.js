@@ -123,17 +123,18 @@ function normalizeVisualDisposition(value, plan) {
     const common = ['contract', 'version', 'planSha256', 'scope', 'mode', 'reason', 'requestedBy', 'createdAt', 'dispositionSha256'];
     exact(value, common, 'visual disposition'); const body = clone(value); delete body.dispositionSha256;
     if (value.contract !== VISUAL_DISPOSITION_CONTRACT || value.version !== VERSION || value.planSha256 !== plan.planSha256
-        || value.scope !== 'full-history-publication' || !['excluded', 'waived'].includes(value.mode)
+        || !['full-history-publication', 'selected-sample-publication'].includes(value.scope)
+        || !['excluded', 'waived'].includes(value.mode)
         || typeof value.reason !== 'string' || value.reason.trim().length < 10 || !iso(value.createdAt)
         || value.dispositionSha256 !== stableHash(body)) fail('visual disposition envelope/SHA drifted');
     if (value.mode === 'waived' && value.requestedBy !== 'user') fail('visual waiver must be explicitly requested by the user');
     if (value.mode === 'excluded' && value.requestedBy !== 'system-contract') fail('visual exclusion must be a visible system-contract scope decision');
     return clone(value);
 }
-function buildVisualDisposition({ plan, mode, reason, requestedBy = mode === 'waived' ? 'user' : 'system-contract',
-    createdAt = new Date().toISOString() } = {}) {
+function buildVisualDisposition({ plan, mode, reason, scope = 'full-history-publication',
+    requestedBy = mode === 'waived' ? 'user' : 'system-contract', createdAt = new Date().toISOString() } = {}) {
     const body = { contract: VISUAL_DISPOSITION_CONTRACT, version: VERSION, planSha256: plan.planSha256,
-        scope: 'full-history-publication', mode, reason: String(reason || '').trim(), requestedBy, createdAt };
+        scope, mode, reason: String(reason || '').trim(), requestedBy, createdAt };
     return normalizeVisualDisposition(seal(body, 'dispositionSha256'), plan);
 }
 
@@ -190,7 +191,7 @@ function historicalSourceVersionProof(item, active, manifest) {
     return { sourceVersion: clone(normalized), sourceVersionIdentitySha256: normalized.identitySha256,
         sourceManifestSha256: active.source.sourceManifestSha256 };
 }
-function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDispositionFile,
+function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDispositionFile, selectedPaperIds = [],
     stagingRoot, executionRoot, aggregateRoot, freshArxivSourceRoot = null,
     publicationMetadataRoot = null, readPublicationMetadata = null } = {}) {
     for (const [label, filename] of Object.entries({ planFile, registryFile, projectionFile, visualDispositionFile })) {
@@ -198,17 +199,31 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
     }
     const planLoaded = strictJsonFile(planFile, 'direct plan'); const plan = planApi.normalizePlan(planLoaded.value);
     const registryLoaded = strictJsonFile(registryFile, 'direct registry'); const registry = runnerApi.normalizeRegistry(registryLoaded.value, plan);
-    if (registry.entries.some(entry => entry.status !== 'staged')) fail('direct registry must have every paper staged');
+    if (!Array.isArray(selectedPaperIds) || new Set(selectedPaperIds).size !== selectedPaperIds.length
+        || selectedPaperIds.some(id => typeof id !== 'string' || !id.trim())) {
+        fail('selected paper IDs must be a unique non-empty string array');
+    }
+    const sample = selectedPaperIds.length > 0;
+    const selectedSet = new Set(selectedPaperIds);
+    const queueIds = new Set(plan.queue.map(item => item.paperId));
+    if ([...selectedSet].some(id => !queueIds.has(id))) fail('selected paper ID is absent from the direct rewrite plan');
+    if (!sample && registry.entries.some(entry => entry.status !== 'staged')) fail('direct registry must have every paper staged');
+    if (sample && selectedPaperIds.some(id => registry.entries.find(entry => entry.paperId === id)?.status !== 'staged')) {
+        fail('selected paper must be staged before sample publication');
+    }
     const projectionLoaded = strictJsonFile(projectionFile, 'direct aggregate projection');
     const projection = aggregateApi.normalizeAggregateProjection(projectionLoaded.value, plan);
-    if (projection.pageCoverage?.publicationReady !== true || projection.pageCoverage?.uncoveredPageKeys?.length !== 0
-        || projection.conferenceTaskCoverage?.publicationReady !== true) {
+    if (!sample && (projection.pageCoverage?.publicationReady !== true || projection.pageCoverage?.uncoveredPageKeys?.length !== 0
+        || projection.conferenceTaskCoverage?.publicationReady !== true)) {
         fail('aggregate projection is not ready for full-page publication');
     }
     const visualLoaded = strictJsonFile(visualDispositionFile, 'visual disposition');
     const visualDisposition = normalizeVisualDisposition(visualLoaded.value, plan);
+    if (visualDisposition.scope !== (sample ? 'selected-sample-publication' : 'full-history-publication')) {
+        fail('visual disposition scope does not match publication scope');
+    }
     const byEntry = new Map(registry.entries.map(entry => [entry.paperId, entry])); const byPath = new Map(); const stageProofs = [];
-    for (const item of plan.queue) {
+    for (const item of plan.queue.filter(item => !sample || selectedSet.has(item.paperId))) {
         const active = byEntry.get(item.paperId); const manifest = runnerApi.replayDirectPageStaging({ item, active,
             stagingRoot, executionRoot, freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
         const relativeDirectory = path.relative(path.resolve(stagingRoot), path.resolve(active.staging.directory)).split(path.sep).join('/');
@@ -229,26 +244,28 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
             source: { kind: 'direct-page-asset', directory: relativeDirectory, path: asset.path } });
     }
     stageProofs.sort((a, b) => a.paperId.localeCompare(b.paperId));
-    const inputs = aggregateApi.loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot,
-        freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
-    const rebuilt = aggregateApi.buildDirectAggregates({ inputs }); const stored = scanDirectAggregates(aggregateRoot, plan);
-    if (stored.size !== rebuilt.length) fail(`direct aggregate set is incomplete: ${stored.size}/${rebuilt.length}`);
     const aggregateProofs = [];
-    for (const expected of rebuilt) {
-        const loaded = stored.get(aggregateKey(expected));
-        if (!loaded || stableHash(loaded.value) !== stableHash(expected)) fail(`${aggregateKey(expected)} is not the deterministic current aggregate`);
-        const sourcePath = path.join(aggregateRoot, loaded.runId, expected.outputPage.stagedPath);
-        if (readRegular(sourcePath).sha256 !== expected.outputPage.contentSha256) fail(`${aggregateKey(expected)} staged page bytes drifted`);
-        const producer = { kind: 'direct-aggregate', scope: expected.scope, key: expected.key,
-            runId: loaded.runId, manifestSha256: expected.manifestSha256 };
-        absorbArtifact(byPath, { path: expected.outputPage.path, sha256: expected.outputPage.contentSha256,
-            baselineSha256: expected.outputPage.contentSha256 === expected.outputPage.previousContentSha256
-                ? expected.outputPage.contentSha256 : expected.outputPage.previousContentSha256,
-            producers: [producer], source: { kind: 'direct-aggregate-page', runId: loaded.runId,
-                stagedPath: expected.outputPage.stagedPath } });
-        aggregateProofs.push({ scope: expected.scope, key: expected.key, runId: loaded.runId,
-            manifestSha256: expected.manifestSha256, fileSha256: loaded.fileSha256,
-            pageSha256: expected.outputPage.contentSha256 });
+    if (!sample) {
+        const inputs = aggregateApi.loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot,
+            freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
+        const rebuilt = aggregateApi.buildDirectAggregates({ inputs }); const stored = scanDirectAggregates(aggregateRoot, plan);
+        if (stored.size !== rebuilt.length) fail(`direct aggregate set is incomplete: ${stored.size}/${rebuilt.length}`);
+        for (const expected of rebuilt) {
+            const loaded = stored.get(aggregateKey(expected));
+            if (!loaded || stableHash(loaded.value) !== stableHash(expected)) fail(`${aggregateKey(expected)} is not the deterministic current aggregate`);
+            const sourcePath = path.join(aggregateRoot, loaded.runId, expected.outputPage.stagedPath);
+            if (readRegular(sourcePath).sha256 !== expected.outputPage.contentSha256) fail(`${aggregateKey(expected)} staged page bytes drifted`);
+            const producer = { kind: 'direct-aggregate', scope: expected.scope, key: expected.key,
+                runId: loaded.runId, manifestSha256: expected.manifestSha256 };
+            absorbArtifact(byPath, { path: expected.outputPage.path, sha256: expected.outputPage.contentSha256,
+                baselineSha256: expected.outputPage.contentSha256 === expected.outputPage.previousContentSha256
+                    ? expected.outputPage.contentSha256 : expected.outputPage.previousContentSha256,
+                producers: [producer], source: { kind: 'direct-aggregate-page', runId: loaded.runId,
+                    stagedPath: expected.outputPage.stagedPath } });
+            aggregateProofs.push({ scope: expected.scope, key: expected.key, runId: loaded.runId,
+                manifestSha256: expected.manifestSha256, fileSha256: loaded.fileSha256,
+                pageSha256: expected.outputPage.contentSha256 });
+        }
     }
     aggregateProofs.sort((a, b) => `${a.scope}:${a.key}`.localeCompare(`${b.scope}:${b.key}`));
     const artifacts = [...byPath.values()].map(record => ({ ...record,
@@ -256,9 +273,9 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
         .sort((a, b) => a.path.localeCompare(b.path));
     const rewrittenPages = artifacts.filter(record => record.path.startsWith('content/posts/') && record.path.endsWith('.md'));
     const pageCoverage = projection.pageCoverage;
-    if (rewrittenPages.length + projection.retainedPages.length !== pageCoverage.inventoryPageCount
+    if (!sample && (rewrittenPages.length + projection.retainedPages.length !== pageCoverage.inventoryPageCount
         || rewrittenPages.length !== pageCoverage.coveredPageCount - pageCoverage.retainedUnchangedPageCount
-        || projection.retainedPages.length !== pageCoverage.retainedUnchangedPageCount) {
+        || projection.retainedPages.length !== pageCoverage.retainedUnchangedPageCount)) {
         fail('direct producer artifacts do not exactly realize aggregate projection page coverage');
     }
     const proof = { plan: { fileSha256: planLoaded.fileSha256, planSha256: plan.planSha256 },
@@ -271,8 +288,11 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
             pageCoverage: clone(pageCoverage), retainedCount: projection.retainedPages.length,
             rewrittenPageCount: rewrittenPages.length },
         visualDisposition: { fileSha256: visualLoaded.fileSha256, dispositionSha256: visualDisposition.dispositionSha256,
-            mode: visualDisposition.mode }, artifacts, artifactSetSha256: stableHash(artifacts) };
+            mode: visualDisposition.mode, scope: visualDisposition.scope },
+        publicationScope: sample ? 'selected-sample' : 'full-history', selectedPaperIds: selectedPaperIds.slice(),
+        artifacts, artifactSetSha256: stableHash(artifacts) };
     return { plan, registry, projection, retainedPages: projection.retainedPages, visualDisposition, artifacts,
+        publicationScope: sample ? 'selected-sample' : 'full-history', selectedPaperIds: selectedPaperIds.slice(),
         proof: seal(proof, 'proofSha256'), roots: { stagingRoot, aggregateRoot } };
 }
 
@@ -333,21 +353,29 @@ function buildPlan({ publicationId, authorityOptions, blogRepo, remoteName = 'or
         exactDelta: records.filter(item => item.operation !== 'unchanged').map(item => ({ path: item.path,
             operation: item.operation, baselineSha256: item.baselineSha256, newSha256: item.sha256 })),
         retainedPages: authority.retainedPages.map(item => ({ pageKey: item.pageKey, path: item.path,
-            baselineSha256: item.previousContentSha256, reason: item.reason })), roots: clone(authority.roots || {}) };
+            baselineSha256: item.previousContentSha256, reason: item.reason })), roots: clone(authority.roots || {}),
+        publicationScope: authority.publicationScope, selectedPaperIds: authority.selectedPaperIds };
     body.exactDeltaSha256 = stableHash(body.exactDelta); body.retainedPageSetSha256 = stableHash(body.retainedPages);
     return seal(body, 'planSha256');
 }
 function validatePlan(value, publicationId = value?.publicationId) {
+    const hasScopeFields = Object.hasOwn(value || {}, 'publicationScope') || Object.hasOwn(value || {}, 'selectedPaperIds');
     const fields = ['contract', 'version', 'publicationId', 'createdAt', 'authorityProof', 'authorityProofSha256',
         'retainedDisposition', 'visualDisposition', 'blogBaseline', 'blogBaselineSha256', 'files', 'fileSetSha256',
         'exactDelta', 'exactDeltaSha256', 'retainedPages', 'retainedPageSetSha256', 'roots', 'planSha256'];
-    exact(value, fields, 'direct publication plan'); const body = clone(value); delete body.planSha256;
+    const normalizedFields = hasScopeFields ? [...fields.slice(0, -1), 'publicationScope', 'selectedPaperIds', 'planSha256'] : fields;
+    exact(value, normalizedFields, 'direct publication plan'); const body = clone(value); delete body.planSha256;
+    const publicationScope = value.publicationScope || 'full-history';
+    const selectedPaperIds = value.selectedPaperIds || [];
     if (value.contract !== PLAN_CONTRACT || value.version !== VERSION || value.publicationId !== publicationId
         || !UUID_RE.test(value.publicationId || '') || !iso(value.createdAt) || value.planSha256 !== stableHash(body)
         || value.authorityProofSha256 !== value.authorityProof?.proofSha256 || !SHA_RE.test(value.authorityProofSha256 || '')
         || value.blogBaselineSha256 !== stableHash(validateBlogState(value.blogBaseline, 'sealed blog baseline'))
         || !Array.isArray(value.files) || !value.files.length || value.fileSetSha256 !== stableHash(value.files)
-        || value.exactDeltaSha256 !== stableHash(value.exactDelta) || value.retainedPageSetSha256 !== stableHash(value.retainedPages)) {
+        || value.exactDeltaSha256 !== stableHash(value.exactDelta) || value.retainedPageSetSha256 !== stableHash(value.retainedPages)
+        || !['full-history', 'selected-sample'].includes(publicationScope)
+        || !Array.isArray(selectedPaperIds) || new Set(selectedPaperIds).size !== selectedPaperIds.length
+        || (publicationScope === 'selected-sample') === (selectedPaperIds.length === 0)) {
         fail('direct publication plan envelope/SHA drifted');
     }
     const producerPlanSha256 = value.authorityProof?.plan?.planSha256;
@@ -359,7 +387,8 @@ function validatePlan(value, publicationId = value?.publicationId) {
         || !SHA_RE.test(producerPlanSha256 || '') || value.visualDisposition.planSha256 !== producerPlanSha256
         || value.retainedDisposition.count !== value.retainedPages.length
         || value.retainedDisposition.inventoryPageCount !== value.retainedDisposition.coveredPageCount
-        || value.retainedDisposition.rewrittenPageCount + value.retainedDisposition.count !== value.retainedDisposition.inventoryPageCount
+        || (publicationScope === 'full-history'
+            && value.retainedDisposition.rewrittenPageCount + value.retainedDisposition.count !== value.retainedDisposition.inventoryPageCount)
         || value.retainedDisposition.pageCoverageSha256 !== authorityCoverage?.pageCoverageSha256
         || value.retainedDisposition.retainedPageSetSha256 !== authorityCoverage?.retainedPageSetSha256
         || stableHash(authorityCoverage?.pageCoverage) !== value.retainedDisposition.pageCoverageSha256
@@ -572,6 +601,23 @@ function defaultHugoGate({ blogRepo, generation }) {
     try {
         const source = path.join(temporary, 'site');
         fs.cpSync(blogRepo, source, { recursive: true, filter: filename => !['.git', 'public', 'resources'].includes(path.basename(filename)) });
+        // The Hugo site enables GitInfo, while the isolated gate deliberately
+        // does not copy the real repository metadata.  Create a disposable
+        // local commit in the gate copy so Hugo validates the same config and
+        // templates without reading or mutating the production repository.
+        const git = (args, label) => {
+            const result = spawnSync('git', ['-C', source, ...args], {
+                encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, maxBuffer: 4 * 1024 * 1024
+            });
+            if (result.error || result.status !== 0) {
+                fail(`temporary Hugo gate Git ${label} failed: ${String(result.stderr || result.error?.message || '').slice(-1000)}`);
+            }
+        };
+        git(['init', '--quiet'], 'init');
+        git(['config', 'user.email', 'hugo-gate@example.invalid'], 'user.email');
+        git(['config', 'user.name', 'Hugo gate'], 'user.name');
+        git(['add', '--all'], 'add');
+        git(['commit', '--quiet', '--no-gpg-sign', '-m', 'temporary Hugo gate snapshot'], 'commit');
         const scan = directory => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
             const item = path.join(directory, entry.name); if (entry.isSymbolicLink()) fail(`Hugo staging contains symlink: ${item}`); if (entry.isDirectory()) scan(item);
         } }; scan(source);

@@ -755,7 +755,7 @@ def push(conference_id, process_id):
                 raise ConferencePublicationError(f'staged 文件字节校验失败: {record["path"]}')
         if commit != current_head or sorted(remote_delta) != paths:
             paper_count = sum(1 for record in generation['files'] if record.get('kind') == 'paper')
-            asset_count = sum(1 for record in generation['files'] if record.get('kind') == 'asset')
+            asset_count = len(generation['imageFiles'])
             message = f'发布 {conference_id} 会议论文解读（{paper_count}篇及汇总，{asset_count}张图）'
             git(repo, 'commit', '-m', message)
             commit = git(repo, 'rev-parse', 'HEAD').stdout.strip().lower()

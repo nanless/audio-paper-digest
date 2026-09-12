@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for immutable text-only extraction of one staged conference PDF."""
+"""CLI for immutable text and visual-audit extraction of one staged conference PDF."""
 
 import json
 import sys

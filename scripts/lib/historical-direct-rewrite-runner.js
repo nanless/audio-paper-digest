@@ -6,19 +6,17 @@
 // reads a historical post, data/current, a crosswalk, or a legacy analysis.
 
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
-const { promisify } = require('node:util');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { PDFParse } = require('pdf-parse');
 const conferenceLocalSources = require('./historical-conference-local-sources.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
 const directContext = require('./direct-rewrite-analysis-context.js');
 const directPages = require('./historical-direct-page-staging.js');
-const execFileAsync = promisify(execFile);
+const pdfLayout = require('./pdf-layout.js');
 
+const CONFERENCE_VISUAL_PAGE_LIMIT = 6;
 const CONTRACT = 'historical-direct-rewrite-execution-v1';
 const REGISTRY_CONTRACT = 'historical-direct-rewrite-execution-registry-v1';
 const STAGING_CONTRACT = 'historical-direct-rewrite-staging-v1';
@@ -520,6 +518,7 @@ function compactSourceDescriptor(route, source, item = null) {
 }
 function sourceSnapshotSha(details) { return stableHash({ paperId: details.paperId, source: details.source, sourceId: details.sourceId,
     textSha256: sha256(Buffer.from(details.text, 'utf8')), structuredArtifacts: details.structuredArtifacts,
+    ...(details.pdfVisualAudit ? { pdfVisualAudit: details.pdfVisualAudit } : {}),
     ...(details.sourceVersion ? { sourceVersion: details.sourceVersion } : {}) }); }
 
 function extractSealedArxivAbstract(text) {
@@ -710,7 +709,13 @@ function directPaper(item, sourceDetails = {}) {
         return { directPaperId: item.paperId, arxivId: item.route.arxivId,
             ...(authors ? { authors: authors.slice() } : {}), ...(title ? { title } : {}) };
     }
-    return { directPaperId: item.paperId, id: item.paperId, ...(title ? { title } : {}) };
+    const authors = sourceDetails.publicationAuthors;
+    if (authors !== undefined && (!Array.isArray(authors) || authors.length === 0
+        || authors.some(author => typeof author !== 'string' || !author.trim() || author !== author.trim()))) {
+        fail(`${item.paperId} conference PDF authors are required for direct analysis when supplied`);
+    }
+    return { directPaperId: item.paperId, id: item.paperId,
+        ...(authors ? { authors: authors.slice() } : {}), ...(title ? { title } : {}) };
 }
 
 function refreshHistoricalDirectReaderAuthors(paper, sourceDetails, refresh) {
@@ -768,6 +773,87 @@ function titleFromConferenceMetadata(source, item) {
     return title;
 }
 
+const CONFERENCE_PDF_AFFILIATION_HINT = /(?:univ(?:ersity)?|institute|research|school|college|department|laboratory|laborator(?:y|ies)|key laboratory|academy|centre|center|adobe|northwestern|xian|xi['’]an|france|china|usa|san francisco|evanston|lannion|vannes|lemans)/i;
+
+function normalizeConferencePdfAuthorName(value) {
+    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        .replace(/c¸/g, 'ç').replace(/C¸/g, 'Ç')
+        .replace(/c´ı/g, 'cí').replace(/C´ı/g, 'Cí');
+}
+
+function validConferencePdfAuthorName(value) {
+    const name = normalizeConferencePdfAuthorName(value);
+    const tokens = name.split(/\s+/).filter(Boolean);
+    return tokens.length >= 2 && tokens.length <= 8
+        && tokens.every(token => /^[\p{L}\p{M}][\p{L}\p{M}'’.'-]*$/u.test(token));
+}
+
+function normalizeConferencePdfAffiliation(value) {
+    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        .replace(/\s*(?:[|｜]|DOI\s*:).+$/i, '')
+        // PyMuPDF can place a DOI immediately after the last affiliation
+        // token when the PDF line has no whitespace at the column boundary.
+        .replace(/\s*10\.\d{4,9}\/[\-._;()/:A-Z0-9]+$/i, '')
+        .replace(/[.;,]+$/, '').trim();
+}
+
+/**
+ * Recover only the author block visibly present in a retained conference PDF.
+ * This is deliberately narrower than a general name NER pass: an author line
+ * must carry the same superscript marker scheme used by the adjacent
+ * affiliation lines. The returned evidence is sealed with the full source
+ * text SHA and the exact preamble SHA before it is handed to Reader.
+ */
+function parseConferencePdfAuthors(text) {
+    const sourceText = String(text || '');
+    const abstractIndex = sourceText.search(/\n\s*ABSTRACT\b/i);
+    const preamble = abstractIndex >= 0 ? sourceText.slice(0, abstractIndex) : sourceText.slice(0, 12000);
+    const rawLines = preamble.split(/\n/);
+    const lines = rawLines.map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const symbolAuthors = [];
+    const numericAuthors = [];
+    for (const line of lines) {
+        if (CONFERENCE_PDF_AFFILIATION_HINT.test(line) || /@|DOI\s*:/i.test(line)) continue;
+        const symbolMatches = [...line.matchAll(/([^,]+?)([†‡∗⋆*](?:\s*,\s*[†‡∗⋆*])*)(?=\s*,|\s*$)/gu)]
+            .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: [...match[2].matchAll(/[†‡∗⋆*]/gu)].map(marker => marker[0]) }))
+            .filter(item => validConferencePdfAuthorName(item.name));
+        const numericMatches = [...line.matchAll(/([^,\d]+?)(\d{1,3}(?:,\d{1,3})*)(?=\s*(?:,|$))/gu)]
+            .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: match[2].split(',') }))
+            .filter(item => validConferencePdfAuthorName(item.name));
+        if (symbolMatches.length) symbolAuthors.push(...symbolMatches);
+        else if (numericMatches.length) numericAuthors.push(...numericMatches);
+    }
+    const authors = symbolAuthors.length ? symbolAuthors : numericAuthors;
+    if (!authors.length) return null;
+    const markerSet = new Set(authors.flatMap(item => item.markers));
+    const affiliations = new Map();
+    for (const line of lines) {
+        if (!CONFERENCE_PDF_AFFILIATION_HINT.test(line)) continue;
+        for (const match of line.matchAll(/([†‡∗⋆*])\s*([^†‡∗⋆*]+?)(?=[†‡∗⋆*]|$)/gu)) {
+            const value = normalizeConferencePdfAffiliation(match[2]);
+            if (markerSet.has(match[1]) && value && !/@|DOI\s*:/i.test(value)) affiliations.set(match[1], value);
+        }
+        for (const match of line.matchAll(/(?:^|\s)([1-9]\d{0,2})\s+(.+?)(?=\s+[1-9]\d{0,2}\s+|$)/gu)) {
+            const value = normalizeConferencePdfAffiliation(match[2]);
+            if (markerSet.has(match[1]) && value && !/@|DOI\s*:/i.test(value)) affiliations.set(match[1], value);
+        }
+    }
+    const normalizedAuthors = authors.map(author => ({
+        name: author.name,
+        affiliations: [...new Set(author.markers.map(marker => affiliations.get(marker)).filter(Boolean))]
+    }));
+    const evidence = preamble.trim();
+    const sourceTextSha256 = sha256(Buffer.from(sourceText, 'utf8'));
+    return {
+        contract: 'conference-pdf-author-evidence-v1',
+        authors: normalizedAuthors,
+        sourceTextSha256,
+        sourceEvidence: evidence,
+        sourceEvidenceSha256: sha256(Buffer.from(evidence, 'utf8')),
+        sourceDomSha256: sha256(Buffer.from(evidence, 'utf8'))
+    };
+}
+
 function priorPreprintAnalysisDisclosure(source, item) {
     const acquisition = source?.pdf?.acquisition;
     if (acquisition?.versionRelation !== PRIOR_PREPRINT_VERSION_RELATION) return null;
@@ -805,29 +891,46 @@ async function extractConferenceSource(item, dependencies = {}) {
     const priorPreprint = priorPreprintAnalysisDisclosure(source, item);
     const pdf = readRegular(source.pdf.absolutePath, 512 * 1024 * 1024);
     if (pdf.sha256 !== source.pdf.sha256 || pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail(`${item.paperId} PDF changed after planning`);
-    const extractPdfText = dependencies.extractPdfText || (async bytes => {
-        const parser = new PDFParse({ data: bytes });
-        try { const result = await parser.getText(); return String(result?.text || ''); }
-        finally { await parser.destroy().catch(() => {}); }
-    });
-    const extractedText = String(await extractPdfText(pdf.bytes) || '').replace(/\r\n?/g, '\n').trim();
-    if (extractedText.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
+    let extractedText;
+    let pdfVisualAudit = null;
+    if (typeof dependencies.extractPdfLayout === 'function') {
+        const layout = await dependencies.extractPdfLayout(pdf.absolutePath, pdf.bytes);
+        extractedText = String(layout?.text || '');
+        pdfVisualAudit = layout?.visualAudit || null;
+    } else if (typeof dependencies.extractPdfText === 'function') {
+        // Test-only injection remains text-compatible, but production never
+        // takes this branch.  Real conference PDFs must use the shared
+        // PyMuPDF layout/audit path below.
+        extractedText = String(await dependencies.extractPdfText(pdf.bytes) || '');
+    } else {
+        const layout = await pdfLayout.extractPdfLayoutFromPath(source.pdf.absolutePath);
+        extractedText = String(layout.text || '');
+        pdfVisualAudit = layout.visualAudit;
+    }
+    const normalizedText = extractedText.replace(/\r\n?/g, '\n').trim();
+    if (normalizedText.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
+    const readerAuthors = parseConferencePdfAuthors(normalizedText);
     // Put the identity warning in the actual text consumed by every primary,
     // repair, scoring, and Reader request. Merely retaining it as manifest
     // metadata would not prevent a model from mistaking these bytes for the
     // differently titled conference camera-ready paper.
-    const text = priorPreprint ? `${priorPreprint.analysisInputNotice}\n\n${extractedText}` : extractedText;
+    const text = priorPreprint ? `${priorPreprint.analysisInputNotice}\n\n${normalizedText}` : normalizedText;
     const artifactsBody = { version: 1, source: 'direct_conference_pdf_text', tables: [], formulas: [], figures: [],
         flattenedTextSha256: sha256(Buffer.from(text, 'utf8')) };
     return { paperId: item.paperId, pdfSha256: pdf.sha256, sourceTitle: titleFromConferenceMetadata(source, item), sourceDetails: { paperId: item.paperId,
         source: 'conference_pdf_text', sourceId: item.paperId, text, imageInfos: [],
+        ...(readerAuthors ? { readerAuthors, publicationAuthors: readerAuthors.authors.map(author => author.name) } : {}),
         structuredArtifacts: { ...artifactsBody, payloadSha256: sha256(JSON.stringify(artifactsBody)) },
         htmlAvailability: 'not_applicable', htmlAttempts: 0,
+        ...(pdfVisualAudit ? { pdfVisualAudit } : {}),
         ...(priorPreprint ? { sourceTitle: priorPreprint.sourceTitle, sourceDoi: priorPreprint.sourceDoi,
             versionRelation: priorPreprint.versionRelation, sourceVersionWarning: priorPreprint.warning } : {}),
         warnings: [
             ...(priorPreprint ? [priorPreprint.warning] : []),
-            '会议本地 PDF 的图像只在本次 Reader 临时物化，不写入 runtime。'
+            ...(pdfVisualAudit
+                ? [`会议 PDF 已通过 PyMuPDF 视觉审计：${pdfVisualAudit.pages.length} 页、${pdfVisualAudit.tableCandidates.length} 个表格候选、${pdfVisualAudit.formulaCandidates.length} 个公式候选、${pdfVisualAudit.figureCandidates.length} 个 Figure 标题候选；${pdfVisualAudit.embeddedImages.length} 个 PDF 内嵌图像对象仅作诊断，不等于论文 Figure，Reader 只临时选取最多 ${CONFERENCE_VISUAL_PAGE_LIMIT} 页像素。`]
+                : ['测试注入文本未执行 PDF 视觉审计；生产路径禁止使用该分支。']),
+            'PDF 没有原始 TeX；公式只能以页面像素和抽取文本复核，不能自动宣称已恢复可发布 TeX。'
         ] } };
 }
 
@@ -883,28 +986,61 @@ async function withEphemeralConferenceFigures(source, callback, dependencies = {
     const directory = fs.mkdtempSync(path.join(root, 'historical-conference-figures-'));
     try {
         const materialize = dependencies.materializeConferenceFigures || renderConferencePdfPages;
-        const figures = await materialize({ pdfPath: source.pdfPath, directory });
+        const figures = await materialize({ pdfPath: source.pdfPath, directory, visualAudit: source.visualAudit });
         return await callback(Array.isArray(figures) ? figures : fail('conference figure extractor must return an array'));
     } finally { fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2 }); }
 }
 
-async function renderConferencePdfPages({ pdfPath, directory }) {
+function selectConferenceVisualPages(visualAudit, pageLimit = CONFERENCE_VISUAL_PAGE_LIMIT) {
+    const pageCount = Array.isArray(visualAudit?.pages) ? visualAudit.pages.length : 0;
+    if (!pageCount || !Number.isSafeInteger(pageLimit) || pageLimit < 1) return [];
+    const limit = Math.min(pageCount, pageLimit);
+    const selected = new Set([1]);
+    if (pageCount > 1 && selected.size < limit) selected.add(2);
+    const evidenceByPage = new Map();
+    const add = (items, weight, kind) => {
+        for (const item of Array.isArray(items) ? items : []) {
+            const page = Number(item?.page);
+            if (!Number.isSafeInteger(page) || page < 1 || page > pageCount) continue;
+            const entry = evidenceByPage.get(page) || { page, score: 0, figures: 0, tables: 0, formulas: 0 };
+            // Count presence strongly, but cap repeated detections on one page.
+            // A page with twenty equation text lines is not twenty times more
+            // useful than a page containing one real Figure caption.
+            entry.score += entry[kind] === 0 ? weight : Math.max(1, Math.floor(weight / 10));
+            entry[kind] += 1;
+            evidenceByPage.set(page, entry);
+        }
+    };
+    // Captioned Figures are the strongest visual evidence. Tables come next;
+    // formula-only pages are useful for glyph/layout checking but should not
+    // crowd out the paper's actual result/method figures.
+    add(visualAudit.figureCandidates, 100, 'figures');
+    add(visualAudit.tableCandidates, 60, 'tables');
+    add(visualAudit.formulaCandidates, 20, 'formulas');
+    const ranked = [...evidenceByPage.values()].sort((left, right) => (
+        right.score - left.score || right.figures - left.figures || right.tables - left.tables
+        || left.page - right.page
+    ));
+    for (const entry of ranked) {
+        if (selected.size >= limit) break;
+        selected.add(entry.page);
+    }
+    return [...selected].sort((left, right) => left - right);
+}
+
+async function renderConferencePdfPages({ pdfPath, directory, visualAudit = null }) {
     if (typeof pdfPath !== 'string' || !path.isAbsolute(pdfPath) || !path.resolve(pdfPath).endsWith('.pdf')) {
         fail('conference PDF renderer needs an absolute PDF path');
     }
-    const prefix = path.join(directory, 'page');
-    try {
-        await execFileAsync('pdftoppm', ['-png', '-f', '1', '-l', '4', '-r', '144', pdfPath, prefix], {
-            cwd: directory, timeout: 120000, maxBuffer: 1024 * 1024
-        });
-    } catch (error) {
-        fail(`conference PDF temporary figure rendering failed: ${String(error?.message || error).slice(0, 500)}`);
-    }
-    const names = fs.readdirSync(directory).filter(name => /^page-\d+\.png$/.test(name)).sort();
-    if (!names.length) fail('conference PDF renderer produced no temporary pages');
-    return names.map((name, index) => {
-        const rawBytes = readRegular(path.join(directory, name), 32 * 1024 * 1024).bytes;
-        return { ordinal: index + 1, caption: `PDF 第 ${index + 1} 页`, rawBytes,
+    const audit = visualAudit || (await pdfLayout.extractPdfLayoutFromPath(pdfPath)).visualAudit;
+    const pageCount = Array.isArray(audit?.pages) ? audit.pages.length : 0;
+    if (!pageCount) fail('conference PDF visual audit has no pages');
+    const selectedPages = selectConferenceVisualPages(audit);
+    const files = await pdfLayout.renderPdfPages(pdfPath, directory, selectedPages);
+    if (!files.length || files.length !== selectedPages.length) fail('conference PDF renderer produced no temporary pages');
+    return files.map((file, index) => {
+        const rawBytes = readRegular(path.join(directory, file.filename), 32 * 1024 * 1024).bytes;
+        return { ordinal: index + 1, page: file.page, caption: `PDF 第 ${file.page} 页`, rawBytes,
             assetSha256: sha256(rawBytes), mediaType: 'image/png' };
     });
 }
@@ -922,7 +1058,8 @@ function analysisAttemptDirectory(dependencies = {}) {
 async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, executionDirectory, dependencies }) {
     const engine = dependencies.engine || require('../analysis-engine.js');
     const sourcePaper = item.route.kind === 'conference-local-pdf'
-        ? { ...sourceDetails, title: titleFromConferenceMetadata(item.route.writerInputs[0], item) }
+        ? { ...sourceDetails, title: titleFromConferenceMetadata(item.route.writerInputs[0], item),
+            ...(sourceDetails.publicationAuthors ? { publicationAuthors: sourceDetails.publicationAuthors } : {}) }
         : { ...sourceDetails, publicationAuthors: dependencies.publicationMetadataAuthors };
     const freshPaper = directPaper(item, sourcePaper);
     const recovered = readAnalysisRecovery({ executionDirectory, item, sourceDescriptor, allowMissing: true });
@@ -931,11 +1068,9 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     // retained fields, while analysis/Reader checkpoints remain available to
     // deep-analyzer for fingerprint-based stage reuse.
     const paper = recovered ? { ...recovered.record, ...freshPaper } : freshPaper;
-    if (item.route.kind === 'arxiv-fresh-fetch') {
-        const refresh = dependencies.refreshApiReaderAuthorsFromSource
-            || require('../deep-analyzer.js').refreshApiReaderAuthorsFromSource;
-        refreshHistoricalDirectReaderAuthors(paper, sourceDetails, refresh);
-    }
+    const refresh = dependencies.refreshApiReaderAuthorsFromSource
+        || require('../deep-analyzer.js').refreshApiReaderAuthorsFromSource;
+    refreshHistoricalDirectReaderAuthors(paper, sourceDetails, refresh);
     const readerAttemptsDir = path.join(executionDirectory, 'reader-attempts');
     let result = paper;
     const persistRecovery = record => writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,
@@ -1596,6 +1731,12 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             executionDir = executionDirectory(options.executionRoot, item, descriptor); safeDirectory(executionDir, true, 'paper execution directory');
             const executionDependencies = { ...dependencies, freshArxivSourceRoot: options.freshArxivSourceRoot,
                 ...(publicationMetadataAuthors ? { publicationMetadataAuthors } : {}),
+                // An incomplete historical analysis is an outer retry boundary.
+                // Keep the old Reader candidate, but bind this retry to a new
+                // identity so an exhausted candidate cannot short-circuit the
+                // next bounded model attempt.
+                ...(active.status === 'analysis_partial'
+                    ? { historicalDirectRetryEpoch: active.attempts + 1 } : {}),
                 persistentRoots: [options.registryRoot, options.executionRoot, options.stagingRoot] };
             const readerAttemptsDir = path.join(executionDir, 'reader-attempts');
             const materializeReaderFigures = async (figures, id) => item.route.kind === 'arxiv-fresh-fetch'
@@ -1612,6 +1753,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 runId: item.runId, route: item.route.kind, sourceDetails: clone(sourceDetails),
                 sourceSha256: descriptor.textSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
                 sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+                ...(executionDependencies.historicalDirectRetryEpoch !== undefined
+                    ? { readerRetryEpoch: executionDependencies.historicalDirectRetryEpoch } : {}),
                 ...(item.route.kind === 'arxiv-fresh-fetch' ? { sourceGeneration: descriptor.generation,
                     sourceManifestSha256: descriptor.sourceManifestSha256,
                     ...(descriptor.sourceVersion ? {
@@ -1622,7 +1765,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 sourceDetails: clone(sourceDetails), sourceDescriptor: descriptor, executionDirectory: executionDir,
                 dependencies: executionDependencies }));
             const analysis = item.route.kind === 'conference-local-pdf'
-                ? await withEphemeralConferenceFigures({ pdfPath: item.route.writerInputs[0]?.pdf.absolutePath },
+                ? await withEphemeralConferenceFigures({ pdfPath: item.route.writerInputs[0]?.pdf.absolutePath,
+                    visualAudit: sourceDetails.pdfVisualAudit },
                     invokeAnalysis, executionDependencies)
                 : await invokeAnalysis([]);
             // The final contract is checked before the durable analysis file
@@ -1770,14 +1914,14 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     HistoricalDirectRewriteRunnerError, stableHash,
     STATES, registryName, registryPath, defaultPauseFilePath, operationLockTarget, pauseFileRequested, selectDirectItems,
     initialRegistry, normalizeRegistry, loadOrCreateRegistry, transition, registryCounts, directPaper, fallbackArxivDetails,
-    extractSealedArxivAbstract, publicationSourceFor, refreshHistoricalDirectReaderAuthors,
+    extractSealedArxivAbstract, parseConferencePdfAuthors, publicationSourceFor, refreshHistoricalDirectReaderAuthors,
     analysisRecoveryPath, analysisRecoveryRecord, normalizeAnalysisRecovery, writeAnalysisRecovery,
     readAnalysisRecovery, normalizeLegacyPaperLockReclaimIntent, normalizeLegacyPaperLockReclaimCompletion,
     legacyPaperLockReclaimEventId,
     legacyPaperLockReclaimPaths, prepareLegacyPaperLockReclaimAudit,
     reconcileLegacyPaperLockReclaimAudits, hasRecoverableAnalysisState, sourcePrerequisiteSnapshot,
     priorPreprintAnalysisDisclosure, extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
-    withEphemeralConferenceFigures, renderConferencePdfPages,
+    withEphemeralConferenceFigures, selectConferenceVisualPages, renderConferencePdfPages,
     directProvenanceFor, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
     validateInterruptedSourceDescriptor, recoverInterruptedRegistryEntry,
     replayCompletedAnalysisForStaging, resealCompletedAnalysisSurfaceRepair,
