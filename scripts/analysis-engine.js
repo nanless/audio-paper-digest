@@ -1333,6 +1333,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
     let lastError = null;
     let lastErrorCode = null;
     let lastErrorRetryable = true;
+    let lastErrorCategory = null;
+    let lastErrorStatus = null;
+    let lastErrorScope = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (onAttempt) {
@@ -1418,6 +1421,12 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 };
                 delete successfulResult.result.latestAnalysisAttemptError;
                 delete successfulResult.result.latestAnalysisAttemptAt;
+                for (const field of ['latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable',
+                    'latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus',
+                    'latestAnalysisAttemptErrorScope', 'errorCode', 'errorCategory', 'errorStatus', 'errorScope',
+                    'errorRetryable']) {
+                    delete successfulResult.result[field];
+                }
                 if (successfulResult.result.digestStatus?.latestAttemptStatus === 'analysis_failed') {
                     successfulResult.result.digestStatus = {
                         ...successfulResult.result.digestStatus,
@@ -1430,6 +1439,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 lastError = analyzed.error;
                 lastErrorCode = analyzed.errorCode || null;
                 lastErrorRetryable = analyzed.errorRetryable !== false;
+                lastErrorCategory = analyzed.errorCategory || null;
+                lastErrorStatus = analyzed.errorStatus || null;
+                lastErrorScope = analyzed.errorScope || null;
                 if (analyzed.errorRetryable === false) break;
                 if (attempt < maxRetries) {
                     if (onRetry) onRetry(attempt + 1, new Error(analyzed.error), paper);
@@ -1446,6 +1458,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
             lastError = error.message;
             lastErrorCode = error.code || null;
             lastErrorRetryable = error.retryable !== false;
+            lastErrorCategory = error.category || null;
+            lastErrorStatus = error.status || null;
+            lastErrorScope = error.scope || null;
             if (error?.retryable === false) break;
             if (attempt < maxRetries) {
                 if (onRetry) onRetry(attempt + 1, error, paper);
@@ -1465,6 +1480,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
             latestAnalysisAttemptError: lastError || '分析失败',
             latestAnalysisAttemptErrorCode: lastErrorCode,
             latestAnalysisAttemptRetryable: lastErrorRetryable,
+            latestAnalysisAttemptErrorCategory: lastErrorCategory,
+            latestAnalysisAttemptErrorStatus: lastErrorStatus,
+            latestAnalysisAttemptErrorScope: lastErrorScope,
             latestAnalysisAttemptAt: getBeijingISOString()
         }
     };

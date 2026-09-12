@@ -59,12 +59,15 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
     // A replayable PDF source uses the normal Reader contracts.  Keep this
     // function as the compatibility gate for legacy weak bundles, but do not
     // attach the weak-policy prompt to a source whose authenticated artifact
-    // carries tables, formula text, or PDF Figure pixels.
+    // carries PDF Figure pixels. PDF text is never authenticated original TeX.
     if (details.conferenceCapabilities?.fullText === 'full'
-        && details.conferenceCapabilities?.tables === 'available'
-        && details.conferenceCapabilities?.formulas === 'available'
+        && details.conferenceCapabilities?.tables === 'unavailable'
+        && details.conferenceCapabilities?.formulas === 'unavailable'
         && details.conferenceCapabilities?.figures === 'available') {
-        if (!artifacts || stableHash(provided) !== stableHash(artifacts)) {
+        if (!artifacts || artifacts.parserVersion !== 'conference-pdf-structure-v2-visual-only-math-tables'
+            || !Array.isArray(artifacts.tables) || artifacts.tables.length
+            || !Array.isArray(artifacts.formulas) || artifacts.formulas.length
+            || stableHash(provided) !== stableHash(artifacts)) {
             throw new Error('Authenticated conference structured Reader artifact differs from source details');
         }
         return null;

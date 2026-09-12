@@ -24,6 +24,7 @@ const ID_RE = /^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/;
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
 const FULL = { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' };
+const PDF_VISUAL = { fullText: 'full', tables: 'unavailable', formulas: 'unavailable', figures: 'available' };
 const READER_CONTRACT = 'beginner-researcher-v3';
 const SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4';
 const SCORING_CONTRACT = 'api-scoring-audit-v2';
@@ -129,13 +130,19 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, de
         || loaded.run.analysisSha256 !== loaded.analysisFileSha256 || loaded.analysis.papers?.length !== 1
         || loaded.analysis.papers[0].id !== loaded.run.paperId || loaded.analysis.papers[0].arxivId || loaded.analysis.papers[0].paper_id) fail('sealed conference analysis completion is required');
     if (stableHash(loaded.run.capabilities) !== stableHash(WEAK)
-        && stableHash(loaded.run.capabilities) !== stableHash(FULL)) fail('conference capability projection is unsupported');
+        && stableHash(loaded.run.capabilities) !== stableHash(FULL)
+        && stableHash(loaded.run.capabilities) !== stableHash(PDF_VISUAL)) fail('conference capability projection is unsupported');
     const artifacts = loaded.source?.sourceDetails?.structuredArtifacts;
     if (!artifacts || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)
         || !Array.isArray(artifacts.figures)) fail('conference structured artifacts are missing');
     if (stableHash(loaded.run.capabilities) === stableHash(WEAK)
         && (artifacts.tables.length || artifacts.formulas.length || artifacts.figures.length)) {
         fail('weak unavailable structures must remain empty');
+    }
+    if (stableHash(loaded.run.capabilities) === stableHash(PDF_VISUAL)
+        && (artifacts.tables.length || artifacts.formulas.length
+            || artifacts.parserVersion !== 'conference-pdf-structure-v2-visual-only-math-tables')) {
+        fail('PDF visual source cannot claim original table cells or TeX');
     }
     const sourcePaper = loaded.analysis.papers[0];
     const publication = validateReaderAndScoring(sourcePaper);

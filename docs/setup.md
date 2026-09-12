@@ -35,7 +35,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 `PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 只用于全历史 ICLR 2026 会议论文的 direct 路线：它必须指向已保留的本地官方 accepted metadata/PDF 根目录。未设置时默认使用 `~/code/github_repos/iclr2026-paper-scraper`；它不是日更抓取输入，也不会触发下载。
 
-`PAPER_ANALYZER_FALLBACK_API_KEYS` 不是负载均衡。系统持续使用当前 active 账号，只有 OpenCode Go 返回 HTTP 429 且结构化类型明确为 `GoUsageLimitError` 才立即切到下一账号；切换结果跨 Node/Python 和日期保存在 `data/runtime/llm-account-pool.json`。原账号到期后不会自动切回。普通 429、5xx、网络/代理错误、截断或内容校验失败均不切换。若只需固定第三顺位，可用 `PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY`；它总排在 `PAPER_ANALYZER_FALLBACK_API_KEYS` 的所有账号之后。副模型如有独立账号池，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`；只有主/副端点规范化后属于同一 OpenCode Go 服务且副模型没有独立 key 时，副模型才继承主账号池。不同服务的副模型必须提供自己的 key，不能继承主账号池。凭据发送前，实际请求 URL 还必须精确匹配由 endpoint 与 model 推导出的规范 API 路由。
+`PAPER_ANALYZER_FALLBACK_API_KEYS` 不是负载均衡。系统持续使用当前 active 账号，仅在 OpenCode Go 返回明确 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，按配置顺位向后切换，不回绕到已冷却的前序账号；普通认证 401 不切换，作为运行级故障停止派发；切换结果跨 Node/Python 和日期保存在 `data/runtime/llm-account-pool.json`。原账号到期后不会自动切回。普通 429、5xx、网络/代理错误、截断或内容校验失败均不切换。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 总排在普通 fallback 列表之后，也可配置逗号列表 `third-key,fourth-key`。追加账号保留现有 active 顺位，全部后续账号不可用时停止请求并保留断点。副模型如有独立账号池，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`；只有主/副端点规范化后属于同一 OpenCode Go 服务且副模型没有独立 key 时，副模型才继承主账号池。不同服务的副模型必须提供自己的 key，不能继承主账号池。凭据发送前，实际请求 URL 还必须精确匹配由 endpoint 与 model 推导出的规范 API 路由。
 
 ## 环境为什么只认项目 `.env`
 

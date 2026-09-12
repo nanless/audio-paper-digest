@@ -1815,6 +1815,47 @@ primary_method_tag: #基准测试
         self.assertEqual(payload['max_output_tokens'], 100)
         self.assertNotIn('messages', payload)
 
+    def test_balance_failover_is_forward_and_authentication_is_run_scoped(self):
+        from llm_account_pool import select_api_key, mark_quota_exhausted, LlmAccountAuthError
+        endpoint = 'https://opencode.ai/zen/go/v1'
+        keys = ['a', 'b', 'c', 'd']
+        for message in ('Insufficient balance',
+                        'Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_test_placeholder/billing',
+                        'Invalid API key'):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as tmp:
+                state_file = Path(tmp) / 'pool.json'
+                for now_ms in (1000, 1100):
+                    selected = select_api_key(keys, endpoint, state_file, now_ms=now_ms)
+                    mark_quota_exhausted(selected, {'blocked_until_ms': 2200}, state_file, now_ms=now_ms)
+                select_api_key(keys, endpoint, state_file, now_ms=1200)
+                error = urllib.error.HTTPError(
+                    endpoint + '/responses', 401, 'Unauthorized', {},
+                    io.BytesIO(json.dumps({'error': {'message': message}}).encode()),
+                )
+                success = mock.MagicMock()
+                success.__enter__.return_value = success
+                success.status = 200
+                success.read.return_value = b'{"status":"completed","output_text":"ok"}'
+                opener = mock.Mock()
+                opener.open.side_effect = [error, success]
+                kwargs = dict(api_url=endpoint + '/responses', endpoint=endpoint,
+                              model='muse-spark-1.2-contributor', api_type='openai-responses',
+                              api_keys=keys, payload={}, opener=opener, timeout=5,
+                              state_file=state_file, usage_sink=lambda _event: None)
+                # Use the actual protocol discriminator, not a duplicate constant.
+                from publish_common import detect_publish_api_type
+                kwargs['api_type'] = detect_publish_api_type(endpoint, kwargs['model'])
+                if message != 'Invalid API key':
+                    self.assertEqual(_open_publish_json_with_account_pool(**kwargs)[0], 200)
+                    expected = ['Bearer c', 'Bearer d']
+                else:
+                    with self.assertRaises(LlmAccountAuthError) as caught:
+                        _open_publish_json_with_account_pool(**kwargs)
+                    self.assertEqual(caught.exception.scope, 'run')
+                    expected = ['Bearer c']
+                self.assertEqual([call.args[0].get_header('Authorization')
+                                  for call in opener.open.call_args_list], expected)
+
     def test_muse_confirmed_quota_switches_once_and_keeps_fallback_sticky(self):
         quota_body = json.dumps({
             'type': 'GoUsageLimitError',
@@ -1867,6 +1908,7 @@ primary_method_tag: #基准测试
         sleep.assert_not_called()
 
     def test_muse_all_accounts_quota_exhausted_is_bounded_and_typed(self):
+        from llm_account_pool import LlmAccountPoolExhaustedError
         def quota_error():
             return urllib.error.HTTPError(
                 'https://opencode.ai/zen/go/v1/responses',
@@ -1893,11 +1935,13 @@ primary_method_tag: #基准测试
                 mock.patch('publish_common.LLM_ACCOUNT_POOL_STATE_FILE', Path(tmp) / 'pool.json'), \
                 mock.patch('urllib.request.build_opener', return_value=opener), \
                 mock.patch('publish_common.time.sleep') as sleep, \
-                self.assertRaisesRegex(PublishLLMUnavailable, '均明确返回额度耗尽'):
+                self.assertRaisesRegex(LlmAccountPoolExhaustedError, '均明确返回额度耗尽') as caught:
             call_publish_llm_api(
                 'inspect', required=True, max_retries=5, max_tokens=100,
             )
         self.assertEqual(opener.open.call_count, 2)
+        self.assertEqual(caught.exception.code, 'LLM_ACCOUNT_POOL_EXHAUSTED')
+        self.assertEqual(caught.exception.scope, 'run')
         sleep.assert_not_called()
 
     def test_muse_raw_quota_marker_without_valid_json_does_not_switch_account(self):
@@ -2024,7 +2068,7 @@ primary_method_tag: #基准测试
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch('publish_common.build_publish_headers') as build_headers, \
                 mock.patch('urllib.request.build_opener') as build_opener, \
-                self.assertRaisesRegex(PublishLLMUnavailable, '属于不同服务'):
+                self.assertRaisesRegex(LlmAccountPoolConfigError, '属于不同服务'):
             call_publish_llm_api(
                 'inspect', required=True, use_secondary=True, max_retries=1,
             )
@@ -2042,7 +2086,7 @@ primary_method_tag: #基准测试
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch('publish_common.build_publish_headers') as build_headers, \
                 mock.patch('urllib.request.build_opener') as build_opener, \
-                self.assertRaisesRegex(PublishLLMUnavailable, '属于不同服务'):
+                self.assertRaisesRegex(LlmAccountPoolConfigError, '属于不同服务'):
             call_publish_llm_api(
                 'inspect', required=True, use_secondary=True, max_retries=1,
             )
@@ -2089,7 +2133,7 @@ primary_method_tag: #基准测试
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch('publish_common.build_publish_headers') as build_headers, \
                 mock.patch('urllib.request.build_opener') as build_opener, \
-                self.assertRaisesRegex(PublishLLMUnavailable, '必须显式配置'):
+                self.assertRaisesRegex(LlmAccountPoolConfigError, '必须显式配置'):
             call_publish_llm_api(
                 'inspect', required=True, use_secondary=True, max_retries=1,
             )
@@ -2108,7 +2152,7 @@ primary_method_tag: #基准测试
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch('publish_common.build_publish_headers') as build_headers, \
                 mock.patch('urllib.request.build_opener') as build_opener, \
-                self.assertRaisesRegex(PublishLLMUnavailable, '独立账号池跨服务'):
+                self.assertRaisesRegex(LlmAccountPoolConfigError, '独立账号池跨服务'):
             call_publish_llm_api(
                 'inspect', required=True, use_secondary=True, max_retries=1,
             )

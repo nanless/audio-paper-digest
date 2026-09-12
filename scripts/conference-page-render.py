@@ -17,6 +17,7 @@ from runtime_guard import require_external_runtime
 PAPER_ID = re.compile(r'^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$')
 WEAK = {'fullText': 'weak', 'tables': 'unavailable', 'formulas': 'unavailable', 'figures': 'unavailable'}
 FULL = {'fullText': 'full', 'tables': 'available', 'formulas': 'available', 'figures': 'available'}
+PDF_VISUAL = {'fullText': 'full', 'tables': 'unavailable', 'formulas': 'unavailable', 'figures': 'available'}
 READER_CONTRACT = 'beginner-researcher-v3'
 SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4'
 SCORING_CONTRACT = 'api-scoring-audit-v2'
@@ -168,13 +169,18 @@ def sealed_reader_sources(paper, manifest, stage, capabilities):
             and plan.get('tableBindings') == [] and plan.get('formulaBindings') == [] \
             and stage.get('figureCount') == 0 and stage.get('tableBindingCount') == 0 \
             and stage.get('formulaBindingCount') == 0 and stage.get('figuresSha256') == stable_sha([])
-    elif capabilities == FULL:
+    elif capabilities in (FULL, PDF_VISUAL):
         sealed = common_seal and isinstance(figures, list) and isinstance(plan.get('figurePlacements'), list) \
             and isinstance(plan.get('tableBindings'), list) and isinstance(plan.get('formulaBindings'), list) \
             and stage.get('figureCount') == len(figures) \
             and stage.get('tableBindingCount') == len(plan['tableBindings']) \
             and stage.get('formulaBindingCount') == len(plan['formulaBindings']) \
             and stage.get('figuresSha256') == stable_sha(figures)
+        if capabilities == PDF_VISUAL:
+            sealed = sealed and plan.get('formulaBindings') == [] and all(
+                isinstance(binding, dict) and binding.get('sourceType') == 'source_quotes'
+                and binding.get('sourceTableOrdinal') is None
+                for binding in plan.get('tableBindings', []))
     else:
         sealed = False
     if not sealed:
@@ -288,13 +294,13 @@ def render_packet(packet):
             or paper.get('arxivId') is not None or paper.get('paper_id') != paper_id:
         raise ValueError('conference paper must not carry an arXiv alias')
     if assignment.get('status') != 'assigned' or assignment.get('paperId') != paper_id \
-            or capabilities not in (WEAK, FULL):
+            or capabilities not in (WEAK, FULL, PDF_VISUAL):
         raise ValueError('taxonomy/capability projection is not source-bound weak/full conference data')
     manifest = paper.get('analysisManifest')
     stage = ((manifest or {}).get('stages') or {}).get('apiReaderArticle') or {}
     plan, article, authors, resources = sealed_reader_sources(paper, manifest, stage, capabilities)
     assets = []
-    if capabilities == FULL:
+    if capabilities in (FULL, PDF_VISUAL):
         asset_by_url = {}
         for item in packet.get('figureAssets') or []:
             if not isinstance(item, dict) or not isinstance(item.get('url'), str) \
@@ -418,10 +424,11 @@ def render_packet(packet):
              f'paper_digest_score: {float(parsed["score"]):.1f}',
              f'paper_digest_rank_bucket: {json.dumps(rank_bucket, ensure_ascii=False)}',
              f'paper_digest_document_type: {json.dumps(document_type, ensure_ascii=False)}',
-             f'paper_digest_conference_structure: {"replayable-pdf-layout-v1" if capabilities == FULL else "weak-text-only-v1"}', '---', '',
+             f'paper_digest_conference_structure: {"pdf-visual-quote-evidence-v1" if capabilities == PDF_VISUAL else "replayable-pdf-layout-v1" if capabilities == FULL else "weak-text-only-v1"}', '---', '',
              f'# 📄 {reader_title}', '', f'> 英文题目：*{title}*', '',
              f'> 会议身份：`{paper_id}`', '',
-             ('' if capabilities == FULL else '> ⚠️ 来源为会议 PDF 弱结构纯文本；表格、公式与 Figure 均不可用，本文不会据此重建这些结构。'),
+             ('> ⚠️ 来源为会议 PDF 弱结构纯文本；表格、公式与 Figure 均不可用，本文不会据此重建这些结构。' if capabilities == WEAK else ''),
+             ('> 来源为官方会议 PDF；图片依据原页像素，表格数字依据原文引用。PDF 文字层不视为原始 TeX，未可靠恢复的结构不作推断。' if capabilities == PDF_VISUAL else ''),
              ('> ✅ 来源为官方会议 PDF；可重放的表格、公式文本与 Figure 像素已按 PDF 抽取结果绑定，未成功恢复的结构不作推断。' if capabilities == FULL else ''), '',
              f'> 会议来源：[官方记录]({record_url}) · [官方 PDF]({pdf_url})', '',
              f'标签：{" ".join("#" + label for label in labels)}', '', f'评分：{complete_score}', '',

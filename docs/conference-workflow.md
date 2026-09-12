@@ -368,7 +368,7 @@ extraction request 与其 metadata/PDF/输出都使用 staging source 根下的�
 ```
 
 `--verify` 不信任已有派生文件：它在临时目录用固定 `PyMuPDF==1.27.2.3` 重新提取，并要求新旧
-text/visual-artifact/receipt 字节完全一致。当前结构化提取器版本为 `2.2.0`，同时保留逐页
+text/visual-artifact/receipt 字节完全一致。当前结构化提取器版本为 `2.3.0`，旧 `2.2.0` 工件需要在后续新 generation 中重新提取封存，不能原地覆盖；同时保留逐页
 视觉审计和可定位的结构记录。Node extraction handle 默认执行临时重提取；同一次自动
 process 的 staging/import 可用 `replay: false` 重放已封存字节与回执，避免重复解析。
 人工单独运行 `--verify` 只用于诊断，不能代替后续来源绑定门禁。
@@ -565,13 +565,17 @@ binding。生产模块不导出 ledger + run/execution 的低层 context builder
 生产入口仍会重放 metadata/PDF/text/artifact 字节；可靠正文达到门槛即可分析。固定 PyMuPDF
 重提取会额外证明逐页 PNG、内嵌图片摘要以及表格/Figure/公式候选的视觉证据 SHA；它不会凭空
 恢复 PDF 中不存在的原始 TeX，也不会把不完整表格候选冒充完整 DOM。因此公式文本绑定仍为
-unavailable，表格只有通过完整矩阵门禁才可进入后续复核，图片/Figure 以原页视觉证据保留。
+unavailable；表格候选保存原始单元格、坐标与原页像素，统一标记 `needs-review`，矩形矩阵本身不能证明原表行列关系正确。启发式旧表格/公式工件不再被 Reader 适配器升级为可信 DOM cell/原始 TeX，量化叙述改走逐字原文 quote，图片/Figure 以原页视觉证据保留。
 稳定 source SHA 不包含可变 execution 状态，
 观察状态另有独立 SHA。它不接受任意全文、旧博客文本、arXiv fallback 或外部图下载。
 
 PDF 是弱结构来源：不能可靠复原原始 TeX 时，不展示“可验证公式”；不能定位完整表格
 和数值时，不展示表格；图片必须记录页码/图号及工件 SHA。不得从旧博客正文反向补造
 这些证据。
+
+结构化 Figure 识别统一支持 `Figure`/`Fig.` 图注，排除 `Figure 2 presents ...` 等正文引用，保留原图号并去重；双栏图只使用同栏前置图注限制裁剪。没有有效图片资产的候选不进入可发布 Figure 集合。
+
+新会议独立发布 `conference:new:publish:generate|review|push` 的 Review 同时执行最终页面正文语义、图片多模态、Markdown 和 Hugo 检查；通过证据仅按路径与页面字节 SHA 复用，失败不签通过。push 逐文件校验 Git 暂存区和提交内 blob，而非只看工作区字节；自身提交后断网和重复发布可在精确父提交、文件集合、内容与远端身份一致时恢复。图床完整资产清单与本次 Git delta 分开处理，已经发布的相同图片可零差异复用。以上均为自动内容检查，不引入人工审批。
 
 ## `conference-run-v2`
 

@@ -3,7 +3,7 @@
  * OpenCode Go account pool shared-state implementation.
  *
  * The pool is deliberately sticky: one account remains active until the
- * provider explicitly reports GoUsageLimitError for that account.  It never
+ * provider explicitly reports GoUsageLimitError or an exact balance 401. It never
  * round-robins successful traffic and never treats generic 429/5xx/network
  * failures as account exhaustion.
  */
@@ -27,7 +27,19 @@ class LlmAccountPoolExhaustedError extends Error {
         this.code = 'LLM_ACCOUNT_POOL_EXHAUSTED';
         this.retryable = false;
         this.category = 'quota_exhausted';
+        this.scope = 'run';
         Object.assign(this, details);
+    }
+}
+
+class LlmAccountAuthError extends Error {
+    constructor() {
+        super('OpenCode Go 认证失败，已停止请求；未切换账号');
+        this.name = 'LlmAccountAuthError';
+        this.code = 'LLM_ACCOUNT_AUTH_ERROR';
+        this.category = 'authentication';
+        this.scope = 'run';
+        this.retryable = false;
     }
 }
 
@@ -38,6 +50,7 @@ class LlmAccountPoolStateError extends Error {
         this.code = 'LLM_ACCOUNT_POOL_STATE_ERROR';
         this.retryable = false;
         this.category = 'state';
+        this.scope = 'run';
     }
 }
 
@@ -48,6 +61,7 @@ class LlmAccountPoolConfigError extends Error {
         this.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
         this.retryable = false;
         this.category = 'config';
+        this.scope = 'run';
     }
 }
 
@@ -432,7 +446,7 @@ function buildExhaustedError(service, accountIds, nowMs) {
     const suffix = earliestRetryAtMs
         ? `，最早恢复时间 ${new Date(earliestRetryAtMs).toISOString()}`
         : '';
-    return new LlmAccountPoolExhaustedError(`所有 OpenCode Go 账号都处于额度冷却${suffix}`, {
+    return new LlmAccountPoolExhaustedError(`当前及后续 OpenCode Go 账号均不可用，禁止向前回切${suffix}`, {
         earliestRetryAtMs,
         blockedAccountCount: blocked.length
     });
@@ -446,7 +460,18 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
     let selection;
     updateState(stateFile, state => {
         const service = ensureService(state, identity);
-        const group = service.groups[identity.groupId] || { activeAccountId: null, switchedAt: null };
+        let group = service.groups[identity.groupId];
+        const isNewGroup = !group;
+        // Appending credentials must not reset sticky selection. Legacy v1
+        // groups have no ordered membership, so match exact prefix identities.
+        if (!group) {
+            for (let length = keys.length - 1; length > 0; length -= 1) {
+                const previous = service.groups[getPoolIdentity(keys.slice(0, length), endpoint).groupId];
+                if (previous) { group = { ...previous }; break; }
+            }
+        }
+        group ||= { activeAccountId: null, switchedAt: null };
+        service.groups[identity.groupId] = group;
         const byId = new Map(keys.map(key => [getAccountId(key), key]));
         const activeId = group.activeAccountId;
         if (activeId && byId.has(activeId) && !excluded.has(activeId)
@@ -456,12 +481,17 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
                 service.accounts[activeId].status = 'eligible_after_reset';
                 return state;
             }
-            return undefined;
+            return isNewGroup ? state : undefined;
         }
-        const nextId = identity.accountIds.find(id => (
+        // Old implementations cleared active on quota failure. Recover their
+        // forward cursor from the furthest confirmed failed account.
+        const floor = activeId ? identity.accountIds.indexOf(activeId) : Math.max(0,
+            ...identity.accountIds.map((id, index) => service.accounts[id]?.lastFailureAt ? index : 0));
+        const eligibleIds = identity.accountIds.slice(Math.max(0, floor));
+        const nextId = eligibleIds.find(id => (
             !excluded.has(id) && !accountIsBlocked(service.accounts[id], nowMs)
         ));
-        if (!nextId) throw buildExhaustedError(service, identity.accountIds, nowMs);
+        if (!nextId) throw buildExhaustedError(service, eligibleIds, nowMs);
         group.activeAccountId = nextId;
         group.switchedAt = new Date(nowMs).toISOString();
         service.groups[identity.groupId] = group;
@@ -486,16 +516,14 @@ function markQuotaExhausted(selection, quota, stateFile, options = {}) {
         service.accounts[selection.accountId] = {
             ...previous,
             status: 'quota_blocked',
-            reason: 'GoUsageLimitError',
+            reason: quota?.type || 'GoUsageLimitError',
             limitName: String(quota?.limitClass || 'unknown'),
             blockedUntilMs: Math.max(Number(previous.blockedUntilMs) || 0, blockedUntilMs),
             blockedUntil: new Date(Math.max(Number(previous.blockedUntilMs) || 0, blockedUntilMs)).toISOString(),
             lastFailureAt: new Date(nowMs).toISOString(),
-            lastFailureStatus: 429
+            lastFailureStatus: quota?.type === 'InsufficientBalanceError' ? 401 : 429
         };
-        for (const group of Object.values(service.groups)) {
-            if (group?.activeAccountId === selection.accountId) group.activeAccountId = null;
-        }
+        // Retain active as a forward-only cursor even while it is blocked.
         return state;
     });
     return blockedUntilMs;
@@ -600,6 +628,17 @@ function fallbackBlockMs(limitClass) {
 }
 
 function classifyOpenCodeGoQuotaResponse(response, options = {}) {
+    if (options.endpoint !== undefined && !isOpenCodeGoEndpoint(options.endpoint)) return null;
+    if (response?.statusCode === 401 && isOpenCodeGoEndpoint(options.endpoint)) {
+        const body = response.body;
+        const messages = [body, response.raw, body?.message, body?.error, body?.error?.message, body?.error?.error?.message];
+        const balancePattern = /^insufficient balance(?:[.!]?|\. Manage your billing here: https:\/\/opencode\.ai\/workspace\/[A-Za-z0-9_-]+\/billing)$/i;
+        if (messages.some(value => typeof value === 'string' && balancePattern.test(value.trim()))) {
+            const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+            return { type: 'InsufficientBalanceError', limitName: 'balance', limitClass: 'balance',
+                blockedUntilMs: nowMs + UNKNOWN_QUOTA_BLOCK_MS };
+        }
+    }
     if (response?.statusCode !== 429) return null;
     const body = response.body;
     const types = [
@@ -645,6 +684,7 @@ module.exports = {
     STATE_SCHEMA_VERSION,
     POLICY_VERSION,
     LlmAccountPoolExhaustedError,
+    LlmAccountAuthError,
     LlmAccountPoolStateError,
     LlmAccountPoolConfigError,
     LlmAccountPoolLockTimeoutError,

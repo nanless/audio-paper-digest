@@ -773,6 +773,7 @@ describe('deep-analyzer section helpers', () => {
             }
         }), error => error.code === 'MODEL_HTTP_NON_RETRYABLE'
             && error.status === 401
+            && error.scope === 'run'
             && error.retryable === false);
         assert.strictEqual(unauthorizedCalls, 1);
     });
@@ -794,6 +795,35 @@ describe('deep-analyzer section helpers', () => {
         const classified = classifyModelRequestError(source, { key: 'test-key', apiKeys: ['test-key'] });
         assert.strictEqual(classified.retryable, false);
         assert.strictEqual(classified.category, 'quota_exhausted');
+        assert.strictEqual(classified.scope, 'run');
+    });
+
+    it('账号认证错误保持运行级非重试分类而不降级成普通request错误', () => {
+        const { classifyModelRequestError } = require('../scripts/deep-analyzer.js');
+        const classified = classifyModelRequestError(Object.assign(new Error('auth failed'), {
+            code: 'LLM_ACCOUNT_AUTH_ERROR', scope: 'run'
+        }), { key: 'test-key' });
+        assert.equal(classified.code, 'LLM_ACCOUNT_AUTH_ERROR');
+        assert.equal(classified.retryable, false);
+        assert.equal(classified.scope, 'run');
+        assert.equal(classified.category, 'authentication');
+    });
+
+    it('副模型图片阶段先保存断点再抛运行级错误，普通图片失败仍可降级', () => {
+        const { checkpointImageSupplementFailure } = require('../scripts/deep-analyzer.js');
+        const paper = {};
+        let saved = false;
+        paper[Symbol.for('audio-paper-digest.analysisCheckpointCallback')] = record => {
+            assert.equal(record.analysisCheckpoint, 'retained analysis');
+            assert.equal(record.analysisManifest.stages.imageSupplement.status, 'transient_failure');
+            saved = true;
+        };
+        const error = Object.assign(new Error('account failed'), {
+            code: 'LLM_ACCOUNT_AUTH_ERROR', scope: 'run', retryable: false });
+        assert.throws(() => checkpointImageSupplementFailure(paper, 'retained analysis',
+            { stages: {} }, null, error), caught => caught === error && saved);
+        assert.doesNotThrow(() => checkpointImageSupplementFailure({}, 'retained analysis',
+            { stages: {} }, null, new Error('optional image unavailable')));
     });
 
     it('账号池锁竞争可在阶段内重试，全部额度耗尽不会重复请求', async () => {

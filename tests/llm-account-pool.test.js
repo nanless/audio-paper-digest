@@ -30,6 +30,69 @@ function tempState() {
 }
 
 describe('OpenCode Go sticky account state', () => {
+    it('inherits third sticky account on append and only fails forward even after old cooldowns expire', () => {
+        const { file } = tempState();
+        const keys = ['a', 'b', 'c'];
+        for (const nowMs of [1000, 1100]) {
+            const selected = selectApiKey(keys, ENDPOINT, file, { nowMs });
+            markQuotaExhausted(selected, { blockedUntilMs: 2200 }, file, { nowMs });
+        }
+        assert.strictEqual(selectApiKey(keys, ENDPOINT, file, { nowMs: 1200 }).apiKey, 'c');
+        keys.push('d');
+        const third = selectApiKey(keys, ENDPOINT, file, { nowMs: 3000 });
+        assert.strictEqual(third.apiKey, 'c');
+        markQuotaExhausted(third, { blockedUntilMs: 5000 }, file, { nowMs: 3000 });
+        const fourth = selectApiKey(keys, ENDPOINT, file, { nowMs: 3001 });
+        assert.strictEqual(fourth.apiKey, 'd');
+        markQuotaExhausted(fourth, { blockedUntilMs: 6000 }, file, { nowMs: 3001 });
+        assert.throws(() => selectApiKey(keys, ENDPOINT, file, { nowMs: 3002 }),
+            error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED' && error.scope === 'run');
+    });
+
+    it('Node/Python share appended membership and a blocked forward cursor', () => {
+        const { file } = tempState();
+        const keys = ['a', 'b', 'c'];
+        for (const nowMs of [1000, 1100]) {
+            markQuotaExhausted(selectApiKey(keys, ENDPOINT, file, { nowMs }),
+                { blockedUntilMs: 2200 }, file, { nowMs });
+        }
+        selectApiKey(keys, ENDPOINT, file, { nowMs: 1200 });
+        const script = [
+            'import sys',
+            `sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'scripts'))})`,
+            'from llm_account_pool import select_api_key, mark_quota_exhausted',
+            `s=select_api_key(['a','b','c','d'], ${JSON.stringify(ENDPOINT)}, sys.argv[1], now_ms=3000)`,
+            "assert s['api_key']=='c'",
+            "mark_quota_exhausted(s, {'blocked_until_ms': 9000}, sys.argv[1], now_ms=3000)"
+        ].join('; ');
+        const result = spawnSync(process.env.PD_PYTHON_BIN || 'python3', ['-c', script, file], { encoding: 'utf8' });
+        assert.strictEqual(result.status, 0, result.stderr);
+        assert.strictEqual(selectApiKey([...keys, 'd'], ENDPOINT, file, { nowMs: 3001 }).apiKey, 'd');
+    });
+
+    it('recognizes balance only as an exact official Go 401, never generic failures', () => {
+        const body = { error: { message: 'Insufficient balance' } };
+        assert.strictEqual(classifyOpenCodeGoQuotaResponse({ statusCode: 401, body }, { endpoint: ENDPOINT }).type,
+            'InsufficientBalanceError');
+        assert.strictEqual(classifyOpenCodeGoQuotaResponse({ statusCode: 401, body: 'Insufficient balance' },
+            { endpoint: ENDPOINT }).type, 'InsufficientBalanceError');
+        const billingMessage = 'Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_test_placeholder/billing';
+        assert.strictEqual(classifyOpenCodeGoQuotaResponse({ statusCode: 401, body: { error: { message: billingMessage } } },
+            { endpoint: ENDPOINT }).type, 'InsufficientBalanceError');
+        for (const message of [billingMessage + '?redirect=1', billingMessage + ' extra',
+            billingMessage.replace('opencode.ai/', 'opencode.ai.evil.example/'),
+            billingMessage.replace('https:', 'http:'), 'prefix ' + billingMessage]) {
+            assert.strictEqual(classifyOpenCodeGoQuotaResponse({ statusCode: 401, body: { message } },
+                { endpoint: ENDPOINT }), null);
+        }
+        for (const response of [
+            { statusCode: 401, body: { error: { message: 'Invalid API key' } } },
+            { statusCode: 401, body: { message: 'not Insufficient balance' } },
+            { statusCode: 429, body }, { statusCode: 500, body }
+        ]) assert.strictEqual(classifyOpenCodeGoQuotaResponse(response, { endpoint: ENDPOINT }), null);
+        assert.strictEqual(classifyOpenCodeGoQuotaResponse({ statusCode: 401, body },
+            { endpoint: 'https://example.com/v1' }), null);
+    });
     it('logical LLM deadline rejects a transport promise that never settles', async () => {
         const startedAt = Date.now();
         await assert.rejects(
@@ -267,8 +330,10 @@ describe('OpenCode Go sticky account state', () => {
         const second = selectApiKey(keys, ENDPOINT, file, { nowMs: 1100 });
         markQuotaExhausted(second, { blockedUntilMs: 4000 }, file, { nowMs: 3000 });
 
-        const recovered = selectApiKey(keys, ENDPOINT, file, { nowMs: 3000 });
-        assert.strictEqual(recovered.apiKey, 'account-a');
+        assert.throws(() => selectApiKey(keys, ENDPOINT, file, { nowMs: 3000 }),
+            error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED' && error.scope === 'run');
+        const recovered = selectApiKey(keys, ENDPOINT, file, { nowMs: 4001 });
+        assert.strictEqual(recovered.apiKey, 'account-b');
         const state = readStateStrict(file);
         const service = state.services[recovered.serviceId];
         assert.strictEqual(service.accounts[recovered.accountId].status, 'eligible_after_reset');
@@ -437,6 +502,52 @@ describe('OpenCode Go sticky account state', () => {
 });
 
 describe('requestLlmJson OpenCode Go failover', () => {
+    it('four billing-balance failures stop with a typed run error and persist no billing URL', async () => {
+        const { file } = tempState();
+        const seen = [];
+        await assert.rejects(requestLlmJson(`${ENDPOINT}/chat/completions`, ENDPOINT, 'test-model', {}, {}, {
+            apiKeys: ['a', 'b', 'c', 'd'], accountPoolStateFile: file, timeoutMs: 5000, recordUsage: false,
+            transportRequestFn: async (_url, _body, headers) => {
+                seen.push(headers.Authorization);
+                return { statusCode: 401, body: { error: { message:
+                    'Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_test_placeholder/billing' } } };
+            }
+        }), error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED'
+            && error.scope === 'run' && error.category === 'quota_exhausted' && error.retryable === false);
+        assert.deepStrictEqual(seen, ['Bearer a', 'Bearer b', 'Bearer c', 'Bearer d']);
+        assert.ok(!fs.readFileSync(file, 'utf8').includes('wrk_test_placeholder'));
+    });
+    it('replays exact balance 401 from third to fourth; generic 401 stops without rotation', async () => {
+        for (const message of ['Insufficient balance',
+            'Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_test_placeholder/billing',
+            'Invalid API key']) {
+            const { file } = tempState();
+            const keys = ['a', 'b', 'c', 'd'];
+            for (const nowMs of [1000, 1100]) {
+                markQuotaExhausted(selectApiKey(keys, ENDPOINT, file, { nowMs }),
+                    { blockedUntilMs: 2200 }, file, { nowMs });
+            }
+            selectApiKey(keys, ENDPOINT, file, { nowMs: 1200 });
+            const seen = [];
+            const request = requestLlmJson(`${ENDPOINT}/chat/completions`, ENDPOINT, 'test-model', {}, {}, {
+                apiKeys: keys, accountPoolStateFile: file, timeoutMs: 5000,
+                transportRequestFn: async (_url, _body, headers) => {
+                    seen.push(headers.Authorization);
+                    return headers.Authorization === 'Bearer c'
+                        ? { statusCode: 401, body: { error: { message } } }
+                        : { statusCode: 200, body: {} };
+                }
+            });
+            if (message !== 'Invalid API key') {
+                assert.strictEqual((await request).statusCode, 200);
+                assert.deepStrictEqual(seen, ['Bearer c', 'Bearer d']);
+            } else {
+                await assert.rejects(request, error => error.code === 'LLM_ACCOUNT_AUTH_ERROR'
+                    && error.category === 'authentication' && error.scope === 'run' && !error.retryable);
+                assert.deepStrictEqual(seen, ['Bearer c']);
+            }
+        }
+    });
     it('rejects every duplicate configured credential before transport', async () => {
         let calls = 0;
         for (const apiKeys of [['key-a', 'key-b', 'key-b'], ['key-a', ' key-a ']]) {

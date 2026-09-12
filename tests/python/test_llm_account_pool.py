@@ -18,6 +18,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from llm_account_pool import (  # noqa: E402
     LlmAccountPoolLockTimeoutError,
+    LlmAccountPoolExhaustedError,
     LlmAccountPoolStateError,
     MAX_SAFE_INTEGER,
     POLICY_VERSION,
@@ -38,6 +39,50 @@ ENDPOINT = 'https://opencode.ai/zen/go/v1'
 
 
 class LlmAccountPoolTest(unittest.TestCase):
+    def test_append_preserves_third_and_never_returns_to_expired_earlier_accounts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / 'pool.json'
+            keys = ['a', 'b', 'c']
+            for now_ms in (1000, 1100):
+                selected = select_api_key(keys, ENDPOINT, state_file, now_ms=now_ms)
+                mark_quota_exhausted(selected, {'blocked_until_ms': 2200}, state_file, now_ms=now_ms)
+            self.assertEqual(select_api_key(keys, ENDPOINT, state_file, now_ms=1200)['api_key'], 'c')
+            keys.append('d')
+            third = select_api_key(keys, ENDPOINT, state_file, now_ms=3000)
+            self.assertEqual(third['api_key'], 'c')
+            mark_quota_exhausted(third, {'blocked_until_ms': 5000}, state_file, now_ms=3000)
+            fourth = select_api_key(keys, ENDPOINT, state_file, now_ms=3001)
+            self.assertEqual(fourth['api_key'], 'd')
+            mark_quota_exhausted(fourth, {'blocked_until_ms': 6000}, state_file, now_ms=3001)
+            with self.assertRaises(LlmAccountPoolExhaustedError) as caught:
+                select_api_key(keys, ENDPOINT, state_file, now_ms=3002)
+            self.assertEqual(caught.exception.scope, 'run')
+
+    def test_balance_requires_exact_message_status_and_go_endpoint(self):
+        body = {'error': {'message': 'Insufficient balance'}}
+        self.assertEqual(classify_opencode_go_quota_response(
+            401, {}, body, endpoint=ENDPOINT)['type'], 'InsufficientBalanceError')
+        self.assertEqual(classify_opencode_go_quota_response(
+            401, {}, {}, raw='Insufficient balance', endpoint=ENDPOINT)['type'], 'InsufficientBalanceError')
+        billing_message = ('Insufficient balance. Manage your billing here: '
+                           'https://opencode.ai/workspace/wrk_test_placeholder/billing')
+        self.assertEqual(classify_opencode_go_quota_response(
+            401, {}, {'error': {'message': billing_message}}, endpoint=ENDPOINT)['type'], 'InsufficientBalanceError')
+        for message in (billing_message + '?redirect=1', billing_message + ' extra',
+                        billing_message.replace('opencode.ai/', 'opencode.ai.evil.example/'),
+                        billing_message.replace('https:', 'http:'), 'prefix ' + billing_message):
+            self.assertIsNone(classify_opencode_go_quota_response(
+                401, {}, {'message': message}, endpoint=ENDPOINT))
+        for status, message, endpoint in (
+            (401, 'Invalid API key', ENDPOINT),
+            (401, 'not Insufficient balance', ENDPOINT),
+            (429, 'Insufficient balance', ENDPOINT),
+            (500, 'Insufficient balance', ENDPOINT),
+            (401, 'Insufficient balance', 'https://example.com/v1'),
+        ):
+            self.assertIsNone(classify_opencode_go_quota_response(
+                status, {}, {'error': {'message': message}}, endpoint=endpoint))
+
     def test_duplicate_primary_and_fallback_credentials_are_rejected(self):
         with self.assertRaisesRegex(ValueError, '不能相同或重复'):
             resolve_api_key_pool('same-key', 'same-key')
@@ -376,17 +421,9 @@ class LlmAccountPoolTest(unittest.TestCase):
             self.assertEqual(select_api_key(
                 ['a', 'b'], ENDPOINT, state_file, now_ms=3000,
             )['api_key'], 'b')
-            selected_a = select_api_key(
-                ['a', 'b'], ENDPOINT, state_file, now_ms=3000,
-                exclude_account_ids={get_account_id('b')},
-            )
-            self.assertEqual(selected_a['api_key'], 'a')
-            state = read_state_strict(state_file)
-            service = next(iter(state['services'].values()))
-            self.assertEqual(
-                service['accounts'][get_account_id('a')]['status'],
-                'eligible_after_reset',
-            )
+            with self.assertRaises(LlmAccountPoolExhaustedError):
+                select_api_key(['a', 'b'], ENDPOINT, state_file, now_ms=3000,
+                               exclude_account_ids={get_account_id('b')})
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js is required for cross-runtime state test')
     def test_python_written_state_is_read_with_same_sticky_account_by_node(self):

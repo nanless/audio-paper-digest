@@ -18,6 +18,31 @@ def stable_sha(value):
 
 
 class ConferencePageRenderTest(unittest.TestCase):
+    def test_pdf_visual_capabilities_render_without_claiming_recovered_tex(self):
+        packet = self.packet()
+        packet['capabilities'] = dict(MODULE.PDF_VISUAL)
+        result = MODULE.render_packet(packet)
+        self.assertIn('pdf-visual-quote-evidence-v1', result['markdown'])
+        self.assertIn('PDF 文字层不视为原始 TeX', result['markdown'])
+        self.assertNotIn('公式文本与 Figure 像素已按 PDF 抽取结果绑定', result['markdown'])
+
+    def test_pdf_visual_capabilities_reject_formula_and_dom_table_bindings(self):
+        for field, binding in [('formulaBindings', {'formulaOrdinal': 1}),
+                               ('tableBindings', {'sourceType': 'artifact_table', 'sourceTableOrdinal': 1})]:
+            packet = self.packet()
+            packet['capabilities'] = dict(MODULE.PDF_VISUAL)
+            paper = packet['paper']
+            plan = paper['apiReaderPlan']
+            plan[field] = [binding]
+            plan['sourceBindingsSha256'] = stable_sha({
+                'tableBindings': plan['tableBindings'], 'formulaBindings': plan['formulaBindings']})
+            paper['apiReaderPlanSha256'] = stable_sha(plan)
+            stage = paper['analysisManifest']['stages']['apiReaderArticle']
+            stage.update(planSha256=stable_sha(plan), sourceBindingsSha256=plan['sourceBindingsSha256'],
+                         tableBindingCount=len(plan['tableBindings']), formulaBindingCount=len(plan['formulaBindings']))
+            with self.assertRaisesRegex(ValueError, 'structure capability'):
+                MODULE.render_packet(packet)
+
     def packet(self):
         paper_id = 'conference:icassp:2026:icassp-arnumber:100'
         article = '这是只来自会议分析 Reader 的全新解读正文。'

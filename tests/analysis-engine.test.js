@@ -354,6 +354,26 @@ describe('mergeAndSaveResults', () => {
 });
 
 describe('analyzePaperWithRetry', () => {
+    it('运行级认证错误的抛出和返回路径均保留结构化字段供历史调度暂停', async () => {
+        for (const returnsRecord of [false, true]) {
+            const result = await analyzePaperWithRetry({ arxivId: '2609.00001' }, {
+                maxRetries: 2, retryDelayMs: 0,
+                analyzeFn: async () => {
+                    if (returnsRecord) return { analysis: null, error: 'authentication unavailable',
+                        errorCode: 'LLM_ACCOUNT_AUTH_ERROR', errorCategory: 'authentication',
+                        errorStatus: 401, errorScope: 'run', errorRetryable: false };
+                    throw Object.assign(new Error('authentication unavailable'), {
+                        code: 'LLM_ACCOUNT_AUTH_ERROR', category: 'authentication',
+                        status: 401, scope: 'run', retryable: false });
+                }
+            });
+            assert.equal(result.result.latestAnalysisAttemptErrorCode, 'LLM_ACCOUNT_AUTH_ERROR');
+            assert.equal(result.result.latestAnalysisAttemptErrorCategory, 'authentication');
+            assert.equal(result.result.latestAnalysisAttemptErrorStatus, 401);
+            assert.equal(result.result.latestAnalysisAttemptErrorScope, 'run');
+        }
+    });
+
     it('深度请求明确标记 retryable=false 时整篇层不再用同预算盲目重试', async () => {
         let calls = 0;
         let retries = 0;
