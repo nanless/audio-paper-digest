@@ -119,6 +119,31 @@ class ConferencePageRenderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'source-bound weak'):
             MODULE.render_packet(packet)
 
+    def test_arxiv_preprint_links_are_hidden_from_conference_projection(self):
+        packet = self.packet()
+        article = '[扩展版](https://arxiv.org/abs/2403.14817)；https://arxiv.org/pdf/2403.14817.pdf'
+        article_sha = hashlib.sha256(article.encode()).hexdigest()
+        packet['paper']['apiReaderArticle'] = article
+        packet['paper']['apiReaderArticleSha256'] = article_sha
+        packet['paper']['analysisManifest']['stages']['apiReaderArticle']['articleSha256'] = article_sha
+        resource = {
+            'origin': 'paper_source', 'type': 'reproduction',
+            'originalUrl': 'https://arxiv.org/abs/2403.14817',
+            'finalUrl': 'https://arxiv.org/abs/2403.14817', 'redirects': [], 'status': 200,
+            'availability': 'available',
+            'sourceQuote': 'Extended version https://arxiv.org/abs/2403.14817',
+        }
+        resource['sourceQuoteSha256'] = hashlib.sha256(resource['sourceQuote'].encode()).hexdigest()
+        identity = {'contract': 'api-reader-resource-identity-v1', 'sourceTextSha256': '1' * 64,
+                    'resources': [resource]}
+        packet['paper']['apiReaderResources'] = {**identity, 'identitySha256': stable_sha(identity)}
+        reader_stage = packet['paper']['analysisManifest']['stages']['apiReaderArticle']
+        reader_stage['resourceIdentitySha256'] = stable_sha(identity)
+        reader_stage['resourceCount'] = 1
+        result = MODULE.render_packet(packet)
+        self.assertNotIn('arxiv.org', result['markdown'].lower())
+        self.assertIn('预印本链接未在会议页展示', result['markdown'])
+
     def test_iwslt_dotted_conference_paper_id_is_preserved(self):
         packet = self.packet()
         paper_id = 'conference:iwslt:2026:conference-paper-id:IWSLT.2026.001'

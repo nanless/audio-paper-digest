@@ -1,8 +1,8 @@
 'use strict';
 
 // Authenticates the deterministic Python PDF extraction bundle before it can
-// enter conference staging.  Only weak, text-only artifacts are accepted;
-// formulas, tables, and figures remain unavailable by construction.
+// enter conference staging.  The extractor may carry replayable structures
+// derived from the official PDF; the original PDF remains the authority.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -15,12 +15,14 @@ const ARTIFACT_CONTRACT = 'conference-structured-artifacts-v2';
 const RECEIPT_CONTRACT = 'conference-pdf-extraction-receipt-v2';
 const VERIFICATION_CONTRACT = 'conference-pdf-extraction-verification-v2';
 const VERSION = 2;
-const PROFILE = 'weak-pdf-layout-v1';
+const PROFILE = 'replayable-pdf-layout-v1';
+const WEAK_PROFILE = 'weak-pdf-layout-v1';
+const REPLAYABLE_PROFILE = 'replayable-pdf-layout-v1';
 const OFFSET_UNIT = 'utf8-byte';
-const EXTRACTOR_NAME = 'audio-paper-digest-conference-text';
-const EXTRACTOR_VERSION = '1.0.0';
-const BACKEND_NAME = 'pypdf';
-const BACKEND_VERSION = '6.17.0';
+const EXTRACTOR_NAME = 'audio-paper-digest-conference-structured';
+const EXTRACTOR_VERSION = '2.1.4';
+const BACKEND_NAME = 'pypdf+pymupdf';
+const BACKEND_VERSION = '6.17.0+1.26.5';
 const OPTIONS = Object.freeze({ minimumTextCharacters: 5000,
     normalization: 'unicode-nfc-lf-rstrip-v1', pageSeparator: '\n\f\n' });
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -32,6 +34,10 @@ const MAX_JSON_BYTES = 64 * 1024 * 1024;
 const MAX_METADATA_BYTES = 16 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024 * 1024;
+// The Python extractor caps one embedded Figure at 2 MiB before base64
+// encoding.  Keep the receipt validator aligned with that bound while still
+// leaving the overall JSON artifact cap at 64 MiB.
+const MAX_FIGURE_ASSET_BASE64_CHARS = 4 * Math.ceil((2 * 1024 * 1024) / 3) + 4;
 const EXTRACTION_HANDLES = new WeakSet();
 const EXTRACTION_HANDLE_DATA = new WeakMap();
 // Python str.isspace() is Unicode White_Space plus the four C0 information
@@ -196,7 +202,7 @@ function normalizeSourceEntry(value, kind) {
 }
 function normalizeOptions(value) {
     exact(value, Object.keys(OPTIONS), 'extraction options');
-    if (stableHash(value) !== stableHash(OPTIONS)) fail('extraction options differ from the supported weak profile');
+    if (stableHash(value) !== stableHash(OPTIONS)) fail('extraction options differ from the supported conference profile');
     return clone(OPTIONS);
 }
 function normalizeRequest(value, requestName) {
@@ -249,7 +255,8 @@ function validateMetadataIdentity(metadata, request) {
 function validateArtifact(value, textBytes) {
     exact(value, ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages',
         'tables', 'formulas', 'figures', 'payloadSha256'], 'structured artifact');
-    if (value.contract !== ARTIFACT_CONTRACT || value.version !== VERSION || value.profile !== PROFILE
+    if (value.contract !== ARTIFACT_CONTRACT || value.version !== VERSION
+        || ![WEAK_PROFILE, REPLAYABLE_PROFILE].includes(value.profile)
         || value.offsetUnit !== OFFSET_UNIT) fail('structured artifact contract/version/profile is unsupported');
     if (assertSha(value.flattenedTextSha256, 'flattenedTextSha256') !== sha256(textBytes)) {
         fail('structured artifact flattenedTextSha256 drifted');
@@ -257,10 +264,11 @@ function validateArtifact(value, textBytes) {
     const { payloadSha256, ...body } = value;
     if (assertSha(payloadSha256, 'payloadSha256') !== sha256(JSON.stringify(body))) fail('structured artifact payloadSha256 drifted');
     if (!Array.isArray(value.pages) || !value.pages.length
-        || !Array.isArray(value.tables) || value.tables.length
-        || !Array.isArray(value.formulas) || value.formulas.length
-        || !Array.isArray(value.figures) || value.figures.length) {
-        fail('weak structured artifact must contain only a non-empty page map');
+        || !Array.isArray(value.tables) || !Array.isArray(value.formulas)
+        || !Array.isArray(value.figures)) fail('structured artifact must contain a non-empty page map and arrays');
+    if (value.profile === WEAK_PROFILE
+        && (value.tables.length || value.formulas.length || value.figures.length)) {
+        fail('weak structured artifact must contain no recovered structures');
     }
     let previousEnd = 0;
     value.pages.forEach((page, index) => {
@@ -274,6 +282,49 @@ function validateArtifact(value, textBytes) {
         previousEnd = page.textEnd;
     });
     if (previousEnd !== textBytes.length) fail('page map must cover all UTF-8 text bytes');
+    if (value.profile === REPLAYABLE_PROFILE) {
+        const checkText = (item, label, empty = false, maximum = 4000) => {
+            if (typeof item !== 'string' || (!empty && !item.trim()) || item.length > maximum
+                || /[\u0000-\u001f\u007f]/u.test(item)) fail(`${label} must be bounded text`);
+        };
+        for (const [index, table] of value.tables.entries()) {
+            exact(table, ['ordinal', 'page', 'caption', 'cells', 'sourceRef', 'recoveryStatus'], `tables[${index}]`);
+            if (!Number.isSafeInteger(table.ordinal) || table.ordinal !== index + 1
+                || !Number.isSafeInteger(table.page) || table.page < 1 || table.page > value.pages.length
+                || table.recoveryStatus !== 'complete') fail('table records must be ordered and complete');
+            checkText(table.caption, `tables[${index}].caption`, true); checkText(table.sourceRef, `tables[${index}].sourceRef`);
+            if (!Array.isArray(table.cells) || !table.cells.length || table.cells.some(row => (
+                !Array.isArray(row) || !row.length || row.some(cell => typeof cell !== 'string' || cell.length > 500)
+            )) || table.cells.some(row => row.length !== table.cells[0].length)) fail('table cells must be a rectangular string matrix');
+        }
+        for (const [index, formula] of value.formulas.entries()) {
+            exact(formula, ['ordinal', 'page', 'tex', 'sourceRef', 'recoveryStatus'], `formulas[${index}]`);
+            if (!Number.isSafeInteger(formula.ordinal) || formula.ordinal !== index + 1
+                || !Number.isSafeInteger(formula.page) || formula.page < 1 || formula.page > value.pages.length
+                || formula.recoveryStatus !== 'complete') fail('formula records must be ordered and complete');
+            checkText(formula.tex, `formulas[${index}].tex`); checkText(formula.sourceRef, `formulas[${index}].sourceRef`);
+        }
+        for (const [index, figure] of value.figures.entries()) {
+            exact(figure, ['ordinal', 'page', 'caption', 'sourceRef', 'recoveryStatus', 'asset'], `figures[${index}]`);
+            if (!Number.isSafeInteger(figure.ordinal) || figure.ordinal !== index + 1
+                || !Number.isSafeInteger(figure.page) || figure.page < 1 || figure.page > value.pages.length
+                || figure.recoveryStatus !== 'complete') fail('figure records must be ordered and complete');
+            checkText(figure.caption, `figures[${index}].caption`, true); checkText(figure.sourceRef, `figures[${index}].sourceRef`);
+            if (figure.asset !== null) {
+                exact(figure.asset, ['base64', 'mediaType', 'sha256'], `figures[${index}].asset`);
+                checkText(figure.asset.mediaType, `figures[${index}].asset.mediaType`);
+                checkText(figure.asset.base64, `figures[${index}].asset.base64`, false,
+                    MAX_FIGURE_ASSET_BASE64_CHARS);
+                if (!/^image\/(?:png|jpeg|webp|gif)$/i.test(figure.asset.mediaType)
+                    || !/^[A-Za-z0-9+/]+={0,2}$/.test(figure.asset.base64)
+                    || !SHA_RE.test(figure.asset.sha256)
+                    || !Buffer.from(figure.asset.base64, 'base64').length
+                    || sha256(Buffer.from(figure.asset.base64, 'base64')) !== figure.asset.sha256) {
+                    fail('figure asset is malformed or its SHA does not replay its bytes');
+                }
+            }
+        }
+    }
     return clone(value);
 }
 function normalizeReceipt(value) {
@@ -281,8 +332,8 @@ function normalizeReceipt(value) {
         'sourceIdentity', 'request', 'source', 'extractor', 'options', 'pageCount', 'text', 'artifacts',
         'blockedReason', 'receiptSha256'], 'extraction receipt');
     if (value.contract !== RECEIPT_CONTRACT || value.version !== VERSION || value.status !== 'ready'
-        || value.textReplayable !== true || value.structuredReplayable !== false || value.blockedReason !== null) {
-        fail('only ready text-replayable weak extraction receipts may enter staging');
+        || value.textReplayable !== true || typeof value.structuredReplayable !== 'boolean' || value.blockedReason !== null) {
+        fail('only ready text-replayable conference extraction receipts may enter staging');
     }
     exact(value.request, ['file', 'sha256'], 'receipt.request');
     exact(value.source, ['metadata', 'pdf'], 'receipt.source');
@@ -348,7 +399,23 @@ function verifyWithPinnedPython(sourceRoot, requestName) {
     return normalizeVerification(parsed);
 }
 
-function loadExtractionHandle(sourceRoot, receiptName) {
+function boundVerification({ request, requestLoaded, metadataLoaded, pdfLoaded, textLoaded,
+    artifactLoaded, receiptLoaded, receipt }) {
+    // The caller has already checked every source/output byte against the
+    // signed receipt.  Reconstruct the same verification binding when the
+    // deterministic Python replay is intentionally skipped on a retry.
+    const body = {
+        contract: VERIFICATION_CONTRACT, version: VERSION, status: 'verified',
+        paperId: request.paperId, sourceIdentity: request.sourceIdentity,
+        requestSha256: requestLoaded.sha256, metadataSha256: metadataLoaded.sha256,
+        pdfSha256: pdfLoaded.sha256, textSha256: textLoaded.sha256,
+        artifactsSha256: artifactLoaded.sha256, receiptFileSha256: receiptLoaded.sha256,
+        receiptSha256: receipt.receiptSha256
+    };
+    return normalizeVerification({ ...body, verificationSha256: stableHash(body) });
+}
+
+function loadExtractionHandle(sourceRoot, receiptName, { replay = true } = {}) {
     const root = safeRoot(sourceRoot); safeName(receiptName, SAFE_JSON_NAME, 'receiptName');
     const receiptLoaded = readDirect(root, receiptName, SAFE_JSON_NAME, MAX_JSON_BYTES, 'extraction receipt');
     const receipt = normalizeReceipt(strictJson(receiptLoaded.bytes, 'extraction receipt'));
@@ -385,7 +452,10 @@ function loadExtractionHandle(sourceRoot, receiptName) {
         || nonWhitespaceCharacters !== receipt.text.nonWhitespaceCharacters) fail('receipt text counts drifted');
     const artifact = validateArtifact(strictJson(artifactLoaded.bytes, 'structured artifact'), textLoaded.bytes);
     if (artifact.pages.length !== receipt.pageCount) fail('receipt page count differs from structured artifact');
-    const verification = verifyWithPinnedPython(root, receipt.request.file);
+    const verification = replay
+        ? verifyWithPinnedPython(root, receipt.request.file)
+        : boundVerification({ request, requestLoaded, metadataLoaded, pdfLoaded, textLoaded,
+            artifactLoaded, receiptLoaded, receipt });
     if (verification.paperId !== request.paperId || verification.sourceIdentity !== request.sourceIdentity
         || verification.requestSha256 !== requestLoaded.sha256 || verification.metadataSha256 !== metadataLoaded.sha256
         || verification.pdfSha256 !== pdfLoaded.sha256 || verification.textSha256 !== textLoaded.sha256
@@ -403,7 +473,8 @@ function loadExtractionHandle(sourceRoot, receiptName) {
             provenance: { extractor: EXTRACTOR_NAME, version: `${EXTRACTOR_VERSION}+${BACKEND_NAME}-${BACKEND_VERSION}` } },
         receipt: { file: receiptName, fileSha256: receiptLoaded.sha256, receiptSha256: receipt.receiptSha256 },
         verification,
-        pageCount: receipt.pageCount, profile: PROFILE, structuredCapabilitiesAvailable: false
+        pageCount: receipt.pageCount, profile: receipt.structuredReplayable ? REPLAYABLE_PROFILE : WEAK_PROFILE,
+        structuredCapabilitiesAvailable: receipt.structuredReplayable
     };
     const handle = Object.freeze(Object.create(null)); EXTRACTION_HANDLES.add(handle);
     EXTRACTION_HANDLE_DATA.set(handle, Object.freeze(clone(snapshot))); return handle;
@@ -414,7 +485,7 @@ function extractionHandleSnapshot(handle) {
 }
 
 module.exports = { REQUEST_CONTRACT, ARTIFACT_CONTRACT, RECEIPT_CONTRACT, VERIFICATION_CONTRACT,
-    VERSION, PROFILE, OFFSET_UNIT,
+    VERSION, PROFILE, WEAK_PROFILE, REPLAYABLE_PROFILE, OFFSET_UNIT,
     EXTRACTOR_NAME, EXTRACTOR_VERSION, BACKEND_NAME, BACKEND_VERSION, OPTIONS, SAFE_JSON_NAME,
     ConferenceExtractionReceiptError, loadExtractionHandle, extractionHandleSnapshot, stableHash,
     pythonNonWhitespaceCharacters };

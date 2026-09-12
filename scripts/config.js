@@ -278,6 +278,9 @@ const FILES = {
     // data/archive/<date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
     visualSummaryAssetDir: ARCHIVE_DIR,
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
+    // Explicit operator decisions for an already sealed daily analysis. The
+    // waiver binds exact current artifacts and never edits the analysis.
+    analysisWaiverDir: path.join(CURRENT_DIR, 'analysis-waivers'),
     postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
     digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
     // Formal Manual v6 workflow state, records/spec and observed metrics.

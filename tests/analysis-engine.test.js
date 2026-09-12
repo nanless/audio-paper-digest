@@ -665,6 +665,14 @@ describe('analyzePaperWithRetry', () => {
             documentType: '方法研究',
             sourceText: 'Experiments\nWe compare a baseline and include an ablation without the alignment loss.'
         }), null);
+        const translatedWithoutExtrapolation = valid
+            .replace('表中保留主方法、最强基线和关键消融。', '表中保留主方法、最强基线和无外推对照。')
+            .replace('去掉对齐损失（消融）', 'HCNA 无外推');
+        assert.strictEqual(validateExperimentTableContract(translatedWithoutExtrapolation, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究',
+            sourceText: 'Table 1 compares HCNA w/o extrap. against fixed and GCR extrapolation.'
+        }), null, '中文“无外推”应与来源中的 w/o extrap. 构成闭合消融对照');
         const stageIdentifier = valid.replace('方法 / 设置', '训练阶段');
         assert.strictEqual(validateExperimentTableContract(stageIdentifier, {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,

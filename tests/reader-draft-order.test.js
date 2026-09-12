@@ -228,6 +228,21 @@ test('unique concept markers move or insert into one canonical declared section 
     assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
 });
 
+test('adjacent standalone concept markers are separated into distinct Markdown paragraphs', () => {
+    const bridge = ordinal => ({ marker: `[[CONCEPT_BRIDGE_${ordinal}]]`,
+        terms: [`term ${ordinal}`, `other ${ordinal}`], sectionKind: 'component',
+        explanation: 'unchanged explanation' });
+    const input = { sections: [{ kind: 'component', body:
+        'component prose remains byte exact\n\n[[CONCEPT_BRIDGE_1]]\n[[CONCEPT_BRIDGE_2]]\n[[CONCEPT_BRIDGE_3]]' }],
+    conceptBridges: [bridge(1), bridge(2), bridge(3)] };
+    const normalized = normalizeReaderDraftOrder(input);
+    assert.equal(normalized.draft.sections[0].body,
+        'component prose remains byte exact\n\n[[CONCEPT_BRIDGE_1]]\n\n[[CONCEPT_BRIDGE_2]]\n\n[[CONCEPT_BRIDGE_3]]');
+    assert.deepEqual(normalized.mapping.conceptMarkerLocations.map(item => item.operation),
+        ['separate-adjacent']);
+    assert.deepEqual(normalizeReaderDraftOrder(normalized.draft).draft, normalized.draft);
+});
+
 test('concept marker moves and inserts tolerate terminal LF while still rejecting trailing spaces', () => {
     const bridge = (ordinal, sectionKind) => ({ marker: `[[CONCEPT_BRIDGE_${ordinal}]]`,
         terms: [`term ${ordinal}`, `other ${ordinal}`], sectionKind, explanation: 'unchanged explanation' });

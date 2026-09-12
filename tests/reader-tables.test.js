@@ -158,6 +158,13 @@ test('explicit staged scientific measurements use real whitespace and digit rege
         'stage 1 lr 5e-5、2e-5、1e-5'), false);
 });
 
+test('adjacent decimal prefixes are not mistaken for pasted numeric copies', () => {
+    assert.equal(findReaderTablePasteDuplication(
+        '5.1%, 2.7%, 2.5%, and 4.15% in mAP@{0.5, 0.75, 0.9, 0.95}'
+    ), null);
+    assert.match(findReaderTablePasteDuplication('45, 45, 100, 45, 45'), /粘连复写/);
+});
+
 test('2512.10571 repeated split sizes require an exact three-way dataset context', () => {
     const cell = '71k / 1k / 1k clips';
     const chineseContext = {

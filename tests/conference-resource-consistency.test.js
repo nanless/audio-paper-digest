@@ -273,10 +273,37 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     assert.doesNotThrow(
         () => deep.enforceConferenceReaderResourceClaims(qualifiedDraft, identity, text)
     );
+    const crossClauseCodeStatusDraft = structuredClone(conflictingDraft);
+    crossClauseCodeStatusDraft.sections[0].body =
+        '代码方面，原文给出了公开仓库链接 https://github.com/example/unavailable-project，'
+        + '但已验证可达资源中该代码类型没有可用记录，本次未能确认其当前可达，不应表述为当前可用或已开源。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(crossClauseCodeStatusDraft, identity, text)
+    );
+    const noCodeIdentityBody = {
+        contract: identity.contract,
+        sourceTextSha256: identity.sourceTextSha256,
+        resources: identity.resources.filter(resource => resource.type !== 'code')
+    };
+    const noCodeIdentity = {
+        ...noCodeIdentityBody,
+        identitySha256: deep.stableFingerprint(noCodeIdentityBody)
+    };
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(
+            crossClauseCodeStatusDraft, noCodeIdentity, text
+        )
+    );
     const explicitDenialDraft = structuredClone(conflictingDraft);
     explicitDenialDraft.sections[0].body = '本文模型权重没有可用记录，不声称模型已开源或当前可用。';
     assert.doesNotThrow(
         () => deep.enforceConferenceReaderResourceClaims(explicitDenialDraft, identity, text)
+    );
+    const broadExplicitDenialDraft = structuredClone(conflictingDraft);
+    broadExplicitDenialDraft.sections[0].body =
+        '本文没有公开可用的代码、模型或数据资源可供确认，因此不声称任何资源已公开。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(broadExplicitDenialDraft, identity, text)
     );
     const nonEquivalenceDraft = structuredClone(conflictingDraft);
     nonEquivalenceDraft.sections[0].body =
@@ -290,6 +317,17 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     assert.doesNotThrow(
         () => deep.enforceConferenceReaderResourceClaims(typedAbsenceDraft, identity, text)
     );
+    for (const body of [
+        '关于资源可用状态需要如实交代：正文给出代码仓库链接，但本次核验显示该复现链接当前不可用，不能写已公开可下载。',
+        '论文声明代码已公开，但本次解读不对其可达性做断言。',
+        '论文正文给出代码仓库链接，但本次核验显示该链接当前不可用，无法据此确认代码公开状态。'
+    ]) {
+        const statusDisclaimerDraft = structuredClone(conflictingDraft);
+        statusDisclaimerDraft.sections[0].body = body;
+        assert.doesNotThrow(
+            () => deep.enforceConferenceReaderResourceClaims(statusDisclaimerDraft, identity, text)
+        );
+    }
     for (const body of [
         '不能声称本文代码已开源或当前可用。',
         '不应表示本文代码已公开。',
@@ -324,6 +362,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     for (const body of [
         '论文引用的第三方偏好评估代码仓库在本次核对时显示可用，但这只是正文开源声明之外的第三方资源，不能等同于本文全部数据和代码已公开。',
         '本解读的输入是论文正文连续文本，不含可用的表格结构、公式源代码与图像像素。',
+        '这篇解读的输入是会议弱文本来源的论文全文连续证据，不包含可用的表格结构、公式代码与图像像素，因此定量结果只能按自然段转述。',
         '若要谈冻结，只能说调用的是已发布权重，原文未给出内部适配器是否更新，这属于具体缺项，不从模型名称推定实现。',
         '凡是涉及代码与数据集可获取性的说法，本文只依据论文正文提到的仓库与数据集链接，不另行断言当前可下载或可运行，因为本次没有对这些链接做可达验证。',
         '资源状态方面，正文开源声明是唯一依据，本次收到的资源信息显示第三方相关仓库当前可用，但论文主仓库的可达性在本次未能确认，复现前应先核实代码与权重是否真正可下载、可运行，再规划多卡预算。',
@@ -344,7 +383,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     for (const body of [
         '代码仓库在正文声明中给出链接且当前可用。',
         '代码仓库当前可用，但权重、数据许可与运行脚本仍需逐项核对。',
-        '论文声明代码已公开，但本次解读不对其可达性做断言。'
+        '论文声明代码已公开，当前可达性仍需进一步核验。'
     ]) {
         const realExcerptClaimDraft = structuredClone(conflictingDraft);
         realExcerptClaimDraft.sections[0].body = body;
@@ -421,6 +460,100 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     assert.doesNotThrow(
         () => deep.enforceConferenceReaderResourceClaims(dependencyDraft, dependencyIdentity, text)
     );
+    const namedDependencyDraft = structuredClone(conflictingDraft);
+    namedDependencyDraft.sections[0].body =
+        'DeepSeek-VL2的仓库链接当前可用，OpenFace工具包链接当前可用，人脸对齐仓库链接当前可用。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(namedDependencyDraft, dependencyIdentity, text)
+    );
+    const modelDistinctionDraft = structuredClone(conflictingDraft);
+    modelDistinctionDraft.sections[0].body =
+        '开放权重模型可下载复现，商业模型只能通过接口复现，系统可运行不等于权重可下载，这点在引用时要区分。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(modelDistinctionDraft, dependencyIdentity, text)
+    );
+    const unavailableModelUrl = 'https://huggingface.co/example/unavailable-model';
+    const unavailableModel = {
+        type: 'model',
+        origin: 'validated_demo',
+        sourceQuote: unavailableModelUrl,
+        sourceQuoteSha256: sha(unavailableModelUrl),
+        originalUrl: unavailableModelUrl,
+        finalUrl: unavailableModelUrl,
+        redirects: [],
+        status: 404,
+        availability: 'unavailable',
+        retryable: false
+    };
+    const unavailableModelIdentityBody = {
+        contract: identity.contract,
+        sourceTextSha256: identity.sourceTextSha256,
+        resources: [...identity.resources, unavailableModel]
+    };
+    const unavailableModelIdentity = {
+        ...unavailableModelIdentityBody,
+        identitySha256: deep.stableFingerprint(unavailableModelIdentityBody)
+    };
+    const VoxtralDisclaimerDraft = structuredClone(conflictingDraft);
+    VoxtralDisclaimerDraft.sections[0].body =
+        '区分三种公开含义，论文提到 Voxtral 权重可下载、正文开源声明与接口可调用是不同事项，'
+        + '只有明确给出可达链接才能写已公开，复现前应先确认所用模型接口与权重当前是否可用。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(
+            VoxtralDisclaimerDraft, unavailableModelIdentity, text
+        )
+    );
+    const futureVerificationDraft = structuredClone(conflictingDraft);
+    futureVerificationDraft.sections[0].body =
+        '若要继续推进，应先补做三项验证，一是公开可运行的代码与环境，'
+        + '二是可下载的冻结权重与嵌入缓存，三是阈值在新生成器上的重标定流程，'
+        + '并记录硬件预算与推理延迟。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(
+            futureVerificationDraft, identity, text
+        )
+    );
+    const explicitPaperCodeAbsenceDraft = structuredClone(conflictingDraft);
+    explicitPaperCodeAbsenceDraft.sections[0].body =
+        '代码与权重方面，论文未声明自研代码开源，语言模型可通过本地运行框架获取，'
+        + '语音模型链接本次未能确认可达，演讲语料来源本次可确认为可用，'
+        + '复现前应先确认权重与数据可达性并记录版本。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(
+            explicitPaperCodeAbsenceDraft, unavailableModelIdentity, text
+        )
+    );
+    const datasetStatusUrl = 'https://github.com/example/dataset-assets';
+    const datasetStatusResource = {
+        type: 'dataset',
+        origin: 'validated_demo',
+        sourceQuote: datasetStatusUrl,
+        sourceQuoteSha256: sha(datasetStatusUrl),
+        originalUrl: datasetStatusUrl,
+        finalUrl: datasetStatusUrl,
+        redirects: [],
+        status: 200,
+        availability: 'available',
+        retryable: false
+    };
+    const datasetStatusIdentityBody = {
+        contract: identity.contract,
+        sourceTextSha256: identity.sourceTextSha256,
+        resources: [...identity.resources, datasetStatusResource]
+    };
+    const datasetStatusIdentity = {
+        ...datasetStatusIdentityBody,
+        identitySha256: deep.stableFingerprint(datasetStatusIdentityBody)
+    };
+    const datasetRepositorySummaryDraft = structuredClone(conflictingDraft);
+    datasetRepositorySummaryDraft.sections[0].body =
+        '资源可达性按本次验证状态交代，ASVspoof2019官网、DECRO在Zenodo的记录、'
+        + 'WildDeepfake与FakeAVCeleb的代码仓库本次验证为可用，其余数据集链接本次未能依据验证资源确认为可用，不写已公开。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(
+            datasetRepositorySummaryDraft, datasetStatusIdentity, text
+        )
+    );
     assert.throws(
         () => deep.enforceConferenceReaderResourceClaims(dependencyDraft, identity, text),
         /本文 code 已开源或当前可用/
@@ -442,6 +575,39 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
             thirdPartyCodeDraft, dependencyIdentity, text
         )
     );
+    const thirdPartyNonPaperDisclaimerDraft = structuredClone(conflictingDraft);
+    thirdPartyNonPaperDisclaimerDraft.sections[0].body =
+        '资源状态方面，论文正文提到的项目代码在本次阅读中未给出可用链接依据，'
+        + '第三方 AlpacaEval 仓库本次可达但只是排名方法的参考实现，不是本论文代码，'
+        + '因此复现应以论文文字模板为准，不要假设官方代码已公开。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(
+            thirdPartyNonPaperDisclaimerDraft, dependencyIdentity, text
+        )
+    );
+    for (const body of [
+        '受害模型是既有系统，通过应用程序接口或已发布权重以推理方式调用。',
+        '关于可用性，论文正文引用的商业模型音频性能页面链接当前不可用，语音适配模型权重页面本次未能确认可达，因此复现时应以论文描述的模型版本名为准，先核对本地可下载的权重与推理代码是否与版本号一致，再补做可达性验证，不把链接可打开等同于结果可复现。',
+        '把代码可用误解为模型可用是常见的误读，需要避免。',
+        '关于资源状态，本次收到的证据中未发现经验证可用的代码模型或数据链接，因此不能声称代码已公开或可一键运行，复现需按上述描述自行实现。',
+        '论文称已公开代码、检查点与三个多语评测集，复现时以实际可达为准，若链接不可用则明确写本次未能确认可达，不把可下载权重等同于系统可运行。',
+        '论文给出项目页面地址，但已验证资源身份中没有本文代码的可用记录，因此此处不将其表述为已公开、已开源或当前可用。'
+            , '代码方面，原文给出了公开仓库链接，但已验证可达资源中该代码类型没有可用记录，本次未能确认其当前可达，复现前应先自行确认该仓库当前是否可达，不应表述为当前可用或已开源。'
+    ]) {
+        const qualifiedDraft = structuredClone(conflictingDraft);
+        qualifiedDraft.sections[0].body = body;
+        assert.doesNotThrow(
+            () => deep.enforceConferenceReaderResourceClaims(qualifiedDraft, identity, text)
+        );
+    }
+    const verifiedThirdPartyRepositoryDraft = structuredClone(conflictingDraft);
+    verifiedThirdPartyRepositoryDraft.sections[0].body =
+        '论文声明将公开人类思维链重标注和TRACE框架，本次收到的资源信息显示代码仓库链接当前可用，但重标注数据的实际下载路径和版本仍需以仓库中的说明为准。';
+    assert.doesNotThrow(
+        () => deep.enforceConferenceReaderResourceClaims(
+            verifiedThirdPartyRepositoryDraft, dependencyIdentity, text
+        )
+    );
     assert.throws(
         () => deep.enforceConferenceReaderResourceClaims(thirdPartyCodeDraft, identity, text),
         /本文 code 已开源或当前可用/
@@ -458,6 +624,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
         '本文基准覆盖代码切换语音，评测结果表明系统在现实噪声下当前可用。',
         '本文评估语码切换条件，并给出当前可用的评测协议。',
         '本文研究代码混合场景，所用语音样本目前已可用。',
+        '实验结果可用于研究不同模态的差异。',
         'This paper covers code-switching speech and reports that the protocol is currently available.',
         'This work studies code mixing and provides a publicly available evaluation protocol.'
     ]) {
@@ -542,6 +709,13 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     assert.throws(
         () => deep.enforceConferenceReaderResourceClaims(emphasisDraft, identity, text),
         /本文 model 已开源或当前可用/
+    );
+    assert.throws(
+        () => deep.enforceConferenceReaderResourceClaims({
+            sections: [{ kind: 'reproduction', body:
+                '本文代码已开源，但模型权重当前不可用。' }]
+        }, identity, text),
+        /本文 code 已开源或当前可用/
     );
     const bareUnavailableSlugDraft = structuredClone(conflictingDraft);
     bareUnavailableSlugDraft.sections[0].body =
@@ -858,4 +1032,103 @@ test('default pinned buffer mode retains RESPONSE_TOO_LARGE protection', async (
     }, pinnedDependencies(stream, state)), error => error.code === 'RESPONSE_TOO_LARGE');
     assert.equal(state.method, 'GET');
     assert.equal(state.agentDestroyed, true);
+});
+
+test('conference Reader resource gate distinguishes explicit denials, dataset repositories and third-party tools', () => {
+    const sourceText = '';
+    const available = (type, url) => ({
+        type,
+        origin: 'validated_demo',
+        sourceQuote: url,
+        sourceQuoteSha256: sha(url),
+        originalUrl: url,
+        finalUrl: url,
+        redirects: [],
+        status: 200,
+        availability: 'available',
+        retryable: false
+    });
+    const identityFor = resources => {
+        const body = {
+            contract: 'api-reader-resource-identity-v1',
+            sourceTextSha256: sha(sourceText),
+            resources
+        };
+        return { ...body, identitySha256: deep.stableFingerprint(body) };
+    };
+    const denialIdentity = identityFor([]);
+    for (const body of [
+        '资源状态方面，没有完成可用性验证的代码模型数据链接，因此不能写代码模型数据已公开。',
+        '资源状态方面，论文正文给出了代码仓库地址，但本次阅读未能确认其可达性，因此不得声称代码、模型或数据已公开可用。',
+        '资源状态方面，本次没有发现完成验证的可用资源，因此不得声称代码模型或数据已公开。'
+    ]) {
+        assert.doesNotThrow(() => deep.enforceConferenceReaderResourceClaims(
+            { sections: [{ kind: 'reproduction', body }] }, denialIdentity, sourceText
+        ));
+    }
+
+    const datasetIdentity = identityFor([
+        available('dataset', 'https://example.org/dataset')
+    ]);
+    assert.doesNotThrow(() => deep.enforceConferenceReaderResourceClaims({
+        sections: [{ kind: 'reproduction', body:
+            '资源可达性方面，语音欺骗数据库官网、多语言数据集记录页、野外伪造仓库与音视频名人仓库当前可用。' }]
+    }, datasetIdentity, sourceText));
+
+    const thirdPartyIdentity = identityFor([
+        available('third_party', 'https://example.org/third-party-tool')
+    ]);
+    assert.doesNotThrow(() => deep.enforceConferenceReaderResourceClaims({
+        sections: [{ kind: 'reproduction', body:
+            '第三方语音识别加对齐工具的代码仓库链接本次确认可用，但并非本文自有代码，本文自有代码本次不作可用声明。' }]
+    }, thirdPartyIdentity, sourceText));
+
+    const establishedDatasetIdentity = identityFor([
+        available('dataset', 'https://example.org/established-dataset')
+    ]);
+    assert.doesNotThrow(() => deep.enforceConferenceReaderResourceClaims({
+        sections: [{ kind: 'reproduction', body:
+            '实验沿用已有的 Common Voice 与 NCHLT 语音数据集；本次核验只确认这些公开数据集记录页可达。' }]
+    }, establishedDatasetIdentity, sourceText));
+
+    const baselineModelIdentity = identityFor([
+        available('model', 'https://example.org/public-baseline')
+    ]);
+    assert.doesNotThrow(() => deep.enforceConferenceReaderResourceClaims({
+        sections: [{ kind: 'reproduction', body:
+            '本研究未训练被评测的多模态大模型，公开权重基线与闭源接口均直接调用；这不等于本文模型已开源。' }]
+    }, baselineModelIdentity, sourceText));
+
+    const fabricatedCodeIdentity = identityFor([]);
+    assert.doesNotThrow(() => deep.enforceConferenceReaderResourceClaims({
+        sections: [{ kind: 'reproduction', body:
+            '原文提到欺骗语音评测集官网、野外伪造代码仓库与名人音视频仓库，但其中“伪造代码仓库”不是本文发布的代码资源。' }]
+    }, fabricatedCodeIdentity, sourceText));
+
+    assert.doesNotThrow(() => deep.enforceConferenceReaderResourceClaims({
+        sections: [{ kind: 'reproduction', body:
+            '关于资源可达性，本次收到的官方验证显示所列的 ASVspoof 官方页、DECRO 存档页、WildDeepfake 代码页与 FakeAVCeleb 代码页当前可用，状态码为二百，可以作为复现起点。' }]
+    }, datasetIdentity, sourceText));
+
+    assert.doesNotThrow(() => deep.enforceConferenceReaderResourceClaims({
+        sections: [{ kind: 'reproduction', body:
+            '第一类是数据与模型访问：三个公开基准的对应版本、两个闭源音频模型的接口权限与默认配置、开源音频模型的权重与生成参数、语音合成模型的可用版本。' }]
+    }, datasetIdentity, sourceText));
+});
+
+test('multi-pass scoring consensus remains replayable after a noisy second audit', () => {
+    const hash = 'a'.repeat(64);
+    const stage = {
+        stabilityWarning: true,
+        stabilityResolution: {
+            contract: deep.SCORING_STABILITY_RESOLUTION_CONTRACT,
+            status: 'resolved',
+            method: 'multi_pass_consensus',
+            scoreDifference: 0.2,
+            secondAuditSha256: hash
+        }
+    };
+    assert.equal(deep.scoringStabilityResolutionIsValid(stage), true);
+    stage.stabilityResolution.scoreDifference = 0.4;
+    assert.equal(deep.scoringStabilityResolutionIsValid(stage), false);
 });

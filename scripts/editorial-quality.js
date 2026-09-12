@@ -83,6 +83,12 @@ const EMPIRICAL_COUNT_UNITS = [
     '模型', '基准', '数据集', '物种', '会话', '目录', '艺人', '轨迹', '主干',
     'worker', 'workers', 'episode', 'episodes', 'epoch', 'epochs'
 ];
+// These are lexical measurement units, not Chinese-written counts.  Without
+// an explicit exclusion, the large-integer pattern reads the leading 千/兆 in
+// terms such as 千赫兹 or 千字节 as an empirical numeral.
+const LEXICAL_SCALE_UNITS = new Set([
+    '千赫', '兆赫', '千赫兹', '兆赫兹', '千字节', '兆字节'
+]);
 // Units for which an Arabic coefficient followed by 万/亿 is an exact decimal
 // scale, not a Chinese-number phrase. Keep this explicit: arbitrary Han text
 // after 万/亿 may be a compound numeral or lexical phrase and must not be
@@ -355,6 +361,21 @@ function findQuantitativeChineseNumerals(text) {
                 && /^\s*\d/u.test(value.slice(finding.index + finding.match.length))) {
                 continue;
             }
+            // An Arabic coefficient plus the lexical scale “千” is already a
+            // readable mixed-magnitude quantity (for example “2.7千对”).
+            // The measured-large-integer pattern sees only the suffix “千对”
+            // and used to report a false Chinese-numeral defect. Keep the
+            // pure Chinese form “千对” blocking; only suppress the suffix
+            // when an Arabic coefficient is immediately to its left.
+            if (reason === 'measured_large_integer'
+                && /^千\s*对$/u.test(finding.match)
+                && /(?:\d+(?:\.\d+)?|\d{1,3}(?:,\d{3})+)\s*$/u.test(value.slice(0, finding.index))) {
+                continue;
+            }
+            if (reason === 'measured_large_integer'
+                && LEXICAL_SCALE_UNITS.has(finding.match.replace(/\s+/gu, ''))) {
+                continue;
+            }
             if (reason === 'mixed_magnitude'
                 && /^\s*对\s*\d/u.test(value.slice(finding.index + finding.match.length))) {
                 continue;
@@ -384,8 +405,12 @@ function findQuantitativeChineseNumerals(text) {
 function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
     const source = String(text || '');
     const requested = new Set();
+    const requestedSimpleMeasured = new Set();
     const requestedTrillionUnits = new Set();
     const scaledUnitAlternation = SCALED_ARABIC_MEASUREMENT_UNITS
+        .slice().sort((a, b) => b.length - a.length)
+        .map(item => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const simpleMeasuredUnitAlternation = HARD_MEASUREMENT_UNITS
         .slice().sort((a, b) => b.length - a.length)
         .map(item => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
     const trillionSurface = new RegExp(`^万亿\\s*(${scaledUnitAlternation})$`, 'iu');
@@ -402,11 +427,21 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
             if (/^[一二两三四五六七八九]阶段$/u.test(surface)
                 && findQuantitativeChineseNumerals(surface)
                     .some(finding => finding.match === surface)) requested.add(surface);
+            // Convert only the exact persisted issue surface.  This keeps
+            // quoted evidence, Markdown tables and formulas byte-exact while
+            // preventing ordinary counts such as “三分支” from consuming a
+            // model retry on the same unambiguous typography defect.
+            const simpleMeasured = surface.match(
+                new RegExp(`^([一二两三四五六七八九])\\s*(${simpleMeasuredUnitAlternation})$`, 'iu')
+            );
+            if (simpleMeasured && !/阶段$/u.test(surface)) {
+                requestedSimpleMeasured.add(surface);
+            }
             const trillion = trillionSurface.exec(surface);
             if (trillion) requestedTrillionUnits.add(trillion[1]);
         }
     }
-    if ((!requested.size && !requestedTrillionUnits.size)
+    if ((!requested.size && !requestedSimpleMeasured.size && !requestedTrillionUnits.size)
         || source.includes('__PD_ISSUE_BOUND_NUMERAL_')) return source;
     const protectedSpans = [];
     const protect = value => {
@@ -447,6 +482,16 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
         normalized = normalized.replaceAll(surface, (_match, offset, whole) => (
             `${/[\u3400-\u9fff]$/u.test(whole.slice(0, offset)) ? ' ' : ''}`
             + `${digits[surface[0]]} 个阶段`
+        ));
+    }
+    for (const surface of requestedSimpleMeasured) {
+        const match = surface.match(
+            new RegExp(`^([一二两三四五六七八九])\\s*(${simpleMeasuredUnitAlternation})$`, 'iu')
+        );
+        if (!match) continue;
+        normalized = normalized.replaceAll(surface, (_match, offset, whole) => (
+            `${/[\u3400-\u9fff]$/u.test(whole.slice(0, offset)) ? ' ' : ''}`
+            + `${digits[match[1]]} ${match[2]}`
         ));
     }
     return protectedSpans.reduceRight((value, original, index) => value.replace(
@@ -859,7 +904,29 @@ function findMissingComparisonUnits(text) {
             `(?:\\d+(?:\\.\\d+)?|[${CHINESE_DIGITS}]+点[${CHINESE_DIGITS}]+(?![${CHINESE_DIGITS}])|[${CHINESE_DIGITS}]+(?!点[${CHINESE_DIGITS}]))\\s*(?:%|个百分点|点|分)`,
             'u'
         );
-        if (explicitScoreUnit.test(sentence.text)) continue;
+        // A paper may declare the unit in the metric label and then reuse it
+        // for the following values, e.g. “WER（%）”, “WER（单位为%）” or
+        // “SIM（无量纲）”.
+        // Treat that declaration as an explicit local binding instead of
+        // demanding a fabricated suffix after every comparison number.
+        const metricUnitDeclaration = new RegExp(
+            `(?:${PERCENT_METRICS_RE.source}\\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲)\\s*[）)]`
+            + `|${PERCENT_METRICS_RE.source}\\s*(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)?\\s*(?:%|个百分点|点|分|无量纲)`
+            + `|${PERCENT_METRICS_RE.source}[^。！？\\n]{0,120}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲))`,
+            'iu'
+        );
+        // Conference tables often use an explicit direction marker instead
+        // of printing a unit in every cell, e.g. “WER↓，越低越好” or
+        // “准确率↑”. Preserve those source-scale numbers as-is; requiring a
+        // fabricated percent sign here creates false positives for metrics
+        // whose table header already defines the reporting convention.
+        const metricDirectionDeclaration = new RegExp(
+            `${PERCENT_METRICS_RE.source}\\s*(?:[↑↓]|[（(][^（）()]{0,30}(?:↑|↓|越高(?:越好)?|越低(?:越好)?)[^（）()]{0,30}[）)])`,
+            'iu'
+        );
+        if (explicitScoreUnit.test(sentence.text)
+            || metricUnitDeclaration.test(sentence.text)
+            || metricDirectionDeclaration.test(sentence.text)) continue;
         // Do not treat digits embedded in model/product names (for example
         // wav2vec-U or Qwen2-Audio) as bare percentage values.
         // 图表编号和“第 2 至 3 位”这类序号不是指标值。先做等长屏蔽，
@@ -896,8 +963,21 @@ function findMissingComparisonUnits(text) {
                 /(?:图|表|公式|式|章节|阶段|步骤|版本|实验|配置|设置|位置|序位)\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?/gu,
                 match => ' '.repeat(match.length)
             )
+            // Composite identifiers such as T12's 12-8-3 condition are
+            // experiment/configuration labels, not percentage values. Mask
+            // them before the nearby-metric heuristic sees the first number.
+            .replace(
+                /(?<![A-Za-z0-9_.])\d+(?:\s*[-_/]\s*\d+)+(?![A-Za-z0-9_.])/gu,
+                match => ' '.repeat(match.length)
+            )
             .replace(
                 /第\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?(?=\s*(?:位|项|个|组|层|步|轮|章|节|张|表|图|词|词元|样本|阶段|版本))/gu,
+                match => ' '.repeat(match.length)
+            )
+            // A range describing inference/sequence steps is a condition,
+            // not a pair of percentage measurements.
+            .replace(
+                /(?:时间步|步数|迭代步|NFE)\s*(?:从|为|在)?\s*\d+(?:\.\d+)?\s*(?:到|至|[-–—])\s*\d+(?:\.\d+)?/giu,
                 match => ' '.repeat(match.length)
             );
         const barePattern = new RegExp(`(?<![A-Za-z0-9_.])${quantity}(?![A-Za-z0-9_.])`, 'gu');
@@ -906,7 +986,7 @@ function findMissingComparisonUnits(text) {
                 const before = numericText.slice(0, match.index);
                 const after = numericText.slice(match.index + match[0].length);
                 if (/第\s*$/.test(before)) return false;
-                return !/^\s*(?:个|条|段|篇|张|种|类|组|步|轮|层|题|份|例|名|台|所|对|倍|模型|系统|骨干|样本|片段|词元|接口|分支)/.test(after);
+                return !/^\s*(?:个|条|段|篇|张|种|类|组|套|块|步|轮|层|题|份|例|名|台|所|对|倍|阶段|数据集|测试集|验证集|时|小时|路|模型|系统|骨干|样本|片段|词元|接口|分支|特征|维度|维)/.test(after);
             })
             .map(match => match[0]);
         const percentageMetricHasNearbyPercentageScaleValue = [...numericText.matchAll(

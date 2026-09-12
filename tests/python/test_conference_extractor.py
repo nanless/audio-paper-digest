@@ -24,6 +24,7 @@ from conference_extractor import (  # noqa: E402
     ConferenceExtractionDependencyError,
     ConferenceExtractionIntegrityError,
     load_pypdf_backend,
+    _normalize_page_text,
     run_extraction,
     sha256_bytes,
     verify_blocked_extraction,
@@ -76,6 +77,10 @@ def build_pdf(page_lines):
 
 
 class ConferenceExtractorTest(unittest.TestCase):
+    def test_page_text_repair_keeps_pairs_and_replaces_unpaired_surrogates(self):
+        self.assertEqual(_normalize_page_text("before\ud83d\udca1after"), "before💡after")
+        self.assertEqual(_normalize_page_text("before\ud83dafter"), "before�after")
+
     def test_default_source_root_uses_central_python_path_config(self):
         from conference_extractor import DEFAULT_STAGING_SOURCE_DIR
 
@@ -142,7 +147,7 @@ class ConferenceExtractorTest(unittest.TestCase):
         artifacts = json.loads((self.root / request["outputs"]["artifactsFile"]).read_text())
         receipt = json.loads((self.root / request["outputs"]["receiptFile"]).read_text())
         self.assertEqual(artifacts["contract"], ARTIFACT_CONTRACT)
-        self.assertEqual(artifacts["profile"], "weak-pdf-layout-v1")
+        self.assertEqual(artifacts["profile"], "replayable-pdf-layout-v1")
         self.assertEqual(len(artifacts["pages"]), 2)
         self.assertIn(PAGE_SEPARATOR.encode(), text_bytes)
         previous_end = 0
@@ -158,7 +163,7 @@ class ConferenceExtractorTest(unittest.TestCase):
         self.assertEqual(receipt["source"]["pdf"]["sha256"], sha256_bytes((self.root / "paper.pdf").read_bytes()))
         self.assertEqual(receipt["text"]["sha256"], sha256_bytes(text_bytes))
         self.assertEqual(receipt["artifacts"]["sha256"], sha256_bytes((self.root / request["outputs"]["artifactsFile"]).read_bytes()))
-        self.assertFalse(receipt["structuredReplayable"])
+        self.assertTrue(receipt["structuredReplayable"])
         self.assertEqual(artifacts["offsetUnit"], OFFSET_UNIT)
         self.assertEqual(artifacts["flattenedTextSha256"], sha256_bytes(text_bytes))
         self.assertEqual(artifacts["tables"], [])
@@ -199,7 +204,7 @@ class ConferenceExtractorTest(unittest.TestCase):
         artifacts = json.loads((self.root / request["outputs"]["artifactsFile"]).read_text())
         self.assertEqual(receipt["blockedReason"]["code"], "TEXT_TOO_SHORT")
         self.assertFalse(receipt["textReplayable"])
-        self.assertEqual(artifacts["profile"], "weak-pdf-layout-v1")
+        self.assertEqual(artifacts["profile"], "replayable-pdf-layout-v1")
 
     def test_parse_failure_writes_only_a_blocked_receipt(self):
         manifest, request = self.write_request(b"%PDF-1.4\nnot a valid PDF\n%%EOF\n")

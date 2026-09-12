@@ -222,7 +222,8 @@ function exactFile(filename, bytes) {
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
         const stat = fs.lstatSync(filename);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || !fs.readFileSync(filename).equals(payload)) {
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+            || (stat.mode & 0o777) !== 0o600 || !fs.readFileSync(filename).equals(payload)) {
             throw new Error(`Conference process refuses to overwrite different bytes: ${filename}`);
         }
     }
@@ -233,9 +234,21 @@ function safeProcessDirectory(root, processId, create = false) {
         throw new Error('conferenceProcessDir and processId are invalid');
     }
     if (create) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    const absolute = path.resolve(root); const target = path.resolve(absolute, processId);
+    const absolute = path.resolve(root);
+    for (const directory of [absolute]) {
+        const stat = fs.lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700) {
+            throw new Error(`conference process root is not a private directory: ${directory}`);
+        }
+    }
+    const target = path.resolve(absolute, processId);
     if (path.dirname(target) !== absolute) throw new Error('conference process directory escapes configured root');
     if (create) fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+    const stat = fs.lstatSync(target);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700
+        || fs.realpathSync(target) !== target) {
+        throw new Error(`conference process directory is unsafe: ${target}`);
+    }
     return target;
 }
 function initialState(authority, members, processId, now) {
@@ -342,6 +355,21 @@ function loadAuthority(options, deps) {
     if (discovery.candidateManifest.adapter !== 'official-proceedings') {
         throw new Error('conference:new:process only accepts official-proceedings exact-PDF discovery');
     }
+    let acquisitionReceipt = discovery.candidateManifest.acquisitionReceipt || null;
+    if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1' && !acquisitionReceipt) {
+        const configuredRoot = files.officialConferenceAcquisitionDir;
+        const expectedRoot = configuredRoot && path.resolve(configuredRoot, discovery.candidateManifest.conference.id);
+        if (typeof deps.discovery.officialAcquisitionBindingFromRoot !== 'function'
+            || !expectedRoot || path.resolve(discovery.candidateManifest.pdfRoot) !== expectedRoot
+            || discovery.candidateManifest.metadataSnapshot.file !== path.join(expectedRoot, 'metadata.json')) {
+            throw new Error('new-conference process requires discovery bound to official acquisition receipt');
+        }
+        acquisitionReceipt = deps.discovery.officialAcquisitionBindingFromRoot(
+            discovery.candidateManifest.conference,
+            discovery.candidateManifest.metadataSnapshot,
+            expectedRoot
+        );
+    }
     if (!selection.included.length) throw new Error('conference:new:process requires a non-empty complete selection');
     for (const member of selection.included) {
         const replay = deps.discovery.replayDiscoveryMember(discoveryHandle, member.sourceIdentity);
@@ -357,6 +385,8 @@ function loadAuthority(options, deps) {
         reportSha256: discovery.reportSha256, filterPolicySha256: selection.filterPolicySha256,
         selectionReceiptSha256: selection.selectionReceiptSha256,
         selectedMemberSetSha256: selection.selectedMemberSetSha256,
+        acquisitionReceiptSha256: acquisitionReceipt?.catalogReceiptSha256 || null,
+        acquisitionPdfReceiptSetSha256: acquisitionReceipt?.pdfReceiptSetSha256 || null,
         taxonomyVersion, taxonomyRegistrySha256: taxonomy.sha256,
         implementationSha256: (deps.implementationSha256 || implementationSha256)(),
         deepExecutionConfig: currentDeepExecutionConfigIdentity(deps) };
@@ -375,7 +405,15 @@ function sourceNames(paperId, implementationSha256 = '') {
     return { metadata: `${stem}-metadata.json`, pdf: `${stem}.pdf`, request: `${stem}-extract.json`,
         text: `${stem}.txt`, artifacts: `${stem}-artifacts.json`, receipt: `${stem}-extraction-receipt.json` };
 }
-function sealOneSource(context, member, deps, createdAt) {
+function sourceCacheRoot(context) {
+    const base = context?.files?.conferenceSourceCacheDir;
+    const implementation = context?.authority?.implementationSha256;
+    if (typeof base !== 'string' || !path.isAbsolute(base) || !/^[a-f0-9]{64}$/.test(implementation || '')) {
+        throw new Error('conference source cache root requires the authenticated implementation identity');
+    }
+    return path.join(base, `generation-${implementation}`);
+}
+function sealOneSource(context, member, deps, createdAt, { replayExisting = true } = {}) {
     const { discovery, discoveryHandle, files } = context; const replay = deps.discovery.replayDiscoveryMember(discoveryHandle, member.sourceIdentity);
     const names = sourceNames(member.paperId, context.authority.implementationSha256); const root = files.conferenceStagingSourceDir; fs.mkdirSync(root, { recursive: true, mode: 0o700 });
     const record = { ...replay.metadataRecord, conferenceId: replay.conference.id, year: replay.conference.year,
@@ -398,24 +436,27 @@ function sealOneSource(context, member, deps, createdAt) {
         outputs: { textFile: names.text, artifactsFile: names.artifacts, receiptFile: names.receipt },
         options: { minimumTextCharacters: 5000, normalization: 'unicode-nfc-lf-rstrip-v1', pageSeparator: '\n\f\n' } };
     exactFile(path.join(root, names.request), canonicalBytes(request));
-    if (!fs.existsSync(path.join(root, names.receipt))) {
+    const hadReceipt = fs.existsSync(path.join(root, names.receipt));
+    if (!hadReceipt) {
         deps.execFileSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), path.join(__dirname, '..', 'conference-extract.py'),
             '--apply', '--manifest', names.request], { cwd: path.join(__dirname, '..', '..'), stdio: 'pipe' });
     }
     const extraction = require('./conference-extraction-receipt.js');
-    const snapshot = extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(root, names.receipt));
+    const snapshot = extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(root, names.receipt,
+        { replay: !hadReceipt || replayExisting }));
     return { paperId: member.paperId, sourceIdentity: member.sourceIdentity, receiptName: names.receipt,
         proof: { requestSha256: snapshot.verification.requestSha256, receiptSha256: snapshot.receipt.receiptSha256,
             verificationSha256: snapshot.verification.verificationSha256, textSha256: snapshot.text.sha256,
             artifactsSha256: snapshot.artifacts.sha256, pdfSha256: snapshot.pdf.sha256 } };
 }
 function prepareShared(context, deps, createdAt) {
-    const files = context.files; const names = namesFor(context);
+    const files = context.files; const names = namesFor(context); const cacheRoot = sourceCacheRoot(context);
     for (const root of [files.conferenceStagingSpecsDir, files.conferenceStagingSourceDir,
-        files.conferenceStagingDir, files.conferenceSourceCacheDir, files.conferenceSourceLedgerDir,
+        files.conferenceStagingDir, files.conferenceSourceCacheDir, cacheRoot, files.conferenceSourceLedgerDir,
         files.conferenceRunsDir, files.conferenceAnalysisDir, files.conferencePageStagingDir,
         files.conferenceAggregateDir]) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    const sealed = context.members.map(member => sealOneSource(context, member, deps, createdAt));
+    const sealed = context.members.map(member => sealOneSource(context, member, deps, createdAt,
+        { replayExisting: false }));
     const seal = { contract: deps.staging.AUTOMATED_EXTRACTION_CONTRACT, version: deps.staging.VERSION,
         conference: clone(context.discovery.candidateManifest.conference), acceptance: {
             method: 'official-proceedings-exact-pdf-v1', catalogSha256: context.discovery.catalogSha256,
@@ -426,17 +467,17 @@ function prepareShared(context, deps, createdAt) {
     const sealFile = exactFile(path.join(files.conferenceStagingSpecsDir, names.extraction), canonicalBytes(seal));
     const staged = deps.staging.bindInputs({ selectionHandle: context.selectionHandle, discoveryHandle: context.discoveryHandle,
         extractionManifest: seal, extractionFileSha256: sha256(fs.readFileSync(sealFile)),
-        extractionSourceRoot: files.conferenceStagingSourceDir, importManifestName: names.import });
+        extractionSourceRoot: files.conferenceStagingSourceDir, importManifestName: names.import, replay: false });
     const importFile = path.join(files.conferenceStagingDir, names.import);
     const stagingReceiptFile = path.join(files.conferenceStagingDir, names.stagingReceipt);
     if (!fs.existsSync(importFile) && !fs.existsSync(stagingReceiptFile)) deps.staging.writeStagingBundle({
         stagingRoot: files.conferenceStagingDir, importManifestName: names.import, receiptName: names.stagingReceipt, staged });
     if (fs.existsSync(importFile) !== fs.existsSync(stagingReceiptFile)) throw new Error('partial conference staging bundle cannot be recovered');
     const stagingHandle = deps.staging.loadStagingHandle(importFile, stagingReceiptFile, context.selectionHandle,
-        context.discoveryHandle, files.conferenceStagingSourceDir);
+        context.discoveryHandle, files.conferenceStagingSourceDir, { replay: false });
     const result = deps.importer.importConferenceSourcesFromStaging({ stagingHandle,
-        sourceRoot: files.conferenceStagingSourceDir, cacheRoot: files.conferenceSourceCacheDir,
-        updatedAt: createdAt, apply: true });
+        sourceRoot: files.conferenceStagingSourceDir, cacheRoot,
+        updatedAt: createdAt, apply: true, replay: false });
     const bundle = deps.importer.createImportReceipt({ result, ledgerName: names.ledger });
     const ledgerFile = path.join(files.conferenceSourceLedgerDir, names.ledger);
     const importReceiptFile = path.join(files.conferenceSourceLedgerDir, names.importReceipt);
@@ -461,21 +502,22 @@ function prepareShared(context, deps, createdAt) {
     if (fs.existsSync(runFile) !== fs.existsSync(planReceiptFile)) throw new Error('partial conference plan bundle cannot be recovered');
     const planHandle = deps.plan.loadPlanHandle(runFile, planReceiptFile,
         path.join(files.conferenceSourceLedgerDir, names.plan), importHandle, files.taxonomyRegistry);
-    return { planHandle, names, sealed, planReceiptSha256: deps.plan.planHandleSnapshot(planHandle).receipt.receiptSha256 };
+    return { planHandle, names, sealed, sourceCacheRoot: cacheRoot,
+        planReceiptSha256: deps.plan.planHandleSnapshot(planHandle).receipt.receiptSha256 };
 }
 
 async function processOne(context, shared, item, deps) {
     const files = context.files; deps.adapter.prepareConferenceAnalysis({ planHandle: shared.planHandle,
-        paperId: item.paperId, sourceRoot: files.conferenceSourceCacheDir,
+        paperId: item.paperId, sourceRoot: shared.sourceCacheRoot,
         analysisRoot: files.conferenceAnalysisDir, executionId: item.analysisRunId });
     const analyzed = await deps.adapter.analyzeConference({ analysisRoot: files.conferenceAnalysisDir,
         executionId: item.analysisRunId, concurrency: 1, planHandle: shared.planHandle,
-        sourceRoot: files.conferenceSourceCacheDir });
+        sourceRoot: shared.sourceCacheRoot });
     if (analyzed.status !== 'complete') throw new Error(`analysis remained ${analyzed.status}`);
     const staged = deps.postprocess.stagePaper({ analysisRoot: files.conferenceAnalysisDir,
         executionId: item.analysisRunId, taxonomyFile: files.taxonomyRegistry,
         stagingRoot: files.conferencePageStagingDir, planHandle: shared.planHandle,
-        sourceRoot: files.conferenceSourceCacheDir, apply: true });
+        sourceRoot: shared.sourceCacheRoot, apply: true });
     if (staged.status !== 'staged') throw new Error(`paper postprocess remained ${staged.status}`);
     return { analysisProof: { analysisSha256: analyzed.analysisSha256,
         completionReceiptSha256: staged.manifest.completionReceiptSha256,
@@ -567,7 +609,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     const aggregate = await (deps.aggregate || (async () => deps.postprocess.aggregateConference({
         analysisRoot: deps.files.conferenceAnalysisDir, executionIds, taxonomyFile: deps.files.taxonomyRegistry,
         stagingRoot: deps.files.conferencePageStagingDir, aggregateRoot: deps.files.conferenceAggregateDir,
-        planHandle: shared.planHandle, sourceRoot: deps.files.conferenceSourceCacheDir, apply: true })))(context, shared, executionIds, deps);
+        planHandle: shared.planHandle, sourceRoot: shared.sourceCacheRoot, apply: true })))(context, shared, executionIds, deps);
     const aggregateProof = { manifestSha256: aggregate.manifest.manifestSha256,
         markdownSha256: aggregate.manifest.markdownSha256, aggregateId: aggregate.manifest.aggregateId,
         pagePath: aggregate.manifest.pagePath };
@@ -618,4 +660,4 @@ module.exports = { CONTRACT, COMPLETION_CONTRACT, VERSION, MAX_CONCURRENCY, stab
     stateDigest, assertState, completionBodyFor, validateCompletionReceipt, defaultDependencies, loadAuthority,
     namesFor, sourceNames, sealOneSource, prepareShared,
     IMPLEMENTATION_FILES, implementationSha256, processOne, runWorkers,
-    runConferenceProcessLocked, runConferenceProcess };
+    runConferenceProcessLocked, runConferenceProcess, safeProcessDirectory, exactFile };

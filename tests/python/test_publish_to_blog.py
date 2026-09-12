@@ -2478,6 +2478,36 @@ title: "Table"
         finally:
             os.unlink(path)
 
+    def test_review_converts_body_latex_without_mutating_frontmatter(self):
+        content = '''---
+paper_digest_original_title: "$S^3$-Bench"
+---
+正文公式为 $S^3$。
+'''
+        with tempfile.NamedTemporaryFile('w+', suffix='.md', encoding='utf-8', delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+        try:
+            fixed, issues = publish_to_blog.review_and_fix_post(path)
+            reviewed = Path(path).read_text(encoding='utf-8')
+            frontmatter, body = publish_to_blog._load_frontmatter(path)
+            self.assertTrue(fixed)
+            self.assertTrue(any('LaTeX' in issue for issue in issues))
+            self.assertEqual(frontmatter['paper_digest_original_title'], '$S^3$-Bench')
+            self.assertIn(r'\(S^3\)', body)
+        finally:
+            os.unlink(path)
+
+    def test_publish_sanitizer_preserves_frontmatter_latex(self):
+        content = '''---
+paper_digest_original_title: "$S^3$-Bench"
+---
+正文公式为 $S^3$。
+'''
+        sanitized = publish_to_blog.sanitize_markdown_for_publish(content)
+        self.assertIn('paper_digest_original_title: "$S^3$-Bench"', sanitized)
+        self.assertIn(r'正文公式为 \(S^3\)。', sanitized)
+
     def test_review_removes_exact_duplicate_long_prose(self):
         paragraph = '训练数据依赖冻结的预训练模型，并使用人工标注档案完成验证。' * 5
         content = f'''---
@@ -3542,6 +3572,34 @@ title: "Bad table"
             publish_to_blog._api_reader_page_binding_issue(altered_formula, paper),
         )
 
+    def test_api_reader_v4_replays_formula_tags_after_publish_sanitization(self):
+        paper = llm_api_publication_fixture()
+        original_latex = paper['apiReaderPlan']['formulaBindings'][0]['latex']
+        original_block = f'\\[{original_latex}\\]'
+        latex = (
+            r'r_{i}=\mathbf{1}\!\left[y_{i}=\texttt{<answer>}'
+            r'a\texttt{</answer>}\right]'
+        )
+        rendered_block = f'\\[{latex}\\]'
+        paper['apiReaderArticle'] = paper['apiReaderArticle'].replace(
+            original_block, rendered_block,
+        )
+        binding = paper['apiReaderPlan']['formulaBindings'][0]
+        binding['latex'] = latex
+        binding['renderedBlockSha256'] = hashlib.sha256(
+            rendered_block.encode('utf-8')
+        ).hexdigest()
+        reseal_llm_api_reader_fixture(paper)
+
+        markdown, _slug = publish_to_blog.generate_paper_page(
+            paper, '2026-08-31', category='论文速递',
+        )
+        self.assertIn(r'\texttt{`<answer>`}', markdown)
+        self.assertIn(r'\texttt{`</answer>`}', markdown)
+        self.assertIsNone(
+            publish_to_blog._api_reader_page_binding_issue(markdown, paper)
+        )
+
     def test_api_reader_v4_rejects_resealed_coordinate_dom_and_old_contract_tampering(self):
         coordinate = llm_api_publication_fixture()
         coordinate['apiReaderPlan']['tableBindings'][0]['cellBindings'][0][
@@ -3616,11 +3674,27 @@ title: "Bad table"
             documented, '2026-08-31',
         )
         self.assertIn('README 已验证包含安装、推理与微调文档', documented_page)
-        documented['apiReaderResources']['resources'][0][
-            'documentationEvidence']['capabilities']['fineTuning'] = False
-        reseal_llm_api_resource_identity(documented)
+        partial = copy.deepcopy(documented)
+        partial_documentation = partial['apiReaderResources']['resources'][0][
+            'documentationEvidence']
+        partial_documentation['capabilities']['fineTuning'] = False
+        partial_documentation['completeness'] = 'partial'
+        reseal_llm_api_resource_identity(partial)
+        partial_payload = publish_to_blog._api_reader_payload(partial)
+        self.assertEqual(
+            partial_payload['resourceIdentityProof']['resources'][0]
+            ['documentationEvidence']['completeness'],
+            'partial',
+        )
+        partial_page, _slug = publish_to_blog.generate_paper_page(
+            partial, '2026-08-31',
+        )
+        self.assertNotIn('README 已验证包含安装、推理与微调文档', partial_page)
+
+        partial_documentation['completeness'] = 'complete'
+        reseal_llm_api_resource_identity(partial)
         with self.assertRaisesRegex(PublishDataValidationError, 'documentationEvidence'):
-            publish_to_blog._api_reader_payload(documented)
+            publish_to_blog._api_reader_payload(partial)
 
         temporary = llm_api_publication_fixture()
         temporary_resource = temporary['apiReaderResources']['resources'][0]

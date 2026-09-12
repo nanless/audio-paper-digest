@@ -219,8 +219,13 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
     issues = []
     for opening, closing, name in (
             (r'\(', r'\)', r'\(…\)'), (r'\[', r'\]', r'\[…\]')):
-        opens = len(re.findall(r'(?<!\\)' + re.escape(opening), clean))
-        closes = len(re.findall(r'(?<!\\)' + re.escape(closing), clean))
+        # A real delimiter may follow an even-length TeX escape run, for
+        # example a display formula ending in ``\\`` immediately before
+        # ``\]``.  Count delimiters whose complete backslash run is odd;
+        # the old one-character lookbehind incorrectly rejected that case.
+        delimiter_prefix = r'(?<!\\)(?:\\\\)*'
+        opens = len(re.findall(delimiter_prefix + re.escape(opening), clean))
+        closes = len(re.findall(delimiter_prefix + re.escape(closing), clean))
         if opens != closes:
             issues.append(
                 f'{label} 公式定界符 {name} 未配对: 开={opens}, 闭={closes}'

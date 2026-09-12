@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Deterministic, text-only extraction for staged conference PDFs.
+"""Deterministic, local extraction for staged conference PDFs.
 
-This module deliberately produces a weak structural profile.  Page text and
-UTF-8 byte ranges are replayable, but formulas, tables, and images are always
-declared unavailable.  It never uses the network or an LLM.
+The extractor keeps the original PDF as the authority and derives a
+replayable page-text map plus conservative table, formula, and Figure records
+from that PDF.  It never uses the network or an LLM.  A structure is only
+emitted when the PDF text/layout contains enough evidence to bind it to a
+page; uncertain structures are omitted rather than invented.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import json
 import os
 import re
 import stat
+import base64
 import tempfile
 import unicodedata
 from dataclasses import dataclass
@@ -33,9 +36,9 @@ RECEIPT_CONTRACT = "conference-pdf-extraction-receipt-v2"
 VERIFICATION_CONTRACT = "conference-pdf-extraction-verification-v2"
 BLOCKED_VERIFICATION_CONTRACT = "conference-pdf-extraction-blocked-verification-v1"
 CONTRACT_VERSION = 2
-EXTRACTOR_NAME = "audio-paper-digest-conference-text"
-EXTRACTOR_VERSION = "1.0.0"
-PROFILE = "weak-pdf-layout-v1"
+EXTRACTOR_NAME = "audio-paper-digest-conference-structured"
+EXTRACTOR_VERSION = "2.1.4"
+PROFILE = "replayable-pdf-layout-v1"
 OFFSET_UNIT = "utf8-byte"
 MINIMUM_TEXT_CHARACTERS = 5000
 PAGE_SEPARATOR = "\n\f\n"
@@ -44,6 +47,8 @@ MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_METADATA_BYTES = 16 * 1024 * 1024
 MAX_PDF_BYTES = 256 * 1024 * 1024
 MAX_DERIVED_BYTES = 64 * 1024 * 1024
+MAX_FIGURE_ASSET_BYTES = 2 * 1024 * 1024
+MAX_TOTAL_FIGURE_ASSET_BYTES = 24 * 1024 * 1024
 MAX_PAGES = 10000
 SAFE_JSON_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,159}\.json$")
 SAFE_PDF_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,159}\.pdf$")
@@ -74,6 +79,7 @@ class ExtractionBackend:
     name: str
     version: str
     extract_pages: Callable[[bytes], list[str]]
+    extract_structures: Callable[[bytes, list[str]], dict[str, list[dict[str, Any]]]] | None = None
 
 
 def _fail(message: str) -> ConferenceExtractionIntegrityError:
@@ -270,7 +276,7 @@ def validate_request(value: Any, manifest_name: str) -> dict[str, Any]:
         "normalization": NORMALIZATION,
         "pageSeparator": PAGE_SEPARATOR,
     }:
-        raise _fail("extraction options must exactly match the supported weak profile")
+        raise _fail("extraction options must exactly match the supported conference profile")
     names = [manifest_name, metadata["file"], pdf["file"], *normalized["outputs"].values()]
     if len(set(names)) != len(names):
         raise _fail("manifest, input, and output filenames must all differ")
@@ -333,6 +339,11 @@ def _normalize_page_text(value: Any) -> str:
         value = ""
     if not isinstance(value, str):
         raise ConferencePdfExtractionError("PDF backend returned non-text page content")
+    # Some otherwise readable PDFs contain UTF-16 surrogate code points in a
+    # font encoding map.  Keep valid pairs as their Unicode scalar value and
+    # replace only unpaired surrogates so the sealed artifact remains strict
+    # UTF-8 instead of turning a recoverable page into PDF_EXTRACTION_FAILED.
+    value = value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
     value = unicodedata.normalize("NFC", value.replace("\r\n", "\n").replace("\r", "\n"))
     return "\n".join(line.rstrip() for line in value.split("\n")).strip("\n")
 
@@ -345,7 +356,20 @@ def load_pypdf_backend() -> ExtractionBackend:
         raise ConferenceExtractionDependencyError(
             "pypdf is required for conference PDF extraction; install requirements.txt"
         ) from exc
+    try:
+        pymupdf = importlib.import_module("fitz")
+    except ImportError as exc:
+        raise ConferenceExtractionDependencyError(
+            "PyMuPDF is required for replayable conference PDF layout extraction; install requirements.txt"
+        ) from exc
     version = str(getattr(pypdf, "__version__", "unknown"))
+    pymupdf_version = str(getattr(pymupdf, "pymupdf_version", "unknown"))
+    if pymupdf_version == "unknown":
+        version_info = getattr(pymupdf, "version", ())
+        if isinstance(version_info, (tuple, list)) and len(version_info) > 1:
+            pymupdf_version = str(version_info[1])
+    backend_name = "pypdf+pymupdf"
+    backend_version = f"{version}+{pymupdf_version}"
 
     def extract_pages(pdf_bytes: bytes) -> list[str]:
         try:
@@ -372,7 +396,356 @@ def load_pypdf_backend() -> ExtractionBackend:
             raise ConferencePdfExtractionError("PDF contains no pages")
         return pages
 
-    return ExtractionBackend(name="pypdf", version=version, extract_pages=extract_pages)
+    def clean_structure_text(value: str, maximum: int = 4000) -> str:
+        value = unicodedata.normalize("NFC", value or "")
+        value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", value)
+        return re.sub(r"\s+", " ", value).strip()[:maximum]
+
+    def clean_formula_text(value: str, maximum: int = 1000) -> str:
+        value = unicodedata.normalize("NFC", value or "")
+        value = value.replace("\x10", "[").replace("\x11", "]")
+        value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", value)
+        return re.sub(r"\s+", " ", value).strip()[:maximum]
+
+    def fitz_lines(page: Any) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for block in page.get_text("dict").get("blocks", []):
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                spans = line.get("spans", [])
+                text = "".join(str(span.get("text", "")) for span in spans)
+                if text.strip():
+                    result.append({"bbox": tuple(line["bbox"]), "text": text,
+                                   "spans": spans})
+        return result
+
+    def fitz_words(page: Any) -> list[dict[str, Any]]:
+        return [{"x0": float(word[0]), "y0": float(word[1]), "x1": float(word[2]),
+                 "y1": float(word[3]), "text": str(word[4])}
+                for word in page.get_text("words", sort=False)]
+
+    def word_lines(words: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        grouped: list[list[dict[str, Any]]] = []
+        for word in sorted(words, key=lambda item: (item["y0"], item["x0"])):
+            center = (word["y0"] + word["y1"]) / 2
+            target = next((line for line in grouped
+                           if abs(line[0]["y0"] + line[0]["y1"] - 2 * center) <= 5), None)
+            if target is None:
+                grouped.append([word])
+            else:
+                target.append(word)
+        return [sorted(line, key=lambda item: item["x0"]) for line in grouped]
+
+    def block_caption(block: dict[str, Any], kind: str) -> tuple[int, str] | None:
+        raw = " ".join(str(block.get("text", "")).split())
+        match = re.match(rf"^\s*{kind}\s+(\d+)\s*[:.\-]?\s*(.*)$", raw, re.IGNORECASE)
+        if not match:
+            return None
+        return int(match.group(1)), clean_structure_text(f"{kind.title()} {match.group(1)}: {match.group(2)}", 1200)
+
+    def caption_blocks(page: Any, kind: str) -> list[dict[str, Any]]:
+        result = []
+        for block in page.get_text("blocks", sort=False):
+            if len(block) < 5:
+                continue
+            parsed = block_caption({"text": block[4]}, kind)
+            if parsed:
+                result.append({"number": parsed[0], "caption": parsed[1],
+                               "bbox": tuple(block[:4])})
+        return sorted(result, key=lambda item: item["bbox"][1])
+
+    def numeric_token(text: str) -> bool:
+        value = text.strip()
+        if value in {"±", "+/-", "−"}:
+            return False
+        return bool(re.fullmatch(
+            r"[+\-−]?(?:\d+(?:[.,]\d+)?(?:[eE][+\-]?\d+)?|Top[-–]\d+|\d+[x×]\d+)",
+            value,
+        ))
+
+    def table_data_row(words: list[dict[str, Any]]) -> tuple[str, list[str], list[float]] | None:
+        numeric_indices = [index for index, word in enumerate(words) if numeric_token(word["text"])]
+        if len(numeric_indices) < 2:
+            return None
+        first = numeric_indices[0]
+        label = clean_structure_text(" ".join(word["text"] for word in words[:first]), 500)
+        raw_values = [(word["text"], word["x0"]) for word in words[first:]
+                      if numeric_token(word["text"]) or word["text"] in {"±", "+/-", "−"}]
+        values: list[str] = []
+        anchors: list[float] = []
+        index = 0
+        while index < len(raw_values):
+            text, x0 = raw_values[index]
+            if text in {"±", "+/-", "−"} and values:
+                if index + 1 < len(raw_values):
+                    values[-1] = clean_structure_text(f"{values[-1]} {text} {raw_values[index + 1][0]}", 120)
+                    index += 2
+                    continue
+            values.append(clean_structure_text(text, 120))
+            anchors.append(x0)
+            index += 1
+        if len(values) < 2:
+            return None
+        return label, values[:40], anchors[:40]
+
+    def table_header_row(words: list[dict[str, Any]], anchors: list[float], region_x0: float) -> list[str]:
+        width = len(anchors) + 1
+        cells = ["" for _ in range(width)]
+        first_value_x = anchors[0] if anchors else region_x0
+        for word in words:
+            x0 = word["x0"]
+            if x0 < (region_x0 + first_value_x) / 2:
+                cell = 0
+            else:
+                cell = min(range(len(anchors)), key=lambda index: abs(anchors[index] - x0)) + 1
+            cells[cell] = clean_structure_text(f"{cells[cell]} {word['text']}", 300)
+        return cells
+
+    def table_records(page: Any, page_number: int, next_ordinal: int) -> tuple[list[dict[str, Any]], int]:
+        captions = caption_blocks(page, "Table")
+        records: list[dict[str, Any]] = []
+        page_width = float(page.rect.width)
+        for caption_index, caption in enumerate(captions):
+            x0, y0, x1, y1 = caption["bbox"]
+            full_width = x1 - x0 >= page_width * 0.60
+            region_x0 = 50.0 if full_width else max(0.0, x0 - 3.0)
+            region_x1 = page_width - 50.0 if full_width else min(page_width, x1 + 3.0)
+            stop_y = (captions[caption_index + 1]["bbox"][1]
+                      if caption_index + 1 < len(captions) else float(page.rect.height))
+            candidates: list[tuple[float, list[dict[str, Any]], tuple[str, list[str], list[float]] | None]] = []
+            data_started = False
+            for line in word_lines([word for word in fitz_words(page)
+                                    if word["x0"] >= region_x0 - 1 and word["x1"] <= region_x1 + 1
+                                    and word["y0"] > y1 + 2 and word["y0"] < stop_y - 1]):
+                text = clean_structure_text(" ".join(word["text"] for word in line), 300)
+                if not text or len(text) > 150:
+                    continue
+                data = table_data_row(line)
+                if data is not None:
+                    candidates.append((line[0]["y0"], line, data))
+                    data_started = True
+                elif not data_started and len(text) <= 100 and not re.search(r"[.!?]", text):
+                    candidates.append((line[0]["y0"], line, None))
+                elif data_started and line[0]["y0"] - candidates[-1][0] > 18:
+                    break
+            data_rows = [item for item in candidates if item[2] is not None]
+            if len(data_rows) < 2:
+                continue
+            widths: dict[int, int] = {}
+            for _, _, data in data_rows:
+                assert data is not None
+                width = 1 + len(data[1])
+                widths[width] = widths.get(width, 0) + 1
+            width = max(widths, key=lambda candidate: (widths[candidate], candidate))
+            valid_data = [data for _, _, data in data_rows if data is not None and 1 + len(data[1]) == width]
+            if len(valid_data) < 2 or width < 2:
+                continue
+            anchors = []
+            for index in range(width - 1):
+                values = [data[2][index] for data in valid_data if len(data[2]) > index]
+                anchors.append(sorted(values)[len(values) // 2])
+            matrix: list[list[str]] = []
+            header_candidates = [item for item in candidates if item[2] is None]
+            for _, line, _ in header_candidates[-3:]:
+                header = table_header_row(line, anchors, region_x0)
+                if any(header):
+                    matrix.append(header)
+            for data in valid_data[:100]:
+                matrix.append([data[0], *data[1]])
+            if len(matrix) < 3:
+                continue
+            records.append({"ordinal": next_ordinal, "page": page_number,
+                            "caption": caption["caption"], "cells": matrix,
+                            "sourceRef": f"pdf:table:{next_ordinal}:page:{page_number}",
+                            "recoveryStatus": "complete"})
+            next_ordinal += 1
+        return records, next_ordinal
+
+    def formula_records(pdf_document: Any, page_number: int, next_ordinal: int) -> tuple[list[dict[str, Any]], int]:
+        page = pdf_document[page_number - 1]
+        line_records = []
+        for line in fitz_lines(page):
+            spans = line["spans"]
+            text = clean_formula_text(line["text"], 500)
+            if len(text) < 3 or len(text) > 240 or "http" in text.lower():
+                continue
+            if not ("=" in text or re.search(r"[∑∫√≤≥≠∈→←↔‖]", text)):
+                continue
+            chars = max(1, sum(len(str(span.get("text", ""))) for span in spans))
+            math_chars = sum(len(str(span.get("text", ""))) for span in spans
+                             if str(span.get("font", "")).startswith(("CMMI", "CMSY", "CMR"))
+                             or float(span.get("size", 10)) < 8)
+            ratio = math_chars / chars
+            prose_words = len(re.findall(r"\b[A-Za-z]{3,}\b", text))
+            if ratio < 0.45 and not (ratio >= 0.28 and prose_words <= 4):
+                continue
+            if re.fullmatch(r"[A-Za-z](?:\s*\w)?\s*=\s*\d+[,.]?", text):
+                continue
+            line_records.append({**line, "text": text, "ratio": ratio})
+        candidates: list[str] = []
+        seen: set[str] = set()
+        unused = set(range(len(line_records)))
+        page_width = float(page.rect.width)
+        while unused:
+            root_index = min(unused, key=lambda index: (line_records[index]["bbox"][1],
+                                                         line_records[index]["bbox"][0]))
+            unused.remove(root_index)
+            group = [root_index]
+            changed = True
+            while changed:
+                changed = False
+                current = [line_records[index] for index in group]
+                min_y = min(item["bbox"][1] for item in current)
+                max_y = max(item["bbox"][3] for item in current)
+                min_x = min(item["bbox"][0] for item in current)
+                max_x = max(item["bbox"][2] for item in current)
+                column = 0 if (min_x + max_x) / 2 < page_width / 2 else 1
+                for index in list(unused):
+                    other = line_records[index]
+                    ox0, oy0, ox1, oy1 = other["bbox"]
+                    other_column = 0 if (ox0 + ox1) / 2 < page_width / 2 else 1
+                    horizontal_gap = max(min_x - ox1, ox0 - max_x, 0)
+                    if (other_column == column and oy0 <= max_y + 18 and oy1 >= min_y - 18
+                            and horizontal_gap <= 90):
+                        group.append(index)
+                        unused.remove(index)
+                        changed = True
+                        min_y = min(min_y, oy0)
+                        max_y = max(max_y, oy1)
+                        min_x = min(min_x, ox0)
+                        max_x = max(max_x, ox1)
+            related = sorted((line_records[index] for index in group),
+                             key=lambda value: (value["bbox"][1], value["bbox"][0]))
+            value = clean_formula_text(" ".join(part["text"] for part in related), 1000)
+            for marker in (" where ", " which ", " Since ", " This ", " The ", " denotes"):
+                if marker in value:
+                    value = value.split(marker, 1)[0].strip()
+            if "," in value and len(re.findall(r"\b[A-Za-z]{3,}\b", value)) >= 3:
+                value = value.split(",", 1)[0].strip()
+            if re.match(r"^[A-Za-z](?:\s*=\s*\d+)?\s+", value) or value.endswith("="):
+                continue
+            if re.match(r"^(?:tions|ing|model|bars|cross|percentages)\b", value, re.IGNORECASE):
+                continue
+            if value and value not in seen:
+                seen.add(value)
+                candidates.append(value)
+        records = [{"ordinal": next_ordinal + index, "page": page_number,
+                    "tex": value, "sourceRef": f"pdf:formula:{next_ordinal + index}:page:{page_number}",
+                    "recoveryStatus": "complete"}
+                   for index, value in enumerate(candidates[:64])]
+        return records, next_ordinal + len(records)
+
+    def figure_records(pdf_document: Any) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        total_asset_bytes = 0
+        for page_number, page in enumerate(pdf_document, 1):
+            captions = caption_blocks(page, "Figure")
+            if not captions:
+                continue
+            visual_blocks = page.get_text("dict").get("blocks", [])
+            for caption_index, caption in enumerate(captions):
+                x0, y0, x1, _ = caption["bbox"]
+                previous_y = (captions[caption_index - 1]["bbox"][3] + 5
+                              if caption_index else 50.0)
+                full_width = x1 - x0 >= float(page.rect.width) * 0.60
+                region_x0 = 50.0 if full_width else max(0.0, x0 - 3.0)
+                region_x1 = float(page.rect.width) - 50.0 if full_width else min(float(page.rect.width), x1 + 3.0)
+                all_drawings = []
+                for drawing in page.get_drawings():
+                    rect = drawing.get("rect")
+                    if not rect or rect.width < 2 or rect.height < 2:
+                        continue
+                    # A few conference PDFs expose the figure's clipping
+                    # path as a drawing that extends beyond the media box.
+                    # It is a page-level mask, not figure content; accepting
+                    # it makes the crop swallow the neighbouring text column.
+                    if (rect.x0 < -1.0 or rect.y0 < -1.0
+                            or rect.x1 > float(page.rect.width) + 1.0
+                            or rect.y1 > float(page.rect.height) + 1.0):
+                        continue
+                    if rect.width > float(page.rect.width) * 0.80 and rect.height > float(page.rect.height) * 0.50:
+                        continue
+                    all_drawings.append(rect)
+                wide_containers = [rect for rect in all_drawings
+                                   if rect.width >= float(page.rect.width) * 0.55
+                                   # Full-width figures in two-column conference
+                                   # PDFs are often only 20–35% of a page tall;
+                                   # requiring 35% misclassifies a four-panel
+                                   # figure as the caption's narrow column.
+                                   and rect.height >= float(page.rect.height) * 0.20
+                                   and rect.y0 < y0 - 2 and rect.y1 >= previous_y]
+                if wide_containers:
+                    # Some conference PDFs place labels just outside the
+                    # drawing's inner content box.  Expand to the actual
+                    # wide figure container, not to the whole page (which
+                    # could pull the neighbouring text column into the crop).
+                    region_x0 = max(0.0, min(rect.x0 for rect in wide_containers) - 8.0)
+                    region_x1 = min(float(page.rect.width), max(rect.x1 for rect in wide_containers) + 8.0)
+                rects = []
+                for rect in all_drawings:
+                    if rect.x1 >= region_x0 and rect.x0 <= region_x1 and rect.y1 <= y0 - 2 and rect.y1 >= previous_y:
+                        rects.append(rect)
+                for block in visual_blocks:
+                    if block.get("type") != 1:
+                        continue
+                    rect = pymupdf.Rect(block.get("bbox"))
+                    if rect.x1 >= region_x0 and rect.x0 <= region_x1 and rect.y1 <= y0 - 2 and rect.y1 >= previous_y:
+                        rects.append(rect)
+                asset = None
+                if rects:
+                    if wide_containers:
+                        visual = pymupdf.Rect(
+                            region_x0,
+                            max(0.0, min(rect.y0 for rect in wide_containers) - 5.0),
+                            region_x1,
+                            min(y0 - 2, max(rect.y1 for rect in wide_containers) + 5.0),
+                        )
+                    else:
+                        visual = pymupdf.Rect(min(rect.x0 for rect in rects), min(rect.y0 for rect in rects),
+                                              max(rect.x1 for rect in rects), max(rect.y1 for rect in rects))
+                        # Text labels such as "Lookup Embedding" and
+                        # "Patch + Position Embedding" are not drawing/image
+                        # blocks, so the union of visual primitives alone is
+                        # too narrow.  The caption's column bounds are the
+                        # safe horizontal envelope for those labels.
+                        visual = pymupdf.Rect(region_x0, max(previous_y, visual.y0 - 5),
+                                              region_x1, min(y0 - 2, visual.y1 + 5))
+                    for scale in (1.6, 1.3, 1.0, 0.8, 0.6):
+                        pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), clip=visual, alpha=False)
+                        raw = pixmap.tobytes("png")
+                        if len(raw) <= MAX_FIGURE_ASSET_BYTES and total_asset_bytes + len(raw) <= MAX_TOTAL_FIGURE_ASSET_BYTES:
+                            asset = {"mediaType": "image/png", "sha256": sha256_bytes(raw),
+                                     "base64": base64.b64encode(raw).decode("ascii")}
+                            total_asset_bytes += len(raw)
+                            break
+                ordinal = len(records) + 1
+                records.append({"ordinal": ordinal, "page": page_number,
+                                "caption": caption["caption"],
+                                "sourceRef": f"pdf:figure:{ordinal}:page:{page_number}",
+                                "recoveryStatus": "complete", "asset": asset})
+        return records[:64]
+
+    def extract_structures(pdf_bytes: bytes, pages: list[str]) -> dict[str, list[dict[str, Any]]]:
+        try:
+            pdf_document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+            tables: list[dict[str, Any]] = []
+            formulas: list[dict[str, Any]] = []
+            for page_number in range(pdf_document.page_count):
+                page_tables, _ = table_records(pdf_document[page_number], page_number + 1, len(tables) + 1)
+                tables.extend(page_tables)
+                page_formulas, _ = formula_records(pdf_document, page_number + 1, len(formulas) + 1)
+                formulas.extend(page_formulas)
+            figures = figure_records(pdf_document)
+            pdf_document.close()
+            return {"tables": tables, "formulas": formulas, "figures": figures}
+        except ConferenceExtractionError:
+            raise
+        except Exception:
+            return {"tables": [], "formulas": [], "figures": []}
+
+    return ExtractionBackend(name=backend_name, version=backend_version, extract_pages=extract_pages,
+                             extract_structures=extract_structures)
 
 
 def _page_ranges(pages: list[str]) -> tuple[bytes, list[dict[str, Any]]]:
@@ -497,6 +870,7 @@ def run_extraction(
         backend_info = None if active_backend is None else {"name": active_backend.name, "version": active_backend.version}
         text_bytes: bytes | None = None
         artifact_bytes: bytes | None = None
+        structures: dict[str, list[dict[str, Any]]] = {"tables": [], "formulas": [], "figures": []}
         page_count: int | None = None
         non_whitespace: int | None = None
         status = "blocked"
@@ -519,6 +893,8 @@ def run_extraction(
                     status = "blocked"
                     blocked_reason = {"code": "PDF_EXTRACTION_FAILED", "message": str(extraction_error)}
                 else:
+                    if active_backend.extract_structures is not None:
+                        structures = active_backend.extract_structures(pdf_bytes, pages)
                     short = non_whitespace < MINIMUM_TEXT_CHARACTERS
                     status = "blocked" if short else "ready"
                     blocked_reason = ({"code": "TEXT_TOO_SHORT", "message":
@@ -531,9 +907,9 @@ def run_extraction(
                         "offsetUnit": OFFSET_UNIT,
                         "flattenedTextSha256": sha256_bytes(text_bytes),
                         "pages": ranges,
-                        "tables": [],
-                        "formulas": [],
-                        "figures": [],
+                        "tables": structures.get("tables", []),
+                        "formulas": structures.get("formulas", []),
+                        "figures": structures.get("figures", []),
                     }
                     artifact["payloadSha256"] = sha256_bytes(_compact_json_bytes(artifact))
                     artifact_bytes = _json_bytes(artifact)
@@ -561,7 +937,7 @@ def run_extraction(
             "version": CONTRACT_VERSION,
             "status": status,
             "textReplayable": status == "ready",
-            "structuredReplayable": False,
+            "structuredReplayable": status == "ready",
             "paperId": request["paperId"],
             "sourceIdentity": request["sourceIdentity"],
             "request": {"file": manifest_name, "sha256": sha256_bytes(manifest_bytes)},
@@ -594,7 +970,7 @@ def run_extraction(
             "pageCount": page_count,
             "textCharacters": non_whitespace,
             "textReplayable": status == "ready",
-            "structuredReplayable": False,
+            "structuredReplayable": status == "ready",
             "receiptSha256": receipt["receiptSha256"],
             "outputs": [name for name, _ in outputs_to_write] if apply else [],
         }
@@ -603,7 +979,7 @@ def run_extraction(
 
 
 def verify_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING_SOURCE_DIR) -> dict[str, Any]:
-    """Re-run the pinned extractor from the original PDF and compare every output byte."""
+    """Re-run the pinned structured extractor from the original PDF and compare every output byte."""
     manifest_name = _safe_name(manifest_name, SAFE_JSON_NAME, "manifest name")
     root_fd = _open_root(Path(source_root))
     try:

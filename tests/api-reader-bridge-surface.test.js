@@ -6,7 +6,9 @@ const {
     repairApiReaderPlanSurfaceBinding,
     stableFingerprint,
     buildApiReaderQualityMetrics,
-    apiReaderPreInjectionQualityView
+    apiReaderPreInjectionQualityView,
+    normalizeReaderConceptBridgeTerms,
+    normalizeReaderWorkflowLeakageSurface
 } = require('../scripts/deep-analyzer.js');
 const { apiReaderV3BindsCanonical } = require('../scripts/analysis-engine.js');
 const { validateEditorialQuality } = require('../scripts/editorial-quality.js');
@@ -22,6 +24,21 @@ test('only exact consecutive paragraph-leading bridge headings collapse, includi
         assert.equal(collapseRepeatedReaderBridgeHeadings(once), once);
     }
     assert.equal(collapseRepeatedReaderBridgeHeadings(heading + '\n' + heading + explanation), heading + explanation);
+});
+
+test('repairs only the established one-character entropy term and naturalizes figure prose', () => {
+    const candidate = { sections: [{ body: '指标包括问题熵与 APES。' }], conceptBridges: [
+        { terms: ['熵', 'APES'], explanation: '熵负责描述分布。' }
+    ] };
+    assert.equal(normalizeReaderConceptBridgeTerms(candidate), true);
+    assert.deepEqual(candidate.conceptBridges[0].terms, ['问题熵', 'APES']);
+    assert.equal(candidate.conceptBridges[0].explanation, '问题熵负责描述分布。');
+    assert.equal(normalizeReaderConceptBridgeTerms(candidate), false);
+    assert.equal(
+        normalizeReaderWorkflowLeakageSurface('该图后解释需要强调辨别好不等于自发可用。'),
+        '这张图最重要的观察是辨别好不等于自发可用。'
+    );
+    assert.equal(normalizeReaderWorkflowLeakageSurface('根据当前 prompt 要求改写。'), '根据当前 prompt 要求改写。');
 });
 
 test('different headings, inline citations, separate paragraphs, tables and fenced examples are unchanged', () => {

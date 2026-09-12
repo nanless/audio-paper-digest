@@ -143,6 +143,14 @@ function findReaderTablePasteDuplication(cell, context = {}) {
     const doubledSpans = [...compact.matchAll(/(.{3,}?)\1/g)];
     for (const doubled of doubledSpans) {
         if (!/[\d\\=]/.test(doubled[1])) continue;
+        // The non-greedy repeated-span detector can mistake the prefix of
+        // adjacent decimal tokens for a duplicated token, e.g. `0.9,0.95`
+        // becomes `,0.9,0.9` because the second copy is only the prefix of
+        // `0.95`. A real pasted numeric copy ends at a delimiter or at the
+        // end of the cell; do not suppress a duplicate whose second copy is
+        // still inside a longer decimal token.
+        const secondCopyEnd = doubled.index + doubled[1].length * 2;
+        if (/\d$/.test(doubled[1]) && /[\d.]/.test(compact[secondCopyEnd] || '')) continue;
         if (hasExplicitRepeatedScientificMeasurement(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasExplicitRepeatedDatasetSplitScale(compact, context)) continue;

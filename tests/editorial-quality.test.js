@@ -190,9 +190,43 @@ describe('Manual v4 editorial quality primitives', () => {
         );
     });
 
+    it('normalizes exact simple empirical counts from persisted issues', () => {
+        const source = '模型包含三分支，并在一对测试样本上进行比较。';
+        const issues = [
+            { code: 'quantitative_chinese_numeral', match: '三分支' },
+            { code: 'quantitative_chinese_numeral', match: '一对' }
+        ];
+        assert.equal(
+            normalizeIssueBoundReaderQuantitativeNumerals(source, issues),
+            '模型包含 3 分支，并在 1 对测试样本上进行比较。'
+        );
+    });
+
     it('does not read the scale suffix in an Arabic comparison as a Chinese count classifier', () => {
         assert.deepEqual(findQuantitativeChineseNumerals(
             '第一段约 500 万对 48 万，此外为 2,459 对 6,578。'
+        ), []);
+        assert.deepEqual(findQuantitativeChineseNumerals('训练集约2.7千对问答；纯中文千对仍需改写。'), [
+            { match: '千对', index: 15, line: 1, reason: 'measured_large_integer' }
+        ]);
+    });
+
+    it('accepts comparison values whose unit is declared by the metric label', () => {
+        assert.deepEqual(findMissingComparisonUnits(
+            'WER（%）从 2.132 升到 2.175，SIM（无量纲）从 0.672 降到 0.668；'
+            + '词错误率（WER，单位为%）从 2 到 4 到 8 时轻微上升。'
+        ), []);
+    });
+
+    it('does not treat experiment-set counts as metric values', () => {
+        assert.deepEqual(findMissingComparisonUnits(
+            '论文在 4 套测试上报告总体准确率等指标，并给出相对基线的提升幅度。'
+        ), []);
+    });
+
+    it('does not treat dataset counts in a qualitative bridge as metric values', () => {
+        assert.deepEqual(findMissingComparisonUnits(
+            '证据是 2 数据集的准确率与消融下降。'
         ), []);
     });
 
@@ -408,6 +442,9 @@ describe('Manual v4 editorial quality primitives', () => {
             '图 3 显示 VIBE 均优于 Video-Robin 与去掉阶段 5 的消融，四项准确率呈现单调提升。'
         ), []);
         assert.deepEqual(findMissingComparisonUnits(
+            '先看 T12 的 12-8-3 逐天音素错误率，基线随距最后训练日增加而爬升，ALIGN 全程更低。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
             '奖励位于 0 到 1，密集字幕采用 F1@IoU0.5，音乐任务使用 0.45、0.20、0.15 的加权和。'
         ), []);
         assert.deepEqual(
@@ -420,6 +457,10 @@ describe('Manual v4 editorial quality primitives', () => {
         );
         assert.deepEqual(
             findMissingComparisonUnits('6 个骨干中 5 个的 WER 低于 0.05，唯 Qwen-Audio-Chat 为 0.202。'),
+            []
+        );
+        assert.deepEqual(
+            findMissingComparisonUnits('先记录误检与词错误率，再用前 100 特征从小强度开始加，观察误检下降与词错误率上升的拐点。'),
             []
         );
         assert.deepEqual(
@@ -446,6 +487,9 @@ describe('Manual v4 editorial quality primitives', () => {
             '通过在真实语音上先学习说话人条件的韵律变异，再以同一目标为辅助联合优化伪造分类，'
             + '方法在两种训练分布下均显著降低了在 ASVspoof 2024 与情感化数据上的错误率，'
             + '同时在标准集上保持竞争力，消融也支持了 2 阶段设计的必要性。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            '固定 Top-2 相对本方法词错误率（WER↓，越低越好）从 2.2 升至 3.1，制作质量（PQ↑）从 7.54 降至 7.47。'
         ), []);
         const asvspoofMissingUnits = findMissingComparisonUnits(
             '在 ASVspoof 2024 基准上，错误率从 24.5 降至 18.2。'

@@ -398,12 +398,15 @@ function importConferenceSources({ manifest, sourceRoot, cacheRoot, updatedAt, a
         mode: apply ? 'apply' : 'dry-run' };
 }
 
-function importConferenceSourcesFromStaging({ stagingHandle, sourceRoot, cacheRoot, updatedAt, apply = false } = {}) {
+function importConferenceSourcesFromStaging({ stagingHandle, sourceRoot, cacheRoot, updatedAt,
+    apply = false, replay = true } = {}) {
     // Lazy loading avoids a module-init cycle: conference-staging deliberately
     // reuses this module's import-manifest validator.
     const stagingApi = require('./conference-staging.js');
     let staged;
-    try { staged = stagingApi.stagingHandleSnapshot(stagingHandle); }
+    try {
+        staged = stagingApi.stagingHandleSnapshot(stagingHandle, { replay });
+    }
     catch (error) { throw fail(`requires an authenticated staging handle: ${error.message}`); }
     const result = importConferenceSources({ manifest: staged.importManifest, sourceRoot, cacheRoot, updatedAt, apply });
     return { ...result, stagingBinding: {
@@ -467,7 +470,7 @@ function normalizeImportReceipt(value) {
 function loadImportHandle(ledgerFile, importReceiptFile, stagingHandle) {
     const stagingApi = require('./conference-staging.js');
     let staged;
-    try { staged = stagingApi.stagingHandleSnapshot(stagingHandle); }
+    try { staged = stagingApi.stagingHandleSnapshot(stagingHandle, { replay: false }); }
     catch (error) { throw fail(`requires an authenticated staging handle: ${error.message}`); }
     let loadedLedger; let loadedReceipt; let ledgerHandle;
     try {

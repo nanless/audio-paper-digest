@@ -47,6 +47,7 @@ const {
 } = require('../manual/scripts/manual-paper-source-identity.js');
 const { resolveArtifactAuthority } = require('../manual/scripts/manual-fresh-authoring-contract.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const { loadAnalysisWaiver, validateAnalysisWaiver } = require('./analysis-waiver.js');
 
 const ALLOWED_DIGEST_STATUSES = new Set(['seen', 'pending_analysis', 'analyzed', 'analysis_failed']);
 const ALLOWED_ANALYSIS_ATTEMPT_STATUSES = new Set(['analyzed', 'analysis_failed']);
@@ -437,7 +438,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
                 addIssue(issues, filePath, `${prefix}.stages.${stage} 尚未完成: ${state.status}`);
             }
         }
-        const coreSummaryBindingIssue = manifest.stages.coreSummaryRepair
+        const coreSummaryBindingIssue = manifest.stages.coreSummaryRepair && !options.analysisWaived
             ? validateCoreSummaryStageBinding(options.paper) : null;
         if (coreSummaryBindingIssue) addIssue(issues, filePath, `${prefix} ${coreSummaryBindingIssue}`);
         const taxonomyBindingIssue = !legacyCoreSummaryCompatible && !manifest.manualTakeover
@@ -785,9 +786,10 @@ function validateDeepAnalysisMetadata(filePath, data, papers, issues, options = 
         addIssue(issues, filePath, 'deepAnalysisCompletedAt 必须是北京时间 ISO 时间戳');
     }
     if (['complete', 'partial_failed', 'failed'].includes(data.status)) {
-        const canonicalSummary = options.allowLegacyCoreSummarySuccess === true
-            ? getReadOnlyValidationAnalysisRunSummary(papers)
-            : getCanonicalAnalysisRunSummary(papers);
+        const canonicalSummary = getValidationAnalysisRunSummary(papers, {
+            allowLegacyCoreSummarySuccess: options.allowLegacyCoreSummarySuccess === true,
+            waivedIds: options.analysisWaiver?.paperIds || new Set()
+        });
         if (canonicalSummary.status !== data.status) {
             addIssue(
                 issues,
@@ -810,6 +812,20 @@ function validateDeepAnalysisMetadata(filePath, data, papers, issues, options = 
     if (Number.isInteger(stats.totalAfterMerge) && stats.totalAfterMerge !== papers.length) {
         addIssue(issues, filePath, `stats.totalAfterMerge (${stats.totalAfterMerge}) 必须等于 papers 数量 (${papers.length})`);
     }
+}
+
+function getValidationAnalysisRunSummary(papers, options = {}) {
+    const records = Array.isArray(papers) ? papers : [];
+    const waivedIds = options.waivedIds || new Set();
+    const isSuccess = paper => options.allowLegacyCoreSummarySuccess === true
+        ? getReadOnlyValidationAnalysisRunSummary([paper]).success === 1
+        : getCanonicalAnalysisRunSummary([paper]).success === 1;
+    const remaining = records.filter(paper => (
+        !waivedIds.has(normalizedId(paper)) && !isSuccess(paper)
+    )).length;
+    const success = records.length - remaining;
+    return { success, remaining,
+        status: remaining <= 0 ? 'complete' : (success > 0 ? 'partial_failed' : 'failed') };
 }
 
 function validateRawCandidateMetadata(filePath, data, papers, issues) {
@@ -906,6 +922,7 @@ function validatePaperListFile(filePath, options = {}) {
         }
         if (options.deepAnalysis) {
             const hasAnalysisBody = typeof paper.analysis === 'string' && paper.analysis.trim().length > 0;
+            const analysisWaived = Boolean(options.analysisWaiver?.paperIds?.has(paperId));
             const legacyReadOnly = options.allowLegacyCoreSummarySuccess === true
                 && isLegacyApiAnalysisSuccessForReadOnlyValidation(paper);
             const manualSource = loadBoundManualV4SourceText(
@@ -1046,6 +1063,7 @@ function validatePaperListFile(filePath, options = {}) {
                         sourceText,
                         imageManifest: paper.imageManifest,
                         paper,
+                        analysisWaived,
                         allowLegacyCoreSummarySuccess:
                             options.allowLegacyCoreSummarySuccess === true
                     }
@@ -1053,8 +1071,8 @@ function validatePaperListFile(filePath, options = {}) {
             } else if (hasAnalysisBody) {
                 addIssue(issues, filePath, `papers[${index}] 有 analysis 正文但缺少 analysisManifest`);
             }
-            if (paper.latestAnalysisAttemptError
-                || paper.digestStatus?.latestAttemptStatus === 'analysis_failed') {
+            if (!analysisWaived && (paper.latestAnalysisAttemptError
+                || paper.digestStatus?.latestAttemptStatus === 'analysis_failed')) {
                 addIssue(issues, filePath, `papers[${index}] 最新分析尝试仍为失败，不能视为有效完成结果`);
             }
             if (paper.analysisSource !== undefined) {
@@ -1581,7 +1599,7 @@ function normalizedPaperMap(rawPapers) {
     return result;
 }
 
-function validateFilteredDeepPapersConsistency(files = Config.FILES) {
+function validateFilteredDeepPapersConsistency(files = Config.FILES, options = {}) {
     const issues = [];
     const filteredPath = files.filteredPapers;
     const deepPath = files.deepAnalysisResult;
@@ -1646,7 +1664,8 @@ function validateFilteredDeepPapersConsistency(files = Config.FILES) {
 
                 const deepPaper = deepById.get(id);
                 if (!deepPaper) continue;
-                const deepSucceeded = getReadOnlyValidationAnalysisRunSummary([deepPaper]).success === 1;
+                const deepSucceeded = options.analysisWaiver?.paperIds?.has(id)
+                    || getReadOnlyValidationAnalysisRunSummary([deepPaper]).success === 1;
                 const digestStatus = databasePaper.digestStatus?.status;
                 const latestAttemptStatus = databasePaper.digestStatus?.latestAttemptStatus;
                 if (deepSucceeded) {
@@ -1677,12 +1696,35 @@ function validateFilteredDeepPapersConsistency(files = Config.FILES) {
     return issues;
 }
 
+function currentAnalysisWaiverContext(files = Config.FILES) {
+    if (!files.analysisWaiverDir || !files.deepAnalysisResult) {
+        return { waiver: null, issues: [] };
+    }
+    const deep = readJsonSafe(files.deepAnalysisResult, null);
+    const date = artifactBatchDate(deep);
+    if (!date) return { waiver: null, issues: [] };
+    let waiver;
+    try {
+        waiver = loadAnalysisWaiver(date, files);
+    } catch (error) {
+        return { waiver: null, issues: [`analysis waiver unreadable: ${error.message}`] };
+    }
+    if (!waiver) return { waiver: null, issues: [] };
+    const checked = validateAnalysisWaiver(waiver, date, files, { deep });
+    return {
+        waiver: checked.valid ? checked : null,
+        issues: checked.issues.map(issue => `analysis waiver invalid: ${issue}`)
+    };
+}
+
 function validateCurrentDataFiles(files = Config.FILES) {
     const filterDecisions = resolveFilterDecisionsPath(files);
     const fetchCheckpoint = files.fetchCheckpoint || (
         files.rawCandidates ? path.join(path.dirname(files.rawCandidates), 'fetch-checkpoint.json') : DEFAULT_FETCH_CHECKPOINT_FILE
     );
+    const analysisWaiverContext = currentAnalysisWaiverContext(files);
     return [
+        ...analysisWaiverContext.issues.map(issue => `${path.basename(files.deepAnalysisResult || 'deep-analysis-result.json')}: ${issue}`),
         ...validatePapersDatabase(files.papers),
         ...validateFetchCheckpointFile(fetchCheckpoint),
         ...validatePaperListFile(files.rawCandidates, { rawCandidates: true }),
@@ -1690,6 +1732,7 @@ function validateCurrentDataFiles(files = Config.FILES) {
         ...validatePaperListFile(files.filteredPapers, { filtered: true }),
         ...validatePaperListFile(files.deepAnalysisResult, {
             deepAnalysis: true,
+            analysisWaiver: analysisWaiverContext.waiver,
             allowLegacyCoreSummarySuccess: true
         }),
         ...validateFilterArtifactsConsistency(files.filteredPapers, filterDecisions),
@@ -1697,7 +1740,9 @@ function validateCurrentDataFiles(files = Config.FILES) {
         ...validateFetchArtifactConsistency(fetchCheckpoint, files.rawCandidates, filterDecisions, files.filteredPapers),
         ...validateCompleteFilterCompanionContract(files, filterDecisions, fetchCheckpoint),
         ...validateRequiredCompanionFiles(files, filterDecisions),
-        ...validateFilteredDeepPapersConsistency(files)
+        ...validateFilteredDeepPapersConsistency(files, {
+            analysisWaiver: analysisWaiverContext.waiver
+        })
     ];
 }
 

@@ -164,7 +164,7 @@ function assertExactDiscoveryExtraction({ discoveryHandle, discovery, extraction
 }
 
 function bindInputs({ selectionHandle, discoveryHandle, extractionManifest, extractionFileSha256,
-    extractionSourceRoot, importManifestName } = {}) {
+    extractionSourceRoot, importManifestName, replay = true } = {}) {
     safeName(importManifestName, 'importManifestName');
     const selection = authenticatedSelection(selectionHandle);
     const discovery = authenticatedDiscovery(discoveryHandle);
@@ -219,7 +219,8 @@ function bindInputs({ selectionHandle, discoveryHandle, extractionManifest, extr
         }
         let extractionSnapshot;
         try {
-            const extractionHandle = extractionReceiptApi.loadExtractionHandle(extractionSourceRoot, member.receiptName);
+            const extractionHandle = extractionReceiptApi.loadExtractionHandle(extractionSourceRoot, member.receiptName,
+                { replay });
             extractionSnapshot = extractionReceiptApi.extractionHandleSnapshot(extractionHandle);
         } catch (error) { fail(`extraction receipt cannot be authenticated for ${member.paperId}: ${error.message}`); }
         assertExactDiscoveryExtraction({ discoveryHandle, discovery, extraction, member, admitted, extractionSnapshot });
@@ -385,7 +386,8 @@ function replayStagingSources({ importManifest, receipt, selection, discovery, d
     return true;
 }
 
-function loadStagingHandle(importManifestFile, receiptFile, selectionHandle, discoveryHandle, extractionSourceRoot) {
+function loadStagingHandle(importManifestFile, receiptFile, selectionHandle, discoveryHandle,
+    extractionSourceRoot, { replay = true } = {}) {
     let importLoaded; let receiptLoaded;
     try {
         importLoaded = ledgerApi.readRegularJson(importManifestFile);
@@ -455,7 +457,8 @@ function loadStagingHandle(importManifestFile, receiptFile, selectionHandle, dis
         selected.delete(sourceIdentity); receiptMembers.delete(sourceIdentity);
     }
     if (selected.size || receiptMembers.size) fail('staging bundle contains missing or extra selection members');
-    replayStagingSources({ importManifest, receipt, selection, discovery, discoveryHandle, extractionSourceRoot });
+    if (replay) replayStagingSources({ importManifest, receipt, selection, discovery,
+        discoveryHandle, extractionSourceRoot });
     const handle = Object.freeze(Object.create(null));
     STAGING_HANDLES.add(handle);
     STAGING_HANDLE_DATA.set(handle, Object.freeze({ importManifest: clone(importManifest), receipt: clone(receipt),
@@ -465,12 +468,12 @@ function loadStagingHandle(importManifestFile, receiptFile, selectionHandle, dis
     return handle;
 }
 
-function stagingHandleSnapshot(handle) {
+function stagingHandleSnapshot(handle, { replay = true } = {}) {
     if (!handle || typeof handle !== 'object' || !STAGING_HANDLES.has(handle)) fail('requires an authenticated staging handle');
     const data = STAGING_HANDLE_DATA.get(handle);
     const selection = authenticatedSelection(data.selectionHandle);
     const discovery = authenticatedDiscovery(data.discoveryHandle);
-    replayStagingSources({ importManifest: data.importManifest, receipt: data.receipt,
+    if (replay) replayStagingSources({ importManifest: data.importManifest, receipt: data.receipt,
         selection, discovery, discoveryHandle: data.discoveryHandle, extractionSourceRoot: data.extractionSourceRoot });
     return { importManifest: clone(data.importManifest), receipt: clone(data.receipt),
         importManifestFile: data.importManifestFile, receiptFile: data.receiptFile,

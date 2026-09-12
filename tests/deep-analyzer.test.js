@@ -1672,6 +1672,14 @@ primary_task_tag: #音视频生成
                 .evidenceProfile.ablationStatus,
             'none'
         );
+        const noComponentAlias = structuredClone(payload);
+        noComponentAlias.evidenceProfile.multiComponentClaimed = false;
+        noComponentAlias.evidenceProfile.ablationStatus = 'direct';
+        assert.strictEqual(
+            parseScoringAuditResult(JSON.stringify(noComponentAlias), allowed)
+                .evidenceProfile.ablationStatus,
+            'not_applicable'
+        );
 
         payload.evidenceProfile.evidenceIds = ['A_UNKNOWN'];
         assert.throws(
@@ -1692,6 +1700,7 @@ primary_task_tag: #音视频生成
             isAllowedReaderDefensiveNegationIssue,
             splitReaderLongParagraphs,
             normalizeReaderEditorialSurface,
+            canonicalReaderBridgeTerm,
             normalizeApiReaderTableBlockSpacing,
             repairApiReaderPlanSurfaceBinding,
             buildApiReaderQualityMetrics,
@@ -1739,6 +1748,15 @@ primary_task_tag: #音视频生成
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
             code: 'quantitative_chinese_numeral', match: '一个组件'
         }), true);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '一个数据集'
+        }), true);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '一模态'
+        }), true);
+        assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
+            code: 'quantitative_chinese_numeral', match: '两个数据集'
+        }), false);
         assert.strictEqual(isAllowedReaderNarrativeNumeralIssue({
             code: 'quantitative_chinese_numeral', match: '一段'
         }), true);
@@ -2034,6 +2052,16 @@ primary_task_tag: #音视频生成
         assert.strictEqual(
             bridgePaper.apiReaderPlan.conceptBridges[2].explanation,
             bridgeArticle.split('\n\n')[3]
+        );
+        assert.strictEqual(
+            canonicalReaderBridgeTerm('零样本评测'),
+            canonicalReaderBridgeTerm('零样本评估'),
+            '术语桥重绑定应容忍“评测/评估”表面同义词'
+        );
+        assert.strictEqual(
+            canonicalReaderBridgeTerm('十样本评测'),
+            canonicalReaderBridgeTerm('10 样本评估'),
+            '术语桥重绑定应容忍中文数字被正文规范化为阿拉伯数字'
         );
         const specs = [
             ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],
@@ -3488,6 +3516,20 @@ primary_task_tag: #音视频生成
         }
     });
 
+    it('唯一且解释完整的概念桥 marker 可安全对齐实际小节 kind', () => {
+        const { normalizeDeclaredReaderMarkerParagraphs } = require('../scripts/deep-analyzer.js');
+        const value = { sections: [
+            { kind: 'component', body: '组件正文保持不变。\n\n[[CONCEPT_BRIDGE_1]]' },
+            { kind: 'result', body: '结果正文保持不变。' }
+        ], conceptBridges: [{
+            marker: '[[CONCEPT_BRIDGE_1]]', sectionKind: 'result',
+            explanation: '完整解释说明两个术语各自负责什么、为什么要组合，以及这项组合如何支撑论文的判断，并明确输入、输出和适用边界。'
+        }], figurePlacements: [], formulaBindings: [] };
+        normalizeDeclaredReaderMarkerParagraphs(value);
+        assert.equal(value.conceptBridges[0].sectionKind, 'component');
+        assert.match(value.sections[0].body, /\n\n\[\[CONCEPT_BRIDGE_1\]\]$/);
+    });
+
     it('公式目标小节已有唯一占位时只删除其他小节的安全重复占位', () => {
         const { normalizeDeclaredReaderMarkerParagraphs } = require('../scripts/deep-analyzer.js');
         const value = { sections: [
@@ -3676,6 +3718,14 @@ primary_task_tag: #音视频生成
             assert.equal(normalize(raw), raw);
         }
         assert.equal(normalize('百分之九十五。'), '95%。');
+        assert.equal(normalize('采样率为十六千赫兹。'), '采样率为 16 kHz。');
+        assert.equal(normalize('采样率为十六千赫兹并在四十八千赫兹条件下复测。'),
+            '采样率为 16 kHz 并在 48 kHz 条件下复测。');
+        assert.equal(normalize('采样率为十二千赫兹。'), '采样率为 12 kHz。');
+        assert.equal(normalize('采样率是否混用十六与四十八千赫。'),
+            '采样率是否混用十六与四十八千赫。');
+        assert.equal(normalize('实验结果可用于研究不同模态的差异。'),
+            '实验结果可用于研究不同模态的差异。');
         assert.equal(normalizeReaderEditorialSurface('精确整数一百二十段与百例，alpha 三。', [
             { code: 'quantitative_chinese_numeral', match: '一百二十段' },
             { code: 'quantitative_chinese_numeral', match: '百例' },
@@ -4436,6 +4486,19 @@ has_dataset: 否
         );
     });
 
+    it('流式多说话人 ASR 的 cpWER 与中文词错率通过核心摘要指标识别', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withResult = sentence => validAnalysisText().replace(
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            sentence
+        );
+        const sourceText = 'Evaluation on CH109, Mixer6, and AMI reports average cpWER 23.36% for SSA versus 42.27% for the cascaded system.';
+        const cpwer = '在 CH109、Mixer6 与 AMI 评测设置下，SSA 的平均 cpWER 为 23.36%，低于级联系统的 42.27%，比较对象、数值与方向均可由原文核对。';
+        const chinese = cpwer.replace('平均 cpWER', '平均级联最小排列词错率');
+        assert.strictEqual(getCoreSummaryDetailIssue(withResult(cpwer), { sourceText }), null);
+        assert.strictEqual(getCoreSummaryDetailIssue(withResult(chinese), { sourceText }), null);
+    });
+
     it('2604.13400 的 PDF 软换行不再隐藏 source 中的定量结果', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const sourceText = 'Experimental results evaluate performance using\n'
@@ -4519,6 +4582,37 @@ has_dataset: 否
         );
         const complete = missingMetric.replace('众包组测得下降', '众包组的可懂度得分下降');
         assert.strictEqual(getCoreSummaryDetailIssue(withSummary(complete), sourceOptions), null);
+    });
+
+    it('核心摘要识别音频论文常见的 CLAP、VISQOL、MCD 指标', () => {
+        const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
+        const withSummary = summary => validAnalysisText().replace(
+            /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
+            `## 核心摘要\n${summary}\n`
+        );
+        const prefix = '音频生成任务输入为文本提示，输出为与提示语义一致的音频，难点在于兼顾语义匹配与听感质量。'
+            + '方法链先编码文本条件，再由生成器产生音频并用判别器约束训练，推理阶段沿采样轨迹逐步恢复波形。'
+            + '相较只优化重建误差的方法，该方法把语义和听感约束放在同一训练流程中。'
+            + '具体而言，文本编码器负责把自然语言提示变成条件表示，生成器负责把条件表示逐步变成时域波形，判别器负责约束输出的局部听感，三者前后衔接以减少语义正确但声音失真的情况，并保持不同提示之间的比较协议一致且便于复核。';
+        const suffix = '结论只在论文覆盖的数据集与时长范围内成立，对更长音频和未见领域的外推尚未验证。'
+            + '原文未披露训练、推理或部署成本。';
+        const cases = [
+            ['在 AudioCaps 测试设置下，Ours 的 CLAP 分数为 36.47，高于自回归基线的 26.67，比较对象、数值与方向均可由原文核对。',
+                'AudioCaps evaluation reports CLAP score 36.47 for Ours versus 26.67 for the autoregressive baseline.'],
+            ['在语音质量评测设置下，Ours 的 VISQOL 为 3.83，高于基线的 3.40，比较对象、数值与方向均可由原文核对。',
+                'The speech quality table reports VISQOL 3.83 for Ours and 3.40 for the baseline.'],
+            ['在编解码评测设置下，Ours 的 MCD 为 5.05，低于基线的 5.40，比较对象、数值与方向均可由原文核对。',
+                'The codec evaluation reports MCD 5.05 for Ours and 5.40 for the baseline.'],
+            ['在 LibriSpeech 测试集的相同协议下，对抗噪声的 PPL 为 10.26，随机噪声为 1.35，'
+                + 'ASR@99% 为 62.75%，高于随机噪声的 17.15%，比较对象、数值与方向均可由原文核对。',
+                'Table 2 reports PPL 10.26 and ASR@99% 62.75% for adversarial noise,'
+                + ' versus PPL 1.35 and ASR@99% 17.15% for random noise.']
+        ];
+        for (const [result, sourceText] of cases) {
+            assert.strictEqual(getCoreSummaryDetailIssue(
+                withSummary(`${prefix}${result}${suffix}`), { sourceText }
+            ), null, result);
+        }
     });
 
     it('2512.14629 并列候选优先诊断含数字句且不放宽完整比较门禁', () => {
@@ -5449,6 +5543,28 @@ has_dataset: 否
                 .filter(issue => /比较问题|识别列/.test(issue)),
             []
         );
+    });
+
+    it('逐级加约束的带符号行也能闭合原文消融证据', () => {
+        const { validateExperimentTableEvidenceDepth } = require('../scripts/analysis-contract.js');
+        const analysis = [
+            '## 实验结果',
+            '为区分全局旋转与各约束的增量收益，下面回答组件逐级叠加后指标如何变化。',
+            '',
+            '| 设置 | FGD ↓ | BeatAlign ↑ |',
+            '| --- | --- | --- |',
+            '| Ours (global) | 0.592 | 0.693 |',
+            '| + L_j | 0.574 | 0.665 |',
+            '| + L_j + L_s | 0.517 | 0.593 |',
+            '| + L_j + L_s + L_m | 0.478 | 0.705 |',
+            '',
+            '逐级加入约束后，FGD 下降而 BeatAlign 有波动，说明不同组件承担不同作用；'
+                + '该差异仅适用于当前测试集，不能外推到其他数据分布。'
+        ].join('\n');
+        const sourceText = 'Table 2 reports an ablation study comparing the components.';
+        assert.strictEqual(validateExperimentTableEvidenceDepth(analysis, {
+            documentType: '方法研究', sourceText
+        }), null);
     });
 
     it('确定性结构规范化不再猜标签，缺失标签交给 taxonomy stage', () => {

@@ -25,20 +25,55 @@ function parseArgs(argv) {
     return { apply: mode === '--apply', statusOnly: mode === '--status', catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'], concurrency: Number(values['--concurrency'] || 1) };
 }
+function readSafeJson(filename) {
+    const named = fs.lstatSync(filename);
+    if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || (named.mode & 0o777) !== 0o600) {
+        throw new Error(`unsafe conference process state file: ${filename}`);
+    }
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+        const opened = fs.fstatSync(fd); const bytes = fs.readFileSync(fd);
+        const after = fs.fstatSync(fd); const finalNamed = fs.lstatSync(filename);
+        if (!opened.isFile() || opened.nlink !== 1 || bytes.length !== opened.size
+            || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size
+            || finalNamed.dev !== opened.dev || finalNamed.ino !== opened.ino
+            || finalNamed.nlink !== 1 || finalNamed.size !== opened.size) {
+            throw new Error(`conference process state changed while reading: ${filename}`);
+        }
+        return JSON.parse(bytes.toString('utf8'));
+    } finally { fs.closeSync(fd); }
+}
+function lockStatus(engine, filename) {
+    if (typeof engine?.inspectFileLockState !== 'function') return null;
+    const snapshot = engine.inspectFileLockState(filename);
+    if (!snapshot?.exists) return null;
+    let ownerAlive = null;
+    if (Number.isInteger(snapshot.owner?.pid) && snapshot.owner.pid > 0) {
+        try { process.kill(snapshot.owner.pid, 0); ownerAlive = true; }
+        catch (error) { ownerAlive = error.code === 'ESRCH' ? false : null; }
+    }
+    return { consistent: snapshot.consistent === true, ownerAlive,
+        ownerPid: snapshot.owner?.pid || null, ownerHost: snapshot.owner?.hostname || null };
+}
 function processStatus(options, runtime = {}) {
     const deps = { ...api.defaultDependencies?.(), ...(runtime.dependencies || {}) };
     const context = (deps.loadAuthority || api.loadAuthority)(options, deps);
     const processId = api.deterministicUuid(api.stableHash(context.authority), 'conference-process-v1');
-    const filename = path.join(deps.files.conferenceProcessDir, processId, 'state.json');
-    const state = api.assertState(JSON.parse(fs.readFileSync(filename)), {
+    const directory = (api.safeProcessDirectory || ((root, id) => path.join(root, id)))
+        (deps.files.conferenceProcessDir, processId, false);
+    const filename = path.join(directory, 'state.json');
+    const state = api.assertState(readSafeJson(filename), {
         authority: context.authority, paperIds: context.members.map(item => item.paperId).sort() });
     if (state.status === 'complete') api.validateCompletionReceipt(state,
-        JSON.parse(fs.readFileSync(path.join(path.dirname(filename), 'completion-receipt.json'))));
+        readSafeJson(path.join(directory, 'completion-receipt.json')));
     const counts = Object.values(state.items).reduce((result, item) => {
         result[item.status] = (result[item.status] || 0) + 1; return result;
     }, {});
-    return { status: state.status, processId, conferenceId: state.authority.conferenceId,
+    const result = { status: state.status, processId, conferenceId: state.authority.conferenceId,
         stateSha256: state.stateSha256, papers: counts, completionReceiptSha256: state.completionReceiptSha256 };
+    const operationLock = lockStatus(deps.engine, path.join(directory, '.operation'));
+    if (operationLock) result.operationLock = operationLock;
+    return result;
 }
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('conference-process.js'); const options = parseArgs(argv);
@@ -47,4 +82,4 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     console.log(JSON.stringify(result)); return result;
 }
 if (require.main === module) main().catch(error => { console.error(`[conference-process] ${error.message}`); process.exitCode = 1; });
-module.exports = { USAGE, parseArgs, processStatus, main };
+module.exports = { USAGE, parseArgs, readSafeJson, processStatus, main };

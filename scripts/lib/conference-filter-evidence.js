@@ -8,6 +8,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const analysisEngine = require('../analysis-engine.js');
 const { spawnSync } = require('node:child_process');
 const discoveryApi = require('./conference-discovery.js');
 const ledgerApi = require('./conference-source-ledger.js');
@@ -637,7 +638,7 @@ function finalize(runRoot, state, { write = true } = {}) {
     }
     return { catalog, report };
 }
-function prepareEvidence({ evidenceRunsRoot, runId, discoveryHandle, apply = false, limit = 1,
+function prepareEvidenceLocked({ evidenceRunsRoot, runId, discoveryHandle, apply = false, limit = 1,
     all = false, expectedTotal = null, now, extract } = {}) {
     if (all) {
         if (!apply) fail('all mode requires apply');
@@ -672,6 +673,24 @@ function prepareEvidence({ evidenceRunsRoot, runId, discoveryHandle, apply = fal
     }
     const completed = finalize(runRoot, state);
     return { status: completed ? 'complete' : 'pending', ...summary(state), processed };
+}
+
+function prepareEvidence(options = {}) {
+    if (options.apply !== true) return prepareEvidenceLocked(options);
+    if (options.all === true && options.expectedTotal !== undefined) {
+        const expected = discoverySnapshot(options.discoveryHandle).candidateManifest.members.length;
+        if (options.expectedTotal !== expected) {
+            throw new Error(`Conference filter evidence rejected: expectedTotal ${options.expectedTotal} does not equal authenticated discovery total ${expected}`);
+        }
+    }
+    const root = safeDirectory(options.evidenceRunsRoot, { create: true });
+    const runRoot = path.join(root, options.runId);
+    if (!fs.existsSync(runRoot)) fs.mkdirSync(runRoot, { mode: 0o700 });
+    safeDirectory(runRoot);
+    return analysisEngine.withFileLockSync(path.join(runRoot, '.operation'),
+        () => prepareEvidenceLocked(options), {
+            recoveryPolicy: analysisEngine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY
+        });
 }
 function inspectEvidence({ evidenceRunsRoot, runId, discoveryHandle, deep = false, limit = null, extractLoader } = {}) {
     const snapshot = discoverySnapshot(discoveryHandle); const root = safeDirectory(evidenceRunsRoot);

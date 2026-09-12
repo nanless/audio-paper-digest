@@ -16,6 +16,7 @@ const {
 } = require('./analysis-engine.js');
 const { setupScriptLogging } = require('./log-setup.js');
 const { validateDailyFreshSourceRun } = require('./validate-data-files.js');
+const { loadAnalysisWaiver, validateAnalysisWaiver } = require('./analysis-waiver.js');
 const {
     cardTaskToken,
     validateCompletedCard,
@@ -383,9 +384,17 @@ function buildDigestRunReport(targetDate, options = {}) {
     const visualWaiver = readJson(path.join(
         Config.FILES.postPublishVisualWaiverDir, `${targetDate}.json`
     ));
+    const analysisWaiver = loadAnalysisWaiver(targetDate, Config.FILES);
+    const analysisWaiverCheck = validateAnalysisWaiver(
+        analysisWaiver, targetDate, Config.FILES, { deep }
+    );
+    const analysisWaivedIds = analysisWaiverCheck.valid ? analysisWaiverCheck.paperIds : new Set();
     const deepBatch = papersFrom(deep);
     const successful = deepBatch.filter(isSuccessfulAnalysisRecord);
-    const failed = deepBatch.filter(paper => !isSuccessfulAnalysisRecord(paper));
+    const failed = deepBatch.filter(paper => (
+        !isSuccessfulAnalysisRecord(paper) && !analysisWaivedIds.has(normalizedId(paper))
+    ));
+    const waived = deepBatch.filter(paper => analysisWaivedIds.has(normalizedId(paper)));
     const rawCount = papersFrom(raw).length;
     const fetchComplete = sourceHealthComplete(raw, targetDate);
     const decisionStats = decisions?.stats || {};
@@ -466,7 +475,9 @@ function buildDigestRunReport(targetDate, options = {}) {
         && Boolean(deep?.dailyFreshSourceRun);
     const analysisPublicationMode = productionV6Complete
         ? 'manual_v6_production'
-        : (llmApiComplete ? 'llm_api_production' : 'invalid_or_legacy');
+        : (llmApiComplete
+            ? (waived.length ? 'llm_api_production_with_operator_waiver' : 'llm_api_production')
+            : 'invalid_or_legacy');
     const productionAnalysisComplete = productionV6Complete || (llmApiComplete && dailySourceComplete);
     const unresolvedScoringIds = deepBatch.filter(paper => {
         const scoring = paper?.analysisManifest?.stages?.scoringAudit;
@@ -475,14 +486,17 @@ function buildDigestRunReport(targetDate, options = {}) {
     }).map(normalizedId).filter(Boolean);
     const analysisComplete = Boolean(deep && filtered) && productionAnalysisComplete && (
         failed.length === 0
-        && successful.length === filteredBatch.length
-        && samePaperIds(successful, filteredBatch)
+        && successful.length + waived.length === filteredBatch.length
+        && samePaperIds([...successful, ...waived], filteredBatch)
     );
     const errors = [];
     if (!fetchComplete) errors.push('抓取来源健康或批次绑定不完整');
     if (!filteredComplete) errors.push('筛选状态、决定覆盖或批次绑定不完整');
     if (unresolvedScoringIds.length > 0) {
         errors.push(`评分稳定性二次审计尚未收敛: ${unresolvedScoringIds.join(', ')}`);
+    }
+    if (analysisWaiver && !analysisWaiverCheck.valid) {
+        errors.push(`日更分析 waiver 无效: ${analysisWaiverCheck.issues.join('; ')}`);
     }
     if (!analysisComplete) errors.push(
         productionAnalysisComplete
@@ -534,8 +548,16 @@ function buildDigestRunReport(targetDate, options = {}) {
             publicationMode: analysisPublicationMode,
             total: deepBatch.length,
             successful: successful.length,
+            waived: waived.length,
+            waivedIds: waived.map(normalizedId).filter(Boolean),
             failed: failed.length,
             failedIds: failed.map(normalizedId).filter(Boolean),
+            waiver: analysisWaiverCheck.valid && analysisWaiver ? {
+                contract: analysisWaiver.contract,
+                reason: analysisWaiver.reason,
+                waivedAt: analysisWaiver.waivedAt,
+                sha256: analysisWaiver.waiverSha256
+            } : null,
             scoringStabilityUnresolvedIds: unresolvedScoringIds,
             dailyFreshSource: {
                 complete: dailySourceComplete,
@@ -575,7 +597,7 @@ function formatDigestRunSummary(report) {
         `[digest-status] ${report.batchDate} overall=${report.overallStatus} errors=${report.errors.length}`,
         `  抓取 ${state(report.fetch.complete)} | candidates=${report.fetch.rawCandidateCount}`,
         `  筛选 ${state(report.filter.complete)} | selected=${report.filter.selectedCount} | candidates=${report.filter.totalCandidates ?? '?'} | pending=${report.filter.pendingDecisions ?? '?'}`,
-        `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | failed=${report.analysis.failed}`,
+        `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | waived=${report.analysis.waived || 0} | failed=${report.analysis.failed}`,
         ...(report.analysis.scoringStabilityUnresolvedIds?.length
             ? [`  评分稳定性 unresolved=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
             : []),

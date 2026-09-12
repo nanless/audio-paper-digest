@@ -206,4 +206,15 @@ describe('production analysis contract regressions', () => {
             sourceText: 'Experiment results compare a baseline; the negative result has a measurable degradation.'
         }), null);
     });
+
+    it('recognizes an explicit Chinese 比较是 relation without accepting a generic 比较问题', () => {
+        const analysis = validAnalysisText().replace(
+            '实验在多个语音识别数据集上比较错误率',
+            '第一个待验证的比较是模型 A、模型 B 与模型 C 的错误率排序能否代替推理质量排序'
+        );
+        assert.strictEqual(validateExperimentTableEvidenceDepth(analysis, {
+            documentType: '方法研究',
+            sourceText: 'Evaluation results report a baseline comparison.'
+        }), null);
+    });
 });

@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const adapter = require('./conference-analysis-adapter.js');
@@ -22,6 +23,7 @@ const VERSION = 1;
 const ID_RE = /^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/;
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
+const FULL = { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' };
 const READER_CONTRACT = 'beginner-researcher-v3';
 const SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4';
 const SCORING_CONTRACT = 'api-scoring-audit-v2';
@@ -37,7 +39,7 @@ const stableHash = fresh.stableHash;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const canonicalBytes = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
 function fail(message) { const error = new Error(`Conference postprocess rejected: ${message}`); error.code = 'CONFERENCE_POSTPROCESS_INTEGRITY'; throw error; }
-function publicHttps(value, label, { identitySafe = false, conferenceOnly = false } = {}) {
+function publicHttps(value, label, { identitySafe = false, conferenceOnly = false, normalize = false } = {}) {
     if (identitySafe) {
         try {
             const normalized = identityApi.validateOfficialUrl(value, label);
@@ -56,7 +58,7 @@ function publicHttps(value, label, { identitySafe = false, conferenceOnly = fals
         || parsed.hostname.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname)
         || !parsed.hostname.split('.').every(part => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(part))
         || (conferenceOnly && /(^|\.)arxiv\.org$/i.test(parsed.hostname))) fail(`${label} must be a public conference HTTPS URL`);
-    if (parsed.href !== value) fail(`${label} must use canonical URL spelling`);
+    if (parsed.href !== value && !normalize) fail(`${label} must use canonical URL spelling`);
     return parsed.href;
 }
 function publicationProjection(paper) {
@@ -126,9 +128,15 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, de
         || receipt?.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256 || receipt?.receiptSha256 !== stableHash(receiptBody)
         || loaded.run.analysisSha256 !== loaded.analysisFileSha256 || loaded.analysis.papers?.length !== 1
         || loaded.analysis.papers[0].id !== loaded.run.paperId || loaded.analysis.papers[0].arxivId || loaded.analysis.papers[0].paper_id) fail('sealed conference analysis completion is required');
-    if (stableHash(loaded.run.capabilities) !== stableHash(WEAK)) fail('only weak unavailable-structure conference completion is supported');
+    if (stableHash(loaded.run.capabilities) !== stableHash(WEAK)
+        && stableHash(loaded.run.capabilities) !== stableHash(FULL)) fail('conference capability projection is unsupported');
     const artifacts = loaded.source?.sourceDetails?.structuredArtifacts;
-    if (!artifacts || artifacts.tables.length || artifacts.formulas.length || artifacts.figures.length) fail('weak unavailable structures must remain empty');
+    if (!artifacts || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)
+        || !Array.isArray(artifacts.figures)) fail('conference structured artifacts are missing');
+    if (stableHash(loaded.run.capabilities) === stableHash(WEAK)
+        && (artifacts.tables.length || artifacts.formulas.length || artifacts.figures.length)) {
+        fail('weak unavailable structures must remain empty');
+    }
     const sourcePaper = loaded.analysis.papers[0];
     const publication = validateReaderAndScoring(sourcePaper);
     const successful = dependencies.isSuccessful || analysisEngine.isSuccessfulAnalysisRecord;
@@ -200,9 +208,21 @@ function safeStem(loaded) {
     return `conference-${parts[1]}-${parts[2]}-${parts[3]}-${value}-${sha256(loaded.run.paperId).slice(0, 10)}`;
 }
 function render(packet) {
-    const output = execFileSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), path.join(__dirname, '..', 'conference-page-render.py')],
-        { input: JSON.stringify(packet), maxBuffer: 64 * 1024 * 1024 });
-    return pageApi.strictJson(output, 'conference renderer output');
+    // Passing a large Figure-bearing JSON packet through execFileSync's stdin
+    // can leave the Python child waiting for EOF on macOS.  Use an exact,
+    // private temporary file instead; the renderer validates and consumes the
+    // same bytes, while the parent can always close and clean up the input.
+    const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'conference-page-render-'));
+    const packetFile = path.join(temporaryRoot, 'packet.json');
+    try {
+        fs.writeFileSync(packetFile, JSON.stringify(packet), { flag: 'wx', mode: 0o600 });
+        const output = execFileSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'),
+            path.join(__dirname, '..', 'conference-page-render.py'), '--packet-file', packetFile],
+        { maxBuffer: 64 * 1024 * 1024 });
+        return pageApi.strictJson(output, 'conference renderer output');
+    } finally {
+        fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
 }
 function implementationFingerprint() {
     const sources = { nodeSourceSha256: pageApi.readRegular(__filename, 4 * 1024 * 1024, 'conference projection source').fileSha256,
@@ -225,6 +245,25 @@ function fingerprint(dependencies) {
         || Object.entries(value).filter(([key]) => key.endsWith('Sha256')).some(([, sha]) => !/^[a-f0-9]{64}$/.test(sha || ''))) fail('conference projection implementation fingerprint is invalid');
     return value;
 }
+
+function conferenceFigureAssets(loaded) {
+    const paper = loaded.analysis.papers[0];
+    return (paper.apiReaderFigures || []).map((figure, index) => {
+        const filename = String(figure.assetFilename || '');
+        const expected = path.join(loaded.directory, 'reader-assets', filename);
+        if (!/^figure-\d+-[a-f0-9]{16}\.png$/.test(filename)
+            || figure.cachePath !== expected || figure.assetMediaType !== 'image/png') {
+            fail(`会议 Figure ${index + 1} 的缓存身份不闭合`);
+        }
+        const record = pageApi.readRegular(expected, 32 * 1024 * 1024, `conference Figure ${index + 1}`);
+        if (record.fileSha256 !== figure.assetSha256 || record.bytes.length !== figure.assetBytes) {
+            fail(`会议 Figure ${index + 1} 的缓存字节不闭合`);
+        }
+        return { ordinal: figure.ordinal, url: figure.url, assetSha256: figure.assetSha256,
+            mediaType: 'image/png', base64: record.bytes.toString('base64') };
+    });
+}
+
 function projection(loaded, taxonomy, renderFn, implementation) {
     const assignment = buildAssignment(loaded, taxonomy); if (assignment.status !== 'assigned') return { assignment };
     const stem = safeStem(loaded), conferenceId = loaded.run.conference.id;
@@ -232,11 +271,31 @@ function projection(loaded, taxonomy, renderFn, implementation) {
     const packet = { paper: { ...structuredClone(loaded.analysis.papers[0]), paper_id: loaded.run.paperId }, taxonomy: assignment,
         paper_id: loaded.run.paperId, conference: loaded.run.conference, capabilities: loaded.run.capabilities,
         publication: structuredClone(loaded.publication), date,
+        figureAssets: conferenceFigureAssets(loaded),
         aggregateUrl: `/posts/conference-${conferenceId}/` };
     delete packet.paper.arxivId;
     const rendered = renderFn(packet);
-    if (!rendered || typeof rendered.markdown !== 'string' || !rendered.markdown.trim() || !Array.isArray(rendered.assets)
-        || rendered.assets.length || JSON.stringify(rendered).includes('paper_digest_arxiv_id') || /arxiv\.org/i.test(rendered.markdown)) fail('generic renderer failed or emitted arXiv identity/weak assets');
+    if (!rendered || typeof rendered.markdown !== 'string' || !rendered.markdown.trim() || !Array.isArray(rendered.assets)) {
+        fail('generic renderer failed or emitted invalid conference assets');
+    }
+    if (JSON.stringify(rendered).includes('paper_digest_arxiv_id') || /arxiv\.org/i.test(rendered.markdown)) {
+        fail('arXiv identity leaked into conference renderer output');
+    }
+    if (stableHash(loaded.run.capabilities) === stableHash(WEAK) && rendered.assets.length) {
+        fail('weak assets are not permitted for weak conference sources');
+    }
+    const assetFiles = rendered.assets.map((asset, index) => {
+        if (!asset || typeof asset.path !== 'string'
+            || !/^static\/images\/conference\/[a-z0-9-]+\/[a-f0-9]{12}\/figure-\d+\.png$/.test(asset.path)
+            || typeof asset.base64 !== 'string'
+            || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.base64)) {
+            fail(`conference renderer returned unsafe asset ${index + 1}`);
+        }
+        const bytes = Buffer.from(asset.base64, 'base64');
+        if (!bytes.length) fail(`conference renderer returned empty asset ${index + 1}`);
+        return { path: asset.path, bytes, sha256: sha256(bytes), size: bytes.length };
+    });
+    if (new Set(assetFiles.map(asset => asset.path)).size !== assetFiles.length) fail('conference renderer returned duplicate assets');
     const pageBytes = Buffer.from(rendered.markdown, 'utf8'); const assignmentBytes = canonicalBytes(assignment);
     const body = { contract: CONTRACT, version: VERSION, status: 'complete', paperId: loaded.run.paperId,
         analysisExecutionId: loaded.run.executionId, analysisSha256: loaded.analysisFileSha256,
@@ -254,8 +313,11 @@ function projection(loaded, taxonomy, renderFn, implementation) {
         documentType: loaded.analysis.papers[0].parsed.documentType,
         scoreDimensions: Object.fromEntries(SCORE_DIMENSIONS.map(([field]) => [field, Number(loaded.analysis.papers[0].parsed[field])])),
         authors: structuredClone(loaded.analysis.papers[0].apiReaderAuthors.authors),
-        resources: structuredClone(loaded.analysis.papers[0].apiReaderResources.resources) };
-    return { assignment, assignmentBytes, pageBytes, manifest: { ...body, manifestSha256: stableHash(body) } };
+        resources: structuredClone(loaded.analysis.papers[0].apiReaderResources.resources),
+        assets: assetFiles.map(({ bytes, ...record }) => record),
+        assetSetSha256: stableHash(assetFiles.map(({ bytes, ...record }) => record)) };
+    return { assignment, assignmentBytes, pageBytes, assetFiles,
+        manifest: { ...body, manifestSha256: stableHash(body) } };
 }
 function stageDirectory(stagingRoot, executionId, registrySha256, implementationSha256, create = false) {
     const root = fresh.assertSafeDirectory(stagingRoot, create); const run = fresh.assertSafeDirectory(path.join(root, executionId), create);
@@ -272,12 +334,17 @@ function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, plan
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
     if (apply) {
         const directory = stageDirectory(stagingRoot, executionId, taxonomy.registrySha256, implementation.implementationSha256, true);
-        rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json']);
+        rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
         pageApi.writeExact(path.join(directory, 'assignment.json'), projected.assignmentBytes || canonicalBytes(projected.assignment));
         if (projected.assignment.status === 'assigned') {
             pageApi.writeExact(path.join(directory, 'page.md'), projected.pageBytes);
+            for (const asset of projected.assetFiles || []) {
+                const target = path.resolve(directory, 'assets', ...asset.path.split('/'));
+                if (!target.startsWith(`${path.join(directory, 'assets')}${path.sep}`)) fail('conference asset escapes staging directory');
+                pageApi.writeExact(target, asset.bytes);
+            }
             pageApi.writeExact(path.join(directory, 'manifest.json'), canonicalBytes(projected.manifest));
-            rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json']);
+            rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
         }
     }
     if (projected.assignment.status !== 'assigned') return { status: 'blocked', assignment: projected.assignment };
@@ -289,7 +356,7 @@ function loadStage({ analysisRoot, executionId, taxonomyFile, stagingRoot, planH
     const implementation = fingerprint(dependencies); const expected = projection(loaded, taxonomy, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
     if (expected.assignment.status !== 'assigned') fail('current taxonomy projection is blocked');
-    const directory = stageDirectory(stagingRoot, executionId, taxonomy.registrySha256, implementation.implementationSha256); rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json']);
+    const directory = stageDirectory(stagingRoot, executionId, taxonomy.registrySha256, implementation.implementationSha256); rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
     const assignmentRecord = pageApi.readRegular(path.join(directory, 'assignment.json'), 16 * 1024 * 1024, 'conference taxonomy assignment');
     const manifestRecord = pageApi.readRegular(path.join(directory, 'manifest.json'), 16 * 1024 * 1024, 'conference page manifest');
     const pageRecord = pageApi.readRegular(path.join(directory, 'page.md'), 32 * 1024 * 1024, 'conference staged page');
@@ -298,6 +365,10 @@ function loadStage({ analysisRoot, executionId, taxonomyFile, stagingRoot, planH
     if (!assignmentRecord.bytes.equals(expected.assignmentBytes) || !manifestRecord.bytes.equals(canonicalBytes(expected.manifest))
         || !pageRecord.bytes.equals(expected.pageBytes) || stableHash(assignment) !== stableHash(expected.assignment)
         || stableHash(manifest) !== stableHash(expected.manifest)) fail('conference stage is not the deterministic projection of current completion/taxonomy/renderer');
+    for (const asset of expected.manifest.assets || []) {
+        const record = pageApi.readRegular(path.join(directory, 'assets', ...asset.path.split('/')), 32 * 1024 * 1024, 'conference staged asset');
+        if (record.fileSha256 !== asset.sha256 || record.bytes.length !== asset.size) fail(`conference staged asset drifted: ${asset.path}`);
+    }
     return { directory, manifest, manifestFileSha256: manifestRecord.fileSha256,
         assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 };
 }
@@ -306,12 +377,21 @@ function scoreLine(score, dimensions) {
     const detail = SCORE_DIMENSIONS.map(([field, label, maximum]) => `${label} ${Number(dimensions[field]).toFixed(1)}/${maximum}`).join(' | ');
     return `**${Number(score).toFixed(1)}/10** | ${detail}`;
 }
+function isArxivResource(resource) {
+    return [resource?.originalUrl, resource?.finalUrl].some(value => {
+        try { return /(^|\.)arxiv\.org$/i.test(new URL(value).hostname); }
+        catch { return false; }
+    });
+}
 function resourceLine(resource, paperId) {
     const labels = { code: '代码相关资源', model: '模型相关资源', dataset: '数据相关资源', demo: '演示资源',
         reproduction: '复现相关资源', third_party: '第三方资源' };
     const statuses = { available: '链接可访问', unavailable: '链接不可用', temporarily_unreachable: '暂时无法访问' };
-    const original = publicHttps(resource.originalUrl, `${paperId} resource original URL`);
-    const final = publicHttps(resource.finalUrl, `${paperId} resource final URL`);
+    // Resource identity preserves the exact URL spelling seen in the paper;
+    // the rendered link may use URL.href normalization (for example, adding
+    // the root slash to https://example.org/) without changing that evidence.
+    const original = publicHttps(resource.originalUrl, `${paperId} resource original URL`, { normalize: true });
+    const final = publicHttps(resource.finalUrl, `${paperId} resource final URL`, { normalize: true });
     const links = `<${original}>${final === original ? '' : ` → <${final}>`}`;
     const http = resource.status === null ? '' : `（HTTP ${resource.status}）`;
     return `- ${labels[resource.type]}：${links} — ${statuses[resource.availability]}${http}`;
@@ -342,7 +422,11 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
         rankBucket: item.manifest.rankBucket, documentType: item.manifest.documentType,
         primaryTask: item.manifest.taxonomy.concepts.find(concept => concept.id === item.manifest.taxonomy.primaryTaskId).preferredLabel.zh,
         primaryMethod: item.manifest.taxonomy.concepts.find(concept => concept.id === item.manifest.taxonomy.primaryMethodId).preferredLabel.zh,
-        authors: structuredClone(item.manifest.authors), resources: structuredClone(item.manifest.resources),
+        authors: structuredClone(item.manifest.authors),
+        // Conference pages are isolated to the official proceedings identity.
+        // Related arXiv links can still exist in the sealed Reader evidence,
+        // but must not leak into the conference aggregate's public surface.
+        resources: structuredClone(item.manifest.resources).filter(resource => !isArxivResource(resource)),
         officialRecordUrl: item.manifest.publication.recordUrl, officialPdfUrl: item.manifest.publication.pdfUrl,
         pagePath: item.manifest.pagePath, url: item.manifest.primaryUrl,
         taxonomyAssignmentSha256: item.manifest.taxonomy.assignmentSha256,

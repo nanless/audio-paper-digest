@@ -38,6 +38,14 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
         text = '| a | b |\n| --- | --- |\n| $x+1$ | $5$ |'
         self.assertEqual(math_and_emphasis_issues(sanitize_markdown_for_publish(text), 'Reader'), [])
 
+    def test_display_math_closer_after_tex_linebreak_is_counted(self):
+        formula = r'\[x=\begin{bmatrix}1\\ 2\\\end{bmatrix}\\\]'
+        self.assertEqual(math_and_emphasis_issues(formula, 'Reader'), [])
+        self.assertTrue(any(
+            '未配对' in issue
+            for issue in math_and_emphasis_issues(formula[:-2], 'Reader')
+        ))
+
     def test_rendered_html_currency_requires_real_separate_plain_table_cells(self):
         html = ('<article><p>价格见表。</p><table><thead><tr><th>$0.2</th><th>成本</th></tr></thead>'
                 '<tbody><tr><td> $0.2 </td><td>\n$1.0/1000\n</td></tr></tbody></table></article>')

@@ -77,6 +77,12 @@ const FILE_LOCK_TOKEN_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f
 const LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY = Symbol(
     'local-dead-process-operation-lock-recovery-v1'
 );
+// Operator-only recovery for a deliberately audited local workspace.  The
+// caller must independently confirm that the owner PID is dead; this is not
+// used by ordinary process retries and does not weaken regular paper locks.
+const OPERATOR_CONFIRMED_DEAD_OPERATION_LOCK_RECOVERY = Symbol(
+    'operator-confirmed-dead-operation-lock-recovery-v1'
+);
 // This narrower capability exists only for a sealed historical-direct paper
 // execution.  It upgrades one pre-hardening 0755/0644 canonical lock whose
 // hostname no longer matches this machine, after a deliberately long lease.
@@ -265,10 +271,26 @@ function localOwnerIsConfirmedDead(owner) {
     }
 }
 
+function localHostIdentifiers() {
+    const identifiers = new Set([os.hostname()]);
+    for (const addresses of Object.values(os.networkInterfaces())) {
+        for (const address of addresses || []) {
+            if (address?.address) identifiers.add(address.address);
+        }
+    }
+    return identifiers;
+}
+
+function ownerIsOnThisMachine(owner) {
+    return typeof owner?.hostname === 'string'
+        && localHostIdentifiers().has(owner.hostname);
+}
+
 function operationLockMayImmediatelyReclaimLocalDeadOwner(snapshot, options = {}) {
-    if (options.recoveryPolicy !== LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY
-        || !strictCurrentFileLockOwner(snapshot)
-        || snapshot.owner.hostname !== os.hostname()) return false;
+    const operatorRecovery = options.recoveryPolicy === OPERATOR_CONFIRMED_DEAD_OPERATION_LOCK_RECOVERY;
+    const localRecovery = options.recoveryPolicy === LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY;
+    if ((!operatorRecovery && !localRecovery) || !strictCurrentFileLockOwner(snapshot)
+        || (!operatorRecovery && !ownerIsOnThisMachine(snapshot.owner))) return false;
     return localOwnerIsConfirmedDead(snapshot.owner);
 }
 
@@ -314,7 +336,7 @@ function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), op
     // Legacy 0755/0644 locks predate the hardened protocol.  They are accepted
     // only for this exact local-dead upgrade path; remote/unknown legacy owners
     // are deliberately never reclaimed.
-    if (exactLegacy && owner.hostname !== os.hostname()) return false;
+    if (exactLegacy && !ownerIsOnThisMachine(owner)) return false;
     if (owner.hostname !== os.hostname()) return true;
     return localOwnerIsConfirmedDead(owner);
 }
@@ -1860,6 +1882,7 @@ module.exports = {
     readJsonFileStrict,
     initializeJsonFileLocked,
     LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
+    OPERATOR_CONFIRMED_DEAD_OPERATION_LOCK_RECOVERY,
     HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
     HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS,
     acquireFileLockSync,

@@ -17,7 +17,8 @@ const IMPLEMENTATION_ALLOWANCE_CONTRACT = 'reader-implementation-repair-allowanc
 const IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT = 'reader-implementation-repair-lineage-v1';
 const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', 'tableCompilerSha256',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
-    'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256']);
+    'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
+    'readerRecoveryEpochSha256']);
 const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const shaText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -127,7 +128,9 @@ function validateImplementationAllowance(payload, identity, directory) {
     const audit = audits.at(-1); const body = proof && { ...proof }; if (body) delete body.allowanceSha256;
     const fromIdentity = String(proof?.fromIdentitySha256 || '');
     const archivePattern = new RegExp(`^${fromIdentity}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`);
-    const direct = identity?.freshAnalysis?.runId ? null
+    const conference = identity?.freshAnalysis?.runId ? null
+        : require('./conference-analysis-context.js').getConferenceAnalysisContext();
+    const direct = identity?.freshAnalysis?.runId || conference?.executionId ? null
         : require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
     const directPaperId = String(direct?.paperId || '').replace(/^arxiv:/, '');
     const directScopeValid = Boolean(direct?.runId)
@@ -138,6 +141,15 @@ function validateImplementationAllowance(payload, identity, directory) {
         && identity?.sourceSha256 === direct.sourceSha256
         && typeof directory === 'string'
         && path.resolve(directory) === path.resolve(direct.readerAttemptsDir);
+    const conferenceScopeValid = Boolean(conference?.executionId)
+        && audit?.scope === 'conference-process'
+        && audit?.runId === conference.executionId
+        && audit?.paperId === conference.paperId
+        && identity?.paperId === conference.paperId
+        && identity?.sourceSha256 === crypto.createHash('sha256')
+            .update(String(conference.sourceDetails?.text || '')).digest('hex')
+        && typeof directory === 'string'
+        && path.resolve(directory) === path.join(path.resolve(conference.executionDir), 'reader-attempts');
     if (!proof || typeof proof !== 'object' || Array.isArray(proof)
         || Object.keys(proof).sort().join('\0') !== keys.sort().join('\0')
         || proof.contract !== IMPLEMENTATION_ALLOWANCE_CONTRACT
@@ -146,8 +158,9 @@ function validateImplementationAllowance(payload, identity, directory) {
         || proof.changedFields.some((field, index) => index && proof.changedFields[index - 1].localeCompare(field) >= 0)
         || !audit || audit.contract !== 'reader-recovery-diagnostics-revision-v1'
         || (identity?.freshAnalysis?.runId ? audit.runId !== identity.freshAnalysis.runId
-            : !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(audit.runId || ''))
-                || !directScopeValid)
+            : conference?.executionId ? !conferenceScopeValid
+                : !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(audit.runId || ''))
+                    || !directScopeValid)
         || audit.paperId !== identity?.paperId
         || audit.toIdentitySha256 !== hashDraft(identity) || audit.fromIdentitySha256 !== fromIdentity
         || !archivePattern.test(String(audit.archivedName || ''))

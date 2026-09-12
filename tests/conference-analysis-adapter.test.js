@@ -63,7 +63,7 @@ function successfulReaderDraft() {
     return draft;
 }
 
-test('weak conference PDF prepares isolated canonical identity with unavailable structured capabilities', t => {
+test('replayable conference PDF prepares isolated canonical identity with structured capabilities', t => {
     const fixture = productionPlanFixture(t);
     const analysisRoot = path.join(fixture.root, 'analysis');
     assert.throws(() => adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
@@ -77,7 +77,7 @@ test('weak conference PDF prepares isolated canonical identity with unavailable 
     assert.equal(paper.id, fixture.paperId); assert.equal(paper.arxivId, undefined);
     assert.equal(paper.paper_id, undefined); assert.equal(paper.fullText, undefined);
     assert.deepEqual(loaded.run.capabilities,
-        { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' });
+        { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' });
     assert.deepEqual(loaded.source.sourceDetails.structuredArtifacts.tables, []);
     assert.deepEqual(loaded.source.sourceDetails.structuredArtifacts.formulas, []);
     assert.deepEqual(loaded.source.sourceDetails.structuredArtifacts.figures, []);
@@ -160,7 +160,7 @@ test('mock common analysis observes source only through authenticated context an
         const injected = context.getConferenceAnalysisSource(prepared.paper);
         assert.equal(injected.source, 'conference_pdf_text'); assert.ok(injected.text.length > 1000);
         assert.deepEqual(injected.conferenceCapabilities,
-            { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' });
+            { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' });
         const analysisFile = path.join(analysisRoot, EXECUTION, 'analysis.json');
         const checkpoint = JSON.parse(fs.readFileSync(analysisFile));
         checkpoint.status = 'running'; checkpoint.stats = { analysisStatus: 'running' };

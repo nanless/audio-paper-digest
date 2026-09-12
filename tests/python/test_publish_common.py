@@ -377,6 +377,19 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             '逻辑自洽且与论文承认的边界一致，但该结论限于 2 个方言。',
         )
 
+    def test_scoring_anchor_removal_preserves_frontmatter_bytes(self):
+        frontmatter = (
+            '---\n'
+            'paper_digest_one_sentence: "刻画网络认法 的二阶模式"\n'
+            '---\n'
+        )
+        self.assertEqual(
+            strip_internal_scoring_anchors(
+                frontmatter + '[A_METHOD] 中 文方法'
+            ),
+            frontmatter + '中文方法',
+        )
+
     def test_manual_paper_identity_mode_only_allows_true_historical_fallback(self):
         self.assertEqual(
             _manual_paper_identity_mode(
@@ -1543,6 +1556,9 @@ primary_method_tag: #基准测试
             '![图片](https://example.com/image.png)\n'
             '<https://example.com/already>\n'
             '<https://github.com/example/repo，说明文字>\n'
+            '| 模型 | 地址 |\n'
+            '| --- | --- |\n'
+            '| Demo | https://huggingface.co/example/table-model |\n'
             '`https://example.com/inline-code`\n'
             '```text\nhttps://example.com/fenced-code\n```\n'
         )
@@ -1558,8 +1574,22 @@ primary_method_tag: #基准测试
         self.assertIn('![图片](https://example.com/image.png)', fixed)
         self.assertEqual(fixed.count('<https://example.com/already>'), 1)
         self.assertIn('<https://github.com/example/repo>，说明文字', fixed)
+        self.assertIn(
+            '| Demo | https://huggingface.co/example/table-model |', fixed,
+        )
         self.assertIn('`https://example.com/inline-code`', fixed)
         self.assertIn('```text\nhttps://example.com/fenced-code\n```', fixed)
+
+    def test_sanitize_repairs_only_line_opening_bold_whitespace(self):
+        text = (
+            '** 概念桥：** 正文\n'
+            '> ** 看图路径：** 第一步\n'
+            '普通 **合法加粗** 与闭合标记：** 后文\n'
+        )
+        fixed = sanitize_markdown_for_publish(text)
+        self.assertIn('**概念桥：** 正文', fixed)
+        self.assertIn('> **看图路径：** 第一步', fixed)
+        self.assertIn('普通 **合法加粗** 与闭合标记：** 后文', fixed)
 
     def test_publish_llm_api_routing(self):
         self.assertEqual(
@@ -2793,6 +2823,7 @@ primary_method_tag: #基准测试
         cases = (
             ('The paper compared with Naive RAG.', '方案 C 比 Naive RAG 更强，却也更脆'),
             ('消融实验比较含年龄信息与不含年龄信息的配置。', '配置 C 不含年龄信息，配置 B 排除说话人上下文'),
+            ('Table 1 compares HCNA w/o extrap. against GCR extrapolation.', '配置 C 无外推，配置 B 保留自适应外推'),
         )
         for source_text, conclusion in cases:
             with self.subTest(conclusion=conclusion):
@@ -2806,6 +2837,15 @@ primary_method_tag: #基准测试
             '| 方法 / 设置 |', '| 阶数 |')
         self.assertIsNone(validate_experiment_table_contract(
             modality_order,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+        ))
+        explicit_contrast = analysis_with('配置 C 相比配置 A 降低 2.7 个百分点').replace(
+            '关键比较问题是三种配置在固定测试集上的 WER 差异多大，并核验模型配置改变是否影响结果方向。',
+            '为核对规模与任务配比谁主导性能，仅对比同一测试划分上的归一化词错误率。',
+        )
+        self.assertIsNone(validate_experiment_table_contract(
+            explicit_contrast,
             contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
             document_type='方法研究',
         ))

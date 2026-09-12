@@ -4397,11 +4397,12 @@ def _validate_api_reader_source_bindings(paper, article=None):
         ordinal = binding.get('formulaOrdinal')
         latex = binding.get('latex')
         rendered_block = f'\\[{str(latex or "").strip()}\\]'
-        # fix_latex_delimiters 是发布渲染必需的确定性变换（如 _{<k} → _{\lt k}，
-        # 防止 Hugo 把 TeX 里的尖括号当 HTML 标签吃掉）。canonical 存量正文里是
-        # 原始块，最终页面里是变换后块：两种形态恰好出现一次才算合法（重复、
-        # 缺失、变换后碰撞都失败关闭）。renderedBlockSha256 仍校验原始绑定。
-        published_block = fix_latex_delimiters(rendered_block)
+        # 最终页面会经过统一的确定性发布清理：除 _{<k} → _{\lt k} 外，
+        # \texttt{<answer>} 之类的论文控制标记也会转成不会被 Hugo 当作 HTML
+        # 的形式。canonical 存量正文里是原始块，最终页面里是清理后块：两种
+        # 形态恰好出现一次才算合法（重复、缺失、变换后碰撞都失败关闭）。
+        # renderedBlockSha256 仍只校验原始绑定，不能用清理后的字节重签来源。
+        published_block = sanitize_markdown_for_publish(rendered_block)
         if published_block == rendered_block:
             formula_occurrences = display_blocks.count(rendered_block)
         else:
@@ -4661,6 +4662,14 @@ def _validate_api_reader_resource_identity(paper):
             }
             capabilities = documentation.get('capabilities') \
                 if isinstance(documentation, dict) else None
+            capability_keys = {'installation', 'inference', 'fineTuning'}
+            complete_documentation = isinstance(capabilities, dict) \
+                and set(capabilities) == capability_keys \
+                and all(value is True for value in capabilities.values())
+            partial_documentation = isinstance(capabilities, dict) \
+                and set(capabilities) == capability_keys \
+                and all(isinstance(value, bool) for value in capabilities.values()) \
+                and not complete_documentation
             if not isinstance(documentation, dict) \
                     or set(documentation) != documentation_keys \
                     or resource.get('type') != 'code' \
@@ -4672,10 +4681,10 @@ def _validate_api_reader_resource_identity(paper):
                     or not re.fullmatch(r'[0-9a-f]{64}', str(
                         documentation.get('sourceSha256') or '',
                     )) \
-                    or not isinstance(capabilities, dict) \
-                    or set(capabilities) != {'installation', 'inference', 'fineTuning'} \
-                    or not all(value is True for value in capabilities.values()) \
-                    or documentation.get('completeness') != 'complete':
+                    or not (complete_documentation or partial_documentation) \
+                    or documentation.get('completeness') != (
+                        'complete' if complete_documentation else 'partial'
+                    ):
                 raise PublishDataValidationError(
                     f'API reader resources[{index}] documentationEvidence 非法'
                 )
@@ -5889,11 +5898,14 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
 
     # 2. 检查未正确转换的 LaTeX 行内公式（$...$ 形式，可能被 Hugo 解析为 markdown）
     # 排除已在 \( ... \) 中的，以及 code block 中的
+    frontmatter_match = re.match(r'^---\n.*?\n---\n', content, flags=re.DOTALL)
+    latex_prefix = frontmatter_match.group(0) if frontmatter_match else ''
+    latex_body = content[len(latex_prefix):]
     latex_pattern = re.compile(r'(?<!\\)\$([^\s$][^$]*?)\$(?!\d)')
-    latex_matches = latex_pattern.findall(content)
+    latex_matches = latex_pattern.findall(latex_body)
     if latex_matches:
         issues.append(f"发现 {len(latex_matches)} 个未转换的 LaTeX 行内公式")
-        content = fix_latex_delimiters(content)
+        content = latex_prefix + fix_latex_delimiters(latex_body)
 
     # Hugo 数学分隔符本身已经负责渲染；外围反引号会把公式重新变成代码。
     backticked_math = re.compile(

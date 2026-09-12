@@ -2430,7 +2430,7 @@ def _validate_experiment_table_evidence_depth(
         before = next((
             paragraph for paragraph in before_candidates
             if len(re.sub(r'[*_`#>\s]', '', paragraph)) >= 20
-            and re.search(r'比较|检验|考察|回答|关键问题|差异|收益|代价|是否|何种|多大|哪些', paragraph)
+            and re.search(r'比较|对比|检验|考察|回答|关键问题|差异|收益|代价|是否|能否|何种|多大|哪些', paragraph)
         ), '')
         after = next((
             paragraph for paragraph in after_candidates
@@ -2466,7 +2466,13 @@ def _validate_experiment_table_evidence_depth(
     )
     result_has_ablation = re.search(
         r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
-        r'消融|移除|去掉|不含|排除',
+        r'消融|移除|去掉|不含|排除|无外推',
+        results,
+        re.I,
+    ) or re.search(
+        r'(?:逐级|逐步|依次)(?:叠加|加入|添加|移除|比较)|'
+        r'(?:组件|约束|模块)[^。；\n]{0,24}(?:对照|贡献|差异)|'
+        r'\+\s*L[_\s]?[A-Za-z](?:\s*\+\s*L[_\s]?[A-Za-z])+',
         results,
         re.I,
     )
@@ -5226,6 +5232,14 @@ def fix_yaml_unbalanced_quotes(text):
 def strip_internal_scoring_anchors(text):
     """Strip reader-facing scoring provenance tags from a derived text view."""
     value = str(text or '')
+    frontmatter = ''
+    frontmatter_match = re.match(
+        r'\A---\r?\n[\s\S]*?\r?\n---(?:\r?\n|\Z)',
+        value,
+    )
+    if frontmatter_match:
+        frontmatter = frontmatter_match.group(0)
+        value = value[len(frontmatter):]
     anchor = r'\[(?:A|SCORING_SOURCE)_[A-Z0-9_/-]+\]'
     value = re.sub(
         rf'(?P<prefix>与|和)[ \t]*{anchor}[ \t]*(?=(?:承认|报告|披露|给出|指出))',
@@ -5248,7 +5262,7 @@ def strip_internal_scoring_anchors(text):
         if line_number in table_lines:
             continue
         lines[line_number] = re.sub(r'(?<=[㐀-鿿])[ \t]+(?=[㐀-鿿])', '', line)
-    return '\n'.join(lines)
+    return frontmatter + '\n'.join(lines)
 
 
 def linkify_bare_https_urls(text):
@@ -5272,6 +5286,9 @@ def linkify_bare_https_urls(text):
 
     value = re.sub(r'<(https://[^>\s]+)>', repair_autolink, value)
     lines = value.splitlines(keepends=True)
+    table_lines = set()
+    for table in extract_markdown_tables(value):
+        table_lines.update(range(table['start_line'], table['end_line'] + 1))
     in_frontmatter = bool(lines and lines[0].strip() == '---')
     frontmatter_closed = not in_frontmatter
     fence = None
@@ -5308,6 +5325,9 @@ def linkify_bare_https_urls(text):
             output.append(line)
             if index > 0 and stripped == '---':
                 frontmatter_closed = True
+            continue
+        if index in table_lines:
+            output.append(line)
             continue
         fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
         if fence_match:
@@ -5372,8 +5392,20 @@ def sanitize_markdown_for_publish(text):
     text = text.replace('\ufffd\ufffd\ufffd', '。')
     text = text.replace('\ufffd\ufffd', '。')
     text = text.replace('\ufffd', '')
-    text = normalize_arxiv_math_double_extraction(text)
-    text = fix_latex_delimiters(text)
+    frontmatter_match = re.match(r'^---\n.*?\n---\n', text, flags=re.DOTALL)
+    latex_prefix = frontmatter_match.group(0) if frontmatter_match else ''
+    latex_body = text[len(latex_prefix):]
+    latex_body = normalize_arxiv_math_double_extraction(latex_body)
+    latex_body = fix_latex_delimiters(latex_body)
+    # Reader concept bridges occasionally emit ``** label：**``.  CommonMark
+    # treats whitespace immediately after the opening delimiter as literal
+    # text, so Hugo preserves both markers.  Restrict the deterministic repair
+    # to a line-opening delimiter; closing delimiters and source-bound tables
+    # remain byte-stable.
+    latex_body = re.sub(
+        r'(?m)^([ \t]*(?:>\s*)?)\*\*[ \t]+(?=\S)', r'\1**', latex_body,
+    )
+    text = latex_prefix + latex_body
     text = escape_html_like_tags(text)
     text = strip_raw_inline_html(text)
     text = fix_image_markdown(text)

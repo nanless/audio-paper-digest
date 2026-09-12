@@ -309,7 +309,7 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
             if (cached) {
                 const bytes = Buffer.from(cached.base64, 'base64');
                 if (sha256(bytes) !== cached.sha256
-                    || !/^image\/(?:png|jpeg|webp)$/.test(String(cached.mime || ''))) {
+                    || !/^image\/(?:png|jpeg|webp|svg\+xml)$/.test(String(cached.mime || ''))) {
                     fail(`daily Reader Figure ${figure.ordinal} invocation cache drift`);
                 }
                 materialized.push({

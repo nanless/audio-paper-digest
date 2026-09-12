@@ -159,7 +159,64 @@ function normalizedPaper(source) {
         source: 'conference', conference: clone(source.conference), externalId: clone(identity.externalId),
         officialRecordUrl, officialPdfUrl, conferencePublication, doi, conferenceTrack: track };
 }
+
+function buildReplayableReaderArtifacts(source) {
+    const raw = source.structuredArtifacts;
+    const sourceDom = value => stableHash(value);
+    const tables = (raw.tables || []).map(table => {
+        const matrix = table.cells.map(row => row.map(cell => String(cell)));
+        const sourceDomSha256 = sourceDom({ kind: 'pdf-table', sourceRef: table.sourceRef,
+            caption: table.caption, cells: matrix });
+        const cells = matrix.flatMap((row, rowIndex) => row.map((text, column) => ({
+            row: rowIndex, column, header: rowIndex === 0, rowspan: 1, colspan: 1,
+            text, sourceDomSha256: sourceDom({ kind: 'pdf-table-cell', sourceRef: table.sourceRef,
+                row: rowIndex, column, text })
+        })));
+        return { ordinal: table.ordinal, label: `Table ${table.ordinal}`,
+            caption: table.caption, sourceDomSha256, headerRows: [0],
+            bodyRows: Array.from({ length: Math.max(0, matrix.length - 1) }, (_, index) => index + 1),
+            cells, matrix, recoveryStatus: table.recoveryStatus };
+    });
+    const formulas = (raw.formulas || []).map(formula => {
+        const latex = String(formula.tex || '').trim();
+        return { ordinal: formula.ordinal, label: `Formula ${formula.ordinal}`, latex,
+            mathml: '', text: latex,
+            sourceDomSha256: sourceDom({ kind: 'pdf-formula', sourceRef: formula.sourceRef, text: latex }),
+            recoveryStatus: formula.recoveryStatus };
+    });
+    const figures = (raw.figures || []).map(figure => {
+        const images = figure.asset ? [{ kind: 'inline_pdf',
+            url: `conference-pdf-figure://${encodeURIComponent(source.paperId)}/${figure.ordinal}`,
+            alt: figure.caption || `Figure ${figure.ordinal}`,
+            mediaType: String(figure.asset.mediaType || '').toLowerCase(),
+            rasterDownloadEligible: false, asset: clone(figure.asset) }] : [];
+        return { ordinal: figure.ordinal, label: `Figure ${figure.ordinal}`,
+            caption: figure.caption, images,
+            sourceDomSha256: sourceDom({ kind: 'pdf-figure', sourceRef: figure.sourceRef,
+                caption: figure.caption, assetSha256: figure.asset?.sha256 || null }),
+            recoveryStatus: figure.recoveryStatus };
+    });
+    const body = { version: 1, parserVersion: 'conference-pdf-structure-v1',
+        sourceKind: 'conference_pdf', sourceId: source.paperId, paperId: source.paperId,
+        sourceHtmlSha256: source.sourceBinding.pdfSha256,
+        tables, formulas, figures, references: [],
+        health: { status: 'ready', detected: { tables: raw.tables.length,
+            formulas: raw.formulas.length, figures: raw.figures.length, references: 0,
+            bibliographies: 0 }, recovered: { tables: tables.length,
+            formulas: formulas.length, figures: figures.length, references: 0 },
+            truncated: false, issues: [] }, flattenedTextSha256: sha256(source.text) };
+    return { ...body, payloadSha256: stableHash(body) };
+}
+
 function sourceDetails(source) {
+    if (source.structuredArtifacts.profile === contextApi.REPLAYABLE_PROFILE) {
+        const structuredArtifacts = buildReplayableReaderArtifacts(source);
+        return { text: source.text, source: 'conference_pdf_text', sourceId: source.paperId,
+            imageInfos: [], htmlAvailability: 'not_applicable', htmlAttempts: 0,
+            warnings: [], structuredArtifacts,
+            conferenceCapabilities: { fullText: 'full', tables: 'available',
+                formulas: 'available', figures: 'available' } };
+    }
     if (source.structuredArtifacts.profile !== contextApi.WEAK_PROFILE
         || source.tableAvailability.available !== false || source.formulaAvailability.available !== false
         || source.figureAvailability.available !== false
@@ -176,6 +233,35 @@ function sourceDetails(source) {
         conferenceCapabilities: { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' } };
 }
 function validatePersistedSourceDetails(details, paperId) {
+    if (details?.conferenceCapabilities?.fullText === 'full') {
+        if (details.source !== 'conference_pdf_text' || details.sourceId !== paperId
+            || typeof details.text !== 'string' || details.text.length < contextApi.MIN_TEXT_CHARS
+            || !Array.isArray(details.imageInfos) || details.imageInfos.length
+            || details.htmlAvailability !== 'not_applicable' || details.htmlAttempts !== 0
+            || !Array.isArray(details.warnings)
+            || stableHash(details.conferenceCapabilities) !== stableHash({ fullText: 'full',
+                tables: 'available', formulas: 'available', figures: 'available' })) {
+            throw new Error('conference structured source details are invalid');
+        }
+        const artifacts = details.structuredArtifacts;
+        const required = ['version', 'parserVersion', 'sourceKind', 'sourceId', 'paperId',
+            'sourceHtmlSha256', 'tables', 'formulas', 'figures', 'references', 'health',
+            'flattenedTextSha256', 'payloadSha256'];
+        if (!artifacts || Object.keys(artifacts).sort().join('\0') !== required.sort().join('\0')
+            || artifacts.version !== 1 || artifacts.parserVersion !== 'conference-pdf-structure-v1'
+            || artifacts.sourceKind !== 'conference_pdf' || artifacts.sourceId !== paperId
+            || artifacts.paperId !== paperId || !/^[a-f0-9]{64}$/.test(artifacts.sourceHtmlSha256)
+            || artifacts.flattenedTextSha256 !== sha256(details.text)
+            || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)
+            || !Array.isArray(artifacts.figures) || !Array.isArray(artifacts.references)
+            || artifacts.references.length
+            || !artifacts.health || artifacts.health.status !== 'ready'
+            || artifacts.payloadSha256 !== stableHash(Object.fromEntries(
+                Object.entries(artifacts).filter(([key]) => key !== 'payloadSha256')))) {
+            throw new Error('conference structured artifacts are invalid');
+        }
+        return details;
+    }
     if (!details || details.source !== 'conference_pdf_text' || details.sourceId !== paperId
         || typeof details.text !== 'string' || details.text.length < contextApi.MIN_TEXT_CHARS
         || !Array.isArray(details.imageInfos) || details.imageInfos.length
@@ -416,13 +502,25 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
                 ...(result.success ? { completedAt: new Date().toISOString() } : {}), papers: [finalPaper] };
             if (!result.success) delete next.completedAt;
             replaceJson(analysisFile, next, currentRecord.sha256);
+            // This callback still runs under the canonical paper lock. Seal
+            // here so the post-batch path does not reacquire the same lock
+            // from this process and wait for itself.
+            if (result.success) {
+                const completed = loadConferenceAnalysis({ analysisRoot, executionId });
+                sealCompletedRun(completed);
+            }
         },
         paperLockOptions: conferencePaperLockOptions(engine)
     }));
     const current = readJson(analysisFile); const status = current.status === 'complete' ? 'complete' : 'partial';
     let run;
-    if (status === 'complete') run = await sealCompletedRunLocked({ analysisRoot, executionId, engine,
-        expectedAnalysisSha256: readJsonRecord(analysisFile).sha256 });
+    if (status === 'complete') {
+        const completed = loadConferenceAnalysis({ analysisRoot, executionId });
+        run = completed.run.status === 'complete' && completed.analysis.stats?.analysisStatus === 'complete'
+            ? completed.run
+            : await sealCompletedRunLocked({ analysisRoot, executionId, engine,
+                expectedAnalysisSha256: readJsonRecord(analysisFile).sha256 });
+    }
     else {
         const runBody = { ...loaded.run, status, updatedAt: new Date().toISOString() };
         delete runBody.runSha256; run = { ...runBody, runSha256: stableHash(runBody) };

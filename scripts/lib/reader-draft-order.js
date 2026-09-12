@@ -75,6 +75,24 @@ function normalizeConceptBridgeMarkerLocations(draft) {
         bridge?.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
         || !READER_SECTION_KINDS.includes(bridge?.sectionKind)
     ))) return [];
+    const spacingChanges = [];
+    for (const [sectionIndex, section] of sections.entries()) {
+        const before = section.body;
+        // Models sometimes emit several standalone bridge tokens on adjacent
+        // lines.  They are still unambiguous marker identities, but Markdown
+        // treats the run as one paragraph and the downstream binding gate
+        // correctly rejects it.  Insert only the missing blank separator; no
+        // authored prose or marker bytes are changed.
+        const after = before.replace(
+            /(^|\n)([ \t]{0,3}\[\[CONCEPT_BRIDGE_\d+\]\][ \t]*)\n(?=[ \t]{0,3}\[\[CONCEPT_BRIDGE_\d+\]\][ \t]*(?:\n|$))/gm,
+            '$1$2\n\n'
+        );
+        if (after !== before) {
+            section.body = after;
+            spacingChanges.push({ sectionIndex, operation: 'separate-adjacent',
+                bodyBeforeSha256: sha(before), bodyAfterSha256: sha(after) });
+        }
+    }
     const declared = new Set(bridges.map(bridge => bridge.marker));
     const rawTokens = sections.flatMap((section, sectionIndex) => [
         ...section.body.matchAll(/\[\[CONCEPT_BRIDGE_[^\]]+\]\]/g)
@@ -98,7 +116,7 @@ function normalizeConceptBridgeMarkerLocations(draft) {
     }
     if (rawTokens.length !== tokens.length || tokens.some(token => !declared.has(token.marker))
         || new Set(tokens.map(token => token.marker)).size !== tokens.length) return [];
-    const changes = [];
+    const changes = [...spacingChanges];
     for (const [bridgeIndex, bridge] of bridges.entries()) {
         const targetIndexes = sections.flatMap((section, index) =>
             section.kind === bridge.sectionKind ? [index] : []);
@@ -152,9 +170,22 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     const bindings = input.tableBindings;
     if (nodes.length <= bindings.length || bindings.length === 0) return 0;
     const solutions = [];
+    const numericTokens = value => String(value || '').match(
+        /(?<![A-Za-z0-9])\d+(?:\.\d+)?%?/g
+    ) || [];
+    const sourceQuoteTokens = binding => new Set(
+        (Array.isArray(binding?.sourceQuotes) ? binding.sourceQuotes : [])
+            .flatMap(numericTokens)
+            .map(token => token.replace(/%$/, ''))
+    );
+    const tableTokens = node => new Set(
+        numericTokens(node?.table?.markdown || '').map(token => token.replace(/%$/, ''))
+    );
     const matches = (binding, node) => Object.prototype.hasOwnProperty.call(binding || {}, 'selection')
         ? Boolean(node.marker && node.markerIndex === binding.tableIndex)
-        : Boolean(node.table && !node.marker);
+        : Boolean(node.table && !node.marker)
+            && (!Array.isArray(binding?.sourceQuotes) || binding.sourceQuotes.length === 0
+                || [...sourceQuoteTokens(binding)].every(token => tableTokens(node).has(token)));
     const visit = (bindingIndex, nodeIndex, selected) => {
         if (solutions.length > 1) return;
         if (bindingIndex === bindings.length) {

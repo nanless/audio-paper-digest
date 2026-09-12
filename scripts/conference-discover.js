@@ -10,13 +10,13 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const discovery = require('./lib/conference-discovery.js');
 
-const USAGE = 'Use --dry-run|--apply --adapter icassp|iclr|icml|official-proceedings --year YYYY [--conference-id SLUG-YYYY] --metadata ABS.json --pdf-root ABS [--candidate-output NAME.json --report-output NAME.json]';
+const USAGE = 'Use --dry-run|--apply --adapter icassp|iclr|icml|official-proceedings --year YYYY [--conference-id SLUG-YYYY] --metadata ABS.json --pdf-root ABS [--acquisition-root ABS] [--candidate-output NAME.json --report-output NAME.json]';
 
 function parseArgs(args) {
     const options = {};
     for (let index = 0; index < args.length; index += 2) {
         const flag = args[index]; const value = args[index + 1];
-        if (!['--adapter', '--year', '--conference-id', '--metadata', '--pdf-root', '--candidate-output', '--report-output'].includes(flag) || value === undefined) {
+        if (!['--adapter', '--year', '--conference-id', '--metadata', '--pdf-root', '--acquisition-root', '--candidate-output', '--report-output'].includes(flag) || value === undefined) {
             throw new Error(USAGE);
         }
         if (Object.hasOwn(options, flag)) throw new Error(`Duplicate argument: ${flag}`);
@@ -70,6 +70,12 @@ function parseCommand(argv) {
     if (options['--conference-id'] && !options['--conference-id'].endsWith(`-${options['--year']}`)) {
         throw new Error('--conference-id must end with the exact --year');
     }
+    if (options['--acquisition-root'] !== undefined && !path.isAbsolute(options['--acquisition-root'])) {
+        throw new Error('--acquisition-root must be absolute');
+    }
+    if (options['--acquisition-root'] !== undefined && options['--adapter'] !== 'official-proceedings') {
+        throw new Error('--acquisition-root is only valid for official-proceedings');
+    }
     const outputs = [options['--candidate-output'], options['--report-output']];
     if (mode === '--dry-run' && outputs.some(Boolean)) throw new Error('--dry-run must not specify output files');
     if (mode === '--apply' && outputs.some(value => !value)) throw new Error('--apply requires --candidate-output and --report-output');
@@ -78,7 +84,9 @@ function parseCommand(argv) {
     }
     return { apply: mode === '--apply', adapter: options['--adapter'], year: Number(options['--year']),
         ...(options['--conference-id'] ? { conferenceId: options['--conference-id'] } : {}),
-        metadataFile: options['--metadata'], pdfRoot: options['--pdf-root'], candidateOutput: options['--candidate-output'],
+        metadataFile: options['--metadata'], pdfRoot: options['--pdf-root'],
+        ...(options['--acquisition-root'] ? { acquisitionRoot: options['--acquisition-root'] } : {}),
+        candidateOutput: options['--candidate-output'],
         reportOutput: options['--report-output'] };
 }
 
@@ -115,6 +123,10 @@ function writeOutputsOnce({ catalogDir, catalogName, candidate, reportDir, repor
 function main(argv = process.argv.slice(2), dependencies = {}) {
     requireExternalRuntime('conference-discover.js');
     const args = parseCommand(argv);
+    if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1'
+        && args.adapter === 'official-proceedings' && !args.acquisitionRoot) {
+        throw new Error('new-conference discovery requires --acquisition-root and official catalog.receipt.json');
+    }
     const files = requireFiles(dependencies.files || Config.FILES);
     const result = discovery.discoverConference(args);
     let outputs = { candidateOutput: null, reportOutput: null };

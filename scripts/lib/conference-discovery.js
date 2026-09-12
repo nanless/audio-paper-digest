@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ledgerApi = require('./conference-source-ledger.js');
 const paperIdentity = require('./paper-identity.js');
+const officialAcquisition = require('./official-conference-acquisition.js');
 
 const CONTRACT = 'conference-discovery-v2';
 const REPORT_CONTRACT = 'conference-discovery-report-v2';
@@ -412,8 +413,10 @@ function matchMember(adapter, member, pdfCatalog, byPath) {
 }
 
 function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, reportRawBytes } = {}) {
-    exact(candidateManifest, ['contract', 'version', 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
-        'pdfCatalogSha256', 'pdfCatalog', 'members', 'memberSetSha256'], 'candidate manifest');
+    const expectedManifestFields = ['contract', 'version', 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
+        'pdfCatalogSha256', 'pdfCatalog', 'members', 'memberSetSha256'];
+    if (Object.hasOwn(candidateManifest, 'acquisitionReceipt')) expectedManifestFields.push('acquisitionReceipt');
+    exact(candidateManifest, expectedManifestFields, 'candidate manifest');
     if (candidateManifest.contract !== CONTRACT || candidateManifest.version !== VERSION || !ADAPTERS.has(candidateManifest.adapter)) {
         throw fail('candidate manifest contract/version/adapter is unsupported');
     }
@@ -427,6 +430,10 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
     assertSha(candidateManifest.metadataSnapshot.sha256, 'candidate manifest metadataSnapshot.sha256');
     if (typeof candidateManifest.pdfRoot !== 'string' || !path.isAbsolute(candidateManifest.pdfRoot)) {
         throw fail('candidate manifest pdfRoot must be absolute');
+    }
+    if (candidateManifest.acquisitionReceipt !== undefined) {
+        validateAcquisitionReceiptBinding(candidateManifest.acquisitionReceipt,
+            candidateManifest.conference, candidateManifest.metadataSnapshot, candidateManifest.pdfRoot);
     }
     if (!Array.isArray(candidateManifest.pdfCatalog)) throw fail('candidate manifest pdfCatalog must be an array');
     const pdfCatalog = candidateManifest.pdfCatalog.map((item, index) => validateDescriptor(item, `pdfCatalog[${index}]`));
@@ -722,7 +729,66 @@ function replayDiscoveryMember(handle, sourceIdentity) {
     };
 }
 
-function discoverConference({ adapter, year, conferenceId = null, metadataFile, pdfRoot } = {}) {
+function validateAcquisitionReceiptBinding(binding, conference, metadataSnapshot, pdfRoot) {
+    exact(binding, ['catalogReceiptFile', 'catalogReceiptFileSha256', 'catalogReceiptSha256',
+        'metadataFile', 'metadataSha256', 'paperSetSha256', 'pdfReceiptSetSha256', 'providerId', 'root'],
+    'candidate manifest acquisitionReceipt');
+    if (binding.providerId !== conference.id || binding.root !== pdfRoot
+        || binding.metadataFile !== metadataSnapshot.file
+        || binding.catalogReceiptFile !== path.join(pdfRoot, 'catalog.receipt.json')
+        || binding.metadataSha256 !== metadataSnapshot.sha256) {
+        throw fail('candidate manifest acquisition receipt paths/provider do not bind discovery inputs');
+    }
+    assertSha(binding.catalogReceiptFileSha256, 'acquisitionReceipt.catalogReceiptFileSha256');
+    assertSha(binding.catalogReceiptSha256, 'acquisitionReceipt.catalogReceiptSha256');
+    assertSha(binding.metadataSha256, 'acquisitionReceipt.metadataSha256');
+    assertSha(binding.paperSetSha256, 'acquisitionReceipt.paperSetSha256');
+    assertSha(binding.pdfReceiptSetSha256, 'acquisitionReceipt.pdfReceiptSetSha256');
+    const replayed = officialAcquisition.replayCatalog(binding.providerId, binding.root);
+    const verified = officialAcquisition.verifyAcquisition({ providerId: binding.providerId, outputRoot: binding.root });
+    if (!verified.complete || replayed.metadataSha256 !== binding.metadataSha256
+        || replayed.receipt.receiptSha256 !== binding.catalogReceiptSha256
+        || officialAcquisition.sha256(fs.readFileSync(binding.catalogReceiptFile)) !== binding.catalogReceiptFileSha256
+        || officialAcquisition.stableHash(replayed.metadata.papers) !== binding.paperSetSha256) {
+        throw fail('candidate manifest acquisition receipt does not replay the official bundle');
+    }
+    const pdfReceiptSet = replayed.metadata.papers.filter(paper => paper.pdfUrl !== null).map(paper => {
+        const receipt = officialAcquisition.replayPdfReceipt(replayed, paper);
+        return { paperId: paper.id, receiptSha256: receipt.receiptSha256,
+            receiptFileSha256: officialAcquisition.sha256(fs.readFileSync(path.join(replayed.paths.receipts, `${paper.id}.json`))) };
+    });
+    if (officialAcquisition.stableHash(pdfReceiptSet) !== binding.pdfReceiptSetSha256) {
+        throw fail('candidate manifest PDF receipt set drifted');
+    }
+    return binding;
+}
+
+function officialAcquisitionBindingFromRoot(conference, metadataSnapshot, root) {
+    const replayed = officialAcquisition.replayCatalog(conference.id, root);
+    const verified = officialAcquisition.verifyAcquisition({ providerId: conference.id, outputRoot: root });
+    if (!verified.complete) throw fail(`official acquisition is incomplete: ${verified.missing.join(', ')}`);
+    const receiptFile = path.join(root, 'catalog.receipt.json');
+    const pdfReceiptSet = replayed.metadata.papers.filter(paper => paper.pdfUrl !== null).map(paper => {
+        const receipt = officialAcquisition.replayPdfReceipt(replayed, paper);
+        return { paperId: paper.id, receiptSha256: receipt.receiptSha256,
+            receiptFileSha256: officialAcquisition.sha256(fs.readFileSync(path.join(replayed.paths.receipts, `${paper.id}.json`))) };
+    });
+    const binding = { providerId: conference.id, root, metadataFile: metadataSnapshot.file,
+        metadataSha256: metadataSnapshot.sha256, catalogReceiptFile: receiptFile,
+        catalogReceiptSha256: replayed.receipt.receiptSha256,
+        catalogReceiptFileSha256: officialAcquisition.sha256(fs.readFileSync(receiptFile)),
+        paperSetSha256: officialAcquisition.stableHash(replayed.metadata.papers),
+        pdfReceiptSetSha256: officialAcquisition.stableHash(pdfReceiptSet) };
+    validateAcquisitionReceiptBinding(binding, conference, metadataSnapshot, root);
+    return binding;
+}
+
+function officialAcquisitionBinding(conference, metadata, pdfs, acquisitionRoot) {
+    if (path.resolve(acquisitionRoot) !== pdfs.root) throw fail('acquisitionRoot must equal pdfRoot');
+    return officialAcquisitionBindingFromRoot(conference, metadata.descriptor, pdfs.root);
+}
+
+function discoverConference({ adapter, year, conferenceId = null, metadataFile, pdfRoot, acquisitionRoot = null } = {}) {
     if (!ADAPTERS.has(adapter)) throw fail('adapter must be one of: icassp, iclr, icml, official-proceedings');
     if (!Number.isInteger(year) || year < 1900 || year > 2100) throw fail('year must be a supported four-digit integer');
     const metadata = readMetadataSnapshot(metadataFile);
@@ -759,6 +825,10 @@ function discoverConference({ adapter, year, conferenceId = null, metadataFile, 
         members,
         memberSetSha256: ledgerApi.memberSetSha256(members)
     };
+    if (acquisitionRoot !== null) {
+        if (adapter !== 'official-proceedings') throw fail('acquisitionRoot is only valid for official-proceedings');
+        manifest.acquisitionReceipt = officialAcquisitionBinding(conference, metadata, pdfs, acquisitionRoot);
+    }
     return { manifest, report: buildReport(manifest) };
 }
 
@@ -767,5 +837,6 @@ module.exports = {
     canonicalBytes, readMetadataSnapshot, catalogPdfs, normalizedTitle, discoverConference, buildReport,
     validateDiscoveryBundle, loadDiscoveryHandle, discoveryHandleSnapshot, replayDiscoveryMember,
     replayDiscoveryMembers, SAFE_JSON_NAME,
-    safeAbsoluteDirectory, safeAbsoluteFile
+    safeAbsoluteDirectory, safeAbsoluteFile, validateAcquisitionReceiptBinding,
+    officialAcquisitionBindingFromRoot
 };

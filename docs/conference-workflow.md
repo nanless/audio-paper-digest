@@ -62,6 +62,7 @@ npm run conference:new:discover -- --apply \
   --adapter official-proceedings --conference-id iwslt-2026 --year 2026 \
   --metadata "$PWD/data/runtime/official-conference-acquisitions/iwslt-2026/metadata.json" \
   --pdf-root "$PWD/data/runtime/official-conference-acquisitions/iwslt-2026" \
+  --acquisition-root "$PWD/data/runtime/official-conference-acquisitions/iwslt-2026" \
   --candidate-output iwslt-2026.json --report-output iwslt-2026-report.json
 ```
 

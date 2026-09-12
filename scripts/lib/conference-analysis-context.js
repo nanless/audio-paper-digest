@@ -56,6 +56,19 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
     if (!details) return null;
     const artifacts = details.structuredArtifacts;
     const provided = structuredArtifacts === undefined ? artifacts : structuredArtifacts;
+    // A replayable PDF source uses the normal Reader contracts.  Keep this
+    // function as the compatibility gate for legacy weak bundles, but do not
+    // attach the weak-policy prompt to a source whose authenticated artifact
+    // carries tables, formula text, or PDF Figure pixels.
+    if (details.conferenceCapabilities?.fullText === 'full'
+        && details.conferenceCapabilities?.tables === 'available'
+        && details.conferenceCapabilities?.formulas === 'available'
+        && details.conferenceCapabilities?.figures === 'available') {
+        if (!artifacts || stableHash(provided) !== stableHash(artifacts)) {
+            throw new Error('Authenticated conference structured Reader artifact differs from source details');
+        }
+        return null;
+    }
     const artifactKeys = ['capabilityProfile', 'figures', 'flattenedTextSha256', 'formulas',
         'payloadSha256', 'source', 'tables', 'version'];
     const artifactBody = artifacts && clone(artifacts);

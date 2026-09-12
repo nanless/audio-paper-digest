@@ -199,6 +199,32 @@ function validateLocatedRecord(item, index, kind) {
     }
 }
 
+function validateReplayableFigureRecord(item, index) {
+    exact(item, ['ordinal', 'page', 'caption', 'sourceRef', 'recoveryStatus', 'asset'],
+        `structuredArtifacts.figures[${index}]`);
+    positiveInteger(item.ordinal, `structuredArtifacts.figures[${index}].ordinal`);
+    positiveInteger(item.page, `structuredArtifacts.figures[${index}].page`);
+    if (item.ordinal !== index + 1 || item.recoveryStatus !== 'complete') {
+        integrity('structuredArtifacts figure records must be ordered and completely recovered', 'invalid_artifact_schema');
+    }
+    string(item.sourceRef, `structuredArtifacts.figures[${index}].sourceRef`);
+    string(item.caption, `structuredArtifacts.figures[${index}].caption`, { empty: true });
+    if (item.asset !== null) {
+        exact(item.asset, ['base64', 'mediaType', 'sha256'], `structuredArtifacts.figures[${index}].asset`);
+        string(item.asset.mediaType, `structuredArtifacts.figures[${index}].asset.mediaType`);
+        string(item.asset.base64, `structuredArtifacts.figures[${index}].asset.base64`);
+        if (!/^image\/(?:png|jpeg|webp|gif)$/i.test(item.asset.mediaType)
+            || !/^[A-Za-z0-9+/]+={0,2}$/.test(item.asset.base64)
+            || !SHA_RE.test(String(item.asset.sha256 || ''))) {
+            integrity('structuredArtifacts Figure asset is malformed', 'invalid_artifact_schema');
+        }
+        const bytes = Buffer.from(item.asset.base64, 'base64');
+        if (!bytes.length || sha256(bytes) !== item.asset.sha256) {
+            integrity('structuredArtifacts Figure asset SHA does not replay its bytes', 'invalid_artifact_schema');
+        }
+    }
+}
+
 function validateStructuredArtifacts(value, sourceText) {
     exact(value, ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages', 'tables', 'formulas', 'figures', 'payloadSha256'], 'structuredArtifacts');
     if (value.contract !== ARTIFACT_CONTRACT || value.version !== ARTIFACT_VERSION
@@ -241,7 +267,9 @@ function validateStructuredArtifacts(value, sourceText) {
     }
     for (const kind of ['table', 'formula', 'figure']) {
         const values = value[`${kind}s`];
-        values.forEach((item, index) => validateLocatedRecord(item, index, kind));
+        values.forEach((item, index) => value.profile === REPLAYABLE_PROFILE && kind === 'figure'
+            ? validateReplayableFigureRecord(item, index)
+            : validateLocatedRecord(item, index, kind));
         if (new Set(values.map(item => item.sourceRef)).size !== values.length) {
             integrity(`structuredArtifacts ${kind} sourceRef values must be unique`, 'invalid_artifact_schema');
         }
@@ -259,7 +287,12 @@ function unavailableCapability(reason) {
 function structuredCapabilityReason(profile) {
     if (profile === WEAK_PROFILE) return 'structured-artifacts-profile-weak';
     if (profile === UNAVAILABLE_PROFILE) return 'structured-artifacts-profile-unavailable';
+    if (profile === REPLAYABLE_PROFILE) return 'replayable-pdf-extraction-receipt-v2';
     return NO_REPLAYABLE_RECEIPT;
+}
+
+function availableCapability(reason) {
+    return { available: true, reliability: 'replayable', reason };
 }
 
 function resolveRun(input) {
@@ -328,13 +361,12 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
         blocked(`source text is shorter than ${MIN_TEXT_CHARS} non-whitespace characters`, 'text_too_short');
     }
     const structuredArtifacts = validateStructuredArtifacts(strictJson(artifactBytes, 'structured-artifacts file'), text);
-    // No current source artifact carries an independently replayable extractor
-    // receipt.  Consequently even a syntactically valid `y=x` record from a
-    // tiny PDF is untrusted for publication.  Text remains usable for analysis.
     const structuredReason = structuredCapabilityReason(structuredArtifacts.profile);
-    const formulaAvailability = unavailableCapability(structuredReason);
-    const tableAvailability = unavailableCapability(structuredReason);
-    const figureAvailability = unavailableCapability(structuredReason);
+    const capability = structuredArtifacts.profile === REPLAYABLE_PROFILE
+        ? availableCapability(structuredReason) : unavailableCapability(structuredReason);
+    const formulaAvailability = capability;
+    const tableAvailability = capability;
+    const figureAvailability = capability;
     const sourceBinding = {
         ledgerSha256: loaded.ledgerSha256,
         metadataSha256: member.metadataSha256, pdfSha256: member.pdfSha256,
@@ -365,7 +397,9 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
         pdfDescriptor: pdfSource.descriptor,
         metadata, text, structuredArtifacts,
         analysisReady: true, textOffsetUnit: OFFSET_UNIT,
-        extractionReceipt: { contract: PDF_EXTRACTION_RECEIPT_CONTRACT, available: false, reason: NO_REPLAYABLE_RECEIPT },
+        extractionReceipt: { contract: PDF_EXTRACTION_RECEIPT_CONTRACT,
+            available: structuredArtifacts.profile === REPLAYABLE_PROFILE,
+            reason: structuredArtifacts.profile === REPLAYABLE_PROFILE ? 'replayable-pdf-extraction-receipt-v2' : NO_REPLAYABLE_RECEIPT },
         formulaAvailability, tableAvailability, figureAvailability,
         figurePolicy: 'no_external_fetch', sourceOnly: true,
         productionAuthorization: { authorized: true, binding: productionBinding }

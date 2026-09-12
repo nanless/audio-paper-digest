@@ -87,12 +87,15 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/conference-analysis-context.js` | Node 库 | 将已认证会议 execution 的单篇来源封装为进程内 opaque 分析上下文；固定 Reader 尝试目录并拒绝 arXiv 身份、跨 execution 路径和伪造来源能力。 |
 | `lib/conference-analysis-adapter.js` | Node 库 | 重放完整会议 plan/source authority 后复用公共深度分析引擎；prepare 先写不可变 intent，再以原子文件和精确前缀恢复保存 canonical、逐阶段 checkpoint 与完成 receipt。旧版缺少 prepare intent 的 execution 不会静默迁移，必须用同一 authenticated plan 新建 execution UUID。 |
 | `lib/conference-discovery.js` | Node 库 | 从 ICASSP/ICLR/ICML 或严格 `official-proceedings` 元数据快照与本机 PDF 目录生成只读候选 catalog 和匹配报告；新会议只按 metadata 的稳定 official ID/`pdfFile` 精确匹配，标题永不作为身份。 |
+| `analysis-waiver.js` | Node 库 | 校验只针对当前日更批次的用户分析 waiver，绑定 deep/filtered/papers 三份精确字节和逐篇 source SHA；不修改分析正文。 |
+| `recover-conference-process-locks.js` | CLI | 仅在操作者确认本工作区且 owner PID 已死亡时，按文件锁协议恢复会议 process 的陈旧 operation lock；活锁和不完整锁跳过。 |
 | `lib/conference-filter-evidence.js` | Node 库 | 从 authenticated discovery 批量重放官方 exact PDF、固定 pypdf 文本与 provider-scoped 摘要定位证据；签发可恢复 evidence run/catalog/report，非 ready 状态一律 fail-open 给 LLM。 |
 | `lib/official-conference-acquisition.js` | Node 库 | 固定 2026 官方 index/record/PDF allowlist，抓取十一个新会议的严格 metadata 与 PDF；AAAI volume 40 以固定 48-issue manifest、逐 issue response receipt/SHA 和跨 issue article ID 唯一性闭合集合，其余来源使用单索引；索引和逐篇下载均支持 0600/O_EXCL 恢复及完整重放验证。 |
 | `lib/official-conference-general-providers.js` | Node 库 | 通用 AI/ML/CV/NLP 官方单篇 record 的纯解析与身份校验器；无网络、无写入，供 provider 适配与 fixture 审计。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口仅从 opaque plan handle 重放完整上游证明与会议全文；不导出 ledger/run 测试捷径。 |
 | `lib/conference-filter.js` | Node 库 | 冻结 discovery、authenticated evidence catalog/report/逐篇 receipt、日更 Prompt/关键词策略、会议领域标签、model/endpoint/taxonomy 指纹；ready 摘要进入 keyword/Prompt，non-ready 安全放行，以 durable intent→transport receipt→decision→CAS 管理决定；生产 signer 固定公共 LLM 路由，不接受 transport 注入，并以安全 stale lock 保证单飞恢复。 |
 | `lib/conference-process.js` | Node 库 | 编排新会议 complete selection 的官方 PDF 自动封存、staging/import、共享深度分析、Reader/评分、current taxonomy 页面和 aggregate；以稳定 UUID、最多 3 并发、逐篇 checkpoint 与 completion receipt 保证恢复和闭合。 |
+| `waive-analysis-failures.js` | CLI | 记录用户明确确认的当前日更分析跳过决定；只生成绑定现有产物的审计 waiver，不覆盖失败尝试。 |
 | `lib/conference-extraction-receipt.js` | Node 库 | 重放请求、来源和派生工件，并在每次 handle 加载时调用固定 Python/pypdf 临时重提取验证；只有字节一致且达到门槛的 weak profile 可进入 staging。 |
 | `lib/conference-staging.js` | Node 库 | 将 authenticated filter selection 与人工复核 extraction 精确绑定为 import manifest/receipt；excluded 或身份别名不能进入。 |
 | `lib/paper-identity.js` | Node 库 | `paper-identity-v1` 的 Node 规范化、官方来源 URL 门禁与稳定 SHA；不替换既有 arXiv helper。 |

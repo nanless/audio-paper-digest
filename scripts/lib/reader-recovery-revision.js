@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
-const { loadFailedCandidate, saveFailedCandidate, hashDraft, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+const { loadFailedCandidate, saveFailedCandidate, hashDraft, shaText, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder } = require('./reader-draft-order.js');
 const { normalizeDanglingReaderConnectors,
@@ -13,11 +13,13 @@ const { normalizeDanglingReaderConnectors,
 const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
-    'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256']);
+    'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
+    'readerRecoveryEpochSha256']);
 const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256'));
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const withoutRevisionFields = identity => Object.fromEntries(Object.entries(identity)
     .filter(([key]) => !ALLOWED_FIELDS.includes(key)));
+const getConferenceAnalysisContext = () => require('./conference-analysis-context.js').getConferenceAnalysisContext();
 
 function readEnvelope(filename) {
     let fd;
@@ -35,7 +37,8 @@ function readEnvelope(filename) {
 
 function finishRevisionArchives(directory, identity, payload) {
     for (const audit of payload.readerRecoveryRevisions || []) {
-        const expectedRunId = identity.freshAnalysis?.runId || null;
+        const conference = getConferenceAnalysisContext();
+        const expectedRunId = identity.freshAnalysis?.runId || conference?.executionId || null;
         const direct = expectedRunId ? null
             : require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
         const directPaperId = String(direct?.paperId || '').replace(/^arxiv:/, '');
@@ -46,8 +49,18 @@ function finishRevisionArchives(directory, identity, payload) {
             && identity.paperId === directPaperId
             && identity.sourceSha256 === direct.sourceSha256
             && path.resolve(directory) === path.resolve(direct.readerAttemptsDir);
+        const conferenceScopeValid = Boolean(conference?.executionId)
+            && audit.scope === 'conference-process'
+            && audit.runId === conference.executionId
+            && audit.paperId === conference.paperId
+            && identity.paperId === conference.paperId
+            && identity.sourceSha256 === shaText(conference.sourceDetails?.text || '')
+            && path.resolve(directory) === path.join(path.resolve(conference.executionDir), 'reader-attempts');
+        const auditScopeValid = identity.freshAnalysis?.runId
+            ? audit.runId === identity.freshAnalysis.runId
+            : conference?.executionId ? conferenceScopeValid : directScopeValid;
         if (audit.contract !== CONTRACT || expectedRunId && audit.runId !== expectedRunId
-            || !expectedRunId && (!UUID_RE.test(String(audit.runId || '')) || !directScopeValid)
+            || !auditScopeValid
             || audit.fromIdentitySha256 === hashDraft(identity)
             || !/^[a-f0-9]{64}$/.test(audit.fromIdentitySha256 || '')
             || !/^[a-f0-9]{64}$/.test(audit.oldPayloadSha256 || '')
@@ -110,6 +123,7 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (exact) { verifyPixels(exact); return finishRevisionArchives(directory, identity, exact); }
     const context = getFreshAnalysisContext();
     const direct = require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
+    const conference = getConferenceAnalysisContext();
     let revisionRunId; let revisionScope;
     if (context) {
         if (context.refreshReaderDiagnostics !== true) return null;
@@ -130,6 +144,13 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
             throw new Error('Reader diagnostic revision must remain in the exact historical direct run/source scope');
         }
         revisionRunId = direct.runId; revisionScope = 'historical-direct';
+    } else if (conference?.executionId) {
+        if (path.resolve(directory) !== path.join(path.resolve(conference.executionDir), 'reader-attempts')
+            || identity?.freshAnalysis !== undefined || identity?.paperId !== conference.paperId
+            || identity.sourceSha256 !== shaText(conference.sourceDetails?.text || '')) {
+            throw new Error('Reader diagnostic revision must remain in the exact conference execution/source scope');
+        }
+        revisionRunId = conference.executionId; revisionScope = 'conference-process';
     } else return null;
     let names;
     try { names = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort(); }
@@ -186,8 +207,9 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     // One lineage receives at most one extra content attempt. An unused proof
     // may be transferred to a newer implementation identity, but once a model
     // request consumes it, later implementation churn cannot mint more calls.
+    const recoveryEpochChanged = old.changedFields.includes('readerRecoveryEpochSha256');
     const grantOrTransferAllowance = diagnosticImplementationChanged
-        && (!lineageAlreadyIssued || Boolean(previousActiveAllowance));
+        && (!lineageAlreadyIssued || Boolean(previousActiveAllowance) || recoveryEpochChanged);
     const archivedName = `${hashDraft(old.identity)}.migrated-${crypto.randomUUID()}.json`;
     const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(), scope: revisionScope,
         runId: revisionRunId, paperId: identity.paperId,

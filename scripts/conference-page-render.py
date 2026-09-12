@@ -5,6 +5,7 @@ import hashlib
 import html
 import ipaddress
 import json
+import os
 import re
 import sys
 from urllib.parse import quote, urlsplit
@@ -15,12 +16,19 @@ from runtime_guard import require_external_runtime
 
 PAPER_ID = re.compile(r'^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$')
 WEAK = {'fullText': 'weak', 'tables': 'unavailable', 'formulas': 'unavailable', 'figures': 'unavailable'}
+FULL = {'fullText': 'full', 'tables': 'available', 'formulas': 'available', 'figures': 'available'}
 READER_CONTRACT = 'beginner-researcher-v3'
 SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4'
 SCORING_CONTRACT = 'api-scoring-audit-v2'
 PUBLICATION_CONTRACT = 'conference-official-publication-v1'
 FLAT_TAXONOMY_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
 SOURCE_URL_NORMALIZATION_CONTRACT = 'paper-source-repository-url-normalization-v1'
+CONFERENCE_IMAGE_BASE_URL = os.environ.get(
+    'PAPER_DIGEST_IMAGE_BASE_URL',
+    'https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main',
+).rstrip('/')
+ARXIV_URL_PATTERN = r'https?://(?:www\.)?arxiv\.org/(?:abs|pdf)/[^\s<>)]+'
+ARXIV_URL_RE = re.compile(ARXIV_URL_PATTERN, re.IGNORECASE)
 REPOSITORY_HOSTS = {'github.com', 'gitlab.com', 'huggingface.co', 'modelscope.cn'}
 SCORE_DIMENSIONS = (
     ('innovationScore', '创新', '2'), ('technicalRigorScore', '技术严谨', '1.5'),
@@ -62,6 +70,21 @@ def public_https(value, label, *, conference_only=False):
                 hostname == 'arxiv.org' or hostname.endswith('.arxiv.org'))):
         raise ValueError(f'{label} 必须是公开会议 HTTPS URL')
     return value
+
+
+def hide_arxiv_links(value):
+    """Keep conference pages conference-native without exposing preprint URLs."""
+    text = str(value or '')
+    note = '（预印本链接未在会议页展示）'
+    text = re.sub(
+        rf'\[([^\]\n]+)\]\(\s*<?{ARXIV_URL_PATTERN}>?\s*\)',
+        rf'\1{note}', text, flags=re.IGNORECASE)
+    text = re.sub(rf'<\s*{ARXIV_URL_PATTERN}\s*>', note, text, flags=re.IGNORECASE)
+    return ARXIV_URL_RE.sub(note, text)
+
+
+def is_arxiv_url(value):
+    return bool(re.search(r'https?://(?:www\.)?arxiv\.org/', str(value or ''), re.IGNORECASE))
 
 
 def fold_repository_token_line_breaks(value):
@@ -118,7 +141,7 @@ def paper_source_resource_binding(resource):
         and normalized_repository_source_token(token) == original
 
 
-def sealed_reader_sources(paper, manifest, stage):
+def sealed_reader_sources(paper, manifest, stage, capabilities):
     plan, article = paper.get('apiReaderPlan'), paper.get('apiReaderArticle')
     authors, resources = paper.get('apiReaderAuthors'), paper.get('apiReaderResources')
     contracts = (manifest or {}).get('contracts') or {}
@@ -133,18 +156,29 @@ def sealed_reader_sources(paper, manifest, stage):
     figures = paper.get('apiReaderFigures')
     source_bindings_sha = stable_sha({
         'tableBindings': plan.get('tableBindings'), 'formulaBindings': plan.get('formulaBindings')})
-    if paper.get('apiReaderArticleSha256') != article_sha or stage.get('articleSha256') != article_sha \
-            or paper.get('apiReaderPlanSha256') != plan_sha or stage.get('planSha256') != plan_sha \
-            or figures != [] or plan.get('figurePlacements') != [] \
-            or plan.get('tableBindings') != [] or plan.get('formulaBindings') != [] \
-            or stage.get('figureCount') != 0 or stage.get('tableBindingCount') != 0 \
-            or stage.get('formulaBindingCount') != 0 or stage.get('figuresSha256') != stable_sha([]) \
-            or plan.get('sourceBindingsSha256') != source_bindings_sha \
-            or stage.get('sourceBindingsContractVersion') != SOURCE_BINDINGS_CONTRACT \
-            or stage.get('sourceBindingsSha256') != source_bindings_sha \
-            or not re.fullmatch(r'[a-f0-9]{64}', str(stage.get('structuredArtifactsSha256') or '')) \
-            or stage.get('structuredArtifactsSha256') != ((manifest or {}).get('sourceAcquisition') or {}).get('structuredArtifactsSha256'):
-        raise ValueError('conference Reader bytes/plan/weak unavailable structure are not sealed')
+    common_seal = paper.get('apiReaderArticleSha256') == article_sha and stage.get('articleSha256') == article_sha \
+        and paper.get('apiReaderPlanSha256') == plan_sha and stage.get('planSha256') == plan_sha \
+        and plan.get('sourceBindingsSha256') == source_bindings_sha \
+        and stage.get('sourceBindingsContractVersion') == SOURCE_BINDINGS_CONTRACT \
+        and stage.get('sourceBindingsSha256') == source_bindings_sha \
+        and re.fullmatch(r'[a-f0-9]{64}', str(stage.get('structuredArtifactsSha256') or '')) \
+        and stage.get('structuredArtifactsSha256') == ((manifest or {}).get('sourceAcquisition') or {}).get('structuredArtifactsSha256')
+    if capabilities == WEAK:
+        sealed = common_seal and figures == [] and plan.get('figurePlacements') == [] \
+            and plan.get('tableBindings') == [] and plan.get('formulaBindings') == [] \
+            and stage.get('figureCount') == 0 and stage.get('tableBindingCount') == 0 \
+            and stage.get('formulaBindingCount') == 0 and stage.get('figuresSha256') == stable_sha([])
+    elif capabilities == FULL:
+        sealed = common_seal and isinstance(figures, list) and isinstance(plan.get('figurePlacements'), list) \
+            and isinstance(plan.get('tableBindings'), list) and isinstance(plan.get('formulaBindings'), list) \
+            and stage.get('figureCount') == len(figures) \
+            and stage.get('tableBindingCount') == len(plan['tableBindings']) \
+            and stage.get('formulaBindingCount') == len(plan['formulaBindings']) \
+            and stage.get('figuresSha256') == stable_sha(figures)
+    else:
+        sealed = False
+    if not sealed:
+        raise ValueError('conference Reader bytes/plan/structure capability is not sealed; unavailable structure cannot be inferred')
     if not isinstance(authors, dict) or contracts.get('apiReaderAuthorIdentity') != 'api-reader-author-identity-v1' \
             or stable_sha(authors) != stage.get('readerAuthorsSha256') \
             or authors.get('identitySha256') != stable_sha(authors.get('identity')) \
@@ -201,8 +235,11 @@ def resource_projection(resources):
     def link(url):
         return '<' + re.sub(r'[<>"\\\s]', lambda match: quote(match.group(0), safe=''), url) + '>'
 
+    visible_resources = [resource for resource in resources
+                         if not is_arxiv_url(resource.get('originalUrl'))
+                         and not is_arxiv_url(resource.get('finalUrl'))]
     lines = []
-    for resource in resources:
+    for resource in visible_resources:
         original = resource['originalUrl']
         final = resource['finalUrl']
         urls = link(original) + (f' → {link(final)}' if final != original else '')
@@ -210,6 +247,8 @@ def resource_projection(resources):
         if resource.get('status') is not None:
             status += f'（HTTP {resource["status"]}）'
         lines.append(f'- {labels[resource["type"]]}：{urls} — {status}')
+    if len(visible_resources) != len(resources):
+        lines.append('预印本/扩展版链接未在会议页展示；会议版来源见页首官方记录与 PDF。')
     if not lines:
         lines.append('本次未形成可展示的已核验资源记录，开放状态尚未核实。')
     lines.append('可达状态仅表示本次链接检查结果，不代表许可证、本文权重或运行复现已验证。')
@@ -248,11 +287,54 @@ def render_packet(packet):
     if paper.get('id') != paper_id or paper.get('conferencePaperId') != paper_id \
             or paper.get('arxivId') is not None or paper.get('paper_id') != paper_id:
         raise ValueError('conference paper must not carry an arXiv alias')
-    if assignment.get('status') != 'assigned' or assignment.get('paperId') != paper_id or capabilities != WEAK:
-        raise ValueError('taxonomy/capability projection is not source-bound weak conference data')
+    if assignment.get('status') != 'assigned' or assignment.get('paperId') != paper_id \
+            or capabilities not in (WEAK, FULL):
+        raise ValueError('taxonomy/capability projection is not source-bound weak/full conference data')
     manifest = paper.get('analysisManifest')
     stage = ((manifest or {}).get('stages') or {}).get('apiReaderArticle') or {}
-    plan, article, authors, resources = sealed_reader_sources(paper, manifest, stage)
+    plan, article, authors, resources = sealed_reader_sources(paper, manifest, stage, capabilities)
+    assets = []
+    if capabilities == FULL:
+        asset_by_url = {}
+        for item in packet.get('figureAssets') or []:
+            if not isinstance(item, dict) or not isinstance(item.get('url'), str) \
+                    or not isinstance(item.get('base64'), str) or not re.fullmatch(r'[a-f0-9]{64}', str(item.get('assetSha256') or '')) \
+                    or item.get('mediaType') != 'image/png' \
+                    or not re.fullmatch(r'(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?', item['base64']):
+                raise ValueError('conference Figure asset packet is invalid')
+            raw = __import__('base64').b64decode(item['base64'], validate=True)
+            if hashlib.sha256(raw).hexdigest() != item['assetSha256'] or item['url'] in asset_by_url:
+                raise ValueError('conference Figure asset packet SHA or identity is invalid')
+            asset_by_url[item['url']] = item
+        # The old path was derived only from the paper ID.  That made a
+        # corrected crop collide with an already published PNG, while the
+        # conference publisher intentionally refuses to overwrite existing
+        # binary assets.  Bind the public directory to the complete Figure
+        # pixel set so a changed crop gets a new immutable path.
+        figure_set = [
+            {'ordinal': int(figure.get('ordinal')), 'assetSha256': asset_by_url[figure.get('url')]['assetSha256']}
+            for figure in paper.get('apiReaderFigures') or []
+            if figure.get('url') in asset_by_url
+        ]
+        figure_hash = hashlib.sha256(json.dumps(
+            {'paperId': paper_id, 'figures': figure_set},
+            ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()[:12]
+        for figure in paper.get('apiReaderFigures') or []:
+            source_url = figure.get('url')
+            packet_asset = asset_by_url.get(source_url)
+            if not packet_asset:
+                raise ValueError(f'conference Figure {figure.get("ordinal")} lacks publishable pixel asset')
+            path = f'static/images/conference/{conference["id"]}/{figure_hash}/figure-{int(figure["ordinal"])}.png'
+            # Conference Figures live in the dedicated GitHub Pages image
+            # repository, just like the existing daily-post images.  Keep the
+            # staging path as the logical source identity; publication maps it
+            # into the image repository and commits the bytes there.
+            public_url = f'{CONFERENCE_IMAGE_BASE_URL}/{conference["id"]}/{figure_hash}/figure-{int(figure["ordinal"])}.png'
+            # Figure ordinals share a prefix (Figure 1 is a prefix of Figure
+            # 11).  A plain string replacement would turn the latter into
+            # ``figure-1.png1``.  Replace only a complete custom URL token.
+            article = re.sub(re.escape(str(source_url)) + r'(?!\d)', public_url, article)
+            assets.append({'path': path, 'base64': packet_asset['base64']})
     scoring_stage = ((manifest or {}).get('stages') or {}).get('scoringAudit') or {}
     analysis = paper.get('analysis')
     headings = re.findall(r'^##(?!#)\s*([^\n]+?)\s*$', str(analysis or ''), flags=re.MULTILINE)
@@ -336,9 +418,11 @@ def render_packet(packet):
              f'paper_digest_score: {float(parsed["score"]):.1f}',
              f'paper_digest_rank_bucket: {json.dumps(rank_bucket, ensure_ascii=False)}',
              f'paper_digest_document_type: {json.dumps(document_type, ensure_ascii=False)}',
-             'paper_digest_conference_structure: weak-text-only-v1', '---', '',
+             f'paper_digest_conference_structure: {"replayable-pdf-layout-v1" if capabilities == FULL else "weak-text-only-v1"}', '---', '',
              f'# 📄 {reader_title}', '', f'> 英文题目：*{title}*', '',
-             f'> 会议身份：`{paper_id}`', '', '> ⚠️ 来源为会议 PDF 弱结构纯文本；表格、公式与 Figure 均不可用，本文不会据此重建这些结构。', '',
+             f'> 会议身份：`{paper_id}`', '',
+             ('' if capabilities == FULL else '> ⚠️ 来源为会议 PDF 弱结构纯文本；表格、公式与 Figure 均不可用，本文不会据此重建这些结构。'),
+             ('> ✅ 来源为官方会议 PDF；可重放的表格、公式文本与 Figure 像素已按 PDF 抽取结果绑定，未成功恢复的结构不作推断。' if capabilities == FULL else ''), '',
              f'> 会议来源：[官方记录]({record_url}) · [官方 PDF]({pdf_url})', '',
              f'标签：{" ".join("#" + label for label in labels)}', '', f'评分：{complete_score}', '',
              f'排名：{rank_bucket} | 文档类型：{document_type}', '', '## 👥 作者与机构', '']
@@ -348,12 +432,25 @@ def render_packet(packet):
                   *resource_projection(resources), '', '## 🧭 深度解读', '', article.strip(), '',
                   '## ⚖️ 评分明细', '', *scoring_projection(paper, parsed, scoring_stage), ''])
     lines.extend(['---', '', f'[← 返回 {conference["id"]} 论文汇总]({packet["aggregateUrl"]})', ''])
-    return {'markdown': publisher.sanitize_markdown_for_publish('\n'.join(lines)), 'assets': []}
+    lines[-1:] = [hide_arxiv_links(line) for line in lines[-1:]]
+    return {'markdown': publisher.sanitize_markdown_for_publish(hide_arxiv_links('\n'.join(lines))), 'assets': assets}
+
+
+def packet_bytes():
+    arguments = sys.argv[1:]
+    if not arguments:
+        return sys.stdin.buffer.read(64 * 1024 * 1024 + 1)
+    if len(arguments) != 2 or arguments[0] != '--packet-file':
+        raise ValueError('usage: conference-page-render.py [--packet-file ABSOLUTE_PATH]')
+    packet_path = os.path.abspath(arguments[1])
+    if not os.path.isabs(arguments[1]) or os.path.islink(packet_path) or not os.path.isfile(packet_path):
+        raise ValueError('conference renderer packet file must be a regular non-symlink file')
+    return open(packet_path, 'rb', buffering=0).read(64 * 1024 * 1024 + 1)
 
 
 def main():
     require_external_runtime('conference-page-render.py')
-    raw = sys.stdin.buffer.read(64 * 1024 * 1024 + 1)
+    raw = packet_bytes()
     if len(raw) > 64 * 1024 * 1024:
         raise ValueError('conference renderer packet exceeds 64 MiB')
     packet = json.loads(raw.decode('utf-8'))
