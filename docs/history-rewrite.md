@@ -391,15 +391,18 @@ recovery 文件 SHA，不写 staging。相同来源的后续进程重放该文�
 `--queue` 的 ID 都会在来源和模型请求前失败。dry-run 会报告最终 `selectedPaperIds`、默认 pause marker 和
 operation-lock 路径。未显式给 ID 的 `--max-papers` 会跳过 registry 中已经 `staged` 的前项，因此原命令
 重复运行会稳定推进下一批；显式 ID 仍会重放已完成工件以支持定向复验。默认 pause marker 是同一 plan SHA 与 arXiv generation 的 registry 文件加 `.pause`；
-不允许覆写 pause 路径，避免脱离 `history:pause/resume/status` 控制面。marker 必须是由 `history:pause` 签发、绑定同一 plan/generation 的
+不允许覆写 pause 路径，避免脱离 `history:pause/resume/status` 控制面。marker 必须由 `history:pause` 或 runner 的信号/运行级故障处理签发、绑定同一 plan/generation 的
 自哈希私有普通文件，不能用空文件伪造。签发 marker，或向运行进程发送
 一次 `SIGINT`/`SIGTERM`，只会阻止领取下一篇；已经开始的并发论文会完成其原子 registry/staging 边界后退出为
-`paused`。移走 marker 后原样重跑即可续跑。
+`paused`。信号暂停会持久化原因，跨进程状态不会把用户暂停误报为普通闲置。通过 `history:resume --phase analysis` 移除已校验 marker 后，原样重跑即可续跑。
+
+账号池耗尽、认证失效等结构化运行级错误会停止新论文派发并持久化原因；论文正文错误、普通网络错误和输出截断不作为全局账号故障。任务异常时会等待所有在途 worker 收尾后再释放 operation lock。限量续跑的最终选篇、source-ready 和 metadata 预检在同一操作锁内进行，避免预检的是旧前 N 篇而执行的是下一批。
 
 同一 plan SHA 与 generation 的 apply 全程持有跨进程 operation lock；锁覆盖 registry 的首次创建、重读、
 所有状态写入和最终计数。第二个 direct-run 不得并发抢写同一 registry。每篇结束后 stderr 输出一行
 `historical-direct-rewrite-progress-v1`，最终 stdout JSON 提供 selection、processed/remaining、完整
 `registryCounts`、pauseFile 和 operationLockTarget，供外部只读 status 聚合；进度流本身不是完成证明。
+逐项更新时间取实际状态转换时刻；最近失败包含 `analysis_partial`，报错摘要保留脱敏后的开头与末端根因。`completedThisRun` 是已处理尝试数，不等于成功论文数，成功以当前 staging 与后续 Review/发布状态分别统计。
 
 `history:pause --phase source|analysis` 以 `0600`、plan SHA 与 generation 自哈希绑定的独立 immutable marker 请求停机；它不杀死
 活动来源或模型请求。`history:resume` 只在对应 phase 的 operation lock 已释放后移除经过重放的 marker，避免

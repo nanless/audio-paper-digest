@@ -15,6 +15,29 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 
 const EXECUTION = '77777777-7777-4777-8777-777777777777';
 
+test('legacy PDF matrices and text-layer tex never become Reader source cells or LaTeX', () => {
+    const source = { paperId: 'conference:icassp:2026:icassp-arnumber:100',
+        text: 'PDF evidence text. '.repeat(400), sourceBinding: { pdfSha256: '1'.repeat(64) },
+        structuredArtifacts: { profile: 'replayable-pdf-layout-v1',
+            tables: [{ ordinal: 1, cells: [['Model', 'Accuracy'], ['Model 2', '95.2']],
+                caption: 'Table 1', sourceRef: 'pdf:table:1:page:1', recoveryStatus: 'complete' }],
+            formulas: [{ ordinal: 1, tex: 'x = a b 2', sourceRef: 'pdf:formula:1:page:1', recoveryStatus: 'complete' }],
+            figures: [{ ordinal: 1, caption: 'Figure 1', sourceRef: 'pdf:figure:1:page:1',
+                recoveryStatus: 'complete', asset: null }] } };
+    const details = adapter.sourceDetails(source);
+    assert.deepEqual(details.structuredArtifacts.tables, []);
+    assert.deepEqual(details.structuredArtifacts.formulas, []);
+    assert.deepEqual(details.structuredArtifacts.figures, []);
+    assert.equal(details.structuredArtifacts.health.detected.formulas, 1);
+    assert.equal(details.structuredArtifacts.health.recovered.formulas, 0);
+    adapter.validatePersistedSourceDetails(details, source.paperId);
+    const old = structuredClone(details);
+    old.structuredArtifacts.parserVersion = 'conference-pdf-structure-v1';
+    delete old.structuredArtifacts.payloadSha256;
+    old.structuredArtifacts.payloadSha256 = adapter.stableHash(old.structuredArtifacts);
+    assert.throws(() => adapter.validatePersistedSourceDetails(old, source.paperId), /structured artifacts are invalid/);
+});
+
 function emptyReaderResourceIdentity(text) {
     const body = { contract: 'api-reader-resource-identity-v1',
         sourceTextSha256: crypto.createHash('sha256').update(text).digest('hex'), resources: [] };
@@ -77,7 +100,7 @@ test('replayable conference PDF prepares isolated canonical identity with struct
     assert.equal(paper.id, fixture.paperId); assert.equal(paper.arxivId, undefined);
     assert.equal(paper.paper_id, undefined); assert.equal(paper.fullText, undefined);
     assert.deepEqual(loaded.run.capabilities,
-        { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' });
+        { fullText: 'full', tables: 'unavailable', formulas: 'unavailable', figures: 'available' });
     assert.deepEqual(loaded.source.sourceDetails.structuredArtifacts.tables, []);
     assert.deepEqual(loaded.source.sourceDetails.structuredArtifacts.formulas, []);
     assert.deepEqual(loaded.source.sourceDetails.structuredArtifacts.figures, []);
@@ -160,7 +183,7 @@ test('mock common analysis observes source only through authenticated context an
         const injected = context.getConferenceAnalysisSource(prepared.paper);
         assert.equal(injected.source, 'conference_pdf_text'); assert.ok(injected.text.length > 1000);
         assert.deepEqual(injected.conferenceCapabilities,
-            { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' });
+            { fullText: 'full', tables: 'unavailable', formulas: 'unavailable', figures: 'available' });
         const analysisFile = path.join(analysisRoot, EXECUTION, 'analysis.json');
         const checkpoint = JSON.parse(fs.readFileSync(analysisFile));
         checkpoint.status = 'running'; checkpoint.stats = { analysisStatus: 'running' };

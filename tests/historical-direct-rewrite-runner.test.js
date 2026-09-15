@@ -20,6 +20,159 @@ const engine = require('../scripts/analysis-engine.js');
 const { validAnalysisPaper, validLegacyApiAnalysisPaper } = require('./valid-analysis-fixture.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+
+test('global failures require typed run scope or an explicit account error code', () => {
+    for (const value of [new Error('HTTP 401: Insufficient balance'),
+        { error: 'LLM_ACCOUNT_POOL_EXHAUSTED', retryable: false },
+        { code: 'MODEL_HTTP_NON_RETRYABLE', status: 403 }, { retryable: false },
+        { errorCode: 'MODEL_HTTP_NON_RETRYABLE', errorStatus: 401 }]) {
+        assert.equal(runner.globalAccountFailure(value), null);
+    }
+    assert.equal(runner.globalAccountFailure({ code: 'LLM_ACCOUNT_POOL_EXHAUSTED' }), 'account-pool-exhausted');
+    assert.equal(runner.globalAccountFailure({ errorDetails: { code: 'LLM_ACCOUNT_AUTH_ERROR' } }), 'account-authentication-failed');
+    assert.equal(runner.globalAccountFailure({ errorCode: 'MODEL_HTTP_NON_RETRYABLE', errorStatus: 401, errorScope: 'run' }), 'account-authentication-failed');
+    assert.equal(runner.globalAccountFailure({ record: { latestAnalysisAttemptErrorScope: 'run',
+        latestAnalysisAttemptErrorCode: 'MODEL_HTTP_NON_RETRYABLE', latestAnalysisAttemptErrorStatus: 401 } }), 'account-authentication-failed');
+});
+
+test('diagnostic truncation preserves root cause and removes credentials first', () => {
+    const value = runner.safeErrorText(new Error('Traceback Authorization: Bearer secret-token\n'
+        + 'frame\n'.repeat(900) + '\nRootCause: sk-test-secret https://user:password@example.test/?token=secret'));
+    assert.ok(value.length <= 2000); assert.match(value, /RootCause:/);
+    assert.doesNotMatch(value, /sk-test|secret-token|user:password|token=secret/);
+});
+
+test('bounded rejects only after all in-flight workers settle and stops claiming work', async () => {
+    let release; const gate = new Promise(resolve => { release = resolve; });
+    let entered; const started = new Promise(resolve => { entered = resolve; });
+    const seen = []; let settled = false;
+    const pending = runner.bounded([0, 1, 2, 3], 2, async item => {
+        seen.push(item);
+        if (item === 0) { await started; throw new Error('fatal-worker'); }
+        entered(); await gate;
+    }).finally(() => { settled = true; });
+    const rejection = assert.rejects(pending, /fatal-worker/);
+    await started; await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false); assert.deepEqual(seen, [0, 1]);
+    release(); await rejection; assert.deepEqual(seen, [0, 1]);
+});
+
+test('bounded pause-check rejection also drains the other worker', async () => {
+    let release; const gate = new Promise(resolve => { release = resolve; });
+    let checks = 0; let settled = false;
+    const pending = runner.bounded([0, 1, 2], 2, async () => { await gate; }, async () => {
+        if (++checks === 2) { await new Promise(resolve => setImmediate(resolve)); throw new Error('pause-read-failed'); }
+        return false;
+    }).finally(() => { settled = true; });
+    const rejection = assert.rejects(pending, /pause-read-failed/);
+    await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false); release(); await rejection;
+});
+
+test('three-worker account circuit stops a longer queue after the first global failure', async () => {
+    let stopped = false; const claimed = []; let active = 0;
+    let release; const gate = new Promise(resolve => { release = resolve; });
+    const result = await runner.bounded([0, 1, 2, 3, 4, 5], 3, async item => {
+        claimed.push(item); active++;
+        if (active === 3) release();
+        await gate;
+        if (item === 0) stopped = Boolean(runner.globalAccountFailure({ code: 'LLM_ACCOUNT_POOL_EXHAUSTED' }));
+        return item;
+    }, () => stopped);
+    assert.deepEqual(claimed, [0, 1, 2]); assert.equal(result.paused, true);
+    assert.deepEqual(result.values.sort(), [0, 1, 2]);
+});
+
+test('typed account failure persists pause and leaves unclaimed papers unchanged', async t => {
+    const f = fixture(t); const roots = files(f.root); let analyses = 0; let ticks = 0;
+    const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 1 }, {
+        captureFreshArxivRewriteSource: directArxivCapture(),
+        now: () => new Date(Date.UTC(2026, 8, 12, 0, 0, ticks++)).toISOString(),
+        analyze: async () => { analyses++; throw Object.assign(new Error('account exhausted'), { code: 'LLM_ACCOUNT_POOL_EXHAUSTED' }); }
+    });
+    assert.equal(result.status, 'paused'); assert.equal(analyses, 1);
+    assert.equal(result.registryCounts.pending, 1);
+    const pause = directControl.readPauseFile(result.pauseFile, f.plan, 1);
+    assert.equal(pause.record.reason.code, 'account-pool-exhausted');
+    const registry = JSON.parse(fs.readFileSync(result.registryFile, 'utf8'));
+    const failed = registry.entries.find(entry => entry.status === 'failed');
+    assert.notEqual(failed.updatedAt, registry.createdAt);
+    assert.ok(failed.updatedAt > pause.record.requestedAt);
+});
+
+test('recovery structured failure pauses even when final validation error is generic', async t => {
+    const f = fixture(t); const roots = files(f.root);
+    const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 1 }, {
+        captureFreshArxivRewriteSource: directArxivCapture(),
+        analyze: async ({ item, sourceDescriptor, executionDirectory }) => {
+            runner.writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,
+                updatedAt: '2026-09-12T00:00:00.000Z', record: { directPaperId: item.paperId,
+                    analysisCheckpoint: 'main', latestAnalysisAttemptErrorCode: 'MODEL_HTTP_NON_RETRYABLE',
+                    latestAnalysisAttemptErrorStatus: 401, latestAnalysisAttemptErrorScope: 'run' } });
+            throw new Error('final analysis incomplete');
+        }
+    });
+    assert.equal(result.status, 'paused'); assert.equal(result.registryCounts.analysis_partial, 1);
+    assert.equal(result.registryCounts.pending, 1);
+    assert.equal(result.pauseReason.code, 'account-authentication-failed');
+});
+
+test('signal-shaped graceful pause persists a compatible marker without starting analysis', async t => {
+    const f = fixture(t); const roots = files(f.root);
+    const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots }, {
+        shouldPause: async () => ({ code: 'SIGTERM', detail: 'User requested graceful pause via SIGTERM' }),
+        analyze: async () => { assert.fail('paused run must not call analysis'); }
+    });
+    assert.equal(result.status, 'paused'); assert.equal(result.progress.processed, 0);
+    assert.equal(runner.pauseFileRequested(result.pauseFile, f.plan, 1), true);
+    assert.equal(directControl.readPauseFile(result.pauseFile, f.plan, 1).record.reason.code, 'SIGTERM');
+});
+
+test('fatal progress failure keeps the operation lock until another active analysis finishes', async t => {
+    const f = fixture(t); const roots = files(f.root); let release; let entered;
+    const gate = new Promise(resolve => { release = resolve; });
+    const started = new Promise(resolve => { entered = resolve; });
+    let progressFailed; const failed = new Promise(resolve => { progressFailed = resolve; });
+    const dependencies = { captureFreshArxivRewriteSource: directArxivCapture(),
+        extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => {
+            if (item.route.kind === 'conference-local-pdf') { entered(); await gate; }
+            else await started;
+            return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }, onProgress: event => { if (event.paperId.startsWith('arxiv:')) { progressFailed(); throw new Error('fatal-progress'); } } };
+    const pending = runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 2 }, dependencies);
+    const rejection = assert.rejects(pending, /fatal-progress/);
+    await failed;
+    try {
+        await assert.rejects(runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots }, {
+            ...dependencies, lockOptions: { timeoutMs: 25, staleMs: 60000 } }), /等待文件锁超时/);
+    } finally { release(); }
+    await rejection;
+    assert.equal(fs.existsSync(`${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`), false);
+});
+
+test('limit selection and metadata prerequisites observe the locked registry, not original prefix', async t => {
+    const f = fixture(t); const roots = files(f.root); let locked = false; const checked = [];
+    await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, maxPapers: 1 }, {
+        captureFreshArxivRewriteSource: directArxivCapture(), renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => sealedAnalysis(item, sourceDescriptor, sourceDetails)
+    });
+    const conference = f.plan.queue.find(item => item.route.kind === 'conference-local-pdf');
+    directControl.updateSourceStatus({ sourceRoot: roots.freshArxivSourceRoot, plan: f.plan,
+        event: { paperId: conference.paperId, status: 'failed', error: 'not ready' } });
+    await assert.rejects(runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, maxPapers: 1 }, {
+        withOperationLock: async (_target, callback) => { locked = true; try { return await callback(); } finally { locked = false; } },
+        assertPublicationMetadataReady: item => { assert.equal(locked, true); checked.push(item.paperId); },
+        analyze: async () => { assert.fail('must reject actual not-ready selection'); }
+    }), /not marked every selected paper ready/);
+    assert.deepEqual(checked, []);
+    await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv' }, {
+        withOperationLock: async (_target, callback) => { locked = true; try { return await callback(); } finally { locked = false; } },
+        assertPublicationMetadataReady: item => { assert.equal(locked, true); checked.push(item.paperId); }
+    });
+    assert.deepEqual(checked, ['arxiv:2601.00001']);
+});
 const pageKey = value => `page:${sha(value)}`;
 function write(filename, value) { fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 }); fs.writeFileSync(filename, value, { mode: 0o600 }); return sha(Buffer.from(value)); }
 function json(filename, value) { const bytes = Buffer.from(JSON.stringify(value)); write(filename, bytes); return sha(bytes); }
@@ -544,7 +697,9 @@ test('direct-run apply fails before source/model work unless scheduler marked ev
         analyze: async () => { analyses++; return {}; }
     }), /source scheduler checkpoint is missing/);
     assert.equal(captures, 0); assert.equal(analyses, 0);
-    assert.equal(fs.existsSync(roots.registryRoot), false, 'prerequisite fails before registry mutation');
+    assert.equal(fs.existsSync(runner.registryPath(roots.registryRoot, f.plan, 1)), false,
+        'locked prerequisite may create the lock directory, but must not mutate the registry');
+    assert.equal(fs.existsSync(`${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`), false);
     const dry = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
         queue: 'arxiv', arxivGeneration: 1 });
     assert.equal(dry.sourcePrerequisite.status, 'missing');

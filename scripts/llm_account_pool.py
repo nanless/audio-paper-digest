@@ -32,11 +32,22 @@ class LlmAccountPoolExhaustedError(RuntimeError):
     code = 'LLM_ACCOUNT_POOL_EXHAUSTED'
     retryable = False
     category = 'quota_exhausted'
+    scope = 'run'
 
     def __init__(self, message, *, earliest_retry_at_ms=None, blocked_account_count=0):
         super().__init__(message)
         self.earliest_retry_at_ms = earliest_retry_at_ms
         self.blocked_account_count = blocked_account_count
+
+
+class LlmAccountAuthError(RuntimeError):
+    code = 'LLM_ACCOUNT_AUTH_ERROR'
+    category = 'authentication'
+    scope = 'run'
+    retryable = False
+
+    def __init__(self):
+        super().__init__('OpenCode Go 认证失败，已停止请求；未切换账号')
 
 
 class LlmAccountPoolStateError(RuntimeError):
@@ -45,6 +56,7 @@ class LlmAccountPoolStateError(RuntimeError):
     code = 'LLM_ACCOUNT_POOL_STATE_ERROR'
     retryable = False
     category = 'state'
+    scope = 'run'
 
 
 class LlmAccountPoolConfigError(ValueError):
@@ -53,6 +65,7 @@ class LlmAccountPoolConfigError(ValueError):
     code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
     retryable = False
     category = 'config'
+    scope = 'run'
 
 
 class LlmAccountPoolLockTimeoutError(TimeoutError):
@@ -411,7 +424,7 @@ def _build_exhausted_error(service, account_ids, now_ms):
         + datetime.fromtimestamp(earliest / 1000, tz=timezone.utc).isoformat()
     )
     return LlmAccountPoolExhaustedError(
-        f'所有 OpenCode Go 账号都处于额度冷却{suffix}',
+        f'当前及后续 OpenCode Go 账号均不可用，禁止向前回切{suffix}',
         earliest_retry_at_ms=earliest,
         blocked_account_count=len(blocked),
     )
@@ -427,10 +440,19 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
 
     def updater(state):
         service = _ensure_service(state, identity)
-        group = service['groups'].get(identity['group_id']) or {
+        group = service['groups'].get(identity['group_id'])
+        is_new_group = group is None
+        if group is None:
+            for length in range(len(keys) - 1, 0, -1):
+                previous = service['groups'].get(get_pool_identity(keys[:length], endpoint)['group_id'])
+                if previous:
+                    group = dict(previous)
+                    break
+        group = group or {
             'activeAccountId': None,
             'switchedAt': None,
         }
+        service['groups'][identity['group_id']] = group
         keys_by_id = dict(zip(identity['account_ids'], keys))
         active_id = group.get('activeAccountId')
         if active_id in keys_by_id and active_id not in excluded \
@@ -443,12 +465,16 @@ def select_api_key(api_keys, endpoint, state_file=LLM_ACCOUNT_POOL_STATE_FILE, *
             if service['accounts'].get(active_id, {}).get('status') == 'quota_blocked':
                 service['accounts'][active_id]['status'] = 'eligible_after_reset'
                 return state
-            return None
-        next_id = next((account_id for account_id in identity['account_ids']
+            return state if is_new_group else None
+        floor = identity['account_ids'].index(active_id) if active_id in keys_by_id else max(
+            [0] + [index for index, account_id in enumerate(identity['account_ids'])
+                   if service['accounts'].get(account_id, {}).get('lastFailureAt')])
+        eligible_ids = identity['account_ids'][floor:]
+        next_id = next((account_id for account_id in eligible_ids
                         if account_id not in excluded
                         and not _account_is_blocked(service['accounts'].get(account_id, {}), now_ms)), None)
         if next_id is None:
-            raise _build_exhausted_error(service, identity['account_ids'], now_ms)
+            raise _build_exhausted_error(service, eligible_ids, now_ms)
         group['activeAccountId'] = next_id
         group['switchedAt'] = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat()
         service['groups'][identity['group_id']] = group
@@ -480,18 +506,16 @@ def mark_quota_exhausted(selection, quota, state_file=LLM_ACCOUNT_POOL_STATE_FIL
         service['accounts'][selection['account_id']] = {
             **previous,
             'status': 'quota_blocked',
-            'reason': 'GoUsageLimitError',
+            'reason': (quota or {}).get('type') or 'GoUsageLimitError',
             'limitName': str((quota or {}).get('limit_class') or 'unknown'),
             'blockedUntilMs': effective_until,
             'blockedUntil': datetime.fromtimestamp(
                 effective_until / 1000, tz=timezone.utc
             ).isoformat(),
             'lastFailureAt': datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(),
-            'lastFailureStatus': 429,
+            'lastFailureStatus': 401 if (quota or {}).get('type') == 'InsufficientBalanceError' else 429,
         }
-        for group in service['groups'].values():
-            if isinstance(group, dict) and group.get('activeAccountId') == selection['account_id']:
-                group['activeAccountId'] = None
+        # Keep active as the forward-only cursor while blocked.
         return state
 
     _update_state(state_file, updater)
@@ -606,7 +630,21 @@ def _fallback_block_ms(limit_class):
     return UNKNOWN_QUOTA_BLOCK_MS
 
 
-def classify_opencode_go_quota_response(status, headers, body, *, raw='', now_ms=None):
+def classify_opencode_go_quota_response(status, headers, body, *, raw='', now_ms=None, endpoint=None):
+    if endpoint is not None and not is_opencode_go_endpoint(endpoint):
+        return None
+    if status == 401 and is_opencode_go_endpoint(endpoint):
+        document = body if isinstance(body, dict) else {}
+        error = document.get('error') if isinstance(document.get('error'), dict) else {}
+        nested = error.get('error') if isinstance(error.get('error'), dict) else {}
+        messages = [body, raw, document.get('message'), document.get('error'), error.get('message'), nested.get('message')]
+        balance_pattern = (r'insufficient balance(?:[.!]?|\. Manage your billing here: '
+                           r'https://opencode\.ai/workspace/[A-Za-z0-9_-]+/billing)')
+        if any(isinstance(value, str) and re.fullmatch(balance_pattern, value.strip(), re.I)
+               for value in messages):
+            current = int(time.time() * 1000) if now_ms is None else int(now_ms)
+            return {'type': 'InsufficientBalanceError', 'limit_name': 'balance', 'limit_class': 'balance',
+                    'blocked_until_ms': current + UNKNOWN_QUOTA_BLOCK_MS}
     if status != 429:
         return None
     body = body if isinstance(body, dict) else {}
@@ -643,6 +681,7 @@ def classify_opencode_go_quota_response(status, headers, body, *, raw='', now_ms
 __all__ = [
     'STATE_SCHEMA_VERSION', 'POLICY_VERSION', 'MAX_SAFE_INTEGER',
     'LlmAccountPoolExhaustedError',
+    'LlmAccountAuthError',
     'LlmAccountPoolStateError', 'LlmAccountPoolConfigError',
     'LlmAccountPoolLockTimeoutError',
     'normalize_api_keys', 'parse_fallback_api_keys', 'resolve_api_key_pool', 'resolve_primary_api_key_pool',

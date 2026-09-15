@@ -9449,6 +9449,14 @@ function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest
     if (typeof persist === 'function') persist(paper);
 }
 
+function checkpointImageSupplementFailure(paper, analysis, manifest, imageManifest, error) {
+    markRecoveryStage(manifest, 'imageSupplement', 'transient_failure', { error: error.message });
+    if (error.scope === 'run') {
+        saveAnalysisCheckpoint(paper, analysis, manifest, imageManifest);
+        throw error;
+    }
+}
+
 function getPreProvidedImageUrls(paper) {
     // A direct source scope is supplied by either the daily sealed bundle or
     // the historical direct runner.  Caller-held recovery URLs may have come
@@ -9621,13 +9629,16 @@ function classifyModelRequestError(sourceError, config = DEEP_CONFIG) {
     }
     if ([
         'LLM_ACCOUNT_POOL_EXHAUSTED',
+        'LLM_ACCOUNT_AUTH_ERROR',
         'LLM_ACCOUNT_POOL_CONFIG_ERROR',
         'LLM_ACCOUNT_POOL_STATE_ERROR'
     ].includes(code)) {
         sourceError.retryable = false;
+        sourceError.scope = 'run';
         sourceError.category = code === 'LLM_ACCOUNT_POOL_EXHAUSTED'
             ? 'quota_exhausted'
-            : (code === 'LLM_ACCOUNT_POOL_STATE_ERROR' ? 'state' : 'config');
+            : code === 'LLM_ACCOUNT_AUTH_ERROR' ? 'authentication'
+                : (code === 'LLM_ACCOUNT_POOL_STATE_ERROR' ? 'state' : 'config');
         sourceError.modelRequestClassified = true;
         sourceError.message = message;
         return sourceError;
@@ -9716,6 +9727,7 @@ function makeModelHttpError(status, message, config = DEEP_CONFIG) {
     return makeModelRequestError(`HTTP ${status}: ${message}`, {
         code: retryable ? 'MODEL_HTTP_TRANSIENT' : 'MODEL_HTTP_NON_RETRYABLE',
         status,
+        ...(status === 401 ? { scope: 'run' } : {}),
         retryable,
         category: retryable ? 'http_transient' : 'http_non_retryable'
     }, config);
@@ -13816,6 +13828,9 @@ async function analyzePaperDeepInternal(paper) {
                 analysis: null, analysisManifest, imageManifest,
                 error: err.message,
                 errorCode: err.code || null,
+                errorCategory: err.category || null,
+                errorStatus: err.status || null,
+                errorScope: err.scope || null,
                 errorRetryable: err.retryable !== false
             };
         }
@@ -13844,6 +13859,9 @@ async function analyzePaperDeepInternal(paper) {
                 analysis: null, analysisManifest, imageManifest,
                 error: err.message,
                 errorCode: err.code || null,
+                errorCategory: err.category || null,
+                errorStatus: err.status || null,
+                errorScope: err.scope || null,
                 errorRetryable: err.retryable !== false
             };
         }
@@ -14967,7 +14985,7 @@ async function analyzePaperDeepInternal(paper) {
                 });
             }
         } catch (err) {
-            markRecoveryStage(analysisManifest, 'imageSupplement', 'transient_failure', { error: err.message });
+            checkpointImageSupplementFailure(paper, analysis, analysisManifest, imageManifest, err);
             console.log(`    [deep] ⚠️  副模型图片筛选失败: ${err.message}，保留纯文本分析结果`);
         }
     } else if (!analysisManifest.stages.imageSupplement) {
@@ -16475,6 +16493,7 @@ module.exports = {
     markRecoveryStage,
     isRecoveryStageComplete,
     suppressOuterRetryAfterReaderExhaustion,
+    checkpointImageSupplementFailure,
     commitDeferredReaderCandidate,
     saveAnalysisCheckpoint,
     shouldRetainFullTextCheckpoint,

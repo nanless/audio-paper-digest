@@ -39,7 +39,7 @@ VERIFICATION_CONTRACT = "conference-pdf-extraction-verification-v2"
 BLOCKED_VERIFICATION_CONTRACT = "conference-pdf-extraction-blocked-verification-v1"
 CONTRACT_VERSION = 2
 EXTRACTOR_NAME = "audio-paper-digest-conference-structured"
-EXTRACTOR_VERSION = "2.2.3"
+EXTRACTOR_VERSION = "2.3.0"
 PROFILE = "replayable-pdf-layout-v1"
 VISUAL_AUDIT_CONTRACT = "conference-pdf-visual-audit-v1"
 VISUAL_AUDIT_VERSION = 1
@@ -563,7 +563,7 @@ def _caption_candidate(text: str) -> tuple[str, int] | None:
     """
     match = re.match(
         r"^\s*(?:(figure|fig\.?|table|tab\.?)\s*(\d+)|([图表])\s*(\d+))"
-        r"(?:\s*[.．:：;；)）\-–—]|\s+|$)",
+        r"(?:\s*[.．:：;；)）\-–—]|\s*$)",
         text,
         flags=re.IGNORECASE,
     )
@@ -571,7 +571,7 @@ def _caption_candidate(text: str) -> tuple[str, int] | None:
         return None
     raw_label = (match.group(1) or match.group(3) or "figure").lower()
     raw_number = match.group(2) or match.group(4)
-    label = "table" if raw_label in {"table", "tab.", "表"} else "figure"
+    label = "table" if raw_label in {"table", "tab", "tab.", "表"} else "figure"
     return label, int(raw_number)
 
 
@@ -609,7 +609,7 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
                 "text": "".join(g["text"] for g in candidate["layout"]["glyphs"]),
                 "renderSha256": render_sha,
                 "sourceRef": f"pdf://page/{page_number}/formula/{len(formula_candidates) + 1}",
-                "status": "visual-only-no-original-tex", **candidate,
+                "status": "visual-only-no-tex", **candidate,
             })
 
         for image_index, image in enumerate(page.get_images(full=True), start=1):
@@ -652,6 +652,8 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
                 if caption:
                     label, number = caption
                     target = table_candidates if label == "table" else figure_candidates
+                    if any(item.get("number") == number for item in target):
+                        continue
                     target.append({
                         "page": page_number,
                         "number": number,
@@ -678,7 +680,12 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
                     "rows": len(matrix),
                     "columns": len(matrix[0]) if matrix else 0,
                     "matrixSha256": _stable_hash(matrix) if rectangular else None,
-                    "status": "matrix-extracted" if rectangular else "needs-review",
+                    # Keep the literal cells and geometry for review. A rectangular
+                    # result alone does not establish correct reading order or units.
+                    "rawCells": matrix,
+                    "cellBboxes": [(_bbox(cell) if cell is not None else None)
+                                   for cell in table.cells],
+                    "status": "needs-review",
                     "renderSha256": render_sha,
                 })
         except Exception as exc:
@@ -707,7 +714,7 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
         "visualBytes": visual_bytes,
         "limitations": [
             "PDF 没有作者原始 TeX；公式仅保存原页视觉证据和抽取文本，不转写为可发布 TeX。",
-            "表格候选只有 status=matrix-extracted 且矩阵完整时才允许后续人工/规则复核。",
+            "表格候选保留原始单元格和坐标，仅供复核；不得将启发式矩阵作为可发布原表。",
             "Figure/图片通过原页 PNG SHA 和 PDF 内嵌图片 SHA 绑定，未把坐标或曲线语义交给自动推断。",
         ],
     }
@@ -797,14 +804,30 @@ def load_pypdf_backend() -> ExtractionBackend:
 
     def caption_blocks(page: Any, kind: str) -> list[dict[str, Any]]:
         result = []
-        for block in page.get_text("blocks", sort=False):
-            if len(block) < 5:
+        seen = set()
+        for block in page.get_text("dict", sort=False).get("blocks", []):
+            if block.get("type") != 0:
                 continue
-            parsed = block_caption({"text": block[4]}, kind)
-            if parsed:
-                result.append({"number": parsed[0], "caption": parsed[1],
-                               "bbox": tuple(block[:4])})
-        return sorted(result, key=lambda item: item["bbox"][1])
+            # Text blocks may merge two side-by-side captions. Find labels at
+            # line level, then attach continuation lines only in that column.
+            lines = block.get("lines", [])
+            for index, line in enumerate(lines):
+                raw = "".join(span.get("text", "") for span in line.get("spans", []))
+                parsed = _caption_candidate(raw)
+                if not parsed or parsed[0] != kind.lower() or parsed[1] in seen:
+                    continue
+                seen.add(parsed[1])
+                bbox = list(line["bbox"])
+                for following in lines[index + 1:]:
+                    text = "".join(span.get("text", "") for span in following.get("spans", []))
+                    fx0, fy0, fx1, fy1 = following["bbox"]
+                    if _caption_candidate(text) or fy0 < bbox[3] - 2 or min(bbox[2], fx1) <= max(bbox[0], fx0):
+                        break
+                    raw += " " + text
+                    bbox = [min(bbox[0], fx0), bbox[1], max(bbox[2], fx1), fy1]
+                result.append({"number": parsed[1], "caption": clean_structure_text(raw, 1200),
+                               "bbox": tuple(bbox)})
+        return sorted(result, key=lambda item: (item["bbox"][1], item["bbox"][0]))
 
     def numeric_token(text: str) -> bool:
         value = text.strip()
@@ -1105,6 +1128,7 @@ def load_pypdf_backend() -> ExtractionBackend:
 
     def figure_records(pdf_document: Any) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
+        seen_numbers: set[int] = set()
         total_asset_bytes = 0
         for page_number, page in enumerate(pdf_document, 1):
             captions = caption_blocks(page, "Figure")
@@ -1112,12 +1136,20 @@ def load_pypdf_backend() -> ExtractionBackend:
                 continue
             visual_blocks = page.get_text("dict").get("blocks", [])
             for caption_index, caption in enumerate(captions):
+                if caption["number"] in seen_numbers:
+                    continue
                 x0, y0, x1, _ = caption["bbox"]
-                previous_y = (captions[caption_index - 1]["bbox"][3] + 5
-                              if caption_index else 50.0)
                 full_width = x1 - x0 >= float(page.rect.width) * 0.60
-                region_x0 = 50.0 if full_width else max(0.0, x0 - 3.0)
-                region_x1 = float(page.rect.width) - 50.0 if full_width else min(float(page.rect.width), x1 + 3.0)
+                midpoint = float(page.rect.width) / 2
+                # A short caption is not the horizontal extent of its Figure.
+                # Use the column, and never use the opposite column's caption
+                # as a vertical clipping boundary.
+                region_x0 = 0.0 if full_width or (x0 + x1) / 2 < midpoint else midpoint
+                region_x1 = float(page.rect.width) if full_width or (x0 + x1) / 2 >= midpoint else midpoint
+                previous_y = max([0.0, *[other["bbox"][3] + 5
+                    for other in captions[:caption_index]
+                    if other["bbox"][3] + 5 < y0
+                    and min(x1, other["bbox"][2]) > max(x0, other["bbox"][0])]])
                 all_drawings = []
                 for drawing in page.get_drawings():
                     rect = drawing.get("rect")
@@ -1160,6 +1192,10 @@ def load_pypdf_backend() -> ExtractionBackend:
                     if rect.x1 >= region_x0 and rect.x0 <= region_x1 and rect.y1 <= y0 - 2 and rect.y1 >= previous_y:
                         rects.append(rect)
                 asset = None
+                # A caption alone cannot turn unrelated graphics elsewhere on
+                # the page into a Figure. Leave distant candidates visual-only.
+                if rects and y0 - max(rect.y1 for rect in rects) > 60:
+                    rects = []
                 if rects:
                     if wide_containers:
                         visual = pymupdf.Rect(
@@ -1186,10 +1222,15 @@ def load_pypdf_backend() -> ExtractionBackend:
                                      "base64": base64.b64encode(raw).decode("ascii")}
                             total_asset_bytes += len(raw)
                             break
+                if asset is None:
+                    # The visual audit still records the candidate and original
+                    # page. No crop means no complete, publishable Figure.
+                    continue
+                seen_numbers.add(caption["number"])
                 ordinal = len(records) + 1
                 records.append({"ordinal": ordinal, "page": page_number,
                                 "caption": caption["caption"],
-                                "sourceRef": f"pdf:figure:{ordinal}:page:{page_number}",
+                                "sourceRef": f"pdf:figure:{caption['number']}:page:{page_number}",
                                 "recoveryStatus": "complete", "asset": asset})
         return records[:64]
 
@@ -1197,18 +1238,33 @@ def load_pypdf_backend() -> ExtractionBackend:
                             visual_audit: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
         try:
             pdf_document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+            # A caller that does not provide the authenticated page audit has
+            # not established that a table-bearing layout is safe to promote
+            # into replayable cells/formula crops. Keep those regions as
+            # literal visual-audit candidates; production extraction passes
+            # the sealed audit explicitly before enabling the richer FULL
+            # projection. This prevents a convenient direct helper call from
+            # silently turning arbitrary PDF geometry into source structure.
+            conservative_visual_only = False
+            if visual_audit is None:
+                audit_probe = _build_visual_audit(pdf_document)
+                conservative_visual_only = any(
+                    isinstance(candidate, dict) and (
+                        candidate.get("rows", 0) > 0 or "rawCells" in candidate)
+                    for candidate in audit_probe.get("tableCandidates", []))
             tables: list[dict[str, Any]] = []
             formulas: list[dict[str, Any]] = []
-            for page_number in range(pdf_document.page_count):
-                page_tables, _ = table_records(pdf_document[page_number], page_number + 1, len(tables) + 1)
-                tables.extend(page_tables)
-                audit_page = next((item for item in (visual_audit or {}).get("pages", [])
-                                   if item.get("page") == page_number + 1), None)
-                page_formulas, _ = formula_records(
-                    pdf_document, page_number + 1, len(formulas) + 1,
-                    str(audit_page["sha256"]) if audit_page else None,
-                )
-                formulas.extend(page_formulas)
+            if not conservative_visual_only:
+                for page_number in range(pdf_document.page_count):
+                    page_tables, _ = table_records(pdf_document[page_number], page_number + 1, len(tables) + 1)
+                    tables.extend(page_tables)
+                    audit_page = next((item for item in (visual_audit or {}).get("pages", [])
+                                       if item.get("page") == page_number + 1), None)
+                    page_formulas, _ = formula_records(
+                        pdf_document, page_number + 1, len(formulas) + 1,
+                        str(audit_page["sha256"]) if audit_page else None,
+                    )
+                    formulas.extend(page_formulas)
             retained_formulas = []
             formula_bytes = 0
             for formula in formulas:

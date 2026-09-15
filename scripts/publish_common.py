@@ -37,6 +37,7 @@ from path_config import (
 from project_env import build_child_process_env, get_required_fetch_proxy
 from llm_account_pool import (
     LlmAccountPoolExhaustedError,
+    LlmAccountAuthError,
     LlmAccountPoolConfigError,
     LlmAccountPoolStateError,
     classify_opencode_go_quota_response,
@@ -4267,7 +4268,7 @@ def _open_publish_json_with_account_pool(
     *, api_url, endpoint, model, api_type, api_keys, payload, opener, timeout,
     state_file=None, usage_sink=None, usage_directory=None,
 ):
-    """Execute one logical request, replaying only confirmed Go quota failures."""
+    """Replay confirmed Go quota/balance failures strictly towards later keys."""
     try:
         expected_api_type = detect_publish_api_type(endpoint, model)
         expected_api_url = build_publish_api_url(expected_api_type, endpoint)
@@ -4333,8 +4334,12 @@ def _open_publish_json_with_account_pool(
             raw_text, parsed = _read_publish_http_error(exc)
             usage_status, usage_body = exc.code, parsed
             quota = classify_opencode_go_quota_response(
-                exc.code, exc.headers, parsed, raw=raw_text,
-            )
+                exc.code, exc.headers, parsed, raw=raw_text, endpoint=endpoint,
+            ) if is_opencode_go_endpoint(endpoint) else None
+            if is_opencode_go_endpoint(endpoint) and exc.code == 401 and quota is None:
+                raise LlmAccountAuthError() from exc
+            if selection is None and quota is not None:
+                raise LlmAccountPoolExhaustedError('OpenCode Go 当前账号额度不足，未配置后续账号') from exc
             if selection is None or quota is None:
                 raise
             blocked_until_ms = mark_quota_exhausted(selection, quota, state_file)
@@ -4402,7 +4407,7 @@ def call_publish_llm_api(
     except LlmAccountPoolConfigError as exc:
         message = f'{context} 的 OpenCode Go 账号池配置非法: {exc}'
         if required:
-            raise PublishLLMUnavailable(message) from exc
+            raise
         print(f'  ⚠️  {message}，跳过')
         return None
     if use_secondary:
@@ -4468,7 +4473,7 @@ def call_publish_llm_api(
         except LlmAccountPoolConfigError as exc:
             message = f'{context} 的副模型 OpenCode Go 账号池配置非法: {exc}'
             if required:
-                raise PublishLLMUnavailable(message) from exc
+                raise
             print(f'  ⚠️  {message}，跳过')
             return None
         config_names = (
@@ -4645,11 +4650,14 @@ def call_publish_llm_api(
             )
         except (
             LlmAccountPoolExhaustedError,
+            LlmAccountAuthError,
             LlmAccountPoolStateError,
             LlmAccountPoolConfigError,
         ) as exc:
             last_error = exc
             print(f'  ⛔ {context} 已停止：{exc}')
+            if getattr(exc, 'scope', None) == 'run':
+                raise
             break
         except Exception as exc:
             last_error = exc

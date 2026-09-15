@@ -59,7 +59,9 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
             freshArxivSourceRoot: files.freshArxivFetchedSourcesDir,
             publicationMetadataRoot: files.historicalArxivPublicationMetadataDir }, {
             ...(runtime.dependencies || {}),
-            shouldPause: async () => stopSignal !== null || Boolean(await runtime.dependencies?.shouldPause?.()),
+            shouldPause: async () => stopSignal !== null
+                ? { code: stopSignal, detail: `User requested graceful pause via ${stopSignal}` }
+                : await runtime.dependencies?.shouldPause?.(),
             onProgress: runtime.dependencies?.onProgress || (event => console.error(JSON.stringify(event)))
         });
         console.log(JSON.stringify(result)); return result;
@@ -67,5 +69,5 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
     }
 }
-if (require.main === module) main().catch(error => { console.error(`[historical-direct-rewrite-run] ${error.message}`); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(`[historical-direct-rewrite-run] ${runner.safeErrorText(error)}`); process.exitCode = 1; });
 module.exports = { USAGE, parsePaperIds, parseArgs, main };

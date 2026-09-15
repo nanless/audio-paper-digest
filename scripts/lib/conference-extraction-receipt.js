@@ -20,7 +20,7 @@ const WEAK_PROFILE = 'weak-pdf-layout-v1';
 const REPLAYABLE_PROFILE = 'replayable-pdf-layout-v1';
 const OFFSET_UNIT = 'utf8-byte';
 const EXTRACTOR_NAME = 'audio-paper-digest-conference-structured';
-const EXTRACTOR_VERSION = '2.2.3';
+const EXTRACTOR_VERSION = '2.3.0';
 const BACKEND_NAME = 'pymupdf';
 const BACKEND_VERSION = '1.27.2.3';
 const OPTIONS = Object.freeze({ minimumTextCharacters: 5000,
@@ -342,7 +342,7 @@ function validatePdfFormulaRecord(formula, index, audit, pageCount) {
         || sha256(cropBytes) !== assertSha(crop.sha256, 'formula crop SHA')) fail('PDF formula crop pixels drifted');
     if (layout.contract !== 'pdf-formula-glyph-layout-v1' || !coordinates(layout.bbox, 4)
         || !Array.isArray(layout.glyphs) || !layout.glyphs.length
-        || candidate.status !== 'visual-only-no-original-tex'
+        || candidate.status !== 'visual-only-no-tex'
         || candidate.derivedTex !== expression.recoveredTex
         || stableHash(layout) !== assertSha(expression.layoutSha256, 'formula.layoutSha256')) {
         fail('PDF formula layout evidence drifted');

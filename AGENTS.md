@@ -73,7 +73,7 @@ npm run digest:prepare -- YYYY-MM-DD
 默认 Muse 精确模型走 OpenAI Responses，`/v1` 转为 `/v1/responses`。所有 Node LLM 请求必须经 `requestLlmJson()`；Python 发布请求必须经 `call_publish_llm_api()`。
 
 - Muse：强制项目 HTTP CONNECT，一次请求一个 one-shot agent，请求后销毁，禁止静默直连。
-- OpenCode Go 账号池：成功时持续使用当前账号；仅明确 `GoUsageLimitError` 才在同一逻辑请求内切换并持久化冷却。普通 429、5xx、网络错误、输出截断和正文门禁不得切号；切换后不自动切回。
+- OpenCode Go 账号池：成功时持续使用当前账号；明确 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，在同一逻辑请求内按配置顺位向后切换并持久化冷却，不回绕到已冷却的前序账号。普通认证 401 是运行级错误，不切号；普通 429、5xx、网络错误、输出截断和正文门禁不得切号。全部后续账号不可用时保存断点并停止派发，不把服务故障继续摊到整批论文。
 - 其他 LLM：默认 `agent:false` 直连，避免继承代理污染 MiMo/Kimi。
 - arXiv 元数据、HTML、PDF、图片：强制项目 HTTP CONNECT。
 - HuggingFace curl：继承 HTTP(S) 代理，可额外使用 `ALL_PROXY` SOCKS。

@@ -163,40 +163,25 @@ function normalizedPaper(source) {
 function buildReplayableReaderArtifacts(source) {
     const raw = source.structuredArtifacts;
     const sourceDom = value => stableHash(value);
-    const tables = (raw.tables || []).map(table => {
-        const matrix = table.cells.map(row => row.map(cell => String(cell)));
-        const sourceDomSha256 = sourceDom({ kind: 'pdf-table', sourceRef: table.sourceRef,
-            caption: table.caption, cells: matrix });
-        const cells = matrix.flatMap((row, rowIndex) => row.map((text, column) => ({
-            row: rowIndex, column, header: rowIndex === 0, rowspan: 1, colspan: 1,
-            text, sourceDomSha256: sourceDom({ kind: 'pdf-table-cell', sourceRef: table.sourceRef,
-                row: rowIndex, column, text })
-        })));
-        return { ordinal: table.ordinal, label: `Table ${table.ordinal}`,
-            caption: table.caption, sourceDomSha256, headerRows: [0],
-            bodyRows: Array.from({ length: Math.max(0, matrix.length - 1) }, (_, index) => index + 1),
-            cells, matrix, recoveryStatus: table.recoveryStatus };
-    });
-    const formulas = (raw.formulas || []).map(formula => {
-        const latex = String(formula.tex || '').trim();
-        return { ordinal: formula.ordinal, label: `Formula ${formula.ordinal}`, latex,
-            mathml: '', text: latex,
-            sourceDomSha256: sourceDom({ kind: 'pdf-formula', sourceRef: formula.sourceRef, text: latex }),
-            recoveryStatus: formula.recoveryStatus };
-    });
-    const figures = (raw.figures || []).map(figure => {
+    // Legacy sealed PDF artifacts can contain heuristic matrices and plain
+    // text in `tex`. Preserve them at the source, never promote them to DOM
+    // cells or original LaTeX. Hashes attest bytes, not extraction correctness.
+    const tables = [];
+    const formulas = [];
+    const figures = (raw.figures || []).filter(figure => figure.asset && figure.recoveryStatus === 'complete').map(figure => {
         const images = figure.asset ? [{ kind: 'inline_pdf',
             url: `conference-pdf-figure://${encodeURIComponent(source.paperId)}/${figure.ordinal}`,
             alt: figure.caption || `Figure ${figure.ordinal}`,
             mediaType: String(figure.asset.mediaType || '').toLowerCase(),
             rasterDownloadEligible: false, asset: clone(figure.asset) }] : [];
-        return { ordinal: figure.ordinal, label: `Figure ${figure.ordinal}`,
+        const originalNumber = /pdf:figure:(\d+):page:/.exec(figure.sourceRef)?.[1] || figure.ordinal;
+        return { ordinal: figure.ordinal, label: `Figure ${originalNumber}`,
             caption: figure.caption, images,
             sourceDomSha256: sourceDom({ kind: 'pdf-figure', sourceRef: figure.sourceRef,
                 caption: figure.caption, assetSha256: figure.asset?.sha256 || null }),
             recoveryStatus: figure.recoveryStatus };
     });
-    const body = { version: 1, parserVersion: 'conference-pdf-structure-v1',
+    const body = { version: 1, parserVersion: 'conference-pdf-structure-v2-visual-only-math-tables',
         sourceKind: 'conference_pdf', sourceId: source.paperId, paperId: source.paperId,
         sourceHtmlSha256: source.sourceBinding.pdfSha256,
         tables, formulas, figures, references: [],
@@ -213,9 +198,9 @@ function sourceDetails(source) {
         const structuredArtifacts = buildReplayableReaderArtifacts(source);
         return { text: source.text, source: 'conference_pdf_text', sourceId: source.paperId,
             imageInfos: [], htmlAvailability: 'not_applicable', htmlAttempts: 0,
-            warnings: [], structuredArtifacts,
-            conferenceCapabilities: { fullText: 'full', tables: 'available',
-                formulas: 'available', figures: 'available' } };
+            warnings: ['PDF 表格仅可引用原文或复核原页；文字层公式不是原始 TeX，不提供可发布结构化表格或公式。'], structuredArtifacts,
+            conferenceCapabilities: { fullText: 'full', tables: 'unavailable',
+                formulas: 'unavailable', figures: 'available' } };
     }
     if (source.structuredArtifacts.profile !== contextApi.WEAK_PROFILE
         || source.tableAvailability.available !== false || source.formulaAvailability.available !== false
@@ -240,7 +225,7 @@ function validatePersistedSourceDetails(details, paperId) {
             || details.htmlAvailability !== 'not_applicable' || details.htmlAttempts !== 0
             || !Array.isArray(details.warnings)
             || stableHash(details.conferenceCapabilities) !== stableHash({ fullText: 'full',
-                tables: 'available', formulas: 'available', figures: 'available' })) {
+                tables: 'unavailable', formulas: 'unavailable', figures: 'available' })) {
             throw new Error('conference structured source details are invalid');
         }
         const artifacts = details.structuredArtifacts;
@@ -248,11 +233,12 @@ function validatePersistedSourceDetails(details, paperId) {
             'sourceHtmlSha256', 'tables', 'formulas', 'figures', 'references', 'health',
             'flattenedTextSha256', 'payloadSha256'];
         if (!artifacts || Object.keys(artifacts).sort().join('\0') !== required.sort().join('\0')
-            || artifacts.version !== 1 || artifacts.parserVersion !== 'conference-pdf-structure-v1'
+            || artifacts.version !== 1 || artifacts.parserVersion !== 'conference-pdf-structure-v2-visual-only-math-tables'
             || artifacts.sourceKind !== 'conference_pdf' || artifacts.sourceId !== paperId
             || artifacts.paperId !== paperId || !/^[a-f0-9]{64}$/.test(artifacts.sourceHtmlSha256)
             || artifacts.flattenedTextSha256 !== sha256(details.text)
             || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)
+            || artifacts.tables.length || artifacts.formulas.length
             || !Array.isArray(artifacts.figures) || !Array.isArray(artifacts.references)
             || artifacts.references.length
             || !artifacts.health || artifacts.health.status !== 'ready'

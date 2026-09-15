@@ -176,20 +176,30 @@ function phasePaths({ phase = 'analysis', registryRoot, sourceRoot, plan, genera
     fail('control phase must be source or analysis');
 }
 
-function pauseRecord(plan, generation, requestedAt) {
+function pauseRecord(plan, generation, requestedAt, reason) {
     const normalized = planApi.normalizePlan(plan); const checked = generationNumber(generation);
     if (Number.isNaN(Date.parse(requestedAt || '')) || new Date(requestedAt).toISOString() !== requestedAt) {
         fail('pause request time must be canonical ISO-8601');
     }
+    if (reason !== undefined && (!reason || typeof reason !== 'object'
+        || Object.keys(reason).sort().join(',') !== 'code,detail'
+        || !['SIGINT', 'SIGTERM', 'external-pause', 'account-pool-exhausted',
+            'account-balance-unavailable', 'account-authentication-failed', 'account-service-unavailable'].includes(reason.code)
+        || typeof reason.detail !== 'string' || reason.detail !== runner.safeErrorText(reason.detail))) {
+        fail('pause reason is invalid or contains unsafe text');
+    }
     const body = { contract: PAUSE_CONTRACT, version: 1, planSha256: normalized.planSha256,
-        generation: checked, requestedAt };
+        generation: checked, requestedAt, ...(reason ? { reason } : {}) };
     return { ...body, requestSha256: stableHash(body) };
 }
 function normalizePauseRecord(value, plan, generation) {
     const expectedKeys = ['contract', 'version', 'planSha256', 'generation', 'requestedAt', 'requestSha256'];
+    if (Object.hasOwn(value || {}, 'reason')) expectedKeys.push('reason');
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')) fail('pause request schema is invalid');
-    const expected = pauseRecord(plan, generation, value.requestedAt);
+    const expected = pauseRecord(plan, generation, value.requestedAt, value.reason);
+    if (value.contract !== expected.contract || value.version !== expected.version
+        || value.planSha256 !== expected.planSha256 || value.generation !== expected.generation) fail('pause request is not bound to this plan/generation');
     if (value.requestSha256 !== expected.requestSha256 || !SHA_RE.test(value.requestSha256)) fail('pause request SHA drifted');
     return expected;
 }
@@ -199,11 +209,11 @@ function readPauseFile(filename, plan, generation) {
     return { record: normalizePauseRecord(loaded.value, plan, generation), fileSha256: loaded.fileSha256 };
 }
 function writePauseRequest({ phase = 'analysis', registryRoot, sourceRoot, plan, generation = 1,
-    requestedAt = new Date().toISOString() } = {}) {
+    requestedAt = new Date().toISOString(), reason } = {}) {
     configuredRoot(phase === 'analysis' ? registryRoot : sourceRoot,
         phase === 'analysis' ? 'registry root' : 'fresh arXiv source root', true);
     const paths = phasePaths({ phase, registryRoot, sourceRoot, plan, generation });
-    const record = pauseRecord(plan, generation, requestedAt);
+    const record = pauseRecord(plan, generation, requestedAt, reason);
     const bytes = prettyBytes(record); let fd;
     try {
         fd = fs.openSync(paths.pauseFile, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
@@ -252,10 +262,10 @@ function registrySnapshot({ registryFile, plan, currentRendererImplementationSha
     const loaded = projectionIo.readStableJson(registryFile, 'direct rewrite registry');
     const registry = runner.normalizeRegistry(loaded.value, plan); const counts = runner.registryCounts(registry);
     const updates = registry.entries.map(item => item.updatedAt).filter(Boolean).sort();
-    const recentFailures = registry.entries.filter(item => item.status === 'failed')
+    const recentFailures = registry.entries.filter(item => ['failed', 'analysis_partial'].includes(item.status))
         .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')))
-        .slice(0, 20).map(item => ({ paperId: item.paperId, route: item.route,
-            updatedAt: item.updatedAt || null, error: item.latestError || null }));
+        .slice(0, 20).map(item => ({ paperId: item.paperId, route: item.route, status: item.status,
+            updatedAt: item.updatedAt || null, error: item.latestError ? runner.safeErrorText(item.latestError) : null }));
     const staleStaged = registry.entries.filter(item => item.status === 'staged'
         && item.staging?.pageStaging?.rendererImplementationSha256 !== currentRendererImplementationSha256);
     return { present: true, fileSha256: loaded.fileSha256, registrySha256: registry.registrySha256,
@@ -499,7 +509,8 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
         fileSha256: loaded.fileSha256, planSha256: plan.planSha256, canonicalPapers: total,
         projectedPages: plan.projectedPages.length, coverage }, execution: { generation: generationNumber(generation),
         registryFile: paths.registryFile, pauseFile: paths.pauseFile, operationLockDirectory: paths.operationLockDirectory,
-        running, pauseRequested: Boolean(pause), progressPercent: total ? Number((staged * 100 / total).toFixed(2)) : 100,
+        running, pauseRequested: Boolean(pause), pauseReason: pause?.record.reason || null,
+        progressPercent: total ? Number((staged * 100 / total).toFixed(2)) : 100,
         ...execution }, sources: { ...sources, pauseFile: sourcePaths.pauseFile,
             operationLockDirectory: sourcePaths.operationLockDirectory, running: sourceRunning,
             pauseRequested: Boolean(sourcePause) }, aggregates, conferenceTasks: tasks,

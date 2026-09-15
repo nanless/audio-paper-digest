@@ -50,6 +50,39 @@ test('source pause uses an isolated plan-generation marker and resumes independe
     assert.equal(control.resumeRewrite({ phase: 'source', sourceRoot: root, plan }).status, 'resumed');
 });
 
+test('pause reason extends legacy contract without allowing credentials or stale bindings', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-pause-reason-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();
+    const reason = { code: 'SIGINT', detail: 'User requested graceful pause via SIGINT' };
+    const paused = control.writePauseRequest({ registryRoot: root, plan, reason });
+    assert.deepEqual(control.readPauseFile(paused.pauseFile, plan, 1).record.reason, reason);
+    assert.equal(runner.pauseFileRequested(paused.pauseFile, plan, 1), true);
+    assert.throws(() => control.normalizePauseRecord({ ...paused.record, generation: 2 }, plan, 1), /bound/);
+    assert.throws(() => control.pauseRecord(plan, 1, paused.record.requestedAt,
+        { code: 'SIGINT', detail: 'sk-do-not-persist' }), /unsafe/);
+    assert.equal(control.resumeRewrite({ registryRoot: root, plan }).status, 'resumed');
+});
+
+test('recent failures include partial analysis and redact its retained error', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-partial-status-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const item = { paperId: 'arxiv:2601.00001', runId: '11111111-1111-4111-8111-111111111111',
+        route: { kind: 'arxiv-fresh-fetch' }, projectionSha256: 'd'.repeat(64) };
+    const plan = { ...minimalPlan(), queue: [item] };
+    const entry = { paperId: item.paperId, runId: item.runId, route: item.route.kind,
+        projectionSha256: item.projectionSha256, status: 'analysis_partial',
+        attempts: 1, latestError: 'root cause sk-test-secret', updatedAt: '2026-09-12T00:00:00.000Z' };
+    const body = { contract: runner.REGISTRY_CONTRACT, version: 1, planSha256: plan.planSha256,
+        createdAt: '2026-09-08T00:00:00.000Z', entries: [entry] };
+    const registryFile = path.join(root, 'registry.json');
+    fs.writeFileSync(registryFile, JSON.stringify({ ...body, registrySha256: runner.stableHash(body) }));
+    const snapshot = control.registrySnapshot({ registryFile, plan, currentRendererImplementationSha256: 'b'.repeat(64) });
+    assert.equal(snapshot.recentFailures.length, 1);
+    assert.equal(snapshot.recentFailures[0].status, 'analysis_partial');
+    assert.doesNotMatch(snapshot.recentFailures[0].error, /sk-test-secret/);
+    assert.equal(snapshot.lastUpdatedAt, entry.updatedAt);
+});
+
 test('source status checkpoint is immutable in shape and advances resumable conference progress', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-source-status-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();

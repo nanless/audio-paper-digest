@@ -12,6 +12,7 @@ const { loadProjectEnv } = require('./env-loader.js');
 const {
     normalizeApiKeys,
     LlmAccountPoolExhaustedError,
+    LlmAccountAuthError,
     isOpenCodeGoEndpoint,
     classifyOpenCodeGoQuotaResponse,
     replaceCredentialHeaders,
@@ -845,6 +846,12 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                     const json = JSON.parse(raw);
                     finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: json, raw });
                 } catch (err) {
+                    // Preserve a plain-text 401 for the route-aware account
+                    // classifier; do not infer account failure from parse errors.
+                    if (res.statusCode === 401) {
+                        finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: raw, raw });
+                        return;
+                    }
                     let streamed;
                     try {
                         streamed = parseSseResponse(raw);
@@ -1014,6 +1021,8 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
         expectedApiUrl = buildApiUrl(detectApiType(endpoint, model), endpoint);
     } catch (error) {
         error.code = error.code || 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.scope = 'run';
+        error.category = 'config';
         error.retryable = false;
         throw error;
     }
@@ -1022,12 +1031,16 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
         actualApiUrl = validateApiEndpointUrl(String(apiUrl)).href;
     } catch (error) {
         error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.scope = 'run';
+        error.category = 'config';
         error.retryable = false;
         throw error;
     }
     if (actualApiUrl !== new URL(expectedApiUrl).href) {
         const error = new Error('LLM 请求 URL 与声明的 endpoint/model 路由不一致，已拒绝发送凭据');
         error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.scope = 'run';
+        error.category = 'config';
         error.retryable = false;
         throw error;
     }
@@ -1038,19 +1051,30 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     if (apiKeys.length !== configuredKeys.length) {
         const error = new Error('OpenCode Go 主账号与备用账号 API key 不能相同或重复');
         error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.scope = 'run';
+        error.category = 'config';
         error.retryable = false;
         throw error;
     }
     if (apiKeys.length > 1 && !isOpenCodeGoEndpoint(endpoint)) {
         const error = new Error('备用 API key 只允许用于 OpenCode Go 官方端点');
         error.code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR';
+        error.scope = 'run';
+        error.category = 'config';
         error.retryable = false;
         throw error;
     }
 
     const baseHeaders = buildOpenCodeRequestHeaders(endpoint, headers);
     if (apiKeys.length < 2) {
-        return requestLlmOnce(apiUrl, endpoint, model, bodyObj, baseHeaders, options);
+        const response = await requestLlmOnce(apiUrl, endpoint, model, bodyObj, baseHeaders, options);
+        if (isOpenCodeGoEndpoint(endpoint)) {
+            if (classifyOpenCodeGoQuotaResponse(response, { endpoint })) {
+                throw new LlmAccountPoolExhaustedError('OpenCode Go 当前账号额度不足，未配置后续账号');
+            }
+            if (response?.statusCode === 401) throw new LlmAccountAuthError();
+        }
+        return response;
     }
 
     const stateFile = options.accountPoolStateFile
@@ -1080,7 +1104,8 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
             requestHeaders,
             { ...options, timeoutMs: remainingMs }
         );
-        const quota = classifyOpenCodeGoQuotaResponse(response);
+        const quota = classifyOpenCodeGoQuotaResponse(response, { endpoint });
+        if (!quota && response?.statusCode === 401) throw new LlmAccountAuthError();
         if (!quota) return response;
         const blockedUntilMs = markQuotaExhausted(selection, quota, stateFile);
         blockedUntilValues.push(blockedUntilMs);

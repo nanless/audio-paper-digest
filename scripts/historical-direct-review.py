@@ -82,21 +82,22 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
         if value.get('inputSha256') == input_sha:
             raise ValueError('canonical semantic checkpoint may only contain a passing result')
     attempt_prefix = f'{target.stem}.attempt-'
-    attempts = []
-    for candidate in sorted(target.parent.glob(f'{attempt_prefix}*.json')) if target.parent.exists() else []:
-        try:
-            attempt = read_json(candidate)
-            if (attempt.get('identity') == identity and attempt.get('unit') == unit
-                    and attempt.get('index') == index
-                    and attempt.get('inputSha256') == input_sha):
-                attempts.append(attempt)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-    if len(attempts) >= 3:
-        return attempts[-1]['result']
+    # Failed attempts are audit history, never a permanent negative cache.
+    # Each invocation performs at most one review call (whose transport has
+    # its own bounded retries), so a later run can recover after an outage.
+    # Allocate after every existing suffix, including unreadable audit files,
+    # without deleting or overwriting evidence from earlier runs.
+    attempt_numbers = []
+    for candidate in target.parent.glob(f'{attempt_prefix}*.json') if target.parent.exists() else []:
+        match = re.fullmatch(re.escape(attempt_prefix) + r'(\d+)\.json', candidate.name)
+        if match:
+            attempt_numbers.append(int(match.group(1)))
+    run_error = None
     try:
         result = runner()
     except Exception as exc:
+        if getattr(exc, 'scope', None) == 'run':
+            run_error = exc
         result = {'passed': False, 'issues': [{
             'severity': 'error', 'type': 'infrastructure',
             'description': f'review worker failed: {type(exc).__name__}: {str(exc)[:500]}'
@@ -107,6 +108,8 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
             'severity': 'error', 'type': 'protocol',
             'description': 'review worker returned an invalid result'
         }]}
+    if blocking(result['issues']):
+        result['passed'] = False
     if result['passed'] is False and not blocking(result['issues']):
         result['issues'].append({'severity': 'error', 'type': 'protocol',
                                  'description': 'reviewer returned false without a blocking issue'})
@@ -117,12 +120,14 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
     if result['passed'] is True:
         atomic_json(target, sealed)
     else:
-        attempt_path = target.with_name(f'{attempt_prefix}{len(attempts) + 1:03d}.json')
+        attempt_path = target.with_name(f'{attempt_prefix}{max(attempt_numbers, default=0) + 1:03d}.json')
         if attempt_path.exists():
             if read_json(attempt_path) != sealed:
                 raise ValueError('semantic failure attempt collision')
         else:
             atomic_json(attempt_path, sealed)
+    if run_error is not None:
+        raise run_error
     return result
 
 
@@ -167,7 +172,11 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
                                               chunk_label=f'{index + 1}/{len(chunks)}')[:2])))
         chunk_results.append(result)
     image_matches = module.parse_markdown_images(content)
-    image_input_sha = stable([{'alt': item['alt'], 'url': item['url']} for item in image_matches])
+    # The reviewer receives the full article, not just image URLs. Changed
+    # surrounding claims must not reuse a verdict about the old explanation.
+    image_input_sha = stable({'pageSha256': actual_sha,
+                             'images': [{'alt': item['alt'], 'url': item['url']}
+                                        for item in image_matches]})
     if image_matches:
         image_result = checkpoint(checkpoint_root, relative, 'images', 0, image_input_sha, protocol,
             lambda: dict(zip(('passed', 'issues'),
@@ -219,6 +228,40 @@ def validate_semantic_protocol(value):
     return value
 
 
+def review_pages_bounded(module, pages, staged, checkpoints, protocol, concurrency):
+    """Never enqueue the entire history before discovering a service outage."""
+    results = []
+    remaining = iter(pages)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        def submit_next():
+            page = next(remaining, None)
+            if page is None:
+                return None
+            return executor.submit(review_page, module, page, staged, checkpoints, protocol)
+
+        pending = {future for _ in range(min(concurrency, len(pages)))
+                   if (future := submit_next()) is not None}
+        while pending:
+            done, pending = concurrent.futures.wait(pending,
+                return_when=concurrent.futures.FIRST_COMPLETED)
+            # Inspect all settled results before replenishing. On a fatal
+            # error, executor shutdown drains only the already-active pages.
+            completed = [future.result() for future in done]
+            for result in completed:
+                results.append(result)
+                print(json.dumps({
+                    'contract': 'historical-direct-semantic-review-progress-v1',
+                    'completed': len(results), 'total': len(pages),
+                    'path': result['path'],
+                    'outcome': 'passed' if result['passed'] else 'blocked',
+                }, ensure_ascii=False, separators=(',', ':')), file=sys.stderr, flush=True)
+            for _ in done:
+                future = submit_next()
+                if future is not None:
+                    pending.add(future)
+    return results
+
+
 def run(request_path, output_path, checkpoint_root, concurrency):
     request = read_json(request_path)
     expected = {'contract', 'version', 'publicationId', 'generationSha256',
@@ -258,22 +301,8 @@ def run(request_path, output_path, checkpoint_root, concurrency):
         module = load_publish_to_blog()
         module.BLOG_REPO = str(staged)
         module.CONTENT_DIR = str(staged / 'content' / 'posts')
-        results = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-            futures = [executor.submit(review_page, module, page, staged, checkpoints,
-                                       request['semanticProtocol']) for page in pages]
-            completed = 0
-            for future in concurrent.futures.as_completed(futures):
-                page_result = future.result()
-                results.append(page_result)
-                completed += 1
-                print(json.dumps({
-                    'contract': 'historical-direct-semantic-review-progress-v1',
-                    'completed': completed,
-                    'total': len(pages),
-                    'path': page_result['path'],
-                    'outcome': 'passed' if page_result['passed'] else 'blocked',
-                }, ensure_ascii=False, separators=(',', ':')), file=sys.stderr, flush=True)
+        results = review_pages_bounded(module, pages, staged, checkpoints,
+                                       request['semanticProtocol'], concurrency)
     results.sort(key=lambda item: item['path'])
     body = {'contract': CONTRACT, 'version': 1, 'publicationId': request['publicationId'],
             'generationSha256': request['generationSha256'],

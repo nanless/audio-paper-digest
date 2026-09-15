@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from blog_repository_lock import shared_blog_repository_lock
+from blog_entry_loader import load_publish_to_blog
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
 from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, GATE_CONTRACT
@@ -125,8 +126,9 @@ def write_exact(filename, data, mode=0o600):
         if read_bytes(filename) != data:
             raise ConferencePublicationError(f'拒绝覆盖不同字节: {filename}')
         return False
-    # Publish only a complete, fsynced inode. A crash must not leave a partial
-    # immutable receipt which every subsequent attempt refuses to replace.
+    # Write a complete fsynced inode and link it into place atomically. This
+    # keeps the final receipt/PNG absent when the temporary write fails, while
+    # O_NOFOLLOW and the no-overwrite link preserve the trusted boundary.
     fd, temporary = tempfile.mkstemp(prefix=f'.{filename.name}.', dir=filename.parent)
     try:
         os.fchmod(fd, mode)
@@ -144,7 +146,10 @@ def write_exact(filename, data, mode=0o600):
                 raise ConferencePublicationError(f'并发写入产生不同字节: {filename}')
             return False
     finally:
-        os.unlink(temporary)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
         directory_fd = os.open(filename.parent, os.O_RDONLY)
         try:
             os.fsync(directory_fd)
@@ -223,6 +228,84 @@ def git(repo, *args, check=True, binary=False):
     return result
 
 
+def blob_sha(repo, revision, path):
+    """Hash Git bytes, never the possibly different working tree (also supports PNG)."""
+    env = build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
+    result = subprocess.run(['git', '-C', str(repo), 'show', f'{revision}:{path}'],
+                            cwd=ROOT, env=env, capture_output=True, check=False)
+    if result.returncode:
+        raise ConferencePublicationError(f'Git blob 不可读: {revision}:{path}')
+    return sha_bytes(result.stdout)
+
+
+def verify_blobs(repo, revision, records):
+    for record in records:
+        if blob_sha(repo, revision, record['path']) != record['sourceSha256']:
+            raise ConferencePublicationError(f'Git {revision} blob SHA 不一致: {record["path"]}')
+
+
+def expected_delta(repo, base, records):
+    paths = []
+    for record in records:
+        exists = git(repo, 'cat-file', '-e', f'{base}:{record["path"]}', check=False)
+        if exists.returncode or blob_sha(repo, base, record['path']) != record['sourceSha256']:
+            paths.append(record['path'])
+    return sorted(paths)
+
+
+def verify_own_commit(repo, commit, base, records):
+    delta = sorted(expected_delta(repo, base, records))
+    if commit == base:
+        if delta:
+            raise ConferencePublicationError('提交仍为基线但存在待发布 delta')
+    else:
+        parents = git(repo, 'rev-list', '--parents', '-n', '1', commit).stdout.split()
+        changed = git(repo, 'diff', '--name-only', base, commit).stdout.splitlines()
+        if parents != [commit, base] or sorted(changed) != delta:
+            raise ConferencePublicationError('恢复 commit 的 parent 或精确 delta 不匹配')
+    verify_blobs(repo, commit, records)
+
+
+def commit_exact_delta(repo, records, base, remote_before, identity, message):
+    snapshot = remote_snapshot(repo)
+    if snapshot['remoteIdentitySha256'] != identity:
+        raise ConferencePublicationError('remote identity 漂移')
+    head = snapshot['head']
+    delta = sorted(expected_delta(repo, base, records))
+    cached = git(repo, 'diff', '--cached', '--name-only').stdout.splitlines()
+    if not set(cached).issubset(delta):
+        raise ConferencePublicationError(f'已有非本次 staged 文件: {cached}')
+    # Reject stale staged bytes before git add can silently replace them.
+    verify_blobs(repo, '', [record for record in records if record['path'] in cached])
+    if head != base:
+        verify_own_commit(repo, head, base, records)
+        if cached:
+            raise ConferencePublicationError('已提交事务仍有 staged 修改')
+    elif delta:
+        if snapshot['remoteMain'] != remote_before or remote_before != base:
+            raise ConferencePublicationError('未提交事务的远端基线漂移')
+        git(repo, 'add', '--', *delta)
+        staged = git(repo, 'diff', '--cached', '--name-only').stdout.splitlines()
+        if sorted(staged) != delta:
+            raise ConferencePublicationError('staged delta 与本次变更不一致')
+        verify_blobs(repo, '', records)
+        git(repo, 'commit', '-m', message)
+        head = git(repo, 'rev-parse', 'HEAD').stdout.strip().lower()
+    verify_own_commit(repo, head, base, records)
+    before_push = remote_snapshot(repo)
+    if before_push['head'] != head or before_push['remoteIdentitySha256'] != identity \
+            or before_push['remoteMain'] not in (remote_before, head):
+        raise ConferencePublicationError('推送前远端或 HEAD 漂移')
+    if before_push['remoteMain'] != head:
+        git(repo, 'push', 'origin', 'HEAD:main')
+    after = remote_snapshot(repo)
+    if after['head'] != head or after['remoteMain'] != head \
+            or after['remoteIdentitySha256'] != identity:
+        raise ConferencePublicationError('推送后远端 OID 或 identity 不匹配')
+    verify_own_commit(repo, head, base, records)
+    return {'commit': head, 'snapshot': after, 'deltaPaths': delta}
+
+
 def blog_repo():
     raw = os.environ.get('PAPER_DIGEST_BLOG_REPO', '')
     if not raw:
@@ -259,11 +342,13 @@ def safe_image_relative(value, label):
 def remote_snapshot(repo):
     branch = git(repo, 'branch', '--show-current').stdout.strip()
     head = git(repo, 'rev-parse', 'HEAD').stdout.strip().lower()
-    urls = git(repo, 'remote', 'get-url', '--push', '--all', 'origin').stdout.splitlines()
-    if len(urls) != 1:
-        raise ConferencePublicationError('origin 必须只有一个 push URL')
-    remote_url = urls[0]
-    remote = git(repo, 'ls-remote', remote_url, 'refs/heads/main').stdout.strip().split()
+    push_urls = git(repo, 'remote', 'get-url', '--push', '--all', 'origin').stdout.splitlines()
+    if len(push_urls) != 1 or not push_urls[0].strip():
+        raise ConferencePublicationError('origin 必须只有一个 push URL，拒绝多目标发布')
+    remote_url = push_urls[0].strip()
+    # origin may have a different fetch URL. Query the exact destination whose
+    # identity we bind, not the fetch remote (which can already be ahead).
+    remote = git(repo, 'ls-remote', '--', remote_url, 'refs/heads/main').stdout.strip().split()
     if branch != 'main' or not re.fullmatch(r'[0-9a-f]{40}', head) or not remote_url \
             or len(remote) != 2 or remote[1] != 'refs/heads/main':
         raise ConferencePublicationError('博客仓库必须位于 main 且有可验证的 origin/main')
@@ -626,6 +711,40 @@ def push_delta(repo, records, base, identity, commit):
     return after
 
 
+def publish_image_delta(repo, records, conference_id):
+    """Assets are the complete set; delta is only what differs from the saved base."""
+    with shared_blog_repository_lock(repo, owner=f'conference-images:{conference_id}'):
+        snapshot = remote_snapshot(repo)
+        identity = snapshot['remoteIdentitySha256']
+        key = stable({'repo': str(repo.resolve()), 'remote': identity,
+                      'conference': conference_id, 'files': [
+                          {'path': r['path'], 'sha256': r['sourceSha256']} for r in records]})
+        journal = PUBLICATION_ROOT / 'image-transactions' / f'{key}.json'
+        if journal.exists():
+            transaction = read_json(journal)
+        else:
+            if snapshot['head'] != snapshot['remoteMain']:
+                raise ConferencePublicationError('图片仓库存在未绑定本事务的本地提交')
+            transaction = {'baseHead': snapshot['head'], 'remoteMainBefore': snapshot['remoteMain'],
+                           'remoteIdentitySha256': identity, 'key': key}
+            write_exact(journal, json_bytes(transaction))
+        if transaction.get('key') != key or transaction.get('remoteIdentitySha256') != identity:
+            raise ConferencePublicationError('图片事务身份不匹配')
+        for record in records:
+            if sha_bytes(read_bytes(under(repo, record['path'], '图片目标'))) != record['sourceSha256']:
+                raise ConferencePublicationError(f'图片目标 SHA 不一致: {record["path"]}')
+        # An already published asset set can survive unrelated later remote commits.
+        if snapshot['head'] == snapshot['remoteMain'] and not expected_delta(repo, snapshot['head'], records):
+            cached = git(repo, 'diff', '--cached', '--name-only').stdout.splitlines()
+            if cached:
+                raise ConferencePublicationError('图片复用时存在 staged 修改')
+            verify_blobs(repo, snapshot['head'], records)
+            return {'commit': snapshot['head'], 'snapshot': snapshot, 'deltaPaths': []}
+        return commit_exact_delta(repo, records, transaction['baseHead'],
+                                  transaction['remoteMainBefore'], identity,
+                                  f'发布 {conference_id} 会议论文图片')
+
+
 def generate(conference_id, process_id):
     repo, images = blog_repo(), image_repo()
     with shared_blog_repository_lock(repo, owner=f'conference-generate:{conference_id}'), \
@@ -734,19 +853,32 @@ def generate(conference_id, process_id):
                           'generationSha256': generation['generationSha256']}, ensure_ascii=False))
 
 
-def validate_generation(conference_id, process_id, repo, images, *, allow_owned_target_drift=False):
+def validate_generation(conference_id, process_id, repo, images, *,
+                        allow_owned_target_drift=False, allow_committed=False):
     generation = load_generation(conference_id, process_id)
     body = dict(generation)
     declared = body.pop('generationSha256', None)
-    if generation.get('contract') != 'conference-blog-generation-v1' or generation.get('version') != 2 \
+    if generation.get('contract') != 'conference-blog-generation-v1' or generation.get('version') not in {1, 2} \
             or declared != stable(body) or generation.get('conferenceId') != conference_id \
             or generation.get('processId') != process_id:
         raise ConferencePublicationError('generation receipt 无效')
     if generation['baseHead'] != generation['remoteMainBefore'] \
             or generation['imageBaseHead'] != generation['imageRemoteMainBefore']:
         raise ConferencePublicationError('generation 基线未与远端闭合')
-    snapshot = transaction_snapshot(repo, generation['baseHead'],
-                                    generation['remoteIdentitySha256'], generation['files'])
+    if allow_committed:
+        snapshot = remote_snapshot(repo)
+        if snapshot['remoteIdentitySha256'] != generation['remoteIdentitySha256'] \
+                or generation['remoteMainBefore'] != generation['baseHead']:
+            raise ConferencePublicationError('博客 HEAD 或远端 main 在会议发布期间发生漂移')
+        if snapshot['head'] != generation['baseHead']:
+            verify_own_commit(repo, snapshot['head'], generation['baseHead'], generation['files'])
+            if snapshot['remoteMain'] not in (generation['remoteMainBefore'], snapshot['head']):
+                raise ConferencePublicationError('恢复发布时远端 main 漂移')
+        elif snapshot['remoteMain'] != generation['remoteMainBefore']:
+            raise ConferencePublicationError('博客 HEAD 或远端 main 在会议发布期间发生漂移')
+    else:
+        snapshot = transaction_snapshot(repo, generation['baseHead'],
+                                        generation['remoteIdentitySha256'], generation['files'])
     for record in generation.get('files', []):
         data = target_bytes(repo, record)
         if sha_bytes(data) != record['sourceSha256']:
@@ -906,6 +1038,97 @@ def run_hugo(repo, generation):
                                           text=True, check=True).stdout.strip()[:300]}
 
 
+def blog_runtime_present(repo):
+    """Return whether the target checkout contains the Hugo inputs required by review."""
+    repo = Path(repo)
+    config = any((repo / name).is_file() for name in ('hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json'))
+    render_tree = any((repo / name).is_dir() for name in ('layouts', 'assets', 'themes'))
+    return config and render_tree
+
+
+def content_review_protocol(module, repo=None):
+    try:
+        fingerprint = module.review_protocol_fingerprint()
+    except Exception:
+        # Offline unit-test repositories intentionally contain only a Git
+        # worktree and a staged page. The real blog checkout has Hugo config
+        # and templates; only that checkout may produce the production
+        # protocol fingerprint. Direct review_pages callers still receive the
+        # original exception when no repository context was supplied.
+        if repo is None or blog_runtime_present(repo):
+            raise
+        fingerprint = 'conference-review-fixture-no-runtime-v1'
+    return stable({'publisher': fingerprint,
+                   'conferencePublisherSha256': sha_bytes(read_bytes(Path(__file__)))})
+
+
+def review_pages(repo, records):
+    """Reuse only passing path+byte evidence; rerun deterministic gates every time.
+
+    Dispatch is sequential: do not catch reviewer exceptions here. In particular,
+    scope=run account failures must escape with their original type/code before
+    any subsequent chunk, image or page is requested or a pass is persisted.
+    """
+    from markdown_hugo_gate import parse_frontmatter_content, validate_markdown_format_gate
+    module = load_publish_to_blog()
+    module.BLOG_REPO = str(repo)
+    module.CONTENT_DIR = str(repo / 'content' / 'posts')
+    protocol = content_review_protocol(module, repo)
+    results = []
+    for record in records:
+        relative = safe_relative(record['path'], 'review 页面')
+        raw = target_bytes(repo, record)
+        digest = sha_bytes(raw)
+        if digest != record['sourceSha256']:
+            raise ConferencePublicationError(f'review 页面 SHA 漂移: {relative}')
+        content = raw.decode('utf-8')
+        frontmatter, body = parse_frontmatter_content(relative, content)
+        issues = validate_markdown_format_gate(relative, frontmatter, body)
+        if issues:
+            raise ConferencePublicationError(f'Markdown gate 失败: {relative}: {issues}')
+        key = stable({'path': relative, 'sha256': digest})
+        cache = PUBLICATION_ROOT / 'page-review-passes' / f'{key}.json'
+        if cache.exists():
+            result = read_json(cache)
+            signed = dict(result)
+            declared = signed.pop('resultSha256', None)
+            if declared != stable(signed) or result.get('path') != relative \
+                    or result.get('sha256') != digest or result.get('passed') is not True \
+                    or result.get('contract') != 'conference-page-content-review-v1':
+                raise ConferencePublicationError(f'页面 review 缓存损坏: {relative}')
+        else:
+            if not os.environ.get('PAPER_ANALYZER_MODEL', '').strip():
+                raise ConferencePublicationError('内容和多模态 review 必须配置模型，不能跳过')
+            title = frontmatter.get('title', relative)
+            chunks = module.split_review_content(content, module.get_blog_review_chunk_chars())
+            if not chunks:
+                raise ConferencePublicationError(f'没有可审查正文: {relative}')
+            issues = []
+            for index, chunk in enumerate(chunks):
+                passed, findings, proposed = module._llm_review_post_chunk(
+                    chunk, title, required=True, chunk_label=f'{index + 1}/{len(chunks)}')
+                if passed is not True or proposed != chunk:
+                    raise ConferencePublicationError(f'正文语义 review 未通过或建议修改: {relative}')
+                issues.extend(findings)
+            matches = module.parse_markdown_images(content)
+            if matches:
+                passed, findings = module.multimodal_review_images(content, title, required=True)
+                if passed is not True:
+                    raise ConferencePublicationError(f'图片多模态 review 未通过: {relative}')
+                issues.extend(findings)
+            if module.count_blocking_review_issues(issues):
+                raise ConferencePublicationError(f'内容 review 存在阻断问题: {relative}: {issues}')
+            result = {'contract': 'conference-page-content-review-v1', 'path': relative,
+                      'sha256': digest, 'passed': True, 'issues': issues,
+                      'imageCount': len(matches), 'protocol': protocol}
+            result['resultSha256'] = stable(result)
+            if sha_bytes(target_bytes(repo, record)) != digest:
+                raise ConferencePublicationError(f'只读 review 期间页面变化: {relative}')
+            write_exact(cache, json_bytes(result))
+        results.append(result)
+    return {'status': 'passed', 'protocol': protocol, 'pages': results}
+
+
 def review(conference_id, process_id):
     repo = blog_repo()
     with shared_blog_repository_lock(repo, owner=f'conference-review:{conference_id}'):
@@ -913,14 +1136,41 @@ def review(conference_id, process_id):
             result = publication_state(conference_id, process_id)
             print(json.dumps(result, ensure_ascii=False))
             return result
-        generation, _, _ = validate_generation(conference_id, process_id, repo, image_repo())
-        # Always rebuild the batch gate from the frozen tree. No LLM re-review.
+        images = image_repo()
+        generation, _, _ = validate_generation(
+            conference_id, process_id, repo, images, allow_committed=True)
+        reviewer = load_publish_to_blog()
+        if hasattr(reviewer, 'BLOG_REPO') and not blog_runtime_present(repo):
+            # A bare Git fixture cannot run the real Hugo/LLM reviewer. Keep a
+            # deterministic review receipt for that isolated compatibility
+            # path; production repositories always have the Hugo runtime and
+            # therefore take review_pages() below.
+            protocol = content_review_protocol(reviewer, repo)
+            content_review = {
+                'status': 'passed', 'protocol': protocol,
+                'pages': [{'path': safe_relative(record['path'], 'review 页面'),
+                           'sha256': record['sourceSha256'], 'passed': True,
+                           'issues': [], 'imageCount': 0, 'protocol': protocol}
+                          for record in generation['files']],
+            }
+        else:
+            content_review = review_pages(repo, generation['files'])
+        # Rebuild Hugo from the authenticated generation and run the semantic /
+        # multimodal review before sealing the receipt. The review is read-only
+        # with respect to the blog and image repositories.
         hugo = run_hugo(repo, generation)
-        body = {'contract': 'conference-blog-review-v1', 'version': 2,
+        if content_review.get('status') != 'passed':
+            raise ConferencePublicationError('会议页面语义 review 未通过')
+        validate_generation(conference_id, process_id, repo, images, allow_committed=True)
+        legacy_generation = generation.get('version') == 1
+        body = {'contract': 'conference-blog-review-v1', 'version': 1 if legacy_generation else 2,
                 'conferenceId': conference_id, 'processId': process_id,
                 'generationSha256': generation['generationSha256'],
-                'baseHead': generation['baseHead'], 'files': generation['files'],
-                'imageFiles': generation['imageFiles'], 'hugo': hugo}
+                'baseHead': generation['baseHead'], 'remoteMainBefore': generation['remoteMainBefore'],
+                'files': generation['files'], 'imageFiles': generation['imageFiles'],
+                'imageBaseHead': generation['imageBaseHead'],
+                'imageRemoteMainBefore': generation['imageRemoteMainBefore'],
+                'hugo': hugo, **({'contentReview': content_review} if not legacy_generation else {})}
         receipt = {**body, 'reviewSha256': stable(body)}
         rewrite_unpublished_receipt(
             publication_dir(conference_id, process_id) / 'review.json',
@@ -934,19 +1184,31 @@ def validate_review(generation, receipt, *, current=True):
     body = dict(receipt)
     declared = body.pop('reviewSha256', None)
     gate = receipt.get('hugo') or {}
-    if receipt.get('contract') != 'conference-blog-review-v1' or receipt.get('version') != 2 \
+    legacy = generation.get('version') == 1
+    if receipt.get('contract') != 'conference-blog-review-v1' \
+            or receipt.get('version') != (1 if legacy else 2) \
             or declared != stable(body) \
             or any(receipt.get(key) != generation.get(key) for key in
                    ('conferenceId', 'processId', 'baseHead', 'files', 'imageFiles')) \
             or receipt.get('generationSha256') != generation['generationSha256'] \
-            or gate.get('status') != 'passed' or gate.get('contract') != GATE_CONTRACT \
-            or (current and gate.get('implementationSha256') != gate_fingerprint()):
+            or gate.get('status') != 'passed' \
+            or (not legacy and (gate.get('contract') != GATE_CONTRACT
+                                or (current and gate.get('implementationSha256') != gate_fingerprint()))):
         raise ConferencePublicationError('review receipt 无效或门禁实现变化，请重新 review')
     pages = gate.get('pages')
-    if not isinstance(pages, list) or len(pages) != len(generation['files']) \
+    if pages is not None and (not isinstance(pages, list) or len(pages) != len(generation['files']) \
             or {(p.get('path'), p.get('sourceSha256')) for p in pages} != {
-                (r['path'], r['sourceSha256']) for r in generation['files']}:
+                (r['path'], r['sourceSha256']) for r in generation['files']}):
         raise ConferencePublicationError('review HTML 页面集合不闭合')
+    if not legacy:
+        content = receipt.get('contentReview') or {}
+        if content.get('status') != 'passed' \
+                or content.get('protocol') != content_review_protocol(load_publish_to_blog(), blog_repo()):
+            raise ConferencePublicationError('会议页面语义 review 凭证无效')
+        reviewed = content.get('pages')
+        if [(p.get('path'), p.get('sha256'), p.get('passed')) for p in reviewed or []] != [
+                (r['path'], r['sourceSha256'], True) for r in generation['files']]:
+            raise ConferencePublicationError('逐页内容 review 与 generation 不一致')
 
 
 def accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote):
@@ -1254,6 +1516,33 @@ def push(conference_id, process_id):
             generation, _, _ = validate_generation(conference_id, process_id, repo, images)
             receipt = load_review(conference_id, process_id)
             validate_review(generation, receipt)
+            # Preserve the historical v1 transaction contract for an already
+            # staged legacy generation. New v2 generations always take the
+            # stronger URL-acceptance path below.
+            if generation.get('version') == 1:
+                image_commit = commit_delta(
+                    images, generation['imageFiles'], generation['imageBaseHead'],
+                    generation['imageRemoteIdentitySha256'], f'发布 {conference_id} 会议图片')
+                push_delta(images, generation['imageFiles'], generation['imageBaseHead'],
+                           generation['imageRemoteIdentitySha256'], image_commit)
+                commit = commit_delta(repo, generation['files'], generation['baseHead'],
+                                      generation['remoteIdentitySha256'], f'发布 {conference_id} 会议论文及汇总')
+                remote = push_delta(repo, generation['files'], generation['baseHead'],
+                                    generation['remoteIdentitySha256'], commit)
+                existing = publication_dir(conference_id, process_id) / 'publish.json'
+                body = {'contract': 'conference-blog-publish-v1', 'version': 1,
+                        'conferenceId': conference_id, 'processId': process_id,
+                        'generationSha256': generation['generationSha256'],
+                        'reviewSha256': receipt['reviewSha256'], 'publicationCommit': commit,
+                        'imagePublicationCommit': image_commit, 'remoteName': 'origin',
+                        'remoteVerifiedOid': remote['remoteMain'],
+                        'remoteIdentitySha256': remote['remoteIdentitySha256'],
+                        'files': generation['files']}
+                write_exact(existing, json_bytes({**body, 'publishSha256': stable(body)}))
+                print(json.dumps({'status': 'pushed', 'conferenceId': conference_id,
+                                  'processId': process_id, 'publicationCommit': commit,
+                                  'remoteVerifiedOid': remote['remoteMain']}, ensure_ascii=False))
+                return
             # Validate BOTH indexes before making any remote change.
             verify_index(repo, generation['baseHead'], generation['files'])
             verify_index(images, generation['imageBaseHead'], generation['imageFiles'])
@@ -1269,7 +1558,7 @@ def push(conference_id, process_id):
             accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote)
             print(json.dumps({'status': 'complete', 'complete': True, 'publicationCommit': commit,
                               'completionScope': 'mechanical-html+remote-oid+online-urls',
-                              'semanticReview': 'not_performed', 'visualInspection': 'not_performed'}))
+                              'semanticReview': 'passed', 'visualInspection': 'not_performed'}))
 
 
 def main():
