@@ -46,7 +46,7 @@ def _source_artifacts(text_sha):
     })
 
 
-def _daily_payload(root, paper_ids):
+def _daily_payload(root, paper_ids, versioned_source_ids=frozenset()):
     """Create source-store bytes in the same shape as the Node capture path."""
     date = '2026-09-07'
     run_id = '11111111-1111-4111-8111-111111111111'
@@ -55,6 +55,7 @@ def _daily_payload(root, paper_ids):
     run_dir = root / run_id
     papers = []
     for paper_id in sorted(paper_ids):
+        source_id = f'{paper_id}v1' if paper_id in versioned_source_ids else paper_id
         source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
         text = (f'Official fresh text for {paper_id}.\n' * 20).encode('utf-8')
         pdf = f'%PDF-1.4\n{paper_id}\n%%EOF\n'.encode('ascii')
@@ -74,8 +75,8 @@ def _daily_payload(root, paper_ids):
             'arxivId': paper_id, 'paperId': f'arxiv:{paper_id}', 'generation': 1,
             'capturedAt': '2026-09-07T00:00:00.000Z',
             'text': {
-                'filename': 'source.txt', 'source': 'html', 'sourceId': paper_id,
-                'url': f'https://arxiv.org/html/{paper_id}',
+                'filename': 'source.txt', 'source': 'html', 'sourceId': source_id,
+                'url': f'https://arxiv.org/html/{source_id}',
                 'fetchedAt': '2026-09-07T00:00:00.000Z',
                 'extractor': {
                     'contract': 'deep-analyzer-official-arxiv-fulltext-v1',
@@ -101,7 +102,7 @@ def _daily_payload(root, paper_ids):
         _write_private(source_dir / 'source-runtime.json', runtime_bytes)
         _write_private(source_dir / 'source-manifest.json', manifest_bytes)
         details = {
-            'text': text.decode('utf-8'), 'source': 'html', 'sourceId': paper_id,
+            'text': text.decode('utf-8'), 'source': 'html', 'sourceId': source_id,
             'imageInfos': [], 'structuredArtifacts': artifacts,
             'readerAuthors': {'authors': []}, 'htmlAvailability': 'available',
             'htmlAttempts': 1, 'warnings': [],
@@ -215,6 +216,20 @@ class DailyFreshPublishGateTest(unittest.TestCase):
                     publish_to_blog.validate_daily_fresh_sources_for_publish(
                         data_file, '2026-09-07',
                     )
+
+    def test_versioned_official_html_source_id_replays_as_the_canonical_paper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = Path(tmp) / 'daily-fresh-source-runs'
+            payload = _daily_payload(
+                source_root, ['2609.12349'], versioned_source_ids={'2609.12349'},
+            )
+            data_file = self._write_payload(tmp, payload)
+            with mock.patch.object(
+                    publish_to_blog, 'DAILY_FRESH_SOURCE_RUNS_DIR', source_root,
+            ):
+                publish_to_blog.validate_daily_fresh_sources_for_publish(
+                    data_file, '2026-09-07',
+                )
 
     def test_schema_v3_all_fresh_generation_replays_input_source_reference(self):
         with tempfile.TemporaryDirectory() as tmp:

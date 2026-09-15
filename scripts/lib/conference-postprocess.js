@@ -14,6 +14,7 @@ const fresh = require('./fresh-rewrite-run.js');
 const analysisEngine = require('../analysis-engine.js');
 const analysisContract = require('../analysis-contract.js');
 const taxonomyRuntimeApi = require('./taxonomy-runtime.js');
+const sourceContextApi = require('./conference-source-context.js');
 
 const CONTRACT = 'conference-paper-page-staging-v1';
 const AGGREGATE_CONTRACT = 'conference-aggregate-staging-v1';
@@ -29,6 +30,8 @@ const SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4';
 const SCORING_CONTRACT = 'api-scoring-audit-v2';
 const PUBLICATION_CONTRACT = 'conference-official-publication-v1';
 const READER_FACING_CONTRACT = 'reader-facing-v3';
+const CONFERENCE_IMAGE_BASE_URL = (process.env.PAPER_DIGEST_IMAGE_BASE_URL
+    || 'https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main').replace(/\/$/, '');
 const SCORE_DIMENSIONS = Object.freeze([
     ['innovationScore', '创新', 2], ['technicalRigorScore', '技术严谨', 1.5],
     ['experimentalSufficiencyScore', '实验充分', 1.5], ['clarityScore', '清晰度', 1],
@@ -52,8 +55,11 @@ function publicHttps(value, label, { identitySafe = false, conferenceOnly = fals
     }
     let parsed;
     try { parsed = new URL(value); } catch { fail(`${label} is not a URL`); }
+    // Fragments are client-side anchors (for example, a paper's #demo or
+    // #code section); they are not sent to the network and are safe to keep in
+    // the published clickable resource identity.
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !parsed.hostname
-        || parsed.port || parsed.hash || !parsed.hostname.includes('.')
+        || parsed.port || !parsed.hostname.includes('.')
         || parsed.hostname === 'localhost' || parsed.hostname.endsWith('.localhost')
         || parsed.hostname.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname)
         || !parsed.hostname.split('.').every(part => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(part))
@@ -101,7 +107,12 @@ function authority(planHandle, dependencies = {}) {
 }
 function planProof(planHandle, dependencies = {}) {
     const authenticated = authority(planHandle, dependencies); const { run, receipt, receiptFileSha256, runFileSha256 } = authenticated.snapshot;
-    const paperIds = run.members.map(item => item.paperId).sort();
+    // Conference plan/run creation canonicalizes paper IDs with
+    // localeCompare. Replaying the proof with Array#sort() uses a different
+    // ordering for IDs containing uppercase title fragments (for example
+    // CVPR paper identities), producing a false selected-member-set drift.
+    const paperIds = run.members.map(item => item.paperId)
+        .sort((left, right) => left.localeCompare(right));
     if (!paperIds.length || new Set(paperIds).size !== paperIds.length
         || run.selectedMemberSetSha256 !== stableHash(paperIds)
         || receipt.filter.selectedMemberSetSha256 !== run.selectedMemberSetSha256
@@ -136,6 +147,15 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, de
     if (stableHash(loaded.run.capabilities) === stableHash(WEAK)
         && (artifacts.tables.length || artifacts.formulas.length || artifacts.figures.length)) {
         fail('weak unavailable structures must remain empty');
+    }
+    // Reopen authenticated source evidence, not the lossy Reader adapter's
+    // formula projection. This also makes uncertain formula regions visible.
+    loaded.formulaEvidence = null;
+    if (stableHash(loaded.run.capabilities) === stableHash(FULL)) {
+        const source = (dependencies.buildConferenceSourceContext || sourceContextApi.buildConferenceSourceContext)({
+            planHandle, paperId: loaded.run.paperId, sourceRoot });
+        if (source.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) fail('formula source snapshot drifted');
+        loaded.formulaEvidence = formulaEvidenceProjection(source);
     }
     const sourcePaper = loaded.analysis.papers[0];
     const publication = validateReaderAndScoring(sourcePaper);
@@ -228,6 +248,7 @@ function implementationFingerprint() {
     const sources = { nodeSourceSha256: pageApi.readRegular(__filename, 4 * 1024 * 1024, 'conference projection source').fileSha256,
         rendererSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'conference-page-render.py'), 4 * 1024 * 1024, 'conference renderer source').fileSha256,
         publisherSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'publish-to-blog.py'), 8 * 1024 * 1024, 'conference publisher source').fileSha256,
+        publisherCommonSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'publish_common.py'), 8 * 1024 * 1024, 'conference shared publisher source').fileSha256,
         loaderSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'blog_entry_loader.py'), 2 * 1024 * 1024, 'conference renderer loader source').fileSha256,
         parserSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'utils.js'), 8 * 1024 * 1024, 'conference parser source').fileSha256,
         taxonomySourceSha256: pageApi.readRegular(path.join(__dirname, 'paper-taxonomy.js'), 4 * 1024 * 1024, 'conference taxonomy source').fileSha256,
@@ -238,6 +259,7 @@ function implementationFingerprint() {
 function fingerprint(dependencies) {
     const value = (dependencies.implementationFingerprint || implementationFingerprint)(); const body = structuredClone(value); delete body.implementationSha256;
     const expectedKeys = ['contract', 'version', 'nodeSourceSha256', 'rendererSourceSha256', 'publisherSourceSha256',
+        'publisherCommonSourceSha256',
         'loaderSourceSha256', 'parserSourceSha256', 'taxonomySourceSha256', 'identitySourceSha256', 'implementationSha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')
@@ -264,6 +286,20 @@ function conferenceFigureAssets(loaded) {
     });
 }
 
+function formulaEvidenceProjection(source) {
+    const raw = source.structuredArtifacts;
+    const { validatePdfFormulaRecord } = require('./conference-extraction-receipt.js');
+    const regions = (raw.formulas || []).map((formula, index) => {
+        validatePdfFormulaRecord(formula, index, raw.visualAudit, raw.pages.length);
+        return { ordinal: formula.ordinal, page: formula.page,
+            sourceRef: formula.sourceRef, sourceExpression: structuredClone(formula.sourceExpression) };
+    });
+    const body = { contract: 'conference-pdf-formula-images-v1',
+        pdfSha256: source.sourceBinding.pdfSha256, sourceSnapshotSha256: source.sourceSnapshotSha256,
+        candidateCount: raw.visualAudit?.formulaCandidates?.length || 0, regions };
+    return { ...body, evidenceSha256: stableHash(body) };
+}
+
 function projection(loaded, taxonomy, renderFn, implementation) {
     const assignment = buildAssignment(loaded, taxonomy); if (assignment.status !== 'assigned') return { assignment };
     const stem = safeStem(loaded), conferenceId = loaded.run.conference.id;
@@ -272,6 +308,7 @@ function projection(loaded, taxonomy, renderFn, implementation) {
         paper_id: loaded.run.paperId, conference: loaded.run.conference, capabilities: loaded.run.capabilities,
         publication: structuredClone(loaded.publication), date,
         figureAssets: conferenceFigureAssets(loaded),
+        formulaEvidence: loaded.formulaEvidence,
         aggregateUrl: `/posts/conference-${conferenceId}/` };
     delete packet.paper.arxivId;
     const rendered = renderFn(packet);
@@ -372,7 +409,201 @@ function loadStage({ analysisRoot, executionId, taxonomyFile, stagingRoot, planH
     return { directory, manifest, manifestFileSha256: manifestRecord.fileSha256,
         assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 };
 }
-function md(value) { return String(value).replace(/([\\`*_[\]<>|{}#()+.!-])/g, '\\$1').replace(/\s+/g, ' ').trim(); }
+function repairFormulaDelimiters(markdown) {
+    return String(markdown).replace(/(?<!\\)\\+\[([\s\S]*?)(\\+)\]|(?<!\\)\\+\(([\s\S]*?)(\\+)\)/g,
+        (_match, display, _displaySlashes, inline, _inlineSlashes) => {
+            const isDisplay = display !== undefined;
+            const value = (isDisplay ? display : inline)
+                .replace(/</g, '\\lt ').replace(/>/g, '\\gt ');
+            return `${isDisplay ? '\\[' : '\\('}${value}${isDisplay ? '\\]' : '\\)'}`;
+        });
+}
+function repairConferenceImageUrls(markdown) {
+    return String(markdown).replace(
+        /(?<![A-Za-z0-9])(?:\/static)?\/images\/conference\/([a-z0-9-]+)\/([a-f0-9]{12})\/figure-(\d+)\.png(?!\d)/g,
+        (_match, conferenceId, figureHash, ordinal) =>
+            `${CONFERENCE_IMAGE_BASE_URL}/${conferenceId}/${figureHash}/figure-${ordinal}.png`,
+    );
+}
+function repairPreservedPage(markdown) {
+    const source = String(markdown);
+    const frontmatter = source.match(/^---\n[\s\S]*?\n---\n/);
+    const prefix = frontmatter ? frontmatter[0] : '';
+    const body = frontmatter ? source.slice(prefix.length) : source;
+    return prefix + repairConferenceImageUrls(repairUnpairedMarkdownStars(
+        repairTechnicalNotationAsterisks(repairStatisticalSignificanceStars(
+            repairCurrencyDollars(repairFormulaDelimiters(body))))));
+}
+function repairCurrencyDollars(markdown) {
+    // Currency markers are literal prose, not Goldmark math delimiters.
+    // Restrict this repair to a dollar immediately followed by a number so
+    // ordinary TeX-like `$x$` expressions remain available to repairDollarMath.
+    return String(markdown).replace(/(?<!\\)\$(?=\s*[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g, '\\\$');
+}
+function repairTechnicalNotationAsterisks(markdown) {
+    // Compact notation such as H1*-H2* is scientific text, not Markdown
+    // emphasis.  Escape only a star immediately following a letter/digit
+    // technical token; real ** emphasis markers remain untouched.
+    return String(markdown).replace(/(?<!\\)\b[A-Za-z]+\d+\*(?!\*)/g,
+        match => `${match.slice(0, -1)}\\*`);
+}
+function repairStatisticalSignificanceStars(markdown) {
+    return String(markdown).replace(
+        /((?:p|P)\s*(?:=|<|>)\s*(?:\d+(?:\.\d+)?(?:e[+-]?\d+)?))(?<!\\)(\*{1,3})(?!\*)/g,
+        (_match, value, stars) => `${value}${stars.split('').map(() => '\\*').join('')}`,
+    );
+}
+function repairUnpairedMarkdownStars(markdown) {
+    let inFence = false;
+    return String(markdown).split('\n').map(line => {
+        if (/^\s*(```|~~~)/.test(line)) { inFence = !inFence; return line; }
+        if (inFence) return line;
+        const runs = [...line.matchAll(/(?<!\\)(\*+)/g)]
+            .filter(match => match[1].length === 1);
+        if (!runs.length || /^\s*\*\s+/.test(line)) return line;
+        const likelyOpening = match => {
+            const start = match.index;
+            const previous = start > 0 ? line[start - 1] : '';
+            const next = line[start + 1] || '';
+            return (!previous || /\s/.test(previous)) && next !== '' && !/\s/.test(next);
+        };
+        // A linguistic marker can contain several opening stars on one line
+        // (for example “*Vː2 ... *mättīsin”) without a closing emphasis star.
+        // Keep genuine *italic* pairs, but escape the whole run when every
+        // single star is an opening marker and there is no plausible closer.
+        const shouldEscape = runs.length === 1 || runs.every(likelyOpening);
+        if (!shouldEscape) return line;
+        return runs.reduceRight((current, match) => {
+            const start = match.index;
+            return current.slice(0, start) + '\\*' + current.slice(start + 1);
+        }, line);
+    }).join('\n');
+}
+function repairDollarMath(markdown) {
+    return String(markdown).replace(/(?<!\\)\$(?!\$)([\s\S]*?)(?<!\\)\$(?!\$)/g,
+        (_match, body) => `\\(${body.replace(/\\\(/g, '(').replace(/\\\)/g, ')')}\\)`);
+}
+function safeStageChild(directory, name, label) {
+    if (typeof name !== 'string' || !/^[a-f0-9]{64}$/i.test(name)) fail(`${label} directory name is invalid`);
+    const child = path.join(directory, name);
+    if (path.dirname(child) !== directory) fail(`${label} directory escapes staging root`);
+    return fresh.assertSafeDirectory(child);
+}
+function stageAssetInventory(directory) {
+    const assetsRoot = path.join(directory, 'assets');
+    if (!fs.existsSync(assetsRoot)) return [];
+    fresh.assertSafeDirectory(assetsRoot);
+    const files = [];
+    const walk = current => {
+        for (const name of fs.readdirSync(current).sort()) {
+            if (!/^[A-Za-z0-9._-]+$/.test(name)) fail('preserved conference asset name is invalid');
+            const target = path.join(current, name);
+            const stat = fs.lstatSync(target);
+            if (stat.isSymbolicLink()) fail('preserved conference assets cannot contain symlinks');
+            if (stat.isDirectory()) { fresh.assertSafeDirectory(target); walk(target); }
+            else if (stat.isFile()) files.push(path.relative(assetsRoot, target).split(path.sep).join('/'));
+            else fail('preserved conference assets contain an unsupported file type');
+        }
+    };
+    walk(assetsRoot);
+    return files.sort();
+}
+function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repair = false }, dependencies = {}) {
+    if (!UUID_RE.test(executionId || '') || !ID_RE.test(paperId || '') || !pageProof
+        || !/^[a-f0-9]{64}$/i.test(pageProof.manifestSha256 || '')
+        || !/^[a-f0-9]{64}$/i.test(pageProof.contentSha256 || '')
+        || typeof pageProof.pagePath !== 'string') fail('preserved conference stage proof is invalid');
+    const root = fresh.assertSafeDirectory(stagingRoot);
+    const runRoot = fresh.assertSafeDirectory(path.join(root, executionId));
+    const matches = [];
+    for (const registryName of fs.readdirSync(runRoot).sort()) {
+        const registry = safeStageChild(runRoot, registryName, 'preserved registry');
+        for (const implementationName of fs.readdirSync(registry).sort()) {
+            const directory = safeStageChild(registry, implementationName, 'preserved projection');
+            rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
+            const assignmentRecord = pageApi.readRegular(path.join(directory, 'assignment.json'), 16 * 1024 * 1024, 'preserved conference taxonomy assignment');
+            const manifestRecord = pageApi.readRegular(path.join(directory, 'manifest.json'), 16 * 1024 * 1024, 'preserved conference page manifest');
+            const pageRecord = pageApi.readRegular(path.join(directory, 'page.md'), 32 * 1024 * 1024, 'preserved conference staged page');
+            const assignment = pageApi.strictJson(assignmentRecord.bytes, 'preserved conference taxonomy assignment');
+            const manifest = pageApi.strictJson(manifestRecord.bytes, 'preserved conference page manifest');
+            const manifestBody = { ...manifest }; delete manifestBody.manifestSha256;
+            if (manifest.contract !== CONTRACT || manifest.version !== VERSION || manifest.status !== 'complete'
+                || manifest.paperId !== paperId || manifest.analysisExecutionId !== executionId
+                || manifest.manifestSha256 !== stableHash(manifestBody)
+                || manifest.contentSha256 !== sha256(pageRecord.bytes)
+                || manifest.contentSha256 !== pageProof.contentSha256
+                || manifest.manifestSha256 !== pageProof.manifestSha256
+                || manifest.pagePath !== pageProof.pagePath) continue;
+            const assignmentBody = { ...assignment }; delete assignmentBody.assignmentSha256;
+            if (assignment.contract !== ASSIGNMENT_CONTRACT || assignment.version !== VERSION
+                || assignment.paperId !== paperId || assignment.analysisExecutionId !== executionId
+                || assignment.status !== 'assigned' || assignment.assignmentSha256 !== stableHash(assignmentBody)
+                || manifest.taxonomy?.assignmentSha256 !== assignment.assignmentSha256
+                || manifest.taxonomy?.registrySha256 !== assignment.registrySha256) {
+                fail(`preserved conference taxonomy assignment is invalid: ${paperId}`);
+            }
+            const declaredAssets = manifest.assets || [];
+            if (!Array.isArray(declaredAssets) || declaredAssets.some(asset => !asset || Object.keys(asset).sort().join('\0') !== ['path', 'sha256', 'size'].sort().join('\0'))
+                || new Set(declaredAssets.map(asset => asset.path)).size !== declaredAssets.length) {
+                fail(`preserved conference asset manifest is invalid: ${paperId}`);
+            }
+            const expectedAssets = declaredAssets.map(asset => asset.path).sort();
+            const actualAssets = stageAssetInventory(directory).map(asset => asset);
+            if (stableHash(expectedAssets) !== stableHash(actualAssets)) fail(`preserved conference asset inventory drifted: ${paperId}`);
+            for (const asset of declaredAssets) {
+                if (typeof asset.path !== 'string' || path.posix.normalize(asset.path) !== asset.path
+                    || asset.path.startsWith('/') || asset.path.includes('..')
+                    || !/^[A-Za-z0-9._/-]+$/.test(asset.path)
+                    || !/^[a-f0-9]{64}$/i.test(asset.sha256 || '') || !Number.isSafeInteger(asset.size) || asset.size < 0) {
+                    fail(`preserved conference asset record is invalid: ${paperId}`);
+                }
+                const assetFile = path.join(directory, 'assets', ...asset.path.split('/'));
+                const loaded = pageApi.readRegular(assetFile, 32 * 1024 * 1024, 'preserved conference asset');
+                if (loaded.fileSha256 !== asset.sha256 || loaded.bytes.length !== asset.size) fail(`preserved conference asset drifted: ${paperId} ${asset.path}`);
+            }
+            const repairedPageBytes = repair ? Buffer.from(repairPreservedPage(pageRecord.bytes.toString('utf8')), 'utf8') : pageRecord.bytes;
+            if (repairedPageBytes.equals(pageRecord.bytes)) {
+                matches.push({ status: 'staged', directory, manifest, manifestFileSha256: manifestRecord.fileSha256,
+                    assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 });
+                continue;
+            }
+            const repairBody = { contract: 'conference-deterministic-page-repair-v1', version: 9,
+                fromManifestSha256: manifest.manifestSha256, fromContentSha256: manifest.contentSha256,
+                replacements: ['math-angle-brackets-to-tex-commands', 'normalize-math-closing-delimiters',
+                    'local-conference-image-path-to-dedicated-image-repository-url',
+                    'escape-currency-dollar-markers', 'escape-technical-notation-asterisks',
+                    'preserve-frontmatter-bytes', 'escape-statistical-significance-stars',
+                    'escape-unpaired-technical-asterisks'] };
+            const repairDirectory = path.join(path.dirname(directory), stableHash(repairBody));
+            fresh.assertSafeDirectory(repairDirectory, true);
+            const repairedManifestBody = { ...manifest, contentSha256: sha256(repairedPageBytes), deterministicPageRepair: repairBody };
+            delete repairedManifestBody.manifestSha256;
+            const repairedManifest = { ...repairedManifestBody, manifestSha256: stableHash(repairedManifestBody) };
+            pageApi.writeExact(path.join(repairDirectory, 'assignment.json'), assignmentRecord.bytes);
+            pageApi.writeExact(path.join(repairDirectory, 'page.md'), repairedPageBytes);
+            for (const asset of declaredAssets) {
+                const sourceAsset = path.join(directory, 'assets', ...asset.path.split('/'));
+                const targetAsset = path.join(repairDirectory, 'assets', ...asset.path.split('/'));
+                pageApi.writeExact(targetAsset, pageApi.readRegular(sourceAsset, 32 * 1024 * 1024, 'preserved conference asset').bytes);
+            }
+            pageApi.writeExact(path.join(repairDirectory, 'manifest.json'), canonicalBytes(repairedManifest));
+            matches.push({ status: 'staged', directory: repairDirectory, manifest: repairedManifest,
+                manifestFileSha256: pageApi.readRegular(path.join(repairDirectory, 'manifest.json'), 16 * 1024 * 1024, 'repaired conference page manifest').fileSha256,
+                assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: sha256(repairedPageBytes),
+                repairedFrom: { manifestSha256: manifest.manifestSha256, contentSha256: manifest.contentSha256 } });
+        }
+    }
+    if (matches.length !== 1) fail(`preserved conference stage is not uniquely bound: ${paperId}`);
+    return matches[0];
+}
+function md(value) {
+    // Parentheses in aggregate titles/labels are literal text, not inline
+    // TeX delimiters.  HTML entities render identically while avoiding the
+    // `\\(` / `\\)` spelling that the Markdown math gate must reserve for
+    // actual formulas.
+    return String(value).replace(/[()]/g, char => char === '(' ? '&#40;' : '&#41;')
+        .replace(/([\\`*_\[\]<>|{}#+.!-])/g, '\\$1').replace(/\s+/g, ' ').trim();
+}
 function scoreLine(score, dimensions) {
     const detail = SCORE_DIMENSIONS.map(([field, label, maximum]) => `${label} ${Number(dimensions[field]).toFixed(1)}/${maximum}`).join(' | ');
     return `**${Number(score).toFixed(1)}/10** | ${detail}`;
@@ -390,27 +621,47 @@ function resourceLine(resource, paperId) {
     // Resource identity preserves the exact URL spelling seen in the paper;
     // the rendered link may use URL.href normalization (for example, adding
     // the root slash to https://example.org/) without changing that evidence.
-    const original = publicHttps(resource.originalUrl, `${paperId} resource original URL`, { normalize: true });
-    const final = publicHttps(resource.finalUrl, `${paperId} resource final URL`, { normalize: true });
+    let original, final;
+    try {
+        original = publicHttps(resource.originalUrl, `${paperId} resource original URL`, { normalize: true });
+        final = publicHttps(resource.finalUrl, `${paperId} resource final URL`, { normalize: true });
+    } catch (error) {
+        // A legacy Reader may have sealed an incomplete URL together with an
+        // explicitly unavailable status. It cannot support a positive link
+        // claim, so represent it as an unclickable unavailable record rather
+        // than rejecting the whole conference aggregate. Available resources
+        // remain fail-closed: malformed positive evidence must never publish.
+        if (resource?.availability !== 'available') {
+            const status = statuses[resource?.availability] || '状态未核实';
+            return `- ${labels[resource?.type] || '资源'}：本次 URL 不完整，未作为可点击链接展示 — ${status}`;
+        }
+        throw error;
+    }
     const links = `<${original}>${final === original ? '' : ` → <${final}>`}`;
     const http = resource.status === null ? '' : `（HTTP ${resource.status}）`;
     return `- ${labels[resource.type]}：${links} — ${statuses[resource.availability]}${http}`;
 }
 function aggregateConference({ analysisRoot, executionIds, taxonomyFile, stagingRoot, aggregateRoot,
-    planHandle, sourceRoot, apply = false }, dependencies = {}) {
+    planHandle, sourceRoot, preservedStages = {}, apply = false }, dependencies = {}) {
     if (!Array.isArray(executionIds) || !executionIds.length || new Set(executionIds).size !== executionIds.length
         || executionIds.some(id => !UUID_RE.test(id))) fail('unique selection execution IDs required');
     const authenticated = planProof(planHandle, dependencies); const expectedIds = authenticated.proof.paperIds;
     if (executionIds.length !== expectedIds.length) fail('analysis execution set must cover the complete authenticated selected member set');
     const taxonomy = (dependencies.loadTaxonomy || taxonomyApi.loadTaxonomy)(taxonomyFile); const byPaper = new Map();
     for (const executionId of executionIds) {
-        const completed = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, dependencies);
-        if (byPaper.has(completed.run.paperId)) fail('multiple analysis executions claim one selected paper');
-        byPaper.set(completed.run.paperId, { executionId, completed });
+        const preserved = Object.hasOwn(preservedStages, executionId) ? preservedStages[executionId] : null;
+        const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, dependencies);
+        const staged = preserved ? loadPreservedStage({ stagingRoot, executionId, paperId: preserved.paperId, pageProof: preserved.pageProof }, dependencies) : null;
+        const paperId = preserved ? staged.manifest.paperId : completed.run.paperId;
+        if (byPaper.has(paperId)) fail('multiple analysis executions claim one selected paper');
+        byPaper.set(paperId, { executionId, completed, ...(staged ? { staged } : {}) });
     }
-    if (stableHash([...byPaper.keys()].sort()) !== stableHash(expectedIds)) fail('analysis executions are not the exact authenticated selected member set');
+    if (stableHash([...byPaper.keys()].sort((left, right) => left.localeCompare(right)))
+            !== stableHash(expectedIds)) {
+        fail('analysis executions are not the exact authenticated selected member set');
+    }
     const stages = expectedIds.map(paperId => {
-        const item = byPaper.get(paperId); const staged = loadStage({ analysisRoot, executionId: item.executionId,
+        const item = byPaper.get(paperId); const staged = item.staged || loadStage({ analysisRoot, executionId: item.executionId,
             taxonomyFile, stagingRoot, planHandle, sourceRoot }, dependencies);
         return { ...staged, completed: item.completed };
     });
@@ -475,14 +726,15 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
         ...(item.resources.length ? item.resources.map(resource => resourceLine(resource, item.paperId))
             : ['本次未形成可展示的已核验资源记录，开放状态尚未核实。']),
         '可达状态仅表示本次链接检查结果，不代表许可证、本文权重或运行复现已验证。', '', '---', '');
-    const markdown = lines.join('\n');
+    const markdown = repairFormulaDelimiters(repairDollarMath(lines.join('\n')));
     const selection = stages.map(item => ({ executionId: item.manifest.analysisExecutionId, paperId: item.manifest.paperId,
         analysisSha256: item.manifest.analysisSha256, completionReceiptSha256: item.manifest.completionReceiptSha256,
         sourceSnapshotSha256: item.manifest.sourceSnapshotSha256, pageManifestSha256: item.manifest.manifestSha256,
         pageManifestFileSha256: item.manifestFileSha256 })).sort((a, b) => a.paperId.localeCompare(b.paperId));
     const selectionSetSha256 = stableHash(selection);
+    const aggregateImplementationSha256 = fingerprint(dependencies).implementationSha256;
     const aggregateId = stableHash({ planProofSha256: authenticated.proof.proofSha256,
-        registrySha256: taxonomy.registrySha256, selectionSetSha256 }).slice(0, 32);
+        registrySha256: taxonomy.registrySha256, selectionSetSha256, aggregateImplementationSha256 }).slice(0, 32);
     const body = { contract: AGGREGATE_CONTRACT, version: VERSION, status: 'complete', aggregateId, conferenceId, date: aggregateDate,
         plan: authenticated.proof, readerQuality: READER_FACING_CONTRACT,
         taxonomy: { contract: taxonomyProjection.flatCompatContract, selectionContract: taxonomyProjection.selectionContract,
@@ -504,5 +756,8 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
 }
 
 module.exports = { CONTRACT, AGGREGATE_CONTRACT, ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, VERSION, stableHash, planProof,
-    loadCompleted, labelProjection, buildAssignment, safeStem, render, implementationFingerprint, fingerprint,
-    stagePaper, loadStage, aggregateConference };
+    loadCompleted, labelProjection, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, formulaEvidenceProjection,
+    repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,
+    repairStatisticalSignificanceStars, repairUnpairedMarkdownStars, repairDollarMath,
+    stagePaper, loadStage, loadPreservedStage, aggregateConference,
+    repairConferenceImageUrls, repairPreservedPage };

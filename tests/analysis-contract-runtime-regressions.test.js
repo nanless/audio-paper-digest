@@ -7,6 +7,7 @@ const {
     getCoreSummaryDetailIssue
 } = require('../scripts/deep-analyzer.js');
 const {
+    classifySourceQuantitativeEvidence,
     validateExperimentTableEvidenceDepth
 } = require('../scripts/analysis-contract.js');
 
@@ -28,6 +29,27 @@ const triageCoreSummary =
     + '原文未披露端到端训练成本，推理成本随阈值可调，Tier-H 单次调用以 Gemini 3 Pro 为默认后端且检索深度超过 3 篇后收益趋于饱和。';
 
 describe('production analysis contract regressions', () => {
+    it('does not confuse symbolic score prose and layout numbers with measured results', () => {
+        const sourceText = [
+            'A public web demo11',
+            ' 1',
+            ' hf.co/spaces/manoskary/scoreprompts exposes the complete workflow.',
+            '2 Related Work',
+            'MuseAgent-1 integrates OMR, performance-audio analysis, and agentic reasoning.',
+            'Figure 1: Deterministic retrieval returns score analysis results.',
+            '3.3 Deterministic Score Questions',
+            'The demo follows one score through four stages. What changes in measures 14–18?',
+            'The present system has not yet been evaluated in a user study.'
+        ].join('\n');
+        assert.strictEqual(classifySourceQuantitativeEvidence(sourceText), false);
+        assert.strictEqual(classifySourceQuantitativeEvidence(
+            'Evaluation on AV-Odyssey improves the overall score from 48.6 to 53.1.'
+        ), true);
+        assert.strictEqual(classifySourceQuantitativeEvidence(
+            'Evaluation reports that the mean performance is 93.2% on the public test set.'
+        ), true);
+    });
+
     it('accepts source metrics used by the current historical batch', () => {
         const cases = [
             ['SAR', '63.0%', '35.5%'],

@@ -17,9 +17,16 @@ const ODYSSEY_FIXTURE = `<!doctype html><main>${ODYSSEY_ENTRY}</main>`;
 const ODYSSEY_TWO_FIXTURE = `<!doctype html><main>${ODYSSEY_ENTRY}
 <div class="w3-container"><a class="w3-text" href="beta26_odyssey.html"><p>Second Paper<br>
 <span class="w3-text w3-text-theme">Carol Example</span></p></a></div></main>`;
+const ISCA_ENTRY = `<div class="w3-card"><h4>Oral Session</h4>
+<a class="w3-text" href="alpha26_SUFFIX.html"><p>Robust Speech Processing<br>
+<span class="w3-text w3-text-theme">Alice Example, Bob Example</span></p></a>
+<a href="https://doi.org/10.21437/CONFERENCE.2026-1">DOI</a></div>`;
 
 const FIXTURES = Object.freeze({
     'odyssey-2026': ODYSSEY_FIXTURE,
+    'chime-2026': `<!doctype html>${ISCA_ENTRY.replaceAll('SUFFIX', 'chime')}`,
+    'jep-2026': `<!doctype html>${ISCA_ENTRY.replaceAll('SUFFIX', 'jep')}`,
+    'speechprosody-2026': `<!doctype html>${ISCA_ENTRY.replaceAll('SUFFIX', 'speechprosody')}`,
     'iwslt-2026': `<!doctype html><article class="acl-paper" data-track="shared task">
 <a class="title" href="/2026.iwslt-1.1/">Simultaneous Translation</a>
 <div class="acl-paper-authors"><a>Alice Example</a><a>Bob Example</a></div>
@@ -124,6 +131,12 @@ test('all fixed provider adapters emit the strict core metadata schema from pure
     assert.deepEqual(odyssey.authors, ['Alice Example', 'Bob Example']);
     assert.equal(odyssey.doi, '10.21437/Odyssey.2026-1');
     assert.equal(odyssey.track, 'speaker recognition');
+    for (const providerId of ['chime-2026', 'jep-2026', 'speechprosody-2026']) {
+        const paper = acquisition.parseCatalog(providerId, FIXTURES[providerId]).papers[0];
+        assert.equal(paper.title, 'Robust Speech Processing');
+        assert.deepEqual(paper.authors, ['Alice Example', 'Bob Example']);
+        assert.equal(paper.track, 'Oral Session');
+    }
     const iwslt = acquisition.parseCatalog('iwslt-2026', FIXTURES['iwslt-2026']).papers[0];
     assert.equal(iwslt.id, '2026.iwslt-1.1');
     assert.equal(iwslt.doi, '10.18653/v1/2026.iwslt-1.1');

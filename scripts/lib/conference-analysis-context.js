@@ -39,8 +39,18 @@ function withConferenceAnalysisSource(identity, callback) {
         || !path.isAbsolute(identity.executionDir)) {
         throw new Error('Authenticated conference analysis source identity is required');
     }
+    if (identity.readerRetryEpoch !== undefined
+        && (!Number.isSafeInteger(identity.readerRetryEpoch) || identity.readerRetryEpoch < 1)) {
+        throw new Error('Conference Reader retry epoch must be a positive safe integer');
+    }
     return scope.run(Object.freeze({ executionId: identity.executionId, executionDir: path.resolve(identity.executionDir), paperId: identity.paperId,
-        sourceDetails: Object.freeze(clone(identity.sourceDetails)) }), callback);
+        sourceDetails: Object.freeze(clone(identity.sourceDetails)),
+        // An explicit conference --retry-failed release starts a fresh
+        // bounded Reader identity. The old candidate remains immutable audit
+        // evidence, while the new epoch prevents an exhausted candidate from
+        // being rejected before the next model request is attempted.
+        ...(identity.readerRetryEpoch !== undefined
+            ? { readerRetryEpoch: identity.readerRetryEpoch } : {}) }), callback);
 }
 function getConferenceAnalysisContext() { return scope.getStore() || null; }
 function getConferenceAnalysisSource(paper) {

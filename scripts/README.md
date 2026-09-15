@@ -38,6 +38,14 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 
 ## 默认 LLM/API：抓取、筛选与分析
 
+会议恢复与发布维护：
+
+- `conference-queue.js`、`lib/conference-queue.js`：显式计划驱动的持久化会议总队列，逐会议推进处理、发布和验收，提供只读计划与状态。
+- `conference-workspace.js`：只读工作区诊断，区分 Git 未提交改动、进程存活与旧运行状态；配置诊断不输出密钥。
+- `lib/conference-process-recovery.js`：恢复批次寻址、失败分类、冷却与重试资格；迁移不能让已有完成记录被普通入口绕过。
+- `lib/conference-source-upgrade.js`：显式来源升级计划与授权执行，绑定原批次和新解析版本，保留旧来源与分析；不静默重跑受影响论文。
+- `conference_publication_gate.py`：最终 HTML 与已部署 URL 的机械验收；不冒充语义审查或人工视觉确认。
+
 | 文件 | 类型 | 职责 |
 |---|---|---|
 | `full-fetch.js` | Node 入口 | 默认数据总编排：归档、抓取、筛选、去重、深度分析和增量落盘。 |
@@ -98,7 +106,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/conference-process.js` | Node 库 | 编排新会议 complete selection 的官方 PDF 自动封存、staging/import、共享深度分析、Reader/评分、current taxonomy 页面和 aggregate；以稳定 UUID、最多 3 并发、逐篇 checkpoint 与 completion receipt 保证恢复和闭合。 |
 | `migrate-conference-process.js` | CLI | 显式迁移会议处理实现指纹，重放已完成页面或复用页面证明，归档旧完成回执，仅续跑未完成论文。 |
 | `migrate-conference-images.js` | CLI | 将已发布 AISTATS/UAI 页面中的本地 Figure 复制到专用图片仓库并更新链接；拒绝覆盖不同图片字节，不自动提交或推送。 |
-| `publish-conference.py` | CLI | 按会议处理回执执行 generate/review/push，绑定单篇、汇总与图床资产，运行 Hugo gate 并验证远端提交。 |
+| `publish-conference.py` | CLI | 按会议处理回执执行 generate/review/push/status/verify；generate 只安装文件，push 核对实际 index/commit blob 后先发布图床再发布博客，verify 验收线上 URL。机械验收不冒充语义或浏览器视觉确认。 |
 | `waive-analysis-failures.js` | CLI | 记录用户明确确认的当前日更分析跳过决定；只生成绑定现有产物的审计 waiver，不覆盖失败尝试。 |
 | `lib/conference-extraction-receipt.js` | Node 库 | 重放请求、来源和派生工件，并在每次 handle 加载时调用固定 Python/PyMuPDF 临时重提取验证；视觉审计包含逐页 PNG、内嵌图片/表格/Figure/公式候选及 SHA，但没有原始 TeX 时仍禁止公式文本绑定。 |
 | `lib/conference-staging.js` | Node 库 | 将 authenticated filter selection 与人工复核 extraction 精确绑定为 import manifest/receipt；excluded 或身份别名不能进入。 |
@@ -150,6 +158,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `conference-staging.js` | 把完整 filter included 集合与已审 extraction 工件绑定成不可覆盖 import manifest/receipt；不复制文件或调用模型。 |
 | `conference-extract.py` | 对 staging-source 中一篇显式 PDF 执行页级文本与视觉审计；`--verify --source-root ABS` 用固定 PyMuPDF 临时重提取并比较已有 bundle 的所有字节，公式没有原始 TeX 时仍不可发布为公式。 |
 | `conference_extractor.py` | Python 会议 PDF 提取实现：严格文件/SHA、UTF-8 byte offset、PyMuPDF 页文本/PNG/图片与版面候选、O_EXCL 和 typed blocked/integrity 状态。 |
+| `icmc-proceedings.py` | 从官方 ICMC 2026 合并 proceedings PDF 的书签和目录提取论文顺序、页范围与作者元数据，并按页范围无栅格化拆分单篇 PDF；不调用模型、不改写原始图表公式。 |
 | `history-inventory.py` | 只读扫描配置博客的历史页面、URL 与聚合拓扑；dry-run 零写，apply 在 clean main 上成对写不可变 ledger/receipt。 |
 | `historical_page_scan.py` | `historical-page-ledger-v1` 严格扫描：无旧正文、稳定 pageId/cohort、逐次链接目标、未核 taxonomy 候选、Git tree/remote-main proof，以及 scan→O_EXCL 写入前后 CAS。 |
 | `historical-page-render.py` | 只从完成 canonical 与 assigned taxonomy packet 渲染历史单篇页面；不读取旧页面正文。 |

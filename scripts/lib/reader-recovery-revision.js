@@ -5,9 +5,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
-const { loadFailedCandidate, saveFailedCandidate, hashDraft, shaText, IMPLEMENTATION_ALLOWANCE_CONTRACT,
-    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT } = require('./reader-repair.js');
-const { normalizeReaderDraftOrder } = require('./reader-draft-order.js');
+const { loadFailedCandidate, saveFailedCandidate, hashDraft, shaText, parseRecoveryDraft,
+    IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT } = require('./reader-repair.js');
+const { normalizeReaderDraftOrder, pruneUniquelyUnboundReaderMarkdownTables } = require('./reader-draft-order.js');
 const { normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals } = require('../editorial-quality.js');
 const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
@@ -176,6 +176,13 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (!compatible.length) return null;
     const old = compatible[0];
     const updated = structuredClone(old.payload);
+    // Some older failed payloads retained a valid raw JSON response while
+    // leaving draft=null because the strict production-shape parser rejected
+    // it.  Rehydrate only the bounded recovery shape here; the caller still
+    // runs the full Reader parser and source-binding gates before acceptance.
+    if (!updated.draft && updated.rawDraft) {
+        updated.draft = parseRecoveryDraft(updated.rawDraft);
+    }
     if (updated.draft) {
         updated.draft.sections = updated.draft.sections.map(section => ({
             ...section,
@@ -192,6 +199,38 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
                         bridge.explanation, updated.issues
                     ) : bridge?.explanation
             }));
+        }
+        // Conference PDF candidates can contain a deterministic mix of real
+        // Markdown tables and selection markers. Repair that bounded source
+        // binding shape before the generic section-order gate; otherwise the
+        // gate rejects the candidate before deep-analyzer's conference
+        // normalizer gets a chance to prove the order. This lazy import avoids
+        // making the recovery library depend on the analyzer during startup.
+        if (conference?.sourceDetails?.structuredArtifacts?.sourceKind === 'conference_pdf') {
+            const deepAnalyzer = require('../deep-analyzer.js');
+            deepAnalyzer.normalizeReaderConferenceNarrowComparisonTable(updated.draft);
+            deepAnalyzer.normalizeDeclaredReaderMarkerParagraphs(updated.draft);
+            deepAnalyzer.normalizeReaderSourceQuotes(
+                updated.draft, conference.sourceDetails.text || ''
+            );
+            deepAnalyzer.normalizeConferenceSourceQuoteMarkerTables(
+                updated.draft,
+                conference.sourceDetails.text || '',
+                conference.sourceDetails.structuredArtifacts
+            );
+            deepAnalyzer.normalizeReaderSourceQuoteTableMarkers(updated.draft);
+            const prunedUnboundTables = pruneUniquelyUnboundReaderMarkdownTables(updated.draft);
+            if (prunedUnboundTables > 0) {
+                updated.draftOrderMappings = [...(updated.draftOrderMappings || []), {
+                    contract: 'conference-reader-prune-unbound-tables-v1',
+                    changed: true,
+                    removedTables: prunedUnboundTables
+                }];
+            }
+            const mixedTableOrder = deepAnalyzer.normalizeConferenceMixedTableBindings(updated.draft);
+            if (mixedTableOrder) {
+                updated.draftOrderMappings = [...(updated.draftOrderMappings || []), mixedTableOrder];
+            }
         }
         const normalized = normalizeReaderDraftOrder(updated.draft);
         updated.draft = normalized.draft;

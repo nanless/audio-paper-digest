@@ -65,6 +65,22 @@ describe('OpenCode Go sticky account state', () => {
         );
     });
 
+    it('operator selection of fourth account stays sticky for matching primary and secondary pools', () => {
+        const { file } = tempState();
+        const primary = resolvePrimaryApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
+        const secondary = resolveApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
+        const chosen = selectApiKey(primary, ENDPOINT, file, {
+            excludeAccountIds: primary.slice(0, 3).map(getAccountId), nowMs: 1000
+        });
+        assert.equal(chosen.accountId, getAccountId(primary[3]));
+        assert.equal(selectApiKey(primary, ENDPOINT, file, { nowMs: 2000 }).accountId, chosen.accountId);
+        assert.equal(selectApiKey(secondary, 'https://opencode.ai/zen/go/v1/responses', file,
+            { nowMs: 3000 }).accountId, chosen.accountId);
+        const state = readStateStrict(file);
+        assert.deepEqual(state.services[chosen.serviceId].accounts, {});
+        for (const key of primary) assert.ok(!fs.readFileSync(file, 'utf8').includes(key));
+    });
+
     it('rejects credential-bearing or query-mutated OpenCode endpoints', () => {
         for (const endpoint of [
             'https://user:pass@opencode.ai/zen/go/v1',

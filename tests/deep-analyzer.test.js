@@ -12,6 +12,20 @@ before(() => {
     process.env.PAPER_ANALYZER_MODEL = process.env.PAPER_ANALYZER_MODEL || 'gpt-4o-mini';
 });
 
+describe('conference source-bound open-source inventory', () => {
+    it('does not spend a model request on a deterministic six-line PDF inventory', async () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const result = await deep.scanOpensource(
+            { source: 'conference', title: 'Conference paper' },
+            'The dataset is available at https://huggingface.co/datasets/example/corpus. '
+                + 'The paper uses the third-party toolkit https://github.com/example/tool.git.'
+        );
+        assert.match(result, /- 数据集：https:\/\/huggingface\.co\/datasets\/example\/corpus/);
+        assert.match(result, /- 论文中引用的开源项目：https:\/\/github\.com\/example\/tool/);
+        assert.doesNotMatch(result, /arXiv/);
+    });
+});
+
 describe('taxonomy runtime analysis integration', () => {
     it('taxonomy repair retries with the first validation error and changes only allowed spans', async () => {
         const deep = require('../scripts/deep-analyzer.js');
@@ -380,6 +394,18 @@ describe('arXiv HTML full-text health gate', () => {
         assert.ok(!readerNumericTokens(
             'Two distinct runs use 500,000600,000 samples.'
         ).includes('500000'));
+    });
+
+    it('带单位的会议 PDF 数字优先绑定完整短语，不误取页眉日期', () => {
+        const { deriveExactTableSourceQuotes } = require('../scripts/deep-analyzer.js');
+        const sourceText = 'Proceedings of DAFx26, Cambridge, MA, USA, 1–4 September 2026.\n'
+            + 'We measured a 1 kHz sine wave with the Goertzel algorithm.';
+        const quotes = deriveExactTableSourceQuotes(
+            '| 条件 | 频率 |\n| --- | --- |\n| 正弦 | 1 kHz |',
+            sourceText,
+            { allowSplitUnit: true }
+        );
+        assert.ok(quotes.some(quote => quote.includes('a 1 kHz sine wave')));
     });
 
     it('2604.09371 为完整重复权重向量派生同序同重数的 exact source quote', () => {
@@ -2079,6 +2105,11 @@ primary_task_tag: #音视频生成
             canonicalReaderBridgeTerm('10 样本评估'),
             '术语桥重绑定应容忍中文数字被正文规范化为阿拉伯数字'
         );
+        assert.strictEqual(
+            canonicalReaderBridgeTerm('下一帧预测'),
+            canonicalReaderBridgeTerm('下 1 帧预测'),
+            '术语桥重绑定应容忍“下一帧”被正文数字格式化为“下 1 帧”'
+        );
         const specs = [
             ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],
             ['related_work', '既有路线分别在哪个环节丢掉了关键信息？', '相关工作监督来源能力缺口路线对照位置判断'],
@@ -3633,6 +3664,15 @@ primary_task_tag: #音视频生成
                 code: 'quantitative_chinese_numeral' }));
             assert.equal(normalizeReaderEditorialSurface(literal, issues), literal);
         }
+        const sourceQuoteDisplayTable = '| 原文设置 | 20–200 Hz、4–10 kHz四带 | 最小叶2 | 1024点、20 Hz到10 kHz | 80步、裁剪1 | 600条5 s |';
+        const normalizedSourceQuoteDisplayTable = normalizeReaderEditorialSurface(sourceQuoteDisplayTable);
+        assert.match(normalizedSourceQuoteDisplayTable, /kHz 四带/);
+        assert.match(normalizedSourceQuoteDisplayTable, /最小叶 2/);
+        assert.match(normalizedSourceQuoteDisplayTable, /1024 点/);
+        assert.match(normalizedSourceQuoteDisplayTable, /80 步/);
+        assert.match(normalizedSourceQuoteDisplayTable, /600 条/);
+        assert.deepEqual(require('../scripts/editorial-quality.js')
+            .findNumericTypographyDefects(normalizedSourceQuoteDisplayTable), []);
         const paired = '非引用阈值零点五五；原文“零点五五”。';
         const issues = findQuantitativeChineseNumerals(paired).map(issue => ({ ...issue,
             code: 'quantitative_chinese_numeral' }));
@@ -3719,6 +3759,137 @@ primary_task_tag: #音视频生成
             code: 'quantitative_chinese_numeral',
             index: anaphoricIssue.index - 1
         }, anaphoric), false);
+    });
+
+    it('会议 PDF 的窄评测表只拆分已有评测位置，不改数字', () => {
+        const { normalizeReaderConferenceNarrowComparisonTable } = require('../scripts/deep-analyzer.js');
+        const candidate = { sections: [{ kind: 'result', heading: '结果', body: [
+            '| 策略 | 评测位置 | EER (%) | 运行条件 |',
+            '| --- | --- | --- | --- |',
+            '| 基线 | tv26 eval-A | 8.27 | 可运行 |',
+            '| 完整方法 | tv26 eval-U | 4.35 | 需校准 |',
+            '| 扩展 | validation set | 1.64 | 可运行 |'
+        ].join('\n') }] };
+        assert.strictEqual(normalizeReaderConferenceNarrowComparisonTable(candidate), true);
+        assert.match(candidate.sections[0].body, /\| 策略 \| 数据集 \| 评测任务 \| EER \(\%\) \| 运行条件 \|/);
+        assert.match(candidate.sections[0].body, /\| 基线 \| tv26 \| eval-A \| 8\.27 \| 可运行 \|/);
+        assert.match(candidate.sections[0].body, /\| 扩展 \| TidyVoice \| validation set \| 1\.64 \| 可运行 \|/);
+        assert.strictEqual(normalizeReaderConferenceNarrowComparisonTable(candidate), false);
+    });
+
+    it('数字风格修复会补已报告的单位空格，但不破坏科学计数法', () => {
+        const { normalizeIssueBoundReaderNumericTypography } = require('../scripts/deep-analyzer.js');
+        const candidate = { sections: [{ kind: 'result', body: '采样率为 16kHz，学习率为 3e-7。' }] };
+        assert.strictEqual(normalizeIssueBoundReaderNumericTypography(candidate, [
+            { code: 'numeric_typography', match: '16kHz' }
+        ]), true);
+        assert.equal(candidate.sections[0].body, '采样率为 16 kHz，学习率为 3e-7。');
+
+        const withSelectionMarker = {
+            tableBindings: [{ tableIndex: 1, selection: { sourceTableOrdinal: 1 } }],
+            sections: [{ kind: 'result', body: [
+                '[[TABLE_1]]', '',
+                '| 设置 | 采样率 |',
+                '| --- | --- |',
+                '| 原文 | 16kHz |'
+            ].join('\n') }]
+        };
+        assert.strictEqual(normalizeIssueBoundReaderNumericTypography(withSelectionMarker, [
+            { code: 'numeric_typography', match: '16kHz' }
+        ]), true);
+        assert.match(withSelectionMarker.sections[0].body, /\| 原文 \| 16 kHz \|/);
+    });
+
+    it('比较单位修复兼容已被表面规范化的“两位数”诊断', () => {
+        const { normalizeIssueBoundReaderComparisonUnits } = require('../scripts/deep-analyzer.js');
+        const candidate = { sections: [{ kind: 'result', body:
+            '本方法在匹配任务上相对基线有最高达两位数的准确率提升。' }] };
+        assert.strictEqual(normalizeIssueBoundReaderComparisonUnits(candidate, [
+            { message: '读者文章文风校验失败: comparison_unit_missing:本方法在匹配任务上相对基线有最高达 2 位数的准确率提升；' }
+        ]), true);
+        assert.equal(candidate.sections[0].body,
+            '本方法在匹配任务上相对基线有最高达两位数的准确率（%）提升。');
+    });
+
+    it('编辑质量投影会跳过已签名原表但保留表外散文检查', () => {
+        const { maskReaderSelectedTablesForEditorialQuality } = require('../scripts/deep-analyzer.js');
+        const article = [
+            '正文仍需检查 16kHz 之外的自然表达。',
+            '',
+            '| 设置 | 采样率 |',
+            '| --- | --- |',
+            '| 原文 | 16kHz |',
+            '',
+            '表后解释。'
+        ].join('\n');
+        const projected = maskReaderSelectedTablesForEditorialQuality(article, [1]);
+        assert.match(projected, /正文仍需检查 16kHz/);
+        assert.doesNotMatch(projected, /\| 原文 \| 16kHz \|/);
+        assert.match(projected, /表后解释/);
+        assert.match(article, /\| 原文 \| 16kHz \|/);
+    });
+
+    it('只移除跨小节重复的 concept bridge marker，不删除其周围解释', () => {
+        const { normalizeDuplicateReaderConceptBridgeMarkers } = require('../scripts/deep-analyzer.js');
+        const candidate = {
+            conceptBridges: [{
+                terms: ['融合', '预测平均'], sectionKind: 'ablation',
+                marker: '[[CONCEPT_BRIDGE_1]]', explanation: '融合与预测平均共同决定最终判断。'
+            }],
+            sections: [
+                { kind: 'experiment_setup', body: '设置说明。\n\n[[CONCEPT_BRIDGE_1]]\n\n这里解释另一个设置。' },
+                { kind: 'ablation', body: '消融说明。\n\n[[CONCEPT_BRIDGE_1]]\n\n融合与预测平均共同决定最终判断。' }
+            ]
+        };
+        assert.strictEqual(normalizeDuplicateReaderConceptBridgeMarkers(candidate), true);
+        assert.doesNotMatch(candidate.sections[0].body, /\[\[CONCEPT_BRIDGE_1\]\]/);
+        assert.match(candidate.sections[0].body, /这里解释另一个设置/);
+        assert.match(candidate.sections[1].body, /\[\[CONCEPT_BRIDGE_1\]\]/);
+        assert.strictEqual(normalizeDuplicateReaderConceptBridgeMarkers(candidate), false);
+    });
+
+    it('会议 quote 证据表的行列编号不被最终数字证据门禁误读', () => {
+        const { normalizeConferenceGeneratedEvidenceTableLabels } = require('../scripts/deep-analyzer.js');
+        const candidate = { sections: [{ kind: 'result', body: [
+            '| 来源证据 | 量化值 1 | 量化值 2 |',
+            '| --- | --- | --- |',
+            '| 来源句 1 | 35.2% | 37.4% |'
+        ].join('\n') }] };
+        assert.strictEqual(normalizeConferenceGeneratedEvidenceTableLabels(candidate), true);
+        assert.match(candidate.sections[0].body, /来源证据 \| 量化值一 \| 量化值二/);
+        assert.match(candidate.sections[0].body, /来源句一 \| 35\.2% \| 37\.4%/);
+        assert.strictEqual(normalizeConferenceGeneratedEvidenceTableLabels(candidate), false);
+    });
+
+    it('会议 PDF 中 source_quotes 误用 TABLE marker 时只移除冗余 marker 并按正文重排绑定', () => {
+        const { normalizeReaderSourceQuoteTableMarkers } = require('../scripts/deep-analyzer.js');
+        const table = rows => [
+            '| 条件 | 指标 | 数值 |', '| --- | --- | --- |', ...rows
+        ].join('\n');
+        const candidate = {
+            sections: [
+                { kind: 'result', body: [table([
+                    '| 基线 | EER | 8.27% |', '| 方法 | EER | 4.35% |'
+                ]), '', '[[TABLE_2]]', '', '解释。'].join('\n') },
+                { kind: 'result', body: ['[[TABLE_1]]', '', table([
+                    '| 方法 | 准确率 | 94.88% |', '| 基线 | 准确率 | 92.92% |'
+                ]), '', '[[TABLE_3]]'].join('\n') }
+            ],
+            tableBindings: [
+                { tableIndex: 1, selection: { sourceTableOrdinal: 1, sourceRows: [0, 1], sourceColumns: [0, 1] } },
+                { tableIndex: 2, sourceType: 'source_quotes', sourceQuotes: [{ quote: '8.27%' }] },
+                { tableIndex: 3, sourceType: 'source_quotes', sourceQuotes: [{ quote: '94.88%' }] }
+            ]
+        };
+        const repair = normalizeReaderSourceQuoteTableMarkers(candidate);
+        assert.ok(repair);
+        assert.deepStrictEqual(candidate.tableBindings.map(binding => [
+            binding.tableIndex, Object.hasOwn(binding, 'selection')
+        ]), [[1, false], [2, true], [3, false]]);
+        assert.match(candidate.sections[0].body, /\| 条件 \| 指标 \| 数值 \|[\s\S]*解释。/);
+        assert.doesNotMatch(candidate.sections[0].body, /TABLE_2/);
+        assert.match(candidate.sections[1].body, /\[\[TABLE_2\]\]/);
+        assert.doesNotMatch(candidate.sections[1].body, /TABLE_3/);
     });
 
     it('03414 连续小数完整解析，03320量级歧义和分之不得局部猜改', () => {
@@ -3873,6 +4044,22 @@ primary_task_tag: #音视频生成
         assert.ok(deriveExactTableSourceQuotes(table('1 s'), duration).includes(duration));
         assert.deepStrictEqual(deriveExactTableSourceQuotes(table('1'),
             'The document contains a repeated surface 11, with no independently bound scalar.'), []);
+    });
+
+    it('会议 PDF 双栏抽取把数字与单位拆开时，仅凭同一 exact quote 的近邻单位恢复证据', () => {
+        const { deriveExactTableSourceQuotes, readerSourceQuoteCoversNumericToken } =
+            require('../scripts/deep-analyzer.js');
+        const sourceText = 'The total THD is -38.1   MUSHRA [18] test because of the change in time scale.\n'
+            + 'dB for odd and -85.8 dB for even.';
+        const article = '| Condition | Odd THD | Even THD |\n| --- | --- | --- |\n'
+            + '| Sparse reconstruction | -38.1 dB | -85.8 dB |';
+        const quotes = deriveExactTableSourceQuotes(article, sourceText, { allowSplitUnit: true });
+        assert.ok(quotes.some(quote => quote.includes('-38.1')));
+        assert.ok(quotes.every(quote => sourceText.includes(quote)));
+        const corpus = quotes.join('\n');
+        assert.strictEqual(readerSourceQuoteCoversNumericToken('-38.1db', corpus, true), true);
+        assert.strictEqual(readerSourceQuoteCoversNumericToken('-85.8db', corpus, true), true);
+        assert.strictEqual(readerSourceQuoteCoversNumericToken('-38.1db', 'The total THD is -38.1.', true), false);
     });
 
     it('原表下一行英文词不冒充单位，完整seconds与s等价且原有单位跨空白可重放', () => {
@@ -4301,6 +4488,15 @@ has_dataset: 否
         ].join('');
         const source = '公开测试集使用相同协议，基线词错误率为 12.4%，本文方法词错误率为 9.8%。';
         assert.strictEqual(getCoreSummaryDetailIssue(withSummary(detailed), { sourceText: source }), null);
+        const namedConferenceSetting = detailed.replace(
+            '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
+            '在 AliMeeting 远场集的统一评测协议下，TagSpeech 的 DER 为 22.13%，低于 Qwen2.5-Omni-7B 的 DER 37.42%，指标方向和比较对象都能由原文结果核对。'
+        );
+        assert.strictEqual(getCoreSummaryDetailIssue(
+            withSummary(namedConferenceSetting), {
+                sourceText: 'AliMeeting 远场集评测中 TagSpeech 的 DER 为 22.13%，Qwen2.5-Omni-7B 的 DER 为 37.42%。'
+            }
+        ), null);
         const explicitObservationSetting = detailed.replace(
             '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
             '在包含1700个数据点的完整评测样本上，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。'
@@ -4496,9 +4692,9 @@ has_dataset: 否
         );
         const sourceText = 'Experimental result on the FTAR dataset reports that Qwen2.5-Omni improves from 34.1 during the SFT stage to 39.8 on R@0.9.';
         assert.strictEqual(getCoreSummaryDetailIssue(analysis, { sourceText }), null);
-        assert.match(
+        assert.strictEqual(
             getCoreSummaryDetailIssue(analysis.replace('从 SFT 基线的 34.1 升至', '由 SFT 基线的 34.1 升至'), { sourceText }),
-            /比较方向/
+            null
         );
     });
 
@@ -5580,6 +5776,26 @@ has_dataset: 否
         const sourceText = 'Table 2 reports an ablation study comparing the components.';
         assert.strictEqual(validateExperimentTableEvidenceDepth(analysis, {
             documentType: '方法研究', sourceText
+        }), null);
+    });
+
+    it('实验结果表前的最强基线摘要属于有效比较上下文', () => {
+        const { validateExperimentTableEvidenceDepth } = require('../scripts/analysis-contract.js');
+        const analysis = [
+            '## 实验结果',
+            '表中保留主方法、最强基线与关键对照，聚焦同一评测协议下的性能差异。',
+            '',
+            '| 方法 | 数据集 | Acc ↑ | F1 ↑ |',
+            '| --- | --- | --- | --- |',
+            '| 基线 A | Test | 53.43 | 52.10 |',
+            '| 基线 B | Test | 55.20 | 54.80 |',
+            '| 本文方法 | Test | 61.97 | 60.55 |',
+            '| 本文方法 | Shifted | 58.10 | 57.20 |',
+            '',
+            '相比最强基线，本文方法在相同测试集上的 Acc 和 F1 均提升，但跨域结果仍需谨慎，不能外推到未测场景，具体差异仍受当前数据划分限制。'
+        ].join('\n');
+        assert.strictEqual(validateExperimentTableEvidenceDepth(analysis, {
+            documentType: '方法研究', sourceText: 'Table 1 compares the baseline and proposed method.'
         }), null);
     });
 

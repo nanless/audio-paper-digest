@@ -510,7 +510,7 @@ function loadImportHandle(ledgerFile, importReceiptFile, stagingHandle) {
         const sourceIdentity = ledgerApi.identityKey(member.identity);
         return { paperId: paperIdentity.canonicalConferencePaperId(
             loadedLedger.ledger.conference, member.identity), sourceIdentity };
-    });
+    }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     const handle = Object.freeze(Object.create(null)); IMPORT_HANDLES.add(handle);
     IMPORT_HANDLE_DATA.set(handle, Object.freeze({ ledger: clone(loadedLedger.ledger), ledgerSha256: loadedLedger.ledgerSha256,
         ledgerFile: loadedLedger.filename, ledgerHandle, receipt: clone(receipt),

@@ -83,7 +83,9 @@ function requiredWorkspaceRoleForCommand(commandName) {
             'conference-postprocess.js', 'conference-process.js']).has(name);
     if (newConferenceDaily) return 'daily';
     if (['full-fetch.js', 'deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js',
-        'refresh-api-reader.js', 'official-conference-acquire.js'].includes(name)) return 'daily';
+        'refresh-api-reader.js', 'official-conference-acquire.js', 'conference-queue.js',
+        'conference-workspace.js', 'migrate-conference-process.js',
+        'recover-conference-process-locks.js'].includes(name)) return 'daily';
     if (name.startsWith('conference-') || name.startsWith('historical-')
         || name.startsWith('history-') || name === 'page-source-crosswalk.js'
         || name === 'arxiv-source-authority.js') return 'history';

@@ -9,7 +9,11 @@ from markdown_hugo_gate import (
     math_and_emphasis_issues,
     validate_hugo_rendered_html_gate,
 )
-from publish_common import publish_table_currency_spans, sanitize_markdown_for_publish
+from publish_common import (
+    fix_latex_delimiters,
+    publish_table_currency_spans,
+    sanitize_markdown_for_publish,
+)
 
 
 class MarkdownCurrencyGateTest(unittest.TestCase):
@@ -33,6 +37,35 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
             with self.subTest(prose=prose):
                 self.assertEqual(publish_table_currency_spans(prose), [])
                 self.assertTrue(math_and_emphasis_issues(prose, 'Reader'))
+
+    def test_prose_usd_ranges_are_rendered_as_currency_not_math(self):
+        text = '官方方案价格为 $100-200 USD，普通手柄价格为 $60–80 USD。'
+        fixed = sanitize_markdown_for_publish(text)
+        self.assertEqual(fixed, '官方方案价格为 100–200 美元，普通手柄价格为 60–80 美元。')
+        self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
+
+    def test_mixed_inr_usd_table_note_is_rendered_as_currency(self):
+        table = ('| 合计 | 卢比 | 美元 | 备注 |\n'
+                 '| --- | --- | --- | --- |\n'
+                 '| 含手机 | INR 10,099 | $115.75 | 原价 INR 6,499 / $74.49 |')
+        fixed = sanitize_markdown_for_publish(table)
+        self.assertIn('原价 INR 6,499 / 74.49 美元', fixed)
+        self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
+
+    def test_decimal_dollar_amounts_in_prose_are_rendered_as_currency(self):
+        text = '均值项目成本为$113.54，高于中位数成本$93.80。'
+        fixed = sanitize_markdown_for_publish(text)
+        self.assertEqual(fixed, '均值项目成本为113.54 美元，高于中位数成本93.80 美元。')
+        self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
+
+    def test_math_like_dollar_expressions_still_fail_closed(self):
+        self.assertEqual(fix_latex_delimiters('$5 + 2'), '$5 + 2')
+
+    def test_quoted_angle_bracket_tokens_cannot_open_html(self):
+        fixed = sanitize_markdown_for_publish('迷你记谱法写作 "<1 2>" 和 "<a b c>"。')
+        self.assertIn('&lt;1 2&gt;', fixed)
+        self.assertIn('&lt;a b c&gt;', fixed)
+        self.assertEqual(math_and_emphasis_issues(fixed, 'Reader'), [])
 
     def test_normalized_same_cell_math_remains_supported(self):
         text = '| a | b |\n| --- | --- |\n| $x+1$ | $5$ |'
@@ -72,6 +105,15 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
         self.assertNotIn('*******___', masked)
         self.assertNotIn('_*____****', masked)
         self.assertIn('**broken marker', masked)
+
+    def test_rendered_statistical_significance_stars_are_data(self):
+        html = ('<table><tr><td>W = 2749, p = 0.00908**</td>'
+                '<td>p &lt; 2.2e-16***</td></tr></table>')
+        masked = mask_rendered_symbolic_table_cells(html)
+        self.assertNotIn('0.00908**', masked)
+        self.assertNotIn('2.2e-16***', masked)
+        self.assertIn('STATISTICAL_SIGNIFICANCE_STARS', masked)
+        self.assertEqual(math_and_emphasis_issues(masked, 'Reader', rendered_html=True), [])
 
     def test_public_html_gate_uses_cell_adapter_on_complete_reader_page(self):
         table = '<table><tr><th>翻译成本</th><th>验证成本</th></tr><tr><td>$0.2</td><td>$1.0/1000</td></tr></table>'

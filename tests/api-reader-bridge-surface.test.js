@@ -8,7 +8,14 @@ const {
     buildApiReaderQualityMetrics,
     apiReaderPreInjectionQualityView,
     normalizeReaderConceptBridgeTerms,
-    normalizeReaderWorkflowLeakageSurface
+    normalizeReaderEditorialSurfacePreservingSelectedTables,
+    normalizeReaderEditorialSurface,
+    restoreReaderSelectedTableBytes,
+    normalizeReaderWorkflowLeakageSurface,
+    normalizeReaderFigureMetricUnits,
+    normalizeIssueBoundReaderTechnicalTermAdhesions,
+    canonicalReaderBridgeTerm,
+    findReaderBridgeParagraph
 } = require('../scripts/deep-analyzer.js');
 const { apiReaderV3BindsCanonical } = require('../scripts/analysis-engine.js');
 const { validateEditorialQuality } = require('../scripts/editorial-quality.js');
@@ -26,7 +33,7 @@ test('only exact consecutive paragraph-leading bridge headings collapse, includi
     assert.equal(collapseRepeatedReaderBridgeHeadings(heading + '\n' + heading + explanation), heading + explanation);
 });
 
-test('repairs only the established one-character entropy term and naturalizes figure prose', () => {
+test('repairs only the established one-character entropy term and leaves Reader facts lossless', () => {
     const candidate = { sections: [{ body: '指标包括问题熵与 APES。' }], conceptBridges: [
         { terms: ['熵', 'APES'], explanation: '熵负责描述分布。' }
     ] };
@@ -34,11 +41,157 @@ test('repairs only the established one-character entropy term and naturalizes fi
     assert.deepEqual(candidate.conceptBridges[0].terms, ['问题熵', 'APES']);
     assert.equal(candidate.conceptBridges[0].explanation, '问题熵负责描述分布。');
     assert.equal(normalizeReaderConceptBridgeTerms(candidate), false);
+    for (const raw of [
+        '该图后解释需要强调辨别好不等于自发可用。',
+        '图后解释必须与图前导读形成闭环且只描述本次实际收到的像素。',
+        '根据当前 prompt 要求改写。'
+    ]) {
+        assert.equal(normalizeReaderWorkflowLeakageSurface(raw), raw);
+    }
+    for (const raw of [
+        '该图像素显示准确率与一致率分别为 20 和 36.5。',
+        '纵轴为准确率 20 到 80。',
+        '图中有两条曲线，数值为 20%。'
+    ]) {
+        assert.equal(normalizeReaderFigureMetricUnits(raw), raw);
+    }
+});
+
+test('removes only a known trailing bridge-field leak and keeps strict term validation for other arrays', () => {
+    const candidate = { sections: [{ body: '音素识别、音位与 component 都在正文出现。' }], conceptBridges: [
+        { terms: ['音素识别', '音位', 'sectionKind', 'component'], explanation: '术语组合说明。' }
+    ] };
+    assert.equal(normalizeReaderConceptBridgeTerms(candidate), true);
+    assert.deepEqual(candidate.conceptBridges[0].terms, ['音素识别', '音位']);
+
+    const unrelated = { sections: [{ body: '真实术语出现在正文。' }], conceptBridges: [
+        { terms: ['真实术语', '另一个术语', '第三个术语'], explanation: '术语组合说明。' }
+    ] };
+    assert.equal(normalizeReaderConceptBridgeTerms(unrelated), false);
+    assert.equal(unrelated.conceptBridges[0].terms.length, 3);
+});
+
+test('repairs only a duplicated bridge-term suffix when the prefix is article-visible', () => {
+    const candidate = {
+        sections: [{ body: '本文比较声音事件定位与检测和六自由度，并说明两者如何协同。' }],
+        conceptBridges: [{
+            terms: ['声音事件定位与检测', '六自由度声音事件定位与检测'],
+            explanation: '六自由度声音事件定位与检测负责描述运动听者。'
+        }]
+    };
+    assert.equal(normalizeReaderConceptBridgeTerms(candidate), true);
+    assert.deepEqual(candidate.conceptBridges[0].terms, ['声音事件定位与检测', '六自由度']);
+    assert.equal(candidate.conceptBridges[0].explanation, '六自由度负责描述运动听者。');
+
+    const unrelated = {
+        sections: [{ body: '本文只出现了声音事件定位与检测。' }],
+        conceptBridges: [{
+            terms: ['声音事件定位与检测', '六自由度声音事件定位与检测'],
+            explanation: '重复词组不应在正文缺少前缀时被猜测修复。'
+        }]
+    };
+    assert.equal(normalizeReaderConceptBridgeTerms(unrelated), false);
+    assert.deepEqual(unrelated.conceptBridges[0].terms, [
+        '声音事件定位与检测', '六自由度声音事件定位与检测'
+    ]);
+});
+
+test('rebinds bridges after bounded Chinese-numeral typography normalization', () => {
+    const cases = [
+        ['叠加论', '三模态叠加显示', '**叠加论 × 3 模态叠加显示：** 两者分别描述组合视角与显示方式。'],
+        ['无线标记', '六自由度头部位姿', '**无线标记 × 6 自由度头部位姿：** 两者分别提供标记信息与姿态信息。'],
+        ['十折交叉验证', '置换检验', '**10 折交叉验证 × 置换检验：** 两者分别用于稳定评估与检验结果可靠性。']
+    ];
+    for (const [left, right, paragraph] of cases) {
+        assert.equal(canonicalReaderBridgeTerm(left), canonicalReaderBridgeTerm(
+            paragraph.match(/\*\*(.+?)：\*\*/u)[1].split(' × ')[0]
+        ));
+        assert.equal(
+            findReaderBridgeParagraph([paragraph], [left, right]),
+            paragraph,
+            `${left} × ${right} 应只容忍确定性的数字/空格表面变化`
+        );
+    }
     assert.equal(
-        normalizeReaderWorkflowLeakageSurface('该图后解释需要强调辨别好不等于自发可用。'),
-        '这张图最重要的观察是辨别好不等于自发可用。'
+        findReaderBridgeParagraph([
+            '**叠加论 × 3 模态叠加显示：** 一处说明。',
+            '**叠加论 × 3 模态叠加显示：** 另一处说明。'
+        ], ['叠加论', '三模态叠加显示']),
+        null,
+        '重复桥段不能因容错而产生歧义绑定'
     );
-    assert.equal(normalizeReaderWorkflowLeakageSurface('根据当前 prompt 要求改写。'), '根据当前 prompt 要求改写。');
+});
+
+test('repairs both issue-bound Han/ASCII directions without touching quotes, fences, or selected tables', () => {
+    const table = [
+        '| 方法 | 说明 |',
+        '| --- | --- |',
+        '| A | Conformer编码器 |'
+    ].join('\n');
+    const candidate = {
+        sections: [{ body: [
+            '普通段包含 Conformer编码器，也包含 编码器Conformer。',
+            '普通段还包含 bellplay~环境 与 rtcmix~数据。',
+            '> 原文引用 Conformer编码器。',
+            '```text',
+            'Conformer编码器',
+            '```',
+            table
+        ].join('\n') }],
+        tableBindings: [{ tableIndex: 1, selection: {} }],
+        conceptBridges: [{ explanation: '桥段说明 Conformer编码器 与 编码器Conformer。' }]
+    };
+    const changed = normalizeIssueBoundReaderTechnicalTermAdhesions(candidate, [
+        { code: 'technical_term_adhesion', match: 'Conformer编码器' },
+        { message: 'technical_term_adhesion:编码器Conformer；technical_term_adhesion:bellplay环；technical_term_adhesion:rtcmix数' }
+    ]);
+    assert.equal(changed, true);
+    assert.match(candidate.sections[0].body, /Conformer 编码器，也包含 编码器 Conformer/u);
+    assert.match(candidate.sections[0].body, /bellplay~ 环境 与 rtcmix~ 数据/u);
+    assert.match(candidate.conceptBridges[0].explanation, /Conformer 编码器 与 编码器 Conformer/u);
+    assert.match(candidate.sections[0].body, /> 原文引用 Conformer编码器。/u);
+    assert.match(candidate.sections[0].body, /```text\nConformer编码器\n```/u);
+    assert.match(candidate.sections[0].body, /\| A \| Conformer编码器 \|/u);
+});
+
+test('normalizes tilde-decorated Latin names before the editorial gate', () => {
+    assert.equal(
+        normalizeReaderEditorialSurface('运行 bellplay~环境 与 rtcmix~数据。'),
+        '运行 bellplay~ 环境 与 rtcmix~ 数据。'
+    );
+});
+
+test('preserves exact PDF cell bytes while normalizing surrounding Reader prose', () => {
+    const table = '| Model | 0-12kHz | 12-18kHz |\n| --- | --- | --- |\n| Ours | 1.24 | 1.39 |';
+    const article = `量化结果应保留来源表格。\n\n${table}\n\n表后解释保留比较方向。`;
+    const normalized = normalizeReaderEditorialSurfacePreservingSelectedTables(article, [1]);
+    assert.ok(normalized.includes('| Model | 0-12kHz | 12-18kHz |'));
+    assert.ok(!normalized.includes('0-12 kHz'));
+    assert.ok(normalized.includes('量化结果应保留来源表格。'));
+});
+
+test('replays selected artifact-table cells after later cleanup passes', () => {
+    const domSha = 'a'.repeat(64);
+    const table = {
+        ordinal: 8, recoveryStatus: 'complete', cells: [
+            { row: 0, column: 0, text: 'Model', sourceDomSha256: domSha },
+            { row: 0, column: 1, text: '0-12kHz', sourceDomSha256: domSha },
+            { row: 1, column: 0, text: 'Ours', sourceDomSha256: domSha },
+            { row: 1, column: 1, text: '1.24', sourceDomSha256: domSha }
+        ]
+    };
+    const binding = {
+        tableIndex: 1, sourceType: 'artifact_table', sourceTableOrdinal: 8,
+        cellBindings: [
+            { renderedRow: 0, renderedColumn: 0, sourceRow: 0, sourceColumn: 0 },
+            { renderedRow: 0, renderedColumn: 1, sourceRow: 0, sourceColumn: 1 },
+            { renderedRow: 1, renderedColumn: 0, sourceRow: 1, sourceColumn: 0 },
+            { renderedRow: 1, renderedColumn: 1, sourceRow: 1, sourceColumn: 1 }
+        ], sourceQuotes: []
+    };
+    const article = '| Model | 0-12 kHz |\n| --- | --- |\n| Ours | 1.24 |';
+    const restored = restoreReaderSelectedTableBytes(article, [binding], { tables: [table] });
+    assert.equal(restored, '| Model | 0-12kHz |\n| --- | --- |\n| Ours | 1.24 |');
 });
 
 test('different headings, inline citations, separate paragraphs, tables and fenced examples are unchanged', () => {

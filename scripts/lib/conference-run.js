@@ -191,7 +191,7 @@ function normalizePaperState(value, paperId) {
 
 function normalizeStates(states, paperIds) {
     assertPlainObject(states, 'paperStates');
-    const keys = Object.keys(states).sort();
+    const keys = Object.keys(states).sort((left, right) => left.localeCompare(right));
     if (keys.length !== paperIds.length || keys.some((id, index) => id !== paperIds[index])) fail('paperStates do not cover the exact member set');
     return Object.fromEntries(paperIds.map(id => [id, normalizePaperState(states[id], id)]));
 }

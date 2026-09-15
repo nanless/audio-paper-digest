@@ -12,6 +12,7 @@ const pdfApi = require('./conference-pdf-source.js');
 const runApi = require('./conference-run.js');
 const executionApi = require('./conference-execution.js');
 const planApi = require('./conference-plan.js');
+const { validatePdfFormulaRecord } = require('./conference-extraction-receipt.js');
 
 const CONTRACT = 'conference-source-context-v2';
 const VERSION = 2;
@@ -305,9 +306,14 @@ function validateStructuredArtifacts(value, sourceText) {
     }
     for (const kind of ['table', 'formula', 'figure']) {
         const values = value[`${kind}s`];
-        values.forEach((item, index) => value.profile === REPLAYABLE_PROFILE && kind === 'figure'
-            ? validateReplayableFigureRecord(item, index)
-            : validateLocatedRecord(item, index, kind));
+        values.forEach((item, index) => {
+            if (kind === 'formula') {
+                try { validatePdfFormulaRecord(item, index, value.visualAudit, value.pages.length); }
+                catch (error) { integrity(error.message, 'invalid_formula_source_expression'); }
+            } else if (value.profile === REPLAYABLE_PROFILE && kind === 'figure') {
+                validateReplayableFigureRecord(item, index);
+            } else validateLocatedRecord(item, index, kind);
+        });
         if (new Set(values.map(item => item.sourceRef)).size !== values.length) {
             integrity(`structuredArtifacts ${kind} sourceRef values must be unique`, 'invalid_artifact_schema');
         }
@@ -315,6 +321,9 @@ function validateStructuredArtifacts(value, sourceText) {
             integrity(`structuredArtifacts ${kind} page is outside the page map`, 'invalid_artifact_schema');
         }
     }
+    if (value.formulas.length > 32 || value.formulas.reduce((sum, formula) => (
+        sum + Buffer.from(formula.sourceExpression.crop.base64, 'base64').length
+    ), 0) > 8 * 1024 * 1024) integrity('PDF formula image budget exceeded', 'invalid_formula_source_expression');
     return value;
 }
 
@@ -402,7 +411,8 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
     const structuredReason = structuredCapabilityReason(structuredArtifacts.profile);
     const capability = structuredArtifacts.profile === REPLAYABLE_PROFILE
         ? availableCapability(structuredReason) : unavailableCapability(structuredReason);
-    const formulaAvailability = capability;
+    const formulaAvailability = { ...unavailableCapability('pdf-has-no-original-tex'),
+        layoutEvidenceAvailable: Boolean(structuredArtifacts.visualAudit?.formulaCandidates?.length) };
     const tableAvailability = capability;
     const figureAvailability = capability;
     const sourceBinding = {

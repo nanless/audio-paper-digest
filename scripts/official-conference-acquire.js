@@ -9,7 +9,7 @@ const acquisition = require('./lib/official-conference-acquisition.js');
 
 const USAGE = [
     'Use: official-conference-acquire.js catalog|download|status|verify',
-    '--provider odyssey-2026|iwslt-2026|eusipco-2026|nime-2026|dafx-2026|aaai-2026|aistats-2026|uai-2026|cvpr-2026|acl-2026|eacl-2026',
+    '--provider odyssey-2026|chime-2026|jep-2026|speechprosody-2026|icmc-2026|iwslt-2026|eusipco-2026|nime-2026|dafx-2026|aaai-2026|aistats-2026|uai-2026|cvpr-2026|acl-2026|eacl-2026',
     '--conference-id ID --year 2026',
     '[--dry-run|--apply] [--limit N] [--concurrency 1..5] [--retries 0..5]'
 ].join(' ');

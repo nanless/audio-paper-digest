@@ -205,6 +205,20 @@ function assertSafeJson(value) {
 }
 
 function parseRepairableDraft(raw) {
+    const value = parseRecoveryDraft(raw);
+    if (!value
+        || value.sections.length < READER_LIMITS.minimumSections
+        || value.conceptBridges.length < READER_LIMITS.minimumConceptBridges) return null;
+    return value;
+}
+
+// Failed Reader responses are not production drafts.  During an explicit
+// implementation migration we may still recover a syntactically complete
+// response that is structurally useful but misses a semantic minimum (for
+// example, three concept bridges instead of four).  Keep this parser strictly
+// bounded and use it only as a recovery input; the authoritative parser must
+// still accept the final draft before publication.
+function parseRecoveryDraft(raw) {
     let value;
     try {
         value = typeof raw === 'string' ? JSON.parse(raw) : structuredClone(raw);
@@ -216,8 +230,7 @@ function parseRepairableDraft(raw) {
         || value.version !== 3
         || typeof value.readerTitle !== 'string' || typeof value.oneSentenceThesis !== 'string'
         || ARRAY_FIELDS.some(field => !Array.isArray(value[field]))
-        || value.sections.length < READER_LIMITS.minimumSections || value.sections.length > READER_LIMITS.maximumSections
-        || value.conceptBridges.length < READER_LIMITS.minimumConceptBridges
+        || value.sections.length < 1 || value.sections.length > READER_LIMITS.maximumSections
         || value.conceptBridges.length > READER_LIMITS.maximumConceptBridges
         || value.figurePlacements.length > READER_LIMITS.maximumFigures) return null;
     return value;
@@ -332,6 +345,13 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             throw new Error('Reader result-table relocation patch must replace every required atomic target');
         }
     }
+    if (operation?.kind === 'add_result_table_v1') {
+        const required = operation.requiredReplacementPaths || [];
+        if (required.some(pointer => !allowed.has(pointer))
+            || required.some(pointer => !seen.includes(pointer))) {
+            throw new Error('Reader result-table addition patch must replace every required atomic target');
+        }
+    }
     const merged = structuredClone(draft);
     for (const item of patch.replacements) {
         const parts = item.path.slice(1).split('/');
@@ -348,21 +368,42 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         const donorAfter = countInSection(afterTables, operation.donorSectionIndex);
         const destinationBefore = countInSection(beforeTables, operation.destinationSectionIndex);
         const destinationAfter = countInSection(afterTables, operation.destinationSectionIndex);
-        const relocated = afterTables.find(table => table.tableIndex === operation.donorGlobalTableIndex
-            && table.sectionIndex === operation.destinationSectionIndex
-            && (String(table.table?.markdown || '').match(/\d+/g) || []).length >= 4);
+        const destinationTables = afterTables.filter(table => (
+            table.sectionIndex === operation.destinationSectionIndex
+            && (String(table.table?.markdown || '').match(/\d+/g) || []).length >= 4
+        ));
+        const relocated = destinationTables.find(table => (
+            hashDraft(table.table?.markdown || '') === operation.donorTableMarkdownSha256
+        )) || (operation.preserveDonorMarkdown ? null : destinationTables[0]);
         const binding = merged.tableBindings?.[operation.bindingIndex];
         if (hashDraft(nodeAt(draft, operation.donorSectionPath))
                 === hashDraft(nodeAt(merged, operation.donorSectionPath))
             || hashDraft(nodeAt(draft, operation.destinationSectionPath))
                 === hashDraft(nodeAt(merged, operation.destinationSectionPath))
             || donorAfter !== donorBefore - 1
-            || destinationAfter !== destinationBefore + 1
-            || afterTables.length !== beforeTables.length
+            || destinationAfter < destinationBefore + 1
             || afterTables.length !== merged.tableBindings.length
             || !relocated
-            || binding?.tableIndex !== operation.donorGlobalTableIndex) {
+            || binding?.tableIndex !== relocated.tableIndex) {
             throw new Error('Reader result-table relocation patch failed its atomic table-move postconditions');
+        }
+    }
+    if (operation?.kind === 'add_result_table_v1') {
+        const beforeTables = locateReaderDraftTables(draft);
+        const afterTables = locateReaderDraftTables(merged);
+        const countInSection = (tables, index) => tables.filter(table => table.sectionIndex === index).length;
+        const destinationBefore = countInSection(beforeTables, operation.destinationSectionIndex);
+        const destinationAfter = countInSection(afterTables, operation.destinationSectionIndex);
+        const added = afterTables.find(table => table.tableIndex === operation.tableIndex);
+        const binding = merged.tableBindings?.[operation.bindingIndex];
+        if (afterTables.length !== beforeTables.length + 1
+            || afterTables.length !== merged.tableBindings.length
+            || destinationAfter !== destinationBefore + 1
+            || !added?.table
+            || (String(added.table.markdown).match(/\d+/g) || []).length < 4
+            || binding?.tableIndex !== operation.tableIndex
+            || binding?.sourceType !== 'source_quotes') {
+            throw new Error('Reader result-table addition patch failed its atomic table-add postconditions');
         }
     }
     return merged;
@@ -523,8 +564,40 @@ function buildMissingResultTableOperation(draft, issues) {
     const destinationSectionIndex = draft.sections.findIndex(section => (
         ['result', 'ablation'].includes(section?.kind)
     ));
+    // If the model declared a binding but omitted its Markdown table, moving
+    // one existing table cannot close the stream: removing one and adding one
+    // leaves the same table count. Authorize the smallest truthful repair
+    // instead: add the missing source_quotes table in result/ablation and
+    // replace only its already-declared binding. The full parser still checks
+    // every quote and numeric cell; this operation never creates evidence.
+    if (locatedTables.length < draft.tableBindings.length && destinationSectionIndex >= 0) {
+        const missingBindingIndex = locatedTables.length;
+        const binding = draft.tableBindings[missingBindingIndex];
+        if (binding && binding.tableIndex === missingBindingIndex + 1
+            && binding.sourceType === 'source_quotes'
+            && Array.isArray(binding.sourceQuotes) && binding.sourceQuotes.length > 0) {
+            const destinationSectionPath = `/sections/${destinationSectionIndex}/body`;
+            const bindingPath = `/tableBindings/${missingBindingIndex}`;
+            return {
+                kind: 'add_result_table_v1',
+                destinationSectionIndex,
+                bindingIndex: missingBindingIndex,
+                tableIndex: missingBindingIndex + 1,
+                destinationSectionPath,
+                bindingPath,
+                requiredReplacementPaths: [destinationSectionPath, bindingPath],
+                requiredPostconditions: [
+                    'destination result/ablation section gains exactly one numeric Markdown table',
+                    'the total table count becomes equal to the binding stream',
+                    'the new table remains paired with the declared source_quotes binding'
+                ]
+            };
+        }
+    }
     const donor = locatedTables.filter(table => (
-        Number.isInteger(table.bindingIndex)
+        typeof table.table?.markdown === 'string'
+        && table.table.markdown.trim().length > 0
+        && Number.isInteger(table.bindingIndex)
         && draft.tableBindings?.[table.bindingIndex]
         && !['result', 'ablation'].includes(draft.sections?.[table.sectionIndex]?.kind)
     )).sort((left, right) => (
@@ -539,6 +612,8 @@ function buildMissingResultTableOperation(draft, issues) {
     return {
         kind: 'relocate_result_table_v1',
         donorGlobalTableIndex: donor.tableIndex,
+        donorTableMarkdownSha256: hashDraft(donor.table.markdown),
+        preserveDonorMarkdown: draft.tableBindings?.[donor.bindingIndex]?.sourceType === 'artifact_table',
         donorOrdinalInSection: locatedTables.filter(table => table.sectionIndex === donor.sectionIndex
             && table.line <= donor.line).length,
         donorSectionIndex: donor.sectionIndex,
@@ -552,7 +627,7 @@ function buildMissingResultTableOperation(draft, issues) {
             'donor section loses exactly one Markdown table',
             'destination result/ablation section gains exactly one numeric Markdown table',
             'the total table count and binding stream stay closed',
-            `the moved table and binding remain global table ${donor.tableIndex}`
+            'the moved table and binding remain paired; signed artifact tables keep their exact Markdown'
         ]
     };
 }
@@ -659,13 +734,21 @@ function buildRepairTargets(draft, issues) {
     ));
     const missingResultTableOperation = buildMissingResultTableOperation(draft, issues);
     if (missingResultTableIssue && missingResultTableOperation) {
-        // Reuse one existing table ordinal instead of authorizing every table
-        // and binding. Moving/replacing the final experiment-setup table keeps
-        // all later table indexes stable: the patch edits its source section,
-        // the first result/ablation section, and exactly one matching binding.
-        add(missingResultTableOperation.donorSectionPath);
-        add(missingResultTableOperation.destinationSectionPath);
-        add(missingResultTableOperation.bindingPath);
+        if (missingResultTableOperation.kind === 'add_result_table_v1') {
+            // The candidate has a declared binding with no authored table.
+            // Only the destination body and that binding may change; this
+            // forces the model to supply an evidence-backed result table
+            // instead of relabeling a setup/configuration table.
+            add(missingResultTableOperation.destinationSectionPath);
+            add(missingResultTableOperation.bindingPath);
+        } else {
+            // Reuse one existing table ordinal only when the table stream is
+            // already closed. Moving/replacing the final experiment-setup
+            // table keeps all later table indexes stable.
+            add(missingResultTableOperation.donorSectionPath);
+            add(missingResultTableOperation.destinationSectionPath);
+            add(missingResultTableOperation.bindingPath);
+        }
         actionableIssues = actionableIssues.filter(issue => !(
             issue?.code === 'reader_result_table_missing'
             || /^读者文章主结果表覆盖不足/.test(String(issue?.message || ''))
@@ -879,7 +962,7 @@ function loadFailedCandidate(directory, identity) {
             || !Array.isArray(envelope.payload.issues)
             || envelope.payload.issues.some(issue => !issue || typeof issue.message !== 'string'
                 || (issue.path !== null && typeof issue.path !== 'string'))
-            || (envelope.payload.draft && !parseRepairableDraft(envelope.payload.draft))) {
+            || (envelope.payload.draft && !parseRecoveryDraft(envelope.payload.draft))) {
             throw new Error('Corrupt or drifted Reader candidate');
         }
         validateImplementationAllowance(envelope.payload, envelope.identity, directory);
@@ -961,6 +1044,6 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,
-    parseRepairableDraft, parseReaderPatchJson, collectDraftIssues,
+    parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
     buildRepairTargets, applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
     retireFailedCandidate };

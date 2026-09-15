@@ -1380,6 +1380,22 @@ class PublishToBlogReviewTest(unittest.TestCase):
             summary,
         )
 
+    def test_core_summary_accepts_named_latin_collection_as_evaluation_setting(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original_result = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        named_collection_result = (
+            '在语言复杂的 ZH-Hard 集合上，本文方法的 WER 从基线的 '
+            '12.478% 降至 9.893%，比较对象、指标、数值与方向均可核对，且直接验证长句鲁棒性。'
+        )
+        self.assertIsNone(
+            publish_to_blog._detailed_core_summary_semantic_issue(
+                summary.replace(original_result, named_collection_result)
+            )
+        )
+
     def test_core_summary_accepts_bounded_fvd_but_keeps_other_result_gates(self):
         summary = (
             '任务以粗糙实例掩码、文本描述与原始音视频为输入，输出在保留背景与非目标音频前提下对指定实例的视听同步编辑，难点在于粗掩码导致背景泄露与音频时序不可控。'

@@ -3,7 +3,9 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const net = require('node:net');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const cheerio = require('cheerio');
 const { detectHttpConnectProxyUrl, createProxyDispatcher } = require('../utils.js');
 
@@ -16,6 +18,7 @@ const PARSER_VERSION = 'official-proceedings-cheerio-v1';
 // larger than 16 MiB. Keep one explicit bounded ceiling for sealed indexes.
 const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
+const MAX_COMBINED_PDF_BYTES = 512 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 const REQUEST_TIMEOUT_MS = 180000;
 const SHA_RE = /^[a-f0-9]{64}$/;
@@ -54,7 +57,44 @@ const PROVIDERS = Object.freeze({
         indexPath: '/odyssey_2026/index.html',
         recordPath: /^\/odyssey_2026\/[A-Za-z0-9_-]+_odyssey\.html$/,
         pdfPath: /^\/odyssey_2026\/[A-Za-z0-9_-]+_odyssey\.pdf$/,
-        parser: 'odyssey'
+        parser: 'isca'
+    }),
+    'chime-2026': Object.freeze({
+        conference: Object.freeze({ id: 'chime-2026', year: 2026 }),
+        indexUrl: 'https://www.isca-archive.org/chime_2026/index.html',
+        host: 'www.isca-archive.org',
+        indexPath: '/chime_2026/index.html',
+        recordPath: /^\/chime_2026\/[A-Za-z0-9_-]+_chime\.html$/,
+        pdfPath: /^\/chime_2026\/[A-Za-z0-9_-]+_chime\.pdf$/,
+        parser: 'isca'
+    }),
+    'jep-2026': Object.freeze({
+        conference: Object.freeze({ id: 'jep-2026', year: 2026 }),
+        indexUrl: 'https://www.isca-archive.org/jep_2026/index.html',
+        host: 'www.isca-archive.org',
+        indexPath: '/jep_2026/index.html',
+        recordPath: /^\/jep_2026\/[A-Za-z0-9_-]+_jep\.html$/,
+        pdfPath: /^\/jep_2026\/[A-Za-z0-9_-]+_jep\.pdf$/,
+        parser: 'isca'
+    }),
+    'speechprosody-2026': Object.freeze({
+        conference: Object.freeze({ id: 'speechprosody-2026', year: 2026 }),
+        indexUrl: 'https://www.isca-archive.org/speechprosody_2026/index.html',
+        host: 'www.isca-archive.org',
+        indexPath: '/speechprosody_2026/index.html',
+        recordPath: /^\/speechprosody_2026\/[A-Za-z0-9_-]+_speechprosody\.html$/,
+        pdfPath: /^\/speechprosody_2026\/[A-Za-z0-9_-]+_speechprosody\.pdf$/,
+        parser: 'isca'
+    }),
+    'icmc-2026': Object.freeze({
+        conference: Object.freeze({ id: 'icmc-2026', year: 2026 }),
+        indexUrl: 'https://icmc2026.ligeti-zentrum.de/proceedings/',
+        host: 'icmc2026.ligeti-zentrum.de',
+        indexPath: '/proceedings/',
+        recordPath: /^\/proceedings\/$/,
+        pdfPath: /^\/wp-content\/uploads\/2026\/07\/ICMC2026_proceedings_V2showcase\.pdf$/,
+        combinedPdfUrl: 'https://icmc2026.ligeti-zentrum.de/wp-content/uploads/2026/07/ICMC2026_proceedings_V2showcase.pdf',
+        parser: 'icmc-combined'
     }),
     'iwslt-2026': Object.freeze({
         conference: Object.freeze({ id: 'iwslt-2026', year: 2026 }),
@@ -322,7 +362,7 @@ function makePaper({ id, title, authors = [], abstract = '', pdfUrl, recordUrl =
         recordUrl, pdfUrl, doi, track };
 }
 
-function parseOdyssey(provider, html) {
+function parseIsca(provider, html) {
     const $ = cheerio.load(html); const papers = [];
     $('a[href]').each((_index, element) => {
         const recordUrl = hrefUrl($(element).attr('href'), provider.indexUrl);
@@ -336,7 +376,7 @@ function parseOdyssey(provider, html) {
         // ISCA includes keynote abstract pages in the same index. They are not
         // proceedings papers and deliberately have no PDF, so exclude them at
         // catalog time instead of inventing a deterministic 404 PDF URL.
-        if (/^Keynote:/iu.test(heading)) return;
+        if (/keynote/iu.test(heading)) return;
         const container = card.length ? card : closestPaper($, element);
         const titleNode = $(element).find('p').first().clone();
         titleNode.find('.w3-text-theme, br').remove();
@@ -353,6 +393,10 @@ function parseOdyssey(provider, html) {
             doi: doiFrom(container), track: cleanMaybe(container.attr('data-track') || heading) }));
     });
     return papers;
+}
+
+function parseOdyssey(provider, html) {
+    return parseIsca(provider, html);
 }
 
 function parseIwslt(provider, html) {
@@ -667,8 +711,11 @@ function parseCatalog(providerId, html) {
     if (provider.parser === 'aaai-multi') {
         fail('AAAI catalog requires all 48 fixed issue snapshots; a single issue cannot represent the proceedings');
     }
+    if (provider.parser === 'icmc-combined') {
+        fail('ICMC catalog requires the combined proceedings PDF, not index HTML alone');
+    }
     const source = cleanText(String(html), 'official index HTML', { max: MAX_INDEX_BYTES });
-    const parsers = { odyssey: parseOdyssey, iwslt: parseIwslt, eusipco: parseEusipco, nime: parseNime, dafx: parseDafx,
+    const parsers = { isca: parseIsca, odyssey: parseOdyssey, iwslt: parseIwslt, eusipco: parseEusipco, nime: parseNime, dafx: parseDafx,
         pmlr: parsePmlr, cvf: parseCvf, acl: parseAcl };
     const papers = parsers[provider.parser](provider, source);
     return normalizeMetadata({ conference: clone(provider.conference), papers }, provider);
@@ -714,7 +761,10 @@ function acquisitionPaths(outputRoot, create = false) {
     }
     return { root, responses, pdfs, receipts, indexFile: path.join(responses, 'index.html'),
         indexReceiptFile: path.join(responses, 'index.receipt.json'), metadataFile: path.join(root, 'metadata.json'),
-        catalogReceiptFile: path.join(root, 'catalog.receipt.json') };
+        catalogReceiptFile: path.join(root, 'catalog.receipt.json'),
+        combinedPdfFile: path.join(responses, 'proceedings.source'),
+        combinedPdfReceiptFile: path.join(responses, 'proceedings.receipt.json'),
+        pageMapFile: path.join(root, 'page-map.json') };
 }
 
 function issueArtifactPaths(paths, issue, create = false) {
@@ -858,6 +908,92 @@ function replayIndexReceipt(provider, paths) {
     return replayResponseReceipt(provider, paths.indexFile, paths.indexReceiptFile, 'responses/index.html');
 }
 
+function icmcCombinedResponseReceipt(provider, fetched) {
+    const body = { contract: HTTP_RECEIPT_CONTRACT, version: VERSION, providerId: provider.conference.id,
+        resource: 'catalog-proceedings-pdf', requestedUrl: fetched.requestedUrl, finalUrl: fetched.finalUrl,
+        redirects: fetched.redirects, responseStatus: fetched.responseStatus, contentType: fetched.contentType,
+        observedAt: fetched.observedAt,
+        body: { relativePath: 'responses/proceedings.source', bytes: fetched.bytes.length, sha256: sha256(fetched.bytes) } };
+    return { ...body, receiptSha256: stableHash(body) };
+}
+
+function replayIcmcCombinedReceipt(provider, paths) {
+    const loaded = readCanonicalJson(paths.combinedPdfReceiptFile, 'ICMC combined proceedings receipt', 1024 * 1024);
+    const receipt = loaded.value;
+    exact(receipt, ['body', 'contentType', 'contract', 'finalUrl', 'observedAt', 'providerId', 'receiptSha256',
+        'redirects', 'requestedUrl', 'resource', 'responseStatus', 'version'], 'ICMC combined proceedings receipt');
+    if (receipt.contract !== HTTP_RECEIPT_CONTRACT || receipt.version !== VERSION
+        || receipt.providerId !== provider.conference.id || receipt.resource !== 'catalog-proceedings-pdf'
+        || receipt.responseStatus !== 200 || !validObservedAt(receipt.observedAt)
+        || !/^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(receipt.contentType)) {
+        fail('ICMC combined proceedings receipt envelope is invalid');
+    }
+    const body = { ...receipt }; delete body.receiptSha256;
+    if (!SHA_RE.test(receipt.receiptSha256) || receipt.receiptSha256 !== stableHash(body)) {
+        fail('ICMC combined proceedings receipt self-SHA drifted');
+    }
+    validateRedirects(provider, receipt, 'pdf');
+    exact(receipt.body, ['bytes', 'relativePath', 'sha256'], 'ICMC combined proceedings byte binding');
+    if (receipt.body.relativePath !== 'responses/proceedings.source' || !Number.isSafeInteger(receipt.body.bytes)
+        || receipt.body.bytes < 5 || receipt.body.bytes > MAX_COMBINED_PDF_BYTES || !SHA_RE.test(receipt.body.sha256)) {
+        fail('ICMC combined proceedings byte binding is invalid');
+    }
+    const pdf = readStableFile(paths.combinedPdfFile, 'sealed ICMC combined proceedings PDF', MAX_COMBINED_PDF_BYTES);
+    if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.size !== receipt.body.bytes
+        || pdf.sha256 !== receipt.body.sha256) fail('ICMC combined proceedings PDF differs from its receipt');
+    return { receipt, receiptFileSha256: loaded.sha256, pdf };
+}
+
+function runIcmcMetadataExtractor(combinedPdfFile, provider) {
+    const script = path.join(__dirname, '..', 'icmc-proceedings.py');
+    const result = spawnSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), script, 'metadata', combinedPdfFile,
+        '--index-url', provider.indexUrl, '--pdf-url', provider.combinedPdfUrl], {
+        cwd: path.join(__dirname, '..', '..'), encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe']
+    });
+    if (result.error || result.status !== 0) {
+        const reason = String(result.stderr || result.error?.message || 'metadata extractor failed')
+            .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 240);
+        fail(`ICMC combined proceedings metadata extraction failed: ${reason}`);
+    }
+    let value;
+    try { value = JSON.parse(String(result.stdout || '')); }
+    catch { fail('ICMC combined proceedings metadata extractor returned invalid JSON'); }
+    exact(value, ['metadata', 'pageMap'], 'ICMC metadata extraction result');
+    const metadata = normalizeMetadata(value.metadata, provider);
+    exact(value.pageMap, ['contract', 'papers', 'sourcePages', 'version'], 'ICMC page map');
+    if (value.pageMap.contract !== 'icmc-combined-proceedings-page-map-v1' || value.pageMap.version !== 1
+        || !Number.isSafeInteger(value.pageMap.sourcePages) || value.pageMap.sourcePages < 1
+        || !Array.isArray(value.pageMap.papers)) fail('ICMC page map envelope is invalid');
+    const expectedIds = metadata.papers.map(paper => paper.id);
+    const pageMap = value.pageMap.papers.map((item, index) => {
+        exact(item, ['endPage', 'id', 'outlineOrder', 'paperNumber', 'startPage'], `ICMC page map paper[${index}]`);
+        if (typeof item.id !== 'string' || !ID_RE.test(item.id) || !Number.isSafeInteger(item.paperNumber)
+            || !Number.isSafeInteger(item.outlineOrder) || !Number.isSafeInteger(item.startPage)
+            || !Number.isSafeInteger(item.endPage) || item.startPage < 1 || item.startPage > item.endPage
+            || item.endPage > value.pageMap.sourcePages) fail('ICMC page map range is invalid');
+        return { id: item.id, paperNumber: item.paperNumber, outlineOrder: item.outlineOrder,
+            startPage: item.startPage, endPage: item.endPage };
+    }).sort((left, right) => left.id.localeCompare(right.id, 'en'));
+    if (pageMap.length !== expectedIds.length || pageMap.some((item, index) => item.id !== expectedIds[index])) {
+        fail('ICMC page map does not bind the extracted paper set');
+    }
+    return { metadata, pageMap: { contract: value.pageMap.contract, version: value.pageMap.version,
+        sourcePages: value.pageMap.sourcePages, papers: pageMap } };
+}
+
+function icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot, metadataBytes, pageMapBytes) {
+    const body = { contract: CATALOG_RECEIPT_CONTRACT, version: VERSION, providerId: provider.conference.id,
+        parserVersion: PARSER_VERSION, indexReceiptSha256: indexSnapshot.receipt.receiptSha256,
+        indexReceiptFileSha256: indexSnapshot.receiptFileSha256,
+        combinedPdfReceiptSha256: combinedSnapshot.receipt.receiptSha256,
+        combinedPdfReceiptFileSha256: combinedSnapshot.receiptFileSha256,
+        metadata: { relativePath: 'metadata.json', bytes: metadataBytes.length, sha256: sha256(metadataBytes) },
+        pageMap: { relativePath: 'page-map.json', bytes: pageMapBytes.length, sha256: sha256(pageMapBytes) },
+        paperSetSha256: stableHash(JSON.parse(metadataBytes.toString('utf8')).papers) };
+    return { ...body, receiptSha256: stableHash(body) };
+}
+
 function replayIssueReceipt(provider, paths, issue) {
     const artifacts = issueArtifactPaths(paths, issue, false);
     return { ...replayResponseReceipt(provider, artifacts.responseFile, artifacts.receiptFile,
@@ -913,8 +1049,31 @@ function multiIssueCatalogReceipt(provider, snapshots, issuePaperSets, metadataB
     return { ...body, receiptSha256: stableHash(body) };
 }
 
+function replayIcmcCatalog(provider, paths) {
+    const indexSnapshot = replayIndexReceipt(provider, paths);
+    const combinedSnapshot = replayIcmcCombinedReceipt(provider, paths);
+    const metadataLoaded = readCanonicalJson(paths.metadataFile, 'ICMC proceedings metadata', MAX_INDEX_BYTES);
+    const pageMapLoaded = readCanonicalJson(paths.pageMapFile, 'ICMC proceedings page map', MAX_INDEX_BYTES);
+    const extracted = runIcmcMetadataExtractor(paths.combinedPdfFile, provider);
+    const expectedMetadataBytes = prettyBytes(extracted.metadata);
+    const expectedPageMapBytes = prettyBytes(extracted.pageMap);
+    if (!metadataLoaded.bytes.equals(expectedMetadataBytes)) fail('ICMC metadata differs from the combined proceedings PDF');
+    if (!pageMapLoaded.bytes.equals(expectedPageMapBytes)) fail('ICMC page map differs from the combined proceedings PDF');
+    const catalogLoaded = readCanonicalJson(paths.catalogReceiptFile, 'ICMC catalog receipt', 1024 * 1024);
+    const receipt = catalogLoaded.value;
+    exact(receipt, ['combinedPdfReceiptFileSha256', 'combinedPdfReceiptSha256', 'contract',
+        'indexReceiptFileSha256', 'indexReceiptSha256', 'metadata', 'pageMap', 'paperSetSha256',
+        'parserVersion', 'providerId', 'receiptSha256', 'version'], 'ICMC catalog receipt');
+    const expected = icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot,
+        metadataLoaded.bytes, pageMapLoaded.bytes);
+    if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('ICMC catalog receipt differs from its source bundle');
+    return { provider, paths, metadata: extracted.metadata, pageMap: extracted.pageMap,
+        metadataSha256: metadataLoaded.sha256, receipt, combinedSnapshot };
+}
+
 function replayCatalog(providerId, outputRoot) {
     const provider = providerFor(providerId); const paths = acquisitionPaths(outputRoot, false);
+    if (provider.parser === 'icmc-combined') return replayIcmcCatalog(provider, paths);
     if (provider.issues) {
         const snapshots = provider.issues.map(issue => replayIssueReceipt(provider, paths, issue));
         const combined = combineAaaiIssueSnapshots(provider, snapshots);
@@ -1046,8 +1205,53 @@ async function acquireMultiIssueCatalog(provider, outputRoot, dependencies) {
         metadataSha256: sha256(metadataBytes), catalogReceiptSha256: catalog.receiptSha256 };
 }
 
+async function acquireIcmcCatalog(provider, outputRoot, dependencies) {
+    const paths = acquisitionPaths(outputRoot, true);
+    const rawPresent = fs.existsSync(paths.indexFile); const receiptPresent = fs.existsSync(paths.indexReceiptFile);
+    if (receiptPresent && !rawPresent) fail('ICMC index receipt exists without its response bytes');
+    let indexSnapshot; let indexStatus = 'recovered'; let receiptStatus = 'recovered';
+    if (rawPresent && receiptPresent) indexSnapshot = replayIndexReceipt(provider, paths);
+    else {
+        const fetched = await fetchOfficial({ provider, url: provider.indexUrl, kind: 'index', maxBytes: MAX_INDEX_BYTES }, dependencies);
+        indexStatus = writeExclusiveOrCompare(paths.indexFile, fetched.bytes, 'ICMC proceedings index response', MAX_INDEX_BYTES);
+        const receipt = responseReceipt(provider, fetched, 'responses/index.html');
+        receiptStatus = writeExclusiveOrCompare(paths.indexReceiptFile, prettyBytes(receipt),
+            'ICMC proceedings index response receipt', 1024 * 1024);
+        indexSnapshot = replayIndexReceipt(provider, paths);
+    }
+    const combinedPresent = fs.existsSync(paths.combinedPdfFile); const combinedReceiptPresent = fs.existsSync(paths.combinedPdfReceiptFile);
+    if (combinedReceiptPresent && !combinedPresent) fail('ICMC combined proceedings receipt exists without its PDF');
+    let combinedSnapshot; let combinedStatus = 'recovered'; let combinedReceiptStatus = 'recovered';
+    if (combinedPresent && combinedReceiptPresent) combinedSnapshot = replayIcmcCombinedReceipt(provider, paths);
+    else {
+        const fetched = await fetchOfficial({ provider, url: provider.combinedPdfUrl, kind: 'pdf', maxBytes: MAX_COMBINED_PDF_BYTES }, dependencies);
+        combinedStatus = writeExclusiveOrCompare(paths.combinedPdfFile, fetched.bytes,
+            'ICMC combined proceedings PDF', MAX_COMBINED_PDF_BYTES);
+        const receipt = icmcCombinedResponseReceipt(provider, fetched);
+        combinedReceiptStatus = writeExclusiveOrCompare(paths.combinedPdfReceiptFile, prettyBytes(receipt),
+            'ICMC combined proceedings PDF receipt', 1024 * 1024);
+        combinedSnapshot = replayIcmcCombinedReceipt(provider, paths);
+    }
+    const extracted = runIcmcMetadataExtractor(paths.combinedPdfFile, provider);
+    const metadataBytes = prettyBytes(extracted.metadata); const pageMapBytes = prettyBytes(extracted.pageMap);
+    const metadataStatus = writeExclusiveOrCompare(paths.metadataFile, metadataBytes, 'ICMC proceedings metadata', MAX_INDEX_BYTES);
+    const pageMapStatus = writeExclusiveOrCompare(paths.pageMapFile, pageMapBytes, 'ICMC proceedings page map', MAX_INDEX_BYTES);
+    const catalog = icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot, metadataBytes, pageMapBytes);
+    const catalogStatus = writeExclusiveOrCompare(paths.catalogReceiptFile, prettyBytes(catalog), 'ICMC catalog receipt', 1024 * 1024);
+    replayCatalog(provider.conference.id, outputRoot);
+    return { command: 'catalog', mode: 'apply', providerId: provider.conference.id, outputRoot,
+        papers: extracted.metadata.papers.length, sourcePages: extracted.pageMap.sourcePages,
+        writes: { index: indexStatus, indexReceipt: receiptStatus, combinedPdf: combinedStatus,
+            combinedPdfReceipt: combinedReceiptStatus, metadata: metadataStatus, pageMap: pageMapStatus,
+            catalogReceipt: catalogStatus }, metadataSha256: sha256(metadataBytes), catalogReceiptSha256: catalog.receiptSha256 };
+}
+
 async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, dependencies = {}) {
     const provider = providerFor(providerId); plannedRoot(outputRoot);
+    if (provider.parser === 'icmc-combined' && !apply) return { command: 'catalog', mode: 'dry-run', providerId, outputRoot,
+        indexUrl: provider.indexUrl, combinedPdfUrl: provider.combinedPdfUrl,
+        writes: ['responses/index.html', 'responses/index.receipt.json', 'responses/proceedings.source',
+            'responses/proceedings.receipt.json', 'metadata.json', 'page-map.json', 'catalog.receipt.json'] };
     if (provider.issues && !apply) return { command: 'catalog', mode: 'dry-run', providerId, outputRoot,
         archiveUrl: provider.archiveUrl, issueCount: provider.issues.length,
         indexUrls: provider.issues.map(issue => issue.url),
@@ -1056,6 +1260,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
     if (!apply) return { command: 'catalog', mode: 'dry-run', providerId, outputRoot,
         indexUrl: provider.indexUrl, writes: ['responses/index.html', 'responses/index.receipt.json',
             'metadata.json', 'catalog.receipt.json'] };
+    if (provider.parser === 'icmc-combined') return acquireIcmcCatalog(provider, outputRoot, dependencies);
     if (provider.issues) return acquireMultiIssueCatalog(provider, outputRoot, dependencies);
     const paths = acquisitionPaths(outputRoot, true);
     const rawPresent = fs.existsSync(paths.indexFile); const receiptPresent = fs.existsSync(paths.indexReceiptFile);
@@ -1093,7 +1298,65 @@ function pdfPath(paths, paper) {
     return filename;
 }
 
+function icmcPageRange(catalog, paper) {
+    if (!Array.isArray(catalog.pageMap?.papers)) fail(`ICMC page map is missing for ${paper.id}`);
+    const range = catalog.pageMap.papers.find(item => item.id === paper.id);
+    if (!range) fail(`ICMC page map has no range for ${paper.id}`);
+    return range;
+}
+
+function icmcPdfReceipt(catalog, paper, pdf, range) {
+    const combined = catalog.combinedSnapshot;
+    const body = { contract: PDF_RECEIPT_CONTRACT, version: VERSION, providerId: catalog.provider.conference.id,
+        paperId: paper.id, metadataSha256: catalog.metadataSha256, requestedUrl: paper.pdfUrl,
+        finalUrl: paper.pdfUrl, redirects: [], responseStatus: 200, contentType: 'application/pdf',
+        observedAt: combined.receipt.observedAt,
+        pdf: { relativePath: paper.pdfFile, bytes: pdf.length, sha256: sha256(pdf) },
+        derivation: { contract: 'icmc-combined-paper-slice-v1', version: 1,
+            sourceReceiptSha256: combined.receipt.receiptSha256,
+            sourceRelativePath: 'responses/proceedings.source', sourceSha256: combined.receipt.body.sha256,
+            startPage: range.startPage, endPage: range.endPage } };
+    return { ...body, receiptSha256: stableHash(body) };
+}
+
+function replayIcmcPdfReceipt(catalog, paper) {
+    const filename = pdfReceiptPath(catalog.paths, paper);
+    const loaded = readCanonicalJson(filename, `${paper.id} ICMC PDF receipt`, 1024 * 1024);
+    const receipt = loaded.value;
+    exact(receipt, ['contentType', 'contract', 'derivation', 'finalUrl', 'metadataSha256', 'observedAt', 'paperId',
+        'pdf', 'providerId', 'receiptSha256', 'redirects', 'requestedUrl', 'responseStatus', 'version'],
+        'ICMC PDF receipt');
+    if (receipt.contract !== PDF_RECEIPT_CONTRACT || receipt.version !== VERSION
+        || receipt.providerId !== catalog.provider.conference.id || receipt.paperId !== paper.id
+        || receipt.metadataSha256 !== catalog.metadataSha256 || receipt.requestedUrl !== paper.pdfUrl
+        || receipt.finalUrl !== paper.pdfUrl || receipt.responseStatus !== 200 || !validObservedAt(receipt.observedAt)
+        || receipt.contentType !== 'application/pdf') fail(`${paper.id} ICMC PDF receipt envelope is invalid`);
+    const body = { ...receipt }; delete body.receiptSha256;
+    if (!SHA_RE.test(receipt.receiptSha256) || receipt.receiptSha256 !== stableHash(body)) fail(`${paper.id} ICMC PDF receipt self-SHA drifted`);
+    validateRedirects(catalog.provider, receipt, 'pdf');
+    exact(receipt.pdf, ['bytes', 'relativePath', 'sha256'], 'ICMC PDF byte binding');
+    if (receipt.pdf.relativePath !== paper.pdfFile || !Number.isSafeInteger(receipt.pdf.bytes)
+        || receipt.pdf.bytes < 5 || receipt.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(receipt.pdf.sha256)) {
+        fail(`${paper.id} ICMC PDF byte binding is invalid`);
+    }
+    exact(receipt.derivation, ['contract', 'endPage', 'sourceReceiptSha256', 'sourceRelativePath', 'sourceSha256',
+        'startPage', 'version'], 'ICMC PDF derivation');
+    const range = icmcPageRange(catalog, paper); const combined = catalog.combinedSnapshot;
+    if (receipt.derivation.contract !== 'icmc-combined-paper-slice-v1' || receipt.derivation.version !== 1
+        || receipt.derivation.sourceReceiptSha256 !== combined.receipt.receiptSha256
+        || receipt.derivation.sourceRelativePath !== 'responses/proceedings.source'
+        || receipt.derivation.sourceSha256 !== combined.receipt.body.sha256
+        || receipt.derivation.startPage !== range.startPage || receipt.derivation.endPage !== range.endPage) {
+        fail(`${paper.id} ICMC PDF derivation does not bind the combined source`);
+    }
+    const pdf = readStableFile(pdfPath(catalog.paths, paper), `${paper.id} sealed ICMC PDF`, MAX_PDF_BYTES);
+    if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.size !== receipt.pdf.bytes
+        || pdf.sha256 !== receipt.pdf.sha256) fail(`${paper.id} sealed ICMC PDF differs from its receipt`);
+    return receipt;
+}
+
 function replayPdfReceipt(catalog, paper) {
+    if (catalog.provider.parser === 'icmc-combined') return replayIcmcPdfReceipt(catalog, paper);
     const filename = pdfReceiptPath(catalog.paths, paper);
     const loaded = readCanonicalJson(filename, `${paper.id} PDF receipt`, 1024 * 1024); const receipt = loaded.value;
     exact(receipt, ['contentType', 'contract', 'finalUrl', 'metadataSha256', 'observedAt', 'paperId', 'pdf',
@@ -1119,8 +1382,98 @@ function replayPdfReceipt(catalog, paper) {
     return receipt;
 }
 
+function splitIcmcPapers(catalog, papers) {
+    // macOS commonly exposes /tmp as a symlink.  The acquisition reader
+    // deliberately rejects symlinked parents, so create the scratch directory
+    // beneath the resolved system temporary directory.
+    const temporaryParent = fs.realpathSync(os.tmpdir());
+    const temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, 'audio-paper-digest-icmc-'));
+    try {
+        const script = path.join(__dirname, '..', 'icmc-proceedings.py');
+        const result = spawnSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), script, 'split',
+            catalog.paths.combinedPdfFile, catalog.paths.pageMapFile, temporaryRoot], {
+            cwd: path.join(__dirname, '..', '..'), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+        if (result.error || result.status !== 0) {
+            const reason = String(result.stderr || result.error?.message || 'ICMC PDF splitter failed')
+                .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 240);
+            fail(`ICMC combined proceedings split failed: ${reason}`);
+        }
+        const output = JSON.parse(String(result.stdout || '{}'));
+        if (!Array.isArray(output.written) || output.total !== catalog.metadata.papers.length) {
+            fail('ICMC PDF splitter returned an invalid result');
+        }
+        return papers.map(paper => readStableFile(path.join(temporaryRoot, `${paper.id}.pdf`),
+            `${paper.id} derived ICMC PDF`, MAX_PDF_BYTES).bytes);
+    } finally {
+        fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+}
+
+function icmcDownloadPapers({ providerId, outputRoot, apply = false, limit = null, concurrency = 1, retries = 0 } = {}) {
+    const catalog = replayCatalog(providerId, outputRoot);
+    if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) fail('limit must be a positive integer');
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency must be an integer from 1 to 5');
+    if (!Number.isSafeInteger(retries) || retries < 0 || retries > 5) fail('retries must be an integer from 0 to 5');
+    const before = acquisitionStatus({ providerId, outputRoot });
+    if (!apply) return { command: 'download', mode: 'dry-run', providerId, outputRoot,
+        total: catalog.metadata.papers.length, downloaded: before.downloaded, pending: before.missing,
+        limit, concurrency: 1, retries };
+    const pending = catalog.metadata.papers.filter(paper => {
+        const target = pdfPath(catalog.paths, paper); const receipt = pdfReceiptPath(catalog.paths, paper);
+        const targetPresent = fs.existsSync(target); const receiptPresent = fs.existsSync(receipt);
+        if (targetPresent && receiptPresent) { replayIcmcPdfReceipt(catalog, paper); return false; }
+        // A derived PDF may survive an interrupted receipt migration.  Recreate
+        // its receipt only after deterministic splitting produces the same
+        // bytes; a receipt without its PDF remains a hard failure.
+        if (receiptPresent && !targetPresent) fail(`${paper.id} has a partial ICMC PDF/receipt pair`);
+        return true;
+    }).slice(0, limit === null ? undefined : limit);
+    const derived = splitIcmcPapers(catalog, pending);
+    let created = 0; let recovered = 0;
+    for (let index = 0; index < pending.length; index += 1) {
+        const paper = pending[index]; const target = pdfPath(catalog.paths, paper);
+        const receiptFile = pdfReceiptPath(catalog.paths, paper); const range = icmcPageRange(catalog, paper);
+        const pdfStatus = writeExclusiveOrCompare(target, derived[index], `${paper.id} ICMC PDF`, MAX_PDF_BYTES);
+        const receipt = icmcPdfReceipt(catalog, paper, derived[index], range);
+        writeExclusiveOrCompare(receiptFile, prettyBytes(receipt), `${paper.id} ICMC PDF receipt`, 1024 * 1024);
+        replayIcmcPdfReceipt(catalog, paper);
+        if (pdfStatus === 'created') created += 1; else recovered += 1;
+    }
+    const after = acquisitionStatus({ providerId, outputRoot });
+    return { command: 'download', mode: 'apply', providerId, outputRoot,
+        total: catalog.metadata.papers.length, created, recovered, downloaded: after.downloaded,
+        missing: after.missing, complete: after.complete, concurrency: 1, retries };
+}
+
+function icmcAcquisitionStatus(provider, outputRoot) {
+    const paths = acquisitionPaths(outputRoot, false);
+    const catalogFiles = [paths.indexFile, paths.indexReceiptFile, paths.combinedPdfFile,
+        paths.combinedPdfReceiptFile, paths.metadataFile, paths.pageMapFile, paths.catalogReceiptFile];
+    const present = catalogFiles.filter(filename => fs.existsSync(filename)).length;
+    if (present !== catalogFiles.length) return { command: 'status', providerId: provider.conference.id, outputRoot,
+        catalog: present ? 'partial' : 'missing', total: 0, downloadable: 0, downloaded: 0, missing: 0,
+        partial: present, complete: false };
+    const catalog = replayCatalog(provider.conference.id, outputRoot);
+    let downloaded = 0; let partial = 0; let missing = 0;
+    for (const paper of catalog.metadata.papers) {
+        const hasPdf = fs.existsSync(pdfPath(paths, paper)); const hasReceipt = fs.existsSync(pdfReceiptPath(paths, paper));
+        if (hasPdf && hasReceipt) { replayIcmcPdfReceipt(catalog, paper); downloaded += 1; }
+        else if (hasPdf || hasReceipt) partial += 1;
+        else missing += 1;
+    }
+    return { command: 'status', providerId: provider.conference.id, outputRoot, catalog: 'complete',
+        total: catalog.metadata.papers.length, downloadable: catalog.metadata.papers.length,
+        downloaded, missing, partial, complete: missing === 0 && partial === 0,
+        sourcePages: catalog.pageMap.sourcePages };
+}
+
 async function downloadPapers({ providerId, outputRoot, apply = false, limit = null, concurrency = 1, retries = 0 } = {}, dependencies = {}) {
     const catalog = replayCatalog(providerId, outputRoot);
+    if (catalog.provider.parser === 'icmc-combined') {
+        return icmcDownloadPapers({ providerId, outputRoot, apply, limit, concurrency, retries });
+    }
     if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) fail('limit must be a positive integer');
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency must be an integer from 1 to 5');
     if (!Number.isSafeInteger(retries) || retries < 0 || retries > 5) fail('retries must be an integer from 0 to 5');
@@ -1170,6 +1523,7 @@ async function downloadPapers({ providerId, outputRoot, apply = false, limit = n
 
 function acquisitionStatus({ providerId, outputRoot } = {}) {
     const provider = providerFor(providerId); plannedRoot(outputRoot);
+    if (provider.parser === 'icmc-combined') return icmcAcquisitionStatus(provider, outputRoot);
     if (!fs.existsSync(outputRoot)) return { command: 'status', providerId, outputRoot, catalog: 'missing',
         total: 0, downloadable: 0, downloaded: 0, missing: 0, partial: 0, complete: false };
     const paths = acquisitionPaths(outputRoot, false);
@@ -1248,7 +1602,7 @@ function verifyAcquisition({ providerId, outputRoot } = {}) {
 
 module.exports = {
     VERSION, HTTP_RECEIPT_CONTRACT, CATALOG_RECEIPT_CONTRACT, PDF_RECEIPT_CONTRACT, PARSER_VERSION,
-    MAX_INDEX_BYTES, MAX_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, AAAI_2026_ISSUES, PROVIDERS,
+    MAX_INDEX_BYTES, MAX_PDF_BYTES, MAX_COMBINED_PDF_BYTES, MAX_REDIRECTS, REQUEST_TIMEOUT_MS, AAAI_2026_ISSUES, PROVIDERS,
     OfficialConferenceAcquisitionError, sha256, stableHash, prettyBytes, providerFor, validateFetchUrl,
     validateRedirectTarget,
     normalizeMetadata, parseAaaiIssue, parseCatalog, acquireCatalog, downloadPapers, acquisitionStatus, verifyAcquisition,

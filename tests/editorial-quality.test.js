@@ -230,6 +230,12 @@ describe('Manual v4 editorial quality primitives', () => {
         ), []);
     });
 
+    it('does not treat speaker counts as bare percentage-scale metric values', () => {
+        assert.deepEqual(findMissingComparisonUnits(
+            '说话人数从 1 人增至 4 人时性能一致下降，开源基线在超过 2 人时计数准确率接近零。'
+        ), []);
+    });
+
     it('blocks numeric-unit adhesion and digit-damaged Chinese connectives without flagging identifiers', () => {
         const findings = findNumericTypographyDefects([
             '该实验包括5个场景，训练50轮，提升19.5个百分点，并把误差从81.7降至81.0。',
@@ -488,9 +494,12 @@ describe('Manual v4 editorial quality primitives', () => {
             + '方法在两种训练分布下均显著降低了在 ASVspoof 2024 与情感化数据上的错误率，'
             + '同时在标准集上保持竞争力，消融也支持了 2 阶段设计的必要性。'
         ), []);
-        assert.deepEqual(findMissingComparisonUnits(
+        const directionalMarkersAreNotUnits = findMissingComparisonUnits(
             '固定 Top-2 相对本方法词错误率（WER↓，越低越好）从 2.2 升至 3.1，制作质量（PQ↑）从 7.54 降至 7.47。'
-        ), []);
+        );
+        assert.ok(directionalMarkersAreNotUnits.some(
+            item => item.reason === 'percentage_metric_delta_without_unit'
+        ));
         const asvspoofMissingUnits = findMissingComparisonUnits(
             '在 ASVspoof 2024 基准上，错误率从 24.5 降至 18.2。'
         );

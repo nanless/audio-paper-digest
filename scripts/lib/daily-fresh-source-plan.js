@@ -245,7 +245,10 @@ function isPaperBoundToPlan(paper, plan) {
             && proof.sourceGeneration === SOURCE_GENERATION
             && proof.sourceManifestSha256 === details.freshSourceDescriptor.sourceManifestSha256
             && proof.sourceSha256 === details.freshSourceDescriptor.sourceSha256
-            && proof.sourceSnapshotSha256 === details.freshSourceDescriptor.sourceSnapshotSha256);
+            && proof.sourceSnapshotSha256 === details.freshSourceDescriptor.sourceSnapshotSha256
+            && stableHash(paper?.analysisManifest?.freshRewriteProvenance) === stableHash(proof)
+            && paper?.sourceSha256 === proof.sourceSha256
+            && paper?.analysisManifest?.sourceAcquisition?.sourceSha256 === proof.sourceSha256);
     } catch { return false; }
 }
 

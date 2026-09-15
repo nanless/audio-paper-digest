@@ -238,6 +238,12 @@ function bindInputs({ selectionHandle, discoveryHandle, extractionManifest, extr
         selected.delete(member.paperId);
     }
     if (selected.size) fail(`reviewed extraction is missing included papers: ${[...selected.keys()].join(', ')}`);
+    // The extraction manifest is ordered by canonical paperId, while the
+    // importer contract is ordered by its ledger identity key.  Those orders
+    // are not interchangeable for conference-paper-id values (CVPR exposes
+    // this whenever author/title prefixes differ from source IDs).
+    importMembers.sort((left, right) => ledgerApi.identityKey(left.identity) < ledgerApi.identityKey(right.identity) ? -1
+        : ledgerApi.identityKey(left.identity) > ledgerApi.identityKey(right.identity) ? 1 : 0);
     const importManifestDraft = { contract: importerApi.CONTRACT, version: importerApi.VERSION,
         conference: clone(extraction.conference), members: importMembers,
         memberSetSha256: ledgerApi.memberSetSha256(importMembers.map(member => ({ identity: member.identity }))) };

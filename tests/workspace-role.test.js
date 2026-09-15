@@ -60,7 +60,9 @@ test('unknown roles, marker schema drift, weak permissions and symlink roots fai
 test('direct command inference and package entrypoints cover daily/history boundaries', () => {
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('full-fetch.js'), 'daily');
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('official-conference-acquire.js'), 'daily');
-    for (const name of ['deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js', 'refresh-api-reader.js']) {
+    for (const name of ['deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js', 'refresh-api-reader.js',
+        'conference-queue.js', 'conference-workspace.js', 'migrate-conference-process.js',
+        'recover-conference-process-locks.js']) {
         assert.equal(envLoader.requiredWorkspaceRoleForCommand(name), 'daily', name);
     }
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('historical-page-staging.js'), 'history');

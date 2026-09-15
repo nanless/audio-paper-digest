@@ -24,7 +24,9 @@ from conference_extractor import (  # noqa: E402
     ConferenceExtractionDependencyError,
     ConferenceExtractionIntegrityError,
     load_pypdf_backend,
+    _formula_layout_candidates,
     _normalize_page_text,
+    _quiet_pymupdf_output,
     run_extraction,
     sha256_bytes,
     verify_blocked_extraction,
@@ -77,9 +79,45 @@ def build_pdf(page_lines):
 
 
 class ConferenceExtractorTest(unittest.TestCase):
+    def test_native_pymupdf_output_cannot_pollute_json_stdout(self):
+        read_fd, write_fd = os.pipe()
+        saved_stdout, saved_stderr = os.dup(1), os.dup(2)
+        null_fd = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(write_fd, 1)
+            os.close(write_fd)
+            os.dup2(null_fd, 2)
+            os.close(null_fd)
+            with _quiet_pymupdf_output():
+                os.write(1, b"native MuPDF warning\n")
+            os.write(1, b"{\"status\":\"verified\"}\n")
+        finally:
+            os.dup2(saved_stdout, 1)
+            os.dup2(saved_stderr, 2)
+            os.close(saved_stdout)
+            os.close(saved_stderr)
+        self.assertEqual(os.read(read_fd, 4096), b'{"status":"verified"}\n')
+        os.close(read_fd)
+
     def test_page_text_repair_keeps_pairs_and_replaces_unpaired_surrogates(self):
         self.assertEqual(_normalize_page_text("before\ud83d\udca1after"), "before💡after")
         self.assertEqual(_normalize_page_text("before\ud83dafter"), "before�after")
+
+    def test_structure_text_repair_also_replaces_unpaired_surrogates(self):
+        page = mock.Mock()
+        page.get_text.side_effect = lambda kind: {
+            "rawdict": {"blocks": [{"type": 0, "lines": [{"dir": (1, 0), "spans": [{
+                "font": "Test", "size": 10, "chars": [
+                    {"c": "=", "bbox": (10, 10, 15, 20), "origin": (10, 20)},
+                    {"c": "\ud835", "bbox": (16, 10, 21, 20), "origin": (16, 20)},
+                ],
+            }]}]}]},
+            "words": [],
+        }[kind]
+        page.get_drawings.return_value = []
+        page.rect.x0, page.rect.y0, page.rect.x1, page.rect.y1 = 0, 0, 612, 792
+        result = _formula_layout_candidates(page)
+        self.assertEqual(result[0]["layout"]["glyphs"][1]["text"], "�")
 
     def test_default_source_root_uses_central_python_path_config(self):
         from conference_extractor import DEFAULT_STAGING_SOURCE_DIR

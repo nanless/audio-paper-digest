@@ -407,6 +407,7 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
     const requested = new Set();
     const requestedSimpleMeasured = new Set();
     const requestedTrillionUnits = new Set();
+    const requestedScaledMagnitudes = new Map();
     const scaledUnitAlternation = SCALED_ARABIC_MEASUREMENT_UNITS
         .slice().sort((a, b) => b.length - a.length)
         .map(item => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
@@ -439,9 +440,17 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
             }
             const trillion = trillionSurface.exec(surface);
             if (trillion) requestedTrillionUnits.add(trillion[1]);
+            const scaledMagnitude = surface.match(
+                /^([+-]?\d+(?:\.\d+)?)\s*([万亿])$/u
+            );
+            if (scaledMagnitude) requestedScaledMagnitudes.set(
+                `${scaledMagnitude[1]} ${scaledMagnitude[2]}`,
+                { coefficient: scaledMagnitude[1], scale: scaledMagnitude[2] }
+            );
         }
     }
-    if ((!requested.size && !requestedSimpleMeasured.size && !requestedTrillionUnits.size)
+    if ((!requested.size && !requestedSimpleMeasured.size && !requestedTrillionUnits.size
+        && !requestedScaledMagnitudes.size)
         || source.includes('__PD_ISSUE_BOUND_NUMERAL_')) return source;
     const protectedSpans = [];
     const protect = value => {
@@ -474,6 +483,14 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
         normalized = normalized.replace(
             new RegExp(`(?<![A-Za-z0-9.,/])([+-]?\\d+(?:\\.\\d+)?)\\s*万亿\\s*(${escapedUnit})(?![A-Za-z])`, 'giu'),
             (_surface, value, matchedUnit) => `${expandDecimalScale(value, 12)} ${matchedUnit}`
+        );
+    }
+    for (const { coefficient, scale } of requestedScaledMagnitudes.values()) {
+        const escapedCoefficient = coefficient.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escapedScale = scale.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        normalized = normalized.replace(
+            new RegExp(`(?<![A-Za-z0-9.,/])${escapedCoefficient}\\s*${escapedScale}(\\s*)(?=(?:${scaledUnitAlternation}))`, 'giu'),
+            (_surface, gap) => `${expandDecimalScale(coefficient, scale === '亿' ? 8 : 4)}${gap || ' '}`
         );
     }
     const digits = Object.freeze({ 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
@@ -915,18 +932,8 @@ function findMissingComparisonUnits(text) {
             + `|${PERCENT_METRICS_RE.source}[^。！？\\n]{0,120}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲))`,
             'iu'
         );
-        // Conference tables often use an explicit direction marker instead
-        // of printing a unit in every cell, e.g. “WER↓，越低越好” or
-        // “准确率↑”. Preserve those source-scale numbers as-is; requiring a
-        // fabricated percent sign here creates false positives for metrics
-        // whose table header already defines the reporting convention.
-        const metricDirectionDeclaration = new RegExp(
-            `${PERCENT_METRICS_RE.source}\\s*(?:[↑↓]|[（(][^（）()]{0,30}(?:↑|↓|越高(?:越好)?|越低(?:越好)?)[^（）()]{0,30}[）)])`,
-            'iu'
-        );
         if (explicitScoreUnit.test(sentence.text)
-            || metricUnitDeclaration.test(sentence.text)
-            || metricDirectionDeclaration.test(sentence.text)) continue;
+            || metricUnitDeclaration.test(sentence.text)) continue;
         // Do not treat digits embedded in model/product names (for example
         // wav2vec-U or Qwen2-Audio) as bare percentage values.
         // 图表编号和“第 2 至 3 位”这类序号不是指标值。先做等长屏蔽，
@@ -986,7 +993,7 @@ function findMissingComparisonUnits(text) {
                 const before = numericText.slice(0, match.index);
                 const after = numericText.slice(match.index + match[0].length);
                 if (/第\s*$/.test(before)) return false;
-                return !/^\s*(?:个|条|段|篇|张|种|类|组|套|块|步|轮|层|题|份|例|名|台|所|对|倍|阶段|数据集|测试集|验证集|时|小时|路|模型|系统|骨干|样本|片段|词元|接口|分支|特征|维度|维)/.test(after);
+                return !/^\s*(?:个|条|段|篇|张|种|类|组|套|块|步|轮|层|题|份|例|名|人|台|所|对|倍|阶段|数据集|测试集|验证集|时|小时|路|模型|系统|骨干|样本|片段|词元|接口|分支|特征|维度|维)/.test(after);
             })
             .map(match => match[0]);
         const percentageMetricHasNearbyPercentageScaleValue = [...numericText.matchAll(
@@ -1131,6 +1138,7 @@ const RESULT_DIRECTION_PATTERNS = Object.freeze({
     descriptive: /^(?:descriptive|描述性)$/i,
     magnitude: /^(?:绝对值反映关联强度|larger\s+(?:absolute\s+)?magnitude\s+means\s+stronger\s+association)$/i
 });
+const READER_DIRECTION_MARK_RE = /(?:[↑↓←→↔↕↗↘↙↖]|\\(?:up|down|left|right|ne|se|sw|nw)arrow\b)/iu;
 
 function canonicalNumericLexeme(value) {
     const normalized = normalizeNfkc(value).toLowerCase()
@@ -1357,6 +1365,10 @@ function validateResultClaims(claims, sourceText, options = {}) {
             }
             if (/not[_ -]?reported.*\d|\d.*not[_ -]?reported/i.test(claimFieldText(value))) {
                 errors.push(`${prefix}.${field} 不得把 notReported 与数值混写`);
+            }
+            if (field === 'unit' && !isNotReported(value)
+                && READER_DIRECTION_MARK_RE.test(claimFieldText(value))) {
+                errors.push(`${prefix}.unit 不得把方向箭头当作指标单位；方向必须放在 direction 字段`);
             }
         }
         const quote = normalizeEvidence(claim.sourceQuote);

@@ -152,6 +152,85 @@ test('generic conference stage binds sealed completion, identity, taxonomy and r
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies).manifest.manifestSha256, result.manifest.manifestSha256);
 });
 
+test('preserved conference pages rewrite local Figure paths to the dedicated image repository', () => {
+    const markdown = '![Figure 1](/images/conference/aistats-2026/470f332ff69e/figure-1.png)';
+    const repaired = api.repairConferenceImageUrls(markdown);
+    assert.equal(repaired,
+        '![Figure 1](https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/'
+        + 'aistats-2026/470f332ff69e/figure-1.png)');
+    assert.equal(api.repairConferenceImageUrls(repaired), repaired);
+});
+
+test('preserved conference pages escape literal currency dollars without changing prose values', () => {
+    const repaired = api.repairPreservedPage('成本为$32,000,000，高于$2,000；区间为$60-80 USD。');
+    assert.equal(repaired, '成本为\\$32,000,000，高于\\$2,000；区间为\\$60-80 USD。');
+    assert.equal(api.repairPreservedPage(repaired), repaired);
+});
+
+test('preserved conference pages escape compact technical notation stars', () => {
+    const repaired = api.repairPreservedPage('**H1*-H2* × 谐噪比：** 数值越低越偏向嘎裂。');
+    assert.equal(repaired, '**H1\\*-H2\\* × 谐噪比：** 数值越低越偏向嘎裂。');
+    assert.equal(api.repairPreservedPage(repaired), repaired);
+});
+
+test('preserved conference page repairs never alter YAML frontmatter', () => {
+    const page = '---\ndescription: "H1*-H2* costs $32"\n---\n\n**H1*-H2*:** cost $32.';
+    const repaired = api.repairPreservedPage(page);
+    assert.equal(repaired,
+        '---\ndescription: "H1*-H2* costs $32"\n---\n\n**H1\\*-H2\\*:** cost \\$32.');
+});
+
+test('preserved conference pages repair significance and linguistic notation stars', () => {
+    const page = '---\ntitle: "Stars"\n---\n\n| p |\n|---|\n| p=0.002** |\n\nFigure *Vː2 and *mättīsin.';
+    const repaired = api.repairPreservedPage(page);
+    assert.equal(repaired,
+        '---\ntitle: "Stars"\n---\n\n| p |\n|---|\n| p=0.002\\*\\* |\n\nFigure \\*Vː2 and \\*mättīsin.');
+    assert.equal(api.repairPreservedPage(repaired), repaired);
+});
+
+test('real PDF formula crop reaches staged Markdown, PNG bytes and figure inventory', t => {
+    const f = fixture(t), loaded = f.runs.get(f.one);
+    const source = JSON.parse(require('node:child_process').execFileSync('bash', [
+        path.resolve(__dirname, '../scripts/python-runtime.sh'), '-B', '-c', `
+import sys,json,hashlib
+sys.path.insert(0,'scripts')
+import fitz
+from conference_extractor import load_pypdf_backend
+d=fitz.open();p=d.new_page(width=612,height=792)
+p.insert_text((60,100),'y=',fontsize=12)
+p.insert_text((80,100),'x',fontsize=12)
+p.insert_text((87,94),'2',fontsize=8)
+raw=d.tobytes();backend=load_pypdf_backend()
+a=backend.extract_structures(raw,backend.extract_pages(raw))
+a['visualAudit']=backend.extract_visual_audit(raw)
+a['pages']=a['visualAudit']['pages']
+print(json.dumps({'structuredArtifacts':a,'sourceBinding':{'pdfSha256':hashlib.sha256(raw).hexdigest()},'sourceSnapshotSha256':'b'*64}))
+`], { cwd: path.resolve(__dirname, '..'), encoding: 'utf8' }));
+    loaded.run.capabilities = { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' };
+    const dependencies = { ...f.dependencies, render: api.render, buildConferenceSourceContext: () => source };
+    const stagingRoot = path.join(f.root, 'formula-stage');
+    const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, dependencies);
+    assert.equal(result.status, 'staged');
+    assert.match(result.markdown, /!\[原文数学表达区域 1，PDF 第 1 页\]/);
+    assert.equal(result.manifest.assets.length, 1);
+    const asset = result.manifest.assets[0];
+    assert.match(asset.path, /^static\/images\/conference\/icassp-2026\/[a-f0-9]{12}\/figure-1\.png$/);
+    const directory = path.join(stagingRoot, f.one, result.manifest.taxonomy.registrySha256,
+        result.manifest.implementation.implementationSha256);
+    const png = fs.readFileSync(path.join(directory, 'assets', asset.path));
+    assert.equal(sha256(png), asset.sha256);
+    assert.equal(asset.sha256, source.structuredArtifacts.formulas[0].sourceExpression.crop.sha256);
+    assert.equal(png.length, asset.size);
+    assert.ok(png.readUInt32BE(16) < 100, 'crop must not include the page or a neighbouring column');
+    assert.ok(png.readUInt32BE(20) < 60, 'crop preserves the exponent without a paragraph-sized image');
+    assert.match(fs.readFileSync(path.join(directory, 'page.md'), 'utf8'), /原文公式与排版/);
+    assert.equal(loaded.analysis.papers[0].apiReaderPlan.formulaBindings.length, 0);
+    assert.equal(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, dependencies).manifest.manifestSha256,
+    result.manifest.manifestSha256);
+});
+
 test('IWSLT conference-paper-id with dots remains a conference identity', t => {
     const f = fixture(t); const loaded = f.runs.get(f.one);
     const paperId = 'conference:iwslt:2026:conference-paper-id:IWSLT.2026.001';
@@ -295,6 +374,7 @@ test('renderer/projection upgrade receives a new immutable stage identity', t =>
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     const implementation = marker => { const body = { contract: api.PROJECTION_CONTRACT, version: 1,
         nodeSourceSha256: marker.repeat(64), rendererSourceSha256: 'b'.repeat(64), publisherSourceSha256: 'c'.repeat(64),
+        publisherCommonSourceSha256: '2'.repeat(64),
         loaderSourceSha256: 'd'.repeat(64), parserSourceSha256: 'e'.repeat(64), taxonomySourceSha256: 'f'.repeat(64),
         identitySourceSha256: '1'.repeat(64) };
         return { ...body, implementationSha256: api.stableHash(body) }; };

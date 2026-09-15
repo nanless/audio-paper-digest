@@ -1,11 +1,13 @@
 import json
 import os
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -17,6 +19,7 @@ if str(SCRIPTS) not in sys.path:
 from blog_repository_lock import (  # noqa: E402
     BlogRepositoryLockError,
     LOCK_NAME,
+    _reclaimable,
     shared_blog_repository_lock,
     shared_lock_root,
 )
@@ -65,6 +68,17 @@ class SharedBlogRepositoryLockTest(unittest.TestCase):
                             repo, owner='contender', timeout_seconds=0.08,
                             stale_seconds=0.05):
                         self.fail('live PID must retain the shared repository lock')
+
+    def test_dead_same_host_owner_is_reclaimed_before_lease_expiry(self):
+        snapshot = {
+            'directoryMtimeNs': time.time_ns(),
+            'owner': {
+                'mtimeNs': time.time_ns(),
+                'record': {'hostname': socket.gethostname(), 'pid': 12345, 'leaseSeconds': 7200},
+            },
+        }
+        with patch('blog_repository_lock.os.kill', side_effect=ProcessLookupError):
+            self.assertTrue(_reclaimable(snapshot, configured_lease=7200))
 
     def test_stale_short_owner_is_recovered_without_recursive_delete(self):
         with tempfile.TemporaryDirectory() as tmp:

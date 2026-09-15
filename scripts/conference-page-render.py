@@ -2,12 +2,14 @@
 """Render a source-bound conference paper without inventing an arXiv identity."""
 
 import hashlib
+import base64
 import html
 import ipaddress
 import json
 import os
 import re
 import sys
+import math
 from urllib.parse import quote, urlsplit
 
 from blog_entry_loader import load_publish_to_blog
@@ -43,7 +45,12 @@ REQUIRED_ANALYSIS_SECTIONS = (
 
 
 def stable_sha(value):
-    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    # Preserve the historical bytes for valid Unicode while safely spelling
+    # lone UTF-16 surrogates emitted by malformed model text.  This matches
+    # Node's JSON.stringify escaping without ASCII-escaping all Chinese text.
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode(
+        'utf-8', 'backslashreplace'
+    )
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -64,7 +71,10 @@ def public_https(value, label, *, conference_only=False):
     labels = hostname.split('.')
     valid_dns = len(labels) > 1 and all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', item)
                                           for item in labels)
-    if parsed.scheme != 'https' or parsed.username or parsed.password or port or parsed.fragment \
+    # URL fragments are client-side anchors (for example, a paper's #demo or
+    # #code section); they are not sent to the network and are safe to keep in
+    # the published clickable resource identity.
+    if parsed.scheme != 'https' or parsed.username or parsed.password or port \
             or not hostname or literal or hostname == 'localhost' or hostname.endswith('.localhost') \
             or not valid_dns or (conference_only and (
                 hostname == 'arxiv.org' or hostname.endswith('.arxiv.org'))):
@@ -209,8 +219,22 @@ def sealed_reader_sources(paper, manifest, stage, capabilities):
         elif resource.get('origin') != 'validated_demo' \
                 or resource.get('originalUrl') not in ((manifest.get('stages') or {}).get('demoLinkScan') or {}).get('discoveredLinks', []):
             raise ValueError('conference Reader demo resource binding is invalid')
-        public_https(resource.get('originalUrl'), 'Reader resource original URL')
-        public_https(resource.get('finalUrl'), 'Reader resource final URL')
+        # A historical Reader candidate may have recorded an incomplete URL
+        # while the source scan already marked that resource as unavailable.
+        # Such a resource cannot support an open-source claim and should not
+        # make an otherwise sealed paper unpublishable. Drop it from the
+        # rendered resource projection; keep the fail-closed check for an
+        # `available` resource, because a published positive claim must still
+        # have two valid public HTTPS endpoints.
+        try:
+            public_https(resource.get('originalUrl'), 'Reader resource original URL')
+            public_https(resource.get('finalUrl'), 'Reader resource final URL')
+        except ValueError:
+            if resource.get('availability') in {'unavailable', 'temporarily_unreachable'}:
+                print('conference Reader 跳过无法闭合且不可用的资源: '
+                      f'{resource.get("originalUrl")}', file=sys.stderr)
+                continue
+            raise
     return plan, article, authors['authors'], resources['resources']
 
 
@@ -279,6 +303,129 @@ def scoring_stability_is_resolved(stage):
         and re.fullmatch(r'[a-f0-9]{64}', str(resolution.get('secondAuditSha256') or '')) is not None
 
 
+def formula_image_projection(evidence, paper_id, conference_id, pdf_url):
+    """Project authenticated PDF crops as visible images, never display TeX."""
+    if evidence is None:
+        return [], []
+    body = {key: value for key, value in evidence.items() if key != 'evidenceSha256'}
+    if evidence.get('contract') != 'conference-pdf-formula-images-v1' \
+            or evidence.get('evidenceSha256') != stable_sha(body) \
+            or not re.fullmatch(r'[a-f0-9]{64}', str(evidence.get('pdfSha256', ''))) \
+            or not re.fullmatch(r'[a-f0-9]{64}', str(evidence.get('sourceSnapshotSha256', ''))) \
+            or not isinstance(evidence.get('regions'), list) \
+            or type(evidence.get('candidateCount')) is not int \
+            or evidence['candidateCount'] < len(evidence['regions']) or len(evidence['regions']) > 32:
+        raise ValueError('conference formula image evidence is invalid')
+    regions = evidence['regions']
+    if not regions and not evidence['candidateCount']:
+        return [], []
+    directory = stable_sha({'kind': 'pdf-formula-images-v1', 'paperId': paper_id,
+                            'evidenceSha256': evidence['evidenceSha256']})[:12]
+    lines = ['## 📐 原文公式与排版', '',
+             '以下展示论文原页中的数学表达区域，保留原始上下标、分式和符号排版。区域序号仅用于本文导航，不是论文公式编号。', '']
+    assets = []
+    total_bytes = 0
+    for index, region in enumerate(regions, 1):
+        expression = region.get('sourceExpression') or {}
+        crop = expression.get('crop') or {}
+        if region.get('ordinal') != index or type(region.get('page')) is not int or region['page'] < 1 \
+                or expression.get('contract') != 'pdf-formula-source-expression-v1' \
+                or expression.get('kind') != 'recovered-from-pdf-layout' \
+                or expression.get('originalTexAvailable') is not False \
+                or crop.get('dpi') != 144 or crop.get('mediaType') != 'image/png' \
+                or not isinstance(crop.get('base64'), str) or len(crop['base64']) > 4 * math.ceil(512 * 1024 / 3) \
+                or not isinstance(crop.get('bbox'), list) or len(crop['bbox']) != 4 \
+                or not all(type(x) in (int, float) and math.isfinite(x) for x in crop['bbox']) \
+                or not 0 < crop['bbox'][2] - crop['bbox'][0] <= 420 \
+                or not 0 < crop['bbox'][3] - crop['bbox'][1] <= 96:
+            raise ValueError('conference formula image region is invalid')
+        try:
+            raw = base64.b64decode(crop['base64'], validate=True)
+        except ValueError as exc:
+            raise ValueError('conference formula PNG is invalid') from exc
+        if not 24 <= len(raw) <= 512 * 1024 or not raw.startswith(b'\x89PNG\r\n\x1a\n') \
+                or not 0 < int.from_bytes(raw[16:20], 'big') <= 842 \
+                or not 0 < int.from_bytes(raw[20:24], 'big') <= 194 \
+                or hashlib.sha256(raw).hexdigest() != crop.get('sha256'):
+            raise ValueError('conference formula PNG SHA drifted')
+        total_bytes += len(raw)
+        if total_bytes > 8 * 1024 * 1024:
+            raise ValueError('conference formula image budget exceeded')
+        # Reuse the existing immutable image asset transport without changing
+        # the publisher: formula images have their own content-bound directory.
+        relative = f'{conference_id}/{directory}/figure-{index}.png'
+        url = f'{CONFERENCE_IMAGE_BASE_URL}/{relative}'
+        assets.append({'path': f'static/images/conference/{relative}', 'base64': crop['base64']})
+        lines.extend([f'![原文数学表达区域 {index}，PDF 第 {region["page"]} 页]({url})', '',
+                      f'区域 {index} · [查看论文原页]({pdf_url}#page={region["page"]})', ''])
+    if evidence['candidateCount'] > len(regions):
+        lines.extend([f'另有 {evidence["candidateCount"] - len(regions)} 个候选区域因边界不明确或图片数量、尺寸限制未展开；'
+                      f'请[查看完整论文]({pdf_url})中的原始排版。', ''])
+    return lines, assets
+
+
+def repair_reader_figure_caption_emphasis(markdown):
+    """Verbalize literal stars inside the generated italic Figure caption line."""
+    pattern = re.compile(r'^\*论文图\s+(\d+)。([^\n]*)\*$', re.MULTILINE)
+
+    def replace(match):
+        caption = re.sub(r'(?:\\\*){3}|\*{3}', '三个星号', match.group(2))
+        caption = re.sub(r'(?:\\\*){2}|\*{2}', '两个星号', caption)
+        caption = re.sub(r'\\?\*', '一个星号', caption)
+        return f'*论文图 {match.group(1)}。{caption}*'
+
+    return pattern.sub(replace, str(markdown))
+
+
+def repair_formula_delimiters(markdown):
+    """Keep TeX delimiters and generated Figure captions Markdown-safe."""
+    markdown = repair_reader_figure_caption_emphasis(markdown)
+    # A model can nest an inline control token inside a code span, for example
+    # `` `turn off `<EOT>``. Repair this exact doubled-closing-backtick shape
+    # here as well as in the shared publisher sanitizer: the conference
+    # renderer may be loaded with a different Python module search path, and
+    # the staged page must be safe before it is sealed.
+    markdown = re.sub(
+        r'`([^`\n]*)`<([A-Za-z][A-Za-z0-9_†-]{0,40})>``',
+        lambda match: f'`{match.group(1)}&lt;{match.group(2)}&gt;`',
+        str(markdown),
+    )
+    # A PDF figure caption can contain literal brackets, such as ``f[k]`` or
+    # ``s = [1, 0, ...]``. The closing bracket is also Markdown image syntax,
+    # so every bracket that is not already escaped must remain escaped in the
+    # alt text. The publication gate masks the complete image label while
+    # checking TeX, because these bytes are caption text rather than math.
+    # The closing delimiter is the ``]`` immediately followed by ``(``;
+    # captions themselves may contain ordinary ``[``/``]`` characters.
+    image = re.compile(r'!\[([^\n]*?)\]\(([^)\n]+)\)')
+
+    def image_alt(match):
+        alt = []
+        slash_run = 0
+        for char in match.group(1):
+            if char == '\\':
+                alt.append(char)
+                slash_run += 1
+                continue
+            if char in '[]' and slash_run % 2 == 0:
+                alt.append('\\')
+            alt.append(char)
+            slash_run = 0
+        alt = ''.join(alt)
+        return f'![{alt}]({match.group(2)})'
+
+    markdown = image.sub(image_alt, str(markdown))
+    pattern = re.compile(r'(?<!\\)\\+\[([\s\S]*?)(\\+)\]|(?<!\\)\\+\(([\s\S]*?)(\\+)\)', re.DOTALL)
+
+    def replace(match):
+        display, _display_slashes, inline, _inline_slashes = match.groups()
+        value = display if display is not None else inline
+        value = value.replace('<', r'\lt ').replace('>', r'\gt ')
+        return (r'\[' if display is not None else r'\(') + value + (r'\]' if display is not None else r'\)')
+
+    return pattern.sub(replace, str(markdown))
+
+
 def render_packet(packet):
     paper, assignment = packet.get('paper'), packet.get('taxonomy')
     paper_id, conference, capabilities = packet.get('paper_id'), packet.get('conference'), packet.get('capabilities')
@@ -334,6 +481,17 @@ def render_packet(packet):
             # 11).  A plain string replacement would turn the latter into
             # ``figure-1.png1``.  Replace only a complete custom URL token.
             article = re.sub(re.escape(str(source_url)) + r'(?!\d)', public_url, article)
+            # Older Reader drafts already contained the local Hugo asset URL
+            # (`/images/conference/...`) instead of the Figure source URL.
+            # Rewrite that deterministic path too, otherwise the page passes
+            # staging but points at a non-existent blog-local asset after the
+            # bytes are committed to the dedicated image repository.
+            local_pattern = (
+                rf'(?<![A-Za-z0-9])(?:/static)?/images/conference/'
+                rf'{re.escape(conference["id"])}/[a-f0-9]{{12}}/'
+                rf'figure-{int(figure["ordinal"])}\.png(?!\d)'
+            )
+            article = re.sub(local_pattern, public_url, article)
             assets.append({'path': path, 'base64': packet_asset['base64']})
     scoring_stage = ((manifest or {}).get('stages') or {}).get('scoringAudit') or {}
     analysis = paper.get('analysis')
@@ -367,6 +525,7 @@ def render_packet(packet):
     labels = [concepts[cid]['preferredLabel']['zh'] for cid in assignment.get('conceptIds', [])]
     parsed = paper.get('parsed') or {}
     title, summary = str(paper.get('title') or '').strip(), str(parsed.get('summary') or '').strip()
+    short_proceedings = acquisition.get('analysisConfidence') == 'short_proceedings'
     reader_title = str(plan.get('readerTitle') or '').strip()
     one_sentence = str(plan.get('oneSentenceThesis') or '').strip()
     rank_bucket, document_type = str(parsed.get('rankBucket') or '').strip(), str(parsed.get('documentType') or '').strip()
@@ -380,6 +539,11 @@ def render_packet(packet):
     pdf_url = public_https(publication.get('pdfUrl'), 'official PDF URL', conference_only=True)
     if publication != paper.get('conferencePublication') or record_url == pdf_url:
         raise ValueError('official conference publication URLs are not canonical-bound')
+    if capabilities == WEAK and packet.get('formulaEvidence'):
+        raise ValueError('weak source cannot carry formula image evidence')
+    formula_lines, formula_assets = formula_image_projection(
+        packet.get('formulaEvidence'), paper_id, conference['id'], pdf_url)
+    assets.extend(formula_assets)
     publisher = load_publish_to_blog()
     category = f'{conference["id"]} 论文'
     lines = ['---', f'title: "{publisher.yaml_escape(title)}"', f'date: {packet["date"]}', 'draft: false',
@@ -422,7 +586,8 @@ def render_packet(packet):
              f'# 📄 {reader_title}', '', f'> 英文题目：*{title}*', '',
              f'> 会议身份：`{paper_id}`', '',
              ('' if capabilities == FULL else '> ⚠️ 来源为会议 PDF 弱结构纯文本；表格、公式与 Figure 均不可用，本文不会据此重建这些结构。'),
-             ('> ✅ 来源为官方会议 PDF；可重放的表格、公式文本与 Figure 像素已按 PDF 抽取结果绑定，未成功恢复的结构不作推断。' if capabilities == FULL else ''), '',
+             ('> ℹ️ 这是短篇 proceedings PDF；正文较短，但分析使用封存的完整 PDF 文本，未降级为摘要。' if short_proceedings else ''),
+             ('> ✅ 来源为官方会议 PDF；表格与 Figure 按原文证据绑定。PDF 公式以原页区域图片展示，未冒称作者原始 TeX。' if capabilities == FULL else ''), '',
              f'> 会议来源：[官方记录]({record_url}) · [官方 PDF]({pdf_url})', '',
              f'标签：{" ".join("#" + label for label in labels)}', '', f'评分：{complete_score}', '',
              f'排名：{rank_bucket} | 文档类型：{document_type}', '', '## 👥 作者与机构', '']
@@ -430,10 +595,12 @@ def render_packet(packet):
         lines.append(f'- {author["name"]}：{"；".join(author["affiliations"])}')
     lines.extend(['', '## 📌 核心摘要', '', summary, '', '## 🔗 开源与复现资源', '',
                   *resource_projection(resources), '', '## 🧭 深度解读', '', article.strip(), '',
+                  *formula_lines,
                   '## ⚖️ 评分明细', '', *scoring_projection(paper, parsed, scoring_stage), ''])
     lines.extend(['---', '', f'[← 返回 {conference["id"]} 论文汇总]({packet["aggregateUrl"]})', ''])
     lines[-1:] = [hide_arxiv_links(line) for line in lines[-1:]]
-    return {'markdown': publisher.sanitize_markdown_for_publish(hide_arxiv_links('\n'.join(lines))), 'assets': assets}
+    markdown = repair_formula_delimiters(hide_arxiv_links('\n'.join(lines)))
+    return {'markdown': publisher.sanitize_markdown_for_publish(markdown), 'assets': assets}
 
 
 def packet_bytes():

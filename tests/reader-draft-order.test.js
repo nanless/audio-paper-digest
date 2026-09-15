@@ -149,6 +149,70 @@ test('ambiguous extra handwritten tables are never pruned', () => {
     assert.deepEqual(input, before);
 });
 
+test('conference PDF grouped numbers allow pruning an unbound table before mixed-order normalization', () => {
+    const select = { tableIndex: 1,
+        selection: { sourceTableOrdinal: 2, sourceRows: [0, 1], sourceColumns: [0, 1] } };
+    const result = [
+        '| 数据集 | 样本规模 | 准确率 |', '| --- | --- | --- |',
+        '| SoundingSVI | 169221 对 | 86.13% |', '| SonicUrban | 236674 对 | 86.13% |'
+    ].join('\n');
+    const input = { sections: [
+        { kind: 'result', body: result },
+        { kind: 'ablation', body: '[[TABLE_1]]' },
+        { kind: 'reproduction', body: markdown('unbound') }
+    ], tableBindings: [select, binding(2, 'The source reports 169,221 pairs and 236,674 pairs.') ] };
+    assert.equal(pruneUniquelyUnboundReaderMarkdownTables(input), 1);
+    assert.match(input.sections[0].body, /169221 对/);
+    assert.doesNotMatch(input.sections[2].body, /unbound/);
+    assert.deepEqual(locateReaderDraftTables(input).map(item => item.markerIndex || 'markdown'), [
+        'markdown', 1
+    ]);
+});
+
+test('source-quote evidence tables beat richer duplicate handwritten tables only with a unique score', () => {
+    const select = { tableIndex: 1,
+        selection: { sourceTableOrdinal: 2, sourceRows: [0, 1], sourceColumns: [0, 1] } };
+    const rich = [
+        '| 评测 | 基线 | 本文 |', '| --- | --- | --- |',
+        '| AudioSet | 35.2% | 37.4% |', '| AudioSet-2 | 27.9% | 37.1% |'
+    ].join('\n');
+    const evidence = [
+        '| 来源证据 | 量化值 1 | 量化值 2 |', '| --- | --- | --- |',
+        '| 来源句 1 | 35.2% | 37.4% |'
+    ].join('\n');
+    const input = { sections: [
+        { kind: 'result', body: [rich, evidence].join('\n\n') },
+        { kind: 'ablation', body: '[[TABLE_1]]' }
+    ], tableBindings: [select, binding(2, 'The reported retrieval values are 35.2% and 37.4%.')] };
+    assert.equal(pruneUniquelyUnboundReaderMarkdownTables(input), 1);
+    assert.doesNotMatch(input.sections[0].body, /\| 评测 \| 基线 \| 本文 \|/);
+    assert.match(input.sections[0].body, /\| 来源证据 \| 量化值 1 \| 量化值 2 \|/);
+});
+
+test('compact k-scale source quotes can uniquely identify the unbound benchmark table', () => {
+    const table = values => [
+        '| 评测对象 | 样本规模 | 视频规模 |', '| --- | --- | --- |',
+        ...values.map(row => `| ${row.join(' | ')} |`)
+    ].join('\n');
+    const input = { sections: [
+        { kind: 'experiment_setup', body: [
+            table([['幻觉基准', 'around 5k samples', 'over 2k unique videos']]),
+            table([['无量化配置', '普通偏好优化', '额外前向免梯度']])
+        ].join('\n\n') },
+        { kind: 'result', body: table([['匹配', 'up to 27%', 'around 3-4 %']]) },
+        { kind: 'ablation', body: table([['偏好数据', '18,112', 'over 10,854']]) },
+        { kind: 'reproduction', body: table([['轮数', 'four epochs', 'βsens = 0.05, βinv = 0.02']]) }
+    ], tableBindings: [
+        binding(1, 'up to 27% accuracy and around 3-4 % gain'),
+        binding(2, '18,112 preference samples over 10,854 unique videos'),
+        binding(3, 'four epochs, βsens = 0.05, βinv = 0.02'),
+        binding(4, 'around 5k samples over 2k unique videos')
+    ] };
+    assert.equal(pruneUniquelyUnboundReaderMarkdownTables(input), 1);
+    assert.doesNotMatch(input.sections[0].body, /无量化配置/);
+    assert.match(input.sections[0].body, /幻觉基准/);
+});
+
 test('structured table diagnostic paths include the exact binding without parsing a message', () => {
     const draft = normalizeReaderDraftOrder(fixture()).draft;
     const targets = buildRepairTargets(draft, [{ path: '/sections/1/body', bindingPath: '/tableBindings/1', message: '表格单位格式不匹配；应检查source quote' }]);

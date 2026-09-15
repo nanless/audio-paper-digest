@@ -2,6 +2,7 @@
 const { setupScriptLogging } = require('./log-setup');
 setupScriptLogging(__filename);
 const fs = require('fs');
+const path = require('path');
 
 /**
  * 重新分析指定论文
@@ -26,8 +27,32 @@ const {
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
+const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const readerRepair = require('./lib/reader-repair.js');
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
+
+function resetReaderForSelectedReanalysis(paper) {
+    const next = structuredClone(paper);
+    const manifest = next.analysisManifest;
+    if (manifest?.stages) {
+        delete manifest.stages.apiReaderArticle;
+        delete manifest.stages.imageSupplement;
+    }
+    if (manifest?.contracts) {
+        delete manifest.contracts.apiReaderArticle;
+        delete manifest.contracts.imageNarrative;
+        if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
+    }
+    if (next.analysisStageCheckpoints) {
+        delete next.analysisStageCheckpoints.apiReaderArticle;
+        delete next.analysisStageCheckpoints.imageSupplement;
+    }
+    for (const key of ['analysis', 'parsed', 'error', 'apiReaderArticle', 'apiReaderPlan',
+        'apiReaderFigures', 'apiReaderAuthors', 'apiReaderResources', 'apiReaderArticleSha256',
+        'apiReaderPlanSha256']) delete next[key];
+    return next;
+}
 
 function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, runStats, updatedAt) {
     const recoveredCount = analyzedResults.filter(result => {
@@ -67,6 +92,29 @@ async function reanalyzeSelected(ids) {
     const data = readJsonFileStrict(RESULT_FILE);
 
     const papers = data.papers || [];
+    const idSet = new Set(ids.map(id => normalizedId(id)).filter(Boolean));
+    const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
+        papers, label: 'selected reanalyze recovery'
+    });
+    let retiredReaderCandidates = 0;
+    try {
+        const names = fs.readdirSync(dailySourcePlan.readerAttemptsDir)
+            .filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
+        for (const name of names) {
+            const envelope = JSON.parse(fs.readFileSync(
+                path.join(dailySourcePlan.readerAttemptsDir, name), 'utf8'
+            ));
+            if (idSet.has(normalizedId(envelope.identity?.paperId))
+                && readerRepair.retireFailedCandidate(dailySourcePlan.readerAttemptsDir, envelope.identity)) {
+                retiredReaderCandidates += 1;
+            }
+        }
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+    if (retiredReaderCandidates > 0) {
+        console.log(`已保留并退休 ${retiredReaderCandidates} 个所选论文的旧 Reader 失败候选`);
+    }
     const batchDate = inferAnalysisBatchDate(
         papers,
         Array.isArray(data) ? {} : data,
@@ -80,21 +128,13 @@ async function reanalyzeSelected(ids) {
 
     // 找到目标论文，清除旧的 analysis
     const toReanalyze = [];
-    const idSet = new Set(ids.map(id => normalizedId(id)));
 
     for (const p of papers) {
         const aid = normalizedId(p);
         if (idSet.has(aid)) {
-            // 清除旧分析结果但保留论文基本信息
-            const cleanPaper = {
-                ...p,
-                analysis: undefined,
-                parsed: undefined,
-                error: undefined
-            };
-            delete cleanPaper.analysis;
-            delete cleanPaper.parsed;
-            delete cleanPaper.error;
+            const cleanPaper = dailyFreshSources.prepareDailyPaper(
+                resetReaderForSelectedReanalysis(p), dailySourcePlan
+            );
             toReanalyze.push(cleanPaper);
         }
     }
@@ -136,23 +176,25 @@ async function reanalyzeSelected(ids) {
     const analyzedResults = [];
     const attemptResults = [];
     let digestStatusUpdated = 0;
-    const { stats } = await analyzeBatch(toReanalyze, {
+    const runSealedDailyAnalysis = () => analyzeBatch(toReanalyze, {
         checkpointFilePath: RESULT_FILE,
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(RESULT_FILE);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (!latest) return { paper, skip: false };
-            const latestForReanalysis = { ...paper, ...latest };
-            delete latestForReanalysis.analysis;
-            delete latestForReanalysis.parsed;
-            delete latestForReanalysis.error;
-            return { paper: latestForReanalysis, skip: false };
+            return {
+                paper: dailyFreshSources.prepareDailyPaper(
+                    resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
+                ),
+                skip: false
+            };
         },
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: 0,
+        analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan),
         onPaperResultLocked: async (paper, result) => {
             const attempted = result.result || {
                 ...paper,
@@ -184,6 +226,9 @@ async function reanalyzeSelected(ids) {
             }
         }
     });
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(
+        dailySourcePlan, runSealedDailyAnalysis
+    );
 
     // 合并结果：用新结果替换旧结果
     const mergedMap = new Map();
@@ -269,4 +314,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { reanalyzeSelected, updateReanalysisStats };
+module.exports = { reanalyzeSelected, updateReanalysisStats, resetReaderForSelectedReanalysis };

@@ -34,5 +34,9 @@ arXiv：{arxivId}
 3. 旧式原表逐格绑定：{"tableIndex":N,"sourceType":"artifact_table","sourceTableOrdinal":J,"cellBindings":[{"renderedRow":0,"renderedColumn":0,"sourceRow":0,"sourceColumn":0}],"sourceQuotes":[]}。
    正文直接写Markdown，每个渲染单元格都须逐字匹配原始DOM单元格且完整映射。上面的cellBindings只是单格格式示意，实际须覆盖表头与所有数据格。该模式也不能使用TABLE marker。
 
+如果机械契约中给出了 `atomicOperation.kind=relocate_result_table_v1`，这是一次“剪切后插入”的原子搬移，不是复制或追加：必须从 donorSectionPath 删除恰好 1 张原表/`[[TABLE_N]]`，并在 destinationSectionPath 的结果或消融小节插入恰好 1 张带数字的 Markdown 表。新表必须插在该目标小节现有表格或 `[[TABLE_N]]` 之前，使它继承 donorGlobalTableIndex；不要把新表追加到目标小节已有的 `[[TABLE_2]]`、`[[TABLE_3]]` 等 marker 后面，也不要改变 tableBindings 中对应 binding 的 tableIndex。三个 requiredReplacementPaths 必须全部输出，且目标正文中要保留表前比较问题和表后差异/边界解释。
+
+如果机械契约中给出了 `atomicOperation.kind=add_result_table_v1`，候选正文少了一张已经声明的表格绑定：这是“新增一张”，不是搬移、复制或把配置表改名。只修改 destinationSectionPath 的结果/消融小节正文和 bindingPath 对应的 `source_quotes` 绑定；在正文中新增恰好 1 张带至少4个原文数字的标准 Markdown 结果表，使总 Markdown 表数等于 tableBindings 数量，并让它按 tableIndex 顺序落在正确位置。表内所有数字、单位、基线与实际策略必须由论文 evidence 中的连续原句逐字支持；若当前 quote 只是配置句，必须在允许的 bindingPath 中替换为主结果原文 quote，不能把配置数字冒充结果。两个 requiredReplacementPaths 必须全部输出，且新表前后保留比较问题与差异/边界解释。
+
 若当前反馈同时包含多个表的结构错误与篇幅不足，本次补丁应同时修正相应表绑定及正文，并选适量允许的小节补足机制/执行过程/公平比较的解释。最多8个替换节点；绑定项和正文各算一个节点。已给出所有可扩写正文不表示要重写所有小节。优先保留正确事实与其他已通过内容，不要只修第一张表或只删marker就提交。
 ~~~

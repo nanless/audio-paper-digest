@@ -128,6 +128,11 @@ test('daily recovery entrypoints replay only current sealed PDF/TXT sources and 
     // the custom operation proves source and figure scope without a model call.
     const complete = validAnalysisPaper(ID, { title: paper.title });
     const descriptor = daily.readDailyFreshSource(plan, complete).freshSourceDescriptor;
+    complete.sourceSha256 = descriptor.sourceSha256;
+    complete.analysisManifest.sourceAcquisition = {
+        ...(complete.analysisManifest.sourceAcquisition || {}),
+        sourceSha256: descriptor.sourceSha256
+    };
     complete.freshRewriteProvenance = {
         contract: 'fresh-source-analysis-v1', runId: plan.runId,
         sourceGeneration: descriptor.sourceGeneration,
@@ -136,6 +141,7 @@ test('daily recovery entrypoints replay only current sealed PDF/TXT sources and 
         sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
         sourceOnly: true, oldGeneratedTextIncluded: false
     };
+    complete.analysisManifest.freshRewriteProvenance = structuredClone(complete.freshRewriteProvenance);
     writeJson(Config.FILES.deepAnalysisResult, {
         batchDate: DATE, status: 'complete', dailyFreshSourceRun: daily.dailyFreshSourceReference(plan), papers: [complete]
     });

@@ -170,16 +170,26 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     const bindings = input.tableBindings;
     if (nodes.length <= bindings.length || bindings.length === 0) return 0;
     const solutions = [];
+    // Conference-PDF extraction can flatten a grouped number such as
+    // `169,221` in the quote while the authored table contains `169221`.
+    // Keep this matcher local to the pruning proof: final source binding still
+    // performs the authoritative numeric replay.  The old matcher split the
+    // grouped source number into `169` and `221`, making an otherwise provable
+    // SounDiT table look unbound.
     const numericTokens = value => String(value || '').match(
-        /(?<![A-Za-z0-9])\d+(?:\.\d+)?%?/g
+        /(?<![A-Za-z0-9])[-+]?(?:\d{1,3}(?:[ ,]\d{3})+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?:\s*(?:k|m|b|samples?|bins?|epochs?|%|dB|kHz|MHz|Hz|GB|MB|KB|ms|s|h))?(?![A-Za-z0-9])/gi
     ) || [];
+    const canonicalNumericToken = token => String(token || '').normalize('NFKC')
+        .replace(/[\u2212\uFF0D]/g, '-')
+        .replace(/[ ,](?=\d{3}(?:\D|$))/g, '')
+        .replace(/\s+/g, '').toLowerCase().replace(/%$/, '');
     const sourceQuoteTokens = binding => new Set(
         (Array.isArray(binding?.sourceQuotes) ? binding.sourceQuotes : [])
             .flatMap(numericTokens)
-            .map(token => token.replace(/%$/, ''))
+            .map(canonicalNumericToken)
     );
     const tableTokens = node => new Set(
-        numericTokens(node?.table?.markdown || '').map(token => token.replace(/%$/, ''))
+        numericTokens(node?.table?.markdown || '').map(canonicalNumericToken)
     );
     const matches = (binding, node) => Object.prototype.hasOwnProperty.call(binding || {}, 'selection')
         ? Boolean(node.marker && node.markerIndex === binding.tableIndex)
@@ -200,8 +210,82 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
         }
     };
     visit(0, 0, []);
-    if (solutions.length !== 1) return 0;
-    const selected = new Set(solutions[0]);
+
+    // The strict order-preserving proof above remains authoritative for the
+    // ordinary case.  A second, still fail-closed proof handles a mixed draft
+    // where selection markers and authored quote tables were emitted in a
+    // different order.  It is intentionally limited to source_quotes with at
+    // least one quantitative overlap.  A generated `来源证据` table is the
+    // deterministic recovery output for a quote binding; prefer it over an
+    // unbound, richer handwritten duplicate because only the quoted numbers
+    // are authenticated at this stage.
+    let selectedIndexes = solutions.length === 1 ? solutions[0] : null;
+    let usedRelaxedAssignment = false;
+    if (!selectedIndexes) {
+        const selectionIndexes = new Map();
+        const sourceEntries = [];
+        for (const [bindingIndex, binding] of bindings.entries()) {
+            if (Object.prototype.hasOwnProperty.call(binding || {}, 'selection')) {
+                const candidates = nodes.flatMap((node, index) => (
+                    node.marker && node.markerIndex === binding.tableIndex ? [index] : []
+                ));
+                if (candidates.length !== 1) return 0;
+                selectionIndexes.set(bindingIndex, candidates[0]);
+                continue;
+            }
+            const sourceTokens = sourceQuoteTokens(binding);
+            if (sourceTokens.size === 0) return 0;
+            const candidates = nodes.flatMap((node, index) => {
+                if (node.marker || !node.table) return [];
+                const tableSet = tableTokens(node);
+                const overlap = [...sourceTokens].filter(token => tableSet.has(token));
+                if (overlap.length === 0) return [];
+                const generatedEvidence = /^\|\s*来源证据\s*\|/m.test(node.table.markdown);
+                const exact = overlap.length === sourceTokens.size;
+                const score = (generatedEvidence ? 1_000_000 : 0)
+                    + (exact ? 100_000 : 0)
+                    + overlap.length * 1_000
+                    + Math.round((overlap.length * 100) / sourceTokens.size);
+                return [{ index, score }];
+            });
+            if (candidates.length === 0) return 0;
+            sourceEntries.push({ bindingIndex, candidates });
+        }
+        let bestScore = -1;
+        let best = null;
+        let bestCount = 0;
+        const visitAssignments = (entryIndex, used, assigned, score) => {
+            if (entryIndex === sourceEntries.length) {
+                const all = [...selectionIndexes.values(), ...assigned.map(item => item.index)];
+                if (new Set(all).size !== bindings.length) return;
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = all;
+                    bestCount = 1;
+                } else if (score === bestScore) {
+                    bestCount += 1;
+                }
+                return;
+            }
+            const entry = sourceEntries[entryIndex];
+            for (const candidate of entry.candidates) {
+                if (used.has(candidate.index) || selectionIndexesHas(candidate.index)) continue;
+                used.add(candidate.index);
+                assigned.push(candidate);
+                visitAssignments(entryIndex + 1, used, assigned, score + candidate.score);
+                assigned.pop();
+                used.delete(candidate.index);
+            }
+        };
+        const selectionIndexesHas = index => new Set(selectionIndexes.values()).has(index);
+        visitAssignments(0, new Set(), [], 0);
+        if (bestCount === 1) {
+            selectedIndexes = best;
+            usedRelaxedAssignment = true;
+        }
+    }
+    if (!selectedIndexes || selectedIndexes.length !== bindings.length) return 0;
+    const selected = new Set(selectedIndexes);
     const unbound = nodes.map((node, index) => ({ node, index }))
         .filter(item => !selected.has(item.index));
     if (unbound.length !== nodes.length - bindings.length
@@ -234,8 +318,12 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
         draft.sections[sectionIndex].body = blocks.join('\n\n').trim();
     }
     const remaining = locateReaderDraftTables(draft);
-    if (remaining.length !== bindings.length
-        || !remaining.every((node, index) => matches(bindings[index], node))) return 0;
+    if (remaining.length !== bindings.length) return 0;
+    // Relaxed mixed-order assignments are deliberately checked by the
+    // one-to-one score proof above; their node order is normalized by the
+    // subsequent mixed-binding pass.  Reapplying the old positional matcher
+    // here would reject the very marker/table permutation this proof handled.
+    if (!usedRelaxedAssignment && !remaining.every((node, index) => matches(bindings[index], node))) return 0;
     input.sections = draft.sections;
     return unbound.length;
 }

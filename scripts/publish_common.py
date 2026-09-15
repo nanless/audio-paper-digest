@@ -4995,10 +4995,55 @@ def publish_table_currency_spans(text):
     return spans
 
 
+def normalize_markdown_table_inr_currency(text):
+    """Normalize mixed INR/USD table cells without guessing at equations.
+
+    A source-bound table may contain a note such as ``INR 6,499 / $74.49``.
+    That cell is not eligible for the exact single-currency waiver above, but
+    the dollar amount is still plainly currency because the same cell names
+    INR.  Restrict this repair to real Markdown table cells and to dollar
+    amounts followed by a cell boundary or punctuation; prose and math-like
+    expressions remain untouched and therefore fail closed.
+    """
+    output = []
+    fence = None
+    amount = re.compile(
+        r'(?<![\\$])\$(\d+(?:,\d{3})*(?:\.\d+)?)(?![\d$])'
+        r'(?=\s*(?:\||[,.;:，。；：!?！？)\]]|$))'
+    )
+    for line in str(text or '').splitlines(keepends=True):
+        fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence_match:
+            marker = fence_match.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            output.append(line)
+            continue
+        if fence is None and line.lstrip().startswith('|') and not _is_markdown_table_separator(line):
+            pipes = list(re.finditer(r'(?<!\\)\|', line))
+            rebuilt = []
+            cursor = 0
+            for left, right in zip(pipes, pipes[1:]):
+                rebuilt.append(line[cursor:left.end()])
+                cell = line[left.end():right.start()]
+                if re.search(r'(?<![A-Za-z])INR(?![A-Za-z])', cell, flags=re.IGNORECASE):
+                    cell = amount.sub(r'\1 美元', cell)
+                rebuilt.append(cell)
+                cursor = right.start()
+            if rebuilt:
+                rebuilt.append(line[cursor:])
+                line = ''.join(rebuilt)
+        output.append(line)
+    return ''.join(output)
+
+
 def fix_latex_delimiters(text):
     r"""转换明确的数学定界符；不把金额、代码或跨表格单元格内容当公式。"""
     if not text:
         return text
+    text = normalize_markdown_table_inr_currency(text)
     # These are literal source bytes, not prose eligible for math rewriting.
     # An unclosed fenced block is conservatively protected through EOF.
     protected = re.compile(
@@ -5012,6 +5057,35 @@ def fix_latex_delimiters(text):
     def convert_prose(prose):
         prose = re.sub(r'(\^|_)\{<([a-zA-Z])\}', r'\1{\\lt \2}', prose)
         prose = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', prose, flags=re.DOTALL)
+        # Readers sometimes write a prose price range as ``$100-200 USD``.
+        # Unlike a standalone dollar amount in a dedicated table cell, this
+        # is not a valid Markdown currency literal: the format gate quite
+        # correctly treats the dollar as a possible math delimiter. Keep the
+        # amount readable while making the currency unambiguous. Requiring
+        # an explicit USD marker keeps expressions such as ``$5 + 2``
+        # fail-closed instead of guessing that they are money.
+        prose = re.sub(
+            r'(?<![\\$])\$(\d+(?:,\d{3})*(?:\.\d+)?)(?:\s*[-–]\s*\$?(\d+(?:,\d{3})*(?:\.\d+)?))?'
+            r'\s*(USD|US dollars?)\b',
+            lambda match: (
+                f'{match.group(1)}'
+                + (f'–{match.group(2)}' if match.group(2) else '')
+                + ' 美元'
+            ),
+            prose,
+            flags=re.IGNORECASE,
+        )
+        # Some readers omit the currency suffix but use a decimal amount in
+        # prose (for example ``$113.54，高于 $93.80``). Treat only amounts
+        # with at least two integer digits and a decimal part as currency;
+        # the narrow shape leaves expressions such as ``$5 + 2`` and the
+        # ambiguous ``$20, $30 and $40`` fail-closed.
+        prose = re.sub(
+            r'(?<![\\$])\$(\d{2,}(?:,\d{3})*\.\d+)'
+            r'(?=\s*(?:[，。；：、,.!?！？)\]]|$|[\u3400-\u9fff]))',
+            r'\1 美元',
+            prose,
+        )
 
         def inline_math(match):
             body = match.group(1)
@@ -5052,6 +5126,38 @@ def escape_html_like_tags(text):
     r"""转义论文中可能被 Hugo 解析为 HTML 的标记。"""
     if not text:
         return text
+    # Reader prose often quotes mini-language tokens such as ``<1 2>`` or
+    # ``<a b c>``. They are not tags, but CommonMark still hands them to the
+    # HTML parser; an unmatched or attribute-like token can then corrupt the
+    # rendered nesting. Escape only angle-bracket spans containing
+    # whitespace, leaving ordinary URLs and explicit tag handling unchanged.
+    text = re.sub(
+        r'(?<![A-Za-z0-9`])<([^>\n]*\s[^>\n]*)>',
+        lambda match: f'&lt;{match.group(1)}&gt;',
+        text,
+    )
+    # A model may accidentally nest an inline control token inside a code
+    # span, for example `` `turn off `<EOT>``.  The middle backtick closes the
+    # span, so the generic tag pass would normally miss ``<EOT>`` because it
+    # is immediately preceded by a backtick.  Repair only this unambiguous
+    # doubled-closing-backtick shape; the entity keeps the token literal while
+    # remaining readable as ``<EOT>`` in the rendered code span.
+    text = re.sub(
+        r'`([^`\n]*)`<([A-Za-z][A-Za-z0-9_†-]{0,40})>``',
+        lambda match: f'`{match.group(1)}&lt;{match.group(2)}&gt;`',
+        text,
+    )
+    protected_code = []
+
+    def protect_inline_code(match):
+        protected_code.append(match.group(0))
+        return f'PD_PROTECTED_INLINE_CODE_{len(protected_code) - 1}'
+
+    # Protect complete single-line inline-code spans before looking for raw
+    # HTML-like tags. Otherwise a valid span such as `` `turn off <EOT>` ``
+    # is mistaken for prose and the tag pass inserts a second pair of
+    # backticks, producing the invalid `` `turn off `<EOT>`` shape.
+    text = re.sub(r'(?<!`)(`+)(?!`)([^`\n]*?)\1(?!`)', protect_inline_code, text)
     # ``publish-to-blog.py`` deliberately emits these two exact, attribute-free
     # container tags for the collapsible scoring section.  Protect them before
     # the generic paper-token escaping below; otherwise the final catch-all
@@ -5088,6 +5194,8 @@ def escape_html_like_tags(text):
     )
     for index, tag in enumerate(safe_containers):
         text = text.replace(f'PD_SAFE_HTML_CONTAINER_{index}', tag)
+    for index, code in enumerate(protected_code):
+        text = text.replace(f'PD_PROTECTED_INLINE_CODE_{index}', code)
     return text
 
 
@@ -5385,6 +5493,82 @@ def escape_symbolic_markdown_table_cells(text):
     return ''.join(output)
 
 
+_STATISTICAL_SIGNIFICANCE_STARS = re.compile(
+    r'(?P<prefix>\bp\s*(?:=|<|>|≤|≥)\s*'
+    r'\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?P<stars>(?<!\\)\*{1,3})'
+    r'(?=\s*(?:\||[,.;，。；]|$))',
+    flags=re.IGNORECASE,
+)
+
+
+_TECHNICAL_NOTATION_ASTERISK = re.compile(
+    r'(?<!\\)(?P<token>\b[A-Za-z]+\d+)(?P<star>\*)(?!\*)'
+)
+
+
+def escape_technical_notation_asterisks(text):
+    """Escape literal stars in compact technical notation such as ``H1*``.
+
+    Acoustic notation uses stars as part of names (for example ``H1*-H2*``),
+    not as Markdown emphasis.  Escaping only a letter/digit token ending in a
+    star preserves authored emphasis while preventing CommonMark from pairing
+    the notation with surrounding bold markers.  YAML frontmatter is kept
+    byte-stable because a backslash in a double-quoted YAML scalar changes its
+    meaning.  The operation is idempotent.
+    """
+    frontmatter_match = re.match(r'^---\n.*?\n---\n', str(text or ''), flags=re.DOTALL)
+    prefix = frontmatter_match.group(0) if frontmatter_match else ''
+    body = str(text or '')[len(prefix):]
+    output = []
+    fence = None
+    for line in body.splitlines(keepends=True):
+        fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence_match:
+            marker = fence_match.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            output.append(line)
+            continue
+        if fence is None:
+            line = _TECHNICAL_NOTATION_ASTERISK.sub(r'\g<token>\\\g<star>', line)
+        output.append(line)
+    return prefix + ''.join(output)
+
+
+def escape_statistical_significance_stars(text):
+    """Escape literal significance stars after p-values.
+
+    Tables often use ``p = 0.00908**`` or ``p < 2.2e-16***`` to encode
+    significance levels.  CommonMark interprets the bare stars as emphasis
+    delimiters, so the published page can fail the Markdown gate even though
+    the source fact is valid.  Restrict the repair to an unescaped p-value
+    followed by a complete star run; ordinary emphasis and code are left
+    untouched.  The operation is idempotent.
+    """
+    output = []
+    fence = None
+    for line in str(text or '').splitlines(keepends=True):
+        fence_match = re.match(r'^\s*(`{3,}|~{3,})', line)
+        if fence_match:
+            marker = fence_match.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            output.append(line)
+            continue
+        if fence is None:
+            line = _STATISTICAL_SIGNIFICANCE_STARS.sub(
+                lambda match: match.group('prefix')
+                + ''.join('\\' + char for char in match.group('stars')),
+                line,
+            )
+        output.append(line)
+    return ''.join(output)
+
+
 def sanitize_markdown_for_publish(text):
     """发布前通用 Markdown 清洗。"""
     # LLM 输出偶尔会携带 UTF-8 替换字符；先清理后再进入 staging，
@@ -5416,6 +5600,8 @@ def sanitize_markdown_for_publish(text):
     text = fix_yaml_double_commas(text)
     text = fix_yaml_unbalanced_quotes(text)
     text = escape_symbolic_markdown_table_cells(text)
+    text = escape_technical_notation_asterisks(text)
+    text = escape_statistical_significance_stars(text)
     # 评分审计和 manual evidence ledger 需要这些锚点来约束上游事实，
     # 但它们是内部 provenance，不应泄漏到面向读者的博客正文。这里只
     # 清理派生的发布视图，不修改 analysis / parsed canonical 数据。

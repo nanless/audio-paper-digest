@@ -607,7 +607,9 @@ function createLockRelease(lockPath, ownerToken, acquiredSnapshot) {
                 ignoreDirectoryMtime: true, ignoreLeaseMtime: true
             })
                 || first.owner?.token !== ownerToken || first.owner?.pid !== process.pid
-                || first.owner?.hostname !== os.hostname()
+                // Hostname is descriptive metadata, not the ownership proof.
+                // macOS can refresh it during a long-running process; the
+                // token + PID pair still proves this process owns the lock.
                 || JSON.stringify(first.entryNames) !== JSON.stringify(['owner.json'])) return false;
             const second = readFileLockSnapshot(lockPath);
             if (!sameFileLockSnapshot(first, second)) return false;

@@ -5,15 +5,24 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
 const api = require('./lib/conference-process.js');
+const recovery = require('./lib/conference-process-recovery.js');
 
-const USAGE = '--dry-run|--apply|--status --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3]';
+const USAGE = '--dry-run|--apply|--status|--source-upgrade-plan|--source-upgrade-apply|--source-upgrade-promote --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3] [--retry-failed]; source upgrade: --from UUID; apply requires --plan-sha SHA --paper-ids ID,ID --authorize-new-analysis; promote requires --plan-sha SHA [--preserve-original-complete]';
 function parseArgs(argv) {
     if (argv[0] === '--legacy-disabled') throw new Error('New-conference execution/analyze/postprocess must use conference:new:process');
-    const mode = argv[0]; if (!['--dry-run', '--apply', '--status'].includes(mode)) throw new Error(`Use ${USAGE}`);
+    const mode = argv[0]; if (!['--dry-run', '--apply', '--status', '--source-upgrade-plan', '--source-upgrade-apply', '--source-upgrade-promote'].includes(mode)) throw new Error(`Use ${USAGE}`);
+    const upgrade = mode.startsWith('--source-upgrade-');
     const values = {};
     for (let index = 1; index < argv.length; index += 2) {
         const flag = argv[index], value = argv[index + 1];
-        if (!['--catalog', '--report', '--filter', '--concurrency'].includes(flag) || !value || Object.hasOwn(values, flag)) {
+        if (flag === '--retry-failed' || flag === '--authorize-new-analysis' || flag === '--preserve-original-complete') {
+            if ((flag === '--retry-failed' && !['--apply', '--source-upgrade-apply'].includes(mode))
+                || (flag === '--authorize-new-analysis' && mode !== '--source-upgrade-apply')
+                || (flag === '--preserve-original-complete' && mode !== '--source-upgrade-promote')
+                || values[flag]) throw new Error(`Use ${USAGE}`);
+            values[flag] = true; index -= 1; continue;
+        }
+        if (![ '--catalog', '--report', '--filter', '--concurrency', ...(upgrade ? ['--from', '--plan-sha', '--paper-ids'] : []) ].includes(flag) || !value || Object.hasOwn(values, flag)) {
             throw new Error(`Use ${USAGE}`);
         }
         values[flag] = value;
@@ -22,8 +31,18 @@ function parseArgs(argv) {
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--filter'] || '')
         || (values['--concurrency'] && !/^[1-3]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
+    if (upgrade && !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--from'] || '')) throw new Error(`Use ${USAGE}`);
+    if (mode === '--source-upgrade-plan' && (values['--plan-sha'] || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
+    if (mode === '--source-upgrade-promote' && (!/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '') || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
+    if (mode === '--source-upgrade-apply' && (!values['--authorize-new-analysis'] || !/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '')
+        || !values['--paper-ids'] || values['--paper-ids'].split(',').some(id => !/^conference:[a-z0-9:._-]+$/.test(id)))) throw new Error(`Use ${USAGE}`);
     return { apply: mode === '--apply', statusOnly: mode === '--status', catalogName: values['--catalog'],
-        reportName: values['--report'], filterId: values['--filter'], concurrency: Number(values['--concurrency'] || 1) };
+        reportName: values['--report'], filterId: values['--filter'], concurrency: Number(values['--concurrency'] || 1),
+        ...(values['--retry-failed'] ? { retryFailed: true } : {}),
+        ...(upgrade ? { sourceUpgrade: mode === '--source-upgrade-plan' ? 'plan' : mode === '--source-upgrade-promote' ? 'promote' : 'apply', fromProcessId: values['--from'],
+            ...(mode === '--source-upgrade-promote' ? { planSha256: values['--plan-sha'] } : {}),
+            ...(mode === '--source-upgrade-promote' && values['--preserve-original-complete'] ? { preserveOriginalComplete: true } : {}),
+            ...(mode === '--source-upgrade-apply' ? { planSha256: values['--plan-sha'], paperIds: values['--paper-ids'].split(','), authorizeNewAnalysis: true } : {}) } : {}) };
 }
 function readSafeJson(filename) {
     const named = fs.lstatSync(filename);
@@ -58,7 +77,7 @@ function lockStatus(engine, filename) {
 function processStatus(options, runtime = {}) {
     const deps = { ...api.defaultDependencies?.(), ...(runtime.dependencies || {}) };
     const context = (deps.loadAuthority || api.loadAuthority)(options, deps);
-    const processId = api.deterministicUuid(api.stableHash(context.authority), 'conference-process-v1');
+    const processId = recovery.resolveProcess(context, deps, api);
     const directory = (api.safeProcessDirectory || ((root, id) => path.join(root, id)))
         (deps.files.conferenceProcessDir, processId, false);
     const filename = path.join(directory, 'state.json');
@@ -71,12 +90,20 @@ function processStatus(options, runtime = {}) {
     }, {});
     const result = { status: state.status, processId, conferenceId: state.authority.conferenceId,
         stateSha256: state.stateSha256, papers: counts, completionReceiptSha256: state.completionReceiptSha256 };
+    if (state.batchFailure) result.batchFailure = state.batchFailure;
     const operationLock = lockStatus(deps.engine, path.join(directory, '.operation'));
     if (operationLock) result.operationLock = operationLock;
     return result;
 }
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('conference-process.js'); const options = parseArgs(argv);
+    if (options.sourceUpgrade) {
+        const upgrade = require('./lib/conference-source-upgrade.js');
+        const result = options.sourceUpgrade === 'plan' ? upgrade.planSourceUpgrade(options, runtime.dependencies || {})
+            : options.sourceUpgrade === 'promote' ? await upgrade.promoteSourceUpgrade(options, runtime.dependencies || {})
+                : await upgrade.applySourceUpgrade(options, runtime.dependencies || {});
+        console.log(JSON.stringify(result)); return result;
+    }
     const result = options.statusOnly ? processStatus(options, runtime)
         : await (runtime.run || api.runConferenceProcess)(options, runtime.dependencies || {});
     console.log(JSON.stringify(result)); return result;

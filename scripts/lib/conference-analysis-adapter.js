@@ -485,7 +485,9 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
     }
     let finalPaper = loaded.analysis.papers[0];
     await analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory, paperId: loaded.run.paperId,
-        sourceDetails: loaded.source.sourceDetails }, () => engine.analyzeBatch([finalPaper], {
+        sourceDetails: loaded.source.sourceDetails,
+        ...(overrides.readerRetryEpoch !== undefined
+            ? { readerRetryEpoch: overrides.readerRetryEpoch } : {}) }, () => engine.analyzeBatch([finalPaper], {
         concurrency, maxRetries: overrides.maxRetries ?? 2, checkpointFilePath: analysisFile, saveInterval: 0,
         preparePaperLocked: () => {
             const current = readJson(analysisFile); const paper = current.papers[0];

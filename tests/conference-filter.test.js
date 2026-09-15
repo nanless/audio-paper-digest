@@ -197,9 +197,12 @@ test('bulk keyword prepare authenticates source collections once and preserves t
 
 test('core audio conferences fail open while broad conferences retain deterministic rejection', () => {
     const examples = [
+        { conferenceId: 'chime-2026', title: 'Multichannel Speech Enhancement' },
         { conferenceId: 'dafx-2026', title: 'Efficient Plate Reverberator Design' },
+        { conferenceId: 'jep-2026', title: 'Speech Prosody Analysis' },
         { conferenceId: 'nime-2026', title: 'A Responsive Piano Interface' },
         { conferenceId: 'odyssey-2026', title: 'Robust Identity Embeddings' },
+        { conferenceId: 'speechprosody-2026', title: 'Prosodic Representation Learning' },
         { conferenceId: 'iwslt-2026', title: 'Simultaneous Translation with Adaptive Policies' }
     ];
     const abstract = 'We present a new system design with controlled experiments, quantitative comparisons, ablation studies, and reproducible evaluation protocols.';
@@ -213,7 +216,8 @@ test('core audio conferences fail open while broad conferences retain determinis
     assert.equal(broad.pass, false);
     assert.equal(broad.conferenceCategoryFallback, false);
     assert.deepEqual(filter.CORE_AUDIO_CONFERENCE_IDS,
-        ['dafx-2026', 'iwslt-2026', 'nime-2026', 'odyssey-2026']);
+        ['chime-2026', 'dafx-2026', 'icmc-2026', 'iwslt-2026', 'jep-2026', 'nime-2026', 'odyssey-2026',
+            'speechprosody-2026']);
     assert.equal(filter.FILTER_CONFIG_BINDING.coreConferenceFallbackVersion,
         filter.CORE_CONFERENCE_FALLBACK_VERSION);
 });

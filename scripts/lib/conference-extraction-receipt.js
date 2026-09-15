@@ -20,11 +20,15 @@ const WEAK_PROFILE = 'weak-pdf-layout-v1';
 const REPLAYABLE_PROFILE = 'replayable-pdf-layout-v1';
 const OFFSET_UNIT = 'utf8-byte';
 const EXTRACTOR_NAME = 'audio-paper-digest-conference-structured';
-const EXTRACTOR_VERSION = '2.2.0';
+const EXTRACTOR_VERSION = '2.2.3';
 const BACKEND_NAME = 'pymupdf';
 const BACKEND_VERSION = '1.27.2.3';
 const OPTIONS = Object.freeze({ minimumTextCharacters: 5000,
     normalization: 'unicode-nfc-lf-rstrip-v1', pageSeparator: '\n\f\n' });
+const SHORT_PROCEEDINGS_OPTIONS = Object.freeze({ minimumTextCharacters: 3000,
+    normalization: OPTIONS.normalization, pageSeparator: OPTIONS.pageSeparator });
+const SHORT_PROCEEDINGS_CONFERENCES = new Set(['jep-2026', 'icmc-2026']);
+const SUPPORTED_OPTIONS = Object.freeze([OPTIONS, SHORT_PROCEEDINGS_OPTIONS]);
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const SAFE_PDF_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.pdf$/;
 const SAFE_TEXT_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.txt$/;
@@ -202,8 +206,15 @@ function normalizeSourceEntry(value, kind) {
 }
 function normalizeOptions(value) {
     exact(value, Object.keys(OPTIONS), 'extraction options');
-    if (stableHash(value) !== stableHash(OPTIONS)) fail('extraction options differ from the supported conference profile');
-    return clone(OPTIONS);
+    if (!SUPPORTED_OPTIONS.some(profile => stableHash(value) === stableHash(profile))) {
+        fail('extraction options differ from the supported conference profiles');
+    }
+    return clone(value);
+}
+
+function optionsForConference(conferenceId) {
+    return clone(SHORT_PROCEEDINGS_CONFERENCES.has(String(conferenceId || '').trim())
+        ? SHORT_PROCEEDINGS_OPTIONS : OPTIONS);
 }
 function normalizeRequest(value, requestName) {
     exact(value, ['contract', 'version', 'paperId', 'sourceIdentity', 'source', 'outputs', 'options'], 'extraction request');
@@ -287,6 +298,69 @@ function validateMetadataIdentity(metadata, request) {
     catch (error) { fail(`metadata identity evidence does not bind canonical paperId: ${error.message}`); }
     return { conference, identity };
 }
+// PDF layouts are source evidence, not the author's TeX. Keep this gate shared
+// with source-context so a metadata-only reload cannot promote a candidate.
+function validatePdfFormulaRecord(formula, index, audit, pageCount) {
+    exact(formula, ['ordinal', 'page', 'tex', 'sourceRef', 'recoveryStatus', 'sourceExpression'], `formulas[${index}]`);
+    if (formula.ordinal !== index + 1 || !Number.isSafeInteger(formula.page)
+        || formula.page < 1 || formula.page > pageCount || formula.tex !== ''
+        || formula.recoveryStatus !== 'layout-preserved') fail('PDF formula must preserve layout without publishable TeX');
+    text(formula.sourceRef, 'formula.sourceRef');
+    const expression = formula.sourceExpression;
+    exact(expression, ['contract', 'kind', 'originalTexAvailable', 'layoutSha256', 'renderSha256', 'recoveredTex', 'crop'], 'formula.sourceExpression');
+    if (expression.contract !== 'pdf-formula-source-expression-v1'
+        || expression.kind !== 'recovered-from-pdf-layout' || expression.originalTexAvailable !== false
+        || !(expression.recoveredTex === null || typeof expression.recoveredTex === 'string' && expression.recoveredTex.length <= 4000)) {
+        fail('PDF formula source expression cannot claim original TeX');
+    }
+    const page = audit?.pages?.find(item => item.page === formula.page);
+    if (!page || assertSha(expression.renderSha256, 'formula.renderSha256') !== page.sha256) {
+        fail('PDF formula has no bound original page pixels');
+    }
+    const matches = (audit.formulaCandidates || []).filter(item => item.page === formula.page
+        && item.layoutSha256 === expression.layoutSha256 && item.renderSha256 === page.sha256);
+    if (matches.length !== 1) fail('PDF formula must bind one layout candidate');
+    const candidate = matches[0];
+    const layout = candidate.layout;
+    exact(layout, ['contract', 'bbox', 'glyphs'], 'formula glyph layout');
+    const coordinates = (value, length) => Array.isArray(value) && value.length === length
+        && value.every(number => typeof number === 'number' && Number.isFinite(number));
+    const crop = expression.crop;
+    exact(crop, ['bbox', 'dpi', 'mediaType', 'sha256', 'base64'], 'formula crop');
+    if (!coordinates(crop.bbox, 4) || stableHash(crop.bbox) !== stableHash(candidate.cropBBox)
+        || candidate.regionStatus !== 'bounded-formula-region'
+        || crop.bbox[2] <= crop.bbox[0] || crop.bbox[2] - crop.bbox[0] > 420
+        || crop.bbox[3] <= crop.bbox[1] || crop.bbox[3] - crop.bbox[1] > 96
+        || crop.dpi !== 144 || crop.mediaType !== 'image/png'
+        || typeof crop.base64 !== 'string' || crop.base64.length > 4 * Math.ceil(512 * 1024 / 3)
+        || !/^[A-Za-z0-9+/]+={0,2}$/.test(crop.base64)) fail('PDF formula crop is invalid');
+    const cropBytes = Buffer.from(crop.base64, 'base64');
+    if (cropBytes.length < 24 || cropBytes.length > 512 * 1024
+        || !cropBytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+        || cropBytes.readUInt32BE(16) < 1 || cropBytes.readUInt32BE(16) > 842
+        || cropBytes.readUInt32BE(20) < 1 || cropBytes.readUInt32BE(20) > 194
+        || sha256(cropBytes) !== assertSha(crop.sha256, 'formula crop SHA')) fail('PDF formula crop pixels drifted');
+    if (layout.contract !== 'pdf-formula-glyph-layout-v1' || !coordinates(layout.bbox, 4)
+        || !Array.isArray(layout.glyphs) || !layout.glyphs.length
+        || candidate.status !== 'visual-only-no-original-tex'
+        || candidate.derivedTex !== expression.recoveredTex
+        || stableHash(layout) !== assertSha(expression.layoutSha256, 'formula.layoutSha256')) {
+        fail('PDF formula layout evidence drifted');
+    }
+    for (const glyph of layout.glyphs) {
+        exact(glyph, ['text', 'bbox', 'origin', 'size', 'font', 'direction'], 'formula glyph');
+        if (typeof glyph.text !== 'string' || [...glyph.text].length !== 1
+            || typeof glyph.font !== 'string' || !coordinates(glyph.bbox, 4)
+            || !coordinates(glyph.origin, 2) || !coordinates(glyph.direction, 2)
+            || !Number.isFinite(glyph.size) || glyph.size <= 0
+            || glyph.bbox[0] < layout.bbox[0] || glyph.bbox[1] < layout.bbox[1]
+            || glyph.bbox[2] > layout.bbox[2] || glyph.bbox[3] > layout.bbox[3]) {
+            fail('PDF formula glyph geometry is invalid');
+        }
+    }
+    return formula;
+}
+
 function validateArtifact(value, textBytes) {
     const allowed = ['contract', 'version', 'profile', 'offsetUnit', 'flattenedTextSha256', 'pages',
         'tables', 'formulas', 'figures', 'payloadSha256'];
@@ -336,12 +410,11 @@ function validateArtifact(value, textBytes) {
             )) || table.cells.some(row => row.length !== table.cells[0].length)) fail('table cells must be a rectangular string matrix');
         }
         for (const [index, formula] of value.formulas.entries()) {
-            exact(formula, ['ordinal', 'page', 'tex', 'sourceRef', 'recoveryStatus'], `formulas[${index}]`);
-            if (!Number.isSafeInteger(formula.ordinal) || formula.ordinal !== index + 1
-                || !Number.isSafeInteger(formula.page) || formula.page < 1 || formula.page > value.pages.length
-                || formula.recoveryStatus !== 'complete') fail('formula records must be ordered and complete');
-            checkText(formula.tex, `formulas[${index}].tex`); checkText(formula.sourceRef, `formulas[${index}].sourceRef`);
+            validatePdfFormulaRecord(formula, index, value.visualAudit, value.pages.length);
         }
+        if (value.formulas.length > 32 || value.formulas.reduce((sum, formula) => (
+            sum + Buffer.from(formula.sourceExpression.crop.base64, 'base64').length
+        ), 0) > 8 * 1024 * 1024) fail('PDF formula image budget exceeded');
         for (const [index, figure] of value.figures.entries()) {
             exact(figure, ['ordinal', 'page', 'caption', 'sourceRef', 'recoveryStatus', 'asset'], `figures[${index}]`);
             if (!Number.isSafeInteger(figure.ordinal) || figure.ordinal !== index + 1
@@ -386,7 +459,7 @@ function normalizeReceipt(value) {
     if (!Number.isSafeInteger(value.pageCount) || value.pageCount < 1
         || !Number.isSafeInteger(value.text.utf8Bytes) || value.text.utf8Bytes < 1
         || !Number.isSafeInteger(value.text.nonWhitespaceCharacters)
-        || value.text.nonWhitespaceCharacters < OPTIONS.minimumTextCharacters) fail('receipt counts do not satisfy the extraction gate');
+        || value.text.nonWhitespaceCharacters < value.options.minimumTextCharacters) fail('receipt counts do not satisfy the extraction gate');
     const result = clone(value); result.request.file = safeName(value.request.file, SAFE_JSON_NAME, 'receipt.request.file');
     assertSha(value.request.sha256, 'receipt.request.sha256');
     result.source = { metadata: normalizeSourceEntry(value.source.metadata, 'metadata'),
@@ -524,6 +597,8 @@ function extractionHandleSnapshot(handle) {
 
 module.exports = { REQUEST_CONTRACT, ARTIFACT_CONTRACT, RECEIPT_CONTRACT, VERIFICATION_CONTRACT,
     VERSION, PROFILE, WEAK_PROFILE, REPLAYABLE_PROFILE, OFFSET_UNIT,
-    EXTRACTOR_NAME, EXTRACTOR_VERSION, BACKEND_NAME, BACKEND_VERSION, OPTIONS, SAFE_JSON_NAME,
+    EXTRACTOR_NAME, EXTRACTOR_VERSION, BACKEND_NAME, BACKEND_VERSION, OPTIONS, SHORT_PROCEEDINGS_OPTIONS,
+    isShortProceedingsConference: conferenceId => SHORT_PROCEEDINGS_CONFERENCES.has(String(conferenceId || '').trim()),
+    optionsForConference, SAFE_JSON_NAME,
     ConferenceExtractionReceiptError, loadExtractionHandle, extractionHandleSnapshot, stableHash,
-    pythonNonWhitespaceCharacters };
+    pythonNonWhitespaceCharacters, validatePdfFormulaRecord };

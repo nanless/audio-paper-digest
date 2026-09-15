@@ -22,6 +22,7 @@
 | 改进解读写法并比较重跑效果 | [Reader 写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
 | 整理历史标签、任务层级与分面检索 | [标签体系设计](tag-taxonomy-design.md) | [实施与验收计划](tag-taxonomy-implementation.md)、`npm run taxonomy:preview` |
 | 抓取 2026 新会议、按日更同源流程深度理解并生成会议汇总 | [会议论文工作流](conference-workflow.md) | [来源研究记录](research/2026-conferences/report-source.md)；`conference:new:*`；官方 acquisition → discovery → filter → analysis → postprocess |
+| 排查会议链恢复、发布与旧公式问题 | [会议链修复记录](conference-repair-notes.md) | 本轮修复范围、验收边界与仍需重建的旧页面 |
 | 整理本机会议 PDF、重写历史会议论文并生成会议汇总 | [会议论文工作流](conference-workflow.md) | 原 `conference:*` 只在 history workspace；历史 URL 映射与 review/push 未完成 |
 | 判断历史 ICASSP/ICLR/ICML 分支哪些能力可以迁回 main | [历史会议分支审计](conference-branch-audit.md) | [会议论文工作流](conference-workflow.md) |
 | 显式运行 Manual/人工路线 | [Manual 入口](../manual/README.md) | [Manual 工作流](../manual/docs/workflow.md) |

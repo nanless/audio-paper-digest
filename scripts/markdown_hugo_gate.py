@@ -267,6 +267,14 @@ def mask_rendered_symbolic_table_cells(text):
     than residual Markdown, so only complete plain ``th``/``td`` cells made
     exclusively from sequence glyphs are masked for the HTML-only gate.
     """
+    text = re.sub(
+        r'(?P<prefix>\bp\s*(?:=|&lt;|&gt;|≤|≥)\s*'
+        r'\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?P<stars>(?<!\\)\*{1,3})'
+        r'(?=\s*(?:<|[,.;，。；]|$))',
+        lambda match: match.group('prefix') + 'STATISTICAL_SIGNIFICANCE_STARS',
+        text,
+        flags=re.IGNORECASE,
+    )
     return re.sub(
         r'(<t[dh]\b[^>]*>)[ \t\r\n]*[*_]+[ \t\r\n]*(</t[dh]>)',
         r'\1SEQUENCE_SYMBOLS\2',

@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const recovery = require('./conference-process-recovery.js');
 
 const CONTRACT = 'conference-process-v1';
 const COMPLETION_CONTRACT = 'conference-process-completion-receipt-v1';
@@ -74,6 +75,8 @@ const IMPLEMENTATION_FILES = Object.freeze([
     'scripts/lib/conference-analysis-context.js',
     'scripts/lib/conference-postprocess.js',
     'scripts/lib/conference-process.js',
+    'scripts/lib/conference-process-recovery.js',
+    'scripts/lib/conference-source-upgrade.js',
     'scripts/lib/conference-staging.js',
     'scripts/lib/paper-identity.js',
     'scripts/lib/reader-contract.js',
@@ -85,6 +88,7 @@ const IMPLEMENTATION_FILES = Object.freeze([
     'scripts/lib/reader-source-diagnostics.js',
     'scripts/lib/reader-tables.js',
     'scripts/llm-account-pool.js',
+    'scripts/publish_common.py',
     'scripts/paper_identity.py',
     'scripts/utils.js'
 ]);
@@ -271,12 +275,51 @@ function assertState(value, expected = null) {
     }
     try { assertDeepExecutionConfigIdentity(value.authority.deepExecutionConfig); }
     catch (error) { throw new Error(`Conference process checkpoint deep execution config integrity failed: ${error.message}`); }
+    if (value.sourceUpgradePromotion) {
+        const promotion = value.sourceUpgradePromotion;
+        if (promotion.contract !== 'conference-source-upgrade-promotion-v1'
+            || !/^[a-f0-9]{64}$/.test(promotion.planSha256 || '')
+            || !/^[a-f0-9]{64}$/.test(promotion.sourceImplementationSha256 || '')
+            || !/^[a-f0-9-]{36}$/.test(promotion.originalProcessId || '')
+            || value.processId !== deterministicUuid(promotion.planSha256, 'conference-source-upgrade-process-v1')) {
+            throw new Error('Source upgrade promotion identity failed');
+        }
+        for (const field of ['preservedOriginalCompletePaperIds', 'preservedPriorUpgradePaperIds']) {
+            const ids = promotion[field];
+            if (ids !== undefined && (!Array.isArray(ids)
+                || stableHash(ids) !== stableHash([...ids].sort())
+                || new Set(ids).size !== ids.length
+                || ids.some(paperId => !Object.hasOwn(value.items || {}, paperId)))) {
+                throw new Error(`Source upgrade ${field} is invalid`);
+            }
+        }
+    }
+    if (value.sourceImplementationSha256 && !/^[a-f0-9]{64}$/.test(value.sourceImplementationSha256)) {
+        throw new Error('Conference process source implementation identity is invalid');
+    }
+    if (value.sourceImplementationSha256 && value.processId !== deterministicUuid(stableHash({
+        ...value.authority, implementationSha256: value.sourceImplementationSha256 }), 'conference-process-v1')) {
+        throw new Error('Conference process source implementation does not bind its original identity');
+    }
     if (expected && (stableHash(value.authority) !== stableHash(expected.authority)
         || stableHash(Object.keys(value.items).sort()) !== stableHash(expected.paperIds))) {
         throw new Error('Conference process authority/member set drifted');
     }
+    const preservedComplete = new Set([
+        ...(value.sourceUpgradePromotion?.preservedOriginalCompletePaperIds || []),
+        ...(value.sourceUpgradePromotion?.preservedPriorUpgradePaperIds || [])
+    ]);
     for (const [paperId, item] of Object.entries(value.items)) {
-        if (item.paperId !== paperId || item.analysisRunId !== deterministicUuid(value.processId, paperId, 'analysis')
+        if (!Number.isSafeInteger(item.attempts) || item.attempts < 0
+            || (item.retryBudgetStart !== undefined && (!Number.isSafeInteger(item.retryBudgetStart)
+                || item.retryBudgetStart < 0 || item.retryBudgetStart > item.attempts))
+            || (item.retryNotBefore != null && !Number.isFinite(Date.parse(item.retryNotBefore)))) {
+            throw new Error(`Conference process retry state is invalid: ${paperId}`);
+        }
+        if (item.paperId !== paperId || (!preservedComplete.has(paperId)
+            && item.analysisRunId !== deterministicUuid(value.processId, paperId, 'analysis'))
+            || preservedComplete.has(paperId) && (!(item.preservedOriginalComplete || item.preservedPriorUpgradeComplete)
+                || !/^[a-f0-9-]{36}$/i.test(item.analysisRunId || ''))
             || !['pending', 'source_sealed', 'analyzing', 'analysis_partial', 'complete'].includes(item.status)) {
             throw new Error(`Conference process item integrity failed: ${paperId}`);
         }
@@ -302,6 +345,7 @@ function assertState(value, expected = null) {
 }
 function completionBodyFor(state, planReceiptSha256, aggregate) {
     return { contract: COMPLETION_CONTRACT, version: VERSION, processId: state.processId,
+        ...(state.sourceUpgradePromotion ? { sourceUpgradePromotion: clone(state.sourceUpgradePromotion) } : {}),
         authority: clone(state.authority), planReceiptSha256,
         items: Object.values(state.items).sort((a, b) => a.paperId.localeCompare(b.paperId)).map(item => ({
             paperId: item.paperId, analysisRunId: item.analysisRunId, sourceProof: item.sourceProof,
@@ -316,6 +360,7 @@ function validateCompletionReceipt(state, receipt, planReceiptSha256 = null) {
         || receipt.processId !== checked.processId) throw new Error('Conference process completion receipt identity failed');
     const body = clone(receipt); delete body.receiptSha256;
     if (receipt.receiptSha256 !== stableHash(body)
+        || stableHash(body.sourceUpgradePromotion || null) !== stableHash(checked.sourceUpgradePromotion || null)
         || checked.completionReceiptSha256 !== receipt.receiptSha256
         || stableHash(body.authority) !== stableHash(checked.authority)
         || stableHash(body.items) !== stableHash(completionBodyFor(checked,
@@ -415,15 +460,46 @@ function sourceCacheRoot(context) {
 }
 function sealOneSource(context, member, deps, createdAt, { replayExisting = true } = {}) {
     const { discovery, discoveryHandle, files } = context; const replay = deps.discovery.replayDiscoveryMember(discoveryHandle, member.sourceIdentity);
-    const names = sourceNames(member.paperId, context.authority.implementationSha256); const root = files.conferenceStagingSourceDir; fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    let names = sourceNames(member.paperId, context.authority.implementationSha256); const root = files.conferenceStagingSourceDir; fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    const extraction = deps.extraction || require('./conference-extraction-receipt.js');
     const record = { ...replay.metadataRecord, conferenceId: replay.conference.id, year: replay.conference.year,
         identity: clone(replay.identity) };
     const metadataBytes = canonicalBytes(record); const candidate = replay.match.candidates[0];
-    const pdfLoaded = deps.discovery.safeAbsoluteFile(path.join(discovery.candidateManifest.pdfRoot, candidate.path),
+    // Prefer the sealed PDF, but rebind its bytes to the live official discovery SHA.
+    const sealedPdf = path.join(root, names.pdf);
+    const pdfLoaded = deps.discovery.safeAbsoluteFile(fs.existsSync(sealedPdf) ? sealedPdf : path.join(discovery.candidateManifest.pdfRoot, candidate.path),
         `official PDF for ${member.paperId}`, deps.discovery.MAX_PDF_BYTES);
     if (sha256(pdfLoaded.bytes) !== candidate.sha256) throw new Error(`official PDF SHA drifted: ${member.paperId}`);
+    const pdfProvenanceKind = String(replay.metadataRecord.pdfUrl || '').includes('ICMC2026_proceedings_')
+        ? 'conference-proceedings' : 'official-pdf';
     exactFile(path.join(root, names.metadata), metadataBytes); exactFile(path.join(root, names.pdf), pdfLoaded.bytes);
-    const request = { contract: 'conference-pdf-extraction-request-v2', version: 2, paperId: member.paperId,
+    let upgradedFrom = null;
+    const previousReceipt = path.join(root, names.receipt);
+    if (fs.existsSync(previousReceipt)) {
+        const old = recovery.readPrivateJson(previousReceipt);
+        const receiptReady = old.status === 'ready' && old.textReplayable === true;
+        if (!receiptReady || old.extractor?.version !== extraction.EXTRACTOR_VERSION
+            || old.extractor?.backend?.version !== extraction.BACKEND_VERSION
+            || old.version !== extraction.VERSION) {
+            // A blocked or obsolete receipt is never accepted as current proof.
+            // Preserve it under its original name, and feed only the
+            // independently authenticated original PDF/metadata into a new
+            // extractor generation. This lets an implementation migration
+            // recover a deterministic PDF-audit bug without deleting failure
+            // evidence or authorizing a new analysis run.
+            upgradedFrom = names.receipt;
+            const generation = stableHash({ source: context.authority.implementationSha256,
+                extractor: extraction.EXTRACTOR_VERSION, backend: extraction.BACKEND_VERSION,
+                contract: extraction.RECEIPT_CONTRACT, version: extraction.VERSION,
+                pdfSha256: candidate.sha256, metadataSha256: sha256(metadataBytes),
+                previousReceiptSha256: old.receiptSha256 || null });
+            names = sourceNames(member.paperId, generation);
+            exactFile(path.join(root, names.metadata), metadataBytes); exactFile(path.join(root, names.pdf), pdfLoaded.bytes);
+        }
+    }
+    const extractionOptions = typeof extraction.optionsForConference === 'function'
+        ? extraction.optionsForConference(context.authority.conferenceId) : extraction.OPTIONS;
+    const request = { contract: extraction.REQUEST_CONTRACT, version: extraction.VERSION, paperId: member.paperId,
         sourceIdentity: member.sourceIdentity, source: {
             metadata: { file: names.metadata, sha256: sha256(metadataBytes), identityEvidence: {
                 conferenceIdPointer: '/conferenceId', conferenceYearPointer: '/year', identityTypePointer: '/identity/type',
@@ -431,32 +507,39 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
                 metadataSnapshotSha256: replay.metadataSnapshotSha256, metadataIndex: replay.metadataIndex,
                 metadataRecordSha256: replay.metadataRecordSha256 }, provenance: { kind: 'official-metadata',
                 locator: String(replay.metadataRecord.recordUrl), retrievedAt: createdAt } },
-            pdf: { file: names.pdf, sha256: candidate.sha256, provenance: { kind: 'official-pdf',
+            pdf: { file: names.pdf, sha256: candidate.sha256, provenance: { kind: pdfProvenanceKind,
                 locator: String(replay.metadataRecord.pdfUrl), retrievedAt: createdAt } } },
         outputs: { textFile: names.text, artifactsFile: names.artifacts, receiptFile: names.receipt },
-        options: { minimumTextCharacters: 5000, normalization: 'unicode-nfc-lf-rstrip-v1', pageSeparator: '\n\f\n' } };
+        options: extractionOptions };
     exactFile(path.join(root, names.request), canonicalBytes(request));
     const hadReceipt = fs.existsSync(path.join(root, names.receipt));
     if (!hadReceipt) {
         deps.execFileSync('bash', [path.join(__dirname, '..', 'python-runtime.sh'), path.join(__dirname, '..', 'conference-extract.py'),
             '--apply', '--manifest', names.request], { cwd: path.join(__dirname, '..', '..'), stdio: 'pipe' });
     }
-    const extraction = require('./conference-extraction-receipt.js');
     const snapshot = extraction.extractionHandleSnapshot(extraction.loadExtractionHandle(root, names.receipt,
         { replay: !hadReceipt || replayExisting }));
     return { paperId: member.paperId, sourceIdentity: member.sourceIdentity, receiptName: names.receipt,
+        ...(upgradedFrom ? { upgradedFrom } : {}),
         proof: { requestSha256: snapshot.verification.requestSha256, receiptSha256: snapshot.receipt.receiptSha256,
             verificationSha256: snapshot.verification.verificationSha256, textSha256: snapshot.text.sha256,
             artifactsSha256: snapshot.artifacts.sha256, pdfSha256: snapshot.pdf.sha256 } };
 }
 function prepareShared(context, deps, createdAt) {
-    const files = context.files; const names = namesFor(context); const cacheRoot = sourceCacheRoot(context);
+    const files = context.files;
+    const sealed = context.members.map(member => sealOneSource(context, member, deps, createdAt,
+        { replayExisting: false }));
+    // Source upgrade creates a separate immutable staging/import/plan namespace.
+    // Existing source bundles and analysis executions are never rewritten here.
+    const generationContext = sealed.some(item => item.upgradedFrom) ? { ...context, authority: {
+        ...context.authority, implementationSha256: stableHash({ implementation: context.authority.implementationSha256,
+            sources: sealed.map(item => ({ paperId: item.paperId, receiptName: item.receiptName,
+                receiptSha256: item.proof.receiptSha256 })).sort((a, b) => a.paperId.localeCompare(b.paperId)) }) } } : context;
+    const names = namesFor(generationContext); const cacheRoot = sourceCacheRoot(generationContext);
     for (const root of [files.conferenceStagingSpecsDir, files.conferenceStagingSourceDir,
         files.conferenceStagingDir, files.conferenceSourceCacheDir, cacheRoot, files.conferenceSourceLedgerDir,
         files.conferenceRunsDir, files.conferenceAnalysisDir, files.conferencePageStagingDir,
         files.conferenceAggregateDir]) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    const sealed = context.members.map(member => sealOneSource(context, member, deps, createdAt,
-        { replayExisting: false }));
     const seal = { contract: deps.staging.AUTOMATED_EXTRACTION_CONTRACT, version: deps.staging.VERSION,
         conference: clone(context.discovery.candidateManifest.conference), acceptance: {
             method: 'official-proceedings-exact-pdf-v1', catalogSha256: context.discovery.catalogSha256,
@@ -488,13 +571,16 @@ function prepareShared(context, deps, createdAt) {
     const imported = deps.importer.importHandleSnapshot(importHandle); const taxonomy = deps.ledger.readRegularJson(files.taxonomyRegistry);
     const taxonomyVersion = String(taxonomy.value.version || taxonomy.value.registryVersion || '');
     if (!taxonomyVersion) throw new Error('taxonomy registry version is missing');
-    const identities = imported.verifiedMembers; const shards = [];
-    for (let index = 0; index < identities.length; index += 50) shards.push({ shardId: `part-${String(index / 50 + 1).padStart(4, '0')}`,
-        paperIds: identities.slice(index, index + 50).map(item => item.paperId) });
+    const identities = imported.verifiedMembers;
+    const planIdentities = [...identities].sort((left, right) => left.paperId.localeCompare(right.paperId));
+    const shards = [];
+    for (let index = 0; index < planIdentities.length; index += 50) shards.push({ shardId: `part-${String(index / 50 + 1).padStart(4, '0')}`,
+        paperIds: planIdentities.slice(index, index + 50).map(item => item.paperId) });
     const planDoc = { contract: deps.plan.PLAN_CONTRACT, version: deps.plan.VERSION, ledgerName: names.ledger,
         taxonomy: { version: taxonomyVersion, sha256: taxonomy.sha256 }, selectionPolicy: {
-            contract: deps.plan.SELECTION_CONTRACT, identities,
-            selectedMemberSetSha256: deps.plan.stableHash(identities.map(item => item.paperId)) }, shards };
+            contract: deps.plan.SELECTION_CONTRACT, identities: planIdentities,
+            selectedMemberSetSha256: deps.plan.stableHash(planIdentities.map(item => item.paperId)) },
+        shards };
     exactFile(path.join(files.conferenceSourceLedgerDir, names.plan), canonicalBytes(planDoc));
     const planned = deps.plan.createRunFromImportPlan({ files, importHandle, planName: names.plan, runName: names.run });
     const runFile = path.join(files.conferenceRunsDir, names.run); const planReceiptFile = path.join(files.conferenceRunsDir, planned.receiptName);
@@ -503,17 +589,38 @@ function prepareShared(context, deps, createdAt) {
     const planHandle = deps.plan.loadPlanHandle(runFile, planReceiptFile,
         path.join(files.conferenceSourceLedgerDir, names.plan), importHandle, files.taxonomyRegistry);
     return { planHandle, names, sealed, sourceCacheRoot: cacheRoot,
+        sourceGenerationChanged: sealed.some(item => item.upgradedFrom),
         planReceiptSha256: deps.plan.planHandleSnapshot(planHandle).receipt.receiptSha256 };
 }
 
 async function processOne(context, shared, item, deps) {
-    const files = context.files; deps.adapter.prepareConferenceAnalysis({ planHandle: shared.planHandle,
+    const files = context.files;
+    const readerRetryEpoch = Array.isArray(item.retryReleases) && item.retryReleases.length > 0
+        ? item.retryReleases.length : undefined;
+    if (shared.sourceGenerationChanged && fs.existsSync(path.join(files.conferenceAnalysisDir, item.analysisRunId, 'run.json'))) {
+        const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir, executionId: item.analysisRunId });
+        try { deps.adapter.verifyPlanAuthority(loaded, shared.planHandle, shared.sourceCacheRoot); }
+        catch (cause) {
+            throw Object.assign(new Error(`Source extraction generation changed; existing analysis requires authenticated rebinding: ${item.paperId}`, { cause }),
+                { code: 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED', retryable: false });
+        }
+    }
+    deps.adapter.prepareConferenceAnalysis({ planHandle: shared.planHandle,
         paperId: item.paperId, sourceRoot: shared.sourceCacheRoot,
         analysisRoot: files.conferenceAnalysisDir, executionId: item.analysisRunId });
     const analyzed = await deps.adapter.analyzeConference({ analysisRoot: files.conferenceAnalysisDir,
         executionId: item.analysisRunId, concurrency: 1, planHandle: shared.planHandle,
-        sourceRoot: shared.sourceCacheRoot });
-    if (analyzed.status !== 'complete') throw new Error(`analysis remained ${analyzed.status}`);
+        sourceRoot: shared.sourceCacheRoot },
+    readerRetryEpoch !== undefined ? { readerRetryEpoch } : undefined);
+    if (analyzed.status !== 'complete') {
+        const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir,
+            executionId: item.analysisRunId });
+        const paper = loaded.analysis.papers[0];
+        const error = new Error(paper.latestAnalysisAttemptError || paper.error || `analysis remained ${analyzed.status}`);
+        error.code = paper.latestAnalysisAttemptErrorCode || null;
+        error.retryable = paper.latestAnalysisAttemptRetryable;
+        throw error;
+    }
     const staged = deps.postprocess.stagePaper({ analysisRoot: files.conferenceAnalysisDir,
         executionId: item.analysisRunId, taxonomyFile: files.taxonomyRegistry,
         stagingRoot: files.conferencePageStagingDir, planHandle: shared.planHandle,
@@ -525,12 +632,23 @@ async function processOne(context, shared, item, deps) {
     pageProof: { manifestSha256: staged.manifest.manifestSha256, contentSha256: staged.manifest.contentSha256,
         pagePath: staged.manifest.pagePath } };
 }
-async function runWorkers(items, concurrency, worker) {
+async function runWorkers(items, concurrency, worker, shouldStop = () => false) {
     let cursor = 0; const results = [];
     const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-        while (true) { const index = cursor++; if (index >= items.length) return; results[index] = await worker(items[index], index); }
+        while (!shouldStop()) { const index = cursor++; if (index >= items.length) return; results[index] = await worker(items[index], index); }
     });
     await Promise.all(runners); return results;
+}
+
+function assertSourceContinuity(state, shared) {
+    const sealed = new Map(shared.sealed.map(item => [item.paperId, item.proof]));
+    for (const item of Object.values(state.items)) {
+        if (!item.sourceProof || !(item.attempts > 0 || item.analysisProof || item.status === 'complete')) continue;
+        if (stableHash(item.sourceProof) !== stableHash(sealed.get(item.paperId) || null)) {
+            throw Object.assign(new Error(`Sealed source proof changed for existing analysis; inspect --source-upgrade-plan --from ${state.processId} before authorizing new analysis: ${item.paperId}`),
+                { code: 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED', retryable: false });
+        }
+    }
 }
 
 async function runConferenceProcessLocked(options, deps, context, processId, directory) {
@@ -545,7 +663,50 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     if (state.status === 'complete') {
         validateCompletionReceipt(state, JSON.parse(fs.readFileSync(path.join(directory, 'completion-receipt.json'))));
     }
-    const shared = await (deps.prepareShared || prepareShared)(context, deps, state.createdAt);
+    // Upgrade old error-only checkpoints before any preparation or model work.
+    // Failed analysis bytes remain untouched; scheduler metadata is additive.
+    state = deps.engine.updateJsonFileLocked(stateFile, current => {
+        const next = clone(assertState(current, expected)); let changed = false;
+        for (const item of Object.values(next.items)) {
+            if (item.status === 'complete') continue;
+            if (!item.lastFailure && (item.lastError || item.status === 'analysis_partial')) {
+                let error = new Error(item.lastError || 'legacy partial analysis');
+                const filename = deps.files.conferenceAnalysisDir
+                    && path.join(deps.files.conferenceAnalysisDir, item.analysisRunId, 'analysis.json');
+                if (filename && fs.existsSync(filename)) {
+                    const paper = recovery.readPrivateJson(filename).papers?.[0];
+                    if (paper) error = Object.assign(new Error(paper.latestAnalysisAttemptError || paper.error || error.message), {
+                        code: paper.latestAnalysisAttemptErrorCode, retryable: paper.latestAnalysisAttemptRetryable });
+                }
+                item.lastFailure = recovery.classifyFailure(error, item.updatedAt);
+                item.lastError = item.lastFailure.message;
+                item.retryNotBefore = new Date(Date.parse(item.updatedAt) + recovery.RETRY_COOLDOWN_MS).toISOString();
+                if (item.lastFailure.systemic) next.batchFailure = item.lastFailure;
+                changed = true;
+            }
+            if (options.retryFailed && (item.lastFailure || item.status === 'analyzing')) {
+                item.retryReleases = [...(item.retryReleases || []), { at: deps.now(), attempts: item.attempts,
+                    previousFailure: item.lastFailure || null }];
+                item.retryBudgetStart = item.attempts; item.retryNotBefore = null;
+                // Preserve the failure as evidence, separately record explicit retry permission.
+                item.retryAuthorizedAtAttempt = item.attempts;
+                if (item.status === 'analyzing') item.status = 'analysis_partial';
+                changed = true;
+            }
+        }
+        if (options.retryFailed && next.batchFailure) { next.batchFailure = null; changed = true; }
+        if (!changed) return undefined;
+        next.generation += 1; next.updatedAt = deps.now(); next.stateSha256 = stateDigest(next);
+        return assertState(next, expected);
+    }) || state;
+    if (state.batchFailure && !options.retryFailed) return { status: 'partial', processId,
+        conferenceId: context.authority.conferenceId, stopped: true, batchFailure: state.batchFailure,
+        complete: Object.values(state.items).filter(item => item.status === 'complete').length,
+        failed: Object.values(state.items).filter(item => item.status !== 'complete').length };
+    const sourceContext = { ...context, authority: { ...context.authority,
+        implementationSha256: recovery.sourceImplementation(state, directory, module.exports) } };
+    const shared = await (deps.prepareShared || prepareShared)(sourceContext, deps, state.createdAt);
+    assertSourceContinuity(state, shared);
     const sourceByPaper = new Map(shared.sealed.map(item => [item.paperId, item.proof]));
     const updateItem = (paperId, expectedStatuses, updater) => deps.engine.updateJsonFileLocked(stateFile, current => {
         const checked = assertState(current, expected); const currentItem = checked.items[paperId];
@@ -574,21 +735,29 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
             sourceProof: sourceByPaper.get(member.paperId), updatedAt: deps.now() }));
     }
     const pending = context.members.map(member => assertState(JSON.parse(fs.readFileSync(stateFile)), expected).items[member.paperId])
-        .filter(item => item.status !== 'complete');
+        .filter(item => recovery.eligible(item, deps.now()));
+    let stopped = false;
     await runWorkers(pending, options.concurrency, async item => {
         const claimed = updateItem(item.paperId, [item.status], current => ({ ...current,
             status: 'analyzing', attempts: current.attempts + 1,
-            lastError: null, updatedAt: deps.now() }));
+            updatedAt: deps.now() }));
         if (claimed.items[item.paperId].status === 'complete') return;
         try {
             const proof = await (deps.processPaper || processOne)(context, shared, item, deps);
             updateItem(item.paperId, ['analyzing'], current => ({ ...current, ...proof,
-                status: 'complete', lastError: null, updatedAt: deps.now() }));
+                status: 'complete', lastError: null, lastFailure: null, retryNotBefore: null, updatedAt: deps.now() }));
         } catch (error) {
+            const failure = recovery.classifyFailure(error, deps.now());
+            if (failure.systemic) stopped = true;
             updateItem(item.paperId, ['analyzing'], current => ({ ...current,
-                status: 'analysis_partial', lastError: String(error.message || error).slice(0, 2000), updatedAt: deps.now() }));
+                status: 'analysis_partial', lastError: failure.message, lastFailure: failure,
+                retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString(), updatedAt: deps.now() }));
+            if (failure.systemic) deps.engine.updateJsonFileLocked(stateFile, current => {
+                const next = clone(assertState(current, expected)); next.batchFailure = failure;
+                next.generation += 1; next.updatedAt = deps.now(); next.stateSha256 = stateDigest(next); return next;
+            });
         }
-    });
+    }, () => stopped);
     state = assertState(JSON.parse(fs.readFileSync(stateFile)), expected);
     let incomplete = Object.values(state.items).filter(item => item.status !== 'complete');
     if (incomplete.length) {
@@ -602,7 +771,9 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
         state = assertState(state || JSON.parse(fs.readFileSync(stateFile)), expected);
         incomplete = Object.values(state.items).filter(item => item.status !== 'complete');
         if (incomplete.length) return { status: 'partial', processId, conferenceId: context.authority.conferenceId,
-            complete: context.members.length - incomplete.length, failed: incomplete.length };
+            complete: context.members.length - incomplete.length, failed: incomplete.length,
+            ...(state.batchFailure ? { stopped: true, batchFailure: state.batchFailure } : {}),
+            deferred: incomplete.filter(item => !recovery.eligible(item, deps.now())).length };
     }
     assertRuntimeAuthorityUnchanged(context, deps, 'before aggregate');
     const executionIds = context.members.map(member => state.items[member.paperId].analysisRunId);
@@ -637,12 +808,13 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
 
 async function runConferenceProcess(options, overrides = {}) {
     if (!options || typeof options.apply !== 'boolean' || !Number.isInteger(options.concurrency)
+        || (options.retryFailed !== undefined && typeof options.retryFailed !== 'boolean')
         || options.concurrency < 1 || options.concurrency > MAX_CONCURRENCY) {
         throw new Error('conference process requires explicit mode and concurrency 1-3');
     }
     const deps = { ...defaultDependencies(), ...overrides };
     const context = (deps.loadAuthority || loadAuthority)(options, deps);
-    const processId = deterministicUuid(stableHash(context.authority), 'conference-process-v1');
+    const processId = recovery.resolveProcess(context, deps, module.exports);
     if (!options.apply) return { status: 'dry-run', processId, conferenceId: context.authority.conferenceId,
         papers: context.members.length, concurrency: options.concurrency };
     const directory = safeProcessDirectory(deps.files.conferenceProcessDir, processId, true);
@@ -653,11 +825,11 @@ async function runConferenceProcess(options, overrides = {}) {
     ), { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
-module.exports = { CONTRACT, COMPLETION_CONTRACT, VERSION, MAX_CONCURRENCY, stableHash, deterministicUuid,
+module.exports = { CONTRACT, COMPLETION_CONTRACT, VERSION, MAX_CONCURRENCY, stableHash, deterministicUuid, canonicalBytes,
     DEEP_EXECUTION_CONFIG_CONTRACT, DEEP_EXECUTION_CONFIG_VERSION, DEEP_EXECUTION_LIMIT_FIELDS,
     deepExecutionConfigIdentity, assertDeepExecutionConfigIdentity, currentDeepExecutionConfigIdentity,
     assertRuntimeAuthorityUnchanged,
     stateDigest, assertState, completionBodyFor, validateCompletionReceipt, defaultDependencies, loadAuthority,
     namesFor, sourceNames, sealOneSource, prepareShared,
-    IMPLEMENTATION_FILES, implementationSha256, processOne, runWorkers,
+    IMPLEMENTATION_FILES, implementationSha256, processOne, runWorkers, assertSourceContinuity,
     runConferenceProcessLocked, runConferenceProcess, safeProcessDirectory, exactFile };

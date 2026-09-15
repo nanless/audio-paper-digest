@@ -11,8 +11,9 @@ const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
 const processApi = require('./lib/conference-process.js');
 const cli = require('./conference-process.js');
+const recovery = require('./lib/conference-process-recovery.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1|2|3] [--reuse-complete-pages]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1|2|3] [--reuse-complete-pages] [--retry-failed]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -20,7 +21,7 @@ function parseArgs(argv) {
     const values = {};
     for (let index = 1; index < argv.length;) {
         const flag = argv[index]; const value = argv[index + 1];
-        if (flag === '--reuse-complete-pages') {
+        if (flag === '--reuse-complete-pages' || flag === '--retry-failed') {
             if (Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
@@ -37,7 +38,7 @@ function parseArgs(argv) {
     return { apply: true, statusOnly: false, catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'],
         fromProcessId: values['--from'], concurrency: Number(values['--concurrency'] || 3),
-        reuseCompletePages: Boolean(values['--reuse-complete-pages']) };
+        reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']) };
 }
 
 function withoutImplementation(authority) {
@@ -78,7 +79,7 @@ function migrateAndRun(options, runtime = {}) {
     const expectedPaperIds = context.members.map(item => item.paperId).sort();
 
     const migrationFile = path.join(directory, 'implementation-migration.json');
-    const runLocked = () => {
+    const runLocked = async () => {
         let state = processApi.assertState(cli.readSafeJson(stateFile));
         if (processApi.stableHash(withoutImplementation(state.authority))
             !== processApi.stableHash(withoutImplementation(context.authority))) {
@@ -98,22 +99,10 @@ function migrateAndRun(options, runtime = {}) {
         const matchingMigration = migrationRecords.find(({ value }) => (
             value.toImplementationSha256 === state.authority.implementationSha256
         ));
-        const interruptedMigration = migrationRecords.length > 0 && !matchingMigration;
+        const interruptedMigration = (migrationRecords.length > 0 || Boolean(state.sourceImplementationSha256)) && !matchingMigration;
         const requiresMigration = state.authority.implementationSha256 !== currentImplementation
             || interruptedMigration;
-        let oldImplementation = state.authority.implementationSha256;
-        const sourceMigration = matchingMigration || migrationRecords.at(-1);
-        if (sourceMigration) {
-            const migration = sourceMigration.value;
-            if (migration.toImplementationSha256 !== state.authority.implementationSha256
-                && !interruptedMigration
-                || !UUID_RE.test(migration.processId || '')
-                || typeof migration.fromImplementationSha256 !== 'string') {
-                throw new Error('implementation migration receipt is invalid');
-            }
-            oldImplementation = interruptedMigration
-                ? migration.fromImplementationSha256 : migration.fromImplementationSha256;
-        }
+        const oldImplementation = recovery.sourceImplementation(state, directory, processApi);
         let completionReceiptCurrent = true;
         if (state.status === 'complete') {
             const completion = cli.readSafeJson(path.join(directory, 'completion-receipt.json'));
@@ -123,7 +112,8 @@ function migrateAndRun(options, runtime = {}) {
         const sharedContext = oldImplementation === currentImplementation
             ? context
             : { ...context, authority: { ...context.authority, implementationSha256: oldImplementation } };
-        const shared = processApi.prepareShared(sharedContext, deps, state.createdAt);
+        const shared = await (deps.prepareShared || processApi.prepareShared)(sharedContext, deps, state.createdAt);
+        processApi.assertSourceContinuity(state, shared);
         // Replay complete papers only when the implementation/lifecycle
         // actually requires it. A publisher/renderer commit can change the
         // projection fingerprint while the LLM process is running; refreshing
@@ -134,15 +124,6 @@ function migrateAndRun(options, runtime = {}) {
         const stagedProofs = new Map();
         if (requiresMigration || lifecycleNeedsRefresh) {
             for (const item of complete) {
-                if (options.reuseCompletePages) {
-                    if (!item.pageProof || typeof item.pageProof.manifestSha256 !== 'string'
-                        || typeof item.pageProof.contentSha256 !== 'string'
-                        || typeof item.pageProof.pagePath !== 'string') {
-                        throw new Error(`existing complete paper has no reusable page proof: ${item.paperId}`);
-                    }
-                    stagedProofs.set(item.paperId, structuredClone(item.pageProof));
-                    continue;
-                }
                 const staged = deps.postprocess.stagePaper({
                     analysisRoot: deps.files.conferenceAnalysisDir,
                     executionId: item.analysisRunId,
@@ -154,6 +135,10 @@ function migrateAndRun(options, runtime = {}) {
                 });
                 if (staged.status !== 'staged') {
                     throw new Error(`existing complete paper failed current postprocess: ${item.paperId}`);
+                }
+                if (options.reuseCompletePages && (staged.manifest.contentSha256 !== item.pageProof?.contentSha256
+                    || staged.manifest.pagePath !== item.pageProof?.pagePath)) {
+                    throw new Error(`existing complete page changed during authenticated replay: ${item.paperId}`);
                 }
                 stagedProofs.set(item.paperId, {
                     manifestSha256: staged.manifest.manifestSha256,
@@ -176,6 +161,13 @@ function migrateAndRun(options, runtime = {}) {
                     }
                     const next = structuredClone(checked);
                     next.authority = structuredClone(context.authority);
+                    // A source-upgrade promoted process already binds its
+                    // original implementation through sourceUpgradePromotion
+                    // and its signed source-upgrade plan.  Adding the legacy
+                    // sourceImplementationSha256 field here would assert that
+                    // the promoted process UUID was derived directly from
+                    // that implementation, which is intentionally false.
+                    if (!next.sourceUpgradePromotion) next.sourceImplementationSha256 = oldImplementation;
                     next.status = 'running';
                     next.aggregate = null;
                     next.completionReceiptSha256 = null;

@@ -210,6 +210,8 @@ const FILES = {
     conferencePageStagingDir: path.join(DATA_DIR, 'runtime', 'conference-page-staging'),
     conferenceAggregateDir: path.join(DATA_DIR, 'runtime', 'conference-aggregates'),
     conferenceProcessDir: path.join(DATA_DIR, 'runtime', 'conference-processes'),
+    conferenceQueueDir: path.join(DATA_DIR, 'runtime', 'conference-queues'),
+    conferencePublicationDir: path.join(DATA_DIR, 'runtime', 'conference-publications'),
     historicalPageInventoryDir: path.join(DATA_DIR, 'runtime', 'historical-page-inventories'),
     // Deterministic, local-only direct-input catalog for the historical rewrite.
     // It records retained crawler/PDF pointers and hashes, never blog prose.

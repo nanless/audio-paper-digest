@@ -60,10 +60,14 @@ const LLM_FILTER_PROMPT = utilsApi.loadPrompt('prompts/filter.md', {
 const DAILY_DECISION_PARSER_VERSION = 'filter-decision-contract-v3';
 const CORE_CONFERENCE_FALLBACK_VERSION = 'core-audio-conferences-2026-v1';
 const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
+    'chime-2026': 'CHiME Speech Separation and Recognition',
     'dafx-2026': 'Digital Audio Effects',
+    'icmc-2026': 'International Computer Music Conference',
     'iwslt-2026': 'Spoken Language Translation',
+    'jep-2026': 'Speech Studies (Journées d’Études sur la Parole)',
     'nime-2026': 'New Interfaces for Musical Expression',
-    'odyssey-2026': 'Speaker and Language Recognition'
+    'odyssey-2026': 'Speaker and Language Recognition',
+    'speechprosody-2026': 'Speech Prosody'
 });
 const CORE_AUDIO_CONFERENCE_IDS = Object.freeze(Object.keys(CORE_AUDIO_CONFERENCE_LABELS).sort());
 const FILTER_CONFIG_BINDING = Object.freeze({
@@ -103,6 +107,14 @@ function exact(value, fields, label) {
 function sha256(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 const LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(LLM_FILTER_POLICY, 'utf8'));
 const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
+// The conference fallback map is deliberately included in the policy digest.
+// Keep the policy digest of filters prepared immediately before the 2026
+// conference labels were added accepted during recovery; their durable state
+// and request envelopes still bind the exact policy they were prepared with.
+// This is a compatibility window, not permission to accept arbitrary policy
+// hashes.
+const LEGACY_FILTER_POLICY_SHA256 = '11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275';
+const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, LEGACY_FILTER_POLICY_SHA256]);
 const FILTER_CONFIG_SHA256 = stableHash(FILTER_CONFIG_BINDING);
 function stableJson(value) {
     const normalize = item => Array.isArray(item) ? item.map(normalize)
@@ -112,6 +124,7 @@ function stableJson(value) {
     return JSON.stringify(normalize(value));
 }
 function stableHash(value) { return sha256(stableJson(value)); }
+function isAcceptedFilterPolicySha256(value) { return ACCEPTED_FILTER_POLICY_SHA256.has(value); }
 function assertSha(value, label) {
     if (typeof value !== 'string' || !SHA_RE.test(value)) fail(`${label} must be a lowercase SHA-256`);
     return value;
@@ -174,8 +187,14 @@ function catalogFromDiscoveryHandle(handle) {
 }
 
 function discoveryDocumentToFilterCatalog(value, { documentSha256 } = {}) {
-    exact(value, ['contract', 'version', 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
-        'pdfCatalogSha256', 'pdfCatalog', 'members', 'memberSetSha256'], 'discovery document');
+    const discoveryFields = ['contract', 'version', 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
+        'pdfCatalogSha256', 'pdfCatalog', 'members', 'memberSetSha256'];
+    // New official-proceedings discoveries may carry the immutable acquisition
+    // receipt binding.  loadDiscoveryHandle() has already replayed and
+    // validated that optional field; the filter catalog must preserve the
+    // document hash without rejecting the authenticated extension.
+    if (Object.hasOwn(value, 'acquisitionReceipt')) discoveryFields.push('acquisitionReceipt');
+    exact(value, discoveryFields, 'discovery document');
     if (value.contract !== discoveryApi.CONTRACT || value.version !== discoveryApi.VERSION
         || !discoveryApi.ADAPTERS.has(value.adapter)) fail('discovery document contract/adapter is unsupported');
     exact(value.conference, ['id', 'year'], 'discovery conference');
@@ -1832,7 +1851,7 @@ function normalizeProductionLlmConfig(value) {
 }
 
 function assertProductionRunnerBinding(state, normalizedSpec, config) {
-    if (normalizedSpec.filterPolicySha256 !== LLM_FILTER_POLICY_SHA256
+    if (!isAcceptedFilterPolicySha256(normalizedSpec.filterPolicySha256)
         || normalizedSpec.promptSha256 !== LLM_FILTER_PROMPT_SHA256) {
         fail('filter spec does not bind built-in production policy and prompt');
     }
@@ -2052,7 +2071,7 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
         ensureRunnerDirectories(directory);
         let state = assertBoundInputs(readFilter({ filterRoot, filterId }),
             { catalog, spec: normalizedSpec, evidenceBinding });
-        if (normalizedSpec.filterPolicySha256 !== LLM_FILTER_POLICY_SHA256
+        if (!isAcceptedFilterPolicySha256(normalizedSpec.filterPolicySha256)
             || normalizedSpec.promptSha256 !== LLM_FILTER_PROMPT_SHA256) fail('filter spec does not bind built-in production policy and prompt');
         const protocol = config.apiType === 'openai_responses' ? 'openai-responses'
             : config.apiType === 'anthropic' ? 'anthropic-messages' : 'openai-chat';

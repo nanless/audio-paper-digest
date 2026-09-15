@@ -3041,6 +3041,11 @@ def _detailed_core_summary_semantic_issue(summary):
     )
     number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
     setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)', re.IGNORECASE)
+    named_setting = re.compile(
+        r'(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)'
+        r'|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))',
+        re.IGNORECASE,
+    )
     has_complete_result = False
     for sentence in re.split(r'[。！？!?\n]', summary):
         result_sentence = _strip_core_summary_non_result_numerals(sentence)
@@ -3055,7 +3060,7 @@ def _detailed_core_summary_semantic_issue(summary):
             len(numbers) >= 2 and baseline_transition.search(result_sentence)
         )
         if metric.search(result_sentence) and has_direction and numbers \
-                and setting.search(result_sentence) \
+                and (setting.search(result_sentence) or named_setting.search(result_sentence)) \
                 and (len(numbers) >= 2 or re.search(
                     r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)', result_sentence
                 )) and not _has_cross_metric_directional_comparison(result_sentence):
@@ -6460,7 +6465,7 @@ def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
             or not isinstance(runtime_manifest, dict)
             or text_manifest.get('filename') != 'source.txt'
             or text_manifest.get('source') not in {'html', 'pdf'}
-            or text_manifest.get('sourceId') != paper_id
+            or normalize_publish_arxiv_id(text_manifest.get('sourceId')) != paper_id
             or text_manifest.get('responseBytes') != len(text)
             or text_manifest.get('responseSha256') != _daily_fresh_sha256(text)
             or text_manifest.get('responseSha256') != proof.get('sourceSha256')

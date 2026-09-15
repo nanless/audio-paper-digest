@@ -187,8 +187,18 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // short metrics such as mAP/PAR/PER match prose words including "mapping",
 // "Particle" and "performance", turning section numbers and citations into
 // apparent experimental measurements.
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|CER|PER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
-const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|on par|comparable|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+// Conference papers often use domain-specific Chinese names for the metric
+// (for example DAFx's “抖动” and “包络相关”). Keep these explicit rather
+// than treating every result noun as quantitative evidence.
+const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
+const CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN = /(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])/i;
+const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|on par|comparable|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)/i;
+const CORE_SUMMARY_COMPARISON_OBJECT_PATTERN = /(?:\bbaseline\b|\bcontrol\b|\breference\b|\bcomparison\b|\b(?:our|ours|proposed|present|this)\s+(?:approach|method|model|system|technique)\b|基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|完整模型|竞品)/i;
+// These quantities describe how a system is operated or configured.  They
+// are useful for the cost paragraph, but without a baseline/comparison they
+// are not empirical result evidence for the core-summary result sentence.
+const CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN = /(?:\b(?:train(?:ing)?|inference|deployment|hardware|gpu|cpu|tpu|npu|parameter(?:s)?|layers?|hidden(?:\s+units?)?|batch(?:\s+size)?|learning\s+rate|epochs?|steps?|iterations?|sampling\s+rate|window(?:\s+size)?|channels?|dimensions?|memory|vram|flops?|macs?|rtf|latency|throughput|fps|runtime|duration|cost|overhead)\b|训练|推理|部署|硬件|显存|内存|参数量|层数|隐藏单元|批量|学习率|轮次|步数|迭代|采样率|窗口|通道|维度|耗时|延迟|吞吐|实时率|计算量|成本|开销)/i;
 const CORE_SUMMARY_DIRECTION_CONNECTOR_PATTERN = /(?:高于|低于|超过|优于|领先)/g;
 const CORE_SUMMARY_BARE_TRANSITION_PATTERN = /(?:升至|降至)/;
 const CORE_SUMMARY_NON_RESULT_PATTERN = /(?:模型|版本|参数量|样本量|训练步数|轮次|批量|batch|学习率|年份|第\s*\d+|图\s*\d+|表\s*\d+|式\s*\d+|章节|引用)/i;
@@ -215,12 +225,37 @@ const EXPERIMENT_TABLE_LIMITS = Object.freeze({
     minEvidenceRows: 3,
     minNumericCells: 2
 });
-const TABLE_IDENTIFIER_HEADER_RE = /(?:^editing(?: operation)?$|(?:^|\b)(?:method|algorithm|approach|strategy|mechanism|aggregation|model|system|backbone|front[ -]?end|pipeline|variant|ablation|representation|embedding|feature|encoder|baseline|config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure|family|language family)(?:\b|$)|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|语系|语族|场景|条件|设置|划分|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量)/i;
+const TABLE_IDENTIFIER_HEADER_RE = /(?:^editing(?: operation)?$|(?:^|\b)(?:method|algorithm|approach|strategy|mechanism|aggregation|model|system|backbone|front[ -]?end|pipeline|variant|ablation|representation|embedding|feature|encoder|baseline|config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|type|modality|version|stage|phase|step|round|epoch|decoder?|context|metric|measure|family|language family)(?:\b|$)|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|语系|语族|场景|条件|设置|划分|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量|拓扑)/i;
 const TABLE_VAGUE_METRIC_HEADER_RE = /^(?:结果|数值|数值变化|观察|观察结果|实际观测|报告结果|主要观察|说明|解释|含义|方向|关键条件|结论|结论边界|证据边界|应如何解读|对照或说明|对照或变化|结果或结论)$/i;
 const TABLE_DIRECTION_MARK_RE = /(?:↑|↓|\\(?:uparrow|downarrow|nearrow|searrow)\b|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)/i;
-const TABLE_DIRECTIONAL_METRIC_RE = /(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)/i;
+const TABLE_DIRECTIONAL_METRIC_RE = /(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|\bl[12]\b|\bmse\b|\bnmse\b|\bmste\b|\bmr[- ]?stft\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度|评分|分数|裁判分)/i;
 const TABLE_NON_DIRECTIONAL_MEASURE_RE = /(?:置信区间|confidence interval|\bci\b|p[- ]?value|p值|显著性|样本数|数量|规模|时长|采样率|方差|标准差|系数|\bbeta\b|\bΔ?AIC\b|复杂度|参数|容量|内存|显存|耗时|延迟|速度|吞吐|功耗|能耗|bytes?|hours?|seconds?|milliseconds?)/i;
 const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(?:%|pp|×|x|ms|s|h|Hz|kHz|MHz|GB|MB|KB|dB|mJ|W))?/i;
+
+// A first column can describe the training condition rather than a metric.
+// Keep this explicit so a table such as “训练损失 × evaluation metrics” is
+// treated as a comparison table without forcing an artificial ↑/↓ marker onto
+// the condition column.
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:训练损失|损失函数|监督目标|训练目标|评估设置|实验设置)$/i;
+function isTableIdentifierHeader(value) {
+    const normalized = String(value || '').trim();
+    if (TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE.test(normalized)) return true;
+    const withoutDirection = normalized
+        .replace(TABLE_DIRECTION_MARK_RE, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const identifier = !normalized || TABLE_IDENTIFIER_HEADER_RE.test(withoutDirection);
+    if (!TABLE_DIRECTION_MARK_RE.test(normalized)) return identifier;
+    // “方法 ↓”“设置 H ↓” and “方法 ↑ 成功率” still describe the row
+    // identity.  A direction marker alone must not turn the first column into
+    // a metric column.  Conversely, a qualifier such as “评估” before a real
+    // metric (for example “评估 L1(...) ↓”) is not an identifier.
+    if (TABLE_DIRECTIONAL_METRIC_RE.test(withoutDirection)) return false;
+    if (/(?:^|[\s/])(?:方法|算法|方案|策略|模型|系统|设置|条件|拓扑|数据集|基线|配置|场景|阶段|实验|评估设置|实验设置)(?:[\s/]|$)/i.test(withoutDirection)) {
+        return true;
+    }
+    return identifier;
+}
 
 // 只匹配独立行/段落中高度明确的模型编辑、自检或对用户指令的复述。
 // 普通论文论述可以自然包含“这里”“注意”“已有分析”等词，因此不能用
@@ -423,7 +458,7 @@ function extractMarkdownTables(text) {
                 .replace(/<br\s*\/?>/gi, ' ')
                 .replace(/[*_`]/g, '')
                 .trim();
-            return !normalized || TABLE_IDENTIFIER_HEADER_RE.test(normalized);
+            return isTableIdentifierHeader(normalized);
         }).length;
         tables.push({
             header,
@@ -517,7 +552,7 @@ function capExperimentTableMetricColumns(analysis, maxMetricColumns = EXPERIMENT
                 .replace(/<br\s*\/?>/gi, ' ')
                 .replace(/[*_`]/g, '')
                 .trim();
-            const identifier = !normalized || TABLE_IDENTIFIER_HEADER_RE.test(normalized);
+            const identifier = isTableIdentifierHeader(normalized);
             if (identifier || keptMetrics < maxMetricColumns) {
                 indexes.push(index);
                 if (!identifier) keptMetrics += 1;
@@ -587,7 +622,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         }
         for (const header of table.header) {
             const normalized = header.replace(/[*_`]/g, '').trim();
-            const identifier = !normalized || TABLE_IDENTIFIER_HEADER_RE.test(normalized);
+            const identifier = isTableIdentifierHeader(normalized);
             if (!identifier && TABLE_VAGUE_METRIC_HEADER_RE.test(normalized)) {
                 return `实验结果第 ${index + 1} 张表含叙述型伪指标列“${normalized}”，应改为可核对指标、设置或比较对象`;
             }
@@ -606,7 +641,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
                 }
             }
         }
-        const comparisonPattern = /(?:比较|对比|检验|考察|回答|关键问题|差异|收益|代价|是否|能否|何种|多大|哪些)/;
+        const comparisonPattern = /(?:比较|对比|基线|对照|检验|考察|回答|关键问题|差异|收益|代价|是否|能否|何种|多大|哪些)/;
         const boundaryPattern = /(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化)/;
         const before = resultLines.slice(0, table.startLine).join('\n').trim()
             .split(/\n\s*\n/).filter(Boolean).slice(-5).reverse()
@@ -969,7 +1004,8 @@ function stripCoreSummaryNonResultNumerals(text) {
 }
 
 function hasCoreSummaryComparisonDirection(sentence, numbers) {
-    if (CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)) return true;
+    if (CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)
+        || /(?:从|由)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)/.test(sentence)) return true;
     // “基线为 12.4%，本文方法降至 9.8%”省略“从/由”仍是闭合比较；
     // “相对基线 12.4% 升至 9.8%”仍没有独立命名终点，不能仅凭两个数字通过。
     return numbers.length >= 2 && CORE_SUMMARY_BARE_TRANSITION_PATTERN.test(sentence)
@@ -982,8 +1018,37 @@ function hasCoreSummaryQuantitativeEvidence(text) {
         if (!sentence) return false;
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         if (!numbers.length) return false;
-        if (CORE_SUMMARY_METRIC_PATTERN.test(sentence)) return true;
-        if (!hasCoreSummaryComparisonDirection(sentence, numbers)) return false;
+        const hasComparisonObject = CORE_SUMMARY_COMPARISON_OBJECT_PATTERN.test(sentence);
+        const hasDirection = hasCoreSummaryComparisonDirection(sentence, numbers);
+        // In music papers, "score(s)" normally means notation rather than an
+        // evaluation metric. Likewise, "performance" may describe performed
+        // audio. Treat these generic English words as result metrics only when
+        // the sentence explicitly binds them to a numeric value or direction.
+        const withoutGenericEnglishMetrics = sentence.replace(
+            new RegExp(CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN.source, 'gi'), ' '
+        );
+        const hasSpecificMetric = CORE_SUMMARY_METRIC_PATTERN.test(withoutGenericEnglishMetrics)
+            || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(withoutGenericEnglishMetrics);
+        const hasExplicitGenericMetric = CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN.test(sentence)
+            && (hasDirection || /(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])[^。！？!?\n]{0,24}\b(?:is|are|was|were|at|of)\b\s*[-+]?\d/i.test(sentence));
+        const nonOperationalSentence = sentence.replace(
+            new RegExp(CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.source, 'gi'), ' ');
+        const nonOperationalWithoutGeneric = nonOperationalSentence.replace(
+            new RegExp(CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN.source, 'gi'), ' '
+        );
+        const hasNonOperationalMetric = CORE_SUMMARY_METRIC_PATTERN.test(nonOperationalWithoutGeneric)
+            || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(nonOperationalWithoutGeneric)
+            || hasExplicitGenericMetric;
+        // A latency/throughput/hardware/training-setting number is not a
+        // result comparison merely because a nearby sentence says
+        // “experiment” or “evaluation”.  It becomes result evidence only
+        // when the source names the compared side or gives an explicit
+        // directional transition.  Do not let an operational detail in the
+        // same sentence hide an independently reported result metric.
+        if (CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.test(sentence)
+            && !hasComparisonObject && !hasDirection && !hasNonOperationalMetric) return false;
+        if (hasSpecificMetric || hasExplicitGenericMetric) return true;
+        if (!hasDirection) return false;
         const measuredUnit = numbers.some(value => /(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分)$/i.test(value.trim()));
         const resultNoun = /(?:结果|数值|增益|差值|百分点|相对|绝对)/.test(sentence);
         return !(CORE_SUMMARY_NON_RESULT_PATTERN.test(sentence) && !measuredUnit && !resultNoun)
@@ -1005,8 +1070,24 @@ function hasSourceMeasuredLossComparison(sentences) {
         const hasExplicitContrast = /\b(?:while|whereas|versus|vs\.?|compared\s+(?:with|to))\b/i.test(sentence);
         if (!hasNamedSides && !hasExplicitContrast) return false;
         const localContext = values.slice(Math.max(0, index - 2), index + 1).join(' ');
-        return /(?:ablation|experiment|evaluation|result|benchmark|test set|dataset|消融|实验|评测|结果|基准|测试集|数据集)/i.test(localContext);
+        // Training-objective numbers alone are operational evidence.  Keep
+        // the special loss-function path only when the surrounding source
+        // binds it to an evaluation/test/benchmark result.
+        return /(?:comparative\s+evaluation|evaluation\s+result|benchmark|test\s+set|validation\s+set|dataset|对比评测|评测结果|基准|测试集|验证集|数据集)/i.test(localContext);
     });
+}
+
+function classifySourceQuantitativeEvidence(sourceText, sentences = null) {
+    if (!sourceText) return null;
+    const values = Array.isArray(sentences) ? sentences : String(sourceText).trim()
+        .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)
+        .map(sentence => sentence.trim()).filter(Boolean);
+    return values.some((sentence, index) => {
+        if (!hasCoreSummaryQuantitativeEvidence(sentence)) return false;
+        const localContext = values.slice(Math.max(0, index - 1), Math.min(values.length, index + 2)).join(' ');
+        return /(?:experiment|evaluation|result|benchmark|test set|dataset|table|metric|实验|评测|结果|基准|测试集|数据集|表格|指标)/i
+            .test(localContext);
+    }) || hasSourceMeasuredLossComparison(values);
 }
 
 function stripDuplicatedLineFootnoteMarkers(text) {
@@ -1024,11 +1105,22 @@ function coreSummaryQuantitativeResultState(text) {
         // CLAP can name either a metric or the comparison model. An explicit
         // model/baseline label cannot stand in for a missing result metric.
         const metricText = sentence.replace(/\bCLAP\s*(?:基线|模型|baseline\b|model\b)/giu, '');
-        const hasMetric = Boolean(sentence && CORE_SUMMARY_METRIC_PATTERN.test(metricText));
+        const hasMetric = Boolean(sentence && (
+            CORE_SUMMARY_METRIC_PATTERN.test(metricText)
+            || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(metricText)
+        ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
             && hasCoreSummaryComparisonDirection(sentence, numbers));
-        const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence);
+        // Conference sources commonly name a concrete split as
+        // “AliMeeting远场集” or “VoxAngeles未见语言集”, which is a real
+        // evaluation setting even though it contains neither the literal
+        // word “数据集” nor an English `test/benchmark` token. Accept only
+        // a named Latin identifier with an explicit setting suffix; the
+        // generic setting vocabulary above remains unchanged.
+        const hasNamedSetting = /(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))/i.test(sentence);
+        const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
+            || hasNamedSetting;
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
         const crossMetricComparison = hasCrossMetricDirectionalComparison(sentence);
@@ -1098,12 +1190,13 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     if (!/(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)/.test(summary)) {
         issues.push('缺少任务问题、输入输出或实际难点');
     }
-    const chain = summary.match(/(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件)/g) || [];
+    const chain = summary.match(/(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件|分(?:\d+|[一二三四五六七八九十]+)步)/g) || [];
     const roles = summary.match(/(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入)/g) || [];
     const tierRoleStages = new Set([...summary.matchAll(
         /(?<![A-Za-z0-9_])Tier[-‐‑‒–—]([LMH])(?![A-Za-z0-9_])[^；。！？!?\n]{0,120}(?:负责|用于|承担|提取|编码|定位|筛选|生成|融合|对比|优化|校准|解码|预测|输出|构建|约束|传递|送入|打分|匹配|投票|检索|推理|判决|路由)/gi
     )].map(match => match[1].toUpperCase()));
-    const hasNumberedMethodChain = chain.length >= 2 && roles.length >= 2;
+    const hasNumberedMethodChain = (chain.length >= 2
+        || /分(?:\d+|[一二三四五六七八九十]+)步/.test(summary)) && roles.length >= 2;
     const hasTieredMethodChain = tierRoleStages.size >= 2;
     if (!hasNumberedMethodChain && !hasTieredMethodChain) {
         issues.push('缺少 2–4 步方法链的分工与衔接');
@@ -1119,23 +1212,11 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)
         .map(sentence => sentence.trim())
         .filter(Boolean);
-    const sourceHasQuantitativeEvidence = sourceText
-        // PDF soft wraps have already been joined above. Split English dots
-        // only before a normal capitalized next sentence, preserving decimal
-        // points and references such as "Fig. 3" inside the evidence sentence.
-        ? quantitativeSourceSentences.some((sentence, index) => {
-            if (!hasCoreSummaryQuantitativeEvidence(sentence)) return false;
-            // arXiv text extraction commonly leaves a short “Results.” heading
-            // on the line immediately before the metric sentence.  Bind the
-            // evidence marker to a small local window instead of requiring it
-            // to survive on the exact same flattened line.
-            const localContext = quantitativeSourceSentences
-                .slice(Math.max(0, index - 1), Math.min(quantitativeSourceSentences.length, index + 2))
-                .join(' ');
-            return /(?:experiment|evaluation|result|benchmark|test set|dataset|table|metric|实验|评测|结果|基准|测试集|数据集|表格|指标)/i
-                .test(localContext);
-        }) || hasSourceMeasuredLossComparison(quantitativeSourceSentences)
-        : null;
+    // PDF soft wraps have already been joined above.  The source classifier
+    // deliberately distinguishes measured result evidence from operational
+    // parameters such as GPUs, steps, latency and compute cost.
+    const sourceHasQuantitativeEvidence = classifySourceQuantitativeEvidence(
+        sourceText, quantitativeSourceSentences);
     const quantitativeResultState = coreSummaryQuantitativeResultState(summary);
     const completeQuantitativeResult = quantitativeResultState.complete;
     if (sourceHasQuantitativeEvidence === true && !completeQuantitativeResult) {
@@ -2203,6 +2284,9 @@ module.exports = {
     CORE_SUMMARY_MAX_CHINESE_CHARS,
     CORE_SUMMARY_MIN_SENTENCES,
     CORE_SUMMARY_MAX_SENTENCES,
+    hasCoreSummaryQuantitativeEvidence,
+    hasSourceMeasuredLossComparison,
+    classifySourceQuantitativeEvidence,
     validateCoreSummarySemanticContract,
     coreSummaryProjectionSha256,
     taxonomySurfaceSha256,

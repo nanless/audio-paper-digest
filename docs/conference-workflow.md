@@ -2,6 +2,69 @@
 
 ## 2026 新会议路线（daily workspace）
 
+### 恢复与维护入口
+
+`npm run conference:new:workspace` 只读检查工作区：未提交内容、配置重复定义和进程
+存活信息分别报告；旧 JSON 中的 `running` 不代表现在还有进程。不要为了显示完成而改状态。
+`npm run storage:pdf-duplicates -- --json` 只报告 PDF 重复候选；默认按来源凭证声明的哈希
+分组，不能把它当成逐字节验证或删除授权。显式 `--hash-bytes` 才重新读全部 PDF 计算哈希，
+大目录耗时较长。会议来源及发布凭证受保护，不属于自动 prune 范围。
+
+新会议队列必须使用明确的计划文件，每个条目指定已筛选的 catalog/report/filter，按数组
+顺序完成一个会议再进入下一个。计划合同为 `conference-queue-plan-v1`，例如：
+
+```json
+{
+  "contract": "conference-queue-plan-v1",
+  "version": 1,
+  "conferences": [
+    {
+      "conferenceId": "acl-2026",
+      "catalogName": "acl-2026.json",
+      "reportName": "acl-2026-report.json",
+      "filterId": "a144e9b3-e014-4f21-a42a-c260c54385b1",
+      "concurrency": 3
+    }
+  ]
+}
+```
+
+```bash
+npm run conference:new:queue -- --dry-run --plan /absolute/path/plan.json
+npm run conference:new:queue -- --status --plan /absolute/path/plan.json
+# 显式执行才会调用模型与发布；先检查 dry-run 的复用/待执行项
+npm run conference:new:queue -- --apply --plan /absolute/path/plan.json
+```
+
+余额、认证、限流或系统传输错误会停止后续派发；保留在途结果和具体失败证据。
+只有确认故障解除后，才在执行命令中显式加 `--retry-failed` 解除暂停/重试限制。
+普通重试不能清掉错误证据或重新分析已完成项。代码/解析器升级先按提示做显式迁移，
+保留旧来源和分析，使用新 generation 重提取；不能放宽旧凭证校验来绕过版本不符。
+
+来源升级是独立的、需要明确授权的新分析，不把旧完成记录冒充新来源结果：
+
+```bash
+# 只读列出绑定旧批次、输入 SHA 和当前解析器的升级计划
+npm run conference:new:process -- --source-upgrade-plan \
+  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID
+# 确认计划后只分析明确列出的论文；PLAN_SHA256 必须等于刚才的计划 SHA
+npm run conference:new:process -- --source-upgrade-apply \
+  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID \
+  --plan-sha PLAN_SHA256 --paper-ids 'PAPER_ID_1,PAPER_ID_2' \
+  --authorize-new-analysis --concurrency 3
+# 全成员升级成果齐备后才能生成新的标准会议 process/汇总；此步骤不发布
+npm run conference:new:process -- --source-upgrade-promote \
+  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID \
+  --plan-sha PLAN_SHA256
+```
+
+未选择的旧成果保持原样；子集升级不等于整会议完成。promotion 返回新 `processId`，
+后续发布使用这个 ID；旧 process、分析和发布凭证均保留。升级不承诺跨来源自动复用模型
+阶段；输入证明变化时必须明确说明新分析成本，不能静默启动。
+
+发布验收分层：本地 HTML 检查、远端 Git 字节和实际线上 URL 验收分别记录。
+机械验收不等于语义审查、浏览器运行数学脚本或人工视觉确认，报告必须保留这种区别。
+
 新会议不是一套“只抓标题和 PDF”的旁路。它只在来源入口上区别于 arXiv 日更，进入
 分析后必须复用同一套 `analysis-engine.js`、13 个 canonical 一级标题、类型感知八维评分、
 `beginner-researcher-v3` Reader、`api-reader-source-bindings-v4` 和 current taxonomy。
@@ -22,12 +85,18 @@ current taxonomy compat 的单篇页及 `reader-facing-v3` 风格会议汇总。
 
 当前官方 acquisition provider：
 
-- 语音/音频/音乐：`odyssey-2026`、`iwslt-2026`、`eusipco-2026`、`nime-2026`、
-  `dafx-2026`；
+- 语音/音频/音乐：`odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、
+  `iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`；
 - AI/ML/CV/NLP：`aaai-2026`（OJS volume 40）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、
   `cvpr-2026`（CVF main）、`acl-2026`、`eacl-2026`；
 - ACL/EACL 只纳入主会 `long`、`short` 和 `findings`，卷首、全集 PDF、workshop 与
   非论文演讲不会冒充单篇论文；Odyssey keynote 摘要页同样排除。
+
+CHiME、JEP 和 Speech Prosody 通过各自的官方 ISCA Archive proceedings index
+封存 metadata 与逐篇 PDF。ICMC 2026 的官方页面只提供一个合并 proceedings PDF；
+`icmc-2026` 先封存该 PDF，再按官方 outline 的物理页范围用固定脚本确定性切片，
+生成 page map、单篇 PDF 与绑定原始合并 PDF SHA 的 receipt。无法从源 PDF 恢复的页
+仍保留为 evidence 状态，不用猜测的标题、表格或公式补齐。
 
 AAAI 2026 的 volume 40 是 48 个独立 OJS issue，而 `/issue/current` 只指向其中一期。
 `aaai-2026 catalog` 因此只接受代码中固定的 48 个官方 issue URL；每一期分别封存
@@ -73,13 +142,13 @@ npm run conference:new:discover -- --apply \
 `daily` 的本工作区并由 wrapper 显式签发 new-conference mode 时放行；原有 `conference:*`
 仍只属于 history workspace。
 
-会议 PDF 当前是可验证的全文、但结构能力仍标为 `weak`：文本可进入同一深度理解和
-Reader/评分流程；没有结构化 DOM/TeX/像素证据时，表格、公式或 Figure 必须显示不可得，
-不能猜测或冒充与 arXiv HTML 完全等价。认证的 weak source 会签发
-`conference-reader-weak-unavailable-structure-v1`，强制 Reader 的 `tableBindings`、
-`formulaBindings`、`figurePlacements` 均为空，并把定量结果和公式含义改用可核对的自然段表达；
-这不会放宽日更 Reader v3/source-bindings v4。这里的 postprocess 产物仍是 runtime staging，
-不代表博客 generate/review/push 已获授权。
+会议 PDF 通过固定版本 PyMuPDF 提取全文、表格、公式候选与 Figure，并保留可重放的
+页面/区域像素证据。不能因来源为 PDF 就统一宣称图表公式不可得，也不能将普通文本
+拼接结果冒充完整 TeX。各结构必须按实际恢复与验证结果决定是否进入 Reader 绑定；
+无法可靠恢复的公式保留候选及原图证据，不能静默丢掉上下标后标记成功。
+旧 `weak` 来源合同只用于真实缺失结构的兼容读取，不代表当前新会议的默认能力。
+postprocess 产物仍是 runtime staging；最终发布必须经过会议 generate、review、push
+及最终页面验收，不能将来源哈希一致或 Hugo 构建通过当成完整内容验收。
 
 状态：`conference-source-ledger-v1` 与 `conference-run-v2` 是主分支中的基础
 契约。它们用于把已下载的会议 PDF 变成可审计的**候选来源**；它们不自动调用
@@ -368,10 +437,15 @@ extraction request 与其 metadata/PDF/输出都使用 staging source 根下的�
 ```
 
 `--verify` 不信任已有派生文件：它在临时目录用固定 `PyMuPDF==1.27.2.3` 重新提取，并要求新旧
-text/visual-artifact/receipt 字节完全一致。当前结构化提取器版本为 `2.2.0`，同时保留逐页
+text/visual-artifact/receipt 字节完全一致。默认结构化提取器版本为 `2.2.3`，同时保留逐页
 视觉审计和可定位的结构记录。Node extraction handle 默认执行临时重提取；同一次自动
 process 的 staging/import 可用 `replay: false` 重放已封存字节与回执，避免重复解析。
 人工单独运行 `--verify` 只用于诊断，不能代替后续来源绑定门禁。
+
+默认 extraction profile 要求不少于 5000 个非空字符。JEP 2026 与 ICMC 2026
+官方 proceedings 中存在完整的两页短论文，因此这两个会议使用显式绑定的
+3000 字符短篇 profile；仍然要求原始 PDF、逐页文本、结构化工件和 SHA-256
+全部可回放，不能把摘要或缺失正文当作短篇全文。
 
 人工复核清单放在 `data/runtime/conference-staging-specs/`，只引用 canonical `paperId`、locator
 `sourceIdentity` 与已经生成的 receipt；成员按 `paperId` 排序，`membersSha256` 绑定整个数组：

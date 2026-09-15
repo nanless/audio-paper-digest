@@ -1696,6 +1696,20 @@ describe('analysis run status', () => {
         assert.strictEqual(releaseNew(), true);
     });
 
+    it('hostname 在进程存活期间刷新时仍能释放自己持有的锁', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-hostname-refresh-'));
+        const target = path.join(dir, 'result.json');
+        const release = acquireFileLockSync(target);
+        const originalHostname = os.hostname;
+        os.hostname = () => `${originalHostname()}-refreshed`;
+        try {
+            assert.strictEqual(release(), true);
+        } finally {
+            os.hostname = originalHostname;
+        }
+        assert.strictEqual(fs.existsSync(`${target}.lock`), false);
+    });
+
     it('release 拒绝目录 ABA，即使 replacement 复用了完全相同的 owner 字节', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-dir-aba-'));
         const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;

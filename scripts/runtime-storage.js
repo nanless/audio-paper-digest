@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { loadProjectEnv } = require('./env-loader.js');
+const { requireExternalRuntime } = require('./env-loader.js');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_RETENTION_DAYS = 30;
@@ -15,6 +15,8 @@ const LEGACY_DEBUG_DIRS = Object.freeze([
     'iclr_filter_input_output'
 ]);
 const PATH_KEY_RE = /(?:^|_)(?:cache|asset|file|local|input|output|materialized)?path$/i;
+const PDF_SHA_RE = /^[a-f0-9]{64}$/i;
+const MAX_RECEIPT_BYTES = 4 * 1024 * 1024;
 
 function isInside(candidate, root) {
     const relative = path.relative(path.resolve(root), path.resolve(candidate));
@@ -48,10 +50,13 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'daily-fresh-source-runs', root: path.join(runtime, 'daily-fresh-source-runs') },
         { key: 'fetched-arxiv-sources', root: path.join(runtime, 'fetched-arxiv-sources') },
         { key: 'historical-arxiv-fresh-failure-handoffs', root: path.join(runtime, 'historical-arxiv-fresh-failure-handoffs') },
+        { key: 'historical-arxiv-publication-metadata', root: path.join(runtime, 'historical-arxiv-publication-metadata') },
+        { key: 'official-conference-acquisitions', root: path.join(runtime, 'official-conference-acquisitions') },
         { key: 'conference-discovery-catalogs', root: path.join(runtime, 'conference-discovery-catalogs') },
         { key: 'conference-discovery-reports', root: path.join(runtime, 'conference-discovery-reports') },
         { key: 'conference-filter-specs', root: path.join(runtime, 'conference-filter-specs') },
         { key: 'conference-filters', root: path.join(runtime, 'conference-filters') },
+        { key: 'conference-filter-evidence-runs', root: path.join(runtime, 'conference-filter-evidence-runs') },
         { key: 'conference-staging-specs', root: path.join(runtime, 'conference-staging-specs') },
         { key: 'conference-staging-sources', root: path.join(runtime, 'conference-staging-sources') },
         { key: 'conference-staging', root: path.join(runtime, 'conference-staging') },
@@ -62,6 +67,22 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'conference-analysis-executions', root: path.join(runtime, 'conference-analysis-executions') },
         { key: 'conference-page-staging', root: path.join(runtime, 'conference-page-staging') },
         { key: 'conference-aggregates', root: path.join(runtime, 'conference-aggregates') },
+        { key: 'conference-processes', root: path.join(runtime, 'conference-processes') },
+        { key: 'conference-queues', root: path.join(runtime, 'conference-queues') },
+        { key: 'conference-publications', root: path.join(runtime, 'conference-publications') },
+        { key: 'conference-source-recovery', root: path.join(runtime, 'conference-source-recovery') },
+        { key: 'blog-republication-archives', root: path.join(runtime, 'blog-republication-archives') },
+        { key: 'canonical-maintenance', root: path.join(runtime, 'canonical-maintenance') },
+        { key: 'daily-fetch-refresh-backups', root: path.join(runtime, 'daily-fetch-refresh-backups') },
+        { key: 'fresh-rewrites', root: path.join(runtime, 'fresh-rewrites') },
+        { key: 'fresh-source-diagnostics', root: path.join(runtime, 'fresh-source-diagnostics') },
+        { key: 'llm-usage', root: path.join(runtime, 'llm-usage') },
+        { key: 'publication-amendments', root: path.join(runtime, 'publication-amendments') },
+        { key: 'reader-attempts', root: path.join(runtime, 'reader-attempts') },
+        { key: 'reader-efficiency-evaluations', root: path.join(runtime, 'reader-efficiency-evaluations') },
+        { key: 'stale-locks', root: path.join(runtime, 'stale-locks') },
+        { key: 'tag-taxonomy-audit', root: path.join(runtime, 'tag-taxonomy-audit') },
+        { key: 'taxonomy-preview', root: path.join(runtime, 'taxonomy-preview') },
         { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
         { key: 'direct-local-inputs', root: path.join(runtime, 'direct-local-inputs') },
         { key: 'historical-conference-local-sources', root: path.join(runtime, 'historical-conference-local-sources') },
@@ -99,8 +120,30 @@ function getLayout(projectRoot = PROJECT_ROOT) {
 }
 
 function readRetentionDays(value = process.env.PD_STORAGE_RETENTION_DAYS) {
-    const parsed = Number.parseInt(String(value ?? ''), 10);
+    const configured = value ?? readProjectEnvValue('PD_STORAGE_RETENTION_DAYS');
+    const parsed = Number.parseInt(String(configured ?? ''), 10);
     return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_RETENTION_DAYS;
+}
+
+// Do not call env-loader here: its compatibility loader chmods .env. Storage
+// status and diagnostics must remain read-only, including when the file already
+// contains the correct value. This parser is intentionally value-blind to the
+// caller; it is used only for the retention setting.
+function readProjectEnvValue(key, envFile = path.join(PROJECT_ROOT, '.env')) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key))) return undefined;
+    let source;
+    try { source = fs.readFileSync(envFile, 'utf8'); }
+    catch (_) { return undefined; }
+    let result;
+    for (const line of source.split('\n')) {
+        const trimmed = line.trim();
+        const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+        if (!match || match[1] !== key) continue;
+        result = match[2].trim();
+        if ((result.startsWith('"') && result.endsWith('"'))
+            || (result.startsWith("'") && result.endsWith("'"))) result = result.slice(1, -1);
+    }
+    return result;
 }
 
 function commonRuntimeLockPaths(layout) {
@@ -201,19 +244,226 @@ function treeStats(root) {
     return result;
 }
 
+function runtimeTopLevelTargets(layout) {
+    const known = new Set(layout.protectedRuntime.map(item => path.resolve(item.root)));
+    const targets = [];
+    try {
+        for (const entry of fs.readdirSync(layout.runtime, { withFileTypes: true })) {
+            const target = path.join(layout.runtime, entry.name);
+            if (!known.has(path.resolve(target))) targets.push({
+                key: `data/runtime/${entry.name}`,
+                root: target
+            });
+        }
+    } catch (_) {
+        // data/runtime itself is still reported and treeStats records the error
+        // boundary if it cannot be read.
+    }
+    return targets.sort((a, b) => a.key.localeCompare(b.key));
+}
+
 function getStorageStatus(options = {}) {
     const layout = getLayout(options.projectRoot);
     const targets = [
         { key: 'data/current', root: layout.current },
         { key: 'data/archive', root: layout.archive },
+        { key: 'data/runtime', root: layout.runtime },
         { key: 'logs', root: layout.logs },
         ...layout.controlled.filter(item => item.key !== 'logs').map(item => ({ key: item.key, root: item.root })),
-        ...layout.protectedRuntime
+        ...layout.protectedRuntime,
+        ...runtimeTopLevelTargets(layout)
     ];
     return {
         projectRoot: layout.projectRoot,
         generatedAt: new Date(options.nowMs ?? Date.now()).toISOString(),
         targets: targets.map(target => ({ key: target.key, ...treeStats(target.root) }))
+    };
+}
+
+function readJsonObject(filename, blockers) {
+    let named;
+    try { named = fs.lstatSync(filename); }
+    catch (error) { blockers.push({ type: 'io', path: filename, message: error.message }); return null; }
+    if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || named.size > MAX_RECEIPT_BYTES) {
+        blockers.push({ type: 'unsafe_receipt', path: filename, message: 'receipt 必须是有界普通单链接文件' });
+        return null;
+    }
+    try {
+        const fd = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+        try {
+            const opened = fs.fstatSync(fd);
+            if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino) {
+                blockers.push({ type: 'changed_receipt', path: filename, message: 'receipt 在读取期间发生身份变化' });
+                return null;
+            }
+            const raw = fs.readFileSync(fd, 'utf8');
+            const after = fs.fstatSync(fd);
+            if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
+                blockers.push({ type: 'changed_receipt', path: filename, message: 'receipt 在读取期间发生变化' });
+                return null;
+            }
+            return JSON.parse(raw);
+        } finally { fs.closeSync(fd); }
+    } catch (error) {
+        blockers.push({ type: 'invalid_receipt', path: filename, message: error.message });
+        return null;
+    }
+}
+
+function declaredPdfHash(value) {
+    return PDF_SHA_RE.test(String(value || '')) ? String(value).toLowerCase() : null;
+}
+
+function addPdfDeclaration(declarations, blockers, pdfPath, hash, receiptPath, sourceKind, runtimeRoot) {
+    const declaredHash = declaredPdfHash(hash);
+    if (!declaredHash) {
+        blockers.push({ type: 'missing_pdf_hash', path: receiptPath, message: 'receipt 没有合法的 PDF SHA-256' });
+        return;
+    }
+    const resolvedPdf = path.resolve(pdfPath);
+    if (!isInside(resolvedPdf, runtimeRoot)) {
+        blockers.push({ type: 'path_escape', path: receiptPath, message: 'receipt PDF 路径逃逸 runtime' });
+        return;
+    }
+    const existing = declarations.get(resolvedPdf) || [];
+    existing.push({ declaredHash, receiptPath: path.resolve(receiptPath), sourceKind });
+    declarations.set(resolvedPdf, existing);
+}
+
+function scanPdfDeclarations(layout, declarations, blockers) {
+    walk(layout.runtime, (entryPath, stat) => {
+        if (!stat.isFile() || path.extname(entryPath).toLowerCase() !== '.json') return;
+        const relative = path.relative(layout.runtime, entryPath).replace(/\\/g, '/');
+        const parts = relative.split('/');
+        const base = path.basename(entryPath);
+        const inOfficialReceipts = parts[0] === 'official-conference-acquisitions'
+            && parts.includes('receipts');
+        const isEvidenceReceipt = base === 'evidence-receipt.json';
+        const isExtractionReceipt = /extraction-receipt\.json$/i.test(base);
+        if (!inOfficialReceipts && !isEvidenceReceipt && !isExtractionReceipt) return;
+        const value = readJsonObject(entryPath, blockers);
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+        if (inOfficialReceipts && value.pdf) {
+            const providerRoot = path.resolve(entryPath, '..', '..');
+            addPdfDeclaration(declarations, blockers,
+                path.join(providerRoot, String(value.pdf.relativePath || '')),
+                value.pdf.sha256, entryPath, 'official-pdf-receipt', layout.runtime);
+        }
+        if (isEvidenceReceipt && value.discovery) {
+            addPdfDeclaration(declarations, blockers, path.join(path.dirname(entryPath), 'paper.pdf'),
+                value.discovery.pdfSha256, entryPath, 'evidence-receipt', layout.runtime);
+        }
+        if (isExtractionReceipt && value.source?.pdf) {
+            addPdfDeclaration(declarations, blockers,
+                path.join(path.dirname(entryPath), String(value.source.pdf.file || '')),
+                value.source.pdf.sha256, entryPath, 'extraction-receipt', layout.runtime);
+        }
+    }, blockers);
+}
+
+function hashFileBytes(filename) {
+    const hash = crypto.createHash('sha256');
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    try {
+        let bytesRead;
+        do {
+            bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+            if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+        } while (bytesRead > 0);
+    } finally { fs.closeSync(fd); }
+    return hash.digest('hex');
+}
+
+function getPdfDuplicateReport(options = {}) {
+    const layout = getLayout(options.projectRoot);
+    const hashBytes = options.hashBytes === true;
+    const blockers = [];
+    const declarations = new Map();
+    const files = new Map();
+    scanPdfDeclarations(layout, declarations, blockers);
+    walk(layout.runtime, (entryPath, stat) => {
+        if (!stat.isFile() || path.extname(entryPath).toLowerCase() !== '.pdf') return;
+        files.set(path.resolve(entryPath), { path: path.resolve(entryPath), bytes: stat.size });
+    }, blockers);
+
+    for (const [pdfPath, claims] of declarations.entries()) {
+        const current = files.get(pdfPath);
+        if (!current) {
+            files.set(pdfPath, { path: pdfPath, bytes: null });
+        }
+        files.get(pdfPath).claims = claims;
+    }
+
+    const records = [...files.values()].sort((a, b) => a.path.localeCompare(b.path)).map(record => {
+        const claims = record.claims || [];
+        const declaredHashes = [...new Set(claims.map(item => item.declaredHash))];
+        let actualHash = null;
+        let hashSource = 'none';
+        let byteVerified = false;
+        let declaredHashMismatch = false;
+        if (record.bytes !== null && hashBytes) {
+            try {
+                actualHash = hashFileBytes(record.path);
+                hashSource = 'bytes';
+                byteVerified = true;
+                declaredHashMismatch = declaredHashes.length > 0 && !declaredHashes.includes(actualHash);
+            } catch (error) {
+                blockers.push({ type: 'io', path: record.path, message: `PDF SHA 计算失败: ${error.message}` });
+            }
+        } else if (record.bytes !== null && declaredHashes.length > 0) {
+            actualHash = declaredHashes[0];
+            hashSource = 'receipt-declared';
+        }
+        return {
+            path: record.path,
+            bytes: record.bytes,
+            exists: record.bytes !== null,
+            hash: actualHash,
+            hashSource,
+            byteVerified,
+            declaredHashMismatch,
+            receiptClaims: claims.map(item => ({
+                receiptPath: item.receiptPath,
+                declaredHash: item.declaredHash,
+                sourceKind: item.sourceKind
+            }))
+        };
+    });
+    const groups = new Map();
+    for (const record of records) {
+        if (!record.hash) continue;
+        const group = groups.get(record.hash) || [];
+        group.push(record);
+        groups.set(record.hash, group);
+    }
+    const duplicateGroups = [...groups.entries()]
+        .filter(([, group]) => group.length > 1)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([hash, group]) => ({
+            hash,
+            basis: hashBytes ? 'bytes' : 'receipt-declared',
+            byteVerified: hashBytes && group.every(item => item.byteVerified),
+            occurrences: group,
+            occurrenceCount: group.length,
+            totalBytes: group.reduce((sum, item) => sum + (item.bytes || 0), 0)
+        }));
+    return {
+        contract: 'runtime-storage-pdf-duplicates-v1',
+        generatedAt: new Date(options.nowMs ?? Date.now()).toISOString(),
+        projectRoot: layout.projectRoot,
+        hashMode: hashBytes ? 'bytes' : 'receipt-declared',
+        byteVerification: hashBytes,
+        byteVerificationNote: hashBytes
+            ? '逐 PDF 读取并计算 SHA-256。'
+            : '默认只使用 receipt 宣称的 SHA-256；未读取 PDF 字节，重复组不等同于已完成字节一致性验证。',
+        pdfFiles: records,
+        duplicateGroups,
+        scannedPdfCount: records.filter(item => item.exists).length,
+        declaredPdfCount: records.filter(item => item.receiptClaims.length > 0).length,
+        unboundPdfCount: records.filter(item => item.exists && item.receiptClaims.length === 0).length,
+        missingDeclaredPdfCount: records.filter(item => !item.exists && item.receiptClaims.length > 0).length,
+        blockers
     };
 }
 
@@ -504,7 +754,22 @@ function printPlan(plan, options = {}) {
     else console.log('Dry-run only. Re-run with --apply to delete the listed files.');
 }
 
+function printPdfDuplicateReport(report) {
+    console.log(`PDF duplicate report (${report.hashMode}): ${report.scannedPdfCount} PDFs, ${report.duplicateGroups.length} duplicate groups`);
+    console.log(report.byteVerificationNote);
+    for (const group of report.duplicateGroups) {
+        console.log(`- ${group.hash} (${group.occurrenceCount} files; ${formatBytes(group.totalBytes)}; byteVerified=${group.byteVerified})`);
+        for (const occurrence of group.occurrences) console.log(`  ${occurrence.path}`);
+    }
+    console.log(`Unbound PDFs: ${report.unboundPdfCount}; missing receipt targets: ${report.missingDeclaredPdfCount}`);
+    if (report.blockers.length > 0) {
+        console.log(`Diagnostics blockers: ${report.blockers.length}`);
+        for (const blocker of report.blockers) console.log(`! ${blocker.type}: ${blocker.path}`);
+    }
+}
+
 function main(argv = process.argv.slice(2)) {
+    requireExternalRuntime('runtime-storage.js');
     const command = argv[0] || 'status';
     if (command === 'status') {
         if (argv.length > 1) throw new Error(`status 命令不接受参数: ${argv.slice(1).join(' ')}`);
@@ -524,7 +789,19 @@ function main(argv = process.argv.slice(2)) {
         printPlan(result, { verbose });
         return;
     }
-    throw new Error(`未知命令: ${command}（仅支持 status / prune）`);
+    if (command === 'pdf-duplicates') {
+        const flags = argv.slice(1);
+        const allowed = new Set(['--hash-bytes', '--json']);
+        const unknown = flags.filter(flag => !allowed.has(flag));
+        const duplicates = flags.filter((flag, index) => flags.indexOf(flag) !== index);
+        if (unknown.length > 0) throw new Error(`pdf-duplicates 未知参数: ${unknown.join(', ')}`);
+        if (duplicates.length > 0) throw new Error(`pdf-duplicates 重复参数: ${[...new Set(duplicates)].join(', ')}`);
+        const report = getPdfDuplicateReport({ hashBytes: flags.includes('--hash-bytes') });
+        if (flags.includes('--json')) console.log(JSON.stringify(report, null, 2));
+        else printPdfDuplicateReport(report);
+        return;
+    }
+    throw new Error(`未知命令: ${command}（仅支持 status / prune / pdf-duplicates）`);
 }
 
 module.exports = {
@@ -532,6 +809,8 @@ module.exports = {
     LEGACY_DEBUG_DIRS,
     getLayout,
     getStorageStatus,
+    treeStats,
+    getPdfDuplicateReport,
     buildPrunePlan,
     pruneStorage,
     activeRuntimeLockBlockers,
@@ -541,7 +820,6 @@ module.exports = {
 
 if (require.main === module) {
     try {
-        loadProjectEnv();
         main();
     } catch (error) {
         console.error(error.message);

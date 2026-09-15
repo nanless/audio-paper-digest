@@ -43,6 +43,8 @@ from publish_common import (  # noqa: E402
     count_blocking_review_issues,
     resolve_publish_parsed,
     sanitize_markdown_for_publish,
+    escape_statistical_significance_stars,
+    escape_technical_notation_asterisks,
     strip_internal_scoring_anchors,
     select_blog_published_snapshot,
     strip_raw_inline_html,
@@ -1469,6 +1471,18 @@ primary_method_tag: #基准测试
         self.assertEqual(fixed, text)
         self.assertEqual(escape_html_like_tags(fixed), fixed)
 
+    def test_escape_html_like_tags_preserves_text_before_inline_control_token(self):
+        text = '目标命令是 `turn off <EOT>`。'
+        fixed = escape_html_like_tags(text)
+        self.assertEqual(fixed, text)
+        self.assertEqual(escape_html_like_tags(fixed), fixed)
+
+    def test_escape_html_like_tags_repairs_nested_inline_control_token(self):
+        text = '目标命令是 `turn off `<EOT>``。'
+        fixed = escape_html_like_tags(text)
+        self.assertEqual(fixed, '目标命令是 `turn off &lt;EOT&gt;`。')
+        self.assertEqual(escape_html_like_tags(fixed), fixed)
+
     def test_yaml_unbalanced_quotes(self):
         text = '---\ntitle: "Bad title\n---\nbody'
         fixed = fix_yaml_unbalanced_quotes(text)
@@ -1520,6 +1534,38 @@ primary_method_tag: #基准测试
         self.assertIn(r'| sequence 2 | \*\_\*\_\_\_\*\*\*\* |', fixed)
         self.assertIn('| code | *******___ |', fixed)
         self.assertEqual(sanitize_markdown_for_publish(fixed), fixed)
+
+    def test_sanitize_escapes_statistical_significance_stars(self):
+        table = (
+            '| 指标 | p 值 |\n'
+            '| --- | --- |\n'
+            '| 平均句时长 | p = 1.32e-10*** |\n'
+            '| F1 | p = 0.00908** |\n'
+            '| 备注 | p < 0.05 |\n'
+        )
+        fixed = sanitize_markdown_for_publish(table)
+        self.assertIn(r'p = 1.32e-10\*\*\*', fixed)
+        self.assertIn(r'p = 0.00908\*\*', fixed)
+        self.assertIn('p < 0.05', fixed)
+        self.assertEqual(sanitize_markdown_for_publish(fixed), fixed)
+
+    def test_statistical_significance_stars_skip_code_fences(self):
+        code = '```text\np = 0.00908**\n```\n'
+        self.assertEqual(escape_statistical_significance_stars(code), code)
+
+    def test_sanitize_escapes_technical_notation_stars_without_touching_frontmatter(self):
+        text = (
+            '---\n'
+            'description: "H1*-H2* 是技术记号"\n'
+            '---\n'
+            '**H1*-H2*：** 这里的星号属于校正后的测量名称。\n'
+            '```text\nH1*-H2*\n```\n'
+        )
+        fixed = sanitize_markdown_for_publish(text)
+        self.assertIn('description: "H1*-H2* 是技术记号"', fixed)
+        self.assertIn(r'**H1\*-H2\*：**', fixed)
+        self.assertIn('```text\nH1*-H2*\n```', fixed)
+        self.assertEqual(escape_technical_notation_asterisks(fixed), fixed)
 
     def test_latex_delimiters_do_not_pair_currency_or_cross_table_cells(self):
         for text in ('$0.2 and $1.0', '$20, $30 and $40', r'\$20 and \$30',

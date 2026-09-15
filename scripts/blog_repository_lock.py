@@ -253,8 +253,16 @@ def _reclaimable(snapshot, configured_lease, now=None):
         newest_ns = max(newest_ns, owner['mtimeNs'])
         if owner['record'] is not None:
             lease = owner['record']['leaseSeconds']
-        if owner['record'] is not None and _pid_state(owner['record']) == 'alive':
-            return False
+        if owner['record'] is not None:
+            pid_state = _pid_state(owner['record'])
+            if pid_state == 'alive':
+                return False
+            # A same-host dead PID is stronger evidence than the heartbeat
+            # lease: the owner process cannot renew or release this lock.
+            # Remote owners remain lease-bound because their PID cannot be
+            # checked safely from this machine.
+            if pid_state == 'dead':
+                return True
     return now - newest_ns / 1_000_000_000 > lease
 
 

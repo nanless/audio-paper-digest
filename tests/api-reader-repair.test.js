@@ -759,6 +759,77 @@ test('missing result table repair moves one stable experiment table/binding into
     assert.ok(merged.sections[7].body.includes('| 方法 4 | 设置 40 | 400 | 4000 |'));
 });
 
+test('missing result table addition closes a prior binding gap without moving setup evidence', () => {
+    const draft = fixture();
+    const block = (name, value) => `\n\n| 方法 | 指标 | 条件 | 结果 A | 结果 B | 结果 C |\n| --- | --- | --- | --- | --- | --- |\n| ${name} | ${value} | 对照 ${value} | ${value}00 | ${value}000 | ${value}0000 |`;
+    draft.sections[6].body += block('设置表', '10');
+    draft.sections[7].body += block('已有结果', '20');
+    draft.tableBindings = [
+        { tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: ['设置表原文证据'] },
+        { tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: ['已有结果原文证据'] },
+        { tableIndex: 3, sourceType: 'source_quotes', sourceTableOrdinal: null,
+            cellBindings: [], sourceQuotes: ['缺失结果原文证据'] }
+    ];
+    const context = buildRepairContext(draft, [{ code: 'reader_result_table_missing',
+        message: '读者文章主结果表覆盖不足：原论文 TABLE_1 明确提供定量结果' }], '完整来源');
+    const operation = context.atomicOperation;
+    assert.equal(operation.kind, 'add_result_table_v1');
+    assert.equal(operation.bindingIndex, 2);
+    const added = block('补充结果', '30');
+    const merged = applyReaderPatch(draft, patchFor(draft, [
+        ['/sections/7/body', `${draft.sections[7].body}${added}`],
+        ['/tableBindings/2', structuredClone(draft.tableBindings[2])]
+    ]), context.targets.map(target => target.path), { atomicOperation: operation });
+    assert.equal((merged.sections[6].body.match(/^\|/gm) || []).length,
+        (draft.sections[6].body.match(/^\|/gm) || []).length);
+    assert.equal((merged.sections[7].body.match(/^\|/gm) || []).length,
+        (draft.sections[7].body.match(/^\|/gm) || []).length + 3);
+});
+
+test('result-table relocation still applies when table and binding streams are already closed', () => {
+    const draft = fixture();
+    const block = (name, value) => `\n\n| 方法 | 指标 | 条件 | 结果 A | 结果 B | 结果 C |\n| --- | --- | --- | --- | --- | --- |\n| ${name} | ${value} | 对照 ${value} | ${value}00 | ${value}000 | ${value}0000 |`;
+    draft.sections[6].body += block('设置表', '10') + block('设置表2', '11');
+    draft.sections[7].body += block('已有结果', '20');
+    draft.tableBindings = [0, 1, 2].map(index => ({
+        tableIndex: index + 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+        cellBindings: [], sourceQuotes: [`表 ${index + 1} 原文证据`]
+    }));
+    const context = buildRepairContext(draft, [{ code: 'reader_result_table_missing',
+        message: '读者文章主结果表覆盖不足：原论文 TABLE_1 明确提供定量结果' }], '完整来源');
+    const operation = context.atomicOperation;
+    assert.equal(operation.kind, 'relocate_result_table_v1');
+    assert.equal(operation.donorGlobalTableIndex, 2);
+    const donor = block('设置表2', '11');
+    const moved = block('设置表2', '11');
+    const binding = structuredClone(draft.tableBindings[1]);
+    const merged = applyReaderPatch(draft, patchFor(draft, [
+        ['/sections/6/body', draft.sections[6].body.slice(0, -donor.length)],
+        ['/sections/7/body', `${moved}${draft.sections[7].body}`],
+        ['/tableBindings/1', binding]
+    ]), context.targets.map(target => target.path), { atomicOperation: operation });
+    assert.equal((merged.sections[6].body.match(/^\|/gm) || []).length,
+        (draft.sections[6].body.match(/^\|/gm) || []).length - 3);
+    assert.equal((merged.sections[7].body.match(/^\|/gm) || []).length,
+        (draft.sections[7].body.match(/^\|/gm) || []).length + 3);
+});
+
+test('result-table repair does not treat a selection marker as Markdown donor', () => {
+    const draft = fixture();
+    draft.sections[6].body += '\n\n[[TABLE_1]]';
+    draft.tableBindings = [{
+        tableIndex: 1,
+        selection: { sourceTableOrdinal: 1, sourceRows: [0, 1], sourceColumns: [0, 1] }
+    }];
+    const issues = [{ code: 'reader_result_table_missing',
+        message: '读者文章主结果表覆盖不足：原论文 TABLE_1 明确提供定量结果' }];
+    const context = buildRepairContext(draft, issues, '完整来源');
+    assert.equal(context.atomicOperation, null);
+    assert.ok(context.targets.length > 0);
+});
+
 test('normalized validation signatures stop the same binding issue after two changing drafts', async t => {
     const first = [{ path: null, message: '读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 200；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=1 text="dev 划分约 200–430 utterances" missing=200。' }];
     const second = [{ path: null, message: '读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 430；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=1 text="dev 划分约 200–430 utterances" missing=430。' }];

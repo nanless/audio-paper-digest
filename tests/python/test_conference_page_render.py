@@ -18,6 +18,14 @@ def stable_sha(value):
 
 
 class ConferencePageRenderTest(unittest.TestCase):
+    def test_stable_sha_accepts_lone_surrogate(self):
+        value = {'text': '\udc53'}
+        expected = hashlib.sha256(
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            .encode('utf-8', 'backslashreplace')
+        ).hexdigest()
+        self.assertEqual(MODULE.stable_sha(value), expected)
+
     def packet(self):
         paper_id = 'conference:icassp:2026:icassp-arnumber:100'
         article = '这是只来自会议分析 Reader 的全新解读正文。'
@@ -107,6 +115,41 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertIn('可达状态仅表示本次链接检查结果', result['markdown'])
         self.assertIn('## ⚖️ 评分明细', result['markdown'])
         self.assertEqual(result['assets'], [])
+
+    def test_short_proceedings_profile_is_visible_without_abstract_downgrade(self):
+        packet = self.packet()
+        packet['capabilities'] = dict(MODULE.FULL)
+        packet['paper']['analysisManifest']['sourceAcquisition'].update({
+            'analysisConfidence': 'short_proceedings',
+        })
+        result = MODULE.render_packet(packet)
+        self.assertIn('短篇 proceedings PDF', result['markdown'])
+        self.assertIn('完整 PDF 文本，未降级为摘要', result['markdown'])
+
+    def test_escaped_formula_brackets_in_image_alt_are_not_published_as_math(self):
+        markdown = r'![原论文图：s = \[1, 0, ...\]](https://example.org/figure.png)'
+        repaired = MODULE.repair_formula_delimiters(markdown)
+        self.assertEqual(repaired, markdown)
+
+    def test_literal_brackets_in_image_alt_remain_markdown_safe(self):
+        markdown = '![原论文图：输入 f[k]，引用 [5]](https://example.org/figure.png)'
+        repaired = MODULE.repair_formula_delimiters(markdown)
+        self.assertIn(r'f\[k\]', repaired)
+        self.assertIn(r'\[5\]', repaired)
+
+    def test_nested_inline_control_token_is_repaired_before_page_sealing(self):
+        markdown = '目标命令是 `turn off `<EOT>``。'
+        repaired = MODULE.repair_formula_delimiters(markdown)
+        self.assertEqual(repaired, '目标命令是 `turn off &lt;EOT&gt;`。')
+        self.assertEqual(MODULE.repair_formula_delimiters(repaired), repaired)
+
+    def test_literal_stars_in_generated_figure_caption_are_verbalized(self):
+        markdown = '*论文图 4。原文：“* stands for p < 0.05 and *** for p < 0.001.”。*'
+        repaired = MODULE.repair_reader_figure_caption_emphasis(markdown)
+        self.assertEqual(
+            repaired,
+            '*论文图 4。原文：“一个星号 stands for p < 0.05 and 三个星号 for p < 0.001.”。*',
+        )
 
     def test_arxiv_alias_and_structure_injection_fail_closed(self):
         packet = self.packet(); packet['paper']['arxivId'] = '2403.14817'

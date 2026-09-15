@@ -8,16 +8,19 @@ const path = require('node:path');
 const {
     getLayout,
     getStorageStatus,
+    getPdfDuplicateReport,
     buildPrunePlan,
     pruneStorage,
     main
 } = require('../scripts/runtime-storage.js');
 
 const CONFERENCE_PROTECTED_KEYS = [
+    'official-conference-acquisitions',
     'conference-discovery-catalogs',
     'conference-discovery-reports',
     'conference-filter-specs',
     'conference-filters',
+    'conference-filter-evidence-runs',
     'conference-staging-specs',
     'conference-staging-sources',
     'conference-staging',
@@ -27,12 +30,20 @@ const CONFERENCE_PROTECTED_KEYS = [
     'conference-executions',
     'conference-analysis-executions',
     'conference-page-staging',
-    'conference-aggregates'
+    'conference-aggregates',
+    'conference-processes',
+    'conference-queues',
+    'conference-publications',
+    'conference-source-recovery'
 ];
 const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks',
     'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-postprocess-schedulers', 'historical-taxonomy-assignments',
     'historical-page-staging', 'historical-daily-aggregates', 'historical-publications', 'paper-source-authorities',
     'daily-fresh-source-runs', 'fetched-arxiv-sources', 'historical-arxiv-fresh-failure-handoffs',
+    'historical-arxiv-publication-metadata', 'blog-republication-archives', 'canonical-maintenance',
+    'daily-fetch-refresh-backups', 'fresh-rewrites', 'fresh-source-diagnostics', 'llm-usage',
+    'publication-amendments', 'reader-attempts', 'reader-efficiency-evaluations', 'stale-locks',
+    'tag-taxonomy-audit', 'taxonomy-preview',
     'direct-local-inputs', 'historical-conference-local-sources', 'historical-conference-page-projections',
     'historical-direct-rewrite-plans', 'historical-direct-rewrite-unprojected-reports',
     'historical-direct-rewrite-registries', 'historical-direct-rewrite-executions', 'historical-direct-rewrite-staging',
@@ -53,6 +64,8 @@ function makeProject() {
         'data/current/deep_analyzer_input_output',
         'data/current/filter_input_output',
         'data/current/iclr_filter_input_output',
+        'data/runtime/official-conference-acquisitions',
+        'data/runtime/conference-filter-evidence-runs',
         'data/runtime/conference-ledgers',
         'data/runtime/conference-sources',
         'data/runtime/conference-discovery-catalogs',
@@ -65,6 +78,12 @@ function makeProject() {
         'data/runtime/conference-runs',
         'data/runtime/conference-executions',
         'data/runtime/conference-analysis-executions',
+        'data/runtime/conference-page-staging',
+        'data/runtime/conference-aggregates',
+        'data/runtime/conference-processes',
+        'data/runtime/conference-queues',
+        'data/runtime/conference-publications',
+        'data/runtime/conference-source-recovery',
         'data/runtime/historical-page-inventories',
         'data/runtime/page-source-crosswalks',
         'data/runtime/historical-arxiv-batches',
@@ -103,7 +122,57 @@ describe('runtime storage status', () => {
             const status = getStorageStatus({ projectRoot, nowMs: NOW_MS });
             assert.ok(status.targets.some(item => item.key === 'data/current' && item.files === 1 && item.bytes === 4));
             assert.ok(status.targets.some(item => item.key === 'logs' && item.files === 1 && item.bytes === 2));
+            assert.ok(status.targets.some(item => item.key === 'data/runtime'));
             assert.strictEqual(fs.existsSync(path.join(projectRoot, 'data/current/image-cache/a.bin')), true);
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('只读报告 official receipt 与 evidence receipt 宣称的 PDF 重复，并显式标记未做字节验证', () => {
+        const projectRoot = makeProject();
+        try {
+            const pdfBytes = '%PDF-declared-only';
+            const declaredHash = crypto.createHash('sha256').update(pdfBytes).digest('hex');
+            const officialPdf = path.join(projectRoot, 'data/runtime/official-conference-acquisitions/demo-2026/pdfs/1.pdf');
+            const officialReceipt = path.join(projectRoot, 'data/runtime/official-conference-acquisitions/demo-2026/receipts/1.json');
+            const evidencePdf = path.join(projectRoot, 'data/runtime/conference-filter-evidence-runs/run/items/paper/paper.pdf');
+            const evidenceReceipt = path.join(projectRoot, 'data/runtime/conference-filter-evidence-runs/run/items/paper/evidence-receipt.json');
+            fs.mkdirSync(path.dirname(officialPdf), { recursive: true });
+            fs.mkdirSync(path.dirname(officialReceipt), { recursive: true });
+            fs.mkdirSync(path.dirname(evidencePdf), { recursive: true });
+            fs.writeFileSync(officialPdf, pdfBytes);
+            fs.writeFileSync(evidencePdf, pdfBytes);
+            fs.writeFileSync(officialReceipt, JSON.stringify({ pdf: { relativePath: 'pdfs/1.pdf', sha256: declaredHash } }));
+            fs.writeFileSync(evidenceReceipt, JSON.stringify({ discovery: { pdfSha256: declaredHash } }));
+
+            const report = getPdfDuplicateReport({ projectRoot, nowMs: NOW_MS });
+            assert.equal(report.hashMode, 'receipt-declared');
+            assert.equal(report.byteVerification, false);
+            assert.match(report.byteVerificationNote, /未读取 PDF 字节/);
+            assert.equal(report.duplicateGroups.length, 1);
+            assert.equal(report.duplicateGroups[0].byteVerified, false);
+            assert.equal(report.duplicateGroups[0].occurrenceCount, 2);
+            assert.equal(fs.readFileSync(officialPdf, 'utf8'), pdfBytes);
+            assert.equal(fs.readFileSync(evidencePdf, 'utf8'), pdfBytes);
+        } finally {
+            fs.rmSync(projectRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('--hash-bytes 是显式昂贵模式，并报告 receipt 与实际字节不一致', () => {
+        const projectRoot = makeProject();
+        try {
+            const pdf = writeFile(projectRoot, 'data/runtime/official-conference-acquisitions/demo-2026/pdfs/1.pdf', '%PDF-real');
+            const receipt = path.join(projectRoot, 'data/runtime/official-conference-acquisitions/demo-2026/receipts/1.json');
+            fs.mkdirSync(path.dirname(receipt), { recursive: true });
+            fs.writeFileSync(receipt, JSON.stringify({ pdf: { relativePath: 'pdfs/1.pdf', sha256: '0'.repeat(64) } }));
+            const report = getPdfDuplicateReport({ projectRoot, hashBytes: true, nowMs: NOW_MS });
+            const record = report.pdfFiles.find(item => item.path === pdf);
+            assert.equal(report.hashMode, 'bytes');
+            assert.equal(record.byteVerified, true);
+            assert.equal(record.hashSource, 'bytes');
+            assert.equal(record.declaredHashMismatch, true);
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }
@@ -121,7 +190,8 @@ describe('runtime storage status', () => {
                 `data/runtime/${key}/old-fixture.bin`, key, NOW_MS - 90 * 24 * 60 * 60 * 1000));
             const status = getStorageStatus({ projectRoot, nowMs: NOW_MS });
             assert.deepEqual(status.targets.filter(item => item.key.startsWith('conference-')).map(item => item.key),
-                CONFERENCE_PROTECTED_KEYS);
+                CONFERENCE_PROTECTED_KEYS.filter(key => key.startsWith('conference-')));
+            assert.ok(status.targets.some(item => item.key === 'official-conference-acquisitions'));
             for (const key of protectedKeys) {
                 assert.ok(status.targets.some(item => item.key === key && item.files === 1));
             }

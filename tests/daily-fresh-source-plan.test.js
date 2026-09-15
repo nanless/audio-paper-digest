@@ -174,6 +174,28 @@ test('daily source plan clears a legacy successful analysis unless it proves the
     assert.equal(daily.isPaperBoundToPlan(prepared, plan), false);
 });
 
+test('daily source binding requires the manifest provenance mirror and source acquisition SHA', async t => {
+    fixture(t); const id = '2609.12348';
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'daily-mocked-batch-4', papers: [{ arxivId: id }] });
+    await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options => require('../scripts/lib/fresh-arxiv-rewrite-source.js')
+        .captureFreshArxivRewriteSource(options, {
+            fetchText: async requested => sourcePayload(requested),
+            fetchPdf: async requested => ({ bytes: Buffer.from(`%PDF-1.4\n${requested}\n%%EOF\n`), url: `https://arxiv.org/pdf/${requested}.pdf`, fetchedAt: new Date().toISOString() })
+        }) });
+    const descriptor = daily.readDailyFreshSource(plan, { arxivId: id }).freshSourceDescriptor;
+    const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+        sourceSha256: descriptor.sourceSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
+        sourceSnapshotSha256: descriptor.sourceSnapshotSha256, sourceGeneration: descriptor.sourceGeneration,
+        sourceManifestSha256: descriptor.sourceManifestSha256, sourceOnly: true, oldGeneratedTextIncluded: false };
+    const incomplete = { arxivId: id, analysis: 'generated body', freshRewriteProvenance: proof,
+        sourceSha256: proof.sourceSha256, analysisManifest: { sourceAcquisition: { sourceSha256: proof.sourceSha256 } } };
+    assert.equal(daily.isPaperBoundToPlan(incomplete, plan), false);
+    assert.equal(daily.prepareDailyPaper(incomplete, plan).analysis, undefined);
+    const complete = structuredClone(incomplete);
+    complete.analysisManifest.freshRewriteProvenance = structuredClone(proof);
+    assert.equal(daily.isPaperBoundToPlan(complete, plan), true);
+});
+
 test('daily source reference replays only the exact sealed run manifest', async t => {
     fixture(t); const id = '2609.12347';
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'daily-mocked-batch-3', papers: [{ arxivId: id }] });
