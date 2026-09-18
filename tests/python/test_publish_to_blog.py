@@ -1195,6 +1195,32 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     publish_to_blog._detailed_core_summary_semantic_issue(unknown_metric),
                 )
 
+    def test_core_summary_accepts_new_node_contract_metric_aliases(self):
+        summary = llm_api_publication_fixture()['parsed']['summary']
+        original_result = (
+            '在公开测试集的 WER（词错率）评测中，本文方法达到8.4%，'
+            '相比同设置基线的10.2%降低1.8个百分点，方向和比较口径均可核对。'
+        )
+        cases = (
+            '在 16 个测试集的同一评测协议下，本文方法的词错率为 25.8 ms，'
+            '相比基线的 48.3 ms 降低，比较对象、数值与方向均可核对，'
+            '该结果用于判断主要方法是否稳定成立并限定可复现边界。',
+            '在 C4 子集的公开评测设置下，本文方法的困惑度从基线的 228.8 降至 49.9，'
+            '比较对象、数值与方向均可核对，该结果用于判断主要方法是否稳定成立并限定可复现边界。',
+            '在 28 条立体声轨道的公开评测设置下，本文方法压缩率为 56.8%，'
+            '高于 FLAC 基线的 57.6%，比较对象、数值与方向均可核对，'
+            '该结果用于判断主要方法是否稳定成立并限定可复现边界。',
+            '在公开评测设置下，本文方法的平均误差从基线的 10.0 降至 7.5，'
+            '比较对象、数值与方向均可核对，该结果用于判断主要方法是否稳定成立并限定可复现边界。',
+        )
+        for result in cases:
+            with self.subTest(result=result):
+                self.assertIsNone(
+                    publish_to_blog._detailed_core_summary_semantic_issue(
+                        summary.replace(original_result, result)
+                    )
+                )
+
     def test_core_summary_accepts_exact_jsr_metric_but_rejects_identifier_substrings(self):
         summary = llm_api_publication_fixture()['parsed']['summary']
         original_result = (
@@ -1919,6 +1945,10 @@ class PublishToBlogReviewTest(unittest.TestCase):
             'We perform 500,000500,000 gradient steps.'
         )
         self.assertIn('500000', doubled_grouped)
+        signed_duplicate = publish_to_blog._api_reader_numeric_tokens(
+            'MM and WW are set to −20-20 dB and 90°.'
+        )
+        self.assertIn('-20db', signed_duplicate)
         self.assertNotIn(
             '500000',
             publish_to_blog._api_reader_numeric_tokens(
@@ -1971,6 +2001,27 @@ class PublishToBlogReviewTest(unittest.TestCase):
         article = (
             '| Stage | Steps |\n| --- | --- |\n'
             '| Coarse translation | 500,000 |'
+        )
+        paper = llm_api_publication_fixture()
+        paper['apiReaderArticle'] = article
+        paper['apiReaderPlan']['formulaBindings'] = []
+        paper['apiReaderPlan']['tableBindings'] = [{
+            'tableIndex': 1, 'sourceType': 'source_quotes',
+            'sourceTableOrdinal': None,
+            'renderedTableSha256': hashlib.sha256(article.encode()).hexdigest(),
+            'cellBindings': [], 'sourceQuotes': [{
+                'quote': source,
+                'sourceQuoteSha256': hashlib.sha256(source.encode()).hexdigest(),
+            }],
+        }]
+        reseal_llm_api_reader_fixture(paper)
+        publish_to_blog._validate_api_reader_source_bindings(paper)
+
+    def test_api_reader_source_quotes_bind_exact_latexml_signed_duplicate_with_unit(self):
+        source = 'MM and WW are set to −20-20 dB and 90° under the recorded protocol.'
+        article = (
+            '| Setting | Floor | Width |\n| --- | --- | --- |\n'
+            '| Directivity | -20 dB | 90° |'
         )
         paper = llm_api_publication_fixture()
         paper['apiReaderArticle'] = article
@@ -3237,6 +3288,23 @@ title: "Bad table"
         }]
         valid = f'paper_digest_taxonomy_registry_sha256: "{"a" * 64}"\n'
         invalid = 'paper_digest_taxonomy_registry_sha256: "aaaa bbbb"\n'
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(valid, issue), [],
+        )
+        self.assertEqual(
+            publish_to_blog.filter_false_positive_review_issues(invalid, issue), issue,
+        )
+
+    def test_review_filters_sidecar_sha_length_hallucination_when_all_hashes_are_valid(self):
+        issue = [{
+            'severity': 'error', 'type': 'yaml',
+            'description': 'paper_digest_sidecars.rethink-context.json 的 sha256 长度为 63 位十六进制字符。',
+            'auto_fixable': False,
+        }]
+        valid = ('paper_digest_sidecars: {"rethink-context.json": '
+                 '{"sha256":"' + 'a' * 64 + '"}}\n')
+        invalid = ('paper_digest_sidecars: {"rethink-context.json": '
+                   '{"sha256":"' + 'a' * 63 + '"}}\n')
         self.assertEqual(
             publish_to_blog.filter_false_positive_review_issues(valid, issue), [],
         )

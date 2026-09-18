@@ -406,6 +406,7 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
     const source = String(text || '');
     const requested = new Set();
     const requestedSimpleMeasured = new Set();
+    const requestedPowerMeasured = new Map();
     const requestedTrillionUnits = new Set();
     const requestedScaledMagnitudes = new Map();
     const scaledUnitAlternation = SCALED_ARABIC_MEASUREMENT_UNITS
@@ -438,6 +439,13 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
             if (simpleMeasured && !/阶段$/u.test(surface)) {
                 requestedSimpleMeasured.add(surface);
             }
+            const powerMeasured = surface.match(
+                new RegExp(`^([十百千万亿])\\s*(${simpleMeasuredUnitAlternation})$`, 'iu')
+            );
+            if (powerMeasured) requestedPowerMeasured.set(surface, {
+                value: ({ 十: 10, 百: 100, 千: 1000, 万: 10000, 亿: 100000000 })[powerMeasured[1]],
+                unit: powerMeasured[2]
+            });
             const trillion = trillionSurface.exec(surface);
             if (trillion) requestedTrillionUnits.add(trillion[1]);
             const scaledMagnitude = surface.match(
@@ -449,7 +457,8 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
             );
         }
     }
-    if ((!requested.size && !requestedSimpleMeasured.size && !requestedTrillionUnits.size
+    if ((!requested.size && !requestedSimpleMeasured.size && !requestedPowerMeasured.size
+        && !requestedTrillionUnits.size
         && !requestedScaledMagnitudes.size)
         || source.includes('__PD_ISSUE_BOUND_NUMERAL_')) return source;
     const protectedSpans = [];
@@ -509,6 +518,12 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
         normalized = normalized.replaceAll(surface, (_match, offset, whole) => (
             `${/[\u3400-\u9fff]$/u.test(whole.slice(0, offset)) ? ' ' : ''}`
             + `${digits[match[1]]} ${match[2]}`
+        ));
+    }
+    for (const [surface, measured] of requestedPowerMeasured) {
+        normalized = normalized.replaceAll(surface, (_match, offset, whole) => (
+            `${/[\u3400-\u9fff]$/u.test(whole.slice(0, offset)) ? ' ' : ''}`
+            + `${String(measured.value).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} ${measured.unit}`
         ));
     }
     return protectedSpans.reduceRight((value, original, index) => value.replace(

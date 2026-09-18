@@ -277,6 +277,7 @@ function nodeAt(draft, pointer) {
     if (['/readerTitle', '/oneSentenceThesis'].includes(pointer)) {
         return draft[pointer.slice(1)];
     }
+    if (pointer === '/tableBindings') return draft.tableBindings;
     const match = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/body)?$/.exec(pointer);
     if (!match || (match[3] && match[1] !== 'sections')) throw new Error(`Reader patch path is not allowed: ${pointer}`);
     const list = draft[match[1]];
@@ -321,7 +322,11 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         if ((item.path.endsWith('/body') || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
             && typeof item.value !== 'string') throw new Error('Reader patch text replacement must be a string');
-        if (!item.path.endsWith('/body') && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
+        if (item.path === '/tableBindings' && !Array.isArray(item.value)) {
+            throw new Error('Reader patch tableBindings replacement must be an array');
+        }
+        if (item.path !== '/tableBindings' && !item.path.endsWith('/body')
+            && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
             && (!item.value || typeof item.value !== 'object' || Array.isArray(item.value))) {
             throw new Error('Reader patch node replacement must be an object');
         }
@@ -350,6 +355,13 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         if (required.some(pointer => !allowed.has(pointer))
             || required.some(pointer => !seen.includes(pointer))) {
             throw new Error('Reader result-table addition patch must replace every required atomic target');
+        }
+    }
+    if (['append_narrative_table_v1', 'bind_trailing_narrative_table_v1'].includes(operation?.kind)) {
+        const required = operation.requiredReplacementPaths || [];
+        if (required.some(pointer => !allowed.has(pointer))
+            || required.some(pointer => !seen.includes(pointer))) {
+            throw new Error('Reader narrative-table patch must replace every required atomic target');
         }
     }
     const merged = structuredClone(draft);
@@ -404,6 +416,38 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || binding?.tableIndex !== operation.tableIndex
             || binding?.sourceType !== 'source_quotes') {
             throw new Error('Reader result-table addition patch failed its atomic table-add postconditions');
+        }
+    }
+    if (['append_narrative_table_v1', 'bind_trailing_narrative_table_v1'].includes(operation?.kind)) {
+        const beforeTables = locateReaderDraftTables(draft);
+        const afterTables = locateReaderDraftTables(merged);
+        const beforeBindings = draft.tableBindings || [];
+        const afterBindings = merged.tableBindings || [];
+        const expectedTableIncrease = operation.kind === 'append_narrative_table_v1' ? 1 : 0;
+        const countInSection = (tables, index) => tables.filter(table => table.sectionIndex === index).length;
+        const destinationBefore = countInSection(beforeTables, operation.destinationSectionIndex);
+        const destinationAfter = countInSection(afterTables, operation.destinationSectionIndex);
+        const oldTablesPreserved = beforeTables.every((table, index) => (
+            hashDraft(table.table?.markdown || table.marker || '')
+                === hashDraft(afterTables[index]?.table?.markdown || afterTables[index]?.marker || '')
+        ));
+        const oldBindingsPreserved = beforeBindings.every((binding, index) => (
+            hashDraft(binding) === hashDraft(afterBindings[index])
+        ));
+        const addedTable = afterTables[operation.tableIndex - 1];
+        const addedBinding = afterBindings[operation.bindingIndex];
+        if (afterTables.length !== beforeTables.length + expectedTableIncrease
+            || afterBindings.length !== beforeBindings.length + 1
+            || afterTables.length !== afterBindings.length
+            || destinationAfter !== destinationBefore + expectedTableIncrease
+            || !oldTablesPreserved || !oldBindingsPreserved
+            || !addedTable?.table
+            || (String(addedTable.table.markdown).match(/\d+/g) || []).length < 4
+            || addedBinding?.tableIndex !== operation.tableIndex
+            || addedBinding?.sourceType !== 'source_quotes'
+            || !Array.isArray(addedBinding.sourceQuotes) || addedBinding.sourceQuotes.length === 0
+            || Object.prototype.hasOwnProperty.call(addedBinding, 'selection')) {
+            throw new Error('Reader narrative-table patch failed its atomic append/bind postconditions');
         }
     }
     return merged;
@@ -632,6 +676,54 @@ function buildMissingResultTableOperation(draft, issues) {
     };
 }
 
+function buildMissingNarrativeTableOperation(draft, issues) {
+    const issue = issues.filter(item => item?.diagnosticOnly !== true).find(item => (
+        /至少需要\s*\d+\s*张有叙事闭环的\s*Markdown\s*表，当前\s*\d+/.test(String(item?.message || ''))
+    ));
+    const counts = /至少需要\s*(\d+)\s*张有叙事闭环的\s*Markdown\s*表，当前\s*(\d+)/
+        .exec(String(issue?.message || ''));
+    if (!counts) return null;
+    const requiredCount = Number(counts[1]);
+    const reportedCount = Number(counts[2]);
+    const tables = locateReaderDraftTables(draft);
+    const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
+    if (!Number.isSafeInteger(requiredCount) || reportedCount >= requiredCount
+        || !bindings.every((binding, index) => binding?.tableIndex === index + 1)) return null;
+    const trailingTable = tables.at(-1);
+    const destinationSectionIndex = trailingTable?.sectionIndex;
+    if (!trailingTable?.table || !['result', 'ablation'].includes(
+        draft.sections?.[destinationSectionIndex]?.kind
+    )) return null;
+    const bindingIndex = bindings.length;
+    const tableIndex = bindingIndex + 1;
+    if (requiredCount === tables.length && tables.length === bindings.length + 1
+        && trailingTable.tableIndex === tableIndex) {
+        return {
+            kind: 'bind_trailing_narrative_table_v1', destinationSectionIndex,
+            bindingIndex, tableIndex, requiredReplacementPaths: ['/tableBindings'],
+            requiredPostconditions: [
+                'all authored tables remain byte-identical and in the same order',
+                'all existing table bindings remain byte-identical',
+                'exactly one source_quotes binding is appended for the trailing table'
+            ]
+        };
+    }
+    if (requiredCount === tables.length + 1 && tables.length === bindings.length) {
+        const destinationSectionPath = `/sections/${destinationSectionIndex}/body`;
+        return {
+            kind: 'append_narrative_table_v1', destinationSectionIndex,
+            bindingIndex, tableIndex, destinationSectionPath,
+            requiredReplacementPaths: [destinationSectionPath, '/tableBindings'],
+            requiredPostconditions: [
+                'all existing tables and bindings remain byte-identical and in the same order',
+                'the destination result/ablation section gains exactly one numeric Markdown table',
+                'exactly one source_quotes binding is appended for the new trailing table'
+            ]
+        };
+    }
+    return null;
+}
+
 function buildRepairTargets(draft, issues) {
     const paths = new Set();
     const add = pointer => {
@@ -714,6 +806,28 @@ function buildRepairTargets(draft, issues) {
     const missingNarrativeTableIssue = blockingIssues.find(issue => (
         /至少需要\s*\d+\s*张有叙事闭环的\s*Markdown\s*表，当前\s*\d+/.test(String(issue?.message || ''))
     ));
+    const missingNarrativeTableOperation = buildMissingNarrativeTableOperation(draft, issues);
+    const ambiguousTableOrderIssue = blockingIssues.find(issue => (
+        /Reader 正文重排前表格与绑定无法唯一闭合/.test(String(issue?.message || ''))
+    ));
+    if (ambiguousTableOrderIssue) {
+        const tables = locateReaderDraftTables(draft);
+        const bindings = Array.isArray(draft.tableBindings) ? draft.tableBindings : [];
+        if (tables.length < bindings.length) {
+            const destination = tables.at(-1)?.path || draft.sections.flatMap((section, index) => (
+                ['result', 'ablation'].includes(section?.kind) ? [`/sections/${index}/body`] : []
+            )).at(-1);
+            if (destination) add(destination);
+            if (bindings[tables.length]) add(`/tableBindings/${tables.length}`);
+        } else if (tables.length > bindings.length) {
+            for (const table of tables) add(table.path);
+            bindings.forEach((_binding, index) => add(`/tableBindings/${index}`));
+        }
+        if (paths.size) {
+            return [...paths].slice(0, 8).map(pointer => ({ path: pointer,
+                oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+        }
+    }
     if (missingNarrativeTableIssue) {
         // When the draft already declares the missing binding, author exactly
         // one new table beside the last existing table. The old generic table
@@ -722,7 +836,10 @@ function buildRepairTargets(draft, issues) {
         // suffix. The full parser will re-check ordering and all source seals.
         const tables = locateReaderDraftTables(draft);
         const missingBindingIndex = tables.length;
-        if (tables.length && draft.tableBindings?.[missingBindingIndex]) {
+        if (missingNarrativeTableOperation) {
+            missingNarrativeTableOperation.requiredReplacementPaths.forEach(add);
+            actionableIssues = actionableIssues.filter(issue => issue !== missingNarrativeTableIssue);
+        } else if (tables.length && draft.tableBindings?.[missingBindingIndex]) {
             add(tables.at(-1).path);
             add(`/tableBindings/${missingBindingIndex}`);
             actionableIssues = actionableIssues.filter(issue => issue !== missingNarrativeTableIssue);
@@ -887,7 +1004,8 @@ function buildRepairTargets(draft, issues) {
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const targets = buildRepairTargets(draft, issues);
-    const atomicOperation = buildMissingResultTableOperation(draft, issues);
+    const atomicOperation = buildMissingResultTableOperation(draft, issues)
+        || buildMissingNarrativeTableOperation(draft, issues);
     const targetText = JSON.stringify(targets);
     const figureOrdinals = new Set();
     for (const match of targetText.matchAll(/\[\[FIGURE_(\d+)\]\]/g)) figureOrdinals.add(Number(match[1]));

@@ -700,6 +700,62 @@ test('missing narrative table repair targets only the final table section and mi
     ]);
 });
 
+test('minimum narrative table repair atomically appends one table and one binding', () => {
+    const draft = fixture();
+    const block = (name, value) => `\n\n${name} 比较相同条件下的两组结果与指标方向。\n\n`
+        + '| 方法 | 条件 | 指标 A | 指标 B | 指标 C |\n| --- | --- | --- | --- | --- |\n'
+        + `| ${name} | 设置 ${value} | ${value}0 | ${value}00 | ${value}000 |\n\n`
+        + `${name} 的净收益只适用于该测试条件，其他数据分布仍需单独验证。`;
+    for (const [offset, sectionIndex] of [6, 7, 8].entries()) {
+        draft.sections[sectionIndex].body += block(`已有表 ${offset + 1}`, String(offset + 1));
+    }
+    draft.tableBindings = [0, 1, 2].map(index => ({ tableIndex: index + 1,
+        sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
+        sourceQuotes: [`source quote ${index + 1} is long enough for binding`] }));
+    const issues = [{ path: null,
+        message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' }];
+    const context = buildRepairContext(draft, issues, '完整来源');
+    assert.equal(context.atomicOperation.kind, 'append_narrative_table_v1');
+    assert.deepEqual(context.targets.map(target => target.path), ['/sections/8/body', '/tableBindings']);
+    const bindings = [...structuredClone(draft.tableBindings), {
+        tableIndex: 4, sourceType: 'source_quotes', sourceTableOrdinal: null,
+        cellBindings: [], sourceQuotes: ['new source quote is long enough for binding']
+    }];
+    const merged = applyReaderPatch(draft, patchFor(draft, [
+        ['/sections/8/body', draft.sections[8].body + block('新增表 4', '4')],
+        ['/tableBindings', bindings]
+    ]), context.targets.map(target => target.path), { atomicOperation: context.atomicOperation });
+    assert.equal(merged.tableBindings.length, 4);
+    assert.equal(merged.tableBindings[3].tableIndex, 4);
+});
+
+test('minimum narrative table recovery binds one already-authored trailing table without rewriting it', () => {
+    const draft = fixture();
+    const block = (name, value) => `\n\n${name} 比较相同条件下的两组结果与指标方向。\n\n`
+        + '| 方法 | 条件 | 指标 A | 指标 B | 指标 C |\n| --- | --- | --- | --- | --- |\n'
+        + `| ${name} | 设置 ${value} | ${value}0 | ${value}00 | ${value}000 |\n\n`
+        + `${name} 的净收益只适用于该测试条件，其他数据分布仍需单独验证。`;
+    for (const [offset, sectionIndex] of [6, 7, 8, 8].entries()) {
+        draft.sections[sectionIndex].body += block(`正文表 ${offset + 1}`, String(offset + 1));
+    }
+    draft.tableBindings = [0, 1, 2].map(index => ({ tableIndex: index + 1,
+        sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
+        sourceQuotes: [`source quote ${index + 1} is long enough for binding`] }));
+    const context = buildRepairContext(draft, [{ path: null,
+        message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' }], '完整来源');
+    assert.equal(context.atomicOperation.kind, 'bind_trailing_narrative_table_v1');
+    assert.deepEqual(context.targets.map(target => target.path), ['/tableBindings']);
+    const beforeBody = draft.sections[8].body;
+    const bindings = [...structuredClone(draft.tableBindings), {
+        tableIndex: 4, sourceType: 'source_quotes', sourceTableOrdinal: null,
+        cellBindings: [], sourceQuotes: ['new source quote is long enough for binding']
+    }];
+    const merged = applyReaderPatch(draft, patchFor(draft, [['/tableBindings', bindings]]),
+        ['/tableBindings'], { atomicOperation: context.atomicOperation });
+    assert.equal(merged.sections[8].body, beforeBody);
+    assert.equal(merged.tableBindings.length, 4);
+});
+
 test('missing result table repair moves one stable experiment table/binding into result', () => {
     const draft = fixture();
     const table = index => `\n\n表 ${index} 的比较条件。\n\n`

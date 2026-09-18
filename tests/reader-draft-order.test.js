@@ -41,6 +41,23 @@ test('stable section ordering preserves table/binding pairs and records replayab
     assert.doesNotMatch(targets[1].value, /ablation/);
 });
 
+test('source-quote evidence realigns bindings before section sorting when raw order is shuffled', () => {
+    const input = { sections: [
+        { kind: 'result', heading: 'results', body: '| Method | Score |\n| --- | --- |\n| result-marker | 0.91 |' },
+        { kind: 'experiment_setup', heading: 'setup', body: '| Setting | Value |\n| --- | --- |\n| setup-marker | 16 kHz |' }
+    ], tableBindings: [
+        binding(1, 'setup-marker 16 kHz'),
+        binding(2, 'result-marker 0.91')
+    ], conceptBridges: [], figurePlacements: [], formulaBindings: [] };
+    const { draft } = normalizeReaderDraftOrder(input);
+    assert.deepEqual(draft.sections.map(section => section.kind), ['experiment_setup', 'result']);
+    assert.deepEqual(draft.tableBindings.map(item => item.sourceQuotes[0]), [
+        'setup-marker 16 kHz', 'result-marker 0.91'
+    ]);
+    assert.deepEqual(locateReaderDraftTables(draft).map(table => table.table.markdown.includes('setup-marker')),
+        [true, false]);
+});
+
 test('mixed handwritten/selection tables retain order and simultaneous marker renames do not collide', () => {
     const input = fixture();
     input.sections[0].body = '[[TABLE_1]]\n\n' + markdown('result-second');
@@ -99,7 +116,6 @@ test('canonical marker permutation normalization rejects ambiguous and mixed cou
     const cases = [
         { body: '[[TABLE_2]]\n\n[[TABLE_2]]', bindings: [select(1), select(2)] },
         { body: '[[TABLE_2]]', bindings: [select(1), select(2)] },
-        { body: `[[TABLE_2]]\n\n${markdown('handwritten')}`, bindings: [ordinary, select(2)] },
         { body: 'inline [[TABLE_2]]\n\n[[TABLE_1]]', bindings: [select(1), select(2)] },
         { body: '[[TABLE_2]]\n\n[[TABLE_1]]', bindings: [ordinary, select(2)] },
         { body: '[[TABLE_2]]\n\n[[TABLE_1]]', bindings: [select(1), { ...select(2), tableIndex: 1 }] }
@@ -114,6 +130,43 @@ test('canonical marker permutation normalization rejects ambiguous and mixed cou
     }
 });
 
+test('canonical mixed marker and quote stream realigns without changing table prose', () => {
+    const select = (tableIndex, sourceTableOrdinal) => ({ tableIndex,
+        selection: { sourceTableOrdinal, sourceRows: [0, 1], sourceColumns: [0, 1] } });
+    const authored = markdown('quote-middle');
+    const input = { sections: [
+        { kind: 'experiment_setup', body: `[[TABLE_1]]\n\n[[TABLE_2]]\n\n${authored}` },
+        { kind: 'result', body: '[[TABLE_3]]\n\n[[TABLE_4]]' }
+    ], tableBindings: [select(1, 11), select(2, 12), select(3, 13), select(4, 14),
+        binding(5, 'quote-middle')], conceptBridges: [], figurePlacements: [], formulaBindings: [] };
+    const normalized = normalizeReaderDraftOrder(input).draft;
+    assert.deepEqual(normalized.tableBindings.map(item => (
+        item.selection?.sourceTableOrdinal || item.sourceQuotes[0]
+    )), [11, 12, 'quote-middle', 13, 14]);
+    assert.deepEqual(locateReaderDraftTables(normalized).map(item => item.markerIndex || 'markdown'),
+        [1, 2, 'markdown', 4, 5]);
+    assert.match(normalized.sections[0].body, new RegExp(authored.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.deepEqual(normalizeReaderDraftOrder(normalized).draft, normalized);
+});
+
+test('only the invisible trailing source-quote suffix is pruned', () => {
+    const input = { sections: [{ kind: 'result', body: `${markdown('one')}\n\n${markdown('two')}` }],
+        tableBindings: [binding(1, 'one'), binding(2, 'two'), binding(3, 'missing')],
+        conceptBridges: [], figurePlacements: [], formulaBindings: [] };
+    const normalized = normalizeReaderDraftOrder(input).draft;
+    assert.equal(normalized.tableBindings.length, 2);
+    assert.deepEqual(normalized.tableBindings.map(item => item.sourceQuotes[0]), ['one', 'two']);
+    const twoMissing = structuredClone(input);
+    twoMissing.tableBindings.push(binding(4, 'also missing'));
+    const pruned = normalizeReaderDraftOrder(twoMissing).draft;
+    assert.equal(pruned.tableBindings.length, 2);
+    assert.deepEqual(pruned.tableBindings.map(item => item.sourceQuotes[0]), ['one', 'two']);
+    const unsafe = structuredClone(twoMissing);
+    unsafe.tableBindings[2].selection = { sourceTableOrdinal: 3,
+        sourceRows: [0, 1], sourceColumns: [0, 1] };
+    assert.equal(normalizeReaderDraftOrder(unsafe).draft.tableBindings.length, 4);
+});
+
 test('unsorted ambiguous bindings fail closed with paths on the unchanged input, never discard tables', () => {
     for (const alter of [draft => draft.tableBindings.pop(), draft => { draft.tableBindings[1].tableIndex = 1; },
         draft => { draft.sections[0].body = '[[TABLE_3]]'; }]) {
@@ -125,6 +178,27 @@ test('unsorted ambiguous bindings fail closed with paths on the unchanged input,
         assert.ok(error.readerIssues.some(issue => issue.path === '/sections/0/body'));
         assert.ok(error.readerIssues.some(issue => issue.path === '/tableBindings/0'));
     }
+});
+
+test('unsorted mixed selection and quote bindings realign by unique marker identity and prose order', () => {
+    const select = (tableIndex, sourceTableOrdinal) => ({ tableIndex,
+        selection: { sourceTableOrdinal, sourceRows: [0, 1], sourceColumns: [0, 1] } });
+    const input = { sections: [
+        { kind: 'result', heading: 'result', body: `[[TABLE_1]]\n\n${markdown('quote-one')}` },
+        { kind: 'ablation', heading: 'ablation', body: markdown('quote-two') },
+        { kind: 'result', heading: 'later result', body: '[[TABLE_2]]' }
+    ], tableBindings: [
+        select(1, 10), select(2, 20), binding(3, 'quote-one'), binding(4, 'quote-two')
+    ], conceptBridges: [], figurePlacements: [], formulaBindings: [] };
+    const normalized = normalizeReaderDraftOrder(input);
+    assert.deepEqual(normalized.draft.sections.map(section => section.kind),
+        ['result', 'result', 'ablation']);
+    assert.deepEqual(normalized.draft.tableBindings.map(item => (
+        item.selection?.sourceTableOrdinal || item.sourceQuotes[0]
+    )), [10, 'quote-one', 20, 'quote-two']);
+    assert.deepEqual(locateReaderDraftTables(normalized.draft).map(item => item.markerIndex || 'markdown'),
+        [1, 'markdown', 3, 'markdown']);
+    assert.deepEqual(normalizeReaderDraftOrder(normalized.draft).draft, normalized.draft);
 });
 
 test('unique selection anchors prune only an unbound handwritten table and its dangling narrative', () => {

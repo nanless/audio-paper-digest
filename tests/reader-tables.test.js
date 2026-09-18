@@ -7,6 +7,7 @@ const cheerio = require('cheerio');
 const { renderReaderTableSelection, compileReaderTableSelections,
     assessReaderTableSelectionEligibility, findReaderTablePasteDuplication,
     hasExplicitRepeatedScientificMeasurement, hasSourceBoundRepeatedNumericVector,
+    hasSourceBoundRepeatedRangeChain,
     effectiveReaderTableRows,
     canonicalizeReaderSelectionRows } = require('../scripts/lib/reader-tables.js');
 
@@ -224,6 +225,23 @@ test('source-bound vector exemption is limited to explicit weight schedule or la
     assert.equal(findReaderTablePasteDuplication(vector, {
         columnIndex: 1, header: ['配置', '层权重'], row: ['RVQ', vector], sourceTexts: [vector]
     }), null);
+});
+
+test('source-bound repeated room-dimension ranges are not mistaken for pasted text', () => {
+    const cell = '[4,20]×[4,20]×[3,10] m';
+    const context = {
+        columnIndex: 1,
+        header: ['条件', '取值'],
+        row: ['房间尺寸', cell],
+        sourceTexts: ['Room dimensions were randomly sampled from [4,20]×[4,20]\\times[3,10] m.']
+    };
+    assert.equal(hasSourceBoundRepeatedRangeChain(cell, context), true);
+    assert.equal(findReaderTablePasteDuplication(cell, context), null);
+    assert.match(findReaderTablePasteDuplication(cell, { ...context, sourceTexts: [] }), /粘连复写/);
+    assert.match(findReaderTablePasteDuplication(`${cell}${cell}`, context), /粘连复写/);
+    assert.equal(hasSourceBoundRepeatedRangeChain(
+        '[4,20]×[3,10]×[4,20] m', context
+    ), false);
 });
 
 test('2604.15804 source-bound repeated colon ratio is not mistaken for pasted text', () => {

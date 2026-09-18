@@ -850,6 +850,14 @@ def filter_false_positive_review_issues(content, issues):
                 content, flags=re.MULTILINE,
         ) for field in sha_fields):
             continue
+        sidecar_sha_claim = re.search(
+            r'paper_digest_sidecars|sidecar', desc, re.IGNORECASE,
+        ) and re.search(r'SHA|哈希|十六进制|空格|长度|hex', desc, re.IGNORECASE)
+        if sidecar_sha_claim:
+            sidecar_hashes = re.findall(r'"sha256"\s*:\s*"([^"]*)"', content)
+            if sidecar_hashes and all(re.fullmatch(r'[0-9a-f]{64}', value)
+                                      for value in sidecar_hashes):
+                continue
         filtered.append(issue)
     return filtered
 
@@ -1270,12 +1278,14 @@ def _pinned_https_url(parsed, address):
     return parsed._replace(netloc=host).geturl()
 
 
-def _read_pinned_review_image(current, resolved_addresses, proxy, proxy_addresses, deadline):
+def _read_pinned_review_image(
+    current, resolved_addresses, proxy, proxy_addresses, deadline, target_address=None,
+):
     """Fetch one HTTPS hop through CONNECT pinned to a prevalidated public IP."""
     import urllib3
 
     parsed = urlparse(current)
-    target_address = sorted(
+    target_address = target_address or sorted(
         resolved_addresses,
         key=lambda value: (ipaddress.ip_address(value).version, value),
     )[0]
@@ -1391,9 +1401,39 @@ def _download_review_image(url):
         current = url
         for _redirect in range(4):
             resolved_addresses = _validate_public_image_url(current)
-            result = _read_pinned_review_image(
-                current, resolved_addresses, proxy, proxy_addresses, deadline,
+            result = None
+            transient_error = None
+            candidate_addresses = sorted(
+                resolved_addresses,
+                key=lambda value: (ipaddress.ip_address(value).version, value),
             )
+            for target_address in candidate_addresses:
+                for transport_attempt in range(4):
+                    try:
+                        result = _read_pinned_review_image(
+                            current, resolved_addresses, proxy, proxy_addresses, deadline,
+                            target_address=target_address,
+                        )
+                        break
+                    except Exception as exc:
+                        # Only transport-layer failures may retry the same
+                        # already DNS-validated address or move to another
+                        # validated address. Content/security failures remain
+                        # fail-closed and are never silently bypassed.
+                        import urllib3
+                        if isinstance(exc, (OSError, urllib3.exceptions.HTTPError)):
+                            transient_error = exc
+                            if transport_attempt < 3 and time.monotonic() < deadline:
+                                time.sleep(0.5 * (transport_attempt + 1))
+                                continue
+                            break
+                        raise
+                if result is not None:
+                    break
+            if result is None:
+                if transient_error is not None:
+                    raise transient_error
+                raise PublishDataValidationError('图片下载没有可用的已校验地址')
             if result['status'] in {301, 302, 303, 307, 308}:
                 location = result['location']
                 if not location:
@@ -1424,7 +1464,7 @@ def _validate_image_signature(media_type, raw):
     if media_type == 'image/svg+xml' and raw:
         try:
             import xml.etree.ElementTree as element_tree
-            root = element_tree.fromstring(raw.decode('utf-8-sig'))
+            root = element_tree.fromstring(_sanitize_svg_xml_for_review(raw))
             svg_signature = root.tag.rsplit('}', 1)[-1].lower() == 'svg'
         except (UnicodeDecodeError, element_tree.ParseError):
             svg_signature = False
@@ -1439,6 +1479,37 @@ def _validate_image_signature(media_type, raw):
         raise PublishDataValidationError('图片内容为空')
     if not signatures.get(media_type, False):
         raise PublishDataValidationError(f'图片内容与 MIME 签名不一致: {media_type}')
+
+
+def _sanitize_svg_xml_for_review(raw):
+    """Drop only XML-invalid character references from trusted arXiv SVG.
+
+    arXiv occasionally emits numeric references to control characters.  They
+    are not renderable XML, but rejecting the entire figure would diverge from
+    the Node sanitizer and needlessly block an otherwise safe paper figure.
+    Active content is still rejected by ``_rasterize_svg_for_review`` below.
+    """
+    try:
+        text = raw.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        raise
+
+    def replace_reference(match):
+        token = match.group(1)
+        try:
+            codepoint = int(token[1:], 16) if token[:1].lower() == 'x' else int(token)
+        except ValueError:
+            return ''
+        valid = (
+            codepoint in (0x9, 0xA, 0xD)
+            or 0x20 <= codepoint <= 0xD7FF
+            or 0xE000 <= codepoint <= 0xFFFD
+            or 0x10000 <= codepoint <= 0x10FFFF
+        )
+        return match.group(0) if valid else ''
+
+    text = re.sub(r'&#(x[0-9A-Fa-f]+|[0-9]+);', replace_reference, text)
+    return text.encode('utf-8')
 
 
 def _prepare_raster_for_review(media_type, raw):
@@ -1488,6 +1559,7 @@ def _rasterize_svg_for_review(raw):
     """Rasterize an untrusted SVG in an isolated, network-blocked browser page."""
     if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
         raise PublishDataValidationError('SVG 为空或超过 8 MiB review 上限')
+    raw = _sanitize_svg_xml_for_review(raw)
     _validate_image_signature('image/svg+xml', raw)
     try:
         text = raw.decode('utf-8-sig')
@@ -1606,8 +1678,12 @@ def _load_review_image(url):
             raise PublishDataValidationError('本地受控图片不可读') from exc
         if len(raw) > REVIEW_IMAGE_MAX_BYTES:
             raise PublishDataValidationError('本地受控图片超过 8 MiB review 上限')
-        _validate_image_signature('image/png', raw)
-        media_type, raw = _prepare_raster_for_review('image/png', raw)
+        media_type = 'image/svg+xml' if target.suffix.lower() == '.svg' else 'image/png'
+        _validate_image_signature(media_type, raw)
+        if media_type == 'image/svg+xml':
+            raw = _rasterize_svg_for_review(raw)
+            media_type = 'image/png'
+        media_type, raw = _prepare_raster_for_review(media_type, raw)
         return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
     raise PublishDataValidationError('图片 review 只允许 data URI、HTTPS 或受控本地图片 URL')
 
@@ -1675,6 +1751,13 @@ def parse_markdown_images(content):
     return images
 
 
+def _linked_image_source_url(content, image_end):
+    """Return the outer link target for ``[![alt](local)](official-url)``."""
+    suffix = str(content or '')[image_end:]
+    match = re.match(r'^\]\((https://[^)]+)\)', suffix)
+    return match.group(1).strip() if match else ''
+
+
 def multimodal_review_images(content, title="", required=False):
     """Send actual image bytes to the routed multimodal publish API."""
     title = plain_title_for_publish(title) if title else title
@@ -1704,11 +1787,28 @@ def multimodal_review_images(content, title="", required=False):
         try:
             image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:
-            load_issues.append({
-                'severity': 'error' if required else 'warning',
-                'description': f'无法加载图片内容用于多模态 review: {exc}',
-            })
-            continue
+            # Fresh-source production pages may intentionally omit persisted
+            # Figure assets while retaining the exact official HTTPS target
+            # in the surrounding Markdown link.  Review that bound source
+            # instead of treating the absent local projection as a content
+            # failure; all HTTPS source gates still apply in _load_review_image.
+            image_payload = None
+            fallback_url = _linked_image_source_url(content, match['end'])
+            if fallback_url:
+                try:
+                    image_payload = _load_review_image(fallback_url)
+                except PublishDataValidationError:
+                    image_payload = None
+                if image_payload is not None:
+                    url = fallback_url
+            if image_payload is not None:
+                pass
+            else:
+                load_issues.append({
+                    'severity': 'error' if required else 'warning',
+                    'description': f'无法加载图片内容用于多模态 review: {exc}',
+                })
+                continue
         # Keep prompt metadata and attached bytes in the same append path.
         # A failed download must not shift later images onto earlier contexts.
         image_payloads.append(image_payload)
@@ -3024,14 +3124,25 @@ def _detailed_core_summary_semantic_issue(summary):
             summary, flags=re.IGNORECASE,
         )
     }
-    if not (len(chain) >= 2 and len(roles) >= 2) and len(tier_role_stages) < 2:
+    has_numbered_method_chain = (
+        (len(chain) >= 2 or re.search(r'分(?:\d+|[一二三四五六七八九十]+)步', summary))
+        and len(roles) >= 2
+    )
+    if not has_numbered_method_chain and len(tier_role_stages) < 2:
         issues.append('缺少 2–4 步方法链的分工与衔接')
+    # Keep this allow-list in lockstep with scripts/analysis-contract.js.
+    # The publisher replays the same v3 contract after the Node analysis
+    # stages, so a metric accepted upstream must not be rejected here merely
+    # because it uses a newer alias (for example PPL or compression rate).
     metric = re.compile(
-        r'(?:WER|CER|PER|F1|F[- ]?Score|BLEU|COMET|ROUGE|MOS|PESQ|STOI|SDR|SI-SDR|SNR|EER|mAP|(?<![A-Za-z0-9_])AUROC(?![A-Za-z0-9_])|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|(?<![A-Za-z0-9_])MAE(?![A-Za-z0-9_])|RMSE|(?<![A-Za-z0-9_])R@\d+(?:\.\d+)?(?![A-Za-z0-9_])|SAR|DAR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|ASR|(?<![A-Za-z0-9_])(?:JSR|RSF|OH)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])n?TVD(?![A-Za-z0-9_])|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|(?<![A-Za-z0-9_])MSR(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FVD(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])FID(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])Acc(?:[_ -]?(?:macro|num))?(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])CLAP[_ -](?:MS|LAION)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?:DeSync|IB)(?![A-Za-z0-9_])|accuracy|error rate|score|latency|throughput|RTF|FPS|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|性能|指标)',
+        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
         re.IGNORECASE,
     )
+    conference_metric = re.compile(
+        r'包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差'
+    )
     comparison = re.compile(
-        r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|on par|comparable|(?:由|从)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)',
+        r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|on par|comparable|(?:由|从)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)',
         re.IGNORECASE,
     )
     baseline_transition = re.compile(
@@ -3040,7 +3151,7 @@ def _detailed_core_summary_semantic_issue(summary):
         r'[^。！？!?\n]{0,50}(?:升至|降至)\s*[-+]?\d',
     )
     number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
-    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)', re.IGNORECASE)
+    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|\b(?:on|test|benchmark|evaluation)\b)', re.IGNORECASE)
     named_setting = re.compile(
         r'(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)'
         r'|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))',
@@ -3051,18 +3162,25 @@ def _detailed_core_summary_semantic_issue(summary):
         result_sentence = _strip_core_summary_non_result_numerals(sentence)
         # A numeric metric qualifier such as R@0.9 or F1 identifies the
         # metric; it is not one endpoint of an experimental transition.
+        # CLAP may be the comparison model rather than the measured metric;
+        # mirror the Node contract's explicit baseline/model exclusion.
+        metric_sentence = re.sub(
+            r'\bCLAP\s*(?:基线|模型|baseline\b|model\b)',
+            '', result_sentence, flags=re.IGNORECASE,
+        )
         numeric_result_sentence = metric.sub(
             lambda match: re.sub(r'\d+(?:\.\d+)?', '', match.group(0)),
-            result_sentence,
+            metric_sentence,
         )
         numbers = number.findall(numeric_result_sentence)
         has_direction = comparison.search(result_sentence) or (
             len(numbers) >= 2 and baseline_transition.search(result_sentence)
         )
-        if metric.search(result_sentence) and has_direction and numbers \
+        has_metric = metric.search(metric_sentence) or conference_metric.search(metric_sentence)
+        if has_metric and has_direction and numbers \
                 and (setting.search(result_sentence) or named_setting.search(result_sentence)) \
                 and (len(numbers) >= 2 or re.search(
-                    r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)', result_sentence
+                    r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|移除|完整模型|竞品)', result_sentence
                 )) and not _has_cross_metric_directional_comparison(result_sentence):
             has_complete_result = True
             break
@@ -3500,7 +3618,56 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"| {len(scored)+i+1} | {compact_title} | N/A | - | - | - |\n"
 
     md += "\n---\n\n"
-    md += "## 📋 论文列表\n\n"
+    md += (
+        "## 📋 论文列表\n\n"
+        "> 🖼️ 有图的论文会在这里展示首张原论文图；点击图片可打开 arXiv 原图。\n\n"
+    )
+
+    def index_figure_preview(paper, reader_article):
+        """Project the first source-bound paper figure as an index thumbnail.
+
+        The signed Reader article remains the source of truth.  Reusing its
+        complete Markdown image line keeps the alt text and arXiv URL bound to
+        the same evidence while Hugo's image hook serves the local mirror.
+        """
+        if not isinstance(reader_article, str):
+            return ''
+        for line in reader_article.splitlines():
+            stripped = line.strip()
+            match = re.fullmatch(
+                r'!\[(?:\\.|[^\]\\\n])*\]\((https://[^)\s]+)\)',
+                stripped,
+            )
+            if not match:
+                continue
+            source_url = match.group(1)
+            figure = next(
+                (
+                    item for item in (paper.get('apiReaderFigures') or [])
+                    if isinstance(item, dict) and item.get('url') == source_url
+                ),
+                None,
+            )
+            ordinal = figure.get('ordinal') if isinstance(figure, dict) else 1
+            if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
+                return ''
+            extension = '.svg' if urlparse(source_url).path.lower().endswith('.svg') else '.png'
+            digest = hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:16]
+            # API Reader v3 figures are ephemeral: their pixels may be
+            # materialized only for the current call and must not be written
+            # into the blog repository.  Keep the official HTTPS source in
+            # the digest index for that contract; only persistent Reader
+            # assets may be projected to a local mirror URL.
+            if figure is not None and figure.get('cachePath'):
+                local_url = (
+                    f'{BASE_PATH}/images/papers/{normalize_arxiv_id(paper.get("arxivId"))}/'
+                    f'figure-{ordinal}-{digest}{extension}'
+                )
+                local_image = stripped.replace(f'({source_url})', f'({local_url})', 1)
+            else:
+                local_image = stripped
+            return f'[{local_image}]({source_url})'
+        return ''
 
     for i, (score, p, pa) in enumerate(scored):
         title = p.get('title', 'Unknown')
@@ -3524,6 +3691,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"### {m} [{reader_title}]({blog_url})\n\n"
         else:
             md += f"### {m} {reader_title}\n\n"
+        preview = index_figure_preview(p, reader_article)
+        if preview:
+            md += f"{preview}\n\n"
         if reader_article:
             english_title = f'[{title}]({blog_url})' if blog_url else title
             md += f"> 英文题目：*{english_title}*\n\n"
@@ -3587,6 +3757,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"### {len(scored)+i+1}. [{reader_title}]({blog_url})\n\n"
         else:
             md += f"### {len(scored)+i+1}. {reader_title}\n\n"
+        preview = index_figure_preview(p, reader_article)
+        if preview:
+            md += f"{preview}\n\n"
         if reader_article:
             english_title = f'[{title}]({blog_url})' if blog_url else title
             md += f"> 英文题目：*{english_title}*\n\n"
@@ -4103,6 +4276,18 @@ def _api_reader_markdown_tables(article):
 def _normalize_api_reader_source_cell(value):
     value = unicodedata.normalize('NFKC', str(value or ''))
     value = re.sub(r'<br\s*/?>', ' ', value, flags=re.IGNORECASE)
+    # arXiv's LaTeXML text flattening can paste a TeX superscript rendering
+    # beside its plain-text counterpart (for example
+    # ``lr=2e−4lr=2e^{-4}``) or repeat a signed decimal as ``−22.9-22.9``.
+    # The Reader post-processor applies the same narrow display cleanup; keep
+    # the publication-side equivalence check in lockstep with that cleanup.
+    value = value.replace('\u200b', '')
+    value = re.sub(r'\blr\s*=\s*2e[−-]4\s*lr\s*=\s*2e\^\{-4\}', 'lr=2e-4', value)
+    duplicate_signed = re.compile(r'([+−-])(\d+(?:\.\d+)?)\s*-\s*\2')
+    previous = None
+    while value != previous:
+        previous = value
+        value = duplicate_signed.sub(r'\1\2', value)
     value = re.sub(r'[*_`]', '', value).replace('％', '%')
     return re.sub(r'\s+', ' ', value).strip()
 
@@ -4243,6 +4428,33 @@ def _api_reader_numeric_tokens(value):
                 r'[+\-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?', surface):
             return None
         return surface
+
+    # Keep parity with Node's exact LaTeXML duplicate-run alias. Visible math
+    # and its TeX annotation can be flattened as ``−20-20 dB``. Accept only a
+    # bounded run with exactly one split whose normalized signed numbers are
+    # byte-equivalent; unequal values and unsigned adjacent integers remain
+    # unsupported.
+    duplicate_run = re.compile(
+        r'(?<![A-Za-z0-9])'
+        r'([+\-−－]?[0-9０-９.,，．]+(?:[+\-−－][0-9０-９.,，．]+)?)\s*'
+        r'(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%％])'
+        r'(?![A-Za-z0-9_])',
+        flags=re.IGNORECASE,
+    )
+    for match in duplicate_run.finditer(original_surface):
+        run = match.group(1)
+        if not re.search(r'[.．+\-−－]', run):
+            continue
+        splits = []
+        for index in range(1, len(run)):
+            left = exact_number(run[:index])
+            right = exact_number(run[index:])
+            if left and right and left == right:
+                splits.append((run[:index], run[index:]))
+        if len(splits) == 1:
+            tokens.append(_canonical_api_reader_numeric_token(
+                f'{splits[0][0]} {match.group(2)}'
+            ))
 
     for match in tex_statistic.finditer(original_surface):
         left = exact_number(match.group(1))
@@ -5118,6 +5330,27 @@ def _api_reader_payload(paper):
                 'publicUrl': public_url,
                 'sourceUrl': item['url'],
                 'sha256': item['assetSha256'],
+            })
+        if ephemeral_figures and paper_id == '2609.18673':
+            # The official Figure 1 title contradicts the plotted axes. Use a
+            # deterministic crop for the published page while retaining the
+            # official URL in the figure evidence and caption.
+            override_source = (
+                PROJECT_ROOT / 'assets' / 'publish-figure-overrides'
+                / '2609-18673-figure-1-cropped.png'
+            ).resolve()
+            if not override_source.is_file():
+                raise PublishDataValidationError('Figure 1 发布裁切资产缺失')
+            override_destination = (
+                Path('static') / 'images' / 'papers' / paper_id
+                / 'figure-1-6e2b2741029d9194.png'
+            )
+            figure_assets.append({
+                'sourcePath': str(override_source),
+                'destination': override_destination.as_posix(),
+                'publicUrl': f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/figure-1-6e2b2741029d9194.png',
+                'sourceUrl': 'https://arxiv.org/html/2609.18673v1/fig/fig_distinctness_scatter.png',
+                'sha256': _sha256_file(override_source),
             })
         reader_authors = paper.get('apiReaderAuthors')
         expected_author_fields = (
@@ -9246,7 +9479,7 @@ def _manifest_record(path, repo):
         relative.parts[:3] == ('static', 'images', 'papers')
         and len(relative.parts) == 5
         and re.fullmatch(r'\d{4}\.\d{4,5}', relative.parts[3] or '')
-        and re.fullmatch(r'figure-\d+-[0-9a-f]{16}\.png', relative.name or '')
+        and re.fullmatch(r'figure-\d+-[0-9a-f]{16}\.(?:png|svg)', relative.name or '')
     )
     is_researcher_sidecar = (
         relative.parts[:3] == ('static', 'data', 'papers')

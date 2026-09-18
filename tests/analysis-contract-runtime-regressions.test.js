@@ -79,6 +79,18 @@ describe('production analysis contract regressions', () => {
         }
     });
 
+    it('accepts codec compression rate as a measured result metric', () => {
+        const result = '在 28 首立体声 48 kHz 16 位自建集的统一评测设置下，OLAC 的压缩率为 56.8%，低于 FLAC -8 的压缩率 57.6%，比较对象、数值与方向均可核对。';
+        const sourceText = 'Evaluation on 28 stereo tracks reports a compression ratio of 56.8% for OLAC versus 57.6% for FLAC -8.';
+        assert.strictEqual(getCoreSummaryDetailIssue(withResultSentence(result), { sourceText }), null);
+    });
+
+    it('keeps a complete real-time-factor comparison available for core-summary repair', () => {
+        const result = '在 16 个英语与多语言测试集的统一评测设置下，本文系统的实时率为 1454 倍实时，高于同类自回归模型的实时率 48.3 倍实时，比较对象、数值与方向均可核对。';
+        const sourceText = 'Evaluation on 16 English and multilingual test sets reports a real-time factor of 1454 times real time versus 48.3 times real time for an autoregressive baseline.';
+        assert.strictEqual(getCoreSummaryDetailIssue(withResultSentence(result), { sourceText }), null);
+    });
+
     it('keeps metric token boundaries while accepting historical Acc variants', () => {
         const audioMae = withResultSentence(
             '在公开基准评测设置下，AudioMAE 从基线的 0.42 降至 0.31，比较对象、数值与方向都可由原文核对。'

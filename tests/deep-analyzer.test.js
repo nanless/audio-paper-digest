@@ -24,6 +24,18 @@ describe('conference source-bound open-source inventory', () => {
         assert.match(result, /- 论文中引用的开源项目：https:\/\/github\.com\/example\/tool/);
         assert.doesNotMatch(result, /arXiv/);
     });
+
+    it('builds a source-only open-source fallback from exact repository URLs', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const result = deep.buildDeterministicOpenSourceScan(
+            'The implementation is available at: '
+            + 'https://github.com/AndrewPBerg/UAV_Classification.'
+        );
+        assert.match(result, /- 代码：https:\/\/github\.com\/AndrewPBerg\/UAV_Classification/);
+        assert.match(result, /- 模型权重：论文中未提及/);
+        assert.match(result, /- 数据集：论文中未提及/);
+        assert.doesNotMatch(result, /not publicly available/);
+    });
 });
 
 describe('taxonomy runtime analysis integration', () => {
@@ -4482,6 +4494,7 @@ has_dataset: 否
         assert.strictEqual(validate('Voxtral Mini 等模型出现负结果。'), null);
         assert.strictEqual(validate('代价是 I2V 动态幅度从 44.58 降至 35.62。'), null);
         assert.strictEqual(validate('移除内容评审器后视觉得分降至 18.67。'), null);
+        assert.strictEqual(validate('例外是消防车融合准确率 57.1% 低于音频分支 65.7%，形成负增益。'), null);
         assert.match(validate('测试误差从 12.4% 下降至 10.8%。'), /没有保留负面证据/);
         assert.match(validate('代价是测试误差从 12.4% 下降至 10.8%。'), /没有保留负面证据/);
         assert.match(validate('动态幅度从 44.58 下降至 35.62。'), /没有保留负面证据/);

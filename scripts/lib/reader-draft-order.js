@@ -328,6 +328,161 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     return unbound.length;
 }
 
+function alignMixedBindingsToCurrentTableNodes(draft, tables) {
+    const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
+    if (!bindings.length || tables.length !== bindings.length) return false;
+    if (!bindings.every((binding, index) => binding?.tableIndex === index + 1)) return false;
+    const selectionByOrdinal = new Map();
+    const proseBindings = [];
+    for (const binding of bindings) {
+        if (Object.prototype.hasOwnProperty.call(binding || {}, 'selection')) {
+            if (selectionByOrdinal.has(binding.tableIndex)) return false;
+            selectionByOrdinal.set(binding.tableIndex, binding);
+        } else {
+            proseBindings.push(binding);
+        }
+    }
+    if (!selectionByOrdinal.size || !proseBindings.length) return false;
+    const markerNodes = tables.filter(table => table.marker);
+    const proseNodes = tables.filter(table => !table.marker);
+    if (markerNodes.length !== selectionByOrdinal.size || proseNodes.length !== proseBindings.length
+        || markerNodes.some(table => !selectionByOrdinal.has(table.markerIndex))) return false;
+    for (const table of markerNodes) {
+        const body = String(draft.sections?.[table.sectionIndex]?.body || '');
+        if (body.split(table.marker).length - 1 !== 1
+            || body.split(/\n\s*\n/).filter(block => block.trim() === table.marker).length !== 1) return false;
+    }
+    let proseIndex = 0;
+    const markerMap = new Map();
+    draft.tableBindings = tables.map((table, canonicalIndex) => {
+        const binding = table.marker
+            ? selectionByOrdinal.get(table.markerIndex)
+            : proseBindings[proseIndex++];
+        if (table.marker) markerMap.set(table.markerIndex, canonicalIndex + 1);
+        return { ...binding, tableIndex: canonicalIndex + 1 };
+    });
+    for (const section of draft.sections) {
+        if (typeof section?.body !== 'string') continue;
+        section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
+            (marker, ordinal) => markerMap.has(Number(ordinal))
+                ? `[[TABLE_${markerMap.get(Number(ordinal))}]]` : marker);
+    }
+    return true;
+}
+
+// Source-quote bindings have no visible ordinal marker.  When a model emits
+// the sections in a different order, the old positional check therefore
+// treated an otherwise recoverable table/binding permutation as ambiguous.
+// Recover it only when every binding has a unique, evidence-backed table
+// assignment.  Selection markers remain stronger anchors and are never
+// inferred from prose.
+function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables) {
+    const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
+    if (!bindings.length || tables.length !== bindings.length
+        || !bindings.every((binding, index) => binding?.tableIndex === index + 1)) return false;
+    const markerBindings = new Map();
+    const quoteBindings = [];
+    for (const binding of bindings) {
+        if (Object.prototype.hasOwnProperty.call(binding || {}, 'selection')) {
+            if (markerBindings.has(binding.tableIndex)) return false;
+            markerBindings.set(binding.tableIndex, binding);
+        } else if (binding?.sourceType === 'source_quotes' && Array.isArray(binding.sourceQuotes)) {
+            quoteBindings.push(binding);
+        } else {
+            return false;
+        }
+    }
+    if (!quoteBindings.length) return false;
+    const markerNodes = tables.filter(table => table.marker);
+    const proseNodes = tables.filter(table => table.table && !table.marker);
+    if (markerNodes.length !== markerBindings.size
+        || proseNodes.length !== quoteBindings.length
+        || markerNodes.some(table => !markerBindings.has(table.markerIndex))) return false;
+
+    const normalize = value => String(value || '').normalize('NFKC').toLowerCase()
+        .replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
+    const tokens = value => normalize(value).match(/[a-z0-9]+|[\u3400-\u9fff]+/g) || [];
+    const numbers = value => normalize(value).match(/(?<![a-z0-9])[-+]?\d+(?:\.\d+)?%?(?![a-z0-9])/g) || [];
+    const score = (binding, node) => {
+        const tableText = normalize(node.table?.markdown);
+        let best = 0;
+        for (const raw of binding.sourceQuotes) {
+            const quote = normalize(typeof raw === 'string' ? raw : raw?.quote);
+            if (!quote) continue;
+            if (tableText.includes(quote) || quote.includes(tableText)) best = Math.max(best, 100000);
+            const quoteNumbers = new Set(numbers(quote));
+            const tableNumbers = new Set(numbers(tableText));
+            const numericOverlap = [...quoteNumbers].filter(token => tableNumbers.has(token)).length;
+            const quoteTokens = new Set(tokens(quote));
+            const tableTokens = new Set(tokens(tableText));
+            const wordOverlap = [...quoteTokens].filter(token => token.length > 1 && tableTokens.has(token)).length;
+            if (quoteNumbers.size && numericOverlap === quoteNumbers.size) best = Math.max(best, 10000 + numericOverlap * 100 + wordOverlap);
+            else if (!quoteNumbers.size && wordOverlap >= 2) best = Math.max(best, wordOverlap * 100);
+        }
+        return best;
+    };
+    const candidates = quoteBindings.map(binding => proseNodes.map((node, index) => ({
+        index, score: score(binding, node)
+    })).filter(candidate => candidate.score > 0));
+    if (candidates.some(items => items.length === 0)) return false;
+    let bestScore = -1, bestAssignments = [], assignment = [];
+    const visit = (bindingIndex, used, total) => {
+        if (bindingIndex === quoteBindings.length) {
+            if (total > bestScore) {
+                bestScore = total;
+                bestAssignments = [assignment.slice()];
+            } else if (total === bestScore && bestAssignments.length < 2) {
+                bestAssignments.push(assignment.slice());
+            }
+            return;
+        }
+        for (const candidate of candidates[bindingIndex]) {
+            if (used.has(candidate.index)) continue;
+            used.add(candidate.index);
+            assignment.push(candidate);
+            visit(bindingIndex + 1, used, total + candidate.score);
+            assignment.pop();
+            used.delete(candidate.index);
+        }
+    };
+    visit(0, new Set(), 0);
+    if (bestAssignments.length !== 1) return false;
+    const assignedByNode = new Map(bestAssignments[0].map((item, index) => [item.index, quoteBindings[index]]));
+    let markerMap = new Map();
+    draft.tableBindings = tables.map((table, canonicalIndex) => {
+        const binding = table.marker
+            ? markerBindings.get(table.markerIndex)
+            : assignedByNode.get(proseNodes.indexOf(table));
+        if (table.marker) markerMap.set(table.markerIndex, canonicalIndex + 1);
+        return { ...binding, tableIndex: canonicalIndex + 1 };
+    });
+    for (const section of draft.sections || []) {
+        if (typeof section?.body !== 'string') continue;
+        section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
+            (marker, ordinal) => markerMap.has(Number(ordinal))
+                ? `[[TABLE_${markerMap.get(Number(ordinal))}]]` : marker);
+    }
+    return true;
+}
+
+// Trailing source_quotes declarations with no visible table nodes carry no
+// reader-facing content and cannot be compiled. Remove only that trailing
+// suffix when the entire visible stream is ordinary
+// Markdown, all earlier bindings are sequential source_quotes, and no TABLE
+// marker exists anywhere. The full parser still replays every remaining quote.
+function pruneTrailingUnboundSourceQuoteBindings(draft, tables) {
+    const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
+    if (!Array.isArray(draft?.sections) || bindings.length <= tables.length
+        || tables.length < 1 || tables.some(table => table.marker)
+        || draft.sections.some(section => /\[\[TABLE_\d+\]\]/.test(String(section?.body || '')))) return false;
+    if (!bindings.every((binding, index) => binding?.tableIndex === index + 1
+        && !Object.prototype.hasOwnProperty.call(binding, 'selection')
+        && binding?.sourceType === 'source_quotes'
+        && Array.isArray(binding.sourceQuotes))) return false;
+    draft.tableBindings = bindings.slice(0, tables.length);
+    return true;
+}
+
 function normalizeReaderDraftOrder(input) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
@@ -342,16 +497,46 @@ function normalizeReaderDraftOrder(input) {
     }
     const sectionMap = ranked.map(({ index }, canonicalIndex) => ({ rawIndex: index, canonicalIndex }));
     const sectionOrderChanged = sectionMap.some(item => item.rawIndex !== item.canonicalIndex);
-    const originalTables = locateReaderDraftTables(draft);
+    let originalTables = locateReaderDraftTables(draft);
+    pruneTrailingUnboundSourceQuoteBindings(draft, originalTables);
     let tableMap = originalTables.map(table => ({ rawIndex: table.bindingIndex, canonicalIndex: table.bindingIndex,
         rawSectionIndex: table.sectionIndex, canonicalSectionIndex: table.sectionIndex }));
     if (sectionOrderChanged && Array.isArray(draft.tableBindings)) {
-        const valid = originalTables.length === draft.tableBindings.length
+        // Prefer authenticated source-quote evidence over positional order.
+        // This also handles the common case where the positional shape looks
+        // valid but each quote binding belongs to a different raw section.
+        const sourceQuoteAligned = alignSourceQuoteBindingsToCurrentTableNodes(draft, originalTables);
+        if (sourceQuoteAligned) originalTables = locateReaderDraftTables(draft);
+        let valid = originalTables.length === draft.tableBindings.length
             && draft.tableBindings.every((binding, index) => binding?.tableIndex === index + 1
                 && (Object.prototype.hasOwnProperty.call(binding, 'selection')
                     ? originalTables[index]?.markerIndex === index + 1
                         && sections.reduce((n, section) => n + String(section?.body || '').split(`[[TABLE_${index + 1}]]`).length - 1, 0) === 1
                     : !originalTables[index]?.marker));
+        // A mixed stream can be unambiguously realigned before section sorting:
+        // selection bindings are anchored by their unique TABLE ordinal, while
+        // source-quote/artifact bindings keep their existing relative order.
+        // The downstream source-binding parser still replays every cell/quote.
+        if (!valid && alignMixedBindingsToCurrentTableNodes(draft, originalTables)) {
+            originalTables = locateReaderDraftTables(draft);
+            valid = originalTables.length === draft.tableBindings.length
+                && draft.tableBindings.every((binding, index) => binding?.tableIndex === index + 1
+                    && (Object.prototype.hasOwnProperty.call(binding, 'selection')
+                        ? originalTables[index]?.markerIndex === index + 1
+                            && sections.reduce((n, section) => n
+                                + String(section?.body || '').split(`[[TABLE_${index + 1}]]`).length - 1, 0) === 1
+                        : !originalTables[index]?.marker));
+        }
+        if (!valid && alignSourceQuoteBindingsToCurrentTableNodes(draft, originalTables)) {
+            originalTables = locateReaderDraftTables(draft);
+            valid = originalTables.length === draft.tableBindings.length
+                && draft.tableBindings.every((binding, index) => binding?.tableIndex === index + 1
+                    && (Object.prototype.hasOwnProperty.call(binding, 'selection')
+                        ? originalTables[index]?.markerIndex === index + 1
+                            && sections.reduce((n, section) => n
+                                + String(section?.body || '').split(`[[TABLE_${index + 1}]]`).length - 1, 0) === 1
+                        : !originalTables[index]?.marker));
+        }
         if (!valid) {
             const error = new Error('Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格');
             error.code = 'READER_DRAFT_ORDER_AMBIGUOUS';
@@ -376,8 +561,10 @@ function normalizeReaderDraftOrder(input) {
                 (marker, index) => markerMap.has(Number(index)) ? `[[TABLE_${markerMap.get(Number(index))}]]` : marker);
         }
     } else if (!sectionOrderChanged && sectionsAreKnown && Array.isArray(draft.tableBindings)) {
-        const markerOrdinals = completeSelectionMarkerPermutation(draft, originalTables);
-        if (markerOrdinals && markerOrdinals.some((ordinal, index) => ordinal !== index + 1)) {
+        const mixedAligned = alignMixedBindingsToCurrentTableNodes(draft, originalTables);
+        if (mixedAligned) originalTables = locateReaderDraftTables(draft);
+        const markerOrdinals = mixedAligned ? null : completeSelectionMarkerPermutation(draft, originalTables);
+        if (!mixedAligned && markerOrdinals && markerOrdinals.some((ordinal, index) => ordinal !== index + 1)) {
             tableMap = originalTables.map((table, canonicalIndex) => ({
                 rawIndex: table.markerIndex - 1,
                 canonicalIndex,
@@ -428,4 +615,6 @@ function normalizeReaderDraftOrder(input) {
 
 module.exports = { READER_DRAFT_ORDER_CONTRACT, READER_SECTION_KINDS, locateReaderDraftTables,
     completeSelectionMarkerPermutation, pruneUniquelyUnboundReaderMarkdownTables,
+    alignMixedBindingsToCurrentTableNodes, alignSourceQuoteBindingsToCurrentTableNodes,
+    pruneTrailingUnboundSourceQuoteBindings,
     normalizeReaderDraftOrder };

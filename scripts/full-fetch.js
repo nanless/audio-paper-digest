@@ -1747,7 +1747,7 @@ async function runFullFetch() {
         }).length
         : 0;
     if (skippedAlreadyAnalyzed > 0) {
-        console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${papersToAnalyze.length} 篇`);
+        console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${filteredNew.length - skippedAlreadyAnalyzed} 篇`);
     }
     const analyzedPapers = [];
 
@@ -1798,7 +1798,9 @@ async function runFullFetch() {
         },
         onPaperDone: (idx, total, paper, result, duration) => {
             const durSec = (duration / 1000).toFixed(1);
-            if (result.success) {
+            if (result.skipped) {
+                console.log(`  [${idx + 1}/${total}] ⏭️ 已有成功分析，保持 canonical 不变 | ${paper.title.substring(0, 50)}...`);
+            } else if (result.success) {
                 const score = result.parsed?.score ? `[${result.parsed.score}分]` : '[N/A]';
                 const rank = result.parsed?.rankBucket || '未分档';
                 const primaryTask = result.parsed?.primaryTaskTag || '';
@@ -1810,11 +1812,12 @@ async function runFullFetch() {
         },
         onBatchDone: async (batchNum, batchResults) => {
             const batchSuccess = batchResults.filter(r => r.success).length;
-            const batchFailed = batchResults.length - batchSuccess;
+            const batchSkipped = batchResults.filter(r => r.skipped).length;
+            const batchFailed = batchResults.length - batchSuccess - batchSkipped;
             const batchScores = batchResults.filter(r => r.success && r.parsed?.score).map(r => r.parsed.score);
             const batchScoreInfo = batchScores.length > 0 ? ` 评分: ${batchScores.join(', ')}` : '';
             const totalBatches = Math.ceil(papersToAnalyze.length / ANALYSIS_CONCURRENCY);
-            console.log(`  ── 批次 ${batchNum}/${totalBatches} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
+            console.log(`  ── 批次 ${batchNum}/${totalBatches} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchSkipped > 0 ? ` | 跳过 ${batchSkipped}` : ''}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
 
             const snapshot = readJsonFileStrict(outputFile, { allowMissing: true });
             const canonicalPapers = Array.isArray(snapshot) ? snapshot : (snapshot?.papers || []);

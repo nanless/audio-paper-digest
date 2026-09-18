@@ -130,6 +130,26 @@ function hasSourceBoundRepeatedColonVector(cell, context = {}, duplicate = null)
     return sourceSequences.has(candidate.sequence);
 }
 
+function hasSourceBoundRepeatedRangeChain(cell, context = {}, duplicate = null) {
+    const text = String(cell || '').normalize('NFKC');
+    const compact = text.replace(/\s+/g, '').replace(/\\times/gi, '×');
+    const number = '[+\\-]?\\d+(?:\\.\\d+)?';
+    const range = `\\[${number},${number}\\]`;
+    const chainPattern = new RegExp(`((?:${range}×){2}${range})`);
+    const match = chainPattern.exec(compact);
+    if (!match || [...compact.matchAll(/\[[^\]]+\]/g)].length !== 3
+        || (duplicate && !(duplicate.index >= match.index
+            && duplicate.index + duplicate.length <= match.index + match[0].length))) return false;
+    const sourceChains = (Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
+        .map(value => String(value || '').normalize('NFKC')
+            .replace(/\s+/g, '').replace(/\\times/gi, '×'));
+    // A repeated range is meaningful in a three-axis room/geometry dimension,
+    // but only when the complete chain occurs in authenticated source text.
+    // Repeated whole cells and dropped/reordered ranges do not match this
+    // exact three-range shape.
+    return sourceChains.some(source => source.includes(match[1]));
+}
+
 function findReaderTablePasteDuplication(cell, context = {}) {
     const text = String(cell || '');
     const compact = text.replace(/\s+/g, '');
@@ -154,6 +174,8 @@ function findReaderTablePasteDuplication(cell, context = {}) {
         if (hasExplicitRepeatedScientificMeasurement(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasExplicitRepeatedDatasetSplitScale(compact, context)) continue;
+        if (hasSourceBoundRepeatedRangeChain(compact, context,
+            { index: doubled.index, length: doubled[0].length })) continue;
         if (hasSourceBoundRepeatedNumericVector(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasSourceBoundRepeatedColonVector(compact, context,
@@ -466,7 +488,7 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
 module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
     hasExplicitRepeatedScientificMeasurement, bracketedNumericVectors,
-    hasSourceBoundRepeatedNumericVector,
+    hasSourceBoundRepeatedNumericVector, hasSourceBoundRepeatedRangeChain,
     findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
     effectiveReaderTableRows, effectiveReaderTableHeaderRows, canonicalizeReaderSelectionRows,
     renderReaderTableSelection, repairUniqueReaderTableSelectionHeader,

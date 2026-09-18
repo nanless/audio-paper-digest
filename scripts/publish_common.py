@@ -197,6 +197,23 @@ TABLE_NUMERIC_CELL_RE = re.compile(
 )
 
 
+def _is_table_identifier_header(value):
+    """Mirror Node handling of directional metric headers."""
+    normalized = str(value or '').strip()
+    if not normalized:
+        return True
+    without_direction = TABLE_DIRECTION_MARK_RE.sub(' ', normalized)
+    without_direction = re.sub(r'\s+', ' ', without_direction).strip()
+    identifier = bool(TABLE_IDENTIFIER_HEADER_RE.search(without_direction))
+    if not TABLE_DIRECTION_MARK_RE.search(normalized):
+        return identifier
+    # “OGI 测试 WER ↓ (%)” contains a setting qualifier and a metric. The
+    # direction marker makes it a measurable column, not an identifier.
+    if TABLE_DIRECTIONAL_METRIC_RE.search(without_direction):
+        return False
+    return identifier
+
+
 def _extract_analysis_section(text, title):
     match = re.search(
         rf'(?:^|\n)##(?!#)\s*{re.escape(title)}[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)',
@@ -2339,7 +2356,7 @@ def extract_markdown_tables(text):
         for cell in header:
             normalized = re.sub(r'<br\s*/?>', ' ', cell, flags=re.IGNORECASE)
             normalized = re.sub(r'[*_`]', '', normalized).strip()
-            if not normalized or TABLE_IDENTIFIER_HEADER_RE.search(normalized):
+            if _is_table_identifier_header(normalized):
                 identifier_columns += 1
         tables.append({
             'header': header,
@@ -2403,7 +2420,7 @@ def _validate_experiment_table_evidence_depth(
             return f'实验结果第 {index} 张表缺少方法、数据集或设置识别列'
         for header in table['header']:
             normalized = re.sub(r'[*_`]', '', header).strip()
-            identifier = not normalized or TABLE_IDENTIFIER_HEADER_RE.search(normalized)
+            identifier = _is_table_identifier_header(normalized)
             if not identifier and TABLE_VAGUE_METRIC_HEADER_RE.search(normalized):
                 return f'实验结果第 {index} 张表含叙述型伪指标列“{normalized}”，应改为可核对指标、设置或比较对象'
             if (not identifier
@@ -2431,7 +2448,7 @@ def _validate_experiment_table_evidence_depth(
         before = next((
             paragraph for paragraph in before_candidates
             if len(re.sub(r'[*_`#>\s]', '', paragraph)) >= 20
-            and re.search(r'比较|对比|检验|考察|回答|关键问题|差异|收益|代价|是否|能否|何种|多大|哪些', paragraph)
+            and re.search(r'比较|对比|基线|对照|检验|考察|回答|关键问题|差异|收益|代价|是否|能否|何种|多大|哪些', paragraph)
         ), '')
         after = next((
             paragraph for paragraph in after_candidates

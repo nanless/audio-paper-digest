@@ -2819,6 +2819,15 @@ primary_method_tag: #基准测试
             contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
             document_type='方法研究',
         ))
+        baseline_narrative = valid.replace(
+            '关键比较问题是完整方法相对强基线能降低多少识别错误，以及收益是否带来速度代价。表中保留主方法、最强基线与关键消融。',
+            '固定测试集与解码预算保持一致，表中保留完整方法、最强基线和关键消融配置。',
+        )
+        self.assertIsNone(validate_experiment_table_contract(
+            baseline_narrative,
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+        ))
         latex_direction = valid.replace('LibriSpeech WER↓', r'Macro-F1 $\uparrow$')
         self.assertIsNone(validate_experiment_table_contract(
             latex_direction,
