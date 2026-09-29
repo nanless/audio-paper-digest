@@ -66,6 +66,72 @@ class ChannelSnapshotEntryTest(unittest.TestCase):
                 self.assertFalse(module.main())
             select.assert_not_called()
 
+    def test_missing_taxonomy_metadata_degrades_loudly_instead_of_silently(self):
+        from utils import parse_analysis
+
+        analysis = (
+            '## 标签\n'
+            '#语音识别 #Transformer #低资源\n'
+            '主任务标签：#语音识别\n'
+            '主方法标签：#Transformer\n'
+            '补充标签：#低资源\n\n'
+            '## 评分\n8.5\n'
+        )
+        parsed = parse_analysis(analysis)
+        self.assertTrue(parsed['taxonomyValidation']['valid'])
+        good = {'arxivId': '2607.00001', 'title': 'Good', 'analysis': analysis, 'parsed': parsed}
+        legacy = {
+            'arxivId': '2607.00002', 'title': 'Legacy', 'analysis': '',
+            'parsed': {
+                'tags': ['#语音识别'], 'primaryTaskTag': '',
+                'taxonomyValidation': {'valid': False, 'errors': ['缺少标签章节']},
+            },
+        }
+        notice = feishu.TAXONOMY_FALLBACK_NOTICE
+        self.assertEqual(notice, wechat.TAXONOMY_FALLBACK_NOTICE)
+        self.assertIn('未携带受控标签元数据', notice)
+
+        # 携带受控 taxonomy 的批次：照常输出，不出现降级声明。
+        feishu_md = feishu.generate_overview_md([(8.5, good, parsed)], [], '2026-07-13')
+        self.assertNotIn(notice, feishu_md)
+        self.assertIn('### 热门方向', feishu_md)
+        wechat_html = wechat.build_overview([(8.5, good, parsed)], [])
+        self.assertNotIn(notice, wechat_html)
+
+        # 缺 taxonomy 元数据的批次：必须显式声明降级，而不是静默呈现扁平计数。
+        degraded_md = feishu.generate_overview_md([(7.0, legacy, legacy['parsed'])], [], '2026-07-13')
+        self.assertIn(notice, degraded_md)
+        self.assertLess(degraded_md.index(notice), degraded_md.index('热门方向'))
+        degraded_html = wechat.build_overview([(7.0, legacy, legacy['parsed'])], [])
+        self.assertIn(notice, degraded_html)
+        self.assertLess(degraded_html.index(notice), degraded_html.index('热门方向'))
+        # 旧式扁平标签计数仍然输出，但被声明限定口径。
+        self.assertIn('#语音识别', degraded_md)
+        self.assertIn('#语音识别', degraded_html)
+
+    def test_registry_drift_also_degrades_the_batch(self):
+        from utils import parse_analysis
+
+        analysis = (
+            '## 标签\n'
+            '#语音识别 #Transformer #低资源\n'
+            '主任务标签：#语音识别\n'
+            '主方法标签：#Transformer\n'
+            '补充标签：#低资源\n\n'
+            '## 评分\n8.5\n'
+        )
+        parsed = parse_analysis(analysis)
+        drifted = dict(parsed)
+        drifted['taxonomyValidation'] = {
+            **parsed['taxonomyValidation'], 'registrySha256': '0' * 64,
+        }
+        paper = {'arxivId': '2607.00003', 'title': 'Drift', 'analysis': analysis, 'parsed': drifted}
+        self.assertTrue(feishu.batch_taxonomy_metadata_gap([paper]))
+        self.assertTrue(wechat.batch_taxonomy_metadata_gap([paper]))
+        self.assertFalse(feishu.batch_taxonomy_metadata_gap([{
+            'arxivId': '2607.00004', 'analysis': analysis, 'parsed': parse_analysis(analysis),
+        }]))
+
 
 if __name__ == '__main__':
     unittest.main()

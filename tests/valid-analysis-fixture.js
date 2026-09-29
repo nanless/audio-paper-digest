@@ -78,8 +78,8 @@ ${results}${results}
 未提及代码、模型或数据集开放地址。`;
 }
 
-function validAnalysisPaper(arxivId, extra = {}) {
-    const analysis = validAnalysisText();
+function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisText()) {
+    const analysis = analysisText;
     const contract = require('../scripts/analysis-contract.js');
     const stages = Object.fromEntries([
         'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',

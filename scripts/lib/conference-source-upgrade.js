@@ -11,7 +11,17 @@ const CONTRACT = 'conference-source-upgrade-plan-v1';
 const promotionProcessId = planSha256 => api.deterministicUuid(planSha256, 'conference-source-upgrade-process-v1');
 const executionIdFor = (planSha256, paperId) => api.deterministicUuid(promotionProcessId(planSha256), paperId, 'analysis');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-const withoutImplementation = authority => { const copy = { ...authority }; delete copy.implementationSha256; return copy; };
+// authority 比对时剥离实现指纹与词表指纹：implementation 由迁移收据桥接；taxonomy 字段是
+// 进程创建时的**身份史**（processId 派生绑定 state.authority 原值，不可就地刷新），换表后
+// 当前 config 的 taxonomy SHA 与它必然不同——该漂移合法，真正强制在封口/发布层
+// （analysis-contract.validateTaxonomyStageBinding 升级分支与 Python _seal_registry_upgrade）。
+const withoutImplementation = authority => {
+    const copy = { ...authority };
+    delete copy.implementationSha256;
+    delete copy.taxonomyVersion;
+    delete copy.taxonomyRegistrySha256;
+    return copy;
+};
 
 function load(options, deps) {
     const context = (deps.loadAuthority || api.loadAuthority)(options, deps);
@@ -83,7 +93,7 @@ function planSourceUpgrade(options, overrides = {}) {
 async function applySourceUpgrade(options, overrides = {}) {
     if (options.authorizeNewAnalysis !== true || !/^[a-f0-9]{64}$/.test(options.planSha256 || '')
         || !Array.isArray(options.paperIds) || !options.paperIds.length || new Set(options.paperIds).size !== options.paperIds.length
-        || !Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 3) {
+        || !Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 5) {
         throw new Error('Source upgrade requires --authorize-new-analysis, exact --plan-sha and explicit --paper-ids');
     }
     const deps = { ...api.defaultDependencies(), ...overrides };

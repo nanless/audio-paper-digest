@@ -247,7 +247,15 @@ function classifyProcessLiveness(status) {
 
 function processProof(result, entry) {
     if (!result || typeof result !== 'object' || result.status !== 'complete') {
-        fail(`conference process for ${entry.conferenceId} is not complete`);
+        // Surface the pending `needs_taxonomy_review` papers instead of hiding
+        // them behind a generic "not complete" failure: the reader must see
+        // which papers wait for taxonomy review and why.
+        const review = Array.isArray(result?.taxonomyReviewQueue) ? result.taxonomyReviewQueue : [];
+        fail(review.length
+            ? `conference process for ${entry.conferenceId} is not complete; taxonomy review pending for `
+                + `${review.length} paper(s): ${review.map(item => `${item.paperId} [`
+                    + `${(item.blockedReasons || []).join(', ')}]`).join('; ')}`.slice(0, 2000)
+            : `conference process for ${entry.conferenceId} is not complete`);
     }
     if (result.conferenceId !== entry.conferenceId) fail('conference process conferenceId mismatch');
     assertUuid(result.processId, 'conference process processId');

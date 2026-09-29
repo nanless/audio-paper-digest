@@ -83,6 +83,7 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'stale-locks', root: path.join(runtime, 'stale-locks') },
         { key: 'tag-taxonomy-audit', root: path.join(runtime, 'tag-taxonomy-audit') },
         { key: 'taxonomy-preview', root: path.join(runtime, 'taxonomy-preview') },
+        { key: 'taxonomy-reseal-reports', root: path.join(runtime, 'taxonomy-reseal-reports') },
         { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
         { key: 'direct-local-inputs', root: path.join(runtime, 'direct-local-inputs') },
         { key: 'historical-conference-local-sources', root: path.join(runtime, 'historical-conference-local-sources') },

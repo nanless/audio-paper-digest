@@ -111,7 +111,7 @@ OpenReview 官方 group 为 `colmweb.org/COLM/2026/Conference`。group API 可�
 
 ## 应监控、但截至研究日尚不能下载最终 proceedings 全集
 
-- INTERSPEECH 2026：ISCA 官方日期为 9 月 28 日至 10 月 1 日；ISCA Archive 当前年份入口尚未出现 2026，等正式归档后复用 Odyssey/ISCA 类 provider。
+- ~~INTERSPEECH 2026~~：**2026-09-25 状态更新**——ISCA Archive 的 `interspeech_2026` 索引已上线（实测 HTTP 200，1379 个 `*_interspeech.html` 记录页，Sydney 09-27~10-01，DOI 10.21437/Interspeech.2026），已按 Odyssey/ISCA 模板实现 `interspeech-2026` provider（同一 `parseIsca`，排除 keynote 摘要页）；不再属于本节。
 - EMNLP 2026：官方会议日期为 10 月 24–29 日；通知与 camera-ready 已发生，但 ACL Anthology 最终 event 尚未到可封存状态，届时复用 ACL/EACL provider。
 - ISMIR 2026：官方日期为 11 月 8–12 日；camera-ready 已完成，但 society 的 past-conference proceedings 还没有 2026 条目。
 - ACM Multimedia 2026：官方日期为 11 月 10–14 日；正式 proceedings 尚未公开。ACM 自 2026 年转向开放获取有利于后续下载，但仍须等待最终论文记录。

@@ -501,22 +501,37 @@ def manifest_sha(manifest):
     return stable(body)
 
 
+_MANIFEST_INDEX = {}
+
+
 def find_manifest(root, expected_sha, label):
     if not SHA_RE.fullmatch(str(expected_sha or '')):
         raise ConferencePublicationError(f'{label} manifest SHA 非法')
     root = Path(root)
     if not root.is_dir() or root.is_symlink():
         raise ConferencePublicationError(f'{label} staging 根目录不存在或不安全: {root}')
-    matches = []
-    for filename in root.rglob('manifest.json'):
-        try:
-            if filename.is_symlink() or not filename.is_file():
+    key = str(root)
+    index = _MANIFEST_INDEX.get(key)
+    if index is None:
+        # One directory walk per root per process.  Page/aggregate staging is
+        # read-only while a publish phase runs, so a manifestSha256 → paths map
+        # turns the per-paper lookup from a full O(N) re-scan (measured 3.4 s ×
+        # 1354 papers ≈ 77 min for Interspeech 2026) into a single ~3 s build
+        # plus O(1) hits.  Duplicate SHAs remain visible as multi-entry lists,
+        # and the per-file symlink/JSON-failure semantics match the scan below.
+        index = {}
+        for filename in root.rglob('manifest.json'):
+            try:
+                if filename.is_symlink() or not filename.is_file():
+                    continue
+                value = read_json(filename)
+                sha = value.get('manifestSha256')
+                if isinstance(sha, str):
+                    index.setdefault(sha, []).append(filename)
+            except ConferencePublicationError:
                 continue
-            value = read_json(filename)
-            if value.get('manifestSha256') == expected_sha:
-                matches.append(filename)
-        except ConferencePublicationError:
-            continue
+        _MANIFEST_INDEX[key] = index
+    matches = index.get(str(expected_sha), [])
     if len(matches) != 1:
         raise ConferencePublicationError(f'{label} manifest 未能唯一定位: {expected_sha}, matches={len(matches)}')
     return matches[0]

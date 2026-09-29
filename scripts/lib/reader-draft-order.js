@@ -370,40 +370,87 @@ function alignMixedBindingsToCurrentTableNodes(draft, tables) {
     return true;
 }
 
-// Source-quote bindings have no visible ordinal marker.  When a model emits
-// the sections in a different order, the old positional check therefore
-// treated an otherwise recoverable table/binding permutation as ambiguous.
-// Recover it only when every binding has a unique, evidence-backed table
-// assignment.  Selection markers remain stronger anchors and are never
-// inferred from prose.
-function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables) {
+// Unmarked source-quote and artifact-table bindings have no visible ordinal
+// marker. When a model emits sections in a different order, recover the
+// permutation only from unique evidence-backed table assignments. Artifact
+// tables require every rendered cell to replay against its sealed DOM cell.
+// Selection markers remain stronger anchors and are never inferred from prose.
+function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredArtifacts = null) {
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
     if (!bindings.length || tables.length !== bindings.length
         || !bindings.every((binding, index) => binding?.tableIndex === index + 1)) return false;
     const markerBindings = new Map();
-    const quoteBindings = [];
+    const evidenceBindings = [];
     for (const binding of bindings) {
         if (Object.prototype.hasOwnProperty.call(binding || {}, 'selection')) {
             if (markerBindings.has(binding.tableIndex)) return false;
             markerBindings.set(binding.tableIndex, binding);
         } else if (binding?.sourceType === 'source_quotes' && Array.isArray(binding.sourceQuotes)) {
-            quoteBindings.push(binding);
+            evidenceBindings.push({ binding, kind: 'source_quotes' });
+        } else if (binding?.sourceType === 'artifact_table'
+            && Number.isInteger(binding.sourceTableOrdinal)
+            && Array.isArray(binding.cellBindings) && binding.cellBindings.length > 0
+            && Array.isArray(binding.sourceQuotes) && binding.sourceQuotes.length === 0) {
+            const sourceTable = (structuredArtifacts?.tables || []).find(table => (
+                table?.ordinal === binding.sourceTableOrdinal
+                && table?.recoveryStatus === 'complete'
+                && /^[a-f0-9]{64}$/.test(String(table?.sourceDomSha256 || ''))
+            ));
+            if (!sourceTable || !Array.isArray(sourceTable.cells)) return false;
+            evidenceBindings.push({ binding, kind: 'artifact_table', sourceTable });
         } else {
             return false;
         }
     }
-    if (!quoteBindings.length) return false;
+    if (!evidenceBindings.length) return false;
     const markerNodes = tables.filter(table => table.marker);
     const proseNodes = tables.filter(table => table.table && !table.marker);
     if (markerNodes.length !== markerBindings.size
-        || proseNodes.length !== quoteBindings.length
+        || proseNodes.length !== evidenceBindings.length
         || markerNodes.some(table => !markerBindings.has(table.markerIndex))) return false;
 
     const normalize = value => String(value || '').normalize('NFKC').toLowerCase()
         .replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
     const tokens = value => normalize(value).match(/[a-z0-9]+|[\u3400-\u9fff]+/g) || [];
     const numbers = value => normalize(value).match(/(?<![a-z0-9])[-+]?\d+(?:\.\d+)?%?(?![a-z0-9])/g) || [];
-    const score = (binding, node) => {
+    const score = (binding, node, kind, sourceTable = null) => {
+        if (kind === 'artifact_table') {
+            const renderedRows = [node.table?.header, ...(node.table?.rows || [])];
+            const seenCells = new Set();
+            const exactCells = binding.cellBindings.every(cell => {
+                const rowIndex = cell?.renderedRow;
+                const columnIndex = cell?.renderedColumn;
+                const sourceRow = cell?.sourceRow;
+                const sourceColumn = cell?.sourceColumn;
+                const key = `${rowIndex}:${columnIndex}`;
+                const row = renderedRows[rowIndex];
+                const sourceCell = sourceTable.cells.find(source => (
+                    Number.isInteger(source?.row) && Number.isInteger(source?.column)
+                    && Number.isInteger(sourceRow) && Number.isInteger(sourceColumn)
+                    && sourceRow >= source.row
+                    && sourceRow < source.row + Number(source.rowspan || 1)
+                    && sourceColumn >= source.column
+                    && sourceColumn < source.column + Number(source.colspan || 1)
+                ));
+                if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)
+                    || rowIndex < 0 || columnIndex < 0
+                    || !Number.isInteger(sourceRow) || !Number.isInteger(sourceColumn)
+                    || !Array.isArray(row) || typeof row[columnIndex] !== 'string'
+                    || typeof sourceCell?.text !== 'string'
+                    || seenCells.has(key)
+                    || normalize(sourceCell.text.replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%'))
+                        !== normalize(row[columnIndex].replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%'))) {
+                    return false;
+                }
+                seenCells.add(key);
+                return true;
+            });
+            const expectedCellCount = renderedRows.reduce((count, row) => (
+                count + (Array.isArray(row) ? row.length : 0)
+            ), 0);
+            return exactCells && binding.cellBindings.length === expectedCellCount
+                && seenCells.size === expectedCellCount ? 1000000 : 0;
+        }
         const tableText = normalize(node.table?.markdown);
         let best = 0;
         for (const raw of binding.sourceQuotes) {
@@ -421,13 +468,13 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables) {
         }
         return best;
     };
-    const candidates = quoteBindings.map(binding => proseNodes.map((node, index) => ({
-        index, score: score(binding, node)
+    const candidates = evidenceBindings.map(({ binding, kind, sourceTable }) => proseNodes.map((node, index) => ({
+        index, score: score(binding, node, kind, sourceTable)
     })).filter(candidate => candidate.score > 0));
     if (candidates.some(items => items.length === 0)) return false;
     let bestScore = -1, bestAssignments = [], assignment = [];
     const visit = (bindingIndex, used, total) => {
-        if (bindingIndex === quoteBindings.length) {
+        if (bindingIndex === evidenceBindings.length) {
             if (total > bestScore) {
                 bestScore = total;
                 bestAssignments = [assignment.slice()];
@@ -447,7 +494,9 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables) {
     };
     visit(0, new Set(), 0);
     if (bestAssignments.length !== 1) return false;
-    const assignedByNode = new Map(bestAssignments[0].map((item, index) => [item.index, quoteBindings[index]]));
+    const assignedByNode = new Map(bestAssignments[0].map((item, index) => [
+        item.index, evidenceBindings[index].binding
+    ]));
     let markerMap = new Map();
     draft.tableBindings = tables.map((table, canonicalIndex) => {
         const binding = table.marker
@@ -483,7 +532,7 @@ function pruneTrailingUnboundSourceQuoteBindings(draft, tables) {
     return true;
 }
 
-function normalizeReaderDraftOrder(input) {
+function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
@@ -502,10 +551,12 @@ function normalizeReaderDraftOrder(input) {
     let tableMap = originalTables.map(table => ({ rawIndex: table.bindingIndex, canonicalIndex: table.bindingIndex,
         rawSectionIndex: table.sectionIndex, canonicalSectionIndex: table.sectionIndex }));
     if (sectionOrderChanged && Array.isArray(draft.tableBindings)) {
-        // Prefer authenticated source-quote evidence over positional order.
-        // This also handles the common case where the positional shape looks
-        // valid but each quote binding belongs to a different raw section.
-        const sourceQuoteAligned = alignSourceQuoteBindingsToCurrentTableNodes(draft, originalTables);
+        // Prefer authenticated evidence over positional order. This also
+        // handles the common case where the positional shape looks valid but
+        // each binding belongs to a different raw section.
+        const sourceQuoteAligned = alignSourceQuoteBindingsToCurrentTableNodes(
+            draft, originalTables, structuredArtifacts
+        );
         if (sourceQuoteAligned) originalTables = locateReaderDraftTables(draft);
         let valid = originalTables.length === draft.tableBindings.length
             && draft.tableBindings.every((binding, index) => binding?.tableIndex === index + 1
@@ -527,7 +578,9 @@ function normalizeReaderDraftOrder(input) {
                                 + String(section?.body || '').split(`[[TABLE_${index + 1}]]`).length - 1, 0) === 1
                         : !originalTables[index]?.marker));
         }
-        if (!valid && alignSourceQuoteBindingsToCurrentTableNodes(draft, originalTables)) {
+        if (!valid && alignSourceQuoteBindingsToCurrentTableNodes(
+            draft, originalTables, structuredArtifacts
+        )) {
             originalTables = locateReaderDraftTables(draft);
             valid = originalTables.length === draft.tableBindings.length
                 && draft.tableBindings.every((binding, index) => binding?.tableIndex === index + 1

@@ -1,0 +1,509 @@
+{
+  "contract": "paper-taxonomy-registry-upgrade-cross-end-fixture-v1",
+  "note": "同一份 (旧SHA, 注记, conceptIds) 输入分别喂给 Node validateSealRegistryUpgrade（scripts/lib/taxonomy-registry-change.js）与 Python _seal_registry_upgrade（scripts/publish_common.py）。expect 由 Node 侧生成；error 按“（…）内分号列表排序 + 括号后尾巴原样保留”归一化，因为同码原因的 message 排序依赖 localeCompare 所在 locale。",
+  "errorNormalization": "split on ； inside the outer （…） and sort the parts",
+  "currentRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+  "cases": [
+    {
+      "name": "additive-upgrade-allowed",
+      "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "additive",
+        "reasons": [
+          "concept-added"
+        ],
+        "note": "确定性重投影：只增新概念"
+      },
+      "expect": {
+        "ok": true,
+        "changeLevel": "additive",
+        "summary": "additive: concept-added×24",
+        "reasonCodes": [
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 204,
+          "newConcepts": 228,
+          "conceptsAdded": 24,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 0,
+          "aliasesAdded": 0,
+          "aliasesRemoved": 0,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "missing-annotation-rejected",
+      "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": null,
+      "expect": {
+        "ok": false,
+        "changeLevel": "additive",
+        "summary": "additive: concept-added×24",
+        "reasonCodes": [
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 204,
+          "newConcepts": 228,
+          "conceptsAdded": 24,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 0,
+          "aliasesAdded": 0,
+          "aliasesRemoved": 0,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": "registryUpgradeFrom 校验失败: 缺少 registryUpgradeFrom 升级说明"
+      }
+    },
+    {
+      "name": "no-snapshot-rejected",
+      "fromRegistrySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "additive",
+        "reasons": [
+          "concept-added"
+        ],
+        "note": "确定性重投影：只增新概念"
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": null,
+        "summary": null,
+        "reasonCodes": null,
+        "counts": null,
+        "error": "无法取得 registry 升级前快照 0000000000000000000000000000000000000000000000000000000000000000，按 fail-closed 拒绝 taxonomySeal"
+      }
+    },
+    {
+      "name": "destructive-lying-annotation-rejected",
+      "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "additive",
+        "reasons": [
+          "concept-added"
+        ],
+        "note": "把 destructive 谎报成 additive"
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "reasonCodes": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 205,
+          "newConcepts": 228,
+          "conceptsAdded": 23,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 1,
+          "aliasesAdded": 2,
+          "aliasesRemoved": 3,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除别名“e2e”，该标签的解析语义改变；概念 method.end-to-end-learning 删除别名“end-to-end”，该标签的解析语义改变；概念 method.end-to-end-learning 删除别名“端到端”，该标签的解析语义改变；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
+      }
+    },
+    {
+      "name": "annotation-level-mismatch-rejected",
+      "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "none",
+        "reasons": [
+          "concept-added"
+        ],
+        "note": "谎报为零变化"
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": "additive",
+        "summary": "additive: concept-added×24",
+        "reasonCodes": [
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 204,
+          "newConcepts": 228,
+          "conceptsAdded": 24,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 0,
+          "aliasesAdded": 0,
+          "aliasesRemoved": 0,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": "registryUpgradeFrom 校验失败: registryUpgradeFrom.changeLevel=none 与复算结果 additive 不一致"
+      }
+    },
+    {
+      "name": "stale-concept-id-rejected",
+      "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+      "conceptIds": [
+        "task.asr",
+        "task.not-a-concept"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "additive",
+        "reasons": [
+          "concept-added"
+        ],
+        "note": "确定性重投影：只增新概念"
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": "additive",
+        "summary": "additive: concept-added×24",
+        "reasonCodes": [
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 204,
+          "newConcepts": 228,
+          "conceptsAdded": 24,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 0,
+          "aliasesAdded": 0,
+          "aliasesRemoved": 0,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": "taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: task.not-a-concept(缺失)"
+      }
+    },
+    {
+      "name": "invalid-from-sha-rejected",
+      "fromRegistrySha256": "not-a-sha",
+      "conceptIds": [
+        "task.asr"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "additive",
+        "reasons": [
+          "concept-added"
+        ],
+        "note": "确定性重投影：只增新概念"
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": null,
+        "summary": null,
+        "reasonCodes": null,
+        "counts": null,
+        "error": "taxonomySeal 记录的 registrySha256 非法，拒绝放行"
+      }
+    },
+    {
+      "name": "destructive-acknowledged-allowed",
+      "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "destructive",
+        "reasons": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "note": "确定性重投影：别名语义人工确认",
+        "destructiveAcknowledgement": {
+          "acknowledged": true,
+          "reasonsHash": "4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a",
+          "conceptIdImpact": "none",
+          "note": "人工确认：仅 method.end-to-end-learning 删除 3 条别名，conceptId 影响 none"
+        }
+      },
+      "expect": {
+        "ok": true,
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "reasonCodes": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 205,
+          "newConcepts": 228,
+          "conceptsAdded": 23,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 1,
+          "aliasesAdded": 2,
+          "aliasesRemoved": 3,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": null
+      }
+    },
+    {
+      "name": "destructive-ack-missing-rejected",
+      "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "destructive",
+        "reasons": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "note": "确定性重投影：别名语义人工确认"
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "reasonCodes": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 205,
+          "newConcepts": 228,
+          "conceptsAdded": 23,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 1,
+          "aliasesAdded": 2,
+          "aliasesRemoved": 3,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除别名“e2e”，该标签的解析语义改变；概念 method.end-to-end-learning 删除别名“end-to-end”，该标签的解析语义改变；概念 method.end-to-end-learning 删除别名“端到端”，该标签的解析语义改变；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
+      }
+    },
+    {
+      "name": "destructive-ack-wrong-hash-rejected",
+      "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "destructive",
+        "reasons": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "note": "确定性重投影：别名语义人工确认",
+        "destructiveAcknowledgement": {
+          "acknowledged": true,
+          "reasonsHash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "conceptIdImpact": "none",
+          "note": "人工确认：仅 method.end-to-end-learning 删除 3 条别名，conceptId 影响 none"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "reasonCodes": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 205,
+          "newConcepts": 228,
+          "conceptsAdded": 23,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 1,
+          "aliasesAdded": 2,
+          "aliasesRemoved": 3,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除别名“e2e”，该标签的解析语义改变；概念 method.end-to-end-learning 删除别名“end-to-end”，该标签的解析语义改变；概念 method.end-to-end-learning 删除别名“端到端”，该标签的解析语义改变；显式确认无效: destructiveAcknowledgement.reasonsHash 与本次复算 destructive reasons 不一致"
+      }
+    },
+    {
+      "name": "destructive-ack-concept-impact-rejected",
+      "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+      "conceptIds": [
+        "task.asr",
+        "method.transformer"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "destructive",
+        "reasons": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "note": "确定性重投影：别名语义人工确认",
+        "destructiveAcknowledgement": {
+          "acknowledged": true,
+          "reasonsHash": "4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a",
+          "conceptIdImpact": "removed",
+          "note": "人工确认：仅 method.end-to-end-learning 删除 3 条别名，conceptId 影响 none"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "reasonCodes": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 205,
+          "newConcepts": 228,
+          "conceptsAdded": 23,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 1,
+          "aliasesAdded": 2,
+          "aliasesRemoved": 3,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除别名“e2e”，该标签的解析语义改变；概念 method.end-to-end-learning 删除别名“end-to-end”，该标签的解析语义改变；概念 method.end-to-end-learning 删除别名“端到端”，该标签的解析语义改变；显式确认无效: destructiveAcknowledgement.conceptIdImpact 必须为 none"
+      }
+    },
+    {
+      "name": "destructive-ack-stale-concept-id-rejected",
+      "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+      "conceptIds": [
+        "task.asr",
+        "task.not-a-concept"
+      ],
+      "annotation": {
+        "contract": "paper-taxonomy-registry-upgrade-v1",
+        "version": 1,
+        "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
+        "fromRegistryVersion": "paper-taxonomy-v1",
+        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistryVersion": "paper-taxonomy-v1",
+        "changeLevel": "destructive",
+        "reasons": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "note": "确定性重投影：别名语义人工确认",
+        "destructiveAcknowledgement": {
+          "acknowledged": true,
+          "reasonsHash": "4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a",
+          "conceptIdImpact": "none",
+          "note": "人工确认：仅 method.end-to-end-learning 删除 3 条别名，conceptId 影响 none"
+        }
+      },
+      "expect": {
+        "ok": false,
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "reasonCodes": [
+          "alias-added",
+          "alias-removed",
+          "concept-added"
+        ],
+        "counts": {
+          "oldConcepts": 205,
+          "newConcepts": 228,
+          "conceptsAdded": 23,
+          "conceptsRemoved": 0,
+          "conceptsChanged": 1,
+          "aliasesAdded": 2,
+          "aliasesRemoved": 3,
+          "facetsAdded": 0,
+          "facetsRemoved": 0
+        },
+        "error": "taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: task.not-a-concept(缺失)"
+      }
+    }
+  ]
+}

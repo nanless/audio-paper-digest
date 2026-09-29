@@ -22,6 +22,7 @@ from publish_common import (
     paper_batch_date, select_blog_published_snapshot
 )
 from path_config import atomic_write_json, atomic_write_text, wechat_preview_path
+from paper_taxonomy import load_taxonomy
 from utils import parse_analysis
 from project_env import build_fetch_url_opener
 
@@ -32,6 +33,62 @@ APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '')
 THUMB_MEDIA_ID = os.environ.get('WECHAT_THUMB_MEDIA_ID', '')
 
 BJ_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
+TAXONOMY_FALLBACK_NOTICE = (
+    '⚠️ 该批次未携带受控标签元数据，以下为旧式扁平标签计数，'
+    '不代表新版任务/方法统计'
+)
+
+
+def batch_taxonomy_metadata_gap(papers):
+    """逐篇检查受控 taxonomy 元数据，任一缺失/失效即返回 True。
+
+    ``publish_common.extract_top_tags`` 是不强制 taxonomy 的旧式统计入口，
+    允许 ``primaryTaskTag`` 缺失时回退到 ``tags[0]`` 并跳过解析失败的论文。
+    发布通道不允许这样静默降级：这里显式判定降级条件，由正文写出声明。
+    """
+    registry = load_taxonomy()
+    for paper in papers:
+        if not isinstance(paper, dict):
+            return True
+        parsed = paper.get('parsed')
+        if not isinstance(parsed, dict):
+            parsed = parse_analysis(paper.get('analysis', '')) or {}
+        validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
+        if not isinstance(validation, dict) or validation.get('valid') is not True \
+                or not str(parsed.get('primaryTaskTag') or '').strip() \
+                or validation.get('registryVersion') != registry['version'] \
+                or validation.get('registrySha256') != registry.get('registrySha256'):
+            return True
+    return False
+
+
+def build_overview(scored, unscored):
+    """生成今日概览 HTML；taxonomy 元数据缺失时显式声明旧式扁平计数。"""
+    papers = [p for _, p, _ in scored] + list(unscored)
+    top_tags = extract_top_tags(papers, limit=8)
+    taxonomy_degraded = batch_taxonomy_metadata_gap(papers)
+    top_scored = scored[:10]
+
+    overview = '<h2>⚡ 今日概览</h2>\n'
+    total = len(scored) + len(unscored)
+    overview += f'<p>📥 抓取 {total} 篇 → 🔬 深度分析完成</p>\n'
+    if taxonomy_degraded:
+        # 降级声明必须出现在扁平标签计数之前，而不是静默替换统计口径。
+        overview += f'<p>{html.escape(TAXONOMY_FALLBACK_NOTICE)}</p>\n'
+    if top_tags:
+        overview += '<h3>🏷️ 热门方向</h3>\n'
+        for tag, cnt in top_tags:
+            overview += f'<p>{tag}：{"█" * min(cnt, 15)} {cnt}篇</p>\n'
+    if top_scored:
+        overview += f'<h3>🏆 高分论文 TOP {len(top_scored)}</h3>\n'
+        for i, (score, p, pa) in enumerate(top_scored):
+            m = format_medal(i)
+            extra = ' | '.join([v for v in [pa.get('rankBucket', ''), pa.get('primaryTaskTag', '')] if v])
+            suffix = f' | {extra}' if extra else ''
+            overview += f'<p>{m} {html.escape(p.get("title", "")[:60])}（{score}分{suffix}）</p>\n'
+    overview += '<hr/>\n'
+    return overview
 
 
 def get_token():
@@ -305,24 +362,8 @@ def main():
 
         paper_htmls.append((h, paper))
 
-    top_tags = extract_top_tags(papers, limit=8)
-    top_scored = scored[:10]
-
-    overview = '<h2>⚡ 今日概览</h2>\n'
+    overview = build_overview(scored, unscored)
     total = len(scored) + len(unscored)
-    overview += f'<p>📥 抓取 {total} 篇 → 🔬 深度分析完成</p>\n'
-    if top_tags:
-        overview += '<h3>🏷️ 热门方向</h3>\n'
-        for tag, cnt in top_tags:
-            overview += f'<p>{tag}：{"█" * min(cnt, 15)} {cnt}篇</p>\n'
-    if top_scored:
-        overview += f'<h3>🏆 高分论文 TOP {len(top_scored)}</h3>\n'
-        for i, (score, p, pa) in enumerate(top_scored):
-            m = format_medal(i)
-            extra = ' | '.join([v for v in [pa.get('rankBucket', ''), pa.get('primaryTaskTag', '')] if v])
-            suffix = f' | {extra}' if extra else ''
-            overview += f'<p>{m} {html.escape(p.get("title", "")[:60])}（{score}分{suffix}）</p>\n'
-    overview += '<hr/>\n'
 
     footer = '<hr/>\n<p style="text-align:center;color:#aaa;font-size:12px;">由 AI 自动生成 · Paper Digest</p>\n'
 

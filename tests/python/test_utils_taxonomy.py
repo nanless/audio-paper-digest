@@ -57,10 +57,60 @@ class UtilsTaxonomyContractTests(unittest.TestCase):
             'primaryMethodId': 'method.transformer',
             'conceptIds': ['task.asr', 'method.transformer',
                            'model_family.unified-audio'],
+            'specificityWarning': (
+                '主任务标签欠具体: #语音识别 存在未选择的 active 后代'
+                '（共 1 个）: #音视频语音识别'),
         })
         with self.assertRaisesRegex(ValueError, 'legacy_tags'):
             parse_analysis(analysis('#语音识别 #Transformer #低资源'),
                            legacy_tags=1)
+
+    def test_task_facet_count_must_stay_within_one_to_three(self):
+        rejected = parse_analysis(analysis(
+            '#语音合成 #语音克隆 #音视频生成 #音频理解 #Transformer',
+            '#语音合成', '#Transformer'))
+        self.assertFalse(rejected['taxonomyValidation']['valid'])
+        self.assertEqual(rejected['taxonomyValidation']['conceptIds'], [])
+        self.assertEqual(
+            rejected['taxonomyValidation']['errors'],
+            ['task 分面标签必须为 1-3 个（主任务 1 个 + 次任务 ≤2 个），'
+             '当前 4 个: #语音合成 #语音克隆 #音视频生成 #音频理解'])
+
+        accepted = parse_analysis(analysis(
+            '#语音合成 #语音克隆 #语音转换 #Transformer',
+            '#语音合成', '#Transformer'))
+        self.assertTrue(accepted['taxonomyValidation']['valid'],
+                        accepted['taxonomyValidation']['errors'])
+        self.assertEqual(accepted['taxonomyValidation']['conceptIds'],
+                         ['task.speech-synthesis', 'task.voice-cloning',
+                          'task.voice-conversion', 'method.transformer'])
+        # 3 个 task 分面合法，但主任务仍是非叶节点 → 告警照常给出。
+        self.assertIsNotNone(
+            accepted['taxonomyValidation']['specificityWarning'])
+
+    def test_primary_task_specificity_is_a_warning_not_a_block(self):
+        # 非叶主任务：valid 保持 True（已封口 stage 回放不被拒），只返回
+        # 结构化 specificityWarning 供新指派/repair 路径消费。
+        parsed = parse_analysis(analysis(
+            '#语音识别 #Transformer #低资源', '#语音识别', '#Transformer'))
+        validation = parsed['taxonomyValidation']
+        self.assertTrue(validation['valid'], validation['errors'])
+        self.assertEqual(validation['specificityWarning'],
+                         '主任务标签欠具体: #语音识别 存在未选择的 active 后代'
+                         '（共 1 个）: #音视频语音识别')
+
+        # 叶节点主任务没有 active 后代 → 无告警。
+        leaf = parse_analysis(analysis(
+            '#音视频语音识别 #Transformer #低资源',
+            '#音视频语音识别', '#Transformer'))
+        self.assertTrue(leaf['taxonomyValidation']['valid'],
+                        leaf['taxonomyValidation']['errors'])
+        self.assertIsNone(leaf['taxonomyValidation']['specificityWarning'])
+
+        # 缺少标签章节时告警字段同样存在且为 None。
+        missing = parse_analysis('## 评分\n6.0/10\n')
+        self.assertIsNone(
+            missing['taxonomyValidation']['specificityWarning'])
 
     def test_aliases_require_explicit_legacy_mode_and_are_canonicalized(self):
         source = analysis('#ASR #TTA #低资源', '#ASR', '#TTA')

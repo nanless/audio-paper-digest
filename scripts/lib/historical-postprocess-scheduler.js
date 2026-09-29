@@ -223,7 +223,22 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                 analysisSha256: assignments[0].analysisSha256,
                 taxonomyAssignmentSha256: assignments[0].assignmentSha256,
                 taxonomyFileSha256: assignmentOutput.fileSha256 };
-            if (assignments[0].status !== 'assigned') fail(`${item.paperId} taxonomy assignment is blocked`);
+            if (assignments[0].status !== 'assigned') {
+                // Deterministic `needs_taxonomy_review`: this paper keeps its date
+                // blocked (fail-closed, its page is never staged), while every
+                // other paper keeps staging. The reasons are reported as an
+                // explicit review queue instead of an opaque integrity failure.
+                const blockedReasons = [...new Set(assignments[0].blockedReasons || [])].sort();
+                const error = new Error(`${item.paperId} taxonomy assignment is blocked: `
+                    + `${blockedReasons.join('; ') || 'unresolved taxonomy selection'}`);
+                error.code = 'HISTORICAL_TAXONOMY_REVIEW_REQUIRED';
+                error.retryable = false;
+                error.taxonomyReview = { paperId: item.paperId, analysisRunId: item.runId,
+                    status: 'needs_taxonomy_review', blockedReasons,
+                    registrySha256: assignments[0].registrySha256 || null,
+                    assignmentSha256: assignments[0].assignmentSha256 || null };
+                throw error;
+            }
             const staged = await deps.stagePages({ apply: true, crosswalkId: options.crosswalkId,
                 analysisRunId: item.runId, stagingRunId, limit: null,
                 rendererImplementationSha256,
@@ -251,7 +266,9 @@ async function runHistoricalPostprocess(options, overrides = {}) {
             const record = { status: 'failed', paperId: item.paperId, analysisRunId: item.runId,
                 analysisSchedulerItemSha256: item.analysisSchedulerItemSha256, registrySha256: taxonomy.registrySha256,
                 rendererImplementationSha256, ...(assignmentProof || {}), stagingRunId,
-                lastError: String(error.message).slice(0, 2000) };
+                lastError: String(error.message).slice(0, 2000),
+                ...(error.taxonomyReview ? { reviewRequired: { ...error.taxonomyReview,
+                    code: 'HISTORICAL_TAXONOMY_REVIEW_REQUIRED' } } : {}) };
             updateCheckpoint(filename, options.crosswalkId, taxonomy.registrySha256,
                 rendererImplementationSha256, deps, value => {
                 value.items[item.paperId] = record; return value;
@@ -335,9 +352,15 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     }
     checkpoint = validateCheckpoint(readJsonFile(filename, 'historical postprocess checkpoint').value,
         options.crosswalkId, taxonomy.registrySha256, rendererImplementationSha256);
+    const reviewItems = outcomes.filter(item => item.reviewRequired)
+        .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
+            status: item.reviewRequired.status, blockedReasons: item.reviewRequired.blockedReasons }))
+        .sort((left, right) => left.paperId.localeCompare(right.paperId));
     return { status: outcomes.every(item => item.status === 'staged') && daily.every(item => item.status === 'staged')
         && selected.length === relevantComplete.length ? 'complete' : 'partial', crosswalkId: options.crosswalkId,
         registrySha256: taxonomy.registrySha256, rendererImplementationSha256,
+        taxonomyReview: reviewItems.length,
+        ...(reviewItems.length ? { taxonomyReviewQueue: reviewItems } : {}),
         processed: outcomes, daily, checkpoint: filename,
         checkpointSha256: checkpoint.checkpointSha256 };
 }

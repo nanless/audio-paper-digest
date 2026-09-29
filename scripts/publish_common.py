@@ -187,6 +187,20 @@ TABLE_DIRECTIONAL_METRIC_RE = re.compile(
     r'(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)',
     flags=re.IGNORECASE,
 )
+# Aggregate columns such as “无条件 AVG ↑” are measurable metrics, but unlike
+# WER/accuracy they do not inherently require ↑/↓ (for example “Avg Total (s)”).
+# Used only by the identifier classifier when a direction marker is present.
+TABLE_GENERIC_METRIC_HEADER_RE = re.compile(
+    r'(?:\bavg\b|\bmean\b|\baverage\b|均值|平均)',
+    flags=re.IGNORECASE,
+)
+# Strong identity words keep their identifier meaning even inside an aggregate
+# header: “6 基准平均 ↑” still anchors the row identity established by the
+# benchmark/dataset qualifier, while weak condition words such as “无条件”
+# yield to the metric reading of “无条件 AVG ↑”.
+TABLE_STRONG_IDENTITY_HEADER_RE = re.compile(
+    r'基准|数据集|语料|任务|语言|语系|语族|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|划分|切片|子集|场景|配置|拓扑'
+)
 TABLE_NON_DIRECTIONAL_MEASURE_RE = re.compile(
     r'(?:置信区间|confidence interval|\bci\b|p[- ]?value|p值|显著性|样本数|数量|规模|时长|采样率|方差|标准差|系数|\bbeta\b|\bΔ?AIC\b|复杂度|参数|容量|内存|显存|耗时|延迟|速度|吞吐|功耗|能耗|bytes?|hours?|seconds?|milliseconds?)',
     flags=re.IGNORECASE,
@@ -209,7 +223,12 @@ def _is_table_identifier_header(value):
         return identifier
     # “OGI 测试 WER ↓ (%)” contains a setting qualifier and a metric. The
     # direction marker makes it a measurable column, not an identifier.
+    # This branch only runs when a direction marker is present, so treating
+    # “无条件 AVG ↑” as a metric never forces an arrow onto “Avg Total (s)”.
     if TABLE_DIRECTIONAL_METRIC_RE.search(without_direction):
+        return False
+    if (TABLE_GENERIC_METRIC_HEADER_RE.search(without_direction)
+            and not TABLE_STRONG_IDENTITY_HEADER_RE.search(without_direction)):
         return False
     return identifier
 
@@ -623,6 +642,517 @@ def _taxonomy_surface_sha256(analysis):
     return hashlib.sha256(surface.encode('utf-8')).hexdigest()
 
 
+# ——— Registry 版本化（换表放行）：Node 分级与升级门的 Python 镜像 ———
+# 权威实现在 scripts/lib/taxonomy-registry-change.js（classifyRegistryChange +
+# validateSealRegistryUpgrade）与 scripts/analysis-contract.js 的
+# stage.registrySha256 分支。发布端必须与 Node 同向：Node 判 additive/none 放行
+# 的封口，Python 不得再靠硬等值把它拒掉；Node fail-closed 的状态 Python 同样拒。
+# 放在 publish_common.py 私有函数里（_validate_taxonomy_seal 的私有依赖），
+# 不改写 scripts/paper_taxonomy.py 的共享语义。
+from paper_taxonomy import _JS_WHITESPACE, normalize_label, validate_taxonomy  # noqa: E402
+
+_REGISTRY_CHANGE_LEVELS = ('none', 'additive', 'destructive')
+_REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1'
+_REGISTRY_UPGRADE_VERSION = 1
+_REGISTRY_UPGRADE_NOTE_MAX_CHARS = 500
+_SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
+
+
+def _taxonomy_registry_history_dir():
+    """config/taxonomy-registry-history/（与 Node FILES.taxonomyRegistryHistoryDir 同源）。"""
+    import taxonomy_paths
+    return Path(taxonomy_paths.TAXONOMY_REGISTRY_FILE).parent / 'taxonomy-registry-history'
+
+
+def _normalize_registry(value, label='registry'):
+    if isinstance(value, str):
+        loaded = load_taxonomy(value)
+        return {'version': loaded['version'], 'facets': loaded['facets'],
+                'concepts': loaded['concepts'], 'registrySha256': loaded['registrySha256']}
+    if type(value) is not dict:
+        raise ValueError(f'{label}: expected registry object or file path')
+    data = {'version': value.get('version'), 'facets': value.get('facets'),
+            'concepts': value.get('concepts')}
+    validate_taxonomy(data)
+    registry_sha = value.get('registrySha256')
+    if registry_sha is not None and (
+            not isinstance(registry_sha, str) or not _SHA256_RE.fullmatch(registry_sha)):
+        raise ValueError(f'{label}: invalid registrySha256')
+    return {**data, 'registrySha256': registry_sha}
+
+
+def _resolve_registry_snapshot(registry_sha256):
+    """按内容字节 SHA 找回升级前快照：文件名必须等于其内容字节 SHA。"""
+    sha = str(registry_sha256 or '')
+    if not _SHA256_RE.fullmatch(sha):
+        return None
+    try:
+        loaded = load_taxonomy(_taxonomy_registry_history_dir() / f'{sha}.json')
+    except Exception:  # noqa: BLE001 - 取回失败一律 fail-closed 返回 None
+        return None
+    if loaded.get('registrySha256') != sha:
+        return None
+    return {'version': loaded['version'], 'facets': loaded['facets'],
+            'concepts': loaded['concepts'], 'registrySha256': loaded['registrySha256']}
+
+
+def _active_global_tag(registry):
+    """active 中文首选标签的全局唯一性（Node activeGlobalTags 的镜像）。"""
+    seen = {}
+    for concept in registry['concepts']:
+        if concept['status'] != 'active':
+            continue
+        tag = f"#{concept['preferredLabel']['zh']}"
+        if tag in seen:
+            return {'tag': tag, 'ids': [seen[tag], concept['id']]}
+        seen[tag] = concept['id']
+    return None
+
+
+def _cross_facet_label_collisions(registry):
+    """to registry 全部标签的跨分面重复扫描（Node crossFacetLabelCollisions 镜像）。
+
+    覆盖 active+deprecated 概念的 zh/en 首选与全部别名，统一经 normalize_label
+    归一；同一归一标签落在 ≥2 个分面即解析歧义。validateTaxonomy 的唯一性只在
+    分面内成立，所以这类碰撞必须在这里判 destructive。
+    """
+    by_label = {}
+    for concept in registry['concepts']:
+        labels = (concept['preferredLabel']['zh'], concept['preferredLabel']['en'],
+                  *concept['aliases'])
+        for raw in labels:
+            label = normalize_label(raw)
+            if not label:
+                continue
+            entry = by_label.setdefault(label, {'facets': [], 'conceptIds': []})
+            if concept['facet'] not in entry['facets']:
+                entry['facets'].append(concept['facet'])
+            if concept['id'] not in entry['conceptIds']:
+                entry['conceptIds'].append(concept['id'])
+    return [{'label': label, **entry} for label, entry in by_label.items()
+            if len(entry['facets']) > 1]
+
+
+def _classify_registry_change(old_registry, new_registry):
+    """Node classifyRegistryChange 的逐条镜像，返回 {changeLevel, detail}。"""
+    frm = _normalize_registry(old_registry, 'old registry')
+    to = _normalize_registry(new_registry, 'new registry')
+    reasons = []
+
+    def note(level, code, message, **extra):
+        reasons.append({'level': level, 'code': code, 'message': message, **extra})
+
+    counts = {
+        'oldConcepts': len(frm['concepts']),
+        'newConcepts': len(to['concepts']),
+        'conceptsAdded': 0,
+        'conceptsRemoved': 0,
+        'conceptsChanged': 0,
+        'aliasesAdded': 0,
+        'aliasesRemoved': 0,
+        'facetsAdded': 0,
+        'facetsRemoved': 0,
+    }
+
+    if frm['version'] != to['version']:
+        note('destructive', 'version-changed',
+             f"registry 版本从 {frm['version']} 变为 {to['version']}，必须整篇重新分析")
+
+    old_facets = {facet['id']: facet for facet in frm['facets']}
+    new_facets = {facet['id']: facet for facet in to['facets']}
+    for facet_id in sorted(old_facets):
+        if facet_id not in new_facets:
+            counts['facetsRemoved'] += 1
+            note('destructive', 'facet-removed',
+                 f'删除分面 {facet_id}，该分面下全部概念随语义消失', facet=facet_id)
+    for facet_id in sorted(new_facets):
+        if facet_id not in old_facets:
+            counts['facetsAdded'] += 1
+            note('additive', 'facet-added', f'新增分面 {facet_id}', facet=facet_id)
+        elif old_facets[facet_id]['label'] != new_facets[facet_id]['label']:
+            note('additive', 'facet-label-updated',
+                 f"分面 {facet_id} 展示名由“{old_facets[facet_id]['label']}”"
+                 f"改为“{new_facets[facet_id]['label']}”，不影响标签解析",
+                 facet=facet_id)
+
+    old_concepts = {concept['id']: concept for concept in frm['concepts']}
+    new_concepts = {concept['id']: concept for concept in to['concepts']}
+
+    for concept_id in sorted(old_concepts):
+        if concept_id in new_concepts:
+            continue
+        counts['conceptsRemoved'] += 1
+        note('destructive', 'concept-removed',
+             f'删除概念 {concept_id}，已封口论文引用它时无法再重放', conceptId=concept_id)
+
+    for concept in to['concepts']:
+        if concept['id'] in old_concepts:
+            continue
+        counts['conceptsAdded'] += 1
+        if concept['status'] == 'active':
+            note('additive', 'concept-added',
+                 f"新增 active 概念 {concept['id']}（只增加可选项）", conceptId=concept['id'])
+        else:
+            note('additive', 'deprecated-concept-added',
+                 f"新增 deprecated 概念 {concept['id']}（不可被选择，不影响旧封口）",
+                 conceptId=concept['id'])
+
+    for concept in to['concepts']:
+        previous = old_concepts.get(concept['id'])
+        if previous is None:
+            continue
+        changes = []
+        if previous['facet'] != concept['facet']:
+            changes.append(('destructive', 'concept-facet-changed',
+                            f"概念 {concept['id']} 从分面 {previous['facet']} 迁到 {concept['facet']}"))
+        for language in ('zh', 'en'):
+            if previous['preferredLabel'][language] != concept['preferredLabel'][language]:
+                changes.append(('destructive', 'preferred-label-changed',
+                                f"概念 {concept['id']} 的 preferredLabel.{language} 由"
+                                f"“{previous['preferredLabel'][language]}”改为"
+                                f"“{concept['preferredLabel'][language]}”"))
+        if previous['broaderId'] != concept['broaderId']:
+            changes.append(('destructive', 'broader-id-changed',
+                            f"概念 {concept['id']} 的 broaderId 由 "
+                            f"{previous['broaderId'] if previous['broaderId'] is not None else 'null'}"
+                            f" 改为 "
+                            f"{concept['broaderId'] if concept['broaderId'] is not None else 'null'}，"
+                            '祖先链与主任务“最具体”判定随之改变'))
+        if previous['status'] != concept['status']:
+            if concept['status'] != 'active':
+                changes.append(('destructive', 'status-deactivated',
+                                f"概念 {concept['id']} 的 status 由 active 改为 {concept['status']}，"
+                                '旧封口的 conceptId 不再 active'))
+            else:
+                changes.append(('additive', 'status-reactivated',
+                                f"概念 {concept['id']} 的 status 由 deprecated 恢复为 active"
+                                '（重新开放可选项）'))
+        old_aliases = {normalize_label(value) for value in previous['aliases']} - {''}
+        new_aliases = {normalize_label(value) for value in concept['aliases']} - {''}
+        for alias in sorted(old_aliases):
+            if alias in new_aliases:
+                continue
+            counts['aliasesRemoved'] += 1
+            changes.append(('destructive', 'alias-removed',
+                            f'概念 {concept["id"]} 删除别名“{alias}”，该标签的解析语义改变'))
+        for alias in sorted(new_aliases):
+            if alias in old_aliases:
+                continue
+            counts['aliasesAdded'] += 1
+            changes.append(('additive', 'alias-added',
+                            f'概念 {concept["id"]} 新增别名“{alias}”'))
+        if previous['definition'] != concept['definition']:
+            changes.append(('additive', 'definition-updated',
+                            f'概念 {concept["id"]} 的 definition 文本更新（不参与标签解析）'))
+        if previous['scopeNote'] != concept['scopeNote']:
+            changes.append(('additive', 'scope-note-updated',
+                            f'概念 {concept["id"]} 的 scopeNote 文本更新（不参与标签解析）'))
+        if previous['replacedBy'] != concept['replacedBy']:
+            changes.append(('additive', 'replacement-updated',
+                            f"deprecated 概念 {concept['id']} 的 replacedBy 由 "
+                            f"{previous['replacedBy'] if previous['replacedBy'] is not None else 'null'}"
+                            f" 改为 "
+                            f"{concept['replacedBy'] if concept['replacedBy'] is not None else 'null'}"
+                            '（不参与标签解析）'))
+        if changes:
+            counts['conceptsChanged'] += 1
+        for level, code, message in changes:
+            note(level, code, message, conceptId=concept['id'])
+
+    global_tag = _active_global_tag(to)
+    if global_tag is not None:
+        note('destructive', 'active-label-not-globally-unique',
+             f"active 中文首选标签 {global_tag['tag']} 在 {' / '.join(global_tag['ids'])}"
+             ' 间重复，运行时会拒绝加载',
+             tag=global_tag['tag'], conceptIds=global_tag['ids'])
+
+    for collision in _cross_facet_label_collisions(to):
+        note('destructive', 'label-collision',
+             f"标签“#{collision['label']}”同时出现在分面 {' / '.join(collision['facets'])}"
+             f"（{' / '.join(collision['conceptIds'])}），跨分面重复会让解析候选不再唯一",
+             tag=f"#{collision['label']}", facets=collision['facets'],
+             conceptIds=collision['conceptIds'])
+
+    reasons.sort(key=lambda item: (
+        item['code'],
+        str(item.get('conceptId') or item.get('facet') or ''),
+        item['message']))
+    destructive = [reason for reason in reasons if reason['level'] == 'destructive']
+    additive = [reason for reason in reasons if reason['level'] == 'additive']
+    change_level = 'destructive' if destructive else ('additive' if additive else 'none')
+
+    def tally(level):
+        grouped = {}
+        for item in reasons:
+            if item['level'] == level:
+                grouped[item['code']] = grouped.get(item['code'], 0) + 1
+        return [f'{code}×{count}' for code, count in sorted(grouped.items())]
+
+    if change_level == 'none':
+        summary = 'registry 语义零变化（仅字节或未记录差异）'
+    else:
+        summary = f"{change_level}: {'、'.join(tally('destructive') + tally('additive'))}"
+    detail = {
+        'changeLevel': change_level,
+        'oldRegistrySha256': frm['registrySha256'],
+        'newRegistrySha256': to['registrySha256'],
+        'oldVersion': frm['version'],
+        'newVersion': to['version'],
+        'counts': counts,
+        'reasons': reasons,
+        'summary': summary,
+    }
+    return {'changeLevel': change_level, 'detail': detail}
+
+
+# ——— destructive 显式确认通道（Node ACKNOWLEDGEMENT_ELIGIBLE_CODES 的镜像） ———
+# 白名单 + 绑定 + 显式提示：只有“概念增删为零、旧 conceptIds 全部仍 active”的
+# 解析语义改动可被人工确认；删概念/删分面/降级/版本升级/迁分面/全局标签撞车
+# 永远不可确认，注记写得再自洽也翻不了案。
+_ACK_ELIGIBLE_CODES = (
+    'preferred-label-changed',
+    'broader-id-changed',
+    'alias-removed',
+    'label-collision',
+    'definition-updated',
+    'scope-note-updated',
+)
+_ACK_FORBIDDEN_CODES = (
+    'concept-removed',
+    'facet-removed',
+    'status-deactivated',
+    'version-changed',
+    'concept-facet-changed',
+    'active-label-not-globally-unique',
+)
+_ACK_CONCEPT_ID_IMPACT = 'none'
+_ACK_FIELDS = ('acknowledged', 'reasonsHash', 'conceptIdImpact', 'note')
+
+
+def _destructive_reasons(change_detail):
+    reasons = (change_detail or {}).get('reasons')
+    if not isinstance(reasons, list):
+        return []
+    return [reason for reason in reasons
+            if isinstance(reason, dict) and reason.get('level') == 'destructive']
+
+
+def _destructive_reason_fingerprint(reason):
+    """结构化字段（排除 message/level）按键序的无空白 JSON —— 与 Node 逐字一致。"""
+    canonical = {key: reason[key] for key in sorted(reason) if key not in ('level', 'message')}
+    return json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def _destructive_reasons_hash(change_detail):
+    """复算 destructive reasons 的稳定哈希：两端同输入必须同哈希。"""
+    fingerprints = sorted(_destructive_reason_fingerprint(reason)
+                          for reason in _destructive_reasons(change_detail))
+    return hashlib.sha256('\n'.join(fingerprints).encode('utf-8')).hexdigest()
+
+
+def _acknowledgement_eligibility(change_detail):
+    """Node acknowledgementEligibility 的镜像：分级不变，只判定可确认性。"""
+    change_level = (change_detail or {}).get('changeLevel')
+    codes = sorted({reason.get('code') for reason in _destructive_reasons(change_detail)
+                    if reason.get('code')})
+    eligible_reasons = [code for code in codes if code in _ACK_ELIGIBLE_CODES]
+    ineligible_reasons = [code for code in codes if code not in _ACK_ELIGIBLE_CODES]
+    # fail-closed：分级缺失/未知、destructive 却数不出理由、或混入白名单外理由
+    # → 一律不可确认（与 Node 同判）。
+    known_level = change_level in _REGISTRY_CHANGE_LEVELS
+    if known_level and not ineligible_reasons:
+        if change_level == 'destructive':
+            eligible = bool(eligible_reasons)
+        else:
+            eligible = not codes
+    else:
+        eligible = False
+    return {'eligible': eligible, 'eligibleReasons': eligible_reasons,
+            'ineligibleReasons': ineligible_reasons}
+
+
+def _validate_destructive_acknowledgement(annotation, expected):
+    """Node validateDestructiveAcknowledgement 的镜像；返回问题描述或 None。"""
+    eligibility = _acknowledgement_eligibility(expected.get('detail'))
+    if not eligibility['eligible']:
+        codes = '、'.join(eligibility['ineligibleReasons']) or '复算 detail 缺失'
+        return f'destructive 不在可确认白名单: {codes}'
+    ack = annotation.get('destructiveAcknowledgement') if type(annotation) is dict else None
+    if type(ack) is not dict:
+        return 'destructive 变更必须携带 destructiveAcknowledgement 显式确认'
+    unknown = [key for key in ack if key not in _ACK_FIELDS]
+    if unknown:
+        return 'destructiveAcknowledgement 含未知字段: ' + '、'.join(sorted(unknown))
+    if ack.get('acknowledged') is not True:
+        return 'destructiveAcknowledgement.acknowledged 必须为 true'
+    if ack.get('conceptIdImpact') != _ACK_CONCEPT_ID_IMPACT:
+        return 'destructiveAcknowledgement.conceptIdImpact 必须为 none'
+    reasons_hash = ack.get('reasonsHash')
+    if not isinstance(reasons_hash, str) or not _SHA256_RE.fullmatch(reasons_hash):
+        return 'destructiveAcknowledgement.reasonsHash 必须是 64 位十六进制 SHA'
+    if reasons_hash != _destructive_reasons_hash(expected.get('detail')):
+        return 'destructiveAcknowledgement.reasonsHash 与本次复算 destructive reasons 不一致'
+    note = ack.get('note')
+    if not isinstance(note, str) or not note.strip(_JS_WHITESPACE) \
+            or note != note.strip(_JS_WHITESPACE) \
+            or len(note) > _REGISTRY_UPGRADE_NOTE_MAX_CHARS:
+        return (f'destructiveAcknowledgement.note 必须是'
+                f' 1-{_REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的说明')
+    return None
+
+
+def _validate_registry_upgrade_annotation(annotation, expected):
+    """Node validateRegistryUpgradeAnnotation 的镜像；返回问题描述或 None。"""
+    if type(annotation) is not dict:
+        return '缺少 registryUpgradeFrom 升级说明'
+    if annotation.get('contract') != _REGISTRY_UPGRADE_CONTRACT \
+            or annotation.get('version') != _REGISTRY_UPGRADE_VERSION:
+        return (f'registryUpgradeFrom 合同不是 {_REGISTRY_UPGRADE_CONTRACT}'
+                f' v{_REGISTRY_UPGRADE_VERSION}')
+    from_sha = annotation.get('fromRegistrySha256')
+    if not isinstance(from_sha, str) or not _SHA256_RE.fullmatch(from_sha) \
+            or from_sha != expected['fromRegistrySha256']:
+        return 'registryUpgradeFrom.fromRegistrySha256 与封口记录的旧 SHA 不一致'
+    to_sha = annotation.get('toRegistrySha256')
+    if not isinstance(to_sha, str) or not _SHA256_RE.fullmatch(to_sha) \
+            or to_sha != expected['toRegistrySha256']:
+        return 'registryUpgradeFrom.toRegistrySha256 与当前 registry SHA 不一致'
+    if not annotation.get('fromRegistryVersion') \
+            or annotation.get('fromRegistryVersion') != expected['registryVersion'] \
+            or annotation.get('toRegistryVersion') != expected['registryVersion']:
+        return 'registryUpgradeFrom registry 版本与当前版本不一致'
+    change_level = annotation.get('changeLevel')
+    if change_level not in _REGISTRY_CHANGE_LEVELS:
+        return 'registryUpgradeFrom.changeLevel 只允许 none/additive/destructive'
+    if change_level != expected['changeLevel']:
+        return (f'registryUpgradeFrom.changeLevel={change_level} '
+                f'与复算结果 {expected["changeLevel"]} 不一致')
+    if change_level == 'destructive':
+        ack_issue = _validate_destructive_acknowledgement(annotation, expected)
+        if ack_issue:
+            return ack_issue
+    elif annotation.get('destructiveAcknowledgement') is not None:
+        return '非 destructive 变更不得携带 destructiveAcknowledgement'
+    reasons = annotation.get('reasons')
+    if not isinstance(reasons, list) or any(
+            not isinstance(code, str) or not code for code in reasons):
+        return 'registryUpgradeFrom.reasons 必须是字符串数组'
+    note = annotation.get('note')
+    if not isinstance(note, str) or not note.strip(_JS_WHITESPACE) \
+            or note != note.strip(_JS_WHITESPACE) \
+            or len(note) > _REGISTRY_UPGRADE_NOTE_MAX_CHARS:
+        return (f'registryUpgradeFrom.note 必须是 1-{_REGISTRY_UPGRADE_NOTE_MAX_CHARS}'
+                ' 字符的说明')
+    return None
+
+
+def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
+                           current=None, current_registry_sha256=None):
+    """Node validateSealRegistryUpgrade 的镜像，异常一律折算成 fail-closed 结果。
+
+    四条同时成立才放行：旧快照按内容 SHA 取回、复算分级非 destructive（或
+    destructive 落在可确认白名单且注记携带与复算绑定的 destructiveAcknowledgement
+    且 conceptIdImpact=none）、registryUpgradeFrom 注记与复算自洽、
+    stage.conceptIds 在当前 registry 全 active。
+    """
+    def fail(error, reason_code, change_level=None, detail=None):
+        # 与 Node 一致：分类前失败 changeLevel/detail 为 None；分类后失败
+        # （destructive / 注记不自洽 / conceptIds 非 active）仍带回复算结果。
+        return {'ok': False, 'error': error, 'reasonCode': reason_code,
+                'changeLevel': change_level, 'detail': detail}
+
+    try:
+        current_registry = _normalize_registry(
+            _PUBLISH_TAXONOMY if current is None else current, 'current registry')
+        current_sha = str(current_registry_sha256
+                          or current_registry.get('registrySha256') or '')
+        if not _SHA256_RE.fullmatch(current_sha):
+            return fail('当前 registry 缺少字节 SHA，拒绝放行 taxonomySeal', 'current-sha-invalid')
+        from_sha = str(from_registry_sha256 or '')
+        if not _SHA256_RE.fullmatch(from_sha):
+            return fail('taxonomySeal 记录的 registrySha256 非法，拒绝放行', 'invalid-from-sha')
+        if from_sha == current_sha:
+            return fail('taxonomySeal 的 registrySha256 已等于当前 SHA，无需升级',
+                        'already-current')
+        snapshot = _resolve_registry_snapshot(from_sha)
+        if snapshot is None:
+            return fail(f'无法取得 registry 升级前快照 {from_sha}，按 fail-closed 拒绝 taxonomySeal',
+                        'snapshot-missing')
+        classified = _classify_registry_change(snapshot, current_registry)
+        change_level = classified['changeLevel']
+        detail = classified['detail']
+        # destructive 默认无条件拒绝；唯一例外是“可确认白名单 + 与本次复算绑定的
+        # 显式 destructiveAcknowledgement”，且只放行第 ② 条门，快照取回、注记自洽、
+        # conceptIds 全部 active 三条门一条不少。与 Node 同向：不可确认或确认无效
+        # 都折算成 reason=destructive 的拒绝。
+        if change_level == 'destructive':
+            first = [reason['message'] for reason in detail['reasons']
+                     if reason['level'] == 'destructive'][:3]
+            ack_issue = _validate_destructive_acknowledgement(annotation, {'detail': detail})
+            if ack_issue:
+                suffix = (f'；{ack_issue}'
+                          if ack_issue.startswith('destructive 不在可确认白名单')
+                          else f'；显式确认无效: {ack_issue}')
+                return fail(
+                    f"registry 变更判定为 destructive，taxonomySeal 不得沿用"
+                    f"（{'；'.join(first)}）{suffix}",
+                    'destructive', change_level, detail)
+        issue = _validate_registry_upgrade_annotation(annotation, {
+            'fromRegistrySha256': from_sha,
+            'toRegistrySha256': current_sha,
+            'registryVersion': current_registry['version'],
+            'changeLevel': change_level,
+            'detail': detail,
+        })
+        if issue:
+            return fail(f'registryUpgradeFrom 校验失败: {issue}', 'annotation-invalid',
+                        change_level, detail)
+        by_id = {concept['id']: concept for concept in current_registry['concepts']}
+        stale = []
+        for concept_id in (concept_ids if isinstance(concept_ids, list) else []):
+            concept = by_id.get(concept_id)
+            if concept is None:
+                stale.append(f'{concept_id}(缺失)')
+            elif concept['status'] != 'active':
+                stale.append(f'{concept_id}({concept["status"]})')
+        if stale:
+            return fail(
+                'taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: '
+                + '、'.join(stale),
+                'concept-not-active', change_level, detail)
+        return {'ok': True, 'error': None, 'reasonCode': None,
+                'changeLevel': change_level, 'detail': detail}
+    except Exception as error:  # noqa: BLE001 - 与 Node 一致：异常折算 fail-closed
+        return fail(f'registry 升级判定无法完成: {error}', 'classify-failed')
+
+
+def _validate_taxonomy_seal_registry_upgrade(stage, paper_label):
+    """_validate_taxonomy_seal 的升级分支：不一致即抛 PublishDataValidationError。"""
+    from_sha = str(stage.get('registrySha256') or '')
+    to_sha = _PUBLISH_TAXONOMY['registrySha256']
+    projection_sha = str(stage.get('projectionSha256') or '')
+    # 升级分支不要求 projectionSha256 等于本地当前值（与 Node 现行为一致，
+    # stage 记录的是封口当时的投影），但当前值当然也接受；格式仍须合法。
+    if not _SHA256_RE.fullmatch(projection_sha):
+        raise PublishDataValidationError(
+            f'{paper_label} taxonomySeal registry 升级被拒 [reason=projection-sha-invalid] '
+            f'from={from_sha} to={to_sha}: projectionSha256 必须是 64 位十六进制 SHA')
+    result = _seal_registry_upgrade(
+        from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'))
+    if result['ok']:
+        return
+    reason_code = result.get('reasonCode') or 'rejected'
+    codes = ''
+    if result.get('detail'):
+        destructive_codes = sorted({reason['code'] for reason in result['detail']['reasons']
+                                    if reason['level'] == 'destructive'})
+        if destructive_codes:
+            codes = ' codes=' + ','.join(destructive_codes)
+    raise PublishDataValidationError(
+        f'{paper_label} taxonomySeal registry 升级被拒 [reason={reason_code}{codes}] '
+        f'from={from_sha} to={to_sha}: {result["error"]}')
+
+
 def _validate_taxonomy_seal(paper, manifest, paper_label):
     """Independently replay the Node-issued taxonomySeal production proof."""
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
@@ -635,17 +1165,27 @@ def _validate_taxonomy_seal(paper, manifest, paper_label):
     if not isinstance(stage, dict) or stage.get('status') not in {'complete', 'not_needed'}:
         raise PublishDataValidationError(f'{paper_label} taxonomySeal 未完成')
 
+    # 与 Node validateTaxonomyStageBinding 同序：registryVersion / projectionContract /
+    # selectionContract 永远要求 current；registrySha256 等于本地当前值时才走原来的
+    # 硬等值（含 projectionSha256），否则进入换表升级校验分支。
     expected_static = {
         'registryVersion': _PUBLISH_TAXONOMY['version'],
-        'registrySha256': _PUBLISH_TAXONOMY['registrySha256'],
         'projectionContract': TAXONOMY_PROJECTION_CONTRACT,
-        'projectionSha256': _PUBLISH_TAXONOMY_PROJECTION_SHA256,
         'selectionContract': TAXONOMY_SELECTION_CONTRACT,
     }
     for field, expected in expected_static.items():
         if stage.get(field) != expected:
             raise PublishDataValidationError(
                 f'{paper_label} taxonomySeal.{field} 与本地 registry/projection 不一致')
+    if stage.get('registrySha256') == _PUBLISH_TAXONOMY['registrySha256']:
+        for field, expected in (
+                ('registrySha256', _PUBLISH_TAXONOMY['registrySha256']),
+                ('projectionSha256', _PUBLISH_TAXONOMY_PROJECTION_SHA256)):
+            if stage.get(field) != expected:
+                raise PublishDataValidationError(
+                    f'{paper_label} taxonomySeal.{field} 与本地 registry/projection 不一致')
+    else:
+        _validate_taxonomy_seal_registry_upgrade(stage, paper_label)
 
     sha_fields = (
         'inputAnalysisSha256', 'outputAnalysisSha256',
@@ -2469,7 +3009,7 @@ def _validate_experiment_table_evidence_depth(
     )
     result_has_comparison = re.search(
         r'\b(?:baseline|compared?\s+(?:to|with)|comparison|versus|vs\.)\b|'
-        r'基线|对照|相比|相对|优于|弱于|'
+        r'基线|对照|比较(?:对象)?是|相比|相对|优于|弱于|对比|超过|高于|低于|升至|降至|'
         r'比(?!较)[^。；\n]{0,30}(?:高|低|强|弱|好|差|大|小|提升|下降)',
         results,
         re.I,
@@ -2496,12 +3036,20 @@ def _validate_experiment_table_evidence_depth(
     )
     if empirical and source_has_ablation and not result_has_ablation:
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照'
+    source_negative_evidence = re.sub(
+        r'\b(?:does|do|did)\s+not(?:\s+\w+){0,2}\s+'
+        r'(?:degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?)\b|'
+        r'\bno\s+(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|'
+        r'\bwithout\s+(?:any\s+)?(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|'
+        r'(?:未|没有|并未|无)[^。；\n]{0,12}(?:退化|失败)',
+        ' ', source_text, flags=re.I
+    )
     source_has_negative = re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|失败|更差|无效|回退|'
         r'不单调(?:性|改进)?|不保证单调(?:改进|提升)',
-        source_text,
+        source_negative_evidence,
         re.I,
     )
     explicit_higher_is_better_metric = (
@@ -2517,7 +3065,14 @@ def _validate_experiment_table_evidence_depth(
         rf'[^。；\n]{{0,40}}(?:下降|降低|降至|受损)',
         results,
     )
-    result_has_negative = contextual_negative or re.search(
+    explicit_metric_decline = re.search(
+        rf'(?:{explicit_higher_is_better_metric}|转写|关键点覆盖)[^。；\n]{{0,40}}'
+        rf'(?:下降|下滑|降低|减少|受限|受损)|'
+        rf'(?:下降|下滑|降低|受损)[^。；\n]{{0,40}}'
+        rf'(?:{explicit_higher_is_better_metric}|转写|关键点覆盖)',
+        results,
+    )
+    result_has_negative = contextual_negative or explicit_metric_decline or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
@@ -5068,6 +5623,10 @@ def fix_latex_delimiters(text):
     r"""转换明确的数学定界符；不把金额、代码或跨表格单元格内容当公式。"""
     if not text:
         return text
+    # LaTeXML serializes literal braces inside \\text as private macros;
+    # decode only those known markers to their standard TeX equivalents.
+    text = text.replace(r'\lx@text@lbrace', r'\{')
+    text = text.replace(r'\lx@text@rbrace', r'\}')
     text = normalize_markdown_table_inr_currency(text)
     # These are literal source bytes, not prose eligible for math rewriting.
     # An unclosed fenced block is conservatively protected through EOF.
@@ -5127,10 +5686,19 @@ def fix_latex_delimiters(text):
         # A closing dollar must follow non-whitespace and cannot open the next
         # numeric amount. Inline math cannot span lines. Thus $0.2 | $1.0/1000
         # remains exact, while $x$, $5$ and same-cell formulas still convert.
-        return re.sub(
+        converted = re.sub(
             r'(?<![\\$])\$(?!\$)([^\s$](?:[^$\n]*?[^\s$])?)\$(?![\d$])',
             inline_math,
             prose,
+        )
+        # A few arXiv figure captions contain a TeX opening delimiter but
+        # omit its closing ``$`` before a unit (for example ``f_s=$16\\,kHz``).
+        # This narrow numeric + TeX thin-space + unit shape is unambiguous math,
+        # not a currency amount; preserve its meaning as plain caption text.
+        return re.sub(
+            r'(?<![\\$])\$(\d+(?:\.\d+)?)(?:\\+,)([A-Za-z][A-Za-z0-9]*)\b',
+            r'\1 \2',
+            converted,
         )
 
     output = []
@@ -5282,6 +5850,46 @@ def strip_raw_inline_html(text):
         text,
         flags=re.IGNORECASE | re.DOTALL
     )
+
+
+def fix_extraction_diacritic_damage(text):
+    r"""修复 PDF 文本提取撕裂的变音符号，避免孤立反引号破坏 Markdown。
+
+    PDF 提取会把重音从元音上撕下来，落成孤立的 ASCII 反引号与游离的
+    ´ / 组合音标（例如 Yoruba → "Yor`ub´a"、Satosphere → "Satosph`ere"、
+    Concrète → "Concr`ete"）。行内成对的反引号才是代码边界；字母夹住且
+    左侧词干不是代码闭合符的反引号属于提取损伤，会打开永不闭合的代码段，
+    最终 Markdown 门禁必然失败。此处只删除这类损伤反引号，并清理同源的
+    游离锐音符与"空格 + 组合音标"孤儿，不触碰合法的成对行内代码。
+    """
+    if not text:
+        return text
+    repaired_lines = []
+    for line in str(text).split('\n'):
+        removals = []
+        for match in re.finditer(r'([A-Za-z]+)`([A-Za-z]+)', line):
+            run_start = match.start(1)
+            if run_start > 0 and line[run_start - 1] == '`':
+                continue  # 合法行内代码的闭合定界符，保持字节不变
+            run_end = match.end(2)
+            if run_end < len(line) and line[run_end] == '`':
+                continue  # 合法行内代码的开启定界符（pre`code`post 形态）
+            removals.append(run_start + len(match.group(1)))
+        for index in reversed(removals):
+            line = line[:index] + line[index + 1:]
+        line = re.sub(r'(?<=[A-Za-z])´(?=[A-Za-z])', '', line)
+        repaired_lines.append(line)
+    text = '\n'.join(repaired_lines)
+    # 提取器会把重音撕成“空格 + 组合音标”的孤儿。锐音/扬抑符（U+0300/U+0301）
+    # 处于这种孤儿位置时是撕裂的字母重音，连同空格一起删除即可还原干净拼写
+    # （Yorub ́a → Yoruba）；其余组合符（如数学 tilde “ ̃vf”）只去掉游离标记
+    # 本身并保留空格，避免 where ̃vf 被粘成 wherevf。
+    text = re.sub(
+        r' [̀-ͯ]',
+        lambda match: '' if match.group(0)[1] in '̀́' else ' ',
+        text,
+    )
+    return text
 
 
 def fix_empty_markdown_links(text):
@@ -5606,6 +6214,12 @@ def sanitize_markdown_for_publish(text):
     latex_body = text[len(latex_prefix):]
     latex_body = normalize_arxiv_math_double_extraction(latex_body)
     latex_body = fix_latex_delimiters(latex_body)
+    latex_body = re.sub(
+        r'(?im)^(#{1,6}\s+)(?:图|Figure|表|Table)\s*\d+'
+        r'\s*[:：、.．-]?\s*',
+        r'\1',
+        latex_body,
+    )
     # Reader concept bridges occasionally emit ``** label：**``.  CommonMark
     # treats whitespace immediately after the opening delimiter as literal
     # text, so Hugo preserves both markers.  Restrict the deterministic repair
@@ -5617,6 +6231,7 @@ def sanitize_markdown_for_publish(text):
     text = latex_prefix + latex_body
     text = escape_html_like_tags(text)
     text = strip_raw_inline_html(text)
+    text = fix_extraction_diacritic_damage(text)
     text = fix_image_markdown(text)
     text = fix_empty_markdown_links(text)
     text = dedupe_image_alts(text)

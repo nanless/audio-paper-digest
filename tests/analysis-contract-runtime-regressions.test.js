@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert');
+const path = require('node:path');
+const crypto = require('node:crypto');
 const { describe, it } = require('node:test');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 const {
@@ -10,6 +12,11 @@ const {
     classifySourceQuantitativeEvidence,
     validateExperimentTableEvidenceDepth
 } = require('../scripts/analysis-contract.js');
+const contract = require('../scripts/analysis-contract.js');
+const { parseAnalysis } = require('../scripts/utils.js');
+const { createTaxonomyRuntime } = require('../scripts/lib/taxonomy-runtime.js');
+const registryChange = require('../scripts/lib/taxonomy-registry-change.js');
+const taxonomyApi = require('../scripts/lib/paper-taxonomy.js');
 
 const withResultSentence = sentence => validAnalysisText().replace(
     '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
@@ -250,5 +257,231 @@ describe('production analysis contract regressions', () => {
             documentType: '方法研究',
             sourceText: 'Evaluation results report a baseline comparison.'
         }), null);
+    });
+});
+
+// ——— Registry 版本化（P2-2/C7）：taxonomySeal 的 additive 放宽与 fail-closed ———
+const REGISTRY_FILE = path.resolve(__dirname, '../config/paper-taxonomy.json');
+const ADDITIVE_OLD_SHA = 'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf';
+const DESTRUCTIVE_OLD_SHA = '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a';
+
+function annotationFor(fromRegistrySha256) {
+    const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+    const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
+    const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
+    return registryChange.buildRegistryUpgradeAnnotation({
+        from, to: current, changeLevel, detail,
+        note: `确定性重投影，升级自 ${fromRegistrySha256.slice(0, 8)}`
+    });
+}
+
+// destructive 只有在注记携带与复算绑定的 destructiveAcknowledgement 时才可能放行。
+function acknowledgedAnnotationFor(fromRegistrySha256) {
+    const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+    const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
+    const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
+    return registryChange.buildRegistryUpgradeAnnotation({
+        from, to: current, changeLevel, detail,
+        note: `确定性重投影，升级自 ${fromRegistrySha256.slice(0, 8)}`,
+        acknowledgeDestructive: true,
+        acknowledgementNote: '人工确认：仅别名语义变化，conceptId 影响 none'
+    });
+}
+
+function sealedPaper(options = {}) {
+    const runtime = createTaxonomyRuntime({ registryPath: REGISTRY_FILE });
+    const analysis = validAnalysisText();
+    const parsed = parseAnalysis(analysis, { taxonomyRuntime: runtime });
+    const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
+    const binding = {
+        registryVersion: options.registryVersion ?? runtime.registryVersion,
+        registrySha256: options.registrySha256 ?? runtime.registrySha256,
+        projectionContract: runtime.projectionContract,
+        projectionSha256: options.projectionSha256 ?? runtime.projectionSha256,
+        selectionContract: options.selectionContract ?? runtime.selectionContract,
+        inputAnalysisSha256: textSha(analysis),
+        outputAnalysisSha256: textSha(analysis),
+        inputProtectedProjectionSha256: textSha(contract.taxonomyProtectedProjection(analysis)),
+        outputProtectedProjectionSha256: textSha(contract.taxonomyProtectedProjection(analysis)),
+        taxonomySurfaceSha256: contract.taxonomySurfaceSha256(analysis),
+        primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
+        primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
+        conceptIds: options.conceptIds || parsed.taxonomyValidation.conceptIds
+    };
+    const stage = { status: 'not_needed', ...binding, bindingSha256: contract.manualSha256(binding) };
+    if (options.annotation) stage.registryUpgradeFrom = options.annotation;
+    return {
+        runtime,
+        parsed,
+        stage,
+        paper: {
+            analysis,
+            analysisStageCheckpoints: { taxonomySeal: analysis },
+            analysisManifest: {
+                contracts: { taxonomy: options.selectionContract ?? runtime.selectionContract },
+                stages: {
+                    structureRepair: { outputAnalysisSha256: binding.inputAnalysisSha256 },
+                    taxonomySeal: stage,
+                    coreSummaryRepair: { inputAnalysisSha256: binding.outputAnalysisSha256 }
+                }
+            }
+        }
+    };
+}
+
+function validateSeal(options) {
+    const fixture = sealedPaper(options);
+    return contract.validateTaxonomyStageBinding(fixture.paper, {
+        parsed: fixture.parsed,
+        taxonomyRuntime: fixture.runtime,
+        registrySnapshotOptions: options.registrySnapshotOptions
+    });
+}
+
+describe('taxonomySeal registry upgrade gate', () => {
+    it('keeps a current seal valid without any upgrade annotation', () => {
+        assert.strictEqual(validateSeal({}), null);
+    });
+
+    it('admits an additive upgrade when registryUpgradeFrom is recorded', () => {
+        assert.strictEqual(validateSeal({
+            registrySha256: ADDITIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64),
+            annotation: annotationFor(ADDITIVE_OLD_SHA)
+        }), null);
+    });
+
+    it('rejects an old seal that carries no registryUpgradeFrom', () => {
+        assert.match(validateSeal({
+            registrySha256: ADDITIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64)
+        }), /registryUpgradeFrom/);
+    });
+
+    it('rejects a destructive upgrade even when the annotation claims additive', () => {
+        const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+        const from = registryChange.resolveRegistrySnapshot(DESTRUCTIVE_OLD_SHA);
+        const lying = { ...annotationFor(ADDITIVE_OLD_SHA), fromRegistrySha256: from.registrySha256 };
+        assert.equal(lying.toRegistrySha256, current.registrySha256);
+        const issue = validateSeal({
+            registrySha256: DESTRUCTIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64),
+            annotation: lying
+        });
+        assert.match(issue, /destructive/);
+    });
+
+    it('admits a destructive upgrade only with an acknowledgement bound to the recomputed detail', () => {
+        const annotation = acknowledgedAnnotationFor(DESTRUCTIVE_OLD_SHA);
+        assert.equal(annotation.changeLevel, 'destructive');
+        assert.ok(annotation.destructiveAcknowledgement);
+        const seal = (overrides = {}) => validateSeal({
+            registrySha256: DESTRUCTIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64),
+            annotation,
+            ...overrides
+        });
+        // 显式确认 + 影响面 none + 四门齐 → 放行，下游逐字绑定照旧重放。
+        assert.strictEqual(seal(), null);
+        // 缺确认 / 哈希不符 / 影响面非 none → 照旧拒绝。
+        const withoutAck = { ...annotation };
+        delete withoutAck.destructiveAcknowledgement;
+        assert.match(seal({ annotation: withoutAck }), /显式确认无效/);
+        assert.match(seal({ annotation: { ...annotation, destructiveAcknowledgement: {
+            ...annotation.destructiveAcknowledgement, reasonsHash: '0'.repeat(64) }
+        } }), /reasonsHash/);
+        assert.match(seal({ annotation: { ...annotation, destructiveAcknowledgement: {
+            ...annotation.destructiveAcknowledgement, conceptIdImpact: 'removed' }
+        } }), /conceptIdImpact/);
+        // 注记谎报 additive：确认不能把 destructive 翻案成 additive。
+        assert.match(seal({ annotation: { ...annotation, changeLevel: 'additive' } }), /destructive/);
+        // conceptIds 非 active：确认不能替代第 ④ 条门。
+        const fixture = sealedPaper({ registrySha256: DESTRUCTIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64), annotation });
+        fixture.stage.conceptIds = [...fixture.stage.conceptIds, 'task.ghost-concept'];
+        assert.match(contract.validateTaxonomyStageBinding(fixture.paper, {
+            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        }), /active/);
+    });
+
+    it('never admits a destructive change outside the acknowledgement whitelist', () => {
+        const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+        const synthetic = structuredClone(current);
+        synthetic.concepts.push({
+            id: 'task.legacy-only', facet: 'task',
+            preferredLabel: { zh: '旧表独有概念', en: 'Legacy Only Concept' },
+            aliases: ['LegacyOnly'], broaderId: null,
+            definition: '旧表独有、新表已删除的概念。', scopeNote: '仅用于不可确认集合测试。',
+            status: 'active', replacedBy: null
+        });
+        const sha = 'a'.repeat(64);
+        const syntheticRegistry = { ...synthetic, registrySha256: sha };
+        const { detail } = registryChange.classifyRegistryChange(syntheticRegistry, current);
+        assert.equal(detail.changeLevel, 'destructive');
+        const base = acknowledgedAnnotationFor(DESTRUCTIVE_OLD_SHA);
+        const issue = validateSeal({
+            registrySha256: sha,
+            projectionSha256: 'e'.repeat(64),
+            annotation: { ...base, fromRegistrySha256: sha,
+                destructiveAcknowledgement: { ...base.destructiveAcknowledgement,
+                    reasonsHash: registryChange.destructiveReasonsHash(detail) } },
+            registrySnapshotOptions: { registryHistory: { [sha]: syntheticRegistry } }
+        });
+        assert.match(issue, /不在可确认白名单/);
+        assert.match(issue, /concept-removed/);
+    });
+
+    it('fails closed when the pre-upgrade registry snapshot cannot be resolved', () => {
+        assert.match(validateSeal({
+            registrySha256: '0'.repeat(64),
+            projectionSha256: 'e'.repeat(64),
+            annotation: { ...annotationFor(ADDITIVE_OLD_SHA), fromRegistrySha256: '0'.repeat(64) }
+        }), /快照/);
+    });
+
+    it('rejects conceptIds that are missing or inactive in the current registry', () => {
+        const fixture = sealedPaper({ registrySha256: ADDITIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64), annotation: annotationFor(ADDITIVE_OLD_SHA) });
+        fixture.stage.conceptIds = [...fixture.stage.conceptIds, 'task.ghost-concept'];
+        assert.match(contract.validateTaxonomyStageBinding(fixture.paper, {
+            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        }), /active/);
+    });
+
+    it('rejects projection drift while the registry SHA already matches', () => {
+        assert.match(validateSeal({ projectionSha256: 'e'.repeat(64) }), /合同不是 current/);
+    });
+
+    it('rejects a registry version bump outright', () => {
+        assert.match(validateSeal({ registryVersion: 'paper-taxonomy-v2' }), /合同不是 current/);
+    });
+
+    it('rejects an annotation that does not target the current registry SHA', () => {
+        assert.match(validateSeal({
+            registrySha256: ADDITIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64),
+            annotation: { ...annotationFor(ADDITIVE_OLD_SHA), toRegistrySha256: 'b'.repeat(64) }
+        }), /toRegistrySha256/);
+    });
+
+    it('still replays every downstream byte binding after an admitted upgrade', () => {
+        const fixture = sealedPaper({
+            registrySha256: ADDITIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64),
+            annotation: annotationFor(ADDITIVE_OLD_SHA)
+        });
+        assert.strictEqual(contract.validateTaxonomyStageBinding(fixture.paper, {
+            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        }), null);
+        const tampered = structuredClone(fixture.paper);
+        tampered.analysisManifest.stages.taxonomySeal.bindingSha256 = 'c'.repeat(64);
+        assert.match(contract.validateTaxonomyStageBinding(tampered, {
+            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        }), /bindingSha256/);
+        const changedText = structuredClone(fixture.paper);
+        changedText.analysisStageCheckpoints.taxonomySeal += '\nDRIFT';
+        assert.match(contract.validateTaxonomyStageBinding(changedText, {
+            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        }), /checkpoint/);
     });
 });

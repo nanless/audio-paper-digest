@@ -31,6 +31,7 @@ from publish_common import (  # noqa: E402
     fix_latex_delimiters,
     METHOD_DETAIL_CONTRACT_VERSION,
     extract_markdown_tables,
+    fix_extraction_diacritic_damage,
     fix_empty_markdown_links,
     fix_yaml_unbalanced_quotes,
     get_today_bj,
@@ -65,6 +66,10 @@ from publish_common import (  # noqa: E402
     _taxonomy_protected_projection,
     _taxonomy_surface_sha256,
     _validate_taxonomy_seal,
+    _seal_registry_upgrade,
+    _classify_registry_change,
+    _destructive_reasons_hash,
+    _acknowledgement_eligibility,
     _manual_paper_identity_mode,
     _manual_editorial_prose_paragraphs,
     _manual_han_character_count,
@@ -167,6 +172,55 @@ def attach_taxonomy_seal(paper, manifest, *, input_analysis=None, status='not_ne
         **({'structureRepair': input_analysis} if with_checkpoints else {}),
     }
     return manifest['stages']['taxonomySeal']
+
+
+# taxonomySeal.bindingSha256 覆盖的 13 个字段（与 publish_common / Node 一致）。
+TAXONOMY_BINDING_FIELDS = (
+    'registryVersion', 'registrySha256', 'projectionContract',
+    'projectionSha256', 'selectionContract', 'inputAnalysisSha256',
+    'outputAnalysisSha256', 'inputProtectedProjectionSha256',
+    'outputProtectedProjectionSha256', 'taxonomySurfaceSha256',
+    'primaryTaskId', 'primaryMethodId', 'conceptIds',
+)
+
+
+def cross_end_fixture():
+    with open(os.path.join(ROOT, 'tests', 'fixtures',
+                           'registry-upgrade-cross-end.json'), encoding='utf-8') as handle:
+        return json.load(handle)
+
+
+def rebind_taxonomy_seal(stage, *, registry_sha256=None, annotation=None,
+                         drop_annotation=False, projection_sha256=None, concept_ids=None):
+    """改写封口记录后按 13 字段重签 bindingSha256（bindingSha256 算法不动）。"""
+    if registry_sha256 is not None:
+        stage['registrySha256'] = registry_sha256
+    if concept_ids is not None:
+        stage['conceptIds'] = concept_ids
+    if drop_annotation:
+        stage.pop('registryUpgradeFrom', None)
+    elif annotation is not None:
+        stage['registryUpgradeFrom'] = annotation
+    if projection_sha256 is not None:
+        stage['projectionSha256'] = projection_sha256
+    binding = {field: stage.get(field) for field in TAXONOMY_BINDING_FIELDS}
+    stage['bindingSha256'] = _manual_hash(binding)
+    return stage
+
+
+def normalize_seal_error(value):
+    """同码原因的 message 排序依赖 localeCompare 所在 locale；error 只在
+    “（…）内分号列表”上排序归一后再比较（与 Node 测试侧同一规则）。括号之后的
+    尾巴（destructive 显式确认的拒绝理由）必须逐字保留，否则两端确认语义漂移
+    会被归一掩盖。"""
+    if value is None:
+        return None
+    start = value.find('（')
+    end = value.rfind('）')
+    if start != -1 and end > start:
+        return (value[:start] + '；'.join(sorted(value[start + 1:end].split('；')))
+                + value[end + 1:])
+    return value
 
 
 def manual_v2_fixture(*, hardened=True, completed_at=None, v3=False):
@@ -1519,6 +1573,20 @@ primary_method_tag: #基准测试
         self.assertEqual(sanitize_markdown_for_publish(table), table)
         self.assertEqual(sanitize_markdown_for_publish(sanitize_markdown_for_publish(table)), table)
 
+    def test_fix_extraction_diacritic_damage_repairs_pdf_torn_accents(self):
+        # PDF 提取把重音撕成反引号/游离音标；孤立反引号会打开不闭合的行内
+        # 代码，最终 Markdown 门禁必然失败（Interspeech 2026 review 实测）。
+        self.assertIn('Yoruba', fix_extraction_diacritic_damage('the Yor`ub ́a minimal'))
+        self.assertIn('Yoruba', fix_extraction_diacritic_damage('the Yor`ub´a minimal'))
+        self.assertIn('Concrete', fix_extraction_diacritic_damage('title: "Concr`ete: x"'))
+        self.assertIn('Satosphere', fix_extraction_diacritic_damage('the Satosph`ere dom'))
+        # 合法行内代码的开闭定界符与围栏必须保持字节不变
+        kept = 'pre`code`post 与 `code` 以及 ```python\nx=1\n```'
+        self.assertEqual(fix_extraction_diacritic_damage(kept), kept)
+        # 数学 tilde 游离时只去标记、保留空格，避免 where ̃vf 粘成 wherevf
+        self.assertIn('where vf', fix_extraction_diacritic_damage('where ̃vf denotes'))
+        self.assertNotIn('wherevf', fix_extraction_diacritic_damage('where ̃vf denotes'))
+
     def test_sanitize_escapes_literal_sequence_symbols_only_in_table_cells(self):
         markdown = (
             '**普通加粗**\n\n'
@@ -2745,6 +2813,227 @@ primary_method_tag: #基准测试
                 protected_drift, protected_drift['analysisManifest'],
                 protected_drift['arxivId'])
 
+    # ——— 换表放行：taxonomySeal registry 升级分支（Node validateSealRegistryUpgrade 镜像） ———
+    def test_taxonomy_seal_upgrade_gate_allows_additive_registry_change(self):
+        additive = next(case for case in cross_end_fixture()['cases']
+                        if case['name'] == 'additive-upgrade-allowed')
+        paper = complete_paper()
+        manifest = {'version': 1}
+        stage = attach_taxonomy_seal(paper, manifest)
+        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+
+        # 旧 SHA + 与复算一致的 additive 注记 → 放行（Node 放行的状态发布端不再拒）。
+        rebind_taxonomy_seal(stage, registry_sha256=additive['fromRegistrySha256'],
+                             annotation=additive['annotation'])
+        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+
+        # 升级分支不再硬比对 projectionSha256：stage 记录值与本地当前值都接受。
+        for projection in ('e' * 64, _PUBLISH_TAXONOMY_PROJECTION_SHA256):
+            stage['projectionSha256'] = projection
+            rebind_taxonomy_seal(stage)
+            self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+
+    def test_taxonomy_seal_upgrade_gate_allows_acknowledged_destructive_change(self):
+        """Node --acknowledge-destructive 重封出来的 stage，发布端必须同样放行；
+        去掉确认字段后必须照旧拒绝（双端一致性，P0-1 不回退）。"""
+        case = next(item for item in cross_end_fixture()['cases']
+                    if item['name'] == 'destructive-acknowledged-allowed')
+        paper = complete_paper()
+        manifest = {'version': 1}
+        stage = attach_taxonomy_seal(paper, manifest)
+        rebind_taxonomy_seal(stage, registry_sha256=case['fromRegistrySha256'],
+                             annotation=case['annotation'])
+        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+
+        # 注记里去掉 destructiveAcknowledgement → reason=destructive 拒绝。
+        stripped = {key: value for key, value in case['annotation'].items()
+                    if key != 'destructiveAcknowledgement'}
+        rebind_taxonomy_seal(stage, registry_sha256=case['fromRegistrySha256'],
+                             annotation=stripped)
+        with self.assertRaises(PublishDataValidationError) as caught:
+            _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+        self.assertIn('reason=destructive', str(caught.exception))
+        self.assertIn('显式确认无效', str(caught.exception))
+
+    def test_taxonomy_seal_current_registry_path_keeps_hard_equality(self):
+        paper = complete_paper()
+        manifest = {'version': 1}
+        stage = attach_taxonomy_seal(paper, manifest)
+        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+
+        # 当前 SHA 分支：原硬等值行为不变（registryVersion / registrySha256 /
+        # projectionSha256 仍逐字段比对本地 registry 与 projection）。
+        stage['projectionSha256'] = '0' * 64
+        with self.assertRaisesRegex(
+                PublishDataValidationError,
+                'projectionSha256 与本地 registry/projection 不一致'):
+            _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+        stage['projectionSha256'] = _PUBLISH_TAXONOMY_PROJECTION_SHA256
+
+        stage['registryVersion'] = 'paper-taxonomy-v0'
+        with self.assertRaisesRegex(
+                PublishDataValidationError,
+                'registryVersion 与本地 registry/projection 不一致'):
+            _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+        stage['registryVersion'] = _PUBLISH_TAXONOMY['version']
+        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+
+    def test_taxonomy_seal_upgrade_gate_fails_closed_on_every_broken_input(self):
+        fixture = cross_end_fixture()
+        cases = {case['name']: case for case in fixture['cases']}
+        expectations = {
+            'missing-annotation-rejected': 'reason=annotation-invalid',
+            'no-snapshot-rejected': 'reason=snapshot-missing',
+            'destructive-lying-annotation-rejected': 'reason=destructive',
+            'annotation-level-mismatch-rejected': 'reason=annotation-invalid',
+            'stale-concept-id-rejected': 'reason=concept-not-active',
+            'invalid-from-sha-rejected': 'reason=invalid-from-sha',
+        }
+        for name, reason_pattern in expectations.items():
+            with self.subTest(case=name):
+                case = cases[name]
+                paper = complete_paper()
+                manifest = {'version': 1}
+                stage = attach_taxonomy_seal(paper, manifest)
+                rebind_taxonomy_seal(
+                    stage,
+                    registry_sha256=case['fromRegistrySha256'],
+                    annotation=case.get('annotation'),
+                    drop_annotation=case.get('annotation') is None,
+                    concept_ids=case.get('conceptIds'))
+                with self.assertRaises(PublishDataValidationError) as caught:
+                    _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+                message = str(caught.exception)
+                self.assertIn(reason_pattern, message)
+                self.assertIn(f"from={case['fromRegistrySha256']}", message)
+                self.assertIn(f"to={fixture['currentRegistrySha256']}", message)
+                if name == 'destructive-lying-annotation-rejected':
+                    self.assertIn('codes=', message)
+                    self.assertIn('alias-removed', message)
+
+        # 升级分支仍要求 projectionSha256 是合法 SHA（stage 值与当前值都接受，
+        # 但不能是垃圾串）。
+        paper = complete_paper()
+        manifest = {'version': 1}
+        stage = attach_taxonomy_seal(paper, manifest)
+        additive = cases['additive-upgrade-allowed']
+        rebind_taxonomy_seal(stage, registry_sha256=additive['fromRegistrySha256'],
+                             annotation=additive['annotation'],
+                             projection_sha256='not-a-sha')
+        with self.assertRaisesRegex(PublishDataValidationError, 'reason=projection-sha-invalid'):
+            _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+
+    def test_taxonomy_seal_destructive_acknowledgement_gate(self):
+        """destructive 只有“显式确认 + 可确认白名单 + 影响面 none”才放行；
+        四条基础门（快照、注记自洽、概念 active、复算分级）一条不少。
+        与 Node validateSealRegistryUpgrade 同向：不可确认的 destructive 注记
+        写得再自洽也翻不了案。"""
+        current = _PUBLISH_TAXONOMY
+        destructive_from = Path(ROOT) / 'config' / 'taxonomy-registry-history' / (
+            '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a.json')
+        old_registry = json.loads(destructive_from.read_bytes().decode('utf-8'))
+
+        # reasonsHash 跨端常量：Node 与 Python 对同一复算 detail 必须同哈希。
+        eligible_detail = _classify_registry_change(
+            {**old_registry, 'registrySha256': destructive_from.stem}, current)['detail']
+        self.assertEqual(eligible_detail['changeLevel'], 'destructive')
+        self.assertEqual(
+            _destructive_reasons_hash(eligible_detail),
+            '4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a')
+        self.assertTrue(_acknowledgement_eligibility(eligible_detail)['eligible'])
+        self.assertEqual(
+            _acknowledgement_eligibility(eligible_detail)['eligibleReasons'], ['alias-removed'])
+
+        # 不可确认集合：旧表多一个概念、新表已删除 → concept-removed。
+        synthetic = copy.deepcopy(current)
+        synthetic.pop('registrySha256', None)
+        synthetic['concepts'] = list(synthetic['concepts']) + [{
+            'id': 'task.legacy-only', 'facet': 'task',
+            'preferredLabel': {'zh': '旧表独有概念', 'en': 'Legacy Only Concept'},
+            'aliases': ['LegacyOnly'], 'broaderId': None,
+            'definition': '旧表独有、新表已删除的概念。',
+            'scopeNote': '仅用于不可确认集合测试。',
+            'status': 'active', 'replacedBy': None,
+        }]
+        payload = json.dumps(synthetic, ensure_ascii=False, indent=2).encode('utf-8')
+        snapshot_sha = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / f'{snapshot_sha}.json').write_bytes(payload)
+            with mock.patch('publish_common._taxonomy_registry_history_dir',
+                            return_value=Path(tmp)):
+                detail = _classify_registry_change(
+                    {**synthetic, 'registrySha256': snapshot_sha}, current)['detail']
+                eligibility = _acknowledgement_eligibility(detail)
+                self.assertEqual(detail['changeLevel'], 'destructive')
+                self.assertFalse(eligibility['eligible'])
+                self.assertEqual(eligibility['ineligibleReasons'], ['concept-removed'])
+
+                annotation = {
+                    'contract': 'paper-taxonomy-registry-upgrade-v1',
+                    'version': 1,
+                    'fromRegistrySha256': snapshot_sha,
+                    'fromRegistryVersion': current['version'],
+                    'toRegistrySha256': current['registrySha256'],
+                    'toRegistryVersion': current['version'],
+                    'changeLevel': 'destructive',
+                    'reasons': ['concept-removed'],
+                    'note': '人工确认（这个变更不可确认）',
+                    'destructiveAcknowledgement': {
+                        'acknowledged': True,
+                        'reasonsHash': _destructive_reasons_hash(detail),
+                        'conceptIdImpact': 'none',
+                        'note': '人工确认：conceptId 影响 none',
+                    },
+                }
+                rejected = _seal_registry_upgrade(snapshot_sha, ['task.asr'], annotation)
+                self.assertFalse(rejected['ok'])
+                self.assertEqual(rejected['reasonCode'], 'destructive')
+                self.assertIn('不在可确认白名单', rejected['error'])
+                self.assertIn('concept-removed', rejected['error'])
+
+                # 第 ① 条门：快照取不回时，确认不能替代快照。
+                missing = _seal_registry_upgrade('0' * 64, ['task.asr'], annotation)
+                self.assertFalse(missing['ok'])
+                self.assertEqual(missing['reasonCode'], 'snapshot-missing')
+
+        # 注记形态锁死：additive 变更携带确认字段 → 拒。
+        additive = next(case for case in cross_end_fixture()['cases']
+                        if case['name'] == 'additive-upgrade-allowed')
+        annotated = {**additive['annotation'],
+                     'destructiveAcknowledgement': {
+                         'acknowledged': True,
+                         'reasonsHash': _destructive_reasons_hash(eligible_detail),
+                         'conceptIdImpact': 'none',
+                         'note': '不该出现在 additive 上',
+                     }}
+        lying = _seal_registry_upgrade(additive['fromRegistrySha256'],
+                                       additive['conceptIds'], annotated)
+        self.assertFalse(lying['ok'])
+        self.assertEqual(lying['reasonCode'], 'annotation-invalid')
+        self.assertIn('非 destructive', lying['error'])
+
+    def test_python_registry_upgrade_gate_matches_node_fixture(self):
+        # 跨端一致性：同一 (旧SHA, 注记, conceptIds) 输入，Python 输出必须与 Node
+        # 侧生成的 fixture 期望逐项一致（JS 测试用同一份 fixture 再跑一遍 Node 侧）。
+        fixture = cross_end_fixture()
+        for case in fixture['cases']:
+            with self.subTest(case=case['name']):
+                outcome = _seal_registry_upgrade(
+                    case['fromRegistrySha256'], case.get('conceptIds'),
+                    case.get('annotation'))
+                detail = outcome.get('detail') or {}
+                view = {
+                    'ok': outcome['ok'],
+                    'changeLevel': outcome['changeLevel'],
+                    'summary': detail.get('summary'),
+                    'reasonCodes': sorted({reason['code']
+                                           for reason in detail.get('reasons', [])})
+                    if outcome['detail'] is not None else None,
+                    'counts': detail.get('counts'),
+                    'error': normalize_seal_error(outcome['error']),
+                }
+                self.assertEqual(view, case['expect'])
+
     def test_versioned_publish_preflight_enforces_bounded_experiment_tables(self):
         headers = ['方法', '数据集'] + [f'M{i}' for i in range(1, 9)]
         separator = ['---'] * len(headers)
@@ -3005,8 +3294,7 @@ primary_method_tag: #基准测试
             source_text='The third configuration fails on the hard subset.',
         ), '没有保留负面证据')
         for ambiguous_decline in (
-                '代价是测试误差从 0.91 下降至 0.90',
-                '动态幅度从 44.58 下降至 35.62'):
+                '代价是测试误差从 0.91 下降至 0.90',):
             with self.subTest(ambiguous_decline=ambiguous_decline):
                 self.assertRegex(validate_experiment_table_contract(
                     analysis_with(ambiguous_decline),
@@ -3014,6 +3302,14 @@ primary_method_tag: #基准测试
                     document_type='方法研究',
                     source_text='The third configuration fails on the hard subset.',
                 ), '没有保留负面证据')
+        # explicit_metric_decline: 裸指标（higher-is-better）下降本身即算负面证据，
+        # 无需“代价”前缀，因此本例通过门禁（与 Node 侧 analysis-contract 语义一致）。
+        self.assertIsNone(validate_experiment_table_contract(
+            analysis_with('动态幅度从 44.58 下降至 35.62'),
+            contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
+            document_type='方法研究',
+            source_text='The third configuration fails on the hard subset.',
+        ))
         positive_rise = analysis_with(
             '配置 C 的准确率从 0.90 微升至 0.91，其余设置保持一致')
         self.assertRegex(validate_experiment_table_contract(

@@ -233,6 +233,43 @@ class PreviewBuilderTest(unittest.TestCase):
         self.assertIn("'+cmd", tags)
         self.assertEqual(result['summary']['uniqueTagCoverage'], 0.2)
 
+    def test_seven_state_csv_schema_and_initial_dispositions(self):
+        self.page(tags=['语音任务', 'ASR', '自动语音识别', '语音任务与语音识别', 'totally-unknown'])
+        self.commit(); self.build()
+        with (self.output / 'tag-disposition.csv').open() as handle:
+            reader = csv.DictReader(handle)
+            self.assertEqual(reader.fieldnames, list(preview.DISPOSITION_CSV_COLUMNS))
+            rows = {row['tag']: row for row in reader}
+        # 旧列原样保留且语义不变
+        for column in preview.LEGACY_CSV_COLUMNS:
+            self.assertIn(column, rows['ASR'])
+        self.assertEqual(rows['ASR']['status'], 'mapped')
+        self.assertEqual(rows['ASR']['conceptId'], 'task.asr')
+        self.assertEqual(rows['ASR']['semanticReview'], 'not_performed')
+        # 七态初始映射：唯一命中 active 中文首选 → keep；经别名 → alias
+        self.assertEqual(rows['语音任务']['disposition'], 'keep')
+        self.assertEqual(rows['ASR']['disposition'], 'alias')
+        # 仅上位命中 → broader（status 仍是 needs_review，原值不静默改写）
+        self.assertEqual(rows['自动语音识别']['disposition'], 'broader')
+        self.assertEqual(rows['自动语音识别']['status'], 'needs_review')
+        self.assertEqual(rows['自动语音识别']['conceptId'], '')
+        evidence = json.loads(rows['自动语音识别']['evidence'])
+        self.assertEqual(evidence['upperConceptId'], 'task.asr')
+        # 零命中与多上位命中都只能 pending，且必须写明原因/候选
+        self.assertEqual(rows['totally-unknown']['disposition'], '')
+        self.assertIn('零命中', json.loads(rows['totally-unknown']['evidence'])['reason'])
+        multi = json.loads(rows['语音任务与语音识别']['evidence'])
+        self.assertEqual(len(multi['candidates']), 2)
+        summary = json.loads((self.output / 'migration-report.json').read_text())['summary']
+        self.assertEqual(summary['dispositionSchema'], preview.DISPOSITION_SCHEMA)
+        self.assertEqual(summary['dispositionCounts'],
+                         {'keep': 1, 'alias': 1, 'broader': 1, 'split_review': 0,
+                          'move_facet': 0, 'deprecated': 0, 'out_of_scope': 0})
+        self.assertEqual(summary['pendingDispositions'], 2)
+        # 兼容旧列读取：新 CSV 能被统一读取器解析并再次通过校验
+        preview.read_disposition_rows((self.output / 'tag-disposition.csv').read_text())
+
+
     def test_dirty_tree_and_unsafe_metadata_urls_fail_without_output_index(self):
         page = self.page(); self.commit()
         page.write_text(page.read_text() + 'changed')
@@ -300,3 +337,110 @@ class PreviewBuilderTest(unittest.TestCase):
         bundle = json.loads((self.output / 'bundle-manifest.json').read_text())
         for name, digest in bundle['files'].items():
             self.assertEqual(hashlib.sha256((self.output / name).read_bytes()).hexdigest(), digest)
+
+
+class SevenStateDispositionTest(unittest.TestCase):
+    """七态互斥、证据要求与旧列兼容的纯单元用例。"""
+
+    def row(self, **overrides):
+        base = {'tag': '旧标签', 'pageCount': 3, 'disposition': '', 'status': 'needs_review',
+                'conceptId': '', 'facet': '', 'semanticReview': 'not_performed',
+                'evidence': {'reason': '待评审'}}
+        base.update(overrides)
+        return base
+
+    def test_seven_state_membership_and_mutual_exclusion(self):
+        valid = self.row(disposition='keep', status='mapped', conceptId='task.asr')
+        self.assertEqual(preview.validate_disposition_rows([valid]), [valid])
+        # 不在七态里的取值直接拒绝
+        for bad in ('drop', 'KEEP', 'merged'):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, '七态'):
+                preview.validate_disposition_rows([self.row(disposition=bad)])
+        # keep/alias 只能出现在 status=mapped 且必须带 conceptId
+        with self.assertRaisesRegex(ValueError, '互斥'):
+            preview.validate_disposition_rows([self.row(disposition='keep', conceptId='task.asr')])
+        with self.assertRaisesRegex(ValueError, 'conceptId'):
+            preview.validate_disposition_rows([self.row(disposition='alias', status='mapped')])
+        # 未评审的 needs_review 行不得凭空变 keep/alias
+        with self.assertRaisesRegex(ValueError, '互斥'):
+            preview.validate_disposition_rows([self.row(disposition='keep', status='needs_review',
+                                                        conceptId='task.asr')])
+        # broader 只能来自“仅上位命中”
+        with self.assertRaisesRegex(ValueError, '仅上位命中'):
+            preview.validate_disposition_rows([self.row(disposition='broader')])
+        preview.validate_disposition_rows([self.row(disposition='broader',
+                                                    evidence={'upperConceptId': 'task.asr'})])
+
+    def test_split_review_requires_candidate_term_list(self):
+        for evidence in ({}, {'candidates': []}, {'candidates': ['']},
+                         {'candidates': [1]}, 'not-json'):
+            with self.subTest(evidence=evidence), self.assertRaises(ValueError):
+                preview.validate_disposition_rows([self.row(disposition='split_review',
+                                                            evidence=evidence)])
+        preview.validate_disposition_rows([self.row(disposition='split_review',
+                                                    evidence={'candidates': ['语音识别', '说话人分离']})])
+
+    def test_deprecated_and_out_of_scope_need_zero_hit_scan_and_reviewer(self):
+        # “本次会议没用到”不构成证据：缺跨会零命中扫描或人工评审一律报错
+        for state in ('deprecated', 'out_of_scope'):
+            for evidence in ({}, {'crossConferenceZeroHit': {}},
+                             {'crossConferenceZeroHit': {'scan': 'seal-1'}},
+                             {'crossConferenceZeroHit': {'scan': 'seal-1'}, 'reviewedBy': ' '}):
+                with self.subTest(state=state, evidence=evidence), self.assertRaises(ValueError):
+                    preview.validate_disposition_rows([self.row(disposition=state, evidence=evidence)])
+            preview.validate_disposition_rows([
+                self.row(disposition=state, status='mapped', conceptId='task.asr',
+                         evidence={'crossConferenceZeroHit': {'scan': 'cross-conference-scan-v1',
+                                                              'papersScanned': 4069},
+                                   'reviewedBy': 'human-reviewer'})])
+
+    def test_move_facet_and_pending_rows_are_guarded(self):
+        with self.assertRaisesRegex(ValueError, '九分面'):
+            preview.validate_disposition_rows([self.row(disposition='move_facet', status='mapped',
+                                                        conceptId='task.asr', facet='task',
+                                                        evidence={'facet': 'bogus'})])
+        with self.assertRaisesRegex(ValueError, '分面不同'):
+            preview.validate_disposition_rows([self.row(disposition='move_facet', status='mapped',
+                                                        conceptId='task.asr', facet='task',
+                                                        evidence={'facet': 'task'})])
+        # 未处置必须写原因；重复 tag 必须拒绝
+        with self.assertRaisesRegex(ValueError, 'reason'):
+            preview.validate_disposition_rows([self.row(evidence={})])
+        with self.assertRaisesRegex(ValueError, '重复'):
+            preview.validate_disposition_rows([self.row(), self.row()])
+
+    def test_legacy_six_column_rows_stay_readable(self):
+        legacy = ('tag,pageCount,status,conceptId,facet,semanticReview\n'
+                  'ASR,12,mapped,task.asr,task,not_performed\n'
+                  '未知词,4,needs_review,,,not_performed\n')
+        rows = preview.read_disposition_rows(legacy)
+        self.assertEqual(len(rows), 2)
+        self.assertNotIn('disposition', rows[0])
+        self.assertEqual(rows[0]['conceptId'], 'task.asr')
+
+    def test_initial_disposition_mapping_rules(self):
+        data = registry()
+        data['concepts'].append(concept('task.old-asr', '旧识别', 'Old recognition',
+                                        'task.speech', ['识别旧名']))
+        data['concepts'][-1].update(status='deprecated', replacedBy='task.asr')
+        by_id = {item['id']: item for item in data['concepts']}
+        cases = [('语音识别', 'task.asr', 'keep'),
+                 ('ASR', 'task.asr', 'alias'),
+                 ('automatic speech recognition', 'task.asr', 'alias'),
+                 ('自动语音识别', None, 'broader'),
+                 ('语音任务与语音识别', None, ''),
+                 ('完全没有的词', None, ''),
+                 ('旧识别', 'task.old-asr', '')]
+        for tag, cid, expected in cases:
+            concept_value = by_id.get(cid)
+            disposition, evidence = preview.initial_disposition(tag, concept_value, data)
+            with self.subTest(tag=tag):
+                self.assertEqual(disposition, expected)
+                if not disposition:
+                    self.assertTrue(evidence.get('reason') or evidence.get('candidates'))
+                if disposition == 'broader':
+                    self.assertEqual(evidence['upperConceptId'], 'task.asr')
+        # deprecated 命中只能是 pending：禁按单会议频次/零命中缺证据自动判 deprecated
+        disposition, evidence = preview.initial_disposition('旧识别', by_id['task.old-asr'], data)
+        self.assertEqual(disposition, '')
+        self.assertIn('跨会零命中扫描', evidence['reason'])

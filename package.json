@@ -17,6 +17,8 @@
     "taxonomy:validate": "node scripts/taxonomy-tools.js validate",
     "taxonomy:preview": "bash scripts/python-runtime.sh scripts/build-taxonomy-preview.py",
     "taxonomy:serve": "node scripts/taxonomy-tools.js serve",
+    "taxonomy:reseal": "node scripts/taxonomy-reseal.js",
+    "taxonomy:seal-inventory": "node scripts/taxonomy-seal-inventory.js",
     "conference:validate-ledger": "node scripts/workspace-role.js exec history -- node scripts/conference-tools.js validate-ledger",
     "conference:verify-ledger": "node scripts/workspace-role.js exec history -- node scripts/conference-tools.js verify-ledger",
     "conference:validate-run": "node scripts/workspace-role.js exec history -- node scripts/conference-tools.js validate-run",

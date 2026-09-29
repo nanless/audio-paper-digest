@@ -7,7 +7,7 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const api = require('./lib/conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 
-const USAGE = '--dry-run|--apply|--status|--source-upgrade-plan|--source-upgrade-apply|--source-upgrade-promote --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3] [--retry-failed]; source upgrade: --from UUID; apply requires --plan-sha SHA --paper-ids ID,ID --authorize-new-analysis; promote requires --plan-sha SHA [--preserve-original-complete]';
+const USAGE = '--dry-run|--apply|--status|--source-upgrade-plan|--source-upgrade-apply|--source-upgrade-promote --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3|4|5] [--retry-failed]; source upgrade: --from UUID; apply requires --plan-sha SHA --paper-ids ID,ID --authorize-new-analysis; promote requires --plan-sha SHA [--preserve-original-complete]';
 function parseArgs(argv) {
     if (argv[0] === '--legacy-disabled') throw new Error('New-conference execution/analyze/postprocess must use conference:new:process');
     const mode = argv[0]; if (!['--dry-run', '--apply', '--status', '--source-upgrade-plan', '--source-upgrade-apply', '--source-upgrade-promote'].includes(mode)) throw new Error(`Use ${USAGE}`);
@@ -30,7 +30,7 @@ function parseArgs(argv) {
     if (!/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--catalog'] || '')
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--filter'] || '')
-        || (values['--concurrency'] && !/^[1-3]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
+        || (values['--concurrency'] && !/^[1-5]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
     if (upgrade && !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--from'] || '')) throw new Error(`Use ${USAGE}`);
     if (mode === '--source-upgrade-plan' && (values['--plan-sha'] || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
     if (mode === '--source-upgrade-promote' && (!/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '') || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
@@ -88,8 +88,14 @@ function processStatus(options, runtime = {}) {
     const counts = Object.values(state.items).reduce((result, item) => {
         result[item.status] = (result[item.status] || 0) + 1; return result;
     }, {});
+    const review = api.taxonomyReviewQueue(state);
     const result = { status: state.status, processId, conferenceId: state.authority.conferenceId,
-        stateSha256: state.stateSha256, papers: counts, completionReceiptSha256: state.completionReceiptSha256 };
+        stateSha256: state.stateSha256, papers: counts, completionReceiptSha256: state.completionReceiptSha256,
+        taxonomyReview: review.taxonomyReview };
+    if (review.taxonomyReview) {
+        result.taxonomyReviewQueue = review.items;
+        result.taxonomyReviewQueueFile = path.join(directory, api.TAXONOMY_REVIEW_FILE);
+    }
     if (state.batchFailure) result.batchFailure = state.batchFailure;
     const operationLock = lockStatus(deps.engine, path.join(directory, '.operation'));
     if (operationLock) result.operationLock = operationLock;

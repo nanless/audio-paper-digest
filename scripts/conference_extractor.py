@@ -389,6 +389,30 @@ def _visual_text(value: str, maximum: int = 4000) -> str:
     return value[:maximum]
 
 
+def _json_safe_deep(value: Any) -> Any:
+    """Recursively keep every string strict UTF-8 for canonical JSON sealing.
+
+    PyMuPDF can surface lone UTF-16 surrogate code points from broken font
+    encoding maps (seen in formula glyph runs and table candidate cells).
+    `_normalize_page_text` already recovers such page text; audit bodies and
+    structured artifacts additionally embed raw candidate strings that never
+    pass through it.  Without this pass `json.dumps(..., ensure_ascii=False)`
+    raises UnicodeEncodeError while sealing the visual audit hash, turning a
+    recoverable page into a batch-failing PDF_VISUAL_AUDIT_FAILED block.
+    Valid surrogate pairs decode to their scalar value; only unpaired
+    surrogates are replaced — matching `_normalize_page_text` policy.
+    """
+    if isinstance(value, str):
+        if any("\ud800" <= character <= "\udfff" for character in value):
+            return value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+        return value
+    if isinstance(value, list):
+        return [_json_safe_deep(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _json_safe_deep(item) for key, item in value.items()}
+    return value
+
+
 def _bbox(value: Any) -> list[float]:
     normalized = []
     for item in value:
@@ -718,6 +742,7 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
             "Figure/图片通过原页 PNG SHA 和 PDF 内嵌图片 SHA 绑定，未把坐标或曲线语义交给自动推断。",
         ],
     }
+    body = _json_safe_deep(body)
     body["auditSha256"] = _stable_hash(body)
     return body
 
@@ -968,7 +993,11 @@ def load_pypdf_backend() -> ExtractionBackend:
                         if any(current[index] for index in range(1, len(current))):
                             rows.append(current)
                         elif current[0]:
-                            cells[0] = clean_structure_text(f"{current[0]} {cells[0]}", 1000)
+                            # The receipt contract (conference-pdf-extraction-
+                            # receipt-v2) bounds every cell at 500 characters;
+                            # keep wrapped-label merges inside that bound so a
+                            # long label can never fail replay downstream.
+                            cells[0] = clean_structure_text(f"{current[0]} {cells[0]}", 500)
                     current = cells
                     last_data_y = line[0]["y0"]
                 elif current is not None:
@@ -985,7 +1014,7 @@ def load_pypdf_backend() -> ExtractionBackend:
                         last_data_y = line[0]["y0"]
                         continue
                     if cells[0]:
-                        current[0] = clean_structure_text(f"{current[0]} {cells[0]}", 1000)
+                        current[0] = clean_structure_text(f"{current[0]} {cells[0]}", 500)
                     last_data_y = line[0]["y0"]
             if current is not None:
                 rows.append(current)
@@ -1002,6 +1031,7 @@ def load_pypdf_backend() -> ExtractionBackend:
     def table_records(page: Any, page_number: int, next_ordinal: int) -> tuple[list[dict[str, Any]], int]:
         captions = caption_blocks(page, "Table")
         records: list[dict[str, Any]] = []
+        base_ordinal = next_ordinal
         page_width = float(page.rect.width)
         for caption_index, caption in enumerate(captions):
             x0, y0, x1, y1 = caption["bbox"]
@@ -1088,7 +1118,19 @@ def load_pypdf_backend() -> ExtractionBackend:
             records.append(record)
             existing_captions.add(record["caption"])
             next_ordinal += 1
-        return records, next_ordinal
+        # The geometry fallback pre-assigns ordinals for every caption it can
+        # recover, but the merge above drops fallback twins whose caption the
+        # line-based path already recovered.  That leaves ordinal gaps (and
+        # duplicate numbers against the next page, whose base is len(tables)+1)
+        # which the receipt contract rejects ("table records must be ordered
+        # and complete").  Renumber densely by insertion order so the returned
+        # base stays contiguous with the caller's running total.
+        for index, record in enumerate(records):
+            ordinal = base_ordinal + index
+            if record.get("ordinal") != ordinal or record.get("sourceRef") != f"pdf:table:{ordinal}:page:{page_number}":
+                records[index] = {**record, "ordinal": ordinal,
+                                  "sourceRef": f"pdf:table:{ordinal}:page:{page_number}"}
+        return records, base_ordinal + len(records)
 
     def formula_records(pdf_document: Any, page_number: int, next_ordinal: int,
                         render_sha: str | None = None) -> tuple[list[dict[str, Any]], int]:
@@ -1139,8 +1181,15 @@ def load_pypdf_backend() -> ExtractionBackend:
                 if caption["number"] in seen_numbers:
                     continue
                 x0, y0, x1, _ = caption["bbox"]
-                full_width = x1 - x0 >= float(page.rect.width) * 0.60
                 midpoint = float(page.rect.width) / 2
+                # A caption that straddles the column gutter (its bbox crosses
+                # the midpoint) belongs to a cross-gutter Figure.  The 60% width
+                # threshold alone misses the ~52%-wide captions such Figures
+                # use, and the column fallback then clips every subplot the
+                # Figure keeps in the other column (verified left-edge pixel
+                # cuts on interspeech_2026 aghniya26 Figure 3).
+                full_width = (x1 - x0 >= float(page.rect.width) * 0.60) \
+                    or (x0 < midpoint < x1)
                 # A short caption is not the horizontal extent of its Figure.
                 # Use the column, and never use the opposite column's caption
                 # as a vertical clipping boundary.
@@ -1197,6 +1246,13 @@ def load_pypdf_backend() -> ExtractionBackend:
                 if rects and y0 - max(rect.y1 for rect in rects) > 60:
                     rects = []
                 if rects:
+                    # Column bounds are only a safe default envelope: when the
+                    # drawing/image union reaches past the gutter, the Figure
+                    # genuinely crosses columns.  Expand (never shrink) the
+                    # envelope to the union ± label slack so subplots and their
+                    # axis labels are never clipped from the left/right edge.
+                    region_x0 = max(0.0, min(region_x0, min(rect.x0 for rect in rects) - 8.0))
+                    region_x1 = min(float(page.rect.width), max(region_x1, max(rect.x1 for rect in rects) + 8.0))
                     if wide_containers:
                         visual = pymupdf.Rect(
                             region_x0,
@@ -1276,7 +1332,7 @@ def load_pypdf_backend() -> ExtractionBackend:
             formulas = retained_formulas
             figures = figure_records(pdf_document)
             pdf_document.close()
-            return {"tables": tables, "formulas": formulas, "figures": figures}
+            return _json_safe_deep({"tables": tables, "formulas": formulas, "figures": figures})
         except ConferenceExtractionError:
             raise
         except Exception:

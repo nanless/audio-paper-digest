@@ -359,10 +359,14 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
             materialized.push(...current);
         } catch (error) {
             // Match the persistent Reader materializer: an individual official
-            // Figure above the byte ceiling is unusable evidence, not a reason
-            // to discard the paper or the smaller figures already fetched.
-            if (error?.code !== 'RESPONSE_TOO_LARGE') throw error;
-            console.log(`    [deep] ⚠️  跳过超过字节上限的论文图 ${figure.ordinal}: ${error.message}`);
+            // Figure above the byte ceiling, or with bytes that contradict its
+            // declared media type, is unusable evidence rather than a reason to
+            // discard the paper or the other figures already fetched.
+            const permanentFigureError = error?.code === 'RESPONSE_TOO_LARGE'
+                || /论文图片声明类型与文件头不一致|论文图片文件头不是支持的 SVG\/PNG\/JPEG\/WebP|论文 SVG (?:文件头或字节上限非法|缺少根节点|清理后仍包含主动内容)/i
+                    .test(String(error?.message || ''));
+            if (!permanentFigureError) throw error;
+            console.log(`    [deep] ⚠️  跳过不可用的论文图 ${figure.ordinal}: ${error.message}`);
         }
     }
     return materialized;

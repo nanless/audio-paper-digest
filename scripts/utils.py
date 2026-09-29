@@ -12,7 +12,8 @@ from datetime import datetime, timezone, timedelta
 
 from paper_taxonomy import (LABEL_MODE_LEGACY,
                             active_preferred_labels, ancestors, load_taxonomy,
-                            prune_ancestors, resolve_label_candidates)
+                            prune_ancestors, resolve_label_candidates,
+                            _registry_data)
 
 BJ_TZ = timezone(timedelta(hours=8))
 SCORING_RUBRIC_VERSION = 'type-aware-v1'
@@ -278,6 +279,53 @@ def _validate_tag_selection(taxonomy, tags, primary_task_tag, primary_method_tag
     if ids and len(prune_ancestors(taxonomy, ids)) != len(ids):
         errors.append('标签不得同时包含祖先与后代概念')
 
+    # 选择合同规则①：主任务恰好 1 个 + 次任务 ≤2 个，即 task 分面总数必须
+    # 落在 [1,3]；总数 3-5 只约束标签条数，不约束 task 分面占比。
+    task_concepts = [concept for concept in concepts if concept is not None
+                     and concept['facet'] == 'task']
+    if not 1 <= len(task_concepts) <= 3:
+        task_tag_list = ' '.join(_canonical_tag(concept)
+                                 for concept in task_concepts)
+        errors.append('task 分面标签必须为 1-3 个（主任务 1 个 + 次任务 ≤2 个），'
+                      f'当前 {len(task_concepts)} 个'
+                      + (f': {task_tag_list}' if task_tag_list else ''))
+
+    # 选择合同规则②：主任务“最具体”是全 registry 性质，不是所选集合内性质。
+    # 欠具体只返回结构化告警，不改变 valid——已封口 stage 的回放（seal
+    # binding、发布侧 parse）不受影响；新指派路径用它触发标签局部修复。
+    specificity_warning = None
+    if task is not None:
+        # 热路径只做一次 registry 校验，再用本地 parent 映射走 parent-chain：
+        # paper_taxonomy.ancestors() 每次调用都会全量重校验 registry，对每个
+        # active 概念各调一次会把选择校验退化成 O(N²)。Node
+        # taxonomy-runtime.activeDescendants 是同构实现。
+        data = _registry_data(taxonomy)
+        parent_by_id = {concept['id']: concept['broaderId']
+                        for concept in data['concepts']}
+
+        def _chain(concept_id):
+            chain = []
+            parent = parent_by_id.get(concept_id)
+            while parent is not None:
+                chain.append(parent)
+                parent = parent_by_id.get(parent)
+            return chain
+
+        missing_descendants = [
+            concept for concept in data['concepts']
+            if concept['status'] == 'active'
+            and concept['id'] != task['id']
+            and task['id'] in _chain(concept['id'])
+            and concept['id'] not in ids
+        ]
+        if missing_descendants:
+            sample = ' '.join(_canonical_tag(concept)
+                              for concept in missing_descendants[:8])
+            tail = ' …' if len(missing_descendants) > 8 else ''
+            specificity_warning = (
+                f'主任务标签欠具体: {_canonical_tag(task)} 存在未选择的 active 后代'
+                f'（共 {len(missing_descendants)} 个）: {sample}{tail}')
+
     # Match Node's Set-based diagnostic de-duplication while preserving order.
     errors = list(dict.fromkeys(errors))
     return {
@@ -288,6 +336,7 @@ def _validate_tag_selection(taxonomy, tags, primary_task_tag, primary_method_tag
         'primaryTaskId': task['id'] if task is not None else None,
         'primaryMethodId': method['id'] if method is not None else None,
         'conceptIds': [] if errors else ids,
+        'specificityWarning': specificity_warning,
     }
 
 
@@ -449,6 +498,7 @@ def parse_analysis(analysis, *, taxonomy=None, legacy_tags=False):
             'primaryTaskId': None,
             'primaryMethodId': None,
             'conceptIds': [],
+            'specificityWarning': None,
         },
     }
 

@@ -13,7 +13,7 @@ const processApi = require('./lib/conference-process.js');
 const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 
-const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1|2|3] [--reuse-complete-pages] [--retry-failed]';
+const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1|2|3|4|5] [--reuse-complete-pages] [--retry-failed]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
@@ -32,7 +32,7 @@ function parseArgs(argv) {
     if (!/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--catalog'] || '')
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !UUID_RE.test(values['--filter'] || '') || !UUID_RE.test(values['--from'] || '')
-        || (values['--concurrency'] && !/^[1-3]$/.test(values['--concurrency']))) {
+        || (values['--concurrency'] && !/^[1-5]$/.test(values['--concurrency']))) {
         throw new Error(`Use ${USAGE}`);
     }
     return { apply: true, statusOnly: false, catalogName: values['--catalog'],
@@ -44,6 +44,11 @@ function parseArgs(argv) {
 function withoutImplementation(authority) {
     const value = structuredClone(authority);
     delete value.implementationSha256;
+    // 换表后 state.taxonomy* 是进程身份史（processId 派生绑定原值，不可就地刷新），
+    // 与当前 config 的 taxonomy 漂移属合法状态；封口层已按当前表强制
+    // （reseal + analysis-contract/publish_common 双端 seal 校验）。实现漂移仍照常桥接。
+    delete value.taxonomyVersion;
+    delete value.taxonomyRegistrySha256;
     return value;
 }
 

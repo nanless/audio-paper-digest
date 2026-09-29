@@ -8,6 +8,7 @@ const {
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,
     refreshApiReaderFiguresFromSource,
+    normalizeApiReaderFigureMarkdown,
     stableFingerprint,
     repairApiReaderPlanSurfaceBinding
 } = require('./deep-analyzer.js');
@@ -292,6 +293,12 @@ async function refreshApiReader(targetId, options = {}) {
                     });
         const repairSurfaceBindings = () => {
                 const repaired = JSON.parse(JSON.stringify(canonical));
+                repaired.apiReaderArticle = normalizeApiReaderFigureMarkdown(
+                    repaired.apiReaderArticle,
+                    repaired.apiReaderFigures
+                );
+                repaired.apiReaderArticleSha256 = crypto.createHash('sha256')
+                    .update(repaired.apiReaderArticle).digest('hex');
                 repairApiReaderPlanSurfaceBinding(repaired, repaired.analysisManifest);
                 const bridges = repaired.apiReaderPlan?.conceptBridges;
                 if (!Array.isArray(bridges) || bridges.some(bridge => (

@@ -63,6 +63,7 @@ const CORE_AUDIO_CONFERENCE_LABELS = Object.freeze({
     'chime-2026': 'CHiME Speech Separation and Recognition',
     'dafx-2026': 'Digital Audio Effects',
     'icmc-2026': 'International Computer Music Conference',
+    'interspeech-2026': 'Interspeech',
     'iwslt-2026': 'Spoken Language Translation',
     'jep-2026': 'Speech Studies (Journées d’Études sur la Parole)',
     'nime-2026': 'New Interfaces for Musical Expression',
@@ -108,13 +109,17 @@ function sha256(value) { return crypto.createHash('sha256').update(value).digest
 const LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(LLM_FILTER_POLICY, 'utf8'));
 const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // The conference fallback map is deliberately included in the policy digest.
-// Keep the policy digest of filters prepared immediately before the 2026
-// conference labels were added accepted during recovery; their durable state
-// and request envelopes still bind the exact policy they were prepared with.
-// This is a compatibility window, not permission to accept arbitrary policy
-// hashes.
-const LEGACY_FILTER_POLICY_SHA256 = '11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275';
-const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, LEGACY_FILTER_POLICY_SHA256]);
+// Keep the policy digest of filters prepared before each conference-label
+// expansion accepted during recovery; their durable state and request
+// envelopes still bind the exact policy they were prepared with. This is a
+// compatibility window, not permission to accept arbitrary policy hashes.
+// '382af440…' = policy before interspeech-2026 was added to the core-audio
+// labels; '11b277a5…' = policy before the original 2026 conference labels.
+const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
+    '382af4406aaf0f4c8e49f22cdacb9ab215c4ab0563903b49930cb3ed8cf9e096',
+    '11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275'
+]);
+const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGACY_FILTER_POLICY_SHA256_LIST]);
 const FILTER_CONFIG_SHA256 = stableHash(FILTER_CONFIG_BINDING);
 function stableJson(value) {
     const normalize = item => Array.isArray(item) ? item.map(normalize)

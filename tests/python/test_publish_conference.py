@@ -339,5 +339,51 @@ class ConferencePublishTests(unittest.TestCase):
             self.assertEqual(M.load_generation(conference_id, process_id), generation)
 
 
+class FindManifestIndexTest(unittest.TestCase):
+    """find_manifest 的进程内索引：唯一命中、未命中、重复命中、非法 SHA。"""
+
+    SHA_A = 'a' * 64
+    SHA_B = 'b' * 64
+
+    def _root(self):
+        root = Path(tempfile.mkdtemp(prefix='find-manifest-'))
+        (root / 'one').mkdir()
+        (root / 'two').mkdir()
+        (root / 'one' / 'manifest.json').write_text(
+            json.dumps({'manifestSha256': self.SHA_A}), encoding='utf-8')
+        (root / 'two' / 'manifest.json').write_text(
+            json.dumps({'manifestSha256': self.SHA_B}), encoding='utf-8')
+        return root
+
+    def test_unique_match_returns_path_and_repeat_is_stable(self):
+        root = self._root()
+        first = M.find_manifest(root, self.SHA_A, 'probe')
+        self.assertTrue(str(first).endswith(str(Path('one') / 'manifest.json')))
+        second = M.find_manifest(root, self.SHA_B, 'probe')
+        self.assertTrue(str(second).endswith(str(Path('two') / 'manifest.json')))
+        # 索引建立后重复查询结果一致（O(1) 命中，不因重扫改写结论）
+        self.assertEqual(M.find_manifest(root, self.SHA_A, 'probe'), first)
+
+    def test_miss_raises_with_zero_matches(self):
+        root = self._root()
+        with self.assertRaises(Exception) as ctx:
+            M.find_manifest(root, 'c' * 64, 'probe')
+        self.assertIn('matches=0', str(ctx.exception))
+
+    def test_duplicate_sha_raises_with_two_matches(self):
+        root = self._root()
+        (root / 'three').mkdir()
+        (root / 'three' / 'manifest.json').write_text(
+            json.dumps({'manifestSha256': self.SHA_A}), encoding='utf-8')
+        with self.assertRaises(Exception) as ctx:
+            M.find_manifest(root, self.SHA_A, 'probe')
+        self.assertIn('matches=2', str(ctx.exception))
+
+    def test_illegal_sha_rejected(self):
+        root = self._root()
+        with self.assertRaises(Exception):
+            M.find_manifest(root, 'not-a-sha', 'probe')
+
+
 if __name__ == '__main__':
     unittest.main()

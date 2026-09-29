@@ -1338,7 +1338,8 @@ function parseAnalysis(analysis, options = {}) {
             valid: false, errors: ['缺少标签章节'],
             registryVersion: taxonomyRuntime.registryVersion,
             registrySha256: taxonomyRuntime.registrySha256,
-            primaryTaskId: null, primaryMethodId: null, conceptIds: []
+            primaryTaskId: null, primaryMethodId: null, conceptIds: [],
+            specificityWarning: null
         }
     };
 

@@ -27,6 +27,7 @@ const FIXTURES = Object.freeze({
     'chime-2026': `<!doctype html>${ISCA_ENTRY.replaceAll('SUFFIX', 'chime')}`,
     'jep-2026': `<!doctype html>${ISCA_ENTRY.replaceAll('SUFFIX', 'jep')}`,
     'speechprosody-2026': `<!doctype html>${ISCA_ENTRY.replaceAll('SUFFIX', 'speechprosody')}`,
+    'interspeech-2026': `<!doctype html>${ISCA_ENTRY.replaceAll('SUFFIX', 'interspeech')}`,
     'iwslt-2026': `<!doctype html><article class="acl-paper" data-track="shared task">
 <a class="title" href="/2026.iwslt-1.1/">Simultaneous Translation</a>
 <div class="acl-paper-authors"><a>Alice Example</a><a>Bob Example</a></div>
@@ -131,7 +132,7 @@ test('all fixed provider adapters emit the strict core metadata schema from pure
     assert.deepEqual(odyssey.authors, ['Alice Example', 'Bob Example']);
     assert.equal(odyssey.doi, '10.21437/Odyssey.2026-1');
     assert.equal(odyssey.track, 'speaker recognition');
-    for (const providerId of ['chime-2026', 'jep-2026', 'speechprosody-2026']) {
+    for (const providerId of ['chime-2026', 'jep-2026', 'speechprosody-2026', 'interspeech-2026']) {
         const paper = acquisition.parseCatalog(providerId, FIXTURES[providerId]).papers[0];
         assert.equal(paper.title, 'Robust Speech Processing');
         assert.deepEqual(paper.authors, ['Alice Example', 'Bob Example']);
@@ -251,6 +252,35 @@ test('Odyssey excludes keynote abstract pages that have no proceedings PDF', () 
 </div></div>`;
     const metadata = acquisition.parseCatalog('odyssey-2026', html);
     assert.deepEqual(metadata.papers.map(paper => paper.id), ['alpha26_odyssey']);
+});
+
+test('Interspeech parses the ISCA index shape and excludes keynote abstract pages', () => {
+    const html = `<!doctype html><main>${ISCA_ENTRY.replaceAll('SUFFIX', 'interspeech')}
+<div class="w3-card"><h4>Keynote1 - Invited Talk</h4>
+<a class="w3-text" href="speaker26_interspeech.html"><p>Invited Talk<br>
+<span class="w3-text w3-text-theme">Carol Example</span></p></a></div></main>`;
+    const metadata = acquisition.parseCatalog('interspeech-2026', html);
+    assert.deepEqual(metadata.papers.map(paper => paper.id), ['alpha26_interspeech']);
+    assert.equal(metadata.papers[0].pdfUrl,
+        'https://www.isca-archive.org/interspeech_2026/alpha26_interspeech.pdf');
+    assert.equal(metadata.conference.id, 'interspeech-2026');
+});
+
+test('Interspeech allowlist accepts only the fixed ISCA index/record/PDF paths', () => {
+    const provider = acquisition.PROVIDERS['interspeech-2026'];
+    assert.equal(acquisition.validateFetchUrl(provider,
+        'https://www.isca-archive.org/interspeech_2026/chen26q_interspeech.pdf', 'pdf'),
+    'https://www.isca-archive.org/interspeech_2026/chen26q_interspeech.pdf');
+    assert.equal(acquisition.validateFetchUrl(provider, provider.indexUrl, 'index'), provider.indexUrl);
+    for (const value of [
+        'http://www.isca-archive.org/interspeech_2026/chen26q_interspeech.pdf',
+        'https://mirror.example/interspeech_2026/chen26q_interspeech.pdf',
+        'https://www.isca-archive.org/interspeech_2026/chen26q_interspeech.pdf?download=1',
+        'https://www.isca-archive.org/odyssey_2026/chen26q_interspeech.pdf',
+        'https://www.isca-archive.org/interspeech_2026/chen26q_odyssey.pdf'
+    ]) assert.throws(() => acquisition.validateFetchUrl(provider, value, 'pdf'), /rejected/u);
+    assert.throws(() => acquisition.validateFetchUrl(provider,
+        'https://www.isca-archive.org/odyssey_2026/index.html', 'index'), /rejected/u);
 });
 
 test('DAFx merges repeated program appearances only when their official PDF identity and metadata agree', () => {

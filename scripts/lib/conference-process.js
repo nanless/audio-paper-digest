@@ -13,10 +13,12 @@ const recovery = require('./conference-process-recovery.js');
 
 const CONTRACT = 'conference-process-v1';
 const COMPLETION_CONTRACT = 'conference-process-completion-receipt-v1';
+const TAXONOMY_REVIEW_CONTRACT = 'conference-taxonomy-review-queue-v1';
+const TAXONOMY_REVIEW_FILE = 'taxonomy-review-queue.json';
 const DEEP_EXECUTION_CONFIG_CONTRACT = 'conference-deep-execution-config-v1';
 const VERSION = 1;
 const DEEP_EXECUTION_CONFIG_VERSION = 1;
-const MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 5;
 const DEEP_EXECUTION_LIMIT_FIELDS = Object.freeze([
     'apiOverallTimeoutMs',
     'apiReaderOverallTimeoutMs',
@@ -87,6 +89,7 @@ const IMPLEMENTATION_FILES = Object.freeze([
     'scripts/lib/reader-resource-sync.js',
     'scripts/lib/reader-source-diagnostics.js',
     'scripts/lib/reader-tables.js',
+    'scripts/lib/taxonomy-registry-change.js',
     'scripts/llm-account-pool.js',
     'scripts/publish_common.py',
     'scripts/paper_identity.py',
@@ -301,9 +304,19 @@ function assertState(value, expected = null) {
         ...value.authority, implementationSha256: value.sourceImplementationSha256 }), 'conference-process-v1')) {
         throw new Error('Conference process source implementation does not bind its original identity');
     }
-    if (expected && (stableHash(value.authority) !== stableHash(expected.authority)
-        || stableHash(Object.keys(value.items).sort()) !== stableHash(expected.paperIds))) {
-        throw new Error('Conference process authority/member set drifted');
+    if (expected) {
+        // 与 context 的比对剥离词表指纹：state.taxonomy* 是进程身份史（processId 派生绑定），
+        // 换表后与当前 config 必然不同且不可就地刷新；换表强制点在封口/发布层。
+        // implementationSha256 仍参与比对（实现漂移必须先走迁移桥接）。
+        const valueAuthority = { ...value.authority };
+        const expectedAuthority = { ...expected.authority };
+        for (const key of ['taxonomyVersion', 'taxonomyRegistrySha256']) {
+            delete valueAuthority[key]; delete expectedAuthority[key];
+        }
+        if (stableHash(valueAuthority) !== stableHash(expectedAuthority)
+            || stableHash(Object.keys(value.items).sort()) !== stableHash(expected.paperIds)) {
+            throw new Error('Conference process authority/member set drifted');
+        }
     }
     const preservedComplete = new Set([
         ...(value.sourceUpgradePromotion?.preservedOriginalCompletePaperIds || []),
@@ -370,6 +383,48 @@ function validateCompletionReceipt(state, receipt, planReceiptSha256 = null) {
         throw new Error('Conference process completion receipt does not bind the current lifecycle');
     }
     return receipt;
+}
+
+// Read-side projection of the `needs_taxonomy_review` queue: items whose
+// deterministic taxonomy assignment stayed blocked. A review item never feeds
+// the completion receipt — it keeps the batch open (partial), so an unresolved
+// taxonomy can never be published as a finished classification, and its page is
+// never staged. The queue is the human-readable report of that pending work.
+function taxonomyReviewQueue(state) {
+    const checked = assertState(state);
+    const items = Object.values(checked.items)
+        .filter(item => item.reviewRequired
+            || item.lastFailure?.code === 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED')
+        .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
+            status: 'needs_taxonomy_review',
+            blockedReasons: item.reviewRequired?.blockedReasons || [],
+            registrySha256: item.reviewRequired?.registrySha256 || null,
+            assignmentSha256: item.reviewRequired?.assignmentSha256 || null,
+            lastError: item.lastError || null }))
+        .sort((left, right) => left.paperId.localeCompare(right.paperId));
+    const body = { contract: TAXONOMY_REVIEW_CONTRACT, version: VERSION,
+        processId: checked.processId, conferenceId: checked.authority.conferenceId,
+        stateGeneration: checked.generation, taxonomyReview: items.length, items };
+    return { ...body, queueSha256: stableHash(body) };
+}
+function writeTaxonomyReviewQueue(directory, queue) {
+    const filename = path.join(directory, TAXONOMY_REVIEW_FILE);
+    if (!queue.taxonomyReview) {
+        if (fs.existsSync(filename)) fs.rmSync(filename);
+        return null;
+    }
+    const bytes = Buffer.from(`${JSON.stringify(queue, null, 2)}\n`);
+    const temporary = path.join(directory, `.taxonomy-review-queue.${sha256(bytes).slice(0, 12)}.tmp`);
+    const descriptor = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+    try { fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); }
+    finally { fs.closeSync(descriptor); }
+    fs.renameSync(temporary, filename);
+    return filename;
+}
+function reviewQueueProjection(queue, directory) {
+    if (!queue.taxonomyReview) return {};
+    return { taxonomyReviewQueue: queue.items,
+        taxonomyReviewQueueFile: path.join(directory, TAXONOMY_REVIEW_FILE) };
 }
 
 function defaultDependencies() {
@@ -625,6 +680,22 @@ async function processOne(context, shared, item, deps) {
         executionId: item.analysisRunId, taxonomyFile: files.taxonomyRegistry,
         stagingRoot: files.conferencePageStagingDir, planHandle: shared.planHandle,
         sourceRoot: shared.sourceCacheRoot, apply: true });
+    if (staged.status === 'blocked') {
+        // Deterministic taxonomy review: the assignment is unresolved, so the
+        // stage wrote assignment.json only (fail-closed, no page.md/manifest).
+        // This is a per-paper review condition, never a batch/system failure.
+        const assignment = staged.assignment || {};
+        const blockedReasons = Array.isArray(assignment.blockedReasons) ? assignment.blockedReasons : [];
+        const error = new Error(`taxonomy review required for ${item.paperId}: `
+            + `${blockedReasons.join('; ') || 'unresolved taxonomy selection'}`);
+        error.code = 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED';
+        error.retryable = false;
+        error.taxonomyReview = { paperId: item.paperId, analysisRunId: item.analysisRunId,
+            status: 'needs_taxonomy_review', blockedReasons,
+            registrySha256: assignment.registrySha256 || null,
+            assignmentSha256: assignment.assignmentSha256 || null };
+        throw error;
+    }
     if (staged.status !== 'staged') throw new Error(`paper postprocess remained ${staged.status}`);
     return { analysisProof: { analysisSha256: analyzed.analysisSha256,
         completionReceiptSha256: staged.manifest.completionReceiptSha256,
@@ -660,6 +731,11 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
         return initialState(context.authority, context.members, processId, deps.now());
     }, { allowMissing: true });
     state = assertState(state || JSON.parse(fs.readFileSync(stateFile)), expected);
+    const publishReviewQueue = current => {
+        const queue = taxonomyReviewQueue(current);
+        writeTaxonomyReviewQueue(directory, queue);
+        return queue;
+    };
     if (state.status === 'complete') {
         validateCompletionReceipt(state, JSON.parse(fs.readFileSync(path.join(directory, 'completion-receipt.json'))));
     }
@@ -699,10 +775,14 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
         next.generation += 1; next.updatedAt = deps.now(); next.stateSha256 = stateDigest(next);
         return assertState(next, expected);
     }) || state;
-    if (state.batchFailure && !options.retryFailed) return { status: 'partial', processId,
-        conferenceId: context.authority.conferenceId, stopped: true, batchFailure: state.batchFailure,
-        complete: Object.values(state.items).filter(item => item.status === 'complete').length,
-        failed: Object.values(state.items).filter(item => item.status !== 'complete').length };
+    if (state.batchFailure && !options.retryFailed) {
+        const review = publishReviewQueue(state);
+        return { status: 'partial', processId,
+            conferenceId: context.authority.conferenceId, stopped: true, batchFailure: state.batchFailure,
+            complete: Object.values(state.items).filter(item => item.status === 'complete').length,
+            failed: Object.values(state.items).filter(item => item.status !== 'complete').length,
+            taxonomyReview: review.taxonomyReview, ...reviewQueueProjection(review, directory) };
+    }
     const sourceContext = { ...context, authority: { ...context.authority,
         implementationSha256: recovery.sourceImplementation(state, directory, module.exports) } };
     const shared = await (deps.prepareShared || prepareShared)(sourceContext, deps, state.createdAt);
@@ -745,12 +825,18 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
         try {
             const proof = await (deps.processPaper || processOne)(context, shared, item, deps);
             updateItem(item.paperId, ['analyzing'], current => ({ ...current, ...proof,
-                status: 'complete', lastError: null, lastFailure: null, retryNotBefore: null, updatedAt: deps.now() }));
+                status: 'complete', lastError: null, lastFailure: null, reviewRequired: null,
+                retryNotBefore: null, updatedAt: deps.now() }));
         } catch (error) {
             const failure = recovery.classifyFailure(error, deps.now());
             if (failure.systemic) stopped = true;
             updateItem(item.paperId, ['analyzing'], current => ({ ...current,
                 status: 'analysis_partial', lastError: failure.message, lastFailure: failure,
+                // A taxonomy review is an explicit, per-paper pending state; it is
+                // reported through the review queue instead of a generic failure.
+                ...(error.taxonomyReview
+                    ? { reviewRequired: { ...error.taxonomyReview, classifiedAt: failure.at } }
+                    : {}),
                 retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString(), updatedAt: deps.now() }));
             if (failure.systemic) deps.engine.updateJsonFileLocked(stateFile, current => {
                 const next = clone(assertState(current, expected)); next.batchFailure = failure;
@@ -770,11 +856,18 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
         });
         state = assertState(state || JSON.parse(fs.readFileSync(stateFile)), expected);
         incomplete = Object.values(state.items).filter(item => item.status !== 'complete');
-        if (incomplete.length) return { status: 'partial', processId, conferenceId: context.authority.conferenceId,
-            complete: context.members.length - incomplete.length, failed: incomplete.length,
-            ...(state.batchFailure ? { stopped: true, batchFailure: state.batchFailure } : {}),
-            deferred: incomplete.filter(item => !recovery.eligible(item, deps.now())).length };
+        if (incomplete.length) {
+            const review = publishReviewQueue(state);
+            return { status: 'partial', processId, conferenceId: context.authority.conferenceId,
+                complete: context.members.length - incomplete.length, failed: incomplete.length,
+                ...(state.batchFailure ? { stopped: true, batchFailure: state.batchFailure } : {}),
+                deferred: incomplete.filter(item => !recovery.eligible(item, deps.now())).length,
+                taxonomyReview: review.taxonomyReview, ...reviewQueueProjection(review, directory) };
+        }
     }
+    // Every member is complete: no taxonomy review is pending, so any stale
+    // queue sidecar is removed before the aggregate/completion transaction.
+    publishReviewQueue(state);
     assertRuntimeAuthorityUnchanged(context, deps, 'before aggregate');
     const executionIds = context.members.map(member => state.items[member.paperId].analysisRunId);
     const aggregate = await (deps.aggregate || (async () => deps.postprocess.aggregateConference({
@@ -803,14 +896,15 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
         next.stateSha256 = stateDigest(next); return assertState(next, expected); });
     validateCompletionReceipt(assertState(state, expected), receipt, shared.planReceiptSha256);
     return { status: 'complete', processId, conferenceId: context.authority.conferenceId,
-        papers: context.members.length, completionReceiptSha256: receipt.receiptSha256, aggregate: aggregateProof };
+        papers: context.members.length, completionReceiptSha256: receipt.receiptSha256, aggregate: aggregateProof,
+        taxonomyReview: 0 };
 }
 
 async function runConferenceProcess(options, overrides = {}) {
     if (!options || typeof options.apply !== 'boolean' || !Number.isInteger(options.concurrency)
         || (options.retryFailed !== undefined && typeof options.retryFailed !== 'boolean')
         || options.concurrency < 1 || options.concurrency > MAX_CONCURRENCY) {
-        throw new Error('conference process requires explicit mode and concurrency 1-3');
+        throw new Error('conference process requires explicit mode and concurrency 1-5');
     }
     const deps = { ...defaultDependencies(), ...overrides };
     const context = (deps.loadAuthority || loadAuthority)(options, deps);
@@ -825,11 +919,13 @@ async function runConferenceProcess(options, overrides = {}) {
     ), { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
-module.exports = { CONTRACT, COMPLETION_CONTRACT, VERSION, MAX_CONCURRENCY, stableHash, deterministicUuid, canonicalBytes,
+module.exports = { CONTRACT, COMPLETION_CONTRACT, TAXONOMY_REVIEW_CONTRACT, TAXONOMY_REVIEW_FILE, VERSION,
+    MAX_CONCURRENCY, stableHash, deterministicUuid, canonicalBytes,
     DEEP_EXECUTION_CONFIG_CONTRACT, DEEP_EXECUTION_CONFIG_VERSION, DEEP_EXECUTION_LIMIT_FIELDS,
     deepExecutionConfigIdentity, assertDeepExecutionConfigIdentity, currentDeepExecutionConfigIdentity,
     assertRuntimeAuthorityUnchanged,
-    stateDigest, assertState, completionBodyFor, validateCompletionReceipt, defaultDependencies, loadAuthority,
+    stateDigest, assertState, completionBodyFor, validateCompletionReceipt, taxonomyReviewQueue,
+    writeTaxonomyReviewQueue, reviewQueueProjection, defaultDependencies, loadAuthority,
     namesFor, sourceNames, sealOneSource, prepareShared,
     IMPLEMENTATION_FILES, implementationSha256, processOne, runWorkers, assertSourceContinuity,
     runConferenceProcessLocked, runConferenceProcess, safeProcessDirectory, exactFile };

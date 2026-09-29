@@ -58,6 +58,112 @@ test('current selection accepts only preferred Chinese labels and rejects hierar
     assert.match(redundant.errors.join('\n'), /最具体|祖先/);
 });
 
+test('selection contract caps the task facet at one primary plus two supplemental tasks', () => {
+    const runtime = createTaxonomyRuntime({ registryPath });
+    const fourTasks = runtime.validateTagSelection({
+        tags: ['#语音合成', '#语音克隆', '#音视频生成', '#音频理解', '#Transformer'],
+        primaryTaskTag: '#语音合成',
+        primaryMethodTag: '#Transformer'
+    });
+    assert.equal(fourTasks.valid, false);
+    assert.deepEqual(fourTasks.errors, [
+        'task 分面标签必须为 1-3 个（主任务 1 个 + 次任务 ≤2 个），'
+        + '当前 4 个: #语音合成 #语音克隆 #音视频生成 #音频理解'
+    ]);
+    assert.deepEqual(fourTasks.conceptIds, []);
+
+    const threeTasks = runtime.validateTagSelection({
+        tags: ['#语音合成', '#语音克隆', '#语音转换', '#Transformer'],
+        primaryTaskTag: '#语音合成',
+        primaryMethodTag: '#Transformer'
+    });
+    assert.equal(threeTasks.valid, true, threeTasks.errors.join('; '));
+    assert.deepEqual(threeTasks.conceptIds, [
+        'task.speech-synthesis', 'task.voice-cloning',
+        'task.voice-conversion', 'method.transformer'
+    ]);
+
+    const noTaskFacet = runtime.validateTagSelection({
+        tags: ['#Transformer', '#低资源', '#基准测试'],
+        primaryTaskTag: '#不是任务标签',
+        primaryMethodTag: '#Transformer'
+    });
+    assert.equal(noTaskFacet.valid, false);
+    assert.ok(noTaskFacet.errors.some(error => /task 分面标签必须为 1-3 个.*当前 0 个$/.test(error)),
+        noTaskFacet.errors.join('; '));
+});
+
+test('primary task specificity is a whole-registry warning that never invalidates a sealed replay', () => {
+    const runtime = createTaxonomyRuntime({ registryPath });
+    const analysis = [
+        '## 机器摘要',
+        'primary_task_tag: #语音识别',
+        'primary_method_tag: #Transformer',
+        '',
+        '## 标签',
+        '#语音识别 #低资源 #Transformer',
+        '主任务标签：#语音识别',
+        '主方法标签：#Transformer',
+        '补充标签：#低资源',
+        ''
+    ].join('\n');
+
+    // 非叶主任务：valid 保持 true，只给出结构化 specificityWarning。
+    const parsed = parseAnalysis(analysis);
+    assert.equal(parsed.taxonomyValidation.valid, true,
+        parsed.taxonomyValidation.errors.join('; '));
+    assert.equal(parsed.taxonomyValidation.specificityWarning,
+        '主任务标签欠具体: #语音识别 存在未选择的 active 后代（共 1 个）: #音视频语音识别');
+
+    // 叶节点主任务没有 active 后代 → 无告警。
+    const leaf = runtime.validateTagSelection({
+        tags: ['#音视频语音识别', '#低资源', '#Transformer'],
+        primaryTaskTag: '#音视频语音识别',
+        primaryMethodTag: '#Transformer'
+    });
+    assert.equal(leaf.valid, true, leaf.errors.join('; '));
+    assert.equal(leaf.specificityWarning, null);
+
+    // 告警不阻断标签节门禁，也不阻断已封口 taxonomySeal stage 的回放验证。
+    assert.strictEqual(contract.validateTagSectionContract(analysis, parsed), null);
+    const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
+    const binding = {
+        registryVersion: runtime.registryVersion,
+        registrySha256: runtime.registrySha256,
+        projectionContract: runtime.projectionContract,
+        projectionSha256: runtime.projectionSha256,
+        selectionContract: runtime.selectionContract,
+        inputAnalysisSha256: textSha(analysis),
+        outputAnalysisSha256: textSha(analysis),
+        inputProtectedProjectionSha256: textSha(
+            require('../scripts/deep-analyzer.js').taxonomyProtectedProjection(analysis)),
+        outputProtectedProjectionSha256: textSha(
+            require('../scripts/deep-analyzer.js').taxonomyProtectedProjection(analysis)),
+        taxonomySurfaceSha256: contract.taxonomySurfaceSha256(analysis),
+        primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
+        primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
+        conceptIds: parsed.taxonomyValidation.conceptIds
+    };
+    const paper = {
+        analysis,
+        analysisStageCheckpoints: { taxonomySeal: analysis },
+        analysisManifest: {
+            contracts: { taxonomy: runtime.selectionContract },
+            stages: {
+                structureRepair: { outputAnalysisSha256: binding.inputAnalysisSha256 },
+                taxonomySeal: {
+                    status: 'not_needed', ...binding,
+                    bindingSha256: contract.manualSha256(binding)
+                },
+                coreSummaryRepair: { inputAnalysisSha256: binding.outputAnalysisSha256 }
+            }
+        }
+    };
+    assert.strictEqual(contract.validateTaxonomyStageBinding(paper, {
+        parsed, taxonomyRuntime: runtime
+    }), null);
+});
+
 test('research-method coverage gives dataset, benchmark, subjective, review and theory papers a real method', () => {
     const runtime = createTaxonomyRuntime({ registryPath });
     const cases = [

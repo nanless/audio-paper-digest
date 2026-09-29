@@ -167,6 +167,14 @@ _PAGE_TAXONOMY_BY_ID = {
     item['id']: item for item in _PAGE_TAXONOMY['concepts']
     if item['status'] == 'active'
 }
+# 只读 registry 快照：博客端（Hugo 模板 + 浏览器搜索）需要 id/facet/zh/en/
+# aliases/ancestorIds，而页面 frontmatter 只带 {id, facet, label}。快照字节
+# 只由 registry 决定，因此与 ``paper_digest_taxonomy_registry_sha256`` 同源。
+TAXONOMY_REGISTRY_SNAPSHOT_CONTRACT = 'paper-taxonomy-registry-snapshot-v1'
+# Hugo 只把 ``data/`` 当模板输入，不会发布到 ``public/``；浏览器端搜索因此
+# 还需要一份字节完全相同的静态副本。
+TAXONOMY_REGISTRY_SNAPSHOT_RELATIVE = Path('data') / 'taxonomy-registry.json'
+TAXONOMY_REGISTRY_STATIC_RELATIVE = Path('static') / 'data' / 'taxonomy-registry.json'
 RESEARCHER_SIDECAR_FILENAMES = (
     'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json',
 )
@@ -1631,6 +1639,50 @@ def _rasterize_svg_for_review(raw):
     return png
 
 
+_IMAGE_REPO_SUFFIX_MIME = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+}
+
+
+def _load_local_image_repo_projection(url):
+    """Read our own pre-push image-repository URL from the local worktree.
+
+    Conference review runs before push: generate stages figure bytes into the
+    image repository working tree without committing them, while the rendered
+    Markdown already cites the canonical raw.githubusercontent main URL.
+    Resolving that exact path locally keeps review read-only for both
+    repositories and lets the later push commit the very bytes that passed
+    review.  Paths outside the image repository (or not staged locally) return
+    None so the caller falls back to the pinned remote download.
+    """
+    match = re.fullmatch(r'https://raw\.githubusercontent\.com/[^/]+/([^/]+)/main/([^?#]+)', url)
+    if not match:
+        return None
+    repo_name, relative = match.groups()
+    image_repo = Path(
+        os.environ.get('PAPER_DIGEST_IMAGE_REPO',
+                       str(Path.home() / 'code' / 'github_repos' / 'audio-paper-digest-images'))
+    ).expanduser().resolve()
+    if repo_name != image_repo.name or not relative:
+        return None
+    target = (image_repo / relative).resolve()
+    if not target.is_relative_to(image_repo) or target.is_symlink() or not target.is_file():
+        return None
+    media_type = _IMAGE_REPO_SUFFIX_MIME.get(target.suffix.lower())
+    if media_type not in REVIEW_IMAGE_MIME_TYPES:
+        return None
+    raw = target.read_bytes()
+    if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
+        raise PublishDataValidationError('本地图片仓图片为空或超过 8 MiB review 上限')
+    _validate_image_signature(media_type, raw)
+    if media_type == 'image/svg+xml':
+        raw = _rasterize_svg_for_review(raw)
+        media_type = 'image/png'
+    media_type, raw = _prepare_raster_for_review(media_type, raw)
+    return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
+
+
 def _load_review_image(url):
     if url.startswith('data:'):
         match = re.fullmatch(r'data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)', url)
@@ -1653,6 +1705,9 @@ def _load_review_image(url):
         media_type, raw = _prepare_raster_for_review(media_type, raw)
         return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
     if url.startswith('https://'):
+        local_payload = _load_local_image_repo_projection(url)
+        if local_payload is not None:
+            return local_payload
         return _download_review_image(url)
     base = BASE_PATH.rstrip('/')
     allowed_prefixes = (
@@ -1783,7 +1838,7 @@ def multimodal_review_images(content, title="", required=False):
         )
         before = content[max(previous_end, match['start'] - 600):match['start']]
         after = content[match['end']:min(next_start, match['end'] + 600)]
-        nearby = (before + f'图片（alt：{alt}）' + after).strip()
+        nearby = (before + match['raw'] + after).strip()
         try:
             image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:
@@ -1832,6 +1887,7 @@ def multimodal_review_images(content, title="", required=False):
 - 摘要中的格式（如"外部图片: url | alt: ..."）只是元数据展示，**不要**因为摘要格式而误判
 - 摘要中的 URL 可能为了简洁而截断，但博客正文中的 URL 是完整的
 - 如果博客正文中所有图片都使用 `![alt](url)` 格式，则格式检查项应视为通过
+- 发布清洗器可能把远程图包成自链接 `[![alt](url)](url)`；内层仍是标准图片语法，这种等 URL 外层链接是合法的，不要报“普通链接格式错误”
 
 博客标题：{title}
 图片元数据摘要：
@@ -2525,6 +2581,109 @@ def _researcher_public_url(relative):
     return f'{base_path}/{relative.relative_to("static").as_posix()}'
 
 
+def build_taxonomy_registry_snapshot(taxonomy=None):
+    """Fold the read-only registry into the compact blog-search snapshot.
+
+    Each concept carries ``id``/``facet``/``zh``/``en``/``aliases`` plus
+    ``ancestorIds`` ordered root first, so the blog can recall a child paper
+    from a parent concept (e.g. ``method.lora`` from 参数高效微调) and match
+    registry aliases (e.g. 说话人日志 → task.diarization) without ever
+    re-deriving taxonomy semantics client-side.
+    """
+    data = _PAGE_TAXONOMY if taxonomy is None else taxonomy
+    if not isinstance(data, dict):
+        raise PublishDataValidationError('taxonomy registry 快照输入非法')
+    registry_sha256 = data.get('registrySha256')
+    if not isinstance(registry_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', registry_sha256):
+        raise PublishDataValidationError('taxonomy registry 快照缺少有效 registrySha256')
+    registry_version = data.get('version')
+    if not isinstance(registry_version, str) or not registry_version:
+        raise PublishDataValidationError('taxonomy registry 快照缺少 registryVersion')
+    concepts = data.get('concepts')
+    if not isinstance(concepts, list) or not concepts:
+        raise PublishDataValidationError('taxonomy registry 快照缺少 concepts')
+    records = {}
+    ordered = []
+    for concept in concepts:
+        if not isinstance(concept, dict):
+            raise PublishDataValidationError('taxonomy registry 快照含非法 concept')
+        concept_id = concept.get('id')
+        preferred = concept.get('preferredLabel')
+        aliases = concept.get('aliases')
+        if (not isinstance(concept_id, str) or not concept_id or concept_id in records
+                or not isinstance(concept.get('facet'), str) or not concept.get('facet')
+                or not isinstance(preferred, dict)
+                or not isinstance(preferred.get('zh'), str) or not preferred.get('zh')
+                or not isinstance(preferred.get('en'), str) or not preferred.get('en')
+                or not isinstance(aliases, list)
+                or any(not isinstance(alias, str) or not alias for alias in aliases)):
+            raise PublishDataValidationError(
+                f'taxonomy registry 快照 concept 非法: {concept_id!r}'
+            )
+        record = {
+            'id': concept_id,
+            'facet': concept['facet'],
+            'zh': preferred['zh'],
+            'en': preferred['en'],
+            'aliases': list(aliases),
+            'ancestorIds': [],
+        }
+        records[concept_id] = (record, concept)
+        ordered.append(record)
+    for record, concept in records.values():
+        chain = []
+        seen = {concept['id']}
+        parent_id = concept.get('broaderId')
+        while parent_id is not None:
+            parent = records.get(parent_id)
+            if parent is None or parent_id in seen:
+                raise PublishDataValidationError(
+                    f'taxonomy registry 快照祖先链非法: {concept["id"]}'
+                )
+            seen.add(parent_id)
+            chain.append(parent_id)
+            parent_id = parent[1].get('broaderId')
+        record['ancestorIds'] = list(reversed(chain))
+    return {
+        'contract': TAXONOMY_REGISTRY_SNAPSHOT_CONTRACT,
+        'registryVersion': registry_version,
+        'registrySha256': registry_sha256,
+        'concepts': ordered,
+    }
+
+
+def taxonomy_registry_snapshot_bytes(snapshot):
+    """Canonical, timestamp-free bytes: identical registry ⇒ identical file."""
+    if not isinstance(snapshot, dict):
+        raise PublishDataValidationError('taxonomy registry 快照对象非法')
+    return (
+        json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+        + '\n'
+    ).encode('utf-8')
+
+
+def export_taxonomy_registry_snapshot(blog_repo=None):
+    """Write the registry snapshot into the blog repo (read-only wrt registry).
+
+    Returns the paths actually rewritten.  Unchanged bytes are left untouched so
+    repeated generation runs do not dirty the blog worktree, and a missing blog
+    root (only reachable from synthetic/fail-fast callers) writes nothing.
+    """
+    repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
+    if not repo.is_dir():
+        return []
+    raw = taxonomy_registry_snapshot_bytes(build_taxonomy_registry_snapshot())
+    written = []
+    for relative in (
+            TAXONOMY_REGISTRY_SNAPSHOT_RELATIVE, TAXONOMY_REGISTRY_STATIC_RELATIVE):
+        target = repo / relative
+        if target.is_file() and target.read_bytes() == raw:
+            continue
+        _atomic_write_bytes(target, raw)
+        written.append(target)
+    return written
+
+
 def build_flat_taxonomy_compat_metadata(parsed, *, required=False):
     """Bind current taxonomy semantics while retaining Hugo's flat ``tags`` field.
 
@@ -3151,7 +3310,9 @@ def _detailed_core_summary_semantic_issue(summary):
         r'[^。！？!?\n]{0,50}(?:升至|降至)\s*[-+]?\d',
     )
     number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
-    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|\b(?:on|test|benchmark|evaluation)\b)', re.IGNORECASE)
+    # Match English setting labels beside Chinese text the same way JavaScript
+    # does: Python treats Han characters as `\w`, while JS `\b` does not.
+    setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|(?<![A-Za-z0-9_])(?:on|test|benchmark|evaluation)(?![A-Za-z0-9_]))', re.IGNORECASE)
     named_setting = re.compile(
         r'(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)'
         r'|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))',
@@ -3620,7 +3781,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
     md += "\n---\n\n"
     md += (
         "## 📋 论文列表\n\n"
-        "> 🖼️ 有图的论文会在这里展示首张原论文图；点击图片可打开 arXiv 原图。\n\n"
+        "> 🖼️ 有图的论文会在这里展示首张原论文图；原图链接见对应独立页面。\n\n"
     )
 
     def index_figure_preview(paper, reader_article):
@@ -3666,7 +3827,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
                 local_image = stripped.replace(f'({source_url})', f'({local_url})', 1)
             else:
                 local_image = stripped
-            return f'[{local_image}]({source_url})'
+            return local_image
         return ''
 
     for i, (score, p, pa) in enumerate(scored):
@@ -5968,7 +6129,11 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                     )
                 else:
                     content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
-                content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
+                # Numbered source sections in legacy prose are formatting noise,
+                # but numbered headings in the canonical API Reader article are
+                # source-bound bytes and must survive final-page replay intact.
+                if key != 'readerArticle':
+                    content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
                 if key == 'scoringReason':
                     if reader_first:
@@ -11601,6 +11766,20 @@ def generate_main(options=None):
         shutil.rmtree(generation_stage_path(today).parent, ignore_errors=True)
         print(f'♻️ 相同 generation 已完整安装，复用生成清单且保留 review 状态: {manifest_path}')
         return
+
+    # 线上搜索的祖先召回/别名召回依赖 registry 快照。它只随 registry 变化，
+    # 且被 Hugo 运行时指纹覆盖，因此必须在本次 staging/gate 之前同步。
+    try:
+        snapshot_paths = export_taxonomy_registry_snapshot(blog_repo)
+    except (OSError, PublishDataValidationError) as exc:
+        print(f"\n❌ taxonomy registry 快照导出失败，未生成任何博客文件: {exc}")
+        sys.exit(1)
+    for snapshot_path in snapshot_paths:
+        try:
+            shown = Path(snapshot_path).relative_to(Path(blog_repo).resolve())
+        except ValueError:
+            shown = snapshot_path
+        print(f'🧾 taxonomy registry 快照: {shown}')
 
     publish_paths = []
     try:

@@ -155,6 +155,23 @@ test('apply closes each conference in order and does not rerun published entries
     assert.deepEqual(second.entries.map(entry => entry.status), ['published', 'published']);
 });
 
+test('a taxonomy review queue is reported by the queue instead of a generic process failure', async t => {
+    const f = fixture(t, 1); const events = [];
+    const blockedReasons = ['primary-task:unknown:#不存在的主任务'];
+    const paperId = 'conference:odyssey:2026:conference-paper-id:paper.7';
+    const deps = dependencies(f, events, {
+        apply: async entry => ({ status: 'partial', conferenceId: entry.conferenceId,
+            taxonomyReview: 1, taxonomyReviewQueue: [{ paperId, blockedReasons }] })
+    });
+    const result = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan }, deps);
+    assert.equal(result.status, 'paused');
+    const entry = result.entries[0];
+    assert.equal(entry.status, 'paused'); assert.equal(entry.stage, 'process');
+    assert.match(entry.failure.message, /taxonomy review pending for 1 paper\(s\)/);
+    assert.match(entry.failure.message, new RegExp(`${paperId} \\[primary-task:unknown:`));
+    assert.equal(events.includes('generate:odyssey-2026'), false);
+});
+
 test('a publisher failure is retained at its stage and resume uses the complete process', async t => {
     const f = fixture(t, 1); const events = []; let failReview = true;
     const deps = dependencies(f, events, {

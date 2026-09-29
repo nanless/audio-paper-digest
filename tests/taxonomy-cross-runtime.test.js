@@ -88,6 +88,18 @@ ${method === undefined ? '' : `主方法标签: ${method}`}
         { name: 'duplicate-selection-rejected', legacyTags: false, text: document({
             tags: '#语音识别 #语音识别 #Transformer', task: '#语音识别', method: '#Transformer'
         }) },
+        { name: 'four-task-facet-selection-rejected', legacyTags: false, text: document({
+            tags: '#语音合成 #语音克隆 #音视频生成 #音频理解 #Transformer',
+            task: '#语音合成', method: '#Transformer'
+        }) },
+        { name: 'three-task-facet-selection-accepted-with-specificity-warning', legacyTags: false,
+            text: document({
+                tags: '#语音合成 #语音克隆 #语音转换 #Transformer',
+                task: '#语音合成', method: '#Transformer'
+            }) },
+        { name: 'non-leaf-primary-task-warns-but-stays-valid', legacyTags: false, text: document({
+            tags: '#语音识别 #低资源 #Transformer', task: '#语音识别', method: '#Transformer'
+        }) },
         { name: 'missing-tag-section-rejected', legacyTags: false,
             text: '## 评分\n6.0/10\n\n## 机器摘要\nprimary_task_tag: #语音识别\nprimary_method_tag: #Transformer\n' },
     ];

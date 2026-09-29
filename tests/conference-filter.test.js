@@ -216,8 +216,8 @@ test('core audio conferences fail open while broad conferences retain determinis
     assert.equal(broad.pass, false);
     assert.equal(broad.conferenceCategoryFallback, false);
     assert.deepEqual(filter.CORE_AUDIO_CONFERENCE_IDS,
-        ['chime-2026', 'dafx-2026', 'icmc-2026', 'iwslt-2026', 'jep-2026', 'nime-2026', 'odyssey-2026',
-            'speechprosody-2026']);
+        ['chime-2026', 'dafx-2026', 'icmc-2026', 'interspeech-2026', 'iwslt-2026', 'jep-2026', 'nime-2026',
+            'odyssey-2026', 'speechprosody-2026']);
     assert.equal(filter.FILTER_CONFIG_BINDING.coreConferenceFallbackVersion,
         filter.CORE_CONFERENCE_FALLBACK_VERSION);
 });

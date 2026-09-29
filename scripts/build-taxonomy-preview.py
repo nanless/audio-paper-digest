@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build a private metadata-only taxonomy shadow index; never rewrite papers."""
+"""Build a private metadata-only taxonomy shadow index; never rewrite papers.
+
+Also emits the seven-state legacy tag disposition table
+(keep / alias / broader / split_review / move_facet / deprecated / out_of_scope)
+with the original tag and status columns preserved verbatim.
+"""
 
 import argparse
 import collections
@@ -19,7 +24,8 @@ import path_config
 import taxonomy_paths
 from markdown_hugo_gate import parse_frontmatter_content
 from paper_taxonomy import (FACET_IDS, LABEL_MODE_LEGACY, ancestors,
-                            load_taxonomy, prune_ancestors, resolve_label)
+                            load_taxonomy, normalize_label, prune_ancestors,
+                            resolve_label)
 from project_env import build_child_process_env, load_project_env
 from runtime_guard import require_external_runtime
 
@@ -29,6 +35,19 @@ BUNDLE_VERSION = 'paper-taxonomy-preview-bundle-v1'
 MAX_PAGE_BYTES = 8 * 1024 * 1024
 ARXIV_ID = re.compile(r'\d{4}\.\d{4,5}(?:v[1-9]\d*)?')
 
+# 七态处置（docs/tag-taxonomy-design.md 5.3）：每个旧标签最终必须落入其一，
+# 保留原值、不静默删除；空 disposition 表示“尚未处置”，不是第八态。
+DISPOSITION_SCHEMA = 'paper-taxonomy-seven-state-disposition-v1'
+DISPOSITIONS = ('keep', 'alias', 'broader', 'split_review', 'move_facet',
+                'deprecated', 'out_of_scope')
+# 旧列原样保留（语义不变），新列只做追加，兼容既有 CSV/报告消费方。
+LEGACY_CSV_COLUMNS = ('tag', 'pageCount', 'status', 'conceptId', 'facet', 'semanticReview')
+DISPOSITION_CSV_COLUMNS = ('tag', 'pageCount', 'disposition', 'status', 'conceptId',
+                           'facet', 'semanticReview', 'evidence')
+# “仅上位命中”判定要求上位中文首选标签至少这么长，避免两字泛词误命中。
+MIN_UPPER_LABEL_CHARS = 3
+PENDING_RULE = '未处置行保留原值待评审；deprecated/out_of_scope 必须有跨会零命中扫描证据 + 人工评审，禁按单会议频次判定'
+
 
 def sha256(value):
     return hashlib.sha256(value).hexdigest()
@@ -36,6 +55,155 @@ def sha256(value):
 
 def stable_hash(value):
     return sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+
+
+def parse_evidence(value, where):
+    """evidence 在内存里必须是 JSON 对象；CSV 里是它的紧凑 JSON 字符串。"""
+    if value is None or value == '':
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError as error:
+            raise ValueError(f'{where}: evidence 必须是 JSON 对象 ({error})') from error
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError(f'{where}: evidence 必须是 JSON 对象')
+
+
+def upper_label_candidates(taxonomy, tag):
+    """确定性“仅上位命中”检测：未直接命中的标签里，唯一被包含的 active 上位标签。
+
+    只做字面包含判断，不做任何语义推断；命中结果写进 evidence 供人工复核。
+    """
+    normalized = normalize_label(tag)
+    if not normalized:
+        return []
+    found = {}
+    for concept in taxonomy['concepts']:
+        if concept['status'] != 'active':
+            continue
+        label = normalize_label(concept['preferredLabel']['zh'])
+        if len(label) >= MIN_UPPER_LABEL_CHARS and label != normalized and label in normalized:
+            found.setdefault(concept['id'], {'conceptId': concept['id'],
+                                             'label': concept['preferredLabel']['zh']})
+    return [found[cid] for cid in sorted(found)]
+
+
+def initial_disposition(tag, concept, taxonomy):
+    """七态初始值：只用字面 registry 解析，不重算语义（semanticReview 仍 not_performed）。
+
+    返回 (disposition, evidence)；空 disposition = 尚未处置，必须带 evidence.reason。
+    """
+    if concept is not None:
+        if concept['status'] != 'active':
+            return '', {'reason': '字面命中 deprecated 概念：须跨会零命中扫描 + 人工评审后才能判 deprecated'}
+        normalized = normalize_label(tag)
+        if normalized == normalize_label(concept['preferredLabel']['zh']):
+            return 'keep', {'matchKind': 'zh_preferred_label'}
+        if normalized == normalize_label(concept['preferredLabel']['en']):
+            return 'alias', {'matchKind': 'en_preferred_label'}
+        return 'alias', {'matchKind': 'alias'}
+    candidates = upper_label_candidates(taxonomy, tag)
+    if len(candidates) == 1:
+        return 'broader', {'matchKind': 'upper_label_containment',
+                           'upperConceptId': candidates[0]['conceptId'],
+                           'upperLabel': candidates[0]['label']}
+    if candidates:
+        return '', {'reason': '同时命中多个上位标签，待人工判定是否拆分（可升级为 split_review）',
+                    'candidates': candidates}
+    return '', {'reason': 'registry 字面解析零命中，待语义/人工评审'}
+
+
+def build_dispositions(counts, resolved, taxonomy):
+    rows = [{'tag': tag, 'pageCount': count, 'disposition': None, 'status': 'mapped' if resolved[tag] else 'needs_review',
+             'conceptId': resolved[tag]['id'] if resolved[tag] else '',
+             'facet': resolved[tag]['facet'] if resolved[tag] else '',
+             'semanticReview': 'not_performed', 'evidence': None}
+            for tag, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+    for row in rows:
+        disposition, evidence = initial_disposition(row['tag'], resolved[row['tag']], taxonomy)
+        row['disposition'], row['evidence'] = disposition, evidence
+    return validate_disposition_rows(rows)
+
+
+def validate_disposition_rows(rows):
+    """七态互斥与证据校验；旧六列形状的行按旧 schema 直接放行。"""
+    if not isinstance(rows, list):
+        raise ValueError('dispositions: 必须是数组')
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get('tag'), str) or not row['tag']:
+            raise ValueError('disposition 行缺少 tag')
+        tag = row['tag']
+        if tag in seen:
+            raise ValueError(f'{tag}: disposition 行重复')
+        seen.add(tag)
+        status = row.get('status')
+        if status not in ('mapped', 'needs_review'):
+            raise ValueError(f'{tag}: status 必须是 mapped 或 needs_review')
+        # 旧列形状：既没有 disposition 也没有 evidence → 兼容读取，不施加七态校验。
+        if 'disposition' not in row and 'evidence' not in row:
+            continue
+        disposition = row.get('disposition') or ''
+        if disposition not in ('', *DISPOSITIONS):
+            raise ValueError(f'{tag}: disposition {disposition!r} 不属于七态 {DISPOSITIONS}')
+        evidence = parse_evidence(row.get('evidence'), tag)
+        if not disposition:
+            reason = evidence.get('reason')
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(f'{tag}: 空 disposition（尚未处置）必须在 evidence.reason 写明原因')
+            continue
+        if disposition in ('keep', 'alias'):
+            if status != 'mapped':
+                raise ValueError(f'{tag}: {disposition} 只能出现在 status=mapped 行（互斥）')
+            if not isinstance(row.get('conceptId'), str) or not row.get('conceptId'):
+                raise ValueError(f'{tag}: {disposition} 必须携带 conceptId')
+        elif disposition == 'broader':
+            if status != 'needs_review' or not isinstance(evidence.get('upperConceptId'), str) \
+                    or not evidence['upperConceptId']:
+                raise ValueError(f'{tag}: broader 只能来自“仅上位命中”（status=needs_review + evidence.upperConceptId）')
+        elif disposition == 'split_review':
+            if status != 'needs_review':
+                raise ValueError(f'{tag}: split_review 只能出现在 status=needs_review 行（互斥）')
+            candidates = evidence.get('candidates')
+            if not isinstance(candidates, list) or not candidates \
+                    or any(not isinstance(item, str) or not item.strip() for item in candidates):
+                raise ValueError(f'{tag}: split_review 必须带候选词列表 evidence.candidates（非空字符串数组）')
+        elif disposition == 'move_facet':
+            if status != 'mapped':
+                raise ValueError(f'{tag}: move_facet 只能出现在 status=mapped 行（互斥）')
+            target = evidence.get('facet')
+            if target not in FACET_IDS:
+                raise ValueError(f'{tag}: move_facet 必须带 evidence.facet ∈ 九分面')
+            if row.get('facet') and target == row['facet']:
+                raise ValueError(f'{tag}: move_facet 目标分面必须与当前分面不同')
+        else:  # deprecated / out_of_scope
+            zero = evidence.get('crossConferenceZeroHit')
+            if not isinstance(zero, dict) or not isinstance(zero.get('scan'), str) or not zero['scan'].strip():
+                raise ValueError(f'{tag}: {disposition} 必须带跨会零命中扫描证据 '
+                                 'evidence.crossConferenceZeroHit.scan（禁按单会议频次判定）')
+            reviewer = evidence.get('reviewedBy')
+            if not isinstance(reviewer, str) or not reviewer.strip():
+                raise ValueError(f'{tag}: {disposition} 必须带人工评审署名 evidence.reviewedBy')
+    return rows
+
+
+def read_disposition_rows(text):
+    """兼容新旧两种表头读取 disposition 行（旧六列缺 disposition/evidence）。"""
+    rows = list(csv.DictReader(io.StringIO(text)))
+    return validate_disposition_rows(rows)
+
+
+def disposition_summary(dispositions):
+    counts = {state: sum(row['disposition'] == state for row in dispositions)
+              for state in DISPOSITIONS}
+    return {'dispositionSchema': DISPOSITION_SCHEMA, 'dispositionCounts': counts,
+            'pendingDispositions': sum(not row['disposition'] for row in dispositions),
+            'disposedDispositions': sum(bool(row['disposition']) for row in dispositions),
+            'dispositionRule': PENDING_RULE}
 
 
 def safe_directory(value, *, create=False):
@@ -313,6 +481,7 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
                'explicitPrimaryTaskRecords': sum(paper['primaryTaskId'] is not None for paper in papers),
                'semanticallyReviewedRecords': 0}
     occurrences = collections.Counter(tag for page in pages for tag in page['tags'])
+    dispositions = build_dispositions(counts, resolved, taxonomy)
     summary.update({'mappedUniqueTags': sum(value is not None for value in resolved.values()),
                     'tagOccurrences': sum(occurrences.values()),
                     'mappedTagOccurrences': sum(count for tag, count in occurrences.items() if resolved[tag] is not None),
@@ -320,16 +489,13 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
                     'tagOccurrenceCoverage': sum(count for tag, count in occurrences.items() if resolved[tag] is not None)
                         / sum(occurrences.values()) if occurrences else 0,
                     'coverageMeaning': 'literal_registry_mapping_not_semantic_accuracy'})
+    summary.update(disposition_summary(dispositions))
     index = {'version': VERSION, 'taxonomyVersion': taxonomy['version'], 'registrySha256': taxonomy['registrySha256'],
              'source': source, 'summary': summary, 'facets': taxonomy['facets'],
              'concepts': taxonomy['concepts'], 'papers': papers}
-    dispositions = [{'tag': tag, 'pageCount': count, 'status': 'mapped' if resolved[tag] else 'needs_review',
-                     'conceptId': resolved[tag]['id'] if resolved[tag] else '',
-                     'facet': resolved[tag]['facet'] if resolved[tag] else '',
-                     'semanticReview': 'not_performed'}
-                    for tag, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
     report = {'version': REPORT_VERSION, 'taxonomyVersion': taxonomy['version'],
               'registrySha256': taxonomy['registrySha256'], 'source': source, 'summary': summary,
+              'dispositionSchema': DISPOSITION_SCHEMA, 'dispositionRule': PENDING_RULE,
               'note': 'Literal registry mapping only; not semantic classification. Unknown-ID records are not proven unique papers.',
               'pages': hashes, 'excluded': excluded, 'tagDispositions': dispositions,
               'duplicates': [{'id': pid, 'relativePaths': sorted(page['relativePath'] for page in group)}
@@ -347,10 +513,13 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     if str(repo) in public_text or str(path_config.PROJECT_ROOT) in public_text:
         raise ValueError('Absolute user path cannot appear in public taxonomy metadata')
     csv_text = io.StringIO(newline='')
-    writer = csv.DictWriter(csv_text, fieldnames=['tag', 'pageCount', 'status', 'conceptId', 'facet', 'semanticReview'])
+    writer = csv.DictWriter(csv_text, fieldnames=list(DISPOSITION_CSV_COLUMNS))
     writer.writeheader()
-    writer.writerows({**row, 'tag': "'" + row['tag'] if row['tag'].lstrip().startswith(('=', '+', '-', '@'))
-                      else row['tag']} for row in dispositions)
+    writer.writerows({**row,
+                      'evidence': json.dumps(row['evidence'], ensure_ascii=False, separators=(',', ':')),
+                      'tag': "'" + row['tag'] if row['tag'].lstrip().startswith(('=', '+', '-', '@'))
+                      else row['tag']}
+                     for row in dispositions)
     report_text = json.dumps(report, ensure_ascii=False, indent=2) + '\n'
     csv_output = csv_text.getvalue()
     bundle = {'version': BUNDLE_VERSION, 'taxonomyVersion': taxonomy['version'],

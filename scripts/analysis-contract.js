@@ -229,6 +229,18 @@ const TABLE_IDENTIFIER_HEADER_RE = /(?:^editing(?: operation)?$|(?:^|\b)(?:metho
 const TABLE_VAGUE_METRIC_HEADER_RE = /^(?:结果|数值|数值变化|观察|观察结果|实际观测|报告结果|主要观察|说明|解释|含义|方向|关键条件|结论|结论边界|证据边界|应如何解读|对照或说明|对照或变化|结果或结论)$/i;
 const TABLE_DIRECTION_MARK_RE = /(?:↑|↓|\\(?:uparrow|downarrow|nearrow|searrow)\b|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)/i;
 const TABLE_DIRECTIONAL_METRIC_RE = /(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|\bl[12]\b|\bmse\b|\bnmse\b|\bmste\b|\bmr[- ]?stft\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度|评分|分数|裁判分)/i;
+// Aggregate/mean columns such as “无条件 AVG ↑” are measurable metrics and must
+// not be mistaken for setting identifiers, but unlike WER/accuracy they do not
+// inherently require an ↑/↓ marker (for example “Avg Total (s)” is a plain
+// duration). Keep them out of TABLE_DIRECTIONAL_METRIC_RE so the direction gate
+// stays unchanged, and consult this list only when a direction marker is already
+// present in isTableIdentifierHeader.
+const TABLE_GENERIC_METRIC_HEADER_RE = /(?:\bavg\b|\bmean\b|\baverage\b|均值|平均)/i;
+// Strong identity words keep their identifier meaning even inside an aggregate
+// header: “6 基准平均 ↑” still anchors the row identity established by the
+// benchmark/dataset qualifier, while weak condition words such as “无条件”
+// yield to the metric reading of “无条件 AVG ↑”.
+const TABLE_STRONG_IDENTITY_HEADER_RE = /基准|数据集|语料|任务|语言|语系|语族|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|划分|切片|子集|场景|配置|拓扑/;
 const TABLE_NON_DIRECTIONAL_MEASURE_RE = /(?:置信区间|confidence interval|\bci\b|p[- ]?value|p值|显著性|样本数|数量|规模|时长|采样率|方差|标准差|系数|\bbeta\b|\bΔ?AIC\b|复杂度|参数|容量|内存|显存|耗时|延迟|速度|吞吐|功耗|能耗|bytes?|hours?|seconds?|milliseconds?)/i;
 const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(?:%|pp|×|x|ms|s|h|Hz|kHz|MHz|GB|MB|KB|dB|mJ|W))?/i;
 
@@ -250,7 +262,11 @@ function isTableIdentifierHeader(value) {
     // identity.  A direction marker alone must not turn the first column into
     // a metric column.  Conversely, a qualifier such as “评估” before a real
     // metric (for example “评估 L1(...) ↓”) is not an identifier.
+    // This branch only runs when a direction marker is present, so treating
+    // “无条件 AVG ↑” as a metric never forces an arrow onto “Avg Total (s)”.
     if (TABLE_DIRECTIONAL_METRIC_RE.test(withoutDirection)) return false;
+    if (TABLE_GENERIC_METRIC_HEADER_RE.test(withoutDirection)
+        && !TABLE_STRONG_IDENTITY_HEADER_RE.test(withoutDirection)) return false;
     if (/(?:^|[\s/])(?:方法|算法|方案|策略|模型|系统|设置|条件|拓扑|数据集|基线|配置|场景|阶段|实验|评估设置|实验设置)(?:[\s/]|$)/i.test(withoutDirection)) {
         return true;
     }
@@ -663,11 +679,15 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     }
     const sourceText = sourceExperimentEvidence(options.sourceText);
     const sourceHasComparison = /\b(?:baseline|compared?\s+(?:to|with)|comparison|outperform(?:s|ed)?|versus|vs\.)\b|基线|对照|相比|优于|弱于/i.test(sourceText);
-    const resultHasComparison = /\b(?:baseline|compared?\s+(?:to|with)|comparison|versus|vs\.)\b|基线|对照|比较(?:对象)?是|相比|相对|优于|弱于|比(?!较)[^。；\n]{0,30}(?:高|低|强|弱|好|差|大|小|提升|下降)/i.test(results);
+    const resultHasComparison = /\b(?:baseline|compared?\s+(?:to|with)|comparison|versus|vs\.)\b|基线|对照|比较(?:对象)?是|相比|相对|优于|弱于|对比|超过|高于|低于|升至|降至|比(?!较)[^。；\n]{0,30}(?:高|低|强|弱|好|差|大|小|提升|下降)/i.test(results);
     if (empirical && sourceHasComparison && !resultHasComparison) {
         return '全文包含基线或对照比较，但实验结果没有保留比较对象';
     }
-    const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceText);
+    const sourceAblationEvidence = String(sourceText || '').replace(
+        /\bno\s+(?:component\s+)?ablations?\b(?:\s+[^.?!\n]{0,40})?|\b(?:controlled\s+)?ablations?\s+(?:were|was)\s+not\s+(?:conducted|performed)\b|\babsence\s+of\s+(?:component\s+)?ablations?\b/gi,
+        ' '
+    );
+    const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceAblationEvidence);
     const resultHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉|不含|排除|无外推/i.test(results)
         // Some papers label the ablation rows only as `+ L_j`, `+ L_s`, ...
         // and describe them as a staged/逐级 addition.  That is still an
@@ -677,14 +697,27 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     if (empirical && sourceHasAblation && !resultHasAblation) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
     }
-    const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效|负(?:面)?结果|性能回落|回落至|降幅|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(sourceText);
+    // Do not treat an explicit absence of degradation/failure as a negative
+    // result. Papers commonly state that an adaptation "does not degrade"
+    // source performance; the bare `degrad` cue otherwise reverses its meaning.
+    const sourceNegativeEvidence = String(sourceText || '').replace(
+        /\b(?:does|do|did)\s+not(?:\s+\w+){0,2}\s+(?:degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?)\b|\bno\s+(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|\bwithout\s+(?:any\s+)?(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|(?:未|没有|并未|无)[^。；\n]{0,12}(?:退化|失败)/gi,
+        ' '
+    );
+    const sourceHasNegative = /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|退化|失败|更差|无效|负(?:面)?结果|性能回落|回落至|降幅|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)/i.test(sourceNegativeEvidence);
     const explicitHigherIsBetterMetric = '(?:性能|质量|得分|分数|准确率|自然度|一致性|合规率|动态幅度|多样性|表达力|成功率|召回率|精确率|F1)';
     const contextualNegative = new RegExp(
         `(?:代价|牺牲)[^。；\\n]{0,80}${explicitHigherIsBetterMetric}[^。；\\n]{0,40}(?:下降|降低|降至|减少|受限|受损)`
     ).test(results) || new RegExp(
         `(?:移除|去掉)[^。；\\n]{1,80}${explicitHigherIsBetterMetric}[^。；\\n]{0,40}(?:下降|降低|降至|受损)`
     ).test(results);
+    const explicitMetricDecline = new RegExp(
+        `(?:${explicitHigherIsBetterMetric}|转写|关键点覆盖)[^。；\\n]{0,40}(?:下降|下滑|降低|减少|受限|受损)`
+    ).test(results) || new RegExp(
+        `(?:下降|下滑|降低|受损)[^。；\\n]{0,40}(?:${explicitHigherIsBetterMetric}|转写|关键点覆盖)`
+    ).test(results);
     const resultHasNegative = contextualNegative
+        || explicitMetricDecline
         || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|降幅|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
     if (empirical && sourceHasNegative && !resultHasNegative) {
@@ -1315,10 +1348,25 @@ function validateTaxonomyStageBinding(paper, options = {}) {
         || require('./lib/taxonomy-runtime.js').getDefaultTaxonomyRuntime();
     if (manifest?.contracts?.taxonomy !== runtime.selectionContract
         || stage.registryVersion !== runtime.registryVersion
-        || stage.registrySha256 !== runtime.registrySha256
         || stage.projectionContract !== runtime.projectionContract
-        || stage.projectionSha256 !== runtime.projectionSha256
         || stage.selectionContract !== runtime.selectionContract) {
+        return 'taxonomySeal registry/projection/selection 合同不是 current';
+    }
+    if (stage.registrySha256 !== runtime.registrySha256) {
+        // Registry 版本化放宽：四条同时成立才放行 ——“旧词表快照可取回 + 变更判为
+        // additive/none（或 destructive 落在可确认白名单且 registryUpgradeFrom 携带
+        // 与复算绑定的 destructiveAcknowledgement）+ 注记自洽 + 旧 conceptIds 在
+        // 当前 registry 全部 active”；不可确认的 destructive 与任何缺证一律 fail-closed。
+        const upgrade = require('./lib/taxonomy-registry-change.js').validateSealRegistryUpgrade({
+            fromRegistrySha256: stage.registrySha256,
+            currentRegistry: runtime.taxonomy,
+            currentRegistrySha256: runtime.registrySha256,
+            conceptIds: stage.conceptIds,
+            annotation: stage.registryUpgradeFrom,
+            snapshotOptions: options.registrySnapshotOptions
+        });
+        if (!upgrade.ok) return upgrade.error;
+    } else if (stage.projectionSha256 !== runtime.projectionSha256) {
         return 'taxonomySeal registry/projection/selection 合同不是 current';
     }
     const parsed = options.parsed;

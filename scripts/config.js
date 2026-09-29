@@ -165,7 +165,11 @@ const HUGGINGFACE_CONFIG = {
 
 const FILES = {
     taxonomyRegistry: path.join(PROJECT_ROOT, 'config', 'paper-taxonomy.json'),
+    // 升级前 registry 的字节快照（文件名 = 内容字节 SHA）。additive 判定与
+    // taxonomySeal 放宽必须能按 SHA 取回旧词表，取不回即 fail-closed。
+    taxonomyRegistryHistoryDir: path.join(PROJECT_ROOT, 'config', 'taxonomy-registry-history'),
     taxonomyPreviewDir: path.join(DATA_DIR, 'runtime', 'taxonomy-preview'),
+    taxonomyResealReportDir: path.join(DATA_DIR, 'runtime', 'taxonomy-reseal-reports'),
     taxonomyExplorerAssets: path.join(PROJECT_ROOT, 'web', 'tag-explorer'),
     // 跨日期、跨 Node/Python 的 provider 账号状态。它不是日批次数据，
     // 因此不能放进会被归档轮转的 current/。

@@ -86,6 +86,15 @@ const PROVIDERS = Object.freeze({
         pdfPath: /^\/speechprosody_2026\/[A-Za-z0-9_-]+_speechprosody\.pdf$/,
         parser: 'isca'
     }),
+    'interspeech-2026': Object.freeze({
+        conference: Object.freeze({ id: 'interspeech-2026', year: 2026 }),
+        indexUrl: 'https://www.isca-archive.org/interspeech_2026/index.html',
+        host: 'www.isca-archive.org',
+        indexPath: '/interspeech_2026/index.html',
+        recordPath: /^\/interspeech_2026\/[A-Za-z0-9_-]+_interspeech\.html$/,
+        pdfPath: /^\/interspeech_2026\/[A-Za-z0-9_-]+_interspeech\.pdf$/,
+        parser: 'isca'
+    }),
     'icmc-2026': Object.freeze({
         conference: Object.freeze({ id: 'icmc-2026', year: 2026 }),
         indexUrl: 'https://icmc2026.ligeti-zentrum.de/proceedings/',

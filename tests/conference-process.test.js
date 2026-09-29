@@ -110,7 +110,7 @@ test('partial paper resumes with the same deterministic UUID and does not rerun 
     assert.deepEqual(cli.processStatus(options, { dependencies: f.deps }), {
         status: 'partial', processId: first.processId, conferenceId: f.authority.conferenceId,
         stateSha256: partial.stateSha256, papers: { complete: 1, analysis_partial: 1 },
-        completionReceiptSha256: null
+        completionReceiptSha256: null, taxonomyReview: 0
     });
     const second = await processApi.runConferenceProcess({ ...options, retryFailed: true }, { ...f.deps, processPaper: worker });
     assert.equal(second.status, 'complete');
@@ -572,8 +572,11 @@ test('CLI caps concurrency and disables the old new-conference bypasses', () => 
     const parsed = cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
         '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '3']);
     assert.equal(parsed.concurrency, 3);
+    const raised = cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
+        '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '5']);
+    assert.equal(raised.concurrency, 5);
     assert.throws(() => cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
-        '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '4']), /Use/);
+        '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '6']), /Use/);
     assert.throws(() => cli.parseArgs(['--legacy-disabled', 'analyze']), /must use conference:new:process/);
 });
 
@@ -701,6 +704,91 @@ test('exhausted model network failure does not stop later conference papers', as
     assert.notEqual(result.stopped, true);
     assert.equal(result.batchFailure, undefined);
     assert.equal(result.complete, 2);
+});
+
+test('taxonomy review keeps the batch moving, withholds the page and reports a visible queue', async t => {
+    const f = fixture(t, 3); const options = { apply: true, concurrency: 2 };
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), 'conference-process-v1');
+    const executionOf = paperId => processApi.deterministicUuid(processId, paperId, 'analysis');
+    const reviewPaperId = f.members[1].paperId;
+    const blockedReasons = ['primary-task:unknown:#不存在的主任务', 'selection:标签不是 active 中文首选标签: #不存在的主任务'];
+    let fixed = false; let stageCalls = 0;
+    const deps = { ...f.deps,
+        adapter: { prepareConferenceAnalysis: () => {},
+            analyzeConference: async () => ({ status: 'complete', analysisSha256: H('analysis') }),
+            loadConferenceAnalysis: () => ({ analysis: { papers: [{}] } }) },
+        postprocess: { stagePaper: ({ executionId }) => {
+            stageCalls += 1;
+            if (!fixed && executionId === executionOf(reviewPaperId)) {
+                return { status: 'blocked', assignment: { contract: 'conference-taxonomy-assignment-v1',
+                    version: 1, paperId: reviewPaperId, analysisExecutionId: executionId, status: 'blocked',
+                    blockedReasons, registrySha256: H('registry'), assignmentSha256: H('assignment'),
+                    primaryTaskId: null, primaryMethodId: null, conceptIds: [] } };
+            }
+            return { status: 'staged', manifest: { manifestSha256: H(`page:${executionId}`),
+                contentSha256: H(`content:${executionId}`), pagePath: `content/posts/${executionId}.md`,
+                completionReceiptSha256: H(`receipt:${executionId}`),
+                sourceSnapshotSha256: H(`source:${executionId}`) } };
+        } } };
+
+    const first = await processApi.runConferenceProcess(options, deps);
+    assert.equal(first.status, 'partial');
+    assert.equal(first.complete, 2); assert.equal(first.failed, 1);
+    assert.notEqual(first.stopped, true); assert.equal(first.batchFailure, undefined);
+    assert.equal(first.taxonomyReview, 1);
+    assert.deepEqual(first.taxonomyReviewQueue.map(item => item.blockedReasons), [blockedReasons]);
+    const directory = path.join(f.files.conferenceProcessDir, first.processId);
+    assert.equal(first.taxonomyReviewQueueFile, path.join(directory, 'taxonomy-review-queue.json'));
+    // The batch does not close while a taxonomy is unresolved: no receipt.
+    assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), false);
+
+    const queue = JSON.parse(fs.readFileSync(first.taxonomyReviewQueueFile, 'utf8'));
+    assert.equal(queue.contract, processApi.TAXONOMY_REVIEW_CONTRACT);
+    assert.equal(queue.taxonomyReview, 1);
+    assert.equal(queue.items[0].paperId, reviewPaperId);
+    assert.equal(queue.items[0].status, 'needs_taxonomy_review');
+    assert.deepEqual(queue.items[0].blockedReasons, blockedReasons);
+    assert.match(queue.queueSha256, /^[a-f0-9]{64}$/);
+
+    const state = JSON.parse(fs.readFileSync(path.join(directory, 'state.json')));
+    const review = state.items[reviewPaperId];
+    assert.equal(review.status, 'analysis_partial');
+    assert.equal(review.pageProof, null);
+    assert.equal(review.lastFailure.code, 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED');
+    assert.equal(review.lastFailure.category, 'taxonomy_review');
+    assert.equal(review.lastFailure.systemic, false);
+    assert.equal(review.lastFailure.retryable, false);
+    assert.deepEqual(review.reviewRequired.blockedReasons, blockedReasons);
+    for (const [paperId, peer] of Object.entries(state.items)) {
+        if (paperId === reviewPaperId) continue;
+        assert.equal(peer.status, 'complete'); assert.ok(peer.pageProof); assert.equal(peer.reviewRequired, null);
+    }
+
+    const status = cli.processStatus(options, { dependencies: f.deps });
+    assert.equal(status.taxonomyReview, 1);
+    assert.equal(status.taxonomyReviewQueue[0].paperId, reviewPaperId);
+    assert.deepEqual(status.taxonomyReviewQueue[0].blockedReasons, blockedReasons);
+    assert.equal(status.taxonomyReviewQueueFile, first.taxonomyReviewQueueFile);
+
+    // A deterministic review is never retried blindly...
+    const quiet = await processApi.runConferenceProcess(options, deps);
+    assert.equal(quiet.status, 'partial'); assert.equal(quiet.taxonomyReview, 1);
+    assert.equal(stageCalls, 3);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'state.json')))
+        .items[reviewPaperId].attempts, 1);
+
+    // ...but an explicit release after the labels are fixed promotes it.
+    fixed = true;
+    const resumed = await processApi.runConferenceProcess({ ...options, retryFailed: true }, deps);
+    assert.equal(resumed.status, 'complete'); assert.equal(resumed.taxonomyReview, 0);
+    assert.equal(stageCalls, 4);
+    assert.equal(fs.existsSync(path.join(directory, 'taxonomy-review-queue.json')), false);
+    assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), true);
+    const done = JSON.parse(fs.readFileSync(path.join(directory, 'state.json')));
+    assert.equal(done.items[reviewPaperId].status, 'complete');
+    assert.equal(done.items[reviewPaperId].reviewRequired, null);
+    assert.ok(done.items[reviewPaperId].pageProof);
+    assert.equal(cli.processStatus(options, { dependencies: f.deps }).taxonomyReview, 0);
 });
 
 test('migration provenance survives a crash between state and migration receipt', async t => {

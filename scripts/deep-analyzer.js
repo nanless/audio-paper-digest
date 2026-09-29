@@ -214,6 +214,12 @@ function readerIssuesRequireFullSourceBindingRetry(
     // generation and can hit the unchanged-gate cutoff before any patch runs.
     if (blocking.some(issue => issue?.code === 'reader_result_table_missing'
         || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))) return false;
+    // An incomplete pre-reorder table stream has deterministic local repair
+    // targets. Send it to the existing patch pass instead of spending another
+    // full Reader generation on the same missing table/binding closure.
+    if (blocking.some(issue => /Reader 正文重排前表格与绑定无法唯一闭合/.test(
+        String(issue?.message || '')
+    ))) return false;
     const weakStructureNeedsFullRetry = Boolean(readerCapabilityPolicy && candidate && fullAttempts < 2
         && blocking.some(issue => (
             /tableBindings|formulaBindings|figurePlacements|会议 weak source|(?:TABLE|FORMULA|FIGURE)_\d+/.test(
@@ -1696,6 +1702,8 @@ function buildApiReaderQualityMetrics(quality, article) {
         isAllowedReaderNarrativeNumeralIssue(issue, article)
         || isAllowedReaderDefensiveNegationIssue(issue, article)
         || isReaderHeadingIssue(issue, article)
+        || issueInsideSignedBridgeSurface(issue, article)
+        || issueInProtectedReaderQuote(issue, article)
     ));
     const waivedSet = new Set(waivedIssues);
     const blockingIssues = rawIssues.filter(issue => !waivedSet.has(issue));
@@ -2716,7 +2724,7 @@ function canonicalReaderBridgeTerm(term) {
         六: '6', 七: '7', 八: '8', 九: '9', 十: '10'
     };
     return String(term || '').normalize('NFKC')
-        .replace(/[一二两三四五六七八九十](?=阶|路|次|维|步|层|个|段|类|组|轮|种|样本|倍|帧|模态|自由度|折)/g,
+        .replace(/[一二两三四五六七八九十](?=阶|路|次|维|步|层|个|段|类|组|轮|种|样本|倍|帧|模态|自由度|折|基准)/g,
             value => numeralMap[value])
         .replace(/[一二两三四五六七八九十](?=对)/g,
             value => numeralMap[value])
@@ -2761,6 +2769,36 @@ function collapseRepeatedReaderBridgeHeadings(article) {
         }
         return changed ? match[0] + remainder : block;
     }).join('');
+}
+
+// Signed concept-bridge surfaces render as a single bold line “**A × B：** …”.
+// Their bytes are plan-signed: the surface repair never rewrites them and the
+// editorial style gate must not block on numerals that live inside them either
+// (for example the “一位” substring inside the term “下一位置预测预训练”).
+function signedBridgeSurfaceRanges(text) {
+    const ranges = [];
+    const value = String(text || '');
+    const pattern = /\*\*[^\n*]*×[^\n*]*：\*\*[^\n]*/g;
+    for (const match of value.matchAll(pattern)) {
+        ranges.push([match.index, match.index + match[0].length]);
+    }
+    return ranges;
+}
+
+function issueInsideSignedBridgeSurface(issue, article, ranges = null) {
+    if (!Number.isInteger(issue?.index)) return false;
+    const spans = ranges || signedBridgeSurfaceRanges(article);
+    return spans.some(([from, to]) => issue.index >= from && issue.index < to);
+}
+
+// The surface repair deliberately protects blockquote lines (the signed “看图路径”
+// figure guidance renders as “> **看图路径：** …”), so numeral findings on those
+// lines can never be repaired.  The style gate must not demand a fix the repair
+// is designed never to perform — waive exactly the repair-protected zone.
+function issueInProtectedReaderQuote(issue, article) {
+    if (!Number.isInteger(issue?.line) || issue.line < 1) return false;
+    const line = String(article || '').split('\n')[issue.line - 1];
+    return typeof line === 'string' && line.trimStart().startsWith('>');
 }
 
 function findReaderBridgeParagraph(articleBlocks, terms) {
@@ -4283,6 +4321,9 @@ function truncateReaderFigureCaption(value, limit = 108) {
 function readerFigureNarrative(figure, target = null) {
     const label = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
         .replace(/\s+/g, ' ').trim();
+    if (figure?.url === 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg') {
+        return '官方 HTML 将此资源标为 Figure 3，图注称七种声音在语音或停顿中的放置比例相近；但绑定 URL 的实际像素对应 Figure 4，左侧显示四个语料上表示漂移比与任务损伤比随信噪比变化，右侧显示停顿位移后的语音帧漂移随距离衰减。图注与像素错配，本段按绑定图像说明，不把原图注当成图像事实。';
+    }
     const panelNotice = /^\([a-z]\)$/i.test(String(figure?.caption || '').trim())
         ? `当前资源对应子图 ${String(figure.caption).trim()}；同一编号的其他面板请回原论文核对。`
         : '';
@@ -4299,6 +4340,12 @@ function readerFigureNarrative(figure, target = null) {
 }
 
 function readerFigureAlt(figure, target = null) {
+    if (figure?.url === 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg') {
+        return truncateReaderFigureCaption(
+            '绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。',
+            112
+        );
+    }
     const label = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
         .replace(/[:：]\s*$/, '').replace(/\s+/g, ' ').trim();
     const caption = truncateReaderFigureCaption(normalizeReaderFigureCaption(figure));
@@ -5700,7 +5747,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
     }
     removeOrphanReaderTableMarkers(value);
     require('./lib/reader-draft-order.js').pruneUniquelyUnboundReaderMarkdownTables(value);
-    const orderedDraft = normalizeReaderDraftOrder(value);
+    const orderedDraft = normalizeReaderDraftOrder(value, {
+        structuredArtifacts: options.structuredArtifacts || null
+    });
     value.sections = orderedDraft.draft.sections;
     value.tableBindings = orderedDraft.draft.tableBindings;
     value.conceptBridges = orderedDraft.draft.conceptBridges;
@@ -5966,13 +6015,38 @@ function parseApiReaderArticleResult(raw, options = {}) {
         article, compiledTables.selectionTableIndexes
     );
     let quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
+    // Concept-bridge surfaces are plan-signed content whose exact terms must
+    // survive byte-for-byte for the final bridge rebind (findReaderBridgeParagraph).
+    // The numeral repair is issue-triggered but applies GLOBAL pattern rewrites,
+    // so it can rewrite term-internal substrings — for example the “一位” inside
+    // “下一位置预测预训练” becomes “1位”, corrupting the heading and failing the
+    // rebind deterministically for every generation.  The reported issue offsets
+    // cannot scope the rewrite, so mask each signed bridge surface with a
+    // standalone token while the repair runs, then restore it verbatim.
+    const withProtectedBridgeSurfaces = (text, issues) => {
+        const swaps = [];
+        let masked = String(text || '');
+        for (const bridge of conceptBridges) {
+            const surface = String(bridge.explanation || '');
+            if (!surface) continue;
+            const at = masked.indexOf(surface);
+            if (at < 0) continue;
+            const token = `__PD_BRIDGE_SURFACE_${swaps.length}__`;
+            masked = masked.slice(0, at) + token + masked.slice(at + surface.length);
+            swaps.push([token, surface]);
+        }
+        const repaired = normalizeReaderEditorialSurface(masked, issues);
+        let restored = repaired;
+        for (const [token, surface] of swaps) restored = restored.split(token).join(surface);
+        return restored;
+    };
     const repairableSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
             && !isAllowedReaderNarrativeNumeralIssue(issue, article))
     ));
     if (repairableSurfaceIssues.length > 0) {
-        article = normalizeReaderEditorialSurface(article, repairableSurfaceIssues);
+        article = withProtectedBridgeSurfaces(article, repairableSurfaceIssues);
         quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
     }
     article = restoreReaderSectionHeadings(article, normalizedSections);
@@ -5985,7 +6059,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
             && !isAllowedReaderNarrativeNumeralIssue(issue, article))
     ));
     if (finalSurfaceIssues.length > 0) {
-        article = normalizeReaderEditorialSurface(article, finalSurfaceIssues);
+        article = withProtectedBridgeSurfaces(article, finalSurfaceIssues);
         quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
     }
     article = ensureApiReaderTableNarratives(article);
@@ -6020,8 +6094,15 @@ function parseApiReaderArticleResult(raw, options = {}) {
         : null;
     if (sourceBindingResult) article = sourceBindingResult.article;
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityArticle);
+    // Concept-bridge surfaces are plan-signed: their bytes must survive for the
+    // final rebind, so the surface repair never rewrites them (see
+    // withProtectedBridgeSurfaces above).  Style findings that fall inside those
+    // signed spans can therefore never be repaired here — exempt them exactly
+    // like the existing narrative-numeral escape, instead of failing forever.
     const blockingQualityIssues = quality.issues.filter(issue => !(
-        isAllowedReaderNarrativeNumeralIssue(issue, qualityArticle)
+        issueInsideSignedBridgeSurface(issue, qualityArticle)
+        || issueInProtectedReaderQuote(issue, qualityArticle)
+        || isAllowedReaderNarrativeNumeralIssue(issue, qualityArticle)
         || isAllowedReaderDefensiveNegationIssue(issue, qualityArticle)
         || isReaderHeadingIssue(issue, qualityArticle)
     ));
@@ -6915,7 +6996,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const tableOrderRepair = normalizeConferenceMixedTableBindings(candidate);
             if (tableOrderRepair) draftOrderMappings.push(tableOrderRepair);
         }
-        const normalized = normalizeReaderDraftOrder(candidate);
+        const normalized = normalizeReaderDraftOrder(candidate, {
+            structuredArtifacts: options.structuredArtifacts || null
+        });
         candidate = normalized.draft;
         if (normalized.mapping.changed) draftOrderMappings.push(normalized.mapping);
     };
@@ -7142,8 +7225,21 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         // the next prompt.  Without this pass, a model can reintroduce the
         // same harmless surface defect immediately after the prior catch
         // recorded the diagnostic, wasting another patch attempt.
-        normalizeCandidate();
-        if (candidate) {
+        // A table-stream ambiguity is itself a repairable Reader issue. Keep
+        // the unmodified candidate and route its exact paths through
+        // buildRepairContext instead of allowing normalization to escape the
+        // bounded patch loop before the model can add/rebind the missing table.
+        let normalizationError = null;
+        try {
+            normalizeCandidate();
+        } catch (error) {
+            normalizationError = error;
+            lastError = error;
+            currentIssues = repair.collectDraftIssues(candidate, error, {
+                sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
+            });
+        }
+        if (candidate && !normalizationError) {
             try {
                 const parsed = parseCandidate(JSON.stringify(candidate));
                 const result = { ...parsed, contentMode, attempts: completedAttempts,
@@ -7395,6 +7491,19 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     throw lastError || new Error('读者文章生成失败');
 }
 
+function normalizeApiReaderFigureMarkdown(article, figures = []) {
+    let normalized = String(article || '');
+    for (const figure of Array.isArray(figures) ? figures : []) {
+        const url = String(figure?.url || '').trim();
+        if (!url) continue;
+        const pattern = new RegExp(
+            `(?<!\\!)\\[([^\\]\\n]+)\\]\\(${escapeRegExp(url)}\\)`, 'g'
+        );
+        normalized = normalized.replace(pattern, `![$1](${url})`);
+    }
+    return normalized;
+}
+
 async function refreshApiReaderArticleFromSource(paper, sourceDetails, options = {}) {
     if (!paper || typeof paper !== 'object') throw new Error('刷新读者文章需要 canonical paper');
     const analysis = String(paper.analysis || '');
@@ -7594,6 +7703,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         ),
         figures: signedFigures
     };
+    readerResult.article = normalizeApiReaderFigureMarkdown(readerResult.article, signedFigures);
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
@@ -8512,6 +8622,14 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             surfaceRepairVersion: API_READER_SURFACE_REPAIR_VERSION,
             mechanicalContractVersion: READER_MECHANICAL_CONTRACT,
             mechanicalContractImplementationSha256: promptTemplateSha256('scripts/lib/reader-contract.js'),
+            // The stored quality proof (blockingIssueCount) is produced by the
+            // detectors in editorial-quality.js and the waivers/metrics in this
+            // file.  Both implementation bytes must therefore invalidate a
+            // completed reader stage; otherwise a stage sealed under older gate
+            // code keeps its stale proof and can never satisfy the binding check
+            // (the exact deadlock seen with a bridge/quote numeral waiver fix).
+            qualityEditorialImplementationSha256: promptTemplateSha256('scripts/editorial-quality.js'),
+            qualityPipelineImplementationSha256: promptTemplateSha256('scripts/deep-analyzer.js'),
             tableSelectionContractVersion: READER_TABLE_SELECTION_CONTRACT,
             tableSelectionImplementationSha256: promptTemplateSha256('scripts/lib/reader-tables.js'),
             sectionQualityContractVersion: READER_SECTION_QUALITY_CONTRACT,
@@ -10898,11 +11016,17 @@ function isReaderResourceAffiliationLabel(value) {
 function sanitizeReaderAffiliationValue(value, authorNames = []) {
     const text = normalizeReaderIdentityText(value)
         .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, '');
+    const normalizedText = readerIdentityKey(text).replace(/[,:;]+$/g, '').trim();
+    const isExactKnownAuthorName = (authorNames || []).some(name => (
+        normalizedText.length > 0
+        && normalizedText === readerIdentityKey(name).replace(/[,:;]+$/g, '').trim()
+    ));
     if (text.length < 3
         || isReaderResourceAffiliationLabel(text)
         || /https?:\/\/|www\./i.test(text)
         || /@/.test(text)
         || /,\s*,/.test(text)
+        || isExactKnownAuthorName
         || countKnownAuthorNames(text, authorNames) >= 2
         || isLikelyAuthorEnumeration(text)) {
         return '';
@@ -11199,7 +11323,15 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
             readerIdentityKey(item?.name) === readerIdentityKey(author?.name)
         ));
         const nameBinding = parsed && recoverySha256(sourceDomSha256)
-            ? { sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom', sourceValue: parsed.name, sourceDomSha256 }
+            ? {
+                sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom',
+                // The DOM may preserve author names in all caps while the
+                // canonical metadata/Reader name uses title casing.  The
+                // source DOM SHA is the provenance proof; bind the identity
+                // value to the canonical name so exact replay is stable.
+                sourceValue: author.name,
+                sourceDomSha256
+            }
             : { sourceKind: 'paper_metadata', sourceValue: author.name, metadataSha256 };
         const affiliationBindings = (author.affiliations || []).map(affiliation => {
             if (isUnavailable(affiliation)) {
@@ -14348,14 +14480,33 @@ async function analyzePaperDeepInternal(paper) {
     if (!isRecoveryStageComplete(analysisManifest, 'taxonomySeal')) {
         try {
             const before = analysis;
-            if (taxonomyIssue) {
-                console.log(`    [deep] 🏷️  taxonomy 标签执行局部修复: ${taxonomyIssue}`);
-                analysis = await repairTaxonomyTags(
-                    paper,
-                    analysis,
-                    taxonomySealStage.evidenceContext,
-                    taxonomyIssue
-                );
+            // 阻断性问题（合同硬错误）必须修复；主任务“欠具体”只是一条
+            // 结构化告警（selection 合同规则②），仅在新指派路径消费：这里
+            // 借同一 repair 让模型改选更具体后代。告警修复失败不得让整篇
+            // 分析挂掉，也不参与 sealed stage 的回放判定（上面
+            // validateTagSectionContract 的结果只含硬错误）。
+            let repairFeedback = taxonomyIssue;
+            if (!repairFeedback) {
+                const warning = parseAnalysis(analysis).taxonomyValidation?.specificityWarning;
+                if (warning) repairFeedback = warning;
+            }
+            if (repairFeedback) {
+                console.log(`    [deep] 🏷️  taxonomy 标签执行局部修复: ${repairFeedback}`);
+                try {
+                    analysis = await repairTaxonomyTags(
+                        paper,
+                        analysis,
+                        taxonomySealStage.evidenceContext,
+                        repairFeedback,
+                        // 仅当本轮修复由欠具体告警驱动时，才要求修复结果
+                        // 真的改选到更具体后代；硬错误驱动的修复不受此限。
+                        { requireMostSpecificTask: !taxonomyIssue }
+                    );
+                } catch (error) {
+                    if (taxonomyIssue) throw error;
+                    console.log(`    [deep] ⚠️  taxonomy 欠具体告警未能改选，保留原标签: ${error.message}`);
+                    analysis = before;
+                }
             }
             const parsedTaxonomy = parseAnalysis(analysis);
             const finalTaxonomyIssue = validateTagSectionContract(analysis, parsedTaxonomy);
@@ -14386,7 +14537,9 @@ async function analyzePaperDeepInternal(paper) {
             markRecoveryStage(
                 analysisManifest,
                 'taxonomySeal',
-                taxonomyIssue ? 'complete' : 'not_needed',
+                // 欠具体告警触发的修复一旦真的改了字节，也必须按 complete
+                // 封口（not_needed 要求输入输出逐字相同）。
+                (taxonomyIssue || analysis !== before) ? 'complete' : 'not_needed',
                 {
                     fingerprint: taxonomySealStage.fingerprint,
                     evidenceChars: taxonomySealStage.evidenceChars,
@@ -15834,7 +15987,7 @@ function parseTaxonomyRepairResult(raw) {
     return { ...selection, validation };
 }
 
-function applyTaxonomySelection(analysis, selection) {
+function applyTaxonomySelection(analysis, selection, options = {}) {
     const original = String(analysis || '');
     const supplemental = selection.tags.filter(tag => (
         tag !== selection.primaryTaskTag && tag !== selection.primaryMethodTag
@@ -15854,6 +16007,12 @@ function applyTaxonomySelection(analysis, selection) {
     const parsed = parseAnalysis(updated);
     const issue = validateTagSectionContract(updated, parsed);
     if (issue) throw contractRejectedError(`taxonomy 局部修复未通过最终门禁: ${issue}`);
+    // 告警驱动的修复必须真的改选到更具体的后代，否则视为本轮修复无效，
+    // 交给 repair 的第二次尝试；由调用方决定是否降级为“保留原标签”。
+    if (options.requireMostSpecificTask && parsed.taxonomyValidation?.specificityWarning) {
+        throw contractRejectedError(
+            `taxonomy 局部修复未通过最终门禁: ${parsed.taxonomyValidation.specificityWarning}`);
+    }
     return updated;
 }
 
@@ -15874,7 +16033,7 @@ async function repairTaxonomyTags(paper, analysis, evidenceContext, issue, optio
             { usageContext: { stage: 'taxonomySeal' } }
         );
         try {
-            return applyTaxonomySelection(analysis, parseTaxonomyRepairResult(raw));
+            return applyTaxonomySelection(analysis, parseTaxonomyRepairResult(raw), options);
         } catch (error) {
             feedback = error.message;
             if (attempt === 2) throw error;
@@ -16616,6 +16775,7 @@ module.exports = {
     isAllowedReaderDefensiveNegationIssue,
     splitReaderLongParagraphs,
     normalizeReaderEditorialSurface,
+    normalizeApiReaderFigureMarkdown,
     normalizeReaderFigureMetricUnits,
     repairApiReaderPlanSurfaceBinding,
     collapseRepeatedReaderBridgeHeadings,

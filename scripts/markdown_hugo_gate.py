@@ -125,10 +125,28 @@ def format_gate_is_current_api_reader(frontmatter):
 
 
 def markdown_table_count(text):
-    return sum(
-        1 for line in text.splitlines()
-        if re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line)
-    )
+    """Count contiguous Markdown table blocks as Goldmark renders them.
+
+    A repeated separator inside one uninterrupted pipe block remains part of
+    the same table in Hugo; counting each separator overstates expected HTML.
+    """
+    count = 0
+    in_table_block = False
+    has_separator = False
+    for line in str(text or '').splitlines():
+        is_pipe_row = bool(re.match(r'^\s*\|.*\|\s*$', line))
+        if not is_pipe_row:
+            if in_table_block and has_separator:
+                count += 1
+            in_table_block = False
+            has_separator = False
+            continue
+        in_table_block = True
+        if re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line):
+            has_separator = True
+    if in_table_block and has_separator:
+        count += 1
+    return count
 
 
 def markdown_image_count(text):

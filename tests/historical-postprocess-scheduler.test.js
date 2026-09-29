@@ -261,11 +261,23 @@ test('unsealed analysis run is recorded failed and never reaches staging', async
 
 test('blocked deterministic taxonomy is preserved as an audit artifact but never staged', async t => {
     const f = fixture(t, 'pending'); const build = f.deps.buildAssignments;
-    f.deps.buildAssignments = options => build(options).map(item => ({ ...item, status: 'blocked' }));
+    f.deps.buildAssignments = options => build(options).map(item => ({ ...item, status: 'blocked',
+        blockedReasons: ['primary-task:unknown:#不存在的主任务'] }));
     const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 }, f.deps);
     assert.equal(result.processed[0].status, 'failed'); assert.equal(f.assignmentWrites(), 1);
     assert.equal(f.stageCalls.length, 0); assert.match(result.processed[0].lastError, /taxonomy assignment is blocked/);
+    // The pending classification is an explicit, visible review queue entry:
+    // its reasons travel with the checkpoint item and with the run report.
+    assert.equal(result.taxonomyReview, 1);
+    assert.deepEqual(result.taxonomyReviewQueue, [{ paperId: f.paperIds[0],
+        analysisRunId: f.runIds[0], status: 'needs_taxonomy_review',
+        blockedReasons: ['primary-task:unknown:#不存在的主任务'] }]);
+    assert.equal(result.processed[0].reviewRequired.status, 'needs_taxonomy_review');
+    assert.deepEqual(result.processed[0].reviewRequired.blockedReasons, ['primary-task:unknown:#不存在的主任务']);
+    assert.match(result.processed[0].lastError, /primary-task:unknown:#不存在的主任务/);
+    const checkpoint = JSON.parse(fs.readFileSync(result.checkpoint, 'utf8'));
+    assert.equal(checkpoint.items[f.paperIds[0]].reviewRequired.status, 'needs_taxonomy_review');
 });
 
 test('CLI validates mode/date/limit/concurrency and forwards dry-run', async () => {

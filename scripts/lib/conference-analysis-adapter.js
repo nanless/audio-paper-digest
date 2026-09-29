@@ -520,5 +520,5 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
 
 module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INTENT_CONTRACT, VERSION, UUID_RE,
     stableHash, normalizedPaper, sourceDetails, validatePersistedSourceDetails,
-    readJsonRecord, writeBytesAtomic, prepareArtifacts, prepareConferenceAnalysis, loadConferenceAnalysis, verifyPlanAuthority,
+    readJsonRecord, writeBytesAtomic, replaceJson, prepareArtifacts, prepareConferenceAnalysis, loadConferenceAnalysis, verifyPlanAuthority,
     sealCompletedRun, sealCompletedRunLocked, analyzeConference };

@@ -857,6 +857,55 @@ describe('analyzePaperWithRetry', () => {
         ), /没有保留负面证据/);
     });
 
+    it('带方向的 AVG 条件列是指标列，条件-方法型结果表通过可核对数字门禁', () => {
+        const withResults = body => validAnalysisText().replace(
+            /## 实验结果\n[\s\S]*?\n\n## 细节详述/,
+            `## 实验结果\n${body}\n\n## 细节详述`
+        );
+        const analysis = withResults([
+            '关键比较问题是回合级文本引导能否在保持节律的同时提升语义得分，以及文本损失加权能否进一步逼近上限。表中保留主方法、最强语音基线与逐词插入基线。',
+            '',
+            '| 方法 / 设置 | 无条件 AVG ↑ | 条件全部 AVG ↑ | 条件助手 AVG ↑ |',
+            '|---|---:|---:|---:|',
+            '| TurnGuide | 8.61 | 6.76 | 6.48 |',
+            '| TurnGuide L3:1 | 9.03 | 7.18 | 7.12 |',
+            '| SCI | 6.94 | 5.85 | 4.94 |',
+            '',
+            'TurnGuide 三项平均分相对 SCI 提升约 1.67，代价是更偏重文本建模；该结论仅适用于该提示生成设置，不能外推到噪声与实时流式场景。'
+        ].join('\n'));
+        const tables = extractMarkdownTables(analysis.match(/## 实验结果[\s\S]*?\n\n## 细节详述/)[0]);
+        assert.strictEqual(tables[0].identifierColumns, 1,
+            '“无条件/条件全部/条件助手 AVG ↑”带方向且含 AVG 指标，不得因中文“条件”子串被判为识别列');
+        assert.strictEqual(validateExperimentTableContract(analysis, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究',
+            sourceText: 'Table 2 reports semantic evaluation results of different models under different temperature settings.',
+        }), null, '方法×条件型结果表的数字必须被计入可核对数字门禁');
+    });
+
+    it('结果段用“对比/超过/降至”等中文比较表述时满足保留比较对象门禁', () => {
+        const withResults = body => validAnalysisText().replace(
+            /## 实验结果\n[\s\S]*?\n\n## 细节详述/,
+            `## 实验结果\n${body}\n\n## 细节详述`
+        );
+        const analysis = withResults([
+            '关键比较问题是端到端模型是否追平级联，以及参考答案能到多高。表中保留参考、级联与端到端两档。',
+            '',
+            '| 方法 | 忠实度 ↑ | 覆盖度 ↑ |',
+            '|---|---:|---:|',
+            '| 参考答案 | 5.0 | 4.2 |',
+            '| 级联 | 3.3 | 4.3 |',
+            '| 端到端 | 2.7 | 4.3 |',
+            '',
+            '表 1 对比开发集参考无关法官打分：参考忠实度达 5.0 满分，级联仅 3.3，端到端进一步降至 2.7；端到端每声明无支撑率约 32%，超过级联的 22% 至 24%，证据边界限于合成英语首诊场景。'
+        ].join('\n'));
+        assert.strictEqual(validateExperimentTableContract(analysis, {
+            contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
+            documentType: '方法研究',
+            sourceText: 'The paper compared cascade and end-to-end systems against the reference oracle.',
+        }), null, '“对比/超过/降至”是真实比较表述，不得误报“没有保留比较对象”');
+    });
+
     it('确定性补回 Muse 遗漏的 Markdown 表格分隔行', () => {
         const malformed = [
             '| 骨干/前端 | 支撑准确率 ↑ | 无支撑拒绝率 ↑ |',

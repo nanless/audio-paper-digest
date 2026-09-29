@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from markdown_hugo_gate import (
+    markdown_table_count,
     mask_rendered_symbolic_table_cells,
     math_and_emphasis_issues,
     validate_hugo_rendered_html_gate,
@@ -129,3 +130,38 @@ class MarkdownCurrencyGateTest(unittest.TestCase):
             self.assertEqual(validate_hugo_rendered_html_gate(output, [artifact]), [])
             target.write_text(page.replace('</div>', '<p>$5+2$</p></div>'), encoding='utf-8')
             self.assertTrue(any('裸 $' in issue for issue in validate_hugo_rendered_html_gate(output, [artifact])))
+
+
+class MarkdownTableCountTest(unittest.TestCase):
+    """markdown_table_count 必须按 Goldmark 语义把连续管道行算作同一张表。"""
+
+    def test_one_block_with_repeated_separators_counts_once(self):
+        text = (
+            '| a | b |\n| --- | --- |\n| 1 | 2 |\n'
+            '| --- | --- |\n| 3 | 4 |\n\n之后的段落'
+        )
+        self.assertEqual(markdown_table_count(text), 1)
+
+    def test_two_separated_blocks_count_two(self):
+        text = (
+            '| a | b |\n| --- | --- |\n| 1 | 2 |\n\n'
+            '| x | y | z |\n| :--- | :--- | :--- |\n| 7 | 8 | 9 |'
+        )
+        self.assertEqual(markdown_table_count(text), 2)
+
+    def test_two_dash_style_separators_do_not_count(self):
+        # `:--` 不是合法 Markdown 分隔符（需 ≥3 连字符），不得计入
+        text = '| a | b |\n| :-- | :-- |\n| 1 | 2 |\n纯文本'
+        self.assertEqual(markdown_table_count(text), 0)
+
+    def test_pipe_rows_without_separator_count_zero(self):
+        text = '| a | b |\n| 1 | 2 |\n纯文本'
+        self.assertEqual(markdown_table_count(text), 0)
+
+    def test_block_at_end_of_text_still_counts(self):
+        text = '| a |\n| --- |\n| 1 |'
+        self.assertEqual(markdown_table_count(text), 1)
+
+    def test_empty_and_none_are_zero(self):
+        self.assertEqual(markdown_table_count(''), 0)
+        self.assertEqual(markdown_table_count(None), 0)

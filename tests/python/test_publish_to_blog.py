@@ -8191,6 +8191,125 @@ body
                 ):
                     publish_to_blog.load_generation_manifest('2026-07-10')
 
+    def test_taxonomy_registry_snapshot_binds_registry_sha_and_ancestor_chain(self):
+        snapshot = publish_to_blog.build_taxonomy_registry_snapshot()
+        self.assertEqual(
+            snapshot['contract'], publish_to_blog.TAXONOMY_REGISTRY_SNAPSHOT_CONTRACT,
+        )
+        self.assertEqual(snapshot['registryVersion'], 'paper-taxonomy-v1')
+        self.assertEqual(
+            snapshot['registrySha256'], publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+        )
+        self.assertEqual(len(snapshot['concepts']), 228)
+        by_id = {item['id']: item for item in snapshot['concepts']}
+        self.assertEqual(by_id['method.lora']['ancestorIds'], ['method.peft'])
+        self.assertEqual(by_id['method.peft']['ancestorIds'], [])
+        self.assertEqual(by_id['method.peft']['zh'], '参数高效微调')
+        self.assertIn('PEFT', by_id['method.peft']['aliases'])
+        self.assertIn('说话人日志', by_id['task.diarization']['aliases'])
+        for item in snapshot['concepts']:
+            ancestors = item['ancestorIds']
+            self.assertNotIn(item['id'], ancestors)
+            for index, ancestor in enumerate(ancestors):
+                # 自根到父链：父概念的祖先必须是本概念祖先的前缀
+                self.assertEqual(by_id[ancestor]['ancestorIds'], ancestors[:index])
+        raw = publish_to_blog.taxonomy_registry_snapshot_bytes(snapshot)
+        self.assertTrue(raw.endswith(b'\n'))
+        self.assertEqual(
+            raw, publish_to_blog.taxonomy_registry_snapshot_bytes(snapshot),
+        )
+        self.assertEqual(
+            json.loads(raw)['registrySha256'],
+            publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+        )
+
+    def test_export_taxonomy_registry_snapshot_writes_frozen_bytes_twice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = (root / 'blog').resolve()
+            (repo / 'content' / 'posts').mkdir(parents=True)
+            self.assertEqual(
+                publish_to_blog.export_taxonomy_registry_snapshot(root / 'missing'), [],
+            )
+            expected = publish_to_blog.taxonomy_registry_snapshot_bytes(
+                publish_to_blog.build_taxonomy_registry_snapshot(),
+            )
+            written = publish_to_blog.export_taxonomy_registry_snapshot(repo)
+            self.assertEqual(
+                [path.relative_to(repo).as_posix() for path in written],
+                ['data/taxonomy-registry.json', 'static/data/taxonomy-registry.json'],
+            )
+            for relative in (
+                    'data/taxonomy-registry.json',
+                    'static/data/taxonomy-registry.json',
+            ):
+                raw = (repo / relative).read_bytes()
+                self.assertEqual(raw, expected)
+                payload = json.loads(raw)
+                self.assertEqual(
+                    payload['registrySha256'],
+                    publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+                )
+                self.assertEqual(len(payload['concepts']), 228)
+            # 字节未变时不重写，避免把博客工作树弄脏
+            self.assertEqual(publish_to_blog.export_taxonomy_registry_snapshot(repo), [])
+
+    def test_generation_exports_taxonomy_registry_snapshot_into_blog_repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, posts, _remote = init_blog_repo(tmp)
+            current_dir = Path(tmp) / 'data' / 'current'
+            date_str = '2026-07-10'
+            paper = {
+                'arxivId': '2607.00001',
+                'title': 'Published paper',
+                'fetchBatchDate': date_str,
+                'parsed': {'score': 8.0},
+            }
+            options = {
+                'data_file': 'unused-test-input.json',
+                'target_date': date_str,
+                'category': '论文速递',
+                'publish_all': False,
+                'excluded_ids': [],
+                'legacy_v5_maintenance': True,
+            }
+            with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                    mock.patch.object(publish_to_blog, 'CONTENT_DIR', str(posts)), \
+                    mock.patch.object(publish_to_blog, 'CURRENT_DIR', current_dir), \
+                    mock.patch.object(
+                        publish_to_blog, 'validate_publish_target',
+                        return_value=(repo, posts),
+                    ), mock.patch.object(
+                        publish_to_blog, 'validate_daily_fresh_sources_for_publish',
+                    ), mock.patch.object(
+                        publish_to_blog, 'load_papers', return_value=[paper],
+                    ), mock.patch.object(
+                        publish_to_blog, 'validate_papers_for_publish',
+                        return_value=[paper],
+                    ), mock.patch.object(
+                        publish_to_blog, 'score_and_sort', return_value=([], [paper]),
+                    ), mock.patch.object(
+                        publish_to_blog, 'prepare_generation_journal',
+                        side_effect=publish_to_blog.PublishDataValidationError(
+                            'staging sentinel',
+                        ),
+                    ), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    publish_to_blog.generate_main(options)
+            # 快照必须在 staging 之前落盘，并且两份字节完全一致
+            self.assertEqual(
+                (repo / 'data' / 'taxonomy-registry.json').read_bytes(),
+                (repo / 'static' / 'data' / 'taxonomy-registry.json').read_bytes(),
+            )
+            payload = json.loads(
+                (repo / 'data' / 'taxonomy-registry.json').read_text(encoding='utf-8'),
+            )
+            self.assertEqual(
+                payload['registrySha256'],
+                publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+            )
+            self.assertEqual(len(payload['concepts']), 228)
+
 
 if __name__ == '__main__':
     unittest.main()

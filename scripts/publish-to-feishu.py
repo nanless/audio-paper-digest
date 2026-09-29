@@ -25,6 +25,7 @@ from publish_common import (
     paper_batch_date, score_and_sort, select_blog_published_snapshot,
     validate_papers_for_publish,
 )
+from paper_taxonomy import load_taxonomy
 from utils import parse_analysis
 
 # ─── Feishu Config ────────────────────────────────────────────
@@ -231,16 +232,51 @@ def generate_paper_md(paper, date_str):
     return md
 
 
+TAXONOMY_FALLBACK_NOTICE = (
+    '⚠️ 该批次未携带受控标签元数据，以下为旧式扁平标签计数，'
+    '不代表新版任务/方法统计'
+)
+
+
+def batch_taxonomy_metadata_gap(papers):
+    """逐篇检查受控 taxonomy 元数据，任一缺失/失效即返回 True。
+
+    ``publish_common.extract_top_tags`` 是不强制 taxonomy 的旧式统计入口，
+    允许 ``primaryTaskTag`` 缺失时回退到 ``tags[0]`` 并跳过解析失败的论文。
+    发布通道不允许这样静默降级：这里显式判定降级条件，由正文写出声明。
+    """
+    registry = load_taxonomy()
+    for paper in papers:
+        if not isinstance(paper, dict):
+            return True
+        parsed = paper.get('parsed')
+        if not isinstance(parsed, dict):
+            parsed = parse_analysis(paper.get('analysis', '')) or {}
+        validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
+        if not isinstance(validation, dict) or validation.get('valid') is not True \
+                or not str(parsed.get('primaryTaskTag') or '').strip() \
+                or validation.get('registryVersion') != registry['version'] \
+                or validation.get('registrySha256') != registry.get('registrySha256'):
+            return True
+    return False
+
+
 def generate_overview_md(scored, unscored, date_str):
     """生成汇总页 Markdown 内容"""
     total = len(scored) + len(unscored)
-    top_tags = extract_top_tags([p for _, p, _ in scored] + unscored, limit=8)
+    overview_papers = [p for _, p, _ in scored] + unscored
+    top_tags = extract_top_tags(overview_papers, limit=8)
+    taxonomy_degraded = batch_taxonomy_metadata_gap(overview_papers)
 
     md = f'# 语音/音乐/音频论文速递 {date_str}\n\n'
     md += f'共分析 **{total}** 篇论文\n\n'
     md += '---\n\n'
     md += '## 今日概览\n\n'
     md += f'📥 抓取 {total} 篇 → 🔬 深度分析完成\n\n'
+
+    if taxonomy_degraded:
+        # 降级声明必须出现在扁平标签计数之前，而不是静默替换统计口径。
+        md += f'{TAXONOMY_FALLBACK_NOTICE}\n\n'
 
     if top_tags:
         md += '### 热门方向\n\n'

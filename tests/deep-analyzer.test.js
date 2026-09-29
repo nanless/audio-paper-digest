@@ -4497,7 +4497,9 @@ has_dataset: 否
         assert.strictEqual(validate('例外是消防车融合准确率 57.1% 低于音频分支 65.7%，形成负增益。'), null);
         assert.match(validate('测试误差从 12.4% 下降至 10.8%。'), /没有保留负面证据/);
         assert.match(validate('代价是测试误差从 12.4% 下降至 10.8%。'), /没有保留负面证据/);
-        assert.match(validate('动态幅度从 44.58 下降至 35.62。'), /没有保留负面证据/);
+        // explicitMetricDecline：裸指标（higher-is-better）下降本身即算负面证据，
+        // 无需"代价/牺牲"前缀，因此本例通过门禁返回 null。
+        assert.strictEqual(validate('动态幅度从 44.58 下降至 35.62。'), null);
         assert.match(validate('准确率从 90.0% 微升至 91.0%。'), /没有保留负面证据/);
     });
 

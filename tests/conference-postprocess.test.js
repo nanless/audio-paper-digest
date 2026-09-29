@@ -14,7 +14,7 @@ const executionCli = require('../scripts/conference-execution.js');
 const adapter = require('../scripts/lib/conference-analysis-adapter.js');
 const pageApi = require('../scripts/lib/historical-page-staging.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
-const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
+const { validAnalysisPaper, validAnalysisText } = require('./valid-analysis-fixture.js');
 
 const TAXONOMY = path.resolve(__dirname, '../config/paper-taxonomy.json');
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
@@ -42,10 +42,11 @@ function canonical(index) {
     return validAnalysisPaper(`2609.${String(10000 + index).slice(-5)}`).analysis;
 }
 
-function completed(executionId, index = 0) {
+function completed(executionId, index = 0, analysisText) {
     const paperId = `conference:icassp:2026:icassp-arnumber:${100 + index}`;
-    const base = validAnalysisPaper(`2609.${String(10000 + index).slice(-5)}`);
-    const analysis = canonical(index); const parsed = require('../scripts/utils.js').parseAnalysis(analysis);
+    const base = validAnalysisPaper(`2609.${String(10000 + index).slice(-5)}`, {}, analysisText);
+    const analysis = analysisText || canonical(index);
+    const parsed = require('../scripts/utils.js').parseAnalysis(analysis);
     const article = `会议 Reader 全新正文 ${index}。`; const articleSha = sha256(article);
     const plan = { version: 3, contract: 'beginner-researcher-v3', readerTitle: `会议解读 ${index}`,
         oneSentenceThesis: '会议论文的一句话结论。', figurePlacements: [], tableBindings: [], formulaBindings: [],
@@ -108,12 +109,13 @@ function completed(executionId, index = 0) {
             tables: [], formulas: [], figures: [] } } } };
 }
 
-function fixture(t) {
+function fixture(t, extraRuns = []) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-postprocess-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const runs = new Map(); const one = '11111111-1111-4111-8111-111111111111';
     const two = '22222222-2222-4222-8222-222222222222';
     runs.set(one, completed(one, 1)); runs.set(two, completed(two, 2));
+    for (const item of extraRuns) runs.set(item.executionId, completed(item.executionId, item.index, item.analysisText));
     const paperIds = [...runs.values()].map(item => item.run.paperId).sort(); const selectedMemberSetSha256 = api.stableHash(paperIds);
     const run = { conferenceId: 'icassp-2026', identitySha256: '1'.repeat(64), stateSha256: '2'.repeat(64),
         membershipSha256: '3'.repeat(64), filterPolicySha256: '4'.repeat(64), selectionReceiptSha256: '5'.repeat(64),
@@ -126,7 +128,8 @@ function fixture(t) {
         planHandleAuthority: handle => { if (handle?.key !== 'a') throw new Error('wrong plan'); return structuredClone(planAuthority); },
         verifyPlanAuthority: (loaded, handle) => { if (loaded.planKey !== handle?.key) throw new Error('cross-plan'); return true; },
         isSuccessful: () => true, render: packet => ({ markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\n${packet.paper.parsed.summary}\n`, assets: [] }) };
-    return { root, one, two, runs, planHandle, sourceRoot: path.join(root, 'source'), dependencies };
+    const extra = extraRuns.map(item => item.executionId);
+    return { root, one, two, extra, runs, planHandle, sourceRoot: path.join(root, 'source'), dependencies };
 }
 
 test('generic conference stage binds sealed completion, identity, taxonomy and registry-isolated bytes', t => {
@@ -301,6 +304,14 @@ test('aggregate replays every selected stage and emits only when the full explic
     assert.equal(result.manifest.readerQuality, 'reader-facing-v3');
     assert.equal(result.manifest.taxonomy.scope, 'aggregate-primary-task-counts');
     assert.deepEqual(result.manifest.primaryTaskCounts, [{ label: '语音识别', count: 2 }]);
+    // 汇总页必须携带支撑“热门方向只统计主任务”的 concept 数据，
+    // 结构与单篇页一致（{facet,id,label}），scope 语义保持不变。
+    const conceptsLine = result.manifest.markdown.split('\n')
+        .find(line => line.startsWith('paper_digest_taxonomy_concepts: '));
+    assert.equal(conceptsLine,
+        'paper_digest_taxonomy_concepts: [{"facet":"task","id":"task.asr","label":"语音识别"}]');
+    assert.match(result.manifest.markdown,
+        /paper_digest_taxonomy_concepts: .*?\npaper_digest_taxonomy_scope: "aggregate-primary-task-counts"/);
     assert.match(result.manifest.markdown, /paper_digest_reader_quality: "reader-facing-v3"/);
     assert.match(result.manifest.markdown, /paper_digest_page_type: index/);
     assert.match(result.manifest.markdown, /^date: 2026-09-07$/m);
@@ -327,6 +338,134 @@ test('aggregate rejects a selected-member subset and executions from another aut
     f.runs.get(f.two).planKey = 'b';
     assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], taxonomyFile: TAXONOMY,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /cross-plan/);
+});
+
+test('multi-level taxonomy hierarchy counts direct and subtree papers on every level', () => {
+    const registry = taxonomyApi.loadTaxonomy(TAXONOMY);
+    const hierarchy = api.aggregateHierarchy(registry, [
+        ['task.asr', 'method.transformer', 'research_focus.robustness'],
+        ['task.av-asr', 'method.transformer', 'research_focus.robustness'],
+        ['task.lip-reading', 'method.transformer']]);
+    assert.equal(hierarchy.contract, api.HIERARCHY_CONTRACT);
+    assert.equal(hierarchy.registrySha256, registry.registrySha256);
+    assert.equal(hierarchy.registryVersion, registry.version);
+    assert.equal(hierarchy.memberCount, 3);
+    assert.equal(hierarchy.facets.length, 9);
+    const facet = id => hierarchy.facets.find(item => item.id === id);
+    assert.deepEqual(hierarchy.facets.map(item => item.id), registry.facets.map(item => item.id));
+    // 每分面一棵树，只输出计数 > 0 的节点。
+    const task = facet('task');
+    assert.deepEqual(task.nodes.map(node => node.id), ['task.asr']);
+    const [root] = task.nodes;
+    assert.deepEqual({ id: root.id, label: root.label, level: root.level, directCount: root.directCount, subtreeCount: root.subtreeCount },
+        { id: 'task.asr', label: '语音识别', level: 0, directCount: 1, subtreeCount: 3 });
+    const [second] = root.children;
+    assert.deepEqual({ id: second.id, level: second.level, directCount: second.directCount, subtreeCount: second.subtreeCount },
+        { id: 'task.av-asr', level: 1, directCount: 1, subtreeCount: 2 });
+    const [third] = second.children;
+    assert.deepEqual({ id: third.id, level: third.level, directCount: third.directCount, subtreeCount: third.subtreeCount },
+        { id: 'task.lip-reading', level: 2, directCount: 1, subtreeCount: 1 });
+    assert.deepEqual(third.children, []);
+    // 空分面保留分面壳（每分面一棵树），但没有任何节点。
+    assert.deepEqual(facet('application'), { id: 'application', label: '应用', nodes: [] });
+    // 同分面内未被计数的兄弟/后代概念绝不出现。
+    const serialized = JSON.stringify(hierarchy);
+    for (const id of ['task.inverse-text-normalization', 'task.speech-separation',
+        'research_focus.adversarial-robustness']) assert.equal(serialized.includes(id), false);
+    assert.equal(facet('method').nodes[0].directCount, 3);
+    assert.equal(facet('method').nodes[0].subtreeCount, 3);
+    assert.equal(facet('research_focus').nodes[0].directCount, 2);
+    const flat = [];
+    const walk = nodes => nodes.forEach(node => { flat.push(node); walk(node.children); });
+    hierarchy.facets.forEach(item => walk(item.nodes));
+    assert.equal(flat.length, 5);
+    assert.ok(flat.every(node => Number.isInteger(node.directCount) && Number.isInteger(node.subtreeCount)
+        && node.directCount > 0 && node.subtreeCount >= node.directCount));
+    // 含子树按成员去重：同一篇同时带祖先与后代也不会被数两次。
+    const deduped = api.aggregateHierarchy(registry, [['task.asr', 'task.av-asr'], ['task.lip-reading']]);
+    const dedupRoot = deduped.facets.find(item => item.id === 'task').nodes[0];
+    assert.deepEqual([dedupRoot.directCount, dedupRoot.subtreeCount], [1, 2]);
+    // 未知概念 fail-closed。
+    assert.throws(() => api.aggregateHierarchy(registry, [['task.not-a-concept']]), /does not know/);
+    assert.throws(() => api.aggregateHierarchy(registry, [[null]]), /does not know/);
+    assert.throws(() => api.aggregateHierarchy(registry, ['not-an-array']), /must be an array/);
+    assert.throws(() => api.aggregateHierarchy({}, []), /loaded registry/);
+    // 渲染：根不缩进、二级缩进一级、三级缩进两级，链接按标签 URL 编码。
+    const lines = api.hierarchyLines(hierarchy);
+    assert.equal(lines[0], '### 🏷️ 多级标签统计');
+    assert.ok(lines.some(line => line.startsWith('每个层级都统计本期论文数') && line.includes('点开下级标签可看该级论文数')));
+    assert.ok(lines.includes(`- [#语音识别](/tags/${encodeURIComponent('语音识别')}/) — 直接 1 篇 · 含子树 3 篇`));
+    assert.ok(lines.includes(`  - [#音视频语音识别](/tags/${encodeURIComponent('音视频语音识别')}/) — 直接 1 篇 · 含子树 2 篇`));
+    assert.ok(lines.includes(`    - [#唇读](/tags/${encodeURIComponent('唇读')}/) — 直接 1 篇 · 含子树 1 篇`));
+    // 8 个英文专名标签必须折成 Hugo 实际生成的小写词页 URL，否则 404。
+    assert.ok(lines.includes('- [#Transformer](/tags/transformer/) — 直接 3 篇 · 含子树 3 篇'));
+    assert.equal(api.tagHref('Transformer'), '/tags/transformer/');
+    assert.equal(api.tagHref('鲁棒性'), `/tags/${encodeURIComponent('鲁棒性')}/`);
+    assert.ok(lines.includes('#### 研究任务'));
+    assert.ok(lines.includes('#### 方法'));
+    assert.ok(lines.includes('#### 研究重点'));
+    assert.equal(lines.some(line => line.startsWith('#### 应用')), false);
+});
+
+test('aggregate renders the multi-level tag drill-down and seals it in the manifest', t => {
+    const tagged = tag => validAnalysisText().replaceAll('#语音识别', tag);
+    const f = fixture(t, [
+        { executionId: '33333333-3333-4333-8333-333333333333', index: 3,
+            analysisText: tagged(currentTag('task.av-asr')) },
+        { executionId: '44444444-4444-4444-8444-444444444444', index: 4,
+            analysisText: tagged(currentTag('task.lip-reading')) }]);
+    const stagingRoot = path.join(f.root, 'staging'); const aggregateRoot = path.join(f.root, 'aggregate');
+    const executionIds = [f.one, f.two, ...f.extra];
+    for (const executionId of executionIds) api.stagePaper({ analysisRoot: 'ignored', executionId,
+        taxonomyFile: TAXONOMY, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+    const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds, taxonomyFile: TAXONOMY,
+        stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+    const registry = taxonomyApi.loadTaxonomy(TAXONOMY);
+    const hierarchy = result.manifest.taxonomyHierarchy;
+    assert.equal(hierarchy.contract, api.HIERARCHY_CONTRACT);
+    assert.equal(hierarchy.registrySha256, registry.registrySha256);
+    assert.equal(hierarchy.memberCount, 4);
+    const task = hierarchy.facets.find(item => item.id === 'task');
+    assert.deepEqual(task.nodes.map(node => node.id), ['task.asr']);
+    const [root, second] = [task.nodes[0], task.nodes[0].children[0]];
+    assert.deepEqual([root.directCount, root.subtreeCount], [2, 4]);
+    assert.deepEqual([second.directCount, second.subtreeCount], [1, 2]);
+    const third = second.children[0];
+    assert.deepEqual({ id: third.id, level: third.level, counts: [third.directCount, third.subtreeCount] },
+        { id: 'task.lip-reading', level: 2, counts: [1, 1] });
+    assert.equal(hierarchy.facets.find(item => item.id === 'method').nodes[0].directCount, 4);
+    // 兼容：既有字段一个都不动。
+    assert.deepEqual(Object.fromEntries(result.manifest.primaryTaskCounts.map(item => [item.label, item.count])),
+        { 语音识别: 2, 音视频语音识别: 1, 唇读: 1 });
+    assert.equal(result.manifest.taxonomy.contract, 'paper-taxonomy-flat-tags-compat-v1');
+    assert.equal(result.manifest.taxonomy.registrySha256, registry.registrySha256);
+    assert.equal(result.manifest.taxonomy.scope, 'aggregate-primary-task-counts');
+    assert.equal(result.manifest.registrySha256, registry.registrySha256);
+    // 排版：热门方向表之后、评分排行榜之前，分面分节 + 缩进层级 + 可点开链接。
+    const markdown = result.manifest.markdown;
+    assert.ok(markdown.indexOf('### 🏷️ 热门方向') < markdown.indexOf('### 🏷️ 多级标签统计'));
+    assert.ok(markdown.indexOf('### 🏷️ 多级标签统计') < markdown.indexOf('## 📊 论文评分排行榜'));
+    const section = markdown.split('### 🏷️ 多级标签统计')[1].split('## 📊 论文评分排行榜')[0];
+    const link = label => `/tags/${encodeURIComponent(label)}/`;
+    const rows = section.split('\n');
+    assert.ok(rows.includes(`- [#语音识别](${link('语音识别')}) — 直接 2 篇 · 含子树 4 篇`));
+    assert.ok(rows.includes(`  - [#音视频语音识别](${link('音视频语音识别')}) — 直接 1 篇 · 含子树 2 篇`));
+    assert.ok(rows.includes(`    - [#唇读](${link('唇读')}) — 直接 1 篇 · 含子树 1 篇`));
+    assert.ok(rows.includes('- [#Transformer](/tags/transformer/) — 直接 4 篇 · 含子树 4 篇'));
+    assert.ok(rows.includes(`- [#鲁棒性](${link('鲁棒性')}) — 直接 4 篇 · 含子树 4 篇`));
+    assert.ok(section.includes('零级标签可点开进入对应标签页，点开下级标签可看该级论文数。'));
+    assert.ok(section.includes('#### 研究任务'));
+    assert.ok(section.includes('#### 方法'));
+    assert.ok(section.includes('#### 研究重点'));
+    assert.equal(section.includes('#### 应用'), false);
+    assert.equal(section.includes('音频分离'), false);
+    assert.ok(markdown.includes(`paper_digest_taxonomy_registry_sha256: "${registry.registrySha256}"`));
+    // 落盘字节与 manifest 完全一致，且层级统计随 manifest 一起封存。
+    const directory = path.join(aggregateRoot, 'icassp-2026', result.manifest.aggregateId);
+    assert.equal(fs.readFileSync(path.join(directory, 'aggregate.md'), 'utf8'), markdown);
+    const written = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'));
+    assert.equal(written.manifestSha256, result.manifest.manifestSha256);
+    assert.deepEqual(written.taxonomyHierarchy, hierarchy);
 });
 
 test('Reader/scoring/taxonomy/publication compatibility gates cannot be bypassed by success stubs', t => {
@@ -442,6 +581,46 @@ test('shared immutable staging writer removes its own short EIO file and retries
     assert.throws(() => pageApi.writeExact(filename, Buffer.from('complete bytes'), { io }), /EIO/);
     assert.equal(fs.existsSync(filename), false);
     assert.equal(pageApi.writeExact(filename, Buffer.from('complete bytes')), sha256('complete bytes'));
+});
+
+test('an unresolved primary task becomes a review assignment, never a page, and is promoted after the fix', t => {
+    const f = fixture(t); const stagingRoot = path.join(f.root, 'review-staging');
+    const unknownTaskText = validAnalysisText()
+        .replace('primary_task_tag: #语音识别', 'primary_task_tag: #不存在的主任务')
+        .replace('#语音识别 #Transformer #鲁棒性', '#不存在的主任务 #Transformer #鲁棒性')
+        .replace('主任务标签: #语音识别', '主任务标签: #不存在的主任务');
+    f.runs.set(f.one, completed(f.one, 1, unknownTaskText));
+    const args = { analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY, stagingRoot,
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true };
+    const review = api.stagePaper(args, f.dependencies);
+    assert.equal(review.status, 'blocked');
+    assert.equal(review.assignment.status, 'blocked');
+    assert.ok(review.assignment.blockedReasons.includes('primary-task:unknown:#不存在的主任务'));
+    assert.ok(review.assignment.blockedReasons.some(reason => reason.startsWith('selection:')));
+    assert.deepEqual(review.assignment.conceptIds, []);
+    assert.equal(review.assignment.primaryTaskId, null);
+    assert.match(review.assignment.registrySha256, /^[a-f0-9]{64}$/);
+    // Fail-closed: the blocked paper stages its assignment placeholder only.
+    const registry = taxonomyApi.loadTaxonomy(TAXONOMY);
+    const registryRoot = path.join(stagingRoot, f.one, registry.registrySha256);
+    const implementationRoot = path.join(registryRoot, fs.readdirSync(registryRoot)[0]);
+    assert.deepEqual(fs.readdirSync(implementationRoot), ['assignment.json']);
+    assert.equal(fs.existsSync(path.join(implementationRoot, 'page.md')), false);
+    assert.equal(fs.existsSync(path.join(implementationRoot, 'manifest.json')), false);
+
+    // Fixing the labels re-runs postprocess: the placeholder is superseded and
+    // the paper is promoted to a real staged page under the same execution.
+    f.runs.set(f.one, completed(f.one, 1));
+    const staged = api.stagePaper(args, f.dependencies);
+    assert.equal(staged.status, 'staged');
+    assert.equal(staged.manifest.paperId, f.runs.get(f.one).run.paperId);
+    assert.deepEqual(fs.readdirSync(implementationRoot).sort(), ['assignment.json', 'manifest.json', 'page.md']);
+    const assignment = JSON.parse(fs.readFileSync(path.join(implementationRoot, 'assignment.json'), 'utf8'));
+    assert.equal(assignment.status, 'assigned');
+    assert.equal(assignment.primaryTaskId, 'task.asr');
+    assert.equal(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies).manifest.manifestSha256,
+    staged.manifest.manifestSha256);
 });
 
 test('CLI requires full authority, configured roots and distinct UUID selections', () => {

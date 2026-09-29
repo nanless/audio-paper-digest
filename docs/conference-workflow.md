@@ -85,14 +85,14 @@ current taxonomy compat 的单篇页及 `reader-facing-v3` 风格会议汇总。
 
 当前官方 acquisition provider：
 
-- 语音/音频/音乐：`odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、
+- 语音/音频/音乐：`odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、`interspeech-2026`、
   `iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`；
 - AI/ML/CV/NLP：`aaai-2026`（OJS volume 40）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、
   `cvpr-2026`（CVF main）、`acl-2026`、`eacl-2026`；
 - ACL/EACL 只纳入主会 `long`、`short` 和 `findings`，卷首、全集 PDF、workshop 与
   非论文演讲不会冒充单篇论文；Odyssey keynote 摘要页同样排除。
 
-CHiME、JEP 和 Speech Prosody 通过各自的官方 ISCA Archive proceedings index
+CHiME、JEP、Speech Prosody 和 Interspeech 通过各自的官方 ISCA Archive proceedings index
 封存 metadata 与逐篇 PDF。ICMC 2026 的官方页面只提供一个合并 proceedings PDF；
 `icmc-2026` 先封存该 PDF，再按官方 outline 的物理页范围用固定脚本确定性切片，
 生成 page map、单篇 PDF 与绑定原始合并 PDF SHA 的 receipt。无法从源 PDF 恢复的页
