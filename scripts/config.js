@@ -233,6 +233,9 @@ const FILES = {
     historicalDirectRewriteStagingDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-staging'),
     historicalDirectAggregateProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregate-projections'),
     historicalDirectAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregates'),
+    historicalDirectTaxonomySupplementDir: path.join(DATA_DIR, 'runtime', 'historical-direct-taxonomy-supplements'),
+    historicalSourceTaxonomyClassificationDir: path.join(DATA_DIR, 'runtime', 'historical-source-taxonomy-classifications'),
+    historicalSourceIdentitySupplementDir: path.join(DATA_DIR, 'runtime', 'historical-source-identity-supplements'),
     // Full-history publication receipts are intentionally isolated from the
     // legacy crosswalk publication prototype and from daily schema-v3 state.
     historicalDirectPublicationDir: path.join(DATA_DIR, 'runtime', 'historical-direct-publications'),

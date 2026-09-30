@@ -1,0 +1,97 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const io=require('./historical-conference-page-projections.js'),runner=require('./historical-direct-rewrite-runner.js');
+const api=require('./historical-source-taxonomy-classification.js'),writer=require('./historical-direct-taxonomy-supplement.js');
+const snippets=require('./source-evidence-snippets.js');
+const digest=v=>crypto.createHash('sha256').update(v).digest('hex');
+const fail=m=>{throw new Error('Source taxonomy checkpoint export rejected: '+m);};
+function validateExcludedIds(ids,selection,plan) {
+ if(!Array.isArray(ids)||new Set(ids).size!==ids.length||ids.some(id=>!selection.paperIds.includes(id)||!plan.queue.some(item=>item.paperId===id)))fail('excluded IDs duplicate or outside original selection/plan');
+ return ids;
+}
+function verifyPageRecord(record,classification) {
+ const {proofSha256,...body}=record;
+ if(proofSha256!==runner.stableHash(body)||record.classificationRecordSha256!==runner.stableHash(classification)
+  ||record.classificationProofSha256!==classification.proofSha256||record.requestStageFingerprint!==classification.fingerprint
+  ||record.paperId!==classification.paperId||runner.stableHash(record.source)!==runner.stableHash(classification.source)
+  ||runner.stableHash(record.evidence)!==runner.stableHash(classification.concepts)
+  ||record.primaryTaskId!==classification.primaryTaskId||record.primaryMethodId!==classification.primaryMethodId)fail('signed page/classification differs');
+ return record;
+}
+function filterSignedRecords(records,classifications,excludePaperIds) {
+ const result={};
+ for(const[key,r]of Object.entries(records)) {
+  if(excludePaperIds.includes(r.paperId))continue;
+  if(!classifications.has(r.paperId))fail('page lacks replayed classification');
+  result[key]=verifyPageRecord(r,classifications.get(r.paperId));
+ }
+ return result;
+}
+function projectPage(item,page,loaded,record,runtime) {
+ if(loaded.fileSha256!==page.pageContentSha256||record.paperId!==item.paperId)fail('frozen page/paper differs');
+ const body={paperId:item.paperId,runId:record.runId,pageKey:page.pageKey,pageSha256:loaded.fileSha256,
+  bodySha256:digest(writer.pageBody(loaded.bytes)),registrySha256:runtime.registrySha256,registryVersion:runtime.registryVersion,
+  concepts:record.concepts.map(({id,facet,label})=>({id,facet,label})),primaryTaskId:record.primaryTaskId,primaryTaskLabel:record.primaryTaskLabel,
+  primaryMethodId:record.primaryMethodId,primaryMethodLabel:record.primaryMethodLabel,evidenceType:'source-only-taxonomy',classificationContract:api.CONTRACT,
+  classificationRecordSha256:runner.stableHash(record),classificationProofSha256:record.proofSha256,source:record.source,evidence:record.concepts,
+  evidenceSelectionContract:record.evidenceSelectionContract,quoteSelections:record.quoteSelections,requestStageFingerprint:record.fingerprint,
+  reviewProof:record.reviewProof,reviewProofSha256:record.reviewProofSha256};
+ return {...body,proofSha256:runner.stableHash(body)};
+}
+function processedIdsForExport(selection,checkpoint,classifications) {
+ if(checkpoint.checkpointScheduling==='completion-set-v1') {
+  const accepted=new Set(checkpoint.decisions.map(d=>d.paperId));
+  if([...accepted].some(id=>!classifications.has(id)))fail('completed checkpoint lacks replayed accepted caches');
+  return [...checkpoint.processedPaperIds];
+ }
+ const failures=new Set(checkpoint.failures.map(f=>f.paperId)),processed=[];
+ for(const id of selection.paperIds){if(!classifications.has(id)&&!failures.has(id))break;processed.push(id);}
+ if(processed.length<checkpoint.processed||[...classifications.keys()].some(id=>!processed.includes(id)))fail('accepted caches extend beyond a replayable sequential completion prefix');
+ return processed;
+}
+async function exportCheckpoint(options) {
+ const config=require('../config.js'),{plan}=writer.readPlanRegistry(options);
+ const runtime=require('./taxonomy-runtime.js').createTaxonomyRuntime({registryPath:options.registrySnapshot});
+ const directory=path.dirname(options.checkpointFile),checkpoint=io.readStableJson(options.checkpointFile,'original immutable classifier checkpoint');
+ const selection=io.readStableJson(path.join(directory,'selection.json'),'original immutable selection');
+ api.validateResumeCheckpoint(checkpoint.value,selection.value,{planSha256:plan.planSha256,registrySha256:runtime.registrySha256,filename:options.checkpointFile});
+ const items=new Map(plan.queue.map(i=>[i.paperId,i])),classifications=new Map(),excluded=validateExcludedIds(options.excludePaperIds||[],selection.value,plan);
+ const completeSet=checkpoint.value.checkpointScheduling==='completion-set-v1';
+ const checkpointCacheNames=new Set(checkpoint.value.decisions.map(d=>'decision-'+digest(d.paperId).slice(0,16)+'-'+d.fingerprint+'.json'));
+ for(const filename of fs.readdirSync(directory).filter(n=>n.startsWith('decision-')&&n.endsWith('.json')).sort()) {
+  // Parallel caches may finish beyond this immutable checkpoint. Such work is
+  // deliberately pending for this export, regardless of its cached response.
+  if(completeSet&&!checkpointCacheNames.has(filename))continue;
+  const record=io.readStableJson(path.join(directory,filename),'accepted classifier cache').value;
+  if(filename!=='decision-'+digest(record.paperId).slice(0,16)+'-'+record.fingerprint+'.json'||!selection.value.paperIds.includes(record.paperId)||classifications.has(record.paperId))fail('cache name/cohort duplicates or differs');
+  const source=await api.loadSource(items.get(record.paperId),config,1);
+  // Old completion is retained only as a processed item for these two exact
+  // identities. Its pre-disclosure classification is deliberately not exported.
+  if(excluded.includes(record.paperId)&&['arxiv:2605.12987','arxiv:2606.01009'].includes(record.paperId)
+      &&source.source.pdfVersionBinding&&!Object.hasOwn(record.source,'pdfVersionBinding')) {
+    delete source.source.pdfVersionBinding;delete source.source.sourceVersionWarning;
+  }
+  api.validateCachedDecision(record,{fingerprint:record.fingerprint,runtime,bundle:snippets.buildSnippets(source.text),source});
+  classifications.set(record.paperId,record);
+ }
+ const processedPaperIds=processedIdsForExport(selection.value,checkpoint.value,classifications);
+ const records=filterSignedRecords(checkpoint.value.supplement.records,classifications,excluded);
+ for(const id of processedPaperIds) {
+  if(!classifications.has(id)||excluded.includes(id))continue;
+  const item=items.get(id),record=classifications.get(id);
+  for(const page of item.pages) {
+   const loaded=io.readStableFile(path.join(options.blogRoot,page.pagePath),'original classified frozen page');
+   if(/^paper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1/m.test(loaded.bytes.toString('utf8').split('---',3)[1]||''))continue;
+   const projected=projectPage(item,page,loaded,record,runtime);
+   if(records[page.pagePath]&&runner.stableHash(records[page.pagePath])!==runner.stableHash(projected))fail('reconstructed signed page bytes differ');
+   records[page.pagePath]=projected;
+  }
+ }
+ const supplement={contract:writer.CONTRACT,records};
+ const report={contract:api.CONTRACT+'-checkpoint-export-report',checkpointFileSha256:checkpoint.fileSha256,selectionFileSha256:selection.fileSha256,
+  selected:selection.value.paperIds.length,processed:processedPaperIds.length,processedPaperIds,acceptedCaches:classifications.size,
+  rejected:checkpoint.value.failures.length,excludedPaperIds:excluded,exportedPaperCount:new Set(Object.values(records).map(r=>r.paperId)).size,
+  pageCount:Object.keys(records).length,remainingPaperIds:selection.value.paperIds.filter(id=>!processedPaperIds.includes(id)),failures:checkpoint.value.failures};
+ return {supplement,report};
+}
+module.exports={validateExcludedIds,verifyPageRecord,filterSignedRecords,projectPage,processedIdsForExport,exportCheckpoint};
