@@ -61,3 +61,62 @@ test('parallel export uses the exact completion set and treats later accepted ca
  assert.deepEqual(api.processedIdsForExport({paperIds:fifty},big,new Map(fifty.map(id=>[id,{}]))),done);
  assert.deepEqual(fifty.filter(id=>!done.includes(id)),['p2','p3','p5']);
 });
+function partialFixture() {
+ const paperIds=['arxiv:2601.00001','arxiv:2601.00002','arxiv:2601.00003','arxiv:2601.00004'];
+ const selection={contract:classify.CONTRACT+'-selection',planSha256:'plan',registrySha256:'registry',paperIds};
+ const proof=signed(paperIds[2]);
+ const value={contract:classify.CONTRACT+'-checkpoint',supplement:{contract:'historical-direct-taxonomy-supplement-v1',records:{'c.md':proof.page}},
+  report:{contract:classify.CONTRACT+'-report',state:'partial',selected:4,processed:2,decisions:[{paperId:paperIds[2],fingerprint:'f'.repeat(64)}],
+   failures:[{paperId:paperIds[0],status:'needs-review',error:'independent review rejected'}],pageCount:1,remainingPaperIds:[paperIds[1],paperIds[3]],
+   stopped:{paperId:paperIds[1],status:'model-service-network-unavailable',error:'aborted'}}};
+ const options=v=>({planSha256:'plan',registrySha256:'registry',filename:'partial-'+String(v.report.processed).padStart(6,'0')+'-'+runner.stableHash(v).slice(0,16)+'.json'});
+ return {value,selection,proof,options};
+}
+test('partial exporter retains signed non-prefix completion and leaves extra caches pending',()=>{
+ const {value,selection,proof,options}=partialFixture(),original=structuredClone(value);
+ const normalized=api.normalizeCheckpoint(value,selection,options(value));
+ assert.deepEqual(normalized.processedPaperIds,[selection.paperIds[0],selection.paperIds[2]]);
+ assert.equal(normalized.supplement.records['c.md'],value.supplement.records['c.md']);
+ const caches=new Map([[selection.paperIds[2],proof.classification],[selection.paperIds[3],signed(selection.paperIds[3]).classification]]);
+ const completed=api.processedIdsForExport(selection,normalized,caches);
+ assert.deepEqual(completed,[selection.paperIds[0],selection.paperIds[2]]);
+ assert.deepEqual(selection.paperIds.filter(id=>!completed.includes(id)),value.report.remainingPaperIds);
+ assert.deepEqual(api.filterSignedRecords(normalized.supplement.records,caches,[]),original.supplement.records);
+ assert.deepEqual(value,original);
+ assert.throws(()=>api.normalizeCheckpoint(value,selection,{...options(value),filename:'partial-000002-'+ '0'.repeat(16)+'.json'}),/partial envelope/);
+ assert.throws(()=>api.normalizeCheckpoint(value,selection,{...options(value),registrySha256:'another'}),/integrity/);
+});
+test('partial exporter rejects forged report counts, contracts, remaining closure and accepted projection',()=>{
+ const {value,selection,options}=partialFixture();
+ const mutations=[v=>v.contract='wrong',v=>v.report.contract='wrong',v=>v.supplement.contract='wrong',v=>v.report.state='complete',
+  v=>v.report.selected=3,v=>v.report.processed=1,v=>v.report.pageCount=2,v=>v.report.remainingPaperIds.reverse(),
+  v=>v.report.remainingPaperIds.push(selection.paperIds[2]),v=>v.report.decisions[0].paperId=selection.paperIds[0],
+  v=>v.report.decisions[0].fingerprint='bad',v=>v.report.stopped.status='message-guessed-error',v=>v.report.stopped.error='',
+  v=>v.report.stopped.paperId='outside',v=>v.supplement.records['c.md'].paperId=selection.paperIds[3]];
+ for(const mutate of mutations){const changed=structuredClone(value);mutate(changed);assert.throws(()=>api.normalizeCheckpoint(changed,selection,options(changed)));}
+ const changedSelection={...selection,paperIds:[selection.paperIds[0],selection.paperIds[0],selection.paperIds[2],selection.paperIds[3]]};
+ assert.throws(()=>api.normalizeCheckpoint(value,changedSelection,options(value)),/partial envelope/);
+});
+test('partial adapter cannot replace strict accepted cache/page binding replay',()=>{
+ const {value,selection,proof,options}=partialFixture(),normalized=api.normalizeCheckpoint(value,selection,options(value));
+ assert.throws(()=>api.processedIdsForExport(selection,normalized,new Map()),/lacks replayed accepted/);
+ const changed=structuredClone(proof.classification);changed.reviewProof={accepted:false};
+ assert.throws(()=>api.filterSignedRecords(normalized.supplement.records,new Map([[changed.paperId,changed]]),[]),/differs/);
+ const fifty=Array.from({length:53},(_,i)=>'arxiv:2601.'+String(i+1).padStart(5,'0'));
+ const big={contract:classify.CONTRACT+'-checkpoint',supplement:{contract:'historical-direct-taxonomy-supplement-v1',records:{}},
+  report:{contract:classify.CONTRACT+'-report',state:'partial',selected:53,processed:50,decisions:[],
+   failures:fifty.filter((_,i)=>![1,3,5].includes(i)).map(paperId=>({paperId,status:'not-covered-by-current-taxonomy',error:'role absent'})),pageCount:0,
+   remainingPaperIds:fifty.filter((_,i)=>[1,3,5].includes(i)),stopped:{status:'operator-stopped',error:'stop'}}};
+ const projected=api.normalizeCheckpoint(big,{...selection,paperIds:fifty},options(big));
+ assert.equal(projected.processedPaperIds.length,50);assert.equal(projected.processedPaperIds[1],fifty[2]);
+});
+test('defined implementation-changed stop can rescue proofs without authorizing model resume',()=>{
+ const {value,selection,options}=partialFixture();value.report.stopped={status:'implementation-changed',error:'Frozen implementation changed; stopped before another model request'};
+ const normalized=api.normalizeCheckpoint(value,selection,options(value));
+ assert.deepEqual(normalized.processedPaperIds,[selection.paperIds[0],selection.paperIds[2]]);
+ const forged=structuredClone(value);forged.report.stopped.status='unrecognized-stop';forged.report.stopped.error='implementation-changed';
+ assert.throws(()=>api.normalizeCheckpoint(forged,selection,options(forged)),/partial envelope/);
+ // Adaptation preserves original classification proofs; it never grants model
+ // compatibility or changes the frozen producer implementation fingerprints.
+ assert.equal(normalized.supplement.records['c.md'].proofSha256,value.supplement.records['c.md'].proofSha256);
+});

@@ -145,7 +145,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `lib/source-evidence-snippets.js` | Node 库 | 从封存原文提取有界、均衡覆盖的连续片段，模型只选择片段编号；代码注入原文 quote、UTF16 位置与 SHA，拒绝未知片段。 |
 | `lib/source-classification-scheduler.js` | Node 库 | 为来源分类提供1–3个有界 worker；账号级失败或停止请求后禁止新模型派发，保留已返回响应，按所选集合顺序合并并记录未完成集合。 |
 | `lib/source-classification-failures.js` | Node 库 | 只用公共请求层的结构化错误识别账号和服务失败并停止新派发；正文校验与输出截断仍按单篇处理，不按错误文字猜测故障或切换账号。 |
-| `lib/historical-source-taxonomy-checkpoint-export.js` | Node 库 | 重放不可变分类 checkpoint、来源、证据注入和独立审核，按明确排除集合投影原签页面证明；兼容串行前缀和并发完成集合，不把额外缓存当作已完成项。 |
+| `lib/historical-source-taxonomy-checkpoint-export.js` | Node 库 | 重放不可变分类 checkpoint 或暂停 partial、来源、证据注入和独立审核，按明确排除集合投影原签页面证明；兼容串行前缀和并发完成集合，不把额外缓存当作已完成项。 |
 | `lib/historical-direct-publication.js` | Node 库 | 对完整 direct staging、aggregate projection v3、aggregate v2 与显式视觉处置执行可恢复的历史发布事务；绑定博客基线、以路径+内容 SHA 永久复用的逐页通过 checkpoint、当前批次确定性/Hugo gate 与 receipt、激活回滚、Git 提交及远端 OID。 |
 
 ## 默认 LLM/API：恢复与维护入口
@@ -203,7 +203,7 @@ Hugo 干净 HEAD、实时 remote OID/identity、baseline 字节和 promoted cano
 | `historical-direct-taxonomy-supplement.js` | `npm run history:taxonomy-supplement -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID`；仅 history 工作区可执行，写入独立不可变分类补充与报告，不修改博客页面或发布状态。 |
 | `historical-source-taxonomy-classification.js` | `npm run history:source-taxonomy -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID`；仅 history 可执行，逐请求保存 selection/review/decision checkpoint；同 UUID 重放精确绑定后续跑，账号耗尽只写编号 partial，不占用最终产物。 |
 | `historical-source-identity-supplement.js` | `npm run history:source-identity -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID`；仅 history 可执行，无模型请求；重放全部封存来源与未签分类旧页，生成独立不可变身份证明，保留会议来源与版本披露。 |
-| `historical-source-taxonomy-checkpoint-export.js` | `npm run history:taxonomy-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID --checkpoint ABS [--exclude-paper-ids ID,...]`；只重放已完成项并保留原证明，不请求模型；分类续跑可同时用 `--resume-after-checkpoint ABS --resume-after-export ABS` 精确跳过已核验集合。分类 `--concurrency 1–3` 默认1，特殊来源重做使用独立 UUID 与 `--only-paper-ids ID,...`。 |
+| `historical-source-taxonomy-checkpoint-export.js` | `npm run history:taxonomy-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID --checkpoint ABS [--exclude-paper-ids ID,...]`；导出支持 checkpoint/partial 两类不可变封装，只重放已完成项并保留原证明，不请求模型。暂停后重跑原 UUID 续分类；`--resume-after-checkpoint ABS --resume-after-export ABS` 用于从正规 checkpoint 开始新集合，不能将 partial 当作续跑 checkpoint。分类 `--concurrency 1–3` 默认1，特殊来源重做使用独立 UUID 与 `--only-paper-ids ID,...`。 |
 | `historical-direct-control.js` | 全历史长任务控制面：`history:status` 单次/持续只读汇总 registry、pause/lock、覆盖率、汇总和 publication blockers；`history:pause` 写入 plan+generation 绑定的停机请求；`history:resume` 只在 operation lock 释放后恢复。 |
 | `historical-direct-publication.js` | 全历史 direct 发布入口：按 `plan → generate → review → publish → status` 驱动单一 publication UUID；发布阶段独占共享博客锁并验证远端 `main` OID。 |
 | `historical-direct-review.py` | 全历史 direct 语义审查协调器：逐页复用正式发布 LLM 与多模态审查，持久化输入/模型/prompt/代码绑定 checkpoint，只允许全页通过后签发最终 receipt。 |

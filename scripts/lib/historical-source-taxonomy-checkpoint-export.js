@@ -49,12 +49,45 @@ function processedIdsForExport(selection,checkpoint,classifications) {
  if(processed.length<checkpoint.processed||[...classifications.keys()].some(id=>!processed.includes(id)))fail('accepted caches extend beyond a replayable sequential completion prefix');
  return processed;
 }
+function normalizeCheckpoint(value,selection,options) {
+ if(!Object.hasOwn(value||{},'report')) {
+  api.validateResumeCheckpoint(value,selection,options);
+  return value;
+ }
+ // A partial is a distinct immutable transport envelope. Verify its own bytes
+ // before adapting its exact completed set to the existing checkpoint verifier.
+ const report=value.report,records=value.supplement?.records;
+ const statuses=new Set(['operator-stopped','implementation-changed','local-integrity-failure','account-pool-exhausted','account-authentication-failed','account-service-unavailable',
+  'model-service-timeout','model-service-network-unavailable','model-service-http-unavailable','model-service-configuration-unavailable',
+  'model-account-state-unavailable','model-service-response-unavailable']);
+ if(value.contract!==api.CONTRACT+'-checkpoint'||value.supplement?.contract!==writer.CONTRACT
+   ||!records||typeof records!=='object'||Array.isArray(records)||report?.contract!==api.CONTRACT+'-report'||report.state!=='partial'
+   ||!Number.isSafeInteger(report.selected)||report.selected<1||report.selected!==selection?.paperIds?.length
+   ||!Number.isSafeInteger(report.processed)||report.processed<1||report.processed>report.selected
+   ||!Array.isArray(report.decisions)||!Array.isArray(report.failures)||report.processed!==report.decisions.length+report.failures.length
+   ||report.pageCount!==Object.keys(records).length||!Array.isArray(report.remainingPaperIds)
+   ||!Array.isArray(selection.paperIds)||new Set(selection.paperIds).size!==selection.paperIds.length
+   ||!report.stopped||!statuses.has(report.stopped.status)||typeof report.stopped.error!=='string'||!report.stopped.error
+   ||(report.stopped.paperId!==undefined&&!selection.paperIds.includes(report.stopped.paperId))
+   ||path.basename(options.filename)!=='partial-'+String(report.processed).padStart(6,'0')+'-'+runner.stableHash(value).slice(0,16)+'.json')fail('partial envelope/report integrity differs');
+ const done=[...report.decisions,...report.failures].map(r=>r.paperId),set=new Set(done);
+ const remaining=selection.paperIds.filter(id=>!set.has(id));
+ if(set.size!==done.length||done.some(id=>!selection.paperIds.includes(id))
+   ||JSON.stringify(report.remainingPaperIds)!==JSON.stringify(remaining))fail('partial completion/remaining closure differs');
+ const normalized={contract:value.contract,checkpointScheduling:'completion-set-v1',
+  processedPaperIds:selection.paperIds.filter(id=>set.has(id)),supplement:value.supplement,processed:report.processed,
+  decisions:report.decisions,failures:report.failures};
+ api.validateResumeCheckpoint(normalized,selection,{...options,
+  filename:'checkpoint-'+String(normalized.processed).padStart(6,'0')+'-'+runner.stableHash(normalized).slice(0,16)+'.json'});
+ return normalized;
+}
 async function exportCheckpoint(options) {
  const config=require('../config.js'),{plan}=writer.readPlanRegistry(options);
  const runtime=require('./taxonomy-runtime.js').createTaxonomyRuntime({registryPath:options.registrySnapshot});
- const directory=path.dirname(options.checkpointFile),checkpoint=io.readStableJson(options.checkpointFile,'original immutable classifier checkpoint');
+ const directory=path.dirname(options.checkpointFile),original=io.readStableJson(options.checkpointFile,'original immutable classifier checkpoint');
  const selection=io.readStableJson(path.join(directory,'selection.json'),'original immutable selection');
- api.validateResumeCheckpoint(checkpoint.value,selection.value,{planSha256:plan.planSha256,registrySha256:runtime.registrySha256,filename:options.checkpointFile});
+ const checkpoint={...original,value:normalizeCheckpoint(original.value,selection.value,
+  {planSha256:plan.planSha256,registrySha256:runtime.registrySha256,filename:options.checkpointFile})};
  const items=new Map(plan.queue.map(i=>[i.paperId,i])),classifications=new Map(),excluded=validateExcludedIds(options.excludePaperIds||[],selection.value,plan);
  const completeSet=checkpoint.value.checkpointScheduling==='completion-set-v1';
  const checkpointCacheNames=new Set(checkpoint.value.decisions.map(d=>'decision-'+digest(d.paperId).slice(0,16)+'-'+d.fingerprint+'.json'));
@@ -94,4 +127,4 @@ async function exportCheckpoint(options) {
   pageCount:Object.keys(records).length,remainingPaperIds:selection.value.paperIds.filter(id=>!processedPaperIds.includes(id)),failures:checkpoint.value.failures};
  return {supplement,report};
 }
-module.exports={validateExcludedIds,verifyPageRecord,filterSignedRecords,projectPage,processedIdsForExport,exportCheckpoint};
+module.exports={validateExcludedIds,verifyPageRecord,filterSignedRecords,projectPage,processedIdsForExport,normalizeCheckpoint,exportCheckpoint};
