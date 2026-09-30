@@ -6,7 +6,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const api = require('../scripts/lib/historical-direct-taxonomy-supplement.js');
-const taxonomy = require('../scripts/lib/paper-taxonomy.js').loadTaxonomy('/Users/francis7999/code/github_repos/audio-paper-digest-rewrite-all/config/paper-taxonomy.json');
+const historicalRegistrySha256 = '15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778';
+const taxonomy = require('../scripts/lib/paper-taxonomy.js').loadTaxonomy(path.resolve(__dirname, '../config/taxonomy-registry-history', historicalRegistrySha256 + '.json'));
+// Historical canonical proofs must retain their original 228-concept snapshot.
+assert.equal(taxonomy.registrySha256, historicalRegistrySha256);
+assert.equal(taxonomy.concepts.length, 228);
 const aggregate = require('../scripts/lib/historical-direct-aggregate.js');
 const valid = { labels: ['声纹识别', '对比学习', '语音'], primaryTaskLabel: '声纹识别', primaryMethodLabel: '对比学习', taxonomy: { registrySha256: taxonomy.registrySha256 } };
 test('exports official strict member loader without dependency overrides', () => {
