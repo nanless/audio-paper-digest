@@ -9,6 +9,29 @@ function validateExcludedIds(ids,selection,plan) {
  if(!Array.isArray(ids)||new Set(ids).size!==ids.length||ids.some(id=>!selection.paperIds.includes(id)||!plan.queue.some(item=>item.paperId===id)))fail('excluded IDs duplicate or outside original selection/plan');
  return ids;
 }
+function validateSelectionPlan(selection,plan) {
+ if(!Array.isArray(plan?.queue)||!Array.isArray(selection?.paperIds)
+  ||new Set(selection.paperIds).size!==selection.paperIds.length)fail('selection/plan members differ');
+ const items=new Map(),pagePaths=new Set();
+ for(const item of plan.queue) {
+  if(!item||typeof item.paperId!=='string'||!item.paperId||items.has(item.paperId)||!Array.isArray(item.pages)||!item.pages.length)fail('selection/plan members differ');
+  for(const page of item.pages) {
+   if(!page||typeof page.pagePath!=='string'||!page.pagePath||pagePaths.has(page.pagePath)
+    ||typeof page.pageKey!=='string'||!page.pageKey||!/^[a-f0-9]{64}$/.test(page.pageContentSha256||''))fail('plan page paths duplicate or differ');
+   pagePaths.add(page.pagePath);
+  }
+  items.set(item.paperId,item);
+ }
+ if(selection.paperIds.some(id=>!items.has(id)))fail('selection includes unknown plan member');
+ return items;
+}
+function verifyRecordPlanBindings(records,items) {
+ for(const[key,record]of Object.entries(records)) {
+  const item=items.get(record?.paperId),page=item?.pages.find(p=>p.pagePath===key);
+  if(!page||record.pageKey!==page.pageKey||record.pageSha256!==page.pageContentSha256)fail('signed record key/page identity differs from plan');
+ }
+ return records;
+}
 function verifyPageRecord(record,classification) {
  const {proofSha256,...body}=record;
  if(proofSha256!==runner.stableHash(body)||record.classificationRecordSha256!==runner.stableHash(classification)
@@ -88,7 +111,7 @@ async function exportCheckpoint(options) {
  const selection=io.readStableJson(path.join(directory,'selection.json'),'original immutable selection');
  const checkpoint={...original,value:normalizeCheckpoint(original.value,selection.value,
   {planSha256:plan.planSha256,registrySha256:runtime.registrySha256,filename:options.checkpointFile})};
- const items=new Map(plan.queue.map(i=>[i.paperId,i])),classifications=new Map(),excluded=validateExcludedIds(options.excludePaperIds||[],selection.value,plan);
+ const items=validateSelectionPlan(selection.value,plan),classifications=new Map(),excluded=validateExcludedIds(options.excludePaperIds||[],selection.value,plan);
  const completeSet=checkpoint.value.checkpointScheduling==='completion-set-v1';
  const checkpointCacheNames=new Set(checkpoint.value.decisions.map(d=>'decision-'+digest(d.paperId).slice(0,16)+'-'+d.fingerprint+'.json'));
  for(const filename of fs.readdirSync(directory).filter(n=>n.startsWith('decision-')&&n.endsWith('.json')).sort()) {
@@ -108,18 +131,26 @@ async function exportCheckpoint(options) {
   classifications.set(record.paperId,record);
  }
  const processedPaperIds=processedIdsForExport(selection.value,checkpoint.value,classifications);
- const records=filterSignedRecords(checkpoint.value.supplement.records,classifications,excluded);
+ // Bind every original dictionary key before exclusions can hide an invalid
+ // page assignment. Excluded identities remain omitted from the export.
+ const records=filterSignedRecords(verifyRecordPlanBindings(checkpoint.value.supplement.records,items),classifications,excluded);
+ const retainedKeys=Object.keys(records),replayedKeys=new Set();
  for(const id of processedPaperIds) {
   if(!classifications.has(id)||excluded.includes(id))continue;
   const item=items.get(id),record=classifications.get(id);
   for(const page of item.pages) {
    const loaded=io.readStableFile(path.join(options.blogRoot,page.pagePath),'original classified frozen page');
-   if(/^paper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1/m.test(loaded.bytes.toString('utf8').split('---',3)[1]||''))continue;
+   if(/^paper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1/m.test(loaded.bytes.toString('utf8').split('---',3)[1]||'')) {
+    if(Object.hasOwn(records,page.pagePath))fail('signed production page unexpectedly retained in checkpoint');
+    continue;
+   }
    const projected=projectPage(item,page,loaded,record,runtime);
    if(records[page.pagePath]&&runner.stableHash(records[page.pagePath])!==runner.stableHash(projected))fail('reconstructed signed page bytes differ');
    records[page.pagePath]=projected;
+   replayedKeys.add(page.pagePath);
   }
  }
+ if(retainedKeys.some(key=>!replayedKeys.has(key)))fail('retained record lacks exact frozen page replay');
  const supplement={contract:writer.CONTRACT,records};
  const report={contract:api.CONTRACT+'-checkpoint-export-report',checkpointFileSha256:checkpoint.fileSha256,selectionFileSha256:selection.fileSha256,
   selected:selection.value.paperIds.length,processed:processedPaperIds.length,processedPaperIds,acceptedCaches:classifications.size,
@@ -127,4 +158,4 @@ async function exportCheckpoint(options) {
   pageCount:Object.keys(records).length,remainingPaperIds:selection.value.paperIds.filter(id=>!processedPaperIds.includes(id)),failures:checkpoint.value.failures};
  return {supplement,report};
 }
-module.exports={validateExcludedIds,verifyPageRecord,filterSignedRecords,projectPage,processedIdsForExport,normalizeCheckpoint,exportCheckpoint};
+module.exports={validateExcludedIds,validateSelectionPlan,verifyRecordPlanBindings,verifyPageRecord,filterSignedRecords,projectPage,processedIdsForExport,normalizeCheckpoint,exportCheckpoint};

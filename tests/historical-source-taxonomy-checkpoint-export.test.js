@@ -120,3 +120,30 @@ test('defined implementation-changed stop can rescue proofs without authorizing 
  // compatibility or changes the frozen producer implementation fingerprints.
  assert.equal(normalized.supplement.records['c.md'].proofSha256,value.supplement.records['c.md'].proofSha256);
 });
+test('selection and retained page keys bind the exact paper and frozen plan page',()=>{
+ const paperId='arxiv:2601.00001',otherId='arxiv:2601.00002';
+ const a=signed(paperId),b=signed(otherId);
+ const page={pagePath:'content/posts/a.md',pageKey:'page-a',pageContentSha256:'a'.repeat(64)};
+ const other={pagePath:'content/posts/b.md',pageKey:'page-b',pageContentSha256:'b'.repeat(64)};
+ const plan={queue:[{paperId,pages:[page]},{paperId:otherId,pages:[other]}]},selection={paperIds:[paperId,otherId]};
+ const items=api.validateSelectionPlan(selection,plan);
+ const bind=(proof,p)=>{const {proofSha256,...body}=proof;Object.assign(body,{pageKey:p.pageKey,pageSha256:p.pageContentSha256});return {...body,proofSha256:runner.stableHash(body)};};
+ const record=bind(a.page,page),otherRecord=bind(b.page,other),records={[page.pagePath]:record,[other.pagePath]:otherRecord};
+ assert.equal(api.verifyRecordPlanBindings(records,items),records);
+ assert.equal(api.verifyPageRecord(record,a.classification),record);
+ // Moving a valid record changes no record proof bytes, but its dictionary key
+ // must still be the page assigned to that exact paper in the frozen plan.
+ assert.throws(()=>api.verifyRecordPlanBindings({'content/posts/forged.md':record},items),/key\/page identity/);
+ assert.throws(()=>api.filterSignedRecords(api.verifyRecordPlanBindings({'content/posts/forged.md':record},items),new Map(),[paperId]),/key\/page identity/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[other.pagePath]:record},items),/key\/page identity/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,pageKey:other.pageKey}},items),/key\/page identity/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,pageSha256:other.pageContentSha256}},items),/key\/page identity/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,paperId:otherId}},items),/key\/page identity/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,paperId:'arxiv:2601.99999'}},items),/key\/page identity/);
+ assert.throws(()=>api.validateSelectionPlan({paperIds:[paperId,'arxiv:2601.99999']},plan),/unknown plan member/);
+ assert.throws(()=>api.validateSelectionPlan({paperIds:[paperId,paperId]},plan),/members differ/);
+ assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],plan.queue[0]]}),/members differ/);
+ assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[page]}]}),/paths duplicate/);
+ assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[]}]}),/members differ/);
+ assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[{...other,pageKey:undefined}]}]}),/paths duplicate or differ/);
+});
