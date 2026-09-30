@@ -269,10 +269,15 @@ function annotationFor(fromRegistrySha256) {
     const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
+    // 换表（v1.1）后 dcf83f84→当前 为可确认 destructive；本助手的意图是“构造一份
+    // 合法可放行的注记”，故自动携带白名单 ack（显式篡改/缺注记的拒绝场景仍由各用例
+    // 自行构造，不经本助手）。
+    const eligible = changeLevel === 'destructive'
+        && registryChange.isAcknowledgementEligible(detail) === true;
     return registryChange.buildRegistryUpgradeAnnotation({
         from, to: current, changeLevel, detail,
-        note: `确定性重投影，升级自 ${fromRegistrySha256.slice(0, 8)}`
-    });
+        note: `确定性重投影，升级自 ${fromRegistrySha256.slice(0, 8)}`,
+        acknowledgeDestructive: eligible });
 }
 
 // destructive 只有在注记携带与复算绑定的 destructiveAcknowledgement 时才可能放行。
@@ -352,10 +357,12 @@ describe('taxonomySeal registry upgrade gate', () => {
     });
 
     it('rejects an old seal that carries no registryUpgradeFrom', () => {
+        // 换表后旧封口对当前为 destructive，缺注记时先走破坏性拒绝分支——
+        // 文案不再出现字面 registryUpgradeFrom，但仍明确指向升级注记机制（意图不变：必拒）。
         assert.match(validateSeal({
             registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64)
-        }), /registryUpgradeFrom/);
+        }), /registryUpgradeFrom|不得沿用|destructiveAcknowledgement/);
     });
 
     it('rejects a destructive upgrade even when the annotation claims additive', () => {

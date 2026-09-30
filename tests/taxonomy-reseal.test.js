@@ -25,12 +25,15 @@ test('a seal already on the current registry is reported as assigned without wri
     assert.equal(plan.item.pageRestageRequired, false);
 });
 
-test('an additive upgrade deterministically reprojects and reseals without a model', () => {
-    const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+// 换表（v1.1）后 dcf83f84→当前 的分级为“可确认的 destructive”（改名/改边/删别名，
+// conceptIds 零影响）——确定性重投影语义不变，仅注记需携带白名单 ack。
+test('a destructive-eligible upgrade deterministically reprojects and reseals without a model', () => {
+    const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
+        acknowledgeDestructive: true });
     assert.equal(plan.ok, true, plan.item.errors.join('; '));
     assert.equal(plan.item.status, 'assigned');
     assert.equal(plan.item.outcome, 'resealed');
-    assert.equal(plan.item.changeLevel, 'additive');
+    assert.equal(plan.item.changeLevel, 'destructive');
     assert.equal(plan.item.needsHuman, false);
     assert.deepEqual(plan.item.conceptIdsDiff, { added: [], removed: [] });
     assert.deepEqual(plan.item.oldConceptIds, plan.item.newConceptIds);
@@ -41,7 +44,8 @@ test('an additive upgrade deterministically reprojects and reseals without a mod
     const nextStage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
     assert.equal(nextStage.registrySha256, runtime().registrySha256);
     assert.equal(nextStage.projectionSha256, runtime().projectionSha256);
-    assert.equal(nextStage.registryUpgradeFrom.changeLevel, 'additive');
+    assert.equal(nextStage.registryUpgradeFrom.changeLevel, 'destructive');
+    assert.equal(nextStage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
     assert.equal(nextStage.registryUpgradeFrom.fromRegistrySha256, ADDITIVE_OLD_SHA);
     assert.notEqual(nextStage.bindingSha256, analysisRecord({
         registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64)
@@ -63,15 +67,16 @@ test('an additive upgrade deterministically reprojects and reseals without a mod
     }), null);
 });
 
-test('annotate mode keeps the old seal bytes and relies on the additive relaxation', () => {
+test('annotate mode keeps the old seal bytes and relies on the acknowledged upgrade annotation', () => {
     const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
-        mode: 'annotate' });
+        mode: 'annotate', acknowledgeDestructive: true });
     assert.equal(plan.ok, true, plan.item.errors.join('; '));
     assert.equal(plan.item.outcome, 'annotated');
     const nextStage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
     assert.equal(nextStage.registrySha256, ADDITIVE_OLD_SHA);
     assert.equal(nextStage.projectionSha256, 'e'.repeat(64));
-    assert.equal(nextStage.registryUpgradeFrom.changeLevel, 'additive');
+    assert.equal(nextStage.registryUpgradeFrom.changeLevel, 'destructive');
+    assert.equal(nextStage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
     assert.strictEqual(contract.validateTaxonomyStageBinding(plan.analysis.papers[0], {
         parsed: parseAnalysis(plan.analysis.papers[0].analysis, { taxonomyRuntime: runtime() }),
         taxonomyRuntime: runtime()
@@ -105,7 +110,7 @@ test('tags that no longer resolve are reported as needing a human/LLM selection'
     const text = validAnalysisText().replace('#鲁棒性', '#不存在的标签');
     const plan = reproject({ analysis: analysisRecord({ analysis: text,
         registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) }),
-    snapshotOptions: {} });
+        acknowledgeDestructive: true, snapshotOptions: {} });
     assert.equal(plan.ok, false);
     assert.equal(plan.item.outcome, 'selection-invalid');
     assert.equal(plan.item.needsHuman, true);
@@ -113,7 +118,8 @@ test('tags that no longer resolve are reported as needing a human/LLM selection'
 });
 
 test('the dry-run report contract carries per-paper diffs and assigned/blocked results', () => {
-    const assigned = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+    const assigned = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
+        acknowledgeDestructive: true });
     const blocked = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
     const summary = resealApi.summarizeReseal({ items: [
         { ...assigned.item }, { ...blocked.item },
@@ -323,16 +329,23 @@ test('without the flag a destructive change stays blocked exactly as before', ()
     }
 });
 
-test('the flag does not change additive upgrades', () => {
+// 分级由 registry 内容决定、与 flag 无关：换表后 dcf83f84→当前 恒为可确认 destructive——
+// 无 flag 被拦（分类不变），带 flag 仅在注记上开白名单口子；原“additive 不得携带
+// ack”的构建器约束由 tests/taxonomy-registry-change.test.js 的 ack 用例覆盖。
+test('the flag does not change the classification, only the acknowledgement', () => {
+    const without = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+    assert.equal(without.item.changeLevel, 'destructive');
+    assert.equal(without.item.outcome, 'destructive-change');
+    assert.equal(without.item.needsHuman, true);
+
     const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
-        acknowledgeDestructive: true, acknowledgementNote: '不应被写进 additive 注记' });
+        acknowledgeDestructive: true, acknowledgementNote: '白名单确认：改名/改边/删别名，conceptId 零影响' });
     assert.equal(plan.ok, true, plan.item.errors.join('; '));
     assert.equal(plan.item.outcome, 'resealed');
-    assert.equal(plan.item.changeLevel, 'additive');
+    assert.equal(plan.item.changeLevel, 'destructive');
     const stage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
-    assert.equal(stage.registryUpgradeFrom.changeLevel, 'additive');
-    assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement, undefined);
-    assert.equal(plan.item.destructiveAcknowledgement, undefined);
+    assert.equal(stage.registryUpgradeFrom.changeLevel, 'destructive');
+    assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
 });
 
 test('classify reports acknowledgement eligibility before anything is applied', () => {
@@ -340,14 +353,17 @@ test('classify reports acknowledgement eligibility before anything is applied', 
     assert.equal(eligible.command, 'classify');
     assert.equal(eligible.changeLevel, 'destructive');
     assert.equal(eligible.acknowledgementEligible, true);
-    assert.deepEqual(eligible.eligibleReasons, ['alias-removed']);
+    assert.deepEqual(eligible.eligibleReasons,
+        ['alias-removed', 'broader-id-changed', 'preferred-label-changed']);
     assert.deepEqual(eligible.ineligibleReasons, []);
 
-    const additive = cli.classifyReport({ oldPath: OLD_SEED, newPath: REGISTRY_FILE });
-    assert.equal(additive.changeLevel, 'additive');
-    assert.equal(additive.acknowledgementEligible, true);
-    assert.deepEqual(additive.eligibleReasons, []);
-    assert.deepEqual(additive.ineligibleReasons, []);
+    // 换表（v1.1）后 seed→当前 同样为可确认 destructive（旧断言 additive 系换表前口径）。
+    const seed = cli.classifyReport({ oldPath: OLD_SEED, newPath: REGISTRY_FILE });
+    assert.equal(seed.changeLevel, 'destructive');
+    assert.equal(seed.acknowledgementEligible, true);
+    assert.deepEqual(seed.eligibleReasons,
+        ['alias-removed', 'broader-id-changed', 'preferred-label-changed']);
+    assert.deepEqual(seed.ineligibleReasons, []);
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'taxonomy-classify-'));
     try {

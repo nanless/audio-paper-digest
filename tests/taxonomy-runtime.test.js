@@ -109,16 +109,18 @@ test('primary task specificity is a whole-registry warning that never invalidate
     ].join('\n');
 
     // 非叶主任务：valid 保持 true，只给出结构化 specificityWarning。
+    // v1.1 换表后 #语音识别 的 active 后代由 1 个增至 6 个（新词表扩充 ASR 族）。
     const parsed = parseAnalysis(analysis);
     assert.equal(parsed.taxonomyValidation.valid, true,
         parsed.taxonomyValidation.errors.join('; '));
     assert.equal(parsed.taxonomyValidation.specificityWarning,
-        '主任务标签欠具体: #语音识别 存在未选择的 active 后代（共 1 个）: #音视频语音识别');
+        '主任务标签欠具体: #语音识别 存在未选择的 active 后代（共 6 个）: '
+        + '#音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复');
 
     // 叶节点主任务没有 active 后代 → 无告警。
     const leaf = runtime.validateTagSelection({
-        tags: ['#音视频语音识别', '#低资源', '#Transformer'],
-        primaryTaskTag: '#音视频语音识别',
+        tags: ['#标点恢复', '#低资源', '#Transformer'],
+        primaryTaskTag: '#标点恢复',
         primaryMethodTag: '#Transformer'
     });
     assert.equal(leaf.valid, true, leaf.errors.join('; '));

@@ -31,10 +31,18 @@ function annotationFor(fromRegistrySha256, options = {}) {
     const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
+    // 换表（v1.1）后 dcf83f84→当前 的分级由 additive 变为可确认的 destructive；
+    // happy-path 夹具的意图是“构造一份合法可放行的注记”，因此在调用方未显式指定时，
+    // 对落在可确认白名单内的 destructive 自动携带 ack。显式传
+    // acknowledgeDestructive:false 的用例仍按原样被拒（用于验证无 ack 失败路径）。
+    const eligible = changeLevel === 'destructive'
+        && registryChange.isAcknowledgementEligible(detail) === true;
+    const acknowledge = options.acknowledgeDestructive === undefined
+        ? eligible : options.acknowledgeDestructive === true;
     return registryChange.buildRegistryUpgradeAnnotation({
         from, to: current, changeLevel, detail,
         note: `确定性重投影，升级自 ${fromRegistrySha256.slice(0, 8)}`,
-        acknowledgeDestructive: options.acknowledgeDestructive === true,
+        acknowledgeDestructive: acknowledge,
         acknowledgementNote: options.acknowledgementNote ?? null });
 }
 

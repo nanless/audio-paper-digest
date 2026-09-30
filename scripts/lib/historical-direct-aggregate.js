@@ -401,7 +401,15 @@ function writeAggregateProjection({ root, outputName, projection, plan } = {}) {
 
 function exactRegistryEntry(entry, item) {
     exact(entry, ['paperId', 'runId', 'route', 'projectionSha256', 'status', 'source', 'analysis', 'staging',
-        'attempts', 'latestError', 'updatedAt'], `direct execution registry ${item.paperId}`);
+        'attempts', 'latestError', 'updatedAt', ...(Object.hasOwn(entry || {}, 'analysisRecovery') ? ['analysisRecovery'] : [])], `direct execution registry ${item.paperId}`);
+    // Retained recovery metadata must equal the terminal receipt that
+    // readAnalysis replays from disk; never discard an unknown proof.
+    if (Object.hasOwn(entry, 'analysisRecovery')) {
+        exact(entry.analysisRecovery, ['filename', 'fileSha256', 'recoverySha256', 'recordSha256', 'updatedAt'], `${item.paperId} retained recovery receipt`);
+        if (!entry.analysis?.recovery || stableHash(entry.analysisRecovery) !== stableHash(entry.analysis.recovery)) {
+            fail(`${item.paperId} retained recovery receipt differs from completed analysis`);
+        }
+    }
     if (entry.paperId !== item.paperId || entry.runId !== item.runId || entry.route !== item.route.kind
         || entry.projectionSha256 !== item.projectionSha256 || !Number.isSafeInteger(entry.attempts) || entry.attempts < 0
         || typeof entry.updatedAt !== 'string' || Number.isNaN(Date.parse(entry.updatedAt))) fail(`${item.paperId} execution registry entry drifted`);
@@ -885,5 +893,5 @@ function writeDirectAggregates({ outputRoot, aggregateRunId, aggregates } = {}) 
 }
 
 module.exports = { CONTRACT, VERSION, PROJECTION_CONTRACT, PROJECTION_VERSION, HistoricalDirectAggregateError,
-    stableHash, buildAggregateProjection, normalizeAggregateProjection, writeAggregateProjection, loadDirectAggregateInputs,
+    stableHash, buildAggregateProjection, normalizeAggregateProjection, writeAggregateProjection, loadDirectAggregateInputs, loadStagedMember,
     buildDirectAggregates, aggregateRunIdFor, writeDirectAggregates, renderAggregate };

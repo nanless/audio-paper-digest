@@ -31,6 +31,27 @@ function expectLevel(oldRegistry, newRegistry, expected, expectedCodes = []) {
     return detail;
 }
 
+// ——— 合成 additive 过渡（换表口径下唯一可复现的 additive 路径） ———
+// 三份历史快照（dcf83f84 / 3f9a14c9 / 15c82a56）→ current(v1.1) 现在全部复算为
+// destructive；“additive 放行 / additive 不得带确认字段”这类门只能用一份合成旧表
+// 来复现：从当前表去掉一个无人引用的叶子概念，旧 → 新就只剩 concept-added。
+// 合成表不落盘，按字节 SHA 注入 registryHistory 后由快照门原样取回。
+const ADDITIVE_FROM_CONCEPT_ID = 'task.wake-word';
+
+function syntheticAdditiveUpgrade(current) {
+    const from = clone(raw());
+    from.concepts = from.concepts.filter(concept => concept.id !== ADDITIVE_FROM_CONCEPT_ID);
+    taxonomyApi.validateTaxonomy(from);
+    const registrySha256 = crypto.createHash('sha256')
+        .update(JSON.stringify(from, null, 2), 'utf8').digest('hex');
+    const withSha = { ...from, registrySha256 };
+    const snapshotOptions = { registryHistory: { [withSha.registrySha256]: withSha } };
+    const { changeLevel, detail } = api.classifyRegistryChange(withSha, current);
+    assert.equal(changeLevel, 'additive', detail.summary);
+    assert.ok(codes(detail).includes('concept-added'));
+    return { from: withSha, snapshotOptions, changeLevel, detail };
+}
+
 test('identical registry bytes classify as none with empty reasons', () => {
     const registry = taxonomyApi.loadTaxonomy(CURRENT);
     const detail = expectLevel(registry, registry, 'none');
@@ -187,6 +208,12 @@ test('registry validation still fails closed on an impossible facet migration', 
     assert.throws(() => api.classifyRegistryChange(raw(), migrated), /Invalid\/duplicate concept ID/);
 });
 
+// 换表口径（config/paper-taxonomy.json 已于 09-30 换为 v1.1 / 262 概念 /
+// SHA a3b75a14…）：本文件早先的期望是换表前（current=15c82a56，228 概念）写的，
+// 下面三对过渡的分级、counts、summary 全部按当前代码实测重算 —— 旧表“只增概念”
+// 的 additive 过渡在 v1.1 里同时删了别名、改了 broaderId 与首选标签，所以
+// seed → current 也翻成了 destructive（可确认白名单内）。“按文档分类”的测试
+// 意图不变：期望仍逐条写死，任何分级漂移都会立刻暴露。
 test('real historical registry transitions classify as documented', () => {
     const seed = taxonomyApi.loadTaxonomy(OLD_SEED);
     const aliasRemoval = taxonomyApi.loadTaxonomy(OLD_ALIAS_REMOVAL);
@@ -199,13 +226,40 @@ test('real historical registry transitions classify as documented', () => {
     const introduced = expectLevel(seed, aliasRemoval, 'destructive',
         ['concept-added', 'label-collision']);
     assert.equal(introduced.reasons.filter(reason => reason.code === 'label-collision').length, 2);
-    expectLevel(seed, current, 'additive', ['concept-added']);
+    assert.equal(introduced.counts.conceptsAdded, 1);
+    assert.equal(introduced.summary, 'destructive: label-collision×2、concept-added×1');
 
-    const detail = expectLevel(aliasRemoval, current, 'destructive', ['alias-removed']);
+    // seed → current(v1.1)：+58 概念 / +5 别名 / 2 处 definition / 8 处 scopeNote，
+    // 但同时删了 flow-matching、self-supervised 两条别名，task.speech-spoofing 的
+    // broaderId 由 null 指向 task.audio-forgery，task.music-understanding 中英文
+    // 首选标签改名 —— 解析语义改变即 destructive。
+    const upgraded = expectLevel(seed, current, 'destructive', [
+        'concept-added', 'alias-added', 'alias-removed', 'broader-id-changed',
+        'preferred-label-changed', 'definition-updated', 'scope-note-updated'
+    ]);
+    assert.equal(upgraded.summary, 'destructive: alias-removed×2、broader-id-changed×1'
+        + '、preferred-label-changed×2、alias-added×5、concept-added×58'
+        + '、definition-updated×2、scope-note-updated×8');
+    assert.equal(upgraded.counts.oldConcepts, 204);
+    assert.equal(upgraded.counts.newConcepts, 262);
+    assert.equal(upgraded.counts.conceptsAdded, 58);
+    assert.equal(upgraded.counts.conceptsChanged, 13);
+
+    // aliasRemoval → current(v1.1)：比上一对多删 end-to-end-learning 的 3 条别名，
+    // 故 alias-removed 由 2 升到 5、conceptsAdded 少 1（旧表已含该概念）。
+    const detail = expectLevel(aliasRemoval, current, 'destructive',
+        ['alias-removed', 'broader-id-changed', 'preferred-label-changed', 'concept-added']);
     const removals = detail.reasons.filter(reason => reason.code === 'alias-removed');
-    assert.equal(removals.length, 3);
-    assert.ok(removals.every(reason => reason.conceptId === 'method.end-to-end-learning'));
-    assert.equal(detail.counts.conceptsAdded, 23);
+    assert.equal(removals.length, 5);
+    assert.deepEqual([...new Set(removals.map(reason => reason.conceptId))].sort(), [
+        'method.end-to-end-learning', 'method.flow-matching', 'method.self-supervised'
+    ]);
+    assert.equal(removals.filter(reason =>
+        reason.conceptId === 'method.end-to-end-learning').length, 3);
+    assert.equal(detail.counts.conceptsAdded, 57);
+    assert.equal(detail.summary, 'destructive: alias-removed×5、broader-id-changed×1'
+        + '、preferred-label-changed×2、alias-added×7、concept-added×57'
+        + '、definition-updated×2、scope-note-updated×8');
 });
 
 test('snapshots resolve by byte SHA and refuse mismatching content', () => {
@@ -228,26 +282,37 @@ test('snapshots resolve by byte SHA and refuse mismatching content', () => {
     assert.equal(map.registrySha256, sha);
 });
 
+// 换表口径：seed → current(v1.1) 复算是**可确认 destructive**（删 2 条别名、
+// 改 broaderId、改首选标签），不再有“additive 注记直接放行”的形态；destructive
+// 注记的唯一合法构造就是显式 acknowledgeDestructive=true（构建期 fail-closed）。
 test('registryUpgradeFrom annotation is built and verified against the recomputed level', () => {
     const from = taxonomyApi.loadTaxonomy(OLD_SEED);
     const to = taxonomyApi.loadTaxonomy(CURRENT);
     const { changeLevel, detail } = api.classifyRegistryChange(from, to);
-    assert.equal(changeLevel, 'additive');
+    assert.equal(changeLevel, 'destructive');
+    assert.equal(api.isAcknowledgementEligible(detail), true);
 
     const annotation = api.buildRegistryUpgradeAnnotation({
-        from, to, changeLevel, detail, note: '确定性重投影：只增新概念'
+        from, to, changeLevel, detail, note: '确定性重投影：可确认 destructive 显式确认',
+        acknowledgeDestructive: true
     });
     assert.equal(annotation.contract, api.REGISTRY_UPGRADE_CONTRACT);
     assert.equal(annotation.version, 1);
     assert.equal(annotation.fromRegistrySha256, from.registrySha256);
     assert.equal(annotation.toRegistrySha256, to.registrySha256);
     assert.ok(annotation.reasons.includes('concept-added'));
+    // destructive 注记必须自带与本次复算逐字绑定的确认字段。
+    assert.equal(annotation.destructiveAcknowledgement.acknowledged, true);
+    assert.equal(annotation.destructiveAcknowledgement.conceptIdImpact, 'none');
+    assert.equal(annotation.destructiveAcknowledgement.reasonsHash,
+        api.destructiveReasonsHash(detail));
 
     const expected = {
         fromRegistrySha256: from.registrySha256,
         toRegistrySha256: to.registrySha256,
         registryVersion: to.version,
-        changeLevel
+        changeLevel,
+        detail
     };
     assert.equal(api.validateRegistryUpgradeAnnotation(annotation, expected), null);
     assert.match(api.validateRegistryUpgradeAnnotation({ ...annotation, note: '' }, expected), /note/);
@@ -258,7 +323,7 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
     assert.match(api.validateRegistryUpgradeAnnotation(
         { ...annotation, contract: 'other' }, expected), /合同/);
     assert.match(api.validateRegistryUpgradeAnnotation(null, expected), /registryUpgradeFrom/);
-
+    // 显式确认缺失/不可确认 → 连注记都构不出来。
     assert.throws(() => api.buildRegistryUpgradeAnnotation({
         from, to, changeLevel: 'destructive', detail, note: 'x'
     }), /destructive/);
@@ -267,18 +332,27 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
     }), /note/);
 });
 
-test('seal upgrade gate passes additive upgrades and fails closed otherwise', () => {
+// 换表口径：历史快照 → current(v1.1) 全部复算为 destructive，四门中的第 ② 条门
+// 只能由“与本次复算绑定的 destructiveAcknowledgement”打开；第 ①③④ 条门（快照
+// 取回、注记自洽、conceptIds 仍 active）一条不少，缺任一仍 fail-closed。additive
+// 复算的放行路径改用合成旧表复现（见 syntheticAdditiveUpgrade）。
+test('seal upgrade gate admits acknowledged destructive upgrades, fails closed otherwise', () => {
     const current = taxonomyApi.loadTaxonomy(CURRENT);
     const conceptIds = ['task.asr', 'method.transformer'];
     const seed = taxonomyApi.loadTaxonomy(OLD_SEED);
+    const { changeLevel, detail } = api.classifyRegistryChange(seed, current);
+    assert.equal(changeLevel, 'destructive');
+    assert.equal(api.isAcknowledgementEligible(detail), true);
     const annotation = api.buildRegistryUpgradeAnnotation({
         from: seed,
         to: current,
-        changeLevel: api.classifyRegistryChange(seed, current).changeLevel,
-        detail: api.classifyRegistryChange(seed, current).detail,
-        note: 'additive 升级'
+        changeLevel,
+        detail,
+        note: '确定性重投影：可确认 destructive 显式确认',
+        acknowledgeDestructive: true
     });
 
+    // 可确认 destructive + 合法 ack 注记 → 放行，且分级仍是 destructive（不翻案）。
     const allowed = api.validateSealRegistryUpgrade({
         fromRegistrySha256: seed.registrySha256,
         currentRegistry: current,
@@ -287,8 +361,9 @@ test('seal upgrade gate passes additive upgrades and fails closed otherwise', ()
         annotation
     });
     assert.equal(allowed.ok, true, allowed.error);
-    assert.equal(allowed.changeLevel, 'additive');
+    assert.equal(allowed.changeLevel, 'destructive');
 
+    // destructive 缺 ack 注记 → 第 ② 条门先拒（注记字段门还没轮到）。
     const missingAnnotation = api.validateSealRegistryUpgrade({
         fromRegistrySha256: seed.registrySha256,
         currentRegistry: current,
@@ -296,7 +371,7 @@ test('seal upgrade gate passes additive upgrades and fails closed otherwise', ()
         conceptIds
     });
     assert.equal(missingAnnotation.ok, false);
-    assert.match(missingAnnotation.error, /registryUpgradeFrom/);
+    assert.match(missingAnnotation.error, /显式确认无效.*destructiveAcknowledgement/);
 
     const missingSnapshot = api.validateSealRegistryUpgrade({
         fromRegistrySha256: '0'.repeat(64),
@@ -336,6 +411,36 @@ test('seal upgrade gate passes additive upgrades and fails closed otherwise', ()
     });
     assert.equal(staleConcept.ok, false);
     assert.match(staleConcept.error, /active/);
+
+    // —— additive 路径（合成旧表）：放行，且注记不携带确认字段 ——
+    const additive = syntheticAdditiveUpgrade(current);
+    const additiveAllowed = api.validateSealRegistryUpgrade({
+        fromRegistrySha256: additive.from.registrySha256,
+        currentRegistry: current,
+        currentRegistrySha256: current.registrySha256,
+        conceptIds,
+        snapshotOptions: additive.snapshotOptions,
+        annotation: api.buildRegistryUpgradeAnnotation({
+            from: additive.from,
+            to: current,
+            changeLevel: additive.changeLevel,
+            detail: additive.detail,
+            note: 'additive 升级'
+        })
+    });
+    assert.equal(additiveAllowed.ok, true, additiveAllowed.error);
+    assert.equal(additiveAllowed.changeLevel, 'additive');
+
+    // additive 缺注记：拒在注记门本身（与 destructive 的 ack 门区分开）。
+    const additiveMissingAnnotation = api.validateSealRegistryUpgrade({
+        fromRegistrySha256: additive.from.registrySha256,
+        currentRegistry: current,
+        currentRegistrySha256: current.registrySha256,
+        conceptIds,
+        snapshotOptions: additive.snapshotOptions
+    });
+    assert.equal(additiveMissingAnnotation.ok, false);
+    assert.match(additiveMissingAnnotation.error, /registryUpgradeFrom/);
 });
 
 // ——— 跨端一致性：同一 (旧SHA, 注记, conceptIds) 输入必须让 Node 与 Python 同向 ———
@@ -475,7 +580,9 @@ test('destructive reasonsHash is a stable, message-independent fingerprint of th
     const hash = api.destructiveReasonsHash(detail);
     assert.match(hash, /^[a-f0-9]{64}$/);
     // 固定输入 → 固定哈希（跨 run、跨端都必须等于这个字面量）。
-    assert.equal(hash, '4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a');
+    // 换表口径：detail 复算自 aliasRemoval(3f9a14c9) → current(v1.1)，
+    // 指纹随复算结果更新为下面这个值（旧值 4549df39… 属于换表前的 228 概念表）。
+    assert.equal(hash, '2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273');
     assert.equal(api.destructiveReasonsHash(detail), hash, '同 detail 必须同哈希');
     // 与 reason 顺序无关（Node/Python 排序规则不同）。
     assert.equal(api.destructiveReasonsHash({ ...detail,
@@ -522,7 +629,7 @@ test('the seal gate admits an acknowledged destructive upgrade only when all fou
         from, to: current, changeLevel, detail,
         note: '确定性重投影：别名语义人工确认',
         acknowledgeDestructive: true,
-        acknowledgementNote: '人工确认：仅删别名，conceptId 影响 none'
+        acknowledgementNote: '人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none'
     });
     const seal = (overrides = {}) => api.validateSealRegistryUpgrade({
         fromRegistrySha256: from.registrySha256,
@@ -560,18 +667,20 @@ test('the seal gate admits an acknowledged destructive upgrade only when all fou
         /toRegistrySha256/);
     assert.match(seal({ annotation: { ...annotation, contract: 'other' } }).error, /合同/);
     // additive 变更不得携带确认字段（注记形态被锁死）。
-    const additiveFrom = taxonomyApi.loadTaxonomy(OLD_SEED);
-    const additive = api.buildRegistryUpgradeAnnotation({
-        from: additiveFrom, to: current,
-        ...api.classifyRegistryChange(additiveFrom, current),
+    // 换表口径：历史快照 → current 已无 additive 对，用合成旧表复现 additive 复算。
+    const additive = syntheticAdditiveUpgrade(current);
+    const additiveAnnotation = api.buildRegistryUpgradeAnnotation({
+        from: additive.from, to: current,
+        changeLevel: additive.changeLevel, detail: additive.detail,
         note: 'additive'
     });
     const annotatedAdditive = api.validateSealRegistryUpgrade({
-        fromRegistrySha256: additiveFrom.registrySha256,
+        fromRegistrySha256: additive.from.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
         conceptIds,
-        annotation: { ...additive, destructiveAcknowledgement: ack }
+        snapshotOptions: additive.snapshotOptions,
+        annotation: { ...additiveAnnotation, destructiveAcknowledgement: ack }
     });
     assert.equal(annotatedAdditive.ok, false);
     assert.match(annotatedAdditive.error, /非 destructive/);

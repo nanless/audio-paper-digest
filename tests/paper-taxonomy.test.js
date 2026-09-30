@@ -14,7 +14,8 @@ test('v1 registry is a complete nine-facet, bounded, defined vocabulary', () => 
     const r = loadTaxonomy(registryPath);
     assert.equal(r.version, 'paper-taxonomy-v1');
     assert.equal(r.facets.length, 9);
-    assert.ok(r.concepts.length >= 150 && r.concepts.length <= 260);
+    // v1.1 换表（2026-09-30）：262 概念（+34 缺口词），上界随词表增长放宽至 280。
+    assert.ok(r.concepts.length >= 150 && r.concepts.length <= 280);
     assert.equal(r.registrySha256, crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex'));
     assert.equal(validateTaxonomy(raw()).version, r.version);
 });
