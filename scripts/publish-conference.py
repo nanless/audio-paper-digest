@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import io
@@ -633,45 +634,88 @@ def transaction_snapshot(repo, base, identity, records):
     return snapshot
 
 
-def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot):
-    """Validate rebasing an unpublished receipt over unrelated published work.
+def rebase_target_changes(repository, base, current, paths, label):
+    """Inspect every intervening commit, including merge parents and reversions."""
+    touched = set()
+    raw = git(repository, 'log', '--format=', '--raw', '--no-abbrev',
+              '--no-renames', '-m', '-z', f'{base}..{current}').stdout.split('\0')
+    index = 0
+    while index < len(raw):
+        header = raw[index].strip('\n')
+        if not header:
+            index += 1
+            continue
+        fields = header.split()
+        if len(fields) != 5 or not fields[0].startswith(':') or index + 1 >= len(raw):
+            raise ConferencePublicationError(f'{label}基线迁移 Git 变更记录非法')
+        path = raw[index + 1]
+        if path in paths:
+            touched.add(path)
+            old_mode, new_mode = fields[0][1:], fields[1]
+            # A first publication may add a regular file. Executable/symlink/
+            # directory modes or an intervening deletion are never recovery.
+            if old_mode not in {'000000', '100644'} or new_mode != '100644':
+                raise ConferencePublicationError(f'{label}目标在基线迁移期间发生模式变化: {path}')
+        index += 2
+    return touched
 
-    A daily blog publish can legitimately land after a conference push but
-    before its URL acceptance receipt is written.  The conference receipt is
-    still recoverable when the new remote tree is a descendant of the old
-    baseline and every old conference target remains byte-identical.  Do not
-    use transaction_snapshot() here: its exact-delta rule is intentionally
-    stricter for a publication commit than it is for this recovery check.
+
+def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot):
+    """Permit generate to reseal over unrelated main commits, never push directly.
+
+    Previously published targets must still be exact generation blobs. Targets
+    not yet published may retain their original base blobs (or absence), only
+    when no intervening commit touched them and their worktree is still exact.
+    transaction_snapshot/push retain their stricter exact-publication rules.
     """
     if snapshot['head'] != snapshot['remoteMain'] \
             or image_snapshot['head'] != image_snapshot['remoteMain']:
         raise ConferencePublicationError('generation 基线迁移拒绝已有未同步本地/远端提交')
     for repository, current, base_key, identity_key, records, label, current_identity in (
             (repo, snapshot['head'], 'baseHead', 'remoteIdentitySha256',
-             previous.get('files') or [], '博客', snapshot['remoteIdentitySha256']),
+             previous.get('files'), '博客', snapshot['remoteIdentitySha256']),
             (images, image_snapshot['head'], 'imageBaseHead', 'imageRemoteIdentitySha256',
-             previous.get('imageFiles') or [], '图片', image_snapshot['remoteIdentitySha256'])):
+             previous.get('imageFiles'), '图片', image_snapshot['remoteIdentitySha256'])):
         if previous.get(identity_key) != current_identity:
             raise ConferencePublicationError(f'旧 generation {label} remote identity 已漂移')
         base = previous.get(base_key)
         if not isinstance(base, str) or not re.fullmatch(r'[0-9a-f]{40}', base):
             raise ConferencePublicationError(f'旧 generation {label} 基线非法')
+        remote_key = 'remoteMainBefore' if repository == repo else 'imageRemoteMainBefore'
+        if previous.get(remote_key) != base:
+            raise ConferencePublicationError(f'旧 generation {label} 基线未与原远端闭合')
         if git(repository, 'cat-file', '-e', f'{base}^{{commit}}', check=False).returncode:
             raise ConferencePublicationError(f'旧 generation {label} 基线在本地不存在')
+        if not isinstance(records, list):
+            raise ConferencePublicationError(f'旧 generation {label} 目标清单非法')
+        by_path = {}
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get('path'), str) \
+                    or not isinstance(record.get('sourceSha256'), str) \
+                    or not SHA_RE.fullmatch(record['sourceSha256']):
+                raise ConferencePublicationError(f'旧 generation {label} 目标记录非法')
+            path = (safe_relative(record['path'], '博客目标') if repository == repo
+                    else safe_image_relative(record['path'], '图片目标'))
+            if path != record['path'] or path in by_path:
+                raise ConferencePublicationError(f'旧 generation {label} 目标路径重复或不规范: {path}')
+            by_path[path] = record
         if base != current:
             if git(repository, 'merge-base', '--is-ancestor', base, current,
                      check=False).returncode:
                 raise ConferencePublicationError(f'旧 generation {label} 基线不是当前 HEAD 祖先')
-            by_path = {record.get('path'): record for record in records
-                        if isinstance(record, dict) and isinstance(record.get('path'), str)}
-            for path in changed_paths(repository, base, current) & set(by_path):
+            for path in rebase_target_changes(repository, base, current, set(by_path), label):
                 if not blob_matches(repository, current, by_path[path]):
                     raise ConferencePublicationError(f'{label}目标在基线迁移期间发生字节变化: {path}')
-            for record in records:
-                if not isinstance(record, dict) or not isinstance(record.get('path'), str) \
-                        or not blob_matches(repository, current, record):
-                    raise ConferencePublicationError(
-                        f'{label}目标未保留旧 generation 字节: {record.get("path") if isinstance(record, dict) else None}')
+        for path, record in by_path.items():
+            entry = git(repository, 'ls-tree', base, '--', path).stdout.strip().split(None, 3)
+            if entry and (len(entry) != 4 or entry[:2] != ['100644', 'blob']):
+                raise ConferencePublicationError(f'{label}旧基线目标模式非法: {path}')
+            target = under(repository, path, f'{label}目标')
+            data = read_bytes(target)
+            if stat.S_IMODE(target.lstat().st_mode) != 0o644:
+                raise ConferencePublicationError(f'{label}工作区目标模式漂移: {path}')
+            if sha_bytes(data) != record['sourceSha256']:
+                raise ConferencePublicationError(f'{label}工作区目标字节漂移: {path}')
 
 
 def can_resume_existing_generation(repository, base, identity, records):
@@ -1077,6 +1121,24 @@ def content_review_protocol(module, repo=None):
                    'conferencePublisherSha256': sha_bytes(read_bytes(Path(__file__)))})
 
 
+def raise_content_review_failure(record, digest, protocol, stage, findings, message, **details):
+    """Preserve a failed verdict for inspection, never as reusable pass evidence.
+
+    Keep the reviewed page identity and the exact findings, but no page/chunk,
+    proposed replacement, prompt or image bytes. Content-addressed records are
+    immutable and repeated identical failures are safe to record again.
+    """
+    body = {'contract': 'conference-page-content-review-failure-v1',
+            'path': safe_relative(record['path'], 'review 失败页面'),
+            'sha256': digest, 'paperId': record.get('paperId'),
+            'passed': False, 'stage': stage, 'protocol': protocol,
+            'issues': findings, **details}
+    failure_sha = stable(body)
+    target = PUBLICATION_ROOT / 'page-review-failures' / f'{failure_sha}.json'
+    write_exact(target, json_bytes({**body, 'failureSha256': failure_sha}))
+    raise ConferencePublicationError(f'{message}；失败原因记录: {target}')
+
+
 def review_pages(repo, records):
     """Reuse only passing path+byte evidence; rerun deterministic gates every time.
 
@@ -1123,16 +1185,24 @@ def review_pages(repo, records):
                 passed, findings, proposed = module._llm_review_post_chunk(
                     chunk, title, required=True, chunk_label=f'{index + 1}/{len(chunks)}')
                 if passed is not True or proposed != chunk:
-                    raise ConferencePublicationError(f'正文语义 review 未通过或建议修改: {relative}')
+                    raise_content_review_failure(
+                        record, digest, protocol, 'text', findings,
+                        f'正文语义 review 未通过或建议修改: {relative}',
+                        chunkIndex=index + 1, chunkCount=len(chunks),
+                        proposedChanged=proposed != chunk)
                 issues.extend(findings)
             matches = module.parse_markdown_images(content)
             if matches:
                 passed, findings = module.multimodal_review_images(content, title, required=True)
                 if passed is not True:
-                    raise ConferencePublicationError(f'图片多模态 review 未通过: {relative}')
+                    raise_content_review_failure(
+                        record, digest, protocol, 'image', findings,
+                        f'图片多模态 review 未通过: {relative}', imageCount=len(matches))
                 issues.extend(findings)
             if module.count_blocking_review_issues(issues):
-                raise ConferencePublicationError(f'内容 review 存在阻断问题: {relative}: {issues}')
+                raise_content_review_failure(
+                    record, digest, protocol, 'blocking-issues', issues,
+                    f'内容 review 存在阻断问题: {relative}')
             result = {'contract': 'conference-page-content-review-v1', 'path': relative,
                       'sha256': digest, 'passed': True, 'issues': issues,
                       'imageCount': len(matches), 'protocol': protocol}
