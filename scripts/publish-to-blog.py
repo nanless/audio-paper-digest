@@ -2628,6 +2628,12 @@ def build_taxonomy_registry_snapshot(taxonomy=None):
             'aliases': list(aliases),
             'ancestorIds': [],
         }
+        for field in ('definition', 'scopeNote', 'status'):
+            value = concept.get(field)
+            if value is not None:
+                if not isinstance(value, str) or not value:
+                    raise PublishDataValidationError(f'taxonomy concept {field} 非法: {concept_id}')
+                record[field] = value
         records[concept_id] = (record, concept)
         ordered.append(record)
     for record, concept in records.values():
@@ -2662,6 +2668,203 @@ def taxonomy_registry_snapshot_bytes(snapshot):
     ).encode('utf-8')
 
 
+def _validate_taxonomy_snapshot(snapshot):
+    """Validate frozen projection shape without guessing a missing parent chain."""
+    if (not isinstance(snapshot, dict)
+            or snapshot.get('contract') != TAXONOMY_REGISTRY_SNAPSHOT_CONTRACT
+            or not re.fullmatch(r'[0-9a-f]{64}', str(snapshot.get('registrySha256') or ''))
+            or not isinstance(snapshot.get('registryVersion'), str)
+            or not snapshot['registryVersion']
+            or not isinstance(snapshot.get('concepts'), list) or not snapshot['concepts']):
+        raise PublishDataValidationError('taxonomy frozen snapshot 非法')
+    by_id = {}
+    facets = {'task', 'method', 'setting', 'signal', 'application', 'research_focus',
+              'artifact', 'scientific_topic', 'model_family'}
+    for node in snapshot['concepts']:
+        if not isinstance(node, dict):
+            raise PublishDataValidationError('taxonomy frozen concept 非法')
+        concept_id = node.get('id')
+        facet = node.get('facet')
+        if (not isinstance(concept_id, str)
+                or not re.fullmatch(r'[a-z][a-z0-9_]*\.[a-z0-9][a-z0-9.-]*', concept_id)
+                or concept_id in by_id or facet not in facets
+                or not concept_id.startswith(f'{facet}.')
+                or not isinstance(node.get('zh'), str) or not node['zh']
+                or not isinstance(node.get('en'), str) or not node['en']
+                or not isinstance(node.get('aliases'), list)
+                or any(not isinstance(value, str) or not value for value in node['aliases'])
+                or not isinstance(node.get('ancestorIds'), list)
+                or any(not isinstance(value, str) or not value for value in node['ancestorIds'])
+                or node.get('status', 'active') not in {'active', 'deprecated'}):
+            raise PublishDataValidationError(f'taxonomy frozen concept 非法: {concept_id!r}')
+        for field in ('definition', 'scopeNote'):
+            if field in node and (not isinstance(node[field], str) or not node[field]):
+                raise PublishDataValidationError(f'taxonomy frozen {field} 非法')
+        by_id[concept_id] = node
+    for node in by_id.values():
+        chain = node['ancestorIds']
+        if len(set(chain)) != len(chain) or node['id'] in chain:
+            raise PublishDataValidationError('taxonomy frozen ancestor cycle')
+        for position, ancestor in enumerate(chain):
+            parent = by_id.get(ancestor)
+            if (parent is None or parent['facet'] != node['facet']
+                    or parent['ancestorIds'] != chain[:position]
+                    or parent.get('status', 'active') != 'active'):
+                raise PublishDataValidationError('taxonomy frozen ancestor chain 不闭合')
+    return snapshot
+
+
+def _validate_taxonomy_catalog(catalog):
+    if (not isinstance(catalog, dict)
+            or catalog.get('contract') != 'paper-taxonomy-version-catalog-v1'
+            or not isinstance(catalog.get('snapshots'), list) or not catalog['snapshots']
+            or not re.fullmatch(r'[a-f0-9]{64}', str(catalog.get('currentSha256') or ''))):
+        raise PublishDataValidationError('taxonomy version catalog 非法')
+    versions = {}
+    for snapshot in catalog['snapshots']:
+        _validate_taxonomy_snapshot(snapshot)
+        sha = snapshot['registrySha256']
+        if sha in versions:
+            raise PublishDataValidationError('taxonomy version catalog 重复 SHA')
+        versions[sha] = snapshot
+    if catalog['currentSha256'] not in versions:
+        raise PublishDataValidationError('taxonomy catalog 缺少当前版本')
+    return versions
+
+
+def _taxonomy_asset_relative(relative):
+    parts = Path(relative).parts
+    if Path(relative).is_absolute() or '..' in parts or '\\' in str(relative):
+        return False
+    if Path(relative).as_posix() in {
+            'data/taxonomy-registry.json', 'static/data/taxonomy-registry.json',
+            'data/taxonomy-catalog.json', 'static/data/taxonomy-catalog.json'}:
+        return True
+    return bool((parts[:2] == ('data', 'taxonomy-snapshots') and len(parts) == 3
+                 or parts[:3] == ('static', 'data', 'taxonomy-snapshots') and len(parts) == 4)
+                and re.fullmatch(r'[a-f0-9]{64}\.json', parts[-1]))
+
+
+def _read_taxonomy_asset(repo, relative):
+    target = repo / relative
+    try:
+        target.resolve().relative_to(repo)
+    except ValueError as exc:
+        raise PublishDataValidationError('taxonomy asset 路径逃逸') from exc
+    if target.is_symlink():
+        raise PublishDataValidationError('taxonomy asset 不得为符号链接')
+    if not target.exists():
+        return None
+    if not target.is_file():
+        raise PublishDataValidationError('taxonomy asset 必须是普通文件')
+    try:
+        return json.loads(target.read_text(encoding='utf-8'))
+    except (ValueError, UnicodeError) as exc:
+        raise PublishDataValidationError('taxonomy asset JSON 非法') from exc
+
+
+def taxonomy_registry_asset_payloads(blog_repo=None):
+    """Prepare the complete immutable history and current mirrors before writing."""
+    repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
+    current = _validate_taxonomy_snapshot(build_taxonomy_registry_snapshot())
+    versions = {}
+    def retain(snapshot):
+        _validate_taxonomy_snapshot(snapshot)
+        sha = snapshot['registrySha256']
+        if sha in versions and versions[sha] != snapshot:
+            raise PublishDataValidationError(f'taxonomy immutable SHA 内容冲突: {sha}')
+        versions[sha] = snapshot
+    catalogs = []
+    for prefix in ('data', 'static/data'):
+        catalog = _read_taxonomy_asset(repo, f'{prefix}/taxonomy-catalog.json')
+        if catalog is not None:
+            _validate_taxonomy_catalog(catalog)
+            catalogs.append(catalog)
+            for snapshot in catalog['snapshots']:
+                retain(snapshot)
+        snapshot = _read_taxonomy_asset(repo, f'{prefix}/taxonomy-registry.json')
+        if snapshot is not None:
+            retain(snapshot)
+        archive = repo / prefix / 'taxonomy-snapshots'
+        if archive.exists():
+            if archive.is_symlink() or not archive.is_dir():
+                raise PublishDataValidationError('taxonomy archive 路径非法')
+            for target in sorted(archive.iterdir()):
+                if not re.fullmatch(r'[a-f0-9]{64}\.json', target.name):
+                    raise PublishDataValidationError('taxonomy archive 含非受控文件')
+                snapshot = _read_taxonomy_asset(repo, target.relative_to(repo))
+                _validate_taxonomy_snapshot(snapshot)
+                if target.stem != snapshot['registrySha256']:
+                    raise PublishDataValidationError('taxonomy archive 文件名 SHA 不匹配')
+                retain(snapshot)
+    if len(catalogs) == 2 and catalogs[0] != catalogs[1]:
+        raise PublishDataValidationError('taxonomy catalog data/static 镜像漂移')
+    retain(current)
+    catalog = {'contract': 'paper-taxonomy-version-catalog-v1',
+               'currentSha256': current['registrySha256'],
+               'snapshots': [versions[sha] for sha in sorted(versions)]}
+    assets = {}
+    for prefix in ('data', 'static/data'):
+        assets[f'{prefix}/taxonomy-registry.json'] = taxonomy_registry_snapshot_bytes(current)
+        assets[f'{prefix}/taxonomy-catalog.json'] = taxonomy_registry_snapshot_bytes(catalog)
+        for sha, snapshot in sorted(versions.items()):
+            assets[f'{prefix}/taxonomy-snapshots/{sha}.json'] = taxonomy_registry_snapshot_bytes(snapshot)
+    return assets
+
+
+def prepare_taxonomy_registry_staged_assets(stage_root, blog_repo=None, *, single_page=False,
+                                          installation=None):
+    """Taxonomy writes share the generation journal, receipt and exact commit delta."""
+    repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
+    stage = Path(stage_root).resolve()
+    if installation is not None:
+        # The target repo may be between data/static replacements after a crash.
+        # Reuse only the journal-bound complete staging set, never derive a new
+        # version catalogue from that partially installed worktree.
+        records = installation.get('files') if isinstance(installation, dict) else None
+        if not isinstance(records, list):
+            raise PublishDataValidationError('taxonomy installation journal 非法')
+        selected = [record for record in records if isinstance(record, dict)
+                    and _taxonomy_asset_relative(record.get('path', ''))]
+        if single_page:
+            if selected:
+                raise PublishDataValidationError('单篇 journal 不得安装全站 taxonomy')
+            return []
+        expected = taxonomy_registry_asset_payloads(stage)
+        if {record['path'] for record in selected} != set(expected):
+            raise PublishDataValidationError('taxonomy journal staging 资产集合不闭合')
+        paths = []
+        for record in selected:
+            relative = record['path']
+            target = stage / relative
+            if (record.get('delete') is not False
+                    or record.get('stagedRelativePath') != relative
+                    or target.is_symlink() or not target.is_file()
+                    or _sha256_file(target) != record.get('expectedSha256')
+                    or target.read_bytes() != expected[relative]):
+                raise PublishDataValidationError('taxonomy journal staging 字节不匹配')
+            paths.append(target)
+        return paths
+    assets = taxonomy_registry_asset_payloads(repo)
+    if single_page:
+        if any(not (repo / relative).is_file() or (repo / relative).read_bytes() != raw
+               for relative, raw in assets.items()):
+            raise PublishDataValidationError('单篇发布不得升级全站 taxonomy；先完成完整批次版本资产发布')
+        return []
+    paths = []
+    for relative, raw in assets.items():
+        target = stage / relative
+        try:
+            target.resolve().relative_to(stage)
+        except ValueError as exc:
+            raise PublishDataValidationError('taxonomy staging 路径逃逸') from exc
+        if target.is_symlink():
+            raise PublishDataValidationError('taxonomy staging 不得为符号链接')
+        _atomic_write_bytes(target, raw)
+        paths.append(target)
+    return paths
+
+
 def export_taxonomy_registry_snapshot(blog_repo=None):
     """Write the registry snapshot into the blog repo (read-only wrt registry).
 
@@ -2672,10 +2875,9 @@ def export_taxonomy_registry_snapshot(blog_repo=None):
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
     if not repo.is_dir():
         return []
-    raw = taxonomy_registry_snapshot_bytes(build_taxonomy_registry_snapshot())
+    assets = taxonomy_registry_asset_payloads(repo)
     written = []
-    for relative in (
-            TAXONOMY_REGISTRY_SNAPSHOT_RELATIVE, TAXONOMY_REGISTRY_STATIC_RELATIVE):
+    for relative, raw in assets.items():
         target = repo / relative
         if target.is_file() and target.read_bytes() == raw:
             continue
@@ -8119,9 +8321,26 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
             controlled_binary = bool(
                 isinstance(allowance, dict) and allowance.get('controlledBinary')
             )
+            controlled_taxonomy = bool(
+                isinstance(allowance, dict) and allowance.get('controlledTaxonomy')
+            )
             if (not expected_sha or target.is_symlink()
                     or not target.is_file() or _sha256_file(target) != expected_sha):
                 unsafe.append(entry)
+                continue
+            if controlled_taxonomy:
+                try:
+                    if not _taxonomy_asset_relative(relative):
+                        raise PublishDataValidationError('taxonomy ownership 路径非法')
+                    payload = json.loads(target.read_text(encoding='utf-8'))
+                    if target.name == 'taxonomy-catalog.json':
+                        _validate_taxonomy_catalog(payload)
+                    else:
+                        _validate_taxonomy_snapshot(payload)
+                        if target.parent.name == 'taxonomy-snapshots' and target.stem != payload['registrySha256']:
+                            raise PublishDataValidationError('taxonomy archive SHA 不匹配')
+                except (OSError, ValueError, UnicodeError, PublishDataValidationError):
+                    unsafe.append(entry)
                 continue
             if controlled_binary:
                 try:
@@ -9230,6 +9449,7 @@ def generation_template_fingerprint():
     return _stable_json_sha256({
         'dependencies': dependencies,
         'basePath': BASE_PATH,
+        'taxonomyRegistrySha256': _PAGE_TAXONOMY['registrySha256'],
         'generationManifestSchema': 3,
         'generationJournalSchema': 1,
         'reviewFailureSchema': 3,
@@ -9533,6 +9753,7 @@ def prepare_generation_installation(
                     prior_exact[item['path']] = {
                         'sha256': item['sha256'],
                         'controlledBinary': is_api_reader_asset_path(target),
+                        'controlledTaxonomy': _taxonomy_asset_relative(item['path']),
                     }
         except PublishDataValidationError:
             prior_exact = {}
@@ -9655,7 +9876,8 @@ def _manifest_record(path, repo):
     )
     if not (
             is_post or is_visual_asset or is_digest_cover
-            or is_reader_asset or is_researcher_sidecar):
+            or is_reader_asset or is_researcher_sidecar
+            or _taxonomy_asset_relative(relative)):
         raise PublishDataValidationError(f'博客清单包含非受控路径: {relative}')
     return path, relative.as_posix()
 
@@ -10279,6 +10501,47 @@ def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_re
     return blocking
 
 
+def attest_taxonomy_registry_assets(date_str, publish_paths, manifest_path, file_results):
+    """Deterministic review binds every frozen JSON byte, mirror and registry version."""
+    manifest = _load_json_object(manifest_path, 'generation manifest')
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    records = {item['path']: item for item in manifest.get('files', [])
+               if isinstance(item, dict) and isinstance(item.get('path'), str)}
+    paths = [Path(item).resolve() for item in publish_paths
+             if _taxonomy_asset_relative(Path(item).resolve().relative_to(repo))]
+    if not paths:
+        return 0
+    try:
+        expected = taxonomy_registry_asset_payloads(repo)
+        actual = {item.relative_to(repo).as_posix() for item in paths}
+        if actual != set(expected):
+            raise PublishDataValidationError('taxonomy review 版本资产集合不闭合')
+        failure = None
+    except (OSError, ValueError, UnicodeError, PublishDataValidationError) as exc:
+        expected = {}
+        failure = str(exc)
+    blocking = 0
+    for target in paths:
+        relative = target.relative_to(repo).as_posix()
+        record = records.get(relative, {})
+        try:
+            raw = target.read_bytes() if not target.is_symlink() else None
+        except OSError:
+            raw = None
+        valid = bool(failure is None and raw is not None and raw == expected.get(relative)
+                     and record.get('deleted') is False
+                     and hashlib.sha256(raw).hexdigest() == record.get('sha256'))
+        file_results[str(target)] = {
+            'passed': valid, 'completed': True, 'failureKind': None if valid else 'content',
+            'blockingCount': 0 if valid else 1,
+            'reviewedSha256': record.get('sha256') if valid else None,
+            'imageReviewMode': 'deterministic_only',
+            'taxonomyReviewMode': 'frozen-version-bytes-v1',
+        }
+        blocking += not valid
+    return blocking
+
+
 def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_results, *, preflight_only=False):
     """Bind every paper figure/sidecar to an exact reviewed page and byte record."""
     manifest = _load_json_object(manifest_path, '生成清单')
@@ -10327,7 +10590,7 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             if key in expected_sidecars:
                 raise PublishDataValidationError(f'researcher sidecar 权威路径重复: {key}')
             expected_sidecars[key] = (sidecar_raw, bundle)
-    blocking = 0
+    blocking = attest_taxonomy_registry_assets(date_str, publish_paths, manifest_path, file_results)
     for item in publish_paths:
         asset = Path(item).resolve()
         if not is_api_reader_asset_path(asset):
@@ -11767,19 +12030,13 @@ def generate_main(options=None):
         print(f'♻️ 相同 generation 已完整安装，复用生成清单且保留 review 状态: {manifest_path}')
         return
 
-    # 线上搜索的祖先召回/别名召回依赖 registry 快照。它只随 registry 变化，
-    # 且被 Hugo 运行时指纹覆盖，因此必须在本次 staging/gate 之前同步。
+    # Validate all taxonomy versions before generation; installation only occurs
+    # later inside the generation journal and receipt-bound exact asset set.
     try:
-        snapshot_paths = export_taxonomy_registry_snapshot(blog_repo)
+        _validate_taxonomy_snapshot(build_taxonomy_registry_snapshot())
     except (OSError, PublishDataValidationError) as exc:
         print(f"\n❌ taxonomy registry 快照导出失败，未生成任何博客文件: {exc}")
         sys.exit(1)
-    for snapshot_path in snapshot_paths:
-        try:
-            shown = Path(snapshot_path).relative_to(Path(blog_repo).resolve())
-        except ValueError:
-            shown = snapshot_path
-        print(f'🧾 taxonomy registry 快照: {shown}')
 
     publish_paths = []
     try:
@@ -11792,6 +12049,11 @@ def generate_main(options=None):
         staged_assets = prepare_api_reader_staged_assets(
             papers, Path(staged_posts).resolve().parent,
         )
+        staged_assets.extend(prepare_taxonomy_registry_staged_assets(
+            Path(staged_posts).resolve().parent, blog_repo,
+            single_page=journal.get('publicationScope') is not None,
+            installation=journal.get('installation'),
+        ))
         staged_assets.extend(prepare_researcher_workbench_staged_assets(
             papers, today, Path(staged_posts).resolve().parent,
         ))
