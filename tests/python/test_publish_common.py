@@ -2882,7 +2882,9 @@ primary_method_tag: #基准测试
         fixture = cross_end_fixture()
         cases = {case['name']: case for case in fixture['cases']}
         expectations = {
-            'missing-annotation-rejected': 'reason=annotation-invalid',
+            # 换表（v1.1）后该用例的旧快照对当前复算为 destructive——ack 门先于注记门，
+            # 缺注记的首拒因由 annotation-invalid 变为 destructive（拒绝对意图不变）。
+            'missing-annotation-rejected': 'reason=destructive',
             'no-snapshot-rejected': 'reason=snapshot-missing',
             'destructive-lying-annotation-rejected': 'reason=destructive',
             'annotation-level-mismatch-rejected': 'reason=annotation-invalid',
@@ -2934,15 +2936,17 @@ primary_method_tag: #基准测试
         old_registry = json.loads(destructive_from.read_bytes().decode('utf-8'))
 
         # reasonsHash 跨端常量：Node 与 Python 对同一复算 detail 必须同哈希。
+        # v1.1 换表（2026-09-30）后 detail 含删别名/改边/改首选名 → 哈希与理由集合随实测更新。
         eligible_detail = _classify_registry_change(
             {**old_registry, 'registrySha256': destructive_from.stem}, current)['detail']
         self.assertEqual(eligible_detail['changeLevel'], 'destructive')
         self.assertEqual(
             _destructive_reasons_hash(eligible_detail),
-            '4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a')
+            '2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273')
         self.assertTrue(_acknowledgement_eligibility(eligible_detail)['eligible'])
         self.assertEqual(
-            _acknowledgement_eligibility(eligible_detail)['eligibleReasons'], ['alias-removed'])
+            _acknowledgement_eligibility(eligible_detail)['eligibleReasons'],
+            ['alias-removed', 'broader-id-changed', 'preferred-label-changed'])
 
         # 不可确认集合：旧表多一个概念、新表已删除 → concept-removed。
         synthetic = copy.deepcopy(current)
@@ -2996,18 +3000,54 @@ primary_method_tag: #基准测试
                 self.assertFalse(missing['ok'])
                 self.assertEqual(missing['reasonCode'], 'snapshot-missing')
 
-        # 注记形态锁死：additive 变更携带确认字段 → 拒。
-        additive = next(case for case in cross_end_fixture()['cases']
-                        if case['name'] == 'additive-upgrade-allowed')
-        annotated = {**additive['annotation'],
-                     'destructiveAcknowledgement': {
-                         'acknowledged': True,
-                         'reasonsHash': _destructive_reasons_hash(eligible_detail),
-                         'conceptIdImpact': 'none',
-                         'note': '不该出现在 additive 上',
-                     }}
-        lying = _seal_registry_upgrade(additive['fromRegistrySha256'],
-                                       additive['conceptIds'], annotated)
+        # 注记形态锁死：非 destructive 变更携带确认字段 → 拒。
+        # v1.1 换表后真实历史快照对当前全为 destructive——按 Node 侧同款思路，
+        # 用“当前表去掉未被引用的 task.wake-word”合成 additive 旧表（仅写测试 tmp
+        # 目录，不碰生产 config/taxonomy-registry-history）复现该门。
+        synthetic_old = json.loads(json.dumps(current))
+        synthetic_old['concepts'] = [
+            c for c in synthetic_old['concepts'] if c['id'] != 'task.wake-word']
+        self.assertFalse(any(c.get('broaderId') == 'task.wake-word'
+                             for c in synthetic_old['concepts']),
+                         'task.wake-word 必须无子节点才可作为合成删除对象')
+        # 只保留 schema 三键：若 current 带内嵌 registrySha256，写进文件会与
+        # “文件名==内容字节 SHA”校验冲突（snapshot-missing）。
+        synthetic_old = {k: synthetic_old[k]
+                         for k in ('version', 'facets', 'concepts') if k in synthetic_old}
+        synthetic_bytes = json.dumps(synthetic_old, ensure_ascii=False, indent=2).encode('utf-8')
+        synthetic_sha = hashlib.sha256(synthetic_bytes).hexdigest()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / f'{synthetic_sha}.json').write_bytes(synthetic_bytes)
+            with mock.patch('publish_common._taxonomy_registry_history_dir',
+                            return_value=Path(tmpdir)):
+                additive_detail = _classify_registry_change(
+                    {**synthetic_old, 'registrySha256': synthetic_sha},
+                    current)['detail']
+                self.assertEqual(additive_detail['changeLevel'], 'additive')
+                annotated = {
+                    'contract': 'paper-taxonomy-registry-upgrade-v1',
+                    'version': 1,
+                    'fromRegistrySha256': synthetic_sha,
+                    'fromRegistryVersion': current['version'],
+                    'toRegistrySha256': current['registrySha256'],
+                    'toRegistryVersion': current['version'],
+                    'changeLevel': 'additive',
+                    'reasons': ['concept-added'],
+                    'note': '合成 additive 快照：验证确认字段只属于 destructive',
+                    'destructiveAcknowledgement': {
+                        'acknowledged': True,
+                        'reasonsHash': _destructive_reasons_hash(additive_detail),
+                        'conceptIdImpact': 'none',
+                        'note': '不该出现在 additive 上',
+                    },
+                }
+                valid_additive = dict(annotated)
+                valid_additive.pop('destructiveAcknowledgement')
+                allowed = _seal_registry_upgrade(
+                    synthetic_sha, ['task.asr'], valid_additive)
+                self.assertTrue(allowed['ok'], allowed['error'])
+                self.assertEqual(allowed['changeLevel'], 'additive')
+                lying = _seal_registry_upgrade(synthetic_sha, ['task.asr'], annotated)
         self.assertFalse(lying['ok'])
         self.assertEqual(lying['reasonCode'], 'annotation-invalid')
         self.assertIn('非 destructive', lying['error'])

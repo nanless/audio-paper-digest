@@ -8200,7 +8200,7 @@ body
         self.assertEqual(
             snapshot['registrySha256'], publish_to_blog._PAGE_TAXONOMY['registrySha256'],
         )
-        self.assertEqual(len(snapshot['concepts']), 228)
+        self.assertEqual(len(snapshot['concepts']), 262)
         by_id = {item['id']: item for item in snapshot['concepts']}
         self.assertEqual(by_id['method.lora']['ancestorIds'], ['method.peft'])
         self.assertEqual(by_id['method.peft']['ancestorIds'], [])
@@ -8250,7 +8250,7 @@ body
                     payload['registrySha256'],
                     publish_to_blog._PAGE_TAXONOMY['registrySha256'],
                 )
-                self.assertEqual(len(payload['concepts']), 228)
+                self.assertEqual(len(payload['concepts']), 262)  # v1.1 换表：228→262
             # 字节未变时不重写，避免把博客工作树弄脏
             self.assertEqual(publish_to_blog.export_taxonomy_registry_snapshot(repo), [])
 

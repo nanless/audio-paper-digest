@@ -59,7 +59,7 @@ class UtilsTaxonomyContractTests(unittest.TestCase):
                            'model_family.unified-audio'],
             'specificityWarning': (
                 '主任务标签欠具体: #语音识别 存在未选择的 active 后代'
-                '（共 1 个）: #音视频语音识别'),
+                '（共 6 个）: #音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复'),
         })
         with self.assertRaisesRegex(ValueError, 'legacy_tags'):
             parse_analysis(analysis('#语音识别 #Transformer #低资源'),
@@ -97,12 +97,13 @@ class UtilsTaxonomyContractTests(unittest.TestCase):
         self.assertTrue(validation['valid'], validation['errors'])
         self.assertEqual(validation['specificityWarning'],
                          '主任务标签欠具体: #语音识别 存在未选择的 active 后代'
-                         '（共 1 个）: #音视频语音识别')
+                         '（共 6 个）: #音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复')
 
         # 叶节点主任务没有 active 后代 → 无告警。
+        # v1.1 换表后 #音视频语音识别 有了子节点（#唇读），叶子用例改用 #标点恢复。
         leaf = parse_analysis(analysis(
-            '#音视频语音识别 #Transformer #低资源',
-            '#音视频语音识别', '#Transformer'))
+            '#标点恢复 #Transformer #低资源',
+            '#标点恢复', '#Transformer'))
         self.assertTrue(leaf['taxonomyValidation']['valid'],
                         leaf['taxonomyValidation']['errors'])
         self.assertIsNone(leaf['taxonomyValidation']['specificityWarning'])

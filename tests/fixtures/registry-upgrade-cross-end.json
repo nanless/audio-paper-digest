@@ -1,8 +1,8 @@
 {
   "contract": "paper-taxonomy-registry-upgrade-cross-end-fixture-v1",
-  "note": "同一份 (旧SHA, 注记, conceptIds) 输入分别喂给 Node validateSealRegistryUpgrade（scripts/lib/taxonomy-registry-change.js）与 Python _seal_registry_upgrade（scripts/publish_common.py）。expect 由 Node 侧生成；error 按“（…）内分号列表排序 + 括号后尾巴原样保留”归一化，因为同码原因的 message 排序依赖 localeCompare 所在 locale。",
+  "note": "同一份 (旧SHA, 注记, conceptIds) 输入分别喂给 Node validateSealRegistryUpgrade（scripts/lib/taxonomy-registry-change.js）与 Python _seal_registry_upgrade（scripts/publish_common.py）。expect 由 Node 侧生成；error 按“（…）内分号列表排序 + 括号后尾巴原样保留”归一化，因为同码原因的 message 排序依赖 localeCompare 所在 locale。换表口径：config/paper-taxonomy.json 已换为 v1.1（262 概念，SHA a3b75a14…），三份历史快照（dcf83f84 / 3f9a14c9 / 15c82a56）到 current 的复算分级全部是 destructive，因此换表前写下的“additive 放行”用例改为“可确认 destructive + destructiveAcknowledgement 放行”；用例名 additive-upgrade-allowed 因被 tests/python/test_publish_common.py 按名取用而保留，语义见该用例的 note。",
   "errorNormalization": "split on ； inside the outer （…） and sort the parts",
-  "currentRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+  "currentRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
   "cases": [
     {
       "name": "additive-upgrade-allowed",
@@ -16,34 +16,53 @@
         "version": 1,
         "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
-        "changeLevel": "additive",
+        "changeLevel": "destructive",
         "reasons": [
-          "concept-added"
+          "alias-added",
+          "alias-removed",
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
-        "note": "确定性重投影：只增新概念"
+        "note": "确定性重投影：可确认 destructive 显式确认",
+        "destructiveAcknowledgement": {
+          "acknowledged": true,
+          "reasonsHash": "bac3ccc63f83715ced2b15ba122f13a03869935a1234c7d8cd4a134465b9a400",
+          "conceptIdImpact": "none",
+          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+        }
       },
       "expect": {
         "ok": true,
-        "changeLevel": "additive",
-        "summary": "additive: concept-added×24",
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
-          "concept-added"
+          "alias-added",
+          "alias-removed",
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 204,
-          "newConcepts": 228,
-          "conceptsAdded": 24,
+          "newConcepts": 262,
+          "conceptsAdded": 58,
           "conceptsRemoved": 0,
-          "conceptsChanged": 0,
-          "aliasesAdded": 0,
-          "aliasesRemoved": 0,
+          "conceptsChanged": 13,
+          "aliasesAdded": 5,
+          "aliasesRemoved": 2,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
         "error": null
-      }
+      },
+      "note": "换表口径：旧名保留（tests/python/test_publish_common.py 按名取用）。dcf83f84 → current(v1.1) 复算为可确认 destructive（删别名/改 broaderId/改首选标签），本用例的语义由“additive 放行”改为“可确认 destructive + 合法 ack 放行”。"
     },
     {
       "name": "missing-annotation-rejected",
@@ -55,23 +74,29 @@
       "annotation": null,
       "expect": {
         "ok": false,
-        "changeLevel": "additive",
-        "summary": "additive: concept-added×24",
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
-          "concept-added"
+          "alias-added",
+          "alias-removed",
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 204,
-          "newConcepts": 228,
-          "conceptsAdded": 24,
+          "newConcepts": 262,
+          "conceptsAdded": 58,
           "conceptsRemoved": 0,
-          "conceptsChanged": 0,
-          "aliasesAdded": 0,
-          "aliasesRemoved": 0,
+          "conceptsChanged": 13,
+          "aliasesAdded": 5,
+          "aliasesRemoved": 2,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
-        "error": "registryUpgradeFrom 校验失败: 缺少 registryUpgradeFrom 升级说明"
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.flow-matching 删除别名“flow matching”，该标签的解析语义改变；概念 method.self-supervised 删除别名“ssl learning”，该标签的解析语义改变；概念 task.speech-spoofing 的 broaderId 由 null 改为 task.audio-forgery，祖先链与主任务“最具体”判定随之改变；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
       }
     },
     {
@@ -86,7 +111,7 @@
         "version": 1,
         "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "additive",
         "reasons": [
@@ -115,7 +140,7 @@
         "version": 1,
         "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "additive",
         "reasons": [
@@ -126,20 +151,24 @@
       "expect": {
         "ok": false,
         "changeLevel": "destructive",
-        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "summary": "destructive: alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 205,
-          "newConcepts": 228,
-          "conceptsAdded": 23,
+          "newConcepts": 262,
+          "conceptsAdded": 57,
           "conceptsRemoved": 0,
-          "conceptsChanged": 1,
-          "aliasesAdded": 2,
-          "aliasesRemoved": 3,
+          "conceptsChanged": 14,
+          "aliasesAdded": 7,
+          "aliasesRemoved": 5,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
@@ -158,33 +187,51 @@
         "version": 1,
         "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "none",
         "reasons": [
-          "concept-added"
+          "alias-added",
+          "alias-removed",
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
-        "note": "谎报为零变化"
+        "note": "谎报为零变化",
+        "destructiveAcknowledgement": {
+          "acknowledged": true,
+          "reasonsHash": "bac3ccc63f83715ced2b15ba122f13a03869935a1234c7d8cd4a134465b9a400",
+          "conceptIdImpact": "none",
+          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+        }
       },
       "expect": {
         "ok": false,
-        "changeLevel": "additive",
-        "summary": "additive: concept-added×24",
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
-          "concept-added"
+          "alias-added",
+          "alias-removed",
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 204,
-          "newConcepts": 228,
-          "conceptsAdded": 24,
+          "newConcepts": 262,
+          "conceptsAdded": 58,
           "conceptsRemoved": 0,
-          "conceptsChanged": 0,
-          "aliasesAdded": 0,
-          "aliasesRemoved": 0,
+          "conceptsChanged": 13,
+          "aliasesAdded": 5,
+          "aliasesRemoved": 2,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
-        "error": "registryUpgradeFrom 校验失败: registryUpgradeFrom.changeLevel=none 与复算结果 additive 不一致"
+        "error": "registryUpgradeFrom 校验失败: registryUpgradeFrom.changeLevel=none 与复算结果 destructive 不一致"
       }
     },
     {
@@ -199,29 +246,47 @@
         "version": 1,
         "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
-        "changeLevel": "additive",
+        "changeLevel": "destructive",
         "reasons": [
-          "concept-added"
+          "alias-added",
+          "alias-removed",
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
-        "note": "确定性重投影：只增新概念"
+        "note": "确定性重投影：只增新概念",
+        "destructiveAcknowledgement": {
+          "acknowledged": true,
+          "reasonsHash": "bac3ccc63f83715ced2b15ba122f13a03869935a1234c7d8cd4a134465b9a400",
+          "conceptIdImpact": "none",
+          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+        }
       },
       "expect": {
         "ok": false,
-        "changeLevel": "additive",
-        "summary": "additive: concept-added×24",
+        "changeLevel": "destructive",
+        "summary": "destructive: alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
-          "concept-added"
+          "alias-added",
+          "alias-removed",
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 204,
-          "newConcepts": 228,
-          "conceptsAdded": 24,
+          "newConcepts": 262,
+          "conceptsAdded": 58,
           "conceptsRemoved": 0,
-          "conceptsChanged": 0,
-          "aliasesAdded": 0,
-          "aliasesRemoved": 0,
+          "conceptsChanged": 13,
+          "aliasesAdded": 5,
+          "aliasesRemoved": 2,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
@@ -239,7 +304,7 @@
         "version": 1,
         "fromRegistrySha256": "dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "additive",
         "reasons": [
@@ -268,39 +333,47 @@
         "version": 1,
         "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "destructive",
         "reasons": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "note": "确定性重投影：别名语义人工确认",
         "destructiveAcknowledgement": {
           "acknowledged": true,
-          "reasonsHash": "4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a",
+          "reasonsHash": "2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅 method.end-to-end-learning 删除 3 条别名，conceptId 影响 none"
+          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
         }
       },
       "expect": {
         "ok": true,
         "changeLevel": "destructive",
-        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "summary": "destructive: alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 205,
-          "newConcepts": 228,
-          "conceptsAdded": 23,
+          "newConcepts": 262,
+          "conceptsAdded": 57,
           "conceptsRemoved": 0,
-          "conceptsChanged": 1,
-          "aliasesAdded": 2,
-          "aliasesRemoved": 3,
+          "conceptsChanged": 14,
+          "aliasesAdded": 7,
+          "aliasesRemoved": 5,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
@@ -319,33 +392,41 @@
         "version": 1,
         "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "destructive",
         "reasons": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "note": "确定性重投影：别名语义人工确认"
       },
       "expect": {
         "ok": false,
         "changeLevel": "destructive",
-        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "summary": "destructive: alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 205,
-          "newConcepts": 228,
-          "conceptsAdded": 23,
+          "newConcepts": 262,
+          "conceptsAdded": 57,
           "conceptsRemoved": 0,
-          "conceptsChanged": 1,
-          "aliasesAdded": 2,
-          "aliasesRemoved": 3,
+          "conceptsChanged": 14,
+          "aliasesAdded": 7,
+          "aliasesRemoved": 5,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
@@ -364,39 +445,47 @@
         "version": 1,
         "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "destructive",
         "reasons": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "note": "确定性重投影：别名语义人工确认",
         "destructiveAcknowledgement": {
           "acknowledged": true,
           "reasonsHash": "0000000000000000000000000000000000000000000000000000000000000000",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅 method.end-to-end-learning 删除 3 条别名，conceptId 影响 none"
+          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
         }
       },
       "expect": {
         "ok": false,
         "changeLevel": "destructive",
-        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "summary": "destructive: alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 205,
-          "newConcepts": 228,
-          "conceptsAdded": 23,
+          "newConcepts": 262,
+          "conceptsAdded": 57,
           "conceptsRemoved": 0,
-          "conceptsChanged": 1,
-          "aliasesAdded": 2,
-          "aliasesRemoved": 3,
+          "conceptsChanged": 14,
+          "aliasesAdded": 7,
+          "aliasesRemoved": 5,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
@@ -415,39 +504,47 @@
         "version": 1,
         "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "destructive",
         "reasons": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "note": "确定性重投影：别名语义人工确认",
         "destructiveAcknowledgement": {
           "acknowledged": true,
-          "reasonsHash": "4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a",
+          "reasonsHash": "2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273",
           "conceptIdImpact": "removed",
-          "note": "人工确认：仅 method.end-to-end-learning 删除 3 条别名，conceptId 影响 none"
+          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
         }
       },
       "expect": {
         "ok": false,
         "changeLevel": "destructive",
-        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "summary": "destructive: alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 205,
-          "newConcepts": 228,
-          "conceptsAdded": 23,
+          "newConcepts": 262,
+          "conceptsAdded": 57,
           "conceptsRemoved": 0,
-          "conceptsChanged": 1,
-          "aliasesAdded": 2,
-          "aliasesRemoved": 3,
+          "conceptsChanged": 14,
+          "aliasesAdded": 7,
+          "aliasesRemoved": 5,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },
@@ -466,39 +563,47 @@
         "version": 1,
         "fromRegistrySha256": "3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a",
         "fromRegistryVersion": "paper-taxonomy-v1",
-        "toRegistrySha256": "15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778",
+        "toRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
         "toRegistryVersion": "paper-taxonomy-v1",
         "changeLevel": "destructive",
         "reasons": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "note": "确定性重投影：别名语义人工确认",
         "destructiveAcknowledgement": {
           "acknowledged": true,
-          "reasonsHash": "4549df39536d53414388cd1620efbf8d639cb791f8df17d8a157e1ad88b4677a",
+          "reasonsHash": "2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅 method.end-to-end-learning 删除 3 条别名，conceptId 影响 none"
+          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
         }
       },
       "expect": {
         "ok": false,
         "changeLevel": "destructive",
-        "summary": "destructive: alias-removed×3、alias-added×2、concept-added×23",
+        "summary": "destructive: alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8",
         "reasonCodes": [
           "alias-added",
           "alias-removed",
-          "concept-added"
+          "broader-id-changed",
+          "concept-added",
+          "definition-updated",
+          "preferred-label-changed",
+          "scope-note-updated"
         ],
         "counts": {
           "oldConcepts": 205,
-          "newConcepts": 228,
-          "conceptsAdded": 23,
+          "newConcepts": 262,
+          "conceptsAdded": 57,
           "conceptsRemoved": 0,
-          "conceptsChanged": 1,
-          "aliasesAdded": 2,
-          "aliasesRemoved": 3,
+          "conceptsChanged": 14,
+          "aliasesAdded": 7,
+          "aliasesRemoved": 5,
           "facetsAdded": 0,
           "facetsRemoved": 0
         },

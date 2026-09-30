@@ -272,6 +272,9 @@ function planOf(fx) {
         analysisRoot: fx.files.conferenceAnalysisDir,
         runtime: taxonomyRuntime(),
         mode: 'reproject',
+        // 换表后 dcf83f84→当前 为可确认的 destructive；happy-path 规划的意图是
+        // “合法可写”，故显式携带 ack（test4 的 blocked 场景不经本助手，直接走 CLI 无 flag）。
+        acknowledgeDestructive: true,
         snapshotOptions: { historyDir: fx.historyDir }
     }) };
 }
@@ -317,7 +320,8 @@ test('apply reseals analysis, run, state and archives the old completion receipt
     const runtime = runtimeFor(fx);
     assert.equal(fs.existsSync(fx.receiptFile), true);
 
-    const { report } = await runMain(['--from', fx.processId, '--apply'], runtime);
+    const { report } = await runMain(['--from', fx.processId, '--apply',
+        '--acknowledge-destructive'], runtime);
 
     assert.equal(report.mode, 'apply');
     assert.equal(report.written, true);
@@ -338,7 +342,8 @@ test('apply reseals analysis, run, state and archives the old completion receipt
     assert.equal(stage.registrySha256, current.registrySha256);
     assert.equal(stage.projectionSha256, current.projectionSha256);
     assert.equal(stage.registryVersion, current.registryVersion);
-    assert.equal(stage.registryUpgradeFrom.changeLevel, 'additive');
+    assert.equal(stage.registryUpgradeFrom.changeLevel, 'destructive');
+    assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
     assert.equal(stage.registryUpgradeFrom.fromRegistrySha256, ADDITIVE_OLD_SHA);
     assert.notEqual(stage.bindingSha256, fx.oldBindingSha256);
     assert.equal(stage.bindingSha256, contract.manualSha256({
@@ -501,14 +506,16 @@ test('a second apply is already-current and writes nothing', async t => {
     const fx = fixture(t);
     const runtime = runtimeFor(fx);
 
-    const first = await runMain(['--from', fx.processId, '--apply'], runtime);
+    const first = await runMain(['--from', fx.processId, '--apply',
+        '--acknowledge-destructive'], runtime);
     assert.equal(first.report.written, true);
     assert.equal(first.report.writeResult.demoted, true);
     const afterFirst = coreSnapshot(fx);
     const generationAfterFirst = processApi.assertState(
         JSON.parse(fs.readFileSync(fx.stateFile, 'utf8'))).generation;
 
-    const second = await runMain(['--from', fx.processId, '--apply'], runtime);
+    const second = await runMain(['--from', fx.processId, '--apply',
+        '--acknowledge-destructive'], runtime);
     assert.equal(second.report.items[0].status, 'assigned');
     assert.equal(second.report.items[0].outcome, 'already-current');
     assert.equal(second.report.summary.assigned, 1);
