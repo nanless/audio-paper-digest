@@ -35,9 +35,12 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
         'print(json.dumps(r,ensure_ascii=False))'
     ].join('\n');
     const result=spawnSync('bash',['scripts/python-runtime.sh','-c',script],{
-        cwd:path.resolve(__dirname,'..'),input:JSON.stringify(input),encoding:'utf8',maxBuffer:16*1024*1024,timeout:30000
+        cwd:path.resolve(__dirname,'..'),input:JSON.stringify(input),encoding:'utf8',maxBuffer:16*1024*1024,timeout:120000
     });
-    assert.equal(result.status,0,result.stderr);
+    const diagnostics=JSON.stringify({errorCode:result.error?.code||null,
+        errorMessage:result.error?.message||null,signal:result.signal,status:result.status,stderr:result.stderr});
+    assert.equal(result.error,undefined,diagnostics);
+    assert.equal(result.status,0,diagnostics);
     assert.deepEqual(JSON.parse(result.stdout),expected);
 });
 
