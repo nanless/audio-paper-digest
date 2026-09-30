@@ -651,6 +651,12 @@ PDF 是弱结构来源：不能可靠复原原始 TeX 时，不展示“可验�
 
 新会议独立发布 `conference:new:publish:generate|review|push` 的 Review 同时执行最终页面正文语义、图片多模态、Markdown 和 Hugo 检查；通过证据仅按路径与页面字节 SHA 复用，失败不签通过。push 逐文件校验 Git 暂存区和提交内 blob，而非只看工作区字节；自身提交后断网和重复发布可在精确父提交、文件集合、内容与远端身份一致时恢复。图床完整资产清单与本次 Git delta 分开处理，已经发布的相同图片可零差异复用。以上均为自动内容检查，不引入人工审批。
 
+未发布的 generation 遇到日更或 UI 更新使 `main` 前移时，只能重新运行正常 `generate → review → push`，不得编辑 generation/receipt 或直接重放旧 push。generate 对博客与图床分别核对同一 push 目标身份、`HEAD = 远端 main`、旧基线确实存在且为当前基线祖先，并逐提交检查全部会议目标（包含 merge 父提交，不能把“改过又恢复”视为未改）。若目标已经发布，当前提交内必须保留 generation 的精确 blob 和 `100644` 模式；若目标尚未发布，旧基线到当前提交必须完全没有触及该目标，旧基线可以是旧内容或不存在。两种情况都要求工作区目标位于安全路径、是普通单链接文件、权限 `0644` 且字节 SHA 精确等于旧 generation。任何目标冲突、删除、可执行/符号链接模式变化、工作区漂移、未知基线、非祖先历史替换或远端身份改变均拒绝。其他进程仍须遵守共享锁，不能并发改写这些目标。
+
+通过上述检查仅允许 generate 重新验证来源与 staging 后签发当前基线的 generation；不会修改旧 review receipt。review 可以按“路径 + 页面内容 SHA”复用未变页面的通过证据，但必须重跑当前基线的 Hugo/确定性门禁并重签 review receipt。push 的精确 delta、父提交、暂存区/提交 blob 与远端 OID 校验保持不变。此恢复不等于论文内容审查通过，也不修复来源或图片 SHA 漂移。
+
+正文或图片内容 review 被拒绝时，具体 findings 会以不可覆盖的诊断文件保存到 `data/runtime/conference-publications/page-review-failures/<failureSha256>.json`，绑定页面路径、内容 SHA、审查协议和阶段；异常同时给出文件路径。诊断不包含正文替换建议或图片字节，不作为通过缓存。先根据 findings 修正生成阶段的内容或来源绑定，再正常 generate/review；服务或账号级异常保留原类型，不能当作内容失败反复尝试。
+
 ## `conference-run-v2`
 
 所有 discovery 下游 `paperId` 都使用 `paper-identity-v1` 的完整 canonical ID，例如

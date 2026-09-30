@@ -261,6 +261,81 @@ class ConferencePublishTests(unittest.TestCase):
             M.review_pages(self.repo, [r])
             self.assertEqual(reviewer.image_calls, 2)
 
+    def test_failed_image_findings_persist_exactly_without_editing_or_pass_cache(self):
+        r = self.record(data=b'---\ntitle: test\n---\n![figure](https://example.invalid/a.png)\n')
+        original = (self.repo / r['path']).read_bytes()
+        findings = [{'severity': 'error', 'description': 'Figure 5 crop includes Figure 6',
+                     'figureIndex': 1}, {'severity': 'warning', 'description': 'Small labels'}]
+        reviewer = FakeReviewer()
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(reviewer, 'multimodal_review_images', return_value=(False, findings)), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            for _ in range(2):
+                with self.assertRaisesRegex(M.ConferencePublicationError, '失败原因记录'):
+                    M.review_pages(self.repo, [r])
+        files = list((M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json'))
+        self.assertEqual(len(files), 1)
+        failure = json.loads(files[0].read_text())
+        signature = failure.pop('failureSha256')
+        self.assertEqual(signature, M.stable(failure))
+        self.assertEqual(files[0].name, f'{signature}.json')
+        self.assertEqual(failure['issues'], findings)
+        self.assertEqual((failure['path'], failure['sha256'], failure['stage'],
+                          failure['imageCount'], failure['passed']),
+                         (r['path'], r['sourceSha256'], 'image', 1, False))
+        self.assertEqual((self.repo / r['path']).read_bytes(), original)
+        self.assertFalse(list((M.PUBLICATION_ROOT / 'page-review-passes').glob('*.json')))
+        self.assertEqual(self.command('-C', self.repo, 'status', '--porcelain'), '?? content/')
+
+    def test_text_suggested_change_records_identity_not_replacement_or_next_page(self):
+        r = self.record()
+        next_page = self.record('content/posts/next.md')
+        reviewer = FakeReviewer()
+        findings = [{'severity': 'warning', 'description': 'Correct the quoted number'}]
+        proposed = 'PRIVATE-PROPOSED-REPLACEMENT'
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(reviewer, '_llm_review_post_chunk',
+                                  return_value=(True, findings, proposed)) as text, \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            with self.assertRaisesRegex(M.ConferencePublicationError, '正文语义'):
+                M.review_pages(self.repo, [r, next_page])
+        self.assertEqual(text.call_count, 1)
+        failure_file, = (M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json')
+        failure = json.loads(failure_file.read_text())
+        self.assertEqual(failure['issues'], findings)
+        self.assertEqual((failure['stage'], failure['chunkIndex'], failure['chunkCount'],
+                          failure['proposedChanged']), ('text', 1, 1, True))
+        self.assertNotIn(proposed, failure_file.read_text())
+        self.assertEqual(reviewer.image_calls, 0)
+        self.assertFalse(list((M.PUBLICATION_ROOT / 'page-review-passes').glob('*.json')))
+
+    def test_failed_findings_never_reused_as_success_or_erased_after_pass(self):
+        r = self.record()
+        reviewer = FakeReviewer()
+        reviewer.passed = False
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            with self.assertRaises(M.ConferencePublicationError):
+                M.review_pages(self.repo, [r])
+            failure_file, = (M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json')
+            failed_bytes = failure_file.read_bytes()
+            reviewer.passed = True
+            self.assertEqual(M.review_pages(self.repo, [r])['status'], 'passed')
+            self.assertEqual(reviewer.calls, 2)
+            self.assertEqual(failure_file.read_bytes(), failed_bytes)
+
+    def test_run_error_identity_propagates_without_fake_content_failure(self):
+        r = self.record()
+        reviewer = FakeReviewer()
+        error = RuntimeError('offline transport failure')
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(reviewer, '_llm_review_post_chunk', side_effect=error), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            with self.assertRaises(RuntimeError) as caught:
+                M.review_pages(self.repo, [r])
+        self.assertIs(caught.exception, error)
+        self.assertFalse((M.PUBLICATION_ROOT / 'page-review-failures').exists())
+
     def test_real_reviewers_propagate_run_account_errors_without_next_page_or_fallback(self):
         from llm_account_pool import LlmAccountAuthError, LlmAccountPoolExhaustedError
         # Exercise the real shared text/image reviewers, mocking only the API
@@ -337,6 +412,211 @@ class ConferencePublishTests(unittest.TestCase):
             with mock.patch.object(M, 'process_bundle', return_value={'files': [r], 'imageFiles': []}):
                 M.generate(conference_id, process_id)
             self.assertEqual(M.load_generation(conference_id, process_id), generation)
+
+    def rebase_fixture(self, existing=False):
+        images = self.make_repo('rebase-images')
+        if existing:
+            old = self.record(data=b'old conference bytes')
+            self.command('-C', self.repo, 'add', old['path'])
+            self.command('-C', self.repo, 'commit', '-m', 'previous conference page')
+            self.command('-C', self.repo, 'push', 'origin', 'HEAD:main')
+        base = M.remote_snapshot(self.repo)
+        image_base = M.remote_snapshot(images)
+        record = self.record()
+        image = self.record('icassp-2026/abcdef123456/figure-1.png', b'PNG sealed bytes', images)
+        image['kind'] = 'asset'
+        previous = {'baseHead': base['head'], 'remoteMainBefore': base['remoteMain'],
+                    'remoteIdentitySha256': base['remoteIdentitySha256'], 'files': [record],
+                    'imageBaseHead': image_base['head'], 'imageRemoteMainBefore': image_base['remoteMain'],
+                    'imageRemoteIdentitySha256': image_base['remoteIdentitySha256'], 'imageFiles': [image]}
+        return images, previous
+
+    def advance_main(self, repo, path='assets/js/ui.js', data=b'new UI'):
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        self.command('-C', repo, 'add', '--', path)
+        self.command('-C', repo, 'commit', '-m', 'unrelated main advance')
+        self.command('-C', repo, 'push', 'origin', 'HEAD:main')
+
+    def check_rebase(self, images, previous):
+        return M.validate_unpublished_rebase(self.repo, images, previous,
+                                            M.remote_snapshot(self.repo), M.remote_snapshot(images))
+
+    def test_unpublished_targets_survive_ui_and_daily_main_advances(self):
+        images, previous = self.rebase_fixture(existing=True)
+        self.advance_main(self.repo)
+        self.advance_main(self.repo, 'content/posts/daily.md', b'other daily content')
+        self.advance_main(images, 'other-conference/other.png', b'unrelated image')
+        self.check_rebase(images, previous)
+        self.assertFalse(M.blob_matches(self.repo, 'HEAD', previous['files'][0]))
+        # The recovery check does not make the old baseline valid for push.
+        with self.assertRaises(M.ConferencePublicationError):
+            M.transaction_snapshot(self.repo, previous['baseHead'],
+                                   previous['remoteIdentitySha256'], previous['files'])
+
+    def test_already_published_targets_survive_unrelated_main_advance(self):
+        images, previous = self.rebase_fixture()
+        for repo, records in ((self.repo, previous['files']), (images, previous['imageFiles'])):
+            self.command('-C', repo, 'add', records[0]['path'])
+            self.command('-C', repo, 'commit', '-m', 'publish exact conference target')
+            self.command('-C', repo, 'push', 'origin', 'HEAD:main')
+            self.advance_main(repo)
+        self.check_rebase(images, previous)
+
+    def test_new_rebase_requires_generate_then_current_hugo_review_and_exact_delta(self):
+        images, previous = self.rebase_fixture()
+        (self.repo / 'hugo.toml').write_text('title = "Offline Hugo inputs"\n')
+        (self.repo / 'layouts').mkdir()
+        conference_id = 'icassp-2026'
+        process_id = 'f4e4a4e4-a4e4-44e4-a4e4-a4e4a4e4a4e4'
+        for record in previous['files'] + previous['imageFiles']:
+            source = self.root / ('page-stage.md' if record['kind'] == 'paper' else 'image-stage.png')
+            source.write_bytes(M.target_bytes(self.repo if record['kind'] == 'paper' else images, record))
+            record['sourcePath'] = str(source)
+        body = {**previous, 'contract': 'conference-blog-generation-v1', 'version': 2,
+                'conferenceId': conference_id, 'processId': process_id, 'remoteName': 'origin',
+                'implementationSha256': M.gate_fingerprint(), 'completionReceiptSha256': 'a' * 64}
+        old = {**body, 'generationSha256': M.stable(body)}
+        directory = M.publication_dir(conference_id, process_id)
+        M.write_exact(directory / 'generation.json', M.json_bytes(old))
+        reviewer = FakeReviewer()
+        gate = {'status': 'passed', 'contract': M.GATE_CONTRACT,
+                'implementationSha256': M.gate_fingerprint()}
+        with mock.patch.object(M, 'blog_repo', return_value=self.repo), \
+                mock.patch.object(M, 'image_repo', return_value=images), \
+                mock.patch.object(M, 'process_bundle', return_value={
+                    'files': previous['files'], 'imageFiles': previous['imageFiles'],
+                    'completion': {'receiptSha256': 'a' * 64}}), \
+                mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(M, 'run_hugo', return_value=gate) as hugo, \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            M.review(conference_id, process_id)
+            old_review = M.load_review(conference_id, process_id)
+            self.advance_main(self.repo)
+            with self.assertRaises(M.ConferencePublicationError):
+                M.validate_generation(conference_id, process_id, self.repo, images)
+            M.generate(conference_id, process_id)
+            new = M.load_generation(conference_id, process_id)
+            self.assertEqual(new['baseHead'], M.remote_snapshot(self.repo)['head'])
+            self.assertNotEqual(new['generationSha256'], old['generationSha256'])
+            self.assertEqual(M.load_review(conference_id, process_id), old_review)
+            with self.assertRaises(M.ConferencePublicationError):
+                M.validate_review(new, old_review)
+            M.review(conference_id, process_id)
+            self.assertEqual(hugo.call_count, 2)
+            self.assertEqual(reviewer.calls, 1)  # Unchanged page SHA reuses semantic evidence.
+            self.assertEqual(hugo.call_args.args[1]['baseHead'], new['baseHead'])
+            M.validate_review(new, M.load_review(conference_id, process_id))
+            commit = M.commit_delta(self.repo, new['files'], new['baseHead'],
+                                    new['remoteIdentitySha256'], '正常重签后发布')
+            M.push_delta(self.repo, new['files'], new['baseHead'], new['remoteIdentitySha256'], commit)
+            self.assertEqual(M.changed_paths(self.repo, new['baseHead'], commit), {'content/posts/test.md'})
+
+    def test_target_conflict_and_worktree_drift_are_rejected(self):
+        images, previous = self.rebase_fixture()
+        self.advance_main(self.repo, previous['files'][0]['path'], b'other published content')
+        (self.repo / previous['files'][0]['path']).write_bytes(b'---\ntitle: test\n---\n\xe6\xad\xa3\xe6\x96\x87\n')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '迁移期间发生字节变化'):
+            self.check_rebase(images, previous)
+
+    def test_untouched_target_worktree_drift_and_mode_are_rejected(self):
+        images, previous = self.rebase_fixture()
+        self.advance_main(self.repo)
+        path = self.repo / previous['files'][0]['path']
+        saved = path.read_bytes()
+        path.write_bytes(b'local drift')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '工作区目标字节漂移'):
+            self.check_rebase(images, previous)
+        path.write_bytes(saved)
+        path.chmod(0o755)
+        with self.assertRaisesRegex(M.ConferencePublicationError, '工作区目标模式漂移'):
+            self.check_rebase(images, previous)
+
+    def test_changed_then_restored_old_target_is_not_untouched(self):
+        images, previous = self.rebase_fixture(existing=True)
+        self.advance_main(self.repo, previous['files'][0]['path'], b'conflict')
+        self.advance_main(self.repo, previous['files'][0]['path'], b'old conference bytes')
+        (self.repo / previous['files'][0]['path']).write_bytes(b'---\ntitle: test\n---\n\xe6\xad\xa3\xe6\x96\x87\n')
+        self.assertNotIn(previous['files'][0]['path'], M.changed_paths(self.repo, previous['baseHead'], 'HEAD'))
+        with self.assertRaisesRegex(M.ConferencePublicationError, '迁移期间发生字节变化'):
+            self.check_rebase(images, previous)
+
+    def test_intervening_executable_mode_even_if_restored_is_rejected(self):
+        images, previous = self.rebase_fixture()
+        path = self.repo / previous['files'][0]['path']
+        for mode in (0o755, 0o644):
+            path.chmod(mode)
+            self.command('-C', self.repo, 'add', previous['files'][0]['path'])
+            self.command('-C', self.repo, 'commit', '-m', 'mode transition')
+            self.command('-C', self.repo, 'push', 'origin', 'HEAD:main')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '迁移期间发生模式变化'):
+            self.check_rebase(images, previous)
+
+    def test_remote_identity_unknown_base_forcepush_and_unsynced_head_rejected(self):
+        images, previous = self.rebase_fixture()
+        self.advance_main(self.repo)
+        for override, message in (({'remoteIdentitySha256': 'b' * 64}, 'identity'),
+                                  ({'baseHead': 'b' * 40, 'remoteMainBefore': 'b' * 40}, '不存在'),
+                                  ({'baseHead': 'not-an-oid'}, '非法'),
+                                  ({'remoteMainBefore': 'b' * 40}, '原远端闭合')):
+            with self.assertRaisesRegex(M.ConferencePublicationError, message):
+                self.check_rebase(images, {**previous, **override})
+        self.command('-C', self.repo, 'commit', '--allow-empty', '-m', 'local only')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '未同步'):
+            self.check_rebase(images, previous)
+        # An actual replacement history in the isolated bare remote is refused.
+        self.command('-C', self.repo, 'checkout', '--orphan', 'replacement')
+        self.command('-C', self.repo, 'commit', '-m', 'unrelated root')
+        self.command('-C', self.repo, 'branch', '-M', 'main')
+        self.command('-C', self.repo, 'push', '--force', 'origin', 'HEAD:main')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '不是当前 HEAD 祖先'):
+            self.check_rebase(images, previous)
+
+    def test_duplicate_or_unsafe_paths_and_nonregular_targets_rejected(self):
+        images, previous = self.rebase_fixture()
+        self.advance_main(self.repo)
+        with self.assertRaisesRegex(M.ConferencePublicationError, '重复'):
+            self.check_rebase(images, {**previous, 'files': previous['files'] * 2})
+        with self.assertRaisesRegex(M.ConferencePublicationError, '安全'):
+            self.check_rebase(images, {**previous, 'files': [{**previous['files'][0], 'path': '../escape.md'}]})
+        path = self.repo / previous['files'][0]['path']
+        saved = self.root / 'saved.md'
+        path.rename(saved)
+        path.symlink_to(saved)
+        with self.assertRaisesRegex(M.ConferencePublicationError, '符号链接'):
+            self.check_rebase(images, previous)
+        path.unlink()
+        os.link(saved, path)
+        with self.assertRaisesRegex(M.ConferencePublicationError, '单链接'):
+            self.check_rebase(images, previous)
+
+    def test_image_target_worktree_drift_and_published_conflict_rejected(self):
+        images, previous = self.rebase_fixture()
+        self.advance_main(self.repo)
+        target = images / previous['imageFiles'][0]['path']
+        saved = target.read_bytes()
+        target.write_bytes(b'wrong image working bytes')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '图片工作区目标字节漂移'):
+            self.check_rebase(images, previous)
+        self.advance_main(images, previous['imageFiles'][0]['path'], b'wrong published image')
+        target.write_bytes(saved)
+        with self.assertRaisesRegex(M.ConferencePublicationError, '图片目标在基线迁移期间发生字节变化'):
+            self.check_rebase(images, previous)
+
+    def test_merge_commit_target_conflict_is_rejected(self):
+        images, previous = self.rebase_fixture(existing=True)
+        self.command('-C', self.repo, 'checkout', '-b', 'other-author')
+        (self.repo / previous['files'][0]['path']).write_bytes(b'conflicting branch page')
+        self.command('-C', self.repo, 'add', previous['files'][0]['path'])
+        self.command('-C', self.repo, 'commit', '-m', 'other branch changes target')
+        self.command('-C', self.repo, 'checkout', 'main')
+        self.advance_main(self.repo)
+        self.command('-C', self.repo, 'merge', '--no-ff', 'other-author', '-m', 'merge other branch')
+        self.command('-C', self.repo, 'push', 'origin', 'HEAD:main')
+        self.record()
+        with self.assertRaisesRegex(M.ConferencePublicationError, '迁移期间发生字节变化'):
+            self.check_rebase(images, previous)
 
 
 class FindManifestIndexTest(unittest.TestCase):
