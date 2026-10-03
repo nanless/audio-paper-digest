@@ -1,27 +1,37 @@
-# 契约与兼容矩阵
+# 数据与发布兼容规则
 
-本页区分“仍可读取”“可维护”和“允许进入默认 production”。旧产物可读不代表能够重新包装成新日更。
+旧文件可以读取，不代表可以用于新分析或发布。下表区分当前写入格式、历史用途和继续操作时的要求；默认 API、显式 Manual 和独立历史发布各自核验，不能互相借用证明。
 
-| 产物 | 当前 writer | 历史读取 | 默认 production |
+| 数据或记录 | 当前写入格式 | 历史用途 | 当前操作要求 |
 |---|---|---|---|
-| filter decision | decision contract v3 | 只在输入、模型和 Prompt 指纹匹配时复用 | 必须完整覆盖 raw candidates |
-| analysis manifest | manifest v1 + 当前阶段契约 | 旧阶段可用于显式恢复或迁移 | 必须满足 API 或 Manual 对应终态集合 |
-| 日更 source run | `daily-fresh-source-run-v1` + `daily-fresh-source-reference-v1` | 旧文本/PDF cache 只读，不能迁成 sealed run | 须重放当前 batch、完整 paper set 和每篇四文件 PDF/TXT/runtime/manifest 封口 |
-| API Reader | Reader v3 + source v4 + author/resource identity v1 | v1/v2 和缺任一当前来源合同的 v3 只读；旧 structured artifact 仅在 sealed TXT/source manifest/parser 布局精确可重放时内存兼容 | 只接受 article/plan/Figure/作者机构/资源状态及其来源 SHA 闭环；不改写旧 sealed artifact |
-| scoring audit | `api-scoring-audit-v2` | 旧评分可显示 | 必须重算八维总分并绑定最终 analysis |
-| generation manifest | schema v3 | v1/v2 仅显式历史维护 | 新日更只接受 v3、`publishedPapers` 和同质 proof |
-| researcher workbench | `researcher-workbench-v1` + `researcher-sidecars-v1` | 无合同旧页继续可读但没有结构化工作台/下载资格 | Reader v3/Manual v6 新页必须绑定 front matter、四个 sidecar 与逐文件 SHA |
-| review receipt | 当前 review protocol | 逐页 pass 永久以“相对路径 + 页面内容 SHA”复用；manifest/模型/代码/协议/Hugo 变化不重审未变文件 | 必须重跑批次 gate 并重绑 generation、Git baseline 和 Hugo gate |
-| visual summary | v3 TOP 10 | v1/v2 由显式迁移命令处理 | 必须绑定 publication commit/OID 与当前 token；modern ephemeral Figure 只复验身份并使用空引用路径，不回退旧缓存 |
-| Manual canonical | production v6 | v5/shadow/sealed preview 只作历史维护 | 默认 API 不读取为自动分析证明 |
-| OpenCode Go account pool | `opencode-go-sticky-quota-failover-v1` | 未知版本拒绝覆盖 | 仅明确 `GoUsageLimitError` 改变 active/cooldown；不保存原始 key |
-| 历史 direct catalog/plan | `merged-good-historical-local-data-v5` / `historical-direct-rewrite-plan-v5` | v4/v3 与 legacy crosswalk/fresh run 仅 fallback 审计 | catalog 同时封存 conflict/multiple Daily 主 arXiv binding、ICML poster authority binding 与当前 PDF-routable 子集；plan 精确重放页面、来源和子集 SHA；不读取旧博客正文 |
-| 历史 direct staging/aggregate/publication | `historical-direct-*-v1` | 私有 runtime 工件可审计；逐页 pass 按路径+内容 SHA 持久复用 | 完整 direct 投影可经独立 review、锁内 activation/commit/push 与远端 OID 验证发布；会议 aggregate 未接入时仍失败关闭 |
+| 筛选决定 | 筛选决定 v3 | 输入、模型和提示词指纹匹配时可复用 | 决定必须覆盖完整候选集合。 |
+| 分析清单 | 分析清单 v1 及当前阶段规则 | 旧阶段可用于显式恢复或迁移 | 须满足所选 API 或 Manual 模式的阶段终态。 |
+| 日更来源 | `daily-fresh-source-run-v1`、`daily-fresh-source-reference-v1` | 旧文本/PDF 缓存只可读取，不能补成新封存来源 | 核对当前批次、完整论文集合及每篇 PDF、文本、来源信息和清单四文件。 |
+| API 解读 | Reader v3、表格及公式来源 v4、作者及资源来源 v1 | v1/v2 及缺任一当前来源要求的旧 v3 只供历史读取；结构化来源兼容条件见下文 | 正文、计划、图、作者机构、资源状态及来源 SHA 均须通过核验，不改写旧封存文件。 |
+| 评分审查 | `api-scoring-audit-v2`，触发时另作稳定性裁决 | 旧评分可显示 | 重算八维总分，并核对最终分析与评分依据。 |
+| 页面生成清单 | schema v3 | v1/v2 仅用于显式历史维护 | 新日更要求 v3、实际 `publishedPapers` 及一致的发布模式和依据。 |
+| 阅读与下载资料 | `researcher-workbench-v1`、`researcher-sidecars-v1` | 无协议旧页继续可读，但不能据此取得结构化下载资格 | Reader v3/Manual v6 新页核对页面元数据、四个下载文件及各 SHA。 |
+| 页面审查记录 | 当前审查协议 | 逐页通过记录按相对路径和页面内容 SHA 长期复用 | 重跑当前批次检查，绑定生成清单、Git 基线、协议和 Hugo 构建；内容未变的文件不重审。 |
+| 论文配图清单 | v3 TOP 10 | v1/v2 由显式迁移命令处理 | 绑定发布提交、远端 OID 和当前 token；临时图片模式核验身份后使用空引用路径，不回退旧缓存。 |
+| Manual 正式结果 | 正式结果 v6 | v5、`shadow` 和封存预览仅供历史维护 | 默认 API 不把 Manual 来源当作自动分析依据；继续任务还须核对当前指令 SHA。 |
+| OpenCode Go 账号池 | `opencode-go-sticky-quota-failover-v1` | 未知版本不能被覆盖 | 仅明确的 `GoUsageLimitError` 429 或 `Insufficient balance` 401 更新冷却并向后切号；不保存原始密钥。 |
+| 历史论文目录与计划 | `merged-good-historical-local-data-v5`、`historical-direct-rewrite-plan-v5` | v4/v3 及旧 crosswalk/fresh run 只供补救审计 | 目录保留冲突或多个 Daily 主 arXiv 绑定、ICML poster 来源依据及当前可访问 PDF 的子集；计划核对页面、来源和子集 SHA，不读旧博客正文写作。 |
+| 历史暂存、汇总与发布 | `historical-direct-*-v1` | 私有运行记录可审计，逐页通过记录按路径和内容 SHA 复用 | 完整结果通过独立审查后，才能在锁内激活、提交、推送并核验远端 OID；计划要求的会议汇总、页面或来源校验未满足时停止。 |
+
+## 兼容读取的具体限制
+
+Reader 的正文结构版本和表格、公式来源版本负责不同检查，不能用一个版本代替另一个。早期结构化来源须通过来源清单和全文 SHA 核验；兼容旧键序哈希时，还须能按记录的 `parserVersion` 重验。例外仅限实现认可的无布局来源标记，且 `tables`、`formulas`、`figures` 数组均为空。任意布局声明不能取得资格，也不能改封存文件生成新 SHA。
+
+页面审查的通过记录只按最终文件路径和内容 SHA 复用。模型、代码、协议、生成清单或 Hugo 变化，仍要求当前批次检查和新的审查记录，但不使字节未变的页面重新接受模型审查。Git 基线或远端身份不匹配时仍禁止推送。
+
+Manual 包内保存的旧提示词和编辑规范副本不代表当前任务可以继续。现有消费者会与仓库当前 `manual/prompts/manual-tutorial-article.md`、`manual/docs/editorial-reference-contract.md` 的 SHA 比较，不符时拒绝旧包；分析规范还检查对应阶段提示词及成稿规范。旧正式结果的显示与旧任务包继续运行是两件事，不能据此宣布所有历史文件都不可读。
+
+独立历史发布入口已经存在，但计划或暂存文件齐全不证明全历史任务已发布。详细操作及来源限制见[历史重写](history-rewrite.md)和[历史发布](history-direct-publication.md)。已有批次重写的人工补丁还受旧运行身份限制，见[从原文重写](fresh-rewrite.md)；不能手填缺失 SHA 扩大兼容范围。
 
 ## 迁移原则
 
-1. production writer 只写当前版本，不回写旧 schema。
-2. 兼容读取器不得静默赋予旧产物新的 production 资格。
-3. 迁移必须重开来源文件并验证 realpath、bytes 和 SHA。
-4. 版本、Prompt、预算或算法变化进入对应阶段指纹，只失效必要下游。
-5. 无法证明来源或集合完整性时 fail closed，不以“页面看起来正常”代替契约。
+1. 当前写入程序只写当前格式，不静默改旧文件使其看起来符合新版本。
+2. 兼容读取不能授予旧结果新的分析或发布资格。
+3. 迁移重新打开来源文件，核验真实路径、文件长度和 SHA。
+4. 版本、提示词、预算或算法变化进入对应阶段指纹，只使必要阶段及下游失效。
+5. 来源或论文集合无法核实时，停止操作；页面看起来正常不能代替校验。

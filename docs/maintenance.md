@@ -2,119 +2,122 @@
 
 ## 受众与原则
 
-给修改默认 API、共享发布、Prompt、数据契约或文档的维护者。先确认变更属于哪个层，只改一处权威实现，再同步消费者、测试与文档。Manual 专属维护见 [manual/README.md](../manual/README.md)。
+本文供修改默认 API、共享发布、提示词、数据格式或文档的维护者使用。先定位配置或接口的实际实现，再同步其消费者、测试与说明。Manual 专属维护见 [manual/README.md](../manual/README.md)。
 
 ## 变更路由
 
-| 变更 | 首要文件 | 必查消费者 |
+| 变更 | 首要实现 | 需要核对的消费者 |
 |---|---|---|
-| Node 参数/路径 | `scripts/config.js` | 入口脚本、测试、env.example |
-| Python 发布路径 | `scripts/path_config.py` | generate/review/push、测试 |
-| API 协议/代理 | `scripts/utils.js`、`publish_common.py` | 筛选、分析、review、API key 测试 |
-| 日更 sealed PDF/TXT | `lib/daily-fresh-source-plan.js`、`lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、validator、Python generate/review/push、storage、文档 |
-| 历史 direct 来源/投影 | `historical-direct-*`、`historical-conference-*-sources/projections` | catalog、plan、scheduler、runner、aggregate、crosswalk fallback、脚本索引和历史文档 |
-| 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口、digest 状态 |
-| 分析结构/评分 | `analysis-contract.js`、Prompt | Node/Python parser、publisher |
-| Reader 文风/图表/修复 | `api-reader-article.md`、`api-reader-repair.md`、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader validator、候选与阶段指纹、博客 review |
-| 博客事务 | `publish-to-blog.py` | 三个独立入口、receipt 测试 |
-| 视觉状态 | 两个 state JS 与 integration | planner、status、record |
-| 命令别名 | `package.json` | README、AGENTS、SKILL、docs |
+| Node 参数与路径 | `scripts/config.js` | 入口脚本、测试、env.example |
+| Python 发布路径 | `scripts/path_config.py` | generate/review/push 与测试 |
+| API 协议或代理 | `scripts/utils.js`、`scripts/publish_common.py` | 筛选、分析、页面审查、API key 测试 |
+| 日更封存文本与 PDF | `lib/daily-fresh-source-plan.js`、`lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
+| 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
+| 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
+| 分析结构或评分 | `analysis-contract.js` 与提示词 | Node/Python 解析器和发布器 |
+| Reader 写作、图表或修复 | `api-reader-article.md`、`api-reader-repair.md`、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
+| 博客事务 | `publish-to-blog.py` | 三个独立入口与 receipt 测试 |
+| 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
+| 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
 
 ## 不可破坏的边界
 
-- 默认日更始终 LLM/API；API 错误不切 Manual。
-- 项目环境只来自根 `.env`，凭据不进入外部子进程。
-- Muse 与 arXiv 必须代理；其他 LLM 默认 `agent:false`。
-- 同篇分析与共享 JSON 更新必须持锁并锁内重读。
-- checkpoint 指纹变化只失效必要阶段，不能无条件清空全部成功项。
-- 日更 API 分析、Reader 和发布只可读取当前 sealed PDF/TXT/runtime/manifest；缺失或漂移必须回到
-  `digest:prepare`，不得以 legacy cache 补跑。
-- 历史 arXiv 每 generation 重新拉取并保存官方 PDF/TXT/runtime/manifest；历史会议只重放绑定的本地
-  metadata/PDF SHA；两者均不得输入旧博客正文、旧分析或旧 Reader。
-- generate、review、push 分离；review 只读最终字节。
-- production proof、页面 SHA、Git baseline、remote OID 和视觉任务逐层绑定。
+- 默认日更始终使用 LLM/API；API 错误不能使其切换 Manual。
+- 项目配置来自根 `.env`。外部子进程使用规定的最小环境，不能继承无关凭据。
+- Muse 与 arXiv 必须使用项目代理；其他 LLM 默认 `agent:false`。
+- 同篇分析及共享 JSON 更新必须持锁，并在锁内重读。
+- 检查点指纹变化只使必要阶段失效，不能无条件清空全部成功结果。
+- 日更分析、Reader 和发布只读取绑定的文本、PDF、来源元数据与清单。文件缺失或不符时，目标仍为北京时间当天才可重跑 `digest:prepare`；历史日期保留失败记录，按历史维护处理，不能用旧缓存补源。
+- 历史 arXiv 每次来源获取都重新封存官方四份文件；历史会议核验绑定的本地元数据/PDF SHA。两者都不能把旧博客、分析或 Reader 正文作为写作来源。
+- generate、review、push 各自独立；review 只读最终字节。
+- 发布资格证明、页面 SHA、Git 基线、远端 OID 和视觉任务须分别核验对应关系。
 - 项目脚本不调用图像 API。
 
 ## Prompt 修改
 
-`loadPrompt()` 读取 Markdown 第一个 fenced block。修改前确认：
+`loadPrompt()` 读取 Markdown 的第一个围栏代码块。修改时逐项确认：
 
-1. 占位符与调用方一致；
-2. JSON/章节结构与 parser 一致；
-3. 示例不会被误认成外层 fence；
-4. Prompt SHA 进入正确阶段指纹；
-5. retry feedback 能精确修正而非整篇漂移；
-6. 读者正文没有模板句、证据 ID 或流程元话语。
+1. 占位符与调用方一致。
+2. JSON 或章节结构与解析器一致。
+3. 内部示例不会被误认成外层代码块。
+4. 提示词 SHA 进入正确阶段指纹。
+5. 重试反馈能定位问题并限制修改范围，不使整篇内容无故变化。
+6. 读者正文没有模板句、证据 ID 或流程说明。
 
-评分 Prompt 变更还需验证八维顺序、范围、开源固定锚点、证据 ID 和 deterministic caps。Reader Prompt 变更要抽检术语桥、表格前后叙事、图前/图后邻接、未传像素的描述边界。
+评分提示词还须保留八维顺序、范围、开源固定锚点、证据 ID 和代码计算的上限。Reader 提示词须抽检术语桥、表格前后的解释、相邻图文，以及未传入像素时不能猜图的限制。
+
+表数量不足诊断使用稳定 `code`、`requiredCount` 和 `actualCount`。修改相关提示或说明时，须同步检查生产、收集、修复、反馈和恢复签名；新结构字段不能退回解析自然文案。详细字段与有界旧格式兼容见 [数据格式](data-format.md) 和 [Reader 写作](reader-writing.md)。
 
 ## 数据契约修改
 
-新增字段时区分：
+新增字段前说明它的用途和核验方式：
 
-- 权威事实：必须进入输入/来源 SHA；
-- 派生缓存：必须可从权威字节重建；
-- 恢复状态：必须带版本和阶段指纹；
-- 发布凭证：必须绑定精确文件/外部状态；
-- 可选诊断：不得改变业务完成结果。
+| 用途 | 要求 |
+|---|---|
+| 原始事实或来源 | 纳入相应输入或来源 SHA |
+| 派生缓存 | 能从原始字节重建 |
+| 恢复状态 | 保存版本和阶段指纹 |
+| 发布凭证 | 对应精确文件及必要外部状态 |
+| 可选诊断 | 不得单独改变业务完成结果 |
 
-结构变化同步 Node validator、Python publisher、fixtures、迁移/历史兼容和 `validate:data`。
+结构变化须同步 Node 校验器、Python 发布器、测试样例、迁移和历史兼容，以及 `validate:data`。SHA 只核验字节与对应关系，不能代替内容审查或证明部署成功。
 
 ## 并发与原子性
 
-普通 JSON 用原子写。读改写对象必须使用公共文件锁，锁内重新读取最新 canonical，合并本次论文或字段并递增 generation。不要在锁外携带整份旧数组覆盖新结果。长任务使用 heartbeat/租约；只有超龄 owner 可回收。
+JSON 保存使用原子写入。读改写时取得公共文件锁，在锁内重读最新正式分析记录，只合并本次论文或字段，再递增 `generation`。不能把锁外的整份旧数组写回去覆盖其他任务。
+
+长任务使用 heartbeat 和租约，只有实现确认持有者与租约符合失效条件时才能回收。Node 分析队列遇到运行级错误会停止领取新论文；Python 页面审查预先提交线程任务，不应假设它具有相同停派行为。
 
 ## 安全与日志
 
-- 真实 URL 只允许 HTTPS，loopback 测试除外。
-- 外部重定向逐跳 DNS/IP 校验。
+- 对外资源使用 HTTPS，回环地址测试除外。
+- 外部资源重定向逐跳核验 DNS/IP。
 - 日志每个非空物理行使用毫秒级北京时间戳。
-- 日志和 `.env` 权限 `0600`。
-- 脱敏认证头、Cookie、token、secret、password、配置密钥实际值和 URL userinfo。
-- `data/`、`logs/`、`.env`、备份、缓存均不提交。
+- 日志和 `.env` 使用 `0600` 权限。
+- 日志脱敏认证头、Cookie、token、secret、password、实际配置密钥和 URL userinfo。
+- `data/`、`logs/`、`.env`、备份及缓存不得提交。
 
 ## 运行存储诊断与清理
 
-`npm run storage:status` 还统计受保护的 daily sealed TXT/PDF、historical direct source/plan/staging 与会议来源目录；它们不是缓存，`storage:prune` 永不删除。`npm run storage:prune` 默认仅输出 dry-run 删除清单；人工核对后才可运行：
+`npm run storage:status` 只读统计文件大小与数量，包括受保护的日更封存来源、历史来源/计划/私有页面和会议来源目录。它们是可重新核验的输入与运行证据，`storage:prune` 不删除。
+
+`npm run storage:prune` 默认只扫描引用并输出预计删除清单。status 和预览可在任务运行时使用，不要求停止写入者。真正删除须先人工核对清单，并停止全部抓取、筛选、分析、博客生成/审查/推送和视觉任务，再运行：
 
 ```bash
 npm run storage:prune -- --apply
 ```
 
-清理器只能删除白名单根内超过 30 天的旧文件：`logs`、`image-cache`、`api-reader-assets`、`visual-reference-inputs` 和三个已无代码消费者的 legacy `*_input_output` 调试目录。三类缓存删除前会扫描 `data/current` / `data/archive` 的权威 JSON，重放绝对/相对路径和 URL SHA-256 引用。JSON 损坏、symlink、路径逃逸或计划后文件变化都会在 apply 前整批阻断。canonical JSON、发布/视觉 manifest、归档成品和博客文件不在删除白名单内。
+保留期默认 30 天，可用正整数 `PD_STORAGE_RETENTION_DAYS` 覆写。清理范围仅有 `logs`、`image-cache`、`api-reader-assets`、`visual-reference-inputs` 和三个已无代码消费者的旧调试目录：`deep_analyzer_input_output`、`filter_input_output`、`iclr_filter_input_output`。三类缓存删除前扫描 `data/current` 与 `data/archive` 的正式 JSON，核对绝对/相对路径和 URL SHA-256 引用。正式分析 JSON、发布/视觉清单、归档成品及博客文件不在白名单内。
 
-`--apply` 只能在全部抓取、筛选、分析、博客生成/review/push 与视觉规划任务停止后运行。清理器会读取常见 full-fetch、逐论文分析和博客事务锁；本机 owner PID 仍存活、远端/非法 owner 无法可靠判活时均 fail closed，且绝不替调用方删除锁。锁检测与 unlink 之间仍不存在跨所有 writer 的统一事务，因此“无活动任务”是操作前提，而不是可省略的建议。
-
-`--apply` 是停机维护命令：只能在抓取、分析、博客三阶段和视觉任务全部停止后运行。引用扫描无法替代所有 writer 共享的事务锁；若与新权威引用并发写入，仍存在扫描后竞态。正在运行的任务期间只允许 `storage:status` 或 dry-run。
+JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前整批阻断。本机锁持有者 PID 存活，或远端/非法持有者无法可靠判活时，同样拒绝删除；清理器不替调用者删锁。它会复扫引用与候选，但扫描和删除之间没有所有写入者共用的事务锁，仍可能发生竞态，因此 `--apply` 前停写是必要条件。预览可以报告这些阻断，不能把预览成功当成删除授权。
 
 ## 验证矩阵
 
-用户明确要求完全不用旧生成正文重写一个既有日批次时，使用 [fresh rewrite 分阶段流程](fresh-rewrite.md)。
-全历史则使用 [direct-local-first 历史流程](history-rewrite.md)：本地会议 metadata/PDF 直达，arXiv 在每个
-generation 新拉 PDF/TXT，crosswalk 只补坏输入。普通 `reanalyze`、Reader refresh 和清除个别 analysis 字段都
-不等于任一隔离保证。
+用户明确要求重写既有日批次、完全不使用旧生成正文时，使用 [fresh rewrite 分阶段流程](fresh-rewrite.md)。全历史使用 [direct-local-first 历史流程](history-rewrite.md)：会议核验本地元数据/PDF，arXiv 每次获取新的官方文本/PDF。备用 `history:arxiv-batch` 只接受命名、不可变的新 arXiv 获取失败交接文件；这不意味着其他 crosswalk 旧状态维护入口全部只读。普通 `reanalyze`、Reader refresh 或清除个别 analysis 字段不能提供这两种隔离保证。
 
 ```bash
 npm run verify
 git diff --check
 ```
 
-`verify` 是完整离线验证入口，必须沙箱外运行。先要求与博客部署一致的 Hugo **0.160.1**，然后检查全仓 JS/Python/shell 语法、运行一次 `npm test`（已包含默认与 Manual JS）、两处 Python 单测和只读 `validate:data`。任何一步失败立即非零退出；Hugo 资源管线 fixture 必须真正构建，缺少 Hugo 不能作为完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等产物目录，不跟随 symlink；Python 字节码写入独立临时目录。
+完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**，再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含默认与 Manual JS）、两处 Python 单测和只读 `validate:data`。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等产物目录，不跟随符号链接；Python 字节码写入独立临时目录。
 
-只有 CI 或无数据的干净 checkout 显式运行 `npm run verify -- --allow-empty`，普通维护默认复验现有数据。`npm run verify -- --quick` 仅做语法与只读数据验证，明确省略所有单测与 Hugo，**不能作为完整验收**。定向调试可单独执行 `test:default`、`test:manual` 或选定测试；完整验证无需再重复运行这些子集。
+只有 CI 或无数据的干净检出仓库才显式使用 `npm run verify -- --allow-empty`。普通维护默认复验已有数据。`npm run verify -- --quick` 仅检查语法和数据，不运行单测或 Hugo，不能代替完整验收。定向调试可单独运行 `test:default`、`test:manual` 或选定测试；完整验证通过后无须重复这些子集。
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，用该 release 的官方 checksums 校验归档后安装，再调用同一个 `verify --allow-empty`。本地入口只检查已安装版本，不自动下载或升级工具。
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装，再执行同一个 `verify --allow-empty`。本地入口仅检查已安装版本，不自动下载或升级。
 
-离线回放使用临时目录与合成/脱敏 fixture，模型、网络和发布动作以 mock 注入，不读写生产 canonical 来制造成功。Reader 至少覆盖多错定位、数字/单位、图 marker、坏 JSON、陈旧或越权 patch、候选损坏、失败恢复与无进展；发布至少覆盖协议漂移、字节变化、LLM 零调用的机械阻断和真实 Hugo 资源构建。记录完整输入指纹、通过/阻断结果和失败调用数，不能把 fixture 通过当成真实长文质量或收费 Token 改善的证明。涉及 Prompt/发布时另做授权的一篇隔离产物实验；实际付费请求不属于 `verify`。
+离线测试使用临时目录和合成/脱敏样例，以 mock 替代模型、网络和发布，不修改生产正式分析数据来制造成功。Reader 测试应覆盖多错定位、数字/单位、图标记、坏 JSON、陈旧或越权补丁、损坏候选、恢复及无进展；发布测试应覆盖协议变化、文件字节变化、未调用 LLM 就阻断的错误和真实 Hugo 资源构建。记录输入指纹、通过或阻断结果及失败调用数。样例通过不代表真实文章质量或付费 token 改善；这类效果需要另行授权的一篇隔离实验，付费请求不属于 `verify`。
 
-原表 selection 仅覆盖能够逐字安全渲染的表子集。付费生成前的 `TABLE_N_SELECTION` 明示 eligibility 和原因；空源表头、所有行都被来源标记为表头、未处理的 MathML/TeX 双写等会禁用该表的 selection，运行时再次拒绝。不能靠猜表头角色或宽松数值等价放行；这些表可走既有 `source_quotes` 路线，但连续原句、数字和单位的完整校验仍必须通过。本轮没有引入新的跨 Node/Python 显示归一协议。
+选择原表内容时，只支持能够安全逐字渲染的表。付费生成前，`TABLE_N_SELECTION` 列明可用性和原因；空表头、所有行均被来源标成表头，或未处理的 MathML/TeX 双写，会禁用该表，运行时仍会拒绝。不能猜表头角色或放宽数字等价条件；这些表可用 `source_quotes`，但连续原句、数字和单位仍须完整核验。
+
+页面审查通过记录永久按“相对路径 + 内容 SHA”复用。修改发布器仍须重新渲染，代码、模型、协议或 Hugo 变化须执行本批检查并生成新 receipt；只有实际页面内容 SHA 变化才重审该页。部署与线上页面仍需人工核验，不能由测试或状态命令代替。
 
 ## 提交前清单
 
-- [ ] 命令与 `package.json` 一致
-- [ ] 中英文文档术语和默认值一致
-- [ ] 无旧路径、悬空链接或不存在脚本
-- [ ] 未混入 Manual 内部规则
-- [ ] 未提交运行数据、日志或凭据
-- [ ] dirty worktree 中用户无关改动被保留
-- [ ] 中文提交信息说明原因、范围和兼容影响
+- [ ] 命令与 `package.json` 一致。
+- [ ] 中英文说明和默认值一致。
+- [ ] 没有旧路径、悬空链接或不存在脚本。
+- [ ] 没有复制 Manual 内部规则。
+- [ ] 未提交运行数据、日志或凭据。
+- [ ] 保留工作区中用户的无关改动。
+- [ ] 中文提交信息说明原因、范围和兼容影响。

@@ -2,100 +2,104 @@
 
 ## 如何使用本页
 
-面向操作者，按“我要完成什么”列命令。逐文件依赖图见 [scripts/README.md](../scripts/README.md)，命令别名以 `package.json` 为准。Manual 内部命令只见 [manual/README.md](../manual/README.md)。
+本页按任务列出操作命令。逐文件职责见 [scripts/README.md](../scripts/README.md)，别名以 `package.json` 为准；Manual 内部命令见 [manual/README.md](../manual/README.md)。示例中的 DATE、ID、UUID 和大写路径是待填写参数，方括号表示可选参数，竖线表示择一。
 
 ## 工作区角色
 
-生产命令运行前先检查：
+生产命令前先运行：
 
 ```bash
 npm run workspace:role -- status
 ```
 
-`digest:*`、`fetch`、`blog:generate/review/push` 只允许 `daily`；`history:*`、`conference:*`、`rewrite:source` 与 `blog:activate-fresh` 只允许 `history`。首次绑定用 `npm run workspace:role -- set daily|history`；整库复制后 marker 仍绑定旧 realpath，必须在确认副本用途后显式执行 `npm run workspace:role -- set history --force`。marker 为 Git 忽略的 `0600` 本机文件。
+日更 `digest:*`、`fetch`、`blog:generate/review/push` 和新会议 `conference:new:*` 使用 `daily`。历史 `history:*`、旧会议 `conference:*` 维护入口、`rewrite:source` 和 `blog:activate-fresh` 使用 `history`；不能把新旧会议命令混用。
+
+首次确认用途后，用 `npm run workspace:role -- set daily|history` 绑定。整库复制后，角色标记仍指向旧真实路径；确认副本用于历史工作后才执行 `npm run workspace:role -- set history --force`。标记是 Git 忽略、权限为 `0600` 的本机文件。
 
 ## 日更脚本阶段与业务终态
 
 | 命令 | 用途 |
 |---|---|
-| `npm run digest:prepare -- DATE` | 默认 LLM/API 脚本阶段：发布博客并准备视觉输入；退出 0 不等于视觉业务终态 |
-| `npm run digest:api -- DATE` | 同义显式别名 |
-| `./run-daily-digest.sh DATE --from STAGE` | 从安全阶段恢复 |
-| `npm run digest:status -- --date DATE` | 只读最终状态快照 |
-| `npm run digest:waive-visuals -- --date DATE --reason TEXT` | 用户明确不生图时签发 waiver |
+| `npm run digest:prepare -- DATE` | 完成默认数据与 Git 发布阶段，准备视觉输入 |
+| `npm run digest:api -- DATE` | 上一命令的等价别名 |
+| `./run-daily-digest.sh DATE --from STAGE` | 从程序允许的阶段恢复 |
+| `npm run digest:status -- --date DATE` | 读取当前最终状态 |
+| `npm run digest:waive-visuals -- --date DATE --reason TEXT` | 用户明确取消生图时记录视觉豁免 |
 
-`digest:manual` 只在用户明确要求人工流程时使用。
+`digest:manual` 只在用户明确选择人工流程时使用。默认入口退出 0 只表示脚本阶段通过，不代表整批完成。
 
-只有后续内置生图与 record 完成，或存在有效视觉 waiver，并且 `digest:status` 返回 0，整批业务才是 complete。
+完成还要求对应发布提交，或保留本批已审页面字节的后续提交，已成功完成 GitHub Pages build/deploy；人工逐页核验汇总和单篇页面的 HTTP 200、正式地址与标题，保存记录。长图和封面须由内置工具生成、目检并 record，或有仅针对视觉的有效用户豁免。最后重读 `digest:status`；它尚未自动核验部署或网页。
 
 ## 数据阶段
 
 | 命令 | 行为 |
 |---|---|
-| `npm run fetch` | 归档、抓取、筛选、分析；不发布 |
-| `npm run deep -- --date DATE` | 从 current sealed PDF/TXT source run 续分析；不能补抓或使用 legacy cache |
-| `npm run batch` | 仅用 current sealed PDF/TXT 批量处理 canonical 中未完成论文 |
-| `npm run batch -- --retry-failed-readers` | 退役当前未完成论文的失败 Reader 候选后续跑，不影响已完成论文 |
-| `npm run reanalyze -- --concurrency N` | 退役全部旧失败 Reader 候选并清空 Reader/图片补充状态后强制全量重分析；仍只重放 current sealed PDF/TXT |
-| `node scripts/analyze-single-paper.js ID --force` | 单篇分析 |
-| `node scripts/reanalyze-selected.js ID...` | 指定集合重分析 |
-| `node scripts/refilter-reanalyze-by-date.js DATE` | 历史日期重筛与重分析 |
-| `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 批量刷新评分与 Reader；重放 sealed PDF/TXT，图像仅临时物化 |
-| `npm run validate:data` | 只读 current 契约检查 |
-| `npm run keyword:recall` | 关键词预筛金标准回放 |
-| `npm run backfill` | 仅补录历史 paper ID |
-| `npm run paper:rethink` | 历史独立维护工具；博客已取消集成，读者无需启动。旧接口保留于[历史说明](paper-rethink-companion.md)。 |
+| `npm run fetch` | 归档、抓取、筛选和分析，不发布 |
+| `npm run deep -- --date DATE` | 只读取当前封存文本/PDF，续跑未完成分析 |
+| `npm run batch` | 批量处理正式分析结果中未完成的论文 |
+| `npm run batch -- --retry-failed-readers` | 归档并停用未完成论文的失败 Reader 候选后续跑，不影响已完成论文 |
+| `npm run reanalyze -- --concurrency N` | 归档并停用全部旧失败 Reader 候选，清空 Reader/图片补充状态，再用绑定来源强制重分析 |
+| `node scripts/analyze-single-paper.js ID --force` | 分析指定论文 |
+| `node scripts/reanalyze-selected.js ID...` | 重分析指定集合 |
+| `node scripts/refilter-reanalyze-by-date.js DATE` | 受控的历史日期重筛与重分析 |
+| `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 从绑定来源批量刷新评分和 Reader，图片只为本次调用临时准备 |
+| `npm run validate:data` | 只读核验当前数据 |
+| `npm run keyword:recall` | 回放关键词预筛金标准 |
+| `npm run backfill` | 只补录历史论文 ID |
+| `npm run paper:rethink` | 历史独立维护工具，博客已取消集成，读者无需启动；见[历史说明](paper-rethink-companion.md) |
 
-`full-fetch.js` 从 fetch 开始时只接受北京时间当天。后台运行可直接调用 `node scripts/full-fetch.js`，避免 npm/TTY 包装干扰。
+`full-fetch.js` 只抓取其启动时的北京时间当天。后台只处理数据时可直接运行 `node scripts/full-fetch.js`，避免 npm/TTY 包装干扰；仍须遵守相同环境、角色和沙箱外运行要求。
 
-以上四个恢复入口都要求 `deep-analysis-result.json.dailyFreshSourceRun` 可精确重放：canonical batchDate、论文集和每个 `source.txt`、`source.pdf`、runtime/manifest 必须闭合。缺失、损坏或漂移会在模型或图片请求前失败；运行 `npm run digest:prepare -- DATE` 重新建立 source phase，不能手补 checkpoint。
+`deep`、`batch`、`reanalyze` 和 `api:reader:refresh` 只读取 `deep-analysis-result.json.dailyFreshSourceRun` 指定的文件，并核验 `batchDate`、论文集合及每篇 `source.txt`、`source.pdf`、runtime 和 manifest。它们不补抓来源或使用旧缓存。缺失、损坏或 SHA 不符时在模型/图片请求前停止。目标仍为北京时间当天才重新运行 `npm run digest:prepare -- DATE`；历史日期保留失败记录，按历史维护处理，不能手改检查点。
 
 ## 博客事务
 
-| 命令 | 唯一职责 |
+| 命令或参数 | 职责 |
 |---|---|
 | `npm run blog:generate -- --date DATE` | 生成页面和 generation manifest |
-| `npm run blog:review -- --date DATE` | 只读 review、Hugo gate、receipt |
-| `npm run blog:push -- --date DATE` | 精确 commit/push 与远端 OID |
-| `--include-id ID` | 单篇隔离范围，适用阶段必须保持同一 ID |
-| `--exclude-id ID` | generate 阶段显式排除，可重复 |
+| `npm run blog:review -- --date DATE` | 只读审查、Hugo 检查并生成 receipt |
+| `npm run blog:push -- --date DATE` | 提交精确改动、推送并核验远端 OID |
+| `--include-id ID` | 限定单篇范围，适用阶段保持同一 ID |
+| `--exclude-id ID` | 生成时显式排除，可重复 |
 
-generation manifest 会把实际选中的 current、日期 archive 或显式 `--data-file` 写成
-`generation-input-source-reference-v1`：绝对路径、字节数和 SHA-256 同时进入 input fingerprint。review 和
-push 只重放该文件及其 `dailyFreshSourceRun`，不会退回当时的 `DEEP_ANALYSIS_RESULT_FILE`；输入或 sealed
-TXT/PDF 漂移时必须重新 generate。
+页面清单以 `generation-input-source-reference-v1` 记录实际选择的 current、日期 archive 或 `--data-file`，其绝对路径、字节数和 SHA-256 都进入输入指纹。review 与 push 只重读这个文件及其 `dailyFreshSourceRun`，不退回当时的 `DEEP_ANALYSIS_RESULT_FILE`。输入或封存文本/PDF 不符时必须重新 generate。
 
-不得把三个入口合并为一个模糊的“发布脚本”。`publish-to-blog.py` 是共享实现与生成兼容入口，不替代三阶段门禁。
-三个入口都会先取得博客仓库 Git common-dir 下的私有共享锁，再取得本项目的日期事务锁；因此即使两个
-`audio-paper-digest` 工作区指向同一个 `PAPER_DIGEST_BLOG_REPO`，也不能同时修改其 worktree、index 或 HEAD。
-共享锁位于 Git 私有目录，不进入博客工作树或提交内容；失效回收和释放只删除 inode/token/SHA 仍精确匹配的锁文件。
+通过的逐页审查永久按“相对路径 + 内容 SHA”复用。发布器变化仍重新渲染；清单、代码、模型、协议或 Hugo 变化须执行本批检查并生成新 receipt。只有页面内容 SHA 变化才重审该页，基线和远端身份检查仍不能省略。
 
-## 会议论文（生产链已接通，历史发布仍建设中）
+三个入口先取得博客 Git common-dir 下的共享锁，再取得项目日期锁。两个工作区指向同一博客时，不能同时修改工作树、index 或 HEAD。共享锁不进入博客工作树或提交；回收和释放只删除 inode、token、SHA 仍匹配的锁文件。`publish-to-blog.py` 是共同实现与生成兼容入口，不能绕过三阶段。
 
-会议命令按 `discover → filter/filter:run → extract → reviewed staging → import → plan/execution → analyze → postprocess` 顺序运行，所有写入阶段都有显式 dry-run/apply 或 receipt/CAS 门禁。当前主分支已有真实 LLM 筛选、共用深度分析/Reader 和确定性单篇/会议汇总 postprocess。仍未完成的是旧会议 URL/task 页映射、conference aggregate 接入 historical publication，以及会议历史 review/push/remote-OID 闭环。因此 `conference:*` 仍不是可直接发布全历史的一键入口。准确参数、运行目录和人工工件格式见[会议论文工作流](conference-workflow.md)。
+默认博客与视觉入口经 `scripts/python-runtime.sh` 选择 Python，优先项目 `.venv`，要求 Python 3.11+ 与 OpenSSL。
 
-## 全历史重写（建设中）
+## 会议论文
 
-`npm run history:inventory -- --dry-run` 只读扫描配置博客的历史页面、公开 URL、逐次聚合
-入链、Git tracked tree、日期/cohort 与旧标签的未核验 URL 候选，并只保存正文 SHA，不保存
-旧正文或 sidecar 路径。确认博客位于 clean `main` 后，使用：
+新会议在日更工作区获取官方来源、发现候选、准备全文证据并筛选。筛选后统一使用 `conference:new:process`，由它完成 PDF 封存、导入、逐篇分析、Reader、评分、分类和私有页面生成；不能使用已禁用的 `conference:new:execution/analyze/postprocess` 别名绕开它。
+
+process 的整批并发默认 1，可用 `--concurrency` 设为 1–5，每篇内部分析并发固定 1。先用已通过核验的候选清单、报告文件名和筛选任务 UUID 预览：
+
+```bash
+npm run conference:new:process -- --dry-run --catalog catalog.json --report report.json --filter UUID
+```
+
+页面生成后，独立的 `conference:new:publish:generate/review/push/status/verify` 处理发布与检查；这些入口均须提供 `--conference-id` 和 `--process-id`。命令存在不代表来源、审查或线上验收已通过。
+
+旧 `conference:*` 保留在历史工作区用于已有独立发现、筛选、提取、暂存、导入、计划、执行、分析和后处理记录的维护；旧后处理并发上限 3，不是新 process 的配置。准确参数、恢复条件与审查文件格式见[会议论文工作流](conference-workflow.md)。
+
+## 全历史重写
+
+### 来源与计划
+
+`npm run history:inventory -- --dry-run` 只读扫描历史页面、URL、汇总链接、Git tracked tree、日期/cohort 和待核旧标签 URL，只保存正文 SHA，不保存旧正文或 sidecar 路径。确认博客处于干净 `main` 后才写入：
 
 ```bash
 npm run history:inventory -- --apply \
   --ledger all-history.json --receipt all-history.receipt.json
 ```
 
-双文件会写入受保护的 `data/runtime/historical-page-inventories`。本地好数据不等待 crosswalk；当前
-执行链为 `conference-local-sources → direct-inputs → conference-projections → direct-plan → direct-scheduler
-→ direct-run → direct-aggregate`。arXiv route 来自冻结页已有的单一 arXiv hint，并在每次 generation 新拉、
-封存官方 TXT/PDF/runtime/manifest；会议只重放绑定的本地 metadata/PDF SHA。crosswalk 仅处理 named fresh arXiv
-acquisition handoff；本地会议输入缺失/损坏使 direct item 失败关闭。历史专属 review、activation、commit/push receipt
-与 remote OID 发布已由 `history:publication` 实现；逐页 pass 仅按路径+内容 SHA 复用，当前批次仍重跑确定性/Hugo gate 并重签 receipt。conference aggregate 未接入时仍失败关闭。
+两份文件保存到受保护的 `data/runtime/historical-page-inventories`。当前 `direct-local-first` 从冻结页面的唯一 arXiv 提示和已核验会议来源创建计划，不等待 crosswalk。arXiv 每个 `generation` 都重新封存官方文本、PDF、来源元数据与清单；会议核验保留的本地元数据/PDF。这里的 generation 是获取序号，与论文修订号 `vN` 不同。
+
+下面文件参数使用绝对路径；先预览，再显式写入。首次生成本地来源清单前须准备缺失 PDF，不能覆盖旧不可变文件名。OpenReview 可达时优先官方来源；替代来源仅限代码白名单。
 
 ```bash
-# 所有文件参数均为绝对路径；先用 --dry-run，确认后才改为 --apply
-# 必须先封存缺失 PDF，再第一次签发 local manifest；不能在旧的 immutable 文件名上覆盖重建。
-# OpenReview 可达时优先用 official sealer；只有代码白名单记录才允许显式替代来源。
 npm run history:openreview-pdf-source -- --apply \
   --snapshot /abs/data/icml2026/papers.json --forum-id OPENREVIEW_ID
 npm run history:icml-alternate-pdf-source -- --apply \
@@ -117,6 +121,15 @@ npm run history:conference-projections -- --apply --catalog /abs/scoped-historic
 npm run history:direct-plan -- --apply --catalog /abs/scoped-historical-local-data-v5.json \
   --inventory /abs/all-history.json --conference-projections /abs/conference-page-projections-v3.json \
   [--output direct-rewrite-plan-v5.json]
+```
+
+只有无版本 current arXiv PDF 明确返回 HTTP 404，才允许使用同一论文的官方历史 `vN` PDF。这条路径拒绝跨 ID、query、fragment 或非官方主机，并从实际选择的 PDF 提取文本。`sourceVersion` 记录尝试的 URL/状态和选定版本 URL，核验它与来源清单、分析来源及页面清单的对应关系；分析和页面 front matter 下方须提示当前稿 PDF 不可用。普通来源文件保持原有字节和格式兼容。
+
+唯一允许跨标题预印本的 `n1mAjfRDZ6` 可在 SSRN 经代理可达时直接获取；只能浏览器下载时用 `--import-file`。导入器核验固定标题、作者、日期、多个跨页特征文本及白名单 DOI，记录 `operator-browser-download` 和 `networkResponseObserved: false`，不伪造 HTTP 200。计划、模型输入和页面须说明非 camera-ready。输入副本在封存后可删除；恢复核验运行目录中的 PDF 和凭证，不修改旧 JSON。普通会议 plan v5 结构保持兼容。
+
+### 执行、暂停与状态
+
+```bash
 npm run history:direct-scheduler -- --apply --plan /abs/direct-rewrite-plan-v5.json \
   [--queue all|arxiv|conference] [--generation N] [--paper-ids ID[,ID...]] [--max-papers N] \
   [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
@@ -128,6 +141,19 @@ npm run history:status -- --plan /abs/direct-rewrite-plan-v5.json [--generation 
 npm run history:status -- --plan /abs/direct-rewrite-plan-v5.json --publication-id UUID
 npm run history:pause -- --plan /abs/direct-rewrite-plan-v5.json --phase source|analysis [--generation N]
 npm run history:resume -- --plan /abs/direct-rewrite-plan-v5.json --phase source|analysis [--generation N]
+```
+
+`direct-run --apply` 要求同一 plan/generation 的 scheduler status 已保存，且所选论文全部 `ready`；它不补做来源获取。分析失败可保存来源对应的检查点并跨进程续跑，只有 analysis、Reader 和来源证明完整时才生成私有页面。scheduler 的 arXiv/会议并发分别默认 3/5，范围 1–8；direct-run 默认 3，范围 1–8。
+
+暂停请求等待已开始的来源或论文处理完成；相应操作锁释放后才用同 phase 的 resume。普通 status 是只读快照，`--watch-seconds` 持续输出 NDJSON。`--verify-sources true` 单次重新计算所有本地来源 SHA，不能与 watch 同用。
+
+未传 `--publication-id` 时，普通/watch 状态完全离线，只说明未选择发布。传入后默认现场核对远端 main 与 receipt 的远端身份/OID；`--live-remote false` 只作离线诊断，不能得到 complete。发布状态是单次检查，不能与 watch 同用，并会深核全部 arXiv 文件和会议来源 SHA。
+
+完整状态取决于计划的全部论文、来源、日汇总、会议汇总和精确任务页覆盖，以及绑定同一 plan SHA 的发布完成状态。数量从 plan/projection 推导，并非固定要求 3824 篇、107 日加 3 会或 193 任务；这些数字只能说明特定历史计划，不能当通用阈值。`completion.blockers` 会列出未覆盖页面、失败或未生成页面的论文、缺失汇总，以及未选择、未完成或计划不符的发布。
+
+### 汇总与独立发布
+
+```bash
 npm run history:direct-aggregate -- projection --apply --plan-file /abs/direct-rewrite-plan-v5.json \
   --inventory-file /abs/all-history.json --output-name direct-aggregate-projection-v3.json
 npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-rewrite-plan-v5.json \
@@ -135,81 +161,55 @@ npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-re
   (--daily YYYY-MM-DD|--conference conference-key)
 ```
 
-`direct-run --apply` 必须先看到同一 plan/generation 的 scheduler status，且所选 paper 全部为 `ready`；
-它不会补做 scheduler。分析 partial 会保留 source-bound checkpoint 并跨进程续跑，但只有完整
-analysis/Reader/provenance 才能 staging。普通 status 仅轻量检查会议路径和 PDF size；
-`--verify-sources true` 单次深核全部本地来源 SHA，不能与 watch 同用。
-未指定 `--publication-id` 的普通/watch 状态完全离线，只报告 publication 未选择；指定后默认现场查询远端
-`main` 并将 receipt 的 remote identity/OID 与 live remote 对齐，可显式用 `--live-remote false` 只做离线诊断，
-但离线结果绝不会 complete。publication 状态是单次终验，不能与 watch 同用，并会顺带深核全部 arXiv bundle
-及会议 metadata/PDF SHA。统一完成态还要求 scheduler 全部 ready、arXiv bundle 与会议来源仍闭合、3824 篇
-全部 staged、107 个日汇总与 3 个会议汇总（`aggregates.expected.aggregate=110`）、193 个精确 projection task
-aggregate，以及绑定同一 plan SHA 的 publication live status 全部完成。
+projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文成员，并保存逐页来源 SHA 和完整覆盖记录。选择会议汇总时，任务页与会议总页在同一 run 生成，任务页先写，总页最后写。没有论文成员的日汇总明确标为 `retain-unchanged`，仍纳入覆盖检查。
 
-`n1mAjfRDZ6` 的 SSRN 下载若能由项目代理直接访问，可省略 `--import-file`；若遇到 Cloudflare、只能由浏览器下载，
-必须用上面的显式导入参数。导入器只接受这一条代码白名单，重新提取 PDF 文本并逐项匹配固定预印本标题、
-作者、日期和多个跨页特征文本；SSRN DOI 由代码白名单来源记录绑定。receipt 明示
-`operator-browser-download`、`networkResponseObserved: false`，不会伪造 HTTP 200。
-导入文件只作为一次性输入，封存后可删除；恢复时重放 runtime PDF 与自哈希 receipt。普通会议来源的
-plan v5 字节结构保持不变，既有 status/pause/resume checkpoint 可继续读取。
+实际发布使用 `history:direct-publication`，依次 plan、generate、review、publish、status。逐页通过记录只按路径与内容 SHA 复用，本批仍执行确定性/Hugo 检查并生成 receipt。`activate --apply` 被禁用；`publish --apply` 在共享博客锁内处理激活、提交、推送和远端 OID。精确参数与视觉处置见[独立历史发布](history-direct-publication.md)。旧 `history:publication` 只提供 plan/generate 私有文件，不能用来真正发布。
 
-aggregate projection v3 会把 inventory 中的会议 task 页按冻结 `outboundPostLinks` 拓扑绑定到 direct 论文成员，
-并签发确定性 task renderer、逐页来源 SHA 和完整 coverage；选择会议 aggregate 时 task 页与会议总页在同一 run
-生成，task 页先写、会议总页最后写。没有 direct 论文成员的日汇总页显式签 `retain-unchanged`，不再游离于页面闭环之外。
-
-长任务通过 `history:pause --phase source|analysis` 请求在活动来源/论文完成后安全暂停；看到相应 operation lock
-已释放后才运行同 phase 的 `history:resume`。`history:status` 是只读快照，`--watch-seconds` 持续输出 NDJSON；最终 `completion.blockers`
-会继续列出未覆盖论文页、失败/未 staged 论文、缺失汇总、会议 task 页和尚未接通的历史 publication。
-
-`history:crosswalk` 只保留 legacy pending decision state 的只读/审计用途。`history:arxiv-batch` 必须明确传入
-`--handoffs NAME.json[,NAME.json...]`，并且只接受 direct scheduler/run 写入的 named immutable fresh-arXiv failure
-handoff；它不枚举 pending 页。`history:local-crawl-batch`（及 `archive-crawl-batch`）和
-`history:conference-crawl-batch` 是 fail-closed retired compatibility endpoints，不能写 crosswalk。准确来源边界和
-recovery 见[历史重写底座](history-rewrite.md)。
+正常 direct 任务不依赖 crosswalk。`history:crosswalk` 仍保留显式旧状态维护：`prepare --apply`、`apply`、`apply-verified` 和 `finalize` 可以按来源授权及 CAS 检查写入状态或凭证，并非全部只读。备用 `history:arxiv-batch` 必须给出 `--handoffs NAME.json[,NAME.json...]`，只接受 scheduler/run 保存的命名、不可变的新 arXiv 获取失败交接文件，不枚举 pending 页面。会议本地来源缺失或损坏只使该项失败，不进入这条备用批处理。`history:local-crawl-batch`、`archive-crawl-batch` 和 `history:conference-crawl-batch` 已停用，不能写 crosswalk。详见[历史重写底座](history-rewrite.md)。
 
 ## 视觉状态机
 
 | 命令 | 行为 |
 |---|---|
-| `npm run visual:post-publish -- --date DATE` | 从已验证 publication 规划两类任务 |
-| `npm run visual:prepare -- --date DATE` | legacy 校验参考缓存并输出绝对图片路径；modern ephemeral 日更复验 Figure 身份后输出空引用路径 |
+| `npm run visual:post-publish -- --date DATE` | 从已验证发布规划两类图片任务 |
+| `npm run visual:prepare -- --date DATE` | 旧清单核验参考缓存并输出绝对图片路径；当前临时图像日更核验论文图身份后返回空引用路径 |
 | `npm run visual:status -- --date DATE` | TOP 10 长图只读状态 |
-| `npm run visual:record -- --date DATE --paper ID --kind infographic --file /abs/result.png --token TOKEN --qa-attested true` | 登记已目检论文图；`--file` 可换成 `--output-hint HINT` |
-| `npm run visual:fail -- ...` | 记录论文图失败 |
-| `npm run cover:status -- --date DATE` | 汇总封面只读状态 |
+| `npm run visual:record -- --date DATE --paper ID --kind infographic --file /abs/result.png --token TOKEN --qa-attested true` | 登记已目检长图；`--file` 可换成 `--output-hint HINT` |
+| `npm run visual:fail -- ...` | 保存长图失败状态 |
+| `npm run cover:status -- --date DATE` | 封面只读状态 |
 | `npm run cover:record -- --date DATE --file /abs/cover.png --token TOKEN --qa-attested true` | 登记已目检封面；`--file` 可换成 `--output-hint HINT` |
-| `npm run cover:fail -- ...` | 记录封面失败 |
+| `npm run cover:fail -- ...` | 保存封面失败状态 |
 
-实际成图只能使用 Codex 内置 `image_gen`；`visual:render:debug` 仅供本地调试/离线兜底。
-`TOKEN` 来自对应 `visual:status` / `cover:status` 待办项打印的 `taskToken`，不得复用旧任务 token。
+只有 Codex 内置 `image_gen` 生成正式图片；`visual:render:debug` 仅用于调试或离线兜底。TOKEN 来自对应 visual/cover status 待办项的 `taskToken`，不能复用旧任务 token。
 
 ## 配置与公共实现
 
-- `scripts/config.js`：Node 参数与 `data/current` 路径。
-- `scripts/env-loader.js` / `scripts/project_env.py`：项目环境与沙箱守卫。
-- `scripts/utils.js`：API 路由、代理、Prompt、原子写、时间和 ID。
-- `scripts/llm-account-pool.js`：OpenCode Go 长期 sticky 账号池、明确额度错误分类与 Node/Python 共享状态。
-- `scripts/analysis-engine.js`：论文锁、重试、checkpoint 与 canonical 合并。
-- `scripts/deep-analyzer.js`：单篇多阶段分析和 Reader。
-- `scripts/path_config.py`：Python 发布路径。
-- `scripts/llm_account_pool.py`：Python 发布链的同 schema 账号选择和配额切换。
-- `scripts/publish_common.py`：发布数据、评分、LLM 与 provenance 公共层。
-- `scripts/publish-to-blog.py`：博客 generation/review/push 共享事务实现。
-- `scripts/python-runtime.sh`：默认博客/视觉入口的 Python 3.11+、OpenSSL 与项目 `.venv` 选择门禁。
+| 文件 | 职责 |
+|---|---|
+| `scripts/config.js` | Node 参数与当前数据路径 |
+| `scripts/env-loader.js`、`scripts/project_env.py` | 项目环境及沙箱外运行检查 |
+| `scripts/utils.js` | API 路由、代理、提示词、原子写入、时间与 ID |
+| `scripts/llm-account-pool.js`、`scripts/llm_account_pool.py` | Node/Python 共用账号选择与冷却状态 |
+| `scripts/analysis-engine.js` | 论文锁、重试、检查点与正式分析合并 |
+| `scripts/deep-analyzer.js` | 单篇多阶段分析与 Reader |
+| `scripts/path_config.py` | Python 发布路径 |
+| `scripts/publish_common.py` | 发布数据、评分、LLM 与来源核验 |
+| `scripts/publish-to-blog.py` | 博客生成、审查和推送的共同事务 |
+| `scripts/python-runtime.sh` | 选择项目 Python 3.11+ 与 OpenSSL 环境 |
 
 ## 运行存储
 
 | 命令 | 行为 |
 |---|---|
-| `npm run storage:status` | 只读统计 `data/current`、`data/archive`、`logs` 和重点缓存的大小/文件数 |
-| `npm run storage:prune` | 扫描权威 JSON 引用并输出 dry-run 删除清单，不删文件 |
-| `npm run storage:prune -- --apply` | 预检无 JSON 损坏、symlink、路径逃逸或漂移后，仅删除白名单根内超期且未引用文件 |
+| `npm run storage:status` | 只读统计 current、archive、logs 与重点缓存的大小和文件数 |
+| `npm run storage:prune` | 扫描正式 JSON 引用，输出预计删除清单，不删文件 |
+| `npm run storage:prune -- --apply` | 停止全部写入者并通过安全预检后，仅删除白名单中的超期未引用文件 |
 
-实现为 `scripts/runtime-storage.js`。它不删 canonical JSON、发布/视觉 manifest、博客或归档成品；完整安全边界见 [维护指南](maintenance.md#运行存储诊断与清理)。
+`scripts/runtime-storage.js` 不删除正式分析 JSON、发布/视觉清单、博客或归档成品。status 和预览可在活动任务期间使用，真正删除前须停写；完整条件见[维护指南](maintenance.md#运行存储诊断与清理)。
 
 ## 可选渠道
 
-`npm run wechat`、`npm run xiaohongshu`、`npm run xhs-login`、`npm run xhs-publish` 和 `python3 scripts/publish-to-feishu.py` 均不属于默认日更。除非用户明确要求，不执行真实渠道写入。
+`npm run wechat`、`npm run xiaohongshu`、`npm run xhs-login`、`npm run xhs-publish` 和 `python3 scripts/publish-to-feishu.py` 不属于默认日更。只有用户明确要求时才执行真实渠道写入。
 
 ## 测试
 
@@ -220,4 +220,4 @@ npm run test:manual
 npm run validate:data -- --allow-empty
 ```
 
-CI 还检查默认与 Manual 目录的 JS/Python 语法、两处 Python 测试和全仓 shell 语法。所有命令沙箱外运行。
+`--allow-empty` 仅用于 CI 或干净无数据检出。CI 还检查默认/Manual JS 与 Python、两处 Python 单测和全仓 shell 语法。所有项目检查都在沙箱外运行；完整 verify 与 quick 的差别见维护指南。

@@ -2,155 +2,208 @@
 
 ## How to Use This Page
 
-This page is task-oriented. See [scripts/README.md](../../scripts/README.md) for file dependencies; `package.json` is authoritative for aliases. Manual commands live only in [manual/README.md](../../manual/README.md).
+This page lists commands by task. See [scripts/README.md](../../scripts/README.md) for file responsibilities; `package.json` defines aliases. Manual commands are in [manual/README.md](../../manual/README.md). DATE, ID, UUID, and uppercase paths are placeholders. Brackets mark optional arguments; a vertical bar separates alternatives.
 
 ## Complete Daily Run
 
 | Command | Purpose |
 |---|---|
-| `npm run digest:prepare -- DATE` | scripted LLM/API stages through blog publication and visual-input preparation; exit 0 is not the final visual state |
-| `npm run digest:api -- DATE` | exact alias |
-| `./run-daily-digest.sh DATE --from STAGE` | resume from a safe stage |
-| `npm run digest:status -- --date DATE` | read-only final snapshot |
-| `npm run digest:waive-visuals -- --date DATE --reason TEXT` | explicit user visual waiver |
+| `npm run digest:prepare -- DATE` | Run default data and Git publication stages, then prepare visual inputs |
+| `npm run digest:api -- DATE` | Exact alias |
+| `./run-daily-digest.sh DATE --from STAGE` | Resume from a stage permitted by the program |
+| `npm run digest:status -- --date DATE` | Read the current status snapshot |
+| `npm run digest:waive-visuals -- --date DATE --reason TEXT` | Record visuals waived by explicit user request |
+
+`digest:manual` requires an explicit request for human processing. Exit 0 from the default entry establishes only that its script stages passed.
+
+Completion also requires successful GitHub Pages build/deploy for the publication commit, or a later commit preserving the reviewed page bytes. Manually check HTTP 200, the official address, and title of every digest and paper page, and keep the results. Create, inspect, and record infographics and the cover with the built-in image tool, unless a valid user waiver applies only to visuals. Read `digest:status` afterward; it does not yet check deployment or live pages.
 
 ## Workspace Role
 
-Run `npm run workspace:role -- status` before a production command. `digest:*`, `fetch`, and
-`blog:generate/review/push` require the `daily` workspace; `history:*`, `conference:*`, `rewrite:source`, and
-`blog:activate-fresh` require `history`. Bind a verified checkout with
-`npm run workspace:role -- set daily|history [--force]`.
+Run `npm run workspace:role -- status` before production commands. Daily `digest:*`, `fetch`, `blog:generate/review/push`, and new-conference `conference:new:*` commands use `daily`. Historical `history:*`, older `conference:*` maintenance, `rewrite:source`, and `blog:activate-fresh` use `history`. Do not mix new and old conference entry points.
+
+After confirming the checkout's purpose, bind it with `npm run workspace:role -- set daily|history [--force]`. A copied checkout retains a marker bound to the original real path; force a historical role only after confirming the copy's purpose. The marker is a Git-ignored local file with `0600` permissions.
 
 ## Data Stage
 
 | Command | Behavior |
 |---|---|
-| `npm run fetch` | archive, fetch, filter, analyze; no publication |
-| `npm run deep -- --date DATE` | continue only from the current sealed PDF/TXT source run; never refetch or use legacy cache |
-| `npm run batch` | analyze unfinished canonical papers only from current sealed PDF/TXT |
-| `npm run batch -- --retry-failed-readers` | retire failed Reader candidates for currently incomplete papers, then resume |
-| `npm run reanalyze -- --concurrency N` | retire all old failed Reader candidates, clear Reader/image-supplement state, and force reanalysis from current sealed PDF/TXT |
-| `node scripts/analyze-single-paper.js ID --force` | analyze one paper |
-| `node scripts/reanalyze-selected.js ID...` | reanalyze selected IDs |
-| `node scripts/refilter-reanalyze-by-date.js DATE` | controlled historical refilter/reanalysis |
-| `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | batch score/Reader refresh from sealed PDF/TXT; figures are call-temporary |
-| `npm run validate:data` | read-only current validation |
-| `npm run keyword:recall` | keyword-gate gold replay |
-| `npm run backfill` | ID backfill only |
-| `npm run paper:rethink` | historical standalone maintenance tool; no longer integrated into the blog and not needed by readers; see the [archived interface documentation](../paper-rethink-companion.md) |
+| `npm run fetch` | Archive, fetch, filter, and analyze; no publication |
+| `npm run deep -- --date DATE` | Resume unfinished analysis using current sealed text/PDF |
+| `npm run batch` | Analyze unfinished papers in accepted analysis records |
+| `npm run batch -- --retry-failed-readers` | Archive and disable failed Reader candidates for unfinished papers, then resume |
+| `npm run reanalyze -- --concurrency N` | Archive and disable all old failed Reader candidates, clear Reader/image-supplement state, and force reanalysis from bound sources |
+| `node scripts/analyze-single-paper.js ID --force` | Analyze one paper |
+| `node scripts/reanalyze-selected.js ID...` | Reanalyze selected IDs |
+| `node scripts/refilter-reanalyze-by-date.js DATE` | Controlled historical refilter/reanalysis |
+| `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | Refresh scores/Reader from bound sources; prepare figures only for the active call |
+| `npm run validate:data` | Read-only current data validation |
+| `npm run keyword:recall` | Replay keyword-filter gold data |
+| `npm run backfill` | Backfill historical IDs only |
+| `npm run paper:rethink` | Historical maintenance tool; no longer integrated into the blog or needed by readers; see the [archived interface documentation](../paper-rethink-companion.md) |
 
-A fetch-start run accepts Beijing today. Direct `node scripts/full-fetch.js` is preferable for background data-only execution when npm/TTY wrappers are unreliable.
+`full-fetch.js` fetches only the Beijing date on which it starts. Background data-only work may call `node scripts/full-fetch.js` directly to avoid npm/TTY wrapper issues; the same environment, role, and outside-sandbox requirements still apply.
 
-All four recovery entries require an exact replay of `deep-analysis-result.json.dailyFreshSourceRun`: its batch date, canonical paper set, and each `source.txt`, `source.pdf`, runtime metadata, and manifest. Missing or drifted bundles fail before model or image work. Re-run `npm run digest:prepare -- DATE` to establish a new source phase; do not patch checkpoints.
+`deep`, `batch`, `reanalyze`, and `api:reader:refresh` read only `deep-analysis-result.json.dailyFreshSourceRun`. They validate batchDate, paper membership, and every `source.txt`, `source.pdf`, runtime record, and manifest. Missing, damaged, or mismatched files fail before model/figure requests. Rerun `npm run digest:prepare -- DATE` only while the target date is Beijing today. For historical dates, retain failures and use historical maintenance. Never refetch through these recovery entries, substitute old caches, or patch checkpoints.
 
 ## Blog Transaction
 
-| Command | Sole responsibility |
+| Command or argument | Responsibility |
 |---|---|
-| `npm run blog:generate -- --date DATE` | pages and generation manifest |
-| `npm run blog:review -- --date DATE` | read-only review, Hugo gate, receipt |
-| `npm run blog:push -- --date DATE` | exact commit/push and remote OID |
-| `--include-id ID` | isolated paper scope; same ID across applicable stages |
-| `--exclude-id ID` | explicit generation exclusion; repeatable |
+| `npm run blog:generate -- --date DATE` | Pages and generation manifest |
+| `npm run blog:review -- --date DATE` | Read-only review, Hugo checks, and receipt |
+| `npm run blog:push -- --date DATE` | Exact commit/push and remote OID verification |
+| `--include-id ID` | Single-paper scope; the same ID across applicable stages |
+| `--exclude-id ID` | Explicit generation exclusion; repeatable |
 
-The generation manifest records the actual current file, dated archive, or explicit `--data-file` as
-`generation-input-source-reference-v1`; its absolute path, byte count, and SHA-256 enter the input fingerprint.
-Review and push replay only that file and its `dailyFreshSourceRun`, never the then-current
-`DEEP_ANALYSIS_RESULT_FILE`. Input or sealed PDF/TXT drift requires generation again.
+The manifest records the chosen current file, dated archive, or `--data-file` as `generation-input-source-reference-v1`. Its absolute path, byte count, and SHA-256 enter the input fingerprint. Review and push replay that exact file and its `dailyFreshSourceRun`, never the then-current `DEEP_ANALYSIS_RESULT_FILE`. Input or sealed text/PDF changes require generation again.
 
-`publish-to-blog.py` is shared implementation and a generation compatibility entry, not a bypass around the three stages.
+Passed page reviews are permanently reused by relative path and content SHA. Publisher changes still rerender pages; manifest, code, model, protocol, or Hugo changes require current batch checks and a new receipt. Only a changed page content SHA triggers page re-review. Baseline and remote-identity checks remain mandatory.
 
-Default blog and visual commands pass through `scripts/python-runtime.sh`, which prefers the project `.venv` and rejects Python versions below 3.11 or non-OpenSSL TLS runtimes.
+Each stage takes the shared lock under the blog's Git common-dir, then its project/date lock. Two checkouts targeting one blog cannot concurrently modify its worktree, index, or HEAD. The shared lock is outside tracked blog files; recovery and release remove only a lock whose inode, token, and SHA still match. `publish-to-blog.py` is shared implementation and a generation compatibility entry, not a bypass around the stages.
+
+Blog and visual entry points use `scripts/python-runtime.sh`, which prefers the project `.venv` and requires Python 3.11+ with OpenSSL.
+
+## Conference Papers
+
+New conferences use the daily workspace to acquire official sources, discover candidates, prepare full-text evidence, and filter. After filtering, `conference:new:process` handles PDF capture, import, analysis, Reader, scoring, taxonomy, and private pages. The separate `conference:new:execution/analyze/postprocess` aliases are disabled.
+
+Process concurrency defaults to 1 and accepts `--concurrency` from 1–5; each paper's internal analysis concurrency stays 1. Preview with the verified candidate catalog and report filenames, and the filtering task's UUID:
+
+```bash
+npm run conference:new:process -- --dry-run --catalog catalog.json --report report.json --filter UUID
+```
+
+The independent `conference:new:publish:generate/review/push/status/verify` entries handle publication and checks; each requires `--conference-id` and `--process-id`. Available commands do not establish that any batch has passed source, review, or live-site verification.
+
+Older `conference:*` entries remain in the history workspace to maintain existing discovery, filtering, extraction, staging, import, plan, execution, analysis, and postprocessing records. The older postprocessing limit is 3, separate from new process settings. Exact arguments and evidence formats are in the [conference workflow](../conference-workflow.md).
 
 ## Historical Direct Rewrite
 
-The active historical route is `conference-local-sources → direct-inputs → conference-projections → direct-plan
-→ direct-scheduler → direct-run → direct-aggregate`. It does not wait for crosswalk: arXiv derives from a frozen
-single historical hint and freshly seals official TXT/PDF/runtime/manifest per generation; conference replays
-bound retained metadata/PDF SHA. Crosswalk accepts only a named immutable fresh-arXiv failure handoff; a damaged or
-missing local conference source fails its direct item closed. `history:publication` now provides historical review,
-locked activation/commit/push receipts, and remote-OID verification. Per-page passes reuse only path plus content SHA,
-while each current batch reruns deterministic/Hugo gates and reissues its receipt. Missing conference-aggregate integration still fails closed.
+### Sources and plans
 
-Ordinary papers retain the existing current-PDF v2 bundle shape. Only an explicit HTTP 404 from the unversioned current
-PDF permits an official historical `vN` PDF for the same canonical arXiv ID. Version fallback rejects cross-ID URLs,
-queries, fragments, and non-official hosts; it forces `source.txt` extraction from the selected PDF bytes instead of a
-withdrawal/current HTML page. A self-hashed `sourceVersion` record seals the attempted current URL/status and selected
-version URL through the source manifest, direct provenance, and page manifest. The warning is part of the actual analysis
-text and appears immediately below final-page front matter; ordinary sealed bundles remain byte/schema compatible.
+`npm run history:inventory -- --dry-run` scans historical pages, URLs, aggregate links, tracked Git tree, dates/cohorts, and unresolved tag URLs. It keeps content SHA, not old prose or sidecar paths. On a clean `main`, write the two protected inventory files:
 
 ```bash
-npm run history:conference-local-sources -- --dry-run|--apply [--output NAME.json]
-npm run history:direct-inputs -- --dry-run|--apply --conference-manifest /abs/FILE.json --inventory /abs/FILE.json --blog-root /abs/DIR [--name NAME.json]
-npm run history:conference-projections -- --dry-run|--apply --catalog /abs/FILE.json --inventory /abs/FILE.json [--output NAME.json]
-npm run history:direct-plan -- --dry-run|--apply --catalog /abs/FILE.json --inventory /abs/FILE.json --conference-projections /abs/FILE.json [--output NAME.json]
-npm run history:direct-scheduler -- --dry-run|--apply --plan /abs/FILE.json [--queue all|arxiv|conference] [--generation N] [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
-npm run history:direct-run -- --dry-run|--apply --plan /abs/FILE.json [--queue all|arxiv|conference] [--generation N] [--concurrency 1-8]
-npm run history:status -- --plan /abs/FILE.json [--generation N] [--watch-seconds N]
-npm run history:status -- --plan /abs/FILE.json [--generation N] --verify-sources true
-npm run history:status -- --plan /abs/FILE.json [--generation N] --publication-id UUID
-npm run history:direct-aggregate -- projection --dry-run|--apply --plan-file /abs/FILE.json --inventory-file /abs/FILE.json --output-name NAME.json
-npm run history:direct-aggregate -- aggregate --dry-run|--apply --plan-file /abs/FILE.json --registry-file /abs/FILE.json --projection-file /abs/FILE.json (--daily YYYY-MM-DD|--conference KEY)
+npm run history:inventory -- --apply \
+  --ledger all-history.json --receipt all-history.receipt.json
 ```
 
-`direct-run --apply` is replay-only: every selected paper must already be `ready` in the scheduler's self-hashed
-status for the same plan/generation. It neither fetches a missing bundle nor creates a scheduler handoff. Recoverable
-analysis failures retain a source-bound `analysis-recovery.json` for cross-process stage reuse, but cannot stage.
-Normal/watch status checks conference paths and PDF sizes cheaply; the one-shot `--verify-sources true` mode rehashes
-all metadata/PDF inputs and cannot be combined with watch.
-Without `--publication-id`, normal/watch status stays offline and does not inspect a publication transaction or remote.
-Selecting a publication enables live remote verification by default; `--live-remote false` is diagnostic-only and can
-never complete. Publication status is a one-shot final audit (not watch-compatible) and deeply replays every arXiv
-bundle and conference metadata/PDF SHA. Unified completion requires all scheduler/source checks, every staged paper, all 107 daily plus 3
-conference aggregates, the exact 193 projected task aggregates, and a live publication bound to the same plan SHA.
+The files live under `data/runtime/historical-page-inventories`. The active `direct-local-first` route uses a frozen page's unique arXiv hint and verified conference sources, without waiting for crosswalk. Every arXiv `generation` captures new official text, PDF, runtime record, and manifest; conferences revalidate retained metadata/PDF. Generation is a source capture sequence, distinct from a paper revision `vN`.
 
-`history:crosswalk` remains read-only/audit state for the active route. `history:arxiv-batch` requires explicit named
-immutable failure handoffs; it does not enumerate pending hints. `history:local-crawl-batch` (the
-`archive-crawl-batch` compatibility alias) and `history:conference-crawl-batch` are retired fail-closed endpoints.
-The detailed active guide is currently
-[Chinese](../history-rewrite.md).
+Use absolute file paths. Preview before applying, prepare missing PDFs before creating the first local manifest, and do not overwrite immutable names. Prefer official OpenReview sources when reachable; alternate sources require the code allowlist.
+
+```bash
+npm run history:openreview-pdf-source -- --apply \
+  --snapshot /abs/data/icml2026/papers.json --forum-id OPENREVIEW_ID
+npm run history:icml-alternate-pdf-source -- --apply \
+  --snapshot /abs/data/icml2026/papers.json --forum-id jfpkqjhex4
+npm run history:icml-alternate-pdf-source -- --apply \
+  --snapshot /abs/data/icml2026/papers.json --forum-id n1mAjfRDZ6 \
+  --import-file /abs/downloads/ssrn-6288899.pdf
+npm run history:conference-local-sources -- --apply \
+  --icml-poster-snapshot /abs/data/icml2026/papers.json \
+  --icml-pdf-root /abs/data/pdfs/icml2026 \
+  --icml-fresh-pdf-root /abs/data/runtime/historical-icml-pdf-sources \
+  --openreview-receipt-root /abs/data/runtime/historical-openreview-pdf-sources \
+  --alternate-receipt-root /abs/data/runtime/historical-icml-alternate-pdf-sources \
+  [--output conference-local-sources-v2.json]
+npm run history:direct-inputs -- --apply --conference-manifest /abs/conference-local-sources-v2.json \
+  --inventory /abs/all-history.json --blog-root /abs/audio-paper-digest-blog [--name scoped-historical-local-data-v5.json]
+npm run history:conference-projections -- --apply --catalog /abs/scoped-historical-local-data-v5.json \
+  --inventory /abs/all-history.json [--output conference-page-projections-v3.json]
+npm run history:direct-plan -- --apply --catalog /abs/scoped-historical-local-data-v5.json \
+  --inventory /abs/all-history.json --conference-projections /abs/conference-page-projections-v3.json \
+  [--output direct-rewrite-plan-v5.json]
+```
+
+Only an explicit HTTP 404 from the unversioned current arXiv PDF permits an official historical `vN` PDF for the same ID. This fallback rejects cross-ID URLs, queries, fragments, and unofficial hosts, and extracts text from the selected PDF. The `sourceVersion` record binds attempted URL/status, selected version URL, source manifest, analysis evidence, and page manifest. Analysis and the page below front matter show the current-PDF-unavailable warning. Ordinary source bundles retain their existing byte/schema compatibility.
+
+The sole cross-title preprint exception, `n1mAjfRDZ6`, can be fetched from SSRN through the proxy when reachable; a browser download requires `--import-file`. Import checks fixed title, authors, date, multiple cross-page text features, and the allowlisted DOI. It records `operator-browser-download` and `networkResponseObserved: false`, not a fabricated HTTP 200. Plan, model input, and page must disclose that it is not camera-ready. After sealing, the input copy may be deleted; recovery verifies saved PDF and receipt without editing old JSON. Ordinary conference plan v5 files retain compatibility.
+
+### Execution, pause, and status
+
+```bash
+npm run history:direct-scheduler -- --apply --plan /abs/direct-rewrite-plan-v5.json \
+  [--queue all|arxiv|conference] [--generation N] [--paper-ids ID[,ID...]] [--max-papers N] \
+  [--arxiv-concurrency 1-8] [--conference-concurrency 1-8]
+npm run history:direct-run -- --apply --plan /abs/direct-rewrite-plan-v5.json \
+  [--queue all|arxiv|conference] [--generation N] [--paper-ids ID[,ID...]] \
+  [--max-papers N] [--concurrency 1-8]
+npm run history:status -- --plan /abs/direct-rewrite-plan-v5.json [--generation N] [--watch-seconds N]
+npm run history:status -- --plan /abs/direct-rewrite-plan-v5.json [--generation N] --verify-sources true
+npm run history:status -- --plan /abs/direct-rewrite-plan-v5.json --publication-id UUID
+npm run history:pause -- --plan /abs/direct-rewrite-plan-v5.json --phase source|analysis [--generation N]
+npm run history:resume -- --plan /abs/direct-rewrite-plan-v5.json --phase source|analysis [--generation N]
+```
+
+`direct-run --apply` requires the same plan/generation's saved scheduler status and every selected paper to be `ready`. It does not fetch missing sources. Recoverable analysis saves source-bound checkpoints for another process; only complete analysis, Reader, and source evidence can produce private pages. Scheduler arXiv/conference concurrency defaults to 3/5, each in 1–8. Direct-run defaults to 3, in 1–8.
+
+Pause requests let active sources or papers finish. Resume the same phase only after its operation lock is released. Normal status is a snapshot; `--watch-seconds` emits NDJSON. One-shot `--verify-sources true` rehashes all local sources and cannot be combined with watch.
+
+Without `--publication-id`, normal/watch status remains offline and reports no publication selected. Selecting one enables live remote-main verification against receipt identity/OID by default. `--live-remote false` is diagnostic-only and cannot complete. Publication status is one-shot, incompatible with watch, and deeply revalidates every arXiv bundle and conference source SHA.
+
+Completion requires the plan's full paper set, sources, daily/conference aggregates, exact task-page coverage, and a completed live publication bound to the same plan SHA. Counts come from plan/projection; 3,824 papers, 107 daily plus 3 conference aggregates, or 193 task pages describe only a particular plan, not universal thresholds. `completion.blockers` reports uncovered pages, failed/unstaged papers, missing aggregates, and unselected, incomplete, or mismatched publication.
+
+### Aggregates and independent publication
+
+```bash
+npm run history:direct-aggregate -- projection --apply --plan-file /abs/direct-rewrite-plan-v5.json \
+  --inventory-file /abs/all-history.json --output-name direct-aggregate-projection-v3.json
+npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-rewrite-plan-v5.json \
+  --registry-file /abs/direct-rewrite-registry.json --projection-file /abs/direct-aggregate-projection-v3.json \
+  (--daily YYYY-MM-DD|--conference conference-key)
+```
+
+Projection v3 maps frozen `outboundPostLinks` from conference task pages to paper members and records per-page source SHA and coverage. Conference aggregation writes task pages first and the conference index last in the same run. Daily indexes with no paper members are explicitly `retain-unchanged` and still included in coverage checks.
+
+Publication uses `history:direct-publication` through plan, generate, review, publish, and status. Passed pages reuse only path/content SHA; each current batch still runs deterministic/Hugo checks and creates a receipt. Standalone `activate --apply` is disabled; `publish --apply` handles activation, commit, push, and remote OID under the shared blog lock. See [independent historical publication](../history-direct-publication.md) for arguments and visual disposition. The older `history:publication` has only private plan/generate output.
+
+Normal direct work does not depend on crosswalk. `history:crosswalk` still permits explicit older-state maintenance: prepare with `--apply`, apply, apply-verified, and finalize may write state or receipts after their source-authorization and CAS checks. The fallback `history:arxiv-batch` requires `--handoffs NAME.json[,NAME.json...]`, accepts only named immutable fresh-arXiv failure handoffs from scheduler/run, and does not enumerate pending pages. A missing or damaged conference source fails its own item, not this fallback. `history:local-crawl-batch`, the `archive-crawl-batch` alias, and `history:conference-crawl-batch` are disabled. See the [historical rewrite guide](../history-rewrite.md).
 
 ## Visual State Machines
 
 | Command | Behavior |
 |---|---|
-| `npm run visual:post-publish -- --date DATE` | plan both visual types from verified publication |
-| `npm run visual:prepare -- --date DATE` | emit validated legacy reference paths; modern ephemeral runs replay Figure identity and emit an empty reference list |
-| `npm run visual:status -- --date DATE` | paper infographic status |
-| `npm run visual:record -- --date DATE --paper ID --kind infographic --file /abs/result.png --token TOKEN --qa-attested true` | record an inspected paper image; `--output-hint` may replace `--file` |
-| `npm run visual:fail -- ...` | record paper-image failure |
-| `npm run cover:status -- --date DATE` | cover status |
-| `npm run cover:record -- --date DATE --file /abs/cover.png --token TOKEN --qa-attested true` | record an inspected cover; `--output-hint` may replace `--file` |
-| `npm run cover:fail -- ...` | record cover failure |
+| `npm run visual:post-publish -- --date DATE` | Plan both image types from verified publication |
+| `npm run visual:prepare -- --date DATE` | Validate legacy reference caches and return absolute paths; current temporary-image daily runs verify figure identity and return no reference paths |
+| `npm run visual:status -- --date DATE` | Read paper infographic status |
+| `npm run visual:record -- --date DATE --paper ID --kind infographic --file /abs/result.png --token TOKEN --qa-attested true` | Record an inspected infographic; `--output-hint HINT` may replace `--file` |
+| `npm run visual:fail -- ...` | Save infographic failure |
+| `npm run cover:status -- --date DATE` | Read cover status |
+| `npm run cover:record -- --date DATE --file /abs/cover.png --token TOKEN --qa-attested true` | Record an inspected cover; `--output-hint HINT` may replace `--file` |
+| `npm run cover:fail -- ...` | Save cover failure |
 
-Only built-in `image_gen` creates final art. `visual:render:debug` is debugging/offline fallback.
+Only built-in `image_gen` creates final art; `visual:render:debug` is for debugging or offline fallback. TOKEN comes from `taskToken` in the corresponding visual/cover status task. Never reuse an older task token.
 
 ## Shared Runtime
 
-- `config.js`: Node parameters and current paths.
-- `env-loader.js` / `project_env.py`: project environment and sandbox guard.
-- `utils.js`: protocol, proxy, prompt, atomic file, time, and ID utilities.
-- `llm-account-pool.js`: OpenCode Go long-lived sticky account selection, explicit quota classification, and shared state.
-- `analysis-engine.js`: locks, retries, checkpoints, merge.
-- `deep-analyzer.js`: per-paper staged analysis and Reader.
-- `path_config.py`: Python publishing paths.
-- `llm_account_pool.py`: the matching Python account-pool state machine used by publication review.
-- `publish_common.py`: publishing data, scoring, LLM, provenance.
-- `publish-to-blog.py`: shared blog transaction implementation.
+| File | Responsibility |
+|---|---|
+| `scripts/config.js` | Node settings and current paths |
+| `scripts/env-loader.js`, `scripts/project_env.py` | Project environment and outside-sandbox checks |
+| `scripts/utils.js` | Protocol, proxy, prompts, atomic writes, time, and IDs |
+| `scripts/llm-account-pool.js`, `scripts/llm_account_pool.py` | Shared account selection/cooldown state |
+| `scripts/analysis-engine.js` | Paper locks, retries, checkpoints, and accepted-record merges |
+| `scripts/deep-analyzer.js` | Staged analysis and Reader |
+| `scripts/path_config.py` | Python publishing paths |
+| `scripts/publish_common.py` | Publishing data, scores, LLM calls, and source validation |
+| `scripts/publish-to-blog.py` | Shared generation/review/push transaction |
+| `scripts/python-runtime.sh` | Python 3.11+ and OpenSSL runtime selection |
 
 ## Runtime Storage
 
 | Command | Behavior |
 |---|---|
-| `npm run storage:status` | read-only size and file-count report for `data/current`, `data/archive`, `logs`, and important caches |
-| `npm run storage:prune` | scan authoritative JSON references and print a dry-run deletion list without deleting files |
-| `npm run storage:prune -- --apply` | after fail-closed validation, delete only expired, unreferenced files inside fixed allowlisted roots |
+| `npm run storage:status` | Read-only size/file counts for current, archive, logs, and key caches |
+| `npm run storage:prune` | Scan saved JSON references and print a deletion preview |
+| `npm run storage:prune -- --apply` | After stopping all writers and passing safety checks, delete only expired unreferenced allowlisted files |
 
-`scripts/runtime-storage.js` never targets canonical JSON, publication/visual manifests, blog files, or archived final assets. Apply is blocked by invalid JSON, symlinks, path escapes, or a changed reference/candidate snapshot.
+`scripts/runtime-storage.js` never deletes accepted analysis JSON, publication/visual manifests, blog files, or archived final assets. Status and previews may run while tasks are active; actual deletion requires stopped writers. See [Maintenance](maintenance.md#runtime-storage).
 
 ## Optional Channels
 
-`npm run wechat`, `npm run xiaohongshu`, XHS login/publish commands, and `publish-to-feishu.py` are outside the default daily run. Do not perform real external writes unless explicitly requested.
+`npm run wechat`, `npm run xiaohongshu`, `npm run xhs-login`, `npm run xhs-publish`, and `publish-to-feishu.py` are outside default daily work. Real external writes require an explicit user request.
 
 ## Tests
 
@@ -161,4 +214,4 @@ npm run test:manual
 npm run validate:data -- --allow-empty
 ```
 
-CI additionally checks JavaScript, Python, Python unit suites, and repository shell syntax. Run all project commands outside the sandbox.
+Use `--allow-empty` only for CI or a clean checkout without data. CI also checks default/Manual JavaScript and Python, both Python test suites, and repository shell syntax. Run project checks outside the sandbox. Maintenance explains full verify versus quick checks.

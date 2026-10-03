@@ -1,172 +1,134 @@
-# 数据、状态与凭证
+# 数据、状态与发布记录
 
 ## 本页目标
 
-帮助操作者判断“哪个文件是权威状态”“何时能恢复”“为什么文件存在仍不算完成”。字段级实现以 validator 和 publisher 为准；Manual 数据见 [manual/README.md](../manual/README.md)。
+本文说明各类文件保存什么、哪些值需要相互核对，以及失败后能否继续运行。字段的具体校验以程序为准；人工流程的数据说明见 [Manual 入口](../manual/README.md)。
 
-## 四类数据
+## 数据分类
 
-1. **持久库**：跨批次累积，例如 `papers.json`。
-2. **日期批次状态**：raw、decisions、filtered、deep，可从 current 归档到日期目录。
-3. **事务凭证**：generation、review、publication、视觉 manifest，绑定精确字节和外部状态。
-4. **跨批次请求状态**：`data/runtime/llm-account-pool.json` 记录 OpenCode Go 当前使用的账号和配额冷却时间，不随当日数据归档。
+| 类别 | 保存内容 |
+|---|---|
+| 持久论文库 | `papers.json` 跨运行保存论文和去重状态，不随日期批次移走。 |
+| 日期批次 | 当前或归档目录中的候选、筛选决定、入选论文和分析结果。 |
+| 发布与视觉记录 | 页面生成清单、审查记录、发布提交、配图任务及资产信息。 |
+| 跨批次请求状态 | `data/runtime/llm-account-pool.json` 保存当前账号及额度冷却状态，不随日批次归档。 |
 
-任何对象的 `complete` 都是契约结论，不是文件名或布尔字段的自我声明。
+文件存在或写有 `complete`，都不能单独证明完成。程序还须核对该文件与输入、来源和其他状态文件是否一致。SHA 用于确认内容身份，不能证明文章事实正确，也不是评审人的数字签名。
+
+不同对象中的 `generation` 含义不同：来源目录用它区分获取次数，账号池和可变数据用它记录更新次数，博客生成清单记录一次页面生成。这些编号都不是 arXiv 论文的 `vN` 修订号。
 
 ## OpenCode Go 账号池状态
 
-`data/runtime/llm-account-pool.json` 使用 `opencode-go-sticky-quota-failover-v1`。它只保存服务/账号的 SHA-256 身份、active 账号、归一化额度窗口、`blockedUntil` 和 generation，不保存 API key、认证头、请求正文或响应正文。稳定凭据指纹仍属于敏感操作元数据，因此文件固定 `0600` 且不得上传或归档。账号身份用于在 key 更换后自然形成新凭据身份，不进入论文分析、筛选或发布内容指纹。
+`data/runtime/llm-account-pool.json` 使用 `opencode-go-sticky-quota-failover-v1`。它保存服务和账号的 SHA-256 身份、当前账号、归一化额度窗口、`blockedUntil` 及更新计数，不保存 API key、认证头、请求或响应正文。账号稳定指纹仍属于敏感操作信息，文件权限须为 `0600`，不得上传或归档。更换密钥会形成新的账号身份，但账号身份不进入筛选、分析或发布内容的指纹。
 
-Node 与 Python 使用同一目录锁协议和耐久原子写；锁只覆盖选择与状态变换，HTTP 请求始终在锁外。未知 schema、损坏 JSON 或 symlink 状态路径都会失败关闭。冷却到期只让账号重新具备候选资格，不会把流量从当前成功账号自动切回。
+Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号选择与状态更新，HTTP 请求在锁外发送。未知格式、损坏 JSON 或符号链接状态路径会使程序停止。只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才触发向后切换及冷却记录；普通认证 401 停止运行，其他 429、5xx、传输或内容失败不触发切换。冷却到期也不会自动把流量从当前成功账号切回。
 
-## current 核心文件
+## `data/current/` 核心文件
 
 ### `papers.json`
 
-跨运行去重数据库，永不随日批次移走。每项可包含 `digestStatus`：成功分析、待分析、失败和最新尝试信息。旧成功正文保留时，新的失败仍写入 `latestAttemptStatus`，防止发布陈旧结果。
+跨运行去重库。每篇的 `digestStatus` 可记录分析成功、待分析、失败和最近一次尝试。旧成功正文可以保留，但后来的失败仍须写入 `latestAttemptStatus`，不能用旧结果掩盖最新失败。
 
 ### `fetch-checkpoint.json`
 
-按 arXiv 类别/HuggingFace 保存来源状态、候选数、内容 SHA 和恢复信息。某个来源损坏只失效该来源；必需来源不完整时，下游不能声明 complete。
+按 arXiv 类别和 HuggingFace 保存来源状态、候选数、内容 SHA 及恢复信息。某一来源损坏只使该来源的记录失效；必需来源未完成时，下游不能声明完成。
 
 ### `raw-candidates.json`
 
-当日合并、规范化并排除已发布论文后的筛选全集。它是 decision coverage 的分母。
+当日合并、规范化并排除已发布论文后的完整筛选输入。筛选决定必须覆盖这份候选集合，不能只对成功响应的论文计算覆盖率。
 
 ### `filter-decisions.json`
 
-按 normalized ID 保存 LLM 或关键词预筛决定、理由、原始响应、parse source、输入 SHA 和配置指纹。模型、Prompt、协议或关键词契约变化会重筛，但不必重抓健康 raw。
+按规范论文 ID 保存模型或关键词预筛的决定、理由、原始响应、解析方式、输入 SHA 和配置指纹。模型、提示词、协议或关键词规则变化时须重新筛选；仍完整有效的候选数据不必重新抓取。
 
 ### `filtered-papers.json`
 
-正式入选集。其 ID 集必须精确等于 raw 中的相关决定减去显式排除；不能把 API 错误、未知决定或缺失项静默丢掉。
+正式入选集合，必须等于候选中的 `related=true` 决定扣除显式排除的 `excludedRelatedIds`。API 错误、未知决定或缺失项不能被静默丢弃。
 
 ### `deep-analysis-result.json`
 
-默认 API canonical。每篇至少包含 metadata、analysis、parsed、source identity、stage checkpoints、analysis manifest、评分与 Reader production bindings。完整性要求 deep 论文集精确覆盖 filtered，且每篇所有必需阶段终态闭合。
+默认 API 的正式分析结果。每篇保存论文信息、`analysis`、`parsed`、来源身份、阶段检查点、`analysisManifest`、评分和解读正文的发布依据。论文集合须精确覆盖入选集合，各必需阶段须达到对应终态。
 
-当 payload 声明 `dailyFreshSourceRun` 时，它必须是 `daily-fresh-source-reference-v1`，精确绑定 batchDate、
-完整的 canonical paper set、run manifest SHA 和 source-set SHA。每篇 `freshRewriteProvenance` 以及
-`analysisManifest.freshRewriteProvenance` 都必须逐字匹配该 run 中的 `source.txt`、`source.pdf`、
-`source-runtime.json` 与 `source-manifest.json` SHA。少一份文件、存在额外文件、来源/集合漂移或混入 legacy
-provenance 都不能成为默认 API production。
+若数据声明 `dailyFreshSourceRun`，该引用须使用 `daily-fresh-source-reference-v1`，绑定 `batchDate`、完整论文集合、运行清单 SHA 和来源集合 SHA。每篇的 `freshRewriteProvenance` 与 `analysisManifest.freshRewriteProvenance` 须一致，并能核对到本次获取的来源文件。文件缺失或多出、来源或集合变化、混入旧来源记录，都不能取得默认 API 的发布资格。
 
 ## 日更封存来源
 
-日更 run 位于 `data/runtime/daily-fresh-source-runs/<runId>/`。它的计划合同为
-`daily-fresh-source-run-v1`，每个 `<arxivId>/generation-000001/` 只能包含四个私有文件：
+日更来源运行使用 `daily-fresh-source-run-v1`，位于 `data/runtime/daily-fresh-source-runs/<runId>/`。每篇的 `sources/<arxivId>/generation-000001/` 只包含以下四文件：
 
-- `source.txt`：本次官方全文文本；
-- `source.pdf`：本次官方 PDF 原字节；
-- `source-runtime.json`：结构化证据、作者信息、图片网址等元数据，以及对应的文本 SHA，不保存图片像素；
-- `source-manifest.json`：各文件的身份、官方网址、提取器、字节数和 SHA，用于重新核验来源。
+| 文件 | 内容 |
+|---|---|
+| `source.txt` | 本次获取的官方全文文本。 |
+| `source.pdf` | 本次获取的官方 PDF 原始字节。 |
+| `source-runtime.json` | 结构化证据、作者信息、图片网址和文本 SHA 等，不保存图片像素。 |
+| `source-manifest.json` | 来源身份、官方网址、提取器、文件长度和 SHA，供后续重新核验。 |
 
-这些是可重放证据，不是可按日期归档轮换的缓存。图像字节、base64、缓存路径和临时文件名不得写进该目录。
+这些文件是保留的论文来源，不是随日期轮换的缓存。图片字节、base64、缓存路径和临时文件名不得写入这组文件。来源引用、获取序号、清单及快照 SHA 须共同匹配，不能只补一个 SHA 字段让旧结果看起来符合要求。
 
-当前官方 PDF 确认返回 HTTP 404 后，来源获取器可以使用同篇论文的官方历史版本。
-此时 `source-runtime.json.sourceVersion` 保存 `arxiv-historical-version-source-v1`
-记录，包括实际使用的 `selectedSourceId`、对应 PDF 地址、当前 PDF 的 404 记录、
-固定警告和身份 SHA。文本与 PDF 必须使用同一个历史版本，普通当前 PDF 不能
-携带这条历史版本记录。Node 与 Python 都逐项检查这些条件，不仅检查文件哈希。
+当前无版本号的官方 PDF 确认返回 HTTP 404 后，获取器才可尝试同一论文的官方历史版本。`source-runtime.json.sourceVersion` 使用 `arxiv-historical-version-source-v1`，记录实际选中的 `selectedSourceId`、PDF 地址、当前 PDF 的 404、固定警告和身份 SHA。文本必须从选中的 PDF 提取；普通当前 PDF 不携带这条历史版本记录。Node 与 Python 都检查这些条件，而不只比较文件哈希。
 
-论文的 `sourceVersion` 必须与封存记录一致，两处 `freshRewriteProvenance` 中的
-`sourceVersionIdentitySha256` 也必须匹配。没有这个绑定的旧历史版本分析需要
-重新分析，不能在旧成功结果上补写证明。正常来源没有这些可选字段，沿用原有
-来源快照字段顺序和 SHA；新增标题或版本说明不改变原快照的计算方式。
+论文的 `sourceVersion` 须与封存记录一致，两处来源记录中的 `sourceVersionIdentitySha256` 也须匹配。缺少该绑定的旧历史版本分析必须重新分析，不能在旧成功记录上补写证明。普通来源不增加这些可选字段；传递标题或版本说明也不改变既有来源快照字段、顺序和 SHA 的计算方式。
 
 ## 分析来源与恢复
 
-`analysisSource` 记录来源类型、请求 ID、原始/全文/实际输入长度、截断、SHA、警告和置信度。默认 API 的
-`analysisSource` 必须与上节 sealed source generation 一致；来源 SHA 变化会失效主分析及下游。
+`analysisSource` 记录来源类型、请求 ID、原始、全文及实际输入长度、截断状态、SHA、警告和置信度。默认 API 的记录须与上述封存来源相符。来源 SHA 变化会使主分析及必要下游失效。
 
-失败时保留：
+失败时保留 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints`、`analysisRecoveryImageManifest` 及最新失败状态和错误。阶段检查点绑定输入、模型、协议、提示词、温度、预算和输出 SHA；恢复从第一个未完成或指纹失效的阶段开始。
 
-- `analysisManifest`；
-- `analysisCheckpoint`；
-- `analysisStageCheckpoints`；
-- `analysisRecoveryImageManifest`；
-- 最新失败状态与错误。
+解读失败候选只供恢复，不能作为成功分析或发布依据。新版表格数量诊断使用 `code=reader_table_count_insufficient`、`requiredCount` 和 `actualCount`。计数必须是安全整数，满足 `requiredCount >= 1`、`0 <= actualCount < requiredCount`；带该错误代码却缺少有效计数时，不得从说明文字补出计数。`diagnosticOnly: true` 的记录仅供参考，不触发修复动作。旧保存诊断只由限定的兼容读取处理，不能让新的自然语言报错决定修复动作。通用草稿哈希及已有恢复身份的计算规则不变。
 
-checkpoint 绑定阶段的输入、模型、协议、Prompt、温度、预算和输出 SHA。恢复从第一个不完整或指纹失效阶段开始。
+## 正式分析结果与发布正文
 
-## canonical 与发布正文
+`analysis` 的 13 个中文一级标题是解析锚点。`parsed` 是解析缓存，发布前须从正文重新解析并逐字段比较，不能把它作为独立事实来源。
 
-canonical 的 13 个中文一级标题是机器解析契约。`parsed` 是缓存，不是独立事实来源；发布前必须从 analysis 重新解析并逐字段比较。
+默认 API 页面使用以下解读和评分数据：
 
-默认 API 发布正文来自：
+| 字段或记录 | 用途 |
+|---|---|
+| `apiReaderArticle` | 读者看到的长文。 |
+| `apiReaderPlan` | 章节、术语解释、图片安排及表格、公式来源记录。 |
+| `apiReaderFigures` | 实际输入图片的来源、DOM、像素 SHA 和显示网址等身份信息。 |
+| `apiReaderAuthors` | `api-reader-author-identity-v1` 逐项核对作者姓名和机构。 |
+| `apiReaderResources` | `api-reader-resource-identity-v1` 核对原文或 Demo 来源、重定向终点及可达状态。 |
+| 评分证据与稳定性裁决 | 说明八维分数及最终评分所依据的分析。 |
+| `llm_api_production` | 确认本次发布论文集合满足默认 API 要求。 |
 
-- `apiReaderArticle`：读者可见长文；
-- `apiReaderPlan`：章节、术语桥、Figure placements，以及 `api-reader-source-bindings-v4` 表格/公式来源绑定；
-- `apiReaderFigures`：已物化官方图片绑定；
-- `apiReaderAuthors`：`api-reader-author-identity-v1` 逐作者姓名与机构来源绑定；
-- `apiReaderResources`：`api-reader-resource-identity-v1` 原文/Demo 来源、重定向终点和可达状态绑定；
-- 评分证据与评分稳定性裁决；
-- `llm_api_production` 集合级 proof。
+Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和公式来源；它们各管一部分要求，版本号不必相同。新发布还须满足作者和资源的 v1 来源核验要求。Reader v1/v2 及缺少任一当前来源要求的旧 v3 只供历史兼容读取。摘要级分析默认不可发布。
 
-Reader v1/v2，以及没有当前来源身份合同的旧 v3，只作历史读取兼容。新 production 必须同时闭合 Reader v3、source binding v4、作者/机构 identity v1 与资源 identity v1。摘要 fallback 默认不可发布。
+新日更的图片只在调用时准备像素，不保存图片文件到运行目录。`apiReaderFigures` 中存在像素 SHA 不代表还有可复用缓存。兼容早期结构化来源时，须通过来源清单和全文 SHA 校验；处理旧键序哈希还须能按记录的解析器版本重验，或属于实现认可的无布局来源且表格、公式和图片数组均为空。任意布局声明不能取得兼容资格，封存文件也不能被重写来制造新 SHA。
 
-## 博客 generation manifest
+## 博客生成清单
 
-schema v3 generation 记录：
+schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确非空页面和受控下载文件集合、逐文件 SHA、新建或覆盖或删除状态、输入及模板指纹、实际渲染的 `publishedPapers`、一致的 `publicationMode` 与发布依据，以及发布后视觉能力。
 
-- 目标日期、category、博客 base HEAD；
-- 精确非空页面/受控 sidecar 集合与逐文件 SHA；
-- 新建/覆盖/删除状态；
-- 输入分析与模板指纹；
-- 实际渲染的 `publishedPapers`；
-- 同质的 `publicationMode` 与对应 production proof；
-- 发布后视觉能力标记。
+默认 API 使用 `llm_api_production`；显式 Manual 使用自己的发布依据。混合两种来源、缺少绑定或使用旧 schema，不能用于新日更发布。
 
-默认 API 使用 `llm_api_production`；显式 Manual 使用独立 proof。混批、缺绑定或旧 schema 不能作为新日更 publication。
+Reader v3 和 Manual v6 新论文页使用 `researcher-workbench-v1` 页面元数据，保存读者标题、原始标题、规范 arXiv ID、明确输入或由封存来源核验的 `vN`、版本一致的 abs/PDF URL、主任务、数值评分、排名分档、文档类型、一句话主线、结构化作者及原摘要 SHA。原始摘要保存在同批 `static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`，不塞入页面元数据。
 
-Reader v3 与 Manual v6 的新论文页同时签发
-`researcher-workbench-v1` front matter。它保存中文读者标题、原始标题、规范
-arXiv ID、输入明确携带或封存来源已验证的 `vN`、版本一致的 abs/PDF URL、主任务、
-数值评分、排名分档、文档类型、一句话主线、结构化作者与原摘要 SHA。原始摘要不
-塞入 front matter，而是保存在同批
-`static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`。
+每篇有四个同源下载文件：`citation.json`、`citation.bib`、`citation.ris` 和 `rethink-context.json`。写入暂存结果前校验路径、LF/UTF-8、JSON/TeX/RIS 转义及 256 KiB 上限；四个 SHA 同时记录在页面元数据、生成清单和审查记录中。审查从 `publishedPapers` 快照重建这些文件并逐字比较，推送只允许审查记录指定的精确变更。
 
-每篇 workbench 论文有四个同源 sidecar：`citation.json`、`citation.bib`、
-`citation.ris` 与 `rethink-context.json`。路径、LF/UTF-8 字节、JSON/TeX/RIS
-转义和 256 KiB 上限在 staging 前验证；四个 SHA 同时写入页面 front matter、
-generation manifest 和 review receipt。review 会从 `publishedPapers` 权威快照
-重建 sidecar 并逐字比较，push 仍只允许 receipt 中的精确 delta。无版本输入绝不
-推断为 v1，而是保存 `version: null` 并使用 base abs/PDF URL。
+历史版本引用采用已核验的 `sourceVersion.selectedSourceId`。输入和封存来源都没有明确版本时，保存 `version: null` 并使用无版本 abs/PDF URL，不能猜成 `v1`。
 
-兼容旧 Hugo 标签页时，新 production 论文仍把 3–5 个 active 中文首选标签写入
-扁平 `tags`，并额外写入 `paper-taxonomy-flat-tags-compat-v1`、selection contract、
-registry version/SHA、按标签顺序排列的 `{id, facet, label}`、显式主任务和显式主方法。
-`rethink-context.json.assessment` 保存同一份 taxonomy 投影。旧页面不因新发布而改写；
-汇总页只把主任务频次称为“热门方向”。
+新论文把 3–5 个当前分类表中启用的首选标签写入 Hugo 的 `tags`，并记录 `paper-taxonomy-flat-tags-compat-v1`、选择规则、分类表版本及 SHA、有序的 `{id, facet, label}`、显式主任务和主方法。标签采用中文首选名称；既定 `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` 八个专名保留原形，并在分类表中配中文别名，不能扩成任意英文标签。`rethink-context.json.assessment` 保存同一分类信息。旧页面不因新发布而改写，汇总页“热门方向”只统计主任务。
 
-## review receipt 与远端发布
+## 审查记录与远端发布
 
-review receipt 绑定 generation SHA、逐页实际 SHA、当前 review 协议、Git baseline、Hugo gate、Hugo 配置/布局/数据/前端代码运行时指纹和 production proof。同时单独保存以“相对路径 + 页面内容 SHA”为键的逐页通过证据。发布器代码变化仍会使 generate 重新渲染，新旧页面的最终字节据此比较。模板、站点脚本、模型、发布器代码、review 协议或 generation manifest 元数据变化时，旧批次 receipt 不能直接 push，但必须复用所有内容 SHA 未变的逐页通过证据，只重跑当前批次 gate 并重签 receipt。push 成功后追加：
+审查记录绑定生成清单 SHA、实际页面 SHA、当前审查协议、Git 基线、Hugo 构建结果和配置、布局、数据、前端代码的运行时指纹，以及发布依据。逐页通过记录单独保存，只按“相对路径 + 页面内容 SHA”长期复用。
 
-- `publicationCommit`；
-- 相同的 `remoteVerifiedOid`；
-- remote 身份；
-- 北京时间 `remoteVerifiedAt`。
+发布器代码变化仍使生成阶段重新渲染，以发现真实字节变化。模板、站点脚本、模型、发布器代码、协议或生成清单元数据变化时，须重跑当前批次检查并生成新审查记录；最终内容未变的页面仍复用原通过记录，只有内容变化的文件重新审查。
 
-实时远端 OID、remote 名称或 push URL 身份变化会使旧凭证失效。
+推送成功后追加 `publicationCommit`、相同的 `remoteVerifiedOid`、远端身份及北京时间 `remoteVerifiedAt`。远端 OID、名称或推送 URL 身份变化会使旧发布记录无法直接复用。远端验证只证明博客提交已到远端；上线还须另查对应 GitHub Pages 构建、部署和全部页面的 HTTP 200、正式地址及标题，保存核验结果。
 
-## 视觉 manifest
+## 视觉任务清单
 
-`visual-summary-manifests/<date>.json` 保存 TOP 10 排名、论文任务 token、参考图缓存、generation context、QA claims 与资产 SHA。`digest-cover-manifests/<date>.json` 保存批次标题、热门方向、排行榜和封面资产。
+`visual-summary-manifests/<date>.json` 保存 TOP 10 排名、论文任务 token、参考图身份、生成上下文、目检声明和资产 SHA。`digest-cover-manifests/<date>.json` 保存批次标题、热门方向、排行榜及封面资产。
 
-完成态同时要求：
+采用 `ephemeral-no-persisted-figure-assets-v1` 的新日更核验官方图身份后使用空引用路径；只有旧记录的兼容流程才核对实际缓存。完成任务还须匹配当前发布提交和远端 OID、任务 token、规范归档路径、图片 SHA、尺寸、格式以及 `qaAttested=true`。
 
-- 绑定当前 publication commit 与远端 OID；
-- 任务 token 匹配；
-- 文件位于 canonical 归档路径；
-- SHA/尺寸/格式正确；
-- `qaAttested=true`。
-
-waiver 是单独状态，绑定当前 publication 与两类 manifest SHA；变化后自动失效。
+用户取消配图的 `waiver` 是独立状态，绑定当前发布和两类清单 SHA，变化后失效。它只替代视觉完成条件，不能替代数据、审查、远端或上线核验。
 
 ## 归档
 
-`data/archive/<date>/` 保存日批次快照和最终视觉资产。历史 `digest:status` 只有在 raw、decisions、filtered、deep 的日期与集合契约完整时才回退归档；当前日期不会用 archive 掩盖 current 故障。
+`data/archive/<date>/` 保存日批次快照及最终视觉资产。历史 `digest:status` 只有在候选、决定、入选及分析文件的日期和集合都匹配时，才可使用归档；当前日期不会用归档掩盖当前数据的故障。
 
 ## 只读验证
 
@@ -175,4 +137,4 @@ npm run validate:data
 npm run digest:status -- --date YYYY-MM-DD
 ```
 
-`validate:data --allow-empty` 仅适合无运行数据的干净 checkout。状态报告是生成时快照，后续状态改变后必须重跑。
+`validate:data --allow-empty` 只用于明确没有运行数据的干净 checkout。状态报告反映读取时的状态，后续推送、登记或取消配图后须重新运行。
