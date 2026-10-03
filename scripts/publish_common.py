@@ -5144,17 +5144,6 @@ def call_publish_llm_api(
                     usage_directory=usage_directory,
                 )
             content = parse_publish_response_text(api_type, data)
-            # A Responses gateway may return valid-looking partial output_text
-            # together with status=incomplete. Terminal state wins over content.
-            if api_type == 'openai_responses' and data.get('status') == 'incomplete':
-                content = ''
-            if content:
-                print(
-                    f'  [publish-api] ✓ {context} | HTTP {status} | '
-                    f'{time.monotonic() - started_at:.1f}s | response_chars={len(content)} '
-                    f'| max_tokens={current_max_tokens}'
-                )
-                return content
             if api_type == 'anthropic':
                 finish_reason = data.get('stop_reason')
                 content_blocks = data.get('content') if isinstance(data.get('content'), list) else []
@@ -5177,12 +5166,40 @@ def call_publish_llm_api(
                 finish_reason = choice.get('finish_reason')
                 message = choice.get('message') or {}
                 reasoning_chars = len(str(message.get('reasoning_content') or ''))
-            finish_label = finish_reason or 'unknown'
-            last_error = RuntimeError(
-                f'LLM 返回内容为空 (finish_reason={finish_label}, '
-                f'reasoning_chars={reasoning_chars})'
+            response_status = data.get('status') if api_type == 'openai_responses' else None
+            # 兼容未提供终态的旧网关；明确返回的失败、未完成或截断状态
+            # 必须先检查，即使正文看起来是完整 JSON，也不能当作成功。
+            unsuccessful_status = (
+                response_status is not None and response_status != 'completed'
             )
-            if finish_reason in {'length', 'max_tokens', 'max_output_tokens'}:
+            output_truncated = finish_reason in {'length', 'max_tokens', 'max_output_tokens'}
+            if content and not unsuccessful_status and not output_truncated:
+                print(
+                    f'  [publish-api] ✓ {context} | HTTP {status} | '
+                    f'{time.monotonic() - started_at:.1f}s | response_chars={len(content)} '
+                    f'| max_tokens={current_max_tokens}'
+                )
+                return content
+            finish_label = finish_reason or 'unknown'
+            response_details = (
+                f'status={response_status}, finish_reason={finish_label}'
+                if response_status is not None else f'finish_reason={finish_label}'
+            )
+            if unsuccessful_status or output_truncated:
+                last_error = RuntimeError(
+                    f'模型响应没有正常完成，已拒绝使用正文（{response_details}）'
+                )
+            else:
+                last_error = RuntimeError(
+                    f'模型没有返回正文（{response_details}, reasoning_chars={reasoning_chars}）'
+                )
+            # 只有原始正文为空且确实耗尽输出预算，才沿用预算恢复。
+            # 已拒绝的非空正文和失败/取消响应不能被当作隐藏推理耗尽。
+            can_recover_empty_output = (
+                not content and output_truncated
+                and (response_status is None or response_status == 'incomplete')
+            )
+            if can_recover_empty_output:
                 if structured_output and reasoning_chars > 0:
                     if structured_recovery_used:
                         print(

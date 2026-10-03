@@ -45,7 +45,8 @@ const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
     'analysisSource', 'sourceId', 'sourceTextChars', 'usedTextChars', 'fullTextChars',
     'fullTextAvailable', 'truncated', 'sourceSha256', 'usedTextSha256', 'analysisConfidence',
     'htmlAvailability', 'htmlAttempts', 'sourceWarnings', 'latestAnalysisAttemptError',
-    'latestAnalysisAttemptAt', 'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable'
+    'latestAnalysisAttemptAt', 'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable',
+    'latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope'
 ]);
 
 function readJsonFileStrict(filePath, options = {}) {
@@ -1456,7 +1457,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 lastErrorCategory = analyzed.errorCategory || null;
                 lastErrorStatus = analyzed.errorStatus || null;
                 lastErrorScope = analyzed.errorScope || null;
-                if (analyzed.errorRetryable === false) break;
+                if (lastErrorScope === 'run' || analyzed.errorRetryable === false) break;
                 if (attempt < maxRetries) {
                     if (onRetry) onRetry(attempt + 1, new Error(analyzed.error), paper);
                     await sleep(retryDelayMs);
@@ -1475,7 +1476,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
             lastErrorCategory = error.category || null;
             lastErrorStatus = error.status || null;
             lastErrorScope = error.scope || null;
-            if (error?.retryable === false) break;
+            if (lastErrorScope === 'run' || error?.retryable === false) break;
             if (attempt < maxRetries) {
                 if (onRetry) onRetry(attempt + 1, error, paper);
                 await sleep(retryDelayMs);
@@ -1561,6 +1562,7 @@ async function analyzeBatch(papers, options = {}) {
     };
 
     let processedCount = 0;
+    let runStopError = null;
     const skipDecisions = new Map();
 
     const shouldSkipCached = (paper) => {
@@ -1619,6 +1621,16 @@ async function analyzeBatch(papers, options = {}) {
                     }
                 }
             });
+            if (!result.success && result.result?.latestAnalysisAttemptErrorScope === 'run') {
+                const failure = result.result;
+                runStopError ||= Object.assign(new Error(result.error), {
+                    code: failure.latestAnalysisAttemptErrorCode,
+                    category: failure.latestAnalysisAttemptErrorCategory,
+                    status: failure.latestAnalysisAttemptErrorStatus,
+                    scope: 'run',
+                    retryable: failure.latestAnalysisAttemptRetryable
+                });
+            }
             if (onPaperResultLocked) {
                 await onPaperResultLocked(paperForAnalysis, result);
             }
@@ -1645,9 +1657,8 @@ async function analyzeBatch(papers, options = {}) {
         return r;
     };
 
-    // 持续饱和的滚动 worker pool：任一论文结束后立刻补入下一篇。
-    // 逻辑批次仍按原始输入切片定义，只用于保持 onBatchDone、增量保存
-    // 和日志的兼容语义，绝不再阻塞后续论文启动。
+    // 每篇完成后启动下一篇；运行级错误会停止领取新任务。
+    // 逻辑批次仍按输入顺序划分，已开始的论文会继续保存结果。
     const totalBatches = Math.ceil(papers.length / concurrency);
     const batchStates = Array.from({ length: totalBatches }, (_, batchIndex) => {
         const start = batchIndex * concurrency;
@@ -1663,10 +1674,13 @@ async function analyzeBatch(papers, options = {}) {
         .filter(r => r && !r.skipped)
         .map(r => r.result || r);
 
-    const wrapFatal = (error, batchIndex) => new Error(
+    const wrapFatal = (error, batchIndex) => Object.assign(new Error(
         `[analyzeBatch] 批次 ${batchIndex + 1}/${totalBatches} 关键回调或执行失败: ${error.message}`,
         { cause: error }
-    );
+    ), {
+        code: error.code, category: error.category, status: error.status,
+        scope: error.scope, retryable: error.retryable
+    });
 
     const recordOutcome = (idx, result) => {
         const batchIndex = Math.floor(idx / concurrency);
@@ -1706,7 +1720,7 @@ async function analyzeBatch(papers, options = {}) {
     };
 
     const worker = async () => {
-        while (!fatalError) {
+        while (!fatalError && !runStopError) {
             const idx = nextIndex++;
             if (idx >= papers.length) return;
             try {
@@ -1733,6 +1747,12 @@ async function analyzeBatch(papers, options = {}) {
     // 最终保存
     if (onSave) {
         await onSave(results, { ...stats, savedAt: getBeijingISOString() });
+    }
+
+    if (runStopError) {
+        runStopError.results = results;
+        runStopError.stats = stats;
+        throw runStopError;
     }
 
     return { results, stats };
@@ -1858,7 +1878,12 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                         ? { manualIngestionCheckpoint: p.manualIngestionCheckpoint }
                         : {}),
                     latestAnalysisAttemptError: p.error || '分析未完成',
-                    latestAnalysisAttemptAt: getBeijingISOString()
+                    latestAnalysisAttemptAt: getBeijingISOString(),
+                    latestAnalysisAttemptErrorCode: p.latestAnalysisAttemptErrorCode ?? p.errorCode ?? null,
+                    latestAnalysisAttemptRetryable: p.latestAnalysisAttemptRetryable ?? p.errorRetryable ?? true,
+                    latestAnalysisAttemptErrorCategory: p.latestAnalysisAttemptErrorCategory ?? p.errorCategory ?? null,
+                    latestAnalysisAttemptErrorStatus: p.latestAnalysisAttemptErrorStatus ?? p.errorStatus ?? null,
+                    latestAnalysisAttemptErrorScope: p.latestAnalysisAttemptErrorScope ?? p.errorScope ?? null
                 });
                 continue;
             }
@@ -1866,6 +1891,12 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
             if (isCompleteAnalysisContent(next)) {
                 delete next.latestAnalysisAttemptError;
                 delete next.latestAnalysisAttemptAt;
+                for (const field of ['latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable',
+                    'latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus',
+                    'latestAnalysisAttemptErrorScope', 'errorCode', 'errorCategory', 'errorStatus',
+                    'errorScope', 'errorRetryable']) {
+                    delete next[field];
+                }
                 if (next.digestStatus?.latestAttemptStatus === 'analysis_failed') {
                     next.digestStatus = {
                         ...next.digestStatus,

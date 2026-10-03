@@ -2122,6 +2122,192 @@ primary_method_tag: #基准测试
         self.assertEqual(result, '{"passed":true,"issues":[]}')
         self.assertEqual(opener.open.call_count, 2)
 
+    def test_publish_llm_rejects_unsuccessful_status_with_complete_review_json(self):
+        review_json = '{"passed":true,"issues":[]}'
+        cases = [
+            ('openai', {'choices': [{
+                'message': {'content': review_json}, 'finish_reason': 'length',
+            }]}, 'length'),
+            ('anthropic', {
+                'content': [{'type': 'text', 'text': review_json}],
+                'stop_reason': 'max_tokens',
+            }, 'max_tokens'),
+        ]
+        for response_status in ('incomplete', 'failed', 'cancelled', 'in_progress', 'queued'):
+            cases.append(('openai_responses', {
+                'status': response_status,
+                'incomplete_details': {'reason': 'max_output_tokens'},
+                'output_text': review_json,
+            }, response_status))
+
+        endpoints = {
+            'openai': ('https://api.example.com/v1', 'text-model'),
+            'anthropic': ('https://api.kimi.com/coding/v1', 'kimi-k2'),
+            'openai_responses': ('https://opencode.ai/zen/go/v1', 'muse-spark-1.2-contributor'),
+        }
+        for protocol, body, expected_reason in cases:
+            with self.subTest(protocol=protocol, reason=expected_reason):
+                response = mock.MagicMock()
+                response.status = 200
+                response.read.return_value = json.dumps(body).encode('utf-8')
+                response.__enter__.return_value = response
+                opener = mock.Mock()
+                opener.open.return_value = response
+                endpoint, model = endpoints[protocol]
+                env = {
+                    'PAPER_ANALYZER_API_KEY': 'test-key',
+                    'PAPER_ANALYZER_ENDPOINT': endpoint,
+                    'PAPER_ANALYZER_MODEL': model,
+                    'HTTPS_PROXY': 'http://127.0.0.1:7897',
+                }
+                with mock.patch.dict(os.environ, env, clear=True), \
+                        mock.patch('urllib.request.build_opener', return_value=opener), \
+                        mock.patch('publish_common.get_claude_code_version', return_value='9.8.7'), \
+                        self.assertRaisesRegex(PublishLLMUnavailable, expected_reason):
+                    call_publish_llm_api(
+                        'inspect', required=True, max_retries=1,
+                        structured_output=True, usage_sink=lambda event: None,
+                    )
+                self.assertEqual(opener.open.call_count, 1)
+
+    def test_publish_llm_accepts_successful_and_legacy_missing_status_responses(self):
+        review_json = '{"passed":true,"issues":[]}'
+        cases = [
+            ('https://api.example.com/v1', 'text-model', {'choices': [{
+                'message': {'content': review_json}, 'finish_reason': 'stop',
+            }]}),
+            ('https://api.example.com/v1', 'text-model', {'choices': [{
+                'message': {'content': review_json},
+            }]}),
+            ('https://api.kimi.com/coding/v1', 'kimi-k2', {
+                'content': [{'type': 'text', 'text': review_json}],
+                'stop_reason': 'end_turn',
+            }),
+            ('https://api.kimi.com/coding/v1', 'kimi-k2', {
+                'content': [{'type': 'text', 'text': review_json}],
+            }),
+            ('https://opencode.ai/zen/go/v1', 'muse-spark-1.2-contributor', {
+                'status': 'completed', 'output_text': review_json,
+            }),
+            ('https://opencode.ai/zen/go/v1', 'muse-spark-1.2-contributor', {
+                'output_text': review_json,
+            }),
+        ]
+        for endpoint, model, body in cases:
+            with self.subTest(endpoint=endpoint, body=body):
+                response = mock.MagicMock()
+                response.status = 200
+                response.read.return_value = json.dumps(body).encode('utf-8')
+                response.__enter__.return_value = response
+                opener = mock.Mock()
+                opener.open.return_value = response
+                env = {
+                    'PAPER_ANALYZER_API_KEY': 'test-key',
+                    'PAPER_ANALYZER_ENDPOINT': endpoint,
+                    'PAPER_ANALYZER_MODEL': model,
+                    'HTTPS_PROXY': 'http://127.0.0.1:7897',
+                }
+                with mock.patch.dict(os.environ, env, clear=True), \
+                        mock.patch('urllib.request.build_opener', return_value=opener), \
+                        mock.patch('publish_common.get_claude_code_version', return_value='9.8.7'):
+                    result = call_publish_llm_api(
+                        'inspect', required=True, max_retries=1,
+                        usage_sink=lambda event: None,
+                    )
+                self.assertEqual(result, review_json)
+                self.assertEqual(opener.open.call_count, 1)
+
+    def test_partial_text_is_not_misclassified_as_empty_hidden_reasoning(self):
+        review_json = '{"passed":true,"issues":[]}'
+        responses = []
+        for finish_reason in ('length', 'stop'):
+            response = mock.MagicMock()
+            response.status = 200
+            response.read.return_value = json.dumps({'choices': [{
+                'message': {'content': review_json, 'reasoning_content': 'hidden reasoning'},
+                'finish_reason': finish_reason,
+            }]}).encode('utf-8')
+            response.__enter__.return_value = response
+            responses.append(response)
+        opener = mock.Mock()
+        opener.open.side_effect = responses
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'test-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_MODEL': 'reasoning-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('urllib.request.build_opener', return_value=opener), \
+                mock.patch('publish_common.time.sleep'):
+            result = call_publish_llm_api(
+                'inspect', required=True, max_tokens=4000, max_retries=2,
+                structured_output=True, usage_sink=lambda event: None,
+            )
+        self.assertEqual(result, review_json)
+        self.assertEqual(opener.open.call_count, 2)
+        payloads = [json.loads(call.args[0].data) for call in opener.open.call_args_list]
+        self.assertEqual([payload['max_tokens'] for payload in payloads], [4000, 4000])
+        self.assertEqual([payload['messages'][0]['content'] for payload in payloads], ['inspect', 'inspect'])
+
+    def test_empty_failed_responses_do_not_expand_budget_or_duplicate_usage(self):
+        for response_status in ('failed', 'cancelled'):
+            with self.subTest(status=response_status):
+                response = mock.MagicMock()
+                response.status = 200
+                response.read.return_value = json.dumps({
+                    'status': response_status,
+                    'incomplete_details': {'reason': 'max_output_tokens'},
+                    'output': [{'type': 'reasoning', 'summary': [
+                        {'type': 'summary_text', 'text': 'hidden reasoning'},
+                    ]}],
+                }).encode('utf-8')
+                response.__enter__.return_value = response
+                opener = mock.Mock()
+                opener.open.return_value = response
+                usage_events = []
+                env = {
+                    'PAPER_ANALYZER_API_KEY': 'test-key',
+                    'PAPER_ANALYZER_ENDPOINT': 'https://opencode.ai/zen/go/v1',
+                    'PAPER_ANALYZER_MODEL': 'muse-spark-1.2-contributor',
+                    'HTTPS_PROXY': 'http://127.0.0.1:7897',
+                }
+                with mock.patch.dict(os.environ, env, clear=True), \
+                        mock.patch('urllib.request.build_opener', return_value=opener), \
+                        mock.patch('publish_common.time.sleep'), \
+                        self.assertRaisesRegex(PublishLLMUnavailable, response_status):
+                    call_publish_llm_api(
+                        'inspect', required=True, max_tokens=4000, max_retries=2,
+                        structured_output=True, usage_sink=usage_events.append,
+                    )
+                self.assertEqual(opener.open.call_count, 2)
+                payloads = [json.loads(call.args[0].data) for call in opener.open.call_args_list]
+                self.assertEqual([payload['max_output_tokens'] for payload in payloads], [4000, 4000])
+                self.assertEqual([payload['input'][0]['content'][0]['text'] for payload in payloads], ['inspect', 'inspect'])
+                self.assertEqual(len(usage_events), 2)
+                self.assertEqual([event['outcome'] for event in usage_events], ['provider_error', 'provider_error'])
+
+    def test_optional_publish_llm_returns_none_for_truncated_nonempty_response(self):
+        response = mock.MagicMock()
+        response.status = 200
+        response.read.return_value = json.dumps({'choices': [{
+            'message': {'content': '{"passed":true,"issues":[]}'},
+            'finish_reason': 'length',
+        }]}).encode('utf-8')
+        response.__enter__.return_value = response
+        opener = mock.Mock()
+        opener.open.return_value = response
+        env = {
+            'PAPER_ANALYZER_API_KEY': 'test-key',
+            'PAPER_ANALYZER_ENDPOINT': 'https://api.example.com/v1',
+            'PAPER_ANALYZER_MODEL': 'text-model',
+        }
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch('urllib.request.build_opener', return_value=opener):
+            result = call_publish_llm_api(
+                'inspect', required=False, max_retries=1, usage_sink=lambda event: None,
+            )
+        self.assertIsNone(result)
+
     def test_publish_llm_response_body_has_hard_size_limit(self):
         response = mock.Mock()
         response.status = 200

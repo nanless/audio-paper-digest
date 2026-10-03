@@ -19,7 +19,7 @@ run-daily-digest.sh
 
 - Node 数据层拥有抓取、筛选、日更 sealed source capture、单篇分析、checkpoint 和 visual manifest。
 - Python 发布层拥有页面生成、只读 review、Hugo 门禁和 Git 事务。
-- Node 与 Python 的 OpenCode Go 请求共享 `data/runtime/llm-account-pool.json`。账号选择是 provider 运输状态，不进入论文、Prompt 或发布内容指纹。
+- Node 与 Python 共用 `data/runtime/llm-account-pool.json`，记录 OpenCode Go 当前使用的账号和配额冷却时间。这些请求状态不进入论文、提示词或发布内容的指纹。
 - 博客仓库是发布目标，不是分析事实来源；未提交页面不能反向改变筛选去重基线。
 - Codex 内置生图是唯一正式绘图执行者；项目代码只规划、校验和登记资产。
 
@@ -44,9 +44,15 @@ source acquisition
 
 每个阶段保存输入指纹、模型与协议、Prompt SHA、证据预算、输出 SHA 和终态。阶段输入变化时只失效该阶段及其下游。整篇论文由规范化 arXiv ID 锁保护，锁内必须重新读取 canonical 后再合并。
 
-模型响应同时受 token、绝对时间和总字节三重边界约束。Responses `incomplete`、Chat `length`、Anthropic `max_tokens`、缺失 SSE 终态或超出字节上限都在解析正文前失败，不能把半截 JSON 当成阶段成功。
+模型响应有输出 token 数、总耗时和响应字节数的限制。Node 分析请求还检查流式响应是否正常结束。Node 与 Python 都先检查响应终态，再接受正文：Responses 的 `incomplete`、`failed` 或 `cancelled`，Chat 的 `length`，以及 Anthropic 的 `max_tokens` 都不能作为成功响应，即使正文恰好是完整 JSON。Python 对原本没有正文、且输出预算耗在隐藏推理上的响应保留有次数限制的恢复；被拒绝的非空正文不属于这种情况。
 
-API Reader 是默认生产正文，不是可选装饰。它依赖最终评分后的 analysis、结构化全文证据和实际物化的 Figure；旧 13 节 analysis 继续作为机器解析层。Reader 的正文版本与来源绑定版本正交：`beginner-researcher-v3` 约束读者结构，`api-reader-source-bindings-v4` 逐格重放表格并从结构化原文注入公式，`api-reader-author-identity-v1` 绑定逐作者机构来源，`api-reader-resource-identity-v1` 绑定项目资源的原文/Demo 证据、重定向终点与可达状态。结构化 artifact 使用稳定键序 SHA；旧 sealed artifact 仅在 source manifest、TXT SHA 与 parser 版本/布局可重放时内存兼容，不改写封存字节。
+认证或账号池不可用等运行级错误会停止领取新论文。已经开始的论文仍会保存结果，尚未开始的论文保持待处理状态；最终保存完成后，批量入口报告运行失败。普通单篇错误只结束该篇的尝试，不停止其他论文。
+
+最终博客正文由 API Reader 生成。它读取封存的原文、结构化全文证据、已验证的资源信息和本次准备的论文图，不把评分后的分析正文当作写作来源；旧的 13 节分析仍供程序解析。Reader 在评分后执行，这个先后顺序不代表它读取评分结果。
+
+正文结构和来源检查分别使用版本协议。`beginner-researcher-v3` 规定文章结构；`api-reader-source-bindings-v4` 逐格核对表格来源，并从结构化原文插入公式；`api-reader-author-identity-v1` 核对作者与机构来源；`api-reader-resource-identity-v1` 核对资源的原文或演示页面证据、重定向地址和可达状态。结构化证据按稳定键序计算 SHA。旧的封存证据只有在来源清单、文本 SHA、解析器版本和布局都能重新核验时才可兼容读取，不改写原文件。
+
+阶段复用还受实现哈希约束。目前 Reader 的质量检查依赖整个 `deep-analyzer.js` 的 SHA，所以修改该文件中与 Reader 无关的代码也可能触发重做。不能仅凭“没有修改评分结果”判断 Reader 一定会复用。
 
 ## 博客事务时序
 

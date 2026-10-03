@@ -64,11 +64,17 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
     context, outputText, eventId = crypto.randomUUID(), at = new Date().toISOString() }) {
     const terminal = response?.status === 'incomplete' || response?.stop_reason === 'max_tokens'
         || (Array.isArray(response?.choices) && response.choices.some(choice => choice?.finish_reason === 'length'));
+    const responseStatus = protocol === 'openai_responses' ? response?.status : null;
+    let outcome;
+    if (errorCode) outcome = 'transport_error';
+    else if (!Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) outcome = 'http_error';
+    else if (responseStatus != null && !['completed', 'incomplete'].includes(responseStatus)) outcome = 'provider_error';
+    else if (terminal) outcome = 'incomplete';
+    else outcome = 'completed';
     return {
         version: VERSION, kind: 'request', eventId, at, runtime: 'node', ...usageContext(context),
         protocol: label(protocol), model: label(model),
-        outcome: errorCode ? 'transport_error' : terminal ? 'incomplete'
-            : Number(statusCode) >= 200 && Number(statusCode) < 300 ? 'completed' : 'http_error',
+        outcome,
         statusCode: count(statusCode), errorCode: label(errorCode),
         durationMs: count(Math.round(durationMs)),
         inputSha256: hash(JSON.stringify(request || {})),

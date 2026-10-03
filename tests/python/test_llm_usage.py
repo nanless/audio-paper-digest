@@ -45,6 +45,43 @@ class UsageTests(unittest.TestCase):
             writer.assert_called_once()
             self.assertNotIn('recordingStatus', event)
 
+    def test_http_success_does_not_override_responses_terminal_status(self):
+        cases = (
+            ('completed', 'completed'),
+            (None, 'completed'),
+            ('incomplete', 'incomplete'),
+            ('failed', 'provider_error'),
+            ('cancelled', 'provider_error'),
+            ('in_progress', 'provider_error'),
+            ('queued', 'provider_error'),
+        )
+        for response_status, expected_outcome in cases:
+            with self.subTest(status=response_status):
+                body = {
+                    'output_text': '{"passed":true,"issues":[]}',
+                    'usage': {'input_tokens': 10, 'output_tokens': 5},
+                }
+                if response_status is not None:
+                    body['status'] = response_status
+                event = llm_usage.build_llm_usage_event(
+                    protocol='openai_responses', model='test', request={},
+                    response=body, status_code=200,
+                )
+                self.assertEqual(event['outcome'], expected_outcome)
+                self.assertEqual(event['usage']['inputTokens'], 10)
+                self.assertEqual(event['usage']['outputTokens'], 5)
+
+    def test_transport_and_http_errors_take_precedence_over_response_status(self):
+        cases = ((200, 'TimeoutError', 'transport_error'), (500, None, 'http_error'))
+        for status_code, error_code, expected_outcome in cases:
+            with self.subTest(status_code=status_code, error_code=error_code):
+                event = llm_usage.build_llm_usage_event(
+                    protocol='openai_responses', model='test', request={},
+                    response={'status': 'incomplete'}, status_code=status_code,
+                    error_code=error_code,
+                )
+                self.assertEqual(event['outcome'], expected_outcome)
+
     def test_private_ledger_and_link_rejection(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()

@@ -85,8 +85,17 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
     incomplete = body.get('status') == 'incomplete' or body.get('stop_reason') == 'max_tokens' \
         or any(isinstance(choice, dict) and choice.get('finish_reason') == 'length'
                for choice in choices)
-    outcome = 'transport_error' if error_code else 'incomplete' if incomplete else \
-        'completed' if isinstance(status_code, int) and 200 <= status_code < 300 else 'http_error'
+    response_status = body.get('status') if protocol == 'openai_responses' else None
+    if error_code:
+        outcome = 'transport_error'
+    elif not isinstance(status_code, int) or not 200 <= status_code < 300:
+        outcome = 'http_error'
+    elif response_status is not None and response_status not in ('completed', 'incomplete'):
+        outcome = 'provider_error'
+    elif incomplete:
+        outcome = 'incomplete'
+    else:
+        outcome = 'completed'
     paper_id = context.get('paperId')
     return {
         'version': VERSION, 'kind': 'request', 'eventId': str(uuid.uuid4()),

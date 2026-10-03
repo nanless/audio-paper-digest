@@ -53,6 +53,38 @@ test('ledger keeps reported usage separate from estimates, missing data and fail
     assert.equal(report.estimatedInputTextTokens, 2);
 });
 
+test('HTTP success does not override the Responses terminal status', () => {
+    const cases = [
+        ['completed', 'completed'], [undefined, 'completed'], ['incomplete', 'incomplete'],
+        ['failed', 'provider_error'], ['cancelled', 'provider_error'],
+        ['in_progress', 'provider_error'], ['queued', 'provider_error']
+    ];
+    for (const [status, outcome] of cases) {
+        const event = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test', request: {},
+            response: { status, output_text: '{"passed":true,"issues":[]}',
+                usage: { input_tokens: 10, output_tokens: 5 } }, statusCode: 200 });
+        assert.equal(event.outcome, outcome, `status=${status}`);
+        assert.equal(event.usage.inputTokens, 10);
+        assert.equal(event.usage.outputTokens, 5);
+    }
+});
+
+test('transport and HTTP errors take precedence over the response terminal status', () => {
+    const cases = [[200, 'ECONNRESET', 'transport_error'], [500, undefined, 'http_error']];
+    for (const [statusCode, errorCode, outcome] of cases) {
+        const event = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test', request: {},
+            response: { status: 'incomplete' }, statusCode, errorCode });
+        assert.equal(event.outcome, outcome);
+    }
+    for (const [protocol, response] of [
+        ['openai', { choices: [{ finish_reason: 'length' }] }],
+        ['anthropic', { stop_reason: 'max_tokens' }]
+    ]) {
+        assert.equal(buildLlmUsageEvent({ protocol, request: {}, response, statusCode: 200 }).outcome,
+            'incomplete');
+    }
+});
+
 test('ledger uses private immutable files and rejects linked directories', t => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usage-ledger-')));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));

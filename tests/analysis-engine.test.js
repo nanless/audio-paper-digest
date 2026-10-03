@@ -354,6 +354,25 @@ describe('mergeAndSaveResults', () => {
 });
 
 describe('analyzePaperWithRetry', () => {
+    it('运行级错误即使未声明 retryable=false 也不重复尝试', async () => {
+        for (const failureForm of ['returned', 'thrown']) {
+            let calls = 0;
+            const result = await analyzePaperWithRetry({ arxivId: '2604.00599' }, {
+                maxRetries: 3,
+                retryDelayMs: 0,
+                analyzeFn: async () => {
+                    calls++;
+                    if (failureForm === 'returned') return {
+                        analysis: null, error: '认证失败', errorScope: 'run', errorStatus: 401
+                    };
+                    throw Object.assign(new Error('认证失败'), { scope: 'run', status: 401 });
+                }
+            });
+            assert.strictEqual(calls, 1);
+            assert.strictEqual(result.result.latestAnalysisAttemptErrorScope, 'run');
+        }
+    });
+
     it('运行级认证错误的抛出和返回路径均保留结构化字段供历史调度暂停', async () => {
         for (const returnsRecord of [false, true]) {
             const result = await analyzePaperWithRetry({ arxivId: '2609.00001' }, {
@@ -1418,6 +1437,11 @@ describe('analyzePaperWithRetry', () => {
             title: 'Existing',
             analysis: null,
             error: 'secondary timeout',
+            latestAnalysisAttemptErrorCode: 'LLM_ACCOUNT_AUTH_ERROR',
+            latestAnalysisAttemptRetryable: false,
+            latestAnalysisAttemptErrorCategory: 'authentication',
+            latestAnalysisAttemptErrorStatus: 401,
+            latestAnalysisAttemptErrorScope: 'run',
             imageManifest: { selected: [], downloaded: [] },
             analysisCheckpoint: validAnalysisText(),
             analysisStaleSnapshots: [{ contract: 'stale-analysis-snapshot-v1',
@@ -1428,6 +1452,10 @@ describe('analyzePaperWithRetry', () => {
         const { mergePapersById } = require('../scripts/analysis-engine.js');
         const [merged] = mergePapersById([complete], [failed], { preserveSuccessfulAnalysis: true });
         assert.strictEqual(merged.analysis, complete.analysis);
+        for (const field of ['latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable',
+            'latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope']) {
+            assert.strictEqual(merged[field], failed[field]);
+        }
         assert.strictEqual(merged.analysisCheckpoint, failed.analysisCheckpoint);
         assert.deepStrictEqual(merged.analysisStaleSnapshots, failed.analysisStaleSnapshots);
         assert.deepStrictEqual(merged.imageManifest, complete.imageManifest);
@@ -1440,6 +1468,8 @@ describe('analyzePaperWithRetry', () => {
         const reloaded = readJsonFileStrict(file).papers[0];
         assert.deepStrictEqual(reloaded.analysisStaleSnapshots, failed.analysisStaleSnapshots);
         assert.strictEqual(reloaded.analysis, complete.analysis);
+        assert.strictEqual(reloaded.latestAnalysisAttemptErrorScope, 'run');
+        assert.strictEqual(reloaded.latestAnalysisAttemptErrorStatus, 401);
         assert.deepStrictEqual(merged.analysisRecoveryImageManifest, failed.imageManifest);
         assert.deepStrictEqual(merged.manualIngestionCheckpoint, failed.manualIngestionCheckpoint);
         assert.strictEqual(merged.latestAnalysisAttemptError, 'secondary timeout');
@@ -1452,18 +1482,36 @@ describe('analyzePaperWithRetry', () => {
         }], { preserveSuccessfulAnalysis: true });
         assert.strictEqual(mergedAgain.analysis, complete.analysis);
         assert.strictEqual(mergedAgain.latestAnalysisAttemptError, 'secondary timeout again');
+        const { latestAnalysisAttemptErrorCode, latestAnalysisAttemptRetryable,
+            latestAnalysisAttemptErrorCategory, latestAnalysisAttemptErrorStatus,
+            latestAnalysisAttemptErrorScope, ...unclassifiedFailure } = failed;
+        const [unclassified] = mergePapersById([mergedAgain], [unclassifiedFailure], { preserveSuccessfulAnalysis: true });
+        assert.strictEqual(unclassified.latestAnalysisAttemptErrorScope, null);
+        assert.strictEqual(unclassified.latestAnalysisAttemptErrorCode, null);
+        assert.strictEqual(unclassified.latestAnalysisAttemptRetryable, true);
+
+        const [recovered] = mergePapersById([merged], [{ ...merged, ...validAnalyzedResult() }], { preserveSuccessfulAnalysis: true });
+        for (const field of ['latestAnalysisAttemptError', 'latestAnalysisAttemptAt',
+            'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable',
+            'latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope']) {
+            assert.strictEqual(recovered[field], undefined);
+        }
     });
 
     it('新鲜论文元数据优先，canonical 只恢复分析状态字段', () => {
         const merged = mergeCanonicalAnalysisState(
-            { arxivId: '2604.00025v2', title: 'Fresh title', abstract: 'Fresh abstract', authors: ['New'] },
+            { arxivId: '2604.00025v2', title: 'Fresh title', abstract: 'Fresh abstract', authors: ['New'],
+                latestAnalysisAttemptErrorScope: 'paper', latestAnalysisAttemptErrorCategory: 'network',
+                latestAnalysisAttemptErrorStatus: 503 },
             {
                 arxivId: '2604.00025',
                 title: 'Stale title',
                 abstract: 'Stale abstract',
                 authors: ['Old'],
                 analysis: validAnalysisText(),
-                analysisCheckpoint: 'checkpoint'
+                analysisCheckpoint: 'checkpoint',
+                latestAnalysisAttemptErrorScope: 'run', latestAnalysisAttemptErrorCategory: 'authentication',
+                latestAnalysisAttemptErrorStatus: 401
             }
         );
         assert.strictEqual(merged.title, 'Fresh title');
@@ -1471,6 +1519,9 @@ describe('analyzePaperWithRetry', () => {
         assert.deepStrictEqual(merged.authors, ['New']);
         assert.strictEqual(merged.analysis, validAnalysisText());
         assert.strictEqual(merged.analysisCheckpoint, 'checkpoint');
+        assert.strictEqual(merged.latestAnalysisAttemptErrorScope, 'run');
+        assert.strictEqual(merged.latestAnalysisAttemptErrorCategory, 'authentication');
+        assert.strictEqual(merged.latestAnalysisAttemptErrorStatus, 401);
     });
 
     it('原子初始化不会覆盖并发进程已创建的 current 文件', () => {
@@ -1510,6 +1561,164 @@ describe('analyzePaperWithRetry', () => {
 });
 
 describe('analyzeBatch', () => {
+    for (const failureForm of ['returned', 'thrown']) {
+        it(`运行级错误以 ${failureForm} 形式出现时停止领取论文，并保存已经开始的结果`, async () => {
+            const papers = Array.from({ length: 5 }, (_, index) => ({
+                arxivId: `2604.${String(index + 501).padStart(5, '0')}`,
+                title: `Paper ${index + 1}`
+            }));
+            const started = [];
+            const resolvers = new Map();
+            const persisted = [];
+            const completedBatches = [];
+            const savedSnapshots = [];
+            let releaseFailedSave;
+            const failedSave = new Promise(resolve => { releaseFailedSave = resolve; });
+            let failureIsBeingSaved = false;
+            const waitFor = async predicate => {
+                for (let attempt = 0; attempt < 100; attempt++) {
+                    if (predicate()) return;
+                    await new Promise(resolve => setImmediate(resolve));
+                }
+                assert.fail('等待批量分析状态超时');
+            };
+            const running = analyzeBatch(papers, {
+                concurrency: 2,
+                maxRetries: 0,
+                analyzeFn: paper => new Promise((resolve, reject) => {
+                    started.push(paper.arxivId);
+                    resolvers.set(paper.arxivId, () => {
+                        if (paper !== papers[0]) return resolve(validAnalyzedResult());
+                        const details = {
+                            code: 'LLM_ACCOUNT_POOL_EXHAUSTED', category: 'quota',
+                            status: 429, scope: 'run', retryable: false
+                        };
+                        if (failureForm === 'thrown') {
+                            reject(Object.assign(new Error('所有账号均不可用'), details));
+                        } else {
+                            resolve({
+                                analysis: null, error: '所有账号均不可用',
+                                errorCode: details.code, errorCategory: details.category,
+                                errorStatus: details.status, errorScope: details.scope,
+                                errorRetryable: details.retryable
+                            });
+                        }
+                    });
+                }),
+                onPaperResultLocked: async (_paper, result) => {
+                    if (!result.success) {
+                        failureIsBeingSaved = true;
+                        await failedSave;
+                    }
+                    persisted.push(result.result);
+                },
+                onBatchDone: (batchNum, batchResults) => {
+                    completedBatches.push({ batchNum, count: batchResults.length });
+                },
+                onSave: (results, stats) => {
+                    savedSnapshots.push({ ids: results.map(paper => paper.arxivId), stats });
+                }
+            }).then(result => ({ result }), error => ({ error }));
+
+            await waitFor(() => started.length === 2);
+            resolvers.get(papers[0].arxivId)();
+            await waitFor(() => failureIsBeingSaved);
+            resolvers.get(papers[1].arxivId)();
+            await waitFor(() => persisted.some(paper => paper.arxivId === papers[1].arxivId));
+            await new Promise(resolve => setImmediate(resolve));
+            const startedBeforeSave = started.slice();
+            releaseFailedSave();
+            // Finish any extra work started by the broken implementation so the
+            // regression test reports its assertions without leaving promises open.
+            for (let attempt = 0; attempt < 10; attempt++) {
+                for (const paper of papers.slice(2)) resolvers.get(paper.arxivId)?.();
+                await new Promise(resolve => setImmediate(resolve));
+            }
+            const { error, result } = await running;
+
+            assert.deepStrictEqual(startedBeforeSave, papers.slice(0, 2).map(paper => paper.arxivId));
+            assert.ok(error, '运行级错误必须传给入口，阻止后续生成阶段');
+            assert.strictEqual(result, undefined);
+            assert.strictEqual(error.code, 'LLM_ACCOUNT_POOL_EXHAUSTED');
+            assert.strictEqual(error.scope, 'run');
+            assert.strictEqual(error.category, 'quota');
+            assert.strictEqual(error.status, 429);
+            assert.strictEqual(error.retryable, false);
+            assert.deepStrictEqual(error.results.map(paper => paper.arxivId), papers.slice(0, 2).map(paper => paper.arxivId));
+            assert.strictEqual(error.stats.success, 1);
+            assert.strictEqual(error.stats.failed, 1);
+            assert.strictEqual(error.stats.total, 5);
+            assert.deepStrictEqual(completedBatches, [{ batchNum: 1, count: 2 }]);
+            assert.deepStrictEqual(savedSnapshots.map(snapshot => snapshot.ids), [papers.slice(0, 2).map(paper => paper.arxivId)]);
+            assert.strictEqual(persisted.length, 2);
+            assert.strictEqual(persisted.find(paper => paper.arxivId === papers[0].arxivId).latestAnalysisAttemptErrorScope, 'run');
+            for (const paper of papers.slice(2)) {
+                assert.strictEqual(paper.analysis, undefined);
+                assert.strictEqual(paper.latestAnalysisAttemptError, undefined);
+            }
+        });
+    }
+
+    it('普通单篇错误和普通 429 不阻止后续论文分析', async () => {
+        const papers = Array.from({ length: 3 }, (_, index) => ({ arxivId: `2604.0060${index}` }));
+        const started = [];
+        const { stats } = await analyzeBatch(papers, {
+            concurrency: 1,
+            maxRetries: 0,
+            analyzeFn: async paper => {
+                started.push(paper.arxivId);
+                if (paper === papers[2]) return validAnalyzedResult();
+                return {
+                    analysis: null, error: '单篇请求失败', errorScope: 'paper',
+                    errorStatus: paper === papers[0] ? 400 : 429,
+                    errorRetryable: paper !== papers[0]
+                };
+            }
+        });
+        assert.deepStrictEqual(started, papers.map(paper => paper.arxivId));
+        assert.strictEqual(stats.success, 1);
+        assert.strictEqual(stats.failed, 2);
+    });
+
+    it('停止时不完整的逻辑批次也保存已开始的结果，不给未开始的论文生成结果', async () => {
+        const papers = Array.from({ length: 5 }, (_, index) => ({ arxivId: `2604.0070${index}` }));
+        const resolvers = new Map();
+        const batches = [];
+        const saved = [];
+        const waitFor = async predicate => {
+            for (let attempt = 0; attempt < 100; attempt++) {
+                if (predicate()) return;
+                await new Promise(resolve => setImmediate(resolve));
+            }
+            assert.fail('等待分析开始超时');
+        };
+        const running = analyzeBatch(papers, {
+            concurrency: 2,
+            maxRetries: 0,
+            analyzeFn: paper => new Promise(resolve => {
+                resolvers.set(paper.arxivId, () => resolve(paper === papers[0]
+                    ? { analysis: null, error: '认证失败', errorScope: 'run', errorStatus: 401 }
+                    : validAnalyzedResult()));
+            }),
+            onBatchDone: (batchNum, results) => batches.push({ batchNum, count: results.length }),
+            onSave: results => saved.push(results.map(paper => paper.arxivId))
+        }).then(() => null, error => error);
+        await waitFor(() => resolvers.size === 2);
+        resolvers.get(papers[1].arxivId)();
+        await waitFor(() => resolvers.size === 3);
+        resolvers.get(papers[0].arxivId)();
+        await waitFor(() => batches.length === 1);
+        resolvers.get(papers[2].arxivId)();
+        const error = await running;
+        assert.ok(error);
+        assert.strictEqual(error.scope, 'run');
+        assert.strictEqual(error.stats.success, 2);
+        assert.strictEqual(error.stats.failed, 1);
+        assert.strictEqual(resolvers.size, 3);
+        assert.deepStrictEqual(batches, [{ batchNum: 1, count: 2 }]);
+        assert.deepStrictEqual(saved, [papers.slice(0, 3).map(paper => paper.arxivId)]);
+    });
+
     it('同篇论文的锁覆盖最新状态重读、分析和写回，排队请求不会覆盖新结果', async () => {
         let canonical = null;
         let analyzeCalls = 0;
