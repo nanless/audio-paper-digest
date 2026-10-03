@@ -2,7 +2,7 @@
 
 ## 适合谁
 
-给第一次运行默认 LLM/API 日更，或排查“环境明明配了但脚本没读到”的用户。流程概念见 [workflow.md](workflow.md)，变量的完整示例见 [env.example](../env.example)。
+本文说明如何安装默认 LLM/API 日更所需的环境，也用于排查配置未被读取的问题。运行步骤见[主流程](workflow.md)，环境变量示例见 [env.example](../env.example)。
 
 ## 最短安装路径
 
@@ -13,13 +13,22 @@ python3.11 -m venv .venv
 cp env.example .env
 ```
 
-Node 必须满足 `>=20.18.1 <21 || >=22.3.0`。Python 必须为 3.11+ 且使用 OpenSSL TLS；macOS 系统自带的 Python 3.9/LibreSSL 不属于受支持运行时。默认博客和视觉入口通过 `scripts/python-runtime.sh` 依次选择项目 `.venv`、`python3.11`，最后才校验 `python3`。项目使用 Node 内置测试框架；Python 依赖用于博客、Hugo 门禁与视觉辅助。
+Node 版本须满足 `>=20.18.1 <21 || >=22.3.0`。Python 须为 3.11 或更高版本，并使用 OpenSSL 提供 TLS；macOS 自带的 Python 3.9/LibreSSL 不受支持。默认博客和视觉入口通过 `scripts/python-runtime.sh` 选择 Python，优先使用项目 `.venv`，其次是 `python3.11`，最后才检查 `python3`。项目使用 Node 内置测试框架，Python 依赖用于博客生成、Hugo 构建检查和视觉辅助。
+
+安装后先确认当前目录及工作区角色：
+
+```bash
+pwd
+npm run workspace:role -- status
+```
+
+日更目录应为 `daily`，全历史副本应为 `history`。角色标记缺失或绑定的真实路径不匹配时，先停止运行。确认目录用途后，再用 `npm run workspace:role -- set daily` 或 `npm run workspace:role -- set history` 绑定；不要用 `--force` 把历史工作区改成日更工作区来绕过检查。
 
 ## 最小 `.env`
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=your-key
-# 可选；同一路由备用账号，逗号分隔
+# 可选；同一路由的备用账号，逗号分隔
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
 PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
@@ -27,80 +36,81 @@ PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
 PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
-# 可选：全历史 ICLR 2026 direct 路线的本地 accepted metadata/PDF 根目录
+# 可选：历史 ICLR 2026 路线使用的本地官方论文信息与 PDF 根目录
 PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```
 
-默认模型是 OpenCode Go 的 Muse Spark 1.2 Contributor，协议为 OpenAI Responses。endpoint 必须为 HTTPS；只有 loopback 测试服务允许 HTTP。
+当前文档示例使用 OpenCode Go 的 `muse-spark-1.3-contributor`，通过 OpenAI Responses 请求；实际模型由项目配置决定。公开服务端点必须使用 HTTPS，只有本机回环测试服务允许 HTTP。
 
-`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 只用于全历史 ICLR 2026 会议论文的 direct 路线：它必须指向已保留的本地官方 accepted metadata/PDF 根目录。未设置时默认使用 `~/code/github_repos/iclr2026-paper-scraper`；它不是日更抓取输入，也不会触发下载。
+`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 只供历史 ICLR 2026 会议来源收集使用，须指向已保留的本地官方录用论文信息与 PDF。未配置时使用 `~/code/github_repos/iclr2026-paper-scraper`。它不参与日更抓取，不会触发下载，也不作为 arXiv 写作输入。
 
-`PAPER_ANALYZER_FALLBACK_API_KEYS` 不是负载均衡。系统持续使用当前 active 账号，仅在 OpenCode Go 返回明确 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，按配置顺位向后切换，不回绕到已冷却的前序账号；普通认证 401 不切换，作为运行级故障停止派发；切换结果跨 Node/Python 和日期保存在 `data/runtime/llm-account-pool.json`。原账号到期后不会自动切回。普通 429、5xx、网络/代理错误、截断或内容校验失败均不切换。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 总排在普通 fallback 列表之后，也可配置逗号列表 `third-key,fourth-key`。追加账号保留现有 active 顺位，全部后续账号不可用时停止请求并保留断点。副模型如有独立账号池，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`；只有主/副端点规范化后属于同一 OpenCode Go 服务且副模型没有独立 key 时，副模型才继承主账号池。不同服务的副模型必须提供自己的 key，不能继承主账号池。凭据发送前，实际请求 URL 还必须精确匹配由 endpoint 与 model 推导出的规范 API 路由。
+### 备用账号
+
+系统会持续使用当前成功的账号。只有 OpenCode Go 返回 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，才按配置顺序切换到后续账号，不会返回前面的账号。普通认证 401 会停止本次运行；普通 429、5xx、网络或代理故障、响应截断和内容校验失败都不触发切换。
+
+账号选择与冷却时间保存在 `data/runtime/llm-account-pool.json`，供 Node、Python 和后续日期的运行共同使用。前面账号的冷却时间到期后，不会自动切回；追加备用账号也不会改变当前成功账号。后续账号全部不可用时，程序停止派发并保存进度。这些规则不用于轮流分配流量。
+
+`PAPER_ANALYZER_FALLBACK_API_KEYS` 可填写逗号分隔的备用账号。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 排在这份列表之后，也可填写第三、第四等账号的列表。需要独立副模型账号池时，使用 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`。只有主副端点属于同一规范 OpenCode Go 服务、且副模型没有独立密钥时，副模型才继承主账号池；跨服务必须显式提供副模型密钥。
+
+账号池文件不保存原始密钥，但账号的稳定指纹仍属于敏感操作记录，权限须为 `0600`，不得上传或归档。发送认证信息前，程序还会核对实际请求地址是否与端点和模型确定的 API 路由一致。
 
 ## 环境为什么只认项目 `.env`
 
-Node 由 `scripts/env-loader.js`，Python 由 `scripts/project_env.py` 加载同一文件。加载器先清理从 shell、IDE、Trae 或 Codex 继承的 `PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、渠道变量和大小写代理变量，再写入当前项目值，并把文件权限收紧到 `0600`。
+Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读取项目根目录 `.env`。它们先清理从 shell、IDE、Trae 或 Codex 继承的 `PAPER_ANALYZER_*`、`PAPER_DIGEST_*`、`PD_*`、渠道变量及大小写代理变量，再载入项目配置，并将文件权限收紧到 `0600`。
 
-因此：
-
-- 不要把项目必需值只写进 `.zshrc`。
-- 不要用外层环境临时“补齐”缺失变量。
-- 子进程必须使用公共最小环境构造器，避免把 LLM/发布密钥传给 curl、Git hook 或浏览器。
+项目必需值不能只写在 `.zshrc`，也不能靠外层环境临时补齐。子进程须使用公共的最小环境构造函数，避免把模型或发布密钥传给 curl、Git hook、浏览器及无关命令。
 
 ## 代理职责
 
 | 流量 | 规则 |
 |---|---|
-| Muse 精确模型 | 强制 `HTTPS_PROXY` 或 `HTTP_PROXY` 的 HTTP CONNECT；一次请求一个 agent |
-| arXiv 元数据/HTML/PDF/图片 | 强制 HTTP CONNECT |
-| HuggingFace curl | 继承 HTTP(S) 代理，可额外用 `ALL_PROXY` SOCKS |
-| 其他 LLM | 默认 `agent:false` 直连 |
-| 外部图片/Demo | HTTPS only；逐跳校验公网 IP |
+| Muse 模型请求 | 必须使用项目 `HTTPS_PROXY` 或 `HTTP_PROXY` 配置的 HTTP CONNECT；每次请求创建独立代理连接对象，用完关闭 |
+| arXiv 元数据、HTML、PDF 和图片 | 必须使用 HTTP CONNECT |
+| HuggingFace curl | 继承 HTTP(S) 代理，可额外使用 `ALL_PROXY` SOCKS |
+| 其他模型请求 | 默认设置 `agent:false`，直接连接 |
+| 外部图片和 Demo | 只接受 HTTPS，每次重定向都校验公网 IP |
 
-缺代理必须明确失败，不能静默直连。访问本地代理的脚本必须沙箱外运行。
+需要代理却未配置时，程序会停止，不会静默直连。所有项目脚本和测试都必须在沙箱外运行，包括访问本机代理的诊断命令。
 
 ## PDF/TXT 来源存储
 
-默认日更不会把抓取时的旧 text cache 当作分析输入。筛选完成后，`full-fetch.js` 通过项目代理为每个
-入选 arXiv ID 新拉官方 HTML 文本与 PDF，封存到 `data/runtime/daily-fresh-source-runs/` 的私有四文件
-generation（TXT、PDF、runtime metadata、manifest）。该目录是 production replay evidence，不能用
-`storage:prune` 删除；图像只在当前模型调用的 OS 临时目录存在。
+筛选完成后，`full-fetch.js` 通过项目代理为每个入选 arXiv ID 获取本次官方 HTML 文本和 PDF，保存到 `data/runtime/daily-fresh-source-runs/`。每篇包含 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json`，后续分析与发布须使用并校验这组文件，不能读取旧文本缓存。
 
-历史 direct route 同样为每个 arXiv generation 新拉、封存 TXT/PDF/runtime/manifest 到
-`data/runtime/fetched-arxiv-sources/`。纯会议条目才重放保留的本地 metadata/PDF SHA。若使用本机 ICLR
-accepted corpus，`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 可显式指向其根目录；它只供会议 local-source
-collector，不会成为 arXiv 写作输入。
+这些文件是保留的论文来源，不是可删除缓存，`storage:prune` 不会清理它们。论文图片只在当前模型请求的系统临时目录中准备和使用，用完清理，不保存到运行目录的图片缓存。
+
+历史重写每次获取 arXiv 来源时，也会保存这四类文件，并用 `generation` 序号区分各次获取。目录为 `data/runtime/fetched-arxiv-sources/`。会议论文则核对保留的本地论文信息和 PDF 及其 SHA。两种来源的具体要求见[历史重写流程](history-rewrite.md)。
 
 ## 常用容量参数
 
-| 变量 | 默认 |
+| 变量 | 默认值 |
 |---|---:|
-| `PD_ANALYSIS_CONCURRENCY` | 3 |
+| `PD_ANALYSIS_CONCURRENCY` | 3 篇论文 |
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
-| `PD_API_READER_REPAIR_MAX_TOKENS` | 8000；仅当最后一个已付 patch 槽在上限精确截断且尚未使用 implementation allowance lineage 时，下次显式续跑获得恰好一次最高 16000 的受限槽 |
-| `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 |
-| `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 |
-| `PD_API_READER_CONCURRENCY` | 5（单进程 Reader generation slot） |
-| `PD_BLOG_REVIEW_CONCURRENCY` | 5 |
+| `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |
+| `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 字符 |
+| `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 字符 |
+| `PD_API_READER_CONCURRENCY` | 5 个进程内解读生成任务 |
+| `PD_BLOG_REVIEW_CONCURRENCY` | 5 个独立页面审查任务 |
 
-Muse 筛选使用 `PD_FILTER_BATCH_SIZE`；整篇分析按 `PD_ANALYSIS_CONCURRENCY` 并发。账号池状态更新使用短锁，网络请求不持锁。Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE。
-Reader 局部修复的单次提升预算还受 `PD_API_READER_MAX_TOKENS` 约束；收到 16000-token 响应后会消费同一条 allowance lineage，transport-only 失败不消费；半截 JSON 永远不会进入候选或绕过正文门禁。
+Muse 筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制，整篇分析并发由 `PD_ANALYSIS_CONCURRENCY` 控制。账号池只在选择账号和更新状态时短暂持锁，发送网络请求时不持锁。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE。
+
+解读正文的局部修复通常最多输出 8000 tokens。如果一次局部修复恰好在该上限截断，且候选尚可获得一次额外恢复机会，程序会保存失败草稿并停止；下次显式续跑可提高修复上限，默认最多 16000 tokens。这次机会与实现升级提供的额外尝试共用，不能叠加。自定义预算下，上限按正文预算和基础修复预算计算，最高为 16000，且不超过 `PD_API_READER_MAX_TOKENS`；不能据此无限追加尝试。模型返回任何内容后即消耗这次机会，纯网络故障不消耗。截断的 JSON 仍不能作为有效候选，也不能绕过内容检查。
 
 ## 可选副模型
 
-API Reader v3 会把安全物化的官方 Figure 直接交给主模型，主模型端点因此需要支持 Responses 图片输入。设置 `PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧 canonical 的额外 image-supplement：副模型筛选候选图和规划局部插入，不替换主模型原文，也不参与评分。secondary endpoint 未设置时复用主端点；secondary key 只有在主副属于同一规范服务时才可复用，跨服务必须显式配置。
+API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前示例中的 Muse 通过 Responses 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
 
-`PD_API_READER_CONCURRENCY` 限制进程内 Reader 重阶段槽；`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文 worker。两者不是同一个并发旋钮，命令的实际吞吐还受前者排队约束。
+`PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
 
-文件日志默认保留 30 天且总量不超过 256 MiB，可分别用 `PD_LOG_RETENTION_DAYS` 和 `PD_LOG_MAX_TOTAL_BYTES` 覆写。
+文件日志默认保留 30 天，总量不超过 256 MiB；可分别用 `PD_LOG_RETENTION_DAYS` 和 `PD_LOG_MAX_TOTAL_BYTES` 覆盖。
 
 ## 博客与 Hugo
 
-`PAPER_DIGEST_BLOG_REPO` 必须指向真实 Hugo 仓库。生成阶段可以在缺目录时跳过“博客已发布去重”，但真实发布不能。review 会运行 Hugo 门禁；Hugo 可执行文件必须在沙箱外环境可用。
+`PAPER_DIGEST_BLOG_REPO` 须指向真实 Hugo 仓库。数据抓取阶段在仓库目录不存在时可以跳过已发布论文去重，但正式发布不能缺少目标仓库。审查会执行 Hugo 构建检查，Hugo 须在沙箱外环境中可用。
 
-发布端不会无限等待外部进程。图片审查、Hugo、Git 本地操作、commit/hook、push/远端核验和视觉规划默认分别受 120、300、30、180、180、120 秒的绝对截止时间约束，可用 `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`、`PD_HUGO_GATE_TIMEOUT_SECONDS`、`PD_GIT_LOCAL_TIMEOUT_SECONDS`、`PD_GIT_COMMIT_TIMEOUT_SECONDS`、`PD_GIT_NETWORK_TIMEOUT_SECONDS`、`PD_VISUAL_PLANNER_TIMEOUT_SECONDS` 在 `env.example` 给出的范围内覆写。超时不会签发伪造的 review 或远端 OID；已建立但尚未验证远端的本地发布提交会保留供续跑收养。
+外部进程有明确等待上限。图片审查、Hugo、Git 本地操作、提交及 hook、推送与远端核验、视觉规划默认分别为 120、300、30、180、180、120 秒。可在 `env.example` 规定范围内，分别使用 `PD_BLOG_IMAGE_REVIEW_DEADLINE_SECONDS`、`PD_HUGO_GATE_TIMEOUT_SECONDS`、`PD_GIT_LOCAL_TIMEOUT_SECONDS`、`PD_GIT_COMMIT_TIMEOUT_SECONDS`、`PD_GIT_NETWORK_TIMEOUT_SECONDS` 和 `PD_VISUAL_PLANNER_TIMEOUT_SECONDS` 调整。超时不会被记录为审查或远端发布成功；有效的本地发布提交若尚未验证远端，会保留供续跑核对和使用。
 
 ## 验证安装
 
@@ -110,12 +120,12 @@ npm test
 npm run validate:data -- --allow-empty
 ```
 
-测试和项目脚本同样要求沙箱外执行。不要用真实日更作为环境探针；API 路由可用 `node scripts/test-api-key.js` 独立验证。
+`--allow-empty` 仅供明确没有运行数据的干净 checkout 使用。已有数据的工作区应运行 `npm run validate:data`，检查实际数据。测试和诊断同样须在沙箱外执行。
+
+需要验证模型路由时，可单独运行 `node scripts/test-api-key.js`；它会发送真实 API 请求，不属于上述离线检查。不要把完整日更当作安装探针。
 
 ## 安全边界
 
-- `.env`、`data/`、`logs/` 和缓存均不得提交。
-- 真实 endpoint 必须 HTTPS。
-- 日志不得出现 key、Authorization、Cookie、secret、password 或 URL userinfo。
-- 非 dry-run 微信发布还要求 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`、`WECHAT_THUMB_MEDIA_ID`；可选渠道不属于默认日更。
-- Manual 环境与命令只从 [manual/README.md](../manual/README.md) 进入。
+`.env`、`data/`、`logs/`、缓存和密钥不得提交。公开模型端点须使用 HTTPS，日志须隐藏密钥、认证头、Cookie、密码、URL 中的用户认证信息及其他敏感信息。
+
+非 dry-run 微信发布还要求 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 和 `WECHAT_THUMB_MEDIA_ID`。这些可选渠道不属于默认日更。人工流程的环境与命令见 [Manual 入口](../manual/README.md)。

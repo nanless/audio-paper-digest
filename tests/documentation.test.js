@@ -57,7 +57,11 @@ test('首页保持任务导向且默认流程与 Manual 边界清楚', () => {
     ]) {
         assert.ok(readme.includes(heading), `README.md 缺少任务型章节: ${heading}`);
     }
-    assert.ok(readme.indexOf('默认路线是 LLM/API') < readme.indexOf('Manual/人工高保障流程'));
+    const defaultRouteIndex = readme.indexOf('默认路线是 LLM/API');
+    const manualRouteIndex = readme.indexOf('Manual/人工流程');
+    assert.ok(defaultRouteIndex >= 0, '首页应明确说明默认 API 路线');
+    assert.ok(manualRouteIndex >= 0, '首页应说明显式人工流程');
+    assert.ok(defaultRouteIndex < manualRouteIndex, '首页应先介绍默认路线，再介绍人工流程');
     assert.doesNotMatch(readme, /node scripts\/manual-|prompts\/manual-|docs\/manual-v6/);
 });
 

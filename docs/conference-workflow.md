@@ -258,6 +258,12 @@ npm run conference:new:filter -- status --filter UUID
 npm run conference:new:filter -- apply --filter UUID --decision DECISION.json --owner OPERATOR
 ```
 
+### 筛选健康检查、并发与恢复
+
+`prepare` 返回的 `filterId` 用于后续运行和恢复。先在运行命令中使用 `--limit 1`，确认一篇论文的请求、响应与筛选记录正常，再保持同一组参数、去掉 `--limit` 继续。推荐全局最多同时运行 5 个不同筛选任务；这是操作建议。同一个 `filterId` 的请求记录、原始响应、用量记录和状态更新共用一把锁，不得启动并发 worker。中断后继续使用原来的 catalog、spec 和 `filterId`，不能换一组输入来恢复旧任务。
+
+会议筛选与日更使用同一个结构化决定解析器。响应格式无法解析时，会议程序会保存原始响应和用量记录，将该项记为 `failed`，不会在同一次已登记请求中追加格式修复请求。待退避时间和次数条件满足后，操作者须显式使用 `--retry-failed`；程序会登记一次新尝试，单独记录其请求、响应和费用依据。
+
 最终 included/excluded 必须绑定受控 decision artifact；LLM 决定要求真实请求/响应字节、
 模型/协议和非零逻辑请求 usage，manual 决定使用独立 actor，不得冒充模型。普通
 `buildDecisionArtifact` 和 `conference:filter apply` 都拒绝 LLM actor；生产 signer 不接收 transport

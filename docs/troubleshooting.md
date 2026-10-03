@@ -2,67 +2,54 @@
 
 ## 使用方法
 
-先找到最早失败的门禁，不要从最后一个报错猜原因。所有诊断命令必须沙箱外运行；沙箱访问不到本地代理不代表目标站点故障。
+从最早失败的阶段查起，确认当时使用的输入、配置和记录，再选择恢复入口。所有项目诊断命令须在沙箱外运行；沙箱内无法访问本机代理，并不能证明目标站点故障。不要为消除报错而手改进度或来源文件。
 
 ## 1. 启动即报缺少配置
 
-检查项目根 `.env`，不是 shell：
+检查项目根目录 `.env` 是否存在及权限是否正确，确认其中已填写 `PAPER_ANALYZER_API_KEY`、`PAPER_ANALYZER_MODEL` 和 `PAPER_ANALYZER_ENDPOINT`。公开端点须使用 HTTPS。加载器会清理继承的项目变量，`.zshrc` 中的值不能补齐缺少的配置。
 
 ```bash
 ls -l .env
-node scripts/test-api-key.js
+npm run workspace:role -- status
 ```
 
-必需三元组为 `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT`。endpoint 必须 HTTPS。loader 会清理继承变量，因此 `.zshrc` 里的值不会补齐项目配置。
+角色应与目录用途一致；缺少标记或真实路径不匹配时，按[安装说明](setup.md)确认用途后再绑定。需要单独验证模型连接时，可运行 `node scripts/test-api-key.js`，但它会发送真实 API 请求，不是离线检查。
 
 ## 2. Muse 请求失败、超时或空响应
 
-确认：
+确认模型名称与项目配置一致，`HTTPS_PROXY` 或 `HTTP_PROXY` 指向 `http(s)://` HTTP CONNECT 代理，命令在沙箱外运行，代理出口与地区符合账号要求。启用 `PD_OPENAI_RESPONSES_STREAM=1` 时，还需检查代理能否正常传输 SSE。
 
-- model 精确为项目当前配置的 `muse-spark-1.3-contributor`；
-- `HTTPS_PROXY` 或 `HTTP_PROXY` 是 `http(s)://` CONNECT 地址；
-- 命令在沙箱外；
-- 代理出口和地区符合账户要求；
-- `PD_OPENAI_RESPONSES_STREAM=1` 是否与代理兼容。
+Muse 每次请求使用独立的 CONNECT 代理连接对象，用完关闭，不能改成直连。`incomplete/max_output_tokens` 表示输出被截断；调整证据、输出预算或提示词后重试，不能接受半截 JSON。
 
-Muse 必须走 one-shot CONNECT agent。不要改成直连。若返回 `incomplete/max_output_tokens`，这是截断，不是成功；调整证据/输出预算或修复 Prompt 后重试，不能接受半截 JSON。
+配置备用账号后，可查看 `data/runtime/llm-account-pool.json` 中的 `activeAccountId`、`limitClass` 和 `blockedUntil`。它不含原始密钥，但稳定凭据指纹仍属敏感记录，须保持 `0600` 权限，不上传或归档。
 
-配置备用账号后，可检查 `data/runtime/llm-account-pool.json` 的 `activeAccountId`、`limitClass` 和 `blockedUntil`；文件不含原始 key。不要为“切回主账号”删除或手改状态：长期 sticky 策略只在当前账号自己收到明确 `GoUsageLimitError` 后重新选择。状态损坏、非法 generation 或状态路径异常会在网络请求前失败关闭。普通 429 不切号，仍按原有短期限流退避。
+只有当前账号返回明确 `GoUsageLimitError` 或 `Insufficient balance` 时，系统才切换到后续账号。普通认证 401 会停止本次运行，普通 429 按原有限流规则退避，不切账号。不要为切回主账号删除或修改状态；冷却到期也不会自动切回。状态损坏、版本计数不合法或路径不安全时，程序会在网络请求前停止。
 
 ## 3. MiMo/Kimi 403
 
-普通 MiMo/Kimi 预期 `agent:false` 直连。若 curl 直连正常而脚本 403，检查是否有调用方绕过 `requestLlmJson()` 或自行注入 agent。不要把 Muse 的强制代理策略套到其他模型。
+MiMo 和 Kimi 请求默认设置 `agent:false`，直接连接。若 curl 直连正常而脚本返回 403，检查调用方是否绕过 `requestLlmJson()`，或自行传入代理连接对象。不要把 Muse 的强制代理规则用于其他模型。
 
 ## 4. arXiv/HuggingFace 抓取失败
 
-检查项目代理和来源 checkpoint：
+先检查项目代理和相应来源的进度记录。arXiv Node 请求须使用 HTTP CONNECT；HuggingFace curl 可额外使用 `ALL_PROXY=socks5h://...`。遇到 429 应按配置退避，不要删除进度文件后用更高并发反复请求。
 
-- arXiv Node 请求只接受 HTTP CONNECT。
-- HuggingFace curl 可额外使用 `ALL_PROXY=socks5h://...`。
-- 429 会按配置退避；不要删除 checkpoint 后高并发重打。
-- 某来源候选数/SHA 不一致时，只重抓该来源。
-
-HuggingFace 空结果不能在代理缺失时伪装成功。HTML 只有 metadata shell 时应继续 PDF fallback。
+来源候选数量或 SHA 不一致时，只重新获取该来源。缺代理的 HuggingFace 请求不能记成正常的空结果。HTML 只有标题、作者等元数据而没有可靠全文时，应在来源获取阶段尝试 PDF 提取。
 
 ## 5. filtered 不完整
 
-运行：
+先运行只读检查：
 
 ```bash
 npm run validate:data
 ```
 
-常见原因：raw 与 decision 输入 SHA 不同、决定未覆盖全部候选、API 错误项仍 pending、filtered 包含非 related 项、模型/Prompt/关键词版本变化后只更新了一部分文件。不要手工删掉未知决定；恢复筛选让缓存补齐。
+常见原因包括候选与筛选决定的输入 SHA 不匹配、决定未覆盖全部候选、API 错误项仍为 `pending`、入选结果包含非 `related` 项，或模型、提示词、关键词版本改变后只更新了部分文件。重新运行筛选入口补齐决定，不要手工删除未知决定。
 
 ## 6. 分析慢或反复失败
 
-先看失败处于哪个 stage，而不是整篇重跑：
+先查看失败阶段及其已有记录，避免无差别重做整篇。整篇分析默认并发为 3，解读重阶段默认并发为 5，Muse 筛选批次由 `PD_FILTER_BATCH_SIZE` 控制。主分析、局部修复和解读正文分别使用自己的输出与上下文预算。
 
-- `PD_ANALYSIS_CONCURRENCY` 默认 3；
-- Reader 重阶段默认 5；
-- Muse 筛选 batch 服从 `PD_FILTER_BATCH_SIZE`；
-- 主分析、局部修复和 Reader 使用不同 token/context 预算。
-- Reader patch 默认 8000 tokens；只有最后一个已付 patch 槽在该上限精确截断、且该候选尚未使用 implementation allowance lineage 时，下一次显式续跑才获得恰好一个最高 16000 的受限槽。收到该槽的任何模型内容即消费额度，transport-only 失败不消费；截断正文仍失败关闭。
+解读局部修复通常最多输出 8000 tokens。某次修复精确在基础上限截断、候选仍有额外恢复资格时，程序保存失败草稿并停止；下一次显式续跑可使用一次提高预算的修复，默认最多 16000 tokens。这个机会与实现升级的额外尝试共用，不能叠加；自定义上限仍受正文与基础修复预算限制。模型返回任何内容就会消耗这次机会，纯网络故障不消耗，截断的正文仍不接受。
 
 ```bash
 npm run deep -- --date YYYY-MM-DD
@@ -70,75 +57,57 @@ npm run batch -- --retry-failed-readers
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 ```
 
-来源 SHA、Prompt 或模型变化会按指纹失效对应阶段。旧成功正文存在但最新尝试失败时仍需重试。
-`batch --retry-failed-readers` 只退役当前未完成论文的失败 Reader 候选；需要真正强制全量重跑时使用 `reanalyze`，它会同时清空旧 Reader 与图片补充状态，不能指望旧成功记录短路。
+来源 SHA、提示词或模型变化会使对应阶段及必要下游重新运行。保留旧成功正文并不能覆盖最新失败。`batch --retry-failed-readers` 只停止复用未完成论文的失败解读候选；要强制重做全部分析，请用 `reanalyze`，它还会清空旧解读和图片补充状态。
 
-如果恢复命令报告 sealed daily source 缺失或漂移，不要改 checkpoint，也不要用旧 `data/current` 文本补跑；重新运行同日 `npm run digest:prepare -- YYYY-MM-DD`，让 source phase 重新封存 PDF/TXT。
+恢复命令报告日更来源缺失或变化时，不要改进度文件，也不要补入旧 `data/current` 文本。目标仍为北京时间当天时，重新运行同日 `npm run digest:prepare -- YYYY-MM-DD` 获取并保存来源；历史日期不能重新从抓取开始，应保留失败记录并按历史维护流程处理。
 
-## 6.1 历史 direct source 或 staging 失败
+## 6.1 历史来源获取或暂存页面失败
 
-先确认失败路由，而不是启动 crosswalk：arXiv direct item 的当前 generation 应在
-`data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/` 中有 TXT、PDF、runtime 和 manifest；
-先重新运行同一 `history:direct-scheduler`，直到所选 paper 在同一 plan/generation status 中全部为 ready；
-`history:direct-run --apply` 不补建来源，并会在模型调用前拒绝缺失、handoff 或 failed status。随后重跑
-direct-run 会验证来源并恢复 source-bound `analysis-recovery.json` 中的一致阶段 checkpoint。fresh acquisition
-失败只会写 immutable handoff，不自动修改 crosswalk，也不应阻断本地会议队列。
+先确认失败的是哪种来源。历史 arXiv 的当前这组封存文件保存在 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`，应包含文本、PDF、来源信息和清单；`generation` 是获取序号，不是论文的 `vN` 版本号。重新运行同一 `history:direct-scheduler`，直到当前计划所选论文均已在对应获取序号下达到 `ready`，再运行 `history:direct-run --apply`。
 
-若 handoff 的精确原因是 current、无版本号 arXiv PDF 返回 HTTP 404，可原样重跑同 generation：实现会先保留
-current-404 观察，再只尝试同 canonical ID 的官方历史版本。成功时必须看到 source runtime 中绑定的自哈希
-`sourceVersion`、由所选 PDF 字节提取且带顶部版本警告的 `source.txt`，以及最终单篇页的“当前稿不可用”提示。
-版本 URL 属于另一论文、带 query/fragment，或未先证明 current PDF=404 时不要手工导入或改 checkpoint。
-普通 current PDF 与既有普通 bundle 不走此分支。若所有同 canonical 版本仍不可用，再进入 named handoff
-fallback；不得猜测替换 arXiv ID。
+`direct-run` 不补抓来源，来源状态缺失、为 `handoff` 或 `failed` 时，会在模型请求前停止。再次运行会核对来源，并复用 `analysis-recovery.json` 中仍与来源相符的阶段结果。若渲染实现已变化，它可使用匹配的分析结果重新生成暂存页，不再请求模型，也不覆盖旧暂存文件。
 
-会议外部路径可能漂移时，用一次 `history:status ... --verify-sources true` 重算 metadata/PDF SHA；不要把
-该深核选项放进 watch。普通 status 只检查路径、文件类型和 PDF size，以保持长期监控廉价。
+无版本号的当前 arXiv PDF 明确返回 HTTP 404 时，可以保持参数不变，重跑同一获取序号的来源任务。程序只会尝试同一论文的官方历史版本，不会猜测另一 arXiv ID。成功后，应有记录当前稿 404 的 `sourceVersion`、从所选 PDF 提取的 `source.txt`、分析输入顶部的版本警告，以及最终页面的“当前稿不可用”提示。来源身份和哈希必须一致。
 
-会议 direct item 先检查 local-source manifest 中 metadata/PDF 的路径和 SHA、冻结 inventory SHA 以及
-conference projection。不要用旧博客正文、旧分析、文件名相似度或随意标题搜索补齐；只有本地会议输入缺失/损坏，
-或已写出的 arXiv failure handoff，才进入相应 crosswalk fallback。
+未证明当前 PDF 为 404、地址指向另一论文或包含查询参数或片段标识时，不得手工导入或改进度文件。普通当前 PDF 来源不走这个条件分支。同一论文的官方版本全部不可用时，才按已保存、命名明确的 arXiv 失败交接记录进入对应补救流程。
 
-## 7. Reader 文章机械、表格或图片脱节
+怀疑会议外部文件路径变化时，用一次 `history:status ... --verify-sources true` 重算论文信息和 PDF 的 SHA，不要在持续观察模式中使用深度校验。普通状态查询只检查路径、类型和文件大小，以免长期观察反复读取大量文件。
 
-检查 `apiReaderPlan` 与正文：
+会议条目应检查本地来源清单中的论文信息与 PDF 路径、SHA，以及冻结页面清单和会议页面映射。缺失或损坏的本地会议来源会使该条目停止，不能套用 arXiv 失败交接流程。不得用旧博客正文、旧分析、相似文件名或随意标题搜索补齐来源。
 
-- 术语桥是否同时解释两个术语的分工、搭配原因和组合意义；
-- 表前是否提出比较问题，表后是否解释净收益、失败项和边界；
-- Figure 是否有导读、可执行看图路径、原图、图注和解释；
-- 未传像素时是否猜了颜色、坐标轴或模块；
-- 段落中的“它/该方法/这一结果”是否唯一回指。
+## 7. 解读句式重复，或表格、图片脱节
 
-修复 Prompt 或结构化 findings 后刷新 Reader，不在博客 review 阶段原地改正文。
+将 `apiReaderPlan` 与正文对照，检查读者能否理解组合术语各自的分工、搭配原因和效果；表前是否提出比较问题，表后是否解释收益、失败条件及边界；图前导读、观察顺序、原图、图注和解释是否相邻。模型未看到图片时，不能描述其颜色、坐标轴或模块。段落中的“它”“该方法”“这一结果”应有明确指代。
 
-表格报错时先核对 `selection` 是否引用真实 DOM 行列、marker 与 binding 是否存在唯一顺序映射，以及 quote 模式裁剪后是否还剩至少两列一行。旧 structured artifact 只有 source manifest、TXT SHA 与 parser 版本/布局均可重放时才兼容；不要重写 sealed 文件伪造新 SHA。单张 Figure 的 `RESPONSE_TOO_LARGE` 会被跳过，若一张都没有成功物化才应继续排查代理、图片 URL、MIME 或源 PDF。
+调整提示词或结构化审查意见后刷新解读，不在博客审查阶段直接改页面。表格数量不足的诊断使用 `reader_table_count_insufficient`、`requiredCount` 和 `actualCount`；这些字段用于程序恢复，操作者不应手改。正文已有表格但缺来源记录时，应补对应记录，不为消除数量报错盲目加表。
+
+表格还需检查 `selection` 是否引用真实 DOM 行列，表格标记与来源记录是否有唯一顺序对应，原文引文模式裁剪后是否仍至少两列、一行数据。旧结构化来源须通过来源清单和全文 SHA 校验，并能按记录的解析器版本重新验证。例外仅限实现认可的无布局来源标记，且表格、公式和图片数组均为空；不能用任意布局声明取得兼容资格，也不得重写封存文件以制造新 SHA。
+
+单张图片的 `RESPONSE_TOO_LARGE` 会使程序跳过该图。如果一张图都未能准备成功，再检查代理、图片地址、MIME 或源 PDF。
 
 ## 8. blog:generate 失败
 
-优先检查 production proof、批次日期、评分八维、Reader v3、作者机构、图片 URL 安全和目标博客工作区。generate 会拒绝覆盖目标日期已有的人工 Git 修改。
-
-单篇/排除参数未命中也会失败，这是范围保护，不应忽略。
+检查正式分析结果是否满足当前发布要求，包括批次日期、八维评分、Reader v3、作者机构及安全的图片地址，再检查目标博客工作区。生成命令会拒绝覆盖目标日期已有的人工 Git 修改。指定单篇或排除项却未命中时也会停止，这是发布范围检查，不能忽略。
 
 ## 9. blog:review 失败
 
-review 是只读门禁。内容问题回到生成/分析修复；瞬时 API 失败只重试失败页。逐页通过证据只按“相对路径 + 页面内容 SHA”复用：页面 SHA 变化才重审该文件。generation manifest 元数据、模型、发布器代码、协议或 Hugo 运行时变化时重跑批次 gate 并重签 receipt，不得重审内容 SHA 未变的文件。Git baseline 或 remote 身份漂移仍会阻断 push。
+审查只读取页面。内容问题回到生成或分析阶段修复；瞬时 API 故障只重试失败页面。通过记录按“相对路径 + 页面内容 SHA”复用，内容变化才重审该文件。生成清单元数据、模型、发布器代码、协议或 Hugo 运行时变化时，重跑当前批次检查并保存新审查记录，不重审内容未变的页面。Git 基线或远端身份变化仍会阻止推送。
 
-Hugo 内存异常时先确认没有并行遗留 Hugo 进程、目标仓库和主题是否正确，再单独运行受控 Hugo gate；不要通过跳过 Hugo 签发 receipt。
+Hugo 内存异常时，先检查是否有遗留并行进程，核对目标仓库和主题，再运行受控构建检查。不能跳过 Hugo 后把审查记录为成功。
 
 ## 10. blog:push 失败
 
-检查：
+检查审查记录是否对应当前生成结果，博客 `HEAD` 是否仍为审查时的基线，已暂存、未暂存和未跟踪的文件是否符合允许的精确变更，远端名称及推送地址是否变化，以及远端 `main` 是否仍匹配可重试的提交。
 
-- receipt 是否绑定当前 generation；
-- 博客 HEAD 是否仍等于 review baseline；
-- staged/unstaged/untracked delta 是否精确；
-- remote 名称和 push URL 身份是否变化；
-- 实时远端 `main` 是否仍匹配可重试提交。
+推送阶段不生成或审查正文，不能借已有本地提交绕过审查记录。有效的本地发布提交尚未推送成功时，按原入口继续，让程序核对并复用，不手工扩大发布范围。
 
-push 不生成、不审查，也不能借已有本地 commit 绕过 receipt。
+### Git 已推送，但页面未上线
+
+检查对应提交的 GitHub Pages 构建与部署结果。失败时读取日志、修复并等待成功；部署的是后续提交时，须验证它仍保留本批已审页面内容。逐页检查目标汇总与论文页面的 HTTP 200、正式地址和标题，保存核验结果。远端提交匹配或 `digest:status` 显示完成，都不能代替这些人工核验。
 
 ## 11. 视觉 pending 或 record 失败
 
-先确认远端 publication OID，再运行：
+先确认发布提交已在远端验证，再运行：
 
 ```bash
 npm run visual:prepare -- --date YYYY-MM-DD
@@ -146,12 +115,12 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-只使用 prepare 输出的绝对参考路径。record 需要当前任务 token、canonical 文件和 `--qa-attested true`。manifest、publication 或资产 SHA 变化会使完成态失效。
+只使用本次准备命令输出的绝对参考路径。新日更核对官方图片身份后会返回空引用列表，这是预期行为，不能改用旧缓存。登记须提供当前任务 token、正式分析文件及 `--qa-attested true`，并且已逐图目检。任务清单、发布记录或图片 SHA 变化会使旧完成记录失效。
 
 ## 12. 状态报告与现实不一致
 
-`digest:status` 是读取时快照。push、record 或 waiver 后必须重新运行。当前日期不会用 archive 掩盖 current 故障；历史日期也只有跨文件契约闭合时才回退 archive。
+`digest:status` 只反映读取时状态，推送、登记图片或取消配图后须重新运行。当前日期的失败不会被归档数据掩盖；历史日期也只有在各文件日期、来源和论文集合匹配时才能使用归档。网页上线另按上述部署与页面核验要求确认。
 
 ## 仍无法定位
 
-记录：命令、目标日期、最早错误、对应 stage、相关 manifest 路径和脱敏日志片段。不要附带 API key、认证头、Cookie 或完整 `.env`。
+记录运行命令、目标日期、最早错误、所在阶段、相关清单路径和脱敏日志片段。不要附 API 密钥、认证头、Cookie 或完整 `.env`。

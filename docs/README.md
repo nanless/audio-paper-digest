@@ -1,83 +1,45 @@
 # 文档导航
 
-默认读者先走 LLM/API 路线；只有明确需要人工高保障流程时才进入
-[`manual/`](../manual/README.md)。如果只想运行一次日更，先看根目录
-[`README.md`](../README.md) 的快速开始，不必从头阅读所有设计细节。
+默认运行 LLM/API 日更。第一次使用请先看根目录 [README.md](../README.md) 的快速开始，再按下面的任务查阅说明。只有用户明确选择人工流程时，才进入 [Manual 子系统](../manual/README.md)。
 
 ## 按任务选择
 
 | 你要做什么 | 先读 | 再查 |
 |---|---|---|
-| 安装并配置模型、代理、博客仓库 | [环境与配置](setup.md) | [排错手册](troubleshooting.md) |
-| 理解默认日更各阶段 | [主流程](workflow.md) | [数据格式](data-format.md) |
-| 理解组件、状态机、锁与事务 | [默认 API 架构](architecture.md) | [契约兼容矩阵](compatibility.md) |
-| 查某个命令或模块职责 | [脚本说明](scripts.md) | [`scripts/` 运行时索引](../scripts/README.md) |
-| 下载论文与引用、复制 AI 提问 | [无需助手的博客阅读工具](blog-reading-tools.md) | 博客“关于与方法”页面 |
-| 修改评分、Prompt、路径或契约 | [维护约定](maintenance.md) | [数据格式](data-format.md) |
-| 完整离线验收、CI 与故障回放 | [维护指南：验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
-| 完全不用旧生成文本重写一个既有日批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 分阶段入口 |
-| 全历史重写：本地会议 PDF 与 fresh arXiv PDF/TXT 直达私有 staging | [历史重写底座](history-rewrite.md) | `conference-local-sources → direct-inputs → direct-plan → direct-run` |
-| 审查并发布完成的 direct 全历史重写 | [全历史 direct publication 闭环](history-direct-publication.md) | immutable plan/generation → historical review → locked activation/commit/push → live OID status |
-| 接管 2026-09-07 全历史重写现场 | [全历史重写交接](historical-rewrite-handoff-2026-09-07.md) | 先生成 local-direct catalog/plan；crosswalk 只处理 named arXiv fresh-failure handoff |
-| 改进解读写法并比较重跑效果 | [Reader 写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
-| 整理历史标签、任务层级与分面检索 | [标签体系设计](tag-taxonomy-design.md) | [实施与验收计划](tag-taxonomy-implementation.md)、`npm run taxonomy:preview` |
-| 抓取 2026 新会议、按日更同源流程深度理解并生成会议汇总 | [会议论文工作流](conference-workflow.md) | [来源研究记录](research/2026-conferences/report-source.md)；`conference:new:*`；官方 acquisition → discovery → filter → analysis → postprocess |
-| 排查会议链恢复、发布与旧公式问题 | [会议链修复记录](conference-repair-notes.md) | 本轮修复范围、验收边界与仍需重建的旧页面 |
-| 整理本机会议 PDF、重写历史会议论文并生成会议汇总 | [会议论文工作流](conference-workflow.md) | 原 `conference:*` 只在 history workspace；历史 URL 映射与 review/push 未完成 |
-| 判断历史 ICASSP/ICLR/ICML 分支哪些能力可以迁回 main | [历史会议分支审计](conference-branch-audit.md) | [会议论文工作流](conference-workflow.md) |
-| 显式运行 Manual/人工路线 | [Manual 入口](../manual/README.md) | [Manual 工作流](../manual/docs/workflow.md) |
+| 安装依赖，配置模型、代理和博客仓库 | [安装与配置](setup.md) | [故障排查](troubleshooting.md) |
+| 运行日更，或从中断处继续 | [主流程](workflow.md) | [数据格式](data-format.md) |
+| 理解模块、状态、锁和发布顺序 | [默认 API 架构](architecture.md) | [兼容规则](compatibility.md) |
+| 查命令参数或脚本职责 | [脚本说明](scripts.md) | [`scripts/` 索引](../scripts/README.md) |
+| 下载论文原文、导读和引用，或批量导出资料 | [博客阅读工具](blog-reading-tools.md) | 博客“关于与方法”页面 |
+| 修改评分、提示词、路径或数据格式 | [维护约定](maintenance.md) | [数据格式](data-format.md) |
+| 执行离线验证或排查故障恢复 | [验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
+| 根据原文重写一个已有日批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 的分阶段入口 |
+| 重写全部历史论文与汇总页 | [历史重写流程](history-rewrite.md) | 本地会议来源、论文计划、来源准备和逐篇重写命令 |
+| 审查并发布历史重写结果 | [历史发布流程](history-direct-publication.md) | `history:direct-publication` 的生成、审查、发布和状态查询 |
+| 查找 2026-09-07 的历史运行记录 | [归档交接记录](historical-rewrite-handoff-2026-09-07.md) | 只供定位当时文件；不能按旧命令启动当前任务 |
+| 改进解读写法，比较重写前后的文章 | [解读写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
+| 设计标签、检查历史标签映射或分类显示 | [标签体系设计](tag-taxonomy-design.md) | [实施计划](tag-taxonomy-implementation.md)、[显示规则](taxonomy-presentation-policy.md)和 `npm run taxonomy:preview` |
+| 抓取并处理 2026 年新会议论文 | [会议工作流](conference-workflow.md) | `conference:new:*`；[来源研究记录](research/2026-conferences/report-source.md)说明研究时的覆盖范围 |
+| 整理本地会议 PDF，处理历史会议论文 | [会议工作流](conference-workflow.md) | 原 `conference:*` 在历史工作区运行；发布历史页面另查[历史发布流程](history-direct-publication.md) |
+| 查看会议处理曾出现的故障与修复范围 | [2026-09-12 修复记录](conference-repair-notes.md) | 文中的验证结果与待修旧页面属于记录当时的范围 |
+| 核对旧会议分支的迁移限制 | [2026-09-06 分支审查](conference-branch-audit.md) | [当前会议工作流](conference-workflow.md) |
+| 显式运行人工流程 | [Manual 入口](../manual/README.md) | [人工流程操作说明](../manual/docs/workflow.md) |
 
-面向新用户，推荐顺序是 `README → setup → workflow → troubleshooting`；维护者再继续阅读
-`scripts → architecture → data-format → compatibility → maintenance`。Agent 的执行约束仍以根目录 `AGENTS.md` / `SKILL.md`
-为准，本文只负责导航。
+日常运行通常只需阅读安装、主流程和排错说明。维护代码时，再查看脚本、架构、数据、兼容和维护文档。根目录 [AGENTS.md](../AGENTS.md) 与 [SKILL.md](../SKILL.md) 保留执行约束和完整操作要求。
 
-## 默认生产链路
+## 默认日更
 
 ```text
-抓取 → 关键词预筛 → LLM 筛选 → 封存本次官方 arXiv TXT/PDF → 多阶段全文分析
-     → 博客 generate → review → push/远端 OID
-     → TOP 10 长图与汇总封面 → digest:status
+抓取候选 → 关键词预筛 → 模型筛选 → 保存本次官方论文文本与 PDF
+        → 全文分析与评分 → 生成博客 → 审查 → 推送并核对远端提交
+        → 配图生成与登记 → 最终核验
 ```
 
-`npm run digest:prepare -- YYYY-MM-DD` 是默认入口，`digest:api` 是同义命令。
-Manual 不会因模型、网络或配额失败而自动启用。微信、飞书、小红书也不属于默认
-日更链路。
+默认入口是 `npm run digest:prepare -- YYYY-MM-DD`，`digest:api` 与它等价。模型、网络或额度失败不会自动切换到人工流程；微信、飞书和小红书也不属于默认日更。
 
-2026 新会议先完成与 discovery 全集闭合的 PDF 摘要 evidence run，再生成一份绑定当前日更
-Prompt、关键词预筛版本、解析合同、有效 `FILTER_CONFIG`、evidence locator、模型路由和
-taxonomy SHA 的**每会独立** filter spec，最后为同一 discovery/evidence 对建立 filter。spec
-命令必须同时认证 catalog、report 和已 complete 的 evidence run；共享 v4 spec 或把其他会议的
-spec/evidence run 混入都会失败关闭：
+脚本成功退出后，仍需完成内置生图及目检，或记录用户明确取消配图的选择。宣告任务完成前，还须确认 GitHub Pages 构建、部署及每篇页面核验通过，重新读取最终状态。具体要求见[主流程](workflow.md)。
 
-```bash
-npm run conference:new:filter -- spec \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --evidence-run EVIDENCE_RUN_UUID --output iwslt-2026-filter-v5.json
-npm run conference:new:filter -- prepare \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --evidence-run EVIDENCE_RUN_UUID \
-  --spec iwslt-2026-filter-v5.json
-```
-
-`prepare` 输出的 `filterId` 是后续运行和恢复键。先用 `--limit 1` 完成该 filter 的健康
-探针，再用同一参数去掉 limit 续跑；失败项只能显式加 `--retry-failed` 并遵守退避与
-次数上限。推荐的全局并发是最多同时运行 5 个**不同 filter** 的 worker；同一个 filter
-必须单飞，因为其 durable intent、原始响应、usage receipt 与 CAS 状态共用一把锁。不要
-对同一 `filterId` 启动并发 worker，也不要在中断后换 catalog、spec 或 filterId。
-会议 runner 与日更使用相同的结构化决定解析器，但不会在一次 durable intent 内追加日更的
-malformed-format repair 请求：无法解析的响应记为 `failed`，保留原始响应和 usage，待退避后
-由 `--retry-failed` 创建新的、可独立计费审计的 intent。
-
-```bash
-npm run conference:new:filter:run -- --apply \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --evidence-run EVIDENCE_RUN_UUID \
-  --spec iwslt-2026-filter-v5.json --filter FILTER_UUID --owner iwslt.health --limit 1
-npm run conference:new:filter:run -- --apply \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --evidence-run EVIDENCE_RUN_UUID \
-  --spec iwslt-2026-filter-v5.json --filter FILTER_UUID --owner iwslt.worker
-```
+新会议的摘要提取与每会独立筛选配置见[会议工作流](conference-workflow.md)，首次运行、并发和恢复见[筛选健康检查、并发与恢复](conference-workflow.md#筛选健康检查并发与恢复)。历史重写只在历史工作区运行；独立历史发布入口已存在，但生成了暂存页面并不代表整批已经审查或发布。
 
 ## English documentation
 

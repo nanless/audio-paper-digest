@@ -2,9 +2,9 @@
 
 ## 1. 受众、目标与入口
 
-本文给需要运行、恢复、发布或维护默认 LLM/API 论文速递的 Agent。紧凑强约束见 [AGENTS.md](AGENTS.md)，文档地图见 [docs/README.md](docs/README.md)，脚本地图见 [scripts/README.md](scripts/README.md)。
+本文供运行、恢复、发布或维护默认 LLM/API 论文速递的 Agent 使用。关键操作限制见 [AGENTS.md](AGENTS.md)，按任务查文档见 [docs/README.md](docs/README.md)，代码入口见 [scripts/README.md](scripts/README.md)。
 
-默认目标是把一个北京时间批次完整推进到远端博客和发布后视觉终态：
+默认任务是完成北京时间当天的论文筛选、分析、博客发布、上线核验和发布后图片：
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
@@ -12,15 +12,15 @@ npm run digest:prepare -- YYYY-MM-DD
 npm run digest:api -- YYYY-MM-DD
 ```
 
-`full-fetch.js` 只是数据阶段；“运行某日论文速递”要求继续 generate、review、push、内置生图和最终验收。其他渠道不在默认范围。
+`full-fetch.js` 只处理数据。“运行某日论文速递”还要求生成并审查博客、推送、核验部署与网页、用内置工具生图及最终验收。其他渠道不在默认范围。
 
-显式 Manual 是隔离子系统，只在用户明确点名时进入：
+Manual 使用独立的内容与来源记录，只在用户明确点名时进入：
 
 ```bash
 npm run digest:manual -- YYYY-MM-DD
 ```
 
-进入前完整阅读 [manual/README.md](manual/README.md)。默认 API 失败不得改写为 Manual 成功。
+进入前完整阅读 [manual/README.md](manual/README.md)。默认 API 失败时不得切换为 Manual，也不得将失败标成 Manual 成功。
 
 ## 2. 第一次运行
 
@@ -31,7 +31,9 @@ python3.11 -m venv .venv
 cp env.example .env
 ```
 
-在 `.env` 至少配置：
+先确认当前工作区用途，再运行 `npm run workspace:role -- status`。日更目录必须是 `daily`，全历史目录必须是 `history`。角色标记缺失或真实路径不符时先停止，确认用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定；不要无条件强制设置。
+
+在 `.env` 至少配置以下字段。仓库文档当前推荐模型为 `muse-spark-1.3-contributor`，实际模型由项目配置指定：
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=your-key
@@ -45,7 +47,7 @@ HTTP_PROXY=http://127.0.0.1:7897
 PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 ```
 
-Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 且由 OpenSSL 提供 TLS；`scripts/python-runtime.sh` 依次选择项目 `.venv`、`python3.11`，最后才校验 `python3`。项目脚本必须沙箱外执行；沙箱拒绝不是远端服务故障。
+Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 且由 OpenSSL 提供 TLS；`scripts/python-runtime.sh` 依次选择项目 `.venv`、`python3.11`，最后才校验 `python3`。所有项目脚本、测试和检查必须在沙箱外执行；沙箱拒绝不能当成远端服务故障处理。
 
 ## 3. 默认流程概览
 
@@ -57,46 +59,47 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
   → LLM 逐篇筛选
   → 多阶段全文分析
   → 类型感知评分审计
-  → API Reader v3 长文、source-binding v4 与官方 Figure 闭环
+  → API Reader v3 长文、v4 图表来源核验与官方插图
   → generate
   → review
   → push + 远端 OID
+  → 人工核验部署与网页
   → TOP 10 长图 + 汇总封面
   → digest:status
 ```
 
-### 3.1 抓取与候选闭环
+### 3.1 抓取与筛选完整性
 
-`scripts/full-fetch.js` 先按日期归档 current，再抓取 7 个 arXiv 类别与 HuggingFace Papers。抓取不是“尽力而为”：每个必需来源必须有完整 checkpoint、候选数量与稳定内容 SHA。arXiv/HF 均强制项目代理。
+`scripts/full-fetch.js` 先按日期归档当前数据，再抓取 7 个 arXiv 类别与 HuggingFace Papers。每个必需来源都须有完整检查点、候选数量和稳定内容 SHA，缺少其中任何一项都不能算抓取完成。arXiv/HF 均强制使用项目代理。
 
-`raw-candidates.json` 保存合并且博客去重后的全集。关键词预筛只对摘要完整且明显未命中音频词族的补充类别形成确定性否定；核心类别、短摘要和词族命中项必须进入 LLM。筛选结果只有在 `filter-decisions.json` 完整覆盖 raw，且 `filtered-papers.json` 精确等于相关决定减去显式排除时才 complete。
+`raw-candidates.json` 保存合并且博客去重后的全集。关键词预筛只对摘要完整且明显未命中音频词族的补充类别判为不相关；核心类别、短摘要和词族命中项必须进入 LLM。筛选结果只有在 `filter-decisions.json` 完整覆盖 raw，且 `filtered-papers.json` 精确等于相关决定中的论文减去显式排除项时才算完成。
 
 ### 3.2 全文分析与 Reader
 
-每篇论文先获取健康 arXiv HTML，失败时受控回退 PDF；结构不足、错误页和摘要壳不能冒充全文。来源 SHA 变化会失效主分析及下游。
+每篇论文优先使用可验证的 arXiv HTML，获取失败时按代码允许的条件改用 PDF。结构不足、错误页和只有摘要的页面不能当成全文。来源 SHA 变化后，主分析及其下游结果均须重新生成。
 
-默认 API 日更在筛选完成后先运行 sealed source phase：每个入选 arXiv 重新请求官方 HTML 文本和 PDF，原子保存
+默认 API 日更在筛选完成后先封存本次来源：每个入选 arXiv 重新请求官方 HTML 文本和 PDF，通过原子写入保存
 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/source.txt`、`source.pdf`、
-`source-runtime.json` 与 `source-manifest.json`。深度分析与 Reader 只能使用该 generation；同一日同一入选集续跑重放已封存的 pair，不走旧的 text-only 抓取或 `data/current` 图片缓存。图像仅在 OS 临时目录为当前模型调用物化并清理，runtime 永不保存像素、base64、缓存路径或图片文件。单张 Figure 若超过响应上限可跳过该图并继续同篇，其余图片至少成功一张时不会因个别下载失败整篇报废；provider 明确拒绝损坏或不兼容的 PNG 时，会转为白底 RGB JPEG 后重试。
+`source-runtime.json` 与 `source-manifest.json`。深度分析与 Reader 只能使用这一组封存文件。同一天、同一入选集续跑时读取已封存的文本和 PDF，不改走旧的仅文本抓取流程，也不使用 `data/current` 图片缓存。图像仅在系统临时目录为当前模型调用准备，用完清理；运行目录不保存像素、base64、缓存路径或图片文件。单张 Figure 若超过响应上限可跳过该图并继续同篇，其余图片至少成功一张时不会因个别下载失败整篇报废；模型服务明确拒绝损坏或不兼容的 PNG 时，会转为白底 RGB JPEG 后重试。
 
-默认阶段包括：主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、taxonomy 封口、核心摘要封口、评分审计、API Reader 和 Figure 物化。各阶段绑定输入、模型、协议、Prompt、温度、预算和输出 SHA；变化只重跑当前阶段及下游。
+默认阶段包括：主分析、开源扫描、Demo 扫描、审校、表格/方法/结构修复、分类核验、核心摘要核验、评分审计、API Reader 和论文图准备。各阶段记录并验证输入、模型、协议、提示词、温度、预算和输出 SHA；其中任何一项变化，只重跑受影响阶段及其下游。
 
-主分析 canonical 保留 13 个固定中文一级标题供机器解析。真正发布给读者的是 `beginner-researcher-v3`：
+主分析正文保留 13 个固定中文一级标题供机器解析。真正发布给读者的是 `beginner-researcher-v3`：
 
-- 12–18 个按学习依赖递进的小节；
+- 12–18 个小节，先解释必要的概念，再讲依赖这些概念的方法和机制；
 - 5000–18000 中文字；
 - 4–10 组术语组合桥；
-- 数据/协议、主结果、消融/失败、训练或部署成本等叙事表；
-- 官方 Figure 的“导读—看图路径—原图—图注—解释”相邻闭环；
-- Markdown 表逐格绑定原表 DOM cell 或逐字原文 quote，展示公式由结构化原始 TeX 确定性注入；
-- 作者机构逐项重放来源；开源资源逐项绑定原文或已验证 Demo、重定向终点与可达状态，暂时不可达不得冒充可用；
+- 用前后段落说明数据协议、主结果、消融/失败、训练或部署成本的表格；
+- 官方插图依次呈现导读、看图路径、原图、图注和解释，相关段落须相邻；
+- Markdown 表的每个单元格对应原表 DOM 单元格或逐字原文引文，展示公式由结构化原始 TeX 确定性注入；
+- 作者姓名与机构逐项核验来源；开源资源逐项绑定原文或已验证 Demo、重定向终点与可达状态，暂时不可达不得冒充可用；
 - 初学研究者能分清论文事实、有限解释和未验证推测。
 
 ### 3.3 评分
 
 评分八维为：创新性 2、技术严谨性 1.5、实验充分性 1.5、清晰度 1、影响力 1.5、开源 1.5、可复现性 0.5、工程/实践价值 1.5。分项总和最大 11，发布总分由代码重算并封顶 10。
 
-文档类型决定适用证据，不改变权重。一个缺陷只归一个主要维度：产物缺失归开源，配置缺失归可复现性，支撑声明的实验不足归实验充分性，表达问题归清晰度，真实逻辑/推导错误才归技术严谨性。评分审计必须引用证据账本，并记录 `evidenceProfile` 与代码上限。评分变化超过 0.5 分时独立复审；前两次差异超过 0.3 分可再审一次，仅接受三次中差异不超过 0.3 分的一对。多次审计证明必须绑定最终采用的审计 SHA 和分数，并重算共识差值。
+文档类型决定适用证据，不改变权重。一个缺陷只归一个主要维度：产物缺失归开源，配置缺失归可复现性，支撑声明的实验不足归实验充分性，表达问题归清晰度，真实逻辑/推导错误才归技术严谨性。评分审计必须引用证据记录，并保存 `evidenceProfile` 和代码计算的评分上限。评分变化超过 0.5 分时独立复审；前两次差异超过 0.3 分可再审一次，仅接受三次中差异不超过 0.3 分的一对。多次审计证明必须绑定最终采用的审计 SHA 和分数，并重算共识差值。
 
 ## 4. API、代理、并发和上下文
 
@@ -105,15 +108,19 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 | 优先条件 | 协议 | URL |
 |---|---|---|
 | DeepSeek 域名或模型 | OpenAI Chat | `/v1/chat/completions` |
-| 精确 Muse Contributor | OpenAI Responses | `/v1/responses` |
+| Muse 模型或显式 `/responses` 端点 | OpenAI Responses | 完整端点原样使用；基础端点追加 `/responses` |
 | `token-plan` + MiMo | Anthropic | `/anthropic/v1/messages` |
 | Kimi coding | Anthropic | `/coding/v1/messages` |
 | 其他 `/anthropic` | Anthropic | `{base}/messages` |
 | 其他 | OpenAI Chat | `/v1/chat/completions` |
 
-所有 Node LLM 调用经 `requestLlmJson()`。Muse 每次使用独立 HTTP CONNECT agent；其他模型默认 `agent:false`。Python 发布使用同一 Muse 例外。
+所有 Node LLM 调用经 `requestLlmJson()`。Muse 每次请求都创建独立的 HTTP CONNECT 连接对象，结束后销毁；这里的 `agent` 指连接对象，并非分析子代理。其他模型默认以 `agent:false` 直连。Python 发布请求遵守同样的 Muse 代理规则。
 
-配置 `PAPER_ANALYZER_FALLBACK_API_KEYS` 后启用 OpenCode Go 长期 sticky 账号池。初始使用主 key；明确 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，记录账号冷却并按配置顺位向后切换，不回绕前序账号。普通认证 401 不切号而上报运行级错误；所有后续账号不可用时停止派发并保留断点。`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 是所有普通备用账号之后的尾部配置，也支持逗号分隔的第三、第四等顺位。成功账号跨请求、跨 Node/Python、跨日期保持 active，旧账号冷却到期也不自动切回。普通 429、5xx、网络/代理错误、Responses incomplete 和内容校验失败都不切号。状态保存在 `data/runtime/llm-account-pool.json`，不含原始 key 但包含稳定凭据指纹，按敏感操作元数据以 `0600` 保护；损坏时失败关闭。认证信息只会发往由 endpoint/model 精确推导的规范 API URL；主副模型只有属于同一规范 OpenCode Go 服务时才可共享账号池，不同服务必须使用独立 key。
+配置 `PAPER_ANALYZER_FALLBACK_API_KEYS` 后启用 OpenCode Go 备用账号。初始使用主密钥；明确 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，记录账号冷却并按配置顺序向后切换，不返回前面已冷却的账号。普通认证 401 不切号，而是上报运行级错误；所有后续账号不可用时停止派发并保留断点。
+
+`PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 指定排在普通备用账号之后的账号，也支持逗号分隔的第三、第四等顺位。成功账号跨请求、跨 Node/Python、跨日期保持使用，旧账号冷却到期也不自动切回。普通 429、5xx、网络或代理错误、Responses 输出截断和内容校验失败都不切号。
+
+状态保存在 `data/runtime/llm-account-pool.json`，不含原始密钥，但包含稳定凭据指纹，须以 `0600` 权限保护；损坏时停止。在请求中附加认证信息前，核验请求 URL 与 endpoint/model 推导的 API URL 精确相同。主副模型只有属于同一规范 OpenCode Go 服务时才可共享账号池，不同服务必须使用独立密钥。
 
 ### 4.2 默认预算
 
@@ -133,7 +140,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 | `PD_API_READER_CONCURRENCY` | 5，限制 1–5 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5，限制 1–5 |
 
-Muse 筛选和整篇分析都按各自配置并发，每个请求有独立隧道；账号池状态转换仍通过短锁串行。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时 SSE。返回 `incomplete/max_output_tokens` 时不得接受半截 JSON。
+Muse 筛选和整篇分析都按各自配置并发，每个请求有独立隧道；账号池状态更新仍通过短时间持锁串行完成。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时使用 SSE。返回 `incomplete/max_output_tokens` 时不得接受半截 JSON。
 
 ## 5. 权威数据与恢复
 
@@ -141,18 +148,18 @@ Muse 筛选和整篇分析都按各自配置并发，每个请求有独立隧道
 
 | 文件 | 含义 |
 |---|---|
-| `papers.json` | 永不按日移走的去重库与 digest 状态 |
+| `papers.json` | 不随每日批次移走的去重库和运行状态 |
 | `fetch-checkpoint.json` | 每个抓取来源的恢复证明 |
 | `raw-candidates.json` | 筛选全集 |
 | `filter-decisions.json` | 逐篇筛选决定与缓存 |
 | `filtered-papers.json` | 正式入选集 |
-| `deep-analysis-result.json` | canonical、checkpoint 与 production proof |
+| `deep-analysis-result.json` | 正式分析结果、阶段检查点与发布资格证明 |
 | `blog-generation-manifest-*.json` | 生成页面集合和 SHA |
-| `blog-review-receipt-*.json` | review、Git 基线、远端发布证明 |
+| `blog-review-receipt-*.json` | 审查结果、Git 基线与远端发布证明 |
 | `visual-summary-manifests/*.json` | TOP 10 长图任务 |
 | `digest-cover-manifests/*.json` | 汇总封面任务 |
 
-`data/archive/<date>/` 是日期快照，不是自动可信的 current 替代。历史状态只有在跨文件日期、候选、决定和论文集合全部闭合时可用。
+`data/archive/<date>/` 保存日期快照，不能仅因文件存在就替代当前数据。使用历史状态前，须核验各文件的日期、候选、筛选决定和论文集合相互对应。
 
 ### 5.2 恢复命令
 
@@ -166,10 +173,10 @@ npm run digest:prepare -- YYYY-MM-DD
 # 只续分析
 npm run deep -- --date YYYY-MM-DD
 
-# 只续 canonical 中未完成论文
+# 只续正式分析结果中未完成的论文
 npm run batch
 
-# 只退役当前未完成论文的失败 Reader 候选后续跑
+# 只归档并停用当前未完成论文的失败 Reader 候选后续跑
 npm run batch -- --retry-failed-readers
 
 # 强制重分析
@@ -183,9 +190,11 @@ npm run validate:data
 npm run digest:status -- --date YYYY-MM-DD
 ```
 
-从 fetch 开始的日期必须是北京时间当天。历史批次只从脚本允许的安全阶段续跑。不要手改 checkpoint 伪造完成态。
+从 fetch 开始的日期必须是北京时间当天。历史批次只使用已有受控数据，从脚本允许的阶段续跑。不要手改检查点伪造完成状态。
 
-`deep`、`batch`、`reanalyze` 与 `api:reader:refresh` 只恢复当前 default API 日更的 sealed source run：它们重放 `deep-analysis-result.json.dailyFreshSourceRun` 所指向的精确论文集合和每篇 PDF/TXT/runtime/manifest，绝不重新抓取或退回 legacy text/cache。缺少、损坏或与 canonical batchDate/论文集不一致时，命令会在任何 LLM 或图像请求前失败；重新执行 `npm run digest:prepare -- YYYY-MM-DD` 重新建立日更 source phase。Reader 需要的图像仅在本次调用的 OS 临时目录物化。`batch --retry-failed-readers` 只退役当前仍未完成论文的失败 Reader 候选；`reanalyze` 则退役全部旧失败候选并显式清空 Reader/图片补充状态，避免旧成功或旧失败短路强制全量重分析。
+`deep`、`batch`、`reanalyze` 与 `api:reader:refresh` 只恢复当前默认 API 日更的封存来源。它们读取 `deep-analysis-result.json.dailyFreshSourceRun` 指定的论文集合和每篇 PDF、TXT、来源元数据与清单，不重新抓取，也不使用旧文本或缓存。文件缺少、损坏，或与正式分析结果的 `batchDate`、论文集合不一致时，命令会在任何 LLM 或图片请求前停止。目标仍为北京时间当天时，重新执行 `npm run digest:prepare -- YYYY-MM-DD` 建立来源文件；历史日期保留失败记录，按历史维护流程处理。Reader 图片仅在本次调用的系统临时目录中准备。
+
+`batch --retry-failed-readers` 只归档并停用当前未完成论文的失败 Reader 候选。`reanalyze` 则归档并停用全部旧失败候选，并显式清空 Reader 和图片补充状态，确保旧成功或旧失败记录不会跳过强制全量重分析。
 
 ## 6. 博客发布事务
 
@@ -195,19 +204,19 @@ npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-generate 安装精确页面并签发 generation manifest；review 对不可变页面 artifact 做确定性、LLM、图片和 Hugo 审查，逐页 checkpoint，最后签发 receipt；push 只允许 receipt 描述的 Git delta，提交后验证远端 `main` OID。
+`generate` 生成并安装本批页面，保存页面清单；`review` 只读审查最终文件，执行确定性、LLM、图片与 Hugo 检查，逐页保存检查点，再生成审查凭证；`push` 只提交凭证允许的精确 Git 差异，并在推送后验证远端 `main` OID。
 
-远端 OID 和 `digest:status` 的 `remoteVerified` 只证明 Git 发布。宣告上线或任务完成前，另行确认对应 publication commit（或保留该批次已审页面字节的后续提交）的 GitHub Pages workflow 已成功 build/deploy，并逐页检查目标日期汇总及单篇的 HTTP 200、正式地址与标题。保存核验记录；部署失败则读日志、修复并等待重新部署成功。
+远端 OID 和 `digest:status` 中的 `remoteVerified` 只证明 Git 提交已到远端。宣告上线或完成前，须另行确认对应发布提交（或保留本批已审页面字节的后续提交）的 GitHub Pages workflow 已成功 build/deploy，再逐页检查目标日期汇总页和单篇页面的 HTTP 200、正式地址与标题，并保存核验记录。部署失败时读取日志、修复并等待重新部署成功。状态命令尚未自动执行这些上线检查。
 
-标签迁移期间，新 production 页面继续写 Hugo 兼容的扁平 `tags`，但必须同时写入 `paper-taxonomy-flat-tags-compat-v1`、当前 registry/version/SHA、逐标签 concept/facet、`paper_digest_primary_task` 与 `paper_digest_primary_method`。旧页面与旧标签 URL 保持不变；汇总“热门方向”只按显式主任务统计，网页标签总表明确是新旧混合索引。
+标签迁移期间，新发布页面继续写 Hugo 兼容的扁平 `tags`，同时必须保存并核验 `paper-taxonomy-flat-tags-compat-v1`、当前词表的版本与 SHA、逐标签 `concept`/`facet`、`paper_digest_primary_task` 和 `paper_digest_primary_method`。旧页面与旧标签 URL 保持不变。汇总“热门方向”只按显式主任务统计，网页标签总表须说明其中包含新旧两种标签。
 
-逐页审查通过证据的唯一失效条件是该文件内容 SHA 变化。它以“相对路径 + 内容 SHA”持久复用。发布器代码变化仍会使 generate 重新渲染以发现真实字节变化；新 generation manifest、production proof、模型、发布器代码、review 协议指纹或 Hugo 运行时变化都不得导致最终字节未变的文件重审。它们只要求重跑当前确定性/Hugo gate 并重签 receipt。博客基线、remote 名称、push URL 身份或 receipt 与当前批次不匹配仍阻断 push。review 不修改已审页面；修复回到生成阶段。
+逐页审查通过记录按“相对路径 + 内容 SHA”持久复用，只有该文件的内容 SHA 变化才重审。发布器代码变化时仍要重新渲染页面，以发现真实字节变化。新的页面清单、发布资格证明、模型、发布器代码、审查协议指纹或 Hugo 运行时变化，只要求重跑当前批次的确定性/Hugo 检查并生成新的审查凭证，不得让字节未变的文件重审。博客基线、远端名称、推送 URL 身份或凭证与当前批次不符时，仍须阻断推送。审查不能修改已审页面；修正须回到生成阶段。
 
-单篇 `--include-id`、排除 `--exclude-id` 和历史 sealed preview 是显式维护功能，参数必须在三阶段保持一致；不要把单篇事务当成整批发布或视觉依据。
+单篇 `--include-id`、排除 `--exclude-id` 和历史封存预览属于显式维护功能，参数必须在三阶段保持一致；单篇发布不能作为整批发布或整批视觉完成的依据。
 
 ## 7. 发布后视觉
 
-远端 OID 验证后，`push-blog.py` 规划 TOP 10 论文长图和一张汇总封面。项目脚本只管理 manifest、参考缓存和状态，实际绘图只能由 Codex 内置 `image_gen` 完成。
+远端 OID 验证后，`push-blog.py` 规划 TOP 10 论文长图和一张汇总封面。项目脚本只管理图片任务、参考文件和状态，实际绘图只能由 Codex 内置 `image_gen` 完成。
 
 ```bash
 npm run visual:prepare -- --date YYYY-MM-DD
@@ -215,7 +224,11 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-Reader 页面在 `ephemeral-no-persisted-figure-assets-v1` 下保留已签、已校验的 arXiv 官方 HTTPS 图片 URL 供读者直接查看，但不复制或缓存图片字节。`visual:prepare` 对 legacy manifest 复验 `.bin` 缓存并输出真实扩展名的绝对路径；modern 日更会复验官方 URL、ordinal、DOM SHA、像素 SHA 与 MIME，但返回空的 `referencedImagePaths`，只用已签 Reader 文本生图且绝不回退旧缓存。登记前逐图检查标题、中文、结构关系、指标方向、数字与排行榜；`record` 必须带 `--qa-attested true`。用户明确说不生图时，使用 `digest:waive-visuals` 签发绑定当前 publication 与 manifest 的 waiver，不能把 pending 改成 complete。
+采用 `ephemeral-no-persisted-figure-assets-v1` 的 Reader 页面保留已记录且核验通过的 arXiv 官方 HTTPS 图片 URL，供读者查看，不复制或缓存图片字节。`visual:prepare` 处理旧版任务清单时核验 `.bin` 缓存，输出带真实扩展名的绝对路径。当前日更则核验官方 URL、图编号、DOM SHA、像素 SHA 和 MIME，返回空的 `referencedImagePaths`；生图只使用已核验的 Reader 文本，不退回旧缓存。
+
+只将 `visual:prepare` 输出的绝对 `referencedImagePaths` 交给工具。登记前逐图检查标题、中文、结构关系、指标方向、数字与排行榜；`record` 必须带 `--qa-attested true`。只有用户明确取消生图时，才使用 `digest:waive-visuals` 记录与当前发布和图片任务清单绑定的豁免，不能把待完成任务改成已完成。
+
+数据、审查、远端发布、部署及网页核验都必须通过。长图和封面须已完成；只有用户明确取消视觉并记录仍有效的豁免时，才可省略图片。满足这些条件后，整批才算完成。最后一次推送或图片登记后重新运行 `digest:status`，确认数据与图片状态；该报告不能替代人工上线核验。
 
 ## 8. 维护与验证
 
@@ -225,13 +238,13 @@ npm run verify
 # 快速语法+数据子集（不是完整验收）：npm run verify -- --quick
 ```
 
-完整入口包含固定 Hugo 0.160.1、全部 JS、默认/Manual Python、全仓语法和只读数据验证。
-Reader 局部修复、表格三种输入模式与真实用量统计见 [reader-writing](docs/reader-writing.md)。
+完整验证使用固定 Hugo 0.160.1，并运行全部 JS 测试、默认/Manual Python 测试、全仓语法检查和只读数据验证。
+Reader 局部修复、三种表格输入模式与实际请求用量见 [reader-writing](docs/reader-writing.md)。
 
 - 新分析入口复用 `analysis-engine.js`，新 LLM 调用复用公共路由和请求封装。
 - Node/Python 路径进入集中配置；写 JSON 使用原子写和跨进程锁。
-- Prompt 第一个 fenced block 是运行时正文；修改结构化输出时同步解析器、validator、测试和指纹。
+- 提示词文件的第一个围栏代码块是运行时读取的正文；修改结构化输出时同步解析器、校验器、测试和指纹。
 - 日志使用毫秒级北京时间、`0600` 权限并脱敏；不得记录密钥、认证头、Cookie 或 URL userinfo。
 - `data/`、`logs/`、`.env`、缓存和运行产物不得提交。
 - Git 提交信息用具体中文说明原因、范围和影响。
-- 诊断、命令和字段细节按 [docs/README.md](docs/README.md) 路由，不在本文件复制 Manual 或渠道内部协议。
+- 诊断、命令和字段细节见 [docs/README.md](docs/README.md) 中对应的文档，不在本文件复制 Manual 或渠道内部协议。

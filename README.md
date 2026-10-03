@@ -1,6 +1,6 @@
 # Paper Digest
 
-**语音 / 音乐 / 音频论文速递自动化流水线**
+**自动筛选、解读和发布语音、音乐与音频论文**
 
 **[English](README.en.md)** · 中文
 
@@ -16,7 +16,7 @@
 
 ## 默认行为
 
-默认路线是 LLM/API，不是人工流程：
+默认路线是 LLM/API：
 
 ```text
 arXiv + HuggingFace
@@ -27,31 +27,26 @@ arXiv + HuggingFace
 ```
 
 - `digest:prepare` 与 `digest:api` 是同一条默认路线。
-- 默认 API 日更在筛选结束、深度分析开始前，为每个入选 arXiv 论文封存本次官方文本和 PDF。每个
-  sealed source run 位于 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`，
+- 默认 API 日更在筛选结束、深度分析开始前，为每篇入选 arXiv 论文封存本次官方文本和 PDF。
+  来源文件位于 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`，
   包含 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json`。分析与 Reader 只能读取这组
-  已封存的文件；论文图仅在当前请求的 OS 临时目录物化，不写入 `data/current/` 或 runtime 图片缓存。
-- Manual/人工高保障流程只有在明确选择时才启用；API、网络或配额失败不会自动切换。
+  已封存的文件；论文图仅在当前请求的系统临时目录中准备，不写入 `data/current/` 或 runtime 图片缓存。
+- Manual/人工流程只有在明确选择时才启用；API、网络或配额失败不会自动切换。
 - 微信、飞书、小红书是可选集成，不属于默认日更。
 
 ## 全历史重写
 
-全历史工作只在 `audio-paper-digest-rewrite-all` 工作区执行，采用 **direct-local-first**：arXiv 每个
-generation 重取官方 TXT/PDF，会议重放已绑定 SHA 的本地 metadata/PDF；旧博客正文和旧分析不进入写作输入。
-OpenReview 不可达时，替代来源仍默认失败关闭；唯一经代码白名单和用户授权的跨标题例外
+全历史工作只在 `audio-paper-digest-rewrite-all` 工作区执行。当前采用 `direct-local-first` 路线：每轮 arXiv
+重写重新获取官方文本和 PDF；会议论文使用已核验 SHA 的本地元数据和 PDF。旧博客正文和旧分析不能用于写作。
+OpenReview 不可达时，默认停止，不自行改用其他来源。唯一由代码白名单和用户授权的跨标题例外
 `n1mAjfRDZ6` 可导入作者发布在 SSRN 的早期预印本，但分析输入、页面顶部和 staging manifest 都必须明示
-“非 camera-ready”，并绑定来源标题、DOI、receipt 与 source SHA。
+“非 camera-ready”，并记录可核验的来源标题、DOI、获取凭证和来源 SHA。
 
-```text
-本地会议 metadata/PDF ─┐
-                       ├→ direct-inputs → conference-projections → direct-plan
-历史页已有 arXiv 链接 ─┘                                      ├→ direct-scheduler → direct-run → staging
-                                                               └→ direct-aggregate
-```
-
-同一 canonical paper 只重写一次再投影到历史 URL；crosswalk 仅接收 fresh arXiv 获取失败产生的命名 handoff。
-长任务可分批、查看状态、安全暂停和续跑。当前只支持私有 staging；历史 review、activation、push 和远端
-OID 事务完成前不得覆盖博客。完整命令与恢复规则见[历史重写底座](docs/history-rewrite.md)。
+同一篇论文只重写一次，再生成对应历史 URL 的页面。`crosswalk` 备用路线仅接收新一轮 arXiv 获取失败后
+生成的命名交接文件。长任务可分批处理、查看状态、安全暂停和续跑。分析先生成私有页面，再由
+`history:direct-publication` 按 `plan → generate → review → publish → status` 发布；全部来源、页面覆盖、
+审查、Git 基线与远端检查通过前不得覆盖博客。入口存在不代表全历史已处理或发布完成。详见
+[历史重写](docs/history-rewrite.md)与[独立历史发布](docs/history-direct-publication.md)。
 
 ## 5 分钟开始
 
@@ -62,13 +57,19 @@ OID 事务完成前不得覆盖博客。完整命令与恢复规则见[历史重
 npm install
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-
 # 2. 创建并按 docs/setup.md 填写项目配置
 cp env.example .env
 ```
 
-`.env` 至少配置模型 key/model/endpoint、HTTP CONNECT 代理和博客路径；完整字段与 sticky 备用账号规则见
-[环境配置](docs/setup.md)。项目脚本必须在沙箱外运行。
+`.env` 至少配置模型密钥、型号、API 地址、HTTP CONNECT 代理和博客路径。字段与备用账号规则见
+[环境配置](docs/setup.md)。所有项目命令必须在沙箱外运行。先确认当前目录用途，再检查工作区角色：
+
+```bash
+npm run workspace:role -- status
+```
+
+日更目录应为 `daily`，全历史目录应为 `history`。标记缺失或路径不匹配时先停止；确认用途后才用
+`npm run workspace:role -- set daily|history [--force]` 绑定角色，不要直接强制改成日更目录。
 
 ```bash
 # 3. 运行 Node 测试
@@ -79,8 +80,8 @@ today="$(TZ=Asia/Shanghai date +%F)"
 npm run digest:prepare -- "$today"
 ```
 
-`digest:prepare` 会完成数据流程和博客发布，并准备视觉任务，但不会自行调用图像 API。
-随后由 Codex 内置生图完成并目检视觉资产，或在用户明确取消时签发可审计豁免。
+`digest:prepare` 完成数据处理和 Git 发布后准备视觉任务。还需人工确认部署及网页核验通过，并由 Codex
+内置生图工具完成、目检和登记图片；只有用户明确取消时才记录视觉豁免。脚本不会自行调用图像 API。
 
 ```bash
 # 5. 最终验收
@@ -91,10 +92,13 @@ npm run digest:status -- --date "$today"
 
 一次完整日更同时满足：
 
-1. 抓取来源、筛选决定和深度分析均为完整终态。
-2. 汇总页和全部论文页通过 review，博客提交已推送且远端 OID 匹配。
-3. TOP 10 长图与汇总封面均已登记，或存在绑定当前发布版本的显式视觉豁免。
-4. 最新 `digest:status` 不再报告未完成阶段。
+1. 抓取来源、筛选决定和深度分析全部完成，数据相互对应。
+2. 汇总页和全部论文页通过审查，博客提交已推送且远端 OID 匹配。
+3. 对应发布提交（或保留本批已审页面字节的后续提交）的 GitHub Pages build/deploy 成功；人工逐页确认
+   汇总和单篇页面的 HTTP 200、正式地址与标题，并保留核验记录。
+4. TOP 10 长图与汇总封面均已登记，或存在绑定当前发布版本的显式视觉豁免。
+5. 最后一次推送或图片登记后重新运行 `digest:status`，报告不再列出未完成阶段。它尚未自动核验部署和
+   网页，显示完成也不能代替第 3 项。
 
 博客已经发布后，视觉失败不会反向撤销博客，也不应触发博客重新生成或重新审查。
 
@@ -103,18 +107,17 @@ npm run digest:status -- --date "$today"
 | 目的 | 命令 |
 |---|---|
 | 默认当天日更 | `npm run digest:prepare -- YYYY-MM-DD` |
-| 续跑未完成日更分析 | `npm run deep -- --date YYYY-MM-DD`（只重放已封存的 TXT/PDF） |
-| 刷新 API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`（只重放已封存的 TXT/PDF） |
-| 校验 current 数据 | `npm run validate:data` |
+| 续跑未完成日更分析 | `npm run deep -- --date YYYY-MM-DD`（只读取本批已封存的 TXT/PDF） |
+| 刷新 API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`（只读取本批已封存的 TXT/PDF） |
+| 校验当前数据 | `npm run validate:data` |
 | 查看运行数据占用 | `npm run storage:status` |
-| 预览引用感知清理 | `npm run storage:prune` |
+| 预览哪些未引用文件可清理 | `npm run storage:prune` |
 | 查看最终状态 | `npm run digest:status -- --date YYYY-MM-DD` |
 | 单独执行博客三阶段 | `npm run blog:generate` → `npm run blog:review` → `npm run blog:push` |
 | 用户明确取消视觉 | `npm run digest:waive-visuals -- --date YYYY-MM-DD --reason "..."` |
 | 显式 Manual 路线 | `npm run digest:manual -- YYYY-MM-DD` |
 
-所有入口、参数和恢复语义见[脚本说明](docs/scripts.md)；文件到职责的一页索引见
-[`scripts/README.md`](scripts/README.md)。
+参数见[脚本说明](docs/scripts.md)，文件职责见[代码索引](scripts/README.md)。
 
 ## 标签体系与只读历史预览
 
@@ -124,39 +127,33 @@ npm run taxonomy:preview
 npm run taxonomy:serve
 ```
 
-共享词表提供稳定ID、任务父子层级与分面。预览扫描项目配置中的Hugo仓库，保留旧标签及未映射项；界面支持父级查询、同分面“或”和跨分面“且”。所有结果只是历史标签的确定性映射，**不是已审的论文语义重标**，不会修改旧正文、评分或标签URL，也不调用论文模型API。服务只在本机回环地址开放静态预览，不是本机AI助手。
+共享词表定义稳定 ID、任务层级与分类分面。预览读取配置中的 Hugo 仓库，保留旧标签及未映射项，支持
+按父级查询、同分面“或”和跨分面“且”。结果只展示旧标签如何对应词表，**不代表论文已完成语义重标
+和审查**。预览不修改旧正文、评分或标签 URL，不调用论文模型 API；服务仅在本机回环地址提供静态页面。
 
 详见[实施与验收计划](docs/tag-taxonomy-implementation.md)和[标签设计](docs/tag-taxonomy-design.md)。
 
 ## 失败后从哪里继续
 
-- 抓取或筛选中断：直接重跑默认入口，健康 checkpoint 会复用。
+- 抓取或筛选中断：重跑默认入口，程序会复用验证通过的检查点。
 - 只有部分论文分析失败：运行 `npm run deep -- --date YYYY-MM-DD`，或按论文定向重分析。`deep`、`batch`、
-  `reanalyze` 和 `api:reader:refresh` 只能精确重放当前 canonical 已绑定的 sealed TXT/PDF；它们不抓取、不补建
-  source run，也不读取 legacy text/cache。sealed source 缺失或 SHA 漂移时，重新运行
-  `npm run digest:prepare -- YYYY-MM-DD`。
+  `reanalyze` 和 `api:reader:refresh` 只能读取当前正式分析结果绑定的 TXT/PDF。它们不重新抓取、不补建
+  来源文件，也不读取旧文本或缓存。封存来源缺失或 SHA 不符时，只有目标仍为北京时间当天，才重新运行
+  `npm run digest:prepare -- YYYY-MM-DD`；历史日期保留失败记录，按历史维护流程处理。
 - 博客审查或推送失败：修复后运行 `npm run blog:review -- --date YYYY-MM-DD` 或 `npm run blog:push -- --date YYYY-MM-DD`。
 - 视觉任务缺失或失效：运行 `npm run visual:post-publish -- --date YYYY-MM-DD`，不要重发博客。
 - 不确定失败属于哪一层：先看[排错手册](docs/troubleshooting.md)和
   [主流程](docs/workflow.md)。
 
-从 fetch 开始只能绑定北京时间当天。历史批次必须基于已存在的受控数据，从相应恢复
-阶段继续，不能伪造日期重新抓取。
+从抓取阶段开始只能处理北京时间当天。历史批次必须使用已有受控数据，从程序允许的恢复阶段继续，
+不能伪造日期重新抓取。
 
 ## 架构概览
 
-```text
-Node.js 数据层
-  fetch / filter / deep analysis / state / visual manifests
-                         ↓
-Python 发布层
-  Hugo generation / page review / Git transaction / remote verification
-                         ↓
-Codex 视觉层
-  built-in image generation / visual QA / asset record
-```
+Node.js 负责抓取、筛选、分析、运行状态和图片任务；Python 负责生成 Hugo 页面、审查与 Git 发布；
+Codex 内置生图工具负责实际绘图，由 Agent 目检后登记。
 
-默认 API 与显式 Manual 共用博客发布和视觉边界，但内容证据与 provenance 独立，不能混批。
+默认 API 与显式 Manual 共用博客发布和视觉工具，但各自的内容证据与来源记录必须独立，不能混批。
 Manual 的脚本、Prompt、测试和工作流集中在 [`manual/`](manual/README.md)。
 
 ## 数据与输出
@@ -165,9 +162,9 @@ Manual 的脚本、Prompt、测试和工作流集中在 [`manual/`](manual/READM
 |---|---|
 | `data/current/` | 当前候选、筛选、分析、发布凭证和视觉任务状态 |
 | `data/archive/<date>/` | 每日数据快照与最终视觉资产 |
-| `data/runtime/daily-fresh-source-runs/` | 日更筛选后封存、供分析/Reader 重放的官方 TXT/PDF source runs |
-| `data/runtime/fetched-arxiv-sources/` | 历史 direct arXiv generation 重新抓取并封存的官方 TXT/PDF source runs |
-| `data/runtime/` 的其他历史子目录 | 历史 direct plan、analysis、单页 staging 与汇总 staging；不写入博客仓库 |
+| `data/runtime/daily-fresh-source-runs/` | 日更筛选后封存、供分析与 Reader 读取的官方文本和 PDF |
+| `data/runtime/fetched-arxiv-sources/` | 历史 arXiv 重写每轮重新获取并封存的官方文本和 PDF |
+| `data/runtime/` 的其他历史子目录 | 历史重写计划、分析、私有单页与汇总；生成这些文件不写博客 |
 | `logs/` | 脱敏后的运行日志，可在 `.env` 中关闭文件日志 |
 | Hugo 博客仓库 | 汇总页、论文页、主题模板与发布提交 |
 
@@ -181,18 +178,17 @@ npm run test:manual        # 显式 Manual Node 测试
 npm test                   # 两者一起运行
 ```
 
-CI 还运行 Python 单测、JS/Python/shell 语法检查和空数据结构校验。修改配置、评分、
-Prompt 或持久化契约前，请阅读[维护约定](docs/maintenance.md)。
+CI 还运行 Python 单测、JS/Python/shell 语法检查和空数据结构校验。修改前请阅读[维护约定](docs/maintenance.md)。
 
 ## 文档导航
 
 - [文档总览](docs/README.md)：按任务选择下一篇文档。
 - [安装与配置](docs/setup.md)：环境变量、代理、模型和博客仓库。
 - [默认主流程](docs/workflow.md)：归档、抓取、筛选、分析、发布和恢复。
-- [默认 API 架构](docs/architecture.md)：组件调用、单篇 DAG、锁和跨仓库事务。
-- [历史重写底座](docs/history-rewrite.md)：direct-local-first 历史输入、fresh arXiv source、会议 PDF 与 fallback。
+- [默认 API 架构](docs/architecture.md)：组件调用、单篇阶段依赖、锁和跨仓库发布。
+- [历史重写](docs/history-rewrite.md)：历史输入、重新获取的 arXiv 来源、会议 PDF 与备用路线。
 - [脚本说明](docs/scripts.md)：命令参数和运行语义。
-- [数据格式](docs/data-format.md)：checkpoint、canonical、receipt 和 manifest。
-- [契约兼容矩阵](docs/compatibility.md)：当前 writer、历史读取和 production 资格。
+- [数据格式](docs/data-format.md)：检查点、正式分析结果和发布凭证。
+- [契约兼容矩阵](docs/compatibility.md)：当前写入格式、历史读取与允许发布的条件。
 - [排错手册](docs/troubleshooting.md)：API、代理、分析、发布和视觉问题。
-- [Manual 子系统](manual/README.md)：显式人工高保障路线。
+- [Manual 子系统](manual/README.md)：显式人工流程。

@@ -2,96 +2,112 @@
 
 ## Method
 
-Find the earliest failed gate. Run all diagnostics outside the sandbox; inability to reach a local proxy inside the sandbox is not a target-site diagnosis.
+Start with the earliest failed stage and identify its inputs, configuration, and records before choosing a recovery command. All project diagnostics run outside the sandbox. Failure to reach a local proxy inside the sandbox does not establish a target-site outage. Do not edit checkpoints or source files merely to suppress an error.
 
 ## Missing Configuration
 
-Inspect repository-root `.env`, not shell variables. The required triplet is API key/model/endpoint, and public endpoints require HTTPS. Project loaders intentionally clear inherited values.
+Check that repository-root `.env` exists, has suitable permissions, and defines `PAPER_ANALYZER_API_KEY`, `PAPER_ANALYZER_MODEL`, and `PAPER_ANALYZER_ENDPOINT`. Public endpoints require HTTPS. Project loaders clear inherited project variables, so `.zshrc` cannot fill missing values.
+
+```bash
+ls -l .env
+npm run workspace:role -- status
+```
+
+The role must match the directory's purpose. If the marker is missing or its real path does not match, follow [Setup](setup.md) before binding the role. `node scripts/test-api-key.js` can test the model connection separately, but sends a real API request and is not an offline check.
 
 ## Muse Failure or Empty Response
 
-Confirm exact model, project HTTP CONNECT URL, external runtime, expected proxy region, and whether optional SSE is compatible. Muse must not be switched to direct access. `incomplete/max_output_tokens` is truncation; adjust evidence/output budgets or prompt and retry.
+Check that the model name matches project configuration, `HTTPS_PROXY` or `HTTP_PROXY` supplies an `http(s)://` CONNECT proxy, and the command runs outside the sandbox. Verify the expected proxy exit region for the account. If `PD_OPENAI_RESPONSES_STREAM=1` is enabled, check that the proxy supports SSE.
 
-With fallback accounts configured, inspect `data/runtime/llm-account-pool.json` for `activeAccountId`, `limitClass`, and `blockedUntil`; raw keys are never stored there. Do not delete or edit state merely to force the primary account back. Sticky routing reselects only when the current account receives an explicit `GoUsageLimitError`. Corrupt state, an invalid generation, or an unsafe state path fails before network I/O, while a generic 429 keeps the current account and follows normal short rate-limit backoff.
+Muse uses a separate CONNECT proxy connection object for each request and destroys it afterward. Do not switch it to direct access. `incomplete/max_output_tokens` means truncation: adjust evidence, output budgets, or the prompt and retry. Never accept partial JSON.
+
+With fallback accounts configured, inspect `activeAccountId`, `limitClass`, and `blockedUntil` in `data/runtime/llm-account-pool.json`. It contains no raw key, but credential fingerprints remain sensitive: keep permissions at `0600` and do not upload or archive it.
+
+Only an explicit `GoUsageLimitError` or `Insufficient balance` on the current account switches to a later account. Other authentication 401 responses stop the run, while generic 429 responses retain the account and follow rate-limit backoff. Do not delete or edit state to force a primary-account return. Cooldown expiry never switches it back automatically. Corrupt state, an invalid generation counter, or an unsafe path stops requests before network I/O.
 
 ## MiMo/Kimi 403
 
-These providers normally use `agent:false` direct connections. Check for callers bypassing `requestLlmJson()` or injecting an agent. Do not copy Muse proxy behavior to ordinary models.
+These requests normally connect directly with `agent:false`. If direct curl succeeds but the script returns 403, check for callers bypassing `requestLlmJson()` or supplying a proxy connection object. Do not apply Muse's required proxy routing to other models.
 
 ## arXiv or HuggingFace Failure
 
-arXiv requires HTTP CONNECT. HuggingFace curl may use SOCKS in addition. Respect 429 backoff and preserve per-source checkpoints. Proxy absence cannot be reported as a healthy empty HuggingFace source. Metadata-shell HTML should continue to PDF fallback.
+Check the project proxy and the affected source checkpoint. arXiv Node requests require HTTP CONNECT; HuggingFace curl may additionally use `ALL_PROXY=socks5h://...`. Respect configured 429 backoff rather than deleting checkpoints and increasing concurrency.
+
+If candidate counts or SHA values do not match, fetch only that source again. Missing proxy configuration cannot establish a healthy empty HuggingFace result. HTML containing metadata but no reliable full text should lead to PDF extraction during source capture.
 
 ## Incomplete Filter State
+
+Run the read-only check:
 
 ```bash
 npm run validate:data
 ```
 
-Look for raw/decision SHA mismatch, incomplete coverage, pending API errors, non-related filtered items, or partially refreshed model/prompt/keyword versions. Resume filtering; do not delete unknown decisions.
+Look for mismatched candidate/decision input SHA, missing decisions, API failures still marked `pending`, non-`related` selected items, or partially updated model, prompt, and keyword versions. Resume filtering to complete the decisions; do not delete unknown ones.
 
 ## Slow or Repeated Analysis Failure
 
-Identify the failed stage. Whole-paper concurrency defaults to 3, Reader heavy work to 5, and Muse filtering follows `PD_FILTER_BATCH_SIZE`. Primary, repair, and Reader have separate budgets.
+Identify the failed stage and its saved records before restarting an entire paper. Whole-paper concurrency defaults to 3, heavy Reader stages to 5, and Muse filtering follows `PD_FILTER_BATCH_SIZE`. Primary analysis, local repair, and Reader generation have separate output and context budgets.
+
+Reader repair normally allows 8000 output tokens. If a repair truncates exactly at the base limit and the candidate remains eligible for extra recovery, the run saves the failed draft and stops. The next explicit resume can use one higher-budget repair, up to 16000 tokens by default. This attempt is shared with implementation-upgrade recovery and cannot be stacked with it; custom limits still depend on full-article and base-repair budgets. Any model content consumes the attempt, while a transport failure without content does not. Truncated content remains invalid.
 
 ```bash
 npm run deep -- --date YYYY-MM-DD
+npm run batch -- --retry-failed-readers
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 ```
 
-A retained older success plus a latest failure still requires retry.
+Source SHA, prompt, or model changes rerun the affected stages and necessary downstream work. An older successful article cannot hide the latest failure. `batch --retry-failed-readers` stops reusing failed candidates only for unfinished papers; use `reanalyze` to force all analysis again and clear old Reader/image-supplement state.
 
-If a recovery command reports a missing or drifted sealed daily source, do not edit a checkpoint or reuse old `data/current` text. Re-run `npm run digest:prepare -- YYYY-MM-DD` so its source phase seals a new PDF/TXT pair.
+If a recovery command reports missing or changed daily sources, do not edit checkpoints or insert old `data/current` text. While the target is still Beijing today, rerun the same dated `npm run digest:prepare -- YYYY-MM-DD` to establish the sources. Historical dates cannot restart at fetch; retain the failure records and follow the historical maintenance workflow.
 
 ## Historical Direct Source or Staging Failure
 
-Identify the route before starting a crosswalk. An arXiv direct item's current generation must contain TXT,
-PDF, runtime metadata, and manifest at
-`data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`. Re-running the same
-Run `history:direct-scheduler` until every selected paper is `ready` in the same plan/generation status.
-`history:direct-run --apply` is replay-only and rejects missing/handoff/failed scheduler state before any model call;
-staged pages whose renderer identity is stale are selected again for source/analysis replay and page-only
-restaging under a renderer-specific directory, without another LLM call or overwriting the older staging packet;
-rerunning it then reuses matching source-bound analysis checkpoints. A failed fresh
-acquisition writes only an immutable handoff; it does not mutate crosswalk automatically or block the local
-conference queue.
+Identify the source route first. The current sealed files under `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/` must contain text, PDF, runtime metadata, and a manifest. The `generation` number identifies a source capture, not the paper’s arXiv `vN` version. Run the same `history:direct-scheduler` until every selected paper is `ready` for that plan and source generation, then run `history:direct-run --apply`.
 
-When the exact failure is HTTP 404 for the current unversioned arXiv PDF, rerunning the same generation may use an
-official historical `vN` PDF only for that canonical ID. A successful fallback must seal self-hashed `sourceVersion`
-evidence, derive `source.txt` from the selected PDF bytes, include the current-unavailable warning in analysis input,
-and render the same warning at the top of the final paper page. Never import a cross-ID/query/fragment URL or patch the
-checkpoint. Ordinary current-PDF bundles do not enter this conditional path; if every same-ID version remains
-unavailable, use the named handoff fallback without guessing a replacement identity.
+Direct-run never fetches missing sources. It stops before model calls if scheduler state is missing, `handoff`, or `failed`. Rerunning verifies sources and reuses stages in `analysis-recovery.json` that still match. If the renderer changed, it can rebuild staged pages from matching analysis without another model request or overwriting older staging files.
 
-Use one `history:status ... --verify-sources true` invocation to rehash external conference metadata/PDF files when
-path drift is suspected. Do not combine deep verification with watch; normal/watch status uses path/type/size checks.
+If the current unversioned arXiv PDF explicitly returned HTTP 404, rerun the same generation unchanged. The system may try official historical versions of that same paper, never a guessed replacement ID. A successful fallback requires a `sourceVersion` record of the current 404, `source.txt` extracted from the selected PDF, a version warning at the top of analysis input, and a current-unavailable warning on the final page. Source identity and hashes must match.
 
-For a conference direct item, check the local-source manifest metadata/PDF paths and SHA, frozen inventory SHA,
-and conference projection. Do not substitute old post prose, old analysis, filename similarity, or an ad-hoc
-title search. An unavailable/damaged local conference source fails that direct item closed. Only a named immutable
-arXiv fresh-acquisition failure handoff can enter the crosswalk fallback.
+Never import a replacement or alter checkpoints if current-PDF 404 was not established, the URL identifies another paper, or it contains a query or fragment. Ordinary current-PDF sources do not use this conditional path. If every official version of the same paper is unavailable, use only the saved, explicitly named arXiv failure handoff for the corresponding fallback workflow.
 
-## Mechanical Reader, Detached Tables, or Figures
+If external conference paths may have changed, run one `history:status ... --verify-sources true` check to rehash metadata and PDFs. Do not combine deep verification with watch. Ordinary status checks paths, types, and sizes without repeatedly reading large files.
 
-Check term-pair roles and combination meaning; table question/conditions/interpretation; figure lead/viewing path/caption/explanation; no-pixel visual guesses; and ambiguous pronouns. Fix analysis/structured findings and refresh Reader. Review must not rewrite the page.
+For conference items, check local-source metadata/PDF paths and SHA, frozen inventory, and conference page mappings. Missing or damaged local conference input stops that item; it cannot enter the arXiv handoff route. Do not substitute old blog prose, old analysis, filename similarity, or ad-hoc title searches.
 
-For a failed Reader candidate, `npm run batch -- --retry-failed-readers` retires candidates only for currently incomplete papers; `reanalyze` additionally clears all Reader/image-supplement state for a true full retry. For tables, verify that `selection` names real DOM rows/columns, marker-to-binding order is uniquely recoverable, and quote pruning still leaves at least two columns and one data row. A single oversized Figure is skipped; investigate proxy, URL, MIME, or source PDF only when no Figure can be materialized.
+## Repetitive Prose or Poorly Integrated Tables and Figures
+
+Compare `apiReaderPlan` with the article. Check whether combined terms explain each component's role and why they work together, whether tables connect a comparison question to results and limits, and whether figures have adjacent guidance, viewing steps, images, captions, and explanation. The model must not describe colors, axes, or modules it has not seen. Pronouns must have clear referents.
+
+Revise prompts or structured review findings and refresh the Reader rather than changing pages during blog review. Table-count diagnostics use `reader_table_count_insufficient`, `requiredCount`, and `actualCount` for recovery; operators must not edit them. If a table exists but lacks its source record, repair that record rather than blindly adding a table.
+
+Check that `selection` names real DOM rows and columns, table markers have a unique ordered mapping to source records, and quote-based pruning leaves at least two columns and one data row. Old structured evidence must pass source-manifest and full-text SHA checks and be verifiable using its recorded parser version. The only exception is an implementation-recognized no-layout source marker with empty table, formula, and figure arrays. An arbitrary layout declaration is not enough, and sealed source files must not be rewritten to create new hashes.
+
+A single `RESPONSE_TOO_LARGE` figure is skipped. Investigate proxy, URL, MIME, or source PDF if no figure can be prepared successfully.
 
 ## Generate Failure
 
-Check production proof, batch date, eight scores, Reader v3, authors, safe image URLs, and target blog worktree. Generate refuses to overwrite overlapping manual Git edits. Include/exclude scope mismatches are intentional failures.
+Check current publication eligibility, batch date, eight scores, Reader v3, affiliations, safe image URLs, and the target blog worktree. Generate refuses to overwrite overlapping manual Git edits. A requested inclusion or exclusion that matches no paper also stops generation; it protects publication scope.
 
 ## Review Failure
 
-Content findings return to generation or analysis. Transient API failures retry only affected pages. Per-page passes are permanently keyed by relative path plus exact page-content SHA, so only changed bytes re-review that file. Generation-manifest metadata, model, publisher-code, protocol, or Hugo-runtime changes rerun batch gates and reissue the receipt without re-reviewing unchanged files. Baseline or remote drift still blocks push.
+Review reads pages without changing them. Content corrections return to generation or analysis; transient API failures retry only affected pages. Per-page passes are keyed by relative path and content SHA. Changed content requires another review. Generation metadata, model, code, protocol, or Hugo-runtime changes rerun current-batch checks and produce a current receipt without re-reviewing unchanged pages. A changed Git baseline or remote identity still blocks push.
 
-For Hugo memory problems, first eliminate stale parallel Hugo processes and verify repository/theme selection. Never skip Hugo to issue a receipt.
+For Hugo memory failures, check for stale parallel processes and confirm the target repository and theme before running the controlled build check. Never skip Hugo and record a successful review.
 
 ## Push Failure
 
-Verify receipt/generation binding, current HEAD versus review baseline, exact worktree/index delta, remote identity, and live remote `main`. Push neither generates nor reviews and cannot use an unrelated local commit to bypass the receipt.
+Check that the receipt matches current generation, blog `HEAD` remains the review baseline, staged/unstaged/untracked files match the exact allowed delta, the remote name and push URL are unchanged, and remote `main` matches the retryable commit.
+
+Push does not generate or review content and cannot bypass the receipt through an existing local commit. If a valid local publication commit was not successfully pushed, resume through the original entry so the system can verify and reuse it without broadening scope.
+
+### Git was pushed but pages are not live
+
+Check GitHub Pages build and deployment for the publication commit. Read logs and fix failures, then wait for success. If a later commit was deployed, verify that it retains this batch's reviewed page content. Check every digest and paper page for HTTP 200, the formal URL, and the correct title, and retain the results. A matching remote commit or complete `digest:status` report cannot replace these manual checks.
 
 ## Visual Pending or Record Failure
+
+Confirm remote publication verification, then run:
 
 ```bash
 npm run visual:prepare -- --date YYYY-MM-DD
@@ -99,12 +115,12 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-Legacy manifests use emitted absolute reference paths. Modern ephemeral manifests intentionally emit an empty reference list after replaying signed Figure identity; they never fall back to old cache files. Record requires the current token, canonical asset, and `--qa-attested true`. Publication, manifest, or asset changes invalidate completion.
+Use only absolute reference paths emitted by the current prepare command. Modern daily tasks intentionally return an empty list after verifying official figure identity; do not substitute old caches. Record requires the current task token, canonical analysis file, and `--qa-attested true` after visual inspection. Manifest, publication, or image SHA changes invalidate older completion records.
 
 ## Stale Status
 
-`digest:status` is a snapshot. Regenerate it after push, record, or waiver. Current-date failures are never hidden by archives; historical archives must still satisfy cross-file contracts.
+`digest:status` is a read-time snapshot. Regenerate it after push, image record, or waiver. Current-date failures are never hidden by archives; historical archives must still have matching dates, sources, and paper sets. Live-site status also requires the deployment and page checks above.
 
 ## Escalation Evidence
 
-Provide command, date, earliest error, stage, manifest path, and a redacted log excerpt. Never include keys, authentication headers, cookies, or full `.env` contents.
+Provide the command, target date, earliest error, stage, relevant manifest path, and a redacted log excerpt. Never include API keys, authentication headers, cookies, or complete `.env` contents.

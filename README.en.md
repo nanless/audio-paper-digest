@@ -15,7 +15,7 @@ Fetch candidate papers from arXiv and HuggingFace Papers, filter and analyze the
 
 ## Default behavior
 
-The default route is LLM/API, not the human workflow:
+The default route uses an LLM through its API:
 
 ```text
 arXiv + HuggingFace
@@ -29,9 +29,9 @@ arXiv + HuggingFace
 - After filtering and before deep analysis, every selected arXiv paper is captured into a sealed source
   generation at `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`.
   It contains `source.txt`, `source.pdf`, `source-runtime.json`, and `source-manifest.json`. Analysis,
-  Reader, generate, review, and push replay that exact bundle. Figure pixels exist only in an active
-  OS-temporary call and never become a runtime image cache.
-- Manual runs only when explicitly selected; API, network, or quota failures never switch provenance.
+  Reader, generate, review, and push validate and use that exact bundle. Images for a model request
+  are prepared in the system temporary directory and cleaned up afterward; their pixels are never saved in a runtime cache.
+- Manual runs only when explicitly selected; API, network, or quota failures never switch to it automatically.
 - WeChat, Feishu, and Xiaohongshu are optional integrations, not part of the default daily run.
 
 ## Start in five minutes
@@ -57,9 +57,23 @@ PAPER_ANALYZER_FALLBACK_API_KEYS=...
 PAPER_ANALYZER_MODEL=...
 PAPER_ANALYZER_ENDPOINT=https://...
 HTTPS_PROXY=http://127.0.0.1:7897   # HTTP_PROXY is also supported; see Setup
+PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 ```
 
-Fallback accounts use persistent sticky failover across processes and dates; they are not round-robin load balancing. See [Setup](docs/en/setup.md) for model, protocol, and proxy requirements. Project commands must run outside the sandbox; entrypoints reject a restricted sandbox before network, logging, or writes.
+After an allowed account switch, later requests keep using the successful account across processes and dates.
+Accounts are not rotated to balance load. See [Setup](docs/en/setup.md) for the switching conditions, model,
+protocol, and proxy requirements. Project commands must run outside the sandbox; entrypoints reject a
+restricted sandbox before network access, logging, or writes.
+
+Confirm the purpose of this checkout, then inspect its role:
+
+```bash
+npm run workspace:role -- status
+```
+
+The daily checkout must be `daily`; the full-history checkout must be `history`. Stop if the marker is
+missing or its real path does not match. Only after confirming the directory purpose, use
+`npm run workspace:role -- set daily|history [--force]` to bind the appropriate role.
 
 ```bash
 # 3. Run Node tests
@@ -70,7 +84,9 @@ today="$(TZ=Asia/Shanghai date +%F)"
 npm run digest:prepare -- "$today"
 ```
 
-`digest:prepare` completes data processing and blog publication, then prepares visual tasks. It does not call an image API. Codex built-in image generation must finish and inspect those assets, or record an explicit user-requested waiver.
+`digest:prepare` processes the data, publishes the Git commit, and prepares visual tasks. The Agent must
+then verify deployment and the live pages, use Codex built-in image generation, inspect each image,
+and record the results. An explicit user-requested waiver may replace the visuals. Scripts do not call an image API.
 
 ```bash
 # 5. Verify final status
@@ -81,10 +97,14 @@ npm run digest:status -- --date "$today"
 
 A complete daily run means all of the following:
 
-1. Fetch sources, filter decisions, and deep analysis are in complete terminal states.
+1. Fetching, filtering, and deep analysis are complete, and their data matches across files.
 2. The digest and every paper page passed review; the blog commit is pushed and matches the remote OID.
-3. TOP 10 infographics and the digest cover are recorded, or a waiver binds the current publication.
-4. The latest `digest:status` report no longer lists an incomplete stage.
+3. GitHub Pages build/deploy succeeded for the publication commit, or a later commit that preserves the
+   reviewed page bytes. The Agent manually checks HTTP 200, the official address, and the title of every
+   digest and paper page, and saves the deployment and page-check records.
+4. TOP 10 infographics and the digest cover are recorded, or an explicit waiver binds the current publication.
+5. A fresh `digest:status` report, read after the last push or image record, lists no incomplete stage.
+   This command does not yet verify deployment or live pages; it cannot replace step 3.
 
 Once the blog is published, a visual failure does not revoke it and must not trigger blog regeneration
 or another page review.
@@ -109,11 +129,16 @@ frozen historical arXiv links ─────────┘                    
 - A crosswalk is a strict arXiv-failure-only fallback: it accepts only a named immutable arXiv
   fresh-acquisition handoff. An unavailable or damaged retained conference source fails its direct route closed;
   it never enters a crosswalk and does not gate the remaining direct queue.
-- Historical output remains private runtime source/analysis/page/aggregate staging. Historical
-  review, activation, commit/push receipt, and remote-OID publication are not implemented.
+- Analysis first produces private source, analysis, page, and aggregate files. The independent
+  `history:direct-publication` entry provides `plan → generate → review → publish → status`. It requires
+  complete source and page coverage, successful reviews, and valid Git baseline and remote checks
+  before replacing blog pages. The presence of this entry does not mean the full history has been processed or published.
+- Alternative OpenReview sources are rejected by default. The sole authorized cross-title exception,
+  `n1mAjfRDZ6`, may use the authors' SSRN preprint, with an explicit “not camera-ready” notice in model
+  input, the page header, and staging manifest, plus verified source title, DOI, acquisition receipt, and source SHA.
 
 The active commands and exact absolute-path arguments are documented in the Chinese
-[historical rewrite guide](docs/history-rewrite.md).
+[historical rewrite guide](docs/history-rewrite.md) and [independent historical publication guide](docs/history-direct-publication.md).
 
 ## Core commands
 
@@ -147,10 +172,12 @@ See the [implementation plan](docs/tag-taxonomy-implementation.md) and [taxonomy
 
 ## Where to resume after a failure
 
-- Interrupted fetch/filter: rerun the default entry; healthy checkpoints are reused.
+- Interrupted fetch/filter: rerun the default entry; checkpoints that pass validation are reused.
 - Only some analyses failed: run `npm run deep -- --date YYYY-MM-DD` or targeted reanalysis. These
-  recovery entries never refetch or reuse legacy text/cache; a missing or drifted sealed bundle requires
-  `npm run digest:prepare -- YYYY-MM-DD` to create a new source generation.
+  recovery commands read only the current analysis data's bound source bundle. They never refetch, create
+  replacement source files, or reuse legacy text/cache. If files are missing or their SHA no longer matches,
+  rerun `npm run digest:prepare -- YYYY-MM-DD` only while the target date is still Beijing today.
+  For historical dates, retain the failure records and follow the historical maintenance workflow.
 - Blog review/push failed: resume with `npm run blog:review -- --date YYYY-MM-DD` or `npm run blog:push -- --date YYYY-MM-DD`.
 - Visual tasks are missing or stale: run `npm run visual:post-publish -- --date YYYY-MM-DD`; do not republish the blog.
 - Unsure which stage failed: start with [Troubleshooting](docs/en/troubleshooting.md) and
@@ -184,11 +211,11 @@ evidence and provenance. Manual scripts, prompts, tests, and workflow live under
 | `data/archive/<date>/` | Daily snapshots and final visual assets |
 | `data/runtime/daily-fresh-source-runs/` | Daily official PDF/TXT source generations used by API analysis and publication replay |
 | `data/runtime/fetched-arxiv-sources/` | Official PDF/TXT source generations for historical direct arXiv rewrites |
-| other historical `data/runtime/` directories | Direct plans, private analysis, page staging, and aggregate staging; never a blog publication |
+| other historical `data/runtime/` directories | Rewrite plans, private analysis, pages, and aggregates; creating them does not publish the blog |
 | `logs/` | Redacted run logs; file logging can be disabled in `.env` |
 | Hugo blog repository | Digest pages, paper pages, templates, and publication commits |
 
-See [Data formats](docs/en/data-format.md) for fields and cross-file invariants.
+See [Data formats](docs/en/data-format.md) for fields and the relationships checked across files.
 
 ## Development and maintenance
 
@@ -207,13 +234,13 @@ contracts.
 - [Documentation map](docs/README.md): choose the next document by task.
 - [Setup](docs/en/setup.md): environment, proxy, model, and blog repository.
 - [Default workflow](docs/en/workflow.md): archive, fetch, filter, analysis, publication, and recovery.
-- [Default API architecture](docs/en/architecture.md): components, state machines, locks, and publication transactions.
+- [Default API architecture](docs/en/architecture.md): components, stage dependencies, locks, and publication checks.
 - [Historical rewrite guide](docs/history-rewrite.md): direct-local inputs, fresh arXiv sources, conference PDFs, and fallback boundaries.
 - [Script responsibilities](docs/en/scripts.md): command arguments and runtime semantics.
-- [Data formats](docs/en/data-format.md): checkpoints, canonical data, receipts, and manifests.
-- [Contract compatibility](docs/en/compatibility.md): current writers, historical reads, and production eligibility.
+- [Data formats](docs/en/data-format.md): checkpoints, accepted analysis records, and publication records.
+- [Contract compatibility](docs/en/compatibility.md): current output formats, historical reads, and publication requirements.
 - [Troubleshooting](docs/en/troubleshooting.md): API, proxy, analysis, publication, and visual failures.
-- [Manual subsystem](manual/README.md): explicit high-assurance human workflow.
+- [Manual subsystem](manual/README.md): explicitly selected human workflow.
 
 ## Optional integrations
 
