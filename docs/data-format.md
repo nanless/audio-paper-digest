@@ -9,7 +9,7 @@
 1. **持久库**：跨批次累积，例如 `papers.json`。
 2. **日期批次状态**：raw、decisions、filtered、deep，可从 current 归档到日期目录。
 3. **事务凭证**：generation、review、publication、视觉 manifest，绑定精确字节和外部状态。
-4. **跨批次运输状态**：`data/runtime/llm-account-pool.json` 保存 OpenCode Go sticky 账号和配额冷却，不随 current 归档。
+4. **跨批次请求状态**：`data/runtime/llm-account-pool.json` 记录 OpenCode Go 当前使用的账号和配额冷却时间，不随当日数据归档。
 
 任何对象的 `complete` 都是契约结论，不是文件名或布尔字段的自我声明。
 
@@ -51,17 +51,28 @@ Node 与 Python 使用同一目录锁协议和耐久原子写；锁只覆盖选�
 `source-runtime.json` 与 `source-manifest.json` SHA。少一份文件、存在额外文件、来源/集合漂移或混入 legacy
 provenance 都不能成为默认 API production。
 
-## 日更 sealed source run
+## 日更封存来源
 
 日更 run 位于 `data/runtime/daily-fresh-source-runs/<runId>/`。它的计划合同为
 `daily-fresh-source-run-v1`，每个 `<arxivId>/generation-000001/` 只能包含四个私有文件：
 
 - `source.txt`：本次官方全文文本；
 - `source.pdf`：本次官方 PDF 原字节；
-- `source-runtime.json`：结构化 artifacts、作者/图像 URL 等无像素 metadata，并绑定 TXT SHA；
-- `source-manifest.json`：四件 source 文件、官方 URL、提取器、字节数和 SHA 的封口。
+- `source-runtime.json`：结构化证据、作者信息、图片网址等元数据，以及对应的文本 SHA，不保存图片像素；
+- `source-manifest.json`：各文件的身份、官方网址、提取器、字节数和 SHA，用于重新核验来源。
 
 这些是可重放证据，不是可按日期归档轮换的缓存。图像字节、base64、缓存路径和临时文件名不得写进该目录。
+
+当前官方 PDF 确认返回 HTTP 404 后，来源获取器可以使用同篇论文的官方历史版本。
+此时 `source-runtime.json.sourceVersion` 保存 `arxiv-historical-version-source-v1`
+记录，包括实际使用的 `selectedSourceId`、对应 PDF 地址、当前 PDF 的 404 记录、
+固定警告和身份 SHA。文本与 PDF 必须使用同一个历史版本，普通当前 PDF 不能
+携带这条历史版本记录。Node 与 Python 都逐项检查这些条件，不仅检查文件哈希。
+
+论文的 `sourceVersion` 必须与封存记录一致，两处 `freshRewriteProvenance` 中的
+`sourceVersionIdentitySha256` 也必须匹配。没有这个绑定的旧历史版本分析需要
+重新分析，不能在旧成功结果上补写证明。正常来源没有这些可选字段，沿用原有
+来源快照字段顺序和 SHA；新增标题或版本说明不改变原快照的计算方式。
 
 ## 分析来源与恢复
 
@@ -110,7 +121,7 @@ schema v3 generation 记录：
 
 Reader v3 与 Manual v6 的新论文页同时签发
 `researcher-workbench-v1` front matter。它保存中文读者标题、原始标题、规范
-arXiv ID、仅在输入明确携带时才保存的 `vN`、版本一致的 abs/PDF URL、主任务、
+arXiv ID、输入明确携带或封存来源已验证的 `vN`、版本一致的 abs/PDF URL、主任务、
 数值评分、排名分档、文档类型、一句话主线、结构化作者与原摘要 SHA。原始摘要不
 塞入 front matter，而是保存在同批
 `static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`。

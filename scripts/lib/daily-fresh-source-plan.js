@@ -241,7 +241,14 @@ function isPaperBoundToPlan(paper, plan) {
     try {
         const details = readDailyFreshSource(plan, paper);
         const proof = paper?.freshRewriteProvenance;
+        const versionMatches = details.sourceVersion
+            ? Object.hasOwn(paper || {}, 'sourceVersion')
+                && stableHash(paper.sourceVersion) === stableHash(details.sourceVersion)
+                && proof?.sourceVersionIdentitySha256 === details.sourceVersion.identitySha256
+            : !Object.hasOwn(paper || {}, 'sourceVersion')
+                && !Object.hasOwn(proof || {}, 'sourceVersionIdentitySha256');
         return Boolean(proof && proof.contract === fresh.CONTRACT && proof.runId === plan.runId
+            && versionMatches
             && proof.sourceGeneration === SOURCE_GENERATION
             && proof.sourceManifestSha256 === details.freshSourceDescriptor.sourceManifestSha256
             && proof.sourceSha256 === details.freshSourceDescriptor.sourceSha256
@@ -288,7 +295,7 @@ const GENERATED_FIELDS = Object.freeze([
     'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
     'apiReaderArticle', 'apiReaderArticleSha256', 'apiReaderPlan', 'apiReaderFigures', 'apiReaderResources',
     'imageManifest', 'freshRewriteProvenance', 'sourceSha256', 'sourceTextChars', 'sourceWarnings',
-    'analysisSource', 'sourceId', 'usedTextSha256', 'structuredArtifactsSha256', 'fullTextAvailable',
+    'analysisSource', 'sourceId', 'sourceVersion', 'usedTextSha256', 'structuredArtifactsSha256', 'fullTextAvailable',
     'fullText', 'pdfText',
     // These values are generated image-recovery state, not source metadata.
     // Retaining them would let a new sealed daily source run select a URL from
@@ -382,6 +389,9 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
     if (typeof callback !== 'function') fail('daily recovery callback is required');
     const id = normalizedId(paper);
     const sourceDetails = readDailyFreshSource(plan, paper);
+    const sourceVersion = sourceDetails.sourceVersion ? clone(sourceDetails.sourceVersion) : null;
+    if (sourceVersion) paper.sourceVersion = clone(sourceVersion);
+    else delete paper.sourceVersion;
     const figureCache = new Map();
     const result = await direct.withDirectRewriteAnalysisSource({ paperId: `arxiv:${id}`,
         route: 'arxiv-fresh-fetch', sourceDetails, runId: plan.runId,
@@ -390,6 +400,9 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
         sourceGeneration: sourceDetails.freshSourceDescriptor.sourceGeneration,
         sourceManifestSha256: sourceDetails.freshSourceDescriptor.sourceManifestSha256,
         sourceSnapshotSha256: sourceDetails.freshSourceDescriptor.sourceSnapshotSha256,
+        ...(sourceVersion ? {
+            sourceVersionIdentitySha256: sourceVersion.identitySha256
+        } : {}),
         readerAttemptsDir: plan.readerAttemptsDir,
         materializeReaderFigures: (figures, requestedId) => ephemeralReaderFigures(
             requestedId, figures, plan, { ...options, figureCache }
@@ -400,8 +413,13 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
             return image;
         } },
     () => callback(sourceDetails));
-    direct.assertNoPersistentFigureFields(result);
-    return result;
+    const output = result && typeof result === 'object' && !Array.isArray(result) ? { ...result } : result;
+    if (output && typeof output === 'object' && !Array.isArray(output)) {
+        if (sourceVersion) output.sourceVersion = clone(sourceVersion);
+        else delete output.sourceVersion;
+    }
+    direct.assertNoPersistentFigureFields(output);
+    return output;
 }
 
 function createDailyAnalyzeFn(plan, options = {}) {

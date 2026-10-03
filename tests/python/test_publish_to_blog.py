@@ -1590,14 +1590,14 @@ class PublishToBlogReviewTest(unittest.TestCase):
             unrelated, {'conceptBridges': []},
         ), unrelated)
 
-    def test_modern_reader_projection_repairs_reviewed_metric_code_typo(self):
+    def test_modern_reader_projection_preserves_numbers_when_repairing_text_typos(self):
         article = (
             '公开指标抽取代吗与标注手册，误差条为 90%五置信区间。'
             '集合 S_yes/S_no 聚合后由 Syes 决定。'
         )
         self.assertEqual(
             publish_to_blog._modern_api_safe_typo_projection(article),
-            '公开指标抽取代码与标注手册，误差条为 95% 置信区间。'
+            '公开指标抽取代码与标注手册，误差条为 90%五置信区间。'
             '集合 `S_yes`/`S_no` 聚合后由 `S_yes` 决定。',
         )
 
@@ -2765,6 +2765,37 @@ title: "Score rows"
             unversioned_frontmatter['paper_digest_arxiv_abs_url'],
             'https://arxiv.org/abs/2608.30002',
         )
+
+    def test_historical_source_pages_and_indexes_show_selected_version_and_notice(self):
+        from test_daily_historical_version_publish import _node_payload
+        with tempfile.TemporaryDirectory() as temporary:
+            source_paper = _node_payload(Path(temporary).resolve() / 'sources')['papers'][0]
+        paper = llm_api_publication_fixture()
+        paper['arxivId'] = source_paper['arxivId']
+        paper['sourceVersion'] = source_paper['sourceVersion']
+        paper['freshRewriteProvenance'] = source_paper['freshRewriteProvenance']
+        paper['analysisManifest']['freshRewriteProvenance'] = source_paper['freshRewriteProvenance']
+        page, slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        selected_url = 'https://arxiv.org/abs/2609.12409v2'
+        self.assertIn(f']({selected_url})', page)
+        self.assertIn('**来源版本说明**', page)
+        self.assertIn('返回 HTTP 404', page)
+        self.assertIn('本文依据官方历史版本 [2609.12409v2]', page)
+        self.assertNotIn('](https://arxiv.org/abs/2609.12409)', page)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
+        for scored in (True, False):
+            with self.subTest(scored=scored):
+                index = publish_to_blog.generate_index_page(
+                    [(8.0, paper, paper['parsed'])] if scored else [], [] if scored else [paper],
+                    '2026-08-31', {paper['arxivId']: slug},
+                )
+                self.assertIn(f'[arXiv 原文]({selected_url})', index)
+                self.assertIn('**来源版本说明**', index)
+                self.assertIn('本文依据官方历史版本 [2609.12409v2]', index)
+                self.assertIsNone(publish_to_blog._api_reader_index_projection_issue(index, [paper]))
+        ordinary = llm_api_publication_fixture()
+        ordinary_page, _ = publish_to_blog.generate_paper_page(ordinary, '2026-08-31')
+        self.assertNotIn('**来源版本说明**', ordinary_page)
 
     def test_current_taxonomy_keeps_flat_tags_and_adds_explicit_compat_metadata(self):
         paper = llm_api_publication_fixture()

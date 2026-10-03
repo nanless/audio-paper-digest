@@ -64,6 +64,10 @@ A daily run lives at `data/runtime/daily-fresh-source-runs/<runId>/`. Its plan u
 These are replayable evidence rather than date-rotated caches. Image bytes, base64, cache paths, and temporary
 filenames are prohibited from the bundle.
 
+When the current official PDF returns HTTP 404, a bundle may use an official historical version of the same paper. Its optional `sourceVersion` record binds the selected version, text and PDF identities, current-PDF 404 evidence, warning, and identity SHA. Node and Python both check these fields. A current PDF cannot carry historical-version evidence.
+
+The paper's `sourceVersion` must match the sealed runtime record, and both provenance records must carry the matching `sourceVersionIdentitySha256`. Older historical-version results without that binding require new analysis. Normal sources retain their existing snapshot fields, order, and SHA; passing through a title or version description does not change that calculation. Citation files use the verified selected version.
+
 ## Analysis Source and Recovery
 
 `analysisSource` binds source type, request ID, raw/full/used lengths, truncation, SHA, warnings, and confidence.

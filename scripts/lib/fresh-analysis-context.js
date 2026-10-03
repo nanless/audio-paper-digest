@@ -199,8 +199,13 @@ function detailsFromSealedBundle(stored) {
         sourceGeneration: stored.generation, sourceManifestSha256: stored.sourceManifestSha256,
         sourceSha256: stored.manifest.text.responseSha256,
         structuredArtifactsSha256: details.structuredArtifacts.payloadSha256 || '',
-        sourceSnapshotSha256: sha(JSON.stringify(sourceSnapshot)) };
-    return { ...details, freshSourceDescriptor: descriptor };
+        sourceSnapshotSha256: sha(JSON.stringify(sourceSnapshot)),
+        ...(runtime.sourceVersion ? { sourceVersionIdentitySha256: runtime.sourceVersion.identitySha256 } : {}) };
+    // Keep the existing snapshot fields unchanged. The source manifest already
+    // binds the runtime title and version metadata through its exact file hash.
+    return { ...details, title: runtime.title,
+        ...(runtime.sourceVersion ? { sourceVersion: structuredClone(runtime.sourceVersion) } : {}),
+        freshSourceDescriptor: descriptor };
 }
 
 function readBundleFreshSource(checked, id, expectation) {
@@ -335,7 +340,10 @@ function provenanceFromSource(source) {
     return { contract: CONTRACT, runId: context.runId, sourceSha256: descriptor.sourceSha256,
         structuredArtifactsSha256: descriptor.structuredArtifactsSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
         ...(descriptor.contract === BUNDLE_CACHE_CONTRACT ? { sourceGeneration: descriptor.sourceGeneration,
-            sourceManifestSha256: descriptor.sourceManifestSha256 } : {}),
+            sourceManifestSha256: descriptor.sourceManifestSha256,
+            ...(descriptor.sourceVersionIdentitySha256 ? {
+                sourceVersionIdentitySha256: descriptor.sourceVersionIdentitySha256
+            } : {}) } : {}),
         sourceOnly: true, oldGeneratedTextIncluded: false };
 }
 

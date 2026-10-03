@@ -30,7 +30,7 @@ import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, tim
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse, urlsplit
 
 SHARED_SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SHARED_SCRIPTS_DIR) not in sys.path:
@@ -3239,7 +3239,7 @@ def build_researcher_workbench_bundle(
         paper.get('abstract'), 'researcher workbench abstract', maximum=200000,
         preserve_newlines=True,
     )
-    identity = parse_publish_arxiv_identity(paper.get('arxivId'))
+    identity = _workbench_source_identity(paper)
     pa = dict(parsed or paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
     try:
         score = float(pa.get('score'))
@@ -4046,7 +4046,8 @@ def _api_reader_index_projection_issue(content, papers):
         if projection is None:
             continue
         aid = paper.get('arxivId', '')
-        matches = [block for block in blocks if f'https://arxiv.org/abs/{aid})' in block]
+        source_url = _visible_arxiv_source_url(paper)
+        matches = [block for block in blocks if f'{source_url})' in block]
         if len(matches) != 1:
             return f'{aid} 汇总页现代决策投影缺失或重复'
         block = matches[0]
@@ -4318,7 +4319,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
 
         pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
-        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        aurl = _visible_arxiv_source_url(p)
         api_reader = _api_reader_payload(p)
         modern_projection = _modern_api_reader_projection(p, api_reader)
         if api_reader:
@@ -4351,6 +4352,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         context_line = build_index_context_line(pa, aurl)
         if context_line:
             md += f"{context_line}\n\n"
+        md += _historical_source_notice(p)
 
         author_institutions = index_author_institution_block(p, pa, api_reader)
         if author_institutions:
@@ -4384,7 +4386,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         # unscored 论文也使用与评分论文相同的读者顺序。
         pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
-        aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+        aurl = _visible_arxiv_source_url(p)
         api_reader = _api_reader_payload(p)
         modern_projection = _modern_api_reader_projection(p, api_reader)
         if api_reader:
@@ -4413,6 +4415,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         context_line = build_index_context_line(pa, aurl)
         if context_line:
             md += f"{context_line}\n\n"
+        md += _historical_source_notice(p)
         author_institutions = index_author_institution_block(p, pa, api_reader)
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
@@ -5713,7 +5716,6 @@ def _modern_api_safe_typo_projection(article):
     """Apply narrowly reviewed typo fixes without mutating signed Reader bytes."""
     replacements = {
         '指标抽取代吗': '指标抽取代码',
-        '90%五置信区间': '95% 置信区间',
         # Bare underscores are parsed as emphasis by Goldmark.  Keep the
         # signed Reader bytes intact, but render this reviewed token pair as
         # inline code so the semantic set names remain visible verbatim.
@@ -6417,7 +6419,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     title = paper.get('title', 'Unknown')
     display_title = plain_title_for_publish(title)
     aid = paper.get('arxivId', '')
-    aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
+    aurl = _visible_arxiv_source_url(paper)
     slug = paper_slug(title, aid)
 
     score_str = pa['score'] if pa and pa.get('score') else ''
@@ -6588,6 +6590,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         md += f'> 英文题目：*{paper_link}*\n\n' if modern_projection is not None else (
             f'> 英文题目：*{paper_link}*\n>\n> 一句话：**{reader_plan["oneSentenceThesis"].strip()}**\n\n'
         )
+    md += _historical_source_notice(paper)
     reader_authors_content = ''
     if api_reader_v2 and api_reader_payload.get('readerAuthors'):
         reader_authors_content = '\n'.join(
@@ -7213,6 +7216,11 @@ _DAILY_FRESH_SOURCE_RUNTIME_KEYS = frozenset({
     'structuredArtifacts', 'imageInfos', 'readerAuthors', 'htmlAvailability',
     'htmlAttempts', 'warnings',
 })
+_ARXIV_HISTORICAL_VERSION_KEYS = frozenset({
+    'contract', 'version', 'canonicalArxivId', 'selectedSourceId', 'textSourceId',
+    'selectedPdfUrl', 'currentPdfAvailable', 'attemptedCurrentPdfStatus',
+    'attemptedCurrentPdfUrl', 'warning', 'identitySha256',
+})
 _DAILY_FRESH_SOURCE_FORBIDDEN_RUNTIME_FIELDS = frozenset({
     'cachePath', 'tempPath', 'rawBytes', 'assetBytes', 'base64', 'buffer',
     'assetFilename', 'assetMediaType', 'assetWidth', 'assetHeight', 'dataUri',
@@ -7329,9 +7337,109 @@ def _daily_fresh_normalized_paper_id(paper):
     return value
 
 
+def _daily_fresh_official_url(value, kind, paper_id, source_id=None):
+    """Check the same official source URLs accepted by the Node source store."""
+    if not isinstance(value, str) or not value.strip():
+        raise PublishDataValidationError(f'{paper_id} 来源网址为空或不是字符串')
+    try:
+        parsed = urlsplit(value.strip())
+        if (parsed.scheme != 'https' or parsed.hostname != 'arxiv.org'
+                or parsed.port not in (None, 443) or parsed.username is not None
+                or parsed.password is not None or parsed.query or parsed.fragment):
+            raise ValueError('not an official source URL')
+        pattern = (r'/pdf/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?'
+                   if kind == 'pdf' else r'/html/(\d{4}\.\d{4,5})(?:v\d+)?/?')
+        match = re.fullmatch(pattern, unquote(parsed.path))
+        if not match or normalize_publish_arxiv_id(match.group(1)) != paper_id:
+            raise ValueError('URL belongs to another paper')
+        if kind == 'pdf' and source_id is not None and match.group(1) != source_id:
+            raise ValueError('PDF URL belongs to another version')
+    except (ValueError, UnicodeError) as exc:
+        raise PublishDataValidationError(f'{paper_id} 来源网址不是本篇论文的官方 HTTPS 地址') from exc
+    return parsed._replace(scheme='https', netloc='arxiv.org').geturl(), match.group(1)
+
+
+def _daily_fresh_historical_version(value, paper_id):
+    if not isinstance(value, dict) or set(value) != _ARXIV_HISTORICAL_VERSION_KEYS:
+        raise PublishDataValidationError(f'{paper_id} 历史版本记录的字段不完整或包含未知字段')
+    selected_id = value.get('selectedSourceId')
+    if (not isinstance(selected_id, str)
+            or re.fullmatch(re.escape(paper_id) + r'v[1-9]\d*', selected_id) is None):
+        raise PublishDataValidationError(f'{paper_id} 历史版本记录没有指定本篇论文的有效版本')
+    selected_url, _ = _daily_fresh_official_url(
+        value.get('selectedPdfUrl'), 'pdf', paper_id, selected_id,
+    )
+    current_url, _ = _daily_fresh_official_url(
+        value.get('attemptedCurrentPdfUrl'), 'pdf', paper_id, paper_id,
+    )
+    body = {
+        'contract': 'arxiv-historical-version-source-v1', 'version': 1,
+        'canonicalArxivId': paper_id, 'selectedSourceId': selected_id,
+        'textSourceId': selected_id, 'selectedPdfUrl': selected_url,
+        'currentPdfAvailable': False, 'attemptedCurrentPdfStatus': 404,
+        'attemptedCurrentPdfUrl': current_url,
+    }
+    body['warning'] = (
+        f'arXiv 当前无版本 PDF {current_url} 返回 HTTP 404，当前稿不可用；'
+        f'本次只封存并分析官方历史版本 {selected_id}（{selected_url}），'
+        '不得暗示当前稿仍有效。'
+    )
+    identity_sha = _daily_fresh_sha256(_daily_fresh_compact_json_bytes(
+        _daily_fresh_canonical(body)
+    ))
+    if (type(value.get('version')) is not int
+            or type(value.get('attemptedCurrentPdfStatus')) is not int
+            or value.get('currentPdfAvailable') is not False
+            or any(value.get(key) != expected for key, expected in body.items())
+            or value.get('identitySha256') != identity_sha):
+        raise PublishDataValidationError(f'{paper_id} 历史版本的身份、404 记录、警告或哈希不一致')
+    return {**body, 'identitySha256': identity_sha}
+
+
+def _workbench_source_identity(paper):
+    identity = parse_publish_arxiv_identity(paper.get('arxivId'))
+    if 'sourceVersion' not in paper:
+        return identity
+    source_version = _daily_fresh_historical_version(paper['sourceVersion'], identity['baseId'])
+    proof = paper.get('freshRewriteProvenance')
+    manifest = paper.get('analysisManifest')
+    if (not isinstance(proof, dict) or not isinstance(manifest, dict)
+            or manifest.get('freshRewriteProvenance') != proof
+            or proof.get('sourceVersionIdentitySha256') != source_version['identitySha256']
+            or (identity['versionedId'] is not None
+                and identity['versionedId'] != source_version['selectedSourceId'])):
+        raise PublishDataValidationError('引用资料中的历史版本未与论文分析的来源证明绑定')
+    return parse_publish_arxiv_identity(source_version['selectedSourceId'])
+
+
+def _visible_arxiv_source_url(paper):
+    if 'sourceVersion' in paper:
+        return _workbench_source_identity(paper)['absUrl']
+    arxiv_id = paper.get('arxivId', '')
+    return f'https://arxiv.org/abs/{arxiv_id}' if arxiv_id else ''
+
+
+def _historical_source_notice(paper):
+    if 'sourceVersion' not in paper:
+        return ''
+    _workbench_source_identity(paper)
+    source_version = paper['sourceVersion']
+    current_url = source_version['attemptedCurrentPdfUrl']
+    selected_url = source_version['selectedPdfUrl']
+    selected_id = source_version['selectedSourceId']
+    return (
+        f'> **来源版本说明**：arXiv 的[当前 PDF]({current_url})返回 HTTP 404。'
+        f'本文依据官方历史版本 [{selected_id}]({selected_url})撰写，'
+        '不代表当前稿仍然可用。\n\n'
+    )
+
+
 def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
+    runtime_keys = _DAILY_FRESH_SOURCE_RUNTIME_KEYS | (
+        {'sourceVersion'} if isinstance(runtime, dict) and 'sourceVersion' in runtime else set()
+    )
     if (
-            not isinstance(runtime, dict) or set(runtime) != _DAILY_FRESH_SOURCE_RUNTIME_KEYS
+            not isinstance(runtime, dict) or set(runtime) != runtime_keys
             or runtime.get('contract') != 'fresh-arxiv-rewrite-runtime-metadata-v1'
             or runtime.get('version') != 1
             or runtime.get('paperId') != f'arxiv:{paper_id}'
@@ -7349,6 +7457,10 @@ def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
             or _daily_fresh_contains_persistent_image_fields(runtime)
     ):
         raise PublishDataValidationError(f'{paper_id} source-runtime.json 与 sealed TXT 不一致')
+    if 'sourceVersion' in runtime:
+        source_version = _daily_fresh_historical_version(runtime['sourceVersion'], paper_id)
+        if source_version['warning'] not in runtime['warnings']:
+            raise PublishDataValidationError(f'{paper_id} 来源警告没有包含已验证的历史版本说明')
     artifacts = runtime['structuredArtifacts']
     artifact_payload = dict(artifacts)
     payload_sha = artifact_payload.pop('payloadSha256', None)
@@ -7438,6 +7550,21 @@ def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
     ):
         raise PublishDataValidationError(f'{paper_id} source manifest 未闭合 TXT/PDF/runtime SHA')
     artifacts = _daily_fresh_validate_runtime(runtime, manifest, text, paper_id)
+    _daily_fresh_official_url(
+        text_manifest.get('url'), 'pdf' if text_manifest['source'] == 'pdf' else 'html',
+        paper_id, text_manifest['sourceId'],
+    )
+    _, pdf_source_id = _daily_fresh_official_url(pdf_manifest.get('url'), 'pdf', paper_id)
+    if pdf_source_id != paper_id:
+        source_version = _daily_fresh_historical_version(runtime.get('sourceVersion'), paper_id)
+        if (source_version['selectedSourceId'] != pdf_source_id
+                or text_manifest['source'] != 'pdf' or text_manifest['sourceId'] != pdf_source_id
+                or paper.get('sourceVersion') != source_version
+                or proof.get('sourceVersionIdentitySha256') != source_version['identitySha256']):
+            raise PublishDataValidationError(f'{paper_id} TXT、PDF、论文或来源证明指向不同历史版本')
+    elif ('sourceVersion' in runtime or 'sourceVersion' in paper
+          or 'sourceVersionIdentitySha256' in proof):
+        raise PublishDataValidationError(f'{paper_id} 当前 PDF 不得携带历史版本回退记录')
     details = {
         'text': text.decode('utf-8'),
         'source': text_manifest['source'],

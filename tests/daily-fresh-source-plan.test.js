@@ -34,6 +34,91 @@ function sourcePayload(id) {
     };
 }
 
+async function captureHistoricalSource(plan, id, pdfSuffix = '') {
+    const selected = `${id}v2`;
+    await daily.captureDailyFreshSources(plan, {
+        concurrency: 1,
+        capture: options => require('../scripts/lib/fresh-arxiv-rewrite-source.js')
+            .captureFreshArxivRewriteSource(options, {
+                fetchText: async () => ({ ...sourcePayload(id), title: 'Official historical paper title' }),
+                fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\nHistorical paper\n%%EOF\n'),
+                    url: `https://arxiv.org/pdf/${selected}${pdfSuffix}`, sourceId: selected,
+                    currentPdfUnavailable: true, currentPdfStatus: 404 }),
+                extractPdfText: async () => ({ text: 'Historical PDF methods, experiments, results, and limitations. '.repeat(120) })
+            })
+    });
+}
+
+test('历史版本信息进入日更分析和结果，两条来源证明保持一致', async t => {
+    fixture(t); const id = '2609.12401';
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'historical-source', papers: [{ arxivId: id }] });
+    await captureHistoricalSource(plan, id, '.pdf');
+    const runtimePath = path.join(plan.sourcesDir, id, 'generation-000001', 'source-runtime.json');
+    const runtime = JSON.parse(fs.readFileSync(runtimePath, 'utf8'));
+    const source = daily.readDailyFreshSource(plan, { arxivId: id });
+    assert.equal(source.title, runtime.title);
+    assert.deepEqual(source.sourceVersion, runtime.sourceVersion);
+
+    const analyze = daily.createDailyAnalyzeFn(plan, {
+        analyze: async paper => {
+            const directSource = direct.getDirectRewriteSource(paper);
+            assert.deepEqual(paper.sourceVersion, runtime.sourceVersion);
+            assert.deepEqual(directSource.sourceVersion, runtime.sourceVersion);
+            const manifest = { sourceAcquisition: { sourceSha256: sha(source.text) } };
+            direct.attachDirectSourceProvenance(paper, manifest, directSource);
+            assert.equal(paper.freshRewriteProvenance.sourceVersionIdentitySha256, runtime.sourceVersion.identitySha256);
+            assert.equal(fresh.freshAnalysisIdentity(id).sourceVersionIdentitySha256, runtime.sourceVersion.identitySha256);
+            // The analyzer's stage checkpoints copy the input paper. Verify
+            // that version metadata is present before the first such save.
+            const checkpoint = JSON.parse(JSON.stringify({ ...paper, analysisManifest: manifest }));
+            assert.deepEqual(checkpoint.sourceVersion, runtime.sourceVersion);
+            assert.equal(checkpoint.analysisManifest.freshRewriteProvenance.sourceVersionIdentitySha256,
+                runtime.sourceVersion.identitySha256);
+            paper.sourceVersion.selectedSourceId = `${id}v1`;
+            // Return an independent object to verify that the wrapper retains
+            // source metadata as well as mutations made by the usual analyzer.
+            return { arxivId: id, analysis: 'new analysis', sourceSha256: sha(source.text),
+                freshRewriteProvenance: paper.freshRewriteProvenance, analysisManifest: manifest };
+        }
+    });
+    const result = await daily.withDailyFreshAnalysisContext(plan, () => analyze({ arxivId: id }));
+    assert.deepEqual(result.sourceVersion, runtime.sourceVersion);
+    assert.equal(daily.isPaperBoundToPlan(result, plan), true);
+    daily.withDailyFreshAnalysisContext(plan, () => fresh.assertFreshPaper(result));
+
+    const oldResult = structuredClone(result);
+    delete oldResult.sourceVersion;
+    delete oldResult.freshRewriteProvenance.sourceVersionIdentitySha256;
+    delete oldResult.analysisManifest.freshRewriteProvenance.sourceVersionIdentitySha256;
+    assert.equal(daily.isPaperBoundToPlan(oldResult, plan), false);
+    const prepared = daily.prepareDailyPaper({ ...oldResult, sourceVersion: runtime.sourceVersion }, plan);
+    assert.equal(prepared.analysis, undefined);
+    assert.equal(prepared.sourceVersion, undefined);
+    assert.equal(prepared.freshRewriteProvenance, undefined);
+    const tampered = structuredClone(result);
+    tampered.sourceVersion.selectedSourceId = `${id}v1`;
+    assert.equal(daily.isPaperBoundToPlan(tampered, plan), false);
+});
+
+test('传递标题和历史版本信息不改变已有来源快照的字段与哈希', async t => {
+    fixture(t); const id = '2609.12402';
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'snapshot-compatibility', papers: [{ arxivId: id }] });
+    await captureHistoricalSource(plan, id);
+    const directory = path.join(plan.sourcesDir, id, 'generation-000001');
+    const runtime = JSON.parse(fs.readFileSync(path.join(directory, 'source-runtime.json'), 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'source-manifest.json'), 'utf8'));
+    const text = fs.readFileSync(path.join(directory, 'source.txt'), 'utf8');
+    const oldDetails = { text, source: manifest.text.source, sourceId: manifest.text.sourceId,
+        imageInfos: runtime.imageInfos, structuredArtifacts: runtime.structuredArtifacts,
+        readerAuthors: runtime.readerAuthors === null ? { authors: [] } : runtime.readerAuthors,
+        htmlAvailability: runtime.htmlAvailability, htmlAttempts: runtime.htmlAttempts, warnings: runtime.warnings };
+    const oldSnapshot = { sourceManifestSha256: sha(fs.readFileSync(path.join(directory, 'source-manifest.json'))),
+        sourceGeneration: 1, details: oldDetails };
+    const source = daily.readDailyFreshSource(plan, { arxivId: id });
+    assert.equal(source.freshSourceDescriptor.sourceSnapshotSha256, sha(JSON.stringify(oldSnapshot)));
+    assert.deepEqual(source.sourceVersion, runtime.sourceVersion);
+});
+
 test('daily Reader materializer reuses Figure bytes captured in the same invocation', async () => {
     const bytes = Buffer.from('same-invocation-image-bytes');
     const url = 'https://arxiv.org/html/2609.12345/figure.png';
@@ -194,6 +279,29 @@ test('daily source binding requires the manifest provenance mirror and source ac
     const complete = structuredClone(incomplete);
     complete.analysisManifest.freshRewriteProvenance = structuredClone(proof);
     assert.equal(daily.isPaperBoundToPlan(complete, plan), true);
+    assert.equal(daily.isPaperBoundToPlan({ ...complete, sourceVersion: null }, plan), false);
+    const forgedProof = { ...proof, sourceVersionIdentitySha256: null };
+    assert.equal(daily.isPaperBoundToPlan({ ...complete, freshRewriteProvenance: forgedProof,
+        analysisManifest: { ...complete.analysisManifest, freshRewriteProvenance: forgedProof } }, plan), false);
+
+    const source = daily.readDailyFreshSource(plan, { arxivId: id });
+    const directory = path.join(plan.sourcesDir, id, 'generation-000001');
+    const runtime = JSON.parse(fs.readFileSync(path.join(directory, 'source-runtime.json'), 'utf8'));
+    const oldDetails = { text: source.text, source: source.source, sourceId: source.sourceId,
+        imageInfos: runtime.imageInfos, structuredArtifacts: runtime.structuredArtifacts,
+        readerAuthors: runtime.readerAuthors === null ? { authors: [] } : runtime.readerAuthors,
+        htmlAvailability: runtime.htmlAvailability, htmlAttempts: runtime.htmlAttempts, warnings: runtime.warnings };
+    assert.equal(source.freshSourceDescriptor.sourceSnapshotSha256, sha(JSON.stringify({
+        sourceManifestSha256: source.freshSourceDescriptor.sourceManifestSha256,
+        sourceGeneration: 1, details: oldDetails
+    })));
+    assert.equal(Object.hasOwn(source.freshSourceDescriptor, 'sourceVersionIdentitySha256'), false);
+    const staleInput = { arxivId: id, sourceVersion: { selectedSourceId: `${id}v1` } };
+    const output = await daily.withDailyFreshPaperSource(plan, staleInput, () => {
+        assert.equal(Object.hasOwn(staleInput, 'sourceVersion'), false);
+        return { arxivId: id, sourceVersion: { selectedSourceId: `${id}v1` } };
+    });
+    assert.equal(Object.hasOwn(output, 'sourceVersion'), false);
 });
 
 test('daily source reference replays only the exact sealed run manifest', async t => {
