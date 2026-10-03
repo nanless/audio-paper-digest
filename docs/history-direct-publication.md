@@ -1,76 +1,97 @@
-# 全历史 direct publication 闭环
+# 历史重写结果的审查与发布
 
-此入口只消费 `historical-direct-rewrite-plan-v5`、对应 execution registry、当前
-`historical-direct-aggregate-projection-v3`、全部 direct page staging 和
-`historical-direct-aggregate-v2`。它不读取日更 canonical，不签发日更 schema-v3 receipt，
-也不把旧 `history:publication` 私有 bundle 当成 direct-local 证明。
+`history:direct-publication` 发布当前[全历史重写流程](history-rewrite.md)生成的页面。它读取 `historical-direct-rewrite-plan-v5`、对应执行记录、`historical-direct-aggregate-projection-v3`、完整单篇暂存页和 `historical-direct-aggregate-v2` 汇总，逐项核对实际文件。它不读取日更正式分析，不生成日更 schema-v3 凭证，也不接受旧 `history:publication` 私有文件作为当前来源证明。
 
-## 状态机
+全历史发布在历史工作区进行，发布前停止日更发布，同步代码与博客最新远端 `main`，按 [AGENTS.md](../AGENTS.md) 核对角色、基线和任务范围。入口已经存在，不表示某次历史现场已完成重写或发布。
+
+## 发布顺序与页面覆盖
 
 ```text
-visual disposition
-  → immutable publication plan
-  → immutable private generation
-  → deterministic historical review + Hugo gate
-  → publish --apply 持有博客 Git common-dir 共享锁
-       ├─ activation CAS / crash recovery
-       ├─ exact staged delta / single-parent commit
-       ├─ push
-       └─ live remote identity + main OID receipt
-  → status（默认再次 live 验证 remote）
+记录用户确认的本次视觉范围
+  → 建立不可变发布计划
+  → 生成私有待发布文件
+  → 检查文件和 Hugo 构建，审查文本及图片
+  → publish --apply 持有共享博客锁
+       ├─ 核对并写入目标页面，恢复中断写入
+       ├─ 只提交允许的差异，生成单父提交
+       ├─ 推送并核验远端身份及 main OID
+       └─ 保存发布凭证
+  → status 再次核验远端
+  → 人工核验部署和所有目标网页
 ```
 
-projection 必须证明全部 inventory 页面闭合。论文页、107 个日汇总、3 个会议汇总和
-193 个会议 task 页属于 rewrite；projection 中的 `retainedPages` 必须逐字保持 Git baseline。
-任一缺页、非 staged 论文、aggregate 缺失、producer SHA 漂移或博客 baseline 前进都会失败关闭。
-publication authority 还会从实际 `content/posts` producer 数量重算
-`rewritten + retain-unchanged = inventoryPageCount`，并把完整 `pageCoverage` 写入 authority proof；publication
-plan 会重新验证该关系、精确 delta 的派生结果及 retained/generated 路径不重叠，不能只信一个布尔完成位。
+完整发布要求页面对应清单覆盖冻结 inventory 的全部页面。需重写的论文页、每日汇总、会议汇总和任务页数量由本次计划推导，不能拿既有某次计划的 107 个日汇总、3 个会议汇总及 193 个任务页作通用门槛。`retainedPages` 列出的保留页必须与原 Git 基线逐字一致。
 
-## 命令
+缺页、未暂存论文、缺汇总、产物 SHA 漂移或博客基线前进都会拒绝发布。程序从实际 `content/posts` 产物重新计算“重写页数 + 保留原样页数 = `inventoryPageCount`”，并把完整 `pageCoverage` 写入输入证明。发布计划再次核对数量关系、精确差异的推导及保留/生成路径不交叠，不能只相信一个完成布尔值。
 
-先签发显式视觉范围。`excluded` 表示视觉根本不属于这次全历史正文发布事务；`waived`
-只能用于用户明确豁免。二者都不会伪造成图片 `complete`，最终 status 会显示
-`published-with-visual-excluded|waived`。
+## 明确视觉范围
+
+本入口要求先记录本次视觉处置。只有用户明确限定本次是正文发布、不包含视觉任务时，才可使用 `excluded`；只有用户明确豁免视觉时，才可使用 `waived`。单说“重写全历史”不自动授予其中任何一种处置。若没有相应范围或豁免，应先落实任务要求，不能照下面示例自行排除视觉。
+
+两种状态都不表示图片已完成。程序将 `requestedBy` 记录为 `system-contract` 或 `user`，这只是范围声明，不能代替实际用户授权。最终事务状态会显示 `published-with-visual-excluded` 或 `published-with-visual-waived`，视觉仍为 `complete:false`。
+
+下面示例仅适用于用户已经明确确认“本次只发布历史正文，视觉不在本次范围内”。`--reason` 必须替换为真实范围说明，不能把示例文字当授权；若用户明确豁免，应改用 `--mode waived` 并记录实际豁免。
 
 ```bash
 npm run history:direct-publication -- visual-disposition --apply \
-  --plan-file /absolute/direct-plan.json \
-  --mode excluded \
-  --reason '全历史正文发布与逐日视觉生成是不同事务，本次明确排除视觉。' \
+  --plan-file /absolute/path/direct-plan.json \
+  --mode excluded --scope full-history-publication \
+  --reason '用户已明确确认本次只发布历史正文，视觉任务不属于本次范围。' \
   --output /absolute/project/data/runtime/historical-direct-visual-dispositions/full-history.json
+```
 
+输出必须直接位于配置的 `historical-direct-visual-dispositions` 目录，已有不同字节不可覆盖。下面 plan/generate 的 `--visual-disposition` 使用同一个实际输出文件。
+
+## 生成、审查与发布命令
+
+```bash
 npm run history:direct-publication -- plan --apply \
   --publication-id UUID \
-  --plan-file /absolute/direct-plan.json \
-  --registry-file /absolute/direct-registry.json \
-  --projection-file /absolute/direct-aggregate-projection-v3.json \
-  --visual-disposition /absolute/full-history.json
+  --plan-file /absolute/path/direct-plan.json \
+  --registry-file /absolute/path/direct-registry.json \
+  --projection-file /absolute/path/direct-aggregate-projection-v3.json \
+  --visual-disposition /absolute/project/data/runtime/historical-direct-visual-dispositions/full-history.json
 
 npm run history:direct-publication -- generate --apply \
   --publication-id UUID \
-  --plan-file /absolute/direct-plan.json \
-  --registry-file /absolute/direct-registry.json \
-  --projection-file /absolute/direct-aggregate-projection-v3.json \
-  --visual-disposition /absolute/full-history.json
+  --plan-file /absolute/path/direct-plan.json \
+  --registry-file /absolute/path/direct-registry.json \
+  --projection-file /absolute/path/direct-aggregate-projection-v3.json \
+  --visual-disposition /absolute/project/data/runtime/historical-direct-visual-dispositions/full-history.json
 
 npm run history:direct-publication -- review --apply --publication-id UUID
 npm run history:direct-publication -- publish --apply --publication-id UUID
 npm run history:direct-publication -- status --publication-id UUID
 ```
 
-`activate --apply` 被 CLI 禁用。真正写博客只能通过 `publish --apply`，使 activation、commit、
-push 和远端验证处于与日更相同的 Git common-dir 共享锁内。activation intent 允许每条路径处于
-baseline 或目标 SHA 后继续，第三种字节立即阻断；commit 已完成而 push 失败时会复用已签 commit
-receipt。Git add 分批执行，避免全历史路径集合超过系统 `ARG_MAX`。
+所有路径和 UUID 应使用该轮实际值。plan/generate/review/publish 都有 `--dry-run`，用于预览对应阶段；审查预览只执行确定性检查与 Hugo，不运行语义模型，不能当作正式审查通过。`--blog-repo ABS` 可显式指定博客仓库；review/publish 支持可选 `--message TEXT`，其中提交说明由发布阶段使用。
 
-`status --live-remote false` 仅供离线诊断并永远返回 incomplete。默认 status 查询 live remote；
-只有 receipt、remote identity 和 `refs/heads/main` OID 全部闭合，publication 才可成为终态。
+只有用户明确选择部分论文时，plan/generate 才传 `--paper-ids ID,ID,...`。此时视觉文件必须使用 `--scope selected-sample-publication`，且只能证明所选单篇的发布，不能冒充全部历史页面及汇总已覆盖。完整发布不传该参数，使用 `full-history-publication`。
 
-历史 review 使用独立的 `historical-semantic-multimodal-v1` receipt：确定性预检覆盖逐文件 SHA、
-front matter、taxonomy contract、链接协议和特殊非 camera-ready 披露；随后真实 Hugo gate，并由独立
-Python coordinator 复用发布公共 LLM 路由执行逐页、逐文本分块和存在图片时的多模态审查。并发由
-`PD_HISTORY_REVIEW_CONCURRENCY` 控制，范围 1–5。每个通过的分块和页面保存可恢复 checkpoint；失败
-attempt 保留审计但不会冒充可复用成功，也不作为永久失败缓存；每次运行每个审查单元最多调用一次审查器（请求层仍有有界重试），三次网络或余额失败不会阻止后续运行恢复，不需要删除旧 attempt。通过 checkpoint 永久以页面路径和实际内容 SHA 寻址；模型、endpoint SHA、Prompt/实现 SHA、预算、并发、Hugo 或 generation/plan 元数据变化时，重跑批次确定性/Hugo gate 并重签当前 review receipt，但不得重审内容 SHA 未变的页面。只有内容 SHA 变化才会重审该页；图片子审查同时绑定整页内容 SHA，避免图片 URL 不变而图文解释改变时复用旧结论。当前协议仍记入批次 review fingerprint 用于 receipt 重签与 push 前校验；它是历史专属协议，不复用或冒充日更 schema-v3 receipt。
+## 审查内容和续跑
 
-review receipt 重签后，若页面已 activation 但尚未推送，activation intent/receipt 可在逐文件 SHA 不变的前提下重绑新 review SHA；已存在的 Git commit receipt 同理只重绑新 review/activation SHA。这些恢复不放宽博客 main 工作区角色、基线 HEAD、路径白名单、每文件 SHA、Git 精确 delta、remote identity 或远端 OID 校验。
+历史审查生成独立的 `historical-semantic-multimodal-v1` 凭证。确定性预检核对逐文件 SHA、front matter、标签协议、链接协议及特殊来源的非会议终稿披露；之后执行真实 Hugo 构建检查，再由独立 Python 协调器通过发布公共模型接口审查逐页文本分块及存在图片时的图文关系。它不能复用或冒充日更 schema-v3 凭证。
+
+`PD_HISTORY_REVIEW_CONCURRENCY` 默认 5，范围 1–5。历史 Python 审查只保留一个不超过并发数的活动页面窗口，读完本轮已结束结果后再补新页；结构化 `scope=run` 错误先保存失败记录，再抛出异常并停止补新页，等待已经开始的页面结束。这个行为来自历史审查自身实现，不能推广为所有 Python 发布入口的规则。
+
+每个通过的分块和页面保存可恢复断点记录（checkpoint）。失败尝试记录（`attempt`）留作审计，不当作成功或永久失败缓存；每次运行每个审查单元最多调用一次审查器，请求层仍有有界重试。三次网络或余额失败不会永久阻止下一次恢复，无需删除失败记录。
+
+逐页通过记录永久按相对路径与实际页面内容 SHA 查找。模型、endpoint SHA、Prompt/实现 SHA、预算、并发、Hugo 或 generation/plan 元数据变化时，须重跑当前批次确定性检查与 Hugo、生成新审查凭证（review receipt），但不能重审内容 SHA 未变的页。只有页面内容 SHA 改变才重新审查该页；文本块可以复用各自输入 SHA 的通过记录。图片子审查同时绑定整页内容 SHA，避免图片 URL 不变、周围解释却改变时沿用旧结论。
+
+当前协议仍进入批次 `review fingerprint`，用于生成新凭证及推送前校验。通过页面缓存不代替当前批次凭证，来源、基线和远端检查也不能省略。
+
+## 写入、推送和中断恢复
+
+独立 `activate --apply` 已被 CLI 禁用。真正写博客须使用 `publish --apply`，在与日更相同的 Git common-dir 共享锁内完成页面写入、提交、推送及远端核验。
+
+写入前的一致性检查（CAS）及 `activation intent` 允许中断后每条路径处于原基线或目标 SHA，发现第三种字节立即拒绝。提交只包含凭证精确允许的差异，Git add 分批执行以避免路径集合超系统 `ARG_MAX`。提交已完成而推送失败时，恢复复用已有提交凭证（commit receipt），不重复创建提交。
+
+如果新审查凭证对应的页面字节未变、页面已写入但尚未推送，activation intent/receipt 可重新绑定新 review SHA；已有提交凭证（commit receipt） 也可重新绑定新 review/activation SHA。恢复仍严格核对博客 `main`、工作区角色、基线 HEAD、路径白名单、逐文件 SHA、Git 精确差异、远端身份和 OID，不能以重绑定掩盖来源或字节漂移。
+
+## 远端与网页验收
+
+默认 `status` 再次查询真实远端，只有 receipt、远端身份及 `refs/heads/main` OID 对应，才允许进入 Git 发布终态。`status --live-remote false` 仅作离线诊断，永远不会给出完整发布状态。
+
+Git 发布状态 `complete` 不表示网站已上线，也不把视觉标成完成。向用户确认本次任务完成前，仍须人工检查对应 publication commit（或保留本批已审页面字节的后续提交）的 GitHub Pages build/deploy 均成功，并逐页核验全部已发布单篇、每日、会议及任务汇总的 HTTP 200、正式地址和标题，保存部署与页面核验记录。当前历史 status 没有自动执行这些检查；部署失败时须读取日志、修复并继续验收。
+
+视觉仅按用户实际确认的本次范围或有效豁免处理；它不豁免来源、审查、远端、部署或网页检查。任何后续发布改变状态后，都应重新查询并按最新字节核验。

@@ -1,113 +1,53 @@
-# 会议论文：官方抓取、日更同源深度理解与汇总
+# 会议论文的来源获取、分析与发布
 
-## 2026 新会议路线（daily workspace）
+新会议从官方目录和 PDF 开始，完成筛选后使用统一的 `process` 入口，再独立生成、审查和发布博客。已有会议运行和全历史页面有各自的维护入口，不能把它们的工作区、任务 ID 或来源记录混用。本页先介绍新会议的完整路径，再说明恢复和旧运行维护。
 
-### 恢复与维护入口
+## 工作区与入口选择
 
-`npm run conference:new:workspace` 只读检查工作区：未提交内容、配置重复定义和进程
-存活信息分别报告；旧 JSON 中的 `running` 不代表现在还有进程。不要为了显示完成而改状态。
-`npm run storage:pdf-duplicates -- --json` 只报告 PDF 重复候选；默认按来源凭证声明的哈希
-分组，不能把它当成逐字节验证或删除授权。显式 `--hash-bytes` 才重新读全部 PDF 计算哈希，
-大目录耗时较长。会议来源及发布凭证受保护，不属于自动 prune 范围。
-
-新会议队列必须使用明确的计划文件，每个条目指定已筛选的 catalog/report/filter，按数组
-顺序完成一个会议再进入下一个。计划合同为 `conference-queue-plan-v1`，例如：
-
-```json
-{
-  "contract": "conference-queue-plan-v1",
-  "version": 1,
-  "conferences": [
-    {
-      "conferenceId": "acl-2026",
-      "catalogName": "acl-2026.json",
-      "reportName": "acl-2026-report.json",
-      "filterId": "a144e9b3-e014-4f21-a42a-c260c54385b1",
-      "concurrency": 3
-    }
-  ]
-}
-```
+运行前先核对目录和工作区角色，所有项目脚本均须在沙箱外执行：
 
 ```bash
-npm run conference:new:queue -- --dry-run --plan /absolute/path/plan.json
-npm run conference:new:queue -- --status --plan /absolute/path/plan.json
-# 显式执行才会调用模型与发布；先检查 dry-run 的复用/待执行项
-npm run conference:new:queue -- --apply --plan /absolute/path/plan.json
+pwd
+npm run workspace:role -- status
 ```
 
-余额、认证、限流或系统传输错误会停止后续派发；保留在途结果和具体失败证据。
-只有确认故障解除后，才在执行命令中显式加 `--retry-failed` 解除暂停/重试限制。
-普通重试不能清掉错误证据或重新分析已完成项。代码/解析器升级先按提示做显式迁移，
-保留旧来源和分析，使用新 generation 重提取；不能放宽旧凭证校验来绕过版本不符。
+| 任务 | 工作区与入口 |
+|---|---|
+| 获取、筛选和处理 2026 年新会议 | 已绑定 `daily` 的日更目录，使用 `conference:new:*`。 |
+| 维护旧会议的发现、提取、导入和隔离执行记录 | 已绑定 `history` 的历史目录，使用原 `conference:*`。 |
+| 重写和发布历史会议页面，保留已有 URL 和任务页 | 历史目录，使用[全历史重写](history-rewrite.md)及[历史直接发布](history-direct-publication.md)。 |
 
-来源升级是独立的、需要明确授权的新分析，不把旧完成记录冒充新来源结果：
-
-```bash
-# 只读列出绑定旧批次、输入 SHA 和当前解析器的升级计划
-npm run conference:new:process -- --source-upgrade-plan \
-  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID
-# 确认计划后只分析明确列出的论文；PLAN_SHA256 必须等于刚才的计划 SHA
-npm run conference:new:process -- --source-upgrade-apply \
-  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID \
-  --plan-sha PLAN_SHA256 --paper-ids 'PAPER_ID_1,PAPER_ID_2' \
-  --authorize-new-analysis --concurrency 3
-# 全成员升级成果齐备后才能生成新的标准会议 process/汇总；此步骤不发布
-npm run conference:new:process -- --source-upgrade-promote \
-  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID \
-  --plan-sha PLAN_SHA256
-```
-
-未选择的旧成果保持原样；子集升级不等于整会议完成。promotion 返回新 `processId`，
-后续发布使用这个 ID；旧 process、分析和发布凭证均保留。升级不承诺跨来源自动复用模型
-阶段；输入证明变化时必须明确说明新分析成本，不能静默启动。
-
-发布验收分层：本地 HTML 检查、远端 Git 字节和实际线上 URL 验收分别记录。
-机械验收不等于语义审查、浏览器运行数学脚本或人工视觉确认，报告必须保留这种区别。
-
-新会议不是一套“只抓标题和 PDF”的旁路。它只在来源入口上区别于 arXiv 日更，进入
-分析后必须复用同一套 `analysis-engine.js`、13 个 canonical 一级标题、类型感知八维评分、
-`beginner-researcher-v3` Reader、`api-reader-source-bindings-v4` 和 current taxonomy。
-`conference-postprocess` 也必须重放 Reader、评分审计和 taxonomy assignment，输出包含
-中英文题目、分档、文档类型、八维评分、作者机构、资源状态、官方 record/PDF 链接与
-current taxonomy compat 的单篇页及 `reader-facing-v3` 风格会议汇总。新增页面不能沿用
-旧标签或会议自造标签。
+新会议的 npm 包装入口会设置并校验所需运行模式；不要自行伪造 `AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE` 或跳过角色检查。两个工作区不能同时生成、审查、推送博客，或修改同一远端 `main`。下文的 `UUID`、`NAME.json`、`C.json` 等是占位符，执行前须替换为对应入口接受的真实任务 ID 和安全文件名。
 
 ```text
-官方 2026 proceedings index
-  → catalog receipt + strict metadata + 逐 PDF receipt/SHA
-  → official-proceedings discovery（精确 paper ID ↔ pdfFile）
-  → 与日更等价的 LLM 筛选
-  → PDF extraction / reviewed staging / import / plan / execution
-  → 共享多阶段全文分析、评分审计、Reader v3、current taxonomy
-  → conference page staging + reader-facing-v3 aggregate
+官方目录与逐篇 PDF
+  → 已核验的 discovery catalog/report
+  → 全集 PDF 摘要证据
+  → 每会独立配置和 LLM 筛选
+  → conference:new:process：提取、导入、分析、评分、解读和页面暂存
+  → conference:new:publish：generate → review → push → verify
 ```
 
-当前官方 acquisition provider：
+会议来源与 arXiv 日更不同，分析仍复用 `analysis-engine.js`、正式分析的 13 个解析标题、类型感知八维评分、`beginner-researcher-v3` 解读及 `api-reader-source-bindings-v4` 来源核验。单篇页面和 `reader-facing-v3` 会议汇总使用现行标签体系，包含中英文题目、分档、文档类型、评分、作者机构、资源状态及官方记录和 PDF 链接，不能沿用旧标签或另造会议标签。
 
-- 语音/音频/音乐：`odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、`interspeech-2026`、
-  `iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`；
-- AI/ML/CV/NLP：`aaai-2026`（OJS volume 40）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、
-  `cvpr-2026`（CVF main）、`acl-2026`、`eacl-2026`；
-- ACL/EACL 只纳入主会 `long`、`short` 和 `findings`，卷首、全集 PDF、workshop 与
-  非论文演讲不会冒充单篇论文；Odyssey keynote 摘要页同样排除。
+会议汇总只读取已通过来源、解读和分类检查的单篇结果，不再让模型总结整批，因此不会为了汇总重复生成每篇深度解读。队列入口只协调已筛选会议的处理和发布，不负责获取或筛选。
 
-CHiME、JEP、Speech Prosody 和 Interspeech 通过各自的官方 ISCA Archive proceedings index
-封存 metadata 与逐篇 PDF。ICMC 2026 的官方页面只提供一个合并 proceedings PDF；
-`icmc-2026` 先封存该 PDF，再按官方 outline 的物理页范围用固定脚本确定性切片，
-生成 page map、单篇 PDF 与绑定原始合并 PDF SHA 的 receipt。无法从源 PDF 恢复的页
-仍保留为 evidence 状态，不用猜测的标题、表格或公式补齐。
+## 获取官方目录和 PDF
 
-AAAI 2026 的 volume 40 是 48 个独立 OJS issue，而 `/issue/current` 只指向其中一期。
-`aaai-2026 catalog` 因此只接受代码中固定的 48 个官方 issue URL；每一期分别封存
-`responses/issues/issue-NN-OJSID.html` 与 response receipt。只有 48 对响应/收据全部可重放、
-issue 标题与 volume/no. 闭合、跨 issue 官方 article ID 唯一时，才写聚合 `metadata.json`
-与 catalog receipt。中断后可重跑恢复已完成的 issue pair；单期响应永远不能生成全集 catalog。
+当前实现支持以下固定来源：
 
-acquisition 固定写入
-`data/runtime/official-conference-acquisitions/<provider>/`，CLI 不接受任意输出根。
-目录、PDF 与收据使用私有权限；索引及每篇 PDF 都绑定官方 URL、响应、字节数和
-SHA-256，并支持只恢复已封存的完整 pair：
+| 类别 | 来源代号（provider） |
+|---|---|
+| 语音、音频和音乐 | `odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、`interspeech-2026`、`iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`。 |
+| AI、机器学习、视觉和语言 | `aaai-2026`（OJS 第 40 卷）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、`cvpr-2026`（CVF 主会）、`acl-2026`、`eacl-2026`。 |
+
+ACL/EACL 只纳入主会 `long`、`short` 和 `findings`，排除卷首、全集 PDF、workshop 和非论文演讲；Odyssey keynote 摘要页也不作为单篇论文。CHiME、JEP、Speech Prosody 和 Interspeech 使用各自官方 ISCA Archive 目录。
+
+ICMC 2026 只有一份合并论文集 PDF。程序先保存原 PDF，再按官方目录大纲（outline）的物理页范围切成单篇，生成页码对应表和绑定原始 PDF SHA 的回执；该切片路径实际串行执行。不能从源 PDF 恢复的页面或结构保留为证据状态，不用猜测的题目、表格或公式补齐。
+
+AAAI 第 40 卷分为 48 个独立 OJS issue，`/issue/current` 只代表其中一期。目录获取只接受代码固定的 48 个官方 URL，每期保存 `responses/issues/issue-NN-OJSID.html` 及响应回执。48 对记录全部可重验、标题与卷期相符且官方 article ID 跨期唯一，才输出聚合 `metadata.json` 和目录回执。中断后重跑可恢复完整的期刊响应与回执对，单期不能充当全集。
+
+来源固定写入 `data/runtime/official-conference-acquisitions/<provider>/`，不接受任意输出根。目录、PDF 和回执使用私有权限，官方 URL、响应、字节数及 SHA-256 必须对应：
 
 ```bash
 npm run conference:new:acquire -- catalog \
@@ -118,13 +58,11 @@ npm run conference:new:acquire -- verify \
   --provider iwslt-2026 --conference-id iwslt-2026 --year 2026
 ```
 
-`download` 默认并发为 1、瞬时网络重试为 0；大批量可显式使用 `--concurrency 1..5` 和
-`--retries 0..5`。重试只覆盖 socket/timeout/429/5xx，并保持同一官方 URL。每个 worker 仍只写自己
-认领的 paper ID，并在任一失败后停止领取新任务、等待在途任务封存完毕，再返回失败，
-因此重新运行同一命令只会恢复完整 pair 并补齐缺项。
+`catalog` 和 `download` 须显式选择 `--dry-run` 或 `--apply`；`status` 和 `verify` 不接受这两个模式参数。`--provider`、`--conference-id` 和 `--year` 必须与固定来源身份一致。
 
-下载完成后，`--pdf-root` 必须指向 provider 根（不是其 `pdfs/` 子目录），因为 metadata
-中的 `pdfFile` 是 `pdfs/<official-id>.pdf`：
+下载默认并发 1、网络重试 0，可显式设置 `--concurrency 1..5` 和 `--retries 0..5`；这些参数及 `--limit` 只用于 `download`。重试限于 socket、超时、HTTP 429 和 5xx，保持同一官方 URL。任一下载失败后停止领取新论文，等待在途任务保存结果，再返回失败。重跑同一命令会重验完整 PDF/回执对并补缺项；有回执却缺 PDF 时仍须停止，不能据回执假装文件存在。
+
+完成下载后再做 discovery。`--pdf-root` 指向 provider 根，而不是 `pdfs/` 子目录，因为 metadata 中的 `pdfFile` 是 `pdfs/<official-id>.pdf`：
 
 ```bash
 npm run conference:new:discover -- --apply \
@@ -135,116 +73,49 @@ npm run conference:new:discover -- --apply \
   --candidate-output iwslt-2026.json --report-output iwslt-2026-report.json
 ```
 
-后续来源阶段用相同参数合同运行 `conference:new:filter*`、`conference:new:extract`、
-`conference:new:staging`、`conference:new:import` 和 `conference:new:plan`；深度处理只运行
-`conference:new:process`。`conference:new:execution`、`conference:new:analyze` 和
-`conference:new:postprocess` 是已禁用的旧旁路，调用时会明确失败。新会议入口只在已绑定
-`daily` 的本工作区并由 wrapper 显式签发 new-conference mode 时放行；原有 `conference:*`
-仍只属于 history workspace。
+目录和文件哈希一致只证明程序能够重验来源，不能代替人工读论文或判断模型结论是否正确。
 
-会议 PDF 通过固定版本 PyMuPDF 提取全文、表格、公式候选与 Figure，并保留可重放的
-页面/区域像素证据。不能因来源为 PDF 就统一宣称图表公式不可得，也不能将普通文本
-拼接结果冒充完整 TeX。各结构必须按实际恢复与验证结果决定是否进入 Reader 绑定；
-无法可靠恢复的公式保留候选及原图证据，不能静默丢掉上下标后标记成功。
-旧 `weak` 来源合同只用于真实缺失结构的兼容读取，不代表当前新会议的默认能力。
-postprocess 产物仍是 runtime staging；最终发布必须经过会议 generate、review、push
-及最终页面验收，不能将来源哈希一致或 Hugo 构建通过当成完整内容验收。
+## 筛选前提取摘要证据
 
-状态：`conference-source-ledger-v1` 与 `conference-run-v2` 是主分支中的基础
-契约。它们用于把已下载的会议 PDF 变成可审计的**候选来源**；它们不自动调用
-模型、不负责下载论文、不自动改历史页面，也不把某个会议全集自动发布到博客。
-source ledger 继续保留 v1 是因为其四类来源工件格式未变；所有携带 canonical `paperId`
-的 discovery/filter/staging/import plan/run/execution 合同均已升级为 v2。
+筛选前必须完成离线 PDF 摘要证据批次。程序认证 discovery catalog/report，把每篇唯一 `exact` PDF 安全复制到隔离目录，生成绑定原始记录的对应文件，再使用固定 PyMuPDF 提取器。`abstract-locator-v1` 只取前两页中唯一、且有明确结束标题的 Abstract 原文，不总结、不调用模型，也不作入选决定。
 
-历史全量重写不等待这条 legacy conference execution 链：已有本地 metadata/PDF 的冻结历史页走
-`history:conference-local-sources → history:direct-inputs → history:conference-projections → history:direct-plan`
-后进入 direct 队列。`direct-inputs` 的 arXiv route 直接来自冻结页已有的单一 arXiv hint，且每个 generation
-新拉、封存官方 TXT、PDF、runtime metadata 与 manifest；会议 route 才消费这里的本地 PDF、metadata SHA 与
-冻结页 frontmatter title fingerprint。图像仅由本次 Reader 在系统临时目录从 PDF 物化；缺失或损坏的本地会议
-输入会使该 direct item 失败关闭，绝不转入 crosswalk。只有 named arXiv fresh acquisition failure handoff
-可以进入 crosswalk。
-
-## 为什么不能把会议 PDF 当作普通日更
-
-默认日更的身份和来源是 arXiv 批次。历史会议页中存在没有可靠 arXiv ID 的记录；
-而一份本机 PDF 的文件名、标题相似度或旧博客标题都不足以证明它与某篇页面是同一
-论文。会议论文必须先冻结会议主身份、PDF 字节和与历史页面的匹配证据。
-
-```text
-会议元数据 + 本机 PDF
-  → discovery → filter → PDF extract → reviewed staging
-  → 受控 PDF 缓存 + source ledger（身份、SHA、来源状态）
-  → plan → 隔离 execution
-  → 同源 fresh analysis / Reader / 评分
-  → taxonomy 证据 sidecar
-  → 独立论文页
-  → 确定性会议汇总投影
-  → generate → review → push（远端 main OID）
-```
-
-会议汇总不会重新让模型总结整批论文：它只消费已经通过来源和 Reader 门禁的单篇
-投影，因此每篇深度理解只生成一次。
-
-## `conference-source-ledger-v1`
-
-每个 ledger 固定一个会议与年份，并对每个成员记录：
-
-- 主身份：IEEE `arnumber`、OpenReview `forumId` 或会议官方 paper ID；标题只可作
-  人工发现候选，不能充当身份或去重键。公开 `paperId` 是
-  `conference:<slug>:<year>:<scheme>:<value>`；短形式 `sourceIdentity` 只用于 ledger 定位。
-- 官方元数据的 SHA、受控缓存内 PDF 的相对路径与字节 SHA、提取文本 SHA、结构化
-  工件 SHA、提取器版本。
-- 明确的来源/身份审查状态和证据。无身份、无全文或来源冲突必须保持 blocked，不能
-  被投影为可分析或可发布。
-
-本机 PDF 与逐篇 metadata 先放入 `conference-staging-sources`，通过提取、复核后再由 importer
-复制到项目控制的 `conference-sources` 私有缓存。账本、缓存、运行
-状态和绝对本机路径均是运行数据，位于 `data/runtime/`，不会提交 Git；提交到 `main`
-的是契约、校验器、CLI、测试和文档。
-
-当前只读维护命令为：
+摘要缺失、歧义或过短记为不可用；提取器失败则阻止继续，不能自动排除这篇论文。命令如下：
 
 ```bash
-npm run conference:validate-ledger -- --ledger icassp-2026.json
-npm run conference:verify-ledger -- --ledger icassp-2026.json
-npm run conference:validate-run -- --run icassp-2026-pilot.json --ledger icassp-2026.json
+npm run conference:new:evidence -- plan \
+  --catalog iwslt-2026.json --report iwslt-2026-report.json \
+  --run 00000000-0000-4000-8000-000000000001
+npm run conference:new:evidence -- apply \
+  --catalog iwslt-2026.json --report iwslt-2026-report.json \
+  --run 00000000-0000-4000-8000-000000000001 --limit 10
+npm run conference:new:evidence -- status \
+  --catalog iwslt-2026.json --report iwslt-2026-report.json \
+  --run 00000000-0000-4000-8000-000000000001
+npm run conference:new:evidence -- verify \
+  --catalog iwslt-2026.json --report iwslt-2026-report.json \
+  --run 00000000-0000-4000-8000-000000000001 --limit 10
 ```
 
-名称只能是对应私有运行目录下的直接 `.json` 文件名；命令不接收任意路径、不导入文件、
-不联网、不调用模型。`verify-ledger` 会重放账本中 metadata、PDF、文本与结构化工件的
-字节 SHA。run 校验还会重放指定 ledger 的 SHA、会议身份和可执行成员，不能只靠
-手写的 `ledgerSha256` 字段通过。
-
-## P1：显式导入与隔离执行
-
-在导入前，先把会议官方 metadata 快照与本机 PDF 目录做只读 discovery。ICASSP 的标题
-只能寻找候选文件；ICLR/ICML 只按 OpenReview forum ID 精确匹配。discovery 的任何结果
-都不是 `verified`，这个命令也不会下载缺失 PDF：
+普通 `apply` 默认处理 1 篇，`--limit` 范围 1–500。确认全集并准备一次处理时，须同时提供 `--all --expected-total N`，其中 `N` 精确等于认证目录的成员总数，否则在创建或推进运行前拒绝。`--all` 仅供 `apply`，不能与 `--limit` 共用。下面的 39 是示例会议的数量，不能照搬到其他目录：
 
 ```bash
-npm run conference:discover -- --dry-run --adapter icassp --year 2026 \
-  --metadata /absolute/papers_2026.json --pdf-root /absolute/papers_2026
+npm run conference:new:evidence -- apply \
+  --catalog iwslt-2026.json --report iwslt-2026-report.json \
+  --run 00000000-0000-4000-8000-000000000001 \
+  --all --expected-total 39
 ```
 
-apply 时只提供直接文件名，程序会把 candidate/report 分别写入配置的
-`data/runtime/conference-discovery-catalogs` 与 `conference-discovery-reports`，且 O_EXCL
-不覆盖已有快照：
+这样既避免误启动数万篇任务，也减少小批次恢复时反复扫描已有回执的本地开销。状态保存在 `data/runtime/conference-filter-evidence-runs/<runId>/`。恢复先重验已完成成员的回执、摘要定位结果、文本及解析证据 SHA；半成品、提取器错误或字节变化都会停止，不能改成排除决定。
 
-```bash
-npm run conference:discover -- --apply --adapter icassp --year 2026 \
-  --metadata /absolute/papers_2026.json --pdf-root /absolute/papers_2026 \
-  --candidate-output icassp-2026.json --report-output icassp-2026-report.json
-```
+非 AAAI 会议继续使用不带 `profile` 的默认定位实现。只有 `aaai-2026` 使用 `aaai-2026-bare-introduction-v1`，允许前两页唯一独占行 `Introduction` 作为摘要终点。实现 SHA 必须来自代码登记表，CLI 不接受任意 profile/hash；更换 profile 必须建立新运行，不能改写旧回执。
 
-筛选的状态合同为 `conference-filter-v5`。它绑定完整 discovery catalog、完整 authenticated
-evidence catalog/report、逐篇 evidence receipt 与 locator、逐篇 source SHA、选择策略、Prompt、
-模型/协议和 taxonomy registry SHA；included、excluded、
-pending、failed 四种决定彼此独立，只有全集无 pending/failed 才能 complete。当前
-`conference:filter` 管理状态与显式人工 decision；`conference:filter:run` 才是唯一生产 LLM
-入口。runner 逐篇重放官方 metadata record、catalog/source SHA、spec/prompt/model/endpoint/taxonomy，
-统一通过固定的 `requestLlmJson()` 使用项目代理和 sticky 账号池。每篇先在全局单飞锁内 O_EXCL
-保存请求 intent，网络返回后保存 terminal HTTP 原始响应、provider usage 及各物理请求的 usage-ledger
-事件绑定，再生成 decision artifact 并应用 CAS：
+全集完成后才生成 `evidence-catalog.json` 和 `evidence-report.json`。筛选通过 `loadEvidenceHandle()` / `evidenceHandleSnapshot()` 读取已经认证的对象，把 catalog/report/state、各篇回执和摘要 SHA、定位版本一起纳入输入、请求及恢复核验。`ready` 摘要进入关键词和提示词输入；其他状态保留原 metadata，交给模型判断，不能凭题目或不完整摘要直接排除。不得直接信任裸 JSON 或路径，也不得把摘要回写到已固定的官方 metadata 快照。
+
+## 配置与执行会议筛选
+
+`conference-filter-v5` 绑定完整 discovery、完整摘要证据 catalog/report、各篇回执及定位信息、来源 SHA、选择规则、提示词、模型、协议和标签登记表 SHA。`included`、`excluded`、`pending`、`failed` 分别记录，全集没有 pending/failed 才能 complete。
+
+`conference:new:filter` 管理配置、状态和显式人工决定；`conference:new:filter:run` 是生产 LLM 筛选入口。它逐篇核验官方记录和完整输入，通过 `requestLlmJson()` 使用项目路由、代理及 sticky 账号池：
 
 ```bash
 npm run conference:new:filter -- spec --catalog NAME.json --report REPORT.json \
@@ -253,30 +124,12 @@ npm run conference:new:filter -- prepare --catalog NAME.json --report REPORT.jso
   --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER-V5.json
 npm run conference:new:filter:run -- --apply --catalog NAME.json --report REPORT.json \
   --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER-V5.json \
-  --filter UUID --owner filter.worker [--limit N] [--retry-failed]
+  --filter UUID --owner filter.worker --limit 1
 npm run conference:new:filter -- status --filter UUID
 npm run conference:new:filter -- apply --filter UUID --decision DECISION.json --owner OPERATOR
 ```
 
-### 筛选健康检查、并发与恢复
-
-`prepare` 返回的 `filterId` 用于后续运行和恢复。先在运行命令中使用 `--limit 1`，确认一篇论文的请求、响应与筛选记录正常，再保持同一组参数、去掉 `--limit` 继续。推荐全局最多同时运行 5 个不同筛选任务；这是操作建议。同一个 `filterId` 的请求记录、原始响应、用量记录和状态更新共用一把锁，不得启动并发 worker。中断后继续使用原来的 catalog、spec 和 `filterId`，不能换一组输入来恢复旧任务。
-
-会议筛选与日更使用同一个结构化决定解析器。响应格式无法解析时，会议程序会保存原始响应和用量记录，将该项记为 `failed`，不会在同一次已登记请求中追加格式修复请求。待退避时间和次数条件满足后，操作者须显式使用 `--retry-failed`；程序会登记一次新尝试，单独记录其请求、响应和费用依据。
-
-最终 included/excluded 必须绑定受控 decision artifact；LLM 决定要求真实请求/响应字节、
-模型/协议和非零逻辑请求 usage，manual 决定使用独立 actor，不得冒充模型。普通
-`buildDecisionArtifact` 和 `conference:filter apply` 都拒绝 LLM actor；生产 signer 不接收 transport
-函数注入，只能消费固定公共路由形成的私有证据。请求中断后先恢复已有 receipt/artifact；若 intent
-存在但终态响应不可知，则保守记为 typed `failed`，绝不自动重复计费。pending 总是优先；failed
-只有显式 `--retry-failed`、超过五分钟退避且累计少于日更 `FILTER_CONFIG.maxRetries`（当前为五次）时才可重试；OpenAI Responses 从第二次 durable attempt 起与日更一样将输出预算提升到 4096 tokens。只有 usage 完整、输出非零且
-严格 JSON 的 `included`/`excluded` 才成为终态。账号池切换前的响应无法由公共 wrapper 提供完整 raw，
-因此 decision receipt 保存各物理请求的 usage-ledger event SHA，terminal raw 单独保存；不可得状态不得
-伪装成完整响应。筛选 complete 后生成只包含 included 身份的 selection receipt。
-
-filter spec 放在 `data/runtime/conference-filter-specs/`。v5 spec 只能由上述 `spec` 命令从同一会议的
-authenticated discovery pair 和 complete evidence run 生成，不能跨会议共享。其形状如下；所有 SHA 都必须由
-对应原始字节或规范化对象真实计算，下面的占位符故意不能直接通过校验：
+每会配置位于 `data/runtime/conference-filter-specs/`，只能由 `spec` 从同会认证的 discovery 双文件及完整摘要证据运行生成，不能跨会议共享。以下字段示例中的占位 SHA 须按相应文件原字节或规范化对象真实计算，不能直接通过校验：
 
 ```json
 {
@@ -297,7 +150,7 @@ authenticated discovery pair 和 complete evidence run 生成，不能跨会议�
     "candidateSetSha256": "<64-hex-normalized-filter-candidate-set-sha256>"
   },
   "evidence": {
-    "runId": "<canonical-evidence-run-uuid-v4>",
+    "runId": "<evidence-run-uuid-v4>",
     "catalogSha256": "<64-hex-evidence-catalog-sha256>",
     "reportSha256": "<64-hex-evidence-report-sha256>",
     "stateSha256": "<64-hex-evidence-state-sha256>",
@@ -310,69 +163,218 @@ authenticated discovery pair 和 complete evidence run 生成，不能跨会议�
 }
 ```
 
-非 AAAI 会议的 `locator` 保持上面的无 `profile` default binding，因此既有完整 evidence run 可继续使用。
-AAAI 2026 的 `locator` 必须额外精确包含
-`"profile":"aaai-2026-bare-introduction-v1"` 及该 profile 在代码 registry 中登记的实现 SHA；旧 AAAI
-default binding、未登记 profile/hash、不同 evidence run/catalog/report 或不闭合的论文全集都会在
-prepare/runner 和任何模型请求前被拒绝。旧 `conference-filter-spec-v4` 共享 spec 不兼容 v5，须按会议重建。
+AAAI 的 `locator` 还须精确包含 `"profile":"aaai-2026-bare-introduction-v1"` 及其登记的实现 SHA。旧 AAAI 默认绑定、未登记的 profile/hash、不同证据运行或不完整论文集合，均在 prepare/runner 和模型请求前拒绝。旧 `conference-filter-spec-v4`、无摘要证据的配置或共享配置不能继续使用，须按会议重新 prepare。
 
-`endpointIdentitySha256` 是 `endpointIdentitySha256(endpoint, model)` 对公共路由最终规范 API URL
-UTF-8 字节计算的 SHA-256；它不包含 API key。endpoint、协议或模型任一漂移都必须重新 prepare
-新的 filter，不能在旧状态上混跑。
+`endpointIdentitySha256` 由 `endpointIdentitySha256(endpoint, model)` 对公共路由规范化后的 API URL 的 UTF-8 字节计算，不含 API key。示例值不代替当前端点计算。端点、协议或模型改变须新建筛选任务，不能在原状态上混跑。
 
-### 必需：筛选前 PDF 摘要证据
+### 筛选健康检查、并发与恢复
 
-筛选前必须运行离线 evidence 批次。它认证既有 discovery
-catalog/report，逐篇把唯一 exact PDF 安全 clone/copy 到隔离 item，生成绑定原始 record 的 projection，
-复用固定 `PyMuPDF` extractor，再由 `abstract-locator-v1` 只截取前两页中唯一且有明确结束标题的
-Abstract 原文。它不总结、不调用模型，也不产生 included/excluded 决定；摘要缺失、歧义或过短
-只记为不可用，提取器失败则整批失败关闭。默认一次只处理 1 篇，`--limit` 最大 500，避免误启
-16k 全量：
+`prepare` 返回的 `filterId` 用于运行和恢复。先用 `--limit 1` 检查一篇论文的请求、响应和筛选记录，再保持同一组输入、去掉 `--limit` 继续。推荐全局最多同时运行 5 个不同筛选任务；这是操作建议。同一 `filterId` 的请求、原始响应、用量和状态更新共用一把锁，不得启动并发 worker。中断后继续使用原 catalog、spec 和 `filterId`，不能换输入恢复旧任务。
 
-```bash
-npm run conference:new:evidence -- plan \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --run 00000000-0000-4000-8000-000000000001
-npm run conference:new:evidence -- apply \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --run 00000000-0000-4000-8000-000000000001 --limit 10
-npm run conference:new:evidence -- status \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --run 00000000-0000-4000-8000-000000000001
-npm run conference:new:evidence -- verify \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --run 00000000-0000-4000-8000-000000000001 --limit 10
-```
+每次请求先在锁内以 `O_EXCL` 保存 intent，再保存终态 HTTP 原始响应、提供方用量及各物理请求的 usage-ledger 事件绑定，最后生成决定文件并按状态 SHA 比较后更新。入选和排除决定都须有受控文件；模型决定还须真实请求/响应字节、模型/协议及非零逻辑请求用量。人工决定使用独立 actor，不能冒充模型。普通 `buildDecisionArtifact` 和人工 `filter apply` 拒绝 LLM actor；生产证据生成器不接受自传 transport 函数。
 
-普通 `apply` 默认 1 篇且 `--limit` 最大 500。已确认全集并准备在单进程完成时，必须同时提供
-`--all --expected-total N`；`N` 必须与认证 discovery member 总数精确相等，否则在创建/推进 run 前
-拒绝。`--all` 仅适用于 `apply`，不能与 `--limit` 共用。这样既保留误启动保护，也避免大会议用很多
-小批次重复扫描既有 receipt 造成 O(n²) 本地 I/O：
+筛选与日更使用同一个结构化决定解析器。格式无法解析时保存响应和用量，记为 `failed`，不在同一 intent 中追加格式修复请求。pending 优先处理；failed 只有显式 `--retry-failed`、超过五分钟退避且累计少于 `FILTER_CONFIG.maxRetries`（当前 5 次）时才重试。新尝试分别记录请求、响应及费用依据；OpenAI Responses 从第二次已登记尝试起，输出预算至少为 4096 tokens。
+
+请求中断后先恢复已有回执或决定文件。intent 已存在而终态响应不可知时，保守记为带错误类型的失败，不自动重复计费。用量完整、输出非零且严格 JSON 的 `included`/`excluded` 才能成为最终决定。账号池切换前的完整原始响应无法从公共封装取得时，回执保留物理请求的 usage-ledger 事件 SHA，并单独保存终态原始响应，不能把不可得状态说成完整响应。全集 complete 后才生成只含 included 身份的选择回执。
+
+当前筛选批量 runner 会捕获公共请求异常，把安全 `errorCode` 和用量写入回执，转成该篇失败后继续处理下一 pending 项；它尚未按 `scope=run` 原样抛出并停止本轮派发。不要把后面 `process` 或会议队列的停止行为当作筛选也已具备的保证。发现账号或服务故障时应停止筛选运行，保留失败证据，排除故障后再按上述条件恢复。
+
+## 新会议统一处理与暂存
+
+新会议处理只用 `conference:new:process`。`conference:new:execution`、`conference:new:analyze` 和 `conference:new:postprocess` 已禁用，调用会明确失败，不能用它们拼接另一条新会议流程。
 
 ```bash
-npm run conference:new:evidence -- apply \
-  --catalog iwslt-2026.json --report iwslt-2026-report.json \
-  --run 00000000-0000-4000-8000-000000000001 \
-  --all --expected-total 39
+npm run conference:new:process -- --dry-run \
+  --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID \
+  --concurrency 3
+npm run conference:new:process -- --apply \
+  --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID \
+  --concurrency 3
+npm run conference:new:process -- --status \
+  --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID
 ```
 
-checkpoint 位于 `data/runtime/conference-filter-evidence-runs/<runId>/`。resume 会先重放所有已完成
-item 的 evidence receipt、locator 重放结果与 text/artifact SHA；遇到半成品 item、提取器失败或任何
-字节漂移立即失败关闭，且不会把该论文自动排除。
-Locator 使用关闭式 provider profile：非 AAAI 继续绑定原始 default SHA；只有 `aaai-2026` 使用
-`aaai-2026-bare-introduction-v1`，允许前两页唯一的独占行 `Introduction` 作为摘要终点。CLI 不接受
-任意 profile/hash 覆写。Profile 变化必须创建新 run，不能改写或混用旧 receipt。
-全集完成后才签发 `evidence-catalog.json` 与 `evidence-report.json`。filter 只通过
-`loadEvidenceHandle()` / `evidenceHandleSnapshot()` 认证读取，并把 catalog/report/state、逐篇
-receipt/evidence SHA 与 locator 版本加入 input、request envelope、durable intent 和恢复重放。
-`ready` 的原文摘要只投影到当前 keyword/prompt 输入；任何 non-ready 状态保留原 metadata 且安全放行
-给 LLM，不允许因标题或不完整摘要直接排除。禁止直接信任裸 JSON/路径，也禁止把摘要回写进已经签名的
-官方 metadata snapshot。无 evidence 的旧 filter/spec 与 v4 不可混跑，必须重新 prepare。
+入口只接受 complete、非空、来自 `official-proceedings` discovery 的选择，每个 included 成员必须是唯一 `exact` PDF。自动来源验收使用 `conference-deterministic-source-seal-v1`，表示程序按官方 metadata 的 `pdfFile` 核验文件，不表示人工审阅。程序内部安排提取、staging、import、plan，再完成共享深度分析、评分、解读、标签和单篇暂存页。
 
-每篇 included 论文随后必须在固定的 `conference-staging-sources` 目录内执行 PDF 提取，
-并由人工复核清单只引用 `paperId`、`sourceIdentity` 和 extraction receipt 文件名。staging
-会重放 request、metadata、PDF、文本、weak artifact 和 receipt 的全部字节与 SHA；不能
-手写路径或哈希绕过提取：
+每篇仍按固定 PyMuPDF 提取，重验 request、metadata、PDF、文本、结构化证据、回执及验证 SHA。process UUID 绑定选择、标签登记表原字节和实现指纹；每篇分析 UUID 根据 process UUID 和完整 `paperId` 确定性生成。状态在 `data/runtime/conference-processes/<process-uuid>/state.json`。
+
+`--concurrency` 默认 1，范围 1–5，覆盖单篇处理生命周期；每篇进入分析引擎时内部并发为 1。相同身份重跑使用同一 UUID，完成论文不再请求模型，未完成论文从原分析检查点继续。只有来源依据、共享分析的完成回执、当前标签及单页清单均通过，论文才 complete；所有成员 complete 后才生成会议汇总及不可覆盖的 `completion-receipt.json`。
+
+分类未能确定时，程序保存 `taxonomy-review-queue.json` 和具体阻断原因。这是单篇待处理条件，不是服务故障，也不能把未解决标签放进可发布汇总。
+
+只有 `--apply` 取得 process 操作锁，`--dry-run` 和 `--status` 只读且不取写锁。程序返回或抛出异常时在 `finally` 释放锁；进程退出遗留的锁只允许安全回收同机已死亡 owner，未知或仍存活 owner 不能擅自清理。逐篇更新另有状态 SHA 比较，禁止把 complete 回退成 analyzing 或 analysis_partial。最终完成事务在锁内重新确认全部成员及回执。
+
+process 只生成私有来源、缓存、检查点及单篇和汇总暂存页，不执行博客生成、审查、推送或远端验证。完成处理后继续下节发布，不把 process complete 当作已上线。
+
+### PDF 中能核验的图表和公式
+
+PDF 提取保留逐页 PNG、内嵌图片摘要、表格单元格及坐标、Figure 和公式候选，以及可重验的页面/区域像素 SHA。不能因为来自 PDF 就统一说图表不可得，也不能把普通文本拼接当作原始 TeX。
+
+当前会议来源不会把启发式表格候选升级成可信 DOM 单元格，矩形矩阵也不能证明原表行列正确；表格候选标为 `needs-review`，数值叙述和可支持的表格通过逐字原文引文核验。没有原始 TeX 时公式来源为 `unavailable`，保留公式候选和页面证据，不能丢上下标后声称得到可核验公式。不能定位完整表格及数值时不展示表格。
+
+Figure 识别支持 `Figure`/`Fig.` 图注，排除 `Figure 2 presents ...` 等正文引用，保留原图号并去重。双栏图只用同栏前置图注限制裁剪；没有有效图片资产的候选不进入可发布图片集合。图片须有页码、图号及解析证据 SHA，不能从旧博客反向补造。旧 weak 来源只供符合相应身份条件的兼容读取。
+
+新会议解读的 PNG 保存在该篇隔离分析运行的 `reader-assets/`。后处理核对文件名、缓存路径、图片类型、SHA 和字节数，再把有效图片写入私有页面暂存目录，发布时进入受控图床。不能将这条会议路径与默认 arXiv 日更或历史直接重写的临时像素路径混为一谈，也不能跨任务复制图片绕过身份检查。
+
+## 新会议独立发布与线上核验
+
+以 process 返回的 ID 发布同一会议，依次执行：
+
+```bash
+conference_process_id='替换为 process 返回的 UUID'
+npm run conference:new:publish:generate -- --conference-id odyssey-2026 --process-id "$conference_process_id"
+npm run conference:new:publish:review -- --conference-id odyssey-2026 --process-id "$conference_process_id"
+npm run conference:new:publish:push -- --conference-id odyssey-2026 --process-id "$conference_process_id"
+npm run conference:new:publish:verify -- --conference-id odyssey-2026 --process-id "$conference_process_id"
+npm run conference:new:publish:status -- --conference-id odyssey-2026 --process-id "$conference_process_id"
+```
+
+`generate` 重验来源及暂存页，生成博客文件和本批清单。`review` 对最终页面字节作只读审查，包含正文模型审查、图片多模态、Markdown 及 Hugo 检查；失败不保存通过记录，也不原地改正文。模型通过不等于论文事实已绝对正确，更不代替独立事实或人工视觉检查。
+
+逐页通过证据只按相对路径和页面内容 SHA 复用。实现、模型、协议或批次记录变化后，未变页面保留通过依据，当前批次仍须重跑确定性检查并生成新审查记录。图片子审查不能脱离整页身份或省略来源检查。
+
+发布正文审查默认并发 5，`PD_BLOG_REVIEW_CONCURRENCY` 范围 1–5。设为 1 时逐页顺序处理，首异常会停止后续页面；默认并发模式会提前提交所有页面任务，异常传播不保证其他已提交页面立即停止请求。不能宣称它与 Node 分析队列具备相同的运行级停止派发能力。
+
+`push` 逐文件核验 Git 暂存区及提交内文件字节，核对本次允许变动的文件集合、父提交、推送身份和远端 OID，不只看工作区文件。博客与图床分别处理受控提交；图床完整资产清单和本次 Git 变动分开，相同已发布图片可零差异复用。自身提交后断网或重复发布，仅在父提交、文件集合、内容和远端身份精确一致时恢复。
+
+### main 前移后的恢复
+
+尚未发布的生成清单（`generation.json`）因日更或 UI 更新遇到 `main` 前移时，重新走正常 `generate → review → push`，不得手改清单、审查记录或直接重放旧 push。generate 分别核对博客和图床的推送目标、`HEAD = 远端 main`，确认旧基线存在且是当前基线祖先，并逐提交检查所有会议目标，包括合并提交的父提交；“改过又恢复”不能视为未改。
+
+已经发布的目标须在当前提交中保留生成清单绑定的精确文件字节和 `100644` 模式；未发布的目标从旧基线到当前提交不得被触及，旧基线可以是旧内容或不存在。两种情况都要求工作区目标路径安全、是普通文件、硬链接数为 1、权限为 `0644`，字节 SHA 与旧清单一致。目标冲突、删除、可执行或符号链接模式变化、工作区漂移、未知基线、非祖先历史替换或远端身份改变都拒绝；其他进程仍须遵守共享锁。
+
+以上只允许 generate 重验来源和暂存结果后生成当前基线的清单，不改旧审查记录，也不修复来源或图片 SHA 漂移。review 可复用未变页面，但重跑当前基线的 Hugo 和确定性检查，再更新当前审查记录；push 对允许变动的精确文件集合、父提交、暂存区、提交及远端的核验不变。
+
+正文或图片被拒绝时，具体 findings 保存为不可覆盖的 `data/runtime/conference-publications/page-review-failures/<failureSha256>.json`，绑定路径、内容 SHA、审查协议和阶段，异常给出文件路径。文件不含正文替换建议或图片字节，也不是通过缓存。先按 findings 修正生成阶段的内容或来源，再正常 generate/review；服务和账号异常保留原类型，不能当内容失败反复请求。
+
+### 自动验收覆盖什么
+
+新 v2 发布在推送博客和图床后，自动 GET 已审页面和全部图片，通过后才保存发布完成记录。页面检查 HTTP 200、HTML 类型、最终 URL 与唯一正式地址一致，以及已审正文、图片顺序和表格单元格的对应投影；含公式时还检查数学脚本存在。图片检查 PNG 类型、实际字节 SHA 和可解码性，允许通过安全核验的重定向，不套用页面最终 URL 必须等于正式地址的条件。线上核验默认并发 4，`PD_CONFERENCE_ONLINE_VERIFY_CONCURRENCY` 范围 1–16。
+
+GET 使用项目 HTTP CONNECT，逐跳核验公网地址并限制响应。全链共享 60 秒期限，响应最多 16 MiB；每一跳的瞬时传输最多尝试 6 次。HTTP 状态、哈希和 HTML 不匹配不作为瞬时故障重试。线上尚未符合时保留远端已经推送的事实，继续运行 `verify`，不要重新分析论文。
+
+`status` 报告已保存的线上检查快照；显式 `verify` 会记录一次新的 intent/result 并重新 GET，最新 pending 或失败不能被旧通过掩盖。已有 publish 的重复 `push` 只读 status，不代替新的线上重验。旧 v1 发布通过单独的 `verification-v2.json` 补充核验，原记录字节保留。
+
+这里的 complete 范围是 `mechanical-html+remote-oid+online-urls`。该验收不查询 GitHub Pages workflow 的 build/deploy，不另查页面标题，也不执行浏览器中的 MathJax/KaTeX 或人工看图。对用户宣告上线前，还须确认部署对应发布提交或保留已审字节的后续提交，核对全部目标页面的正式地址和标题，并保留部署及页面核验记录。需要的事实、浏览器和视觉审查也须按任务完成；不能把机器字段或模型通过当作这些工作已经完成。
+
+## 队列、恢复与升级
+
+### 顺序处理已筛选会议
+
+队列使用 `conference-queue-plan-v1` 计划，按数组顺序完成一个会议的 `process → generate → review → push → verify`，再进入下一个。每项指定原 catalog/report/filter：
+
+```json
+{
+  "contract": "conference-queue-plan-v1",
+  "version": 1,
+  "conferences": [
+    {
+      "conferenceId": "acl-2026",
+      "catalogName": "acl-2026.json",
+      "reportName": "acl-2026-report.json",
+      "filterId": "a144e9b3-e014-4f21-a42a-c260c54385b1",
+      "concurrency": 3
+    }
+  ]
+}
+```
+
+```bash
+npm run conference:new:queue -- --dry-run --plan /absolute/path/plan.json
+npm run conference:new:queue -- --status --plan /absolute/path/plan.json
+npm run conference:new:queue -- --apply --plan /absolute/path/plan.json
+```
+
+队列项 `concurrency` 默认 3、范围 1–3；独立 process 的默认 1、范围 1–5 是另一层配置，不能互换。队列发现已发布会议也会进入真实 verify，不仅凭旧发布回执跳过当前线上检查。
+
+阶段抛错或 process 存活状态不明时，队列暂停后续会议并保留阶段、错误和在途结果。只有确认故障解除，才在 `--apply` 命令中显式加 `--retry-failed` 释放暂停和重试条件。普通恢复不清空错误依据，不重新分析完成项，也不能为了显示完成手改状态。
+
+process 会将余额、认证、限流、配置及被分类为系统传输故障的错误记为 `batchFailure`，停止领取后续论文并等待在途结果；已保存记录保留。单篇 Demo 瞬时故障、部分带类型的网络错误和待处理标签不等于系统失败。普通可重试论文默认最多进入 3 次、退避 15 分钟；中断留下的 analyzing 不自动重发，须明确处理。显式 retry 记录释放依据，不能伪装成失败从未发生。筛选和 Python 发布审查的不同派发边界见各自章节。
+
+### 实现变化后的显式迁移
+
+process 的实现指纹来自固定清单，覆盖共享引擎、深度分析、来源上下文、JS/Python 论文身份、Reader 修复及表格和资源处理、会议暂存及渲染，以及实际分析、Reader、评分、开源扫描和修复提示词。
+
+已有进展的任务遇到实现变化时，普通 process 会要求显式迁移，不会静默另建 UUID 并整会重新计费。只有旧任务全为 pending、尝试为 0 且没有来源、分析或页面证明时，才允许新实现建立另一命名空间，旧检查点仍保留。多个已进展任务身份相符却有歧义时停止，不能任意选一个。
+
+```bash
+npm run conference:new:migrate-process -- --apply \
+  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID \
+  --concurrency 3
+```
+
+迁移默认并发 3、范围 1–5，重验原来源及固定成员。完成论文先由当前后处理重新生成并核验暂存页，不重新请求模型；未完成论文仍可能继续分析。`--reuse-complete-pages` 另要求重放后的页面路径及内容 SHA 不变。需要解除失败限制时可显式加 `--retry-failed`，迁移记录和原来源依据保留。迁移实现与升级来源是不同操作。
+
+### 来源升级需要明确的新分析授权
+
+来源升级先输出绑定原 process、输入 SHA 和当前提取器的计划，再只分析明确选中的论文：
+
+```bash
+npm run conference:new:process -- --source-upgrade-plan \
+  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID
+npm run conference:new:process -- --source-upgrade-apply \
+  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID \
+  --plan-sha PLAN_SHA256 --paper-ids 'PAPER_ID_1,PAPER_ID_2' \
+  --authorize-new-analysis --concurrency 3
+npm run conference:new:process -- --source-upgrade-promote \
+  --catalog C.json --report R.json --filter FILTER_UUID --from PROCESS_UUID \
+  --plan-sha PLAN_SHA256
+```
+
+`PLAN_SHA256` 必须等于刚核对的计划 SHA，`--paper-ids` 只列本会明确授权的新分析对象，`--authorize-new-analysis` 不能省略。未选择的旧成果保留；新提取组使用新的来源依据，不能放宽旧回执或覆写旧文件。来源获取或提取的 generation 不等于论文 `vN` 修订号。
+
+子集升级 complete 不等于整会完成。普通 promote 需要全成员升级结果；显式 `--preserve-original-complete` 可保留原完成项，`--prefer-upgrade` 优先用完成的升级项并保留其他原完成项，两者互斥。无论哪种方式，缺少完整可核验结果的成员都会阻止生成新会议结果。返回的新 `processId` 用于后续发布，原 process、分析和发布记录保留。计划没有承诺跨来源复用模型阶段，输入改变时须说明新分析成本。
+
+`--page-repair-mode caption-only` 是另一个明确限定的确定性页面修复选项，只供 source-upgrade 的 plan/promote，要求保留的 process 已完成并有绑定的修复策略；它不等于 source-upgrade-apply 的模型新分析，也不自动授权新成本。不要为普通恢复自行加这些模式参数。
+
+### 工作区、重复文件与锁维护
+
+`npm run conference:new:workspace` 只读报告未提交内容、配置重复定义及进程存活信息。旧 JSON 的 running 不代表当前仍有进程；应依据实际 owner 和锁记录判断。
+
+`npm run storage:pdf-duplicates -- --json` 仅按来源记录声明的哈希报告重复候选，不是逐字节核验或删除授权。`--hash-bytes` 才重新读取全部 PDF 计算哈希，大目录可能耗时较长。会议来源及发布记录受保护，不属于自动 prune 范围。
+
+`npm run conference:new:recover-locks` 会实际回收符合条件的锁，不是只读查询。它只处理程序判定可回收、owner 确认死亡的 process 操作锁；锁格式损坏、进程存活或存活未知时保留并报告跳过，不批量删除锁文件。
+
+## 旧会议来源和隔离执行的维护
+
+本节命令均属于 history 工作区，用于维护已有独立会议链。它们不替代新会议 process，也不自动映射历史页面清单的旧 URL 和任务页。旧会议汇总未接入 `history:publication` 的限制只属于该旧入口，不能据此说当前历史直接发布没有会议能力。
+
+一份本机 PDF 的文件名、相似题目或旧博客题目不足以证明论文身份。旧链先固定官方主身份、PDF 字节和匹配依据，再依次发现、筛选、提取、复核、导入、计划及隔离执行。
+
+### 来源账本与只读校验
+
+`conference-source-ledger-v1` 固定一个会议和年份。主身份使用 IEEE `arnumber`、OpenReview `forumId` 或会议官方 paper ID；题目只能帮助人工寻找候选，不作身份或去重键。公开主键使用 `paper-identity-v1` 的完整形式，例如 `conference:icassp:2026:icassp-arnumber:10910001`。短 `sourceIdentity=icassp-arnumber:10910001` 只在账本内定位来源。
+
+账本记录官方 metadata SHA、受控 PDF 的相对路径和字节 SHA、提取文本及结构化证据 SHA、提取器版本、来源和身份审查状态。身份缺失、无全文或来源冲突保持 blocked，不能进入分析或发布。四类来源文件格式未变，所以 ledger 仍为 v1；discovery、staging、import、plan、run 和 execution 使用各自 v2 协议，筛选状态及配置为 v5，均须核验完整 `paperId`。早期 `icassp-2026:icassp-arnumber:10910001` 临时 ID 会被拒绝，没有自动运行数据迁移入口。
+
+本机 PDF 和逐篇 metadata 先放 `conference-staging-sources`，提取并复核后由 importer 复制到私有 `conference-sources`。账本、缓存、运行状态和本机绝对路径均在 `data/runtime/`，不提交 Git；仓库只跟踪实现、协议、校验器、测试和文档。
+
+```bash
+npm run conference:validate-ledger -- --ledger icassp-2026.json
+npm run conference:verify-ledger -- --ledger icassp-2026.json
+npm run conference:validate-run -- --run icassp-2026-pilot.json --ledger icassp-2026.json
+```
+
+这些只读命令只接收私有运行目录直属 `.json` 文件名，不导入、不联网、不调用模型。`verify-ledger` 重验 metadata、PDF、文本及结构化证据原字节 SHA；run 校验还核对指定 ledger 的 SHA、会议身份和成员，手写 `ledgerSha256` 不能代替实际重验。
+
+### 发现、提取与人工复核
+
+先提供官方 metadata 快照和本机 PDF 根做只读 discovery。ICASSP 题目只找候选；ICLR/ICML 按 OpenReview forum ID 精确匹配。发现结果不是 verified，命令也不下载缺失 PDF：
+
+```bash
+npm run conference:discover -- --dry-run --adapter icassp --year 2026 \
+  --metadata /absolute/papers_2026.json --pdf-root /absolute/papers_2026
+```
+
+apply 时 candidate/report 只能给直接文件名，在 `conference-discovery-catalogs` 和 `conference-discovery-reports` 以 `O_EXCL` 创建，不覆盖旧快照：
+
+```bash
+npm run conference:discover -- --apply --adapter icassp --year 2026 \
+  --metadata /absolute/papers_2026.json --pdf-root /absolute/papers_2026 \
+  --candidate-output icassp-2026.json --report-output icassp-2026-report.json
+```
+
+旧运行仍须满足前述筛选和完整证据要求，不能拿旧 v4 配置继续混跑。旧 `conference:filter` 和 `conference:filter:run` 只在 history 工作区使用。每篇 included PDF 必须在固定 staging source 根提取，人工复核清单只引用 `paperId`、`sourceIdentity` 和提取回执文件名；staging 重验请求、metadata、PDF、文本、结构化证据和回执的全部字节，不接受手写路径或哈希替代提取。
 
 ```bash
 npm run conference:extract -- --dry-run --manifest PAPER-extract.json
@@ -386,10 +388,7 @@ npm run conference:staging -- --dry-run \
   --import-output icassp-2026-import.json --receipt-output icassp-2026-staging-receipt.json
 ```
 
-extraction request 与其 metadata/PDF/输出都使用 staging source 根下的直接文件名。ICASSP
-示例的最小 v2 形状如下；`discoveryBinding` 必须来自已认证 discovery 对该 metadata index 的
-重放，PDF 必须等于唯一 `exact` 候选。当前没有 resolution receipt adapter，因此
-`normalized`、`ambiguous` 和 `unmatched` 候选不能进入 staging。
+提取请求及其 metadata、PDF 和输出使用暂存来源根直属文件名，彼此不能混用。以下最小 v2 示例的 `discoveryBinding` 来自已认证目录对应 metadata index 的重验，PDF 须等于唯一 `exact` 候选。当前未实现用于单独解决匹配歧义的回执适配器，`normalized`、`ambiguous` 或 `unmatched` 候选不能进入 staging：
 
 ```json
 {
@@ -442,19 +441,13 @@ extraction request 与其 metadata/PDF/输出都使用 staging source 根下的�
 }
 ```
 
-`--verify` 不信任已有派生文件：它在临时目录用固定 `PyMuPDF==1.27.2.3` 重新提取，并要求新旧
-text/visual-artifact/receipt 字节完全一致。当前结构化提取器版本为 `2.3.1`，旧 `2.3.0` 及更早工件需要在后续新 generation 中重新提取封存，不能原地覆盖；同时保留逐页
-视觉审计和可定位的结构记录。Node extraction handle 默认执行临时重提取；同一次自动
-process 的 staging/import 可用 `replay: false` 重放已封存字节与回执，避免重复解析。
-人工单独运行 `--verify` 只用于诊断，不能代替后续来源绑定门禁。
+`--verify` 在临时目录用固定 `PyMuPDF==1.27.2.3` 重新提取，要求文本、视觉证据和回执的新旧字节完全一致。当前提取器为 `2.3.1`，`2.3.0` 及更早解析结果须在新的来源提取组中重新生成并保存，旧文件保留，不能原地覆盖。逐页视觉审计和可定位结构记录也须保留。
 
-默认 extraction profile 要求不少于 5000 个非空字符。JEP 2026 与 ICMC 2026
-官方 proceedings 中存在完整的两页短论文，因此这两个会议使用显式绑定的
-3000 字符短篇 profile；仍然要求原始 PDF、逐页文本、结构化工件和 SHA-256
-全部可回放，不能把摘要或缺失正文当作短篇全文。
+Node 提取句柄默认执行临时重提取；同一次自动 process 的 staging/import 可用 `replay: false` 重验已保存字节和回执，避免重复解析。单独运行 verify 只用于诊断，不能代替后续来源检查。
 
-人工复核清单放在 `data/runtime/conference-staging-specs/`，只引用 canonical `paperId`、locator
-`sourceIdentity` 与已经生成的 receipt；成员按 `paperId` 排序，`membersSha256` 绑定整个数组：
+默认提取要求至少 5000 个非空字符。JEP/ICMC 的完整两页短论文使用明确绑定的 3000 字符 profile，仍须完整 PDF、逐页文本、结构化证据和 SHA，不能拿摘要或缺正文记录当短篇全文。
+
+人工复核清单在 `data/runtime/conference-staging-specs/`，成员按 `paperId` 排序，`membersSha256` 绑定整个数组。新 process 的自动验收与这里的人工 review 记录不同，不能互相冒充：
 
 ```json
 {
@@ -473,11 +466,11 @@ process 的 staging/import 可用 `replay: false` 重放已封存字节与回执
 }
 ```
 
-确认所有 dry-run 后，把 `conference:staging` 的 `--dry-run` 改为 `--apply`。apply 只在配置的 `conference-staging` 目录以
-O_EXCL 写入 import manifest/receipt；它不复制来源、不调用模型。
+核对 dry-run 后才把 staging 改为 `--apply`。它在 `conference-staging` 以 `O_EXCL` 保存导入清单及回执，不复制来源或调用模型。
 
-生产导入只接收刚才的 staging 双文件及完整 discovery/filter 证明，不再接受任意
-`--manifest`、`--source-root` 或 `--cache-root`：
+### 导入与固定运行计划
+
+导入只接收 staging 双文件及完整 discovery/filter 依据，不再接受任意 `--manifest`、`--source-root` 或 `--cache-root`：
 
 ```bash
 npm run conference:import -- --dry-run \
@@ -486,13 +479,9 @@ npm run conference:import -- --dry-run \
   --updated-at 2026-09-06T00:00:00.000Z --ledger-output icassp-2026-ledger.json
 ```
 
-确认后改为 `--apply`。导入器只从配置的 staging source 读取被认证文件，复制进
-`conference-sources`，并在 `conference-ledgers` 中以 O_EXCL 同时写 ledger 和自动命名的
-`icassp-2026-ledger.import-receipt.json`。
+确认后改为 `--apply`。importer 从配置的 staging source 读取认证文件，复制到 `conference-sources`，在 `conference-ledgers` 以 `O_EXCL` 保存 ledger 和自动命名的 `icassp-2026-ledger.import-receipt.json`。
 
-导入后必须准备一份 `conference-run-plan-v2` 计划文件放在 `conference-ledgers`。它要
-精确列出全部 included 且 verified 的身份、当前 taxonomy SHA 和无重叠完整分片。创建
-run 时仍需重放全部上游凭证：
+`conference-run-plan-v2` 放在 `conference-ledgers`，精确列全部 included 且 verified 身份、当前标签 SHA 和完整无重叠分片。成员可按主题、session 或编号分片，但不能遗漏或重复：
 
 ```json
 {
@@ -522,6 +511,8 @@ run 时仍需重放全部上游凭证：
 }
 ```
 
+创建 run 仍核验全部上游记录：
+
 ```bash
 npm run conference:plan -- --dry-run \
   --catalog icassp-2026.json --report icassp-2026-report.json --filter UUID \
@@ -530,10 +521,11 @@ npm run conference:plan -- --dry-run \
   --plan icassp-2026-plan.json --run icassp-2026-run.json
 ```
 
-确认后改为 `--apply`。run 与自动命名的 `icassp-2026-run.plan-receipt.json` 会在
-`conference-runs` 中成对、不可覆盖地写入。
+确认后改为 `--apply`。生成的 run 使用 `conference-run-v2`，它和自动命名的 `icassp-2026-run.plan-receipt.json` 在 `conference-runs` 成对创建，不可覆盖。运行分别固定 ledger、`filterPolicySha256`、`selectionReceiptSha256`、`selectedMemberSetSha256` 和标签版本，不能用一个 `selectionPolicySha256` 混指规则、筛选结果及成员集合。
 
-execution prepare 同样不能只拿一份手写 run；它必须重放 reviewed plan 和整个上游链：
+### 隔离 execution 的创建与恢复
+
+prepare 不能只拿手写 run，必须重验 reviewed plan 和完整上游链：
 
 ```bash
 npm run conference:execution -- prepare \
@@ -545,69 +537,13 @@ npm run conference:execution -- prepare \
   --execution 00000000-0000-4000-8000-000000000001
 ```
 
-状态文件与不可变 `authority.json` 放在 `data/runtime/conference-executions/<UUID>/`。authority
-绑定 plan receipt 文件 SHA、run 文件 SHA、import receipt、筛选策略、筛选结果 receipt 和最终成员集；
-每次 status/transition 都必须重新提供上面 prepare 的完整参数链并逐次重放，不能只凭一份 execution
-state 继续推进。创建顺序固定为 `patches/ → 初始 state.json → authority.json`；prepare 只会
-自愈可由当前 plan authority 完整证明的空目录、空 `patches/` 或无 attempt 的初始
-`state.json` 单件。`authority.json` 单件无法区分创建中断与已推进 state 被删除，因此一律
-失败关闭，绝不重建 pending；未知文件、非空孤立 patch、symlink 或任一字节漂移也都会失败关闭。
-并发 writer 已经落下同一 authority 时，失败方只重放完整 bundle，绝不回滚共享文件；其他创建
-错误的 cleanup 只删除本进程记录且当前 `dev/ino/size/SHA` 仍与写入描述符一致的文件和目录。
-目录使用锁、状态 SHA CAS 和受控 patch 保证可恢复。主分支现已通过
-`conference:analyze` 复用共享深度分析/Reader，并由 `conference:postprocess paper|aggregate`
-重放 completion、current taxonomy 和完整 selected member set。但这些新页仍使用 generic
-conference 路径，没有绑定历史 inventory 保留的旧 URL/task 页；conference aggregate 也尚未接入
-historical publication，且没有会议历史 review/push/remote-OID 闭环。因此可运行隔离试点，
-但不能直接发布或声称已重写历史会议页。
+状态及不可变 `authority.json` 位于 `data/runtime/conference-executions/<UUID>/`。该文件固定计划回执、run 文件、导入回执、筛选规则、选择回执和最终成员集合，每次 status/transition 都须重新提供完整参数并重验，不能只读状态文件继续。
 
-### 新会议统一批处理入口
+创建顺序为 `patches/ → 初始 state.json → authority.json`。prepare 只恢复可由当前计划完整证明的空目录、空 `patches/` 或没有尝试记录的初始 `state.json` 单件。孤立 `authority.json` 无法区分创建中断与状态被删，因此拒绝重建 pending；未知文件、非空孤立 patch、符号链接和字节变化也停止。
 
-日更工作区中的新会议不得再分别调用 execution、analyze 或 postprocess；这三条
-`conference:new:*` 旧旁路会明确失败。唯一批处理入口是：
+并发进程已创建相同 `authority.json` 时，失败方只重验完整文件组，不回滚共享文件。其他创建错误只清理由本进程记录、且当前 dev/ino/size/SHA 仍与写入描述符一致的文件或目录。操作锁、状态 SHA 比较及受控补丁保证可恢复，不能删除记录绕过检查。
 
-```bash
-npm run conference:new:process -- --dry-run \
-  --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID \
-  --concurrency 3
-npm run conference:new:process -- --apply \
-  --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID \
-  --concurrency 3
-npm run conference:new:process -- --status \
-  --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID
-```
-
-该入口只接受已经 complete、非空且来自 `official-proceedings` discovery 的 selection，
-每个 included member 还必须是唯一 `exact` PDF。它签发
-`conference-deterministic-source-seal-v1`，明确表示机器按官方 metadata 的 `pdfFile`
-自动验收，不写也不暗示人工 review。每篇仍运行固定 PyMuPDF 提取，并在 staging、import
-和后续重载时重放 request、metadata、PDF、text、artifact、receipt 与 verification SHA。
-
-process UUID 绑定 selection、current taxonomy 原始字节和实现指纹；每篇 analysis UUID
-再由 process UUID 与 canonical paperId 确定性派生。checkpoint 位于
-`data/runtime/conference-processes/<process-uuid>/state.json`，状态只在 source proof、公共
-analysis-engine 的 completion receipt、current taxonomy 单页 manifest 均存在后进入
-`complete`。全体成员 complete 后才生成 aggregate，并签发同目录不可变
-`completion-receipt.json`。并发覆盖完整单篇生命周期且限制为 1–3；重跑沿用同一 UUID，
-已完成论文不再调用模型，partial 论文从原 analysis checkpoint 续跑。
-
-实现指纹使用代码中的稳定显式文件清单，覆盖共享 analysis engine、deep analyzer、会议来源上下文、
-JS/Python 论文身份、Reader contract/repair/tables/resource sync、会议 staging/postprocess/renderer，
-以及实际分析、Reader、评分、开源扫描和修复 Prompt。任一已绑定实现字节漂移都会产生新 process UUID；
-当前安全策略接受因此发生全量重分析，不跨实现版本复用旧 complete 状态。
-
-只有 `--apply` 获取同一 process 目录的 operation lock；`--dry-run` 和 `--status` 保持只读且不拿写锁。
-该锁使用本地死亡进程可恢复策略，异常会在 `finally` 释放，SIGINT/进程退出留下的同机死亡 owner 可由
-后续运行安全回收。逐篇状态更新另有状态 CAS，禁止把 `complete` 回退为 `analyzing` 或
-`analysis_partial`；最终 completion transaction 会在锁内重新确认所有成员 complete 并重放 receipt。
-
-此入口只写私有 source/cache/checkpoint/page/aggregate staging，不执行博客 generate、review、
-push 或远端 OID 验证。会议公开发布仍是独立、尚未授权的后续事务。
-
-`transition` 只读取 `data/runtime/conference-executions/<UUID>/patches/` 下的直接 JSON 文件。
-首个来源就绪 patch 的最小形状如下；`expectedStateSha256` 必须取当前 status 输出对应状态，
-`operationId` 不可复用给不同字节。当前不要构造 `completed`：没有 completion-proof bundle 时
-它一定失败。
+transition 只读 execution `patches/` 直属 JSON。`expectedStateSha256` 使用当前 status 对应值，`operationId` 不可复用于不同字节。来源就绪补丁如下；没有 completion-proof bundle 时手写 completed 一定拒绝：
 
 ```json
 {
@@ -638,62 +574,20 @@ npm run conference:execution -- transition --execution UUID \
   --patch source-ready-10910001.json --owner worker.1
 ```
 
-会议全文生产入口是 `conference-source-context-v2`：只接受 opaque `planHandle`、canonical
-`paperId` 和受控 source root，并把 plan/import/filter receipt 写入 production authority
-binding。生产模块不导出 ledger + run/execution 的低层 context builder，也不会返回
-`analysisReady=true` 的 test-only context。
-生产入口仍会重放 metadata/PDF/text/artifact 字节；可靠正文达到门槛即可分析。固定 PyMuPDF
-重提取会额外证明逐页 PNG、内嵌图片摘要以及表格/Figure/公式候选的视觉证据 SHA；它不会凭空
-恢复 PDF 中不存在的原始 TeX，也不会把不完整表格候选冒充完整 DOM。因此公式文本绑定仍为
-unavailable；表格候选保存原始单元格、坐标与原页像素，统一标记 `needs-review`，矩形矩阵本身不能证明原表行列关系正确。启发式旧表格/公式工件不再被 Reader 适配器升级为可信 DOM cell/原始 TeX，量化叙述改走逐字原文 quote，图片/Figure 以原页视觉证据保留。
-稳定 source SHA 不包含可变 execution 状态，
-观察状态另有独立 SHA。它不接受任意全文、旧博客文本、arXiv fallback 或外部图下载。
+旧 `conference:analyze` 复用共享分析和 Reader，`conference:postprocess paper|aggregate` 重验完成记录、当前标签和完整选择集合。它们在通用会议页面路径生成私有单篇及汇总，未绑定历史页面清单的旧 URL 和任务页，因此不能直接声称旧历史页已重写或已发布。
 
-PDF 是弱结构来源：不能可靠复原原始 TeX 时，不展示“可验证公式”；不能定位完整表格
-和数值时，不展示表格；图片必须记录页码/图号及工件 SHA。不得从旧博客正文反向补造
-这些证据。
+生产来源入口 `conference-source-context-v2` 只接受校验器返回的受控 `planHandle`、完整 `paperId` 及受控根，绑定 plan/import/filter 回执。不导出仅用 ledger/run/execution 拼造的低层入口，也不返回 `analysisReady=true` 的测试上下文。metadata、PDF、全文和解析证据仍须逐字节重验；来源 SHA 不含可变 execution 状态，观察状态另有 SHA。它不接受任意全文、旧博客、arXiv 替代获取或外部图片下载。
 
-结构化 Figure 识别统一支持 `Figure`/`Fig.` 图注，排除 `Figure 2 presents ...` 等正文引用，保留原图号并去重；双栏图只使用同栏前置图注限制裁剪。没有有效图片资产的候选不进入可发布 Figure 集合。
+会议页独立使用 `conference` scope，不伪装成某一天日更。汇总至少说明目录总数、身份已核数、来源可用数、深度分析完成数、未纳入或阻断原因，以及按唯一会议身份统计的任务分布；长篇解读只放单篇。blocked、未完成或未分类成员不能进入可发布汇总。
 
-新会议独立发布 `conference:new:publish:generate|review|push` 的 Review 同时执行最终页面正文语义、图片多模态、Markdown 和 Hugo 检查；通过证据仅按路径与页面字节 SHA 复用，失败不签通过。push 逐文件校验 Git 暂存区和提交内 blob，而非只看工作区字节；自身提交后断网和重复发布可在精确父提交、文件集合、内容与远端身份一致时恢复。图床完整资产清单与本次 Git delta 分开处理，已经发布的相同图片可零差异复用。以上均为自动内容检查，不引入人工审批。
+## 与全历史重写的衔接
 
-未发布的 generation 遇到日更或 UI 更新使 `main` 前移时，只能重新运行正常 `generate → review → push`，不得编辑 generation/receipt 或直接重放旧 push。generate 对博客与图床分别核对同一 push 目标身份、`HEAD = 远端 main`、旧基线确实存在且为当前基线祖先，并逐提交检查全部会议目标（包含 merge 父提交，不能把“改过又恢复”视为未改）。若目标已经发布，当前提交内必须保留 generation 的精确 blob 和 `100644` 模式；若目标尚未发布，旧基线到当前提交必须完全没有触及该目标，旧基线可以是旧内容或不存在。两种情况都要求工作区目标位于安全路径、是普通单链接文件、权限 `0644` 且字节 SHA 精确等于旧 generation。任何目标冲突、删除、可执行/符号链接模式变化、工作区漂移、未知基线、非祖先历史替换或远端身份改变均拒绝。其他进程仍须遵守共享锁，不能并发改写这些目标。
+单个既有日批次可查 [`rewrite:source`](fresh-rewrite.md)。全历史会议页优先走 `history:conference-local-sources → history:direct-inputs → history:conference-projections → history:direct-plan` 后进入直接重写队列，不要求先跑旧 ledger/execution，也不把旧全文、任意路径或旧解读直接塞进正式分析。
 
-通过上述检查仅允许 generate 重新验证来源与 staging 后签发当前基线的 generation；不会修改旧 review receipt。review 可以按“路径 + 页面内容 SHA”复用未变页面的通过证据，但必须重跑当前基线的 Hugo/确定性门禁并重签 review receipt。push 的精确 delta、父提交、暂存区/提交 blob 与远端 OID 校验保持不变。此恢复不等于论文内容审查通过，也不修复来源或图片 SHA 漂移。
+会议来源只读取本地来源清单已绑定的 metadata/PDF SHA 和冻结页面对应记录，本轮解读所需图片从 PDF 在系统临时目录准备。本地文件缺失或损坏只使该项失败，不转入 crosswalk 或备用 arXiv 获取。arXiv 来源根据冻结页的单一 arXiv 线索，每个新的来源获取序号都重新获取官方文本、PDF、runtime metadata 和 manifest；同一获取序号恢复时，先核验并复用原四文件。只有明确命名的 arXiv 新获取失败交接才能进入 crosswalk，不能任意调用备用链。只有当前官方 PDF 返回 404 后才可尝试同 ID 历史版本，文本须来自实际选中 PDF，引用使用核验的 `sourceVersion`，不能把获取序号当论文修订号或猜成 `v1`。
 
-正文或图片内容 review 被拒绝时，具体 findings 会以不可覆盖的诊断文件保存到 `data/runtime/conference-publications/page-review-failures/<failureSha256>.json`，绑定页面路径、内容 SHA、审查协议和阶段；异常同时给出文件路径。诊断不包含正文替换建议或图片字节，不作为通过缓存。先根据 findings 修正生成阶段的内容或来源绑定，再正常 generate/review；服务或账号级异常保留原类型，不能当作内容失败反复尝试。
+ICML/OpenReview 替代 PDF 默认拒绝，不能以相似题目替换来源。经用户授权的跨标题预印本例外仅为 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`，由代码白名单绑定 poster/forum、固定 SSRN 题目与作者、DOI 及 PDF/receipt/source SHA。浏览器文件只经受控 `--import-file` 导入，记录 `networkResponseObserved: false`；计划、模型输入和页面都须显示不是会议 camera-ready 定稿，不能推广到其他论文。完整来源和发布要求见历史文档。
 
-## `conference-run-v2`
+当前历史直接发布已有计划、生成、独立审查和精确发布入口，维护旧 URL、会议汇总和任务页。旧 `history:publication` 的私有输出不能代替它；独立 `activate --apply` 已禁用，`publish --apply` 在共享锁内完成交接、提交、推送和远端核验。具体参数及中断恢复见[历史直接发布](history-direct-publication.md)，不据旧分支的未完成说明跳过当前流程。
 
-所有 discovery 下游 `paperId` 都使用 `paper-identity-v1` 的完整 canonical ID，例如
-`conference:icassp:2026:icassp-arnumber:10910001`。`sourceIdentity` 仍是 ledger 内部定位符
-`icassp-arnumber:10910001`，不能替代论文主键。早期形如
-`icassp-2026:icassp-arnumber:10910001` 的临时 ID 已由 v2 合同拒绝，且没有运行数据迁移入口。
-
-一个会议运行分别冻结 ledger、`filterPolicySha256`、`selectionReceiptSha256`、
-`selectedMemberSetSha256` 和 taxonomy 版本，禁止再用一个 `selectionPolicySha256` 混指
-筛选规则、筛选结果或成员集合。成员可
-按主题、session 或连续编号分片，但分片必须不重叠且完整覆盖固定成员清单。论文状态为
-来源、分析、分类、发布的逐层状态；`blocked`、未完成或尚未分类的成员不会进入可发布
-聚合输入。
-
-会议页是独立 `conference` scope，不伪装成某一天的日更。它至少应说明目录总数、身份
-已核数、来源可用数、深度理解完成数、未纳入/阻断原因，以及按唯一会议身份统计的任务
-分布。长文解读仍只放在单篇页。
-
-## 与历史重写的关系
-
-单个既有日批次的隔离重写可以使用 [`rewrite:source`](fresh-rewrite.md)。全历史会议页则优先使用
-本页开头的 direct-local-first chain；它不要求先跑 legacy ledger/execution，也不把 legacy `fullText`、
-任意文件路径或旧 Reader 文本塞进 canonical。direct conference route 只接受 local-source manifest 已绑定的
-metadata/PDF SHA 和冻结 projection。
-
-历史 direct 顺序是：本地 source catalog/projection/plan → source-only rewrite → 私有单页/汇总 staging。
-旧 URL 与旧 receipt 保留为投影和未来 publication 基线；现阶段没有历史专属 review、activation 或
-generate/review/push receipt。
-
-## Token 与批次控制
-
-会议执行可按 source、analysis 与 Reader 并发限制分片；同一 canonical paper 仍只能有一个 writer。每次请求
-使用既有用量账本和 checkpoint；来源 SHA、Reader 或 taxonomy 规则变化才失效必要下游。质量 review 是每个
-direct run 的常规阶段，不是本地好数据队列的 pilot-first 开关。
+每篇仍只允许一个写入者，请求用量和检查点保留；来源、Reader 或标签规则变化按实际指纹及迁移要求处理，不无限复用旧通过。每次直接重写的质量审查都是正常阶段，不能当作可省略的试点。发布范围是否排除视觉或允许豁免取决用户明确要求，命令示例不能代替用户授权或决定；Git 到达远端仍不能替代部署和页面核验。
