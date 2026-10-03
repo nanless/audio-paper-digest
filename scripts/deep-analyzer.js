@@ -207,7 +207,8 @@ function readerIssuesRequireFullSourceBindingRetry(
     requireAllFigurePlacements = false
 ) {
     const blocking = (Array.isArray(issues) ? issues : [])
-        .filter(issue => issue?.diagnosticOnly !== true);
+        .filter(issue => issue?.diagnosticOnly !== true
+            && issue?.code !== 'reader_table_count_insufficient');
     // A valid draft that merely put every table outside result/ablation needs
     // a local table move/rebind. TABLE_N appears in the gate only as evidence
     // inventory; treating it as a broken binding wastes a second 48k full
@@ -4804,7 +4805,7 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
         const sourceDetails = require('./lib/conference-analysis-context.js')
             .getConferenceAnalysisSource({ id: conferenceContext.paperId });
         if (sourceDetails.conferenceCapabilities?.fullText === 'weak') {
-            throw new Error('会议 weak PDF 来源没有可物化的 Figure 像素，禁止伪造 Figure 输入');
+            throw new Error('当前会议 PDF 来源没有可独立引用的论文原图，无法准备插图');
         }
         const root = path.join(conferenceContext.executionDir, 'reader-assets');
         fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -4952,9 +4953,13 @@ function validateApiReaderTableNarratives(article, minimumTables = 2) {
         /^\|.+\|$/m.test(block) ? index : -1
     )).filter(index => index >= 0);
     if (tableIndexes.length < minimumTables) {
-        throw new Error(
-            `读者文章至少需要 ${minimumTables} 张有叙事闭环的 Markdown 表，当前 ${tableIndexes.length}`
-        );
+        const { TABLE_COUNT_ISSUE_CODE } = require('./lib/reader-repair.js');
+        const message = `组装后的文章至少需要 ${minimumTables} 张 Markdown 表，目前识别到 ${tableIndexes.length} 张。`
+            + '请补充缺少的表，并为每张表写清比较问题和结果解释。';
+        const issue = { path: null, code: TABLE_COUNT_ISSUE_CODE,
+            requiredCount: minimumTables, actualCount: tableIndexes.length, message };
+        throw Object.assign(new Error(message), { code: TABLE_COUNT_ISSUE_CODE,
+            requiredCount: minimumTables, actualCount: tableIndexes.length, readerIssues: [issue] });
     }
     for (const [tableOffset, index] of tableIndexes.entries()) {
         const beforeParts = [];
@@ -6709,7 +6714,22 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
 }
 
 function buildApiReaderValidationFeedback(error) {
-    const message = String(error?.message || error || '未知校验错误');
+    const originalMessage = String(error?.message || error || '未知校验错误');
+    const { TABLE_COUNT_ISSUE_CODE, readTableCountIssue } = require('./lib/reader-repair.js');
+    const codedCountIssue = error?.code === TABLE_COUNT_ISSUE_CODE ? error : null;
+    const countIssue = codedCountIssue || (typeof error === 'string' ? { message: originalMessage } : error);
+    const tableCounts = readTableCountIssue(countIssue);
+    const tableCountFailure = countIssue?.diagnosticOnly !== true && tableCounts;
+    // Coded count failures select repairs only from their fields. Their text
+    // remains available to the caller's log, but cannot select another gate.
+    const message = codedCountIssue ? '' : originalMessage;
+    const feedbackMessage = codedCountIssue
+        ? tableCounts
+            ? countIssue.diagnosticOnly === true
+                ? '这项数量诊断仅供参考，本次不据此选择修复操作'
+                : `组装后的文章至少需要 ${tableCounts.requiredCount} 张 Markdown 表，目前识别到 ${tableCounts.actualCount} 张`
+            : '表格数量诊断没有可用于修复的有效计数'
+        : originalMessage;
     const fixes = [];
     if (/表格前缺少|张表.*前缺少/.test(message)) {
         fixes.push(
@@ -6732,7 +6752,7 @@ function buildApiReaderValidationFeedback(error) {
             + '不要使用会额外产生 pipe 的 LaTeX 绝对值或条件概率写法'
         );
     }
-    if (/至少需要 \d+ 张有叙事闭环/.test(message)) {
+    if (tableCountFailure) {
         fixes.push(
             '保留已有合格表并补足要求数量；新增表必须写在 section.body 内，使用标准表头、分隔行和数据行，'
             + '且每张表都要有相邻的独立表前段与表后段；若 repair targets 含整个 /tableBindings，'
@@ -6875,7 +6895,7 @@ function buildApiReaderValidationFeedback(error) {
             + '不要只加空话'
         );
     }
-    return `上一次输出被代码拒绝：${message}。`
+    return `上一次输出被代码拒绝：${feedbackMessage}。`
         + (fixes.length > 0 ? `必须执行以下修复：${fixes.join('；')}。` : '')
         + '请按本次请求指定的输出协议精确修复目标节点；逐句去重，'
         + '任何包含过多句子的单段都拆成 2–4 句的自然段。'
@@ -7114,17 +7134,18 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let draftOrderMappings = [];
     const normalizeCandidate = () => {
         if (!candidate) return;
+        const normalizationIssues = currentIssues.filter(issue => issue?.code !== repair.TABLE_COUNT_ISSUE_CODE);
         normalizeReaderConceptBridgeTerms(candidate);
         normalizeShiftedReaderConceptBridgeMarkers(candidate);
         normalizeDuplicateReaderConceptBridgeMarkers(candidate);
-        normalizeIssueBoundReaderComparisonUnits(candidate, currentIssues);
-        normalizeIssueBoundReaderTechnicalTermAdhesions(candidate, currentIssues);
-        normalizeIssueBoundReaderNumericTypography(candidate, currentIssues);
+        normalizeIssueBoundReaderComparisonUnits(candidate, normalizationIssues);
+        normalizeIssueBoundReaderTechnicalTermAdhesions(candidate, normalizationIssues);
+        normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
         candidate.sections = candidate.sections.map(section => ({
             ...section,
             body: typeof section?.body === 'string'
                 ? normalizeIssueBoundReaderQuantitativeNumerals(
-                    normalizeDanglingReaderConnectors(section.body), currentIssues
+                    normalizeDanglingReaderConnectors(section.body), normalizationIssues
                 ) : section?.body
         }));
         if (Array.isArray(candidate.conceptBridges)) {
@@ -7132,7 +7153,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 ...bridge,
                 explanation: typeof bridge?.explanation === 'string'
                     ? normalizeIssueBoundReaderQuantitativeNumerals(
-                        bridge.explanation, currentIssues
+                        bridge.explanation, normalizationIssues
                     ) : bridge?.explanation
             }));
         }
@@ -7309,7 +7330,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         console.log(`    [deep] ↗ Reader 局部修复在 ${repairMaxTokens} tokens 精确截断，`
             + `本次仅将 patch 预算提升至 ${repairTruncationRetryMaxTokens}`);
     }
-    attemptErrorHistory.push(...currentIssues.map(issue => issue.message));
+    const issueFeedback = issue => issue?.code === repair.TABLE_COUNT_ISSUE_CODE
+        ? buildApiReaderValidationFeedback(issue) : issue.message;
+    attemptErrorHistory.push(...currentIssues.map(issueFeedback));
     validationFeedback = buildAttemptFeedback();
     previousDraft = recovered?.rawDraft || start.previousDraft;
     let providerImageExclusions = normalizeProviderImageExclusions(recovered?.providerImageExclusions, allImageInputs);
@@ -7442,7 +7465,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const prompt = repairContext ? loadPrompt('prompts/api-reader-repair.md', {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
             validationFeedback: [numericSpellingGuidance, reviewFeedbackPrefix,
-                ...currentIssues.map(issue => issue.message)].filter(Boolean).join('\n'),
+                ...currentIssues.map(issueFeedback)].filter(Boolean).join('\n'),
             repairTargets: JSON.stringify({ draftSha256: repairContext.draftSha256,
                 targets: repairContext.targets,
                 ...(repairContext.atomicOperation ? { atomicOperation: repairContext.atomicOperation } : {}) }),
@@ -7611,12 +7634,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             lastError = error;
             previousDraft = candidate ? JSON.stringify(candidate) : raw;
             currentIssues = repairContext && !patchApplied
-                ? [...currentIssues.filter(issue => !issue.message.startsWith('Reader patch')),
+                ? [...currentIssues.filter(issue => issue.code === repair.TABLE_COUNT_ISSUE_CODE
+                    || !issue.message.startsWith('Reader patch')),
                     { path: null, message: `Reader patch rejected: ${error.message}` }]
                 : repair.collectDraftIssues(candidate, error, {
                     sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
                 });
-            const failureSignature = repair.hashDraft(currentIssues);
+            const failureSignature = repair.hashRecoveryIssues(currentIssues);
             // A malformed patch response consumes its bounded content attempt,
             // but it never mutated the candidate.  Only compare draft hashes
             // after a patch was parsed and applied; otherwise two distinct
@@ -7654,7 +7678,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             validationFeedback = buildAttemptFeedback();
             console.log(`    [deep] ⚠️  读者文章校验失败 (${attempt}/${maxAttempts}): ${error.message}`);
             if (validationFailureStreak >= 2) {
-                throw new Error(`Reader 同一规范化验证门禁连续 2 次无改善，已保留失败候选：${error.message}`, { cause: error });
+                throw new Error(`读者文章同一组校验问题连续两次未改善，已停止修复并保留草稿：${error.message}`, { cause: error });
             }
             if (noProgress >= 2) {
                 throw new Error(`Reader 局部修复连续无进展，已保留失败候选：${error.message}`, { cause: error });
@@ -8145,7 +8169,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         sourceText
     });
     if (sealedInvalidReason) {
-        throw new Error(`资源状态封口后的分析未通过最终契约: ${sealedInvalidReason}`);
+        throw new Error(`更新资源可用状态后，分析仍未通过最终检查：${sealedInvalidReason}`);
     }
     manifest.stages.scoringAudit = {
         status: 'complete',

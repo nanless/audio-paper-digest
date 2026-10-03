@@ -499,7 +499,7 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
     }
     const readability = validateReadabilityRubric(record.readabilityRubric);
     if (!readability.valid || !readability.passing) {
-        throw new Error(`${label}.readabilityRubric 未通过 12/14 且无 0 分门禁: ${readability.errors.join('；') || `total=${readability.total}`}`);
+        throw new Error(`${label}.readabilityRubric 未达到可读性要求：总分至少为 12/14，且每项都不能为 0 分。具体问题：${readability.errors.join('；') || `当前总分为 ${readability.total}`}`);
     }
     if (recordsVersion === RECORDS_VERSION) {
         if (record.readabilityRubric?.independentReview !== true

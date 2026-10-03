@@ -237,7 +237,8 @@ def sealed_reader_sources(paper, manifest, stage, capabilities):
             public_https(resource.get('finalUrl'), 'Reader resource final URL')
         except ValueError:
             if resource.get('availability') in {'unavailable', 'temporarily_unreachable'}:
-                print('conference Reader 跳过无法闭合且不可用的资源: '
+                print('会议论文解读中的资源链接未通过公开 HTTPS 地址检查；'
+                      '该资源已标记为不可用或暂时无法访问，本次继续处理：'
                       f'{resource.get("originalUrl")}', file=sys.stderr)
                 continue
             raise

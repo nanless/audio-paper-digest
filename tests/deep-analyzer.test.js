@@ -590,6 +590,49 @@ describe('arXiv HTML full-text health gate', () => {
 });
 
 describe('deep-analyzer section helpers', () => {
+    it('表格数量错误提供稳定计数，反馈不根据说明文字选择其他修复', () => {
+        const { validateApiReaderTableNarratives, buildApiReaderValidationFeedback,
+            readerIssuesRequireFullSourceBindingRetry } = require('../scripts/deep-analyzer.js');
+        const { TABLE_COUNT_ISSUE_CODE } = require('../scripts/lib/reader-repair.js');
+        let produced;
+        try { validateApiReaderTableNarratives('', 4); } catch (error) { produced = error; }
+        assert.strictEqual(produced.code, TABLE_COUNT_ISSUE_CODE);
+        assert.strictEqual(produced.requiredCount, 4);
+        assert.strictEqual(produced.actualCount, 0);
+        assert.strictEqual(produced.readerIssues.length, 1);
+        assert.deepStrictEqual(produced.readerIssues[0], { path: null, code: TABLE_COUNT_ISSUE_CODE,
+            requiredCount: 4, actualCount: 0, message: produced.message });
+        assert.match(produced.message, /目前识别到 0 张/);
+
+        const coded = message => Object.assign(new Error(message), {
+            code: TABLE_COUNT_ISSUE_CODE, requiredCount: 4, actualCount: 3
+        });
+        const natural = coded('只识别到三张表，需要补齐。');
+        const misleading = coded('tableBindings[0] source-binding v4 readerTitle 需要重建宽表');
+        const feedback = buildApiReaderValidationFeedback(natural);
+        assert.strictEqual(buildApiReaderValidationFeedback(misleading), feedback);
+        assert.match(feedback, /保留已有合格表并补足要求数量/);
+        assert.doesNotMatch(feedback, /逐张按正文顺序重建|扩为 5 列以上/);
+        for (const error of [natural, misleading]) {
+            assert.strictEqual(readerIssuesRequireFullSourceBindingRetry(null, {}, 0, [{
+                path: null, code: error.code, requiredCount: 4, actualCount: 3, message: error.message
+            }]), false);
+        }
+        const legacy = '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3';
+        assert.strictEqual(buildApiReaderValidationFeedback(legacy),
+            buildApiReaderValidationFeedback(new Error(legacy)));
+        assert.match(buildApiReaderValidationFeedback(legacy), /保留已有合格表并补足要求数量/);
+        const invalid = Object.assign(coded(legacy + ' tableBindings[0] source-binding v4'), { requiredCount: '4' });
+        const invalidFeedback = buildApiReaderValidationFeedback(invalid);
+        assert.match(invalidFeedback, /没有可用于修复的有效计数/);
+        assert.doesNotMatch(invalidFeedback, /保留已有合格表并补足要求数量|逐张按正文顺序重建/);
+        assert.strictEqual(buildApiReaderValidationFeedback({ ...invalid, message: '当前999，仍缺1' }), invalidFeedback);
+        const diagnosticFeedback = buildApiReaderValidationFeedback({ ...natural, diagnosticOnly: true });
+        assert.match(diagnosticFeedback, /仅供参考，本次不据此选择修复操作/);
+        assert.doesNotMatch(diagnosticFeedback,
+            /保留已有合格表并补足要求数量|没有可用于修复的有效计数/);
+    });
+
     it('读者长文重试反馈把常见结构错误翻译成可执行修复步骤', () => {
         const { buildApiReaderValidationFeedback } = require('../scripts/deep-analyzer.js');
         const tableFeedback = buildApiReaderValidationFeedback(

@@ -315,7 +315,7 @@ test('real Reader entry uses execution-local attempts, empty figures short-circu
     await context.withConferenceAnalysisSource({ executionId: EXECUTION, executionDir: root, paperId,
         sourceDetails: details }, async () => {
         assert.deepEqual(await deep.materializeApiReaderFigures([], paperId), []);
-        await assert.rejects(deep.materializeApiReaderFigures([{ ordinal: 1 }], paperId), /会议 weak PDF/);
+        await assert.rejects(deep.materializeApiReaderFigures([{ ordinal: 1 }], paperId), /没有可独立引用的论文原图，无法准备插图/);
         const authors = deep.resolveApiReaderAuthors({ id: paperId, authors: ['作者甲'] }, details);
         assert.deepEqual(authors.authors[0].affiliations, ['机构信息未能从会议 PDF 纯文本可靠映射']);
         assert.doesNotMatch(JSON.stringify(authors), /arXiv/);

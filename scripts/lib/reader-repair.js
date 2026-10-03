@@ -22,6 +22,47 @@ const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', '
 const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const shaText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+const TABLE_COUNT_ISSUE_CODE = 'reader_table_count_insufficient';
+
+function readTableCountIssue(issue) {
+    let requiredCount, actualCount;
+    if (issue?.code === TABLE_COUNT_ISSUE_CODE) {
+        ({ requiredCount, actualCount } = issue);
+    } else {
+        // Older saved diagnostics carry counts only in this exact message.
+        // A coded diagnostic must never obtain missing fields from prose.
+        if (issue?.code !== undefined && issue?.code !== null && issue?.code !== '') return null;
+        const match = /至少需要\s*(\d+)\s*张有叙事闭环的\s*Markdown\s*表，当前\s*(\d+)/
+            .exec(String(issue?.message || ''));
+        if (!match) return null;
+        requiredCount = Number(match[1]);
+        actualCount = Number(match[2]);
+    }
+    if (!Number.isSafeInteger(requiredCount) || requiredCount < 1
+        || !Number.isSafeInteger(actualCount) || actualCount < 0
+        || actualCount >= requiredCount) return null;
+    return { requiredCount, actualCount };
+}
+
+function recoveryIssueProjection(issue) {
+    if (issue?.code !== TABLE_COUNT_ISSUE_CODE) return issue;
+    const counts = readTableCountIssue(issue);
+    // Keep the comparison input used by saved v1 candidates and v2 failure
+    // signatures. This compatibility text is never the displayed message.
+    const projected = counts
+        ? { path: issue.path ?? null,
+            message: `读者文章至少需要 ${counts.requiredCount} 张有叙事闭环的 Markdown 表，当前 ${counts.actualCount}` }
+        : { path: issue.path ?? null, code: TABLE_COUNT_ISSUE_CODE,
+            message: '表格数量诊断的计数无效' };
+    for (const [key, value] of Object.entries(issue)) {
+        if (!['path', 'message', 'code', 'requiredCount', 'actualCount'].includes(key)) projected[key] = value;
+    }
+    return projected;
+}
+
+function hashRecoveryIssues(issues) {
+    return hashDraft(issues.map(recoveryIssueProjection));
+}
 
 function normalizeValidationMessage(message) {
     return String(message || '')
@@ -54,7 +95,7 @@ function validationDeficits(message, coordinate) {
 function validationFailureSignature(issues) {
     const values = Array.isArray(issues) ? issues : [];
     const blocking = values.filter(issue => issue?.diagnosticOnly !== true);
-    const selected = blocking.length ? blocking : values;
+    const selected = (blocking.length ? blocking : values).map(recoveryIssueProjection);
     const gates = selected.map(issue => ({ path: issue?.path ?? null, code: issue?.code || null,
         message: normalizeValidationMessage(issue?.message) }))
         .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
@@ -456,8 +497,22 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
 // Independent diagnostics supplement (never replace) the authoritative parser.
 function collectDraftIssues(draft, parserError, options = {}) {
     const issues = [];
-    if (parserError) issues.push({ path: null, message: String(parserError.message || parserError) });
-    if (Array.isArray(parserError?.readerIssues)) issues.push(...parserError.readerIssues);
+    const parserIssues = Array.isArray(parserError?.readerIssues) ? parserError.readerIssues : [];
+    const hasSameCountIssue = parserError?.code === TABLE_COUNT_ISSUE_CODE
+        && parserIssues.some(issue => issue?.code === TABLE_COUNT_ISSUE_CODE
+            && issue.diagnosticOnly !== true && issue.path === null
+            && issue.requiredCount === parserError.requiredCount
+            && issue.actualCount === parserError.actualCount);
+    if (parserError && !hasSameCountIssue) {
+        if (parserError.code === TABLE_COUNT_ISSUE_CODE) {
+            issues.push({ path: null, code: TABLE_COUNT_ISSUE_CODE,
+                requiredCount: parserError.requiredCount, actualCount: parserError.actualCount,
+                message: String(parserError.message || parserError) });
+        } else {
+            issues.push({ path: null, message: String(parserError.message || parserError) });
+        }
+    }
+    issues.push(...parserIssues);
     if (!draft) return issues;
     draft.sections.forEach((section, index) => {
         if (!section || typeof section !== 'object' || Array.isArray(section)
@@ -561,7 +616,7 @@ function collectTableBindingIssues(draft, options = {}) {
                     typeof quote !== 'string' || quote.length < 12 || quote.length > 4000
                         || (typeof options.sourceText === 'string' && !options.sourceText.includes(quote)) ? [quoteIndex] : []
                 ));
-                if (invalid.length) add(index, `sourceQuotes 的索引 ${invalid.slice(0, 12).join(', ')} 未提供全文中12–4000字符的连续原句；`
+                if (invalid.length) add(index, `sourceQuotes 中以下数组项不是全文中12–4000字符的连续原句：${invalid.slice(0, 12).join(', ')}；`
                     + '不要只摘独立数值或把引文写成对象。原文双写数值可留在引文中，正文写法仍须通过既有来源门禁。',
                 { diagnosticOnly: true });
             }
@@ -601,7 +656,8 @@ function collectTableBindingIssues(draft, options = {}) {
 }
 
 function buildMissingResultTableOperation(draft, issues) {
-    const blockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true);
+    const blockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true
+        && issue?.code !== TABLE_COUNT_ISSUE_CODE && !readTableCountIssue(issue));
     if (!blockingIssues.some(issue => issue?.code === 'reader_result_table_missing'
         || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))) return null;
     const locatedTables = locateReaderDraftTables(draft);
@@ -678,16 +734,14 @@ function buildMissingResultTableOperation(draft, issues) {
 
 function buildMissingNarrativeTableOperation(draft, issues) {
     const issue = issues.filter(item => item?.diagnosticOnly !== true).find(item => (
-        /至少需要\s*\d+\s*张有叙事闭环的\s*Markdown\s*表，当前\s*\d+/.test(String(item?.message || ''))
+        readTableCountIssue(item)
     ));
-    const counts = /至少需要\s*(\d+)\s*张有叙事闭环的\s*Markdown\s*表，当前\s*(\d+)/
-        .exec(String(issue?.message || ''));
+    const counts = readTableCountIssue(issue);
     if (!counts) return null;
-    const requiredCount = Number(counts[1]);
-    const reportedCount = Number(counts[2]);
+    const { requiredCount, actualCount } = counts;
     const tables = locateReaderDraftTables(draft);
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
-    if (!Number.isSafeInteger(requiredCount) || reportedCount >= requiredCount
+    if (actualCount >= requiredCount
         || !bindings.every((binding, index) => binding?.tableIndex === index + 1)) return null;
     const trailingTable = tables.at(-1);
     const destinationSectionIndex = trailingTable?.sectionIndex;
@@ -776,8 +830,11 @@ function buildRepairTargets(draft, issues) {
     // at least one blocking issue exists, target only blocking issues. This
     // keeps a local marker/prose repair below the eight-node patch contract and
     // lets the full parser surface any remaining source problem afterward.
-    const blockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true);
-    let actionableIssues = blockingIssues.length ? blockingIssues : issues;
+    const isCountDiagnostic = issue => issue?.code === TABLE_COUNT_ISSUE_CODE || readTableCountIssue(issue);
+    const allBlockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true);
+    const blockingIssues = allBlockingIssues.filter(issue => !isCountDiagnostic(issue));
+    let actionableIssues = (allBlockingIssues.length ? blockingIssues : issues)
+        .filter(issue => !isCountDiagnostic(issue));
     const firstSubstantiveIssue = actionableIssues.find(issue => (
         !String(issue?.message || '').startsWith('Reader patch rejected:')
     ));
@@ -803,8 +860,8 @@ function buildRepairTargets(draft, issues) {
                 oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
         }
     }
-    const missingNarrativeTableIssue = blockingIssues.find(issue => (
-        /至少需要\s*\d+\s*张有叙事闭环的\s*Markdown\s*表，当前\s*\d+/.test(String(issue?.message || ''))
+    const missingNarrativeTableIssue = allBlockingIssues.find(issue => (
+        readTableCountIssue(issue)
     ));
     const missingNarrativeTableOperation = buildMissingNarrativeTableOperation(draft, issues);
     const ambiguousTableOrderIssue = blockingIssues.find(issue => (
@@ -843,6 +900,19 @@ function buildRepairTargets(draft, issues) {
             add(tables.at(-1).path);
             add(`/tableBindings/${missingBindingIndex}`);
             actionableIssues = actionableIssues.filter(issue => issue !== missingNarrativeTableIssue);
+        } else {
+            // Preserve the previous count-repair scope when the atomic cases
+            // do not apply. Select nodes from the draft structure, so changing
+            // the diagnostic wording cannot redirect the repair.
+            tables.forEach(table => add(table.path));
+            draft.tableBindings.forEach((_binding, index) => add(`/tableBindings/${index}`));
+            if (![...paths].some(pointer => pointer.startsWith('/sections/'))) {
+                draft.sections.forEach((section, index) => {
+                    if (['training', 'experiment_setup', 'result', 'ablation'].includes(section?.kind)) {
+                        add(`/sections/${index}/body`);
+                    }
+                });
+            }
         }
     }
     const missingResultTableIssue = blockingIssues.find(issue => (
@@ -1011,7 +1081,9 @@ function buildRepairTargets(draft, issues) {
     }
     // Global readability/length errors cannot safely be localized from a regex
     // message. Keep all body targets reviewable, but cap each patch to 8 nodes.
-    if (!paths.size) draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
+    if (!paths.size && (actionableIssues.length || !issues.length)) {
+        draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
+    }
     return [...paths].slice(0, 8).map(pointer => ({ path: pointer,
         oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
 }
@@ -1093,7 +1165,8 @@ function loadFailedCandidate(directory, identity) {
                     || new Set(envelope.payload.consumedImplementationAllowanceSha256).size !== envelope.payload.consumedImplementationAllowanceSha256.length))
             || !Array.isArray(envelope.payload.issues)
             || envelope.payload.issues.some(issue => !issue || typeof issue.message !== 'string'
-                || (issue.path !== null && typeof issue.path !== 'string'))
+                || (issue.path !== null && typeof issue.path !== 'string')
+                || (issue.code === TABLE_COUNT_ISSUE_CODE && !readTableCountIssue(issue)))
             || (envelope.payload.draft && !parseRecoveryDraft(envelope.payload.draft))) {
             throw new Error('Corrupt or drifted Reader candidate');
         }
@@ -1173,7 +1246,8 @@ function retireFailedCandidate(directory, identity) {
 }
 
 module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
-    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
+    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE,
+    readTableCountIssue, hashRecoveryIssues, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,
     parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,

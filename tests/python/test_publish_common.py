@@ -931,6 +931,15 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         self.assertEqual(_manual_han_character_count(paragraphs[0]), 258)
 
         summary_sentence = '本文检验流式识别在固定测试划分中的错误率与速度权衡，并把结论限制在论文实际报告的设置内。'
+        at_paragraph_limits = '甲' * 260 + '；!?;！？。'
+        self.assertIsNone(validate_final_manual_v4_markdown(sanitized.replace(
+            summary_sentence, at_paragraph_limits, 1,
+        )))
+        for paragraph in ('甲' * 261 + '。', at_paragraph_limits + '?'):
+            with self.subTest(paragraph_boundary=paragraph[-8:]):
+                self.assertIn('段落过长', validate_final_manual_v4_markdown(sanitized.replace(
+                    summary_sentence, paragraph, 1,
+                )))
         innovation_sentence = '相较固定上下文基线，该方法把分块状态与对齐监督联合起来，并由测试集上的错误率变化提供直接证据。'
         duplicate_paragraph = '这段复核文字完整说明固定测试划分、相同解码预算与未测语言边界，重复出现时必须由最终页面门禁直接阻断。'
         duplicate_case = sanitized.replace(
@@ -964,7 +973,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             ),
             '中英文技术词边界': sanitized.replace('编码器接收', '编码器使用Conformer接收', 1),
             '能能': sanitized.replace('编码器接收', '编码器的功能能接收', 1),
-            '段落过载': sanitized.replace(
+            '段落过长': sanitized.replace(
                 summary_sentence, '这段文字用于验证最终页面长段门禁是否仍然生效。' * 30,
             ),
             '完全重复': duplicate_case,

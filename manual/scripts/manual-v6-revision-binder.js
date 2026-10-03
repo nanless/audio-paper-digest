@@ -689,7 +689,7 @@ function bindRevision(options) {
         };
     }
     if (!articleFile.bytes.equals(articleBytes)) {
-        throw new Error('final article 尚未物化确定性表格/工件；先运行 binder --prepare，再做独立审计');
+        throw new Error('最终文章 final-article.md 与根据绑定记录和论文图表组装出的内容不一致。先运行 binder --prepare 更新文件，再由独立审查代理重新检查更新后的文章并更新审查记录');
     }
     const technical = state.papers[paperId].tasks.technical_scoring;
     const readability = state.papers[paperId].tasks.pedagogy_readability;

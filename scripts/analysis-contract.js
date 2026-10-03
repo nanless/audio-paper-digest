@@ -1365,10 +1365,10 @@ function validateTaxonomyStageBinding(paper, options = {}) {
         return 'taxonomySeal registry/projection/selection 合同不是 current';
     }
     if (stage.registrySha256 !== runtime.registrySha256) {
-        // Registry 版本化放宽：四条同时成立才放行 ——“旧词表快照可取回 + 变更判为
-        // additive/none（或 destructive 落在可确认白名单且 registryUpgradeFrom 携带
-        // 与复算绑定的 destructiveAcknowledgement）+ 注记自洽 + 旧 conceptIds 在
-        // 当前 registry 全部 active”；不可确认的 destructive 与任何缺证一律 fail-closed。
+        // 词表升级后，以下四项同时满足才能沿用旧记录。旧词表快照必须能够取回；
+        // 变更须为 additive/none，或属于已确认的 destructive 白名单，且 registryUpgradeFrom
+        // 包含与重新计算结果对应的 destructiveAcknowledgement；升级说明须与校验结果一致；
+        // 旧 conceptIds 在当前词表中须全部为 active。无法确认的 destructive 变更或缺少任何证据时拒绝沿用。
         const upgrade = require('./lib/taxonomy-registry-change.js').validateSealRegistryUpgrade({
             fromRegistrySha256: stage.registrySha256,
             currentRegistry: runtime.taxonomy,

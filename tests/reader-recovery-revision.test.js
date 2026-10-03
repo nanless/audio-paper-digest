@@ -7,7 +7,8 @@ const crypto = require('node:crypto');
 const Config = require('../scripts/config.js');
 const { withFreshAnalysisContext } = require('../scripts/lib/fresh-analysis-context.js');
 const { loadReaderRecoveryRevision } = require('../scripts/lib/reader-recovery-revision.js');
-const { saveFailedCandidate, loadFailedCandidate, hashDraft } = require('../scripts/lib/reader-repair.js');
+const { saveFailedCandidate, loadFailedCandidate, hashDraft,
+    TABLE_COUNT_ISSUE_CODE } = require('../scripts/lib/reader-repair.js');
 const { READER_SECTION_KINDS, normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
 const directContext = require('../scripts/lib/direct-rewrite-analysis-context.js');
 const conferenceContext = require('../scripts/lib/conference-analysis-context.js');
@@ -110,6 +111,27 @@ test('ordinary calls and an unenabled fresh scope never scan or migrate an old c
     assert.equal(withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: false }, () =>
         loadReaderRecoveryRevision(f.directory, f.identity)), null);
     assert.equal(fs.readdirSync(f.directory).length, 1);
+});
+
+test('diagnostic migration cannot use coded table-count prose to rewrite numeral surfaces', t => {
+    const f = fixture(t);
+    f.payload.draft.sections[0].body = '训练采用两阶段流程，另有三阶段对照。';
+    f.payload.draft.conceptBridges[0] = { explanation: '两阶段流程连接三阶段对照。' };
+    f.payload.issues = [{ path: null, code: TABLE_COUNT_ISSUE_CODE,
+        requiredCount: 4, actualCount: 3, message: 'quantitative_chinese_numeral:两阶段' },
+    { path: null, message: '读者文章文风校验失败: quantitative_chinese_numeral:三阶段' }];
+    f.payload.rawDraft = JSON.stringify(f.payload.draft);
+    const filename = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const bytes = fs.readFileSync(filename);
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    assert.equal(migrated.draft.sections[0].body, '训练采用两阶段流程，另有 3 个阶段对照。');
+    assert.equal(migrated.draft.conceptBridges[0].explanation, '两阶段流程连接 3 个阶段对照。');
+    assert.deepEqual(migrated.issues, f.payload.issues);
+    const archive = fs.readdirSync(f.directory).find(name => name.includes('.migrated-'));
+    assert.deepEqual(fs.readFileSync(path.join(f.directory, archive)), bytes);
+    for (const key of ['attempts', 'fullAttempts', 'transportFailures']) {
+        assert.equal(migrated[key], f.payload[key]);
+    }
 });
 
 test('unenabled fresh scope wins over a nested direct source context used by daily analysis', t => {

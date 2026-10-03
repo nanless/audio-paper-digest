@@ -6,7 +6,8 @@ const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
 const { loadFailedCandidate, saveFailedCandidate, hashDraft, shaText, parseRecoveryDraft,
-    IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT } = require('./reader-repair.js');
+    IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT,
+    TABLE_COUNT_ISSUE_CODE } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder, pruneUniquelyUnboundReaderMarkdownTables } = require('./reader-draft-order.js');
 const { normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals } = require('../editorial-quality.js');
@@ -184,11 +185,12 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         updated.draft = parseRecoveryDraft(updated.rawDraft);
     }
     if (updated.draft) {
+        const normalizationIssues = updated.issues.filter(issue => issue?.code !== TABLE_COUNT_ISSUE_CODE);
         updated.draft.sections = updated.draft.sections.map(section => ({
             ...section,
             body: typeof section?.body === 'string'
                 ? normalizeIssueBoundReaderQuantitativeNumerals(
-                    normalizeDanglingReaderConnectors(section.body), updated.issues
+                    normalizeDanglingReaderConnectors(section.body), normalizationIssues
                 ) : section?.body
         }));
         if (Array.isArray(updated.draft.conceptBridges)) {
@@ -196,7 +198,7 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
                 ...bridge,
                 explanation: typeof bridge?.explanation === 'string'
                     ? normalizeIssueBoundReaderQuantitativeNumerals(
-                        bridge.explanation, updated.issues
+                        bridge.explanation, normalizationIssues
                     ) : bridge?.explanation
             }));
         }

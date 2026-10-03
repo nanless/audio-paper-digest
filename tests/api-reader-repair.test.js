@@ -6,7 +6,8 @@ const path = require('node:path');
 const {
     REPAIR_VERSION, hashDraft, parseRepairableDraft, collectDraftIssues, buildRepairTargets,
     applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate, retireFailedCandidate,
-    validationFailureSignature, validationFailureHasNoProgress
+    validationFailureSignature, validationFailureHasNoProgress,
+    TABLE_COUNT_ISSUE_CODE, readTableCountIssue, hashRecoveryIssues
 } = require('../scripts/lib/reader-repair.js');
 
 function fixture() {
@@ -42,6 +43,26 @@ function temporary(t) {
 function failed(draft = fixture()) {
     return { status: 'failed', draft, rawDraft: JSON.stringify(draft), issues: [{ path: null, message: '仍未通过最终门禁' }],
         attempts: 1, fullAttempts: 1, noProgress: 0, failureSignature: 'failure' };
+}
+
+function countRepairFixture(tableCount = 3, bindingCount = 3) {
+    const draft = fixture();
+    for (let index = 0; index < tableCount; index++) {
+        const sectionIndex = [6, 7, 8, 8][index];
+        draft.sections[sectionIndex].body += `\n\n表 ${index + 1} 比较相同条件下的结果与指标方向。\n\n`
+            + '| 方法 | 条件 | 指标 A | 指标 B | 指标 C |\n| --- | --- | --- | --- | --- |\n'
+            + `| 方法 ${index + 1} | 统一设置 | 10 | 20 | 30 |\n\n`
+            + '该结果只适用于当前测试条件，其他数据分布仍需验证。';
+    }
+    draft.tableBindings = Array.from({ length: bindingCount }, (_, index) => ({
+        tableIndex: index + 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+        cellBindings: [], sourceQuotes: [`source quote ${index + 1} is long enough for binding`]
+    }));
+    return draft;
+}
+
+function countIssue(actualCount = 3, message = '表格不足，请补齐。') {
+    return { path: null, code: TABLE_COUNT_ISSUE_CODE, requiredCount: 4, actualCount, message };
 }
 
 test('local replacements preserve every unselected node and reject stale/unauthorized patches', () => {
@@ -297,7 +318,7 @@ test('all malformed quote bindings, marker-only tables and insufficient length a
     const issues = collectDraftIssues(draft, new Error('读者文章存在未绑定的 TABLE marker'), { sourceText: '原文中实际的连续证据很长，但这里只列出了一个数字 3.093.09。' });
     for (const index of [0, 1]) {
         assert.ok(issues.some(issue => issue.path === `/tableBindings/${index}` && /cellBindings 必须是 \[\]/.test(issue.message)));
-        assert.ok(issues.some(issue => issue.path === `/tableBindings/${index}` && /sourceQuotes 的索引/.test(issue.message)));
+        assert.ok(issues.some(issue => issue.path === `/tableBindings/${index}` && /sourceQuotes 中以下数组项/.test(issue.message)));
     }
     assert.ok(issues.some(issue => /实际Markdown表 0 张/.test(issue.message)));
     assert.ok(issues.some(issue => issue.code === 'reader_length_preflight' && issue.diagnosticOnly));
@@ -548,7 +569,7 @@ test('production stops unchanged patches and refuses another call on exhausted r
         readerRecordDisposition: () => {},
         readerCallModel: async () => (++calls === 1 ? JSON.stringify(draft)
             : JSON.stringify(patchFor(draft, [['/readerTitle', '短']]))) };
-    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /连续无进展|规范化验证门禁/);
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /连续无进展|同一组校验问题连续两次未改善/);
     assert.equal(calls, 2);
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
     assert.equal(calls, 2);
@@ -756,6 +777,283 @@ test('minimum narrative table recovery binds one already-authored trailing table
     assert.equal(merged.tableBindings.length, 4);
 });
 
+test('coded count diagnostics preserve old repair targets and both saved failure comparisons', () => {
+    const draft = countRepairFixture();
+    const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
+    const natural = countIssue();
+    const misleading = countIssue(3, 'tableBindings[0] source-binding v4 readerTitle 需要重建宽表');
+    const original = buildRepairContext(draft, [legacy], '完整来源');
+    for (const issue of [natural, misleading]) {
+        const context = buildRepairContext(draft, [issue], '完整来源');
+        assert.deepEqual(context.targets, original.targets);
+        assert.deepEqual(context.atomicOperation, original.atomicOperation);
+        assert.equal(hashRecoveryIssues([issue]), hashDraft([legacy]));
+        assert.equal(validationFailureSignature([issue]), validationFailureSignature([legacy]));
+    }
+    assert.deepEqual(original.targets.map(target => target.path), ['/sections/8/body', '/tableBindings']);
+    assert.equal(original.atomicOperation.kind, 'append_narrative_table_v1');
+    assert.notEqual(hashDraft([natural]), hashDraft([misleading]), 'generic object hashes retain exact message bytes');
+});
+
+test('count progress depends on reported counts and required thresholds rather than message numbers', () => {
+    const first = countIssue(1, '需要4张表，目前1张');
+    const improved = countIssue(2, 'tableBindings[9] 当前999，仍缺888');
+    const stalled = countIssue(2, '另一种自然说法，没有数字');
+    const regressed = countIssue(1, '已完成99张');
+    assert.equal(validationFailureHasNoProgress(validationFailureSignature([first]),
+        validationFailureSignature([improved])), false);
+    assert.equal(validationFailureHasNoProgress(validationFailureSignature([improved]),
+        validationFailureSignature([stalled])), true);
+    assert.equal(validationFailureHasNoProgress(validationFailureSignature([improved]),
+        validationFailureSignature([regressed])), true);
+    assert.equal(hashRecoveryIssues([improved]), hashRecoveryIssues([stalled]));
+    assert.notEqual(hashRecoveryIssues([first]), hashRecoveryIssues([improved]));
+    assert.notEqual(validationFailureSignature([first]),
+        validationFailureSignature([{ ...first, requiredCount: 5 }]));
+});
+
+test('malformed coded counts cannot borrow legacy numbers or authorize message-selected repair nodes', () => {
+    const draft = countRepairFixture();
+    const legacyText = '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3；tableBindings[0] source-binding v4';
+    const invalid = [
+        { requiredCount: undefined }, { actualCount: undefined }, { requiredCount: '4' },
+        { actualCount: '3' }, { requiredCount: 4.5 }, { actualCount: -1 },
+        { actualCount: Number.MAX_SAFE_INTEGER + 1 }, { requiredCount: 0 },
+        { actualCount: 4 }, { actualCount: 5 }, { requiredCount: Infinity }, { actualCount: NaN }
+    ];
+    for (const fields of invalid) {
+        const issue = { ...countIssue(3, legacyText), ...fields };
+        assert.equal(readTableCountIssue(issue), null);
+        const context = buildRepairContext(draft, [issue], '完整来源');
+        assert.equal(context.atomicOperation, null);
+        assert.deepEqual(context.targets, []);
+        const otherMessage = { ...issue, message: '当前1，仍缺999，tableBindings[9]' };
+        assert.equal(hashRecoveryIssues([issue]), hashRecoveryIssues([otherMessage]));
+        assert.equal(validationFailureSignature([issue]), validationFailureSignature([otherMessage]));
+        assert.equal(validationFailureHasNoProgress(validationFailureSignature([issue]),
+            validationFailureSignature([otherMessage])), true);
+    }
+    assert.equal(readTableCountIssue({ ...countIssue(), code: 'another_issue', message: legacyText }), null);
+});
+
+test('valid counts preserve structural fallback targets while diagnostic-only counts select none', () => {
+    const draft = countRepairFixture();
+    draft.sections[8].kind = 'component';
+    const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
+    const expected = buildRepairTargets(draft, [legacy]);
+    assert.ok(expected.length > 0);
+    for (const message of ['表格不足', 'tableBindings[0] readerTitle source-binding v4 主结果表覆盖不足']) {
+        const context = buildRepairContext(draft, [countIssue(3, message)], '完整来源');
+        assert.equal(context.atomicOperation, null);
+        assert.deepEqual(context.targets, expected);
+    }
+    const noTables = countRepairFixture(0, 4);
+    assert.deepEqual(buildRepairTargets(noTables, [countIssue(0)]).map(target => target.path), [
+        '/tableBindings/0', '/tableBindings/1', '/tableBindings/2', '/tableBindings/3',
+        '/sections/5/body', '/sections/6/body', '/sections/7/body', '/sections/8/body'
+    ]);
+    const diagnostic = { ...countIssue(3, 'tableBindings[0] 主结果表覆盖不足'), diagnosticOnly: true };
+    const context = buildRepairContext(countRepairFixture(), [diagnostic], '完整来源');
+    assert.equal(context.atomicOperation, null);
+    assert.deepEqual(context.targets, []);
+    const other = { path: '/sections/2/body', message: '这个小节需要修正。' };
+    assert.deepEqual(buildRepairTargets(draft, [diagnostic, other]).map(target => target.path), ['/sections/2/body']);
+});
+
+test('typed reported count three still binds the fourth authored table without rewriting its body', () => {
+    const draft = countRepairFixture(4, 3);
+    const context = buildRepairContext(draft, [countIssue(3)], '完整来源');
+    assert.equal(context.atomicOperation.kind, 'bind_trailing_narrative_table_v1');
+    assert.deepEqual(context.targets.map(target => target.path), ['/tableBindings']);
+    const bindings = [...structuredClone(draft.tableBindings), {
+        tableIndex: 4, sourceType: 'source_quotes', sourceTableOrdinal: null,
+        cellBindings: [], sourceQuotes: ['new source quote is long enough for binding']
+    }];
+    const merged = applyReaderPatch(draft, patchFor(draft, [['/tableBindings', bindings]]),
+        ['/tableBindings'], { atomicOperation: context.atomicOperation });
+    assert.deepEqual(merged.sections, draft.sections);
+    assert.deepEqual(merged.tableBindings.slice(0, 3), draft.tableBindings);
+});
+
+test('production requests a bounded structural patch when a valid count has no atomic operation', async t => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const signed = require('./reader-signed-draft-fixture.js').fixture({ noFigures: true });
+    const draft = signed.draft;
+    for (const section of draft.sections) {
+        section.body = section.body.split(/\n\s*\n/).filter(block => !/^\|/m.test(block)).join('\n\n');
+    }
+    draft.tableBindings = [];
+    const options = { sourceText: signed.sourceDetails.text,
+        structuredArtifacts: signed.sourceDetails.structuredArtifacts,
+        readerAttemptsDir: temporary(t), readerMaxAttempts: 2,
+        readerMaterializeFigures: async () => [], readerRecordDisposition: () => {} };
+    const sourceEvidence = [1, 2, 3, 4].map(index => `TABLE_${index}: 离线数量要求`).join('\n');
+    let calls = 0;
+    const expectedPaths = ['/sections/5/body', '/sections/6/body', '/sections/7/body', '/sections/8/body'];
+    await assert.rejects(deep.generateApiReaderArticleDetailed(
+        { arxivId: '2609.99971', title: '离线数量回退修复' }, '', sourceEvidence, {
+            ...options, readerCallModel: async messages => {
+                calls += 1;
+                if (calls === 1) return JSON.stringify(draft);
+                assert.equal(calls, 2);
+                const prompt = messages[0].content[0].text;
+                const targetStart = prompt.indexOf('{"draftSha256":');
+                assert.ok(targetStart >= 0, 'the patch request includes the authorized target envelope');
+                const targetEnd = prompt.indexOf('\n', targetStart);
+                const envelope = JSON.parse(prompt.slice(targetStart, targetEnd < 0 ? undefined : targetEnd));
+                assert.deepEqual(envelope.targets.map(target => target.path), expectedPaths);
+                assert.equal(envelope.atomicOperation, undefined);
+                return JSON.stringify(patchFor(draft, expectedPaths.map(pointer => [pointer,
+                    draft.sections[Number(pointer.split('/')[2])].body])));
+            }
+        }
+    ), /至少需要 4 张 Markdown 表/);
+    assert.equal(calls, 2, 'one initial response and one bounded patch use the existing attempt budget');
+    const files = fs.readdirSync(options.readerAttemptsDir).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const stored = JSON.parse(fs.readFileSync(path.join(options.readerAttemptsDir, files[0]), 'utf8'));
+    assert.equal(stored.payload.fullAttempts, 1);
+    assert.equal(stored.payload.attempts, 2);
+    assert.equal(stored.payload.issues.filter(issue => issue.code === TABLE_COUNT_ISSUE_CODE).length, 1);
+});
+
+test('collecting a coded count error yields one diagnostic without swallowing another parser failure', () => {
+    const { validateApiReaderTableNarratives } = require('../scripts/deep-analyzer.js');
+    let error;
+    try { validateApiReaderTableNarratives('', 4); } catch (caught) { error = caught; }
+    assert.equal(error.code, TABLE_COUNT_ISSUE_CODE);
+    assert.equal(error.requiredCount, 4);
+    assert.equal(error.actualCount, 0);
+    assert.deepEqual(collectDraftIssues(null, error), error.readerIssues);
+    const parserError = new Error('公式来源不匹配');
+    parserError.readerIssues = [{ ...countIssue(), diagnosticOnly: true }];
+    const collected = collectDraftIssues(null, parserError);
+    assert.equal(collected.length, 2);
+    assert.equal(collected[0].message, '公式来源不匹配');
+    assert.equal(collected[1].diagnosticOnly, true);
+    const draft = countRepairFixture();
+    assert.deepEqual(buildRepairTargets(draft, collected), buildRepairTargets(draft, [collected[0]]));
+});
+
+test('production count feedback and patch-rejection retention do not read coded diagnostic wording', async t => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const repair = require('../scripts/lib/reader-repair.js');
+    const signed = require('./reader-signed-draft-fixture.js').fixture({ noFigures: true });
+    const draft = signed.draft;
+    draft.sections.forEach(section => {
+        section.body = section.body.split(/\n\s*\n/).filter(block => !/^\|/m.test(block)).join('\n\n');
+    });
+    draft.tableBindings = [];
+    const directory = temporary(t);
+    const misleading = 'Reader patch tableBindings[0] source-binding v4 readerTitle misleading_count_text';
+    const originalCollect = repair.collectDraftIssues;
+    repair.collectDraftIssues = (...args) => originalCollect(...args).map(issue => (
+        issue.code === TABLE_COUNT_ISSUE_CODE ? { ...issue, message: misleading } : issue
+    ));
+    let calls = 0;
+    try {
+        await assert.rejects(deep.generateApiReaderArticleDetailed(
+            { arxivId: '2609.99972', title: '离线数量文案与补丁失败' }, '',
+            [1, 2, 3, 4].map(index => `TABLE_${index}: 离线数量要求`).join('\n'), {
+                sourceText: signed.sourceDetails.text, structuredArtifacts: signed.sourceDetails.structuredArtifacts,
+                readerAttemptsDir: directory, readerMaxAttempts: 2,
+                readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+                readerCallModel: async messages => {
+                    if (++calls === 1) return JSON.stringify(draft);
+                    const prompt = messages[0].content[0].text;
+                    assert.doesNotMatch(prompt, /misleading_count_text/);
+                    assert.match(prompt, /目前识别到 0 张/);
+                    return '{broken';
+                }
+            }
+        ));
+    } finally {
+        repair.collectDraftIssues = originalCollect;
+    }
+    assert.equal(calls, 2);
+    const filename = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const stored = JSON.parse(fs.readFileSync(path.join(directory, filename), 'utf8'));
+    assert.equal(stored.payload.issues.filter(issue => issue.code === TABLE_COUNT_ISSUE_CODE).length, 1);
+    assert.ok(stored.payload.issues.some(issue => issue.message.startsWith('Reader patch rejected:')));
+});
+
+test('legacy recovery bytes are authenticated before count compatibility and never rewritten', t => {
+    const directory = temporary(t);
+    const identity = { version: REPAIR_VERSION, paperId: '2609.99970' };
+    const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
+    const payload = { ...failed(countRepairFixture()), issues: [legacy],
+        failureSignature: hashDraft([legacy]), validationFailureSignature: validationFailureSignature([legacy]) };
+    const filename = saveFailedCandidate(directory, identity, payload);
+    const bytes = fs.readFileSync(filename);
+    const recovered = loadFailedCandidate(directory, identity);
+    assert.deepEqual(recovered, payload);
+    assert.deepEqual(fs.readFileSync(filename), bytes);
+    assert.equal(buildRepairContext(recovered.draft, recovered.issues, '').atomicOperation.kind,
+        'append_narrative_table_v1');
+    const tampered = JSON.parse(bytes);
+    tampered.payload.issues = [countIssue()];
+    assert.equal(hashRecoveryIssues(tampered.payload.issues), payload.failureSignature);
+    fs.writeFileSync(filename, JSON.stringify(tampered));
+    const tamperedBytes = fs.readFileSync(filename);
+    assert.throws(() => loadFailedCandidate(directory, identity), /Corrupt or drifted/);
+    assert.deepEqual(fs.readFileSync(filename), tamperedBytes, 'rejected records are not repaired or re-signed');
+    tampered.payloadSha256 = hashDraft(tampered.payload);
+    fs.writeFileSync(filename, JSON.stringify(tampered));
+    assert.deepEqual(loadFailedCandidate(directory, identity).issues, [countIssue()]);
+    tampered.payload.issues[0].actualCount = 4;
+    tampered.payloadSha256 = hashDraft(tampered.payload);
+    fs.writeFileSync(filename, JSON.stringify(tampered));
+    assert.throws(() => loadFailedCandidate(directory, identity), /Corrupt or drifted/);
+});
+
+test('production normalization ignores typed count prose but keeps unrelated issue-bound repairs', async t => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const repair = require('../scripts/lib/reader-repair.js');
+    const draft = fixture();
+    draft.readerTitle = '短';
+    const countSurface = '训练采用两阶段课程，使用模型Transformer，采样率为16kHz，准确率 90 高于 80。';
+    draft.sections[0].body += `\n\n${countSurface}`;
+    draft.sections[1].body += '\n\n另一个实验采用三阶段训练。';
+    draft.conceptBridges[0].explanation += '两阶段课程限定采样条件。';
+    const countMessage = 'quantitative_chinese_numeral:两阶段；technical_term_adhesion:模型Transformer；'
+        + 'numeric_typography:16kHz；comparison_unit_missing:准确率 90 高于 80';
+    const originalCollect = repair.collectDraftIssues;
+    repair.collectDraftIssues = (...args) => [...originalCollect(...args), countIssue(3, countMessage),
+        { path: null, diagnosticOnly: true, message: 'quantitative_chinese_numeral:三阶段' }];
+    const directory = temporary(t);
+    let calls = 0;
+    let beforePatch;
+    try {
+        await assert.rejects(deep.generateApiReaderArticleDetailed(
+            { arxivId: '2609.99973', title: '离线数量诊断规范化边界' }, '', '', {
+                sourceText: '', readerAttemptsDir: directory, readerMaxAttempts: 2,
+                readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+                readerCallModel: async messages => {
+                    if (++calls === 1) return JSON.stringify(draft);
+                    const filename = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+                    beforePatch = JSON.parse(fs.readFileSync(path.join(directory, filename), 'utf8')).payload.draft;
+                    const prompt = messages[0].content[0].text;
+                    const start = prompt.indexOf('{"draftSha256":');
+                    const end = prompt.indexOf('\n', start);
+                    const envelope = JSON.parse(prompt.slice(start, end < 0 ? undefined : end));
+                    const target = envelope.targets.find(item => item.path === '/readerTitle');
+                    assert.ok(target);
+                    return JSON.stringify({ version: 1, draftSha256: envelope.draftSha256,
+                        replacements: [{ path: target.path, oldSha256: target.oldSha256, value: '短' }] });
+                }
+            }
+        ), /读者标题/);
+    } finally {
+        repair.collectDraftIssues = originalCollect;
+    }
+    assert.equal(calls, 2);
+    const filename = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const stored = JSON.parse(fs.readFileSync(path.join(directory, filename), 'utf8'));
+    assert.equal(stored.payload.draft.sections[0].body, beforePatch.sections[0].body);
+    assert.equal(stored.payload.draft.conceptBridges[0].explanation, beforePatch.conceptBridges[0].explanation);
+    assert.equal(stored.payload.draft.sections[1].body,
+        beforePatch.sections[1].body.replace('三阶段', ' 3 个阶段'));
+});
+
 test('missing result table repair moves one stable experiment table/binding into result', () => {
     const draft = fixture();
     const table = index => `\n\n表 ${index} 的比较条件。\n\n`
@@ -906,7 +1204,7 @@ test('normalized validation signatures stop the same binding issue after two cha
             return calls === 1 ? JSON.stringify(draft)
                 : JSON.stringify(patchFor(draft, [['/readerTitle', changedTitle]]));
         }
-    }), /同一规范化验证门禁连续 2 次无改善/);
+    }), /同一组校验问题连续两次未改善/);
     assert.equal(calls, 2);
     const envelope = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0])));
     assert.equal(envelope.payload.validationFailureStreak, 2);

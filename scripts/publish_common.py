@@ -3641,7 +3641,9 @@ def validate_manual_editorial_quality_v4(analysis):
             return f'manual v4 {section} 中英文技术词边界缺少空格: {adhesion.group(0)}'
         for paragraph in _manual_editorial_prose_paragraphs(body):
             if _manual_han_character_count(paragraph) > 260 or len(re.findall(r'[。！？；!?;]', paragraph)) > 7:
-                return f'manual v4 {section} 段落过载，必须拆分并建立推进关系'
+                return (f'manual v4 {section} 段落过长：汉字超过 260 个，或中文句号、'
+                        '中英文问号、感叹号和分号合计超过 7 个。'
+                        '请按主要意思拆成多个段落，并写清前后联系')
     seen = {}
     for section, body in sections.items():
         for sentence in re.split(r'(?<=[。！？!?；;])', body):
