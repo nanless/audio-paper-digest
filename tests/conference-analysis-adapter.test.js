@@ -376,8 +376,8 @@ test('weak PDF Reader policy forces empty structure bindings and retries a nonem
     assert.match(prompts[0], /conference-reader-weak-unavailable-structure-v1/);
     assert.match(prompts[0], /tableBindings、formulaBindings、figurePlacements 必须全部为 \[\]/);
     assert.match(prompts[1], /tableBindings、formulaBindings、figurePlacements 必须全部为 \[\]/);
-    assert.match(prompts[1], /请为刚进入语音\/音乐\/音频领域的研究生写一篇/);
-    assert.doesNotMatch(prompts[1], /Reader 受限局部修复/);
+    assert.match(prompts[1], /请为刚进入语音、音乐或音频领域的研究生写一篇中文论文解读/);
+    assert.doesNotMatch(prompts[1], /请修复下方尚未通过检查的论文解读/);
 
     const policy = context.WEAK_READER_CAPABILITY_POLICY;
     const badFormula = successfulReaderDraft();

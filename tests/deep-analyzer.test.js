@@ -5344,11 +5344,11 @@ has_dataset: 否
         assert.match(block, /禁止把 `0\.85` 改成 `85\.00`/);
         assert.match(block, /禁止增删末尾零、舍入、百分数与小数互换、单位换算或自行计算差值/);
         assert.match(block, /禁止把摘要\/引言中的概括值与表格中的基线值拼成一组比较/);
-        assert.match(block, /\[方法 A\]的\[指标\]为\[数值 A\]，高于\/低于\[基线 B\]的\[数值 B\]/);
-        assert.match(block, /方向必须字面使用“高于”“低于”“从……升至”或“从……降至”之一/);
-        assert.match(block, /不能用“最高”“最优”“最低”或“达到”代替/);
-        assert.match(block, /禁止写无“从”的“\[数值 B\]升至\/降至\[数值 A\]”/);
-        assert.doesNotMatch(block, /相对\[比较对象 B\]为\[数值\]升至\/降至\[数值\]/);
+        assert.match(block, /按单句检查比较对象、评测设置或数据集、指标、数值与方向/);
+        assert.match(block, /句首和要素顺序可以按内容安排/);
+        assert.match(block, /不能比较不同量纲或不同指标/);
+        assert.match(block, /“最高”“最优”“最低”或“达到”不能独立说明与谁比较/);
+        assert.doesNotMatch(block, /必须以“在\[|八项缺任何一项|方向必须字面使用/);
         const expected = crypto.createHash('sha256').update(JSON.stringify({
             runtimePrompt: block,
             contractVersion: 'core-summary-detailed-v3'
@@ -5447,7 +5447,7 @@ has_dataset: 否
         }), null);
         assert.strictEqual(exterior(updated), exterior(original));
         assert.match(prompt, /2–4 个步骤/);
-        assert.match(prompt, /320–600 个中文\/中文标点字符/);
+        assert.match(prompt, /汉字与中文标点合计 320–600 个/);
         assert.match(prompt, /同一量表上报告的两个条件或维度/);
         assert.match(prompt, /两个数值及各自单位、正负号和小数精度必须逐字来自同一原表行/);
         assert.match(prompt, /禁止把 `0\.85` 改成 `85\.00`/);
@@ -5457,7 +5457,9 @@ has_dataset: 否
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
         assert.match(prompts[1], /这是第 2 次局部修复/);
-        assert.match(prompts[1], /方向必须字面使用“高于”“低于”“从……升至”或“从……降至”之一/);
+        assert.match(prompts[1], /在同一句中说明比较对象、评测设置或数据集、指标、数值与方向/);
+        assert.match(prompts[1], /使用相同指标的原文数值明确比较/);
+        assert.doesNotMatch(prompts[1], /方向必须字面使用|两侧必须重复同一指标名/);
         assert.match(prompts[1], /只编辑或补充下列未通过项/);
     });
 
@@ -5491,7 +5493,7 @@ has_dataset: 否
         assert.strictEqual(calls, 2);
         assert.strictEqual(getCoreSummaryDetailIssue(updated), null);
         assert.match(prompts[1], new RegExp(noCost.slice(0, 80)));
-        assert.match(prompts[1], /成本句在原文已披露时/);
+        assert.match(prompts[1], /原文已披露成本时，说明训练、推理或部署的实际开销与条件/);
         assert.doesNotMatch(prompts[1], /量化句须在同一句内闭合/);
     });
 

@@ -26,9 +26,9 @@ test('Reader prompt notices share parser thresholds and per-request evidence tab
 
 test('Reader prompt distinguishes table input modes and states character and figure-direction semantics', () => {
     const prompt = fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-article.md'), 'utf8');
-    assert.match(prompt, /selection：正文独占/);
-    assert.match(prompt, /artifact_table（既有兼容模式）：.*完整 Markdown 表，不使用 TABLE marker/);
-    assert.match(prompt, /source_quotes：.*完整 Markdown 表，不使用 TABLE marker/);
+    assert.match(prompt, /`selection`：正文独占一段写 `\[\[TABLE_<tableIndex>\]\]`，不手写该表的 Markdown/);
+    assert.match(prompt, /`artifact_table` 是既有兼容模式。.*完整 Markdown 表，不使用 `TABLE` 占位符/);
+    assert.match(prompt, /`source_quotes` 用于直接整理原文句子。.*完整 Markdown 表，不使用 `TABLE` 占位符/);
     assert.match(prompt, /`cellBindings=\[\]` 必须为空/);
     assert.match(prompt, /不得发明 `value`、`quoteIndex`/);
     assert.match(prompt, /不是 JSON 字符数、英文长度或 token 数/);
@@ -47,14 +47,14 @@ test('runtime Reader prompt keeps source identity rules without contradictory ex
     assert.doesNotMatch(prompt, /\{(?:title|arxivId|sourceEvidence|validationFeedback|previousDraft|mechanicalContract)\}/);
     assert.match(prompt, /不能把无训练等同于确定性求解/);
     assert.doesNotMatch(prompt, /再解释复用模型、确定性求解和推理过程/);
-    assert.match(prompt, /仅按证据说明参数冻结\/更新、梯度路径/);
+    assert.match(prompt, /参数如何冻结或更新、梯度经过哪里、监督来自哪里、何时重置，都只能按证据说明/);
     assert.match(prompt, /数值相同不是同一指标的证据/);
-    assert.match(prompt, /不同指标的差值不能放到模型列下/);
+    assert.match(prompt, /不要把不同指标的差值放到模型列下/);
     assert.match(prompt, /原文表头、图注或算术互相冲突时明确标注冲突/);
     assert.match(prompt, /单位留在同一单元格/);
     assert.match(prompt, /原文是裸数值时不擅自添单位/);
     assert.doesNotMatch(prompt, /\| 指标 \| 单位 \|/);
-    assert.match(prompt, /保留正确的图\/公式ordinal、概念桥marker与绑定关系/);
+    assert.match(prompt, /保留正确的图和公式编号、概念解释占位符及对应关系/);
     assert.doesNotMatch(prompt, /表后必须用 2–4 段/);
     const schema = JSON.parse(prompt.slice(prompt.indexOf('\n{\n') + 1,
         prompt.indexOf('\n\n`sections` 数量')));

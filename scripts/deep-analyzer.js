@@ -16246,25 +16246,25 @@ async function repairCoreSummarySection(
             retryTargets.push(`删除不能由原文核对的实验数值断言，并原样写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”；`
                 + '不得同时保留或新增实验数字');
         } else if (/(?:定量|量化|比较对象|评测设置|指标名称|指标口径|数值|比较方向)/.test(feedback)) {
-            retryTargets.push('量化句须在同一句内闭合比较对象、评测设置或数据集、指标、数值与方向，'
-                + '且方向必须字面使用“高于”“低于”“从……升至”或“从……降至”之一，'
-                + '不能用“最高”“最优”“最低”“达到”或无“从”的“升至/降至”代替；'
-                + '方向连接词两侧必须重复同一指标名，不能直接比较两个不同指标');
+            retryTargets.push('在同一句中说明比较对象、评测设置或数据集、指标、数值与方向。'
+                + '使用相同指标的原文数值明确比较，不跨指标比较。句首和要素顺序可以按内容安排，'
+                + '不必重复指标名；不能只写“最高”“最优”“最低”或“达到”而不说明比较对象与方向');
         }
         if (/方法链/.test(feedback)) {
-            retryTargets.push('至少写清两步且不超过四步的方法链：用“先……，再……，最后……”或等价连接词，'
-                + '每一步都写明输入、职责和输出，并说明前一步输出如何进入后一步；不要只罗列模块名');
+            retryTargets.push('解释 2–4 个方法步骤的输入、职责和输出，以及前一步输出怎样进入后一步。'
+                + '按实际处理过程衔接，不只罗列模块名，也不要求统一的连接词');
         }
         if (/(?:结论适用边界|失败条件|未验证范围)/.test(feedback)) {
-            retryTargets.push('边界句须明确写出适用边界、失败条件或尚未验证范围');
+            retryTargets.push('说明结论适用的具体条件、可能失败的条件或尚未验证的范围');
         }
         if (/训练、推理或部署成本/.test(feedback)) {
-            retryTargets.push('成本句在原文已披露时须写出训练成本、推理开销、计算量、硬件、延迟或吞吐中的实际证据；只有原文确实未披露时才可使用固定不可得句');
+            retryTargets.push('原文已披露成本时，说明训练、推理或部署的实际开销与条件，'
+                + '例如计算量、硬件、延迟或吞吐。只有原文确实未披露时，才写“原文未披露训练、推理或部署成本”');
         }
         const summaryIssue = attempt === 1
             ? feedback
            : `这是第 ${attempt} 次局部修复。保留上一候选中已合格的句子，只编辑或补充下列未通过项：`
-               + `${retryTargets.length ? retryTargets.join('；') : '逐项满足上次校验错误'}。\n`
+               + `${retryTargets.length ? retryTargets.join('\n') : '根据下方校验反馈逐项修正'}。\n`
                + `上次校验错误：${feedback}`;
         const prompt = loadPrompt('prompts/core-summary-repair.md', {
             title: paper.title,

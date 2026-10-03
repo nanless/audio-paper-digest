@@ -25,10 +25,9 @@ describe('post-publication visual prompt style contract', () => {
             'full image generation',
             'complete final poster',
             'visually verify every title',
-            'no illegible pseudo-text',
-            'no cyberpunk or sci-fi HUD',
-            'no neon glow',
-            'no dense grid of equal-sized boxes',
+            'Render legible text without random characters or pseudo-text',
+            'Do not use a dark navy or black full-page background, neon glow, cyberpunk or sci-fi HUD',
+            'avoid cluttered icons, repeated decorative waveforms, a dense grid of equal-sized boxes',
         ]) {
             assert.match(prompt, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
         }
@@ -43,15 +42,14 @@ describe('post-publication visual prompt style contract', () => {
             'low-saturation palette',
             'flat-vector editorial illustration',
             'generous negative space',
-            'up to ten compact, calm editorial rows',
+            'up to ten clearly aligned rows',
             'full image generation',
             'complete final cover',
             'highest available portrait resolution',
             'visually verify every supplied title',
-            'no illegible pseudo-text',
-            'no cyberpunk or sci-fi HUD',
-            'no neon glow',
-            'no podium, medal, laurel, trophy',
+            'Render legible text without random characters or pseudo-text',
+            'Do not use a dark navy or black full-page background, neon glow, cyberpunk or sci-fi HUD',
+            'Avoid podiums, medals, laurels, trophies',
         ]) {
             assert.match(prompt, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
         }
