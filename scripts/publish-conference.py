@@ -619,7 +619,7 @@ def verify_tree(repo, base, tree, records):
             raise ConferencePublicationError(f'Git tree 实际 blob/模式不匹配: {record["path"]}')
 
 
-def transaction_snapshot(repo, base, identity, records):
+def transaction_snapshot(repo, base, identity, records, new_source_sha=None):
     snapshot = remote_snapshot(repo)
     if snapshot['remoteIdentitySha256'] != identity:
         raise ConferencePublicationError('发布 remote identity 漂移')
@@ -660,7 +660,8 @@ def rebase_target_changes(repository, base, current, paths, label):
     return touched
 
 
-def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot):
+def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot,
+                                new_source_sha=None, new_image_source_sha=None):
     """Permit generate to reseal over unrelated main commits, never push directly.
 
     Previously published targets must still be exact generation blobs. Targets
@@ -705,7 +706,19 @@ def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot
                 raise ConferencePublicationError(f'旧 generation {label} 基线不是当前 HEAD 祖先')
             for path in rebase_target_changes(repository, base, current, set(by_path), label):
                 if not blob_matches(repository, current, by_path[path]):
-                    raise ConferencePublicationError(f'{label}目标在基线迁移期间发生字节变化: {path}')
+                    # 有主放行：间涉提交虽改了 HEAD 字节，但工作区目标已回到本次
+                    # staged 源字节（push 的精确 delta 提交将以工作区字节覆盖），
+                    # 迁移未保留任何非本次权威内容 → 放行；否则照旧 fail-closed。
+                    staged_sha = ((new_source_sha if repository == repo
+                                   else new_image_source_sha) or {}).get(path)
+                    owned = False
+                    if staged_sha is not None:
+                        try:
+                            owned = sha_bytes(read_bytes(under(repository, path, f'{label}目标'))) == staged_sha
+                        except ConferencePublicationError:
+                            owned = False
+                    if not owned:
+                        raise ConferencePublicationError(f'{label}目标在基线迁移期间发生字节变化: {path}')
         for path, record in by_path.items():
             entry = git(repository, 'ls-tree', base, '--', path).stdout.strip().split(None, 3)
             if entry and (len(entry) != 4 or entry[:2] != ['100644', 'blob']):
@@ -715,7 +728,13 @@ def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot
             if stat.S_IMODE(target.lstat().st_mode) != 0o644:
                 raise ConferencePublicationError(f'{label}工作区目标模式漂移: {path}')
             if sha_bytes(data) != record['sourceSha256']:
-                raise ConferencePublicationError(f'{label}工作区目标字节漂移: {path}')
+                # 有主字节等值放行：目标恰等于本次生成的 staged 源字节（权威源已落位，
+                # 见中断恢复/经审重裁场景）→ 放行，新 generation 将以源字节刷新记录；
+                # 任意其他漂移（含人工改动）照旧 fail-closed。
+                staged_sha = ((new_source_sha if repository == repo
+                               else new_image_source_sha) or {}).get(path)
+                if staged_sha is None or sha_bytes(data) != staged_sha:
+                    raise ConferencePublicationError(f'{label}工作区目标字节漂移: {path}')
 
 
 def can_resume_existing_generation(repository, base, identity, records):
@@ -832,13 +851,21 @@ def generate(conference_id, process_id):
                     images, previous_record.get('imageBaseHead'),
                     previous_record.get('imageRemoteIdentitySha256'), previous_record.get('imageFiles') or []))
             if needs_rebase:
-                validate_unpublished_rebase(repo, images, previous_record, snapshot, image_snapshot)
+                validate_unpublished_rebase(repo, images, previous_record, snapshot, image_snapshot,
+                                            new_source_sha={item['path']: item['sourceSha256']
+                                                            for item in files},
+                                            new_image_source_sha={item['path']: item['sourceSha256']
+                                                                  for item in image_files})
                 previous = previous_record
                 rebased = True
             else:
                 previous, _, _ = validate_generation(
                     conference_id, process_id, repo, images,
-                    allow_owned_target_drift=projection_changed
+                    allow_owned_target_drift=projection_changed,
+                    new_image_source_sha={item['path']: item['sourceSha256']
+                                          for item in image_files},
+                    new_source_sha={item['path']: item['sourceSha256']
+                                    for item in files}
                 )
             same_implementation = previous.get('implementationSha256') == gate_fingerprint()
             completion_changed = previous['completionReceiptSha256'] != bundle['completion']['receiptSha256']
@@ -913,7 +940,8 @@ def generate(conference_id, process_id):
 
 
 def validate_generation(conference_id, process_id, repo, images, *,
-                        allow_owned_target_drift=False, allow_committed=False):
+                        allow_owned_target_drift=False, allow_committed=False,
+                        new_image_source_sha=None, new_source_sha=None):
     generation = load_generation(conference_id, process_id)
     body = dict(generation)
     declared = body.pop('generationSha256', None)
@@ -937,10 +965,16 @@ def validate_generation(conference_id, process_id, repo, images, *,
             raise ConferencePublicationError('博客 HEAD 或远端 main 在会议发布期间发生漂移')
     else:
         snapshot = transaction_snapshot(repo, generation['baseHead'],
-                                        generation['remoteIdentitySha256'], generation['files'])
+                                        generation['remoteIdentitySha256'], generation['files'],
+                                        new_source_sha=new_source_sha)
     for record in generation.get('files', []):
         data = target_bytes(repo, record)
         if sha_bytes(data) != record['sourceSha256']:
+            # 有主字节等值放行：目标恰等于本次生成的 staged 源字节（权威源已落位，
+            # 中断恢复/经审修复场景）→ 放行，新 generation 将以源字节刷新记录。
+            staged_sha = (new_source_sha or {}).get(record['path'])
+            if staged_sha is not None and sha_bytes(data) == staged_sha:
+                continue
             if not allow_owned_target_drift or not can_replace_conference_target(
                     under(repo, record['path'], '博客目标'), data,
                     conference_id, record['kind']):
@@ -949,11 +983,17 @@ def validate_generation(conference_id, process_id, repo, images, *,
     if not isinstance(image_files, list):
         raise ConferencePublicationError('generation 缺少图片仓库文件清单')
     image_snapshot = transaction_snapshot(images, generation['imageBaseHead'],
-                                          generation['imageRemoteIdentitySha256'], image_files)
+                                          generation['imageRemoteIdentitySha256'], image_files,
+                                          new_source_sha=new_image_source_sha)
     for record in image_files:
         data = target_bytes(images, record)
         if sha_bytes(data) != record['sourceSha256']:
-            raise ConferencePublicationError(f'图片仓库目标字节与 generation 不一致: {record["path"]}')
+            # 有主图片漂移：目标字节恰等于本次生成的 staged 源字节（本次权威源已落在目标，
+            # 多见于中断恢复与经审重裁的资产）→ 放行，新 generation 将以 staged 源刷新记录；
+            # 其余漂移照旧 fail-closed（asset 无内容标记，不用 kind 探测，只认字节等值）。
+            staged_sha = (new_image_source_sha or {}).get(record['path'])
+            if not staged_sha or sha_bytes(data) != staged_sha:
+                raise ConferencePublicationError(f'图片仓库目标字节与 generation 不一致: {record["path"]}')
     return generation, snapshot, image_snapshot
 
 
@@ -1139,7 +1179,7 @@ def raise_content_review_failure(record, digest, protocol, stage, findings, mess
     raise ConferencePublicationError(f'{message}；失败原因记录: {target}')
 
 
-def review_pages(repo, records):
+def review_pages(repo, records, workers=None):
     """Reuse only passing path+byte evidence; rerun deterministic gates every time.
 
     Dispatch is sequential: do not catch reviewer exceptions here. In particular,
@@ -1151,8 +1191,11 @@ def review_pages(repo, records):
     module.BLOG_REPO = str(repo)
     module.CONTENT_DIR = str(repo / 'content' / 'posts')
     protocol = content_review_protocol(module, repo)
-    results = []
-    for record in records:
+
+    # 会议侧逐页 review 原为串行（~70s/页 × 1355 页 ≈ 26 小时）——按日更同款
+    # PD_BLOG_REVIEW_CONCURRENCY（1–5，默认 5）并行化。逐页函数保持“首个坏页即抛”
+    # 的 fail-fast 语义（按记录顺序取结果，坏页之前的通过页已各自持久化 pass-cache）。
+    def _review_one(record):
         relative = safe_relative(record['path'], 'review 页面')
         raw = target_bytes(repo, record)
         digest = sha_bytes(raw)
@@ -1173,44 +1216,58 @@ def review_pages(repo, records):
                     or result.get('sha256') != digest or result.get('passed') is not True \
                     or result.get('contract') != 'conference-page-content-review-v1':
                 raise ConferencePublicationError(f'页面 review 缓存损坏: {relative}')
-        else:
-            if not os.environ.get('PAPER_ANALYZER_MODEL', '').strip():
-                raise ConferencePublicationError('内容和多模态 review 必须配置模型，不能跳过')
-            title = frontmatter.get('title', relative)
-            chunks = module.split_review_content(content, module.get_blog_review_chunk_chars())
-            if not chunks:
-                raise ConferencePublicationError(f'没有可审查正文: {relative}')
-            issues = []
-            for index, chunk in enumerate(chunks):
-                passed, findings, proposed = module._llm_review_post_chunk(
-                    chunk, title, required=True, chunk_label=f'{index + 1}/{len(chunks)}')
-                if passed is not True or proposed != chunk:
-                    raise_content_review_failure(
-                        record, digest, protocol, 'text', findings,
-                        f'正文语义 review 未通过或建议修改: {relative}',
-                        chunkIndex=index + 1, chunkCount=len(chunks),
-                        proposedChanged=proposed != chunk)
-                issues.extend(findings)
-            matches = module.parse_markdown_images(content)
-            if matches:
-                passed, findings = module.multimodal_review_images(content, title, required=True)
-                if passed is not True:
-                    raise_content_review_failure(
-                        record, digest, protocol, 'image', findings,
-                        f'图片多模态 review 未通过: {relative}', imageCount=len(matches))
-                issues.extend(findings)
-            if module.count_blocking_review_issues(issues):
+            return result
+        if not os.environ.get('PAPER_ANALYZER_MODEL', '').strip():
+            raise ConferencePublicationError('内容和多模态 review 必须配置模型，不能跳过')
+        title = frontmatter.get('title', relative)
+        chunks = module.split_review_content(content, module.get_blog_review_chunk_chars())
+        if not chunks:
+            raise ConferencePublicationError(f'没有可审查正文: {relative}')
+        found = []
+        for index, chunk in enumerate(chunks):
+            passed, findings, proposed = module._llm_review_post_chunk(
+                chunk, title, required=True, chunk_label=f'{index + 1}/{len(chunks)}')
+            if passed is not True or proposed != chunk:
                 raise_content_review_failure(
-                    record, digest, protocol, 'blocking-issues', issues,
-                    f'内容 review 存在阻断问题: {relative}')
-            result = {'contract': 'conference-page-content-review-v1', 'path': relative,
-                      'sha256': digest, 'passed': True, 'issues': issues,
-                      'imageCount': len(matches), 'protocol': protocol}
-            result['resultSha256'] = stable(result)
-            if sha_bytes(target_bytes(repo, record)) != digest:
-                raise ConferencePublicationError(f'只读 review 期间页面变化: {relative}')
-            write_exact(cache, json_bytes(result))
-        results.append(result)
+                    record, digest, protocol, 'text', findings,
+                    f'正文语义 review 未通过或建议修改: {relative}',
+                    chunkIndex=index + 1, chunkCount=len(chunks),
+                    proposedChanged=proposed != chunk)
+            found.extend(findings)
+        matches = module.parse_markdown_images(content)
+        if matches:
+            passed, findings = module.multimodal_review_images(content, title, required=True)
+            if passed is not True:
+                raise_content_review_failure(
+                    record, digest, protocol, 'image', findings,
+                    f'图片多模态 review 未通过: {relative}', imageCount=len(matches))
+            found.extend(findings)
+        if module.count_blocking_review_issues(found):
+            raise_content_review_failure(
+                record, digest, protocol, 'blocking-issues', found,
+                f'内容 review 存在阻断问题: {relative}')
+        result = {'contract': 'conference-page-content-review-v1', 'path': relative,
+                  'sha256': digest, 'passed': True, 'issues': found,
+                  'imageCount': len(matches), 'protocol': protocol}
+        result['resultSha256'] = stable(result)
+        if sha_bytes(target_bytes(repo, record)) != digest:
+            raise ConferencePublicationError(f'只读 review 期间页面变化: {relative}')
+        write_exact(cache, json_bytes(result))
+        return result
+
+    try:
+        workers = int(workers if workers is not None
+                      else os.environ.get('PD_BLOG_REVIEW_CONCURRENCY', '5').strip() or '5')
+    except (TypeError, ValueError):
+        workers = 5
+    # 遵循独立博客页 review 的明确 1–5 并发范围；默认保持 5。
+    workers = max(1, min(int(workers), 5))
+    import concurrent.futures
+    if workers == 1:
+        results = [_review_one(record) for record in records]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            results = list(executor.map(_review_one, records))
     return {'status': 'passed', 'protocol': protocol, 'pages': results}
 
 

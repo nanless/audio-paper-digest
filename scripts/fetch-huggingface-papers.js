@@ -6,8 +6,8 @@ setupScriptLogging(__filename);
  * 从 HuggingFace Papers 获取过去一周的论文
  * 
  * API 说明：
- * - /api/daily_papers?limit=100  返回精选每日论文（含 ai_summary, githubRepo, upvotes 等丰富数据）
- *   最大 limit=100，支持 offset 分页
+ * - /api/daily_papers?limit=100&p=0  返回精选每日论文（含 ai_summary, githubRepo, upvotes 等丰富数据）
+ *   最大 limit=100，使用 p 页码分页
  * - /api/papers?limit=100        返回最新论文（含 upvotes, authors, summary）
  *   覆盖最近 1-2 天，用于补充 daily_papers 未收录的新论文
  * 
@@ -370,8 +370,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     let dailyComplete = false;
 
     while (!reachedCutoff && page < HUGGINGFACE_CONFIG.maxPages) {
-        const offset = page * HUGGINGFACE_CONFIG.pageLimit;
-        const url = `https://huggingface.co/api/daily_papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&offset=${offset}`;
+        const url = `https://huggingface.co/api/daily_papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&p=${page}`;
         const response = await fetchTracked(`daily_papers:${page + 1}`, url);
         const data = response.data;
 

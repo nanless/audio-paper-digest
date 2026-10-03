@@ -260,12 +260,12 @@ describe('HuggingFace 抓取健康状态', () => {
             minUpvotes: 0,
             fetchFn: url => {
                 urls.push(url);
-                if (url.includes('daily_papers') && url.includes('offset=0')) return { ok: true, data: firstPage };
+                if (url.includes('daily_papers') && url.includes('p=0')) return { ok: true, data: firstPage };
                 return { ok: true, data: [] };
             },
             sleepFn: async () => {}
         });
-        assert.ok(urls.some(url => url.includes('daily_papers') && url.includes('offset=100')));
+        assert.ok(urls.some(url => url.includes('daily_papers') && url.includes('p=1')));
     });
 
     it('papers API 满页时继续分页，直到短页或日期截止线', async () => {

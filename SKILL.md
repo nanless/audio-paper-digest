@@ -96,7 +96,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 
 评分八维为：创新性 2、技术严谨性 1.5、实验充分性 1.5、清晰度 1、影响力 1.5、开源 1.5、可复现性 0.5、工程/实践价值 1.5。分项总和最大 11，发布总分由代码重算并封顶 10。
 
-文档类型决定适用证据，不改变权重。一个缺陷只归一个主要维度：产物缺失归开源，配置缺失归可复现性，支撑声明的实验不足归实验充分性，表达问题归清晰度，真实逻辑/推导错误才归技术严谨性。评分审计必须引用证据账本，并记录 `evidenceProfile` 与代码上限。
+文档类型决定适用证据，不改变权重。一个缺陷只归一个主要维度：产物缺失归开源，配置缺失归可复现性，支撑声明的实验不足归实验充分性，表达问题归清晰度，真实逻辑/推导错误才归技术严谨性。评分审计必须引用证据账本，并记录 `evidenceProfile` 与代码上限。评分变化超过 0.5 分时独立复审；前两次差异超过 0.3 分可再审一次，仅接受三次中差异不超过 0.3 分的一对。多次审计证明必须绑定最终采用的审计 SHA 和分数，并重算共识差值。
 
 ## 4. API、代理、并发和上下文
 
@@ -196,6 +196,8 @@ npm run blog:push -- --date YYYY-MM-DD
 ```
 
 generate 安装精确页面并签发 generation manifest；review 对不可变页面 artifact 做确定性、LLM、图片和 Hugo 审查，逐页 checkpoint，最后签发 receipt；push 只允许 receipt 描述的 Git delta，提交后验证远端 `main` OID。
+
+远端 OID 和 `digest:status` 的 `remoteVerified` 只证明 Git 发布。宣告上线或任务完成前，另行确认对应 publication commit（或保留该批次已审页面字节的后续提交）的 GitHub Pages workflow 已成功 build/deploy，并逐页检查目标日期汇总及单篇的 HTTP 200、正式地址与标题。保存核验记录；部署失败则读日志、修复并等待重新部署成功。
 
 标签迁移期间，新 production 页面继续写 Hugo 兼容的扁平 `tags`，但必须同时写入 `paper-taxonomy-flat-tags-compat-v1`、当前 registry/version/SHA、逐标签 concept/facet、`paper_digest_primary_task` 与 `paper_digest_primary_method`。旧页面与旧标签 URL 保持不变；汇总“热门方向”只按显式主任务统计，网页标签总表明确是新旧混合索引。
 

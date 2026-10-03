@@ -12,7 +12,8 @@ from types import SimpleNamespace
 
 SOURCE = Path(os.environ.get('SOURCE_PUBLISHER_PATH',
     str(Path(__file__).resolve().parents[2] / 'scripts/publish-to-blog.py')))
-NAMES = {'build_taxonomy_registry_snapshot', 'taxonomy_registry_snapshot_bytes',
+NAMES = {'_validate_taxonomy_presentation_policy', '_taxonomy_historical_projection_sha256',
+    '_taxonomy_presentation_selection', 'build_taxonomy_registry_snapshot', 'taxonomy_registry_snapshot_bytes',
     '_validate_taxonomy_snapshot', '_validate_taxonomy_catalog', '_taxonomy_asset_relative',
     '_read_taxonomy_asset', 'taxonomy_registry_asset_payloads',
     'prepare_taxonomy_registry_staged_assets', 'export_taxonomy_registry_snapshot',

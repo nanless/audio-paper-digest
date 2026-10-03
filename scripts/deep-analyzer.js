@@ -1038,6 +1038,9 @@ function isAllowedReaderNarrativeNumeralIssue(issue, article = '') {
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
     const match = String(issue.match || '').trim();
     const articleText = String(article);
+    if (match === '一对' && Number.isInteger(issue.index)
+        && /^一对一(?:分配|匹配|映射|对应|关联|对齐|约束|配对)/u.test(
+            articleText.slice(issue.index))) return true;
     // A third-octave band is a scientific term, not a measured one-fold gain.
     // Match the exact occurrence, never waive other 一倍 merely because the
     // term appears elsewhere in the article.
@@ -1734,6 +1737,45 @@ function buildApiReaderQualityMetrics(quality, article) {
 // the evidence authority; this helper only chooses the safe display surface.
 function normalizeReaderSourceDisplayArtifacts(value) {
     let output = String(value ?? '');
+    // LaTeXML can expose the same confidence interval once as visible text and
+    // again as a brace-encoded comma annotation. Keep the visible interval and
+    // drop only an annotation whose endpoints exactly repeat it.
+    output = output.replace(
+        /(\[\s*([+−-]?\d+(?:\.\d+)?)\s*,\s*([+−-]?\d+(?:\.\d+)?)\s*\])\[\s*([+−-]?\d+(?:\.\d+)?)\{\}\{,\}\s*([+−-]?\d+(?:\.\d+)?)\{\}\s*\]/g,
+        (whole, visible, low, high, annotatedLow, annotatedHigh) => (
+            low.replaceAll('-', '−') === annotatedLow.replaceAll('-', '−')
+                && high.replaceAll('-', '−') === annotatedHigh.replaceAll('-', '−')
+                ? visible : whole
+        )
+    );
+    // A standalone percentage can contain the same leading sign from both
+    // LaTeXML's visible math and its annotation. Never apply this to prose
+    // expressions or a pair of different numeric values.
+    output = output.replace(/^−-(\d+(?:\.\d+)?%)$/, '−$1')
+        .replace(/^\+\+(\d+(?:\.\d+)?%)$/, '+$1');
+    output = output.replace(
+        /(?<![\d,])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,])/g,
+        (whole, visible, annotation) => annotation.replaceAll('{,}', ',') === visible
+            ? visible : whole
+    );
+    const scalar = '[+−-]?\\d+(?:\\.\\d+)?';
+    const repeatedInterval = new RegExp(
+        `(?<![A-Za-z0-9])(${scalar})[\\s\\u200b]*\\[\\s*(${scalar})\\s*,\\s*(${scalar})\\s*\\]`
+        + `[\\s\\u200b]*(${scalar})\\\\;\\s*\\[\\s*(${scalar})\\s*,\\s*(${scalar})\\s*\\]`, 'g'
+    );
+    output = output.replace(repeatedInterval, (whole, mean, low, high, texMean, texLow, texHigh) => {
+        const same = (left, right) => left.replace('−', '-') === right.replace('−', '-');
+        if (!same(mean, texMean) || !same(low, texLow) || !same(high, texHigh)) return whole;
+        return `${mean} [${low}, ${high}]`;
+    });
+    output = output.replace(
+        /(?<![A-Za-z0-9])([1-9]\d*)([−+-])(\d+)\1\^\{([−+-])\3\}(?![A-Za-z0-9])/g,
+        (whole, base, visibleSign, exponent, texSign) => {
+            const sign = visibleSign.replace('−', '-');
+            if (sign !== texSign.replace('−', '-')) return whole;
+            return `\\(${base}^{${sign}${exponent}}\\)`;
+        }
+    );
     output = output.replace(
         /l[\u200b\u200c\u200d\ufeff]*r\s*=\s*([0-9]+(?:\.[0-9]+)?)[\u200b\u200c\u200d\ufeff]*e[−-](\d+)\s*lr\s*=\s*\1e\^\{[-−]\2\}/gi,
         (_whole, base, exponent) => `lr=${base}e-${exponent}`
@@ -1879,6 +1921,18 @@ function readerNumericTokenMatches(value) {
     const texStatistic = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?(?:[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+|[0-9\uFF10-\uFF19]+)(?:[.\uFF0E][0-9\uFF10-\uFF19]+)?)\\mu\s*=\s*([+\-\u2212\uFF0D]?[0-9\uFF10-\uFF19{}.,\uFF0C\uFF0E]+)\s*(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%\uFF05])(?![A-Za-z0-9_])/gi;
     for (const whole of originalSurface.matchAll(texStatistic)) {
         appendAlias(whole, whole[1], whole[2].replace(/[{}]/g, ''), whole[3]);
+    }
+    // LaTeXML also duplicates a complete visible measurement immediately
+    // before its TeX annotation, e.g. 50 Hz50\\text{\\,}\\mathrm{H}\\mathrm{z}.
+    // The digit after Hz correctly blocks the ordinary unit tokenizer. Add
+    // an alias only when BOTH number spellings and the fully decoded unit
+    // agree; the exact original span remains the quote authority.
+    const texMeasurement = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?(?:[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+|[0-9\uFF10-\uFF19]+)(?:[.\uFF0E][0-9\uFF10-\uFF19]+)?)\s*(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)([+\-\u2212\uFF0D]?(?:[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+|[0-9\uFF10-\uFF19]+)(?:[.\uFF0E][0-9\uFF10-\uFF19]+)?)(?:\s|\\text\{\\[,;!]\}|\\[,;!])*((?:\\(?:mathrm|textrm|text)\{[A-Za-z]+\}){1,8})(?![A-Za-z0-9_]|\\(?:mathrm|textrm|text)\{[A-Za-z])/gi;
+    for (const whole of originalSurface.matchAll(texMeasurement)) {
+        const texUnit = [...whole[4].matchAll(/\\(?:mathrm|textrm|text)\{([A-Za-z]+)\}/g)]
+            .map(match => match[1]).join('');
+        if (texUnit.toLowerCase() !== whole[2].toLowerCase()) continue;
+        appendAlias(whole, whole[1], whole[3], whole[2]);
     }
     return matches.sort((left, right) => left.index - right.index);
 }
@@ -2428,6 +2482,10 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             renderedBlockSha256: crypto.createHash('sha256').update(renderedBlock).digest('hex')
         };
     });
+
+    if (/\[\[FORMULA_\d+\]\]/.test(boundArticle)) {
+        throw new Error('Reader source-binding v4 formulaBindings 未覆盖正文公式占位符');
+    }
 
     // Never replace unsupported cells with reader-visible diagnostics. The
     // exact cell/quote gates below throw into the existing Reader repair loop.
@@ -2981,8 +3039,13 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
         // `Spoken-SQuAD` is a dataset name, not an input/transcript label.
         // Require a delimiter after the label so a result-table cell starting
         // with that dataset name remains editable for Han/ASCII spacing.
-        .replace(/^\s*\|\s*(?:(?:输入|口语输出|Input)[^|\n]*|(?:原文|原句)(?=\s*[|:：])[^|\n]*|Spoken(?:-form)?(?: transcript)?(?=[|\s:：])[^|\n]*)\|[^\n]*/gmi, protect);
+        .replace(/^\s*\|\s*(?:(?:输入|口语输出|Input)[^|\n]*|(?:原文|原句)(?=\s*[|:：])[^|\n]*|Spoken(?:-form)?(?: transcript)?(?=[|\s:：])[^|\n]*)\|[^\n]*/gmi, protect)
+        // Structural one-to-one relations are not measured quantities. Keep
+        // them protected from stale numeral diagnostics as well as spacing.
+        .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
+            () => protect('一对一'));
     let normalized = protectedText
+        .replace(/采样率\s*1\s*般(?=\s*16\s*千赫)/g, '采样率通常为')
         .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
         .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
         .replace(/([A-Za-z0-9.%+*)\]~*_α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2')
@@ -3200,7 +3263,7 @@ function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
             '$1 个'
         )
         .replace(/([\u3400-\u9fff])([-+]\d)/g, '$1 $2')
-        .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
+        .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:MWh|mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
         .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2')
         // Frequency/unit replacements happen after the first typography pass
@@ -4254,6 +4317,23 @@ function buildApiReaderEvidenceContext(
     return combined;
 }
 
+function transformReaderFigureCaptionPreservingMathStars(value, transform) {
+    const original = String(value ?? '');
+    let placeholderPrefix = '\uE000PD_FIGURE_MATH_STAR_';
+    while (original.includes(placeholderPrefix)) placeholderPrefix += '\uE000';
+    const protectedStars = [];
+    const protectedValue = original.replace(/\^\{\\?\*+\}|\^\*+/g, match => {
+        const token = `${placeholderPrefix}${protectedStars.length}\uE001`;
+        protectedStars.push([token, match]);
+        return token;
+    });
+    let output = transform(protectedValue);
+    for (const [token, notation] of protectedStars) {
+        output = output.replaceAll(token, notation);
+    }
+    return output;
+}
+
 function normalizeReaderFigureCaption(figure) {
     const rawCaption = String(figure?.caption || '').normalize('NFKC');
     let figureFilename = '';
@@ -4266,21 +4346,23 @@ function normalizeReaderFigureCaption(figure) {
     const panelCaption = figureFilename.includes('snri')
         ? rawCaption.match(/(?:^|\s)b\)\s*(.*?)(?=\s+In both\b|$)/i)?.[1]
         : null;
-    let caption = String(panelCaption || rawCaption)
-        .replace(/[\u200b-\u200d\u2061\ufeff]/g, '')
-        .replace(/^Fig(?:ure)?\.?\s*\d+[a-z]?\s*[:.]?\s*/i, '')
-        .replace(/R2R\^?(?:\{2\}|2)/g, 'R²')
-        .replace(/([Δδ])\\(?:Delta|delta)/g, '$1')
-        .replace(/([εϵ])\\(?:varepsilon|epsilon)/g, '$1')
-        .replace(/±\\pm/g, '±')
-        .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '$1/$2')
-        .replace(/\\(?:text|mathrm|operatorname)\{([^{}]*)\}/g, '$1')
-        .replace(/\\(?:hat|bar|mathring)\{([^{}]+)\}/g, '$1')
-        .replace(/\\(?:Delta|delta)/g, 'Δ')
-        .replace(/\\pm/g, '±')
-        .replace(/\\dagger/g, '†')
-        .replace(/[{}]/g, '')
-        .replace(/\s+/g, ' ').trim();
+    let caption = transformReaderFigureCaptionPreservingMathStars(
+        String(panelCaption || rawCaption), value => value
+            .replace(/[\u200b-\u200d\u2061\ufeff]/g, '')
+            .replace(/^Fig(?:ure)?\.?\s*\d+[a-z]?\s*[:.]?\s*/i, '')
+            .replace(/R2R\^?(?:\{2\}|2)/g, 'R²')
+            .replace(/([Δδ])\\(?:Delta|delta)/g, '$1')
+            .replace(/([εϵ])\\(?:varepsilon|epsilon)/g, '$1')
+            .replace(/±\\pm/g, '±')
+            .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, '$1/$2')
+            .replace(/\\(?:text|mathrm|operatorname)\{([^{}]*)\}/g, '$1')
+            .replace(/\\(?:hat|bar|mathring)\{([^{}]+)\}/g, '$1')
+            .replace(/\\(?:Delta|delta)/g, 'Δ')
+            .replace(/\\pm/g, '±')
+            .replace(/\\dagger/g, '†')
+            .replace(/[{}]/g, '')
+            .replace(/\s+/g, ' ').trim()
+    );
     caption = caption
         .replace(/(P\s*=\s*\d+)\s*P\s*=\s*(\d+\/\d+)/gi, 'P=$2')
         .replace(
@@ -4321,6 +4403,22 @@ function truncateReaderFigureCaption(value, limit = 108) {
 function readerFigureNarrative(figure, target = null) {
     const label = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
         .replace(/\s+/g, ' ').trim();
+    if (figure?.url === 'https://arxiv.org/html/2609.34337v1/framework.svg'
+        && figure?.assetSha256 === 'f2dc8c1f63fa0141176bf5bf826166b7411d352bba29bd8ec203e72e08b077f3') {
+        return '原论文 Figure 1：上半图展示冻结因果编码器、效用控制器、预算条件分配器、精确前缀可行守卫、RVQ 前缀掩码与序列化路径；下半图展示逐帧拒绝不可行候选，并使累积序列化比特不超过前缀预算。作者在摘要与原图注中将这一方法称为 UniAdapt，图中模块标签使用具体功能名称。';
+    }
+    if (figure?.url === 'https://arxiv.org/html/2609.35005v1/assets/stmc_v_mmstmc.png'
+        && figure?.assetSha256 === '5e3713fe22bd0af51b1e04f6b648a945e9fc778140e47fdbd455c654fc00b05b') {
+        return '原图左侧标题为 STMC，右侧标题为 Multimodal STMC，展示卷积块与池化后的状态计算差异；官方 HTML 图注把右侧写作 SM-STMC，图中文字与图注命名不一致。本文方法名称依据论文文字，不把右侧图中文字擅自改成 SM-STMC。';
+    }
+    if (figure?.url === 'https://arxiv.org/html/2609.34648v1/q1_target_probability_before_after_boxscatter.svg'
+        && figure?.assetSha256 === '00cf558f4a0bd41e05c93d2411de1a8b29230cef8cc652476c8f6d72f438b3aa') {
+        return '原论文 Figure 1 的当前绑定资源：左右两面板分别展示编辑前、编辑后的目标情绪概率分布；右面板内部的小字同时标注转录错误变化 ΔWER 与说话人相似度变化 ΔS-SIM。这两个变化量是文字标注，不是另设纵轴的独立曲线面板。';
+    }
+    if (figure?.url === 'https://arxiv.org/html/2609.33742v1/figs/teaser.jpeg'
+        && figure?.assetSha256 === '7f175a62e5beb2a32b116b1250ddffc57dbf934d56eb17935e5dae522c9fe470') {
+        return '绑定原图顶部为英文源句 The train was delayed because of heavy rain.，时长预算为 3s；三条路线的输出分别为 1s、5s、3s，DuraS2ST 的显式规划路线满足预算。官方 HTML 图注使用“你说得对”的另一例子，与该图像像素不一致；正文中的译法例子来自图注，不能当作图中可见文字。';
+    }
     if (figure?.url === 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg') {
         return '官方 HTML 将此资源标为 Figure 3，图注称七种声音在语音或停顿中的放置比例相近；但绑定 URL 的实际像素对应 Figure 4，左侧显示四个语料上表示漂移比与任务损伤比随信噪比变化，右侧显示停顿位移后的语音帧漂移随距离衰减。图注与像素错配，本段按绑定图像说明，不把原图注当成图像事实。';
     }
@@ -4331,15 +4429,43 @@ function readerFigureNarrative(figure, target = null) {
     // PDF captions (for example `*` and `***` p-value markers) must be
     // verbalized because this narrative is wrapped in a single emphasis pair
     // and Hugo's rendered-HTML gate must not mistake them for bold Markdown.
-    const caption = truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 180)
-        .replace(/\*{3}/g, '三个星号')
-        .replace(/\*{2}/g, '两个星号')
-        .replace(/\*/g, '一个星号');
+    const caption = transformReaderFigureCaptionPreservingMathStars(
+        truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 180), value => value
+            .replace(/\*{3}/g, '三个星号')
+            .replace(/\*{2}/g, '两个星号')
+            .replace(/\*/g, '一个星号')
+    );
     return `原论文 ${label}：“${caption}”。`
         + panelNotice;
 }
 
 function readerFigureAlt(figure, target = null) {
+    if (figure?.url === 'https://arxiv.org/html/2610.01012v1/fig/one_to_many_ver2.png'
+        && figure?.assetSha256 === 'a07e5c8f0844b239f2191ca04ef10572b417452b4693219c7fd229b3a28c78bd') {
+        return '原论文 Figure 1：3 个无声视频帧及红框唇部放大；真值句为 He passed me the bat，右侧列出 bag、back、map、mat、pack 5 种候选。透明背景应在白底上查看。';
+    }
+    if (figure?.url === 'https://arxiv.org/html/2609.34337v1/framework.svg'
+        && figure?.assetSha256 === 'f2dc8c1f63fa0141176bf5bf826166b7411d352bba29bd8ec203e72e08b077f3') {
+        return '原论文 Figure 1：冻结因果编码器、效用控制器、预算分配器与精确前缀可行守卫；下方为逐帧精确预算分配。';
+    }
+    if (figure?.url === 'https://arxiv.org/html/2609.35005v1/assets/stmc_v_mmstmc.png'
+        && figure?.assetSha256 === '5e3713fe22bd0af51b1e04f6b648a945e9fc778140e47fdbd455c654fc00b05b') {
+        return '原论文 Figure 2：左侧 STMC、右侧图中标为 Multimodal STMC。官方图注将右侧称为 SM-STMC，存在命名差异。';
+    }
+    if (figure?.url === 'https://arxiv.org/html/2609.34648v1/q1_target_probability_before_after_boxscatter.svg'
+        && figure?.assetSha256 === '00cf558f4a0bd41e05c93d2411de1a8b29230cef8cc652476c8f6d72f438b3aa') {
+        return '原论文 Figure 1：编辑前后的目标情绪概率分布。右面板内另以小字标注 ΔWER 和 ΔS-SIM，未单列变化量曲线面板。';
+    }
+    if (figure?.url === 'https://arxiv.org/html/2609.33742v1/figs/teaser.jpeg'
+        && figure?.assetSha256 === '7f175a62e5beb2a32b116b1250ddffc57dbf934d56eb17935e5dae522c9fe470') {
+        return '原论文 Figure 1：英文源句预算 3s，级联、黑盒控制与 DuraS2ST 分别输出 1s、5s、3s。官方图注与像素不一致。';
+    }
+    if (figure?.url === 'https://arxiv.org/html/2609.35115v1/fdclock_fig1.png'
+        && figure?.assetSha256 === 'f175d3b2f3e7b7c4b7cfec22ee41d2b35f3dbd3f99a685391e283edd40b6a00d') {
+        // This exact raster was inspected during publication review. The
+        // truncated caption omits the actual side-by-side contract diagram.
+        return '原论文 Figure 1：常规运行时与原生时钟契约的状态分配、固定地址缓存和精确形状执行对照。';
+    }
     if (figure?.url === 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg') {
         return truncateReaderFigureCaption(
             '绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。',
@@ -4419,6 +4545,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         ? readerResult.plan.figurePlacements
         : [];
     const used = [];
+    const skipped = [];
     const plannedFigures = placements.length > 0
         ? placements.map(placement => ({
             figure: figures.find(item => item.ordinal === placement.figureOrdinal),
@@ -4426,7 +4553,10 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         })).filter(item => item.figure)
         : figures.map(figure => ({ figure, placement: null }));
     for (const { figure, placement } of plannedFigures) {
-        if (article.includes(`](${figure.url})`)) continue;
+        if (article.includes(`](${figure.url})`)) {
+            skipped.push(`Figure ${figure.ordinal}: 正文已有同 URL 链接`);
+            continue;
+        }
         const preferredKinds = placement
             ? [placement.targetKind]
             : figure.ordinal === 1
@@ -4440,7 +4570,10 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
             !placement
             || readerSectionContainsMarker(article, section.heading, placement.marker)
         ));
-        if (!target) continue;
+        if (!target) {
+            skipped.push(`Figure ${figure.ordinal}: ${placement?.marker || '无 marker'} 未匹配 ${preferredKinds.join('/')} 小节标题`);
+            continue;
+        }
         const alt = sanitizeMarkdownImageAlt(readerFigureAlt(figure, target));
         const focusBlock = placement?.focusPoints?.length
             ? `> **看图路径：** ${placement.focusPoints.map(
@@ -4460,7 +4593,10 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
                 block
             )
             : insertMarkdownBeforeNextReaderHeading(article, target.heading, block);
-        if (!inserted.inserted) continue;
+        if (!inserted.inserted) {
+            skipped.push(`Figure ${figure.ordinal}: ${placement?.marker || '无 marker'} 在“${target.heading}”中缺失或重复`);
+            continue;
+        }
         article = inserted.article;
         used.push({
             ...figure,
@@ -4475,7 +4611,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
         });
     }
     if (placements.length > 0 && used.length !== placements.length) {
-        throw new Error(`论文图计划只成功插入 ${used.length}/${placements.length} 张`);
+        throw new Error(`论文图计划只成功插入 ${used.length}/${placements.length} 张；${skipped.join('；') || '存在不可用的原图 ordinal'}`);
     }
     const orderedFigures = orderApiReaderFiguresByArticle(article, used);
     if (!orderedFigures) {
@@ -4503,7 +4639,7 @@ function rewriteApiReaderFigureNarratives(article, figures) {
         }
         const pattern = new RegExp(
             `!\\[[^\\n]*\\]\\(${escapeRegExp(url)}\\)\\n\\n`
-            + `\\*论文图\\s+${figure.ordinal}。[^\\n]*\\*`
+            + `\\*[ \\t]*论文图\\s+${figure.ordinal}。[^\\n]*\\*`
         );
         if (!pattern.test(rewritten)) {
             throw new Error(`论文图 ${figure.ordinal} 的旧叙事块无法精确定位`);
@@ -6008,8 +6144,16 @@ function parseApiReaderArticleResult(raw, options = {}) {
             `读者文章中文字数必须为 ${minimumChineseChars}-${maximumChineseChars}，当前 ${chineseChars}`
         );
     }
-    if (/(?:evidence\s*id|manual_complete|证据块|代码校验反馈|图后解释(?:需要|必须|紧扣)|不擅自断言|按反馈重写|(?:本|上述|当前|这个)\s*prompt|(?:根据|遵循)\s*(?:本|上述|当前)?\s*prompt|prompt\s*(?:要求|指令|中要求))/i.test(article)) {
-        throw new Error('读者文章泄漏了流程或证据元话语');
+    // Some papers define an evidence block as their model's output structure.
+    // Only the authoritative source definition permits that domain term;
+    // numbered workflow blocks and actual instructions remain forbidden.
+    const sourceDefinesEvidenceBlock = /structured evidence block\s*\(value,\s*comparison,\s*difference,\s*direction\s+per measurement\)/i.test(String(options.sourceText || ''));
+    const workflowSurface = sourceDefinesEvidenceBlock
+        ? article.replace(/证据块/g, '声学记录') : article;
+    const workflowLeak = /(?:evidence\s*id|manual_complete|证据块|代码校验反馈|图后解释(?:需要|必须|紧扣)|不擅自断言|按反馈重写|(?:本|上述|当前|这个)\s*prompt|(?:根据|遵循)\s*(?:本|上述|当前)?\s*prompt|prompt\s*(?:要求|指令|中要求))/i.exec(workflowSurface)
+        || /(?:第\s*(?:\d+|[一二三四五六七八九十]+)\s*个证据块|证据块\s*\d+\s*[：:])/.exec(article);
+    if (workflowLeak) {
+        throw new Error(`读者文章泄漏了流程或证据元话语：${workflowLeak[0]}`);
     }
     const qualityView = () => maskReaderSelectedTablesForEditorialQuality(
         article, compiledTables.selectionTableIndexes
@@ -6062,6 +6206,10 @@ function parseApiReaderArticleResult(raw, options = {}) {
         article = withProtectedBridgeSurfaces(article, finalSurfaceIssues);
         quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
     }
+    // Global numeral repairs can also touch a matching phrase in a heading.
+    // Restore the separately normalized plan anchors after the final repair,
+    // before table/figure binding looks up those exact section titles.
+    article = restoreReaderSectionHeadings(article, normalizedSections);
     article = ensureApiReaderTableNarratives(article);
     quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
     // Issue offsets describe this pre-injection view. Original TeX insertion
@@ -6134,8 +6282,11 @@ function parseApiReaderArticleResult(raw, options = {}) {
         validateApiReaderTableNarratives(article, minimumTables);
         const tables = extractMarkdownTables(article);
         const minimumWideTables = requirements.minimumWideTables;
-        if (tables.filter(table => table.header.length >= requirements.minimumWideColumns).length < minimumWideTables) {
-            throw new Error(`读者文章至少需要 ${minimumWideTables} 张 ${requirements.minimumWideColumns} 列以上的宽表`);
+        const wideTableCount = tables.filter(table => (
+            table.header.length >= requirements.minimumWideColumns
+        )).length;
+        if (wideTableCount < minimumWideTables) {
+            throw new Error(`读者文章至少需要 ${minimumWideTables} 张 ${requirements.minimumWideColumns} 列以上的宽表，当前 ${wideTableCount} 张`);
         }
     }
     // A short lead can remain after table/figure normalization even though
@@ -6322,9 +6473,19 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     const articleHeadings = [...article.matchAll(/^###\s+(.+?)\s*$/gm)]
         .map(match => match[1].trim());
     if (articleHeadings.length !== plan.sections.length) return false;
-    const repairedHeadings = plan.sections.map(section => (
-        normalizeReaderEditorialSurface(String(section?.heading || '').trim())
-    ));
+    const repairedHeadings = plan.sections.map((section, index) => {
+        const heading = normalizeReaderEditorialSurface(String(section?.heading || '').trim());
+        if (heading === articleHeadings[index]) return heading;
+        // Earlier Reader repair normalized measured counts in headings while
+        // leaving the plan unchanged. Recover only the same exact typography
+        // transformation; unrelated heading changes still fail closed.
+        const issues = findQuantitativeChineseNumerals(heading).map(issue => ({
+            ...issue, code: 'quantitative_chinese_numeral'
+        }));
+        return normalizeReaderEditorialSurface(
+            normalizeIssueBoundReaderQuantitativeNumerals(heading, issues), issues
+        );
+    });
     if (!repairedHeadings.every((heading, index) => heading === articleHeadings[index])) {
         return false;
     }
@@ -6335,7 +6496,19 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
         repairedTableBindings = plan.tableBindings.map((binding, index) => ({
             ...binding,
             renderedTableSha256: crypto.createHash('sha256')
-                .update(articleTables[index].markdown).digest('hex')
+                .update(articleTables[index].markdown).digest('hex'),
+            ...(binding.sourceType === 'artifact_table' ? {
+                cellBindings: binding.cellBindings.map(cell => {
+                    const rows = [articleTables[index].header, ...articleTables[index].rows];
+                    const renderedText = rows[cell.renderedRow]?.[cell.renderedColumn];
+                    if (typeof renderedText !== 'string'
+                        || normalizeReaderSourceCell(renderedText)
+                            !== normalizeReaderSourceCell(cell.sourceText)) {
+                        throw new Error('Reader 表面修复后的单元格不能重放原始来源');
+                    }
+                    return { ...cell, renderedText };
+                })
+            } : {})
         }));
     }
     const repairedFigureBindings = repairShortApiReaderFigureLeadBindings(
@@ -8085,18 +8258,22 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
     );
     const allowedUrls = new Set(currentInventory.map(item => item.url));
     const retainedFigures = figures.filter(item => allowedUrls.has(item?.url));
-    const materialized = await materializeApiReaderFigures(
+    const directContext = require('./lib/direct-rewrite-analysis-context.js');
+    const materialized = await (directContext.directReaderMaterializer() || materializeApiReaderFigures)(
         retainedFigures,
         getPaperArxivId(paper)
     );
+    const signedFigures = directContext.getDirectRewriteAnalysisContext()
+        ? materialized.map(directContext.stripEphemeralFigureFields) : materialized;
     const prunedArticle = pruneUnmaterializedApiReaderFigureBlocks(
         paper.apiReaderArticle,
         figures,
         materialized
     );
-    const rewrittenArticle = normalizeReaderEditorialSurface(
-        rewriteApiReaderFigureNarratives(prunedArticle, materialized)
-    );
+    // The article was already validated. A figure-only refresh must preserve
+    // its tables and Markdown emphasis; whole-body typography normalization
+    // can turn a caption's opening `*` into a list marker.
+    const rewrittenArticle = rewriteApiReaderFigureNarratives(prunedArticle, materialized);
     const articleSha256 = crypto.createHash('sha256').update(rewrittenArticle).digest('hex');
     const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
     const materializedOrdinals = new Set(materialized.map(item => item.ordinal));
@@ -8109,12 +8286,12 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
     paper.apiReaderArticleSha256 = articleSha256;
     paper.apiReaderPlan = readerPlan;
     paper.apiReaderPlanSha256 = stableFingerprint(readerPlan);
-    paper.apiReaderFigures = materialized;
+    paper.apiReaderFigures = signedFigures;
     paper.apiReaderAuthors = readerAuthors;
     stage.articleSha256 = articleSha256;
     stage.planSha256 = paper.apiReaderPlanSha256;
     stage.figureCount = materialized.length;
-    stage.figuresSha256 = stableFingerprint(materialized);
+    stage.figuresSha256 = stableFingerprint(signedFigures);
     stage.readerAuthorsSha256 = stableFingerprint(readerAuthors);
     stage.structuredArtifactsSha256 = sourceDetails.structuredArtifacts?.payloadSha256 || '';
     stage.refreshedAt = getBeijingISOString();
@@ -8122,7 +8299,7 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         status: 'skipped',
         reason: 'api_reader_v3_official_figures_bound',
         officialFigureCount: materialized.length,
-        officialFiguresSha256: stableFingerprint(materialized),
+        officialFiguresSha256: stableFingerprint(signedFigures),
         refreshedAt: getBeijingISOString()
     };
     return paper;
@@ -11231,7 +11408,11 @@ function parseArxivReaderAuthors($) {
 
 function resolveApiReaderAuthors(paper, sourceDetails) {
     const parsed = sourceDetails?.readerAuthors;
-    const normalizeName = value => String(value || '').replace(/\s+/g, ' ').trim();
+    const normalizeName = value => String(value || '').replace(/\s+/g, ' ').trim()
+        // Metadata may retain TeX grouping around an already Unicode Latin
+        // accent (Ga{ë}l). Remove only these presentation braces, while the
+        // identity continues to bind the original metadata/DOM SHA.
+        .replace(/(?<=[A-Za-z])\{([\u00c0-\u024f])\}(?=[A-Za-z])/gu, '$1');
     const rawAuthors = Array.isArray(paper?.authors) ? paper.authors : [];
     let names = rawAuthors.map(author => (
         typeof author === 'string' ? author : author?.name

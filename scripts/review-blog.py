@@ -18,6 +18,18 @@ def _is_api_reader_asset_path(module, path):
     return bool(checker(path)) if checker else False
 
 
+def _is_taxonomy_asset_path(module, path):
+    checker = getattr(module, '_taxonomy_asset_relative', None)
+    repo = getattr(module, 'BLOG_REPO', None)
+    if not checker or not repo:
+        return False
+    try:
+        relative = Path(path).resolve().relative_to(Path(repo).expanduser().resolve())
+    except ValueError:
+        return False
+    return bool(checker(relative))
+
+
 def parse_options(module, argv=None):
     parser = argparse.ArgumentParser(
         prog='review-blog.py',
@@ -65,7 +77,8 @@ def read_generated_pages(
     for path in paths:
         path = Path(path)
         if module.is_visual_summary_asset_path(path, date_str) \
-                or _is_api_reader_asset_path(module, path):
+                or _is_api_reader_asset_path(module, path) \
+                or _is_taxonomy_asset_path(module, path):
             continue
         if not path.is_file() or path.name == f'{date_str}.md':
             continue
@@ -115,7 +128,7 @@ def validate_reused_pages(
     }
     for path in paths:
         path = Path(path).resolve()
-        if _is_api_reader_asset_path(module, path):
+        if path.suffix != '.md' or _is_api_reader_asset_path(module, path):
             continue
         result = prior_results.get(str(path), {})
         if result.get('passed') is not True or not path.is_file():
@@ -240,6 +253,7 @@ def _run_review(module, date_str):
                 page = Path(page).resolve()
                 if (
                     page.is_file()
+                    and page.suffix == '.md'
                     and not module.is_visual_summary_asset_path(page, date_str)
                     and not _is_api_reader_asset_path(module, page)
                 ):

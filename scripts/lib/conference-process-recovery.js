@@ -116,7 +116,10 @@ function resolveProcess(context, deps, api) {
     return derived;
 }
 
-function sourceImplementation(state, directory, api) {
+function sourceImplementation(state, directory, api, ancestry = new Set()) {
+    api.assertState(state);
+    if (ancestry.has(state.processId) || ancestry.size >= 64) throw new Error('Promotion provenance contains a cycle');
+    const parents = new Set(ancestry); parents.add(state.processId);
     const withoutImplementation = value => { const copy = { ...value }; delete copy.implementationSha256; return copy; };
     if (state.sourceUpgradePromotion) {
         const promotion = state.sourceUpgradePromotion;
@@ -132,9 +135,34 @@ function sourceImplementation(state, directory, api) {
                 !== api.stableHash(withoutImplementation(state.authority))
             || plan.fromProcessId !== promotion.originalProcessId
             || plan.sourceImplementationSha256 !== promotion.sourceImplementationSha256
-            || api.stableHash(plan.papers.map(item => item.paperId).sort()) !== api.stableHash(Object.keys(state.items).sort())
-            || api.deterministicUuid(api.stableHash({ ...plan.authority, implementationSha256: plan.sourceImplementationSha256 }),
-                'conference-process-v1') !== plan.fromProcessId) throw new Error('Source upgrade promotion plan integrity failed');
+            || api.stableHash(plan.pageRepairPolicy || null) !== api.stableHash(promotion.pageRepairPolicy || null)
+            || api.stableHash(plan.papers.map(item => item.paperId).sort()) !== api.stableHash(Object.keys(state.items).sort())) {
+            throw new Error('Source upgrade promotion plan integrity failed');
+        }
+        // The parent process UUID binds its issued authority, not the newer
+        // registry in a promotion plan. Reopen the exact signed parent state.
+        const parentDirectory = api.safeProcessDirectory(path.dirname(directory), plan.fromProcessId, false);
+        const parent = api.assertState(readPrivateJson(path.join(parentDirectory, 'state.json')));
+        if (parent.processId !== plan.fromProcessId || parent.stateSha256 !== plan.originalStateSha256
+            || api.stableHash(Object.keys(parent.items).sort()) !== api.stableHash(Object.keys(state.items).sort())) {
+            throw new Error('Promotion parent state does not bind the original plan');
+        }
+        const parentSource = sourceImplementation(parent, parentDirectory, api, parents);
+        const sourceAuthority = value => { const copy = withoutImplementation(value);
+            delete copy.taxonomyVersion; delete copy.taxonomyRegistrySha256; return copy; };
+        if (parentSource !== plan.sourceImplementationSha256
+            || api.stableHash(sourceAuthority(parent.authority)) !== api.stableHash(sourceAuthority(plan.authority))
+            || plan.papers.some(item => parent.items[item.paperId]?.analysisRunId !== item.previousExecutionId
+                || parent.items[item.paperId]?.status !== item.previousStatus
+                || parent.items[item.paperId]?.sourceIdentity !== state.items[item.paperId]?.sourceIdentity)
+            || (parent.sourceUpgradePromotion
+                ? api.deterministicUuid(parent.sourceUpgradePromotion.planSha256, 'conference-source-upgrade-process-v1')
+                : api.deterministicUuid(api.stableHash({ ...parent.authority, implementationSha256: parentSource }),
+                    'conference-process-v1')) !== parent.processId) {
+            throw new Error('Promotion parent source/authority/UUID integrity failed');
+        }
+        if (parent.status === 'complete') api.validateCompletionReceipt(parent,
+            readPrivateJson(path.join(parentDirectory, 'completion-receipt.json')));
         return promotion.sourceImplementationSha256;
     }
     const bindsOrigin = implementationSha256 => /^[a-f0-9]{64}$/.test(implementationSha256 || '')

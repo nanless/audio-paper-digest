@@ -166,11 +166,11 @@ EXPERIMENT_TABLE_LIMITS = {
 }
 TABLE_IDENTIFIER_HEADER_RE = re.compile(
     r'(?:^editing(?: operation)?$|(?:^|\b)(?:method|algorithm|approach|strategy|mechanism|aggregation|model|system|backbone|front[ -]?end|pipeline|'
-    r'variant|representation|embedding|feature|encoder|baseline|'
+    r'variant|ablation|representation|embedding|feature|encoder|baseline|'
     r'config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|'
     r'comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|'
     r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
-    r'measure)(?:\b|$)|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|表征|嵌入|特征|编码器|基线|'
+    r'measure)(?:\b|$)|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|'
     r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|'
     r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量)',
     flags=re.IGNORECASE,
@@ -214,6 +214,9 @@ TABLE_NUMERIC_CELL_RE = re.compile(
 def _is_table_identifier_header(value):
     """Mirror Node handling of directional metric headers."""
     normalized = str(value or '').strip()
+    # Match Node's explicit training-condition identifiers.
+    if re.fullmatch(r'(?:训练损失|损失函数|监督目标|训练目标|评估设置|实验设置)', normalized, flags=re.IGNORECASE):
+        return True
     if not normalized:
         return True
     without_direction = TABLE_DIRECTION_MARK_RE.sub(' ', normalized)
@@ -3029,7 +3032,7 @@ def _validate_experiment_table_evidence_depth(
         re.I,
     ) or re.search(
         r'(?:逐级|逐步|依次)(?:叠加|加入|添加|移除|比较)|'
-        r'(?:组件|约束|模块)[^。；\n]{0,24}(?:对照|贡献|差异)|'
+        r'(?:组件|约束|模块|损失|监督目标|局部配对|竞争归一化)[^。；\n]{0,24}(?:对照|贡献|差异|是否必要|必要性)|'
         r'\+\s*L[_\s]?[A-Za-z](?:\s*\+\s*L[_\s]?[A-Za-z])+',
         results,
         re.I,
@@ -3566,8 +3569,16 @@ def validate_manual_editorial_quality_v4(analysis):
             body,
             flags=re.M,
         )
+        # Match the Node gate: one-to-one is a structural relation, not a
+        # measured pair count. Preserve diagnostic offsets with equal blanks.
+        quantity_body = re.sub(
+            r'(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))',
+            lambda match: ' ' * len(match.group(0)),
+            quantity_body,
+        )
         quantity_body = re.sub(
             r'(?:进一步|这一步|下一步|上一步|每一步|一次性|这一类|有趣二分)|'
+            r'另一个流|'
             r'(?:同一|统一|唯一|单一)(?=[\u4e00-\u9fff])|'
             r'一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))|'
             r'二分(?=(?:解释|结构|视角|框架|法))',
@@ -6214,6 +6225,19 @@ def sanitize_markdown_for_publish(text):
     latex_body = text[len(latex_prefix):]
     latex_body = normalize_arxiv_math_double_extraction(latex_body)
     latex_body = fix_latex_delimiters(latex_body)
+    # Paper control markers inside nested TeX braces can look like Hugo
+    # shortcodes (e.g. \text{{<tts_start>}}). Hugo's literal shortcode escape
+    # restores the original bytes before Markdown/math rendering.
+    def escape_literal_shortcode(match):
+        opening, body, closing = match.groups()
+        if (opening, closing) not in {('<', '>'), ('%', '%')}:
+            return match.group(0)
+        return '{{' + opening + '/*' + body + '*/' + closing + '}}'
+
+    latex_body = re.sub(
+        r'\{\{(<|%)(?!/\*)(.*?)(>|%)\}\}',
+        escape_literal_shortcode, latex_body, flags=re.DOTALL,
+    )
     latex_body = re.sub(
         r'(?im)^(#{1,6}\s+)(?:图|Figure|表|Table)\s*\d+'
         r'\s*[:：、.．-]?\s*',
@@ -6227,6 +6251,13 @@ def sanitize_markdown_for_publish(text):
     # remain byte-stable.
     latex_body = re.sub(
         r'(?m)^([ \t]*(?:>\s*)?)\*\*[ \t]+(?=\S)', r'\1**', latex_body,
+    )
+    # A duplicated Chinese MOS label was observed in a signed core summary.
+    # Repair only this prose prefix; source quotes and table cells are untouched.
+    latex_body = re.sub(
+        r'(?m)^(语音质量评估输入待测语音、输出与人耳一致的)'
+        r'平均意见分平均意见分（Mean Opinion Score, MOS）',
+        r'\1平均意见分（Mean Opinion Score, MOS）', latex_body,
     )
     text = latex_prefix + latex_body
     text = escape_html_like_tags(text)

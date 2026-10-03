@@ -437,7 +437,7 @@ extraction request 与其 metadata/PDF/输出都使用 staging source 根下的�
 ```
 
 `--verify` 不信任已有派生文件：它在临时目录用固定 `PyMuPDF==1.27.2.3` 重新提取，并要求新旧
-text/visual-artifact/receipt 字节完全一致。当前结构化提取器版本为 `2.3.0`，旧 `2.2.0` 工件需要在后续新 generation 中重新提取封存，不能原地覆盖；同时保留逐页
+text/visual-artifact/receipt 字节完全一致。当前结构化提取器版本为 `2.3.1`，旧 `2.3.0` 及更早工件需要在后续新 generation 中重新提取封存，不能原地覆盖；同时保留逐页
 视觉审计和可定位的结构记录。Node extraction handle 默认执行临时重提取；同一次自动
 process 的 staging/import 可用 `replay: false` 重放已封存字节与回执，避免重复解析。
 人工单独运行 `--verify` 只用于诊断，不能代替后续来源绑定门禁。

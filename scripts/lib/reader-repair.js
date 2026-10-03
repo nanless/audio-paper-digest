@@ -877,7 +877,7 @@ function buildRepairTargets(draft, issues) {
         // and binding at once. Large five-node patches repeatedly ended before
         // their JSON suffix. Repair one table pair, then let the authoritative
         // full parser identify the next deficit on the following attempt.
-        const tableSpecific = issues.filter(issue => (
+        const tableSpecific = blockingIssues.filter(issue => (
             /^\/tableBindings\/(?:0|[1-9]\d*)$/.test(String(issue?.path || issue?.bindingPath || ''))
             || /tableBindings\[(?:0|[1-9]\d*)\]/.test(String(issue?.message || ''))
         )).sort((left, right) => {
@@ -894,9 +894,14 @@ function buildRepairTargets(draft, issues) {
         const repairableTables = locatedTables.filter(table => (
             Number.isInteger(table.bindingIndex) && draft.tableBindings?.[table.bindingIndex]
         ));
-        const narrowTables = repairableTables.filter(table => (
-            !Array.isArray(table.table?.header) || table.table.header.length < 5
-        ));
+        const narrowTables = repairableTables.filter(table => {
+            const binding = draft.tableBindings[table.bindingIndex];
+            const columnCount = Array.isArray(table.table?.header)
+                ? table.table.header.length
+                : Array.isArray(binding?.selection?.sourceColumns)
+                    ? binding.selection.sourceColumns.length : 0;
+            return columnCount < READER_LIMITS.minimumWideColumns;
+        });
         const firstTable = (narrowTables.length ? narrowTables : repairableTables).sort((left, right) => (
             (sectionTableCounts.get(left.sectionIndex) || 0) - (sectionTableCounts.get(right.sectionIndex) || 0)
             || String(draft.sections?.[left.sectionIndex]?.body || '').length
@@ -915,6 +920,15 @@ function buildRepairTargets(draft, issues) {
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
         const message = issue.message || '';
+        const workflowLeak = /读者文章泄漏了流程或证据元话语：([^\n]+)/.exec(message)?.[1];
+        if (workflowLeak) {
+            draft.sections.forEach((section, index) => {
+                if (String(section?.body || '').includes(workflowLeak)) add(`/sections/${index}/body`);
+            });
+            draft.conceptBridges.forEach((bridge, index) => {
+                if (JSON.stringify(bridge).includes(workflowLeak)) add(`/conceptBridges/${index}`);
+            });
+        }
         let localizedComparisonUnit = false;
         for (const match of message.matchAll(/comparison_unit_missing:([^；\n]+)/gu)) {
             const surface = match[1].trim().replace(/\s+/gu, '');

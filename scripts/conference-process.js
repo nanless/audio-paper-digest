@@ -7,7 +7,7 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const api = require('./lib/conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
 
-const USAGE = '--dry-run|--apply|--status|--source-upgrade-plan|--source-upgrade-apply|--source-upgrade-promote --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3|4|5] [--retry-failed]; source upgrade: --from UUID; apply requires --plan-sha SHA --paper-ids ID,ID --authorize-new-analysis; promote requires --plan-sha SHA [--preserve-original-complete]';
+const USAGE = '--dry-run|--apply|--status|--source-upgrade-plan|--source-upgrade-apply|--source-upgrade-promote --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3|4|5] [--retry-failed]; source upgrade: --from UUID; apply requires --plan-sha SHA --paper-ids ID,ID --authorize-new-analysis; promote requires --plan-sha SHA [--preserve-original-complete|--prefer-upgrade]; plan/promote support [--page-repair-mode caption-only]';
 function parseArgs(argv) {
     if (argv[0] === '--legacy-disabled') throw new Error('New-conference execution/analyze/postprocess must use conference:new:process');
     const mode = argv[0]; if (!['--dry-run', '--apply', '--status', '--source-upgrade-plan', '--source-upgrade-apply', '--source-upgrade-promote'].includes(mode)) throw new Error(`Use ${USAGE}`);
@@ -15,14 +15,15 @@ function parseArgs(argv) {
     const values = {};
     for (let index = 1; index < argv.length; index += 2) {
         const flag = argv[index], value = argv[index + 1];
-        if (flag === '--retry-failed' || flag === '--authorize-new-analysis' || flag === '--preserve-original-complete') {
+        if (flag === '--retry-failed' || flag === '--authorize-new-analysis' || flag === '--preserve-original-complete' || flag === '--prefer-upgrade') {
             if ((flag === '--retry-failed' && !['--apply', '--source-upgrade-apply'].includes(mode))
                 || (flag === '--authorize-new-analysis' && mode !== '--source-upgrade-apply')
-                || (flag === '--preserve-original-complete' && mode !== '--source-upgrade-promote')
+                || ((flag === '--preserve-original-complete' || flag === '--prefer-upgrade') && mode !== '--source-upgrade-promote')
                 || values[flag]) throw new Error(`Use ${USAGE}`);
             values[flag] = true; index -= 1; continue;
         }
-        if (![ '--catalog', '--report', '--filter', '--concurrency', ...(upgrade ? ['--from', '--plan-sha', '--paper-ids'] : []) ].includes(flag) || !value || Object.hasOwn(values, flag)) {
+        if (![ '--catalog', '--report', '--filter', '--concurrency', ...(upgrade ? ['--from', '--plan-sha', '--paper-ids'] : []),
+            ...(['--source-upgrade-plan', '--source-upgrade-promote'].includes(mode) ? ['--page-repair-mode'] : []) ].includes(flag) || !value || Object.hasOwn(values, flag)) {
             throw new Error(`Use ${USAGE}`);
         }
         values[flag] = value;
@@ -33,6 +34,8 @@ function parseArgs(argv) {
         || (values['--concurrency'] && !/^[1-5]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
     if (upgrade && !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--from'] || '')) throw new Error(`Use ${USAGE}`);
     if (mode === '--source-upgrade-plan' && (values['--plan-sha'] || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
+    if (values['--preserve-original-complete'] && values['--prefer-upgrade']) throw new Error(`Use ${USAGE}`);
+    if (values['--page-repair-mode'] !== undefined && values['--page-repair-mode'] !== 'caption-only') throw new Error(`Use ${USAGE}`);
     if (mode === '--source-upgrade-promote' && (!/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '') || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
     if (mode === '--source-upgrade-apply' && (!values['--authorize-new-analysis'] || !/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '')
         || !values['--paper-ids'] || values['--paper-ids'].split(',').some(id => !/^conference:[a-z0-9:._-]+$/.test(id)))) throw new Error(`Use ${USAGE}`);
@@ -40,8 +43,10 @@ function parseArgs(argv) {
         reportName: values['--report'], filterId: values['--filter'], concurrency: Number(values['--concurrency'] || 1),
         ...(values['--retry-failed'] ? { retryFailed: true } : {}),
         ...(upgrade ? { sourceUpgrade: mode === '--source-upgrade-plan' ? 'plan' : mode === '--source-upgrade-promote' ? 'promote' : 'apply', fromProcessId: values['--from'],
+            ...(values['--page-repair-mode'] ? { pageRepairMode: values['--page-repair-mode'] } : {}),
             ...(mode === '--source-upgrade-promote' ? { planSha256: values['--plan-sha'] } : {}),
             ...(mode === '--source-upgrade-promote' && values['--preserve-original-complete'] ? { preserveOriginalComplete: true } : {}),
+            ...(mode === '--source-upgrade-promote' && values['--prefer-upgrade'] ? { preferUpgrade: true } : {}),
             ...(mode === '--source-upgrade-apply' ? { planSha256: values['--plan-sha'], paperIds: values['--paper-ids'].split(','), authorizeNewAnalysis: true } : {}) } : {}) };
 }
 function readSafeJson(filename) {

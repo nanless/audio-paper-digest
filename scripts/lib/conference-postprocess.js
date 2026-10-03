@@ -128,12 +128,18 @@ function planProof(planHandle, dependencies = {}) {
         selectedMemberSetSha256: run.selectedMemberSetSha256, paperIds };
     return { authenticated, proof: { ...body, proofSha256: stableHash(body) } };
 }
-function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, dependencies = {}) {
+function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
     if (!UUID_RE.test(executionId || '')) fail('analysis execution ID must be a UUID');
     authority(planHandle, dependencies);
     const loaded = (dependencies.loadConferenceAnalysis || adapter.loadConferenceAnalysis)({ analysisRoot, executionId });
-    try { (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot); }
-    catch (error) { fail(`conference analysis does not replay against the authenticated plan: ${error.message}`); }
+    // trustEvidence（仅 promote 混合入账显式传入）：跨实现时代的分析各自绑定其录制时的
+    // plan-receipt（原始=origin 时代、升级=新代），单一 live plan 只能匹配其一——此时
+    // 只信任分析自带的证据链（下方 run/analysis/receipt/source/sourceDetails/membership
+    // 校验一条不少），跳过“live plan==录制代”的交叉检查；其余调用方行为不变。
+    if (!trustEvidence) {
+        try { (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot); }
+        catch (error) { fail(`conference analysis does not replay against the authenticated plan: ${error.message}`); }
+    }
     const receipt = loaded.run?.completionReceipt; const receiptBody = receipt && structuredClone(receipt); if (receiptBody) delete receiptBody.receiptSha256;
     if (loaded.run?.status !== 'complete' || loaded.analysis?.status !== 'complete' || !ID_RE.test(loaded.run.paperId || '')
         || loaded.run.executionId !== executionId || receipt?.executionId !== executionId
@@ -413,8 +419,8 @@ function stageDirectory(stagingRoot, executionId, registrySha256, implementation
 function rejectExtraStageFiles(directory, allowed) {
     const entries = fs.readdirSync(directory).sort(); if (entries.some(name => !allowed.includes(name))) fail('conference stage contains unexpected recovery content');
 }
-function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, apply = false }, dependencies = {}) {
-    const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, dependencies);
+function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, apply = false, trustEvidence = false }, dependencies = {}) {
+    const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const taxonomy = (dependencies.loadTaxonomy || taxonomyApi.loadTaxonomy)(taxonomyFile);
     const implementation = fingerprint(dependencies); const projected = projection(loaded, taxonomy, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
@@ -437,8 +443,8 @@ function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, plan
     if (projected.assignment.status !== 'assigned') return { status: 'blocked', assignment: projected.assignment };
     return { status: apply ? 'staged' : 'dry-run', manifest: projected.manifest, markdown: projected.pageBytes.toString('utf8') };
 }
-function loadStage({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot }, dependencies = {}) {
-    const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, dependencies);
+function loadStage({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
+    const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const taxonomy = (dependencies.loadTaxonomy || taxonomyApi.loadTaxonomy)(taxonomyFile);
     const implementation = fingerprint(dependencies); const expected = projection(loaded, taxonomy, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
@@ -475,6 +481,36 @@ function repairConferenceImageUrls(markdown) {
             `${CONFERENCE_IMAGE_BASE_URL}/${conferenceId}/${figureHash}/figure-${ordinal}.png`,
     );
 }
+function repairCaptionQuotedGlossLinks(markdown) {
+    // Quoted phonetic glosses are source text, not relative link targets.
+    // Keep the original visible text and reserve this repair for generated
+    // Figure caption lines; article links, image labels and formulas stay intact.
+    let fence = null;
+    return String(markdown).split('\n').map(line => {
+        const ending = line.endsWith('\r') ? '\r' : '';
+        const text = ending ? line.slice(0, -1) : line;
+        const marker = text.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+        if (marker) {
+            if (!fence) fence = { char: marker[1][0], length: marker[1].length };
+            else if (marker[1][0] === fence.char && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+            return line;
+        }
+        if (fence || !/^\*论文图\s+\d+。[^\n]*\*$/.test(text)) return line;
+        // The new repair is deliberately limited to plain generated captions.
+        // Existing repairs still apply separately; mixed Markdown/TeX is not parsed here.
+        const caption = text.slice(1, -1);
+        if (/[\\$`<>*_~]/.test(caption) || caption.includes('![')) return line;
+        let depth = 0;
+        for (const char of caption) {
+            if (char === '[' && ++depth > 1) return line;
+            if (char === ']' && --depth < 0) return line;
+        }
+        if (depth !== 0) return line;
+        return text.replace(/(?<![\\!])\[([^\[\]\n]+)\]\((‘[^‘’\n]*’|“[^“”\n]*”|'[^'\n]*'|"[^"\n]*")\)/g,
+            (_match, label, gloss) => `&#91;${label}&#93;(${gloss})`) + ending;
+    }).join('\n');
+}
+
 function repairPreservedPage(markdown) {
     const source = String(markdown);
     const frontmatter = source.match(/^---\n[\s\S]*?\n---\n/);
@@ -482,7 +518,7 @@ function repairPreservedPage(markdown) {
     const body = frontmatter ? source.slice(prefix.length) : source;
     return prefix + repairConferenceImageUrls(repairUnpairedMarkdownStars(
         repairTechnicalNotationAsterisks(repairStatisticalSignificanceStars(
-            repairCurrencyDollars(repairFormulaDelimiters(body))))));
+            repairCurrencyDollars(repairFormulaDelimiters(repairCaptionQuotedGlossLinks(body)))))));
 }
 function repairCurrencyDollars(markdown) {
     // Currency markers are literal prose, not Goldmark math delimiters.
@@ -558,7 +594,13 @@ function stageAssetInventory(directory) {
     walk(assetsRoot);
     return files.sort();
 }
-function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repair = false }, dependencies = {}) {
+function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repair = false, repairMode, repairPolicy }, dependencies = {}) {
+    if (repairMode !== undefined && (repairMode !== 'caption-only' || !repair
+        || repairPolicy?.contract !== 'conference-caption-only-page-repair-policy-v1'
+        || repairPolicy.mode !== repairMode || repairPolicy.implementationSha256 !== sha256(fs.readFileSync(__filename))
+        || Object.keys(repairPolicy).sort().join('\0') !== ['contract', 'mode', 'implementationSha256'].sort().join('\0'))) {
+        fail('caption-only repair requires the exact authorized policy');
+    }
     if (!UUID_RE.test(executionId || '') || !ID_RE.test(paperId || '') || !pageProof
         || !/^[a-f0-9]{64}$/i.test(pageProof.manifestSha256 || '')
         || !/^[a-f0-9]{64}$/i.test(pageProof.contentSha256 || '')
@@ -611,19 +653,26 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
                 const loaded = pageApi.readRegular(assetFile, 32 * 1024 * 1024, 'preserved conference asset');
                 if (loaded.fileSha256 !== asset.sha256 || loaded.bytes.length !== asset.size) fail(`preserved conference asset drifted: ${paperId} ${asset.path}`);
             }
-            const repairedPageBytes = repair ? Buffer.from(repairPreservedPage(pageRecord.bytes.toString('utf8')), 'utf8') : pageRecord.bytes;
+            const repairedPageBytes = repair ? Buffer.from((repairMode === 'caption-only'
+                ? repairCaptionQuotedGlossLinks : repairPreservedPage)(pageRecord.bytes.toString('utf8')), 'utf8') : pageRecord.bytes;
             if (repairedPageBytes.equals(pageRecord.bytes)) {
                 matches.push({ status: 'staged', directory, manifest, manifestFileSha256: manifestRecord.fileSha256,
                     assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 });
                 continue;
             }
-            const repairBody = { contract: 'conference-deterministic-page-repair-v1', version: 9,
+            const repairBody = repairMode === 'caption-only'
+                ? { contract: 'conference-deterministic-page-repair-v1', version: 11, mode: repairMode,
+                    implementationSha256: repairPolicy.implementationSha256,
+                    fromManifestSha256: manifest.manifestSha256, fromContentSha256: manifest.contentSha256,
+                    assignmentFileSha256: assignmentRecord.fileSha256, assetSetSha256: stableHash(declaredAssets),
+                    replacements: ['literal-quoted-phonetic-gloss-in-generated-figure-caption'] }
+                : { contract: 'conference-deterministic-page-repair-v1', version: 10,
                 fromManifestSha256: manifest.manifestSha256, fromContentSha256: manifest.contentSha256,
                 replacements: ['math-angle-brackets-to-tex-commands', 'normalize-math-closing-delimiters',
                     'local-conference-image-path-to-dedicated-image-repository-url',
                     'escape-currency-dollar-markers', 'escape-technical-notation-asterisks',
                     'preserve-frontmatter-bytes', 'escape-statistical-significance-stars',
-                    'escape-unpaired-technical-asterisks'] };
+                    'escape-unpaired-technical-asterisks', 'literal-quoted-phonetic-gloss-in-generated-figure-caption'] };
             const repairDirectory = path.join(path.dirname(directory), stableHash(repairBody));
             fresh.assertSafeDirectory(repairDirectory, true);
             const repairedManifestBody = { ...manifest, contentSha256: sha256(repairedPageBytes), deterministicPageRepair: repairBody };
@@ -799,7 +848,7 @@ function hierarchyLines(hierarchy) {
 }
 
 function aggregateConference({ analysisRoot, executionIds, taxonomyFile, stagingRoot, aggregateRoot,
-    planHandle, sourceRoot, preservedStages = {}, apply = false }, dependencies = {}) {
+    planHandle, sourceRoot, preservedStages = {}, apply = false, trustEvidence = false }, dependencies = {}) {
     if (!Array.isArray(executionIds) || !executionIds.length || new Set(executionIds).size !== executionIds.length
         || executionIds.some(id => !UUID_RE.test(id))) fail('unique selection execution IDs required');
     const authenticated = planProof(planHandle, dependencies); const expectedIds = authenticated.proof.paperIds;
@@ -807,7 +856,7 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
     const taxonomy = (dependencies.loadTaxonomy || taxonomyApi.loadTaxonomy)(taxonomyFile); const byPaper = new Map();
     for (const executionId of executionIds) {
         const preserved = Object.hasOwn(preservedStages, executionId) ? preservedStages[executionId] : null;
-        const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot }, dependencies);
+        const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
         const staged = preserved ? loadPreservedStage({ stagingRoot, executionId, paperId: preserved.paperId, pageProof: preserved.pageProof }, dependencies) : null;
         const paperId = preserved ? staged.manifest.paperId : completed.run.paperId;
         if (byPaper.has(paperId)) fail('multiple analysis executions claim one selected paper');
@@ -819,7 +868,7 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
     }
     const stages = expectedIds.map(paperId => {
         const item = byPaper.get(paperId); const staged = item.staged || loadStage({ analysisRoot, executionId: item.executionId,
-            taxonomyFile, stagingRoot, planHandle, sourceRoot }, dependencies);
+            taxonomyFile, stagingRoot, planHandle, sourceRoot, trustEvidence }, dependencies);
         return { ...staged, completed: item.completed };
     });
     if (new Set(stages.map(item => item.manifest.pagePath)).size !== stages.length) fail('selected pages have duplicate path ownership');
@@ -951,4 +1000,4 @@ module.exports = { CONTRACT, AGGREGATE_CONTRACT, ASSIGNMENT_CONTRACT, PROJECTION
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,
     repairStatisticalSignificanceStars, repairUnpairedMarkdownStars, repairDollarMath,
     stagePaper, loadStage, loadPreservedStage, aggregateConference, aggregateHierarchy, hierarchyLines, tagHref,
-    repairConferenceImageUrls, repairPreservedPage };
+    repairConferenceImageUrls, repairCaptionQuotedGlossLinks, repairPreservedPage };

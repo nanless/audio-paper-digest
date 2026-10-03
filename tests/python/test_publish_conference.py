@@ -298,7 +298,7 @@ class ConferencePublishTests(unittest.TestCase):
                                   return_value=(True, findings, proposed)) as text, \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
             with self.assertRaisesRegex(M.ConferencePublicationError, '正文语义'):
-                M.review_pages(self.repo, [r, next_page])
+                M.review_pages(self.repo, [r, next_page], workers=1)
         self.assertEqual(text.call_count, 1)
         failure_file, = (M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json')
         failure = json.loads(failure_file.read_text())
@@ -338,6 +338,10 @@ class ConferencePublishTests(unittest.TestCase):
 
     def test_real_reviewers_propagate_run_account_errors_without_next_page_or_fallback(self):
         from llm_account_pool import LlmAccountAuthError, LlmAccountPoolExhaustedError
+        # 本用例断言严格的逐页时序（text 错误→零 image 调用 / image 错误→恰一次）——
+        # 固定顺序执行；生产默认 PD_BLOG_REVIEW_CONCURRENCY=5 并行（顺序语义不变，
+        # 只是页间并发），其余用例不受影响。
+        os.environ['PD_BLOG_REVIEW_CONCURRENCY'] = '1'
         # Exercise the real shared text/image reviewers, mocking only the API
         # boundary and image bytes. A configured secondary must not be tried.
         reviewer = M.load_publish_to_blog()
@@ -358,7 +362,7 @@ class ConferencePublishTests(unittest.TestCase):
                             mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock',
                                                        'PAPER_ANALYZER_SECONDARY_MODEL': 'must-not-fallback'}):
                         with self.assertRaises(error_type) as raised:
-                            M.review_pages(self.repo, [first, second])
+                            M.review_pages(self.repo, [first, second], workers=1)
                         self.assertIs(raised.exception, error)
                         self.assertEqual(raised.exception.scope, 'run')
                         self.assertEqual(api.call_count, 1 if stage == 'text' else 2)

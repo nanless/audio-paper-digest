@@ -305,6 +305,12 @@ function findQuantitativeChineseNumerals(text) {
         // quantities.  Auditing “两种视图如何分账” as if it were an
         // experimental count produced unnatural titles such as “2 种视图”.
         .replace(/^#{1,6}\s+[^\n]*$/gmu, match => ' '.repeat(match.length))
+        // One-to-one assignment/matching names a relation, not one measured
+        // pair. Keep offsets stable and keep ordinary pair counts blocking.
+        .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
+            match => ' '.repeat(match.length))
+        // "The other stream" is an anaphoric phrase, not a measured count.
+        .replace(/另一个流/gu, match => ' '.repeat(match.length))
         .replace(
             /(?:进一步|这一步|下一步|上一步|每一步|一次性|这一类|有趣二分)|(?:同一|统一|唯一|单一)(?=[\p{Script=Han}])|一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))|二分(?=(?:解释|结构|视角|框架|法))/gu,
             match => ' '.repeat(match.length)
@@ -922,7 +928,10 @@ function findTechnicalTermAdhesions(text) {
 }
 
 function findMissingComparisonUnits(text) {
-    const value = stripCodeLinksAndUrls(text);
+    const value = stripCodeLinksAndUrls(text)
+        // Otherwise “一对一分配” is read as two values followed by 分.
+        .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
+            match => ' '.repeat(match.length));
     const findings = [];
     const quantity = `(?:\\d+(?:\\.\\d+)?|[${CHINESE_DIGITS}]+(?:点[${CHINESE_DIGITS}]+)?)`;
     const unit = '(?:%|个百分点|点|分|毫秒|秒|分钟|小时|毫焦|Hz|kHz|MHz|dB|mJ|GB|MB|KB|倍)';

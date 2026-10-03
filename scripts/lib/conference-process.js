@@ -287,7 +287,19 @@ function assertState(value, expected = null) {
             || value.processId !== deterministicUuid(promotion.planSha256, 'conference-source-upgrade-process-v1')) {
             throw new Error('Source upgrade promotion identity failed');
         }
-        for (const field of ['preservedOriginalCompletePaperIds', 'preservedPriorUpgradePaperIds']) {
+        if (promotion.preferUpgrade !== undefined && typeof promotion.preferUpgrade !== 'boolean') {
+            throw new Error('Source upgrade preferUpgrade is invalid');
+        }
+        if (promotion.pageRepairPolicy !== undefined) {
+            const policy = exactKeys(promotion.pageRepairPolicy, ['contract', 'mode', 'implementationSha256'], 'page repair policy');
+            if (policy.contract !== 'conference-caption-only-page-repair-policy-v1' || policy.mode !== 'caption-only'
+                || !/^[a-f0-9]{64}$/.test(policy.implementationSha256 || '')) throw new Error('Unknown page repair policy');
+        }
+        if (promotion.preferUpgrade === true && (!Array.isArray(promotion.upgradedPaperIds)
+            || !Array.isArray(promotion.preservedOriginalCompletePaperIds))) {
+            throw new Error('Source upgrade preferUpgrade ledger arrays are missing');
+        }
+        for (const field of ['preservedOriginalCompletePaperIds', 'preservedPriorUpgradePaperIds', 'upgradedPaperIds']) {
             const ids = promotion[field];
             if (ids !== undefined && (!Array.isArray(ids)
                 || stableHash(ids) !== stableHash([...ids].sort())

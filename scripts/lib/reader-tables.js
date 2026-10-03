@@ -150,6 +150,20 @@ function hasSourceBoundRepeatedRangeChain(cell, context = {}, duplicate = null) 
     return sourceChains.some(source => source.includes(match[1]));
 }
 
+function hasSourceBoundNumericScalar(cell, context = {}, duplicate = null) {
+    if (!duplicate) return false;
+    // Repeated digits or thousands groups inside one source-backed number
+    // (1000000 / 1,000,000) are not pasted copies. Compare complete tokens,
+    // so a doubled number absent from the source still fails the gate.
+    const scalar = /(?<![\d.+\-−])[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\d.]|,\d)/g;
+    const tokens = value => [...String(value || '').matchAll(scalar)];
+    const sourceNumbers = new Set((Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
+        .flatMap(tokens).map(match => match[0].replace(/,/g, '').replace(/−/g, '-').toLowerCase()));
+    return tokens(cell).some(match => duplicate.index >= match.index
+        && duplicate.index + duplicate.length <= match.index + match[0].length
+        && sourceNumbers.has(match[0].replace(/,/g, '').replace(/−/g, '-').toLowerCase()));
+}
+
 function findReaderTablePasteDuplication(cell, context = {}) {
     const text = String(cell || '');
     const compact = text.replace(/\s+/g, '');
@@ -171,6 +185,8 @@ function findReaderTablePasteDuplication(cell, context = {}) {
         // still inside a longer decimal token.
         const secondCopyEnd = doubled.index + doubled[1].length * 2;
         if (/\d$/.test(doubled[1]) && /[\d.]/.test(compact[secondCopyEnd] || '')) continue;
+        if (hasSourceBoundNumericScalar(compact, context,
+            { index: doubled.index, length: doubled[0].length })) continue;
         if (hasExplicitRepeatedScientificMeasurement(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasExplicitRepeatedDatasetSplitScale(compact, context)) continue;
@@ -203,7 +219,23 @@ function readerResultTableRequirement(artifacts) {
         if (!/\b(?:results?|performance|comparisons?|benchmarks?)\b|实验结果|主结果|性能比较/i.test(caption)
             || /\b(?:authors?|affiliations?|hyperparameters?|configuration|settings|setup)\b|dataset statistics|data statistics|作者|机构|超参数|训练配置/i.test(caption)) return false;
         const rows = Array.isArray(table.matrix) ? table.matrix.filter(Array.isArray) : [];
-        return rows.length >= 2 && rows.flat().filter(cell => typeof cell === 'string' && /\d/.test(cell)).length >= 4;
+        const headerRows = Array.isArray(table.headerRows) && table.headerRows.length
+            ? table.headerRows : [0];
+        const headers = new Set(headerRows);
+        const measurementCells = rows.flatMap((row, rowIndex) => headers.has(rowIndex) ? []
+            : row.filter((cell, columnIndex) => {
+                if (typeof cell !== 'string') return false;
+                const label = headerRows.map(index => rows[index]?.[columnIndex] || '').join(' ');
+                if (/\b(?:year|method|model|reference|citation|version|benchmark)\b|年份|方法名称|模型名称|版本/i.test(label)) return false;
+                // Citation years, model versions and task names are digits,
+                // but they do not make a taxonomy/benchmark directory a
+                // measured-results table. Keep numeric scientific cells.
+                const numericSurface = cell.normalize('NFKC')
+                    .replace(/\\(?:textbf|mathbf|mathrm|textrm|text)\{|\\bf\b/g, '')
+                    .replace(/[{}*$]/g, '').trim();
+                return /^(?:[≈~<>≤≥↑↓]\s*)?[+−-]?\d/.test(numericSurface);
+            }));
+        return rows.length >= 2 && measurementCells.length >= 4;
     }).map(table => table.ordinal);
     return { contract: READER_RESULT_COVERAGE_CONTRACT,
         minimumResultTables: sourceTableOrdinals.length ? 1 : 0, sourceTableOrdinals };
@@ -219,6 +251,27 @@ function effectiveReaderTableRows(table) {
     if (!Array.isArray(matrix) || matrix.length < 4 || !Number.isInteger(width) || width < 3
         || matrix.some(row => !Array.isArray(row) || row.length !== width)
         || !Array.isArray(cells)) return unchanged;
+    // Some sealed LaTeXML tables classify full-width protocol dividers as
+    // headers while the actual, distinct column labels are plain <td> cells.
+    // Derive their roles only when the original DOM spans prove this shape.
+    const firstCells = cells.filter(cell => cell?.row === 0);
+    const protocolDividers = declaredHeaders.length > 0 && declaredHeaders.every(row => {
+        const rowCells = cells.filter(cell => cell?.row === row);
+        return row > 0 && rowCells.length === 1 && rowCells[0].header === true
+            && rowCells[0].column === 0 && Number(rowCells[0].colspan) === width
+            && Number(rowCells[0].rowspan || 1) === 1
+            && matrix[row].every(text => text === rowCells[0].text);
+    });
+    if (protocolDividers && firstCells.length === width
+        && firstCells.every(cell => cell.header === false
+            && Number(cell.colspan || 1) === 1 && Number(cell.rowspan || 1) === 1)
+        && new Set(matrix[0]).size === width && matrix[0].every(text => text.trim())
+        && matrix.some((row, index) => index > 0 && !declaredHeaders.includes(index)
+            && row.slice(1).filter(text => /\d/.test(text)).length >= 2)) {
+        return { headerRows: [0], bodyRows: matrix.map((_row, index) => index)
+            .filter(index => index > 0 && !declaredHeaders.includes(index)), inferred: true,
+        inferenceContract: 'full-width-protocol-divider-header-v1' };
+    }
     const dataRows = Array.from({ length: matrix.length - 2 }, (_, index) => index + 2);
     // Compatibility for the old parser's exact row-header contagion shape:
     // the top grouped header is explicit, its second tier is the sole declared

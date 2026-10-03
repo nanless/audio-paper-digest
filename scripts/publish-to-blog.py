@@ -1532,7 +1532,20 @@ def _prepare_raster_for_review(media_type, raw):
                 raise PublishDataValidationError('图片像素尺寸非法')
             if (max(width, height) <= REVIEW_IMAGE_MAX_EDGE
                     and width * height <= REVIEW_IMAGE_MAX_PIXELS):
-                return media_type, raw
+                rgba = source.convert('RGBA')
+                if rgba.getchannel('A').getextrema()[0] == 255:
+                    return media_type, raw
+                # Review on the same white surface as the reader page. A
+                # transparent PNG with black text otherwise appears blank
+                # when the model decodes transparency against black.
+                background = Image.new('RGB', rgba.size, 'white')
+                background.paste(rgba, mask=rgba.getchannel('A'))
+                output = io.BytesIO()
+                background.save(output, format='PNG')
+                prepared = output.getvalue()
+                if len(prepared) <= REVIEW_IMAGE_MAX_BYTES:
+                    _validate_image_signature('image/png', prepared)
+                    return 'image/png', prepared
             scale = min(
                 REVIEW_IMAGE_MAX_EDGE / width,
                 REVIEW_IMAGE_MAX_EDGE / height,
@@ -1763,25 +1776,158 @@ def _digest_cover_review_expectation(url):
 
 
 def parse_markdown_images(content):
-    """Parse inline Markdown images while preserving balanced URL parentheses."""
+    """Scan inline images with balanced labels and destinations.
+
+    Only paragraph code spans and top-level fences are excluded; indented
+    code and container fences are not generalized here. Quoted titles may contain
+    unmatched parentheses; only destination parentheses affect URL balance.
+    Broken inline images fail closed; reference labels remain out of scope.
+    """
+    def is_escaped(position):
+        previous = position
+        while previous > 0 and content[previous - 1] == '\\':
+            previous -= 1
+        return (position - previous) % 2 != 0
+
+    def invalid(detail, position):
+        raise PublishDataValidationError(
+            f'图片 Markdown {detail}（字符位置 {position}）'
+        )
+
+    # CommonMark top-level fences: <=3 leading spaces, >=3 matching marks;
+    # backticks cannot occur in a backtick fence's info string. An unclosed
+    # fence consumes the rest of the document as code, including literal ![.
+    fenced_ranges = []
+    fence = None
+    offset = 0
+    for line in content.splitlines(keepends=True):
+        if fence:
+            close = r' {0,3}' + re.escape(fence[1]) + '{' + str(fence[2]) + r',}[ \t]*\r?\n?$'
+            if re.fullmatch(close, line):
+                fenced_ranges.append((fence[0], offset + len(line)))
+                fence = None
+        else:
+            opened = re.match(r' {0,3}(`{3,}|~{3,})([^\r\n]*)', line)
+            if opened and not (opened.group(1)[0] == '`' and '`' in opened.group(2)):
+                fence = (offset, opened.group(1)[0], len(opened.group(1)))
+        offset += len(line)
+    if fence:
+        fenced_ranges.append((fence[0], len(content)))
+
     images = []
     cursor = 0
     while True:
         start = content.find('![', cursor)
         if start < 0:
             break
-        alt_end = content.find('](', start + 2)
-        if alt_end < 0:
-            break
+        fenced = next((span for span in fenced_ranges if span[0] <= start < span[1]), None)
+        if fenced:
+            cursor = fenced[1]
+            continue
+        # Locate code spans only before the next image marker. Once an image
+        # is parsed, its complete label/URL/title is consumed, so backticks in
+        # those fields cannot accidentally open a code span over later images.
+        tick = content.find('`', cursor, start)
+        if tick >= 0:
+            fenced = next((span for span in fenced_ranges if span[0] <= tick < span[1]), None)
+            if fenced:
+                cursor = fenced[1]
+                continue
+            tick_end = tick + 1
+            while tick_end < len(content) and content[tick_end] == '`':
+                tick_end += 1
+            if not is_escaped(tick):
+                limit = len(content)
+                paragraph_end = re.search(
+                    r'(?:\r\n|\r(?!\n)|(?<!\r)\n)(?:[ \t]*(?:\r\n|\r(?!\n)|(?<!\r)\n)| {0,3}(?:#{1,6}(?:[ \t]|(?=\r|\n|$))|'
+                    r'>|[-+*][ \t]+(?=\S)|0{0,8}1[.)][ \t]+(?=\S)|'
+                    r'(?:-+|\*{3,}|_{3,}|=+)[ \t]*(?=\r|\n|$)))',
+                    content[tick_end:],
+                )
+                if paragraph_end:
+                    limit = tick_end + paragraph_end.start()
+                for fence_start, _fence_end in fenced_ranges:
+                    if tick_end <= fence_start < limit:
+                        limit = fence_start
+                closing = re.search(
+                    r'(?<!`)`{' + str(tick_end - tick) + r'}(?!`)',
+                    content[tick_end:limit],
+                )
+                if closing:
+                    cursor = tick_end + closing.end()
+                    continue
+            cursor = tick_end
+            continue
+        if is_escaped(start):
+            cursor = start + 2
+            continue
+        depth = 1
+        alt_end = start + 2
+        escaped = False
+        while alt_end < len(content):
+            char = content[alt_end]
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '`':
+                # Matching code spans are literal label content: brackets
+                # inside them do not alter the enclosing image label depth.
+                tick_end = alt_end + 1
+                while tick_end < len(content) and content[tick_end] == '`':
+                    tick_end += 1
+                boundary = re.search(r'(?:\r\n|\r(?!\n)|(?<!\r)\n)[ \t]*(?:\r\n|\r(?!\n)|(?<!\r)\n)', content[tick_end:])
+                limit = tick_end + boundary.start() if boundary else len(content)
+                closing = re.search(
+                    r'(?<!`)`{' + str(tick_end - alt_end) + r'}(?!`)',
+                    content[tick_end:limit],
+                )
+                if closing:
+                    alt_end = tick_end + closing.end()
+                    continue
+                # An unmatched delimiter remains literal; its brackets are
+                # still parsed normally rather than silently hiding an image.
+                alt_end = tick_end
+                continue
+            elif char == '[':
+                depth += 1
+            elif char == ']':
+                depth -= 1
+                if depth == 0:
+                    break
+            alt_end += 1
+        if depth != 0:
+            invalid('alt 未闭合', start)
+        if content[alt_end + 1:alt_end + 2] != '(':
+            cursor = alt_end + 1
+            continue
+        end = alt_end + 2
         depth = 1
         escaped = False
-        end = alt_end + 2
+        angle = False
+        title_quote = None
+        title_start = None
+        title_end = None
         while end < len(content):
             char = content[end]
             if escaped:
                 escaped = False
             elif char == '\\':
                 escaped = True
+            elif title_quote:
+                if char == title_quote:
+                    title_quote = None
+                    title_end = end
+            elif angle:
+                if char == '>':
+                    angle = False
+            elif char == '<' and not content[alt_end + 2:end].strip():
+                angle = True
+            elif char in ('"', "'") and depth == 1 and content[end - 1:end].isspace():
+                if title_start is not None:
+                    invalid('存在多个 title', start)
+                title_quote = char
+                title_start = end
             elif char == '(':
                 depth += 1
             elif char == ')':
@@ -1789,14 +1935,25 @@ def parse_markdown_images(content):
                 if depth == 0:
                     break
             end += 1
+        if title_quote:
+            invalid('title 未闭合', start)
+        if angle:
+            invalid('尖括号 URL 未闭合', start)
         if depth != 0:
-            cursor = alt_end + 2
-            continue
-        destination = content[alt_end + 2:end].strip()
-        title_match = re.match(r'^(.*?)(?:\s+["\'].*["\'])$', destination)
-        url = (title_match.group(1) if title_match else destination).strip()
+            invalid('URL 括号未闭合', start)
+        if title_start is not None:
+            if title_end is None or content[title_end + 1:end].strip():
+                invalid('title 后存在非法内容', start)
+            url = content[alt_end + 2:title_start].strip()
+        else:
+            # Preserve the previous raw-destination behavior for non-title
+            # content, including legacy truncated data URIs. The unchanged
+            # loader must still reject invalid bytes/schemes/addresses.
+            url = content[alt_end + 2:end].strip()
         if url.startswith('<') and url.endswith('>'):
             url = url[1:-1].strip()
+        if not url:
+            invalid('URL 为空', start)
         raw = content[start:end + 1]
         images.append({
             'alt': content[start + 2:alt_end], 'url': url,
@@ -2732,13 +2889,115 @@ def _validate_taxonomy_catalog(catalog):
     return versions
 
 
+def _validate_taxonomy_presentation_policy(policy):
+    fields = {'contract', 'baseRegistrySha256', 'baseSnapshotSha256',
+              'preferredRegistrySha256', 'preferredSnapshotSha256',
+              'preferredProjectionSha256'}
+    if (not isinstance(policy, dict) or set(policy) != fields
+            or policy.get('contract') != 'paper-taxonomy-presentation-selection-v1'
+            or any(not isinstance(policy[key], str)
+                   or not re.fullmatch(r'[a-f0-9]{64}', policy[key])
+                   for key in fields - {'contract'})
+            or policy['baseRegistrySha256'] == policy['preferredRegistrySha256']):
+        raise PublishDataValidationError('taxonomy presentation policy 非法')
+    return policy
+
+
+def _taxonomy_historical_projection_sha256(snapshot):
+    # The public historical projection has a fixed nine-facet order.  Concept
+    # IDs are ASCII.  Rebuilt bytes must match the explicitly approved digest;
+    # an unrecognized ordering/projection can never silently select a version.
+    facets = ['task', 'method', 'setting', 'signal', 'application', 'research_focus',
+              'artifact', 'scientific_topic', 'model_family']
+    def compact(value):
+        return re.sub(r'\s+', ' ', re.sub(r'[\r\n|]+', ' ', value or '')).strip()
+    lines = ['contract=paper-taxonomy-prompt-projection-v1',
+             f'registry_version={snapshot["registryVersion"]}',
+             f'registry_sha256={snapshot["registrySha256"]}',
+             '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。']
+    current_facet = None
+    nodes = [node for node in snapshot['concepts'] if node.get('status') == 'active']
+    for node in sorted(nodes, key=lambda item: (facets.index(item['facet']),
+                                               item['id'])):
+        if node['facet'] != current_facet:
+            current_facet = node['facet']
+            lines.append(f'[{current_facet}]')
+        lines.append('|'.join([node['id'], '#' + node['zh'],
+                               compact(node.get('definition')), compact(node.get('scopeNote'))]))
+    raw = ('historical-taxonomy-prompt-projection-v2\n' + '\n'.join(lines) + '\n').encode('utf-8')
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _taxonomy_presentation_selection(repo, current, versions):
+    """An explicit, byte-bound display choice never changes per-paper signing."""
+    relatives = ['data/taxonomy-presentation-policy.json',
+                 'static/data/taxonomy-presentation-policy.json']
+    def read_regular(relative):
+        target = repo / relative
+        # Reject even a dangling link and links to another in-repo location.
+        for item in [target, *target.parents]:
+            if item == repo:
+                break
+            if item.is_symlink():
+                raise PublishDataValidationError('taxonomy policy/快照路径不得为符号链接')
+        if not target.exists():
+            return None
+        if not target.is_file() or target.stat().st_nlink != 1:
+            raise PublishDataValidationError('taxonomy policy/快照必须为普通单链接文件')
+        return target.read_bytes()
+    raw_mirrors = [read_regular(relative) for relative in relatives]
+    if raw_mirrors == [None, None]:
+        return current, {}
+    if raw_mirrors[0] is None or raw_mirrors[0] != raw_mirrors[1]:
+        raise PublishDataValidationError('taxonomy presentation policy data/static 字节漂移')
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise PublishDataValidationError('taxonomy presentation policy JSON 重复键')
+            result[key] = value
+        return result
+    try:
+        policy = _validate_taxonomy_presentation_policy(
+            json.loads(raw_mirrors[0].decode('utf-8'), object_pairs_hook=unique_object))
+    except (ValueError, UnicodeError) as exc:
+        raise PublishDataValidationError('taxonomy presentation policy JSON 非法') from exc
+    base_sha = policy['baseRegistrySha256']
+    preferred_sha = policy['preferredRegistrySha256']
+    if (current['registrySha256'] != base_sha
+            or hashlib.sha256(taxonomy_registry_snapshot_bytes(current)).hexdigest()
+            != policy['baseSnapshotSha256']):
+        raise PublishDataValidationError('taxonomy presentation policy 不匹配实际签发来源')
+    preferred = versions.get(preferred_sha)
+    if preferred is None:
+        raise PublishDataValidationError('taxonomy presentation policy 缺少冻结首选快照')
+    raw = taxonomy_registry_snapshot_bytes(preferred)
+    if (hashlib.sha256(raw).hexdigest() != policy['preferredSnapshotSha256']
+            or _taxonomy_historical_projection_sha256(preferred)
+            != policy['preferredProjectionSha256']):
+        raise PublishDataValidationError('taxonomy presentation policy 快照/投影 SHA 漂移')
+    if preferred['concepts'][:len(current['concepts'])] != current['concepts']:
+        raise PublishDataValidationError('taxonomy presentation policy 不是原词表逐对象追加')
+    # Both archived copies and both catalog entries must already carry exactly
+    # this approved snapshot; a policy may not manufacture a missing version.
+    for prefix in ('data', 'static/data'):
+        if read_regular(f'{prefix}/taxonomy-snapshots/{preferred_sha}.json') != raw:
+            raise PublishDataValidationError('taxonomy presentation policy 首选归档字节不闭合')
+        catalog = _read_taxonomy_asset(repo, f'{prefix}/taxonomy-catalog.json')
+        if catalog is None or _validate_taxonomy_catalog(catalog).get(preferred_sha) != preferred:
+            raise PublishDataValidationError('taxonomy presentation policy 首选 catalog 不闭合')
+    return preferred, dict(zip(relatives, raw_mirrors))
+
+
 def _taxonomy_asset_relative(relative):
     parts = Path(relative).parts
     if Path(relative).is_absolute() or '..' in parts or '\\' in str(relative):
         return False
     if Path(relative).as_posix() in {
             'data/taxonomy-registry.json', 'static/data/taxonomy-registry.json',
-            'data/taxonomy-catalog.json', 'static/data/taxonomy-catalog.json'}:
+            'data/taxonomy-catalog.json', 'static/data/taxonomy-catalog.json',
+            'data/taxonomy-presentation-policy.json',
+            'static/data/taxonomy-presentation-policy.json'}:
         return True
     return bool((parts[:2] == ('data', 'taxonomy-snapshots') and len(parts) == 3
                  or parts[:3] == ('static', 'data', 'taxonomy-snapshots') and len(parts) == 4)
@@ -2800,12 +3059,13 @@ def taxonomy_registry_asset_payloads(blog_repo=None):
     if len(catalogs) == 2 and catalogs[0] != catalogs[1]:
         raise PublishDataValidationError('taxonomy catalog data/static 镜像漂移')
     retain(current)
+    display, policy_assets = _taxonomy_presentation_selection(repo, current, versions)
     catalog = {'contract': 'paper-taxonomy-version-catalog-v1',
-               'currentSha256': current['registrySha256'],
+               'currentSha256': display['registrySha256'],
                'snapshots': [versions[sha] for sha in sorted(versions)]}
-    assets = {}
+    assets = dict(policy_assets)
     for prefix in ('data', 'static/data'):
-        assets[f'{prefix}/taxonomy-registry.json'] = taxonomy_registry_snapshot_bytes(current)
+        assets[f'{prefix}/taxonomy-registry.json'] = taxonomy_registry_snapshot_bytes(display)
         assets[f'{prefix}/taxonomy-catalog.json'] = taxonomy_registry_snapshot_bytes(catalog)
         for sha, snapshot in sorted(versions.items()):
             assets[f'{prefix}/taxonomy-snapshots/{sha}.json'] = taxonomy_registry_snapshot_bytes(snapshot)
@@ -3090,6 +3350,18 @@ def build_researcher_workbench_bundle(
     }
 
 
+def _workbench_display_original_title(title):
+    """Convert inline-math dollar delimiters in the YAML display title."""
+    if not isinstance(title, str):
+        return title
+    title = re.sub(r'AS\$\^2\$D', 'AS²D', title, flags=re.IGNORECASE)
+    return re.sub(
+        r'(?<!\\)\$(.+?)(?<!\\)\$',
+        lambda match: r'\(' + match.group(1) + r'\)',
+        title,
+    )
+
+
 def _researcher_workbench_frontmatter(bundle):
     if not bundle:
         return ''
@@ -3122,7 +3394,7 @@ def _researcher_workbench_frontmatter(bundle):
     return (
         f'paper_digest_workbench_contract: "{RESEARCHER_WORKBENCH_CONTRACT}"\n'
         f'paper_digest_reader_title: {json.dumps(bundle["readerTitle"], ensure_ascii=False)}\n'
-        f'paper_digest_original_title: {json.dumps(bundle["originalTitle"], ensure_ascii=False)}\n'
+        f'paper_digest_original_title: {json.dumps(_workbench_display_original_title(bundle["originalTitle"]), ensure_ascii=False)}\n'
         f'paper_digest_arxiv_version: {version}\n'
         f'paper_digest_arxiv_versioned_id: {versioned_id}\n'
         f'paper_digest_arxiv_abs_url: {json.dumps(identity["absUrl"], ensure_ascii=False)}\n'
@@ -3160,7 +3432,7 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
     identity = bundle['identity']
     expected = {
         'paper_digest_reader_title': bundle['readerTitle'],
-        'paper_digest_original_title': bundle['originalTitle'],
+        'paper_digest_original_title': _workbench_display_original_title(bundle['originalTitle']),
         'paper_digest_arxiv_id': identity['baseId'],
         'paper_digest_arxiv_version': identity['version'],
         'paper_digest_arxiv_versioned_id': identity['versionedId'],
@@ -3496,7 +3768,7 @@ def _detailed_core_summary_semantic_issue(summary):
     # stages, so a metric accepted upstream must not be rejected here merely
     # because it uses a newer alias (for example PPL or compression rate).
     metric = re.compile(
-        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
+        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
         re.IGNORECASE,
     )
     conference_metric = re.compile(
@@ -3752,8 +4024,15 @@ def _modern_api_reader_projection(paper, payload=None):
             safe_value = html.escape(re.sub(r'\s+', ' ', value.strip()))
             ledger.append(f'- {label}：{safe_value}')
     detailed_summary = _sealed_detailed_core_summary(paper, parsed)
+    visible_summary = detailed_summary or payload['plan']['oneSentenceThesis'].strip()
+    # Preserve the sealed source summary while repairing this exact duplicated
+    # bilingual term in the deterministic publication projection.
+    visible_summary = visible_summary.replace(
+        '音频推测推测解码 Audio Speculative Speculative Decoding',
+        '音频推测解码 Audio Speculative Decoding',
+    )
     return {
-        'summary': detailed_summary or payload['plan']['oneSentenceThesis'].strip(),
+        'summary': visible_summary,
         'opensource': '\n\n'.join(lines),
         'scoringReason': '\n\n'.join(ledger),
     }
@@ -4636,8 +4915,38 @@ def _api_reader_markdown_tables(article):
     return tables
 
 
+def _normalize_api_reader_display_artifacts(value):
+    """Remove only an exact repeated LaTeXML CI annotation from display text."""
+    value = str(value or '')
+    value = re.sub(
+        r'(\[\s*([+−-]?\d+(?:\.\d+)?)\s*,\s*([+−-]?\d+(?:\.\d+)?)\s*\])'
+        r'\[\s*([+−-]?\d+(?:\.\d+)?)\{\}\{,\}\s*([+−-]?\d+(?:\.\d+)?)\{\}\s*\]',
+        lambda match: match[1] if (
+            match[2].replace('-', '−') == match[4].replace('-', '−')
+            and match[3].replace('-', '−') == match[5].replace('-', '−')
+        ) else match[0],
+        value,
+    )
+    # A repeated bilingual bridge label can be emitted as two adjacent bold
+    # spans, leaving the second span malformed in rendered Hugo HTML. Collapse
+    # only an exact same-label repetition; its explanatory prose is unchanged.
+    return re.sub(
+        r'\*\*([^*\n]+?)([：:])\*\*\s*\*\*\s*\1\2\*\*\s*',
+        r'**\1\2** ',
+        value,
+    )
+
+
 def _normalize_api_reader_source_cell(value):
     value = unicodedata.normalize('NFKC', str(value or ''))
+    value = _normalize_api_reader_display_artifacts(value)
+    value = re.sub(r'^−-(\d+(?:\.\d+)?%)$', r'−\1', value)
+    value = re.sub(r'^\+\+(\d+(?:\.\d+)?%)$', r'+\1', value)
+    value = re.sub(
+        r'(?<![\d,])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,])',
+        lambda match: match[1] if match[2].replace('{,}', ',') == match[1]
+        else match[0], value,
+    )
     value = re.sub(r'<br\s*/?>', ' ', value, flags=re.IGNORECASE)
     # arXiv's LaTeXML text flattening can paste a TeX superscript rendering
     # beside its plain-text counterpart (for example
@@ -4645,6 +4954,23 @@ def _normalize_api_reader_source_cell(value):
     # The Reader post-processor applies the same narrow display cleanup; keep
     # the publication-side equivalence check in lockstep with that cleanup.
     value = value.replace('\u200b', '')
+    scalar = r'[+−-]?\d+(?:\.\d+)?'
+    value = re.sub(
+        rf'(?<![A-Za-z0-9])({scalar})\s*\[\s*({scalar})\s*,\s*({scalar})\s*\]'
+        rf'\s*({scalar})\\;\s*\[\s*({scalar})\s*,\s*({scalar})\s*\]',
+        lambda match: (f'{match[1]} [{match[2]}, {match[3]}]')
+        if all(match[i].replace('−', '-') == match[i + 3].replace('−', '-')
+               for i in (1, 2, 3)) else match[0], value,
+    )
+    # Exact visible power + identical TeX annotation; preserve the raw DOM
+    # cell binding while mirroring Node's unambiguous display cleanup.
+    value = re.sub(
+        r'(?<![A-Za-z0-9])([1-9]\d*)([−+-])(\d+)\1\^\{([−+-])\3\}(?![A-Za-z0-9])',
+        lambda match: ('\\(' + match[1] + '^{' + match[2].replace('−', '-')
+                       + match[3] + '}\\)')
+        if match[2].replace('−', '-') == match[4].replace('−', '-')
+        else match[0], value,
+    )
     value = re.sub(r'\blr\s*=\s*2e[−-]4\s*lr\s*=\s*2e\^\{-4\}', 'lr=2e-4', value)
     duplicate_signed = re.compile(r'([+−-])(\d+(?:\.\d+)?)\s*-\s*\2')
     previous = None
@@ -4828,6 +5154,25 @@ def _api_reader_numeric_tokens(value):
             f'{match.group(1)} {match.group(3)}'
         )
         tokens.append(alias)
+    # Mirror Node's exact visible-measurement + TeX annotation alias.
+    # Both numbers and decoded units must agree inside the SHA-bound quote.
+    number_surface = r'[+\-−－]?(?:[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]+)(?:[.．][0-9０-９]+)?'
+    tex_measurement = re.compile(
+        rf'(?<![A-Za-z0-9])({number_surface})\s*'
+        rf'(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)({number_surface})'
+        r'(?:\s|\\text\{\\[,;!]\}|\\[,;!])*'
+        r'((?:\\(?:mathrm|textrm|text)\{[A-Za-z]+\}){1,8})'
+        r'(?![A-Za-z0-9_]|\\(?:mathrm|textrm|text)\{[A-Za-z])',
+        flags=re.IGNORECASE,
+    )
+    for match in tex_measurement.finditer(original_surface):
+        left = exact_number(match.group(1))
+        right = exact_number(match.group(3))
+        tex_unit = ''.join(re.findall(
+            r'\\(?:mathrm|textrm|text)\{([A-Za-z]+)\}', match.group(4)))
+        if left and left == right and tex_unit.lower() == match.group(2).lower():
+            tokens.append(_canonical_api_reader_numeric_token(
+                f'{match.group(1)} {match.group(2)}'))
     return tokens
 
 
@@ -4849,6 +5194,8 @@ def _validate_api_reader_source_bindings(paper, article=None):
     if not isinstance(plan, dict) or not isinstance(stage, dict) \
             or not isinstance(source, dict) or not isinstance(article, str):
         raise PublishDataValidationError('API reader source-binding v4 缺少 plan/stage/source/article')
+    if re.search(r'\[\[FORMULA_\d+\]\]', article):
+        raise PublishDataValidationError('API reader source-binding v4 正文残留未绑定公式占位符')
     if contracts.get('apiReaderSourceBindings') != LLM_API_READER_SOURCE_BINDING_CONTRACT \
             or plan.get('sourceBindingsContract') != LLM_API_READER_SOURCE_BINDING_CONTRACT \
             or stage.get('sourceBindingsContractVersion') != LLM_API_READER_SOURCE_BINDING_CONTRACT:
@@ -4879,6 +5226,9 @@ def _validate_api_reader_source_bindings(paper, article=None):
         raise PublishDataValidationError('API reader source-binding 数量与 stage 不一致')
 
     rendered_tables = _api_reader_markdown_tables(article)
+    canonical_reader_article = paper.get('apiReaderArticle')
+    canonical_tables = _api_reader_markdown_tables(canonical_reader_article) \
+        if isinstance(canonical_reader_article, str) else rendered_tables
     if len(rendered_tables) != len(table_bindings):
         raise PublishDataValidationError('API reader 正文表格数量与 source binding 不一致')
     for index, (binding, rendered) in enumerate(zip(table_bindings, rendered_tables), 1):
@@ -4888,9 +5238,11 @@ def _validate_api_reader_source_bindings(paper, article=None):
         }
         if not isinstance(binding, dict) or set(binding) not in (required, required | {'sourceTableDomSha256'}):
             raise PublishDataValidationError(f'API reader tableBindings[{index - 1}] 字段非法')
-        if binding.get('tableIndex') != index \
+        canonical_rendered = canonical_tables[index - 1] \
+            if index <= len(canonical_tables) else None
+        if binding.get('tableIndex') != index or canonical_rendered is None \
                 or binding.get('renderedTableSha256') != _javascript_string_sha256(
-                    rendered['markdown']
+                    canonical_rendered['markdown']
                 ):
             raise PublishDataValidationError(f'API reader 第 {index} 个表格渲染 SHA 漂移')
         rendered_rows = [rendered['header'], *rendered['rows']]
@@ -4928,7 +5280,8 @@ def _validate_api_reader_source_bindings(paper, article=None):
                         or rendered_column >= len(rendered_rows[rendered_row]):
                     raise PublishDataValidationError(f'API reader 第 {index} 个表格单元格覆盖非法')
                 actual_text = rendered_rows[rendered_row][rendered_column]
-                if cell.get('renderedText') != actual_text \
+                if _normalize_api_reader_source_cell(cell.get('renderedText')) \
+                        != _normalize_api_reader_source_cell(actual_text) \
                         or _normalize_api_reader_source_cell(actual_text) \
                         != _normalize_api_reader_source_cell(cell.get('sourceText')) \
                         or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):
@@ -5236,6 +5589,10 @@ def _validate_api_reader_resource_identity(paper):
             raise PublishDataValidationError(f'API reader resources[{index}] failureCode 非法')
         documentation = resource.get('documentationEvidence')
         if documentation is not None:
+            # This proof comes from raw.githubusercontent.com, a separate
+            # endpoint from the repository URL probe above. A valid README
+            # response may therefore coexist with a temporarily unreachable
+            # repository-page result.
             documentation_keys = {
                 'contract', 'repositoryUrl', 'sourceUrl', 'status',
                 'sourceSha256', 'capabilities', 'completeness',
@@ -5253,7 +5610,6 @@ def _validate_api_reader_resource_identity(paper):
             if not isinstance(documentation, dict) \
                     or set(documentation) != documentation_keys \
                     or resource.get('type') != 'code' \
-                    or availability != 'available' \
                     or documentation.get('contract') \
                     != 'repository-documentation-evidence-v1' \
                     or documentation.get('repositoryUrl') != original_url \
@@ -5746,6 +6102,8 @@ def _api_reader_payload(paper):
     rendered_article = _modern_api_safe_typo_projection(
         _modern_api_bridge_render_spacing(article, plan)
     ) if reader_contract == LLM_API_READER_CONTRACT else article
+    if reader_contract == LLM_API_READER_CONTRACT:
+        rendered_article = _normalize_api_reader_display_artifacts(rendered_article)
     if figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
         rendered_article = render_ephemeral_api_reader_figures(rendered_article, figures)
     for asset in figure_assets:
@@ -6150,6 +6508,8 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         else api_reader_payload['renderedArticle'] if api_reader_payload
         else _manual_reader_article(paper, reader_plan, date_str)
     )
+    if api_reader_payload and api_reader_payload.get('contract') == LLM_API_READER_CONTRACT:
+        reader_article = _normalize_api_reader_display_artifacts(reader_article)
     reader_first = reader_plan is not None and reader_article is not None
     api_reader_v2 = bool(
         api_reader_payload
@@ -6739,7 +7099,7 @@ def classify_review_failure(issues):
         return 'transient'
     transient_markers = (
         '连续失败', '调用失败', '返回非 json', '响应不完整', '协议',
-        '下载失败', '超时', 'timeout', 'unavailable',
+        '下载失败', '超时', '绝对截止时间', 'timeout', 'unavailable',
     )
     if all(
         isinstance(issue, dict)
@@ -7604,7 +7964,22 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             continue  # The shared Hugo gate already reports this binding failure.
         rendered_fragment = html.unescape(_rendered_article_fragment(candidates[0][1]))
         for formula_index, block in enumerate(source_blocks, 1):
-            if rendered_fragment.count(block) != 1:
+            # Hugo restores its explicit literal-shortcode escapes before
+            # rendering. Compare that exact surface while retaining the
+            # original source formula SHA and the unique-occurrence gate.
+            rendered_block = re.sub(
+                r'\{\{(<|%)/\*(.*?)\*/(>|%)\}\}',
+                lambda match: ('{{' + match[1] + match[2] + match[3] + '}}')
+                if (match[1], match[3]) in {('<', '>'), ('%', '%')}
+                else match[0],
+                block, flags=re.DOTALL,
+            )
+            # Published TeX can contain HTML character references so Markdown
+            # does not interpret angle-bracket operators as raw HTML. Hugo
+            # emits their decoded text in the article; compare that exact TeX
+            # surface after decoding the source block once as well.
+            rendered_block = html.unescape(rendered_block)
+            if rendered_fragment.count(rendered_block) != 1:
                 issues.append(
                     f'{label} API reader v4 第 {formula_index} 个展示公式未在 Hugo HTML '
                     '中原样且唯一保留'
@@ -8333,7 +8708,12 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
                     if not _taxonomy_asset_relative(relative):
                         raise PublishDataValidationError('taxonomy ownership 路径非法')
                     payload = json.loads(target.read_text(encoding='utf-8'))
-                    if target.name == 'taxonomy-catalog.json':
+                    if target.name == 'taxonomy-presentation-policy.json':
+                        _validate_taxonomy_presentation_policy(payload)
+                        _taxonomy_presentation_selection(repo,
+                            _validate_taxonomy_snapshot(build_taxonomy_registry_snapshot()),
+                            _validate_taxonomy_catalog(_read_taxonomy_asset(repo, 'data/taxonomy-catalog.json')))
+                    elif target.name == 'taxonomy-catalog.json':
                         _validate_taxonomy_catalog(payload)
                     else:
                         _validate_taxonomy_snapshot(payload)
@@ -11554,6 +11934,13 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
             failure_kind = record.get('failureKind') or (
                 'content' if record.get('completed', True) else 'pending'
             )
+            if failure_kind == 'content':
+                # Older checkpoints classified absolute image-download
+                # deadlines as content failures. Re-evaluate their recorded
+                # issue with the current classifier so unchanged page bytes
+                # can retry the transport failure without inventing an edit.
+                if classify_review_failure(record.get('issues') or []) == 'transient':
+                    failure_kind = 'transient'
             if (
                 current == recorded
                 and failure_kind == 'content'

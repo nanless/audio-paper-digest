@@ -922,9 +922,11 @@ test('changed text or artifacts reject complete proof reuse before models or mig
     }
 });
 
-test('source upgrade authorizes only an explicit subset and preserves unselected and original results', async t => {
-    const upgrade = require('../scripts/lib/conference-source-upgrade.js');
-    const f = fixture(t, 3); const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+// Shared fixture for the source-upgrade promote ledger modes: sealed historical
+// sources, a mocked discovery/prepareShared/staging/aggregate chain and a
+// switchable "new source generation" so upgrades visibly differ from originals.
+function sourceUpgradeFixture(t, count = 3) {
+    const f = fixture(t, count); const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
     f.files.conferenceStagingSourceDir = path.join(f.root, 'sources'); f.files.conferenceAnalysisDir = path.join(f.root, 'analysis');
     fs.mkdirSync(f.files.conferenceStagingSourceDir, { mode: 0o700 }); fs.mkdirSync(f.files.conferenceAnalysisDir, { mode: 0o700 });
     const sources = [];
@@ -940,16 +942,17 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
             artifactsSha256: digest(bytes.artifacts), requestSha256: digest(bytes.request), receiptSha256: receipt.receiptSha256,
             verificationSha256: H('historical verification') } });
     }
-    let creatingNewGeneration = false, calls = []; const stagedByExecution = new Map();
     f.files.conferencePageStagingDir = path.join(f.root, 'pages'); f.files.conferenceAggregateDir = path.join(f.root, 'aggregates');
+    const control = { creatingNewGeneration: false, calls: [], stageCalls: [], preservedCalls: [], originalItems: null };
+    const stagedByExecution = new Map();
     const deps = { ...f.deps, discovery: { MAX_PDF_BYTES: discovery.MAX_PDF_BYTES,
         safeAbsoluteFile: discovery.safeAbsoluteFile,
         replayDiscoveryMember: (_handle, identity) => ({ match: { kind: 'exact', candidates: [{ sha256:
             sources[f.members.findIndex(member => member.sourceIdentity === identity)].proof.pdfSha256 }] } }) },
     prepareShared: async () => ({ planHandle: {}, planReceiptSha256: H('plan'), sealed: sources.map(source => ({
-        ...source, proof: { ...source.proof, ...(creatingNewGeneration ? { receiptSha256: H(`new ${source.paperId}`) } : {}) } })) }),
+        ...source, proof: { ...source.proof, ...(control.creatingNewGeneration ? { receiptSha256: H(`new ${source.paperId}`) } : {}) } })) }),
     processPaper: async (_c, _s, item) => {
-        calls.push(item.paperId); if (!creatingNewGeneration) return success(item);
+        control.calls.push(item.paperId); if (!control.creatingNewGeneration) return success(item);
         const prior = success(item);
         const markdown = `---\npaper_digest_paper_id: "${item.paperId}"\npaper_digest_source_kind: conference\npaper_digest_conference_id: "odyssey-2026"\n---\nFixture new Reader\n`;
         const body = { contract: 'conference-paper-page-staging-v1', version: 1, status: 'complete', paperId: item.paperId,
@@ -961,9 +964,25 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
         fs.writeFileSync(path.join(folder, 'page.md'), markdown, { mode: 0o600 });
         return { analysisProof: prior.analysisProof, pageProof: { manifestSha256: manifest.manifestSha256,
             contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
-    }, postprocess: { stagePaper: ({ executionId }) => ({ status: 'staged', manifest: stagedByExecution.get(executionId) }) },
+    },
+    postprocess: { stagePaper: ({ executionId }) => {
+            control.stageCalls.push(executionId);
+            return { status: 'staged', manifest: stagedByExecution.get(executionId) };
+        },
+        // Preserved ledger members replay the remembered original stage bytes.
+        loadPreservedStage: ({ executionId, paperId }) => {
+            control.preservedCalls.push(paperId);
+            const item = control.originalItems && control.originalItems.get(paperId);
+            if (!item) throw new Error(`preserved promotion has no original item: ${paperId}`);
+            if (item.analysisRunId !== executionId) throw new Error(`preserved promotion execution drifted: ${paperId}`);
+            return { status: 'staged', manifest: { analysisSha256: item.analysisProof.analysisSha256,
+                completionReceiptSha256: item.analysisProof.completionReceiptSha256,
+                sourceSnapshotSha256: item.analysisProof.sourceSnapshotSha256,
+                manifestSha256: item.pageProof.manifestSha256, contentSha256: item.pageProof.contentSha256,
+                pagePath: item.pageProof.pagePath } };
+        } },
     aggregate: async (...args) => {
-        if (!creatingNewGeneration) return f.deps.aggregate(...args);
+        if (!control.creatingNewGeneration) return f.deps.aggregate(...args);
         const ids = args[2]; const markdown = '---\npaper_digest_page_type: index\nslug: conference-odyssey-2026\n---\nAll upgraded papers\n';
         const body = { contract: 'conference-aggregate-staging-v1', version: 1, status: 'complete', conferenceId: 'odyssey-2026',
             aggregateId: H(ids).slice(0, 32), pagePath: 'content/posts/conference-odyssey-2026.md', markdown,
@@ -974,9 +993,19 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
         fs.writeFileSync(path.join(folder, 'manifest.json'), JSON.stringify(manifest), { mode: 0o600 });
         fs.writeFileSync(path.join(folder, 'aggregate.md'), markdown, { mode: 0o600 }); return { manifest };
     } };
+    const rememberOriginal = stateFile => {
+        control.originalItems = new Map(Object.entries(JSON.parse(fs.readFileSync(stateFile)).items));
+    };
+    return { ...f, deps, sources, control, stagedByExecution, rememberOriginal };
+}
+
+test('source upgrade authorizes only an explicit subset and preserves unselected and original results', async t => {
+    const upgrade = require('../scripts/lib/conference-source-upgrade.js');
+    const h = sourceUpgradeFixture(t, 3); const f = h; const deps = h.deps;
     const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, deps);
     const originalFile = path.join(f.files.conferenceProcessDir, original.processId, 'state.json'), originalBytes = fs.readFileSync(originalFile);
-    creatingNewGeneration = true; calls = [];
+    h.rememberOriginal(originalFile);
+    h.control.creatingNewGeneration = true; h.control.calls = [];
     const options = { fromProcessId: original.processId, concurrency: 1 };
     const plan = upgrade.planSourceUpgrade(options, deps); assert.equal(plan.papers.length, 3);
     await assert.rejects(upgrade.applySourceUpgrade({ ...options, authorizeNewAnalysis: true, planSha256: plan.planSha256,
@@ -984,15 +1013,15 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
     const selected = f.members[1].paperId;
     const result = await upgrade.applySourceUpgrade({ ...options, authorizeNewAnalysis: true,
         planSha256: plan.planSha256, paperIds: [selected] }, deps);
-    assert.equal(result.status, 'complete'); assert.deepEqual(calls, [selected]);
+    assert.equal(result.status, 'complete'); assert.deepEqual(h.control.calls, [selected]);
     const state = JSON.parse(fs.readFileSync(result.stateFile)); assert.deepEqual(Object.keys(state.items), [selected]);
     assert.deepEqual(fs.readFileSync(originalFile), originalBytes);
     await assert.rejects(upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, deps), /requires all conference members/);
     const remaining = f.members.map(item => item.paperId).filter(id => id !== selected);
     await upgrade.applySourceUpgrade({ ...options, authorizeNewAnalysis: true, planSha256: plan.planSha256, paperIds: remaining }, deps);
-    const beforePromotionCalls = calls.length;
+    const beforePromotionCalls = h.control.calls.length;
     const promoted = await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, deps);
-    assert.equal(promoted.conferenceCompletion, true); assert.equal(promoted.papers, 3); assert.equal(calls.length, beforePromotionCalls);
+    assert.equal(promoted.conferenceCompletion, true); assert.equal(promoted.papers, 3); assert.equal(h.control.calls.length, beforePromotionCalls);
     assert.notEqual(promoted.processId, original.processId);
     const promotedStateFile = path.join(f.files.conferenceProcessDir, promoted.processId, 'state.json');
     const promotedState = processApi.assertState(JSON.parse(fs.readFileSync(promotedStateFile)));
@@ -1001,7 +1030,7 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
     assert.equal(cli.processStatus(options, { dependencies: deps }).processId, promoted.processId);
     assert.equal((await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, deps)).processId, promoted.processId);
     assert.equal((await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, deps)).processId, promoted.processId);
-    assert.equal(calls.length, beforePromotionCalls); assert.deepEqual(fs.readFileSync(originalFile), originalBytes);
+    assert.equal(h.control.calls.length, beforePromotionCalls); assert.deepEqual(fs.readFileSync(originalFile), originalBytes);
     const code = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_readonly',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\np.PROCESS_ROOT=Path(sys.argv[2]);p.PAGE_ROOT=Path(sys.argv[3]);p.AGGREGATE_ROOT=Path(sys.argv[4])\nb=p.process_bundle('odyssey-2026',sys.argv[5])\nprint(json.dumps({'files':len(b['files']),'status':b['state']['status']}))`;
     const publisherRead = childProcess.execFileSync('bash', [path.join(__dirname, '..', 'scripts', 'python-runtime.sh'), '-c', code,
         path.join(__dirname, '..', 'scripts'), f.files.conferenceProcessDir, f.files.conferencePageStagingDir,
@@ -1014,4 +1043,156 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
     const parsed = cli.parseArgs(['--source-upgrade-apply', ...authArgs, '--plan-sha', plan.planSha256,
         '--paper-ids', selected, '--authorize-new-analysis']);
     assert.deepEqual(parsed.paperIds, [selected]); assert.equal(parsed.authorizeNewAnalysis, true);
+});
+
+test('promote CLI accepts exactly one promote ledger mode flag', () => {
+    const shared = ['--catalog', 'catalog.json', '--report', 'report.json',
+        '--filter', '11111111-1111-4111-8111-111111111111', '--from', '22222222-2222-4222-8222-222222222222'];
+    const promote = ['--source-upgrade-promote', ...shared, '--plan-sha', 'a'.repeat(64)];
+    assert.equal(cli.parseArgs(promote).preserveOriginalComplete, undefined);
+    assert.equal(cli.parseArgs(promote).preferUpgrade, undefined);
+    assert.equal(cli.parseArgs([...promote, '--preserve-original-complete']).preserveOriginalComplete, true);
+    assert.equal(cli.parseArgs([...promote, '--prefer-upgrade']).preferUpgrade, true);
+    assert.throws(() => cli.parseArgs([...promote, '--preserve-original-complete', '--prefer-upgrade']), /Use/);
+    assert.throws(() => cli.parseArgs([...promote, '--prefer-upgrade', '--preserve-original-complete']), /Use/);
+    assert.throws(() => cli.parseArgs(['--source-upgrade-plan', ...shared, '--prefer-upgrade']), /Use/);
+    assert.throws(() => cli.parseArgs(['--source-upgrade-apply', ...shared, '--plan-sha', 'a'.repeat(64),
+        '--paper-ids', 'conference:odyssey:2026:conference-paper-id:paper.1', '--authorize-new-analysis',
+        '--prefer-upgrade']), /Use/);
+});
+
+test('promote --prefer-upgrade books upgraded members first, preserves the rest and seals a checkable ledger', async t => {
+    const upgrade = require('../scripts/lib/conference-source-upgrade.js');
+    const h = sourceUpgradeFixture(t, 3);
+    const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps);
+    const originalFile = path.join(h.files.conferenceProcessDir, original.processId, 'state.json');
+    h.rememberOriginal(originalFile);
+    h.control.creatingNewGeneration = true; h.control.calls = [];
+    const options = { fromProcessId: original.processId, concurrency: 1 };
+    const plan = upgrade.planSourceUpgrade(options, h.deps);
+    const upgradedIds = [h.members[0].paperId, h.members[1].paperId].sort();
+    const kept = h.members[2].paperId;
+    const applied = await upgrade.applySourceUpgrade({ ...options, authorizeNewAnalysis: true,
+        planSha256: plan.planSha256, paperIds: upgradedIds }, h.deps);
+    assert.equal(applied.status, 'complete');
+    const runsBeforePromotion = h.control.calls.length;
+    // 无 flag 的默认模式仍然要求全量升级完成。
+    await assert.rejects(upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, h.deps),
+        /Promotion requires all conference members upgraded and complete/);
+    assert.equal(h.control.calls.length, runsBeforePromotion);
+    const promoted = await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256,
+        preferUpgrade: true }, h.deps);
+    assert.equal(promoted.conferenceCompletion, true); assert.equal(promoted.papers, 3);
+    assert.equal(h.control.calls.length, runsBeforePromotion, 'promote 不调用模型');
+    const directory = path.join(h.files.conferenceProcessDir, promoted.processId);
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(directory, 'state.json'))));
+    const receipt = JSON.parse(fs.readFileSync(path.join(directory, 'completion-receipt.json')));
+    processApi.validateCompletionReceipt(state, receipt);
+    assert.equal(cli.processStatus(options, { dependencies: h.deps }).processId, promoted.processId);
+    const promotion = receipt.sourceUpgradePromotion;
+    assert.equal(promotion.preferUpgrade, true);
+    assert.deepEqual(promotion.upgradedPaperIds, upgradedIds);
+    assert.deepEqual(promotion.preservedOriginalCompletePaperIds, [kept]);
+    assert.equal(Object.hasOwn(promotion, 'preservedPriorUpgradePaperIds'), false);
+    // 升级优先：已升级的成员取升级结果。
+    for (const id of upgradedIds) {
+        const item = state.items[id];
+        assert.equal(item.analysisRunId, processApi.deterministicUuid(promoted.processId, id, 'analysis'));
+        assert.equal(item.preservedOriginalComplete, undefined);
+        assert.equal(item.pageProof.contentSha256, h.stagedByExecution.get(item.analysisRunId).contentSha256);
+    }
+    // 其余成员回填原样结果。
+    const preserved = state.items[kept];
+    assert.equal(preserved.preservedOriginalComplete, true);
+    assert.notEqual(preserved.analysisRunId, processApi.deterministicUuid(promoted.processId, kept, 'analysis'));
+    assert.deepEqual(preserved.pageProof, h.control.originalItems.get(kept).pageProof);
+    assert.deepEqual(h.control.preservedCalls, [kept]);
+    assert.deepEqual(h.control.stageCalls, upgradedIds.map(id => state.items[id].analysisRunId));
+    // 终态口径：promoted 进程只作 --status/发布节点，后续 --apply 按设计拒绝重绑。
+    await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps),
+        error => error.code === 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED'
+            && /inspect --source-upgrade-plan --from /.test(error.message));
+    // 收据字段 fail-closed：乱序、重复、越集和类型错误一律拒绝。
+    const tamper = (mutation, pattern) => {
+        const copy = structuredClone(state);
+        mutation(copy.sourceUpgradePromotion);
+        copy.stateSha256 = processApi.stateDigest(copy);
+        assert.throws(() => processApi.assertState(copy), pattern);
+    };
+    tamper(p => { const [first, second] = p.upgradedPaperIds; p.upgradedPaperIds = [second, first]; },
+        /Source upgrade upgradedPaperIds is invalid/);
+    tamper(p => { p.upgradedPaperIds = [p.upgradedPaperIds[0], p.upgradedPaperIds[0]]; },
+        /Source upgrade upgradedPaperIds is invalid/);
+    tamper(p => { p.upgradedPaperIds = [...p.upgradedPaperIds, 'conference:odyssey:2026:conference-paper-id:unknown']; },
+        /Source upgrade upgradedPaperIds is invalid/);
+    tamper(p => { p.preferUpgrade = 'true'; }, /Source upgrade preferUpgrade is invalid/);
+    tamper(p => { delete p.preservedOriginalCompletePaperIds; },
+        /Source upgrade preferUpgrade ledger arrays are missing/);
+});
+
+test('promote --preserve-original-complete keeps original results verbatim and ignores upgraded results', async t => {
+    const upgrade = require('../scripts/lib/conference-source-upgrade.js');
+    const h = sourceUpgradeFixture(t, 3);
+    const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps);
+    const originalFile = path.join(h.files.conferenceProcessDir, original.processId, 'state.json');
+    h.rememberOriginal(originalFile);
+    h.control.creatingNewGeneration = true; h.control.calls = [];
+    const options = { fromProcessId: original.processId, concurrency: 1 };
+    const plan = upgrade.planSourceUpgrade(options, h.deps);
+    const upgradedId = h.members[0].paperId;
+    const applied = await upgrade.applySourceUpgrade({ ...options, authorizeNewAnalysis: true,
+        planSha256: plan.planSha256, paperIds: [upgradedId] }, h.deps);
+    assert.equal(applied.status, 'complete');
+    await assert.rejects(upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, h.deps),
+        /Promotion requires all conference members upgraded and complete/);
+    const beforePromotionCalls = h.control.calls.length;
+    const promoted = await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256,
+        preserveOriginalComplete: true }, h.deps);
+    assert.equal(promoted.conferenceCompletion, true); assert.equal(promoted.papers, 3);
+    assert.equal(h.control.calls.length, beforePromotionCalls);
+    assert.deepEqual(h.control.stageCalls, [], 'preserve 模式不走 stagePaper，升级结果被整体忽略');
+    const directory = path.join(h.files.conferenceProcessDir, promoted.processId);
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(directory, 'state.json'))));
+    const receipt = JSON.parse(fs.readFileSync(path.join(directory, 'completion-receipt.json')));
+    processApi.validateCompletionReceipt(state, receipt);
+    const promotion = receipt.sourceUpgradePromotion;
+    assert.equal(Object.hasOwn(promotion, 'preferUpgrade'), false);
+    assert.equal(Object.hasOwn(promotion, 'upgradedPaperIds'), false);
+    const allIds = h.members.map(item => item.paperId).sort();
+    assert.deepEqual(promotion.preservedOriginalCompletePaperIds, allIds);
+    assert.deepEqual(promotion.preservedPriorUpgradePaperIds, []);
+    assert.deepEqual(h.control.preservedCalls, allIds);
+    const upgradedRunId = processApi.deterministicUuid(promoted.processId, upgradedId, 'analysis');
+    assert.equal(h.stagedByExecution.has(upgradedRunId), true, '升级结果存在但必须被忽略');
+    for (const id of allIds) {
+        const item = state.items[id];
+        assert.equal(item.preservedOriginalComplete, true);
+        assert.equal(item.analysisRunId, h.control.originalItems.get(id).analysisRunId);
+        assert.notEqual(item.analysisRunId, processApi.deterministicUuid(promoted.processId, id, 'analysis'));
+        assert.deepEqual(item.pageProof, h.control.originalItems.get(id).pageProof);
+    }
+});
+
+test('promote --prefer-upgrade still refuses an originally incomplete member without an upgraded result', async t => {
+    const upgrade = require('../scripts/lib/conference-source-upgrade.js');
+    const h = sourceUpgradeFixture(t, 3);
+    const failed = h.members[2].paperId;
+    const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, { ...h.deps,
+        processPaper: async (_context, _shared, item) => {
+            if (item.paperId === failed) throw new Error('fixture original failure');
+            return success(item);
+        } });
+    assert.equal(original.status, 'partial');
+    h.rememberOriginal(path.join(h.files.conferenceProcessDir, original.processId, 'state.json'));
+    h.control.creatingNewGeneration = true; h.control.calls = [];
+    const options = { fromProcessId: original.processId, concurrency: 1 };
+    const plan = upgrade.planSourceUpgrade(options, h.deps);
+    const upgraded = [h.members[0].paperId];
+    const applied = await upgrade.applySourceUpgrade({ ...options, authorizeNewAnalysis: true,
+        planSha256: plan.planSha256, paperIds: upgraded }, h.deps);
+    assert.equal(applied.status, 'complete');
+    await assert.rejects(upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256,
+        preferUpgrade: true }, h.deps),
+        error => /^Promotion requires all conference members upgraded and complete; missing: /.test(error.message)
+            && error.message.endsWith(failed));
 });

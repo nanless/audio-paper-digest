@@ -370,6 +370,40 @@ def formula_image_projection(evidence, paper_id, conference_id, pdf_url):
     return lines, assets
 
 
+def repair_caption_quoted_gloss_links(markdown):
+    """Keep quoted phonetic glosses literal in generated Figure captions."""
+    output = []
+    fence = None
+    pattern = re.compile(r"(?<![\\!])\[([^\[\]\n]+)\]\((‘[^‘’\n]*’|“[^“”\n]*”|'[^'\n]*'|\"[^\"\n]*\")\)")
+    for line in str(markdown).split('\n'):
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line)
+        if marker:
+            if fence is None:
+                fence = (marker.group(1)[0], len(marker.group(1)))
+            elif marker.group(1)[0] == fence[0] and len(marker.group(1)) >= fence[1] and not marker.group(2).strip():
+                fence = None
+        elif fence is None:
+            ending = '\r' if line.endswith('\r') else ''
+            text = line[:-1] if ending else line
+            if re.fullmatch(r'\*论文图\s+\d+。[^\n]*\*', text):
+                # Only the new quoted-gloss repair skips complex caption lines.
+                # The unchanged existing render repairs may still act on them.
+                caption = text[1:-1]
+                complex_line = any(marker in caption for marker in ('\\', '$', '`', '<', '>', '*', '_', '~', '!['))
+                depth = 0
+                for char in caption:
+                    if char == '[':
+                        depth += 1
+                        complex_line = complex_line or depth > 1
+                    elif char == ']':
+                        depth -= 1
+                        complex_line = complex_line or depth < 0
+                if not complex_line and depth == 0:
+                    line = pattern.sub(lambda match: f'&#91;{match.group(1)}&#93;({match.group(2)})', text) + ending
+        output.append(line)
+    return '\n'.join(output)
+
+
 def repair_reader_figure_caption_emphasis(markdown):
     """Verbalize literal stars inside the generated italic Figure caption line."""
     pattern = re.compile(r'^\*论文图\s+(\d+)。([^\n]*)\*$', re.MULTILINE)
@@ -385,7 +419,7 @@ def repair_reader_figure_caption_emphasis(markdown):
 
 def repair_formula_delimiters(markdown):
     """Keep TeX delimiters and generated Figure captions Markdown-safe."""
-    markdown = repair_reader_figure_caption_emphasis(markdown)
+    markdown = repair_reader_figure_caption_emphasis(repair_caption_quoted_gloss_links(markdown))
     # A model can nest an inline control token inside a code span, for example
     # `` `turn off `<EOT>``. Repair this exact doubled-closing-backtick shape
     # here as well as in the shared publisher sanitizer: the conference

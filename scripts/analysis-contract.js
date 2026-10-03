@@ -187,7 +187,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // short metrics such as mAP/PAR/PER match prose words including "mapping",
 // "Particle" and "performance", turning section numbers and citations into
 // apparent experimental measurements.
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // Conference papers often use domain-specific Chinese names for the metric
 // (for example DAFx's “抖动” and “包络相关”). Keep these explicit rather
 // than treating every result noun as quantitative evidence.
@@ -692,7 +692,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         // Some papers label the ablation rows only as `+ L_j`, `+ L_s`, ...
         // and describe them as a staged/逐级 addition.  That is still an
         // explicit component comparison when the source contains an ablation.
-        || /(?:逐级|逐步|依次)(?:叠加|加入|添加|移除|比较)|(?:组件|约束|模块)[^。；\n]{0,24}(?:对照|贡献|差异)/i.test(results)
+        || /(?:逐级|逐步|依次)(?:叠加|加入|添加|移除|比较)|(?:组件|约束|模块|损失|监督目标|局部配对|竞争归一化)[^。；\n]{0,24}(?:对照|贡献|差异|是否必要|必要性)/i.test(results)
         || /\+\s*L[_\s]?[A-Za-z](?:\s*\+\s*L[_\s]?[A-Za-z])+/i.test(results);
     if (empirical && sourceHasAblation && !resultHasAblation) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
@@ -1023,21 +1023,30 @@ function isRecoveryStageTerminal(stage, status) {
 
 function stripCoreSummaryNonResultNumerals(text) {
     return String(text || '')
+        // Case matters for short metric acronyms: the prose words "map",
+        // "per" and "most" are not mAP, PER or MOS-T measurements.
+        .replace(/\b(?:map|Map|per|Per|most|Most|MOST)\b/g, ' ')
+        .replace(/\bMel(?=[- ](?:spectrogram|filterbank|QCD|control)\b)/gi, ' ')
+        .replace(/\bSTFT(?=[⁡(])/g, ' ')
         .replace(/https?:\/\/\S+/g, ' ')
         .replace(/\[[0-9,;\s-]+\]/g, ' ')
         .replace(/§\s*\d+(?:\.\d+)*/g, ' ')
-        .replace(/\b(?:theorem|lemma|proposition|corollary|definition|assumption|equation|fig(?:ure)?\.?|table|section|appendix)\s*\d+(?:\.\d+)*/gi, ' ')
+        .replace(/\b(?:theorem|lemma|proposition|corollary|definition|def\.?|problem|prob\.?|assumption|equation|fig(?:ure)?\.?|table|section|appendix)\s*\d+(?:\.\d+)*/gi, ' ')
         .replace(/(?:定理|引理|命题|推论|公理|定义|假设|公式|方程|等式|式|图|表|章节|附录)\s*(?:编号)?\s*\d+(?:\.\d+)*/g, ' ')
         .replace(/(?<![A-Za-z0-9_])\d+(?:,\d{3})*(?:\.\d+)?\s*(?:种\s*)?(?:languages?|语言)(?![A-Za-z0-9_])/gi, ' ')
         .replace(/\b(?:19|20)\d{2}\b/g, ' ')
         .replace(/\b\d+(?:\.\d+)?\s*[BbMmKk]\b/g, ' ')
         .replace(/\b(?:v|ver(?:sion)?\.?)[-_ ]?\d+(?:\.\d+)*\b/gi, ' ')
         .replace(/\b[A-Za-z][A-Za-z0-9_-]*[-_]\d+(?:\.\d+)+(?:[-_][A-Za-z0-9.]+)?\b/g, ' ')
-        .replace(/\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM)\s*[-_ ]?\d+(?:\.\d+)*(?:\s*[BbMmKk])?\b/gi, ' ');
+        .replace(/\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX)\s*[-_ ]?\d+(?:\.\d+)*(?:\s*[BbMmKk])?\b/gi, ' ');
 }
 
 function hasCoreSummaryComparisonDirection(sentence, numbers) {
-    if (CORE_SUMMARY_COMPARISON_PATTERN.test(sentence)
+    // A diagram's "from inputs to outputs" is a mapping, not a measured
+    // improvement. A numeric transition must name its starting value.
+    const directionSurface = sentence.replace(/\bfrom\b([^。！？!?]{0,50})\bto\b/gi,
+        (match, between) => /\d/.test(between) ? match : ' ');
+    if (CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
         || /(?:从|由)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)/.test(sentence)) return true;
     // “基线为 12.4%，本文方法降至 9.8%”省略“从/由”仍是闭合比较；
     // “相对基线 12.4% 升至 9.8%”仍没有独立命名终点，不能仅凭两个数字通过。
@@ -1240,6 +1249,9 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     // marker 1). Remove only that exact pair before joining soft lines; a
     // normal trailing measurement whose next line differs remains evidence.
     const quantitativeSourceText = stripDuplicatedLineFootnoteMarkers(sourceText)
+        // Strip only the outline number before joining PDF soft wraps. A
+        // heading beside a metric glossary is not a numeric result value.
+        .replace(/^\s*\d{1,2}(?:\.\d+){0,3}[ \t]+(?=[A-Z][A-Za-z])/gm, '')
         .replace(/([^\n])\r?\n(?!\r?\n)/g, '$1 ');
     const quantitativeSourceSentences = quantitativeSourceText.trim()
         .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)

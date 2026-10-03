@@ -997,10 +997,22 @@ function stableSha256(value) {
 function scoringStabilityIsResolved(scoring) {
     if (scoring?.stabilityWarning !== true) return true;
     const resolution = scoring.stabilityResolution;
+    const multiPass = resolution?.method === 'multi_pass_consensus';
+    const multiPassProofValid = !multiPass || (
+        Number.isFinite(resolution.thirdAuditScore)
+        && Number.isSafeInteger(resolution.thirdAttempts) && resolution.thirdAttempts >= 1
+        && /^[a-f0-9]{64}$/.test(String(resolution.firstAuditSha256 || ''))
+        && /^[a-f0-9]{64}$/.test(String(resolution.thirdAuditSha256 || ''))
+        && scoring.auditSha256 === resolution.secondAuditSha256
+        && Math.abs(scoring.finalScore - resolution.secondAuditScore) < 1e-9
+        && Math.abs(Math.abs(resolution.secondAuditScore - resolution.firstAuditScore)
+            - resolution.scoreDifference) < 1e-9
+    );
     return Boolean(
         resolution?.contract === SCORING_STABILITY_RESOLUTION_CONTRACT
         && resolution?.status === 'resolved'
-        && resolution?.method === 'second_pass_consensus'
+        && (resolution?.method === 'second_pass_consensus' || multiPass)
+        && multiPassProofValid
         && Number.isFinite(resolution?.firstAuditScore)
         && Number.isFinite(resolution?.secondAuditScore)
         && Number.isFinite(resolution?.scoreDifference)

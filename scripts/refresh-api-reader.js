@@ -10,7 +10,11 @@ const {
     refreshApiReaderFiguresFromSource,
     normalizeApiReaderFigureMarkdown,
     stableFingerprint,
-    repairApiReaderPlanSurfaceBinding
+    repairApiReaderPlanSurfaceBinding,
+    restoreReaderSelectedTableBytes,
+    rewriteApiReaderFigureNarratives,
+    normalizeApiReaderTablePasteArtifacts,
+    normalizeReaderEditorialSurface
 } = require('./deep-analyzer.js');
 const {
     readJsonFileStrict,
@@ -21,6 +25,7 @@ const {
     getCanonicalAnalysisRunSummary
 } = require('./analysis-engine.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const { effectiveReaderTableRows } = require('./lib/reader-tables.js');
 const {
     updateAnalysisDigestStatuses,
     inferAnalysisBatchDate,
@@ -291,15 +296,67 @@ async function refreshApiReader(targetId, options = {}) {
                     : await (refreshOperations.article || refreshApiReaderArticleFromSource)(canonical, sourceDetails, {
                         reviewFeedback: options.reviewFeedback
                     });
-        const repairSurfaceBindings = () => {
+        const repairSurfaceBindings = sourceDetails => {
                 const repaired = JSON.parse(JSON.stringify(canonical));
                 repaired.apiReaderArticle = normalizeApiReaderFigureMarkdown(
                     repaired.apiReaderArticle,
                     repaired.apiReaderFigures
                 );
+                repaired.apiReaderArticle = rewriteApiReaderFigureNarratives(
+                    repaired.apiReaderArticle, repaired.apiReaderFigures
+                );
+                repaired.apiReaderArticle = normalizeApiReaderTablePasteArtifacts(
+                    repaired.apiReaderArticle
+                );
+                repaired.apiReaderArticle = repaired.apiReaderArticle.replace(
+                    /采样率\s*1\s*般\s*16\s*千赫/g, match => normalizeReaderEditorialSurface(match)
+                );
+                for (const binding of repaired.apiReaderPlan?.tableBindings || []) {
+                    if (binding.sourceType !== 'artifact_table') continue;
+                    const table = sourceDetails.structuredArtifacts?.tables?.find(item => (
+                        item.ordinal === binding.sourceTableOrdinal
+                        && item.sourceDomSha256 === binding.sourceTableDomSha256
+                    ));
+                    if (!table || effectiveReaderTableRows(table).inferenceContract
+                        !== 'full-width-protocol-divider-header-v1') continue;
+                    const headers = binding.cellBindings.filter(cell => cell.renderedRow === 0);
+                    if (!headers.length || !headers.every(cell => (
+                        table.headerRows.includes(cell.sourceRow)
+                        && cell.sourceDomSha256 === headers[0].sourceDomSha256
+                    ))) continue;
+                    binding.cellBindings = binding.cellBindings.map(cell => {
+                        if (cell.renderedRow !== 0) return cell;
+                        const original = table.cells.find(candidate => candidate.row === 0
+                            && candidate.column === cell.sourceColumn);
+                        if (!original || table.matrix[0][cell.sourceColumn] !== original.text) {
+                            throw new Error('Reader 原表列标题无法唯一重放');
+                        }
+                        return { ...cell, sourceRow: 0, sourceText: original.text,
+                            renderedText: original.text, sourceDomSha256: original.sourceDomSha256 };
+                    });
+                }
+                repaired.apiReaderArticle = restoreReaderSelectedTableBytes(
+                    repaired.apiReaderArticle,
+                    repaired.apiReaderPlan?.tableBindings,
+                    sourceDetails.structuredArtifacts
+                );
                 repaired.apiReaderArticleSha256 = crypto.createHash('sha256')
                     .update(repaired.apiReaderArticle).digest('hex');
                 repairApiReaderPlanSurfaceBinding(repaired, repaired.analysisManifest);
+                if (repaired.analysisManifest.stages.apiReaderArticle.articleSha256
+                    !== repaired.apiReaderArticleSha256
+                    || repaired.analysisManifest.stages.apiReaderArticle.sourceBindingsSha256
+                        !== repaired.apiReaderPlan.sourceBindingsSha256) {
+                    throw new Error(`${requested} 表面修复未签发完整正文与来源绑定证明`);
+                }
+                const actualHeadings = [...repaired.apiReaderArticle.matchAll(/^###\s+(.+?)\s*$/gm)]
+                    .map(match => match[1].trim());
+                const plannedHeadings = repaired.apiReaderPlan?.sections?.map(section => section.heading.trim());
+                if (!Array.isArray(plannedHeadings)
+                    || actualHeadings.length !== plannedHeadings.length
+                    || actualHeadings.some((heading, index) => heading !== plannedHeadings[index])) {
+                    throw new Error(`${requested} 读者计划小节标题无法与最终正文精确闭环`);
+                }
                 const bridges = repaired.apiReaderPlan?.conceptBridges;
                 if (!Array.isArray(bridges) || bridges.some(bridge => (
                     typeof bridge?.explanation !== 'string'

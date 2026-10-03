@@ -135,6 +135,8 @@ npm run blog:push -- --date YYYY-MM-DD
 
 generate 只生成并签发 schema v3 generation manifest；review 只读审查最终字节并绑定逐页 SHA、协议、Git 基线和 Hugo gate；push 只提交 receipt 精确允许的 delta，推送后验证远端 `main` OID。发布器代码变化仍会使 generate 重新渲染，以便真实字节变化被发现；但逐页通过证据永久只按“相对路径 + 页面内容 SHA”复用。generation manifest 元数据、模型、发布器代码、review 协议指纹或 Hugo 运行时变化不得让最终字节未变的文件重审；它们只要求重跑当前批次 gate 并重签 receipt。只有页面内容 SHA 变化才重审该文件。基线、remote 身份或 receipt 与当前批次不匹配仍会阻断 push。review worker 不得原地修改已审字节；修正建议返回生成/修复阶段。
 
+`remoteVerified` 只证明 Git 提交已到远端。对用户宣告博客已上线或任务已完成前，还必须确认 GitHub Pages workflow 的 build/deploy 均成功，并逐页核验目标日期汇总页及已发布单篇的 HTTP 200、正式地址和标题。workflow 必须对应 publication commit，或保留该批次已审页面字节的后续提交；保留部署与页面核验记录。部署失败时读取失败日志、修复并继续检查；`digest:status` 显示 complete 也不能代替上线核验。
+
 ## 发布后视觉与完成定义
 
 push 远端验证后才可规划视觉任务。TOP 10 论文各一张长图，另有一张汇总封面；实际生成只能由 Codex 内置 `image_gen` 完成，项目脚本不得调用图像 API。
