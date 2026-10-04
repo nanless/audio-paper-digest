@@ -662,7 +662,7 @@ function prepareShared(context, deps, createdAt) {
 
 async function processOne(context, shared, item, deps) {
     const files = context.files;
-    const readerRetryEpoch = Array.isArray(item.retryReleases) && item.retryReleases.length > 0
+    const readerRetryRound = Array.isArray(item.retryReleases) && item.retryReleases.length > 0
         ? item.retryReleases.length : undefined;
     if (shared.sourceGenerationChanged && fs.existsSync(path.join(files.conferenceAnalysisDir, item.analysisRunId, 'run.json'))) {
         const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir, executionId: item.analysisRunId });
@@ -678,7 +678,7 @@ async function processOne(context, shared, item, deps) {
     const analyzed = await deps.adapter.analyzeConference({ analysisRoot: files.conferenceAnalysisDir,
         executionId: item.analysisRunId, concurrency: 1, planHandle: shared.planHandle,
         sourceRoot: shared.sourceCacheRoot },
-    readerRetryEpoch !== undefined ? { readerRetryEpoch } : undefined);
+    readerRetryRound !== undefined ? { readerRetryEpoch: readerRetryRound } : undefined);
     if (analyzed.status !== 'complete') {
         const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir,
             executionId: item.analysisRunId });

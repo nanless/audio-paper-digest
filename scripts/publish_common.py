@@ -674,14 +674,14 @@ def _normalize_registry(value, label='registry'):
                 'concepts': loaded['concepts'], 'registrySha256': loaded['registrySha256']}
     if type(value) is not dict:
         raise ValueError(f'{label}: expected registry object or file path')
-    data = {'version': value.get('version'), 'facets': value.get('facets'),
+    registry = {'version': value.get('version'), 'facets': value.get('facets'),
             'concepts': value.get('concepts')}
-    validate_taxonomy(data)
+    validate_taxonomy(registry)
     registry_sha = value.get('registrySha256')
     if registry_sha is not None and (
             not isinstance(registry_sha, str) or not _SHA256_RE.fullmatch(registry_sha)):
         raise ValueError(f'{label}: invalid registrySha256')
-    return {**data, 'registrySha256': registry_sha}
+    return {**registry, 'registrySha256': registry_sha}
 
 
 def _resolve_registry_snapshot(registry_sha256):
@@ -2039,19 +2039,19 @@ def _manual_result_direction_supported(value):
     return any(pattern.fullmatch(text) for pattern in MANUAL_RESULT_DIRECTION_PATTERNS)
 
 
-def _manual_result_claim_signature(claim):
-    signature = []
+def _manual_result_claim_dedup_key(claim):
+    normalized_field_values = []
     for field in MANUAL_RESULT_CLAIM_SEMANTIC_FIELDS:
         value = claim.get(field)
         if _manual_claim_not_reported(value):
             reason = value.get('reason') if isinstance(value, dict) else ''
-            signature.append(f'notReported:{_normalize_manual_evidence(reason)}')
+            normalized_field_values.append(f'notReported:{_normalize_manual_evidence(reason)}')
         else:
-            signature.append(
+            normalized_field_values.append(
                 f'{_manual_normalized_semantic_text(value)}:'
                 f'{",".join(_manual_numeric_lexemes(value))}'
             )
-    return json.dumps(signature, ensure_ascii=False, separators=(',', ':'))
+    return json.dumps(normalized_field_values, ensure_ascii=False, separators=(',', ':'))
 
 
 def _manual_reader_result_evidence_blocks(value):
@@ -2218,7 +2218,7 @@ def _validate_manual_v4_result_claims(
     )
     reader_results = _extract_analysis_section(analysis, reader_section)
     reader_blocks = _manual_reader_result_evidence_blocks(reader_results)
-    signatures = {}
+    claim_index_by_key = {}
     numeric_claim_count = 0
     for index, claim in enumerate(claims):
         if not isinstance(claim, dict):
@@ -2289,13 +2289,13 @@ def _validate_manual_v4_result_claims(
                 f'{prefix}.readerBindings '
                 f'未共同落在读者正文{reader_section}的同一局部证据块'
             )
-        signature = _manual_result_claim_signature(claim)
-        if signature in signatures:
+        claim_key = _manual_result_claim_dedup_key(claim)
+        if claim_key in claim_index_by_key:
             raise PublishDataValidationError(
-                f'{prefix} 与 resultClaims[{signatures[signature]}] 重复，'
+                f'{prefix} 与 resultClaims[{claim_index_by_key[claim_key]}] 重复，'
                 '不能重复计入最低条数'
             )
-        signatures[signature] = index
+        claim_index_by_key[claim_key] = index
     empirical = exception is None and not re.search(
         r'(?:理论|定性|theor|qualitative)', document_type, re.I,
     )

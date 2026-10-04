@@ -80,6 +80,136 @@ test('durable intent/output, analysis installation and run SHA interruption reco
     }
 });
 
+test('archived operator output recovers unchanged when the current implementation SHA differs', async t => {
+    const f = setup(t);
+    const originalFetch = global.fetch;
+    let fetchCalls = 0;
+    global.fetch = async () => { fetchCalls++; throw new Error('no network is authorized'); };
+    try {
+        await assert.rejects(f.apply({ afterOutput: () => { throw new Error('stop after archived output'); } }),
+            { message: 'stop after archived output' });
+        const patchSha256 = runner.sha256(fs.readFileSync(f.patchFile));
+        const archive = path.join(f.runDir, 'patches', 'signed-operator-archive', patchSha256);
+        const outputPath = path.join(archive, 'output.json');
+        const outputBytes = fs.readFileSync(outputPath);
+        const intentBytes = fs.readFileSync(path.join(archive, 'intent.json'));
+        const output = JSON.parse(outputBytes), intent = JSON.parse(intentBytes);
+        assert.equal(runner.stableHash(output), intent.outputSha256);
+        assert.equal(output.paperSha256, runner.stableHash(output.paper));
+        assert.equal(engine.apiReaderV3BindsCanonical(output.paper), true);
+        assert.equal(f.read('analysis').status, 'complete');
+        assert.equal(f.read('run').status, 'complete');
+
+        const operatorPath = require.resolve('../scripts/lib/reader-signed-operator.js');
+        const originalRead = fs.readFileSync;
+        const originalBytes = originalRead(operatorPath);
+        const changedBytes = Buffer.concat([originalBytes, Buffer.from('\n// Offline fixture: changed implementation bytes.\n')]);
+        assert.equal(output.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(originalBytes));
+        let sourceReads = 0;
+        fs.readFileSync = function(filename, options) {
+            if (filename !== operatorPath) return originalRead.apply(this, arguments);
+            sourceReads++;
+            const encoding = typeof options === 'string' ? options : options?.encoding;
+            return encoding ? changedBytes.toString(encoding) : Buffer.from(changedBytes);
+        };
+        try {
+            const currentImplementationSha256 = runner.sha256(fs.readFileSync(operatorPath));
+            assert.notEqual(currentImplementationSha256, output.provenance.implementationIdentity['reader-signed-operator.js']);
+            const result = await f.apply();
+            assert.equal(result.status, 'fact_review_pending');
+            assert.equal(result.newApiRequests, 0);
+            assert.equal(result.paperSha256, output.paperSha256);
+            assert.equal(runner.stableHash(f.read('analysis').papers[0]), output.paperSha256);
+            assert.equal(engine.apiReaderV3BindsCanonical(f.read('analysis').papers[0]), true);
+            assert.equal(f.read('run').analysisSha256, runner.readRegularJson(path.join(f.runDir, 'analysis.json')).sha256);
+            assert.deepEqual(fs.readFileSync(outputPath), outputBytes);
+            assert.deepEqual(fs.readFileSync(path.join(archive, 'intent.json')), intentBytes);
+            assert(sourceReads > 0);
+        } finally {
+            fs.readFileSync = originalRead;
+        }
+        assert.equal(fetchCalls, 0);
+    } finally {
+        global.fetch = originalFetch;
+    }
+});
+
+test('an operator intent without output rejects only the changed output SHA and recovers with the original implementation', async t => {
+    const f = setup(t);
+    const originalFetch = global.fetch;
+    let fetchCalls = 0;
+    global.fetch = async () => { fetchCalls++; throw new Error('no network is authorized'); };
+    try {
+        await assert.rejects(f.apply({ afterIntent: () => { throw new Error('stop after durable intent'); } }),
+            { message: 'stop after durable intent' });
+        const patchBytes = fs.readFileSync(f.patchFile), patchSha256 = runner.sha256(patchBytes);
+        const archive = path.join(f.runDir, 'patches', 'signed-operator-archive', patchSha256);
+        const outputPath = path.join(archive, 'output.json');
+        assert.equal(fs.existsSync(outputPath), false);
+        const paths = [path.join(f.runDir, 'analysis.json'), path.join(f.runDir, 'run.json'), f.patchFile,
+            ...['before.json', 'request.json', 'intent.json'].map(name => path.join(archive, name))];
+        const originalFiles = new Map(paths.map(filename => [filename, fs.readFileSync(filename)]));
+        const before = JSON.parse(originalFiles.get(path.join(archive, 'before.json')));
+        const request = JSON.parse(originalFiles.get(path.join(archive, 'request.json')));
+        const intent = JSON.parse(originalFiles.get(path.join(archive, 'intent.json')));
+        const run = f.reload().run;
+        assert.equal(intent.patchFileSha256, patchSha256);
+        assert.equal(runner.sha256(originalFiles.get(path.join(archive, 'request.json'))), patchSha256);
+        assert.equal(intent.parentPaperSha256, request.parentPaperSha256);
+        assert.equal(intent.runIdentitySha256, run.identitySha256);
+        assert.equal(intent.sourceSnapshotSha256, f.sourceDetails.freshSourceDescriptor.sourceSnapshotSha256);
+        assert.equal(runner.stableHash(before), request.parentPaperSha256);
+        assert.equal(before.apiReaderArticleSha256, request.parentArticleSha256);
+        assert.equal(before.apiReaderPlanSha256, request.parentPlanSha256);
+        assert.equal(before.sourceSha256, request.sourceSha256);
+
+        const operatorPath = require.resolve('../scripts/lib/reader-signed-operator.js');
+        const originalRead = fs.readFileSync;
+        const originalBytes = originalRead(operatorPath);
+        const changedBytes = Buffer.concat([originalBytes, Buffer.from('\n// Offline fixture: changed implementation bytes.\n')]);
+        let sourceReads = 0;
+        fs.readFileSync = function(filename, options) {
+            if (filename !== operatorPath) return originalRead.apply(this, arguments);
+            sourceReads++;
+            const encoding = typeof options === 'string' ? options : options?.encoding;
+            return encoding ? changedBytes.toString(encoding) : Buffer.from(changedBytes);
+        };
+        try {
+            const candidate = await prepareSignedReaderOperatorResult({ parent: before, sourceDetails: f.sourceDetails,
+                run, request, patchFileSha256: patchSha256, appliedAt: intent.appliedAt });
+            assert.equal(candidate.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(changedBytes));
+            assert.notEqual(candidate.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(originalBytes));
+            assert.equal(candidate.contract, 'reader-signed-operator-v1');
+            assert.equal(intent.contract, candidate.contract);
+            assert.equal(candidate.paperSha256, runner.stableHash(candidate.paper));
+            assert.equal(candidate.provenance.parentPaperSha256, request.parentPaperSha256);
+            assert.equal(candidate.provenance.patchFileSha256, patchSha256);
+            assert.equal(candidate.provenance.sourceSnapshotSha256, f.sourceDetails.freshSourceDescriptor.sourceSnapshotSha256);
+            assert.equal(candidate.provenance.appliedAt, intent.appliedAt);
+            assert.equal(engine.apiReaderV3BindsCanonical(candidate.paper), true);
+            assert.notEqual(runner.stableHash(candidate), intent.outputSha256);
+            await assert.rejects(f.apply(), { message: 'Signed operator durable output drift' });
+            for (const [filename, bytes] of originalFiles) assert.deepEqual(fs.readFileSync(filename), bytes);
+            assert.equal(fs.existsSync(outputPath), false);
+            assert(sourceReads >= 2);
+        } finally {
+            fs.readFileSync = originalRead;
+        }
+        const result = await f.apply();
+        const restoredOutput = JSON.parse(fs.readFileSync(outputPath));
+        assert.equal(result.status, 'fact_review_pending');
+        assert.equal(result.newApiRequests, 0);
+        assert.equal(runner.stableHash(restoredOutput), intent.outputSha256);
+        assert.equal(restoredOutput.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(originalBytes));
+        assert.equal(engine.apiReaderV3BindsCanonical(f.read('analysis').papers[0]), true);
+        assert.equal(f.read('run').analysisSha256, runner.readRegularJson(path.join(f.runDir, 'analysis.json')).sha256);
+        for (const filename of paths.slice(2)) assert.deepEqual(fs.readFileSync(filename), originalFiles.get(filename));
+        assert.equal(fetchCalls, 0);
+    } finally {
+        global.fetch = originalFetch;
+    }
+});
+
 test('stale parent, invalid source/draft/node, append and production gate failures leave analysis and archives unchanged',async t=>{
     for(const mutate of [f=>{f.request.parentPaperSha256='0'.repeat(64);},
         f=>{f.request.sourceSha256='0'.repeat(64);},f=>{f.request.patch.draftSha256='0'.repeat(64);},

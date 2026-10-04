@@ -31,7 +31,7 @@ function checkParent(parent, request) {
         || parent.sourceSha256 !== request.sourceSha256) throw new Error('Signed operator parent full-paper CAS mismatch');
 }
 
-function implementationIdentity() {
+function readerOperatorImplementationHashes() {
     return Object.fromEntries(['reader-signed-operator.js', 'reader-signed-draft.js', 'reader-repair.js']
         .map(name => [name, sha(fs.readFileSync(path.join(__dirname, name)))]));
 }
@@ -39,19 +39,19 @@ function implementationIdentity() {
 async function prepareSignedReaderOperatorResult({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }) {
     validateSignedOperatorRequest(request, run); checkParent(parent, request);
     if (!validSha(patchFileSha256) || !Number.isFinite(Date.parse(appliedAt))) throw new Error('Invalid operator execution audit');
-    const inverse = recoverSignedReaderDraft({ paper: parent, sourceDetails, runId: run.runId });
+    const draftRecovery = recoverSignedReaderDraft({ paper: parent, sourceDetails, runId: run.runId });
     const allowedPaths = request.patch.replacements.map(item => item?.path).filter(pointer =>
         /^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?$/.test(pointer || ''));
-    const draft = repair.applyReaderPatch(inverse.draft, request.patch, allowedPaths,
+    const draft = repair.applyReaderPatch(draftRecovery.draft, request.patch, allowedPaths,
         { availableFigureOrdinals: parent.apiReaderFigures.map(figure => figure.ordinal) });
-    if (repair.hashDraft(draft) === inverse.proof.draftSha256) throw new Error('Signed operator patch must change an existing node');
+    if (repair.hashDraft(draft) === draftRecovery.proof.draftSha256) throw new Error('Signed operator patch must change an existing node');
     const deep = require('../deep-analyzer.js');
     const provenance = { contract: CONTRACT, executionKind: 'operator', runId: run.runId,
         paperId: request.paperId, parentPaperSha256: request.parentPaperSha256,
         parentArticleSha256: request.parentArticleSha256, parentPlanSha256: request.parentPlanSha256,
-        sourceSha256: request.sourceSha256, sourceSnapshotSha256: inverse.proof.sourceSnapshotSha256,
-        patchFileSha256, beforeDraftSha256: inverse.proof.draftSha256, afterDraftSha256: repair.hashDraft(draft),
-        reason: request.reason, appliedAt, implementationIdentity: implementationIdentity(),
+        sourceSha256: request.sourceSha256, sourceSnapshotSha256: draftRecovery.proof.sourceSnapshotSha256,
+        patchFileSha256, beforeDraftSha256: draftRecovery.proof.draftSha256, afterDraftSha256: repair.hashDraft(draft),
+        reason: request.reason, appliedAt, implementationIdentity: readerOperatorImplementationHashes(),
         deepFinalizerSha256: sha(fs.readFileSync(path.join(__dirname, '../deep-analyzer.js'))),
         newApiRequests: 0, requiresFactReview: true };
     const paper = await deep.finalizeOperatorApiReaderArticleFromSource(

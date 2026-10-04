@@ -2747,16 +2747,16 @@ def build_taxonomy_registry_snapshot(taxonomy=None):
     registry aliases (e.g. 说话人日志 → task.diarization) without ever
     re-deriving taxonomy semantics client-side.
     """
-    data = _PAGE_TAXONOMY if taxonomy is None else taxonomy
-    if not isinstance(data, dict):
+    registry = _PAGE_TAXONOMY if taxonomy is None else taxonomy
+    if not isinstance(registry, dict):
         raise PublishDataValidationError('taxonomy registry 快照输入非法')
-    registry_sha256 = data.get('registrySha256')
+    registry_sha256 = registry.get('registrySha256')
     if not isinstance(registry_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', registry_sha256):
         raise PublishDataValidationError('taxonomy registry 快照缺少有效 registrySha256')
-    registry_version = data.get('version')
+    registry_version = registry.get('version')
     if not isinstance(registry_version, str) or not registry_version:
         raise PublishDataValidationError('taxonomy registry 快照缺少 registryVersion')
-    concepts = data.get('concepts')
+    concepts = registry.get('concepts')
     if not isinstance(concepts, list) or not concepts:
         raise PublishDataValidationError('taxonomy registry 快照缺少 concepts')
     records = {}
@@ -4014,7 +4014,7 @@ def _modern_api_reader_projection(paper, payload=None):
         lines.append('本次未形成可展示的已核验资源记录，开放状态尚未核实。')
     lines.append('可达状态仅表示本次链接检查结果，不代表许可证、本文权重或运行复现已验证。')
     parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
-    ledger = ['评分属于系统判断，不是论文实验结果；八维数值与总分见页首，原始审计记录保留在后端。']
+    scoring_note_lines = ['评分属于系统判断，不是论文实验结果；八维数值与总分见页首，原始审计记录保留在后端。']
     stages = (paper.get('analysisManifest') or {}).get('stages') or {}
     scoring = stages.get('scoringAudit') or {}
     for label, value in (
@@ -4022,7 +4022,7 @@ def _modern_api_reader_projection(paper, payload=None):
             ('评分模型', scoring.get('model')), ('评分请求协议', scoring.get('protocol'))):
         if isinstance(value, str) and value.strip():
             safe_value = html.escape(re.sub(r'\s+', ' ', value.strip()))
-            ledger.append(f'- {label}：{safe_value}')
+            scoring_note_lines.append(f'- {label}：{safe_value}')
     detailed_summary = _sealed_detailed_core_summary(paper, parsed)
     visible_summary = detailed_summary or payload['plan']['oneSentenceThesis'].strip()
     # Preserve the sealed source summary while repairing this exact duplicated
@@ -4034,7 +4034,7 @@ def _modern_api_reader_projection(paper, payload=None):
     return {
         'summary': visible_summary,
         'opensource': '\n\n'.join(lines),
-        'scoringReason': '\n\n'.join(ledger),
+        'scoringReason': '\n\n'.join(scoring_note_lines),
     }
 
 
@@ -6797,7 +6797,7 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     seen_near = []
     near_duplicate_count = 0
 
-    def factual_guard_signature(text):
+    def extract_number_url_negation_tokens(text):
         """Keep tiny but material factual differences out of fuzzy deletion."""
         numbers = tuple(re.findall(r'(?<![A-Za-z])[-+]?\d+(?:\.\d+)?%?', text))
         urls = tuple(re.findall(r'https?://\S+', text, flags=re.IGNORECASE))
@@ -6823,12 +6823,12 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
             continue
         fingerprint = unicodedata.normalize('NFKC', normalized).casefold()
         duplicate = any(
-            factual_guard_signature(fingerprint) == previous_signature
+            extract_number_url_negation_tokens(fingerprint) == previous_fact_tokens
             and min(len(fingerprint), len(previous)) / max(len(fingerprint), len(previous)) >= 0.9
             and difflib.SequenceMatcher(
                 None, fingerprint, previous, autojunk=False,
             ).ratio() >= 0.97
-            for previous, previous_signature in seen_near
+            for previous, previous_fact_tokens in seen_near
         )
         if duplicate:
             blocks[index] = ''
@@ -6836,7 +6836,7 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
                 blocks[index + 1] = ''
             near_duplicate_count += 1
         else:
-            seen_near.append((fingerprint, factual_guard_signature(fingerprint)))
+            seen_near.append((fingerprint, extract_number_url_negation_tokens(fingerprint)))
     if near_duplicate_count:
         content = prose_prefix + ''.join(blocks)
         issues.append(f"发现并删除 {near_duplicate_count} 个近重复长正文段落")
@@ -7146,14 +7146,14 @@ def build_generation_input_source_reference(data_file):
         raise PublishDataValidationError('generation 输入文件不能是符号链接')
     if not stat.S_ISREG(entry.st_mode):
         raise PublishDataValidationError('generation 输入必须是普通 JSON 文件')
-    canonical = candidate.resolve()
-    payload = canonical.read_bytes()
+    resolved_input_path = candidate.resolve()
+    input_file_bytes = resolved_input_path.read_bytes()
     return {
         'contract': GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT,
         'version': 1,
-        'path': str(canonical),
-        'sha256': hashlib.sha256(payload).hexdigest(),
-        'bytes': len(payload),
+        'path': str(resolved_input_path),
+        'sha256': hashlib.sha256(input_file_bytes).hexdigest(),
+        'bytes': len(input_file_bytes),
     }
 
 

@@ -78,17 +78,17 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     const sourceDetails = validateSource(identity.sourceDetails, id);
     // Source-scope unit tests may supply a snapshot hash to exercise nested
     // Reader paths. Only a run ID activates a persistence-capable proof.
-    const hasSealedProvenance = identity.runId !== undefined;
-    if (hasSealedProvenance && (!UUID.test(String(identity.runId || '')) || !SHA.test(String(identity.sourceSha256 || ''))
+    const hasRunId = identity.runId !== undefined;
+    if (hasRunId && (!UUID.test(String(identity.runId || '')) || !SHA.test(String(identity.sourceSha256 || ''))
         || !SHA.test(String(identity.structuredArtifactsSha256 || ''))
         || !SHA.test(String(identity.sourceSnapshotSha256 || '')))) {
         fail('sealed direct source provenance is incomplete');
     }
-    if (hasSealedProvenance && (sha256(sourceDetails.text) !== identity.sourceSha256
+    if (hasRunId && (sha256(sourceDetails.text) !== identity.sourceSha256
         || sourceDetails.structuredArtifacts?.payloadSha256 !== identity.structuredArtifactsSha256)) {
         fail('direct source provenance does not bind its supplied text/artifacts');
     }
-    if (hasSealedProvenance && identity.route === 'arxiv-fresh-fetch'
+    if (hasRunId && identity.route === 'arxiv-fresh-fetch'
         && (!Number.isSafeInteger(identity.sourceGeneration) || identity.sourceGeneration < 1
             || !SHA.test(String(identity.sourceManifestSha256 || '')))) {
         fail('arXiv direct source provenance lacks its sealed generation/manifest');
@@ -139,7 +139,7 @@ function withDirectRewriteAnalysisSource(identity, callback) {
         // strips them before every JSON persistence boundary.
         supplementaryReaderImages: Object.freeze(supplementaryImages.map(image => Object.freeze({ ...image, rawBytes: Buffer.from(image.rawBytes) }))),
         sourceSnapshotSha256: String(identity.sourceSnapshotSha256 || ''),
-        ...(hasSealedProvenance ? { runId: identity.runId, sourceSha256: identity.sourceSha256,
+        ...(hasRunId ? { runId: identity.runId, sourceSha256: identity.sourceSha256,
             structuredArtifactsSha256: identity.structuredArtifactsSha256,
             ...(identity.route === 'arxiv-fresh-fetch' ? { sourceGeneration: identity.sourceGeneration,
                 sourceManifestSha256: identity.sourceManifestSha256,

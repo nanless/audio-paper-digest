@@ -52,7 +52,7 @@ function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
     const plan = paper.apiReaderPlan;
     if (!['sections', 'conceptBridges', 'figurePlacements', 'formulaBindings', 'tableBindings']
         .every(key => Array.isArray(plan[key]))) fail('signed plan lacks inverse schema arrays');
-    let view = apiReaderPreInjectionQualityView(paper.apiReaderArticle, plan, paper.apiReaderFigures);
+    let articleWithMarkers = apiReaderPreInjectionQualityView(paper.apiReaderArticle, plan, paper.apiReaderFigures);
     const bridges = plan.conceptBridges.map((bridge, index) => {
         // The parser signs the canonical plan after applying the same surface
         // normalization to terms that it applies to the assembled article
@@ -71,13 +71,13 @@ function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
             : rawPrefix;
         if (bridge.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
             || typeof bridge.explanation !== 'string' || !bridge.explanation.startsWith(prefix)
-            || view.split(bridge.explanation).length !== 2
-            || !view.split('\n\n').includes(bridge.explanation)) fail(`bridge ${index} lacks a unique exact paragraph/prefix`);
+            || articleWithMarkers.split(bridge.explanation).length !== 2
+            || !articleWithMarkers.split('\n\n').includes(bridge.explanation)) fail(`bridge ${index} lacks a unique exact paragraph/prefix`);
         const remainder = bridge.explanation.slice(prefix.length);
         const hasSingleSpace = remainder.startsWith(' ');
         const body = hasSingleSpace ? remainder.slice(1) : remainder;
         if (!body || /^\s/.test(body)) fail(`bridge ${index} has ambiguous prefix spacing`);
-        view = view.replace(bridge.explanation, bridge.marker);
+        articleWithMarkers = articleWithMarkers.replace(bridge.explanation, bridge.marker);
         // The assembler adds one heading plus a space. A historical no-space
         // signed bridge can only round-trip by retaining its exact heading:
         // production's existing duplicate-heading collapse then retains the
@@ -86,15 +86,15 @@ function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
         return { ...pick(bridge, ['terms', 'sectionKind', 'marker']),
             explanation: hasSingleSpace ? body : bridge.explanation };
     });
-    const headings = [...view.matchAll(/^### ([^\n]+)\n\n/gm)];
+    const headings = [...articleWithMarkers.matchAll(/^### ([^\n]+)\n\n/gm)];
     if (!Array.isArray(plan.sections) || headings.length !== plan.sections.length || headings[0]?.index !== 0
         || new Set(plan.sections.map(section => section.heading)).size !== plan.sections.length) fail('section headings are not unique/exact');
     const sections = plan.sections.map((section, index) => {
         if (headings[index][1] !== section.heading) fail(`section ${index} heading differs`);
         const start = headings[index].index + headings[index][0].length;
-        const end = index + 1 < headings.length ? headings[index + 1].index - 2 : view.length;
-        if (index + 1 < headings.length && view.slice(end, end + 2) !== '\n\n') fail('section boundary differs');
-        const body = view.slice(start, end);
+        const end = index + 1 < headings.length ? headings[index + 1].index - 2 : articleWithMarkers.length;
+        if (index + 1 < headings.length && articleWithMarkers.slice(end, end + 2) !== '\n\n') fail('section boundary differs');
+        const body = articleWithMarkers.slice(start, end);
         if (body !== body.trim()) fail(`section ${index} body is not exact canonical spacing`);
         return { ...pick(section, ['kind', 'heading']), body };
     });

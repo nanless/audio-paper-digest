@@ -1438,17 +1438,17 @@ function normalizeIssueBoundReaderTechnicalTermAdhesions(candidate, issues = [])
 // remain byte-identical.
 function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
     if (!candidate || !Array.isArray(candidate.sections)) return false;
-    const surfaces = new Set();
+    const reportedNumericFragments = new Set();
     for (const issue of Array.isArray(issues) ? issues : []) {
         if (issue?.code === 'numeric_typography' && typeof issue.match === 'string') {
-            surfaces.add(issue.match.trim());
+            reportedNumericFragments.add(issue.match.trim());
         }
         for (const match of String(issue?.message || '')
             .matchAll(/numeric_typography:([^；\n]+)/gu)) {
-            if (match[1].trim()) surfaces.add(match[1].trim());
+            if (match[1].trim()) reportedNumericFragments.add(match[1].trim());
         }
     }
-    if (surfaces.size === 0) return false;
+    if (reportedNumericFragments.size === 0) return false;
     const selectedTableIndexes = new Set(
         (Array.isArray(candidate.tableBindings) ? candidate.tableBindings : [])
             .filter(binding => binding && binding.selection)
@@ -1481,9 +1481,9 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
                 return line;
             }
             let updated = line;
-            for (const surface of surfaces) {
-                if (!updated.includes(surface)) continue;
-                const escaped = surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            for (const numericFragment of reportedNumericFragments) {
+                if (!updated.includes(numericFragment)) continue;
+                const escaped = numericFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 updated = updated.replace(new RegExp(escaped, 'gu'), (match, offset, whole) => {
                     let result = match
                         .replace(/([\p{Script=Han}])(?=\d)/gu, '$1 ')
@@ -5987,7 +5987,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 + `, markerBound=${Boolean(candidate)}, markerOccurrences=${markerOccurrences}；已有marker必须唯一独占一段且位于声明小节）`
             );
         }
-        const exactSignedSurface = Array.isArray(options.exactSignedBridgeSurfaces)
+        const exactBridgeParagraph = Array.isArray(options.exactSignedBridgeSurfaces)
             && typeof options.exactSignedBridgeSurfaces[index] === 'string'
             ? options.exactSignedBridgeSurfaces[index]
             : null;
@@ -5995,7 +5995,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
             terms: bridge.terms.map(term => normalizeReaderEditorialSurface(term.trim())),
             sectionKind: bridge.sectionKind,
             marker,
-            explanation: exactSignedSurface || collapseRepeatedReaderBridgeHeadings(
+            explanation: exactBridgeParagraph || collapseRepeatedReaderBridgeHeadings(
                 normalizeReaderEditorialSurface(
                     `**${bridge.terms[0].trim()} × ${bridge.terms[1].trim()}：** ${explanation}`
                 )
@@ -6114,17 +6114,17 @@ function parseApiReaderArticleResult(raw, options = {}) {
         }
         article = article.replace(bridge.marker, bridge.explanation);
     }
-    const exactSignedSurfaces = Array.isArray(options.exactSignedBridgeSurfaces)
+    const exactBridgeParagraphs = Array.isArray(options.exactSignedBridgeSurfaces)
         ? options.exactSignedBridgeSurfaces.filter(value => typeof value === 'string' && value.length > 0)
         : [];
-    const protectedSignedSurfaces = [];
-    for (const surface of exactSignedSurfaces) {
-        const token = `__PD_SIGNED_BRIDGE_SURFACE_${protectedSignedSurfaces.length}__`;
-        if (article.split(surface).length !== 2) {
+    const protectedBridgeParagraphs = [];
+    for (const bridgeParagraph of exactBridgeParagraphs) {
+        const token = `__PD_SIGNED_BRIDGE_SURFACE_${protectedBridgeParagraphs.length}__`;
+        if (article.split(bridgeParagraph).length !== 2) {
             throw new Error('signed Reader bridge surface is not unique in assembled article');
         }
-        article = article.replace(surface, token);
-        protectedSignedSurfaces.push({ token, surface });
+        article = article.replace(bridgeParagraph, token);
+        protectedBridgeParagraphs.push({ token, surface: bridgeParagraph });
     }
     article = relocateExplicitReaderTableExplanations(ensureApiReaderTableNarratives(
         normalizeApiReaderTableBlockSpacing(
@@ -6135,11 +6135,11 @@ function parseApiReaderArticleResult(raw, options = {}) {
     ));
     article = normalizeReaderWorkflowLeakageSurface(article);
     article = normalizeReaderFigureMetricUnits(article);
-    for (const { token, surface } of protectedSignedSurfaces) {
+    for (const { token, surface: bridgeParagraph } of protectedBridgeParagraphs) {
         if (article.split(token).length !== 2) {
             throw new Error('signed Reader bridge surface was altered during normalization');
         }
-        article = article.replace(token, surface);
+        article = article.replace(token, bridgeParagraph);
     }
     const chineseChars = (article.match(/[\u3400-\u9fff]/g) || []).length;
     const minimumChineseChars = requirements.minimumChineseChars;
@@ -6153,9 +6153,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
     // Only the authoritative source definition permits that domain term;
     // numbered workflow blocks and actual instructions remain forbidden.
     const sourceDefinesEvidenceBlock = /structured evidence block\s*\(value,\s*comparison,\s*difference,\s*direction\s+per measurement\)/i.test(String(options.sourceText || ''));
-    const workflowSurface = sourceDefinesEvidenceBlock
+    const workflowCheckText = sourceDefinesEvidenceBlock
         ? article.replace(/证据块/g, '声学记录') : article;
-    const workflowLeak = /(?:evidence\s*id|manual_complete|证据块|代码校验反馈|图后解释(?:需要|必须|紧扣)|不擅自断言|按反馈重写|(?:本|上述|当前|这个)\s*prompt|(?:根据|遵循)\s*(?:本|上述|当前)?\s*prompt|prompt\s*(?:要求|指令|中要求))/i.exec(workflowSurface)
+    const workflowLeak = /(?:evidence\s*id|manual_complete|证据块|代码校验反馈|图后解释(?:需要|必须|紧扣)|不擅自断言|按反馈重写|(?:本|上述|当前|这个)\s*prompt|(?:根据|遵循)\s*(?:本|上述|当前)?\s*prompt|prompt\s*(?:要求|指令|中要求))/i.exec(workflowCheckText)
         || /(?:第\s*(?:\d+|[一二三四五六七八九十]+)\s*个证据块|证据块\s*\d+\s*[：:])/.exec(article);
     if (workflowLeak) {
         throw new Error(`读者文章泄漏了流程或证据元话语：${workflowLeak[0]}`);
@@ -6366,7 +6366,7 @@ function removeDuplicateReaderLongSentences(article) {
 }
 
 function apiReaderPreInjectionQualityView(article, plan, figures = []) {
-    let view = String(article || '');
+    let articleWithMarkers = String(article || '');
     for (const figure of figures) {
         const placement = (plan.figurePlacements || []).find(item => item.figureOrdinal === figure.ordinal);
         if (!placement || typeof placement.marker !== 'string') {
@@ -6379,21 +6379,21 @@ function apiReaderPreInjectionQualityView(article, plan, figures = []) {
             `![${sanitizeMarkdownImageAlt(readerFigureAlt(figure))}](${figure.url})`,
             `*论文图 ${figure.ordinal}。${readerFigureNarrative(figure)}*`
         ].filter(Boolean).join('\n\n');
-        if (view.split(block).length !== 2) {
+        if (articleWithMarkers.split(block).length !== 2) {
             throw new Error(`Reader 文风统计视图无法精确重放 Figure ${figure.ordinal} 注入块`);
         }
-        view = view.replace(block, placement.marker);
+        articleWithMarkers = articleWithMarkers.replace(block, placement.marker);
     }
     for (const binding of plan.formulaBindings || []) {
         const block = `\\[${String(binding.latex || '').trim()}\\]`;
         if (typeof binding.marker !== 'string'
             || crypto.createHash('sha256').update(block).digest('hex') !== binding.renderedBlockSha256
-            || view.split(block).length !== 2) {
+            || articleWithMarkers.split(block).length !== 2) {
             throw new Error('Reader 文风统计视图无法精确重放公式注入块');
         }
-        view = view.replace(block, binding.marker);
+        articleWithMarkers = articleWithMarkers.replace(block, binding.marker);
     }
-    return view;
+    return articleWithMarkers;
 }
 
 function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
