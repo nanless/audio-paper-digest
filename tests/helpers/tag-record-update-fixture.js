@@ -12,7 +12,7 @@ const crypto = require('node:crypto');
 const { validAnalysisText } = require('../valid-analysis-fixture.js');
 const contract = require('../../scripts/analysis-contract.js');
 const { parseAnalysis } = require('../../scripts/utils.js');
-const { createTagRules } = require('../../scripts/lib/tag-rules.js');
+const { createTagRules, LEGACY_TAG_PROMPT_TEXT_CONTRACT } = require('../../scripts/lib/tag-rules.js');
 const registryChange = require('../../scripts/lib/tag-catalog-change.js');
 const tagCatalogApi = require('../../scripts/lib/tag-catalog.js');
 const resealApi = require('../../scripts/lib/tag-record-update.js');
@@ -56,7 +56,8 @@ function analysisRecord(options = {}) {
     const binding = {
         registryVersion: current.registryVersion,
         registrySha256,
-        projectionContract: current.projectionContract,
+        projectionContract: options.projectionContract ?? (registrySha256 !== current.registrySha256
+            ? LEGACY_TAG_PROMPT_TEXT_CONTRACT : current.projectionContract),
         projectionSha256,
         selectionContract: current.selectionContract,
         inputAnalysisSha256: textSha(text),

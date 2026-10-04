@@ -11,7 +11,8 @@ FACET_IDS = ('task', 'method', 'setting', 'signal', 'application',
 LABEL_MODE_CURRENT = 'current'
 LABEL_MODE_LEGACY = 'legacy'
 LABEL_MODES = (LABEL_MODE_CURRENT, LABEL_MODE_LEGACY)
-TAG_PROMPT_TEXT_CONTRACT = 'paper-taxonomy-prompt-projection-v1'
+TAG_PROMPT_TEXT_CONTRACT = 'paper-tag-prompt-text-v2'
+LEGACY_TAG_PROMPT_TEXT_CONTRACT = 'paper-taxonomy-prompt-projection-v1'
 TAG_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1'
 TAG_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
 CONCEPT_KEYS = {'id', 'facet', 'preferredLabel', 'aliases', 'broaderId',
@@ -167,8 +168,11 @@ def active_preferred_labels(tag_catalog, facets=None):
     return labels
 
 
-def build_tag_prompt_text(tag_catalog):
-    """按与 Node 相同的规则生成精简标签提示文本。"""
+def build_tag_prompt_text(tag_catalog, prompt_text_contract=TAG_PROMPT_TEXT_CONTRACT):
+    """按指定版本生成标签提示；默认用于新请求，旧版只供明确的旧记录核验。"""
+    if not isinstance(prompt_text_contract, str) or prompt_text_contract not in (
+            LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT):
+        raise ValueError('标签提示文本的版本不受支持。')
     data = _registry_data(tag_catalog)
     registry_sha = tag_catalog.get('registrySha256')
     if not isinstance(registry_sha, str) or not re.fullmatch(r'[a-f0-9]{64}', registry_sha):
@@ -179,10 +183,12 @@ def build_tag_prompt_text(tag_catalog):
         key=lambda concept: (facet_order[concept['facet']], concept['id']),
     )
     lines = [
-        f'contract={TAG_PROMPT_TEXT_CONTRACT}',
+        f'contract={prompt_text_contract}',
         f'registry_version={data["version"]}',
         f'registry_sha256={registry_sha}',
-        '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。',
+        ('只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。'
+         if prompt_text_contract == LEGACY_TAG_PROMPT_TEXT_CONTRACT else
+         '只能选择以下已启用概念的中文首选标签。ID 用于区分概念；不要创建新标签，也不要改用同义词。'),
     ]
     current_facet = None
     for concept in active:
@@ -198,8 +204,9 @@ def build_tag_prompt_text(tag_catalog):
     return '\n'.join(lines) + '\n'
 
 
-def tag_prompt_text_sha256(tag_catalog):
-    return hashlib.sha256(build_tag_prompt_text(tag_catalog).encode('utf-8')).hexdigest()
+def tag_prompt_text_sha256(tag_catalog, prompt_text_contract=TAG_PROMPT_TEXT_CONTRACT):
+    return hashlib.sha256(build_tag_prompt_text(
+        tag_catalog, prompt_text_contract).encode('utf-8')).hexdigest()
 
 
 def resolve_label_candidates(tag_catalog, label, facet=None, *, mode=LABEL_MODE_LEGACY):

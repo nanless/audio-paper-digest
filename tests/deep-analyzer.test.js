@@ -73,6 +73,66 @@ describe('taxonomy runtime analysis integration', () => {
             'method.crowdsourced-evaluation');
     });
 
+    it('v1 提示的完整检查点按原恢复规则在默认 v2 下失效', () => {
+        const deepPath = require.resolve('../scripts/deep-analyzer.js');
+        const current = require(deepPath);
+        const rules = require('../scripts/lib/tag-rules.js');
+        const runtime = rules.getDefaultTagRules();
+        const projection = rules.buildTagPromptText(runtime.tagCatalog, rules.LEGACY_TAG_PROMPT_TEXT_CONTRACT);
+        const legacyRuntime = Object.freeze({ ...runtime, projection,
+            projectionContract: rules.LEGACY_TAG_PROMPT_TEXT_CONTRACT,
+            projectionSha256: crypto.createHash('sha256').update(projection).digest('hex') });
+        const paperInput = { arxivId: '2608.13817', title: 'Same source', authors: [], categories: [] };
+        const analysis = validAnalysisText();
+        const source = '同一份论文全文证据';
+        const originalDefault = rules.getDefaultTagRules;
+        const cachedModule = require.cache[deepPath];
+        let legacyPrimary;
+        let legacyRevision;
+        try {
+            rules.getDefaultTagRules = () => legacyRuntime;
+            delete require.cache[deepPath];
+            const legacyContext = require(deepPath);
+            legacyPrimary = legacyContext.buildRecoveryFingerprints(paperInput, source, paperInput.arxivId).primaryAnalysis;
+            const evidence = legacyContext.buildStageEvidenceContext('revision', analysis, source);
+            legacyRevision = legacyContext.buildTextStageFingerprint('revision', analysis, evidence);
+        } finally {
+            rules.getDefaultTagRules = originalDefault;
+            require.cache[deepPath] = cachedModule;
+        }
+        const currentPrimary = current.buildRecoveryFingerprints(paperInput, source, paperInput.arxivId).primaryAnalysis;
+        assert.notStrictEqual(currentPrimary, legacyPrimary);
+        const primaryPaper = { ...paperInput };
+        const primaryManifest = { version: 1, stages: {
+            primaryAnalysis: { status: 'complete', fingerprint: legacyPrimary },
+            revision: { status: 'complete', fingerprint: legacyRevision }
+        } };
+        current.saveAnalysisCheckpoint(primaryPaper, analysis, primaryManifest);
+        assert.strictEqual(current.invalidateRecoveryStageIfChanged(primaryPaper, primaryManifest,
+            'primaryAnalysis', currentPrimary), true);
+        assert.strictEqual(primaryManifest.stages.primaryAnalysis, undefined);
+        assert.strictEqual(primaryManifest.stages.revision, undefined);
+        assert.strictEqual(primaryPaper.analysisStageCheckpoints.primaryAnalysis, undefined);
+
+        const revisionPaper = { ...paperInput };
+        const revisionManifest = { version: 1, stages: {
+            primaryAnalysis: { status: 'complete', fingerprint: currentPrimary },
+            demoLinkScan: { status: 'complete', fingerprint: 'unchanged-demo' },
+            revision: { status: 'complete', fingerprint: legacyRevision },
+            tableRepair: { status: 'complete', fingerprint: 'downstream-table' }
+        } };
+        current.saveAnalysisCheckpoint(revisionPaper, analysis, revisionManifest);
+        const prepared = current.prepareTextRecoveryStage(revisionPaper, revisionManifest,
+            'revision', analysis, source);
+        assert.strictEqual(prepared.invalidated, true);
+        assert.strictEqual(prepared.compatibilityReused, false);
+        assert.strictEqual(prepared.analysis, analysis);
+        assert.strictEqual(revisionManifest.stages.demoLinkScan.status, 'complete');
+        assert.strictEqual(revisionManifest.stages.revision, undefined);
+        assert.strictEqual(revisionManifest.stages.tableRepair, undefined);
+        assert.strictEqual(revisionPaper.analysisStageCheckpoints.revision, undefined);
+    });
+
     it('taxonomy prompt has no paper-specific 2403 answer example', () => {
         const prompt = fs.readFileSync(
             path.join(__dirname, '../prompts/tag-repair.md'), 'utf8'
@@ -85,6 +145,12 @@ describe('taxonomy runtime analysis integration', () => {
         const fields = deep.tagRuleFingerprintFields();
         assert.match(fields.taxonomyRegistrySha256, /^[a-f0-9]{64}$/);
         assert.match(fields.taxonomyProjectionSha256, /^[a-f0-9]{64}$/);
+        assert.strictEqual(fields.taxonomyProjectionContract, 'paper-tag-prompt-text-v2');
+        const rules = require('../scripts/lib/tag-rules.js');
+        const legacyPrompt = rules.buildTagPromptText(rules.getDefaultTagRules().tagCatalog,
+            rules.LEGACY_TAG_PROMPT_TEXT_CONTRACT);
+        const legacySha = require('node:crypto').createHash('sha256').update(legacyPrompt).digest('hex');
+        assert.notStrictEqual(fields.taxonomyProjectionSha256, legacySha);
         assert.strictEqual(fields.taxonomySelectionContract, 'paper-taxonomy-selection-v1');
         const input = validAnalysisText();
         const evidence = deep.buildStageEvidenceContext('revision', input, 'speech evidence');

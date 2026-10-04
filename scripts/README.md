@@ -62,7 +62,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
 | `lib/filter-input-contract.js` | Node 库 | 计算筛选决定所对应的最小输入 SHA。 |
 | `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另提供别名解析和上下级查询。Node/Python 解析器及发布检查均使用词表原始字节计算的 SHA。 |
-| `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 生成提供给模型的标签文本。选择规则仍按 `paper-taxonomy-selection-v1` 检查，详见本页的分类词表维护说明。 |
+| `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，也可按明确旧版生成核验文本。选择规则仍按 `paper-taxonomy-selection-v1` 检查，详见本页的分类词表维护说明。 |
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-record-update.js` | Node 库 | 仅更新分析结果中的分类记录：新词表必须仍解析出完全相同的 conceptIds，否则拒绝并列出需人工或模型重选的论文。另只读扫描失效历史分类文件并汇总报告，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果解析标签，映射 concept ID、去除祖先标签并生成逐篇分类文件。文件名同时包含词表 SHA 与分类 SHA，分析升级不覆盖旧记录；旧版仅按词表 SHA 命名的文件，只有逐字段等于当前重建结果时才允许读取。 |
@@ -319,6 +319,15 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 这条告警仅供新的分类或修复步骤使用，不改变已核验阶段的恢复行为。别名只供显式旧格式解析。
 
 ### 词表变更与确认范围
+
+新模型请求使用 `paper-tag-prompt-text-v2` 标签提示。Node 的 `buildTagPromptText(tagCatalog, promptTextContract)`
+和 Python 的 `build_tag_prompt_text(tag_catalog, prompt_text_contract)` 默认使用新版；只有核验旧记录时才显式选择
+`paper-taxonomy-prompt-projection-v1`。这次变化只改提示协议行和中文说明，词表、概念选择规则及输出字段保持。
+
+词表 SHA 相同时，读取器按记录保存的提示版本精确核对全文 SHA。词表升级后，新版还须按旧词表快照核对提示 SHA，
+并通过原有升级检查。旧版跨词表记录保留原兼容范围：Node 不单独核对提示 SHA，Python 只检查其格式；
+两端仍核对旧快照、升级说明、确认范围和概念是否有效。不能把这条旧兼容分支当作旧提示全文的精确认证。
+核验不会重写旧记录。显式重新分析时，新提示身份进入原阶段指纹；不匹配的旧检查点仍按原规则失效。
 
 `lib/tag-catalog-change.js` 将变更分为 `none`、`additive`、`destructive`，按字节 SHA 从
 `config/tag-catalog-history/` 读取升级前快照，并生成或核验 `registryUpgradeFrom`。

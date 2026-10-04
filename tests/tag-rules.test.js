@@ -8,7 +8,9 @@ const { parseAnalysis } = require('../scripts/utils.js');
 const contract = require('../scripts/analysis-contract.js');
 const {
     createTagRules,
+    buildTagPromptText,
     TAG_PROMPT_TEXT_CONTRACT,
+    LEGACY_TAG_PROMPT_TEXT_CONTRACT,
     TAG_SELECTION_CONTRACT,
     TAG_FLAT_COMPAT_CONTRACT
 } = require('../scripts/lib/tag-rules.js');
@@ -29,6 +31,40 @@ test('runtime derives all active preferred labels, roles and compact projection 
     assert.match(runtime.projection, /method\.crowdsourced-evaluation\|#众包评测/);
     assert.match(runtime.projection, /\[scientific_topic\]/);
     assert.doesNotMatch(runtime.projection, /众包评估/);
+});
+
+test('标签提示保留 v1 全文字节，默认 v2 只更换版本和说明', () => {
+    const tagCatalog = {
+        version: 'paper-taxonomy-v1', registrySha256: 'a'.repeat(64),
+        facets: [{ id: 'task' }, { id: 'method' }],
+        concepts: [
+            { id: 'method.b', facet: 'method', status: 'active',
+                preferredLabel: { zh: '方法乙' }, definition: '方法|说明', scopeNote: '范围\n说明' },
+            { id: 'task.z', facet: 'task', status: 'deprecated',
+                preferredLabel: { zh: '停用任务' }, definition: '停用', scopeNote: '不输出' },
+            { id: 'task.a', facet: 'task', status: 'active',
+                preferredLabel: { zh: '任务甲' }, definition: '  任务   说明 ', scopeNote: '任务范围' }
+        ]
+    };
+    const expectedV1 = 'contract=paper-taxonomy-prompt-projection-v1\n'
+        + 'registry_version=paper-taxonomy-v1\n'
+        + `registry_sha256=${'a'.repeat(64)}\n`
+        + '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。\n'
+        + '[task]\ntask.a|#任务甲|任务 说明|任务范围\n'
+        + '[method]\nmethod.b|#方法乙|方法 说明|范围 说明\n';
+    assert.equal(buildTagPromptText(tagCatalog, LEGACY_TAG_PROMPT_TEXT_CONTRACT), expectedV1);
+    assert.equal(crypto.createHash('sha256').update(expectedV1).digest('hex'),
+        'e16ddf3cea3935f48d3fab11c299c075c2ffe5734d29ce8cf792ac51d2d17d09');
+    const expectedV2 = expectedV1.replace('contract=paper-taxonomy-prompt-projection-v1',
+        'contract=paper-tag-prompt-text-v2').replace(
+        '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。',
+        '只能选择以下已启用概念的中文首选标签。ID 用于区分概念；不要创建新标签，也不要改用同义词。');
+    assert.equal(buildTagPromptText(tagCatalog), expectedV2);
+    assert.equal(buildTagPromptText(tagCatalog, TAG_PROMPT_TEXT_CONTRACT), expectedV2);
+    assert.equal(TAG_PROMPT_TEXT_CONTRACT, 'paper-tag-prompt-text-v2');
+    for (const value of [null, '', false, 1, {}, [], 'paper-tag-prompt-text-v3']) {
+        assert.throws(() => buildTagPromptText(tagCatalog, value), /标签提示版本必须为/);
+    }
 });
 
 test('current selection accepts only preferred Chinese labels and rejects hierarchy duplication', () => {

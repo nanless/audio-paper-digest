@@ -55,6 +55,7 @@ from analysis_sections import (
 )
 from tag_catalog import (
     TAG_PROMPT_TEXT_CONTRACT,
+    LEGACY_TAG_PROMPT_TEXT_CONTRACT,
     TAG_SELECTION_CONTRACT,
     load_tag_catalog,
     tag_prompt_text_sha256,
@@ -1056,7 +1057,8 @@ def _validate_registry_upgrade_annotation(annotation, expected):
 
 
 def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
-                           current=None, current_registry_sha256=None):
+                           current=None, current_registry_sha256=None,
+                           snapshot_resolver=None):
     """按 Node 的规则核验标签词表升级；无法完成核验时返回拒绝结果。
 
     本函数先取得旧词表快照并重新判断变更，再核对升级说明和所选概念。
@@ -1082,7 +1084,7 @@ def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
         if from_sha == current_sha:
             return fail('标签阶段记录中的词表 SHA 与当前值相同，无需进行词表升级核验。',
                         'already-current')
-        snapshot = _resolve_registry_snapshot(from_sha)
+        snapshot = (snapshot_resolver or _resolve_registry_snapshot)(from_sha)
         if snapshot is None:
             return fail(f'无法取得更新前的词表快照 {from_sha}，不能沿用标签阶段记录。',
                         'snapshot-missing')
@@ -1140,14 +1142,41 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
     to_sha = _PUBLISH_TAG_CATALOG['registrySha256']
     stage_prompt_text_sha256 = str(stage.get('projectionSha256') or '')
     # 词表升级时，projectionSha256 记录原标签阶段使用的提示文本 SHA。
-    # 此处只检查 SHA 格式，不要求等于当前提示文本的 SHA；升级条件随后另行核验。
+    # 旧版沿用原有的 SHA 格式检查与升级规则；新版还须按旧词表精确核验提示 SHA。
     if not _SHA256_RE.fullmatch(stage_prompt_text_sha256):
         raise PublishDataValidationError(
             f'{paper_label} taxonomySeal registry 升级被拒 [reason=projection-sha-invalid] '
             f'from={from_sha} to={to_sha}: projectionSha256 必须是 64 位十六进制 SHA')
-    result = _seal_registry_upgrade(
-        from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'))
+    snapshot = None
+    if stage.get('projectionContract') == TAG_PROMPT_TEXT_CONTRACT:
+        def capture_snapshot(registry_sha256):
+            nonlocal snapshot
+            snapshot = _resolve_registry_snapshot(registry_sha256)
+            if isinstance(snapshot, dict):
+                if snapshot.get('registrySha256') not in (None, registry_sha256):
+                    raise ValueError('旧词表快照中的 SHA 与标签阶段记录绑定的词表 SHA 不一致。')
+                snapshot = {**snapshot, 'registrySha256': registry_sha256}
+            return snapshot
+        result = _seal_registry_upgrade(
+            from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'),
+            snapshot_resolver=capture_snapshot)
+    else:
+        result = _seal_registry_upgrade(
+            from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'))
     if result['ok']:
+        if stage.get('projectionContract') == TAG_PROMPT_TEXT_CONTRACT:
+            if not isinstance(snapshot, dict):
+                raise PublishDataValidationError(
+                    f'{paper_label} 标签阶段使用的旧词表快照无法取得，不能核验新版提示文本。')
+            try:
+                expected_prompt_sha = tag_prompt_text_sha256(
+                    snapshot, stage['projectionContract'])
+            except ValueError as error:
+                raise PublishDataValidationError(
+                    f'{paper_label} 标签阶段使用的旧词表快照无效，不能核验新版提示文本。') from error
+            if stage_prompt_text_sha256 != expected_prompt_sha:
+                raise PublishDataValidationError(
+                    f'{paper_label} 标签阶段记录的新版提示文本 SHA 与旧词表快照生成的文本不一致。')
         return
     reason_code = result.get('reasonCode') or 'rejected'
     codes = ''
@@ -1176,12 +1205,14 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     if not isinstance(stage, dict) or stage.get('status') not in {'complete', 'not_needed'}:
         raise PublishDataValidationError(f'{paper_label} 标签阶段记录缺失，或尚未完成。')
 
-    # 本函数先按 Node 的检查顺序核对词表版本、提示文本协议和标签选择协议。
-    # 词表 SHA 未变时，提示文本 SHA 也必须与当前值相同；
-    # 词表 SHA 改变时，再按升级规则检查能否沿用原阶段记录。
+    # 提示版本按保存记录选择；读取旧版不改写其提示 SHA 或绑定签名。
+    projection_contract = stage.get('projectionContract')
+    if not isinstance(projection_contract, str) or projection_contract not in (
+            LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT):
+        raise PublishDataValidationError(
+            f'{paper_label} 标签阶段记录中的提示文本协议版本不受支持。')
     expected_static = {
         'registryVersion': _PUBLISH_TAG_CATALOG['version'],
-        'projectionContract': TAG_PROMPT_TEXT_CONTRACT,
         'selectionContract': TAG_SELECTION_CONTRACT,
     }
     for field, expected in expected_static.items():
@@ -1191,7 +1222,8 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     if stage.get('registrySha256') == _PUBLISH_TAG_CATALOG['registrySha256']:
         for field, expected in (
                 ('registrySha256', _PUBLISH_TAG_CATALOG['registrySha256']),
-                ('projectionSha256', _PUBLISH_TAG_PROMPT_TEXT_SHA256)):
+                ('projectionSha256', tag_prompt_text_sha256(
+                    _PUBLISH_TAG_CATALOG, projection_contract))):
             if stage.get(field) != expected:
                 raise PublishDataValidationError(
                     f'{paper_label} 标签阶段记录中的 {field} 与当前词表、提示文本或标签选择协议不一致。')

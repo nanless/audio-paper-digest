@@ -15,6 +15,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from tag_catalog import (FACET_IDS, LABEL_MODE_LEGACY, TAG_FLAT_COMPAT_CONTRACT,
+                            TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_PROMPT_TEXT_CONTRACT,
+                            build_tag_prompt_text, tag_prompt_text_sha256,
                             active_preferred_labels,
                             ancestors, load_tag_catalog, normalize_label,
                             prune_ancestors, resolve_current_label, resolve_label,
@@ -41,6 +43,44 @@ def registry():
 
 
 class RegistryTest(unittest.TestCase):
+    def test_versioned_prompt_preserves_legacy_bytes_and_defaults_to_new_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'catalog.json'
+            target.write_text(json.dumps(registry(), ensure_ascii=False), encoding='utf-8')
+            catalog = load_tag_catalog(target)
+        expected = (
+            'contract=paper-taxonomy-prompt-projection-v1\n'
+            'registry_version=paper-taxonomy-v1\n'
+            f'registry_sha256={catalog["registrySha256"]}\n'
+            '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。\n'
+            '[task]\n'
+            'task.asr|#语音识别|Defined concept.|No inferred semantic classification.\n'
+            'task.speech|#语音任务|Defined concept.|No inferred semantic classification.\n'
+            '[method]\n'
+            'method.lora|#低秩适配|Defined concept.|No inferred semantic classification.\n'
+            'method.peft|#参数高效微调|Defined concept.|No inferred semantic classification.\n'
+            '[setting]\n'
+            'setting.low-resource|#低资源|Defined concept.|No inferred semantic classification.\n'
+        )
+        self.assertEqual(build_tag_prompt_text(catalog, LEGACY_TAG_PROMPT_TEXT_CONTRACT), expected)
+        self.assertEqual(tag_prompt_text_sha256(catalog, LEGACY_TAG_PROMPT_TEXT_CONTRACT),
+                         hashlib.sha256(expected.encode('utf-8')).hexdigest())
+        new_lines = expected.splitlines(keepends=True)
+        new_lines[0] = 'contract=paper-tag-prompt-text-v2\n'
+        new_lines[3] = ('只能选择以下已启用概念的中文首选标签。ID 用于区分概念；'
+                        '不要创建新标签，也不要改用同义词。\n')
+        new_text = ''.join(new_lines)
+        self.assertEqual(build_tag_prompt_text(catalog), new_text)
+        self.assertEqual(build_tag_prompt_text(catalog, TAG_PROMPT_TEXT_CONTRACT), new_text)
+        self.assertEqual(tag_prompt_text_sha256(catalog),
+                         hashlib.sha256(new_text.encode('utf-8')).hexdigest())
+        for contract in (None, '', 'paper-tag-prompt-text-v3', 2, [], {}):
+            with self.subTest(contract=contract):
+                with self.assertRaisesRegex(ValueError, '版本不受支持'):
+                    build_tag_prompt_text(catalog, contract)
+                with self.assertRaisesRegex(ValueError, '版本不受支持'):
+                    tag_prompt_text_sha256(catalog, contract)
+
     def test_flat_hugo_compat_contract_is_versioned(self):
         self.assertEqual(
             TAG_FLAT_COMPAT_CONTRACT,

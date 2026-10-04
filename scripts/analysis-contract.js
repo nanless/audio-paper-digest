@@ -1358,30 +1358,61 @@ function validateTagStageProof(paper, options = {}) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.taxonomySeal;
     if (!isRecoveryStageTerminal('taxonomySeal', stage?.status)) return '标签阶段记录缺失，或状态不是 complete 或 not_needed。';
-    const runtime = options.tagRules
-        || require('./lib/tag-rules.js').getDefaultTagRules();
+    const tagRulesApi = require('./lib/tag-rules.js');
+    const runtime = options.tagRules || tagRulesApi.getDefaultTagRules();
     if (manifest?.contracts?.taxonomy !== runtime.selectionContract
         || stage.registryVersion !== runtime.registryVersion
-        || stage.projectionContract !== runtime.projectionContract
+        || (stage.projectionContract !== tagRulesApi.TAG_PROMPT_TEXT_CONTRACT
+            && stage.projectionContract !== tagRulesApi.LEGACY_TAG_PROMPT_TEXT_CONTRACT)
         || stage.selectionContract !== runtime.selectionContract) {
         return '标签阶段记录中的词表版本、标签提示文本或标签选择规则与当前配置不一致。';
     }
     if (stage.registrySha256 !== runtime.registrySha256) {
-        // 词表升级后，以下四项同时满足才能沿用旧记录。旧词表快照必须能够取回；
-        // 变更须为 additive/none，或属于已确认的 destructive 白名单，且 registryUpgradeFrom
-        // 包含与重新计算结果对应的 destructiveAcknowledgement；升级说明须与校验结果一致；
-        // 旧 conceptIds 在当前词表中须全部为 active。无法确认的 destructive 变更或缺少任何证据时拒绝沿用。
+        // v1 沿用原升级规则。v2 只读取一次旧词表，升级检查和提示重建使用
+        // 同一个快照，避免动态读取器在一次核验中返回不同内容。
+        let promptCatalog = null;
+        let snapshotOptions = options.registrySnapshotOptions;
+        if (stage.projectionContract === tagRulesApi.TAG_PROMPT_TEXT_CONTRACT) {
+            let snapshot;
+            try {
+                snapshot = require('./lib/tag-catalog-change.js').resolveRegistrySnapshot(
+                    stage.registrySha256, snapshotOptions
+                );
+            } catch {
+                return '无法完成词表升级核验：无法读取标签提示所需的旧词表快照。';
+            }
+            if (!snapshot || (snapshot.registrySha256
+                && snapshot.registrySha256 !== stage.registrySha256)) {
+                return '标签提示所需的旧词表快照缺失，或其 SHA 与阶段记录不一致。';
+            }
+            promptCatalog = { ...snapshot, registrySha256: stage.registrySha256 };
+            snapshotOptions = { registryHistory: new Map([[stage.registrySha256, snapshot]]) };
+        }
+        // 旧快照、升级说明、允许的变更及原概念有效性仍须全部通过原检查。
         const upgrade = require('./lib/tag-catalog-change.js').validateSealRegistryUpgrade({
             fromRegistrySha256: stage.registrySha256,
             currentRegistry: runtime.tagCatalog,
             currentRegistrySha256: runtime.registrySha256,
             conceptIds: stage.conceptIds,
             annotation: stage.registryUpgradeFrom,
-            snapshotOptions: options.registrySnapshotOptions
+            snapshotOptions
         });
         if (!upgrade.ok) return upgrade.error;
-    } else if (stage.projectionSha256 !== runtime.projectionSha256) {
-        return '标签阶段记录中的词表版本、标签提示文本或标签选择规则与当前配置不一致。';
+        if (promptCatalog) {
+            const promptSha256 = crypto.createHash('sha256').update(
+                tagRulesApi.buildTagPromptText(promptCatalog, stage.projectionContract), 'utf8'
+            ).digest('hex');
+            if (stage.projectionSha256 !== promptSha256) {
+                return '标签阶段的提示 SHA 与其版本和旧词表生成的提示文本不一致。';
+            }
+        }
+    } else {
+        const promptSha256 = crypto.createHash('sha256').update(
+            tagRulesApi.buildTagPromptText(runtime.tagCatalog, stage.projectionContract), 'utf8'
+        ).digest('hex');
+        if (stage.projectionSha256 !== promptSha256) {
+            return '标签阶段记录中的词表版本、标签提示文本或标签选择规则与当前配置不一致。';
+        }
     }
     const parsed = options.parsed;
     const validation = parsed?.taxonomyValidation;

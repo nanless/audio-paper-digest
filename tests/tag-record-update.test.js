@@ -10,6 +10,9 @@ const contract = require('../scripts/analysis-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
 const resealApi = require('../scripts/lib/tag-record-update.js');
 const cli = require('../scripts/tag-record-update.js');
+const { buildTagPromptText, TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_PROMPT_TEXT_CONTRACT }
+    = require('../scripts/lib/tag-rules.js');
+const crypto = require('node:crypto');
 const { ADDITIVE_OLD_SHA, DESTRUCTIVE_OLD_SHA, EXECUTION_ID, PAPER_ID,
     runtime, analysisRecord, reproject } = require('./helpers/tag-record-update-fixture.js');
 
@@ -44,6 +47,7 @@ test('明确确认允许的破坏性变更后，工具按当前词表更新标�
     const nextStage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
     assert.equal(nextStage.registrySha256, runtime().registrySha256);
     assert.equal(nextStage.projectionSha256, runtime().projectionSha256);
+    assert.equal(nextStage.projectionContract, TAG_PROMPT_TEXT_CONTRACT);
     assert.equal(nextStage.registryUpgradeFrom.changeLevel, 'destructive');
     assert.equal(nextStage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
     assert.equal(nextStage.registryUpgradeFrom.fromRegistrySha256, ADDITIVE_OLD_SHA);
@@ -75,6 +79,7 @@ test('annotate 模式保留原标签阶段字段，并记录已确认的词表�
     const nextStage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
     assert.equal(nextStage.registrySha256, ADDITIVE_OLD_SHA);
     assert.equal(nextStage.projectionSha256, 'e'.repeat(64));
+    assert.equal(nextStage.projectionContract, LEGACY_TAG_PROMPT_TEXT_CONTRACT);
     assert.equal(nextStage.registryUpgradeFrom.changeLevel, 'destructive');
     assert.equal(nextStage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
     assert.strictEqual(contract.validateTagStageProof(plan.analysis.papers[0], {
@@ -378,4 +383,20 @@ test('classify 在实际更新前报告本次变更是否允许明确确认', ()
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+
+test('当前词表的旧 v1 标签记录只读核验，不转换版本或补签', () => {
+    const current = runtime();
+    const projectionSha256 = crypto.createHash('sha256').update(
+        buildTagPromptText(current.tagCatalog, LEGACY_TAG_PROMPT_TEXT_CONTRACT)
+    ).digest('hex');
+    const analysis = analysisRecord({ projectionContract: LEGACY_TAG_PROMPT_TEXT_CONTRACT,
+        projectionSha256 });
+    const before = JSON.stringify(analysis);
+    const result = reproject({ analysis });
+    assert.equal(result.ok, false);
+    assert.equal(result.item.outcome, 'already-current');
+    assert.equal(result.analysis, null);
+    assert.equal(JSON.stringify(analysis), before);
 });

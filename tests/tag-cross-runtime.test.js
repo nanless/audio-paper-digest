@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { loadTagCatalog, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/tag-catalog');
-const { getDefaultTagRules } = require('../scripts/lib/tag-rules');
+const { getDefaultTagRules, buildTagPromptText, TAG_PROMPT_TEXT_CONTRACT,
+    LEGACY_TAG_PROMPT_TEXT_CONTRACT } = require('../scripts/lib/tag-rules');
+const crypto = require('node:crypto');
 const { hashTagSectionAndPrimaryTags } = require('../scripts/analysis-contract');
 const { parseAnalysis } = require('../scripts/utils');
 
@@ -17,18 +19,28 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
     labels.push('未说明','not-a-real-topic','#说话人分离','在线','ＬｏＲＡ','参数高效微调','数据增强','说话人识别');
     const faceted=[['#端到端训练','method'],['#端到端','setting'],['E2E learning','method']];
     const input={labels,faceted,ids:tagCatalog.concepts.map(c=>c.id),groups:tagCatalog.concepts.map(c=>[c.id,...ancestors(tagCatalog,c.id)])};
+    const promptTexts = [LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT]
+        .map(projectionContract => {
+            const text = buildTagPromptText(tagCatalog, projectionContract);
+            return { projectionContract, text,
+                sha256: crypto.createHash('sha256').update(text, 'utf8').digest('hex') };
+        });
+    assert.equal(promptTexts[0].sha256, '96813f030122a5d6b3b5b51da583b40002411355c3bbdfabed3a4b0b6b101b27',
+        '旧 v1 全文 SHA 来自 83e08cf 的实际格式器和冻结词表');
     const expected={version:tagCatalog.version,registrySha256:tagCatalog.registrySha256,
         projectionSha256:getDefaultTagRules().projectionSha256,
+        promptTexts,
         resolved:labels.map(label=>resolveLabel(tagCatalog,label)?.id||null),
         faceted:faceted.map(([label,facet])=>resolveLabel(tagCatalog,label,facet)?.id||null),
         ancestors:input.ids.map(id=>ancestors(tagCatalog,id)),pruned:input.groups.map(ids=>pruneAncestors(tagCatalog,ids))};
     const script=[
         'import json, sys',
         'sys.path.insert(0,"scripts")',
-        'from tag_catalog import load_tag_catalog, resolve_label, ancestors, prune_ancestors, tag_prompt_text_sha256',
+        'from tag_catalog import load_tag_catalog, resolve_label, ancestors, prune_ancestors, tag_prompt_text_sha256, build_tag_prompt_text',
         't=load_tag_catalog(); p=json.load(sys.stdin)',
+        'prompt_texts=[{"projectionContract":v,"text":build_tag_prompt_text(t,v),"sha256":tag_prompt_text_sha256(t,v)} for v in ["paper-taxonomy-prompt-projection-v1","paper-tag-prompt-text-v2"]]',
         'r={"version":t["version"],"registrySha256":t["registrySha256"],"projectionSha256":tag_prompt_text_sha256(t),',
-        '"resolved":[(resolve_label(t,s) or {}).get("id") for s in p["labels"]],',
+        '"promptTexts":prompt_texts,"resolved":[(resolve_label(t,s) or {}).get("id") for s in p["labels"]],',
         '"faceted":[(resolve_label(t,s,f) or {}).get("id") for s,f in p["faceted"]],',
         '"ancestors":[ancestors(t,s) for s in p["ids"]],',
         '"pruned":[prune_ancestors(t,s) for s in p["groups"]]}',

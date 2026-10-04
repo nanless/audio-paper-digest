@@ -14,7 +14,8 @@ const {
 } = require('../scripts/analysis-contract.js');
 const contract = require('../scripts/analysis-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
-const { createTagRules } = require('../scripts/lib/tag-rules.js');
+const { createTagRules, buildTagPromptText, TAG_PROMPT_TEXT_CONTRACT,
+    LEGACY_TAG_PROMPT_TEXT_CONTRACT } = require('../scripts/lib/tag-rules.js');
 const registryChange = require('../scripts/lib/tag-catalog-change.js');
 const tagCatalogApi = require('../scripts/lib/tag-catalog.js');
 
@@ -301,7 +302,9 @@ function sealedPaper(options = {}) {
     const binding = {
         registryVersion: options.registryVersion ?? runtime.registryVersion,
         registrySha256: options.registrySha256 ?? runtime.registrySha256,
-        projectionContract: runtime.projectionContract,
+        projectionContract: options.projectionContract ?? (
+            options.registrySha256 && options.registrySha256 !== runtime.registrySha256
+                ? LEGACY_TAG_PROMPT_TEXT_CONTRACT : runtime.projectionContract),
         projectionSha256: options.projectionSha256 ?? runtime.projectionSha256,
         selectionContract: options.selectionContract ?? runtime.selectionContract,
         inputAnalysisSha256: textSha(analysis),
@@ -490,5 +493,88 @@ describe('taxonomySeal registry upgrade gate', () => {
         assert.match(contract.validateTagStageProof(changedText, {
             parsed: fixture.parsed, tagRules: fixture.runtime
         }), /正文检查点缺失/);
+    });
+});
+
+
+describe('标签提示版本的读取边界', () => {
+    const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
+    it('同词表 v1/v2 的 complete 和 not_needed 记录精确核验且不补签', () => {
+        const runtime = createTagRules({ registryPath: REGISTRY_FILE });
+        for (const projectionContract of [LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT]) {
+            const projectionSha256 = textSha(buildTagPromptText(runtime.tagCatalog, projectionContract));
+            for (const status of ['complete', 'not_needed']) {
+                const f = sealedPaper({ projectionContract, projectionSha256 });
+                f.stage.status = status;
+                if (status === 'complete') f.paper.analysisStageCheckpoints.structureRepair = f.paper.analysis;
+                const before = JSON.stringify(f.paper);
+                assert.equal(contract.validateTagStageProof(f.paper, {
+                    parsed: f.parsed, tagRules: f.runtime
+                }), null);
+                assert.equal(JSON.stringify(f.paper), before);
+                assert.match(validateSeal({ projectionContract, projectionSha256: 'e'.repeat(64) }),
+                    /标签提示文本或标签选择规则与当前配置不一致/);
+            }
+        }
+        for (const projectionContract of ['', null, false, 'paper-tag-prompt-text-v3']) {
+            const f = sealedPaper();
+            f.stage.projectionContract = projectionContract;
+            assert.match(contract.validateTagStageProof(f.paper, { parsed: f.parsed, tagRules: f.runtime }),
+                /标签提示文本或标签选择规则与当前配置不一致/);
+        }
+    });
+
+    it('跨词表 v1 保留原升级规则，v2 必须对应旧快照的完整提示', () => {
+        const from = registryChange.resolveRegistrySnapshot(ADDITIVE_OLD_SHA);
+        const annotation = annotationFor(ADDITIVE_OLD_SHA);
+        assert.equal(validateSeal({ registrySha256: ADDITIVE_OLD_SHA,
+            projectionContract: LEGACY_TAG_PROMPT_TEXT_CONTRACT,
+            projectionSha256: 'e'.repeat(64), annotation }), null);
+        const projectionSha256 = textSha(buildTagPromptText(from, TAG_PROMPT_TEXT_CONTRACT));
+        const options = { registrySha256: ADDITIVE_OLD_SHA,
+            projectionContract: TAG_PROMPT_TEXT_CONTRACT, projectionSha256, annotation };
+        assert.equal(validateSeal(options), null);
+        assert.match(validateSeal({ ...options, projectionSha256: 'e'.repeat(64) }), /提示 SHA/);
+        assert.match(validateSeal({ ...options, annotation: undefined }), /升级说明|显式确认/);
+        assert.match(validateSeal({ ...options,
+            registrySnapshotOptions: { historyDir: '/does-not-exist-tag-history' } }), /快照/);
+        const missingMetadata = structuredClone(from);
+        delete missingMetadata.registrySha256;
+        const before = JSON.stringify(missingMetadata);
+        assert.equal(validateSeal({ ...options,
+            registrySnapshotOptions: { registryHistory: { [ADDITIVE_OLD_SHA]: missingMetadata } } }), null);
+        assert.equal(JSON.stringify(missingMetadata), before);
+        const nullMetadata = { ...from, registrySha256: null };
+        const nullBefore = JSON.stringify(nullMetadata);
+        assert.equal(validateSeal({ ...options,
+            registrySnapshotOptions: { registryHistory: { [ADDITIVE_OLD_SHA]: nullMetadata } } }), null);
+        assert.equal(JSON.stringify(nullMetadata), nullBefore);
+        assert.match(validateSeal({ ...options, registrySnapshotOptions: {
+            registryHistory: { [ADDITIVE_OLD_SHA]: { ...from, registrySha256: '' } }
+        } }), /无法完成词表升级核验/);
+        assert.match(validateSeal({ ...options, registrySnapshotOptions: {
+            registryHistory: { [ADDITIVE_OLD_SHA]: { ...from, registrySha256: 'b'.repeat(64) } }
+        } }), /快照缺失，或其 SHA 与阶段记录不一致/);
+    });
+
+    it('v2 每次核验只取一次快照，读取失败保持清楚的拒绝结果', () => {
+        const from = registryChange.resolveRegistrySnapshot(ADDITIVE_OLD_SHA);
+        const different = structuredClone(from);
+        different.concepts[0].definition += ' 测试中的另一个快照。';
+        const base = { registrySha256: ADDITIVE_OLD_SHA, projectionContract: TAG_PROMPT_TEXT_CONTRACT,
+            annotation: annotationFor(ADDITIVE_OLD_SHA) };
+        for (const promptCatalog of [from, different]) {
+            let calls = 0;
+            const result = validateSeal({ ...base,
+                projectionSha256: textSha(buildTagPromptText(promptCatalog, TAG_PROMPT_TEXT_CONTRACT)),
+                registrySnapshotOptions: { resolveSnapshot: () => ++calls === 1 ? from : different }
+            });
+            assert.equal(calls, 1);
+            if (promptCatalog === from) assert.equal(result, null);
+            else assert.match(result, /提示 SHA/);
+        }
+        assert.match(validateSeal({ ...base, projectionSha256: 'e'.repeat(64),
+            registrySnapshotOptions: { resolveSnapshot: () => { throw new Error('读取失败'); } }
+        }), /无法完成词表升级核验：无法读取标签提示所需的旧词表快照/);
     });
 });

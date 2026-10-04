@@ -15,6 +15,11 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SCRIPTS = os.path.join(ROOT, 'scripts')
 sys.path.insert(0, SCRIPTS)
 
+from tag_catalog import (
+    TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_PROMPT_TEXT_CONTRACT,
+    load_tag_catalog, tag_prompt_text_sha256,
+)
+
 from publish_common import (  # noqa: E402
     LlmAccountPoolConfigError,
     PublishLLMUnavailable,
@@ -125,7 +130,8 @@ def complete_paper():
 
 
 def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not_needed',
-                         with_checkpoints=False):
+                         with_checkpoints=False,
+                         projection_contract=TAG_PROMPT_TEXT_CONTRACT):
     output_analysis = paper['analysis']
     input_analysis = output_analysis if input_analysis is None else input_analysis
     parsed = parse_analysis(output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
@@ -139,8 +145,9 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
     binding = {
         'registryVersion': _PUBLISH_TAG_CATALOG['version'],
         'registrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
-        'projectionContract': 'paper-taxonomy-prompt-projection-v1',
-        'projectionSha256': _PUBLISH_TAG_PROMPT_TEXT_SHA256,
+        'projectionContract': projection_contract,
+        'projectionSha256': tag_prompt_text_sha256(
+            _PUBLISH_TAG_CATALOG, projection_contract),
         'selectionContract': 'paper-taxonomy-selection-v1',
         'inputAnalysisSha256': input_sha,
         'outputAnalysisSha256': output_sha,
@@ -3014,7 +3021,8 @@ primary_method_tag: #基准测试
                         if case['name'] == 'additive-upgrade-allowed')
         paper = complete_paper()
         manifest = {'version': 1}
-        stage = attach_tag_stage_record(paper, manifest)
+        stage = attach_tag_stage_record(
+            paper, manifest, projection_contract=LEGACY_TAG_PROMPT_TEXT_CONTRACT)
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
         # 旧 SHA + 与复算一致的 additive 注记 → 放行（Node 放行的状态发布端不再拒）。
@@ -3022,8 +3030,10 @@ primary_method_tag: #基准测试
                              annotation=additive['annotation'])
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
-        # 升级分支不再硬比对 projectionSha256：stage 记录值与本地当前值都接受。
-        for projection in ('e' * 64, _PUBLISH_TAG_PROMPT_TEXT_SHA256):
+        # 明确旧版的升级分支只核 SHA 格式，保留原来允许的两种记录值。
+        for projection in ('e' * 64, tag_prompt_text_sha256(
+                _PUBLISH_TAG_CATALOG, LEGACY_TAG_PROMPT_TEXT_CONTRACT),
+                _PUBLISH_TAG_PROMPT_TEXT_SHA256):
             stage['projectionSha256'] = projection
             rebind_tag_stage_record(stage)
             self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
@@ -3035,7 +3045,8 @@ primary_method_tag: #基准测试
                     if item['name'] == 'destructive-acknowledged-allowed')
         paper = complete_paper()
         manifest = {'version': 1}
-        stage = attach_tag_stage_record(paper, manifest)
+        stage = attach_tag_stage_record(
+            paper, manifest, projection_contract=LEGACY_TAG_PROMPT_TEXT_CONTRACT)
         rebind_tag_stage_record(stage, registry_sha256=case['fromRegistrySha256'],
                              annotation=case['annotation'])
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
@@ -3049,6 +3060,101 @@ primary_method_tag: #基准测试
             _validate_tag_stage_record(paper, manifest, paper['arxivId'])
         self.assertIn('reason=destructive', str(caught.exception))
         self.assertIn('显式确认无效', str(caught.exception))
+
+    def test_tag_prompt_versions_bind_exact_text_without_rewriting_stages(self):
+        for contract in (LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT):
+            for status in ('complete', 'not_needed'):
+                with self.subTest(contract=contract, status=status):
+                    paper = complete_paper()
+                    manifest = {'version': 1}
+                    stage = attach_tag_stage_record(
+                        paper, manifest, status=status, with_checkpoints=True,
+                        projection_contract=contract)
+                    saved_paper = copy.deepcopy(paper)
+                    saved_manifest = copy.deepcopy(manifest)
+                    self.assertIsNone(_validate_tag_stage_record(
+                        paper, manifest, paper['arxivId']))
+                    self.assertEqual(paper, saved_paper)
+                    self.assertEqual(manifest, saved_manifest)
+                    other_contract = (TAG_PROMPT_TEXT_CONTRACT
+                                      if contract == LEGACY_TAG_PROMPT_TEXT_CONTRACT
+                                      else LEGACY_TAG_PROMPT_TEXT_CONTRACT)
+                    stage['projectionSha256'] = tag_prompt_text_sha256(
+                        _PUBLISH_TAG_CATALOG, other_contract)
+                    rebind_tag_stage_record(stage)
+                    with self.assertRaisesRegex(PublishDataValidationError, 'projectionSha256'):
+                        _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+
+        for contract in (None, '', 'paper-tag-prompt-text-v3', 2, [], {}):
+            with self.subTest(invalid_contract=contract):
+                paper = complete_paper()
+                manifest = {'version': 1}
+                stage = attach_tag_stage_record(paper, manifest)
+                stage['projectionContract'] = contract
+                rebind_tag_stage_record(stage)
+                with self.assertRaisesRegex(PublishDataValidationError, '提示文本协议版本不受支持'):
+                    _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+
+    def test_new_tag_prompt_upgrade_uses_one_snapshot_for_all_checks(self):
+        case = next(item for item in cross_end_fixture()['cases']
+                    if item['name'] == 'additive-upgrade-allowed')
+        from_sha = case['fromRegistrySha256']
+        snapshot = load_tag_catalog(
+            Path(ROOT) / 'config' / 'tag-catalog-history' / f'{from_sha}.json')
+        paper = complete_paper()
+        manifest = {'version': 1}
+        stage = attach_tag_stage_record(paper, manifest)
+        rebind_tag_stage_record(
+            stage, registry_sha256=from_sha, annotation=case['annotation'],
+            projection_sha256=tag_prompt_text_sha256(snapshot))
+        saved = copy.deepcopy((paper, manifest))
+        with mock.patch('publish_common._resolve_registry_snapshot',
+                        side_effect=[snapshot, None]) as resolver:
+            self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
+            resolver.assert_called_once_with(from_sha)
+        self.assertEqual((paper, manifest), saved)
+
+        for omit_sha, missing_sha in ((True, None), (False, None)):
+            without_sha = copy.deepcopy(snapshot)
+            if omit_sha:
+                without_sha.pop('registrySha256')
+            else:
+                without_sha['registrySha256'] = missing_sha
+            before = copy.deepcopy(without_sha)
+            with self.subTest(omit_sha=omit_sha, missing_sha=missing_sha), mock.patch(
+                    'publish_common._resolve_registry_snapshot', return_value=without_sha) as resolver:
+                self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
+                resolver.assert_called_once_with(from_sha)
+            self.assertEqual(without_sha, before)
+
+        empty_sha = copy.deepcopy(snapshot)
+        empty_sha['registrySha256'] = ''
+        with mock.patch('publish_common._resolve_registry_snapshot', return_value=empty_sha):
+            with self.assertRaisesRegex(PublishDataValidationError, '旧词表快照中的 SHA'):
+                _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+        self.assertEqual(empty_sha['registrySha256'], '')
+
+        conflicting = copy.deepcopy(snapshot)
+        conflicting['registrySha256'] = '0' * 64
+        stage['projectionSha256'] = tag_prompt_text_sha256(conflicting)
+        rebind_tag_stage_record(stage)
+        with mock.patch('publish_common._resolve_registry_snapshot', return_value=conflicting):
+            with self.assertRaisesRegex(PublishDataValidationError, '旧词表快照中的 SHA'):
+                _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+
+        for invalid_sha in ('e' * 64, _PUBLISH_TAG_PROMPT_TEXT_SHA256,
+                            tag_prompt_text_sha256(snapshot, LEGACY_TAG_PROMPT_TEXT_CONTRACT)):
+            with self.subTest(invalid_sha=invalid_sha):
+                stage['projectionSha256'] = invalid_sha
+                rebind_tag_stage_record(stage)
+                with self.assertRaisesRegex(PublishDataValidationError, '新版提示文本 SHA'):
+                    _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+
+        stage['projectionSha256'] = tag_prompt_text_sha256(snapshot)
+        rebind_tag_stage_record(stage)
+        with mock.patch('publish_common._resolve_registry_snapshot', return_value=None):
+            with self.assertRaisesRegex(PublishDataValidationError, 'reason=snapshot-missing'):
+                _validate_tag_stage_record(paper, manifest, paper['arxivId'])
 
     def test_tag_stage_current_registry_path_keeps_hard_equality(self):
         paper = complete_paper()

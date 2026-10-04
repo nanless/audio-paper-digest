@@ -4,7 +4,8 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const tagCatalogApi = require('./tag-catalog.js');
 
-const TAG_PROMPT_TEXT_CONTRACT = 'paper-taxonomy-prompt-projection-v1';
+const TAG_PROMPT_TEXT_CONTRACT = 'paper-tag-prompt-text-v2';
+const LEGACY_TAG_PROMPT_TEXT_CONTRACT = 'paper-taxonomy-prompt-projection-v1';
 const TAG_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1';
 const TAG_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1';
 const DEFAULT_REGISTRY_PATH = path.resolve(__dirname, '../../config/tag-catalog.json');
@@ -21,16 +22,23 @@ function compactText(value) {
     return String(value || '').replace(/[\r\n|]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function buildTagPromptText(tagCatalog) {
+// 新请求默认使用 v2；v1 仅用于按旧阶段记录的版本重建核验文本。
+function buildTagPromptText(tagCatalog, promptTextContract = TAG_PROMPT_TEXT_CONTRACT) {
+    if (promptTextContract !== TAG_PROMPT_TEXT_CONTRACT
+        && promptTextContract !== LEGACY_TAG_PROMPT_TEXT_CONTRACT) {
+        throw new Error('标签提示版本必须为 paper-tag-prompt-text-v2 或 paper-taxonomy-prompt-projection-v1。');
+    }
     const facets = new Map(tagCatalog.facets.map((facet, index) => [facet.id, { ...facet, index }]));
     const active = tagCatalog.concepts.filter(concept => concept.status === 'active')
         .sort((a, b) => facets.get(a.facet).index - facets.get(b.facet).index
             || a.id.localeCompare(b.id));
     const lines = [
-        `contract=${TAG_PROMPT_TEXT_CONTRACT}`,
+        `contract=${promptTextContract}`,
         `registry_version=${tagCatalog.version}`,
         `registry_sha256=${tagCatalog.registrySha256}`,
-        '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。'
+        promptTextContract === LEGACY_TAG_PROMPT_TEXT_CONTRACT
+            ? '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。'
+            : '只能选择以下已启用概念的中文首选标签。ID 用于区分概念；不要创建新标签，也不要改用同义词。'
     ];
     let currentFacet = null;
     for (const concept of active) {
@@ -203,6 +211,7 @@ function getDefaultTagRules() {
 
 module.exports = {
     TAG_PROMPT_TEXT_CONTRACT,
+    LEGACY_TAG_PROMPT_TEXT_CONTRACT,
     TAG_SELECTION_CONTRACT,
     TAG_FLAT_COMPAT_CONTRACT,
     DEFAULT_REGISTRY_PATH,
