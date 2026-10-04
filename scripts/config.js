@@ -165,8 +165,8 @@ const HUGGINGFACE_CONFIG = {
 
 const FILES = {
     tagCatalogFile: path.join(PROJECT_ROOT, 'config', 'tag-catalog.json'),
-    // 升级前 registry 的字节快照（文件名 = 内容字节 SHA）。additive 判定与
-    // taxonomySeal 放宽必须能按 SHA 取回旧词表，取不回即 fail-closed。
+    // 保存升级前词表的原始字节，文件名使用这些字节的 SHA。
+    // 核验标签记录的词表升级时，必须按保存的 SHA 取得旧词表；找不到就拒绝继续。
     tagCatalogHistoryDir: path.join(PROJECT_ROOT, 'config', 'tag-catalog-history'),
     tagPreviewDir: path.join(DATA_DIR, 'runtime', 'taxonomy-preview'),
     tagRecordUpdateReportDir: path.join(DATA_DIR, 'runtime', 'taxonomy-reseal-reports'),

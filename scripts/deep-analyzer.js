@@ -8473,6 +8473,7 @@ function rollbackLegacyImageSupplementForModernReader(
 }
 
 const RECOVERY_MANIFEST_VERSION = 1;
+const ANALYSIS_STRUCTURE_NORMALIZATION_VERSION = 'analysis-structure-normalization-v2';
 const RECOVERY_STAGE_STATUSES = new Set([
     'pending', 'complete', 'not_needed', 'skipped', 'no_candidates',
     'no_high_value_images', 'no_downloadable_images', 'transient_failure', 'invalid_output', 'contract_rejected'
@@ -8708,7 +8709,7 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
         maxTokens: 8000,
         evidenceMaxChars: 30000,
         patterns: BROAD_EVIDENCE_PATTERNS,
-        taskLabel: 'TAXONOMY',
+        taskLabel: '标签核验与修复',
         typeAware: false
     }
 });
@@ -8768,6 +8769,7 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
             ? tagRuleFingerprintFields() : {}),
         ...(stage === 'structureRepair'
             ? {
+                analysisStructureNormalizationVersion: ANALYSIS_STRUCTURE_NORMALIZATION_VERSION,
                 experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
                 editorialLeakageContractVersion: ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION
             }
@@ -16205,14 +16207,14 @@ function normalizeAnalysisStructure(analysis) {
         values.primary_task_tag = parsedBefore.primaryTaskTag;
         values.primary_method_tag = parsedBefore.primaryMethodTag;
     }
-    values.primary_task_tag = values.primary_task_tag || '#taxonomy-pending-task';
-    values.primary_method_tag = values.primary_method_tag || '#taxonomy-pending-method';
+    values.primary_task_tag = values.primary_task_tag || '#待选择主任务';
+    values.primary_method_tag = values.primary_method_tag || '#待选择主方法';
     if (!findSectionBounds(updated, '标签')) {
         updated = replaceOrInsertRequiredSection(updated, '标签', [
-            '#taxonomy-pending-task #taxonomy-pending-method #taxonomy-pending-supplement',
-            '主任务标签: #taxonomy-pending-task',
-            '主方法标签: #taxonomy-pending-method',
-            '补充标签: #taxonomy-pending-supplement'
+            '#待选择主任务 #待选择主方法 #待选择补充标签',
+            '主任务标签: #待选择主任务',
+            '主方法标签: #待选择主方法',
+            '补充标签: #待选择补充标签'
         ].join('\n'));
     }
     updated = mergeSectionByTitle(updated, '机器摘要', REQUIRED_MACHINE_SUMMARY_KEYS

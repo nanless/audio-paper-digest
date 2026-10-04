@@ -19,10 +19,10 @@ test('resume excludes exact processed prefix only with immutable content hash an
  const checkpoint={contract:classify.CONTRACT+'-checkpoint',supplement:{contract:'historical-direct-taxonomy-supplement-v1',records:{}},processed:2,decisions:[{paperId:selection.paperIds[0],fingerprint:'f'.repeat(64)}],failures:[{paperId:selection.paperIds[1],status:'needs-review',error:'independent review rejected'}]};
  const options={planSha256:'plan',registrySha256:'registry',filename:'checkpoint-000002-'+runner.stableHash(checkpoint).slice(0,16)+'.json'};
  assert.deepEqual(classify.validateResumeCheckpoint(checkpoint,selection,options),selection.paperIds.slice(0,2));
- assert.throws(()=>classify.validateResumeCheckpoint(checkpoint,selection,{...options,filename:'checkpoint-000002-'+ 'a'.repeat(16)+'.json'}),/integrity/);
- assert.throws(()=>classify.validateResumeCheckpoint(checkpoint,selection,{...options,registrySha256:'changed'}),/integrity/);
+ assert.throws(()=>classify.validateResumeCheckpoint(checkpoint,selection,{...options,filename:'checkpoint-000002-'+ 'a'.repeat(16)+'.json'}),/续跑检查点或原选择记录/);
+ assert.throws(()=>classify.validateResumeCheckpoint(checkpoint,selection,{...options,registrySha256:'changed'}),/续跑检查点或原选择记录/);
  const changed=structuredClone(checkpoint);changed.failures[0].paperId=selection.paperIds[2];
- assert.throws(()=>classify.validateResumeCheckpoint(changed,selection,{...options,filename:'checkpoint-000002-'+runner.stableHash(changed).slice(0,16)+'.json'}),/prefix/);
+ assert.throws(()=>classify.validateResumeCheckpoint(changed,selection,{...options,filename:'checkpoint-000002-'+runner.stableHash(changed).slice(0,16)+'.json'}),/已处理论文重复，或与应有的已处理集合不一致/);
 });
 test('CLI accepts canonical conference IDs and rejects malformed or duplicate exclusions',()=>{
  const cli=require('../scripts/historical-tag-checkpoint-export.js');
@@ -39,7 +39,7 @@ test('new remaining cohort accepts only an exact replay of the official checkpoi
  const report={contract:classify.CONTRACT+'-checkpoint-export-report',processedPaperIds:['arxiv:2601.00001'],processed:1,acceptedCaches:1,remainingPaperIds:['arxiv:2601.00002']};
  assert.deepEqual(classify.validateResumeExportReport(report,structuredClone(report)),report.processedPaperIds);
  const changed={...report,processedPaperIds:report.remainingPaperIds};
- assert.throws(()=>classify.validateResumeExportReport(changed,report),/exact source\/cache\/checkpoint replay/);
+ assert.throws(()=>classify.validateResumeExportReport(changed,report),/重新核验的来源、缓存和检查点不一致/);
 });
 test('parallel completion checkpoint can safely exclude out-of-order completed IDs without skipping gaps',()=>{
  const selection={contract:classify.CONTRACT+'-selection',planSha256:'plan',registrySha256:'registry',paperIds:['arxiv:2601.00001','arxiv:2601.00002','arxiv:2601.00003']};
@@ -47,7 +47,7 @@ test('parallel completion checkpoint can safely exclude out-of-order completed I
  const options={planSha256:'plan',registrySha256:'registry',filename:'checkpoint-000002-'+runner.stableHash(checkpoint).slice(0,16)+'.json'};
  assert.deepEqual(classify.validateResumeCheckpoint(checkpoint,selection,options),checkpoint.processedPaperIds);
  const changed=structuredClone(checkpoint);changed.processedPaperIds.reverse();
- assert.throws(()=>classify.validateResumeCheckpoint(changed,selection,{...options,filename:'checkpoint-000002-'+runner.stableHash(changed).slice(0,16)+'.json'}),/ordered selection/);
+ assert.throws(()=>classify.validateResumeCheckpoint(changed,selection,{...options,filename:'checkpoint-000002-'+runner.stableHash(changed).slice(0,16)+'.json'}),/已处理集合的格式或顺序与原选择记录不一致/);
 });
 test('parallel export uses the exact completion set and treats later accepted caches as pending',()=>{
  const ids=['a','b','c','d'],selection={paperIds:ids};
@@ -84,7 +84,7 @@ test('partial exporter retains signed non-prefix completion and leaves extra cac
  assert.deepEqual(api.filterSignedRecords(normalized.supplement.records,caches,[]),original.supplement.records);
  assert.deepEqual(value,original);
  assert.throws(()=>api.normalizeCheckpoint(value,selection,{...options(value),filename:'partial-000002-'+ '0'.repeat(16)+'.json'}),/partial envelope/);
- assert.throws(()=>api.normalizeCheckpoint(value,selection,{...options(value),registrySha256:'another'}),/integrity/);
+ assert.throws(()=>api.normalizeCheckpoint(value,selection,{...options(value),registrySha256:'another'}),/续跑检查点或原选择记录的格式、身份、数量及文件名不符合要求/);
 });
 test('partial exporter rejects forged report counts, contracts, remaining closure and accepted projection',()=>{
  const {value,selection,options}=partialFixture();

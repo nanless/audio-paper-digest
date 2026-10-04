@@ -6104,7 +6104,45 @@ has_dataset: 否
         assert.match(normalized, /### 表 I：对比结果/);
         assert.match(normalized, /### 关键结论/);
         assert.doesNotMatch(normalized, /total_score:/);
-        assert.match(normalized, /#taxonomy-pending-task/);
+        assert.match(normalized, /#待选择主任务/);
+    });
+
+    it('结构规范化保留已有标签和非空坏值，只为缺失字段补中文待选标签', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const contract = require('../scripts/analysis-contract.js');
+        const legal = deep.normalizeAnalysisStructure(validAnalysisText());
+        assert.strictEqual(deep.normalizeAnalysisStructure(legal), legal);
+        assert.strictEqual(deep.extractSectionByTitle(legal, '标签'),
+            deep.extractSectionByTitle(validAnalysisText(), '标签'));
+
+        const invalidNonempty = legal
+            .replaceAll('#语音识别', '#未登记任务')
+            .replaceAll('#Transformer', '#未登记方法');
+        assert.strictEqual(deep.parseAnalysis(invalidNonempty).tagValidation.valid, false);
+        const preserved = deep.normalizeAnalysisStructure(invalidNonempty);
+        assert.match(preserved, /^primary_task_tag: #未登记任务$/m);
+        assert.match(preserved, /^primary_method_tag: #未登记方法$/m);
+        assert.doesNotMatch(preserved, /#待选择/);
+        assert.ok(contract.validateTagSectionContract(preserved, deep.parseAnalysis(preserved)));
+
+        const missing = legal
+            .replace('primary_task_tag: #语音识别', 'primary_task_tag:')
+            .replace('primary_method_tag: #Transformer', 'primary_method_tag:')
+            .replace(/\n## 标签\n[\s\S]*?(?=\n## 作者与机构)/, '');
+        const normalized = deep.normalizeAnalysisStructure(missing);
+        const parsed = deep.parseAnalysis(normalized);
+        assert.strictEqual(deep.extractSectionByTitle(normalized, '标签'), [
+            '#待选择主任务 #待选择主方法 #待选择补充标签',
+            '主任务标签: #待选择主任务',
+            '主方法标签: #待选择主方法',
+            '补充标签: #待选择补充标签'
+        ].join('\n'));
+        assert.match(normalized, /^primary_task_tag: #待选择主任务$/m);
+        assert.match(normalized, /^primary_method_tag: #待选择主方法$/m);
+        assert.strictEqual(contract.validateTopLevelSectionContract(normalized), null);
+        assert.deepStrictEqual(deep.getRepairableAnalysisStructureIssues(normalized), []);
+        assert.strictEqual(parsed.tagValidation.valid, false);
+        assert.ok(contract.validateTagSectionContract(normalized, parsed));
     });
 
     it('结构规范化不会为双标签正文伪造补充标签，标签阶段可以局部修复', () => {
@@ -7526,5 +7564,93 @@ describe('标签保存格式的实际执行与恢复边界', () => {
             'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
             'tableRepair', 'methodRepair', 'structureRepair', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
         ]);
+    });
+});
+
+
+describe('结构归一化和标签证据的新运行身份', () => {
+    it('标签任务名只改变证据标题，短全文和分段全文的选择及顺序保持', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const input = validAnalysisText();
+        for (const source of ['speech task evidence',
+            Array.from({ length: 1800 }, (_, index) => `speech task ${index}: method and experiment evidence.\n`).join('')]) {
+            const oldEvidence = deep.buildTaskEvidenceContext(source, 30000, undefined, 'TAXONOMY');
+            const evidence = deep.buildStageEvidenceContext('tagSelection', input, source);
+            assert.match(evidence, /^\[标签核验与修复_SOURCE_\d+\/\d+\]/);
+            assert.strictEqual(evidence.replace(/^\[标签核验与修复_SOURCE_/gm, '[TAXONOMY_SOURCE_'),
+                oldEvidence);
+            assert.notStrictEqual(deep.buildTextStageFingerprint('tagSelection', input, evidence),
+                deep.buildTextStageFingerprint('tagSelection', input, oldEvidence));
+        }
+        assert.strictEqual(deep.buildStageEvidenceContext('tagSelection', input, ''), '');
+    });
+
+    it('正常结构版本变化先保存旧快照，再按原闭包失效，保留 Reader 记录', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const input = validAnalysisText();
+        const source = 'speech task evidence';
+        const evidence = deep.buildStageEvidenceContext('structureRepair', input, source);
+        const originalCreateHash = crypto.createHash;
+        let payload;
+        let fingerprint;
+        try {
+            crypto.createHash = function(...args) {
+                const hash = originalCreateHash.apply(this, args);
+                const update = hash.update;
+                hash.update = function(value, ...rest) {
+                    if (typeof value === 'string' && value.startsWith('{')) {
+                        const candidate = JSON.parse(value);
+                        if (candidate.analysisStructureNormalizationVersion) payload = candidate;
+                    }
+                    return update.call(this, value, ...rest);
+                };
+                return hash;
+            };
+            fingerprint = deep.buildTextStageFingerprint('structureRepair', input, evidence);
+        } finally { crypto.createHash = originalCreateHash; }
+        assert.strictEqual(payload.analysisStructureNormalizationVersion, 'analysis-structure-normalization-v2');
+        const oldPayload = { ...payload };
+        delete oldPayload.analysisStructureNormalizationVersion;
+        const oldFingerprint = deep.stableFingerprint(oldPayload);
+        assert.notStrictEqual(fingerprint, oldFingerprint);
+        const paper = { analysisCheckpoint: 'old final checkpoint', analysisStageCheckpoints: {
+            methodRepair: input, structureRepair: input, taxonomySeal: input,
+            coreSummaryRepair: input, scoringAudit: input, imageSupplement: input,
+            apiReaderArticle: 'unchanged reader checkpoint'
+        }, apiReaderArticle: 'unchanged reader article',
+        analysisManifest: { version: 1, contracts: { taxonomy: 'paper-taxonomy-selection-v1' }, stages: {
+            methodRepair: { status: 'complete' },
+            structureRepair: { status: 'complete', fingerprint: oldFingerprint },
+            taxonomySeal: { status: 'complete' }, coreSummaryRepair: { status: 'complete' },
+            scoringAudit: { status: 'complete' }, imageSupplement: { status: 'complete' },
+            apiReaderArticle: { status: 'complete' }
+        } } };
+        const prior = structuredClone({ analysisCheckpoint: paper.analysisCheckpoint,
+            analysisStageCheckpoints: paper.analysisStageCheckpoints,
+            stages: paper.analysisManifest.stages, contracts: paper.analysisManifest.contracts });
+        const prepared = deep.prepareTextRecoveryStage(paper, paper.analysisManifest,
+            'structureRepair', paper.analysisCheckpoint, source);
+        assert.strictEqual(prepared.fingerprint, fingerprint);
+        assert.strictEqual(prepared.compatibilityReused, false);
+        assert.strictEqual(prepared.invalidated, true);
+        assert.strictEqual(prepared.analysis, input);
+        const snapshot = paper.analysisStaleSnapshots.at(-1);
+        assert.strictEqual(snapshot.invalidatedStage, 'structureRepair');
+        assert.strictEqual(snapshot.previousFingerprint, oldFingerprint);
+        assert.deepStrictEqual(snapshot.payload, prior);
+        assert.ok(deep.validateStaleAnalysisSnapshot(snapshot));
+        assert.deepStrictEqual(deep.recoveryInvalidationClosure('structureRepair'), [
+            'structureRepair', 'tagSelection', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
+        ]);
+        for (const key of ['structureRepair', 'taxonomySeal', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement']) {
+            assert.strictEqual(paper.analysisManifest.stages[key], undefined);
+            assert.strictEqual(paper.analysisStageCheckpoints[key], undefined);
+        }
+        assert.strictEqual(paper.analysisStageCheckpoints.methodRepair, input);
+        assert.strictEqual(paper.analysisManifest.stages.methodRepair.status, 'complete');
+        assert.strictEqual(paper.analysisManifest.stages.apiReaderArticle.status, 'complete');
+        assert.strictEqual(paper.analysisStageCheckpoints.apiReaderArticle, 'unchanged reader checkpoint');
+        assert.strictEqual(paper.apiReaderArticle, 'unchanged reader article');
+        assert.strictEqual(paper.analysisManifest.contracts?.taxonomy, undefined);
     });
 });
