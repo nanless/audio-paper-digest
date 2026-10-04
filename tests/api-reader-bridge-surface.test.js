@@ -3,17 +3,17 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const {
     collapseRepeatedReaderBridgeHeadings,
-    repairApiReaderPlanSurfaceBinding,
+    repairApiReaderArticleAndPlanBindings,
     stableFingerprint,
     buildApiReaderQualityMetrics,
-    apiReaderPreInjectionQualityView,
+    restoreApiReaderInjectionMarkers,
     normalizeReaderConceptBridgeTerms,
-    normalizeReaderEditorialSurfacePreservingSelectedTables,
-    normalizeReaderEditorialSurface,
+    normalizeReaderProsePreservingSelectedTables,
+    normalizeReaderProseFormatting,
     restoreReaderSelectedTableBytes,
     normalizeReaderWorkflowLeakageSurface,
     normalizeReaderFigureMetricUnits,
-    normalizeIssueBoundReaderTechnicalTermAdhesions,
+    repairReportedTextSpacing,
     canonicalReaderBridgeTerm,
     findReaderBridgeParagraph
 } = require('../scripts/deep-analyzer.js');
@@ -141,7 +141,7 @@ test('repairs both issue-bound Han/ASCII directions without touching quotes, fen
         tableBindings: [{ tableIndex: 1, selection: {} }],
         conceptBridges: [{ explanation: '桥段说明 Conformer编码器 与 编码器Conformer。' }]
     };
-    const changed = normalizeIssueBoundReaderTechnicalTermAdhesions(candidate, [
+    const changed = repairReportedTextSpacing(candidate, [
         { code: 'technical_term_adhesion', match: 'Conformer编码器' },
         { message: 'technical_term_adhesion:编码器Conformer；technical_term_adhesion:bellplay环；technical_term_adhesion:rtcmix数' }
     ]);
@@ -156,7 +156,7 @@ test('repairs both issue-bound Han/ASCII directions without touching quotes, fen
 
 test('normalizes tilde-decorated Latin names before the editorial gate', () => {
     assert.equal(
-        normalizeReaderEditorialSurface('运行 bellplay~环境 与 rtcmix~数据。'),
+        normalizeReaderProseFormatting('运行 bellplay~环境 与 rtcmix~数据。'),
         '运行 bellplay~ 环境 与 rtcmix~ 数据。'
     );
 });
@@ -164,7 +164,7 @@ test('normalizes tilde-decorated Latin names before the editorial gate', () => {
 test('preserves exact PDF cell bytes while normalizing surrounding Reader prose', () => {
     const table = '| Model | 0-12kHz | 12-18kHz |\n| --- | --- | --- |\n| Ours | 1.24 | 1.39 |';
     const article = `量化结果应保留来源表格。\n\n${table}\n\n表后解释保留比较方向。`;
-    const normalized = normalizeReaderEditorialSurfacePreservingSelectedTables(article, [1]);
+    const normalized = normalizeReaderProsePreservingSelectedTables(article, [1]);
     assert.ok(normalized.includes('| Model | 0-12kHz | 12-18kHz |'));
     assert.ok(!normalized.includes('0-12 kHz'));
     assert.ok(normalized.includes('量化结果应保留来源表格。'));
@@ -264,7 +264,7 @@ test('surface repair preserves production binding, reseals actual bytes and metr
     const paper = signedFixture();
     const before = structuredClone(paper);
     const stage = paper.analysisManifest.stages.apiReaderArticle;
-    assert.equal(repairApiReaderPlanSurfaceBinding(paper, paper.analysisManifest), true);
+    assert.equal(repairApiReaderArticleAndPlanBindings(paper, paper.analysisManifest), true);
     assert.equal(paper.apiReaderArticle, before.apiReaderArticle.replace(heading + ' ' + heading, heading));
     assert.equal(paper.apiReaderPlan.conceptBridges[0].explanation, heading + explanation);
     assert.equal(paper.apiReaderArticleSha256, sha(paper.apiReaderArticle));
@@ -283,7 +283,7 @@ test('surface repair preserves production binding, reseals actual bytes and metr
         assert.equal(stage[key], before.analysisManifest.stages.apiReaderArticle[key]);
     }
     const once = JSON.stringify(paper);
-    assert.equal(repairApiReaderPlanSurfaceBinding(paper, paper.analysisManifest), false);
+    assert.equal(repairApiReaderArticleAndPlanBindings(paper, paper.analysisManifest), false);
     assert.equal(JSON.stringify(paper), once);
 });
 
@@ -299,17 +299,17 @@ test('surface metrics replay only bound Figure and TeX injections back to the pa
         formulaBindings: [{ marker: '[[FORMULA_1]]', latex: 'x=1', renderedBlockSha256: sha(formula) }] };
     const authored = '### 解释现有图表\n\n这里是作者写出的说明段。\n\n';
     const final = authored + figureBlock + '\n\n' + formula;
-    const view = apiReaderPreInjectionQualityView(final, plan, [figure]);
+    const view = restoreApiReaderInjectionMarkers(final, plan, [figure]);
     assert.equal(view, authored + '[[FIGURE_1]]\n\n[[FORMULA_1]]');
     const quality = value => validateEditorialQuality({
         summary: '', method: value, innovations: '', results: '', details: '', limits: ''
     });
     assert.ok(quality(final).issues.some(issue => issue.match === '四个'));
     assert.ok(!quality(view).issues.some(issue => issue.match === '四个'));
-    assert.throws(() => apiReaderPreInjectionQualityView(final.replace(focus, '未绑定图文'), plan, [figure]),
+    assert.throws(() => restoreApiReaderInjectionMarkers(final.replace(focus, '未绑定图文'), plan, [figure]),
         /无法精确重放 Figure/);
-    assert.throws(() => apiReaderPreInjectionQualityView(final.replace('x=1', 'x=2'), plan, [figure]),
+    assert.throws(() => restoreApiReaderInjectionMarkers(final.replace('x=1', 'x=2'), plan, [figure]),
         /无法精确重放公式/);
     const unboundProse = '> **看图路径：** 正文声称四个未绑定面板';
-    assert.equal(apiReaderPreInjectionQualityView(unboundProse, {}, []), unboundProse);
+    assert.equal(restoreApiReaderInjectionMarkers(unboundProse, {}, []), unboundProse);
 });

@@ -121,6 +121,175 @@ test('publication transaction recovers through plan, generation, review, activat
         assert.equal(status.phase, 'published-with-visual-excluded');
         assert.equal(status.visual.complete, false);
         assert.equal(status.visual.audited, true);
+
+        const secondPublicationId = '22345678-1234-4123-8123-123456789abc';
+        assert.notEqual(secondPublicationId, publicationId);
+        const secondRoot = path.join(root, 'cli-transaction');
+        const secondOutputRoot = path.join(secondRoot, 'runtime');
+        const secondBlogRepo = path.join(secondRoot, 'blog');
+        const relativePage = 'content/posts/2026-01-01-paper.md';
+        const secondTarget = path.join(secondBlogRepo, relativePage);
+        fs.mkdirSync(path.dirname(secondTarget), { recursive: true, mode: 0o700 });
+        fs.mkdirSync(secondOutputRoot, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(secondTarget, baseline, { mode: 0o640 });
+        const targetMode = fs.lstatSync(secondTarget).mode & 0o777;
+        const events = [];
+        const calls = { locks: 0, installs: 0, commits: 0, pushes: 0, remoteReplays: 0, semantic: 0 };
+        let locked = false;
+        function snapshotTree(directory, prefix = '') {
+            return fs.readdirSync(directory).sort().flatMap(name => {
+                const filename = path.join(directory, name);
+                const relative = prefix ? `${prefix}/${name}` : name;
+                const stat = fs.lstatSync(filename);
+                return stat.isDirectory()
+                    ? [{ path: relative, kind: 'directory', mode: stat.mode & 0o777 }, ...snapshotTree(filename, relative)]
+                    : [{ path: relative, kind: 'file', mode: stat.mode & 0o777, bytes: fs.readFileSync(filename) }];
+            });
+        }
+        const firstArchive = snapshotTree(outputRoot);
+        const secondAuthority = fakeAuthority(next, baseline);
+        const secondOptions = { outputRoot: secondOutputRoot, publicationId: secondPublicationId, blogRepo: secondBlogRepo };
+        const secondDeps = {
+            loadAuthority: () => secondAuthority,
+            blogState: (repo, remote) => {
+                assert.equal(repo, secondBlogRepo); assert.equal(remote, 'origin'); return blogState();
+            },
+            gitBlob: () => baseline,
+            worktreeSha: (repo, relative) => {
+                assert.equal(repo, secondBlogRepo);
+                const filename = path.join(repo, relative);
+                return fs.existsSync(filename) ? sha(fs.readFileSync(filename)) : null;
+            },
+            sourceBytes: () => next, hugoVersion: 'hugo v0.cli-fixture',
+            hugoGate: () => ({ status: 'passed', engine: 'fixture', version: secondDeps.hugoVersion }),
+            semanticReview: ({ loadedPlan, generation, protocol }) => {
+                assert.equal(loadedPlan.plan.publicationId, secondPublicationId);
+                assert.equal(generation.manifest.publicationId, secondPublicationId);
+                calls.semantic += 1;
+                const page = { path: relativePage, sha256: sha(next), textChunks: 1, imageCount: 0,
+                    imageReviewMode: 'not-required', passed: true, issues: [] };
+                page.resultSha256 = api.stableHash(page);
+                const body = { contract: 'historical-direct-semantic-review-v1', version: 1,
+                    publicationId: secondPublicationId, generationSha256: generation.manifest.generationSha256,
+                    reviewProtocolFingerprint: protocol, semanticProtocol: api.semanticReviewProtocol(), results: [page],
+                    resultSetSha256: api.stableHash([page]), passed: true };
+                const receipt = { ...body, semanticReviewSha256: api.stableHash(body) };
+                const bytes = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`);
+                fs.writeFileSync(path.join(secondRoot, 'semantic-review.json'), bytes, { mode: 0o600 });
+                return { receipt, fileSha256: sha(bytes) };
+            },
+            now: () => now,
+            withBlogPublicationLock: callback => {
+                assert.equal(locked, false); calls.locks += 1;
+                assert.deepEqual(fs.readFileSync(secondTarget), calls.installs === 0 ? baseline : next);
+                events.push('lock-enter'); locked = true;
+                try { return callback(); }
+                finally { events.push('lock-exit'); locked = false; }
+            },
+            replaceFile: (filename, bytes, mode) => {
+                assert.equal(locked, true); assert.equal(filename, secondTarget);
+                assert.deepEqual(fs.readFileSync(filename), baseline);
+                assert.equal(Buffer.isBuffer(bytes), true); assert.deepEqual(bytes, next);
+                assert.equal(mode, targetMode); assert.equal(mode, fs.lstatSync(filename).mode & 0o777);
+                const temporary = `${filename}.${crypto.randomUUID()}.cli.tmp`;
+                const fd = fs.openSync(temporary,
+                    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, mode);
+                try { fs.writeFileSync(fd, bytes); fs.fchmodSync(fd, mode); fs.fsyncSync(fd); }
+                finally { fs.closeSync(fd); }
+                try { fs.renameSync(temporary, filename); }
+                finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+                assert.equal(locked, true); assert.deepEqual(fs.readFileSync(filename), next);
+                assert.equal(fs.lstatSync(filename).mode & 0o777, mode);
+                calls.installs += 1; events.push('installed');
+            },
+            validateActivatedWorktree: (repo, paths) => {
+                assert.equal(locked, true); assert.equal(repo, secondBlogRepo);
+                assert.deepEqual(paths, [relativePage]); assert.deepEqual(fs.readFileSync(secondTarget), next);
+                return true;
+            },
+            prePublishRemote: (repo, remote) => {
+                assert.equal(locked, true); assert.equal(repo, secondBlogRepo); assert.equal(remote, 'origin');
+                return { branch: 'main', localHead: oid('a'), remoteIdentitySha256: hash('d'), remoteOid: oid('a') };
+            },
+            publishGit: ({ blogRepo: repo, plan: currentPlan, publicationId: currentId }) => {
+                assert.equal(locked, true); assert.equal(repo, secondBlogRepo); assert.equal(currentId, secondPublicationId);
+                assert.equal(calls.installs, 1); assert.deepEqual(fs.readFileSync(secondTarget), next);
+                const loaded = api.loadPlan(secondOptions);
+                const generation = api.loadGeneration(loaded).manifest;
+                const reviewed = api.loadReview(loaded).receipt;
+                const activated = api.loadActivation(loaded).receipt;
+                assert.equal(currentPlan.planSha256, loaded.plan.planSha256);
+                assert.equal(activated.publicationId, secondPublicationId);
+                assert.equal(activated.generationSha256, generation.generationSha256);
+                assert.equal(activated.reviewSha256, reviewed.reviewSha256);
+                assert.equal(activated.exactDeltaSha256, currentPlan.exactDeltaSha256);
+                assert.deepEqual(activated.activatedFiles, [{ path: relativePage, sha256: sha(next) }]);
+                calls.commits += 1; events.push('committed'); return oid('f');
+            },
+            pushAndVerify: ({ blogRepo: repo, remoteName, commit }) => {
+                assert.equal(locked, true); assert.equal(repo, secondBlogRepo); assert.equal(remoteName, 'origin');
+                assert.equal(commit, oid('f')); assert.equal(calls.commits, 1);
+                const loaded = api.loadPlan(secondOptions);
+                const committed = api.loadCommit(loaded).receipt;
+                assert.equal(committed.publicationId, secondPublicationId);
+                assert.equal(committed.publicationCommit, commit);
+                assert.equal(committed.activationSha256, api.loadActivation(loaded).receipt.activationSha256);
+                assert.equal(committed.reviewSha256, api.loadReview(loaded).receipt.reviewSha256);
+                assert.equal(committed.exactDeltaSha256, loaded.plan.exactDeltaSha256);
+                calls.pushes += 1; events.push('pushed-and-verified');
+                return { remoteName, remoteIdentitySha256: hash('d'), remoteVerifiedOid: commit };
+            },
+            liveRemote: (repo, remote) => {
+                assert.equal(locked, true); assert.equal(repo, secondBlogRepo); assert.equal(remote, 'origin');
+                calls.remoteReplays += 1;
+                return { remoteIdentitySha256: hash('d'), remoteOid: oid('f') };
+            }
+        };
+        const secondPlan = api.buildPlan({ publicationId: secondPublicationId, authorityOptions: {},
+            blogRepo: secondBlogRepo, createdAt: now }, secondDeps);
+        assert.equal(secondPlan.exactDelta.length, 1);
+        assert.equal(api.writePlan({ outputRoot: secondOutputRoot, plan: secondPlan }).status, 'planned');
+        assert.equal(api.generate({ ...secondOptions, authorityOptions: {}, apply: true }, secondDeps).status, 'generated');
+        assert.equal(api.review({ ...secondOptions, apply: true }, secondDeps).status, 'reviewed');
+        const config = { FILES: { historicalDirectPublicationDir: secondOutputRoot },
+            PUBLISH_CONFIG: { blogRepo: secondBlogRepo, githubRemote: 'origin' } };
+        const runtime = { config, dependencies: secondDeps };
+        const beforeRejectedActivation = snapshotTree(secondRoot);
+        assert.throws(() => cli.main(['activate', '--apply', '--publication-id', secondPublicationId], runtime),
+            /standalone activate --apply is disabled/);
+        assert.deepEqual(snapshotTree(secondRoot), beforeRejectedActivation);
+        assert.deepEqual(calls, { locks: 0, installs: 0, commits: 0, pushes: 0, remoteReplays: 0, semantic: 1 });
+        assert.deepEqual(events, []); assert.equal(locked, false);
+        const published = cli.main(['publish', '--apply', '--publication-id', secondPublicationId], runtime);
+        assert.equal(published.status, 'published');
+        assert.deepEqual(events, ['lock-enter', 'installed', 'committed', 'pushed-and-verified', 'lock-exit']);
+        assert.deepEqual(calls, { locks: 1, installs: 1, commits: 1, pushes: 1, remoteReplays: 0, semantic: 1 });
+        assert.equal(locked, false); assert.deepEqual(fs.readFileSync(secondTarget), next);
+        const loadedSecond = api.loadPlan(secondOptions);
+        const activationReceipt = api.loadActivation(loadedSecond).receipt;
+        const commitReceipt = api.loadCommit(loadedSecond).receipt;
+        const publicationReceipt = api.loadPublication(loadedSecond).receipt;
+        assert.equal(publicationReceipt.publicationId, secondPublicationId);
+        assert.equal(publicationReceipt.planSha256, secondPlan.planSha256);
+        assert.equal(publicationReceipt.activationSha256, activationReceipt.activationSha256);
+        assert.equal(publicationReceipt.commitSha256, commitReceipt.commitSha256);
+        assert.equal(publicationReceipt.reviewSha256, api.loadReview(loadedSecond).receipt.reviewSha256);
+        assert.equal(publicationReceipt.exactDeltaSha256, secondPlan.exactDeltaSha256);
+        assert.equal(publicationReceipt.remoteIdentitySha256, hash('d'));
+        assert.equal(publicationReceipt.remoteVerifiedOid, commitReceipt.publicationCommit);
+        assert.equal(publicationReceipt.remoteVerifiedOid, oid('f'));
+        const publicationBytes = fs.readFileSync(path.join(loadedSecond.directory, 'publication.json'));
+        const commitBytes = fs.readFileSync(path.join(loadedSecond.directory, 'commit.json'));
+        events.length = 0;
+        const replayed = cli.main(['publish', '--apply', '--publication-id', secondPublicationId], runtime);
+        assert.equal(replayed.status, 'already-published'); assert.deepEqual(replayed.receipt, publicationReceipt);
+        assert.deepEqual(events, ['lock-enter', 'lock-exit']);
+        assert.deepEqual(calls, { locks: 2, installs: 1, commits: 1, pushes: 1, remoteReplays: 1, semantic: 1 });
+        assert.equal(locked, false); assert.deepEqual(fs.readFileSync(secondTarget), next);
+        assert.deepEqual(fs.readFileSync(path.join(loadedSecond.directory, 'publication.json')), publicationBytes);
+        assert.deepEqual(fs.readFileSync(path.join(loadedSecond.directory, 'commit.json')), commitBytes);
+        assert.deepEqual(snapshotTree(outputRoot), firstArchive);
+        assert.deepEqual(fs.readFileSync(target), next);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

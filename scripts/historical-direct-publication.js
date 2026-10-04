@@ -71,7 +71,7 @@ function roots(Config) {
         freshArxivSourceRoot: Config.FILES.freshArxivFetchedSourcesDir,
         publicationMetadataRoot: Config.FILES.historicalArxivPublicationMetadataDir };
 }
-function authorityOptions(options, Config) {
+function buildPublicationInputOptions(options, Config) {
     return { planFile: options.planFile, registryFile: options.registryFile, projectionFile: options.projectionFile,
         visualDispositionFile: options.visualDispositionFile,
         selectedPaperIds: options.paperIds || [],
@@ -121,7 +121,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
         const result = api.status({ ...common, liveRemote: options.liveRemote });
         console.log(JSON.stringify(result)); if (!result.complete) process.exitCode = 1; return result;
     }
-    const authority = ['plan', 'generate'].includes(options.action) ? authorityOptions(options, Config) : null;
+    const authority = ['plan', 'generate'].includes(options.action) ? buildPublicationInputOptions(options, Config) : null;
     if (options.action === 'plan') {
         let plan = api.buildPlan({ publicationId: options.publicationId, authorityOptions: authority,
             blogRepo: common.blogRepo, remoteName: common.remoteName }, runtime.dependencies || {});
@@ -135,10 +135,10 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     if (options.action === 'activate' && options.apply) {
         throw new Error('standalone activate --apply is disabled; use publish --apply so activation, commit, push and OID verification share one blog lock');
     }
-    const operation = options.action === 'publish' ? api.closeout : api[options.action];
+    const operation = options.action === 'publish' ? api.activateAndPublish : api[options.action];
     const result = operation(args, runtime.dependencies || {}); console.log(JSON.stringify(result)); return result;
 }
 if (require.main === module) {
     try { main(); } catch (error) { console.error(`[historical-direct-publication] ${error.message}`); process.exitCode = 1; }
 }
-module.exports = { USAGE, parseArgs, roots, authorityOptions, writeArtifact, main };
+module.exports = { USAGE, parseArgs, roots, buildPublicationInputOptions, writeArtifact, main };

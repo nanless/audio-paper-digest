@@ -1408,7 +1408,7 @@ test('historical direct accepts one preflight fetch, defers candidate retirement
     assert.equal(modelCalls, 1);
     assert.equal(materializations, 1, 'Reader preflight fetches Figure pixels exactly once');
     const injected = deep.injectApiReaderFigures(first, sourceDetails.structuredArtifacts, id);
-    const receipts = deep.materializeDirectApiReaderFiguresFromEvidence(
+    const receipts = deep.bindDirectApiReaderFiguresToEvidence(
         injected.figures, first.imageEvidence
     );
     assert.equal(materializations, 1, 'accepted Reader post-processing performs zero additional network fetches');

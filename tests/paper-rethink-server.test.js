@@ -116,26 +116,230 @@ function httpRequest(server, {
         requestHeaders['Content-Length'] = encoded.length;
     }
     return new Promise((resolve, reject) => {
-        const req = http.request({
-            host: DEFAULT_HOST,
-            port: server.address().port,
-            method,
-            path,
-            headers: requestHeaders
-        }, res => {
-            const chunks = [];
-            res.on('data', chunk => chunks.push(chunk));
-            res.on('end', () => resolve({
-                statusCode: res.statusCode,
-                headers: res.headers,
-                text: Buffer.concat(chunks).toString('utf8')
-            }));
-        });
-        req.once('error', reject);
-        if (encoded) req.write(encoded);
-        req.end();
+        let req;
+        let response;
+        let responseEnded = false;
+        let requestClosed = false;
+        let result;
+        const errors = [];
+        const finish = () => {
+            if (!requestClosed) return;
+            if (errors.length) {
+                reject(errors[0]);
+            } else if (responseEnded && response.complete === true) {
+                resolve(result);
+            }
+        };
+        const fail = error => {
+            errors.push(error);
+            if (!req) {
+                reject(error);
+                return;
+            }
+            if (!req.destroyed) req.destroy();
+            finish();
+        };
+        try {
+            req = http.request({
+                host: DEFAULT_HOST,
+                port: server.address().port,
+                method,
+                path,
+                headers: requestHeaders
+            }, res => {
+                response = res;
+                const chunks = [];
+                res.on('data', chunk => chunks.push(chunk));
+                res.on('error', fail);
+                res.on('aborted', () => fail(new Error('HTTP 响应中断，正文未接收完整。')));
+                res.on('close', () => {
+                    if (!responseEnded || res.complete !== true) {
+                        fail(new Error('HTTP 响应在正文接收完整前关闭。'));
+                    }
+                });
+                res.on('end', () => {
+                    responseEnded = true;
+                    if (res.complete !== true) {
+                        fail(new Error('HTTP 响应在正文接收完整前结束。'));
+                        return;
+                    }
+                    result = {
+                        statusCode: res.statusCode,
+                        headers: res.headers,
+                        text: Buffer.concat(chunks).toString('utf8')
+                    };
+                    finish();
+                });
+            });
+            req.on('error', fail);
+            req.once('close', () => {
+                requestClosed = true;
+                if (!response && !errors.length) {
+                    errors.push(new Error('请求已关闭，但没有收到 HTTP 响应。'));
+                }
+                finish();
+            });
+            if (encoded) req.write(encoded);
+            req.end();
+        } catch (error) {
+            fail(error);
+        }
     });
 }
+
+it('HTTP 请求只在响应完整且请求关闭后完成，并拒绝所有传输错误', async t => {
+    const { EventEmitter } = require('node:events');
+    const createRequestFixture = ({ statusCode = 413, constructionError = null, writeError = null } = {}) => {
+        const req = new EventEmitter();
+        const res = new EventEmitter();
+        const writes = [];
+        let endCalls = 0;
+        let destroyCalls = 0;
+        let responseCallback;
+        let requestOptions;
+        let state = 'pending';
+        req.destroyed = false;
+        req.write = bytes => {
+            if (writeError) throw writeError;
+            writes.push(bytes);
+        };
+        req.end = () => { endCalls++; };
+        req.destroy = () => { destroyCalls++; req.destroyed = true; return req; };
+        res.statusCode = statusCode;
+        res.headers = { 'content-type': 'application/json' };
+        res.complete = false;
+        const originalRequest = http.request;
+        const mock = t.mock.method(http, 'request', (options, callback) => {
+            if (constructionError) throw constructionError;
+            requestOptions = options;
+            responseCallback = callback;
+            return req;
+        });
+        let promise;
+        try {
+            promise = httpRequest({ address: () => ({ port: 32123 }) }, {
+                method: 'POST', path: '/v1/rethink',
+                headers: { 'X-Lifecycle-Test': 'yes' }, body: '请求正文。'
+            });
+        } finally {
+            mock.mock.restore();
+        }
+        assert.strictEqual(http.request, originalRequest);
+        promise.then(() => { state = 'resolved'; }, () => { state = 'rejected'; });
+        return {
+            req, res, promise, writes,
+            get state() { return state; },
+            get endCalls() { return endCalls; },
+            get destroyCalls() { return destroyCalls; },
+            get requestOptions() { return requestOptions; },
+            respond() { responseCallback(res); },
+            completeResponse() {
+                res.emit('data', Buffer.from('{"ok":'));
+                res.emit('data', Buffer.from('false}'));
+                res.complete = true;
+                res.emit('end');
+            },
+            closeRequest() { req.destroyed = true; req.emit('close'); }
+        };
+    };
+
+    for (const statusCode of [200, 413]) {
+        const testRequest = createRequestFixture({ statusCode });
+        assert.deepStrictEqual(testRequest.requestOptions, {
+            host: DEFAULT_HOST, port: 32123, method: 'POST', path: '/v1/rethink',
+            headers: { 'X-Lifecycle-Test': 'yes', 'Content-Length': Buffer.byteLength('请求正文。') }
+        });
+        assert.deepStrictEqual(testRequest.writes, [Buffer.from('请求正文。')]);
+        assert.strictEqual(testRequest.endCalls, 1);
+        testRequest.respond();
+        testRequest.completeResponse();
+        await Promise.resolve();
+        assert.strictEqual(testRequest.state, 'pending');
+        testRequest.closeRequest();
+        assert.deepStrictEqual(await testRequest.promise, {
+            statusCode, headers: testRequest.res.headers, text: '{"ok":false}'
+        });
+        assert.strictEqual(testRequest.destroyCalls, 0);
+    }
+
+    const closeFirst = createRequestFixture();
+    closeFirst.respond();
+    closeFirst.res.complete = true;
+    closeFirst.closeRequest();
+    await Promise.resolve();
+    assert.strictEqual(closeFirst.state, 'pending');
+    closeFirst.completeResponse();
+    assert.strictEqual((await closeFirst.promise).statusCode, 413);
+
+    for (const afterResponse of [false, true]) {
+        for (const code of ['EPIPE', 'UNKNOWN_REQUEST_ERROR']) {
+            const testRequest = createRequestFixture();
+            if (afterResponse) { testRequest.respond(); testRequest.completeResponse(); }
+            const first = Object.assign(new Error('请求写入失败。'), { code });
+            const second = Object.assign(new Error('请求再次报告写入失败。'), { code: 'SECOND_REQUEST_ERROR' });
+            assert.doesNotThrow(() => testRequest.req.emit('error', first));
+            assert.doesNotThrow(() => testRequest.req.emit('error', second));
+            assert.strictEqual(testRequest.req.listenerCount('error'), 1);
+            assert.strictEqual(testRequest.destroyCalls, 1);
+            await Promise.resolve();
+            assert.strictEqual(testRequest.state, 'pending');
+            testRequest.closeRequest();
+            await assert.rejects(testRequest.promise, error => error === first);
+        }
+    }
+
+    const noResponse = createRequestFixture();
+    noResponse.closeRequest();
+    await assert.rejects(noResponse.promise, /没有收到 HTTP 响应/);
+
+    for (const event of ['error', 'aborted', 'close', 'end']) {
+        const testRequest = createRequestFixture();
+        testRequest.respond();
+        testRequest.res.emit('data', Buffer.from('{"ok":'));
+        const error = new Error('响应读取失败。');
+        assert.doesNotThrow(() => testRequest.res.emit(event, error));
+        if (event === 'error') {
+            assert.doesNotThrow(() => testRequest.res.emit('error', new Error('响应再次报告读取失败。')));
+            assert.strictEqual(testRequest.res.listenerCount('error'), 1);
+        }
+        assert.strictEqual(testRequest.destroyCalls, 1);
+        await Promise.resolve();
+        assert.strictEqual(testRequest.state, 'pending');
+        testRequest.closeRequest();
+        await assert.rejects(testRequest.promise, event === 'error'
+            ? caught => caught === error
+            : /HTTP 响应.*(?:中断|关闭|结束)/);
+    }
+
+    const closedPartial = createRequestFixture();
+    closedPartial.respond();
+    closedPartial.closeRequest();
+    await Promise.resolve();
+    assert.strictEqual(closedPartial.state, 'pending');
+    closedPartial.res.emit('close');
+    await assert.rejects(closedPartial.promise, /正文接收完整前关闭/);
+
+    const lateResponseError = createRequestFixture();
+    lateResponseError.respond();
+    lateResponseError.completeResponse();
+    const responseError = new Error('完整响应之后仍报告传输错误。');
+    lateResponseError.res.emit('error', responseError);
+    lateResponseError.closeRequest();
+    await assert.rejects(lateResponseError.promise, error => error === responseError);
+
+    const constructionError = new Error('请求构造失败。');
+    const constructionFailure = createRequestFixture({ constructionError });
+    await assert.rejects(constructionFailure.promise, error => error === constructionError);
+    assert.strictEqual(constructionFailure.destroyCalls, 0);
+    const writeError = new Error('同步写入失败。');
+    const writeFailure = createRequestFixture({ writeError });
+    assert.strictEqual(writeFailure.destroyCalls, 1);
+    assert.strictEqual(writeFailure.endCalls, 0);
+    await Promise.resolve();
+    assert.strictEqual(writeFailure.state, 'pending');
+    writeFailure.closeRequest();
+    await assert.rejects(writeFailure.promise, error => error === writeError);
+});
 
 describe('paper rethink endpoint policy', () => {
     it('uses the shared Muse family proxy policy for current and future model versions', () => {

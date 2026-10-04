@@ -10,11 +10,11 @@ const {
     refreshApiReaderFiguresFromSource,
     normalizeApiReaderFigureMarkdown,
     stableFingerprint,
-    repairApiReaderPlanSurfaceBinding,
+    repairApiReaderArticleAndPlanBindings,
     restoreReaderSelectedTableBytes,
     rewriteApiReaderFigureNarratives,
     normalizeApiReaderTablePasteArtifacts,
-    normalizeReaderEditorialSurface
+    normalizeReaderProseFormatting
 } = require('./deep-analyzer.js');
 const {
     readJsonFileStrict,
@@ -309,7 +309,7 @@ async function refreshApiReader(targetId, options = {}) {
                     repaired.apiReaderArticle
                 );
                 repaired.apiReaderArticle = repaired.apiReaderArticle.replace(
-                    /采样率\s*1\s*般\s*16\s*千赫/g, match => normalizeReaderEditorialSurface(match)
+                    /采样率\s*1\s*般\s*16\s*千赫/g, match => normalizeReaderProseFormatting(match)
                 );
                 for (const binding of repaired.apiReaderPlan?.tableBindings || []) {
                     if (binding.sourceType !== 'artifact_table') continue;
@@ -342,7 +342,7 @@ async function refreshApiReader(targetId, options = {}) {
                 );
                 repaired.apiReaderArticleSha256 = crypto.createHash('sha256')
                     .update(repaired.apiReaderArticle).digest('hex');
-                repairApiReaderPlanSurfaceBinding(repaired, repaired.analysisManifest);
+                repairApiReaderArticleAndPlanBindings(repaired, repaired.analysisManifest);
                 if (repaired.analysisManifest.stages.apiReaderArticle.articleSha256
                     !== repaired.apiReaderArticleSha256
                     || repaired.analysisManifest.stages.apiReaderArticle.sourceBindingsSha256

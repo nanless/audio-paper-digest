@@ -6,7 +6,7 @@ const { describe, it } = require('node:test');
 const {
     buildApiReaderArtifactEvidence,
     buildApiReaderValidationFeedback,
-    normalizeReaderEditorialSurface
+    normalizeReaderProseFormatting
 } = require('../scripts/deep-analyzer.js');
 
 describe('Reader formula inventory feedback', () => {
@@ -46,7 +46,7 @@ describe('Reader formula inventory feedback', () => {
 
     it('inserts a Han boundary space after a starred technical variant', () => {
         assert.strictEqual(
-            normalizeReaderEditorialSurface('GatherMOS-ZS*中的对照更严格。'),
+            normalizeReaderProseFormatting('GatherMOS-ZS*中的对照更严格。'),
             'GatherMOS-ZS* 中的对照更严格。'
         );
     });

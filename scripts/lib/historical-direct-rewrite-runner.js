@@ -1366,7 +1366,7 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
     repairCompletedAnalysisSurface = null }) {
     const repair = repairCompletedAnalysisSurface
         || ((analysis, manifest) => require('../deep-analyzer.js')
-            .repairApiReaderPlanSurfaceBinding(analysis, manifest));
+            .repairApiReaderArticleAndPlanBindings(analysis, manifest));
     const beforeRecordSha256 = stableHash(completed.analysis);
     if (repair(completed.analysis, completed.analysis.analysisManifest) !== true) {
         return { ...completed, surfaceRepair: null, analysisReceipt: active.analysis };

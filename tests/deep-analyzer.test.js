@@ -1826,10 +1826,10 @@ primary_task_tag: #音视频生成
             isAllowedReaderNarrativeNumeralIssue,
             isAllowedReaderDefensiveNegationIssue,
             splitReaderLongParagraphs,
-            normalizeReaderEditorialSurface,
+            normalizeReaderProseFormatting,
             canonicalReaderBridgeTerm,
-            normalizeApiReaderTableBlockSpacing,
-            repairApiReaderPlanSurfaceBinding,
+            separateApiReaderTableBlocks,
+            repairApiReaderArticleAndPlanBindings,
             buildApiReaderQualityMetrics,
             scoringStabilityResolutionIsValid,
             bindStructuredArtifactsToText
@@ -1899,7 +1899,7 @@ primary_task_tag: #音视频生成
         assert.strictEqual(isAllowedReaderDefensiveNegationIssue({
             code: 'defensive_negation_saturation', count: 30
         }, '这是长文正文。'.repeat(900)), false);
-        const tableSpacing = normalizeApiReaderTableBlockSpacing([
+        const tableSpacing = separateApiReaderTableBlocks([
             '比较问题与统一条件、基线和指标方向都在这个段落中说明。',
             '| 方法 | WER |',
             '|---|---:|',
@@ -1926,77 +1926,77 @@ primary_task_tag: #音视频生成
             assert.ok((paragraph.match(/[。！？!?；;]/g) || []).length <= 5);
         }
         assert.strictEqual(
-            normalizeReaderEditorialSurface('把ITD和ILD交给两个模型。', [{
+            normalizeReaderProseFormatting('把ITD和ILD交给两个模型。', [{
                 code: 'quantitative_chinese_numeral', match: '两个模型'
             }]),
             '把 ITD 和 ILD 交给 2 个模型。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('结果为-6.84dB，到-2.76dB，延迟12ms。'),
+            normalizeReaderProseFormatting('结果为-6.84dB，到-2.76dB，延迟12ms。'),
             '结果为 -6.84 dB，到 -2.76 dB，延迟 12 ms。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('码率从1.1kbps升至6kbps。'),
+            normalizeReaderProseFormatting('码率从1.1kbps升至6kbps。'),
             '码率从 1.1 kbps 升至 6 kbps。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('主观选择为25对10分，延迟为0.77 vs 0.85秒。'),
+            normalizeReaderProseFormatting('主观选择为25对10分，延迟为0.77 vs 0.85秒。'),
             '主观选择为 25 对 10 分，延迟为 0.77 vs 0.85 秒。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('Attn.与卷积并行，Attn.的输出进入门控层。'),
+            normalizeReaderProseFormatting('Attn.与卷积并行，Attn.的输出进入门控层。'),
             'Attn. 与卷积并行，Attn. 的输出进入门控层。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('同 1 条曲线使用alpha 三，规模为1 万。', [
+            normalizeReaderProseFormatting('同 1 条曲线使用alpha 三，规模为1 万。', [
                 { code: 'quantitative_chinese_numeral', match: 'alpha 三' },
                 { code: 'quantitative_chinese_numeral', match: '1 万' }
             ]),
             '同一条曲线使用 alpha 3，规模为 10,000。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('百例标注覆盖一百二十段音频。', [
+            normalizeReaderProseFormatting('百例标注覆盖一百二十段音频。', [
                 { code: 'quantitative_chinese_numeral', match: '百例' },
                 { code: 'quantitative_chinese_numeral', match: '一百二十段' }
             ]),
             '100 例标注覆盖 120 段音频。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('延迟为数 10 毫秒。', [{
+            normalizeReaderProseFormatting('延迟为数 10 毫秒。', [{
                 code: 'quantitative_chinese_numeral', match: '数 10'
             }]),
             '延迟为数十毫秒。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('季度销售额为 $35 million，预算仍是 \\$20。'),
+            normalizeReaderProseFormatting('季度销售额为 $35 million，预算仍是 \\$20。'),
             '季度销售额为 35 million 美元，预算仍是 20 美元。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('该结论只覆盖单一宿主；\n\n下一段继续。'),
+            normalizeReaderProseFormatting('该结论只覆盖单一宿主；\n\n下一段继续。'),
             '该结论只覆盖单一宿主。\n\n下一段继续。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('该权重衡量跨窗口 1 致性。'),
+            normalizeReaderProseFormatting('该权重衡量跨窗口 1 致性。'),
             '该权重衡量跨窗口一致性。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface('受限提示 The final answer is: <True/False>，另见 `<S>`。'),
+            normalizeReaderProseFormatting('受限提示 The final answer is: <True/False>，另见 `<S>`。'),
             '受限提示 The final answer is: `<True/False>`，另见 `<S>`。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface(
+            normalizeReaderProseFormatting(
                 '演示：https://aspire.ugent.be/demos/IWAENC2026HZ/，模型有300M参数。'
             ),
             '演示：https://aspire.ugent.be/demos/IWAENC2026HZ/，模型有 300M 参数。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface(
+            normalizeReaderProseFormatting(
                 'CER 却更差为 24.05 对 22.48，余弦相似度为 0.838 对 0.864。'
             ),
             'CER 却更差为 24.05 对 22.48，余弦相似度为 0.838 对 0.864。'
         );
         assert.strictEqual(
-            normalizeReaderEditorialSurface(
+            normalizeReaderProseFormatting(
                 'CER 24.05 差于 22.48，另一组 CER 从 32.56 降至 24.14。'
             ),
             'CER 24.05 差于 22.48，另一组 CER 从 32.56 降至 24.14。'
@@ -2025,7 +2025,7 @@ primary_task_tag: #音视频生成
             status: 'complete', planSha256: '0'.repeat(64)
         } } };
         assert.strictEqual(
-            repairApiReaderPlanSurfaceBinding(recoveryPaper, recoveryManifest), true
+            repairApiReaderArticleAndPlanBindings(recoveryPaper, recoveryManifest), true
         );
         assert.strictEqual(
             recoveryPaper.apiReaderPlan.sections[0].heading,
@@ -2100,7 +2100,7 @@ primary_task_tag: #音视频生成
             figuresSha256: '0'.repeat(64)
         } } };
         assert.strictEqual(
-            repairApiReaderPlanSurfaceBinding(
+            repairApiReaderArticleAndPlanBindings(
                 historicalFigurePaper, historicalFigureManifest
             ),
             true
@@ -2166,7 +2166,7 @@ primary_task_tag: #音视频生成
             status: 'complete', planSha256: '0'.repeat(64)
         } } };
         assert.strictEqual(
-            repairApiReaderPlanSurfaceBinding(bridgePaper, bridgeManifest), true
+            repairApiReaderArticleAndPlanBindings(bridgePaper, bridgeManifest), true
         );
         assert.strictEqual(
             bridgePaper.apiReaderPlan.conceptBridges[0].explanation,
@@ -3001,7 +3001,7 @@ primary_task_tag: #音视频生成
     });
 
     it('modern Reader 零图旧插图只能按封存块和评分 SHA 严格逆移除', () => {
-        const { repairApiReaderPlanSurfaceBinding } = require('../scripts/deep-analyzer.js');
+        const { repairApiReaderArticleAndPlanBindings } = require('../scripts/deep-analyzer.js');
         const hash = value => crypto.createHash('sha256').update(value).digest('hex');
         const canonical = value => Array.isArray(value)
             ? value.map(canonical)
@@ -3099,7 +3099,7 @@ primary_task_tag: #音视频生成
         });
         const repaired = makePaper();
         assert.strictEqual(
-            repairApiReaderPlanSurfaceBinding(repaired, repaired.analysisManifest), true
+            repairApiReaderArticleAndPlanBindings(repaired, repaired.analysisManifest), true
         );
         assert.strictEqual(repaired.analysis, scoringAnalysis);
         assert.strictEqual(hash(repaired.analysis),
@@ -3119,7 +3119,7 @@ primary_task_tag: #音视频生成
         corrupted.analysisManifest.stages.imageSupplement.outputAnalysisSha256 =
             hash(corrupted.analysis);
         assert.throws(
-            () => repairApiReaderPlanSurfaceBinding(corrupted, corrupted.analysisManifest),
+            () => repairApiReaderArticleAndPlanBindings(corrupted, corrupted.analysisManifest),
             /插入块不唯一/
         );
     });
@@ -3729,7 +3729,7 @@ primary_task_tag: #音视频生成
     });
 
     it('Reader 数值排版保护逐字引语、转录、代码与原始公式，不跨保护边界替换', () => {
-        const { normalizeReaderEditorialSurface } = require('../scripts/deep-analyzer.js');
+        const { normalizeReaderProseFormatting } = require('../scripts/deep-analyzer.js');
         const { findQuantitativeChineseNumerals } = require('../scripts/editorial-quality.js');
         const transcript = '零点九九九九九九五，把它十万次幂，概率是百分之九十五';
         const literals = [
@@ -3747,10 +3747,10 @@ primary_task_tag: #音视频生成
         for (const literal of literals) {
             const issues = findQuantitativeChineseNumerals(literal).map(issue => ({ ...issue,
                 code: 'quantitative_chinese_numeral' }));
-            assert.equal(normalizeReaderEditorialSurface(literal, issues), literal);
+            assert.equal(normalizeReaderProseFormatting(literal, issues), literal);
         }
         const sourceQuoteDisplayTable = '| 原文设置 | 20–200 Hz、4–10 kHz四带 | 最小叶2 | 1024点、20 Hz到10 kHz | 80步、裁剪1 | 600条5 s |';
-        const normalizedSourceQuoteDisplayTable = normalizeReaderEditorialSurface(sourceQuoteDisplayTable);
+        const normalizedSourceQuoteDisplayTable = normalizeReaderProseFormatting(sourceQuoteDisplayTable);
         assert.match(normalizedSourceQuoteDisplayTable, /kHz 四带/);
         assert.match(normalizedSourceQuoteDisplayTable, /最小叶 2/);
         assert.match(normalizedSourceQuoteDisplayTable, /1024 点/);
@@ -3761,12 +3761,12 @@ primary_task_tag: #音视频生成
         const paired = '非引用阈值零点五五；原文“零点五五”。';
         const issues = findQuantitativeChineseNumerals(paired).map(issue => ({ ...issue,
             code: 'quantitative_chinese_numeral' }));
-        assert.equal(normalizeReaderEditorialSurface(paired, issues), '非引用阈值 0.55；原文“零点五五”。');
+        assert.equal(normalizeReaderProseFormatting(paired, issues), '非引用阈值 0.55；原文“零点五五”。');
     });
 
     it('三分之一倍频程只在issue精确上下文豁免，普通一倍和错位索引仍阻断', () => {
         const { isAllowedReaderNarrativeNumeralIssue, buildApiReaderQualityMetrics,
-            normalizeReaderEditorialSurface } = require('../scripts/deep-analyzer.js');
+            normalizeReaderProseFormatting } = require('../scripts/deep-analyzer.js');
         const { validateEditorialQuality } = require('../scripts/editorial-quality.js');
         const article = '按三分之一倍频程划分频带，幅度增益为一倍。';
         const quality = validateEditorialQuality({ summary: '', method: article,
@@ -3779,12 +3779,12 @@ primary_task_tag: #音视频生成
         assert.equal(isAllowedReaderNarrativeNumeralIssue({ code: 'quantitative_chinese_numeral', match: '一倍' }), false);
         assert.equal(buildApiReaderQualityMetrics(quality, article).waivedIssueCount, 1);
         assert.equal(buildApiReaderQualityMetrics(quality, article).blockingIssueCount, 1);
-        assert.ok(normalizeReaderEditorialSurface(article, issues).includes('三分之一倍频程'));
+        assert.ok(normalizeReaderProseFormatting(article, issues).includes('三分之一倍频程'));
     });
 
     it('million-scale 量级形容词不被伪造为精确 1000000，精确计数与等级仍阻断', () => {
         const { isAllowedReaderNarrativeNumeralIssue, buildApiReaderQualityMetrics,
-            normalizeReaderEditorialSurface } = require('../scripts/deep-analyzer.js');
+            normalizeReaderProseFormatting } = require('../scripts/deep-analyzer.js');
         const { validateEditorialQuality } = require('../scripts/editorial-quality.js');
         const article = '| 热词定制 | 百万级库 | 亚毫秒 |\n\n精确规模为百万条热词，评分采用十级。';
         const quality = validateEditorialQuality({ summary: '', method: article,
@@ -3801,7 +3801,7 @@ primary_task_tag: #音视频生成
         const metrics = buildApiReaderQualityMetrics(quality, article);
         assert.ok(metrics.waivedIssueCount >= 1);
         const blocking = issues.filter(issue => !isAllowedReaderNarrativeNumeralIssue(issue, article));
-        const normalized = normalizeReaderEditorialSurface(article, blocking);
+        const normalized = normalizeReaderProseFormatting(article, blocking);
         assert.match(normalized, /百万级库/);
         assert.doesNotMatch(normalized, /1000000\s*级库/);
     });
@@ -3897,7 +3897,7 @@ primary_task_tag: #音视频生成
     });
 
     it('编辑质量投影会跳过已签名原表但保留表外散文检查', () => {
-        const { maskReaderSelectedTablesForEditorialQuality } = require('../scripts/deep-analyzer.js');
+        const { omitReaderSelectedTablesForProseCheck } = require('../scripts/deep-analyzer.js');
         const article = [
             '正文仍需检查 16kHz 之外的自然表达。',
             '',
@@ -3907,7 +3907,7 @@ primary_task_tag: #音视频生成
             '',
             '表后解释。'
         ].join('\n');
-        const projected = maskReaderSelectedTablesForEditorialQuality(article, [1]);
+        const projected = omitReaderSelectedTablesForProseCheck(article, [1]);
         assert.match(projected, /正文仍需检查 16kHz/);
         assert.doesNotMatch(projected, /\| 原文 \| 16kHz \|/);
         assert.match(projected, /表后解释/);
@@ -3978,9 +3978,9 @@ primary_task_tag: #音视频生成
     });
 
     it('03414 连续小数完整解析，03320量级歧义和分之不得局部猜改', () => {
-        const { normalizeReaderEditorialSurface } = require('../scripts/deep-analyzer.js');
+        const { normalizeReaderProseFormatting } = require('../scripts/deep-analyzer.js');
         const { findQuantitativeChineseNumerals } = require('../scripts/editorial-quality.js');
-        const normalize = raw => normalizeReaderEditorialSurface(raw,
+        const normalize = raw => normalizeReaderProseFormatting(raw,
             findQuantitativeChineseNumerals(raw).map(issue => ({ ...issue, code: 'quantitative_chinese_numeral' })));
         assert.equal(normalize('拐点零点五五，指数零点四五；纵轴从零点六五到零点九五。'),
             '拐点 0.55，指数 0.45；纵轴从 0.65 到 0.95。');
@@ -3998,7 +3998,7 @@ primary_task_tag: #音视频生成
             '采样率是否混用十六与四十八千赫。');
         assert.equal(normalize('实验结果可用于研究不同模态的差异。'),
             '实验结果可用于研究不同模态的差异。');
-        assert.equal(normalizeReaderEditorialSurface('精确整数一百二十段与百例，alpha 三。', [
+        assert.equal(normalizeReaderProseFormatting('精确整数一百二十段与百例，alpha 三。', [
             { code: 'quantitative_chinese_numeral', match: '一百二十段' },
             { code: 'quantitative_chinese_numeral', match: '百例' },
             { code: 'quantitative_chinese_numeral', match: 'alpha 三' }
@@ -5579,14 +5579,14 @@ has_dataset: 否
     });
 
     it('历史 direct 最终 Figure 只接受本轮前置像素的精确 ordinal URL 与 source SHA', () => {
-        const { materializeDirectApiReaderFiguresFromEvidence } = require('../scripts/deep-analyzer.js');
+        const { bindDirectApiReaderFiguresToEvidence } = require('../scripts/deep-analyzer.js');
         const sourceSha256 = crypto.createHash('sha256').update('pixels').digest('hex');
         const url = 'https://arxiv.org/html/2609.99971/figure.png';
         const figure = { ordinal: 1, url, caption: 'Figure 1' };
         const proof = { inputId: `figure:1:${sourceSha256}`, kind: 'figure', ordinal: 1,
             url, sha256: sourceSha256, sourceSha256, status: 'ready' };
         assert.deepStrictEqual(
-            materializeDirectApiReaderFiguresFromEvidence([figure], [proof]),
+            bindDirectApiReaderFiguresToEvidence([figure], [proof]),
             [{ ...figure, assetSha256: sourceSha256 }]
         );
         for (const drift of [
@@ -5596,7 +5596,7 @@ has_dataset: 否
             { ...proof, status: 'preflight-rejected' }
         ]) {
             assert.throws(
-                () => materializeDirectApiReaderFiguresFromEvidence([figure], [drift]),
+                () => bindDirectApiReaderFiguresToEvidence([figure], [drift]),
                 /Direct Reader Figure evidence rejected/
             );
         }
@@ -5604,7 +5604,7 @@ has_dataset: 否
 
     it('Reader 已接受后的网络错误保留可重试类型，证据漂移仍不可重试', () => {
         const { preserveReaderPostProcessingRetryability,
-            materializeDirectApiReaderFiguresFromEvidence } = require('../scripts/deep-analyzer.js');
+            bindDirectApiReaderFiguresToEvidence } = require('../scripts/deep-analyzer.js');
         const transient = preserveReaderPostProcessingRetryability(new TypeError('fetch failed'));
         assert.strictEqual(transient.retryable, true);
         assert.strictEqual(transient.code, 'READER_POST_PROCESSING_TRANSIENT');
@@ -5616,7 +5616,7 @@ has_dataset: 否
         assert.strictEqual(preserveReaderPostProcessingRetryability(typed), typed);
         assert.strictEqual(typed.retryable, false);
         let drift;
-        try { materializeDirectApiReaderFiguresFromEvidence([{ ordinal: 1, url: 'https://arxiv.org/html/2609.99971/f.png' }], []); }
+        try { bindDirectApiReaderFiguresToEvidence([{ ordinal: 1, url: 'https://arxiv.org/html/2609.99971/f.png' }], []); }
         catch (error) { drift = error; }
         assert.strictEqual(drift.retryable, false);
         assert.strictEqual(preserveReaderPostProcessingRetryability(drift), drift);

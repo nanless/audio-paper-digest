@@ -1028,7 +1028,7 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
     if (!iso(body.remoteVerifiedAt)) fail('remote verification time is invalid'); const receipt = seal(body, 'publicationSha256');
     writeExact(priorRemotePath, prettyBytes(receipt)); return { status: 'published', receipt, filename: priorRemotePath };
 }
-function closeout(options = {}, dependencies = {}) {
+function activateAndPublish(options = {}, dependencies = {}) {
     if (options.apply !== true) return publish({ ...options, apply: false }, dependencies);
     return withBlogPublicationLock(options.blogRepo, () => {
         activate({ ...options, apply: true }, dependencies);
@@ -1095,5 +1095,5 @@ module.exports = {
     deterministicReview, review, loadReview, activate, loadActivation, publish, loadPublication, status,
     defaultBlogState, defaultGitBlob, defaultValidateActivatedWorktree, defaultValidateActivationRecovery,
     blogCommonDirectory, withBlogPublicationLock, defaultPrePublishRemote,
-    defaultPublishGit, defaultPushAndVerify, loadCommit, closeout
+    defaultPublishGit, defaultPushAndVerify, loadCommit, activateAndPublish
 };

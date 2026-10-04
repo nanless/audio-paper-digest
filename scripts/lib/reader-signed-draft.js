@@ -2,8 +2,8 @@
 
 const crypto = require('node:crypto');
 const { apiReaderV3BindsCanonical } = require('../analysis-engine.js');
-const { apiReaderPreInjectionQualityView, parseApiReaderArticleResult, injectApiReaderFigures,
-    buildApiReaderEvidenceContext, normalizeReaderEditorialSurface, stableFingerprint } = require('../deep-analyzer.js');
+const { restoreApiReaderInjectionMarkers, parseApiReaderArticleResult, injectApiReaderFigures,
+    buildApiReaderEvidenceContext, normalizeReaderProseFormatting, stableFingerprint } = require('../deep-analyzer.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
 const { readerRequirements } = require('./reader-contract.js');
 const CONTRACT = 'reader-signed-draft-roundtrip-v1';
@@ -52,7 +52,7 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
     const plan = paper.apiReaderPlan;
     if (!['sections', 'conceptBridges', 'figurePlacements', 'formulaBindings', 'tableBindings']
         .every(key => Array.isArray(plan[key]))) fail('signed plan lacks inverse schema arrays');
-    let articleWithMarkers = apiReaderPreInjectionQualityView(paper.apiReaderArticle, plan, paper.apiReaderFigures);
+    let articleWithMarkers = restoreApiReaderInjectionMarkers(paper.apiReaderArticle, plan, paper.apiReaderFigures);
     const bridges = plan.conceptBridges.map((bridge, index) => {
         // The parser signs the canonical plan after applying the same surface
         // normalization to terms that it applies to the assembled article
@@ -61,10 +61,10 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
         // pre-normalized terms makes every otherwise valid signed bridge look
         // non-reversible.
         const canonicalTerms = (bridge.terms || []).map(term =>
-            normalizeReaderEditorialSurface(String(term || '').trim())
+            normalizeReaderProseFormatting(String(term || '').trim())
         );
         const rawPrefix = `**${canonicalTerms[0]} × ${canonicalTerms[1]}：**`;
-        const normalizedPrefix = normalizeReaderEditorialSurface(rawPrefix);
+        const normalizedPrefix = normalizeReaderProseFormatting(rawPrefix);
         const prefix = typeof bridge.explanation === 'string'
             && bridge.explanation.startsWith(normalizedPrefix)
             ? normalizedPrefix

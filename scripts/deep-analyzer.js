@@ -1272,7 +1272,7 @@ function normalizeIssueBoundReaderComparisonUnits(candidate, issues = []) {
             .map(finding => ({ code: 'quantitative_chinese_numeral', match: finding.match,
                 index: finding.index }));
         if (numeralIssues.length) {
-            updatedExcerpt = normalizeReaderEditorialSurface(updatedExcerpt, numeralIssues);
+            updatedExcerpt = normalizeReaderProseFormatting(updatedExcerpt, numeralIssues);
         }
         if (updatedExcerpt === excerpt) return;
         for (const section of candidate.sections) {
@@ -1322,7 +1322,7 @@ function normalizeIssueBoundReaderComparisonUnits(candidate, issues = []) {
 // editorial gate. This is intentionally separate from the broad prose
 // normalizer: source quotes, code, and compiler-owned table cells must remain
 // byte-identical, while a plain Reader paragraph may safely become “prefix 数”.
-function normalizeIssueBoundReaderTechnicalTermAdhesions(candidate, issues = []) {
+function repairReportedTextSpacing(candidate, issues = []) {
     if (!candidate || !Array.isArray(candidate.sections)) return false;
     const terms = new Set();
     for (const issue of Array.isArray(issues) ? issues : []) {
@@ -1557,12 +1557,12 @@ function normalizeReaderConferenceNarrowComparisonTable(candidate) {
 // bytes are already bound to PDF DOM cells, so protect only those tables while
 // normalizing the surrounding article. Source-quote tables remain editable
 // and continue through the ordinary normalization path.
-function normalizeReaderEditorialSurfacePreservingSelectedTables(
+function normalizeReaderProsePreservingSelectedTables(
     article, selectionTableIndexes = []
 ) {
     const selected = new Set((Array.isArray(selectionTableIndexes)
         ? selectionTableIndexes : []).filter(Number.isSafeInteger));
-    if (selected.size === 0) return normalizeReaderEditorialSurface(article);
+    if (selected.size === 0) return normalizeReaderProseFormatting(article);
     const lines = String(article || '').split('\n');
     const tables = extractMarkdownTables(article);
     const missing = [...selected].filter(index => !tables[index - 1]);
@@ -1577,7 +1577,7 @@ function normalizeReaderEditorialSurfacePreservingSelectedTables(
         lines.splice(table.startLine, table.endLine - table.startLine + 1, token);
         protectedBlocks.push({ token, block });
     }
-    let normalized = normalizeReaderEditorialSurface(lines.join('\n'));
+    let normalized = normalizeReaderProseFormatting(lines.join('\n'));
     for (const { token, block } of protectedBlocks) {
         if (normalized.split(token).length !== 2) {
             throw new Error('Reader selection table protected token 丢失');
@@ -1593,7 +1593,7 @@ function normalizeReaderEditorialSurfacePreservingSelectedTables(
 // narrow, authenticated LaTeXML display alias may clean only a proven
 // visible/annotation duplicate; the cell binding still records the original
 // source text and DOM SHA. Mask only the table blocks in prose quality checks.
-function maskReaderSelectedTablesForEditorialQuality(article, selectionTableIndexes = []) {
+function omitReaderSelectedTablesForProseCheck(article, selectionTableIndexes = []) {
     const selected = new Set((Array.isArray(selectionTableIndexes)
         ? selectionTableIndexes : []).filter(Number.isSafeInteger));
     if (selected.size === 0) return String(article || '');
@@ -1706,7 +1706,7 @@ function buildApiReaderQualityMetrics(quality, article) {
         isAllowedReaderNarrativeNumeralIssue(issue, article)
         || isAllowedReaderDefensiveNegationIssue(issue, article)
         || isReaderHeadingIssue(issue, article)
-        || issueInsideSignedBridgeSurface(issue, article)
+        || issueFallsWithinReaderBridgeLine(issue, article)
         || issueInProtectedReaderQuote(issue, article)
     ));
     const waivedSet = new Set(waivedIssues);
@@ -2834,7 +2834,7 @@ function collapseRepeatedReaderBridgeHeadings(article) {
 // Their bytes are plan-signed: the surface repair never rewrites them and the
 // editorial style gate must not block on numerals that live inside them either
 // (for example the “一位” substring inside the term “下一位置预测预训练”).
-function signedBridgeSurfaceRanges(text) {
+function readerBridgeLineRanges(text) {
     const ranges = [];
     const value = String(text || '');
     const pattern = /\*\*[^\n*]*×[^\n*]*：\*\*[^\n]*/g;
@@ -2844,9 +2844,9 @@ function signedBridgeSurfaceRanges(text) {
     return ranges;
 }
 
-function issueInsideSignedBridgeSurface(issue, article, ranges = null) {
+function issueFallsWithinReaderBridgeLine(issue, article, ranges = null) {
     if (!Number.isInteger(issue?.index)) return false;
-    const spans = ranges || signedBridgeSurfaceRanges(article);
+    const spans = ranges || readerBridgeLineRanges(article);
     return spans.some(([from, to]) => issue.index >= from && issue.index < to);
 }
 
@@ -3017,7 +3017,7 @@ function splitReaderLongParagraphs(text, targetChineseChars = 190, maxChineseCha
     }).filter(Boolean).join('\n\n');
 }
 
-function normalizeReaderEditorialSurface(text, quantitativeIssues = []) {
+function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
     const protectedMarkdown = [];
     const protect = value => {
         const token = `__PD_READER_PROTECTED_${protectedMarkdown.length}__`;
@@ -4733,7 +4733,7 @@ function pruneUnmaterializedApiReaderFigureBlocks(article, plannedFigures, mater
     return output.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function materializeDirectApiReaderFiguresFromEvidence(figures, imageEvidence) {
+function bindDirectApiReaderFiguresToEvidence(figures, imageEvidence) {
     const planned = Array.isArray(figures) ? figures : null;
     const evidence = Array.isArray(imageEvidence) ? imageEvidence : null;
     const reject = message => {
@@ -4926,7 +4926,7 @@ function fitApiReaderFigureDimensions(sourceWidth, sourceHeight) {
     };
 }
 
-function normalizeApiReaderTableBlockSpacing(article) {
+function separateApiReaderTableBlocks(article) {
     const lines = String(article || '').split('\n');
     const output = [];
     for (let index = 0; index < lines.length;) {
@@ -5694,7 +5694,7 @@ function normalizeConferenceGeneratedEvidenceTableLabels(candidate) {
 // tables. Every displayed number is copied from its own exact quote; if the
 // quote has no recoverable number, leave the draft for the normal Reader
 // repair path instead of inventing a row.
-function normalizeConferenceSourceQuoteMarkerTables(draft, sourceText, structuredArtifacts) {
+function repairConferenceReaderQuoteTables(draft, sourceText, structuredArtifacts) {
     if (structuredArtifacts?.sourceKind !== 'conference_pdf'
         || !Array.isArray(draft?.sections) || !Array.isArray(draft?.tableBindings)
         || typeof sourceText !== 'string' || !sourceText) return null;
@@ -5930,7 +5930,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     }
     const normalizedSections = value.sections.map(section => ({
         ...section,
-        heading: normalizeReaderEditorialSurface(section.heading.trim()),
+        heading: normalizeReaderProseFormatting(section.heading.trim()),
         body: splitReaderLongParagraphs(section.body)
     }));
     const kinds = new Set(normalizedSections.map(section => section.kind));
@@ -5992,11 +5992,11 @@ function parseApiReaderArticleResult(raw, options = {}) {
             ? options.exactSignedBridgeSurfaces[index]
             : null;
         return {
-            terms: bridge.terms.map(term => normalizeReaderEditorialSurface(term.trim())),
+            terms: bridge.terms.map(term => normalizeReaderProseFormatting(term.trim())),
             sectionKind: bridge.sectionKind,
             marker,
             explanation: exactBridgeParagraph || collapseRepeatedReaderBridgeHeadings(
-                normalizeReaderEditorialSurface(
+                normalizeReaderProseFormatting(
                     `**${bridge.terms[0].trim()} × ${bridge.terms[1].trim()}：** ${explanation}`
                 )
             )
@@ -6094,12 +6094,12 @@ function parseApiReaderArticleResult(raw, options = {}) {
             figureOrdinal: placement.figureOrdinal,
             targetKind: placement.targetKind,
             marker,
-            leadQuote: normalizeReaderEditorialSurface(leadNarrative),
-            explanationQuote: normalizeReaderEditorialSurface(explanationNarrative),
+            leadQuote: normalizeReaderProseFormatting(leadNarrative),
+            explanationQuote: normalizeReaderProseFormatting(explanationNarrative),
             ...(value.version === 3
                 ? {
                     focusPoints: focusPoints.map(
-                        item => normalizeReaderEditorialSurface(item.trim())
+                        item => normalizeReaderProseFormatting(item.trim())
                     )
                 }
                 : {})
@@ -6127,8 +6127,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
         protectedBridgeParagraphs.push({ token, surface: bridgeParagraph });
     }
     article = relocateExplicitReaderTableExplanations(ensureApiReaderTableNarratives(
-        normalizeApiReaderTableBlockSpacing(
-            normalizeReaderEditorialSurfacePreservingSelectedTables(
+        separateApiReaderTableBlocks(
+            normalizeReaderProsePreservingSelectedTables(
                 article, compiledTables.selectionTableIndexes
             )
         )
@@ -6160,7 +6160,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     if (workflowLeak) {
         throw new Error(`读者文章泄漏了流程或证据元话语：${workflowLeak[0]}`);
     }
-    const qualityView = () => maskReaderSelectedTablesForEditorialQuality(
+    const qualityView = () => omitReaderSelectedTablesForProseCheck(
         article, compiledTables.selectionTableIndexes
     );
     let quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
@@ -6184,7 +6184,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
             masked = masked.slice(0, at) + token + masked.slice(at + surface.length);
             swaps.push([token, surface]);
         }
-        const repaired = normalizeReaderEditorialSurface(masked, issues);
+        const repaired = normalizeReaderProseFormatting(masked, issues);
         let restored = repaired;
         for (const [token, surface] of swaps) restored = restored.split(token).join(surface);
         return restored;
@@ -6200,7 +6200,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     }
     article = restoreReaderSectionHeadings(article, normalizedSections);
     article = removeDuplicateReaderLongSentences(article);
-    article = normalizeApiReaderTableBlockSpacing(article);
+    article = separateApiReaderTableBlocks(article);
     quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
     const finalSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
@@ -6253,7 +6253,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     // signed spans can therefore never be repaired here — exempt them exactly
     // like the existing narrative-numeral escape, instead of failing forever.
     const blockingQualityIssues = quality.issues.filter(issue => !(
-        issueInsideSignedBridgeSurface(issue, qualityArticle)
+        issueFallsWithinReaderBridgeLine(issue, qualityArticle)
         || issueInProtectedReaderQuote(issue, qualityArticle)
         || isAllowedReaderNarrativeNumeralIssue(issue, qualityArticle)
         || isAllowedReaderDefensiveNegationIssue(issue, qualityArticle)
@@ -6322,8 +6322,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
             contract: value.version === API_READER_PLAN_VERSION
                 ? API_READER_ARTICLE_CONTRACT
                 : 'beginner-researcher-v2',
-            readerTitle: normalizeReaderEditorialSurface(value.readerTitle.trim()),
-            oneSentenceThesis: normalizeReaderEditorialSurface(value.oneSentenceThesis.trim()),
+            readerTitle: normalizeReaderProseFormatting(value.readerTitle.trim()),
+            oneSentenceThesis: normalizeReaderProseFormatting(value.oneSentenceThesis.trim()),
             conceptBridges: reboundConceptBridges,
             figurePlacements: reboundFigurePlacements,
             ...(sourceBindingResult ? {
@@ -6365,7 +6365,7 @@ function removeDuplicateReaderLongSentences(article) {
     return output.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function apiReaderPreInjectionQualityView(article, plan, figures = []) {
+function restoreApiReaderInjectionMarkers(article, plan, figures = []) {
     let articleWithMarkers = String(article || '');
     for (const figure of figures) {
         const placement = (plan.figurePlacements || []).find(item => item.figureOrdinal === figure.ordinal);
@@ -6466,7 +6466,7 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
     };
 }
 
-function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
+function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;
     const originalArticle = paper?.apiReaderArticle;
     let article = typeof originalArticle === 'string'
@@ -6479,7 +6479,7 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
         .map(match => match[1].trim());
     if (articleHeadings.length !== plan.sections.length) return false;
     const repairedHeadings = plan.sections.map((section, index) => {
-        const heading = normalizeReaderEditorialSurface(String(section?.heading || '').trim());
+        const heading = normalizeReaderProseFormatting(String(section?.heading || '').trim());
         if (heading === articleHeadings[index]) return heading;
         // Earlier Reader repair normalized measured counts in headings while
         // leaving the plan unchanged. Recover only the same exact typography
@@ -6487,7 +6487,7 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
         const issues = findQuantitativeChineseNumerals(heading).map(issue => ({
             ...issue, code: 'quantitative_chinese_numeral'
         }));
-        return normalizeReaderEditorialSurface(
+        return normalizeReaderProseFormatting(
             normalizeIssueBoundReaderQuantitativeNumerals(heading, issues), issues
         );
     });
@@ -6531,7 +6531,7 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
                 return false;
             }
             const terms = bridge.terms.map(term => (
-                normalizeReaderEditorialSurface(String(term || '').trim())
+                normalizeReaderProseFormatting(String(term || '').trim())
             ));
             const paragraph = findReaderBridgeParagraph(articleBlocks, terms);
             if (!paragraph) return false;
@@ -6544,8 +6544,8 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
     }
     const repairedPlan = {
         ...plan,
-        readerTitle: normalizeReaderEditorialSurface(plan.readerTitle),
-        oneSentenceThesis: normalizeReaderEditorialSurface(plan.oneSentenceThesis),
+        readerTitle: normalizeReaderProseFormatting(plan.readerTitle),
+        oneSentenceThesis: normalizeReaderProseFormatting(plan.oneSentenceThesis),
         ...(Array.isArray(repairedConceptBridges)
             ? { conceptBridges: repairedConceptBridges }
             : {}),
@@ -6610,7 +6610,7 @@ function repairApiReaderPlanSurfaceBinding(paper, analysisManifest) {
                 && stage.figuresSha256 === newFiguresSha))) {
         return rollbackLegacyImageSupplementForModernReader(paper, analysisManifest);
     }
-    const qualityView = apiReaderPreInjectionQualityView(article, repairedPlan, repairedFigures || []);
+    const qualityView = restoreApiReaderInjectionMarkers(article, repairedPlan, repairedFigures || []);
     const quality = validateReaderEditorialQuality(qualityView, repairedPlan.sections);
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityView);
     if (qualityMetrics.blockingIssueCount > 0) {
@@ -7139,7 +7139,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         normalizeShiftedReaderConceptBridgeMarkers(candidate);
         normalizeDuplicateReaderConceptBridgeMarkers(candidate);
         normalizeIssueBoundReaderComparisonUnits(candidate, normalizationIssues);
-        normalizeIssueBoundReaderTechnicalTermAdhesions(candidate, normalizationIssues);
+        repairReportedTextSpacing(candidate, normalizationIssues);
         normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
         candidate.sections = candidate.sections.map(section => ({
             ...section,
@@ -7167,7 +7167,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         normalizeDeclaredReaderMarkerParagraphs(candidate);
         if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
             normalizeReaderSourceQuotes(candidate, options.sourceText);
-            const sourceQuoteMarkerTableRepair = normalizeConferenceSourceQuoteMarkerTables(
+            const sourceQuoteMarkerTableRepair = repairConferenceReaderQuoteTables(
                 candidate, options.sourceText, options.structuredArtifacts
             );
             if (sourceQuoteMarkerTableRepair) draftOrderMappings.push(sourceQuoteMarkerTableRepair);
@@ -15195,7 +15195,7 @@ async function analyzePaperDeepInternal(paper) {
         };
     }
     if (isRecoveryStageComplete(analysisManifest, 'apiReaderArticle')) {
-        if (repairApiReaderPlanSurfaceBinding(paper, analysisManifest)) {
+        if (repairApiReaderArticleAndPlanBindings(paper, analysisManifest)) {
             console.log('    [deep] ✅ 已确定性对齐读者文章与计划标题排版');
         }
         const articleSha = crypto.createHash('sha256')
@@ -15268,7 +15268,7 @@ async function analyzePaperDeepInternal(paper) {
                 ))
                 : injectedReaderResult.figures;
             const materializedFigures = directContext.getDirectRewriteAnalysisContext()
-                ? materializeDirectApiReaderFiguresFromEvidence(
+                ? bindDirectApiReaderFiguresToEvidence(
                     figuresForMaterialization,
                     generatedReaderResult.imageEvidence
                 )
@@ -16916,14 +16916,14 @@ module.exports = {
     normalizeDuplicateReaderConceptBridgeMarkers,
     normalizeIssueBoundReaderComparisonUnits,
     normalizeReaderConferenceNarrowComparisonTable,
-    normalizeIssueBoundReaderTechnicalTermAdhesions,
+    repairReportedTextSpacing,
     normalizeIssueBoundReaderNumericTypography,
-    normalizeReaderEditorialSurfacePreservingSelectedTables,
-    maskReaderSelectedTablesForEditorialQuality,
+    normalizeReaderProsePreservingSelectedTables,
+    omitReaderSelectedTablesForProseCheck,
     restoreReaderSelectedTableBytes,
     normalizeReaderWorkflowLeakageSurface,
     normalizeReaderSourceQuoteTableMarkers,
-    normalizeConferenceSourceQuoteMarkerTables,
+    repairConferenceReaderQuoteTables,
     normalizeConferenceGeneratedEvidenceTableLabels,
     normalizeReaderSourceQuotes,
     readerSourceQuoteCoversNumericToken,
@@ -16937,7 +16937,7 @@ module.exports = {
     mergeShortReaderFigureLead,
     removeOrphanReaderTableMarkers,
     normalizeApiReaderTablePasteArtifacts,
-    normalizeApiReaderTableBlockSpacing,
+    separateApiReaderTableBlocks,
     rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
     generateApiReaderArticleDetailed,
@@ -16979,14 +16979,14 @@ module.exports = {
     isAllowedReaderNarrativeNumeralIssue,
     isAllowedReaderDefensiveNegationIssue,
     splitReaderLongParagraphs,
-    normalizeReaderEditorialSurface,
+    normalizeReaderProseFormatting,
     normalizeApiReaderFigureMarkdown,
     normalizeReaderFigureMetricUnits,
-    repairApiReaderPlanSurfaceBinding,
+    repairApiReaderArticleAndPlanBindings,
     collapseRepeatedReaderBridgeHeadings,
     canonicalReaderBridgeTerm,
     findReaderBridgeParagraph,
-    apiReaderPreInjectionQualityView,
+    restoreApiReaderInjectionMarkers,
     makeReaderHeadingSpecific,
     getApiReaderFigureInventory,
     buildApiReaderArtifactEvidence,
@@ -17002,7 +17002,7 @@ module.exports = {
     prepareTrustedArxivFigureBuffer,
     isPermanentApiReaderFigureFailure,
     pruneUnmaterializedApiReaderFigureBlocks,
-    materializeDirectApiReaderFiguresFromEvidence,
+    bindDirectApiReaderFiguresToEvidence,
     preserveReaderPostProcessingRetryability,
     materializeApiReaderFigures,
     fitApiReaderFigureDimensions,

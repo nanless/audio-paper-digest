@@ -176,7 +176,7 @@ function directReaderCandidateCommitDeferred() {
 function directPrimaryImageDownloader() { return scope.getStore()?.downloadPrimaryImage || null; }
 function directSupplementaryReaderImages() { return scope.getStore()?.supplementaryReaderImages || []; }
 
-function directFreshAnalysisIdentity(paper = getDirectRewriteAnalysisContext()?.paperId) {
+function getDirectSourceProvenance(paper = getDirectRewriteAnalysisContext()?.paperId) {
     const context = scope.getStore();
     if (!context || !context.runId) return null;
     if (paperId(paper) !== context.paperId) fail('direct provenance was requested for another paper');
@@ -196,7 +196,7 @@ function attachDirectSourceProvenance(paper, manifest, source) {
     const context = scope.getStore();
     if (!context || !context.runId) return;
     if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) fail('direct analysis manifest is invalid');
-    const proof = directFreshAnalysisIdentity(paper);
+    const proof = getDirectSourceProvenance(paper);
     if (sha256(String(source?.text || '')) !== proof.sourceSha256
         || source?.structuredArtifacts?.payloadSha256 !== proof.structuredArtifactsSha256) {
         fail('direct analysis tried to attach provenance from another source');
@@ -239,5 +239,5 @@ module.exports = { PROVENANCE_CONTRACT, EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT,
     withDirectRewriteAnalysisSource, getDirectRewriteAnalysisContext, getDirectRewriteSource,
     directReaderAttemptsDirectory, directReaderMaterializer, directPrimaryImageDownloader, stripEphemeralFigureFields,
     directReaderCandidateCommitDeferred,
-    directSupplementaryReaderImages, directFreshAnalysisIdentity, attachDirectSourceProvenance,
+    directSupplementaryReaderImages, getDirectSourceProvenance, attachDirectSourceProvenance,
     assertNoPersistentFigureFields, paperId, stableHash };

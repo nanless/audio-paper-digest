@@ -215,7 +215,7 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
             deepAnalyzer.normalizeReaderSourceQuotes(
                 updated.draft, conference.sourceDetails.text || ''
             );
-            deepAnalyzer.normalizeConferenceSourceQuoteMarkerTables(
+            deepAnalyzer.repairConferenceReaderQuoteTables(
                 updated.draft,
                 conference.sourceDetails.text || '',
                 conference.sourceDetails.structuredArtifacts
