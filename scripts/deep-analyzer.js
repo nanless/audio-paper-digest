@@ -16238,8 +16238,8 @@ function applyTaxonomySelection(analysis, selection, options = {}) {
     const parsed = parseAnalysis(updated);
     const issue = validateTagSectionContract(updated, parsed);
     if (issue) throw contractRejectedError(`taxonomy 局部修复未通过最终门禁: ${issue}`);
-    // 告警驱动的修复必须真的改选到更具体的后代，否则视为本轮修复无效，
-    // 交给 repair 的第二次尝试；由调用方决定是否降级为“保留原标签”。
+    // 启用 requireMostSpecificTask 时，修复结果的主任务标签不能再出现过于宽泛的告警。
+    // 重试由修复函数控制；最终失败时是否保留原标签，由主流程决定。
     if (options.requireMostSpecificTask && parsed.taxonomyValidation?.specificityWarning) {
         throw contractRejectedError(
             `taxonomy 局部修复未通过最终门禁: ${parsed.taxonomyValidation.specificityWarning}`);
@@ -16641,8 +16641,9 @@ function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
 }
 
 /**
- * 检查并修复实验结果中缺失的表格。
- * 只在存在省略标记，或正文明确引用原文表格却缺少 Markdown 表格时调用。
+ * 在已有实验结果中检查表格是否遗漏或不符合要求，必要时补充或修正。
+ * 出现省略标记或未通过表格检查时，会调用模型；
+ * 正文引用了表格、原文也有表格线索，但正文未展示表格时，也会调用模型。
  */
 async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence = null) {
     const resultsSection = extractResultsSection(analysis);
