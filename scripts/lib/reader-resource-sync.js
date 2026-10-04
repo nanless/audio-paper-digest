@@ -15,7 +15,7 @@ function readerResourceIdentityRebind(paper, manifest, resources) {
     const stage = manifest.stages.apiReaderArticle;
     if (stage?.status !== 'complete' || apiReaderV3BindsCanonical(paper)) return null;
     if (stage.resourceCount !== resources.resources.length) {
-        throw new Error('Resource synchronization cannot repair an invalid Reader signature');
+        throw new Error('读者文章与正式分析的绑定无效，不能仅靠同步资源状态修复。');
     }
     const reboundStages = structuredClone(manifest.stages);
     reboundStages.apiReaderArticle.resourceIdentitySha256 = resources.identitySha256;
@@ -24,7 +24,7 @@ function readerResourceIdentityRebind(paper, manifest, resources) {
         analysisManifest: { ...manifest, stages: reboundStages }
     };
     if (!apiReaderV3BindsCanonical(rebound)) {
-        throw new Error('Resource synchronization cannot repair an invalid Reader signature');
+        throw new Error('读者文章与正式分析的绑定无效，不能仅靠同步资源状态修复。');
     }
     return {
         contract: 'reader-resource-identity-rebind-v1',
@@ -34,10 +34,9 @@ function readerResourceIdentityRebind(paper, manifest, resources) {
     };
 }
 
-// Deterministic projection of an already sealed resource identity. No network,
-// no model, no score change, and no write/checkpoint callback. Caller owns locks
-// and persistence. It refuses changed scoring evidence instead of re-signing an
-// outdated assessment merely to satisfy the publication projection.
+// 根据已保存并通过核验的资源记录更新正文中的可达状态，不联网、不调用模型，也不改变评分。
+// 本函数只修改传入的论文对象，锁和文件保存由调用方负责。资源状态若影响评分依据，
+// 必须重新审查评分，不能只改绑定记录来继续发布。
 function synchronizeReaderResourceAvailability(paper, sourceDetails) {
     const deep = require('../deep-analyzer.js');
     const sourceText = String(sourceDetails?.text || '');
@@ -60,30 +59,29 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
                     || !manifest.stages.demoLinkScan?.discoveredLinks?.includes(resource.originalUrl))
         ))
         || manifest.stages.openSourceScan?.resourceEvidenceSha256 !== resources.identitySha256) {
-        throw new Error('Resource synchronization requires sealed scoring/source/resource identity');
+        throw new Error('评分审查、全文或资源核验记录未通过同步前检查。');
     }
     const originalParsed = parseAnalysis(paper.analysis);
     const scoreFields = ['score','documentType','innovationScore','technicalRigorScore','experimentalSufficiencyScore',
         'clarityScore','impactScore','openSourceScore','reproducibilityScore','engineeringScore','scoringReason'];
     if (paper.parsed && scoreFields.some(field => stableHash(paper.parsed[field] ?? null)
         !== stableHash(originalParsed?.[field] ?? null))) {
-        throw new Error('Stored parsed scores/type/audit prose differ from canonical; refusing an implicit score repair');
+        throw new Error('已保存的解析评分、文档类型或评分理由与重新解析正文的结果不同；请先重新审查评分。');
     }
     const updatedAnalysis = deep.applyApiReaderResourceAvailability(paper.analysis, resources);
-    // A freshly generated Reader already binds the same resource projection.
-    // In that no-op case there are no bytes or signatures for this helper to
-    // repair; the caller's final canonical validation remains authoritative.
+    // 如果同步后的正文与原文相同，就返回原对象，不尝试修复读者文章的绑定。
+    // 最终是否可以继续使用这份记录，仍由调用方的正式分析校验决定。
     if (updatedAnalysis === paper.analysis) return paper;
     const readerIdentityRebind = readerResourceIdentityRebind(paper, manifest, resources);
     const updatedParsed = parseAnalysis(updatedAnalysis);
     for (const field of ['hasCode','hasModel','hasDataset']) {
         if (originalParsed?.[field] !== updatedParsed?.[field]) {
-            throw new Error(`Resource availability changes ${field}; normal scoring audit is required`);
+            throw new Error(`资源状态更新会改变 ${field}；必须重新审查评分。`);
         }
     }
     const withoutOpenSource = parsed => { const { opensource, ...rest } = parsed || {}; return rest; };
     if (stableHash(withoutOpenSource(originalParsed)) !== stableHash(withoutOpenSource(updatedParsed))) {
-        throw new Error('Resource synchronization would alter scores/type/audit prose outside the availability projection');
+        throw new Error('资源状态更新会改变开源详情以外的解析结果，不能仅靠同步资源状态继续。');
     }
     const beforeReader = stableHash(Object.fromEntries(protectedReaderKeys.map(key => [key, paper[key]])));
     const audit = manifest.stages.scoringAudit.audit;
@@ -94,7 +92,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
         const updated = deep.applyApiReaderResourceAvailability(value, resources);
         const oldParsed = parseAnalysis(value), nextParsed = parseAnalysis(updated);
         if (stableHash(withoutOpenSource(oldParsed)) !== stableHash(withoutOpenSource(nextParsed))) {
-            throw new Error(`Resource synchronization would change scoring evidence in checkpoint ${name}`);
+            throw new Error(`资源状态更新会改变检查点 ${name} 中开源详情以外的解析结果。`);
         }
         if (updated !== value) checkpointChanges.push({ path: name, beforeSha256: sha(value), afterSha256: sha(updated) });
         return updated;
@@ -106,7 +104,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
     if (typeof paper.analysisCheckpoint === 'string') {
         const terminal = new Set([paper.analysis, ...['scoringAudit','apiReaderArticle','imageSupplement']
             .map(stage => paper.analysisStageCheckpoints?.[stage]).filter(value => typeof value === 'string')]);
-        if (!terminal.has(paper.analysisCheckpoint)) throw new Error('Resource synchronization found a non-terminal active checkpoint');
+        if (!terminal.has(paper.analysisCheckpoint)) throw new Error('当前活动检查点不是正式正文或允许更新的最终阶段正文，不能同步资源状态。');
         checkpoint = syncCheckpoint(paper.analysisCheckpoint, 'analysisCheckpoint');
     }
     const stages = structuredClone(manifest.stages);
@@ -123,7 +121,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
             stages.scoringAudit.outputAnalysisSha256 = sha(checkpoints.scoringAudit);
             stages.imageSupplement.inputAnalysisSha256 = stages.scoringAudit.outputAnalysisSha256;
         }
-    } else throw new Error('Resource synchronization cannot replay the scoring-to-final analysis chain');
+    } else throw new Error('评分审查与最终正文之间的哈希对应关系不符合要求，不能同步资源状态。');
     const provenance = { contract: CONTRACT, executionKind: 'deterministic_resource_projection',
         sourceSha256: paper.sourceSha256, resourceIdentitySha256: resources.identitySha256,
         beforeAnalysisSha256: beforeSha256, afterAnalysisSha256: afterSha256,
@@ -140,7 +138,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
         || stableHash(Object.fromEntries(protectedReaderKeys.map(key => [key, next[key]]))) !== beforeReader
         || !scoringAuditBindsFinalAnalysis(next)
         || (stages.apiReaderArticle?.status === 'complete' && !apiReaderV3BindsCanonical(next))) {
-        throw new Error('Resource synchronization violated audit or Reader byte invariants');
+        throw new Error('同步资源状态后，评分审查内容、读者文章内容或阶段绑定未能保持要求。');
     }
     Object.assign(paper, next);
     return paper;

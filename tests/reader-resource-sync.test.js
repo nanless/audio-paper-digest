@@ -107,7 +107,7 @@ test('demo availability projection updates canonical/parsed/terminal checkpoints
 test('code/model/dataset availability evidence changes refuse stale scoring without mutating input',()=>{
     for(const type of ['code','model','dataset']) {
         const f=fixture(type,'available'),before=JSON.stringify(f.paper);
-        assert.throws(()=>sync(f.paper,f.sourceDetails),/normal scoring audit is required/);
+        assert.throws(()=>sync(f.paper,f.sourceDetails),/必须重新审查评分/);
         assert.equal(JSON.stringify(f.paper),before);
     }
 });
@@ -151,7 +151,7 @@ test('Reader invalidation cannot silently convert the execution-local verified i
     f.paper.analysisManifest.stages.apiReaderArticle={status:'complete',fingerprint:'old'};
     deep.invalidateRecoveryStageIfChanged(f.paper,f.paper.analysisManifest,'apiReaderArticle','new');
     assert.equal(f.paper.apiReaderResources,undefined);
-    assert.throws(()=>deep.applyApiReaderResourceAvailability(f.paper.analysis,f.paper.apiReaderResources),/缺失身份/);
+    assert.throws(()=>deep.applyApiReaderResourceAvailability(f.paper.analysis,f.paper.apiReaderResources),/记录缺失时，不能按空资源列表处理/);
     assert.match(deep.applyApiReaderResourceAvailability(f.paper.analysis,verified),/demo=temporarily_unreachable/);
 });
 

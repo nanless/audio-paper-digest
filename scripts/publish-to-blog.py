@@ -5170,7 +5170,7 @@ def _api_reader_numeric_tokens(value):
 
 
 def _validate_api_reader_source_bindings(paper, article=None):
-    """Deterministically replay the sealed API-reader v4 source bindings."""
+    """按 v4 来源记录核对读者文章中的表格和公式，并返回核验结果。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     contracts = contracts if isinstance(contracts, dict) else {}
@@ -5182,22 +5182,22 @@ def _validate_api_reader_source_bindings(paper, article=None):
     article = paper.get('apiReaderArticle') if article is None and isinstance(paper, dict) else article
     if isinstance(article, str) and '原文中没有可逐字绑定的数值证据' in article:
         raise PublishDataValidationError(
-            'API reader source-binding v4 正文含内部绑定失败占位，请修复 Reader 后重新生成'
+            '读者文章中仍有内部绑定失败占位说明，请修复正文后重新生成页面。'
         )
     if not isinstance(plan, dict) or not isinstance(stage, dict) \
             or not isinstance(source, dict) or not isinstance(article, str):
-        raise PublishDataValidationError('API reader source-binding v4 缺少 plan/stage/source/article')
+        raise PublishDataValidationError('读者文章的编辑计划、阶段记录、来源记录或正文缺失，或格式无效。')
     if re.search(r'\[\[FORMULA_\d+\]\]', article):
-        raise PublishDataValidationError('API reader source-binding v4 正文残留未绑定公式占位符')
+        raise PublishDataValidationError('读者文章中仍有未对应原文公式的占位符。')
     if contracts.get('apiReaderSourceBindings') != LLM_API_READER_SOURCE_BINDING_CONTRACT \
             or plan.get('sourceBindingsContract') != LLM_API_READER_SOURCE_BINDING_CONTRACT \
             or stage.get('sourceBindingsContractVersion') != LLM_API_READER_SOURCE_BINDING_CONTRACT:
-        raise PublishDataValidationError('API reader source-binding contract/version 不是 v4')
+        raise PublishDataValidationError('读者文章的表格与公式来源记录未采用 v4 规则。')
 
     table_bindings = plan.get('tableBindings')
     formula_bindings = plan.get('formulaBindings')
     if not isinstance(table_bindings, list) or not isinstance(formula_bindings, list):
-        raise PublishDataValidationError('API reader source-binding v4 缺少表格或公式绑定数组')
+        raise PublishDataValidationError('读者文章的表格或公式来源记录必须是列表。')
     bindings_sha = _stable_json_sha256({
         'tableBindings': table_bindings,
         'formulaBindings': formula_bindings,
@@ -5206,17 +5206,17 @@ def _validate_api_reader_source_bindings(paper, article=None):
     structured_sha = source.get('structuredArtifactsSha256')
     if plan.get('sourceBindingsSha256') != bindings_sha \
             or stage.get('sourceBindingsSha256') != bindings_sha:
-        raise PublishDataValidationError('API reader sourceBindingsSha256 无法重放')
+        raise PublishDataValidationError('读者文章的表格或公式来源记录 SHA 与编辑计划或阶段记录不一致。')
     if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
             or paper.get('sourceSha256') != source_sha \
             or stage.get('sourceBindingsSourceTextSha256') != source_sha:
         raise PublishDataValidationError('Reader 所用论文全文的 SHA 缺失、格式无效，或与论文记录、当前阶段的来源记录不一致。')
     if not re.fullmatch(r'[0-9a-f]{64}', str(structured_sha or '')) \
             or stage.get('structuredArtifactsSha256') != structured_sha:
-        raise PublishDataValidationError('API reader structuredArtifacts SHA 未闭环')
+        raise PublishDataValidationError('论文结构化证据的 SHA 缺失、格式无效，或与读者文章阶段记录不一致。')
     if stage.get('tableBindingCount') != len(table_bindings) \
             or stage.get('formulaBindingCount') != len(formula_bindings):
-        raise PublishDataValidationError('API reader source-binding 数量与 stage 不一致')
+        raise PublishDataValidationError('读者文章的表格或公式来源记录条数与阶段记录不一致。')
 
     rendered_tables = _api_reader_markdown_tables(article)
     canonical_reader_article = paper.get('apiReaderArticle')
@@ -5230,14 +5230,14 @@ def _validate_api_reader_source_bindings(paper, article=None):
             'renderedTableSha256', 'cellBindings', 'sourceQuotes',
         }
         if not isinstance(binding, dict) or set(binding) not in (required, required | {'sourceTableDomSha256'}):
-            raise PublishDataValidationError(f'API reader tableBindings[{index - 1}] 字段非法')
+            raise PublishDataValidationError(f'表格来源记录 tableBindings[{index - 1}] 格式无效、缺少必要字段，或含有不允许的字段。')
         canonical_rendered = canonical_tables[index - 1] \
             if index <= len(canonical_tables) else None
         if binding.get('tableIndex') != index or canonical_rendered is None \
                 or binding.get('renderedTableSha256') != _javascript_string_sha256(
                     canonical_rendered['markdown']
                 ):
-            raise PublishDataValidationError(f'API reader 第 {index} 个表格渲染 SHA 漂移')
+            raise PublishDataValidationError(f'第 {index} 个表格的序号、保存正文中的表格或渲染 SHA 与来源记录不一致。')
         rendered_rows = [rendered['header'], *rendered['rows']]
         if binding.get('sourceType') == 'artifact_table':
             if set(binding) != required | {'sourceTableDomSha256'} \
@@ -5247,10 +5247,10 @@ def _validate_api_reader_source_bindings(paper, article=None):
                     or not re.fullmatch(r'[0-9a-f]{64}', str(binding.get('sourceTableDomSha256') or '')) \
                     or binding.get('sourceQuotes') != [] \
                     or not isinstance(binding.get('cellBindings'), list):
-                raise PublishDataValidationError(f'API reader 第 {index} 个 artifact table 来源绑定非法')
+                raise PublishDataValidationError(f'第 {index} 个表格的原表来源记录缺失或不符合要求。')
             expected_cells = sum(len(row) for row in rendered_rows)
             if len(binding['cellBindings']) != expected_cells:
-                raise PublishDataValidationError(f'API reader 第 {index} 个表格没有逐格绑定')
+                raise PublishDataValidationError(f'第 {index} 个表格的单元格来源记录条数与显示的单元格数不一致。')
             seen = set()
             for cell_index, cell in enumerate(binding['cellBindings']):
                 cell_keys = {
@@ -5259,35 +5259,35 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 }
                 if not isinstance(cell, dict) or set(cell) != cell_keys:
                     raise PublishDataValidationError(
-                        f'API reader 第 {index} 个表格 cellBindings[{cell_index}] 字段非法'
+                        f'第 {index} 个表格的单元格记录 cellBindings[{cell_index}] 格式无效、缺少必要字段，或含有不允许的字段。'
                     )
                 coordinates = [cell.get(key) for key in (
                     'renderedRow', 'renderedColumn', 'sourceRow', 'sourceColumn',
                 )]
                 if any(not isinstance(value, int) or isinstance(value, bool) or value < 0
                        for value in coordinates):
-                    raise PublishDataValidationError(f'API reader 第 {index} 个表格单元格坐标非法')
+                    raise PublishDataValidationError(f'第 {index} 个表格的单元格坐标必须是非负整数。')
                 rendered_row, rendered_column = coordinates[:2]
                 key = (rendered_row, rendered_column)
                 if key in seen or rendered_row >= len(rendered_rows) \
                         or rendered_column >= len(rendered_rows[rendered_row]):
-                    raise PublishDataValidationError(f'API reader 第 {index} 个表格单元格覆盖非法')
+                    raise PublishDataValidationError(f'第 {index} 个表格的单元格来源记录重复，或显示坐标超出表格范围。')
                 actual_text = rendered_rows[rendered_row][rendered_column]
                 if _normalize_api_reader_source_cell(cell.get('renderedText')) \
                         != _normalize_api_reader_source_cell(actual_text) \
                         or _normalize_api_reader_source_cell(actual_text) \
                         != _normalize_api_reader_source_cell(cell.get('sourceText')) \
                         or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):
-                    raise PublishDataValidationError(f'API reader 第 {index} 个表格单元格来源漂移')
+                    raise PublishDataValidationError(f'第 {index} 个表格的单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。')
                 seen.add(key)
             if len(seen) != expected_cells:
-                raise PublishDataValidationError(f'API reader 第 {index} 个表格逐格覆盖不完整')
+                raise PublishDataValidationError(f'第 {index} 个表格仍有单元格缺少来源记录。')
         elif binding.get('sourceType') == 'source_quotes':
             if set(binding) != required or binding.get('sourceTableOrdinal') is not None \
                     or binding.get('cellBindings') != [] \
                     or not isinstance(binding.get('sourceQuotes'), list) \
                     or not binding['sourceQuotes']:
-                raise PublishDataValidationError(f'API reader 第 {index} 个 source_quotes 绑定非法')
+                raise PublishDataValidationError(f'第 {index} 个表格的逐字引文来源记录缺失或不符合要求。')
             quote_corpus = []
             for quote_index, quote_binding in enumerate(binding['sourceQuotes']):
                 if not isinstance(quote_binding, dict) \
@@ -5297,21 +5297,21 @@ def _validate_api_reader_source_bindings(paper, article=None):
                         or quote_binding.get('sourceQuoteSha256') \
                         != _javascript_string_sha256(quote_binding['quote']):
                     raise PublishDataValidationError(
-                        f'API reader 第 {index} 个表格 sourceQuotes[{quote_index}] 非法'
+                        f'第 {index} 个表格的引文记录 sourceQuotes[{quote_index}] 字段、长度或 SHA 不符合要求。'
                     )
                 quote_corpus.append(quote_binding['quote'])
             quote_tokens = set(_api_reader_numeric_tokens('\n'.join(quote_corpus)))
             missing = set(_api_reader_numeric_tokens(rendered['markdown'])) - quote_tokens
             if missing:
                 raise PublishDataValidationError(
-                    f'API reader 第 {index} 个表格数字缺少来源 quote: {sorted(missing)}'
+                    f'第 {index} 个表格中的数字或单位未被来源引文完整覆盖：{sorted(missing)}'
                 )
         else:
-            raise PublishDataValidationError(f'API reader 第 {index} 个表格 sourceType 非法')
+            raise PublishDataValidationError(f'第 {index} 个表格的来源类型不符合要求。')
 
     display_blocks = _api_reader_display_formula_blocks(article)
     if len(display_blocks) != len(formula_bindings):
-        raise PublishDataValidationError('API reader 正文展示公式数量与 source binding 不一致')
+        raise PublishDataValidationError('读者文章中的展示公式数量与公式来源记录条数不一致。')
     seen_ordinals = set()
     for index, binding in enumerate(formula_bindings):
         expected_keys = {
@@ -5319,15 +5319,14 @@ def _validate_api_reader_source_bindings(paper, article=None):
             'sourceDomSha256', 'renderedBlockSha256',
         }
         if not isinstance(binding, dict) or set(binding) != expected_keys:
-            raise PublishDataValidationError(f'API reader formulaBindings[{index}] 字段非法')
+            raise PublishDataValidationError(f'公式来源记录 formulaBindings[{index}] 格式无效、缺少必要字段，或含有不允许的字段。')
         ordinal = binding.get('formulaOrdinal')
         latex = binding.get('latex')
         rendered_block = f'\\[{str(latex or "").strip()}\\]'
-        # 最终页面会经过统一的确定性发布清理：除 _{<k} → _{\lt k} 外，
-        # \texttt{<answer>} 之类的论文控制标记也会转成不会被 Hugo 当作 HTML
-        # 的形式。canonical 存量正文里是原始块，最终页面里是清理后块：两种
-        # 形态恰好出现一次才算合法（重复、缺失、变换后碰撞都失败关闭）。
-        # renderedBlockSha256 仍只校验原始绑定，不能用清理后的字节重签来源。
+        # 发布清理会将 _{<k} 改为 _{\lt k}，并处理 \texttt{<answer>} 等标记，
+        # 避免 Hugo 将其当作 HTML。保存正文中是原始公式块，最终页面可能是清理后的块。
+        # 两种形式合计必须恰好出现一次；缺失、重复或清理后发生碰撞时均拒绝。
+        # renderedBlockSha256 仍核对原始公式块，不能用清理后的字节重新签署来源记录。
         published_block = sanitize_markdown_for_publish(rendered_block)
         if published_block == rendered_block:
             formula_occurrences = display_blocks.count(rendered_block)
@@ -5348,7 +5347,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 != _javascript_string_sha256(rendered_block) \
                 or formula_occurrences != 1 \
                 or binding['marker'] in article:
-            raise PublishDataValidationError(f'API reader 第 {index + 1} 个公式来源/渲染绑定非法')
+            raise PublishDataValidationError(f'第 {index + 1} 个公式的来源记录或正文显示内容不符合要求。')
         seen_ordinals.add(ordinal)
     return {
         'contract': LLM_API_READER_SOURCE_BINDING_CONTRACT,
@@ -5368,12 +5367,12 @@ def _validate_api_reader_author_identity(paper):
     payload = paper.get('apiReaderAuthors') if isinstance(paper, dict) else None
     if not isinstance(payload, dict) or set(payload) != {
             'authors', 'sourceDomSha256', 'identity', 'identitySha256'}:
-        raise PublishDataValidationError('API reader author identity 顶层字段非法')
+        raise PublishDataValidationError('读者文章的作者记录格式无效、缺少必要字段，或含有不允许的字段。')
     identity = payload.get('identity')
     if not isinstance(identity, dict) or set(identity) != {
             'contract', 'sourceDomSha256', 'sourceTextSha256',
             'metadataSha256', 'authors'}:
-        raise PublishDataValidationError('API reader author identity 字段非法')
+        raise PublishDataValidationError('读者文章的作者来源记录格式无效、缺少必要字段，或含有不允许的字段。')
     identity_sha = _stable_json_sha256(identity)
     source_sha = paper.get('sourceSha256')
     metadata_sha = _stable_json_sha256(
@@ -5388,17 +5387,17 @@ def _validate_api_reader_author_identity(paper):
             or stage.get('readerAuthorIdentitySha256') != identity_sha \
             or identity.get('sourceTextSha256') != source_sha \
             or identity.get('metadataSha256') != metadata_sha:
-        raise PublishDataValidationError('API reader author identity contract/SHA 未闭环')
+        raise PublishDataValidationError('读者文章的作者来源规则不匹配，或作者记录、论文全文及论文元数据的 SHA 与对应记录不一致。')
     source_dom_sha = identity.get('sourceDomSha256')
     if source_dom_sha != '' and not re.fullmatch(r'[0-9a-f]{64}', str(source_dom_sha or '')):
-        raise PublishDataValidationError('API reader author identity source DOM SHA 非法')
+        raise PublishDataValidationError('作者来源记录中的 DOM SHA 必须为空字符串或有效的 SHA-256。')
     if not re.fullmatch(r'[0-9a-f]{64}', str(payload.get('sourceDomSha256') or '')):
-        raise PublishDataValidationError('API reader author payload source DOM SHA 非法')
+        raise PublishDataValidationError('读者文章作者记录中的来源 DOM SHA 缺失或格式无效。')
     public_authors = payload.get('authors')
     bound_authors = identity.get('authors')
     if not isinstance(public_authors, list) or not isinstance(bound_authors, list) \
             or not public_authors or len(public_authors) != len(bound_authors):
-        raise PublishDataValidationError('API reader author identity 作者集合为空或不一致')
+        raise PublishDataValidationError('展示作者列表或来源作者列表无效、为空，或两者数量不一致。')
     for index, (author, bound) in enumerate(zip(public_authors, bound_authors)):
         if not isinstance(author, dict) or set(author) != {'name', 'affiliations'} \
                 or not isinstance(bound, dict) or set(bound) != {
@@ -5408,34 +5407,34 @@ def _validate_api_reader_author_identity(paper):
                 or not isinstance(author.get('name'), str) or not author['name'].strip() \
                 or not isinstance(author.get('affiliations'), list) \
                 or not author['affiliations']:
-            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者 identity 不一致')
+            raise PublishDataValidationError(f'第 {index + 1} 位作者的字段、姓名或机构列表无效，或与来源记录不一致。')
         if not all(isinstance(value, str) and value.strip()
                    for value in author['affiliations']):
-            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者机构非法')
+            raise PublishDataValidationError(f'第 {index + 1} 位作者的每个机构名称都必须是非空字符串。')
         name_binding = bound.get('nameBinding')
         if not isinstance(name_binding, dict) \
                 or name_binding.get('sourceValue') != author['name']:
-            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者姓名绑定非法')
+            raise PublishDataValidationError(f'第 {index + 1} 位作者缺少姓名来源记录，或记录中的姓名不一致。')
         if name_binding.get('sourceKind') == 'html_dom':
             if set(name_binding) != {'sourceKind', 'sourceValue', 'sourceDomSha256'} \
                     or not source_dom_sha \
                     or name_binding.get('sourceDomSha256') != source_dom_sha:
-                raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者 DOM 姓名绑定非法')
+                raise PublishDataValidationError(f'第 {index + 1} 位作者的 HTML 姓名来源字段或 DOM SHA 不符合要求。')
         elif name_binding.get('sourceKind') == 'paper_metadata':
             if set(name_binding) != {'sourceKind', 'sourceValue', 'metadataSha256'} \
                     or name_binding.get('metadataSha256') != metadata_sha:
-                raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者 metadata 姓名绑定非法')
+                raise PublishDataValidationError(f'第 {index + 1} 位作者的论文元数据姓名来源字段或 SHA 不符合要求。')
         else:
-            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者 name sourceKind 非法')
+            raise PublishDataValidationError(f'第 {index + 1} 位作者的姓名来源类型不符合要求。')
         affiliation_bindings = bound.get('affiliationBindings')
         if not isinstance(affiliation_bindings, list) \
                 or len(affiliation_bindings) != len(author['affiliations']):
-            raise PublishDataValidationError(f'API reader 第 {index + 1} 位作者机构绑定数量非法')
+            raise PublishDataValidationError(f'第 {index + 1} 位作者的机构来源记录必须是列表，且条数须与机构列表一致。')
         for affiliation_index, (affiliation, binding) in enumerate(zip(
                 author['affiliations'], affiliation_bindings)):
             if not isinstance(binding, dict) or binding.get('sourceValue') != affiliation:
                 raise PublishDataValidationError(
-                    f'API reader 第 {index + 1} 位作者第 {affiliation_index + 1} 个机构绑定非法'
+                    f'第 {index + 1} 位作者的第 {affiliation_index + 1} 个机构缺少来源记录，或机构名称不一致。'
                 )
             if binding.get('sourceKind') == 'html_dom':
                 if set(binding) != {
@@ -5444,7 +5443,7 @@ def _validate_api_reader_author_identity(paper):
                             'direct_author', 'single_global_affiliation'} \
                         or not source_dom_sha \
                         or binding.get('sourceDomSha256') != source_dom_sha:
-                    raise PublishDataValidationError('API reader 作者机构 DOM binding 非法')
+                    raise PublishDataValidationError('作者机构的 HTML 来源字段、对应关系或 DOM SHA 不符合要求。')
             elif binding.get('sourceKind') == 'explicit_unavailable':
                 if set(binding) != {
                         'sourceKind', 'sourceValue', 'sourceTextSha256'} \
@@ -5452,9 +5451,9 @@ def _validate_api_reader_author_identity(paper):
                         or binding.get('sourceTextSha256') != source_sha:
                     raise PublishDataValidationError('API reader 作者机构 unavailable binding 非法')
             else:
-                raise PublishDataValidationError('API reader 作者机构 sourceKind 非法')
+                raise PublishDataValidationError('作者机构的来源类型不符合要求。')
     if stage.get('readerAuthorsSha256') != _stable_json_sha256(payload):
-        raise PublishDataValidationError('API reader author payload SHA 与 stage 不一致')
+        raise PublishDataValidationError('读者文章作者记录的 SHA 与阶段记录不一致。')
     return {
         'contract': LLM_API_READER_AUTHOR_IDENTITY_CONTRACT,
         'sha256': identity_sha,
@@ -5468,9 +5467,9 @@ def _validated_https_identity_url(value, label):
     try:
         parsed = urlparse(value)
     except (TypeError, ValueError) as exc:
-        raise PublishDataValidationError(f'{label} URL 非法') from exc
+        raise PublishDataValidationError(f'{label} 的 URL 无法解析。') from exc
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password:
-        raise PublishDataValidationError(f'{label} 必须是无凭据 HTTPS URL')
+        raise PublishDataValidationError(f'{label} 必须是包含主机名且不带用户名或密码的 HTTPS URL。')
     return value
 
 
@@ -5487,7 +5486,7 @@ def _validate_api_reader_resource_identity(paper):
     payload = paper.get('apiReaderResources') if isinstance(paper, dict) else None
     if not isinstance(payload, dict) or set(payload) != {
             'contract', 'sourceTextSha256', 'resources', 'identitySha256'}:
-        raise PublishDataValidationError('API reader resource identity 顶层字段非法')
+        raise PublishDataValidationError('读者文章的资源记录格式无效、缺少必要字段，或含有不允许的字段。')
     identity = {key: value for key, value in payload.items() if key != 'identitySha256'}
     identity_sha = _stable_json_sha256(identity)
     if payload.get('contract') != LLM_API_READER_RESOURCE_IDENTITY_CONTRACT \
@@ -5501,11 +5500,11 @@ def _validate_api_reader_resource_identity(paper):
             or reader_stage.get('resourceIdentitySha256') != identity_sha \
             or open_stage.get('resourceEvidenceSha256') != identity_sha \
             or payload.get('sourceTextSha256') != paper.get('sourceSha256'):
-        raise PublishDataValidationError('API reader resource identity contract/SHA 未闭环')
+        raise PublishDataValidationError('读者文章的资源来源规则不匹配，或资源记录、论文全文及分析阶段保存的 SHA 不一致。')
     resources = payload.get('resources')
     if not isinstance(resources, list) or len(resources) > 12 \
             or reader_stage.get('resourceCount') != len(resources):
-        raise PublishDataValidationError('API reader resource identity 数量非法')
+        raise PublishDataValidationError('读者文章的资源记录必须是最多 12 条的列表，且条数须与阶段记录一致。')
     discovered_links = demo_stage.get('discoveredLinks') if isinstance(demo_stage, dict) else []
     allowed_types = {'code', 'model', 'dataset', 'demo', 'reproduction', 'third_party'}
     available_types = set()
@@ -5517,49 +5516,49 @@ def _validate_api_reader_resource_identity(paper):
         allowed = required | {'retryable', 'failureCode', 'documentationEvidence'}
         if not isinstance(resource, dict) or not required.issubset(resource) \
                 or not set(resource).issubset(allowed):
-            raise PublishDataValidationError(f'API reader resources[{index}] 字段非法')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 格式无效、缺少必要字段，或含有不允许的字段。')
         if resource.get('type') not in allowed_types \
                 or resource.get('origin') not in {'paper_source', 'validated_demo'}:
-            raise PublishDataValidationError(f'API reader resources[{index}] 类型或来源非法')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 的类型或来源不符合要求。')
         original_url = _validated_https_identity_url(
-            resource.get('originalUrl'), f'API reader resources[{index}].originalUrl',
+            resource.get('originalUrl'), f'资源记录 resources[{index}] 的原始地址 originalUrl',
         )
         final_url = _validated_https_identity_url(
-            resource.get('finalUrl'), f'API reader resources[{index}].finalUrl',
+            resource.get('finalUrl'), f'资源记录 resources[{index}] 的最终地址 finalUrl',
         )
         source_quote = resource.get('sourceQuote')
         if not isinstance(source_quote, str) or not source_quote.strip() \
                 or original_url not in source_quote \
                 or resource.get('sourceQuoteSha256') \
                 != _javascript_string_sha256(source_quote):
-            raise PublishDataValidationError(f'API reader resources[{index}] sourceQuote SHA/URL 非法')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 缺少有效的来源引文、引文未包含原始地址，或引文 SHA 不一致。')
         if resource['origin'] == 'validated_demo' \
                 and original_url not in (discovered_links or []):
-            raise PublishDataValidationError(f'API reader resources[{index}] Demo 来源未绑定发现记录')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 的演示页原始地址未包含在已发现链接的记录中。')
         redirects = resource.get('redirects')
         if not isinstance(redirects, list) or len(redirects) > 3:
-            raise PublishDataValidationError(f'API reader resources[{index}] 重定向链非法')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 的重定向记录必须是最多 3 条的列表。')
         expected_from = original_url
         for redirect_index, redirect in enumerate(redirects):
             if not isinstance(redirect, dict) or set(redirect) != {'from', 'to', 'status'} \
                     or redirect.get('from') != expected_from \
                     or redirect.get('status') not in {301, 302, 303, 307, 308}:
                 raise PublishDataValidationError(
-                    f'API reader resources[{index}] redirects[{redirect_index}] 非法'
+                    f'资源记录 resources[{index}] 的重定向条目 redirects[{redirect_index}] 字段、起点或 HTTP 状态码不符合要求。'
                 )
-            _validated_https_identity_url(redirect.get('from'), 'resource redirect.from')
+            _validated_https_identity_url(redirect.get('from'), '资源重定向的起始地址')
             expected_from = _validated_https_identity_url(
-                redirect.get('to'), 'resource redirect.to',
+                redirect.get('to'), '资源重定向的目标地址',
             )
         if expected_from != final_url:
-            raise PublishDataValidationError(f'API reader resources[{index}] 重定向终点不一致')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 的重定向终点与最终地址不一致。')
         availability = resource.get('availability')
         status = resource.get('status')
         if isinstance(status, bool) or (status is not None and not isinstance(status, int)):
-            raise PublishDataValidationError(f'API reader resources[{index}] HTTP status 非法')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 的 HTTP 状态码必须是整数或空值。')
         retryable = resource.get('retryable')
         if retryable is not None and not isinstance(retryable, bool):
-            raise PublishDataValidationError(f'API reader resources[{index}] retryable 非法')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 的重试标记必须是布尔值或空值。')
         if availability == 'available':
             valid_terminal = status is not None and 200 <= status < 400 and retryable in {None, False}
             available_types.add(resource['type'])
@@ -5573,19 +5572,17 @@ def _validate_api_reader_resource_identity(paper):
         else:
             valid_terminal = False
         if not valid_terminal:
-            raise PublishDataValidationError(f'API reader resources[{index}] 可用性/status 语义非法')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 的可达状态与 HTTP 状态码或重试标记不一致。')
         failure_code = resource.get('failureCode')
         if failure_code is not None and (
                 availability != 'temporarily_unreachable' or status is not None
                 or not isinstance(failure_code, str) or not failure_code.strip()
                 or len(failure_code) > 100):
-            raise PublishDataValidationError(f'API reader resources[{index}] failureCode 非法')
+            raise PublishDataValidationError(f'资源记录 resources[{index}] 的失败原因代码格式无效，或不适用于当前可达状态和 HTTP 状态码。')
         documentation = resource.get('documentationEvidence')
         if documentation is not None:
-            # This proof comes from raw.githubusercontent.com, a separate
-            # endpoint from the repository URL probe above. A valid README
-            # response may therefore coexist with a temporarily unreachable
-            # repository-page result.
+            # README 证据来自独立的 raw.githubusercontent.com 地址。
+            # 仓库页面暂时不可达时，仍可能已取得有效的 README 响应。
             documentation_keys = {
                 'contract', 'repositoryUrl', 'sourceUrl', 'status',
                 'sourceSha256', 'capabilities', 'completeness',
@@ -5615,11 +5612,11 @@ def _validate_api_reader_resource_identity(paper):
                         'complete' if complete_documentation else 'partial'
                     ):
                 raise PublishDataValidationError(
-                    f'API reader resources[{index}] documentationEvidence 非法'
+                    f'资源记录 resources[{index}] 的 README 文档证据不符合要求。请核对记录格式、代码仓库地址、访问结果和文档完整性。'
                 )
             source_url = _validated_https_identity_url(
                 documentation.get('sourceUrl'),
-                f'API reader resources[{index}].documentationEvidence.sourceUrl',
+                f'资源记录 resources[{index}] 的 README 文档证据来源地址',
             )
             parsed_repository = urlparse(original_url)
             repository_parts = [part for part in parsed_repository.path.split('/') if part]
@@ -5631,7 +5628,7 @@ def _validate_api_reader_resource_identity(paper):
             )
             if source_url != expected_source:
                 raise PublishDataValidationError(
-                    f'API reader resources[{index}] documentationEvidence 来源非法'
+                    f'资源记录 resources[{index}] 的 README 文档证据地址不是该仓库 main 分支的指定地址。'
                 )
 
     parsed_analysis = parse_analysis(paper.get('analysis', '')) or {}
@@ -5641,7 +5638,7 @@ def _validate_api_reader_resource_identity(paper):
         actual_yes = str(parsed_analysis.get(field) or '').strip().lower() in {'是', 'yes'}
         if actual_yes != expected_yes:
             raise PublishDataValidationError(
-                f'API reader resource identity 与机器摘要 {field} 可用性不一致'
+                f'读者文章资源记录的可达状态与机器摘要中的 {field} 标记不一致。'
             )
     availability_summary = (
         '未发现可验证的官方 HTTPS 资源 URL。' if not resources else
@@ -5652,7 +5649,7 @@ def _validate_api_reader_resource_identity(paper):
         )
     )
     if availability_summary not in str(parsed_analysis.get('opensource') or ''):
-        raise PublishDataValidationError('API reader 开源详情缺少密封资源可达性摘要')
+        raise PublishDataValidationError('开源说明中缺少与资源记录一致的可达性摘要。')
     return {
         'contract': LLM_API_READER_RESOURCE_IDENTITY_CONTRACT,
         'sha256': identity_sha,
@@ -5722,24 +5719,22 @@ def _ephemeral_figure_note(figure):
     if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1 \
             or not isinstance(caption, str) or not caption.strip() \
             or '\n' in caption or '\r' in caption:
-        raise PublishDataValidationError('ephemeral Figure 的 ordinal/caption 非法')
+        raise PublishDataValidationError('临时图片的序号必须是正整数，图注必须是非空且不含换行的字符串。')
     return f'> **论文图 {ordinal}（像素未随页面持久化）**：{caption.strip()}'
 
 
 def render_ephemeral_api_reader_figures(article, figures):
-    """Replay source-bound Figure slots without persisting local image bytes.
+    """核对保存正文中的论文图位置和 URL 顺序，不写入本地图片文件。
 
-    The canonical Reader record binds each official arXiv HTTPS URL and the
-    pixels previously shown to the Reader.  Publication preserves that remote
-    image Markdown so readers can see the paper Figure, while still creating
-    no cache path, copied asset, or local image bytes.
+    图片记录保存官方 arXiv HTTPS 地址及分析时所用图片的信息。
+    本函数保留远程图片的 Markdown，校验后返回原正文，不创建图片缓存或复制资产。
     """
     if not isinstance(article, str) or not isinstance(figures, list):
-        raise PublishDataValidationError('ephemeral Figure 渲染缺少正文或 figure 数组')
+        raise PublishDataValidationError('临时图片显示所需的正文必须是字符串，图片记录必须是列表。')
     rendered = article
     for figure in figures:
         if not isinstance(figure, dict) or not isinstance(figure.get('url'), str):
-            raise PublishDataValidationError('ephemeral Figure URL 非法')
+            raise PublishDataValidationError('临时图片记录缺失或格式无效，或 URL 不是字符串。')
         pattern = re.compile(
             rf'^!\[(?:\\.|[^\]\\\n])*\]\({re.escape(figure["url"])}\)$',
             flags=re.MULTILINE,
@@ -5747,16 +5742,16 @@ def render_ephemeral_api_reader_figures(article, figures):
         _ephemeral_figure_note(figure)
         if len(pattern.findall(rendered)) != 1:
             raise PublishDataValidationError(
-                f'ephemeral Figure {figure.get("ordinal")} 未唯一映射到 canonical 正文'
+                f'临时使用的论文图 {figure.get("ordinal")} 未在保存的读者正文中恰好出现一次。'
             )
     expected_urls = [figure['url'] for figure in figures]
     if _api_reader_article_image_urls(rendered) != expected_urls:
-        raise PublishDataValidationError('ephemeral Figure 发布视图与签名 URL 顺序不一致')
+        raise PublishDataValidationError('发布正文中的图片 URL 与保存的图片记录在内容或顺序上不一致。')
     return rendered
 
 
 def _api_reader_payload(paper):
-    """Replay the API reader article contract from canonical bytes."""
+    """核验保存的读者正文、编辑计划和阶段记录，并构造发布所需的数据。"""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     reader_contract = contracts.get('apiReaderArticle')
@@ -5765,15 +5760,15 @@ def _api_reader_payload(paper):
         return None
     declared_figure_persistence = contracts.get('apiReaderFigurePersistence')
     if declared_figure_persistence not in (None, EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT):
-        raise PublishDataValidationError('API reader Figure persistence contract 非法')
+        raise PublishDataValidationError('读者文章中的图片保存方式不符合要求。')
     if declared_figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT \
             and reader_contract not in LLM_API_READER_STRUCTURED_CONTRACTS:
-        raise PublishDataValidationError('ephemeral Figure persistence 只适用于结构化 API Reader')
+        raise PublishDataValidationError('临时使用图片的方式仅适用于采用结构化记录的读者文章。')
     article = paper.get('apiReaderArticle')
     plan = paper.get('apiReaderPlan')
     stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
     if not isinstance(article, str) or not article.strip() or not isinstance(plan, dict):
-        raise PublishDataValidationError('API reader contract 缺少读者文章或编辑计划')
+        raise PublishDataValidationError('读者正文缺失或不是非空字符串，或编辑计划不是对象。')
     article = article.strip()
     article_sha = _javascript_string_sha256(article)
     plan_sha = _stable_json_sha256(plan)
@@ -5782,7 +5777,7 @@ def _api_reader_payload(paper):
             or stage.get('status') != 'complete'
             or stage.get('articleSha256') != article_sha
             or stage.get('planSha256') != plan_sha):
-        raise PublishDataValidationError('API reader contract 文章/计划 SHA 或阶段状态不闭环')
+        raise PublishDataValidationError('保存的读者正文或编辑计划 SHA 与论文记录、阶段记录不一致，或读者文章阶段尚未完成。')
     plan_version = plan.get('version')
     expected_plan_versions = {
         'beginner-researcher-v1': {1},
@@ -5791,7 +5786,7 @@ def _api_reader_payload(paper):
     }
     if plan_version not in expected_plan_versions.get(reader_contract, set()) \
             or plan.get('contract') != reader_contract:
-        raise PublishDataValidationError('API reader plan 版本或契约非法')
+        raise PublishDataValidationError('读者文章的编辑计划版本或规则与当前文章格式不匹配。')
     source_binding_proof = (
         _validate_api_reader_source_bindings(paper)
         if reader_contract == LLM_API_READER_CONTRACT else None
@@ -5806,7 +5801,7 @@ def _api_reader_payload(paper):
     )
     if not isinstance(plan.get('readerTitle'), str) \
             or not isinstance(plan.get('oneSentenceThesis'), str):
-        raise PublishDataValidationError('API reader plan 缺少读者标题或一句话主线')
+        raise PublishDataValidationError('编辑计划中的读者标题或一句话主线必须是字符串。')
     plan_sections = plan.get('sections')
     allowed_kinds = (
         'background', 'related_work', 'problem', 'method_overview', 'component',
@@ -5827,29 +5822,29 @@ def _api_reader_payload(paper):
     if not isinstance(plan_sections, list) \
             or not minimum_sections <= len(plan_sections) <= maximum_sections:
         raise PublishDataValidationError(
-            f'API reader plan 必须包含 {minimum_sections}-{maximum_sections} 个小节'
+            f'编辑计划的小节必须是列表，且包含 {minimum_sections}-{maximum_sections} 个小节。'
         )
     kinds = []
     planned_headings = []
     previous_rank = -1
     for section in plan_sections:
         if not isinstance(section, dict) or set(section) != {'kind', 'heading'}:
-            raise PublishDataValidationError('API reader plan 小节字段非法')
+            raise PublishDataValidationError('编辑计划的小节记录格式无效、缺少必要字段，或含有不允许的字段。')
         kind = section.get('kind')
         heading = section.get('heading')
         if kind not in allowed_kinds or not isinstance(heading, str) or not heading.strip():
-            raise PublishDataValidationError('API reader plan 小节 kind/heading 非法')
+            raise PublishDataValidationError('编辑计划的小节类型不符合要求，或小节标题不是非空字符串。')
         rank = allowed_kinds.index(kind)
         if rank < previous_rank:
-            raise PublishDataValidationError('API reader plan 小节顺序违反学习依赖')
+            raise PublishDataValidationError('编辑计划中的小节未按规定的学习顺序排列。')
         previous_rank = rank
         kinds.append(kind)
         planned_headings.append(heading.strip())
     if not required_kinds.issubset(kinds):
-        raise PublishDataValidationError('API reader plan 缺少必需教学阶段')
+        raise PublishDataValidationError('编辑计划缺少读者文章必需的小节类型。')
     article_headings = re.findall(r'^###\s+(.+?)\s*$', article, flags=re.MULTILINE)
     if article_headings != planned_headings or len(set(article_headings)) != len(article_headings):
-        raise PublishDataValidationError('API reader plan 与正文小节标题/顺序不一致')
+        raise PublishDataValidationError('编辑计划与正文的小节标题或排列顺序不一致，或正文存在重复标题。')
     if plan_version in {2, 3}:
         concept_bridges = plan.get('conceptBridges')
         figure_placements = plan.get('figurePlacements')
@@ -5860,7 +5855,7 @@ def _api_reader_payload(paper):
                 or not isinstance(figure_placements, list) \
                 or len(figure_placements) > 4:
             raise PublishDataValidationError(
-                f'API reader v{plan_version} plan 缺少术语桥或 Figure marker 计划'
+                f'v{plan_version} 编辑计划中的术语说明或图片位置记录缺失、格式无效，或数量不符合要求。'
             )
         for index, bridge in enumerate(concept_bridges, 1):
             if not isinstance(bridge, dict) or set(bridge) != {
@@ -5873,7 +5868,7 @@ def _api_reader_payload(paper):
                     or bridge['explanation'] not in article \
                     or bridge['marker'] in article:
                 raise PublishDataValidationError(
-                    f'API reader v{plan_version} 术语桥与正文绑定非法'
+                    f'v{plan_version} 术语说明的字段、适用小节或占位标记不符合要求，或说明内容未完整出现在正文中。'
                 )
         seen_placement_ordinals = set()
         for placement in figure_placements:
@@ -5896,30 +5891,29 @@ def _api_reader_payload(paper):
                     or (plan_version == 3 and (
                         not isinstance(placement.get('focusPoints'), list)
                         or not 2 <= len(placement['focusPoints']) <= 4
-                        # Reader validates raw focus text at 120 chars, then
-                        # typography normalization may insert Han/ASCII spaces.
-                        # Accept only that bounded expansion.
+                        # 原始观察点最多 120 个字符；排版规范化可能在中文与英文之间补空格。
+                        # 这里允许带空格的文本扩展至 160 个字符，去除空白后仍不得超过 120。
                         or not all(isinstance(item, str)
                                    and 12 <= len(item.strip()) <= 160
                                    and len(re.sub(r'\s+', '', item.strip())) <= 120
                                    for item in placement['focusPoints'])
                     )):
                 raise PublishDataValidationError(
-                    f'API reader v{plan_version} Figure marker 计划与正文绑定非法'
+                    f'v{plan_version} 图片位置计划的字段、序号、适用小节、占位标记、导读、解释或观察点不符合要求。'
                 )
             seen_placement_ordinals.add(placement['figureOrdinal'])
     figures = paper.get('apiReaderFigures')
     if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS:
         if not isinstance(figures, list):
-            raise PublishDataValidationError('API reader v2 缺少结构化 figure 绑定数组')
+            raise PublishDataValidationError('读者文章缺少结构化的图片记录列表。')
         figures_sha = _stable_json_sha256(figures)
         if stage.get('figureCount') != len(figures) \
                 or stage.get('figuresSha256') != figures_sha:
-            raise PublishDataValidationError('API reader v2 figure 数量或 SHA 未闭环')
+            raise PublishDataValidationError('读者文章的图片记录条数或 SHA 与阶段记录不一致。')
         article_image_urls = _api_reader_article_image_urls(article)
         figure_urls = [item.get('url') for item in figures if isinstance(item, dict)]
         if article_image_urls != figure_urls or len(set(figure_urls)) != len(figure_urls):
-            raise PublishDataValidationError('API reader v2 正文图片与 figure 绑定不一致')
+            raise PublishDataValidationError('正文中的图片 URL 与图片记录的内容或顺序不一致，或图片记录存在重复 URL。')
         figure_persistence = declared_figure_persistence
         ephemeral_figures = figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT
         paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
@@ -5934,8 +5928,8 @@ def _api_reader_payload(paper):
                     'cachePath', 'assetFilename', 'assetMediaType',
                     'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight'})
             elif 'assetSha256' in item:
-                # Direct historical runs retain only this content hash from
-                # the temporary pixels. It is evidence, not an asset path.
+                # 历史直接分析可保留临时像素的内容 SHA，作为图片证据；
+                # 此字段不提供可复制的图片文件路径。
                 expected_figure_fields.add('assetSha256')
             if plan_version in {2, 3}:
                 expected_figure_fields.update({
@@ -5944,7 +5938,7 @@ def _api_reader_payload(paper):
             if plan_version == 3:
                 expected_figure_fields.add('focusPoints')
             if not isinstance(item, dict) or set(item) != expected_figure_fields:
-                raise PublishDataValidationError('API reader v2 figure 字段非法')
+                raise PublishDataValidationError('读者文章的图片记录格式无效、缺少必要字段，或含有不允许的字段。')
             if plan_version in {2, 3}:
                 placement = next((entry for entry in plan['figurePlacements']
                                   if entry['figureOrdinal'] == item['ordinal']), None)
@@ -5956,7 +5950,7 @@ def _api_reader_payload(paper):
                         item.get(key) != placement.get(key)
                         for key in binding_keys):
                     raise PublishDataValidationError(
-                        f'API reader v{plan_version} figure 与 marker 计划不一致'
+                        f'v{plan_version} 图片记录缺少对应的位置计划，或图片内容字段与计划不一致。'
                     )
                 matching_headings = {
                     section['heading'] for section in plan_sections
@@ -5964,7 +5958,7 @@ def _api_reader_payload(paper):
                 }
                 if item.get('targetHeading') not in matching_headings:
                     raise PublishDataValidationError(
-                        f'API reader v{plan_version} figure 目标标题与章节计划不一致'
+                        f'v{plan_version} 图片的目标标题未对应章节计划中同类型的小节。'
                     )
             if plan_version == 3:
                 expected_focus = '> **看图路径：** ' + '；'.join(
@@ -5994,27 +5988,26 @@ def _api_reader_payload(paper):
             if parsed_url.scheme != 'https' \
                     or parsed_url.hostname not in {'arxiv.org', 'www.arxiv.org'} \
                     or not re.fullmatch(r'[0-9a-f]{64}', str(item['sourceDomSha256'])):
-                raise PublishDataValidationError('API reader v2 figure 来源绑定非法')
+                raise PublishDataValidationError('读者文章的图片 URL 未使用官方 arXiv HTTPS 地址，或来源 DOM SHA 格式无效。')
             if ephemeral_figures:
-                # Cache and pixel fields are deliberately absent.  The final
-                # page retains sealed metadata and may retain the temporary
-                # pixel content hash, but never a path, byte count or payload.
+                # 此类记录不保存缓存和像素字段；最终页面保留已核验的图片元数据，
+                # 记录中可有临时像素的内容 SHA，但不能有路径、字节数或像素内容。
                 if item.get('assetSha256') is not None \
                         and not re.fullmatch(r'[0-9a-f]{64}', str(item['assetSha256'])):
                     raise PublishDataValidationError(
-                        'API reader ephemeral figure evidence SHA 非法'
+                        '临时图片的像素证据 SHA 格式无效。'
                     )
                 _ephemeral_figure_note(item)
                 continue
             declared_cache_path = Path(str(item['cachePath'] or '')).expanduser()
             if declared_cache_path.is_symlink() or declared_cache_path.parent.is_symlink():
-                raise PublishDataValidationError('API reader v2 figure 缓存路径不得使用符号链接')
+                raise PublishDataValidationError('读者文章的图片缓存路径及其直接父目录不得是符号链接。')
             cache_path = declared_cache_path.resolve()
             cache_root = (Path(CURRENT_DIR) / 'api-reader-assets' / paper_id).resolve()
             try:
                 cache_path.relative_to(cache_root)
             except ValueError as exc:
-                raise PublishDataValidationError('API reader v2 figure 缓存路径逃逸') from exc
+                raise PublishDataValidationError('读者文章的图片缓存路径不在该论文指定的缓存目录内。') from exc
             raw_asset = cache_path.read_bytes() if cache_path.is_file() else b''
             png_dimensions = (
                 struct.unpack('>II', raw_asset[16:24])
@@ -6031,7 +6024,7 @@ def _api_reader_payload(paper):
                     or png_dimensions != (item['assetWidth'], item['assetHeight']) \
                     or not (600 <= item['assetWidth'] <= 4096) \
                     or not (200 <= item['assetHeight'] <= 4096):
-                raise PublishDataValidationError('API reader v2 figure 缓存字节或 SHA 不一致')
+                raise PublishDataValidationError('读者文章的图片缓存文件缺失，或文件名、格式、SHA、字节数及尺寸不符合记录要求。')
             destination = Path('static') / 'images' / 'papers' / paper_id / cache_path.name
             public_url = f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/{cache_path.name}'
             figure_assets.append({
@@ -6042,15 +6035,14 @@ def _api_reader_payload(paper):
                 'sha256': item['assetSha256'],
             })
         if ephemeral_figures and paper_id == '2609.18673':
-            # The official Figure 1 title contradicts the plotted axes. Use a
-            # deterministic crop for the published page while retaining the
-            # official URL in the figure evidence and caption.
+            # 官方论文图 1 的标题与坐标轴含义不一致，发布时使用指定的裁切图片。
+            # 图片证据中的官方 URL 和图注保持原样。
             override_source = (
                 PROJECT_ROOT / 'assets' / 'publish-figure-overrides'
                 / '2609-18673-figure-1-cropped.png'
             ).resolve()
             if not override_source.is_file():
-                raise PublishDataValidationError('Figure 1 发布裁切资产缺失')
+                raise PublishDataValidationError('发布所需的论文图 1 裁切文件缺失。')
             override_destination = (
                 Path('static') / 'images' / 'papers' / paper_id
                 / 'figure-1-6e2b2741029d9194.png'
@@ -6075,7 +6067,7 @@ def _api_reader_payload(paper):
                     r'[0-9a-f]{64}', str(reader_authors.get('sourceDomSha256') or '')
                 ) \
                 or stage.get('readerAuthorsSha256') != _stable_json_sha256(reader_authors):
-            raise PublishDataValidationError('API reader v2 作者与机构来源绑定非法')
+            raise PublishDataValidationError('读者文章的作者与机构记录缺失、字段或来源 DOM SHA 无效，或记录 SHA 与阶段记录不一致。')
         for author in reader_authors['authors']:
             if not isinstance(author, dict) or set(author) != {'name', 'affiliations'} \
                     or not isinstance(author.get('name'), str) \
@@ -6084,7 +6076,7 @@ def _api_reader_payload(paper):
                     or not author['affiliations'] \
                     or not all(isinstance(value, str) and value.strip()
                                for value in author['affiliations']):
-                raise PublishDataValidationError('API reader v2 作者或机构字段非法')
+                raise PublishDataValidationError('读者文章的作者或机构字段不符合要求，姓名和机构名称必须是非空字符串。')
     else:
         figures = []
         figure_assets = []
@@ -6119,7 +6111,7 @@ def _api_reader_payload(paper):
 
 
 def _api_reader_page_binding_issue(content, paper):
-    """Bind the final page's actual reader tables/formulas back to canonical v4."""
+    """核对最终页面的来源标记及显示内容，并重新检查表格和公式的来源记录。"""
     if not isinstance(paper, dict):
         return None
     manifest = paper.get('analysisManifest')
@@ -6133,9 +6125,9 @@ def _api_reader_page_binding_issue(content, paper):
         author_proof = payload.get('authorIdentityProof') if isinstance(payload, dict) else None
         resource_proof = payload.get('resourceIdentityProof') if isinstance(payload, dict) else None
         if not isinstance(proof, dict):
-            raise PublishDataValidationError('API reader 页面缺少 source-binding v4 proof')
+            raise PublishDataValidationError('读者文章页面缺少表格与公式的 v4 来源核验结果。')
         if not isinstance(author_proof, dict) or not isinstance(resource_proof, dict):
-            raise PublishDataValidationError('API reader 页面缺少 author/resource identity proof')
+            raise PublishDataValidationError('读者文章页面缺少作者来源或资源核验结果。')
         def frontmatter_value(field, pattern):
             match = re.search(
                 rf'^{re.escape(field)}:\s*{pattern}\s*$', content, flags=re.MULTILINE,
@@ -6171,7 +6163,7 @@ def _api_reader_page_binding_issue(content, paper):
                 or int(marker_formula_count.group(1)) != proof['formulaCount'] \
                 or marker_structured_sha is None \
                 or marker_structured_sha.group(1) != proof['structuredArtifactsSha256']:
-            raise PublishDataValidationError('最终页面 source-binding count/artifact SHA 与 canonical 不一致')
+            raise PublishDataValidationError('最终页面的表格或公式来源条数、结构化证据 SHA 缺失，或与保存的核验结果不一致。')
         identity_markers = {
             'authorContract': frontmatter_value(
                 'paper_digest_api_reader_author_identity_contract', r'"([^"]+)"',
@@ -6200,15 +6192,15 @@ def _api_reader_page_binding_issue(content, paper):
                 'resourceSha': resource_proof['sha256'],
                 'resourceCount': str(resource_proof['count']),
         }:
-            raise PublishDataValidationError('最终页面 author/resource identity marker 与 canonical 不一致')
+            raise PublishDataValidationError('最终页面的作者或资源核验标记缺失，或其中的规则、SHA、条数与保存的核验结果不一致。')
         figure_persistence_marker = frontmatter_value(
             'paper_digest_api_reader_figure_persistence', r'"([^"]+)"',
         )
         if payload.get('figurePersistence') == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
             if figure_persistence_marker != EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
-                raise PublishDataValidationError('最终页面 Figure persistence marker 与 canonical 不一致')
+                raise PublishDataValidationError('最终页面的图片保存方式标记缺失，或与读者文章记录不一致。')
         elif figure_persistence_marker is not None:
-            raise PublishDataValidationError('legacy API reader 页面不得伪造 ephemeral Figure marker')
+            raise PublishDataValidationError('未采用临时图片保存方式的读者文章页面不得声明该方式。')
 
         def h2_section(label):
             heading_match = re.search(
@@ -6237,14 +6229,14 @@ def _api_reader_page_binding_issue(content, paper):
             raise PublishDataValidationError('页面核心摘要与当前 Reader 记录中应展示的摘要不一致。')
         if re.search(r'^##\s+(?:💬\s*毒舌点评|💡\s*研究者判断|📎\s*补充信息|⚖️\s*评分依据与证据)',
                      content, flags=re.MULTILINE):
-            raise PublishDataValidationError('现代 Reader 页面混入未经独立事实审查的 canonical 解释')
+            raise PublishDataValidationError('读者文章页面混入了未经独立事实审查的分析解释栏目。')
         expected_resources = reader_display_fields['opensource']
         expected_resources = sanitize_markdown_for_publish(
             _nest_reader_headings(expected_resources.strip(), minimum_level=3)
         ).strip()
         actual_resources = h2_section('🔗 开源与复现资源')
         if not expected_resources or actual_resources != expected_resources:
-            raise PublishDataValidationError('最终页面开源与复现资源段与 canonical identity 不一致')
+            raise PublishDataValidationError('最终页面缺少有效的开源与复现资源说明，或说明与资源核验记录的展示结果不一致。')
         actual_scores = h2_section('⚖️ 评分明细')
         if actual_scores is not None:
             actual_scores = re.split(r'^---\s*$', actual_scores, maxsplit=1, flags=re.MULTILINE)[0].strip()
@@ -6264,7 +6256,7 @@ def _api_reader_page_binding_issue(content, paper):
                 )
         heading = re.search(r'^##\s+🧭\s*深度解读\s*$', content, flags=re.MULTILINE)
         if heading is None:
-            raise PublishDataValidationError('最终页面缺少 API reader 深度解读区')
+            raise PublishDataValidationError('最终页面缺少读者文章的深度解读部分。')
         article_start = heading.end()
         if content[article_start:article_start + 2] == '\n\n':
             article_start += 2
@@ -6278,7 +6270,7 @@ def _api_reader_page_binding_issue(content, paper):
             raise PublishDataValidationError('页面深度解读与正式 Reader 正文的渲染结果不一致。')
         page_proof = _validate_api_reader_source_bindings(paper, article=page_article)
         if page_proof != proof:
-            raise PublishDataValidationError('最终页面表格/公式重放 proof 与 canonical 不一致')
+            raise PublishDataValidationError('最终页面表格或公式的来源核验结果与保存记录不一致。')
     except PublishDataValidationError as exc:
         return str(exc)
     return None
@@ -7073,7 +7065,7 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
         issues.append(f'Manual v4 最终 Markdown 门禁失败: {manual_v4_issue}')
     api_reader_issue = _api_reader_page_binding_issue(content, paper)
     if api_reader_issue:
-        issues.append(f'LLM API source-binding v4 最终 Markdown 门禁失败: {api_reader_issue}')
+        issues.append(f'读者文章的最终 Markdown 内容未通过来源核验：{api_reader_issue}')
     index_quality_issue = validate_digest_index_reader_quality(content)
     if index_quality_issue:
         issues.append(f'汇总页读者质量门禁失败: {index_quality_issue}')
@@ -8190,7 +8182,7 @@ def validate_staged_posts(
             artifact['apiReaderIssue'] = api_reader_issue
         if api_reader_issue:
             raise PublishDataValidationError(
-                f'{path.name} LLM API source-binding v4 最终 Markdown 门禁失败: '
+                f'{path.name} 读者文章的最终 Markdown 内容未通过来源核验：'
                 f'{api_reader_issue}'
             )
         index_quality_issue = artifact['indexQualityIssue']

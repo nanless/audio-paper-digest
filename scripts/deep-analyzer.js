@@ -8265,17 +8265,17 @@ function refreshApiReaderAuthorsFromSource(paper, sourceDetails) {
     const stage = manifest?.stages?.apiReaderArticle;
     if (manifest?.contracts?.apiReaderArticle !== API_READER_ARTICLE_CONTRACT
         || stage?.status !== 'complete') {
-        throw new Error('作者机构刷新只接受已完成 v3 读者文章的 canonical');
+        throw new Error('刷新作者和机构信息前，正式分析记录必须已有完成的 v3 读者文章。');
     }
     const sourceText = String(sourceDetails?.text || '');
     const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
     if (!sourceText || sourceSha256 !== paper.sourceSha256
         || sourceSha256 !== manifest.sourceAcquisition?.sourceSha256) {
-        throw new Error('作者机构刷新的全文 SHA 与 canonical 来源不一致');
+        throw new Error('刷新作者和机构信息所用的全文不能为空，其 SHA 必须同时与论文记录和来源获取记录一致。');
     }
     const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
     if (!readerAuthors.authors.length || !recoverySha256(readerAuthors.sourceDomSha256)) {
-        throw new Error('作者机构刷新未能建立来源绑定');
+        throw new Error('未能取得作者列表或格式有效的来源内容 SHA，无法刷新作者和机构信息。');
     }
     paper.apiReaderAuthors = readerAuthors;
     stage.readerAuthorIdentityContractVersion = API_READER_AUTHOR_IDENTITY_CONTRACT;
@@ -11544,7 +11544,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
             || evidence.sourceEvidenceSha256 !== crypto.createHash('sha256')
                 .update(evidence.sourceEvidence).digest('hex')
             || !String(sourceDetails.text || '').includes(evidence.sourceEvidence)) {
-            throw new Error('会议 PDF 作者证据无法从已封存全文重放');
+            throw new Error('会议 PDF 的作者证据与全文哈希不一致，或者引文缺失、格式无效、哈希不一致或没有完整出现在已保存全文中。');
         }
     }
     const isUnavailable = value => /^机构信息未/.test(String(value || ''));
@@ -11555,10 +11555,8 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
         const nameBinding = parsed && recoverySha256(sourceDomSha256)
             ? {
                 sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom',
-                // The DOM may preserve author names in all caps while the
-                // canonical metadata/Reader name uses title casing.  The
-                // source DOM SHA is the provenance proof; bind the identity
-                // value to the canonical name so exact replay is stable.
+                // 来源 DOM 中的作者姓名可能全部大写，而元数据和读者文章使用正常大小写。
+                // 此处保存读者文章中的姓名，同时保留来源 DOM 的 SHA，以便核对同一作者。
                 sourceValue: author.name,
                 sourceDomSha256
             }
@@ -11576,7 +11574,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
             const globallyUnique = [...new Set(parsedAuthors.flatMap(item => item.affiliations || []))]
                 .find(value => readerIdentityKey(value) === readerIdentityKey(affiliation));
             if ((!direct && !globallyUnique) || !recoverySha256(sourceDomSha256)) {
-                throw new Error(`作者 ${author.name} 的机构“${affiliation}”无法重放到 HTML source detail`);
+                throw new Error(`作者 ${author.name} 的机构“${affiliation}”缺少对应的来源机构记录，或来源内容 SHA 格式无效。`);
             }
             return {
                 sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom',
@@ -11704,7 +11702,7 @@ async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
         }
         if ([301, 302, 303, 307, 308].includes(response.status)) {
             const location = response.headers.get('location');
-            if (!location || count >= 3) throw new Error('开源资源重定向链无效或过长');
+            if (!location || count >= 3) throw new Error('资源重定向缺少目标地址，或超过允许的三次重定向');
             const nextUrl = new URL(location, currentUrl).toString();
             redirects.push({ from: currentUrl, to: nextUrl, status: response.status });
             currentUrl = nextUrl;
@@ -11721,7 +11719,7 @@ async function verifyApiReaderResourceUrl(rawUrl, options = {}) {
             retryable: temporary
         };
     }
-    throw new Error('开源资源验证未产生终态');
+    throw new Error('检查资源地址后，仍未取得最终访问结果');
 }
 
 function githubRepositoryReadmeUrl(repositoryUrl) {
@@ -11859,7 +11857,7 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
     const candidates = boundCandidates.slice(0, 12);
     if (boundCandidates.length > candidates.length) {
         console.log(
-            `    [deep] 开源资源候选已按来源顺序稳定截断: ${boundCandidates.length} → 12`
+            `    [deep] 符合来源要求的资源链接共有 ${boundCandidates.length} 项；本次按原顺序检查前 12 项。`
         );
     }
     const resources = [];
@@ -11869,13 +11867,12 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
     for (const candidate of candidates) {
         const { sourceLine, origin } = candidate;
         if (!isConferenceReaderResourceUrlShape(candidate.url)) {
-            console.warn(`    [deep] 跳过格式不完整的开源资源 URL: ${candidate.url}`);
+            console.warn(`    [deep] 资源地址不符合允许的格式，已跳过：${candidate.url}`);
             continue;
         }
-        // LLM prose may expand a named dataset/project into a plausible URL
-        // that the paper never states.  Omit it from the sealed identity;
-        // applyApiReaderResourceAvailability() deterministically removes the
-        // unbound URL from canonical prose before scoring and publication.
+        // 模型可能根据数据集或项目名称猜出网址。上方只保留能对应原文或已验证 Demo
+        // 链接的候选，这里继续检查地址。后续同步资源状态时，会从正式正文中移除
+        // 没有进入资源记录的网址，避免将猜测的链接带入评分和发布。
         let verified = verifiedByUrl.get(candidate.url);
         try {
             if (!verified) {
@@ -11886,9 +11883,9 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
                 verifiedByUrl.set(candidate.url, verified);
             }
         } catch (error) {
-            if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|必须使用 HTTPS|开源资源重定向链无效或过长|开源资源验证未产生终态/i
+            if (/非公网|localhost|不支持的公网 URL 协议|用户名或密码|必须使用 HTTPS|资源重定向缺少目标地址，或超过允许的三次重定向|检查资源地址后，仍未取得最终访问结果/i
                 .test(String(error?.message || ''))) {
-                console.warn(`    [deep] 跳过无法闭合验证的开源资源 URL: ${candidate.url}`);
+                console.warn(`    [deep] 资源地址未通过安全检查，或未取得有效的重定向及访问结果，已跳过：${candidate.url}`);
                 continue;
             }
             throw error;
@@ -11909,18 +11906,14 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
                     );
                 } catch (error) {
                     if (error?.code === 'PROXY_CONFIG_ERROR') throw error;
-                    console.warn(`    [deep] 仓库文档验证暂时失败: ${candidate.url}: ${error.message}`);
+                    console.warn(`    [deep] 本次未能检查仓库文档：${candidate.url}；原因：${error.message}`);
                     documentationByUrl.set(candidate.url, null);
                 }
             }
             documentationEvidence = documentationByUrl.get(candidate.url);
-            // The GitHub HTML endpoint and raw content endpoint are separate
-            // network surfaces.  A transient failure on the former must not
-            // erase stronger evidence from the latter: an authenticated 200
-            // README response under the exact metadata-bound owner/repository
-            // path proves that the public repository is currently serving
-            // content.  Keep this promotion fail-closed behind the complete,
-            // SHA-bound documentation contract.
+            // GitHub 页面和原始 README 使用不同地址，页面请求暂时失败不一定代表仓库不可用。
+            // 只有仓库与元数据一致、README 状态为 200、文档记录的 SHA 格式有效，
+            // 且三项能力标记均满足完整条件时，下方才将资源标为 available。其余情况保留原访问结果。
             if (verified.availability !== 'available'
                 && documentationEvidence?.completeness === 'complete'
                 && validRepositoryDocumentationEvidence(
@@ -11961,7 +11954,7 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
 function applyApiReaderResourceAvailability(analysis, identity) {
     if (identity?.contract !== API_READER_RESOURCE_IDENTITY_CONTRACT || !Array.isArray(identity.resources)
         || !recoverySha256(identity.identitySha256)) {
-        throw new Error('资源状态同步需要已验证 identity，不能把缺失身份当作空资源列表');
+        throw new Error('同步资源状态需要符合格式的资源核验记录；记录缺失时，不能按空资源列表处理。');
     }
     let updated = String(analysis || '');
     const acceptedUrls = new Set((identity?.resources || [])

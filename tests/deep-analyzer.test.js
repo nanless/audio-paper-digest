@@ -2833,7 +2833,7 @@ primary_task_tag: #音视频生成
                 authors: [{ name: '甲', affiliations: ['伪造机构'] }],
                 sourceDomSha256: authors.sourceDomSha256
             }
-        ), /无法重放到 HTML source detail/);
+        ), /缺少对应的来源机构记录，或来源内容 SHA 格式无效/);
         const separated = cheerio.load(
             '<div class="ltx_authors">'
             + '<span class="ltx_creator ltx_role_author"><span class="ltx_personname">乙</span></span>'

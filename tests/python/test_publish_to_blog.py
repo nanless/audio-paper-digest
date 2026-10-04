@@ -1028,7 +1028,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertEqual(
             publish_to_blog.classify_review_failure([{
                 'severity': 'error',
-                'description': f'LLM API source-binding v4 最终 Markdown 门禁失败: {binding_issue}',
+                'description': f'读者文章的最终 Markdown 内容未通过来源核验：{binding_issue}',
             }]),
             'content',
         )
@@ -2066,7 +2066,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             tampered['apiReaderArticle'].encode()
         ).hexdigest()
         reseal_llm_api_reader_fixture(tampered)
-        with self.assertRaisesRegex(PublishDataValidationError, '数字缺少来源 quote'):
+        with self.assertRaisesRegex(PublishDataValidationError, '数字或单位未被来源引文完整覆盖'):
             publish_to_blog._validate_api_reader_source_bindings(tampered)
 
     def test_api_reader_source_quotes_bind_exact_latexml_doubled_thousands_group(self):
@@ -2181,7 +2181,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             tampered['apiReaderArticle'].encode()
         ).hexdigest()
         reseal_llm_api_reader_fixture(tampered)
-        with self.assertRaisesRegex(PublishDataValidationError, '数字缺少来源 quote'):
+        with self.assertRaisesRegex(PublishDataValidationError, '数字或单位未被来源引文完整覆盖'):
             publish_to_blog._validate_api_reader_source_bindings(tampered)
 
     def test_api_reader_numeric_replay_preserves_exact_repeated_decimals(self):
@@ -2203,7 +2203,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         paper = llm_api_publication_fixture()
         paper['apiReaderArticle'] += '\n\n原文中没有可逐字绑定的数值证据'
         with self.assertRaisesRegex(
-                publish_to_blog.PublishDataValidationError, '内部绑定失败占位'):
+                publish_to_blog.PublishDataValidationError, '内部绑定失败占位说明'):
             publish_to_blog._validate_api_reader_source_bindings(paper)
 
     def test_api_reader_display_formula_count_ignores_escaped_reference_in_image_alt(self):
@@ -2225,7 +2225,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         reseal_llm_api_reader_fixture(paper)
         with self.assertRaisesRegex(
                 publish_to_blog.PublishDataValidationError,
-                '正文展示公式数量与 source binding 不一致'):
+                '展示公式数量与公式来源记录条数不一致。'):
             publish_to_blog._validate_api_reader_source_bindings(paper)
 
     def test_api_reader_numeric_units_are_whole_words_not_next_row_prefixes(self):
@@ -2273,7 +2273,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 if accepted:
                     publish_to_blog._validate_api_reader_source_bindings(paper)
                 else:
-                    with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '数字缺少来源 quote'):
+                    with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '数字或单位未被来源引文完整覆盖'):
                         publish_to_blog._validate_api_reader_source_bindings(paper)
         unitless = publish_to_blog._api_reader_numeric_tokens(
             'The measured score is 3.093.09 under the shared protocol.'
@@ -3658,7 +3658,7 @@ title: "Bad table"
         paper['apiReaderArticle'] += '\n漂移'
         with self.assertRaisesRegex(
                 publish_to_blog.PublishDataValidationError,
-                '文章/计划 SHA 或阶段状态不闭环'):
+                '保存的读者正文或编辑计划 SHA 与论文记录、阶段记录不一致，或读者文章阶段尚未完成。'):
             publish_to_blog.generate_paper_page(paper, '2026-08-31')
 
     def test_api_reader_v2_places_authors_after_identity_and_uses_visible_heading_levels(self):
@@ -3751,7 +3751,7 @@ title: "Bad table"
             'https://github.com/example/invented-model',
         )
         self.assertIn(
-            '开源与复现资源段',
+            '开源与复现资源说明',
             publish_to_blog._api_reader_page_binding_issue(altered_resource, paper),
         )
         altered_formula = markdown.replace(
@@ -3797,24 +3797,24 @@ title: "Bad table"
             'renderedColumn'
         ] = 1
         reseal_llm_api_reader_fixture(coordinate)
-        with self.assertRaisesRegex(PublishDataValidationError, '单元格来源漂移'):
+        with self.assertRaisesRegex(PublishDataValidationError, '单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。'):
             publish_to_blog._api_reader_payload(coordinate)
 
         dom = llm_api_publication_fixture()
         dom['apiReaderPlan']['formulaBindings'][0]['sourceDomSha256'] = '伪造'
         reseal_llm_api_reader_fixture(dom)
-        with self.assertRaisesRegex(PublishDataValidationError, '公式来源/渲染绑定非法'):
+        with self.assertRaisesRegex(PublishDataValidationError, '公式的来源记录或正文显示内容不符合要求。'):
             publish_to_blog._api_reader_payload(dom)
 
         old_contract = llm_api_publication_fixture()
         del old_contract['analysisManifest']['contracts']['apiReaderSourceBindings']
-        with self.assertRaisesRegex(PublishDataValidationError, '不是 v4'):
+        with self.assertRaisesRegex(PublishDataValidationError, '未采用 v4 规则。'):
             publish_to_blog.llm_api_production_proof([old_contract])
 
     def test_api_reader_author_resource_identity_tamper_temporary_empty_and_redirect(self):
         missing_author = llm_api_publication_fixture()
         del missing_author['apiReaderAuthors']['identity']['authors'][0]['nameBinding']
-        with self.assertRaisesRegex(PublishDataValidationError, 'author identity'):
+        with self.assertRaisesRegex(PublishDataValidationError, '作者来源规则不匹配'):
             publish_to_blog._api_reader_payload(missing_author)
 
         redirect = llm_api_publication_fixture()
@@ -3836,7 +3836,7 @@ title: "Bad table"
             'https://github.com/example/wrong-start'
         )
         reseal_llm_api_resource_identity(redirect)
-        with self.assertRaisesRegex(PublishDataValidationError, 'redirects'):
+        with self.assertRaisesRegex(PublishDataValidationError, '重定向条目'):
             publish_to_blog._api_reader_payload(redirect)
 
         documented = llm_api_publication_fixture()
@@ -3884,7 +3884,7 @@ title: "Bad table"
 
         partial_documentation['completeness'] = 'complete'
         reseal_llm_api_resource_identity(partial)
-        with self.assertRaisesRegex(PublishDataValidationError, 'documentationEvidence'):
+        with self.assertRaisesRegex(PublishDataValidationError, 'README 文档证据不符合要求'):
             publish_to_blog._api_reader_payload(partial)
 
         temporary = llm_api_publication_fixture()
@@ -3954,7 +3954,7 @@ title: "Bad table"
             for index in range(1, 6)
         ]
         reseal_llm_api_reader_fixture(paper)
-        with self.assertRaisesRegex(PublishDataValidationError, 'Figure marker 计划'):
+        with self.assertRaisesRegex(PublishDataValidationError, '编辑计划中的术语说明或图片位置记录'):
             publish_to_blog._api_reader_payload(paper)
 
     def test_remote_verified_historical_api_receipt_reuses_before_new_v4_gate(self):
@@ -4084,7 +4084,7 @@ title: "Bad table"
                 tampered_stage['figuresSha256'] = publish_to_blog._stable_json_sha256(
                     tampered['apiReaderFigures']
                 )
-                with self.assertRaisesRegex(PublishDataValidationError, 'marker 计划不一致'):
+                with self.assertRaisesRegex(PublishDataValidationError, '图片记录缺少对应的位置计划，或图片内容字段与计划不一致。'):
                     publish_to_blog._api_reader_payload(tampered)
             finally:
                 publish_to_blog.CURRENT_DIR = original_current
@@ -4164,7 +4164,7 @@ title: "Bad table"
 
         missing_marker = copy.deepcopy(paper)
         del missing_marker['analysisManifest']['contracts']['apiReaderFigurePersistence']
-        with self.assertRaisesRegex(PublishDataValidationError, 'figure 字段非法'):
+        with self.assertRaisesRegex(PublishDataValidationError, '图片记录格式无效、缺少必要字段，或含有不允许的字段。'):
             publish_to_blog._api_reader_payload(missing_marker)
 
         malformed_evidence = copy.deepcopy(paper)
@@ -4172,7 +4172,7 @@ title: "Bad table"
         malformed_evidence['analysisManifest']['stages']['apiReaderArticle'][
             'figuresSha256'
         ] = publish_to_blog._stable_json_sha256(malformed_evidence['apiReaderFigures'])
-        with self.assertRaisesRegex(PublishDataValidationError, 'evidence SHA 非法'):
+        with self.assertRaisesRegex(PublishDataValidationError, '像素证据 SHA 格式无效。'):
             publish_to_blog._api_reader_payload(malformed_evidence)
 
         ephemeral_without_evidence_sha = copy.deepcopy(paper)
@@ -4201,11 +4201,11 @@ title: "Bad table"
         self.assertNotIn(caption, rendered)
 
         duplicate = article + f'\n\n![重复]({url})'
-        with self.assertRaisesRegex(PublishDataValidationError, '未唯一映射'):
+        with self.assertRaisesRegex(PublishDataValidationError, '未在保存的读者正文中恰好出现一次。'):
             publish_to_blog.render_ephemeral_api_reader_figures(duplicate, [{
                 'ordinal': 4, 'caption': caption, 'url': url,
             }])
-        with self.assertRaisesRegex(PublishDataValidationError, '未唯一映射'):
+        with self.assertRaisesRegex(PublishDataValidationError, '未在保存的读者正文中恰好出现一次。'):
             publish_to_blog.render_ephemeral_api_reader_figures('没有图片。', [{
                 'ordinal': 4, 'caption': caption, 'url': url,
             }])
