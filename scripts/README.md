@@ -129,7 +129,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/historical-conference-crawl-authority.js` | Node 库 | 用已有会议元数据和 PDF 的稳定会议 ID 提供身份依据，支持重新核验 ICASSP、ICLR 本地来源。 |
 | `lib/historical-conference-crawl-batch.js` | Node 库 | 保留旧版只读辅助功能，crosswalk 写入功能已停用。会议标题指纹只能用于直接重写的页面对应，不得写入 crosswalk。 |
 | `lib/historical-conference-local-sources.js` | Node 库 | 生成 `historical-conference-local-sources-v2`。除既有会议元数据和 PDF 外，还按认证 ICML poster→OpenReview forum ID 合并 ICML 来源；只读已有目录及运行目录中的新文件，新 PDF 必须对应唯一 OpenReview/替代来源凭证。逐项记录元数据、论文记录、PDF 获取与来源 SHA；缺 PDF 时明确标为 unavailable。 |
-| `lib/historical-conference-page-projections.js` | Node 库 | 根据冻结历史清单中的 frontmatter 标题指纹与本地会议记录，确定论文对应哪些页面；不读取正文。 |
+| `lib/historical-conference-page-projections.js` | Node 库 | 读取历史清单、页面标题和已保留的会议来源，核对文件 SHA 后确定论文对应哪些页面。页面文件参与校验，旧正文不作为重写输入。 |
 | `lib/historical-direct-rewrite-input-catalog.js` | Node 库 | 结合历史清单中的唯一 arXiv 提示、严格主评分行身份、ICML poster 与可路由身份、会议本地来源清单，生成 `merged-good-historical-local-data-v5`。身份记录仅保存字节区间和哈希，不把旧正文送入写作。 |
 | `lib/historical-daily-primary-arxiv-binding.js` | Node 库 | 核验冻结 Daily 页的 SHA，仅接受唯一合法评分元数据行中的规范 `[arxiv]` 主身份；保存对应字节区间和行哈希，拒绝把正文引用链接当成论文主身份。 |
 | `lib/historical-icml-poster-authority.js` | Node 库 | 认证 ICML 2026 原始 poster→OpenReview forum 快照，核验 Daily 子条目与汇总小节的身份及 forum-ID 本地 PDF；旧页面正文不进入写作。 |
@@ -194,7 +194,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `historical-conference-local-sources.js` | 只读生成本地会议来源清单 v2，必须显式传绝对 `--icml-poster-snapshot` 与已有 `--icml-pdf-root`。新 PDF 和获取凭证根目录由参数或集中配置提供；不接触历史页、crosswalk、模型、网络或发布。 |
 | `historical-openreview-pdf-source.js` | 为一个已认证 ICML/OpenReview forum ID 规划或封存缺失官方 PDF。dry-run 不联网、不写文件；PDF 保存到本地来源清单实际读取的 ICML PDF 根，凭证单独进入运行目录。 |
 | `historical-icml-alternate-pdf-source.js` | 只封存代码白名单中的 ICML 替代来源，固定 poster/forum、标题、作者与来源 URL。`--import-file` 仅允许 `n1mAjfRDZ6`，重新提取并匹配标题、作者、日期和跨页特征文本，以非网络获取凭证记录浏览器下载导入。 |
-| `historical-conference-page-projections.js` | 从显式本地来源目录和冻结历史清单确定会议论文与页面的对应关系；不读取历史正文。 |
+| `historical-conference-page-projections.js` | 从指定的本地来源目录和历史清单确定会议论文与页面的对应关系；核对页面文件 SHA，但不把旧正文用于重写。 |
 | `historical-direct-rewrite-inputs.js` | 用冻结清单中的唯一 arXiv 提示、严格主评分行身份、ICML poster 全量/可路由身份、会议来源清单和博客根目录，生成范围固定的 v5 输入目录；不要求额外 arXiv 来源清单。 |
 | `historical-direct-rewrite-plan.js` | 用直接重写的 v5 来源目录、历史清单与会议页面对应记录 v3 生成原文重写计划，核验 arXiv 主身份与 ICML 可路由身份；拒绝旧 v4/v3 文件，并报告未覆盖历史论文页。 |
 | `historical-direct-rewrite-scheduler.js` | 只准备直接重写计划的 arXiv/会议来源队列和封存文件，支持固定论文集合/上限、计划及获取序号锁、暂停标记、安全信号停止与逐项进度。arXiv 原子保存 TXT、PDF、元数据、清单；失败只保存不可变 crosswalk 交接文件，不执行分析、Reader、crosswalk 或发布。 |

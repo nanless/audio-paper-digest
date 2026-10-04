@@ -1962,3 +1962,30 @@ Node作者负责新纯模块、analysis-contract、deep-analyzer、analysis-engi
 第二十三批必要本地检查全部完成。首轮已经通过Hugo、全仓语法和除一项旧文字断言外的JavaScript；补验退出0，用时91.531704秒，运行期间源码保持不变。原失败用例通过（117.725709毫秒）；默认Python801项在88.234秒全部通过，Manual26项在0.049秒全部通过，修改测试语法和严格只读数据也通过。仅补实际失败和未执行部分，没有重跑已通过整套，首轮退出1日志保留。等待独立终审后提交九个文件并正常推送，核远端相同提交与两组完整自动检查。
 
 第二十三批独立终审完成，没有未解决的P1/P2。终审核对了首轮真实失败、唯一精确断言修正、补充验证和九文件范围；生产文件与其他测试的已审内容保持。现在提交并正常推送，再核相同远端提交和两组完整自动检查。
+
+语言整理第二十四批正式计划：按用途整理相邻三个库的变量名，同时改写原文片段和会议页面对应的普通说明。主代理已读三份只读研究与独立建议。来源作者负责scripts/lib/historical-source-tag-assignment.js、scripts/lib/source-evidence-snippets.js和tests/source-evidence-snippets.test.js；会议作者负责scripts/lib/historical-conference-page-projections.js、tests/historical-direct-rewrite-input-catalog.test.js和tests/historical-direct-rewrite-plan.test.js。两组文件互不重叠，独立代理审查全部实际差异。主代理负责README、进度、统一验证及提交。来源分类刚新增的实际调用测试继续作为回归，不为低影响改名新增镜像实现的测试。
+
+来源分类的runtime实际上是标签规则对象，改为tagRules；active概念映射改为activeConceptsById。证据集合改为evidenceSnippets，包含文本和来源描述的外层对象改为sourceDetails，执行记录索引改为runEntriesByPaperId，渲染代码SHA改为rendererImplementationSha256，带编号的模型证据文本改为selectionEvidenceText。两种projected分别保存分类字段与页面记录对，改为savedDecisionFields和pageRecordEntries；参与决策内容哈希的字段集合改为decisionRecordFields。这些名称只用于对应作用域，loadSource里真正的来源描述对象仍可称source。所有保存键不改；对象简写须改成原键与新局部变量的显式对应。validateCachedDecision仍接受runtime、bundle和source属性，通过解构别名取得新局部名称，不迁外部选项接口。
+
+原文片段里的projection局部改为evidenceText，公开返回字段仍为projection；injectEvidence的位置参数改为evidenceSnippets，编号索引改为snippetsById，选中的片段改为selectedSnippet。六条普通错误改为自然中文，准确说明文本长度及两项整数配置、没有前进的位置、JSON外形、必要字段的出现次数、字段全集和数组，以及概念字段与已知编号。原取样、字符单位、数字、正则、字段、编号头和连续引文不变；注释明确直接截取来源文本并保存UTF16位置，不保证已经识别真实方法或结论章节。两项既有未知编号和自写引文反例只改文字匹配。
+
+会议私有metadataTitle函数实际返回两种标题指纹，改为getSourceTitleFingerprints；临时返回键改为originalTitleFingerprint和pageTitleFingerprints，同步唯一内部消费者。它仍先核元数据文件SHA和记录索引，再按原标题归一化算法计算指纹，不声称对标题原始字节直接取SHA。所有保存的标题指纹和projections字段保持。候选论文集合改为matchingPaperIds，对应页面数组改为mappedPages；两种binding分别改为pageTitleRecord与dailyPosterPageRecord；内容哈希使用的字段集合改为mappingRecordFields。公共函数名、字段顺序和哈希算法不改。
+
+会议普通报错及四段注释使用完整自然英语，以匹配共享读取器现有英语对象说明，不翻半句或新增自动翻译表。各句只说明实际拒绝条件：counts只要求对象，不检查每个数值；读取一致性只比较读到的字节数、设备、inode和长度；标题只允许原指纹及移除完整行内TeX后的指纹，不能成为模糊匹配；页面对应先排序再检查，不能称拒绝所有原输入乱序。库存句采用“The historical page inventory must contain a counts object, a pages array, and valid page-set and ledger SHA values.”，排序句采用“The conference paper IDs are repeated or are not in increasing order after sorting.”，目录对应句采用“The inventory file path or SHA does not match the scoped v5 catalog.”。保unsafe字面、原异常name/code及所有判断，不增加错误分型。新错误可能进入运行记录与其哈希，不当作仅改日志；旧记录不改写或补签。
+
+只同步已查明的会议五项文字断言：来源目录测试三条包装，计划测试的标题歧义和共享JSON各一条。相邻计划库自己的同名错误仍保持，原失败输入、动作和优先级不改。来源三段模型提示及重试反馈的完整文字、插值值和顺序全部保护；合同、状态、保存字段、路径、编号、引文坐标、来源和恢复规则保持。源码名称和说明变化仍真实改变三个文件SHA，原依赖检查照常执行，不能给旧记录替换新SHA，也不能承诺全部已处理项自动重审。
+
+作者完成后按实际绑定位置逆还原整语法树，私有两个返回键和普通文字另列明确允许项；不能通过全名替换掩盖误改保存属性。核模型模板完整相等、字段简写正确、原算法和所有非文字结构保持。作者只做语法及静态对照，不分别执行整套。两位作者停笔、主代理读全部差异并取得独立预审后冻结所有跟踪文件，只运行一次完整检查；必要补验仅覆盖实际失败和未执行部分。独立终审后精确add、详细中文commit和正常push，再核远端相同提交及两组完整自动检查。期间不运行生产日更、历史重写、模型或博客发布，不修改运行数据。
+
+第二十三批远端检查已完成。提交 2d22fda90c48c78f2f631d128b225211560e144f 与远端一致；GitHub Actions 37243499993 的两个任务及全部 28 个步骤均成功。已核对实际检查记录，不以启动检查代替通过。
+
+第二十四批修改与预审完成。两名作者共修改三个生产模块和三份既有测试，主代理修正 README 并记录计划；实际范围为八个文件。来源分类及片段模块迁移 89 个局部名称位置，会议模块迁移 41 个名称位置；七处解构或简写显式保留原属性键，会议私有标题函数的两个临时返回键及消费者同步修改。六条片段诊断、会议普通诊断和职责注释改为完整自然的句子，七处真实测试断言同步，原输入与行为不变，没有增加镜像测试。
+作者的有限静态检查分别通过，完整生产语法树逆还原后一致；三段来源模型模板及反馈内容保持。独立审查未发现未解决的 P1/P2，确认公开选项、保存字段、状态、取样、UTF16 坐标、预算和哈希算法保持。独立检查器第一次调用因模板节点层级读取错误退出，修正检查器后通过；原记录保留，该问题不属于项目行为失败。源码身份和新诊断文本会改变，新失败记录或缓存指纹可能随之变化；旧记录和凭证不重写。
+主代理已阅读八个文件的完整实际差异和三份短报告。现在冻结跟踪文件，统一运行一次完整验证；若有失败，只修实际问题并补跑受影响或尚未运行的检查。
+
+第二十四批完整验证首轮退出 1，用时 243.902465 秒，期间源码保持不变。固定 Hugo 与全仓 JavaScript、Python、shell 语法检查通过；JavaScript 共 2345 项、133 个套件，2343 项通过，一项失败，一项原有跳过，耗时 214263.150875 毫秒。唯一失败为 historical-direct-rewrite-plan.test.js:458 的旧错误文字断言：调用从计划库进入会议库 normalizeConferencePageMappingRecord，后者实际返回“conference page mapping record is missing required fields or contains unsupported fields”。预审将它误判为计划库自有诊断，遗漏同步；首轮日志和真实堆栈保留。
+仅将该断言改为实际会议库错误文字，原输入、拒绝动作及生产实现保持。首轮在 JavaScript 失败后停止，Python、Manual Python 和严格只读数据尚未执行；补验只覆盖修改测试语法、唯一失败用例和这些尚未执行部分，不重跑已通过完整检查。
+
+第二十四批必要本地检查已完成。补验退出 0，用时 105.313015 秒，期间源码保持不变；原失败 JavaScript 用例一项通过，耗时 156.460166 毫秒。默认 Python 801 项在 101.220 秒全部通过，Manual Python 26 项在 0.057 秒全部通过；修改测试语法及严格只读数据检查通过。首轮退出 1 的日志保留，补验没有重复首轮已通过部分。最终共有八处文字断言同步；等待独立终审后提交八个文件并正常推送，再核远端提交和对应自动检查。
+
+第二十四批独立终审完成，未解决的 P1/P2 为 0。终审核对了真实失败堆栈、唯一断言修正和补验结果；三个生产文件保持已审 SHA，三份测试的完整差异仅为八处精确文字断言，原输入与动作不变。现在精确提交八个文件并正常推送，随后核对远端提交与完整自动检查。

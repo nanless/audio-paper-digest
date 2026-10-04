@@ -178,10 +178,10 @@ test('projection and plan reject legacy v3/v4 and malformed v5 bytes through the
         inventoryFile: f.inventoryFile, blogRoot: f.blog });
     const legacyV3 = { contract: 'merged-good-historical-local-data-v3', version: 3,
         scope: current.scope, inputs: current.inputs, summary: current.summary, entries: current.entries };
-    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV3), /current scoped v5 local source catalog/);
+    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV3), /The scoped v5 local source catalog failed validation/);
     assert.throws(() => planApi.normalizeCatalog(legacyV3), /current scoped v5 local source catalog/);
     const legacyV4 = structuredClone(current); legacyV4.contract = 'merged-good-historical-local-data-v4'; legacyV4.version = 4;
-    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV4), /current scoped v5 local source catalog/);
+    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV4), /The scoped v5 local source catalog failed validation/);
     assert.throws(() => planApi.normalizeCatalog(legacyV4), /current scoped v5 local source catalog/);
     const cases = [
         value => { delete value.scopeBinding; },
@@ -194,7 +194,7 @@ test('projection and plan reject legacy v3/v4 and malformed v5 bytes through the
     ];
     for (const mutate of cases) {
         const legacy = structuredClone(current); mutate(legacy);
-        assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacy), /current scoped v5 local source catalog/);
+        assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacy), /The scoped v5 local source catalog failed validation/);
         assert.throws(() => planApi.normalizeCatalog(legacy), /current scoped v5 local source catalog/);
     }
 });

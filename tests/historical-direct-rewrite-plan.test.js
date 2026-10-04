@@ -313,7 +313,7 @@ test('source scheduler accepts only a signed pause marker bound to its plan and 
     fs.writeFileSync(pauseFile, '', { mode: 0o600 });
     await assert.rejects(schedulerCli.main(['--apply', '--plan', planFile], { files,
         prepare: async options => { options.shouldPause(); throw new Error('unsigned marker was accepted'); } }),
-    /pause request|strict UTF-8 JSON/);
+    /pause request|must contain valid UTF-8 JSON/);
     fs.unlinkSync(pauseFile);
     directControl.writePauseRequest({ phase: 'source', sourceRoot, plan,
         requestedAt: '2026-09-07T00:00:00.000Z' });
@@ -456,7 +456,7 @@ test('direct arXiv registry, analysis, and staging bind one sealed source genera
 test('plan requires a complete explicit conference projection artifact and CLI keeps queues separate', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     assert.throws(() => planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
-        inventory: f.inventory, conferencePageProjections: {} }), /conference page projection artifact/);
+        inventory: f.inventory, conferencePageProjections: {} }), /conference page mapping record is missing required fields or contains unsupported fields/);
     const parsed = schedulerCli.parseArgs(['--dry-run', '--plan', f.catalogPath, '--queue', 'conference',
         '--generation', '2', '--arxiv-concurrency', '3', '--conference-concurrency', '5',
         '--paper-ids', 'conference:icassp:2026:icassp-arnumber:100', '--max-papers', '1']);
@@ -512,7 +512,7 @@ test('ambiguous retained metadata titles fail instead of guessing a conference p
     const ambiguousCatalog = currentCatalog({ root: f.root, inventory: f.inventory, inventoryPath: f.inventoryPath,
         inventoryFileSha256: f.inventoryFileSha256, entries: [...f.catalog.entries, duplicate] });
     assert.throws(() => conferencePageMappingsApi.buildConferencePageMappings({ catalog: ambiguousCatalog,
-        catalogFileSha256: sha('ambiguous catalog'), inventory: f.inventory, blogRoot: f.blog }), /multiple retained conference identities/);
+        catalogFileSha256: sha('ambiguous catalog'), inventory: f.inventory, blogRoot: f.blog }), /the frontmatter title matches more than one retained conference paper/);
 });
 
 test('daily ICML projection consumes a sealed poster authority binding without title matching', t => {

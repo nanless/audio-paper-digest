@@ -16,6 +16,6 @@ test('long source uses bounded balanced spans including start and end',()=>{
 test('invented evidence IDs and model-written quotes cannot enter injected evidence',()=>{
  const bundle=api.buildSnippets('This exact known source sentence supports source proof. '.repeat(10));
  const raw={primaryTaskId:'task.asr',primaryMethodId:'method.self-supervised',concepts:[{id:'task.asr',evidenceId:'unknown',rationale:'已核原文'}]};
- assert.throws(()=>api.injectEvidence(JSON.stringify(raw),bundle),/sealed source span/);
- raw.concepts[0]={id:'task.asr',quote:'fabricated',rationale:'已核原文'};assert.throws(()=>api.injectEvidence(JSON.stringify(raw),bundle),/sealed source span/);
+ assert.throws(()=>api.injectEvidence(JSON.stringify(raw),bundle),/每个概念必须仅包含 id、evidenceId 和 rationale，且 evidenceId 必须对应已编号的来源片段/);
+ raw.concepts[0]={id:'task.asr',quote:'fabricated',rationale:'已核原文'};assert.throws(()=>api.injectEvidence(JSON.stringify(raw),bundle),/每个概念必须仅包含 id、evidenceId 和 rationale，且 evidenceId 必须对应已编号的来源片段/);
 });
