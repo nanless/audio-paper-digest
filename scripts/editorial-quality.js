@@ -195,11 +195,11 @@ function extractMarkdownSections(markdown) {
         const rawTitle = match[1].trim().replace(/^(?:[^\p{L}\p{N}#]+\s*)+/u, '');
         const withoutColon = rawTitle.trim().replace(/[：:]$/, '').trim();
         const title = PAPER_EVALUATION_TITLES.includes(withoutColon) ? withoutColon : rawTitle;
-        const canonical = Object.entries(SECTION_ALIASES)
+        const sectionName = Object.entries(SECTION_ALIASES)
             .find(([_name, aliases]) => aliases.includes(title))?.[0];
-        if (!canonical) continue;
+        if (!sectionName) continue;
         headings.push({
-            canonical,
+            sectionName,
             headingStart: line.start,
             bodyStart: line.end
         });
@@ -208,8 +208,8 @@ function extractMarkdownSections(markdown) {
         const current = headings[index];
         const end = headings[index + 1]?.headingStart ?? text.length;
         const body = text.slice(current.bodyStart, end).replace(/^\n+|\n+$/g, '');
-        sections[current.canonical] = current.canonical === 'review'
-            && headings.filter(heading => heading.canonical === 'review').length > 1
+        sections[current.sectionName] = current.sectionName === 'review'
+            && headings.filter(heading => heading.sectionName === 'review').length > 1
             ? '' : body;
     }
     return sections;
@@ -219,9 +219,9 @@ function coerceCoreSections(input) {
     if (typeof input === 'string') return extractMarkdownSections(input);
     const source = input && typeof input === 'object' ? input : {};
     const sections = {};
-    for (const canonical of CORE_SECTION_NAMES) {
-        const alias = SECTION_ALIASES[canonical].find(name => typeof source[name] === 'string');
-        sections[canonical] = alias ? source[alias] : '';
+    for (const sectionName of CORE_SECTION_NAMES) {
+        const alias = SECTION_ALIASES[sectionName].find(name => typeof source[name] === 'string');
+        sections[sectionName] = alias ? source[alias] : '';
     }
     return sections;
 }

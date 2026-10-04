@@ -190,26 +190,26 @@ def generate_paper_md(paper, date_str):
     heading_issue = evaluation_heading_issue(paper.get('analysis'))
     if heading_issue:
         raise ValueError(heading_issue)
-    pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
+    parsed_analysis = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
     title = paper.get('title', 'Unknown')
     aid = paper.get('arxivId', '')
     aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
 
     md = f'# {title}\n\n'
 
-    if pa:
-        if pa.get('tags'):
-            md += f"{' '.join(pa['tags'])}\n\n"
+    if parsed_analysis:
+        if parsed_analysis.get('tags'):
+            md += f"{' '.join(parsed_analysis['tags'])}\n\n"
 
-        score = float(pa.get('score', '0') or '0')
+        score = float(parsed_analysis.get('score', '0') or '0')
         se = '🔥' if score >= 8 else '✅' if score >= 6 else '📝'
-        md += f'{se} **{pa.get("score", "N/A")}/10**\n\n'
+        md += f'{se} **{parsed_analysis.get("score", "N/A")}/10**\n\n'
 
         metadata = []
-        if pa.get('documentType'):
-            metadata.append(f'文档类型：{pa["documentType"]}')
-        if pa.get('confidence'):
-            metadata.append(f'评分置信度：{pa["confidence"]}')
+        if parsed_analysis.get('documentType'):
+            metadata.append(f'文档类型：{parsed_analysis["documentType"]}')
+        if parsed_analysis.get('confidence'):
+            metadata.append(f'评分置信度：{parsed_analysis["confidence"]}')
         if metadata:
             md += f'{" | ".join(metadata)}\n\n'
 
@@ -229,7 +229,7 @@ def generate_paper_md(paper, date_str):
             ('开源详情', 'opensource'),
         ]
         for label, key in sections:
-            content = pa.get(key, '')
+            content = parsed_analysis.get(key, '')
             if content:
                 md += f'## {label}\n\n{content}\n\n'
 
@@ -295,10 +295,10 @@ def generate_overview_md(scored, unscored, date_str):
 
     if scored:
         md += f'### 论文评分排行榜（{len(scored)} 篇）\n\n'
-        for i, (score, p, pa) in enumerate(scored):
+        for i, (score, p, parsed_analysis) in enumerate(scored):
             medal = '🥇' if i == 0 else '🥈' if i == 1 else '🥉' if i == 2 else f'{i+1}.'
             title = p.get('title', 'Unknown')[:60]
-            document_type = pa.get('documentType', '') if pa else ''
+            document_type = parsed_analysis.get('documentType', '') if parsed_analysis else ''
             type_suffix = f'，{document_type}' if document_type else ''
             md += f'- {medal} {title}（{score}分{type_suffix}）\n'
         md += '\n'
@@ -306,14 +306,14 @@ def generate_overview_md(scored, unscored, date_str):
     md += '---\n\n'
     md += '## 论文列表\n\n'
 
-    for i, (score, p, pa) in enumerate(scored):
+    for i, (score, p, parsed_analysis) in enumerate(scored):
         title = p.get('title', 'Unknown')
         md += f'### {i+1}. {title}\n\n'
-        if pa:
-            if pa.get('roast'):
-                md += f'💡 {pa["roast"]}\n\n'
-            if pa.get('summary'):
-                md += f'📌 {pa["summary"]}\n\n'
+        if parsed_analysis:
+            if parsed_analysis.get('roast'):
+                md += f'💡 {parsed_analysis["roast"]}\n\n'
+            if parsed_analysis.get('summary'):
+                md += f'📌 {parsed_analysis["summary"]}\n\n'
         md += '---\n\n'
 
     for i, p in enumerate(unscored):
@@ -363,7 +363,7 @@ def main():
         total = len(scored) + len(unscored)
         overview_md = generate_overview_md(scored, unscored, today)
         overview_blocks = md_to_feishu_blocks(overview_md)
-        all_papers = [(p, pa) for _, p, pa in scored] + [(p, None) for p in unscored]
+        all_papers = [(p, parsed_analysis) for _, p, parsed_analysis in scored] + [(p, None) for p in unscored]
         paper_block_count = 0
         for paper, _ in all_papers:
             paper_block_count += len(md_to_feishu_blocks(generate_paper_md(paper, today)))
@@ -410,8 +410,8 @@ def main():
             next_index += len(batch)
             print(f"  ✅ 写入汇总块 {i+1}-{i+len(batch)}")
 
-        all_papers = [(p, pa) for _, p, pa in scored] + [(p, None) for p in unscored]
-        for idx, (paper, pa) in enumerate(all_papers):
+        all_papers = [(p, parsed_analysis) for _, p, parsed_analysis in scored] + [(p, None) for p in unscored]
+        for idx, (paper, parsed_analysis) in enumerate(all_papers):
             paper_blocks = md_to_feishu_blocks(generate_paper_md(paper, today))
             for i in range(0, len(paper_blocks), batch_size):
                 batch = paper_blocks[i:i + batch_size]

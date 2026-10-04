@@ -3235,27 +3235,27 @@ def build_researcher_workbench_bundle(
         preserve_newlines=True,
     )
     identity = _workbench_source_identity(paper)
-    pa = dict(parsed or paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
+    parsed_analysis = dict(parsed or paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
     try:
-        score = float(pa.get('score'))
+        score = float(parsed_analysis.get('score'))
     except (TypeError, ValueError) as exc:
         raise PublishDataValidationError('researcher workbench score 必须是数值') from exc
     if not math.isfinite(score) or score < 0 or score > 10:
         raise PublishDataValidationError('researcher workbench score 必须在 0-10')
-    raw_primary_task = pa.get('primaryTaskTag')
+    raw_primary_task = parsed_analysis.get('primaryTaskTag')
     if not isinstance(raw_primary_task, str):
         raise PublishDataValidationError('researcher workbench primaryTask 必须是字符串')
     primary_task = _validated_workbench_text(
         raw_primary_task.lstrip('#'),
         'researcher workbench primaryTask', maximum=200,
     )
-    tag_metadata = build_flat_tag_compat_metadata(pa)
+    tag_metadata = build_flat_tag_compat_metadata(parsed_analysis)
     primary_method = tag_metadata['primaryMethod'] if tag_metadata else None
     rank_bucket = _validated_workbench_text(
-        pa.get('rankBucket'), 'researcher workbench rankBucket', maximum=100,
+        parsed_analysis.get('rankBucket'), 'researcher workbench rankBucket', maximum=100,
     )
     document_type = _validated_workbench_text(
-        pa.get('documentType'), 'researcher workbench documentType', maximum=100,
+        parsed_analysis.get('documentType'), 'researcher workbench documentType', maximum=100,
     )
     authors = _workbench_authors(paper, api_reader_payload)
     abstract_sha = hashlib.sha256(abstract.encode('utf-8')).hexdigest()
@@ -3646,9 +3646,9 @@ def normalize_digest_index_reader_surface(text):
     return frontmatter + value
 
 
-def compact_index_opensource(pa, paper, limit=4):
+def compact_index_opensource(parsed_analysis, paper, limit=4):
     """Keep the digest index navigable; full provenance remains on each paper page."""
-    oss_text = enrich_opensource(pa, paper)
+    oss_text = enrich_opensource(parsed_analysis, paper)
     urls = []
     for raw in re.findall(
             r'https://[^\s<>()\[\]{}"\'，。；：！？、一-鿿]+',
@@ -4058,11 +4058,11 @@ def _api_reader_index_display_fields_issue(content, papers):
     return None
 
 
-def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v2=False,
+def full_index_decision_block(parsed_analysis, paper, key, *, reader_article='', api_reader_v2=False,
                               reader_display_fields=None):
     """根据对应的摘要或资源内容构造汇总展示块，并按汇总页需要整理标题和图片。"""
     content = reader_display_fields[key] if reader_display_fields is not None \
-        else pa.get(key, '') if isinstance(pa, dict) else ''
+        else parsed_analysis.get(key, '') if isinstance(parsed_analysis, dict) else ''
     if not isinstance(content, str) or not content.strip():
         return ''
     content = content.strip()
@@ -4091,7 +4091,7 @@ def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v
     return content.strip()
 
 
-def index_author_institution_block(paper, pa, api_reader=None):
+def index_author_institution_block(paper, parsed_analysis, api_reader=None):
     """优先展示读者文章记录中的作者和机构；没有可用列表时，使用已解析的作者文本。"""
     reader_authors = api_reader.get('readerAuthors') if isinstance(api_reader, dict) else None
     authors = reader_authors.get('authors') if isinstance(reader_authors, dict) else None
@@ -4100,7 +4100,7 @@ def index_author_institution_block(paper, pa, api_reader=None):
             f'- {author["name"]}：{"；".join(author["affiliations"])}'
             for author in authors
         )
-    fallback = pa.get('authors', '') if isinstance(pa, dict) else ''
+    fallback = parsed_analysis.get('authors', '') if isinstance(parsed_analysis, dict) else ''
     return fallback.strip() if isinstance(fallback, str) else ''
 
 
@@ -4135,13 +4135,13 @@ def format_display_tags(tags):
     return ' | '.join(dict.fromkeys(flattened))
 
 
-def build_index_context_line(pa, aurl=''):
+def build_index_context_line(parsed_analysis, aurl=''):
     """Render non-duplicated ranking/source metadata below the score row."""
     bits = []
-    if isinstance(pa, dict) and pa.get('rankBucket'):
-        bits.append(f'排名：{pa["rankBucket"]}')
-    if isinstance(pa, dict) and pa.get('documentType'):
-        bits.append(f'文档类型：{pa["documentType"]}')
+    if isinstance(parsed_analysis, dict) and parsed_analysis.get('rankBucket'):
+        bits.append(f'排名：{parsed_analysis["rankBucket"]}')
+    if isinstance(parsed_analysis, dict) and parsed_analysis.get('documentType'):
+        bits.append(f'文档类型：{parsed_analysis["documentType"]}')
     if aurl:
         bits.append(f'[arXiv 原文]({aurl})')
     return ' | '.join(bits)
@@ -4234,13 +4234,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
 
 """
     md += "| 排名 | 论文 | 总分 | 分档 | 文档类型 | 主任务 |\n|------|------|------|------|----------|--------|\n"
-    for i, (score, p, pa) in enumerate(scored):
+    for i, (score, p, parsed_analysis) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
-        rank_bucket = pa.get('rankBucket', '') or '-'
-        document_type = pa.get('documentType', '') or '-'
-        primary_task = pa.get('primaryTaskTag', '') or '-'
+        rank_bucket = parsed_analysis.get('rankBucket', '') or '-'
+        document_type = parsed_analysis.get('documentType', '') or '-'
+        primary_task = parsed_analysis.get('primaryTaskTag', '') or '-'
         compact_title = compact_title_for_ranking(title)
         if slug:
             md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {score} | {rank_bucket} | {document_type} | {primary_task} |\n"
@@ -4307,7 +4307,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             return local_image
         return ''
 
-    for i, (score, p, pa) in enumerate(scored):
+    for i, (score, p, parsed_analysis) in enumerate(scored):
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
         m = format_medal(i)
@@ -4315,7 +4315,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         heading_issue = evaluation_heading_issue(p.get('analysis'))
         if heading_issue:
             raise PublishDataValidationError(heading_issue)
-        pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
+        parsed_analysis = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = _visible_arxiv_source_url(p)
         api_reader = _api_reader_payload(p)
@@ -4338,29 +4338,29 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if reader_article:
             english_title = f'[{title}]({blog_url})' if blog_url else title
             md += f"> 英文题目：*{english_title}*\n\n"
-        tags = pa.get('tags') or []
+        tags = parsed_analysis.get('tags') or []
         display_tags = format_display_tags(tags)
         if display_tags:
             md += f"标签：{display_tags}\n\n"
         
-        score_line = format_complete_score_line(pa)
+        score_line = format_complete_score_line(parsed_analysis)
         if score_line:
             md += f"评分：{score_line}\n\n"
 
-        context_line = build_index_context_line(pa, aurl)
+        context_line = build_index_context_line(parsed_analysis, aurl)
         if context_line:
             md += f"{context_line}\n\n"
         md += _historical_source_notice(p)
 
-        author_institutions = index_author_institution_block(p, pa, api_reader)
+        author_institutions = index_author_institution_block(p, parsed_analysis, api_reader)
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
         
-        if reader_display_fields is None and pa.get('roast'):
-            md += f"💡 **论文评价**\n\n{pa['roast']}\n\n"
+        if reader_display_fields is None and parsed_analysis.get('roast'):
+            md += f"💡 **论文评价**\n\n{parsed_analysis['roast']}\n\n"
 
         summary = full_index_decision_block(
-            pa, p, 'summary', reader_article=reader_article,
+            parsed_analysis, p, 'summary', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
             reader_display_fields=reader_display_fields,
         )
@@ -4368,7 +4368,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
         opensource = full_index_decision_block(
-            pa, p, 'opensource', reader_article=reader_article,
+            parsed_analysis, p, 'opensource', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
             reader_display_fields=reader_display_fields,
         )
@@ -4385,7 +4385,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         heading_issue = evaluation_heading_issue(p.get('analysis'))
         if heading_issue:
             raise PublishDataValidationError(heading_issue)
-        pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
+        parsed_analysis = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = _visible_arxiv_source_url(p)
         api_reader = _api_reader_payload(p)
@@ -4408,23 +4408,23 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if reader_article:
             english_title = f'[{title}]({blog_url})' if blog_url else title
             md += f"> 英文题目：*{english_title}*\n\n"
-        tags = pa.get('tags') or []
+        tags = parsed_analysis.get('tags') or []
         display_tags = format_display_tags(tags)
         if display_tags:
             md += f"标签：{display_tags}\n\n"
         md += '评分：N/A（分析未提供可验证的八维评分）\n\n'
-        context_line = build_index_context_line(pa, aurl)
+        context_line = build_index_context_line(parsed_analysis, aurl)
         if context_line:
             md += f"{context_line}\n\n"
         md += _historical_source_notice(p)
-        author_institutions = index_author_institution_block(p, pa, api_reader)
+        author_institutions = index_author_institution_block(p, parsed_analysis, api_reader)
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
-        if reader_display_fields is None and pa.get('roast'):
-            md += f"💡 **论文评价**\n\n{pa['roast']}\n\n"
+        if reader_display_fields is None and parsed_analysis.get('roast'):
+            md += f"💡 **论文评价**\n\n{parsed_analysis['roast']}\n\n"
 
         summary = full_index_decision_block(
-            pa, p, 'summary', reader_article=reader_article,
+            parsed_analysis, p, 'summary', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
             reader_display_fields=reader_display_fields,
         )
@@ -4432,7 +4432,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
 
         opensource = full_index_decision_block(
-            pa, p, 'opensource', reader_article=reader_article,
+            parsed_analysis, p, 'opensource', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
             reader_display_fields=reader_display_fields,
         )
@@ -4471,9 +4471,9 @@ def extract_repo_urls(text):
     return sorted(urls)
 
 
-def enrich_opensource(pa, paper):
+def enrich_opensource(parsed_analysis, paper):
     """仅从已审计的本地输入提取开源链接，生成阶段不联网。"""
-    oss = pa.get('opensource', '')
+    oss = parsed_analysis.get('opensource', '')
     if not oss:
         return ''
 
@@ -6406,20 +6406,20 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     if heading_issue:
         raise PublishDataValidationError(heading_issue)
     # main() replaces parsed with the validated analysis baseline before generation.
-    pa = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
+    parsed_analysis = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
     # 补充 opensource 中缺失的具体链接
-    if pa and pa.get('opensource'):
-        pa['opensource'] = enrich_opensource(pa, paper)
+    if parsed_analysis and parsed_analysis.get('opensource'):
+        parsed_analysis['opensource'] = enrich_opensource(parsed_analysis, paper)
     title = paper.get('title', 'Unknown')
     display_title = plain_title_for_publish(title)
     aid = paper.get('arxivId', '')
     aurl = _visible_arxiv_source_url(paper)
     slug = paper_slug(title, aid)
 
-    score_str = pa['score'] if pa and pa.get('score') else ''
-    task_str = pa['primaryTaskTag'].replace('#', '') if pa and pa.get('primaryTaskTag') else ''
+    score_str = parsed_analysis['score'] if parsed_analysis and parsed_analysis.get('score') else ''
+    task_str = parsed_analysis['primaryTaskTag'].replace('#', '') if parsed_analysis and parsed_analysis.get('primaryTaskTag') else ''
     desc = f"{task_str} | {score_str}/10" if score_str and task_str else display_title
-    tags = pa.get('tags', []) if pa else []
+    tags = parsed_analysis.get('tags', []) if parsed_analysis else []
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     manual_depth = contracts.get('manualDepth')
@@ -6526,7 +6526,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         )
     workbench_bundle = (
         build_researcher_workbench_bundle(
-            paper, date_str, parsed=pa, reader_plan=reader_plan,
+            paper, date_str, parsed=parsed_analysis, reader_plan=reader_plan,
             api_reader_payload=api_reader_payload,
             require_reader=True,
         )
@@ -6596,26 +6596,26 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
     elif paper.get('analysisConfidence') == 'full_text' and paper.get('sourceTextChars', 0) > paper.get('usedTextChars', paper.get('sourceTextChars', 0)):
         md += '> ℹ️ 本文基于论文全文节选生成，超出分析上下文上限的内容未纳入。\n\n'
     metadata_block = ''
-    if pa:
+    if parsed_analysis:
         reader_identity_lines = []
         display_tags = format_display_tags(tags)
         if display_tags:
             metadata_block += f"标签：{display_tags}\n\n"
             reader_identity_lines.append(f"标签：{display_tags}")
 
-        score_line = format_complete_score_line(pa)
+        score_line = format_complete_score_line(parsed_analysis)
         if score_line:
             metadata_block += f"{score_line}\n\n"
             reader_identity_lines.append(f"评分：{score_line}")
 
-        meta = build_paper_meta(pa, aurl)
+        meta = build_paper_meta(parsed_analysis, aurl)
         if meta:
             metadata_block += f"{meta}\n\n"
         if reader_display_fields is not None:
-            metadata_block = (build_index_context_line(pa, aurl) or '') + '\n\n'
+            metadata_block = (build_index_context_line(parsed_analysis, aurl) or '') + '\n\n'
 
-        if pa.get('authors') and not api_reader_v2:
-            metadata_block += f"\n### 👥 作者与机构\n\n{pa['authors']}\n"
+        if parsed_analysis.get('authors') and not api_reader_v2:
+            metadata_block += f"\n### 👥 作者与机构\n\n{parsed_analysis['authors']}\n"
 
         if reader_first and reader_identity_lines:
             md += '> ' + '\n>\n> '.join(reader_identity_lines) + '\n\n'
@@ -6626,7 +6626,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 
         # 分离补充信息（从 opensource 中提取）
         opensource_content = reader_display_fields['opensource'] if reader_display_fields is not None \
-            else pa.get('opensource', '')
+            else parsed_analysis.get('opensource', '')
         supplementary = ''
         if opensource_content:
             supp_match = re.search(r'##\s*补充信息\s*\n([\s\S]*)', opensource_content)
@@ -6666,7 +6666,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 label, key, content = item
             else:
                 label, key = item
-                content = pa.get(key, '')
+                content = parsed_analysis.get(key, '')
             if content:
                 # 如果 summary 中混入了详细分析内容（因标题损坏导致解析边界失效），截断到详细分析之前
                 if key == 'summary':
@@ -7836,7 +7836,7 @@ def review_all_posts(
     # 构建 arxivId -> title 映射
     title_map = {}
     paper_map = {}
-    for score, p, pa in scored_papers:
+    for score, p, parsed_analysis in scored_papers:
         paper_id = normalize_publish_arxiv_id(p.get('arxivId', ''))
         title_map[paper_id] = p.get('title', '')
         paper_map[paper_id] = p

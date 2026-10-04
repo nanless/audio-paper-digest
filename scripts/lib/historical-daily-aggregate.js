@@ -146,7 +146,7 @@ function bindTopology({ crosswalkRoot, crosswalkId, inventoryRoot } = {}) {
     return { state, inventory };
 }
 
-function canonicalProjection(paper, tagAssignment) {
+function buildDailyPaperDisplayRecord(paper, tagAssignment) {
     if (!paper || typeof paper !== 'object' || typeof paper.analysis !== 'string' || !paper.analysis.trim()
         || !paper.parsed || typeof paper.parsed !== 'object') fail('completed canonical paper is missing parsed analysis');
     const reparsed = require('../utils.js').parseAnalysis(paper.analysis);
@@ -193,16 +193,16 @@ function loadAggregateInputs(options, dependencies = {}) {
         (dependencies.replaySelectedBindings || pageStagingApi.replaySelectedBindings)(staged.manifest, topology.state);
         const analysisRunIds = [...new Set(staged.manifest.pages.map(page => page.analysisRunId))];
         if (analysisRunIds.length !== 1) fail('each page staging manifest must bind exactly one analysis run');
-        const projection = (dependencies.loadProjectionInputs || pageStagingApi.loadProjectionInputs)({
+        const pageGenerationInputs = (dependencies.loadPageGenerationInputs || pageStagingApi.loadPageGenerationInputs)({
             crosswalkRoot: options.crosswalkRoot, crosswalkId: staged.manifest.crosswalkId,
             analysisRoot: options.analysisRoot, tagAssignmentRoot: options.tagAssignmentRoot,
-            tagCatalogPath: options.tagCatalogPath, analysisRunId: analysisRunIds[0] }, dependencies.projectionDependencies || {});
-        if (projection.crosswalk.stateSha256 !== topology.state.stateSha256) fail('canonical projection used a different crosswalk state');
-        const groups = new Map(projection.groups.map(group => [group.paperId, group]));
+            tagCatalogPath: options.tagCatalogPath, analysisRunId: analysisRunIds[0] }, dependencies.pageGenerationDependencies || {});
+        if (pageGenerationInputs.crosswalk.stateSha256 !== topology.state.stateSha256) fail('canonical projection used a different crosswalk state');
+        const groups = new Map(pageGenerationInputs.groups.map(group => [group.paperId, group]));
         for (const page of staged.manifest.pages) {
-            const group = groups.get(page.paperId); const projectedPage = group?.pages.find(item => item.pageKey === page.pageKey);
-            if (!group || !projectedPage || projectedPage.pagePath !== page.pagePath || projectedPage.primaryUrl !== page.primaryUrl
-                || projectedPage.cohortDate !== page.cohortDate || projectedPage.pageContentSha256 !== page.sourcePageContentSha256
+            const group = groups.get(page.paperId); const sourcePage = group?.pages.find(item => item.pageKey === page.pageKey);
+            if (!group || !sourcePage || sourcePage.pagePath !== page.pagePath || sourcePage.primaryUrl !== page.primaryUrl
+                || sourcePage.cohortDate !== page.cohortDate || sourcePage.pageContentSha256 !== page.sourcePageContentSha256
                 || group.analysisRunId !== page.analysisRunId || group.analysisFileSha256 !== page.analysisFileSha256
                 || group.analysisRecordSha256 !== page.analysisRecordSha256
                 || group.analysisSha256 !== page.analysisSha256
@@ -211,7 +211,7 @@ function loadAggregateInputs(options, dependencies = {}) {
             stagedPages.push({ ...page, stagingRunId: staged.manifest.stagingRunId,
                 stagingManifestSha256: staged.manifest.manifestSha256,
                 rendererImplementationSha256: staged.manifest.rendererImplementationSha256,
-                canonical: canonicalProjection(group.paper, group.taxonomy) });
+                canonical: buildDailyPaperDisplayRecord(group.paper, group.taxonomy) });
         }
     }
     if (new Set(stagedPages.map(page => page.pageKey)).size !== stagedPages.length) fail('page appears in multiple staging manifests');
@@ -319,5 +319,5 @@ function writeAggregates({ outputRoot, aggregateRunId, aggregates } = {}) {
 }
 
 module.exports = { PAGE_STAGING_CONTRACT, CONTRACT, VERSION, UUID_RE, stableHash, strictJson,
-    normalizePageStagingManifest, loadCompletedPageStaging, bindTopology, canonicalProjection,
+    normalizePageStagingManifest, loadCompletedPageStaging, bindTopology, buildDailyPaperDisplayRecord,
     loadAggregateInputs, aggregateRunIdFor, renderDaily, buildDailyAggregates, writeAggregates };

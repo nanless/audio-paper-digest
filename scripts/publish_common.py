@@ -6339,12 +6339,12 @@ def score_and_sort(papers):
     scored = []
     unscored = []
     for p in papers:
-        pa = resolve_publish_parsed(p)
+        parsed_analysis = resolve_publish_parsed(p)
         normalized_paper = dict(p)
-        normalized_paper['parsed'] = pa
-        if pa and pa.get('score'):
+        normalized_paper['parsed'] = parsed_analysis
+        if parsed_analysis and parsed_analysis.get('score'):
             try:
-                scored.append((float(pa['score']), normalized_paper, pa))
+                scored.append((float(parsed_analysis['score']), normalized_paper, parsed_analysis))
             except (ValueError, TypeError):
                 unscored.append(normalized_paper)
         else:
@@ -6364,10 +6364,10 @@ def extract_top_tags(papers, limit=8):
     """
     tag_count = {}
     for p in papers:
-        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
-        if not pa:
+        parsed_analysis = p.get('parsed') or parse_analysis(p.get('analysis', ''))
+        if not parsed_analysis:
             continue
-        hot_tag = pa.get('primaryTaskTag') or (pa['tags'][0] if pa.get('tags') else '')
+        hot_tag = parsed_analysis.get('primaryTaskTag') or (parsed_analysis['tags'][0] if parsed_analysis.get('tags') else '')
         if hot_tag:
             tag_count[hot_tag] = tag_count.get(hot_tag, 0) + 1
     return sorted(tag_count.items(), key=lambda x: (-x[1], x[0]))[:limit]
@@ -6381,24 +6381,24 @@ def extract_all_tags(papers, limit=10):
     """
     tag_set = set()
     for p in papers:
-        pa = p.get('parsed') or parse_analysis(p.get('analysis', ''))
-        if not pa:
+        parsed_analysis = p.get('parsed') or parse_analysis(p.get('analysis', ''))
+        if not parsed_analysis:
             continue
-        if pa.get('primaryTaskTag'):
-            tag_set.add(pa['primaryTaskTag'].replace('#', '').strip())
-        for t in pa.get('tags', []):
+        if parsed_analysis.get('primaryTaskTag'):
+            tag_set.add(parsed_analysis['primaryTaskTag'].replace('#', '').strip())
+        for t in parsed_analysis.get('tags', []):
             clean = t.replace('#', '').strip()
             if clean:
                 tag_set.add(clean)
     return sorted(tag_set)[:limit]
 
 
-def extract_one_liner(pa):
+def extract_one_liner(parsed_analysis):
     """从分析结果中提取一句话亮点，优先用创新点或核心贡献，而非截断摘要"""
     text = ''
 
     # 1. 优先尝试 innovation 第一条
-    innovation = pa.get('innovation', '')
+    innovation = parsed_analysis.get('innovation', '')
     if innovation:
         first = innovation.split('\n')[0].strip()
         first = re.sub(r'^\d+\.\s*', '', first)
@@ -6407,7 +6407,7 @@ def extract_one_liner(pa):
 
     # 2. 尝试从 summary 中提取核心贡献句（找"提出了"/"解决了"/"旨在"等）
     if not text:
-        summary = pa.get('summary', '')
+        summary = parsed_analysis.get('summary', '')
         if summary:
             sentences = re.split(r'[。\n]', summary)
             for s in sentences:
@@ -6423,7 +6423,7 @@ def extract_one_liner(pa):
 
     # 前两种内容不可用时，取论文评价的第一句。
     if not text:
-        evaluation_text = pa.get('roast', '')
+        evaluation_text = parsed_analysis.get('roast', '')
         if evaluation_text:
             text = evaluation_text.split('。')[0].strip()
 
@@ -6447,13 +6447,13 @@ def extract_one_liner(pa):
     return ''
 
 
-def build_paper_meta(pa, aurl=''):
+def build_paper_meta(parsed_analysis, aurl=''):
     """拼接评分、分档、主任务/主方法等关键信息（Markdown 格式）"""
-    if not pa:
+    if not parsed_analysis:
         return ''
 
     bits = []
-    score = pa.get('score', '')
+    score = parsed_analysis.get('score', '')
     if score:
         try:
             score_val = float(score)
@@ -6461,20 +6461,20 @@ def build_paper_meta(pa, aurl=''):
         except (ValueError, TypeError):
             pass
 
-    if pa.get('rankBucket'):
-        bits.append(pa['rankBucket'])
-    if pa.get('documentType'):
-        bits.append(f'文档类型：{pa["documentType"]}')
-    if pa.get('confidence'):
-        bits.append(f'评分置信度：{pa["confidence"]}')
+    if parsed_analysis.get('rankBucket'):
+        bits.append(parsed_analysis['rankBucket'])
+    if parsed_analysis.get('documentType'):
+        bits.append(f'文档类型：{parsed_analysis["documentType"]}')
+    if parsed_analysis.get('confidence'):
+        bits.append(f'评分置信度：{parsed_analysis["confidence"]}')
     primary_tags = []
     for key in ('primaryTaskTag', 'primaryMethodTag'):
-        tag = pa.get(key)
+        tag = parsed_analysis.get(key)
         if tag and tag not in primary_tags:
             primary_tags.append(tag)
             bits.append(tag)
 
-    raw_tags = pa.get('tags', [])
+    raw_tags = parsed_analysis.get('tags', [])
     raw_tags = [raw_tags] if isinstance(raw_tags, str) else list(raw_tags or [])
     flattened_tags = []
     for raw_tag in raw_tags:

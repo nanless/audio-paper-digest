@@ -373,7 +373,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         return;
     }
     if (manifest.sourceAcquisition !== undefined) {
-        validateAnalysisSourceProvenance(filePath, manifest.sourceAcquisition, `${prefix}.sourceAcquisition`, issues);
+        validateAnalysisSourceRecordShape(filePath, manifest.sourceAcquisition, `${prefix}.sourceAcquisition`, issues);
     }
     const sourceSha256 = manifest.sourceAcquisition?.sourceSha256 || '';
     const manualTakeoverIssue = validateManualTakeoverManifest(manifest, sourceSha256, {
@@ -471,7 +471,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
     }
 }
 
-function validateAnalysisSourceProvenance(filePath, source, prefix, issues) {
+function validateAnalysisSourceRecordShape(filePath, source, prefix, issues) {
     if (!isPlainObject(source)) {
         addIssue(issues, filePath, `${prefix} 必须是对象`);
         return;
@@ -498,12 +498,12 @@ function validateAnalysisSourceProvenance(filePath, source, prefix, issues) {
 
 function validateDailyFreshSourceRun(filePath, data, papers, issues) {
     const reference = data?.dailyFreshSourceRun;
-    const bundleProvenance = papers.some(paper => (
+    const hasSourceBundleFields = papers.some(paper => (
         paper?.freshRewriteProvenance?.sourceGeneration !== undefined
         || paper?.freshRewriteProvenance?.sourceManifestSha256 !== undefined
     ));
     if (reference === undefined) {
-        if (bundleProvenance) addIssue(issues, filePath, 'sealed daily source provenance 缺少 dailyFreshSourceRun 顶层引用');
+        if (hasSourceBundleFields) addIssue(issues, filePath, 'sealed daily source provenance 缺少 dailyFreshSourceRun 顶层引用');
         return;
     }
     let plan;
@@ -1076,7 +1076,7 @@ function validatePaperListFile(filePath, options = {}) {
                 addIssue(issues, filePath, `papers[${index}] 最新分析尝试仍为失败，不能视为有效完成结果`);
             }
             if (paper.analysisSource !== undefined) {
-                validateAnalysisSourceProvenance(filePath, {
+                validateAnalysisSourceRecordShape(filePath, {
                     analysisSource: paper.analysisSource,
                     sourceTextChars: paper.sourceTextChars,
                     usedTextChars: paper.usedTextChars,

@@ -83,9 +83,9 @@ def build_overview(scored, unscored):
             overview += f'<p>{tag}：{"█" * min(cnt, 15)} {cnt}篇</p>\n'
     if top_scored:
         overview += f'<h3>🏆 高分论文 TOP {len(top_scored)}</h3>\n'
-        for i, (score, p, pa) in enumerate(top_scored):
+        for i, (score, p, parsed_analysis) in enumerate(top_scored):
             m = format_medal(i)
-            extra = ' | '.join([v for v in [pa.get('rankBucket', ''), pa.get('primaryTaskTag', '')] if v])
+            extra = ' | '.join([v for v in [parsed_analysis.get('rankBucket', ''), parsed_analysis.get('primaryTaskTag', '')] if v])
             suffix = f' | {extra}' if extra else ''
             overview += f'<p>{m} {html.escape(p.get("title", "")[:60])}（{score}分{suffix}）</p>\n'
     overview += '<hr/>\n'
@@ -266,7 +266,7 @@ def main():
         heading_issue = evaluation_heading_issue(paper.get('analysis'))
         if heading_issue:
             raise ValueError(heading_issue)
-        pa = paper.get('parsed') or parse_analysis(paper.get('analysis',''))
+        parsed_analysis = paper.get('parsed') or parse_analysis(paper.get('analysis',''))
         title = paper.get('title','Unknown')
         aid = paper.get('arxivId','')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
@@ -297,49 +297,49 @@ def main():
                         out.append(f'<p>{html.escape(para.strip()).replace(chr(10), "<br/>")}</p>')
             return '\n'.join(out) + ('\n' if out else '')
 
-        if pa:
-            if pa['tags']:
-                h += f'<p style="color:#1a73e8;">{" ".join(pa["tags"])}</p>\n'
-            score = float(pa['score'] or '0')
+        if parsed_analysis:
+            if parsed_analysis['tags']:
+                h += f'<p style="color:#1a73e8;">{" ".join(parsed_analysis["tags"])}</p>\n'
+            score = float(parsed_analysis['score'] or '0')
             se = score_emoji(score)
-            h += f'<p>{se} 评分：{html.escape(str(pa["score"]))}/10'
+            h += f'<p>{se} 评分：{html.escape(str(parsed_analysis["score"]))}/10'
             if aurl: h += f' | <a href="{aurl}">arxiv</a>'
             h += '</p>\n'
             meta = []
-            if pa.get('rankBucket'):
-                meta.append(pa['rankBucket'])
-            if pa.get('documentType'):
-                meta.append(f'文档类型：{pa["documentType"]}')
-            if pa.get('primaryTaskTag'):
-                meta.append(pa['primaryTaskTag'])
-            if pa.get('primaryMethodTag'):
-                meta.append(pa['primaryMethodTag'])
+            if parsed_analysis.get('rankBucket'):
+                meta.append(parsed_analysis['rankBucket'])
+            if parsed_analysis.get('documentType'):
+                meta.append(f'文档类型：{parsed_analysis["documentType"]}')
+            if parsed_analysis.get('primaryTaskTag'):
+                meta.append(parsed_analysis['primaryTaskTag'])
+            if parsed_analysis.get('primaryMethodTag'):
+                meta.append(parsed_analysis['primaryMethodTag'])
             if meta:
                 h += f'<p style="color:#666;">{" | ".join(meta)}</p>\n'
             machine_parts = []
-            if pa.get('innovationScore'):
-                machine_parts.append(f'创新 {pa["innovationScore"]}/2')
-            if pa.get('technicalRigorScore'):
-                machine_parts.append(f'严谨 {pa["technicalRigorScore"]}/1.5')
-            if pa.get('experimentalSufficiencyScore'):
-                machine_parts.append(f'实验 {pa["experimentalSufficiencyScore"]}/1.5')
-            if pa.get('clarityScore'):
-                machine_parts.append(f'清晰 {pa["clarityScore"]}/1')
-            if pa.get('impactScore'):
-                machine_parts.append(f'影响 {pa["impactScore"]}/1.5')
-            if pa.get('openSourceScore'):
-                machine_parts.append(f'开源 {pa["openSourceScore"]}/1.5')
-            if pa.get('reproducibilityScore'):
-                machine_parts.append(f'复现 {pa["reproducibilityScore"]}/0.5')
-            if pa.get('engineeringScore'):
-                machine_parts.append(f'工程 {pa["engineeringScore"]}/1.5')
-            if pa.get('confidence'):
-                machine_parts.append(f'置信度 {pa["confidence"]}')
+            if parsed_analysis.get('innovationScore'):
+                machine_parts.append(f'创新 {parsed_analysis["innovationScore"]}/2')
+            if parsed_analysis.get('technicalRigorScore'):
+                machine_parts.append(f'严谨 {parsed_analysis["technicalRigorScore"]}/1.5')
+            if parsed_analysis.get('experimentalSufficiencyScore'):
+                machine_parts.append(f'实验 {parsed_analysis["experimentalSufficiencyScore"]}/1.5')
+            if parsed_analysis.get('clarityScore'):
+                machine_parts.append(f'清晰 {parsed_analysis["clarityScore"]}/1')
+            if parsed_analysis.get('impactScore'):
+                machine_parts.append(f'影响 {parsed_analysis["impactScore"]}/1.5')
+            if parsed_analysis.get('openSourceScore'):
+                machine_parts.append(f'开源 {parsed_analysis["openSourceScore"]}/1.5')
+            if parsed_analysis.get('reproducibilityScore'):
+                machine_parts.append(f'复现 {parsed_analysis["reproducibilityScore"]}/0.5')
+            if parsed_analysis.get('engineeringScore'):
+                machine_parts.append(f'工程 {parsed_analysis["engineeringScore"]}/1.5')
+            if parsed_analysis.get('confidence'):
+                machine_parts.append(f'置信度 {parsed_analysis["confidence"]}')
             if machine_parts:
                 h += f'<p style="color:#888;">{" | ".join(machine_parts)}</p>\n'
 
-            if pa.get('authors'):
-                h += f'<p><strong>👥 作者与机构</strong></p>\n<p>{html.escape(pa["authors"])}</p>\n'
+            if parsed_analysis.get('authors'):
+                h += f'<p><strong>👥 作者与机构</strong></p>\n<p>{html.escape(parsed_analysis["authors"])}</p>\n'
 
             sections = [
                 ('💡 论文评价', 'roast'), ('📌 核心摘要', 'summary'),
@@ -350,8 +350,8 @@ def main():
                 ('🔗 开源详情', 'opensource'),
             ]
             for label, key in sections:
-                if pa.get(key):
-                    h += f'<p><strong>{label}</strong></p>\n{render_rich_text(pa[key])}'
+                if parsed_analysis.get(key):
+                    h += f'<p><strong>{label}</strong></p>\n{render_rich_text(parsed_analysis[key])}'
         else:
             h += '<p style="color:#999;">⚠️ 该论文分析失败</p>\n'
 

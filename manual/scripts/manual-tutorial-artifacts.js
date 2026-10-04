@@ -137,7 +137,7 @@ function numericCellIds(table) {
     return cells;
 }
 
-function tableDisplayProjection(table) {
+function buildTableDisplayRecord(table) {
     const id = assertId(table?.id, 'table.id');
     const matrix = normalizeMatrix(table);
     const sourceCells = Array.isArray(table?.cells) ? table.cells : [];
@@ -323,8 +323,8 @@ function renderWideGroupedNumericMatrix(matrix) {
     });
 }
 
-function deriveDisplayTableLayout(table, projectedMatrix = null) {
-    const matrix = projectedMatrix || tableDisplayProjection(table).displayMatrix;
+function deriveDisplayTableLayout(table, displayMatrix = null) {
+    const matrix = displayMatrix || buildTableDisplayRecord(table).displayMatrix;
     const blocks = [];
     let cursor = 0;
     let tableLabel = '';
@@ -379,12 +379,12 @@ function deriveDisplayTableLayout(table, projectedMatrix = null) {
 }
 
 function renderMarkdownTable(table) {
-    const projection = tableDisplayProjection(table);
-    const textHeavy = isTextHeavyRecordMatrix(projection.displayMatrix);
-    const wideNumeric = !textHeavy && isWideGroupedNumericMatrix(projection.displayMatrix);
-    const layout = textHeavy || wideNumeric ? null : deriveDisplayTableLayout(table, projection.displayMatrix);
+    const tableDisplayRecord = buildTableDisplayRecord(table);
+    const textHeavy = isTextHeavyRecordMatrix(tableDisplayRecord.displayMatrix);
+    const wideNumeric = !textHeavy && isWideGroupedNumericMatrix(tableDisplayRecord.displayMatrix);
+    const layout = textHeavy || wideNumeric ? null : deriveDisplayTableLayout(table, tableDisplayRecord.displayMatrix);
     let caption = sanitizeTableDisplayText(table.caption || table.label || table.id);
-    if (projection.transformations.length) {
+    if (tableDisplayRecord.transformations.length) {
         // Once a damaged sign has been neutralized, directional prose in the
         // source caption would contradict the displayed values.  Preserve the
         // comparison identity while removing only claims that require the
@@ -399,8 +399,8 @@ function renderMarkdownTable(table) {
     const rendered = [
         `**${caption}**`,
         '',
-        ...(textHeavy ? renderTextHeavyRecordMatrix(projection.displayMatrix)
-            : (wideNumeric ? renderWideGroupedNumericMatrix(projection.displayMatrix) : [
+        ...(textHeavy ? renderTextHeavyRecordMatrix(tableDisplayRecord.displayMatrix)
+            : (wideNumeric ? renderWideGroupedNumericMatrix(tableDisplayRecord.displayMatrix) : [
             ...(layout.tableLabel ? [`**${escapeMarkdownCell(layout.tableLabel)}**`, ''] : []),
             ...layout.blocks.flatMap((block, index) => {
                 const prefix = index > 0 ? [''] : [];
@@ -409,7 +409,7 @@ function renderMarkdownTable(table) {
             })
         ]))
     ];
-    if (projection.transformations.length) {
+    if (tableDisplayRecord.transformations.length) {
         rendered.push(
             '',
             `> 符号说明：${AMBIGUOUS_SIGN_MARKER} 表示原表该数值前出现了无法可靠解释的重复符号。这里仅保留数值，方向按未知处理，不得据此判断上升或下降。`
@@ -497,14 +497,14 @@ function makeTableDisposition(table) {
     const matrix = normalizeMatrix(table);
     const numericIds = numericCellIds(table);
     const renderedMarkdown = renderMarkdownTable(table);
-    const displayProjection = tableDisplayProjection(table);
+    const tableDisplayRecord = buildTableDisplayRecord(table);
     return {
         id: assertId(table.id, 'table.id'),
         kind: normalizeText(table.kind || 'other'),
         disposition: 'inline',
         sourceMatrixSha256: assertSha(table.matrixSha256, `${table.id}.matrixSha256`),
         sourceMatrixBound: true,
-        displayProjection,
+        displayProjection: tableDisplayRecord,
         renderedMarkdown,
         renderedSha256: sha256(renderedMarkdown),
         numericCellIds: numericIds,
@@ -601,8 +601,8 @@ function validateTutorialArtifactPlan(index, plan) {
         if (item.disposition === 'omit') throw new Error(`table ${item.id} 不得省略：教程资产层必须完整处置可恢复表格`);
         if (item.sourceMatrixSha256 !== source.matrixSha256) throw new Error(`table ${item.id} 源矩阵 SHA 不一致`);
         if (item.sourceMatrixBound !== true) throw new Error(`table ${item.id} 必须显式保留源矩阵 SHA 绑定`);
-        const expectedProjection = tableDisplayProjection(source);
-        if (JSON.stringify(item.displayProjection) !== JSON.stringify(expectedProjection)) {
+        const expectedDisplayRecord = buildTableDisplayRecord(source);
+        if (JSON.stringify(item.displayProjection) !== JSON.stringify(expectedDisplayRecord)) {
             throw new Error(`table ${item.id} 展示投影未保留原始单元格或试图推断符号方向`);
         }
         const expectedMarkdown = renderMarkdownTable(source);
@@ -725,7 +725,7 @@ module.exports = {
     numericCellIds,
     ambiguousRepeatedSignValues,
     sanitizeTableDisplayText,
-    tableDisplayProjection,
+    buildTableDisplayRecord,
     isTextHeavyRecordMatrix,
     renderTextHeavyRecordMatrix,
     isWideGroupedNumericMatrix,

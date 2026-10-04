@@ -98,9 +98,9 @@ def normalize_oss_status(value):
     return 'unknown'
 
 
-def sanitize_oneliner_claims(text, pa=None):
+def sanitize_oneliner_claims(text, parsed_analysis=None):
     """依据结构化开源状态删除 one-liner 中相冲突的开源断言。"""
-    pa = pa or {}
+    parsed_analysis = parsed_analysis or {}
     claims = (
         ('hasCode', r'(?:代码|源码)(?:仓库)?'),
         ('hasModel', r'(?:模型权重|模型|权重|checkpoint)'),
@@ -108,7 +108,7 @@ def sanitize_oneliner_claims(text, pa=None):
     )
     cleaned = str(text or '')
     for field, subject in claims:
-        if normalize_oss_status(pa.get(field)) != 'yes':
+        if normalize_oss_status(parsed_analysis.get(field)) != 'yes':
             cleaned = re.sub(
                 rf'[，,；;]?\s*{subject}(?:已经|已|现已|目前)?(?:开源|公开|发布|可下载|可用)[！!。.]?',
                 '。',
@@ -123,46 +123,46 @@ def sanitize_oneliner_claims(text, pa=None):
     return cleaned.strip()
 
 
-def safe_oneliner(text, pa=None, max_len=65):
+def safe_oneliner(text, parsed_analysis=None, max_len=65):
     """清洗、校验并截断 one-liner；不可用时返回 None 触发本地回退。"""
-    cleaned = sanitize_oneliner_claims(text, pa)
+    cleaned = sanitize_oneliner_claims(text, parsed_analysis)
     meaningful = re.findall(r'[\u4e00-\u9fffA-Za-z0-9]', cleaned)
     if len(meaningful) < 10:
         return None
     return smart_truncate(cleaned, max_len=max_len)
 
 
-def build_oneliner_context(title, abstract, pa=None):
+def build_oneliner_context(title, abstract, parsed_analysis=None):
     """构造 one-liner 输入，优先使用深度分析 parsed 字段。"""
-    pa = pa or {}
+    parsed_analysis = parsed_analysis or {}
     parts = [
         f"标题：{title}",
     ]
-    if pa.get('summary'):
-        parts.append(f"核心摘要：{pa.get('summary', '')[:500]}")
-    if pa.get('results'):
-        parts.append(f"实验结果：{pa.get('results', '')[:450]}")
-    if pa.get('limitations'):
-        parts.append(f"局限：{pa.get('limitations', '')[:250]}")
-    if pa.get('opensource'):
-        parts.append(f"开源：{pa.get('opensource', '')[:220]}")
+    if parsed_analysis.get('summary'):
+        parts.append(f"核心摘要：{parsed_analysis.get('summary', '')[:500]}")
+    if parsed_analysis.get('results'):
+        parts.append(f"实验结果：{parsed_analysis.get('results', '')[:450]}")
+    if parsed_analysis.get('limitations'):
+        parts.append(f"局限：{parsed_analysis.get('limitations', '')[:250]}")
+    if parsed_analysis.get('opensource'):
+        parts.append(f"开源：{parsed_analysis.get('opensource', '')[:220]}")
     if len(parts) <= 1 and abstract:
         parts.append(f"摘要：{abstract[:800]}")
     status_labels = {'yes': '已公开', 'no': '未公开', 'unknown': '未说明'}
     parts.append(
         '结构化开源状态：'
-        f"代码={status_labels[normalize_oss_status(pa.get('hasCode'))]}；"
-        f"模型={status_labels[normalize_oss_status(pa.get('hasModel'))]}；"
-        f"数据集={status_labels[normalize_oss_status(pa.get('hasDataset'))]}"
+        f"代码={status_labels[normalize_oss_status(parsed_analysis.get('hasCode'))]}；"
+        f"模型={status_labels[normalize_oss_status(parsed_analysis.get('hasModel'))]}；"
+        f"数据集={status_labels[normalize_oss_status(parsed_analysis.get('hasDataset'))]}"
     )
-    if pa.get('primaryTaskTag') or pa.get('primaryMethodTag'):
-        parts.append(f"标签：{pa.get('primaryTaskTag', '')} {pa.get('primaryMethodTag', '')}".strip())
+    if parsed_analysis.get('primaryTaskTag') or parsed_analysis.get('primaryMethodTag'):
+        parts.append(f"标签：{parsed_analysis.get('primaryTaskTag', '')} {parsed_analysis.get('primaryMethodTag', '')}".strip())
     return "\n".join(parts)
 
 
-def build_oneliner_prompt(title, abstract, pa=None):
+def build_oneliner_prompt(title, abstract, parsed_analysis=None):
     """构造稳定的 one-liner prompt，供调用和缓存指纹共同使用。"""
-    context = build_oneliner_context(title, abstract, pa)
+    context = build_oneliner_context(title, abstract, parsed_analysis)
     return f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略。优先突出任务、方法、实验收益或开源价值，不要只复述标题。开源情况只能依据“结构化开源状态”，不得从其他文字推断：
 
 {context}
@@ -170,9 +170,9 @@ def build_oneliner_prompt(title, abstract, pa=None):
 只输出介绍文字，不要任何解释、格式标记、emoji或LaTeX公式。"""
 
 
-def call_llm_for_oneliner(title, abstract, pa=None):
+def call_llm_for_oneliner(title, abstract, parsed_analysis=None):
     """调用 LLM 生成一句话论文介绍，自动检测协议。"""
-    prompt = build_oneliner_prompt(title, abstract, pa)
+    prompt = build_oneliner_prompt(title, abstract, parsed_analysis)
 
     content = call_publish_llm_api(
         prompt,
@@ -182,7 +182,7 @@ def call_llm_for_oneliner(title, abstract, pa=None):
         context="小红书 one-liner",
         timeout=180
     )
-    return safe_oneliner((content or '').strip('"\''), pa, max_len=65)
+    return safe_oneliner((content or '').strip('"\''), parsed_analysis, max_len=65)
 
 
 def _sha256_text(value):
@@ -197,10 +197,10 @@ def _paper_cache_identity(paper):
         return ''
 
 
-def build_oneliner_fingerprint(paper, pa):
+def build_oneliner_fingerprint(paper, parsed_analysis):
     title = paper.get('title', '')
     abstract = paper.get('abstract', '') or paper.get('summary', '')
-    prompt = build_oneliner_prompt(title, abstract, pa)
+    prompt = build_oneliner_prompt(title, abstract, parsed_analysis)
     config = {
         'model': os.environ.get('PAPER_ANALYZER_MODEL', ''),
         'endpoint': os.environ.get('PAPER_ANALYZER_ENDPOINT', ''),
@@ -297,9 +297,9 @@ def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
     results = {}
     pending = []
     for idx, item in enumerate(top_papers):
-        _score, paper, pa = item
+        _score, paper, parsed_analysis = item
         paper_id = _paper_cache_identity(paper)
-        fingerprint = build_oneliner_fingerprint(paper, pa)
+        fingerprint = build_oneliner_fingerprint(paper, parsed_analysis)
         cached = cache['entries'].get(paper_id) if paper_id else None
         reusable = (
             isinstance(cached, dict)
@@ -308,7 +308,7 @@ def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
             and all(cached.get(key) == value for key, value in fingerprint.items())
         )
         if reusable:
-            sanitized = safe_oneliner(cached['oneliner'], pa, max_len=65)
+            sanitized = safe_oneliner(cached['oneliner'], parsed_analysis, max_len=65)
             if sanitized:
                 results[idx] = sanitized
                 if sanitized != cached['oneliner']:
@@ -329,10 +329,10 @@ def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
 
     def worker(pending_item):
         idx, item, paper_id, fingerprint, expected_entry = pending_item
-        score, p, pa = item
+        score, p, parsed_analysis = item
         title = p.get('title', '')
         abstract = p.get('abstract', '') or p.get('summary', '')
-        result = call_llm_for_oneliner(title, abstract, pa)
+        result = call_llm_for_oneliner(title, abstract, parsed_analysis)
         cache_saved = True
         if use_cache:
             try:
@@ -383,14 +383,14 @@ def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
     return results
 
 
-def format_oss_badge(pa):
+def format_oss_badge(parsed_analysis):
     """生成开源状态简短标签"""
-    if pa is None:
+    if parsed_analysis is None:
         return ''
     statuses = {
-        'code': normalize_oss_status(pa.get('hasCode')),
-        'model': normalize_oss_status(pa.get('hasModel')),
-        'dataset': normalize_oss_status(pa.get('hasDataset')),
+        'code': normalize_oss_status(parsed_analysis.get('hasCode')),
+        'model': normalize_oss_status(parsed_analysis.get('hasModel')),
+        'dataset': normalize_oss_status(parsed_analysis.get('hasDataset')),
     }
 
     badges = []
@@ -423,22 +423,22 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
 TOP {top_n} 👇
 
 """
-    for i, (score, p, pa) in enumerate(top):
+    for i, (score, p, parsed_analysis) in enumerate(top):
         medal = format_medal(i)
         title = p.get('title', 'Unknown')
         if len(title) > 45:
             title = title[:42] + '...'
-        liner = llm_oneliners.get(i) or safe_oneliner(extract_one_liner(pa), pa, max_len=80) or ''
+        liner = llm_oneliners.get(i) or safe_oneliner(extract_one_liner(parsed_analysis), parsed_analysis, max_len=80) or ''
         fire = score_emoji(score)
         score_line = f'{fire} {score}/10'
-        if pa.get('rankBucket'):
-            score_line += f' | {pa["rankBucket"]}'
-        if pa.get('documentType'):
-            score_line += f' | {pa["documentType"]}'
-        if pa.get('primaryMethodTag'):
-            score_line += f' | {pa["primaryMethodTag"]}'
+        if parsed_analysis.get('rankBucket'):
+            score_line += f' | {parsed_analysis["rankBucket"]}'
+        if parsed_analysis.get('documentType'):
+            score_line += f' | {parsed_analysis["documentType"]}'
+        if parsed_analysis.get('primaryMethodTag'):
+            score_line += f' | {parsed_analysis["primaryMethodTag"]}'
 
-        oss_line = format_oss_badge(pa)
+        oss_line = format_oss_badge(parsed_analysis)
         oss_str = f"{oss_line}\n" if oss_line else ""
         md += f"""{medal} {title}
 {score_line}
@@ -458,17 +458,17 @@ def generate_all_summary_post(scored, unscored, date_str):
     total = len(scored) + len(unscored)
     repo_url = os.environ.get('PAPER_DIGEST_REPO_URL', 'github.com/nanless/audio-paper-digest')
     md = f"✅ {date_str} 语音/音乐/音频论文速递 | 共{total}篇\n\n🛠️ 筛选+分析流水线开源：{repo_url}\n\n"
-    for i, (score, p, pa) in enumerate(scored):
+    for i, (score, p, parsed_analysis) in enumerate(scored):
         medal = format_medal(i)
         title = p.get('title', '')[:50]
-        liner = safe_oneliner(extract_one_liner(pa), pa, max_len=80)
+        liner = safe_oneliner(extract_one_liner(parsed_analysis), parsed_analysis, max_len=80)
         fire = score_emoji(score)
-        extras = [v for v in [pa.get('rankBucket', ''), pa.get('documentType', ''), pa.get('primaryTaskTag', '')] if v]
+        extras = [v for v in [parsed_analysis.get('rankBucket', ''), parsed_analysis.get('documentType', ''), parsed_analysis.get('primaryTaskTag', '')] if v]
         extra_text = f" | {' | '.join(extras)}" if extras else ''
         md += f"{medal} {title} {fire}{score}分{extra_text}\n"
         if liner:
             md += f"   ✨ {liner}\n"
-        oss_line = format_oss_badge(pa)
+        oss_line = format_oss_badge(parsed_analysis)
         if oss_line:
             md += f"   {oss_line}\n"
         md += "\n"

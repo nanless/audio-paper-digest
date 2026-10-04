@@ -1285,7 +1285,7 @@ function parseAnalysis(analysis, options = {}) {
             : tagRules.resolveCurrentTag(String(raw).trim(), facet);
     }
 
-    function _canonicalTag(raw, facet) {
+    function getPreferredTagText(raw, facet) {
         const concept = _resolveAllowedTag(raw, facet);
         return concept ? `#${concept.preferredLabel.zh}` : '';
     }
@@ -1296,7 +1296,7 @@ function parseAnalysis(analysis, options = {}) {
 
     function _filterAllowedTags(tags) {
         if (!tags || !Array.isArray(tags)) return [];
-        return tags.map(tag => _canonicalTag(tag)).filter(Boolean);
+        return tags.map(tag => getPreferredTagText(tag)).filter(Boolean);
     }
 
     function _isBadTaskTag(tag) {
@@ -1439,9 +1439,9 @@ function parseAnalysis(analysis, options = {}) {
     // Role lines are authoritative.  Machine-summary echoes are checked by
     // the contract but never used to invent a missing task/method role.
     result.primaryTaskTag = _isTaskTag(extractedTaskTag)
-        ? _canonicalTag(extractedTaskTag, 'task') : '';
+        ? getPreferredTagText(extractedTaskTag, 'task') : '';
     result.primaryMethodTag = _isMethodTag(extractedMethodTag)
-        ? _canonicalTag(extractedMethodTag, 'method') : '';
+        ? getPreferredTagText(extractedMethodTag, 'method') : '';
     result.taxonomyValidation = tagRules.validateTagSelection({
         tags: legacyTags ? result.tags : rawTagList,
         primaryTaskTag: legacyTags ? result.primaryTaskTag : extractedTaskTag,

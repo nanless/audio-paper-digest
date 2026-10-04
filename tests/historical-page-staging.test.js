@@ -145,7 +145,7 @@ test('default renderer uses a private temporary input file and a bounded subproc
 });
 
 test('selected binding replay tolerates later unrelated or same-identity pages but rejects selected-page drift', t => {
-    const f = fixture(t); const selected = api.loadProjectionInputs({ crosswalkRoot: '/unused', crosswalkId: CROSSWALK,
+    const f = fixture(t); const selected = api.loadPageGenerationInputs({ crosswalkRoot: '/unused', crosswalkId: CROSSWALK,
         analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused',
         analysisRunId: ANALYSIS_RUN }, f.dependencies).groups;
     const manifest = { selectedBindings: api.selectedBindingsFor(selected) };

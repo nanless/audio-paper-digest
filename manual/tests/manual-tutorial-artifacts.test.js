@@ -7,7 +7,7 @@ const path = require('node:path');
 const {
     classifyFigureCandidate,
     numericCellIds,
-    tableDisplayProjection,
+    buildTableDisplayRecord,
     renderMarkdownTable,
     sanitizeTableDisplayText,
     buildTutorialArtifactPlan,
@@ -169,15 +169,15 @@ describe('Manual tutorial artifact projection', () => {
         assert.match(tableThree.renderedMarkdown, /RMSE↓/);
         assert.doesNotMatch(tableThree.renderedMarkdown, /\\downarrow/);
         assert.equal(sanitizeTableDisplayText('Δ\\Delta rank −- baseline ++1951'), 'Δ rank − baseline 1951†');
-        const projection = tableDisplayProjection(index.tables.find(item => item.id === 'TAB0002'));
-        assert.ok(projection.transformations.length >= 1);
-        const transformed = projection.transformations.find(item => item.rawValue === '++1951');
+        const tableDisplayRecord = buildTableDisplayRecord(index.tables.find(item => item.id === 'TAB0002'));
+        assert.ok(tableDisplayRecord.transformations.length >= 1);
+        const transformed = tableDisplayRecord.transformations.find(item => item.rawValue === '++1951');
         assert.equal(transformed.neutralValue, '1951');
         assert.equal(transformed.direction, 'unknown');
         assert.equal(transformed.displayValue, '1951†');
         assert.equal(transformed.rawValueSha256, sha('++1951'));
         assert.match(transformed.cellId, /^TAB0002:r3:c0:/);
-        assert.equal(projection.sourceValuesPreserved, true);
+        assert.equal(tableDisplayRecord.sourceValuesPreserved, true);
         assert.equal(
             numericCellIds(index.tables.find(item => item.id === 'TAB0002'))[0],
             `TAB0002:r3:c0:${sha('++1951').slice(0, 12)}`
@@ -189,10 +189,10 @@ describe('Manual tutorial artifact projection', () => {
         const source = table('TAB9000', 'other', 'Ambiguous extracted signs', [
             ['delta', 'query'], ['--12', 'a'], ['+-3.5%', 'b'], ['+7', 'ordinary positive'], ['-8', 'ordinary negative']
         ]);
-        const projection = tableDisplayProjection(source);
-        assert.deepEqual(projection.displayMatrix.slice(1).map(row => row[0]), ['12†', '3.5%†', '+7', '-8']);
-        assert.deepEqual(projection.transformations.map(item => item.direction), ['unknown', 'unknown']);
-        assert.deepEqual(projection.transformations.map(item => item.rawValue), ['--12', '+-3.5%']);
+        const tableDisplayRecord = buildTableDisplayRecord(source);
+        assert.deepEqual(tableDisplayRecord.displayMatrix.slice(1).map(row => row[0]), ['12†', '3.5%†', '+7', '-8']);
+        assert.deepEqual(tableDisplayRecord.transformations.map(item => item.direction), ['unknown', 'unknown']);
+        assert.deepEqual(tableDisplayRecord.transformations.map(item => item.rawValue), ['--12', '+-3.5%']);
         assert.match(renderMarkdownTable(source), /方向按未知处理/);
     });
 

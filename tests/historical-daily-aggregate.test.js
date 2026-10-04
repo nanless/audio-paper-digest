@@ -129,7 +129,7 @@ test('two real per-paper staging producers merge into one complete daily aggrega
     const inputs = api.loadAggregateInputs({ stagingRoot, stagingRunIds, crosswalkRoot: '/unused',
         inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused' }, {
         bindTopology: () => ({ state, inventory }),
-        loadProjectionInputs: options => pageStagingApi.loadProjectionInputs(options, dependencies) });
+        loadPageGenerationInputs: options => pageStagingApi.loadPageGenerationInputs(options, dependencies) });
     const [aggregate] = api.buildDailyAggregates({ inputs, date: DATE });
     assert.equal(aggregate.members.length, 2);
     assert.deepEqual(aggregate.members.map(item => item.paperId), ['arxiv:2604.00002', 'arxiv:2604.00001']);
@@ -174,7 +174,7 @@ test('new unrelated crosswalk progress does not invalidate unchanged staged page
         manifestFileSha256: 'c'.repeat(64) }),
         bindTopology: () => ({ state: currentState, inventory: {} }),
         replaySelectedBindings: () => [],
-        loadProjectionInputs: () => ({ crosswalk: currentState, groups: [{ paperId: page.paperId,
+        loadPageGenerationInputs: () => ({ crosswalk: currentState, groups: [{ paperId: page.paperId,
             paper, taxonomy: tagAssignment, taxonomyFileSha256: page.taxonomyFileSha256,
             analysisRunId: page.analysisRunId, analysisFileSha256: page.analysisFileSha256,
             analysisRecordSha256: page.analysisRecordSha256,

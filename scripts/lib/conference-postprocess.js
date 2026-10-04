@@ -208,15 +208,15 @@ function resolve(tagCatalog, label, facet, reasons, role) {
 function buildAssignment(loaded, tagCatalog) {
     const paper = loaded.analysis.papers[0], input = getConsistentPublicationFields(paper), reasons = [], concepts = new Map();
     const tagRules = tagRulesApi.createTagRules({ tagCatalog });
-    const parsed = require('../utils.js').parseAnalysis(paper.analysis);
-    const tagStageProofIssue = analysisContract.validateTagStageProof(paper, { parsed, tagRules: tagRules });
+    const parsedAnalysis = require('../utils.js').parseAnalysis(paper.analysis);
+    const tagStageProofIssue = analysisContract.validateTagStageProof(paper, { parsed: parsedAnalysis, tagRules: tagRules });
     // 标签选择未通过当前词表校验时，保存待审查的分配记录，不生成页面。
     // 如果标签选择已通过、但阶段记录不一致，则按完整性错误停止，
     // 不能把来源或记录损坏归为普通标签审查。
-    const unresolvedSelection = parsed?.taxonomyValidation?.valid !== true;
+    const unresolvedSelection = parsedAnalysis?.taxonomyValidation?.valid !== true;
     if (tagStageProofIssue && !unresolvedSelection) fail(`标签阶段记录未通过当前校验：${tagStageProofIssue}`);
     if (unresolvedSelection) {
-        for (const issue of parsed.taxonomyValidation.errors || []) {
+        for (const issue of parsedAnalysis.taxonomyValidation.errors || []) {
             reasons.push(`selection:${String(issue).slice(0, 200)}`);
         }
     }
@@ -906,8 +906,8 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     // 不能只凭显示出来的标签文字重新推断概念。
     const taskConceptByLabel = new Map();
     for (const stage of stages) {
-        const projection = stage.manifest.taxonomy;
-        const concept = projection.concepts.find(item => item.id === projection.primaryTaskId);
+        const tagAssignment = stage.manifest.taxonomy;
+        const concept = tagAssignment.concepts.find(item => item.id === tagAssignment.primaryTaskId);
         if (!concept || concept.facet !== 'task') fail('汇总缺少主任务概念，或该概念不属于任务这一分类维度。');
         // Keys are sorted to match the single-page frontmatter JSON spelling.
         const record = { facet: concept.facet, id: concept.id, label: concept.preferredLabel.zh };

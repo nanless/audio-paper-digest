@@ -46,7 +46,7 @@ async function prepareReaderOperatorPatchResult({ parent, sourceDetails, run, re
         { availableFigureOrdinals: parent.apiReaderFigures.map(figure => figure.ordinal) });
     if (repair.hashDraft(draft) === draftRecovery.proof.draftSha256) throw new Error('Signed operator patch must change an existing node');
     const deep = require('../deep-analyzer.js');
-    const provenance = { contract: CONTRACT, executionKind: 'operator', runId: run.runId,
+    const patchExecutionRecord = { contract: CONTRACT, executionKind: 'operator', runId: run.runId,
         paperId: request.paperId, parentPaperSha256: request.parentPaperSha256,
         parentArticleSha256: request.parentArticleSha256, parentPlanSha256: request.parentPlanSha256,
         sourceSha256: request.sourceSha256, sourceSnapshotSha256: draftRecovery.proof.sourceSnapshotSha256,
@@ -55,10 +55,10 @@ async function prepareReaderOperatorPatchResult({ parent, sourceDetails, run, re
         deepFinalizerSha256: sha(fs.readFileSync(path.join(__dirname, '../deep-analyzer.js'))),
         newApiRequests: 0, requiresFactReview: true };
     const paper = await deep.finalizeOperatorApiReaderArticleFromSource(
-        structuredClone(parent), sourceDetails, draft, provenance
+        structuredClone(parent), sourceDetails, draft, patchExecutionRecord
     );
     if (!require('../analysis-engine.js').hasValidApiReaderV3Records(paper)) throw new Error('Operator output failed production sealing');
-    return { contract: CONTRACT, provenance, paper, paperSha256: runner.stableHash(paper) };
+    return { contract: CONTRACT, provenance: patchExecutionRecord, paper, paperSha256: runner.stableHash(paper) };
 }
 
 function readPrivate(filename, json = true) {

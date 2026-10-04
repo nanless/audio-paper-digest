@@ -29,7 +29,7 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
     const { freshSourceDescriptor: descriptor, ...sourceSnapshot } = sourceDetails || {};
     const artifacts = sourceDetails?.structuredArtifacts;
     const { payloadSha256, ...artifactBody } = artifacts || {};
-    const provenance = paper.freshRewriteProvenance;
+    const analysisSourceRecord = paper.freshRewriteProvenance;
     if (!descriptor || descriptor.version !== 1 || descriptor.contract !== 'fresh-source-cache-v1'
         || descriptor.runId !== runId || descriptor.paperId !== id
         || !validSha(descriptor.sourceSnapshotSha256)
@@ -39,12 +39,12 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
             && sha(JSON.stringify(artifactBody)) !== payloadSha256)
         || payloadSha256 !== descriptor.structuredArtifactsSha256
         || artifacts.flattenedTextSha256 !== descriptor.sourceSha256
-        || provenance?.contract !== 'fresh-source-analysis-v1' || provenance.runId !== runId
-        || provenance.sourceOnly !== true || provenance.oldGeneratedTextIncluded !== false
-        || provenance.sourceSha256 !== descriptor.sourceSha256
-        || provenance.structuredArtifactsSha256 !== descriptor.structuredArtifactsSha256
-        || provenance.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256
-        || stableHash(provenance) !== stableHash(paper.analysisManifest.freshRewriteProvenance)
+        || analysisSourceRecord?.contract !== 'fresh-source-analysis-v1' || analysisSourceRecord.runId !== runId
+        || analysisSourceRecord.sourceOnly !== true || analysisSourceRecord.oldGeneratedTextIncluded !== false
+        || analysisSourceRecord.sourceSha256 !== descriptor.sourceSha256
+        || analysisSourceRecord.structuredArtifactsSha256 !== descriptor.structuredArtifactsSha256
+        || analysisSourceRecord.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256
+        || stableHash(analysisSourceRecord) !== stableHash(paper.analysisManifest.freshRewriteProvenance)
         || paper.sourceSha256 !== descriptor.sourceSha256
         || paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 !== payloadSha256) {
         fail('sealed source snapshot or fresh provenance mismatch');
@@ -60,10 +60,10 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
         // Rebuild the exact prefix from that canonical surface; using raw
         // pre-normalized terms makes every otherwise valid signed bridge look
         // non-reversible.
-        const canonicalTerms = (bridge.terms || []).map(term =>
+        const formattedTerms = (bridge.terms || []).map(term =>
             normalizeReaderProseFormatting(String(term || '').trim())
         );
-        const rawPrefix = `**${canonicalTerms[0]} × ${canonicalTerms[1]}：**`;
+        const rawPrefix = `**${formattedTerms[0]} × ${formattedTerms[1]}：**`;
         const normalizedPrefix = normalizeReaderProseFormatting(rawPrefix);
         const prefix = typeof bridge.explanation === 'string'
             && bridge.explanation.startsWith(normalizedPrefix)
@@ -113,14 +113,14 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
     const evidence = buildApiReaderEvidenceContext('', sourceDetails.text, artifacts, id);
     const availableTableCount = [...evidence.matchAll(/^TABLE_(\d+):/gm)].length;
     const minimumIntegratedTables = readerRequirements({ version: 3, availableTableCount }).minimumTables;
-    const parsed = parseApiReaderArticleResult(JSON.stringify(draft), {
+    const parsedReaderResult = parseApiReaderArticleResult(JSON.stringify(draft), {
         requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables,
         availableFigureOrdinals: paper.apiReaderFigures.map(figure => figure.ordinal),
         requireSourceBindings: true, allowDeterministicQuoteRepair: true,
         structuredArtifacts: artifacts, sourceText: sourceDetails.text,
         exactSignedBridgeSurfaces: plan.conceptBridges.map(bridge => bridge.explanation)
     });
-    const roundtrip = injectApiReaderFigures(parsed, artifacts, id);
+    const roundtrip = injectApiReaderFigures(parsedReaderResult, artifacts, id);
     if (roundtrip.article !== paper.apiReaderArticle) fail('production round-trip article bytes differ');
     if (stableHash(roundtrip.plan) !== paper.apiReaderPlanSha256) fail('production round-trip plan SHA differs');
     const figureCore = paper.apiReaderFigures.map(figure => Object.fromEntries(Object.entries(figure)

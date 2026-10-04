@@ -121,11 +121,11 @@ function readAssignment(filename) {
         throw new Error(`Invalid assigned taxonomy artifact: ${filename}`);
     }
     const basename = path.basename(filename);
-    const canonicalName = tagAssignmentsApi.assignmentFilename(
+    const currentAssignmentFilename = tagAssignmentsApi.assignmentFilename(
         value.paperId, value.registrySha256, value.assignmentSha256
     );
     const legacyName = tagAssignmentsApi.legacyAssignmentFilename(value.paperId, value.registrySha256);
-    if (basename !== canonicalName && basename !== legacyName) {
+    if (basename !== currentAssignmentFilename && basename !== legacyName) {
         throw new Error(`Invalid assigned taxonomy artifact: ${filename}`);
     }
     return { value, bytes, fileSha256: sha256(bytes), filename,
@@ -144,11 +144,11 @@ function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAs
     const safeRoot = fresh.assertSafeDirectory(root); const runRoot = path.join(safeRoot, analysisRunId);
     if (!fs.existsSync(runRoot)) return null;
     fresh.assertSafeDirectory(runRoot);
-    const canonical = path.join(runRoot, tagAssignmentsApi.assignmentFilename(
+    const currentAssignmentPath = path.join(runRoot, tagAssignmentsApi.assignmentFilename(
         paperId, registrySha256, expectedAssignment.assignmentSha256
     ));
     const legacy = path.join(runRoot, tagAssignmentsApi.legacyAssignmentFilename(paperId, registrySha256));
-    const filename = fs.existsSync(canonical) ? canonical : fs.existsSync(legacy) ? legacy : null;
+    const filename = fs.existsSync(currentAssignmentPath) ? currentAssignmentPath : fs.existsSync(legacy) ? legacy : null;
     if (!filename) return null;
     const loaded = readAssignment(filename);
     if (loaded.value.analysisRunId !== analysisRunId || loaded.value.paperId !== paperId
@@ -161,7 +161,7 @@ function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAs
     return loaded.value.status === 'assigned' ? loaded : null;
 }
 
-function loadProjectionInputs({ crosswalkRoot, crosswalkId, analysisRoot, tagAssignmentRoot, tagCatalogPath, analysisRunId } = {}, dependencies = {}) {
+function loadPageGenerationInputs({ crosswalkRoot, crosswalkId, analysisRoot, tagAssignmentRoot, tagCatalogPath, analysisRunId } = {}, dependencies = {}) {
     const tagCatalog = (dependencies.loadTagCatalog || registryApi.loadTagCatalog)(tagCatalogPath);
     if (!SHA_RE.test(tagCatalog?.registrySha256 || '')) throw new Error('Current taxonomy registry SHA is required');
     const state = (dependencies.readCrosswalk || crosswalkApi.readCrosswalk)({ crosswalkRoot, crosswalkId });
@@ -365,7 +365,7 @@ function stageHistoricalPages(options, dependencies = {}) {
         && options.rendererImplementationSha256 !== rendererImplementationSha256) {
         throw new Error('Historical staging renderer implementation identity drifted');
     }
-    const loaded = loadProjectionInputs(options, dependencies); const maximum = options.limit === 'pilot' ? 1 : options.limit === null ? loaded.groups.length : options.limit;
+    const loaded = loadPageGenerationInputs(options, dependencies); const maximum = options.limit === 'pilot' ? 1 : options.limit === null ? loaded.groups.length : options.limit;
     const selected = loaded.groups.slice(0, maximum);
     if (options.expectedAssignment !== undefined) {
         const expected = options.expectedAssignment;
@@ -512,7 +512,7 @@ function stageHistoricalPages(options, dependencies = {}) {
 
 module.exports = { CONTRACT, INTENT_CONTRACT, RENDERER_IMPLEMENTATION_CONTRACT, RENDERER_IMPLEMENTATION_FILES,
     VERSION, rendererImplementationIdentity, currentRendererImplementationSha256,
-    readAssignment, findAssignment, loadProjectionInputs,
+    readAssignment, findAssignment, loadPageGenerationInputs,
     selectedBindingsFor, replaySelectedBindings, pageInputBindings, normalizeStagingManifest,
     stagingIntent, normalizeStagingIntent, strictJson, readRegular, defaultRender, writeExact,
     stagedFileInventory, stageHistoricalPages };
