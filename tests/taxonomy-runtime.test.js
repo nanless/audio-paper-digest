@@ -141,7 +141,7 @@ test('primary task specificity is a whole-registry warning that never invalidate
             require('../scripts/deep-analyzer.js').maskClassificationFields(analysis)),
         outputProtectedProjectionSha256: textSha(
             require('../scripts/deep-analyzer.js').maskClassificationFields(analysis)),
-        taxonomySurfaceSha256: contract.taxonomySurfaceSha256(analysis),
+        taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(analysis),
         primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
         primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
         conceptIds: parsed.taxonomyValidation.conceptIds
@@ -242,7 +242,7 @@ primary_method_tag: #众包评测
         outputAnalysisSha256: textSha(analysis),
         inputProtectedProjectionSha256: protectedSha,
         outputProtectedProjectionSha256: protectedSha,
-        taxonomySurfaceSha256: contract.taxonomySurfaceSha256(analysis),
+        taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(analysis),
         primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
         primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
         conceptIds: parsed.taxonomyValidation.conceptIds
@@ -306,7 +306,7 @@ primary_method_tag: #众包评测
         outputAnalysisSha256: textSha(outputAnalysis),
         inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(inputAnalysis)),
         outputProtectedProjectionSha256: textSha(contract.maskClassificationFields(outputAnalysis)),
-        taxonomySurfaceSha256: contract.taxonomySurfaceSha256(outputAnalysis),
+        taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(outputAnalysis),
         primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
         primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
         conceptIds: parsed.taxonomyValidation.conceptIds

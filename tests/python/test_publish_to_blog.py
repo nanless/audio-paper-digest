@@ -2866,8 +2866,8 @@ title: "Score rows"
             'taxonomyValidation': {
                 'valid': True,
                 'errors': [],
-                'registryVersion': publish_to_blog._PAGE_TAXONOMY['version'],
-                'registrySha256': publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+                'registryVersion': publish_to_blog._PAGE_TAG_CATALOG['version'],
+                'registrySha256': publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                 'primaryTaskId': 'task.asr',
                 'primaryMethodId': 'method.transformer',
                 'conceptIds': ['task.asr', 'method.transformer', 'setting.low-resource'],
@@ -2888,7 +2888,7 @@ title: "Score rows"
         )
         self.assertEqual(
             frontmatter['paper_digest_taxonomy_registry_sha256'],
-            publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+            publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
         self.assertEqual(
             [item['id'] for item in frontmatter['paper_digest_taxonomy_concepts']],
@@ -2904,7 +2904,7 @@ title: "Score rows"
         self.assertEqual(context['assessment']['primaryMethod'], 'Transformer')
         self.assertEqual(
             context['assessment']['taxonomy']['registrySha256'],
-            publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+            publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
 
     def test_current_taxonomy_index_counts_only_primary_tasks_as_directions(self):
@@ -2922,8 +2922,8 @@ title: "Score rows"
                 'primaryMethodTag': '#Transformer',
                 'taxonomyValidation': {
                     'valid': True, 'errors': [],
-                    'registryVersion': publish_to_blog._PAGE_TAXONOMY['version'],
-                    'registrySha256': publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+                    'registryVersion': publish_to_blog._PAGE_TAG_CATALOG['version'],
+                    'registrySha256': publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                     'primaryTaskId': task_id,
                     'primaryMethodId': 'method.transformer',
                     'conceptIds': [task_id, 'method.transformer', 'setting.low-resource'],
@@ -8325,7 +8325,7 @@ body
         )
         self.assertEqual(snapshot['registryVersion'], 'paper-taxonomy-v1')
         self.assertEqual(
-            snapshot['registrySha256'], publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+            snapshot['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
         self.assertEqual(len(snapshot['concepts']), 262)
         by_id = {item['id']: item for item in snapshot['concepts']}
@@ -8347,7 +8347,7 @@ body
         )
         self.assertEqual(
             json.loads(raw)['registrySha256'],
-            publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+            publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
 
     def test_export_taxonomy_registry_snapshot_writes_frozen_bytes_twice(self):
@@ -8375,7 +8375,7 @@ body
                 payload = json.loads(raw)
                 self.assertEqual(
                     payload['registrySha256'],
-                    publish_to_blog._PAGE_TAXONOMY['registrySha256'],
+                    publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                 )
                 self.assertEqual(len(payload['concepts']), 262)  # v1.1 换表：228→262
             # 字节未变时不重写，避免把博客工作树弄脏

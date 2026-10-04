@@ -162,9 +162,9 @@ FINAL_PAGE_ARTIFACT_VERSION = 1
 RESEARCHER_WORKBENCH_CONTRACT = 'researcher-workbench-v1'
 RESEARCHER_SIDECAR_CONTRACT = 'researcher-sidecars-v1'
 FLAT_TAXONOMY_COMPAT_CONTRACT = TAXONOMY_FLAT_COMPAT_CONTRACT
-_PAGE_TAXONOMY = load_tag_catalog()
-_PAGE_TAXONOMY_BY_ID = {
-    item['id']: item for item in _PAGE_TAXONOMY['concepts']
+_PAGE_TAG_CATALOG = load_tag_catalog()
+_PAGE_ACTIVE_TAGS_BY_ID = {
+    item['id']: item for item in _PAGE_TAG_CATALOG['concepts']
     if item['status'] == 'active'
 }
 # 只读 registry 快照：博客端（Hugo 模板 + 浏览器搜索）需要 id/facet/zh/en/
@@ -2747,7 +2747,7 @@ def build_taxonomy_registry_snapshot(taxonomy=None):
     registry aliases (e.g. 说话人日志 → task.diarization) without ever
     re-deriving taxonomy semantics client-side.
     """
-    registry = _PAGE_TAXONOMY if taxonomy is None else taxonomy
+    registry = _PAGE_TAG_CATALOG if taxonomy is None else taxonomy
     if not isinstance(registry, dict):
         raise PublishDataValidationError('taxonomy registry 快照输入非法')
     registry_sha256 = registry.get('registrySha256')
@@ -3159,8 +3159,8 @@ def build_flat_taxonomy_compat_metadata(parsed, *, required=False):
         if required:
             raise PublishDataValidationError('新页面缺少有效 current taxonomy selection')
         return None
-    if validation.get('registryVersion') != _PAGE_TAXONOMY['version'] \
-            or validation.get('registrySha256') != _PAGE_TAXONOMY['registrySha256']:
+    if validation.get('registryVersion') != _PAGE_TAG_CATALOG['version'] \
+            or validation.get('registrySha256') != _PAGE_TAG_CATALOG['registrySha256']:
         raise PublishDataValidationError('页面 taxonomy selection 与当前 registry 不一致')
     tags = parsed.get('tags')
     concept_ids = validation.get('conceptIds')
@@ -3169,7 +3169,7 @@ def build_flat_taxonomy_compat_metadata(parsed, *, required=False):
         raise PublishDataValidationError('页面 taxonomy 标签与 concept ID 集合不闭合')
     concepts = []
     for tag, concept_id in zip(tags, concept_ids):
-        concept = _PAGE_TAXONOMY_BY_ID.get(concept_id)
+        concept = _PAGE_ACTIVE_TAGS_BY_ID.get(concept_id)
         label = str(tag or '').removeprefix('#')
         if not concept or concept['preferredLabel']['zh'] != label:
             raise PublishDataValidationError('页面 taxonomy concept ID 与中文首选标签不一致')
@@ -3182,8 +3182,8 @@ def build_flat_taxonomy_compat_metadata(parsed, *, required=False):
     primary_method_id = validation.get('primaryMethodId')
     primary_task = str(parsed.get('primaryTaskTag') or '').removeprefix('#')
     primary_method = str(parsed.get('primaryMethodTag') or '').removeprefix('#')
-    task = _PAGE_TAXONOMY_BY_ID.get(primary_task_id)
-    method = _PAGE_TAXONOMY_BY_ID.get(primary_method_id)
+    task = _PAGE_ACTIVE_TAGS_BY_ID.get(primary_task_id)
+    method = _PAGE_ACTIVE_TAGS_BY_ID.get(primary_method_id)
     if not task or task['facet'] != 'task' or task['preferredLabel']['zh'] != primary_task \
             or not method or method['facet'] != 'method' \
             or method['preferredLabel']['zh'] != primary_method \
@@ -3192,8 +3192,8 @@ def build_flat_taxonomy_compat_metadata(parsed, *, required=False):
     return {
         'contract': FLAT_TAXONOMY_COMPAT_CONTRACT,
         'selectionContract': TAXONOMY_SELECTION_CONTRACT,
-        'registryVersion': _PAGE_TAXONOMY['version'],
-        'registrySha256': _PAGE_TAXONOMY['registrySha256'],
+        'registryVersion': _PAGE_TAG_CATALOG['version'],
+        'registrySha256': _PAGE_TAG_CATALOG['registrySha256'],
         'primaryTaskId': primary_task_id,
         'primaryMethodId': primary_method_id,
         'primaryTask': primary_task,
@@ -9956,7 +9956,7 @@ def generation_template_fingerprint():
     return _stable_json_sha256({
         'dependencies': dependencies,
         'basePath': BASE_PATH,
-        'taxonomyRegistrySha256': _PAGE_TAXONOMY['registrySha256'],
+        'taxonomyRegistrySha256': _PAGE_TAG_CATALOG['registrySha256'],
         'generationManifestSchema': 3,
         'generationJournalSchema': 1,
         'reviewFailureSchema': 3,

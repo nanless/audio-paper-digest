@@ -1351,15 +1351,15 @@ describe('analyzePaperWithRetry', () => {
         const analysisSha = crypto.createHash('sha256').update(paper.analysis).digest('hex');
         const summary = contract.extractSection(paper.analysis, '核心摘要');
         const summarySha = crypto.createHash('sha256').update(summary).digest('hex');
-        const projectionSha = contract.coreSummaryProjectionSha256(paper.analysis);
+        const summaryMaskedAnalysisSha256 = contract.hashAnalysisWithMaskedCoreSummary(paper.analysis);
         paper.analysisManifest.stages.structureRepair.outputAnalysisSha256 = analysisSha;
         Object.assign(stage, {
             inputAnalysisSha256: analysisSha,
             outputAnalysisSha256: analysisSha,
             inputSummarySha256: summarySha,
             summarySha256: summarySha,
-            inputStructureProjectionSha256: projectionSha,
-            outputStructureProjectionSha256: projectionSha
+            inputStructureProjectionSha256: summaryMaskedAnalysisSha256,
+            outputStructureProjectionSha256: summaryMaskedAnalysisSha256
         });
         stage.bindingSha256 = contract.manualSha256({
             contractVersion: stage.contractVersion,

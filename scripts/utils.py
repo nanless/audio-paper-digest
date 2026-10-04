@@ -181,15 +181,15 @@ def parse_machine_summary(analysis):
     return result
 
 
-_DEFAULT_TAXONOMY = load_tag_catalog()
+_DEFAULT_TAG_CATALOG = load_tag_catalog()
 
 # These compatibility exports are projections of the registry, never a second
 # hand-maintained vocabulary.  A model family remains a supplementary tag and
 # cannot occupy the primary method role.
-ALLOWED_TAGS = set(active_preferred_labels(_DEFAULT_TAXONOMY))
-PRIMARY_TASK_TAGS = set(active_preferred_labels(_DEFAULT_TAXONOMY, ('task',)))
+ALLOWED_TAGS = set(active_preferred_labels(_DEFAULT_TAG_CATALOG))
+PRIMARY_TASK_TAGS = set(active_preferred_labels(_DEFAULT_TAG_CATALOG, ('task',)))
 PRIMARY_METHOD_TAGS = set(active_preferred_labels(
-    _DEFAULT_TAXONOMY, ('method',)))
+    _DEFAULT_TAG_CATALOG, ('method',)))
 
 
 def _taxonomy_tag(raw, taxonomy, *, facets=None, legacy_tags=False):
@@ -465,7 +465,7 @@ def parse_analysis(analysis, *, taxonomy=None, legacy_tags=False):
         return None
     if type(legacy_tags) is not bool:
         raise ValueError('legacy_tags must be bool')
-    registry = _DEFAULT_TAXONOMY if taxonomy is None else taxonomy
+    registry = _DEFAULT_TAG_CATALOG if taxonomy is None else taxonomy
     # Validation happens before parsing so a malformed registry can never turn
     # an unknown production label into an accepted string by accident.
     active_preferred_labels(registry)

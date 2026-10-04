@@ -61,10 +61,10 @@ from publish_common import (  # noqa: E402
     MANUAL_AUDIT_CHECKS,
     MANUAL_STAGE_EVIDENCE_STAGES,
     _manual_hash,
-    _PUBLISH_TAXONOMY,
-    _PUBLISH_TAXONOMY_PROJECTION_SHA256,
+    _PUBLISH_TAG_CATALOG,
+    _PUBLISH_TAG_PROMPT_TEXT_SHA256,
     _mask_classification_fields,
-    _taxonomy_surface_sha256,
+    _hash_tag_section_and_primary_tags,
     _validate_taxonomy_seal,
     _seal_registry_upgrade,
     _classify_registry_change,
@@ -128,7 +128,7 @@ def attach_taxonomy_seal(paper, manifest, *, input_analysis=None, status='not_ne
                          with_checkpoints=False):
     output_analysis = paper['analysis']
     input_analysis = output_analysis if input_analysis is None else input_analysis
-    parsed = parse_analysis(output_analysis, taxonomy=_PUBLISH_TAXONOMY)
+    parsed = parse_analysis(output_analysis, taxonomy=_PUBLISH_TAG_CATALOG)
     selection = parsed['taxonomyValidation']
     input_sha = hashlib.sha256(input_analysis.encode('utf-8')).hexdigest()
     output_sha = hashlib.sha256(output_analysis.encode('utf-8')).hexdigest()
@@ -137,16 +137,16 @@ def attach_taxonomy_seal(paper, manifest, *, input_analysis=None, status='not_ne
     masked_output_analysis_sha256 = hashlib.sha256(
         _mask_classification_fields(output_analysis).encode('utf-8')).hexdigest()
     binding = {
-        'registryVersion': _PUBLISH_TAXONOMY['version'],
-        'registrySha256': _PUBLISH_TAXONOMY['registrySha256'],
+        'registryVersion': _PUBLISH_TAG_CATALOG['version'],
+        'registrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
         'projectionContract': 'paper-taxonomy-prompt-projection-v1',
-        'projectionSha256': _PUBLISH_TAXONOMY_PROJECTION_SHA256,
+        'projectionSha256': _PUBLISH_TAG_PROMPT_TEXT_SHA256,
         'selectionContract': 'paper-taxonomy-selection-v1',
         'inputAnalysisSha256': input_sha,
         'outputAnalysisSha256': output_sha,
         'inputProtectedProjectionSha256': masked_input_analysis_sha256,
         'outputProtectedProjectionSha256': masked_output_analysis_sha256,
-        'taxonomySurfaceSha256': _taxonomy_surface_sha256(output_analysis),
+        'taxonomySurfaceSha256': _hash_tag_section_and_primary_tags(output_analysis),
         'primaryTaskId': selection['primaryTaskId'],
         'primaryMethodId': selection['primaryMethodId'],
         'conceptIds': selection['conceptIds'],
@@ -3023,7 +3023,7 @@ primary_method_tag: #基准测试
         self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
 
         # 升级分支不再硬比对 projectionSha256：stage 记录值与本地当前值都接受。
-        for projection in ('e' * 64, _PUBLISH_TAXONOMY_PROJECTION_SHA256):
+        for projection in ('e' * 64, _PUBLISH_TAG_PROMPT_TEXT_SHA256):
             stage['projectionSha256'] = projection
             rebind_taxonomy_seal(stage)
             self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
@@ -3063,14 +3063,14 @@ primary_method_tag: #基准测试
                 PublishDataValidationError,
                 'projectionSha256 与本地 registry/projection 不一致'):
             _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
-        stage['projectionSha256'] = _PUBLISH_TAXONOMY_PROJECTION_SHA256
+        stage['projectionSha256'] = _PUBLISH_TAG_PROMPT_TEXT_SHA256
 
         stage['registryVersion'] = 'paper-taxonomy-v0'
         with self.assertRaisesRegex(
                 PublishDataValidationError,
                 'registryVersion 与本地 registry/projection 不一致'):
             _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
-        stage['registryVersion'] = _PUBLISH_TAXONOMY['version']
+        stage['registryVersion'] = _PUBLISH_TAG_CATALOG['version']
         self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
 
     def test_taxonomy_seal_upgrade_gate_fails_closed_on_every_broken_input(self):
@@ -3125,7 +3125,7 @@ primary_method_tag: #基准测试
         四条基础门（快照、注记自洽、概念 active、复算分级）一条不少。
         与 Node validateSealRegistryUpgrade 同向：不可确认的 destructive 注记
         写得再自洽也翻不了案。"""
-        current = _PUBLISH_TAXONOMY
+        current = _PUBLISH_TAG_CATALOG
         destructive_from = Path(ROOT) / 'config' / 'taxonomy-registry-history' / (
             '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a.json')
         old_registry = json.loads(destructive_from.read_bytes().decode('utf-8'))

@@ -63,7 +63,7 @@ function analysisRecord(options = {}) {
         outputAnalysisSha256: textSha(text),
         inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(text)),
         outputProtectedProjectionSha256: textSha(contract.maskClassificationFields(text)),
-        taxonomySurfaceSha256: contract.taxonomySurfaceSha256(text),
+        taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(text),
         primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
         primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
         conceptIds: parsed.taxonomyValidation.conceptIds

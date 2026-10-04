@@ -1293,7 +1293,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     return issues.length ? `核心摘要未达到 ${CORE_SUMMARY_CONTRACT_VERSION}: ${issues.join('；')}` : null;
 }
 
-function coreSummaryProjectionSha256(analysis) {
+function hashAnalysisWithMaskedCoreSummary(analysis) {
     const source = String(analysis || '');
     const matches = [...source.matchAll(/^##\s*核心摘要\s*\r?\n/gm)];
     if (matches.length !== 1) return '';
@@ -1307,15 +1307,15 @@ function coreSummaryProjectionSha256(analysis) {
         .digest('hex');
 }
 
-function taxonomySurfaceSha256(analysis) {
+function hashTagSectionAndPrimaryTags(analysis) {
     const source = String(analysis || '');
-    const tagBlock = extractSection(source, '标签');
-    const machine = extractSection(source, '机器摘要');
-    const task = machine.match(/^primary_task_tag\s*[:：]\s*(\S+)\s*$/m)?.[1] || '';
-    const method = machine.match(/^primary_method_tag\s*[:：]\s*(\S+)\s*$/m)?.[1] || '';
-    if (!tagBlock || !task || !method) return '';
+    const tagSectionText = extractSection(source, '标签');
+    const machineSummaryText = extractSection(source, '机器摘要');
+    const primaryTaskTag = machineSummaryText.match(/^primary_task_tag\s*[:：]\s*(\S+)\s*$/m)?.[1] || '';
+    const primaryMethodTag = machineSummaryText.match(/^primary_method_tag\s*[:：]\s*(\S+)\s*$/m)?.[1] || '';
+    if (!tagSectionText || !primaryTaskTag || !primaryMethodTag) return '';
     return crypto.createHash('sha256')
-        .update(`primary_task_tag=${task}\nprimary_method_tag=${method}\n${tagBlock}`)
+        .update(`primary_task_tag=${primaryTaskTag}\nprimary_method_tag=${primaryMethodTag}\n${tagSectionText}`)
         .digest('hex');
 }
 
@@ -1395,7 +1395,7 @@ function validateTaxonomyStageBinding(paper, options = {}) {
         || !/^[a-f0-9]{64}$/.test(String(stage.inputProtectedProjectionSha256 || ''))
         || structure?.outputAnalysisSha256 !== stage.inputAnalysisSha256
         || stage.inputProtectedProjectionSha256 !== stage.outputProtectedProjectionSha256
-        || stage.taxonomySurfaceSha256 !== taxonomySurfaceSha256(paper.analysis)
+        || stage.taxonomySurfaceSha256 !== hashTagSectionAndPrimaryTags(paper.analysis)
         || manifest.stages?.coreSummaryRepair?.inputAnalysisSha256 !== stage.outputAnalysisSha256) {
         return 'taxonomySeal 输入/输出/受保护字节或下游链无法重放';
     }
@@ -1410,7 +1410,7 @@ function validateTaxonomyStageBinding(paper, options = {}) {
         || crypto.createHash('sha256').update(tagCheckpointText).digest('hex') !== stage.outputAnalysisSha256
         || crypto.createHash('sha256').update(maskedAnalysisText).digest('hex')
             !== stage.outputProtectedProjectionSha256
-        || taxonomySurfaceSha256(tagCheckpointText) !== stage.taxonomySurfaceSha256) {
+        || hashTagSectionAndPrimaryTags(tagCheckpointText) !== stage.taxonomySurfaceSha256) {
         return 'taxonomySeal 成功态缺少可逐字重放的 taxonomy checkpoint';
     }
     if (stage.status === 'complete') {
@@ -1490,7 +1490,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (crypto.createHash('sha256').update(upstreamCheckpoint).digest('hex')
             !== stage.inputAnalysisSha256
         || checkpointSummarySha256 !== stage.inputSummarySha256
-        || coreSummaryProjectionSha256(upstreamCheckpoint)
+        || hashAnalysisWithMaskedCoreSummary(upstreamCheckpoint)
             !== stage.inputStructureProjectionSha256) {
         return `核心摘要输入不能从 ${upstreamLabel} checkpoint 重放`;
     }
@@ -1501,7 +1501,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
             || crypto.createHash('sha256')
                 .update(extractSection(summaryCheckpoint, '核心摘要')).digest('hex')
                 !== stage.summarySha256
-            || coreSummaryProjectionSha256(summaryCheckpoint)
+            || hashAnalysisWithMaskedCoreSummary(summaryCheckpoint)
                 !== stage.outputStructureProjectionSha256)) {
         return '核心摘要输出不能从 coreSummaryRepair checkpoint 重放';
     }
@@ -2348,8 +2348,8 @@ module.exports = {
     hasSourceMeasuredLossComparison,
     classifySourceQuantitativeEvidence,
     validateCoreSummarySemanticContract,
-    coreSummaryProjectionSha256,
-    taxonomySurfaceSha256,
+    hashAnalysisWithMaskedCoreSummary,
+    hashTagSectionAndPrimaryTags,
     maskClassificationFields,
     validateTaxonomyStageBinding,
     validateCoreSummaryStageBinding,

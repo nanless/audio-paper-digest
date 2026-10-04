@@ -308,7 +308,7 @@ function sealedPaper(options = {}) {
         outputAnalysisSha256: textSha(analysis),
         inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(analysis)),
         outputProtectedProjectionSha256: textSha(contract.maskClassificationFields(analysis)),
-        taxonomySurfaceSha256: contract.taxonomySurfaceSha256(analysis),
+        taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(analysis),
         primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
         primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
         conceptIds: options.conceptIds || parsed.taxonomyValidation.conceptIds

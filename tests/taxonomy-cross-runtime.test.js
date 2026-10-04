@@ -5,7 +5,7 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { loadTagCatalog, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/paper-taxonomy');
 const { getDefaultTagRules } = require('../scripts/lib/taxonomy-runtime');
-const { taxonomySurfaceSha256 } = require('../scripts/analysis-contract');
+const { hashTagSectionAndPrimaryTags } = require('../scripts/analysis-contract');
 const { parseAnalysis } = require('../scripts/utils');
 
 test('all shared taxonomy labels, aliases and ancestors agree across Node and Python', () => {
@@ -111,13 +111,13 @@ ${method === undefined ? '' : `主方法标签: ${method}`}
         'import json, sys',
         'sys.path.insert(0,"scripts")',
         'from utils import parse_analysis',
-        'from publish_common import _taxonomy_surface_sha256',
+        'from publish_common import _hash_tag_section_and_primary_tags',
         'items=json.load(sys.stdin)',
         'keys=("tags","primaryTaskTag","primaryMethodTag","taxonomyValidation")',
         'out=[]',
         'for item in items:',
         '    parsed=parse_analysis(item["text"],legacy_tags=item["legacyTags"])',
-        '    out.append({**{key:parsed[key] for key in keys},"taxonomySurfaceSha256":_taxonomy_surface_sha256(item["text"])})',
+        '    out.append({**{key:parsed[key] for key in keys},"taxonomySurfaceSha256":_hash_tag_section_and_primary_tags(item["text"])})',
         'print(json.dumps(out,ensure_ascii=False))'
     ].join('\n');
     const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
@@ -130,7 +130,7 @@ ${method === undefined ? '' : `主方法标签: ${method}`}
     const node = fixtures.map(item => {
         const parsed = parseAnalysis(item.text, { legacyTags: item.legacyTags });
         return { ...Object.fromEntries(keys.map(key => [key, parsed[key]])),
-            taxonomySurfaceSha256: taxonomySurfaceSha256(item.text) };
+            taxonomySurfaceSha256: hashTagSectionAndPrimaryTags(item.text) };
     });
     fixtures.forEach((fixture, index) => assert.deepEqual(
         python[index], node[index], fixture.name));

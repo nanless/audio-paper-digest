@@ -53,8 +53,8 @@ const {
     CORE_SUMMARY_MAX_SENTENCES,
     CORE_SUMMARY_RESULT_UNAVAILABLE,
     validateCoreSummarySemanticContract,
-    coreSummaryProjectionSha256,
-    taxonomySurfaceSha256,
+    hashAnalysisWithMaskedCoreSummary,
+    hashTagSectionAndPrimaryTags,
     maskClassificationFields,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
@@ -9316,7 +9316,7 @@ function captureSealedCoreSummaryRecoveryCandidate(paper) {
         paperId: getPaperArxivId(paper),
         legacyAnalysis: paper.analysis,
         legacyAnalysisSha256: crypto.createHash('sha256').update(paper.analysis).digest('hex'),
-        legacySummaryExteriorSha256: coreSummaryProjectionSha256(paper.analysis),
+        legacySummaryExteriorSha256: hashAnalysisWithMaskedCoreSummary(paper.analysis),
         legacyManifest,
         legacyManifestSha256: stableFingerprint(legacyManifest),
         freshIdentity,
@@ -9353,7 +9353,7 @@ function validateSealedCoreSummaryRecoveryCandidate(candidate, paper, sourceProv
         && candidate.legacyAnalysisSha256 === crypto.createHash('sha256')
             .update(String(candidate.legacyAnalysis || '')).digest('hex')
         && candidate.legacySummaryExteriorSha256
-            === coreSummaryProjectionSha256(candidate.legacyAnalysis)
+            === hashAnalysisWithMaskedCoreSummary(candidate.legacyAnalysis)
         && candidate.legacyManifestSha256 === stableFingerprint(candidate.legacyManifest)
         && freshIdentity && candidate.freshIdentitySha256 === stableFingerprint(freshIdentity)
         && candidate.freshIdentitySha256 === stableFingerprint(candidate.freshIdentity)
@@ -9478,7 +9478,7 @@ function canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage)
         && audit.legacyManifestSha256 === stableFingerprint(audit.legacyManifest)
         && crypto.createHash('sha256').update(String(checkpoint || '')).digest('hex')
             === audit.legacyAnalysisSha256
-        && coreSummaryProjectionSha256(checkpoint) === audit.legacySummaryExteriorSha256
+        && hashAnalysisWithMaskedCoreSummary(checkpoint) === audit.legacySummaryExteriorSha256
         && crypto.createHash('sha256').update(String(sourceText || '')).digest('hex')
             === audit.sourceSha256
         && manifest?.sourceAcquisition?.sourceSha256 === audit.sourceSha256
@@ -14756,7 +14756,7 @@ async function analyzePaperDeepInternal(paper) {
                     .update(maskClassificationFields(before)).digest('hex'),
                 outputProtectedProjectionSha256: crypto.createHash('sha256')
                     .update(maskClassificationFields(analysis)).digest('hex'),
-                taxonomySurfaceSha256: taxonomySurfaceSha256(analysis),
+                taxonomySurfaceSha256: hashTagSectionAndPrimaryTags(analysis),
                 primaryTaskId: parsedForTagCheck.taxonomyValidation.primaryTaskId,
                 primaryMethodId: parsedForTagCheck.taxonomyValidation.primaryMethodId,
                 conceptIds: parsedForTagCheck.taxonomyValidation.conceptIds
@@ -14865,10 +14865,10 @@ async function analyzePaperDeepInternal(paper) {
                 outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
                 inputSummarySha256: crypto.createHash('sha256').update(summaryInput).digest('hex'),
                 summarySha256: crypto.createHash('sha256').update(summaryOutput).digest('hex'),
-                inputStructureProjectionSha256: coreSummaryProjectionSha256(
+                inputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(
                     coreSummaryRepairStage.inputAnalysis
                 ),
-                outputStructureProjectionSha256: coreSummaryProjectionSha256(analysis)
+                outputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(analysis)
             };
             markRecoveryStage(analysisManifest, 'coreSummaryRepair', changed ? 'complete' : 'not_needed', {
                 contractVersion: CORE_SUMMARY_CONTRACT_VERSION,

@@ -364,10 +364,10 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
             .getDefaultTagRules();
         const taxonomyParsed = require('../scripts/utils.js').parseAnalysis(locked.analysis);
         const taxonomyInputSha = runner.sha256(locked.analysis);
-        const taxonomyProjectionSha = runner.sha256(
+        const classificationMaskedAnalysisSha256 = runner.sha256(
             contract.maskClassificationFields(locked.analysis)
         );
-        const taxonomyBinding = {
+        const tagStageProof = {
             registryVersion: tagRules.registryVersion,
             registrySha256: tagRules.registrySha256,
             projectionContract: tagRules.projectionContract,
@@ -375,17 +375,17 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
             selectionContract: tagRules.selectionContract,
             inputAnalysisSha256: taxonomyInputSha,
             outputAnalysisSha256: taxonomyInputSha,
-            inputProtectedProjectionSha256: taxonomyProjectionSha,
-            outputProtectedProjectionSha256: taxonomyProjectionSha,
-            taxonomySurfaceSha256: contract.taxonomySurfaceSha256(locked.analysis),
+            inputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
+            outputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
+            taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(locked.analysis),
             primaryTaskId: taxonomyParsed.taxonomyValidation.primaryTaskId,
             primaryMethodId: taxonomyParsed.taxonomyValidation.primaryMethodId,
             conceptIds: taxonomyParsed.taxonomyValidation.conceptIds
         };
         manifest.stages.structureRepair.outputAnalysisSha256 = taxonomyInputSha;
         manifest.stages.taxonomySeal = {
-            status: 'not_needed', fingerprint: 'b'.repeat(64), ...taxonomyBinding,
-            bindingSha256: contract.manualSha256(taxonomyBinding)
+            status: 'not_needed', fingerprint: 'b'.repeat(64), ...tagStageProof,
+            bindingSha256: contract.manualSha256(tagStageProof)
         };
         manifest.contracts = {
             ...manifest.contracts,
@@ -404,8 +404,8 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
         const binding = { contractVersion: 'core-summary-detailed-v3',
             inputAnalysisSha256: inputSha, outputAnalysisSha256: outputSha,
             inputSummarySha256: runner.sha256(inputSummary), summarySha256: runner.sha256(outputSummary),
-            inputStructureProjectionSha256: contract.coreSummaryProjectionSha256(locked.analysis),
-            outputStructureProjectionSha256: contract.coreSummaryProjectionSha256(repaired) };
+            inputStructureProjectionSha256: contract.hashAnalysisWithMaskedCoreSummary(locked.analysis),
+            outputStructureProjectionSha256: contract.hashAnalysisWithMaskedCoreSummary(repaired) };
         manifest.stages.structureRepair.outputAnalysisSha256 = inputSha;
         manifest.stages.coreSummaryRepair = { status: 'complete', fingerprint: 'a'.repeat(64),
             ...binding, bindingSha256: contract.manualSha256(binding) };

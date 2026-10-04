@@ -43,7 +43,7 @@ class TaxonomyAssetsTests(unittest.TestCase):
             'VISUAL_SUMMARY_KINDS': set(), 'RESEARCHER_SIDECAR_FILENAMES': set()}
         self.env['_atomic_write_bytes'] = self.write
         self.env['_sha256_file'] = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-        self.env['_PAGE_TAXONOMY'] = {'registrySha256': 'b'*64, 'version': 'v2', 'concepts': [
+        self.env['_PAGE_TAG_CATALOG'] = {'registrySha256': 'b'*64, 'version': 'v2', 'concepts': [
             {'id': 'task.child', 'facet': 'task', 'preferredLabel': {'zh': '新名字', 'en': 'new'},
              'aliases': [], 'broaderId': None, 'status': 'active',
              'definition': '原登记定义', 'scopeNote': '原登记排除说明'}]}
@@ -212,9 +212,9 @@ class TaxonomyAssetsTests(unittest.TestCase):
         self.call('export_taxonomy_registry_snapshot', self.repo)
         # Prepare a third version so one replacement leaves data/static catalog
         # temporarily different, while the original complete stage remains intact.
-        self.env['_PAGE_TAXONOMY']['registrySha256'] = 'c'*64
-        self.env['_PAGE_TAXONOMY']['version'] = 'v3'
-        self.env['_PAGE_TAXONOMY']['concepts'][0]['preferredLabel']['zh'] = '最新名字'
+        self.env['_PAGE_TAG_CATALOG']['registrySha256'] = 'c'*64
+        self.env['_PAGE_TAG_CATALOG']['version'] = 'v3'
+        self.env['_PAGE_TAG_CATALOG']['concepts'][0]['preferredLabel']['zh'] = '最新名字'
         paths = self.call('prepare_taxonomy_registry_staged_assets', self.stage, self.repo)
         records = [{'path': path.relative_to(self.stage).as_posix(), 'delete': False,
                     'stagedRelativePath': path.relative_to(self.stage).as_posix(),

@@ -74,8 +74,8 @@ class HistoricalPageRenderTests(unittest.TestCase):
         assignment = {
             'status': 'assigned',
             'paperId': f'arxiv:{paper["arxivId"]}',
-            'registryVersion': renderer.load_publish_to_blog()._PAGE_TAXONOMY['version'],
-            'registrySha256': renderer.load_publish_to_blog()._PAGE_TAXONOMY['registrySha256'],
+            'registryVersion': renderer.load_publish_to_blog()._PAGE_TAG_CATALOG['version'],
+            'registrySha256': renderer.load_publish_to_blog()._PAGE_TAG_CATALOG['registrySha256'],
             'primaryTaskId': 'task.localization',
             'primaryMethodId': 'method.transformer',
             'conceptIds': ['task.localization', 'method.transformer', 'research_focus.robustness'],

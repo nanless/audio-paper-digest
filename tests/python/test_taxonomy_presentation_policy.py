@@ -41,7 +41,7 @@ class PresentationPolicyTests(unittest.TestCase):
         self.preferred = json.loads((FIXTURES / (preferred + '.json')).read_text())
         # Reconstruct the raw runtime fields consumed by the actual snapshot
         # builder. This is not a replacement registry or a signing operation.
-        self.env['_PAGE_TAXONOMY'] = {
+        self.env['_PAGE_TAG_CATALOG'] = {
             'version': self.base['registryVersion'], 'registrySha256': BASE,
             'concepts': [dict(id=n['id'], facet=n['facet'],
                 preferredLabel={'zh': n['zh'], 'en': n['en']}, aliases=n['aliases'],
@@ -237,7 +237,7 @@ class PresentationPolicyTests(unittest.TestCase):
 
     def test_source_registry_advance_is_unknown_even_if_richer(self):
         self.prepare()
-        self.env['_PAGE_TAXONOMY']['registrySha256']='1'*64
+        self.env['_PAGE_TAG_CATALOG']['registrySha256']='1'*64
         with self.assertRaisesRegex(self.error,'实际签发来源'):
             self.call('taxonomy_registry_asset_payloads',self.repo)
 
