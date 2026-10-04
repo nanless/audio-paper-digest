@@ -2772,13 +2772,13 @@ primary_method_tag: #基准测试
         non_method['analysis'] = non_method['analysis'].replace(
             'primary_method_tag: #Transformer', 'primary_method_tag: #低资源').replace(
             '主方法标签：#Transformer', '主方法标签：#低资源')
-        with self.assertRaisesRegex(PublishDataValidationError, 'taxonomy|补充标签'):
+        with self.assertRaisesRegex(PublishDataValidationError, '补充标签的内容或顺序与首行除主任务、主方法外的标签不一致。'):
             resolve_publish_parsed(non_method)
 
         machine_mismatch = copy.deepcopy(paper)
         machine_mismatch['analysis'] = machine_mismatch['analysis'].replace(
             'primary_method_tag: #Transformer', 'primary_method_tag: #CNN')
-        with self.assertRaisesRegex(PublishDataValidationError, '机器摘要与标签角色'):
+        with self.assertRaisesRegex(PublishDataValidationError, '机器摘要中的主任务或主方法与标签章节不一致。'):
             resolve_publish_parsed(machine_mismatch)
 
         duplicate_machine_role = copy.deepcopy(paper)
@@ -2799,7 +2799,7 @@ primary_method_tag: #基准测试
         extra_line = copy.deepcopy(paper)
         extra_line['analysis'] = extra_line['analysis'].replace(
             '补充标签：#低资源', '补充标签：#低资源\n额外标签说明')
-        with self.assertRaisesRegex(PublishDataValidationError, '恰好四行'):
+        with self.assertRaisesRegex(PublishDataValidationError, '标签章节必须恰好包含四行非空内容。'):
             resolve_publish_parsed(extra_line)
 
     def test_publish_preflight_rejects_dimension_without_reason(self):
@@ -2904,7 +2904,7 @@ primary_method_tag: #基准测试
         self.assertEqual(len(validate_papers_for_publish([paper])), 1)
         missing_tag_stage = copy.deepcopy(paper)
         del missing_tag_stage['analysisManifest']['stages']['taxonomySeal']
-        with self.assertRaisesRegex(PublishDataValidationError, 'taxonomySeal'):
+        with self.assertRaisesRegex(PublishDataValidationError, '深度分析阶段尚未全部完成: taxonomySeal'):
             validate_papers_for_publish([missing_tag_stage])
         paper['analysisManifest']['stages']['scoringAudit']['status'] = 'transient_failure'
         with self.assertRaisesRegex(PublishDataValidationError, 'scoringAudit'):
@@ -2957,7 +2957,7 @@ primary_method_tag: #基准测试
             checkpoint_drift, checkpoint_drift['analysisManifest'],
             status='complete', with_checkpoints=True)
         checkpoint_drift['analysisStageCheckpoints']['taxonomySeal'] += '\nDRIFT'
-        with self.assertRaisesRegex(PublishDataValidationError, '输出 checkpoint'):
+        with self.assertRaisesRegex(PublishDataValidationError, '标签阶段保存的输出正文无效，或其正文、受保护正文或标签内容的 SHA 与阶段记录不一致。'):
             _validate_tag_stage_record(
                 checkpoint_drift, checkpoint_drift['analysisManifest'],
                 checkpoint_drift['arxivId'])
@@ -2968,7 +2968,7 @@ primary_method_tag: #基准测试
             structure_checkpoint_drift['analysisManifest'],
             status='complete', with_checkpoints=True)
         structure_checkpoint_drift['analysisStageCheckpoints']['structureRepair'] += '\nDRIFT'
-        with self.assertRaisesRegex(PublishDataValidationError, '输入 checkpoint'):
+        with self.assertRaisesRegex(PublishDataValidationError, '标签阶段保存的输入正文无效，或其正文或受保护正文 SHA 与阶段记录不一致。'):
             _validate_tag_stage_record(
                 structure_checkpoint_drift,
                 structure_checkpoint_drift['analysisManifest'],
@@ -2980,7 +2980,7 @@ primary_method_tag: #基准测试
             complete_without_checkpoints['analysisManifest'],
             status='complete', with_checkpoints=False)
         complete_without_checkpoints.pop('analysisStageCheckpoints')
-        with self.assertRaisesRegex(PublishDataValidationError, '缺少 taxonomy checkpoint'):
+        with self.assertRaisesRegex(PublishDataValidationError, '已完成的标签阶段缺少有效的输出正文。'):
             _validate_tag_stage_record(
                 complete_without_checkpoints,
                 complete_without_checkpoints['analysisManifest'],
@@ -3003,7 +3003,7 @@ primary_method_tag: #基准测试
         stage = attach_tag_stage_record(
             protected_drift, protected_drift['analysisManifest'],
             input_analysis=drifted_input, status='complete', with_checkpoints=True)
-        with self.assertRaisesRegex(PublishDataValidationError, '受保护正文投影'):
+        with self.assertRaisesRegex(PublishDataValidationError, '标签阶段记录中的输入与输出受保护正文哈希不一致。'):
             _validate_tag_stage_record(
                 protected_drift, protected_drift['analysisManifest'],
                 protected_drift['arxivId'])
@@ -3061,14 +3061,14 @@ primary_method_tag: #基准测试
         stage['projectionSha256'] = '0' * 64
         with self.assertRaisesRegex(
                 PublishDataValidationError,
-                'projectionSha256 与本地 registry/projection 不一致'):
+                '标签阶段记录中的 projectionSha256 与当前词表、提示文本或标签选择协议不一致。'):
             _validate_tag_stage_record(paper, manifest, paper['arxivId'])
         stage['projectionSha256'] = _PUBLISH_TAG_PROMPT_TEXT_SHA256
 
         stage['registryVersion'] = 'paper-taxonomy-v0'
         with self.assertRaisesRegex(
                 PublishDataValidationError,
-                'registryVersion 与本地 registry/projection 不一致'):
+                '标签阶段记录中的 registryVersion 与当前词表、提示文本或标签选择协议不一致。'):
             _validate_tag_stage_record(paper, manifest, paper['arxivId'])
         stage['registryVersion'] = _PUBLISH_TAG_CATALOG['version']
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))

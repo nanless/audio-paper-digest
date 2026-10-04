@@ -93,7 +93,7 @@ test('selection contract caps the task facet at one primary plus two supplementa
         noTaskFacet.errors.join('; '));
 });
 
-test('primary task specificity is a whole-registry warning that never invalidates a sealed replay', () => {
+test('主任务是否过于宽泛按整个词表判断；该告警不使已有标签阶段记录失效', () => {
     const runtime = createTagRules({ registryPath });
     const analysis = [
         '## 机器摘要',
@@ -217,7 +217,7 @@ primary_method_tag: #众包评测
     );
 });
 
-test('taxonomy stage binding replays registry, IDs, protected bytes and downstream input', () => {
+test('标签阶段记录核对词表、概念 ID、受保护正文和后续阶段输入', () => {
     const analysis = `## 机器摘要
 primary_task_tag: #语音可懂度评估
 primary_method_tag: #众包评测
@@ -282,7 +282,7 @@ primary_method_tag: #众包评测
     }
 });
 
-test('taxonomy complete binding requires exact structure and taxonomy checkpoint bytes', () => {
+test('标签阶段标为 complete 时，必须保留匹配的结构修复和标签正文检查点', () => {
     const outputAnalysis = `## 机器摘要
 primary_task_tag: #语音可懂度评估
 primary_method_tag: #众包评测
@@ -341,5 +341,5 @@ primary_method_tag: #众包评测
     }
     const missing = structuredClone(paper);
     delete missing.analysisStageCheckpoints;
-    assert.match(validate(missing), /checkpoint/);
+    assert.match(validate(missing), /正文检查点缺失/);
 });

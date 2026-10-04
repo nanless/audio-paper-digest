@@ -67,10 +67,10 @@ def parse_evidence(value, where):
         try:
             parsed = json.loads(value)
         except ValueError as error:
-            raise ValueError(f'{where}: evidence 必须是 JSON 对象 ({error})') from error
+            raise ValueError(f'{where}: evidence 必须是 JSON 对象，当前内容无法解析：{error}') from error
         if isinstance(parsed, dict):
             return parsed
-    raise ValueError(f'{where}: evidence 必须是 JSON 对象')
+    raise ValueError(f'{where}: evidence 必须是 JSON 对象。')
 
 
 def upper_label_candidates(tag_catalog, tag):
@@ -93,9 +93,10 @@ def upper_label_candidates(tag_catalog, tag):
 
 
 def initial_disposition(tag, concept, tag_catalog):
-    """七态初始值：只用字面 registry 解析，不重算语义（semanticReview 仍 not_performed）。
+    """根据词表中的名称和别名初步选择处理方式，不进行语义评审。
 
-    返回 (disposition, evidence)；空 disposition = 尚未处置，必须带 evidence.reason。
+    返回 (disposition, evidence)，semanticReview 保持 not_performed。
+    disposition 为空表示尚未选择处理方式，evidence.reason 须说明原因。
     """
     if concept is not None:
         if concept['status'] != 'active':
@@ -130,69 +131,69 @@ def build_dispositions(counts, resolved, tag_catalog):
 
 
 def validate_disposition_rows(rows):
-    """七态互斥与证据校验；旧六列形状的行按旧 schema 直接放行。"""
+    """核对标签处理方式及所需证据；没有 disposition 和 evidence 列的旧记录按原规则兼容读取。"""
     if not isinstance(rows, list):
-        raise ValueError('dispositions: 必须是数组')
+        raise ValueError('标签处理记录必须是数组。')
     seen = set()
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get('tag'), str) or not row['tag']:
-            raise ValueError('disposition 行缺少 tag')
+            raise ValueError('标签处理记录必须是对象，并在 tag 中填写非空标签。')
         tag = row['tag']
         if tag in seen:
-            raise ValueError(f'{tag}: disposition 行重复')
+            raise ValueError(f'{tag}: 标签处理表中存在重复的标签。')
         seen.add(tag)
         status = row.get('status')
         if status not in ('mapped', 'needs_review'):
-            raise ValueError(f'{tag}: status 必须是 mapped 或 needs_review')
-        # 旧列形状：既没有 disposition 也没有 evidence → 兼容读取，不施加七态校验。
+            raise ValueError(f'{tag}: 处理记录的 status 必须为 mapped 或 needs_review。')
+        # 旧记录没有 disposition 和 evidence 字段时，按原规则兼容读取，不检查处理方式。
         if 'disposition' not in row and 'evidence' not in row:
             continue
         disposition = row.get('disposition') or ''
         if disposition not in ('', *DISPOSITIONS):
-            raise ValueError(f'{tag}: disposition {disposition!r} 不属于七态 {DISPOSITIONS}')
+            raise ValueError(f'{tag}: disposition 的值 {disposition!r} 不在允许的七种处理方式中：{DISPOSITIONS}')
         evidence = parse_evidence(row.get('evidence'), tag)
         if not disposition:
             reason = evidence.get('reason')
             if not isinstance(reason, str) or not reason.strip():
-                raise ValueError(f'{tag}: 空 disposition（尚未处置）必须在 evidence.reason 写明原因')
+                raise ValueError(f'{tag}: 尚未选择处理方式时，必须在 evidence.reason 中写明原因。')
             continue
         if disposition in ('keep', 'alias'):
             if status != 'mapped':
-                raise ValueError(f'{tag}: {disposition} 只能出现在 status=mapped 行（互斥）')
+                raise ValueError(f'{tag}: 采用 {disposition} 处理方式时，status 必须为 mapped。')
             if not isinstance(row.get('conceptId'), str) or not row.get('conceptId'):
-                raise ValueError(f'{tag}: {disposition} 必须携带 conceptId')
+                raise ValueError(f'{tag}: 采用 {disposition} 处理方式时，必须填写非空的 conceptId。')
         elif disposition == 'broader':
             if status != 'needs_review' or not isinstance(evidence.get('upperConceptId'), str) \
                     or not evidence['upperConceptId']:
-                raise ValueError(f'{tag}: broader 只能来自“仅上位命中”（status=needs_review + evidence.upperConceptId）')
+                raise ValueError(f'{tag}: broader 处理方式要求 status 为 needs_review，并在 evidence.upperConceptId 中填写上级概念 ID。')
         elif disposition == 'split_review':
             if status != 'needs_review':
-                raise ValueError(f'{tag}: split_review 只能出现在 status=needs_review 行（互斥）')
+                raise ValueError(f'{tag}: 采用 split_review 处理方式时，status 必须为 needs_review。')
             candidates = evidence.get('candidates')
             if not isinstance(candidates, list) or not candidates \
                     or any(not isinstance(item, str) or not item.strip() for item in candidates):
-                raise ValueError(f'{tag}: split_review 必须带候选词列表 evidence.candidates（非空字符串数组）')
+                raise ValueError(f'{tag}: 采用 split_review 处理方式时，evidence.candidates 必须是非空数组，且每个候选词都是非空字符串。')
         elif disposition == 'move_facet':
             if status != 'mapped':
-                raise ValueError(f'{tag}: move_facet 只能出现在 status=mapped 行（互斥）')
+                raise ValueError(f'{tag}: 采用 move_facet 处理方式时，status 必须为 mapped。')
             target = evidence.get('facet')
             if target not in FACET_IDS:
-                raise ValueError(f'{tag}: move_facet 必须带 evidence.facet ∈ 九分面')
+                raise ValueError(f'{tag}: 采用 move_facet 处理方式时，evidence.facet 必须属于九个分类维度之一。')
             if row.get('facet') and target == row['facet']:
-                raise ValueError(f'{tag}: move_facet 目标分面必须与当前分面不同')
+                raise ValueError(f'{tag}: 采用 move_facet 处理方式时，目标分类维度必须与当前维度不同。')
         else:  # deprecated / out_of_scope
             zero = evidence.get('crossConferenceZeroHit')
             if not isinstance(zero, dict) or not isinstance(zero.get('scan'), str) or not zero['scan'].strip():
-                raise ValueError(f'{tag}: {disposition} 必须带跨会零命中扫描证据 '
-                                 'evidence.crossConferenceZeroHit.scan（禁按单会议频次判定）')
+                raise ValueError(f'{tag}: 采用 {disposition} 处理方式时，必须提供跨会议扫描未命中的证据：'
+                                 'evidence.crossConferenceZeroHit.scan；不能仅凭单个会议的出现频次作判断。')
             reviewer = evidence.get('reviewedBy')
             if not isinstance(reviewer, str) or not reviewer.strip():
-                raise ValueError(f'{tag}: {disposition} 必须带人工评审署名 evidence.reviewedBy')
+                raise ValueError(f'{tag}: 采用 {disposition} 处理方式时，必须在 evidence.reviewedBy 中填写人工评审者。')
     return rows
 
 
 def read_disposition_rows(text):
-    """兼容新旧两种表头读取 disposition 行（旧六列缺 disposition/evidence）。"""
+    """按新旧两种表头读取标签处理记录；旧六列记录不含 disposition 和 evidence 字段。"""
     rows = list(csv.DictReader(io.StringIO(text)))
     return validate_disposition_rows(rows)
 
@@ -219,7 +220,7 @@ def safe_directory(value, *, create=False):
             current.mkdir(mode=0o700, exist_ok=True)
             info = current.lstat()
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise ValueError('Taxonomy path contains a symlink or non-directory')
+            raise ValueError('标签预览路径中存在符号链接，或某一层不是目录。')
     return target
 
 
@@ -228,11 +229,11 @@ def read_regular(path, limit=MAX_PAGE_BYTES):
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
-            raise ValueError('Taxonomy input must be bounded regular single-link file')
+            raise ValueError('标签预览输入必须是普通文件，只有一个硬链接，且大小不能超过限制。')
         with os.fdopen(fd, 'rb', closefd=False) as handle:
             raw = handle.read(limit + 1)
         if len(raw) > limit:
-            raise ValueError('Taxonomy input exceeds size limit')
+            raise ValueError('标签预览输入文件超过大小限制。')
         return raw
     finally:
         os.close(fd)
@@ -243,10 +244,10 @@ def git_snapshot(repo):
         return subprocess.check_output(['git', '-C', str(repo), *args],
                                        env=build_child_process_env(), text=True, timeout=30).strip()
     if Path(git('rev-parse', '--show-toplevel')).resolve() != repo:
-        raise ValueError('Blog input must be the Git repository root')
+        raise ValueError('博客输入路径必须是 Git 仓库根目录。')
     head = git('rev-parse', 'HEAD')
     if not re.fullmatch(r'[a-f0-9]{40,64}', head) or git('status', '--porcelain=v1', '--untracked-files=all'):
-        raise ValueError('Blog input must be a clean committed worktree')
+        raise ValueError('博客输入必须是已提交的干净 Git 工作区。')
     return head
 
 
@@ -257,7 +258,7 @@ def markdown_paths(repo):
         for name in [*dirs, *files]:
             path = Path(directory) / name
             if path.is_symlink():
-                raise ValueError('Blog content symlink refused')
+                raise ValueError('博客内容目录中不得包含符号链接。')
         found.extend(Path(directory) / name for name in files if name.lower().endswith('.md'))
     return sorted(found, key=lambda path: path.relative_to(repo).as_posix())
 
@@ -266,7 +267,7 @@ def normalized_date(value):
     if isinstance(value, (date, datetime)):
         return value.isoformat()[:10], value.isoformat()
     if not isinstance(value, str) or not re.match(r'^\d{4}-\d{2}-\d{2}(?:$|[T ])', value):
-        raise ValueError('Paper date must be a valid ISO date')
+        raise ValueError('论文日期必须是有效的 ISO 日期。')
     if len(value) == 10:
         date.fromisoformat(value)
     else:
@@ -279,15 +280,15 @@ def blog_base_url(repo):
     raw = read_regular(config).decode('utf-8')
     values, _ = parse_frontmatter_content(config, '---\n' + raw + '\n---\n')
     if values.get('permalinks') or values.get('uglyURLs'):
-        raise ValueError('Custom Hugo permalinks require an explicit URL projection contract')
+        raise ValueError('配置了自定义 Hugo 永久链接或 uglyURLs，预览程序需要明确的 URL 生成规则。')
     base = values.get('baseURL')
     if not isinstance(base, str):
-        raise ValueError('Hugo baseURL is required')
+        raise ValueError('Hugo 配置必须填写 baseURL。')
     parsed = urlsplit(base)
     if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password
             or parsed.port not in (None, 443) or parsed.query or parsed.fragment
             or re.search(r'[\x00-\x20\x7f\\]', base)):
-        raise ValueError('Hugo baseURL must be safe HTTPS')
+        raise ValueError('Hugo 的 baseURL 必须是安全的 HTTPS 地址。')
     return base.rstrip('/') + '/'
 
 
@@ -297,17 +298,17 @@ def page_url(repo, path, frontmatter, base):
     if raw is None:
         slug = frontmatter.get('slug', path.stem)
         if not isinstance(slug, str) or not slug or slug != slug.strip() or re.search(r'[\x00-\x1f\x7f/\\?#]', slug):
-            raise ValueError('Unsafe page slug')
+            raise ValueError('页面的 slug 无效，或包含不允许的路径字符。')
         relative = path.parent.relative_to(repo / 'content' / 'posts').as_posix()
         parts = ([] if relative == '.' else relative.split('/')) + [slug]
         raw = root.path + 'posts/' + '/'.join(quote(part, safe='-._~') for part in parts) + '/'
     if not isinstance(raw, str) or not raw or re.search(r'[\x00-\x20\x7f\\]', raw) or raw.startswith('//'):
-        raise ValueError('Unsafe page URL')
+        raise ValueError('页面 URL 为空、格式无效，或包含不允许的字符。')
     parsed = urlsplit(raw)
     if parsed.scheme and (parsed.scheme != 'https' or parsed.netloc != root.netloc):
-        raise ValueError('Foreign or non-HTTPS page URL')
+        raise ValueError('页面 URL 必须使用 HTTPS，并属于当前博客站点。')
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError('Unsafe page URL components')
+        raise ValueError('页面 URL 不得包含用户凭据、查询参数或片段。')
     url_path = parsed.path if parsed.path.startswith('/') else root.path + parsed.path
     decoded = url_path
     for _ in range(4):
@@ -318,14 +319,14 @@ def page_url(repo, path, frontmatter, base):
     if (any(part in ('.', '..') for part in decoded.split('/'))
             or '\\' in decoded or re.search(r'[\x00-\x1f\x7f]', decoded)
             or not decoded.startswith(unquote(root.path))):
-        raise ValueError('Page URL escapes blog base path')
+        raise ValueError('页面 URL 超出了博客的基础路径，或包含不允许的路径字符。')
     return urlunsplit((root.scheme, root.netloc, url_path, '', ''))
 
 
 def paper_metadata(repo, path, raw, base):
     relative = path.relative_to(repo).as_posix()
     if '\\' in relative or any(part in ('.', '..') for part in Path(relative).parts):
-        raise ValueError('Unsafe source relative path')
+        raise ValueError('来源文件的相对路径包含不允许的路径字符。')
     frontmatter, body = parse_frontmatter_content(path, raw.decode('utf-8'))
     kind = frontmatter.get('paper_digest_page_type')
     if (re.fullmatch(r'\d{4}-\d{2}-\d{2}', path.stem)
@@ -336,10 +337,10 @@ def paper_metadata(repo, path, raw, base):
         return None, 'draft'
     tags = frontmatter.get('tags', [])
     if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
-        raise ValueError(f'Invalid tag list: {relative}')
+        raise ValueError(f'页面 {relative} 的标签必须是字符串数组。')
     title = frontmatter.get('title')
     if not isinstance(title, str) or not title.strip() or re.search(r'[\x00-\x1f\x7f]', title):
-        raise ValueError(f'Invalid paper title: {relative}')
+        raise ValueError(f'页面 {relative} 的论文标题必须是非空字符串，且不得包含控制字符。')
     public_date, sort_date = normalized_date(frontmatter.get('date'))
     identity_evidence = []
     for key in ('paper_digest_arxiv_id', 'arxiv_id', 'arxivId'):
@@ -347,7 +348,7 @@ def paper_metadata(repo, path, raw, base):
         if explicit is None:
             continue
         if not isinstance(explicit, str) or not ARXIV_ID.fullmatch(explicit):
-            raise ValueError(f'Invalid explicit arXiv identity: {relative} ({key})')
+            raise ValueError(f'页面 {relative} 的 arXiv ID 格式无效，字段为 {key}。')
         identity_evidence.append((re.sub(r'v[1-9]\d*$', '', explicit), 'frontmatter'))
     filename = re.search(r'-(\d{4})-(\d{4,5})(?:v[1-9]\d*)?$', path.stem)
     if filename:
@@ -357,12 +358,12 @@ def paper_metadata(repo, path, raw, base):
     linked = set(re.findall(r'\[arxiv\]\(https://arxiv\.org/abs/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?\)', body, re.I))
     identity_evidence.extend((value, 'explicit_arxiv_link') for value in sorted(linked))
     if len({value for value, _origin in identity_evidence}) > 1:
-        raise ValueError(f'Conflicting arXiv identities: {relative}')
+        raise ValueError(f'页面 {relative} 中记录的 arXiv ID 相互冲突。')
     pid, id_source = identity_evidence[0] if identity_evidence else (None, None)
     primary_keys = ('paper_digest_primary_task', 'primaryTask', 'primary_task', 'primaryTaskTag', 'primary_task_tag')
     if any(key in frontmatter and frontmatter[key] is not None and not isinstance(frontmatter[key], str)
            for key in primary_keys):
-        raise ValueError(f'Explicit primary task must be string or null: {relative}')
+        raise ValueError(f'页面 {relative} 的主任务字段必须是字符串或 null。')
     primary_values = [{'field': key, 'value': value} for key, value in frontmatter.items()
                       if key in primary_keys
                       and isinstance(value, str) and value.strip()]
@@ -410,9 +411,9 @@ def validate_output_root(value, repo):
     project = path_config.PROJECT_ROOT.resolve()
     forbidden = [repo, path_config.CURRENT_DIR.resolve(), path_config.FRESH_REWRITE_RUNS_DIR.resolve()]
     if output == project or output in project.parents or any(output == root or root in output.parents or output in root.parents for root in forbidden):
-        raise ValueError('Taxonomy output overlaps an input or protected directory')
+        raise ValueError('标签预览输出目录与输入目录或受保护目录重叠。')
     if project in output.parents and project / 'data' / 'runtime' not in output.parents:
-        raise ValueError('Project taxonomy output must be under data/runtime')
+        raise ValueError('仓库内的标签预览输出必须保存在 data/runtime 下。')
     safe_directory(output, create=True)
     for name in ('index.json', 'migration-report.json', 'tag-disposition.csv', 'bundle-manifest.json'):
         target = output / name
@@ -420,15 +421,15 @@ def validate_output_root(value, repo):
             read_regular(target, 64 * 1024 * 1024)
     if (output / 'index.json').exists():
         if json.loads(read_regular(output / 'index.json', 64 * 1024 * 1024))['version'] != VERSION:
-            raise ValueError('Refusing to overwrite non-taxonomy index')
+            raise ValueError('已有索引的版本不符合标签预览协议，拒绝覆盖。')
     elif (output / 'tag-disposition.csv').exists() and not (output / 'migration-report.json').exists():
-        raise ValueError('Refusing to overwrite unowned taxonomy output')
+        raise ValueError('已有标签处置表缺少对应的预览报告，无法确认其来源，拒绝覆盖。')
     if (output / 'migration-report.json').exists():
         if json.loads(read_regular(output / 'migration-report.json', 64 * 1024 * 1024))['version'] != REPORT_VERSION:
-            raise ValueError('Refusing to overwrite non-taxonomy report')
+            raise ValueError('已有报告的版本不符合标签预览协议，拒绝覆盖。')
     if (output / 'bundle-manifest.json').exists():
         if json.loads(read_regular(output / 'bundle-manifest.json'))['version'] != BUNDLE_VERSION:
-            raise ValueError('Refusing to overwrite non-taxonomy bundle manifest')
+            raise ValueError('已有文件清单的版本不符合标签预览协议，拒绝覆盖。')
     return output
 
 
@@ -451,7 +452,7 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
         else:
             pages.append(page)
     if not pages:
-        raise ValueError('No paper pages found')
+        raise ValueError('未找到可用于标签预览的论文页面。')
     counts = collections.Counter(tag for page in pages for tag in set(page['tags']))
     # This tool is an audit of historical Hugo metadata, so aliases are
     # intentionally enabled here and nowhere in the production parser.
@@ -503,15 +504,15 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     # Verify all inputs again before installing any artifact; also catches
     # ignored/untracked-file list drift that a Git HEAD check alone cannot see.
     if markdown_paths(repo) != paths or git_snapshot(repo) != commit:
-        raise ValueError('Blog snapshot changed during taxonomy preview')
+        raise ValueError('生成标签预览期间，博客文件列表或 Git 状态发生变化。')
     for path, expected in zip(paths, hashes):
         if sha256(read_regular(path)) != expected['sha256']:
-            raise ValueError('Blog page SHA changed during taxonomy preview')
+            raise ValueError('生成标签预览期间，博客页面的 SHA 发生变化。')
     if load_tag_catalog(registry_path)['registrySha256'] != tag_catalog['registrySha256']:
-        raise ValueError('Taxonomy registry changed during preview')
+        raise ValueError('生成标签预览期间，标签词表的 SHA 发生变化。')
     public_text = json.dumps(index, ensure_ascii=False, indent=2) + '\n'
     if str(repo) in public_text or str(path_config.PROJECT_ROOT) in public_text:
-        raise ValueError('Absolute user path cannot appear in public taxonomy metadata')
+        raise ValueError('公开的标签预览元数据不得包含用户本地的绝对路径。')
     csv_text = io.StringIO(newline='')
     writer = csv.DictWriter(csv_text, fieldnames=list(DISPOSITION_CSV_COLUMNS))
     writer.writeheader()

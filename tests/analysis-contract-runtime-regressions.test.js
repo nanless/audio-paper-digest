@@ -456,11 +456,11 @@ describe('taxonomySeal registry upgrade gate', () => {
     });
 
     it('rejects projection drift while the registry SHA already matches', () => {
-        assert.match(validateSeal({ projectionSha256: 'e'.repeat(64) }), /合同不是 current/);
+        assert.match(validateSeal({ projectionSha256: 'e'.repeat(64) }), /词表版本、标签提示文本或标签选择规则与当前配置不一致/);
     });
 
     it('rejects a registry version bump outright', () => {
-        assert.match(validateSeal({ registryVersion: 'paper-taxonomy-v2' }), /合同不是 current/);
+        assert.match(validateSeal({ registryVersion: 'paper-taxonomy-v2' }), /词表版本、标签提示文本或标签选择规则与当前配置不一致/);
     });
 
     it('rejects an annotation that does not target the current registry SHA', () => {
@@ -489,6 +489,6 @@ describe('taxonomySeal registry upgrade gate', () => {
         changedText.analysisStageCheckpoints.taxonomySeal += '\nDRIFT';
         assert.match(contract.validateTagStageProof(changedText, {
             parsed: fixture.parsed, tagRules: fixture.runtime
-        }), /checkpoint/);
+        }), /正文检查点缺失/);
     });
 });

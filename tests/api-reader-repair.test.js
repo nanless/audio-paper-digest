@@ -253,7 +253,7 @@ test('a misplaced figure repair exposes the binding, declared section and actual
     draft.sections[10].body += '\n\n图前导读已经基于真实像素说明应按什么顺序观察且长度满足要求。'
         + '\n\n[[FIGURE_4]]\n\n图后解释只总结已经写出的观察与证据边界，不增加任何新的像素事实。';
     const issues = collectDraftIssues(draft, new Error(
-        '读者文章 figurePlacements[0]（Figure 4）图前导读与图后解释未形成相邻闭环'
+        '读者文章 figurePlacements[0]（Figure 4）图片的插入位置、相邻导读与解释段，或观察点不符合要求'
     ));
     const paths = buildRepairTargets(draft, issues).map(target => target.path);
     for (const pointer of ['/figurePlacements/0', '/sections/7/body', '/sections/10/body']) {

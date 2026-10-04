@@ -587,7 +587,7 @@ def _find_analysis_section_bounds(analysis, title):
     )
     match = heading.search(analysis)
     if match is None:
-        raise PublishDataValidationError(f'taxonomy proof 找不到 ## {title}')
+        raise PublishDataValidationError(f'标签检查所需的章节缺失：## {title}')
     start = match.start() + len(match.group(1))
     content_start = start + len(match.group(2))
     remainder = analysis[content_start:]
@@ -611,7 +611,7 @@ def _replace_primary_tag_fields(analysis, task_tag, method_tag):
         pattern = re.compile(rf'^{key}\s*[:：]\s*.*$', re.M)
         if len(pattern.findall(body)) != 1:
             raise PublishDataValidationError(
-                f'taxonomy proof 要求机器摘要 {key} 恰好出现一次')
+                f'标签检查要求机器摘要中的 {key} 恰好出现一次。')
         body = pattern.sub(f'{key}: {value}', body)
     return f'{analysis[:content_start]}{body}{analysis[end:]}'
 
@@ -1161,11 +1161,11 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     if not isinstance(contracts, dict) \
             or contracts.get('taxonomy') != TAG_SELECTION_CONTRACT:
         raise PublishDataValidationError(
-            f'{paper_label} taxonomy selection contract 缺失或不是 current')
+            f'{paper_label} 标签选择协议缺失，或不是当前支持的版本。')
     stages = manifest.get('stages') if isinstance(manifest, dict) else None
     stage = stages.get('taxonomySeal') if isinstance(stages, dict) else None
     if not isinstance(stage, dict) or stage.get('status') not in {'complete', 'not_needed'}:
-        raise PublishDataValidationError(f'{paper_label} taxonomySeal 未完成')
+        raise PublishDataValidationError(f'{paper_label} 标签阶段记录缺失，或尚未完成。')
 
     # 本函数先按 Node 的检查顺序核对词表版本、提示文本协议和标签选择协议。
     # 词表 SHA 未变时，提示文本 SHA 也必须与当前值相同；
@@ -1178,14 +1178,14 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     for field, expected in expected_static.items():
         if stage.get(field) != expected:
             raise PublishDataValidationError(
-                f'{paper_label} taxonomySeal.{field} 与本地 registry/projection 不一致')
+                f'{paper_label} 标签阶段记录中的 {field} 与当前词表、提示文本或标签选择协议不一致。')
     if stage.get('registrySha256') == _PUBLISH_TAG_CATALOG['registrySha256']:
         for field, expected in (
                 ('registrySha256', _PUBLISH_TAG_CATALOG['registrySha256']),
                 ('projectionSha256', _PUBLISH_TAG_PROMPT_TEXT_SHA256)):
             if stage.get(field) != expected:
                 raise PublishDataValidationError(
-                    f'{paper_label} taxonomySeal.{field} 与本地 registry/projection 不一致')
+                    f'{paper_label} 标签阶段记录中的 {field} 与当前词表、提示文本或标签选择协议不一致。')
     else:
         _validate_tag_stage_catalog_upgrade(stage, paper_label)
 
@@ -1197,7 +1197,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     if any(not re.fullmatch(r'[a-f0-9]{64}', str(stage.get(field) or ''))
            for field in sha_fields):
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal 缺少可重放 analysis/projection/binding SHA')
+            f'{paper_label} 标签阶段记录中的正文、受保护正文、标签内容或绑定 SHA 缺失，或格式无效。')
 
     text_sha = lambda value: hashlib.sha256(value.encode('utf-8')).hexdigest()
     structure_stage = stages.get('structureRepair')
@@ -1205,33 +1205,33 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
             or structure_stage.get('outputAnalysisSha256') \
             != stage['inputAnalysisSha256']:
         raise PublishDataValidationError(
-            f'{paper_label} structureRepair 输出未绑定 taxonomySeal 输入')
+            f'{paper_label} 结构修复阶段的输出 SHA 与标签阶段的输入 SHA 不一致，或结构修复记录缺失。')
     if stage['inputProtectedProjectionSha256'] \
             != stage.get('outputProtectedProjectionSha256'):
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal 改变了受保护正文投影')
+            f'{paper_label} 标签阶段记录中的输入与输出受保护正文哈希不一致。')
     if stage['status'] == 'not_needed' \
             and stage['inputAnalysisSha256'] != stage['outputAnalysisSha256']:
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal=not_needed 输入输出正文不一致')
+            f'{paper_label} 标签阶段标记为无需修复，但记录中的输入与输出正文 SHA 不一致。')
 
     current_analysis = str(paper.get('analysis') or '')
     if stage['taxonomySurfaceSha256'] != _hash_tag_section_and_primary_tags(current_analysis):
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal taxonomy surface SHA 与最终正文不一致')
+            f'{paper_label} 最终正文中的标签章节或主标签字段与标签阶段记录的 SHA 不一致。')
     core_summary_stage = stages.get('coreSummaryRepair')
     scoring_stage = stages.get('scoringAudit')
     if not isinstance(core_summary_stage, dict) \
             or core_summary_stage.get('status') not in {'complete', 'not_needed'} \
             or core_summary_stage.get('inputAnalysisSha256') != stage['outputAnalysisSha256']:
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal 输出未绑定 coreSummaryRepair 输入')
+            f'{paper_label} 详细摘要阶段记录缺失、尚未完成，或其输入 SHA 与标签阶段的输出 SHA 不一致。')
     core_output_sha = core_summary_stage.get('outputAnalysisSha256')
     if not re.fullmatch(r'[a-f0-9]{64}', str(core_output_sha or '')) \
             or not isinstance(scoring_stage, dict) \
             or scoring_stage.get('coreSummaryInputAnalysisSha256') != core_output_sha:
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal/coreSummary/scoring 下游 SHA 链不闭合')
+            f'{paper_label} 详细摘要阶段的输出 SHA 无效，评分记录缺失，或评分使用的摘要输入 SHA 与摘要阶段输出不一致。')
 
     checkpoints = paper.get('analysisStageCheckpoints')
     input_analysis = checkpoints.get('structureRepair') \
@@ -1240,7 +1240,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
         if isinstance(checkpoints, dict) else None
     if not isinstance(output_analysis, str):
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal 成功态缺少 taxonomy checkpoint')
+            f'{paper_label} 已完成的标签阶段缺少有效的输出正文。')
     masked_output_analysis = _mask_classification_fields(output_analysis)
     if (not masked_output_analysis
             or text_sha(output_analysis) != stage['outputAnalysisSha256']
@@ -1249,18 +1249,18 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
             or _hash_tag_section_and_primary_tags(output_analysis)
             != stage['taxonomySurfaceSha256']):
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal 输出 checkpoint 不可重放')
+            f'{paper_label} 标签阶段保存的输出正文无效，或其正文、受保护正文或标签内容的 SHA 与阶段记录不一致。')
     if stage['status'] == 'complete':
         if not isinstance(input_analysis, str):
             raise PublishDataValidationError(
-                f'{paper_label} taxonomySeal=complete 缺少 structure/taxonomy checkpoint')
+                f'{paper_label} 已执行标签修复，但结构修复阶段缺少有效的输入正文。')
         masked_input_analysis = _mask_classification_fields(input_analysis)
         if (not masked_input_analysis
                 or text_sha(input_analysis) != stage['inputAnalysisSha256']
                 or text_sha(masked_input_analysis)
                 != stage['inputProtectedProjectionSha256']):
             raise PublishDataValidationError(
-                f'{paper_label} taxonomySeal 输入 checkpoint 不可重放')
+                f'{paper_label} 标签阶段保存的输入正文无效，或其正文或受保护正文 SHA 与阶段记录不一致。')
 
     binding_fields = (
         'registryVersion', 'registrySha256', 'projectionContract',
@@ -1272,7 +1272,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     binding = {field: stage.get(field) for field in binding_fields}
     if stage['bindingSha256'] != _manual_hash(binding):
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal binding SHA 不可重放')
+            f'{paper_label} 标签阶段记录的绑定 SHA 与按原字段重新计算的结果不一致。')
 
     current_parsed = parse_analysis(current_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
     current_validation = current_parsed.get('taxonomyValidation') or {}
@@ -1284,14 +1284,14 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     recorded_selection = {field: stage.get(field) for field in expected_selection}
     if not current_validation.get('valid') or expected_selection != recorded_selection:
         raise PublishDataValidationError(
-            f'{paper_label} 当前 analysis taxonomy 与 sealed IDs 不一致')
+            f'{paper_label} 当前正文中的标签选择无效，或与标签阶段记录的主标签和概念 ID 不一致。')
     if stage['status'] == 'complete':
         output_validation = parse_analysis(
             output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)['taxonomyValidation']
         output_selection = {field: output_validation.get(field) for field in expected_selection}
         if not output_validation.get('valid') or output_selection != recorded_selection:
             raise PublishDataValidationError(
-                f'{paper_label} taxonomySeal parsed IDs 与 checkpoint 不一致')
+                f'{paper_label} 标签阶段保存的输出正文未通过标签检查，或其中的主标签和概念 ID 与阶段记录不一致。')
 
 
 def _manual_paper_identity_mode(contracts, paper_label='paper'):
@@ -4258,16 +4258,16 @@ def resolve_publish_parsed(paper):
 
 
 def _validate_current_analysis_tags(analysis, parsed, paper_label):
-    """Validate the exact current four-line tag section and primary tags for all producers."""
+    """核对各类发布输入的四行标签章节、主任务标签和主方法标签。"""
     match = re.search(r'(^|\n)##(?!#)\s*标签[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)', analysis)
     lines = [line.strip() for line in (match.group(2) if match else '').splitlines()
              if line.strip()]
     if len(lines) != 4:
-        raise PublishDataValidationError(f'{paper_label} 标签章节必须恰好四行')
+        raise PublishDataValidationError(f'{paper_label} 标签章节必须恰好包含四行非空内容。')
     all_tags = re.findall(r'#[^\s,，;；、]+', lines[0])
     if len(all_tags) not in range(3, 6) or ' '.join(all_tags) != lines[0]:
         raise PublishDataValidationError(
-            f'{paper_label} 标签首行必须是 3-5 个空格分隔的 current 标签')
+            f'{paper_label} 标签章节首行必须包含 3–5 个标签，并用空格分隔。')
     role_patterns = (
         (r'^主任务标签\s*[：:]\s*(#\S+)$', '主任务标签'),
         (r'^主方法标签\s*[：:]\s*(#\S+)$', '主方法标签'),
@@ -4277,31 +4277,31 @@ def _validate_current_analysis_tags(analysis, parsed, paper_label):
     for line, (pattern, label) in zip(lines[1:], role_patterns):
         role_match = re.fullmatch(pattern, line)
         if role_match is None:
-            raise PublishDataValidationError(f'{paper_label} 标签章节缺少合法{label}行')
+            raise PublishDataValidationError(f'{paper_label} 标签章节中的{label}行缺失或格式无效。')
         values.append(role_match.group(1))
     task_tag, method_tag, supplemental_text = values
     supplemental = supplemental_text.split()
     expected_supplemental = [tag for tag in all_tags if tag not in {task_tag, method_tag}]
     if supplemental != expected_supplemental:
-        raise PublishDataValidationError(f'{paper_label} 补充标签未精确覆盖其余标签')
+        raise PublishDataValidationError(f'{paper_label} 补充标签的内容或顺序与首行除主任务、主方法外的标签不一致。')
     validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
     if not isinstance(validation, dict) or validation.get('valid') is not True:
-        detail = (validation or {}).get('errors', ['缺少 taxonomy 验证'])[0]
-        raise PublishDataValidationError(f'{paper_label} current taxonomy 非法: {detail}')
+        detail = (validation or {}).get('errors', ['缺少标签检查结果'])[0]
+        raise PublishDataValidationError(f'{paper_label} 当前正文的标签选择未通过检查：{detail}')
     if parsed.get('tags') != all_tags \
             or parsed.get('primaryTaskTag') != task_tag \
             or parsed.get('primaryMethodTag') != method_tag:
-        raise PublishDataValidationError(f'{paper_label} 标签 surface 与 registry 解析不一致')
+        raise PublishDataValidationError(f'{paper_label} 标签章节中的标签、主任务或主方法与词表解析结果不一致。')
     machine = parsed.get('machineSummary') or {}
     machine_start, machine_end = _find_analysis_section_bounds(analysis, '机器摘要')
     machine_body = analysis[machine_start:machine_end]
     for key in ('primary_task_tag', 'primary_method_tag'):
         if len(re.findall(rf'^{key}\s*[:：]\s*\S+\s*$', machine_body, re.M)) != 1:
             raise PublishDataValidationError(
-                f'{paper_label} 机器摘要 {key} 必须恰好出现一次')
+                f'{paper_label} 机器摘要中的 {key} 必须恰好出现一次，并填写一个有效值。')
     if machine.get('primaryTaskTag') != task_tag \
             or machine.get('primaryMethodTag') != method_tag:
-        raise PublishDataValidationError(f'{paper_label} 机器摘要与标签角色不一致')
+        raise PublishDataValidationError(f'{paper_label} 机器摘要中的主任务或主方法与标签章节不一致。')
 
 
 def normalize_publish_arxiv_id(arxiv_id):

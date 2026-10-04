@@ -1355,14 +1355,14 @@ function maskClassificationFields(analysis) {
 function validateTagStageProof(paper, options = {}) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.taxonomySeal;
-    if (!isRecoveryStageTerminal('taxonomySeal', stage?.status)) return 'taxonomySeal 未完成';
+    if (!isRecoveryStageTerminal('taxonomySeal', stage?.status)) return '标签阶段记录缺失，或状态不是 complete 或 not_needed。';
     const runtime = options.tagRules
         || require('./lib/tag-rules.js').getDefaultTagRules();
     if (manifest?.contracts?.taxonomy !== runtime.selectionContract
         || stage.registryVersion !== runtime.registryVersion
         || stage.projectionContract !== runtime.projectionContract
         || stage.selectionContract !== runtime.selectionContract) {
-        return 'taxonomySeal registry/projection/selection 合同不是 current';
+        return '标签阶段记录中的词表版本、标签提示文本或标签选择规则与当前配置不一致。';
     }
     if (stage.registrySha256 !== runtime.registrySha256) {
         // 词表升级后，以下四项同时满足才能沿用旧记录。旧词表快照必须能够取回；
@@ -1379,7 +1379,7 @@ function validateTagStageProof(paper, options = {}) {
         });
         if (!upgrade.ok) return upgrade.error;
     } else if (stage.projectionSha256 !== runtime.projectionSha256) {
-        return 'taxonomySeal registry/projection/selection 合同不是 current';
+        return '标签阶段记录中的词表版本、标签提示文本或标签选择规则与当前配置不一致。';
     }
     const parsed = options.parsed;
     const validation = parsed?.taxonomyValidation;
@@ -1387,7 +1387,7 @@ function validateTagStageProof(paper, options = {}) {
         || stage.primaryTaskId !== validation.primaryTaskId
         || stage.primaryMethodId !== validation.primaryMethodId
         || manualSha256(stage.conceptIds) !== manualSha256(validation.conceptIds)) {
-        return 'taxonomySeal concept IDs 与最终 canonical 标签不一致';
+        return '正文标签未通过校验，或其主任务、主方法及概念 ID 与标签阶段记录不一致。';
     }
     const structure = manifest.stages?.structureRepair;
     if (!/^[a-f0-9]{64}$/.test(String(stage.inputAnalysisSha256 || ''))
@@ -1397,10 +1397,10 @@ function validateTagStageProof(paper, options = {}) {
         || stage.inputProtectedProjectionSha256 !== stage.outputProtectedProjectionSha256
         || stage.taxonomySurfaceSha256 !== hashTagSectionAndPrimaryTags(paper.analysis)
         || manifest.stages?.coreSummaryRepair?.inputAnalysisSha256 !== stage.outputAnalysisSha256) {
-        return 'taxonomySeal 输入/输出/受保护字节或下游链无法重放';
+        return '标签阶段的输入、输出、标签内容或受保护正文哈希不匹配，或与前后阶段的记录不一致。';
     }
     if (stage.status === 'not_needed' && stage.inputAnalysisSha256 !== stage.outputAnalysisSha256) {
-        return 'taxonomySeal=not_needed 时输入与输出正文必须相同';
+        return '标签阶段标为 not_needed 时，记录中的输入与输出正文哈希必须相同。';
     }
     const checkpoints = paper?.analysisStageCheckpoints;
     const tagCheckpointText = checkpoints?.taxonomySeal;
@@ -1411,7 +1411,7 @@ function validateTagStageProof(paper, options = {}) {
         || crypto.createHash('sha256').update(maskedAnalysisText).digest('hex')
             !== stage.outputProtectedProjectionSha256
         || hashTagSectionAndPrimaryTags(tagCheckpointText) !== stage.taxonomySurfaceSha256) {
-        return 'taxonomySeal 成功态缺少可逐字重放的 taxonomy checkpoint';
+        return '标签阶段的正文检查点缺失，或正文、受保护内容和标签的哈希与阶段记录不符。';
     }
     if (stage.status === 'complete') {
         const structureCheckpoint = checkpoints?.structureRepair;
@@ -1422,7 +1422,7 @@ function validateTagStageProof(paper, options = {}) {
             || crypto.createHash('sha256').update(maskedInputAnalysisText).digest('hex')
                 !== stage.inputProtectedProjectionSha256
         ) {
-            return 'taxonomySeal=complete 缺少可逐字重放的 structure/taxonomy checkpoint';
+            return '标签阶段标为 complete 时，必须保留与其输入正文及受保护正文哈希一致的结构修复检查点。';
         }
     }
     const binding = {
@@ -1440,7 +1440,7 @@ function validateTagStageProof(paper, options = {}) {
         primaryMethodId: stage.primaryMethodId,
         conceptIds: stage.conceptIds
     };
-    if (stage.bindingSha256 !== manualSha256(binding)) return 'taxonomySeal bindingSha256 闭环失败';
+    if (stage.bindingSha256 !== manualSha256(binding)) return '标签阶段的 bindingSha256 与重新计算的阶段记录哈希不一致。';
     return null;
 }
 
@@ -1450,16 +1450,16 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (stage?.status === MANUAL_COMPLETE_STATUS) return null;
     const summary = extractSection(String(paper?.analysis || ''), '核心摘要');
     const summarySha256 = crypto.createHash('sha256').update(String(summary || '')).digest('hex');
-    if (!isRecoveryStageTerminal('coreSummaryRepair', stage?.status)) return 'coreSummaryRepair 未完成';
+    if (!isRecoveryStageTerminal('coreSummaryRepair', stage?.status)) return '核心摘要阶段记录缺失，或状态不是 complete 或 not_needed。';
     if (manifest?.contracts?.coreSummary !== CORE_SUMMARY_CONTRACT_VERSION
-        || stage.contractVersion !== CORE_SUMMARY_CONTRACT_VERSION) return '核心摘要合同不是 current v3';
-    if (!/^[a-f0-9]{64}$/.test(String(stage.fingerprint || ''))) return '核心摘要阶段缺少 sealed fingerprint';
-    if (!/^[a-f0-9]{64}$/.test(String(stage.outputAnalysisSha256 || ''))) return '核心摘要阶段缺少输出 SHA';
+        || stage.contractVersion !== CORE_SUMMARY_CONTRACT_VERSION) return '核心摘要阶段记录未采用当前 v3 规则。';
+    if (!/^[a-f0-9]{64}$/.test(String(stage.fingerprint || ''))) return '核心摘要阶段的输入指纹缺失，或格式无效。';
+    if (!/^[a-f0-9]{64}$/.test(String(stage.outputAnalysisSha256 || ''))) return '核心摘要阶段的输出正文哈希缺失，或格式无效。';
     if (options.skipSemantic !== true) {
         const semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, options);
         if (semanticIssue) return semanticIssue;
     }
-    if (stage.summarySha256 !== summarySha256) return '核心摘要正文未绑定阶段 SHA';
+    if (stage.summarySha256 !== summarySha256) return '核心摘要正文的哈希与阶段记录不一致。';
     const structure = manifest?.stages?.structureRepair;
     const tagStage = manifest?.stages?.taxonomySeal;
     const scoring = manifest?.stages?.scoringAudit;
@@ -1468,7 +1468,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         'inputStructureProjectionSha256', 'outputStructureProjectionSha256', 'bindingSha256'
     ];
     if (requiredShaFields.some(field => !/^[a-f0-9]{64}$/.test(String(stage[field] || '')))) {
-        return '核心摘要阶段缺少可重放输入/投影 SHA 链';
+        return '核心摘要阶段的输入正文、输入摘要、受保护正文或阶段记录哈希缺失，或格式无效。';
     }
     const tagOutputAnalysisSha256 = String(tagStage?.outputAnalysisSha256 || '');
     const hasTagStageOutput = isRecoveryStageTerminal('taxonomySeal', tagStage?.status)
@@ -1476,14 +1476,14 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     const upstreamStage = hasTagStageOutput ? tagStage : structure;
     const upstreamLabel = hasTagStageOutput ? 'taxonomySeal' : 'structureRepair';
     if (upstreamStage?.outputAnalysisSha256 !== stage.inputAnalysisSha256) {
-        return `核心摘要输入没有绑定 ${upstreamLabel} 输出`;
+        return `核心摘要的输入正文哈希与上一阶段 ${upstreamLabel} 的输出记录不一致。`;
     }
     if (stage.inputStructureProjectionSha256 !== stage.outputStructureProjectionSha256) {
-        return '核心摘要局部修复改变了其他 12 节投影';
+        return '核心摘要阶段记录中的输入与输出受保护正文哈希不一致。';
     }
     const upstreamCheckpoint = paper?.analysisStageCheckpoints?.[upstreamLabel];
     if (typeof upstreamCheckpoint !== 'string') {
-        return `核心摘要输入缺少 ${upstreamLabel} checkpoint`;
+        return `核心摘要阶段缺少上一阶段 ${upstreamLabel} 的正文检查点。`;
     }
     const checkpointSummarySha256 = crypto.createHash('sha256')
         .update(extractSection(upstreamCheckpoint, '核心摘要')).digest('hex');
@@ -1492,7 +1492,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         || checkpointSummarySha256 !== stage.inputSummarySha256
         || hashAnalysisWithMaskedCoreSummary(upstreamCheckpoint)
             !== stage.inputStructureProjectionSha256) {
-        return `核心摘要输入不能从 ${upstreamLabel} checkpoint 重放`;
+        return `核心摘要阶段的输入正文、摘要或受保护正文哈希与上一阶段 ${upstreamLabel} 的正文检查点不一致。`;
     }
     const summaryCheckpoint = paper?.analysisStageCheckpoints?.coreSummaryRepair;
     if (typeof summaryCheckpoint === 'string'
@@ -1503,7 +1503,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
                 !== stage.summarySha256
             || hashAnalysisWithMaskedCoreSummary(summaryCheckpoint)
                 !== stage.outputStructureProjectionSha256)) {
-        return '核心摘要输出不能从 coreSummaryRepair checkpoint 重放';
+        return '核心摘要阶段的输出正文、摘要或受保护正文哈希与本阶段的正文检查点不一致。';
     }
     const bindingBody = {
         contractVersion: stage.contractVersion,
@@ -1514,12 +1514,12 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         inputStructureProjectionSha256: stage.inputStructureProjectionSha256,
         outputStructureProjectionSha256: stage.outputStructureProjectionSha256
     };
-    if (stage.bindingSha256 !== manualSha256(bindingBody)) return '核心摘要阶段 binding SHA 不可重放';
+    if (stage.bindingSha256 !== manualSha256(bindingBody)) return '核心摘要阶段的绑定哈希与重新计算的阶段记录哈希不一致。';
     if (scoring?.status !== MANUAL_COMPLETE_STATUS) {
         if (scoring?.coreSummaryInputAnalysisSha256 !== stage.outputAnalysisSha256
             || scoring?.inputCoreSummarySha256 !== stage.summarySha256
             || scoring?.outputCoreSummarySha256 !== stage.summarySha256) {
-            return '评分阶段没有绑定核心摘要输入/输出 SHA 链';
+            return '评分阶段记录的输入正文、输入摘要或输出摘要哈希与核心摘要阶段的输出不一致。';
         }
     }
     return null;
@@ -1737,11 +1737,12 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         const resultClaims = validateResultClaims(takeover.resultClaims, options.sourceText || '', {
             documentType: takeover.documentType,
             exception: takeover.resultClaimsException,
-            // In-memory reuse/status checks may intentionally omit the bound
-            // full text and only verify schema, claim-local numbers and hashes.
-            // Persistent canonical validators must explicitly reload and pass
-            // the SHA-bound sourceText; validate:data does so from the same-date
-            // manual-full-text manifest, while ingestion already owns the text.
+            // 内存中的状态或复用检查可以不传全文，此时不检查引文是否来自全文；
+            // 结果主张的结构和数字仍须核验，后面还会单独核对 resultClaimsSha256。
+            // validate:data 校验 Manual v4/v5 持久记录时，会从同批 manual-full-text 清单
+            // 定位全文并核对文件 SHA，再把文本传到这里。Manual 录入流程则使用刚读取
+            // 并计算过 SHA 的全文，声明了 sourceSha256 时还会核对它。这里的
+            // Boolean(options.sourceText) 只控制引文与全文的比较，不认证来源 SHA。
             requireSourceBinding: Boolean(options.sourceText),
             readerResultsText: options.analysis === undefined
                 ? undefined

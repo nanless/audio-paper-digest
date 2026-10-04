@@ -477,7 +477,7 @@ def render_packet(packet):
         raise ValueError('conference paper must not carry an arXiv alias')
     if assignment.get('status') != 'assigned' or assignment.get('paperId') != paper_id \
             or capabilities not in (WEAK, FULL, PDF_VISUAL):
-        raise ValueError('taxonomy/capability projection is not source-bound weak/full conference data')
+        raise ValueError('会议论文的标签记录或来源能力记录无效，标签记录不属于当前论文，或来源能力不在允许范围内。')
     manifest = paper.get('analysisManifest')
     stage = ((manifest or {}).get('stages') or {}).get('apiReaderArticle') or {}
     plan, article, authors, resources = sealed_reader_sources(paper, manifest, stage, capabilities)
@@ -560,9 +560,9 @@ def render_packet(packet):
             or assignment.get('primaryMethodId') != tag_stage.get('primaryMethodId') \
             or sorted(assignment.get('conceptIds') or []) != sorted(tag_stage.get('conceptIds') or []) \
             or tag_stage.get('status') not in {'complete', 'not_needed'}:
-        raise ValueError('conference current taxonomy seal/projection is not closed')
+        raise ValueError('会议论文的标签选择记录与分析阶段记录的协议、词表或所选标签不一致，或标签阶段尚未完成。')
     if any(cid not in concepts for cid in ordered):
-        raise ValueError('taxonomy labels are incomplete')
+        raise ValueError('会议论文的标签记录中，部分主标签或已选概念没有对应的概念记录。')
     labels = [concepts[cid]['preferredLabel']['zh'] for cid in assignment.get('conceptIds', [])]
     parsed = paper.get('parsed') or {}
     title, summary = str(paper.get('title') or '').strip(), str(parsed.get('summary') or '').strip()

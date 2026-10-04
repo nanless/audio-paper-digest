@@ -61,7 +61,7 @@ describe('taxonomy runtime analysis integration', () => {
         );
         assert.strictEqual(prompts.length, 2);
         assert.deepStrictEqual(budgets, [8000, 8000]);
-        assert.match(prompts[1], /concept ID 集合或主角色非法/);
+        assert.match(prompts[1], /标签修复结果中的概念 ID、数量、重复项或主任务与主方法的选择不符合要求/);
         assert.strictEqual(
             deep.maskClassificationFields(repaired),
             deep.maskClassificationFields(validAnalysisText())
@@ -726,7 +726,7 @@ describe('deep-analyzer section helpers', () => {
         assert.match(narrativeFeedback, /至少写 25 个汉字/);
 
         const figureFeedback = buildApiReaderValidationFeedback(
-            new Error('读者文章 figurePlacements[1] 图前导读与图后解释未形成相邻闭环')
+            new Error('读者文章 figurePlacements[1] 图片的插入位置、相邻导读与解释段，或观察点不符合要求')
         );
         assert.match(figureFeedback, /前一段至少 30 字/);
         assert.match(figureFeedback, /后一段至少 45 字/);
@@ -5323,7 +5323,7 @@ has_dataset: 否
         assert.strictEqual(manifest.contracts.experimentTables, 'bounded-v1');
     });
 
-    it('taxonomy Prompt 上线后旧摘要迁移快照仍保留但不得冒充当前主分析', () => {
+    it('更新标签提示词后保留旧摘要迁移快照，但不把它作为当前主分析', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const textForAnalysis = 'actual primary input with sufficient source evidence';
         const sourceText = 'source evidence without experimental tables';
@@ -5571,7 +5571,7 @@ has_dataset: 否
         }
     });
 
-    it('核心摘要局部修复使用受限的通用 repair 预算且其他 12 节逐字不变', async () => {
+    it('核心摘要局部修复使用通用修复预算，其他 12 节的正文逐字不变', async () => {
         const { getCoreSummaryDetailIssue, repairCoreSummarySection } = require('../scripts/deep-analyzer.js');
         const original = validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
@@ -6011,7 +6011,7 @@ has_dataset: 否
         }), null);
     });
 
-    it('确定性结构规范化不再猜标签，缺失标签交给 taxonomy stage', () => {
+    it('结构规范化不猜选标签，缺失标签由标签阶段处理', () => {
         const {
             normalizeAnalysisStructure,
             getRepairableAnalysisStructureIssues,
@@ -6041,7 +6041,7 @@ has_dataset: 否
         assert.match(normalized, /#taxonomy-pending-task/);
     });
 
-    it('双标签不会被结构规范化伪造补充标签，可由 taxonomy stage 局部修复', () => {
+    it('结构规范化不会为双标签正文伪造补充标签，标签阶段可以局部修复', () => {
         const {
             normalizeAnalysisStructure,
             getRepairableAnalysisStructureIssues,
@@ -6620,7 +6620,7 @@ has_dataset: 否
         assert.strictEqual(manifest.stages.imageSupplement, undefined);
     });
 
-    it('成功态只为 complete taxonomy 保留精确两份证明 checkpoint', () => {
+    it('标签阶段标为 complete 时，只保留结构修复和标签阶段的两份正文检查点', () => {
         const { retainFinalTagCheckpoints } = require('../scripts/deep-analyzer.js');
         const paper = { analysisStageCheckpoints: {
             structureRepair: 'structure bytes',
@@ -6649,7 +6649,7 @@ has_dataset: 否
         assert.throws(() => retainFinalTagCheckpoints({
             analysisStageCheckpoints: { structureRepair: 'structure bytes' }
         }, { stages: { taxonomySeal: { status: 'complete' } } }),
-        /必须保留 taxonomySeal/);
+        /必须保留该阶段的正文检查点/);
     });
 
     it('failed scoring cleanup follows dependency DAG and does not erase source-only Reader', () => {

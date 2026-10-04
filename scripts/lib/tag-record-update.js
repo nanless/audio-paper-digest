@@ -83,8 +83,8 @@ function stageResult({ paper, analysisRunId, status, outcome, errors = [], ...ex
 // 或根本不（再）可确认 → 仍 blocked/destructive-change（needsHuman）。
 function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOptions = {},
     acknowledgeDestructive = false, acknowledgementNote = null } = {}) {
-    if (!RESEAL_MODES.includes(mode)) throw new Error(`unsupported reseal mode: ${mode}`);
-    if (!runtime || !runtime.registrySha256) throw new Error('taxonomy runtime is required');
+    if (!RESEAL_MODES.includes(mode)) throw new Error(`不支持的标签记录更新模式：${mode}`);
+    if (!runtime || !runtime.registrySha256) throw new Error('更新标签记录需要提供标签规则及词表哈希。');
     const contractApi = contract();
     const record = analysis && typeof analysis === 'object' ? analysis : null;
     const paper = record?.papers?.length === 1 ? record.papers[0] : null;
@@ -96,7 +96,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
                 oldConceptIds: [], newConceptIds: [],
                 conceptIdsDiff: { added: [], removed: [] },
                 pageRestageRequired: false,
-                errors: ['analysis 记录必须恰好包含一篇 canonical 论文'] } };
+                errors: ['分析记录必须恰好包含一篇论文。'] } };
     }
     const executionId = typeof record.executionId === 'string' ? record.executionId : null;
     const stage = paper.analysisManifest?.stages?.taxonomySeal;
@@ -109,7 +109,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
     if (!contractApi.isRecoveryStageTerminal('taxonomySeal', stage?.status)) {
         return { ok: false, analysis: null,
             item: stageResult({ ...base, status: 'skipped', outcome: 'stage-not-terminal',
-                errors: [`taxonomySeal 状态 ${stage?.status ?? '缺失'} 不是终态`] }) };
+                errors: [`标签阶段的状态为 ${stage?.status ?? '缺失'}，尚未完成，不能更新记录。`] }) };
     }
     const oldConceptIds = Array.isArray(stage.conceptIds) ? stage.conceptIds : [];
     const parsed = parseAnalysisText(paper.analysis, runtime);
@@ -138,7 +138,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         return { ok: false, analysis: null,
             item: stageResult({ ...base, status: 'blocked', outcome: 'missing-registry-snapshot',
                 oldConceptIds, conceptIds: oldConceptIds, errors: [
-                    `无法取回 registry 升级前快照 ${stage.registrySha256}，fail-closed 拒绝重封`] }) };
+                    `无法取得词表更新前的快照 ${stage.registrySha256}，不能更新标签记录。`] }) };
     }
     const { changeLevel, detail } = registryChange.classifyRegistryChange(snapshot, runtime.tagCatalog);
     if (changeLevel === 'destructive') {
@@ -172,13 +172,13 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
             item: stageResult({ ...base, status: 'blocked', outcome: 'selection-invalid',
                 oldConceptIds, conceptIds: oldConceptIds, changeLevel,
                 errorsDetail: Array.isArray(validation?.errors) ? validation.errors : ['标签无法解析'],
-                errors: ['正文标签在当前 registry 下无法解析，需要人工/LLM 重新选标签'] }) };
+                errors: ['正文标签无法按当前词表解析，需要人工或模型重新选择标签；本工具不会调用模型。'] }) };
     }
     if (!sameIds(validation.conceptIds, oldConceptIds)) {
         return { ok: false, analysis: null,
             item: stageResult({ ...base, status: 'blocked', outcome: 'concept-ids-changed',
                 oldConceptIds, conceptIds: validation.conceptIds, changeLevel,
-                errors: ['重投影得到的 conceptIds 与旧封口不一致，需要人工/LLM 复核'] }) };
+                errors: ['正文标签在当前词表中解析出的概念 ID 与原标签阶段记录不同，需要人工或模型重新核对；本工具不会调用模型。'] }) };
     }
 
     let annotation;
@@ -196,7 +196,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         return { ok: false, analysis: null,
             item: stageResult({ ...base, status: 'blocked', outcome: 'annotation-failed',
                 oldConceptIds, conceptIds: oldConceptIds, changeLevel,
-                errors: [`registryUpgradeFrom 注记生成失败: ${error.message}`] }) };
+                errors: [`无法生成词表更新说明：${error.message}`] }) };
     }
 
     const nextStage = mode === 'reproject'

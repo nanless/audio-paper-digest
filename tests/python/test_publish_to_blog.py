@@ -1017,8 +1017,24 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertEqual(match.group(1).strip(), summary)
         self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
 
+        invalid_summary_record = copy.deepcopy(paper)
+        invalid_summary_record['analysisManifest']['stages']['coreSummaryRepair'][
+            'contractVersion'
+        ] = 'invalid-core-summary-contract'
+        binding_issue = publish_to_blog._api_reader_page_binding_issue(
+            page, invalid_summary_record,
+        )
+        self.assertIsInstance(binding_issue, str)
+        self.assertEqual(
+            publish_to_blog.classify_review_failure([{
+                'severity': 'error',
+                'description': f'LLM API source-binding v4 最终 Markdown 门禁失败: {binding_issue}',
+            }]),
+            'content',
+        )
+
         paper['analysisManifest']['stages']['coreSummaryRepair']['summarySha256'] = '0' * 64
-        with self.assertRaisesRegex(PublishDataValidationError, '详细核心摘要与阶段 SHA'):
+        with self.assertRaisesRegex(PublishDataValidationError, '读者文章的详细核心摘要 SHA 与阶段记录不一致。'):
             publish_to_blog.generate_paper_page(paper, '2026-08-31')
 
         shallow = llm_api_publication_fixture()
@@ -1085,7 +1101,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         drifted = copy.deepcopy(paper)
         drifted['analysisStageCheckpoints']['taxonomySeal'] += '\n'
         with self.assertRaisesRegex(
-                PublishDataValidationError, 'taxonomySeal checkpoint 重放'):
+                PublishDataValidationError, '读者文章的详细核心摘要所依赖的标签阶段正文或摘要缺失、格式无效，或正文、摘要或其他章节的 SHA 与阶段记录不一致。'):
             publish_to_blog._validated_detailed_core_summary(
                 drifted, publish_to_blog.parse_analysis(drifted['analysis'])
             )
@@ -1093,7 +1109,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         incomplete = copy.deepcopy(paper)
         del incomplete['analysisManifest']['stages']['taxonomySeal']
         with self.assertRaisesRegex(
-                PublishDataValidationError, '上游 taxonomySeal 非法'):
+                PublishDataValidationError, '读者文章的详细核心摘要所依赖的标签阶段记录缺失或无效。'):
             publish_to_blog._validated_detailed_core_summary(
                 incomplete, publish_to_blog.parse_analysis(incomplete['analysis'])
             )

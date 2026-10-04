@@ -246,7 +246,7 @@ class PreviewBuilderTest(unittest.TestCase):
         self.assertEqual(rows['ASR']['status'], 'mapped')
         self.assertEqual(rows['ASR']['conceptId'], 'task.asr')
         self.assertEqual(rows['ASR']['semanticReview'], 'not_performed')
-        # 七态初始映射：唯一命中 active 中文首选 → keep；经别名 → alias
+        # 初始处理方式：唯一命中启用概念的中文首选名称时选 keep，经别名命中时选 alias。
         self.assertEqual(rows['语音任务']['disposition'], 'keep')
         self.assertEqual(rows['ASR']['disposition'], 'alias')
         # 仅上位命中 → broader（status 仍是 needs_review，原值不静默改写）
@@ -273,7 +273,7 @@ class PreviewBuilderTest(unittest.TestCase):
     def test_dirty_tree_and_unsafe_metadata_urls_fail_without_output_index(self):
         page = self.page(); self.commit()
         page.write_text(page.read_text() + 'changed')
-        with self.assertRaisesRegex(ValueError, 'clean'): self.build()
+        with self.assertRaisesRegex(ValueError, '博客输入必须是已提交的干净 Git 工作区。'): self.build()
         self.assertFalse((self.output / 'index.json').exists())
         self.git('add', '.'); self.git('commit', '-qm', 'changed')
         for url in ('javascript:alert(1)', 'https://evil.example/x', '/audio-paper-digest-blog/../private',
@@ -285,7 +285,7 @@ class PreviewBuilderTest(unittest.TestCase):
         page = self.page(); self.commit()
         other = self.root / 'foreign.md'; other.write_bytes(page.read_bytes())
         page.unlink(); page.symlink_to(other); self.commit()
-        with self.assertRaisesRegex(ValueError, 'symlink'): self.build()
+        with self.assertRaisesRegex(ValueError, '博客内容目录中不得包含符号链接。'): self.build()
         page.unlink(); self.page(); self.commit()
         self.output.rmdir()
         self.output.symlink_to(self.repo, target_is_directory=True)
@@ -314,7 +314,7 @@ class PreviewBuilderTest(unittest.TestCase):
         page = self.page(paper_digest_arxiv_id='2609.00001v3')
         page.write_text(page.read_text() + '[arxiv](https://arxiv.org/abs/2609.00002v1)')
         self.commit()
-        with self.assertRaisesRegex(ValueError, 'Conflicting'): self.build()
+        with self.assertRaisesRegex(ValueError, '的 arXiv ID 相互冲突。'): self.build()
         page.write_text(page.read_text().replace('2609.00002v1', '2609.00001v2'))
         self.commit()
         self.assertEqual(self.build()['papers'][0]['id'], '2609.00001')
@@ -340,7 +340,7 @@ class PreviewBuilderTest(unittest.TestCase):
 
 
 class SevenStateDispositionTest(unittest.TestCase):
-    """七态互斥、证据要求与旧列兼容的纯单元用例。"""
+    """核对七种处理方式的适用条件、证据要求及旧表头兼容读取。"""
 
     def row(self, **overrides):
         base = {'tag': '旧标签', 'pageCount': 3, 'disposition': '', 'status': 'needs_review',
@@ -352,21 +352,21 @@ class SevenStateDispositionTest(unittest.TestCase):
     def test_seven_state_membership_and_mutual_exclusion(self):
         valid = self.row(disposition='keep', status='mapped', conceptId='task.asr')
         self.assertEqual(preview.validate_disposition_rows([valid]), [valid])
-        # 不在七态里的取值直接拒绝
+        # 拒绝不在七种处理方式中的取值。
         for bad in ('drop', 'KEEP', 'merged'):
-            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, '七态'):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, '不在允许的七种处理方式中'):
                 preview.validate_disposition_rows([self.row(disposition=bad)])
         # keep/alias 只能出现在 status=mapped 且必须带 conceptId
-        with self.assertRaisesRegex(ValueError, '互斥'):
+        with self.assertRaisesRegex(ValueError, '采用 keep 处理方式时，status 必须为 mapped。'):
             preview.validate_disposition_rows([self.row(disposition='keep', conceptId='task.asr')])
         with self.assertRaisesRegex(ValueError, 'conceptId'):
             preview.validate_disposition_rows([self.row(disposition='alias', status='mapped')])
         # 未评审的 needs_review 行不得凭空变 keep/alias
-        with self.assertRaisesRegex(ValueError, '互斥'):
+        with self.assertRaisesRegex(ValueError, '采用 keep 处理方式时，status 必须为 mapped。'):
             preview.validate_disposition_rows([self.row(disposition='keep', status='needs_review',
                                                         conceptId='task.asr')])
         # broader 只能来自“仅上位命中”
-        with self.assertRaisesRegex(ValueError, '仅上位命中'):
+        with self.assertRaisesRegex(ValueError, 'broader 处理方式要求 status 为 needs_review，并在 evidence.upperConceptId 中填写上级概念 ID。'):
             preview.validate_disposition_rows([self.row(disposition='broader')])
         preview.validate_disposition_rows([self.row(disposition='broader',
                                                     evidence={'upperConceptId': 'task.asr'})])
@@ -395,11 +395,11 @@ class SevenStateDispositionTest(unittest.TestCase):
                                    'reviewedBy': 'human-reviewer'})])
 
     def test_move_facet_and_pending_rows_are_guarded(self):
-        with self.assertRaisesRegex(ValueError, '九分面'):
+        with self.assertRaisesRegex(ValueError, 'evidence.facet 必须属于九个分类维度之一。'):
             preview.validate_disposition_rows([self.row(disposition='move_facet', status='mapped',
                                                         conceptId='task.asr', facet='task',
                                                         evidence={'facet': 'bogus'})])
-        with self.assertRaisesRegex(ValueError, '分面不同'):
+        with self.assertRaisesRegex(ValueError, '目标分类维度必须与当前维度不同'):
             preview.validate_disposition_rows([self.row(disposition='move_facet', status='mapped',
                                                         conceptId='task.asr', facet='task',
                                                         evidence={'facet': 'task'})])

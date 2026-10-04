@@ -13,7 +13,7 @@ const cli = require('../scripts/tag-record-update.js');
 const { ADDITIVE_OLD_SHA, DESTRUCTIVE_OLD_SHA, EXECUTION_ID, PAPER_ID,
     runtime, analysisRecord, reproject } = require('./helpers/tag-record-update-fixture.js');
 
-test('a seal already on the current registry is reported as assigned without writes', () => {
+test('标签阶段已使用当前词表时，只核验记录，不写入文件', () => {
     const plan = reproject();
     assert.equal(plan.ok, false);
     assert.equal(plan.analysis, null);
@@ -27,7 +27,7 @@ test('a seal already on the current registry is reported as assigned without wri
 
 // 换表（v1.1）后 dcf83f84→当前 的分级为“可确认的 destructive”（改名/改边/删别名，
 // conceptIds 零影响）——确定性重投影语义不变，仅注记需携带白名单 ack。
-test('a destructive-eligible upgrade deterministically reprojects and reseals without a model', () => {
+test('明确确认允许的破坏性变更后，工具按当前词表更新标签阶段记录，不调用模型', () => {
     const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
         acknowledgeDestructive: true });
     assert.equal(plan.ok, true, plan.item.errors.join('; '));
@@ -67,7 +67,7 @@ test('a destructive-eligible upgrade deterministically reprojects and reseals wi
     }), null);
 });
 
-test('annotate mode keeps the old seal bytes and relies on the acknowledged upgrade annotation', () => {
+test('annotate 模式保留原标签阶段字段，并记录已确认的词表升级说明', () => {
     const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
         mode: 'annotate', acknowledgeDestructive: true });
     assert.equal(plan.ok, true, plan.item.errors.join('; '));
@@ -83,7 +83,7 @@ test('annotate mode keeps the old seal bytes and relies on the acknowledged upgr
     }), null);
 });
 
-test('a destructive registry change is blocked for human/LLM relabelling', () => {
+test('白名单外的破坏性词表变更会停止更新，留待人工或模型重新选择标签', () => {
     const plan = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
     assert.equal(plan.ok, false);
     assert.equal(plan.analysis, null);
@@ -94,7 +94,7 @@ test('a destructive registry change is blocked for human/LLM relabelling', () =>
     assert.match(plan.item.errors.join(' '), /destructive/);
 });
 
-test('an unresolvable pre-upgrade snapshot fails closed instead of guessing', () => {
+test('无法取得更新前的词表快照时，工具拒绝更新标签记录', () => {
     const plan = reproject({
         registrySha256: '0'.repeat(64),
         projectionSha256: 'e'.repeat(64),
@@ -106,7 +106,7 @@ test('an unresolvable pre-upgrade snapshot fails closed instead of guessing', ()
     assert.match(plan.item.errors.join(' '), /快照/);
 });
 
-test('tags that no longer resolve are reported as needing a human/LLM selection', () => {
+test('正文标签无法按当前词表解析时，报告需要人工或模型重新选择标签', () => {
     const text = validAnalysisText().replace('#鲁棒性', '#不存在的标签');
     const plan = reproject({ analysis: analysisRecord({ analysis: text,
         registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) }),
@@ -117,7 +117,7 @@ test('tags that no longer resolve are reported as needing a human/LLM selection'
     assert.ok(Array.isArray(plan.item.errorsDetail) && plan.item.errorsDetail.length > 0);
 });
 
-test('the dry-run report contract carries per-paper diffs and assigned/blocked results', () => {
+test('预览报告包含逐篇差异，以及已分配、受阻和跳过的结果', () => {
     const assigned = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
         acknowledgeDestructive: true });
     const blocked = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
@@ -144,14 +144,14 @@ test('the dry-run report contract carries per-paper diffs and assigned/blocked r
     }
 });
 
-test('unsupported modes and malformed records are refused', () => {
-    assert.throws(() => reproject({ mode: 'llm' }), /unsupported reseal mode/);
+test('不支持的更新模式和格式不符的分析记录会被拒绝', () => {
+    assert.throws(() => reproject({ mode: 'llm' }), /不支持的标签记录更新模式/);
     const broken = resealApi.reprojectAnalysis({ analysis: { papers: [] }, runtime: runtime() });
     assert.equal(broken.item.status, 'blocked');
     assert.equal(broken.item.outcome, 'unreadable-analysis');
 });
 
-test('mark-stale only reports stale assignment files and never rewrites them', () => {
+test('mark-stale 只报告旧标签分配文件，不改写原文件', () => {
     const current = runtime().registrySha256;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'taxonomy-stale-'));
     try {
@@ -183,7 +183,7 @@ test('mark-stale only reports stale assignment files and never rewrites them', (
     }
 });
 
-test('CLI argument surface covers reseal, mark-stale, classify and archive-snapshot', () => {
+test('命令参数支持更新记录、标记旧文件、比较词表和归档快照', () => {
     const uuid = '9dce2993-0000-4000-8000-000000000000';
     assert.deepEqual(cli.parseArgs(['--from', uuid]),
         { command: 'reseal', processId: uuid, apply: false, mode: 'reproject', reportName: null,
@@ -261,7 +261,7 @@ function registryWithExtraConcept() {
 }
 const extraConceptSnapshot = sha => ({ ...registryWithExtraConcept(), registrySha256: sha });
 
-test('an explicitly acknowledged destructive change deterministically reseals', () => {
+test('明确确认允许的破坏性变更后，可以更新标签阶段记录', () => {
     const plan = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
         acknowledgeDestructive: true, acknowledgementNote: '人工确认：仅别名语义，conceptId 影响 none' });
     assert.equal(plan.ok, true, plan.item.errors.join('; '));
@@ -297,7 +297,7 @@ test('an explicitly acknowledged destructive change deterministically reseals', 
     assert.ok(ack.note.includes(runtime().registrySha256));
 });
 
-test('the acknowledgement flag never passes an unacknowledgeable destructive change', () => {
+test('确认参数不能放行白名单外的破坏性变更', () => {
     const sha = 'a'.repeat(64);
     const snapshotOptions = { registryHistory: { [sha]: extraConceptSnapshot(sha) } };
     const plan = reproject({ registrySha256: sha, projectionSha256: 'e'.repeat(64),
@@ -312,7 +312,7 @@ test('the acknowledgement flag never passes an unacknowledgeable destructive cha
     assert.equal(plan.item.destructiveAcknowledgement, undefined);
 });
 
-test('without the flag a destructive change stays blocked exactly as before', () => {
+test('未提供确认参数时，允许确认的破坏性变更仍会阻止更新', () => {
     const sha = 'a'.repeat(64);
     const snapshotOptions = { registryHistory: { [sha]: extraConceptSnapshot(sha) } };
     for (const acknowledgeDestructive of [false, undefined]) {
@@ -332,7 +332,7 @@ test('without the flag a destructive change stays blocked exactly as before', ()
 // 分级由 registry 内容决定、与 flag 无关：换表后 dcf83f84→当前 恒为可确认 destructive——
 // 无 flag 被拦（分类不变），带 flag 仅在注记上开白名单口子；原“additive 不得携带
 // ack”的构建器约束由 tests/tag-catalog-change.test.js 的 ack 用例覆盖。
-test('the flag does not change the classification, only the acknowledgement', () => {
+test('确认参数只记录用户确认，不改变词表变更的分类', () => {
     const without = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
     assert.equal(without.item.changeLevel, 'destructive');
     assert.equal(without.item.outcome, 'destructive-change');
@@ -348,7 +348,7 @@ test('the flag does not change the classification, only the acknowledgement', ()
     assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
 });
 
-test('classify reports acknowledgement eligibility before anything is applied', () => {
+test('classify 在实际更新前报告本次变更是否允许明确确认', () => {
     const eligible = cli.classifyReport({ oldPath: OLD_ALIAS_REMOVAL, newPath: REGISTRY_FILE });
     assert.equal(eligible.command, 'classify');
     assert.equal(eligible.changeLevel, 'destructive');

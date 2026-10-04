@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render one fresh historical paper page from a sealed projection packet."""
+"""根据历史论文记录及其来源证明生成单篇论文页面。"""
 
 import json
 import base64
@@ -158,19 +158,19 @@ def render_packet(packet):
         if packet.get('publicationSource') is not None:
             raise ValueError('non-direct packet cannot carry publication source proof')
         if not isinstance(assignment, dict):
-            raise ValueError('taxonomy object is required')
+            raise ValueError('历史论文缺少有效的标签选择记录。')
         if assignment.get('status') != 'assigned' or assignment.get('paperId') != f'arxiv:{paper.get("arxivId")}':
-            raise ValueError('assigned taxonomy belongs to another paper')
+            raise ValueError('历史论文的标签尚未完成分配，或标签记录属于另一篇论文。')
         concepts = {item['id']: item for item in assignment.get('concepts', [])}
         ordered = []
         for concept_id in [assignment.get('primaryTaskId'), assignment.get('primaryMethodId'), *assignment.get('conceptIds', [])]:
             if concept_id and concept_id not in ordered:
                 ordered.append(concept_id)
         if any(concept_id not in concepts for concept_id in ordered):
-            raise ValueError('taxonomy concept labels are incomplete')
+            raise ValueError('历史论文的标签记录中，部分主标签或已选概念没有对应的概念记录。')
         if not isinstance(assignment.get('registryVersion'), str) \
                 or not isinstance(assignment.get('registrySha256'), str):
-            raise ValueError('taxonomy assignment registry identity is incomplete')
+            raise ValueError('历史论文的标签记录中，词表版本或 SHA 缺失，或不是字符串。')
         labels = [f'#{concepts[concept_id]["preferredLabel"]["zh"]}' for concept_id in ordered]
         projected = dict(paper)
     publisher = load_publish_to_blog()

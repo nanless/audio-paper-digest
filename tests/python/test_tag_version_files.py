@@ -91,7 +91,7 @@ class TagVersionFilesTests(unittest.TestCase):
     def test_invalid_archive_fails_before_any_write(self):
         self.seed()
         self.put('data/taxonomy-snapshots/'+'c'*64+'.json', self.old)
-        with self.assertRaisesRegex(self.error, '文件名 SHA'):
+        with self.assertRaisesRegex(self.error, '标签词表归档文件名中的 SHA 与快照记录不一致。'):
             self.call('prepare_tag_catalog_staged_files', self.stage, self.repo)
         self.assertEqual(list(self.stage.iterdir()), [])
 
@@ -100,17 +100,17 @@ class TagVersionFilesTests(unittest.TestCase):
         changed = json.loads(json.dumps(self.old))
         changed['concepts'][0]['ancestorIds'] = ['task.absent']
         self.put('data/taxonomy-snapshots/'+'a'*64+'.json', changed)
-        with self.assertRaisesRegex(self.error, 'chain'):
+        with self.assertRaisesRegex(self.error, '保存的标签概念的上级列表包含缺失、跨分类或停用的概念，或与上级概念记录的顺序不一致。'):
             self.call('tag_catalog_file_contents', self.repo)
         changed['concepts'][0]['ancestorIds'] = []
         changed['concepts'][0]['zh'] = '冒名'
         self.put('data/taxonomy-snapshots/'+'a'*64+'.json', changed)
-        with self.assertRaisesRegex(self.error, '内容冲突'):
+        with self.assertRaisesRegex(self.error, '标签词表的同一个 SHA 对应了不同的快照内容'):
             self.call('tag_catalog_file_contents', self.repo)
 
     def test_symlink_and_uncontrolled_paths_rejected(self):
         (self.repo/'data').symlink_to(self.stage, target_is_directory=True)
-        with self.assertRaisesRegex(self.error, '逃逸'):
+        with self.assertRaisesRegex(self.error, '标签词表文件的路径超出了博客仓库。'):
             self.call('tag_catalog_file_contents', self.repo)
         for relative in ('data/unrelated.json', 'static/data/taxonomy-snapshots/no.json',
                          'data/../taxonomy-registry.json', 'data\\taxonomy-registry.json'):
@@ -220,7 +220,7 @@ class TagVersionFilesTests(unittest.TestCase):
                     'stagedRelativePath': path.relative_to(self.stage).as_posix(),
                     'expectedSha256': self.env['_sha256_file'](path)} for path in paths]
         self.write(self.repo/'data/taxonomy-catalog.json', (self.stage/'data/taxonomy-catalog.json').read_bytes())
-        with self.assertRaisesRegex(self.error, '镜像漂移'):
+        with self.assertRaisesRegex(self.error, 'data 与 static/data 中的标签词表版本目录内容不一致。'):
             self.call('tag_catalog_file_contents', self.repo)
         resumed = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
                             installation={'files': records})

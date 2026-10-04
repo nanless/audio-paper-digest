@@ -266,7 +266,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     };
     assert.throws(
         () => deep.enforceConferenceReaderResourceClaims(conflictingDraft, identity, text),
-        /verified resource identity 为 unavailable/
+        /资源身份记录中的可达状态为 unavailable/
     );
     const qualifiedDraft = structuredClone(conflictingDraft);
     qualifiedDraft.sections[0].body = '原文称代码已公开，但本次链接核验返回 HTTP 404，当前不可用。';
@@ -679,7 +679,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     modelConflictDraft.sections[0].body = '本文模型权重已开源并可用。';
     assert.throws(
         () => deep.enforceConferenceReaderResourceClaims(modelConflictDraft, identity, text),
-        /verified resource identity 中该类型没有 available 记录/
+        /资源身份记录中没有该类型处于 available 状态的资源/
     );
     for (const body of [
         '本文代码已开源，但模型权重当前不可用。',
@@ -722,7 +722,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
         '本文代码已开源，地址 github.com/example/unavailable-project。';
     assert.throws(
         () => deep.enforceConferenceReaderResourceClaims(bareUnavailableSlugDraft, identity, text),
-        /verified resource identity 为 unavailable/
+        /资源身份记录中的可达状态为 unavailable/
     );
 
     const twoCodeText = [
@@ -748,7 +748,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
         () => deep.enforceConferenceReaderResourceClaims(
             crossedLinksDraft, twoCodeIdentity, twoCodeText
         ),
-        /verified resource identity/
+        /资源身份记录/
     );
     const repeatedTokenDraft = structuredClone(conflictingDraft);
     repeatedTokenDraft.sections[0] = {
@@ -758,7 +758,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     };
     assert.throws(
         () => deep.enforceConferenceReaderResourceClaims(repeatedTokenDraft, identity, text),
-        /verified resource identity 为 unavailable/
+        /资源身份记录中的可达状态为 unavailable/
     );
     for (const [kind, body, type] of [
         ['method_overview', '代码已经开源，可直接下载。', 'code'],
@@ -804,7 +804,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     forgedTemporary.identitySha256 = deep.stableFingerprint(forgedBody);
     assert.throws(
         () => deep.enforceConferenceReaderResourceClaims(qualifiedDraft, forgedTemporary, text),
-        /需要可重放的 verified resource identity/
+        /会议读者文章的资源身份记录与原文不一致/
     );
 });
 

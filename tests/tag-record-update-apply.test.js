@@ -315,7 +315,7 @@ function currentStage(fx) {
         stage: analysis.papers[0].analysisManifest.stages.taxonomySeal };
 }
 
-test('apply reseals analysis, run, state and archives the old completion receipt', async t => {
+test('实际更新会保存分析、运行和进程记录，并归档原完成凭证', async t => {
     const fx = fixture(t);
     const runtime = runtimeFor(fx);
     assert.equal(fs.existsSync(fx.receiptFile), true);
@@ -406,7 +406,7 @@ test('apply reseals analysis, run, state and archives the old completion receipt
     assert.equal(sha256(archivedBytes), sha256(fx.originalReceiptBytes));
 });
 
-test('a tampered state checkpoint aborts apply without touching analysis bytes', async t => {
+test('进程检查点发生变化时，更新会停止，并保留原分析文件', async t => {
     const fx = fixture(t);
     const { state, plan } = planOf(fx);
     assert.equal(plan.writes.length, 1);
@@ -419,7 +419,7 @@ test('a tampered state checkpoint aborts apply without touching analysis bytes',
     const tamperedBytes = fs.readFileSync(fx.stateFile);
 
     await assert.rejects(() => applyOf(fx, plan, state.stateSha256),
-        /process checkpoint 在重放期间发生变化/);
+        /进程检查点在标签记录更新期间发生变化/);
 
     const after = coreSnapshot(fx);
     assert.deepEqual(after.analysis, before.analysis, 'analysis 不得被改写');
@@ -430,7 +430,7 @@ test('a tampered state checkpoint aborts apply without touching analysis bytes',
         'complete', '进程仍保持篡改后的完整状态，没有半个封口');
 });
 
-test('a tampered analysis byte aborts apply before any write', async t => {
+test('分析文件内容发生变化时，更新会在写入前停止', async t => {
     const fx = fixture(t);
     const { plan } = planOf(fx);
     assert.equal(plan.writes.length, 1);
@@ -466,7 +466,7 @@ test('a tampered analysis byte aborts apply before any write', async t => {
     }).analysisFileSha256, tamperedSha256);
 
     await assert.rejects(() => applyOf(fx, plan, fx.state.stateSha256),
-        /analysis 字节在重放期间发生变化/);
+        /分析文件内容发生变化/);
 
     const after = coreSnapshot(fx);
     assert.equal(fs.readFileSync(fx.analysisFile).equals(tamperedBytes), true,
@@ -477,7 +477,7 @@ test('a tampered analysis byte aborts apply before any write', async t => {
     assert.deepEqual(after.executionEntries, before.executionEntries);
 });
 
-test('a blocked paper fails the apply run closed with exit code 1', async t => {
+test('有论文无法更新时，本次更新以退出码 1 结束', async t => {
     const fx = fixture(t, { registrySha256: DESTRUCTIVE_OLD_SHA, annotation: false });
     const runtime = runtimeFor(fx);
     const before = coreSnapshot(fx);
@@ -502,7 +502,7 @@ test('a blocked paper fails the apply run closed with exit code 1', async t => {
     }
 });
 
-test('a second apply is already-current and writes nothing', async t => {
+test('再次更新已使用当前词表的记录时，不写入文件', async t => {
     const fx = fixture(t);
     const runtime = runtimeFor(fx);
 
@@ -543,7 +543,7 @@ function archiveFiles(t) {
         files: { tagCatalogFile: source, tagCatalogHistoryDir: historyDir } };
 }
 
-test('--archive-snapshot copies the current table by content SHA and stays idempotent', async t => {
+test('--archive-snapshot 按内容哈希归档当前词表，重复执行不产生额外快照', async t => {
     const fx = archiveFiles(t);
     assert.equal(fs.existsSync(fx.historyDir), false);
 
@@ -569,7 +569,7 @@ test('--archive-snapshot copies the current table by content SHA and stays idemp
     assert.equal(fs.readFileSync(target).equals(fx.bytes), true);
 });
 
-test('--archive-snapshot refuses an existing archive whose bytes no longer match its name', async t => {
+test('已有归档内容的哈希与文件名不符时，--archive-snapshot 拒绝继续', async t => {
     const fx = archiveFiles(t);
     await runMain(['--archive-snapshot'], { files: fx.files });
     const sha = sha256(fx.bytes);
@@ -594,7 +594,7 @@ test('--archive-snapshot refuses an existing archive whose bytes no longer match
 });
 
 // ——— destructive 显式确认通道在真实（tmp 夹具）写入链路上的行为 ———
-test('a destructive-eligible process reseals end-to-end with --acknowledge-destructive', async t => {
+test('提供 --acknowledge-destructive 后，进程可以更新允许确认的破坏性变更', async t => {
     const fx = fixture(t, { registrySha256: DESTRUCTIVE_OLD_SHA, annotation: false });
     const runtime = runtimeFor(fx);
     const before = coreSnapshot(fx);

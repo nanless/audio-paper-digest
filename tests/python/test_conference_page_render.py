@@ -184,7 +184,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unavailable structure'):
             MODULE.render_packet(packet)
         packet = self.packet(); packet['capabilities']['tables'] = 'available'
-        with self.assertRaisesRegex(ValueError, 'source-bound weak'):
+        with self.assertRaisesRegex(ValueError, '会议论文的标签记录或来源能力记录无效，标签记录不属于当前论文，或来源能力不在允许范围内。'):
             MODULE.render_packet(packet)
 
     def test_arxiv_preprint_links_are_hidden_from_conference_projection(self):
@@ -238,7 +238,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'api-scoring-audit-v2'):
             MODULE.render_packet(packet)
         packet = self.packet(); packet['taxonomy']['registrySha256'] = 'b' * 64
-        with self.assertRaisesRegex(ValueError, 'taxonomy seal'):
+        with self.assertRaisesRegex(ValueError, '会议论文的标签选择记录与分析阶段记录的协议、词表或所选标签不一致，或标签阶段尚未完成。'):
             MODULE.render_packet(packet)
         packet = self.packet(); packet['publication']['pdfUrl'] = 'https://arxiv.org/pdf/1234.5678.pdf'
         packet['paper']['conferencePublication'] = packet['publication']

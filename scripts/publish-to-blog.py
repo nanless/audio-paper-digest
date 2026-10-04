@@ -2739,31 +2739,28 @@ def _researcher_public_url(relative):
 
 
 def build_tag_catalog_snapshot(tag_catalog=None):
-    """Fold the read-only registry into the compact blog-search snapshot.
+    """根据只读词表生成博客搜索使用的精简快照。
 
-    Each concept carries ``id``/``facet``/``zh``/``en``/``aliases`` plus
-    ``ancestorIds`` ordered root first, so the blog can recall a child paper
-    from a parent concept (e.g. ``method.lora`` from 参数高效微调) and match
-    registry aliases (e.g. 说话人日志 → task.diarization) without ever
-    re-deriving tag meanings and hierarchy client-side.
+    每个概念保留 id、facet、中英文名称和别名，ancestorIds 按从最高层到直接上级的顺序记录。
+    博客可据此按上级概念查询论文，或用别名匹配标签，无需在浏览器中重新推导标签含义和层级。
     """
     registry = _PAGE_TAG_CATALOG if tag_catalog is None else tag_catalog
     if not isinstance(registry, dict):
-        raise PublishDataValidationError('taxonomy registry 快照输入非法')
+        raise PublishDataValidationError('生成标签词表快照的输入必须是对象。')
     registry_sha256 = registry.get('registrySha256')
     if not isinstance(registry_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', registry_sha256):
-        raise PublishDataValidationError('taxonomy registry 快照缺少有效 registrySha256')
+        raise PublishDataValidationError('标签词表快照缺少有效的 registrySha256。')
     registry_version = registry.get('version')
     if not isinstance(registry_version, str) or not registry_version:
-        raise PublishDataValidationError('taxonomy registry 快照缺少 registryVersion')
+        raise PublishDataValidationError('标签词表快照缺少有效的版本名称。')
     concepts = registry.get('concepts')
     if not isinstance(concepts, list) or not concepts:
-        raise PublishDataValidationError('taxonomy registry 快照缺少 concepts')
+        raise PublishDataValidationError('标签词表快照缺少非空的概念列表。')
     records = {}
     ordered = []
     for concept in concepts:
         if not isinstance(concept, dict):
-            raise PublishDataValidationError('taxonomy registry 快照含非法 concept')
+            raise PublishDataValidationError('标签词表快照中的每个概念都必须是对象。')
         concept_id = concept.get('id')
         preferred = concept.get('preferredLabel')
         aliases = concept.get('aliases')
@@ -2775,7 +2772,7 @@ def build_tag_catalog_snapshot(tag_catalog=None):
                 or not isinstance(aliases, list)
                 or any(not isinstance(alias, str) or not alias for alias in aliases)):
             raise PublishDataValidationError(
-                f'taxonomy registry 快照 concept 非法: {concept_id!r}'
+                f'标签词表快照中的概念无效：{concept_id!r}'
             )
         record = {
             'id': concept_id,
@@ -2789,7 +2786,7 @@ def build_tag_catalog_snapshot(tag_catalog=None):
             value = concept.get(field)
             if value is not None:
                 if not isinstance(value, str) or not value:
-                    raise PublishDataValidationError(f'taxonomy concept {field} 非法: {concept_id}')
+                    raise PublishDataValidationError(f'标签概念 {concept_id} 的 {field} 必须是非空字符串。')
                 record[field] = value
         records[concept_id] = (record, concept)
         ordered.append(record)
@@ -2801,7 +2798,7 @@ def build_tag_catalog_snapshot(tag_catalog=None):
             parent = records.get(parent_id)
             if parent is None or parent_id in seen:
                 raise PublishDataValidationError(
-                    f'taxonomy registry 快照祖先链非法: {concept["id"]}'
+                    f'标签概念 {concept["id"]} 的上级概念缺失，或上级关系存在循环。'
                 )
             seen.add(parent_id)
             chain.append(parent_id)
@@ -2816,9 +2813,9 @@ def build_tag_catalog_snapshot(tag_catalog=None):
 
 
 def tag_catalog_snapshot_bytes(snapshot):
-    """Canonical, timestamp-free bytes: identical registry ⇒ identical file."""
+    """按固定 JSON 格式生成不含时间戳的字节；相同快照会生成相同文件。"""
     if not isinstance(snapshot, dict):
-        raise PublishDataValidationError('taxonomy registry 快照对象非法')
+        raise PublishDataValidationError('标签词表快照必须是对象。')
     return (
         json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         + '\n'
@@ -2826,20 +2823,20 @@ def tag_catalog_snapshot_bytes(snapshot):
 
 
 def _validate_tag_catalog_snapshot(snapshot):
-    """Validate frozen projection shape without guessing a missing parent chain."""
+    """核验已保存词表快照的格式和上级关系，不补造缺失的上级概念。"""
     if (not isinstance(snapshot, dict)
             or snapshot.get('contract') != TAG_CATALOG_SNAPSHOT_CONTRACT
             or not re.fullmatch(r'[0-9a-f]{64}', str(snapshot.get('registrySha256') or ''))
             or not isinstance(snapshot.get('registryVersion'), str)
             or not snapshot['registryVersion']
             or not isinstance(snapshot.get('concepts'), list) or not snapshot['concepts']):
-        raise PublishDataValidationError('taxonomy frozen snapshot 非法')
+        raise PublishDataValidationError('保存的标签词表快照格式无效，或缺少协议、版本、SHA 或概念列表。')
     by_id = {}
     facets = {'task', 'method', 'setting', 'signal', 'application', 'research_focus',
               'artifact', 'scientific_topic', 'model_family'}
     for node in snapshot['concepts']:
         if not isinstance(node, dict):
-            raise PublishDataValidationError('taxonomy frozen concept 非法')
+            raise PublishDataValidationError('保存的标签词表快照中的每个概念都必须是对象。')
         concept_id = node.get('id')
         facet = node.get('facet')
         if (not isinstance(concept_id, str)
@@ -2853,21 +2850,21 @@ def _validate_tag_catalog_snapshot(snapshot):
                 or not isinstance(node.get('ancestorIds'), list)
                 or any(not isinstance(value, str) or not value for value in node['ancestorIds'])
                 or node.get('status', 'active') not in {'active', 'deprecated'}):
-            raise PublishDataValidationError(f'taxonomy frozen concept 非法: {concept_id!r}')
+            raise PublishDataValidationError(f'保存的标签词表快照中存在无效概念：{concept_id!r}')
         for field in ('definition', 'scopeNote'):
             if field in node and (not isinstance(node[field], str) or not node[field]):
-                raise PublishDataValidationError(f'taxonomy frozen {field} 非法')
+                raise PublishDataValidationError(f'保存的标签概念中，{field} 必须是非空字符串。')
         by_id[concept_id] = node
     for node in by_id.values():
         chain = node['ancestorIds']
         if len(set(chain)) != len(chain) or node['id'] in chain:
-            raise PublishDataValidationError('taxonomy frozen ancestor cycle')
+            raise PublishDataValidationError('保存的标签概念的上级列表存在重复，或包含概念自身。')
         for position, ancestor in enumerate(chain):
             parent = by_id.get(ancestor)
             if (parent is None or parent['facet'] != node['facet']
                     or parent['ancestorIds'] != chain[:position]
                     or parent.get('status', 'active') != 'active'):
-                raise PublishDataValidationError('taxonomy frozen ancestor chain 不闭合')
+                raise PublishDataValidationError('保存的标签概念的上级列表包含缺失、跨分类或停用的概念，或与上级概念记录的顺序不一致。')
     return snapshot
 
 
@@ -2876,16 +2873,16 @@ def _validate_tag_version_catalog(catalog):
             or catalog.get('contract') != 'paper-taxonomy-version-catalog-v1'
             or not isinstance(catalog.get('snapshots'), list) or not catalog['snapshots']
             or not re.fullmatch(r'[a-f0-9]{64}', str(catalog.get('currentSha256') or ''))):
-        raise PublishDataValidationError('taxonomy version catalog 非法')
+        raise PublishDataValidationError('标签词表版本目录格式无效，或缺少协议、快照列表或当前版本 SHA。')
     versions = {}
     for snapshot in catalog['snapshots']:
         _validate_tag_catalog_snapshot(snapshot)
         sha = snapshot['registrySha256']
         if sha in versions:
-            raise PublishDataValidationError('taxonomy version catalog 重复 SHA')
+            raise PublishDataValidationError('标签词表版本目录中存在重复的 SHA。')
         versions[sha] = snapshot
     if catalog['currentSha256'] not in versions:
-        raise PublishDataValidationError('taxonomy catalog 缺少当前版本')
+        raise PublishDataValidationError('标签词表版本目录中未保存当前版本的快照。')
     return versions
 
 
@@ -2899,7 +2896,7 @@ def _validate_tag_display_policy(policy):
                    or not re.fullmatch(r'[a-f0-9]{64}', policy[key])
                    for key in fields - {'contract'})
             or policy['baseRegistrySha256'] == policy['preferredRegistrySha256']):
-        raise PublishDataValidationError('taxonomy presentation policy 非法')
+        raise PublishDataValidationError('标签展示策略的字段、协议或 SHA 格式无效，或选用版本与基础版本相同。')
     return policy
 
 
@@ -2929,7 +2926,7 @@ def _historical_tag_prompt_text_sha256(snapshot):
 
 
 def _select_tag_display_version(repo, current, versions):
-    """An explicit, byte-bound display choice never changes per-paper signing."""
+    """按明确的展示策略选择词表版本，不改变单篇论文的签发记录。"""
     relatives = ['data/taxonomy-presentation-policy.json',
                  'static/data/taxonomy-presentation-policy.json']
     def read_regular(relative):
@@ -2939,53 +2936,53 @@ def _select_tag_display_version(repo, current, versions):
             if item == repo:
                 break
             if item.is_symlink():
-                raise PublishDataValidationError('taxonomy policy/快照路径不得为符号链接')
+                raise PublishDataValidationError('标签展示策略或快照的路径及其父目录不得是符号链接。')
         if not target.exists():
             return None
         if not target.is_file() or target.stat().st_nlink != 1:
-            raise PublishDataValidationError('taxonomy policy/快照必须为普通单链接文件')
+            raise PublishDataValidationError('标签展示策略和快照必须是普通文件，且只能有一个硬链接。')
         return target.read_bytes()
     raw_mirrors = [read_regular(relative) for relative in relatives]
     if raw_mirrors == [None, None]:
         return current, {}
     if raw_mirrors[0] is None or raw_mirrors[0] != raw_mirrors[1]:
-        raise PublishDataValidationError('taxonomy presentation policy data/static 字节漂移')
+        raise PublishDataValidationError('标签展示策略只缺少一份副本，或 data 与 static/data 中的文件内容不完全一致。')
     def unique_object(pairs):
         result = {}
         for key, value in pairs:
             if key in result:
-                raise PublishDataValidationError('taxonomy presentation policy JSON 重复键')
+                raise PublishDataValidationError('标签展示策略的 JSON 中存在重复键。')
             result[key] = value
         return result
     try:
         policy = _validate_tag_display_policy(
             json.loads(raw_mirrors[0].decode('utf-8'), object_pairs_hook=unique_object))
     except (ValueError, UnicodeError) as exc:
-        raise PublishDataValidationError('taxonomy presentation policy JSON 非法') from exc
+        raise PublishDataValidationError('标签展示策略文件无法按 UTF-8 JSON 读取，或其中的策略内容未通过校验。') from exc
     base_sha = policy['baseRegistrySha256']
     preferred_sha = policy['preferredRegistrySha256']
     if (current['registrySha256'] != base_sha
             or hashlib.sha256(tag_catalog_snapshot_bytes(current)).hexdigest()
             != policy['baseSnapshotSha256']):
-        raise PublishDataValidationError('taxonomy presentation policy 不匹配实际签发来源')
+        raise PublishDataValidationError('标签展示策略记录的基础词表 SHA 或快照 SHA 与实际签发来源不一致。')
     preferred = versions.get(preferred_sha)
     if preferred is None:
-        raise PublishDataValidationError('taxonomy presentation policy 缺少冻结首选快照')
+        raise PublishDataValidationError('标签展示策略选用的版本没有保存对应的词表快照。')
     raw = tag_catalog_snapshot_bytes(preferred)
     if (hashlib.sha256(raw).hexdigest() != policy['preferredSnapshotSha256']
             or _historical_tag_prompt_text_sha256(preferred)
             != policy['preferredProjectionSha256']):
-        raise PublishDataValidationError('taxonomy presentation policy 快照/投影 SHA 漂移')
+        raise PublishDataValidationError('标签展示策略记录的快照 SHA 或提示文本 SHA 与重新计算的结果不一致。')
     if preferred['concepts'][:len(current['concepts'])] != current['concepts']:
-        raise PublishDataValidationError('taxonomy presentation policy 不是原词表逐对象追加')
+        raise PublishDataValidationError('标签展示策略选用的词表修改了已有概念，或改变了它们的顺序；只允许在原列表末尾追加概念。')
     # Both archived copies and both catalog entries must already carry exactly
     # this approved snapshot; a policy may not manufacture a missing version.
     for prefix in ('data', 'static/data'):
         if read_regular(f'{prefix}/taxonomy-snapshots/{preferred_sha}.json') != raw:
-            raise PublishDataValidationError('taxonomy presentation policy 首选归档字节不闭合')
+            raise PublishDataValidationError('标签展示策略选用版本的归档副本缺失，或文件内容与对应快照不完全一致。')
         catalog = _read_tag_catalog_file(repo, f'{prefix}/taxonomy-catalog.json')
         if catalog is None or _validate_tag_version_catalog(catalog).get(preferred_sha) != preferred:
-            raise PublishDataValidationError('taxonomy presentation policy 首选 catalog 不闭合')
+            raise PublishDataValidationError('标签展示策略选用的版本未在对应版本目录中保存，或目录中的快照内容不一致。')
     return preferred, dict(zip(relatives, raw_mirrors))
 
 
@@ -3009,21 +3006,21 @@ def _read_tag_catalog_file(repo, relative):
     try:
         target.resolve().relative_to(repo)
     except ValueError as exc:
-        raise PublishDataValidationError('taxonomy asset 路径逃逸') from exc
+        raise PublishDataValidationError('标签词表文件的路径超出了博客仓库。') from exc
     if target.is_symlink():
-        raise PublishDataValidationError('taxonomy asset 不得为符号链接')
+        raise PublishDataValidationError('标签词表文件不得是符号链接。')
     if not target.exists():
         return None
     if not target.is_file():
-        raise PublishDataValidationError('taxonomy asset 必须是普通文件')
+        raise PublishDataValidationError('标签词表文件必须是普通文件。')
     try:
         return json.loads(target.read_text(encoding='utf-8'))
     except (ValueError, UnicodeError) as exc:
-        raise PublishDataValidationError('taxonomy asset JSON 非法') from exc
+        raise PublishDataValidationError('标签词表文件不是有效的 UTF-8 JSON。') from exc
 
 
 def tag_catalog_file_contents(blog_repo=None):
-    """Prepare the complete immutable history and current mirrors before writing."""
+    """写入前准备完整的词表历史快照，以及当前版本在两处目录中的副本。"""
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
     current = _validate_tag_catalog_snapshot(build_tag_catalog_snapshot())
     versions = {}
@@ -3031,7 +3028,7 @@ def tag_catalog_file_contents(blog_repo=None):
         _validate_tag_catalog_snapshot(snapshot)
         sha = snapshot['registrySha256']
         if sha in versions and versions[sha] != snapshot:
-            raise PublishDataValidationError(f'taxonomy immutable SHA 内容冲突: {sha}')
+            raise PublishDataValidationError(f'标签词表的同一个 SHA 对应了不同的快照内容：{sha}')
         versions[sha] = snapshot
     catalogs = []
     for prefix in ('data', 'static/data'):
@@ -3047,17 +3044,17 @@ def tag_catalog_file_contents(blog_repo=None):
         archive = repo / prefix / 'taxonomy-snapshots'
         if archive.exists():
             if archive.is_symlink() or not archive.is_dir():
-                raise PublishDataValidationError('taxonomy archive 路径非法')
+                raise PublishDataValidationError('标签词表归档路径必须是目录，且不得是符号链接。')
             for target in sorted(archive.iterdir()):
                 if not re.fullmatch(r'[a-f0-9]{64}\.json', target.name):
-                    raise PublishDataValidationError('taxonomy archive 含非受控文件')
+                    raise PublishDataValidationError('标签词表归档目录中存在不符合 SHA 文件命名要求的文件。')
                 snapshot = _read_tag_catalog_file(repo, target.relative_to(repo))
                 _validate_tag_catalog_snapshot(snapshot)
                 if target.stem != snapshot['registrySha256']:
-                    raise PublishDataValidationError('taxonomy archive 文件名 SHA 不匹配')
+                    raise PublishDataValidationError('标签词表归档文件名中的 SHA 与快照记录不一致。')
                 retain(snapshot)
     if len(catalogs) == 2 and catalogs[0] != catalogs[1]:
-        raise PublishDataValidationError('taxonomy catalog data/static 镜像漂移')
+        raise PublishDataValidationError('data 与 static/data 中的标签词表版本目录内容不一致。')
     retain(current)
     display, policy_assets = _select_tag_display_version(repo, current, versions)
     catalog = {'contract': 'paper-taxonomy-version-catalog-v1',
@@ -3083,16 +3080,16 @@ def prepare_tag_catalog_staged_files(stage_root, blog_repo=None, *, single_page=
         # version catalogue from that partially installed worktree.
         records = installation.get('files') if isinstance(installation, dict) else None
         if not isinstance(records, list):
-            raise PublishDataValidationError('taxonomy installation journal 非法')
+            raise PublishDataValidationError('标签词表安装记录缺少有效的文件列表。')
         selected = [record for record in records if isinstance(record, dict)
                     and _is_tag_catalog_file_path(record.get('path', ''))]
         if single_page:
             if selected:
-                raise PublishDataValidationError('单篇 journal 不得安装全站 taxonomy')
+                raise PublishDataValidationError('单篇发布的安装记录不得包含全站标签词表文件。')
             return []
         expected = tag_catalog_file_contents(stage)
         if {record['path'] for record in selected} != set(expected):
-            raise PublishDataValidationError('taxonomy journal staging 资产集合不闭合')
+            raise PublishDataValidationError('安装记录中的标签词表文件集合与暂存区应有的文件集合不一致。')
         paths = []
         for record in selected:
             relative = record['path']
@@ -3102,14 +3099,14 @@ def prepare_tag_catalog_staged_files(stage_root, blog_repo=None, *, single_page=
                     or target.is_symlink() or not target.is_file()
                     or _sha256_file(target) != record.get('expectedSha256')
                     or target.read_bytes() != expected[relative]):
-                raise PublishDataValidationError('taxonomy journal staging 字节不匹配')
+                raise PublishDataValidationError('标签词表暂存文件无效，或其安装路径、删除标记、SHA 或文件内容与安装记录不一致。')
             paths.append(target)
         return paths
     assets = tag_catalog_file_contents(repo)
     if single_page:
         if any(not (repo / relative).is_file() or (repo / relative).read_bytes() != raw
                for relative, raw in assets.items()):
-            raise PublishDataValidationError('单篇发布不得升级全站 taxonomy；先完成完整批次版本资产发布')
+            raise PublishDataValidationError('单篇发布不得更新全站标签词表；请先通过完整批次发布词表版本文件。')
         return []
     paths = []
     for relative, raw in assets.items():
@@ -3117,20 +3114,18 @@ def prepare_tag_catalog_staged_files(stage_root, blog_repo=None, *, single_page=
         try:
             target.resolve().relative_to(stage)
         except ValueError as exc:
-            raise PublishDataValidationError('taxonomy staging 路径逃逸') from exc
+            raise PublishDataValidationError('标签词表文件的暂存路径超出了暂存目录。') from exc
         if target.is_symlink():
-            raise PublishDataValidationError('taxonomy staging 不得为符号链接')
+            raise PublishDataValidationError('标签词表暂存文件不得是符号链接。')
         _atomic_write_bytes(target, raw)
         paths.append(target)
     return paths
 
 
 def export_tag_catalog_files(blog_repo=None):
-    """Write the registry snapshot into the blog repo (read-only wrt registry).
+    """将词表版本文件写入博客仓库，不修改原词表。
 
-    Returns the paths actually rewritten.  Unchanged bytes are left untouched so
-    repeated generation runs do not dirty the blog worktree, and a missing blog
-    root (only reachable from synthetic/fail-fast callers) writes nothing.
+    返回实际写入的文件路径。已有文件内容相同时跳过写入；博客根目录不存在时不写入任何文件。
     """
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
     if not repo.is_dir():
@@ -3147,32 +3142,30 @@ def export_tag_catalog_files(blog_repo=None):
 
 
 def build_flat_tag_compat_metadata(parsed, *, required=False):
-    """Bind current tag meanings and hierarchy while retaining Hugo's flat ``tags`` field.
+    """保留 Hugo 的 tags 字段，并记录当前词表中标签的含义和层级。
 
-    Legacy maintenance callers may omit current tag selection proof. New production
-    inputs are validated before rendering and therefore always take this path.
-    Once a payload claims current validity, every ID, label, facet and role is
-    replayed against the exact registry bytes instead of trusting cached fields.
+    旧记录维护时可以缺少当前标签选择记录；required 为 True 时必须提供有效记录。
+    输入声明标签选择有效后，本函数仍按当前词表逐项核对 ID、中文名称、分类维度和主标签角色。
     """
     validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
     if not isinstance(validation, dict) or validation.get('valid') is not True:
         if required:
-            raise PublishDataValidationError('新页面缺少有效 current taxonomy selection')
+            raise PublishDataValidationError('新页面缺少通过当前词表检查的标签选择记录。')
         return None
     if validation.get('registryVersion') != _PAGE_TAG_CATALOG['version'] \
             or validation.get('registrySha256') != _PAGE_TAG_CATALOG['registrySha256']:
-        raise PublishDataValidationError('页面 taxonomy selection 与当前 registry 不一致')
+        raise PublishDataValidationError('页面的标签选择记录与当前词表版本或 SHA 不一致。')
     tags = parsed.get('tags')
     concept_ids = validation.get('conceptIds')
     if not isinstance(tags, list) or not isinstance(concept_ids, list) \
             or len(tags) != len(concept_ids) or len(tags) not in range(3, 6):
-        raise PublishDataValidationError('页面 taxonomy 标签与 concept ID 集合不闭合')
+        raise PublishDataValidationError('页面标签或概念 ID 列表无效，或两者数量不一致；标签数量必须为 3–5 个。')
     concepts = []
     for tag, concept_id in zip(tags, concept_ids):
         concept = _PAGE_ACTIVE_TAGS_BY_ID.get(concept_id)
         label = str(tag or '').removeprefix('#')
         if not concept or concept['preferredLabel']['zh'] != label:
-            raise PublishDataValidationError('页面 taxonomy concept ID 与中文首选标签不一致')
+            raise PublishDataValidationError('页面标签与对应概念的中文首选名称不一致，或该概念未在当前词表中启用。')
         concepts.append({
             'id': concept_id,
             'facet': concept['facet'],
@@ -3188,7 +3181,7 @@ def build_flat_tag_compat_metadata(parsed, *, required=False):
             or not method or method['facet'] != 'method' \
             or method['preferredLabel']['zh'] != primary_method \
             or primary_task_id not in concept_ids or primary_method_id not in concept_ids:
-        raise PublishDataValidationError('页面 taxonomy 主任务/主方法角色无法重放')
+        raise PublishDataValidationError('页面的主任务或主方法不符合对应的分类、中文首选名称或已选概念。')
     return {
         'contract': FLAT_TAG_COMPAT_CONTRACT,
         'selectionContract': TAG_SELECTION_CONTRACT,
@@ -3876,24 +3869,24 @@ def _validated_detailed_core_summary(paper, parsed):
     if not isinstance(stage, dict) \
             or stage.get('status') not in {'complete', 'not_needed'} \
             or stage.get('contractVersion') != CORE_SUMMARY_DETAILED_CONTRACT:
-        raise PublishDataValidationError('现代 Reader 的详细核心摘要阶段未按 v3 封口')
+        raise PublishDataValidationError('读者文章的详细核心摘要阶段记录缺失、尚未完成，或不符合 v3 规则。')
     analysis = paper.get('analysis')
     stored_analysis_fields = parse_analysis(analysis) if isinstance(analysis, str) else None
     summary = stored_analysis_fields.get('summary') if isinstance(stored_analysis_fields, dict) else None
     if not isinstance(summary, str) or not summary.strip():
-        raise PublishDataValidationError('现代 Reader 缺少详细核心摘要正文')
+        raise PublishDataValidationError('读者文章缺少有效的详细核心摘要正文。')
     summary = summary.strip()
     semantic_issue = _detailed_core_summary_semantic_issue(summary)
     if semantic_issue:
         raise PublishDataValidationError(
-            f'现代 Reader 的详细核心摘要未达到 {CORE_SUMMARY_DETAILED_CONTRACT}: '
+            f'读者文章的详细核心摘要未达到 {CORE_SUMMARY_DETAILED_CONTRACT}: '
             f'{semantic_issue}'
         )
     if isinstance(parsed, dict) and parsed.get('summary') != summary:
-        raise PublishDataValidationError('现代 Reader 的 parsed 核心摘要与 canonical 不一致')
+        raise PublishDataValidationError('读者文章的已解析核心摘要与分析正文中的摘要不一致。')
     summary_sha = _javascript_string_sha256(summary)
     if stage.get('summarySha256') != summary_sha:
-        raise PublishDataValidationError('现代 Reader 的详细核心摘要与阶段 SHA 不一致')
+        raise PublishDataValidationError('读者文章的详细核心摘要 SHA 与阶段记录不一致。')
     required_stage_shas = (
         'fingerprint', 'inputAnalysisSha256', 'outputAnalysisSha256',
         'inputSummarySha256', 'inputStructureProjectionSha256',
@@ -3901,10 +3894,10 @@ def _validated_detailed_core_summary(paper, parsed):
     )
     if any(not re.fullmatch(r'[0-9a-f]{64}', str(stage.get(field) or ''))
            for field in required_stage_shas):
-        raise PublishDataValidationError('现代 Reader 的详细核心摘要缺少可重放 SHA 链')
+        raise PublishDataValidationError('读者文章的详细核心摘要阶段记录中，输入指纹或相关 SHA 缺失，或格式无效。')
     if stage.get('inputStructureProjectionSha256') \
             != stage.get('outputStructureProjectionSha256'):
-        raise PublishDataValidationError('现代 Reader 的详细核心摘要改变了其他章节投影')
+        raise PublishDataValidationError('读者文章的详细核心摘要阶段记录中，输入与输出的其他章节 SHA 不一致。')
     binding_body = {
         'contractVersion': stage['contractVersion'],
         'inputAnalysisSha256': stage['inputAnalysisSha256'],
@@ -3915,7 +3908,7 @@ def _validated_detailed_core_summary(paper, parsed):
         'outputStructureProjectionSha256': stage['outputStructureProjectionSha256'],
     }
     if stage.get('bindingSha256') != _stable_json_sha256(binding_body):
-        raise PublishDataValidationError('现代 Reader 的详细核心摘要 binding SHA 不可重放')
+        raise PublishDataValidationError('读者文章的详细核心摘要绑定 SHA 与按原字段重新计算的结果不一致。')
     structure = stages.get('structureRepair') if isinstance(stages, dict) else None
     tag_stage = stages.get('taxonomySeal') if isinstance(stages, dict) else None
     tag_contract = contracts.get('taxonomy')
@@ -3928,7 +3921,7 @@ def _validated_detailed_core_summary(paper, parsed):
                     r'[0-9a-f]{64}', str(tag_stage.get('outputAnalysisSha256') or '')
                 ):
             raise PublishDataValidationError(
-                '现代 Reader 的详细核心摘要上游 taxonomySeal 非法'
+                '读者文章的详细核心摘要所依赖的标签阶段记录缺失或无效。'
             )
         upstream = tag_stage
         upstream_label = 'taxonomySeal'
@@ -3949,7 +3942,7 @@ def _validated_detailed_core_summary(paper, parsed):
                 or _analysis_sha256_ignoring_core_summary_body(upstream_checkpoint) \
                 != stage.get('inputStructureProjectionSha256'):
             raise PublishDataValidationError(
-                '现代 Reader 的详细核心摘要无法从 taxonomySeal checkpoint 重放'
+                '读者文章的详细核心摘要所依赖的标签阶段正文或摘要缺失、格式无效，或正文、摘要或其他章节的 SHA 与阶段记录不一致。'
             )
     else:
         # 旧记录的标签协议值为 None，且未保存 taxonomySeal 阶段键时，
@@ -3960,13 +3953,13 @@ def _validated_detailed_core_summary(paper, parsed):
     if not isinstance(upstream, dict) \
             or upstream.get('outputAnalysisSha256') != stage.get('inputAnalysisSha256'):
        raise PublishDataValidationError(
-           f'现代 Reader 的详细核心摘要未绑定 {upstream_label} 输出'
+           f'读者文章的详细核心摘要输入与 {upstream_label} 阶段输出的 SHA 不一致，或上游阶段记录缺失。'
        )
     if not isinstance(scoring, dict):
-        raise PublishDataValidationError('现代 Reader 的评分阶段未绑定详细核心摘要')
+        raise PublishDataValidationError('读者文章的评分阶段记录缺失，或评分使用的正文或详细核心摘要 SHA 与阶段记录不一致。')
     if scoring.get('status') != MANUAL_REVIEW_MODE:
         analysis_sha = _javascript_string_sha256(analysis)
-        # 现代 Reader 页面按来源记录展示官方图片。历史 imageSupplement=complete
+        # 读者文章页面按来源记录展示官方图片。历史 imageSupplement=complete
         # 的成功记录没有保留添图前正文，本函数无法只凭三个 SHA 字段
         # 确认变化仅限图片。因此，非人工复核的评分输出仍须与最终分析正文绑定。
         scoring_binds_final = scoring.get('outputAnalysisSha256') == analysis_sha
@@ -3974,7 +3967,7 @@ def _validated_detailed_core_summary(paper, parsed):
                 or scoring.get('coreSummaryInputAnalysisSha256') != stage.get('outputAnalysisSha256') \
                 or scoring.get('inputCoreSummarySha256') != summary_sha \
                 or scoring.get('outputCoreSummarySha256') != summary_sha:
-            raise PublishDataValidationError('现代 Reader 的评分阶段未绑定详细核心摘要')
+            raise PublishDataValidationError('读者文章的评分阶段记录缺失，或评分使用的正文或详细核心摘要 SHA 与阶段记录不一致。')
     return summary
 
 
@@ -4164,7 +4157,7 @@ def _current_batch_tag_metadata(papers):
            or item['registrySha256'] != first['registrySha256']
            or item['selectionContract'] != first['selectionContract']
            for item in selections[1:]):
-        raise PublishDataValidationError('汇总页混入不同 taxonomy registry/selection')
+        raise PublishDataValidationError('汇总页中的标签选择记录使用了不同的词表版本、词表 SHA 或标签选择协议。')
     counts = {}
     for item in selections:
         tag = f'#{item["primaryTask"]}'
@@ -5995,7 +5988,7 @@ def _api_reader_payload(paper):
                         ) \
                         or item['explanationQuote'] not in article_paragraphs[image_index + 2]:
                     raise PublishDataValidationError(
-                        'API reader v3 未形成导读—看图路径—原图—图注—解释的相邻闭环'
+                        'API Reader v3 的论文图未按导读、看图路径、原图、图注和解释的顺序相邻排列，或对应内容与图片计划不一致。'
                     )
             parsed_url = urlparse(item['url'])
             if parsed_url.scheme != 'https' \
@@ -8829,7 +8822,7 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
             if controlled_tag_files:
                 try:
                     if not _is_tag_catalog_file_path(relative):
-                        raise PublishDataValidationError('taxonomy ownership 路径非法')
+                        raise PublishDataValidationError('文件路径不属于允许发布的标签词表文件。')
                     payload = json.loads(target.read_text(encoding='utf-8'))
                     if target.name == 'taxonomy-presentation-policy.json':
                         _validate_tag_display_policy(payload)
@@ -8841,7 +8834,7 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
                     else:
                         _validate_tag_catalog_snapshot(payload)
                         if target.parent.name == 'taxonomy-snapshots' and target.stem != payload['registrySha256']:
-                            raise PublishDataValidationError('taxonomy archive SHA 不匹配')
+                            raise PublishDataValidationError('标签词表归档文件名中的 SHA 与快照记录不一致。')
                 except (OSError, ValueError, UnicodeError, PublishDataValidationError):
                     unsafe.append(entry)
                 continue
@@ -11005,7 +10998,7 @@ def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_re
 
 
 def review_tag_catalog_files(date_str, publish_paths, manifest_path, file_results):
-    """Deterministic review binds every frozen JSON byte, mirror and registry version."""
+    """按应发布的文件集合检查词表 JSON 内容、两处副本和版本记录。"""
     manifest = _load_json_object(manifest_path, 'generation manifest')
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = {item['path']: item for item in manifest.get('files', [])
@@ -11018,7 +11011,7 @@ def review_tag_catalog_files(date_str, publish_paths, manifest_path, file_result
         expected = tag_catalog_file_contents(repo)
         actual = {item.relative_to(repo).as_posix() for item in paths}
         if actual != set(expected):
-            raise PublishDataValidationError('taxonomy review 版本资产集合不闭合')
+            raise PublishDataValidationError('待审查的标签词表文件集合与应发布的版本文件集合不一致。')
         failure = None
     except (OSError, ValueError, UnicodeError, PublishDataValidationError) as exc:
         expected = {}
@@ -12545,7 +12538,7 @@ def generate_main(options=None):
     try:
         _validate_tag_catalog_snapshot(build_tag_catalog_snapshot())
     except (OSError, PublishDataValidationError) as exc:
-        print(f"\n❌ taxonomy registry 快照导出失败，未生成任何博客文件: {exc}")
+        print(f"\n❌ 标签词表快照导出失败，未生成任何博客文件：{exc}")
         sys.exit(1)
 
     publish_paths = []

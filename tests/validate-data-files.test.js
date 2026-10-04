@@ -538,7 +538,7 @@ describe('validate-data-files', () => {
         rebound.analysisManifest.stages.coreSummaryRepair.summarySha256 = '0'.repeat(64);
         fs.writeFileSync(resultFile, JSON.stringify({ papers: [rebound] }));
         assert.match(validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
-            /核心摘要正文未绑定阶段 SHA/);
+            /核心摘要正文的哈希与阶段记录不一致/);
         const shallow = completeAnalysisPaper('2607.00012');
         shallow.analysis = shallow.analysis.replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,

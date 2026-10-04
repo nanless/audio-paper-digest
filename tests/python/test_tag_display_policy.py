@@ -159,7 +159,7 @@ class PresentationPolicyTests(unittest.TestCase):
     def test_duplicate_key_and_semantically_equal_mirror_bytes_rejected(self):
         self.prepare()
         self.write(self.repo/POLICIES[1], json.dumps(self.policy).encode())
-        with self.assertRaisesRegex(self.error, '字节漂移'): self.call('tag_catalog_file_contents', self.repo)
+        with self.assertRaisesRegex(self.error, '标签展示策略只缺少一份副本，或 data 与 static/data 中的文件内容不完全一致。'): self.call('tag_catalog_file_contents', self.repo)
         raw = self.policy_bytes[:-2] + b', "contract":"paper-taxonomy-presentation-selection-v1"}\n'
         self.policy_write(raw)
         with self.assertRaisesRegex(self.error, '重复键'): self.call('tag_catalog_file_contents', self.repo)
@@ -178,7 +178,7 @@ class PresentationPolicyTests(unittest.TestCase):
     def test_hardlink_and_parent_symlink_rejected(self):
         self.prepare()
         path=self.repo/POLICIES[0]; other=self.root/'link'; os.link(path, other)
-        with self.assertRaisesRegex(self.error, '单链接'): self.call('tag_catalog_file_contents', self.repo)
+        with self.assertRaisesRegex(self.error, '标签展示策略和快照必须是普通文件，且只能有一个硬链接。'): self.call('tag_catalog_file_contents', self.repo)
         other.unlink()
         data=self.repo/'static/data'; moved=self.repo/'static/moved'; data.rename(moved); data.symlink_to(moved)
         with self.assertRaisesRegex(self.error, '符号链接'): self.call('tag_catalog_file_contents', self.repo)
@@ -197,7 +197,7 @@ class PresentationPolicyTests(unittest.TestCase):
         self.policy['preferredSnapshotSha256']=hashlib.sha256(self.call('tag_catalog_snapshot_bytes',changed)).hexdigest()
         self.policy['preferredProjectionSha256']=self.call('_historical_tag_prompt_text_sha256',changed)
         self.policy_write(json.dumps(self.policy).encode())
-        with self.assertRaisesRegex(self.error, '逐对象追加'): self.call('tag_catalog_file_contents',self.repo)
+        with self.assertRaisesRegex(self.error, '标签展示策略选用的词表修改了已有概念，或改变了它们的顺序；只允许在原列表末尾追加概念。'): self.call('tag_catalog_file_contents',self.repo)
 
     def test_generation_journal_precise_members_install_and_idempotent_resume(self):
         self.transaction()

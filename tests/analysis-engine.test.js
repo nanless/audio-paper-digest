@@ -1267,7 +1267,7 @@ describe('analyzePaperWithRetry', () => {
         assert.match(attempt.result.latestAnalysisAttemptAt, /\+08:00$/);
     });
 
-    it('完成态必须绑定 current v3 核心摘要阶段、合同、fingerprint 与正文 SHA', () => {
+    it('完成记录必须包含当前 v3 核心摘要阶段、输入指纹和对应正文哈希', () => {
         const paper = validAnalysisPaper('2604.00022');
         assert.strictEqual(isSuccessfulAnalysisRecord(paper), true);
         for (const mutate of [
@@ -1379,7 +1379,7 @@ describe('analyzePaperWithRetry', () => {
         assert.match(contract.validateCoreSummaryStageBinding(paper), /中文字符不足/);
     });
 
-    it('核心摘要在 taxonomySeal 后绑定 taxonomy 输出而不是更早的 structureRepair 输出', () => {
+    it('核心摘要接收标签阶段的输出，而不使用更早的结构修复输出', () => {
         const contract = require('../scripts/analysis-contract.js');
         const paper = validAnalysisPaper('2604.00023');
        const structureAnalysis = paper.analysis.replace(
@@ -1417,13 +1417,13 @@ describe('analyzePaperWithRetry', () => {
         paper.analysisStageCheckpoints.taxonomySeal = structureAnalysis;
         assert.match(
             contract.validateCoreSummaryStageBinding(paper),
-            /taxonomySeal checkpoint 重放/
+            /上一阶段 taxonomySeal 的正文检查点不一致/
         );
 
         delete paper.analysisStageCheckpoints.taxonomySeal;
         assert.match(
             contract.validateCoreSummaryStageBinding(paper),
-            /缺少 taxonomySeal checkpoint/
+            /缺少上一阶段 taxonomySeal 的正文检查点/
         );
     });
 

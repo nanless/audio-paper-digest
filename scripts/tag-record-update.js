@@ -284,7 +284,7 @@ function planProcessReseal({ state, adapter, analysisRoot, runtime, mode, snapsh
         const item = state.items[paperId];
         if (item.status !== 'complete') {
             items.push(skippedItem({ paperId, analysisRunId: item.analysisRunId,
-                outcome: 'not-complete', errors: [`论文状态 ${item.status}，未完成不参与重放`], runtime }));
+                outcome: 'not-complete', errors: [`论文状态为 ${item.status}，尚未完成，不能更新标签记录。`], runtime }));
             continue;
         }
         let loaded;
@@ -354,14 +354,14 @@ function applyReseal({ processDir, stateFile, plannedStateSha256, writes, plans,
     return engine.withFileLock(lockPath, async () => {
         const freshState = processApi.assertState(readProcessJson(stateFile));
         if (freshState.stateSha256 !== plannedStateSha256) {
-            throw new Error('process checkpoint 在重放期间发生变化，拒绝写入');
+            throw new Error('进程检查点在标签记录更新期间发生变化，不能写入。');
         }
         const executed = [];
         const executedIds = new Set();
         for (const write of writes) {
             const fresh = loadExecution({ adapter, analysisRoot, executionId: write.executionId, runtime });
             if (fresh.analysisSha256 !== write.expectedSha256) {
-                throw new Error(`analysis 字节在重放期间发生变化: ${write.paperId}`);
+                throw new Error(`标签记录更新期间，论文 ${write.paperId} 的分析文件内容发生变化，不能写入。`);
             }
             if (write.analysisStale) {
                 adapter.replaceJson(write.analysisFile, JSON.parse(write.bytes.toString('utf8')),

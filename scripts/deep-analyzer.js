@@ -802,7 +802,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
         if (verifiedResourceIdentity?.contract !== API_READER_RESOURCE_IDENTITY_CONTRACT
             || identitySha256 !== stableFingerprint(identityBody)
             || !Array.isArray(verifiedResourceIdentity?.resources)) {
-            throw new Error('评分开源状态需要可重放的 verified resource identity');
+            throw new Error('核对评分中的开源状态时，资源身份记录必须包含正确的协议、对应内容的哈希和资源列表。');
         }
         verifiedAvailableTypes = new Set(verifiedResourceIdentity.resources
             .filter(item => item?.availability === 'available')
@@ -918,8 +918,8 @@ function hasAffirmativeDemoEvidence(sourceText) {
 async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', options = {}) {
     let lastError = null;
     let validationFeedback = '这是第一次输出，没有上一次校验错误。';
-    // 即使没有额外原文，也要把已有分析的带 ID 章节构造成可引用账本；
-    // 否则空 ID 集会让“每个理由必须引用合法 ID”的硬契约无解。
+    // 没有另外提供证据上下文时，评分审查会把已有分析章节整理成带引用 ID 的内容。
+    // 评分理由必须使用上下文中的合法 ID，因此不能仅因未传入原文，就把可引用内容置空。
     const evidenceContext = typeof options.evidenceContext === 'string'
         ? options.evidenceContext
         : buildTypeAwareSourceContext(analysis, sourceEvidence);
@@ -1604,12 +1604,9 @@ function omitReaderSelectedTablesForProseCheck(article, selectionTableIndexes = 
     return lines.join('\n');
 }
 
-// Selection tables are already a deterministic projection of sealed PDF DOM
-// cells.  A later Reader cleanup pass must not be able to change those bytes
-// (for example, `0-12kHz` becoming `0-12 kHz`).  Rebuild only the selected
-// artifact tables from their signed cell coordinates immediately before the
-// source-binding gate.  This is deliberately not applied to source-quote
-// tables, whose prose cells remain model-authored evidence surfaces.
+// 来源检查前，按照 artifact_table 记录的原表坐标恢复所选表格，避免正文清理
+// 把 0-12kHz 改成 0-12 kHz 等写法。这个步骤只恢复已对应原表单元格的内容；
+// source_quotes 表格不在此处理，它们的文字内容仍需按引用证据另行核验。
 function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtifacts) {
     let output = String(article || '');
     const bindings = Array.isArray(tableBindings) ? tableBindings : [];
@@ -3495,7 +3492,7 @@ function buildApiReaderResourceEvidence(identity) {
     if (identity.contract !== API_READER_RESOURCE_IDENTITY_CONTRACT
         || identitySha256 !== stableFingerprint(identityBody)
         || !Array.isArray(identity.resources)) {
-        throw new Error('Reader 资源证据需要可重放的 verified resource identity');
+        throw new Error('为读者文章准备资源证据时，资源身份记录必须包含正确的协议、对应内容的哈希和资源列表。');
     }
     const lines = [
         `[READER_VERIFIED_RESOURCES] ${identity.contract} sha256=${identitySha256}`,
@@ -3513,7 +3510,7 @@ function buildApiReaderResourceEvidence(identity) {
                     resource.documentationEvidence, resource.originalUrl
                 ))
             || (resource?.origin === 'paper_source' && !paperSourceQuoteBindsOriginalUrl(resource))) {
-            throw new Error(`Reader 资源证据第 ${index + 1} 项不可重放`);
+            throw new Error(`资源证据第 ${index + 1} 项的可达状态、引文哈希或来源记录不符合要求。`);
         }
         lines.push(`RESOURCE_${index + 1}: type=${resource.type}; availability=${resource.availability}; `
             + `status=${resource.status === null ? 'null' : resource.status}; url=${resource.originalUrl}`);
@@ -3572,7 +3569,7 @@ function replayVerifiedReaderResourceIdentity(identity, sourceText) {
                         || [408, 425, 429].includes(resource.status)
                         || (Number.isInteger(resource.status) && resource.status >= 500))));
         })) {
-        throw new Error('会议 Reader 资源声明门禁需要可重放的 verified resource identity');
+        throw new Error('会议读者文章的资源身份记录与原文不一致，或其中的资源、来源与可达状态记录不符合要求。');
     }
     return identity;
 }
@@ -4234,7 +4231,7 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
                             const excerpt = conflictExcerpt(window, token);
                             issues.push({ path: node.path,
                                 message: `${node.path} 把 ${resource.type} 链接声明为已开源或当前可用，`
-                                    + `但 verified resource identity 为 ${resource.availability}`,
+                                    + `但资源身份记录中的可达状态为 ${resource.availability}`,
                                 conflictExcerpt: excerpt });
                             resourceConflict = true;
                             break;
@@ -4256,7 +4253,7 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
                 const nounMatch = conflict.match(noun);
                 issues.push({ path: node.path,
                     message: `${node.path} 声称本文 ${type} 已开源或当前可用，`
-                        + '但 verified resource identity 中该类型没有 available 记录',
+                        + '但资源身份记录中没有该类型处于 available 状态的资源',
                     conflictExcerpt: conflictExcerpt(conflict, nounMatch?.[0] || '') });
             }
         }
@@ -4267,7 +4264,7 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
 function enforceConferenceReaderResourceClaims(draft, identity, sourceText) {
     const issues = conferenceReaderResourceClaimIssues(draft, identity, sourceText);
     if (!issues.length) return;
-    const error = new Error(`会议 Reader 资源声明与已验证可达状态冲突: ${issues[0].message}; `
+    const error = new Error(`会议读者文章中的资源声明与已验证的可达状态不一致：${issues[0].message}; `
         + `conflictExcerpt=${JSON.stringify(issues[0].conflictExcerpt)}`);
     error.readerIssues = issues;
     throw error;
@@ -6078,7 +6075,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 || item.trim().length < 12 || item.trim().length > 120)) {
             throw new Error(
                 `读者文章 figurePlacements[${index}]（Figure ${placement.figureOrdinal}）`
-                + '图前导读与图后解释未形成相邻闭环'
+                + '图片的插入位置、相邻导读与解释段，或观察点不符合要求'
                 + `（targetKind=${placement.targetKind}`
                 + `, markerBound=${Boolean(candidate)}`
                 + `, markerIndex=${markerIndex}`
@@ -6506,7 +6503,7 @@ function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
                     if (typeof renderedText !== 'string'
                         || normalizeReaderSourceCell(renderedText)
                             !== normalizeReaderSourceCell(cell.sourceText)) {
-                        throw new Error('Reader 表面修复后的单元格不能重放原始来源');
+                        throw new Error('文章文字规范化后，表格单元格与绑定的原始来源不一致。');
                     }
                     return { ...cell, renderedText };
                 })
@@ -6611,7 +6608,7 @@ function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
     const quality = validateReaderEditorialQuality(qualityView, repairedPlan.sections);
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityView);
     if (qualityMetrics.blockingIssueCount > 0) {
-        throw new Error('Reader 表面修复后仍有文风阻断问题，拒绝签发新的表面绑定');
+        throw new Error('文章文字规范化后仍未通过表达质量检查，不能更新文章与计划的绑定记录。');
     }
     paper.apiReaderPlan = repairedPlan;
     paper.apiReaderPlanSha256 = newSha;
@@ -6771,7 +6768,7 @@ function buildApiReaderValidationFeedback(error) {
             + '若末尾表已经存在，则不要再改正文，只追加它缺少的绑定'
         );
     }
-    if (/figurePlacements\[\d+\].*相邻闭环/.test(message)) {
+    if (/figurePlacements\[\d+\].*图片的插入位置、相邻导读与解释段，或观察点不符合要求/.test(message)) {
         fixes.push(
             '对应 Figure marker 必须在 targetKind 指定的同一小节中独占一个 Markdown 段；'
             + `紧邻前一段至少 ${API_READER_FIGURE_LEAD_MIN_CHARS} 字，`
@@ -9906,7 +9903,7 @@ function retainFinalTagCheckpoints(paper, analysisManifest) {
     const tagCheckpointText = paper.analysisStageCheckpoints?.taxonomySeal;
     if (typeof tagCheckpointText !== 'string') {
         throw contractRejectedError(
-            'taxonomySeal 成功态必须保留 taxonomySeal 逐字 checkpoint'
+            '标签阶段完成后，必须保留该阶段的正文检查点。'
         );
     }
     if (tagStageStatus === 'not_needed') {
@@ -9916,7 +9913,7 @@ function retainFinalTagCheckpoints(paper, analysisManifest) {
     const structureCheckpointText = paper.analysisStageCheckpoints?.structureRepair;
     if (typeof structureCheckpointText !== 'string') {
         throw contractRejectedError(
-            'taxonomySeal=complete 成功态必须保留 structureRepair/taxonomySeal 两份逐字 checkpoint'
+            '标签阶段标为 complete 时，必须保留结构修复和标签阶段的两份正文检查点。'
         );
     }
     paper.analysisStageCheckpoints = { structureRepair: structureCheckpointText, taxonomySeal: tagCheckpointText };
@@ -12011,9 +12008,9 @@ function applyApiReaderResourceAvailability(analysis, identity) {
     let cleaned = String(section || '').replace(/^[-*]\s*资源可达性验证[：:].*$/gm, '').trim();
     for (const [type, label] of resourceLines) {
         const resources = identity.resources.filter(resource => resource.type === type);
-        // An absent verified record is not evidence that the model's original
-        // statement is false. Preserve that line. Once a record exists, the
-        // deterministic URL/status projection is authoritative.
+        // 本循环没有某类资源记录时，保留“开源详情”中对应的原说明。有该类记录时，
+        // 按记录中的地址和可达状态更新说明。这个规则只处理本节文字，
+        // 机器摘要的资源标记已在上方另行更新。
         if (!resources.length) continue;
         const projected = `- ${label}：${resources.map(resourceDescription).join('；')}`;
         const lines = cleaned.split('\n');
@@ -14722,7 +14719,7 @@ async function analyzePaperDeepInternal(paper) {
                 if (warning) repairFeedback = warning;
             }
             if (repairFeedback) {
-                console.log(`    [deep] 🏷️  taxonomy 标签执行局部修复: ${repairFeedback}`);
+                console.log(`    [deep] 🏷️  正在局部修复标签：${repairFeedback}`);
                 try {
                     analysis = await repairTagSelection(
                         paper,
@@ -14735,14 +14732,14 @@ async function analyzePaperDeepInternal(paper) {
                     );
                 } catch (error) {
                     if (tagValidationIssue) throw error;
-                    console.log(`    [deep] ⚠️  taxonomy 欠具体告警未能改选，保留原标签: ${error.message}`);
+                    console.log(`    [deep] ⚠️  未能替换过于宽泛的主任务标签，保留本次修复前的正文：${error.message}`);
                     analysis = before;
                 }
             }
             const parsedForTagCheck = parseAnalysis(analysis);
             const finalTagValidationIssue = validateTagSectionContract(analysis, parsedForTagCheck);
             if (finalTagValidationIssue) {
-                throw contractRejectedError(`taxonomy 最终门禁失败: ${finalTagValidationIssue}`);
+                throw contractRejectedError(`局部修复后的标签仍未通过校验：${finalTagValidationIssue}`);
             }
             const tagStageProof = {
                 registryVersion: TAG_RULES.registryVersion,
@@ -16060,8 +16057,9 @@ function normalizeAnalysisStructure(analysis) {
     };
     for (const [key, fallback] of Object.entries(scoreFallbacks)) {
         if (parsedBefore.scoreValidation?.valid && fallback !== undefined && fallback !== '') {
-            // 评分理由是八维分项的唯一事实来源。覆盖机器摘要中的漂移值，
-            // 同时保证 open_source 落在固定锚点上，避免无意义的 LLM 结构修复循环。
+            // 解析结果通过评分校验且该分项有值时，使用解析结果覆盖机器摘要中的分数。
+            // 这样可以纠正两处不一致的记录，也避免结构修复反复处理同一分数问题；
+            // open_source 仍按下方的固定取值检查。
             values[key] = fallback;
         } else if (!values[key] && fallback !== undefined && fallback !== '') {
             values[key] = fallback;
@@ -16101,9 +16099,8 @@ function normalizeAnalysisStructure(analysis) {
             ? numeric.toFixed(1)
             : '';
     }
-    // 结构修复模型偶尔会遗漏 open_source 行。评分理由或已解析的资源状态
-    // 能提供更具体证据时优先复用；完全没有证据时使用最保守的 0.0 锚点，
-    // 让确定性契约修复收敛，同时不凭空给论文增加开源分。
+    // 模型可能遗漏 open_source 行。上方已经尝试复用解析分项，并检查了机器摘要中的取值；
+    // 这里仍为空时就填入 0.0，保证结构完整，而不凭缺少记录增加开源分。
     if (!values.open_source) {
         values.open_source = '0.0';
     }
@@ -16112,10 +16109,10 @@ function normalizeAnalysisStructure(analysis) {
     values.has_model = normalizeMachineEnum(values.has_model || parsedBefore.hasModel, ['是', '否', '未说明'], '未说明');
     values.has_dataset = normalizeMachineEnum(values.has_dataset || parsedBefore.hasDataset, ['是', '否', '未说明'], '未说明');
 
-    // Taxonomy is semantic data, not a structure fallback.  Never infer a
-    // plausible-looking task/method from prose here: a dedicated post-
-    // tag selection stage after structure repair either validates the exact registry concepts
-    // or performs a source-bound, tag-only repair.
+    // 机器摘要中已有的主标签先保留。解析结果通过标签校验时，用解析出的主任务和主方法
+    // 覆盖这些值；否则保留机器摘要中的非空值，只给空缺补待处理标记。
+    // 这里不从正文猜选标签，也不保证保留下来的标签已经合规。结构修复结束后，
+    // 独立标签阶段依据当前词表核验，必要时按原文证据局部修复。
     if (parsedBefore.taxonomyValidation?.valid) {
         values.primary_task_tag = parsedBefore.primaryTaskTag;
         values.primary_method_tag = parsedBefore.primaryMethodTag;
@@ -16148,13 +16145,13 @@ function sectionExteriorBytes(analysis, title) {
 
 function replaceSectionBodyExact(analysis, title, content) {
     const bounds = findSectionBounds(analysis, title);
-    if (!bounds) throw contractRejectedError(`taxonomy 修复找不到 ## ${title}`);
+    if (!bounds) throw contractRejectedError(`修复标签时找不到 ## ${title} 章节。`);
     return `${analysis.slice(0, bounds.contentStart)}${String(content).trim()}${analysis.slice(bounds.end)}`;
 }
 
 function replaceMachinePrimaryTagFields(analysis, taskTag, methodTag) {
     const bounds = findSectionBounds(analysis, '机器摘要');
-    if (!bounds) throw contractRejectedError('taxonomy 修复找不到 ## 机器摘要');
+    if (!bounds) throw contractRejectedError('修复标签时找不到 ## 机器摘要章节。');
     let body = analysis.slice(bounds.contentStart, bounds.end);
     for (const [key, value] of [
         ['primary_task_tag', taskTag],
@@ -16163,7 +16160,7 @@ function replaceMachinePrimaryTagFields(analysis, taskTag, methodTag) {
         const pattern = new RegExp(`^${key}\\s*[:：]\\s*.*$`, 'gm');
         const matches = body.match(pattern) || [];
         if (matches.length !== 1) {
-            throw contractRejectedError(`taxonomy 修复要求机器摘要 ${key} 恰好出现一次`);
+            throw contractRejectedError(`修复标签时，机器摘要中的 ${key} 字段必须恰好出现一次。`);
         }
         body = body.replace(pattern, `${key}: ${value}`);
     }
@@ -16173,17 +16170,17 @@ function replaceMachinePrimaryTagFields(analysis, taskTag, methodTag) {
 function parseTagRepairResult(raw) {
     const text = String(raw || '').trim();
     if (!text.startsWith('{') || !text.endsWith('}')) {
-        throw contractRejectedError('taxonomy 修复输出必须是无前后缀的 JSON 对象');
+        throw contractRejectedError('标签修复结果必须是 JSON 对象，前后不能附加其他内容。');
     }
     for (const key of ['primaryTaskId', 'primaryMethodId', 'conceptIds']) {
         const occurrences = text.match(new RegExp(`"${key}"\\s*:`, 'g')) || [];
         if (occurrences.length !== 1) {
-            throw contractRejectedError(`taxonomy 修复 JSON 键 ${key} 必须恰好出现一次`);
+            throw contractRejectedError(`标签修复结果中的 JSON 键 ${key} 必须恰好出现一次。`);
         }
     }
     let parsed;
     try { parsed = JSON.parse(text); } catch (error) {
-        throw contractRejectedError(`taxonomy 修复 JSON 无法解析: ${error.message}`);
+        throw contractRejectedError(`无法解析标签修复结果中的 JSON：${error.message}`);
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
         || Object.keys(parsed).sort().join(',') !== 'conceptIds,primaryMethodId,primaryTaskId'
@@ -16191,7 +16188,7 @@ function parseTagRepairResult(raw) {
         || typeof parsed.primaryMethodId !== 'string'
         || !Array.isArray(parsed.conceptIds)
         || parsed.conceptIds.some(id => typeof id !== 'string')) {
-        throw contractRejectedError('taxonomy 修复 JSON schema 非法');
+        throw contractRejectedError('标签修复结果的 JSON 字段或类型不符合要求。');
     }
     const activeById = new Map(TAG_RULES.tagCatalog.concepts
         .filter(concept => concept.status === 'active')
@@ -16204,7 +16201,7 @@ function parseTagRepairResult(raw) {
         || !parsed.conceptIds.includes(parsed.primaryMethodId)
         || activeById.get(parsed.primaryTaskId)?.facet !== 'task'
         || activeById.get(parsed.primaryMethodId)?.facet !== 'method') {
-        throw contractRejectedError('taxonomy 修复 concept ID 集合或主角色非法');
+        throw contractRejectedError('标签修复结果中的概念 ID、数量、重复项或主任务与主方法的选择不符合要求。');
     }
     const selection = {
         tags: concepts.map(concept => `#${concept.preferredLabel.zh}`),
@@ -16213,7 +16210,7 @@ function parseTagRepairResult(raw) {
     };
     const validation = TAG_RULES.validateTagSelection(selection);
     if (!validation.valid) {
-        throw contractRejectedError(`taxonomy 修复选择非法: ${validation.errors.join('、')}`);
+        throw contractRejectedError(`标签修复结果未通过词表校验：${validation.errors.join('、')}`);
     }
     return { ...selection, validation };
 }
@@ -16233,16 +16230,16 @@ function applyTagSelection(analysis, selection, options = {}) {
         updated, selection.primaryTaskTag, selection.primaryMethodTag
     );
     if (maskClassificationFields(updated) !== maskClassificationFields(original)) {
-        throw contractRejectedError('taxonomy 局部修复改变了标签节和机器摘要两字段之外的字节');
+        throw contractRejectedError('标签局部修复改动了标签节和机器摘要主任务、主方法字段以外的内容。');
     }
     const parsed = parseAnalysis(updated);
     const issue = validateTagSectionContract(updated, parsed);
-    if (issue) throw contractRejectedError(`taxonomy 局部修复未通过最终门禁: ${issue}`);
+    if (issue) throw contractRejectedError(`标签局部修复后仍未通过校验：${issue}`);
     // 启用 requireMostSpecificTask 时，修复结果的主任务标签不能再出现过于宽泛的告警。
     // 重试由修复函数控制；最终失败时是否保留原标签，由主流程决定。
     if (options.requireMostSpecificTask && parsed.taxonomyValidation?.specificityWarning) {
         throw contractRejectedError(
-            `taxonomy 局部修复未通过最终门禁: ${parsed.taxonomyValidation.specificityWarning}`);
+            `标签局部修复后仍未通过校验：${parsed.taxonomyValidation.specificityWarning}`);
     }
     return updated;
 }
@@ -16270,7 +16267,7 @@ async function repairTagSelection(paper, analysis, evidenceContext, issue, optio
             if (attempt === 2) throw error;
         }
     }
-    throw contractRejectedError(`taxonomy 局部修复失败: ${feedback}`);
+    throw contractRejectedError(`标签局部修复失败：${feedback}`);
 }
 
 async function repairCoreSummarySection(
@@ -16334,14 +16331,14 @@ async function repairCoreSummarySection(
         candidateSummary = match[1];
         const updated = mergeSectionByTitle(original, '核心摘要', match[1]);
         if (sectionExteriorBytes(updated, '核心摘要') !== originalExterior) {
-            throw contractRejectedError('核心摘要局部修复改变了其他一级章节字节');
+            throw contractRejectedError('核心摘要局部修复改动了其他一级章节的内容。');
         }
         issue = getCoreSummaryDetailIssue(updated, { sourceText });
         if (!issue) return updated;
-        console.warn(`    [deep] ⚠️  核心摘要局部修复未通过 (${attempt}/3): ${issue}`);
+        console.warn(`    [deep] ⚠️  本次核心摘要局部修复仍未通过校验（${attempt}/3）：${issue}`);
         feedback = issue;
     }
-    throw contractRejectedError(`核心摘要局部修复失败: ${feedback}`);
+    throw contractRejectedError(`核心摘要局部修复失败：${feedback}`);
 }
 
 async function repairMissingAnalysisSections(
@@ -16453,9 +16450,10 @@ function getRepairableAnalysisStructureIssues(analysis, options = {}) {
     const parsed = parseAnalysis(analysis);
     const machineIssue = validateMachineSummaryContract(analysis, parsed, { checkScoringConsistency: false });
     if (machineIssue) issues.push(`机器摘要: ${machineIssue}`);
-    // Taxonomy is sealed by the dedicated post-structure stage.  Keeping it
-    // out of structural repair prevents a full-document model rewrite for a
-    // four-line semantic classification error.
+    // 本函数仍通过机器摘要检查主任务和主方法的格式，包括键是否存在、只出现一次、
+    // 值不为空，以及是否写成单个 #标签。它不把词表语义校验结果或标签选择问题
+    // 列为整篇结构修复的问题；这些问题由结构修复后的独立标签阶段处理，
+    // 必要时按原文证据局部修复，避免让模型只为修改分类选择而重写全文。
     const tableIssue = validateExperimentTableContract(analysis, {
         contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         documentType: parsed?.documentType,
