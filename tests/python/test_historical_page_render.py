@@ -132,7 +132,7 @@ class HistoricalPageRenderTests(unittest.TestCase):
         parsed = publisher.parse_analysis(paper['analysis'])
         analysis_sha = hashlib.sha256(paper['analysis'].encode('utf-8')).hexdigest()
         summary_sha = hashlib.sha256(parsed['summary'].encode('utf-8')).hexdigest()
-        projection_sha = publisher._core_summary_projection_sha256(paper['analysis'])
+        projection_sha = publisher._analysis_sha256_ignoring_core_summary_body(paper['analysis'])
         core_stage = paper['analysisManifest']['stages']['coreSummaryRepair']
         core_stage.update({
             'inputAnalysisSha256': analysis_sha,

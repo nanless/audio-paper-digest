@@ -5,15 +5,15 @@ const {fixture,sign}=require('./reader-signed-draft-fixture.js');
 const runner=require('../scripts/lib/fresh-rewrite-run.js');
 const engine=require('../scripts/analysis-engine.js');
 const repair=require('../scripts/lib/reader-repair.js');
-const {recoverSignedReaderDraft}=require('../scripts/lib/reader-signed-draft.js');
-const {prepareSignedReaderOperatorResult,applySignedReaderOperator,acceptSignedReaderFactReview}=require('../scripts/lib/reader-signed-operator.js');
+const {reconstructReaderDraftFromVerifiedArticle}=require('../scripts/lib/reader-signed-draft.js');
+const {prepareReaderOperatorPatchResult,applyReaderOperatorPatch,acceptReaderOperatorFactReview}=require('../scripts/lib/reader-signed-operator.js');
 
 function setup(t, options={}) {
     const f=fixture({noFigures:options.noFigures!==false});
     const stage=f.paper.analysisManifest.stages.apiReaderArticle;
     Object.assign(stage,{attempts:6,fullAttempts:2,transportFailures:3,promptTemplateSha256:'e'.repeat(64),
         temperature:1,apiUsageHistory:[{requests:4,totalTokens:12345}]});sign(f.paper);
-    const inverse=recoverSignedReaderDraft(f);
+    const inverse=reconstructReaderDraftFromVerifiedArticle(f);
     const patch={version:1,draftSha256:inverse.proof.draftSha256,replacements:[{path:'/sections/0/body',
         oldSha256:repair.hashDraft(inverse.draft.sections[0].body),
         value:inverse.draft.sections[0].body+'\n\n补充核对时需要保留实验条件，不能仅凭模型名字认定指标提升。'}]};
@@ -41,9 +41,9 @@ function setup(t, options={}) {
             paperLocked=true;try{return await cb();}finally{paperLocked=false;}}),reload,
         updateJsonFileLocked:engine.updateJsonFileLocked,
         updateRun:changes=>engine.updateJsonFileLocked(path.join(runDir,'run.json'),current=>({...current,...changes}))};
-    const apply=hooks=>engine.withFileLock(path.join(runDir,'.operation'),()=>applySignedReaderOperator(
+    const apply=hooks=>engine.withFileLock(path.join(runDir,'.operation'),()=>applyReaderOperatorPatch(
         {loaded:reload(),patchFile:'reviewed.json'},{...deps,...hooks}));
-    const accept=(request,hooks)=>engine.withFileLock(path.join(runDir,'.operation'),()=>acceptSignedReaderFactReview(
+    const accept=(request,hooks)=>engine.withFileLock(path.join(runDir,'.operation'),()=>acceptReaderOperatorFactReview(
         {loaded:reload(),request},{...deps,isSuccessfulAnalysisRecord:()=>true,...hooks}));
     return {...f,request,run,rootDir,runDir,other,patchFile,writeRequest,read,reload,apply,accept};
 }
@@ -175,7 +175,7 @@ test('an operator intent without output rejects only the changed output SHA and 
             return encoding ? changedBytes.toString(encoding) : Buffer.from(changedBytes);
         };
         try {
-            const candidate = await prepareSignedReaderOperatorResult({ parent: before, sourceDetails: f.sourceDetails,
+            const candidate = await prepareReaderOperatorPatchResult({ parent: before, sourceDetails: f.sourceDetails,
                 run, request, patchFileSha256: patchSha256, appliedAt: intent.appliedAt });
             assert.equal(candidate.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(changedBytes));
             assert.notEqual(candidate.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(originalBytes));
@@ -238,7 +238,7 @@ test('durable output corruption and competing parent installation fail closed',a
 test('operator never downloads a missing or foreign signed pixel cache',async t=>{
     const f=setup(t,{noFigures:false});let fetches=0;const old=global.fetch;
     global.fetch=async()=>{fetches++;throw new Error('unexpected fetch');};t.after(()=>{global.fetch=old;});
-    await assert.rejects(prepareSignedReaderOperatorResult({parent:f.paper,sourceDetails:f.sourceDetails,run:f.run,
+    await assert.rejects(prepareReaderOperatorPatchResult({parent:f.paper,sourceDetails:f.sourceDetails,run:f.run,
         request:f.request,patchFileSha256:runner.sha256(fs.readFileSync(f.patchFile)),appliedAt:'2026-09-06T08:00:00Z'}),/cache|ENOENT/);
     assert.equal(fetches,0);
 });
@@ -250,7 +250,7 @@ test('Reader operator rejects a canonical availability mismatch instead of silen
     f.paper.analysisManifest.stages.scoringAudit={status:'complete',outputAnalysisSha256:runner.sha256(f.paper.analysis),audit:{total:6.9}};
     f.request.parentPaperSha256=runner.stableHash(f.paper);
     const before=JSON.stringify(f.paper);
-    await assert.rejects(prepareSignedReaderOperatorResult({parent:f.paper,sourceDetails:f.sourceDetails,run:f.run,
+    await assert.rejects(prepareReaderOperatorPatchResult({parent:f.paper,sourceDetails:f.sourceDetails,run:f.run,
         request:f.request,patchFileSha256:'f'.repeat(64),appliedAt:'2026-09-06T08:00:00Z'}),/explicit resource synchronization first/);
     assert.equal(JSON.stringify(f.paper),before);
 });

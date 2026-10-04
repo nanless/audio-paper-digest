@@ -22,7 +22,7 @@ const MATERIALIZED_KEYS = new Set(['cachePath', 'assetFilename', 'assetMediaType
 // fetch assets, touch candidates, certify new prose, or recover original API
 // whitespace/selection syntax discarded by the parser. Only an exact legal
 // input representation of the existing signed output can be returned.
-function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
+function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId }) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(runId || '')
         || paper?.latestAnalysisAttemptError || !apiReaderV3BindsCanonical(paper)) fail('invalid signed parent or run');
     const id = paper.arxivId || paper.paper_id;
@@ -138,4 +138,4 @@ function recoverSignedReaderDraft({ paper, sourceDetails, runId }) {
         draftSha256: sha(JSON.stringify(draft)), operatorRecovered: true, apiGenerated: false } };
 }
 
-module.exports = { CONTRACT, recoverSignedReaderDraft };
+module.exports = { CONTRACT, reconstructReaderDraftFromVerifiedArticle };

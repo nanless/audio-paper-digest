@@ -5,14 +5,14 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const runner = require('./fresh-rewrite-run.js');
 const repair = require('./reader-repair.js');
-const { recoverSignedReaderDraft } = require('./reader-signed-draft.js');
+const { reconstructReaderDraftFromVerifiedArticle } = require('./reader-signed-draft.js');
 const CONTRACT = 'reader-signed-operator-v1';
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const validSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const sameKeys = (value, keys) => value && !Array.isArray(value)
     && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
 
-function validateSignedOperatorRequest(request, run) {
+function validateReaderOperatorPatchRequest(request, run) {
     if (!sameKeys(request, ['version', 'runId', 'paperId', 'parentPaperSha256', 'parentArticleSha256',
         'parentPlanSha256', 'sourceSha256', 'reason', 'patch']) || request.version !== 1
         || request.runId !== run.runId || !run.paperIds.includes(request.paperId)
@@ -36,10 +36,10 @@ function readerOperatorImplementationHashes() {
         .map(name => [name, sha(fs.readFileSync(path.join(__dirname, name)))]));
 }
 
-async function prepareSignedReaderOperatorResult({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }) {
-    validateSignedOperatorRequest(request, run); checkParent(parent, request);
+async function prepareReaderOperatorPatchResult({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }) {
+    validateReaderOperatorPatchRequest(request, run); checkParent(parent, request);
     if (!validSha(patchFileSha256) || !Number.isFinite(Date.parse(appliedAt))) throw new Error('Invalid operator execution audit');
-    const draftRecovery = recoverSignedReaderDraft({ paper: parent, sourceDetails, runId: run.runId });
+    const draftRecovery = reconstructReaderDraftFromVerifiedArticle({ paper: parent, sourceDetails, runId: run.runId });
     const allowedPaths = request.patch.replacements.map(item => item?.path).filter(pointer =>
         /^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?$/.test(pointer || ''));
     const draft = repair.applyReaderPatch(draftRecovery.draft, request.patch, allowedPaths,
@@ -92,13 +92,13 @@ function immutable(filename, value) {
 
 // Called only by the operation-locked runner; acquire the shared paper lock
 // here, and reload the run again inside it. No arbitrary output paths.
-async function applySignedReaderOperator({ loaded, patchFile }, deps) {
+async function applyReaderOperatorPatch({ loaded, patchFile }, deps) {
     require('../env-loader.js').requireExternalRuntime('reader-signed-operator.js');
     const { runDir, run } = loaded;
     if (path.resolve(runDir) !== path.join(path.resolve(deps.rootDir), run.runId)) throw new Error('Signed operator outside configured run root');
     runner.assertSafeDirectory(path.join(runDir, 'patches'));
     const filename = require('./reader-operator-patch.js').patchPath(runDir, patchFile);
-    const requestFile = readPrivate(filename), request = validateSignedOperatorRequest(requestFile.value, run);
+    const requestFile = readPrivate(filename), request = validateReaderOperatorPatchRequest(requestFile.value, run);
     return deps.withPaperAnalysisLock({ arxivId: request.paperId }, async () => {
         let current = deps.reload();
         if (current.run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
@@ -119,7 +119,7 @@ async function applySignedReaderOperator({ loaded, patchFile }, deps) {
                 throw new Error('Signed operator intent/request drift');
             }
             checkParent(before, request);
-            recoverSignedReaderDraft({ paper: before, sourceDetails, runId: run.runId });
+            reconstructReaderDraftFromVerifiedArticle({ paper: before, sourceDetails, runId: run.runId });
             try { output = readPrivate(path.join(directory, 'output.json')).value; }
             catch (error) { if (error.code !== 'ENOENT') throw error; }
         } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -127,7 +127,7 @@ async function applySignedReaderOperator({ loaded, patchFile }, deps) {
         if (!intent) {
             checkParent(parent, request);
             // All content/figure validation must succeed before archiving.
-            output = await prepareSignedReaderOperatorResult({ parent, sourceDetails, run: current.run,
+            output = await prepareReaderOperatorPatchResult({ parent, sourceDetails, run: current.run,
                 request, patchFileSha256: requestFile.sha256, appliedAt: deps.now() });
             before = parent;
             runner.assertSafeDirectory(directory, true);
@@ -142,7 +142,7 @@ async function applySignedReaderOperator({ loaded, patchFile }, deps) {
         }
         if (!output) {
             checkParent(parent, request);
-            output = await prepareSignedReaderOperatorResult({ parent: before, sourceDetails, run: current.run,
+            output = await prepareReaderOperatorPatchResult({ parent: before, sourceDetails, run: current.run,
                 request, patchFileSha256: requestFile.sha256, appliedAt: intent.appliedAt });
         }
         if (runner.stableHash(output) !== intent.outputSha256
@@ -180,7 +180,7 @@ async function applySignedReaderOperator({ loaded, patchFile }, deps) {
     });
 }
 
-async function acceptSignedReaderFactReview({ loaded, request }, deps) {
+async function acceptReaderOperatorFactReview({ loaded, request }, deps) {
     require('../env-loader.js').requireExternalRuntime('reader-signed-operator fact acceptance');
     const { runDir, run } = loaded;
     const keys = ['runId','paperId','parentPaperSha256','articleSha256','planSha256','sourceSha256',
@@ -215,7 +215,7 @@ async function acceptSignedReaderFactReview({ loaded, request }, deps) {
                 || parent.apiReaderArticleSha256 !== request.articleSha256 || parent.apiReaderPlanSha256 !== request.planSha256) {
                 throw new Error('Fact acceptance requires the exact pending operator Reader');
             }
-            recoverSignedReaderDraft({ paper: parent, sourceDetails: source, runId: run.runId });
+            reconstructReaderDraftFromVerifiedArticle({ paper: parent, sourceDetails: source, runId: run.runId });
             const accepted = structuredClone(parent);
             accepted.readerFactReview = { ...parent.readerFactReview, status: 'complete',
                 contract: 'reader-operator-fact-review-v1', parentPaperSha256: request.parentPaperSha256,
@@ -266,5 +266,5 @@ async function acceptSignedReaderFactReview({ loaded, request }, deps) {
     });
 }
 
-module.exports = { CONTRACT, validateSignedOperatorRequest, prepareSignedReaderOperatorResult,
-    applySignedReaderOperator, acceptSignedReaderFactReview };
+module.exports = { CONTRACT, validateReaderOperatorPatchRequest, prepareReaderOperatorPatchResult,
+    applyReaderOperatorPatch, acceptReaderOperatorFactReview };

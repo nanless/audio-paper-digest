@@ -573,7 +573,7 @@ async function signedPatchRewrite(options, overrides = {}) {
     const deps = dependencies(overrides);
     return withRunOperation(options.runId, deps, async loaded => {
         if (loaded.run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
-        return require('./reader-signed-operator.js').applySignedReaderOperator({ loaded, patchFile: options.patchFile }, {
+        return require('./reader-signed-operator.js').applyReaderOperatorPatch({ loaded, patchFile: options.patchFile }, {
             rootDir: deps.rootDir, readFreshSource: deps.readFreshSource, now: deps.now,
             updateJsonFileLocked: deps.updateJsonFileLocked,
             withPaperAnalysisLock: overrides.withPaperAnalysisLock || require('../analysis-engine.js').withPaperAnalysisLock,
@@ -584,10 +584,10 @@ async function signedPatchRewrite(options, overrides = {}) {
     });
 }
 
-async function acceptSignedReaderFactReview(request, overrides = {}) {
+async function acceptReaderOperatorFactReview(request, overrides = {}) {
     const deps = dependencies(overrides);
     return withRunOperation(request.runId, deps, async loaded => {
-        return require('./reader-signed-operator.js').acceptSignedReaderFactReview({ loaded, request }, {
+        return require('./reader-signed-operator.js').acceptReaderOperatorFactReview({ loaded, request }, {
             rootDir: deps.rootDir, readFreshSource: deps.readFreshSource, now: deps.now,
             updateJsonFileLocked: deps.updateJsonFileLocked, isSuccessfulAnalysisRecord: deps.isSuccessfulAnalysisRecord,
             withPaperAnalysisLock: overrides.withPaperAnalysisLock || require('../analysis-engine.js').withPaperAnalysisLock,
@@ -602,4 +602,4 @@ module.exports = { RUN_CONTRACT, INPUT_CONTRACT, ANALYSIS_CONTRACT, FRESHNESS_CO
     writeImmutableJson, assertAnalysisEnvelope, assertFreshProvenance, loadRun,
     sealedRecoveryCapabilitySnapshot, consumeSealedRecoveryCapability,
     prepareRewrite, collectRewriteSources, analyzeRewrite, rewriteStatus, promoteRewrite, patchRewrite, signedPatchRewrite,
-    acceptSignedReaderFactReview };
+    acceptReaderOperatorFactReview };

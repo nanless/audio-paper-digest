@@ -557,7 +557,7 @@ def llm_api_publication_fixture():
     plan_sha = publish_to_blog._stable_json_sha256(plan)
     analysis_sha = hashlib.sha256(analysis.encode('utf-8')).hexdigest()
     summary_sha = hashlib.sha256(detailed_summary.encode('utf-8')).hexdigest()
-    summary_projection_sha = publish_to_blog._core_summary_projection_sha256(analysis)
+    summary_projection_sha = publish_to_blog._analysis_sha256_ignoring_core_summary_body(analysis)
     core_summary_binding = {
         'contractVersion': 'core-summary-detailed-v3',
         'inputAnalysisSha256': analysis_sha,
@@ -1028,7 +1028,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         shallow['parsed']['summary'] = new_summary
         analysis_sha = hashlib.sha256(shallow['analysis'].encode('utf-8')).hexdigest()
         summary_sha = hashlib.sha256(new_summary.encode('utf-8')).hexdigest()
-        projection_sha = publish_to_blog._core_summary_projection_sha256(
+        projection_sha = publish_to_blog._analysis_sha256_ignoring_core_summary_body(
             shallow['analysis']
         )
         stage = shallow['analysisManifest']['stages']['coreSummaryRepair']
@@ -1438,7 +1438,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         paper['parsed'] = parsed
         analysis_sha = hashlib.sha256(paper['analysis'].encode('utf-8')).hexdigest()
         summary_sha = hashlib.sha256(summary.encode('utf-8')).hexdigest()
-        projection_sha = publish_to_blog._core_summary_projection_sha256(paper['analysis'])
+        projection_sha = publish_to_blog._analysis_sha256_ignoring_core_summary_body(paper['analysis'])
         binding = {
             'contractVersion': 'core-summary-detailed-v3',
             'inputAnalysisSha256': analysis_sha,
@@ -1656,7 +1656,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             '集合 S_yes/S_no 聚合后由 Syes 决定。'
         )
         self.assertEqual(
-            publish_to_blog._modern_api_safe_typo_projection(article),
+            publish_to_blog._apply_reader_display_fixes(article),
             '公开指标抽取代码与标注手册，误差条为 90%五置信区间。'
             '集合 `S_yes`/`S_no` 聚合后由 `S_yes` 决定。',
         )

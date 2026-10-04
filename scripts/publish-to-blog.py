@@ -3673,7 +3673,7 @@ def compact_index_opensource(pa, paper, limit=4):
 API_READER_DECISION_PROJECTION_CONTRACT = 'api-reader-decision-projection-v2'
 
 
-def _core_summary_projection_sha256(analysis):
+def _analysis_sha256_ignoring_core_summary_body(analysis):
     matches = list(re.finditer(r'^##\s*核心摘要\s*\r?\n', str(analysis or ''), re.MULTILINE))
     if len(matches) != 1:
         return None
@@ -3947,7 +3947,7 @@ def _sealed_detailed_core_summary(paper, parsed):
                 or _javascript_string_sha256(
                     checkpoint_summary.strip()
                 ) != stage.get('inputSummarySha256') \
-                or _core_summary_projection_sha256(upstream_checkpoint) \
+                or _analysis_sha256_ignoring_core_summary_body(upstream_checkpoint) \
                 != stage.get('inputStructureProjectionSha256'):
             raise PublishDataValidationError(
                 '现代 Reader 的详细核心摘要无法从 taxonomySeal checkpoint 重放'
@@ -3980,7 +3980,7 @@ def _sealed_detailed_core_summary(paper, parsed):
     return summary
 
 
-def _modern_api_reader_projection(paper, payload=None):
+def _build_api_reader_display_fields(paper, payload=None):
     """One visible scientific summary/resource source for modern API pages."""
     payload = _api_reader_payload(paper) if payload is None else payload
     if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
@@ -4042,7 +4042,7 @@ def _api_reader_index_projection_issue(content, papers):
     """Replay modern per-paper decision blocks in an immutable daily index."""
     blocks = re.split(r'^### ', content.split('## 📋 论文列表', 1)[-1], flags=re.MULTILINE)[1:]
     for paper in papers:
-        projection = _modern_api_reader_projection(paper)
+        projection = _build_api_reader_display_fields(paper)
         if projection is None:
             continue
         aid = paper.get('arxivId', '')
@@ -4321,7 +4321,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         aid = p.get('arxivId', '')
         aurl = _visible_arxiv_source_url(p)
         api_reader = _api_reader_payload(p)
-        modern_projection = _modern_api_reader_projection(p, api_reader)
+        modern_projection = _build_api_reader_display_fields(p, api_reader)
         if api_reader:
             reader_plan = api_reader['plan']
             reader_article = api_reader['article']
@@ -4388,7 +4388,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         aid = p.get('arxivId', '')
         aurl = _visible_arxiv_source_url(p)
         api_reader = _api_reader_payload(p)
-        modern_projection = _modern_api_reader_projection(p, api_reader)
+        modern_projection = _build_api_reader_display_fields(p, api_reader)
         if api_reader:
             reader_plan = api_reader['plan']
             reader_article = api_reader['article']
@@ -5712,7 +5712,7 @@ def _modern_api_bridge_render_spacing(article, plan):
     return article
 
 
-def _modern_api_safe_typo_projection(article):
+def _apply_reader_display_fixes(article):
     """Apply narrowly reviewed typo fixes without mutating signed Reader bytes."""
     replacements = {
         '指标抽取代吗': '指标抽取代码',
@@ -6101,7 +6101,7 @@ def _api_reader_payload(paper):
         figure_assets = []
         reader_authors = None
         figure_persistence = None
-    rendered_article = _modern_api_safe_typo_projection(
+    rendered_article = _apply_reader_display_fixes(
         _modern_api_bridge_render_spacing(article, plan)
     ) if reader_contract == LLM_API_READER_CONTRACT else article
     if reader_contract == LLM_API_READER_CONTRACT:
@@ -6240,7 +6240,7 @@ def _api_reader_page_binding_issue(content, paper):
         )).strip()
         if actual_authors != expected_authors:
             raise PublishDataValidationError('最终页面作者与机构段与 canonical identity 不一致')
-        projection = _modern_api_reader_projection(paper, payload)
+        projection = _build_api_reader_display_fields(paper, payload)
         if frontmatter_value('paper_digest_api_reader_decision_projection', r'"([^"]+)"') \
                 != API_READER_DECISION_PROJECTION_CONTRACT:
             raise PublishDataValidationError('最终页面缺少现代 Reader 决策投影契约')
@@ -6517,7 +6517,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         api_reader_payload
         and api_reader_payload.get('contract') in LLM_API_READER_STRUCTURED_CONTRACTS
     )
-    modern_projection = _modern_api_reader_projection(paper, api_reader_payload)
+    modern_projection = _build_api_reader_display_fields(paper, api_reader_payload)
     # Modern Manual pages must never be reconstructed from the legacy fixed
     # canonical sections.  A missing, partial or tampered reader payload is a
     # hard failure: silently falling back would turn an old analysis into a

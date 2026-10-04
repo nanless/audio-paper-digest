@@ -7827,7 +7827,7 @@ async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, 
         && applyApiReaderResourceAvailability(parentAnalysis, paper.apiReaderResources) !== parentAnalysis) {
         throw new Error('Reader operator patch requires explicit resource synchronization first; canonical analysis is outside its scope');
     }
-    require('./lib/reader-signed-draft.js').recoverSignedReaderDraft({ paper, sourceDetails, runId: provenance.runId });
+    require('./lib/reader-signed-draft.js').reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId: provenance.runId });
     if (crypto.createHash('sha256').update(JSON.stringify(draft)).digest('hex') !== provenance.afterDraftSha256) {
         throw new Error('Operator finalization draft SHA mismatch');
     }

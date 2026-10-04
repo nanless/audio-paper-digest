@@ -11,7 +11,7 @@ from publish_common import (  # noqa: E402
     PublishDataValidationError,
     _manual_v6_canonical_json,
     _manual_v6_hash,
-    _manual_v6_signature_value,
+    _prepare_manual_v6_json_hash_input,
     _manual_v6_text,
 )
 
@@ -27,7 +27,7 @@ class ManualSignatureContractTest(unittest.TestCase):
         self.assertEqual(self.vectors['contract'], MANUAL_V6_SIGNATURE_CONTRACT)
         for vector in self.vectors['accepted']:
             canonical = _manual_v6_canonical_json(
-                _manual_v6_signature_value(vector['value'])
+                _prepare_manual_v6_json_hash_input(vector['value'])
             )
             self.assertEqual(canonical, vector['canonicalJson'], vector['name'])
             self.assertEqual(_manual_v6_hash(vector['value']), vector['sha256'], vector['name'])
@@ -36,10 +36,10 @@ class ManualSignatureContractTest(unittest.TestCase):
     def test_non_ascii_keys_and_illegal_numbers_fail_closed(self):
         for vector in self.vectors['rejected']:
             with self.assertRaises(PublishDataValidationError, msg=vector['name']):
-                _manual_v6_signature_value(vector['value'])
+                _prepare_manual_v6_json_hash_input(vector['value'])
         for value in (2 ** 53, float(2 ** 53), float('nan'), float('inf'), -0.0):
             with self.assertRaises(PublishDataValidationError):
-                _manual_v6_signature_value({'value': value})
+                _prepare_manual_v6_json_hash_input({'value': value})
 
 
 if __name__ == '__main__':

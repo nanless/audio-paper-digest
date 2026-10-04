@@ -1315,7 +1315,7 @@ def _manual_paper_identity_mode(contracts, paper_label='paper'):
 MANUAL_V6_SIGNATURE_CONTRACT = 'stable-json-ascii-keys-exact-ieee754-nfkc-text-v2'
 
 
-def _manual_v6_signature_value(value, label='manual-v6-signature'):
+def _prepare_manual_v6_json_hash_input(value, label='manual-v6-signature'):
     """Canonical v6 signature input shared with manual-signature-contract.js.
 
     Object keys are deliberately restricted to visible ASCII. Safe integers
@@ -1342,7 +1342,7 @@ def _manual_v6_signature_value(value, label='manual-v6-signature'):
         return value
     if isinstance(value, list):
         return [
-            _manual_v6_signature_value(item, f'{label}[{index}]')
+            _prepare_manual_v6_json_hash_input(item, f'{label}[{index}]')
             for index, item in enumerate(value)
         ]
     if isinstance(value, dict):
@@ -1352,7 +1352,7 @@ def _manual_v6_signature_value(value, label='manual-v6-signature'):
         for key in sorted(value):
             if not key or any(ord(character) < 0x20 or ord(character) > 0x7E for character in key):
                 raise PublishDataValidationError(f'{label} 签名对象 key 必须是可见 ASCII')
-            result[key] = _manual_v6_signature_value(value[key], f'{label}.{key}')
+            result[key] = _prepare_manual_v6_json_hash_input(value[key], f'{label}.{key}')
         return result
     raise PublishDataValidationError(f'{label} 含不可签名类型: {type(value).__name__}')
 
@@ -1396,7 +1396,7 @@ def _manual_v6_canonical_json(value):
 
 
 def _manual_v6_hash(value):
-    canonical = _manual_v6_signature_value(value)
+    canonical = _prepare_manual_v6_json_hash_input(value)
     encoded = _manual_v6_canonical_json(canonical).encode('utf-8')
     return hashlib.sha256(encoded).hexdigest()
 

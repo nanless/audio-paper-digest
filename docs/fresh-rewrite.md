@@ -167,7 +167,7 @@ npm run rewrite:source -- signed-patch --run-id "$rewrite_run_id" --patch review
 }
 ```
 
-先用 `recoverSignedReaderDraft({paper, sourceDetails, runId})` 获得 `{draft,proof}`。草稿和节点 SHA 使用 `reader-repair.hashDraft` 的 JSON 顺序规则，不是完整论文或计划的 `stableHash`。`replacements` 须为 1–8 个已有节点，规则与前文相同。恢复出的输入须能重新生成相同正文、计划和图来源，不能声称找回模型原始 JSON 空白或表格选择写法。
+先用 `reconstructReaderDraftFromVerifiedArticle({paper, sourceDetails, runId})` 获得 `{draft,proof}`。草稿和节点 SHA 使用 `reader-repair.hashDraft` 的 JSON 顺序规则，不是完整论文或计划的 `stableHash`。`replacements` 须为 1–8 个已有节点，规则与前文相同。恢复出的输入须能重新生成相同正文、计划和图来源，不能声称找回模型原始 JSON 空白或表格选择写法。
 
 执行先持运行锁，再持论文锁，锁内重读父论文并比较 SHA 后才修改。真实解析器核验表格、公式和正文，共用 API 刷新的最终处理函数；人工操作只重用路径和 SHA 已核验的旧原图缓存，不下载、不请求模型，也不伪造 `readerCallModel` 返回。原图缺失或变化时停止。
 
@@ -177,7 +177,7 @@ npm run rewrite:source -- signed-patch --run-id "$rewrite_run_id" --patch review
 
 ### 接受独立事实审查报告
 
-无需手改状态。获授权的任务脚本在沙箱外调用 `scripts/lib/fresh-rewrite-run.js` 的 `acceptSignedReaderFactReview(request)`；这不是另一个命令行阶段。请求须精确包含：
+无需手改状态。获授权的任务脚本在沙箱外调用 `scripts/lib/fresh-rewrite-run.js` 的 `acceptReaderOperatorFactReview(request)`；这不是另一个命令行阶段。请求须精确包含：
 
 ```javascript
 {
