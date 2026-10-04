@@ -1,9 +1,7 @@
 'use strict';
 
-// Unified production control plane for newly acquired official proceedings.
-// It deliberately replaces the disconnected conference execution/analyze
-// commands: a paper is complete only when the authenticated analysis receipt
-// and deterministic page manifest are both recorded in this checkpoint.
+// 统一管理新获取的官方会议论文。论文只有完成分析凭证核验、生成页面清单，
+// 并将两份记录写入进程检查点后，才算完成；不再分别运行彼此独立的分析入口。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -317,9 +315,9 @@ function assertState(value, expected = null) {
         throw new Error('Conference process source implementation does not bind its original identity');
     }
     if (expected) {
-        // 与 context 的比对剥离词表指纹：state.taxonomy* 是进程身份史（processId 派生绑定），
-        // 换表后与当前 config 必然不同且不可就地刷新；换表强制点在封口/发布层。
-        // implementationSha256 仍参与比对（实现漂移必须先走迁移桥接）。
+        // 比较当前配置时，先排除进程创建时保存的词表版本和哈希。它们参与原 processId
+        // 的计算，不能因更换词表就覆盖原值。是否允许继续使用标签记录，由后续标签阶段
+        // 和发布检查决定。implementationSha256 仍参与比较，实现变化须先按迁移流程核验。
         const valueAuthority = { ...value.authority };
         const expectedAuthority = { ...expected.authority };
         for (const key of ['taxonomyVersion', 'taxonomyRegistrySha256']) {
@@ -327,7 +325,7 @@ function assertState(value, expected = null) {
         }
         if (stableHash(valueAuthority) !== stableHash(expectedAuthority)
             || stableHash(Object.keys(value.items).sort()) !== stableHash(expected.paperIds)) {
-            throw new Error('Conference process authority/member set drifted');
+            throw new Error('会议进程记录的来源、筛选、配置或论文集合与当前输入不一致。');
         }
     }
     const preservedComplete = new Set([
@@ -349,21 +347,21 @@ function assertState(value, expected = null) {
             throw new Error(`Conference process item integrity failed: ${paperId}`);
         }
         if (item.status === 'complete' && (!item.sourceProof || !item.analysisProof || !item.pageProof)) {
-            throw new Error(`Conference process complete item lacks causal proofs: ${paperId}`);
+            throw new Error(`论文 ${paperId} 已标为完成，但缺少来源、分析或页面记录。`);
         }
     }
     const incomplete = Object.values(value.items).filter(item => item.status !== 'complete');
     if (value.status === 'complete') {
         if (incomplete.length || !value.aggregate
             || !/^[a-f0-9]{64}$/.test(value.completionReceiptSha256 || '')) {
-            throw new Error('Conference process complete checkpoint lacks closed items/aggregate/receipt proof');
+            throw new Error('会议进程已标为完成，但仍有未完成论文，或缺少汇总记录及格式有效的完成凭证哈希。');
         }
     } else {
         if (value.aggregate !== null || value.completionReceiptSha256 !== null) {
-            throw new Error('Conference process incomplete checkpoint carries aggregate/receipt proof');
+            throw new Error('会议进程尚未完成，不能保存汇总记录或完成凭证哈希。');
         }
         if (value.status === 'partial' && !incomplete.length) {
-            throw new Error('Conference process partial checkpoint has no incomplete item');
+            throw new Error('会议进程标为 partial，但所有论文都已完成。');
         }
     }
     return value;
@@ -465,7 +463,7 @@ function loadAuthority(options, deps) {
     const discovery = deps.discovery.discoveryHandleSnapshot(discoveryHandle);
     const selection = deps.filter.selectionHandleSnapshot(selectionHandle);
     if (discovery.candidateManifest.adapter !== 'official-proceedings') {
-        throw new Error('conference:new:process only accepts official-proceedings exact-PDF discovery');
+        throw new Error('conference:new:process 只接受从官方论文集精确匹配 PDF 的发现结果。');
     }
     let acquisitionReceipt = discovery.candidateManifest.acquisitionReceipt || null;
     if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1' && !acquisitionReceipt) {
@@ -474,7 +472,7 @@ function loadAuthority(options, deps) {
         if (typeof deps.discovery.officialAcquisitionBindingFromRoot !== 'function'
             || !expectedRoot || path.resolve(discovery.candidateManifest.pdfRoot) !== expectedRoot
             || discovery.candidateManifest.metadataSnapshot.file !== path.join(expectedRoot, 'metadata.json')) {
-            throw new Error('new-conference process requires discovery bound to official acquisition receipt');
+            throw new Error('新会议流程的发现结果必须对应官方文件获取记录。');
         }
         acquisitionReceipt = deps.discovery.officialAcquisitionBindingFromRoot(
             discovery.candidateManifest.conference,
@@ -482,16 +480,16 @@ function loadAuthority(options, deps) {
             expectedRoot
         );
     }
-    if (!selection.included.length) throw new Error('conference:new:process requires a non-empty complete selection');
+    if (!selection.included.length) throw new Error('conference:new:process 要求筛选结果包含入选论文。');
     for (const member of selection.included) {
         const replay = deps.discovery.replayDiscoveryMember(discoveryHandle, member.sourceIdentity);
         if (replay.match.kind !== 'exact' || replay.match.candidates.length !== 1) {
-            throw new Error(`selected source is not a unique official exact PDF: ${member.paperId}`);
+            throw new Error(`论文 ${member.paperId} 未能精确匹配唯一一份官方 PDF。`);
         }
     }
     const tagCatalogFile = deps.ledger.readRegularJson(files.tagCatalogFile);
     const tagCatalogVersion = String(tagCatalogFile.value.version || tagCatalogFile.value.registryVersion || '');
-    if (!tagCatalogVersion) throw new Error('current taxonomy registry version is missing');
+    if (!tagCatalogVersion) throw new Error('当前标签词表缺少版本标识。');
     const authority = { conferenceId: selection.conferenceId, catalogName: options.catalogName,
         reportName: options.reportName, filterId: options.filterId, catalogSha256: discovery.catalogSha256,
         reportSha256: discovery.reportSha256, filterPolicySha256: selection.filterPolicySha256,
@@ -521,7 +519,7 @@ function sourceCacheRoot(context) {
     const base = context?.files?.conferenceSourceCacheDir;
     const implementation = context?.authority?.implementationSha256;
     if (typeof base !== 'string' || !path.isAbsolute(base) || !/^[a-f0-9]{64}$/.test(implementation || '')) {
-        throw new Error('conference source cache root requires the authenticated implementation identity');
+        throw new Error('会议来源文件目录必须为绝对路径，实现指纹也必须有效。');
     }
     return path.join(base, `generation-${implementation}`);
 }
@@ -536,7 +534,7 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
     const sealedPdf = path.join(root, names.pdf);
     const pdfLoaded = deps.discovery.safeAbsoluteFile(fs.existsSync(sealedPdf) ? sealedPdf : path.join(discovery.candidateManifest.pdfRoot, candidate.path),
         `official PDF for ${member.paperId}`, deps.discovery.MAX_PDF_BYTES);
-    if (sha256(pdfLoaded.bytes) !== candidate.sha256) throw new Error(`official PDF SHA drifted: ${member.paperId}`);
+    if (sha256(pdfLoaded.bytes) !== candidate.sha256) throw new Error(`论文 ${member.paperId} 的官方 PDF 哈希与发现记录不一致。`);
     const pdfProvenanceKind = String(replay.metadataRecord.pdfUrl || '').includes('ICMC2026_proceedings_')
         ? 'conference-proceedings' : 'official-pdf';
     exactFile(path.join(root, names.metadata), metadataBytes); exactFile(path.join(root, names.pdf), pdfLoaded.bytes);
@@ -622,7 +620,7 @@ function prepareShared(context, deps, createdAt) {
     const stagingReceiptFile = path.join(files.conferenceStagingDir, names.stagingReceipt);
     if (!fs.existsSync(importFile) && !fs.existsSync(stagingReceiptFile)) deps.staging.writeStagingBundle({
         stagingRoot: files.conferenceStagingDir, importManifestName: names.import, receiptName: names.stagingReceipt, staged });
-    if (fs.existsSync(importFile) !== fs.existsSync(stagingReceiptFile)) throw new Error('partial conference staging bundle cannot be recovered');
+    if (fs.existsSync(importFile) !== fs.existsSync(stagingReceiptFile)) throw new Error('会议来源准备文件不完整，不能恢复；预期的清单和凭证必须同时存在。');
     const stagingHandle = deps.staging.loadStagingHandle(importFile, stagingReceiptFile, context.selectionHandle,
         context.discoveryHandle, files.conferenceStagingSourceDir, { replay: false });
     const result = deps.importer.importConferenceSourcesFromStaging({ stagingHandle,
@@ -633,11 +631,11 @@ function prepareShared(context, deps, createdAt) {
     const importReceiptFile = path.join(files.conferenceSourceLedgerDir, names.importReceipt);
     if (!fs.existsSync(ledgerFile) && !fs.existsSync(importReceiptFile)) deps.importCli.reserveOutputPair(
         files.conferenceSourceLedgerDir, names.ledger, bundle.ledgerBytes, bundle.receipt, names.importReceipt);
-    if (fs.existsSync(ledgerFile) !== fs.existsSync(importReceiptFile)) throw new Error('partial conference import bundle cannot be recovered');
+    if (fs.existsSync(ledgerFile) !== fs.existsSync(importReceiptFile)) throw new Error('会议来源导入文件不完整，不能恢复；预期的清单和凭证必须同时存在。');
     const importHandle = deps.importer.loadImportHandle(ledgerFile, importReceiptFile, stagingHandle);
     const imported = deps.importer.importHandleSnapshot(importHandle); const tagCatalogFile = deps.ledger.readRegularJson(files.tagCatalogFile);
     const tagCatalogVersion = String(tagCatalogFile.value.version || tagCatalogFile.value.registryVersion || '');
-    if (!tagCatalogVersion) throw new Error('taxonomy registry version is missing');
+    if (!tagCatalogVersion) throw new Error('标签词表缺少版本标识。');
     const identities = imported.verifiedMembers;
     const planIdentities = [...identities].sort((left, right) => left.paperId.localeCompare(right.paperId));
     const shards = [];
@@ -652,7 +650,7 @@ function prepareShared(context, deps, createdAt) {
     const planned = deps.plan.createRunFromImportPlan({ files, importHandle, planName: names.plan, runName: names.run });
     const runFile = path.join(files.conferenceRunsDir, names.run); const planReceiptFile = path.join(files.conferenceRunsDir, planned.receiptName);
     if (!fs.existsSync(runFile) && !fs.existsSync(planReceiptFile)) deps.plan.applyRunPlan(planned);
-    if (fs.existsSync(runFile) !== fs.existsSync(planReceiptFile)) throw new Error('partial conference plan bundle cannot be recovered');
+    if (fs.existsSync(runFile) !== fs.existsSync(planReceiptFile)) throw new Error('会议分析计划文件不完整，不能恢复；预期的计划和凭证必须同时存在。');
     const planHandle = deps.plan.loadPlanHandle(runFile, planReceiptFile,
         path.join(files.conferenceSourceLedgerDir, names.plan), importHandle, files.tagCatalogFile);
     return { planHandle, names, sealed, sourceCacheRoot: cacheRoot,
@@ -668,7 +666,7 @@ async function processOne(context, shared, item, deps) {
         const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir, executionId: item.analysisRunId });
         try { deps.adapter.verifyPlanAuthority(loaded, shared.planHandle, shared.sourceCacheRoot); }
         catch (cause) {
-            throw Object.assign(new Error(`Source extraction generation changed; existing analysis requires authenticated rebinding: ${item.paperId}`, { cause }),
+            throw Object.assign(new Error(`论文 ${item.paperId} 的已有分析未通过当前来源与计划核验；继续使用前，必须按正式流程重新核验来源绑定。`, { cause }),
                 { code: 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED', retryable: false });
         }
     }
@@ -683,7 +681,7 @@ async function processOne(context, shared, item, deps) {
         const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir,
             executionId: item.analysisRunId });
         const paper = loaded.analysis.papers[0];
-        const error = new Error(paper.latestAnalysisAttemptError || paper.error || `analysis remained ${analyzed.status}`);
+        const error = new Error(paper.latestAnalysisAttemptError || paper.error || `分析结束后状态仍为 ${analyzed.status}。`);
         error.code = paper.latestAnalysisAttemptErrorCode || null;
         error.retryable = paper.latestAnalysisAttemptRetryable;
         throw error;
@@ -693,13 +691,12 @@ async function processOne(context, shared, item, deps) {
         stagingRoot: files.conferencePageStagingDir, planHandle: shared.planHandle,
         sourceRoot: shared.sourceCacheRoot, apply: true });
     if (staged.status === 'blocked') {
-        // Deterministic tag assignment review: the assignment is unresolved, so the
-        // stage wrote assignment.json only (fail-closed, no page.md/manifest).
-        // This is a per-paper review condition, never a batch/system failure.
+        // 标签分配尚未确定时，后处理只保存 assignment.json，不生成页面或页面清单。
+        // 这篇论文进入标签审查队列，其他论文仍可继续处理；它不属于模型或系统故障。
         const assignment = staged.assignment || {};
         const blockedReasons = Array.isArray(assignment.blockedReasons) ? assignment.blockedReasons : [];
-        const error = new Error(`taxonomy review required for ${item.paperId}: `
-            + `${blockedReasons.join('; ') || 'unresolved taxonomy selection'}`);
+        const error = new Error(`论文 ${item.paperId} 的标签需要重新核对：`
+            + `${blockedReasons.join('; ') || '标签选择尚未确定'}`);
         error.code = 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED';
         error.retryable = false;
         error.taxonomyReview = { paperId: item.paperId, analysisRunId: item.analysisRunId,
@@ -708,7 +705,7 @@ async function processOne(context, shared, item, deps) {
             assignmentSha256: assignment.assignmentSha256 || null };
         throw error;
     }
-    if (staged.status !== 'staged') throw new Error(`paper postprocess remained ${staged.status}`);
+    if (staged.status !== 'staged') throw new Error(`论文后处理结束后状态仍为 ${staged.status}。`);
     return { analysisProof: { analysisSha256: analyzed.analysisSha256,
         completionReceiptSha256: staged.manifest.completionReceiptSha256,
         sourceSnapshotSha256: staged.manifest.sourceSnapshotSha256 },
@@ -728,7 +725,7 @@ function assertSourceContinuity(state, shared) {
     for (const item of Object.values(state.items)) {
         if (!item.sourceProof || !(item.attempts > 0 || item.analysisProof || item.status === 'complete')) continue;
         if (stableHash(item.sourceProof) !== stableHash(sealed.get(item.paperId) || null)) {
-            throw Object.assign(new Error(`Sealed source proof changed for existing analysis; inspect --source-upgrade-plan --from ${state.processId} before authorizing new analysis: ${item.paperId}`),
+            throw Object.assign(new Error(`已有分析对应的来源记录发生变化；请先检查 --source-upgrade-plan --from ${state.processId} 的结果，再决定是否授权论文 ${item.paperId} 重新分析。`),
                 { code: 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED', retryable: false });
         }
     }

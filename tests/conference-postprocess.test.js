@@ -132,7 +132,7 @@ function fixture(t, extraRuns = []) {
     return { root, one, two, extra, runs, planHandle, sourceRoot: path.join(root, 'source'), dependencies };
 }
 
-test('generic conference stage binds sealed completion, identity, taxonomy and registry-isolated bytes', t => {
+test('会议页面生成会核对完成记录、论文身份和标签，并按词表版本分别保存文件', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     const result = api.stagePaper({ analysisRoot: path.join(f.root, 'analysis'), executionId: f.one,
         tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
@@ -263,7 +263,7 @@ test('completion drift, arXiv renderer leakage and weak assets fail closed', t =
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     f.runs.get(f.one).run.completionReceipt.analysisSha256 = 'c'.repeat(64);
     assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
-        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /sealed conference analysis/);
+        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /会议分析的完成状态、论文身份或完成凭证/);
     f.runs.set(f.one, completed(f.one, 1));
     assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, { ...f.dependencies, render: () => ({ markdown: 'https://arxiv.org/abs/1234.5678', assets: [] }) }), /arXiv identity/);
@@ -326,7 +326,7 @@ test('aggregate replays every selected stage and emits only when the full explic
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
     fs.appendFileSync(path.join(secondStage.directory, 'page.md'), 'drift');
     assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
-        stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /deterministic projection/);
+        stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /会议暂存的分类记录、页面或清单与当前分析结果、词表和生成程序的输出不一致/);
 });
 
 test('aggregate rejects a selected-member subset and executions from another authenticated plan', t => {
@@ -334,13 +334,13 @@ test('aggregate rejects a selected-member subset and executions from another aut
     for (const executionId of [f.one, f.two]) api.stagePaper({ analysisRoot: 'ignored', executionId,
         tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
     assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one], tagCatalogPath: TAG_CATALOG_PATH,
-        stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /complete authenticated selected member set/);
+        stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /已核验计划中的全部入选论文/);
     f.runs.get(f.two).planKey = 'b';
     assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /cross-plan/);
 });
 
-test('multi-level taxonomy hierarchy counts direct and subtree papers on every level', () => {
+test('多层标签统计分别计算每一级的直接使用篇数和包含下级概念的去重篇数', () => {
     const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
     const hierarchy = api.aggregateHierarchy(registry, [
         ['task.asr', 'method.transformer', 'research_focus.robustness'],
@@ -386,10 +386,10 @@ test('multi-level taxonomy hierarchy counts direct and subtree papers on every l
     const dedupRoot = deduped.facets.find(item => item.id === 'task').nodes[0];
     assert.deepEqual([dedupRoot.directCount, dedupRoot.subtreeCount], [1, 2]);
     // 未知概念 fail-closed。
-    assert.throws(() => api.aggregateHierarchy(registry, [['task.not-a-concept']]), /does not know/);
-    assert.throws(() => api.aggregateHierarchy(registry, [[null]]), /does not know/);
-    assert.throws(() => api.aggregateHierarchy(registry, ['not-an-array']), /must be an array/);
-    assert.throws(() => api.aggregateHierarchy({}, []), /loaded registry/);
+    assert.throws(() => api.aggregateHierarchy(registry, [['task.not-a-concept']]), /当前词表中缺失或未启用的概念/);
+    assert.throws(() => api.aggregateHierarchy(registry, [[null]]), /当前词表中缺失或未启用的概念/);
+    assert.throws(() => api.aggregateHierarchy(registry, ['not-an-array']), /概念 ID 列表必须是数组/);
+    assert.throws(() => api.aggregateHierarchy({}, []), /构建标签层级需要词表的分类维度/);
     // 渲染：根不缩进、二级缩进一级、三级缩进两级，链接按标签 URL 编码。
     const lines = api.hierarchyLines(hierarchy);
     assert.equal(lines[0], '### 🏷️ 多级标签统计');
@@ -472,25 +472,25 @@ test('Reader/scoring/taxonomy/publication compatibility gates cannot be bypassed
     const f = fixture(t); const args = { analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot: path.join(f.root, 'staging'), planHandle: f.planHandle, sourceRoot: f.sourceRoot };
     f.runs.get(f.one).analysis.papers[0].analysisManifest.contracts.apiReaderSourceBindings = 'api-reader-source-bindings-v3';
-    assert.throws(() => api.stagePaper(args, f.dependencies), /source-bindings-v4/);
+    assert.throws(() => api.stagePaper(args, f.dependencies), /读者文章、来源绑定规则或文章与正式分析的对应记录未通过校验/);
     f.runs.set(f.one, completed(f.one, 1));
     f.runs.get(f.one).analysis.papers[0].analysisManifest.stages.scoringAudit.scoringContract = 'legacy';
-    assert.throws(() => api.stagePaper(args, f.dependencies), /api-scoring-audit-v2/);
+    assert.throws(() => api.stagePaper(args, f.dependencies), /评分审查的状态、规则、正文绑定或稳定性未通过校验/);
     f.runs.set(f.one, completed(f.one, 1));
     delete f.runs.get(f.one).analysis.papers[0].analysisManifest.contracts.coreSummary;
-    assert.throws(() => api.stagePaper(args, f.dependencies), /core-summary-detailed-v3/);
+    assert.throws(() => api.stagePaper(args, f.dependencies), /通过核心摘要阶段校验/);
     f.runs.set(f.one, completed(f.one, 1));
     f.runs.get(f.one).analysis.papers[0].analysisManifest.stages.taxonomySeal.registrySha256 = '0'.repeat(64);
-    assert.throws(() => api.stagePaper(args, f.dependencies), /taxonomy seal/);
+    assert.throws(() => api.stagePaper(args, f.dependencies), /标签阶段记录未通过当前校验/);
     f.runs.set(f.one, completed(f.one, 1));
     f.runs.get(f.one).analysis.papers[0].conferencePublication.pdfUrl = 'https://arxiv.org/pdf/1234.5678.pdf';
-    assert.throws(() => api.stagePaper(args, f.dependencies), /conference HTTPS URL/);
+    assert.throws(() => api.stagePaper(args, f.dependencies), /符合会议页面要求的公网 HTTPS 地址/);
     f.runs.set(f.one, completed(f.one, 1));
     f.runs.get(f.one).analysis.papers[0].analysis = '## 评分\n6.9/10';
-    assert.throws(() => api.stagePaper(args, f.dependencies), /canonical 13-section/);
+    assert.throws(() => api.stagePaper(args, f.dependencies), /包含规定的 13 节/);
     f.runs.set(f.one, completed(f.one, 1));
     f.runs.get(f.one).analysis.papers[0].analysisManifest.sourceAcquisition.analysisSource = 'abstract';
-    assert.throws(() => api.stagePaper(args, f.dependencies), /full-text analysis/);
+    assert.throws(() => api.stagePaper(args, f.dependencies), /基于全文的分析/);
 });
 
 test('loadStage re-renders current completion and rejects re-signed metadata or extra files', t => {
@@ -503,13 +503,13 @@ test('loadStage re-renders current completion and rejects re-signed metadata or 
     manifest.title = 'attacker title'; const body = structuredClone(manifest); delete body.manifestSha256;
     manifest.manifestSha256 = api.stableHash(body); fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
     assert.throws(() => api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
-        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /deterministic projection/);
+        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /会议暂存的分类记录、页面或清单与当前分析结果、词表和生成程序的输出不一致/);
     fs.writeFileSync(manifestFile, `${JSON.stringify(staged.manifest, null, 2)}\n`); fs.writeFileSync(path.join(directory, 'extra.json'), '{}');
     assert.throws(() => api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /unexpected recovery content/);
 });
 
-test('renderer/projection upgrade receives a new immutable stage identity', t => {
+test('页面生成程序升级后，使用新的暂存身份，不覆盖原文件', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     const implementation = marker => { const body = { contract: api.PROJECTION_CONTRACT, version: 1,
         nodeSourceSha256: marker.repeat(64), rendererSourceSha256: 'b'.repeat(64), publisherSourceSha256: 'c'.repeat(64),

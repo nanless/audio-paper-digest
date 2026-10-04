@@ -135,16 +135,16 @@ test('state status and completion receipt reject incoherent lifecycle claims', a
 
     const partial = { ...state, status: 'partial', aggregate: null, completionReceiptSha256: null };
     partial.stateSha256 = processApi.stateDigest(partial);
-    assert.throws(() => processApi.assertState(partial), /partial checkpoint has no incomplete item/);
+    assert.throws(() => processApi.assertState(partial), /标为 partial，但所有论文都已完成/);
 
     const incompleteWithProof = { ...state, status: 'running' };
     incompleteWithProof.stateSha256 = processApi.stateDigest(incompleteWithProof);
-    assert.throws(() => processApi.assertState(incompleteWithProof), /incomplete checkpoint carries aggregate\/receipt proof/);
+    assert.throws(() => processApi.assertState(incompleteWithProof), /尚未完成，不能保存汇总记录或完成凭证哈希/);
 
     const incompleteItem = structuredClone(state);
     incompleteItem.items[f.members[0].paperId].status = 'analysis_partial';
     incompleteItem.stateSha256 = processApi.stateDigest(incompleteItem);
-    assert.throws(() => processApi.assertState(incompleteItem), /complete checkpoint lacks closed items/);
+    assert.throws(() => processApi.assertState(incompleteItem), /已标为完成，但仍有未完成论文/);
 
     const validPartial = structuredClone(state);
     validPartial.status = 'partial';
@@ -564,7 +564,7 @@ test('real official exact-PDF source seal reaches authenticated staging/import/p
     const sealedPdfFile = path.join(files.conferenceStagingSourceDir,
         processApi.sourceNames(paperId, context.authority.implementationSha256).pdf);
     fs.writeFileSync(sealedPdfFile, 'corrupt sealed PDF');
-    assert.throws(() => processApi.prepareShared(context, upgradedDeps, stamp), /PDF SHA drifted/);
+    assert.throws(() => processApi.prepareShared(context, upgradedDeps, stamp), /官方 PDF 哈希与发现记录不一致/);
     assert.equal(extractions, 1);
 });
 
@@ -1111,7 +1111,7 @@ test('promote --prefer-upgrade books upgraded members first, preserves the rest 
     // 终态口径：promoted 进程只作 --status/发布节点，后续 --apply 按设计拒绝重绑。
     await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps),
         error => error.code === 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED'
-            && /inspect --source-upgrade-plan --from /.test(error.message));
+            && /请先检查 --source-upgrade-plan --from /.test(error.message));
     // 收据字段 fail-closed：乱序、重复、越集和类型错误一律拒绝。
     const tamper = (mutation, pattern) => {
         const copy = structuredClone(state);

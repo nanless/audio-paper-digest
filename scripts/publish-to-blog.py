@@ -6285,12 +6285,12 @@ def _api_reader_page_binding_issue(content, paper):
 
 
 def _normalize_fresh_article(value):
-    """Compatibility facade for the extracted payload verifier."""
+    """沿用 Manual 文件核验模块的正文规范化规则。"""
     return _normalize_fresh_article_impl(value)
 
 
 def _validate_manual_v5_fresh_authoring(paper, article, date_str):
-    """Compatibility facade for the extracted payload verifier."""
+    """将项目路径传给 Manual 核验模块，检查新写作正文及其输入文件。"""
     return _verify_manual_v5_fresh_authoring(
         paper, article, date_str,
         current_dir=CURRENT_DIR, project_root=PROJECT_ROOT,
@@ -6298,21 +6298,20 @@ def _validate_manual_v5_fresh_authoring(paper, article, date_str):
 
 
 def _validate_manual_v5_tutorial_payload(paper, article, date_str):
-    """Replay the sealed v5 quality/artifact package from its real files."""
+    """将项目路径传给 Manual 核验模块，检查教程质量记录和图表计划。"""
     return _verify_manual_v5_tutorial_payload(
         paper, article, date_str, current_dir=CURRENT_DIR,
     )
 
 
 def _manual_reader_article(paper, plan, date_str=None):
-    """Read the separately attested reader article; never trust an unhashed draft."""
+    """核对保存的读者正文及其 SHA，并按 Manual 版本执行对应的材料检查。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     if isinstance(contracts, dict) \
             and contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V6:
-        # This branch raises on every missing field/SHA drift.  It deliberately
-        # cannot inherit the historical v5 "None means use the old layout"
-        # compatibility behavior.
+        # v6 必须通过完整材料检查，缺失或不一致时直接拒绝。
+        # 本分支不能像历史 v5 一样返回 None 后改用旧版页面布局。
         return validate_manual_v6_payload(paper)['article']
     if not plan or plan.get('version') != 2:
         return None

@@ -1,6 +1,6 @@
 'use strict';
 
-/** Validate and canonically represent the author-owned classification/tag fields. */
+/** 检查作者填写的文档类型和标签字段，并整理为统一格式。 */
 const {
     ALLOWED_TAGS,
     PRIMARY_TASK_TAGS,
@@ -43,36 +43,36 @@ function normalizeAuthorOwnedBaseFields(record, label = 'author record') {
     }
 
     if (typeof record.task !== 'string') {
-        throw new Error(`${label}.task 必须是单个合法 #主任务标签`);
+        throw new Error(`${label}.task 必须是一个合法的 #主任务标签。`);
     }
     const task = record.task.trim();
     if (!/^#[^\s#]+$/u.test(task) || !PRIMARY_TASK_TAGS.has(task)) {
-        throw new Error(`${label}.task 必须是 current registry 的单个 task facet 标签`);
+        throw new Error(`${label}.task 必须是当前词表中的单个任务标签。`);
     }
     if (typeof record.primaryMethodTag !== 'string') {
-        throw new Error(`${label}.primaryMethodTag 必须是单个合法 #主方法标签`);
+        throw new Error(`${label}.primaryMethodTag 必须是一个合法的 #主方法标签。`);
     }
     const primaryMethodTag = record.primaryMethodTag.trim();
     if (!/^#[^\s#]+$/u.test(primaryMethodTag)
         || !PRIMARY_METHOD_TAGS.has(primaryMethodTag)) {
-        throw new Error(`${label}.primaryMethodTag 必须是 current registry 的单个 method facet 标签`);
+        throw new Error(`${label}.primaryMethodTag 必须是当前词表中的单个方法标签。`);
     }
 
     if (typeof record.tags !== 'string') {
-        throw new Error(`${label}.tags 必须是 3-5 个空格分隔的合法标签字符串`);
+        throw new Error(`${label}.tags 必须是字符串，包含 3–5 个用空格分隔的合法标签。`);
     }
     const tags = record.tags.split(/\s+/u).filter(Boolean);
     if (tags.length < 3 || tags.length > 5 || new Set(tags).size !== tags.length
         || tags.some(tag => !/^#[^\s#]+$/u.test(tag) || !ALLOWED_TAGS.has(tag))
         || !tags.includes(task) || !tags.includes(primaryMethodTag)) {
-        throw new Error(`${label}.tags 必须含 3-5 个不重复的空格分隔白名单标签，并覆盖主任务和主方法`);
+        throw new Error(`${label}.tags 必须包含 3–5 个词表认可且不重复的标签，用空格分隔，并列出主任务和主方法。`);
     }
     const validation = require('../../scripts/lib/tag-rules.js')
         .getDefaultTagRules().validateTagSelection({
             tags, primaryTaskTag: task, primaryMethodTag
         });
     if (!validation.valid) {
-        throw new Error(`${label}.tags 不符合 current taxonomy: ${validation.errors.join('；')}`);
+        throw new Error(`${label}.tags 未通过当前词表的标签选择校验：${validation.errors.join('；')}`);
     }
 
     return {

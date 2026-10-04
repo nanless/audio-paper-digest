@@ -4222,7 +4222,7 @@ title: "Bad table"
             paper['analysisManifest']['contracts'].pop('tutorialPayload')
             with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    '历史 v5 只读兼容但不得重新包装'):
+                    '历史 v5 记录仅可兼容读取，不能据此重新生成教程材料。'):
                 publish_to_blog.generate_paper_page(paper, '2026-08-26')
             paper['analysisManifest']['contracts']['tutorialPayload'] = 'manual-v5-tutorial-payload-v1'
             takeover['tutorialPayload'] = payload
@@ -4232,7 +4232,7 @@ title: "Bad table"
             takeover['tutorialPayloadSha256'] = publish_to_blog._stable_json_sha256(payload)
             with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    '统一质量 orchestrator 协议'):
+                    '统一质量核验协议或规则指纹与当前要求不一致。'):
                 publish_to_blog.generate_paper_page(paper, '2026-08-26')
             payload['orchestratorFingerprint'] = original_orchestrator
             takeover['tutorialPayloadSha256'] = publish_to_blog._stable_json_sha256(payload)
@@ -4241,7 +4241,7 @@ title: "Bad table"
             quality_path.write_text('{"paperId":"2608.00000"}', encoding='utf-8')
             with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    'qualityPath 文件 SHA 漂移'):
+                    'qualityPath 对应文件的 SHA 与记录不一致。'):
                 publish_to_blog.generate_paper_page(paper, '2026-08-26')
             quality_path.write_bytes(original_quality_bytes)
             official_input = next(
@@ -4257,7 +4257,7 @@ title: "Bad table"
             }), encoding='utf-8')
             with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    'official_project_evidence paperId/kind/HTTPS URL 非法'):
+                    '官方项目证据中的论文 ID、材料类型或 HTTPS URL 不符合要求。'):
                 publish_to_blog.generate_paper_page(paper, '2026-08-26')
             official_path.write_bytes(original_official_bytes)
             article_path = Path(
@@ -4266,7 +4266,7 @@ title: "Bad table"
             article_path.write_text(reader_article + '\n\n旧稿注入。', encoding='utf-8')
             with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    'fresh article.md raw/NFKC SHA 或正文发生漂移'):
+                    '新写作 article.md 的原始文件 SHA、NFKC 规范化正文 SHA 或正文内容与记录不一致。'):
                 publish_to_blog.generate_paper_page(paper, '2026-08-26')
         self.assertIn('# 📄 两条表示如何统一听懂与生成音频', markdown)
         self.assertIn('> 英文题目：*[A General Purpose Audio Model](https://arxiv.org/abs/2608.24168)*', markdown)
@@ -4326,9 +4326,9 @@ title: "Bad table"
                     if boundary == 'old_copy_path':
                         editorial_input['path'] = str(old_copy.resolve())
                         resign_manual_v5_fresh_files(paper)
-                        expected_error = '未绑定当前固定契约'
+                        expected_error = '路径与当前指定文件不一致。'
                     else:
-                        expected_error = '文件 SHA 漂移'
+                        expected_error = '文件 SHA 与输入记录不一致。'
                     receipt_body = {key: value for key, value in fresh.items() if key != 'receiptSha256'}
                     self.assertEqual(fresh['receiptSha256'], publish_to_blog._stable_json_sha256(receipt_body))
                     self.assertEqual(takeover['freshAuthoringSha256'], publish_to_blog._stable_json_sha256(fresh))
@@ -4337,7 +4337,7 @@ title: "Bad table"
                         publish_to_blog.generate_paper_page(paper, date_str)
                     self.assertEqual(
                         str(failure.exception),
-                        f'{paper["arxivId"]} fresh authority editorial_contract {expected_error}',
+                        f'{paper["arxivId"]} 新写作所需的 editorial_contract 材料{expected_error}',
                     )
                     if boundary == 'current_bytes':
                         contract_path.write_bytes(old_bytes)

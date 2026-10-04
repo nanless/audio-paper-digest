@@ -1,6 +1,6 @@
 'use strict';
 
-// Explicit fork, not an in-place rebinding of evidence or successful prose.
+// 来源升级另建进程，保留原有证据和已完成正文，不在原记录上重新绑定。
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -11,10 +11,9 @@ const CONTRACT = 'conference-source-upgrade-plan-v1';
 const promotionProcessId = planSha256 => api.deterministicUuid(planSha256, 'conference-source-upgrade-process-v1');
 const executionIdFor = (planSha256, paperId) => api.deterministicUuid(promotionProcessId(planSha256), paperId, 'analysis');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-// authority 比对时剥离实现指纹与词表指纹：implementation 由迁移收据桥接；标签 字段是
-// 进程创建时的**身份史**（processId 派生绑定 state.authority 原值，不可就地刷新），换表后
-// 当前 config 的 标签 SHA 与它必然不同——该漂移合法，真正强制在封口/发布层
-// （analysis-contract.validateTagStageProof 升级分支与 Python _seal_registry_upgrade）。
+// 比较来源与筛选记录时，排除实现指纹和词表指纹。实现变化由迁移凭证另行核验；
+// 原词表字段参与进程身份计算，不能在更换词表后直接覆盖。
+// 是否允许沿用标签记录，由后续标签阶段和发布检查决定。
 const withoutImplementation = authority => {
     const copy = { ...authority };
     delete copy.implementationSha256;
@@ -31,7 +30,7 @@ function load(options, deps) {
     if (state.processId !== options.fromProcessId
         || api.stableHash(withoutImplementation(state.authority)) !== api.stableHash(withoutImplementation(context.authority))
         || api.stableHash(Object.keys(state.items).sort()) !== api.stableHash(context.members.map(item => item.paperId).sort())) {
-        throw new Error('Source upgrade source/filter/config/taxonomy authority or membership differs');
+        throw new Error('来源升级所用的来源、筛选、其余配置或论文集合与原进程不一致。');
     }
     const origin = recovery.sourceImplementation(state, directory, api);
     return { context, directory, state, origin };
@@ -68,8 +67,8 @@ function sourceProofOf(snapshot) {
 }
 
 function retainedLegacySnapshot(root, names, receipt, member, deps) {
-    // This is a byte replay of an issued 2.3.0 source, never an extraction by
-    // 2.3.1. The completed canonical/source receipt remains the authority.
+    // 这里只核对已保存的 2.3.0 提取文件，不能将其称为 2.3.1 的重新提取结果。
+    // 原分析和来源凭证仍是核验依据。
     if (receipt.contract !== extraction.RECEIPT_CONTRACT || receipt.version !== 2
         || receipt.status !== 'ready' || receipt.textReplayable !== true
         || receipt.extractor?.name !== extraction.EXTRACTOR_NAME || receipt.extractor.version !== '2.3.0'
@@ -259,7 +258,7 @@ async function promoteCaptionOnly(current, plan, deps) {
             || api.stableHash({ analysisSha256: staged.manifest.analysisSha256,
                 completionReceiptSha256: staged.manifest.completionReceiptSha256,
                 sourceSnapshotSha256: staged.manifest.sourceSnapshotSha256 }) !== api.stableHash(causal)) {
-            throw new Error('Caption repair current taxonomy/page causal proof drifted');
+            throw new Error('修正图注时，重新计算的标签分配或原页面的分析、来源记录不一致。');
         }
         const proof = { manifestSha256: staged.manifest.manifestSha256,
             contentSha256: staged.manifest.contentSha256, pagePath: staged.manifest.pagePath };
@@ -440,10 +439,9 @@ async function promoteSourceUpgrade(options, overrides = {}) {
             const state = recovery.readPrivateJson(filename);
             let statePlan = plan;
             if (state.planSha256 !== plan.planSha256) {
-                // prefer-upgrade 同样允许携带旧 plan 的升级目录：实现指纹随代码演进
-                // 变化是常态，目录合法性改由 plan 文件自洽 + 原始 stateSha 冻结校验
-                // （originalStateSha256 === 当前 state.stateSha256，state 只在 reseal 等
-                // 显式操作时改变）来保证，而非要求 planSha 恒等。
+                // prefer-upgrade 也允许保留旧计划的升级目录，因为实现指纹可能随代码变化。
+                // 下方核对旧计划文件的内容哈希、原进程 ID 和原状态 SHA，
+                // 不要求旧计划的 planSha256 与当前计划相同。
                 if (!options.preserveOriginalComplete && !options.preferUpgrade) continue;
                 const planFile = path.join(folder, 'plan.json'); if (!fs.existsSync(planFile)) continue;
                 statePlan = recovery.readPrivateJson(planFile);
@@ -501,8 +499,8 @@ async function promoteSourceUpgrade(options, overrides = {}) {
         const sourceContext = { ...current.context, authority: { ...current.context.authority, implementationSha256: current.origin } };
         const shared = await (deps.prepareShared || api.prepareShared)(sourceContext, deps, current.state.createdAt);
         api.assertSourceContinuity({ items: Object.fromEntries(completed), processId: current.state.processId }, shared);
-        // Replays the canonical analysis receipt, source/plan, tag catalog and exact
-        // page bytes. Promotion never calls analyzeConference or a model.
+        // 核对原分析完成凭证、来源、计划、当前词表和页面字节。
+        // 合并升级结果的阶段不调用分析函数或模型。
         const preservedStages = {};
         const promotedItems = new Map();
         for (const id of allIds) {
@@ -513,9 +511,9 @@ async function promoteSourceUpgrade(options, overrides = {}) {
             if (preserved.has(id) || preservedPrior.has(id)) {
                 staged = deps.postprocess.loadPreservedStage({ stagingRoot: deps.files.conferencePageStagingDir,
                     executionId: item.analysisRunId, paperId: id, pageProof: item.pageProof, repair: true });
-                // 换表+reseal 后旧 staging（换表前 registry/analysis 指纹）与当前 item proof
-                // 必然不一致；字节回放失败时按当前 analysis/词表重新 stage（记录 pageRepair），
-                // 而不是把换表前的旧词表页面带进发布。
+                // 词表或标签阶段记录更新后，原暂存页面可能仍绑定旧分析和词表。
+                // 下方发现绑定不一致时，按当前分析和词表重新生成页面并记录 pageRepair，
+                // 不能直接将更新前的页面带入发布。
                 const replayProof = { analysisProof: { analysisSha256: staged.manifest?.analysisSha256,
                     completionReceiptSha256: staged.manifest?.completionReceiptSha256, sourceSnapshotSha256: staged.manifest?.sourceSnapshotSha256 },
                 pageProof: { manifestSha256: staged.manifest?.manifestSha256, contentSha256: staged.manifest?.contentSha256, pagePath: staged.manifest?.pagePath } };

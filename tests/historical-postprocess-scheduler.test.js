@@ -116,7 +116,7 @@ test('renderer implementation change creates a new staging run and checkpoint wi
     assert.equal(firstCheckpoint.items[f.paperIds[0]].rendererImplementationSha256, RENDERER);
     assert.equal(secondCheckpoint.items[f.paperIds[0]].rendererImplementationSha256, replacementRenderer);
     assert.throws(() => api.validateCheckpoint(firstCheckpoint, CROSSWALK, REGISTRY,
-        replacementRenderer), /checkpoint identity\/schema drifted/);
+        replacementRenderer), /历史后处理检查点的身份或结构与当前输入不一致/);
     assert.doesNotThrow(() => api.validateCheckpoint(secondCheckpoint, CROSSWALK, REGISTRY,
         replacementRenderer));
     assert.equal(f.stageCalls.at(-1).rendererImplementationSha256, replacementRenderer);
@@ -177,7 +177,7 @@ test('analysis A to B drift during staging fails before checkpointing A as stage
     const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: 'pilot', concurrency: 1 }, f.deps);
     assert.equal(result.processed[0].status, 'failed');
-    assert.match(result.processed[0].lastError, /changed while staging/);
+    assert.match(result.processed[0].lastError, /在页面暂存期间发生变化/);
     assert.equal(result.daily[0].status, 'blocked');
 });
 
@@ -266,7 +266,7 @@ test('blocked deterministic taxonomy is preserved as an audit artifact but never
     const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 }, f.deps);
     assert.equal(result.processed[0].status, 'failed'); assert.equal(f.assignmentWrites(), 1);
-    assert.equal(f.stageCalls.length, 0); assert.match(result.processed[0].lastError, /taxonomy assignment is blocked/);
+    assert.equal(f.stageCalls.length, 0); assert.match(result.processed[0].lastError, /标签分配受阻/);
     // The pending classification is an explicit, visible review queue entry:
     // its reasons travel with the checkpoint item and with the run report.
     assert.equal(result.taxonomyReview, 1);

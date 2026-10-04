@@ -255,25 +255,25 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
     if (!recordId || recordId !== id) throw new Error(`${label}.arxivId 与对象键不一致`);
     if (!DOCUMENT_TYPES.has(record.type)) throw new Error(`${label}.type 非法`);
     const task = assertString(record.task, `${label}.task`, 2);
-    if (!/^#[^\s#]+$/.test(task)) throw new Error(`${label}.task 必须是单个 #主任务标签`);
+    if (!/^#[^\s#]+$/.test(task)) throw new Error(`${label}.task 必须是一个 #主任务标签。`);
     const tags = assertString(record.tags, `${label}.tags`, 5);
     const tagList = [...new Set(tags.split(/\s+/).filter(Boolean))];
     if (tagList.length < 3 || tagList.length > 5
         || tagList.some(tag => !/^#[^\s#]+$/.test(tag)) || !tagList.includes(task)) {
-        throw new Error(`${label}.tags 必须含 3-5 个标签，并覆盖主任务、主方法和补充标签`);
+        throw new Error(`${label}.tags 必须包含 3–5 个标签，并列出主任务、主方法和补充标签。`);
     }
     const invalidTags = tagList.filter(tag => !ALLOWED_TAGS.has(tag));
     if (invalidTags.length > 0) {
-        throw new Error(`${label}.tags 含非白名单标签: ${invalidTags.join(' ')}`);
+        throw new Error(`${label}.tags 中有当前词表不认可的标签：${invalidTags.join(' ')}`);
     }
     if (!PRIMARY_TASK_TAGS.has(task)) {
-        throw new Error(`${label}.task 必须是 current registry 的 task facet 标签`);
+        throw new Error(`${label}.task 必须是当前词表中的任务标签。`);
     }
     const primaryMethodTag = assertString(
         record.primaryMethodTag, `${label}.primaryMethodTag`, 2
     );
     if (!PRIMARY_METHOD_TAGS.has(primaryMethodTag) || !tagList.includes(primaryMethodTag)) {
-        throw new Error(`${label}.primaryMethodTag 必须是 tags 中显式包含的 current method facet 标签`);
+        throw new Error(`${label}.primaryMethodTag 必须是当前词表中的方法标签，并在 tags 中明确列出。`);
     }
     const tagValidationResult = require('../../scripts/lib/tag-rules.js')
         .getDefaultTagRules().validateTagSelection({
@@ -282,7 +282,7 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
             primaryMethodTag
         });
     if (!tagValidationResult.valid) {
-        throw new Error(`${label}.tags 不符合 current taxonomy: ${tagValidationResult.errors.join('；')}`);
+        throw new Error(`${label}.tags 未通过当前词表的标签选择校验：${tagValidationResult.errors.join('；')}`);
     }
     const dims = validateScoreDimensions(record.dims, `${label}.dims`);
     if (!record.authorInfo || typeof record.authorInfo !== 'object' || Array.isArray(record.authorInfo)) {
@@ -1005,7 +1005,7 @@ function buildAnalysis(paper, record, options = {}) {
     const tags = record.tags.split(/\s+/);
     const methodTag = record.primaryMethodTag;
     if (!PRIMARY_METHOD_TAGS.has(methodTag) || !tags.includes(methodTag)) {
-        throw new Error(`${record.arxivId || paper.arxivId || paper.title}.primaryMethodTag 必须是 tags 中的 current method facet 标签`);
+        throw new Error(`${record.arxivId || paper.arxivId || paper.title}.primaryMethodTag 必须是当前词表中的方法标签，并在 tags 中列出。`);
     }
     const authorInfo = record.authorInfo || {};
     const authorNames = Array.isArray(authorInfo.authorList) && authorInfo.authorList.length

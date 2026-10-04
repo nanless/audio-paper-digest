@@ -300,9 +300,9 @@ describe('Manual v6 persistent task runner', () => {
         for (const [draft, pattern] of [
             [{ ...base, type: 'system/method paper' }, /type 必须是受控文档类型/],
             [{ ...base, type: '' }, /type 必须是受控文档类型/],
-            [{ ...base, task: '语音识别' }, /task 必须是 current registry/],
-            [{ ...base, primaryMethodTag: '#语音识别' }, /primaryMethodTag 必须是 current registry/],
-            [{ ...base, tags: ['#语音识别', '#Transformer', '#鲁棒性'] }, /tags 必须是 3-5 个空格分隔/]
+            [{ ...base, task: '语音识别' }, /task 必须是当前词表中的单个任务标签/],
+            [{ ...base, primaryMethodTag: '#语音识别' }, /primaryMethodTag 必须是当前词表中的单个方法标签/],
+            [{ ...base, tags: ['#语音识别', '#Transformer', '#鲁棒性'] }, /tags 必须是字符串，包含 3–5 个用空格分隔/]
         ]) {
             semanticSha = writeProductionAuthorDraft(root, draft, output, receipt);
             assert.throws(() => validateProductionAuthorOutput(

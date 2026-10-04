@@ -63,7 +63,7 @@ test('original authority determines parent UUID, allowing a separately issued ne
 test('exact original state hash and source authority cannot be bypassed by rehashing a newer plan',t=>{
  const f=provenance(t);f.parent.stateSha256=H('drift');f.save(f.parent);assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),/original plan/);
 });
-test('missing original parent is rejected instead of silently deriving from current taxonomy',t=>{
+test('缺少原上级进程时，拒绝合并，不能用当前词表推算原进程身份',t=>{
  const f=provenance(t);fs.rmSync(path.join(f.root,f.parent.processId),{recursive:true});assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),/ENOENT/);
 });
 test('re-signed plan cannot change parent member status or source identity',t=>{

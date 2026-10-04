@@ -109,10 +109,10 @@ data/current/
 
 还须遵守根目录的工作区角色、环境与沙箱要求。Manual 日更使用 `daily` 工作区，先运行 `npm run workspace:role -- status` 确认。
 
-1. 用户明确要求 Manual，而不是默认 API 日更。
-2. 日期使用 `YYYY-MM-DD`，raw/select/fulltext 属于同一批次。
-3. 每篇论文最终具有 `complete` ArtifactIndex。
-4. 每个子代理只处理一篇论文和一个角色，并使用 packet 指定的模型与推理等级。
-5. 正式流程、shadow 隔离审计、legacy v5 历史维护和 sealed preview 封存预览没有混用路径或文件。
+1. 用户明确要求采用人工流程（Manual）。
+2. 日期使用 `YYYY-MM-DD` 格式，抓取结果、筛选结果和全文材料来自同一批次。
+3. 每篇论文的材料索引（ArtifactIndex）最终状态为 `complete`。
+4. 每个子代理只处理一篇论文，并且只承担一个角色；模型和推理等级由任务包指定。
+5. 正式流程、隔离审计（shadow）、旧 v5 记录维护和教程预览分别使用各自的路径与文件，不能相互混用。
 
 任一项不满足时先看[恢复矩阵](docs/workflow.md#十状态与恢复矩阵)，不要猜测状态后用 `--force` 强行推进。

@@ -15,7 +15,7 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 const stableHash = fresh.stableHash;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
-function fail(message) { const error = new Error(`Historical postprocess rejected: ${message}`);
+function fail(message) { const error = new Error(`历史后处理检查未通过：${message}`);
     error.code = 'HISTORICAL_POSTPROCESS_INTEGRITY'; error.retryable = false; throw error; }
 function uuidFrom(value) { const bytes = Buffer.from(sha256(value).slice(0, 32), 'hex');
     bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80; const hex = bytes.toString('hex');
@@ -45,12 +45,12 @@ function validateCheckpoint(value, crosswalkId, registrySha256, rendererImplemen
         || value.rendererImplementationSha256 !== rendererImplementationSha256
         || !SHA_RE.test(value.rendererImplementationSha256 || '') || !value.items || typeof value.items !== 'object'
         || Array.isArray(value.items) || !value.daily || typeof value.daily !== 'object' || Array.isArray(value.daily)
-        || !Number.isSafeInteger(value.generation) || value.generation < 1) fail('checkpoint identity/schema drifted');
+        || !Number.isSafeInteger(value.generation) || value.generation < 1) fail('历史后处理检查点的身份或结构与当前输入不一致。');
     if (Object.values(value.items).some(item => !item || item.rendererImplementationSha256 !== rendererImplementationSha256)) {
-        fail('checkpoint item renderer implementation binding drifted');
+        fail('历史后处理检查点中的论文没有绑定当前页面生成程序的实现指纹。');
     }
     const body = structuredClone(value); delete body.checkpointSha256;
-    if (!SHA_RE.test(value.checkpointSha256 || '') || value.checkpointSha256 !== stableHash(body)) fail('checkpoint self-SHA drifted');
+    if (!SHA_RE.test(value.checkpointSha256 || '') || value.checkpointSha256 !== stableHash(body)) fail('历史后处理检查点的内容哈希缺失、格式无效或与实际内容不一致。');
     return structuredClone(value);
 }
 function readJsonFile(filename, label) { const loaded = pageStaging.readRegular(filename, 64 * 1024 * 1024, label);
@@ -60,7 +60,7 @@ function readAnalysisScheduler(root, crosswalkId) {
     const directory = fresh.assertSafeDirectory(root); const filename = path.join(directory, `${crosswalkId}.json`);
     const loaded = readJsonFile(filename, 'historical analysis scheduler'); const value = loaded.value;
     if (value.contract !== ANALYSIS_SCHEDULER_CONTRACT || value.version !== 1 || value.crosswalkId !== crosswalkId
-        || !value.items || typeof value.items !== 'object' || Array.isArray(value.items)) fail('analysis scheduler identity/schema is invalid');
+        || !value.items || typeof value.items !== 'object' || Array.isArray(value.items)) fail('分析调度记录的身份、版本或论文集合格式不符合要求。');
     return { ...loaded, filename };
 }
 function analysisSchedulerItemBinding(paperId, item) {
@@ -80,11 +80,11 @@ function prepareCurrentAssignment(item, tagCatalog, files, deps) {
         arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir,
         now: deps.now() });
     if (!(recovered?.storageSealed === true && recovered.currentContractComplete === true)) {
-        fail(`${item.paperId} analysis run is not current-contract complete`);
+        fail(`论文 ${item.paperId} 的分析运行未保存完整数据，或尚未通过当前规则的完成检查。`);
     }
     const handle = deps.loadAnalysisRun({ analysisRoot: files.freshRewriteRunsDir, runId: item.runId });
     const assignments = deps.buildAssignments({ runHandle: handle, tagCatalog, paperId: item.paperId });
-    if (assignments.length !== 1) fail(`${item.paperId} taxonomy assignment result is not singular`);
+    if (assignments.length !== 1) fail(`论文 ${item.paperId} 的标签分配结果不是唯一一项。`);
     return assignments[0];
 }
 
@@ -108,7 +108,7 @@ function assertStagedManifestProof(staged, stagingRunId, rendererImplementationS
         || manifest.rendererImplementationSha256 !== rendererImplementationSha256
         || staged.manifestSha256 !== manifest.manifestSha256
         || !Array.isArray(manifest.pages) || !manifest.pages.length) {
-        fail('page staging did not return its authenticated manifest proof');
+        fail('页面生成未返回与本次运行、实现指纹及页面集合对应的清单记录。');
     }
     for (const page of manifest.pages) {
         const actual = {
@@ -130,7 +130,7 @@ function assertStagedManifestProof(staged, stagingRunId, rendererImplementationS
             taxonomyFileSha256: expected.taxonomyFileSha256
         };
         if (stableHash(actual) !== stableHash(wanted)) {
-            fail(`${expected.paperId} staging manifest differs from prepared taxonomy/analysis proof`);
+            fail(`论文 ${expected.paperId} 的暂存清单与准备阶段的分析、标签分配记录不一致。`);
         }
     }
 }
@@ -181,10 +181,10 @@ async function runHistoricalPostprocess(options, overrides = {}) {
         || options.date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(options.date || '')) fail('invalid options');
     const analysisScheduler = readAnalysisScheduler(files.historicalAnalysisSchedulerDir, options.crosswalkId);
     const tagCatalog = deps.loadTagCatalog(files.tagCatalogFile);
-    if (!SHA_RE.test(tagCatalog.registrySha256 || '')) fail('current taxonomy registry SHA is invalid');
+    if (!SHA_RE.test(tagCatalog.registrySha256 || '')) fail('当前标签词表的 SHA 格式无效。');
     const rendererImplementationSha256 = typeof deps.rendererImplementationSha256 === 'function'
         ? deps.rendererImplementationSha256() : deps.rendererImplementationSha256;
-    if (!SHA_RE.test(rendererImplementationSha256 || '')) fail('current renderer implementation SHA is invalid');
+    if (!SHA_RE.test(rendererImplementationSha256 || '')) fail('当前页面生成程序的实现 SHA 格式无效。');
     const crosswalk = deps.readCrosswalk({ crosswalkRoot: files.pageSourceCrosswalkDir, crosswalkId: options.crosswalkId });
     const allComplete = completeItems(analysisScheduler);
     const relevantComplete = options.date ? allComplete.filter(item => (item.cohortDates || []).includes(options.date)) : allComplete;
@@ -224,13 +224,11 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                 taxonomyAssignmentSha256: assignments[0].assignmentSha256,
                 taxonomyFileSha256: assignmentOutput.fileSha256 };
             if (assignments[0].status !== 'assigned') {
-                // Deterministic `needs_taxonomy_review`: this paper keeps its date
-                // blocked (fail-closed, its page is never staged), while every
-                // other paper keeps staging. The reasons are reported as an
-                // explicit review queue instead of an opaque integrity failure.
+                // 标签分配尚未确定时，这篇论文及其对应日期不能发布，其他论文继续生成页面。
+                // 原因会进入标签审查队列，不能把单篇判断问题当成不明确的系统故障。
                 const blockedReasons = [...new Set(assignments[0].blockedReasons || [])].sort();
-                const error = new Error(`${item.paperId} taxonomy assignment is blocked: `
-                    + `${blockedReasons.join('; ') || 'unresolved taxonomy selection'}`);
+                const error = new Error(`论文 ${item.paperId} 的标签分配受阻：`
+                    + `${blockedReasons.join('; ') || '标签选择尚未确定'}`);
                 error.code = 'HISTORICAL_TAXONOMY_REVIEW_REQUIRED';
                 error.retryable = false;
                 error.taxonomyReview = { paperId: item.paperId, analysisRunId: item.runId,
@@ -251,7 +249,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                 assignmentIdentity(assignments[0], assignmentOutput.fileSha256));
             const replayed = prepareCurrentAssignment(item, tagCatalog, files, deps);
             if (stableHash(assignmentIdentity(replayed)) !== stableHash(assignmentIdentity(assignments[0]))) {
-                fail(`${item.paperId} analysis/taxonomy changed while staging`);
+                fail(`论文 ${item.paperId} 的分析或标签分配记录在页面暂存期间发生变化。`);
             }
             const record = { status: 'staged', paperId: item.paperId, analysisRunId: item.runId,
                 analysisSchedulerItemSha256: item.analysisSchedulerItemSha256,

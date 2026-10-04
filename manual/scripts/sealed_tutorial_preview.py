@@ -1,9 +1,8 @@
-"""Verify a sealed single-paper tutorial preview for byte-exact publication.
+"""核验单篇教程预览的文件和发布记录，不改写页面。
 
-This boundary intentionally never opens the canonical deep-analysis file.  It
-accepts only the fixed preview directory for the requested date/paper, replays
-the file hashes that author the visible page, and returns the already-reviewed
-``post.md`` bytes unchanged.
+本模块按指定日期和论文定位固定预览目录，并核对相关文件的 SHA。
+它不读取正式深度分析正文；核验通过后返回 post.md 的 UTF-8 页面文本和发布记录。
+筛选结果文件仅提供论文元数据；预览检查通过不代表博客审查或部署已经完成。
 """
 
 import hashlib
@@ -43,13 +42,13 @@ def _read_regular(path, label):
     candidate = Path(path)
     try:
         if candidate.is_symlink():
-            raise PublishDataValidationError(f'{label} 必须是非符号链接普通文件')
+            raise PublishDataValidationError(f'{label} 必须是普通文件，且不得是符号链接。')
         path = candidate.resolve(strict=True)
         if not path.is_file():
-            raise PublishDataValidationError(f'{label} 必须是非符号链接普通文件')
+            raise PublishDataValidationError(f'{label} 必须是普通文件，且不得是符号链接。')
         return path.read_bytes()
     except OSError as exc:
-        raise PublishDataValidationError(f'{label} 无法读取: {path}') from exc
+        raise PublishDataValidationError(f'{label} 无法读取，路径为 {path}。') from exc
 
 
 def _load_json_regular(path, label):
@@ -57,29 +56,29 @@ def _load_json_regular(path, label):
     try:
         value = json.loads(raw.decode('utf-8'))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise PublishDataValidationError(f'{label} 不是合法 UTF-8 JSON') from exc
+        raise PublishDataValidationError(f'{label} 不是有效的 UTF-8 JSON。') from exc
     if not isinstance(value, dict):
-        raise PublishDataValidationError(f'{label} 顶层必须是对象')
+        raise PublishDataValidationError(f'{label} 的顶层必须是对象。')
     return value, raw
 
 
 def _exact_bound_file(binding, expected_path, label):
     if not isinstance(binding, dict):
-        raise PublishDataValidationError(f'{label} 缺少文件绑定')
+        raise PublishDataValidationError(f'{label} 的文件记录缺失，或不是对象。')
     try:
         candidate = Path(str(binding.get('path') or ''))
         if candidate.is_symlink():
-            raise PublishDataValidationError(f'{label} 不得使用符号链接')
+            raise PublishDataValidationError(f'{label} 不得使用符号链接。')
         actual_path = candidate.resolve(strict=True)
         expected_path = Path(expected_path).resolve(strict=True)
     except (OSError, RuntimeError) as exc:
-        raise PublishDataValidationError(f'{label} 绑定路径不存在') from exc
+        raise PublishDataValidationError(f'{label} 记录的路径或指定文件路径不存在，或无法解析。') from exc
     if actual_path != expected_path:
-        raise PublishDataValidationError(f'{label} 未绑定固定受控路径')
+        raise PublishDataValidationError(f'{label} 记录的路径与指定文件路径不一致。')
     raw = _read_regular(actual_path, label)
     digest = _sha256_bytes(raw)
     if binding.get('sha256') != digest:
-        raise PublishDataValidationError(f'{label} SHA-256 漂移')
+        raise PublishDataValidationError(f'{label} 的 SHA-256 与记录不一致。')
     return raw, digest
 
 
@@ -88,7 +87,7 @@ def _find_filtered_metadata(date_str, paper_id, current_dir):
     filtered, _raw = _load_json_regular(filtered_path, 'filtered-papers')
     if filtered.get('status') != 'complete' or filtered.get('batchDate') != date_str:
         raise PublishDataValidationError(
-            f'filtered-papers 必须是 {date_str} 的 complete 批次'
+            f'筛选结果的日期必须为 {date_str}，且批次状态必须为 complete。'
         )
     matches = [
         item for item in filtered.get('papers', []) if isinstance(item, dict)
@@ -96,24 +95,24 @@ def _find_filtered_metadata(date_str, paper_id, current_dir):
     ]
     if len(matches) != 1:
         raise PublishDataValidationError(
-            f'filtered-papers 必须精确包含一条 {paper_id} metadata'
+            f'筛选结果中必须恰好包含一条论文 {paper_id} 的元数据记录。'
         )
     title = str(matches[0].get('title') or '').strip()
     if len(title) < 3:
-        raise PublishDataValidationError(f'{paper_id} filtered metadata 缺少标题')
+        raise PublishDataValidationError(f'{paper_id} 的筛选记录标题长度不足 3 个字符。')
     return matches[0], filtered_path
 
 
 def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR):
-    """Return byte-exact post text and a prose-free publication snapshot."""
+    """按原字节读取 post.md，不改写其正文，返回页面文本及不含分析正文的发布记录。"""
     paper_id = normalize_publish_arxiv_id(paper_id)
     if not paper_id:
-        raise PublishDataValidationError('sealed tutorial preview 缺少合法 arXiv ID')
+        raise PublishDataValidationError('单篇教程预览缺少有效的 arXiv ID。')
     root = Path(current_dir).resolve() / 'manual-tutorial-previews' / date_str / paper_id
     manifest_path = root / 'manifest.json'
     post_path = root / 'post.md'
     manifest, manifest_bytes = _load_json_regular(
-        manifest_path, 'sealed tutorial preview manifest'
+        manifest_path, '单篇教程预览清单'
     )
     if (
         manifest.get('version') != PREVIEW_VERSION
@@ -124,7 +123,7 @@ def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR)
         or manifest.get('paperId') != paper_id
     ):
         raise PublishDataValidationError(
-            'sealed tutorial preview manifest 版本、模式、状态、日期或论文身份不匹配'
+            '单篇教程预览清单的版本、模式、状态、日期或论文 ID 与当前要求不一致。'
         )
     expected_isolation = {
         'singlePaperOnly': True,
@@ -134,29 +133,29 @@ def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR)
         'otherPapersGenerated': False,
     }
     if manifest.get('isolation') != expected_isolation:
-        raise PublishDataValidationError('sealed tutorial preview isolation 声明非法')
+        raise PublishDataValidationError('单篇教程预览清单中的隔离声明与规定不一致。')
 
     output = manifest.get('output')
     if not isinstance(output, dict):
-        raise PublishDataValidationError('sealed tutorial preview 缺少 output')
+        raise PublishDataValidationError('单篇教程预览清单缺少有效的输出记录。')
     try:
         output_path = Path(str(output.get('path') or '')).resolve(strict=True)
     except (OSError, RuntimeError) as exc:
-        raise PublishDataValidationError('sealed tutorial preview output.path 不存在') from exc
+        raise PublishDataValidationError('单篇教程预览的输出路径不存在，或无法解析。') from exc
     if output_path != post_path.resolve():
-        raise PublishDataValidationError('sealed tutorial preview output.path 路径逃逸')
-    post_bytes = _read_regular(post_path, 'sealed tutorial preview post.md')
+        raise PublishDataValidationError('单篇教程预览的输出路径不是指定的 post.md 文件。')
+    post_bytes = _read_regular(post_path, '单篇教程预览 post.md')
     post_sha = _sha256_bytes(post_bytes)
     if output.get('postSha256') != post_sha or output.get('bytes') != len(post_bytes):
-        raise PublishDataValidationError('sealed tutorial preview post.md SHA/字节数漂移')
+        raise PublishDataValidationError('单篇教程预览的 post.md SHA 或字节数与清单记录不一致。')
     try:
         post_text = post_bytes.decode('utf-8')
     except UnicodeDecodeError as exc:
-        raise PublishDataValidationError('sealed tutorial preview post.md 不是 UTF-8') from exc
+        raise PublishDataValidationError('单篇教程预览的 post.md 不是有效的 UTF-8 文本。') from exc
 
     inputs = manifest.get('inputs')
     if not isinstance(inputs, dict):
-        raise PublishDataValidationError('sealed tutorial preview 缺少 inputs')
+        raise PublishDataValidationError('单篇教程预览清单缺少有效的输入记录。')
     controlled_files = {
         'article': root / 'draft' / 'article.md',
         'quality': root / 'quality.json',
@@ -173,20 +172,20 @@ def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR)
     if not isinstance(payload, dict) \
             or payload.get('contract') != MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT \
             or payload.get('paperId') != paper_id:
-        raise PublishDataValidationError('sealed tutorial payload contract/paperId 非法')
+        raise PublishDataValidationError('单篇教程材料记录缺失、格式无效，或论文 ID 与当前论文不一致。')
     for field in (
         'articleSha256', 'freshAuthoringReceiptSha256', 'qualityFileSha256',
         'qualityPacketSha256', 'artifactPlanFileSha256', 'artifactPlanSha256',
         'artifactPlanBindingSha256', 'receiptSha256',
     ):
         if not SHA256_RE.fullmatch(str(payload.get(field) or '')):
-            raise PublishDataValidationError(f'sealed tutorial payload 缺少 SHA: {field}')
+            raise PublishDataValidationError(f'单篇教程材料记录中的 {field} 缺失，或不是有效的 SHA。')
     if payload['qualityFileSha256'] != replayed['quality']['sha256']:
-        raise PublishDataValidationError('sealed tutorial payload quality 文件绑定漂移')
+        raise PublishDataValidationError('单篇教程材料记录中的质量检查文件 SHA 与实际文件不一致。')
     article_file_sha = replayed['article']['sha256']
     article_binding_sha = str(inputs.get('article', {}).get('sha256') or '')
     if article_binding_sha != article_file_sha:
-        raise PublishDataValidationError('sealed tutorial payload article 文件绑定漂移')
+        raise PublishDataValidationError('单篇教程清单中的正文文件 SHA 与实际 article.md 文件不一致。')
     plan_path = root / 'artifact-plan.json'
     plan_raw, plan_file_sha = _exact_bound_file(
         {'path': payload.get('artifactPlanPath'), 'sha256': payload.get('artifactPlanFileSha256')},
@@ -195,12 +194,12 @@ def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR)
     try:
         plan_value = json.loads(plan_raw.decode('utf-8'))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise PublishDataValidationError('artifact-plan.json 非法') from exc
+        raise PublishDataValidationError('artifact-plan.json 不是有效的 UTF-8 JSON。') from exc
     stable_plan = json.dumps(
         plan_value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
     ).encode('utf-8')
     if _sha256_bytes(stable_plan) != payload['artifactPlanSha256']:
-        raise PublishDataValidationError('sealed tutorial payload artifact plan 语义 SHA 漂移')
+        raise PublishDataValidationError('单篇教程材料记录中的图表计划对象 SHA 与按固定 JSON 格式重新计算的结果不一致。')
 
     try:
         frontmatter, body = parse_frontmatter_content(post_path, post_text)
@@ -208,7 +207,7 @@ def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR)
         raise
     if str(frontmatter.get('date') or '') != date_str:
         raise PublishDataValidationError(
-            'sealed tutorial preview frontmatter date 未绑定 sealed payload'
+            '单篇教程页面头部的日期与目标发布日期不一致。'
         )
     expected_frontmatter = {
         'draft': False,
@@ -227,7 +226,7 @@ def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR)
     for field, expected in expected_frontmatter.items():
         if frontmatter.get(field) != expected:
             raise PublishDataValidationError(
-                f'sealed tutorial preview frontmatter {field} 未绑定 sealed payload'
+                f'单篇教程页面头部的 {field} 与规定值或教程材料记录不一致。'
             )
     format_issues = validate_markdown_format_gate(post_path, frontmatter, body)
     if format_issues:
@@ -235,7 +234,7 @@ def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR)
     article_text = replayed['article']['raw'].decode('utf-8').strip()
     if body.count(article_text) != 1:
         raise PublishDataValidationError(
-            'sealed tutorial preview 必须逐字且仅一次包含 fresh article.md'
+            '单篇教程页面必须恰好包含一次去除首尾空白后的 article.md 正文。'
         )
 
     metadata, filtered_path = _find_filtered_metadata(date_str, paper_id, current_dir)

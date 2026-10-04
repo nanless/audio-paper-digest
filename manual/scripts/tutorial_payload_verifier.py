@@ -1,9 +1,7 @@
-"""Fail-closed verification for sealed Manual v5 tutorial payloads.
+"""核验 Manual v5 教程正文及其引用的真实文件；缺少必需记录或检查不一致时拒绝使用。
 
-This module owns the filesystem replay boundary only.  It deliberately does
-not render Markdown, mutate canonical data, or know about publication scope.
-The generator may therefore reuse it for batch and single-paper releases
-without creating a second authoring path.
+本模块不渲染 Markdown、不修改正式分析结果，也不决定发布范围。
+单篇和批量生成共用这些检查。
 """
 
 import hashlib
@@ -60,14 +58,14 @@ def validate_manual_v5_fresh_authoring(
             or fresh.get('contract') != FRESH_AUTHORING_CONTRACT \
             or fresh.get('mode') != FRESH_AUTHORING_MODE:
         raise PublishDataValidationError(
-            f'{paper_id} Manual v5 缺少 {FRESH_AUTHORING_CONTRACT} 文件凭证'
+            f'{paper_id} Manual v5 的新写作文件凭证缺失，或不符合 {FRESH_AUTHORING_CONTRACT} 格式。'
         )
     if not isinstance(fresh.get('authoringSessionId'), str) \
             or len(fresh['authoringSessionId'].strip()) < 12:
-        raise PublishDataValidationError(f'{paper_id} fresh authoring session 非法')
+        raise PublishDataValidationError(f'{paper_id} 新写作会话 ID 必须是字符串，且去除首尾空白后至少包含 12 个字符。')
     if fresh.get('prohibitedProseInputs') != []:
         raise PublishDataValidationError(
-            f'{paper_id} fresh prohibitedProseInputs 必须为空，旧正文不得进入生成或修订输入'
+            f'{paper_id} 新写作记录中的 prohibitedProseInputs 必须为空列表，旧正文不得进入生成或修订输入。'
         )
     expected_article_path = (
         current_dir / 'manual-tutorial-previews' / date_str / paper_id
@@ -76,16 +74,16 @@ def validate_manual_v5_fresh_authoring(
     try:
         article_path = Path(str(fresh.get('articlePath') or '')).resolve(strict=True)
     except (OSError, RuntimeError) as exc:
-        raise PublishDataValidationError(f'{paper_id} fresh article.md 不存在') from exc
+        raise PublishDataValidationError(f'{paper_id} 新写作 article.md 的路径不存在，或无法解析。') from exc
     if article_path != expected_article_path or article_path.is_symlink() \
             or not article_path.is_file():
-        raise PublishDataValidationError(f'{paper_id} fresh article.md 未绑定受控路径')
+        raise PublishDataValidationError(f'{paper_id} 新写作 article.md 解析后的路径必须指向指定的普通文件。')
     raw_bytes = article_path.read_bytes()
     raw_sha = hashlib.sha256(raw_bytes).hexdigest()
     try:
         file_article = raw_bytes.decode('utf-8')
     except UnicodeDecodeError as exc:
-        raise PublishDataValidationError(f'{paper_id} fresh article.md 不是 UTF-8') from exc
+        raise PublishDataValidationError(f'{paper_id} 新写作 article.md 不是有效的 UTF-8 文本。') from exc
     normalized_sha = hashlib.sha256(
         normalize_fresh_article(file_article).encode('utf-8')
     ).hexdigest()
@@ -93,7 +91,7 @@ def validate_manual_v5_fresh_authoring(
             or fresh.get('articleSha256') != normalized_sha \
             or normalize_fresh_article(article) != normalize_fresh_article(file_article):
         raise PublishDataValidationError(
-            f'{paper_id} fresh article.md raw/NFKC SHA 或正文发生漂移'
+            f'{paper_id} 新写作 article.md 的原始文件 SHA、NFKC 规范化正文 SHA 或正文内容与记录不一致。'
         )
 
     official_evidence_path = (
@@ -106,18 +104,18 @@ def validate_manual_v5_fresh_authoring(
     inputs = fresh.get('inputs')
     if not isinstance(inputs, list) or len(inputs) != len(expected_kinds):
         raise PublishDataValidationError(
-            f'{paper_id} fresh inputs 未精确覆盖当前权威输入'
+            f'{paper_id} 新写作输入必须是列表，且条目数必须与本次所需材料一致。'
         )
     by_kind = {}
     allowed_kinds = FRESH_AUTHORING_INPUT_KINDS + OPTIONAL_FRESH_AUTHORING_INPUT_KINDS
     for item in inputs:
         if not isinstance(item, dict) or item.get('kind') not in allowed_kinds \
                 or item['kind'] in by_kind:
-            raise PublishDataValidationError(f'{paper_id} fresh inputs kind 非法或重复')
+            raise PublishDataValidationError(f'{paper_id} 新写作输入条目必须是对象，kind 必须属于允许的材料类型，且不能重复。')
         by_kind[item['kind']] = item
     if set(by_kind) != set(expected_kinds):
         raise PublishDataValidationError(
-            f'{paper_id} fresh inputs 含缺失、额外或旧 prose 输入'
+            f'{paper_id} 新写作输入的材料类型与本次所需类型不一致，存在缺失或额外输入。'
         )
     static_paths = {
         'authoring_prompt': (
@@ -137,61 +135,61 @@ def validate_manual_v5_fresh_authoring(
             bound_path = Path(str(item.get('path') or '')).resolve(strict=True)
         except (OSError, RuntimeError) as exc:
             raise PublishDataValidationError(
-                f'{paper_id} fresh authority {kind} 不存在'
+                f'{paper_id} 新写作所需的 {kind} 材料路径不存在，或无法解析。'
             ) from exc
         if bound_path.is_symlink() or not bound_path.is_file():
             raise PublishDataValidationError(
-                f'{paper_id} fresh authority {kind} 不是普通文件'
+                f'{paper_id} 新写作所需的 {kind} 材料解析后的路径必须指向普通文件。'
             )
         if kind in static_paths and bound_path != static_paths[kind]:
             raise PublishDataValidationError(
-                f'{paper_id} fresh authority {kind} 未绑定当前固定契约'
+                f'{paper_id} 新写作所需的 {kind} 材料路径与当前指定文件不一致。'
             )
         if kind == 'paper_metadata' \
                 and bound_path != (current_dir / 'filtered-papers.json').resolve():
             raise PublishDataValidationError(
-                f'{paper_id} fresh metadata 未绑定当前 filtered-papers.json'
+                f'{paper_id} 新写作元数据必须来自当前目录中的 filtered-papers.json。'
             )
         if kind in {'source_snapshot', 'artifact_index'}:
             try:
                 bound_path.relative_to(evidence_root)
             except ValueError as exc:
                 raise PublishDataValidationError(
-                    f'{paper_id} fresh authority {kind} 逃逸本日证据目录'
+                    f'{paper_id} 新写作所需的 {kind} 材料路径超出了目标日期的证据目录。'
                 ) from exc
         if kind == 'artifact_index':
             try:
                 artifact_index = json.loads(bound_path.read_text(encoding='utf-8'))
             except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise PublishDataValidationError(
-                    f'{paper_id} fresh ArtifactIndex 不可读'
+                    f'{paper_id} 新写作的图表与公式索引无法读取，或不是有效的 UTF-8 JSON。'
                 ) from exc
             if artifact_index.get('paperId') != paper_id \
                     or artifact_index.get('inventoryHealth', {}).get('status') != 'complete':
                 raise PublishDataValidationError(
-                    f'{paper_id} fresh ArtifactIndex 必须属于本篇且 inventory complete'
+                    f'{paper_id} 新写作的图表与公式索引必须属于当前论文，且清点状态必须为 complete。'
                 )
         if kind == 'official_project_evidence':
             if bound_path != official_evidence_path:
                 raise PublishDataValidationError(
-                    f'{paper_id} official_project_evidence 未绑定日期级固定路径'
+                    f'{paper_id} 官方项目证据必须使用目标日期下为当前论文指定的文件路径。'
                 )
             try:
                 evidence = json.loads(bound_path.read_text(encoding='utf-8'))
             except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise PublishDataValidationError(
-                    f'{paper_id} official_project_evidence 不可读'
+                    f'{paper_id} 官方项目证据无法读取，或不是有效的 UTF-8 JSON。'
                 ) from exc
             if evidence.get('paperId') != paper_id \
                     or evidence.get('kind') != 'official_project_evidence' \
                     or not str(evidence.get('url') or '').startswith('https://'):
                 raise PublishDataValidationError(
-                    f'{paper_id} official_project_evidence paperId/kind/HTTPS URL 非法'
+                    f'{paper_id} 官方项目证据中的论文 ID、材料类型或 HTTPS URL 不符合要求。'
                 )
         actual_sha = hashlib.sha256(bound_path.read_bytes()).hexdigest()
         if item.get('sha256') != actual_sha:
             raise PublishDataValidationError(
-                f'{paper_id} fresh authority {kind} 文件 SHA 漂移'
+                f'{paper_id} 新写作所需的 {kind} 材料文件 SHA 与输入记录不一致。'
             )
     normalized_receipt = {
         'contract': FRESH_AUTHORING_CONTRACT,
@@ -207,14 +205,14 @@ def validate_manual_v5_fresh_authoring(
     if fresh.get('receiptSha256') != receipt_sha \
             or takeover.get('freshAuthoringSha256') != stable_json_sha256(fresh):
         raise PublishDataValidationError(
-            f'{paper_id} fresh receipt/canonical SHA 不闭环'
+            f'{paper_id} 新写作凭证 SHA 与重新计算的结果不一致，或正式分析记录保存的凭证 SHA 不一致。'
         )
     return {'receiptSha256': receipt_sha, 'articleSha256': normalized_sha}
 
 
 def validate_manual_v5_tutorial_payload(
         paper, article, date_str, *, current_dir=CURRENT_DIR):
-    """Replay the sealed v5 quality/artifact package from its real files."""
+    """读取真实文件，核对 v5 教程的正文、质量检查记录和图表计划。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
@@ -222,21 +220,21 @@ def validate_manual_v5_tutorial_payload(
     if not isinstance(contracts, dict) \
             or contracts.get('tutorialPayload') != MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT:
         raise PublishDataValidationError(
-            f'{paper_id} Manual v5 缺少 {MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT}；'
-            '历史 v5 只读兼容但不得重新包装'
+            f'{paper_id} Manual v5 未声明 {MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT} 教程材料格式；'
+            '历史 v5 记录仅可兼容读取，不能据此重新生成教程材料。'
         )
     payload = takeover.get('tutorialPayload') if isinstance(takeover, dict) else None
     fresh = takeover.get('freshAuthoring') if isinstance(takeover, dict) else None
     if not isinstance(payload, dict) \
             or payload.get('contract') != MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT:
         raise PublishDataValidationError(
-            f'{paper_id} canonical 缺少 sealed tutorial payload'
+            f'{paper_id} 正式分析记录缺少有效的教程材料记录，或材料格式不符合当前要求。'
         )
     if payload.get('orchestratorContract') != MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT \
             or payload.get('orchestratorFingerprint') \
             != MANUAL_TUTORIAL_ORCHESTRATOR_FINGERPRINT:
         raise PublishDataValidationError(
-            f'{paper_id} tutorial payload 未绑定当前统一质量 orchestrator 协议'
+            f'{paper_id} 教程材料记录中的统一质量核验协议或规则指纹与当前要求不一致。'
         )
     expected_root = (
         current_dir / 'manual-tutorial-previews' / date_str / paper_id
@@ -251,12 +249,12 @@ def validate_manual_v5_tutorial_payload(
             bound_path = Path(str(payload.get(field) or '')).resolve(strict=True)
         except (OSError, RuntimeError) as exc:
             raise PublishDataValidationError(
-                f'{paper_id} tutorial payload {field} 不存在'
+                f'{paper_id} 教程材料记录中 {field} 的路径不存在，或无法解析。'
             ) from exc
         if bound_path != expected_path or bound_path.is_symlink() \
                 or not bound_path.is_file():
             raise PublishDataValidationError(
-                f'{paper_id} tutorial payload {field} 未绑定受控普通文件'
+                f'{paper_id} 教程材料记录中 {field} 解析后的路径必须指向指定的普通文件。'
             )
         raw = bound_path.read_bytes()
         sha_field = (
@@ -265,32 +263,32 @@ def validate_manual_v5_tutorial_payload(
         )
         if payload.get(sha_field) != hashlib.sha256(raw).hexdigest():
             raise PublishDataValidationError(
-                f'{paper_id} tutorial payload {field} 文件 SHA 漂移'
+                f'{paper_id} 教程材料记录中 {field} 对应文件的 SHA 与记录不一致。'
             )
         try:
             documents[field] = json.loads(raw.decode('utf-8'))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise PublishDataValidationError(
-                f'{paper_id} tutorial payload {field} JSON 损坏'
+                f'{paper_id} 教程材料记录中 {field} 对应文件不是有效的 UTF-8 JSON。'
             ) from exc
     quality = documents['qualityPath']
     plan = documents['artifactPlanPath']
     if not isinstance(quality, dict) or not isinstance(plan, dict):
         raise PublishDataValidationError(
-            f'{paper_id} tutorial quality/plan 顶层必须是对象'
+            f'{paper_id} 教程质量检查记录和图表计划的顶层都必须是对象。'
         )
     quality_sha = stable_json_sha256(quality)
     plan_sha = stable_json_sha256(plan)
     if payload.get('qualityPacketSha256') != quality_sha \
             or payload.get('artifactPlanSha256') != plan_sha:
         raise PublishDataValidationError(
-            f'{paper_id} tutorial quality/plan 对象 SHA 漂移'
+            f'{paper_id} 教程质量检查记录或图表计划对象的 SHA 与材料记录不一致。'
         )
     if quality.get('contract') != TUTORIAL_FORMAT_CONTRACT \
             or quality.get('paperId') != paper_id \
             or payload.get('qualityContract') != TUTORIAL_FORMAT_CONTRACT:
         raise PublishDataValidationError(
-            f'{paper_id} tutorial quality contract 或单篇身份非法'
+            f'{paper_id} 教程质量检查记录的格式规则或论文 ID 不符合要求。'
         )
     normalized_article = normalize_fresh_article(article)
     article_sha = hashlib.sha256(normalized_article.encode('utf-8')).hexdigest()
@@ -305,7 +303,7 @@ def validate_manual_v5_tutorial_payload(
             or payload.get('articleSha256') != article_sha \
             or payload.get('freshAuthoringReceiptSha256') != fresh.get('receiptSha256'):
         raise PublishDataValidationError(
-            f'{paper_id} tutorial payload 与 fresh article receipt 不一致'
+            f'{paper_id} 教程质量检查记录中的新写作信息、正文 SHA 或新写作凭证 SHA 与材料记录不一致，或新写作记录缺失。'
         )
     plan_binding_sha = hashlib.sha256(json.dumps(
         plan, ensure_ascii=False, separators=(',', ':'),
@@ -317,7 +315,7 @@ def validate_manual_v5_tutorial_payload(
             or payload.get('artifactPlanBindingSha256') != plan_binding_sha \
             or plan.get('paperId') != paper_id:
         raise PublishDataValidationError(
-            f'{paper_id} tutorial quality 未绑定当前 artifact plan'
+            f'{paper_id} 教程质量检查记录中的图表计划缺失，或其论文 ID、版本或 SHA 与当前图表计划及材料记录不一致。'
         )
     fresh_inputs = {
         item.get('kind'): item
@@ -331,7 +329,7 @@ def validate_manual_v5_tutorial_payload(
         artifact_index = json.loads(artifact_path.read_text(encoding='utf-8'))
     except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError(
-            f'{paper_id} tutorial ArtifactIndex 不可重放'
+            f'{paper_id} 教程的图表与公式索引路径无法解析、文件无法读取，或不是有效的 UTF-8 JSON。'
         ) from exc
     artifact_identity = (
         artifact_index.get('outputSha256')
@@ -342,7 +340,7 @@ def validate_manual_v5_tutorial_payload(
             or payload.get('artifactIndexSha256') != artifact_identity \
             or plan.get('artifactIndexSha256') != artifact_identity:
         raise PublishDataValidationError(
-            f'{paper_id} tutorial payload 未绑定 complete ArtifactIndex'
+            f'{paper_id} 教程的图表与公式索引不属于当前论文、清点尚未完成，或索引 SHA 与材料记录或图表计划不一致。'
         )
     for key in ('tables', 'figures', 'formulas'):
         source_ids = [item.get('id') for item in artifact_index.get(key, [])]
@@ -354,7 +352,7 @@ def validate_manual_v5_tutorial_payload(
         if source_ids != plan_ids or source_ids != coverage_ids \
                 or len(source_ids) != len(set(source_ids)):
             raise PublishDataValidationError(
-                f'{paper_id} tutorial artifact plan 未逐项覆盖 {key}'
+                f'{paper_id} 教程图表计划或覆盖记录中的 {key} 条目或排列顺序与来源索引不一致，或来源索引中存在重复 ID。'
             )
     table_dispositions = {
         item.get('artifactId'): item
@@ -369,7 +367,7 @@ def validate_manual_v5_tutorial_payload(
         if not isinstance(disposition, dict) \
                 or disposition.get('fullTableMarkdown') != table.get('renderedMarkdown'):
             raise PublishDataValidationError(
-                f'{paper_id} quality 未逐字采用完整表格 {table.get("id")}'
+                f'{paper_id} 教程质量检查记录缺少表格 {table.get("id")}，或保存的完整 Markdown 表格与图表计划不一致。'
             )
     for figure in plan.get('figures', []):
         disposition = figure_dispositions.get(figure.get('id'))
@@ -379,7 +377,7 @@ def validate_manual_v5_tutorial_payload(
         if not isinstance(disposition, dict) \
                 or disposition.get('disposition') != expected:
             raise PublishDataValidationError(
-                f'{paper_id} quality 图片处置与 plan 不一致 {figure.get("id")}'
+                f'{paper_id} 教程质量检查记录中图片 {figure.get("id")} 的处理方式缺失，或与图表计划要求不一致。'
             )
     validation = payload.get('validation')
     section_count = len(re.findall(
@@ -392,13 +390,13 @@ def validate_manual_v5_tutorial_payload(
             or validation.get('articleCharacters') != len(normalized_article) \
             or validation.get('sectionCount') != section_count:
         raise PublishDataValidationError(
-            f'{paper_id} tutorial quality validation 摘要不可重放'
+            f'{paper_id} 教程质量核验摘要缺失或无效，或其格式规则、论文 ID、正文 SHA、字数或节数与实际内容不一致。'
         )
     receipt_body = dict(payload)
     receipt_body.pop('receiptSha256', None)
     if payload.get('receiptSha256') != stable_json_sha256(receipt_body) \
             or takeover.get('tutorialPayloadSha256') != stable_json_sha256(payload):
         raise PublishDataValidationError(
-            f'{paper_id} tutorial payload receipt/canonical SHA 不闭环'
+            f'{paper_id} 教程材料凭证 SHA 与重新计算的结果不一致，或正式分析记录保存的材料 SHA 不一致。'
         )
     return payload

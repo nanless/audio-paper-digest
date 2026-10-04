@@ -108,22 +108,22 @@ function validateExactMetadataFields(record, label = 'record') {
     }
     if (typeof record.task !== 'string' || !/^#[^\s#]+$/u.test(record.task)
         || !PRIMARY_TASK_TAGS.has(record.task)) {
-        throw new Error(`${label}.task 必须是单个 current task facet 标签`);
+        throw new Error(`${label}.task 必须是当前词表中的单个任务标签。`);
     }
     if (typeof record.primaryMethodTag !== 'string'
         || !/^#[^\s#]+$/u.test(record.primaryMethodTag)
         || !PRIMARY_METHOD_TAGS.has(record.primaryMethodTag)) {
-        throw new Error(`${label}.primaryMethodTag 必须是单个 current method facet 标签`);
+        throw new Error(`${label}.primaryMethodTag 必须是当前词表中的单个方法标签。`);
     }
     if (typeof record.tags !== 'string') {
-        throw new Error(`${label}.tags 必须是 3-5 个空格分隔标签，数组不允许`);
+        throw new Error(`${label}.tags 必须是字符串，包含 3–5 个用空格分隔的标签，不能使用数组。`);
     }
     const tags = record.tags.split(/\s+/u).filter(Boolean);
     if (tags.length < 3 || tags.length > 5 || new Set(tags).size !== tags.length
         || tags.some(tag => !/^#[^\s#]+$/u.test(tag) || !ALLOWED_TAGS.has(tag))
         || !tags.includes(record.task) || !tags.includes(record.primaryMethodTag)
         || tags.join(' ') !== record.tags) {
-        throw new Error(`${label}.tags 必须是规范空格分隔的 3-5 个不重复白名单标签并包含 task 与 primaryMethodTag`);
+        throw new Error(`${label}.tags 必须包含 3–5 个词表认可且不重复的标签，标签之间只用一个空格，并列出 task 和 primaryMethodTag。`);
     }
     const selection = getDefaultTagRules().validateTagSelection({
         tags,
@@ -131,7 +131,7 @@ function validateExactMetadataFields(record, label = 'record') {
         primaryMethodTag: record.primaryMethodTag
     });
     if (!selection.valid) {
-        throw new Error(`${label}.tags 不符合 current taxonomy: ${selection.errors.join('；')}`);
+        throw new Error(`${label}.tags 未通过当前词表的标签选择校验：${selection.errors.join('；')}`);
     }
     return {
         type: record.type,

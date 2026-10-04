@@ -157,7 +157,7 @@ function receiptFixture(packet, correction) {
 }
 
 describe('Manual v6 explicit metadata correction protocol', () => {
-    it('只接受 canonical type、显式 task/method 与规范 3-5 tags 字符串', () => {
+    it('只接受规定的文档类型、明确的主任务和主方法，以及规范的 3–5 标签字符串', () => {
         assert.deepEqual(validateExactMetadataFields({
             type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',
             tags: '#语音识别 #Transformer #多语言 #低资源'
@@ -180,7 +180,7 @@ describe('Manual v6 explicit metadata correction protocol', () => {
         assert.throws(() => validateExactMetadataFields({
             type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',
             tags: ['#语音识别', '#Transformer', '#多语言']
-        }), /数组不允许/);
+        }), /不能使用数组/);
     });
 
     it('packet/correction/receipt 精确绑定 Terra-high 单篇 provenance 与四字段 delta', () => {
@@ -196,7 +196,7 @@ describe('Manual v6 explicit metadata correction protocol', () => {
         unboundMethodChange.changes.primaryMethodTag = '#CNN';
         assert.throws(
             () => validateCorrection(unboundMethodChange, packet, payload, { fullPreflight: false }),
-            /包含 task 与 primaryMethodTag/
+            /并列出 task 和 primaryMethodTag/
         );
         const badReceipt = { ...receiptFixture(packet, correction), model: 'gpt-5.6-sol' };
         assert.throws(() => validateReceipt(badReceipt, packet, correction), /provenance/);

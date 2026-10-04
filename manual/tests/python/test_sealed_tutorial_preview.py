@@ -173,9 +173,9 @@ class SealedTutorialPreviewTest(unittest.TestCase):
                     self.assertNotEqual(binding['sha256'], sha(contract_path.read_bytes()))
                     if boundary == 'old_copy_path':
                         binding['path'] = str(old_copy.resolve())
-                        expected_error = '未绑定固定受控路径'
+                        expected_error = '记录的路径与指定文件路径不一致。'
                     else:
-                        expected_error = 'SHA-256 漂移'
+                        expected_error = '的 SHA-256 与记录不一致。'
                     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
                     self.assertEqual(manifest['output']['postSha256'], sha(post_path.read_bytes()))
                     self.assertEqual(manifest['output']['bytes'], len(post_path.read_bytes()))
@@ -197,7 +197,7 @@ class SealedTutorialPreviewTest(unittest.TestCase):
         temporary, current, date_str, paper_id, post_path = self.make_fixture()
         self.addCleanup(temporary.cleanup)
         post_path.write_text(post_path.read_text(encoding='utf-8') + 'tamper', encoding='utf-8')
-        with self.assertRaisesRegex(sealed.PublishDataValidationError, 'SHA/字节数漂移'):
+        with self.assertRaisesRegex(sealed.PublishDataValidationError, '单篇教程预览的 post.md SHA 或字节数与清单记录不一致。'):
             sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
 
     def test_symlinked_article_fails_closed(self):

@@ -280,10 +280,10 @@ describe('Manual v6 deterministic revision binder', () => {
         }, 'revision base payload'), /type 必须是受控文档类型/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...base, task: ''
-        }, 'revision base payload'), /task 必须是 current registry/);
+        }, 'revision base payload'), /task 必须是当前词表中的单个任务标签/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...base, tags: ['#数据集', '#语音识别', '#多语言']
-        }, 'revision base payload'), /tags 必须是 3-5 个空格分隔/);
+        }, 'revision base payload'), /tags 必须是字符串，包含 3–5 个用空格分隔/);
     });
 
     it('在封印前原子规范化 E1 风格 ledger 及全部依赖引用', () => {

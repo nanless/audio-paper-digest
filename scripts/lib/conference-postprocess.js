@@ -43,20 +43,20 @@ const SCORE_DIMENSIONS = Object.freeze([
 const stableHash = fresh.stableHash;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const canonicalBytes = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
-function fail(message) { const error = new Error(`Conference postprocess rejected: ${message}`); error.code = 'CONFERENCE_POSTPROCESS_INTEGRITY'; throw error; }
+function fail(message) { const error = new Error(`会议后处理检查未通过：${message}`); error.code = 'CONFERENCE_POSTPROCESS_INTEGRITY'; throw error; }
 function publicHttps(value, label, { identitySafe = false, conferenceOnly = false, normalize = false } = {}) {
     if (identitySafe) {
         try {
             const normalized = identityApi.validateOfficialUrl(value, label);
             if (conferenceOnly && /(^|\.)arxiv\.org$/i.test(new URL(normalized).hostname)) {
-                fail(`${label} must be a public conference HTTPS URL`);
+                fail(`${label} 必须是符合会议页面要求的公网 HTTPS 地址。`);
             }
             return normalized;
         }
-        catch (error) { fail(`${label} is invalid: ${error.message}`); }
+        catch (error) { fail(`${label} 不符合网址要求：${error.message}`); }
     }
     let parsed;
-    try { parsed = new URL(value); } catch { fail(`${label} is not a URL`); }
+    try { parsed = new URL(value); } catch { fail(`${label} 不是有效的网址。`); }
     // Fragments are client-side anchors (for example, a paper's #demo or
     // #code section); they are not sent to the network and are safe to keep in
     // the published clickable resource identity.
@@ -65,18 +65,18 @@ function publicHttps(value, label, { identitySafe = false, conferenceOnly = fals
         || parsed.hostname === 'localhost' || parsed.hostname.endsWith('.localhost')
         || parsed.hostname.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname)
         || !parsed.hostname.split('.').every(part => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(part))
-        || (conferenceOnly && /(^|\.)arxiv\.org$/i.test(parsed.hostname))) fail(`${label} must be a public conference HTTPS URL`);
-    if (parsed.href !== value && !normalize) fail(`${label} must use canonical URL spelling`);
+        || (conferenceOnly && /(^|\.)arxiv\.org$/i.test(parsed.hostname))) fail(`${label} 必须是符合会议页面要求的公网 HTTPS 地址。`);
+    if (parsed.href !== value && !normalize) fail(`${label} 必须使用网址解析后得到的规范形式。`);
     return parsed.href;
 }
 function getPublicationUrls(paper) {
     const value = paper?.conferencePublication;
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== ['contract', 'pdfUrl', 'recordUrl'].sort().join('\0')
-        || value.contract !== PUBLICATION_CONTRACT) fail('sealed canonical conference publication URLs are required');
+        || value.contract !== PUBLICATION_CONTRACT) fail('会议论文的发布记录无效；必须包含规定的格式版本、记录网址和 PDF 网址。');
     const recordUrl = publicHttps(value.recordUrl, 'official record URL', { identitySafe: true, conferenceOnly: true });
     const pdfUrl = publicHttps(value.pdfUrl, 'official PDF URL', { conferenceOnly: true });
-    if (recordUrl === pdfUrl) fail('official record and PDF URLs must be distinct');
+    if (recordUrl === pdfUrl) fail('官方论文记录网址与 PDF 网址必须不同。');
     return { contract: PUBLICATION_CONTRACT, recordUrl, pdfUrl };
 }
 function validateReaderAndScoring(paper) {
@@ -87,25 +87,25 @@ function validateReaderAndScoring(paper) {
     const coreSummaryIssue = analysisContract.validateCoreSummaryStageBinding(paper);
     if (sectionIssue || coreSummaryIssue || acquisition.fullTextAvailable !== true || acquisition.analysisSource === 'abstract') {
         const issue = sectionIssue || coreSummaryIssue;
-        fail(`canonical 13-section/core-summary-detailed-v3 full-text analysis is required${issue ? `: ${issue}` : ''}`);
+        fail(`会议论文必须有基于全文的分析，包含规定的 13 节，并通过核心摘要阶段校验${issue ? `: ${issue}` : ''}`);
     }
     if (contracts.apiReaderArticle !== READER_CONTRACT
         || contracts.apiReaderSourceBindings !== SOURCE_BINDINGS_CONTRACT
         || paper?.apiReaderPlan?.contract !== READER_CONTRACT
         || paper?.apiReaderPlan?.sourceBindingsContract !== SOURCE_BINDINGS_CONTRACT
         || !analysisEngine.apiReaderV3BindsCanonical(paper)) {
-        fail('Reader beginner-researcher-v3/source-bindings-v4 proof is not replayable');
+        fail('读者文章、来源绑定规则或文章与正式分析的对应记录未通过校验。');
     }
     if (scoring.status !== 'complete' || scoring.scoringContract !== SCORING_CONTRACT
         || !analysisEngine.scoringAuditBindsFinalAnalysis(paper)
         || !analysisEngine.scoringStabilityIsResolved(scoring)) {
-        fail('api-scoring-audit-v2 proof is not replayable');
+        fail('评分审查的状态、规则、正文绑定或稳定性未通过校验。');
     }
     return getPublicationUrls(paper);
 }
 function authority(planHandle, dependencies = {}) {
     try { return (dependencies.planHandleAuthority || planApi.planHandleAuthority)(planHandle); }
-    catch (error) { fail(`authenticated conference plan handle is required: ${error.message}`); }
+    catch (error) { fail(`会议后处理需要已核验的分析计划：${error.message}`); }
 }
 function planProof(planHandle, dependencies = {}) {
     const authenticated = authority(planHandle, dependencies); const { run, receipt, receiptFileSha256, runFileSha256 } = authenticated.snapshot;
@@ -119,7 +119,7 @@ function planProof(planHandle, dependencies = {}) {
         || run.selectedMemberSetSha256 !== stableHash(paperIds)
         || receipt.filter.selectedMemberSetSha256 !== run.selectedMemberSetSha256
         || receipt.filter.selectionReceiptSha256 !== run.selectionReceiptSha256
-        || receipt.filter.filterPolicySha256 !== run.filterPolicySha256) fail('authenticated plan selected member set/provenance drifted');
+        || receipt.filter.filterPolicySha256 !== run.filterPolicySha256) fail('分析计划中的入选论文集合或来源记录与核验结果不一致。');
     const body = { conferenceId: run.conferenceId, runIdentitySha256: run.identitySha256,
         runStateSha256: run.stateSha256, membershipSha256: run.membershipSha256,
         planReceiptSha256: receipt.receiptSha256, planReceiptFileSha256: receiptFileSha256,
@@ -129,16 +129,16 @@ function planProof(planHandle, dependencies = {}) {
     return { authenticated, proof: { ...body, proofSha256: stableHash(body) } };
 }
 function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
-    if (!UUID_RE.test(executionId || '')) fail('analysis execution ID must be a UUID');
+    if (!UUID_RE.test(executionId || '')) fail('分析运行 ID 必须是 UUID。');
     authority(planHandle, dependencies);
     const loaded = (dependencies.loadConferenceAnalysis || adapter.loadConferenceAnalysis)({ analysisRoot, executionId });
-    // trustEvidence（仅 promote 混合入账显式传入）：跨实现时代的分析各自绑定其录制时的
-    // plan-receipt（原始=origin 时代、升级=新代），单一 live plan 只能匹配其一——此时
-    // 只信任分析自带的证据链（下方 run/analysis/receipt/source/sourceDetails/membership
-    // 校验一条不少），跳过“live plan==录制代”的交叉检查；其余调用方行为不变。
+    // 来源升级合并不同版本的已完成记录时，调用方会明确启用 trustEvidence。
+    // 每份分析保留其创建时的计划凭证；当前单一计划不能同时匹配这些版本。
+    // 此时只跳过当前计划与原计划的交叉检查，下方对运行、分析、完成凭证、
+    // 来源及论文集合的检查仍全部执行，其他调用方的行为保持原样。
     if (!trustEvidence) {
         try { (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot); }
-        catch (error) { fail(`conference analysis does not replay against the authenticated plan: ${error.message}`); }
+        catch (error) { fail(`会议分析与已核验计划不一致：${error.message}`); }
     }
     const receipt = loaded.run?.completionReceipt; const receiptBody = receipt && structuredClone(receipt); if (receiptBody) delete receiptBody.receiptSha256;
     if (loaded.run?.status !== 'complete' || loaded.analysis?.status !== 'complete' || !ID_RE.test(loaded.run.paperId || '')
@@ -146,35 +146,35 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         || receipt?.analysisSha256 !== loaded.analysisFileSha256 || receipt?.paperId !== loaded.run.paperId
         || receipt?.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256 || receipt?.receiptSha256 !== stableHash(receiptBody)
         || loaded.run.analysisSha256 !== loaded.analysisFileSha256 || loaded.analysis.papers?.length !== 1
-        || loaded.analysis.papers[0].id !== loaded.run.paperId || loaded.analysis.papers[0].arxivId || loaded.analysis.papers[0].paper_id) fail('sealed conference analysis completion is required');
+        || loaded.analysis.papers[0].id !== loaded.run.paperId || loaded.analysis.papers[0].arxivId || loaded.analysis.papers[0].paper_id) fail('会议分析的完成状态、论文身份或完成凭证与实际文件不一致。');
     if (stableHash(loaded.run.capabilities) !== stableHash(WEAK)
         && stableHash(loaded.run.capabilities) !== stableHash(FULL)
-        && stableHash(loaded.run.capabilities) !== stableHash(PDF_VISUAL)) fail('conference capability projection is unsupported');
+        && stableHash(loaded.run.capabilities) !== stableHash(PDF_VISUAL)) fail('会议来源声明的表格、公式或图片处理能力不符合支持的组合。');
     const artifacts = loaded.source?.sourceDetails?.structuredArtifacts;
     if (!artifacts || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)
-        || !Array.isArray(artifacts.figures)) fail('conference structured artifacts are missing');
+        || !Array.isArray(artifacts.figures)) fail('会议来源缺少包含表格、公式和图片数组的结构化记录。');
     if (stableHash(loaded.run.capabilities) === stableHash(WEAK)
         && (artifacts.tables.length || artifacts.formulas.length || artifacts.figures.length)) {
-        fail('weak unavailable structures must remain empty');
+        fail('来源未提供结构化内容时，表格、公式和图片数组必须保持为空。');
     }
-    // Reopen authenticated source evidence, not the lossy Reader adapter's
-    // formula projection. This also makes uncertain formula regions visible.
+    // 重新读取已核验的原始来源，而不从读者文章适配后的公式列表中取证。
+    // 这样仍能保留来源中尚未确认的公式区域。
     loaded.formulaEvidence = null;
     if (stableHash(loaded.run.capabilities) === stableHash(FULL)) {
         const source = (dependencies.buildConferenceSourceContext || sourceContextApi.buildConferenceSourceContext)({
             planHandle, paperId: loaded.run.paperId, sourceRoot });
-        if (source.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) fail('formula source snapshot drifted');
+        if (source.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) fail('公式证据的来源快照与分析记录不一致。');
         loaded.formulaEvidence = buildFormulaEvidenceRecord(source);
     }
     if (stableHash(loaded.run.capabilities) === stableHash(PDF_VISUAL)
         && (artifacts.tables.length || artifacts.formulas.length
             || artifacts.parserVersion !== 'conference-pdf-structure-v2-visual-only-math-tables')) {
-        fail('PDF visual source cannot claim original table cells or TeX');
+        fail('仅提供 PDF 图像的来源不能声明已有原表单元格或 TeX 公式。');
     }
     const sourcePaper = loaded.analysis.papers[0];
     const publication = validateReaderAndScoring(sourcePaper);
     const successful = dependencies.isSuccessful || analysisEngine.isSuccessfulAnalysisRecord;
-    if (!successful(loaded.analysis.papers[0])) fail('conference canonical paper is not analysis-complete');
+    if (!successful(loaded.analysis.papers[0])) fail('会议论文的正式分析记录尚未通过完成检查。');
     const coordinates = identityApi.conferenceCoordinates(loaded.run.conference);
     const identity = identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'conference',
         canonicalId: loaded.run.paperId, arxivId: null, conference: coordinates,
@@ -190,14 +190,14 @@ function getConsistentPublicationFields(paper) {
         rankBucket: String(value.rankBucket || '').trim(), documentType: String(value.documentType || '').trim(),
         scoringReason: String(value.scoringReason || '').trim(),
         scoreDimensions: Object.fromEntries(SCORE_DIMENSIONS.map(([field]) => [field, String(value[field] ?? '').trim()])) });
-    if (!parsed || stableHash(pick(parsed)) !== stableHash(pick(reparsed || {}))) fail('cached conference labels drifted from canonical analysis');
+    if (!parsed || stableHash(pick(parsed)) !== stableHash(pick(reparsed || {}))) fail('会议论文缓存的标签、摘要或评分字段与重新解析正文得到的结果不一致。');
     const value = pick(parsed); const score = Number(value.score);
     if (!Number.isFinite(score) || score < 0 || score > 10 || !value.summary || !value.scoringReason
         || !value.rankBucket || !value.documentType
         || SCORE_DIMENSIONS.some(([field, , maximum]) => {
             const dimension = Number(value.scoreDimensions[field]);
             return !Number.isFinite(dimension) || dimension < 0 || dimension > maximum;
-        }) || reparsed?.scoreValidation?.valid !== true) fail('canonical conference summary/document type/eight-dimensional score is incomplete');
+        }) || reparsed?.scoreValidation?.valid !== true) fail('会议论文的摘要、文档类型、排名、评分理由或八维评分缺失，或评分不符合要求。');
     return value;
 }
 function resolve(tagCatalog, label, facet, reasons, role) {
@@ -210,14 +210,11 @@ function buildAssignment(loaded, tagCatalog) {
     const tagRules = tagRulesApi.createTagRules({ tagCatalog });
     const parsed = require('../utils.js').parseAnalysis(paper.analysis);
     const tagStageProofIssue = analysisContract.validateTagStageProof(paper, { parsed, tagRules: tagRules });
-    // A tag selection the current registry cannot resolve is not byte-level
-    // integrity drift: it is exactly the `needs_taxonomy_review` case the
-    // 标签 design promises (§6 "进入 标签 review"). Record it as an
-    // explicit blocked assignment so the record joins the review queue and its
-    // page is never rendered; every other seal replay failure stays fail-closed
-    // with a hard integrity error.
+    // 标签选择未通过当前词表校验时，保存待审查的分配记录，不生成页面。
+    // 如果标签选择已通过、但阶段记录不一致，则按完整性错误停止，
+    // 不能把来源或记录损坏归为普通标签审查。
     const unresolvedSelection = parsed?.taxonomyValidation?.valid !== true;
-    if (tagStageProofIssue && !unresolvedSelection) fail(`current taxonomy seal is not replayable: ${tagStageProofIssue}`);
+    if (tagStageProofIssue && !unresolvedSelection) fail(`标签阶段记录未通过当前校验：${tagStageProofIssue}`);
     if (unresolvedSelection) {
         for (const issue of parsed.taxonomyValidation.errors || []) {
             reasons.push(`selection:${String(issue).slice(0, 200)}`);
@@ -298,7 +295,7 @@ function fingerprint(dependencies) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')
         || value.contract !== PROJECTION_CONTRACT || value.version !== VERSION || value.implementationSha256 !== stableHash(body)
-        || Object.entries(value).filter(([key]) => key.endsWith('Sha256')).some(([, sha]) => !/^[a-f0-9]{64}$/.test(sha || ''))) fail('conference projection implementation fingerprint is invalid');
+        || Object.entries(value).filter(([key]) => key.endsWith('Sha256')).some(([, sha]) => !/^[a-f0-9]{64}$/.test(sha || ''))) fail('会议页面生成程序的实现指纹不符合要求。');
     return value;
 }
 
@@ -309,11 +306,11 @@ function conferenceFigureAssets(loaded) {
         const expected = path.join(loaded.directory, 'reader-assets', filename);
         if (!/^figure-\d+-[a-f0-9]{16}\.png$/.test(filename)
             || figure.cachePath !== expected || figure.assetMediaType !== 'image/png') {
-            fail(`会议 Figure ${index + 1} 的缓存身份不闭合`);
+            fail(`会议论文第 ${index + 1} 张图的缓存文件名、路径或图片格式不符合要求。`);
         }
         const record = pageApi.readRegular(expected, 32 * 1024 * 1024, `conference Figure ${index + 1}`);
         if (record.fileSha256 !== figure.assetSha256 || record.bytes.length !== figure.assetBytes) {
-            fail(`会议 Figure ${index + 1} 的缓存字节不闭合`);
+            fail(`会议论文第 ${index + 1} 张图的缓存 SHA 或字节数与记录不一致。`);
         }
         return { ordinal: figure.ordinal, url: figure.url, assetSha256: figure.assetSha256,
             mediaType: 'image/png', base64: record.bytes.toString('base64') };
@@ -390,10 +387,9 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     return { assignment, assignmentBytes, pageBytes, assetFiles,
         manifest: { ...body, manifestSha256: stableHash(body) } };
 }
-// A blocked assignment is a pending-review placeholder, never a published
-// artifact. Once the labels are fixed, the resolved projection may replace that
-// placeholder in place (needs_taxonomy_review -> assigned); anything else keeps
-// the immutable "refuses to overwrite staging bytes" behaviour.
+// 尚未生成页面的 blocked 标签记录可以重新计算。只有原文件完整，论文 ID 和分析运行 ID 与新记录相同，
+// 且目录中没有 page.md 或 manifest.json 时，下方才允许删除旧记录后重新写入。
+// 其他已有文件仍按原规则保留，不能覆盖不同内容。
 function supersedeBlockedAssignment(directory, assignment) {
     const filename = path.join(directory, 'assignment.json');
     if (!fs.existsSync(filename)) return false;
@@ -423,7 +419,7 @@ function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pl
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
     const implementation = fingerprint(dependencies); const projected = buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation);
-    if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
+    if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('生成会议页面期间，相关实现指纹发生变化。');
     if (apply) {
         const directory = stageDirectory(stagingRoot, executionId, tagCatalog.registrySha256, implementation.implementationSha256, true);
         rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
@@ -447,8 +443,8 @@ function loadStage({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pla
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
     const implementation = fingerprint(dependencies); const expected = buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation);
-    if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
-    if (expected.assignment.status !== 'assigned') fail('current taxonomy projection is blocked');
+    if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('生成会议页面期间，相关实现指纹发生变化。');
+    if (expected.assignment.status !== 'assigned') fail('当前论文的标签分配尚未完成，不能读取已生成页面。');
     const directory = stageDirectory(stagingRoot, executionId, tagCatalog.registrySha256, implementation.implementationSha256); rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
     const assignmentRecord = pageApi.readRegular(path.join(directory, 'assignment.json'), 16 * 1024 * 1024, 'conference taxonomy assignment');
     const manifestRecord = pageApi.readRegular(path.join(directory, 'manifest.json'), 16 * 1024 * 1024, 'conference page manifest');
@@ -457,7 +453,7 @@ function loadStage({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pla
     const manifest = pageApi.strictJson(manifestRecord.bytes, 'conference page manifest');
     if (!assignmentRecord.bytes.equals(expected.assignmentBytes) || !manifestRecord.bytes.equals(canonicalBytes(expected.manifest))
         || !pageRecord.bytes.equals(expected.pageBytes) || stableHash(assignment) !== stableHash(expected.assignment)
-        || stableHash(manifest) !== stableHash(expected.manifest)) fail('conference stage is not the deterministic projection of current completion/taxonomy/renderer');
+        || stableHash(manifest) !== stableHash(expected.manifest)) fail('会议暂存的分类记录、页面或清单与当前分析结果、词表和生成程序的输出不一致。');
     for (const asset of expected.manifest.assets || []) {
         const record = pageApi.readRegular(path.join(directory, 'assets', ...asset.path.split('/')), 32 * 1024 * 1024, 'conference staged asset');
         if (record.fileSha256 !== asset.sha256 || record.bytes.length !== asset.size) fail(`conference staged asset drifted: ${asset.path}`);
@@ -632,7 +628,7 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
                 || assignment.status !== 'assigned' || assignment.assignmentSha256 !== stableHash(assignmentBody)
                 || manifest.taxonomy?.assignmentSha256 !== assignment.assignmentSha256
                 || manifest.taxonomy?.registrySha256 !== assignment.registrySha256) {
-                fail(`preserved conference taxonomy assignment is invalid: ${paperId}`);
+                fail(`论文 ${paperId} 原页面的标签分配身份、哈希或页面绑定不符合要求。`);
             }
             const declaredAssets = manifest.assets || [];
             if (!Array.isArray(declaredAssets) || declaredAssets.some(asset => !asset || Object.keys(asset).sort().join('\0') !== ['path', 'sha256', 'size'].sort().join('\0'))
@@ -741,29 +737,27 @@ function resourceLine(resource, paperId) {
     return `- ${labels[resource.type]}：${links} — ${statuses[resource.availability]}${http}`;
 }
 function aggregateHierarchy(tagCatalog, memberConceptIds) {
-    // The hierarchy is always rebuilt from the exact registry bytes the batch
-    // was staged against: the caller has already proven every staged page
-    // sealed the same registrySha256, so a concept id this registry cannot
-    // resolve is impossible — and fails closed here anyway.
+    // 汇总流程先核对各单篇页面绑定了同一词表，再按这份词表构建层级统计。
+    // 本函数仍检查概念是否存在并已启用，不能遇到未知概念就猜选替代项。
     if (!tagCatalog || typeof tagCatalog !== 'object' || !Array.isArray(tagCatalog.facets)
         || !Array.isArray(tagCatalog.concepts) || typeof tagCatalog.version !== 'string'
         || !/^[a-f0-9]{64}$/.test(String(tagCatalog.registrySha256 || ''))) {
-        fail('taxonomy hierarchy requires the loaded registry bytes and their SHA');
+        fail('构建标签层级需要词表的分类维度、概念、版本和格式有效的 SHA。');
     }
-    if (!Array.isArray(memberConceptIds)) fail('aggregate member concept projections are required');
+    if (!Array.isArray(memberConceptIds)) fail('汇总需要每篇论文的概念 ID 列表。');
     const byId = new Map();
     for (const concept of tagCatalog.concepts) {
-        if (byId.has(concept.id)) fail('registry contains duplicate concept IDs');
+        if (byId.has(concept.id)) fail('词表中有重复的概念 ID。');
         byId.set(concept.id, concept);
     }
     const direct = new Map(); const subtree = new Map();
     memberConceptIds.forEach((conceptIds, index) => {
-        if (!Array.isArray(conceptIds)) fail(`aggregate member ${index + 1} concept projection must be an array`);
+        if (!Array.isArray(conceptIds)) fail(`汇总第 ${index + 1} 篇论文的概念 ID 列表必须是数组。`);
         const carried = new Set();
         for (const id of conceptIds) {
             const concept = typeof id === 'string' ? byId.get(id) : null;
             if (!concept || concept.status !== 'active') {
-                fail(`aggregate member carries a concept the current registry does not know: ${String(id)}`);
+                fail(`汇总成员包含当前词表中缺失或未启用的概念：${String(id)}`);
             }
             carried.add(id);
         }
@@ -784,9 +778,9 @@ function aggregateHierarchy(tagCatalog, memberConceptIds) {
         let level = 0; let current = concept;
         while (current.broaderId !== null) {
             const parent = byId.get(current.broaderId);
-            if (!parent) fail(`registry concept ${current.id} references an unknown broader concept`);
+            if (!parent) fail(`词表中的概念 ${current.id} 指向了不存在的上级概念。`);
             current = parent; level += 1;
-            if (level > 64) fail('registry concept hierarchy is too deep');
+            if (level > 64) fail('词表中的概念层级超过允许的深度。');
         }
         return level;
     };
@@ -805,7 +799,7 @@ function aggregateHierarchy(tagCatalog, memberConceptIds) {
         const parentId = byId.get(id).broaderId;
         if (parentId === null) continue;
         const parent = nodes.get(parentId);
-        if (!parent) fail(`counted taxonomy node ${id} is missing its counted ancestor ${parentId}`);
+        if (!parent) fail(`概念 ${id} 已计入统计，但缺少其上级概念 ${parentId} 的统计记录。`);
         parent.children.push(node);
     }
     for (const node of nodes.values()) node.children.sort(compare);
@@ -850,21 +844,21 @@ function hierarchyLines(hierarchy) {
 function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagingRoot, aggregateRoot,
     planHandle, sourceRoot, preservedStages = {}, apply = false, trustEvidence = false }, dependencies = {}) {
     if (!Array.isArray(executionIds) || !executionIds.length || new Set(executionIds).size !== executionIds.length
-        || executionIds.some(id => !UUID_RE.test(id))) fail('unique selection execution IDs required');
+        || executionIds.some(id => !UUID_RE.test(id))) fail('生成会议汇总需要非空的分析运行 ID 数组，各项必须是有效且不重复的 UUID。');
     const authenticated = planProof(planHandle, dependencies); const expectedIds = authenticated.proof.paperIds;
-    if (executionIds.length !== expectedIds.length) fail('analysis execution set must cover the complete authenticated selected member set');
+    if (executionIds.length !== expectedIds.length) fail('分析运行集合必须覆盖已核验计划中的全部入选论文。');
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath); const byPaper = new Map();
     for (const executionId of executionIds) {
         const preserved = Object.hasOwn(preservedStages, executionId) ? preservedStages[executionId] : null;
         const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
         const staged = preserved ? loadPreservedStage({ stagingRoot, executionId, paperId: preserved.paperId, pageProof: preserved.pageProof }, dependencies) : null;
         const paperId = preserved ? staged.manifest.paperId : completed.run.paperId;
-        if (byPaper.has(paperId)) fail('multiple analysis executions claim one selected paper');
+        if (byPaper.has(paperId)) fail('同一篇入选论文对应了多个分析运行，不能生成汇总。');
         byPaper.set(paperId, { executionId, completed, ...(staged ? { staged } : {}) });
     }
     if (stableHash([...byPaper.keys()].sort((left, right) => left.localeCompare(right)))
             !== stableHash(expectedIds)) {
-        fail('analysis executions are not the exact authenticated selected member set');
+        fail('分析运行对应的论文集合与已核验计划的完整入选集合不一致。');
     }
     const stages = expectedIds.map(paperId => {
         const item = byPaper.get(paperId); const staged = item.staged || loadStage({ analysisRoot, executionId: item.executionId,
@@ -896,35 +890,32 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     if (!aggregateTagMetadata || stages.some(item => item.manifest.taxonomy.registrySha256 !== tagCatalog.registrySha256
         || item.manifest.taxonomy.registryVersion !== aggregateTagMetadata.registryVersion
         || item.manifest.taxonomy.selectionContract !== aggregateTagMetadata.selectionContract
-        || item.manifest.taxonomy.flatCompatContract !== aggregateTagMetadata.flatCompatContract)) fail('aggregate taxonomy metadata is missing or mixed');
-    // 混合防线（同一 registrySha256）成立之后才允许把成员 conceptIds 折成
-    // 多级树：directCount = 成员页面直接标记该概念的篇数，subtreeCount = 该
-    // 概念及其全部后代按成员去重的篇数（与检索的祖先召回语义一致）。
+        || item.manifest.taxonomy.flatCompatContract !== aggregateTagMetadata.flatCompatContract)) fail('汇总成员的标签元数据缺失，或词表版本、哈希及标签规则不一致。');
+    // 所有成员的词表与标签规则一致后，再按其概念 ID 构建层级。directCount 统计
+    // 直接使用该概念的论文数；subtreeCount 统计使用该概念或任一后代概念的论文数，
+    // 同一篇论文只计一次，不能把下级标签的频次直接相加。
     const hierarchy = aggregateHierarchy(tagCatalog,
         stages.map(item => item.manifest.taxonomy.conceptIds));
     const directions = [...members.reduce((counts, item) => counts.set(item.primaryTask,
         (counts.get(item.primaryTask) || 0) + 1), new Map()).entries()]
         .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-CN'));
-    // The aggregate only counts primary tasks as directions, but it must still
-    // publish the {id, facet, label} concept records behind those counts so the
-    // paper library search does not silently treat an aggregate page as a
-    // taxonomy-free legacy page.  The projection is rebuilt from the exact
-    // staged single-page taxonomies (same registry/selection already checked
-    // above), never from the rendered labels alone.
+    // 热门方向只统计主任务，同时保留每个计数对应的概念 ID、分类维度和标签，
+    // 供论文库检索识别这份汇总。概念记录来自已经核验词表及选择规则的单篇页面，
+    // 不能只凭显示出来的标签文字重新推断概念。
     const taskConceptByLabel = new Map();
     for (const stage of stages) {
         const projection = stage.manifest.taxonomy;
         const concept = projection.concepts.find(item => item.id === projection.primaryTaskId);
-        if (!concept || concept.facet !== 'task') fail('aggregate primary task concept projection is incomplete');
+        if (!concept || concept.facet !== 'task') fail('汇总缺少主任务概念，或该概念不属于任务这一分类维度。');
         // Keys are sorted to match the single-page frontmatter JSON spelling.
         const record = { facet: concept.facet, id: concept.id, label: concept.preferredLabel.zh };
         const known = taskConceptByLabel.get(record.label);
-        if (known && known.id !== record.id) fail('aggregate primary task label maps to multiple taxonomy concepts');
+        if (known && known.id !== record.id) fail('同一主任务标签对应了多个概念，不能生成汇总。');
         taskConceptByLabel.set(record.label, record);
     }
     const directionConcepts = directions.map(([label]) => {
         const concept = taskConceptByLabel.get(label);
-        if (!concept) fail(`aggregate direction lacks a staged primary task concept: ${label}`);
+        if (!concept) fail(`汇总方向 ${label} 没有对应的已生成单篇页面主任务概念。`);
         return concept;
     });
     const aggregateTags = [...new Set(members.flatMap(item => item.labels))].sort((left, right) => left.localeCompare(right, 'zh-CN'));
@@ -939,9 +930,9 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         `paper_digest_taxonomy_registry_sha256: "${tagCatalog.registrySha256}"`,
         `paper_digest_taxonomy_concepts: ${JSON.stringify(directionConcepts)}`,
         'paper_digest_taxonomy_scope: "aggregate-primary-task-counts"', '---', '', `# ${conferenceId} 论文深度解读`, '',
-        `本汇总收录 authenticated plan 选择集内全部 ${members.length} 篇已完成分析、重标和单篇 staging 的论文。`, '',
-        '🏷️ 标签说明：本期使用新版受控 taxonomy；热门方向只统计主任务。', '',
-        '## ⚡ 今日概览', '', `✅ authenticated plan 入选 ${members.length} 篇 → 🔬 深度分析、Reader 与页面投影完成`, '',
+        `本汇总收录已核验计划中全部 ${members.length} 篇已完成分析、标签分配和单篇页面生成的论文。`, '',
+        '🏷️ 标签说明：本期标签来自新版词表；热门方向只统计主任务。', '',
+        '## ⚡ 今日概览', '', `计划入选的 ${members.length} 篇论文已完成深度分析、读者文章和单篇页面生成。`, '',
         '### 🏷️ 热门方向', '', '| 方向（仅主任务） | 数量 |', '|---|---:|'];
     for (const [label, count] of directions) lines.push(`| #${md(label)} | ${count} 篇 |`);
     // 热门方向表之后给出同一 registry 的多级下钻统计；排版保持与现有表格

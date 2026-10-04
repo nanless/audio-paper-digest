@@ -155,19 +155,19 @@ describe('Manual v6 production packet materializer', () => {
         }), /type 必须是受控文档类型/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...valid, task: '语音识别'
-        }), /task 必须是 current registry/);
+        }), /task 必须是当前词表中的单个任务标签/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...valid, task: '#数据集'
-        }), /task 必须是 current registry/);
+        }), /task 必须是当前词表中的单个任务标签/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...valid, primaryMethodTag: '#语音识别'
-        }), /primaryMethodTag 必须是 current registry/);
+        }), /primaryMethodTag 必须是当前词表中的单个方法标签/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...valid, tags: ['#语音识别', '#Transformer', '#鲁棒性']
-        }), /tags 必须是 3-5 个空格分隔/);
+        }), /tags 必须是字符串，包含 3–5 个用空格分隔/);
         assert.throws(() => normalizeAuthorOwnedBaseFields({
             ...valid, tags: '#Transformer #鲁棒性 #低资源'
-        }), /覆盖主任务和主方法/);
+        }), /并列出主任务和主方法/);
         assert.deepEqual(normalizeAuthorOwnedBaseFields({
             ...valid,
             tags: '#语音识别 #Transformer #CNN #鲁棒性'
