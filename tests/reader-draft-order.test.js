@@ -174,10 +174,31 @@ test('unsorted ambiguous bindings fail closed with paths on the unchanged input,
         let error;
         try { normalizeReaderDraftOrder(draft); } catch (caught) { error = caught; }
         assert.equal(error?.code, 'READER_DRAFT_ORDER_AMBIGUOUS');
+        assert.equal(error.message, '重排正文前，表格与来源记录不能一一对应。请按当前草稿的正文顺序核对 tableBindings 和 TABLE 占位符，不猜测缺失数据，也不丢弃已有来源的表格。');
+        for (const issue of error.readerIssues) {
+            assert.deepEqual(Object.keys(issue), ['path', 'message', 'code']);
+            assert.equal(issue.code, 'reader_table_binding_order_ambiguous');
+            assert.equal(issue.message, error.message);
+        }
         assert.equal(JSON.stringify(draft), before);
         assert.ok(error.readerIssues.some(issue => issue.path === '/sections/0/body'));
         assert.ok(error.readerIssues.some(issue => issue.path === '/tableBindings/0'));
     }
+});
+
+test('ambiguous tables in one section preserve repeated body paths before binding paths', () => {
+    const draft = fixture();
+    draft.sections[0].body += `\n\n${markdown('second-result')}`;
+    const before = JSON.stringify(draft);
+    assert.throws(() => normalizeReaderDraftOrder(draft), error => {
+        assert.equal(error.code, 'READER_DRAFT_ORDER_AMBIGUOUS');
+        assert.deepEqual(error.readerIssues.map(issue => issue.path), [
+            '/sections/0/body', '/sections/0/body', '/sections/1/body', '/sections/2/body',
+            '/tableBindings/0', '/tableBindings/1', '/tableBindings/2'
+        ]);
+        return true;
+    });
+    assert.equal(JSON.stringify(draft), before);
 });
 
 test('unsorted mixed selection and quote bindings realign by unique marker identity and prose order', () => {

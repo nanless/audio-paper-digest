@@ -8,7 +8,7 @@ const Config = require('../scripts/config.js');
 const { withFreshAnalysisContext } = require('../scripts/lib/fresh-analysis-context.js');
 const { loadReaderRecoveryRevision } = require('../scripts/lib/reader-recovery-revision.js');
 const { saveFailedCandidate, loadFailedCandidate, hashDraft,
-    TABLE_COUNT_ISSUE_CODE } = require('../scripts/lib/reader-repair.js');
+    TABLE_COUNT_ISSUE_CODE, collectDraftIssues } = require('../scripts/lib/reader-repair.js');
 const { READER_SECTION_KINDS, normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
 const directContext = require('../scripts/lib/direct-rewrite-analysis-context.js');
 const conferenceContext = require('../scripts/lib/conference-analysis-context.js');
@@ -44,6 +44,163 @@ function fixture(t) {
     return { root, context, directory, oldIdentity, identity, payload,
         enabled: fn => withFreshAnalysisContext(context, fn) };
 }
+
+function ambiguousLegacyFixture(t) {
+    const f = fixture(t);
+    f.oldIdentity = { ...f.identity, repairImplementationSha256: 'c'.repeat(64) };
+    const table = '| 比较项 | 指标 |\n| --- | --- |\n| 方法甲 | 10 |\n| 方法乙 | 20 |';
+    f.payload.draft.sections[6].body += `\n\n${table}\n\n${table}`;
+    let actualError;
+    try { normalizeReaderDraftOrder(f.payload.draft); } catch (error) { actualError = error; }
+    assert.equal(actualError.code, 'READER_DRAFT_ORDER_AMBIGUOUS');
+    assert.deepEqual(actualError.readerIssues.map(issue => issue.path), ['/sections/6/body', '/sections/6/body']);
+    const oldMessage = 'Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格';
+    const actualIssues = collectDraftIssues(f.payload.draft, actualError);
+    f.payload.issues = [{ path: null, message: oldMessage },
+        ...actualError.readerIssues.map(issue => ({ path: issue.path, message: oldMessage })),
+        ...actualIssues.slice(1 + actualError.readerIssues.length)];
+    f.payload.rawDraft = JSON.stringify(f.payload.draft);
+    f.payload.draftOrderMappings = [];
+    return f;
+}
+
+test('真实表格歧义的旧失败仍以失败状态迁移，原草稿、归档和已付费计数保持', t => {
+    const f = ambiguousLegacyFixture(t);
+    const oldDraft = structuredClone(f.payload.draft);
+    const filename = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const originalBytes = fs.readFileSync(filename);
+    const envelope = JSON.parse(originalBytes);
+    assert.equal(envelope.payloadSha256, hashDraft(f.payload));
+    assert.deepEqual(loadFailedCandidate(f.directory, f.oldIdentity), f.payload);
+    const pixels = { pixelEvidenceSha256: hashDraft(f.payload.imageEvidence) };
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, pixels));
+    assert.equal(migrated.status, 'failed');
+    assert.deepEqual(migrated.draft, oldDraft);
+    assert.equal(migrated.rawDraft, f.payload.rawDraft);
+    assert.deepEqual(migrated.draftOrderMappings, []);
+    assert.deepEqual(migrated.issues, f.payload.issues);
+    assert.deepEqual(migrated.imageEvidence, f.payload.imageEvidence);
+    for (const key of ['attempts', 'fullAttempts', 'transportFailures']) {
+        assert.equal(migrated[key], f.payload[key]);
+    }
+    const audit = migrated.readerRecoveryRevisions[0];
+    assert.deepEqual(audit.changedFields, ['repairImplementationSha256']);
+    assert.equal(audit.inputDraftSha256, hashDraft(oldDraft));
+    assert.equal(audit.outputDraftSha256, hashDraft(oldDraft));
+    assert.equal(audit.oldPayloadSha256, envelope.payloadSha256);
+    assert.equal(audit.oldEnvelopeSha256, crypto.createHash('sha256').update(originalBytes).digest('hex'));
+    assert.deepEqual(fs.readFileSync(path.join(f.directory, audit.archivedName)), originalBytes);
+    assert.equal(fs.statSync(path.join(f.directory, audit.archivedName)).mode & 0o777, 0o600);
+    const names = fs.readdirSync(f.directory);
+    assert.deepEqual(f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, pixels)), migrated);
+    assert.deepEqual(fs.readdirSync(f.directory), names);
+    assert.match(migrated.implementationRepairAllowanceProof.allowanceSha256, /^[a-f0-9]{64}$/);
+    const consumedProof = migrated.implementationRepairAllowanceProof;
+    saveFailedCandidate(f.directory, f.identity, {
+        ...migrated, attempts: migrated.attempts + 1, implementationRepairAllowanceProof: null
+    });
+    const nextIdentity = { ...f.identity, repairImplementationSha256: '9'.repeat(64) };
+    const next = f.enabled(() => loadReaderRecoveryRevision(f.directory, nextIdentity, pixels));
+    assert.equal(next.attempts, f.payload.attempts + 1);
+    assert.equal(next.fullAttempts, f.payload.fullAttempts);
+    assert.equal(next.transportFailures, f.payload.transportFailures);
+    assert.equal(next.implementationRepairAllowanceProof, null);
+    assert.ok(next.consumedImplementationAllowanceSha256.includes(consumedProof.allowanceSha256));
+    assert.deepEqual(next.draft, oldDraft);
+    assert.equal(next.rawDraft, f.payload.rawDraft);
+    assert.deepEqual(next.draftOrderMappings, []);
+});
+
+test('表格排序说明不参与数词规范化，独立真实数词诊断仍按原规则处理', async t => {
+    const code = 'reader_table_binding_order_ambiguous';
+    const message = 'quantitative_chinese_numeral:两阶段 tableBindings source-binding v4';
+    const cases = [
+        ['合法诊断', { path: null, code, message }],
+        ['参考诊断', { path: null, code, message, diagnosticOnly: true }],
+        ['直接 typed 的无效路径拒读', { path: '/sections/01/body', code, message }, true],
+        ['失效顶层证据', { path: null, code: 'READER_DRAFT_ORDER_AMBIGUOUS', message,
+            readerIssues: [{ path: '/sections/0/body', code, message }] }]
+    ];
+    for (const [name, issue, refuseLoad = false] of cases) {
+        await t.test(name, tt => {
+            const f = fixture(tt);
+            f.payload.draft.sections[0].body = '训练采用两阶段流程，另有三阶段对照。';
+            f.payload.draft.conceptBridges[0] = { explanation: '两阶段流程连接三阶段对照。' };
+            f.payload.issues = [issue,
+                { path: null, message: '读者文章文风校验失败: quantitative_chinese_numeral:三阶段' }];
+            f.payload.rawDraft = JSON.stringify(f.payload.draft);
+            const filename = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+            const bytes = fs.readFileSync(filename);
+            if (refuseLoad) {
+                const names = fs.readdirSync(f.directory);
+                assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)),
+                    /Reader candidate refused/);
+                assert.deepEqual(fs.readFileSync(filename), bytes);
+                assert.deepEqual(fs.readdirSync(f.directory), names);
+                assert.equal(fs.existsSync(path.join(f.directory, `${hashDraft(f.identity)}.json`)), false);
+                return;
+            }
+            const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+            assert.equal(migrated.draft.sections[0].body, '训练采用两阶段流程，另有 3 个阶段对照。');
+            assert.equal(migrated.draft.conceptBridges[0].explanation, '两阶段流程连接 3 个阶段对照。');
+            assert.deepEqual(migrated.issues, f.payload.issues);
+            for (const key of ['attempts', 'fullAttempts', 'transportFailures']) {
+                assert.equal(migrated[key], f.payload[key]);
+            }
+            const archive = migrated.readerRecoveryRevisions[0].archivedName;
+            assert.deepEqual(fs.readFileSync(path.join(f.directory, archive)), bytes);
+        });
+    }
+});
+
+test('仅捕获严格合法排序异常，依赖注入的其他错误或坏子项原样抛出且不安装文件', async t => {
+    const code = 'reader_table_binding_order_ambiguous';
+    const message = 'tableBindings source-binding v4';
+    const cases = [
+        ['其他代码', Object.assign(new Error(message), { code: 'SOURCE_BINDING_FAILED' })],
+        ['缺子项', Object.assign(new Error(message), { code: 'READER_DRAFT_ORDER_AMBIGUOUS' })],
+        ['非法路径', Object.assign(new Error(message), { code: 'READER_DRAFT_ORDER_AMBIGUOUS',
+            readerIssues: [{ path: '/sections/01/body', code, message }] })],
+        ['未知子项代码', Object.assign(new Error(message), { code: 'READER_DRAFT_ORDER_AMBIGUOUS',
+            readerIssues: [{ path: '/sections/0/body', code: 'other', message }] })],
+        ['参考子项', Object.assign(new Error(message), { code: 'READER_DRAFT_ORDER_AMBIGUOUS',
+            readerIssues: [{ path: '/sections/0/body', code, message, diagnosticOnly: true }] })],
+        ['不同说明', Object.assign(new Error(message), { code: 'READER_DRAFT_ORDER_AMBIGUOUS',
+            readerIssues: [{ path: '/sections/0/body', code, message: '不同说明' }] })],
+        ['顶层参考', Object.assign(new Error(message), { code: 'READER_DRAFT_ORDER_AMBIGUOUS', diagnosticOnly: true,
+            readerIssues: [{ path: '/sections/0/body', code, message }] })],
+        ['顶层参考坏类型', Object.assign(new Error(message), { code: 'READER_DRAFT_ORDER_AMBIGUOUS', diagnosticOnly: 'true',
+            readerIssues: [{ path: '/sections/0/body', code, message }] })]
+    ];
+    for (const [name, injectedError] of cases) {
+        await t.test(name, tt => {
+            const f = fixture(tt);
+            const filename = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+            const bytes = fs.readFileSync(filename);
+            const names = fs.readdirSync(f.directory);
+            const draftOrder = require('../scripts/lib/reader-draft-order.js');
+            const revisionPath = require.resolve('../scripts/lib/reader-recovery-revision.js');
+            const originalModule = require.cache[revisionPath];
+            const originalNormalize = draftOrder.normalizeReaderDraftOrder;
+            let called = 0;
+            try {
+                draftOrder.normalizeReaderDraftOrder = () => { called += 1; throw injectedError; };
+                delete require.cache[revisionPath];
+                const injectedRevision = require(revisionPath);
+                assert.throws(() => f.enabled(() => injectedRevision.loadReaderRecoveryRevision(f.directory, f.identity)),
+                    error => error === injectedError);
+                assert.equal(called, 1);
+            } finally {
+                draftOrder.normalizeReaderDraftOrder = originalNormalize;
+                require.cache[revisionPath] = originalModule;
+            }
+            assert.deepEqual(fs.readFileSync(filename), bytes);
+            assert.deepEqual(fs.readdirSync(f.directory), names);
+            assert.equal(loadFailedCandidate(f.directory, f.identity), null);
+            assert.deepEqual(loadFailedCandidate(f.directory, f.oldIdentity), f.payload);
+        });
+    }
+});
 
 test('explicit same-run revision preserves paid budgets, records mappings, archives evidence and is idempotent', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);

@@ -7,7 +7,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
 const { loadFailedCandidate, saveFailedCandidate, hashDraft, shaText, parseRecoveryDraft,
     IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT,
-    TABLE_COUNT_ISSUE_CODE } = require('./reader-repair.js');
+    TABLE_COUNT_ISSUE_CODE, classifyTableBindingOrderIssue, readTableBindingOrderError } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder, pruneUniquelyUnboundReaderMarkdownTables } = require('./reader-draft-order.js');
 const { normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals } = require('../editorial-quality.js');
@@ -185,7 +185,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         updated.draft = parseRecoveryDraft(updated.rawDraft);
     }
     if (updated.draft) {
-        const normalizationIssues = updated.issues.filter(issue => issue?.code !== TABLE_COUNT_ISSUE_CODE);
+        const normalizationIssues = updated.issues.filter(issue => issue?.code !== TABLE_COUNT_ISSUE_CODE
+            && !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
         updated.draft.sections = updated.draft.sections.map(section => ({
             ...section,
             body: typeof section?.body === 'string'
@@ -234,11 +235,18 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
                 updated.draftOrderMappings = [...(updated.draftOrderMappings || []), mixedTableOrder];
             }
         }
-        const normalized = normalizeReaderDraftOrder(updated.draft);
-        updated.draft = normalized.draft;
-        updated.rawDraft = JSON.stringify(updated.draft);
-        if (normalized.mapping.changed) {
-            updated.draftOrderMappings = [...(updated.draftOrderMappings || []), normalized.mapping];
+        let normalized;
+        try {
+            normalized = normalizeReaderDraftOrder(updated.draft);
+        } catch (error) {
+            if (!readTableBindingOrderError(error)) throw error;
+        }
+        if (normalized) {
+            updated.draft = normalized.draft;
+            updated.rawDraft = JSON.stringify(updated.draft);
+            if (normalized.mapping.changed) {
+                updated.draftOrderMappings = [...(updated.draftOrderMappings || []), normalized.mapping];
+            }
         }
     }
     const diagnosticImplementationChanged = implementationFields.some(field => old.changedFields.includes(field));

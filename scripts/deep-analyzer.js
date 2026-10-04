@@ -206,37 +206,34 @@ function readerIssuesRequireFullSourceBindingRetry(
     recovered, candidate, fullAttempts, issues, readerCapabilityPolicy = null,
     requireAllFigurePlacements = false
 ) {
+    const { classifyTableBindingOrderIssue } = require('./lib/reader-repair.js');
     const blocking = (Array.isArray(issues) ? issues : [])
         .filter(issue => issue?.diagnosticOnly !== true
             && issue?.code !== 'reader_table_count_insufficient');
+    if (blocking.some(issue => classifyTableBindingOrderIssue(issue).actionable)) return false;
+    const otherBlocking = blocking.filter(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
     // A valid draft that merely put every table outside result/ablation needs
     // a local table move/rebind. TABLE_N appears in the gate only as evidence
     // inventory; treating it as a broken binding wastes a second 48k full
     // generation and can hit the unchanged-gate cutoff before any patch runs.
-    if (blocking.some(issue => issue?.code === 'reader_result_table_missing'
+    if (otherBlocking.some(issue => issue?.code === 'reader_result_table_missing'
         || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))) return false;
-    // An incomplete pre-reorder table stream has deterministic local repair
-    // targets. Send it to the existing patch pass instead of spending another
-    // full Reader generation on the same missing table/binding closure.
-    if (blocking.some(issue => /Reader 正文重排前表格与绑定无法唯一闭合/.test(
-        String(issue?.message || '')
-    ))) return false;
     const weakStructureNeedsFullRetry = Boolean(readerCapabilityPolicy && candidate && fullAttempts < 2
-        && blocking.some(issue => (
+        && otherBlocking.some(issue => (
             /tableBindings|formulaBindings|figurePlacements|会议 weak source|(?:TABLE|FORMULA|FIGURE)_\d+/.test(
                 String(issue?.message || '')
             )
         )));
     const completeFigureBindingNeedsFullRetry = Boolean(requireAllFigurePlacements
         && candidate && fullAttempts < 2
-        && blocking.some(issue => /figurePlacements?/.test(String(issue?.message || ''))));
+        && otherBlocking.some(issue => /figurePlacements?/.test(String(issue?.message || ''))));
     const conferenceWideTableNeedsFullRetry = Boolean(requireAllFigurePlacements
         && candidate && fullAttempts < 2
-        && blocking.some(issue => /宽表/.test(String(issue?.message || ''))));
+        && otherBlocking.some(issue => /宽表/.test(String(issue?.message || ''))));
     return weakStructureNeedsFullRetry || completeFigureBindingNeedsFullRetry
         || conferenceWideTableNeedsFullRetry
         || Boolean(!recovered && candidate && fullAttempts < 2
-        && blocking.some(issue => (
+        && otherBlocking.some(issue => (
             /source-binding|tableBindings|sourceQuote|selection|TABLE_\d+/.test(
                 String(issue?.message || '')
             )
@@ -6714,16 +6711,30 @@ async function generateApiReaderArticleDetailed(paper, analysis, sourceEvidence,
 }
 
 function buildApiReaderValidationFeedback(error) {
+    const { TABLE_COUNT_ISSUE_CODE, readTableCountIssue,
+        classifyTableBindingOrderIssue, classifyTableBindingOrderError } = require('./lib/reader-repair.js');
+    const orderDiagnostic = error instanceof Error || typeof error === 'string'
+        ? classifyTableBindingOrderError(error) : classifyTableBindingOrderIssue(error);
     const originalMessage = String(error?.message || error || '未知校验错误');
-    const { TABLE_COUNT_ISSUE_CODE, readTableCountIssue } = require('./lib/reader-repair.js');
     const codedCountIssue = error?.code === TABLE_COUNT_ISSUE_CODE ? error : null;
     const countIssue = codedCountIssue || (typeof error === 'string' ? { message: originalMessage } : error);
     const tableCounts = readTableCountIssue(countIssue);
-    const tableCountFailure = countIssue?.diagnosticOnly !== true && tableCounts;
+    const tableCountFailure = !orderDiagnostic.ignoreMessageForRepair
+        && countIssue?.diagnosticOnly !== true && tableCounts;
     // Coded count failures select repairs only from their fields. Their text
     // remains available to the caller's log, but cannot select another gate.
-    const message = codedCountIssue ? '' : originalMessage;
-    const feedbackMessage = codedCountIssue
+    const message = codedCountIssue || orderDiagnostic.ignoreMessageForRepair ? '' : originalMessage;
+    const orderFeedback = orderDiagnostic.actionable
+        ? '重排正文前，表格与来源记录不能一一对应'
+        : orderDiagnostic.kind === 'typed' || orderDiagnostic.kind === 'legacy'
+            ? '这项表格对应诊断仅供参考，本次不据此选择修复操作'
+            : ({
+                'invalid-typed': '表格对应诊断的路径或字段无效，本次不据此选择修复操作',
+                'invalid-legacy': '旧格式的表格对应诊断含有无效路径或字段，本次不据此选择修复操作',
+                'code-conflict': '表格对应诊断的代码与旧格式说明不一致，本次不据此选择修复操作',
+                'invalid-error': '表格对应异常的子项未通过核验，本次不据此选择修复操作'
+            })[orderDiagnostic.kind];
+    const feedbackMessage = orderDiagnostic.ignoreMessageForRepair ? orderFeedback : codedCountIssue
         ? tableCounts
             ? countIssue.diagnosticOnly === true
                 ? '这项数量诊断仅供参考，本次不据此选择修复操作'
@@ -6856,13 +6867,13 @@ function buildApiReaderValidationFeedback(error) {
             + '解释或成本；不要试图改动未授权的另一张表，也不要只列方法与数值两列'
         );
     }
-    if (/Reader 正文重排前表格与绑定无法唯一闭合/.test(message)) {
+    if (orderDiagnostic.actionable) {
         fixes.push(
-            '先逐节按正文顺序数清实际 Markdown 表和独占 TABLE marker，再与 tableBindings 一一闭合。'
-            + '若正文表少于绑定，只在允许的小节补齐缺失的证据表并同步该绑定；'
-            + '若正文表多于绑定，只删除无法对应任何绑定的多余手写表，保留其余表、marker 与来源证据。'
-            + '不得新增或删除 tableBindings 数组项；selection 绑定才允许在正文使用对应 [[TABLE_n]] marker，'
-            + 'source_quotes 绑定必须直接写 Markdown 表，绝不能把 [[TABLE_n]] 放在 source_quotes 绑定对应的正文位置。'
+            '先按正文顺序核对实际 Markdown 表、独占 [[TABLE_n]] 和 tableBindings。'
+            + '正文表少于绑定时，只在允许的小节补充有原文依据的表，并同步对应的现有绑定；'
+            + '正文表多于绑定时，只删除不能对应任何绑定的多余手写表，保留其余表、占位符和来源记录。'
+            + '不得新增或删除 tableBindings 数组项。selection 绑定才可使用对应 [[TABLE_n]]；'
+            + 'source_quotes 绑定必须直接写 Markdown 表'
         );
     }
     if (/source_quotes 时正文必须直接写 Markdown 表|source_quotes.*不能使用 \[\[TABLE_/.test(message)) {
@@ -7134,7 +7145,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let draftOrderMappings = [];
     const normalizeCandidate = () => {
         if (!candidate) return;
-        const normalizationIssues = currentIssues.filter(issue => issue?.code !== repair.TABLE_COUNT_ISSUE_CODE);
+        const normalizationIssues = currentIssues.filter(issue => issue?.code !== repair.TABLE_COUNT_ISSUE_CODE
+            && !repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
         normalizeReaderConceptBridgeTerms(candidate);
         normalizeShiftedReaderConceptBridgeMarkers(candidate);
         normalizeDuplicateReaderConceptBridgeMarkers(candidate);
@@ -7331,6 +7343,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             + `本次仅将 patch 预算提升至 ${repairTruncationRetryMaxTokens}`);
     }
     const issueFeedback = issue => issue?.code === repair.TABLE_COUNT_ISSUE_CODE
+        || repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
         ? buildApiReaderValidationFeedback(issue) : issue.message;
     attemptErrorHistory.push(...currentIssues.map(issueFeedback));
     validationFeedback = buildAttemptFeedback();
@@ -7458,6 +7471,20 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ) || implementationMigrationNeedsFullRegeneration;
         const repairContext = candidate && !sourceBindingNeedsFullRetry
             ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText) : null;
+        if (repairContext && repairContext.targets.length === 0
+            && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)) {
+            const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
+            repair.saveFailedCandidate(candidateDirectory, identity, {
+                ...latestFailure,
+                status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
+                issues: currentIssues, attempts: attempt - 1, fullAttempts, transportFailures,
+                noProgress, failureSignature: previousFailureSignature,
+                validationFailureSignature: previousValidationFailureSignature, validationFailureStreak,
+                implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
+                ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {})
+            });
+            throw new Error('没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求');
+        }
         if (sourceBindingNeedsFullRetry) previousDraft = JSON.stringify(candidate);
         if (!repairContext && fullAttempts >= 2 && !implementationRepairAllowanceProof) {
             throw lastError || new Error('Reader root JSON remained invalid after two full attempts');
@@ -7635,6 +7662,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             previousDraft = candidate ? JSON.stringify(candidate) : raw;
             currentIssues = repairContext && !patchApplied
                 ? [...currentIssues.filter(issue => issue.code === repair.TABLE_COUNT_ISSUE_CODE
+                    || repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
                     || !issue.message.startsWith('Reader patch')),
                     { path: null, message: `Reader patch rejected: ${error.message}` }]
                 : repair.collectDraftIssues(candidate, error, {

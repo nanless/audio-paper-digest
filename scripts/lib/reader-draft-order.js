@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { extractMarkdownTables } = require('../analysis-contract.js');
 const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v4';
+const TABLE_BINDING_ORDER_ISSUE_CODE = 'reader_table_binding_order_ambiguous';
 const READER_SECTION_KINDS = Object.freeze([
     'background', 'related_work', 'problem', 'method_overview', 'component', 'training',
     'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'
@@ -591,11 +592,11 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
                         : !originalTables[index]?.marker));
         }
         if (!valid) {
-            const error = new Error('Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格');
+            const error = new Error('重排正文前，表格与来源记录不能一一对应。请按当前草稿的正文顺序核对 tableBindings 和 TABLE 占位符，不猜测缺失数据，也不丢弃已有来源的表格。');
             error.code = 'READER_DRAFT_ORDER_AMBIGUOUS';
             error.readerIssues = [
-                ...originalTables.map(table => ({ path: table.path, message: error.message })),
-                ...draft.tableBindings.map((_binding, index) => ({ path: `/tableBindings/${index}`, message: error.message }))
+                ...originalTables.map(table => ({ path: table.path, message: error.message, code: TABLE_BINDING_ORDER_ISSUE_CODE })),
+                ...draft.tableBindings.map((_binding, index) => ({ path: `/tableBindings/${index}`, message: error.message, code: TABLE_BINDING_ORDER_ISSUE_CODE }))
             ];
             throw error;
         }
@@ -666,7 +667,7 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
         conceptBridges: bridgeMap, conceptMarkerLocations } };
 }
 
-module.exports = { READER_DRAFT_ORDER_CONTRACT, READER_SECTION_KINDS, locateReaderDraftTables,
+module.exports = { READER_DRAFT_ORDER_CONTRACT, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS, locateReaderDraftTables,
     completeSelectionMarkerPermutation, pruneUniquelyUnboundReaderMarkdownTables,
     alignMixedBindingsToCurrentTableNodes, alignSourceQuoteBindingsToCurrentTableNodes,
     pruneTrailingUnboundSourceQuoteBindings,

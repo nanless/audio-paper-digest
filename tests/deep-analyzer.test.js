@@ -590,6 +590,84 @@ describe('arXiv HTML full-text health gate', () => {
 });
 
 describe('deep-analyzer section helpers', () => {
+    it('表格排序反馈只依据合法诊断结构，兼容完整旧异常', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const { READER_SECTION_KINDS, normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
+        const draft = { sections: READER_SECTION_KINDS.map(kind => ({ kind, heading: kind, body: kind.repeat(130) })),
+            tableBindings: [] };
+        [draft.sections[6], draft.sections[7]] = [draft.sections[7], draft.sections[6]];
+        draft.sections[6].body += '\n\n| 方法 | 得分 |\n| --- | --- |\n| 方法甲 | 10 |';
+        let produced;
+        try { normalizeReaderDraftOrder(draft); } catch (error) { produced = error; }
+        assert.strictEqual(produced.code, 'READER_DRAFT_ORDER_AMBIGUOUS');
+        const expected = deep.buildApiReaderValidationFeedback(produced);
+        assert.match(expected, /^上一次输出被代码拒绝：重排正文前，表格与来源记录不能一一对应。/);
+        assert.match(expected, /不得新增或删除 tableBindings 数组项/);
+        assert.doesNotMatch(expected, /。。/);
+        assert.doesNotMatch(expected, /逐张按正文顺序重建|扩为 5 列以上|删除所有自行书写的展示公式/);
+        const oldMessage = 'Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格';
+        for (const input of [new Error(oldMessage), oldMessage,
+            { path: null, code: 'reader_table_binding_order_ambiguous', message: '表格对应有问题。' },
+            { path: '/sections/6/body', code: 'reader_table_binding_order_ambiguous',
+                message: 'tableBindings source-binding v4 formulaBindings 宽表 readerTitle quantitative_chinese_numeral:两阶段' },
+            Object.assign(new Error('新的自然说明'), {
+                code: 'reader_table_binding_order_ambiguous', path: '/tableBindings/0'
+            })]) {
+            assert.strictEqual(deep.buildApiReaderValidationFeedback(input), expected);
+        }
+    });
+
+    it('参考和无效表格排序诊断保留身份，不借说明取得其他反馈或整篇重试', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const code = 'reader_table_binding_order_ambiguous';
+        const oldMessage = 'Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格';
+        const misleading = 'tableBindings source-binding v4 formulaBindings figurePlacements 宽表 readerTitle quantitative_chinese_numeral:两阶段 表格前缺少 正文字数必须';
+        const inputs = [
+            [{ path: null, code, message: misleading, diagnosticOnly: true }, '仅供参考'],
+            [{ path: '/sections/0/body', message: oldMessage, diagnosticOnly: true }, '仅供参考'],
+            [{ path: '/sections/01/body', code, message: misleading }, '路径或字段无效'],
+            [{ path: '/sections/0/body\n', code, message: misleading }, '路径或字段无效'],
+            [{ code, message: misleading }, '路径或字段无效'],
+            [{ path: null, code, message: misleading, diagnosticOnly: undefined }, '路径或字段无效'],
+            [{ path: '/sections/01/body', message: oldMessage }, '旧格式的表格对应诊断含有无效路径或字段'],
+            [{ path: null, message: oldMessage, diagnosticOnly: undefined }, '旧格式的表格对应诊断含有无效路径或字段'],
+            ...['unknown', 0, false, NaN].map(conflictingCode => [
+                { path: null, code: conflictingCode, message: oldMessage }, '代码与旧格式说明不一致'
+            ]),
+            [{ path: null, code: 'reader_table_count_insufficient', requiredCount: 4, actualCount: 3,
+                message: oldMessage }, '代码与旧格式说明不一致'],
+            [{ path: null, code: 'READER_DRAFT_ORDER_AMBIGUOUS', message: misleading,
+                readerIssues: [{ path: '/sections/0/body', code, message: misleading }] }, '子项未通过核验'],
+            [Object.assign(new Error(misleading), { code, path: '/sections/01/body' }), '路径或字段无效'],
+            [Object.assign(new Error(misleading), { code }), '路径或字段无效'],
+            [Object.assign(new Error(oldMessage), { path: '/sections/01/body' }), '旧格式的表格对应诊断含有无效路径或字段'],
+            [Object.assign(new Error(oldMessage), { diagnosticOnly: true }), '旧格式的表格对应诊断含有无效路径或字段'],
+            [Object.assign(new Error(oldMessage), { diagnosticOnly: undefined }), '旧格式的表格对应诊断含有无效路径或字段'],
+            ...[true, 'true'].map(diagnosticOnly => [Object.assign(new Error(misleading), {
+                code: 'READER_DRAFT_ORDER_AMBIGUOUS', diagnosticOnly,
+                readerIssues: [{ path: '/sections/0/body', code, message: misleading }]
+            }), '子项未通过核验'])
+        ];
+        const realSourceIssue = { path: '/tableBindings/0', message: 'source-binding v4 原文单元格不符' };
+        for (const [input, label] of inputs) {
+            const feedback = deep.buildApiReaderValidationFeedback(input);
+            assert.ok(feedback.includes(label), label);
+            assert.doesNotMatch(feedback,
+                /必须执行以下修复|逐张按正文顺序重建|扩为 5 列以上|数量、比例、编号/);
+            if (!(input instanceof Error)) {
+                assert.strictEqual(deep.readerIssuesRequireFullSourceBindingRetry(null, {}, 0, [input], {}, true), false);
+                assert.strictEqual(deep.readerIssuesRequireFullSourceBindingRetry(null, {}, 0,
+                    [input, realSourceIssue], {}, true), true);
+            }
+        }
+        const validOrderIssue = { path: '/sections/0/body', code, message: misleading };
+        assert.strictEqual(deep.readerIssuesRequireFullSourceBindingRetry(null, {}, 0,
+            [validOrderIssue, realSourceIssue], {}, true), false);
+        assert.strictEqual(deep.readerIssuesRequireFullSourceBindingRetry(null, {}, 0, [realSourceIssue]), true);
+        assert.match(deep.buildApiReaderValidationFeedback(new Error(realSourceIssue.message)),
+            /逐张按正文顺序重建 tableBindings/);
+    });
+
     it('表格数量错误提供稳定计数，反馈不根据说明文字选择其他修复', () => {
         const { validateApiReaderTableNarratives, buildApiReaderValidationFeedback,
             readerIssuesRequireFullSourceBindingRetry } = require('../scripts/deep-analyzer.js');

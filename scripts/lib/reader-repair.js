@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { READER_LIMITS } = require('./reader-contract.js');
-const { locateReaderDraftTables } = require('./reader-draft-order.js');
+const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE } = require('./reader-draft-order.js');
 
 const REPAIR_VERSION = 'reader-node-repair-v1';
 const ARRAY_FIELDS = ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
@@ -23,6 +23,112 @@ const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(val
 const shaText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const TABLE_COUNT_ISSUE_CODE = 'reader_table_count_insufficient';
+const LEGACY_TABLE_BINDING_ORDER_MESSAGE = 'Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格';
+const TABLE_BINDING_ORDER_ERROR_CODE = 'READER_DRAFT_ORDER_AMBIGUOUS';
+const TABLE_BINDING_ORDER_COMPARISON_MESSAGES = Object.freeze({
+    'invalid-typed': '表格对应诊断的字段无效',
+    'invalid-legacy': '旧格式表格对应诊断的字段无效',
+    'code-conflict': '表格对应诊断的代码与旧格式说明不一致',
+    'invalid-error': '表格对应异常的子项未通过核验'
+});
+
+function classifyTableBindingOrderIssue(issue) {
+    let kind = 'unrelated';
+    if (issue && typeof issue === 'object' && !Array.isArray(issue)) {
+        const defaultCode = issue.code === undefined || issue.code === null || issue.code === '';
+        if (issue.code === TABLE_BINDING_ORDER_ERROR_CODE
+            || (defaultCode && issue.path === null && issue.message === LEGACY_TABLE_BINDING_ORDER_MESSAGE
+                && own(issue, 'readerIssues'))) {
+            kind = 'invalid-error';
+        } else if (issue.code === TABLE_BINDING_ORDER_ISSUE_CODE
+            || issue.message === LEGACY_TABLE_BINDING_ORDER_MESSAGE) {
+            if (issue.code !== TABLE_BINDING_ORDER_ISSUE_CODE && !defaultCode) {
+                kind = 'code-conflict';
+            } else {
+                const match = typeof issue.path === 'string'
+                    ? /^(?:\/sections\/(0|[1-9]\d*)\/body|\/tableBindings\/(0|[1-9]\d*))$/.exec(issue.path) : null;
+                const validPath = own(issue, 'path') && (issue.path === null || (match
+                    && match[0] === issue.path && Number.isSafeInteger(Number(match[1] ?? match[2]))));
+                const valid = validPath && typeof issue.message === 'string'
+                    && (!own(issue, 'diagnosticOnly') || typeof issue.diagnosticOnly === 'boolean');
+                kind = issue.code === TABLE_BINDING_ORDER_ISSUE_CODE
+                    ? (valid ? 'typed' : 'invalid-typed') : (valid ? 'legacy' : 'invalid-legacy');
+            }
+        }
+    }
+    return { kind, actionable: ['typed', 'legacy'].includes(kind) && issue.diagnosticOnly !== true,
+        ignoreMessageForRepair: kind !== 'unrelated', issue };
+}
+
+function readTableBindingOrderIssue(issue) {
+    const result = classifyTableBindingOrderIssue(issue);
+    return ['typed', 'legacy'].includes(result.kind) ? issue : null;
+}
+
+function classifyTableBindingOrderError(error) {
+    const unrelated = { kind: 'unrelated', validOrderError: false, actionable: false,
+        ignoreMessageForRepair: false, summary: null, readerIssues: [] };
+    const legacy = () => ({ kind: 'legacy', validOrderError: true, actionable: true,
+        ignoreMessageForRepair: true, summary: { path: null, message: LEGACY_TABLE_BINDING_ORDER_MESSAGE,
+            code: TABLE_BINDING_ORDER_ISSUE_CODE }, readerIssues: [] });
+    if (typeof error === 'string') return error === LEGACY_TABLE_BINDING_ORDER_MESSAGE ? legacy() : unrelated;
+    if (!(error instanceof Error)) return unrelated;
+    const readerIssues = own(error, 'readerIssues') ? error.readerIssues : [];
+    if (error.code === TABLE_BINDING_ORDER_ERROR_CODE) {
+        const children = Array.isArray(readerIssues) ? readerIssues.map(classifyTableBindingOrderIssue) : [];
+        const valid = (!own(error, 'diagnosticOnly') || error.diagnosticOnly === false)
+            && typeof error.message === 'string' && children.length > 0
+            && children.every(child => child.actionable && child.kind === children[0].kind
+                && child.issue.message === error.message);
+        const summary = valid
+            ? { path: null, message: error.message, code: TABLE_BINDING_ORDER_ISSUE_CODE }
+            : { path: null, code: error.code, message: error.message };
+        if (!valid && own(error, 'readerIssues')) summary.readerIssues = readerIssues;
+        if (!valid && own(error, 'diagnosticOnly')) summary.diagnosticOnly = error.diagnosticOnly;
+        return { kind: valid ? children[0].kind : 'invalid-error', validOrderError: valid,
+            actionable: valid, ignoreMessageForRepair: true, summary, readerIssues };
+    }
+    if (error.code === TABLE_BINDING_ORDER_ISSUE_CODE || own(error, 'path') || own(error, 'diagnosticOnly')) {
+        const result = classifyTableBindingOrderIssue(error);
+        if (!result.ignoreMessageForRepair) return unrelated;
+        const summary = Object.fromEntries(Object.getOwnPropertyNames(error)
+            .filter(key => key !== 'stack').map(key => [key, error[key]]));
+        return { kind: result.kind, validOrderError: false, actionable: result.actionable,
+            ignoreMessageForRepair: true, summary, readerIssues };
+    }
+    if (error.message !== LEGACY_TABLE_BINDING_ORDER_MESSAGE) return unrelated;
+    const defaultCode = error.code === undefined || error.code === null || error.code === '';
+    if (defaultCode && !own(error, 'readerIssues')) return legacy();
+    const summary = { path: null, message: error.message };
+    if (own(error, 'code')) summary.code = error.code;
+    if (own(error, 'readerIssues')) summary.readerIssues = readerIssues;
+    return { kind: defaultCode ? 'invalid-error' : 'code-conflict', validOrderError: false,
+        actionable: false, ignoreMessageForRepair: true, summary, readerIssues };
+}
+
+function readTableBindingOrderError(error) {
+    const result = classifyTableBindingOrderError(error);
+    return result.validOrderError ? result : null;
+}
+
+function projectTableBindingOrderIssue(issue, result, keepCode = false) {
+    if (result.kind === 'legacy') return issue;
+    const message = result.kind === 'typed' ? LEGACY_TABLE_BINDING_ORDER_MESSAGE
+        : TABLE_BINDING_ORDER_COMPARISON_MESSAGES[result.kind];
+    return Object.fromEntries(Object.entries(issue).flatMap(([key, value]) => {
+        if (!keepCode && result.kind === 'typed' && key === 'code') return [];
+        if (key === 'message' && typeof value === 'string') return [[key, message]];
+        if (!keepCode && result.kind === 'invalid-error' && issue.code === TABLE_BINDING_ORDER_ERROR_CODE
+            && key === 'readerIssues' && Array.isArray(value)) {
+            return [[key, value.map(child => {
+                const classified = classifyTableBindingOrderIssue(child);
+                return classified.ignoreMessageForRepair && typeof child.message === 'string'
+                    ? projectTableBindingOrderIssue(child, classified, true) : child;
+            })]];
+        }
+        return [[key, value]];
+    }));
+}
 
 function readTableCountIssue(issue) {
     let requiredCount, actualCount;
@@ -45,6 +151,8 @@ function readTableCountIssue(issue) {
 }
 
 function recoveryIssueProjection(issue) {
+    const orderIssue = classifyTableBindingOrderIssue(issue);
+    if (orderIssue.ignoreMessageForRepair) return projectTableBindingOrderIssue(issue, orderIssue);
     if (issue?.code !== TABLE_COUNT_ISSUE_CODE) return issue;
     const counts = readTableCountIssue(issue);
     // Keep the comparison input used by saved v1 candidates and v2 failure
@@ -497,14 +605,22 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
 // Independent diagnostics supplement (never replace) the authoritative parser.
 function collectDraftIssues(draft, parserError, options = {}) {
     const issues = [];
+    const objectIssue = parserError && typeof parserError === 'object' && !(parserError instanceof Error)
+        ? classifyTableBindingOrderIssue(parserError) : null;
+    const orderError = objectIssue ? { ...objectIssue, summary: parserError }
+        : classifyTableBindingOrderError(parserError);
     const parserIssues = Array.isArray(parserError?.readerIssues) ? parserError.readerIssues : [];
-    const hasSameCountIssue = parserError?.code === TABLE_COUNT_ISSUE_CODE
+    const standaloneParserIssues = orderError.ignoreMessageForRepair && !orderError.actionable
+        ? parserIssues.filter(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair) : parserIssues;
+    const hasSameCountIssue = !orderError.ignoreMessageForRepair && parserError?.code === TABLE_COUNT_ISSUE_CODE
         && parserIssues.some(issue => issue?.code === TABLE_COUNT_ISSUE_CODE
             && issue.diagnosticOnly !== true && issue.path === null
             && issue.requiredCount === parserError.requiredCount
             && issue.actualCount === parserError.actualCount);
     if (parserError && !hasSameCountIssue) {
-        if (parserError.code === TABLE_COUNT_ISSUE_CODE) {
+        if (orderError.ignoreMessageForRepair) {
+            issues.push(orderError.summary);
+        } else if (parserError.code === TABLE_COUNT_ISSUE_CODE) {
             issues.push({ path: null, code: TABLE_COUNT_ISSUE_CODE,
                 requiredCount: parserError.requiredCount, actualCount: parserError.actualCount,
                 message: String(parserError.message || parserError) });
@@ -512,7 +628,7 @@ function collectDraftIssues(draft, parserError, options = {}) {
             issues.push({ path: null, message: String(parserError.message || parserError) });
         }
     }
-    issues.push(...parserIssues);
+    issues.push(...standaloneParserIssues);
     if (!draft) return issues;
     draft.sections.forEach((section, index) => {
         if (!section || typeof section !== 'object' || Array.isArray(section)
@@ -543,7 +659,8 @@ function collectDraftIssues(draft, parserError, options = {}) {
     }
     collectTableBindingIssues(draft, options).forEach(issue => issues.push(issue));
     require('./reader-source-diagnostics.js').buildReaderSourceDiagnostics({ draft,
-        sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts, parserError
+        sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts,
+        parserError: orderError.ignoreMessageForRepair ? null : parserError
     }).forEach(issue => issues.push(issue));
     try {
         const tables = require('./reader-tables.js');
@@ -657,6 +774,7 @@ function collectTableBindingIssues(draft, options = {}) {
 
 function buildMissingResultTableOperation(draft, issues) {
     const blockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true
+        && !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
         && issue?.code !== TABLE_COUNT_ISSUE_CODE && !readTableCountIssue(issue));
     if (!blockingIssues.some(issue => issue?.code === 'reader_result_table_missing'
         || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))) return null;
@@ -734,7 +852,7 @@ function buildMissingResultTableOperation(draft, issues) {
 
 function buildMissingNarrativeTableOperation(draft, issues) {
     const issue = issues.filter(item => item?.diagnosticOnly !== true).find(item => (
-        readTableCountIssue(item)
+        !classifyTableBindingOrderIssue(item).ignoreMessageForRepair && readTableCountIssue(item)
     ));
     const counts = readTableCountIssue(issue);
     if (!counts) return null;
@@ -831,14 +949,20 @@ function buildRepairTargets(draft, issues) {
     // keeps a local marker/prose repair below the eight-node patch contract and
     // lets the full parser surface any remaining source problem afterward.
     const isCountDiagnostic = issue => issue?.code === TABLE_COUNT_ISSUE_CODE || readTableCountIssue(issue);
-    const allBlockingIssues = issues.filter(issue => issue?.diagnosticOnly !== true);
+    const selectableIssues = issues.filter(issue => {
+        const orderIssue = classifyTableBindingOrderIssue(issue);
+        return !orderIssue.ignoreMessageForRepair || orderIssue.actionable;
+    });
+    const allBlockingIssues = selectableIssues.filter(issue => issue?.diagnosticOnly !== true);
     const blockingIssues = allBlockingIssues.filter(issue => !isCountDiagnostic(issue));
-    let actionableIssues = (allBlockingIssues.length ? blockingIssues : issues)
+    let actionableIssues = (allBlockingIssues.length ? blockingIssues : selectableIssues)
         .filter(issue => !isCountDiagnostic(issue));
     const firstSubstantiveIssue = actionableIssues.find(issue => (
-        !String(issue?.message || '').startsWith('Reader patch rejected:')
+        classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+            || !String(issue?.message || '').startsWith('Reader patch rejected:')
     ));
-    const firstPlacementGroup = conceptBridgePlacementGroup(firstSubstantiveIssue);
+    const firstPlacementGroup = classifyTableBindingOrderIssue(firstSubstantiveIssue).ignoreMessageForRepair
+        ? null : conceptBridgePlacementGroup(firstSubstantiveIssue);
     if (firstPlacementGroup) {
         // Bridge placement does not authorize rewriting an otherwise valid
         // bridge definition. Several duplicated markers may be diagnosed at
@@ -846,6 +970,7 @@ function buildRepairTargets(draft, issues) {
         // eight-node patch contract. The full parser will surface any remainder.
         const seenBridgeIndexes = new Set();
         for (const issue of actionableIssues) {
+            if (classifyTableBindingOrderIssue(issue).ignoreMessageForRepair) continue;
             const group = conceptBridgePlacementGroup(issue);
             if (!group || seenBridgeIndexes.has(group.index)) continue;
             seenBridgeIndexes.add(group.index);
@@ -861,11 +986,11 @@ function buildRepairTargets(draft, issues) {
         }
     }
     const missingNarrativeTableIssue = allBlockingIssues.find(issue => (
-        readTableCountIssue(issue)
+        !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair && readTableCountIssue(issue)
     ));
     const missingNarrativeTableOperation = buildMissingNarrativeTableOperation(draft, issues);
     const ambiguousTableOrderIssue = blockingIssues.find(issue => (
-        /Reader 正文重排前表格与绑定无法唯一闭合/.test(String(issue?.message || ''))
+        classifyTableBindingOrderIssue(issue).actionable
     ));
     if (ambiguousTableOrderIssue) {
         const tables = locateReaderDraftTables(draft);
@@ -877,6 +1002,9 @@ function buildRepairTargets(draft, issues) {
             if (destination) add(destination);
             if (bindings[tables.length]) add(`/tableBindings/${tables.length}`);
         } else if (tables.length > bindings.length) {
+            for (const table of tables) add(table.path);
+            bindings.forEach((_binding, index) => add(`/tableBindings/${index}`));
+        } else {
             for (const table of tables) add(table.path);
             bindings.forEach((_binding, index) => add(`/tableBindings/${index}`));
         }
@@ -916,8 +1044,9 @@ function buildRepairTargets(draft, issues) {
         }
     }
     const missingResultTableIssue = blockingIssues.find(issue => (
-        issue?.code === 'reader_result_table_missing'
-        || /^读者文章主结果表覆盖不足/.test(String(issue?.message || ''))
+        !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+        && (issue?.code === 'reader_result_table_missing'
+            || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))
     ));
     const missingResultTableOperation = buildMissingResultTableOperation(draft, issues);
     if (missingResultTableIssue && missingResultTableOperation) {
@@ -941,15 +1070,17 @@ function buildRepairTargets(draft, issues) {
             || /^读者文章主结果表覆盖不足/.test(String(issue?.message || ''))
         ));
     }
-    const globalWideTableIssue = blockingIssues.find(issue => /宽表/.test(String(issue?.message || '')));
+    const globalWideTableIssue = blockingIssues.find(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+        && /宽表/.test(String(issue?.message || '')));
     if (globalWideTableIssue) {
         // A global minimum-wide-table gate used to authorize every table body
         // and binding at once. Large five-node patches repeatedly ended before
         // their JSON suffix. Repair one table pair, then let the authoritative
         // full parser identify the next deficit on the following attempt.
         const tableSpecific = blockingIssues.filter(issue => (
-            /^\/tableBindings\/(?:0|[1-9]\d*)$/.test(String(issue?.path || issue?.bindingPath || ''))
-            || /tableBindings\[(?:0|[1-9]\d*)\]/.test(String(issue?.message || ''))
+            !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+            && (/^\/tableBindings\/(?:0|[1-9]\d*)$/.test(String(issue?.path || issue?.bindingPath || ''))
+                || /tableBindings\[(?:0|[1-9]\d*)\]/.test(String(issue?.message || '')))
         )).sort((left, right) => {
             const index = issue => Number(/^\/tableBindings\/(\d+)$/.exec(
                 String(issue?.path || issue?.bindingPath || '')
@@ -987,6 +1118,7 @@ function buildRepairTargets(draft, issues) {
                 : [globalWideTableIssue];
     }
     for (const issue of actionableIssues) {
+        if (classifyTableBindingOrderIssue(issue).ignoreMessageForRepair) continue;
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
         const message = issue.message || '';
@@ -1081,7 +1213,8 @@ function buildRepairTargets(draft, issues) {
     }
     // Global readability/length errors cannot safely be localized from a regex
     // message. Keep all body targets reviewable, but cap each patch to 8 nodes.
-    if (!paths.size && (actionableIssues.length || !issues.length)) {
+    if (!paths.size && (actionableIssues.some(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)
+        || !issues.length)) {
         draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
     }
     return [...paths].slice(0, 8).map(pointer => ({ path: pointer,
@@ -1166,6 +1299,7 @@ function loadFailedCandidate(directory, identity) {
             || !Array.isArray(envelope.payload.issues)
             || envelope.payload.issues.some(issue => !issue || typeof issue.message !== 'string'
                 || (issue.path !== null && typeof issue.path !== 'string')
+                || (issue.code === TABLE_BINDING_ORDER_ISSUE_CODE && !readTableBindingOrderIssue(issue))
                 || (issue.code === TABLE_COUNT_ISSUE_CODE && !readTableCountIssue(issue)))
             || (envelope.payload.draft && !parseRecoveryDraft(envelope.payload.draft))) {
             throw new Error('Corrupt or drifted Reader candidate');
@@ -1184,6 +1318,14 @@ function saveFailedCandidate(directory, identity, payload) {
     if (payload.status !== 'failed') throw new Error('Reader candidate cannot certify success');
     if (Object.prototype.hasOwnProperty.call(payload, 'implementationRepairAllowance')) {
         throw new Error('Reader implementation repair allowance requires a recovery-revision proof');
+    }
+    for (const issue of payload.issues || []) {
+        const original = classifyTableBindingOrderIssue(issue);
+        if (!original.ignoreMessageForRepair) continue;
+        const persisted = classifyTableBindingOrderIssue(JSON.parse(JSON.stringify(issue)));
+        if ((!original.actionable && persisted.actionable) || !persisted.ignoreMessageForRepair) {
+            throw new Error('保存后诊断字段会变化，可能扩大修复范围；请保留有效字段后重试。');
+        }
     }
     const absolute = assertSafeDirectory(directory, true);
     const filename = candidatePath(absolute, identity);
@@ -1246,7 +1388,9 @@ function retireFailedCandidate(directory, identity) {
 }
 
 module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
-    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE,
+    IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
+    classifyTableBindingOrderIssue, readTableBindingOrderIssue,
+    classifyTableBindingOrderError, readTableBindingOrderError,
     readTableCountIssue, hashRecoveryIssues, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,

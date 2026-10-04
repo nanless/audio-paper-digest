@@ -7,7 +7,9 @@ const {
     REPAIR_VERSION, hashDraft, parseRepairableDraft, collectDraftIssues, buildRepairTargets,
     applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate, retireFailedCandidate,
     validationFailureSignature, validationFailureHasNoProgress,
-    TABLE_COUNT_ISSUE_CODE, readTableCountIssue, hashRecoveryIssues
+    TABLE_COUNT_ISSUE_CODE, readTableCountIssue, hashRecoveryIssues,
+    classifyTableBindingOrderIssue, readTableBindingOrderIssue,
+    classifyTableBindingOrderError, readTableBindingOrderError
 } = require('../scripts/lib/reader-repair.js');
 
 function fixture() {
@@ -1793,4 +1795,1396 @@ test('a transport failure before the final-slot 16000 response preserves the sam
         'reader-implementation-repair-lineage-v1');
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
     assert.deepEqual(calls.map(call => call.tokens), [48000, 8000, 16000, 16000]);
+});
+
+// Fixed complete outputs captured from fcee227 before this implementation.
+const tableOrderCases = [
+  {
+    "name": "missing-binding",
+    "draft": {
+      "sections": [
+        {
+          "kind": "result",
+          "heading": "results",
+          "body": "| Method | Value |\n| --- | --- |\n| result | 12 |"
+        },
+        {
+          "kind": "ablation",
+          "heading": "ablations",
+          "body": "| Method | Value |\n| --- | --- |\n| ablation | 12 |"
+        },
+        {
+          "kind": "experiment_setup",
+          "heading": "setup",
+          "body": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+        }
+      ],
+      "tableBindings": [
+        {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        },
+        {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        }
+      ],
+      "conceptBridges": [],
+      "figurePlacements": [],
+      "formulaBindings": []
+    },
+    "issues": [
+      {
+        "path": null,
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/0",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/1",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": null,
+        "diagnosticOnly": true,
+        "message": "Reader 表格清单尚未闭合：正文实际Markdown表 3 张、selection 0 项、tableBindings 2 项。source_quotes/artifact_table 都必须有对应的实际Markdown；由完整parser决定现有确定性quote补绑定能否恢复。"
+      },
+      {
+        "path": null,
+        "code": "reader_length_preflight",
+        "diagnosticOnly": true,
+        "message": "Reader 篇幅预估为 0 个汉字（标题、正文和术语桥；不含绑定JSON），最终门禁为 5000–18000；目前估计至少还需 5000 字。修复表格时同时扩写已有方法、执行顺序或实验比较段落，保留正确事实。此项仅预检提示，最终中文字数以完整parser组装后为准。"
+      }
+    ],
+    "hash": "b646d527cca526c97135889c1f6385b0fb1feff6c2bc8721e06bdc3df545b202",
+    "signature": "reader-validation-v2:{\"gateSha256\":\"9874dfa458270cdc5bc3f7b318fdbb6f893846a8b0fe3847052807ae70e37356\",\"deficits\":[]}",
+    "targets": [
+      {
+        "path": "/sections/0/body",
+        "oldSha256": "2af3a3a507da29cae23de040d24bf9d22f539f0482ebac8158f3fc453ff84619",
+        "value": "| Method | Value |\n| --- | --- |\n| result | 12 |"
+      },
+      {
+        "path": "/sections/1/body",
+        "oldSha256": "3d50e64455a27e0078ec870d5802b8c395e271b45f21032943813f4e19d97515",
+        "value": "| Method | Value |\n| --- | --- |\n| ablation | 12 |"
+      },
+      {
+        "path": "/sections/2/body",
+        "oldSha256": "b1181025c52101f4a5de20ebd42b80db6f6bc1395054749da131b03bbdcc1cad",
+        "value": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+      },
+      {
+        "path": "/tableBindings/0",
+        "oldSha256": "a90ae6ff2034028f66a803e82bc967961af8752e437531212ad03ce36402a419",
+        "value": {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        }
+      },
+      {
+        "path": "/tableBindings/1",
+        "oldSha256": "3f6cdbbd47e13be51749f950d1a10a00e2ac7d17356e190ad2f9337c5fdd50cb",
+        "value": {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "extra-table",
+    "draft": {
+      "sections": [
+        {
+          "kind": "result",
+          "heading": "results",
+          "body": "| Method | Value |\n| --- | --- |\n| result | 12 |"
+        },
+        {
+          "kind": "ablation",
+          "heading": "ablations",
+          "body": "| Method | Value |\n| --- | --- |\n| ablation | 12 |\n\n| Method | Value |\n| --- | --- |\n| extra-table | 12 |"
+        },
+        {
+          "kind": "experiment_setup",
+          "heading": "setup",
+          "body": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+        }
+      ],
+      "tableBindings": [
+        {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        },
+        {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        },
+        {
+          "tableIndex": 3,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "setup quote"
+          ]
+        }
+      ],
+      "conceptBridges": [],
+      "figurePlacements": [],
+      "formulaBindings": []
+    },
+    "issues": [
+      {
+        "path": null,
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/0",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/1",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "tableBindings[2] sourceQuotes 中以下数组项不是全文中12–4000字符的连续原句：0；不要只摘独立数值或把引文写成对象。原文双写数值可留在引文中，正文写法仍须通过既有来源门禁。",
+        "diagnosticOnly": true
+      },
+      {
+        "path": null,
+        "diagnosticOnly": true,
+        "message": "Reader 表格清单尚未闭合：正文实际Markdown表 4 张、selection 0 项、tableBindings 3 项。source_quotes/artifact_table 都必须有对应的实际Markdown；由完整parser决定现有确定性quote补绑定能否恢复。"
+      },
+      {
+        "path": null,
+        "code": "reader_length_preflight",
+        "diagnosticOnly": true,
+        "message": "Reader 篇幅预估为 0 个汉字（标题、正文和术语桥；不含绑定JSON），最终门禁为 5000–18000；目前估计至少还需 5000 字。修复表格时同时扩写已有方法、执行顺序或实验比较段落，保留正确事实。此项仅预检提示，最终中文字数以完整parser组装后为准。"
+      }
+    ],
+    "hash": "7d949b59d2f566f0ee0757706bb4111aec7904bc0c663f08a30d7c068fb875de",
+    "signature": "reader-validation-v2:{\"gateSha256\":\"d1cda6ba01760f39d4e917b86667ce2d963bb31adfec739bd8ebe8d43023014f\",\"deficits\":[]}",
+    "targets": [
+      {
+        "path": "/sections/0/body",
+        "oldSha256": "2af3a3a507da29cae23de040d24bf9d22f539f0482ebac8158f3fc453ff84619",
+        "value": "| Method | Value |\n| --- | --- |\n| result | 12 |"
+      },
+      {
+        "path": "/sections/1/body",
+        "oldSha256": "c0ec514ed548efe8cbc93bbb660b386e01f902bf11109eb12dc431ceb9b03cfb",
+        "value": "| Method | Value |\n| --- | --- |\n| ablation | 12 |\n\n| Method | Value |\n| --- | --- |\n| extra-table | 12 |"
+      },
+      {
+        "path": "/sections/2/body",
+        "oldSha256": "b1181025c52101f4a5de20ebd42b80db6f6bc1395054749da131b03bbdcc1cad",
+        "value": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+      },
+      {
+        "path": "/tableBindings/0",
+        "oldSha256": "a90ae6ff2034028f66a803e82bc967961af8752e437531212ad03ce36402a419",
+        "value": {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        }
+      },
+      {
+        "path": "/tableBindings/1",
+        "oldSha256": "3f6cdbbd47e13be51749f950d1a10a00e2ac7d17356e190ad2f9337c5fdd50cb",
+        "value": {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        }
+      },
+      {
+        "path": "/tableBindings/2",
+        "oldSha256": "a27cfe18a414e9c96e84b917820ee373e1c7a1d23d3284e6716715f24d45ffdd",
+        "value": {
+          "tableIndex": 3,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "setup quote"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "equal-count-marker-ambiguity",
+    "draft": {
+      "sections": [
+        {
+          "kind": "result",
+          "heading": "results",
+          "body": "[[TABLE_3]]"
+        },
+        {
+          "kind": "ablation",
+          "heading": "ablations",
+          "body": "| Method | Value |\n| --- | --- |\n| ablation | 12 |"
+        },
+        {
+          "kind": "experiment_setup",
+          "heading": "setup",
+          "body": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+        }
+      ],
+      "tableBindings": [
+        {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        },
+        {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        },
+        {
+          "tableIndex": 3,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "setup quote"
+          ]
+        }
+      ],
+      "conceptBridges": [],
+      "figurePlacements": [],
+      "formulaBindings": []
+    },
+    "issues": [
+      {
+        "path": null,
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/0",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/1",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "tableBindings[2] sourceQuotes 中以下数组项不是全文中12–4000字符的连续原句：0；不要只摘独立数值或把引文写成对象。原文双写数值可留在引文中，正文写法仍须通过既有来源门禁。",
+        "diagnosticOnly": true
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "tableBindings[2] 使用 source_quotes 时正文必须直接写 Markdown 表，不能使用 [[TABLE_3]]；同步修改 sections[0].body 与本绑定项"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "sections[0].body 的 [[TABLE_3]] 没有selection绑定，需由模型按原文写出完整Markdown表；tableBindings[2]本身不会生成表格"
+      },
+      {
+        "path": null,
+        "diagnosticOnly": true,
+        "message": "Reader 表格清单尚未闭合：正文实际Markdown表 2 张、selection 0 项、tableBindings 3 项。source_quotes/artifact_table 都必须有对应的实际Markdown；由完整parser决定现有确定性quote补绑定能否恢复。"
+      },
+      {
+        "path": null,
+        "code": "reader_length_preflight",
+        "diagnosticOnly": true,
+        "message": "Reader 篇幅预估为 0 个汉字（标题、正文和术语桥；不含绑定JSON），最终门禁为 5000–18000；目前估计至少还需 5000 字。修复表格时同时扩写已有方法、执行顺序或实验比较段落，保留正确事实。此项仅预检提示，最终中文字数以完整parser组装后为准。"
+      }
+    ],
+    "hash": "dee92789afef243bfc4a8ebb7fb6ac9283983510545a5f73179ff8ec4ab3e401",
+    "signature": "reader-validation-v2:{\"gateSha256\":\"5513f9ec192463f4ef190458b56714e7d5851cdeade58213a98853d50ba14f85\",\"deficits\":[]}",
+    "targets": [
+      {
+        "path": "/sections/0/body",
+        "oldSha256": "93add3e38e13eddb57102c19d9a8e75480d68b7ae722c53305247a76213f5959",
+        "value": "[[TABLE_3]]"
+      },
+      {
+        "path": "/sections/1/body",
+        "oldSha256": "3d50e64455a27e0078ec870d5802b8c395e271b45f21032943813f4e19d97515",
+        "value": "| Method | Value |\n| --- | --- |\n| ablation | 12 |"
+      },
+      {
+        "path": "/sections/2/body",
+        "oldSha256": "b1181025c52101f4a5de20ebd42b80db6f6bc1395054749da131b03bbdcc1cad",
+        "value": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+      },
+      {
+        "path": "/tableBindings/0",
+        "oldSha256": "a90ae6ff2034028f66a803e82bc967961af8752e437531212ad03ce36402a419",
+        "value": {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        }
+      },
+      {
+        "path": "/tableBindings/1",
+        "oldSha256": "3f6cdbbd47e13be51749f950d1a10a00e2ac7d17356e190ad2f9337c5fdd50cb",
+        "value": {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        }
+      },
+      {
+        "path": "/tableBindings/2",
+        "oldSha256": "a27cfe18a414e9c96e84b917820ee373e1c7a1d23d3284e6716715f24d45ffdd",
+        "value": {
+          "tableIndex": 3,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "setup quote"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "same-section-duplicate-path",
+    "draft": {
+      "sections": [
+        {
+          "kind": "result",
+          "heading": "results",
+          "body": "| Method | Value |\n| --- | --- |\n| result | 12 |\n\n| Method | Value |\n| --- | --- |\n| second-result | 12 |"
+        },
+        {
+          "kind": "ablation",
+          "heading": "ablations",
+          "body": "| Method | Value |\n| --- | --- |\n| ablation | 12 |"
+        },
+        {
+          "kind": "experiment_setup",
+          "heading": "setup",
+          "body": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+        }
+      ],
+      "tableBindings": [
+        {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        },
+        {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        },
+        {
+          "tableIndex": 3,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "setup quote"
+          ]
+        }
+      ],
+      "conceptBridges": [],
+      "figurePlacements": [],
+      "formulaBindings": []
+    },
+    "issues": [
+      {
+        "path": null,
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/0",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/1",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "tableBindings[2] sourceQuotes 中以下数组项不是全文中12–4000字符的连续原句：0；不要只摘独立数值或把引文写成对象。原文双写数值可留在引文中，正文写法仍须通过既有来源门禁。",
+        "diagnosticOnly": true
+      },
+      {
+        "path": null,
+        "diagnosticOnly": true,
+        "message": "Reader 表格清单尚未闭合：正文实际Markdown表 4 张、selection 0 项、tableBindings 3 项。source_quotes/artifact_table 都必须有对应的实际Markdown；由完整parser决定现有确定性quote补绑定能否恢复。"
+      },
+      {
+        "path": null,
+        "code": "reader_length_preflight",
+        "diagnosticOnly": true,
+        "message": "Reader 篇幅预估为 0 个汉字（标题、正文和术语桥；不含绑定JSON），最终门禁为 5000–18000；目前估计至少还需 5000 字。修复表格时同时扩写已有方法、执行顺序或实验比较段落，保留正确事实。此项仅预检提示，最终中文字数以完整parser组装后为准。"
+      }
+    ],
+    "hash": "aec9bd3e884249bddb666bf6a5b872c1dac26fa50dcb5b8c509c5464d51ae95e",
+    "signature": "reader-validation-v2:{\"gateSha256\":\"3a780c6181997ddf885629b5245b266c5f9cad0a2fc12bb05721a55b66e5a901\",\"deficits\":[]}",
+    "targets": [
+      {
+        "path": "/sections/0/body",
+        "oldSha256": "ae924cff2a1741996b08bb523661715a83daac7fe22193125c8d478588d6f977",
+        "value": "| Method | Value |\n| --- | --- |\n| result | 12 |\n\n| Method | Value |\n| --- | --- |\n| second-result | 12 |"
+      },
+      {
+        "path": "/sections/1/body",
+        "oldSha256": "3d50e64455a27e0078ec870d5802b8c395e271b45f21032943813f4e19d97515",
+        "value": "| Method | Value |\n| --- | --- |\n| ablation | 12 |"
+      },
+      {
+        "path": "/sections/2/body",
+        "oldSha256": "b1181025c52101f4a5de20ebd42b80db6f6bc1395054749da131b03bbdcc1cad",
+        "value": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+      },
+      {
+        "path": "/tableBindings/0",
+        "oldSha256": "a90ae6ff2034028f66a803e82bc967961af8752e437531212ad03ce36402a419",
+        "value": {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        }
+      },
+      {
+        "path": "/tableBindings/1",
+        "oldSha256": "3f6cdbbd47e13be51749f950d1a10a00e2ac7d17356e190ad2f9337c5fdd50cb",
+        "value": {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        }
+      },
+      {
+        "path": "/tableBindings/2",
+        "oldSha256": "a27cfe18a414e9c96e84b917820ee373e1c7a1d23d3284e6716715f24d45ffdd",
+        "value": {
+          "tableIndex": 3,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "setup quote"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "missing-table-selection-binding",
+    "draft": {
+      "sections": [
+        {
+          "kind": "result",
+          "heading": "results",
+          "body": "| Method | Value |\n| --- | --- |\n| result | 12 |"
+        },
+        {
+          "kind": "ablation",
+          "heading": "ablations",
+          "body": "| Method | Value |\n| --- | --- |\n| ablation | 12 |"
+        },
+        {
+          "kind": "experiment_setup",
+          "heading": "setup",
+          "body": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+        }
+      ],
+      "tableBindings": [
+        {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "result quote"
+          ]
+        },
+        {
+          "tableIndex": 2,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "ablation quote"
+          ]
+        },
+        {
+          "tableIndex": 3,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [
+            "setup quote"
+          ]
+        },
+        {
+          "tableIndex": 4,
+          "selection": {
+            "sourceTableOrdinal": 4,
+            "sourceRows": [
+              0,
+              1
+            ],
+            "sourceColumns": [
+              0,
+              1
+            ]
+          }
+        }
+      ],
+      "conceptBridges": [],
+      "figurePlacements": [],
+      "formulaBindings": []
+    },
+    "issues": [
+      {
+        "path": null,
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/0",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/1",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/tableBindings/3",
+        "message": "Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格"
+      },
+      {
+        "path": "/sections/0/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/1/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/sections/2/body",
+        "message": "小节 body 至少 120 字符"
+      },
+      {
+        "path": "/tableBindings/2",
+        "message": "tableBindings[2] sourceQuotes 中以下数组项不是全文中12–4000字符的连续原句：0；不要只摘独立数值或把引文写成对象。原文双写数值可留在引文中，正文写法仍须通过既有来源门禁。",
+        "diagnosticOnly": true
+      },
+      {
+        "path": "/tableBindings/3",
+        "message": "tableBindings[3] 的 [[TABLE_4]] 必须在正文中唯一独占一段"
+      },
+      {
+        "path": null,
+        "code": "reader_length_preflight",
+        "diagnosticOnly": true,
+        "message": "Reader 篇幅预估为 0 个汉字（标题、正文和术语桥；不含绑定JSON），最终门禁为 5000–18000；目前估计至少还需 5000 字。修复表格时同时扩写已有方法、执行顺序或实验比较段落，保留正确事实。此项仅预检提示，最终中文字数以完整parser组装后为准。"
+      }
+    ],
+    "hash": "163af4d5b98d73db2cd07f3715f73e5c608dc69200f1462ed31e0a0cbcafac6a",
+    "signature": "reader-validation-v2:{\"gateSha256\":\"1c9faacd7ba9b1a0b40290811ca66fb8934bec844a0131a119132c5e2fa3e30a\",\"deficits\":[]}",
+    "targets": [
+      {
+        "path": "/sections/2/body",
+        "oldSha256": "b1181025c52101f4a5de20ebd42b80db6f6bc1395054749da131b03bbdcc1cad",
+        "value": "| Method | Value |\n| --- | --- |\n| setup | 12 |"
+      },
+      {
+        "path": "/tableBindings/3",
+        "oldSha256": "f4ebdec83f7deb4b069f151e9fdb392032f0c5522389f1a2d7a168dd34922fc0",
+        "value": {
+          "tableIndex": 4,
+          "selection": {
+            "sourceTableOrdinal": 4,
+            "sourceRows": [
+              0,
+              1
+            ],
+            "sourceColumns": [
+              0,
+              1
+            ]
+          }
+        }
+      }
+    ]
+  }
+];
+
+const tableOrderCode = 'reader_table_binding_order_ambiguous';
+const oldTableOrderMessage = 'Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格';
+const newTableOrderMessage = '重排正文前，表格与来源记录不能一一对应。请按当前草稿的正文顺序核对 tableBindings 和 TABLE 占位符，不猜测缺失数据，也不丢弃已有来源的表格。';
+const noTableOrderTargetMessage = '没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求';
+
+function tableOrderIssue(path = null, extra = {}) {
+    return { path, message: newTableOrderMessage, code: tableOrderCode, ...extra };
+}
+
+function tableOrderError(children, extra = {}) {
+    return Object.assign(new Error(newTableOrderMessage), {
+        code: 'READER_DRAFT_ORDER_AMBIGUOUS', readerIssues: children, ...extra
+    });
+}
+
+function storedReaderFailure(directory) {
+    const names = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+    assert.equal(names.length, 1);
+    const filename = path.join(directory, names[0]);
+    const envelope = JSON.parse(fs.readFileSync(filename, 'utf8'));
+    assert.equal(envelope.payloadSha256, hashDraft(envelope.payload));
+    assert.deepEqual(loadFailedCandidate(directory, envelope.identity), envelope.payload);
+    return { filename, ...envelope };
+}
+
+test('真实排序异常保留五组旧完整诊断的顺序、重复路径、比较值与修复节点', async t => {
+    const { normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
+    for (const row of tableOrderCases) {
+        await t.test(row.name, () => {
+            const draft = structuredClone(row.draft);
+            const original = JSON.stringify(draft);
+            let error;
+            try { normalizeReaderDraftOrder(draft); } catch (caught) { error = caught; }
+            assert.ok(error instanceof Error);
+            assert.equal(error.code, 'READER_DRAFT_ORDER_AMBIGUOUS');
+            assert.equal(error.message, newTableOrderMessage);
+            const issues = collectDraftIssues(draft, error);
+            // Only this fixed old producer sentence gains the new display and typed code.
+            const expected = row.issues.map(issue => issue.message === oldTableOrderMessage
+                ? { ...issue, message: newTableOrderMessage, code: tableOrderCode } : issue);
+            assert.equal(JSON.stringify(issues), JSON.stringify(expected));
+            assert.equal(hashRecoveryIssues(issues), row.hash);
+            assert.equal(validationFailureSignature(issues), row.signature);
+            assert.equal(JSON.stringify(buildRepairTargets(draft, issues)), JSON.stringify(row.targets));
+            assert.equal(JSON.stringify(draft), original);
+        });
+    }
+    const reference = tableOrderCases[0].issues.filter(issue => issue.path !== null
+        && issue.message === oldTableOrderMessage).map(issue => ({ ...issue, diagnosticOnly: true }));
+    assert.equal(hashRecoveryIssues(reference), '81e0cc6a665cb2c34454df631f17317c7b3c674705235d506e6077c0e175ac18');
+    assert.equal(validationFailureSignature(reference), 'reader-validation-v2:{"gateSha256":"4480ef335d1d0c4536baa7be3e9340905f7a69f615e8ae7ee04f4cce4da05c42","deficits":[]}');
+    assert.deepEqual(buildRepairTargets(tableOrderCases[0].draft, reference), []);
+    assert.equal(hashRecoveryIssues(reference.map(issue => ({ ...issue, message: newTableOrderMessage,
+        code: tableOrderCode }))), hashRecoveryIssues(reference));
+});
+
+test('完整旧句与结构化诊断只接受规范路径，参考项和显式代码冲突没有操作权限', () => {
+    const validPaths = [null, '/sections/0/body', '/sections/123/body', '/tableBindings/0', '/tableBindings/9007199254740991'];
+    for (const path of validPaths) {
+        const typed = tableOrderIssue(path);
+        const legacy = { path, message: oldTableOrderMessage };
+        for (const issue of [typed, legacy]) {
+            assert.equal(classifyTableBindingOrderIssue(issue).actionable, true);
+            assert.equal(classifyTableBindingOrderIssue(issue).ignoreMessageForRepair, true);
+            assert.equal(readTableBindingOrderIssue(issue), issue);
+            const reference = { ...issue, diagnosticOnly: true };
+            assert.equal(readTableBindingOrderIssue(reference), reference);
+            assert.equal(classifyTableBindingOrderIssue(reference).actionable, false);
+        }
+    }
+    const badPaths = [undefined, 0, {}, '/sections/01/body', '/tableBindings/-1', '/sections/1/body\n',
+        '/sections/1/body\r', '/sections/1/body ', '/tableBindings/9007199254740992', '/readerTitle', '/tableBindings'];
+    for (const path of badPaths) {
+        for (const issue of [{ path, message: newTableOrderMessage, code: tableOrderCode }, { path, message: oldTableOrderMessage }]) {
+            assert.equal(classifyTableBindingOrderIssue(issue).actionable, false);
+            assert.equal(readTableBindingOrderIssue(issue), null);
+            assert.deepEqual(buildRepairTargets(fixture(), [issue]), []);
+        }
+    }
+    const absentPath = tableOrderIssue(); delete absentPath.path;
+    assert.equal(classifyTableBindingOrderIssue(absentPath).kind, 'invalid-typed');
+    for (const diagnosticOnly of [undefined, 'true', 0, null]) {
+        assert.equal(classifyTableBindingOrderIssue(tableOrderIssue(null, { diagnosticOnly })).kind, 'invalid-typed');
+    }
+    for (const code of [undefined, null, '']) {
+        assert.equal(classifyTableBindingOrderIssue({ path: null, message: oldTableOrderMessage, code }).kind, 'legacy');
+    }
+    for (const code of [0, false, ' ', 'other', NaN]) {
+        const issue = { path: '/sections/0/body', message: oldTableOrderMessage, code };
+        assert.equal(classifyTableBindingOrderIssue(issue).kind, 'code-conflict');
+        assert.deepEqual(buildRepairTargets(fixture(), [issue]), []);
+    }
+    for (const message of [`前缀${oldTableOrderMessage}`, `${oldTableOrderMessage}后缀`, newTableOrderMessage]) {
+        assert.equal(classifyTableBindingOrderIssue({ path: null, message }).kind, 'unrelated');
+    }
+});
+
+test('异常适配核验实际 Error 和全部子项，持久对象与无效异常不能借旧句重新授权', () => {
+    const children = [tableOrderIssue('/sections/0/body'), tableOrderIssue('/sections/0/body')];
+    const valid = tableOrderError(children);
+    const result = readTableBindingOrderError(valid);
+    assert.equal(result.validOrderError, true);
+    assert.equal(result.actionable, true);
+    assert.equal(result.readerIssues, children);
+    assert.deepEqual(result.summary, tableOrderIssue());
+    assert.equal(readTableBindingOrderError(oldTableOrderMessage).validOrderError, true);
+    assert.equal(readTableBindingOrderError(new Error(oldTableOrderMessage)).validOrderError, true);
+    for (const object of [tableOrderIssue(), { path: null, message: oldTableOrderMessage },
+        { code: valid.code, message: valid.message, readerIssues: children }]) {
+        assert.equal(readTableBindingOrderError(object), null);
+        assert.equal(classifyTableBindingOrderError(object).kind, 'unrelated');
+    }
+    for (const error of [tableOrderError([]), tableOrderError([tableOrderIssue('/sections/01/body')]),
+        tableOrderError([tableOrderIssue(null, { diagnosticOnly: true })]),
+        tableOrderError(children, { diagnosticOnly: true }), tableOrderError(children, { diagnosticOnly: undefined }),
+        tableOrderError([tableOrderIssue(null, { message: '不同说明' })]),
+        tableOrderError([children[0], { path: null, message: oldTableOrderMessage }]),
+        Object.assign(new Error(oldTableOrderMessage), { readerIssues: [] })]) {
+        assert.equal(readTableBindingOrderError(error), null);
+        const classified = classifyTableBindingOrderError(error);
+        assert.equal(classified.kind, 'invalid-error');
+        assert.equal(classified.ignoreMessageForRepair, true);
+        assert.equal(classifyTableBindingOrderIssue(classified.summary).actionable, false);
+    }
+    const actualTyped = Object.assign(new Error('数字 2、formulaBindings、readerTitle 都不能授予权限'), {
+        path: '/sections/1/body', code: tableOrderCode, diagnosticOnly: true
+    });
+    const snapshot = classifyTableBindingOrderError(actualTyped).summary;
+    assert.deepEqual(Object.keys(snapshot), Object.getOwnPropertyNames(actualTyped).filter(key => key !== 'stack'));
+    assert.equal(snapshot.message, actualTyped.message);
+    assert.equal(snapshot.path, actualTyped.path);
+    assert.equal(classifyTableBindingOrderError(actualTyped).actionable, false);
+    const missingPath = Object.assign(new Error(oldTableOrderMessage), { code: tableOrderCode });
+    const missingResult = classifyTableBindingOrderError(missingPath);
+    assert.equal(missingResult.kind, 'invalid-typed');
+    assert.equal(Object.hasOwn(missingResult.summary, 'path'), false);
+    assert.equal(classifyTableBindingOrderError(Object.assign(new Error(oldTableOrderMessage), {
+        path: '/readerTitle'
+    })).kind, 'invalid-legacy');
+});
+
+test('失效或冲突异常的本组子项仅作为嵌套证据，独立真实节点诊断仍可修复', () => {
+    const child = tableOrderIssue('/sections/1/body');
+    const other = { path: '/readerTitle', message: 'readerTitle 不符合标题长度要求' };
+    const bad = tableOrderError([child, other, child]);
+    const oldWithChildren = Object.assign(new Error(oldTableOrderMessage), { readerIssues: [child, other, child] });
+    const conflict = Object.assign(new Error(oldTableOrderMessage), { code: 'other', readerIssues: [child, other, child] });
+    for (const error of [bad, oldWithChildren, conflict]) {
+        const issues = collectDraftIssues(null, error);
+        assert.equal(issues[0].readerIssues, error.readerIssues);
+        assert.deepEqual(issues.slice(1), [other]);
+        assert.deepEqual(buildRepairTargets(fixture(), issues).map(target => target.path), ['/readerTitle']);
+        assert.equal(child.diagnosticOnly, undefined);
+        assert.equal(child.code, tableOrderCode);
+    }
+    const valid = tableOrderError([child, child]);
+    assert.deepEqual(collectDraftIssues(null, valid), [tableOrderIssue(), child, child]);
+});
+
+test('比较只稳定本组说明，保留字段、键序、重复和直接子项以外的证据变化', () => {
+    const draft = countRepairFixture();
+    const original = [tableOrderIssue('/sections/6/body', { bindingPath: '/tableBindings/1', extra: 7 }),
+        tableOrderIssue('/sections/6/body', { extra: 8 })];
+    const changed = original.map(issue => ({ ...issue, message: '数字 999、公式、figurePlacements、正文不足 3 字' }));
+    assert.equal(hashRecoveryIssues(changed), hashRecoveryIssues(original));
+    assert.equal(validationFailureSignature(changed), validationFailureSignature(original));
+    assert.deepEqual(buildRepairTargets(draft, changed), buildRepairTargets(draft, original));
+    for (const variant of [[original[1], original[0]], [{ ...original[0], extra: 9 }, original[1]]]) {
+        assert.notEqual(hashRecoveryIssues(variant), hashRecoveryIssues(original));
+        // The existing validation gate sorts path/code/message and ignores extra fields.
+        assert.equal(validationFailureSignature(variant), validationFailureSignature(original));
+    }
+    for (const variant of [original.slice(0, 1), [{ ...original[0], path: '/sections/7/body' }, original[1]]]) {
+        assert.notEqual(hashRecoveryIssues(variant), hashRecoveryIssues(original));
+        assert.notEqual(validationFailureSignature(variant), validationFailureSignature(original));
+    }
+    const nested = { path: null, code: 'READER_DRAFT_ORDER_AMBIGUOUS', message: '总说明 1', readerIssues: [
+        tableOrderIssue('/sections/01/body', { message: '坏路径 1', readerIssues: [{ message: '深层 1' }] }),
+        { path: '/readerTitle', code: 'unrelated', message: '真实其他问题 1' }, 1,
+        { path: null, code: tableOrderCode, message: 12 }
+    ] };
+    const same = structuredClone(nested); same.message = '总说明 999'; same.readerIssues[0].message = '坏路径 999';
+    assert.equal(hashRecoveryIssues([nested]), hashRecoveryIssues([same]));
+    assert.equal(validationFailureSignature([nested]), validationFailureSignature([same]));
+    for (const mutate of [issue => { issue.readerIssues[0].path = '/sections/02/body'; },
+        issue => { issue.readerIssues[0].readerIssues[0].message = '深层 2'; },
+        issue => { issue.readerIssues[1].message = '真实其他问题 2'; },
+        issue => { issue.readerIssues.reverse(); }, issue => { issue.readerIssues[3].message = 13; }]) {
+        const variant = structuredClone(nested); mutate(variant);
+        assert.notEqual(hashRecoveryIssues([nested]), hashRecoveryIssues([variant]));
+        // Nested evidence belongs to the recovery hash, not the original validation gate.
+        assert.equal(validationFailureSignature([nested]), validationFailureSignature([variant]));
+    }
+});
+
+test('无效、冲突和参考表格诊断不能从路径别名或文字取得通用、原子和整篇修复', () => {
+    const draft = countRepairFixture();
+    const malicious = 'readerTitle、formulaBindings、figurePlacements、tableBindings 缺失，必须保留结果表；正文仅 2 字，quantitative_chinese_numeral:两阶段';
+    const issues = [tableOrderIssue('/sections/6/body', { diagnosticOnly: true, message: malicious,
+        bindingPath: '/tableBindings/0' }), tableOrderIssue('/readerTitle', { message: malicious }),
+        { path: '/sections/6/body', message: oldTableOrderMessage, code: 'unknown', bindingPath: '/tableBindings/0' },
+        { path: '/sections/6/body\n', message: oldTableOrderMessage },
+        { path: null, code: 'READER_DRAFT_ORDER_AMBIGUOUS', message: malicious, readerIssues: [tableOrderIssue()] }];
+    for (const issue of issues) {
+        const context = buildRepairContext(draft, [issue], 'TABLE_1: 真实来源', '原文');
+        assert.deepEqual(context.targets, []);
+        assert.equal(context.atomicOperation, null);
+        assert.deepEqual(context.figureOrdinals, []);
+    }
+    const positive = buildRepairTargets(draft, [...issues, { path: '/readerTitle', message: 'readerTitle 太短' }]);
+    assert.deepEqual(positive.map(target => target.path), ['/readerTitle']);
+    const many = structuredClone(draft);
+    many.sections.forEach(section => { section.body += '\n\n| 项目 | 值 |\n| --- | --- |\n| 结果 | 1 |'; });
+    assert.equal(buildRepairTargets(many, [tableOrderIssue()]).length, 8);
+});
+
+test('保存前拒绝实际 JSON 序列化扩大权限，原目录和候选字节保持不变', async t => {
+    const cases = [
+        { path: null, message: oldTableOrderMessage, diagnosticOnly: undefined },
+        { path: null, message: oldTableOrderMessage, code: NaN },
+        { path: null, message: oldTableOrderMessage, readerIssues: undefined }
+    ];
+    const refusal = '保存后诊断字段会变化，可能扩大修复范围；请保留有效字段后重试。';
+    for (const [index, issue] of cases.entries()) {
+        await t.test(`实际序列化反例 ${index + 1}`, tt => {
+            const root = temporary(tt), directory = path.join(root, 'not-created');
+            const identity = { paperId: '2609.99870', input: index };
+            assert.equal(classifyTableBindingOrderIssue(issue).actionable, false);
+            assert.equal(classifyTableBindingOrderIssue(JSON.parse(JSON.stringify(issue))).actionable, true);
+            assert.throws(() => saveFailedCandidate(directory, identity, { ...failed(), issues: [issue] }),
+                error => error.message === refusal);
+            assert.equal(fs.existsSync(directory), false);
+            const filename = saveFailedCandidate(root, identity, { ...failed(), issues: [{ path: null, message: oldTableOrderMessage }] });
+            const bytes = fs.readFileSync(filename), names = fs.readdirSync(root);
+            assert.throws(() => saveFailedCandidate(root, identity, { ...failed(), issues: [issue] }),
+                error => error.message === refusal);
+            assert.deepEqual(fs.readFileSync(filename), bytes);
+            assert.deepEqual(fs.readdirSync(root), names);
+        });
+    }
+    const directory = temporary(t);
+    for (const [index, issue] of [{ path: null, message: oldTableOrderMessage }, tableOrderIssue(),
+        tableOrderIssue(null, { diagnosticOnly: true }), { path: '/readerTitle', message: '独立标题诊断' }].entries()) {
+        const identity = { input: index };
+        saveFailedCandidate(directory, identity, { ...failed(), issues: [issue] });
+        assert.deepEqual(loadFailedCandidate(directory, identity).issues, [issue]);
+    }
+});
+
+test('旧候选原始字节先认证，新增 typed 只校验直接主项，不递归认证嵌套证据', t => {
+    const directory = temporary(t), identity = { input: 'raw authentication' };
+    const old = { ...failed(), issues: [{ path: null, message: oldTableOrderMessage }] };
+    const filename = saveFailedCandidate(directory, identity, old), bytes = fs.readFileSync(filename);
+    assert.deepEqual(loadFailedCandidate(directory, identity), old);
+    assert.deepEqual(fs.readFileSync(filename), bytes);
+    const envelope = JSON.parse(bytes); envelope.payload.issues = [tableOrderIssue()];
+    fs.writeFileSync(filename, JSON.stringify(envelope), { mode: 0o600 });
+    assert.throws(() => loadFailedCandidate(directory, identity), /Corrupt/);
+    envelope.payloadSha256 = hashDraft(envelope.payload);
+    fs.writeFileSync(filename, JSON.stringify(envelope), { mode: 0o600 });
+    assert.deepEqual(loadFailedCandidate(directory, identity).issues, [tableOrderIssue()]);
+    envelope.payload.issues = [tableOrderIssue('/sections/01/body')];
+    envelope.payloadSha256 = hashDraft(envelope.payload);
+    fs.writeFileSync(filename, JSON.stringify(envelope), { mode: 0o600 });
+    assert.throws(() => loadFailedCandidate(directory, identity), /Corrupt/);
+    const nested = { path: null, code: 'READER_DRAFT_ORDER_AMBIGUOUS', message: '原始失效异常',
+        readerIssues: [tableOrderIssue('/sections/01/body')] };
+    envelope.payload.issues = [nested]; envelope.payloadSha256 = hashDraft(envelope.payload);
+    fs.writeFileSync(filename, JSON.stringify(envelope), { mode: 0o600 });
+    assert.deepEqual(loadFailedCandidate(directory, identity).issues, [nested]);
+    assert.deepEqual(buildRepairTargets(fixture(), [nested]), []);
+});
+
+function withoutSignedTables() {
+    const signed = require('./reader-signed-draft-fixture.js').fixture({ noFigures: true });
+    for (const section of signed.draft.sections) {
+        section.body = section.body.split(/\n\s*\n/).filter(block => !/^\|/m.test(block)).join('\n\n');
+    }
+    signed.draft.tableBindings = [];
+    return signed;
+}
+
+test('真实来源单元格错误继续生成诊断，本组异常的数字说明不能伪造来源错误', () => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const signed = require('./reader-signed-draft-fixture.js').fixture({ noFigures: true });
+    signed.draft.sections[7].body = signed.draft.sections[7].body.replace('| 1.0 |', '| 9.876 |');
+    let actual;
+    try { deep.parseApiReaderArticleResult(JSON.stringify(signed.draft), {
+        requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2,
+        requireSourceBindings: true, allowDeterministicQuoteRepair: true,
+        sourceText: signed.sourceDetails.text, structuredArtifacts: signed.sourceDetails.structuredArtifacts
+    }); } catch (error) { actual = error; }
+    assert.ok(actual instanceof Error);
+    assert.match(actual.message, /单元格|原表|source/i);
+    const options = { sourceText: signed.sourceDetails.text, structuredArtifacts: signed.sourceDetails.structuredArtifacts };
+    const realIssues = collectDraftIssues(signed.draft, actual, options);
+    assert.ok(realIssues.some(issue => issue.code === 'reader_source_cell_diagnostic'));
+    assert.ok(buildRepairTargets(signed.draft, realIssues).length > 0);
+    const spoof = Object.assign(new Error(actual.message), { code: 'READER_DRAFT_ORDER_AMBIGUOUS', readerIssues: [] });
+    const isolated = collectDraftIssues(signed.draft, spoof, options);
+    assert.equal(isolated.some(issue => issue.code === 'reader_source_cell_diagnostic'), false);
+    actual.readerIssues = [tableOrderIssue('/sections/7/body', { diagnosticOnly: true })];
+    const independent = collectDraftIssues(signed.draft, actual, options);
+    assert.ok(independent.some(issue => issue.code === 'reader_source_cell_diagnostic'));
+    assert.equal(independent[0].message, actual.message);
+});
+
+test('真实歧义生成中断后只续修已有表格节点，完整解析器继续拒绝未合格正文', async t => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const directory = temporary(t), draft = countRepairFixture();
+    [draft.sections[6], draft.sections[7]] = [draft.sections[7], draft.sections[6]];
+    draft.tableBindings[1].tableIndex = 1;
+    const paper = { arxivId: '2609.99871', title: '表格顺序离线续修' };
+    const base = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 2,
+        readerMaterializeFigures: async () => [], readerRecordDisposition: () => {} };
+    let initialCalls = 0;
+    await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', { ...base, readerCallModel: async () => {
+        if (++initialCalls === 1) return JSON.stringify(draft);
+        throw new Error('离线中断，尚未返回局部修复');
+    } }), /离线中断/);
+    assert.equal(initialCalls, 2);
+    const stored = storedReaderFailure(directory);
+    assert.equal(stored.payload.attempts, 1);
+    assert.equal(stored.payload.fullAttempts, 1);
+    assert.equal(stored.payload.transportFailures, 1);
+    const expectedPaths = ['/sections/6/body', '/sections/7/body', '/sections/8/body',
+        '/tableBindings/0', '/tableBindings/1', '/tableBindings/2'];
+    let resumedCalls = 0;
+    await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', { ...base,
+        readerCallModel: async (messages, _budget, options) => {
+            resumedCalls++;
+            assert.equal(options.usageContext.stage, 'apiReaderRepair');
+            const line = messages[0].content[0].text.split('\n').find(line => line.startsWith('{"draftSha256":'));
+            const envelope = JSON.parse(line);
+            assert.deepEqual(envelope.targets.map(target => target.path), expectedPaths);
+            const binding = { ...stored.payload.draft.tableBindings[1], tableIndex: 2 };
+            return JSON.stringify(patchFor(stored.payload.draft, [['/tableBindings/1', binding]]));
+        }
+    }), error => error.code !== 'READER_DRAFT_ORDER_AMBIGUOUS');
+    assert.equal(resumedCalls, 1);
+    const after = storedReaderFailure(directory).payload;
+    assert.equal(after.attempts, 2);
+    assert.equal(after.fullAttempts, 1);
+    assert.equal(after.transportFailures, 1);
+    assert.ok(after.draftOrderMappings.length > 0);
+    assert.equal(after.status, 'failed');
+});
+
+test('实际生成和续跑没有表格修复节点时不新增请求，并保留同轮次数与最新错误记录', async t => {
+    const deep = require('../scripts/deep-analyzer.js'), repair = require('../scripts/lib/reader-repair.js');
+    const signed = withoutSignedTables(), directory = temporary(t);
+    const originalCollector = repair.collectDraftIssues;
+    t.after(() => { repair.collectDraftIssues = originalCollector; });
+    let injectedMetadata = false, parserFailures = 0, latestPayload;
+    // This deliberately injects a legal diagnostic with no matching 0/0 structure.
+    // The real producer does not emit it; normalization and the complete parser still run.
+    repair.collectDraftIssues = (draft, error, options) => {
+        const real = originalCollector(draft, error, options);
+        assert.ok(real.some(issue => issue.code === TABLE_COUNT_ISSUE_CODE));
+        assert.equal(draft.tableBindings.length, 0);
+        assert.equal(require('../scripts/lib/reader-draft-order.js').locateReaderDraftTables(draft).length, 0);
+        parserFailures++;
+        if (!injectedMetadata && fs.existsSync(directory) && fs.readdirSync(directory).some(name => /^[a-f0-9]{64}\.json$/.test(name))) {
+            const stored = storedReaderFailure(directory);
+            latestPayload = { ...stored.payload,
+                lastContentError: { message: '本轮最新正文错误', code: 'latest-content' },
+                lastTransportError: '本轮最新传输错误' };
+            saveFailedCandidate(directory, stored.identity, latestPayload);
+            injectedMetadata = true;
+        }
+        return [tableOrderIssue(null, { message: 'readerTitle 和公式 2 不得从说明生成修复' })];
+    };
+    const paper = { arxivId: '2609.99872', title: '无节点离线派发边界' };
+    const base = { sourceText: signed.sourceDetails.text, structuredArtifacts: signed.sourceDetails.structuredArtifacts,
+        readerAttemptsDir: directory, readerMaxAttempts: 2,
+        readerMaterializeFigures: async () => [], readerRecordDisposition: () => {} };
+    let calls = 0;
+    await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', { ...base,
+        readerCallModel: async () => { calls++; return JSON.stringify(signed.draft); }
+    }), error => error.message === noTableOrderTargetMessage);
+    assert.equal(calls, 1);
+    assert.ok(parserFailures >= 2);
+    assert.equal(injectedMetadata, true);
+    const beforeResume = storedReaderFailure(directory).payload;
+    assert.equal(beforeResume.attempts, 1, 'the paid first request must not roll back to entry attempts=0');
+    assert.equal(beforeResume.fullAttempts, 1);
+    assert.equal(beforeResume.transportFailures, 0);
+    assert.deepEqual(beforeResume.lastContentError, { message: '本轮最新正文错误', code: 'latest-content' });
+    assert.equal(beforeResume.lastTransportError, '本轮最新传输错误');
+    const stateFields = ['attempts', 'fullAttempts', 'transportFailures', 'noProgress', 'failureSignature',
+        'validationFailureSignature', 'validationFailureStreak', 'implementationRepairAllowanceProof',
+        'implementationRepairAllowanceLineage', 'consumedImplementationAllowanceSha256',
+        'imageEvidence', 'providerImageExclusions', 'readerRecoveryRevisions'];
+    for (const key of stateFields) assert.deepEqual(beforeResume[key], latestPayload[key], key);
+    await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', { ...base,
+        readerCallModel: async () => { calls++; throw new Error('不应到达模型请求'); }
+    }), error => error.message === noTableOrderTargetMessage);
+    assert.equal(calls, 1);
+    const afterResume = storedReaderFailure(directory).payload;
+    for (const key of [...stateFields, 'lastContentError', 'lastTransportError']) {
+        assert.deepEqual(afterResume[key], beforeResume[key]);
+    }
+});
+
+test('真实独立标题错误仍取得局部请求，本组参考诊断不阻断原修复派发', async t => {
+    const deep = require('../scripts/deep-analyzer.js'), repair = require('../scripts/lib/reader-repair.js');
+    const signed = require('./reader-signed-draft-fixture.js').fixture({ noFigures: true });
+    signed.draft.readerTitle = '短';
+    const originalCollector = repair.collectDraftIssues;
+    t.after(() => { repair.collectDraftIssues = originalCollector; });
+    repair.collectDraftIssues = (draft, error, options) => {
+        const real = originalCollector(draft, error, options);
+        assert.match(error.message, /读者标题/);
+        return [...real, tableOrderIssue(null, { diagnosticOnly: true })];
+    };
+    let calls = 0;
+    await assert.rejects(deep.generateApiReaderArticleDetailed({ arxivId: '2609.99873', title: '独立标题真实派发' }, '', '', {
+        sourceText: signed.sourceDetails.text, structuredArtifacts: signed.sourceDetails.structuredArtifacts,
+        readerAttemptsDir: temporary(t), readerMaxAttempts: 2, readerRecordDisposition: () => {},
+        readerMaterializeFigures: async () => [], readerCallModel: async (_messages, _budget, options) => {
+            if (++calls === 1) return JSON.stringify(signed.draft);
+            assert.equal(options.usageContext.stage, 'apiReaderRepair');
+            throw new Error('独立标题请求已到达');
+        }
+    }), /独立标题请求已到达/);
+    assert.equal(calls, 2);
+});
+
+test('普通诊断对象和无效或参考实际 Error 保留原证据，但不能让附带本组子项重新授权', () => {
+    const child = tableOrderIssue('/sections/1/body');
+    const sourceChild = { path: '/readerTitle', message: 'readerTitle 太短，真实独立节点错误' };
+    const object = { path: '/readerTitle', code: tableOrderCode, message: oldTableOrderMessage,
+        readerIssues: [child, sourceChild, child], extra: '原字段' };
+    const objectIssues = collectDraftIssues(null, object);
+    assert.equal(objectIssues[0], object);
+    assert.deepEqual(Object.keys(objectIssues[0]), Object.keys(object));
+    assert.deepEqual(objectIssues.slice(1), [sourceChild]);
+    assert.deepEqual(buildRepairTargets(fixture(), objectIssues).map(target => target.path), ['/readerTitle']);
+    const badTyped = Object.assign(new Error(oldTableOrderMessage), {
+        path: '/readerTitle', code: tableOrderCode, readerIssues: [child, sourceChild, child]
+    });
+    const badLegacy = Object.assign(new Error(oldTableOrderMessage), {
+        path: '/readerTitle', readerIssues: [child, sourceChild, child]
+    });
+    const typedReference = Object.assign(new Error(newTableOrderMessage), {
+        path: null, code: tableOrderCode, diagnosticOnly: true, readerIssues: [child, sourceChild, child]
+    });
+    const legacyReference = Object.assign(new Error(oldTableOrderMessage), {
+        path: '/sections/1/body', diagnosticOnly: true, readerIssues: [child, sourceChild, child]
+    });
+    for (const error of [badTyped, badLegacy, typedReference, legacyReference]) {
+        const issues = collectDraftIssues(null, error);
+        assert.equal(issues[0].readerIssues, error.readerIssues);
+        assert.deepEqual(issues.slice(1), [sourceChild]);
+        assert.deepEqual(buildRepairTargets(fixture(), issues).map(target => target.path), ['/readerTitle']);
+        assert.equal(classifyTableBindingOrderIssue(issues[0]).actionable, false);
+    }
+    const countConflict = Object.assign(new Error(oldTableOrderMessage), { code: TABLE_COUNT_ISSUE_CODE,
+        requiredCount: 4, actualCount: 3, readerIssues: [{ path: null, code: TABLE_COUNT_ISSUE_CODE,
+            message: oldTableOrderMessage, requiredCount: 4, actualCount: 3 }] });
+    const conflictIssues = collectDraftIssues(null, countConflict);
+    assert.equal(conflictIssues.length, 1);
+    assert.equal(conflictIssues[0].code, TABLE_COUNT_ISSUE_CODE);
+    assert.equal(conflictIssues[0].readerIssues, countConflict.readerIssues);
+    assert.equal(classifyTableBindingOrderIssue(conflictIssues[0]).kind, 'code-conflict');
+    const context = buildRepairContext(countRepairFixture(), conflictIssues, 'TABLE_1: 原来源');
+    assert.deepEqual(context.targets, []);
+    assert.equal(context.atomicOperation, null);
+});
+
+test('无目标真实续跑保留实际迁移的未用凭证，消耗后也不会恢复旧凭证', async t => {
+    const crypto = require('node:crypto'), Config = require('../scripts/config.js');
+    const fresh = require('../scripts/lib/fresh-analysis-context.js');
+    const revision = require('../scripts/lib/reader-recovery-revision.js');
+    const deep = require('../scripts/deep-analyzer.js'), repair = require('../scripts/lib/reader-repair.js');
+    const root = temporary(t), previousRoot = Config.FILES.freshRewriteRunsDir;
+    Config.FILES.freshRewriteRunsDir = root;
+    t.after(() => { Config.FILES.freshRewriteRunsDir = previousRoot; });
+    const runId = crypto.randomUUID(), runDir = path.join(root, runId), paperId = '2609.99874';
+    fs.mkdirSync(runDir, { mode: 0o700 });
+    const sourceText = 'This offline source describes controlled acoustic observations without numerical claims. '.repeat(
+        Math.ceil((Config.ANALYSIS_CONFIG.fullTextMinCharsForFull + 1) / 85) + 1);
+    const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+    // This is a real legacy cache fixture accepted by its original loader, not a
+    // modern sealed HTML/PDF generation or a publishable source bundle.
+    const artifactBody = { figures: [], flattenedTextSha256: sha(sourceText), formulas: [],
+        parserVersion: 'offline-empty-source-v1', tables: [], version: 1 };
+    const artifacts = { ...artifactBody, payloadSha256: sha(JSON.stringify(artifactBody)) };
+    const sourceExpectations = { [paperId]: { sourceSha256: sha(sourceText), structuredArtifactsSha256: artifacts.payloadSha256 } };
+    fs.writeFileSync(path.join(runDir, 'run.json'), JSON.stringify({ version: 1, contract: 'fresh-rewrite-run-v1',
+        runId, paperIds: [paperId], sourceExpectations }), { mode: 0o600 });
+    const scope = { runId, runDir, sourceExpectations, refreshReaderDiagnostics: true };
+    const draft = withoutSignedTables().draft;
+    draft.sections[4].body = draft.sections[4].body.replace('[[FORMULA_1]]', '');
+    draft.formulaBindings = [];
+    const directory = path.join(runDir, 'reader-attempts'), paper = { arxivId: paperId, title: '实际未用恢复凭证' };
+    const originalCollector = repair.collectDraftIssues;
+    t.after(() => { repair.collectDraftIssues = originalCollector; });
+    repair.collectDraftIssues = (candidate, error, options) => {
+        const real = originalCollector(candidate, error, options);
+        assert.ok(real.some(issue => issue.code === TABLE_COUNT_ISSUE_CODE));
+        assert.equal(candidate.tableBindings.length, 0);
+        return [tableOrderIssue()];
+    };
+    let calls = 0;
+    const options = { sourceText, structuredArtifacts: artifacts, readerAttemptsDir: directory,
+        readerMaxAttempts: 2, readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+        readerCallModel: async () => { calls++; return JSON.stringify(draft); } };
+    await fresh.withFreshAnalysisContext(scope, async () => {
+        await fresh.fetchFreshSource(paperId, async () => ({ source: 'html', sourceId: paperId, text: sourceText,
+            structuredArtifacts: artifacts }));
+        await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', options),
+            error => error.message === noTableOrderTargetMessage);
+        assert.equal(calls, 1);
+        const original = storedReaderFailure(directory);
+        assert.equal(original.payload.attempts, 1);
+        const oldIdentity = { ...original.identity, repairImplementationSha256: '0'.repeat(64) };
+        saveFailedCandidate(directory, oldIdentity, original.payload);
+        fs.unlinkSync(original.filename); // Only the isolated test candidate is moved into migration input.
+        const migrated = revision.loadReaderRecoveryRevision(directory, original.identity);
+        const proof = migrated.implementationRepairAllowanceProof;
+        assert.match(proof.allowanceSha256, /^[a-f0-9]{64}$/);
+        assert.equal(migrated.attempts, 1);
+        assert.equal(migrated.fullAttempts, 1);
+        assert.ok(fs.existsSync(path.join(directory, migrated.readerRecoveryRevisions[0].archivedName)));
+        await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', options),
+            error => error.message === noTableOrderTargetMessage);
+        const guarded = storedReaderFailure(directory).payload;
+        assert.equal(calls, 1);
+        assert.deepEqual(guarded.implementationRepairAllowanceProof, proof);
+        assert.equal(guarded.attempts, 1);
+        assert.equal(guarded.fullAttempts, 1);
+        saveFailedCandidate(directory, original.identity, { ...guarded, implementationRepairAllowanceProof: null });
+        await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', options),
+            error => error.message === noTableOrderTargetMessage);
+        const consumed = storedReaderFailure(directory).payload;
+        assert.equal(calls, 1);
+        assert.equal(consumed.implementationRepairAllowanceProof, null);
+        assert.ok(consumed.consumedImplementationAllowanceSha256.includes(proof.allowanceSha256));
+        assert.equal(consumed.attempts, 1);
+        assert.equal(consumed.fullAttempts, 1);
+    });
+});
+
+test('真实来源错误和本组参考项共同存在时，生成仍进入原来源修复请求', async t => {
+    const deep = require('../scripts/deep-analyzer.js'), repair = require('../scripts/lib/reader-repair.js');
+    const signed = require('./reader-signed-draft-fixture.js').fixture({ noFigures: true });
+    signed.draft.sections[7].body = signed.draft.sections[7].body.replace('| 1.0 |', '| 9.876 |');
+    const originalCollector = repair.collectDraftIssues;
+    t.after(() => { repair.collectDraftIssues = originalCollector; });
+    repair.collectDraftIssues = (draft, error, options) => {
+        const real = originalCollector(draft, error, options);
+        assert.ok(real.some(issue => issue.code === 'reader_source_cell_diagnostic'));
+        return [...real, tableOrderIssue(null, { diagnosticOnly: true })];
+    };
+    let calls = 0;
+    await assert.rejects(deep.generateApiReaderArticleDetailed({ arxivId: '2609.99875', title: '真实来源错误继续派发' }, '', '', {
+        sourceText: signed.sourceDetails.text, structuredArtifacts: signed.sourceDetails.structuredArtifacts,
+        readerAttemptsDir: temporary(t), readerMaxAttempts: 2, readerMaterializeFigures: async () => [],
+        readerRecordDisposition: () => {}, readerCallModel: async () => {
+            if (++calls === 1) return JSON.stringify(signed.draft);
+            throw new Error('真实来源修复已到达');
+        }
+    }), /真实来源修复已到达/);
+    assert.equal(calls, 2);
 });
