@@ -4,6 +4,11 @@
 // before doing work in a sandbox.  Importing this module from tests or callers
 // remains side-effect free because env-loader only guards direct entrypoints.
 require('./env-loader.js');
+const {
+    PAPER_EVALUATION_TITLES,
+    normalizeAnalysisSectionTitle,
+    visibleAnalysisLines
+} = require('./lib/analysis-section-titles.js');
 
 /**
  * Reader-visible editorial quality gates shared by API and Manual analyses.
@@ -23,7 +28,7 @@ const QUALITY_SECTION_NAMES = Object.freeze([
 
 const SECTION_ALIASES = Object.freeze({
     authors: ['authors', 'authorInfo', '作者与机构'],
-    review: ['review', 'roast', '毒舌点评'],
+    review: ['review', 'roast', ...PAPER_EVALUATION_TITLES],
     summary: ['summary', '核心摘要'],
     method: ['method', 'architecture', '方法概述和架构'],
     innovations: ['innovations', 'innovation', '核心创新点'],
@@ -50,7 +55,7 @@ const BARE_EDITORIAL_LABELS = Object.freeze([
 ]);
 
 const ASSEMBLER_GENERATED_HEADINGS = Object.freeze([
-    '评分', '机器摘要', '标签', '作者与机构', '毒舌点评', '核心摘要',
+    '评分', '机器摘要', '标签', '作者与机构', ...PAPER_EVALUATION_TITLES, '核心摘要',
     '方法概述和架构', '核心创新点', '实验结果', '细节详述', '评分理由',
     '局限与问题', '论文证据直接支持的边界', '进一步审视', '开源详情'
 ]);
@@ -183,25 +188,29 @@ function warning(code, message, details = {}) {
 function extractMarkdownSections(markdown) {
     const sections = {};
     const text = String(markdown ?? '');
-    const headingRe = /^#{2,3}\s+([^\n]+)\s*$/gm;
     const headings = [];
-    let match;
-    while ((match = headingRe.exec(text))) {
-        const title = match[1].trim().replace(/^(?:[^\p{L}\p{N}#]+\s*)+/u, '');
+    for (const line of visibleAnalysisLines(text)) {
+        const match = /^#{2,3}\s+([^\n]+)\s*$/.exec(line.body);
+        if (!match) continue;
+        const rawTitle = match[1].trim().replace(/^(?:[^\p{L}\p{N}#]+\s*)+/u, '');
+        const withoutColon = rawTitle.trim().replace(/[：:]$/, '').trim();
+        const title = PAPER_EVALUATION_TITLES.includes(withoutColon) ? withoutColon : rawTitle;
         const canonical = Object.entries(SECTION_ALIASES)
             .find(([_name, aliases]) => aliases.includes(title))?.[0];
         if (!canonical) continue;
         headings.push({
             canonical,
-            headingStart: match.index,
-            bodyStart: headingRe.lastIndex
+            headingStart: line.start,
+            bodyStart: line.end
         });
     }
     for (let index = 0; index < headings.length; index += 1) {
         const current = headings[index];
         const end = headings[index + 1]?.headingStart ?? text.length;
         const body = text.slice(current.bodyStart, end).replace(/^\n+|\n+$/g, '');
-        sections[current.canonical] = body;
+        sections[current.canonical] = current.canonical === 'review'
+            && headings.filter(heading => heading.canonical === 'review').length > 1
+            ? '' : body;
     }
     return sections;
 }
@@ -675,26 +684,28 @@ function findBareEditorialLabels(text) {
 }
 
 function generatedHeadingTitle(rawTitle) {
-    return String(rawTitle || '')
+    const title = String(rawTitle || '')
         .trim()
         .replace(/\s+#+\s*$/u, '')
         .replace(/^(?:[^\p{L}\p{N}#]+\s*)+/u, '')
         .trim();
+    const withoutColon = title.replace(/[：:]$/, '').trim();
+    return PAPER_EVALUATION_TITLES.includes(withoutColon) ? withoutColon : title;
 }
 
 function findEmbeddedGeneratedHeadings(text) {
     const value = String(text ?? '');
     const findings = [];
-    const headingRe = /^\s*(#{1,6})\s+([^\n]+?)\s*$/gmu;
-    let match;
-    while ((match = headingRe.exec(value))) {
+    for (const line of visibleAnalysisLines(value)) {
+        const match = /^\s*(#{1,6})\s+([^\n]+?)\s*$/u.exec(line.body);
+        if (!match) continue;
         const title = generatedHeadingTitle(match[2]);
         if (!ASSEMBLER_GENERATED_HEADING_SET.has(title)) continue;
         findings.push({
             match: match[0].trim(),
             title,
             level: match[1].length,
-            line: lineNumberAt(value, match.index),
+            line: lineNumberAt(value, line.start),
             reason: 'assembler_generated_heading_embedded'
         });
     }
@@ -704,8 +715,9 @@ function findEmbeddedGeneratedHeadings(text) {
 function findDuplicateGeneratedHeadings(markdown) {
     const occurrences = new Map();
     for (const finding of findEmbeddedGeneratedHeadings(markdown)) {
-        if (!occurrences.has(finding.title)) occurrences.set(finding.title, []);
-        occurrences.get(finding.title).push(finding);
+        const title = normalizeAnalysisSectionTitle(finding.title);
+        if (!occurrences.has(title)) occurrences.set(title, []);
+        occurrences.get(title).push(finding);
     }
     return [...occurrences.entries()]
         .filter(([_title, items]) => items.length > 1)

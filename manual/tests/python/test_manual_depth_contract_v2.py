@@ -1,4 +1,5 @@
 import os
+import hashlib
 import sys
 import unittest
 
@@ -173,6 +174,21 @@ class ManualDepthContractV2Test(unittest.TestCase):
         analysis = valid_analysis()
         self.assertIsNone(validate_manual_depth_contract(analysis))
         self.assertIsNone(validate_manual_depth_contract_v2(analysis))
+
+    def test_evaluation_title_alias_preserves_quality_and_rejects_duplicates(self):
+        original = valid_analysis()
+        new_title = original.replace('## 毒舌点评\n', '## 论文评价\n')
+        self.assertEqual(validate_manual_depth_contract_v2(original),
+                         validate_manual_depth_contract_v2(new_title))
+        for suffix in ('## 毒舌点评\n', '## 论文评价\n',
+                       '## 毒舌点评\n另一段评价。'):
+            with self.subTest(suffix=suffix):
+                issue = validate_manual_depth_contract_v2(new_title + '\n\n' + suffix)
+                self.assertIn('论文评价章节重复', issue)
+        original_sha = hashlib.sha256(original.encode()).hexdigest()
+        validate_manual_depth_contract_v2(original)
+        self.assertEqual(hashlib.sha256(original.encode()).hexdigest(),
+                         original_sha)
 
     def test_v2_rejects_cross_section_duplicates(self):
         duplicated = '这句话被人工复制到多个章节用于凑齐契约字数，属于典型的模板化素材复用行为。'

@@ -26,6 +26,7 @@ from publish_common import (
     validate_papers_for_publish,
 )
 from tag_catalog import load_tag_catalog
+from analysis_sections import evaluation_heading_issue
 from utils import parse_analysis
 
 # ─── Feishu Config ────────────────────────────────────────────
@@ -186,6 +187,9 @@ def md_to_feishu_blocks(md_text):
 
 def generate_paper_md(paper, date_str):
     """生成单篇论文的 Markdown 内容"""
+    heading_issue = evaluation_heading_issue(paper.get('analysis'))
+    if heading_issue:
+        raise ValueError(heading_issue)
     pa = paper.get('parsed') or parse_analysis(paper.get('analysis', ''))
     title = paper.get('title', 'Unknown')
     aid = paper.get('arxivId', '')
@@ -214,7 +218,7 @@ def generate_paper_md(paper, date_str):
 
         sections = [
             ('作者与机构', 'authors'),
-            ('毒舌点评', 'roast'),
+            ('论文评价', 'roast'),
             ('核心摘要', 'summary'),
             ('方法概述和架构', 'architecture'),
             ('核心创新点', 'innovation'),
@@ -263,6 +267,10 @@ def batch_has_invalid_tag_metadata(papers):
 
 def generate_overview_md(scored, unscored, date_str):
     """生成汇总页 Markdown 内容"""
+    for paper in [item[1] for item in scored] + list(unscored):
+        heading_issue = evaluation_heading_issue(paper.get('analysis'))
+        if heading_issue:
+            raise ValueError(heading_issue)
     total = len(scored) + len(unscored)
     overview_papers = [p for _, p, _ in scored] + unscored
     top_tags = extract_top_tags(overview_papers, limit=8)

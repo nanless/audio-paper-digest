@@ -977,6 +977,80 @@ class PublishToBlogReviewTest(unittest.TestCase):
             index.replace(summary, '未经事实核查的旧摘要'), [paper],
         ))
 
+    def test_evaluation_title_does_not_bypass_modern_reader_isolation(self):
+        paper = llm_api_publication_fixture()
+        paper['apiReaderArticle'] += '\n\n论文评价只能覆盖本文实际验证的条件。'
+        reseal_llm_api_reader_fixture(paper)
+        page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        index = publish_to_blog.generate_index_page(
+            [(6.1, paper, paper['parsed'])], [], '2026-08-31',
+            {paper['arxivId']: 'fixture'},
+        )
+        self.assertIn('论文评价只能覆盖', page)
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
+        self.assertIsNone(publish_to_blog._api_reader_index_display_fields_issue(index, [paper]))
+        for title in ('论文评价', '毒舌点评'):
+            with self.subTest(title=title):
+                changed_page = page.replace('## 🧭 深度解读',
+                    f'## 💬 {title}\n\n未经审查的解释。\n\n## 🧭 深度解读')
+                self.assertIsNotNone(publish_to_blog._api_reader_page_binding_issue(changed_page, paper))
+                changed_index = index.replace('📌 **核心摘要**',
+                    f'💡 **{title}**\n\n未经审查的解释。\n\n📌 **核心摘要**', 1)
+                self.assertIsNotNone(publish_to_blog._api_reader_index_display_fields_issue(changed_index, [paper]))
+        ordinary_index = index.replace('👥 **作者与机构**',
+            '论文评价范围限于论文已经验证的条件。\n\n👥 **作者与机构**', 1)
+        self.assertIsNone(publish_to_blog._api_reader_index_display_fields_issue(ordinary_index, [paper]))
+
+    def test_evaluation_duplicate_cannot_be_hidden_by_cached_parsed_when_rendering(self):
+        paper = manual_v5_reader_paper()
+        paper['analysis'] = '## 论文评价\n已有评价。\n\n## 毒舌点评\n'
+        for render in (
+                lambda: publish_to_blog.generate_paper_page(paper, '2026-08-31'),
+                lambda: publish_to_blog.generate_index_page(
+                    [(8.7, paper, paper['parsed'])], [], '2026-08-31',
+                    {paper['arxivId']: 'fixture'})):
+            with self.assertRaisesRegex(PublishDataValidationError, '论文评价章节重复'):
+                render()
+
+    def test_evaluation_language_gate_covers_both_titles_and_real_display_icons(self):
+        evaluation = ('The evaluation supports the comparison but does not establish '
+                      'deployment benefits outside the measured conditions. ') * 3
+        for title in ('论文评价', '毒舌点评'):
+            for heading in (f'### 💡 {title}', f'## 💬 {title}', f'💡 **{title}**'):
+                with self.subTest(heading=heading), tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / 'page.md'
+                    content = ('---\ntitle: "Evaluation"\n---\n' + heading + '\n\n' +
+                               evaluation + '\n\n### 📌 核心摘要\n\n中文摘要。\n')
+                    path.write_text(content, encoding='utf-8')
+                    before = path.read_bytes()
+                    fixed, issues = publish_to_blog.review_and_fix_post(path)
+                    self.assertFalse(fixed)
+                    self.assertTrue(any('必须改为简体中文' in issue for issue in issues))
+                    self.assertEqual(path.read_bytes(), before)
+
+    def test_index_evaluation_checks_each_paper_and_keeps_ordinary_subheadings_inside_it(self):
+        prefix = '---\ntitle: "Index"\npaper_digest_page_type: index\n---\n## 📋 论文列表\n\n'
+        first = '### 🥇 [甲](/posts/a)\n\n💡 **论文评价**\n\n证据清楚。\n\n'
+        second = '### 🥈 [乙](/posts/b)\n\n💡 **毒舌点评**\n\n部署边界有限。\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'index.md'
+            for body, duplicate in (
+                    (first + second, False),
+                    (first + '### 一个普通小节\n\n💬 **毒舌点评**\n\n' + second, True)):
+                content = prefix + body
+                path.write_text(content, encoding='utf-8')
+                _, issues = publish_to_blog.review_and_fix_post(path, dry_run=True)
+                self.assertEqual(any('论文评价章节重复' in issue for issue in issues), duplicate)
+                self.assertEqual(path.read_text(encoding='utf-8'), content)
+            english = ('This paper has limited evidence for generalization beyond the '
+                       'reported conditions and does not establish a deployment benefit. ') * 3
+            content = prefix + first + second.replace('部署边界有限。', english)
+            path.write_text(content, encoding='utf-8')
+            _, issues = publish_to_blog.review_and_fix_post(path, dry_run=True)
+            self.assertTrue(any('必须改为简体中文' in issue for issue in issues))
+            self.assertFalse(any('论文评价章节重复' in issue for issue in issues))
+            self.assertEqual(path.read_text(encoding='utf-8'), content)
+
     def test_current_v3_core_summary_is_replayed_instead_of_one_sentence_thesis(self):
         paper = llm_api_publication_fixture()
         summary = paper['parsed']['summary']
@@ -2771,7 +2845,7 @@ title: "Score rows"
             markdown,
         )
         self.assertIn(f'> 英文题目：*[{title}]({blog_url})*', markdown)
-        for text in ('标签：#语音识别', '评分：**8.0/10**', '💡 **毒舌点评**', '📌 **核心摘要**', '🔗 **开源资源**'):
+        for text in ('标签：#语音识别', '评分：**8.0/10**', '💡 **论文评价**', '📌 **核心摘要**', '🔗 **开源资源**'):
             self.assertIn(text, markdown)
         context = (
             '排名：前25% | 文档类型：方法研究 | '
@@ -2784,8 +2858,8 @@ title: "Score rows"
         self.assertLess(markdown.index('> 英文题目：'), markdown.index('标签：#语音识别'))
         self.assertLess(markdown.index('标签：#语音识别'), markdown.index('评分：**8.0/10**'))
         self.assertLess(markdown.index('评分：**8.0/10**'), markdown.index(context))
-        self.assertLess(markdown.index(context), markdown.index('💡 **毒舌点评**'))
-        self.assertLess(markdown.index('💡 **毒舌点评**'), markdown.index('📌 **核心摘要**'))
+        self.assertLess(markdown.index(context), markdown.index('💡 **论文评价**'))
+        self.assertLess(markdown.index('💡 **论文评价**'), markdown.index('📌 **核心摘要**'))
         self.assertLess(markdown.index('📌 **核心摘要**'), markdown.index('🔗 **开源资源**'))
 
     def test_display_tags_flattens_compound_model_output(self):
@@ -4273,12 +4347,12 @@ title: "Bad table"
         self.assertIn('> 一句话：**共享语言推理而分离音频表示', markdown)
         self.assertIn('> 标签：#音频理解', markdown)
         self.assertIn('> 评分：**8.7/10**', markdown)
-        self.assertIn('### 💬 毒舌点评', markdown)
+        self.assertIn('### 💬 论文评价', markdown)
         self.assertIn('### 🔗 开源与复现资源', markdown)
         self.assertLess(markdown.index('> 英文题目：'), markdown.index('> 标签：#音频理解'))
         self.assertLess(markdown.index('> 标签：#音频理解'), markdown.index('> 评分：**8.7/10**'))
-        self.assertLess(markdown.index('> 评分：**8.7/10**'), markdown.index('### 💬 毒舌点评'))
-        self.assertLess(markdown.index('### 💬 毒舌点评'), markdown.index('### 📌 核心摘要'))
+        self.assertLess(markdown.index('> 评分：**8.7/10**'), markdown.index('### 💬 论文评价'))
+        self.assertLess(markdown.index('### 💬 论文评价'), markdown.index('### 📌 核心摘要'))
         self.assertIn('#### 先解释表示冲突', markdown)
         self.assertIn('#### 再追踪两条通路', markdown)
         self.assertNotRegex(markdown, r'(?m)^### 先解释表示冲突$')

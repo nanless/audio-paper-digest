@@ -1372,3 +1372,55 @@ has_dataset: 否
         assert.match(parsed.results, /!\[语谱图对比\]\(https:\/\/arxiv\.org\/html\/2604\.12345\/x2\.png\)/);
     });
 });
+
+
+describe('论文评价标题兼容', () => {
+    it('旧正文读取保持字节和SHA，新正文的解析值一致', () => {
+        const crypto = require('node:crypto');
+        const { validAnalysisText } = require('./valid-analysis-fixture.js');
+        const legacy = validAnalysisText();
+        const current = legacy.replace('## 毒舌点评\n', '## 论文评价\n');
+        const bytes = Buffer.from(legacy);
+        const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+        assert.deepStrictEqual(parseAnalysis(current), parseAnalysis(legacy));
+        const contract = require('../scripts/analysis-contract.js');
+        for (const text of [legacy, current]) {
+            assert.deepStrictEqual(contract.getMissingRequiredSections(text), []);
+            assert.deepStrictEqual(contract.getDuplicateRequiredSections(text), []);
+            assert.strictEqual(contract.validateTopLevelSectionContract(text), null);
+        }
+        assert.strictEqual(crypto.createHash('sha256').update(legacy).digest('hex'), sha);
+        assert.ok(Buffer.from(legacy).equals(bytes));
+    });
+
+    it('新旧混用和同名重复均拒绝，不选择第一处或最后一处', () => {
+        const contract = require('../scripts/analysis-contract.js');
+        const { validAnalysisText } = require('./valid-analysis-fixture.js');
+        for (const titles of [['毒舌点评', '论文评价'], ['毒舌点评', '毒舌点评'], ['论文评价', '论文评价']]) {
+            for (const body of ['两个章节内容相同。', '']) {
+                const text = validAnalysisText().replace(
+                    /## 毒舌点评\n[^\n]*\n/,
+                    titles.map(title => `## ${title}\n${body}\n`).join('\n')
+                );
+                assert.strictEqual(parseAnalysis(text), null);
+                assert.deepStrictEqual(contract.getDuplicateRequiredSections(text), ['论文评价']);
+                assert.match(contract.validateTopLevelSectionContract(text), /论文评价章节重复/);
+                assert.match(contract.getInvalidAnalysisReason(text, { roast: '缓存内容' }), /必要章节重复/);
+                assert.strictEqual(contract.extractSection(text, '论文评价'), '');
+            }
+        }
+    });
+
+    it('普通句、三级标题、代码围栏和多冒号不能冒充评价章节', () => {
+        const { extractAnalysisSection, getPaperEvaluationHeadingIssue } = require('../scripts/lib/analysis-section-titles.js');
+        const prefix = '这句话讨论论文评价。\n### 论文评价\n这是小标题。\n'
+            + '```text\n## 毒舌点评\n这是代码示例。\n```\n'
+            + '~~~text\n## 论文评价\n这是另一个代码示例。\n~~~\n'
+            + '## 论文评价：：\n这是无效标题。\n';
+        const raw = `${prefix}## 毒舌点评：\r\n真实的评价。\r\n## 核心摘要\r\n摘要。`;
+        assert.strictEqual(getPaperEvaluationHeadingIssue(raw), null);
+        assert.strictEqual(extractAnalysisSection(raw, '论文评价'), '真实的评价。');
+        assert.strictEqual(parseAnalysis(raw).roast, '真实的评价。');
+        assert.strictEqual(parseAnalysis('## 评分\n6.0/10').roast, '');
+    });
+});

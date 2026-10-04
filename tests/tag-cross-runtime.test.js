@@ -135,3 +135,43 @@ ${method === undefined ? '' : `主方法标签: ${method}`}
     fixtures.forEach((fixture, index) => assert.deepEqual(
         python[index], node[index], fixture.name));
 });
+
+
+test('评价标题的围栏、Unicode空白、CRLF和重复判别在两端一致', () => {
+    const rules = require('../scripts/lib/analysis-section-titles.js');
+    const inputs = [
+        '## 毒舌点评\n旧评价。\n## 核心摘要\n摘要。',
+        '## 论文评价\n新评价。\n## 核心摘要\n摘要。',
+        '## 毒舌点评\n\n## 论文评价\n',
+        '## 论文评价\n相同。\n## 论文评价\n相同。',
+        '## 毒舌点评\n相同。\n## 毒舌点评\n相同。',
+        '普通句讨论论文评价。\n### 论文评价\n小标题。\n## 核心摘要\n摘要。',
+        '```text\n## 毒舌点评\n```\n## 论文评价\n真实评价。',
+        '~~~text\n## 论文评价\n~~~\n## 毒舌点评\n真实评价。',
+        '## 论文评价：：\n无效标题。\n## 毒舌点评\n真实评价。'
+    ];
+    for (const whitespace of [' ', '\t', '\u3000', '\u00a0', '']) {
+        for (const newline of ['\n', '\r\n']) {
+            inputs.push(`##${whitespace}论文评价${whitespace}：${whitespace}${newline}真实评价。${newline}## 核心摘要${newline}摘要。`);
+            inputs.push(`##${whitespace}毒舌点评${whitespace}${newline}旧评价。${newline}##${whitespace}论文评价${whitespace}${newline}新评价。`);
+        }
+    }
+    const expected = inputs.map(text => ({
+        headings: rules.analysisSectionHeadings(text).map(heading => heading.title),
+        duplicate: Boolean(rules.getPaperEvaluationHeadingIssue(text)),
+        evaluation: rules.extractAnalysisSection(text, '论文评价')
+    }));
+    const script = [
+        'import json,sys',
+        'sys.path.insert(0,"scripts")',
+        'from analysis_sections import analysis_heading_titles,evaluation_heading_issue,extract_evaluation_section',
+        'inputs=json.load(sys.stdin)',
+        'print(json.dumps([{"headings":analysis_heading_titles(text),"duplicate":bool(evaluation_heading_issue(text)),"evaluation":extract_evaluation_section(text)} for text in inputs],ensure_ascii=False))'
+    ].join('\n');
+    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
+        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(inputs), encoding: 'utf8', timeout: 120000
+    });
+    assert.equal(result.error, undefined, String(result.error));
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), expected);
+});

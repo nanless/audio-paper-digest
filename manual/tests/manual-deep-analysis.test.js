@@ -1061,7 +1061,7 @@ describe('manual full-text-evidence-v2 quality gates', () => {
         );
     });
 
-    it('v2 拒绝毒舌点评固定模板句式', () => {
+    it('v2 拒绝论文评价固定模板句式', () => {
         const fixture = baseSpec();
         fixture.analysis = fixture.analysis.replace(
             '工作的问题定义清楚，但方法增量和工程证据仍有提升空间。',
@@ -1121,5 +1121,28 @@ describe('manual full-text-evidence-v3 reader-visible quality gates', () => {
 
         const flatLimits = fixture.analysis.replace('论文证据直接支持的边界', '局限汇总');
         assert.match(validateManualDepthContract(flatLimits, v3Options(fixture.sourceText)), /局限必须分开标注/);
+    });
+});
+
+
+describe('旧人工评价记录的读取兼容', () => {
+    it('旧账本章节名保持原值与SHA，重复正文不能通过缓存或Manual入口', () => {
+        const fixture = baseSpec();
+        const takeover = fixture.manifest.manualTakeover;
+        takeover.evidenceLedger.push({ ...takeover.evidenceLedger[0], id: 'E07', section: '毒舌点评' });
+        takeover.evidenceLedgerSha256 = manualSha256(takeover.evidenceLedger);
+        const original = JSON.stringify(fixture.manifest);
+        const oldSha = takeover.evidenceLedgerSha256;
+        assert.equal(validateManualTakeoverManifest(fixture.manifest, fixture.sourceSha256, {
+            analysis: fixture.analysis, sourceText: fixture.sourceText
+        }), null);
+        assert.equal(JSON.stringify(fixture.manifest), original);
+        assert.equal(takeover.evidenceLedgerSha256, oldSha);
+        assert.equal(takeover.evidenceLedger[6].section, '毒舌点评');
+        const mixed = fixture.analysis.replace('## 核心摘要', '## 论文评价\n另一个评价。\n\n## 核心摘要');
+        assert.match(validateManualDepthContract(mixed, { sourceText: fixture.sourceText }), /论文评价章节重复/);
+        assert.match(validateManualTakeoverManifest(fixture.manifest, fixture.sourceSha256, {
+            analysis: mixed, sourceText: fixture.sourceText
+        }), /论文评价章节重复/);
     });
 });

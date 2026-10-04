@@ -29,6 +29,15 @@ const {
     writeFileAtomic
 } = require('./utils.js');
 const {
+    PAPER_EVALUATION_TITLE,
+    normalizeAnalysisSectionTitle,
+    analysisSectionTitlePattern,
+    analysisSectionHeadings,
+    extractAnalysisSection,
+    getPaperEvaluationHeadingIssue,
+    getCurrentPaperEvaluationHeadingIssue
+} = require('./lib/analysis-section-titles.js');
+const {
     REQUIRED_ANALYSIS_SECTIONS,
     REQUIRED_MACHINE_SUMMARY_KEYS,
     getMissingRequiredSections,
@@ -7105,7 +7114,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         // exhausted candidate instead of silently treating it as unchanged.
         parserImplementationSha256: repair.shaText([
             fs.readFileSync(__filename, 'utf8'),
-            fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8')
+            fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'utils.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8')
         ].join('\0')),
         readerRecoveryEpochSha256: repair.shaText(READER_RECOVERY_EPOCH),
         editorialImplementationSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'editorial-quality.js'), 'utf8')),
@@ -8736,6 +8747,9 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity();
     return stableFingerprint({
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
+        ...(['revision', 'structureRepair'].includes(stage) ? {
+            analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js')
+        } : {}),
         ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, config.maxTokens),
         promptTemplateSha256: promptTemplateSha256(
             RECOVERY_PROMPT_FILES[stage],
@@ -8811,6 +8825,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
     const usedTextSha256 = crypto.createHash('sha256').update(textForAnalysis).digest('hex');
     const primaryContext = {
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
+        analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js'),
         ...modelFingerprint(DEEP_CONFIG),
         promptTemplateSha256: promptTemplateSha256(
             RECOVERY_PROMPT_FILES.primaryAnalysis,
@@ -8834,6 +8849,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         }),
         apiReaderArticle: stableFingerprint({
             ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
+            analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js'),
             ...modelFingerprint(DEEP_CONFIG, API_READER_INITIAL_TEMPERATURE, API_READER_MAX_TOKENS),
             contract: API_READER_ARTICLE_CONTRACT,
             contentMode: READER_SOURCE_CONTENT_MODE,
@@ -8902,6 +8918,11 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             imageInsertionMax: IMAGE_INSERTION_MAX
         })
     };
+}
+
+function hasCurrentPrimaryAnalysisCheckpoint(manifest, currentFingerprint) {
+    return typeof currentFingerprint === 'string' && currentFingerprint.length > 0
+        && manifest?.stages?.primaryAnalysis?.fingerprint === currentFingerprint;
 }
 
 function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, downloadedImages, preImageAnalysis) {
@@ -13571,8 +13592,16 @@ function parseImageInsertionPlan(raw, imageInfos = []) {
 }
 
 function findSectionBounds(analysis, title) {
+    if (normalizeAnalysisSectionTitle(title) === PAPER_EVALUATION_TITLE) {
+        if (getPaperEvaluationHeadingIssue(analysis)) return null;
+        const headings = analysisSectionHeadings(analysis);
+        const heading = headings.find(item => item.section === PAPER_EVALUATION_TITLE);
+        if (!heading) return null;
+        const next = headings.find(item => item.start >= heading.end);
+        return { start: heading.start, contentStart: heading.end, end: next ? next.start : analysis.length };
+    }
     const heading = new RegExp(
-        `(^|\\n)((#{2,3})\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)`,
+        `(^|\\n)((#{2,3})\\s*(?:\\d+[.\\s]+)?(?:${analysisSectionTitlePattern(title)})[：:\\s]*\\n)`,
         'm'
     );
     const match = heading.exec(analysis);
@@ -14296,6 +14325,11 @@ async function analyzePaperDeepInternal(paper) {
         tagPromptText: TAG_RULES.projection
     });
 
+    // 当前提示生成的初稿即使跨次恢复，也必须完成新标题的结构修复。
+    // 历史兼容检查点的原指纹不同，局部修复仍保留其旧标题。
+    let requireCurrentEvaluationTitle = hasCurrentPrimaryAnalysisCheckpoint(
+        analysisManifest, recoveryFingerprints.primaryAnalysis
+    );
     let analysis = isRecoveryStageComplete(analysisManifest, 'primaryAnalysis')
         ? String(paper.analysisCheckpoint || '')
         : '';
@@ -14315,6 +14349,7 @@ async function analyzePaperDeepInternal(paper) {
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
                 API_MAX_TOKENS, API_MAX_RETRIES, { ...DEEP_CONFIG, usageContext: { stage: 'primaryAnalysis' } }
             );
+            requireCurrentEvaluationTitle = true;
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', { fingerprint: recoveryFingerprints.primaryAnalysis });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 主模型文本分析完成 (${analysis.length} chars)`);
@@ -14346,6 +14381,7 @@ async function analyzePaperDeepInternal(paper) {
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
                 API_MAX_TOKENS, { usageContext: { stage: 'primaryAnalysis' } }
             );
+            requireCurrentEvaluationTitle = true;
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', { fingerprint: recoveryFingerprints.primaryAnalysis });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 文本分析完成`);
@@ -14494,7 +14530,14 @@ async function analyzePaperDeepInternal(paper) {
                 error.code = 'INVALID_STAGE_OUTPUT';
                 throw error;
             }
+            const evaluationIssue = getCurrentPaperEvaluationHeadingIssue(cleaned);
+            if (evaluationIssue) {
+                const error = new Error(evaluationIssue);
+                error.code = 'INVALID_STAGE_OUTPUT';
+                throw error;
+            }
             analysis = cleaned;
+            requireCurrentEvaluationTitle = true;
             analysis = syncResourceFieldsFromOpenSource(
                 analysis,
                 extractSectionByTitle(analysis, '开源详情')
@@ -14601,7 +14644,9 @@ async function analyzePaperDeepInternal(paper) {
     );
     analysis = structureRepairStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'structureRepair')) {
-        const preNormalizationIssues = getRepairableAnalysisStructureIssues(analysis, { sourceText: rawTextForAnalysis });
+        const preNormalizationIssues = getRepairableAnalysisStructureIssues(analysis, {
+            sourceText: rawTextForAnalysis, requireCurrentEvaluationTitle
+        });
         const normalizedStructure = normalizeAnalysisStructure(analysis);
         const normalizedChanged = normalizedStructure !== analysis;
         if (normalizedChanged) {
@@ -14609,7 +14654,9 @@ async function analyzePaperDeepInternal(paper) {
             console.log(`    [deep] ✅ 已确定性规范化结构 | categories=${sanitizeLogField(preNormalizationIssues.join('、') || '空白/数值表示', 500)}`);
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         }
-        const structureIssues = getRepairableAnalysisStructureIssues(analysis, { sourceText: rawTextForAnalysis });
+        const structureIssues = getRepairableAnalysisStructureIssues(analysis, {
+            sourceText: rawTextForAnalysis, requireCurrentEvaluationTitle
+        });
         try {
             if (structureIssues.length > 0) {
                 console.log(`    [deep] 🔧 检测到结构契约问题，执行最终结构修复: ${structureIssues.join('、')}`);
@@ -14617,9 +14664,12 @@ async function analyzePaperDeepInternal(paper) {
                     paper,
                     analysis,
                     rawTextForAnalysis,
-                    structureRepairStage.evidenceContext
+                    structureRepairStage.evidenceContext,
+                    { requireCurrentEvaluationTitle }
                 );
-                const postRepairIssues = getRepairableAnalysisStructureIssues(analysis, { sourceText: rawTextForAnalysis });
+                const postRepairIssues = getRepairableAnalysisStructureIssues(analysis, {
+                    sourceText: rawTextForAnalysis, requireCurrentEvaluationTitle
+                });
                 if (postRepairIssues.length > 0) {
                     const error = new Error(`最终结构修复后的分析仍未通过结构契约: ${postRepairIssues.join('、')}`);
                     error.code = 'CONTRACT_REJECTED';
@@ -14633,7 +14683,8 @@ async function analyzePaperDeepInternal(paper) {
             const finalization = await finalizeStructureRepairOutput(
                 paper,
                 analysis,
-                rawTextForAnalysis
+                rawTextForAnalysis,
+                { requireCurrentEvaluationTitle }
             );
             analysis = finalization.analysis;
             analysisManifest.contracts = {
@@ -15968,11 +16019,15 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
 }
 
 function replaceOrInsertRequiredSection(analysis, title, content) {
+    if (normalizeAnalysisSectionTitle(title) === PAPER_EVALUATION_TITLE) {
+        const issue = getPaperEvaluationHeadingIssue(analysis);
+        if (issue) throw contractRejectedError(issue);
+    }
     if (findSectionBounds(analysis, title)) return mergeSectionByTitle(analysis, title, content);
-    const index = REQUIRED_ANALYSIS_SECTIONS.indexOf(title);
+    const index = REQUIRED_ANALYSIS_SECTIONS.indexOf(normalizeAnalysisSectionTitle(title));
     const following = REQUIRED_ANALYSIS_SECTIONS.slice(index + 1);
     for (const nextTitle of following) {
-        const next = new RegExp(`(^|\\n)##\\s*${escapeRegExp(nextTitle)}[：:\\s]*\\n`, 'm').exec(analysis);
+        const next = new RegExp(`(^|\\n)##\\s*(?:${analysisSectionTitlePattern(nextTitle)})[：:\\s]*\\n`, 'm').exec(analysis);
         if (next) {
             const insertAt = next.index + next[1].length;
             return `${analysis.slice(0, insertAt)}## ${title}\n${content.trim()}\n\n${analysis.slice(insertAt)}`;
@@ -15984,6 +16039,8 @@ function replaceOrInsertRequiredSection(analysis, title, content) {
 function normalizeUnexpectedTopLevelHeadings(analysis) {
     return String(analysis || '').replace(/^##\s*([^\n]+?)\s*$/gm, (line, rawTitle) => {
         const cleanTitle = rawTitle.replace(/^#+\s*/, '').replace(/[：:]\s*$/, '').trim();
+        // 旧评价标题只用于读取，不改写，也不能降级后隐藏重复章节。
+        if (normalizeAnalysisSectionTitle(cleanTitle) === PAPER_EVALUATION_TITLE) return line;
         return REQUIRED_ANALYSIS_SECTIONS.includes(cleanTitle)
             ? `## ${cleanTitle}`
             : `### ${cleanTitle}`;
@@ -16337,7 +16394,9 @@ async function repairMissingAnalysisSections(
     paper, existingAnalysis, sourceText, preparedEvidence = null, options = {}
 ) {
     let currentAnalysis = normalizeAnalysisStructure(existingAnalysis);
-    let structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis, { sourceText });
+    let structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis, {
+        sourceText, requireCurrentEvaluationTitle: options.requireCurrentEvaluationTitle === true
+    });
     let validationFeedback = '这是第一次结构修复，没有上一次校验错误。';
     const evidenceContext = typeof preparedEvidence === 'string'
         ? preparedEvidence
@@ -16358,6 +16417,8 @@ async function repairMissingAnalysisSections(
         if (cleaned) currentAnalysis = normalizeAnalysisStructure(removeUnapprovedMarkdownImages(cleaned, []));
 
         structureIssues = getRepairableAnalysisStructureIssues(currentAnalysis, { sourceText });
+        const evaluationIssue = getCurrentPaperEvaluationHeadingIssue(currentAnalysis);
+        if (evaluationIssue && !structureIssues.includes(evaluationIssue)) structureIssues.push(evaluationIssue);
         if (structureIssues.length === 0) return currentAnalysis;
 
         validationFeedback = `上一次输出仍有结构契约问题：${structureIssues.join('、')}。必须输出完整分析并逐项修正。`;
@@ -16420,7 +16481,9 @@ async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, o
     // 方法兜底本身也是模型输出，必须再次接受完整结构/叙事契约审计。
     // 否则它可在满足 600 字方法契约的同时新增编辑批注或破坏其他章节，
     // 并被错误地保存为 structureRepair=complete 供后续运行复用。
-    const finalStructureIssues = getRepairableAnalysisStructureIssues(analysis, { sourceText });
+    const finalStructureIssues = getRepairableAnalysisStructureIssues(analysis, {
+        sourceText, requireCurrentEvaluationTitle: options.requireCurrentEvaluationTitle === true
+    });
     if (finalStructureIssues.length > 0) {
         throw contractRejectedError(
             `最终方法兜底后的分析仍未通过结构契约: ${finalStructureIssues.join('、')}`
@@ -16431,6 +16494,10 @@ async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, o
 
 function getRepairableAnalysisStructureIssues(analysis, options = {}) {
     const issues = [];
+    if (options.requireCurrentEvaluationTitle === true) {
+        const issue = getCurrentPaperEvaluationHeadingIssue(analysis);
+        if (issue) issues.push(issue);
+    }
     const missing = getMissingRequiredSections(analysis);
     if (missing.length > 0) issues.push(`缺少必要章节: ${missing.join('/')}`);
     const duplicate = getDuplicateRequiredSections(analysis);
@@ -16785,8 +16852,11 @@ function escapeRegExp(text) {
 
 function extractSectionByTitle(analysis, title, followingTitles = []) {
     if (!analysis) return '';
+    if (normalizeAnalysisSectionTitle(title) === PAPER_EVALUATION_TITLE) {
+        return extractAnalysisSection(analysis, title);
+    }
     const heading = new RegExp(
-        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)`,
+        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?(?:${analysisSectionTitlePattern(title)})[：:\\s]*\\n)`,
         'm'
     );
     const match = heading.exec(analysis);
@@ -16795,7 +16865,7 @@ function extractSectionByTitle(analysis, title, followingTitles = []) {
     const contentStart = match.index + match[1].length + match[2].length;
     const rest = analysis.slice(contentStart);
     let end = rest.length;
-    const titleAlternation = followingTitles.map(escapeRegExp).join('|');
+    const titleAlternation = followingTitles.map(analysisSectionTitlePattern).join('|');
     const nextSpecific = titleAlternation
         ? new RegExp(`\\n#{2,3}\\s*(?:\\d+[.\\s]+)?(?:${titleAlternation})[：:\\s]*\\n`)
         : null;
@@ -16812,16 +16882,27 @@ function extractSectionByTitle(analysis, title, followingTitles = []) {
 
 function normalizeSectionContent(title, newContent) {
     const heading = new RegExp(
-        `^#{1,6}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n*`,
+        `^#{1,6}\\s*(?:\\d+[.\\s]+)?(?:${analysisSectionTitlePattern(title)})[：:\\s]*\\n*`,
         'i'
     );
     return (newContent || '').replace(heading, '').trim();
 }
 
 function mergeSectionByTitle(analysis, title, newContent) {
+    if (normalizeAnalysisSectionTitle(title) === PAPER_EVALUATION_TITLE) {
+        const issue = getPaperEvaluationHeadingIssue(analysis);
+        if (issue) throw contractRejectedError(issue);
+    }
     const cleanContent = normalizeSectionContent(title, newContent);
+    if (normalizeAnalysisSectionTitle(title) === PAPER_EVALUATION_TITLE) {
+        const bounds = findSectionBounds(analysis, title);
+        if (bounds) {
+            return `${analysis.slice(0, bounds.contentStart)}${cleanContent}\n\n${analysis.slice(bounds.end)}`;
+        }
+        return `${analysis.trim()}\n\n## ${PAPER_EVALUATION_TITLE}\n${cleanContent}`;
+    }
     const heading = new RegExp(
-        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)([\\s\\S]*?)(?=\\n#{2,3}\\s|$)`
+        `(^|\\n)(#{2,3}\\s*(?:\\d+[.\\s]+)?(?:${analysisSectionTitlePattern(title)})[：:\\s]*\\n)([\\s\\S]*?)(?=\\n#{2,3}\\s|$)`
     );
     if (heading.test(analysis)) {
         return analysis.replace(heading, (match, prefix, header) => `${prefix}${header}${cleanContent}\n`);
@@ -17089,6 +17170,7 @@ module.exports = {
     calculateScoringDelta,
     stableFingerprint,
     buildRecoveryFingerprints,
+    hasCurrentPrimaryAnalysisCheckpoint,
     RECOVERY_STAGE_ORDER,
     RECOVERY_STAGE_DEPENDENCIES,
     recoveryInvalidationClosure,

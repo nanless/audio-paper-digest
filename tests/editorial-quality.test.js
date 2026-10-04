@@ -852,3 +852,16 @@ describe('Manual v4 aggregate gate', () => {
         assert.equal(JSON.stringify(sections), before);
     });
 });
+
+
+describe('论文评价的编辑质量检查', () => {
+    it('评价两名混用按同一章节报告，代码示例不参与计数', () => {
+        const text = '## 毒舌点评\n旧评价。\n\n## 论文评价\n新评价。';
+        const duplicate = findDuplicateGeneratedHeadings(text);
+        assert.equal(duplicate.length, 1);
+        assert.equal(duplicate[0].title, '论文评价');
+        assert.equal(duplicate[0].count, 2);
+        assert.equal(validateEditorialQuality(text).issues.some(item => item.code === 'duplicate_generated_heading'), true);
+        assert.deepEqual(findDuplicateGeneratedHeadings('```text\n## 毒舌点评\n```\n## 论文评价\n有效评价。'), []);
+    });
+});

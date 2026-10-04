@@ -235,6 +235,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `config.js` | Node 参数与运行数据路径的集中配置。 |
 | `env-loader.js` | 从项目 `.env` 建立受控运行环境，检查直接 Node 和 Manual 入口的运行条件。 |
 | `utils.js` | 提供 Node 原子文件写入、时间、ID、提示词、LLM 协议和代理工具。 |
+| `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `llm-account-pool.js` | 管理 Node OpenCode Go 账号池，持续使用成功账号，识别额度错误，并保存跨进程账号状态。 |
 | `log-setup.js` | Node 终端/文件日志、时间戳和敏感信息脱敏。 |
 | `runtime-storage.js` | 只读统计运行存储，按文件引用关系预览受控缓存或日志清理；只有显式 `--apply` 才清理。 |
@@ -244,6 +245,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `llm_account_pool.py` | 按与 Node 相同的数据格式和锁协议管理 OpenCode Go 账号池。 |
 | `llm_usage.py` | 记录 Python 发布请求的用量与失败事件，沿用跨运行请求归因格式。 |
 | `utils.py` | Python 评分解析与发布侧通用文本工具。 |
+| `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
 | `log_setup.py` | Python 统一日志与脱敏。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
 | `python-runtime.sh` | 为默认博客/视觉入口选择并校验 Python 3.11+ 与 OpenSSL，可由 `PD_PYTHON_BIN` 覆写。 |

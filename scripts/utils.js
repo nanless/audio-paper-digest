@@ -8,6 +8,11 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const {
+    PAPER_EVALUATION_TITLE,
+    extractAnalysisSection,
+    getPaperEvaluationHeadingIssue
+} = require('./lib/analysis-section-titles.js');
 const { loadProjectEnv } = require('./env-loader.js');
 const {
     normalizeApiKeys,
@@ -1255,6 +1260,7 @@ function parseScoringDimensions(scoringText) {
 }
 
 function parseAnalysis(analysis, options = {}) {
+    if (getPaperEvaluationHeadingIssue(analysis)) return null;
     if (!analysis) return null;
     const tagRules = options.tagRules || TAG_RULES;
     const legacyTags = options.legacyTags === true;
@@ -1450,9 +1456,9 @@ function parseAnalysis(analysis, options = {}) {
     m = analysis.match(/##\s*作者与机构\s*\n([\s\S]*?)(?=\n##\s|$)/);
     if (m) result.authors = stripMd(m[1]);
 
-    // 毒舌点评（使用任意下一节 ## 作为终止，容忍 LLM 标题 typo）
-    m = analysis.match(/##\s*毒舌点评\s*\n([\s\S]*?)(?=\n##\s|$)/);
-    if (m) result.roast = stripMd(m[1]);
+    // 评价节兼容旧标题，但不会从重复或混用的标题中任取一节。
+    const paperEvaluation = extractAnalysisSection(analysis, PAPER_EVALUATION_TITLE);
+    if (paperEvaluation) result.roast = stripMd(paperEvaluation);
 
     // 核心摘要
     m = analysis.match(/##\s*核心摘要\s*\n([\s\S]*?)(?=##\s*(?:详细分析|方法概述和架构)|$)/);

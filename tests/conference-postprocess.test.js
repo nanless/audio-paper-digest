@@ -514,6 +514,7 @@ test('页面生成程序升级后，使用新的暂存身份，不覆盖原文�
     const implementation = marker => { const body = { contract: api.PROJECTION_CONTRACT, version: 1,
         nodeSourceSha256: marker.repeat(64), rendererSourceSha256: 'b'.repeat(64), publisherSourceSha256: 'c'.repeat(64),
         publisherCommonSourceSha256: '2'.repeat(64),
+        analysisSectionsSourceSha256: '3'.repeat(64), analysisSectionTitlesSourceSha256: '4'.repeat(64),
         loaderSourceSha256: 'd'.repeat(64), parserSourceSha256: 'e'.repeat(64), taxonomySourceSha256: 'f'.repeat(64),
         identitySourceSha256: '1'.repeat(64) };
         return { ...body, implementationSha256: api.stableHash(body) }; };

@@ -23,6 +23,7 @@ from publish_common import (
 )
 from path_config import atomic_write_json, atomic_write_text, wechat_preview_path
 from tag_catalog import load_tag_catalog
+from analysis_sections import evaluation_heading_issue
 from utils import parse_analysis
 from project_env import build_fetch_url_opener
 
@@ -262,6 +263,9 @@ def main():
 
     paper_htmls = []
     for paper in papers:
+        heading_issue = evaluation_heading_issue(paper.get('analysis'))
+        if heading_issue:
+            raise ValueError(heading_issue)
         pa = paper.get('parsed') or parse_analysis(paper.get('analysis',''))
         title = paper.get('title','Unknown')
         aid = paper.get('arxivId','')
@@ -338,7 +342,7 @@ def main():
                 h += f'<p><strong>👥 作者与机构</strong></p>\n<p>{html.escape(pa["authors"])}</p>\n'
 
             sections = [
-                ('💡 毒舌点评', 'roast'), ('📌 核心摘要', 'summary'),
+                ('💡 论文评价', 'roast'), ('📌 核心摘要', 'summary'),
                 ('🏗️ 方法概述和架构', 'architecture'),
                 ('💡 核心创新点', 'innovation'), ('🔬 细节详述', 'details'),
                 ('📊 实验结果', 'results'), ('⚖️ 评分理由', 'scoringReason'),

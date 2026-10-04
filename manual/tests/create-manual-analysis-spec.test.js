@@ -1067,3 +1067,17 @@ describe('strict reusable manual v4 spec assembler', () => {
         }), /filtered 完整批次指纹不一致/);
     });
 });
+
+
+describe('人工分析的论文评价标题', () => {
+    it('新组装使用新标题，保留原review字段和正文', () => {
+        const record = validRecord();
+        const original = JSON.stringify(record);
+        const analysis = buildAnalysis({ arxivId: ID, title: 'Evaluation title', authors: ['Test Author'] }, record);
+        assert.equal((analysis.match(/^## 论文评价$/gm) || []).length, 1);
+        assert.doesNotMatch(analysis, /^## 毒舌点评$/m);
+        const { extractSection } = require('../../scripts/analysis-contract.js');
+        assert.equal(extractSection(analysis, '论文评价'), record.editorial.review);
+        assert.equal(JSON.stringify(record), original);
+    });
+});

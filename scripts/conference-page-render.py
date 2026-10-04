@@ -12,6 +12,7 @@ import sys
 import math
 from urllib.parse import quote, urlsplit
 
+from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
 
@@ -40,7 +41,7 @@ SCORE_DIMENSIONS = (
     ('reproducibilityScore', '可复现', '0.5'), ('engineeringScore', '工程/实践', '1.5'),
 )
 REQUIRED_ANALYSIS_SECTIONS = (
-    '评分', '机器摘要', '标签', '作者与机构', '毒舌点评', '核心摘要', '方法概述和架构',
+    '评分', '机器摘要', '标签', '作者与机构', '论文评价', '核心摘要', '方法概述和架构',
     '核心创新点', '实验结果', '细节详述', '评分理由', '局限与问题', '开源详情',
 )
 
@@ -536,8 +537,10 @@ def render_packet(packet):
             assets.append({'path': path, 'base64': packet_asset['base64']})
     scoring_stage = ((manifest or {}).get('stages') or {}).get('scoringAudit') or {}
     analysis = paper.get('analysis')
-    headings = re.findall(r'^##(?!#)\s*([^\n]+?)\s*$', str(analysis or ''), flags=re.MULTILINE)
-    headings = [re.sub(r'[：:]\s*$', '', item).strip() for item in headings]
+    heading_issue = evaluation_heading_issue(analysis)
+    if heading_issue:
+        raise ValueError(heading_issue)
+    headings = [normalize_analysis_section_title(title) for title in analysis_heading_titles(analysis)]
     acquisition = (manifest or {}).get('sourceAcquisition') or {}
     if headings != list(REQUIRED_ANALYSIS_SECTIONS) or acquisition.get('fullTextAvailable') is not True \
             or acquisition.get('analysisSource') == 'abstract' \

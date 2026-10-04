@@ -122,6 +122,40 @@ class ConferencePageRenderTest(unittest.TestCase):
                              'selectionContract': 'paper-taxonomy-selection-v1',
                              'flatCompatContract': 'paper-taxonomy-flat-tags-compat-v1', 'concepts': concepts}}
 
+    def test_evaluation_heading_compatibility_keeps_old_analysis_and_hash(self):
+        packet = self.packet()
+        paper = packet['paper']
+        paper['analysis'] = paper['analysis'].replace('## 论文评价\n', '## 毒舌点评\n')
+        stage = paper['analysisManifest']['stages']['scoringAudit']
+        stage['outputAnalysisSha256'] = hashlib.sha256(paper['analysis'].encode()).hexdigest()
+        old_text = paper['analysis']
+        old_sha = stage['outputAnalysisSha256']
+        old_page = MODULE.render_packet(packet)['markdown']
+        self.assertEqual(paper['analysis'], old_text)
+        self.assertEqual(stage['outputAnalysisSha256'], old_sha)
+        paper['analysis'] = old_text.replace('## 毒舌点评\n', '## 论文评价\n')
+        with self.assertRaisesRegex(ValueError, 'api-scoring-audit-v2'):
+            MODULE.render_packet(packet)
+        stage['outputAnalysisSha256'] = hashlib.sha256(paper['analysis'].encode()).hexdigest()
+        self.assertEqual(MODULE.render_packet(packet)['markdown'], old_page)
+
+    def test_evaluation_duplicate_and_fenced_missing_section_are_rejected(self):
+        for suffix in ('## 论文评价\n', '## 毒舌点评\n'):
+            packet = self.packet()
+            paper = packet['paper']
+            paper['analysis'] += '\n\n' + suffix
+            paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = (
+                hashlib.sha256(paper['analysis'].encode()).hexdigest())
+            with self.assertRaisesRegex(ValueError, '论文评价章节重复'):
+                MODULE.render_packet(packet)
+        packet = self.packet()
+        paper = packet['paper']
+        paper['analysis'] = paper['analysis'].replace('## 论文评价\n', '```md\n## 论文评价\n```\n')
+        paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = (
+            hashlib.sha256(paper['analysis'].encode()).hexdigest())
+        with self.assertRaisesRegex(ValueError, 'api-scoring-audit-v2'):
+            MODULE.render_packet(packet)
+
     def test_generic_identity_and_unavailable_structure_are_rendered_without_arxiv(self):
         result = MODULE.render_packet(self.packet())
         self.assertIn('paper_digest_paper_id: "conference:icassp:2026:icassp-arnumber:100"', result['markdown'])

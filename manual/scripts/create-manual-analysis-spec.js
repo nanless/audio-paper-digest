@@ -661,7 +661,7 @@ function assertNoCrossPaperTemplateReuse(papers) {
                 const item = editorialUses.get(sentence.normalized)
                     || { source: sentence.source, papers: new Map() };
                 const fields = item.papers.get(id) || new Set();
-                fields.add(field === 'review' ? 'editorial.review/毒舌点评' : `editorial.${field}`);
+                fields.add(field === 'review' ? 'editorial.review/论文评价' : `editorial.${field}`);
                 item.papers.set(id, fields);
                 editorialUses.set(sentence.normalized, item);
             }
@@ -1073,7 +1073,7 @@ function buildAnalysis(paper, record, options = {}) {
     const limitsBody = `### 论文证据直接支持的边界\n\n${evidenceLimits}\n\n`
         + `### 进一步审视\n\n${reviewerLimits || record.review}`;
     const openBody = editorial.open || record.open;
-    const roast = editorial.review || record.review;
+    const paperEvaluation = editorial.review || record.review;
     const scoreReasons = Array.isArray(record.scoringReasons) && record.scoringReasons.length === 8
         ? record.scoringReasons
         : [record.innovations, `${record.method2} ${record.limits}`, record.results,
@@ -1127,8 +1127,8 @@ ${record.tags}
 通讯作者：${authorInfo.correspondingAuthors || '正文未明确标注'}
 作者列表：${authors}（机构：${authorInfo.affiliations || '正文未明确机构'}）
 
-## 毒舌点评
-${roast}
+## 论文评价
+${paperEvaluation}
 
 ## 核心摘要
 ${summary}

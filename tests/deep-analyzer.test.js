@@ -7257,3 +7257,116 @@ describe('open-source evidence request safety', () => {
         assert.strictEqual(messages[0].content, 'evidence ⧵underline{x}');
     });
 });
+
+
+describe('论文评价迁移与结构恢复', () => {
+    it('旧标题局部修复保留原标题和其他正文，重复不被归一化隐藏', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const contract = require('../scripts/analysis-contract.js');
+        const legacy = validAnalysisText();
+        const hash = crypto.createHash('sha256').update(legacy).digest('hex');
+        const body = contract.extractSection(legacy, '论文评价');
+        const updated = deep.mergeSectionByTitle(legacy, '论文评价', body + ' 新增评价依据。');
+        assert.match(updated, /^## 毒舌点评$/m);
+        assert.doesNotMatch(updated, /^## 论文评价$/m);
+        assert.deepStrictEqual(contract.getMissingRequiredSections(updated), []);
+        assert.strictEqual(contract.validateTopLevelSectionContract(updated), null);
+        const originalParts = legacy.split(/## 毒舌点评\n[\s\S]*?(?=## 核心摘要)/);
+        assert.strictEqual(updated.slice(0, updated.indexOf('## 毒舌点评')), originalParts[0]);
+        assert.strictEqual(updated.slice(updated.indexOf('## 核心摘要')), originalParts[1]);
+        const mixed = legacy.replace('## 核心摘要', '## 论文评价\n第二份评价。\n\n## 核心摘要');
+        const normalized = deep.normalizeAnalysisStructure(mixed);
+        assert.deepStrictEqual(contract.getDuplicateRequiredSections(normalized), ['论文评价']);
+        assert.strictEqual(deep.parseAnalysis(normalized), null);
+        assert.ok(deep.getRepairableAnalysisStructureIssues(normalized).some(issue => /重复/.test(issue)));
+        assert.throws(() => deep.mergeSectionByTitle(mixed, '论文评价', '替换内容'), /论文评价章节重复/);
+        assert.strictEqual(crypto.createHash('sha256').update(legacy).digest('hex'), hash);
+    });
+
+    it('新初稿缺节、旧名或混用都能进入真实结构修复，并只接受新标题的完整输出', async () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const legacy = validAnalysisText();
+        const current = legacy.replace('## 毒舌点评\n', '## 论文评价\n');
+        const drafts = [legacy, legacy.replace(/## 毒舌点评\n[\s\S]*?(?=## 核心摘要)/, ''),
+            legacy.replace('## 核心摘要', '## 论文评价\n重复内容。\n\n## 核心摘要')];
+        for (const draft of drafts) {
+            let calls = 0;
+            const result = await deep.repairMissingAnalysisSections(
+                { arxivId: '2608.13817', title: 'Evaluation repair' }, draft, '论文全文证据', '结构证据', {
+                    requireCurrentEvaluationTitle: true,
+                    callModelFn: async messages => {
+                        calls += 1;
+                        assert.match(messages[0].content, /论文评价/);
+                        return current;
+                    }
+                }
+            );
+            assert.strictEqual(calls, 1);
+            assert.match(result, /^## 论文评价$/m);
+            assert.doesNotMatch(result, /^## 毒舌点评$/m);
+            assert.deepStrictEqual(deep.getRepairableAnalysisStructureIssues(result, { requireCurrentEvaluationTitle: true }), []);
+        }
+        let rejectedCalls = 0;
+        await assert.rejects(deep.repairMissingAnalysisSections(
+            { arxivId: '2608.13817', title: 'Legacy output rejected' }, legacy, '论文全文证据', '结构证据', {
+                requireCurrentEvaluationTitle: true,
+                callModelFn: async () => { rejectedCalls += 1; return legacy; }
+            }
+        ), /新生成的分析必须包含且只包含一个“论文评价”章节/);
+        assert.strictEqual(rejectedCalls, 2);
+        assert.deepStrictEqual(deep.getRepairableAnalysisStructureIssues(legacy), []);
+    });
+
+    it('新初稿保存中断后同身份恢复仍要求新标题，历史身份保留读取兼容', async () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const paper = { arxivId: '2608.13817', title: 'Interrupted primary', authors: [], categories: [] };
+        const legacy = validAnalysisText();
+        const currentFingerprint = deep.buildRecoveryFingerprints(paper, '论文全文证据', paper.arxivId).primaryAnalysis;
+        const manifest = { version: 1, stages: {
+            primaryAnalysis: { status: 'complete', fingerprint: currentFingerprint },
+            methodRepair: { status: 'transient_failure', error: 'interrupted' }
+        } };
+        deep.saveAnalysisCheckpoint(paper, legacy, manifest);
+        const reloaded = JSON.parse(JSON.stringify(paper));
+        const recoveredManifest = deep.createAnalysisRecoveryManifest(reloaded);
+        const requiresCurrent = deep.hasCurrentPrimaryAnalysisCheckpoint(recoveredManifest, currentFingerprint);
+        assert.strictEqual(requiresCurrent, true);
+        assert.ok(deep.getRepairableAnalysisStructureIssues(reloaded.analysisCheckpoint, {
+            requireCurrentEvaluationTitle: requiresCurrent
+        }).some(issue => /新生成的分析/.test(issue)));
+        let calls = 0;
+        const result = await deep.repairMissingAnalysisSections(paper, reloaded.analysisCheckpoint, '论文全文证据', '结构证据', {
+            requireCurrentEvaluationTitle: requiresCurrent,
+            callModelFn: async () => { calls += 1; return legacy.replace('## 毒舌点评\n', '## 论文评价\n'); }
+        });
+        assert.strictEqual(calls, 1);
+        assert.match(result, /^## 论文评价$/m);
+        const historicalManifest = { version: 1, stages: { primaryAnalysis: { status: 'complete', fingerprint: 'a'.repeat(64) } } };
+        assert.strictEqual(deep.hasCurrentPrimaryAnalysisCheckpoint(historicalManifest, currentFingerprint), false);
+        assert.deepStrictEqual(deep.getRepairableAnalysisStructureIssues(legacy, { requireCurrentEvaluationTitle: false }), []);
+    });
+
+    it('只改变标题规则实现会改变实际相关阶段的源码指纹', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const paper = { title: 'Source fingerprint', authors: [], categories: [] };
+        const before = deep.buildRecoveryFingerprints(paper, '相同全文', '2608.1');
+        const stages = ['revision', 'structureRepair', 'openSourceScan'];
+        const previous = Object.fromEntries(stages.map(stage => [stage, deep.buildTextStageFingerprint(stage, '相同正文', '相同证据')]));
+        const originalRead = fs.readFileSync;
+        const rulePath = path.resolve(__dirname, '../scripts/lib/analysis-section-titles.js');
+        try {
+            fs.readFileSync = function(file, ...args) {
+                const value = originalRead.call(this, file, ...args);
+                if (typeof file !== 'string' || path.resolve(file) !== rulePath) return value;
+                return typeof value === 'string' ? value + '\n// changed rule dependency'
+                    : Buffer.concat([value, Buffer.from('\n// changed rule dependency')]);
+            };
+            const after = deep.buildRecoveryFingerprints(paper, '相同全文', '2608.1');
+            assert.notStrictEqual(after.primaryAnalysis, before.primaryAnalysis);
+            assert.notStrictEqual(after.apiReaderArticle, before.apiReaderArticle);
+            assert.notStrictEqual(deep.buildTextStageFingerprint('revision', '相同正文', '相同证据'), previous.revision);
+            assert.notStrictEqual(deep.buildTextStageFingerprint('structureRepair', '相同正文', '相同证据'), previous.structureRepair);
+            assert.strictEqual(deep.buildTextStageFingerprint('openSourceScan', '相同正文', '相同证据'), previous.openSourceScan);
+        } finally { fs.readFileSync = originalRead; }
+    });
+});

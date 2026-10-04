@@ -1,5 +1,12 @@
 const crypto = require('crypto');
 const {
+    PAPER_EVALUATION_TITLE,
+    normalizeAnalysisSectionTitle,
+    analysisSectionHeadings,
+    extractAnalysisSection,
+    getPaperEvaluationHeadingIssue
+} = require('./lib/analysis-section-titles.js');
+const {
     validateEditorialQuality,
     validateResultClaims,
     validateReadabilityRubric
@@ -30,7 +37,7 @@ const REQUIRED_ANALYSIS_SECTIONS = Object.freeze([
     '机器摘要',
     '标签',
     '作者与机构',
-    '毒舌点评',
+    PAPER_EVALUATION_TITLE,
     '核心摘要',
     '方法概述和架构',
     '核心创新点',
@@ -303,16 +310,13 @@ function escapeRegExp(value) {
 }
 
 function getMissingRequiredSections(text) {
-    const analysis = String(text || '');
-    return REQUIRED_ANALYSIS_SECTIONS.filter(title => {
-        const heading = new RegExp(`(^|\\n)##(?!#)\\s*${escapeRegExp(title)}[：:\\s]*\\n`, 'm');
-        return !heading.test(analysis);
-    });
+    const headings = analysisSectionHeadings(text);
+    return REQUIRED_ANALYSIS_SECTIONS.filter(title => !headings.some(heading => heading.section === title));
 }
 
 function countSectionHeadings(text, title) {
-    const heading = new RegExp(`(^|\\n)##(?!#)\\s*${escapeRegExp(title)}[：:\\s]*(?=\\n|$)`, 'gm');
-    return [...String(text || '').matchAll(heading)].length;
+    return analysisSectionHeadings(text)
+        .filter(heading => heading.section === normalizeAnalysisSectionTitle(title)).length;
 }
 
 function getDuplicateRequiredSections(text) {
@@ -320,11 +324,7 @@ function getDuplicateRequiredSections(text) {
 }
 
 function extractSection(text, title) {
-    const heading = new RegExp(
-        `(^|\\n)##(?!#)\\s*${escapeRegExp(title)}[：:\\s]*\\n([\\s\\S]*?)(?=\\n##(?!#)\\s|$)`,
-        ''
-    );
-    return heading.exec(String(text || ''))?.[2]?.trim() || '';
+    return extractAnalysisSection(text, title);
 }
 
 function splitMarkdownTableRow(row) {
@@ -777,6 +777,8 @@ function validateMethodDetailContract(analysis) {
 }
 
 function validateManualDepthContract(analysis, options = {}) {
+    const evaluationIssue = getPaperEvaluationHeadingIssue(analysis);
+    if (evaluationIssue) return evaluationIssue;
     // The old manual gate only checked that the method section was long.  A
     // template could therefore pass with a short abstract, three generic
     // innovation bullets and one two-column placeholder table.  The API path
@@ -915,10 +917,10 @@ function validateManualDepthContractV2(analysis, options = {}) {
         const example = duplicates[0];
         return `manual 正文存在跨章节自我复制: ${duplicates.length} 个句子重复出现在多个章节（如「${example.sentence.slice(0, 24)}…」同时出现在${example.sections.join('、')}），每个章节必须独立撰写`;
     }
-    const editorial = extractSection(analysis, '毒舌点评');
+    const editorial = extractSection(analysis, PAPER_EVALUATION_TITLE);
     for (const pattern of MANUAL_EDITORIAL_TEMPLATE_PATTERNS) {
         if (pattern.test(editorial)) {
-            return 'manual 毒舌点评使用固定模板句式（亮点一是二是/短板是），必须改为针对本文的独立审稿人批评';
+            return 'Manual 论文评价使用了固定模板句式（亮点一是二是/短板是），必须依据这篇论文独立评价。';
         }
     }
     const scoringReason = extractSection(analysis, '评分理由');
@@ -1590,11 +1592,11 @@ function validateManualEvidenceLedger(ledger, sourceText = '') {
             return `manual evidenceLedger 第 ${index + 1} 条 id 非法或重复`;
         }
         seen.add(item.id);
-        if (!REQUIRED_ANALYSIS_SECTIONS.includes(item.section)
+        if (!REQUIRED_ANALYSIS_SECTIONS.includes(normalizeAnalysisSectionTitle(item.section))
             || ['评分', '标签', '作者与机构'].includes(item.section)) {
             return `manual evidenceLedger ${item.id} section 必须对应事实正文章节`;
         }
-        sections.add(item.section);
+        sections.add(normalizeAnalysisSectionTitle(item.section));
         if (typeof item.claim !== 'string' || item.claim.trim().length < 20) {
             return `manual evidenceLedger ${item.id} claim 过短`;
         }
@@ -1843,8 +1845,8 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
                     return 'manualTakeover.editorialReviewSha256 不匹配';
                 }
                 if (options.analysis
-                    && extractSection(options.analysis, '毒舌点评').trim() !== takeover.editorialReview.trim()) {
-                    return 'manualTakeover.editorialReview 未与 canonical 毒舌点评逐字绑定';
+                    && extractSection(options.analysis, PAPER_EVALUATION_TITLE).trim() !== takeover.editorialReview.trim()) {
+                    return 'manualTakeover.editorialReview 与分析正文中的论文评价不逐字一致。';
                 }
             }
         } catch (error) {
@@ -2043,6 +2045,8 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
     const manualStatuses = Object.values(manifest?.stages || {})
         .some(stage => stage?.status === MANUAL_COMPLETE_STATUS);
     if (!manualStatuses && manifest?.manualTakeover === undefined) return null;
+    const evaluationIssue = getPaperEvaluationHeadingIssue(options.analysis || manifest?.manualTakeover?.analysis || '');
+    if (evaluationIssue) return evaluationIssue;
     if (MANUAL_READER_QUALITY_VERSIONS.includes(manifest?.contracts?.manualDepth)
         && manifest?.contracts?.experimentTables !== EXPERIMENT_TABLE_CONTRACT_VERSION) {
         return `manual v4 必须绑定 experimentTables=${EXPERIMENT_TABLE_CONTRACT_VERSION}`;
@@ -2096,8 +2100,9 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
 }
 
 function validateTopLevelSectionContract(analysis) {
-    const headings = [...String(analysis || '').matchAll(/^##(?!#)\s*([^\n]+?)\s*$/gm)]
-        .map(match => match[1].replace(/[：:]\s*$/, '').trim());
+    const headings = analysisSectionHeadings(analysis).map(heading => heading.section);
+    const evaluationIssue = getPaperEvaluationHeadingIssue(analysis);
+    if (evaluationIssue) return evaluationIssue;
     const extra = headings.filter(title => !REQUIRED_ANALYSIS_SECTIONS.includes(title));
     if (extra.length > 0) return `包含额外一级章节: ${[...new Set(extra)].join('、')}`;
     if (headings.length !== REQUIRED_ANALYSIS_SECTIONS.length) return '一级章节数量与固定契约不一致';

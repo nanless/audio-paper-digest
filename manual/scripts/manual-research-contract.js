@@ -515,7 +515,7 @@ function validateReaderArticle(plan, article, evidenceLedger = [], options = {})
 }
 
 /**
- * The roast is a compact editorial judgment, not a second generic abstract.
+ * The paper evaluation is a compact editorial judgment, not a second generic abstract.
  * Keeping its two claims tied to phrases already used in the long-form article
  * makes the published verdict auditable without forcing citation markup into
  * the reader-facing copy.

@@ -76,6 +76,9 @@ from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_require
 from runtime_guard import require_external_runtime
 from llm_usage import with_llm_usage_context
 from utils import strip_md, parse_analysis
+from analysis_sections import (
+    evaluation_heading_issue, extract_evaluation_section, find_evaluation_headings,
+)
 from tag_catalog import (
     TAG_FLAT_COMPAT_CONTRACT,
     TAG_SELECTION_CONTRACT,
@@ -1006,7 +1009,7 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 4. **内容完整性**：是否有乱码、重复、段落错位。当前内容是完整正文的分块 {chunk_label}，不要因为分块边界报告内容不完整。
 5. **图片问题**：图片链接是否为空、格式是否正确（支持 base64 data URI 和普通 URL）
 6. **YAML frontmatter 问题**：标题、描述等字段是否有引号不匹配、特殊字符未转义
-7. **中文栏目语言**：`毒舌点评` 必须以简体中文为主；如果整段主要是英文，必须报告为 error，并要求依据原点评含义改写为中文，不能只删除内容
+7. **中文栏目语言**：`论文评价`（兼容旧标题 `毒舌点评`）必须以简体中文为主；如果整段主要是英文，必须报告为 error，并要求依据原点评含义改写为中文，不能只删除内容
 
 【重要区分】以下情况**不要**作为错误报告：
 - 已经用反引号包裹的 HTML-like 标记（如 `` `<S>` ``）→ 这是正确格式
@@ -3870,6 +3873,9 @@ def _validated_detailed_core_summary(paper, parsed):
             or stage.get('contractVersion') != CORE_SUMMARY_DETAILED_CONTRACT:
         raise PublishDataValidationError('读者文章的详细核心摘要阶段记录缺失、尚未完成，或不符合 v3 规则。')
     analysis = paper.get('analysis')
+    heading_issue = evaluation_heading_issue(analysis)
+    if heading_issue:
+        raise PublishDataValidationError(heading_issue)
     stored_analysis_fields = parse_analysis(analysis) if isinstance(analysis, str) else None
     summary = stored_analysis_fields.get('summary') if isinstance(stored_analysis_fields, dict) else None
     if not isinstance(summary, str) or not summary.strip():
@@ -4040,7 +4046,7 @@ def _api_reader_index_display_fields_issue(content, papers):
         if len(matches) != 1:
             return f'{aid} 汇总页现代决策投影缺失或重复'
         block = matches[0]
-        if '毒舌点评' in block:
+        if find_evaluation_headings(block, rendered=True):
             return f'{aid} 汇总页现代决策投影混入 canonical 点评'
         for key, label, end in (
                 ('summary', '📌 **核心摘要**', r'\n\n🔗 \*\*开源资源\*\*'),
@@ -4102,7 +4108,7 @@ def normalize_digest_index_preserving_decision_blocks(markdown):
     """Normalize index-owned prose without rewriting copied paper sections."""
     pattern = re.compile(
         r'^👥 \*\*作者与机构\*\*\n\n[\s\S]*?'
-        r'(?=\n\n(?:💡 \*\*毒舌点评\*\*|📌 \*\*核心摘要\*\*))|'
+        r'(?=\n\n(?:💡 \*\*(?:论文评价|毒舌点评)\*\*|📌 \*\*核心摘要\*\*))|'
         r'^📌 \*\*核心摘要\*\*\n\n[\s\S]*?(?=^---$)',
         flags=re.MULTILINE,
     )
@@ -4306,6 +4312,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         slug = paper_slugs.get(p.get('arxivId', ''), '')
         m = format_medal(i)
 
+        heading_issue = evaluation_heading_issue(p.get('analysis'))
+        if heading_issue:
+            raise PublishDataValidationError(heading_issue)
         pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = _visible_arxiv_source_url(p)
@@ -4348,7 +4357,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
         
         if reader_display_fields is None and pa.get('roast'):
-            md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
+            md += f"💡 **论文评价**\n\n{pa['roast']}\n\n"
 
         summary = full_index_decision_block(
             pa, p, 'summary', reader_article=reader_article,
@@ -4373,6 +4382,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         slug = paper_slugs.get(p.get('arxivId', ''), '')
 
         # unscored 论文也使用与评分论文相同的读者顺序。
+        heading_issue = evaluation_heading_issue(p.get('analysis'))
+        if heading_issue:
+            raise PublishDataValidationError(heading_issue)
         pa = p.get('parsed') or parse_analysis(p.get('analysis', '')) or {}
         aid = p.get('arxivId', '')
         aurl = _visible_arxiv_source_url(p)
@@ -4409,7 +4421,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
         if reader_display_fields is None and pa.get('roast'):
-            md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
+            md += f"💡 **论文评价**\n\n{pa['roast']}\n\n"
 
         summary = full_index_decision_block(
             pa, p, 'summary', reader_article=reader_article,
@@ -6226,7 +6238,7 @@ def _api_reader_page_binding_issue(content, paper):
             raise PublishDataValidationError('页面缺少有效的 Reader 展示字段标记 paper_digest_api_reader_decision_projection。')
         if h2_section('📌 核心摘要') != sanitize_markdown_for_publish(reader_display_fields['summary']).strip():
             raise PublishDataValidationError('页面核心摘要与当前 Reader 记录中应展示的摘要不一致。')
-        if re.search(r'^##\s+(?:💬\s*毒舌点评|💡\s*研究者判断|📎\s*补充信息|⚖️\s*评分依据与证据)',
+        if find_evaluation_headings(content, rendered=True) or re.search(r'^##\s+(?:💡\s*研究者判断|📎\s*补充信息|⚖️\s*评分依据与证据)',
                      content, flags=re.MULTILINE):
             raise PublishDataValidationError('读者文章页面混入了未经独立事实审查的分析解释栏目。')
         expected_resources = reader_display_fields['opensource']
@@ -6390,6 +6402,9 @@ def _strip_non_reader_article_images(content, image_plans_by_url):
 
 def generate_paper_page(paper, date_str, category='论文速递'):
     """生成单篇论文的独立页面"""
+    heading_issue = evaluation_heading_issue(paper.get('analysis'))
+    if heading_issue:
+        raise PublishDataValidationError(heading_issue)
     # main() replaces parsed with the validated analysis baseline before generation.
     pa = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
     # 补充 opensource 中缺失的具体链接
@@ -6625,7 +6640,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
             ('🧭 深度解读', 'readerArticle', reader_article),
         ] if reader_display_fields is not None else (
             [
-                ('💬 毒舌点评', 'roast'),
+                ('💬 论文评价', 'roast'),
                 ('📌 核心摘要', 'summary'),
                 ('🔗 开源与复现资源', 'opensource', opensource_content),
                 # The decision-facing blocks come first.  The long reader
@@ -7027,18 +7042,26 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     # 面向中文读者的固定栏目不得整段退化为英文。确定性层只负责阻断，
     # 不凭空翻译或生成观点；普通 LLM review 或 manual reviewer 必须据原文
     # 给出真正的中文点评后才能签发凭证。
-    roast_pattern = re.compile(
-        r'(?:^|\n)(?:#{1,6}\s*)?💡\s*(?:\*\*)?毒舌点评(?:\*\*)?\s*\n+'
-        r'([\s\S]*?)(?=\n(?:#{1,6}\s+|(?:📌|🔗|🏗️|📊|🔬|⚖️|🚨|📎)\s*\*\*|---\s*$)|\Z)',
-        flags=re.MULTILINE,
-    )
-    for roast_match in roast_pattern.finditer(content):
-        roast = roast_match.group(1)
-        han_count = len(re.findall(r'[\u3400-\u9fff]', roast))
-        latin_count = len(re.findall(r'[A-Za-z]', roast))
+    evaluation_blocks = [content]
+    if re.search(r'^paper_digest_page_type:[ \t]*index[ \t]*$',
+                 prose_prefix, flags=re.MULTILINE):
+        list_body = content.split('## 📋 论文列表', 1)[-1]
+        paper_starts = [match.start() for match in re.finditer(
+            r'^### (?:🥇|🥈|🥉|\d+\.) [^\n]+$', list_body, flags=re.MULTILINE)]
+        if paper_starts:
+            boundaries = [0, *paper_starts, len(list_body)]
+            evaluation_blocks = [list_body[start:end] for start, end in
+                                 zip(boundaries, boundaries[1:]) if start < end]
+    for evaluation_block in evaluation_blocks:
+        heading_issue = evaluation_heading_issue(evaluation_block, rendered=True)
+        if heading_issue:
+            issues.append(heading_issue)
+            continue
+        evaluation_text = extract_evaluation_section(evaluation_block, rendered=True)
+        han_count = len(re.findall(r'[\u3400-\u9fff]', evaluation_text))
+        latin_count = len(re.findall(r'[A-Za-z]', evaluation_text))
         if latin_count >= 120 and (han_count < 20 or latin_count > han_count * 3):
-            issues.append('毒舌点评以英文为主，必须改为简体中文后才能发布')
-            break
+            issues.append('论文评价以英文为主，必须改为简体中文后才能发布')
 
     # 12. 检查 YAML frontmatter 中是否有未闭合的双引号
     content_before_yaml_quote_fix = content
@@ -9922,6 +9945,7 @@ def generation_template_fingerprint():
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
         'publish_common.py': script_dir / 'publish_common.py',
         'utils.py': script_dir / 'utils.py',
+        'analysis_sections.py': script_dir / 'analysis_sections.py',
         'path_config.py': script_dir / 'path_config.py',
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
         'manual/sealed_tutorial_preview.py': MANUAL_SCRIPTS_DIR / 'sealed_tutorial_preview.py',
@@ -10051,6 +10075,7 @@ def review_protocol_fingerprint():
         'publish_common.py': script_dir / 'publish_common.py',
         'llm_account_pool.py': script_dir / 'llm_account_pool.py',
         'utils.py': script_dir / 'utils.py',
+        'analysis_sections.py': script_dir / 'analysis_sections.py',
     }
     dependencies = {
         name: _sha256_file(path)

@@ -10,6 +10,8 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
 
+from analysis_sections import evaluation_heading_issue, extract_evaluation_section
+
 from tag_catalog import (LABEL_MODE_LEGACY,
                             active_preferred_labels, ancestors, load_tag_catalog,
                             prune_ancestors, resolve_label_candidates,
@@ -463,6 +465,8 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     """解析深度分析文本为结构化字典"""
     if not analysis:
         return None
+    if evaluation_heading_issue(analysis):
+        return None
     if type(legacy_tags) is not bool:
         raise ValueError('legacy_tags must be bool')
     registry = _DEFAULT_TAG_CATALOG if tag_catalog is None else tag_catalog
@@ -584,8 +588,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     m = re.search(r'##\s*作者与机构\s*\n([\s\S]*?)(?=\n##|$)', analysis)
     r['authors'] = m.group(1).strip() if m else ''
 
-    m = re.search(r'##\s*毒舌点评\s*\n([\s\S]*?)(?=\n##|$)', analysis)
-    r['roast'] = m.group(1).strip() if m else ''
+    r['roast'] = extract_evaluation_section(analysis)
 
     # 兼容旧格式（有 ## 详细分析 父标题）和新格式（扁平 ## 标题）
     m = re.search(r'##\s*核心摘要\s*\n([\s\S]*?)(?=\n##\s*(?:方法概述和架构|详细分析)|$)', analysis)

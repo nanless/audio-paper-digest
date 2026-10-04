@@ -49,6 +49,10 @@ from llm_account_pool import (
     select_api_key,
 )
 from utils import parse_analysis
+from analysis_sections import (
+    EVALUATION_TITLE, LEGACY_EVALUATION_TITLE, normalize_analysis_section_title,
+    evaluation_heading_issue, extract_evaluation_section,
+)
 from tag_catalog import (
     TAG_PROMPT_TEXT_CONTRACT,
     TAG_SELECTION_CONTRACT,
@@ -237,6 +241,8 @@ def _is_table_identifier_header(value):
 
 
 def _extract_analysis_section(text, title):
+    if title in {EVALUATION_TITLE, LEGACY_EVALUATION_TITLE}:
+        return extract_evaluation_section(text)
     match = re.search(
         rf'(?:^|\n)##(?!#)\s*{re.escape(title)}[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)',
         str(text or ''),
@@ -1157,6 +1163,9 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
 
 def _validate_tag_stage_record(paper, manifest, paper_label):
     """发布端根据 Node 保存的标签阶段记录，重新核验词表、正文、检查点和所选标签的绑定。"""
+    heading_issue = evaluation_heading_issue(paper.get('analysis'))
+    if heading_issue:
+        raise PublishDataValidationError(f'{paper_label} {heading_issue}')
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     if not isinstance(contracts, dict) \
             or contracts.get('taxonomy') != TAG_SELECTION_CONTRACT:
@@ -1274,6 +1283,9 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
         raise PublishDataValidationError(
             f'{paper_label} 标签阶段记录的绑定 SHA 与按原字段重新计算的结果不一致。')
 
+    heading_issue = evaluation_heading_issue(current_analysis)
+    if heading_issue:
+        raise PublishDataValidationError(f'{paper_label} {heading_issue}')
     current_parsed = parse_analysis(current_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
     current_validation = current_parsed.get('taxonomyValidation') or {}
     expected_selection = {
@@ -1286,6 +1298,9 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
         raise PublishDataValidationError(
             f'{paper_label} 当前正文中的标签选择无效，或与标签阶段记录的主标签和概念 ID 不一致。')
     if stage['status'] == 'complete':
+        heading_issue = evaluation_heading_issue(output_analysis)
+        if heading_issue:
+            raise PublishDataValidationError(f'{paper_label} 标签阶段输出：{heading_issue}')
         output_validation = parse_analysis(
             output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)['taxonomyValidation']
         output_selection = {field: output_validation.get(field) for field in expected_selection}
@@ -3158,6 +3173,9 @@ def validate_manual_depth_contract(analysis):
     a manifest opts into ``full-text-evidence-v1`` so historical API records
     and older manual receipts remain compatible.
     """
+    heading_issue = evaluation_heading_issue(analysis)
+    if heading_issue:
+        return heading_issue
     method = _extract_analysis_section(analysis, '方法概述和架构')
     results = _extract_analysis_section(analysis, '实验结果')
     details = _extract_analysis_section(analysis, '细节详述')
@@ -3223,6 +3241,9 @@ def validate_manual_depth_contract_v2(analysis):
     the canonical publish record; that gate is enforced at Node ingestion time
     only.  Everything else is checked here as a publish-time fallback.
     """
+    heading_issue = evaluation_heading_issue(analysis)
+    if heading_issue:
+        return heading_issue
     base_issue = validate_manual_depth_contract(analysis)
     if base_issue:
         return base_issue
@@ -3236,9 +3257,9 @@ def validate_manual_depth_contract_v2(analysis):
             f'manual 正文存在跨章节自我复制: {len(duplicates)} 个句子重复出现在多个章节'
             f'（如「{preview}…」同时出现在{joined}），每个章节必须独立撰写'
         )
-    editorial = _extract_analysis_section(analysis, '毒舌点评')
-    if MANUAL_EDITORIAL_TEMPLATE_RE.search(editorial or ''):
-        return 'manual 毒舌点评使用固定模板句式（亮点一是二是/短板是），必须改为针对本文的独立审稿人批评'
+    evaluation = _extract_analysis_section(analysis, EVALUATION_TITLE)
+    if MANUAL_EDITORIAL_TEMPLATE_RE.search(evaluation or ''):
+        return '论文评价使用了固定模板句式（亮点一是二是/短板是），请根据本文证据分别评价贡献和不足。'
     scoring_reason = _extract_analysis_section(analysis, '评分理由') or ''
     anchor_tags = set(MANUAL_SCORING_ANCHOR_TAG_RE.findall(scoring_reason))
     if len(anchor_tags) < MANUAL_SCORING_ANCHOR_TAG_MIN:
@@ -3424,10 +3445,13 @@ def validate_manual_editorial_quality_v4(analysis):
     controlled full text is available.  Python repeats reader-visible checks
     that remain exactly recomputable from the canonical Markdown.
     """
+    heading_issue = evaluation_heading_issue(analysis)
+    if heading_issue:
+        return heading_issue
     sections = {
         name: _extract_analysis_section(analysis, heading)
         for name, heading in (
-            ('authors', '作者与机构'), ('review', '毒舌点评'),
+            ('authors', '作者与机构'), ('review', EVALUATION_TITLE),
             ('summary', '核心摘要'), ('method', '方法概述和架构'),
             ('innovations', '核心创新点'), ('results', '实验结果'),
             ('details', '细节详述'), ('limits', '局限与问题'),
@@ -3657,7 +3681,7 @@ def validate_manual_editorial_quality_v4(analysis):
 
 
 FINAL_MANUAL_SECTION_HEADINGS = (
-    '作者与机构', '毒舌点评', '核心摘要', '方法概述和架构',
+    '作者与机构', EVALUATION_TITLE, LEGACY_EVALUATION_TITLE, '核心摘要', '方法概述和架构',
     '核心创新点', '实验结果', '细节详述', '评分理由',
     '局限与问题', '开源详情', '补充信息',
     # Manual v5 reader-first pages replace the fixed v4 method/innovation/
@@ -3678,7 +3702,7 @@ def _manual_v4_reader_view(markdown):
     return re.sub(
         rf'^[^\S\r\n]*#{{1,6}}[^\S\r\n]+'
         rf'(?:[^\w\s#]\ufe0f?[^\S\r\n]*)*({headings})[^\S\r\n]*$',
-        lambda match: f'## {match.group(1)}',
+        lambda match: f'## {normalize_analysis_section_title(match.group(1))}',
         text,
         flags=re.MULTILINE,
     )
@@ -3749,6 +3773,9 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
                 ):
             return '最终 Markdown 缺少 Manual v4 深度标记'
 
+    heading_issue = evaluation_heading_issue(markdown, rendered=True)
+    if heading_issue:
+        return heading_issue
     reader_view = _manual_v4_reader_view(markdown)
     is_v5_reader_article = manual_depth in {
         MANUAL_DEPTH_CONTRACT_VERSION_V5,
@@ -4009,7 +4036,7 @@ def validate_digest_index_reader_quality(markdown, required=False):
     # generation equality contract protects these reused blocks.
     index_owned_body = re.sub(
         r'^👥 \*\*作者与机构\*\*\n\n[\s\S]*?'
-        r'(?=\n\n(?:💡 \*\*毒舌点评\*\*|📌 \*\*核心摘要\*\*))',
+        r'(?=\n\n(?:💡 \*\*(?:论文评价|毒舌点评)\*\*|📌 \*\*核心摘要\*\*))',
         '👥 **作者与机构**\n\n已绑定单篇作者机构。\n\n',
         body,
         flags=re.MULTILINE,
@@ -4212,6 +4239,9 @@ def resolve_publish_parsed(paper):
     analysis = paper.get('analysis')
     if not isinstance(analysis, str) or not analysis.strip():
         raise PublishDataValidationError(f'{paper_label} 缺少 analysis')
+    heading_issue = evaluation_heading_issue(analysis)
+    if heading_issue:
+        raise PublishDataValidationError(f'{paper_label} {heading_issue}')
     raw_analysis_parsed = parse_analysis(analysis)
     _validate_current_analysis_tags(analysis, raw_analysis_parsed, paper_label)
     analysis_parsed = validate_publish_parsed(
@@ -4259,6 +4289,9 @@ def resolve_publish_parsed(paper):
 
 def _validate_current_analysis_tags(analysis, parsed, paper_label):
     """核对各类发布输入的四行标签章节、主任务标签和主方法标签。"""
+    heading_issue = evaluation_heading_issue(analysis)
+    if heading_issue:
+        raise PublishDataValidationError(f'{paper_label} {heading_issue}')
     match = re.search(r'(^|\n)##(?!#)\s*标签[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)', analysis)
     lines = [line.strip() for line in (match.group(2) if match else '').splitlines()
              if line.strip()]
@@ -4377,6 +4410,9 @@ def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
             if not isinstance(paper, dict):
                 raise PublishDataValidationError('论文记录必须是对象')
             paper_label = paper.get('arxivId') or paper.get('title') or '<unknown paper>'
+            heading_issue = evaluation_heading_issue(paper.get('analysis'))
+            if heading_issue:
+                raise PublishDataValidationError(f'{paper_label} {heading_issue}')
             if not validate_manual_stage_records:
                 _validate_publish_image_exclusion_view(paper, paper_label)
             if paper.get('latestAnalysisAttemptError'):
@@ -6389,11 +6425,11 @@ def extract_one_liner(pa):
             if not text and sentences:
                 text = sentences[0].strip()
 
-    # 3. 回退到 roast
+    # 前两种内容不可用时，取论文评价的第一句。
     if not text:
-        roast = pa.get('roast', '')
-        if roast:
-            text = roast.split('。')[0].strip()
+        evaluation_text = pa.get('roast', '')
+        if evaluation_text:
+            text = evaluation_text.split('。')[0].strip()
 
     # 清理 Markdown 和废话前缀
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
