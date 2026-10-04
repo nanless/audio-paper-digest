@@ -106,7 +106,7 @@ function normalizeCheckpoint(value,selection,options) {
 }
 async function exportCheckpoint(options) {
  const config=require('../config.js'),{plan}=writer.readPlanRegistry(options);
- const runtime=require('./taxonomy-runtime.js').createTaxonomyRuntime({registryPath:options.registrySnapshot});
+ const runtime=require('./taxonomy-runtime.js').createTagRules({registryPath:options.registrySnapshot});
  const directory=path.dirname(options.checkpointFile),original=io.readStableJson(options.checkpointFile,'original immutable classifier checkpoint');
  const selection=io.readStableJson(path.join(directory,'selection.json'),'original immutable selection');
  const checkpoint={...original,value:normalizeCheckpoint(original.value,selection.value,

@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const crosswalkApi = require('./page-source-crosswalk.js');
-const taxonomyApi = require('./historical-taxonomy-assignment.js');
+const tagAssignmentsApi = require('./historical-taxonomy-assignment.js');
 const registryApi = require('./paper-taxonomy.js');
 const fresh = require('./fresh-rewrite-run.js');
 
@@ -113,17 +113,17 @@ function readAssignment(filename) {
     const loaded = readRegular(filename, 16 * 1024 * 1024, 'taxonomy assignment');
     const bytes = loaded.bytes; const value = strictJson(bytes, 'taxonomy assignment');
     const body = { ...value }; delete body.assignmentSha256;
-    if (value.contract !== taxonomyApi.CONTRACT || value.version !== taxonomyApi.VERSION
+    if (value.contract !== tagAssignmentsApi.CONTRACT || value.version !== tagAssignmentsApi.VERSION
         || !['assigned', 'blocked'].includes(value.status) || !SHA_RE.test(value.assignmentSha256 || '')
         || !SHA_RE.test(value.registrySha256 || '') || value.assignmentSha256 !== stableHash(body)
         || !/^[a-f0-9-]{36}$/i.test(value.analysisRunId || '')) {
         throw new Error(`Invalid assigned taxonomy artifact: ${filename}`);
     }
     const basename = path.basename(filename);
-    const canonicalName = taxonomyApi.assignmentFilename(
+    const canonicalName = tagAssignmentsApi.assignmentFilename(
         value.paperId, value.registrySha256, value.assignmentSha256
     );
-    const legacyName = taxonomyApi.legacyAssignmentFilename(value.paperId, value.registrySha256);
+    const legacyName = tagAssignmentsApi.legacyAssignmentFilename(value.paperId, value.registrySha256);
     if (basename !== canonicalName && basename !== legacyName) {
         throw new Error(`Invalid assigned taxonomy artifact: ${filename}`);
     }
@@ -143,10 +143,10 @@ function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAs
     const safeRoot = fresh.assertSafeDirectory(root); const runRoot = path.join(safeRoot, analysisRunId);
     if (!fs.existsSync(runRoot)) return null;
     fresh.assertSafeDirectory(runRoot);
-    const canonical = path.join(runRoot, taxonomyApi.assignmentFilename(
+    const canonical = path.join(runRoot, tagAssignmentsApi.assignmentFilename(
         paperId, registrySha256, expectedAssignment.assignmentSha256
     ));
-    const legacy = path.join(runRoot, taxonomyApi.legacyAssignmentFilename(paperId, registrySha256));
+    const legacy = path.join(runRoot, tagAssignmentsApi.legacyAssignmentFilename(paperId, registrySha256));
     const filename = fs.existsSync(canonical) ? canonical : fs.existsSync(legacy) ? legacy : null;
     if (!filename) return null;
     const loaded = readAssignment(filename);
@@ -161,17 +161,17 @@ function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAs
 }
 
 function loadProjectionInputs({ crosswalkRoot, crosswalkId, analysisRoot, taxonomyRoot, taxonomyRegistry, analysisRunId } = {}, dependencies = {}) {
-    const taxonomy = (dependencies.loadTaxonomy || registryApi.loadTaxonomy)(taxonomyRegistry);
+    const taxonomy = (dependencies.loadTagCatalog || registryApi.loadTagCatalog)(taxonomyRegistry);
     if (!SHA_RE.test(taxonomy?.registrySha256 || '')) throw new Error('Current taxonomy registry SHA is required');
     const state = (dependencies.readCrosswalk || crosswalkApi.readCrosswalk)({ crosswalkRoot, crosswalkId });
     const pages = new Map(state.source.papers.map(page => [page.pageKey, page])); const results = [];
-    const handle = (dependencies.loadRun || taxonomyApi.loadCompletedHistoricalAnalysisRun)({
+    const handle = (dependencies.loadRun || tagAssignmentsApi.loadCompletedHistoricalAnalysisRun)({
         analysisRoot, runId: analysisRunId }, dependencies.analysisDependencies || {});
-    const run = (dependencies.runSnapshot || taxonomyApi.runSnapshot)(handle);
+    const run = (dependencies.runSnapshot || tagAssignmentsApi.runSnapshot)(handle);
     for (const group of state.identityGroups.filter(item => item.paperId.startsWith('arxiv:'))) {
         const paper = run.papers.find(item => `arxiv:${fresh.paperId(item)}` === group.paperId);
         if (!paper) continue;
-        const rebuilt = (dependencies.buildAssignment || taxonomyApi.buildAssignment)({ runHandle: handle, paper, taxonomy });
+        const rebuilt = (dependencies.buildAssignment || tagAssignmentsApi.buildAssignment)({ runHandle: handle, paper, taxonomy });
         const assignment = (dependencies.findAssignment || findAssignment)(taxonomyRoot, group.paperId,
             analysisRunId, taxonomy.registrySha256, rebuilt);
         if (!assignment) continue;

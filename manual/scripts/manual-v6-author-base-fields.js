@@ -68,7 +68,7 @@ function normalizeAuthorOwnedBaseFields(record, label = 'author record') {
         throw new Error(`${label}.tags 必须含 3-5 个不重复的空格分隔白名单标签，并覆盖主任务和主方法`);
     }
     const validation = require('../../scripts/lib/taxonomy-runtime.js')
-        .getDefaultTaxonomyRuntime().validateTagSelection({
+        .getDefaultTagRules().validateTagSelection({
             tags, primaryTaskTag: task, primaryMethodTag
         });
     if (!validation.valid) {

@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const api = require('../scripts/lib/historical-taxonomy-assignment.js');
 const cli = require('../scripts/historical-taxonomy-assignment.js');
-const taxonomyApi = require('../scripts/lib/paper-taxonomy.js');
+const tagCatalogApi = require('../scripts/lib/paper-taxonomy.js');
 const { parseAnalysis } = require('../scripts/utils.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
@@ -36,7 +36,7 @@ function runFixture(t, papers = [paper()]) {
 }
 
 function registry() {
-    return taxonomyApi.loadTaxonomy(path.join(__dirname, '..', 'config', 'paper-taxonomy.json'));
+    return tagCatalogApi.loadTagCatalog(path.join(__dirname, '..', 'config', 'paper-taxonomy.json'));
 }
 
 test('completed historical canonical maps exact concepts and binds all source SHA values', t => {

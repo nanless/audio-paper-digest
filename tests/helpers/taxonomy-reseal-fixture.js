@@ -12,9 +12,9 @@ const crypto = require('node:crypto');
 const { validAnalysisText } = require('../valid-analysis-fixture.js');
 const contract = require('../../scripts/analysis-contract.js');
 const { parseAnalysis } = require('../../scripts/utils.js');
-const { createTaxonomyRuntime } = require('../../scripts/lib/taxonomy-runtime.js');
+const { createTagRules } = require('../../scripts/lib/taxonomy-runtime.js');
 const registryChange = require('../../scripts/lib/taxonomy-registry-change.js');
-const taxonomyApi = require('../../scripts/lib/paper-taxonomy.js');
+const tagCatalogApi = require('../../scripts/lib/paper-taxonomy.js');
 const resealApi = require('../../scripts/lib/taxonomy-reseal.js');
 
 const REGISTRY_FILE = path.resolve(__dirname, '../../config/paper-taxonomy.json');
@@ -24,11 +24,11 @@ const DESTRUCTIVE_OLD_SHA = '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f6
 const EXECUTION_ID = '11111111-1111-4111-8111-111111111111';
 const PAPER_ID = 'conference:test:2026:paper-one';
 
-const runtime = () => createTaxonomyRuntime({ registryPath: REGISTRY_FILE });
+const runtime = () => createTagRules({ registryPath: REGISTRY_FILE });
 const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function annotationFor(fromRegistrySha256, options = {}) {
-    const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+    const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
     // 换表（v1.1）后 dcf83f84→当前 的分级由 additive 变为可确认的 destructive；

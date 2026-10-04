@@ -40,7 +40,7 @@ def _string(value, name):
         raise ValueError(f'{name}: expected nonempty trimmed string without controls')
 
 
-def validate_taxonomy(data):
+def validate_tag_catalog(data):
     _object(data, {'version', 'facets', 'concepts'}, 'taxonomy')
     if data['version'] != 'paper-taxonomy-v1':
         raise ValueError('Unsupported taxonomy version')
@@ -117,19 +117,19 @@ def validate_taxonomy(data):
     return data
 
 
-def _registry_data(taxonomy):
-    if not isinstance(taxonomy, dict):
+def _registry_data(tag_catalog):
+    if not isinstance(tag_catalog, dict):
         raise ValueError('taxonomy: expected registry')
     expected = {'version', 'facets', 'concepts'}
-    if 'registrySha256' in taxonomy:
+    if 'registrySha256' in tag_catalog:
         expected.add('registrySha256')
-        if not isinstance(taxonomy['registrySha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', taxonomy['registrySha256']):
+        if not isinstance(tag_catalog['registrySha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', tag_catalog['registrySha256']):
             raise ValueError('taxonomy: invalid registry SHA metadata')
-    _object(taxonomy, expected, 'taxonomy')
-    return validate_taxonomy({key: taxonomy.get(key) for key in ('version', 'facets', 'concepts')})
+    _object(tag_catalog, expected, 'taxonomy')
+    return validate_tag_catalog({key: tag_catalog.get(key) for key in ('version', 'facets', 'concepts')})
 
 
-def load_taxonomy(file_path=None):
+def load_tag_catalog(file_path=None):
     if file_path is None:
         import taxonomy_paths
         file_path = taxonomy_paths.TAXONOMY_REGISTRY_FILE
@@ -145,13 +145,13 @@ def load_taxonomy(file_path=None):
         return value
     # Match Node's fatal TextDecoder: UTF-8 BOM is discarded for parsing, while
     # the digest continues to bind the complete original byte sequence.
-    data = validate_taxonomy(json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique_object))
+    data = validate_tag_catalog(json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique_object))
     return {**data, 'registrySha256': hashlib.sha256(raw).hexdigest()}
 
 
-def active_preferred_labels(taxonomy, facets=None):
+def active_preferred_labels(tag_catalog, facets=None):
     """Return the canonical Chinese publication labels for active concepts."""
-    data = _registry_data(taxonomy)
+    data = _registry_data(tag_catalog)
     if facets is None:
         selected_facets = set(FACET_IDS)
     else:
@@ -167,10 +167,10 @@ def active_preferred_labels(taxonomy, facets=None):
     return labels
 
 
-def build_prompt_projection(taxonomy):
+def build_tag_prompt_text(tag_catalog):
     """Replay the compact prompt projection produced by the Node runtime."""
-    data = _registry_data(taxonomy)
-    registry_sha = taxonomy.get('registrySha256')
+    data = _registry_data(tag_catalog)
+    registry_sha = tag_catalog.get('registrySha256')
     if not isinstance(registry_sha, str) or not re.fullmatch(r'[a-f0-9]{64}', registry_sha):
         raise ValueError('taxonomy projection requires registrySha256')
     facet_order = {facet['id']: index for index, facet in enumerate(data['facets'])}
@@ -198,11 +198,11 @@ def build_prompt_projection(taxonomy):
     return '\n'.join(lines) + '\n'
 
 
-def prompt_projection_sha256(taxonomy):
-    return hashlib.sha256(build_prompt_projection(taxonomy).encode('utf-8')).hexdigest()
+def tag_prompt_text_sha256(tag_catalog):
+    return hashlib.sha256(build_tag_prompt_text(tag_catalog).encode('utf-8')).hexdigest()
 
 
-def resolve_label_candidates(taxonomy, label, facet=None, *, mode=LABEL_MODE_LEGACY):
+def resolve_label_candidates(tag_catalog, label, facet=None, *, mode=LABEL_MODE_LEGACY):
     """Resolve a label without guessing across concepts.
 
     ``current`` is the production-safe namespace: only the normalized Chinese
@@ -213,7 +213,7 @@ def resolve_label_candidates(taxonomy, label, facet=None, *, mode=LABEL_MODE_LEG
     remain responsible for rejecting deprecated concepts rather than silently
     following ``replacedBy``.
     """
-    data = _registry_data(taxonomy)
+    data = _registry_data(tag_catalog)
     if facet is not None and facet not in FACET_IDS:
         raise ValueError(f'Unknown facet: {facet}')
     if mode not in LABEL_MODES:
@@ -236,18 +236,18 @@ def resolve_label_candidates(taxonomy, label, facet=None, *, mode=LABEL_MODE_LEG
     return matches
 
 
-def resolve_label(taxonomy, label, facet=None, *, mode=LABEL_MODE_LEGACY):
-    matches = resolve_label_candidates(taxonomy, label, facet, mode=mode)
+def resolve_label(tag_catalog, label, facet=None, *, mode=LABEL_MODE_LEGACY):
+    matches = resolve_label_candidates(tag_catalog, label, facet, mode=mode)
     return matches[0] if len(matches) == 1 else None
 
 
-def resolve_current_label(taxonomy, label, facet=None):
+def resolve_current_label(tag_catalog, label, facet=None):
     """Resolve only an active Chinese preferred label."""
-    return resolve_label(taxonomy, label, facet, mode=LABEL_MODE_CURRENT)
+    return resolve_label(tag_catalog, label, facet, mode=LABEL_MODE_CURRENT)
 
 
-def ancestors(taxonomy, cid):
-    data = _registry_data(taxonomy)
+def ancestors(tag_catalog, cid):
+    data = _registry_data(tag_catalog)
     ids = {concept['id']: concept for concept in data['concepts']}
     if not isinstance(cid, str) or cid not in ids:
         raise ValueError(f'Unknown concept ID: {cid}')
@@ -258,11 +258,11 @@ def ancestors(taxonomy, cid):
     return result
 
 
-def prune_ancestors(taxonomy, ids):
-    _registry_data(taxonomy)
+def prune_ancestors(tag_catalog, ids):
+    _registry_data(tag_catalog)
     if not isinstance(ids, list) or any(not isinstance(cid, str) for cid in ids):
         raise ValueError('ids must be string array')
-    covered = {parent for cid in ids for parent in ancestors(taxonomy, cid)}
+    covered = {parent for cid in ids for parent in ancestors(tag_catalog, cid)}
     return [cid for cid in ids if cid not in covered]
 
 

@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const path = require('node:path');
-const taxonomyApi = require('./paper-taxonomy.js');
+const tagCatalogApi = require('./paper-taxonomy.js');
 
 const TAXONOMY_PROJECTION_CONTRACT = 'paper-taxonomy-prompt-projection-v1';
 const TAXONOMY_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1';
@@ -21,15 +21,15 @@ function compactText(value) {
     return String(value || '').replace(/[\r\n|]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function buildPromptProjection(taxonomy) {
-    const facets = new Map(taxonomy.facets.map((facet, index) => [facet.id, { ...facet, index }]));
-    const active = taxonomy.concepts.filter(concept => concept.status === 'active')
+function buildTagPromptText(tagCatalog) {
+    const facets = new Map(tagCatalog.facets.map((facet, index) => [facet.id, { ...facet, index }]));
+    const active = tagCatalog.concepts.filter(concept => concept.status === 'active')
         .sort((a, b) => facets.get(a.facet).index - facets.get(b.facet).index
             || a.id.localeCompare(b.id));
     const lines = [
         `contract=${TAXONOMY_PROJECTION_CONTRACT}`,
-        `registry_version=${taxonomy.version}`,
-        `registry_sha256=${taxonomy.registrySha256}`,
+        `registry_version=${tagCatalog.version}`,
+        `registry_sha256=${tagCatalog.registrySha256}`,
         '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。'
     ];
     let currentFacet = null;
@@ -48,20 +48,20 @@ function buildPromptProjection(taxonomy) {
     return `${lines.join('\n')}\n`;
 }
 
-function createTaxonomyRuntime(options = {}) {
-    const taxonomy = options.taxonomy || taxonomyApi.loadTaxonomy(
+function createTagRules(options = {}) {
+    const tagCatalog = options.taxonomy || tagCatalogApi.loadTagCatalog(
         options.registryPath || DEFAULT_REGISTRY_PATH
     );
-    taxonomyApi.validateTaxonomy({
-        version: taxonomy.version,
-        facets: taxonomy.facets,
-        concepts: taxonomy.concepts
+    tagCatalogApi.validateTagCatalog({
+        version: tagCatalog.version,
+        facets: tagCatalog.facets,
+        concepts: tagCatalog.concepts
     });
-    if (!/^[a-f0-9]{64}$/.test(String(taxonomy.registrySha256 || ''))) {
+    if (!/^[a-f0-9]{64}$/.test(String(tagCatalog.registrySha256 || ''))) {
         throw new Error('taxonomy runtime requires a raw registry SHA');
     }
 
-    const active = taxonomy.concepts.filter(concept => concept.status === 'active');
+    const active = tagCatalog.concepts.filter(concept => concept.status === 'active');
     const byPreferredTag = new Map();
     for (const concept of active) {
         const tag = preferredTag(concept);
@@ -70,7 +70,7 @@ function createTaxonomyRuntime(options = {}) {
         }
         byPreferredTag.set(tag, concept);
     }
-    const projection = buildPromptProjection(taxonomy);
+    const projection = buildTagPromptText(tagCatalog);
     const allowedTags = new Set(byPreferredTag.keys());
     const taskTags = new Set(active.filter(concept => concept.facet === 'task').map(preferredTag));
     const methodTags = new Set(active.filter(concept => concept.facet === 'method').map(preferredTag));
@@ -90,7 +90,7 @@ function createTaxonomyRuntime(options = {}) {
             );
             return historicalMethod ? structuredClone(historicalMethod) : null;
         }
-        const candidates = taxonomyApi.resolveLabelCandidates(taxonomy, value, facet)
+        const candidates = tagCatalogApi.resolveLabelCandidates(tagCatalog, value, facet)
             .filter(concept => concept.status === 'active');
         return candidates.length === 1 ? candidates[0] : null;
     }
@@ -103,7 +103,7 @@ function createTaxonomyRuntime(options = {}) {
     // 校验过一次，这里只保留本地 id→parent 映射；Python 侧
     // utils._validate_tag_selection 是同构实现。
     const parentByConceptId = new Map(
-        taxonomy.concepts.map(concept => [concept.id, concept.broaderId])
+        tagCatalog.concepts.map(concept => [concept.id, concept.broaderId])
     );
     function ancestorIds(conceptId) {
         const chain = [];
@@ -115,7 +115,7 @@ function createTaxonomyRuntime(options = {}) {
         return chain;
     }
     function activeDescendants(conceptId) {
-        return taxonomy.concepts.filter(concept =>
+        return tagCatalog.concepts.filter(concept =>
             concept.status === 'active'
             && concept.id !== conceptId
             && ancestorIds(concept.id).includes(conceptId));
@@ -138,10 +138,10 @@ function createTaxonomyRuntime(options = {}) {
         if (!method) errors.push('主方法标签必须是 active method 中文首选标签');
         if (task && !ids.includes(task.id)) errors.push('主任务标签必须出现在完整标签列表');
         if (method && !ids.includes(method.id)) errors.push('主方法标签必须出现在完整标签列表');
-        if (task && ids.some(id => taxonomyApi.ancestors(taxonomy, id).includes(task.id))) {
+        if (task && ids.some(id => tagCatalogApi.ancestors(tagCatalog, id).includes(task.id))) {
             errors.push('主任务标签不是所选任务中的最具体概念');
         }
-        if (ids.length && taxonomyApi.pruneAncestors(taxonomy, ids).length !== ids.length) {
+        if (ids.length && tagCatalogApi.pruneAncestors(tagCatalog, ids).length !== ids.length) {
             errors.push('标签不得同时包含祖先与后代概念');
         }
 
@@ -173,8 +173,8 @@ function createTaxonomyRuntime(options = {}) {
         return {
             valid: errors.length === 0,
             errors: [...new Set(errors)],
-            registryVersion: taxonomy.version,
-            registrySha256: taxonomy.registrySha256,
+            registryVersion: tagCatalog.version,
+            registrySha256: tagCatalog.registrySha256,
             primaryTaskId: task?.id || null,
             primaryMethodId: method?.id || null,
             conceptIds: errors.length ? [] : ids,
@@ -183,9 +183,9 @@ function createTaxonomyRuntime(options = {}) {
     }
 
     return Object.freeze({
-        taxonomy,
-        registryVersion: taxonomy.version,
-        registrySha256: taxonomy.registrySha256,
+        taxonomy: tagCatalog,
+        registryVersion: tagCatalog.version,
+        registrySha256: tagCatalog.registrySha256,
         projection,
         projectionSha256: sha256(projection),
         projectionContract: TAXONOMY_PROJECTION_CONTRACT,
@@ -201,8 +201,8 @@ function createTaxonomyRuntime(options = {}) {
 }
 
 let defaultRuntime;
-function getDefaultTaxonomyRuntime() {
-    if (!defaultRuntime) defaultRuntime = createTaxonomyRuntime();
+function getDefaultTagRules() {
+    if (!defaultRuntime) defaultRuntime = createTagRules();
     return defaultRuntime;
 }
 
@@ -211,7 +211,7 @@ module.exports = {
     TAXONOMY_SELECTION_CONTRACT,
     TAXONOMY_FLAT_COMPAT_CONTRACT,
     DEFAULT_REGISTRY_PATH,
-    buildPromptProjection,
-    createTaxonomyRuntime,
-    getDefaultTaxonomyRuntime
+    buildTagPromptText,
+    createTagRules,
+    getDefaultTagRules
 };

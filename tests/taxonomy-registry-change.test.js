@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
-const taxonomyApi = require('../scripts/lib/paper-taxonomy.js');
+const tagCatalogApi = require('../scripts/lib/paper-taxonomy.js');
 const api = require('../scripts/lib/taxonomy-registry-change.js');
 
 const CURRENT = path.resolve(__dirname, '../config/paper-taxonomy.json');
@@ -41,7 +41,7 @@ const ADDITIVE_FROM_CONCEPT_ID = 'task.wake-word';
 function syntheticAdditiveUpgrade(current) {
     const from = clone(raw());
     from.concepts = from.concepts.filter(concept => concept.id !== ADDITIVE_FROM_CONCEPT_ID);
-    taxonomyApi.validateTaxonomy(from);
+    tagCatalogApi.validateTagCatalog(from);
     const registrySha256 = crypto.createHash('sha256')
         .update(JSON.stringify(from, null, 2), 'utf8').digest('hex');
     const withSha = { ...from, registrySha256 };
@@ -53,7 +53,7 @@ function syntheticAdditiveUpgrade(current) {
 }
 
 test('identical registry bytes classify as none with empty reasons', () => {
-    const registry = taxonomyApi.loadTaxonomy(CURRENT);
+    const registry = tagCatalogApi.loadTagCatalog(CURRENT);
     const detail = expectLevel(registry, registry, 'none');
     assert.equal(detail.reasons.length, 0);
     assert.equal(detail.oldRegistrySha256, detail.newRegistrySha256);
@@ -112,7 +112,7 @@ test('deleting a concept, relabelling, repointing broaderId, deactivating and dr
     const aliasOwner = aliasDrop.concepts.find(concept => concept.aliases.length);
     const dropped = aliasOwner.aliases[0];
     aliasOwner.aliases = aliasOwner.aliases.slice(1);
-    taxonomyApi.validateTaxonomy(aliasDrop);
+    tagCatalogApi.validateTagCatalog(aliasDrop);
     expectLevel(raw(), aliasDrop, 'destructive', ['alias-removed']);
     assert.ok(dropped);
 });
@@ -122,7 +122,7 @@ test('reactivating a deprecated concept is additive', () => {
     const victim = byId(deprecated, 'task.wake-word');
     victim.status = 'deprecated';
     victim.replacedBy = 'task.keyword-detection';
-    taxonomyApi.validateTaxonomy(deprecated);
+    tagCatalogApi.validateTagCatalog(deprecated);
 
     const detail = expectLevel(deprecated, raw(), 'additive', ['status-reactivated']);
     assert.equal(detail.counts.conceptsAdded, 0);
@@ -141,21 +141,21 @@ test('colliding active Chinese preferred labels across facets are destructive', 
         status: 'active',
         replacedBy: null
     });
-    taxonomyApi.validateTaxonomy(next);
+    tagCatalogApi.validateTagCatalog(next);
 
     const detail = expectLevel(raw(), next, 'destructive', ['active-label-not-globally-unique']);
     assert.ok(detail.reasons.some(reason => reason.code === 'active-label-not-globally-unique'
         && reason.conceptIds.length === 2));
 });
 
-// 评审复现场景：把另一分面已占用的标签当别名加进来 —— validateTaxonomy 的
+// 评审复现场景：把另一分面已占用的标签当别名加进来 —— validateTagCatalog 的
 // 标签唯一性只在分面内（scripts/lib/paper-taxonomy.js 的 key 是 facet\0归一
 // 标签），registry 校验能过、旧分级还会判 additive，但解析期该标签的候选数
 // 会由 1 变 2，所以必须判 destructive / label-collision。
 test('cross-facet collisions over every registry label are destructive (label-collision)', () => {
     const aliasCollision = clone(raw());
     byId(aliasCollision, 'method.transformer').aliases.push('语音识别');
-    taxonomyApi.validateTaxonomy(aliasCollision);
+    tagCatalogApi.validateTagCatalog(aliasCollision);
 
     const detail = expectLevel(raw(), aliasCollision, 'destructive', ['label-collision']);
     const collisions = detail.reasons.filter(reason => reason.code === 'label-collision');
@@ -170,7 +170,7 @@ test('cross-facet collisions over every registry label are destructive (label-co
     // 英文首选标签同样参与扫描。
     const enCollision = clone(raw());
     byId(enCollision, 'method.transformer').aliases.push('Automatic speech recognition');
-    taxonomyApi.validateTaxonomy(enCollision);
+    tagCatalogApi.validateTagCatalog(enCollision);
     expectLevel(raw(), enCollision, 'destructive', ['label-collision']);
 
     // deprecated 概念的标签也参与扫描（解析器不会因 deprecated 而跳过 legacy 模式）。
@@ -186,18 +186,18 @@ test('cross-facet collisions over every registry label are destructive (label-co
         status: 'deprecated',
         replacedBy: 'signal.speech'
     });
-    taxonomyApi.validateTaxonomy(deprecatedCollision);
+    tagCatalogApi.validateTagCatalog(deprecatedCollision);
     const deprecatedDetail = expectLevel(raw(), deprecatedCollision, 'destructive',
         ['label-collision', 'deprecated-concept-added']);
     assert.ok(deprecatedDetail.reasons.some(reason => reason.code === 'label-collision'
         && reason.tag === '#语音识别'
         && reason.conceptIds.includes('signal.voice-recognition')));
 
-    // 只在同一分面内出现的重复不会走到这里：validateTaxonomy 直接抛错。
+    // 只在同一分面内出现的重复不会走到这里：validateTagCatalog 直接抛错。
     assert.throws(() => {
         const inFacet = clone(raw());
         byId(inFacet, 'method.transformer').aliases.push('端到端学习');
-        taxonomyApi.validateTaxonomy(inFacet);
+        tagCatalogApi.validateTagCatalog(inFacet);
         api.classifyRegistryChange(raw(), inFacet);
     }, /Ambiguous label in facet/);
 });
@@ -215,9 +215,9 @@ test('registry validation still fails closed on an impossible facet migration', 
 // seed → current 也翻成了 destructive（可确认白名单内）。“按文档分类”的测试
 // 意图不变：期望仍逐条写死，任何分级漂移都会立刻暴露。
 test('real historical registry transitions classify as documented', () => {
-    const seed = taxonomyApi.loadTaxonomy(OLD_SEED);
-    const aliasRemoval = taxonomyApi.loadTaxonomy(OLD_ALIAS_REMOVAL);
-    const current = taxonomyApi.loadTaxonomy(CURRENT);
+    const seed = tagCatalogApi.loadTagCatalog(OLD_SEED);
+    const aliasRemoval = tagCatalogApi.loadTagCatalog(OLD_ALIAS_REMOVAL);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
 
     // 历史 seed → aliasRemoval 新增 method.end-to-end-learning，其别名“端到端”
     // 与“End-to-end”撞上既有 setting.end-to-end 的 zh/en 首选（跨分面、候选由 1
@@ -286,8 +286,8 @@ test('snapshots resolve by byte SHA and refuse mismatching content', () => {
 // 改 broaderId、改首选标签），不再有“additive 注记直接放行”的形态；destructive
 // 注记的唯一合法构造就是显式 acknowledgeDestructive=true（构建期 fail-closed）。
 test('registryUpgradeFrom annotation is built and verified against the recomputed level', () => {
-    const from = taxonomyApi.loadTaxonomy(OLD_SEED);
-    const to = taxonomyApi.loadTaxonomy(CURRENT);
+    const from = tagCatalogApi.loadTagCatalog(OLD_SEED);
+    const to = tagCatalogApi.loadTagCatalog(CURRENT);
     const { changeLevel, detail } = api.classifyRegistryChange(from, to);
     assert.equal(changeLevel, 'destructive');
     assert.equal(api.canAcknowledgeRegistryChange(detail), true);
@@ -337,9 +337,9 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
 // 取回、注记自洽、conceptIds 仍 active）一条不少，缺任一仍 fail-closed。additive
 // 复算的放行路径改用合成旧表复现（见 syntheticAdditiveUpgrade）。
 test('seal upgrade gate admits acknowledged destructive upgrades, fails closed otherwise', () => {
-    const current = taxonomyApi.loadTaxonomy(CURRENT);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
     const conceptIds = ['task.asr', 'method.transformer'];
-    const seed = taxonomyApi.loadTaxonomy(OLD_SEED);
+    const seed = tagCatalogApi.loadTagCatalog(OLD_SEED);
     const { changeLevel, detail } = api.classifyRegistryChange(seed, current);
     assert.equal(changeLevel, 'destructive');
     assert.equal(api.canAcknowledgeRegistryChange(detail), true);
@@ -383,7 +383,7 @@ test('seal upgrade gate admits acknowledged destructive upgrades, fails closed o
     assert.equal(missingSnapshot.ok, false);
     assert.match(missingSnapshot.error, /快照/);
 
-    const aliasRemoval = taxonomyApi.loadTaxonomy(OLD_ALIAS_REMOVAL);
+    const aliasRemoval = tagCatalogApi.loadTagCatalog(OLD_ALIAS_REMOVAL);
     const lying = api.buildRegistryUpgradeAnnotation({
         from: aliasRemoval,
         to: current,
@@ -584,7 +584,7 @@ function fullReasonCounts(reasons) {
 test('Node and Python registry upgrade gates agree on the shared fixture', () => {
     const fixture = JSON.parse(fs.readFileSync(CROSS_END_FIXTURE, 'utf8'));
     assert.equal(fixture.contract, 'paper-taxonomy-registry-upgrade-cross-end-fixture-v1');
-    const current = taxonomyApi.loadTaxonomy(CURRENT);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
     assert.deepEqual(Object.keys(CROSS_END_DISPLAY_EXPECTATIONS).sort(),
         fixture.cases.map(item => item.name).sort());
     const classificationInputs = [
@@ -724,8 +724,8 @@ test('acknowledgement eligibility is an explicit whitelist of parse-semantic cha
 });
 
 test('destructive reasonsHash is a stable, message-independent fingerprint of the recomputed detail', () => {
-    const from = taxonomyApi.loadTaxonomy(OLD_ALIAS_REMOVAL);
-    const current = taxonomyApi.loadTaxonomy(CURRENT);
+    const from = tagCatalogApi.loadTagCatalog(OLD_ALIAS_REMOVAL);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
     const { detail } = api.classifyRegistryChange(from, current);
     const hash = api.destructiveReasonsHash(detail);
     assert.match(hash, /^[a-f0-9]{64}$/);
@@ -769,8 +769,8 @@ test('destructive reasonsHash is a stable, message-independent fingerprint of th
 });
 
 test('the seal gate admits an acknowledged destructive upgrade only when all four doors hold', () => {
-    const current = taxonomyApi.loadTaxonomy(CURRENT);
-    const from = taxonomyApi.loadTaxonomy(OLD_ALIAS_REMOVAL);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    const from = tagCatalogApi.loadTagCatalog(OLD_ALIAS_REMOVAL);
     const conceptIds = ['task.asr', 'method.transformer'];
     const { changeLevel, detail } = api.classifyRegistryChange(from, current);
     assert.equal(changeLevel, 'destructive');

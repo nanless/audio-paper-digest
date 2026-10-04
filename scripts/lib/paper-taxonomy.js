@@ -26,7 +26,7 @@ function string(value, name) {
         || /[\u0000-\u001f\u007f]/u.test(value)) throw new Error(`${name}: expected nonempty trimmed string without controls`);
 }
 
-function validateTaxonomy(data) {
+function validateTagCatalog(data) {
     object(data, ['version', 'facets', 'concepts'], 'taxonomy');
     if (data.version !== 'paper-taxonomy-v1') throw new Error('Unsupported taxonomy version');
     if (!Array.isArray(data.facets) || data.facets.length !== FACET_IDS.length) throw new Error('taxonomy: all nine facets required');
@@ -92,21 +92,21 @@ function validateTaxonomy(data) {
     return data;
 }
 
-function registryData(taxonomy) {
-    if (!taxonomy || typeof taxonomy !== 'object') throw new Error('taxonomy: expected registry');
-    if (Object.prototype.hasOwnProperty.call(taxonomy, 'registrySha256')) {
-        object(taxonomy, ['version', 'facets', 'concepts', 'registrySha256'], 'loaded taxonomy');
-        if (typeof taxonomy.registrySha256 !== 'string' || !/^[a-f0-9]{64}$/.test(taxonomy.registrySha256)) throw new Error('Invalid registrySha256');
+function registryData(tagCatalog) {
+    if (!tagCatalog || typeof tagCatalog !== 'object') throw new Error('taxonomy: expected registry');
+    if (Object.prototype.hasOwnProperty.call(tagCatalog, 'registrySha256')) {
+        object(tagCatalog, ['version', 'facets', 'concepts', 'registrySha256'], 'loaded taxonomy');
+        if (typeof tagCatalog.registrySha256 !== 'string' || !/^[a-f0-9]{64}$/.test(tagCatalog.registrySha256)) throw new Error('Invalid registrySha256');
     } else {
-        object(taxonomy, ['version', 'facets', 'concepts'], 'taxonomy');
+        object(tagCatalog, ['version', 'facets', 'concepts'], 'taxonomy');
     }
     // Loaded SHA is metadata, never part of validation or label authority.
-    const data = { version: taxonomy.version, facets: taxonomy.facets, concepts: taxonomy.concepts };
-    validateTaxonomy(data);
+    const data = { version: tagCatalog.version, facets: tagCatalog.facets, concepts: tagCatalog.concepts };
+    validateTagCatalog(data);
     return data;
 }
 
-function loadTaxonomy(filePath) {
+function loadTagCatalog(filePath) {
     const target = filePath === undefined ? require('../config.js').FILES.taxonomyRegistry : filePath;
     if (typeof target !== 'string' || !target) throw new Error('taxonomyRegistry path required');
     const bytes = fs.readFileSync(target);
@@ -129,18 +129,18 @@ function loadTaxonomy(filePath) {
             top.expectKey = false;
         }
     }
-    const data = validateTaxonomy(parsed);
+    const data = validateTagCatalog(parsed);
     return { ...data, registrySha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }
 
-function resolveLabel(taxonomy, label, facet) {
-    const matches = resolveLabelCandidates(taxonomy, label, facet);
+function resolveLabel(tagCatalog, label, facet) {
+    const matches = resolveLabelCandidates(tagCatalog, label, facet);
     // Deprecated concepts remain explicit objects; no silent forward migration.
     return matches.length === 1 ? matches[0] : null;
 }
 
-function resolveLabelCandidates(taxonomy, label, facet) {
-    const data = registryData(taxonomy);
+function resolveLabelCandidates(tagCatalog, label, facet) {
+    const data = registryData(tagCatalog);
     if (facet === null) facet = undefined;
     if (facet !== undefined && !FACET_IDS.includes(facet)) throw new Error(`Unknown facet: ${facet}`);
     const normalized = normalizeLabel(label);
@@ -150,8 +150,8 @@ function resolveLabelCandidates(taxonomy, label, facet) {
     return matches.map(item => structuredClone(item));
 }
 
-function ancestors(taxonomy, id) {
-    const data = registryData(taxonomy);
+function ancestors(tagCatalog, id) {
+    const data = registryData(tagCatalog);
     const byId = new Map(data.concepts.map(c => [c.id, c]));
     if (!byId.has(id)) throw new Error(`Unknown concept ID: ${id}`);
     const result = [];
@@ -163,12 +163,12 @@ function ancestors(taxonomy, id) {
     return result;
 }
 
-function pruneAncestors(taxonomy, ids) {
-    registryData(taxonomy);
+function pruneAncestors(tagCatalog, ids) {
+    registryData(tagCatalog);
     if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) throw new Error('ids must be string array');
-    const covered = new Set(ids.flatMap(id => ancestors(taxonomy, id)));
+    const covered = new Set(ids.flatMap(id => ancestors(tagCatalog, id)));
     return ids.filter(id => !covered.has(id));
 }
 
-module.exports = { loadTaxonomy, validateTaxonomy, normalizeLabel, resolveLabelCandidates,
+module.exports = { loadTagCatalog, validateTagCatalog, normalizeLabel, resolveLabelCandidates,
     resolveLabel, ancestors, pruneAncestors };

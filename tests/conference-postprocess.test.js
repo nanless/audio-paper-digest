@@ -7,8 +7,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const api = require('../scripts/lib/conference-postprocess.js');
-const taxonomyApi = require('../scripts/lib/paper-taxonomy.js');
-const { createTaxonomyRuntime } = require('../scripts/lib/taxonomy-runtime.js');
+const tagCatalogApi = require('../scripts/lib/paper-taxonomy.js');
+const { createTagRules } = require('../scripts/lib/taxonomy-runtime.js');
 const cli = require('../scripts/conference-postprocess.js');
 const executionCli = require('../scripts/conference-execution.js');
 const adapter = require('../scripts/lib/conference-analysis-adapter.js');
@@ -19,10 +19,10 @@ const { validAnalysisPaper, validAnalysisText } = require('./valid-analysis-fixt
 const TAXONOMY = path.resolve(__dirname, '../config/paper-taxonomy.json');
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
-const TAXONOMY_RUNTIME = createTaxonomyRuntime({ registryPath: TAXONOMY });
+const TAG_RULES = createTagRules({ registryPath: TAXONOMY });
 
 function currentTag(id) {
-    const concept = TAXONOMY_RUNTIME.taxonomy.concepts.find(item => item.id === id && item.status === 'active');
+    const concept = TAG_RULES.taxonomy.concepts.find(item => item.id === id && item.status === 'active');
     assert.ok(concept, `conference fixture requires active taxonomy concept ${id}`);
     return `#${concept.preferredLabel.zh}`;
 }
@@ -33,7 +33,7 @@ function currentSelection() {
         primaryTaskTag: currentTag('task.asr'),
         primaryMethodTag: currentTag('method.transformer')
     };
-    const validation = TAXONOMY_RUNTIME.validateTagSelection(selection);
+    const validation = TAG_RULES.validateTagSelection(selection);
     assert.equal(validation.valid, true, `conference fixture taxonomy is invalid: ${validation.errors.join('; ')}`);
     return selection;
 }
@@ -145,7 +145,7 @@ test('generic conference stage binds sealed completion, identity, taxonomy and r
     assert.equal(result.manifest.scoringContract, 'api-scoring-audit-v2');
     assert.equal(Object.keys(result.manifest.scoreDimensions).length, 8);
     assert.doesNotMatch(result.markdown, /arxiv/i); assert.deepEqual(result.manifest.capabilities, WEAK);
-    const registry = taxonomyApi.loadTaxonomy(TAXONOMY);
+    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY);
     const replayed = api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
     assert.equal(replayed.manifest.manifestSha256, result.manifest.manifestSha256);
@@ -341,7 +341,7 @@ test('aggregate rejects a selected-member subset and executions from another aut
 });
 
 test('multi-level taxonomy hierarchy counts direct and subtree papers on every level', () => {
-    const registry = taxonomyApi.loadTaxonomy(TAXONOMY);
+    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY);
     const hierarchy = api.aggregateHierarchy(registry, [
         ['task.asr', 'method.transformer', 'research_focus.robustness'],
         ['task.av-asr', 'method.transformer', 'research_focus.robustness'],
@@ -420,7 +420,7 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
         taxonomyFile: TAXONOMY, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
     const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds, taxonomyFile: TAXONOMY,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
-    const registry = taxonomyApi.loadTaxonomy(TAXONOMY);
+    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY);
     const hierarchy = result.manifest.taxonomyHierarchy;
     assert.equal(hierarchy.contract, api.HIERARCHY_CONTRACT);
     assert.equal(hierarchy.registrySha256, registry.registrySha256);
@@ -497,7 +497,7 @@ test('loadStage re-renders current completion and rejects re-signed metadata or 
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     const staged = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
-    const registry = taxonomyApi.loadTaxonomy(TAXONOMY); const directory = path.join(stagingRoot, f.one,
+    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY); const directory = path.join(stagingRoot, f.one,
         registry.registrySha256, staged.manifest.implementation.implementationSha256);
     const manifestFile = path.join(directory, 'manifest.json'); const manifest = JSON.parse(fs.readFileSync(manifestFile));
     manifest.title = 'attacker title'; const body = structuredClone(manifest); delete body.manifestSha256;
@@ -601,7 +601,7 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
     assert.equal(review.assignment.primaryTaskId, null);
     assert.match(review.assignment.registrySha256, /^[a-f0-9]{64}$/);
     // Fail-closed: the blocked paper stages its assignment placeholder only.
-    const registry = taxonomyApi.loadTaxonomy(TAXONOMY);
+    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY);
     const registryRoot = path.join(stagingRoot, f.one, registry.registrySha256);
     const implementationRoot = path.join(registryRoot, fs.readdirSync(registryRoot)[0]);
     assert.deepEqual(fs.readdirSync(implementationRoot), ['assignment.json']);

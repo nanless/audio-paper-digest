@@ -16,7 +16,7 @@
 
 const path = require('node:path');
 const crypto = require('node:crypto');
-const taxonomyApi = require('./paper-taxonomy.js');
+const tagCatalogApi = require('./paper-taxonomy.js');
 
 const CHANGE_LEVELS = Object.freeze(['none', 'additive', 'destructive']);
 const REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1';
@@ -67,18 +67,18 @@ function isPlainObject(value) {
         && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 
-// 接受文件路径或已解析对象；返回经 validateTaxonomy 校验的 registry 快照。
+// 接受文件路径或已解析对象；返回经 validateTagCatalog 校验的 registry 快照。
 // 对象若没有 registrySha256 就记 null —— 分级不依赖字节 SHA，只有升级
 // 注记与快照查找才要求真实字节 SHA。
 function normalizeRegistry(value, label = 'registry') {
     if (typeof value === 'string') {
-        const loaded = taxonomyApi.loadTaxonomy(value);
+        const loaded = tagCatalogApi.loadTagCatalog(value);
         return { version: loaded.version, facets: loaded.facets,
             concepts: loaded.concepts, registrySha256: loaded.registrySha256 };
     }
     if (!isPlainObject(value)) throw new Error(`${label}: expected registry object or file path`);
     const data = { version: value.version, facets: value.facets, concepts: value.concepts };
-    taxonomyApi.validateTaxonomy(data);
+    tagCatalogApi.validateTagCatalog(data);
     const registrySha256 = value.registrySha256;
     if (registrySha256 !== undefined && registrySha256 !== null
         && !SHA256_RE.test(String(registrySha256))) throw new Error(`${label}: invalid registrySha256`);
@@ -86,7 +86,7 @@ function normalizeRegistry(value, label = 'registry') {
 }
 
 // active 概念的中文首选标签在全 registry 范围内必须唯一，否则
-// createTaxonomyRuntime 会直接抛错并让整个运行时不可用。
+// createTagRules 会直接抛错并让整个运行时不可用。
 function activeGlobalTags(registry) {
     const seen = new Map();
     for (const concept of registry.concepts) {
@@ -98,7 +98,7 @@ function activeGlobalTags(registry) {
     return { ok: true };
 }
 
-// 跨分面标签碰撞：validateTaxonomy 的标签唯一性只在分面内成立（key 是
+// 跨分面标签碰撞：validateTagCatalog 的标签唯一性只在分面内成立（key 是
 // facet\0归一标签），所以把一个已被别的分面占用的标签（首选或别名）塞进
 // 另一个分面时，registry 校验能过、分级却会误判 additive —— 可解析期该
 // 标签的候选数会从 1 变 2，运行时直接爆。这里对 to registry 的全部标签
@@ -109,7 +109,7 @@ function crossFacetLabelCollisions(registry) {
     for (const concept of registry.concepts) {
         const labels = [concept.preferredLabel.zh, concept.preferredLabel.en, ...concept.aliases];
         for (const raw of labels) {
-            const label = taxonomyApi.normalizeLabel(raw);
+            const label = tagCatalogApi.normalizeLabel(raw);
             if (!label) continue;
             let entry = byLabel.get(label);
             if (!entry) {
@@ -219,8 +219,8 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
                     `概念 ${concept.id} 已恢复为可选择状态，可用于新的分类`]);
             }
         }
-        const oldAliases = new Set(previous.aliases.map(value => taxonomyApi.normalizeLabel(value)).filter(Boolean));
-        const newAliases = new Set(concept.aliases.map(value => taxonomyApi.normalizeLabel(value)).filter(Boolean));
+        const oldAliases = new Set(previous.aliases.map(value => tagCatalogApi.normalizeLabel(value)).filter(Boolean));
+        const newAliases = new Set(concept.aliases.map(value => tagCatalogApi.normalizeLabel(value)).filter(Boolean));
         for (const alias of [...oldAliases].sort()) {
             if (newAliases.has(alias)) continue;
             counts.aliasesRemoved += 1;
@@ -417,7 +417,7 @@ function resolveRegistrySnapshot(registrySha256, options = {}) {
     const directory = options.historyDir || defaultHistoryDir();
     if (!directory) return null;
     try {
-        const loaded = taxonomyApi.loadTaxonomy(path.join(directory, `${sha}.json`));
+        const loaded = tagCatalogApi.loadTagCatalog(path.join(directory, `${sha}.json`));
         if (loaded.registrySha256 !== sha) return null;
         return { version: loaded.version, facets: loaded.facets,
             concepts: loaded.concepts, registrySha256: loaded.registrySha256 };

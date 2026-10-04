@@ -360,19 +360,19 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
             manifest.sourceAcquisition, sourceText), true);
         assert.equal(deep.sealedCoreSummaryRecoveryIsValid(
             locked, manifest, sourceText, 'structureRepair'), true);
-        const taxonomyRuntime = require('../scripts/lib/taxonomy-runtime.js')
-            .getDefaultTaxonomyRuntime();
+        const tagRules = require('../scripts/lib/taxonomy-runtime.js')
+            .getDefaultTagRules();
         const taxonomyParsed = require('../scripts/utils.js').parseAnalysis(locked.analysis);
         const taxonomyInputSha = runner.sha256(locked.analysis);
         const taxonomyProjectionSha = runner.sha256(
             contract.taxonomyProtectedProjection(locked.analysis)
         );
         const taxonomyBinding = {
-            registryVersion: taxonomyRuntime.registryVersion,
-            registrySha256: taxonomyRuntime.registrySha256,
-            projectionContract: taxonomyRuntime.projectionContract,
-            projectionSha256: taxonomyRuntime.projectionSha256,
-            selectionContract: taxonomyRuntime.selectionContract,
+            registryVersion: tagRules.registryVersion,
+            registrySha256: tagRules.registrySha256,
+            projectionContract: tagRules.projectionContract,
+            projectionSha256: tagRules.projectionSha256,
+            selectionContract: tagRules.selectionContract,
             inputAnalysisSha256: taxonomyInputSha,
             outputAnalysisSha256: taxonomyInputSha,
             inputProtectedProjectionSha256: taxonomyProjectionSha,
@@ -389,7 +389,7 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
         };
         manifest.contracts = {
             ...manifest.contracts,
-            taxonomy: taxonomyRuntime.selectionContract
+            taxonomy: tagRules.selectionContract
         };
         locked.analysisStageCheckpoints.taxonomySeal = locked.analysis;
         const repaired = await deep.repairCoreSummarySection(locked, locked.analysis, sourceText, null, {

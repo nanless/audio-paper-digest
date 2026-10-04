@@ -7,7 +7,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const api = require('../scripts/lib/historical-direct-taxonomy-supplement.js');
 const historicalRegistrySha256 = '15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778';
-const taxonomy = require('../scripts/lib/paper-taxonomy.js').loadTaxonomy(path.resolve(__dirname, '../config/taxonomy-registry-history', historicalRegistrySha256 + '.json'));
+const taxonomy = require('../scripts/lib/paper-taxonomy.js').loadTagCatalog(path.resolve(__dirname, '../config/taxonomy-registry-history', historicalRegistrySha256 + '.json'));
 // Historical canonical proofs must retain their original 228-concept snapshot.
 assert.equal(taxonomy.registrySha256, historicalRegistrySha256);
 assert.equal(taxonomy.concepts.length, 228);

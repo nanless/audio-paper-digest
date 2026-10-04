@@ -140,7 +140,7 @@ function defaultDependencies() {
     const engine = require('../analysis-engine.js');
     return { files: Config.FILES, now: () => new Date().toISOString(),
         readCrosswalk: args => require('./page-source-crosswalk.js').readCrosswalk(args),
-        recoverRun: args => history.recoverHistoricalArxivRun(args), loadTaxonomy: filename => registry.loadTaxonomy(filename),
+        recoverRun: args => history.recoverHistoricalArxivRun(args), loadTagCatalog: filename => registry.loadTagCatalog(filename),
         loadAnalysisRun: args => taxonomy.loadCompletedHistoricalAnalysisRun(args), runSnapshot: handle => taxonomy.runSnapshot(handle),
         buildAssignments: args => taxonomy.buildAssignments(args), writeAssignments: args => taxonomy.writeAssignments(args),
         stagePages: args => pageStaging.stageHistoricalPages(args),
@@ -180,7 +180,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
             && (!Number.isSafeInteger(options.limit) || options.limit < 1)
         || options.date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(options.date || '')) fail('invalid options');
     const analysisScheduler = readAnalysisScheduler(files.historicalAnalysisSchedulerDir, options.crosswalkId);
-    const taxonomy = deps.loadTaxonomy(files.taxonomyRegistry);
+    const taxonomy = deps.loadTagCatalog(files.taxonomyRegistry);
     if (!SHA_RE.test(taxonomy.registrySha256 || '')) fail('current taxonomy registry SHA is invalid');
     const rendererImplementationSha256 = typeof deps.rendererImplementationSha256 === 'function'
         ? deps.rendererImplementationSha256() : deps.rendererImplementationSha256;

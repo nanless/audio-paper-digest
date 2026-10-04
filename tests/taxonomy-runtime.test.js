@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const { parseAnalysis } = require('../scripts/utils.js');
 const contract = require('../scripts/analysis-contract.js');
 const {
-    createTaxonomyRuntime,
+    createTagRules,
     TAXONOMY_PROJECTION_CONTRACT,
     TAXONOMY_SELECTION_CONTRACT,
     TAXONOMY_FLAT_COMPAT_CONTRACT
@@ -16,7 +16,7 @@ const {
 const registryPath = path.resolve(__dirname, '../config/paper-taxonomy.json');
 
 test('runtime derives all active preferred labels, roles and compact projection from registry', () => {
-    const runtime = createTaxonomyRuntime({ registryPath });
+    const runtime = createTagRules({ registryPath });
     assert.equal(runtime.projectionContract, TAXONOMY_PROJECTION_CONTRACT);
     assert.equal(runtime.selectionContract, TAXONOMY_SELECTION_CONTRACT);
     assert.equal(runtime.flatCompatContract, TAXONOMY_FLAT_COMPAT_CONTRACT);
@@ -32,7 +32,7 @@ test('runtime derives all active preferred labels, roles and compact projection 
 });
 
 test('current selection accepts only preferred Chinese labels and rejects hierarchy duplication', () => {
-    const runtime = createTaxonomyRuntime({ registryPath });
+    const runtime = createTagRules({ registryPath });
     const valid = runtime.validateTagSelection({
         tags: ['#语音可懂度评估', '#众包评测', '#多语言', '#基准测试'],
         primaryTaskTag: '#语音可懂度评估',
@@ -59,7 +59,7 @@ test('current selection accepts only preferred Chinese labels and rejects hierar
 });
 
 test('selection contract caps the task facet at one primary plus two supplemental tasks', () => {
-    const runtime = createTaxonomyRuntime({ registryPath });
+    const runtime = createTagRules({ registryPath });
     const fourTasks = runtime.validateTagSelection({
         tags: ['#语音合成', '#语音克隆', '#音视频生成', '#音频理解', '#Transformer'],
         primaryTaskTag: '#语音合成',
@@ -94,7 +94,7 @@ test('selection contract caps the task facet at one primary plus two supplementa
 });
 
 test('primary task specificity is a whole-registry warning that never invalidates a sealed replay', () => {
-    const runtime = createTaxonomyRuntime({ registryPath });
+    const runtime = createTagRules({ registryPath });
     const analysis = [
         '## 机器摘要',
         'primary_task_tag: #语音识别',
@@ -167,7 +167,7 @@ test('primary task specificity is a whole-registry warning that never invalidate
 });
 
 test('research-method coverage gives dataset, benchmark, subjective, review and theory papers a real method', () => {
-    const runtime = createTaxonomyRuntime({ registryPath });
+    const runtime = createTagRules({ registryPath });
     const cases = [
         ['dataset', ['#语音识别', '#数据集构建', '#数据集'], '#语音识别', '#数据集构建'],
         ['benchmark', ['#语音识别', '#基准设计', '#基准测试'], '#语音识别', '#基准设计'],
@@ -227,7 +227,7 @@ primary_method_tag: #众包评测
 主任务标签：#语音可懂度评估
 主方法标签：#众包评测
 补充标签：#多语言 #基准测试`;
-    const runtime = createTaxonomyRuntime({ registryPath });
+    const runtime = createTagRules({ registryPath });
     const parsed = parseAnalysis(analysis);
     const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
     const protectedSha = textSha(require('../scripts/deep-analyzer.js')
@@ -293,7 +293,7 @@ primary_method_tag: #众包评测
 主方法标签：#众包评测
 补充标签：#多语言 #基准测试`;
     const inputAnalysis = outputAnalysis.replaceAll('#众包评测', '#端到端');
-    const runtime = createTaxonomyRuntime({ registryPath });
+    const runtime = createTagRules({ registryPath });
     const parsed = parseAnalysis(outputAnalysis);
     const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
     const binding = {

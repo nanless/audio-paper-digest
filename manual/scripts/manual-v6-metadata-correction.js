@@ -20,7 +20,7 @@ const {
     ALLOWED_TAGS, PRIMARY_TASK_TAGS, PRIMARY_METHOD_TAGS, DOCUMENT_TYPES,
     normalizedId, writeFileAtomic, getBeijingISOString
 } = require('../../scripts/utils.js');
-const { getDefaultTaxonomyRuntime } = require('../../scripts/lib/taxonomy-runtime.js');
+const { getDefaultTagRules } = require('../../scripts/lib/taxonomy-runtime.js');
 const { validateRecord, RECORDS_VERSION } = require('./create-manual-analysis-spec.js');
 const { stableSignatureSha256 } = require('./manual-signature-contract.js');
 const { withFileLockSync } = require('../../scripts/analysis-engine.js');
@@ -125,7 +125,7 @@ function validateExactMetadataFields(record, label = 'record') {
         || tags.join(' ') !== record.tags) {
         throw new Error(`${label}.tags 必须是规范空格分隔的 3-5 个不重复白名单标签并包含 task 与 primaryMethodTag`);
     }
-    const selection = getDefaultTaxonomyRuntime().validateTagSelection({
+    const selection = getDefaultTagRules().validateTagSelection({
         tags,
         primaryTaskTag: record.task,
         primaryMethodTag: record.primaryMethodTag

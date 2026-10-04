@@ -52,8 +52,8 @@ from utils import parse_analysis
 from paper_taxonomy import (
     TAXONOMY_PROJECTION_CONTRACT,
     TAXONOMY_SELECTION_CONTRACT,
-    load_taxonomy,
-    prompt_projection_sha256,
+    load_tag_catalog,
+    tag_prompt_text_sha256,
 )
 from llm_usage import record_llm_usage, with_llm_usage_context
 
@@ -576,8 +576,8 @@ def _manual_hash(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
-_PUBLISH_TAXONOMY = load_taxonomy()
-_PUBLISH_TAXONOMY_PROJECTION_SHA256 = prompt_projection_sha256(_PUBLISH_TAXONOMY)
+_PUBLISH_TAXONOMY = load_tag_catalog()
+_PUBLISH_TAXONOMY_PROJECTION_SHA256 = tag_prompt_text_sha256(_PUBLISH_TAXONOMY)
 
 
 def _taxonomy_section_bounds(analysis, title):
@@ -652,7 +652,7 @@ def _taxonomy_surface_sha256(analysis):
 # 的封口，Python 不得再靠硬等值把它拒掉；Node fail-closed 的状态 Python 同样拒。
 # 放在 publish_common.py 私有函数里（_validate_taxonomy_seal 的私有依赖），
 # 不改写 scripts/paper_taxonomy.py 的共享语义。
-from paper_taxonomy import _JS_WHITESPACE, normalize_label, validate_taxonomy  # noqa: E402
+from paper_taxonomy import _JS_WHITESPACE, normalize_label, validate_tag_catalog  # noqa: E402
 
 _REGISTRY_CHANGE_LEVELS = ('none', 'additive', 'destructive')
 _REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1'
@@ -669,14 +669,14 @@ def _taxonomy_registry_history_dir():
 
 def _normalize_registry(value, label='registry'):
     if isinstance(value, str):
-        loaded = load_taxonomy(value)
+        loaded = load_tag_catalog(value)
         return {'version': loaded['version'], 'facets': loaded['facets'],
                 'concepts': loaded['concepts'], 'registrySha256': loaded['registrySha256']}
     if type(value) is not dict:
         raise ValueError(f'{label}: expected registry object or file path')
     registry = {'version': value.get('version'), 'facets': value.get('facets'),
             'concepts': value.get('concepts')}
-    validate_taxonomy(registry)
+    validate_tag_catalog(registry)
     registry_sha = value.get('registrySha256')
     if registry_sha is not None and (
             not isinstance(registry_sha, str) or not _SHA256_RE.fullmatch(registry_sha)):
@@ -690,7 +690,7 @@ def _resolve_registry_snapshot(registry_sha256):
     if not _SHA256_RE.fullmatch(sha):
         return None
     try:
-        loaded = load_taxonomy(_taxonomy_registry_history_dir() / f'{sha}.json')
+        loaded = load_tag_catalog(_taxonomy_registry_history_dir() / f'{sha}.json')
     except Exception:  # noqa: BLE001 - 取回失败一律 fail-closed 返回 None
         return None
     if loaded.get('registrySha256') != sha:
@@ -716,7 +716,7 @@ def _cross_facet_label_collisions(registry):
     """to registry 全部标签的跨分面重复扫描（Node crossFacetLabelCollisions 镜像）。
 
     覆盖 active+deprecated 概念的 zh/en 首选与全部别名，统一经 normalize_label
-    归一；同一归一标签落在 ≥2 个分面即解析歧义。validateTaxonomy 的唯一性只在
+    归一；同一归一标签落在 ≥2 个分面即解析歧义。validateTagCatalog 的唯一性只在
     分面内成立，所以这类碰撞必须在这里判 destructive。
     """
     by_label = {}

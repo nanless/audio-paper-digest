@@ -79,7 +79,7 @@ from utils import strip_md, parse_analysis
 from paper_taxonomy import (
     TAXONOMY_FLAT_COMPAT_CONTRACT,
     TAXONOMY_SELECTION_CONTRACT,
-    load_taxonomy,
+    load_tag_catalog,
 )
 from tutorial_payload_verifier import (
     TUTORIAL_FORMAT_CONTRACT,
@@ -162,7 +162,7 @@ FINAL_PAGE_ARTIFACT_VERSION = 1
 RESEARCHER_WORKBENCH_CONTRACT = 'researcher-workbench-v1'
 RESEARCHER_SIDECAR_CONTRACT = 'researcher-sidecars-v1'
 FLAT_TAXONOMY_COMPAT_CONTRACT = TAXONOMY_FLAT_COMPAT_CONTRACT
-_PAGE_TAXONOMY = load_taxonomy()
+_PAGE_TAXONOMY = load_tag_catalog()
 _PAGE_TAXONOMY_BY_ID = {
     item['id']: item for item in _PAGE_TAXONOMY['concepts']
     if item['status'] == 'active'

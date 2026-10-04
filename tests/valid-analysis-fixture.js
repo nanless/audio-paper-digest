@@ -93,18 +93,18 @@ function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisTex
     const summarySha256 = crypto.createHash('sha256').update(summary).digest('hex');
     const projectionSha256 = contract.coreSummaryProjectionSha256(analysis);
     stages.structureRepair.outputAnalysisSha256 = analysisSha256;
-    const taxonomyRuntime = require('../scripts/lib/taxonomy-runtime.js')
-        .getDefaultTaxonomyRuntime();
+    const tagRules = require('../scripts/lib/taxonomy-runtime.js')
+        .getDefaultTagRules();
     const taxonomyValidation = require('../scripts/utils.js').parseAnalysis(analysis)
         .taxonomyValidation;
     const taxonomyProjectionSha256 = crypto.createHash('sha256')
         .update(contract.taxonomyProtectedProjection(analysis)).digest('hex');
     const taxonomyBinding = {
-        registryVersion: taxonomyRuntime.registryVersion,
-        registrySha256: taxonomyRuntime.registrySha256,
-        projectionContract: taxonomyRuntime.projectionContract,
-        projectionSha256: taxonomyRuntime.projectionSha256,
-        selectionContract: taxonomyRuntime.selectionContract,
+        registryVersion: tagRules.registryVersion,
+        registrySha256: tagRules.registrySha256,
+        projectionContract: tagRules.projectionContract,
+        projectionSha256: tagRules.projectionSha256,
+        selectionContract: tagRules.selectionContract,
         inputAnalysisSha256: analysisSha256,
         outputAnalysisSha256: analysisSha256,
         inputProtectedProjectionSha256: taxonomyProjectionSha256,
@@ -143,7 +143,7 @@ function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisTex
         analysisManifest: { version: 1, stages,
             contracts: {
                 coreSummary: 'core-summary-detailed-v3',
-                taxonomy: taxonomyRuntime.selectionContract
+                taxonomy: tagRules.selectionContract
             } },
         ...extra
     };

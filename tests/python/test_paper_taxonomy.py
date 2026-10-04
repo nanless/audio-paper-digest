@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from paper_taxonomy import (FACET_IDS, LABEL_MODE_LEGACY, TAXONOMY_FLAT_COMPAT_CONTRACT,
                             active_preferred_labels,
-                            ancestors, load_taxonomy, normalize_label,
+                            ancestors, load_tag_catalog, normalize_label,
                             prune_ancestors, resolve_current_label, resolve_label,
-                            resolve_label_candidates, validate_taxonomy)
+                            resolve_label_candidates, validate_tag_catalog)
 
 SPEC = importlib.util.spec_from_file_location('build_taxonomy_preview', ROOT / 'scripts/build-taxonomy-preview.py')
 preview = importlib.util.module_from_spec(SPEC)
@@ -49,7 +49,7 @@ class RegistryTest(unittest.TestCase):
 
     def test_current_resolution_only_exposes_active_chinese_preferred_labels(self):
         data = registry()
-        self.assertIs(validate_taxonomy(data), data)
+        self.assertIs(validate_tag_catalog(data), data)
         for label in ('语音识别', '#语音识别', ' ＃语音识别 '):
             self.assertEqual(resolve_current_label(data, label)['id'], 'task.asr')
         for label in ('ASR', 'asr', ' ＃ＡＳＲ ', '\ufeff#ASR\ufeff',
@@ -89,7 +89,7 @@ class RegistryTest(unittest.TestCase):
     def test_current_projection_rejects_cross_facet_preferred_label_collision(self):
         data = registry()
         data['concepts'][2]['preferredLabel']['zh'] = '语音识别'
-        self.assertIs(validate_taxonomy(data), data)
+        self.assertIs(validate_tag_catalog(data), data)
         with self.assertRaisesRegex(ValueError, 'globally unique'):
             active_preferred_labels(data)
         with self.assertRaisesRegex(ValueError, 'resolution mode'):
@@ -109,7 +109,7 @@ class RegistryTest(unittest.TestCase):
         for change in changes:
             data = registry(); change(data)
             with self.subTest(data=data), self.assertRaises(ValueError):
-                validate_taxonomy(data)
+                validate_tag_catalog(data)
         for bad in ({**registry(), 'extra': 'x'}, {**registry(), 'registrySha256': 'bad'}):
             with self.assertRaises(ValueError):
                 resolve_label(bad, 'ASR')
@@ -118,16 +118,16 @@ class RegistryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'registry.json'
             target.write_text(json.dumps(registry()), encoding='utf-8')
-            first = load_taxonomy(target)
+            first = load_tag_catalog(target)
             self.assertEqual(first['registrySha256'], hashlib.sha256(target.read_bytes()).hexdigest())
             target.write_text(json.dumps(registry(), indent=2), encoding='utf-8')
-            self.assertNotEqual(first['registrySha256'], load_taxonomy(target)['registrySha256'])
+            self.assertNotEqual(first['registrySha256'], load_tag_catalog(target)['registrySha256'])
             target.write_bytes(b'\xef\xbb\xbf' + json.dumps(registry()).encode())
-            self.assertEqual(load_taxonomy(target)['registrySha256'], hashlib.sha256(target.read_bytes()).hexdigest())
+            self.assertEqual(load_tag_catalog(target)['registrySha256'], hashlib.sha256(target.read_bytes()).hexdigest())
             target.write_text('{"version":1,"\\u0076ersion":2}', encoding='utf-8')
-            with self.assertRaises(ValueError): load_taxonomy(target)
+            with self.assertRaises(ValueError): load_tag_catalog(target)
             target.write_bytes(b'\xff')
-            with self.assertRaises(UnicodeDecodeError): load_taxonomy(target)
+            with self.assertRaises(UnicodeDecodeError): load_tag_catalog(target)
 
 
 class PreviewBuilderTest(unittest.TestCase):

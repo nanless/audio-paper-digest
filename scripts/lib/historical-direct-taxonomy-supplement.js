@@ -8,7 +8,7 @@ const planApi = require('./historical-direct-rewrite-plan.js');
 const runner = require('./historical-direct-rewrite-runner.js');
 const fresh = require('./fresh-arxiv-rewrite-source.js');
 const pages = require('./historical-direct-page-staging.js');
-const taxonomyApi = require('./paper-taxonomy.js');
+const tagCatalogApi = require('./paper-taxonomy.js');
 const io = require('./historical-conference-page-projections.js');
 const CONTRACT = 'historical-direct-taxonomy-supplement-v1';
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -26,7 +26,7 @@ function pageBody(bytes) {
 function classify(canonical, taxonomy) {
     if (canonical.taxonomy.registrySha256 !== taxonomy.registrySha256) fail('canonical registry snapshot SHA differs');
     const resolve = (label, facet) => {
-        const matches = taxonomyApi.resolveLabelCandidates(taxonomy, label, facet);
+        const matches = tagCatalogApi.resolveLabelCandidates(taxonomy, label, facet);
         if (matches.length !== 1 || matches[0].status !== 'active') fail(`canonical label is unknown, ambiguous or inactive: ${label}`);
         return matches[0];
     };
@@ -36,7 +36,7 @@ function classify(canonical, taxonomy) {
         const primary = [task, method].filter(c => c.preferredLabel.zh === label);
         return primary.length === 1 ? primary[0] : resolve(label);
     });
-    const ids = taxonomyApi.pruneAncestors(taxonomy, [...new Set(concepts.map(c => c.id))]).sort();
+    const ids = tagCatalogApi.pruneAncestors(taxonomy, [...new Set(concepts.map(c => c.id))]).sort();
     if (!ids.includes(task.id) || !ids.includes(method.id)) fail('explicit primary role is absent or ancestor-pruned');
     return { concepts: ids.map(id => { const c = concepts.find(c => c.id === id); return { id, facet: c.facet, label: c.preferredLabel.zh }; }),
         primaryTaskId: task.id, primaryTaskLabel: task.preferredLabel.zh,
@@ -53,7 +53,7 @@ function readPlanRegistry({ planFile, registryFile }) {
 
 async function buildSupplement(options) {
     const { plan, registry, planFileSha256, registryFileSha256 } = readPlanRegistry(options);
-    const taxonomy = taxonomyApi.loadTaxonomy(options.registrySnapshot);
+    const taxonomy = tagCatalogApi.loadTagCatalog(options.registrySnapshot);
     const renderer = pages.currentRendererImplementationSha256();
     const entries = new Map(registry.entries.map(e => [e.paperId, e]));
     const records = {}; const failures = []; const authenticated = [];

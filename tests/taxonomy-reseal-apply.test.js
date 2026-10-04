@@ -27,7 +27,7 @@ const utilsApi = require('../scripts/utils.js');
 const contextApi = require('../scripts/lib/conference-source-context.js');
 const cli = require('../scripts/taxonomy-reseal.js');
 const { REGISTRY_FILE, REGISTRY_HISTORY_DIR, ADDITIVE_OLD_SHA, DESTRUCTIVE_OLD_SHA,
-    runtime: taxonomyRuntime, annotationFor, analysisRecord, textSha }
+    runtime: tagRules, annotationFor, analysisRecord, textSha }
     = require('./helpers/taxonomy-reseal-fixture.js');
 
 const PROCESS_ID = '9dce2993-0000-4000-8000-000000000000';
@@ -191,7 +191,7 @@ function fixture(t, options = {}) {
         selectionReceiptSha256: '4'.repeat(64),
         selectedMemberSetSha256: '5'.repeat(64),
         taxonomyVersion: 'paper-taxonomy-v1',
-        taxonomyRegistrySha256: taxonomyRuntime().registrySha256,
+        taxonomyRegistrySha256: tagRules().registrySha256,
         implementationSha256: processApi.implementationSha256(),
         deepExecutionConfig: executionIdentity()
     };
@@ -247,7 +247,7 @@ function fixture(t, options = {}) {
 function runtimeFor(fx) {
     return {
         files: fx.files,
-        taxonomyRuntime: taxonomyRuntime(),
+        taxonomyRuntime: tagRules(),
         snapshotOptions: { historyDir: fx.historyDir },
         now: () => FIXED_NOW
     };
@@ -270,7 +270,7 @@ function planOf(fx) {
         state,
         adapter,
         analysisRoot: fx.files.conferenceAnalysisDir,
-        runtime: taxonomyRuntime(),
+        runtime: tagRules(),
         mode: 'reproject',
         // 换表后 dcf83f84→当前 为可确认的 destructive；happy-path 规划的意图是
         // “合法可写”，故显式携带 ack（test4 的 blocked 场景不经本助手，直接走 CLI 无 flag）。
@@ -286,7 +286,7 @@ function applyOf(fx, plan, plannedStateSha256) {
         plannedStateSha256,
         writes: plan.writes,
         plans: plan.plans,
-        runtime: taxonomyRuntime(),
+        runtime: tagRules(),
         adapter,
         engine,
         processApi,
@@ -337,7 +337,7 @@ test('apply reseals analysis, run, state and archives the old completion receipt
     // null（既有行为，不在本任务改动范围内）。
 
     // analysis.json：stage registry/projection 重封到当前，bindingSha256 闭环通过。
-    const current = taxonomyRuntime();
+    const current = tagRules();
     const { paper, stage } = currentStage(fx);
     assert.equal(stage.registrySha256, current.registrySha256);
     assert.equal(stage.projectionSha256, current.projectionSha256);
@@ -636,7 +636,7 @@ test('a destructive-eligible process reseals end-to-end with --acknowledge-destr
         assert.equal(applied.report.writeResult.executed.length, 1);
         assert.equal(applied.report.writeResult.demoted, true);
 
-        const current = taxonomyRuntime();
+        const current = tagRules();
         const { paper, stage } = currentStage(fx);
         assert.equal(stage.registrySha256, current.registrySha256);
         assert.equal(stage.registryUpgradeFrom.changeLevel, 'destructive');

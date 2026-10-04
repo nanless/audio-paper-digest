@@ -61,8 +61,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `digest-status.js` | Node 共享 | `papers.json` 的分析状态、批次日期和恢复状态同步。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
 | `lib/filter-input-contract.js` | Node 库 | 计算筛选决定所对应的最小输入 SHA。 |
-| `lib/paper-taxonomy.js` | Node 库 | 严格加载共享词表，解析同义标签、枚举候选并查询祖先。提示词、Node/Python 解析器和发布检查均以词表原始字节为准。 |
-| `lib/taxonomy-runtime.js` | Node 库 | 从有效中文标签生成白名单、任务/方法角色及提示词输入，并检查 `paper-taxonomy-selection-v1`。数量、层级和具体程度规则见本页的分类词表维护说明。 |
+| `lib/paper-taxonomy.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另提供别名解析和上下级查询。Node/Python 解析器及发布检查均使用词表原始字节计算的 SHA。 |
+| `lib/taxonomy-runtime.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 生成提供给模型的标签文本。选择规则仍按 `paper-taxonomy-selection-v1` 检查，详见本页的分类词表维护说明。 |
 | `lib/taxonomy-registry-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/taxonomy-reseal.js` | Node 库 | 仅更新分析结果中的分类记录：新词表必须仍解析出完全相同的 conceptIds，否则拒绝并列出需人工或模型重选的论文。另只读扫描失效历史分类文件并汇总报告，不调用模型。 |
 | `lib/historical-taxonomy-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果解析标签，映射 concept ID、去除祖先标签并生成逐篇分类文件。文件名同时包含词表 SHA 与分类 SHA，分析升级不覆盖旧记录；旧版仅按词表 SHA 命名的文件，只有逐字段等于当前重建结果时才允许读取。 |

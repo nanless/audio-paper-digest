@@ -11,7 +11,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
 
 from paper_taxonomy import (LABEL_MODE_LEGACY,
-                            active_preferred_labels, ancestors, load_taxonomy,
+                            active_preferred_labels, ancestors, load_tag_catalog,
                             prune_ancestors, resolve_label_candidates,
                             _registry_data)
 
@@ -181,7 +181,7 @@ def parse_machine_summary(analysis):
     return result
 
 
-_DEFAULT_TAXONOMY = load_taxonomy()
+_DEFAULT_TAXONOMY = load_tag_catalog()
 
 # These compatibility exports are projections of the registry, never a second
 # hand-maintained vocabulary.  A model family remains a supplementary tag and

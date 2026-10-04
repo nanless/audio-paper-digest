@@ -108,7 +108,7 @@ test('two real per-paper staging producers merge into one complete daily aggrega
         state.identityGroups.push({ paperId, identitySha256: String(index + 2).repeat(64),
             identityRecordSha256: String(index + 3).repeat(64), pageKeys: [pages[index].pageKey] });
     }
-    const dependencies = { loadTaxonomy: () => ({ registrySha256 }), readCrosswalk: () => state,
+    const dependencies = { loadTagCatalog: () => ({ registrySha256 }), readCrosswalk: () => state,
         findAssignment: (_root, paperId, analysisRunId) => assignments[paperId]?.analysisRunId === analysisRunId
             ? { value: assignments[paperId], fileSha256: sha(Buffer.from(JSON.stringify(assignments[paperId]))) } : null,
         loadRun: ({ runId }) => ({ runId }), runSnapshot: handle => runSnapshots[handle.runId],

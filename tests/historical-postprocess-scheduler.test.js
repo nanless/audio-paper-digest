@@ -47,7 +47,7 @@ function fixture(t, secondStatus = 'complete') {
     };
     const deps = { files, now: () => `2026-09-07T00:00:${String(tick++).padStart(2, '0')}.000Z`,
         rendererImplementationSha256: () => RENDERER,
-        updateLocked, loadTaxonomy: () => ({ registrySha256: REGISTRY }), readCrosswalk: () => crosswalk,
+        updateLocked, loadTagCatalog: () => ({ registrySha256: REGISTRY }), readCrosswalk: () => crosswalk,
         recoverRun: () => ({ storageSealed: true, currentContractComplete: true }), loadAnalysisRun: ({ runId }) => ({ runId }),
         buildAssignments: ({ runHandle, paperId }) => [{ paperId, analysisRunId: runHandle.runId,
             analysisFileSha256: sha(`analysis-file:${paperId}`),

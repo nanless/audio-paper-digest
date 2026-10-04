@@ -28,10 +28,10 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-taxonomy-assignment.js');
     const options = parseArgs(argv); const Config = runtime.config || require('./config.js');
     const api = runtime.api || require('./lib/historical-taxonomy-assignment.js');
-    const taxonomyApi = runtime.taxonomyApi || require('./lib/paper-taxonomy.js');
+    const tagCatalogApi = runtime.taxonomyApi || require('./lib/paper-taxonomy.js');
     const runHandle = api.loadCompletedHistoricalAnalysisRun({ analysisRoot: Config.FILES.freshRewriteRunsDir,
         runId: options.analysisRunId }, runtime.dependencies);
-    const taxonomy = taxonomyApi.loadTaxonomy(Config.FILES.taxonomyRegistry);
+    const taxonomy = tagCatalogApi.loadTagCatalog(Config.FILES.taxonomyRegistry);
     const assignments = api.buildAssignments({ runHandle, taxonomy, paperId: options.paperId });
     const counts = assignments.reduce((value, item) => ({ ...value, [item.status]: (value[item.status] || 0) + 1 }), {});
     const output = { status: options.apply ? 'written' : 'dry-run', analysisRunId: options.analysisRunId,

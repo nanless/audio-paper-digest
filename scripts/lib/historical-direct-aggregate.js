@@ -13,7 +13,7 @@ const directPages = require('./historical-direct-page-staging.js');
 const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
 const projectionIo = require('./historical-conference-page-projections.js');
 const { parseAnalysis } = require('../utils.js');
-const taxonomyRuntime = require('./taxonomy-runtime.js').getDefaultTaxonomyRuntime();
+const tagRules = require('./taxonomy-runtime.js').getDefaultTagRules();
 
 const CONTRACT = 'historical-direct-aggregate-v2';
 const VERSION = 2;
@@ -525,8 +525,8 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
         fail(`${item.paperId} direct canonical analysis cannot supply aggregate fields`);
     }
     const taxonomyValidation = parsed.taxonomyValidation;
-    if (taxonomyValidation.registryVersion !== taxonomyRuntime.registryVersion
-        || taxonomyValidation.registrySha256 !== taxonomyRuntime.registrySha256) {
+    if (taxonomyValidation.registryVersion !== tagRules.registryVersion
+        || taxonomyValidation.registrySha256 !== tagRules.registrySha256) {
         fail(`${item.paperId} direct canonical taxonomy differs from current registry`);
     }
     const articleHeading = analysis.apiReaderArticle.match(/^#{1,6}\s+([^\n]+)$/m)?.[1]?.trim();
@@ -562,8 +562,8 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
         resources: resources.map(resource => ({ type: resource.type,
             status: resource.status === null ? '未取得 HTTP 状态' : String(resource.status),
             availability: resource.availability, url: resource.finalUrl || resource.originalUrl })),
-        taxonomy: { selectionContract: taxonomyRuntime.selectionContract,
-            registryVersion: taxonomyRuntime.registryVersion, registrySha256: taxonomyRuntime.registrySha256 } };
+        taxonomy: { selectionContract: tagRules.selectionContract,
+            registryVersion: tagRules.registryVersion, registrySha256: tagRules.registrySha256 } };
 }
 function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoot,
     freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null,
@@ -677,7 +677,7 @@ function renderAggregate(scope, key, members, options = {}) {
     let output = `---\ntitle: "${display}"\ndraft: false\n`;
     output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;
     output += 'paper_digest_reader_quality: "reader-facing-v3"\n';
-    output += `paper_digest_taxonomy_contract: "${taxonomyRuntime.flatCompatContract}"\n`;
+    output += `paper_digest_taxonomy_contract: "${tagRules.flatCompatContract}"\n`;
     output += `paper_digest_taxonomy_selection_contract: "${taxonomy.selectionContract}"\n`;
     output += `paper_digest_taxonomy_registry_version: "${taxonomy.registryVersion}"\n`;
     output += `paper_digest_taxonomy_registry_sha256: "${taxonomy.registrySha256}"\n`;

@@ -3,13 +3,13 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
-const { loadTaxonomy, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/paper-taxonomy');
-const { getDefaultTaxonomyRuntime } = require('../scripts/lib/taxonomy-runtime');
+const { loadTagCatalog, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/paper-taxonomy');
+const { getDefaultTagRules } = require('../scripts/lib/taxonomy-runtime');
 const { taxonomySurfaceSha256 } = require('../scripts/analysis-contract');
 const { parseAnalysis } = require('../scripts/utils');
 
 test('all shared taxonomy labels, aliases and ancestors agree across Node and Python', () => {
-    const taxonomy=loadTaxonomy();
+    const taxonomy=loadTagCatalog();
     const labels=[];
     for(const concept of taxonomy.concepts) for(const label of [concept.preferredLabel.zh,concept.preferredLabel.en,...concept.aliases]) {
         labels.push(label,`#${label}`,`  ${label}  `,label.replace(/[a-z]/g,c=>c.toUpperCase()));
@@ -18,16 +18,16 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
     const faceted=[['#端到端训练','method'],['#端到端','setting'],['E2E learning','method']];
     const input={labels,faceted,ids:taxonomy.concepts.map(c=>c.id),groups:taxonomy.concepts.map(c=>[c.id,...ancestors(taxonomy,c.id)])};
     const expected={version:taxonomy.version,registrySha256:taxonomy.registrySha256,
-        projectionSha256:getDefaultTaxonomyRuntime().projectionSha256,
+        projectionSha256:getDefaultTagRules().projectionSha256,
         resolved:labels.map(label=>resolveLabel(taxonomy,label)?.id||null),
         faceted:faceted.map(([label,facet])=>resolveLabel(taxonomy,label,facet)?.id||null),
         ancestors:input.ids.map(id=>ancestors(taxonomy,id)),pruned:input.groups.map(ids=>pruneAncestors(taxonomy,ids))};
     const script=[
         'import json, sys',
         'sys.path.insert(0,"scripts")',
-        'from paper_taxonomy import load_taxonomy, resolve_label, ancestors, prune_ancestors, prompt_projection_sha256',
-        't=load_taxonomy(); p=json.load(sys.stdin)',
-        'r={"version":t["version"],"registrySha256":t["registrySha256"],"projectionSha256":prompt_projection_sha256(t),',
+        'from paper_taxonomy import load_tag_catalog, resolve_label, ancestors, prune_ancestors, tag_prompt_text_sha256',
+        't=load_tag_catalog(); p=json.load(sys.stdin)',
+        'r={"version":t["version"],"registrySha256":t["registrySha256"],"projectionSha256":tag_prompt_text_sha256(t),',
         '"resolved":[(resolve_label(t,s) or {}).get("id") for s in p["labels"]],',
         '"faceted":[(resolve_label(t,s,f) or {}).get("id") for s,f in p["faceted"]],',
         '"ancestors":[ancestors(t,s) for s in p["ids"]],',

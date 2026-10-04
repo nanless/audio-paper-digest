@@ -1357,7 +1357,7 @@ function validateTaxonomyStageBinding(paper, options = {}) {
     const stage = manifest?.stages?.taxonomySeal;
     if (!isRecoveryStageTerminal('taxonomySeal', stage?.status)) return 'taxonomySeal 未完成';
     const runtime = options.taxonomyRuntime
-        || require('./lib/taxonomy-runtime.js').getDefaultTaxonomyRuntime();
+        || require('./lib/taxonomy-runtime.js').getDefaultTagRules();
     if (manifest?.contracts?.taxonomy !== runtime.selectionContract
         || stage.registryVersion !== runtime.registryVersion
         || stage.projectionContract !== runtime.projectionContract

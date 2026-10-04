@@ -104,8 +104,8 @@ function createPreviewServer(assets) {
 function main(argv = process.argv.slice(2)) {
     requireExternalRuntime('taxonomy-tools.js');
     const options = parseArgs(argv);
-    const { loadTaxonomy } = require('./lib/paper-taxonomy');
-    const taxonomy = loadTaxonomy(Config.FILES.taxonomyRegistry);
+    const { loadTagCatalog } = require('./lib/paper-taxonomy');
+    const taxonomy = loadTagCatalog(Config.FILES.taxonomyRegistry);
     if (options.command === 'validate') {
         console.log(JSON.stringify({ status: 'valid', version: taxonomy.version,
             concepts: taxonomy.concepts.length, facets: taxonomy.facets.length, registrySha256: taxonomy.registrySha256 }));

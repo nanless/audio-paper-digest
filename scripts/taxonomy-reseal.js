@@ -572,11 +572,11 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     const adapter = runtime.adapter || require('./lib/conference-analysis-adapter.js');
     const processApi = runtime.processApi || require('./lib/conference-process.js');
     const engine = runtime.engine || require('./analysis-engine.js');
-    const taxonomyRuntime = runtime.taxonomyRuntime
-        || require('./lib/taxonomy-runtime.js').getDefaultTaxonomyRuntime();
+    const tagRules = runtime.taxonomyRuntime
+        || require('./lib/taxonomy-runtime.js').getDefaultTagRules();
 
     if (options.command === 'mark-stale') {
-        const report = markStaleReport({ files, runtime: taxonomyRuntime });
+        const report = markStaleReport({ files, runtime: tagRules });
         if (options.reportName) report.reportFile = writeReportFile(files, options.reportName, report);
         console.log(JSON.stringify(report));
         return report;
@@ -595,7 +595,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         state,
         adapter,
         analysisRoot: files.conferenceAnalysisDir,
-        runtime: taxonomyRuntime,
+        runtime: tagRules,
         mode: options.mode,
         snapshotOptions: runtime.snapshotOptions || {},
         acknowledgeDestructive: options.acknowledgeDestructive,
@@ -609,7 +609,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         resealMode: options.mode,
         processId: options.processId,
         written: false,
-        registry: { version: taxonomyRuntime.registryVersion, sha256: taxonomyRuntime.registrySha256 },
+        registry: { version: tagRules.registryVersion, sha256: tagRules.registrySha256 },
         implementationDrift: state.authority?.implementationSha256 !== processApi.implementationSha256(),
         design: {
             llmCalls: 0,
@@ -639,7 +639,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
             plannedStateSha256: state.stateSha256,
             writes: plan.writes,
             plans: plan.plans,
-            runtime: taxonomyRuntime,
+            runtime: tagRules,
             adapter,
             engine,
             processApi,

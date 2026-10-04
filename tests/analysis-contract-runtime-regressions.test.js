@@ -14,9 +14,9 @@ const {
 } = require('../scripts/analysis-contract.js');
 const contract = require('../scripts/analysis-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
-const { createTaxonomyRuntime } = require('../scripts/lib/taxonomy-runtime.js');
+const { createTagRules } = require('../scripts/lib/taxonomy-runtime.js');
 const registryChange = require('../scripts/lib/taxonomy-registry-change.js');
-const taxonomyApi = require('../scripts/lib/paper-taxonomy.js');
+const tagCatalogApi = require('../scripts/lib/paper-taxonomy.js');
 
 const withResultSentence = sentence => validAnalysisText().replace(
     '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
@@ -266,7 +266,7 @@ const ADDITIVE_OLD_SHA = 'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64
 const DESTRUCTIVE_OLD_SHA = '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a';
 
 function annotationFor(fromRegistrySha256) {
-    const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+    const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
     // 换表（v1.1）后 dcf83f84→当前 为可确认 destructive；本助手的意图是“构造一份
@@ -282,7 +282,7 @@ function annotationFor(fromRegistrySha256) {
 
 // destructive 只有在注记携带与复算绑定的 destructiveAcknowledgement 时才可能放行。
 function acknowledgedAnnotationFor(fromRegistrySha256) {
-    const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+    const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
     return registryChange.buildRegistryUpgradeAnnotation({
@@ -294,7 +294,7 @@ function acknowledgedAnnotationFor(fromRegistrySha256) {
 }
 
 function sealedPaper(options = {}) {
-    const runtime = createTaxonomyRuntime({ registryPath: REGISTRY_FILE });
+    const runtime = createTagRules({ registryPath: REGISTRY_FILE });
     const analysis = validAnalysisText();
     const parsed = parseAnalysis(analysis, { taxonomyRuntime: runtime });
     const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -366,7 +366,7 @@ describe('taxonomySeal registry upgrade gate', () => {
     });
 
     it('rejects a destructive upgrade even when the annotation claims additive', () => {
-        const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+        const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
         const from = registryChange.resolveRegistrySnapshot(DESTRUCTIVE_OLD_SHA);
         const lying = { ...annotationFor(ADDITIVE_OLD_SHA), fromRegistrySha256: from.registrySha256 };
         assert.equal(lying.toRegistrySha256, current.registrySha256);
@@ -412,7 +412,7 @@ describe('taxonomySeal registry upgrade gate', () => {
     });
 
     it('never admits a destructive change outside the acknowledgement whitelist', () => {
-        const current = taxonomyApi.loadTaxonomy(REGISTRY_FILE);
+        const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
         const synthetic = structuredClone(current);
         synthetic.concepts.push({
             id: 'task.legacy-only', facet: 'task',

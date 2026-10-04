@@ -245,7 +245,7 @@ const OLD_SEED = path.join(REGISTRY_HISTORY,
     'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf.json');
 
 // 构造“旧表多一个概念、新表已删除”的 registry：复算必为 destructive +
-// concept-removed，属于不可确认集合。loadTaxonomy 只接受
+// concept-removed，属于不可确认集合。loadTagCatalog 只接受
 // version/facets/concepts 三个字段，所以这里不带 registrySha256；
 // 快照注入点再按需补上（normalizeRegistry 接受对象形态的字节 SHA）。
 function registryWithExtraConcept() {

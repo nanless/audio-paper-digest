@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const adapter = require('./conference-analysis-adapter.js');
-const taxonomyApi = require('./paper-taxonomy.js');
+const tagCatalogApi = require('./paper-taxonomy.js');
 const identityApi = require('./paper-identity.js');
 const planApi = require('./conference-plan.js');
 const pageApi = require('./historical-page-staging.js');
@@ -201,15 +201,15 @@ function labelProjection(paper) {
     return value;
 }
 function resolve(taxonomy, label, facet, reasons, role) {
-    const found = taxonomyApi.resolveLabelCandidates(taxonomy, label, facet);
+    const found = tagCatalogApi.resolveLabelCandidates(taxonomy, label, facet);
     if (found.length !== 1 || found[0].status !== 'active') { reasons.push(`${role}:${found.length ? 'ambiguous-or-deprecated' : 'unknown'}:${label}`); return null; }
     return found[0];
 }
 function buildAssignment(loaded, taxonomy) {
     const paper = loaded.analysis.papers[0], input = labelProjection(paper), reasons = [], concepts = new Map();
-    const taxonomyRuntime = taxonomyRuntimeApi.createTaxonomyRuntime({ taxonomy });
+    const tagRules = taxonomyRuntimeApi.createTagRules({ taxonomy });
     const parsed = require('../utils.js').parseAnalysis(paper.analysis);
-    const taxonomyIssue = analysisContract.validateTaxonomyStageBinding(paper, { parsed, taxonomyRuntime });
+    const taxonomyIssue = analysisContract.validateTaxonomyStageBinding(paper, { parsed, taxonomyRuntime: tagRules });
     // A tag selection the current registry cannot resolve is not byte-level
     // integrity drift: it is exactly the `needs_taxonomy_review` case the
     // taxonomy design promises (§6 "进入 taxonomy review"). Record it as an
@@ -236,21 +236,21 @@ function buildAssignment(loaded, taxonomy) {
     const method = resolve(taxonomy, primaryMethodLabel, 'method', reasons, 'primary-method');
     for (const label of input.tags) {
         const candidates = [task, method].filter(item => item && [item.preferredLabel.zh, item.preferredLabel.en, ...item.aliases]
-            .some(value => taxonomyApi.normalizeLabel(value) === taxonomyApi.normalizeLabel(label)));
+            .some(value => tagCatalogApi.normalizeLabel(value) === tagCatalogApi.normalizeLabel(label)));
         const concept = candidates.length === 1 ? candidates[0] : resolve(taxonomy, label, undefined, reasons, 'tag');
         if (concept) concepts.set(concept.id, concept);
     }
     for (const item of [task, method]) if (item) concepts.set(item.id, item);
     if (!input.tags.includes(input.primaryTaskTag)) reasons.push('primary-task:not-in-tags');
     if (!input.tags.includes(input.primaryMethodTag)) reasons.push('primary-method:not-in-tags');
-    const ids = taxonomyApi.pruneAncestors(taxonomy, [...concepts.keys()].sort()).sort();
+    const ids = tagCatalogApi.pruneAncestors(taxonomy, [...concepts.keys()].sort()).sort();
     if ((task && !ids.includes(task.id)) || (method && !ids.includes(method.id))) reasons.push('primary-concept:ancestor-pruned');
     const blockedReasons = [...new Set(reasons)].sort(); const receipt = loaded.run.completionReceipt;
     const body = { contract: ASSIGNMENT_CONTRACT, version: VERSION, paperId: loaded.run.paperId,
         analysisExecutionId: loaded.run.executionId, analysisSha256: loaded.analysisFileSha256,
         completionReceiptSha256: receipt.receiptSha256, sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
-        registryVersion: taxonomyRuntime.registryVersion, registrySha256: taxonomy.registrySha256,
-        selectionContract: taxonomyRuntime.selectionContract, flatCompatContract: taxonomyRuntime.flatCompatContract,
+        registryVersion: tagRules.registryVersion, registrySha256: taxonomy.registrySha256,
+        selectionContract: tagRules.selectionContract, flatCompatContract: tagRules.flatCompatContract,
         status: blockedReasons.length ? 'blocked' : 'assigned', blockedReasons,
         primaryTaskId: blockedReasons.length ? null : task.id, primaryMethodId: blockedReasons.length ? null : method.id,
         conceptIds: blockedReasons.length ? [] : ids, concepts: blockedReasons.length ? [] : ids.map(id => { const item = concepts.get(id);
@@ -421,7 +421,7 @@ function rejectExtraStageFiles(directory, allowed) {
 }
 function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, apply = false, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
-    const taxonomy = (dependencies.loadTaxonomy || taxonomyApi.loadTaxonomy)(taxonomyFile);
+    const taxonomy = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(taxonomyFile);
     const implementation = fingerprint(dependencies); const projected = projection(loaded, taxonomy, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
     if (apply) {
@@ -445,7 +445,7 @@ function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, plan
 }
 function loadStage({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
-    const taxonomy = (dependencies.loadTaxonomy || taxonomyApi.loadTaxonomy)(taxonomyFile);
+    const taxonomy = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(taxonomyFile);
     const implementation = fingerprint(dependencies); const expected = projection(loaded, taxonomy, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
     if (expected.assignment.status !== 'assigned') fail('current taxonomy projection is blocked');
@@ -853,7 +853,7 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
         || executionIds.some(id => !UUID_RE.test(id))) fail('unique selection execution IDs required');
     const authenticated = planProof(planHandle, dependencies); const expectedIds = authenticated.proof.paperIds;
     if (executionIds.length !== expectedIds.length) fail('analysis execution set must cover the complete authenticated selected member set');
-    const taxonomy = (dependencies.loadTaxonomy || taxonomyApi.loadTaxonomy)(taxonomyFile); const byPaper = new Map();
+    const taxonomy = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(taxonomyFile); const byPaper = new Map();
     for (const executionId of executionIds) {
         const preserved = Object.hasOwn(preservedStages, executionId) ? preservedStages[executionId] : null;
         const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);

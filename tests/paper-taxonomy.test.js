@@ -5,19 +5,19 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { loadTaxonomy, validateTaxonomy, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/paper-taxonomy.js');
+const { loadTagCatalog, validateTagCatalog, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/paper-taxonomy.js');
 const registryPath = path.join(__dirname, '../config/paper-taxonomy.json');
 const raw = () => JSON.parse(fs.readFileSync(registryPath, 'utf8'));
 const concept = (r, id) => r.concepts.find(c => c.id === id);
 
 test('v1 registry is a complete nine-facet, bounded, defined vocabulary', () => {
-    const r = loadTaxonomy(registryPath);
+    const r = loadTagCatalog(registryPath);
     assert.equal(r.version, 'paper-taxonomy-v1');
     assert.equal(r.facets.length, 9);
     // v1.1 换表（2026-09-30）：262 概念（+34 缺口词），上界随词表增长放宽至 280。
     assert.ok(r.concepts.length >= 150 && r.concepts.length <= 280);
     assert.equal(r.registrySha256, crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex'));
-    assert.equal(validateTaxonomy(raw()).version, r.version);
+    assert.equal(validateTagCatalog(raw()).version, r.version);
 });
 
 test('normalization is NFKC + one hash + trim + ASCII lower, no fuzzy guessing', () => {
@@ -77,7 +77,7 @@ test('bare end-to-end belongs only to setting; explicit learning label resolves 
     assert.equal(resolveLabel(r, '#端到端训练', 'method').id, 'method.end-to-end-learning');
     concept(r, 'method.transformer').aliases.push('shared-test-label');
     concept(r, 'task.asr').aliases.push('shared-test-label');
-    validateTaxonomy(r);
+    validateTagCatalog(r);
     assert.equal(resolveLabel(r, 'shared-test-label'), null);
     assert.equal(resolveLabel(r, 'shared-test-label', 'task').id, 'task.asr');
     assert.throws(() => resolveLabel(r, 'ASR', 'unknown'), /Unknown facet/);
@@ -112,7 +112,7 @@ for (const [name, mutate] of [
     ['deprecated missing replacement', r => { r.concepts[0].status = 'deprecated'; }],
     ['deprecated self replacement', r => { Object.assign(r.concepts[0], { status: 'deprecated', replacedBy: r.concepts[0].id }); }],
     ['deprecated cross-facet replacement', r => { Object.assign(r.concepts[0], { status: 'deprecated', replacedBy: 'method.peft' }); }],
-]) test(`reject ${name}`, () => { const r = raw(); mutate(r); assert.throws(() => validateTaxonomy(r)); });
+]) test(`reject ${name}`, () => { const r = raw(); mutate(r); assert.throws(() => validateTagCatalog(r)); });
 
 test('deprecated entries stay explicit and require an active same-facet replacement', () => {
     const r = raw();
@@ -121,7 +121,7 @@ test('deprecated entries stay explicit and require an active same-facet replacem
     r.concepts.push(old);
     assert.equal(resolveLabel(r, '旧适配名称').status, 'deprecated');
     concept(r, 'method.lora').broaderId = old.id;
-    assert.throws(() => validateTaxonomy(r), /active/);
+    assert.throws(() => validateTagCatalog(r), /active/);
 });
 
 test('raw JSON duplicate keys, malformed JSON, and invalid loaded metadata fail closed', t => {
@@ -129,15 +129,15 @@ test('raw JSON duplicate keys, malformed JSON, and invalid loaded metadata fail 
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const p = path.join(dir, 'registry.json');
     fs.writeFileSync(p, '{"version":"bad","version":"paper-taxonomy-v1","facets":[],"concepts":[]}');
-    assert.throws(() => loadTaxonomy(p), /Duplicate JSON key/);
+    assert.throws(() => loadTagCatalog(p), /Duplicate JSON key/);
     fs.writeFileSync(p, '{"version":"bad","\\u0076ersion":"paper-taxonomy-v1","facets":[],"concepts":[]}');
-    assert.throws(() => loadTaxonomy(p), /Duplicate JSON key/);
+    assert.throws(() => loadTagCatalog(p), /Duplicate JSON key/);
     fs.writeFileSync(p, '{');
-    assert.throws(() => loadTaxonomy(p));
-    const r = loadTaxonomy(registryPath);
+    assert.throws(() => loadTagCatalog(p));
+    const r = loadTagCatalog(registryPath);
     r.registrySha256 = 'false';
     assert.throws(() => resolveLabel(r, 'ASR'), /registrySha256/);
-    assert.throws(() => validateTaxonomy(Object.assign(Object.create({ polluted: true }), raw())), /plain object/);
+    assert.throws(() => validateTagCatalog(Object.assign(Object.create({ polluted: true }), raw())), /plain object/);
 });
 
 test('load reads each file revision without stale global cache', t => {
@@ -146,10 +146,10 @@ test('load reads each file revision without stale global cache', t => {
     const p = path.join(dir, 'registry.json');
     const r = raw();
     fs.writeFileSync(p, JSON.stringify(r));
-    const first = loadTaxonomy(p);
+    const first = loadTagCatalog(p);
     r.concepts[0].scopeNote += ' 测试修订。';
     fs.writeFileSync(p, JSON.stringify(r));
-    const second = loadTaxonomy(p);
+    const second = loadTagCatalog(p);
     assert.notEqual(first.registrySha256, second.registrySha256);
     assert.notEqual(first.concepts[0].scopeNote, second.concepts[0].scopeNote);
     assert.equal(resolveLabel(first, 'ASR').id, 'task.asr');

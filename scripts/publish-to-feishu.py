@@ -25,7 +25,7 @@ from publish_common import (
     paper_batch_date, score_and_sort, select_blog_published_snapshot,
     validate_papers_for_publish,
 )
-from paper_taxonomy import load_taxonomy
+from paper_taxonomy import load_tag_catalog
 from utils import parse_analysis
 
 # ─── Feishu Config ────────────────────────────────────────────
@@ -245,7 +245,7 @@ def batch_taxonomy_metadata_gap(papers):
     允许 ``primaryTaskTag`` 缺失时回退到 ``tags[0]`` 并跳过解析失败的论文。
     发布通道不允许这样静默降级：这里显式判定降级条件，由正文写出声明。
     """
-    registry = load_taxonomy()
+    registry = load_tag_catalog()
     for paper in papers:
         if not isinstance(paper, dict):
             return True

@@ -6,7 +6,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const taxonomyApi = require('./paper-taxonomy.js');
+const tagCatalogApi = require('./paper-taxonomy.js');
 const fresh = require('./fresh-rewrite-run.js');
 
 const CONTRACT = 'paper-taxonomy-assignment-v1';
@@ -73,7 +73,7 @@ function labelProjection(paper) {
 }
 
 function resolveOne(taxonomy, label, facet, reasons, role) {
-    const matches = taxonomyApi.resolveLabelCandidates(taxonomy, label, facet);
+    const matches = tagCatalogApi.resolveLabelCandidates(taxonomy, label, facet);
     if (matches.length === 0) { reasons.push(`${role}:unknown:${label || '<empty>'}`); return null; }
     if (matches.length > 1) { reasons.push(`${role}:ambiguous:${label}`); return null; }
     if (matches[0].status !== 'active') { reasons.push(`${role}:deprecated:${matches[0].id}`); return null; }
@@ -81,9 +81,9 @@ function resolveOne(taxonomy, label, facet, reasons, role) {
 }
 function conceptMatchesLabel(concept, label) {
     if (!concept) return false;
-    const normalized = taxonomyApi.normalizeLabel(label);
+    const normalized = tagCatalogApi.normalizeLabel(label);
     return [concept.preferredLabel.zh, concept.preferredLabel.en, ...concept.aliases]
-        .some(value => taxonomyApi.normalizeLabel(value) === normalized);
+        .some(value => tagCatalogApi.normalizeLabel(value) === normalized);
 }
 
 function buildAssignment({ runHandle, paper, taxonomy } = {}) {
@@ -92,7 +92,7 @@ function buildAssignment({ runHandle, paper, taxonomy } = {}) {
     const matches = run.papers.filter(item => paperIdOf(item) === paperId);
     if (matches.length !== 1 || stableHash(matches[0]) !== stableHash(paper)) fail('paper is not the exact canonical record from this analysis run');
     if (!taxonomy || !SHA_RE.test(String(taxonomy.registrySha256 || ''))) fail('loaded taxonomy with registry SHA is required');
-    taxonomyApi.validateTaxonomy({ version: taxonomy.version, facets: taxonomy.facets, concepts: taxonomy.concepts });
+    tagCatalogApi.validateTagCatalog({ version: taxonomy.version, facets: taxonomy.facets, concepts: taxonomy.concepts });
     const input = labelProjection(paper); const reasons = []; const concepts = new Map();
     const currentTaxonomyValidation = require('../utils.js')
         .parseAnalysis(paper.analysis)?.taxonomyValidation;
@@ -109,7 +109,7 @@ function buildAssignment({ runHandle, paper, taxonomy } = {}) {
     for (const concept of [task, method]) if (concept) concepts.set(concept.id, concept);
     if (!input.tags.includes(input.primaryTaskTag)) reasons.push('primary-task:not-in-canonical-tags');
     if (!input.tags.includes(input.primaryMethodTag)) reasons.push('primary-method:not-in-canonical-tags');
-    const prunedIds = taxonomyApi.pruneAncestors(taxonomy, [...concepts.keys()].sort()).sort();
+    const prunedIds = tagCatalogApi.pruneAncestors(taxonomy, [...concepts.keys()].sort()).sort();
     if (task && !prunedIds.includes(task.id)) reasons.push(`primary-task:ancestor-pruned:${task.id}`);
     if (method && !prunedIds.includes(method.id)) reasons.push(`primary-method:ancestor-pruned:${method.id}`);
     const blockedReasons = [...new Set(reasons)].sort();

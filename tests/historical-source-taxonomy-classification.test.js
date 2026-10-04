@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const api = require('../scripts/lib/historical-source-taxonomy-classification.js');
-const runtime = require('../scripts/lib/taxonomy-runtime.js').createTaxonomyRuntime({ registryPath: require('node:path').resolve(__dirname, '../config/paper-taxonomy.json') });
+const runtime = require('../scripts/lib/taxonomy-runtime.js').createTagRules({ registryPath: require('node:path').resolve(__dirname, '../config/paper-taxonomy.json') });
 const concepts = ['task.asr', 'method.self-supervised', 'setting.multilingual'].map(id => ({ id, quote: 'This is exact multilingual self-supervised speech recognition evidence.', rationale: '原文明确包含该论文任务方法与条件。' }));
 const raw = { primaryTaskId: concepts[0].id, primaryMethodId: concepts[1].id, concepts };
 const evidence = concepts[0].quote;

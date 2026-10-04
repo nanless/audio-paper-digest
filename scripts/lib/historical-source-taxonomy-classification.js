@@ -181,7 +181,7 @@ async function classifyRun(options) {
     const poolIdentity = pool.getPoolIdentity(pool.resolvePrimaryApiKeyPool(process.env.PAPER_ANALYZER_API_KEY,
         process.env.PAPER_ANALYZER_FALLBACK_API_KEYS, process.env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY), process.env.PAPER_ANALYZER_ENDPOINT);
     const { plan, registry } = supplementApi.readPlanRegistry(options);
-    const runtime = taxRuntime.createTaxonomyRuntime({ registryPath: options.registrySnapshot });
+    const runtime = taxRuntime.createTagRules({ registryPath: options.registrySnapshot });
     const supplement = { contract: supplementApi.CONTRACT, records: {} };
     const failures = [], decisions = []; let stopped = null;
     const byId = new Map(registry.entries.map(e => [e.paperId, e]));

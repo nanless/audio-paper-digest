@@ -240,7 +240,7 @@ async function promoteCaptionOnly(current, plan, deps) {
     }
     const shared = replayRetainedShared(current, plan, deps);
     api.assertSourceContinuity(current.state, shared);
-    const taxonomy = require('./paper-taxonomy.js').loadTaxonomy(deps.files.taxonomyRegistry);
+    const taxonomy = require('./paper-taxonomy.js').loadTagCatalog(deps.files.taxonomyRegistry);
     const preservedStages = {}, items = {};
     for (const original of Object.values(current.state.items)) {
         const loaded = deps.postprocess.loadCompleted({ analysisRoot: deps.files.conferenceAnalysisDir,

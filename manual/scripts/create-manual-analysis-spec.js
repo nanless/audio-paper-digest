@@ -276,7 +276,7 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
         throw new Error(`${label}.primaryMethodTag 必须是 tags 中显式包含的 current method facet 标签`);
     }
     const taxonomyValidation = require('../../scripts/lib/taxonomy-runtime.js')
-        .getDefaultTaxonomyRuntime().validateTagSelection({
+        .getDefaultTagRules().validateTagSelection({
             tags: tagList,
             primaryTaskTag: task,
             primaryMethodTag

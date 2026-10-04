@@ -9,7 +9,7 @@ SCRIPTS = os.path.join(ROOT, 'scripts')
 if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
-from paper_taxonomy import active_preferred_labels, load_taxonomy  # noqa: E402
+from paper_taxonomy import active_preferred_labels, load_tag_catalog  # noqa: E402
 from utils import (ALLOWED_TAGS, PRIMARY_METHOD_TAGS, PRIMARY_TASK_TAGS,
                    parse_analysis)  # noqa: E402
 
@@ -30,7 +30,7 @@ def analysis(tags, task=None, method=None, *, summary_task=None, summary_method=
 
 class UtilsTaxonomyContractTests(unittest.TestCase):
     def test_compatibility_sets_are_registry_projections(self):
-        taxonomy = load_taxonomy()
+        taxonomy = load_tag_catalog()
         self.assertEqual(ALLOWED_TAGS, set(active_preferred_labels(taxonomy)))
         self.assertEqual(PRIMARY_TASK_TAGS,
                          set(active_preferred_labels(taxonomy, ('task',))))
@@ -52,7 +52,7 @@ class UtilsTaxonomyContractTests(unittest.TestCase):
             'valid': True,
             'errors': [],
             'registryVersion': 'paper-taxonomy-v1',
-            'registrySha256': load_taxonomy()['registrySha256'],
+            'registrySha256': load_tag_catalog()['registrySha256'],
             'primaryTaskId': 'task.asr',
             'primaryMethodId': 'method.transformer',
             'conceptIds': ['task.asr', 'method.transformer',
@@ -163,7 +163,7 @@ class UtilsTaxonomyContractTests(unittest.TestCase):
                          'task.asr')
 
     def test_deprecated_legacy_concept_is_reported_without_replacement(self):
-        taxonomy = copy.deepcopy(load_taxonomy())
+        taxonomy = copy.deepcopy(load_tag_catalog())
         taxonomy.pop('registrySha256')
         old = copy.deepcopy(next(
             concept for concept in taxonomy['concepts']

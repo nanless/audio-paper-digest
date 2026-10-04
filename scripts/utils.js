@@ -1127,10 +1127,10 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
 // The raw registry is the sole tag authority.  These compatibility exports
 // remain Sets for existing consumers, but are derived from active preferred
 // Chinese labels rather than copied from a prompt table.
-const TAXONOMY_RUNTIME = require('./lib/taxonomy-runtime.js').getDefaultTaxonomyRuntime();
-const ALLOWED_TAGS = TAXONOMY_RUNTIME.allowedTags;
-const PRIMARY_TASK_TAGS = TAXONOMY_RUNTIME.taskTags;
-const PRIMARY_METHOD_TAGS = TAXONOMY_RUNTIME.methodTags;
+const TAG_RULES = require('./lib/taxonomy-runtime.js').getDefaultTagRules();
+const ALLOWED_TAGS = TAG_RULES.allowedTags;
+const PRIMARY_TASK_TAGS = TAG_RULES.taskTags;
+const PRIMARY_METHOD_TAGS = TAG_RULES.methodTags;
 
 const SCORE_DIMENSIONS = Object.freeze({
     innovationScore: Object.freeze({ label: '创新性', max: 2 }),
@@ -1256,7 +1256,7 @@ function parseScoringDimensions(scoringText) {
 
 function parseAnalysis(analysis, options = {}) {
     if (!analysis) return null;
-    const taxonomyRuntime = options.taxonomyRuntime || TAXONOMY_RUNTIME;
+    const tagRules = options.taxonomyRuntime || TAG_RULES;
     const legacyTags = options.legacyTags === true;
 
     // 标准化标签：加 # 前缀，清理分隔符和多余空格
@@ -1275,8 +1275,8 @@ function parseAnalysis(analysis, options = {}) {
     function _resolveAllowedTag(raw, facet) {
         if (!raw) return null;
         return legacyTags
-            ? taxonomyRuntime.resolveLegacyTag(_normalizeTag(raw), facet)
-            : taxonomyRuntime.resolveCurrentTag(String(raw).trim(), facet);
+            ? tagRules.resolveLegacyTag(_normalizeTag(raw), facet)
+            : tagRules.resolveCurrentTag(String(raw).trim(), facet);
     }
 
     function _canonicalTag(raw, facet) {
@@ -1336,8 +1336,8 @@ function parseAnalysis(analysis, options = {}) {
         scoreValidation: { valid: false, scores: {}, errors: ['缺少评分理由'] },
         taxonomyValidation: {
             valid: false, errors: ['缺少标签章节'],
-            registryVersion: taxonomyRuntime.registryVersion,
-            registrySha256: taxonomyRuntime.registrySha256,
+            registryVersion: tagRules.registryVersion,
+            registrySha256: tagRules.registrySha256,
             primaryTaskId: null, primaryMethodId: null, conceptIds: [],
             specificityWarning: null
         }
@@ -1436,7 +1436,7 @@ function parseAnalysis(analysis, options = {}) {
         ? _canonicalTag(extractedTaskTag, 'task') : '';
     result.primaryMethodTag = _isMethodTag(extractedMethodTag)
         ? _canonicalTag(extractedMethodTag, 'method') : '';
-    result.taxonomyValidation = taxonomyRuntime.validateTagSelection({
+    result.taxonomyValidation = tagRules.validateTagSelection({
         tags: legacyTags ? result.tags : rawTagList,
         primaryTaskTag: legacyTags ? result.primaryTaskTag : extractedTaskTag,
         primaryMethodTag: legacyTags ? result.primaryMethodTag : extractedMethodTag

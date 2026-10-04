@@ -101,16 +101,16 @@ const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     findReaderTablePasteDuplication,
     effectiveReaderTableRows, readerResultTableRequirement, renderReaderTableSelection,
     validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
-const { getDefaultTaxonomyRuntime } = require('./lib/taxonomy-runtime.js');
-const TAXONOMY_RUNTIME = getDefaultTaxonomyRuntime();
+const { getDefaultTagRules } = require('./lib/taxonomy-runtime.js');
+const TAG_RULES = getDefaultTagRules();
 
 function taxonomyFingerprintFields() {
     return {
-        taxonomyRegistryVersion: TAXONOMY_RUNTIME.registryVersion,
-        taxonomyRegistrySha256: TAXONOMY_RUNTIME.registrySha256,
-        taxonomyProjectionContract: TAXONOMY_RUNTIME.projectionContract,
-        taxonomyProjectionSha256: TAXONOMY_RUNTIME.projectionSha256,
-        taxonomySelectionContract: TAXONOMY_RUNTIME.selectionContract
+        taxonomyRegistryVersion: TAG_RULES.registryVersion,
+        taxonomyRegistrySha256: TAG_RULES.registrySha256,
+        taxonomyProjectionContract: TAG_RULES.projectionContract,
+        taxonomyProjectionSha256: TAG_RULES.projectionSha256,
+        taxonomySelectionContract: TAG_RULES.selectionContract
     };
 }
 
@@ -14304,7 +14304,7 @@ async function analyzePaperDeepInternal(paper) {
         categories: Array.isArray(paper.categories) ? paper.categories.join(', ') : (paper.categories || '未知'),
         arxivId: arxivId,
         textForAnalysis: textForAnalysis,
-        taxonomyProjection: TAXONOMY_RUNTIME.projection
+        taxonomyProjection: TAG_RULES.projection
     });
 
     let analysis = isRecoveryStageComplete(analysisManifest, 'primaryAnalysis')
@@ -14697,7 +14697,7 @@ async function analyzePaperDeepInternal(paper) {
             paper,
             analysisManifest,
             'taxonomySeal',
-            `${taxonomySealStage.fingerprint}:invalid-${TAXONOMY_RUNTIME.selectionContract}`
+            `${taxonomySealStage.fingerprint}:invalid-${TAG_RULES.selectionContract}`
         );
         analysis = paper.analysisCheckpoint || taxonomySealStage.inputAnalysis;
         taxonomySealStage = prepareTextRecoveryStage(
@@ -14745,11 +14745,11 @@ async function analyzePaperDeepInternal(paper) {
                 throw contractRejectedError(`taxonomy 最终门禁失败: ${finalTaxonomyIssue}`);
             }
             const taxonomyBinding = {
-                registryVersion: TAXONOMY_RUNTIME.registryVersion,
-                registrySha256: TAXONOMY_RUNTIME.registrySha256,
-                projectionContract: TAXONOMY_RUNTIME.projectionContract,
-                projectionSha256: TAXONOMY_RUNTIME.projectionSha256,
-                selectionContract: TAXONOMY_RUNTIME.selectionContract,
+                registryVersion: TAG_RULES.registryVersion,
+                registrySha256: TAG_RULES.registrySha256,
+                projectionContract: TAG_RULES.projectionContract,
+                projectionSha256: TAG_RULES.projectionSha256,
+                selectionContract: TAG_RULES.selectionContract,
                 inputAnalysisSha256: taxonomySealStage.inputAnalysisSha256,
                 outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
                 inputProtectedProjectionSha256: crypto.createHash('sha256')
@@ -14763,7 +14763,7 @@ async function analyzePaperDeepInternal(paper) {
             };
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
-                taxonomy: TAXONOMY_RUNTIME.selectionContract
+                taxonomy: TAG_RULES.selectionContract
             };
             markRecoveryStage(
                 analysisManifest,
@@ -15972,7 +15972,7 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
         arxivId: getPaperArxivId(paper),
         existingAnalysis: existingAnalysis,
         textForAnalysis: evidence,
-        taxonomyProjection: TAXONOMY_RUNTIME.projection
+        taxonomyProjection: TAG_RULES.projection
     });
     return await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
         { usageContext: { stage: 'revision' } });
@@ -16193,7 +16193,7 @@ function parseTaxonomyRepairResult(raw) {
         || parsed.conceptIds.some(id => typeof id !== 'string')) {
         throw contractRejectedError('taxonomy 修复 JSON schema 非法');
     }
-    const activeById = new Map(TAXONOMY_RUNTIME.taxonomy.concepts
+    const activeById = new Map(TAG_RULES.taxonomy.concepts
         .filter(concept => concept.status === 'active')
         .map(concept => [concept.id, concept]));
     const concepts = parsed.conceptIds.map(id => activeById.get(id));
@@ -16211,7 +16211,7 @@ function parseTaxonomyRepairResult(raw) {
         primaryTaskTag: `#${activeById.get(parsed.primaryTaskId).preferredLabel.zh}`,
         primaryMethodTag: `#${activeById.get(parsed.primaryMethodId).preferredLabel.zh}`
     };
-    const validation = TAXONOMY_RUNTIME.validateTagSelection(selection);
+    const validation = TAG_RULES.validateTagSelection(selection);
     if (!validation.valid) {
         throw contractRejectedError(`taxonomy 修复选择非法: ${validation.errors.join('、')}`);
     }
@@ -16256,7 +16256,7 @@ async function repairTaxonomyTags(paper, analysis, evidenceContext, issue, optio
             arxivId: getPaperArxivId(paper),
             validationFeedback: feedback,
             textForAnalysis: evidenceContext,
-            taxonomyProjection: TAXONOMY_RUNTIME.projection
+            taxonomyProjection: TAG_RULES.projection
         });
         const raw = await callModelFn(
             [{ role: 'user', content: prompt }],

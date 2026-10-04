@@ -24,7 +24,7 @@ import path_config
 import taxonomy_paths
 from markdown_hugo_gate import parse_frontmatter_content
 from paper_taxonomy import (FACET_IDS, LABEL_MODE_LEGACY, ancestors,
-                            load_taxonomy, normalize_label, prune_ancestors,
+                            load_tag_catalog, normalize_label, prune_ancestors,
                             resolve_label)
 from project_env import build_child_process_env, load_project_env
 from runtime_guard import require_external_runtime
@@ -438,7 +438,7 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     destination = validate_output_root(output, repo)
     commit = git_snapshot(repo)
     registry_path = Path(registry_path or taxonomy_paths.TAXONOMY_REGISTRY_FILE)
-    taxonomy = load_taxonomy(registry_path)
+    taxonomy = load_tag_catalog(registry_path)
     base = blog_base_url(repo)
     paths = markdown_paths(repo)
     pages, excluded, hashes = [], [], []
@@ -507,7 +507,7 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     for path, expected in zip(paths, hashes):
         if sha256(read_regular(path)) != expected['sha256']:
             raise ValueError('Blog page SHA changed during taxonomy preview')
-    if load_taxonomy(registry_path)['registrySha256'] != taxonomy['registrySha256']:
+    if load_tag_catalog(registry_path)['registrySha256'] != taxonomy['registrySha256']:
         raise ValueError('Taxonomy registry changed during preview')
     public_text = json.dumps(index, ensure_ascii=False, indent=2) + '\n'
     if str(repo) in public_text or str(path_config.PROJECT_ROOT) in public_text:

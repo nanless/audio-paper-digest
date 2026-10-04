@@ -37,7 +37,7 @@ function fixture(t) {
             identityRecordSha256: '8'.repeat(64), groupSha256: 'd'.repeat(64), pageKeys: keys }] };
     const dependencies = { readCrosswalk: () => state, findAssignment: () => ({ value: assignment, fileSha256: 'e'.repeat(64) }),
         rendererImplementationSha256: () => RENDERER_SHA,
-        loadTaxonomy: () => ({ registrySha256: REGISTRY_SHA }),
+        loadTagCatalog: () => ({ registrySha256: REGISTRY_SHA }),
         loadRun: () => ({}), runSnapshot: () => ({ analysisFileSha256: 'a'.repeat(64), papers: [paper] }),
         buildAssignment: () => assignment,
         render: packet => { assert.equal(packet.paper.apiReaderArticle, 'NEW_READER_ONLY'); return `---\ndate: ${packet.cohortDate}\n---\nNEW PAGE`; },
