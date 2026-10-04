@@ -1,100 +1,62 @@
-# 本机论文 AI Companion（历史维护记录）
+# 旧本机论文助手的接口维护参考
 
-2026-09-06 起，博客已取消全部本机助手入口，包括本机 AI、Zotero 确认页和 PDF 下载服务。
-读者使用[纯网页阅读工具](blog-reading-tools.md)，无需运行本项目、启动服务或填写 API key。
-以下内容仅记录旧接口及实现，文中关于博客入口的描述属于历史设计，不应据此恢复集成。
-保留服务源码和静态 sidecar 契约用于历史维护，不代表博客继续依赖它们。
+2026-09-06 起，博客已取消全部本机助手入口，包括本机 AI、Zotero 确认页和 PDF 下载服务。读者使用[纯网页阅读工具](blog-reading-tools.md)，无需运行本项目、启动服务或填写 API 密钥。博客前端也不再向本机服务传递地址或参数。
 
-## 为什么需要本机 companion
+服务源码和 `researcher-sidecars-v1` 静态附属文件格式仍保留。这份说明供维护旧接口时查阅，下面的博客工具栏、导航和预填设计属于退出集成前的行为，不能据此恢复博客功能。源码中残留的旧启动或重开提示，也不代表今天的博客提供这些入口。
 
-博客部署在静态 GitHub Pages 上，不能安全保存 API key，也不能为 OpenCode Go
-补上浏览器 CORS 支持。OpenCode Go 对浏览器带 `Authorization` 的请求会先收到
-CORS preflight；服务端没有对应 `OPTIONS` 路由时通常表现为 404。把 key 写进网页、
-把请求改成 `no-cors` 或反复重试都不能解决这个安全边界。
+## 旧设计解决的问题
 
-本机 companion 让浏览器只访问 `127.0.0.1` 上的隔离 UI；真正的模型请求由 Node
-发出，因此不经过浏览器对模型 endpoint 的 CORS preflight，并继续复用项目现有的：
+静态 GitHub Pages 不能安全保存 API 密钥，也不能替模型服务增加浏览器 CORS 支持。旧记录观察到 OpenCode Go 的浏览器请求带 `Authorization` 时先做 CORS 预检，服务没有对应 `OPTIONS` 路由时通常返回 404。这是当时的观察，本说明没有重新联网核验服务现状。把密钥写进网页、使用 `no-cors` 或重复请求都不能替代正确的凭据和跨源设计。
 
-- OpenAI Responses / Chat Completions 路由；
-- OpenCode Go sticky 账号池；
-- Muse 所需的项目 HTTP CONNECT 代理；
-- 请求截止时间和响应字节上限。
+旧助手让用户导航到 `127.0.0.1` 的本机界面，再由 Node 请求模型，避开浏览器直接调用模型端点的预检。它复用 OpenAI Responses / Chat Completions 路由、OpenCode Go 固定账号及备用账号规则、Muse 的项目 HTTP CONNECT 代理，以及请求截止时间和响应体积限制。
 
-## 启动
+## 维护时的启动与监听方式
 
-先按[环境与配置](setup.md)准备项目 `.env`，再在项目根运行：
+旧服务按[环境与配置](setup.md)读取项目 `.env`，源码对应启动命令为：
 
 ```bash
 npm run paper:rethink
 ```
 
-服务固定监听：
+这仅是维护入口说明，不是阅读博客的准备步骤。生产启动固定监听：
 
 ```text
 http://127.0.0.1:43128/ui
 ```
 
-它不监听 `0.0.0.0`、局域网地址或 IPv6 wildcard。端口被占用时启动失败，不会自动
-换端口。博客集成只能用一个普通外链显式打开这个 URL；不得在页面加载时探测
-`/health`、自动调用 `/v1/rethink`，也不得把 session token 带回博客页面。
+它不监听 `0.0.0.0`、局域网地址或 IPv6 通配监听地址；端口占用即失败，不自动换端口。浏览器连接失败说明服务不可达，静态博客不能替用户启动 Node。今天的博客没有“从论文工具栏重新打开助手”的操作。
 
-浏览器显示“无法连接 127.0.0.1”意味着本机服务未启动；静态博客不能替用户启动 Node。
-在仓库目录运行上述命令并保持终端运行，然后从论文工具栏重新打开。官方 arXiv PDF、
-浏览器保存 PDF、静态 BibTeX/RIS 和浏览器 Zotero Connector 不需要这个服务。
-本机确认导入只需要 Zotero Desktop，不依赖浏览器扩展。
+退出集成前，设计只允许用户显式点击带 `target="_blank"` 的普通外链打开 `/ui`，不允许页面加载、滚动或鼠标悬停时探测 `/health` 或请求 `/v1/rethink`，不把会话标识（session token）传回博客。官方 arXiv PDF、浏览器保存 PDF、静态 BibTeX/RIS 和浏览器 Zotero Connector 本来就不需要这个服务；本机确认导入当时只依赖 Zotero Desktop。
 
-没有配置 LLM endpoint/key/model 时，本机 UI、PDF 和 Zotero 仍可独立使用；AI 请求仍
-要求精确 endpoint allowlist 和有效凭据。已经填写但不安全的 endpoint 仍在启动时拒绝。
-UI 的“检查模型配置与 Zotero 连接”只在用户点击后检查配置是否齐全并读取 Connector
-ping，不调用模型、不产生模型费用、不写 Zotero，也不代表模型账号实际已验证可用。
+没有配置模型端点、密钥或模型名时，服务的 UI、PDF 和 Zotero 接口仍可独立使用；模型请求须有有效凭据及精确端点白名单。已配置却不安全的端点仍在启动时拒绝。“检查模型配置与 Zotero 连接”仅在点击后检查配置是否齐全并读取 Connector ping，不调用模型、不产生模型费用、不写 Zotero，也不能证明模型账号实际可用。
 
-## UI 与凭据
+## 密钥与发送内容
 
-UI 可以输入 protocol、model、endpoint、临时 API key、问题和论文原文。临时 key：
+旧 UI 接收协议、模型名、端点、临时 API 密钥、问题和论文文本。临时密钥仅进入当前请求内存，不进入 URL、HTML、日志或文件，不存 `localStorage`、`sessionStorage`、IndexedDB 或 Cache API，提交后清空密码输入框，也不与项目备用密钥混成账号池。
 
-- 只进入当前请求的内存；
-- 不进入 URL、HTML、日志或文件；
-- 不使用 `localStorage`、`sessionStorage`、IndexedDB 或 Cache API；
-- 提交后立即清空 password 输入框；
-- 不会与项目 fallback key 混成账号池。
+密钥不落盘不等于论文文本留在本机。问题和原文会发给选择的模型服务，受供应商自身日志、保留和训练政策约束，因此旧界面要求发送前核对端点与内容。
 
-API key 不落盘不代表论文文本不会离开本机；问题与原文会发送给所选服务，并可能受
-该供应商自身的日志、保留和训练政策约束。发送前必须核对 UI 中的 endpoint 和内容。
+临时密钥留空时使用项目 `PAPER_ANALYZER_API_KEY`；默认端点为 OpenCode Go 时，公共路由还按项目规则使用 `PAPER_ANALYZER_FALLBACK_API_KEYS`。助手没有为普通网络、5xx、协议或内容失败另加自动重试。它调用公共请求层一次，但公共账号池可在同一逻辑请求内向后切换账号，因此不等于只能产生一个实际传输请求。
 
-临时 key 留空时使用项目 `.env` 的 `PAPER_ANALYZER_API_KEY`；若默认 endpoint 是
-OpenCode Go，还会按生产规则使用 `PAPER_ANALYZER_FALLBACK_API_KEYS`。普通网络、
-5xx、协议或内容失败不会由 companion 自动重试；账号池只会对结构化、明确的
-`GoUsageLimitError` 做既有 sticky failover。
+旧记录只列 `GoUsageLimitError` 切号；当前共享实现也识别官方 HTTP 401 的精确 `Insufficient balance`，并与明确 HTTP 429 `GoUsageLimitError` 一样记录冷却及后续账号选择。普通认证 401 不切号，普通 429、5xx、网络或内容失败也不能借此切号。这里说明现有公共层行为，没有修改服务或核验当前账号状态。
 
-## Endpoint allowlist
+## 模型端点白名单
 
-默认只批准 `PAPER_ANALYZER_ENDPOINT`。如确实要使用其他服务，必须由本机操作者在
-`.env` 中显式添加，而不是接受网页任意指定：
+默认仅允许 `PAPER_ANALYZER_ENDPOINT`。旧接口允许本机操作者显式配置其他地址，而不接受网页随意指定：
 
 ```dotenv
 PD_PAPER_RETHINK_ALLOWED_ENDPOINTS=https://api.openai.com/v1,https://api.example.com/v1
 ```
 
-UI 仍可填写 endpoint，但 `/v1/rethink` 只接受 allowlist 的精确 canonical 值。该设计
-防止获得 HTTP 调用能力的页面把本机 companion 变成内网探测或 DNS rebinding 工具。
+`/v1/rethink` 只接受规范化后与白名单精确相等的值。非默认端点必须输入该服务的临时密钥，项目密钥只发给项目默认端点。白名单旨在限制服务调用范围，不能把设计意图当作实际跨域泄漏或 DNS 重绑定漏洞已复现、已修好的证据。
 
-endpoint 规则：
+端点只允许 HTTPS 默认端口 443，拒绝 URL 用户信息、查询参数、片段标识、IP 地址字面值、本机或私网后缀、单标签主机名，以及原始或百分号编码的点路径、编码斜线和反斜线。Chat 填 API 基础路径（如 `/v1`），不附加 `/chat/completions`。`protocol` 只能选 `openai_responses` 或 `openai_chat`，须与公共路由推导一致。
 
-- 只允许 HTTPS 默认端口 443；
-- 禁止 URL userinfo、query、fragment；
-- 禁止 IP literal、本机/私网后缀和单标签主机名；
-- 禁止原始或 percent-encoded dot segment、encoded slash/backslash；
-- Chat endpoint 填 API 基础路径，例如 `/v1`，不要附加 `/chat/completions`；
-- protocol 必须显式选择 `openai_responses` 或 `openai_chat`，并与公共路由推导一致。
-
-为其他 endpoint 配置 allowlist 时，还必须输入其临时 key；项目 `.env` key 只会发送到
-项目默认 endpoint。
-
-## HTTP 合同
+## HTTP 接口与请求限制
 
 ### `GET /health`
 
-只返回不含 token、endpoint、model 或凭据的健康状态：
+只返回不含会话标识、模型端点、模型名或凭据的健康状态：
 
 ```json
 {"ok":true,"service":"paper-rethink-companion","schemaVersion":1}
@@ -102,12 +64,9 @@ endpoint 规则：
 
 ### `GET /ui`
 
-返回带启动时随机 session token 的本机 UI。响应为 `no-store`，有严格 CSP、
-`frame-ancestors 'none'`、Permissions Policy 和 `no-referrer`。token 只在该 UI 文档中
-使用，每次重启都会变化。博客可以通过普通导航打开 `/ui`，但带博客 `Origin` 的
-脚本 fetch 会被拒绝且拿不到 UI HTML/token。
+界面含进程启动时随机生成的会话标识（session token），响应为 `no-store`，设置严格 CSP、`frame-ancestors 'none'`、Permissions Policy 和 `no-referrer`。会话标识仅供该 UI 文档使用，重启后改变。旧博客普通导航可打开界面，但带博客 `Origin` 的脚本 fetch 被拒绝，不能读取 HTML 或会话标识。
 
-`/ui` 导航可携带以下可选预填参数：
+旧导航允许以下预填字段；今天的博客不再生成这些本机导航：
 
 ```text
 ?title=...
@@ -119,72 +78,35 @@ endpoint 规则：
 &action=zotero
 ```
 
-- 编码后的 query 总长不超过 32768 字符；HTTP 请求行与头合计上限 48 KiB。
-  这可容纳 2000 个汉字经过 URL 编码后的长度；字段不得重复，任何未知参数都拒绝。
-- `action` 只接受 `rethink`（默认）或 `zotero`，仅控制初始聚焦区域，不会发送模型请求
-  或执行导入。
-- `key`、`apiKey`、`token` 等凭据字段属于未知参数，服务在签发 UI HTML/session
-  token 前拒绝，错误不回显参数名或值。
-- `sourceUrl` 只允许与 `arxivId` 一致的官方 arXiv HTTPS abs/PDF URL。
-- `contextUrl` 只允许配置的博客 HTTPS origin/base path 下，严格形如
-  `data/papers/YYYY-MM-DD/<safe-arxiv-id>/rethink-context.json`，并必须与
-  `arxivId` 指向同一论文。
-- companion 由服务器侧按 256 KiB、10 秒、JSON content-type、无 redirect 的边界
-  读取 sidecar；本机浏览器不跨源 fetch。
-- sidecar 合同和 arXiv 身份通过后才预填原文框；暂时不可用时保留手动粘贴能力，
-  只显示脱敏失败提示。
-- `selectedText` 只允许用户点击论文工具栏按钮时从当前文档选择读取，规范化为 NFC
-  纯文本；最多 2000 字符，并继续受 32768 字符的编码后总 query 上限约束。控制字符、
-  超长选择和过长 URL 在导航前后分别失败关闭。
-- 有选中段落时，UI 把它标为“不可信论文证据”并置于摘要 sidecar 之前，同时预填
-  “解释作用、前提和误读”的问题；没有选择时继续使用摘要 sidecar 或手动粘贴全文。
-- `pageExcerpt` 是旧页面没有 sidecar 时的可选兜底，只能由博客在用户点击时提取正文
-  导读摘录并传入。最多 2000 字符，执行与选段相同的 NFC、换行和控制字符校验；
-  仍受 32768 字符编码后 query 上限约束。后端只有在没有 `selectedText`、也没有通过
-  验证的 sidecar 时才使用，明确标注“博客导读摘录，非论文原文，未经来源绑定验证”。
-  该摘录不会成为 Zotero 作者/引用 metadata、恢复链接或任何可信来源证明；原始
-  `pageExcerpt` 字段在预填后丢弃。模型调用仍等待用户在本机核对并点击发送，不自动抓全文。
-- UI 完成预填后立即用 `history.replaceState` 从地址栏和当前 history entry 移除 query；
-  选中文本不会进入 API key、Zotero ticket、日志或 storage。它只会在用户再次点击
-  “发送到所选模型”后随原文框内容发给 provider。
+编码后查询参数总长不超过 32768 字符，HTTP 请求行与头合计上限 48 KiB，可容纳 2000 汉字的 URL 编码。字段不可重复，未知参数拒绝；`key`、`apiKey`、`token` 等凭据字段也在返回 UI HTML 或会话标识前拒绝，错误不回显参数名或值。`action` 只接受默认 `rethink` 或 `zotero`，仅决定初始聚焦区域，不请求模型或导入。
 
-UI 会给普通论文和选段各自预填问题。上下文只有 sidecar 摘要时，问题明确要求模型指出
-证据不足，用户仍可在发送前补充原文。Zotero 导入失败后，使用页面中的“重新打开这篇
-论文的确认页”链接；它保留论文身份与受控 sidecar，丢弃选段和博客摘录，且不携带 key 或 token。
-不要直接刷新已清除 query 的 `/ui`，否则论文身份会丢失。重试前先检查库中是否已保存；
-失败请求的一次性 ticket 仍会作废，不能自动重试不确定的写入。
+`sourceUrl` 仅允许与 `arxivId` 相同的官方 arXiv HTTPS abs/PDF 地址。`contextUrl` 只允许配置博客 HTTPS origin/base path 下的 `data/papers/YYYY-MM-DD/<safe-arxiv-id>/rethink-context.json`，且须同篇。服务器按 256 KiB、10 秒、JSON content-type、无重定向读取该附属文件，本机浏览器不跨源 fetch。格式及 arXiv 身份通过后才预填原文框，暂不可用时保留手动粘贴，只显示脱敏错误。
 
-博客只能生成普通、用户点击触发的 `target="_blank"` 导航；不得在加载、滚动或
-hover 时 fetch localhost，也不得把本机 session token 传回博客。
+`selectedText` 来自旧工具栏用户主动选择的段落，规范化为 NFC 纯文本，最多 2000 字符，同时受 32768 编码总长限制。控制字符、超长选择和过长 URL 在导航前后都拒绝。选段优先置于摘要附属文件之前，并标明“不可信论文证据”，预填解释作用、前提与误读的问题；没有选择时用已核验摘要或手动全文。
+
+`pageExcerpt` 是旧页没有附属文件时的后备导读摘录，最多 2000 字符，检查 NFC、换行和控制字符，仍受 32768 总长限制。只有无 `selectedText` 且无通过验证的附属文件时才使用，并注明“博客导读摘录，非论文原文，未经来源绑定验证”。它不进入 Zotero 作者或引用元数据、恢复链接或可信来源证明，预填后丢弃原字段。请求模型仍须用户本机核对后点击发送，不自动抓全文。
+
+预填完成后，`history.replaceState` 清除地址栏及当前历史条目的查询参数。选段不进入密钥、Zotero 导入票据、日志或存储，只有再次点击发送才随原文框内容发给模型。仅有摘要时，预填问题要求模型说明证据不足，用户可补全文。
+
+旧 UI 的 Zotero 失败恢复链接保留论文身份与受控附属文件，丢弃选段和导读摘录，不带 key/token。直接刷新已清除查询参数的 `/ui` 会丢论文身份；重试应先检查库中是否已保存。不确定写入不能自动重试，失败请求的一次性 ticket 仍作废。这是服务现存恢复设计，不是今天博客的导入功能。
 
 ### `GET /v1/paper/pdf?arxivId=...`
 
-这是用户显式点击“下载 PDF（本机）”后的附件下载入口。它只接受唯一的
-`arxivId` 参数，支持现代及 old-style arXiv ID，并保留显式 `vN`；未知、重复参数或
-非法 ID 在联网前拒绝。服务只通过项目 HTTP CONNECT 请求官方 arXiv PDF，验证受控
-重定向、50 MiB 上限、MIME 与 `%PDF-` 文件头，然后用 `attachment` 响应返回。该入口
-不接受任意 URL、不读取 API key，也不在博客加载时调用；进程级限制为最多两个并发、
-每分钟六次。HTTPS 页面跳转到 HTTP loopback 时浏览器可能按降级规则移除 referrer，
-因此服务不把可缺失、也可由非浏览器伪造的 referrer 当作授权凭据。
-下载失败时，浏览器导航收到包含官方 PDF 链接和代理恢复说明的 HTML；普通 API 客户端
-仍收到稳定 JSON 错误。附件来源、重定向、体积与文件头校验不变。
+旧服务将此作为用户主动点击后的附件下载接口，只接受唯一 `arxivId`，支持现代及旧式 arXiv ID，保留显式 `vN`。未知、重复参数或非法 ID 在联网前拒绝，不接受任意 URL，也不读取 API 密钥。
+
+下载经项目 HTTP CONNECT，只访问身份一致的官方 `arxiv.org`/`export.arxiv.org` PDF，最多两次受控重定向、50 MiB，检查 `application/pdf`/`application/octet-stream` 和 `%PDF-` 文件头后设置 `Content-Disposition: attachment` 返回。PDF 请求使用独立 180 秒超时，不能与下述模型的 120 秒预算混为一项。进程最多两个并发、每分钟六次。
+
+HTTPS 到 HTTP loopback 导航可能使浏览器移除 referrer，它既可缺失也可被非浏览器伪造，不能作授权凭据。失败时浏览器收到含官方 PDF 链接和代理恢复说明的 HTML，普通 API 客户端收到稳定 JSON 错误；来源、重定向、体积和文件头检查不变。
 
 ### `GET /v1/local/status`
 
-仅本机 UI 用户点击连接检查后调用，必须携带当前 session header；带非本机 Origin 的
-请求拒绝。返回模型配置是否齐全、协议是否支持、代理是否配置，以及固定
-`127.0.0.1:23119/connector/ping` 的可用状态，不返回 endpoint、model、key、库内容或
-原始网络错误。它不会自动运行 LLM 验证或导入。
+本机 UI 用户点击连接检查时携带当前 session header。有 `Origin` 时必须是精确本机 UI origin，无 `Origin` 的客户端仍必须通过 session 核验。返回模型配置是否齐全、协议是否支持、代理是否配置，以及固定 `127.0.0.1:23119/connector/ping` 是否可达，不返回 endpoint、model、key、库内容或原始网络错误，也不运行 LLM 验证或导入。
 
 ### `POST /v1/rethink`
 
-请求必须同时满足：
+请求须同时满足允许的博客 origin 或精确本机 UI origin、当前进程随机 token 的 `X-Paper-Rethink-Session`，以及 `Content-Type: application/json`。博客 origin 在旧白名单中不等于博客能取得 token，今天也没有恢复集成。
 
-1. `Origin` 是允许的博客 origin 或精确本机 UI origin；
-2. `X-Paper-Rethink-Session` 等于当前进程的随机 token；
-3. `Content-Type: application/json`。
-
-请求 schema：
+以下 JSON 保留原接口例子中的 `muse-spark-1.2-contributor`，用于查旧格式，不是今日模型配置推荐：
 
 ```json
 {
@@ -198,10 +120,7 @@ hover 时 fetch localhost，也不得把本机 session token 传回博客。
 }
 ```
 
-限制：请求体 256 KiB、原文 120000 字符、问题 8000 字符、响应 2 MiB、输出
-1048576 字符、模型请求 120 秒、输出 tokens 128–8000。
-
-成功响应只返回纯文本与非敏感路由信息：
+请求体上限为 256 KiB，其中原文最多 120000 字符，问题最多 8000 字符。响应体最多 2 MiB，输出最多 1048576 字符；模型请求预算为 120 秒，输出 token 数可设为 128–8000。成功响应只含纯文本及非敏感路由信息，原例子为：
 
 ```json
 {
@@ -212,79 +131,53 @@ hover 时 fetch localhost，也不得把本机 session token 传回博客。
 }
 ```
 
-上游错误正文、headers、key 和 Authorization 不向浏览器回显。Responses 的
-`incomplete/failed`、缺少 SSE completed 终态，以及 Chat 的 `length`、
-`content_filter`、`tool_calls` 或缺少 `finish_reason=stop` 都按不完整失败处理。
+上游错误正文、headers、key 和 Authorization 不回显到浏览器。Responses 的 `incomplete/failed`、SSE 缺 completed 终态，以及 Chat 的 `length`、`content_filter`、`tool_calls` 或缺 `finish_reason=stop` 都按不完整失败处理。
 
-## CORS、PNA 与 CSRF
+### `POST /v1/zotero/import`
 
-companion 对允许 origin 的合法 preflight 返回：
+接口只允许精确本机 UI Origin 和进程随机 session header。界面显示即将写入的标题、arXiv ID、作者来源和目标；用户确认后才消费十分钟有效、单次使用的随机 ticket，最多 128 个并存。服务先作废票据，再尝试导入；网络结果不确定时不能复用同票据自动重写。
 
-- `Access-Control-Allow-Origin`：原样精确 origin，不使用 `*`；
+服务以 BibTeX 请求固定 `127.0.0.1:23119/connector/import`，写入 Zotero 当前选中的库或分类。对 Zotero 10 的本机 HTTP 加固还发送 `Zotero-Allowed-Request: true`。公共博客不能取得本机 UI 的 origin/session 条件，也不共享它的票据、端口或权限。
+
+有 `researcher-sidecars-v1` 时，引用使用经过论文身份、摘要 SHA 与受控 HTTPS 路径核验的 `rethink-context.json` 标题和作者。旧页没有附属文件时只用携带的标题与严格规范 arXiv ID，作者显示未知，不从正文猜测。Connector 未启动、超时或拒绝时保留稳定错误与重新确认身份链接。
+
+导入接口不保证自动保存 PDF 附件。旧“打开 PDF”只是官方 `https://arxiv.org/pdf/<严格ID>.pdf` 导航，浏览器可能预览；附件下载与文献导入是两个分别由用户触发的动作。
+
+## CORS、PNA 与跨站请求限制
+
+对允许 origin 的合法预检，服务精确返回该 origin，不用通配符：
+
+- `Access-Control-Allow-Origin`：原样精确 origin；
 - `Access-Control-Allow-Methods: GET, POST, OPTIONS`；
 - 只允许 `Content-Type, X-Paper-Rethink-Session`；
-- 浏览器请求 PNA 时返回 `Access-Control-Allow-Private-Network: true`；
+- 浏览器请求 PNA 时，`Access-Control-Allow-Private-Network: true`；
 - `Access-Control-Max-Age: 0`。
 
-Origin 只能防跨站读取，不能单独防 CSRF；随机 token 才是写请求的第二道门。博客
-origin 虽在 CORS allowlist 中，但拿不到 token，因此博客只负责打开 `/ui`，不能直接
-发送模型请求。
+Origin 限制浏览器跨站读取，不能单独防 CSRF，也不等于非浏览器调用者身份认证；随机会话标识是写请求的另一项条件。旧博客 origin 虽在 CORS 白名单中，不能通过脚本读取 `/ui` token，因此旧设计只允许普通导航。保留后端约束不代表重新开放博客入口。
 
-## 原文上下文边界
+## 原文上下文与模型能力
 
-v1 不让 companion 根据论文文本中的 URL 自动下载 PDF、访问网页或调用工具。用户
-应从已发布论文页、arXiv 原文或发布期生成的可信 context sidecar 中粘贴内容，并在
-发送前检查会离开本机的文本。
+旧 v1 不根据论文文本中的 URL 自动下载 PDF、访问网页或调用工具。用户从论文页、arXiv 或发布时生成的可信附属文件取内容，发送前核对会离开本机的文本。
 
-system prompt 把论文内容与用户问题都声明为不可信证据；内容中的“忽略指令”、
-角色声明、联网、工具调用或数据外传要求都不得执行。模型没有 tool/function、网络、
-代码执行或文件权限。UI 以 textarea/value 显示回答，不把模型文本作为 HTML 执行。
+系统提示词将论文和用户问题都视为不可信数据，文本中的忽略指令、角色声明、联网、工具调用或外传要求不执行。请求没有工具或函数调用能力，也没有网络、代码执行或文件权限，UI 以 textarea/value 显示回答，不把模型文字作为 HTML 执行。这些是输入和显示约束，不保证模型事实正确或所有提示注入都已实测。
 
-后续如果自动注入论文全文，来源必须是发布期生成并由 SHA 绑定的同源 sidecar，或由
-本机服务根据规范化、版本化 arXiv ID 从固定官方 host 获取；不要接受任意全文 URL。
+旧设计为未来自动输入全文提出的条件仍可供维护参考：来源须是发布时生成并由 SHA 绑定的同源附属文件，或由服务按规范且版本明确的 arXiv ID 从固定官方主机获取，不能接受任意全文 URL。今天博客没有因此增加自动全文或助手功能。
 
-## 博客工具栏与 Zotero 的分层边界
+## 静态引用与旧集成的区别
 
-本机 AI companion 与引用工具应保持独立：
+旧设计在博客放 Highwire/JSON-LD 学术元数据、静态 `.bib`/`.ris`，另以普通链接打开本机确认 UI；浏览器 Zotero Connector 是不运行助手时的替代方案。静态引用在发布时生成并绑定文件清单（manifest）的 SHA，不在浏览器猜作者或抓 arXiv。旧“AI 重理解”导航也只打开 `http://127.0.0.1:43128/ui`。
 
-1. 博客页面嵌入 Highwire/JSON-LD 学术 metadata，同时提供“导入 Zotero（本机确认）”
-   链接。链接只导航到 companion `/ui`，不会在博客加载时扫描 localhost；浏览器
-   Zotero Connector 仍作为不运行 companion 时的 fallback。
-2. 同源静态 `.bib` / `.ris` 是无扩展时的确定性 fallback；它们在发布期生成并绑定
-   manifest SHA，不在浏览器运行时从正文猜作者或抓 arXiv。
-3. companion 在本机确认页展示将写入的标题、arXiv ID、作者来源和目标说明。只有用户
-   点击“确认导入这条记录”后，服务端才消费一个十分钟、单次使用、最多 128 个并存的
-   随机 ticket，并通过固定 `127.0.0.1:23119/connector/import` 将 BibTeX 写入 Zotero
-   当前选中的库或分类。对 Zotero 10 的本机 HTTP 加固同时发送
-   `Zotero-Allowed-Request: true`；请求还必须同时携带本机 UI Origin 与进程随机
-   session header，公共博客拿不到二者。
-4. 博客中的“AI 重理解”只显式打开 `http://127.0.0.1:43128/ui`，不与 Zotero
-   localhost 能力共享 token、端口或权限。
+2026-09-06 取消的是这些本机交互入口。静态附属文件仍兼容，读者可下载引用后自行导入文献工具；本说明不会把服务留存解释成博客继续依赖它。
 
-新 `researcher-sidecars-v1` 页面使用经过身份、摘要 SHA 和受控 HTTPS 路径验证的
-`rethink-context.json` 标题与作者生成引用。历史页没有 sidecar 时只使用页面携带的
-标题和严格规范化 arXiv ID，预览会明确作者未知，不从正文猜作者。Connector 未启动、
-超时或拒绝导入时，UI 显示稳定错误和保留论文身份的重新确认链接，避免刷新后丢失上下文，
-也避免网络结果不确定时自动重复写入。
+## 源码维护的现有测试
 
-“打开 PDF”仍是指向固定 `https://arxiv.org/pdf/<严格ID>.pdf` 的显式导航，浏览器可能
-预览而不下载。论文工具栏另提供“下载 PDF（本机）”：只有用户点击后，companion 才
-通过项目 HTTP CONNECT 从官方 `arxiv.org`/`export.arxiv.org` 获取身份一致的 PDF，
-最多接受两次受控重定向、50 MiB、`application/pdf`/`application/octet-stream`，并在
-验证 `%PDF-` 文件头后用 `Content-Disposition: attachment` 返回。它不接受任意 URL。
-`connector/import` 的稳定合同不保证自动保存 PDF attachment，因此 Zotero 导入仍不
-伪称自动附带 PDF；下载与导入是两个分别由用户触发的动作。
+`tests/paper-rethink-server.test.js` 使用模拟模型和模拟文献库写入，覆盖规范端点、白名单、协议终态、不可信提示输入、公共调用次数、密钥泄漏检查、Origin/session、CORS/PNA、CSP 与请求体积。还覆盖缺模型配置时 PDF/Zotero 独立可用、2000 汉字 HTTP 预填、只读连接检查、身份恢复、PDF 浏览器错误页及旧摘录的优先级、标注和引用隔离。
 
-## 测试重点
-
-`tests/paper-rethink-server.test.js` 覆盖 canonical endpoint、allowlist、协议终态、
-prompt injection 边界、单次调用、key canary、Origin/session、CORS/PNA、UI CSP 和请求
-大小，并覆盖缺少模型配置时独立 PDF/Zotero 可用性、2000 汉字真实 HTTP 预填、
-只读连接检查、Zotero 恢复身份、PDF 浏览器错误页及旧页摘录的优先级、标注和引用隔离。
-模型和库写入均使用 mock。
-修改 companion 后至少运行（按项目要求在沙箱外执行）：
+下面保留源码维护检查命令。它们不是读者操作，本次文档改写也没有启动服务、请求模型或写 Zotero：
 
 ```bash
 node --test --test-concurrency=1 tests/paper-rethink-server.test.js
 node --check scripts/paper-rethink-server.js
 ```
+
+实际修改服务时仍按项目要求在沙箱外运行相应检查，不能将本说明中的历史结果当作新修改已经测试。
