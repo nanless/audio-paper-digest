@@ -1,22 +1,38 @@
 # 显式保留博客展示词表
 
-发布器默认继续使用当前源仓库的签发词表。博客已批准更丰富的追加词表时，可在博客仓库中提供 `data/taxonomy-presentation-policy.json` 与 `static/data/taxonomy-presentation-policy.json` 两份逐字节相同的策略。策略只选择目录展示版本，不改变日更单篇的标签、主任务、主方法或签发 registry SHA。
+发布器默认用当前源仓库词表生成展示目录。如果用户明确批准博客继续展示已归档的较丰富词表，可以通过展示策略选择该版本。策略只决定目录展示，不改变单篇论文的标签、主任务、主方法或原分类绑定的词表 SHA，也不重新判断旧论文分类。
 
-策略 contract 为 `paper-taxonomy-presentation-selection-v1`，且只允许以下六个字段：
+策略位于博客仓库的 `data/taxonomy-presentation-policy.json` 与 `static/data/taxonomy-presentation-policy.json`。两份文件必须逐字节相同；仅在两份均不存在时，发布器才使用默认词表。存在不完整或非法策略时直接拒绝，不静默退回默认版本。
+
+## 六个协议字段
+
+策略 `contract` 固定为 `paper-taxonomy-presentation-selection-v1`，只允许以下六个字段：
 
 | 字段 | 绑定内容 |
-| --- | --- |
-| `contract` | 上述固定协议 |
-| `baseRegistrySha256` | 实际日更签发的原始 registry 文件 SHA，不是快照文件 SHA |
-| `baseSnapshotSha256` | 发布器由日更 registry 生成的 canonical 快照字节 SHA |
-| `preferredRegistrySha256` | 已批准的展示 registry 原始文件 SHA |
-| `preferredSnapshotSha256` | 已冻结的展示快照 canonical 字节 SHA |
-| `preferredProjectionSha256` | `historical-taxonomy-prompt-projection-v2` 的实际提示投影 SHA |
+|---|---|
+| `contract` | 固定协议名称 |
+| `baseRegistrySha256` | 当前源仓库用于论文分类的原始词表文件 SHA，不是快照文件 SHA |
+| `baseSnapshotSha256` | 发布器由上述词表生成的规范序列化快照字节 SHA |
+| `preferredRegistrySha256` | 用户批准用于展示的已归档词表原始文件 SHA |
+| `preferredSnapshotSha256` | 上述展示快照的规范序列化字节 SHA |
+| `preferredProjectionSha256` | 按 `historical-taxonomy-prompt-projection-v2` 重建、供分类提示词使用的概念清单 SHA |
 
-首选版本必须已存在于 data/static 两份 catalog 和 SHA 命名归档，归档字节必须精确相同。每个原概念的全部字段、名称、父链与概念顺序必须作为首选快照的完整前缀保留。显式策略由既有来源与审批证明绑定；单凭概念数量、日期或名称不能自动批准版本。投影重建与已批准 hash 不符时失败关闭。
+这五个 SHA 必须是 64 位小写十六进制字符串，原词表与首选词表 SHA 必须不同。原始词表、序列化快照和分类提示词清单是不同内容，不能互换哈希。清单含协议、词表版本与 SHA、分面、概念 ID、首选标签、定义及范围说明，不能缩成 ID 列表后计算哈希。用户授权应来自本次明确指令与审批记录；六字段策略用于绑定内容，本身不证明用户已经批准。
 
-策略 JSON 保留原字节，包括排版与尾换行；重复键、额外字段、单镜像缺失、镜像排版不同、符号链接、硬链接、未知源 registry、缺少归档以及任何 SHA/父链漂移都拒绝。存在策略时不会静默降回日更词表；没有策略时保持原有逻辑。
+## 使用已存在的归档
 
-策略两份原字节作为受控 taxonomy 资产进入现有 generation staging、安装 journal、schema-v3 manifest、review 与精确 push delta。协议不增加新的 manifest 字段。生成后或审后即使只改一个空格，也必须重新正常 generate → review，不能补改 receipt。中断安装只能恢复原 journal 绑定的完整 staging 字节；目标已发生外部改动时拒绝覆盖。单篇发布仍不得升级全站版本资产。
+首选快照必须已存在于 `data/taxonomy-catalog.json`、`static/data/taxonomy-catalog.json`，以及两边按 SHA 命名的 `taxonomy-snapshots/<SHA>.json` 归档。目录记录必须与首选对象一致，两份归档必须精确等于该快照的规范序列化字节。策略不能制造缺失版本，也不能仅凭概念数量、日期或名称批准升级。
 
-此策略不代表旧文章已完成来源分类，也不重签已有历史记录。部署 richer catalog/消费者后才可批准并提交相应策略；新增词表不能靠发布器自行制造或仅靠策略文件自我声明。
+原快照的整个概念数组必须是首选快照的完整前缀，每个对象的全部字段与原顺序都要保留，包括名称、别名、定义、范围、状态和父关系。不能仅核 ID 或数量相同就视为追加。发布器还会重建父链与分类提示词清单，核对已批准 SHA；任一项不符就停止。
+
+重复 JSON 键、额外字段、单镜像缺失、镜像排版不同、文件或父目录符号链接、硬链接、未知源词表、缺少归档，以及 SHA 或父链漂移都被拒绝。这些检查确认输入内容一致，不代替对展示版本的人工批准。
+
+## 生成、审查与恢复
+
+发布器保留策略 JSON 的原始字节，包括排版和尾换行。两份策略作为受控分类资产写入生成阶段的暂存目录和安装记录，纳入 schema-v3 生成清单与审查，并列入本次精确推送的变更集合。协议不新增生成清单字段。单篇发布仍不得升级全站版本资产。
+
+生成后或审查后，即使只改一个空格，也须重新生成并审查变更，不能补改旧发布凭证。逐页审查仍按相对路径与页面内容 SHA 复用；未变页面无需因策略元数据变化重复逐页审查，但当前批次检查和新的发布凭证不能省略。
+
+安装中断时，只能恢复原安装记录绑定的完整暂存字节。目标发生外部变化后，程序拒绝覆盖；不能用改写安装记录或凭证的方式让新字节通过。
+
+较丰富目录及相应消费者的变更应先完成审查，再批准并提交匹配的策略；实际安装与发布仍走上述流程。展示词表升级不代表旧文章已完成来源分类，也不为历史记录生成新的分类凭证。Git 远端核验后，部署和正式页面仍须按 [发布要求](../AGENTS.md#博客三阶段与远端证明) 另行确认。

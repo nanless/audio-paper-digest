@@ -42,9 +42,43 @@ review_blog = importlib.util.module_from_spec(REVIEW_SPEC)
 REVIEW_SPEC.loader.exec_module(review_blog)
 
 
+def manual_v5_reader_paper():
+    article = (
+        '### 先解释表示冲突\n\n'
+        '这里用完整段落解释理解与生成为何不能共享同一接口，并把论文的设计选择放回可检验的问题中。\n\n'
+        '### 再追踪两条通路\n\n'
+        '这里用完整段落追踪输入、共享推理与输出如何衔接，避免把模块名称直接堆给读者。'
+    )
+    return {
+        'title': 'A General Purpose Audio Model',
+        'arxivId': '2608.24168',
+        'parsed': {
+            'score': '8.7', 'tags': ['#音频理解'],
+            'summary': '这是一篇读者版摘要。',
+            'roast': '它把双路径的职责划分得很清楚，值得肯定；但没有组件消融，因而仍不足以证明每个分工都不可替代。',
+            'opensource': '代码：尚未公开；复现需要依照正文的训练设置自行实现。',
+            'architecture': '### 两条通路为何只在语言主干会合\n\n这里解释数据流。',
+            'results': '### 哪项比较真正支持主张\n\n这里解释实验。',
+            'scoringReason': '* 创新性 (1.7/2)：[E01] 机制与直接证据可追溯，但没有组件消融。',
+        },
+        'analysisManifest': {
+            'contracts': {'manualDepth': 'full-text-evidence-v5'},
+            'manualTakeover': {'researchBrief': {'editorialPlan': {
+                'version': 2,
+                'readerFormatContract': 'graduate-researcher-tutorial-quality-v2',
+                'readerTitle': '两条表示如何统一听懂与生成音频',
+                'oneSentenceThesis': '共享语言推理而分离音频表示，让理解压缩与生成还原不再争抢同一个接口。',
+            }}, 'readerArticle': article,
+            'readerArticleSha256': hashlib.sha256(article.encode('utf-8')).hexdigest()},
+        },
+    }
+
+
 @contextlib.contextmanager
-def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False):
+def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False,
+                          project_root=None):
     """Attach a real file-backed fresh-authoring receipt to a v5 fixture."""
+    project_root = Path(ROOT) if project_root is None else Path(project_root)
     with tempfile.TemporaryDirectory() as tmp:
         current = Path(tmp) / 'current'
         paper_id = publish_to_blog.normalize_arxiv_id(paper['arxivId'])
@@ -73,9 +107,9 @@ def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False):
             'paper_metadata': filtered_path,
             'source_snapshot': source_path,
             'artifact_index': artifact_path,
-            'authoring_prompt': Path(ROOT) / 'manual' / 'prompts' / 'manual-tutorial-article.md',
-            'editorial_contract': Path(ROOT) / 'manual' / 'docs' / 'editorial-reference-contract.md',
-            'blank_schema': Path(ROOT) / 'manual' / 'scripts' / 'manual-tutorial-quality-contract.js',
+            'authoring_prompt': project_root / 'manual' / 'prompts' / 'manual-tutorial-article.md',
+            'editorial_contract': project_root / 'manual' / 'docs' / 'editorial-reference-contract.md',
+            'blank_schema': project_root / 'manual' / 'scripts' / 'manual-tutorial-quality-contract.js',
         }
         if official_project_evidence:
             evidence_path = evidence_root / 'external-evidence' / f'{paper_id}-official-project.json'
@@ -165,8 +199,34 @@ def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False):
         takeover['tutorialPayload'] = payload
         takeover['tutorialPayloadSha256'] = publish_to_blog._stable_json_sha256(payload)
         paper['analysisManifest']['contracts']['tutorialPayload'] = 'manual-v5-tutorial-payload-v1'
-        with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current):
+        with mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                mock.patch.object(publish_to_blog, 'PROJECT_ROOT', project_root):
             yield paper
+
+
+def resign_manual_v5_fresh_files(paper):
+    """Keep a temporary receipt, quality file and payload mutually consistent."""
+    takeover = paper['analysisManifest']['manualTakeover']
+    fresh = takeover['freshAuthoring']
+    fresh.pop('receiptSha256', None)
+    fresh['receiptSha256'] = publish_to_blog._stable_json_sha256(fresh)
+    takeover['freshAuthoringSha256'] = publish_to_blog._stable_json_sha256(fresh)
+    payload = takeover['tutorialPayload']
+    quality_path = Path(payload['qualityPath'])
+    quality = json.loads(quality_path.read_text(encoding='utf-8'))
+    quality['freshAuthoring'] = {
+        key: fresh[key] for key in (
+            'contract', 'mode', 'authoringSessionId', 'articleSha256',
+            'articleFileSha256', 'prohibitedProseInputs', 'inputs',
+        )
+    }
+    quality_path.write_text(json.dumps(quality, ensure_ascii=False, indent=2), encoding='utf-8')
+    payload['freshAuthoringReceiptSha256'] = fresh['receiptSha256']
+    payload['qualityFileSha256'] = hashlib.sha256(quality_path.read_bytes()).hexdigest()
+    payload['qualityPacketSha256'] = publish_to_blog._stable_json_sha256(quality)
+    payload.pop('receiptSha256', None)
+    payload['receiptSha256'] = publish_to_blog._stable_json_sha256(payload)
+    takeover['tutorialPayloadSha256'] = publish_to_blog._stable_json_sha256(payload)
 
 
 def manual_v6_publication_fixture():
@@ -4135,35 +4195,8 @@ title: "Bad table"
             }])
 
     def test_manual_v5_reader_plan_uses_reader_first_header_and_preserves_custom_subheads(self):
-        reader_article = (
-            '### 先解释表示冲突\n\n'
-            '这里用完整段落解释理解与生成为何不能共享同一接口，并把论文的设计选择放回可检验的问题中。\n\n'
-            '### 再追踪两条通路\n\n'
-            '这里用完整段落追踪输入、共享推理与输出如何衔接，避免把模块名称直接堆给读者。'
-        )
-        paper = {
-            'title': 'A General Purpose Audio Model',
-            'arxivId': '2608.24168',
-            'parsed': {
-                'score': '8.7', 'tags': ['#音频理解'],
-                'summary': '这是一篇读者版摘要。',
-                'roast': '它把双路径的职责划分得很清楚，值得肯定；但没有组件消融，因而仍不足以证明每个分工都不可替代。',
-                'opensource': '代码：尚未公开；复现需要依照正文的训练设置自行实现。',
-                'architecture': '### 两条通路为何只在语言主干会合\n\n这里解释数据流。',
-                'results': '### 哪项比较真正支持主张\n\n这里解释实验。',
-                'scoringReason': '* 创新性 (1.7/2)：[E01] 机制与直接证据可追溯，但没有组件消融。',
-            },
-            'analysisManifest': {
-                'contracts': {'manualDepth': 'full-text-evidence-v5'},
-                'manualTakeover': {'researchBrief': {'editorialPlan': {
-                    'version': 2,
-                    'readerFormatContract': 'graduate-researcher-tutorial-quality-v2',
-                    'readerTitle': '两条表示如何统一听懂与生成音频',
-                    'oneSentenceThesis': '共享语言推理而分离音频表示，让理解压缩与生成还原不再争抢同一个接口。',
-                }}, 'readerArticle': reader_article,
-                'readerArticleSha256': hashlib.sha256(reader_article.encode('utf-8')).hexdigest()},
-            },
-        }
+        paper = manual_v5_reader_paper()
+        reader_article = paper['analysisManifest']['manualTakeover']['readerArticle']
         with manual_v5_fresh_files(
                 paper, '2026-08-26', official_project_evidence=True):
             markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-26')
@@ -4244,6 +4277,69 @@ title: "Bad table"
             markdown.index('### ⚖️ 评分依据与证据（展开查看）'),
             markdown.index('<summary>📎 论文与评分元数据</summary>'),
         )
+
+    def test_manual_v5_page_checks_current_editorial_bytes_and_fixed_path(self):
+        date_str = '2026-08-26'
+        for boundary in ('current_bytes', 'old_copy_path'):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary:
+                project_root = Path(temporary) / 'project'
+                for relative in (
+                        'manual/prompts/manual-tutorial-article.md',
+                        'manual/docs/editorial-reference-contract.md',
+                        'manual/scripts/manual-tutorial-quality-contract.js'):
+                    target = project_root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes((Path(ROOT) / relative).read_bytes())
+                contract_path = project_root / 'manual/docs/editorial-reference-contract.md'
+                old_bytes = contract_path.read_bytes()
+                old_copy = Path(temporary) / 'previous-editorial-contract.md'
+                old_copy.write_bytes(old_bytes)
+                paper = manual_v5_reader_paper()
+                article = paper['analysisManifest']['manualTakeover']['readerArticle']
+                with manual_v5_fresh_files(paper, date_str, project_root=project_root):
+                    original_markdown, _slug = publish_to_blog.generate_paper_page(paper, date_str)
+                    self.assertIn('#### 先解释表示冲突', original_markdown)
+                    takeover = paper['analysisManifest']['manualTakeover']
+                    fresh = takeover['freshAuthoring']
+                    editorial_input = next(
+                        item for item in fresh['inputs'] if item['kind'] == 'editorial_contract'
+                    )
+                    contract_path.write_bytes(old_bytes + '\n测试中的下一版编辑要求。\n'.encode('utf-8'))
+                    self.assertEqual(editorial_input['sha256'], hashlib.sha256(old_copy.read_bytes()).hexdigest())
+                    self.assertNotEqual(editorial_input['sha256'], hashlib.sha256(contract_path.read_bytes()).hexdigest())
+                    if boundary == 'old_copy_path':
+                        editorial_input['path'] = str(old_copy.resolve())
+                        resign_manual_v5_fresh_files(paper)
+                        expected_error = '未绑定当前固定契约'
+                    else:
+                        expected_error = '文件 SHA 漂移'
+                    receipt_body = {key: value for key, value in fresh.items() if key != 'receiptSha256'}
+                    self.assertEqual(fresh['receiptSha256'], publish_to_blog._stable_json_sha256(receipt_body))
+                    self.assertEqual(takeover['freshAuthoringSha256'], publish_to_blog._stable_json_sha256(fresh))
+                    publish_to_blog._validate_manual_v5_tutorial_payload(paper, article, date_str)
+                    with self.assertRaises(PublishDataValidationError) as failure:
+                        publish_to_blog.generate_paper_page(paper, date_str)
+                    self.assertEqual(
+                        str(failure.exception),
+                        f'{paper["arxivId"]} fresh authority editorial_contract {expected_error}',
+                    )
+                    if boundary == 'current_bytes':
+                        contract_path.write_bytes(old_bytes)
+                    else:
+                        editorial_input['path'] = str(contract_path.resolve())
+                        editorial_input['sha256'] = hashlib.sha256(contract_path.read_bytes()).hexdigest()
+                        resign_manual_v5_fresh_files(paper)
+                    restored_markdown, _slug = publish_to_blog.generate_paper_page(paper, date_str)
+                    self.assertEqual(
+                        restored_markdown.split('\n---\n', 1)[1],
+                        original_markdown.split('\n---\n', 1)[1],
+                    )
+                    payload = takeover['tutorialPayload']
+                    for key, expected_sha in (
+                            ('fresh_authoring', fresh['receiptSha256']),
+                            ('tutorial_payload', payload['receiptSha256']),
+                            ('tutorial_quality', payload['qualityPacketSha256'])):
+                        self.assertIn(f'paper_digest_{key}_sha256: "{expected_sha}"', restored_markdown)
 
     def test_manual_v5_never_falls_back_to_legacy_canonical_sections(self):
         paper = {

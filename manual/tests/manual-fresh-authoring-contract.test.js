@@ -102,7 +102,7 @@ describe('Manual v5 fresh-authoring-v1 file contract', () => {
         assert.doesNotThrow(() => resolveArtifactAuthority(f.artifactManifestPath, f.artifactExpected));
     });
 
-    it('rejects old-prose declarations, article drift and authority SHA drift', () => {
+    it('rejects old-prose declarations and article drift', () => {
         const f = fixture();
         const options = {
             paperId: ID, articlePath: f.files.articlePath, readerArticle: f.article,
@@ -113,6 +113,48 @@ describe('Manual v5 fresh-authoring-v1 file contract', () => {
         assert.throws(() => validateFreshAuthoringReceipt(oldProse, options), /必须为空/);
         fs.appendFileSync(f.files.articlePath, '发生漂移');
         assert.throws(() => validateFreshAuthoringReceipt(f.receipt, options), /raw\/NFKC SHA/);
+    });
+
+    it('checks current bytes at the authority paths supplied by the caller', context => {
+        const f = fixture();
+        context.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+        const contractPath = f.files.editorialContractPath;
+        const contractBytes = fs.readFileSync(path.resolve(
+            __dirname, '..', 'docs', 'editorial-reference-contract.md'
+        ));
+        fs.writeFileSync(contractPath, contractBytes);
+        const input = f.receipt.inputs.find(item => item.kind === 'editorial_contract');
+        input.sha256 = sha256(contractBytes);
+        delete f.receipt.receiptSha256;
+        f.receipt.receiptSha256 = stableSha256(f.receipt);
+        const options = {
+            paperId: ID, articlePath: f.files.articlePath, readerArticle: f.article,
+            authorityPaths: { paperId: ID, ...f.files }
+        };
+        assert.doesNotThrow(() => validateFreshAuthoringReceipt(f.receipt, options));
+        const oldCopy = path.join(f.root, 'previous-contract.md');
+        fs.writeFileSync(oldCopy, contractBytes);
+        fs.appendFileSync(contractPath, '\n测试中的下一版编辑要求。\n');
+        const { receiptSha256, ...receiptBody } = f.receipt;
+        assert.equal(stableSha256(receiptBody), receiptSha256);
+        assert.equal(rawFileSha256(oldCopy), input.sha256);
+        assert.throws(() => validateFreshAuthoringReceipt(f.receipt, options), {
+            message: `${ID}.freshAuthoring.inputs.editorial_contract.sha256 与当前权威文件不一致`
+        });
+        fs.writeFileSync(contractPath, contractBytes);
+        assert.doesNotThrow(() => validateFreshAuthoringReceipt(f.receipt, options));
+
+        fs.appendFileSync(contractPath, '\n测试中的下一版编辑要求。\n');
+        assert.notEqual(rawFileSha256(contractPath), rawFileSha256(oldCopy));
+        const oldCopyReceipt = structuredClone(f.receipt);
+        oldCopyReceipt.inputs.find(item => item.kind === 'editorial_contract').path = oldCopy;
+        delete oldCopyReceipt.receiptSha256;
+        oldCopyReceipt.receiptSha256 = stableSha256(oldCopyReceipt);
+        assert.throws(() => validateFreshAuthoringReceipt(oldCopyReceipt, options), /editorial_contract\.path/);
+        const oldCopyOptions = {
+            ...options, authorityPaths: { ...options.authorityPaths, editorialContractPath: oldCopy }
+        };
+        assert.doesNotThrow(() => validateFreshAuthoringReceipt(oldCopyReceipt, oldCopyOptions));
     });
 
     it('rejects incomplete ArtifactIndex even when all declared hashes match', () => {

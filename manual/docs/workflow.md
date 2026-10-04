@@ -1,109 +1,101 @@
-# Manual production v6 运行手册
+# Manual v6 运行手册
 
-[返回入口](../README.md) · [文档地图](README.md) · [架构契约](architecture.md) · [编辑契约](editorial-reference-contract.md)
+[返回入口](../README.md) · [文档地图](README.md) · [架构说明](architecture.md) · [编辑要求](editorial-reference-contract.md)
 
-本文给批次负责人和主 Agent 使用：每一节都说明输入、命令、成功信号和禁止项。字段与哈希原理集中在[架构契约](architecture.md)，正文质量集中在[编辑契约](editorial-reference-contract.md)。
+主代理负责创建真实单篇子代理、登记任务并汇总整批结果。本手册按执行顺序说明每步读取和生成什么，以及失败后怎样恢复。文件身份和 SHA 算法见[架构说明](architecture.md)，正文质量要求见[编辑说明](editorial-reference-contract.md)。
 
-## 受众与进入条件
+## 开始前确认工作区和日期
 
-只有用户明确要求 Manual/人工流程时运行：
+只有用户明确要求 Manual 或人工流程时，才使用此入口：
 
 ```bash
 npm run digest:manual -- YYYY-MM-DD
 ```
 
-进入前确认：
+先确认位于日更工作区，并按根目录要求核对角色、环境和博客仓库：
 
-- 日期为北京时间批次日期，格式固定为 `YYYY-MM-DD`；
-- 项目 `.env`、代理和博客仓库配置已由共享流程验证；
-- 本批不会把 production、shadow 或 legacy 数据混在同一路径；
-- 主 Agent准备直接管理 leaf 队列，runner 不会替你创建 subagent。
+```bash
+pwd
+npm run workspace:role -- status
+```
 
-默认 LLM/API 日更、其他发布渠道和视觉绘制细节不在本手册展开。
+角色须为 `daily`。日期使用北京时间批次日期，格式为 `YYYY-MM-DD`；抓取阶段还须符合根目录的日期限制，历史日期不能从抓取开始重跑。共享流程负责校验项目环境、代理和博客配置，不能因默认 API 的网络、模型或配额失败就自行切换 Manual。
 
-## 一、抓取候选
+正式模式（`production`）、隔离模式（`shadow`）和旧 v5 维护使用各自路径，不能混用文件。主代理直接管理单篇任务队列，任务管理器不会替你创建子代理。其他发布渠道与实际生图操作另见根目录说明。
+
+## 一、抓取与筛选候选
+
+先获取原始候选：
 
 ```bash
 npm run manual:fetch -- --date YYYY-MM-DD --raw
 ```
 
-raw 会访问 arXiv/HuggingFace，但不调用筛选模型。成功结果应包含完整候选集合、来源健康信息、checkpoint 和输入 SHA。
+`--raw` 访问 arXiv/HuggingFace，不调用筛选模型。检查输出中的完整候选、逐来源健康信息、checkpoint 和输入 SHA。某来源暂时失败时，不能将不完整集合宣布为完整。
 
-主 Agent逐篇给出 `manual_offline` 决定后提交完整 spec：
+主代理逐篇给出 `manual_offline` 决定，再提交筛选 spec：
 
 ```bash
 npm run manual:fetch -- --date YYYY-MM-DD --select FILTER_SPEC.json
 ```
 
-筛选 spec 必须恰好覆盖 raw candidate 全集。缺失 ID、未知 ID、重复 ID、日期不一致或理由不足都会失败。
+筛选文件必须恰好覆盖原始候选全集，既包含选中项，也包含明确排除项。缺失、未知或重复 ID，日期不一致、理由不足都会失败；标题关键词脚本不能冒充逐篇人工决定。
 
-多人分片时使用确定性合并器；`--part` 至少两份：
+多人分片筛选时，由确定性合并器检查和合并至少两份 `--part`：
 
 ```bash
 npm run manual:filter-merge -- --date YYYY-MM-DD --reviewer REVIEWER_ID \
   --part PART_1.json --part PART_2.json [--output MERGED_SPEC.json]
 ```
 
-禁止项：
+方括号表示可选参数，执行时不要将括号作为命令字符；文件路径使用真实输出，`REVIEWER_ID` 填实际审查者身份。
 
-- 不得因某来源暂时失败就把候选集合声明完整；
-- 不得只提交“选中项”，遗漏明确排除项；
-- 不得用标题关键词脚本冒充逐篇人工决定。
-
-## 二、建立全文证据
+## 二、保存全文与结构化来源
 
 ```bash
 npm run manual:fulltext -- YYYY-MM-DD
 ```
 
-该阶段在纯文本化之前保存表格矩阵、rowspan/colspan、MathML/TeX、图片、章节、citation 和 bibliography，并为每篇论文建立 ArtifactIndex。
+提取器在转成纯文本之前保存表格矩阵及合并单元格关系、MathML/TeX、图片、章节、正文引用和参考文献，并为每篇建立 `ArtifactIndex` 来源索引。
 
-成功信号是每篇入选论文的 `inventoryHealth.status=complete`。`complete` 表示来源结构闭环：检测到的表、图、公式和引用都能回放；PDF/纯文本 fallback 或截断结果仍是 `incomplete`。
+每篇入选论文须达到 `inventoryHealth.status=complete`。受支持的结构化来源需核对表格、公式、图片、引用的检测和恢复计数，且无截断、未解决的解析问题；表格还须有可重放矩阵。PDF 或纯文本回退仍是 `incomplete`，没有解析到条目不能证明论文没有这些内容。
 
-单篇失败时保留其他论文的健康 checkpoint，只修复对应论文。不要删除整个日期目录，也不要手改 `incomplete` 为 `complete`。
+单篇失败时保留其他论文的健康 checkpoint，修复对应来源再续跑。不要删除整个日期目录或手改 `incomplete` 为 `complete`。
 
-## 三、初始化任务 DAG
+## 三、初始化单篇任务
 
 ```bash
 npm run manual:tasks -- init --date YYYY-MM-DD
 npm run manual:tasks -- status --date YYYY-MM-DD
 ```
 
-如需显式使用非默认 filtered 文件，`init` 支持 `--papers PATH`。Production 默认读取标准 `filtered-papers.json`。
-
-每篇论文有四个 runner role：
+正式模式默认读取标准 `filtered-papers.json`；`init` 也可用 `--papers PATH` 显式指定入选文件。每篇包含四个角色，依赖如下：
 
 ```text
 author
-  ├── technical_scoring
-  └── pedagogy_readability
-          │
-          ▼
-   author_revision
+  ├── technical_scoring ─────┐
+  └── pedagogy_readability ──┤
+                            ▼
+                     author_revision
 ```
 
-author 通过后两个 reviewer 才能解锁；两个 reviewer 都通过后 revision 才能解锁。不同论文可以并发，同一论文不能跳过依赖。
+初稿验证通过后两个审查任务才可运行，两者都通过后才可修订。不同论文可并发，同篇不能跳过依赖。这里的“通过”是管理器核验文件与角色要求后记录的 `validated`，不能用子代理一句“完成”替代。
 
-## 四、推进一个角色任务
+## 四、创建并推进一个角色任务
 
-### 1. 物化 packet
+### 生成任务输入包
 
 ```bash
 npm run manual:packet -- --date YYYY-MM-DD --paper ARXIV_ID --role ROLE
 ```
 
-`ROLE` 只能是：
+`ROLE` 只能为 `author`、`technical_scoring`、`pedagogy_readability` 或 `author_revision`。命令输出当前输入包（`packet`）、单篇文件目录及准确的注册参数，使用这些实际输出，不从示例推算路径。
 
-- `author`
-- `technical_scoring`
-- `pedagogy_readability`
-- `author_revision`
+输入包列明允许读取的文件、SHA 和角色结果格式。结构校验通过不等于实际文件可用：注册、状态恢复和结果汇总都重读文件；作者和修订作者还须满足仓库当前提示词、编辑要求的 SHA。旧副本和旧包自洽，也不能绕过当前检查。
 
-命令输出当前 packet、artifact root 以及精确 register 参数。该输出是路径真相，不要从本文示例推算路径。
+### 注册输入包
 
-### 2. 注册 packet
-
-原样使用上一步返回的值：
+原样使用上一步返回的路径：
 
 ```bash
 npm run manual:tasks -- register --date YYYY-MM-DD \
@@ -111,39 +103,39 @@ npm run manual:tasks -- register --date YYYY-MM-DD \
   --artifact-root ARTIFACT_ROOT --packet PACKET_JSON
 ```
 
-register 只验证并登记 allowlist；它不会领取任务或创建 leaf。
+`register` 核验并登记文件白名单，不领取任务或创建子代理。
 
-### 3. 领取可运行任务
+### 领取可运行任务
 
 ```bash
 npm run manual:tasks -- claim --date YYYY-MM-DD --limit 3
 ```
 
-claim 只返回依赖满足的任务。主 Agent占 1 个平台槽，因此 `--limit` 不应超过可用的 3 个 leaf 槽。
+`--limit` 默认为 3，范围 1–3。管理器只领取依赖满足的任务，并按当前已领取或运行的任务计算剩余容量。平台共 4 槽，主代理占 1 槽，最多同时运行 3 个单篇子代理。
 
-### 4. 创建 leaf 并回写真实 task name
+### 创建真实子代理并登记任务名
 
-主 Agent根据 claim 直接创建一个只处理当前论文、当前 role 的 leaf。平台返回唯一 task name 后：
+主代理根据 claim 创建只处理当前论文、当前角色的子代理。平台返回唯一任务名后，才能执行：
 
 ```bash
 npm run manual:tasks -- start --date YYYY-MM-DD \
   --claim CLAIM_ID --task-name TASK_NAME
 ```
 
-不能在真实 leaf 创建前调用 start，也不能用虚构 task name 占位。
+不能提前 start，也不能用虚构任务名占位。四个正文角色均使用 `gpt-5.6-terra` 和 `high`；按输入包的实际契约创建任务，不能以其他模型运行后填同一凭证。
 
-### 5. 提交 output 与 receipt
+### 提交结果与凭证
 
-leaf 只读取 packet allowlist，按 packet 的 `outputContract` 写入规定路径。随后：
+子代理只读取白名单文件，按 `outputContract` 写入规定结果和提交凭证。完成后提交：
 
 ```bash
 npm run manual:tasks -- submit --date YYYY-MM-DD \
   --claim CLAIM_ID --output OUTPUT_JSON --receipt RECEIPT_JSON
 ```
 
-submit 会重开真实文件并校验论文身份、模型/推理等级、输入 SHA、输出结构和角色规则。只有通过后状态才是 `validated`。
+`submit` 重读真实文件，核验论文身份、模型/推理等级、输入 SHA、输出结构及角色规则。全部通过才记录 `validated`，验证后不能原地修改文件。
 
-### 6. 真实失败与恢复
+### 记录失败并恢复
 
 ```bash
 npm run manual:tasks -- fail --date YYYY-MM-DD \
@@ -156,50 +148,52 @@ npm run manual:tasks -- retry --date YYYY-MM-DD \
   --paper ARXIV_ID --role ROLE
 ```
 
-- `fail`：leaf 已明确返回失败并留下原因。
-- `abandon`：平台已经确认活动任务终止，但 claim 没有正常收口。
-- `retry`：失败/放弃后重新打开指定论文和 role。
+子代理明确返回失败时用 `fail` 保存原因；平台已确认任务终止，但领取记录未正常结束时用 `abandon`；失败或放弃后，用 `retry` 重新开放对应论文和角色。不能只凭等待时间推断任务死亡，否则可能出现两个子代理同时写同一目录。
 
-不能仅凭墙钟超时推断任务死亡；否则可能同时存在两个写同一 artifact root 的 leaf。
+## 五、四个角色分别交付什么
 
-## 五、四个角色的交付边界
+| 角色 | 实际允许输入 | 结果与职责 |
+|---|---|---|
+| `author` | 当前论文元数据、来源快照、全文、来源索引、提示词、编辑要求、空白结构模板；索引声明的结构化来源、授权图片及可选官方项目证据 | 写新初稿和研究蓝图，绑定事实与来源；不读旧分析、旧正文、博客页或其他论文 |
+| `technical_scoring` | 来源索引、空白模板、已验证初稿输出/凭证及初稿文章、结构化初稿 | 交八维评分、8 条论文特有理由、证据 ID 与独立校准；不改正文或自创尺度 |
+| `pedagogy_readability` | 与技术审查对应的受控初稿文件和来源索引 | 检查解释、术语、段落承接、章节职责与图表；交具体问题记录，不只评文风好恶 |
+| `author_revision` | 逐项复用 author 的原始证据及其顺序，加两份已验证审查结果 | 重新写完整终稿、来源映射和问题处理记录；不读取前稿局部修补，不改变审查者分数 |
 
-| role | 主要输入 | 交付 | 不得做什么 |
-|---|---|---|---|
-| `author` | 当前论文 metadata、全文、结构化来源、complete ArtifactIndex、Prompt、编辑契约、空白 schema | fresh 初稿、研究蓝图、事实与工件映射 | 读取历史 analysis、旧正文、博客页或其他论文 |
-| `technical_scoring` | 当前论文证据与 author 提交 | 八维评分、8 条特定理由、证据 ID、独立 calibration | 替 author 改写正文；自创评分尺度 |
-| `pedagogy_readability` | 当前论文证据与 author 提交 | 教学结构、术语、段落、图表互动和可读性 findings | 只做文风好恶判断；给可直接粘贴的旧稿补丁 |
-| `author_revision` | 与 author 同序的原始证据，加两个已验证 reviewer findings | 从原始证据冷启动的完整替换稿、binding map、findings resolution | 读取 previous draft 后局部修补；改变 reviewer-owned 分数 |
+两个审查角色没有单独获准读取完整全文文件，须按生成的实际白名单工作，不能自行扩大上下文。四个角色的任务名必须互异。
 
-author_revision 不是“在旧稿上润色”。它必须根据原始证据和结构化 findings 重新生成完整终稿。
+初稿正文和结构化记录分别写入 `draft/author-article.md`、`draft/author-record.json`，以 `outputs/author.json` 描述，凭证为 `receipts/author.json`。两个审查结果写入 `reviews/technical-scoring.json`、`reviews/pedagogy-readability.json`，各有对应的提交凭证文件。修订作者交 `draft/final-article.md`、`draft/revision-binding-map.json` 和修订记录，组合器最终生成 `outputs/author-revision.json` 与 `receipts/author-revision.json`。以当前输入包指定路径为准。
 
-## 六、revision binder 与独立审计
+修订要求依据原始证据重写整篇，与 API Reader 的局部修复是不同流程，不能将补丁当成 Manual 完整替换稿。
 
-revision leaf 写好 `final-article.md` 和 binding map 后依次执行：
+## 六、核验修订稿与独立审计
+
+修订作者完成终稿和来源映射后，依次执行：
 
 ```bash
-# 将 binding map 中的确定性表格/工件物化进已有终稿
+# 将映射中确定的来源表格等内容写入已有终稿
 npm run manual:bind-revision -- --date YYYY-MM-DD \
   --paper ARXIV_ID --prepare
 
-# 只在内存重放完整 record 与 reader-longform 门禁
+# 只在内存重放完整单篇记录和正文来源检查
 npm run manual:bind-revision -- --date YYYY-MM-DD \
   --paper ARXIV_ID --preflight
 ```
 
-如 map 不在默认位置，可追加 `--map PATH`。`--prepare` 与 `--preflight` 互斥。
+映射不在默认位置时可加 `--map PATH`；`--prepare` 与 `--preflight` 互斥。预检通过后，由独立的 `gpt-5.6-terra/high` 审计任务核对当前文章和映射 SHA 及完整语义要求，至少记录两轮真实检查，最终无遗留问题，并将审计写入输入包规定位置。
 
-preflight 通过后，再由独立 Terra-high audit 检查当前 article/map 的真实 SHA 和完整语义门禁，将 audit 写入 packet 规定位置。最后运行无模式参数的 binder：
+最后不带模式参数运行组合器：
 
 ```bash
 npm run manual:bind-revision -- --date YYYY-MM-DD --paper ARXIV_ID
 ```
 
-它只把已完成的 article、map、reviews 和 audit 确定性序列化为 output/receipt，不替 leaf 写作。随后用本手册第四节的 runner `submit` 提交 revision。
+它将已完成的文章、映射、审查与审计组合成规定结果和凭证，不替作者写正文。随后按第四节执行修订角色的 `submit`。
 
-## 七、受控元数据纠错
+教程写作通常要求 8–18 个论文特有三级标题；当前 v2 编辑计划的 4–8 个锚点、输入包说明的 2400–24000 字符和 `reader-longform-v2` 的 6–32 个内容块是不同对象。V6 单篇记录检查至少 2400 字符，其他独立教程质量检查另有 6000 字符与 8–18 节要求；不能据某个检查通过宣布全部满足。具体适用范围见[正文结构说明](editorial-reference-contract.md#正文顺序跟随理解需要)。
 
-只有 metadata 身份错误且已有证据时才进入纠错状态机。它与论文正文 DAG 分离：
+## 七、纠正论文元数据
+
+只有论文元数据身份有误且已有来源证据时，才进入这个独立状态机：
 
 ```bash
 npm run manual:correction -- packet --date YYYY-MM-DD --paper ARXIV_ID
@@ -212,7 +206,7 @@ npm run manual:correction -- manifest --date YYYY-MM-DD
 npm run manual:correction -- status --date YYYY-MM-DD
 ```
 
-恢复入口：
+中断后的恢复入口为：
 
 ```bash
 npm run manual:correction -- retry --date YYYY-MM-DD --paper ARXIV_ID
@@ -220,13 +214,11 @@ npm run manual:correction -- abandon --date YYYY-MM-DD \
   --claim CLAIM_ID --reason REASON
 ```
 
-`--force` 只被 `packet` 和 `manifest` 接受，且仍会重放字段、证据和 SHA 校验。纠错 manifest 完成后，从最早受影响节点重新物化 production packet；不能直接修改 record 或 canonical。
+`N` 只能为 1–3，不传时使用实现的活动任务上限。`--force` 只用于 `packet` 和 `manifest`，仍核字段、证据及 SHA。纠错清单完成后，从最早受影响节点重新生成正式任务输入包；不能直接改单篇记录或正式分析结果。
 
-其中 `N` 只能是 1–3；不传时使用实现的 active limit。
+## 八、汇总单篇与整批结果
 
-## 八、密封 records、spec 与 canonical
-
-四个 role 全部 `validated` 后：
+四个角色都 `validated` 后运行：
 
 ```bash
 npm run manual:records -- --date YYYY-MM-DD
@@ -236,24 +228,20 @@ npm run manual:analyze -- --date YYYY-MM-DD \
   --spec data/current/manual-v6/YYYY-MM-DD/spec.json
 ```
 
-成功含义：
+`manual:records` 重读每篇输入包、结果及凭证，生成单篇记录和整批文件。`manual:spec` 重验论文全集、来源索引、records、任务证据和正文映射，生成每篇发布输入及 batch Merkle root。`manual:analyze` 再次验证 spec，写标准 `data/current/deep-analysis-result.json`。
 
-1. `manual:records` 重开每篇 packet/output/receipt，密封单篇 record 和整批 envelope。
-2. `manual:spec` 重放论文全集、ArtifactIndex、records、任务证据和 reader-longform，生成 per-paper shard 与 batch Merkle root。
-3. `manual:analyze` 再次验证 spec，写入标准 `data/current/deep-analysis-result.json`。
+`manual:records` 支持显式 `--force`；`manual:spec` 和 `manual:analyze` 也支持在已有输出变化时显式覆盖。它只允许覆盖目标文件，不跳过任何校验。集合、路径、SHA、来源身份或 Merkle 不符仍会失败，四角色完成也不等于已发布。
 
-`manual:records` 支持显式 `--force`，spec/analyze 也支持在已有输出变化时显式 `--force`。force 只允许覆盖目标文件，不会跳过 validator；任何集合、路径、SHA、source identity 或 Merkle 错误仍会失败。
-
-## 九、博客审查与发布
+## 九、独立逐页审查与博客发布
 
 ```bash
 npm run blog:generate -- --date YYYY-MM-DD
 npm run blog:manual-plan -- --date YYYY-MM-DD
 ```
 
-plan 给出受控逐页 shard 与 attestation 路径。每个最终页面由独立的单页 Terra-high leaf 审查；reviewer 只读当前不可变页面，不能边审边改。需要修改时回到生成/修订阶段，产生新 SHA 后重审该页。
+计划输出逐页审查文件及批次审查声明（`attestation`）的受控路径。每个最终页面由独立单页 `gpt-5.6-terra/high` 子代理审查，并登记逐页唯一的真实任务名。审查者只读当前不可变页面；需要修改时回到生成或修订阶段，产生新 SHA 后重审该页。
 
-逐页 shard 完成后：
+逐页记录完成后：
 
 ```bash
 npm run blog:manual-attest -- --date YYYY-MM-DD
@@ -261,9 +249,11 @@ npm run blog:manual-review -- --date YYYY-MM-DD --attestation ATTESTATION.json
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-push 会复验 generation manifest、页面 SHA、review receipt、Git 基线、提交差异和远端 OID。只有远端 `main` OID 等于 publication commit 才算发布完成。
+`push` 重验页面生成清单、页面 SHA、审查凭证、Git 基线、允许提交差异和远端 OID。远端 `main` OID 等于本次发布提交，只表示提交已到远端。
 
-单篇灰度时，generate、plan、attest、review、push 必须传相同 `--include-id ARXIV_ID`。不得因此删除同日其他页面或建立整批视觉任务。
+宣告上线前还须核对 GitHub Pages 构建和部署成功，部署对应发布提交或保留已审字节的后续提交；逐页记录 HTTP 200、正式地址和标题。按根目录要求完成论文配图与封面，或保留用户明确且仍有效的视觉取消记录。视觉取消不能替代数据、审查、远端和上线核验；推送或登记后重新读取最终状态。
+
+只发布单篇时，生成页面、准备审查计划、汇总审查声明、审查页面和推送这五步，都传同一个 `--include-id ARXIV_ID`。不能因此删除同日其他页面或建立整批视觉任务。
 
 ## 十、状态与恢复矩阵
 
@@ -273,45 +263,46 @@ npm run manual:tasks -- status --date YYYY-MM-DD
 npm run digest:status -- --date YYYY-MM-DD
 ```
 
-| 状态/症状 | 含义 | 下一步 | 禁止项 |
-|---|---|---|---|
-| `awaiting_packet` | 当前 role 尚无有效 packet | 执行 `manual:packet`，使用返回参数 register | 猜路径或复用其他论文 packet |
-| `pending` | packet 有效，依赖满足，等待领取 | `claim`，有槽后创建 leaf | 手动改成 running |
-| `blocked` | 上游 role 未 validated | 完成上游；重新 status | 跳过依赖直接 revision |
-| `claimed` | runner 已发 claim，尚未绑定真实 task | 创建 leaf 后立即 `start` | 长期占 claim 或填假 task name |
-| `running` | 真实 leaf 与 task name 已绑定 | 等待并 submit；确认终止后才 abandon | 按超时重复创建 leaf |
-| `validated` | output/receipt 已通过 | 推进下游或等待 records 收口 | 原地编辑已验证文件 |
-| `failed` | 有明确失败证据 | 修复后 `retry --paper --role` | 删除 state/receipt 掩盖失败 |
-| `stale` | 输入或协议 SHA 已变化 | 从最早变化节点重新 packet/register/submit | 修改旧 SHA 使其表面一致 |
-| `awaiting_records_envelope` | 四角色完成但 records-v4 尚未物化 | 运行 `manual:records` | 把任务完成等同于批次密封完成 |
-| review 页面 SHA 变化 | 已审字节不再是当前页 | 只重审变化页，重新组装批次 receipt | 复用旧 attestation |
-| push 后 OID 不匹配 | 本地提交未获远端确认 | 重试 push/远端验证 | 声称已发布 |
+| 状态或症状 | 含义 | 下一步与限制 |
+|---|---|---|
+| `awaiting_packet` | 当前角色没有有效输入包 | 生成包，使用返回参数 register；不猜路径或借其他论文的包 |
+| `pending` | 输入有效、依赖满足，等待领取 | 有容量时 claim 并创建真实子代理；不手改成 running |
+| `blocked` | 上游角色尚未 validated | 完成上游再查状态；不跳过依赖直接修订 |
+| `claimed` | 已领取，未登记真实任务 | 创建子代理后立即 start；不长期占位或填假任务名 |
+| `running` | 真实任务已登记 | 等待提交；只有确认终止才 abandon，不凭超时重复创建 |
+| `validated` | 结果和凭证已核验 | 推进下游；不原地修改验证文件 |
+| `failed` | 有明确失败记录 | 修复后 retry 指定论文和角色；不删状态或凭证掩盖失败 |
+| `stale` | 输入或协议 SHA 不再一致 | 从最早变化节点重新生成、注册、提交；不改旧 SHA |
+| 作者包与仓库当前要求不符 | 包内副本及外层 SHA 可仍自洽，但当前提示词或编辑要求已变化 | 保留旧证据，按正常流程重建受影响输入和下游；不能仅保存旧副本继续 |
+| `awaiting_records_envelope` | 四角色完成，整批 records 尚未生成 | 运行 manual:records，再验证 spec；不能直接宣告批次完成 |
+| 页面 SHA 变化 | 审过的字节与当前页面不同 | 重审变化页，汇总当前批次凭证；不能复用不符的批次审查声明 |
+| 推送后 OID 不符 | 提交尚未得到远端确认 | 恢复 push 或远端核验；不能宣告已发布 |
 
-恢复的一般原则是“从最早失效的证据节点向后重放”，不是“把最后一个错误字段改到能过”。
+定位最早不符的输入，保留无关的健康任务，再重做对应下游。状态报告只是读取时快照，不能替代上线检查，也不能在后续写入后继续当作最终状态。
 
 ## 十一、性能观测
 
 ```bash
 npm run manual:performance-report -- \
-  --date YYYY-MM-DD --date YYYY-MM-DD --date YYYY-MM-DD
+  --date DATE_1 --date DATE_2 --date DATE_3
 ```
 
-`--date` 可重复但不能重复同一日期；`--output PATH` 仅能写入受控 observability 目录且禁止覆盖。报告只消费真实 sidecar。一个指标不足 3 个不同日期时只能显示 `insufficient_data`，不能从理论耗时推算 P50/P95。
+将三个占位日期换成不同的真实 `YYYY-MM-DD`。`--date` 可重复提供，但不能重复同一日期；`--output PATH` 只能写受控的观测记录目录，且不能覆盖文件。报告只读取真实的附属统计文件；一个指标不足 3 个不同日期时显示 `insufficient_data`，不能从理论耗时推算 P50/P95。
 
-## 十二、shadow 与 legacy 维护入口
+## 十二、隔离审计与旧格式维护
 
-Shadow 只用于隔离审计和比较：
+隔离模式用于审计和比较，不发布：
 
-| 入口 | 参数 | 结果边界 |
+| 入口 | 参数 | 实际范围 |
 |---|---|---|
-| `manual:v6:shadow:spec` | `--date`，至少一个可重复 `--records`，可选 `--force` | 只写 shadow spec |
-| `manual:v6:shadow:analyze` | `--date --spec`，可选 `--force` | 只写 shadow canonical，禁止发布 |
-| `manual:v6:tasks` | 与 production runner 相同，追加 `--shadow` | 状态只在 shadow 根 |
+| `manual:v6:shadow:spec` | `--date`，至少一个可重复 `--records`，可选 `--force` | 只生成隔离模式的批次输入 |
+| `manual:v6:shadow:analyze` | `--date --spec`，可选 `--force` | 只写隔离模式的分析结果 |
+| `manual:v6:tasks` | 正式管理器参数，追加 `--shadow` | 状态只保存在隔离模式的数据根 |
 | `manual:shadow` | `--date`；可选 `--output`、可重复 `--metrics` | 默认只读审计 |
-| `manual:shadow -- --init-shadow` | 还必须提供 `--workspace` | 只允许北京时间当天 fresh 批次 |
-| `manual:shadow:benchmark` | 至少一个可重复 `--report`；可选 `--output` | 少于 3 个真实批次不得给性能分位数 |
+| `manual:shadow -- --init-shadow` | 另需 `--workspace` | 只允许北京时间当天的新批次 |
+| `manual:shadow:benchmark` | 至少一个可重复 `--report`；可选 `--output` | 少于 3 个真实批次不计算性能分位数 |
 
-Legacy v5 只为既有历史工件保留：
+旧 v5 入口仅用于已有文件的显式维护：
 
 | 入口 | 必需参数 |
 |---|---|
@@ -321,4 +312,6 @@ Legacy v5 只为既有历史工件保留：
 | `manual:v5:promote-draft` | `--date --paper-id --source-dir --technical-review --readability-review --figure-review`；可选 `--author-packet` |
 | `manual:v5:work-queue` | `--date`；可选 `--observations`、`--output-dir`、`--no-sidecar` |
 
-这些入口不能创建新 production v6 证明、不能与 v6 混批，也不能建立新视觉任务。既有 sealed tutorial preview 只有只读复验路径，没有新写入口。
+这些入口不能生成新正式模式的 v6 证明、混入 v6 批次或建立新视觉任务。Python v5 写作来源及既有封存预览仍核当前固定路径和字节 SHA；保存旧提示词或编辑要求副本不保证可复验。预览中 `editorialContract` 绑定提示词，`referenceContract` 绑定编辑要求，不能混用。预览没有新写入口。
+
+静态旧文章的阅读、旧任务恢复、预览复验和重新发布各有边界，不能由某个包的失败推断全部历史文章不可读。具体消费者范围见[历史兼容边界](architecture.md#历史兼容边界)。

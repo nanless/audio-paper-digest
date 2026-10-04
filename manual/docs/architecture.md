@@ -1,91 +1,69 @@
-# Manual v6 架构与证据契约
+# Manual v6 的任务、来源与发布校验
 
-[返回入口](../README.md) · [文档地图](README.md) · [运行手册](workflow.md) · [编辑契约](editorial-reference-contract.md)
+[返回入口](../README.md) · [文档地图](README.md) · [运行手册](workflow.md) · [编辑要求](editorial-reference-contract.md)
 
-本文给维护 runner、packet、records/spec、canonical 和发布门禁的人使用。它解释组件为什么分层、每层信任什么，以及一次变化应使哪些证据失效。日常运行命令集中在[运行手册](workflow.md)。
+本文说明单篇任务、来源文件、整批结果和发布记录如何相互核验，供维护任务管理器、输入包、结果汇总和发布检查的人使用。日常操作见[运行手册](workflow.md)，文章内容要求见[编辑说明](editorial-reference-contract.md)。
 
-## 受众、目标与非目标
+## 从来源到发布
 
-Manual v6 的目标是：把“人或 Agent 已认真读过论文”变成可重放的文件证据，而不是一句不可验证的声明。
+Manual 只有在用户明确选择人工流程时运行。主代理创建真实子代理，让每个子代理只处理一篇论文和一个角色；脚本负责抓取、保存来源、核验文件和管理任务依赖。任务记录可以证明哪些文件被提交、它们属于哪篇论文、是否符合规定结构，不能单凭这些记录证明模型理解正确或所有论文事实都已查实。
 
-它必须同时保证：
-
-- 每个语义任务只接触一篇论文和精确允许输入；
-- 来源、表图公式和关键数字能回到当前论文；
-- author、两类 review、revision 与页面 review 有独立 provenance；
-- 单篇结果和整批发布输入都有确定性闭包；
-- 输入或协议变化后，旧结果不能静默复用。
-
-它不负责自动创建 subagent，也不把 Manual 变成默认路线。默认 API canonical 使用自己的 production proof，只在共享 publisher 边界与 Manual 汇合。
-
-## 从来源到发布的总 DAG
+完整流程如下。箭头表示文件和任务依赖，后续内容任务仍须由主代理创建。
 
 ```text
-raw candidates
-      │ manual_offline decisions（全集闭包）
-      ▼
-filtered-papers.json
-      │
-      ├──────────────► full text / structured source / ArtifactIndex
-      │                                      │
-      │                                      ▼
-      │                       deny-by-default role packets
-      │                                      │
-      │                               author leaf + receipt
-      │                                ┌─────┴─────┐
-      │                                ▼           ▼
-      │                         technical     pedagogy
-      │                         scoring       readability
-      │                                └─────┬─────┘
-      │                                      ▼
-      │                         revision + binder + audit
-      │                                      │
-      └──────────────────────────────────────┤
-                                             ▼
-                                  sealed paper record v4
-                                             │ all papers
-                                             ▼
-                                   records-v4 envelope
-                                             │
-                                             ▼
-                               spec v6 + batch Merkle root
-                                             │ verified ingestion
-                                             ▼
-                             deep-analysis-result.json canonical
-                                             │
-                                             ▼
-                      generation v3 → page review → push → remote OID
+原始候选 → manual_offline 逐篇筛选决定 → filtered-papers.json
+                                              │
+                         全文、结构化来源与 ArtifactIndex
+                                              │
+                                      author 写初稿
+                                   ┌──────────┴──────────┐
+                                   ▼                     ▼
+                          technical_scoring     pedagogy_readability
+                                   └──────────┬──────────┘
+                                              ▼
+                            author_revision 写完整替换稿
+                               → 正文来源映射与独立审计
+                                              │
+                                  单篇 record v4
+                                              │ 整批论文
+                                  records-v4.json
+                                              │
+                              spec v6 与 batch Merkle root
+                                              │ 再次核验
+                              deep-analysis-result.json
+                                              │
+                        生成页面 → 单页审查 → 推送 → 远端 OID
 ```
 
-箭头代表证据依赖，不代表脚本会自动完成下一个语义任务。
+筛选决定必须覆盖原始候选全集，正式结果必须覆盖入选论文全集。每层同时检查论文身份、来源、允许输入、任务结果和对应 SHA，不能用“文件已存在”代替这些检查。默认 API 日更有自己的 `llm_api_production` 证明；它与 Manual 在共享发布器汇合，上游任务不能互相冒充。
 
-## 角色和组件所有权
+## 谁读取和生成哪些文件
 
-| 组件/参与者 | 唯一职责 | 信任的输入 | 不能承担的职责 |
-|---|---|---|---|
-| 主 Agent | 维护队列、直接创建 leaf、把真实 task name 交给 runner、收口批次 | runner status、packet 输出、平台任务状态 | 代替 runner 判定 validated；让一个 leaf 处理多篇 |
-| author leaf | 从当前论文证据冷启动教程初稿和证据蓝图 | author packet allowlist | 读取历史 prose 或 review findings |
-| technical reviewer | 独立评分与校准 | 当前论文证据、受控 author 提交 | 改写 author 内容或改变正式量表 |
-| pedagogy reviewer | 独立检查解释、结构和读者负担 | 当前论文证据、受控 author 提交 | 只给泛化文风评价或提供旧稿补丁 |
-| revision leaf | 根据原始证据和结构化 findings 冷启动完整替换稿 | revision packet allowlist | 读取 previous draft 后局部编辑 |
-| task runner | DAG 状态、claim、路径/SHA、output/receipt 验证 | 已物化 packet 和普通文件 | 创建 subagent、调用 LLM/API、写 prose |
-| revision binder | 将已完成 article/map/reviews/audit 确定性序列化 | runner-validated author/reviews 与当前 revision files | 发明语义内容或代替 independent audit |
-| records sealer | 注入四角色 receipts 和 resolution，密封 record/envelope | validated task artifacts | 接受缺 role、漂移文件或跨论文 evidence |
-| spec assembler | 重放全批集合并建立 paper shard/Merkle root | records envelope、filtered、来源与任务证据 | 从文件名推断 provenance |
-| canonical ingestion | 再次重放 spec，写共享 canonical | 同日 production spec v6 | 自动识别/提升 shadow 或 v5 |
-| publisher/review gate | 页面、review、Git 与远端发布闭包 | 标准 canonical 和 production proof | 修改已审页面；发布未验证输入 |
+| 参与者或组件 | 读取和生成什么 | 职责限制 |
+|---|---|---|
+| 主代理 | 查看任务状态，生成并注册输入包，创建真实子代理，登记平台返回的任务名，汇总整批 | 不能代替管理器宣布 `validated`，不能让一个子代理处理多篇 |
+| 初稿作者 `author` | 读取当前论文来源和写作要求，提交文章、结构化初稿及凭证 | 不能读取旧博客、旧分析、历史正文或审查意见 |
+| 技术审查 `technical_scoring` | 读取来源索引和受控初稿文件，提交评分、校准与具体问题 | 不能改写作者正文或改变正式量表 |
+| 可读性审查 `pedagogy_readability` | 读取来源索引和受控初稿文件，提交解释、结构、术语和读者负担的检查结果 | 不能只给泛泛的文风评价或提供旧稿粘贴补丁 |
+| 修订作者 `author_revision` | 读取初稿作者同一组原始证据及两份已验证审查结果，提交完整替换稿和来源映射 | 不能读取前一稿再局部编辑，不能改变审查者确定的分数 |
+| 任务管理器 `runner` | 保存依赖和状态，核验输入包、结果与凭证的路径、身份及 SHA | 不创建子代理，不调用模型，不写正文 |
+| 修订组合器 `binder` | 将完成的文章、映射、审查和独立审计组合成规定的修订结果与凭证 | 不补造内容，不代替独立审计 |
+| 结果汇总器 `sealer` | 依据已验证任务，写入四角色凭证、问题处理记录和单篇及整批结果 | 不接受缺失角色、漂移文件或其他论文的证据 |
+| 批次组装器 `assembler` | 重验论文全集、来源和单篇任务，生成每篇发布输入及 Merkle root | 不从文件名猜测来源或任务身份 |
+| 正式结果写入入口 | 再次核验同日正式模式的 spec，写入发布器读取的正式分析结果 | 不自动接受隔离模式结果或将 v5 转成 v6 |
+| 发布器与审查检查 | 核验最终页面、审查记录、Git 基线、提交差异和远端 OID | 不修改已审页面，不发布未验证输入 |
 
-## 三种运行模式
+四个正文角色的凭证均要求 `gpt-5.6-terra` 模型和 `high` 推理等级。独立修订审计、独立单页审查也有对应的固定模型与隔离要求，但它们不是四个正文角色中的额外状态节点。必须记录真实任务与交付结果，不能填写虚构任务名、模型或用量。
 
-| 模式 | 数据根 | 用途 | 是否写标准 canonical | 是否允许正式发布 |
-|---|---|---|---|---|
-| `production` | `data/current/manual-v6/<date>/` | 用户显式选择的 Manual 正式批次 | 是 | 是 |
-| `shadow` | `data/current/manual-v6-shadow/<date>/` | 隔离审计、比较和回归 | 否 | 否 |
-| `legacy_v5_maintenance` | 历史工件原路径 | 复演或显式维护既有 v5 | 否 | 仅历史维护，不建立新视觉任务 |
+## 三种运行模式与目录
 
-模式是签名输入，不能通过目录名、文件存在性或 `--data-file` 自动推断。Shadow 与 production 使用同构概念但不能互相引用文件。
+| 模式 | 数据位置 | 用途与发布范围 |
+|---|---|---|
+| `production` | `data/current/manual-v6/<date>/` | 用户显式选择的正式 Manual 批次；核验后可写正式分析结果并发布 |
+| `shadow` | `data/current/manual-v6-shadow/<date>/` | 隔离审计、比较和回归；不写共享正式结果，不允许正式发布 |
+| `legacy_v5_maintenance` | 既有历史文件路径 | 显式维护旧 v5；不能建立新 v6 证明或新视觉任务，能否复验取决于具体旧入口 |
 
-## 运行数据布局
+模式参与输入身份计算，不能根据目录名、文件存在或 `--data-file` 自动推断。正式模式与隔离模式的文件不能互相引用。
 
 ```text
 data/current/
@@ -108,178 +86,138 @@ data/current/
 └── deep-analysis-result.json
 ```
 
-源码位于 `manual/scripts/`，Prompt 位于 `manual/prompts/`，运行证据仍位于 `data/current/`。源码移动不迁移、不复制、不重签运行数据。
+源码在 `manual/scripts/`，提示词在 `manual/prompts/`，运行证据在 `data/current/`。移动源码不代表可以迁移、复制或重签运行数据。
 
-## 来源证据：ArtifactIndex 是什么
+## 来源索引怎样保存图表和公式
 
-纯文本会丢失表格合并单元格、公式表示、图片身份和引用关系，因此 Manual v6 在 `.text()` 之前保存结构化来源，并生成 ArtifactIndex。
+纯文本全文会丢失表格合并单元格、公式表示、图片身份和引用关系，因此来源提取在调用 `.text()` 之前保存结构化内容，再建立 `ArtifactIndex`。这份索引清点论文中的表、图、公式、章节、术语和引用，并保留表格单元格 ID 与矩阵、公式 MathML/TeX、图片 URL 与图注及原文位置。
 
-ArtifactIndex 至少承担四个职责：
+来源 HTML、全文、论文元数据、解析器和索引各有真实字节及 SHA。正文绑定这些来源后，检查器才能核对每个重要条目是否用于文章，或是否有允许的省略理由。
 
-1. **清点**：论文检测到了哪些表、图、公式、章节、术语和引用。
-2. **恢复**：为表格提供 cell ID/矩阵，为公式提供 MathML/TeX，为图片提供 URL/caption/source span。
-3. **绑定**：把来源 HTML、全文、论文 metadata 和当前 parser 的真实字节/SHA 连起来。
-4. **覆盖检查**：让 reader-longform 能证明每个重要工件被使用或合法省略。
+`inventoryHealth.status=complete` 表示解析结果符合完整性条件。对受支持的结构化 HTML，表格、公式、图片和引用的检测数与恢复数须相等、为整数，且没有截断或未解决的解析问题；表格还须有可重放的矩阵。Manual 的 PDF 或纯文本回退保持 `incomplete`，不能把“未解析到”解释为“论文没有”，也不能手改状态以继续生产任务。
 
-`inventoryHealth.status=complete` 只在检测数与恢复数闭环、无截断且工件可回放时成立。PDF 或纯文本 fallback 必须保持 `incomplete`；“没解析到”不能解释为“论文没有”。
+这里的索引完整性不同于 API Reader 的来源诊断或局部修复协议。不能把另一入口的诊断字段或恢复方式当作 Manual 的完整性证明。
 
-## Packet：把上下文隔离变成文件事实
+## 输入包怎样限制上下文
 
-每个 packet 只属于一个日期、论文和 role。它采用 deny-by-default allowlist：leaf 只能读取列出的 realpath、kind、bytes/SHA；未列出的输入一律禁止。
+任务输入包 `packet` 只属于一个日期、一篇论文和一个角色。子代理只能读取白名单列出的路径和文件类型；实际文件必须位于受控单篇目录中，并与记录的 SHA 一致。未列出的输入禁止读取。
 
-author packet 的典型允许输入包括：
+初稿作者的输入包括当前论文元数据、来源快照、完整全文、`ArtifactIndex`、当前写作提示词、编辑要求和空白结构模板（schema）。索引声明结构化来源时还须提供对应文件；论文图片必须由索引的实际图像文件 SHA 授权，可选官方项目证据也须通过对应核验。历史 `analysis`、旧 `readerArticle`、旧 `article.md`/`post.md`、博客页、已填写质量记录和历史审查正文都不能作为写作输入。
 
-- 当前论文 metadata projection 和 source snapshot；
-- 完整全文、structured source、complete ArtifactIndex；
-- ArtifactIndex 授权的论文图片；
-- production tutorial Prompt 和编辑契约；
-- 空白 schema 与可选官方项目证据。
+正式模式中，两个审查角色的实际输入是来源索引、空白模板、已验证初稿任务的输出和凭证，以及初稿文章与结构化初稿。完整全文没有另作为文件加入这两个角色的白名单，不能假定审查者可以读取任意来源文件。修订作者逐项复用初稿作者的原始输入及其顺序，只增加两份已验证的技术和可读性审查结果；前稿不作为修订底稿。
 
-禁止输入历史 analysis、旧 `readerArticle`、`article.md`、`post.md`、博客页面、已填写 quality 或历史 review prose。
+新输入包内的 `outputContract` 规定角色结果和凭证的路径、字段、量表及 SHA 算法。子代理按包内要求提交，不能依赖聊天中临时补充的格式。旧包缺这一可选字段的结构兼容，不代表其实际输入仍符合当前要求。
 
-review packet 只增加其角色真正需要的受控 author 输出。revision packet 复用 author 的原始证据，只增加 runner 已验证的 technical/readability findings；它不能把 previous draft 作为编辑底稿。
+## 任务管理与真实子代理
 
-新 packet 还内联角色专属 `outputContract`，规定输出路径、receipt 路径、字段、量表和稳定语义 SHA。leaf 不应依赖聊天中的补充口头 schema。
-
-## Runner 状态机
-
-Runner 的命令生命周期为：
+管理器的状态与操作关系如下：
 
 ```text
 init → awaiting_packet
-packet + register → pending / blocked
+生成 packet 并 register → pending / blocked
 claim → claimed
-start(real task name) → running
-submit(valid output + receipt) → validated
-                  └─ fail / abandon → failed → retry
-input/protocol drift at any bound node → stale
+创建真实子代理，start 登记任务名 → running
+submit 核验输出和凭证 → validated
+明确失败或确认终止 → fail / abandon → failed → retry
+绑定输入或协议不再一致 → stale
 ```
 
-关键不变量：
+`register` 重读输入包及白名单文件；`claim` 只领取依赖满足的任务，并受最多 3 个活动任务的限制。创建真实子代理后才能 `start`，任务名必须唯一。`submit` 重读结果和凭证，核验论文、角色、模型、推理等级、隔离声明、输入 SHA 和结果结构；修订提交还重放正文来源检查，不将问题推迟到整批汇总。
 
-- `register` 重开 packet 和 allowlist 的真实文件，不信任调用者传入的摘要；
-- `claim` 只返回依赖满足的节点，并受 active limit 约束；
-- `start` 必须绑定平台真实、唯一 task name；
-- `submit` 重开 output/receipt 并校验论文身份、role、模型、隔离声明和输入 SHA；
-- `author_revision` submit 还重放 reader-longform，而不是把缺口推迟到 records 阶段；
-- `abandon` 只能在平台确认真实任务终止后使用。
+不能仅凭等待时间判断任务死亡。只有平台确认活动任务已经终止，才可 `abandon`，否则可能出现两个子代理同时写同一目录。`manual:work-queue` 只是 `status` 别名，不创建任务；管理器也不生成整批 `records` 文件。
 
-runner 不写正文、不调用模型、不物化 records envelope。`manual:work-queue` 只是 `status` 别名，也不创建任务。
+## 完整替换稿、来源映射与独立审计
 
-## Revision、reader-longform 与独立审计
+修订作者提交 `draft/final-article.md` 和 `draft/revision-binding-map.json`。正文映射说明每段所用来源、表格、图片、公式、术语和相关工作，组合后形成 `reader-longform-v2`。它包含 6–32 个按最终顺序排列的内容块。写作提示词通常要求 8–18 个论文特有三级标题，这与内容块的结构限制不同，不能混为一谈。
 
-最终读者文章不能只靠一段自由文本进入 record。Revision leaf 同时提交文章和 binding map；binder 将其构造成 `reader-longform-v2`。
+当前 v6 使用 v2 编辑计划，其 `sectionPlan` 包含 4–8 个章节锚点，正文输入说明列出 2400–24000 的规范化字符范围；v6 单篇记录检查正文至少 2400 字符。读取文章时，若同时传入正文映射与来源索引，正文可以增加章节，但须按原顺序保留计划中的锚点。程序随后核验全部内容块。另有独立质量记录检查 6000 字符和 8–18 节，以及 v3 编辑计划的教程检查；不能把它们概括成所有当前 v6 入口都会执行的同一项硬门禁。正文还须满足实际写作要求，结构通过不证明教程质量足够。
 
-longform 的核心对象是：
+表格绑定原始矩阵和单元格 ID。结果表不能同时从正文与完整数据附录省略，其数值单元格覆盖须为 100%；其他表格以及图、公式的使用或省略也须逐项记录。正文实际使用的术语须就地定义，相关工作至少绑定 2 个真实文献 ID，并在对应内容块说明关系与差异。
 
-- 6–32 个按最终顺序重放的教学 blocks；
-- 表格及其 ArtifactIndex cell ID 覆盖；
-- 图片、公式的使用或可审计 omission；
-- 最终正文实际使用术语的定义；
-- 真实 citation 对应的 related-work 关系与差异。
+`--prepare` 将映射中确定的来源表格等内容写入已有终稿；`--preflight` 只在内存构造尚未汇总的单篇记录并运行完整校验。两者互斥。预检通过后，独立审计核对当前文章和映射的文件 SHA，至少记录两轮真实检查，最终一轮没有遗留问题；最后不带模式参数运行组合器，才生成修订结果和凭证。
 
-`--prepare` 只把 binding map 声明的确定性表格/工件物化进 leaf 已写好的终稿；`--preflight` 只在内存中构造未密封 record 并运行完整 validator。preflight 通过后，独立 audit 绑定当前 article/map SHA；无参数 binder 才物化 revision output/receipt。
+组合器读取管理器已验证的初稿记录、技术评分及可读性审查，并应用审查者确定的分数与校准。修订作者只能重新绑定证据，不能改评分。组合器内部读取结构化初稿不等于允许修订子代理读取前稿；它也不得读取自己上次留下的修订结果作为新的内容依据。
 
-Binder 不得回读遗留 revision payload 作为语义 base。author base、technical review 和 pedagogy review 必须来自 runner validated 路径。Reviewer-owned 分数与校准先应用，revision 只能重新绑定证据，不能改变评分决定。
+## 单篇记录、批次输入与正式结果
 
-## Record、spec 与 canonical 的三层闭包
+### 单篇记录（record v4）
 
-### Record v4：单篇闭包
+单篇记录绑定四个互异的真实任务、各自输入包/结果/凭证的路径及文件和内容 SHA、来源身份、`ArtifactIndex`、问题处理记录、正文来源映射和最终文章 SHA。基础质量检查也必须通过。
 
-一篇 sealed record 绑定：
+初稿 `authorReceipt` 与终稿 `finalRevisionAuthorReceipt` 分开。尚未汇总的修订结果不能预填汇总器才会写入的 `reviewReceipts`、`reviewResolution` 或 `sealedRecordSha256`，否则会形成记录与凭证互相依赖的哈希循环。
 
-- author、technical、pedagogy、revision 四个互异 task provenance；
-- 四类 packet/output/receipt 的真实路径、字节 SHA 和语义 SHA；
-- 完整来源身份与 ArtifactIndex；
-- reviewer findings 到 revision resolution；
-- reader-longform 与最终 article SHA；
-- legacy/base 质量子校验结果。
+### 整批输入（spec v6）
 
-初稿 `authorReceipt` 与终稿 `finalRevisionAuthorReceipt` 分开。未密封 revision payload 不得预先包含 sealer 才能注入的 review receipts、resolution 或 sealed SHA，避免 record/receipt 哈希环。
+批次组装器重读入选集合、全文清单、来源索引清单、`records-v4` 整批文件、每篇任务文件和正文映射，再生成每篇发布输入及 batch Merkle root。增加或删除论文、改变来源或任务证据都会改变批次身份，不能只拼接 records。
 
-### Spec v6：整批闭包
+规范化论文 ID 按固定顺序排序，所以原输入数组乱序不会改变这一排序结果。批次身份包含运行模式、日期、入选集合指纹和完整论文集合。Merkle 的第一项绑定这些批次信息，后续项依次为每篇输入的 SHA；每对 SHA 的原始字节拼接后再哈希，奇数个节点的最后一项复制自身。缺任一单篇输入时状态只能是 `running`，`rootSha256` 为 `null`。
 
-Spec assembler 重开 filtered、全文 manifest、ArtifactIndex manifest、records envelope、每篇 task artifacts 和 longform。每篇生成 paper shard，整批按固定顺序构造 Merkle root。
+### 发布器读取的正式结果
 
-因此，增加/删除论文、改变论文顺序规则、修改任何单篇来源或 task evidence，都会改变 batch identity。Spec 不是 records 文件的简单拼接。
+正式模式的写入入口只接受同日 `manual-v6/<date>/spec.json`，并再次调用正式组装器核验。成功后写 `data/current/deep-analysis-result.json`，保留反向核对 spec、record、来源索引、任务证据和 Merkle root 所需的证明。
 
-### Canonical：共享发布边界
+Manual 使用 `full-text-evidence-v6`，默认 API 使用 `llm_api_production`。共享发布器识别对应证明，再执行页面生成、审查和推送；不能将两条路线的记录改名或改版本来互相替代。
 
-Production ingestion 只接受同日 `manual-v6/<date>/spec.json` 并再次运行 official assembler。成功后写标准 `data/current/deep-analysis-result.json`，其中保留反向验证 spec、record、ArtifactIndex、task evidence 和 Merkle root 所需的 proof。
+## 页面审查、推送与上线
 
-共享 publisher 只需要理解标准 canonical 加对应 production proof：Manual 使用 `full-text-evidence-v6` 证明，默认 API 使用自己的 `llm_api_production` 证明。两条上游路线不能互相伪装，但在 generation/review/push 的共享门禁处采用同样严格的页面与发布验证。
+正式发布依次读取分析证明、schema v3 版本的页面生成清单、`publishedPapers` 和逐页 SHA，生成不可变页面审查输入。独立单页子代理提交 Manual 审查记录，之后汇总批次审查声明（`attestation`），完成 Markdown/Hugo 检查并生成审查凭证（review receipt），再核验允许的 Git 变动、发布提交和远端 `main` OID。
 
-## 发布闭包
+审查者只读最终页面。修改建议使本页失败，须回到生成或修订阶段；内容 SHA 变化后重新审查该页并汇总当前批次凭证。已有通过记录的复用仍须满足 Manual 入口的版本、模型、页面身份和当前批次检查，不能套用 API 模型请求流程或省略批次验收。
 
-Manual production 发布依次绑定：
+远端 OID 只证明提交已经推送。宣告上线前还须确认 GitHub Pages 构建和部署成功，部署对应发布提交或保留已审页面字节的后续提交，并逐页记录 HTTP 200、正式地址和标题。任务要求的视觉及有效取消记录按[根目录操作手册](../../SKILL.md)处理；推送或视觉登记之后重新读取最终状态，不能使用之前的快照宣布完成。
 
-```text
-canonical production proof
-  → generation schema v3 + publishedPapers + page SHA
-  → immutable page artifact
-  → per-page Manual review shard
-  → batch attestation + deterministic Markdown/Hugo gate
-  → review receipt
-  → exact Git delta + publication commit
-  → remote main OID
-```
+## 文件、文本与协议 SHA
 
-review worker 只读；任何修改建议都让页面失败。页面改变后旧 shard 不再有效。Push 不能只以“本地 commit 已创建”为成功，必须验证远端 OID。
+不同校验对象使用不同算法，不能将所有 SHA 都称为文章的“语义 SHA”。
 
-## 路径、SHA 与协议身份
+| 对象 | 实际校验内容 |
+|---|---|
+| 文件 | 真实路径、受控目录、普通文件和符号链接限制，以及原始字节数和 SHA-256 |
+| 规范文本 | 合法 Unicode 字符，NFKC 规范化、换行统一为 LF、首尾去空白后计算 SHA |
+| v6 JSON 协议对象 | 按 `stable-json-ascii-keys-exact-ieee754-nfkc-text-v2` 确定性序列化后计算 SHA |
+| 整批输入 | 批次身份及按论文 ID 排序的每篇输入共同构造 Merkle root |
+| 规则与实现 | 提示词、编辑要求、输入/输出契约、校验器、组合器和组装器的文件或协议指纹 |
 
-Manual 证据同时绑定三层身份：
+v6 JSON 的键只允许可见 ASCII，排序后写入；数组保持顺序，字符串必须是合法 Unicode 标量序列。它拒绝孤立的代理码位、NaN、Infinity、负零和非安全整数，浮点按实际 IEEE754 值的精确十进制表示序列化。JSON 字符串本身不会自动做 NFKC，文本规范化由专用函数执行。不能用普通 `JSON.stringify()` 或自行省略字段来替代规定算法。
 
-| 层 | 例子 | 为什么需要 |
-|---|---|---|
-| 文件系统身份 | realpath、普通文件、禁止 symlink、受控根内路径 | 防止路径替换和越界输入 |
-| 字节身份 | bytes、SHA-256、NFKC/trim 后语义 SHA | 检测文件漂移并支持跨运行时比较 |
-| 协议身份 | Prompt/contract/schema/validator/binder/assembler fingerprint | 防止旧规则输出被当前规则静默复用 |
+Python v5 的 JSON SHA 使用 UTF-8、非 ASCII 原字输出、键排序和紧凑分隔符；它与 v6 的精确浮点序列化不是同一协议。跨版本文件须使用对应读取器，不能改签成当前格式。
 
-Prompt、编辑契约、allowlist/output contract、stable JSON/Unicode 规则、validator、binder、sealer 或 assembler 的变化都可能使节点 `stale`。恢复时从最早变化节点重新 packet/register/submit，再组装 records/spec/canonical；不能在旧 JSON 中替换哈希。
+## 当前输入变化后怎样恢复
 
-对历史工件，兼容读取器只能按工件自身绑定的旧协议和字节重放。保留历史读取能力不等于允许把旧工件改签为当前 production。
+`validateTaskPacket()` 的纯结构校验不读取白名单文件。只有 `requireFiles=true` 时才核真实文件及来源；在这一模式下，`author` 和 `author_revision` 的提示词、编辑要求副本 SHA 还须等于仓库当前固定文件的 SHA。注册任务、恢复已保存状态和汇总 records 都执行实际文件核验。旧包即使副本、包和外层记录彼此一致，也可能因当前要求变更而被拒绝。
 
-## 可观测性与恢复原则
+这项仓库文档 SHA 比较不直接用于两个审查角色；它们仍须通过各自文件、父任务和结果校验，不能据此保证旧审查结果总可复用。输入包或规则变化时，从最早不再一致的任务重新生成、注册、提交，再汇总单篇记录、整批输入和正式结果；不要修改旧 JSON 的 SHA 使其表面通过。
 
-Raw fetch、fulltext、ArtifactIndex、task/records/spec/canonical 的 metrics 使用真实单调时钟，记录可测 queue/host wait、cache 命中、重试等待、输入输出 bytes/SHA 和 task count。无法观测的值写 `unknown`。
+## 可观测性与恢复记录
 
-Metrics 写失败不能改变论文内容结果，但报告必须显式显示缺失。报告消费前重新检查 sidecar realpath、绑定文件 bytes/SHA 和契约 fingerprint。至少 3 个不同日期才计算 nearest-rank P50/P95。
+抓取、全文、来源索引及任务、records、spec、正式结果的统计使用真实单调时钟，记录可测的排队和主机等待、缓存命中、重试等待、输入输出字节/SHA 与任务数。无法观测的值记为 `unknown`，不能填理论估计。
 
-恢复只遵守一条总原则：定位最早失效证据，保留无关健康节点，向下游重放。不能通过清空整个数据根、手改 SHA、复用旧 receipt 或降级 v5 来消除错误表象。
+统计文件写入失败不改变论文内容结果，但报告必须显示缺失。读取附属统计文件前，重新核验实际路径、所绑定文件的字节/SHA 和协议指纹；至少有 3 个不同日期的数据，才按最近秩法计算中位数及第 95 百分位（P50/P95）。
+
+恢复时保留无关的健康结果和失败记录，定位最早不符的证据，再处理下游。不能清空整个数据根、手改 SHA、复用不符的凭证或降级 v5 来消除错误表象。
 
 ## 历史兼容边界
 
-### Legacy v5
+### 旧 v5 维护
 
-`manual:v5:*` 保留既有 records v3/spec v5、author packet、draft promotion 和 work-queue 的显式维护。它们不能：
+`manual:v5:*` 保留既有 records v3/spec v5、作者输入包、草稿替换和任务队列的显式维护。它们不能为新批次创建正式模式的 v6 证明、与 records v4/spec v6 混批、通过修改 `version` 升级，或建立新教程、质量回归和新视觉任务。V6 使用旧基础校验器作基础质量检查，不改变其正式依据来自任务证据、来源索引、正文映射和 Merkle root。
 
-- 为新批次创建 production v6 证明；
-- 与 records v4/spec v6 混批；
-- 通过修改 `version` 字段提升；
-- 进入新教程生成、质量回归或新视觉任务。
+Python v5 写作来源核验仍要求提示词、编辑要求和空白模板位于当前项目的固定路径，并检查当前字节 SHA。指向旧备份，即使备份 SHA 正确，也不满足固定路径；仍指当前路径而记录旧 SHA，也会失败。Node 的新稿输入检查函数可显式传入 `authorityPaths`，这项可注入能力不能当作 Python 发布入口也接受任意旧路径。
 
-V6 可以重放 legacy/base validator 作为基础质量子校验，但这不改变 v6 正式语义来自 task evidence、ArtifactIndex、reader-longform 和 Merkle root。
+### 既有封存预览
 
-### Sealed tutorial preview
+既有封存教程预览可以通过专用只读入口复验，但不只检查旧清单与文章彼此一致。读取器还核当前固定路径的提示词、编辑要求和质量模板：`inputs.editorialContract` 指向 `manual/prompts/manual-tutorial-article.md`，`inputs.referenceContract` 才指向本目录的编辑要求文档。任一当前字节 SHA 不符，或指向旧备份路径，都会拒绝。
 
-既有 sealed preview 仅按固定 manifest、正文和 SHA 原字节复验。Production v6 不提供新 preview 写入口；不能把 preview 页面提升为新 canonical 或视觉任务。
+正式 v6 没有新预览写入口；不能把预览页面转为新正式结果或视觉任务。不要修改旧清单来绕过当前输入检查。
 
-### Shadow
+### 静态旧文章与隔离审计
 
-Shadow 必须显式选择并只引用 shadow 根。它可运行同构 records/spec/canonical 审计，但不会更新标准 canonical、`papers.json`、发布完成状态或视觉规划。
+已保存 Markdown 或已经部署的文章不会仅因编辑要求变化而自动删除或不可读。阅读旧文章、重放正式结果、恢复旧作者任务和复验封存预览是不同操作，须分别满足对应入口的条件。静态格式检查和 v6 正式结果重放不会直接读取这份编辑要求，不能由作者包的拒绝推断所有历史文件都不可读，也不能反过来保证全部旧页都能重新发布。
 
-## 维护变更的最小验收
+隔离模式必须显式选择，只引用自己的数据根；可审计对应任务、records、spec 和分析结果，不更新共享正式结果、`papers.json`、发布完成状态或视觉规划。
 
-任何影响 Manual 协议的代码或文档变更，至少验证：
+## 修改后的必要核验
 
-1. Production/shadow 数据根互不引用。
-2. Packet allowlist、output contract 和 runner 状态转移仍 fail closed。
-3. Prompt/contract/代码 fingerprint 变化能使对应节点 stale。
-4. Record 任一 task/source/longform 字节变化会使 sealer 拒绝。
-5. Spec 的论文集合、paper shard 或 Merkle 变化会使 ingestion 拒绝。
-6. V5、shadow 和 sealed preview 不能通过 production publisher。
-7. Page SHA 漂移会使 review/push 失败。
-8. 历史 fixture 仍能通过明确的只读兼容路径复演。
+涉及 Manual 协议或绑定文档的变更，应检查正式与隔离模式的数据根互不引用、输入包白名单和输出要求有效、真实任务依赖未绕过。当前提示词或编辑要求改变时，须验证自洽旧作者包也会被相应文件检查拒绝；只破坏包的外层 SHA 不能证明这项行为。
 
-具体测试命令由仓库共享 CI 统一维护；本文件不重复根级测试清单。
+还须验证单篇任务、来源或正文变化会被汇总器发现，论文集合、单篇输入或 Merkle 漂移会被写入入口拒绝，页面 SHA 不符会阻断审查或推送。V5、隔离结果或预览不能冒充新正式结果；历史样例只在明确支持的入口核验，不能假定一切旧文件都可继续使用。具体测试由共享 CI 维护。

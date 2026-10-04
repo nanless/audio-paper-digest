@@ -8,7 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const Config = require('../../scripts/config.js');
 const {
-    buildTaskPacket, stableSha256, validateReviewOutput
+    buildTaskPacket, stableSha256, validateReviewOutput, validateTaskPacket
 } = require('../scripts/manual-v6-workflow.js');
 const { computeArtifactIndexSha256 } = require('../scripts/manual-artifact-index.js');
 const { buildFilteredBatchFingerprint, buildPaperInputIdentity } = require('../scripts/manual-fetch-fulltext.js');
@@ -28,6 +28,26 @@ const completedAt = '2026-08-28T09:10:00.000+08:00';
 
 function bytesSha(filePath) {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function withUpdatedEditorialContract(context, check) {
+    const repositoryPath = path.resolve(__dirname, '..', 'docs', 'editorial-reference-contract.md');
+    const readFileSync = fs.readFileSync;
+    const updatedBytes = Buffer.concat([
+        readFileSync(repositoryPath), Buffer.from('\n测试中的下一版编辑要求。\n')
+    ]);
+    const mockedRead = context.mock.method(fs, 'readFileSync', (file, options) => {
+        if (typeof file !== 'string' || path.resolve(file) !== repositoryPath) {
+            return readFileSync(file, options);
+        }
+        const encoding = typeof options === 'string' ? options : options?.encoding;
+        return encoding ? updatedBytes.toString(encoding) : Buffer.from(updatedBytes);
+    });
+    try {
+        check(repositoryPath);
+    } finally {
+        mockedRead.mock.restore();
+    }
 }
 
 function writeProductionAuthorDraft(root, draft, output, receipt) {
@@ -667,6 +687,105 @@ describe('Manual v6 persistent task runner', () => {
         const retry = claimTasks(fx.state, 1, queuedAt).claimed[0];
         assert.throws(() => startTask(fx.state, retry.claimId, 'abandoned-author-task', startedAt), /已在批次使用/);
         fs.rmSync(fx.root, { recursive: true, force: true });
+    });
+
+    it('作者和修订者的旧输入自身一致时，实际文件核验和注册仍要求当前编辑要求', async context => {
+        for (const role of ['author', 'author_revision']) {
+            await context.test(role, test => {
+                const fx = fixture();
+                test.after(() => fs.rmSync(fx.root, { recursive: true, force: true }));
+                const paperId = '2608.12345';
+                const paper = fx.papers[paperId];
+                const author = register(fx, paperId, 'author');
+                let { packet, packetPath } = author;
+                if (role === 'author_revision') {
+                    validateAuthor(fx);
+                    register(fx, paperId, 'technical_scoring');
+                    register(fx, paperId, 'pedagogy_readability');
+                    submitReview(fx, 'technical_scoring', 'technical-current-contract');
+                    submitReview(fx, 'pedagogy_readability', 'readability-current-contract');
+                    packet = buildTaskPacket({
+                        role, paperId, paperInputSha256: paper.paperInputSha256,
+                        sourceIdentitySha256: paper.sourceIdentitySha256, contractSha256: C,
+                        allowedArtifacts: [
+                            ...author.packet.allowedArtifacts,
+                            { path: 'reviews/technical-scoring.json', kind: 'technical_review',
+                                sha256: bytesSha(path.join(paper.root, 'reviews', 'technical-scoring.json')) },
+                            { path: 'reviews/pedagogy-readability.json', kind: 'readability_review',
+                                sha256: bytesSha(path.join(paper.root, 'reviews', 'pedagogy-readability.json')) }
+                        ]
+                    });
+                    packetPath = path.join(paper.root, 'author-revision.packet.json');
+                    fs.writeFileSync(packetPath, JSON.stringify(packet));
+                }
+                const fileOptions = { paperId, artifactRoot: paper.root, requireFiles: true };
+                const registerOptions = {
+                    paperId, role, artifactRoot: paper.root, packetPath, controlledTaskRoot: fx.root
+                };
+                const packetFileSha = bytesSha(packetPath);
+                const assertPacketMatchesFiles = () => {
+                    assert.equal(bytesSha(packetPath), packetFileSha);
+                    assert.equal(buildTaskPacket(packet).packetSha256, packet.packetSha256);
+                    for (const artifact of packet.allowedArtifacts) {
+                        assert.equal(bytesSha(path.join(paper.root, artifact.path)), artifact.sha256);
+                    }
+                };
+                assertPacketMatchesFiles();
+                assert.doesNotThrow(() => validateTaskPacket(packet, fileOptions));
+                assert.doesNotThrow(() => registerPacket(fx.state, registerOptions));
+                withUpdatedEditorialContract(test, repositoryPath => {
+                    assertPacketMatchesFiles();
+                    assert.notEqual(bytesSha(repositoryPath), bytesSha(paper.contractPath));
+                    assert.doesNotThrow(() => validateTaskPacket(packet));
+                    assert.doesNotThrow(() => validateTaskPacket(packet, {
+                        ...fileOptions, requireFiles: false
+                    }));
+                    const currentContractError = {
+                        message: 'editorial_contract 不是仓库当前固定权威文件'
+                    };
+                    assert.throws(() => validateTaskPacket(packet, fileOptions), currentContractError);
+                    assert.throws(() => registerPacket(fx.state, registerOptions), currentContractError);
+                });
+                assertPacketMatchesFiles();
+                assert.doesNotThrow(() => validateTaskPacket(packet, fileOptions));
+                assert.doesNotThrow(() => registerPacket(fx.state, registerOptions));
+            });
+        }
+    });
+
+    it('已登记作者包的文件和状态签名一致时，恢复仍重新核对当前编辑要求', context => {
+        const fx = fixture();
+        context.after(() => fs.rmSync(fx.root, { recursive: true, force: true }));
+        const { packet, packetPath } = register(fx, '2608.12345', 'author');
+        const task = fx.state.papers['2608.12345'].tasks.author;
+        const stateBefore = JSON.stringify(fx.state);
+        assert.doesNotThrow(() => verifyBoundInputs(fx.state));
+        withUpdatedEditorialContract(context, () => {
+            assert.equal(bytesSha(packetPath), task.packetFileSha256);
+            assert.equal(buildTaskPacket(packet).packetSha256, task.packetSha256);
+            assert.throws(() => verifyBoundInputs(fx.state), {
+                message: 'editorial_contract 不是仓库当前固定权威文件'
+            });
+            assert.equal(JSON.stringify(fx.state), stateBefore);
+        });
+        assert.doesNotThrow(() => verifyBoundInputs(fx.state));
+    });
+
+    it('技术审查包自己的文件核验不比较作者的当前编辑要求', context => {
+        const fx = fixture();
+        context.after(() => fs.rmSync(fx.root, { recursive: true, force: true }));
+        const { packet, packetPath } = register(fx, '2608.12345', 'technical_scoring');
+        const options = { paperId: packet.paperId, artifactRoot: fx.papers[packet.paperId].root, requireFiles: true };
+        assert.deepEqual(packet.allowedArtifacts.map(item => item.kind), ['artifact_index']);
+        assert.doesNotThrow(() => validateTaskPacket(packet, options));
+        withUpdatedEditorialContract(context, () => {
+            assert.doesNotThrow(() => validateTaskPacket(packet, options));
+            assert.doesNotThrow(() => registerPacket(fx.state, {
+                paperId: packet.paperId, role: packet.role, artifactRoot: options.artifactRoot,
+                packetPath, controlledTaskRoot: fx.root
+            }));
+        });
+        assert.doesNotThrow(() => validateTaskPacket(packet, options));
     });
 
     it('filtered、packet 或 state 字节/字段被篡改后 status/mutation 必须 fail closed', () => {

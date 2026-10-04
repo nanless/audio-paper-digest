@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -20,7 +21,8 @@ def sha(raw):
 
 
 class SealedTutorialPreviewTest(unittest.TestCase):
-    def make_fixture(self):
+    def make_fixture(self, authority_root=None):
+        authority_root = ROOT if authority_root is None else Path(authority_root)
         temporary = tempfile.TemporaryDirectory()
         current = Path(temporary.name) / 'current'
         paper_id = '2608.25177'
@@ -80,9 +82,9 @@ class SealedTutorialPreviewTest(unittest.TestCase):
         controlled = {
             'article': article_path,
             'quality': quality_path,
-            'editorialContract': ROOT / 'manual' / 'prompts' / 'manual-tutorial-article.md',
-            'referenceContract': ROOT / 'manual' / 'docs' / 'editorial-reference-contract.md',
-            'qualitySchema': ROOT / 'manual' / 'scripts' / 'manual-tutorial-quality-contract.js',
+            'editorialContract': authority_root / 'manual' / 'prompts' / 'manual-tutorial-article.md',
+            'referenceContract': authority_root / 'manual' / 'docs' / 'editorial-reference-contract.md',
+            'qualitySchema': authority_root / 'manual' / 'scripts' / 'manual-tutorial-quality-contract.js',
         }
         manifest = {
             'version': 5,
@@ -135,6 +137,61 @@ class SealedTutorialPreviewTest(unittest.TestCase):
         self.assertNotIn('analysis', result['snapshot'])
         self.assertNotIn('parsed', result['snapshot'])
         self.assertNotIn('readerArticle', json.dumps(result['snapshot']))
+
+    def test_current_reference_contract_bytes_and_fixed_path_are_required(self):
+        for boundary in ('current_bytes', 'old_copy_path'):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary_root:
+                authority_root = Path(temporary_root) / 'project'
+                for relative in (
+                        'manual/prompts/manual-tutorial-article.md',
+                        'manual/docs/editorial-reference-contract.md',
+                        'manual/scripts/manual-tutorial-quality-contract.js',
+                        'manual/scripts/sealed_tutorial_preview.py'):
+                    target = authority_root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes((ROOT / relative).read_bytes())
+                temporary, current, date_str, paper_id, post_path = self.make_fixture(authority_root)
+                self.addCleanup(temporary.cleanup)
+                manifest_path = post_path.parent / 'manifest.json'
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                self.assertEqual(
+                    Path(manifest['inputs']['editorialContract']['path']),
+                    authority_root / 'manual/prompts/manual-tutorial-article.md',
+                )
+                contract_path = authority_root / 'manual/docs/editorial-reference-contract.md'
+                self.assertEqual(Path(manifest['inputs']['referenceContract']['path']), contract_path)
+                old_bytes = contract_path.read_bytes()
+                old_copy = Path(temporary_root) / 'previous-editorial-contract.md'
+                old_copy.write_bytes(old_bytes)
+                module_path = authority_root / 'manual/scripts/sealed_tutorial_preview.py'
+                with mock.patch.object(sealed, '__file__', str(module_path)):
+                    original = sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
+                    self.assertEqual(original['postText'], post_path.read_text(encoding='utf-8'))
+                    contract_path.write_bytes(old_bytes + '\n测试中的下一版编辑要求。\n'.encode('utf-8'))
+                    binding = manifest['inputs']['referenceContract']
+                    self.assertEqual(binding['sha256'], sha(old_copy.read_bytes()))
+                    self.assertNotEqual(binding['sha256'], sha(contract_path.read_bytes()))
+                    if boundary == 'old_copy_path':
+                        binding['path'] = str(old_copy.resolve())
+                        expected_error = '未绑定固定受控路径'
+                    else:
+                        expected_error = 'SHA-256 漂移'
+                    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+                    self.assertEqual(manifest['output']['postSha256'], sha(post_path.read_bytes()))
+                    self.assertEqual(manifest['output']['bytes'], len(post_path.read_bytes()))
+                    with self.assertRaises(sealed.PublishDataValidationError) as failure:
+                        sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
+                    self.assertEqual(
+                        str(failure.exception),
+                        f'preview.inputs.referenceContract {expected_error}',
+                    )
+                    if boundary == 'current_bytes':
+                        contract_path.write_bytes(old_bytes)
+                    else:
+                        binding.update(path=str(contract_path.resolve()), sha256=sha(contract_path.read_bytes()))
+                        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+                    restored = sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
+                    self.assertEqual(restored['postText'], original['postText'])
 
     def test_post_byte_tamper_fails_closed(self):
         temporary, current, date_str, paper_id, post_path = self.make_fixture()
