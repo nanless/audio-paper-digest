@@ -6,8 +6,8 @@ const planApi = require('./historical-direct-rewrite-plan.js');
 const runner = require('./historical-direct-rewrite-runner.js');
 const fresh = require('./fresh-arxiv-rewrite-source.js');
 const io = require('./historical-conference-page-projections.js');
-const taxApi = require('./paper-taxonomy.js');
-const taxRuntime = require('./taxonomy-runtime.js');
+const tagCatalogApi = require('./paper-taxonomy.js');
+const tagRulesApi = require('./taxonomy-runtime.js');
 const supplementApi = require('./historical-direct-taxonomy-supplement.js');
 const scheduler = require('./source-classification-scheduler.js');
 const failureApi = require('./source-classification-failures.js');
@@ -181,7 +181,7 @@ async function classifyRun(options) {
     const poolIdentity = pool.getPoolIdentity(pool.resolvePrimaryApiKeyPool(process.env.PAPER_ANALYZER_API_KEY,
         process.env.PAPER_ANALYZER_FALLBACK_API_KEYS, process.env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY), process.env.PAPER_ANALYZER_ENDPOINT);
     const { plan, registry } = supplementApi.readPlanRegistry(options);
-    const runtime = taxRuntime.createTagRules({ registryPath: options.registrySnapshot });
+    const runtime = tagRulesApi.createTagRules({ registryPath: options.registrySnapshot });
     const supplement = { contract: supplementApi.CONTRACT, records: {} };
     const failures = [], decisions = []; let stopped = null;
     const byId = new Map(registry.entries.map(e => [e.paperId, e]));

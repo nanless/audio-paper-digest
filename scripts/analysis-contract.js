@@ -1403,14 +1403,14 @@ function validateTaxonomyStageBinding(paper, options = {}) {
         return 'taxonomySeal=not_needed 时输入与输出正文必须相同';
     }
     const checkpoints = paper?.analysisStageCheckpoints;
-    const taxonomyCheckpoint = checkpoints?.taxonomySeal;
-    const taxonomyProjection = typeof taxonomyCheckpoint === 'string'
-        ? taxonomyProtectedProjection(taxonomyCheckpoint) : '';
-    if (typeof taxonomyCheckpoint !== 'string' || !taxonomyProjection
-        || crypto.createHash('sha256').update(taxonomyCheckpoint).digest('hex') !== stage.outputAnalysisSha256
-        || crypto.createHash('sha256').update(taxonomyProjection).digest('hex')
+    const tagCheckpointText = checkpoints?.taxonomySeal;
+    const maskedAnalysisText = typeof tagCheckpointText === 'string'
+        ? taxonomyProtectedProjection(tagCheckpointText) : '';
+    if (typeof tagCheckpointText !== 'string' || !maskedAnalysisText
+        || crypto.createHash('sha256').update(tagCheckpointText).digest('hex') !== stage.outputAnalysisSha256
+        || crypto.createHash('sha256').update(maskedAnalysisText).digest('hex')
             !== stage.outputProtectedProjectionSha256
-        || taxonomySurfaceSha256(taxonomyCheckpoint) !== stage.taxonomySurfaceSha256) {
+        || taxonomySurfaceSha256(tagCheckpointText) !== stage.taxonomySurfaceSha256) {
         return 'taxonomySeal 成功态缺少可逐字重放的 taxonomy checkpoint';
     }
     if (stage.status === 'complete') {

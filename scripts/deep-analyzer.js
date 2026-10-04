@@ -9898,19 +9898,19 @@ function hasIncompleteRecoveryStage(manifest) {
 }
 
 function retainFinalTaxonomyCheckpoints(paper, analysisManifest) {
-    const taxonomyStatus = analysisManifest?.stages?.taxonomySeal?.status;
-    if (!['complete', 'not_needed'].includes(taxonomyStatus)) {
+    const tagStageStatus = analysisManifest?.stages?.taxonomySeal?.status;
+    if (!['complete', 'not_needed'].includes(tagStageStatus)) {
         delete paper.analysisStageCheckpoints;
         return;
     }
-    const taxonomySeal = paper.analysisStageCheckpoints?.taxonomySeal;
-    if (typeof taxonomySeal !== 'string') {
+    const tagCheckpointText = paper.analysisStageCheckpoints?.taxonomySeal;
+    if (typeof tagCheckpointText !== 'string') {
         throw contractRejectedError(
             'taxonomySeal 成功态必须保留 taxonomySeal 逐字 checkpoint'
         );
     }
-    if (taxonomyStatus === 'not_needed') {
-        paper.analysisStageCheckpoints = { taxonomySeal };
+    if (tagStageStatus === 'not_needed') {
+        paper.analysisStageCheckpoints = { taxonomySeal: tagCheckpointText };
         return;
     }
     const structureRepair = paper.analysisStageCheckpoints?.structureRepair;
@@ -9919,7 +9919,7 @@ function retainFinalTaxonomyCheckpoints(paper, analysisManifest) {
             'taxonomySeal=complete 成功态必须保留 structureRepair/taxonomySeal 两份逐字 checkpoint'
         );
     }
-    paper.analysisStageCheckpoints = { structureRepair, taxonomySeal };
+    paper.analysisStageCheckpoints = { structureRepair, taxonomySeal: tagCheckpointText };
 }
 
 function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest = null) {
@@ -14683,32 +14683,32 @@ async function analyzePaperDeepInternal(paper) {
     // 结构修复完成后，单独依据原文证据核验并修复标签。
     // 标签不合规时必须修复；主任务标签过于宽泛时，也会尝试改选。
     // 局部修复只允许改动标签节，以及机器摘要中的主任务和主方法标签字段。
-    let taxonomySealStage = prepareTextRecoveryStage(
+    let tagStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
         'taxonomySeal',
         analysis,
         rawTextForAnalysis
     );
-    analysis = taxonomySealStage.analysis;
-    let taxonomyIssue = validateTagSectionContract(analysis, parseAnalysis(analysis));
-    if (isRecoveryStageComplete(analysisManifest, 'taxonomySeal') && taxonomyIssue) {
+    analysis = tagStage.analysis;
+    let tagValidationIssue = validateTagSectionContract(analysis, parseAnalysis(analysis));
+    if (isRecoveryStageComplete(analysisManifest, 'taxonomySeal') && tagValidationIssue) {
         invalidateRecoveryStageIfChanged(
             paper,
             analysisManifest,
             'taxonomySeal',
-            `${taxonomySealStage.fingerprint}:invalid-${TAG_RULES.selectionContract}`
+            `${tagStage.fingerprint}:invalid-${TAG_RULES.selectionContract}`
         );
-        analysis = paper.analysisCheckpoint || taxonomySealStage.inputAnalysis;
-        taxonomySealStage = prepareTextRecoveryStage(
+        analysis = paper.analysisCheckpoint || tagStage.inputAnalysis;
+        tagStage = prepareTextRecoveryStage(
             paper,
             analysisManifest,
             'taxonomySeal',
             analysis,
             rawTextForAnalysis
         );
-        analysis = taxonomySealStage.analysis;
-        taxonomyIssue = validateTagSectionContract(analysis, parseAnalysis(analysis));
+        analysis = tagStage.analysis;
+        tagValidationIssue = validateTagSectionContract(analysis, parseAnalysis(analysis));
     }
     if (!isRecoveryStageComplete(analysisManifest, 'taxonomySeal')) {
         try {
@@ -14716,7 +14716,7 @@ async function analyzePaperDeepInternal(paper) {
             // 标签不合规时，修复失败会阻断分析。主任务标签过于宽泛只记为告警，
             // 仅在本阶段尚未完成时尝试改选；失败则保留原标签。
             // 上方对已完成阶段的额外检查只看标签是否合规，不因这条告警单独要求重跑。
-            let repairFeedback = taxonomyIssue;
+            let repairFeedback = tagValidationIssue;
             if (!repairFeedback) {
                 const warning = parseAnalysis(analysis).taxonomyValidation?.specificityWarning;
                 if (warning) repairFeedback = warning;
@@ -14727,39 +14727,39 @@ async function analyzePaperDeepInternal(paper) {
                     analysis = await repairTaxonomyTags(
                         paper,
                         analysis,
-                        taxonomySealStage.evidenceContext,
+                        tagStage.evidenceContext,
                         repairFeedback,
                         // 只有因主任务标签过于宽泛而触发修复时，才要求修复后的主任务标签不再出现这条告警；
                         // 修复标签合规错误时，不附加这一要求。
-                        { requireMostSpecificTask: !taxonomyIssue }
+                        { requireMostSpecificTask: !tagValidationIssue }
                     );
                 } catch (error) {
-                    if (taxonomyIssue) throw error;
+                    if (tagValidationIssue) throw error;
                     console.log(`    [deep] ⚠️  taxonomy 欠具体告警未能改选，保留原标签: ${error.message}`);
                     analysis = before;
                 }
             }
-            const parsedTaxonomy = parseAnalysis(analysis);
-            const finalTaxonomyIssue = validateTagSectionContract(analysis, parsedTaxonomy);
-            if (finalTaxonomyIssue) {
-                throw contractRejectedError(`taxonomy 最终门禁失败: ${finalTaxonomyIssue}`);
+            const parsedForTagCheck = parseAnalysis(analysis);
+            const finalTagValidationIssue = validateTagSectionContract(analysis, parsedForTagCheck);
+            if (finalTagValidationIssue) {
+                throw contractRejectedError(`taxonomy 最终门禁失败: ${finalTagValidationIssue}`);
             }
-            const taxonomyBinding = {
+            const tagStageProof = {
                 registryVersion: TAG_RULES.registryVersion,
                 registrySha256: TAG_RULES.registrySha256,
                 projectionContract: TAG_RULES.projectionContract,
                 projectionSha256: TAG_RULES.projectionSha256,
                 selectionContract: TAG_RULES.selectionContract,
-                inputAnalysisSha256: taxonomySealStage.inputAnalysisSha256,
+                inputAnalysisSha256: tagStage.inputAnalysisSha256,
                 outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
                 inputProtectedProjectionSha256: crypto.createHash('sha256')
                     .update(taxonomyProtectedProjection(before)).digest('hex'),
                 outputProtectedProjectionSha256: crypto.createHash('sha256')
                     .update(taxonomyProtectedProjection(analysis)).digest('hex'),
                 taxonomySurfaceSha256: taxonomySurfaceSha256(analysis),
-                primaryTaskId: parsedTaxonomy.taxonomyValidation.primaryTaskId,
-                primaryMethodId: parsedTaxonomy.taxonomyValidation.primaryMethodId,
-                conceptIds: parsedTaxonomy.taxonomyValidation.conceptIds
+                primaryTaskId: parsedForTagCheck.taxonomyValidation.primaryTaskId,
+                primaryMethodId: parsedForTagCheck.taxonomyValidation.primaryMethodId,
+                conceptIds: parsedForTagCheck.taxonomyValidation.conceptIds
             };
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
@@ -14770,13 +14770,13 @@ async function analyzePaperDeepInternal(paper) {
                 'taxonomySeal',
                 // 即使只是调整过于宽泛的主任务标签，只要正文有变化，也要记为 complete；
                 // not_needed 仅用于没有标签错误且正文逐字未变的结果。
-                (taxonomyIssue || analysis !== before) ? 'complete' : 'not_needed',
+                (tagValidationIssue || analysis !== before) ? 'complete' : 'not_needed',
                 {
-                    fingerprint: taxonomySealStage.fingerprint,
-                    evidenceChars: taxonomySealStage.evidenceChars,
-                    evidenceSha256: taxonomySealStage.evidenceSha256,
-                    ...taxonomyBinding,
-                    bindingSha256: stableFingerprint(taxonomyBinding)
+                    fingerprint: tagStage.fingerprint,
+                    evidenceChars: tagStage.evidenceChars,
+                    evidenceSha256: tagStage.evidenceSha256,
+                    ...tagStageProof,
+                    bindingSha256: stableFingerprint(tagStageProof)
                 }
             );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -14785,7 +14785,7 @@ async function analyzePaperDeepInternal(paper) {
                 analysisManifest,
                 'taxonomySeal',
                 recoveryFailureStatus(error),
-                { error: error.message, fingerprint: taxonomySealStage.fingerprint }
+                { error: error.message, fingerprint: tagStage.fingerprint }
             );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             throw error;

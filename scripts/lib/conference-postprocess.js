@@ -13,7 +13,7 @@ const pageApi = require('./historical-page-staging.js');
 const fresh = require('./fresh-rewrite-run.js');
 const analysisEngine = require('../analysis-engine.js');
 const analysisContract = require('../analysis-contract.js');
-const taxonomyRuntimeApi = require('./taxonomy-runtime.js');
+const tagRulesApi = require('./taxonomy-runtime.js');
 const sourceContextApi = require('./conference-source-context.js');
 
 const CONTRACT = 'conference-paper-page-staging-v1';
@@ -207,7 +207,7 @@ function resolve(taxonomy, label, facet, reasons, role) {
 }
 function buildAssignment(loaded, taxonomy) {
     const paper = loaded.analysis.papers[0], input = labelProjection(paper), reasons = [], concepts = new Map();
-    const tagRules = taxonomyRuntimeApi.createTagRules({ taxonomy });
+    const tagRules = tagRulesApi.createTagRules({ taxonomy });
     const parsed = require('../utils.js').parseAnalysis(paper.analysis);
     const taxonomyIssue = analysisContract.validateTaxonomyStageBinding(paper, { parsed, taxonomyRuntime: tagRules });
     // A tag selection the current registry cannot resolve is not byte-level
