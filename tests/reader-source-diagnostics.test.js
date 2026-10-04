@@ -40,7 +40,7 @@ test('percent moved into an independent column points back to original suffixed 
     assert.equal(issue.candidates[0].sourceRow, 1);
     assert.equal(issue.candidates[0].text, '96.4%');
     assert.equal(issue.candidates[0].difference, 'percent_position_differs');
-    assert.match(issue.message, /仅补sourceQuotes不能修复/);
+    assert.match(issue.message, /只补充 sourceQuotes，都不能修正/);
     assert.ok(issue.sourceQuotes.every(item => source.matrix.map(row => row.join('\n')).join('\n').includes(item.quote)));
 });
 
@@ -50,7 +50,7 @@ test('same number in unrelated rows and bibliography cannot discover a candidate
         { sourceText: 'References\n[96] Model-B produced a result.\n96.4%' });
     assert.deepEqual(issue.candidates, []);
     assert.deepEqual(issue.sourceQuotes, []);
-    assert.match(issue.message, /未找到有行列语义锚点/);
+    assert.match(issue.message, /没有找到能通过行标签和列标题对应/);
 });
 
 test('row and metric anchors outrank a numeric coincidence in a different metric', () => {
@@ -95,7 +95,7 @@ test('public wrapper locates the exact candidate body after another selection ma
     assert.equal(issues[0].path, '/sections/1/body');
     assert.equal(issues[0].bindingPath, '/tableBindings/1');
     assert.equal(issues[0].candidates[0].text, '3.3%');
-    assert.match(issues[0].message, /原文候选上下文 L3/);
+    assert.match(issues[0].message, /可供核对的原文片段 L3/);
 });
 
 test('a declared source sentence supports a percentage-placement hint without a matching DOM table', () => {
@@ -105,7 +105,7 @@ test('a declared source sentence supports a percentage-placement hint without a 
             binding: { sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [], sourceQuotes: [quote] } });
     assert.deepEqual(issue.candidates, []);
     assert.equal(issue.quoteCandidates[0].text, '96.4%');
-    assert.match(issue.message, /该句是否对应本行实验仍须/);
+    assert.match(issue.message, /这句话是否对应当前行的实验，仍须由人工或模型核对/);
 });
 
 test('unrelated global prose, fabricated quotes and reference numbers are never suggested', () => {
@@ -135,7 +135,7 @@ test('Chinese row labels get table-only context with two English anchors despite
     assert.equal(issue.tableContexts[0].rows[0].cells[1], 'Require-ITN (%)');
     assert.equal(issue.tableContexts[0].rows[2].cells[0], 'Cascaded');
     assert.equal(next.tableContexts, undefined);
-    assert.match(issue.message, /不强制改用artifact_table/);
+    assert.match(issue.message, /不要求一律改用 artifact_table/);
     assert.equal(JSON.stringify(source), before);
     const [singleAnchor] = diagnose(rendered.slice(0, 3), source);
     assert.equal(singleAnchor.tableContexts, undefined);
@@ -164,7 +164,7 @@ test('translated labels expose one uniquely corroborated DOM table as a hint wit
     assert.equal(issue.tableContexts[0].matchBasis,
         'one_english_anchor_plus_failed_and_sibling_numeric_surfaces_unique_dom_table');
     assert.equal(issue.tableContexts[0].rows[2].cells[2], '0.48 ↑');
-    assert.match(issue.message, /不授予selection或quote资格/);
+    assert.match(issue.message, /不能据此使用 selection 或认定引文有效/);
 
     const onlyFailedNumber = rendered.map(row => row.slice());
     onlyFailedNumber[2][3] = '原文未逐项报告';
@@ -198,8 +198,8 @@ test('image-estimated numbers absent from text and DOM are directed out of Markd
     assert.equal(issues.length, 2);
     assert.ok(issues.every(issue => issue.unsupportedApproximateNumeric === true));
     assert.ok(issues.every(issue => issue.candidates.length === 0));
-    assert.match(issues[0].message, /Figure像素估读/);
-    assert.match(issues[0].message, /不得把估读数值写进要求exact quote\/cell证据的Markdown数字表/);
+    assert.match(issues[0].message, /对图片的估读/);
+    assert.match(issues[0].message, /不能放进要求逐字原文引文或对应原表单元格证据的 Markdown 数字表/);
     assert.match(issues[0].message, /原文未逐项报告；图中仅显示定性趋势/);
 });
 
@@ -228,7 +228,7 @@ test('unique whitespace-only quote recovery returns original newlines and thin s
     assert.equal(issue.quoteCandidates[0].text, '150\u2009ms');
     assert.equal(issue.quoteCandidates[0].whitespaceRecovered, true);
     assert.equal(issue.quoteCandidates[0].lineEnd, 3);
-    assert.match(issue.message, /须复制此原始字节/);
+    assert.match(issue.message, /须复制这里的原始文本/);
     const [ambiguous] = diagnose([['方案', '延迟'], ['掩蔽增量', '约150']], table([['x', 'y']]),
         { ...options, sourceText: original + '\n' + declared });
     assert.deepEqual(ambiguous.quoteCandidates, []);
@@ -240,13 +240,13 @@ test('unique whitespace-only quote recovery returns original newlines and thin s
 test('first-attempt spelling guidance states both unit conventions without granting source equivalence', () => {
     const notice = readerNumericSpellingGuidance();
     assert.match(notice, /171 ms、96.4%/);
-    assert.match(notice, /独立单位列不能替代/);
-    assert.match(notice, /原表头单位与裸格/);
+    assert.match(notice, /独立的单位列不能替代同格单位/);
+    assert.match(notice, /原表头单位与原数据格/);
     assert.match(notice, /末尾单位覆盖整组/);
     assert.match(notice, /不能拆成“a dB”/);
     assert.match(notice, /逗号和小数精度/);
-    assert.match(notice, /换行\/空白/);
-    assert.match(notice, /完整来源门禁/);
+    assert.match(notice, /换行和空白/);
+    assert.match(notice, /完整来源检查/);
 });
 
 test('canonical missing token cannot turn an explicit two-decimal cell into an integer-rounding guess', () => {

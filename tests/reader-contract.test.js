@@ -14,10 +14,10 @@ test('Reader prompt notices share parser thresholds and per-request evidence tab
     assert.equal(readerRequirements({ availableTableCount: 0 }).minimumTables, 2);
     assert.equal(readerRequirements({ version: 2 }).minimumSections, 10);
     const notice = buildReaderContractNotice({ minimumIntegratedTables: 3 });
-    assert.match(notice, /至少 3 张/);
-    assert.match(notice, /至少 2 张达到 5 列/);
+    assert.match(notice, /至少应包含 3 张表/);
+    assert.match(notice, /至少 2 张的列数应不少于 5 列/);
     assert.match(notice, /5000–18000/);
-    assert.match(notice, /没有像素时 figurePlacements 必须为空/);
+    assert.match(notice, /没有收到像素时，figurePlacements 必须为空/);
     const prompt = fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-article.md'), 'utf8');
     assert.match(prompt, /\{mechanicalContract\}/);
     assert.doesNotMatch(prompt, /未附像素但允许/);

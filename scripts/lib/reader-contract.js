@@ -39,14 +39,14 @@ function readerRequirements(options = {}) {
 function buildReaderContractNotice(options = {}) {
     const rules = readerRequirements(options);
     return [
-        `本次机械门禁（${READER_MECHANICAL_CONTRACT}）：`,
-        `sections ${rules.minimumSections}–${rules.maximumSections} 节；正文 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 中文字；conceptBridges ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组。`,
-        `至少 ${rules.minimumTables} 张有叙事闭环的表，其中至少 ${rules.minimumWideTables} 张达到 ${rules.minimumWideColumns} 列。原表选择不能自行补列或改数字；原表宽度不足时用有完整逐字证据的 source_quotes 整理表承担宽表要求。`,
+        `本次文章检查要求（${READER_MECHANICAL_CONTRACT}）：`,
+        `sections 应包含 ${rules.minimumSections}–${rules.maximumSections} 个小节，正文包含 ${rules.minimumChineseChars}–${rules.maximumChineseChars} 个中文字；conceptBridges 应解释 ${rules.minimumConceptBridges}–${rules.maximumConceptBridges} 组相关术语的分工和组合意义。`,
+        `文章至少应包含 ${rules.minimumTables} 张表，其中至少 ${rules.minimumWideTables} 张的列数应不少于 ${rules.minimumWideColumns} 列。每张表都要说明比较问题，并解释结果及其限制。选取原表时不能补造列或改数字；原表列数不足时，可用 source_quotes 整理表满足列数要求，但表内内容必须有完整的逐字原文证据。`,
         ...(options.minimumResultTables > 0 ? [
-            `原文明确包含定量结果表：result/ablation 小节必须呈现至少 ${options.minimumResultTables} 张数字结果表，保留必要基线与实际可运行策略；只有数据集表和配置表不能通过。`
+            `原文包含定量结果表，result 或 ablation 小节须呈现至少 ${options.minimumResultTables} 张带数字的结果表，并保留必要的基线和实际可运行策略。仅展示数据集表或配置表不满足要求。`
         ] : []),
-        `表前至少 ${rules.tableLeadChineseChars} 个汉字，表后至少 ${rules.tableExplanationChineseChars} 个汉字，放在与表相邻的独立正文段中。`,
-        `Figure 最多 ${rules.maximumFigures} 张；仅选择本次实际收到像素的编号；没有像素时 figurePlacements 必须为空。图前至少 ${rules.figureLeadChars} 字符，图后至少 ${rules.figureExplanationChars} 字符，focusPoints ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项。`
+        `表前的独立说明段至少包含 ${rules.tableLeadChineseChars} 个汉字，表后的独立解释段至少包含 ${rules.tableExplanationChineseChars} 个汉字；说明和解释都应紧邻表格。`,
+        `最多展示 ${rules.maximumFigures} 张论文图，只能选择本次实际收到像素的图片编号。没有收到像素时，figurePlacements 必须为空。图前的导读至少包含 ${rules.figureLeadChars} 个字符，图后的解释至少包含 ${rules.figureExplanationChars} 个字符；focusPoints 应提供 ${rules.minimumFocusPoints}–${rules.maximumFocusPoints} 项观察提示。`
     ].join('\n');
 }
 

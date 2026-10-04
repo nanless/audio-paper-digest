@@ -6967,7 +6967,7 @@ function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback) {
     const staleReaderStage = currentReaderValid
         ? null : recoverableStaleReaderRevisionStage(paper, sourceText);
     if (!currentReaderValid && !staleReaderStage) {
-        throw new Error('定向 Reader 修订需要完整、正文/计划/阶段 SHA 一致的已签名 Reader');
+        throw new Error('定向修订需要完整的读者文章，且正文、写作计划和分析阶段的 SHA 记录须一致。');
     }
     const sourceSha256 = crypto.createHash('sha256').update(String(sourceText || '')).digest('hex');
     const revisionStage = staleReaderStage
@@ -6975,7 +6975,7 @@ function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback) {
     if (sourceSha256 !== paper.sourceSha256
         || sourceSha256 !== paper.analysisManifest.sourceAcquisition.sourceSha256
         || sourceSha256 !== revisionStage.sourceBindingsSourceTextSha256) {
-        throw new Error('定向 Reader 修订底稿与本次全文来源 SHA 不一致');
+        throw new Error('定向修订所用文章的来源 SHA 与本次论文全文不一致。');
     }
     const initialDraft = JSON.stringify({ article: paper.apiReaderArticle, plan: paper.apiReaderPlan });
     return {
@@ -7009,18 +7009,18 @@ function buildApiReaderGenerationStart(paper, options = {}) {
             || seed.metadata?.revisionSeedArticleSha256 !== paper.apiReaderArticleSha256
             || seed.metadata?.revisionSeedPlanSha256 !== paper.apiReaderPlanSha256
             || seed.metadata?.revisionSeedSourceSha256 !== sourceSha256) {
-            throw new Error('Reader initialDraft 不是当前已签名正文与计划，拒绝使用未验证底稿');
+            throw new Error('initialDraft 未通过当前正文、写作计划和来源记录的核验，不能用于定向修订。');
         }
     }
     const reviewFeedbackPrefix = externalReviewFeedback
-        ? '上一轮只读发布审查发现以下事实或图文绑定问题；必须逐项纠正，'
-            + `不能原样复述错误：${externalReviewFeedback}`
+        ? '上一轮只读发布审查发现以下事实或图文对应问题，请逐项修正，'
+            + `不能只复述问题而不修改内容：${externalReviewFeedback}`
             + (seed
-                ? '\n本次是基于已签名 Reader 的定向修订。previousDraft 中的 {article,plan} '
-                    + '是已有正文与计划的修订参考，不是可直接提交的输出结构。只修反馈指出的问题及必要连带内容，'
+                ? '\n本次基于已核验的读者文章进行定向修订。previousDraft 中的 {article,plan} '
+                    + '提供原正文和写作计划，供修改时参考，不能直接作为本次输出。只修反馈指出的问题及必要连带内容，'
                     + '保留已经正确的章节、解释、图表和数字，不要无端重写。'
-                    + '仍须输出当前协议要求的完整 JSON，包括全部小节、marker 与来源绑定；'
-                    + '不得直接返回参考用的 {article,plan}，全部正文、图片、表格和公式仍须通过原门禁。'
+                    + '仍须返回本次请求要求的完整 JSON，包括所有小节、占位符和来源记录；'
+                    + '不得直接返回参考用的 {article,plan}；修改后的正文、图片、表格和公式仍须通过完整检查。'
                 : '')
         : '';
     return {
@@ -7226,9 +7226,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let previousValidationFailureSignature = '';
     let implementationRepairAllowanceProof = null;
     const reviewFeedbackPrefix = start.reviewFeedbackPrefix;
-    // 振荡型失败下模型会在“修好 A 又弄坏 B”之间横跳：只给最近一次错误，
-    // 它永远看不到约束全集。本轮内累积历次错误并每次全量呈现，同时让外部
-    // review 反馈在每一轮都保留（之前第二轮起就被覆盖丢弃了）。
+    // 只提供最近一次错误，可能使模型在修正一处时再次破坏此前正确的内容。
+    // 本轮会累积所有尝试的错误，并在每次请求中保留外部审查反馈。
     const attemptErrorHistory = [];
     const numericSpellingGuidance = require('./lib/reader-source-diagnostics.js').readerNumericSpellingGuidance();
     const buildAttemptFeedback = () => {
@@ -7236,12 +7235,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         if (reviewFeedbackPrefix) parts.push(reviewFeedbackPrefix);
         if (attemptErrorHistory.length === 0) {
             parts.push(start.isRevision
-                ? '这是基于已签名底稿的首次定向修订，尚无本轮校验错误。'
+                ? '这是基于已核验文章的首次定向修订，本轮尚未产生检查错误。'
                 : '这是第一次生成，没有上一次校验错误。');
         } else {
             parts.push(
-                '以下是本轮之前所有尝试被代码拒绝的错误（必须同时全部纠正，'
-                + '不要只修最后一条而把前面已通过的又改坏）：\n'
+                '以下汇总本轮此前各次尝试未通过检查的问题。请同时修正这些问题，'
+                + '并保留此前已经正确的内容：\n'
                 + attemptErrorHistory.join('\n')
             );
         }
@@ -7264,8 +7263,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const completeFigureBindingNotice = options.structuredArtifacts?.sourceKind === 'conference_pdf'
         && !readerCapabilityPolicy && availableFigureOrdinals.length > 0
         ? availableFigureOrdinals.length <= API_READER_FIGURE_SELECTION_LIMIT
-            ? `会议 PDF Figure 硬约束：可用像素 Figure 为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}；figurePlacements 必须逐个覆盖这些 ordinal，且每个 marker 都要在对应 targetKind 小节中形成“前导读—marker—后解释”的相邻闭环，不能输出空数组或只绑定其中一张。`
-            : `会议 PDF Figure 选择约束：本次可用像素 Figure 为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}，最多选择 ${API_READER_FIGURE_SELECTION_LIMIT} 张最有解释价值且互不重复的图；每个所选 marker 都要在对应 targetKind 小节中形成“前导读—marker—后解释”的相邻闭环。未选择的 Figure 仍由页面资源层保留，不要为凑数量生成 placement。`
+            ? `本次收到像素的会议论文图为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}。figurePlacements 必须逐一记录这些图片，在对应 targetKind 小节中放置占位符，并在紧邻的前后段落分别写导读和解释。不能返回空数组，也不能只记录其中一张。`
+            : `本次收到像素的会议论文图为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}，最多选择 ${API_READER_FIGURE_SELECTION_LIMIT} 张最有解释价值且不重复的图片。每张所选图片都须在对应 targetKind 小节放置占位符，并在紧邻的前后段落分别写导读和解释。未选择的图片仍会由页面资源层保留，不要为凑数量添加 figurePlacements。`
         : '';
     const mechanicalContract = [buildReaderContractNotice({ version: 3, minimumIntegratedTables, availableTableCount,
         ...readerResultTableRequirement(options.structuredArtifacts) }), capabilityNotice,

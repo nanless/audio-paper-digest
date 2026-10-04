@@ -67,6 +67,6 @@ test('missing results are diagnosed together and repair allows the empty result 
 
 test('prompt contract discloses the source-derived result requirement before any model call', () => {
     const { buildReaderContractNotice } = require('../scripts/lib/reader-contract.js');
-    assert.match(buildReaderContractNotice(readerResultTableRequirement(sourceTables())), /result\/ablation.*数字结果表/);
-    assert.doesNotMatch(buildReaderContractNotice(readerResultTableRequirement({ tables: [] })), /result\/ablation.*数字结果表/);
+    assert.match(buildReaderContractNotice(readerResultTableRequirement(sourceTables())), /result 或 ablation 小节须呈现至少 1 张带数字的结果表/);
+    assert.doesNotMatch(buildReaderContractNotice(readerResultTableRequirement({ tables: [] })), /result 或 ablation.*带数字的结果表/);
 });

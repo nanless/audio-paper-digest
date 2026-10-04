@@ -1709,7 +1709,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             index.write_text(markdown.replace(paper['parsed']['summary'],
                                              '未审查的摘要替换'), encoding='utf-8')
             with mock.patch.object(publish_to_blog, 'llm_review_post') as llm:
-                with self.assertRaisesRegex(PublishDataValidationError, '决策投影不一致'):
+                with self.assertRaisesRegex(PublishDataValidationError, '与对应读者文章记录的展示内容不一致'):
                     publish_to_blog.validate_staged_posts(
                         tmp, '2026-08-31', date_only=True,
                         authoritative_papers={'2026-08-31-fixture.md': paper},

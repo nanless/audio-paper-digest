@@ -81,11 +81,11 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/reader-draft-order.js` | Node 库 | 调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
 | `lib/reader-source-diagnostics.js` | Node 库 | 把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的只读修复建议；不自动改数字或放宽来源检查。 |
 | `lib/reader-recovery-revision.js` | Node 库 | 显式迁移同源失败候选的诊断，保留付费请求计数、索引调整与旧无进展状态，归档原字节；表数量文案不能触发正文规范化。迁移不生成成功证明。 |
-| `lib/reader-contract.js` | Node 库 | 定义 Reader 共用的格式阈值，按当前证据生成提示词检查说明，并根据实际小节身份报告近重复。 |
+| `lib/reader-contract.js` | Node 库 | 集中规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
 | `lib/reader-tables.js` | Node 库 | 将 TABLE 标记与原表行列选择展开为 Markdown 和逐格来源记录，保留表头对应关系，拒绝错位和越界。 |
 | `lib/llm-usage.js` | Node 库 | 规范化真实请求用量，按论文和阶段归因；服务未提供的计费用量保持不可得。 |
 | `lib/fresh-rewrite-run.js` | Node 库 | 从白名单中的原始元数据创建独立重写 run，准备同源文件，只恢复本 run 的分析，并在完整结果验证通过后更新正式数据。 |
-| `workspace-role.js` | CLI/公共门禁 | 用不跟踪入 Git、权限为 `0600` 且绑定仓库真实路径的标记区分 `daily` 与 `history`。`set` 原子保存或显式切换角色，`exec` 在 npm 生产入口启动前检查角色；直接 Node/Python 入口再由公共运行检查核验。 |
+| `workspace-role.js` | 入口与共享运行检查 | 用不跟踪入 Git、权限为 `0600` 且绑定仓库真实路径的标记区分 `daily` 与 `history`。`set` 原子保存或显式切换角色，`exec` 在 npm 生产入口启动前检查角色；直接 Node/Python 入口再由公共运行检查核验。 |
 | `lib/fresh-analysis-context.js` | Node 库 | 隔离全新重写 run 的来源文件与深度分析上下文，重新核验来源 SHA；拒绝旧生成正文和其他 run 的检查点。 |
 | `lib/fresh-rewrite-publication.js` | Node 库 | 重写前备份当前正式分析结果和博客基线；新结果完整且来源、基线 CAS 均通过后，才替换正式分析结果。 |
 | `lib/conference-source-ledger.js` | Node 库 | 管理会议来源身份、四类文件 SHA 和审查证据；文件不可变保存，读取时重新核验本地来源。标题不能作为论文身份。 |
@@ -220,7 +220,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。只读取封存 PDF/TXT；图片只为本次调用在系统临时目录中准备。 |
 | `evaluate-keyword-prefilter.js` | 只读回放金标准与历史正样本，报告关键词召回。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
-| `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据门禁；`--quick` 仅语法与数据，不是完整验收。 |
+| `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据检查；`--quick` 仅语法与数据，不是完整验收。 |
 | `llm-usage-report.js` | 只读汇总真实请求用量，区分服务提供的 usage、不可得状态和字符估算，不推算未经证实的费用。 |
 | `evaluate-reader-efficiency.js` | 在隔离目录中按明确限额开展单篇 Reader 效率实验。默认只预检，`--live` 才调用模型；不覆盖正式分析结果或发布博客。 |
 | `rewrite-from-source.js` | 通过 `prepare/sources/analyze/status/patch/signed-patch/promote` 显式运行同源重写。`patch` 修复失败候选，`signed-patch` 局部修订本 run 的成功 Reader 并要求事实复核；两种补丁都不调用 API，也不接受任意路径。 |

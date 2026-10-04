@@ -3977,7 +3977,7 @@ def _validated_detailed_core_summary(paper, parsed):
 
 
 def _build_api_reader_display_fields(paper, payload=None):
-    """返回现代 Reader 页面的摘要、资源情况和评分说明；未使用对应协议时返回 None。"""
+    """返回读者文章页面使用的摘要、资源情况和评分说明；未使用对应格式时返回 None。"""
     payload = _api_reader_payload(paper) if payload is None else payload
     if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
         return None
@@ -4034,7 +4034,7 @@ def _build_api_reader_display_fields(paper, payload=None):
 
 
 def _api_reader_index_display_fields_issue(content, papers):
-    """Replay modern per-paper decision blocks in an immutable daily index."""
+    """逐篇核对汇总页中的展示内容是否与对应读者文章记录一致，不修改页面。"""
     blocks = re.split(r'^### ', content.split('## 📋 论文列表', 1)[-1], flags=re.MULTILINE)[1:]
     for paper in papers:
         reader_display_fields = _build_api_reader_display_fields(paper)
@@ -4044,23 +4044,23 @@ def _api_reader_index_display_fields_issue(content, papers):
         source_url = _visible_arxiv_source_url(paper)
         matches = [block for block in blocks if f'{source_url})' in block]
         if len(matches) != 1:
-            return f'{aid} 汇总页现代决策投影缺失或重复'
+            return f'{aid}：汇总页中对应论文的内容缺失，或出现多个匹配块。'
         block = matches[0]
         if find_evaluation_headings(block, rendered=True):
-            return f'{aid} 汇总页现代决策投影混入 canonical 点评'
+            return f'{aid}：汇总页中对应论文的内容含有不允许展示的论文评价栏目。'
         for key, label, end in (
                 ('summary', '📌 **核心摘要**', r'\n\n🔗 \*\*开源资源\*\*'),
                 ('opensource', '🔗 **开源资源**', r'\n\n---')):
             match = re.search(re.escape(label) + r'\n\n([\s\S]*?)' + end, block)
             expected = sanitize_markdown_for_publish(reader_display_fields[key]).strip()
             if not match or match.group(1).strip() != expected:
-                return f'{aid} 汇总页 {key} 与签名 Reader 决策投影不一致'
+                return f'{aid}：汇总页中 {key} 对应的摘要或资源内容缺失，或与对应读者文章记录的展示内容不一致。'
     return None
 
 
 def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v2=False,
                               reader_display_fields=None):
-    """Replay the same summary/resource bytes shown on the single-paper page."""
+    """根据对应的摘要或资源内容构造汇总展示块，并按汇总页需要整理标题和图片。"""
     content = reader_display_fields[key] if reader_display_fields is not None \
         else pa.get(key, '') if isinstance(pa, dict) else ''
     if not isinstance(content, str) or not content.strip():
@@ -4092,7 +4092,7 @@ def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v
 
 
 def index_author_institution_block(paper, pa, api_reader=None):
-    """Render the same author/affiliation identity used by the paper page."""
+    """优先展示读者文章记录中的作者和机构；没有可用列表时，使用已解析的作者文本。"""
     reader_authors = api_reader.get('readerAuthors') if isinstance(api_reader, dict) else None
     authors = reader_authors.get('authors') if isinstance(reader_authors, dict) else None
     if isinstance(authors, list) and authors:
@@ -4105,7 +4105,7 @@ def index_author_institution_block(paper, pa, api_reader=None):
 
 
 def normalize_digest_index_preserving_decision_blocks(markdown):
-    """Normalize index-owned prose without rewriting copied paper sections."""
+    """整理汇总页自身的文字，保留匹配到的作者机构、摘要及其后续内容块。"""
     pattern = re.compile(
         r'^👥 \*\*作者与机构\*\*\n\n[\s\S]*?'
         r'(?=\n\n(?:💡 \*\*(?:论文评价|毒舌点评)\*\*|📌 \*\*核心摘要\*\*))|'
@@ -7683,7 +7683,7 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
 
 
 def _review_single_paper(args):
-    """并发只读 review 单篇论文，返回路径、标题、计数和输出。"""
+    """只读审查单篇论文，返回路径、标题、问题计数和输出。"""
     if len(args) == 7:
         arxiv_id, slug, date_str, title, require_llm, content_dir, paper = args
         page_artifact = None
@@ -7741,7 +7741,7 @@ def _review_single_paper(args):
     if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
         llm_issues = list(llm_issues or []) + [{
             'severity': 'error',
-            'description': '文本审查返回 passed=false，但没有给出阻断原因；本次审查按失败处理。',
+            'description': '文本审查明确返回未通过，但没有给出阻断原因；本次审查按失败处理。',
         }]
     if llm_issues:
         for issue in llm_issues:
@@ -7751,7 +7751,7 @@ def _review_single_paper(args):
     if llm_fixed_content != content:
         readonly_issue = {
             'severity': 'error',
-            'description': 'LLM 建议修改最终页；review 阶段禁止写回，请回到 generation 修复后重新审查',
+            'description': '模型建议修改最终页面；审查阶段不能写回文件，请回到生成阶段修复后重新审查。',
         }
         llm_issues = list(llm_issues or []) + [readonly_issue]
         lines.append(f"    🤖 LLM (error): {readonly_issue['description']}")
@@ -7767,7 +7767,7 @@ def _review_single_paper(args):
     if img_passed is False and count_blocking_review_issues(img_issues) == 0:
         img_issues = list(img_issues or []) + [{
             'severity': 'error',
-            'description': '图片 reviewer 明确返回 passed=false，fail closed',
+            'description': '图片审查明确返回未通过，但没有给出阻断原因；本次审查按失败处理。',
         }]
     if img_issues:
         img_blocking = count_blocking_review_issues(img_issues)
@@ -7788,7 +7788,7 @@ def _review_single_paper(args):
     failure_kind = classify_review_failure(blocking_details) if blocking_count else None
     reviewed_sha256 = _sha256_file(paper_file)
     if reviewed_sha256 != page_artifact['sha256']:
-        raise PublishDataValidationError(f'{os.path.basename(paper_file)} 在只读 review 期间发生变化')
+        raise PublishDataValidationError(f'{os.path.basename(paper_file)} 在只读审查期间发生变化。')
     return (
         os.path.realpath(paper_file), title, fixed_count, blocking_count,
         advisory_count, lines, failure_kind, reviewed_sha256,
@@ -7892,7 +7892,7 @@ def review_all_posts(
         if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
             llm_issues = list(llm_issues or []) + [{
                 'severity': 'error',
-                'description': '汇总页 LLM reviewer 明确返回 passed=false，fail closed',
+                'description': '汇总页文本审查明确返回未通过，但没有给出阻断原因；本次审查按失败处理。',
             }]
         if llm_issues:
             for issue in llm_issues:
@@ -7902,7 +7902,7 @@ def review_all_posts(
         if llm_fixed_content != content:
             readonly_issue = {
                 'severity': 'error',
-                'description': 'LLM 建议修改最终页；review 阶段禁止写回，请回到 generation 修复后重新审查',
+                'description': '模型建议修改最终页面；审查阶段不能写回文件，请回到生成阶段修复后重新审查。',
             }
             llm_issues = list(llm_issues or []) + [readonly_issue]
             print(f"    🤖 LLM (error): {readonly_issue['description']}")
@@ -7916,7 +7916,7 @@ def review_all_posts(
         if _img_passed is False and count_blocking_review_issues(img_issues) == 0:
             img_issues = list(img_issues or []) + [{
                 'severity': 'error',
-                'description': '汇总页图片 reviewer 明确返回 passed=false，fail closed',
+                'description': '汇总页图片审查明确返回未通过，但没有给出阻断原因；本次审查按失败处理。',
             }]
         if img_issues:
             img_blocking = count_blocking_review_issues(img_issues)
@@ -7935,7 +7935,7 @@ def review_all_posts(
                 print(f"    ✅ 通过 review")
         index_reviewed_sha256 = _sha256_file(index_file)
         if index_reviewed_sha256 != index_artifact['sha256']:
-            raise PublishDataValidationError('汇总页在只读 review 期间发生变化')
+            raise PublishDataValidationError('汇总页在只读审查期间发生变化。')
         file_results[os.path.realpath(index_file)] = {
             'passed': (
                 not remaining_code_issues

@@ -226,13 +226,9 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
         elif resource.get('origin') != 'validated_demo' \
                 or resource.get('originalUrl') not in ((manifest.get('stages') or {}).get('demoLinkScan') or {}).get('discoveredLinks', []):
             raise ValueError('conference Reader demo resource binding is invalid')
-        # A historical Reader candidate may have recorded an incomplete URL
-        # while the source scan already marked that resource as unavailable.
-        # Such a resource cannot support an open-source claim and should not
-        # make an otherwise sealed paper unpublishable. Drop it from the
-        # rendered resource projection; keep the fail-closed check for an
-        # `available` resource, because a published positive claim must still
-        # have two valid public HTTPS endpoints.
+        # 历史记录中可能存在不完整的网址。资源已标记为不可用或暂时无法访问时，
+        # 允许继续处理，但不能据此声称资源已开放，也不在这里删除原资源记录。
+        # 资源标记为 available 时，原始地址与最终地址都必须通过公开 HTTPS 地址检查。
         try:
             public_https(resource.get('originalUrl'), 'Reader resource original URL')
             public_https(resource.get('finalUrl'), 'Reader resource final URL')
@@ -251,9 +247,9 @@ def score_line(parsed):
         score = float(parsed.get('score'))
         dimensions = [(label, float(parsed.get(field)), maximum) for field, label, maximum in SCORE_DIMENSIONS]
     except (TypeError, ValueError):
-        raise ValueError('canonical eight-dimensional score is incomplete') from None
+        raise ValueError('总分或八个评分维度缺失，或无法转换为数字。') from None
     if not 0 <= score <= 10 or any(not 0 <= value <= float(maximum) for _, value, maximum in dimensions):
-        raise ValueError('canonical eight-dimensional score is out of range')
+        raise ValueError('总分或评分维度的数值不在允许范围内。')
     detail = ' | '.join(f'{label} {value:.1f}/{maximum}' for label, value, maximum in dimensions)
     return f'**{score:.1f}/10** | {detail}'
 
@@ -472,7 +468,7 @@ def render_packet(packet):
     paper, assignment = packet.get('paper'), packet.get('taxonomy')
     paper_id, conference, capabilities = packet.get('paper_id'), packet.get('conference'), packet.get('capabilities')
     if not isinstance(paper, dict) or not isinstance(assignment, dict) or not PAPER_ID.fullmatch(str(paper_id or '')):
-        raise ValueError('generic conference paper projection is required')
+        raise ValueError('会议论文及其标签记录必须为对象，且论文 ID 必须符合会议论文格式。')
     if paper.get('id') != paper_id or paper.get('conferencePaperId') != paper_id \
             or paper.get('arxivId') is not None or paper.get('paper_id') != paper_id:
         raise ValueError('conference paper must not carry an arXiv alias')
@@ -548,7 +544,7 @@ def render_packet(packet):
             or scoring_stage.get('scoringContract') != SCORING_CONTRACT \
             or scoring_stage.get('outputAnalysisSha256') != hashlib.sha256(analysis.encode()).hexdigest() \
             or not scoring_stability_is_resolved(scoring_stage):
-        raise ValueError('conference api-scoring-audit-v2 proof is not sealed')
+        raise ValueError('会议论文的分析正文、全文来源或评分审计记录不符合 api-scoring-audit-v2 要求。')
     concepts = {item['id']: item for item in assignment.get('concepts', [])}
     ordered = []
     for concept_id in [assignment.get('primaryTaskId'), assignment.get('primaryMethodId'), *assignment.get('conceptIds', [])]:
@@ -578,11 +574,11 @@ def render_packet(packet):
     publication = packet.get('publication')
     if not title or not summary or not reader_title or not one_sentence or not rank_bucket or not document_type or not scoring \
             or not isinstance(publication, dict) or publication.get('contract') != PUBLICATION_CONTRACT:
-        raise ValueError('canonical title/summary/Reader/score/publication fields are incomplete')
+        raise ValueError('会议论文的标题、摘要、解读标题、核心观点、排名、文档类型或评分说明为空，或发布记录格式及规则不符合要求。')
     record_url = public_https(publication.get('recordUrl'), 'official record URL', conference_only=True)
     pdf_url = public_https(publication.get('pdfUrl'), 'official PDF URL', conference_only=True)
     if publication != paper.get('conferencePublication') or record_url == pdf_url:
-        raise ValueError('official conference publication URLs are not canonical-bound')
+        raise ValueError('会议论文的发布记录与论文中保存的记录不一致，或官方记录地址与 PDF 地址相同。')
     if capabilities == WEAK and packet.get('formulaEvidence'):
         raise ValueError('weak source cannot carry formula image evidence')
     formula_lines, formula_assets = render_formula_image_section(

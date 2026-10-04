@@ -3693,7 +3693,7 @@ FINAL_MANUAL_SECTION_HEADINGS = (
 
 
 def _manual_v4_reader_view(markdown):
-    """Turn rendered blog section headings back into the canonical heading view."""
+    """在用于校验的文本副本中，把已知页面栏目转换为分析章节标题。"""
     text = str(markdown or '')
     frontmatter = re.match(r'^---\n.*?\n---\n', text, flags=re.DOTALL)
     if frontmatter:
@@ -3753,11 +3753,10 @@ def _final_markdown_image_occurrences(markdown):
 
 
 def validate_final_manual_v4_markdown(markdown, paper=None):
-    """Recheck Manual v4 contracts on the exact reader-facing Markdown.
+    """页面完成发布处理后，重新核验人工流程要求的章节、正文和图片说明。
 
-    This intentionally runs after publication sanitization/rendering.  It does
-    not trust that a valid canonical analysis stayed valid while headings,
-    anchors, images and surrounding prose were assembled into a blog page.
+    根据记录或页面标记选择 v4、v5 或 v6 规则；未使用这些格式时返回 None。
+    分析记录通过检查，并不表示组装后的页面也符合要求。
     """
     manual_depth = _final_manual_depth_contract(markdown, paper)
     if manual_depth is None:
@@ -4028,12 +4027,9 @@ def validate_digest_index_reader_quality(markdown, required=False):
             return '汇总页排名/文档类型/arXiv 必须位于评分之后'
         if context and authors and context.start() > authors.start():
             return '汇总页排名/文档类型/arXiv 必须位于作者机构之前'
-    # Summary and resource blocks are byte-for-byte projections of sections
-    # already validated on each single-paper page. Re-running the generic
-    # longform prose heuristic across all 22 concatenated projections creates
-    # cross-context false positives (for example two legitimate “但” clauses).
-    # Keep structural/duplication checks on the index-owned prose while the
-    # generation equality contract protects these reused blocks.
+    # 汇总页会复用单篇的作者机构、摘要和资源内容。下面先在校验副本中
+    # 替换匹配到的内容块，再检查汇总页自身的文字，避免把不同论文的表达合并判断。
+    # 复用内容是否一致，由相应生成和页面核验负责。
     index_owned_body = re.sub(
         r'^👥 \*\*作者与机构\*\*\n\n[\s\S]*?'
         r'(?=\n\n(?:💡 \*\*(?:论文评价|毒舌点评)\*\*|📌 \*\*核心摘要\*\*))',

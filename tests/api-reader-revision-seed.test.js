@@ -118,10 +118,10 @@ test('incomplete, tampered, stale-stage and wrong-source Readers fail closed as 
     ]) {
         const paper = fixture();
         tamper(paper);
-        assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修正事实'), /已签名 Reader/);
+        assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修正事实'), /定向修订需要完整的读者文章/);
     }
-    assert.throws(() => prepareApiReaderRevisionSeed(fixture(), sourceText + 'changed', '修正事实'), /来源 SHA 不一致/);
-    assert.throws(() => prepareApiReaderRevisionSeed({}, sourceText, '修正事实'), /已签名 Reader/);
+    assert.throws(() => prepareApiReaderRevisionSeed(fixture(), sourceText + 'changed', '修正事实'), /来源 SHA 与本次论文全文不一致/);
+    assert.throws(() => prepareApiReaderRevisionSeed({}, sourceText, '修正事实'), /定向修订需要完整的读者文章/);
 });
 
 test('caller-supplied drafts cannot bypass seed validation and changed signed inputs change the seed identity', () => {
@@ -129,8 +129,8 @@ test('caller-supplied drafts cannot bypass seed validation and changed signed in
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, '修正事实');
     assert.throws(() => buildApiReaderGenerationStart(paper, {
         reviewFeedback: '修正事实', sourceText, initialDraft: seed.initialDraft + 'forged'
-    }), /未验证底稿/);
-    assert.throws(() => buildApiReaderGenerationStart(paper, { sourceText, initialDraft: seed.initialDraft }), /未验证底稿/);
+    }), /未通过当前正文、写作计划和来源记录的核验/);
+    assert.throws(() => buildApiReaderGenerationStart(paper, { sourceText, initialDraft: seed.initialDraft }), /未通过当前正文、写作计划和来源记录的核验/);
     paper.apiReaderArticle += '\n\n另一次已签名修订。';
     paper.apiReaderArticleSha256 = sha(paper.apiReaderArticle);
     paper.analysisManifest.stages.apiReaderArticle.articleSha256 = paper.apiReaderArticleSha256;

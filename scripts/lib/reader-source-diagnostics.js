@@ -14,11 +14,11 @@ const sameLabel = (a, b) => Boolean(anchor(a) && anchor(a) === anchor(b));
 const sha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 
 function readerNumericSpellingGuidance() {
-    return '数字格式：source_quotes 的数值必须与完整原文单位写在同一格（如171 ms、96.4%）；独立单位列不能替代。'
-        + '若原表单位仅写在表头、数据格为裸值，应保留原表头单位与裸格，不能逐格追加%。'
-        + '若原句以“a vs. b/c dB”让末尾单位覆盖整组，正文也须保留同组写法，不能拆成“a dB”。'
-        + '保留来源千分位逗号和小数精度，不自行四舍五入；sourceQuotes必须保留原文换行/空白。'
-        + '只补quotes不能修复正文数字/单位拼写错误；仍须通过完整来源门禁。';
+    return '数字写法：source_quotes 表中的数值必须与原文中的完整单位写在同一格（如171 ms、96.4%）；独立的单位列不能替代同格单位。'
+        + '若原表只在表头写单位，数据格不带单位，应保留原表头单位与原数据格，不能逐格追加%。'
+        + '若原句采用“a vs. b/c dB”这样的写法，末尾单位覆盖整组数值，正文也须保留整组写法，不能拆成“a dB”。'
+        + '保留来源中的千分位逗号和小数精度，不自行四舍五入；sourceQuotes 必须保留原文的换行和空白。'
+        + '仅补充引文不能修正正文中的数字或单位；修改后的内容仍须通过完整来源检查。';
 }
 
 function scalar(value) {
@@ -274,34 +274,34 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
         const unsupportedApproximateNumeric = /(?:约|大约|近似|估计|估读|分布中心)/u.test(text)
             && failedNumbers.length > 0
             && failedNumbers.every(number => !sourceNumbers.has(number) && !domNumbers.has(number));
-        const guidance = '候选仅用于核对，不是已验证绑定或唯一答案。必须同时核对正文单元格、表头和来源单位/拼写；'
-            + '百分号仅放独立列或仅补sourceQuotes不能修复正文裸值与来源百分数不一致。'
-            + readerNumericSpellingGuidance() + '不要自动换算或借文献编号补证据。';
+        const guidance = '这些候选只供核对，不能据此认定来源已经确认，也不能假定其中只有一个正确答案。请同时核对正文单元格、表头，以及来源中的单位和写法；'
+            + '仅把百分号放在独立列，或只补充 sourceQuotes，都不能修正正文裸值与来源百分数不一致的问题。'
+            + readerNumericSpellingGuidance() + '不要自行换算数值，也不能把参考文献编号当作数字证据。';
         const summary = found.length ? found.map(candidate => `TABLE_${candidate.sourceTableOrdinal}`
             + `[${candidate.sourceRow},${candidate.sourceColumn}]=${JSON.stringify(candidate.text)}`
             + ` (${candidate.difference}; ${candidate.matchBasis}) 行=${JSON.stringify(candidate.rowContext)}`
             + ` 列头=${JSON.stringify(candidate.columnHeaders)}`).join('；')
-            : '未找到有行列语义锚点的原表候选；不得仅按同值数字搜索替代证据，请核对原文对应实验。';
-        const quoteHint = sourceQuotes.length ? ` 原文候选上下文 L${sourceQuotes[0].lineStart}`
+            : '没有找到能通过行标签和列标题对应的原表候选。不能仅凭相同数字另找来源，请核对原文中对应的实验';
+        const quoteHint = sourceQuotes.length ? `。 可供核对的原文片段 L${sourceQuotes[0].lineStart}`
             + `–${sourceQuotes[0].lineEnd}: ${JSON.stringify(sourceQuotes[0].quote)}` : '';
-        const declaredHint = quoteCandidates.map(candidate => ` 当前绑定的逐字原句候选 L${candidate.lineStart}`
+        const declaredHint = quoteCandidates.map(candidate => `。 当前来源记录中可供核对的原文引文 L${candidate.lineStart}`
             + `–${candidate.lineEnd}: ${JSON.stringify(candidate.quote)}；原写法=${JSON.stringify(candidate.text)}`
-            + ` (${candidate.difference}${candidate.whitespaceRecovered ? '; 原声明空白被改写，须复制此原始字节' : ''})；`
-            + '该句是否对应本行实验仍须人工/模型核对').join('');
+            + ` (${candidate.difference}${candidate.whitespaceRecovered ? '; 所提供引文中的空白已被改写，须复制这里的原始文本' : ''})；`
+            + '这句话是否对应当前行的实验，仍须由人工或模型核对').join('');
         // Attach the bounded table context once, not six times for six cells.
         const weakUniqueContext = tableContexts.some(context => context.matchBasis
             === 'one_english_anchor_plus_failed_and_sibling_numeric_surfaces_unique_dom_table');
         const contextBasis = weakUniqueContext
-            ? '一个英文锚点加失败数字及另一不同表内数字唯一锁定完整DOM表；仅供核对'
-            : '至少两个英文系统/指标锚点';
+            ? '一个英文名称与未通过检查的数字、另一不同数字共同定位了唯一的完整 DOM 表；仍只供核对'
+            : '至少两个对应的英文系统或指标名称';
         const contextHint = failure === failures[0] && !found.length && tableContexts.length
-            ? ` 候选原表上下文（${contextBasis}；逐行对应未确认，不授予selection或quote资格）：${JSON.stringify(tableContexts)}。`
-                + '请自行核对原样表头单位及数据格；确认原表把%放表头后，应同时修正文表头和裸值写法，不能只加quotes；'
-                + '不要把其他原表本已带%的数据格也去掉单位，不强制改用artifact_table。' : '';
+            ? `。 以下原表内容只供核对（${contextBasis}）；各行与正文的对应关系尚未确认，不能据此使用 selection 或认定引文有效：${JSON.stringify(tableContexts)}。`
+                + '请核对原表的表头单位和数据格。如果原表把 % 放在表头，应同时修正正文表头和不带单位的数据格，不能只补充引文；'
+                + '不要删除其他原表数据格中已有的 %；这里也不要求一律改用 artifact_table' : '';
         const approximateHint = unsupportedApproximateNumeric
-            ? ' 这些带“约/估计”措辞的数字未出现在全文逐字证据或任何完整DOM表。若来自Figure像素估读，'
-                + '不得把估读数值写进要求exact quote/cell证据的Markdown数字表；应删除这些数值行，或改成不含新数字的'
-                + '“原文未逐项报告；图中仅显示定性趋势”，把有像素依据的趋势留在表外Figure解释中。不得猜替代值。'
+            ? '。 这些带“约”或“估计”措辞的数字没有出现在论文全文或任何完整原表中。若数值来自对图片的估读，'
+                + '不能放进要求逐字原文引文或对应原表单元格证据的 Markdown 数字表；应删除这些数值行，或改成不含新数字的'
+                + '“原文未逐项报告；图中仅显示定性趋势”，把像素支持的趋势留在表外的图片解释中。不得猜测替代值'
             : '';
         return [{ code: 'reader_source_cell_diagnostic', diagnosticOnly: true, path, bindingPath,
             renderedCell: { row, column, text }, candidates: found, sourceQuotes, quoteCandidates,
