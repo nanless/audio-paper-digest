@@ -93,13 +93,13 @@ function processStatus(options, runtime = {}) {
     const counts = Object.values(state.items).reduce((result, item) => {
         result[item.status] = (result[item.status] || 0) + 1; return result;
     }, {});
-    const review = api.taxonomyReviewQueue(state);
+    const review = api.buildTagReviewQueue(state);
     const result = { status: state.status, processId, conferenceId: state.authority.conferenceId,
         stateSha256: state.stateSha256, papers: counts, completionReceiptSha256: state.completionReceiptSha256,
         taxonomyReview: review.taxonomyReview };
     if (review.taxonomyReview) {
         result.taxonomyReviewQueue = review.items;
-        result.taxonomyReviewQueueFile = path.join(directory, api.TAXONOMY_REVIEW_FILE);
+        result.taxonomyReviewQueueFile = path.join(directory, api.TAG_REVIEW_QUEUE_FILE);
     }
     if (state.batchFailure) result.batchFailure = state.batchFailure;
     const operationLock = lockStatus(deps.engine, path.join(directory, '.operation'));

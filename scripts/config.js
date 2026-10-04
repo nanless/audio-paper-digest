@@ -164,13 +164,13 @@ const HUGGINGFACE_CONFIG = {
 // ═══════════════════════════════════════════════════════
 
 const FILES = {
-    taxonomyRegistry: path.join(PROJECT_ROOT, 'config', 'paper-taxonomy.json'),
+    tagCatalogFile: path.join(PROJECT_ROOT, 'config', 'tag-catalog.json'),
     // 升级前 registry 的字节快照（文件名 = 内容字节 SHA）。additive 判定与
     // taxonomySeal 放宽必须能按 SHA 取回旧词表，取不回即 fail-closed。
-    taxonomyRegistryHistoryDir: path.join(PROJECT_ROOT, 'config', 'taxonomy-registry-history'),
-    taxonomyPreviewDir: path.join(DATA_DIR, 'runtime', 'taxonomy-preview'),
-    taxonomyResealReportDir: path.join(DATA_DIR, 'runtime', 'taxonomy-reseal-reports'),
-    taxonomyExplorerAssets: path.join(PROJECT_ROOT, 'web', 'tag-explorer'),
+    tagCatalogHistoryDir: path.join(PROJECT_ROOT, 'config', 'tag-catalog-history'),
+    tagPreviewDir: path.join(DATA_DIR, 'runtime', 'taxonomy-preview'),
+    tagRecordUpdateReportDir: path.join(DATA_DIR, 'runtime', 'taxonomy-reseal-reports'),
+    tagExplorerAssets: path.join(PROJECT_ROOT, 'web', 'tag-explorer'),
     // 跨日期、跨 Node/Python 的 provider 账号状态。它不是日批次数据，
     // 因此不能放进会被归档轮转的 current/。
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
@@ -233,8 +233,8 @@ const FILES = {
     historicalDirectRewriteStagingDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-staging'),
     historicalDirectAggregateProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregate-projections'),
     historicalDirectAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregates'),
-    historicalDirectTaxonomySupplementDir: path.join(DATA_DIR, 'runtime', 'historical-direct-taxonomy-supplements'),
-    historicalSourceTaxonomyClassificationDir: path.join(DATA_DIR, 'runtime', 'historical-source-taxonomy-classifications'),
+    historicalDirectTagSupplementDir: path.join(DATA_DIR, 'runtime', 'historical-direct-taxonomy-supplements'),
+    historicalSourceTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-source-taxonomy-classifications'),
     historicalSourceIdentitySupplementDir: path.join(DATA_DIR, 'runtime', 'historical-source-identity-supplements'),
     // Full-history publication receipts are intentionally isolated from the
     // legacy crosswalk publication prototype and from daily schema-v3 state.
@@ -263,7 +263,7 @@ const FILES = {
     historicalOpenreviewPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
     historicalOpenreviewPdfSourceDir: path.join(DATA_DIR, 'runtime', 'historical-openreview-pdf-sources'),
     historicalIcmlAlternatePdfSourceDir: path.join(DATA_DIR, 'runtime', 'historical-icml-alternate-pdf-sources'),
-    historicalTaxonomyAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-taxonomy-assignments'),
+    historicalTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-taxonomy-assignments'),
     historicalPageStagingDir: path.join(DATA_DIR, 'runtime', 'historical-page-staging'),
     historicalDailyAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-daily-aggregates'),
     historicalPublicationDir: path.join(DATA_DIR, 'runtime', 'historical-publications'),

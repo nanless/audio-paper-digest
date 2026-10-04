@@ -122,16 +122,16 @@ npm run digest:status -- --date "$today"
 ## 标签体系与只读历史预览
 
 ```bash
-npm run taxonomy:validate
-npm run taxonomy:preview
-npm run taxonomy:serve
+npm run tags:validate
+npm run tags:preview
+npm run tags:serve
 ```
 
-共享词表定义稳定 ID、任务层级与分类分面。预览读取配置中的 Hugo 仓库，保留旧标签及未映射项，支持
-按父级查询、同分面“或”和跨分面“且”。结果只展示旧标签如何对应词表，**不代表论文已完成语义重标
-和审查**。预览不修改旧正文、评分或标签 URL，不调用论文模型 API；服务仅在本机回环地址提供静态页面。
+共享词表为每个标签定义稳定 ID、上下级关系和所属的分类维度，例如任务或方法。预览读取配置中的 Hugo 仓库，保留旧标签和未能对应词表的标签。
 
-详见[实施与验收计划](docs/tag-taxonomy-implementation.md)和[标签设计](docs/tag-taxonomy-design.md)。
+可以按上级标签查询；同一分类维度中选多个标签时，论文命中其中一个即可，不同维度的条件则须同时满足。结果展示的是旧标签与词表的对应关系，**不能据此认定论文已按原文重新分类并通过审查**。预览不修改旧正文、评分或标签 URL，也不调用论文模型 API。静态预览服务只在本机回环地址运行。
+
+详见[实施与验收计划](docs/tag-system-implementation.md)和[标签设计](docs/tag-system-design.md)。
 
 ## 失败后从哪里继续
 

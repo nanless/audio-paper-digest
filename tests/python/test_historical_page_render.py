@@ -123,7 +123,7 @@ class HistoricalPageRenderTests(unittest.TestCase):
         figure_url = paper['apiReaderFigures'][0]['url']
         paper['directPaperId'] = f'arxiv:{paper["arxivId"]}'
         # The direct route reparses the sealed canonical surface instead of
-        # importing the legacy taxonomy assignment used by the other fixture.
+        # importing the legacy tag assignment used by the other fixture.
         paper['analysis'] += (
             '\n\n## 标签\n#音乐源分离 #Transformer #鲁棒性\n'
             '主任务标签: #音乐源分离\n主方法标签: #Transformer'

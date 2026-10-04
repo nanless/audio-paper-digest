@@ -39,7 +39,7 @@ function classifyFailure(error, now) {
     // demo host must leave that paper retryable, but must not stop the whole
     // conference batch as if the analyzer transport were unavailable.
     else if (code === 'DEMO_TRANSIENT_FAILURE') category = 'paper';
-    // An unresolved taxonomy assignment is a deterministic per-paper review
+    // An unresolved tag assignment is a deterministic per-paper review
     // condition: it neither stops the batch nor retries by itself (the labels
     // must be fixed first), and it is reported through the review queue.
     else if (code === 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED') category = 'taxonomy_review';

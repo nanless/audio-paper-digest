@@ -368,7 +368,7 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
     const analysis = '## 评分\n8.2\n\n## 核心摘要\n只来自新 canonical 的摘要。\n\n## 方法概述和架构\nFresh method.';
     const paper = { arxivId: '2609.03622', title: 'Fresh canonical title', analysis,
         parsed: require('../scripts/utils.js').parseAnalysis(analysis) };
-    const taxonomy = { status: 'assigned', assignmentSha256: page.taxonomyAssignmentSha256,
+    const tagAssignment = { status: 'assigned', assignmentSha256: page.taxonomyAssignmentSha256,
         registrySha256: '0'.repeat(64), primaryTaskId: 'task.speech-enhancement', primaryMethodId: 'method.tta',
         concepts: [{ id: 'task.speech-enhancement', facet: 'task', preferredLabel: { zh: '语音增强' } },
             { id: 'method.tta', facet: 'method', preferredLabel: { zh: '测试时自适应' } }] };
@@ -383,7 +383,7 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
         pages: [{ pageId: `page:${'3'.repeat(64)}`, path: f.dailyPath,
             primaryUrl: `https://example.test/posts/${DATE}/`, contentSha256: sha(f.oldDaily), kind: 'daily-summary',
             scope: { type: 'daily', key: DATE }, cohortDate: DATE }] } };
-    const projection = { crosswalk: state, groups: [{ paperId: page.paperId, paper, taxonomy,
+    const projection = { crosswalk: state, groups: [{ paperId: page.paperId, paper, taxonomy: tagAssignment,
         taxonomyFileSha256: page.taxonomyFileSha256, analysisRunId: page.analysisRunId,
         analysisFileSha256: page.analysisFileSha256,
         analysisRecordSha256: page.analysisRecordSha256,
@@ -393,14 +393,14 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
     const aggregateInputDependencies = { bindTopology: () => ({ state, inventory }), replaySelectedBindings: () => [],
         loadProjectionInputs: () => projection };
     const inputs = daily.loadAggregateInputs({ stagingRoot: f.stagingRoot, stagingRunIds: [STAGE],
-        crosswalkRoot: '/unused', inventoryRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused' },
+        crosswalkRoot: '/unused', inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused' },
     aggregateInputDependencies);
     const aggregate = daily.buildDailyAggregates({ inputs, date: DATE });
     fs.unlinkSync(path.join(f.aggregateRoot, AGG, `daily-${DATE}.json`));
     daily.writeAggregates({ outputRoot: f.aggregateRoot, aggregateRunId: AGG, aggregates: aggregate });
     const replay = api.replayProducerSet({ pageStagingRunIds: [STAGE], dailyAggregates: [{ aggregateRunId: AGG, date: DATE }],
         stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, crosswalkRoot: '/unused', inventoryRoot: '/unused',
-        analysisRoot: '/unused', taxonomyRoot: '/unused', taxonomyRegistry: '/unused' }, {
+        analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused' }, {
         aggregateInputDependencies, replayAnalysisSources: () => f.plan.producerReplay.analysisSources });
     assert.equal(replay.staged[0].manifestFileSha256, sha(fs.readFileSync(path.join(f.stagingRoot, STAGE, 'manifest.json'))));
     assert.equal(replay.aggregates[0].manifest.markdownSha256, sha(Buffer.from(aggregate[0].markdown)));
@@ -409,7 +409,7 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
     const plan = api.buildPlan({ planId: '77777777-7777-4777-8777-777777777777', pageStagingRunIds: [STAGE],
         dailyAggregates: [{ aggregateRunId: AGG, date: DATE }], blogRepo: f.blogRepo,
         stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, crosswalkRoot: '/unused', inventoryRoot: '/unused',
-        analysisRoot: '/unused', taxonomyRoot: '/unused', taxonomyRegistry: '/unused' }, { ...planDependencies,
+        analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused' }, { ...planDependencies,
         aggregateInputDependencies, replayAnalysisSources: () => f.plan.producerReplay.analysisSources,
         now: () => '2026-09-07T00:00:00.000Z' });
     assert.equal(plan.producerReplaySha256, replay.proof.proofSha256);
@@ -424,12 +424,12 @@ test('CLI keeps phase one explicit and rejects malformed producer refs', () => {
     const config = { PUBLISH_CONFIG: { blogRepo: '/blog' }, FILES: { historicalPublicationDir: '/publication',
         historicalPageStagingDir: '/staging', historicalDailyAggregateDir: '/aggregate', pageSourceCrosswalkDir: '/crosswalk',
         historicalPageInventoryDir: '/inventory', freshRewriteRunsDir: '/analysis',
-        historicalTaxonomyAssignmentDir: '/taxonomy', taxonomyRegistry: '/registry' } };
+        historicalTagAssignmentDir: '/taxonomy', tagCatalogFile: '/registry' } };
     let planned; const dry = cli.main(['plan', '--dry-run', '--plan-id', PLAN, '--page-staging-runs', STAGE,
         '--daily-aggregates', `${AGG}@${DATE}`], { config, buildPlan: options => { planned = options;
             return { planId: PLAN, planSha256: '1'.repeat(64), batches: [], artifacts: [] }; } });
     assert.equal(dry.status, 'dry-run'); assert.equal(planned.analysisRoot, '/analysis'); assert.equal(planned.blogRepo, '/blog');
     let generated; cli.main(['generate', '--dry-run', '--plan-id', PLAN, '--batch-id', `daily-${DATE}`], {
         config, generateBundle: options => { generated = options; return { status: 'dry-run' }; } });
-    assert.equal(generated.outputRoot, '/publication'); assert.equal(generated.taxonomyRegistry, '/registry');
+    assert.equal(generated.outputRoot, '/publication'); assert.equal(generated.tagCatalogPath, '/registry');
 });

@@ -45,7 +45,7 @@ function withoutImplementation(authority) {
     const value = structuredClone(authority);
     delete value.implementationSha256;
     // 换表后 state.taxonomy* 是进程身份史（processId 派生绑定原值，不可就地刷新），
-    // 与当前 config 的 taxonomy 漂移属合法状态；封口层已按当前表强制
+    // 与当前 config 的 标签 漂移属合法状态；封口层已按当前表强制
     // （reseal + analysis-contract/publish_common 双端 seal 校验）。实现漂移仍照常桥接。
     delete value.taxonomyVersion;
     delete value.taxonomyRegistrySha256;
@@ -132,7 +132,7 @@ function migrateAndRun(options, runtime = {}) {
                 const staged = deps.postprocess.stagePaper({
                     analysisRoot: deps.files.conferenceAnalysisDir,
                     executionId: item.analysisRunId,
-                    taxonomyFile: deps.files.taxonomyRegistry,
+                    tagCatalogPath: deps.files.tagCatalogFile,
                     stagingRoot: deps.files.conferencePageStagingDir,
                     planHandle: shared.planHandle,
                     sourceRoot: shared.sourceCacheRoot,

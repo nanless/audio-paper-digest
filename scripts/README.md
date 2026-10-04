@@ -61,11 +61,11 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `digest-status.js` | Node 共享 | `papers.json` 的分析状态、批次日期和恢复状态同步。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
 | `lib/filter-input-contract.js` | Node 库 | 计算筛选决定所对应的最小输入 SHA。 |
-| `lib/paper-taxonomy.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另提供别名解析和上下级查询。Node/Python 解析器及发布检查均使用词表原始字节计算的 SHA。 |
-| `lib/taxonomy-runtime.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 生成提供给模型的标签文本。选择规则仍按 `paper-taxonomy-selection-v1` 检查，详见本页的分类词表维护说明。 |
-| `lib/taxonomy-registry-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
-| `lib/taxonomy-reseal.js` | Node 库 | 仅更新分析结果中的分类记录：新词表必须仍解析出完全相同的 conceptIds，否则拒绝并列出需人工或模型重选的论文。另只读扫描失效历史分类文件并汇总报告，不调用模型。 |
-| `lib/historical-taxonomy-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果解析标签，映射 concept ID、去除祖先标签并生成逐篇分类文件。文件名同时包含词表 SHA 与分类 SHA，分析升级不覆盖旧记录；旧版仅按词表 SHA 命名的文件，只有逐字段等于当前重建结果时才允许读取。 |
+| `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另提供别名解析和上下级查询。Node/Python 解析器及发布检查均使用词表原始字节计算的 SHA。 |
+| `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 生成提供给模型的标签文本。选择规则仍按 `paper-taxonomy-selection-v1` 检查，详见本页的分类词表维护说明。 |
+| `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
+| `lib/tag-record-update.js` | Node 库 | 仅更新分析结果中的分类记录：新词表必须仍解析出完全相同的 conceptIds，否则拒绝并列出需人工或模型重选的论文。另只读扫描失效历史分类文件并汇总报告，不调用模型。 |
+| `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果解析标签，映射 concept ID、去除祖先标签并生成逐篇分类文件。文件名同时包含词表 SHA 与分类 SHA，分析升级不覆盖旧记录；旧版仅按词表 SHA 命名的文件，只有逐字段等于当前重建结果时才允许读取。 |
 | `lib/historical-page-staging.js` | Node 库 | 将完成的分析与新分类渲染到 crosswalk 保留的单篇路径。同一论文的重复历史页面共用新分析；结果写入独立私有目录，并保存逐页 SHA。 |
 | `lib/historical-daily-aggregate.js` | Node 库 | 核验并合并单篇私有页面、crosswalk、历史页面清单及新分析/分类，按稳定顺序重建每日汇总和清单；不读取旧汇总正文。 |
 | `lib/historical-postprocess-scheduler.js` | Node 库 | 处理来源核验通过且已完成的旧历史分析队列，依次重新分类、生成单篇页面和完整日期汇总。检查点核验当前分析文件与分类 SHA；每次汇总读取同日全部当前成员，论文升级后其全部日期页面都须更新。最多并发 3，不写博客。 |
@@ -139,22 +139,22 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/historical-direct-control.js` | Node 库 | 按计划和来源获取序号管理不可变暂停请求、安全恢复与来源检查点，并只读汇总任务、registry、汇总和发布阻断项；不调用模型或修改博客。 |
 | `lib/historical-direct-page-staging.js` | Node 库 | 将直接重写的封存来源、分析与 Reader 渲染成历史单篇私有页面。跨标题预印本显示非 camera-ready 提示；当前稿 PDF 返回 404 而采用同论文旧 `vN` 时显示“当前稿不可用”，并核验披露、清单与页面 SHA。 |
 | `lib/historical-direct-aggregate.js` | Node 库 | 根据直接重写记录和页面对应记录重建日汇总、会议汇总及会议任务私有页面，不读取旧正文。页面对应记录 v3 用冻结链接确定任务成员，无论文汇总记录为 `retain-unchanged`，并核验全部历史页面覆盖。`reader-facing-v3` 只按主任务统计热门方向，保留双语链接标题、八维评分、分档、文档类型、arXiv、作者机构与资源状态；采用旧 arXiv `vN` 时，排行榜与条目均显示当前稿不可用和实际官方链接。 |
-| `lib/historical-direct-taxonomy-supplement.js` | Node 库 | 只读核验已完成直接重写的来源、分析与私有页面，按原分类版本提取概念及主角色。补充记录对应历史页面整文件与正文 SHA，保留旧正文和标签，单列失败，不把未完成分析当成已核验结果。 |
+| `lib/historical-direct-tag-supplement.js` | Node 库 | 只读核验已完成直接重写的来源、分析与私有页面，按原分类版本提取概念及主角色。补充记录对应历史页面整文件与正文 SHA，保留旧正文和标签，单列失败，不把未完成分析当成已核验结果。 |
 | `lib/historical-source-identity-supplement.js` | Node 库 | 独立核验封存 arXiv 或会议元数据/PDF 的身份及旧页精确 SHA，仅补身份、官方来源和论文版本披露，不生成分类或正文完成证明。 |
-| `lib/historical-source-taxonomy-classification.js` | Node 库 | 对尚无有效正式分类的历史页，用编号原文证据、公共模型路由和独立语义审查生成分类补充。正文保持不变；明确区分未覆盖、待审和账号耗尽后未处理的论文。 |
+| `lib/historical-source-tag-assignment.js` | Node 库 | 对尚无有效正式分类的历史页，用编号原文证据、公共模型路由和独立语义审查生成分类补充。正文保持不变；明确区分未覆盖、待审和账号耗尽后未处理的论文。 |
 | `lib/source-evidence-snippets.js` | Node 库 | 从封存原文均衡提取有长度上限的连续片段，模型仅选择片段编号；代码写入原文引文、UTF16 位置和 SHA，拒绝未知编号。 |
 | `lib/source-classification-scheduler.js` | Node 库 | 以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |
 | `lib/source-classification-failures.js` | Node 库 | 只根据公共请求层的结构化错误识别账号或服务故障，并停止新请求。正文校验失败和输出截断仍按单篇处理，不根据错误文案猜故障或切账号。 |
-| `lib/historical-source-taxonomy-checkpoint-export.js` | Node 库 | 核验不可变分类 checkpoint 或暂停 partial、来源、原文注入及独立审核，再按明确排除集导出原有页面证明。兼容串行前缀与并发完成集合；其他缓存不能算已完成。 |
+| `lib/historical-tag-checkpoint-export.js` | Node 库 | 核验不可变分类 checkpoint 或暂停 partial、来源、原文注入及独立审核，再按明确排除集导出原有页面证明。兼容串行前缀与并发完成集合；其他缓存不能算已完成。 |
 | `lib/historical-direct-publication.js` | Node 库 | 核验直接重写的全部私有页面、汇总对应记录 v3、汇总文件 v2 和显式视觉处置，执行可恢复的历史发布。固定博客基线；按路径与内容 SHA 复用逐页通过记录，重跑本批确定性/Hugo 检查并生成凭证，再处理激活回滚、Git 提交与远端 OID。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
 | 文件 | 职责 |
 |---|---|
-| `taxonomy-tools.js` | 校验分类词表，并在回环地址提供仅四个只读路由的静态预览服务；不提供本机助手或正式数据迁移。 |
-| `taxonomy-reseal.js` | 仅重新生成分类记录，不重跑 Reader、评分或 LLM。默认预览，写入前核验 SHA 与原分类身份；参数、确认白名单及快照步骤见本页的分类词表维护说明。 |
-| `taxonomy-seal-inventory.js` | 只读盘点会议、日更及历史分类记录，按词表 SHA 汇总状态、数量和示例论文，列出与当前词表的差异。扫描字段、路径和测试参数见本页的分类词表维护说明。 |
+| `tag-tools.js` | 校验分类词表，并在回环地址提供仅四个只读路由的静态预览服务；不提供本机助手或正式数据迁移。 |
+| `tag-record-update.js` | 仅重新生成分类记录，不重跑 Reader、评分或 LLM。默认预览，写入前核验 SHA 与原分类身份；参数、确认白名单及快照步骤见本页的分类词表维护说明。 |
+| `tag-check-inventory.js` | 只读盘点会议、日更及历史分类记录，按词表 SHA 汇总状态、数量和示例论文，列出与当前词表的差异。扫描字段、路径和测试参数见本页的分类词表维护说明。 |
 | `conference-tools.js` | 只读校验私有会议 ledger/run；只接受受控运行目录内的直接文件名，不导入 PDF、不联网、不调用模型。 |
 | `conference-analyze.js` | 核验完整会议计划、导入、筛选与发现记录后，准备、运行或查看隔离的逐篇分析。恢复时重新认证实际来源，不写日更 `current`。 |
 | `conference-import.js` | 仅接受暂存/导入双文件与完整发现、筛选记录，复制认证来源并成对保存来源清单和导入凭证；不接受任意路径。 |
@@ -178,7 +178,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `arxiv-source-authority.js` | 按规范 arXiv ID 规划或获取官方全文，用于维护来源授权；不属于 direct 路线或 arXiv 获取失败备用批次的选择器。dry-run 不联网、不写文件。 |
 | `historical-arxiv-analysis.js` | 用现场核验的 arXiv 全文和白名单原始抓取元数据创建独立原文分析 run。analyze 调用现有多阶段引擎，结果不写入日更 current。 |
 | `historical-arxiv-analysis-scheduler.js` | 仅调度旧备用路线中 finalized crosswalk 的历史 arXiv 分析。`new-full`、`reader-recovery`、`all` 只维护旧队列，不能阻断或替代 direct-local。 |
-| `historical-taxonomy-assignment.js` | 对完成的历史分析逐篇或批量重新分类。dry-run 不写文件，apply 只保存独立分类结果，不调用模型。 |
+| `historical-tag-assignment.js` | 对完成的历史分析逐篇或批量重新分类。dry-run 不写文件，apply 只保存独立分类结果，不调用模型。 |
 | `historical-page-staging.js` | 按显式分析 run 和当前词表 SHA 选择精确对应的分类结果，再从 verified crosswalk 生成私有单篇页面；不写博客。 |
 | `historical-daily-aggregate.js` | 按 `--staging-runs UUID[,UUID...]` 合并多份单篇页面，重建私有日汇总清单，保留原路径与 URL。dry-run 不写文件，apply 也不写博客。 |
 | `historical-publication.js` | plan 固定旧历史发布输入、博客基线与逐路径操作；generate 再核验生成来源，以 `O_EXCL` 保存私有文件。没有认证汇总时拒绝 conference refs。 |
@@ -200,17 +200,17 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `historical-direct-rewrite-run.js` | 运行仅使用原文的直接重写分析、Reader 和单篇私有页面生成。apply 要求所选项已有同计划、同获取序号的 scheduler-ready 状态；失败阶段按来源核验过的恢复文件跨进程续跑，不能当成已生成页面。 |
 | `historical-arxiv-publication-metadata.js` | 默认对直接重写计划全部 arXiv 论文预览或批量封存官方 Atom 附件。只复用满足当前论文版本和时间窗的原始 Atom，其余按封存来源 ID 经公共 CONNECT 适配器精确获取，不调用模型。瞬时失败最多重试三次；单篇耗尽后继续整批，最后报告 partial 并非零退出。失败项不生成附件，重跑只补缺失项。 |
 | `historical-direct-aggregate.js` | 为直接重写中已完成的论文记录生成可重新核验的日汇总或会议汇总私有页面。 |
-| `historical-direct-taxonomy-supplement.js` | 仅在历史工作区生成不可变分类补充和报告，不修改博客页面或发布状态。所需计划、词表、博客、快照及 run 参数见本页的历史补充维护说明。 |
-| `historical-source-taxonomy-classification.js` | 仅在历史工作区按原文生成分类补充，逐请求保存选择、审查和决定的检查点。同 UUID 核验输入后续跑；账号耗尽只保存编号 partial，不占用最终产物。参数见本页的历史补充维护说明。 |
+| `historical-direct-tag-supplement.js` | 仅在历史工作区生成不可变分类补充和报告，不修改博客页面或发布状态。所需计划、词表、博客、快照及 run 参数见本页的历史补充维护说明。 |
+| `historical-source-tag-assignment.js` | 仅在历史工作区按原文生成分类补充，逐请求保存选择、审查和决定的检查点。同 UUID 核验输入后续跑；账号耗尽只保存编号 partial，不占用最终产物。参数见本页的历史补充维护说明。 |
 | `historical-source-identity-supplement.js` | 仅在历史工作区核验全部封存来源和没有正式分类记录的旧页，生成独立不可变身份证明，保留会议来源与论文版本披露，不请求模型。参数见本页的历史补充维护说明。 |
-| `historical-source-taxonomy-checkpoint-export.js` | 从不可变 checkpoint 或 partial 导出已完成项，保留原证明，不调用模型。暂停恢复、排除集合和新 run 参数见本页的历史补充维护说明。 |
+| `historical-tag-checkpoint-export.js` | 从不可变 checkpoint 或 partial 导出已完成项，保留原证明，不调用模型。暂停恢复、排除集合和新 run 参数见本页的历史补充维护说明。 |
 | `historical-direct-control.js` | 提供全历史长任务控制：`history:status` 单次或持续只读汇总 registry、暂停、锁、覆盖率、汇总和发布阻断项；`history:pause` 保存对应计划与获取序号的停止请求；`history:resume` 只在操作锁释放后恢复。 |
 | `historical-direct-publication.js` | 全历史直接重写发布入口：按 `plan → generate → review → publish → status` 驱动单一 publication UUID；发布阶段独占共享博客锁并验证远端 `main` OID。 |
 | `historical-direct-review.py` | 协调历史直接重写的逐页语义审查，复用正式发布的 LLM 与多模态审查，保存对应输入、模型、提示词和代码的检查点；全部页面通过后才生成最终凭证。 |
 | `paper_identity.py` | 实现与 Node 相同的 `paper-identity-v1`，用共享测试向量核对身份与 SHA 结果。 |
-| `paper_taxonomy.py` | 与 Node 共用分类词表，显式解析当前格式或旧格式标签并精确映射概念。新正式页面只接受有效的中文首选标签及 [既定英文专名例外](../AGENTS.md#内容与评分门禁)；未知或歧义标签报错，不自行缩小含义。 |
-| `taxonomy_paths.py` | 集中配置独立标签预览的 Python 路径，复用项目根与环境，不改变正式发布 `path_config` 的模板指纹。 |
-| `build-taxonomy-preview.py` | 只读扫描 Hugo 历史论文，生成带来源指纹的标签映射、旧词处置和待核报告，不修改博客或当前数据。七种处置状态和证据要求见本页的分类词表维护说明。 |
+| `tag_catalog.py` | 与 Node 共用分类词表，显式解析当前格式或旧格式标签并精确映射概念。新正式页面只接受有效的中文首选标签及 [既定英文专名例外](../AGENTS.md#内容与评分门禁)；未知或歧义标签报错，不自行缩小含义。 |
+| `tag_paths.py` | 集中配置独立标签预览的 Python 路径，复用项目根与环境，不改变正式发布 `path_config` 的模板指纹。 |
+| `build-tag-preview.py` | 只读扫描 Hugo 历史论文，生成带来源指纹的标签映射、旧词处置和待核报告，不修改博客或当前数据。七种处置状态和证据要求见本页的分类词表维护说明。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `batch-analyze.js` | 用当前正式分析结果绑定的日更 PDF/TXT 批量分析未完成论文。`--retry-failed-readers` 仅归档并停用这些论文的失败 Reader 候选；没有对应来源记录时停止。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
@@ -311,15 +311,15 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 ### 标签选择与具体程度
 
-`lib/taxonomy-runtime.js` 检查 `paper-taxonomy-selection-v1`：标签总数须为 3–5，task 分面须有 1–3 个，
+`lib/tag-rules.js` 检查 `paper-taxonomy-selection-v1`：标签总数须为 3–5，task 分面须有 1–3 个，
 其中主任务恰好 1 个，次任务最多 2 个；祖先标签和后代标签不能同时存在。主任务必须是所选集合中最具体的
 任务，否则报错。如果整个词表中还有未选的有效后代，只返回 `specificityWarning` 告警，不改变 `valid`。
 这条告警仅供新的分类或修复步骤使用，不改变已核验阶段的恢复行为。别名只供显式旧格式解析。
 
 ### 词表变更与确认范围
 
-`lib/taxonomy-registry-change.js` 将变更分为 `none`、`additive`、`destructive`，按字节 SHA 从
-`config/taxonomy-registry-history/` 读取升级前快照，并生成或核验 `registryUpgradeFrom`。
+`lib/tag-catalog-change.js` 将变更分为 `none`、`additive`、`destructive`，按字节 SHA 从
+`config/tag-catalog-history/` 读取升级前快照，并生成或核验 `registryUpgradeFrom`。
 只有新增内容的变更（`additive`）可直接沿用已核验的 `taxonomySeal`。破坏既有记录的变更（`destructive`）默认拒绝，并报告
 `blocked` 与 `needsHuman`；只有明确确认且属于允许范围的改动才能重新生成分类记录。
 
@@ -335,7 +335,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 ### 重新生成分类记录
 
-`taxonomy-reseal.js --from PROCESS_UUID` 默认预览，输出逐篇新旧 conceptIds 差异及 `assigned/blocked`
+`tag-record-update.js --from PROCESS_UUID` 默认预览，输出逐篇新旧 conceptIds 差异及 `assigned/blocked`
 报告；`--apply` 才依次保存 analysis、run、state 和 completion receipt，每一步都核对 SHA CAS，
 并将已完成进程退回运行状态（`complete` → `running`）。不重跑 Reader、评分或 LLM；分类对应关系无法核验时拒绝写入。
 `--mark-stale` 只读列出失效 assignment 文件；`--classify` 只分类词表变更。
@@ -348,24 +348,24 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 确认参数只属于 reseal 命令，与 `--archive-snapshot`、`--mark-stale`、`--classify` 互斥；
 `--acknowledge-note` 必须与 `--acknowledge-destructive` 一起使用。不传确认参数时仍按原规则拒绝
 `destructive` 变更。确认记录不进入 `bindingSha256`；更新后仍须通过
-`analysis-contract.validateTaxonomyStageBinding` 与 Python `_seal_registry_upgrade` 的同一确认检查。
+`analysis-contract.validateTagStageProof` 与 Python `_seal_registry_upgrade` 的同一确认检查。
 
 ### 修改词表前保存快照
 
-先运行 `npm run taxonomy:reseal -- --archive-snapshot`，把当前 `config/paper-taxonomy.json` 原始字节保存为
-`config/taxonomy-registry-history/<内容字节SHA>.json`，再修改词表。文件名与内容 SHA 不符时拒绝；同名文件
+先运行 `npm run tags:update-records -- --archive-snapshot`，把当前 `config/tag-catalog.json` 原始字节保存为
+`config/tag-catalog-history/<内容字节SHA>.json`，再修改词表。文件名与内容 SHA 不符时拒绝；同名文件
 字节一致时可重复执行，字节不同则报错且不覆盖。未归档旧表时无法取得旧快照，已核验论文不能继续恢复。
 
-`npm run taxonomy:seal-inventory [-- --json]` 只读扫描
+`npm run tags:check-inventory [-- --json]` 只读扫描
 `conference-analysis-executions/*/analysis.json` 中的 `stages.taxonomySeal.registrySha256` 和状态、
 `data/current/deep-analysis-result.json` 的逐篇分类记录，以及 `historical-taxonomy-assignments`。
-按 registry SHA 汇总数量、示例 paperId 及与当前 `config/paper-taxonomy.json` SHA 的差集。
+按 registry SHA 汇总数量、示例 paperId 及与当前 `config/tag-catalog.json` SHA 的差集。
 它不删除、改写、重新验证或调用模型，无论记录新旧都返回退出码 0。
 测试样例可用 `--executions/--deep/--assignments/--registry` 显式覆盖路径。
 
 ### 历史标签预览
 
-`build-taxonomy-preview.py` 按七种状态输出 `disposition` 与 `evidence`：
+`build-tag-preview.py` 按七种状态输出 `disposition` 与 `evidence`：
 `keep/alias/broader/split_review/move_facet/deprecated/out_of_scope`，并保留
 `status/conceptId/facet/semanticReview` 列。默认不重新判断语义。`deprecated/out_of_scope` 必须附上
 跨会议零命中扫描证据和人工评审署名；`split_review` 必须列出候选词。缺少这些依据时停止。
@@ -375,10 +375,10 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 下列命令只在历史工作区运行。它们生成独立补充记录，不替换历史正文或正式发布状态。
 
 ```bash
-npm run history:taxonomy-supplement -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
-npm run history:source-taxonomy -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
+npm run history:tag-supplement -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
+npm run history:source-tags -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
 npm run history:source-identity -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
-npm run history:taxonomy-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID --checkpoint ABS [--exclude-paper-ids ID,...]
+npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID --checkpoint ABS [--exclude-paper-ids ID,...]
 ```
 
 分类按请求保存 selection/review/decision 检查点。同 UUID 须核验全部输入后才能续跑；账号耗尽时只写

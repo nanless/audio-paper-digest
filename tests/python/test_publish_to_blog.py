@@ -981,26 +981,26 @@ class PublishToBlogReviewTest(unittest.TestCase):
         paper = llm_api_publication_fixture()
         summary = paper['parsed']['summary']
 
-        taxonomy_chained = copy.deepcopy(paper)
-        taxonomy_chained['analysisManifest']['stages']['structureRepair'][
+        tag_stage_chained = copy.deepcopy(paper)
+        tag_stage_chained['analysisManifest']['stages']['structureRepair'][
             'outputAnalysisSha256'
         ] = 'a' * 64
-        taxonomy_chained['analysisManifest']['contracts']['taxonomy'] = (
-            publish_to_blog.TAXONOMY_SELECTION_CONTRACT
+        tag_stage_chained['analysisManifest']['contracts']['taxonomy'] = (
+            publish_to_blog.TAG_SELECTION_CONTRACT
         )
-        taxonomy_chained['analysisManifest']['stages']['taxonomySeal'] = {
+        tag_stage_chained['analysisManifest']['stages']['taxonomySeal'] = {
             'status': 'complete',
             'inputAnalysisSha256': 'a' * 64,
-            'outputAnalysisSha256': taxonomy_chained['analysisManifest']['stages'][
+            'outputAnalysisSha256': tag_stage_chained['analysisManifest']['stages'][
                 'coreSummaryRepair'
             ]['inputAnalysisSha256'],
         }
-        taxonomy_chained['analysisStageCheckpoints'] = {
-            'taxonomySeal': taxonomy_chained['analysis'],
+        tag_stage_chained['analysisStageCheckpoints'] = {
+            'taxonomySeal': tag_stage_chained['analysis'],
         }
         self.assertIsNotNone(
             publish_to_blog._validated_detailed_core_summary(
-                taxonomy_chained, taxonomy_chained['parsed'],
+                tag_stage_chained, tag_stage_chained['parsed'],
             )
         )
 
@@ -1054,14 +1054,14 @@ class PublishToBlogReviewTest(unittest.TestCase):
         with self.assertRaisesRegex(PublishDataValidationError, '未达到 core-summary-detailed-v3'):
             publish_to_blog.llm_api_production_proof([shallow])
 
-    def test_current_core_summary_replays_taxonomy_seal_upstream(self):
+    def test_current_core_summary_replays_tag_stage_upstream(self):
         paper = llm_api_publication_fixture()
         analysis_sha = hashlib.sha256(paper['analysis'].encode('utf-8')).hexdigest()
         structure_sha = hashlib.sha256(
             (paper['analysis'] + '\nlegacy taxonomy surface').encode('utf-8')
         ).hexdigest()
         paper['analysisManifest']['contracts']['taxonomy'] = (
-            publish_to_blog.TAXONOMY_SELECTION_CONTRACT
+            publish_to_blog.TAG_SELECTION_CONTRACT
         )
         paper['analysisManifest']['stages']['structureRepair'][
             'outputAnalysisSha256'
@@ -2857,7 +2857,7 @@ title: "Score rows"
         ordinary_page, _ = publish_to_blog.generate_paper_page(ordinary, '2026-08-31')
         self.assertNotIn('**来源版本说明**', ordinary_page)
 
-    def test_current_taxonomy_keeps_flat_tags_and_adds_explicit_compat_metadata(self):
+    def test_current_tag_selection_keeps_flat_tags_and_adds_explicit_compat_metadata(self):
         paper = llm_api_publication_fixture()
         paper['parsed'].update({
             'tags': ['#语音识别', '#Transformer', '#低资源'],
@@ -2884,7 +2884,7 @@ title: "Score rows"
         self.assertEqual(frontmatter['paper_digest_primary_method'], 'Transformer')
         self.assertEqual(
             frontmatter['paper_digest_taxonomy_contract'],
-            publish_to_blog.FLAT_TAXONOMY_COMPAT_CONTRACT,
+            publish_to_blog.FLAT_TAG_COMPAT_CONTRACT,
         )
         self.assertEqual(
             frontmatter['paper_digest_taxonomy_registry_sha256'],
@@ -2907,7 +2907,7 @@ title: "Score rows"
             publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
 
-    def test_current_taxonomy_index_counts_only_primary_tasks_as_directions(self):
+    def test_current_tag_selection_index_counts_only_primary_tasks_as_directions(self):
         first = llm_api_publication_fixture()
         second = copy.deepcopy(first)
         second['arxivId'] = '2608.30003'
@@ -8318,10 +8318,10 @@ body
                 ):
                     publish_to_blog.load_generation_manifest('2026-07-10')
 
-    def test_taxonomy_registry_snapshot_binds_registry_sha_and_ancestor_chain(self):
-        snapshot = publish_to_blog.build_taxonomy_registry_snapshot()
+    def test_tag_catalog_snapshot_binds_registry_sha_and_ancestor_chain(self):
+        snapshot = publish_to_blog.build_tag_catalog_snapshot()
         self.assertEqual(
-            snapshot['contract'], publish_to_blog.TAXONOMY_REGISTRY_SNAPSHOT_CONTRACT,
+            snapshot['contract'], publish_to_blog.TAG_CATALOG_SNAPSHOT_CONTRACT,
         )
         self.assertEqual(snapshot['registryVersion'], 'paper-taxonomy-v1')
         self.assertEqual(
@@ -8340,31 +8340,31 @@ body
             for index, ancestor in enumerate(ancestors):
                 # 自根到父链：父概念的祖先必须是本概念祖先的前缀
                 self.assertEqual(by_id[ancestor]['ancestorIds'], ancestors[:index])
-        raw = publish_to_blog.taxonomy_registry_snapshot_bytes(snapshot)
+        raw = publish_to_blog.tag_catalog_snapshot_bytes(snapshot)
         self.assertTrue(raw.endswith(b'\n'))
         self.assertEqual(
-            raw, publish_to_blog.taxonomy_registry_snapshot_bytes(snapshot),
+            raw, publish_to_blog.tag_catalog_snapshot_bytes(snapshot),
         )
         self.assertEqual(
             json.loads(raw)['registrySha256'],
             publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
 
-    def test_export_taxonomy_registry_snapshot_writes_frozen_bytes_twice(self):
+    def test_export_tag_catalog_snapshot_writes_frozen_bytes_twice(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = (root / 'blog').resolve()
             (repo / 'content' / 'posts').mkdir(parents=True)
             self.assertEqual(
-                publish_to_blog.export_taxonomy_registry_snapshot(root / 'missing'), [],
+                publish_to_blog.export_tag_catalog_files(root / 'missing'), [],
             )
-            expected = publish_to_blog.taxonomy_registry_snapshot_bytes(
-                publish_to_blog.build_taxonomy_registry_snapshot(),
+            expected = publish_to_blog.tag_catalog_snapshot_bytes(
+                publish_to_blog.build_tag_catalog_snapshot(),
             )
-            written = publish_to_blog.export_taxonomy_registry_snapshot(repo)
+            written = publish_to_blog.export_tag_catalog_files(repo)
             self.assertEqual(
                 [path.relative_to(repo).as_posix() for path in written],
-                list(publish_to_blog.taxonomy_registry_asset_payloads(repo)),
+                list(publish_to_blog.tag_catalog_file_contents(repo)),
             )
             for relative in (
                     'data/taxonomy-registry.json',
@@ -8379,9 +8379,9 @@ body
                 )
                 self.assertEqual(len(payload['concepts']), 262)  # v1.1 换表：228→262
             # 字节未变时不重写，避免把博客工作树弄脏
-            self.assertEqual(publish_to_blog.export_taxonomy_registry_snapshot(repo), [])
+            self.assertEqual(publish_to_blog.export_tag_catalog_files(repo), [])
 
-    def test_generation_exports_taxonomy_registry_snapshot_into_blog_repo(self):
+    def test_generation_exports_tag_catalog_snapshot_into_blog_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current_dir = Path(tmp) / 'data' / 'current'

@@ -143,11 +143,11 @@ def render_packet(packet):
     if not isinstance(paper, dict):
         raise ValueError('paper object is required')
     if direct:
-        # Direct historical rewrites are sealed to an independently captured
-        # source/run packet in Node. They deliberately do not have a legacy
-        # crosswalk or postprocess taxonomy-assignment prerequisite. The
-        # taxonomy surface is already part of the sealed canonical analysis
-        # and is reparsed below rather than imported from an old page.
+        # Node binds direct historical rewrites to an independently captured
+        # source/run packet. This path does not require a legacy crosswalk or
+        # a separate postprocess tag assignment. The recorded analysis already
+        # contains the tag section and primary tag fields; parse them below
+        # instead of importing tags from an old page.
         if not isinstance(paper.get('directPaperId'), str) or not paper['directPaperId']:
             raise ValueError('direct staging paper identity is required')
         projected = dict(paper)
@@ -184,7 +184,7 @@ def render_packet(packet):
         parsed = publisher.parse_analysis(projected.get('analysis', ''))
         if not isinstance(parsed, dict):
             raise ValueError('sealed direct conference analysis cannot be reparsed')
-        taxonomy = publisher.build_flat_taxonomy_compat_metadata(parsed, required=True)
+        tag_metadata = publisher.build_flat_tag_compat_metadata(parsed, required=True)
         title = publisher.plain_title_for_publish(projected.get('title', ''))
         if not title:
             raise ValueError('direct conference title is required')
@@ -204,13 +204,13 @@ def render_packet(packet):
             'draft: false', f'tags: {json.dumps(tags, ensure_ascii=False)}',
             'categories: [论文速递]', 'paper_digest_pipeline_owned: true',
             'paper_digest_page_type: paper', f'paper_digest_direct_paper_id: {json.dumps(projected["directPaperId"], ensure_ascii=False)}',
-            f'paper_digest_taxonomy_contract: {json.dumps(taxonomy["contract"])}',
-            f'paper_digest_taxonomy_selection_contract: {json.dumps(taxonomy["selectionContract"])}',
-            f'paper_digest_taxonomy_registry_version: {json.dumps(taxonomy["registryVersion"])}',
-            f'paper_digest_taxonomy_registry_sha256: {json.dumps(taxonomy["registrySha256"])}',
-            f'paper_digest_taxonomy_concepts: {json.dumps(taxonomy["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}',
-            f'paper_digest_primary_task: {json.dumps(taxonomy["primaryTask"], ensure_ascii=False)}',
-            f'paper_digest_primary_method: {json.dumps(taxonomy["primaryMethod"], ensure_ascii=False)}',
+            f'paper_digest_taxonomy_contract: {json.dumps(tag_metadata["contract"])}',
+            f'paper_digest_taxonomy_selection_contract: {json.dumps(tag_metadata["selectionContract"])}',
+            f'paper_digest_taxonomy_registry_version: {json.dumps(tag_metadata["registryVersion"])}',
+            f'paper_digest_taxonomy_registry_sha256: {json.dumps(tag_metadata["registrySha256"])}',
+            f'paper_digest_taxonomy_concepts: {json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}',
+            f'paper_digest_primary_task: {json.dumps(tag_metadata["primaryTask"], ensure_ascii=False)}',
+            f'paper_digest_primary_method: {json.dumps(tag_metadata["primaryMethod"], ensure_ascii=False)}',
             '---', '', f'# 📄 {reader_title}', '', f'> 会议论文 ID：`{projected["directPaperId"]}`', ''
         ]
         if tags:
@@ -225,7 +225,7 @@ def render_packet(packet):
     # Historical staging must not trust a cached ``parsed`` object for scores,
     # summaries, dimensions, or prose.  Rebuild every publication field from
     # the sealed canonical analysis, then apply only the deterministic current
-    # taxonomy projection below.
+    # tag metadata below.
     projected['parsed'] = publisher.parse_analysis(paper.get('analysis', ''))
     if not isinstance(projected['parsed'], dict):
         raise ValueError('sealed canonical analysis cannot be reparsed for publication')

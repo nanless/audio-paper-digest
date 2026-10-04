@@ -1127,7 +1127,7 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
 // The raw registry is the sole tag authority.  These compatibility exports
 // remain Sets for existing consumers, but are derived from active preferred
 // Chinese labels rather than copied from a prompt table.
-const TAG_RULES = require('./lib/taxonomy-runtime.js').getDefaultTagRules();
+const TAG_RULES = require('./lib/tag-rules.js').getDefaultTagRules();
 const ALLOWED_TAGS = TAG_RULES.allowedTags;
 const PRIMARY_TASK_TAGS = TAG_RULES.taskTags;
 const PRIMARY_METHOD_TAGS = TAG_RULES.methodTags;
@@ -1256,7 +1256,7 @@ function parseScoringDimensions(scoringText) {
 
 function parseAnalysis(analysis, options = {}) {
     if (!analysis) return null;
-    const tagRules = options.taxonomyRuntime || TAG_RULES;
+    const tagRules = options.tagRules || TAG_RULES;
     const legacyTags = options.legacyTags === true;
 
     // 标准化标签：加 # 前缀，清理分隔符和多余空格

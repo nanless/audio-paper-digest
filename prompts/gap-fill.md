@@ -6,7 +6,7 @@
 
 ## 调用方式
 
-代码通过 `loadPrompt()` 替换 `{title}`、`{arxivId}`、`{existingAnalysis}`、`{textForAnalysis}` 和 `{taxonomyProjection}`，分别提供标题、论文 ID、已有分析、本次论文证据和当前可用的标签定义。
+代码通过 `loadPrompt()` 替换 `{title}`、`{arxivId}`、`{existingAnalysis}`、`{textForAnalysis}` 和 `{tagPromptText}`，分别提供标题、论文 ID、已有分析、本次论文证据和当前可用的标签定义。
 
 ## 提示词内容
 
@@ -26,7 +26,7 @@ arXiv ID：{arxivId}
 
 当前可用的标签及其定义：
 
-{taxonomyProjection}
+{tagPromptText}
 
 ### 输出结构
 

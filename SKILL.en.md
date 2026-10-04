@@ -100,7 +100,7 @@ directory for the current model request and cleaned up afterward; their pixels n
 `data/current` or runtime image caches.
 
 Stages include primary analysis, open-source and demo scans, revision, table/method/structure repair,
-taxonomy checks, core-summary checks, scoring audit, API Reader, and image preparation. Each stage
+tag checks, core-summary checks, scoring audit, API Reader, and image preparation. Each stage
 records its input, model, protocol, prompt, temperature, budgets, and output SHA. Changes rerun the
 affected stage and its downstream stages.
 
@@ -250,7 +250,7 @@ check HTTP 200, the official address, and the title of every target digest and p
 these records. If deployment fails, read its logs, repair the problem, and wait for successful
 redeployment. `digest:status` does not yet perform deployment or live-page checks.
 
-During taxonomy migration, new pages retain Hugo's flat `tags` field but must also carry
+During the transition to the new tag system, new pages retain Hugo's flat `tags` field but must also carry
 `paper-taxonomy-flat-tags-compat-v1`, the current registry version/SHA, each tag's `concept`/`facet`,
 `paper_digest_primary_task`, and `paper_digest_primary_method`. Old pages and tag URLs remain
 unchanged. Aggregate “popular directions” count only explicit primary tasks; the site-wide tag list

@@ -75,7 +75,7 @@ function completeItems(snapshot) {
         .filter(item => item.status === 'complete').sort((a, b) => a.paperId.localeCompare(b.paperId));
 }
 
-function prepareCurrentAssignment(item, taxonomy, files, deps) {
+function prepareCurrentAssignment(item, tagCatalog, files, deps) {
     const recovered = deps.recoverRun({ runId: item.runId, date: item.analysisDate,
         arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir,
         now: deps.now() });
@@ -83,12 +83,12 @@ function prepareCurrentAssignment(item, taxonomy, files, deps) {
         fail(`${item.paperId} analysis run is not current-contract complete`);
     }
     const handle = deps.loadAnalysisRun({ analysisRoot: files.freshRewriteRunsDir, runId: item.runId });
-    const assignments = deps.buildAssignments({ runHandle: handle, taxonomy, paperId: item.paperId });
+    const assignments = deps.buildAssignments({ runHandle: handle, tagCatalog, paperId: item.paperId });
     if (assignments.length !== 1) fail(`${item.paperId} taxonomy assignment result is not singular`);
     return assignments[0];
 }
 
-function assignmentIdentity(assignment, taxonomyFileSha256 = null) {
+function assignmentIdentity(assignment, tagAssignmentFileSha256 = null) {
     return {
         paperId: assignment.paperId,
         analysisRunId: assignment.analysisRunId,
@@ -97,7 +97,7 @@ function assignmentIdentity(assignment, taxonomyFileSha256 = null) {
         analysisSha256: assignment.analysisSha256,
         registrySha256: assignment.registrySha256,
         assignmentSha256: assignment.assignmentSha256,
-        ...(taxonomyFileSha256 ? { taxonomyFileSha256 } : {})
+        ...(tagAssignmentFileSha256 ? { taxonomyFileSha256: tagAssignmentFileSha256 } : {})
     };
 }
 
@@ -135,14 +135,14 @@ function assertStagedManifestProof(staged, stagingRunId, rendererImplementationS
     }
 }
 function defaultDependencies() {
-    const Config = require('../config.js'); const taxonomy = require('./historical-taxonomy-assignment.js');
-    const registry = require('./paper-taxonomy.js'); const history = require('./historical-arxiv-analysis.js');
+    const Config = require('../config.js'); const tagAssignmentsApi = require('./historical-tag-assignment.js');
+    const registry = require('./tag-catalog.js'); const history = require('./historical-arxiv-analysis.js');
     const engine = require('../analysis-engine.js');
     return { files: Config.FILES, now: () => new Date().toISOString(),
         readCrosswalk: args => require('./page-source-crosswalk.js').readCrosswalk(args),
         recoverRun: args => history.recoverHistoricalArxivRun(args), loadTagCatalog: filename => registry.loadTagCatalog(filename),
-        loadAnalysisRun: args => taxonomy.loadCompletedHistoricalAnalysisRun(args), runSnapshot: handle => taxonomy.runSnapshot(handle),
-        buildAssignments: args => taxonomy.buildAssignments(args), writeAssignments: args => taxonomy.writeAssignments(args),
+        loadAnalysisRun: args => tagAssignmentsApi.loadCompletedHistoricalAnalysisRun(args), runSnapshot: handle => tagAssignmentsApi.runSnapshot(handle),
+        buildAssignments: args => tagAssignmentsApi.buildAssignments(args), writeAssignments: args => tagAssignmentsApi.writeAssignments(args),
         stagePages: args => pageStaging.stageHistoricalPages(args),
         rendererImplementationSha256: () => pageStaging.currentRendererImplementationSha256(),
         loadAggregateInputs: args => aggregateApi.loadAggregateInputs(args), buildAggregates: args => aggregateApi.buildDailyAggregates(args),
@@ -180,8 +180,8 @@ async function runHistoricalPostprocess(options, overrides = {}) {
             && (!Number.isSafeInteger(options.limit) || options.limit < 1)
         || options.date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(options.date || '')) fail('invalid options');
     const analysisScheduler = readAnalysisScheduler(files.historicalAnalysisSchedulerDir, options.crosswalkId);
-    const taxonomy = deps.loadTagCatalog(files.taxonomyRegistry);
-    if (!SHA_RE.test(taxonomy.registrySha256 || '')) fail('current taxonomy registry SHA is invalid');
+    const tagCatalog = deps.loadTagCatalog(files.tagCatalogFile);
+    if (!SHA_RE.test(tagCatalog.registrySha256 || '')) fail('current taxonomy registry SHA is invalid');
     const rendererImplementationSha256 = typeof deps.rendererImplementationSha256 === 'function'
         ? deps.rendererImplementationSha256() : deps.rendererImplementationSha256;
     if (!SHA_RE.test(rendererImplementationSha256 || '')) fail('current renderer implementation SHA is invalid');
@@ -189,35 +189,35 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     const allComplete = completeItems(analysisScheduler);
     const relevantComplete = options.date ? allComplete.filter(item => (item.cohortDates || []).includes(options.date)) : allComplete;
     const dryPrepared = options.apply ? [] : relevantComplete.flatMap(item => {
-        try { return [{ ...item, currentAssignment: prepareCurrentAssignment(item, taxonomy, files, deps) }]; }
+        try { return [{ ...item, currentAssignment: prepareCurrentAssignment(item, tagCatalog, files, deps) }]; }
         catch { return []; }
     });
     const available = options.apply ? relevantComplete : dryPrepared; const maximum = options.limit === 'pilot' ? 1
         : options.limit === null ? available.length : options.limit; const selected = available.slice(0, maximum);
     const plan = options.apply ? [] : selected.map(item => ({ paperId: item.paperId, analysisRunId: item.runId,
         rendererImplementationSha256,
-        stagingRunId: deterministicStagingRunId(options.crosswalkId, item, taxonomy.registrySha256,
+        stagingRunId: deterministicStagingRunId(options.crosswalkId, item, tagCatalog.registrySha256,
             rendererImplementationSha256, item.currentAssignment?.assignmentSha256),
         analysisFileSha256: item.currentAssignment?.analysisFileSha256,
         analysisRecordSha256: item.currentAssignment?.analysisRecordSha256,
         taxonomyAssignmentSha256: item.currentAssignment?.assignmentSha256,
         cohortDates: item.cohortDates || [] }));
     if (!options.apply) return { status: 'dry-run', crosswalkId: options.crosswalkId,
-        registrySha256: taxonomy.registrySha256, analysisSchedulerFileSha256: analysisScheduler.fileSha256,
+        registrySha256: tagCatalog.registrySha256, analysisSchedulerFileSha256: analysisScheduler.fileSha256,
         rendererImplementationSha256,
         checkpointComplete: allComplete.length, relevantComplete: relevantComplete.length,
         completeAvailable: dryPrepared.length, unsealed: relevantComplete.length - dryPrepared.length, selected: plan };
     const filename = checkpointPath(files.historicalPostprocessSchedulerDir, options.crosswalkId,
-        taxonomy.registrySha256, rendererImplementationSha256, true);
-    updateCheckpoint(filename, options.crosswalkId, taxonomy.registrySha256,
+        tagCatalog.registrySha256, rendererImplementationSha256, true);
+    updateCheckpoint(filename, options.crosswalkId, tagCatalog.registrySha256,
         rendererImplementationSha256, deps, value => value);
     const outcomes = await mapConcurrent(selected, options.concurrency, async item => {
         let stagingRunId = null; let assignmentProof = null;
         try {
-            const assignments = [prepareCurrentAssignment(item, taxonomy, files, deps)];
-            stagingRunId = deterministicStagingRunId(options.crosswalkId, item, taxonomy.registrySha256,
+            const assignments = [prepareCurrentAssignment(item, tagCatalog, files, deps)];
+            stagingRunId = deterministicStagingRunId(options.crosswalkId, item, tagCatalog.registrySha256,
                 rendererImplementationSha256, assignments[0].assignmentSha256);
-            const assignmentOutput = deps.writeAssignments({ outputRoot: files.historicalTaxonomyAssignmentDir, assignments })[0];
+            const assignmentOutput = deps.writeAssignments({ outputRoot: files.historicalTagAssignmentDir, assignments })[0];
             assignmentProof = { analysisFileSha256: assignments[0].analysisFileSha256,
                 analysisRecordSha256: assignments[0].analysisRecordSha256,
                 analysisSha256: assignments[0].analysisSha256,
@@ -245,38 +245,38 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                 expectedStagingRunId: stagingRunId,
                 expectedAssignment: assignmentIdentity(assignments[0], assignmentOutput.fileSha256),
                 crosswalkRoot: files.pageSourceCrosswalkDir, analysisRoot: files.freshRewriteRunsDir,
-                taxonomyRoot: files.historicalTaxonomyAssignmentDir, taxonomyRegistry: files.taxonomyRegistry,
+                tagAssignmentRoot: files.historicalTagAssignmentDir, tagCatalogPath: files.tagCatalogFile,
                 stagingRoot: files.historicalPageStagingDir });
             assertStagedManifestProof(staged, stagingRunId, rendererImplementationSha256,
                 assignmentIdentity(assignments[0], assignmentOutput.fileSha256));
-            const replayed = prepareCurrentAssignment(item, taxonomy, files, deps);
+            const replayed = prepareCurrentAssignment(item, tagCatalog, files, deps);
             if (stableHash(assignmentIdentity(replayed)) !== stableHash(assignmentIdentity(assignments[0]))) {
                 fail(`${item.paperId} analysis/taxonomy changed while staging`);
             }
             const record = { status: 'staged', paperId: item.paperId, analysisRunId: item.runId,
                 analysisSchedulerItemSha256: item.analysisSchedulerItemSha256,
-                registrySha256: taxonomy.registrySha256, rendererImplementationSha256,
+                registrySha256: tagCatalog.registrySha256, rendererImplementationSha256,
                 ...assignmentProof, stagingRunId,
                 stagingManifestSha256: staged.manifestSha256, cohortDates: item.cohortDates || [], lastError: null };
-            updateCheckpoint(filename, options.crosswalkId, taxonomy.registrySha256,
+            updateCheckpoint(filename, options.crosswalkId, tagCatalog.registrySha256,
                 rendererImplementationSha256, deps, value => {
                 value.items[item.paperId] = record; return value;
             }); return record;
         } catch (error) {
             const record = { status: 'failed', paperId: item.paperId, analysisRunId: item.runId,
-                analysisSchedulerItemSha256: item.analysisSchedulerItemSha256, registrySha256: taxonomy.registrySha256,
+                analysisSchedulerItemSha256: item.analysisSchedulerItemSha256, registrySha256: tagCatalog.registrySha256,
                 rendererImplementationSha256, ...(assignmentProof || {}), stagingRunId,
                 lastError: String(error.message).slice(0, 2000),
                 ...(error.taxonomyReview ? { reviewRequired: { ...error.taxonomyReview,
                     code: 'HISTORICAL_TAXONOMY_REVIEW_REQUIRED' } } : {}) };
-            updateCheckpoint(filename, options.crosswalkId, taxonomy.registrySha256,
+            updateCheckpoint(filename, options.crosswalkId, tagCatalog.registrySha256,
                 rendererImplementationSha256, deps, value => {
                 value.items[item.paperId] = record; return value;
             }); return record;
         }
     });
     let checkpoint = validateCheckpoint(readJsonFile(filename, 'historical postprocess checkpoint').value,
-        options.crosswalkId, taxonomy.registrySha256, rendererImplementationSha256);
+        options.crosswalkId, tagCatalog.registrySha256, rendererImplementationSha256);
     const pages = new Map(crosswalk.source.papers.map(page => [page.pageKey, page]));
     const pageOwners = new Map();
     for (const group of crosswalk.identityGroups) for (const pageKey of group.pageKeys) pageOwners.set(pageKey, group.paperId);
@@ -291,10 +291,10 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     const currentItems = new Map();
     for (const item of allComplete.filter(candidate => requiredPaperIds.has(candidate.paperId))) {
         try {
-            const assignment = prepareCurrentAssignment(item, taxonomy, files, deps);
+            const assignment = prepareCurrentAssignment(item, tagCatalog, files, deps);
             currentItems.set(item.paperId, { item, assignment,
                 stagingRunId: deterministicStagingRunId(options.crosswalkId, item,
-                    taxonomy.registrySha256, rendererImplementationSha256,
+                    tagCatalog.registrySha256, rendererImplementationSha256,
                     assignment.assignmentSha256) });
         } catch { /* A stale or unsealed member blocks its dates below. */ }
     }
@@ -320,7 +320,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
         if (!ready) {
             const record = { date, status: 'blocked', rendererImplementationSha256,
                 reason: 'not-all-date-papers-staged' };
-            updateCheckpoint(filename, options.crosswalkId, taxonomy.registrySha256,
+            updateCheckpoint(filename, options.crosswalkId, tagCatalog.registrySha256,
                 rendererImplementationSha256, deps, value => {
                 value.daily[date] = record; return value;
             }); daily.push(record); continue;
@@ -329,36 +329,36 @@ async function runHistoricalPostprocess(options, overrides = {}) {
         try {
             const inputs = deps.loadAggregateInputs({ stagingRoot: files.historicalPageStagingDir, stagingRunIds,
                 crosswalkRoot: files.pageSourceCrosswalkDir, inventoryRoot: files.historicalPageInventoryDir,
-                analysisRoot: files.freshRewriteRunsDir, taxonomyRoot: files.historicalTaxonomyAssignmentDir,
-                taxonomyRegistry: files.taxonomyRegistry });
+                analysisRoot: files.freshRewriteRunsDir, tagAssignmentRoot: files.historicalTagAssignmentDir,
+                tagCatalogPath: files.tagCatalogFile });
             const aggregates = deps.buildAggregates({ inputs, date });
             const aggregateRunId = deps.aggregateRunIdFor(stagingRunIds);
             const outputs = deps.writeAggregates({ outputRoot: files.historicalDailyAggregateDir, aggregateRunId, aggregates });
             const record = { date, status: 'staged', rendererImplementationSha256,
                 aggregateRunId, stagingRunIds,
                 manifestSha256: aggregates[0].manifestSha256, fileSha256: outputs[0].fileSha256 };
-            updateCheckpoint(filename, options.crosswalkId, taxonomy.registrySha256,
+            updateCheckpoint(filename, options.crosswalkId, tagCatalog.registrySha256,
                 rendererImplementationSha256, deps, value => {
                 value.daily[date] = record; return value;
             }); daily.push(record);
         } catch (error) {
             const record = { date, status: 'blocked', rendererImplementationSha256,
                 reason: String(error.message).slice(0, 2000) };
-            updateCheckpoint(filename, options.crosswalkId, taxonomy.registrySha256,
+            updateCheckpoint(filename, options.crosswalkId, tagCatalog.registrySha256,
                 rendererImplementationSha256, deps, value => {
                 value.daily[date] = record; return value;
             }); daily.push(record);
         }
     }
     checkpoint = validateCheckpoint(readJsonFile(filename, 'historical postprocess checkpoint').value,
-        options.crosswalkId, taxonomy.registrySha256, rendererImplementationSha256);
+        options.crosswalkId, tagCatalog.registrySha256, rendererImplementationSha256);
     const reviewItems = outcomes.filter(item => item.reviewRequired)
         .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
             status: item.reviewRequired.status, blockedReasons: item.reviewRequired.blockedReasons }))
         .sort((left, right) => left.paperId.localeCompare(right.paperId));
     return { status: outcomes.every(item => item.status === 'staged') && daily.every(item => item.status === 'staged')
         && selected.length === relevantComplete.length ? 'complete' : 'partial', crosswalkId: options.crosswalkId,
-        registrySha256: taxonomy.registrySha256, rendererImplementationSha256,
+        registrySha256: tagCatalog.registrySha256, rendererImplementationSha256,
         taxonomyReview: reviewItems.length,
         ...(reviewItems.length ? { taxonomyReviewQueue: reviewItems } : {}),
         processed: outcomes, daily, checkpoint: filename,

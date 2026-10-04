@@ -10,7 +10,7 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
 
-from paper_taxonomy import (LABEL_MODE_LEGACY,
+from tag_catalog import (LABEL_MODE_LEGACY,
                             active_preferred_labels, ancestors, load_tag_catalog,
                             prune_ancestors, resolve_label_candidates,
                             _registry_data)
@@ -192,26 +192,26 @@ PRIMARY_METHOD_TAGS = set(active_preferred_labels(
     _DEFAULT_TAG_CATALOG, ('method',)))
 
 
-def _taxonomy_tag(raw, taxonomy, *, facets=None, legacy_tags=False):
-    """Return ``(concept, error)`` for one explicit taxonomy token."""
+def _resolve_analysis_tag(raw, tag_catalog, *, facets=None, legacy_tags=False):
+    """Return ``(concept, error)`` for one explicit tag."""
     if not isinstance(raw, str) or not raw.strip():
         return None, '标签为空'
     token = raw.strip()
     if legacy_tags and facets == ('method',) \
             and token.removeprefix('#') == '端到端':
-        candidates = [concept for concept in taxonomy['concepts']
+        candidates = [concept for concept in tag_catalog['concepts']
                       if concept['status'] == 'active'
                       and concept['id'] == 'method.end-to-end-learning']
     elif not legacy_tags:
         if not token.startswith('#') or token.count('#') != 1:
             return None, f'current 标签必须精确写成 #preferredLabel.zh: {token}'
         label = token[1:]
-        candidates = [concept for concept in taxonomy['concepts']
+        candidates = [concept for concept in tag_catalog['concepts']
                       if concept['status'] == 'active'
                       and concept['preferredLabel']['zh'] == label]
     else:
         candidates = resolve_label_candidates(
-            taxonomy, token, mode=LABEL_MODE_LEGACY)
+            tag_catalog, token, mode=LABEL_MODE_LEGACY)
     if facets is not None:
         candidates = [concept for concept in candidates if concept['facet'] in facets]
     if len(candidates) != 1:
@@ -239,23 +239,23 @@ def _canonical_tag(concept):
     return f"#{concept['preferredLabel']['zh']}"
 
 
-def _current_tag_concept(taxonomy, raw, facet=None):
+def _current_tag_concept(tag_catalog, raw, facet=None):
     if not isinstance(raw, str):
         return None
     token = raw.strip()
-    matches = [concept for concept in taxonomy['concepts']
+    matches = [concept for concept in tag_catalog['concepts']
                if concept['status'] == 'active'
                and _canonical_tag(concept) == token
                and (facet is None or concept['facet'] == facet)]
     return matches[0] if len(matches) == 1 else None
 
 
-def _validate_tag_selection(taxonomy, tags, primary_task_tag, primary_method_tag):
+def _validate_tag_selection(tag_catalog, tags, primary_task_tag, primary_method_tag):
     raw_tags = tags if isinstance(tags, list) else []
     errors = []
     if len(raw_tags) < 3 or len(raw_tags) > 5:
         errors.append('标签总数必须为 3-5 个')
-    concepts = [_current_tag_concept(taxonomy, tag) for tag in raw_tags]
+    concepts = [_current_tag_concept(tag_catalog, tag) for tag in raw_tags]
     for tag, concept in zip(raw_tags, concepts):
         if concept is None:
             errors.append(f'标签不是 active 中文首选标签: {tag}')
@@ -263,8 +263,8 @@ def _validate_tag_selection(taxonomy, tags, primary_task_tag, primary_method_tag
     if len(set(ids)) != len(ids):
         errors.append('标签包含重复概念')
 
-    task = _current_tag_concept(taxonomy, primary_task_tag, 'task')
-    method = _current_tag_concept(taxonomy, primary_method_tag, 'method')
+    task = _current_tag_concept(tag_catalog, primary_task_tag, 'task')
+    method = _current_tag_concept(tag_catalog, primary_method_tag, 'method')
     if task is None:
         errors.append('主任务标签必须是 active task 中文首选标签')
     if method is None:
@@ -274,9 +274,9 @@ def _validate_tag_selection(taxonomy, tags, primary_task_tag, primary_method_tag
     if method is not None and method['id'] not in ids:
         errors.append('主方法标签必须出现在完整标签列表')
     if task is not None and any(
-            task['id'] in ancestors(taxonomy, cid) for cid in ids):
+            task['id'] in ancestors(tag_catalog, cid) for cid in ids):
         errors.append('主任务标签不是所选任务中的最具体概念')
-    if ids and len(prune_ancestors(taxonomy, ids)) != len(ids):
+    if ids and len(prune_ancestors(tag_catalog, ids)) != len(ids):
         errors.append('标签不得同时包含祖先与后代概念')
 
     # 选择合同规则①：主任务恰好 1 个 + 次任务 ≤2 个，即 task 分面总数必须
@@ -290,16 +290,16 @@ def _validate_tag_selection(taxonomy, tags, primary_task_tag, primary_method_tag
                       f'当前 {len(task_concepts)} 个'
                       + (f': {task_tag_list}' if task_tag_list else ''))
 
-    # 选择合同规则②：主任务“最具体”是全 registry 性质，不是所选集合内性质。
-    # 欠具体只返回结构化告警，不改变 valid——已封口 stage 的回放（seal
-    # binding、发布侧 parse）不受影响；新指派路径用它触发标签局部修复。
+    # 判断主任务是否足够具体时，要检查整个词表，而不只是本次选中的标签。
+    # 主任务过于宽泛只产生告警，不改变 valid 字段；已有阶段记录的绑定校验
+    # 和发布端解析仍按原规则执行，新的标签选择流程用该告警触发局部修复。
     specificity_warning = None
     if task is not None:
-        # 热路径只做一次 registry 校验，再用本地 parent 映射走 parent-chain：
-        # paper_taxonomy.ancestors() 每次调用都会全量重校验 registry，对每个
-        # active 概念各调一次会把选择校验退化成 O(N²)。Node
-        # taxonomy-runtime.activeDescendants 是同构实现。
-        data = _registry_data(taxonomy)
+        # 先核验一次词表，再用本地的父级映射查询上下级关系。
+        # tag_catalog.ancestors() 每次都会完整核验词表；逐个查询所有启用概念
+        # 会使选择检查达到 O(N²)。Node 的 tag-rules.activeDescendants
+        # 使用相同规则。
+        data = _registry_data(tag_catalog)
         parent_by_id = {concept['id']: concept['broaderId']
                         for concept in data['concepts']}
 
@@ -331,8 +331,8 @@ def _validate_tag_selection(taxonomy, tags, primary_task_tag, primary_method_tag
     return {
         'valid': not errors,
         'errors': errors,
-        'registryVersion': taxonomy['version'],
-        'registrySha256': taxonomy.get('registrySha256'),
+        'registryVersion': tag_catalog['version'],
+        'registrySha256': tag_catalog.get('registrySha256'),
         'primaryTaskId': task['id'] if task is not None else None,
         'primaryMethodId': method['id'] if method is not None else None,
         'conceptIds': [] if errors else ids,
@@ -459,13 +459,13 @@ def parse_scoring_dimensions(scoring_text):
     return {'valid': not errors, 'scores': scores, 'errors': errors}
 
 
-def parse_analysis(analysis, *, taxonomy=None, legacy_tags=False):
+def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     """解析深度分析文本为结构化字典"""
     if not analysis:
         return None
     if type(legacy_tags) is not bool:
         raise ValueError('legacy_tags must be bool')
-    registry = _DEFAULT_TAG_CATALOG if taxonomy is None else taxonomy
+    registry = _DEFAULT_TAG_CATALOG if tag_catalog is None else tag_catalog
     # Validation happens before parsing so a malformed registry can never turn
     # an unknown production label into an accepted string by accident.
     active_preferred_labels(registry)
@@ -528,16 +528,16 @@ def parse_analysis(analysis, *, taxonomy=None, legacy_tags=False):
             raw_tag_list = _tag_tokens(first_line, legacy_tags=legacy_tags)
             for token in raw_tag_list:
                 if legacy_tags:
-                    concept, _error = _taxonomy_tag(
+                    concept, _error = _resolve_analysis_tag(
                         token, registry, legacy_tags=True)
                     # Legacy aliases can be globally ambiguous while an exact
                     # explicit task/method role line disambiguates them.  Do
                     # not extend this exception to supplemental tags.
                     if concept is None and token.strip() == str(extracted_task_tag or '').strip():
-                        concept, _error = _taxonomy_tag(
+                        concept, _error = _resolve_analysis_tag(
                             token, registry, facets=('task',), legacy_tags=True)
                     if concept is None and token.strip() == str(extracted_method_tag or '').strip():
-                        concept, _error = _taxonomy_tag(
+                        concept, _error = _resolve_analysis_tag(
                             token, registry, facets=('method',), legacy_tags=True)
                 else:
                     concept = _current_tag_concept(registry, token)
@@ -559,9 +559,9 @@ def parse_analysis(analysis, *, taxonomy=None, legacy_tags=False):
     r['engineeringScore'] = machine_summary['engineeringScore']
     r['confidence'] = machine_summary['confidence']
     if legacy_tags:
-        task_concept, _task_error = _taxonomy_tag(
+        task_concept, _task_error = _resolve_analysis_tag(
             extracted_task_tag, registry, facets=('task',), legacy_tags=True)
-        method_concept, _method_error = _taxonomy_tag(
+        method_concept, _method_error = _resolve_analysis_tag(
             extracted_method_tag, registry, facets=('method',), legacy_tags=True)
     else:
         task_concept = _current_tag_concept(registry, extracted_task_tag, 'task')

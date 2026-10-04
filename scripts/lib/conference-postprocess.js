@@ -6,14 +6,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const adapter = require('./conference-analysis-adapter.js');
-const tagCatalogApi = require('./paper-taxonomy.js');
+const tagCatalogApi = require('./tag-catalog.js');
 const identityApi = require('./paper-identity.js');
 const planApi = require('./conference-plan.js');
 const pageApi = require('./historical-page-staging.js');
 const fresh = require('./fresh-rewrite-run.js');
 const analysisEngine = require('../analysis-engine.js');
 const analysisContract = require('../analysis-contract.js');
-const tagRulesApi = require('./taxonomy-runtime.js');
+const tagRulesApi = require('./tag-rules.js');
 const sourceContextApi = require('./conference-source-context.js');
 
 const CONTRACT = 'conference-paper-page-staging-v1';
@@ -200,24 +200,24 @@ function getConsistentPublicationFields(paper) {
         }) || reparsed?.scoreValidation?.valid !== true) fail('canonical conference summary/document type/eight-dimensional score is incomplete');
     return value;
 }
-function resolve(taxonomy, label, facet, reasons, role) {
-    const found = tagCatalogApi.resolveLabelCandidates(taxonomy, label, facet);
+function resolve(tagCatalog, label, facet, reasons, role) {
+    const found = tagCatalogApi.resolveLabelCandidates(tagCatalog, label, facet);
     if (found.length !== 1 || found[0].status !== 'active') { reasons.push(`${role}:${found.length ? 'ambiguous-or-deprecated' : 'unknown'}:${label}`); return null; }
     return found[0];
 }
-function buildAssignment(loaded, taxonomy) {
+function buildAssignment(loaded, tagCatalog) {
     const paper = loaded.analysis.papers[0], input = getConsistentPublicationFields(paper), reasons = [], concepts = new Map();
-    const tagRules = tagRulesApi.createTagRules({ taxonomy });
+    const tagRules = tagRulesApi.createTagRules({ tagCatalog });
     const parsed = require('../utils.js').parseAnalysis(paper.analysis);
-    const taxonomyIssue = analysisContract.validateTaxonomyStageBinding(paper, { parsed, taxonomyRuntime: tagRules });
+    const tagStageProofIssue = analysisContract.validateTagStageProof(paper, { parsed, tagRules: tagRules });
     // A tag selection the current registry cannot resolve is not byte-level
     // integrity drift: it is exactly the `needs_taxonomy_review` case the
-    // taxonomy design promises (§6 "进入 taxonomy review"). Record it as an
+    // 标签 design promises (§6 "进入 标签 review"). Record it as an
     // explicit blocked assignment so the record joins the review queue and its
     // page is never rendered; every other seal replay failure stays fail-closed
     // with a hard integrity error.
     const unresolvedSelection = parsed?.taxonomyValidation?.valid !== true;
-    if (taxonomyIssue && !unresolvedSelection) fail(`current taxonomy seal is not replayable: ${taxonomyIssue}`);
+    if (tagStageProofIssue && !unresolvedSelection) fail(`current taxonomy seal is not replayable: ${tagStageProofIssue}`);
     if (unresolvedSelection) {
         for (const issue of parsed.taxonomyValidation.errors || []) {
             reasons.push(`selection:${String(issue).slice(0, 200)}`);
@@ -232,24 +232,24 @@ function buildAssignment(loaded, taxonomy) {
     };
     const primaryTaskLabel = input.primaryTaskTag || rawRoleTag('主任务标签');
     const primaryMethodLabel = input.primaryMethodTag || rawRoleTag('主方法标签');
-    const task = resolve(taxonomy, primaryTaskLabel, 'task', reasons, 'primary-task');
-    const method = resolve(taxonomy, primaryMethodLabel, 'method', reasons, 'primary-method');
+    const task = resolve(tagCatalog, primaryTaskLabel, 'task', reasons, 'primary-task');
+    const method = resolve(tagCatalog, primaryMethodLabel, 'method', reasons, 'primary-method');
     for (const label of input.tags) {
         const candidates = [task, method].filter(item => item && [item.preferredLabel.zh, item.preferredLabel.en, ...item.aliases]
             .some(value => tagCatalogApi.normalizeLabel(value) === tagCatalogApi.normalizeLabel(label)));
-        const concept = candidates.length === 1 ? candidates[0] : resolve(taxonomy, label, undefined, reasons, 'tag');
+        const concept = candidates.length === 1 ? candidates[0] : resolve(tagCatalog, label, undefined, reasons, 'tag');
         if (concept) concepts.set(concept.id, concept);
     }
     for (const item of [task, method]) if (item) concepts.set(item.id, item);
     if (!input.tags.includes(input.primaryTaskTag)) reasons.push('primary-task:not-in-tags');
     if (!input.tags.includes(input.primaryMethodTag)) reasons.push('primary-method:not-in-tags');
-    const ids = tagCatalogApi.pruneAncestors(taxonomy, [...concepts.keys()].sort()).sort();
+    const ids = tagCatalogApi.pruneAncestors(tagCatalog, [...concepts.keys()].sort()).sort();
     if ((task && !ids.includes(task.id)) || (method && !ids.includes(method.id))) reasons.push('primary-concept:ancestor-pruned');
     const blockedReasons = [...new Set(reasons)].sort(); const receipt = loaded.run.completionReceipt;
     const body = { contract: ASSIGNMENT_CONTRACT, version: VERSION, paperId: loaded.run.paperId,
         analysisExecutionId: loaded.run.executionId, analysisSha256: loaded.analysisFileSha256,
         completionReceiptSha256: receipt.receiptSha256, sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
-        registryVersion: tagRules.registryVersion, registrySha256: taxonomy.registrySha256,
+        registryVersion: tagRules.registryVersion, registrySha256: tagCatalog.registrySha256,
         selectionContract: tagRules.selectionContract, flatCompatContract: tagRules.flatCompatContract,
         status: blockedReasons.length ? 'blocked' : 'assigned', blockedReasons,
         primaryTaskId: blockedReasons.length ? null : task.id, primaryMethodId: blockedReasons.length ? null : method.id,
@@ -285,7 +285,7 @@ function implementationFingerprint() {
         publisherCommonSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'publish_common.py'), 8 * 1024 * 1024, 'conference shared publisher source').fileSha256,
         loaderSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'blog_entry_loader.py'), 2 * 1024 * 1024, 'conference renderer loader source').fileSha256,
         parserSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'utils.js'), 8 * 1024 * 1024, 'conference parser source').fileSha256,
-        taxonomySourceSha256: pageApi.readRegular(path.join(__dirname, 'paper-taxonomy.js'), 4 * 1024 * 1024, 'conference taxonomy source').fileSha256,
+        taxonomySourceSha256: pageApi.readRegular(path.join(__dirname, 'tag-catalog.js'), 4 * 1024 * 1024, 'conference taxonomy source').fileSha256,
         identitySourceSha256: pageApi.readRegular(path.join(__dirname, 'paper-identity.js'), 4 * 1024 * 1024, 'conference identity source').fileSha256 };
     const body = { contract: PROJECTION_CONTRACT, version: VERSION, ...sources };
     return { ...body, implementationSha256: stableHash(body) };
@@ -334,8 +334,8 @@ function buildFormulaEvidenceRecord(source) {
     return { ...body, evidenceSha256: stableHash(body) };
 }
 
-function buildConferencePageArtifacts(loaded, taxonomy, renderFn, implementation) {
-    const assignment = buildAssignment(loaded, taxonomy); if (assignment.status !== 'assigned') return { assignment };
+function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementation) {
+    const assignment = buildAssignment(loaded, tagCatalog); if (assignment.status !== 'assigned') return { assignment };
     const stem = safeStem(loaded), conferenceId = loaded.run.conference.id;
     const date = loaded.run.completionReceipt.completedAt.slice(0, 10);
     const packet = { paper: { ...structuredClone(loaded.analysis.papers[0]), paper_id: loaded.run.paperId }, taxonomy: assignment,
@@ -419,13 +419,13 @@ function stageDirectory(stagingRoot, executionId, registrySha256, implementation
 function rejectExtraStageFiles(directory, allowed) {
     const entries = fs.readdirSync(directory).sort(); if (entries.some(name => !allowed.includes(name))) fail('conference stage contains unexpected recovery content');
 }
-function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, apply = false, trustEvidence = false }, dependencies = {}) {
+function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, planHandle, sourceRoot, apply = false, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
-    const taxonomy = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(taxonomyFile);
-    const implementation = fingerprint(dependencies); const projected = buildConferencePageArtifacts(loaded, taxonomy, dependencies.render || render, implementation);
+    const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
+    const implementation = fingerprint(dependencies); const projected = buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
     if (apply) {
-        const directory = stageDirectory(stagingRoot, executionId, taxonomy.registrySha256, implementation.implementationSha256, true);
+        const directory = stageDirectory(stagingRoot, executionId, tagCatalog.registrySha256, implementation.implementationSha256, true);
         rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
         supersedeBlockedAssignment(directory, projected.assignment);
         pageApi.writeExact(path.join(directory, 'assignment.json'), projected.assignmentBytes || canonicalBytes(projected.assignment));
@@ -443,13 +443,13 @@ function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, plan
     if (projected.assignment.status !== 'assigned') return { status: 'blocked', assignment: projected.assignment };
     return { status: apply ? 'staged' : 'dry-run', manifest: projected.manifest, markdown: projected.pageBytes.toString('utf8') };
 }
-function loadStage({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
+function loadStage({ analysisRoot, executionId, tagCatalogPath, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
-    const taxonomy = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(taxonomyFile);
-    const implementation = fingerprint(dependencies); const expected = buildConferencePageArtifacts(loaded, taxonomy, dependencies.render || render, implementation);
+    const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
+    const implementation = fingerprint(dependencies); const expected = buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
     if (expected.assignment.status !== 'assigned') fail('current taxonomy projection is blocked');
-    const directory = stageDirectory(stagingRoot, executionId, taxonomy.registrySha256, implementation.implementationSha256); rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
+    const directory = stageDirectory(stagingRoot, executionId, tagCatalog.registrySha256, implementation.implementationSha256); rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
     const assignmentRecord = pageApi.readRegular(path.join(directory, 'assignment.json'), 16 * 1024 * 1024, 'conference taxonomy assignment');
     const manifestRecord = pageApi.readRegular(path.join(directory, 'manifest.json'), 16 * 1024 * 1024, 'conference page manifest');
     const pageRecord = pageApi.readRegular(path.join(directory, 'page.md'), 32 * 1024 * 1024, 'conference staged page');
@@ -740,19 +740,19 @@ function resourceLine(resource, paperId) {
     const http = resource.status === null ? '' : `（HTTP ${resource.status}）`;
     return `- ${labels[resource.type]}：${links} — ${statuses[resource.availability]}${http}`;
 }
-function aggregateHierarchy(taxonomy, memberConceptIds) {
+function aggregateHierarchy(tagCatalog, memberConceptIds) {
     // The hierarchy is always rebuilt from the exact registry bytes the batch
     // was staged against: the caller has already proven every staged page
     // sealed the same registrySha256, so a concept id this registry cannot
     // resolve is impossible — and fails closed here anyway.
-    if (!taxonomy || typeof taxonomy !== 'object' || !Array.isArray(taxonomy.facets)
-        || !Array.isArray(taxonomy.concepts) || typeof taxonomy.version !== 'string'
-        || !/^[a-f0-9]{64}$/.test(String(taxonomy.registrySha256 || ''))) {
+    if (!tagCatalog || typeof tagCatalog !== 'object' || !Array.isArray(tagCatalog.facets)
+        || !Array.isArray(tagCatalog.concepts) || typeof tagCatalog.version !== 'string'
+        || !/^[a-f0-9]{64}$/.test(String(tagCatalog.registrySha256 || ''))) {
         fail('taxonomy hierarchy requires the loaded registry bytes and their SHA');
     }
     if (!Array.isArray(memberConceptIds)) fail('aggregate member concept projections are required');
     const byId = new Map();
-    for (const concept of taxonomy.concepts) {
+    for (const concept of tagCatalog.concepts) {
         if (byId.has(concept.id)) fail('registry contains duplicate concept IDs');
         byId.set(concept.id, concept);
     }
@@ -791,7 +791,7 @@ function aggregateHierarchy(taxonomy, memberConceptIds) {
         return level;
     };
     const nodes = new Map();
-    for (const concept of taxonomy.concepts) {
+    for (const concept of tagCatalog.concepts) {
         const directCount = direct.get(concept.id) || 0;
         const subtreeCount = subtree.get(concept.id) || 0;
         if (!directCount && !subtreeCount) continue;
@@ -809,17 +809,17 @@ function aggregateHierarchy(taxonomy, memberConceptIds) {
         parent.children.push(node);
     }
     for (const node of nodes.values()) node.children.sort(compare);
-    return { contract: HIERARCHY_CONTRACT, registryVersion: taxonomy.version,
-        registrySha256: taxonomy.registrySha256, memberCount: memberConceptIds.length,
+    return { contract: HIERARCHY_CONTRACT, registryVersion: tagCatalog.version,
+        registrySha256: tagCatalog.registrySha256, memberCount: memberConceptIds.length,
         // 每分面一棵树；只有计数 > 0 的节点存在，空分面保留为 nodes: []。
-        facets: taxonomy.facets.map(facet => ({ id: facet.id, label: facet.label,
-            nodes: taxonomy.concepts.filter(concept => concept.facet === facet.id
+        facets: tagCatalog.facets.map(facet => ({ id: facet.id, label: facet.label,
+            nodes: tagCatalog.concepts.filter(concept => concept.facet === facet.id
                 && concept.broaderId === null && nodes.has(concept.id))
                 .map(concept => nodes.get(concept.id)).sort(compare) })) };
 }
 
 function tagHref(label) {
-    // Hugo 的 taxonomy 词页 URL 走 URLize：ASCII 大小写被折成小写（线上
+    // Hugo 的 标签 词页 URL 走 URLize：ASCII 大小写被折成小写（线上
     // /tags/Transformer/ 404、/tags/transformer/ 200），空格折成 '-'；中文
     // 标签则按 UTF-8 百分号编码（/tags/%E9%B2%81%E6%A3%92%E6%80%A7/ 200）。
     // 这里复刻同一规则，保证 8 个英文专名标签的链接不会打到 404。
@@ -847,13 +847,13 @@ function hierarchyLines(hierarchy) {
     return lines;
 }
 
-function aggregateConference({ analysisRoot, executionIds, taxonomyFile, stagingRoot, aggregateRoot,
+function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagingRoot, aggregateRoot,
     planHandle, sourceRoot, preservedStages = {}, apply = false, trustEvidence = false }, dependencies = {}) {
     if (!Array.isArray(executionIds) || !executionIds.length || new Set(executionIds).size !== executionIds.length
         || executionIds.some(id => !UUID_RE.test(id))) fail('unique selection execution IDs required');
     const authenticated = planProof(planHandle, dependencies); const expectedIds = authenticated.proof.paperIds;
     if (executionIds.length !== expectedIds.length) fail('analysis execution set must cover the complete authenticated selected member set');
-    const taxonomy = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(taxonomyFile); const byPaper = new Map();
+    const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath); const byPaper = new Map();
     for (const executionId of executionIds) {
         const preserved = Object.hasOwn(preservedStages, executionId) ? preservedStages[executionId] : null;
         const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
@@ -868,7 +868,7 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
     }
     const stages = expectedIds.map(paperId => {
         const item = byPaper.get(paperId); const staged = item.staged || loadStage({ analysisRoot, executionId: item.executionId,
-            taxonomyFile, stagingRoot, planHandle, sourceRoot, trustEvidence }, dependencies);
+            tagCatalogPath, stagingRoot, planHandle, sourceRoot, trustEvidence }, dependencies);
         return { ...staged, completed: item.completed };
     });
     if (new Set(stages.map(item => item.manifest.pagePath)).size !== stages.length) fail('selected pages have duplicate path ownership');
@@ -892,15 +892,15 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
         pageManifestFileSha256: item.manifestFileSha256, assignmentFileSha256: item.assignmentFileSha256 }))
         .sort((left, right) => right.score - left.score || left.paperId.localeCompare(right.paperId))
         .map((item, index) => ({ rank: index + 1, ...item }));
-    const taxonomyProjection = members.length ? stages[0].manifest.taxonomy : null;
-    if (!taxonomyProjection || stages.some(item => item.manifest.taxonomy.registrySha256 !== taxonomy.registrySha256
-        || item.manifest.taxonomy.registryVersion !== taxonomyProjection.registryVersion
-        || item.manifest.taxonomy.selectionContract !== taxonomyProjection.selectionContract
-        || item.manifest.taxonomy.flatCompatContract !== taxonomyProjection.flatCompatContract)) fail('aggregate taxonomy metadata is missing or mixed');
+    const aggregateTagMetadata = members.length ? stages[0].manifest.taxonomy : null;
+    if (!aggregateTagMetadata || stages.some(item => item.manifest.taxonomy.registrySha256 !== tagCatalog.registrySha256
+        || item.manifest.taxonomy.registryVersion !== aggregateTagMetadata.registryVersion
+        || item.manifest.taxonomy.selectionContract !== aggregateTagMetadata.selectionContract
+        || item.manifest.taxonomy.flatCompatContract !== aggregateTagMetadata.flatCompatContract)) fail('aggregate taxonomy metadata is missing or mixed');
     // 混合防线（同一 registrySha256）成立之后才允许把成员 conceptIds 折成
     // 多级树：directCount = 成员页面直接标记该概念的篇数，subtreeCount = 该
     // 概念及其全部后代按成员去重的篇数（与检索的祖先召回语义一致）。
-    const hierarchy = aggregateHierarchy(taxonomy,
+    const hierarchy = aggregateHierarchy(tagCatalog,
         stages.map(item => item.manifest.taxonomy.conceptIds));
     const directions = [...members.reduce((counts, item) => counts.set(item.primaryTask,
         (counts.get(item.primaryTask) || 0) + 1), new Map()).entries()]
@@ -933,10 +933,10 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
         `tags: ${JSON.stringify(aggregateTags)}`, `categories: ${JSON.stringify([`${conferenceId} 论文`])}`,
         `description: "共收录 ${members.length} 篇 ${conferenceId} 会议论文的 Reader 深度解读"`,
         'paper_digest_page_type: index', `paper_digest_reader_quality: "${READER_FACING_CONTRACT}"`,
-        `paper_digest_taxonomy_contract: "${taxonomyProjection.flatCompatContract}"`,
-        `paper_digest_taxonomy_selection_contract: "${taxonomyProjection.selectionContract}"`,
-        `paper_digest_taxonomy_registry_version: "${taxonomyProjection.registryVersion}"`,
-        `paper_digest_taxonomy_registry_sha256: "${taxonomy.registrySha256}"`,
+        `paper_digest_taxonomy_contract: "${aggregateTagMetadata.flatCompatContract}"`,
+        `paper_digest_taxonomy_selection_contract: "${aggregateTagMetadata.selectionContract}"`,
+        `paper_digest_taxonomy_registry_version: "${aggregateTagMetadata.registryVersion}"`,
+        `paper_digest_taxonomy_registry_sha256: "${tagCatalog.registrySha256}"`,
         `paper_digest_taxonomy_concepts: ${JSON.stringify(directionConcepts)}`,
         'paper_digest_taxonomy_scope: "aggregate-primary-task-counts"', '---', '', `# ${conferenceId} 论文深度解读`, '',
         `本汇总收录 authenticated plan 选择集内全部 ${members.length} 篇已完成分析、重标和单篇 staging 的论文。`, '',
@@ -971,16 +971,16 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
     const selectionSetSha256 = stableHash(selection);
     const aggregateImplementationSha256 = fingerprint(dependencies).implementationSha256;
     const aggregateId = stableHash({ planProofSha256: authenticated.proof.proofSha256,
-        registrySha256: taxonomy.registrySha256, selectionSetSha256, aggregateImplementationSha256 }).slice(0, 32);
+        registrySha256: tagCatalog.registrySha256, selectionSetSha256, aggregateImplementationSha256 }).slice(0, 32);
     const body = { contract: AGGREGATE_CONTRACT, version: VERSION, status: 'complete', aggregateId, conferenceId, date: aggregateDate,
         plan: authenticated.proof, readerQuality: READER_FACING_CONTRACT,
-        taxonomy: { contract: taxonomyProjection.flatCompatContract, selectionContract: taxonomyProjection.selectionContract,
-            registryVersion: taxonomyProjection.registryVersion, registrySha256: taxonomy.registrySha256,
+        taxonomy: { contract: aggregateTagMetadata.flatCompatContract, selectionContract: aggregateTagMetadata.selectionContract,
+            registryVersion: aggregateTagMetadata.registryVersion, registrySha256: tagCatalog.registrySha256,
             scope: 'aggregate-primary-task-counts' },
         primaryTaskCounts: directions.map(([label, count]) => ({ label, count })),
-        // 兼容：primaryTaskCounts / taxonomy 头保持原样，多级统计只新增字段。
+        // 兼容：primaryTaskCounts / 标签 头保持原样，多级统计只新增字段。
         taxonomyHierarchy: hierarchy,
-        registrySha256: taxonomy.registrySha256, selection, selectionSetSha256, members,
+        registrySha256: tagCatalog.registrySha256, selection, selectionSetSha256, members,
         memberSetSha256: stableHash(members), pagePath: `content/posts/conference-${conferenceId}.md`, markdown,
         markdownSha256: sha256(Buffer.from(markdown)) };
     const manifest = { ...body, manifestSha256: stableHash(body) };

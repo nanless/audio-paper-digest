@@ -158,17 +158,19 @@ The active commands and exact absolute-path arguments are documented in the Chin
 See [Script responsibilities](docs/en/scripts.md) for arguments and recovery semantics, or
 [`scripts/README.md`](scripts/README.md) for a compact file-to-responsibility index.
 
-## Taxonomy and read-only historical preview
+## Tag system and read-only historical preview
 
 ```bash
-npm run taxonomy:validate
-npm run taxonomy:preview
-npm run taxonomy:serve
+npm run tags:validate
+npm run tags:preview
+npm run tags:serve
 ```
 
-A shared registry defines stable IDs, task ancestry and facets. The preview reads the configured Hugo checkout, retains original and unresolved tags, and supports parent queries, OR within a facet and AND across facets. These are **legacy-label mappings, not reviewed semantic reclassifications**. No article, score or old tag URL is changed and no paper-model API is called. The loopback server only serves static preview assets, not a local AI companion.
+The shared tag catalog defines stable IDs, parent relationships, and classification dimensions such as task and method. The preview reads the configured Hugo checkout and retains both original tags and tags that could not be matched to the catalog.
 
-See the [implementation plan](docs/tag-taxonomy-implementation.md) and [taxonomy design](docs/tag-taxonomy-design.md) (Chinese).
+You can search by a parent tag. When you select several tags in one dimension, matching any one is enough; conditions from different dimensions must all match. The results show how old labels map to the catalog. **They do not establish that a paper has been semantically reclassified and reviewed.** The preview leaves articles, scores, and existing tag URLs unchanged and makes no paper-model API requests. Its static server runs only on the local loopback address.
+
+See the [implementation plan](docs/tag-system-implementation.md) and [tag design](docs/tag-system-design.md) (Chinese).
 
 ## Where to resume after a failure
 

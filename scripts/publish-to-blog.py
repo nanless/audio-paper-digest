@@ -76,9 +76,9 @@ from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_require
 from runtime_guard import require_external_runtime
 from llm_usage import with_llm_usage_context
 from utils import strip_md, parse_analysis
-from paper_taxonomy import (
-    TAXONOMY_FLAT_COMPAT_CONTRACT,
-    TAXONOMY_SELECTION_CONTRACT,
+from tag_catalog import (
+    TAG_FLAT_COMPAT_CONTRACT,
+    TAG_SELECTION_CONTRACT,
     load_tag_catalog,
 )
 from tutorial_payload_verifier import (
@@ -161,7 +161,7 @@ MANUAL_REVIEW_MODE = 'manual_complete'
 FINAL_PAGE_ARTIFACT_VERSION = 1
 RESEARCHER_WORKBENCH_CONTRACT = 'researcher-workbench-v1'
 RESEARCHER_SIDECAR_CONTRACT = 'researcher-sidecars-v1'
-FLAT_TAXONOMY_COMPAT_CONTRACT = TAXONOMY_FLAT_COMPAT_CONTRACT
+FLAT_TAG_COMPAT_CONTRACT = TAG_FLAT_COMPAT_CONTRACT
 _PAGE_TAG_CATALOG = load_tag_catalog()
 _PAGE_ACTIVE_TAGS_BY_ID = {
     item['id']: item for item in _PAGE_TAG_CATALOG['concepts']
@@ -170,11 +170,11 @@ _PAGE_ACTIVE_TAGS_BY_ID = {
 # 只读 registry 快照：博客端（Hugo 模板 + 浏览器搜索）需要 id/facet/zh/en/
 # aliases/ancestorIds，而页面 frontmatter 只带 {id, facet, label}。快照字节
 # 只由 registry 决定，因此与 ``paper_digest_taxonomy_registry_sha256`` 同源。
-TAXONOMY_REGISTRY_SNAPSHOT_CONTRACT = 'paper-taxonomy-registry-snapshot-v1'
+TAG_CATALOG_SNAPSHOT_CONTRACT = 'paper-taxonomy-registry-snapshot-v1'
 # Hugo 只把 ``data/`` 当模板输入，不会发布到 ``public/``；浏览器端搜索因此
 # 还需要一份字节完全相同的静态副本。
-TAXONOMY_REGISTRY_SNAPSHOT_RELATIVE = Path('data') / 'taxonomy-registry.json'
-TAXONOMY_REGISTRY_STATIC_RELATIVE = Path('static') / 'data' / 'taxonomy-registry.json'
+TAG_CATALOG_SNAPSHOT_RELATIVE = Path('data') / 'taxonomy-registry.json'
+TAG_CATALOG_STATIC_RELATIVE = Path('static') / 'data' / 'taxonomy-registry.json'
 RESEARCHER_SIDECAR_FILENAMES = (
     'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json',
 )
@@ -2738,16 +2738,16 @@ def _researcher_public_url(relative):
     return f'{base_path}/{relative.relative_to("static").as_posix()}'
 
 
-def build_taxonomy_registry_snapshot(taxonomy=None):
+def build_tag_catalog_snapshot(tag_catalog=None):
     """Fold the read-only registry into the compact blog-search snapshot.
 
     Each concept carries ``id``/``facet``/``zh``/``en``/``aliases`` plus
     ``ancestorIds`` ordered root first, so the blog can recall a child paper
     from a parent concept (e.g. ``method.lora`` from 参数高效微调) and match
     registry aliases (e.g. 说话人日志 → task.diarization) without ever
-    re-deriving taxonomy semantics client-side.
+    re-deriving tag meanings and hierarchy client-side.
     """
-    registry = _PAGE_TAG_CATALOG if taxonomy is None else taxonomy
+    registry = _PAGE_TAG_CATALOG if tag_catalog is None else tag_catalog
     if not isinstance(registry, dict):
         raise PublishDataValidationError('taxonomy registry 快照输入非法')
     registry_sha256 = registry.get('registrySha256')
@@ -2808,14 +2808,14 @@ def build_taxonomy_registry_snapshot(taxonomy=None):
             parent_id = parent[1].get('broaderId')
         record['ancestorIds'] = list(reversed(chain))
     return {
-        'contract': TAXONOMY_REGISTRY_SNAPSHOT_CONTRACT,
+        'contract': TAG_CATALOG_SNAPSHOT_CONTRACT,
         'registryVersion': registry_version,
         'registrySha256': registry_sha256,
         'concepts': ordered,
     }
 
 
-def taxonomy_registry_snapshot_bytes(snapshot):
+def tag_catalog_snapshot_bytes(snapshot):
     """Canonical, timestamp-free bytes: identical registry ⇒ identical file."""
     if not isinstance(snapshot, dict):
         raise PublishDataValidationError('taxonomy registry 快照对象非法')
@@ -2825,10 +2825,10 @@ def taxonomy_registry_snapshot_bytes(snapshot):
     ).encode('utf-8')
 
 
-def _validate_taxonomy_snapshot(snapshot):
+def _validate_tag_catalog_snapshot(snapshot):
     """Validate frozen projection shape without guessing a missing parent chain."""
     if (not isinstance(snapshot, dict)
-            or snapshot.get('contract') != TAXONOMY_REGISTRY_SNAPSHOT_CONTRACT
+            or snapshot.get('contract') != TAG_CATALOG_SNAPSHOT_CONTRACT
             or not re.fullmatch(r'[0-9a-f]{64}', str(snapshot.get('registrySha256') or ''))
             or not isinstance(snapshot.get('registryVersion'), str)
             or not snapshot['registryVersion']
@@ -2871,7 +2871,7 @@ def _validate_taxonomy_snapshot(snapshot):
     return snapshot
 
 
-def _validate_taxonomy_catalog(catalog):
+def _validate_tag_version_catalog(catalog):
     if (not isinstance(catalog, dict)
             or catalog.get('contract') != 'paper-taxonomy-version-catalog-v1'
             or not isinstance(catalog.get('snapshots'), list) or not catalog['snapshots']
@@ -2879,7 +2879,7 @@ def _validate_taxonomy_catalog(catalog):
         raise PublishDataValidationError('taxonomy version catalog 非法')
     versions = {}
     for snapshot in catalog['snapshots']:
-        _validate_taxonomy_snapshot(snapshot)
+        _validate_tag_catalog_snapshot(snapshot)
         sha = snapshot['registrySha256']
         if sha in versions:
             raise PublishDataValidationError('taxonomy version catalog 重复 SHA')
@@ -2889,7 +2889,7 @@ def _validate_taxonomy_catalog(catalog):
     return versions
 
 
-def _validate_taxonomy_presentation_policy(policy):
+def _validate_tag_display_policy(policy):
     fields = {'contract', 'baseRegistrySha256', 'baseSnapshotSha256',
               'preferredRegistrySha256', 'preferredSnapshotSha256',
               'preferredProjectionSha256'}
@@ -2903,7 +2903,7 @@ def _validate_taxonomy_presentation_policy(policy):
     return policy
 
 
-def _taxonomy_historical_projection_sha256(snapshot):
+def _historical_tag_prompt_text_sha256(snapshot):
     # The public historical projection has a fixed nine-facet order.  Concept
     # IDs are ASCII.  Rebuilt bytes must match the explicitly approved digest;
     # an unrecognized ordering/projection can never silently select a version.
@@ -2928,7 +2928,7 @@ def _taxonomy_historical_projection_sha256(snapshot):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _taxonomy_presentation_selection(repo, current, versions):
+def _select_tag_display_version(repo, current, versions):
     """An explicit, byte-bound display choice never changes per-paper signing."""
     relatives = ['data/taxonomy-presentation-policy.json',
                  'static/data/taxonomy-presentation-policy.json']
@@ -2958,22 +2958,22 @@ def _taxonomy_presentation_selection(repo, current, versions):
             result[key] = value
         return result
     try:
-        policy = _validate_taxonomy_presentation_policy(
+        policy = _validate_tag_display_policy(
             json.loads(raw_mirrors[0].decode('utf-8'), object_pairs_hook=unique_object))
     except (ValueError, UnicodeError) as exc:
         raise PublishDataValidationError('taxonomy presentation policy JSON 非法') from exc
     base_sha = policy['baseRegistrySha256']
     preferred_sha = policy['preferredRegistrySha256']
     if (current['registrySha256'] != base_sha
-            or hashlib.sha256(taxonomy_registry_snapshot_bytes(current)).hexdigest()
+            or hashlib.sha256(tag_catalog_snapshot_bytes(current)).hexdigest()
             != policy['baseSnapshotSha256']):
         raise PublishDataValidationError('taxonomy presentation policy 不匹配实际签发来源')
     preferred = versions.get(preferred_sha)
     if preferred is None:
         raise PublishDataValidationError('taxonomy presentation policy 缺少冻结首选快照')
-    raw = taxonomy_registry_snapshot_bytes(preferred)
+    raw = tag_catalog_snapshot_bytes(preferred)
     if (hashlib.sha256(raw).hexdigest() != policy['preferredSnapshotSha256']
-            or _taxonomy_historical_projection_sha256(preferred)
+            or _historical_tag_prompt_text_sha256(preferred)
             != policy['preferredProjectionSha256']):
         raise PublishDataValidationError('taxonomy presentation policy 快照/投影 SHA 漂移')
     if preferred['concepts'][:len(current['concepts'])] != current['concepts']:
@@ -2983,13 +2983,13 @@ def _taxonomy_presentation_selection(repo, current, versions):
     for prefix in ('data', 'static/data'):
         if read_regular(f'{prefix}/taxonomy-snapshots/{preferred_sha}.json') != raw:
             raise PublishDataValidationError('taxonomy presentation policy 首选归档字节不闭合')
-        catalog = _read_taxonomy_asset(repo, f'{prefix}/taxonomy-catalog.json')
-        if catalog is None or _validate_taxonomy_catalog(catalog).get(preferred_sha) != preferred:
+        catalog = _read_tag_catalog_file(repo, f'{prefix}/taxonomy-catalog.json')
+        if catalog is None or _validate_tag_version_catalog(catalog).get(preferred_sha) != preferred:
             raise PublishDataValidationError('taxonomy presentation policy 首选 catalog 不闭合')
     return preferred, dict(zip(relatives, raw_mirrors))
 
 
-def _taxonomy_asset_relative(relative):
+def _is_tag_catalog_file_path(relative):
     parts = Path(relative).parts
     if Path(relative).is_absolute() or '..' in parts or '\\' in str(relative):
         return False
@@ -3004,7 +3004,7 @@ def _taxonomy_asset_relative(relative):
                 and re.fullmatch(r'[a-f0-9]{64}\.json', parts[-1]))
 
 
-def _read_taxonomy_asset(repo, relative):
+def _read_tag_catalog_file(repo, relative):
     target = repo / relative
     try:
         target.resolve().relative_to(repo)
@@ -3022,26 +3022,26 @@ def _read_taxonomy_asset(repo, relative):
         raise PublishDataValidationError('taxonomy asset JSON 非法') from exc
 
 
-def taxonomy_registry_asset_payloads(blog_repo=None):
+def tag_catalog_file_contents(blog_repo=None):
     """Prepare the complete immutable history and current mirrors before writing."""
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
-    current = _validate_taxonomy_snapshot(build_taxonomy_registry_snapshot())
+    current = _validate_tag_catalog_snapshot(build_tag_catalog_snapshot())
     versions = {}
     def retain(snapshot):
-        _validate_taxonomy_snapshot(snapshot)
+        _validate_tag_catalog_snapshot(snapshot)
         sha = snapshot['registrySha256']
         if sha in versions and versions[sha] != snapshot:
             raise PublishDataValidationError(f'taxonomy immutable SHA 内容冲突: {sha}')
         versions[sha] = snapshot
     catalogs = []
     for prefix in ('data', 'static/data'):
-        catalog = _read_taxonomy_asset(repo, f'{prefix}/taxonomy-catalog.json')
+        catalog = _read_tag_catalog_file(repo, f'{prefix}/taxonomy-catalog.json')
         if catalog is not None:
-            _validate_taxonomy_catalog(catalog)
+            _validate_tag_version_catalog(catalog)
             catalogs.append(catalog)
             for snapshot in catalog['snapshots']:
                 retain(snapshot)
-        snapshot = _read_taxonomy_asset(repo, f'{prefix}/taxonomy-registry.json')
+        snapshot = _read_tag_catalog_file(repo, f'{prefix}/taxonomy-registry.json')
         if snapshot is not None:
             retain(snapshot)
         archive = repo / prefix / 'taxonomy-snapshots'
@@ -3051,30 +3051,30 @@ def taxonomy_registry_asset_payloads(blog_repo=None):
             for target in sorted(archive.iterdir()):
                 if not re.fullmatch(r'[a-f0-9]{64}\.json', target.name):
                     raise PublishDataValidationError('taxonomy archive 含非受控文件')
-                snapshot = _read_taxonomy_asset(repo, target.relative_to(repo))
-                _validate_taxonomy_snapshot(snapshot)
+                snapshot = _read_tag_catalog_file(repo, target.relative_to(repo))
+                _validate_tag_catalog_snapshot(snapshot)
                 if target.stem != snapshot['registrySha256']:
                     raise PublishDataValidationError('taxonomy archive 文件名 SHA 不匹配')
                 retain(snapshot)
     if len(catalogs) == 2 and catalogs[0] != catalogs[1]:
         raise PublishDataValidationError('taxonomy catalog data/static 镜像漂移')
     retain(current)
-    display, policy_assets = _taxonomy_presentation_selection(repo, current, versions)
+    display, policy_assets = _select_tag_display_version(repo, current, versions)
     catalog = {'contract': 'paper-taxonomy-version-catalog-v1',
                'currentSha256': display['registrySha256'],
                'snapshots': [versions[sha] for sha in sorted(versions)]}
     assets = dict(policy_assets)
     for prefix in ('data', 'static/data'):
-        assets[f'{prefix}/taxonomy-registry.json'] = taxonomy_registry_snapshot_bytes(display)
-        assets[f'{prefix}/taxonomy-catalog.json'] = taxonomy_registry_snapshot_bytes(catalog)
+        assets[f'{prefix}/taxonomy-registry.json'] = tag_catalog_snapshot_bytes(display)
+        assets[f'{prefix}/taxonomy-catalog.json'] = tag_catalog_snapshot_bytes(catalog)
         for sha, snapshot in sorted(versions.items()):
-            assets[f'{prefix}/taxonomy-snapshots/{sha}.json'] = taxonomy_registry_snapshot_bytes(snapshot)
+            assets[f'{prefix}/taxonomy-snapshots/{sha}.json'] = tag_catalog_snapshot_bytes(snapshot)
     return assets
 
 
-def prepare_taxonomy_registry_staged_assets(stage_root, blog_repo=None, *, single_page=False,
+def prepare_tag_catalog_staged_files(stage_root, blog_repo=None, *, single_page=False,
                                           installation=None):
-    """Taxonomy writes share the generation journal, receipt and exact commit delta."""
+    """将词表文件写入与页面共用的暂存区，并绑定安装记录、审查凭证和本次精确文件差异。"""
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
     stage = Path(stage_root).resolve()
     if installation is not None:
@@ -3085,12 +3085,12 @@ def prepare_taxonomy_registry_staged_assets(stage_root, blog_repo=None, *, singl
         if not isinstance(records, list):
             raise PublishDataValidationError('taxonomy installation journal 非法')
         selected = [record for record in records if isinstance(record, dict)
-                    and _taxonomy_asset_relative(record.get('path', ''))]
+                    and _is_tag_catalog_file_path(record.get('path', ''))]
         if single_page:
             if selected:
                 raise PublishDataValidationError('单篇 journal 不得安装全站 taxonomy')
             return []
-        expected = taxonomy_registry_asset_payloads(stage)
+        expected = tag_catalog_file_contents(stage)
         if {record['path'] for record in selected} != set(expected):
             raise PublishDataValidationError('taxonomy journal staging 资产集合不闭合')
         paths = []
@@ -3105,7 +3105,7 @@ def prepare_taxonomy_registry_staged_assets(stage_root, blog_repo=None, *, singl
                 raise PublishDataValidationError('taxonomy journal staging 字节不匹配')
             paths.append(target)
         return paths
-    assets = taxonomy_registry_asset_payloads(repo)
+    assets = tag_catalog_file_contents(repo)
     if single_page:
         if any(not (repo / relative).is_file() or (repo / relative).read_bytes() != raw
                for relative, raw in assets.items()):
@@ -3125,7 +3125,7 @@ def prepare_taxonomy_registry_staged_assets(stage_root, blog_repo=None, *, singl
     return paths
 
 
-def export_taxonomy_registry_snapshot(blog_repo=None):
+def export_tag_catalog_files(blog_repo=None):
     """Write the registry snapshot into the blog repo (read-only wrt registry).
 
     Returns the paths actually rewritten.  Unchanged bytes are left untouched so
@@ -3135,7 +3135,7 @@ def export_taxonomy_registry_snapshot(blog_repo=None):
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
     if not repo.is_dir():
         return []
-    assets = taxonomy_registry_asset_payloads(repo)
+    assets = tag_catalog_file_contents(repo)
     written = []
     for relative, raw in assets.items():
         target = repo / relative
@@ -3146,10 +3146,10 @@ def export_taxonomy_registry_snapshot(blog_repo=None):
     return written
 
 
-def build_flat_taxonomy_compat_metadata(parsed, *, required=False):
-    """Bind current taxonomy semantics while retaining Hugo's flat ``tags`` field.
+def build_flat_tag_compat_metadata(parsed, *, required=False):
+    """Bind current tag meanings and hierarchy while retaining Hugo's flat ``tags`` field.
 
-    Legacy maintenance callers may omit current taxonomy proof. New production
+    Legacy maintenance callers may omit current tag selection proof. New production
     inputs are validated before rendering and therefore always take this path.
     Once a payload claims current validity, every ID, label, facet and role is
     replayed against the exact registry bytes instead of trusting cached fields.
@@ -3190,8 +3190,8 @@ def build_flat_taxonomy_compat_metadata(parsed, *, required=False):
             or primary_task_id not in concept_ids or primary_method_id not in concept_ids:
         raise PublishDataValidationError('页面 taxonomy 主任务/主方法角色无法重放')
     return {
-        'contract': FLAT_TAXONOMY_COMPAT_CONTRACT,
-        'selectionContract': TAXONOMY_SELECTION_CONTRACT,
+        'contract': FLAT_TAG_COMPAT_CONTRACT,
+        'selectionContract': TAG_SELECTION_CONTRACT,
         'registryVersion': _PAGE_TAG_CATALOG['version'],
         'registrySha256': _PAGE_TAG_CATALOG['registrySha256'],
         'primaryTaskId': primary_task_id,
@@ -3254,8 +3254,8 @@ def build_researcher_workbench_bundle(
         raw_primary_task.lstrip('#'),
         'researcher workbench primaryTask', maximum=200,
     )
-    taxonomy = build_flat_taxonomy_compat_metadata(pa)
-    primary_method = taxonomy['primaryMethod'] if taxonomy else None
+    tag_metadata = build_flat_tag_compat_metadata(pa)
+    primary_method = tag_metadata['primaryMethod'] if tag_metadata else None
     rank_bucket = _validated_workbench_text(
         pa.get('rankBucket'), 'researcher workbench rankBucket', maximum=100,
     )
@@ -3286,7 +3286,7 @@ def build_researcher_workbench_bundle(
         'abstractSha256': abstract_sha,
         'assessment': {
             'primaryTask': primary_task,
-            **({'primaryMethod': primary_method, 'taxonomy': taxonomy} if taxonomy else {}),
+            **({'primaryMethod': primary_method, 'taxonomy': tag_metadata} if tag_metadata else {}),
             'score': score,
             'rankBucket': rank_bucket,
             'documentType': document_type,
@@ -3341,7 +3341,7 @@ def build_researcher_workbench_bundle(
         'authors': authors,
         'primaryTask': primary_task,
         'primaryMethod': primary_method,
-        'taxonomy': taxonomy,
+        'taxonomy': tag_metadata,
         'score': score,
         'rankBucket': rank_bucket,
         'documentType': document_type,
@@ -3379,17 +3379,17 @@ def _researcher_workbench_frontmatter(bundle):
         'null' if identity['versionedId'] is None
         else json.dumps(identity['versionedId'], ensure_ascii=False)
     )
-    taxonomy = bundle.get('taxonomy')
-    taxonomy_marker = ''
-    if taxonomy:
-        taxonomy_marker = (
-            f'paper_digest_taxonomy_contract: "{taxonomy["contract"]}"\n'
-            f'paper_digest_taxonomy_selection_contract: "{taxonomy["selectionContract"]}"\n'
-            f'paper_digest_taxonomy_registry_version: "{taxonomy["registryVersion"]}"\n'
-            f'paper_digest_taxonomy_registry_sha256: "{taxonomy["registrySha256"]}"\n'
+    tag_metadata = bundle.get('taxonomy')
+    tag_frontmatter = ''
+    if tag_metadata:
+        tag_frontmatter = (
+            f'paper_digest_taxonomy_contract: "{tag_metadata["contract"]}"\n'
+            f'paper_digest_taxonomy_selection_contract: "{tag_metadata["selectionContract"]}"\n'
+            f'paper_digest_taxonomy_registry_version: "{tag_metadata["registryVersion"]}"\n'
+            f'paper_digest_taxonomy_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
             f'paper_digest_taxonomy_concepts: '
-            f'{json.dumps(taxonomy["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}\n'
-            f'paper_digest_primary_method: {json.dumps(taxonomy["primaryMethod"], ensure_ascii=False)}\n'
+            f'{json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}\n'
+            f'paper_digest_primary_method: {json.dumps(tag_metadata["primaryMethod"], ensure_ascii=False)}\n'
         )
     return (
         f'paper_digest_workbench_contract: "{RESEARCHER_WORKBENCH_CONTRACT}"\n'
@@ -3400,7 +3400,7 @@ def _researcher_workbench_frontmatter(bundle):
         f'paper_digest_arxiv_abs_url: {json.dumps(identity["absUrl"], ensure_ascii=False)}\n'
         f'paper_digest_arxiv_pdf_url: {json.dumps(identity["pdfUrl"], ensure_ascii=False)}\n'
         f'paper_digest_primary_task: {json.dumps(bundle["primaryTask"], ensure_ascii=False)}\n'
-        f'{taxonomy_marker}'
+        f'{tag_frontmatter}'
         f'paper_digest_score: {json.dumps(bundle["score"], allow_nan=False)}\n'
         f'paper_digest_rank_bucket: {json.dumps(bundle["rankBucket"], ensure_ascii=False)}\n'
         f'paper_digest_document_type: {json.dumps(bundle["documentType"], ensure_ascii=False)}\n'
@@ -3448,15 +3448,15 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
         'paper_digest_sidecars': bundle['sidecarRecords'],
         'description': bundle['oneSentenceThesis'],
     }
-    taxonomy = bundle.get('taxonomy')
-    if taxonomy:
+    tag_metadata = bundle.get('taxonomy')
+    if tag_metadata:
         expected.update({
-            'paper_digest_taxonomy_contract': taxonomy['contract'],
-            'paper_digest_taxonomy_selection_contract': taxonomy['selectionContract'],
-            'paper_digest_taxonomy_registry_version': taxonomy['registryVersion'],
-            'paper_digest_taxonomy_registry_sha256': taxonomy['registrySha256'],
-            'paper_digest_taxonomy_concepts': taxonomy['concepts'],
-            'paper_digest_primary_method': taxonomy['primaryMethod'],
+            'paper_digest_taxonomy_contract': tag_metadata['contract'],
+            'paper_digest_taxonomy_selection_contract': tag_metadata['selectionContract'],
+            'paper_digest_taxonomy_registry_version': tag_metadata['registryVersion'],
+            'paper_digest_taxonomy_registry_sha256': tag_metadata['registrySha256'],
+            'paper_digest_taxonomy_concepts': tag_metadata['concepts'],
+            'paper_digest_primary_method': tag_metadata['primaryMethod'],
         })
     for field, value in expected.items():
         if frontmatter.get(field) != value:
@@ -3859,12 +3859,11 @@ def _detailed_core_summary_semantic_issue(summary):
 
 
 def _validated_detailed_core_summary(paper, parsed):
-    """Return the current detailed summary, or None for pre-v3 records.
+    """核验详细摘要的正文和阶段记录，并返回摘要文本。
 
-    The reader plan's one-sentence thesis remains page metadata/description.
-    Once the analysis declares the v3 summary contract, however, the visible
-    ``核心摘要`` must replay the separately sealed canonical section instead
-    of collapsing it back to that short thesis.
+    记录未声明当前详细摘要协议时，本函数返回 None。声明了该协议后，
+    页面必须使用分析正文中经过本函数核验的详细摘要，不能改用编辑计划的一句话摘要。
+    一句话摘要仍供页面元数据和简介使用；本函数不代表整篇分析或页面已通过所有检查。
     """
     manifest = paper.get('analysisManifest')
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
@@ -3922,7 +3921,7 @@ def _validated_detailed_core_summary(paper, parsed):
     tag_contract = contracts.get('taxonomy')
     has_tag_stage = isinstance(stages, dict) and 'taxonomySeal' in stages
     if tag_contract is not None or has_tag_stage:
-        if tag_contract != TAXONOMY_SELECTION_CONTRACT \
+        if tag_contract != TAG_SELECTION_CONTRACT \
                 or not isinstance(tag_stage, dict) \
                 or tag_stage.get('status') not in {'complete', 'not_needed'} \
                 or not re.fullmatch(
@@ -3953,9 +3952,9 @@ def _validated_detailed_core_summary(paper, parsed):
                 '现代 Reader 的详细核心摘要无法从 taxonomySeal checkpoint 重放'
             )
     else:
-        # core-summary-detailed-v3 上线早期尚未有 taxonomySeal。只对完全没有
-        # taxonomy 合同和阶段的记录保留 structureRepair 直连兼容；任一现行
-        # taxonomy 痕迹存在时都不允许回退，避免绕过中间阶段。
+        # 旧记录的标签协议值为 None，且未保存 taxonomySeal 阶段键时，
+        # 摘要阶段可以直接连接 structureRepair。协议值不是 None 或阶段键已出现时，
+        # 本函数必须检查标签阶段，不能回退到结构阶段。
         upstream = structure
         upstream_label = 'structureRepair'
     if not isinstance(upstream, dict) \
@@ -3967,10 +3966,9 @@ def _validated_detailed_core_summary(paper, parsed):
         raise PublishDataValidationError('现代 Reader 的评分阶段未绑定详细核心摘要')
     if scoring.get('status') != MANUAL_REVIEW_MODE:
         analysis_sha = _javascript_string_sha256(analysis)
-        # Modern Reader pages already materialize source-bound official figures.
-        # A legacy imageSupplement=complete has no retained pre-image bytes in
-        # the final success record, so Python cannot prove it changed only image
-        # spans. Fail closed instead of accepting a three-SHA self-assertion.
+        # 现代 Reader 页面按来源记录展示官方图片。历史 imageSupplement=complete
+        # 的成功记录没有保留添图前正文，本函数无法只凭三个 SHA 字段
+        # 确认变化仅限图片。因此，非人工复核的评分输出仍须与最终分析正文绑定。
         scoring_binds_final = scoring.get('outputAnalysisSha256') == analysis_sha
         if not scoring_binds_final \
                 or scoring.get('coreSummaryInputAnalysisSha256') != stage.get('outputAnalysisSha256') \
@@ -3981,7 +3979,7 @@ def _validated_detailed_core_summary(paper, parsed):
 
 
 def _build_api_reader_display_fields(paper, payload=None):
-    """One visible scientific summary/resource source for modern API pages."""
+    """返回现代 Reader 页面的摘要、资源情况和评分说明；未使用对应协议时返回 None。"""
     payload = _api_reader_payload(paper) if payload is None else payload
     if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
         return None
@@ -4025,8 +4023,7 @@ def _build_api_reader_display_fields(paper, payload=None):
             scoring_note_lines.append(f'- {label}：{safe_value}')
     detailed_summary = _validated_detailed_core_summary(paper, parsed)
     visible_summary = detailed_summary or payload['plan']['oneSentenceThesis'].strip()
-    # Preserve the sealed source summary while repairing this exact duplicated
-    # bilingual term in the deterministic publication projection.
+    # 这里只在发布视图中修正这处重复的中英文术语，不改写论文记录中的摘要。
     visible_summary = visible_summary.replace(
         '音频推测推测解码 Audio Speculative Speculative Decoding',
         '音频推测解码 Audio Speculative Decoding',
@@ -4152,13 +4149,13 @@ def build_index_context_line(pa, aurl=''):
     return ' | '.join(bits)
 
 
-def _current_taxonomy_aggregate_metadata(papers):
+def _current_batch_tag_metadata(papers):
     if not papers:
         return None
     selections = []
     for paper in papers:
         parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
-        metadata = build_flat_taxonomy_compat_metadata(parsed)
+        metadata = build_flat_tag_compat_metadata(parsed)
         if metadata is None:
             return None
         selections.append(metadata)
@@ -4174,7 +4171,7 @@ def _current_taxonomy_aggregate_metadata(papers):
         counts[tag] = counts.get(tag, 0) + 1
     primary_tasks = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return {
-        'contract': FLAT_TAXONOMY_COMPAT_CONTRACT,
+        'contract': FLAT_TAG_COMPAT_CONTRACT,
         'selectionContract': first['selectionContract'],
         'registryVersion': first['registryVersion'],
         'registrySha256': first['registrySha256'],
@@ -4187,16 +4184,16 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category='论�
     total = len(scored) + len(unscored)
     papers = [p for _, p, _ in scored] + unscored
     tag_set = extract_all_tags(papers, limit=10)
-    taxonomy = _current_taxonomy_aggregate_metadata(papers)
-    top_tags = taxonomy['primaryTasks'][:8] if taxonomy \
+    tag_metadata = _current_batch_tag_metadata(papers)
+    top_tags = tag_metadata['primaryTasks'][:8] if tag_metadata \
         else extract_top_tags(papers, limit=8)
-    taxonomy_marker = ''
-    if taxonomy:
-        taxonomy_marker = (
-            f'paper_digest_taxonomy_contract: "{taxonomy["contract"]}"\n'
-            f'paper_digest_taxonomy_selection_contract: "{taxonomy["selectionContract"]}"\n'
-            f'paper_digest_taxonomy_registry_version: "{taxonomy["registryVersion"]}"\n'
-            f'paper_digest_taxonomy_registry_sha256: "{taxonomy["registrySha256"]}"\n'
+    tag_frontmatter = ''
+    if tag_metadata:
+        tag_frontmatter = (
+            f'paper_digest_taxonomy_contract: "{tag_metadata["contract"]}"\n'
+            f'paper_digest_taxonomy_selection_contract: "{tag_metadata["selectionContract"]}"\n'
+            f'paper_digest_taxonomy_registry_version: "{tag_metadata["registryVersion"]}"\n'
+            f'paper_digest_taxonomy_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
             'paper_digest_taxonomy_scope: "aggregate-primary-task-counts"\n'
         )
 
@@ -4212,7 +4209,7 @@ layout: "posts"
 paper_digest_pipeline_owned: true
 paper_digest_page_type: index
 paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
-{taxonomy_marker}---
+{tag_frontmatter}---
 
 # {conference_title}
 
@@ -4224,7 +4221,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
 
 ✅ 筛选入选 {total} 篇 → 🔬 深度分析完成
 
-{'🏷️ 标签说明：本期使用新版受控 taxonomy；站点标签页暂时兼容展示历史标签与新标签。' if taxonomy else ''}
+{'🏷️ 标签说明：本期标签来自新版词表；站点标签页暂时兼容展示历史标签与新标签。' if tag_metadata else ''}
 
 ### 🏷️ 热门方向
 
@@ -5673,10 +5670,9 @@ def _validate_api_reader_resource_identity(paper):
 
 
 def _modern_api_bridge_render_spacing(article, plan):
-    """Fix only a signed bridge paragraph's CommonMark delimiter boundary.
+    """按编辑计划为术语说明段的加粗标题后补空格，避免 CommonMark 误解析相邻文字。
 
-    This is a rendered view, like official-image URL materialization. The
-    canonical article/plan and all table/formula bytes remain untouched.
+    处理只作用于发布视图，不改写论文记录中的正文或编辑计划，表格与公式字节也保留。
     """
     fences = []
     opened = None
@@ -8823,27 +8819,27 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
             controlled_binary = bool(
                 isinstance(allowance, dict) and allowance.get('controlledBinary')
             )
-            controlled_taxonomy = bool(
+            controlled_tag_files = bool(
                 isinstance(allowance, dict) and allowance.get('controlledTaxonomy')
             )
             if (not expected_sha or target.is_symlink()
                     or not target.is_file() or _sha256_file(target) != expected_sha):
                 unsafe.append(entry)
                 continue
-            if controlled_taxonomy:
+            if controlled_tag_files:
                 try:
-                    if not _taxonomy_asset_relative(relative):
+                    if not _is_tag_catalog_file_path(relative):
                         raise PublishDataValidationError('taxonomy ownership 路径非法')
                     payload = json.loads(target.read_text(encoding='utf-8'))
                     if target.name == 'taxonomy-presentation-policy.json':
-                        _validate_taxonomy_presentation_policy(payload)
-                        _taxonomy_presentation_selection(repo,
-                            _validate_taxonomy_snapshot(build_taxonomy_registry_snapshot()),
-                            _validate_taxonomy_catalog(_read_taxonomy_asset(repo, 'data/taxonomy-catalog.json')))
+                        _validate_tag_display_policy(payload)
+                        _select_tag_display_version(repo,
+                            _validate_tag_catalog_snapshot(build_tag_catalog_snapshot()),
+                            _validate_tag_version_catalog(_read_tag_catalog_file(repo, 'data/taxonomy-catalog.json')))
                     elif target.name == 'taxonomy-catalog.json':
-                        _validate_taxonomy_catalog(payload)
+                        _validate_tag_version_catalog(payload)
                     else:
-                        _validate_taxonomy_snapshot(payload)
+                        _validate_tag_catalog_snapshot(payload)
                         if target.parent.name == 'taxonomy-snapshots' and target.stem != payload['registrySha256']:
                             raise PublishDataValidationError('taxonomy archive SHA 不匹配')
                 except (OSError, ValueError, UnicodeError, PublishDataValidationError):
@@ -10260,7 +10256,7 @@ def prepare_generation_installation(
                     prior_exact[item['path']] = {
                         'sha256': item['sha256'],
                         'controlledBinary': is_api_reader_asset_path(target),
-                        'controlledTaxonomy': _taxonomy_asset_relative(item['path']),
+                        'controlledTaxonomy': _is_tag_catalog_file_path(item['path']),
                     }
         except PublishDataValidationError:
             prior_exact = {}
@@ -10384,7 +10380,7 @@ def _manifest_record(path, repo):
     if not (
             is_post or is_visual_asset or is_digest_cover
             or is_reader_asset or is_researcher_sidecar
-            or _taxonomy_asset_relative(relative)):
+            or _is_tag_catalog_file_path(relative)):
         raise PublishDataValidationError(f'博客清单包含非受控路径: {relative}')
     return path, relative.as_posix()
 
@@ -11008,18 +11004,18 @@ def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_re
     return blocking
 
 
-def attest_taxonomy_registry_assets(date_str, publish_paths, manifest_path, file_results):
+def review_tag_catalog_files(date_str, publish_paths, manifest_path, file_results):
     """Deterministic review binds every frozen JSON byte, mirror and registry version."""
     manifest = _load_json_object(manifest_path, 'generation manifest')
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = {item['path']: item for item in manifest.get('files', [])
                if isinstance(item, dict) and isinstance(item.get('path'), str)}
     paths = [Path(item).resolve() for item in publish_paths
-             if _taxonomy_asset_relative(Path(item).resolve().relative_to(repo))]
+             if _is_tag_catalog_file_path(Path(item).resolve().relative_to(repo))]
     if not paths:
         return 0
     try:
-        expected = taxonomy_registry_asset_payloads(repo)
+        expected = tag_catalog_file_contents(repo)
         actual = {item.relative_to(repo).as_posix() for item in paths}
         if actual != set(expected):
             raise PublishDataValidationError('taxonomy review 版本资产集合不闭合')
@@ -11097,7 +11093,7 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             if key in expected_sidecars:
                 raise PublishDataValidationError(f'researcher sidecar 权威路径重复: {key}')
             expected_sidecars[key] = (sidecar_raw, bundle)
-    blocking = attest_taxonomy_registry_assets(date_str, publish_paths, manifest_path, file_results)
+    blocking = review_tag_catalog_files(date_str, publish_paths, manifest_path, file_results)
     for item in publish_paths:
         asset = Path(item).resolve()
         if not is_api_reader_asset_path(asset):
@@ -12544,10 +12540,10 @@ def generate_main(options=None):
         print(f'♻️ 相同 generation 已完整安装，复用生成清单且保留 review 状态: {manifest_path}')
         return
 
-    # Validate all taxonomy versions before generation; installation only occurs
-    # later inside the generation journal and receipt-bound exact asset set.
+    # 生成前先核验所有词表版本。文件随后通过安装记录写入，
+    # 实际写入范围必须与审查凭证绑定的文件集合一致。
     try:
-        _validate_taxonomy_snapshot(build_taxonomy_registry_snapshot())
+        _validate_tag_catalog_snapshot(build_tag_catalog_snapshot())
     except (OSError, PublishDataValidationError) as exc:
         print(f"\n❌ taxonomy registry 快照导出失败，未生成任何博客文件: {exc}")
         sys.exit(1)
@@ -12563,7 +12559,7 @@ def generate_main(options=None):
         staged_assets = prepare_api_reader_staged_assets(
             papers, Path(staged_posts).resolve().parent,
         )
-        staged_assets.extend(prepare_taxonomy_registry_staged_assets(
+        staged_assets.extend(prepare_tag_catalog_staged_files(
             Path(staged_posts).resolve().parent, blog_repo,
             single_page=journal.get('publicationScope') is not None,
             installation=journal.get('installation'),

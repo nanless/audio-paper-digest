@@ -212,13 +212,13 @@ function producerProofFor(inputs, staged, aggregates, analysisSources) {
 }
 
 function replayProducerSet({ pageStagingRunIds, dailyAggregates, stagingRoot, aggregateRoot,
-    crosswalkRoot, inventoryRoot, analysisRoot, taxonomyRoot, taxonomyRegistry } = {}, dependencies = {}) {
+    crosswalkRoot, inventoryRoot, analysisRoot, tagAssignmentRoot, tagCatalogPath } = {}, dependencies = {}) {
     const expectedRunId = dailyApi.aggregateRunIdFor(pageStagingRunIds);
     if (dailyAggregates.some(ref => ref.aggregateRunId !== expectedRunId)) {
         fail(`daily aggregate run must equal the deterministic staging-set run ID ${expectedRunId}`);
     }
     const inputs = (dependencies.loadAggregateInputs || dailyApi.loadAggregateInputs)({ stagingRunIds: pageStagingRunIds,
-        stagingRoot, crosswalkRoot, inventoryRoot, analysisRoot, taxonomyRoot, taxonomyRegistry },
+        stagingRoot, crosswalkRoot, inventoryRoot, analysisRoot, tagAssignmentRoot, tagCatalogPath },
     dependencies.aggregateInputDependencies || {});
     const actualRunIds = inputs.stagedRuns.map(item => item.manifest.stagingRunId).sort();
     if (stableHash(actualRunIds) !== stableHash(pageStagingRunIds.slice().sort())) fail('replayed staging producer set differs from the plan request');
@@ -267,7 +267,7 @@ function batchesFor(artifacts, dates) {
 
 function buildPlan({ planId, pageStagingRunIds, dailyAggregates, conferenceRefs = [], blogRepo,
     remoteName = 'origin', stagingRoot, aggregateRoot, crosswalkRoot, inventoryRoot, analysisRoot,
-    taxonomyRoot, taxonomyRegistry } = {}, dependencies = {}) {
+    tagAssignmentRoot, tagCatalogPath } = {}, dependencies = {}) {
     if (!UUID_RE.test(planId || '') || !Array.isArray(pageStagingRunIds) || !pageStagingRunIds.length
         || new Set(pageStagingRunIds).size !== pageStagingRunIds.length || pageStagingRunIds.some(id => !UUID_RE.test(id))
         || !Array.isArray(dailyAggregates) || !dailyAggregates.length
@@ -275,7 +275,7 @@ function buildPlan({ planId, pageStagingRunIds, dailyAggregates, conferenceRefs 
         || new Set(dailyAggregates.map(ref => ref.date)).size !== dailyAggregates.length) fail('plan ID and non-empty unique producer references are required');
     if (!Array.isArray(conferenceRefs) || conferenceRefs.length) fail('conference publication refs are reserved but unsupported until authenticated conference aggregates exist');
     const replay = (dependencies.replayProducerSet || replayProducerSet)({ pageStagingRunIds, dailyAggregates,
-        stagingRoot, aggregateRoot, crosswalkRoot, inventoryRoot, analysisRoot, taxonomyRoot, taxonomyRegistry }, dependencies);
+        stagingRoot, aggregateRoot, crosswalkRoot, inventoryRoot, analysisRoot, tagAssignmentRoot, tagCatalogPath }, dependencies);
     if (!replay?.proof) fail('producer replay proof is absent');
     validateProducerReplay(replay.proof);
     const staged = replay.staged;
@@ -696,12 +696,12 @@ function loadGenerationProof({ loadedPlan, batchId }) {
 }
 
 function generateBundle({ outputRoot, planId, batchId, blogRepo, stagingRoot, aggregateRoot, crosswalkRoot,
-    inventoryRoot, analysisRoot, taxonomyRoot, taxonomyRegistry, apply = false, remoteName = 'origin' } = {}, dependencies = {}) {
+    inventoryRoot, analysisRoot, tagAssignmentRoot, tagCatalogPath, apply = false, remoteName = 'origin' } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, planId }); const batch = loaded.plan.batches.find(item => item.batchId === batchId);
     if (!batch) fail('batch is absent from publication plan');
     const refs = { pageStagingRunIds: loaded.plan.producers.filter(item => item.kind === 'page-staging').map(item => item.runId),
         dailyAggregates: loaded.plan.producers.filter(item => item.kind === 'daily-aggregate').map(item => ({ aggregateRunId: item.runId, date: item.date })),
-        stagingRoot, aggregateRoot, crosswalkRoot, inventoryRoot, analysisRoot, taxonomyRoot, taxonomyRegistry };
+        stagingRoot, aggregateRoot, crosswalkRoot, inventoryRoot, analysisRoot, tagAssignmentRoot, tagCatalogPath };
     const replay = (dependencies.replayProducerSet || replayProducerSet)(refs, dependencies);
     if (!replay?.proof || stableHash(replay.proof) !== stableHash(loaded.plan.producerReplay)) fail('generate producer replay differs from the sealed publication plan');
     const state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), 'generate opening blog state');

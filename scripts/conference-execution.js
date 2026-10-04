@@ -76,7 +76,7 @@ function loadBoundPlan(files, options) {
     const runFile = safeRuntimeFile(files.conferenceRunsDir, options.runName);
     const receiptFile = safeRuntimeFile(files.conferenceRunsDir, options.planReceiptName);
     const planFile = safeRuntimeFile(files.conferenceSourceLedgerDir, options.planName);
-    return planApi.loadPlanHandle(runFile, receiptFile, planFile, importHandle, files.taxonomyRegistry);
+    return planApi.loadPlanHandle(runFile, receiptFile, planFile, importHandle, files.tagCatalogFile);
 }
 function publicStatus(execution) {
     const statusCounts = Object.values(execution.paperStates).reduce((counts, state) => {

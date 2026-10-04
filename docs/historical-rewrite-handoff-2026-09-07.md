@@ -26,7 +26,7 @@
 
 ### 2.2 九维受控标签体系
 
-当时唯一词表来源是 `config/paper-taxonomy.json`，共有 228 个有效概念，分布如下。这是旧版本统计，现行词表和专名例外见 [分类实现说明](tag-taxonomy-implementation.md)。
+当时唯一词表来源是 `config/paper-taxonomy.json`，共有 228 个有效概念，分布如下。这是旧版本统计，现行词表和专名例外见 [分类实现说明](tag-system-implementation.md)。
 
 | 分面 | 数量 | 回答的问题 |
 |---|---:|---|
@@ -383,6 +383,6 @@ npm run history:publication -- generate --apply \
 - 当前历史来源与分析流程：[docs/history-rewrite.md](history-rewrite.md)
 - 历史设计路线图：[docs/history-rewrite-roadmap.md](history-rewrite-roadmap.md)
 - 当前会议流程：[docs/conference-workflow.md](conference-workflow.md)
-- 分类设计：[docs/tag-taxonomy-design.md](tag-taxonomy-design.md)
-- 分类实现：[docs/tag-taxonomy-implementation.md](tag-taxonomy-implementation.md)
+- 分类设计：[标签体系设计](tag-system-design.md)
+- 分类实现：[标签体系实施说明](tag-system-implementation.md)
 - 脚本入口：[scripts/README.md](../scripts/README.md)

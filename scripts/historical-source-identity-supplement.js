@@ -3,13 +3,13 @@
 const path = require('node:path');
 const {requireExternalRuntime}=require('./env-loader.js');
 const {requireWorkspaceRole}=require('./workspace-role.js');
-const {parseArgs}=require('./historical-direct-taxonomy-supplement.js');
+const {parseArgs}=require('./historical-direct-tag-supplement.js');
 async function main(argv=process.argv.slice(2)) {
     requireExternalRuntime('historical-source-identity-supplement'); requireWorkspaceRole('history');
     const options=parseArgs(argv), config=require('./config.js');
     if(options.offset) throw new Error('Identity supplement does not accept offset');
     const api=require('./lib/historical-source-identity-supplement.js');
-    const writer=require('./lib/historical-direct-taxonomy-supplement.js');
+    const writer=require('./lib/historical-direct-tag-supplement.js');
     const outputRoot=config.FILES.historicalSourceIdentitySupplementDir;
     if(!outputRoot || !path.isAbsolute(outputRoot)) throw new Error('Central config historicalSourceIdentitySupplementDir is required');
     const directory=path.join(outputRoot,options.runId);

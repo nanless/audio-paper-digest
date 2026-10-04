@@ -249,7 +249,7 @@ function processProof(result, entry) {
     if (!result || typeof result !== 'object' || result.status !== 'complete') {
         // Surface the pending `needs_taxonomy_review` papers instead of hiding
         // them behind a generic "not complete" failure: the reader must see
-        // which papers wait for taxonomy review and why.
+        // which papers wait for tag assignment review and why.
         const review = Array.isArray(result?.taxonomyReviewQueue) ? result.taxonomyReviewQueue : [];
         fail(review.length
             ? `conference process for ${entry.conferenceId} is not complete; taxonomy review pending for `

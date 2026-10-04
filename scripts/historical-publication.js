@@ -42,8 +42,8 @@ function main(argv = process.argv.slice(2), runtime = {}) {
         crosswalkRoot: Config.FILES.pageSourceCrosswalkDir,
         inventoryRoot: Config.FILES.historicalPageInventoryDir,
         analysisRoot: Config.FILES.freshRewriteRunsDir,
-        taxonomyRoot: Config.FILES.historicalTaxonomyAssignmentDir,
-        taxonomyRegistry: Config.FILES.taxonomyRegistry };
+        tagAssignmentRoot: Config.FILES.historicalTagAssignmentDir,
+        tagCatalogPath: Config.FILES.tagCatalogFile };
     const publicationRoot = Config.FILES.historicalPublicationDir;
     if (options.action === 'plan') {
         let plan = (runtime.buildPlan || api.buildPlan)({ ...options, ...roots }, runtime.dependencies || {});

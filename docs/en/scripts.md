@@ -66,7 +66,7 @@ Blog and visual entry points use `scripts/python-runtime.sh`, which prefers the 
 
 ## Conference Papers
 
-New conferences use the daily workspace to acquire official sources, discover candidates, prepare full-text evidence, and filter. After filtering, `conference:new:process` handles PDF capture, import, analysis, Reader, scoring, taxonomy, and private pages. The separate `conference:new:execution/analyze/postprocess` aliases are disabled.
+New conferences use the daily workspace to acquire official sources, discover candidates, prepare full-text evidence, and filter. After filtering, `conference:new:process` handles PDF capture, import, analysis, Reader, scoring, tag assignment, and private pages. The separate `conference:new:execution/analyze/postprocess` aliases are disabled.
 
 Process concurrency defaults to 1 and accepts `--concurrency` from 1–5; each paper's internal analysis concurrency stays 1. Preview with the verified candidate catalog and report filenames, and the filtering task's UUID:
 

@@ -4,7 +4,7 @@ const planApi = require('./historical-direct-rewrite-plan.js');
 const runner = require('./historical-direct-rewrite-runner.js');
 const fresh = require('./fresh-arxiv-rewrite-source.js');
 const io = require('./historical-conference-page-projections.js');
-const supplements = require('./historical-direct-taxonomy-supplement.js');
+const supplements = require('./historical-direct-tag-supplement.js');
 const alternate = require('./historical-icml-alternate-pdf-source.js');
 const CONTRACT = 'historical-source-identity-supplement-v1';
 const digest = v => crypto.createHash('sha256').update(v).digest('hex');

@@ -27,7 +27,7 @@ const {
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
     validateCoreSummaryStageBinding,
-    validateTaxonomyStageBinding,
+    validateTagStageProof,
     MANUAL_COMPLETE_STATUS,
     MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5,
@@ -441,12 +441,12 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         const coreSummaryBindingIssue = manifest.stages.coreSummaryRepair && !options.analysisWaived
             ? validateCoreSummaryStageBinding(options.paper) : null;
         if (coreSummaryBindingIssue) addIssue(issues, filePath, `${prefix} ${coreSummaryBindingIssue}`);
-        const taxonomyBindingIssue = !legacyCoreSummaryCompatible && !manifest.manualTakeover
-            ? validateTaxonomyStageBinding(options.paper, {
+        const tagStageProofIssue = !legacyCoreSummaryCompatible && !manifest.manualTakeover
+            ? validateTagStageProof(options.paper, {
                 parsed: parseAnalysis(options.paper?.analysis)
             }) : null;
-        if (taxonomyBindingIssue) {
-            addIssue(issues, filePath, `${prefix} ${taxonomyBindingIssue}`);
+        if (tagStageProofIssue) {
+            addIssue(issues, filePath, `${prefix} ${tagStageProofIssue}`);
         }
     }
     const scoring = manifest.stages.scoringAudit;

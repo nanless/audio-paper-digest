@@ -47,7 +47,7 @@ function parseArgs(argv) {
 
 function requireFiles(files) {
     for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir', 'conferenceFilterSpecsDir',
-        'conferenceFilterEvidenceRunsDir', 'conferenceFiltersDir', 'taxonomyRegistry', 'llmAccountPoolState']) {
+        'conferenceFilterEvidenceRunsDir', 'conferenceFiltersDir', 'tagCatalogFile', 'llmAccountPoolState']) {
         if (typeof files?.[field] !== 'string' || !path.isAbsolute(files[field])) {
             throw new Error(`Configured ${field} must be an absolute path`);
         }
@@ -87,7 +87,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         runId: options.evidenceRunId, discoveryHandle });
     const spec = filter.normalizeSpec(ledger.readRegularJson(
         filter.safeDirectJson(files.conferenceFilterSpecsDir, options.specName)).value);
-    filterCli.verifyTaxonomy(files, spec);
+    filterCli.verifyTagCatalogFileBinding(files, spec);
     // Authenticate the large immutable source/evidence/state closure once, then
     // advance every bounded item under one lock. Each paper still gets its own
     // durable intent, transport receipt, decision artifact, state CAS and fsync.

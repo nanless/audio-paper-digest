@@ -11,10 +11,10 @@ const CONTRACT = 'conference-source-upgrade-plan-v1';
 const promotionProcessId = planSha256 => api.deterministicUuid(planSha256, 'conference-source-upgrade-process-v1');
 const executionIdFor = (planSha256, paperId) => api.deterministicUuid(promotionProcessId(planSha256), paperId, 'analysis');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
-// authority 比对时剥离实现指纹与词表指纹：implementation 由迁移收据桥接；taxonomy 字段是
+// authority 比对时剥离实现指纹与词表指纹：implementation 由迁移收据桥接；标签 字段是
 // 进程创建时的**身份史**（processId 派生绑定 state.authority 原值，不可就地刷新），换表后
-// 当前 config 的 taxonomy SHA 与它必然不同——该漂移合法，真正强制在封口/发布层
-// （analysis-contract.validateTaxonomyStageBinding 升级分支与 Python _seal_registry_upgrade）。
+// 当前 config 的 标签 SHA 与它必然不同——该漂移合法，真正强制在封口/发布层
+// （analysis-contract.validateTagStageProof 升级分支与 Python _seal_registry_upgrade）。
 const withoutImplementation = authority => {
     const copy = { ...authority };
     delete copy.implementationSha256;
@@ -223,7 +223,7 @@ function replayRetainedShared(current, plan, deps) {
         path.join(files.conferenceSourceLedgerDir, names.importReceipt), staging);
     const planHandle = deps.plan.loadPlanHandle(path.join(files.conferenceRunsDir, names.run),
         path.join(files.conferenceRunsDir, deps.plan.receiptNameFor(names.run)),
-        path.join(files.conferenceSourceLedgerDir, names.plan), imported, files.taxonomyRegistry);
+        path.join(files.conferenceSourceLedgerDir, names.plan), imported, files.tagCatalogFile);
     const planReceiptSha256 = deps.plan.planHandleSnapshot(planHandle).receipt.receiptSha256;
     if (planReceiptSha256 !== receipt.planReceiptSha256) throw new Error('Retained completed native plan receipt drifted');
     return { planHandle, planReceiptSha256, sourceCacheRoot: path.join(files.conferenceSourceCacheDir, `generation-${implementation}`),
@@ -240,7 +240,7 @@ async function promoteCaptionOnly(current, plan, deps) {
     }
     const shared = replayRetainedShared(current, plan, deps);
     api.assertSourceContinuity(current.state, shared);
-    const taxonomy = require('./paper-taxonomy.js').loadTagCatalog(deps.files.taxonomyRegistry);
+    const tagCatalog = require('./tag-catalog.js').loadTagCatalog(deps.files.tagCatalogFile);
     const preservedStages = {}, items = {};
     for (const original of Object.values(current.state.items)) {
         const loaded = deps.postprocess.loadCompleted({ analysisRoot: deps.files.conferenceAnalysisDir,
@@ -253,7 +253,7 @@ async function promoteCaptionOnly(current, plan, deps) {
         const staged = deps.postprocess.loadPreservedStage({ stagingRoot: deps.files.conferencePageStagingDir,
             executionId: original.analysisRunId, paperId: original.paperId, pageProof: original.pageProof,
             repair: true, repairMode: 'caption-only', repairPolicy: plan.pageRepairPolicy });
-        const assignment = deps.postprocess.buildAssignment(loaded, taxonomy);
+        const assignment = deps.postprocess.buildAssignment(loaded, tagCatalog);
         if (assignment.status !== 'assigned' || api.stableHash(assignment) !== api.stableHash(staged.manifest.taxonomy)
             || staged.assignmentFileSha256 !== staged.manifest.taxonomyAssignmentFileSha256
             || api.stableHash({ analysisSha256: staged.manifest.analysisSha256,
@@ -277,7 +277,7 @@ async function promoteCaptionOnly(current, plan, deps) {
     }
     const executionIds = Object.keys(items).sort().map(id => items[id].analysisRunId);
     const aggregate = deps.postprocess.aggregateConference({ analysisRoot: deps.files.conferenceAnalysisDir, executionIds,
-        taxonomyFile: deps.files.taxonomyRegistry, stagingRoot: deps.files.conferencePageStagingDir,
+        tagCatalogPath: deps.files.tagCatalogFile, stagingRoot: deps.files.conferencePageStagingDir,
         aggregateRoot: deps.files.conferenceAggregateDir, planHandle: shared.planHandle,
         sourceRoot: shared.sourceCacheRoot, preservedStages, apply: true, trustEvidence: true });
     if (aggregate.manifest.markdownSha256 !== current.state.aggregate.markdownSha256) throw new Error('Caption-only repair changed aggregate bytes');
@@ -501,7 +501,7 @@ async function promoteSourceUpgrade(options, overrides = {}) {
         const sourceContext = { ...current.context, authority: { ...current.context.authority, implementationSha256: current.origin } };
         const shared = await (deps.prepareShared || api.prepareShared)(sourceContext, deps, current.state.createdAt);
         api.assertSourceContinuity({ items: Object.fromEntries(completed), processId: current.state.processId }, shared);
-        // Replays the canonical analysis receipt, source/plan, taxonomy and exact
+        // Replays the canonical analysis receipt, source/plan, tag catalog and exact
         // page bytes. Promotion never calls analyzeConference or a model.
         const preservedStages = {};
         const promotedItems = new Map();
@@ -522,7 +522,7 @@ async function promoteSourceUpgrade(options, overrides = {}) {
                 if (api.stableHash(replayProof.analysisProof) !== api.stableHash(item.analysisProof)
                     || api.stableHash(replayProof.pageProof) !== api.stableHash(item.pageProof)) {
                     staged = deps.postprocess.stagePaper({ analysisRoot: deps.files.conferenceAnalysisDir,
-                        executionId: item.analysisRunId, taxonomyFile: deps.files.taxonomyRegistry,
+                        executionId: item.analysisRunId, tagCatalogPath: deps.files.tagCatalogFile,
                         stagingRoot: deps.files.conferencePageStagingDir, planHandle: shared.planHandle,
                         sourceRoot: shared.sourceCacheRoot, apply: true, trustEvidence: true });
                     restagedPreserved = true;
@@ -530,7 +530,7 @@ async function promoteSourceUpgrade(options, overrides = {}) {
                 }
             } else {
                 staged = deps.postprocess.stagePaper({ analysisRoot: deps.files.conferenceAnalysisDir,
-                    executionId: item.analysisRunId, taxonomyFile: deps.files.taxonomyRegistry,
+                    executionId: item.analysisRunId, tagCatalogPath: deps.files.tagCatalogFile,
                     stagingRoot: deps.files.conferencePageStagingDir, planHandle: shared.planHandle,
                     sourceRoot: shared.sourceCacheRoot, apply: true, trustEvidence: true });
                 freshStage = true;
@@ -563,7 +563,7 @@ async function promoteSourceUpgrade(options, overrides = {}) {
         }
         const executionIds = allIds.map(id => promotedItems.get(id).analysisRunId);
         const aggregate = await (deps.aggregate || (async () => deps.postprocess.aggregateConference({
-            analysisRoot: deps.files.conferenceAnalysisDir, executionIds, taxonomyFile: deps.files.taxonomyRegistry,
+            analysisRoot: deps.files.conferenceAnalysisDir, executionIds, tagCatalogPath: deps.files.tagCatalogFile,
             stagingRoot: deps.files.conferencePageStagingDir, aggregateRoot: deps.files.conferenceAggregateDir,
             planHandle: shared.planHandle, sourceRoot: shared.sourceCacheRoot, preservedStages, apply: true,
             trustEvidence: true })))(current.context, shared, executionIds, deps);

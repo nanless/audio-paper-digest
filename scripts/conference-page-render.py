@@ -24,7 +24,7 @@ READER_CONTRACT = 'beginner-researcher-v3'
 SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4'
 SCORING_CONTRACT = 'api-scoring-audit-v2'
 PUBLICATION_CONTRACT = 'conference-official-publication-v1'
-FLAT_TAXONOMY_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
+FLAT_TAG_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
 SOURCE_URL_NORMALIZATION_CONTRACT = 'paper-source-repository-url-normalization-v1'
 CONFERENCE_IMAGE_BASE_URL = os.environ.get(
     'PAPER_DIGEST_IMAGE_BASE_URL',
@@ -551,15 +551,15 @@ def render_packet(packet):
     for concept_id in [assignment.get('primaryTaskId'), assignment.get('primaryMethodId'), *assignment.get('conceptIds', [])]:
         if concept_id and concept_id not in ordered:
             ordered.append(concept_id)
-    taxonomy_stage = ((manifest or {}).get('stages') or {}).get('taxonomySeal') or {}
-    if assignment.get('flatCompatContract') != FLAT_TAXONOMY_CONTRACT \
+    tag_stage = ((manifest or {}).get('stages') or {}).get('taxonomySeal') or {}
+    if assignment.get('flatCompatContract') != FLAT_TAG_CONTRACT \
             or assignment.get('selectionContract') != ((manifest or {}).get('contracts') or {}).get('taxonomy') \
-            or assignment.get('registryVersion') != taxonomy_stage.get('registryVersion') \
-            or assignment.get('registrySha256') != taxonomy_stage.get('registrySha256') \
-            or assignment.get('primaryTaskId') != taxonomy_stage.get('primaryTaskId') \
-            or assignment.get('primaryMethodId') != taxonomy_stage.get('primaryMethodId') \
-            or sorted(assignment.get('conceptIds') or []) != sorted(taxonomy_stage.get('conceptIds') or []) \
-            or taxonomy_stage.get('status') not in {'complete', 'not_needed'}:
+            or assignment.get('registryVersion') != tag_stage.get('registryVersion') \
+            or assignment.get('registrySha256') != tag_stage.get('registrySha256') \
+            or assignment.get('primaryTaskId') != tag_stage.get('primaryTaskId') \
+            or assignment.get('primaryMethodId') != tag_stage.get('primaryMethodId') \
+            or sorted(assignment.get('conceptIds') or []) != sorted(tag_stage.get('conceptIds') or []) \
+            or tag_stage.get('status') not in {'complete', 'not_needed'}:
         raise ValueError('conference current taxonomy seal/projection is not closed')
     if any(cid not in concepts for cid in ordered):
         raise ValueError('taxonomy labels are incomplete')

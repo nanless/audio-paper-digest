@@ -16,7 +16,7 @@ const COMPLETION_PROOF_REQUIRED = 'completed state requires an authenticated con
 const SHA_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,319}$/;
 const CONFERENCE_RE = /^[a-z0-9][a-z0-9-]{1,79}$/;
-const TAXONOMY_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+const TAG_CATALOG_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const USAGE_FIELDS = Object.freeze([
     'requests', 'unsuccessfulRequests', 'inputTokens', 'outputTokens', 'totalTokens',
     'cachedInputTokens', 'cacheCreationInputTokens', 'reasoningTokens',
@@ -243,7 +243,7 @@ function createRun(input, { allowInitialStates = false, ledgerBinding = undefine
         'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256', 'members', 'shards', 'paperStates'];
     for (const key of Object.keys(input)) if (!allowedInput.includes(key)) fail(`input has unknown field ${key}`);
     if (typeof input.conferenceId !== 'string' || !CONFERENCE_RE.test(input.conferenceId)) fail('conferenceId is malformed');
-    if (typeof input.taxonomyVersion !== 'string' || !TAXONOMY_RE.test(input.taxonomyVersion)) fail('taxonomyVersion is malformed');
+    if (typeof input.taxonomyVersion !== 'string' || !TAG_CATALOG_VERSION_PATTERN.test(input.taxonomyVersion)) fail('taxonomyVersion is malformed');
     const members = normalizeMembers(input.members, input.conferenceId);
     const paperIds = members.map(member => member.paperId);
     const membershipSha256 = stableHash(members);

@@ -228,7 +228,7 @@ function readerResultTableRequirement(artifacts) {
                 const label = headerRows.map(index => rows[index]?.[columnIndex] || '').join(' ');
                 if (/\b(?:year|method|model|reference|citation|version|benchmark)\b|年份|方法名称|模型名称|版本/i.test(label)) return false;
                 // Citation years, model versions and task names are digits,
-                // but they do not make a taxonomy/benchmark directory a
+                // but they do not make a tag catalog/benchmark directory a
                 // measured-results table. Keep numeric scientific cells.
                 const numericSurface = cell.normalize('NFKC')
                     .replace(/\\(?:textbf|mathbf|mathrm|textrm|text)\{|\\bf\b/g, '')

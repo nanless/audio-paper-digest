@@ -118,8 +118,8 @@ test('two real per-paper staging producers merge into one complete daily aggrega
     for (let index = 0; index < stagingRunIds.length; index += 1) {
         const staged = pageStagingApi.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
             stagingRunId: stagingRunIds[index], analysisRunId: analysisRunIds[index], limit: null,
-            crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
-            taxonomyRegistry: '/unused', stagingRoot }, dependencies);
+            crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
+            tagCatalogPath: '/unused', stagingRoot }, dependencies);
         assert.equal(staged.pageCount, 1);
     }
     const inventory = { ledger: { ledgerSha256: 'd'.repeat(64), pageSetSha256: 'e'.repeat(64),
@@ -127,7 +127,7 @@ test('two real per-paper staging producers merge into one complete daily aggrega
             primaryUrl: `https://example.test/blog/posts/${DATE}/`, contentSha256: 'f'.repeat(64),
             kind: 'daily-summary', scope: { type: 'daily', key: DATE }, cohortDate: DATE }] } };
     const inputs = api.loadAggregateInputs({ stagingRoot, stagingRunIds, crosswalkRoot: '/unused',
-        inventoryRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused', taxonomyRegistry: '/unused' }, {
+        inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused' }, {
         bindTopology: () => ({ state, inventory }),
         loadProjectionInputs: options => pageStagingApi.loadProjectionInputs(options, dependencies) });
     const [aggregate] = api.buildDailyAggregates({ inputs, date: DATE });
@@ -161,13 +161,13 @@ test('new unrelated crosswalk progress does not invalidate unchanged staged page
     const analysis = '## 评分\n8.0\n\n## 核心摘要\n全新且只来自 canonical 的摘要。\n\n## 方法概述和架构\n方法正文。';
     const paper = { arxivId: '2604.00001', title: 'Fresh canonical title', analysis,
         parsed: require('../scripts/utils.js').parseAnalysis(analysis) };
-    const taxonomy = { status: 'assigned', assignmentSha256: page.taxonomyAssignmentSha256,
+    const tagAssignment = { status: 'assigned', assignmentSha256: page.taxonomyAssignmentSha256,
         registrySha256: '9'.repeat(64), primaryTaskId: 'task.speech-enhancement', primaryMethodId: 'method.tta',
         concepts: [{ id: 'task.speech-enhancement', facet: 'task', preferredLabel: { zh: '语音增强' } },
             { id: 'method.tta', facet: 'method', preferredLabel: { zh: '测试时自适应' } }] };
     const currentState = { stateSha256: 'f'.repeat(64), identityGroupsSha256: 'e'.repeat(64) };
     const result = api.loadAggregateInputs({ stagingRoot: '/unused', stagingRunIds: [RUN], crosswalkRoot: '/unused',
-        inventoryRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused' }, {
+        inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused' }, {
         loadCompletedPageStaging: () => ({ manifest: { stagingRunId: RUN, crosswalkId: CROSSWALK,
             crosswalkStateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64),
             rendererImplementationSha256: RENDERER, pages: [page] },
@@ -175,7 +175,7 @@ test('new unrelated crosswalk progress does not invalidate unchanged staged page
         bindTopology: () => ({ state: currentState, inventory: {} }),
         replaySelectedBindings: () => [],
         loadProjectionInputs: () => ({ crosswalk: currentState, groups: [{ paperId: page.paperId,
-            paper, taxonomy, taxonomyFileSha256: page.taxonomyFileSha256,
+            paper, taxonomy: tagAssignment, taxonomyFileSha256: page.taxonomyFileSha256,
             analysisRunId: page.analysisRunId, analysisFileSha256: page.analysisFileSha256,
             analysisRecordSha256: page.analysisRecordSha256,
             analysisSha256: page.analysisSha256,
@@ -254,7 +254,7 @@ test('CLI dry-run never invokes writer and apply targets configured aggregate ro
         writeAggregates: options => { writes += 1; assert.equal(options.outputRoot, '/configured/output'); return []; } };
     const config = { FILES: { historicalPageStagingDir: '/staging', pageSourceCrosswalkDir: '/crosswalk',
         historicalPageInventoryDir: '/inventory', freshRewriteRunsDir: '/analysis',
-        historicalTaxonomyAssignmentDir: '/taxonomy', taxonomyRegistry: '/registry',
+        historicalTagAssignmentDir: '/taxonomy', tagCatalogFile: '/registry',
         historicalDailyAggregateDir: '/configured/output' } };
     assert.equal(cli.main(['--dry-run', '--staging-runs', RUN, '--date', DATE], { api: fakeApi, config }).status, 'dry-run');
     assert.equal(writes, 0);

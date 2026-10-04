@@ -263,16 +263,16 @@ test('authenticated import, plan and execution preserve the full selection recei
     } finally { ledgerApi.loadLedger = oldPublicLedgerLoad; }
     assert.deepEqual(importer.importHandleSnapshot(importHandle).verifiedMembers,
         [{ paperId: pid('100'), sourceIdentity: 'icassp-arnumber:100' }]);
-    const taxonomy = path.join(f.root, 'taxonomy.json'); fs.writeFileSync(taxonomy, '{"version":"taxonomy-v1"}\n');
+    const tagCatalogPath = path.join(f.root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n');
     const runs = path.join(f.root, 'runs'); const executions = path.join(f.root, 'executions');
     const identities = importer.importHandleSnapshot(importHandle).verifiedMembers;
     const selectedMemberSetSha256 = planApi.stableHash(identities.map(member => member.paperId));
     const plan = { contract: planApi.PLAN_CONTRACT, version: planApi.VERSION, ledgerName: 'ledger.json',
-        taxonomy: { version: 'taxonomy-v1', sha256: sha(fs.readFileSync(taxonomy)) },
+        taxonomy: { version: 'taxonomy-v1', sha256: sha(fs.readFileSync(tagCatalogPath)) },
         selectionPolicy: { contract: planApi.SELECTION_CONTRACT, identities, selectedMemberSetSha256 },
         shards: [{ shardId: 'all', paperIds: identities.map(member => member.paperId) }] };
     fs.writeFileSync(path.join(f.output, 'plan.json'), `${JSON.stringify(plan, null, 2)}\n`);
-    const planFiles = { ...f.files, conferenceRunsDir: runs, taxonomyRegistry: taxonomy };
+    const planFiles = { ...f.files, conferenceRunsDir: runs, tagCatalogFile: tagCatalogPath };
     const planArgs = ['--catalog', 'catalog.json', '--report', 'report.json', '--filter', f.filterId,
         '--import', 'import.json', '--staging-receipt', 'receipt.json', '--ledger', 'ledger.json',
         '--import-receipt', 'ledger.import-receipt.json', '--plan', 'plan.json', '--run', 'cli-run.json'];
@@ -297,10 +297,10 @@ test('authenticated import, plan and execution preserve the full selection recei
     aliasedPlan.shards[0].paperIds = ['icassp-2026:alias'];
     fs.writeFileSync(path.join(f.output, 'alias-plan.json'), `${JSON.stringify(aliasedPlan, null, 2)}\n`);
     assert.throws(() => planApi.createRunFromImportPlan({ files: { conferenceSourceLedgerDir: f.output,
-        conferenceRunsDir: runs, taxonomyRegistry: taxonomy }, importHandle, planName: 'alias-plan.json', runName: 'alias.json' }),
+        conferenceRunsDir: runs, tagCatalogFile: tagCatalogPath }, importHandle, planName: 'alias-plan.json', runName: 'alias.json' }),
     /exactly equal|not canonical/);
     const planned = planApi.createRunFromImportPlan({ files: { conferenceSourceLedgerDir: f.output,
-        conferenceRunsDir: runs, taxonomyRegistry: taxonomy }, importHandle, planName: 'plan.json', runName: 'run.json' });
+        conferenceRunsDir: runs, tagCatalogFile: tagCatalogPath }, importHandle, planName: 'plan.json', runName: 'run.json' });
     let writes = 0;
     const failingIo = new Proxy(fs, { get(target, property) {
         if (property === 'writeFileSync') return (...args) => {
@@ -314,7 +314,7 @@ test('authenticated import, plan and execution preserve the full selection recei
     assert.equal(fs.existsSync(path.join(runs, 'run.plan-receipt.json')), false);
     planApi.applyRunPlan(planned);
     const planHandle = planApi.loadPlanHandle(path.join(runs, 'run.json'), path.join(runs, 'run.plan-receipt.json'),
-        path.join(f.output, 'plan.json'), importHandle, taxonomy);
+        path.join(f.output, 'plan.json'), importHandle, tagCatalogPath);
     const sourceContext = sourceContextApi.buildConferenceSourceContext({ planHandle,
         paperId: identities[0].paperId, sourceRoot: f.cache });
     assert.equal(sourceContext.productionAuthorization.authorized, true);
@@ -342,7 +342,7 @@ test('authenticated import, plan and execution preserve the full selection recei
     assert.equal(status.planReceiptSha256, planned.receipt.receiptSha256);
     assert.equal(status.selectionReceiptSha256, planned.receipt.filter.selectionReceiptSha256);
     assert.throws(() => planApi.loadPlanHandle(path.join(runs, 'run.json'), path.join(runs, 'missing.json'),
-        path.join(f.output, 'plan.json'), importHandle, taxonomy), /cannot be read safely|ENOENT/);
+        path.join(f.output, 'plan.json'), importHandle, tagCatalogPath), /cannot be read safely|ENOENT/);
     assert.throws(() => executionApi.prepareExecutionFromPlan({ executionRoot: executions, planHandle: {},
         executionId: '66666666-6666-4666-8666-666666666666', now: NOW }), /authenticated plan handle/);
 });

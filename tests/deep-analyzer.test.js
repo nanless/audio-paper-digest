@@ -43,7 +43,7 @@ describe('taxonomy runtime analysis integration', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const prompts = [];
         const budgets = [];
-        const repaired = await deep.repairTaxonomyTags(
+        const repaired = await deep.repairTagSelection(
             { arxivId: '2403.01900', title: 'Crowdsourced test' },
             validAnalysisText(),
             'The paper evaluates multilingual speech intelligibility with crowdsourced listeners.',
@@ -75,14 +75,14 @@ describe('taxonomy runtime analysis integration', () => {
 
     it('taxonomy prompt has no paper-specific 2403 answer example', () => {
         const prompt = fs.readFileSync(
-            path.join(__dirname, '../prompts/taxonomy-tag-repair.md'), 'utf8'
+            path.join(__dirname, '../prompts/tag-repair.md'), 'utf8'
         );
         assert.doesNotMatch(prompt, /task\.intelligibility|method\.crowdsourced-evaluation/);
     });
 
     it('current fingerprints bind taxonomy while legacy summary fingerprints do not', () => {
         const deep = require('../scripts/deep-analyzer.js');
-        const fields = deep.taxonomyFingerprintFields();
+        const fields = deep.tagRuleFingerprintFields();
         assert.match(fields.taxonomyRegistrySha256, /^[a-f0-9]{64}$/);
         assert.match(fields.taxonomyProjectionSha256, /^[a-f0-9]{64}$/);
         assert.strictEqual(fields.taxonomySelectionContract, 'paper-taxonomy-selection-v1');
@@ -6046,7 +6046,7 @@ has_dataset: 否
             normalizeAnalysisStructure,
             getRepairableAnalysisStructureIssues,
             parseAnalysis,
-            applyTaxonomySelection,
+            applyTagSelection,
             maskClassificationFields
         } = require('../scripts/deep-analyzer.js');
         const { validateTagSectionContract } = require('../scripts/analysis-contract.js');
@@ -6063,7 +6063,7 @@ has_dataset: 否
         assert.doesNotMatch(normalized, /#音频伪造检测 #CNN #模型评估/);
         assert.ok(validateTagSectionContract(normalized, parsed));
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(normalized), []);
-        const repaired = applyTaxonomySelection(normalized, {
+        const repaired = applyTagSelection(normalized, {
             tags: ['#音频伪造检测', '#CNN', '#模型评估'],
             primaryTaskTag: '#音频伪造检测',
             primaryMethodTag: '#CNN'
@@ -6621,14 +6621,14 @@ has_dataset: 否
     });
 
     it('成功态只为 complete taxonomy 保留精确两份证明 checkpoint', () => {
-        const { retainFinalTaxonomyCheckpoints } = require('../scripts/deep-analyzer.js');
+        const { retainFinalTagCheckpoints } = require('../scripts/deep-analyzer.js');
         const paper = { analysisStageCheckpoints: {
             structureRepair: 'structure bytes',
             taxonomySeal: 'taxonomy bytes',
             coreSummaryRepair: 'summary bytes',
             scoringAudit: 'scoring bytes'
         } };
-        retainFinalTaxonomyCheckpoints(paper, {
+        retainFinalTagCheckpoints(paper, {
             stages: { taxonomySeal: { status: 'complete' } }
         });
         assert.deepStrictEqual(paper.analysisStageCheckpoints, {
@@ -6639,14 +6639,14 @@ has_dataset: 否
         const notNeeded = { analysisStageCheckpoints: {
             structureRepair: 'same bytes', taxonomySeal: 'same bytes'
         } };
-        retainFinalTaxonomyCheckpoints(notNeeded, {
+        retainFinalTagCheckpoints(notNeeded, {
             stages: { taxonomySeal: { status: 'not_needed' } }
         });
         assert.deepStrictEqual(notNeeded.analysisStageCheckpoints, {
             taxonomySeal: 'same bytes'
         });
 
-        assert.throws(() => retainFinalTaxonomyCheckpoints({
+        assert.throws(() => retainFinalTagCheckpoints({
             analysisStageCheckpoints: { structureRepair: 'structure bytes' }
         }, { stages: { taxonomySeal: { status: 'complete' } } }),
         /必须保留 taxonomySeal/);

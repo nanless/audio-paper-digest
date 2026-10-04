@@ -143,13 +143,13 @@ function normalizePlan(value) {
     const ledgerName = safeName(value.ledgerName, 'plan ledgerName');
     exact(value.taxonomy, ['version', 'sha256'], 'plan taxonomy');
     if (typeof value.taxonomy.version !== 'string' || !value.taxonomy.version.trim()) fail('plan taxonomy.version must be non-empty');
-    const taxonomy = { version: value.taxonomy.version, sha256: sha(value.taxonomy.sha256, 'plan taxonomy.sha256') };
+    const tagCatalogIdentity = { version: value.taxonomy.version, sha256: sha(value.taxonomy.sha256, 'plan taxonomy.sha256') };
     const selectionPolicy = normalizeSelection(value.selectionPolicy);
     const shards = normalizeShards(value.shards, selectionPolicy.identities);
-    return { contract: PLAN_CONTRACT, version: VERSION, ledgerName, taxonomy, selectionPolicy, shards };
+    return { contract: PLAN_CONTRACT, version: VERSION, ledgerName, taxonomy: tagCatalogIdentity, selectionPolicy, shards };
 }
 
-function readTaxonomy(filename) {
+function readTagCatalogFile(filename) {
     if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail('configured taxonomy registry must be an absolute filename');
     let canonicalFilename;
     try {
@@ -175,7 +175,7 @@ function serialize(value) { return Buffer.from(`${JSON.stringify(value, null, 2)
 
 function createRunFromImportPlan({ files, importHandle, planName, runName }) {
     if (!files || typeof files !== 'object') fail('configured files must be an object');
-    for (const field of ['conferenceSourceLedgerDir', 'conferenceRunsDir', 'taxonomyRegistry']) {
+    for (const field of ['conferenceSourceLedgerDir', 'conferenceRunsDir', 'tagCatalogFile']) {
         if (typeof files[field] !== 'string') fail(`configured ${field} is required`);
     }
     safeName(planName, 'planName'); safeName(runName, 'runName');
@@ -201,8 +201,8 @@ function createRunFromImportPlan({ files, importHandle, planName, runName }) {
             fail(`plan paperId is not canonical for ${member.sourceIdentity}`);
         }
     }
-    const taxonomy = readTaxonomy(files.taxonomyRegistry);
-    if (plan.taxonomy.sha256 !== taxonomy.sha256) fail('plan taxonomy SHA does not match the configured registry bytes');
+    const tagCatalogFile = readTagCatalogFile(files.tagCatalogFile);
+    if (plan.taxonomy.sha256 !== tagCatalogFile.sha256) fail('plan taxonomy SHA does not match the configured registry bytes');
     const run = runApi.createConferenceRunFromVerifiedLedger({ ledgerHandle: authority.ledgerHandle,
         taxonomyVersion: plan.taxonomy.version,
         filterPolicySha256: imported.receipt.filterPolicySha256,
@@ -261,7 +261,7 @@ function normalizeSecureReceipt(value) {
     return clone(value);
 }
 
-function loadPlanHandle(runFile, receiptFile, planFile, importHandle, taxonomyFile) {
+function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalogPath) {
     let authority;
     try { authority = importerApi.importHandleAuthority(importHandle); }
     catch (error) { throw fail(error.message); }
@@ -272,12 +272,12 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, taxonomyFi
     }
     catch (error) { throw fail(`plan bundle cannot be read safely: ${error.message}`); }
     const receipt = normalizeSecureReceipt(loadedReceipt.value); const plan = normalizePlan(loadedPlan.value);
-    const imported = authority.snapshot; const taxonomy = readTaxonomy(taxonomyFile);
+    const imported = authority.snapshot; const tagCatalogFile = readTagCatalogFile(tagCatalogPath);
     if (receipt.run.name !== path.basename(runFile) || receipt.run.sha256 !== loadedRun.sha256) fail('plan receipt does not bind exact run file');
     if (receipt.planName !== path.basename(planFile) || receipt.planSha256 !== loadedPlan.sha256) fail('plan receipt does not bind exact reviewed plan file');
     if (receipt.ledger.name !== path.basename(imported.ledgerFile) || receipt.ledger.sha256 !== imported.ledgerSha256
         || receipt.ledger.memberSetSha256 !== imported.ledger.memberSetSha256) fail('plan receipt does not bind authenticated import ledger');
-    if (receipt.taxonomy.sha256 !== taxonomy.sha256) fail('plan receipt taxonomy bytes drifted');
+    if (receipt.taxonomy.sha256 !== tagCatalogFile.sha256) fail('plan receipt taxonomy bytes drifted');
     if (plan.ledgerName !== receipt.ledger.name || stableHash(plan.taxonomy) !== stableHash(receipt.taxonomy)
         || stableHash(plan.selectionPolicy.identities) !== stableHash(receipt.members)
         || stableHash(plan.shards) !== stableHash(receipt.shards)) fail('reviewed plan content drifted from plan receipt');

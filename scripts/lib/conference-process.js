@@ -13,8 +13,8 @@ const recovery = require('./conference-process-recovery.js');
 
 const CONTRACT = 'conference-process-v1';
 const COMPLETION_CONTRACT = 'conference-process-completion-receipt-v1';
-const TAXONOMY_REVIEW_CONTRACT = 'conference-taxonomy-review-queue-v1';
-const TAXONOMY_REVIEW_FILE = 'taxonomy-review-queue.json';
+const TAG_REVIEW_QUEUE_CONTRACT = 'conference-taxonomy-review-queue-v1';
+const TAG_REVIEW_QUEUE_FILE = 'taxonomy-review-queue.json';
 const DEEP_EXECUTION_CONFIG_CONTRACT = 'conference-deep-execution-config-v1';
 const VERSION = 1;
 const DEEP_EXECUTION_CONFIG_VERSION = 1;
@@ -64,7 +64,7 @@ const IMPLEMENTATION_FILES = Object.freeze([
     'prompts/scoring-audit.md',
     'prompts/structure-repair.md',
     'prompts/table-fill.md',
-    'prompts/taxonomy-tag-repair.md',
+    'prompts/tag-repair.md',
     'scripts/analysis-contract.js',
     'scripts/analysis-engine.js',
     'scripts/conference-page-render.py',
@@ -89,7 +89,7 @@ const IMPLEMENTATION_FILES = Object.freeze([
     'scripts/lib/reader-resource-sync.js',
     'scripts/lib/reader-source-diagnostics.js',
     'scripts/lib/reader-tables.js',
-    'scripts/lib/taxonomy-registry-change.js',
+    'scripts/lib/tag-catalog-change.js',
     'scripts/llm-account-pool.js',
     'scripts/publish_common.py',
     'scripts/paper_identity.py',
@@ -397,12 +397,12 @@ function validateCompletionReceipt(state, receipt, planReceiptSha256 = null) {
     return receipt;
 }
 
-// Read-side projection of the `needs_taxonomy_review` queue: items whose
-// deterministic taxonomy assignment stayed blocked. A review item never feeds
-// the completion receipt — it keeps the batch open (partial), so an unresolved
-// taxonomy can never be published as a finished classification, and its page is
-// never staged. The queue is the human-readable report of that pending work.
-function taxonomyReviewQueue(state) {
+// Build a read-only queue for papers whose deterministic tag assignment is blocked.
+// Queue entries keep the batch partial and are excluded from the completion receipt.
+// An unresolved assignment cannot authorize page staging or publication.
+// The queue reports which papers still need a classification decision.
+// It does not convert a pending assignment into a completed classification.
+function buildTagReviewQueue(state) {
     const checked = assertState(state);
     const items = Object.values(checked.items)
         .filter(item => item.reviewRequired
@@ -414,13 +414,13 @@ function taxonomyReviewQueue(state) {
             assignmentSha256: item.reviewRequired?.assignmentSha256 || null,
             lastError: item.lastError || null }))
         .sort((left, right) => left.paperId.localeCompare(right.paperId));
-    const body = { contract: TAXONOMY_REVIEW_CONTRACT, version: VERSION,
+    const body = { contract: TAG_REVIEW_QUEUE_CONTRACT, version: VERSION,
         processId: checked.processId, conferenceId: checked.authority.conferenceId,
         stateGeneration: checked.generation, taxonomyReview: items.length, items };
     return { ...body, queueSha256: stableHash(body) };
 }
-function writeTaxonomyReviewQueue(directory, queue) {
-    const filename = path.join(directory, TAXONOMY_REVIEW_FILE);
+function writeTagReviewQueue(directory, queue) {
+    const filename = path.join(directory, TAG_REVIEW_QUEUE_FILE);
     if (!queue.taxonomyReview) {
         if (fs.existsSync(filename)) fs.rmSync(filename);
         return null;
@@ -436,7 +436,7 @@ function writeTaxonomyReviewQueue(directory, queue) {
 function buildTagReviewQueueFields(queue, directory) {
     if (!queue.taxonomyReview) return {};
     return { taxonomyReviewQueue: queue.items,
-        taxonomyReviewQueueFile: path.join(directory, TAXONOMY_REVIEW_FILE) };
+        taxonomyReviewQueueFile: path.join(directory, TAG_REVIEW_QUEUE_FILE) };
 }
 
 function defaultDependencies() {
@@ -489,9 +489,9 @@ function loadAuthority(options, deps) {
             throw new Error(`selected source is not a unique official exact PDF: ${member.paperId}`);
         }
     }
-    const taxonomy = deps.ledger.readRegularJson(files.taxonomyRegistry);
-    const taxonomyVersion = String(taxonomy.value.version || taxonomy.value.registryVersion || '');
-    if (!taxonomyVersion) throw new Error('current taxonomy registry version is missing');
+    const tagCatalogFile = deps.ledger.readRegularJson(files.tagCatalogFile);
+    const tagCatalogVersion = String(tagCatalogFile.value.version || tagCatalogFile.value.registryVersion || '');
+    if (!tagCatalogVersion) throw new Error('current taxonomy registry version is missing');
     const authority = { conferenceId: selection.conferenceId, catalogName: options.catalogName,
         reportName: options.reportName, filterId: options.filterId, catalogSha256: discovery.catalogSha256,
         reportSha256: discovery.reportSha256, filterPolicySha256: selection.filterPolicySha256,
@@ -499,7 +499,7 @@ function loadAuthority(options, deps) {
         selectedMemberSetSha256: selection.selectedMemberSetSha256,
         acquisitionReceiptSha256: acquisitionReceipt?.catalogReceiptSha256 || null,
         acquisitionPdfReceiptSetSha256: acquisitionReceipt?.pdfReceiptSetSha256 || null,
-        taxonomyVersion, taxonomyRegistrySha256: taxonomy.sha256,
+        taxonomyVersion: tagCatalogVersion, taxonomyRegistrySha256: tagCatalogFile.sha256,
         implementationSha256: (deps.implementationSha256 || implementationSha256)(),
         deepExecutionConfig: currentDeepExecutionConfigIdentity(deps) };
     return { files, discoveryHandle, selectionHandle, discovery, selection, authority,
@@ -635,16 +635,16 @@ function prepareShared(context, deps, createdAt) {
         files.conferenceSourceLedgerDir, names.ledger, bundle.ledgerBytes, bundle.receipt, names.importReceipt);
     if (fs.existsSync(ledgerFile) !== fs.existsSync(importReceiptFile)) throw new Error('partial conference import bundle cannot be recovered');
     const importHandle = deps.importer.loadImportHandle(ledgerFile, importReceiptFile, stagingHandle);
-    const imported = deps.importer.importHandleSnapshot(importHandle); const taxonomy = deps.ledger.readRegularJson(files.taxonomyRegistry);
-    const taxonomyVersion = String(taxonomy.value.version || taxonomy.value.registryVersion || '');
-    if (!taxonomyVersion) throw new Error('taxonomy registry version is missing');
+    const imported = deps.importer.importHandleSnapshot(importHandle); const tagCatalogFile = deps.ledger.readRegularJson(files.tagCatalogFile);
+    const tagCatalogVersion = String(tagCatalogFile.value.version || tagCatalogFile.value.registryVersion || '');
+    if (!tagCatalogVersion) throw new Error('taxonomy registry version is missing');
     const identities = imported.verifiedMembers;
     const planIdentities = [...identities].sort((left, right) => left.paperId.localeCompare(right.paperId));
     const shards = [];
     for (let index = 0; index < planIdentities.length; index += 50) shards.push({ shardId: `part-${String(index / 50 + 1).padStart(4, '0')}`,
         paperIds: planIdentities.slice(index, index + 50).map(item => item.paperId) });
     const planDoc = { contract: deps.plan.PLAN_CONTRACT, version: deps.plan.VERSION, ledgerName: names.ledger,
-        taxonomy: { version: taxonomyVersion, sha256: taxonomy.sha256 }, selectionPolicy: {
+        taxonomy: { version: tagCatalogVersion, sha256: tagCatalogFile.sha256 }, selectionPolicy: {
             contract: deps.plan.SELECTION_CONTRACT, identities: planIdentities,
             selectedMemberSetSha256: deps.plan.stableHash(planIdentities.map(item => item.paperId)) },
         shards };
@@ -654,7 +654,7 @@ function prepareShared(context, deps, createdAt) {
     if (!fs.existsSync(runFile) && !fs.existsSync(planReceiptFile)) deps.plan.applyRunPlan(planned);
     if (fs.existsSync(runFile) !== fs.existsSync(planReceiptFile)) throw new Error('partial conference plan bundle cannot be recovered');
     const planHandle = deps.plan.loadPlanHandle(runFile, planReceiptFile,
-        path.join(files.conferenceSourceLedgerDir, names.plan), importHandle, files.taxonomyRegistry);
+        path.join(files.conferenceSourceLedgerDir, names.plan), importHandle, files.tagCatalogFile);
     return { planHandle, names, sealed, sourceCacheRoot: cacheRoot,
         sourceGenerationChanged: sealed.some(item => item.upgradedFrom),
         planReceiptSha256: deps.plan.planHandleSnapshot(planHandle).receipt.receiptSha256 };
@@ -689,11 +689,11 @@ async function processOne(context, shared, item, deps) {
         throw error;
     }
     const staged = deps.postprocess.stagePaper({ analysisRoot: files.conferenceAnalysisDir,
-        executionId: item.analysisRunId, taxonomyFile: files.taxonomyRegistry,
+        executionId: item.analysisRunId, tagCatalogPath: files.tagCatalogFile,
         stagingRoot: files.conferencePageStagingDir, planHandle: shared.planHandle,
         sourceRoot: shared.sourceCacheRoot, apply: true });
     if (staged.status === 'blocked') {
-        // Deterministic taxonomy review: the assignment is unresolved, so the
+        // Deterministic tag assignment review: the assignment is unresolved, so the
         // stage wrote assignment.json only (fail-closed, no page.md/manifest).
         // This is a per-paper review condition, never a batch/system failure.
         const assignment = staged.assignment || {};
@@ -744,8 +744,8 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     }, { allowMissing: true });
     state = assertState(state || JSON.parse(fs.readFileSync(stateFile)), expected);
     const publishReviewQueue = current => {
-        const queue = taxonomyReviewQueue(current);
-        writeTaxonomyReviewQueue(directory, queue);
+        const queue = buildTagReviewQueue(current);
+        writeTagReviewQueue(directory, queue);
         return queue;
     };
     if (state.status === 'complete') {
@@ -844,7 +844,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
             if (failure.systemic) stopped = true;
             updateItem(item.paperId, ['analyzing'], current => ({ ...current,
                 status: 'analysis_partial', lastError: failure.message, lastFailure: failure,
-                // A taxonomy review is an explicit, per-paper pending state; it is
+                // A tag assignment review is an explicit, per-paper pending state; it is
                 // reported through the review queue instead of a generic failure.
                 ...(error.taxonomyReview
                     ? { reviewRequired: { ...error.taxonomyReview, classifiedAt: failure.at } }
@@ -877,13 +877,13 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 taxonomyReview: review.taxonomyReview, ...buildTagReviewQueueFields(review, directory) };
         }
     }
-    // Every member is complete: no taxonomy review is pending, so any stale
+    // Every member is complete: no tag assignment review is pending, so any stale
     // queue sidecar is removed before the aggregate/completion transaction.
     publishReviewQueue(state);
     assertRuntimeAuthorityUnchanged(context, deps, 'before aggregate');
     const executionIds = context.members.map(member => state.items[member.paperId].analysisRunId);
     const aggregate = await (deps.aggregate || (async () => deps.postprocess.aggregateConference({
-        analysisRoot: deps.files.conferenceAnalysisDir, executionIds, taxonomyFile: deps.files.taxonomyRegistry,
+        analysisRoot: deps.files.conferenceAnalysisDir, executionIds, tagCatalogPath: deps.files.tagCatalogFile,
         stagingRoot: deps.files.conferencePageStagingDir, aggregateRoot: deps.files.conferenceAggregateDir,
         planHandle: shared.planHandle, sourceRoot: shared.sourceCacheRoot, apply: true })))(context, shared, executionIds, deps);
     const aggregateProof = { manifestSha256: aggregate.manifest.manifestSha256,
@@ -931,13 +931,13 @@ async function runConferenceProcess(options, overrides = {}) {
     ), { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
-module.exports = { CONTRACT, COMPLETION_CONTRACT, TAXONOMY_REVIEW_CONTRACT, TAXONOMY_REVIEW_FILE, VERSION,
+module.exports = { CONTRACT, COMPLETION_CONTRACT, TAG_REVIEW_QUEUE_CONTRACT, TAG_REVIEW_QUEUE_FILE, VERSION,
     MAX_CONCURRENCY, stableHash, deterministicUuid, canonicalBytes,
     DEEP_EXECUTION_CONFIG_CONTRACT, DEEP_EXECUTION_CONFIG_VERSION, DEEP_EXECUTION_LIMIT_FIELDS,
     deepExecutionConfigIdentity, assertDeepExecutionConfigIdentity, currentDeepExecutionConfigIdentity,
     assertRuntimeAuthorityUnchanged,
-    stateDigest, assertState, completionBodyFor, validateCompletionReceipt, taxonomyReviewQueue,
-    writeTaxonomyReviewQueue, buildTagReviewQueueFields, defaultDependencies, loadAuthority,
+    stateDigest, assertState, completionBodyFor, validateCompletionReceipt, buildTagReviewQueue,
+    writeTagReviewQueue, buildTagReviewQueueFields, defaultDependencies, loadAuthority,
     namesFor, sourceNames, sealOneSource, prepareShared,
     IMPLEMENTATION_FILES, implementationSha256, processOne, runWorkers, assertSourceContinuity,
     runConferenceProcessLocked, runConferenceProcess, safeProcessDirectory, exactFile };

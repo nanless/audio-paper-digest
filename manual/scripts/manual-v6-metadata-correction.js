@@ -20,7 +20,7 @@ const {
     ALLOWED_TAGS, PRIMARY_TASK_TAGS, PRIMARY_METHOD_TAGS, DOCUMENT_TYPES,
     normalizedId, writeFileAtomic, getBeijingISOString
 } = require('../../scripts/utils.js');
-const { getDefaultTagRules } = require('../../scripts/lib/taxonomy-runtime.js');
+const { getDefaultTagRules } = require('../../scripts/lib/tag-rules.js');
 const { validateRecord, RECORDS_VERSION } = require('./create-manual-analysis-spec.js');
 const { stableSignatureSha256 } = require('./manual-signature-contract.js');
 const { withFileLockSync } = require('../../scripts/analysis-engine.js');

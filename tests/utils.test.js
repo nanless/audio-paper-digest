@@ -1225,7 +1225,7 @@ describe('loadPrompt', () => {
             existingSummary: '已有核心摘要。',
             methodSection: '## 方法概述和架构\n已有方法。',
             resultsSection: '## 实验结果\n已有结果。',
-            taxonomyProjection: 'contract=test\n[task]\ntask.asr|#语音识别'
+            tagPromptText: 'contract=test\n[task]\ntask.asr|#语音识别'
         };
         const promptFiles = [
             'prompts/filter.md',
@@ -1274,7 +1274,7 @@ describe('loadPrompt', () => {
             existingSummary: '已有核心摘要。',
             methodSection: '## 方法概述和架构\n已有方法。',
             resultsSection: '## 实验结果\n已有结果。',
-            taxonomyProjection: 'contract=test\n[task]\ntask.asr|#语音识别'
+            tagPromptText: 'contract=test\n[task]\ntask.asr|#语音识别'
         };
         const promptFiles = [
             'prompts/filter.md',

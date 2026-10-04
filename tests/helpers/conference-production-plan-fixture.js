@@ -76,11 +76,11 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120 } = {}) {
         path.join(roots.staging, 'staging-receipt.json'), selectionHandle, discoveryHandle, roots.source);
     const importHandle = importer.loadImportHandle(path.join(roots.ledgers, 'ledger.json'),
         path.join(roots.ledgers, 'ledger.import-receipt.json'), stagingHandle);
-    const taxonomy = path.join(root, 'taxonomy.json'); fs.writeFileSync(taxonomy, '{"version":"taxonomy-v1"}\n', { mode: 0o600 });
-    files.taxonomyRegistry = taxonomy;
+    const tagCatalogPath = path.join(root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n', { mode: 0o600 });
+    files.tagCatalogFile = tagCatalogPath;
     const identities = importer.importHandleSnapshot(importHandle).verifiedMembers;
     const runPlan = { contract: plan.PLAN_CONTRACT, version: plan.VERSION, ledgerName: 'ledger.json',
-        taxonomy: { version: 'taxonomy-v1', sha256: sha256(fs.readFileSync(taxonomy)) },
+        taxonomy: { version: 'taxonomy-v1', sha256: sha256(fs.readFileSync(tagCatalogPath)) },
         selectionPolicy: { contract: plan.SELECTION_CONTRACT, identities,
             selectedMemberSetSha256: plan.stableHash(identities.map(member => member.paperId)) },
         shards: [{ shardId: 'all', paperIds: identities.map(member => member.paperId) }] };
@@ -88,7 +88,7 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120 } = {}) {
     const planned = plan.createRunFromImportPlan({ files, importHandle, planName: 'plan.json', runName: 'run.json' });
     plan.applyRunPlan(planned);
     const planHandle = plan.loadPlanHandle(path.join(roots.runs, 'run.json'),
-        path.join(roots.runs, 'run.plan-receipt.json'), path.join(roots.ledgers, 'plan.json'), importHandle, taxonomy);
+        path.join(roots.runs, 'run.plan-receipt.json'), path.join(roots.ledgers, 'plan.json'), importHandle, tagCatalogPath);
     const authority = plan.planHandleAuthority(planHandle);
     const ledger = authority.ledgerHandle && require('../../scripts/lib/conference-source-ledger.js')
         .ledgerHandleSnapshot(authority.ledgerHandle).ledger;

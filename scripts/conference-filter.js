@@ -52,9 +52,9 @@ function requireFiles(files) {
 function readConfiguredJson(directory, name) {
     return ledgerApi.readRegularJson(filterApi.safeDirectJson(directory, name));
 }
-function verifyTaxonomy(files, spec) {
-    if (typeof files.taxonomyRegistry !== 'string') throw new Error('Configured taxonomyRegistry is required');
-    const loaded = ledgerApi.readRegularJson(files.taxonomyRegistry);
+function verifyTagCatalogFileBinding(files, spec) {
+    if (typeof files.tagCatalogFile !== 'string') throw new Error('Configured tagCatalogFile is required');
+    const loaded = ledgerApi.readRegularJson(files.tagCatalogFile);
     if (loaded.sha256 !== spec.taxonomyRegistrySha256) throw new Error('Configured taxonomy registry SHA drifted from filter spec');
 }
 
@@ -71,7 +71,7 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
     const options = parseArgs(argv); const files = requireFiles(dependencies.files || Config.FILES);
     let state;
     if (options.command === 'spec') {
-        const taxonomy = ledgerApi.readRegularJson(files.taxonomyRegistry);
+        const tagCatalogFile = ledgerApi.readRegularJson(files.tagCatalogFile);
         const discoveryHandle = discoveryApi.loadDiscoveryHandle({
             catalogDir: files.conferenceDiscoveryCatalogDir, catalogName: options.catalogName,
             reportDir: files.conferenceDiscoveryReportDir, reportName: options.reportName
@@ -80,7 +80,7 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
             runId: options.evidenceRunId, discoveryHandle });
         const spec = filterApi.buildProductionSpec({ endpoint: (dependencies.env || process.env).PAPER_ANALYZER_ENDPOINT,
             model: (dependencies.env || process.env).PAPER_ANALYZER_MODEL,
-            taxonomyRegistrySha256: taxonomy.sha256, discoveryHandle, evidenceHandle });
+            tagCatalogSha256: tagCatalogFile.sha256, discoveryHandle, evidenceHandle });
         filterApi.writeFilterSpec({ specRoot: files.conferenceFilterSpecsDir, specName: options.specName, spec });
         const output = { kind: 'conference-filter-spec', specName: options.specName,
             conferenceId: spec.discovery.conferenceId, evidenceRunId: spec.evidence.runId,
@@ -93,7 +93,7 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
             reportDir: files.conferenceDiscoveryReportDir, reportName: options.reportName
         });
         const loadedSpec = readConfiguredJson(files.conferenceFilterSpecsDir, options.specName);
-        const spec = filterApi.normalizeSpec(loadedSpec.value); verifyTaxonomy(files, spec);
+        const spec = filterApi.normalizeSpec(loadedSpec.value); verifyTagCatalogFileBinding(files, spec);
         const evidenceHandle = evidenceApi.loadEvidenceHandle({ evidenceRunsRoot: files.conferenceFilterEvidenceRunsDir,
             runId: options.evidenceRunId, discoveryHandle });
         state = filterApi.prepareFilter({ filterRoot: files.conferenceFiltersDir, discoveryHandle, evidenceHandle,
@@ -111,4 +111,4 @@ if (require.main === module) {
     try { main(); } catch (error) { console.error(`[conference-filter] ${error.message}`); process.exitCode = 1; }
 }
 
-module.exports = { parseArgs, requireFiles, readConfiguredJson, verifyTaxonomy, summary, main };
+module.exports = { parseArgs, requireFiles, readConfiguredJson, verifyTagCatalogFileBinding, summary, main };

@@ -252,7 +252,7 @@ function isTextHeavyRecordMatrix(matrix) {
     if (!Array.isArray(matrix) || matrix.length < 2) return false;
     const width = matrix[0]?.length || 0;
     if (width < 3 || width > 8 || matrix.some(row => row.length !== width)) return false;
-    // Descriptive protocol/taxonomy tables may contain digits in names such as
+    // Descriptive protocol/tag catalog tables may contain digits in names such as
     // Banking77, S&P 500 or 10-K, so a numeric-token test would misclassify
     // them as result tables.  Long record fields are the stable signal.
     const fields = matrix.slice(1).flatMap(row => row.slice(1).map(normalizeText));

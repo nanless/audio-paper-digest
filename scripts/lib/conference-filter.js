@@ -1431,7 +1431,7 @@ function endpointIdentitySha256(endpoint, model) {
     return sha256(Buffer.from(new URL(utilsApi.buildApiUrl(apiType, endpoint)).href, 'utf8'));
 }
 
-function buildProductionSpec({ endpoint, model, taxonomyRegistrySha256, discoveryHandle, evidenceHandle } = {}) {
+function buildProductionSpec({ endpoint, model, tagCatalogSha256, discoveryHandle, evidenceHandle } = {}) {
     endpoint = nonempty(String(endpoint || '').trim(), 'production spec endpoint');
     model = nonempty(String(model || '').trim(), 'production spec model');
     const apiType = utilsApi.detectApiType(endpoint, model);
@@ -1443,7 +1443,7 @@ function buildProductionSpec({ endpoint, model, taxonomyRegistrySha256, discover
     return normalizeSpec({ contract: SPEC_CONTRACT, version: SPEC_VERSION,
         filterPolicySha256: LLM_FILTER_POLICY_SHA256, promptSha256: LLM_FILTER_PROMPT_SHA256,
         model, endpointProtocol, endpointIdentitySha256: endpointIdentitySha256(endpoint, model),
-        taxonomyRegistrySha256, evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
+        taxonomyRegistrySha256: tagCatalogSha256, evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
         discovery: { contract: catalog.contract, conferenceId: catalog.conferenceId,
             catalogSha256: catalog.catalogSha256, reportSha256: discovery.reportSha256,
             candidateSetSha256: stableHash(catalog.members) }, evidence });

@@ -37,7 +37,7 @@ function parseArgs(argv) {
 }
 function configured(files) {
     const result = { analysisRoot: files.conferenceAnalysisDir, sourceRoot: files.conferenceSourceCacheDir,
-        taxonomyFile: files.taxonomyRegistry, stagingRoot: files.conferencePageStagingDir,
+        tagCatalogPath: files.tagCatalogFile, stagingRoot: files.conferencePageStagingDir,
         aggregateRoot: files.conferenceAggregateDir };
     for (const [key, value] of Object.entries(result)) if (typeof value !== 'string' || !path.isAbsolute(value)) throw new Error(`${key} must be a configured absolute path`);
     return result;

@@ -28,8 +28,8 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     const options = parseArgs(argv); const result = (runtime.stage || require('./lib/historical-page-staging.js').stageHistoricalPages)({
         ...options, crosswalkRoot: Config.FILES.pageSourceCrosswalkDir,
         analysisRoot: Config.FILES.freshRewriteRunsDir,
-        taxonomyRoot: Config.FILES.historicalTaxonomyAssignmentDir,
-        taxonomyRegistry: Config.FILES.taxonomyRegistry,
+        tagAssignmentRoot: Config.FILES.historicalTagAssignmentDir,
+        tagCatalogPath: Config.FILES.tagCatalogFile,
         stagingRoot: Config.FILES.historicalPageStagingDir }, runtime.dependencies || {});
     console.log(JSON.stringify(result)); return result;
 }

@@ -28,9 +28,9 @@ function fixture(t, secondStatus = 'complete') {
         crosswalk.identityGroups.push({ paperId: paperIds[index], pageKeys: [pages[index].pageKey] });
     }
     const files = { historicalAnalysisSchedulerDir: path.join(root, 'analysis-scheduler'),
-        historicalPostprocessSchedulerDir: path.join(root, 'postprocess'), taxonomyRegistry: path.join(root, 'taxonomy.json'),
+        historicalPostprocessSchedulerDir: path.join(root, 'postprocess'), tagCatalogFile: path.join(root, 'taxonomy.json'),
         pageSourceCrosswalkDir: path.join(root, 'crosswalk'), freshRewriteRunsDir: path.join(root, 'runs'),
-        historicalTaxonomyAssignmentDir: path.join(root, 'assignments'), historicalPageStagingDir: path.join(root, 'staging'),
+        historicalTagAssignmentDir: path.join(root, 'assignments'), historicalPageStagingDir: path.join(root, 'staging'),
         historicalPageInventoryDir: path.join(root, 'inventory'), historicalDailyAggregateDir: path.join(root, 'aggregates') };
     fs.mkdirSync(files.historicalAnalysisSchedulerDir, { recursive: true });
     const items = Object.fromEntries(paperIds.map((paperId, index) => [paperId, { status: index ? secondStatus : 'complete',

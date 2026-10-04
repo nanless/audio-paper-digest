@@ -146,7 +146,7 @@ function bindTopology({ crosswalkRoot, crosswalkId, inventoryRoot } = {}) {
     return { state, inventory };
 }
 
-function canonicalProjection(paper, taxonomy) {
+function canonicalProjection(paper, tagAssignment) {
     if (!paper || typeof paper !== 'object' || typeof paper.analysis !== 'string' || !paper.analysis.trim()
         || !paper.parsed || typeof paper.parsed !== 'object') fail('completed canonical paper is missing parsed analysis');
     const reparsed = require('../utils.js').parseAnalysis(paper.analysis);
@@ -158,17 +158,17 @@ function canonicalProjection(paper, taxonomy) {
     const summary = boundedText(reparsed.summary, 'canonical core summary', 20000);
     const score = Number(reparsed.score);
     if (!Number.isFinite(score) || score < 0 || score > 10) fail('canonical score is invalid');
-    if (!taxonomy || taxonomy.status !== 'assigned' || !Array.isArray(taxonomy.concepts)) fail('assigned taxonomy is required');
-    const concepts = taxonomy.concepts.map((concept, index) => {
+    if (!tagAssignment || tagAssignment.status !== 'assigned' || !Array.isArray(tagAssignment.concepts)) fail('assigned taxonomy is required');
+    const concepts = tagAssignment.concepts.map((concept, index) => {
         const label = boundedText(concept?.preferredLabel?.zh, `taxonomy concept[${index}] Chinese label`, 200);
         if (typeof concept.id !== 'string' || typeof concept.facet !== 'string') fail(`taxonomy concept[${index}] is invalid`);
         return { id: concept.id, facet: concept.facet, label };
     });
-    const task = concepts.find(item => item.id === taxonomy.primaryTaskId && item.facet === 'task');
-    const method = concepts.find(item => item.id === taxonomy.primaryMethodId && item.facet === 'method');
+    const task = concepts.find(item => item.id === tagAssignment.primaryTaskId && item.facet === 'task');
+    const method = concepts.find(item => item.id === tagAssignment.primaryMethodId && item.facet === 'method');
     if (!task || !method || new Set(concepts.map(item => item.id)).size !== concepts.length) fail('taxonomy primary task/method projection is incomplete');
     return { title, summary, score, analysisSha256: sha256(Buffer.from(paper.analysis, 'utf8')),
-        taxonomyAssignmentSha256: taxonomy.assignmentSha256, taxonomyRegistrySha256: taxonomy.registrySha256,
+        taxonomyAssignmentSha256: tagAssignment.assignmentSha256, taxonomyRegistrySha256: tagAssignment.registrySha256,
         primaryTaskId: task.id, primaryTaskLabel: task.label, primaryMethodId: method.id,
         primaryMethodLabel: method.label, labels: concepts.map(item => item.label) };
 }
@@ -195,8 +195,8 @@ function loadAggregateInputs(options, dependencies = {}) {
         if (analysisRunIds.length !== 1) fail('each page staging manifest must bind exactly one analysis run');
         const projection = (dependencies.loadProjectionInputs || pageStagingApi.loadProjectionInputs)({
             crosswalkRoot: options.crosswalkRoot, crosswalkId: staged.manifest.crosswalkId,
-            analysisRoot: options.analysisRoot, taxonomyRoot: options.taxonomyRoot,
-            taxonomyRegistry: options.taxonomyRegistry, analysisRunId: analysisRunIds[0] }, dependencies.projectionDependencies || {});
+            analysisRoot: options.analysisRoot, tagAssignmentRoot: options.tagAssignmentRoot,
+            tagCatalogPath: options.tagCatalogPath, analysisRunId: analysisRunIds[0] }, dependencies.projectionDependencies || {});
         if (projection.crosswalk.stateSha256 !== topology.state.stateSha256) fail('canonical projection used a different crosswalk state');
         const groups = new Map(projection.groups.map(group => [group.paperId, group]));
         for (const page of staged.manifest.pages) {

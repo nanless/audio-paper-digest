@@ -6,8 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const crosswalkApi = require('./page-source-crosswalk.js');
-const tagAssignmentsApi = require('./historical-taxonomy-assignment.js');
-const registryApi = require('./paper-taxonomy.js');
+const tagAssignmentsApi = require('./historical-tag-assignment.js');
+const registryApi = require('./tag-catalog.js');
 const fresh = require('./fresh-rewrite-run.js');
 
 const CONTRACT = 'historical-paper-page-staging-v1';
@@ -24,9 +24,9 @@ const RENDERER_IMPLEMENTATION_FILES = Object.freeze([
     'scripts/lib/historical-direct-rewrite-runner.js',
     'scripts/lib/historical-postprocess-scheduler.js',
     'scripts/lib/historical-daily-aggregate.js',
-    'scripts/lib/historical-taxonomy-assignment.js',
-    'scripts/lib/paper-taxonomy.js',
-    'config/paper-taxonomy.json',
+    'scripts/lib/historical-tag-assignment.js',
+    'scripts/lib/tag-catalog.js',
+    'config/tag-catalog.json',
     'scripts/historical-page-render.py',
     'scripts/blog_entry_loader.py',
     'scripts/publish-to-blog.py',
@@ -160,9 +160,9 @@ function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAs
     return loaded.value.status === 'assigned' ? loaded : null;
 }
 
-function loadProjectionInputs({ crosswalkRoot, crosswalkId, analysisRoot, taxonomyRoot, taxonomyRegistry, analysisRunId } = {}, dependencies = {}) {
-    const taxonomy = (dependencies.loadTagCatalog || registryApi.loadTagCatalog)(taxonomyRegistry);
-    if (!SHA_RE.test(taxonomy?.registrySha256 || '')) throw new Error('Current taxonomy registry SHA is required');
+function loadProjectionInputs({ crosswalkRoot, crosswalkId, analysisRoot, tagAssignmentRoot, tagCatalogPath, analysisRunId } = {}, dependencies = {}) {
+    const tagCatalog = (dependencies.loadTagCatalog || registryApi.loadTagCatalog)(tagCatalogPath);
+    if (!SHA_RE.test(tagCatalog?.registrySha256 || '')) throw new Error('Current taxonomy registry SHA is required');
     const state = (dependencies.readCrosswalk || crosswalkApi.readCrosswalk)({ crosswalkRoot, crosswalkId });
     const pages = new Map(state.source.papers.map(page => [page.pageKey, page])); const results = [];
     const handle = (dependencies.loadRun || tagAssignmentsApi.loadCompletedHistoricalAnalysisRun)({
@@ -171,12 +171,12 @@ function loadProjectionInputs({ crosswalkRoot, crosswalkId, analysisRoot, taxono
     for (const group of state.identityGroups.filter(item => item.paperId.startsWith('arxiv:'))) {
         const paper = run.papers.find(item => `arxiv:${fresh.paperId(item)}` === group.paperId);
         if (!paper) continue;
-        const rebuilt = (dependencies.buildAssignment || tagAssignmentsApi.buildAssignment)({ runHandle: handle, paper, taxonomy });
-        const assignment = (dependencies.findAssignment || findAssignment)(taxonomyRoot, group.paperId,
-            analysisRunId, taxonomy.registrySha256, rebuilt);
+        const rebuilt = (dependencies.buildAssignment || tagAssignmentsApi.buildAssignment)({ runHandle: handle, paper, tagCatalog });
+        const assignment = (dependencies.findAssignment || findAssignment)(tagAssignmentRoot, group.paperId,
+            analysisRunId, tagCatalog.registrySha256, rebuilt);
         if (!assignment) continue;
         if (!paper || assignment.value.analysisFileSha256 !== run.analysisFileSha256
-            || assignment.value.registrySha256 !== taxonomy.registrySha256
+            || assignment.value.registrySha256 !== tagCatalog.registrySha256
             || assignment.value.analysisRecordSha256 !== stableHash(paper)
             || assignment.value.analysisSha256 !== sha256(Buffer.from(paper.analysis, 'utf8'))) {
             throw new Error(`${group.paperId} taxonomy does not bind the completed analysis`);

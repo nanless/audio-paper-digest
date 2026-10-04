@@ -1352,12 +1352,12 @@ function maskClassificationFields(analysis) {
     return `${source.slice(0, tagSectionBounds.contentStart)}__TAXONOMY_SECTION__${source.slice(tagSectionBounds.end)}`;
 }
 
-function validateTaxonomyStageBinding(paper, options = {}) {
+function validateTagStageProof(paper, options = {}) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.taxonomySeal;
     if (!isRecoveryStageTerminal('taxonomySeal', stage?.status)) return 'taxonomySeal 未完成';
-    const runtime = options.taxonomyRuntime
-        || require('./lib/taxonomy-runtime.js').getDefaultTagRules();
+    const runtime = options.tagRules
+        || require('./lib/tag-rules.js').getDefaultTagRules();
     if (manifest?.contracts?.taxonomy !== runtime.selectionContract
         || stage.registryVersion !== runtime.registryVersion
         || stage.projectionContract !== runtime.projectionContract
@@ -1369,9 +1369,9 @@ function validateTaxonomyStageBinding(paper, options = {}) {
         // 变更须为 additive/none，或属于已确认的 destructive 白名单，且 registryUpgradeFrom
         // 包含与重新计算结果对应的 destructiveAcknowledgement；升级说明须与校验结果一致；
         // 旧 conceptIds 在当前词表中须全部为 active。无法确认的 destructive 变更或缺少任何证据时拒绝沿用。
-        const upgrade = require('./lib/taxonomy-registry-change.js').validateSealRegistryUpgrade({
+        const upgrade = require('./lib/tag-catalog-change.js').validateSealRegistryUpgrade({
             fromRegistrySha256: stage.registrySha256,
-            currentRegistry: runtime.taxonomy,
+            currentRegistry: runtime.tagCatalog,
             currentRegistrySha256: runtime.registrySha256,
             conceptIds: stage.conceptIds,
             annotation: stage.registryUpgradeFrom,
@@ -2209,11 +2209,11 @@ function validateTagSectionContract(analysis, parsed, options = {}) {
         if (!parsed.primaryTaskTag) return '标签章节缺少可解析的主任务标签';
         if (!parsed.primaryMethodTag) return '标签章节缺少可解析的主方法标签';
         if (parsed?.taxonomyValidation?.valid !== true) {
-            return `标签不符合当前 taxonomy: ${parsed?.taxonomyValidation?.errors?.[0] || '缺少验证结果'}`;
+            return `标签不符合当前词表要求： ${parsed?.taxonomyValidation?.errors?.[0] || '缺少验证结果'}`;
         }
         if (allTags.length !== parsed.tags.length
         || allTags.some((tag, index) => tag !== parsed.tags[index])) {
-            return '标签首行必须逐字使用当前 taxonomy 的 active 中文首选标签';
+            return '标签首行必须与当前词表中仍有效的中文首选标签逐字一致';
         }
     }
     if (parsed.machineSummary?.primaryTaskTag !== taskTag
@@ -2351,7 +2351,7 @@ module.exports = {
     hashAnalysisWithMaskedCoreSummary,
     hashTagSectionAndPrimaryTags,
     maskClassificationFields,
-    validateTaxonomyStageBinding,
+    validateTagStageProof,
     validateCoreSummaryStageBinding,
     manualSha256,
     manualTextSha256,

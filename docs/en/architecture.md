@@ -29,7 +29,7 @@ sealed source files
   → primary analysis
   → project/demo evidence
   → revision and table/method/structure repairs
-  → taxonomy and core-summary checks
+  → tag and core-summary checks
   → scoring audit
   → API Reader article and official paper figures
   → optional legacy image supplement

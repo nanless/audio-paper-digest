@@ -93,9 +93,9 @@ function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisTex
     const summarySha256 = crypto.createHash('sha256').update(summary).digest('hex');
     const summaryMaskedAnalysisSha256 = contract.hashAnalysisWithMaskedCoreSummary(analysis);
     stages.structureRepair.outputAnalysisSha256 = analysisSha256;
-    const tagRules = require('../scripts/lib/taxonomy-runtime.js')
+    const tagRules = require('../scripts/lib/tag-rules.js')
         .getDefaultTagRules();
-    const taxonomyValidation = require('../scripts/utils.js').parseAnalysis(analysis)
+    const tagValidationResult = require('../scripts/utils.js').parseAnalysis(analysis)
         .taxonomyValidation;
     const classificationMaskedAnalysisSha256 = crypto.createHash('sha256')
         .update(contract.maskClassificationFields(analysis)).digest('hex');
@@ -110,9 +110,9 @@ function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisTex
         inputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
         outputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
         taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(analysis),
-        primaryTaskId: taxonomyValidation.primaryTaskId,
-        primaryMethodId: taxonomyValidation.primaryMethodId,
-        conceptIds: taxonomyValidation.conceptIds
+        primaryTaskId: tagValidationResult.primaryTaskId,
+        primaryMethodId: tagValidationResult.primaryMethodId,
+        conceptIds: tagValidationResult.conceptIds
     };
     stages.taxonomySeal = {
         status: 'not_needed', ...tagStageProof,

@@ -101,10 +101,10 @@ const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     findReaderTablePasteDuplication,
     effectiveReaderTableRows, readerResultTableRequirement, renderReaderTableSelection,
     validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
-const { getDefaultTagRules } = require('./lib/taxonomy-runtime.js');
+const { getDefaultTagRules } = require('./lib/tag-rules.js');
 const TAG_RULES = getDefaultTagRules();
 
-function taxonomyFingerprintFields() {
+function tagRuleFingerprintFields() {
     return {
         taxonomyRegistryVersion: TAG_RULES.registryVersion,
         taxonomyRegistrySha256: TAG_RULES.registrySha256,
@@ -8527,7 +8527,7 @@ const RECOVERY_PROMPT_FILES = Object.freeze({
     revision: 'prompts/gap-fill.md',
     tableRepair: 'prompts/table-fill.md',
     methodRepair: 'prompts/method-fill.md',
-    taxonomySeal: 'prompts/taxonomy-tag-repair.md',
+    taxonomySeal: 'prompts/tag-repair.md',
     coreSummaryRepair: 'prompts/core-summary-repair.md',
     structureRepair: 'prompts/structure-repair.md',
     scoringAudit: 'prompts/scoring-audit.md',
@@ -8749,7 +8749,7 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
         evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
         inputAnalysisSha256: crypto.createHash('sha256').update(String(inputAnalysis || '')).digest('hex'),
         ...(['revision', 'structureRepair', 'taxonomySeal'].includes(stage)
-            ? taxonomyFingerprintFields() : {}),
+            ? tagRuleFingerprintFields() : {}),
         ...(stage === 'structureRepair'
             ? {
                 experimentTableContractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -8826,7 +8826,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
         title: paper.title || '',
         authors: paper.authors || [],
         categories: paper.categories || [],
-        ...taxonomyFingerprintFields()
+        ...tagRuleFingerprintFields()
     };
     return {
         primaryAnalysis: stableFingerprint(primaryContext),
@@ -9897,7 +9897,7 @@ function hasIncompleteRecoveryStage(manifest) {
     );
 }
 
-function retainFinalTaxonomyCheckpoints(paper, analysisManifest) {
+function retainFinalTagCheckpoints(paper, analysisManifest) {
     const tagStageStatus = analysisManifest?.stages?.taxonomySeal?.status;
     if (!['complete', 'not_needed'].includes(tagStageStatus)) {
         delete paper.analysisStageCheckpoints;
@@ -14304,7 +14304,7 @@ async function analyzePaperDeepInternal(paper) {
         categories: Array.isArray(paper.categories) ? paper.categories.join(', ') : (paper.categories || '未知'),
         arxivId: arxivId,
         textForAnalysis: textForAnalysis,
-        taxonomyProjection: TAG_RULES.projection
+        tagPromptText: TAG_RULES.projection
     });
 
     let analysis = isRecoveryStageComplete(analysisManifest, 'primaryAnalysis')
@@ -14724,7 +14724,7 @@ async function analyzePaperDeepInternal(paper) {
             if (repairFeedback) {
                 console.log(`    [deep] 🏷️  taxonomy 标签执行局部修复: ${repairFeedback}`);
                 try {
-                    analysis = await repairTaxonomyTags(
+                    analysis = await repairTagSelection(
                         paper,
                         analysis,
                         tagStage.evidenceContext,
@@ -15580,7 +15580,7 @@ async function analyzePaperDeepInternal(paper) {
     }
     delete paper.analysisCheckpoint;
     delete paper.analysisRecoveryImageManifest;
-    retainFinalTaxonomyCheckpoints(paper, analysisManifest);
+    retainFinalTagCheckpoints(paper, analysisManifest);
     delete paper.analysisStaleSnapshots;
     delete paper.latestAnalysisAttemptError;
     delete paper.latestAnalysisAttemptAt;
@@ -15972,7 +15972,7 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
         arxivId: getPaperArxivId(paper),
         existingAnalysis: existingAnalysis,
         textForAnalysis: evidence,
-        taxonomyProjection: TAG_RULES.projection
+        tagPromptText: TAG_RULES.projection
     });
     return await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
         { usageContext: { stage: 'revision' } });
@@ -16114,7 +16114,7 @@ function normalizeAnalysisStructure(analysis) {
 
     // Taxonomy is semantic data, not a structure fallback.  Never infer a
     // plausible-looking task/method from prose here: a dedicated post-
-    // structure taxonomy stage either validates the exact registry concepts
+    // tag selection stage after structure repair either validates the exact registry concepts
     // or performs a source-bound, tag-only repair.
     if (parsedBefore.taxonomyValidation?.valid) {
         values.primary_task_tag = parsedBefore.primaryTaskTag;
@@ -16152,7 +16152,7 @@ function replaceSectionBodyExact(analysis, title, content) {
     return `${analysis.slice(0, bounds.contentStart)}${String(content).trim()}${analysis.slice(bounds.end)}`;
 }
 
-function replaceMachineTaxonomyFields(analysis, taskTag, methodTag) {
+function replaceMachinePrimaryTagFields(analysis, taskTag, methodTag) {
     const bounds = findSectionBounds(analysis, '机器摘要');
     if (!bounds) throw contractRejectedError('taxonomy 修复找不到 ## 机器摘要');
     let body = analysis.slice(bounds.contentStart, bounds.end);
@@ -16170,7 +16170,7 @@ function replaceMachineTaxonomyFields(analysis, taskTag, methodTag) {
     return `${analysis.slice(0, bounds.contentStart)}${body}${analysis.slice(bounds.end)}`;
 }
 
-function parseTaxonomyRepairResult(raw) {
+function parseTagRepairResult(raw) {
     const text = String(raw || '').trim();
     if (!text.startsWith('{') || !text.endsWith('}')) {
         throw contractRejectedError('taxonomy 修复输出必须是无前后缀的 JSON 对象');
@@ -16193,7 +16193,7 @@ function parseTaxonomyRepairResult(raw) {
         || parsed.conceptIds.some(id => typeof id !== 'string')) {
         throw contractRejectedError('taxonomy 修复 JSON schema 非法');
     }
-    const activeById = new Map(TAG_RULES.taxonomy.concepts
+    const activeById = new Map(TAG_RULES.tagCatalog.concepts
         .filter(concept => concept.status === 'active')
         .map(concept => [concept.id, concept]));
     const concepts = parsed.conceptIds.map(id => activeById.get(id));
@@ -16218,7 +16218,7 @@ function parseTaxonomyRepairResult(raw) {
     return { ...selection, validation };
 }
 
-function applyTaxonomySelection(analysis, selection, options = {}) {
+function applyTagSelection(analysis, selection, options = {}) {
     const original = String(analysis || '');
     const supplemental = selection.tags.filter(tag => (
         tag !== selection.primaryTaskTag && tag !== selection.primaryMethodTag
@@ -16229,7 +16229,7 @@ function applyTaxonomySelection(analysis, selection, options = {}) {
         `主方法标签：${selection.primaryMethodTag}`,
         `补充标签：${supplemental.join(' ')}`
     ].join('\n'));
-    updated = replaceMachineTaxonomyFields(
+    updated = replaceMachinePrimaryTagFields(
         updated, selection.primaryTaskTag, selection.primaryMethodTag
     );
     if (maskClassificationFields(updated) !== maskClassificationFields(original)) {
@@ -16247,16 +16247,16 @@ function applyTaxonomySelection(analysis, selection, options = {}) {
     return updated;
 }
 
-async function repairTaxonomyTags(paper, analysis, evidenceContext, issue, options = {}) {
+async function repairTagSelection(paper, analysis, evidenceContext, issue, options = {}) {
     const callModelFn = options.callModelFn || callModel;
     let feedback = issue;
     for (let attempt = 1; attempt <= 2; attempt++) {
-        const prompt = loadPrompt('prompts/taxonomy-tag-repair.md', {
+        const prompt = loadPrompt('prompts/tag-repair.md', {
             title: paper.title || '',
             arxivId: getPaperArxivId(paper),
             validationFeedback: feedback,
             textForAnalysis: evidenceContext,
-            taxonomyProjection: TAG_RULES.projection
+            tagPromptText: TAG_RULES.projection
         });
         const raw = await callModelFn(
             [{ role: 'user', content: prompt }],
@@ -16264,7 +16264,7 @@ async function repairTaxonomyTags(paper, analysis, evidenceContext, issue, optio
             { usageContext: { stage: 'taxonomySeal' } }
         );
         try {
-            return applyTaxonomySelection(analysis, parseTaxonomyRepairResult(raw), options);
+            return applyTagSelection(analysis, parseTagRepairResult(raw), options);
         } catch (error) {
             feedback = error.message;
             if (attempt === 2) throw error;
@@ -17055,12 +17055,12 @@ module.exports = {
     buildTaskEvidenceContext,
     buildStageEvidenceContext,
     buildTextStageFingerprint,
-    taxonomyFingerprintFields,
-    parseTaxonomyRepairResult,
-    applyTaxonomySelection,
-    repairTaxonomyTags,
+    tagRuleFingerprintFields,
+    parseTagRepairResult,
+    applyTagSelection,
+    repairTagSelection,
     maskClassificationFields,
-    retainFinalTaxonomyCheckpoints,
+    retainFinalTagCheckpoints,
     runtimePromptTemplateSha256,
     buildLegacyCoreSummaryV2PrimaryFingerprint,
     buildLegacyCoreSummaryV2TextFingerprint,

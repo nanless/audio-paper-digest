@@ -1,6 +1,6 @@
 {
   "contract": "paper-taxonomy-registry-upgrade-cross-end-fixture-v1",
-  "note": "同一份 (旧SHA, 注记, conceptIds) 输入分别喂给 Node validateSealRegistryUpgrade（scripts/lib/taxonomy-registry-change.js）与 Python _seal_registry_upgrade（scripts/publish_common.py）。expect 由 Node 侧生成；error 按“（…）内分号列表排序 + 括号后尾巴原样保留”归一化，因为同码原因的 message 排序依赖 localeCompare 所在 locale。换表口径：config/paper-taxonomy.json 已换为 v1.1（262 概念，SHA a3b75a14…），三份历史快照（dcf83f84 / 3f9a14c9 / 15c82a56）到 current 的复算分级全部是 destructive，因此换表前写下的“additive 放行”用例改为“可确认 destructive + destructiveAcknowledgement 放行”；用例名 additive-upgrade-allowed 因被 tests/python/test_publish_common.py 按名取用而保留，语义见该用例的 note。",
+  "note": "同一组旧词表 SHA、升级说明和 conceptIds，分别交给 Node validateSealRegistryUpgrade（scripts/lib/tag-catalog-change.js）与 Python _seal_registry_upgrade（scripts/publish_common.py）检查。expect 由 Node 生成。比较错误信息时，将括号内用分号分隔的原因排序，括号后的内容保持原样，因为 localeCompare 的排序结果会受运行环境语言设置影响。config/tag-catalog.json 已更新为 v1.1，含 262 个概念，SHA 为 a3b75a14…；从三份历史快照（dcf83f84、3f9a14c9、15c82a56）升级到当前词表，重新检查的结果均为 destructive。因此，原先预期 additive 升级通过的用例，现在要求明确确认 destructive 变更，并提供 destructiveAcknowledgement。保留 additive-upgrade-allowed 用例名，是因为 tests/python/test_publish_common.py 仍按该名称查找用例；具体条件见该用例的说明。",
   "errorNormalization": "split on ； inside the outer （…） and sort the parts",
   "currentRegistrySha256": "a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d",
   "cases": [

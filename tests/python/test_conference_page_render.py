@@ -230,7 +230,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertIn(f'paper_digest_paper_id: "{paper_id}"', result['markdown'])
         self.assertNotIn('paper_digest_arxiv_id', result['markdown'])
 
-    def test_reader_scoring_taxonomy_and_official_urls_fail_closed(self):
+    def test_reader_scoring_tag_selection_and_official_urls_fail_closed(self):
         packet = self.packet(); packet['paper']['apiReaderPlan']['sourceBindingsContract'] = 'api-reader-source-bindings-v3'
         with self.assertRaisesRegex(ValueError, 'source-bindings-v4'):
             MODULE.render_packet(packet)

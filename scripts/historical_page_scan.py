@@ -682,12 +682,12 @@ def _term_slug(value: str) -> str:
     return normalized
 
 
-def _taxonomy_candidates(tags: list[str], categories: list[str], base: str) -> list[dict[str, str]]:
+def _legacy_tag_route_candidates(tags: list[str], categories: list[str], base: str) -> list[dict[str, str]]:
     candidates = []
-    for taxonomy, values in (("tags", tags), ("categories", categories)):
+    for tag_route_group, values in (("tags", tags), ("categories", categories)):
         for term in sorted(set(values)):
-            route = urljoin(base, f"{taxonomy}/{quote(_term_slug(term), safe='-._~')}/")
-            candidates.append({"taxonomy": taxonomy, "term": term, "status": "unverified",
+            route = urljoin(base, f"{tag_route_group}/{quote(_term_slug(term), safe='-._~')}/")
+            candidates.append({"taxonomy": tag_route_group, "term": term, "status": "unverified",
                                "candidateUrl": route, "method": "legacy-term-normalization-v1"})
     return candidates
 
@@ -757,7 +757,7 @@ def _page_record(repo: Path, path: Path, raw: bytes, base: str, git_blob_oid: st
         "identityHints": _identity_hints(path, frontmatter, body),
         "outboundPostLinks": _strict_post_link_occurrences(body, primary_url, base),
         "publicationEvidenceRefs": _publication_evidence(frontmatter),
-        "legacyTaxonomyCandidates": _taxonomy_candidates(tags, categories, base),
+        "legacyTaxonomyCandidates": _legacy_tag_route_candidates(tags, categories, base),
     }
     return {**body_record, "snapshotSha256": stable_hash(_page_snapshot_body(body_record))}
 
@@ -977,7 +977,7 @@ def validate_ledger(value: Any) -> dict[str, Any]:
         if any(not unquote(urlsplit(link["targetUrl"]).path).startswith(posts_prefix)
                for link in page["outboundPostLinks"]):
             raise _fail(f"pages[{index}] outbound link is outside the posts route")
-        expected_candidates = _taxonomy_candidates(page["legacy"]["tags"], page["legacy"]["categories"],
+        expected_candidates = _legacy_tag_route_candidates(page["legacy"]["tags"], page["legacy"]["categories"],
                                                    source["baseUrl"])
         if page["legacyTaxonomyCandidates"] != expected_candidates:
             raise _fail(f"pages[{index}] legacy taxonomy candidates drifted")

@@ -1,0 +1,381 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { validAnalysisText } = require('./valid-analysis-fixture.js');
+const contract = require('../scripts/analysis-contract.js');
+const { parseAnalysis } = require('../scripts/utils.js');
+const resealApi = require('../scripts/lib/tag-record-update.js');
+const cli = require('../scripts/tag-record-update.js');
+const { ADDITIVE_OLD_SHA, DESTRUCTIVE_OLD_SHA, EXECUTION_ID, PAPER_ID,
+    runtime, analysisRecord, reproject } = require('./helpers/tag-record-update-fixture.js');
+
+test('a seal already on the current registry is reported as assigned without writes', () => {
+    const plan = reproject();
+    assert.equal(plan.ok, false);
+    assert.equal(plan.analysis, null);
+    assert.equal(plan.item.status, 'assigned');
+    assert.equal(plan.item.outcome, 'already-current');
+    assert.equal(plan.item.needsHuman, false);
+    assert.deepEqual(plan.item.conceptIdsDiff, { added: [], removed: [] });
+    assert.deepEqual(plan.item.oldConceptIds, plan.item.newConceptIds);
+    assert.equal(plan.item.pageRestageRequired, false);
+});
+
+// 换表（v1.1）后 dcf83f84→当前 的分级为“可确认的 destructive”（改名/改边/删别名，
+// conceptIds 零影响）——确定性重投影语义不变，仅注记需携带白名单 ack。
+test('a destructive-eligible upgrade deterministically reprojects and reseals without a model', () => {
+    const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
+        acknowledgeDestructive: true });
+    assert.equal(plan.ok, true, plan.item.errors.join('; '));
+    assert.equal(plan.item.status, 'assigned');
+    assert.equal(plan.item.outcome, 'resealed');
+    assert.equal(plan.item.changeLevel, 'destructive');
+    assert.equal(plan.item.needsHuman, false);
+    assert.deepEqual(plan.item.conceptIdsDiff, { added: [], removed: [] });
+    assert.deepEqual(plan.item.oldConceptIds, plan.item.newConceptIds);
+    assert.equal(plan.item.pageRestageRequired, true);
+    assert.equal(plan.item.registry.from, ADDITIVE_OLD_SHA);
+    assert.equal(plan.item.registry.to, runtime().registrySha256);
+
+    const nextStage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
+    assert.equal(nextStage.registrySha256, runtime().registrySha256);
+    assert.equal(nextStage.projectionSha256, runtime().projectionSha256);
+    assert.equal(nextStage.registryUpgradeFrom.changeLevel, 'destructive');
+    assert.equal(nextStage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
+    assert.equal(nextStage.registryUpgradeFrom.fromRegistrySha256, ADDITIVE_OLD_SHA);
+    assert.notEqual(nextStage.bindingSha256, analysisRecord({
+        registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64)
+    }).papers[0].analysisManifest.stages.taxonomySeal.bindingSha256);
+    // 正文与 checkpoint 逐字不变：只有 registry/projection/binding 与注记变化。
+    assert.equal(plan.analysis.papers[0].analysis,
+        analysisRecord({ registrySha256: ADDITIVE_OLD_SHA }).papers[0].analysis);
+    // 缓存的 parsed.taxonomyValidation 必须一并刷新，发布侧会直接读它。
+    const refreshed = plan.analysis.papers[0].parsed.taxonomyValidation;
+    assert.equal(refreshed.registrySha256, runtime().registrySha256);
+    assert.equal(refreshed.valid, true);
+    assert.deepEqual(refreshed.conceptIds,
+        analysisRecord({ registrySha256: ADDITIVE_OLD_SHA }).papers[0].parsed.taxonomyValidation.conceptIds);
+    assert.deepEqual(plan.analysis.papers[0].parsed.tags,
+        analysisRecord({ registrySha256: ADDITIVE_OLD_SHA }).papers[0].parsed.tags);
+    assert.strictEqual(contract.validateTagStageProof(plan.analysis.papers[0], {
+        parsed: parseAnalysis(plan.analysis.papers[0].analysis, { tagRules: runtime() }),
+        tagRules: runtime()
+    }), null);
+});
+
+test('annotate mode keeps the old seal bytes and relies on the acknowledged upgrade annotation', () => {
+    const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
+        mode: 'annotate', acknowledgeDestructive: true });
+    assert.equal(plan.ok, true, plan.item.errors.join('; '));
+    assert.equal(plan.item.outcome, 'annotated');
+    const nextStage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
+    assert.equal(nextStage.registrySha256, ADDITIVE_OLD_SHA);
+    assert.equal(nextStage.projectionSha256, 'e'.repeat(64));
+    assert.equal(nextStage.registryUpgradeFrom.changeLevel, 'destructive');
+    assert.equal(nextStage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
+    assert.strictEqual(contract.validateTagStageProof(plan.analysis.papers[0], {
+        parsed: parseAnalysis(plan.analysis.papers[0].analysis, { tagRules: runtime() }),
+        tagRules: runtime()
+    }), null);
+});
+
+test('a destructive registry change is blocked for human/LLM relabelling', () => {
+    const plan = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.analysis, null);
+    assert.equal(plan.item.status, 'blocked');
+    assert.equal(plan.item.outcome, 'destructive-change');
+    assert.equal(plan.item.needsHuman, true);
+    assert.ok(plan.item.reasons.length > 0);
+    assert.match(plan.item.errors.join(' '), /destructive/);
+});
+
+test('an unresolvable pre-upgrade snapshot fails closed instead of guessing', () => {
+    const plan = reproject({
+        registrySha256: '0'.repeat(64),
+        projectionSha256: 'e'.repeat(64),
+        snapshotOptions: { historyDir: path.join(os.tmpdir(), 'does-not-exist-taxonomy') }
+    });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.item.outcome, 'missing-registry-snapshot');
+    assert.equal(plan.item.needsHuman, true);
+    assert.match(plan.item.errors.join(' '), /快照/);
+});
+
+test('tags that no longer resolve are reported as needing a human/LLM selection', () => {
+    const text = validAnalysisText().replace('#鲁棒性', '#不存在的标签');
+    const plan = reproject({ analysis: analysisRecord({ analysis: text,
+        registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) }),
+        acknowledgeDestructive: true, snapshotOptions: {} });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.item.outcome, 'selection-invalid');
+    assert.equal(plan.item.needsHuman, true);
+    assert.ok(Array.isArray(plan.item.errorsDetail) && plan.item.errorsDetail.length > 0);
+});
+
+test('the dry-run report contract carries per-paper diffs and assigned/blocked results', () => {
+    const assigned = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
+        acknowledgeDestructive: true });
+    const blocked = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+    const summary = resealApi.summarizeReseal({ items: [
+        { ...assigned.item }, { ...blocked.item },
+        { paperId: PAPER_ID, status: 'skipped', outcome: 'not-complete', needsHuman: false }
+    ] });
+    assert.equal(summary.total, 3);
+    assert.equal(summary.assigned, 1);
+    assert.equal(summary.blocked, 1);
+    assert.equal(summary.skipped, 1);
+    assert.equal(summary.needsHuman, 1);
+    assert.equal(summary.outcomes.resealed, 1);
+    assert.equal(summary.outcomes['destructive-change'], 1);
+    assert.equal(summary.outcomes['not-complete'], 1);
+    for (const item of [assigned.item, blocked.item]) {
+        assert.match(item.paperId, /^conference:/);
+        assert.equal(item.analysisRunId, EXECUTION_ID);
+        assert.ok(item.registry.from && item.registry.to);
+        assert.ok(Array.isArray(item.oldConceptIds) && Array.isArray(item.newConceptIds));
+        assert.deepEqual(Object.keys(item.conceptIdsDiff).sort(), ['added', 'removed']);
+        assert.ok(['assigned', 'blocked', 'skipped'].includes(item.status));
+        assert.equal(typeof item.needsHuman, 'boolean');
+    }
+});
+
+test('unsupported modes and malformed records are refused', () => {
+    assert.throws(() => reproject({ mode: 'llm' }), /unsupported reseal mode/);
+    const broken = resealApi.reprojectAnalysis({ analysis: { papers: [] }, runtime: runtime() });
+    assert.equal(broken.item.status, 'blocked');
+    assert.equal(broken.item.outcome, 'unreadable-analysis');
+});
+
+test('mark-stale only reports stale assignment files and never rewrites them', () => {
+    const current = runtime().registrySha256;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'taxonomy-stale-'));
+    try {
+        fs.mkdirSync(path.join(root, 'run-a'));
+        fs.mkdirSync(path.join(root, 'run-b'));
+        const staleName = `arxiv-2401.00001.taxonomy.${'a'.repeat(64)}.json`;
+        fs.writeFileSync(path.join(root, 'run-a', staleName), JSON.stringify({ paperId: 'arxiv:2401.00001' }));
+        fs.writeFileSync(path.join(root, 'run-b', 'arxiv-2401.00002.taxonomy.json'),
+            JSON.stringify({ paperId: 'arxiv:2401.00002', registrySha256: current }));
+        fs.writeFileSync(path.join(root, 'run-b', 'arxiv-2401.00003.taxonomy.json'), '{不是JSON');
+
+        const before = fs.readdirSync(path.join(root, 'run-a'));
+        const scan = resealApi.scanStaleAssignments({ root, currentRegistrySha256: current });
+        assert.equal(scan.directories.length, 2);
+        assert.equal(scan.stale, 1);
+        assert.equal(scan.current, 1);
+        assert.equal(scan.unreadable, 1);
+        const stale = scan.entries.find(entry => entry.file === staleName);
+        assert.equal(stale.stale, true);
+        assert.equal(stale.registrySha256, 'a'.repeat(64));
+        assert.deepEqual(fs.readdirSync(path.join(root, 'run-a')), before,
+            'mark-stale 是只读的');
+        const missing = resealApi.scanStaleAssignments({
+            root: path.join(root, 'nope'), currentRegistrySha256: current
+        });
+        assert.equal(missing.entries.length, 0);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('CLI argument surface covers reseal, mark-stale, classify and archive-snapshot', () => {
+    const uuid = '9dce2993-0000-4000-8000-000000000000';
+    assert.deepEqual(cli.parseArgs(['--from', uuid]),
+        { command: 'reseal', processId: uuid, apply: false, mode: 'reproject', reportName: null,
+            acknowledgeDestructive: false, acknowledgeNote: null });
+    assert.deepEqual(cli.parseArgs(['--from', uuid, '--apply', '--mode', 'annotate']),
+        { command: 'reseal', processId: uuid, apply: true, mode: 'annotate', reportName: null,
+            acknowledgeDestructive: false, acknowledgeNote: null });
+    assert.deepEqual(cli.parseArgs(['--from', uuid, '--acknowledge-destructive']),
+        { command: 'reseal', processId: uuid, apply: false, mode: 'reproject', reportName: null,
+            acknowledgeDestructive: true, acknowledgeNote: null });
+    assert.deepEqual(cli.parseArgs(
+        ['--from', uuid, '--apply', '--acknowledge-destructive', '--acknowledge-note', '人工确认']),
+        { command: 'reseal', processId: uuid, apply: true, mode: 'reproject', reportName: null,
+            acknowledgeDestructive: true, acknowledgeNote: '人工确认' });
+    assert.deepEqual(cli.parseArgs(['--mark-stale']), { command: 'mark-stale', reportName: null });
+    assert.deepEqual(cli.parseArgs(['--classify', '--old', 'a.json', '--new', 'b.json']),
+        { command: 'classify', oldPath: 'a.json', newPath: 'b.json' });
+    assert.deepEqual(cli.parseArgs(['--archive-snapshot']), { command: 'archive-snapshot' });
+    assert.deepEqual(cli.parseArgs(['--help']), { help: true });
+    assert.throws(() => cli.parseArgs([]), /Use:/);
+    assert.throws(() => cli.parseArgs(['--from', 'not-a-uuid']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--from', uuid, '--mode', 'llm']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--mark-stale', '--apply']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--apply']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--report', 'a.json']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--from', uuid]), /Use:/);
+    assert.throws(() => cli.parseArgs(['--from', uuid, '--report', '../escape.json']), /report/);
+    // --acknowledge-destructive 只属于 reseal：与 --archive-snapshot / --mark-stale /
+    // --classify 互斥；--acknowledge-note 必须依附 --acknowledge-destructive。
+    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--acknowledge-destructive']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--mark-stale', '--acknowledge-destructive']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json', '--new', 'b.json',
+        '--acknowledge-destructive']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json', '--new', 'b.json',
+        '--acknowledge-note', 'x']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--from', uuid, '--acknowledge-note', 'x']), /Use:/);
+    assert.throws(() => cli.parseArgs(
+        ['--from', uuid, '--acknowledge-destructive', '--acknowledge-note', '   ']),
+    /acknowledge-note/);
+    assert.throws(() => cli.parseArgs(
+        ['--from', uuid, '--acknowledge-destructive', '--acknowledge-note', 'x'.repeat(501)]),
+    /acknowledge-note/);
+    assert.match(cli.USAGE, /不调用模型/);
+    assert.match(cli.USAGE, /needsHuman|人工/);
+    assert.match(cli.USAGE, /archive-snapshot/);
+    assert.match(cli.USAGE, /更新词表前，必须先用 --archive-snapshot 归档当前词表/);
+    assert.match(cli.USAGE, /--acknowledge-destructive/);
+    assert.match(cli.USAGE, /concept-removed/);
+    assert.match(cli.USAGE, /acknowledgementEligible/);
+});
+
+// ——— destructive 显式确认通道：--acknowledge-destructive 的规划语义 ———
+const REGISTRY_FILE = path.resolve(__dirname, '../config/tag-catalog.json');
+const REGISTRY_HISTORY = path.resolve(__dirname, '../config/tag-catalog-history');
+const OLD_ALIAS_REMOVAL = path.join(REGISTRY_HISTORY,
+    '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a.json');
+const OLD_SEED = path.join(REGISTRY_HISTORY,
+    'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf.json');
+
+// 构造“旧表多一个概念、新表已删除”的 registry：复算必为 destructive +
+// concept-removed，属于不可确认集合。loadTagCatalog 只接受
+// version/facets/concepts 三个字段，所以这里不带 registrySha256；
+// 快照注入点再按需补上（normalizeRegistry 接受对象形态的字节 SHA）。
+function registryWithExtraConcept() {
+    const next = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+    next.concepts.push({
+        id: 'task.legacy-only', facet: 'task',
+        preferredLabel: { zh: '旧表独有概念', en: 'Legacy Only Concept' },
+        aliases: ['LegacyOnly'], broaderId: null,
+        definition: '旧表独有、新表已删除的概念。', scopeNote: '仅用于不可确认集合测试。',
+        status: 'active', replacedBy: null
+    });
+    return next;
+}
+const extraConceptSnapshot = sha => ({ ...registryWithExtraConcept(), registrySha256: sha });
+
+test('an explicitly acknowledged destructive change deterministically reseals', () => {
+    const plan = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
+        acknowledgeDestructive: true, acknowledgementNote: '人工确认：仅别名语义，conceptId 影响 none' });
+    assert.equal(plan.ok, true, plan.item.errors.join('; '));
+    assert.equal(plan.item.status, 'assigned');
+    assert.equal(plan.item.outcome, 'resealed');
+    assert.equal(plan.item.changeLevel, 'destructive');
+    assert.equal(plan.item.needsHuman, false);
+    assert.equal(plan.item.pageRestageRequired, true);
+    assert.equal(plan.item.destructiveAcknowledgement.acknowledged, true);
+    assert.equal(plan.item.destructiveAcknowledgement.conceptIdImpact, 'none');
+    assert.match(plan.item.destructiveAcknowledgement.reasonsHash, /^[a-f0-9]{64}$/);
+    assert.equal(plan.item.destructiveAcknowledgement.note,
+        '人工确认：仅别名语义，conceptId 影响 none');
+
+    const stage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
+    assert.equal(stage.registrySha256, runtime().registrySha256);
+    assert.equal(stage.registryUpgradeFrom.changeLevel, 'destructive');
+    assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.reasonsHash,
+        plan.item.destructiveAcknowledgement.reasonsHash);
+    // 正文与 checkpoint 逐字不变；重封后 binding 必须重新闭合（第 4 条门）。
+    assert.equal(plan.analysis.papers[0].analysis,
+        analysisRecord({ registrySha256: DESTRUCTIVE_OLD_SHA }).papers[0].analysis);
+    assert.strictEqual(contract.validateTagStageProof(plan.analysis.papers[0], {
+        parsed: parseAnalysis(plan.analysis.papers[0].analysis, { tagRules: runtime() }),
+        tagRules: runtime()
+    }), null);
+    // 不给 note → 默认模板必须自带 from/to 字节 SHA。
+    const defaulted = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA,
+        projectionSha256: 'e'.repeat(64), acknowledgeDestructive: true });
+    const ack = defaulted.analysis.papers[0].analysisManifest.stages.taxonomySeal
+        .registryUpgradeFrom.destructiveAcknowledgement;
+    assert.ok(ack.note.includes(DESTRUCTIVE_OLD_SHA));
+    assert.ok(ack.note.includes(runtime().registrySha256));
+});
+
+test('the acknowledgement flag never passes an unacknowledgeable destructive change', () => {
+    const sha = 'a'.repeat(64);
+    const snapshotOptions = { registryHistory: { [sha]: extraConceptSnapshot(sha) } };
+    const plan = reproject({ registrySha256: sha, projectionSha256: 'e'.repeat(64),
+        acknowledgeDestructive: true, snapshotOptions });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.analysis, null);
+    assert.equal(plan.item.status, 'blocked');
+    assert.equal(plan.item.outcome, 'destructive-change');
+    assert.equal(plan.item.needsHuman, true);
+    assert.match(plan.item.errors.join(''), /不在可确认白名单/);
+    assert.match(plan.item.errors.join(''), /concept-removed/);
+    assert.equal(plan.item.destructiveAcknowledgement, undefined);
+});
+
+test('without the flag a destructive change stays blocked exactly as before', () => {
+    const sha = 'a'.repeat(64);
+    const snapshotOptions = { registryHistory: { [sha]: extraConceptSnapshot(sha) } };
+    for (const acknowledgeDestructive of [false, undefined]) {
+        const plan = reproject({ registrySha256: sha, projectionSha256: 'e'.repeat(64),
+            snapshotOptions, acknowledgeDestructive });
+        assert.equal(plan.ok, false);
+        assert.equal(plan.item.outcome, 'destructive-change');
+        assert.equal(plan.item.needsHuman, true);
+        // 可确认但没带 flag 时，报告必须提示 flag 的存在与用法。
+        const eligible = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA,
+            projectionSha256: 'e'.repeat(64), acknowledgeDestructive });
+        assert.equal(eligible.item.outcome, 'destructive-change');
+        assert.match(eligible.item.errors.join(''), /--acknowledge-destructive/);
+    }
+});
+
+// 分级由 registry 内容决定、与 flag 无关：换表后 dcf83f84→当前 恒为可确认 destructive——
+// 无 flag 被拦（分类不变），带 flag 仅在注记上开白名单口子；原“additive 不得携带
+// ack”的构建器约束由 tests/tag-catalog-change.test.js 的 ack 用例覆盖。
+test('the flag does not change the classification, only the acknowledgement', () => {
+    const without = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+    assert.equal(without.item.changeLevel, 'destructive');
+    assert.equal(without.item.outcome, 'destructive-change');
+    assert.equal(without.item.needsHuman, true);
+
+    const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
+        acknowledgeDestructive: true, acknowledgementNote: '白名单确认：改名/改边/删别名，conceptId 零影响' });
+    assert.equal(plan.ok, true, plan.item.errors.join('; '));
+    assert.equal(plan.item.outcome, 'resealed');
+    assert.equal(plan.item.changeLevel, 'destructive');
+    const stage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
+    assert.equal(stage.registryUpgradeFrom.changeLevel, 'destructive');
+    assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
+});
+
+test('classify reports acknowledgement eligibility before anything is applied', () => {
+    const eligible = cli.classifyReport({ oldPath: OLD_ALIAS_REMOVAL, newPath: REGISTRY_FILE });
+    assert.equal(eligible.command, 'classify');
+    assert.equal(eligible.changeLevel, 'destructive');
+    assert.equal(eligible.acknowledgementEligible, true);
+    assert.deepEqual(eligible.eligibleReasons,
+        ['alias-removed', 'broader-id-changed', 'preferred-label-changed']);
+    assert.deepEqual(eligible.ineligibleReasons, []);
+
+    // 换表（v1.1）后 seed→当前 同样为可确认 destructive（旧断言 additive 系换表前口径）。
+    const seed = cli.classifyReport({ oldPath: OLD_SEED, newPath: REGISTRY_FILE });
+    assert.equal(seed.changeLevel, 'destructive');
+    assert.equal(seed.acknowledgementEligible, true);
+    assert.deepEqual(seed.eligibleReasons,
+        ['alias-removed', 'broader-id-changed', 'preferred-label-changed']);
+    assert.deepEqual(seed.ineligibleReasons, []);
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'taxonomy-classify-'));
+    try {
+        const syntheticFile = path.join(root, 'legacy-registry.json');
+        fs.writeFileSync(syntheticFile,
+            `${JSON.stringify(registryWithExtraConcept(), null, 2)}\n`);
+        const ineligible = cli.classifyReport({ oldPath: syntheticFile, newPath: REGISTRY_FILE });
+        assert.equal(ineligible.changeLevel, 'destructive');
+        assert.equal(ineligible.acknowledgementEligible, false);
+        assert.deepEqual(ineligible.ineligibleReasons, ['concept-removed']);
+        assert.deepEqual(ineligible.eligibleReasons, []);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

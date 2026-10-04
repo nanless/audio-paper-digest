@@ -65,7 +65,7 @@ from publish_common import (  # noqa: E402
     _PUBLISH_TAG_PROMPT_TEXT_SHA256,
     _mask_classification_fields,
     _hash_tag_section_and_primary_tags,
-    _validate_taxonomy_seal,
+    _validate_tag_stage_record,
     _seal_registry_upgrade,
     _classify_registry_change,
     _destructive_reasons_hash,
@@ -124,11 +124,11 @@ def complete_paper():
     }
 
 
-def attach_taxonomy_seal(paper, manifest, *, input_analysis=None, status='not_needed',
+def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not_needed',
                          with_checkpoints=False):
     output_analysis = paper['analysis']
     input_analysis = output_analysis if input_analysis is None else input_analysis
-    parsed = parse_analysis(output_analysis, taxonomy=_PUBLISH_TAG_CATALOG)
+    parsed = parse_analysis(output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
     selection = parsed['taxonomyValidation']
     input_sha = hashlib.sha256(input_analysis.encode('utf-8')).hexdigest()
     output_sha = hashlib.sha256(output_analysis.encode('utf-8')).hexdigest()
@@ -175,7 +175,7 @@ def attach_taxonomy_seal(paper, manifest, *, input_analysis=None, status='not_ne
 
 
 # taxonomySeal.bindingSha256 覆盖的 13 个字段（与 publish_common / Node 一致）。
-TAXONOMY_BINDING_FIELDS = (
+TAG_STAGE_BINDING_FIELDS = (
     'registryVersion', 'registrySha256', 'projectionContract',
     'projectionSha256', 'selectionContract', 'inputAnalysisSha256',
     'outputAnalysisSha256', 'inputProtectedProjectionSha256',
@@ -190,7 +190,7 @@ def cross_end_fixture():
         return json.load(handle)
 
 
-def rebind_taxonomy_seal(stage, *, registry_sha256=None, annotation=None,
+def rebind_tag_stage_record(stage, *, registry_sha256=None, annotation=None,
                          drop_annotation=False, projection_sha256=None, concept_ids=None):
     """改写封口记录后按 13 字段重签 bindingSha256（bindingSha256 算法不动）。"""
     if registry_sha256 is not None:
@@ -203,7 +203,7 @@ def rebind_taxonomy_seal(stage, *, registry_sha256=None, annotation=None,
         stage['registryUpgradeFrom'] = annotation
     if projection_sha256 is not None:
         stage['projectionSha256'] = projection_sha256
-    binding = {field: stage.get(field) for field in TAXONOMY_BINDING_FIELDS}
+    binding = {field: stage.get(field) for field in TAG_STAGE_BINDING_FIELDS}
     stage['bindingSha256'] = _manual_hash(binding)
     return stage
 
@@ -2763,7 +2763,7 @@ primary_method_tag: #基准测试
         with self.assertRaisesRegex(PublishDataValidationError, '评分维度|工程/实践价值'):
             resolve_publish_parsed(paper)
 
-    def test_publish_preflight_replays_current_taxonomy_for_manual_or_api_producers(self):
+    def test_publish_preflight_replays_current_tag_selection_for_manual_or_api_producers(self):
         paper = complete_paper()
         self.assertEqual(
             resolve_publish_parsed(paper)['primaryMethodTag'], '#Transformer')
@@ -2900,17 +2900,17 @@ primary_method_tag: #基准测试
             'version': 1,
             'stages': {name: {'status': status} for name, status in complete_statuses.items()},
         }
-        attach_taxonomy_seal(paper, paper['analysisManifest'])
+        attach_tag_stage_record(paper, paper['analysisManifest'])
         self.assertEqual(len(validate_papers_for_publish([paper])), 1)
-        missing_taxonomy = copy.deepcopy(paper)
-        del missing_taxonomy['analysisManifest']['stages']['taxonomySeal']
+        missing_tag_stage = copy.deepcopy(paper)
+        del missing_tag_stage['analysisManifest']['stages']['taxonomySeal']
         with self.assertRaisesRegex(PublishDataValidationError, 'taxonomySeal'):
-            validate_papers_for_publish([missing_taxonomy])
+            validate_papers_for_publish([missing_tag_stage])
         paper['analysisManifest']['stages']['scoringAudit']['status'] = 'transient_failure'
         with self.assertRaisesRegex(PublishDataValidationError, 'scoringAudit'):
             validate_papers_for_publish([paper])
 
-    def test_python_replays_taxonomy_seal_production_proof_and_rejects_drift(self):
+    def test_python_replays_tag_stage_production_proof_and_rejects_drift(self):
         paper = complete_paper()
         statuses = {
             'imageDownload': 'complete', 'primaryAnalysis': 'complete',
@@ -2924,10 +2924,10 @@ primary_method_tag: #基准测试
             'stages': {name: {'status': status} for name, status in statuses.items()},
         }
         paper['analysisManifest'] = manifest
-        attach_taxonomy_seal(paper, manifest)
+        attach_tag_stage_record(paper, manifest)
         self.assertEqual(
             set(paper['analysisStageCheckpoints']), {'taxonomySeal'})
-        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+        self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
         self.assertEqual(len(validate_papers_for_publish([paper])), 1)
 
         mutations = {
@@ -2949,112 +2949,112 @@ primary_method_tag: #基准测试
             candidate = copy.deepcopy(paper)
             mutate(candidate)
             with self.subTest(name=name), self.assertRaises(PublishDataValidationError):
-                _validate_taxonomy_seal(
+                _validate_tag_stage_record(
                     candidate, candidate['analysisManifest'], candidate['arxivId'])
 
         checkpoint_drift = copy.deepcopy(paper)
-        attach_taxonomy_seal(
+        attach_tag_stage_record(
             checkpoint_drift, checkpoint_drift['analysisManifest'],
             status='complete', with_checkpoints=True)
         checkpoint_drift['analysisStageCheckpoints']['taxonomySeal'] += '\nDRIFT'
         with self.assertRaisesRegex(PublishDataValidationError, '输出 checkpoint'):
-            _validate_taxonomy_seal(
+            _validate_tag_stage_record(
                 checkpoint_drift, checkpoint_drift['analysisManifest'],
                 checkpoint_drift['arxivId'])
 
         structure_checkpoint_drift = copy.deepcopy(paper)
-        attach_taxonomy_seal(
+        attach_tag_stage_record(
             structure_checkpoint_drift,
             structure_checkpoint_drift['analysisManifest'],
             status='complete', with_checkpoints=True)
         structure_checkpoint_drift['analysisStageCheckpoints']['structureRepair'] += '\nDRIFT'
         with self.assertRaisesRegex(PublishDataValidationError, '输入 checkpoint'):
-            _validate_taxonomy_seal(
+            _validate_tag_stage_record(
                 structure_checkpoint_drift,
                 structure_checkpoint_drift['analysisManifest'],
                 structure_checkpoint_drift['arxivId'])
 
         complete_without_checkpoints = copy.deepcopy(paper)
-        attach_taxonomy_seal(
+        attach_tag_stage_record(
             complete_without_checkpoints,
             complete_without_checkpoints['analysisManifest'],
             status='complete', with_checkpoints=False)
         complete_without_checkpoints.pop('analysisStageCheckpoints')
         with self.assertRaisesRegex(PublishDataValidationError, '缺少 taxonomy checkpoint'):
-            _validate_taxonomy_seal(
+            _validate_tag_stage_record(
                 complete_without_checkpoints,
                 complete_without_checkpoints['analysisManifest'],
                 complete_without_checkpoints['arxivId'])
 
-        # A real taxonomy-only repair changes the masked fields but preserves
+        # A repair limited to tag selection changes the masked fields but preserves
         # every protected byte and is accepted when the proof is resealed.
         repaired = copy.deepcopy(paper)
         legacy_input = repaired['analysis'].replace('#语音识别', '#ASR')
-        attach_taxonomy_seal(
+        attach_tag_stage_record(
             repaired, repaired['analysisManifest'],
             input_analysis=legacy_input, status='complete', with_checkpoints=True)
-        self.assertIsNone(_validate_taxonomy_seal(
+        self.assertIsNone(_validate_tag_stage_record(
             repaired, repaired['analysisManifest'], repaired['arxivId']))
 
-        # Even a fully rehashed binding cannot authorize a non-taxonomy edit.
+        # Even a fully rehashed binding cannot authorize edits outside the tag fields.
         protected_drift = copy.deepcopy(paper)
         drifted_input = protected_drift['analysis'].replace(
             '具体理由充分', '输入阶段的其他正文已变化', 1)
-        stage = attach_taxonomy_seal(
+        stage = attach_tag_stage_record(
             protected_drift, protected_drift['analysisManifest'],
             input_analysis=drifted_input, status='complete', with_checkpoints=True)
         with self.assertRaisesRegex(PublishDataValidationError, '受保护正文投影'):
-            _validate_taxonomy_seal(
+            _validate_tag_stage_record(
                 protected_drift, protected_drift['analysisManifest'],
                 protected_drift['arxivId'])
 
     # ——— 换表放行：taxonomySeal registry 升级分支（Node validateSealRegistryUpgrade 镜像） ———
-    def test_taxonomy_seal_upgrade_gate_allows_additive_registry_change(self):
+    def test_tag_stage_upgrade_gate_allows_additive_registry_change(self):
         additive = next(case for case in cross_end_fixture()['cases']
                         if case['name'] == 'additive-upgrade-allowed')
         paper = complete_paper()
         manifest = {'version': 1}
-        stage = attach_taxonomy_seal(paper, manifest)
-        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+        stage = attach_tag_stage_record(paper, manifest)
+        self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
         # 旧 SHA + 与复算一致的 additive 注记 → 放行（Node 放行的状态发布端不再拒）。
-        rebind_taxonomy_seal(stage, registry_sha256=additive['fromRegistrySha256'],
+        rebind_tag_stage_record(stage, registry_sha256=additive['fromRegistrySha256'],
                              annotation=additive['annotation'])
-        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+        self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
         # 升级分支不再硬比对 projectionSha256：stage 记录值与本地当前值都接受。
         for projection in ('e' * 64, _PUBLISH_TAG_PROMPT_TEXT_SHA256):
             stage['projectionSha256'] = projection
-            rebind_taxonomy_seal(stage)
-            self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+            rebind_tag_stage_record(stage)
+            self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
-    def test_taxonomy_seal_upgrade_gate_allows_acknowledged_destructive_change(self):
+    def test_tag_stage_upgrade_gate_allows_acknowledged_destructive_change(self):
         """Node --acknowledge-destructive 重封出来的 stage，发布端必须同样放行；
         去掉确认字段后必须照旧拒绝（双端一致性，P0-1 不回退）。"""
         case = next(item for item in cross_end_fixture()['cases']
                     if item['name'] == 'destructive-acknowledged-allowed')
         paper = complete_paper()
         manifest = {'version': 1}
-        stage = attach_taxonomy_seal(paper, manifest)
-        rebind_taxonomy_seal(stage, registry_sha256=case['fromRegistrySha256'],
+        stage = attach_tag_stage_record(paper, manifest)
+        rebind_tag_stage_record(stage, registry_sha256=case['fromRegistrySha256'],
                              annotation=case['annotation'])
-        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+        self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
         # 注记里去掉 destructiveAcknowledgement → reason=destructive 拒绝。
         stripped = {key: value for key, value in case['annotation'].items()
                     if key != 'destructiveAcknowledgement'}
-        rebind_taxonomy_seal(stage, registry_sha256=case['fromRegistrySha256'],
+        rebind_tag_stage_record(stage, registry_sha256=case['fromRegistrySha256'],
                              annotation=stripped)
         with self.assertRaises(PublishDataValidationError) as caught:
-            _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
         self.assertIn('reason=destructive', str(caught.exception))
         self.assertIn('显式确认无效', str(caught.exception))
 
-    def test_taxonomy_seal_current_registry_path_keeps_hard_equality(self):
+    def test_tag_stage_current_registry_path_keeps_hard_equality(self):
         paper = complete_paper()
         manifest = {'version': 1}
-        stage = attach_taxonomy_seal(paper, manifest)
-        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+        stage = attach_tag_stage_record(paper, manifest)
+        self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
         # 当前 SHA 分支：原硬等值行为不变（registryVersion / registrySha256 /
         # projectionSha256 仍逐字段比对本地 registry 与 projection）。
@@ -3062,18 +3062,18 @@ primary_method_tag: #基准测试
         with self.assertRaisesRegex(
                 PublishDataValidationError,
                 'projectionSha256 与本地 registry/projection 不一致'):
-            _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
         stage['projectionSha256'] = _PUBLISH_TAG_PROMPT_TEXT_SHA256
 
         stage['registryVersion'] = 'paper-taxonomy-v0'
         with self.assertRaisesRegex(
                 PublishDataValidationError,
                 'registryVersion 与本地 registry/projection 不一致'):
-            _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
         stage['registryVersion'] = _PUBLISH_TAG_CATALOG['version']
-        self.assertIsNone(_validate_taxonomy_seal(paper, manifest, paper['arxivId']))
+        self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
-    def test_taxonomy_seal_upgrade_gate_fails_closed_on_every_broken_input(self):
+    def test_tag_stage_upgrade_gate_fails_closed_on_every_broken_input(self):
         fixture = cross_end_fixture()
         cases = {case['name']: case for case in fixture['cases']}
         expectations = {
@@ -3091,15 +3091,15 @@ primary_method_tag: #基准测试
                 case = cases[name]
                 paper = complete_paper()
                 manifest = {'version': 1}
-                stage = attach_taxonomy_seal(paper, manifest)
-                rebind_taxonomy_seal(
+                stage = attach_tag_stage_record(paper, manifest)
+                rebind_tag_stage_record(
                     stage,
                     registry_sha256=case['fromRegistrySha256'],
                     annotation=case.get('annotation'),
                     drop_annotation=case.get('annotation') is None,
                     concept_ids=case.get('conceptIds'))
                 with self.assertRaises(PublishDataValidationError) as caught:
-                    _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+                    _validate_tag_stage_record(paper, manifest, paper['arxivId'])
                 message = str(caught.exception)
                 self.assertIn(reason_pattern, message)
                 self.assertIn(f"from={case['fromRegistrySha256']}", message)
@@ -3112,21 +3112,21 @@ primary_method_tag: #基准测试
         # 但不能是垃圾串）。
         paper = complete_paper()
         manifest = {'version': 1}
-        stage = attach_taxonomy_seal(paper, manifest)
+        stage = attach_tag_stage_record(paper, manifest)
         additive = cases['additive-upgrade-allowed']
-        rebind_taxonomy_seal(stage, registry_sha256=additive['fromRegistrySha256'],
+        rebind_tag_stage_record(stage, registry_sha256=additive['fromRegistrySha256'],
                              annotation=additive['annotation'],
                              projection_sha256='not-a-sha')
         with self.assertRaisesRegex(PublishDataValidationError, 'reason=projection-sha-invalid'):
-            _validate_taxonomy_seal(paper, manifest, paper['arxivId'])
+            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
 
-    def test_taxonomy_seal_destructive_acknowledgement_gate(self):
+    def test_tag_stage_destructive_acknowledgement_gate(self):
         """destructive 只有“显式确认 + 可确认白名单 + 影响面 none”才放行；
         四条基础门（快照、注记自洽、概念 active、复算分级）一条不少。
         与 Node validateSealRegistryUpgrade 同向：不可确认的 destructive 注记
         写得再自洽也翻不了案。"""
         current = _PUBLISH_TAG_CATALOG
-        destructive_from = Path(ROOT) / 'config' / 'taxonomy-registry-history' / (
+        destructive_from = Path(ROOT) / 'config' / 'tag-catalog-history' / (
             '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a.json')
         old_registry = json.loads(destructive_from.read_bytes().decode('utf-8'))
 
@@ -3222,7 +3222,7 @@ primary_method_tag: #基准测试
         snapshot_sha = hashlib.sha256(payload).hexdigest()
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / f'{snapshot_sha}.json').write_bytes(payload)
-            with mock.patch('publish_common._taxonomy_registry_history_dir',
+            with mock.patch('publish_common._tag_catalog_history_dir',
                             return_value=Path(tmp)):
                 detail = _classify_registry_change(
                     {**synthetic, 'registrySha256': snapshot_sha}, current)['detail']
@@ -3262,7 +3262,7 @@ primary_method_tag: #基准测试
         # 注记形态锁死：非 destructive 变更携带确认字段 → 拒。
         # v1.1 换表后真实历史快照对当前全为 destructive——按 Node 侧同款思路，
         # 用“当前表去掉未被引用的 task.wake-word”合成 additive 旧表（仅写测试 tmp
-        # 目录，不碰生产 config/taxonomy-registry-history）复现该门。
+        # 目录，不碰生产 config/tag-catalog-history）复现该门。
         synthetic_old = json.loads(json.dumps(current))
         synthetic_old['concepts'] = [
             c for c in synthetic_old['concepts'] if c['id'] != 'task.wake-word']
@@ -3277,7 +3277,7 @@ primary_method_tag: #基准测试
         synthetic_sha = hashlib.sha256(synthetic_bytes).hexdigest()
         with tempfile.TemporaryDirectory() as tmpdir:
             (Path(tmpdir) / f'{synthetic_sha}.json').write_bytes(synthetic_bytes)
-            with mock.patch('publish_common._taxonomy_registry_history_dir',
+            with mock.patch('publish_common._tag_catalog_history_dir',
                             return_value=Path(tmpdir)):
                 additive_detail = _classify_registry_change(
                     {**synthetic_old, 'registrySha256': synthetic_sha},
@@ -3400,7 +3400,7 @@ primary_method_tag: #基准测试
             'contracts': {'experimentTables': EXPERIMENT_TABLE_CONTRACT_VERSION},
             'stages': {name: {'status': status} for name, status in statuses.items()},
         }
-        attach_taxonomy_seal(paper, paper['analysisManifest'])
+        attach_tag_stage_record(paper, paper['analysisManifest'])
 
         self.assertEqual(len(extract_markdown_tables(table)), 1)
         self.assertEqual(len(extract_markdown_tables(f'```markdown\n{table}\n```')), 0)
@@ -3712,7 +3712,7 @@ ZETA 与 MusicMagus 的 ΔBPM 数值与两个全局适配系统分成两组，�
             'contracts': {'methodDetail': METHOD_DETAIL_CONTRACT_VERSION},
             'stages': {name: {'status': status} for name, status in statuses.items()},
         }
-        attach_taxonomy_seal(paper, paper['analysisManifest'])
+        attach_tag_stage_record(paper, paper['analysisManifest'])
         with self.assertRaisesRegex(PublishDataValidationError, '方法契约无效'):
             validate_papers_for_publish([paper])
 

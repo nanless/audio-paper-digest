@@ -6,7 +6,7 @@
 
 ## 调用方式
 
-代码通过 `loadPrompt()` 读取第一个代码块，并替换论文标题、作者、类别、arXiv ID、本次可用的原文以及标签选项。`{hasFullText}` 说明本次输入是全文证据还是摘要；`{taxonomyProjection}` 提供当前可用的标签及其定义。
+代码通过 `loadPrompt()` 读取第一个代码块，并替换论文标题、作者、类别、arXiv ID、本次可用的原文以及标签选项。`{hasFullText}` 说明本次输入是全文证据还是摘要；`{tagPromptText}` 提供当前可用的标签及其定义。
 
 ## 提示词内容
 
@@ -120,7 +120,7 @@ has_dataset: 是 / 否 / 未说明
 
 当前可用的标签及其定义：
 
-{taxonomyProjection}
+{tagPromptText}
 
 ## 作者与机构
 

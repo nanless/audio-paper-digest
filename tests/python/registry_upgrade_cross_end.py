@@ -5,7 +5,7 @@
 (旧 registry SHA, registryUpgradeFrom 注记, conceptIds) 输入喂给 Python 侧
 升级门 `_seal_registry_upgrade`（scripts/publish_common.py，Node
 validateSealRegistryUpgrade 的镜像），并在一行标记前输出 JSON 结果，
-供 tests/taxonomy-registry-change.test.js spawn 后与 Node 输出逐项比对。
+供 tests/tag-catalog-change.test.js spawn 后与 Node 输出逐项比对。
 """
 
 import json

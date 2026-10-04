@@ -80,7 +80,7 @@
 <a id="24-taxonomy"></a>
 ### 2.4 分类
 
-`paper-taxonomy-v1` 的词表、九个分面、稳定 concept ID、同分面父子关系、别名解析、祖先查询和中英文校验器可以复用。旧预览却不能当正式分类：当时 1,243 个旧标签只有 178 个字面映射，1,065 个未解析标签（unresolved），语义审查数量为 0。旧标签只用于比较变化和保留旧路由，不成为新论文的分类证据。现行分类要求见 [分类实现说明](tag-taxonomy-implementation.md)。
+`paper-taxonomy-v1` 的词表、九个分面、稳定 concept ID、同分面父子关系、别名解析、祖先查询和中英文校验器可以复用。旧预览却不能当正式分类：当时 1,243 个旧标签只有 178 个字面映射，1,065 个未解析标签（unresolved），语义审查数量为 0。旧标签只用于比较变化和保留旧路由，不成为新论文的分类证据。现行分类要求见 [分类实现说明](tag-system-implementation.md)。
 
 <a id="25-generate--review--push"></a>
 ### 2.5 生成、审查与推送
@@ -108,9 +108,9 @@ P2  canonical analysis --> Reader v3/source bindings --> fact review completion
                                       |
                                       +--------------------+
                                                            v
-P3  taxonomy registry ------------------------------> reviewed assignments
+P3  标签词表 --------------------------------------> 已审查的标签记录
                                                            |
-inventory page/link/taxonomy routes -----------------------+
+页面、链接和标签页路由清单 --------------------------+
                                                            v
 P4  4,490 deterministic staged projections + authorized additions
                                                            |
@@ -277,12 +277,12 @@ U/U 正式分析和 Reader 须通过 `isSuccessfulAnalysisRecord`、`apiReaderV3
 以下仍为拟议命令，不对应现行分类入口的参数。
 
 ```bash
-planned history:taxonomy snapshot-routes --inventory all-history.json --output ROUTE_LEDGER
-planned history:taxonomy prepare --analysis-run UUID --registry config/paper-taxonomy.json --run-id UUID
-planned history:taxonomy classify --run-id UUID --shard SHARD --concurrency N
-planned history:taxonomy review --run-id UUID --decision NAME.json --owner REVIEWER
-planned history:taxonomy status --run-id UUID
-planned history:taxonomy finalize --run-id UUID
+planned history:tags snapshot-routes --inventory all-history.json --output ROUTE_LEDGER
+planned history:tags prepare --analysis-run UUID --registry config/tag-catalog.json --run-id UUID
+planned history:tags classify --run-id UUID --shard SHARD --concurrency N
+planned history:tags review --run-id UUID --decision NAME.json --owner REVIEWER
+planned history:tags status --run-id UUID
+planned history:tags finalize --run-id UUID
 ```
 
 ### 7.4 P3 验收
@@ -297,7 +297,7 @@ U/U 分类记录须为已审状态（reviewed），不能将 partial/legacy_mapp
 <a id="81-新合同"></a>
 ### 8.1 当时拟议的协议
 
-1. `historical-projection-plan-v1` 拟绑定页面清单、来源对应表、分析及分类的完成凭证 SHA（inventory/crosswalk/analysis/taxonomy completion），并精确列出 4,490 个基线 `pageId`。每页记录路径 `path`、正式 URL（primary URL）、发布日期 `publishedDate`、所属批次日期 `cohortDate`、旧任务标识 `legacyTaskKey` 和旧字节 SHA；另存汇总成员、顺序、链接目标集合及重复次数（link target set/multiset），明确记录拓扑变更（topology delta）。`authorizedAdditions` 单列新增页面或重定向，默认空。
+1. `historical-projection-plan-v1` 拟绑定页面清单、来源对应表、分析及分类的完成凭证 SHA，并精确列出 4,490 个基线 `pageId`。每页记录路径 `path`、正式 URL（primary URL）、发布日期 `publishedDate`、所属批次日期 `cohortDate`、旧任务标识 `legacyTaskKey` 和旧字节 SHA；另存汇总成员、顺序、链接目标集合及重复次数（link target set/multiset），明确记录拓扑变更（topology delta）。`authorizedAdditions` 单列新增页面或重定向，默认空。
 2. `historical-page-projection-v1` 拟保存新 Markdown、附属记录（sidecar）和来源图文件 SHA，并绑定论文身份、Reader、分类或汇总输入 SHA；`oldGeneratedTextIncluded=false`，标题和引用只能来自新来源或 Reader。
 3. `historical-projection-completion-v1` 拟要求基线 4,490/4,490 全部完成，新增项另计，不能用新增页面补齐缺失旧页。
 
@@ -321,7 +321,7 @@ U/U 分类记录须为已审状态（reviewed），不能将 partial/legacy_mapp
 以下是当时的页面生成提案。
 
 ```bash
-planned history:project prepare --analysis-run UUID --taxonomy-run UUID --projection UUID
+planned history:project prepare --analysis-run UUID --tag-run UUID --projection UUID
 planned history:project render --projection UUID --scope daily:YYYY-MM-DD --concurrency N
 planned history:project render --projection UUID --scope conference:icassp-2026 --concurrency N
 planned history:project status --projection UUID
@@ -347,7 +347,7 @@ Hugo 的 list all/published、全站构建、Markdown/HTML/MathJax/链接检查�
 3. `historical-review-receipt-v1` 拟保存逐文件字节/Hugo 检查、按唯一论文复用的事实报告、汇总成员/排序和标签路由检查。
 4. `historical-publication-intent-v1` 拟绑定精确 Git 差异（delta）、目标 tree OID、parent OID 和预期远端 OID，并保存提交说明与回滚 commit 计划。
 5. `historical-publication-receipt-v1` 拟记录实际 commit/tree、推送（push）输出、实时远端 main OID 和全部清单（manifest）SHA。
-6. `historical-rewrite-status-v1` 拟汇报 P0–P5 凭证链、4,490 个基线页、新增项（additions）和 U，并分别报告来源、分析、分类、页面、审查、发布的计数与错误（source/analysis/taxonomy/page/review/publish）。
+6. `historical-rewrite-status-v1` 拟汇报 P0–P5 凭证链、4,490 个基线页、新增项（additions）和 U，并分别报告来源、分析、分类、页面、审查、发布的计数与错误。
 
 ### 9.2 发布策略
 
@@ -404,8 +404,8 @@ Hugo 页数、published 集合、旧 URL/redirect、标签路由和 14,743 条�
 | 正式分析（canonical） | 来源快照、分析提示词/模型/协议/预算、引擎和解析器（source snapshot、analysis prompt/model/protocol/budget、engine/parser） | 正式分析及其下游 |
 | Reader | 正式分析、来源绑定、Reader 提示词/模型/预算及来源能力（canonical、source bindings、Reader prompt/model/budget、capabilities） | Reader 及其下游 |
 | 评分（scoring） | 正式分析/Reader、评分规则和审计提示词/模型（canonical/Reader、rubric、audit prompt/model） | 评分和汇总排名 |
-| 分类（taxonomy） | 正式分析/Reader/来源、词表和分类策略（canonical/Reader/source、registry、assignment policy） | 分类和页面生成 |
-| 页面（page） | Reader/评分/分类、页面身份和批次、渲染器和模板（Reader/score/taxonomy、pageId/cohort、renderer/template） | 相应页面和依赖它的汇总页 |
+| 标签分类 | 正式分析、Reader、原文来源、标签词表和标签选择规则 | 分类和页面生成 |
+| 页面（page） | Reader、评分和标签记录，以及页面身份、批次、渲染器与模板 | 相应页面和依赖它的汇总页 |
 | 审查（review） | 相对路径、最终文件内容 SHA | 只重审内容 SHA 变化的文件；protocol/model/code/Hugo/manifest 变化时仅重做批次检查并生成新 receipt |
 
 按当时的账号机制，同一逻辑请求更换 API key 不建立新缓存身份，只有明确 usage-limit 才换账号。网络错误、5xx、截断和正文检查失败保留原账号及尝试记录；服务商 token 用量以实际回执为准，缺失回执单列。这里不改写成今天所有账号错误的完整分类。
@@ -425,7 +425,7 @@ Hugo 页数、published 集合、旧 URL/redirect、标签路由和 14,743 条�
 | Identity A | 40 页面 | 日更的单一、缺失、冲突和多条线索；三个会议；跨日期重复；ICLR 两批次 | 40/40 已核验（verified），人工复核没有错配 |
 | Source B | 12 篇唯一论文 | arXiv HTML、备用 PDF、长文、表/公式/图；ICASSP/ICLR/ICML 当时的 weak PDF；短文或损坏 PDF 须阻断 | 来源字节和每项能力均可重放 |
 | Analysis C | 12 篇唯一论文 | 方法、数据集、理论、系统报告；资源有/无；机构有/无；结构能力不同 | 解析器通过率为 100%，首轮事实通过率达到预设阈值 |
-| Taxonomy D | 30 篇唯一论文 | ASR/AV-ASR、PEFT/LoRA、增强子任务、非任务科学主题、跨模态、数据集与基准 | 双人或独立审查一致率达到门槛 |
+| 标签分类 D | 30 篇唯一论文 | ASR/AV-ASR、PEFT/LoRA、增强子任务、非任务科学主题、跨模态、数据集与基准 | 双人或独立审查一致率达到门槛 |
 | Projection E | 1 日更 + 3 会议切片 | 重复页、ICASSP 任务页、ICLR 双批次、ICML 无任务页；嵌套方括号链接 | 页面、链接和 Hugo 检查全通过，addition=0 |
 | Publication F | 全 4,490 页影子构建（shadow） | 完整路径集、旧标签路由、远端漂移、故障恢复 | 预览凭证完整，真实博客没有写入 |
 

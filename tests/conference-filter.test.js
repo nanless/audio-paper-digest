@@ -280,7 +280,7 @@ test('per-conference spec rejects legacy shared shape, unregistered locators, an
         evidenceApi.locatorBindingForConference({ id: 'icassp-2026', year: 2026 }));
     assert.equal(Object.hasOwn(bound.evidence.locator, 'profile'), false);
     const production = filter.buildProductionSpec({ endpoint: 'https://example.test/v1',
-        model: 'muse-spark-1.3-contributor', taxonomyRegistrySha256: h('taxonomy'),
+        model: 'muse-spark-1.3-contributor', tagCatalogSha256: h('taxonomy'),
         discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle });
     assert.equal(production.discovery.conferenceId, 'icassp-2026');
     assert.equal(production.discovery.catalogSha256, bound.discovery.catalogSha256);

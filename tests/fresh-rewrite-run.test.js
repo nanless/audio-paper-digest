@@ -360,10 +360,10 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
             manifest.sourceAcquisition, sourceText), true);
         assert.equal(deep.canReuseStageForCoreSummaryRecovery(
             locked, manifest, sourceText, 'structureRepair'), true);
-        const tagRules = require('../scripts/lib/taxonomy-runtime.js')
+        const tagRules = require('../scripts/lib/tag-rules.js')
             .getDefaultTagRules();
-        const taxonomyParsed = require('../scripts/utils.js').parseAnalysis(locked.analysis);
-        const taxonomyInputSha = runner.sha256(locked.analysis);
+        const parsedForTagCheck = require('../scripts/utils.js').parseAnalysis(locked.analysis);
+        const tagInputAnalysisSha256 = runner.sha256(locked.analysis);
         const classificationMaskedAnalysisSha256 = runner.sha256(
             contract.maskClassificationFields(locked.analysis)
         );
@@ -373,16 +373,16 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
             projectionContract: tagRules.projectionContract,
             projectionSha256: tagRules.projectionSha256,
             selectionContract: tagRules.selectionContract,
-            inputAnalysisSha256: taxonomyInputSha,
-            outputAnalysisSha256: taxonomyInputSha,
+            inputAnalysisSha256: tagInputAnalysisSha256,
+            outputAnalysisSha256: tagInputAnalysisSha256,
             inputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
             outputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
             taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(locked.analysis),
-            primaryTaskId: taxonomyParsed.taxonomyValidation.primaryTaskId,
-            primaryMethodId: taxonomyParsed.taxonomyValidation.primaryMethodId,
-            conceptIds: taxonomyParsed.taxonomyValidation.conceptIds
+            primaryTaskId: parsedForTagCheck.taxonomyValidation.primaryTaskId,
+            primaryMethodId: parsedForTagCheck.taxonomyValidation.primaryMethodId,
+            conceptIds: parsedForTagCheck.taxonomyValidation.conceptIds
         };
-        manifest.stages.structureRepair.outputAnalysisSha256 = taxonomyInputSha;
+        manifest.stages.structureRepair.outputAnalysisSha256 = tagInputAnalysisSha256;
         manifest.stages.taxonomySeal = {
             status: 'not_needed', fingerprint: 'b'.repeat(64), ...tagStageProof,
             bindingSha256: contract.manualSha256(tagStageProof)

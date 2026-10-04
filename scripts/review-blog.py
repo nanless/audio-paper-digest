@@ -18,8 +18,8 @@ def _is_api_reader_asset_path(module, path):
     return bool(checker(path)) if checker else False
 
 
-def _is_taxonomy_asset_path(module, path):
-    checker = getattr(module, '_taxonomy_asset_relative', None)
+def _is_tag_catalog_file_path(module, path):
+    checker = getattr(module, '_is_tag_catalog_file_path', None)
     repo = getattr(module, 'BLOG_REPO', None)
     if not checker or not repo:
         return False
@@ -78,7 +78,7 @@ def read_generated_pages(
         path = Path(path)
         if module.is_visual_summary_asset_path(path, date_str) \
                 or _is_api_reader_asset_path(module, path) \
-                or _is_taxonomy_asset_path(module, path):
+                or _is_tag_catalog_file_path(module, path):
             continue
         if not path.is_file() or path.name == f'{date_str}.md':
             continue

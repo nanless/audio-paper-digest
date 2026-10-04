@@ -100,14 +100,14 @@ function fixture(t, endpoint, metadata = null, model = 'fixture-filter-model') {
                 verification: { verificationSha256: 'b'.repeat(64) } };
         } });
     const evidenceHandle = evidenceApi.loadEvidenceHandle({ evidenceRunsRoot: dirs.evidence, runId: evidenceRunId, discoveryHandle });
-    const taxonomyFile = path.join(root, 'taxonomy.json'); fs.writeFileSync(taxonomyFile, '{"version":"taxonomy-v1"}\n', { mode: 0o600 });
+    const tagCatalogPath = path.join(root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n', { mode: 0o600 });
     const spec = filter.buildProductionSpec({ endpoint, model,
-        taxonomyRegistrySha256: sha(fs.readFileSync(taxonomyFile)), discoveryHandle, evidenceHandle });
+        tagCatalogSha256: sha(fs.readFileSync(tagCatalogPath)), discoveryHandle, evidenceHandle });
     fs.writeFileSync(path.join(dirs.specs, 'spec.json'), `${JSON.stringify(spec)}\n`, { mode: 0o600 });
     filter.prepareFilter({ filterRoot: dirs.filters, discoveryHandle, evidenceHandle, spec, filterId, now: stamp });
     const files = { conferenceDiscoveryCatalogDir: dirs.catalogs, conferenceDiscoveryReportDir: dirs.reports,
         conferenceFilterEvidenceRunsDir: dirs.evidence, conferenceFilterSpecsDir: dirs.specs,
-        conferenceFiltersDir: dirs.filters, taxonomyRegistry: taxonomyFile,
+        conferenceFiltersDir: dirs.filters, tagCatalogFile: tagCatalogPath,
         llmAccountPoolState: path.join(root, 'account-pool.json') };
     const env = { PAPER_ANALYZER_ENDPOINT: endpoint, PAPER_ANALYZER_API_KEY: 'fixture-key', PAPER_ANALYZER_MODEL: model };
     return { root, dirs, spec, files, env };

@@ -2,7 +2,7 @@
     'use strict';
     const api = factory();
     if (typeof module === 'object' && module.exports) module.exports = api;
-    else { root.TaxonomyExplorer = api; api.mount(root.document, root.fetch.bind(root)); }
+    else { root.TagExplorer = api; api.mount(root.document, root.fetch.bind(root)); }
 }(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
     const VERSION = 'paper-taxonomy-preview-v1';

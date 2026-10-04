@@ -49,9 +49,9 @@ from llm_account_pool import (
     select_api_key,
 )
 from utils import parse_analysis
-from paper_taxonomy import (
-    TAXONOMY_PROJECTION_CONTRACT,
-    TAXONOMY_SELECTION_CONTRACT,
+from tag_catalog import (
+    TAG_PROMPT_TEXT_CONTRACT,
+    TAG_SELECTION_CONTRACT,
     load_tag_catalog,
     tag_prompt_text_sha256,
 )
@@ -580,7 +580,7 @@ _PUBLISH_TAG_CATALOG = load_tag_catalog()
 _PUBLISH_TAG_PROMPT_TEXT_SHA256 = tag_prompt_text_sha256(_PUBLISH_TAG_CATALOG)
 
 
-def _taxonomy_section_bounds(analysis, title):
+def _find_analysis_section_bounds(analysis, title):
     heading = re.compile(
         rf'(^|\n)((#{{2,3}})\s*(?:\d+[.\s]+)?{re.escape(title)}[：:\s]*\n)',
         re.M,
@@ -597,13 +597,13 @@ def _taxonomy_section_bounds(analysis, title):
     return content_start, end
 
 
-def _replace_taxonomy_section_body(analysis, title, content):
-    content_start, end = _taxonomy_section_bounds(analysis, title)
+def _replace_analysis_section_body(analysis, title, content):
+    content_start, end = _find_analysis_section_bounds(analysis, title)
     return f'{analysis[:content_start]}{str(content).strip()}{analysis[end:]}'
 
 
-def _replace_machine_taxonomy_fields(analysis, task_tag, method_tag):
-    content_start, end = _taxonomy_section_bounds(analysis, '机器摘要')
+def _replace_primary_tag_fields(analysis, task_tag, method_tag):
+    content_start, end = _find_analysis_section_bounds(analysis, '机器摘要')
     body = analysis[content_start:end]
     for key, value in (
             ('primary_task_tag', task_tag),
@@ -617,9 +617,9 @@ def _replace_machine_taxonomy_fields(analysis, task_tag, method_tag):
 
 
 def _mask_classification_fields(analysis):
-    masked = _replace_machine_taxonomy_fields(
+    masked = _replace_primary_tag_fields(
         str(analysis or ''), '__PRIMARY_TASK__', '__PRIMARY_METHOD__')
-    return _replace_taxonomy_section_body(masked, '标签', '__TAXONOMY_SECTION__')
+    return _replace_analysis_section_body(masked, '标签', '__TAXONOMY_SECTION__')
 
 
 def _hash_tag_section_and_primary_tags(analysis):
@@ -645,14 +645,13 @@ def _hash_tag_section_and_primary_tags(analysis):
     return hashlib.sha256(tag_hash_input.encode('utf-8')).hexdigest()
 
 
-# ——— Registry 版本化（换表放行）：Node 分级与升级门的 Python 镜像 ———
-# 权威实现在 scripts/lib/taxonomy-registry-change.js（classifyRegistryChange +
-# validateSealRegistryUpgrade）与 scripts/analysis-contract.js 的
-# stage.registrySha256 分支。发布端必须与 Node 同向：Node 判 additive/none 放行
-# 的封口，Python 不得再靠硬等值把它拒掉；Node fail-closed 的状态 Python 同样拒。
-# 放在 publish_common.py 私有函数里（_validate_taxonomy_seal 的私有依赖），
-# 不改写 scripts/paper_taxonomy.py 的共享语义。
-from paper_taxonomy import _JS_WHITESPACE, normalize_label, validate_tag_catalog  # noqa: E402
+# 标签词表更新后，Python 发布检查按 Node 的规则决定能否沿用原标签阶段记录。
+# 对应规则见 scripts/lib/tag-catalog-change.js 的 classifyRegistryChange、
+# validateSealRegistryUpgrade，以及 scripts/analysis-contract.js 的词表 SHA 分支。
+# 词表 SHA 改变本身不是拒绝理由；变更类型、升级说明和所选概念仍须通过检查。
+# 两端允许沿用或拒绝沿用的条件应保持一致。
+# 这些私有检查只服务于发布端，不改变 scripts/tag_catalog.py 的共享规则。
+from tag_catalog import _JS_WHITESPACE, normalize_label, validate_tag_catalog  # noqa: E402
 
 _REGISTRY_CHANGE_LEVELS = ('none', 'additive', 'destructive')
 _REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1'
@@ -661,10 +660,10 @@ _REGISTRY_UPGRADE_NOTE_MAX_CHARS = 500
 _SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
 
 
-def _taxonomy_registry_history_dir():
-    """config/taxonomy-registry-history/（与 Node FILES.taxonomyRegistryHistoryDir 同源）。"""
-    import taxonomy_paths
-    return Path(taxonomy_paths.TAXONOMY_REGISTRY_FILE).parent / 'taxonomy-registry-history'
+def _tag_catalog_history_dir():
+    """config/tag-catalog-history/（与 Node FILES.tagCatalogHistoryDir 同源）。"""
+    import tag_paths
+    return Path(tag_paths.TAG_CATALOG_FILE).parent / 'tag-catalog-history'
 
 
 def _normalize_registry(value, label='registry'):
@@ -690,7 +689,7 @@ def _resolve_registry_snapshot(registry_sha256):
     if not _SHA256_RE.fullmatch(sha):
         return None
     try:
-        loaded = load_tag_catalog(_taxonomy_registry_history_dir() / f'{sha}.json')
+        loaded = load_tag_catalog(_tag_catalog_history_dir() / f'{sha}.json')
     except Exception:  # noqa: BLE001 - 取回失败一律 fail-closed 返回 None
         return None
     if loaded.get('registrySha256') != sha:
@@ -1052,12 +1051,11 @@ def _validate_registry_upgrade_annotation(annotation, expected):
 
 def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
                            current=None, current_registry_sha256=None):
-    """Node validateSealRegistryUpgrade 的镜像，异常一律折算成 fail-closed 结果。
+    """按 Node 的规则核验标签词表升级；无法完成核验时返回拒绝结果。
 
-    四条同时成立才放行：旧快照按内容 SHA 取回、复算分级非 destructive（或
-    destructive 落在可确认白名单且注记携带与复算绑定的 destructiveAcknowledgement
-    且 conceptIdImpact=none）、registryUpgradeFrom 注记与复算自洽、
-    stage.conceptIds 在当前 registry 全 active。
+    本函数先取得旧词表快照并重新判断变更，再核对升级说明和所选概念。
+    破坏性变更只有属于可确认范围、且提供与本次结果对应的显式确认时才可继续；
+    所选概念仍必须在当前词表中启用，旧快照和升级说明也必须通过检查。
     """
     def fail(error, reason_code, change_level=None, detail=None):
         # 与 Node 一致：分类前失败 changeLevel/detail 为 None；分类后失败
@@ -1085,10 +1083,10 @@ def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
         classified = _classify_registry_change(snapshot, current_registry)
         change_level = classified['changeLevel']
         detail = classified['detail']
-        # destructive 默认无条件拒绝；唯一例外是“可确认白名单 + 与本次复算绑定的
-        # 显式 destructiveAcknowledgement”，且只放行第 ② 条门，快照取回、注记自洽、
-        # conceptIds 全部 active 三条门一条不少。与 Node 同向：不可确认或确认无效
-        # 都折算成 reason=destructive 的拒绝。
+        # 本次重新计算的破坏性变更必须全部属于可确认范围，
+        # 且 destructiveAcknowledgement 必须与这些结果一致，才能继续升级检查。
+        # 显式确认不能替代旧快照、升级说明和所选概念的检查；
+        # 不可确认或确认无效时，仍以 reasonCode=destructive 拒绝沿用。
         if change_level == 'destructive':
             first = [reason['message'] for reason in detail['reasons']
                      if reason['level'] == 'destructive'][:3]
@@ -1130,13 +1128,13 @@ def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
         return fail(f'registry 升级判定无法完成: {error}', 'classify-failed')
 
 
-def _validate_taxonomy_seal_registry_upgrade(stage, paper_label):
-    """_validate_taxonomy_seal 的升级分支：不一致即抛 PublishDataValidationError。"""
+def _validate_tag_stage_catalog_upgrade(stage, paper_label):
+    """_validate_tag_stage_record 的升级分支：不一致即抛 PublishDataValidationError。"""
     from_sha = str(stage.get('registrySha256') or '')
     to_sha = _PUBLISH_TAG_CATALOG['registrySha256']
     projection_sha = str(stage.get('projectionSha256') or '')
-    # 升级分支不要求 projectionSha256 等于本地当前值（与 Node 现行为一致，
-    # stage 记录的是封口当时的投影），但当前值当然也接受；格式仍须合法。
+    # 词表升级时，projectionSha256 记录原标签阶段使用的提示文本 SHA。
+    # 此处只检查 SHA 格式，不要求等于当前提示文本的 SHA；升级条件随后另行核验。
     if not _SHA256_RE.fullmatch(projection_sha):
         raise PublishDataValidationError(
             f'{paper_label} taxonomySeal registry 升级被拒 [reason=projection-sha-invalid] '
@@ -1157,11 +1155,11 @@ def _validate_taxonomy_seal_registry_upgrade(stage, paper_label):
         f'from={from_sha} to={to_sha}: {result["error"]}')
 
 
-def _validate_taxonomy_seal(paper, manifest, paper_label):
-    """Independently replay the Node-issued taxonomySeal production proof."""
+def _validate_tag_stage_record(paper, manifest, paper_label):
+    """发布端根据 Node 保存的标签阶段记录，重新核验词表、正文、检查点和所选标签的绑定。"""
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     if not isinstance(contracts, dict) \
-            or contracts.get('taxonomy') != TAXONOMY_SELECTION_CONTRACT:
+            or contracts.get('taxonomy') != TAG_SELECTION_CONTRACT:
         raise PublishDataValidationError(
             f'{paper_label} taxonomy selection contract 缺失或不是 current')
     stages = manifest.get('stages') if isinstance(manifest, dict) else None
@@ -1169,13 +1167,13 @@ def _validate_taxonomy_seal(paper, manifest, paper_label):
     if not isinstance(stage, dict) or stage.get('status') not in {'complete', 'not_needed'}:
         raise PublishDataValidationError(f'{paper_label} taxonomySeal 未完成')
 
-    # 与 Node validateTaxonomyStageBinding 同序：registryVersion / projectionContract /
-    # selectionContract 永远要求 current；registrySha256 等于本地当前值时才走原来的
-    # 硬等值（含 projectionSha256），否则进入换表升级校验分支。
+    # 本函数先按 Node 的检查顺序核对词表版本、提示文本协议和标签选择协议。
+    # 词表 SHA 未变时，提示文本 SHA 也必须与当前值相同；
+    # 词表 SHA 改变时，再按升级规则检查能否沿用原阶段记录。
     expected_static = {
         'registryVersion': _PUBLISH_TAG_CATALOG['version'],
-        'projectionContract': TAXONOMY_PROJECTION_CONTRACT,
-        'selectionContract': TAXONOMY_SELECTION_CONTRACT,
+        'projectionContract': TAG_PROMPT_TEXT_CONTRACT,
+        'selectionContract': TAG_SELECTION_CONTRACT,
     }
     for field, expected in expected_static.items():
         if stage.get(field) != expected:
@@ -1189,7 +1187,7 @@ def _validate_taxonomy_seal(paper, manifest, paper_label):
                 raise PublishDataValidationError(
                     f'{paper_label} taxonomySeal.{field} 与本地 registry/projection 不一致')
     else:
-        _validate_taxonomy_seal_registry_upgrade(stage, paper_label)
+        _validate_tag_stage_catalog_upgrade(stage, paper_label)
 
     sha_fields = (
         'inputAnalysisSha256', 'outputAnalysisSha256',
@@ -1276,7 +1274,7 @@ def _validate_taxonomy_seal(paper, manifest, paper_label):
         raise PublishDataValidationError(
             f'{paper_label} taxonomySeal binding SHA 不可重放')
 
-    current_parsed = parse_analysis(current_analysis, taxonomy=_PUBLISH_TAG_CATALOG)
+    current_parsed = parse_analysis(current_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
     current_validation = current_parsed.get('taxonomyValidation') or {}
     expected_selection = {
         'primaryTaskId': current_validation.get('primaryTaskId'),
@@ -1289,7 +1287,7 @@ def _validate_taxonomy_seal(paper, manifest, paper_label):
             f'{paper_label} 当前 analysis taxonomy 与 sealed IDs 不一致')
     if stage['status'] == 'complete':
         output_validation = parse_analysis(
-            output_analysis, taxonomy=_PUBLISH_TAG_CATALOG)['taxonomyValidation']
+            output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)['taxonomyValidation']
         output_selection = {field: output_validation.get(field) for field in expected_selection}
         if not output_validation.get('valid') or output_selection != recorded_selection:
             raise PublishDataValidationError(
@@ -4215,7 +4213,7 @@ def resolve_publish_parsed(paper):
     if not isinstance(analysis, str) or not analysis.strip():
         raise PublishDataValidationError(f'{paper_label} 缺少 analysis')
     raw_analysis_parsed = parse_analysis(analysis)
-    _validate_current_taxonomy_analysis(analysis, raw_analysis_parsed, paper_label)
+    _validate_current_analysis_tags(analysis, raw_analysis_parsed, paper_label)
     analysis_parsed = validate_publish_parsed(
         raw_analysis_parsed,
         f'{paper_label}.analysis',
@@ -4259,8 +4257,8 @@ def resolve_publish_parsed(paper):
     )
 
 
-def _validate_current_taxonomy_analysis(analysis, parsed, paper_label):
-    """Validate the exact current four-line taxonomy surface for all producers."""
+def _validate_current_analysis_tags(analysis, parsed, paper_label):
+    """Validate the exact current four-line tag section and primary tags for all producers."""
     match = re.search(r'(^|\n)##(?!#)\s*标签[：:\s]*\n([\s\S]*?)(?=\n##(?!#)\s|$)', analysis)
     lines = [line.strip() for line in (match.group(2) if match else '').splitlines()
              if line.strip()]
@@ -4295,7 +4293,7 @@ def _validate_current_taxonomy_analysis(analysis, parsed, paper_label):
             or parsed.get('primaryMethodTag') != method_tag:
         raise PublishDataValidationError(f'{paper_label} 标签 surface 与 registry 解析不一致')
     machine = parsed.get('machineSummary') or {}
-    machine_start, machine_end = _taxonomy_section_bounds(analysis, '机器摘要')
+    machine_start, machine_end = _find_analysis_section_bounds(analysis, '机器摘要')
     machine_body = analysis[machine_start:machine_end]
     for key in ('primary_task_tag', 'primary_method_tag'):
         if len(re.findall(rf'^{key}\s*[:：]\s*\S+\s*$', machine_body, re.M)) != 1:
@@ -4432,7 +4430,7 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                 if validate_manual_provenance:
                     _validate_manual_takeover_manifest(paper, manifest, paper_label)
                 if not uses_manual_manifest:
-                    _validate_taxonomy_seal(paper, manifest, paper_label)
+                    _validate_tag_stage_record(paper, manifest, paper_label)
                 signed_v6_compatibility = _manual_v6_signed_compatibility(
                     paper, manifest,
                 )

@@ -22,7 +22,7 @@ from publish_common import (
     paper_batch_date, select_blog_published_snapshot
 )
 from path_config import atomic_write_json, atomic_write_text, wechat_preview_path
-from paper_taxonomy import load_tag_catalog
+from tag_catalog import load_tag_catalog
 from utils import parse_analysis
 from project_env import build_fetch_url_opener
 
@@ -34,16 +34,16 @@ THUMB_MEDIA_ID = os.environ.get('WECHAT_THUMB_MEDIA_ID', '')
 
 BJ_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
-TAXONOMY_FALLBACK_NOTICE = (
+TAG_METADATA_FALLBACK_NOTICE = (
     '⚠️ 该批次未携带受控标签元数据，以下为旧式扁平标签计数，'
     '不代表新版任务/方法统计'
 )
 
 
-def batch_taxonomy_metadata_gap(papers):
-    """逐篇检查受控 taxonomy 元数据，任一缺失/失效即返回 True。
+def batch_has_invalid_tag_metadata(papers):
+    """逐篇检查受控标签元数据，任一缺失/失效即返回 True。
 
-    ``publish_common.extract_top_tags`` 是不强制 taxonomy 的旧式统计入口，
+    ``publish_common.extract_top_tags`` 是不要求受控标签元数据 的旧式统计入口，
     允许 ``primaryTaskTag`` 缺失时回退到 ``tags[0]`` 并跳过解析失败的论文。
     发布通道不允许这样静默降级：这里显式判定降级条件，由正文写出声明。
     """
@@ -64,18 +64,18 @@ def batch_taxonomy_metadata_gap(papers):
 
 
 def build_overview(scored, unscored):
-    """生成今日概览 HTML；taxonomy 元数据缺失时显式声明旧式扁平计数。"""
+    """生成今日概览 HTML；标签元数据缺失时显式声明旧式扁平计数。"""
     papers = [p for _, p, _ in scored] + list(unscored)
     top_tags = extract_top_tags(papers, limit=8)
-    taxonomy_degraded = batch_taxonomy_metadata_gap(papers)
+    has_invalid_tag_metadata = batch_has_invalid_tag_metadata(papers)
     top_scored = scored[:10]
 
     overview = '<h2>⚡ 今日概览</h2>\n'
     total = len(scored) + len(unscored)
     overview += f'<p>📥 抓取 {total} 篇 → 🔬 深度分析完成</p>\n'
-    if taxonomy_degraded:
+    if has_invalid_tag_metadata:
         # 降级声明必须出现在扁平标签计数之前，而不是静默替换统计口径。
-        overview += f'<p>{html.escape(TAXONOMY_FALLBACK_NOTICE)}</p>\n'
+        overview += f'<p>{html.escape(TAG_METADATA_FALLBACK_NOTICE)}</p>\n'
     if top_tags:
         overview += '<h3>🏷️ 热门方向</h3>\n'
         for tag, cnt in top_tags:

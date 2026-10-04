@@ -19,7 +19,7 @@
 | 审查并发布历史重写结果 | [历史发布流程](history-direct-publication.md) | `history:direct-publication` 的生成、审查、发布和状态查询 |
 | 查找 2026-09-07 的历史运行记录 | [归档交接记录](historical-rewrite-handoff-2026-09-07.md) | 只供定位当时文件；不能按旧命令启动当前任务 |
 | 改进解读写法，比较重写前后的文章 | [解读写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
-| 设计标签、检查历史标签映射或分类显示 | [标签体系设计](tag-taxonomy-design.md) | [实施计划](tag-taxonomy-implementation.md)、[显示规则](taxonomy-presentation-policy.md)和 `npm run taxonomy:preview` |
+| 设计标签、检查历史标签映射或分类显示 | [标签体系设计](tag-system-design.md) | [实施计划](tag-system-implementation.md)、[显示规则](tag-display-policy.md)和 `npm run tags:preview` |
 | 抓取并处理 2026 年新会议论文 | [会议工作流](conference-workflow.md) | `conference:new:*`；[来源研究记录](research/2026-conferences/report-source.md)说明研究时的覆盖范围 |
 | 整理本地会议 PDF，处理历史会议论文 | [会议工作流](conference-workflow.md) | 原 `conference:*` 在历史工作区运行；发布历史页面另查[历史发布流程](history-direct-publication.md) |
 | 查看会议处理曾出现的故障与修复范围 | [2026-09-12 修复记录](conference-repair-notes.md) | 文中的验证结果与待修旧页面属于记录当时的范围 |

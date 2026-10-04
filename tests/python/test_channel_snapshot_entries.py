@@ -66,7 +66,7 @@ class ChannelSnapshotEntryTest(unittest.TestCase):
                 self.assertFalse(module.main())
             select.assert_not_called()
 
-    def test_missing_taxonomy_metadata_degrades_loudly_instead_of_silently(self):
+    def test_missing_tag_selection_metadata_degrades_loudly_instead_of_silently(self):
         from utils import parse_analysis
 
         analysis = (
@@ -87,18 +87,18 @@ class ChannelSnapshotEntryTest(unittest.TestCase):
                 'taxonomyValidation': {'valid': False, 'errors': ['缺少标签章节']},
             },
         }
-        notice = feishu.TAXONOMY_FALLBACK_NOTICE
-        self.assertEqual(notice, wechat.TAXONOMY_FALLBACK_NOTICE)
+        notice = feishu.TAG_METADATA_FALLBACK_NOTICE
+        self.assertEqual(notice, wechat.TAG_METADATA_FALLBACK_NOTICE)
         self.assertIn('未携带受控标签元数据', notice)
 
-        # 携带受控 taxonomy 的批次：照常输出，不出现降级声明。
+        # 批次携带有效的受控标签元数据时，照常输出，不显示降级说明。
         feishu_md = feishu.generate_overview_md([(8.5, good, parsed)], [], '2026-07-13')
         self.assertNotIn(notice, feishu_md)
         self.assertIn('### 热门方向', feishu_md)
         wechat_html = wechat.build_overview([(8.5, good, parsed)], [])
         self.assertNotIn(notice, wechat_html)
 
-        # 缺 taxonomy 元数据的批次：必须显式声明降级，而不是静默呈现扁平计数。
+        # 批次缺少标签元数据时，必须说明正在使用旧式扁平计数。
         degraded_md = feishu.generate_overview_md([(7.0, legacy, legacy['parsed'])], [], '2026-07-13')
         self.assertIn(notice, degraded_md)
         self.assertLess(degraded_md.index(notice), degraded_md.index('热门方向'))
@@ -126,9 +126,9 @@ class ChannelSnapshotEntryTest(unittest.TestCase):
             **parsed['taxonomyValidation'], 'registrySha256': '0' * 64,
         }
         paper = {'arxivId': '2607.00003', 'title': 'Drift', 'analysis': analysis, 'parsed': drifted}
-        self.assertTrue(feishu.batch_taxonomy_metadata_gap([paper]))
-        self.assertTrue(wechat.batch_taxonomy_metadata_gap([paper]))
-        self.assertFalse(feishu.batch_taxonomy_metadata_gap([{
+        self.assertTrue(feishu.batch_has_invalid_tag_metadata([paper]))
+        self.assertTrue(wechat.batch_has_invalid_tag_metadata([paper]))
+        self.assertFalse(feishu.batch_has_invalid_tag_metadata([{
             'arxivId': '2607.00004', 'analysis': analysis, 'parsed': parse_analysis(analysis),
         }]))
 

@@ -7,8 +7,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const api = require('../scripts/lib/conference-postprocess.js');
-const tagCatalogApi = require('../scripts/lib/paper-taxonomy.js');
-const { createTagRules } = require('../scripts/lib/taxonomy-runtime.js');
+const tagCatalogApi = require('../scripts/lib/tag-catalog.js');
+const { createTagRules } = require('../scripts/lib/tag-rules.js');
 const cli = require('../scripts/conference-postprocess.js');
 const executionCli = require('../scripts/conference-execution.js');
 const adapter = require('../scripts/lib/conference-analysis-adapter.js');
@@ -16,13 +16,13 @@ const pageApi = require('../scripts/lib/historical-page-staging.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
 const { validAnalysisPaper, validAnalysisText } = require('./valid-analysis-fixture.js');
 
-const TAXONOMY = path.resolve(__dirname, '../config/paper-taxonomy.json');
+const TAG_CATALOG_PATH = path.resolve(__dirname, '../config/tag-catalog.json');
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
-const TAG_RULES = createTagRules({ registryPath: TAXONOMY });
+const TAG_RULES = createTagRules({ registryPath: TAG_CATALOG_PATH });
 
 function currentTag(id) {
-    const concept = TAG_RULES.taxonomy.concepts.find(item => item.id === id && item.status === 'active');
+    const concept = TAG_RULES.tagCatalog.concepts.find(item => item.id === id && item.status === 'active');
     assert.ok(concept, `conference fixture requires active taxonomy concept ${id}`);
     return `#${concept.preferredLabel.zh}`;
 }
@@ -135,7 +135,7 @@ function fixture(t, extraRuns = []) {
 test('generic conference stage binds sealed completion, identity, taxonomy and registry-isolated bytes', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     const result = api.stagePaper({ analysisRoot: path.join(f.root, 'analysis'), executionId: f.one,
-        taxonomyFile: TAXONOMY, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+        tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
     assert.equal(result.status, 'staged'); assert.equal(result.manifest.paperId, f.runs.get(f.one).run.paperId);
     assert.equal(result.manifest.identity.kind, 'conference'); assert.equal(result.manifest.identity.arxivId, null);
     assert.equal(result.manifest.identity.source.status, 'official');
@@ -145,13 +145,13 @@ test('generic conference stage binds sealed completion, identity, taxonomy and r
     assert.equal(result.manifest.scoringContract, 'api-scoring-audit-v2');
     assert.equal(Object.keys(result.manifest.scoreDimensions).length, 8);
     assert.doesNotMatch(result.markdown, /arxiv/i); assert.deepEqual(result.manifest.capabilities, WEAK);
-    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY);
-    const replayed = api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
+    const replayed = api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
     assert.equal(replayed.manifest.manifestSha256, result.manifest.manifestSha256);
     assert.ok(fs.existsSync(path.join(stagingRoot, f.one, registry.registrySha256,
         result.manifest.implementation.implementationSha256, 'page.md')));
-    assert.equal(api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.equal(api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies).manifest.manifestSha256, result.manifest.manifestSha256);
 });
 
@@ -212,7 +212,7 @@ print(json.dumps({'structuredArtifacts':a,'sourceBinding':{'pdfSha256':hashlib.s
     loaded.run.capabilities = { fullText: 'full', tables: 'available', formulas: 'available', figures: 'available' };
     const dependencies = { ...f.dependencies, render: api.render, buildConferenceSourceContext: () => source };
     const stagingRoot = path.join(f.root, 'formula-stage');
-    const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, dependencies);
     assert.equal(result.status, 'staged');
     assert.match(result.markdown, /!\[原文数学表达区域 1，PDF 第 1 页\]/);
@@ -229,7 +229,7 @@ print(json.dumps({'structuredArtifacts':a,'sourceBinding':{'pdfSha256':hashlib.s
     assert.ok(png.readUInt32BE(20) < 60, 'crop preserves the exponent without a paragraph-sized image');
     assert.match(fs.readFileSync(path.join(directory, 'page.md'), 'utf8'), /原文公式与排版/);
     assert.equal(loaded.analysis.papers[0].apiReaderPlan.formulaBindings.length, 0);
-    assert.equal(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.equal(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, dependencies).manifest.manifestSha256,
     result.manifest.manifestSha256);
 });
@@ -250,7 +250,7 @@ test('IWSLT conference-paper-id with dots remains a conference identity', t => {
     const receiptBody = { ...loaded.run.completionReceipt, paperId, analysisSha256: loaded.analysisFileSha256 };
     delete receiptBody.receiptSha256;
     loaded.run.completionReceipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
-    const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot: path.join(f.root, 'staging'), planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
     assert.equal(result.manifest.paperId, paperId);
     assert.equal(result.manifest.identity.externalId.value, 'IWSLT.2026.001');
@@ -262,19 +262,19 @@ test('IWSLT conference-paper-id with dots remains a conference identity', t => {
 test('completion drift, arXiv renderer leakage and weak assets fail closed', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     f.runs.get(f.one).run.completionReceipt.analysisSha256 = 'c'.repeat(64);
-    assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /sealed conference analysis/);
     f.runs.set(f.one, completed(f.one, 1));
-    assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, { ...f.dependencies, render: () => ({ markdown: 'https://arxiv.org/abs/1234.5678', assets: [] }) }), /arXiv identity/);
-    assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, { ...f.dependencies, render: () => ({ markdown: 'generic', assets: [{ path: 'x' }] }) }), /weak assets/);
 });
 
 test('production Node stage invokes the generic Python renderer without an arXiv identity', t => {
     const f = fixture(t); const dependencies = { ...f.dependencies }; delete dependencies.render;
     const stagingRoot = path.join(f.root, 'dry-staging');
-    const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, dependencies);
     assert.match(result.markdown, /paper_digest_paper_id: "conference:icassp:2026:icassp-arnumber:101"/);
     assert.match(result.markdown, /表格、公式与 Figure 均不可用/);
@@ -296,8 +296,8 @@ test('aggregate replays every selected stage and emits only when the full explic
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging'); const aggregateRoot = path.join(f.root, 'aggregate');
     f.runs.get(f.one).analysis.papers[0].title = 'Bad [link](https://evil.invalid) # heading';
     for (const executionId of [f.one, f.two]) api.stagePaper({ analysisRoot: 'ignored', executionId,
-        taxonomyFile: TAXONOMY, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
-    const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], taxonomyFile: TAXONOMY,
+        tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+    const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
     assert.equal(result.manifest.members.length, 2); assert.equal(result.manifest.members[0].paperId, f.runs.get(f.one).run.paperId);
     assert.equal(result.manifest.date, '2026-09-07');
@@ -322,26 +322,26 @@ test('aggregate replays every selected stage and emits only when the full explic
     assert.doesNotMatch(result.manifest.markdown, /\]\(https:\/\/evil\.invalid\)|\n# heading/);
     assert.doesNotMatch(result.manifest.markdown, /旧会议汇总正文/);
     assert.ok(fs.existsSync(path.join(aggregateRoot, 'icassp-2026', result.manifest.aggregateId, 'manifest.json')));
-    const secondStage = api.loadStage({ analysisRoot: 'ignored', executionId: f.two, taxonomyFile: TAXONOMY,
+    const secondStage = api.loadStage({ analysisRoot: 'ignored', executionId: f.two, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
     fs.appendFileSync(path.join(secondStage.directory, 'page.md'), 'drift');
-    assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], taxonomyFile: TAXONOMY,
+    assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /deterministic projection/);
 });
 
 test('aggregate rejects a selected-member subset and executions from another authenticated plan', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging'); const aggregateRoot = path.join(f.root, 'aggregate');
     for (const executionId of [f.one, f.two]) api.stagePaper({ analysisRoot: 'ignored', executionId,
-        taxonomyFile: TAXONOMY, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
-    assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one], taxonomyFile: TAXONOMY,
+        tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+    assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one], tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /complete authenticated selected member set/);
     f.runs.get(f.two).planKey = 'b';
-    assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], taxonomyFile: TAXONOMY,
+    assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /cross-plan/);
 });
 
 test('multi-level taxonomy hierarchy counts direct and subtree papers on every level', () => {
-    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY);
+    const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
     const hierarchy = api.aggregateHierarchy(registry, [
         ['task.asr', 'method.transformer', 'research_focus.robustness'],
         ['task.av-asr', 'method.transformer', 'research_focus.robustness'],
@@ -417,10 +417,10 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
     const stagingRoot = path.join(f.root, 'staging'); const aggregateRoot = path.join(f.root, 'aggregate');
     const executionIds = [f.one, f.two, ...f.extra];
     for (const executionId of executionIds) api.stagePaper({ analysisRoot: 'ignored', executionId,
-        taxonomyFile: TAXONOMY, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
-    const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds, taxonomyFile: TAXONOMY,
+        tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+    const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
-    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY);
+    const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
     const hierarchy = result.manifest.taxonomyHierarchy;
     assert.equal(hierarchy.contract, api.HIERARCHY_CONTRACT);
     assert.equal(hierarchy.registrySha256, registry.registrySha256);
@@ -469,7 +469,7 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
 });
 
 test('Reader/scoring/taxonomy/publication compatibility gates cannot be bypassed by success stubs', t => {
-    const f = fixture(t); const args = { analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    const f = fixture(t); const args = { analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot: path.join(f.root, 'staging'), planHandle: f.planHandle, sourceRoot: f.sourceRoot };
     f.runs.get(f.one).analysis.papers[0].analysisManifest.contracts.apiReaderSourceBindings = 'api-reader-source-bindings-v3';
     assert.throws(() => api.stagePaper(args, f.dependencies), /source-bindings-v4/);
@@ -495,17 +495,17 @@ test('Reader/scoring/taxonomy/publication compatibility gates cannot be bypassed
 
 test('loadStage re-renders current completion and rejects re-signed metadata or extra files', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
-    const staged = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    const staged = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
-    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY); const directory = path.join(stagingRoot, f.one,
+    const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH); const directory = path.join(stagingRoot, f.one,
         registry.registrySha256, staged.manifest.implementation.implementationSha256);
     const manifestFile = path.join(directory, 'manifest.json'); const manifest = JSON.parse(fs.readFileSync(manifestFile));
     manifest.title = 'attacker title'; const body = structuredClone(manifest); delete body.manifestSha256;
     manifest.manifestSha256 = api.stableHash(body); fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
-    assert.throws(() => api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.throws(() => api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /deterministic projection/);
     fs.writeFileSync(manifestFile, `${JSON.stringify(staged.manifest, null, 2)}\n`); fs.writeFileSync(path.join(directory, 'extra.json'), '{}');
-    assert.throws(() => api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.throws(() => api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /unexpected recovery content/);
 });
 
@@ -520,14 +520,14 @@ test('renderer/projection upgrade receives a new immutable stage identity', t =>
     const firstDeps = { ...f.dependencies, implementationFingerprint: () => implementation('a') };
     const secondDeps = { ...f.dependencies, implementationFingerprint: () => implementation('d'),
         render: packet => ({ markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\nUPGRADED\n`, assets: [] }) };
-    const first = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    const first = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, firstDeps);
-    const second = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    const second = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, secondDeps);
     assert.notEqual(first.manifest.implementation.implementationSha256, second.manifest.implementation.implementationSha256);
-    assert.notEqual(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.notEqual(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, firstDeps).directory,
-    api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, secondDeps).directory);
 });
 
@@ -544,11 +544,11 @@ test('real plan authority, source replay and sealed analysis can stage one confe
     const analysis = { ...loaded.analysis, status: 'complete', completedAt: '2026-09-07T01:00:00.000Z', papers: [paper] };
     fs.writeFileSync(path.join(analysisRoot, executionId, 'analysis.json'), `${JSON.stringify(analysis, null, 2)}\n`);
     adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId }));
-    const result = api.stagePaper({ analysisRoot, executionId, taxonomyFile: TAXONOMY, stagingRoot,
+    const result = api.stagePaper({ analysisRoot, executionId, tagCatalogPath: TAG_CATALOG_PATH, stagingRoot,
         planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot, apply: true }, { isSuccessful: () => true,
         render: packet => ({ markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\nFRESH`, assets: [] }) });
     assert.equal(result.manifest.paperId, fixture.paperId); assert.equal(result.status, 'staged');
-    const aggregate = api.aggregateConference({ analysisRoot, executionIds: [executionId], taxonomyFile: TAXONOMY,
+    const aggregate = api.aggregateConference({ analysisRoot, executionIds: [executionId], tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot: path.join(fixture.root, 'aggregates'), planHandle: fixture.planHandle,
         sourceRoot: fixture.sourceRoot, apply: true }, { isSuccessful: () => true,
         render: packet => ({ markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\nFRESH`, assets: [] }) });
@@ -590,7 +590,7 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
         .replace('#语音识别 #Transformer #鲁棒性', '#不存在的主任务 #Transformer #鲁棒性')
         .replace('主任务标签: #语音识别', '主任务标签: #不存在的主任务');
     f.runs.set(f.one, completed(f.one, 1, unknownTaskText));
-    const args = { analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY, stagingRoot,
+    const args = { analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH, stagingRoot,
         planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true };
     const review = api.stagePaper(args, f.dependencies);
     assert.equal(review.status, 'blocked');
@@ -601,7 +601,7 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
     assert.equal(review.assignment.primaryTaskId, null);
     assert.match(review.assignment.registrySha256, /^[a-f0-9]{64}$/);
     // Fail-closed: the blocked paper stages its assignment placeholder only.
-    const registry = tagCatalogApi.loadTagCatalog(TAXONOMY);
+    const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
     const registryRoot = path.join(stagingRoot, f.one, registry.registrySha256);
     const implementationRoot = path.join(registryRoot, fs.readdirSync(registryRoot)[0]);
     assert.deepEqual(fs.readdirSync(implementationRoot), ['assignment.json']);
@@ -618,7 +618,7 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
     const assignment = JSON.parse(fs.readFileSync(path.join(implementationRoot, 'assignment.json'), 'utf8'));
     assert.equal(assignment.status, 'assigned');
     assert.equal(assignment.primaryTaskId, 'task.asr');
-    assert.equal(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, taxonomyFile: TAXONOMY,
+    assert.equal(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies).manifest.manifestSha256,
     staged.manifest.manifestSha256);
 });

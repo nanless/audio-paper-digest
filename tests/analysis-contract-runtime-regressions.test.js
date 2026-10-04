@@ -14,9 +14,9 @@ const {
 } = require('../scripts/analysis-contract.js');
 const contract = require('../scripts/analysis-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
-const { createTagRules } = require('../scripts/lib/taxonomy-runtime.js');
-const registryChange = require('../scripts/lib/taxonomy-registry-change.js');
-const tagCatalogApi = require('../scripts/lib/paper-taxonomy.js');
+const { createTagRules } = require('../scripts/lib/tag-rules.js');
+const registryChange = require('../scripts/lib/tag-catalog-change.js');
+const tagCatalogApi = require('../scripts/lib/tag-catalog.js');
 
 const withResultSentence = sentence => validAnalysisText().replace(
     '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
@@ -261,7 +261,7 @@ describe('production analysis contract regressions', () => {
 });
 
 // ——— Registry 版本化（P2-2/C7）：taxonomySeal 的 additive 放宽与 fail-closed ———
-const REGISTRY_FILE = path.resolve(__dirname, '../config/paper-taxonomy.json');
+const REGISTRY_FILE = path.resolve(__dirname, '../config/tag-catalog.json');
 const ADDITIVE_OLD_SHA = 'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf';
 const DESTRUCTIVE_OLD_SHA = '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a';
 
@@ -296,7 +296,7 @@ function acknowledgedAnnotationFor(fromRegistrySha256) {
 function sealedPaper(options = {}) {
     const runtime = createTagRules({ registryPath: REGISTRY_FILE });
     const analysis = validAnalysisText();
-    const parsed = parseAnalysis(analysis, { taxonomyRuntime: runtime });
+    const parsed = parseAnalysis(analysis, { tagRules: runtime });
     const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
     const binding = {
         registryVersion: options.registryVersion ?? runtime.registryVersion,
@@ -336,9 +336,9 @@ function sealedPaper(options = {}) {
 
 function validateSeal(options) {
     const fixture = sealedPaper(options);
-    return contract.validateTaxonomyStageBinding(fixture.paper, {
+    return contract.validateTagStageProof(fixture.paper, {
         parsed: fixture.parsed,
-        taxonomyRuntime: fixture.runtime,
+        tagRules: fixture.runtime,
         registrySnapshotOptions: options.registrySnapshotOptions
     });
 }
@@ -406,8 +406,8 @@ describe('taxonomySeal registry upgrade gate', () => {
         const fixture = sealedPaper({ registrySha256: DESTRUCTIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64), annotation });
         fixture.stage.conceptIds = [...fixture.stage.conceptIds, 'task.ghost-concept'];
-        assert.match(contract.validateTaxonomyStageBinding(fixture.paper, {
-            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        assert.match(contract.validateTagStageProof(fixture.paper, {
+            parsed: fixture.parsed, tagRules: fixture.runtime
         }), /active/);
     });
 
@@ -450,8 +450,8 @@ describe('taxonomySeal registry upgrade gate', () => {
         const fixture = sealedPaper({ registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64), annotation: annotationFor(ADDITIVE_OLD_SHA) });
         fixture.stage.conceptIds = [...fixture.stage.conceptIds, 'task.ghost-concept'];
-        assert.match(contract.validateTaxonomyStageBinding(fixture.paper, {
-            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        assert.match(contract.validateTagStageProof(fixture.paper, {
+            parsed: fixture.parsed, tagRules: fixture.runtime
         }), /active/);
     });
 
@@ -477,18 +477,18 @@ describe('taxonomySeal registry upgrade gate', () => {
             projectionSha256: 'e'.repeat(64),
             annotation: annotationFor(ADDITIVE_OLD_SHA)
         });
-        assert.strictEqual(contract.validateTaxonomyStageBinding(fixture.paper, {
-            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        assert.strictEqual(contract.validateTagStageProof(fixture.paper, {
+            parsed: fixture.parsed, tagRules: fixture.runtime
         }), null);
         const tampered = structuredClone(fixture.paper);
         tampered.analysisManifest.stages.taxonomySeal.bindingSha256 = 'c'.repeat(64);
-        assert.match(contract.validateTaxonomyStageBinding(tampered, {
-            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        assert.match(contract.validateTagStageProof(tampered, {
+            parsed: fixture.parsed, tagRules: fixture.runtime
         }), /bindingSha256/);
         const changedText = structuredClone(fixture.paper);
         changedText.analysisStageCheckpoints.taxonomySeal += '\nDRIFT';
-        assert.match(contract.validateTaxonomyStageBinding(changedText, {
-            parsed: fixture.parsed, taxonomyRuntime: fixture.runtime
+        assert.match(contract.validateTagStageProof(changedText, {
+            parsed: fixture.parsed, tagRules: fixture.runtime
         }), /checkpoint/);
     });
 });

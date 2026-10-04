@@ -1,0 +1,309 @@
+"""Offline publisher transactions; public fixtures only, no env/model/main imports."""
+import ast
+import copy
+import io
+from contextlib import redirect_stdout
+import hashlib
+import json
+import os
+import subprocess
+import unittest
+from pathlib import Path
+import test_tag_version_files as assets_test
+SOURCE = assets_test.SOURCE
+
+
+BASE = 'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d'
+PREFERRED = {
+    '68bbb2a0fb3c142ef21369320aca58f17b0ff7072e85923ec1c33dc2be98428c':
+        ('a0aabb8814f1d9819e4b72e3304cee6b100c937744a626a24654f4a471f46af9',
+         'c3f225b6fce48d50474719e96ba558f11df4917bdf9d1d60f61aa7d24eb0ff74'),
+    '8c89a69ffe7daba6cc9da4ea5789101d6118e326b9978ec3edae1a85e965c8e3':
+        ('91947cb14473c88009c2821336ea25bd8a2173b4fea58fc69e1ed1d571613e4f',
+         '257d5d219ddd4750a0cc5491a418753d051456d027a648c7e41f7f640e6774f0')}
+FIXTURES = Path(__file__).resolve().parents[1] / 'fixtures'
+POLICIES = ['data/taxonomy-presentation-policy.json',
+            'static/data/taxonomy-presentation-policy.json']
+DATE = '2026-10-01'
+
+
+class PresentationPolicyTests(unittest.TestCase):
+    # Reuse the AST isolation infrastructure, without inheriting/rerunning its
+    # cases. Additional real production transaction functions are AST-loaded.
+    setUp = assets_test.TagVersionFilesTests.setUp
+    call = assets_test.TagVersionFilesTests.call
+    write = staticmethod(assets_test.TagVersionFilesTests.write)
+    put = assets_test.TagVersionFilesTests.put
+
+    def prepare(self, preferred=None):
+        preferred = preferred or list(PREFERRED)[1]
+        self.base = json.loads((FIXTURES / (BASE + '.json')).read_text())
+        self.preferred = json.loads((FIXTURES / (preferred + '.json')).read_text())
+        # Reconstruct the raw runtime fields consumed by the actual snapshot
+        # builder. This is not a replacement registry or a signing operation.
+        self.env['_PAGE_TAG_CATALOG'] = {
+            'version': self.base['registryVersion'], 'registrySha256': BASE,
+            'concepts': [dict(id=n['id'], facet=n['facet'],
+                preferredLabel={'zh': n['zh'], 'en': n['en']}, aliases=n['aliases'],
+                broaderId=n['ancestorIds'][-1] if n['ancestorIds'] else None,
+                **{k: n[k] for k in ('definition', 'scopeNote', 'status') if k in n})
+                for n in self.base['concepts']]}
+        self.assertEqual(self.call('build_tag_catalog_snapshot'), self.base)
+        catalog = {'contract': 'paper-taxonomy-version-catalog-v1',
+            'currentSha256': preferred, 'snapshots': [self.base, self.preferred]}
+        for prefix in ('data', 'static/data'):
+            self.put(f'{prefix}/taxonomy-registry.json', self.preferred)
+            self.put(f'{prefix}/taxonomy-catalog.json', catalog)
+            for snapshot in [self.base, self.preferred]:
+                self.put(f'{prefix}/taxonomy-snapshots/{snapshot["registrySha256"]}.json', snapshot)
+        self.policy = {'contract': 'paper-taxonomy-presentation-selection-v1',
+            'baseRegistrySha256': BASE,
+            'baseSnapshotSha256': '05046ef39ee694db3da5de2e24193bd7ec31b39efd18388bb0ae7c740f2b56b2',
+            'preferredRegistrySha256': preferred,
+            'preferredSnapshotSha256': PREFERRED[preferred][0],
+            'preferredProjectionSha256': PREFERRED[preferred][1]}
+        # Deliberately preserve noncanonical original bytes, including indent.
+        self.policy_bytes = (json.dumps(self.policy, ensure_ascii=False, indent=4)+'\n').encode()
+        self.policy_write(self.policy_bytes)
+
+    def policy_write(self, raw):
+        for relative in POLICIES:
+            self.write(self.repo / relative, raw)
+
+    def git(self, *args):
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        return subprocess.run(['git', '-C', str(self.repo), *args], check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+
+    def transaction(self):
+        self.prepare()
+        self.git('init', '-q')
+        self.git('config', 'user.name', 'Offline fixture')
+        self.git('config', 'user.email', 'fixture@example.invalid')
+        self.git('add', '.')
+        self.git('commit', '-qm', '公开词表基线')
+        self.before_head = self.git('rev-parse', 'HEAD').stdout
+        extra = {'_validate_manifest_path_date', 'validate_generation_manifest_file_bytes',
+                 'load_verified_review_receipt', 'git_push', '_file_fingerprint', 'restore_git_publish_state'}
+        nodes = [n for n in ast.parse(SOURCE.read_text()).body
+                 if isinstance(n, ast.FunctionDef) and n.name in extra]
+        self.assertEqual({n.name for n in nodes}, extra)
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), 'exec'), self.env)
+        self.env.update({
+            '_git_relative_manifest': lambda paths: [Path(p).resolve().relative_to(self.repo).as_posix()
+                                                     for p in paths],
+            '_run_git': lambda args, **kw: self.git(*args),
+            'validate_publish_date': lambda date: date,
+            '_load_json_object': lambda path, *_: json.loads(Path(path).read_text()),
+            'prior_api_reader_manifest_assets': lambda date: [],
+            '_is_pipeline_owned_paper': lambda *args: False,
+            'is_api_reader_asset_path': lambda *args: False, 'subprocess': subprocess,
+            'generation_manifest_path': lambda date: self.root / 'generation.json',
+            '_save_generation_journal': lambda path, journal: self.write(path,
+                (json.dumps(journal)+'\n').encode())})
+        self.posts = self.stage / 'posts'
+        self.posts.mkdir()
+        self.write(self.posts / f'{DATE}-fixture.md', b'---\npaper_digest_pipeline_owned: true\n---\npublic page\n')
+        self.content = self.repo / 'content/posts'
+        self.content.mkdir(parents=True)
+        self.assets = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo)
+        self.journal = {}
+        self.records = self.call('prepare_generation_installation', self.journal,
+            self.root/'journal.json', self.posts, self.content, DATE, staged_assets=self.assets)
+        self.paths = self.call('resume_generation_installation', self.journal,
+            self.root/'journal.json', self.posts)
+        self.manifest = {'schemaVersion': 3, 'date': DATE,
+            'files': [{'path': p.relative_to(self.repo).as_posix(),
+                       **self.call('_file_fingerprint', p)} for p in self.paths]}
+        self.manifest_path = self.root / 'generation.json'
+        self.write(self.manifest_path, (json.dumps(self.manifest)+'\n').encode())
+        return self.paths
+
+    def byte_gate(self):
+        return self.call('validate_generation_manifest_file_bytes', self.manifest_path, DATE)
+
+    def test_real_262_to_330_and_338_preserve_exact_original_policy_bytes(self):
+        for preferred in PREFERRED:
+            with self.subTest(preferred=preferred):
+                self.prepare(preferred)
+                assets = self.call('tag_catalog_file_contents', self.repo)
+                self.assertIn(len(assets), (10, 12))
+                for relative in POLICIES:
+                    self.assertEqual(assets[relative], self.policy_bytes)
+                self.assertEqual(json.loads(assets['data/taxonomy-registry.json']), self.preferred)
+                self.assertEqual(json.loads(assets['data/taxonomy-catalog.json'])['currentSha256'], preferred)
+                self.assertEqual(self.call('build_tag_catalog_snapshot'), self.base)
+                self.call('export_tag_catalog_files', self.repo)
+                self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
+
+    def test_without_policy_keeps_original_base_selection(self):
+        self.prepare()
+        for relative in POLICIES: (self.repo / relative).unlink()
+        assets = self.call('tag_catalog_file_contents', self.repo)
+        self.assertEqual(len(assets), 8)
+        self.assertEqual(json.loads(assets['data/taxonomy-registry.json']), self.base)
+
+    def test_each_binding_and_unknown_field_fail_before_stage_writes(self):
+        self.prepare()
+        for key in self.policy:
+            with self.subTest(key=key):
+                wrong = dict(self.policy); wrong[key] = '0'*64
+                self.policy_write(json.dumps(wrong).encode())
+                with self.assertRaises(self.error):
+                    self.call('prepare_tag_catalog_staged_files', self.stage, self.repo)
+                self.assertEqual(list(self.stage.iterdir()), [])
+        wrong = dict(self.policy, downgradeAllowed=True)
+        self.policy_write(json.dumps(wrong).encode())
+        with self.assertRaises(self.error): self.call('tag_catalog_file_contents', self.repo)
+
+    def test_duplicate_key_and_semantically_equal_mirror_bytes_rejected(self):
+        self.prepare()
+        self.write(self.repo/POLICIES[1], json.dumps(self.policy).encode())
+        with self.assertRaisesRegex(self.error, '字节漂移'): self.call('tag_catalog_file_contents', self.repo)
+        raw = self.policy_bytes[:-2] + b', "contract":"paper-taxonomy-presentation-selection-v1"}\n'
+        self.policy_write(raw)
+        with self.assertRaisesRegex(self.error, '重复键'): self.call('tag_catalog_file_contents', self.repo)
+
+    def test_missing_mirror_archive_catalog_and_dangling_symlink_rejected(self):
+        self.prepare()
+        for relative in [POLICIES[1], 'static/data/taxonomy-snapshots/'+self.preferred['registrySha256']+'.json',
+                         'static/data/taxonomy-catalog.json']:
+            with self.subTest(relative=relative):
+                path=self.repo/relative; raw=path.read_bytes(); path.unlink()
+                with self.assertRaises(self.error): self.call('tag_catalog_file_contents', self.repo)
+                path.write_bytes(raw)
+        path=self.repo/POLICIES[0]; path.unlink(); path.symlink_to(self.root/'missing')
+        with self.assertRaisesRegex(self.error, '符号链接'): self.call('tag_catalog_file_contents', self.repo)
+
+    def test_hardlink_and_parent_symlink_rejected(self):
+        self.prepare()
+        path=self.repo/POLICIES[0]; other=self.root/'link'; os.link(path, other)
+        with self.assertRaisesRegex(self.error, '单链接'): self.call('tag_catalog_file_contents', self.repo)
+        other.unlink()
+        data=self.repo/'static/data'; moved=self.repo/'static/moved'; data.rename(moved); data.symlink_to(moved)
+        with self.assertRaisesRegex(self.error, '符号链接'): self.call('tag_catalog_file_contents', self.repo)
+
+    def test_approved_bytes_cannot_hide_changed_base_concept_or_graph(self):
+        self.prepare()
+        changed=copy.deepcopy(self.preferred); changed['concepts'][0]['zh'] += '改'
+        # Even with freshly altered policy digests, the additive semantic check
+        # must reject changed existing labels/definitions/parents.
+        for prefix in ('data', 'static/data'):
+            catalog=json.loads((self.repo/f'{prefix}/taxonomy-catalog.json').read_text())
+            catalog['snapshots'][1]=changed
+            self.put(f'{prefix}/taxonomy-catalog.json',catalog)
+            self.put(f'{prefix}/taxonomy-registry.json',changed)
+            self.put(f'{prefix}/taxonomy-snapshots/{changed["registrySha256"]}.json',changed)
+        self.policy['preferredSnapshotSha256']=hashlib.sha256(self.call('tag_catalog_snapshot_bytes',changed)).hexdigest()
+        self.policy['preferredProjectionSha256']=self.call('_historical_tag_prompt_text_sha256',changed)
+        self.policy_write(json.dumps(self.policy).encode())
+        with self.assertRaisesRegex(self.error, '逐对象追加'): self.call('tag_catalog_file_contents',self.repo)
+
+    def test_generation_journal_precise_members_install_and_idempotent_resume(self):
+        self.transaction()
+        self.assertEqual(len(self.records),11)
+        self.assertEqual({r['path'] for r in self.records}, {p.relative_to(self.repo).as_posix() for p in self.paths})
+        for relative in POLICIES:
+            self.assertEqual((self.repo/relative).read_bytes(),self.policy_bytes)
+            self.assertEqual((self.stage/relative).read_bytes(),self.policy_bytes)
+        self.assertTrue(self.byte_gate())
+        results={}
+        self.assertEqual(self.call('review_tag_catalog_files', DATE,self.paths,self.manifest_path,results),0)
+        self.assertEqual(len(results),10)
+        self.assertEqual(self.call('resume_generation_installation',self.journal,self.root/'journal.json',self.posts),self.paths)
+        self.assertEqual(self.git('rev-parse','HEAD').stdout,self.before_head)
+
+    def test_policy_change_before_installation_rejected_by_real_git_ownership(self):
+        self.transaction()
+        # New staging prepared before a foreign policy edit is not authority to
+        # overwrite that edit; the real git status rejects the unreceipted bytes.
+        self.policy_write(self.policy_bytes+b' ')
+        self.journal={}
+        with self.assertRaisesRegex(self.error,'人工'):
+            self.call('prepare_generation_installation', self.journal,self.root/'next.json',self.posts,
+                      self.content,DATE,staged_assets=self.assets)
+
+    def test_generation_policy_drift_even_json_whitespace_blocks_review(self):
+        self.transaction()
+        self.policy_write(self.policy_bytes+b' ')
+        with self.assertRaisesRegex(self.error,'generation 后'):self.byte_gate()
+        self.assertGreater(self.call('review_tag_catalog_files',DATE,self.paths,self.manifest_path,{}),0)
+
+    def test_policy_removed_after_generation_cannot_silently_downgrade(self):
+        self.transaction()
+        for relative in POLICIES: (self.repo/relative).unlink()
+        with self.assertRaisesRegex(self.error,'generation 后'): self.byte_gate()
+        self.assertGreater(self.call('review_tag_catalog_files',DATE,self.paths,self.manifest_path,{}),0)
+
+    def test_source_registry_advance_is_unknown_even_if_richer(self):
+        self.prepare()
+        self.env['_PAGE_TAG_CATALOG']['registrySha256']='1'*64
+        with self.assertRaisesRegex(self.error,'实际签发来源'):
+            self.call('tag_catalog_file_contents',self.repo)
+
+    def test_policy_and_archive_paths_only_exact_whitelist(self):
+        self.prepare()
+        for path in ['data/other-policy.json','data/taxonomy-presentation-policy.json/child',
+                     'static/data/../data/taxonomy-presentation-policy.json',
+                     '/data/taxonomy-presentation-policy.json',
+                     'static\\data\\taxonomy-presentation-policy.json']:
+            with self.subTest(path=path): self.assertFalse(self.call('_is_tag_catalog_file_path',path))
+        for path in POLICIES: self.assertTrue(self.call('_is_tag_catalog_file_path',path))
+
+    def test_prior_receipt_allows_exact_policy_only(self):
+        self.transaction()
+        allowances={r['path']:{'sha256':r['sha256'],'controlledTaxonomy':True} for r in self.manifest['files']
+                    if self.call('_is_tag_catalog_file_path',r['path'])}
+        paths=[self.repo/p for p in allowances]
+        self.call('validate_manifest_clean_against_head',paths,allowances)
+        self.policy_write(self.policy_bytes+b' ')
+        with self.assertRaises(self.error):self.call('validate_manifest_clean_against_head',paths,allowances)
+
+    def test_post_review_policy_drift_reaches_real_push_gate_before_any_git_write(self):
+        self.transaction()
+        self.assertEqual(self.call('review_tag_catalog_files',DATE,self.paths,self.manifest_path,{}),0)
+        receipt={'schemaVersion':3,'date':DATE,'strictReview':True,'hugoGate':'hugo',
+            'reviewProtocolFingerprint':'offline-protocol',
+            'generationManifestSha256':hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()}
+        path=self.root/'receipt.json';self.write(path,json.dumps(receipt).encode())
+        self.env.update({'review_receipt_path':lambda date:path,
+            'review_protocol_fingerprint':lambda:'offline-protocol',
+            '_manual_review_provenance_error':lambda *a,**kw:None,
+            'validate_current_generation_template':lambda *a:None,
+            '_validate_active_publication_scope':lambda *a:None,
+            'validate_generation_visual_contract':lambda *a:None})
+        before=self.git('status','--porcelain=v1','-z').stdout
+        index=self.git('write-tree').stdout
+        self.policy_write(self.policy_bytes+b' ')
+        dirty=self.git('status','--porcelain=v1','-z').stdout
+        # Full production git_push, load_verified_review_receipt, and byte
+        # validator are executed. Unrelated protocol/model provenance prelude
+        # alone is stubbed. Every git call after the byte gate is prohibited.
+        self.env['_run_git']=lambda *a,**kw: self.fail('push attempted Git mutation/remote operation')
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertFalse(self.call('git_push',DATE,self.paths))
+        self.assertIn('generation 后', output.getvalue())
+        self.assertNotIn('恢复失败', output.getvalue())
+        self.assertEqual(self.git('rev-parse','HEAD').stdout,self.before_head)
+        self.assertEqual(self.git('write-tree').stdout,index)
+        self.assertEqual(self.git('status','--porcelain=v1','-z').stdout,dirty)
+        self.assertNotEqual(before,dirty) # tracked policy was clean before the tamper
+
+    def test_interrupted_policy_installation_uses_only_frozen_stage_and_rejects_drift(self):
+        self.transaction()
+        # Existing installation resumes frozen original policy even if mirrored
+        # current worktree bytes now diverge. It must not regenerate selection.
+        changed=self.policy_bytes+b' '
+        self.write(self.repo/POLICIES[0],changed)
+        with self.assertRaises(self.error):self.call('resume_generation_installation',self.journal,self.root/'journal.json',self.posts)
+        with self.assertRaises(self.error):self.call('tag_catalog_file_contents',self.repo)
+        self.assertEqual(set(self.call('prepare_tag_catalog_staged_files',self.stage,self.repo,
+            installation=self.journal['installation'])),set(self.assets))
+        self.write(self.stage/POLICIES[0],changed)
+        with self.assertRaises(self.error):self.call('prepare_tag_catalog_staged_files',self.stage,self.repo,
+            installation=self.journal['installation'])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -479,7 +479,7 @@ test('real official exact-PDF source seal reaches authenticated staging/import/p
         decisionName: 'included.json', artifact });
     filter.applyDecision({ filterRoot: path.join(root, 'filters'), filterId,
         decisionHandle: filter.loadDecisionHandle(decisionFile), owner: 'filter-reviewer', now: stamp });
-    const taxonomy = path.join(root, 'taxonomy.json'); fs.writeFileSync(taxonomy, '{"version":"taxonomy-v1"}\n');
+    const tagCatalogPath = path.join(root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n');
     const files = { conferenceDiscoveryCatalogDir: path.join(root, 'catalogs'),
         conferenceDiscoveryReportDir: path.join(root, 'reports'), conferenceFiltersDir: path.join(root, 'filters'),
         conferenceStagingSpecsDir: path.join(root, 'specs'), conferenceStagingSourceDir: path.join(root, 'source'),
@@ -487,7 +487,7 @@ test('real official exact-PDF source seal reaches authenticated staging/import/p
         conferenceSourceLedgerDir: path.join(root, 'ledgers'), conferenceRunsDir: path.join(root, 'runs'),
         conferenceAnalysisDir: path.join(root, 'analysis'), conferencePageStagingDir: path.join(root, 'pages'),
         conferenceAggregateDir: path.join(root, 'aggregates'), conferenceProcessDir: path.join(root, 'processes'),
-        taxonomyRegistry: taxonomy };
+        tagCatalogFile: tagCatalogPath };
     const deps = { ...processApi.defaultDependencies(), files,
         execFileSync: (_command, args, options) => {
             const code = 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[3]); from conference_extractor import run_extraction; run_extraction(sys.argv[1], apply=True, source_root=Path(sys.argv[2]))';
@@ -739,11 +739,11 @@ test('taxonomy review keeps the batch moving, withholds the page and reports a v
     assert.deepEqual(first.taxonomyReviewQueue.map(item => item.blockedReasons), [blockedReasons]);
     const directory = path.join(f.files.conferenceProcessDir, first.processId);
     assert.equal(first.taxonomyReviewQueueFile, path.join(directory, 'taxonomy-review-queue.json'));
-    // The batch does not close while a taxonomy is unresolved: no receipt.
+    // The batch does not close while a tag assignment is unresolved: no receipt.
     assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), false);
 
     const queue = JSON.parse(fs.readFileSync(first.taxonomyReviewQueueFile, 'utf8'));
-    assert.equal(queue.contract, processApi.TAXONOMY_REVIEW_CONTRACT);
+    assert.equal(queue.contract, processApi.TAG_REVIEW_QUEUE_CONTRACT);
     assert.equal(queue.taxonomyReview, 1);
     assert.equal(queue.items[0].paperId, reviewPaperId);
     assert.equal(queue.items[0].status, 'needs_taxonomy_review');

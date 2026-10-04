@@ -106,7 +106,7 @@ Each paper has four same-origin files: `citation.json`, `citation.bib`, `citatio
 
 Historical-version citations use the verified `sourceVersion.selectedSourceId`. Without an explicit or source-verified version, store `version: null` and unversioned abs/PDF URLs; never guess v1.
 
-New papers write 3–5 active preferred taxonomy labels to Hugo `tags`, together with `paper-taxonomy-flat-tags-compat-v1`, selection contract, registry version and SHA, ordered `{id, facet, label}`, and explicit primary task and method. Chinese preferred labels are required, with the fixed `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` names retained and accompanied by Chinese aliases in the registry. This exception does not permit arbitrary English labels. `rethink-context.json.assessment` carries the same projection. Older pages remain unchanged; digest “popular directions” count primary tasks alone.
+New papers write 3–5 active preferred labels from the tag catalog to Hugo `tags`, together with `paper-taxonomy-flat-tags-compat-v1`, selection contract, registry version and SHA, ordered `{id, facet, label}`, and explicit primary task and method. Chinese preferred labels are required, with the fixed `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` names retained and accompanied by Chinese aliases in the registry. This exception does not permit arbitrary English labels. `rethink-context.json.assessment` carries the same projection. Older pages remain unchanged; digest “popular directions” count primary tasks alone.
 
 ## Review and Remote Publication
 

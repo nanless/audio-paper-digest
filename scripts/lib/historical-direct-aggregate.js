@@ -13,7 +13,7 @@ const directPages = require('./historical-direct-page-staging.js');
 const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
 const projectionIo = require('./historical-conference-page-projections.js');
 const { parseAnalysis } = require('../utils.js');
-const tagRules = require('./taxonomy-runtime.js').getDefaultTagRules();
+const tagRules = require('./tag-rules.js').getDefaultTagRules();
 
 const CONTRACT = 'historical-direct-aggregate-v2';
 const VERSION = 2;
@@ -524,9 +524,9 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
         || !parsed?.taxonomyValidation?.valid || !parsed.primaryTaskTag || !parsed.primaryMethodTag || labels.length < 3) {
         fail(`${item.paperId} direct canonical analysis cannot supply aggregate fields`);
     }
-    const taxonomyValidation = parsed.taxonomyValidation;
-    if (taxonomyValidation.registryVersion !== tagRules.registryVersion
-        || taxonomyValidation.registrySha256 !== tagRules.registrySha256) {
+    const tagValidationResult = parsed.taxonomyValidation;
+    if (tagValidationResult.registryVersion !== tagRules.registryVersion
+        || tagValidationResult.registrySha256 !== tagRules.registrySha256) {
         fail(`${item.paperId} direct canonical taxonomy differs from current registry`);
     }
     const articleHeading = analysis.apiReaderArticle.match(/^#{1,6}\s+([^\n]+)$/m)?.[1]?.trim();
@@ -670,17 +670,17 @@ function renderAggregate(scope, key, members, options = {}) {
     const directionCounts = [...members.reduce((counts, item) => counts.set(item.canonical.primaryTaskLabel,
         (counts.get(item.canonical.primaryTaskLabel) || 0) + 1), new Map()).entries()]
         .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-CN'));
-    const taxonomy = members[0]?.canonical.taxonomy;
-    if (!taxonomy || members.some(item => stableHash(item.canonical.taxonomy) !== stableHash(taxonomy))) {
+    const classificationMetadata = members[0]?.canonical.taxonomy;
+    if (!classificationMetadata || members.some(item => stableHash(item.canonical.taxonomy) !== stableHash(classificationMetadata))) {
         fail(`${scope}:${key} aggregate taxonomy metadata is missing or mixed`);
     }
     let output = `---\ntitle: "${display}"\ndraft: false\n`;
     output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;
     output += 'paper_digest_reader_quality: "reader-facing-v3"\n';
     output += `paper_digest_taxonomy_contract: "${tagRules.flatCompatContract}"\n`;
-    output += `paper_digest_taxonomy_selection_contract: "${taxonomy.selectionContract}"\n`;
-    output += `paper_digest_taxonomy_registry_version: "${taxonomy.registryVersion}"\n`;
-    output += `paper_digest_taxonomy_registry_sha256: "${taxonomy.registrySha256}"\n`;
+    output += `paper_digest_taxonomy_selection_contract: "${classificationMetadata.selectionContract}"\n`;
+    output += `paper_digest_taxonomy_registry_version: "${classificationMetadata.registryVersion}"\n`;
+    output += `paper_digest_taxonomy_registry_sha256: "${classificationMetadata.registrySha256}"\n`;
     output += 'paper_digest_taxonomy_scope: "aggregate-primary-task-counts"\n---\n\n';
     output += `# ${display}\n\n`;
     output += `本期共收录 **${members.length}** 篇完成 source-only 重写的论文。\n\n`;

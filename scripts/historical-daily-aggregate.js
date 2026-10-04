@@ -29,8 +29,8 @@ function main(argv = process.argv.slice(2), runtime = {}) {
         crosswalkRoot: Config.FILES.pageSourceCrosswalkDir,
         inventoryRoot: Config.FILES.historicalPageInventoryDir,
         analysisRoot: Config.FILES.freshRewriteRunsDir,
-        taxonomyRoot: Config.FILES.historicalTaxonomyAssignmentDir,
-        taxonomyRegistry: Config.FILES.taxonomyRegistry }, runtime.dependencies || {});
+        tagAssignmentRoot: Config.FILES.historicalTagAssignmentDir,
+        tagCatalogPath: Config.FILES.tagCatalogFile }, runtime.dependencies || {});
     const aggregates = api.buildDailyAggregates({ inputs, date: options.date });
     const aggregateRunId = api.aggregateRunIdFor(options.stagingRunIds);
     const output = { status: options.apply ? 'written' : 'dry-run', aggregateRunId,

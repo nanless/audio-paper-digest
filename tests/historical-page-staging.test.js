@@ -47,8 +47,8 @@ function fixture(t) {
 
 test('one canonical projects to every verified duplicate page while preserving path/date/url', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: STAGING, limit: 'pilot',
-        analysisRunId: ANALYSIS_RUN, crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
-        taxonomyRegistry: '/unused', stagingRoot: f.root };
+        analysisRunId: ANALYSIS_RUN, crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
+        tagCatalogPath: '/unused', stagingRoot: f.root };
     const result = api.stageHistoricalPages(args, f.dependencies);
     assert.equal(result.selectedIdentities, 1); assert.equal(result.pageCount, 2);
     const manifest = JSON.parse(fs.readFileSync(path.join(f.root, STAGING, 'manifest.json')));
@@ -65,7 +65,7 @@ test('one canonical projects to every verified duplicate page while preserving p
 test('staging intent and manifest reject a renderer implementation change under the same immutable run id', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: STAGING,
         limit: 'pilot', analysisRunId: ANALYSIS_RUN, crosswalkRoot: '/unused', analysisRoot: '/unused',
-        taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root,
+        tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root,
         rendererImplementationSha256: RENDERER_SHA };
     api.stageHistoricalPages(args, f.dependencies);
     const intent = JSON.parse(fs.readFileSync(path.join(f.root, STAGING, 'intent.json')));
@@ -82,8 +82,8 @@ test('renderer implementation drift during rendering cannot produce a manifest',
     const f = fixture(t); let reads = 0;
     assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
         stagingRunId: STAGING, limit: 'pilot', analysisRunId: ANALYSIS_RUN,
-        crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
-        taxonomyRegistry: '/unused', stagingRoot: f.root }, { ...f.dependencies,
+        crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
+        tagCatalogPath: '/unused', stagingRoot: f.root }, { ...f.dependencies,
         rendererImplementationSha256: () => reads++ === 0 ? RENDERER_SHA : '4'.repeat(64) }),
     /changed while rendering/);
     assert.equal(fs.existsSync(path.join(f.root, STAGING, 'manifest.json')), false);
@@ -92,8 +92,8 @@ test('renderer implementation drift during rendering cannot produce a manifest',
 test('exact page left after an interrupted write resumes under the same intent and run id', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK,
         stagingRunId: STAGING, limit: 'pilot', analysisRunId: ANALYSIS_RUN,
-        crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
-        taxonomyRegistry: '/unused', stagingRoot: f.root };
+        crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
+        tagCatalogPath: '/unused', stagingRoot: f.root };
     let reads = 0;
     assert.throws(() => api.stageHistoricalPages(args, { ...f.dependencies,
         rendererImplementationSha256: () => reads++ === 0 ? RENDERER_SHA : '4'.repeat(64) }),
@@ -146,7 +146,7 @@ test('default renderer uses a private temporary input file and a bounded subproc
 
 test('selected binding replay tolerates later unrelated or same-identity pages but rejects selected-page drift', t => {
     const f = fixture(t); const selected = api.loadProjectionInputs({ crosswalkRoot: '/unused', crosswalkId: CROSSWALK,
-        analysisRoot: '/unused', taxonomyRoot: '/unused', taxonomyRegistry: '/unused',
+        analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused',
         analysisRunId: ANALYSIS_RUN }, f.dependencies).groups;
     const manifest = { selectedBindings: api.selectedBindingsFor(selected) };
     manifest.selectedBindingSha256 = stableHash(manifest.selectedBindings);
@@ -187,7 +187,7 @@ test('staging selects the rebuilt current assignment and accepts a legacy name o
 test('dry-run validates inputs but writes no staging directory', t => {
     const f = fixture(t); const result = api.stageHistoricalPages({ apply: false, crosswalkId: CROSSWALK,
         analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',
-        taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root }, f.dependencies);
+        tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root }, f.dependencies);
     assert.equal(result.status, 'dry-run'); assert.equal(result.selectedPages, 2); assert.deepEqual(fs.readdirSync(f.root), []);
 });
 
@@ -211,8 +211,8 @@ test('assignment reader rejects duplicate JSON keys and symlinks', t => {
 test('page staging rejects asset traversal and an existing symlink run directory', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK,
         stagingRunId: '44444444-4444-4444-8444-444444444444', analysisRunId: ANALYSIS_RUN,
-        limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
-        taxonomyRegistry: '/unused', stagingRoot: f.root };
+        limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
+        tagCatalogPath: '/unused', stagingRoot: f.root };
     assert.throws(() => api.stageHistoricalPages(args, { ...f.dependencies,
         render: () => ({ markdown: 'FRESH', assets: [{ path: 'static/images/papers/../../../../escape.bin', base64: 'eA==' }] }) }), /unsafe staged asset/);
     const outside = path.join(f.root, 'outside'); fs.mkdirSync(outside);
@@ -224,7 +224,7 @@ test('page staging rejects a self-hashed assignment that differs from determinis
     const f = fixture(t);
     assert.throws(() => api.stageHistoricalPages({ apply: false, crosswalkId: CROSSWALK,
         analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',
-        taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root }, {
+        tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root }, {
         ...f.dependencies, buildAssignment: () => ({ forged: true, assignmentSha256: 'f'.repeat(64) })
     }), /not the deterministic current-registry projection/);
 });
@@ -243,8 +243,8 @@ test('prepared assignment A cannot stage analysis B under A staging identity', t
     assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
         stagingRunId: STAGING, expectedStagingRunId: STAGING,
         expectedAssignment: staleExpected, analysisRunId: ANALYSIS_RUN, limit: 'pilot',
-        crosswalkRoot: '/unused', analysisRoot: '/unused', taxonomyRoot: '/unused',
-        taxonomyRegistry: '/unused', stagingRoot: f.root }, f.dependencies), /identity drifted/);
+        crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
+        tagCatalogPath: '/unused', stagingRoot: f.root }, f.dependencies), /identity drifted/);
     assert.equal(fs.existsSync(path.join(f.root, STAGING)), false,
         'assignment drift must fail before writing staging intent or directories');
 });
@@ -262,7 +262,7 @@ test('renderer failure leaves only an immutable input intent and same run ID res
     const f = fixture(t); const runId = '66666666-6666-4666-8666-666666666666';
     const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: runId,
         analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',
-        taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root };
+        tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root };
     assert.throws(() => api.stageHistoricalPages(args, { ...f.dependencies,
         render: () => { throw new Error('real publisher contract rejected'); } }), /publisher contract/);
     assert.deepEqual(fs.readdirSync(path.join(f.root, runId)), ['intent.json']);
@@ -278,6 +278,6 @@ test('manifest-less legacy partial files are rejected because they lack an input
     fs.writeFileSync(path.join(runRoot, 'pages', 'orphan.md'), 'partial');
     assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
         stagingRunId: runId, analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused',
-        analysisRoot: '/unused', taxonomyRoot: '/unused', taxonomyRegistry: '/unused', stagingRoot: f.root },
+        analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root },
     f.dependencies), /unbound partial files/);
 });

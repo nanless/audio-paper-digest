@@ -21,7 +21,7 @@ const {
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
     validateCoreSummaryStageBinding,
-    validateTaxonomyStageBinding,
+    validateTagStageProof,
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 
@@ -866,10 +866,10 @@ function getIncompleteAnalysisContentReason(paper) {
         !isRecoveryStageTerminal(stage, stages[stage]?.status))) {
         return '必需恢复阶段未全部进入允许终态';
     }
-    const taxonomyBindingIssue = !paper.analysisManifest.manualTakeover
-        ? validateTaxonomyStageBinding(paper, { parsed: parseAnalysis(paper.analysis) })
+    const tagStageProofIssue = !paper.analysisManifest.manualTakeover
+        ? validateTagStageProof(paper, { parsed: parseAnalysis(paper.analysis) })
         : null;
-    if (taxonomyBindingIssue) return `taxonomySeal 证明无法重放: ${taxonomyBindingIssue}`;
+    if (tagStageProofIssue) return `taxonomySeal 证明无法重放: ${tagStageProofIssue}`;
     const coreSummaryBindingIssue = validateCoreSummaryStageBinding(paper);
     if (coreSummaryBindingIssue) return `核心摘要证明无法重放: ${coreSummaryBindingIssue}`;
     if (validateManualTakeoverManifest(
@@ -952,7 +952,7 @@ function isSealedApiAnalysisEligibleForCoreSummaryRecovery(paper) {
         || REQUIRED_RECOVERY_STAGES.some(stage =>
             !isRecoveryStageTerminal(stage, stages[stage]?.status))
         || validateCoreSummaryStageBinding(paper, { skipSemantic: true })
-        || validateTaxonomyStageBinding(paper, { parsed: parseAnalysis(paper.analysis) })
+        || validateTagStageProof(paper, { parsed: parseAnalysis(paper.analysis) })
         || validateManualTakeoverManifest(
             manifest,
             manifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',

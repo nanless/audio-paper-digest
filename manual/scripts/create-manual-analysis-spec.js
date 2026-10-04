@@ -275,14 +275,14 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
     if (!PRIMARY_METHOD_TAGS.has(primaryMethodTag) || !tagList.includes(primaryMethodTag)) {
         throw new Error(`${label}.primaryMethodTag 必须是 tags 中显式包含的 current method facet 标签`);
     }
-    const taxonomyValidation = require('../../scripts/lib/taxonomy-runtime.js')
+    const tagValidationResult = require('../../scripts/lib/tag-rules.js')
         .getDefaultTagRules().validateTagSelection({
             tags: tagList,
             primaryTaskTag: task,
             primaryMethodTag
         });
-    if (!taxonomyValidation.valid) {
-        throw new Error(`${label}.tags 不符合 current taxonomy: ${taxonomyValidation.errors.join('；')}`);
+    if (!tagValidationResult.valid) {
+        throw new Error(`${label}.tags 不符合 current taxonomy: ${tagValidationResult.errors.join('；')}`);
     }
     const dims = validateScoreDimensions(record.dims, `${label}.dims`);
     if (!record.authorInfo || typeof record.authorInfo !== 'object' || Array.isArray(record.authorInfo)) {

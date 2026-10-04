@@ -38,7 +38,7 @@ function parseArgs(argv) {
 function requireFiles(files) {
     for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir', 'conferenceFiltersDir',
         'conferenceStagingDir', 'conferenceStagingSourceDir', 'conferenceSourceLedgerDir',
-        'conferenceRunsDir', 'taxonomyRegistry']) {
+        'conferenceRunsDir', 'tagCatalogFile']) {
         if (typeof files?.[field] !== 'string') throw new Error(`Configured ${field} is required`);
     }
     return files;

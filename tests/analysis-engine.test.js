@@ -1387,25 +1387,25 @@ describe('analyzePaperWithRetry', () => {
             '#语音识别 #Transformer'
         );
         const structureSha = crypto.createHash('sha256').update(structureAnalysis).digest('hex');
-        const taxonomyStage = paper.analysisManifest.stages.taxonomySeal;
-        taxonomyStage.status = 'complete';
-        taxonomyStage.inputAnalysisSha256 = structureSha;
-        taxonomyStage.inputProtectedProjectionSha256 = crypto.createHash('sha256')
+        const tagStage = paper.analysisManifest.stages.taxonomySeal;
+        tagStage.status = 'complete';
+        tagStage.inputAnalysisSha256 = structureSha;
+        tagStage.inputProtectedProjectionSha256 = crypto.createHash('sha256')
             .update(contract.maskClassificationFields(structureAnalysis)).digest('hex');
-        taxonomyStage.bindingSha256 = contract.manualSha256({
-            registryVersion: taxonomyStage.registryVersion,
-            registrySha256: taxonomyStage.registrySha256,
-            projectionContract: taxonomyStage.projectionContract,
-            projectionSha256: taxonomyStage.projectionSha256,
-            selectionContract: taxonomyStage.selectionContract,
-            inputAnalysisSha256: taxonomyStage.inputAnalysisSha256,
-            outputAnalysisSha256: taxonomyStage.outputAnalysisSha256,
-            inputProtectedProjectionSha256: taxonomyStage.inputProtectedProjectionSha256,
-            outputProtectedProjectionSha256: taxonomyStage.outputProtectedProjectionSha256,
-            taxonomySurfaceSha256: taxonomyStage.taxonomySurfaceSha256,
-            primaryTaskId: taxonomyStage.primaryTaskId,
-            primaryMethodId: taxonomyStage.primaryMethodId,
-            conceptIds: taxonomyStage.conceptIds
+        tagStage.bindingSha256 = contract.manualSha256({
+            registryVersion: tagStage.registryVersion,
+            registrySha256: tagStage.registrySha256,
+            projectionContract: tagStage.projectionContract,
+            projectionSha256: tagStage.projectionSha256,
+            selectionContract: tagStage.selectionContract,
+            inputAnalysisSha256: tagStage.inputAnalysisSha256,
+            outputAnalysisSha256: tagStage.outputAnalysisSha256,
+            inputProtectedProjectionSha256: tagStage.inputProtectedProjectionSha256,
+            outputProtectedProjectionSha256: tagStage.outputProtectedProjectionSha256,
+            taxonomySurfaceSha256: tagStage.taxonomySurfaceSha256,
+            primaryTaskId: tagStage.primaryTaskId,
+            primaryMethodId: tagStage.primaryMethodId,
+            conceptIds: tagStage.conceptIds
         });
        paper.analysisStageCheckpoints.structureRepair = structureAnalysis;
 
