@@ -362,7 +362,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         assert.match(validateSeal({
             registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64)
-        }), /registryUpgradeFrom|不得沿用|destructiveAcknowledgement/);
+        }), /registryUpgradeFrom|不能直接沿用|destructiveAcknowledgement/);
     });
 
     it('rejects a destructive upgrade even when the annotation claims additive', () => {
@@ -375,7 +375,7 @@ describe('taxonomySeal registry upgrade gate', () => {
             projectionSha256: 'e'.repeat(64),
             annotation: lying
         });
-        assert.match(issue, /destructive/);
+        assert.match(issue, /破坏性变更/);
     });
 
     it('admits a destructive upgrade only with an acknowledgement bound to the recomputed detail', () => {
@@ -408,7 +408,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         fixture.stage.conceptIds = [...fixture.stage.conceptIds, 'task.ghost-concept'];
         assert.match(contract.validateTagStageProof(fixture.paper, {
             parsed: fixture.parsed, tagRules: fixture.runtime
-        }), /active/);
+        }), /原标签阶段记录引用的以下概念在当前词表中缺失或已停用/);
     });
 
     it('never admits a destructive change outside the acknowledgement whitelist', () => {
@@ -434,7 +434,7 @@ describe('taxonomySeal registry upgrade gate', () => {
                     reasonsHash: registryChange.destructiveReasonsHash(detail) } },
             registrySnapshotOptions: { registryHistory: { [sha]: syntheticRegistry } }
         });
-        assert.match(issue, /不在可确认白名单/);
+        assert.match(issue, /不属于可人工确认的范围/);
         assert.match(issue, /concept-removed/);
     });
 
@@ -452,7 +452,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         fixture.stage.conceptIds = [...fixture.stage.conceptIds, 'task.ghost-concept'];
         assert.match(contract.validateTagStageProof(fixture.paper, {
             parsed: fixture.parsed, tagRules: fixture.runtime
-        }), /active/);
+        }), /原标签阶段记录引用的以下概念在当前词表中缺失或已停用/);
     });
 
     it('rejects projection drift while the registry SHA already matches', () => {

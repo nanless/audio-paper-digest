@@ -313,7 +313,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 ### 标签选择与具体程度
 
-`lib/tag-rules.js` 检查 `paper-taxonomy-selection-v1`：标签总数须为 3–5，task 分面须有 1–3 个，
+`lib/tag-rules.js` 检查 `paper-taxonomy-selection-v1`：标签总数须为 3–5，任务类（`facet=task`）标签须有 1–3 个，
 其中主任务恰好 1 个，次任务最多 2 个；祖先标签和后代标签不能同时存在。主任务必须是所选集合中最具体的
 任务，否则报错。如果整个词表中还有未选的有效后代，只返回 `specificityWarning` 告警，不改变 `valid`。
 这条告警仅供新的分类或修复步骤使用，不改变已核验阶段的恢复行为。别名只供显式旧格式解析。
@@ -322,12 +322,12 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 `lib/tag-catalog-change.js` 将变更分为 `none`、`additive`、`destructive`，按字节 SHA 从
 `config/tag-catalog-history/` 读取升级前快照，并生成或核验 `registryUpgradeFrom`。
-只有新增内容的变更（`additive`）可直接沿用已核验的 `taxonomySeal`。破坏既有记录的变更（`destructive`）默认拒绝，并报告
+程序判为 `none` 或 `additive`、且原概念对应关系仍有效的变更，可以沿用已核验的标签阶段（`taxonomySeal`）。`additive` 还包括部分定义、范围说明和状态修订，不只新增内容。读取时仍须核对旧快照、升级说明和原概念选择。破坏既有记录的变更（`destructive`）默认拒绝，并报告
 `blocked` 与 `needsHuman`；只有明确确认且属于允许范围的改动才能重新生成分类记录。
 
 `canAcknowledgeRegistryChange` 判断可确认范围；命令 `--classify` 输出 `acknowledgementEligible`、
 `eligibleReasons` 和 `ineligibleReasons`，应先看结果再决定。允许确认的原因包括
-`preferred-label-changed`、`broader-id-changed`、`alias-removed`、`label-collision` 及 definition/scope 类。
+`preferred-label-changed`、`broader-id-changed`、`alias-removed`、`label-collision` 以及定义或适用范围的修订。
 新增概念本身不妨碍确认，但删除概念等白名单外的破坏性变更仍会被拒绝。
 原 `conceptIds` 对应的概念仍须全部有效；旧快照须可读取，升级注记也须与复算结果一致。
 
@@ -338,7 +338,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 ### 重新生成分类记录
 
 `tag-record-update.js --from PROCESS_UUID` 默认预览，输出逐篇新旧 conceptIds 差异及 `assigned/blocked`
-报告；`--apply` 才依次保存 analysis、run、state 和 completion receipt，每一步都核对 SHA CAS，
+报告；`--apply` 才依次保存分析、运行记录、进程状态和完成凭证，每次写入前都核对原文件 SHA，发现其他修改就停止，
 并将已完成进程退回运行状态（`complete` → `running`）。不重跑 Reader、评分或 LLM；分类对应关系无法核验时拒绝写入。
 `--mark-stale` 只读列出失效 assignment 文件；`--classify` 只分类词表变更。
 
@@ -347,7 +347,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 `destructiveAcknowledgement = {acknowledged:true, reasonsHash, conceptIdImpact:'none', note}` 写入
 `registryUpgradeFrom`；`reasonsHash` 对应本次重新计算的变更原因，Node/Python 使用相同哈希规则。
 
-确认参数只属于 reseal 命令，与 `--archive-snapshot`、`--mark-stale`、`--classify` 互斥；
+确认参数只用于更新分类记录，不能与 `--archive-snapshot`、`--mark-stale` 或 `--classify` 一起使用；
 `--acknowledge-note` 必须与 `--acknowledge-destructive` 一起使用。不传确认参数时仍按原规则拒绝
 `destructive` 变更。确认记录不进入 `bindingSha256`；更新后仍须通过
 `analysis-contract.validateTagStageProof` 与 Python `_seal_registry_upgrade` 的同一确认检查。

@@ -64,9 +64,9 @@ test('ancestry and pruning preserve leaf order and unrelated branches', () => {
     assert.deepEqual(pruneAncestors(r, ['method.peft', 'method.lora', 'setting.streaming', 'method.adapter', 'method.lora']),
         ['method.lora', 'setting.streaming', 'method.adapter', 'method.lora']);
     assert.deepEqual(pruneAncestors(r, []), []);
-    assert.throws(() => ancestors(r, 'task.missing'), /Unknown/);
-    assert.throws(() => pruneAncestors(r, ['task.missing']), /Unknown/);
-    assert.throws(() => pruneAncestors(r, 'task.asr'), /array/);
+    assert.throws(() => ancestors(r, 'task.missing'), /未知的概念 ID/);
+    assert.throws(() => pruneAncestors(r, ['task.missing']), /未知的概念 ID/);
+    assert.throws(() => pruneAncestors(r, 'task.asr'), /字符串数组/);
 });
 
 test('bare end-to-end belongs only to setting; explicit learning label resolves method', () => {
@@ -80,7 +80,7 @@ test('bare end-to-end belongs only to setting; explicit learning label resolves 
     validateTagCatalog(r);
     assert.equal(resolveLabel(r, 'shared-test-label'), null);
     assert.equal(resolveLabel(r, 'shared-test-label', 'task').id, 'task.asr');
-    assert.throws(() => resolveLabel(r, 'ASR', 'unknown'), /Unknown facet/);
+    assert.throws(() => resolveLabel(r, 'ASR', 'unknown'), /未知的分类维度/);
 });
 
 test('no Unicode-wide casefold is applied', () => {
@@ -121,7 +121,7 @@ test('deprecated entries stay explicit and require an active same-facet replacem
     r.concepts.push(old);
     assert.equal(resolveLabel(r, '旧适配名称').status, 'deprecated');
     concept(r, 'method.lora').broaderId = old.id;
-    assert.throws(() => validateTagCatalog(r), /active/);
+    assert.throws(() => validateTagCatalog(r), /概念 method\.lora 的上级概念必须存在、已启用，并属于同一分类维度。/);
 });
 
 test('raw JSON duplicate keys, malformed JSON, and invalid loaded metadata fail closed', t => {
@@ -129,15 +129,15 @@ test('raw JSON duplicate keys, malformed JSON, and invalid loaded metadata fail 
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const p = path.join(dir, 'registry.json');
     fs.writeFileSync(p, '{"version":"bad","version":"paper-taxonomy-v1","facets":[],"concepts":[]}');
-    assert.throws(() => loadTagCatalog(p), /Duplicate JSON key/);
+    assert.throws(() => loadTagCatalog(p), /JSON 中出现重复字段/);
     fs.writeFileSync(p, '{"version":"bad","\\u0076ersion":"paper-taxonomy-v1","facets":[],"concepts":[]}');
-    assert.throws(() => loadTagCatalog(p), /Duplicate JSON key/);
+    assert.throws(() => loadTagCatalog(p), /JSON 中出现重复字段/);
     fs.writeFileSync(p, '{');
     assert.throws(() => loadTagCatalog(p));
     const r = loadTagCatalog(registryPath);
     r.registrySha256 = 'false';
     assert.throws(() => resolveLabel(r, 'ASR'), /registrySha256/);
-    assert.throws(() => validateTagCatalog(Object.assign(Object.create({ polluted: true }), raw())), /plain object/);
+    assert.throws(() => validateTagCatalog(Object.assign(Object.create({ polluted: true }), raw())), /标签词表 必须是普通对象。/);
 });
 
 test('load reads each file revision without stale global cache', t => {

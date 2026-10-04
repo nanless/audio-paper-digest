@@ -91,7 +91,7 @@ test('白名单外的破坏性词表变更会停止更新，留待人工或模�
     assert.equal(plan.item.outcome, 'destructive-change');
     assert.equal(plan.item.needsHuman, true);
     assert.ok(plan.item.reasons.length > 0);
-    assert.match(plan.item.errors.join(' '), /destructive/);
+    assert.match(plan.item.errors.join(' '), /破坏性变更/);
 });
 
 test('无法取得更新前的词表快照时，工具拒绝更新标签记录', () => {
@@ -203,24 +203,24 @@ test('命令参数支持更新记录、标记旧文件、比较词表和归档�
         { command: 'classify', oldPath: 'a.json', newPath: 'b.json' });
     assert.deepEqual(cli.parseArgs(['--archive-snapshot']), { command: 'archive-snapshot' });
     assert.deepEqual(cli.parseArgs(['--help']), { help: true });
-    assert.throws(() => cli.parseArgs([]), /Use:/);
-    assert.throws(() => cli.parseArgs(['--from', 'not-a-uuid']), /Use:/);
-    assert.throws(() => cli.parseArgs(['--from', uuid, '--mode', 'llm']), /Use:/);
-    assert.throws(() => cli.parseArgs(['--mark-stale', '--apply']), /Use:/);
-    assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json']), /Use:/);
-    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--apply']), /Use:/);
-    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--report', 'a.json']), /Use:/);
-    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--from', uuid]), /Use:/);
+    assert.throws(() => cli.parseArgs([]), /用法：/);
+    assert.throws(() => cli.parseArgs(['--from', 'not-a-uuid']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--from', uuid, '--mode', 'llm']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--mark-stale', '--apply']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--apply']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--report', 'a.json']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--from', uuid]), /用法：/);
     assert.throws(() => cli.parseArgs(['--from', uuid, '--report', '../escape.json']), /report/);
     // --acknowledge-destructive 只属于 reseal：与 --archive-snapshot / --mark-stale /
     // --classify 互斥；--acknowledge-note 必须依附 --acknowledge-destructive。
-    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--acknowledge-destructive']), /Use:/);
-    assert.throws(() => cli.parseArgs(['--mark-stale', '--acknowledge-destructive']), /Use:/);
+    assert.throws(() => cli.parseArgs(['--archive-snapshot', '--acknowledge-destructive']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--mark-stale', '--acknowledge-destructive']), /用法：/);
     assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json', '--new', 'b.json',
-        '--acknowledge-destructive']), /Use:/);
+        '--acknowledge-destructive']), /用法：/);
     assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json', '--new', 'b.json',
-        '--acknowledge-note', 'x']), /Use:/);
-    assert.throws(() => cli.parseArgs(['--from', uuid, '--acknowledge-note', 'x']), /Use:/);
+        '--acknowledge-note', 'x']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--from', uuid, '--acknowledge-note', 'x']), /用法：/);
     assert.throws(() => cli.parseArgs(
         ['--from', uuid, '--acknowledge-destructive', '--acknowledge-note', '   ']),
     /acknowledge-note/);
@@ -307,7 +307,7 @@ test('确认参数不能放行白名单外的破坏性变更', () => {
     assert.equal(plan.item.status, 'blocked');
     assert.equal(plan.item.outcome, 'destructive-change');
     assert.equal(plan.item.needsHuman, true);
-    assert.match(plan.item.errors.join(''), /不在可确认白名单/);
+    assert.match(plan.item.errors.join(''), /不属于可人工确认的范围/);
     assert.match(plan.item.errors.join(''), /concept-removed/);
     assert.equal(plan.item.destructiveAcknowledgement, undefined);
 });

@@ -1,16 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
-// Taxonomy-only 重放 / registry 变更分级 / 死件只读报告（评审改进 P2-2/C7）。
-//
-// 这个工具回答“改词表之后，已经封口的论文要不要整篇重新分析”：
-//   * 只重放 taxonomySeal 阶段，绝不重跑 Reader、评分、图片或任何 LLM；
-//   * 确定性重投影：只有旧 conceptIds 在新 registry 全部仍 active、正文标签
-//     解析出完全相同 conceptIds、且变更判为 additive 时才重封；
-//   * 出现任一失效概念 / destructive 变更 / 快照缺失，就把该论文放进
-//     needsHuman 清单（人工或 LLM 重新选标签），并且 fail-closed 不写它；
-//   * 任何 binding 闭合不上的论文都拒绝写入，已写入的每一字节都先在内存里
-//     重算并通过 analysis-contract 的逐字重放。
+// 词表更新后，检查已有标签阶段记录能否继续沿用，并计算或写入更新结果。
+// 程序只处理标签阶段，不重做 Reader、评分或图片，也不调用模型。
+// 更新前须取得旧词表快照、重新判断变更，并确认正文标签仍对应原概念 ID。
+// 破坏性变更须符合确认白名单并提供有效确认；其他检查仍不能跳过。
+// 未通过核验的论文不写入，报告会说明是否需要重新分析或人工、模型重新选标签。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -87,7 +82,7 @@ const USAGE = [
     "  比较两份词表 JSON，输出 changeLevel、detail、acknowledgementEligible、",
     "  eligibleReasons 和 ineligibleReasons。",
     "  additive：仅增加概念或别名，将 deprecated 恢复为 active，或更新定义、适用范围、",
-    "            分面展示名以及 deprecated 概念的 replacedBy。",
+    "            分类维度的显示名称以及 deprecated 概念的 replacedBy。",
     "  destructive：删除概念、更改首选标签、concept.facet 或 broaderId，将状态改为非 active，",
     "               删除或改变别名语义，或使不同 active 概念使用相同的中文首选标签。",
     "  none：没有语义变化。",
@@ -103,7 +98,7 @@ const USAGE = [
 ].join('\n');
 
 function usageError() {
-    return new Error(`Use:\n${USAGE}`);
+    return new Error(`用法：\n${USAGE}`);
 }
 
 function parseArgs(argv = process.argv.slice(2)) {
@@ -136,9 +131,8 @@ function parseArgs(argv = process.argv.slice(2)) {
     }
     const reportName = values['--report'] || null;
 
-    // destructive 显式确认：只对 reseal 生效，且 --acknowledge-note 必须依附
-    // --acknowledge-destructive（与 --archive-snapshot/--mark-stale/--classify
-    // 的互斥仍由下面各分支的 flags/values 白名单把守）。
+    // 人工确认只用于标签记录更新。--acknowledge-note 必须与确认参数一起使用；
+    // 它们与其他命令的互斥规则由下方参数检查决定。
     const acknowledgeDestructive = flags.has('--acknowledge-destructive');
     const acknowledgeNote = values['--acknowledge-note'] ?? null;
     if (acknowledgeNote !== null && !acknowledgeDestructive) throw usageError();
@@ -183,24 +177,24 @@ const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function safeProcessDirectory(root, processId) {
     if (typeof root !== 'string' || !path.isAbsolute(root) || !UUID_RE.test(String(processId || ''))) {
-        throw new Error('conferenceProcessDir/processId 无效');
+        throw new Error('会议进程目录必须是绝对路径，且 processId 必须是有效的 UUID。');
     }
     const absoluteRoot = path.resolve(root);
     const target = path.resolve(absoluteRoot, processId);
-    if (path.dirname(target) !== absoluteRoot) throw new Error('process 目录逃逸出配置根');
+    if (path.dirname(target) !== absoluteRoot) throw new Error('会议进程目录不在配置的根目录内。');
     const stat = fs.lstatSync(target);
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(target) !== target) {
-        throw new Error(`process 目录不安全: ${target}`);
+        throw new Error(`会议进程目录不是普通目录、含符号链接，或实际路径不一致：${target}`);
     }
     return target;
 }
 
-// 与 conference-process.js 的 readSafeJson 同等严格：0600 普通文件 + 身份不变。
+// 与 conference-process.js 一样，只读取权限为 0600 的普通文件，并核对读取期间文件未变化。
 function readProcessJson(filename) {
     const named = fs.lstatSync(filename);
     if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1
         || (named.mode & 0o777) !== 0o600) {
-        throw new Error(`unsafe conference process file: ${filename}`);
+        throw new Error(`会议进程文件必须是权限为 0600、只有一个硬链接的普通文件，不能是符号链接：${filename}`);
     }
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
@@ -212,7 +206,7 @@ function readProcessJson(filename) {
             || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size
             || finalNamed.dev !== opened.dev || finalNamed.ino !== opened.ino
             || finalNamed.size !== opened.size || finalNamed.nlink !== opened.nlink) {
-            throw new Error(`conference process file changed while reading: ${filename}`);
+            throw new Error(`会议进程文件在读取期间发生变化，或不符合普通文件要求：${filename}`);
         }
         return JSON.parse(bytes.toString('utf8'));
     } finally {
@@ -227,7 +221,7 @@ function loadExecution({ adapter, analysisRoot, executionId, runtime }) {
         return { directory, analysis: loaded.analysis, analysisSha256: loaded.analysisFileSha256,
             run: loaded.run, runSha256: loaded.runFileSha256, resumed: false };
     } catch (error) {
-        // 只允许“本工具上一次中断”的续跑：analysis 已重封、run/state 还没跟上。
+        // 仅恢复本工具中断后的更新：分析文件已经更新，但运行记录和进程检查点尚未同步。
         const resume = resumeCandidate({ adapter, directory, runtime });
         if (!resume) throw error;
         return resume;
@@ -272,9 +266,8 @@ function skippedItem({ paperId, analysisRunId, outcome, errors, runtime }) {
         pageRestageRequired: false, errors };
 }
 
-// 只读规划：产出逐篇报告与需要写入的 analysis/run 字节（全部先在内存里算好）。
-// acknowledgeDestructive 透传到每篇的 reprojectAnalysis：只有可确认白名单内的
-// destructive 才会因此从 blocked 变成 reproject。
+// 在内存中计算逐篇报告及待写入的分析、运行记录字节，不写入文件。
+// 人工确认参数传给各篇的 reprojectAnalysis；仅白名单内的破坏性变更可以继续核验。
 function planProcessReseal({ state, adapter, analysisRoot, runtime, mode, snapshotOptions,
     acknowledgeDestructive = false, acknowledgementNote = null }) {
     const items = [];
@@ -295,7 +288,7 @@ function planProcessReseal({ state, adapter, analysisRoot, runtime, mode, snapsh
                 outcome: 'unreadable-analysis', needsHuman: false,
                 registry: { from: null, to: runtime.registrySha256 }, changeLevel: null,
                 oldConceptIds: [], newConceptIds: [], conceptIdsDiff: { added: [], removed: [] },
-                pageRestageRequired: false, errors: [`analysis 执行链无法校验: ${error.message}`] });
+                pageRestageRequired: false, errors: [`无法核验分析文件及其运行记录：${error.message}`] });
             continue;
         }
         const plan = resealApi.reprojectAnalysis({ analysis: loaded.analysis, runtime, mode, snapshotOptions,
@@ -334,7 +327,7 @@ function archiveCompletionReceipt(directory, processApi, generation) {
         if (!fs.readFileSync(target).equals(bytes)) {
             target = path.join(directory, `completion-receipt-${digest}-g${generation}.json`);
             if (fs.existsSync(target) && !fs.readFileSync(target).equals(bytes)) {
-                throw new Error('completion receipt 归档名冲突且字节不同，拒绝覆盖');
+                throw new Error('同名完成凭证归档的内容不同，不能覆盖。');
             }
         }
     }
@@ -346,8 +339,8 @@ function archiveCompletionReceipt(directory, processApi, generation) {
     return path.basename(target);
 }
 
-// 写入阶段：analysis.json → 重新封 run.json → state.json 的 analysisProof →
-// 归档旧 completion receipt。每一步都带 SHA CAS；任一步对不上立即抛错。
+// 依次更新分析文件、运行记录和进程检查点，再归档旧完成凭证。
+// 每次写入前核对原文件 SHA，任何不一致都停止更新。
 function applyReseal({ processDir, stateFile, plannedStateSha256, writes, plans, runtime,
     adapter, engine, processApi, analysisRoot, now }) {
     const lockPath = path.join(processDir, '.operation');
@@ -371,7 +364,7 @@ function applyReseal({ processDir, stateFile, plannedStateSha256, writes, plans,
                 runFileSha256: fresh.runSha256, analysisFileSha256: write.finalSha256 });
             const verified = adapter.loadConferenceAnalysis({ analysisRoot, executionId: write.executionId });
             if (verified.analysisFileSha256 !== write.finalSha256) {
-                throw new Error(`重封后 analysis 执行链校验失败: ${write.paperId}`);
+                throw new Error(`更新标签记录后，论文 ${write.paperId} 的分析文件 SHA 与预期不一致。`);
             }
             executed.push({
                 paperId: write.paperId,
@@ -382,7 +375,7 @@ function applyReseal({ processDir, stateFile, plannedStateSha256, writes, plans,
             executedIds.add(write.paperId);
         }
 
-        // 锁内重新读取每篇的最终 proof，绝不用规划期的陈旧值。
+        // 持锁时重新读取每篇论文的最终记录，不使用规划时保存的旧值。
         const proofs = [];
         for (const entry of plans) {
             if (executedIds.has(entry.paperId)) {
@@ -400,16 +393,16 @@ function applyReseal({ processDir, stateFile, plannedStateSha256, writes, plans,
         const nextState = engine.updateJsonFileLocked(stateFile, current => {
             const checked = processApi.assertState(current);
             if (checked.stateSha256 !== plannedStateSha256) {
-                throw new Error('process checkpoint CAS 失败，拒绝写入');
+                throw new Error('进程检查点在更新期间发生变化，不能写入。');
             }
             const next = JSON.parse(JSON.stringify(checked));
             for (const proof of proofs) {
                 const item = next.items[proof.paperId];
                 if (!item || item.status !== 'complete') {
-                    throw new Error(`重封目标论文状态异常: ${proof.paperId}`);
+                    throw new Error(`待更新论文 ${proof.paperId} 的进程记录缺失，或状态不是 complete。`);
                 }
                 if (!proof.completionReceiptSha256) {
-                    throw new Error(`重封目标缺少 completion receipt: ${proof.paperId}`);
+                    throw new Error(`待更新论文 ${proof.paperId} 缺少完成凭证的 SHA。`);
                 }
                 if (item.analysisProof.analysisSha256 === proof.analysisSha256
                     && item.analysisProof.completionReceiptSha256 === proof.completionReceiptSha256) {
@@ -425,8 +418,7 @@ function applyReseal({ processDir, stateFile, plannedStateSha256, writes, plans,
             }
             if (!outcome.stateChanged) return undefined;
             if (wasComplete) {
-                // 与 implementation 迁移一致：旧 completion proof 归档保存，进程
-                // 退回 running，由下一次确定性 postprocess 重放签发新 receipt。
+                // 归档旧完成凭证，并把进程改为 running；后续页面处理须重新生成完成凭证。
                 next.status = 'running';
                 next.aggregate = null;
                 next.completionReceiptSha256 = null;
@@ -457,12 +449,11 @@ function markStaleReport({ files, runtime }) {
         root,
         registry: { version: runtime.registryVersion, sha256: runtime.registrySha256 },
         ...scan,
-        note: '只读报告：stale=true 表示该 assignment 记录的 registry SHA 与当前词表不一致（死件），本工具不删除、不改名、不改写。'
+        note: '只读报告：stale=true 表示该分类记录中的词表 SHA 与当前词表不同；本工具不删除、改名或改写原文件。'
     };
 }
 
-// 只读分级报告：除 changeLevel/detail 外，直接告诉操作者这次 destructive 能否
-// 走 --acknowledge-destructive（先看再决定，避免带 flag 跑完才发现不可确认）。
+// 只读比较两份词表，同时说明破坏性变更是否可以人工确认，供操作者决定下一步。
 function classifyReport({ oldPath, newPath }) {
     const { changeLevel, detail } = registryChange.classifyRegistryChange(oldPath, newPath);
     const eligibility = registryChange.acknowledgementEligibility(detail);
@@ -494,7 +485,7 @@ function archiveRegistrySnapshot({ sourceFile, historyDir }) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     const directoryStat = fs.lstatSync(directory);
     if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
-        throw new Error(`registry history 目录不安全: ${directory}`);
+        throw new Error(`词表快照目录不是普通目录，或是符号链接：${directory}`);
     }
     const target = path.join(directory, `${contentSha256}.json`);
     if (path.dirname(target) !== directory || !REPORT_NAME_RE.test(`${contentSha256}.json`)) {
@@ -508,7 +499,7 @@ function archiveRegistrySnapshot({ sourceFile, historyDir }) {
             throw new Error(`已存在同名归档但字节与文件名内容 SHA 不一致，拒绝覆盖: ${target}`);
         }
         return { ...result, status: 'already-archived', idempotent: true, written: false,
-            message: '当前词表已按字节归档，幂等跳过' };
+            message: '已存在内容相同的词表快照，无需再次写入。' };
     }
     const fd = fs.openSync(target, 'wx', 0o600);
     try {
@@ -544,9 +535,8 @@ function writeReportFile(files, name, report) {
 
 function nextStepFor(state) {
     const authority = state.authority || {};
-    // 本函数仅用于 apply 成功后的报告：重封会把 complete 进程降级为 running
-    // 并清空 aggregate/completion 凭证，此时下一步仍是重放 staging 并重新闭合
-    // （与 USAGE 的换表 checklist 一致），不能因 status 非 complete 报 null。
+    // 写入成功后的报告需要给出后续页面处理命令。进程可能已经从 complete
+    // 改为 running，仍需重新生成页面和完成凭证，不能因这个状态变化省略下一步。
     if (state.status !== 'complete' && state.status !== 'running') return null;
     if (!authority.catalogName || !state.processId) return null;
     return 'npm run conference:new:migrate-process -- --apply'
@@ -615,12 +605,12 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         design: {
             llmCalls: 0,
             deterministicReprojection: true,
-            failClosed: 'binding 闭合不上的论文 status=blocked 并跳过写入；存在 blocked 论文时退出码为 1',
+            failClosed: '未通过标签阶段核验的论文记为 status=blocked，不写入更新；存在 blocked 论文时退出码为 1。',
             needsHuman: resealApi.NEEDS_HUMAN_OUTCOMES,
-            destructiveAcknowledgement: '默认 destructive → blocked；--acknowledge-destructive 只对'
-                + ' 可确认白名单（preferred-label-changed / broader-id-changed / alias-removed /'
-                + ' label-collision / definition·scope 类）生效，注记写入绑定复算的 destructiveAcknowledgement',
-            pageRestageRequired: 'pageProof 与页面字节不在本工具范围，重封后须重跑确定性 postprocess'
+            destructiveAcknowledgement: '破坏性变更默认拒绝更新；--acknowledge-destructive 只适用于'
+                + ' 可人工确认的原因（preferred-label-changed / broader-id-changed / alias-removed /'
+                + ' label-collision / definition·scope 类），升级说明中须记录与本次重新计算结果对应的 destructiveAcknowledgement。',
+            pageRestageRequired: '本工具不更新页面内容和 pageProof；更新标签记录后，须重新运行页面后处理。'
         },
         items: plan.items,
         summary: resealApi.summarizeTagRecordUpdates({ items: plan.items }),
@@ -663,7 +653,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
 
 if (require.main === module) {
     main().catch(error => {
-        console.error(`[taxonomy-reseal] ${error.message}`);
+        console.error(`[标签记录更新] ${error.message}`);
         process.exitCode = 1;
     });
 }

@@ -3251,7 +3251,7 @@ primary_method_tag: #基准测试
                 rejected = _seal_registry_upgrade(snapshot_sha, ['task.asr'], annotation)
                 self.assertFalse(rejected['ok'])
                 self.assertEqual(rejected['reasonCode'], 'destructive')
-                self.assertIn('不在可确认白名单', rejected['error'])
+                self.assertIn('不属于可人工确认的范围', rejected['error'])
                 self.assertIn('concept-removed', rejected['error'])
 
                 # 第 ① 条门：快照取不回时，确认不能替代快照。
@@ -3309,7 +3309,7 @@ primary_method_tag: #基准测试
                 lying = _seal_registry_upgrade(synthetic_sha, ['task.asr'], annotated)
         self.assertFalse(lying['ok'])
         self.assertEqual(lying['reasonCode'], 'annotation-invalid')
-        self.assertIn('非 destructive', lying['error'])
+        self.assertIn('非破坏性变更', lying['error'])
 
     def test_python_registry_upgrade_gate_matches_node_fixture(self):
         # 跨端一致性：同一 (旧SHA, 注记, conceptIds) 输入，Python 输出必须与 Node
@@ -3320,39 +3320,44 @@ primary_method_tag: #基准测试
             },
             'missing-annotation-rejected': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',
-                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.flow-matching 删除了别名“flow matching”，使用该别名的旧标签需要重新核对；概念 method.self-supervised 删除了别名“ssl learning”，使用该别名的旧标签需要重新核对；概念 task.speech-spoofing 的上级概念（broaderId）由 null 改为 task.audio-forgery，祖先关系随之改变，也可能影响主任务是否符合最具体概念的要求；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认',
+                'error': '词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.flow-matching 删除了别名“flow matching”，使用该别名的旧标签需要重新核对；概念 method.self-supervised 删除了别名“ssl learning”，使用该别名的旧标签需要重新核对；概念 task.speech-spoofing 的上级概念（broaderId）由 null 改为 task.audio-forgery，祖先关系随之改变，也可能影响主任务是否符合最具体概念的要求；显式确认无效：破坏性变更必须在 destructiveAcknowledgement 中提供显式确认。',
             },
             'no-snapshot-rejected': {
+                'error': '无法取得更新前的词表快照 0000000000000000000000000000000000000000000000000000000000000000，不能沿用标签阶段记录。',
             },
             'destructive-lying-annotation-rejected': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
-                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认',
+                'error': '词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效：破坏性变更必须在 destructiveAcknowledgement 中提供显式确认。',
             },
             'annotation-level-mismatch-rejected': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',
+                'error': '词表升级说明未通过核验：registryUpgradeFrom.changeLevel=none 与重新计算的变更等级 destructive 不一致。',
             },
             'stale-concept-id-rejected': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',
+                'error': '原标签阶段记录引用的以下概念在当前词表中缺失或已停用：task.not-a-concept(缺失)',
             },
             'invalid-from-sha-rejected': {
+                'error': '标签阶段记录中的 registrySha256 格式无效，不能沿用该记录。',
             },
             'destructive-acknowledged-allowed': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
             },
             'destructive-ack-missing-rejected': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
-                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认',
+                'error': '词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效：破坏性变更必须在 destructiveAcknowledgement 中提供显式确认。',
             },
             'destructive-ack-wrong-hash-rejected': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
-                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructiveAcknowledgement.reasonsHash 与本次复算 destructive reasons 不一致',
+                'error': '词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效：destructiveAcknowledgement.reasonsHash 与本次重新计算的破坏性变更原因不一致。',
             },
             'destructive-ack-concept-impact-rejected': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
-                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructiveAcknowledgement.conceptIdImpact 必须为 none',
+                'error': '词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效：destructiveAcknowledgement.conceptIdImpact 必须为 none，表明所选概念 ID 不变。',
             },
             'destructive-ack-stale-concept-id-rejected': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
+                'error': '原标签阶段记录引用的以下概念在当前词表中缺失或已停用：task.not-a-concept(缺失)',
             },
         }
         fixture = cross_end_fixture()

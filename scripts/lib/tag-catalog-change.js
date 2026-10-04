@@ -1,18 +1,11 @@
 'use strict';
 
-// Registry 版本化（评审改进 P2-2/C7）：把“词表改动能否沿用已封口分析”从
-// 字节硬等值升级成一个可复算的分级判定。
-//
-// 分级只回答一个问题：旧封口（taxonomySeal.stage.conceptIds 与正文中逐字
-// 写下的中文首选标签）在新词表里是否仍然逐字成立。
-//   - additive：新词表只会“多出可选项”，旧标签仍解析到同一 concept、旧
-//     conceptId 仍 active → 允许确定性重投影后重封（不需要 LLM）。
-//   - destructive：任何可能改变标签解析结果的改动 → 默认一律拒绝放行，只能
-//     重新分析或人工/LLM 重新选标签；唯一的显式例外是“可确认白名单 + 注记携带
-//     与本次复算绑定的 destructiveAcknowledgement”（见下方白名单常量），且只放行
-//     概念零删除的语义重封，四条基础门一条不少。
-// 判定只依赖两份 registry JSON 内容，不含时间戳与环境，保证任何一方独立
-// 复算都得到同一份 detail。
+// 比较新旧词表，判断已有分类记录能否继续沿用。判断依据是词表内容，
+// 不要求两份文件的字节完全相同，也不依赖运行时间或环境。
+// additive 不只包括新增概念，也包括定义等不会被程序判为破坏性的改动。
+// 沿用旧记录前，调用方仍须核对快照、升级说明、正文标签及原概念 ID。
+// destructive 默认拒绝沿用；只有所有破坏性原因都属于可确认范围，且提供
+// 对应的显式确认时，才能继续其他检查。确认不能代替这些检查，也不能允许删除概念。
 
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -25,30 +18,24 @@ const REGISTRY_UPGRADE_NOTE_MAX_CHARS = 500;
 const REGISTRY_UPGRADE_REASON_CAP = 32;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 
-// ——— destructive 显式确认通道（AGENTS.md“显式授权的白名单例外”） ———
-// destructive 变更默认拒绝；只有其中的破坏性理由全部属于可确认白名单，
-// 并携带与本次复算绑定的显式确认时，才可能沿用旧分类记录。
-// 同一次变更可以新增概念，但不能混入删除概念等白名单外的破坏性理由；
-// 旧 conceptIds 对应的概念仍须全部有效，旧快照与升级注记也须通过核验。
-// 确认只写入 registryUpgradeFrom，不参与 bindingSha256，也不改变变更分级。
+// 人工确认只适用于以下破坏性变更原因。同次变更可以新增概念，但不能包含
+// 删除概念等白名单外的破坏性原因；原概念、旧快照和升级说明仍须通过核验。
+// 确认写入 registryUpgradeFrom，不参与 bindingSha256，也不改变变更等级。
 const ACKNOWLEDGEMENT_ELIGIBLE_CODES = Object.freeze([
-    // 改首选标签 / 改祖先边 / 删别名：正文里的中文首选标签仍解析到同一 conceptId，
-    // 只是“旧标签文字”在新表里的落点变了，重投影后 conceptIds 逐字不变。
+    // 更改首选标签、上级关系或删除别名后，正文标签仍须解析为原概念 ID。
     'preferred-label-changed',
     'broader-id-changed',
     'alias-removed',
-    // 新表自身标签跨分面重复：会先被运行时拒绝加载，人工确认只针对“确认该碰撞
-    // 不触及已封口 conceptIds”，任何触达封口概念的碰撞仍会被 conceptIds 门拦下。
+    // 不同分类维度的标签重复时，人工确认不能替代正文标签的解析和概念核验。
     'label-collision',
-    // definition / scopeNote 类改动当前判为 additive；列进白名单是显式声明
-    // “这类纯文本语义即便将来重判为 destructive 也可确认”，不含任何概念增删。
+    // 定义与适用范围说明的改动目前判为 additive；即使以后判为 destructive，
+    // 这两个原因也属于允许显式确认的范围。
     'definition-updated',
     'scope-note-updated'
 ]);
-// 白名单之外一律不可确认：删概念、删分面、降级、版本升级、迁分面、active
-// 首选标签全局撞车 —— 这些改动会让已封口 conceptIds 或运行时本身失效，
-// 只能整篇重新分析或人工/LLM 重新选标签。canAcknowledgeRegistryChange 用白名单
-// 判定，本常量只作为文档与测试的显式对照表。
+// 删除概念或分类维度、停用概念、更改版本或所属维度，以及启用概念的中文
+// 首选标签重复，都不允许人工确认。下表用于文档和测试对照；实际判断使用
+// canAcknowledgeRegistryChange 中的允许列表。
 const ACKNOWLEDGEMENT_FORBIDDEN_CODES = Object.freeze([
     'concept-removed',
     'facet-removed',
@@ -67,26 +54,25 @@ function isPlainObject(value) {
         && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 
-// 接受文件路径或已解析对象；返回经 validateTagCatalog 校验的 registry 快照。
-// 对象若没有 registrySha256 就记 null —— 分级不依赖字节 SHA，只有升级
-// 注记与快照查找才要求真实字节 SHA。
-function normalizeRegistry(value, label = 'registry') {
+// 接受文件路径或词表对象，返回通过 validateTagCatalog 校验的词表快照。
+// 对象未提供 registrySha256 时记为 null；变更分级不依赖文件字节 SHA，
+// 查找旧快照和核验升级说明时才需要这个 SHA。
+function normalizeRegistry(value, label = '词表') {
     if (typeof value === 'string') {
         const loaded = tagCatalogApi.loadTagCatalog(value);
         return { version: loaded.version, facets: loaded.facets,
             concepts: loaded.concepts, registrySha256: loaded.registrySha256 };
     }
-    if (!isPlainObject(value)) throw new Error(`${label}: expected registry object or file path`);
+    if (!isPlainObject(value)) throw new Error(`${label} 必须是词表对象或词表文件路径。`);
     const data = { version: value.version, facets: value.facets, concepts: value.concepts };
     tagCatalogApi.validateTagCatalog(data);
     const registrySha256 = value.registrySha256;
     if (registrySha256 !== undefined && registrySha256 !== null
-        && !SHA256_RE.test(String(registrySha256))) throw new Error(`${label}: invalid registrySha256`);
+        && !SHA256_RE.test(String(registrySha256))) throw new Error(`${label} 中的 registrySha256 格式无效。`);
     return { ...data, registrySha256: registrySha256 ?? null };
 }
 
-// active 概念的中文首选标签在全 registry 范围内必须唯一，否则
-// createTagRules 会直接抛错并让整个运行时不可用。
+// 已启用概念的中文首选标签在整个词表中须唯一，否则无法创建标签规则。
 function activeGlobalTags(registry) {
     const seen = new Map();
     for (const concept of registry.concepts) {
@@ -98,12 +84,9 @@ function activeGlobalTags(registry) {
     return { ok: true };
 }
 
-// 跨分面标签碰撞：validateTagCatalog 的标签唯一性只在分面内成立（key 是
-// facet\0归一标签），所以把一个已被别的分面占用的标签（首选或别名）塞进
-// 另一个分面时，registry 校验能过、分级却会误判 additive —— 可解析期该
-// 标签的候选数会从 1 变 2，运行时直接爆。这里对 to registry 的全部标签
-// （active+deprecated 概念的 zh/en 首选 + 全部别名，经 normalizeLabel 归一）
-// 做跨分面重复扫描；同一归一标签落在 ≥2 个分面即为解析歧义。
+// validateTagCatalog 只检查同一分类维度内的标签是否唯一。这里继续检查
+// 不同维度之间的重复，避免更新词表后，同一个标签对应多个分类概念。
+// 检查涵盖所有概念的中英文首选标签和别名，包括已停用概念，并使用相同的归一化规则。
 function crossFacetLabelCollisions(registry) {
     const byLabel = new Map();
     for (const concept of registry.concepts) {
@@ -128,8 +111,8 @@ function crossFacetLabelCollisions(registry) {
 }
 
 function classifyRegistryChange(oldRegistry, newRegistry) {
-    const from = normalizeRegistry(oldRegistry, 'old registry');
-    const to = normalizeRegistry(newRegistry, 'new registry');
+    const from = normalizeRegistry(oldRegistry, '旧词表');
+    const to = normalizeRegistry(newRegistry, '新词表');
     const reasons = [];
     const note = (level, code, message, extra = {}) => {
         reasons.push({ level, code, message, ...extra });
@@ -164,7 +147,7 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
             counts.facetsAdded += 1;
             note('additive', 'facet-added', `新增了分面 ${id}`, { facet: id });
         } else if (oldFacets.get(id).label !== newFacets.get(id).label) {
-            // 分面 id 决定解析与投影，label 只用于展示。
+            // 分类维度的 id 决定标签解析结果，label 只用于展示。
             note('additive', 'facet-label-updated',
                 `分面 ${id} 的显示名称由“${oldFacets.get(id).label}”改为“${newFacets.get(id).label}”，标签解析方式不变`,
                 { facet: id });
@@ -296,11 +279,9 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
     };
 }
 
-// ——— destructive reasons 的稳定指纹 ———
-// 指纹只吃“结构化字段”，故意排除 message：Node 用 localeCompare 排序、文案与
-// Python 镜像也有细微差别，而 code/conceptId/facet/tag/conceptIds/facets 两侧
-// 逐字一致。键按字典序、无空白 JSON 序列化，再按码序排序后拼接取 SHA，保证
-// Node 与 Python 对同一份复算 detail 得到同一个 reasonsHash。
+// 确认原因的指纹只使用结构化字段，不包含 level 和 message。
+// 每条原因的键按字典序排列，再把各条序列化结果排序、拼接并计算 SHA。
+// Node 与 Python 使用相同规则，确保同一组原因得到相同的 reasonsHash。
 function destructiveReasonFingerprint(reason) {
     const canonical = {};
     for (const key of Object.keys(reason).sort()) {
@@ -320,15 +301,14 @@ function destructiveReasonsHash(changeDetail) {
     return crypto.createHash('sha256').update(fingerprints.join('\n')).digest('hex');
 }
 
-// 可确认性与分级解耦：classifyRegistryChange 的输出永远不变（destructive 就是
-// destructive），这里只回答“这一组 destructive 理由是否落在显式确认白名单内”。
+// 这里只判断破坏性原因是否全部属于可确认范围，不改变原变更等级。
 function acknowledgementEligibility(changeDetail) {
     const changeLevel = changeDetail?.changeLevel;
     const codes = [...new Set(destructiveReasons(changeDetail).map(reason => reason.code))].sort();
     const eligibleReasons = codes.filter(code => ACKNOWLEDGEMENT_ELIGIBLE_CODES.includes(code));
     const ineligibleReasons = codes.filter(code => !ACKNOWLEDGEMENT_ELIGIBLE_CODES.includes(code));
-    // fail-closed：分级缺失/未知、判为 destructive 却数不出理由、或混入任一
-    // 白名单外的 destructive 理由 → 一律不可确认。
+    // 等级缺失或未知、破坏性变更没有相应原因，或者存在白名单外的原因时，
+    // 都不能人工确认。
     const knownLevel = CHANGE_LEVELS.includes(changeLevel);
     const eligible = knownLevel && ineligibleReasons.length === 0
         && (changeLevel === 'destructive'
@@ -341,17 +321,17 @@ function canAcknowledgeRegistryChange(changeDetail) {
     return acknowledgementEligibility(changeDetail).eligible;
 }
 
-// 默认确认模板必须自带 from/to 字节 SHA，人工确认可直接与换表记录对账。
+// 默认确认说明包含新旧词表的文件字节 SHA，便于核对本次词表更新。
 function buildDestructiveAcknowledgement({ detail, fromRegistrySha256, toRegistrySha256, note }) {
     const eligibility = acknowledgementEligibility(detail);
     if (!eligibility.eligible) {
-        throw new Error('destructive 变更不在可确认白名单: '
-            + (eligibility.ineligibleReasons.join('、') || 'detail 缺失'));
+        throw new Error('本次破坏性变更不属于可人工确认的范围：'
+            + (eligibility.ineligibleReasons.join('、') || '变更详情缺失'));
     }
     const text = String(note ?? '').trim()
         || `显式确认 destructive 重封：${fromRegistrySha256} → ${toRegistrySha256}，conceptId 影响 none`;
     if (!text || text.length > REGISTRY_UPGRADE_NOTE_MAX_CHARS) {
-        throw new Error(`destructiveAcknowledgement.note 必须是 1-${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的说明`);
+        throw new Error(`生成的人工确认说明不能为空，且长度不能超过 ${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 个字符。`);
     }
     return {
         acknowledged: true,
@@ -361,32 +341,32 @@ function buildDestructiveAcknowledgement({ detail, fromRegistrySha256, toRegistr
     };
 }
 
-// 注记里的确认字段校验：缺、字段不符、哈希与本次复算不一致、或该 destructive
-// 根本不可确认 → 返回拒绝理由；四条基础门的其余三条仍由调用方各自把守。
+// 核对升级说明中的确认字段。字段缺失或无效、原因哈希不一致，以及变更
+// 不属于可确认范围时，都返回拒绝原因。调用方仍须核对旧快照、升级说明和原概念。
 function validateDestructiveAcknowledgement(annotation, expected = {}) {
     const eligibility = acknowledgementEligibility(expected.detail);
     if (!eligibility.eligible) {
-        return 'destructive 不在可确认白名单: '
-            + (eligibility.ineligibleReasons.join('、') || '复算 detail 缺失');
+        return '本次破坏性变更不属于可人工确认的范围：'
+            + (eligibility.ineligibleReasons.join('、') || '重新计算的变更详情缺失');
     }
     const ack = isPlainObject(annotation) ? annotation.destructiveAcknowledgement : undefined;
-    if (!isPlainObject(ack)) return 'destructive 变更必须携带 destructiveAcknowledgement 显式确认';
+    if (!isPlainObject(ack)) return '破坏性变更必须在 destructiveAcknowledgement 中提供显式确认。';
     const unknown = Object.keys(ack).filter(key => !DESTRUCTIVE_ACK_FIELDS.includes(key));
-    if (unknown.length) return `destructiveAcknowledgement 含未知字段: ${unknown.join('、')}`;
-    if (ack.acknowledged !== true) return 'destructiveAcknowledgement.acknowledged 必须为 true';
+    if (unknown.length) return `destructiveAcknowledgement 包含未知字段：${unknown.join('、')}`;
+    if (ack.acknowledged !== true) return 'destructiveAcknowledgement.acknowledged 必须为 true，以明确确认本次变更。';
     if (ack.conceptIdImpact !== DESTRUCTIVE_ACK_CONCEPT_ID_IMPACT) {
-        return 'destructiveAcknowledgement.conceptIdImpact 必须为 none';
+        return 'destructiveAcknowledgement.conceptIdImpact 必须为 none，表明所选概念 ID 不变。';
     }
     if (!SHA256_RE.test(String(ack.reasonsHash || ''))) {
-        return 'destructiveAcknowledgement.reasonsHash 必须是 64 位十六进制 SHA';
+        return 'destructiveAcknowledgement.reasonsHash 必须是 64 位十六进制 SHA。';
     }
     if (ack.reasonsHash !== destructiveReasonsHash(expected.detail)) {
-        return 'destructiveAcknowledgement.reasonsHash 与本次复算 destructive reasons 不一致';
+        return 'destructiveAcknowledgement.reasonsHash 与本次重新计算的破坏性变更原因不一致。';
     }
     const note = ack.note;
     if (typeof note !== 'string' || !note.trim() || note !== note.trim()
         || note.length > REGISTRY_UPGRADE_NOTE_MAX_CHARS) {
-        return `destructiveAcknowledgement.note 必须是 1-${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的说明`;
+        return `destructiveAcknowledgement.note 必须是长度为 1–${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的非空说明，且首尾不能有空白。`;
     }
     return null;
 }
@@ -399,20 +379,20 @@ function defaultHistoryDir() {
     }
 }
 
-// 用字节 SHA 找回升级前的 registry 快照。快照文件名必须等于其内容字节
-// SHA，找不到或对不上就返回 null —— 调用方必须 fail-closed。
+// 按文件字节 SHA 查找旧词表快照。文件名必须与内容 SHA 一致；快照缺失、
+// 读取失败或内容不符时返回 null，由调用方拒绝继续更新记录。
 function resolveRegistrySnapshot(registrySha256, options = {}) {
     const sha = String(registrySha256 || '');
     if (!SHA256_RE.test(sha)) return null;
     const explicit = options.registryHistory;
     if (explicit instanceof Map) {
-        if (explicit.has(sha)) return normalizeRegistry(explicit.get(sha), `registry snapshot ${sha}`);
+        if (explicit.has(sha)) return normalizeRegistry(explicit.get(sha), `词表快照 ${sha}`);
     } else if (isPlainObject(explicit) && Object.hasOwn(explicit, sha)) {
-        return normalizeRegistry(explicit[sha], `registry snapshot ${sha}`);
+        return normalizeRegistry(explicit[sha], `词表快照 ${sha}`);
     }
     if (typeof options.resolveSnapshot === 'function') {
         const resolved = options.resolveSnapshot(sha);
-        if (resolved) return normalizeRegistry(resolved, `registry snapshot ${sha}`);
+        if (resolved) return normalizeRegistry(resolved, `词表快照 ${sha}`);
     }
     const directory = options.historyDir || defaultHistoryDir();
     if (!directory) return null;
@@ -432,13 +412,13 @@ function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
     const toRegistry = to && typeof to === 'object' ? to : null;
     const text = String(note ?? '').trim();
     if (!text || text.length > REGISTRY_UPGRADE_NOTE_MAX_CHARS) {
-        throw new Error(`registryUpgradeFrom.note 必须是 1-${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的说明`);
+        throw new Error(`生成的词表升级说明不能为空，且长度不能超过 ${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 个字符。`);
     }
     if (!CHANGE_LEVELS.includes(changeLevel)) {
-        throw new Error('registryUpgradeFrom.changeLevel 只允许 none/additive/destructive');
+        throw new Error('registryUpgradeFrom.changeLevel 必须为 none、additive 或 destructive。');
     }
     if (changeLevel === 'destructive' && acknowledgeDestructive !== true) {
-        throw new Error('registryUpgradeFrom.changeLevel=destructive 必须显式 acknowledgeDestructive=true 才能注记放行');
+        throw new Error('为破坏性变更生成升级说明时，必须明确设置 acknowledgeDestructive=true。');
     }
     const annotation = {
         contract: REGISTRY_UPGRADE_CONTRACT,
@@ -453,13 +433,13 @@ function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
         note: text
     };
     if (!SHA256_RE.test(annotation.fromRegistrySha256) || !SHA256_RE.test(annotation.toRegistrySha256)) {
-        throw new Error('registryUpgradeFrom 需要真实的新旧 registry 字节 SHA');
+        throw new Error('registryUpgradeFrom 中的新旧词表 SHA 必须格式有效。');
     }
     if (!annotation.fromRegistryVersion || annotation.fromRegistryVersion !== annotation.toRegistryVersion) {
-        throw new Error('registryUpgradeFrom 新旧 registry 版本必须一致');
+        throw new Error('registryUpgradeFrom 中的新旧词表版本必须非空且一致。');
     }
     if (changeLevel === 'destructive') {
-        // destructive 唯一的注记形态：白名单内 + 与本次复算逐字绑定的显式确认。
+        // 破坏性变更的升级说明必须包含与本次重新计算结果对应的显式确认。
         annotation.destructiveAcknowledgement = buildDestructiveAcknowledgement({
             detail,
             fromRegistrySha256: annotation.fromRegistrySha256,
@@ -467,68 +447,63 @@ function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
             note: acknowledgementNote
         });
     } else if (acknowledgeDestructive) {
-        throw new Error('非 destructive 变更不得携带 destructiveAcknowledgement');
+        throw new Error('非破坏性变更不能包含 destructiveAcknowledgement 确认记录。');
     }
     return annotation;
 }
 
-// 注记只承载审计说明：判定本身永远由 classifyRegistryChange 复算，注记
-// 篡改无法把 destructive 变成 additive；destructive 只有在“显式确认 +
-// 确认对象为零概念删除（白名单）”时才可能放行，且四条基础门一条不少。
+// 升级说明用于记录核验依据，不能改变重新计算的变更等级。
+// 破坏性变更须另外核对显式确认；其他字段仍须与本次词表和阶段记录一致。
 function validateRegistryUpgradeAnnotation(annotation, expected = {}) {
-    if (!isPlainObject(annotation)) return '缺少 registryUpgradeFrom 升级说明';
+    if (!isPlainObject(annotation)) return 'registryUpgradeFrom 升级说明缺失或不是普通对象。';
     if (annotation.contract !== REGISTRY_UPGRADE_CONTRACT || annotation.version !== REGISTRY_UPGRADE_VERSION) {
-        return `registryUpgradeFrom 合同不是 ${REGISTRY_UPGRADE_CONTRACT} v${REGISTRY_UPGRADE_VERSION}`;
+        return `registryUpgradeFrom 的格式标识和版本必须为 ${REGISTRY_UPGRADE_CONTRACT} v${REGISTRY_UPGRADE_VERSION}。`;
     }
     if (!SHA256_RE.test(String(annotation.fromRegistrySha256 || ''))
         || annotation.fromRegistrySha256 !== expected.fromRegistrySha256) {
-        return 'registryUpgradeFrom.fromRegistrySha256 与封口记录的旧 SHA 不一致';
+        return 'registryUpgradeFrom.fromRegistrySha256 格式无效，或与标签阶段记录中的旧词表 SHA 不一致。';
     }
     if (!SHA256_RE.test(String(annotation.toRegistrySha256 || ''))
         || annotation.toRegistrySha256 !== expected.toRegistrySha256) {
-        return 'registryUpgradeFrom.toRegistrySha256 与当前 registry SHA 不一致';
+        return 'registryUpgradeFrom.toRegistrySha256 格式无效，或与当前词表 SHA 不一致。';
     }
     if (!annotation.fromRegistryVersion || annotation.fromRegistryVersion !== expected.registryVersion
         || annotation.toRegistryVersion !== expected.registryVersion) {
-        return 'registryUpgradeFrom registry 版本与当前版本不一致';
+        return 'registryUpgradeFrom 中的新旧词表版本缺失或与当前版本不一致。';
     }
     if (!CHANGE_LEVELS.includes(annotation.changeLevel)) {
-        return 'registryUpgradeFrom.changeLevel 只允许 none/additive/destructive';
+        return 'registryUpgradeFrom.changeLevel 必须为 none、additive 或 destructive。';
     }
     if (annotation.changeLevel !== expected.changeLevel) {
-        return `registryUpgradeFrom.changeLevel=${annotation.changeLevel} 与复算结果 ${expected.changeLevel} 不一致`;
+        return `registryUpgradeFrom.changeLevel=${annotation.changeLevel} 与重新计算的变更等级 ${expected.changeLevel} 不一致。`;
     }
     if (annotation.changeLevel === 'destructive') {
         const ackIssue = validateDestructiveAcknowledgement(annotation, expected);
         if (ackIssue) return ackIssue;
     } else if (annotation.destructiveAcknowledgement !== undefined) {
-        return '非 destructive 变更不得携带 destructiveAcknowledgement';
+        return '非破坏性变更不能包含 destructiveAcknowledgement 确认记录。';
     }
     if (!Array.isArray(annotation.reasons) || annotation.reasons.some(code => typeof code !== 'string' || !code)) {
-        return 'registryUpgradeFrom.reasons 必须是字符串数组';
+        return 'registryUpgradeFrom.reasons 必须是数组，且各项必须是非空字符串。';
     }
     const note = annotation.note;
     if (typeof note !== 'string' || !note.trim() || note !== note.trim()
         || note.length > REGISTRY_UPGRADE_NOTE_MAX_CHARS) {
-        return `registryUpgradeFrom.note 必须是 1-${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的说明`;
+        return `registryUpgradeFrom.note 必须是长度为 1–${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的非空说明，且首尾不能有空白。`;
     }
     return null;
 }
 
-// taxonomySeal 放宽入口：四条同时成立才放行 ——
-//   ① 旧快照按字节 SHA 可取回；
-//   ② 复算分级为 additive/none，或 destructive 落在可确认白名单且注记携带与
-//      本次复算绑定的 destructiveAcknowledgement（概念零删除）；
-//   ③ 注记其余字段与复算自洽；
-//   ④ 旧 conceptIds 在当前 registry 全部 active。
-// 任何异常都折算成 fail-closed 的拒绝理由，绝不向调用方抛错。
+// 沿用旧标签阶段记录前，须取得旧快照并重新判断变更，核对升级说明，
+// 再确认原概念在当前词表中仍启用。破坏性变更还须符合白名单并提供有效确认。
+// 无法完成核验时返回拒绝结果，不向调用方抛出异常。
 function validateSealRegistryUpgrade(options = {}) {
     try {
         return sealRegistryUpgrade(options);
     } catch (error) {
         return {
             ok: false,
-            error: `registry 升级判定无法完成: ${error.message}`,
+            error: `无法完成词表升级核验：${error.message}`,
             changeLevel: null,
             detail: null
         };
@@ -540,32 +515,29 @@ function sealRegistryUpgrade({
     annotation, snapshotOptions = {}
 } = {}) {
     const fail = error => ({ ok: false, error, changeLevel: null, detail: null });
-    const current = normalizeRegistry(currentRegistry, 'current registry');
+    const current = normalizeRegistry(currentRegistry, '当前词表');
     const currentSha = String(currentRegistrySha256 || current.registrySha256 || '');
-    if (!SHA256_RE.test(currentSha)) return fail('当前 registry 缺少字节 SHA，拒绝放行 taxonomySeal');
+    if (!SHA256_RE.test(currentSha)) return fail('当前词表的 SHA 缺失或格式无效，不能沿用标签阶段记录。');
     if (!SHA256_RE.test(String(fromRegistrySha256 || ''))) {
-        return fail('taxonomySeal 记录的 registrySha256 非法，拒绝放行');
+        return fail('标签阶段记录中的 registrySha256 格式无效，不能沿用该记录。');
     }
-    if (String(fromRegistrySha256) === currentSha) return fail('taxonomySeal 的 registrySha256 已等于当前 SHA，无需升级');
+    if (String(fromRegistrySha256) === currentSha) return fail('标签阶段记录中的词表 SHA 与当前值相同，无需进行词表升级核验。');
     const snapshot = resolveRegistrySnapshot(fromRegistrySha256, snapshotOptions);
     if (!snapshot) {
-        return fail(`无法取得 registry 升级前快照 ${fromRegistrySha256}，按 fail-closed 拒绝 taxonomySeal`);
+        return fail(`无法取得更新前的词表快照 ${fromRegistrySha256}，不能沿用标签阶段记录。`);
     }
     const { changeLevel, detail } = classifyRegistryChange(snapshot, current);
-    // destructive 默认无条件拒绝；唯一的例外是“可确认白名单 + 与本次复算绑定的
-    // 显式 destructiveAcknowledgement”，且确认只在第 ② 条门上放行，第 ①③④ 条门
-    // 一条不少。不可确认的 destructive（删概念/删分面/降级/版本升级等）写得再
-    // 自洽也翻不了案。
+    // 有效的人工确认只能满足破坏性变更这一项，不能跳过快照、升级说明或概念检查。
     if (changeLevel === 'destructive') {
         const reasons = detail.reasons.filter(reason => reason.level === 'destructive').slice(0, 3)
             .map(reason => reason.message);
         const ackIssue = validateDestructiveAcknowledgement(annotation, { detail });
         if (ackIssue) {
-            const suffix = ackIssue.startsWith('destructive 不在可确认白名单')
-                ? `；${ackIssue}` : `；显式确认无效: ${ackIssue}`;
+            const suffix = ackIssue.startsWith('本次破坏性变更不属于可人工确认的范围')
+                ? `；${ackIssue}` : `；显式确认无效：${ackIssue}`;
             return {
                 ok: false,
-                error: `registry 变更判定为 destructive，taxonomySeal 不得沿用（${reasons.join('；')}）${suffix}`,
+                error: `词表包含破坏性变更，原标签阶段记录不能直接沿用（${reasons.join('；')}）${suffix}`,
                 changeLevel,
                 detail
             };
@@ -578,7 +550,7 @@ function sealRegistryUpgrade({
         changeLevel,
         detail
     });
-    if (issue) return { ok: false, error: `registryUpgradeFrom 校验失败: ${issue}`, changeLevel, detail };
+    if (issue) return { ok: false, error: `词表升级说明未通过核验：${issue}`, changeLevel, detail };
     const byId = new Map(current.concepts.map(concept => [concept.id, concept]));
     const stale = [];
     for (const id of Array.isArray(conceptIds) ? conceptIds : []) {
@@ -589,7 +561,7 @@ function sealRegistryUpgrade({
     if (stale.length) {
         return {
             ok: false,
-            error: `taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: ${stale.join('、')}`,
+            error: `原标签阶段记录引用的以下概念在当前词表中缺失或已停用：${stale.join('、')}`,
             changeLevel,
             detail
         };

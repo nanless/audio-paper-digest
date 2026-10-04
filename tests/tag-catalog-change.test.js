@@ -199,13 +199,13 @@ test('cross-facet collisions over every registry label are destructive (label-co
         byId(inFacet, 'method.transformer').aliases.push('端到端学习');
         tagCatalogApi.validateTagCatalog(inFacet);
         api.classifyRegistryChange(raw(), inFacet);
-    }, /Ambiguous label in facet/);
+    }, /分类维度 method 中的标签对应了多个概念：端到端学习/);
 });
 
 test('registry validation still fails closed on an impossible facet migration', () => {
     const migrated = clone(raw());
     byId(migrated, 'task.asr').facet = 'method';
-    assert.throws(() => api.classifyRegistryChange(raw(), migrated), /Invalid\/duplicate concept ID/);
+    assert.throws(() => api.classifyRegistryChange(raw(), migrated), /概念 ID 的格式或所属分类维度无效，或 ID 重复：task\.asr/);
 });
 
 // 换表口径（config/tag-catalog.json 已于 09-30 换为 v1.1 / 262 概念 /
@@ -321,15 +321,15 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
     assert.match(api.validateRegistryUpgradeAnnotation(
         { ...annotation, changeLevel: 'none' }, expected), /changeLevel/);
     assert.match(api.validateRegistryUpgradeAnnotation(
-        { ...annotation, contract: 'other' }, expected), /合同/);
+        { ...annotation, contract: 'other' }, expected), /格式标识和版本/);
     assert.match(api.validateRegistryUpgradeAnnotation(null, expected), /registryUpgradeFrom/);
     // 显式确认缺失/不可确认 → 连注记都构不出来。
     assert.throws(() => api.buildRegistryUpgradeAnnotation({
         from, to, changeLevel: 'destructive', detail, note: 'x'
-    }), /destructive/);
+    }), /破坏性变更/);
     assert.throws(() => api.buildRegistryUpgradeAnnotation({
         from, to, changeLevel, detail, note: 'x'.repeat(api.REGISTRY_UPGRADE_NOTE_MAX_CHARS + 1)
-    }), /note/);
+    }), /生成的词表升级说明不能为空，且长度不能超过/);
 });
 
 // 换表口径：历史快照 → current(v1.1) 全部复算为 destructive，四门中的第 ② 条门
@@ -399,7 +399,7 @@ test('seal upgrade gate admits acknowledged destructive upgrades, fails closed o
         annotation: lying
     });
     assert.equal(destructive.ok, false);
-    assert.match(destructive.error, /additive|destructive/);
+    assert.match(destructive.error, /破坏性变更/);
     assert.equal(destructive.changeLevel, 'destructive');
 
     const staleConcept = api.validateSealRegistryUpgrade({
@@ -410,7 +410,7 @@ test('seal upgrade gate admits acknowledged destructive upgrades, fails closed o
         annotation
     });
     assert.equal(staleConcept.ok, false);
-    assert.match(staleConcept.error, /active/);
+    assert.match(staleConcept.error, /缺失或已停用/);
 
     // —— additive 路径（合成旧表）：放行，且注记不携带确认字段 ——
     const additive = syntheticAdditiveUpgrade(current);
@@ -485,27 +485,27 @@ const CROSS_END_DISPLAY_EXPECTATIONS = {
     },
     "missing-annotation-rejected": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。",
-        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.flow-matching 删除了别名“flow matching”，使用该别名的旧标签需要重新核对；概念 method.self-supervised 删除了别名“ssl learning”，使用该别名的旧标签需要重新核对；概念 task.speech-spoofing 的上级概念（broaderId）由 null 改为 task.audio-forgery，祖先关系随之改变，也可能影响主任务是否符合最具体概念的要求；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
+        "error": "词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.flow-matching 删除了别名“flow matching”，使用该别名的旧标签需要重新核对；概念 method.self-supervised 删除了别名“ssl learning”，使用该别名的旧标签需要重新核对；概念 task.speech-spoofing 的上级概念（broaderId）由 null 改为 task.audio-forgery，祖先关系随之改变，也可能影响主任务是否符合最具体概念的要求；显式确认无效：破坏性变更必须在 destructiveAcknowledgement 中提供显式确认。"
     },
     "no-snapshot-rejected": {
         "summary": null,
-        "error": "无法取得 registry 升级前快照 0000000000000000000000000000000000000000000000000000000000000000，按 fail-closed 拒绝 taxonomySeal"
+        "error": "无法取得更新前的词表快照 0000000000000000000000000000000000000000000000000000000000000000，不能沿用标签阶段记录。"
     },
     "destructive-lying-annotation-rejected": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
-        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
+        "error": "词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效：破坏性变更必须在 destructiveAcknowledgement 中提供显式确认。"
     },
     "annotation-level-mismatch-rejected": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。",
-        "error": "registryUpgradeFrom 校验失败: registryUpgradeFrom.changeLevel=none 与复算结果 destructive 不一致"
+        "error": "词表升级说明未通过核验：registryUpgradeFrom.changeLevel=none 与重新计算的变更等级 destructive 不一致。"
     },
     "stale-concept-id-rejected": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。",
-        "error": "taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: task.not-a-concept(缺失)"
+        "error": "原标签阶段记录引用的以下概念在当前词表中缺失或已停用：task.not-a-concept(缺失)"
     },
     "invalid-from-sha-rejected": {
         "summary": null,
-        "error": "taxonomySeal 记录的 registrySha256 非法，拒绝放行"
+        "error": "标签阶段记录中的 registrySha256 格式无效，不能沿用该记录。"
     },
     "destructive-acknowledged-allowed": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
@@ -513,19 +513,19 @@ const CROSS_END_DISPLAY_EXPECTATIONS = {
     },
     "destructive-ack-missing-rejected": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
-        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
+        "error": "词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效：破坏性变更必须在 destructiveAcknowledgement 中提供显式确认。"
     },
     "destructive-ack-wrong-hash-rejected": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
-        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructiveAcknowledgement.reasonsHash 与本次复算 destructive reasons 不一致"
+        "error": "词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效：destructiveAcknowledgement.reasonsHash 与本次重新计算的破坏性变更原因不一致。"
     },
     "destructive-ack-concept-impact-rejected": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
-        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructiveAcknowledgement.conceptIdImpact 必须为 none"
+        "error": "词表包含破坏性变更，原标签阶段记录不能直接沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效：destructiveAcknowledgement.conceptIdImpact 必须为 none，表明所选概念 ID 不变。"
     },
     "destructive-ack-stale-concept-id-rejected": {
         "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
-        "error": "taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: task.not-a-concept(缺失)"
+        "error": "原标签阶段记录引用的以下概念在当前词表中缺失或已停用：task.not-a-concept(缺失)"
     }
 };
 
@@ -765,7 +765,7 @@ test('destructive reasonsHash is a stable, message-independent fingerprint of th
     assert.throws(() => api.buildDestructiveAcknowledgement({
         detail: ineligible.detail, fromRegistrySha256: from.registrySha256,
         toRegistrySha256: current.registrySha256
-    }), /白名单/);
+    }), /本次破坏性变更不属于可人工确认的范围：concept-removed/);
 });
 
 test('the seal gate admits an acknowledged destructive upgrade only when all four doors hold', () => {
@@ -815,7 +815,7 @@ test('the seal gate admits an acknowledged destructive upgrade only when all fou
         /changeLevel/);
     assert.match(seal({ annotation: { ...annotation, toRegistrySha256: 'b'.repeat(64) } }).error,
         /toRegistrySha256/);
-    assert.match(seal({ annotation: { ...annotation, contract: 'other' } }).error, /合同/);
+    assert.match(seal({ annotation: { ...annotation, contract: 'other' } }).error, /格式标识和版本/);
     // additive 变更不得携带确认字段（注记形态被锁死）。
     // 换表口径：历史快照 → current 已无 additive 对，用合成旧表复现 additive 复算。
     const additive = syntheticAdditiveUpgrade(current);
@@ -833,10 +833,10 @@ test('the seal gate admits an acknowledged destructive upgrade only when all fou
         annotation: { ...additiveAnnotation, destructiveAcknowledgement: ack }
     });
     assert.equal(annotatedAdditive.ok, false);
-    assert.match(annotatedAdditive.error, /非 destructive/);
+    assert.match(annotatedAdditive.error, /非破坏性变更/);
 
     // ④ conceptIds 非 active → 即便确认合法也拒。
-    assert.match(seal({ conceptIds: [...conceptIds, 'task.not-a-concept'] }).error, /active/);
+    assert.match(seal({ conceptIds: [...conceptIds, 'task.not-a-concept'] }).error, /缺失或已停用/);
     // ① 快照取不回 → 拒（确认无法替代快照）。
     assert.match(seal({ fromRegistrySha256: '0'.repeat(64),
         annotation: { ...annotation, fromRegistrySha256: '0'.repeat(64) } }).error, /快照/);
@@ -871,6 +871,6 @@ test('the seal gate admits an acknowledged destructive upgrade only when all fou
     });
     assert.equal(ineligible.ok, false);
     assert.equal(ineligible.changeLevel, 'destructive');
-    assert.match(ineligible.error, /不在可确认白名单/);
+    assert.match(ineligible.error, /不属于可人工确认的范围/);
     assert.match(ineligible.error, /concept-removed/);
 });

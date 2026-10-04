@@ -195,7 +195,7 @@ PRIMARY_METHOD_TAGS = set(active_preferred_labels(
 
 
 def _resolve_analysis_tag(raw, tag_catalog, *, facets=None, legacy_tags=False):
-    """Return ``(concept, error)`` for one explicit tag."""
+    """查找一个明确写出的标签，返回对应概念及错误说明。"""
     if not isinstance(raw, str) or not raw.strip():
         return None, '标签为空'
     token = raw.strip()
@@ -206,7 +206,7 @@ def _resolve_analysis_tag(raw, tag_catalog, *, facets=None, legacy_tags=False):
                       and concept['id'] == 'method.end-to-end-learning']
     elif not legacy_tags:
         if not token.startswith('#') or token.count('#') != 1:
-            return None, f'current 标签必须精确写成 #preferredLabel.zh: {token}'
+            return None, f'当前标签必须准确使用井号加中文首选名称的格式：{token}。'
         label = token[1:]
         candidates = [concept for concept in tag_catalog['concepts']
                       if concept['status'] == 'active'
@@ -217,12 +217,12 @@ def _resolve_analysis_tag(raw, tag_catalog, *, facets=None, legacy_tags=False):
     if facets is not None:
         candidates = [concept for concept in candidates if concept['facet'] in facets]
     if len(candidates) != 1:
-        role = '/'.join(facets) if facets else 'taxonomy'
-        reason = '歧义' if len(candidates) > 1 else '未知或角色不匹配'
-        return None, f'{role} 标签{reason}: {token}'
+        role = '/'.join(facets) if facets else '标签词表'
+        reason = '对应多个概念，无法唯一确定' if len(candidates) > 1 else '不存在或不属于指定分类维度'
+        return None, f'{role} 中的标签{reason}：{token}。'
     concept = candidates[0]
     if concept['status'] != 'active':
-        return None, f'legacy deprecated 标签不得自动迁移: {token}'
+        return None, f'旧标签对应已停用概念，不能自动改用替代标签：{token}。'
     return concept, None
 
 
@@ -256,39 +256,39 @@ def _validate_tag_selection(tag_catalog, tags, primary_task_tag, primary_method_
     raw_tags = tags if isinstance(tags, list) else []
     errors = []
     if len(raw_tags) < 3 or len(raw_tags) > 5:
-        errors.append('标签总数必须为 3-5 个')
+        errors.append('标签总数必须为 3–5 个。')
     concepts = [_current_tag_concept(tag_catalog, tag) for tag in raw_tags]
     for tag, concept in zip(raw_tags, concepts):
         if concept is None:
-            errors.append(f'标签不是 active 中文首选标签: {tag}')
+            errors.append(f'标签不是词表中已启用概念的中文首选名称：{tag}')
     ids = [concept['id'] for concept in concepts if concept is not None]
     if len(set(ids)) != len(ids):
-        errors.append('标签包含重复概念')
+        errors.append('标签列表包含重复概念。')
 
     task = _current_tag_concept(tag_catalog, primary_task_tag, 'task')
     method = _current_tag_concept(tag_catalog, primary_method_tag, 'method')
     if task is None:
-        errors.append('主任务标签必须是 active task 中文首选标签')
+        errors.append('主任务标签必须使用词表中已启用任务概念的中文首选名称。')
     if method is None:
-        errors.append('主方法标签必须是 active method 中文首选标签')
+        errors.append('主方法标签必须使用词表中已启用方法概念的中文首选名称。')
     if task is not None and task['id'] not in ids:
-        errors.append('主任务标签必须出现在完整标签列表')
+        errors.append('主任务标签必须出现在完整标签列表中。')
     if method is not None and method['id'] not in ids:
-        errors.append('主方法标签必须出现在完整标签列表')
+        errors.append('主方法标签必须出现在完整标签列表中。')
     if task is not None and any(
             task['id'] in ancestors(tag_catalog, cid) for cid in ids):
-        errors.append('主任务标签不是所选任务中的最具体概念')
+        errors.append('主任务标签必须是所选任务中最具体的概念。')
     if ids and len(prune_ancestors(tag_catalog, ids)) != len(ids):
-        errors.append('标签不得同时包含祖先与后代概念')
+        errors.append('标签不能同时包含上级概念及其下级概念。')
 
-    # 选择合同规则①：主任务恰好 1 个 + 次任务 ≤2 个，即 task 分面总数必须
-    # 落在 [1,3]；总数 3-5 只约束标签条数，不约束 task 分面占比。
+    # 任务标签须有 1–3 个，其中主任务为 1 个，次任务不超过 2 个。
+    # 总标签数 3–5 的限制单独检查，不能用它替代任务标签数量检查。
     task_concepts = [concept for concept in concepts if concept is not None
                      and concept['facet'] == 'task']
     if not 1 <= len(task_concepts) <= 3:
         task_tag_list = ' '.join(_canonical_tag(concept)
                                  for concept in task_concepts)
-        errors.append('task 分面标签必须为 1-3 个（主任务 1 个 + 次任务 ≤2 个），'
+        errors.append('任务标签须有 1–3 个，其中主任务为 1 个，次任务不超过 2 个；'
                       f'当前 {len(task_concepts)} 个'
                       + (f': {task_tag_list}' if task_tag_list else ''))
 
@@ -325,10 +325,10 @@ def _validate_tag_selection(tag_catalog, tags, primary_task_tag, primary_method_
                               for concept in missing_descendants[:8])
             tail = ' …' if len(missing_descendants) > 8 else ''
             specificity_warning = (
-                f'主任务标签欠具体: {_canonical_tag(task)} 存在未选择的 active 后代'
-                f'（共 {len(missing_descendants)} 个）: {sample}{tail}')
+                f'主任务标签过于宽泛：{_canonical_tag(task)} 的下级概念中有未被选中的已启用概念'
+                f'（共 {len(missing_descendants)} 个）：{sample}{tail}')
 
-    # Match Node's Set-based diagnostic de-duplication while preserving order.
+    # 与 Node 一致，删除重复诊断并保留首次出现的顺序。
     errors = list(dict.fromkeys(errors))
     return {
         'valid': not errors,

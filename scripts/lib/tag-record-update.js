@@ -1,17 +1,10 @@
 'use strict';
 
-// Taxonomy-only 重放（评审改进 P2-2/C7）：只重放 taxonomySeal 阶段，不重跑
-// Reader、评分或任何 LLM 调用。
-//
-// 确定性重投影的边界写死在这里：
-//   1. stage 记录的旧 registry 必须能按字节 SHA 取回快照；
-//   2. 旧→新的变更必须判为 additive/none，或 destructive 落在可确认白名单且
-//      调用方带 acknowledgeDestructive 显式确认（注记自动写入
-//      destructiveAcknowledgement，reasonsHash 绑定本次复算）；
-//   3. 正文里的标签必须在新 registry 下解析出与旧封口完全相同的 conceptIds；
-//   4. 新 stage 必须重新通过 analysis-contract 的逐字重放校验。
-// 任何一条不成立就返回 blocked（assigned=false），并把需要人工/LLM 介入的
-// 原因写进报告 —— 绝不写半个封口，也绝不去调用模型。
+// 只更新或核验标签阶段记录，不重新生成 Reader、评分或图片，也不调用模型。
+// 更新前须取得原词表快照，重新判断词表变更，并确认正文标签仍解析为原概念 ID。
+// destructive 变更还须属于可确认范围，并带有与本次原因对应的显式确认。
+// 更新后的阶段记录必须通过 analysis-contract 核验，才能返回可写入的分析记录。
+// 无法继续时返回原有 blocked 结果，并按具体原因标明是否需要人工或模型重新核对。
 
 const registryChange = require('./tag-catalog-change.js');
 
@@ -42,7 +35,7 @@ function idDiff(before, after) {
 }
 
 function parseAnalysisText(text, runtime) {
-    // 懒加载：utils.js 与 analysis-contract.js 互相依赖，避免加载期环。
+    // utils.js 与 analysis-contract.js 互相依赖，因此在调用时加载，避免循环加载。
     return require('../utils.js').parseAnalysis(text, { tagRules: runtime });
 }
 
@@ -76,11 +69,9 @@ function stageResult({ paper, analysisRunId, status, outcome, errors = [], ...ex
     return item;
 }
 
-// 对单篇 canonical analysis（{contract, executionId, paperId, status, papers:[…]}）
-// 产出确定性重投影计划；不写任何文件。
-// acknowledgeDestructive 只对“可确认白名单内”的 destructive 生效：可确认且带
-// flag → 进入 reproject 并自动写入 destructiveAcknowledgement；可确认但缺 flag、
-// 或根本不（再）可确认 → 仍 blocked/destructive-change（needsHuman）。
+// 为只含一篇论文的分析记录计算标签更新结果，不写入文件。
+// acknowledgeDestructive 仅适用于白名单内的破坏性变更；缺少确认或不属于
+// 可确认范围时，仍返回 blocked/destructive-change，并标明需要重新核对。
 function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOptions = {},
     acknowledgeDestructive = false, acknowledgementNote = null } = {}) {
     if (!RESEAL_MODES.includes(mode)) throw new Error(`不支持的标签记录更新模式：${mode}`);
@@ -118,7 +109,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         parsed, tagRules: runtime, registrySnapshotOptions: snapshotOptions
     });
 
-    // —— 已经是 current registry：只做逐字重放校验，无写入必要。 ——
+    // 已使用当前词表时，只核验现有记录，不生成新的写入内容。
     if (stage.registrySha256 === runtime.registrySha256) {
         const issue = validate();
         if (issue) {
@@ -143,7 +134,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
     const { changeLevel, detail } = registryChange.classifyRegistryChange(snapshot, runtime.tagCatalog);
     if (changeLevel === 'destructive') {
         const eligibility = registryChange.acknowledgementEligibility(detail);
-        const baseError = 'registry 变更判为 destructive：必须整篇重新分析或人工/LLM 重新选标签';
+        const baseError = '词表包含破坏性变更，需要重新分析整篇论文，或由人工或模型重新选择标签；本工具不调用模型。';
         if (!eligibility.eligible) {
             return { ok: false, analysis: null,
                 item: stageResult({ ...base, status: 'blocked', outcome: 'destructive-change',
@@ -151,7 +142,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
                     reasons: detail.reasons.filter(reason => reason.level === 'destructive')
                         .map(reason => reason.message),
                     errors: [baseError,
-                        `；--acknowledge-destructive 对本次改动无效：${eligibility.ineligibleReasons.join('、')} 不在可确认白名单`] }) };
+                        `--acknowledge-destructive 不适用于本次改动：${eligibility.ineligibleReasons.join('、')} 不属于可人工确认的范围。`] }) };
         }
         if (!acknowledgeDestructive) {
             return { ok: false, analysis: null,
@@ -160,10 +151,9 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
                     reasons: detail.reasons.filter(reason => reason.level === 'destructive')
                         .map(reason => reason.message),
                     errors: [baseError,
-                        '；本次改动落在可确认白名单内，带 --acknowledge-destructive 可显式确认后确定性重封'] }) };
+                        '本次改动属于可人工确认的范围；明确使用 --acknowledge-destructive 后，仍须通过后续标签核验才能更新记录。'] }) };
         }
-        // 可确认 + 显式确认：继续走第 3/4 条门（正文重投影与 binding 重放），
-        // 注记里写入与本次复算绑定的 destructiveAcknowledgement。
+        // 人工确认有效后，仍须核对正文标签的解析结果和更新后的阶段记录。
     }
 
     const validation = parsed?.taxonomyValidation;
@@ -206,9 +196,8 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         ...paper.analysisManifest,
         stages: { ...paper.analysisManifest.stages, taxonomySeal: nextStage }
     } };
-    // 缓存的 parsed.taxonomyValidation 是“按当前 registry 解析”的结果；发布侧
-    // （Python 的 paper['parsed'] 优先）会直接读它，所以重封必须一并刷新其中的
-    // registry 版本与字节 SHA，保持与重新 parse 的结果逐字段一致。
+    // Python 发布端会优先读取已保存的 parsed.taxonomyValidation，因此更新
+    // 标签记录时也更新其中的词表版本与 SHA，使它们与当前解析结果一致。
     if (paper.parsed && typeof paper.parsed === 'object' && paper.parsed.taxonomyValidation) {
         nextPaper.parsed = {
             ...paper.parsed,
@@ -225,7 +214,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         return { ok: false, analysis: null,
             item: stageResult({ ...base, status: 'blocked', outcome: 'binding-refused',
                 oldConceptIds, conceptIds: oldConceptIds, changeLevel,
-                errors: [`重封后 binding 无法闭合，fail-closed 拒绝写入: ${issue}`] }) };
+                errors: [`更新后的标签阶段记录未通过核验，不能写入：${issue}`] }) };
     }
     const nextAnalysis = { ...record, papers: [nextPaper] };
     return {
@@ -244,8 +233,8 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
     };
 }
 
-// 重封只允许改动 registry/projection 字段、注记与 bindingSha256；正文与
-// checkpoint SHA 必须原样保留，否则下游 coreSummary/scoring 链会断。
+// 只更新阶段记录中的词表与提示文本字段、升级说明和 bindingSha256。正文及原检查点的 SHA
+// 保持不变，以便核心摘要和评分阶段继续核验它们对应的正文。
 function rebuildStage(stage, runtime, annotation, contractApi) {
     const binding = {
         registryVersion: runtime.registryVersion,
@@ -292,8 +281,8 @@ function summarizeTagRecordUpdates(report) {
     };
 }
 
-// 只读死件报告：列出 historical-taxonomy-assignments 下与当前 registry SHA
-// 不符的 assignment；不删除、不改名、不改写。
+// 列出 historical-taxonomy-assignments 中词表 SHA 与当前值不同的分类文件。
+// 此函数只读取文件，不删除、改名或改写原记录。
 function scanStaleAssignments({ root, currentRegistrySha256, readDir, readJson }) {
     const fs = require('node:fs');
     const path = require('node:path');
@@ -334,7 +323,7 @@ function scanStaleAssignments({ root, currentRegistrySha256, readDir, readJson }
                     sha = typeof value.registrySha256 === 'string' ? value.registrySha256 : null;
                     paperId = typeof value.paperId === 'string' ? value.paperId : null;
                 } catch (error) {
-                    reason = `无法解析: ${error.message}`;
+                    reason = `无法解析文件：${error.message}`;
                 }
             }
             const isStale = sha ? sha !== currentRegistrySha256 : null;
@@ -343,7 +332,7 @@ function scanStaleAssignments({ root, currentRegistrySha256, readDir, readJson }
             else if (isStale === false) current += 1;
             else unreadable += 1;
             entries.push({ directory, file, paperId, registrySha256: sha,
-                stale: isStale, reason: reason || (isStale === null ? '文件未记录 registrySha256' : null) });
+                stale: isStale, reason: reason || (isStale === null ? '文件未记录词表 SHA（registrySha256）。' : null) });
         }
     }
     return { root, currentRegistrySha256, directories, entries, stale, current, unreadable };

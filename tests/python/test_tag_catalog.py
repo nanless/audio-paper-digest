@@ -90,9 +90,9 @@ class RegistryTest(unittest.TestCase):
         data = registry()
         data['concepts'][2]['preferredLabel']['zh'] = '语音识别'
         self.assertIs(validate_tag_catalog(data), data)
-        with self.assertRaisesRegex(ValueError, 'globally unique'):
+        with self.assertRaisesRegex(ValueError, '所选分类维度中已启用概念的中文首选名称不能重复。'):
             active_preferred_labels(data)
-        with self.assertRaisesRegex(ValueError, 'resolution mode'):
+        with self.assertRaisesRegex(ValueError, '未知的标签查找模式：automatic。'):
             resolve_label(data, '语音识别', mode='automatic')
 
     def test_invalid_ids_roles_cycles_aliases_and_metadata_fail_closed(self):

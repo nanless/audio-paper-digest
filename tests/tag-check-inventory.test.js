@@ -169,12 +169,12 @@ test('人类可读输出、退出码与参数校验', t => {
     const result = runCli(['--executions', paths.executions, '--deep', paths.deepFile,
         '--assignments', paths.assignments, '--registry', paths.registryFile]);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /分类法封口盘点（只读） paper-taxonomy-seal-inventory-v1/);
-    assert.match(result.stdout, new RegExp(`当前 config SHA: ${CURRENT}`));
-    assert.match(result.stdout, /\[当前\] 封口 4/);
-    assert.match(result.stdout, new RegExp(`\\[非当前\\] 封口 2`));
+    assert.match(result.stdout, /标签阶段记录检查（只读） paper-taxonomy-seal-inventory-v1/);
+    assert.match(result.stdout, new RegExp(`当前词表 SHA： ${CURRENT}`));
+    assert.match(result.stdout, /\[当前\] 标签阶段记录 4/);
+    assert.match(result.stdout, new RegExp(`\\[非当前\\] 标签阶段记录 2`));
     assert.match(result.stdout, /示例 paperId: arxiv:2609\.00001/);
-    assert.match(result.stdout, /换表前须按非当前封口逐组决定 reseal \/ 重分析/);
+    assert.match(result.stdout, /请逐组核对使用旧词表的记录，再决定更新标签记录还是重新分析/);
 
     const unknown = runCli(['--nope']);
     assert.equal(unknown.status, 1);

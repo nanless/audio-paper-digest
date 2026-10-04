@@ -1,18 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
-// 换表前封口盘点（评审改进 P2 / 缺口 #10）。
-//
-// 现有 --mark-stale 只看 data/runtime/historical-taxonomy-assignments/，覆盖不到
-// 会议与日更分析里真正落盘的 taxonomySeal 证据。这个工具补上“按 registrySha256
-// 分组的封口清单”，作为换表（改 config/tag-catalog.json）前的依据：
-//   1) data/runtime/conference-analysis-executions/*/analysis.json 的
-//      stages.taxonomySeal.registrySha256（含 status）；
-//   2) data/current/deep-analysis-result.json 的 papers[].analysisManifest.stages.taxonomySeal；
-//   3) data/runtime/historical-taxonomy-assignments/*/*.json 的 registrySha256。
-//
-// 只读：只 readdirSync/readFileSync，不删除、不改名、不改写、不重放、不调用模型；
-// 无论盘点结果里有多少旧 SHA，都以退出码 0 结束（它只是清单，不是门禁）。
+// 更新词表前，读取会议、日更分析和历史分类文件中的标签阶段记录，并按词表 SHA 分组。
+// --mark-stale 只检查历史分类文件；本工具还读取会议和日更实际保存的记录。
+// 检查范围是 conference-analysis-executions/*/analysis.json、当前深度分析结果，
+// 以及 historical-taxonomy-assignments 中的分类文件。所有路径由集中配置或参数指定。
+// 本工具只读取文件，不更新记录，也不调用模型。它提供清单，不判断发布资格；
+// 无论统计出多少旧词表 SHA，命令均以退出码 0 结束。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -44,7 +38,7 @@ const USAGE = [
 ].join('\n');
 
 function parseArgs(argv) {
-    if (!Array.isArray(argv)) throw new Error('argv 必须是数组');
+    if (!Array.isArray(argv)) throw new Error('命令参数 argv 必须是数组。');
     const options = { json: false };
     const paths = { '--executions': 'executionsDir', '--deep': 'deepFile',
                     '--assignments': 'assignmentsDir', '--registry': 'registryFile' };
@@ -52,14 +46,14 @@ function parseArgs(argv) {
         const flag = argv[index];
         if (flag === '--help' || flag === '-h') return { help: true };
         if (flag === '--json') {
-            if (options.json) throw new Error('--json 重复');
+            if (options.json) throw new Error('--json 不能重复指定。');
             options.json = true;
             continue;
         }
         const key = paths[flag];
         const value = argv[index + 1];
         if (!key || value === undefined || value.startsWith('--') || Object.hasOwn(options, key)) {
-            throw new Error(`Use:\n${USAGE}`);
+            throw new Error(`用法：\n${USAGE}`);
         }
         options[key] = value;
         index += 1;
@@ -87,7 +81,7 @@ function readJson(io, file) {
     }
 }
 
-// 逐篇 seal 优先；没有任何逐篇 seal 时才回落到顶层 stages.taxonomySeal，
+// 优先读取每篇论文的标签阶段记录；没有逐篇记录时才读取顶层 stages.taxonomySeal，
 // 避免同一次执行被重复计数。
 function collectTagStageRecords(value, fallbackPaperId) {
     const entries = [];
@@ -106,7 +100,7 @@ function collectTagStageRecords(value, fallbackPaperId) {
         const tagStageRecord = paper?.analysisManifest?.stages?.taxonomySeal;
         if (tagStageRecord) {
             found += 1;
-            // 执行/批次级 paperId 是 canonical 身份，逐篇 id 只作回落。
+            // 优先使用执行或批次记录的 paperId，缺少时才使用逐篇论文的 ID。
             push(tagStageRecord, fallbackPaperId || paper.paperId || paper.id);
         }
     }
@@ -285,45 +279,45 @@ function short(sha) {
 
 function formatHuman(inventory) {
     const lines = [];
-    lines.push(`分类法封口盘点（只读） ${inventory.contract}`);
-    lines.push(`当前 config SHA: ${inventory.currentRegistrySha256}（${inventory.currentRegistryFile}）`);
+    lines.push(`标签阶段记录检查（只读） ${inventory.contract}`);
+    lines.push(`当前词表 SHA： ${inventory.currentRegistrySha256}（${inventory.currentRegistryFile}）`);
     lines.push('来源:');
     for (const [name, info] of Object.entries(inventory.sources)) {
         const parts = [];
         if (info.directories !== null && info.directories !== undefined) parts.push(`目录 ${info.directories}`);
-        parts.push(`文件 ${info.files}`, `封口 ${info.seals}`, `不可读 ${info.unreadable}`);
-        if (info.withoutSeal !== undefined) parts.push(`无 seal ${info.withoutSeal}`);
+        parts.push(`文件 ${info.files}`, `标签阶段记录 ${info.seals}`, `不可读 ${info.unreadable}`);
+        if (info.withoutSeal !== undefined) parts.push(`无标签阶段记录 ${info.withoutSeal}`);
         if (info.missing) parts.push('路径不存在');
         lines.push(`  ${name}: ${parts.join(' / ')}`);
     }
-    lines.push(`合计封口: ${inventory.totals.seals}（缺 SHA ${inventory.totals.sealsWithoutSha}，`
+    lines.push(`标签阶段记录总数： ${inventory.totals.seals}（缺 SHA ${inventory.totals.sealsWithoutSha}，`
         + `不可读 ${inventory.totals.unreadable}）`);
-    lines.push('', '按 registrySha256 分组:');
+    lines.push('', '按词表 SHA（registrySha256）分组：');
     for (const group of inventory.groups) {
         const marker = group.registrySha256 === null ? '[缺 SHA]'
             : group.matchesCurrent ? '[当前]' : '[非当前]';
         const statuses = Object.entries(group.statuses).map(([key, value]) => `${key} ${value}`).join(' / ');
         const sources = Object.entries(group.bySource).map(([key, value]) => `${key} ${value}`).join(' / ');
-        lines.push(`  ${short(group.registrySha256)} ${marker} 封口 ${group.seals} · ${statuses}`);
+        lines.push(`  ${short(group.registrySha256)} ${marker} 标签阶段记录 ${group.seals} · ${statuses}`);
         lines.push(`      来源: ${sources}`);
         if (group.samplePaperIds.length) lines.push(`      示例 paperId: ${group.samplePaperIds.join(', ')}`);
     }
     const diff = inventory.diff;
-    lines.push('', '与当前 config SHA 的差集:');
-    lines.push(`  一致: ${diff.currentSeals} 封口（占比 ${(diff.inSyncRatio * 100).toFixed(2)}%）`);
+    lines.push('', '各组记录与当前词表 SHA 的比较：');
+    lines.push(`  一致: ${diff.currentSeals} 条记录（占比 ${(diff.inSyncRatio * 100).toFixed(2)}%）`);
     if (diff.staleRegistrySha256.length) {
-        lines.push(`  非当前: ${diff.staleSeals} 封口，共 ${diff.staleRegistrySha256.length} 个 SHA`);
+        lines.push(`  非当前: ${diff.staleSeals} 条记录，共 ${diff.staleRegistrySha256.length} 个 SHA`);
         for (const item of diff.staleRegistrySha256) {
-            lines.push(`    ${short(item.registrySha256)} ${item.seals} 封口（${Object.entries(item.bySource)
+            lines.push(`    ${short(item.registrySha256)} ${item.seals} 条记录（${Object.entries(item.bySource)
                 .map(([key, value]) => `${key} ${value}`).join(' / ')}）`);
         }
-        lines.push('  换表前须按非当前封口逐组决定 reseal / 重分析，本清单只给证据不写任何文件。');
+        lines.push('  请逐组核对使用旧词表的记录，再决定更新标签记录还是重新分析；本清单不写入任何文件。');
     } else if (diff.currentPresent) {
-        lines.push('  没有非当前封口：全部封口都指向当前 registry SHA。');
+        lines.push('  已统计且具有有效 SHA 的记录都使用当前词表；缺少 SHA 的记录仍须另行核对。');
     } else {
-        lines.push('  未发现任何可解析的封口 SHA（或扫描路径为空）。');
+        lines.push('  没有找到可识别的标签阶段词表 SHA，扫描路径也可能为空。');
     }
-    if (diff.sealsWithoutSha) lines.push(`  另有 ${diff.sealsWithoutSha} 条封口未记录 registrySha256，需人工核对。`);
+    if (diff.sealsWithoutSha) lines.push(`  另有 ${diff.sealsWithoutSha} 条记录的 registrySha256 缺失或格式无效，需人工核对。`);
     return lines.join('\n');
 }
 

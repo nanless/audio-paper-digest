@@ -58,8 +58,8 @@ class UtilsTagRulesTests(unittest.TestCase):
             'conceptIds': ['task.asr', 'method.transformer',
                            'model_family.unified-audio'],
             'specificityWarning': (
-                '主任务标签欠具体: #语音识别 存在未选择的 active 后代'
-                '（共 6 个）: #音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复'),
+                '主任务标签过于宽泛：#语音识别 的下级概念中有未被选中的已启用概念'
+                '（共 6 个）：#音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复'),
         })
         with self.assertRaisesRegex(ValueError, 'legacy_tags'):
             parse_analysis(analysis('#语音识别 #Transformer #低资源'),
@@ -73,7 +73,7 @@ class UtilsTagRulesTests(unittest.TestCase):
         self.assertEqual(rejected['taxonomyValidation']['conceptIds'], [])
         self.assertEqual(
             rejected['taxonomyValidation']['errors'],
-            ['task 分面标签必须为 1-3 个（主任务 1 个 + 次任务 ≤2 个），'
+            ['任务标签须有 1–3 个，其中主任务为 1 个，次任务不超过 2 个；'
              '当前 4 个: #语音合成 #语音克隆 #音视频生成 #音频理解'])
 
         accepted = parse_analysis(analysis(
@@ -84,22 +84,22 @@ class UtilsTagRulesTests(unittest.TestCase):
         self.assertEqual(accepted['taxonomyValidation']['conceptIds'],
                          ['task.speech-synthesis', 'task.voice-cloning',
                           'task.voice-conversion', 'method.transformer'])
-        # 3 个 task 分面合法，但主任务仍是非叶节点 → 告警照常给出。
+        # 3 个任务标签符合数量要求，但主任务仍有下级概念，照常给出告警。
         self.assertIsNotNone(
             accepted['taxonomyValidation']['specificityWarning'])
 
     def test_primary_task_specificity_is_a_warning_not_a_block(self):
-        # 非叶主任务：valid 保持 True（已封口 stage 回放不被拒），只返回
-        # 结构化 specificityWarning 供新指派/repair 路径消费。
+        # 主任务仍有下级概念时，valid 保持 True，已有阶段记录仍按原规则核验。
+        # 新的标签选择与修复流程另用 specificityWarning 判断是否需要细化。
         parsed = parse_analysis(analysis(
             '#语音识别 #Transformer #低资源', '#语音识别', '#Transformer'))
         validation = parsed['taxonomyValidation']
         self.assertTrue(validation['valid'], validation['errors'])
         self.assertEqual(validation['specificityWarning'],
-                         '主任务标签欠具体: #语音识别 存在未选择的 active 后代'
-                         '（共 6 个）: #音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复')
+                         '主任务标签过于宽泛：#语音识别 的下级概念中有未被选中的已启用概念'
+                         '（共 6 个）：#音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复')
 
-        # 叶节点主任务没有 active 后代 → 无告警。
+        # 主任务没有已启用的下级概念时，不产生宽泛告警。
         # v1.1 换表后 #音视频语音识别 有了子节点（#唇读），叶子用例改用 #标点恢复。
         leaf = parse_analysis(analysis(
             '#标点恢复 #Transformer #低资源',

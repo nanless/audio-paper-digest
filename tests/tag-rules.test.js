@@ -55,7 +55,7 @@ test('current selection accepts only preferred Chinese labels and rejects hierar
         primaryMethodTag: '#Transformer'
     });
     assert.equal(redundant.valid, false);
-    assert.match(redundant.errors.join('\n'), /最具体|祖先/);
+    assert.match(redundant.errors.join('\n'), /最具体|上级概念/);
 });
 
 test('selection contract caps the task facet at one primary plus two supplemental tasks', () => {
@@ -67,7 +67,7 @@ test('selection contract caps the task facet at one primary plus two supplementa
     });
     assert.equal(fourTasks.valid, false);
     assert.deepEqual(fourTasks.errors, [
-        'task 分面标签必须为 1-3 个（主任务 1 个 + 次任务 ≤2 个），'
+        '任务标签须有 1–3 个，其中主任务为 1 个，次任务不超过 2 个；'
         + '当前 4 个: #语音合成 #语音克隆 #音视频生成 #音频理解'
     ]);
     assert.deepEqual(fourTasks.conceptIds, []);
@@ -89,7 +89,7 @@ test('selection contract caps the task facet at one primary plus two supplementa
         primaryMethodTag: '#Transformer'
     });
     assert.equal(noTaskFacet.valid, false);
-    assert.ok(noTaskFacet.errors.some(error => /task 分面标签必须为 1-3 个.*当前 0 个$/.test(error)),
+    assert.ok(noTaskFacet.errors.some(error => /任务标签须有 1–3 个.*当前 0 个$/.test(error)),
         noTaskFacet.errors.join('; '));
 });
 
@@ -114,7 +114,7 @@ test('主任务是否过于宽泛按整个词表判断；该告警不使已有�
     assert.equal(parsed.taxonomyValidation.valid, true,
         parsed.taxonomyValidation.errors.join('; '));
     assert.equal(parsed.taxonomyValidation.specificityWarning,
-        '主任务标签欠具体: #语音识别 存在未选择的 active 后代（共 6 个）: '
+        '主任务标签过于宽泛：#语音识别 的下级概念中有未被选中的已启用概念（共 6 个）：'
         + '#音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复');
 
     // 叶节点主任务没有 active 后代 → 无告警。

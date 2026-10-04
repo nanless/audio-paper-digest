@@ -672,20 +672,20 @@ def _tag_catalog_history_dir():
     return Path(tag_paths.TAG_CATALOG_FILE).parent / 'tag-catalog-history'
 
 
-def _normalize_registry(value, label='registry'):
+def _normalize_registry(value, label='词表'):
     if isinstance(value, str):
         loaded = load_tag_catalog(value)
         return {'version': loaded['version'], 'facets': loaded['facets'],
                 'concepts': loaded['concepts'], 'registrySha256': loaded['registrySha256']}
     if type(value) is not dict:
-        raise ValueError(f'{label}: expected registry object or file path')
+        raise ValueError(f'{label} 必须是词表对象或词表文件路径。')
     registry = {'version': value.get('version'), 'facets': value.get('facets'),
             'concepts': value.get('concepts')}
     validate_tag_catalog(registry)
     registry_sha = value.get('registrySha256')
     if registry_sha is not None and (
             not isinstance(registry_sha, str) or not _SHA256_RE.fullmatch(registry_sha)):
-        raise ValueError(f'{label}: invalid registrySha256')
+        raise ValueError(f'{label} 中的 registrySha256 格式无效。')
     return {**registry, 'registrySha256': registry_sha}
 
 
@@ -705,7 +705,7 @@ def _resolve_registry_snapshot(registry_sha256):
 
 
 def _active_global_tag(registry):
-    """active 中文首选标签的全局唯一性（Node activeGlobalTags 的镜像）。"""
+    """检查已启用概念的中文首选名称在整个词表中是否重复。"""
     seen = {}
     for concept in registry['concepts']:
         if concept['status'] != 'active':
@@ -742,9 +742,9 @@ def _cross_facet_label_collisions(registry):
 
 
 def _classify_registry_change(old_registry, new_registry):
-    """Node classifyRegistryChange 的逐条镜像，返回 {changeLevel, detail}。"""
-    frm = _normalize_registry(old_registry, 'old registry')
-    to = _normalize_registry(new_registry, 'new registry')
+    """按与 Node 相同的规则逐项比较词表，返回变更等级和详细结果。"""
+    frm = _normalize_registry(old_registry, '旧词表')
+    to = _normalize_registry(new_registry, '新词表')
     reasons = []
 
     def note(level, code, message, **extra):
@@ -981,77 +981,77 @@ def _acknowledgement_eligibility(change_detail):
 
 
 def _validate_destructive_acknowledgement(annotation, expected):
-    """Node validateDestructiveAcknowledgement 的镜像；返回问题描述或 None。"""
+    """核对破坏性变更的人工确认，返回问题说明；通过时返回 None。"""
     eligibility = _acknowledgement_eligibility(expected.get('detail'))
     if not eligibility['eligible']:
-        codes = '、'.join(eligibility['ineligibleReasons']) or '复算 detail 缺失'
-        return f'destructive 不在可确认白名单: {codes}'
+        codes = '、'.join(eligibility['ineligibleReasons']) or '重新计算的变更详情缺失'
+        return f'本次破坏性变更不属于可人工确认的范围：{codes}'
     ack = annotation.get('destructiveAcknowledgement') if type(annotation) is dict else None
     if type(ack) is not dict:
-        return 'destructive 变更必须携带 destructiveAcknowledgement 显式确认'
+        return '破坏性变更必须在 destructiveAcknowledgement 中提供显式确认。'
     unknown = [key for key in ack if key not in _ACK_FIELDS]
     if unknown:
-        return 'destructiveAcknowledgement 含未知字段: ' + '、'.join(sorted(unknown))
+        return 'destructiveAcknowledgement 包含未知字段：' + '、'.join(sorted(unknown))
     if ack.get('acknowledged') is not True:
-        return 'destructiveAcknowledgement.acknowledged 必须为 true'
+        return 'destructiveAcknowledgement.acknowledged 必须为 true，以明确确认本次变更。'
     if ack.get('conceptIdImpact') != _ACK_CONCEPT_ID_IMPACT:
-        return 'destructiveAcknowledgement.conceptIdImpact 必须为 none'
+        return 'destructiveAcknowledgement.conceptIdImpact 必须为 none，表明所选概念 ID 不变。'
     reasons_hash = ack.get('reasonsHash')
     if not isinstance(reasons_hash, str) or not _SHA256_RE.fullmatch(reasons_hash):
-        return 'destructiveAcknowledgement.reasonsHash 必须是 64 位十六进制 SHA'
+        return 'destructiveAcknowledgement.reasonsHash 必须是 64 位十六进制 SHA。'
     if reasons_hash != _destructive_reasons_hash(expected.get('detail')):
-        return 'destructiveAcknowledgement.reasonsHash 与本次复算 destructive reasons 不一致'
+        return 'destructiveAcknowledgement.reasonsHash 与本次重新计算的破坏性变更原因不一致。'
     note = ack.get('note')
     if not isinstance(note, str) or not note.strip(_JS_WHITESPACE) \
             or note != note.strip(_JS_WHITESPACE) \
             or len(note) > _REGISTRY_UPGRADE_NOTE_MAX_CHARS:
-        return (f'destructiveAcknowledgement.note 必须是'
-                f' 1-{_REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的说明')
+        return (f'destructiveAcknowledgement.note 必须是长度为'
+                f' 1–{_REGISTRY_UPGRADE_NOTE_MAX_CHARS} 字符的非空说明，且首尾不能有空白。')
     return None
 
 
 def _validate_registry_upgrade_annotation(annotation, expected):
-    """Node validateRegistryUpgradeAnnotation 的镜像；返回问题描述或 None。"""
+    """核对词表升级说明与重新计算的结果；通过时返回 None，否则返回问题说明。"""
     if type(annotation) is not dict:
-        return '缺少 registryUpgradeFrom 升级说明'
+        return 'registryUpgradeFrom 升级说明缺失或不是普通对象。'
     if annotation.get('contract') != _REGISTRY_UPGRADE_CONTRACT \
             or annotation.get('version') != _REGISTRY_UPGRADE_VERSION:
-        return (f'registryUpgradeFrom 合同不是 {_REGISTRY_UPGRADE_CONTRACT}'
-                f' v{_REGISTRY_UPGRADE_VERSION}')
+        return (f'registryUpgradeFrom 的格式标识和版本必须为 {_REGISTRY_UPGRADE_CONTRACT}'
+                f' v{_REGISTRY_UPGRADE_VERSION}。')
     from_sha = annotation.get('fromRegistrySha256')
     if not isinstance(from_sha, str) or not _SHA256_RE.fullmatch(from_sha) \
             or from_sha != expected['fromRegistrySha256']:
-        return 'registryUpgradeFrom.fromRegistrySha256 与封口记录的旧 SHA 不一致'
+        return 'registryUpgradeFrom.fromRegistrySha256 格式无效，或与标签阶段记录中的旧词表 SHA 不一致。'
     to_sha = annotation.get('toRegistrySha256')
     if not isinstance(to_sha, str) or not _SHA256_RE.fullmatch(to_sha) \
             or to_sha != expected['toRegistrySha256']:
-        return 'registryUpgradeFrom.toRegistrySha256 与当前 registry SHA 不一致'
+        return 'registryUpgradeFrom.toRegistrySha256 格式无效，或与当前词表 SHA 不一致。'
     if not annotation.get('fromRegistryVersion') \
             or annotation.get('fromRegistryVersion') != expected['registryVersion'] \
             or annotation.get('toRegistryVersion') != expected['registryVersion']:
-        return 'registryUpgradeFrom registry 版本与当前版本不一致'
+        return 'registryUpgradeFrom 中的新旧词表版本缺失或与当前版本不一致。'
     change_level = annotation.get('changeLevel')
     if change_level not in _REGISTRY_CHANGE_LEVELS:
-        return 'registryUpgradeFrom.changeLevel 只允许 none/additive/destructive'
+        return 'registryUpgradeFrom.changeLevel 必须为 none、additive 或 destructive。'
     if change_level != expected['changeLevel']:
         return (f'registryUpgradeFrom.changeLevel={change_level} '
-                f'与复算结果 {expected["changeLevel"]} 不一致')
+                f'与重新计算的变更等级 {expected["changeLevel"]} 不一致。')
     if change_level == 'destructive':
         ack_issue = _validate_destructive_acknowledgement(annotation, expected)
         if ack_issue:
             return ack_issue
     elif annotation.get('destructiveAcknowledgement') is not None:
-        return '非 destructive 变更不得携带 destructiveAcknowledgement'
+        return '非破坏性变更不能包含 destructiveAcknowledgement 确认记录。'
     reasons = annotation.get('reasons')
     if not isinstance(reasons, list) or any(
             not isinstance(code, str) or not code for code in reasons):
-        return 'registryUpgradeFrom.reasons 必须是字符串数组'
+        return 'registryUpgradeFrom.reasons 必须是数组，且各项必须是非空字符串。'
     note = annotation.get('note')
     if not isinstance(note, str) or not note.strip(_JS_WHITESPACE) \
             or note != note.strip(_JS_WHITESPACE) \
             or len(note) > _REGISTRY_UPGRADE_NOTE_MAX_CHARS:
-        return (f'registryUpgradeFrom.note 必须是 1-{_REGISTRY_UPGRADE_NOTE_MAX_CHARS}'
-                ' 字符的说明')
+        return (f'registryUpgradeFrom.note 必须是长度为 1–{_REGISTRY_UPGRADE_NOTE_MAX_CHARS}'
+                ' 字符的非空说明，且首尾不能有空白。')
     return None
 
 
@@ -1064,27 +1064,27 @@ def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
     所选概念仍必须在当前词表中启用，旧快照和升级说明也必须通过检查。
     """
     def fail(error, reason_code, change_level=None, detail=None):
-        # 与 Node 一致：分类前失败 changeLevel/detail 为 None；分类后失败
-        # （destructive / 注记不自洽 / conceptIds 非 active）仍带回复算结果。
+        # 变更分类前失败时，changeLevel 和 detail 为 None。
+        # 完成分类后，即使确认、升级说明或所选概念未通过检查，仍返回分类结果。
         return {'ok': False, 'error': error, 'reasonCode': reason_code,
                 'changeLevel': change_level, 'detail': detail}
 
     try:
         current_registry = _normalize_registry(
-            _PUBLISH_TAG_CATALOG if current is None else current, 'current registry')
+            _PUBLISH_TAG_CATALOG if current is None else current, '当前词表')
         current_sha = str(current_registry_sha256
                           or current_registry.get('registrySha256') or '')
         if not _SHA256_RE.fullmatch(current_sha):
-            return fail('当前 registry 缺少字节 SHA，拒绝放行 taxonomySeal', 'current-sha-invalid')
+            return fail('当前词表的 SHA 缺失或格式无效，不能沿用标签阶段记录。', 'current-sha-invalid')
         from_sha = str(from_registry_sha256 or '')
         if not _SHA256_RE.fullmatch(from_sha):
-            return fail('taxonomySeal 记录的 registrySha256 非法，拒绝放行', 'invalid-from-sha')
+            return fail('标签阶段记录中的 registrySha256 格式无效，不能沿用该记录。', 'invalid-from-sha')
         if from_sha == current_sha:
-            return fail('taxonomySeal 的 registrySha256 已等于当前 SHA，无需升级',
+            return fail('标签阶段记录中的词表 SHA 与当前值相同，无需进行词表升级核验。',
                         'already-current')
         snapshot = _resolve_registry_snapshot(from_sha)
         if snapshot is None:
-            return fail(f'无法取得 registry 升级前快照 {from_sha}，按 fail-closed 拒绝 taxonomySeal',
+            return fail(f'无法取得更新前的词表快照 {from_sha}，不能沿用标签阶段记录。',
                         'snapshot-missing')
         classified = _classify_registry_change(snapshot, current_registry)
         change_level = classified['changeLevel']
@@ -1099,10 +1099,10 @@ def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
             ack_issue = _validate_destructive_acknowledgement(annotation, {'detail': detail})
             if ack_issue:
                 suffix = (f'；{ack_issue}'
-                          if ack_issue.startswith('destructive 不在可确认白名单')
-                          else f'；显式确认无效: {ack_issue}')
+                          if ack_issue.startswith('本次破坏性变更不属于可人工确认的范围')
+                          else f'；显式确认无效：{ack_issue}')
                 return fail(
-                    f"registry 变更判定为 destructive，taxonomySeal 不得沿用"
+                    f"词表包含破坏性变更，原标签阶段记录不能直接沿用"
                     f"（{'；'.join(first)}）{suffix}",
                     'destructive', change_level, detail)
         issue = _validate_registry_upgrade_annotation(annotation, {
@@ -1113,7 +1113,7 @@ def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
             'detail': detail,
         })
         if issue:
-            return fail(f'registryUpgradeFrom 校验失败: {issue}', 'annotation-invalid',
+            return fail(f'词表升级说明未通过核验：{issue}', 'annotation-invalid',
                         change_level, detail)
         by_id = {concept['id']: concept for concept in current_registry['concepts']}
         stale = []
@@ -1125,13 +1125,13 @@ def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
                 stale.append(f'{concept_id}({concept["status"]})')
         if stale:
             return fail(
-                'taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: '
+                '原标签阶段记录引用的以下概念在当前词表中缺失或已停用：'
                 + '、'.join(stale),
                 'concept-not-active', change_level, detail)
         return {'ok': True, 'error': None, 'reasonCode': None,
                 'changeLevel': change_level, 'detail': detail}
     except Exception as error:  # noqa: BLE001 - 与 Node 一致：异常折算 fail-closed
-        return fail(f'registry 升级判定无法完成: {error}', 'classify-failed')
+        return fail(f'无法完成词表升级核验：{error}', 'classify-failed')
 
 
 def _validate_tag_stage_catalog_upgrade(stage, paper_label):
