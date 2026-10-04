@@ -433,7 +433,7 @@ function writeTaxonomyReviewQueue(directory, queue) {
     fs.renameSync(temporary, filename);
     return filename;
 }
-function reviewQueueProjection(queue, directory) {
+function buildTagReviewQueueFields(queue, directory) {
     if (!queue.taxonomyReview) return {};
     return { taxonomyReviewQueue: queue.items,
         taxonomyReviewQueueFile: path.join(directory, TAXONOMY_REVIEW_FILE) };
@@ -793,7 +793,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
             conferenceId: context.authority.conferenceId, stopped: true, batchFailure: state.batchFailure,
             complete: Object.values(state.items).filter(item => item.status === 'complete').length,
             failed: Object.values(state.items).filter(item => item.status !== 'complete').length,
-            taxonomyReview: review.taxonomyReview, ...reviewQueueProjection(review, directory) };
+            taxonomyReview: review.taxonomyReview, ...buildTagReviewQueueFields(review, directory) };
     }
     const sourceContext = { ...context, authority: { ...context.authority,
         implementationSha256: recovery.sourceImplementation(state, directory, module.exports) } };
@@ -874,7 +874,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 complete: context.members.length - incomplete.length, failed: incomplete.length,
                 ...(state.batchFailure ? { stopped: true, batchFailure: state.batchFailure } : {}),
                 deferred: incomplete.filter(item => !recovery.eligible(item, deps.now())).length,
-                taxonomyReview: review.taxonomyReview, ...reviewQueueProjection(review, directory) };
+                taxonomyReview: review.taxonomyReview, ...buildTagReviewQueueFields(review, directory) };
         }
     }
     // Every member is complete: no taxonomy review is pending, so any stale
@@ -937,7 +937,7 @@ module.exports = { CONTRACT, COMPLETION_CONTRACT, TAXONOMY_REVIEW_CONTRACT, TAXO
     deepExecutionConfigIdentity, assertDeepExecutionConfigIdentity, currentDeepExecutionConfigIdentity,
     assertRuntimeAuthorityUnchanged,
     stateDigest, assertState, completionBodyFor, validateCompletionReceipt, taxonomyReviewQueue,
-    writeTaxonomyReviewQueue, reviewQueueProjection, defaultDependencies, loadAuthority,
+    writeTaxonomyReviewQueue, buildTagReviewQueueFields, defaultDependencies, loadAuthority,
     namesFor, sourceNames, sealOneSource, prepareShared,
     IMPLEMENTATION_FILES, implementationSha256, processOne, runWorkers, assertSourceContinuity,
     runConferenceProcessLocked, runConferenceProcess, safeProcessDirectory, exactFile };

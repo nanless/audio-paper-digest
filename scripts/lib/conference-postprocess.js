@@ -69,7 +69,7 @@ function publicHttps(value, label, { identitySafe = false, conferenceOnly = fals
     if (parsed.href !== value && !normalize) fail(`${label} must use canonical URL spelling`);
     return parsed.href;
 }
-function publicationProjection(paper) {
+function getPublicationUrls(paper) {
     const value = paper?.conferencePublication;
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== ['contract', 'pdfUrl', 'recordUrl'].sort().join('\0')
@@ -101,7 +101,7 @@ function validateReaderAndScoring(paper) {
         || !analysisEngine.scoringStabilityIsResolved(scoring)) {
         fail('api-scoring-audit-v2 proof is not replayable');
     }
-    return publicationProjection(paper);
+    return getPublicationUrls(paper);
 }
 function authority(planHandle, dependencies = {}) {
     try { return (dependencies.planHandleAuthority || planApi.planHandleAuthority)(planHandle); }
@@ -164,7 +164,7 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         const source = (dependencies.buildConferenceSourceContext || sourceContextApi.buildConferenceSourceContext)({
             planHandle, paperId: loaded.run.paperId, sourceRoot });
         if (source.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) fail('formula source snapshot drifted');
-        loaded.formulaEvidence = formulaEvidenceProjection(source);
+        loaded.formulaEvidence = buildFormulaEvidenceRecord(source);
     }
     if (stableHash(loaded.run.capabilities) === stableHash(PDF_VISUAL)
         && (artifacts.tables.length || artifacts.formulas.length
@@ -182,7 +182,7 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     loaded.identity = identity; loaded.identitySha256 = identityApi.identitySha256(identity); loaded.publication = publication;
     return loaded;
 }
-function labelProjection(paper) {
+function getConsistentPublicationFields(paper) {
     const parsed = paper.parsed; const reparsed = require('../utils.js').parseAnalysis(paper.analysis);
     const pick = value => ({ tags: (value.tags || []).map(item => String(item).trim()),
         primaryTaskTag: String(value.primaryTaskTag || '').trim(), primaryMethodTag: String(value.primaryMethodTag || '').trim(),
@@ -206,7 +206,7 @@ function resolve(taxonomy, label, facet, reasons, role) {
     return found[0];
 }
 function buildAssignment(loaded, taxonomy) {
-    const paper = loaded.analysis.papers[0], input = labelProjection(paper), reasons = [], concepts = new Map();
+    const paper = loaded.analysis.papers[0], input = getConsistentPublicationFields(paper), reasons = [], concepts = new Map();
     const tagRules = tagRulesApi.createTagRules({ taxonomy });
     const parsed = require('../utils.js').parseAnalysis(paper.analysis);
     const taxonomyIssue = analysisContract.validateTaxonomyStageBinding(paper, { parsed, taxonomyRuntime: tagRules });
@@ -320,7 +320,7 @@ function conferenceFigureAssets(loaded) {
     });
 }
 
-function formulaEvidenceProjection(source) {
+function buildFormulaEvidenceRecord(source) {
     const raw = source.structuredArtifacts;
     const { validatePdfFormulaRecord } = require('./conference-extraction-receipt.js');
     const regions = (raw.formulas || []).map((formula, index) => {
@@ -334,7 +334,7 @@ function formulaEvidenceProjection(source) {
     return { ...body, evidenceSha256: stableHash(body) };
 }
 
-function projection(loaded, taxonomy, renderFn, implementation) {
+function buildConferencePageArtifacts(loaded, taxonomy, renderFn, implementation) {
     const assignment = buildAssignment(loaded, taxonomy); if (assignment.status !== 'assigned') return { assignment };
     const stem = safeStem(loaded), conferenceId = loaded.run.conference.id;
     const date = loaded.run.completionReceipt.completedAt.slice(0, 10);
@@ -422,7 +422,7 @@ function rejectExtraStageFiles(directory, allowed) {
 function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, apply = false, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const taxonomy = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(taxonomyFile);
-    const implementation = fingerprint(dependencies); const projected = projection(loaded, taxonomy, dependencies.render || render, implementation);
+    const implementation = fingerprint(dependencies); const projected = buildConferencePageArtifacts(loaded, taxonomy, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
     if (apply) {
         const directory = stageDirectory(stagingRoot, executionId, taxonomy.registrySha256, implementation.implementationSha256, true);
@@ -446,7 +446,7 @@ function stagePaper({ analysisRoot, executionId, taxonomyFile, stagingRoot, plan
 function loadStage({ analysisRoot, executionId, taxonomyFile, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const taxonomy = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(taxonomyFile);
-    const implementation = fingerprint(dependencies); const expected = projection(loaded, taxonomy, dependencies.render || render, implementation);
+    const implementation = fingerprint(dependencies); const expected = buildConferencePageArtifacts(loaded, taxonomy, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('conference projection implementation changed while rendering');
     if (expected.assignment.status !== 'assigned') fail('current taxonomy projection is blocked');
     const directory = stageDirectory(stagingRoot, executionId, taxonomy.registrySha256, implementation.implementationSha256); rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
@@ -996,7 +996,7 @@ function aggregateConference({ analysisRoot, executionIds, taxonomyFile, staging
 
 module.exports = { CONTRACT, AGGREGATE_CONTRACT, ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, HIERARCHY_CONTRACT,
     VERSION, stableHash, planProof,
-    loadCompleted, labelProjection, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, formulaEvidenceProjection,
+    loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,
     repairStatisticalSignificanceStars, repairUnpairedMarkdownStars, repairDollarMath,
     stagePaper, loadStage, loadPreservedStage, aggregateConference, aggregateHierarchy, hierarchyLines, tagHref,

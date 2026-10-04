@@ -181,8 +181,8 @@ console.log('formula evidence gate: 8 checks passed');
                   "sourceBinding": {"pdfSha256": "a" * 64}, "sourceSnapshotSha256": "b" * 64}
         result = subprocess.run(["node", "-e", """
 const fs = require('node:fs');
-const {formulaEvidenceProjection} = require('./scripts/lib/conference-postprocess.js');
-process.stdout.write(JSON.stringify(formulaEvidenceProjection(JSON.parse(fs.readFileSync(0, 'utf8')))));
+const {buildFormulaEvidenceRecord} = require('./scripts/lib/conference-postprocess.js');
+process.stdout.write(JSON.stringify(buildFormulaEvidenceRecord(JSON.parse(fs.readFileSync(0, 'utf8')))));
 """], cwd=ROOT, input=json.dumps(source), text=True, capture_output=True, check=True)
         packet = ConferencePageRenderTest().packet()
         packet["capabilities"] = dict(MODULE.FULL)

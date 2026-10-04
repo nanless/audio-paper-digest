@@ -55,7 +55,7 @@ function runSnapshot(handle) {
     return clone(HANDLE_DATA.get(handle));
 }
 
-function labelProjection(paper) {
+function getConsistentClassificationLabels(paper) {
     const parsed = paper?.parsed;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof paper.analysis !== 'string' || !paper.analysis.trim()) {
         fail(`${paperIdOf(paper)} lacks canonical analysis/parsed labels`);
@@ -93,7 +93,7 @@ function buildAssignment({ runHandle, paper, taxonomy } = {}) {
     if (matches.length !== 1 || stableHash(matches[0]) !== stableHash(paper)) fail('paper is not the exact canonical record from this analysis run');
     if (!taxonomy || !SHA_RE.test(String(taxonomy.registrySha256 || ''))) fail('loaded taxonomy with registry SHA is required');
     tagCatalogApi.validateTagCatalog({ version: taxonomy.version, facets: taxonomy.facets, concepts: taxonomy.concepts });
-    const input = labelProjection(paper); const reasons = []; const concepts = new Map();
+    const input = getConsistentClassificationLabels(paper); const reasons = []; const concepts = new Map();
     const currentTaxonomyValidation = require('../utils.js')
         .parseAnalysis(paper.analysis)?.taxonomyValidation;
     if (currentTaxonomyValidation?.valid === false) {
@@ -180,5 +180,5 @@ function writeAssignments({ outputRoot, assignments } = {}) {
 }
 
 module.exports = { CONTRACT, VERSION, HISTORICAL_BASELINE_CONTRACT, stableHash, canonicalBytes,
-    loadCompletedHistoricalAnalysisRun, runSnapshot, labelProjection, buildAssignment, buildAssignments,
+    loadCompletedHistoricalAnalysisRun, runSnapshot, getConsistentClassificationLabels, buildAssignment, buildAssignments,
     legacyAssignmentFilename, assignmentFilename, writeAssignments };

@@ -4042,8 +4042,8 @@ def _api_reader_index_projection_issue(content, papers):
     """Replay modern per-paper decision blocks in an immutable daily index."""
     blocks = re.split(r'^### ', content.split('## 📋 论文列表', 1)[-1], flags=re.MULTILINE)[1:]
     for paper in papers:
-        projection = _build_api_reader_display_fields(paper)
-        if projection is None:
+        reader_display_fields = _build_api_reader_display_fields(paper)
+        if reader_display_fields is None:
             continue
         aid = paper.get('arxivId', '')
         source_url = _visible_arxiv_source_url(paper)
@@ -4057,16 +4057,16 @@ def _api_reader_index_projection_issue(content, papers):
                 ('summary', '📌 **核心摘要**', r'\n\n🔗 \*\*开源资源\*\*'),
                 ('opensource', '🔗 **开源资源**', r'\n\n---')):
             match = re.search(re.escape(label) + r'\n\n([\s\S]*?)' + end, block)
-            expected = sanitize_markdown_for_publish(projection[key]).strip()
+            expected = sanitize_markdown_for_publish(reader_display_fields[key]).strip()
             if not match or match.group(1).strip() != expected:
                 return f'{aid} 汇总页 {key} 与签名 Reader 决策投影不一致'
     return None
 
 
 def full_index_decision_block(pa, paper, key, *, reader_article='', api_reader_v2=False,
-                              modern_projection=None):
+                              reader_display_fields=None):
     """Replay the same summary/resource bytes shown on the single-paper page."""
-    content = modern_projection[key] if modern_projection is not None \
+    content = reader_display_fields[key] if reader_display_fields is not None \
         else pa.get(key, '') if isinstance(pa, dict) else ''
     if not isinstance(content, str) or not content.strip():
         return ''
@@ -4321,7 +4321,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         aid = p.get('arxivId', '')
         aurl = _visible_arxiv_source_url(p)
         api_reader = _api_reader_payload(p)
-        modern_projection = _build_api_reader_display_fields(p, api_reader)
+        reader_display_fields = _build_api_reader_display_fields(p, api_reader)
         if api_reader:
             reader_plan = api_reader['plan']
             reader_article = api_reader['article']
@@ -4358,13 +4358,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
         
-        if modern_projection is None and pa.get('roast'):
+        if reader_display_fields is None and pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
         summary = full_index_decision_block(
             pa, p, 'summary', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
-            modern_projection=modern_projection,
+            reader_display_fields=reader_display_fields,
         )
         if summary:
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
@@ -4372,7 +4372,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         opensource = full_index_decision_block(
             pa, p, 'opensource', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
-            modern_projection=modern_projection,
+            reader_display_fields=reader_display_fields,
         )
         if opensource:
             md += f"🔗 **开源资源**\n\n{opensource}\n\n"
@@ -4388,7 +4388,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         aid = p.get('arxivId', '')
         aurl = _visible_arxiv_source_url(p)
         api_reader = _api_reader_payload(p)
-        modern_projection = _build_api_reader_display_fields(p, api_reader)
+        reader_display_fields = _build_api_reader_display_fields(p, api_reader)
         if api_reader:
             reader_plan = api_reader['plan']
             reader_article = api_reader['article']
@@ -4419,13 +4419,13 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         author_institutions = index_author_institution_block(p, pa, api_reader)
         if author_institutions:
             md += f"👥 **作者与机构**\n\n{author_institutions}\n\n"
-        if modern_projection is None and pa.get('roast'):
+        if reader_display_fields is None and pa.get('roast'):
             md += f"💡 **毒舌点评**\n\n{pa['roast']}\n\n"
 
         summary = full_index_decision_block(
             pa, p, 'summary', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
-            modern_projection=modern_projection,
+            reader_display_fields=reader_display_fields,
         )
         if summary:
             md += f"📌 **核心摘要**\n\n{summary}\n\n"
@@ -4433,7 +4433,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         opensource = full_index_decision_block(
             pa, p, 'opensource', reader_article=reader_article,
             api_reader_v2=bool(api_reader),
-            modern_projection=modern_projection,
+            reader_display_fields=reader_display_fields,
         )
         if opensource:
             md += f"🔗 **开源资源**\n\n{opensource}\n\n"
@@ -6240,16 +6240,16 @@ def _api_reader_page_binding_issue(content, paper):
         )).strip()
         if actual_authors != expected_authors:
             raise PublishDataValidationError('页面中的作者和机构与已绑定来源的作者记录不一致。')
-        projection = _build_api_reader_display_fields(paper, payload)
+        reader_display_fields = _build_api_reader_display_fields(paper, payload)
         if frontmatter_value('paper_digest_api_reader_decision_projection', r'"([^"]+)"') \
                 != API_READER_DECISION_PROJECTION_CONTRACT:
             raise PublishDataValidationError('页面缺少有效的 Reader 展示字段标记 paper_digest_api_reader_decision_projection。')
-        if h2_section('📌 核心摘要') != sanitize_markdown_for_publish(projection['summary']).strip():
+        if h2_section('📌 核心摘要') != sanitize_markdown_for_publish(reader_display_fields['summary']).strip():
             raise PublishDataValidationError('页面核心摘要与当前 Reader 记录中应展示的摘要不一致。')
         if re.search(r'^##\s+(?:💬\s*毒舌点评|💡\s*研究者判断|📎\s*补充信息|⚖️\s*评分依据与证据)',
                      content, flags=re.MULTILINE):
             raise PublishDataValidationError('现代 Reader 页面混入未经独立事实审查的 canonical 解释')
-        expected_resources = projection['opensource']
+        expected_resources = reader_display_fields['opensource']
         expected_resources = sanitize_markdown_for_publish(
             _nest_reader_headings(expected_resources.strip(), minimum_level=3)
         ).strip()
@@ -6259,7 +6259,7 @@ def _api_reader_page_binding_issue(content, paper):
         actual_scores = h2_section('⚖️ 评分明细')
         if actual_scores is not None:
             actual_scores = re.split(r'^---\s*$', actual_scores, maxsplit=1, flags=re.MULTILINE)[0].strip()
-        if actual_scores != sanitize_markdown_for_publish(projection['scoringReason']).strip():
+        if actual_scores != sanitize_markdown_for_publish(reader_display_fields['scoringReason']).strip():
             raise PublishDataValidationError('页面评分明细与按当前评分记录生成的说明不一致。')
         positive_claims = {
             'code': r'代码[^\n]{0,18}(?:已开源|已经开源|可以访问|可直接下载|仓库可用)',
@@ -6517,7 +6517,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         api_reader_payload
         and api_reader_payload.get('contract') in LLM_API_READER_STRUCTURED_CONTRACTS
     )
-    modern_projection = _build_api_reader_display_fields(paper, api_reader_payload)
+    reader_display_fields = _build_api_reader_display_fields(paper, api_reader_payload)
     # Modern Manual pages must never be reconstructed from the legacy fixed
     # canonical sections.  A missing, partial or tampered reader payload is a
     # hard failure: silently falling back would turn an old analysis into a
@@ -6587,7 +6587,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         # original English title and canonical link explicitly.  Calling this
         # merely “论文” made the reader-first identity block ambiguous and
         # broke the same title/link contract used by the daily index.
-        md += f'> 英文题目：*{paper_link}*\n\n' if modern_projection is not None else (
+        md += f'> 英文题目：*{paper_link}*\n\n' if reader_display_fields is not None else (
             f'> 英文题目：*{paper_link}*\n>\n> 一句话：**{reader_plan["oneSentenceThesis"].strip()}**\n\n'
         )
     md += _historical_source_notice(paper)
@@ -6617,7 +6617,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         meta = build_paper_meta(pa, aurl)
         if meta:
             metadata_block += f"{meta}\n\n"
-        if modern_projection is not None:
+        if reader_display_fields is not None:
             metadata_block = (build_index_context_line(pa, aurl) or '') + '\n\n'
 
         if pa.get('authors') and not api_reader_v2:
@@ -6631,7 +6631,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
             md += f"\n## 👥 作者与机构\n\n{reader_authors_content}\n"
 
         # 分离补充信息（从 opensource 中提取）
-        opensource_content = modern_projection['opensource'] if modern_projection is not None \
+        opensource_content = reader_display_fields['opensource'] if reader_display_fields is not None \
             else pa.get('opensource', '')
         supplementary = ''
         if opensource_content:
@@ -6641,10 +6641,10 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 opensource_content = opensource_content[:supp_match.start()].strip()
 
         sections = ([
-            ('📌 核心摘要', 'summary', modern_projection['summary']),
-            ('🔗 开源与复现资源', 'opensource', modern_projection['opensource']),
+            ('📌 核心摘要', 'summary', reader_display_fields['summary']),
+            ('🔗 开源与复现资源', 'opensource', reader_display_fields['opensource']),
             ('🧭 深度解读', 'readerArticle', reader_article),
-        ] if modern_projection is not None else (
+        ] if reader_display_fields is not None else (
             [
                 ('💬 毒舌点评', 'roast'),
                 ('📌 核心摘要', 'summary'),
@@ -6719,8 +6719,8 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
             md += f'\n{"##" if api_reader_v2 else "###"} 📎 补充信息\n\n{supplementary}\n'
         if reader_first and metadata_block:
             md += f'\n<details>\n<summary>📎 论文与评分元数据</summary>\n\n{metadata_block.strip()}\n\n</details>\n'
-        if modern_projection is not None:
-            md += f'\n## ⚖️ 评分明细\n\n{modern_projection["scoringReason"]}\n'
+        if reader_display_fields is not None:
+            md += f'\n## ⚖️ 评分明细\n\n{reader_display_fields["scoringReason"]}\n'
         if reader_first and scoring_evidence:
             md += (
                 f'\n{"##" if api_reader_v2 else "###"} ⚖️ 评分依据与证据（展开查看）\n\n'

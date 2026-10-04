@@ -295,7 +295,7 @@ function updateState(state, now) {
     return { ...body, stateSha256: stableHash(body) };
 }
 
-function projectionFor(replay, snapshot) {
+function buildSourceMetadataRecord(replay, snapshot) {
     return { contract: PROJECTION_CONTRACT, version: VERSION, conference: clone(replay.conference), identity: clone(replay.identity),
         metadataRecord: clone(replay.metadataRecord), discovery: { catalogSha256: snapshot.catalogSha256,
             reportSha256: snapshot.reportSha256, metadataSnapshotSha256: replay.metadataSnapshotSha256,
@@ -468,7 +468,7 @@ function validateStagedInputs({ itemRoot, member, snapshot, replay }) {
             catalogSha256: snapshot.catalogSha256, metadataSnapshotSha256: replay.metadataSnapshotSha256,
             metadataIndex: replay.metadataIndex, metadataRecordSha256: replay.metadataRecordSha256 })
         || stableHash(request?.options) !== stableHash(extractionApi.OPTIONS)
-        || stableHash(projectionLoaded.value) !== stableHash(projectionFor(replay, snapshot))
+        || stableHash(projectionLoaded.value) !== stableHash(buildSourceMetadataRecord(replay, snapshot))
         || pdfLoaded.sha256 !== candidate.sha256) {
         fail('staged extraction request/projection does not bind the discovery member');
     }
@@ -505,7 +505,7 @@ function processMember({ runRoot, state, member, snapshot, discoveryHandle, extr
         const extraction = loadExistingExtraction(itemRoot);
         return finishMember({ itemRoot, state, member, snapshot, replay, extraction });
     }
-    const projection = projectionFor(replay, snapshot); const projectionBytes = jsonBytes(projection);
+    const projection = buildSourceMetadataRecord(replay, snapshot); const projectionBytes = jsonBytes(projection);
     writeExclusive(direct(itemRoot, 'metadata.json'), projectionBytes);
     const candidate = replay.match.candidates[0];
     const pdfRoot = path.resolve(snapshot.candidateManifest.pdfRoot);
@@ -571,7 +571,7 @@ function verifyCompletedMember({ runRoot, state, member, snapshot, discoveryHand
         || pdfLoaded.sha256 !== requestLoaded.value?.source?.pdf?.sha256
         || pdfLoaded.sha256 !== receipt.discovery.pdfSha256
         || pdfLoaded.sha256 !== replay.match.candidates[0].sha256
-        || stableHash(projectionLoaded.value) !== stableHash(projectionFor(replay, snapshot))
+        || stableHash(projectionLoaded.value) !== stableHash(buildSourceMetadataRecord(replay, snapshot))
         || replay.metadataSnapshotSha256 !== receipt.discovery.metadataSnapshotSha256
         || replay.metadataIndex !== receipt.discovery.metadataIndex
         || replay.metadataRecordSha256 !== receipt.discovery.metadataRecordSha256
@@ -773,7 +773,7 @@ function evidenceHandleMemberSnapshots(handle) {
 module.exports = { VERSION, RUN_CONTRACT, PROJECTION_CONTRACT, RECEIPT_CONTRACT, CATALOG_CONTRACT,
     REPORT_CONTRACT, LOCATOR_CONTRACT, DEFAULT_LOCATOR_PROFILE, AAAI_LOCATOR_PROFILE, LOCATOR_RULES,
     AAAI_LOCATOR_RULES, LOCATOR_PROFILES, LOCATOR_IMPLEMENTATION_SHA256, ABSTRACT_MIN_CHARS,
-    ABSTRACT_MAX_CHARS, UUID_RE, stableHash, locateAbstract, initialState, normalizeState, projectionFor,
+    ABSTRACT_MAX_CHARS, UUID_RE, stableHash, locateAbstract, initialState, normalizeState, buildSourceMetadataRecord,
     locatorProfileForConference, locatorBindingForConference,
     extractionRequestFor, prepareEvidence, inspectEvidence, loadEvidenceHandle, evidenceHandleSnapshot,
     evidenceHandleMemberSnapshots,

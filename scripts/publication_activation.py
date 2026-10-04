@@ -229,7 +229,7 @@ def prepare_intent(module, run_dir):
     baseline_raw = read(run_dir / 'baseline.json'); baseline = json.loads(baseline_raw)
     promotion_raw = read(run_dir / 'promotion.json'); promotion = json.loads(promotion_raw)
     current = Path(module.CURRENT_DIR); repo = Path(module.BLOG_REPO).resolve()
-    canonical_raw = read(current / 'deep-analysis-result.json'); canonical = json.loads(canonical_raw)
+    analysis_result_bytes = read(current / 'deep-analysis-result.json'); analysis_result = json.loads(analysis_result_bytes)
     if run.get('status') != 'promoted' or run.get('runId') != run_dir.name \
             or sha(baseline_raw) != run['baseline']['sha256'] \
             or baseline.get('contract') != 'fresh-rewrite-baseline-v1' \
@@ -237,10 +237,10 @@ def prepare_intent(module, run_dir):
             or Path(baseline['blog']['repo']).resolve() != repo \
             or promotion.get('runId') != run['runId'] \
             or promotion.get('baselineSha256') != sha(baseline_raw) \
-            or sha(canonical_raw) != promotion.get('canonicalSha256') \
-            or canonical.get('generation') != promotion.get('canonicalGeneration') \
-            or canonical.get('freshRewritePromotion', {}).get('runId') != run['runId'] \
-            or sorted(p.get('arxivId', '') for p in canonical.get('papers', [])) != sorted(run['paperIds']):
+            or sha(analysis_result_bytes) != promotion.get('canonicalSha256') \
+            or analysis_result.get('generation') != promotion.get('canonicalGeneration') \
+            or analysis_result.get('freshRewritePromotion', {}).get('runId') != run['runId'] \
+            or sorted(p.get('arxivId', '') for p in analysis_result.get('papers', [])) != sorted(run['paperIds']):
         raise ValueError('Promoted run/baseline/canonical CAS mismatch')
     git = lambda args: module._run_git(args, text=True, check=True).stdout.strip()
     head = git(['rev-parse', 'HEAD'])
@@ -307,8 +307,8 @@ def prepare_intent(module, run_dir):
         raise ValueError('No retired receipt attests the exact current baseline HEAD')
     intent = {'contract': CONTRACT, 'runId': run['runId'], 'date': date, 'files': records,
               'runSha256': sha(run_raw), 'baselineSha256': sha(baseline_raw),
-              'promotionSha256': sha(promotion_raw), 'canonicalSha256': sha(canonical_raw),
-              'canonicalGeneration': canonical['generation'], 'paperIds': run['paperIds'],
+              'promotionSha256': sha(promotion_raw), 'canonicalSha256': sha(analysis_result_bytes),
+              'canonicalGeneration': analysis_result['generation'], 'paperIds': run['paperIds'],
               'blogHead': head, 'remoteOid': remote_oid, 'remoteIdentitySha256': identity}
     if prior and prior != intent:
         raise ValueError('Activation intent CAS drifted')

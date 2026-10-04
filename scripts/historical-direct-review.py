@@ -116,16 +116,16 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
     body = {'contract': CHECKPOINT_CONTRACT, 'version': 1, 'identity': identity,
             'unit': unit, 'index': index, 'inputSha256': input_sha,
             'protocol': protocol, 'result': result}
-    sealed = {**body, 'checkpointSha256': stable(body)}
+    checkpoint_record = {**body, 'checkpointSha256': stable(body)}
     if result['passed'] is True:
-        atomic_json(target, sealed)
+        atomic_json(target, checkpoint_record)
     else:
         attempt_path = target.with_name(f'{attempt_prefix}{max(attempt_numbers, default=0) + 1:03d}.json')
         if attempt_path.exists():
-            if read_json(attempt_path) != sealed:
+            if read_json(attempt_path) != checkpoint_record:
                 raise ValueError('semantic failure attempt collision')
         else:
-            atomic_json(attempt_path, sealed)
+            atomic_json(attempt_path, checkpoint_record)
     if run_error is not None:
         raise run_error
     return result
