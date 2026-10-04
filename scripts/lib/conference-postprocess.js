@@ -283,6 +283,8 @@ function implementationFingerprint() {
         publisherSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'publish-to-blog.py'), 8 * 1024 * 1024, 'conference publisher source').fileSha256,
         publisherCommonSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'publish_common.py'), 8 * 1024 * 1024, 'conference shared publisher source').fileSha256,
         analysisSectionsSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'analysis_sections.py'), 2 * 1024 * 1024, 'conference analysis headings source').fileSha256,
+        tagStageRecordSourceSha256: pageApi.readRegular(path.join(__dirname, 'tag-stage-record.js'), 2 * 1024 * 1024, 'conference tag stage reader source').fileSha256,
+        pythonTagStageRecordSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'tag_stage_record.py'), 2 * 1024 * 1024, 'conference Python tag stage reader source').fileSha256,
         loaderSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'blog_entry_loader.py'), 2 * 1024 * 1024, 'conference renderer loader source').fileSha256,
         parserSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'utils.js'), 8 * 1024 * 1024, 'conference parser source').fileSha256,
         pythonParserSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'utils.py'), 8 * 1024 * 1024, 'conference Python parser source').fileSha256,
@@ -296,6 +298,7 @@ function fingerprint(dependencies) {
     const value = (dependencies.implementationFingerprint || implementationFingerprint)(); const body = structuredClone(value); delete body.implementationSha256;
     const expectedKeys = ['contract', 'version', 'nodeSourceSha256', 'rendererSourceSha256', 'publisherSourceSha256',
         'publisherCommonSourceSha256', 'analysisSectionsSourceSha256', 'analysisSectionTitlesSourceSha256',
+        'tagStageRecordSourceSha256', 'pythonTagStageRecordSourceSha256',
         'loaderSourceSha256', 'parserSourceSha256', 'pythonParserSourceSha256', 'taxonomySourceSha256', 'identitySourceSha256', 'implementationSha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')

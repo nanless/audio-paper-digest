@@ -514,6 +514,7 @@ test('页面生成程序升级后，使用新的暂存身份，不覆盖原文�
     const implementation = marker => { const body = { contract: api.PROJECTION_CONTRACT, version: 1,
         nodeSourceSha256: marker.repeat(64), rendererSourceSha256: 'b'.repeat(64), publisherSourceSha256: 'c'.repeat(64),
         publisherCommonSourceSha256: '2'.repeat(64),
+        tagStageRecordSourceSha256: '6'.repeat(64), pythonTagStageRecordSourceSha256: '7'.repeat(64),
         analysisSectionsSourceSha256: '3'.repeat(64), analysisSectionTitlesSourceSha256: '4'.repeat(64),
         loaderSourceSha256: 'd'.repeat(64), parserSourceSha256: 'e'.repeat(64), pythonParserSourceSha256: '5'.repeat(64), taxonomySourceSha256: 'f'.repeat(64),
         identitySourceSha256: '1'.repeat(64) };
@@ -672,4 +673,30 @@ test('会议实现身份实际包含 Python 解析器全文，单独变化使身
         const { pythonParserSourceSha256: _originalPython, implementationSha256: _originalHash, ...otherOriginal } = baseline;
         assert.deepEqual(otherChanged, otherOriginal);
     } finally { pageApi.readRegular = originalRead; }
+});
+
+test('会议页面实现身份包含两端标签格式读取器的实际全文 SHA', () => {
+    const baseline = api.implementationFingerprint();
+    for (const [relative, field] of [
+        ['scripts/lib/tag-stage-record.js', 'tagStageRecordSourceSha256'],
+        ['scripts/tag_stage_record.py', 'pythonTagStageRecordSourceSha256']
+    ]) {
+        const target = path.resolve(__dirname, '..', relative);
+        assert.equal(baseline[field], sha256(fs.readFileSync(target)));
+        const originalRead = pageApi.readRegular;
+        try {
+            pageApi.readRegular = function(file, ...args) {
+                const result = originalRead(file, ...args);
+                if (path.resolve(file) !== target) return result;
+                const bytes = Buffer.concat([result.bytes, Buffer.from('\nchanged tag record dependency')]);
+                return { ...result, bytes, fileSha256: sha256(bytes) };
+            };
+            const changed = api.implementationFingerprint();
+            assert.notEqual(changed[field], baseline[field]);
+            assert.notEqual(changed.implementationSha256, baseline.implementationSha256);
+            for (const key of Object.keys(baseline)) {
+                if (key !== field && key !== 'implementationSha256') assert.equal(changed[key], baseline[key]);
+            }
+        } finally { pageApi.readRegular = originalRead; }
+    }
 });

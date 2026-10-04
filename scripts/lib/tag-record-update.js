@@ -6,6 +6,7 @@
 // 更新后的阶段记录必须通过 analysis-contract 核验，才能返回可写入的分析记录。
 // 无法继续时返回原有 blocked 结果，并按具体原因标明是否需要人工或模型重新核对。
 
+const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./tag-stage-record.js');
 const registryChange = require('./tag-catalog-change.js');
 
 const RESEAL_MODES = Object.freeze(['reproject', 'annotate']);
@@ -90,17 +91,35 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
                 errors: ['分析记录必须恰好包含一篇论文。'] } };
     }
     const executionId = typeof record.executionId === 'string' ? record.executionId : null;
-    const stage = paper.analysisManifest?.stages?.taxonomySeal;
+    let tagRecord;
+    try { tagRecord = readTagStageRecord(paper.analysisManifest, paper.analysisStageCheckpoints); }
+    catch (error) {
+        return { ok: false, analysis: null, item: stageResult({ paper, analysisRunId: executionId,
+            fromRegistrySha256: null, toRegistrySha256: runtime.registrySha256,
+            status: 'blocked', outcome: 'binding-refused', errors: [error.message] }) };
+    }
+    const stage = tagRecord.stage;
     const base = {
         paper,
         analysisRunId: executionId,
         fromRegistrySha256: typeof stage?.registrySha256 === 'string' ? stage.registrySha256 : null,
         toRegistrySha256: runtime.registrySha256
     };
-    if (!contractApi.isRecoveryStageTerminal('taxonomySeal', stage?.status)) {
+    if (!contractApi.isRecoveryStageTerminal(tagRecord.stageKey, stage?.status)) {
         return { ok: false, analysis: null,
             item: stageResult({ ...base, status: 'skipped', outcome: 'stage-not-terminal',
                 errors: [`标签阶段的状态为 ${stage?.status ?? '缺失'}，尚未完成，不能更新记录。`] }) };
+    }
+    if (mode === 'reproject') {
+        const originalBinding = Object.fromEntries(tagRecord.bindingFields.map(field => [field, stage[field]]));
+        const expectedContract = tagRecord.format === 'current'
+            ? TAG_STAGE_RECORD_CONTRACT : runtime.selectionContract;
+        if (stage.bindingSha256 !== contractApi.manualSha256(originalBinding)
+            || paper.analysisManifest?.contracts?.[tagRecord.contractKey] !== expectedContract) {
+            return { ok: false, analysis: null, item: stageResult({ ...base,
+                status: 'blocked', outcome: 'binding-refused',
+                errors: ['原标签阶段的绑定签名或合同声明无效，不能重新生成记录。'] }) };
+        }
     }
     const oldConceptIds = Array.isArray(stage.conceptIds) ? stage.conceptIds : [];
     let cachedValidation;
@@ -197,12 +216,21 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
     }
 
     const nextStage = mode === 'reproject'
-        ? rebuildStage(stage, runtime, annotation, contractApi)
+        ? rebuildStage(stage, runtime, annotation, contractApi, tagRecord)
         : { ...stage, registryUpgradeFrom: annotation };
     const nextPaper = { ...paper, analysisManifest: {
         ...paper.analysisManifest,
-        stages: { ...paper.analysisManifest.stages, taxonomySeal: nextStage }
+        stages: Object.fromEntries(Object.entries(paper.analysisManifest.stages).map(([key, value]) =>
+            key === tagRecord.stageKey ? [mode === 'reproject' ? 'tagSelection' : key, nextStage] : [key, value]))
     } };
+    if (mode === 'reproject') {
+        nextPaper.analysisManifest.contracts = Object.fromEntries(
+            Object.entries(paper.analysisManifest.contracts).map(([key, value]) =>
+                key === tagRecord.contractKey ? ['tagSelectionRecord', TAG_STAGE_RECORD_CONTRACT] : [key, value]));
+        nextPaper.analysisStageCheckpoints = Object.fromEntries(
+            Object.entries(paper.analysisStageCheckpoints).map(([key, value]) =>
+                key === tagRecord.checkpointKey ? ['tagSelection', value] : [key, value]));
+    }
     // 注记保留缓存的原字段名；显式重新生成时只迁移标签子对象的字段名。
     // 两种模式都只更新原子对象的词表版本和 SHA，不覆盖评分或人工修改。
     if (cachedValidation) {
@@ -241,7 +269,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
 
 // 只更新阶段记录中的词表与提示文本字段、升级说明和 bindingSha256。正文及原检查点的 SHA
 // 保持不变，以便核心摘要和评分阶段继续核验它们对应的正文。
-function rebuildStage(stage, runtime, annotation, contractApi) {
+function rebuildStage(stage, runtime, annotation, contractApi, tagRecord) {
     const binding = {
         registryVersion: runtime.registryVersion,
         registrySha256: runtime.registrySha256,
@@ -252,13 +280,14 @@ function rebuildStage(stage, runtime, annotation, contractApi) {
         outputAnalysisSha256: stage.outputAnalysisSha256,
         inputProtectedProjectionSha256: stage.inputProtectedProjectionSha256,
         outputProtectedProjectionSha256: stage.outputProtectedProjectionSha256,
-        taxonomySurfaceSha256: stage.taxonomySurfaceSha256,
+        tagSectionAndPrimaryTagsSha256: stage[tagRecord.hashKey],
         primaryTaskId: stage.primaryTaskId,
         primaryMethodId: stage.primaryMethodId,
         conceptIds: stage.conceptIds
     };
     return {
-        ...stage,
+        ...Object.fromEntries(Object.entries(stage).map(([key, value]) =>
+            key === tagRecord.hashKey ? ['tagSectionAndPrimaryTagsSha256', value] : [key, value])),
         registryVersion: runtime.registryVersion,
         registrySha256: runtime.registrySha256,
         projectionContract: runtime.projectionContract,

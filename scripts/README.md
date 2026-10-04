@@ -64,6 +64,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另提供别名解析和上下级查询。Node/Python 解析器及发布检查均使用词表原始字节计算的 SHA。 |
 | `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，也可按明确旧版生成核验文本。选择规则仍按 `paper-taxonomy-selection-v1` 检查，详见本页的分类词表维护说明。 |
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
+| `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；拒绝双格式混用，不改写或补签旧记录。 |
 | `lib/tag-record-update.js` | Node 库 | 仅更新分析结果中的分类记录：新词表必须仍解析出完全相同的 conceptIds，否则拒绝并列出需人工或模型重选的论文。另只读扫描失效历史分类文件并汇总报告，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果解析标签，映射 concept ID、去除祖先标签并生成逐篇分类文件。文件名同时包含词表 SHA 与分类 SHA，分析升级不覆盖旧记录；旧版仅按词表 SHA 命名的文件，只有逐字段等于当前重建结果时才允许读取。 |
 | `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（crosswalk）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |
@@ -245,6 +246,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `llm_account_pool.py` | 按与 Node 相同的数据格式和锁协议管理 OpenCode Go 账号池。 |
 | `llm_usage.py` | 记录 Python 发布请求的用量与失败事件，沿用跨运行请求归因格式。 |
 | `utils.py` | Python 分析与评分解析、发布侧通用文本工具；`read_tag_validation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
+| `tag_stage_record.py` | 只读识别标签阶段保存格式，供发布、摘要和会议页面核验使用；与 Node 遵守相同的新旧格式规则。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
 | `log_setup.py` | Python 统一日志与脱敏。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
@@ -324,7 +326,21 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 正式发布仍重新解析原正文，旧缓存不能代替标签、阶段和来源核验，也不能绕过人工评分覆盖的检查。
 
 标签更新工具的只读检查不迁移旧缓存。注记模式沿缓存原字段更新词表版本和 SHA；显式重新生成模式才在新输出副本中迁移标签字段，
-并保留缓存中的其余内容和评分覆盖。这个接口变化没有改正式标签阶段的名称或十三字段绑定。
+并保留缓存中的其余内容和评分覆盖。解析结果的字段名与正式阶段记录的保存格式分别核验。
+
+新的 API 标签阶段与正文检查点都使用 `tagSelection`。`contracts.tagSelectionRecord` 保存独立格式版本
+`paper-tag-stage-record-v2`，阶段内的标签选择协议仍保持原版本。`tagSectionAndPrimaryTagsSha256` 记录标签章节
+与机器摘要中主任务、主方法标签文本的哈希。
+
+`lib/tag-stage-record.js` 与 `tag_stage_record.py` 按明确格式读取记录。旧记录继续使用原阶段名、检查点、合同字段
+和十三字段绑定；新绑定只替换标签内容哈希的字段名，其余十二项和顺序保持。字段名参与绑定哈希，因此两种格式
+分别按自己的原字段计算。同一记录的阶段、合同、检查点或哈希字段混用两种格式时会被拒绝，即使值相同或为空。
+读取器不改写输入，不给旧记录补新签名；完整正文、词表、前后阶段和检查点仍须通过原检查。
+
+正常新执行或真正的显式重新生成写新格式。只读检查、同词表的 `already-current` 结果和注记模式保留原格式；
+`reproject` 不会自动迁移全部同词表旧记录。新执行的标签指纹包含新保存格式及读取器源码身份，旧检查点仍按原失效规则处理。
+人工流程的十一项阶段集合、提示身份和审查凭证保持。
+显式重新生成前还须核对原格式的十三字段绑定及原阶段合同。原签名或合同不一致时返回阻断结果，不能借重新计算新签名修掉旧错误；其后的正文、检查点、概念和词表升级检查仍完整执行。
 
 ### 词表变更与确认范围
 
@@ -339,7 +355,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 `lib/tag-catalog-change.js` 将变更分为 `none`、`additive`、`destructive`，按字节 SHA 从
 `config/tag-catalog-history/` 读取升级前快照，并生成或核验 `registryUpgradeFrom`。
-程序判为 `none` 或 `additive`、且原概念对应关系仍有效的变更，可以沿用已核验的标签阶段（`taxonomySeal`）。`additive` 还包括部分定义、范围说明和状态修订，不只新增内容。读取时仍须核对旧快照、升级说明和原概念选择。破坏既有记录的变更（`destructive`）默认拒绝，并报告
+程序判为 `none` 或 `additive`、且原概念对应关系仍有效的变更，可以沿用已核验的标签阶段。`additive` 还包括部分定义、范围说明和状态修订，不只新增内容。读取时仍须核对旧快照、升级说明和原概念选择。破坏既有记录的变更（`destructive`）默认拒绝，并报告
 `blocked` 与 `needsHuman`；只有明确确认且属于允许范围的改动才能重新生成分类记录。
 
 `canAcknowledgeRegistryChange` 判断可确认范围；命令 `--classify` 输出 `acknowledgementEligible`、
@@ -376,10 +392,10 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 字节一致时可重复执行，字节不同则报错且不覆盖。未归档旧表时无法取得旧快照，已核验论文不能继续恢复。
 
 `npm run tags:check-inventory [-- --json]` 只读扫描
-`conference-analysis-executions/*/analysis.json` 中的 `stages.taxonomySeal.registrySha256` 和状态、
+`conference-analysis-executions/*/analysis.json` 中的新旧标签阶段词表 SHA 和状态、
 `data/current/deep-analysis-result.json` 的逐篇分类记录，以及 `historical-taxonomy-assignments`。
 按 registry SHA 汇总数量、示例 paperId 及与当前 `config/tag-catalog.json` SHA 的差集。
-它不删除、改写、重新验证或调用模型，无论记录新旧都返回退出码 0。
+它不删除、改写、重新验证或调用模型。格式混用须明确报告为不可读，不能取其中一套字段继续统计。
 测试样例可用 `--executions/--deep/--assignments/--registry` 显式覆盖路径。
 
 ### 历史标签预览

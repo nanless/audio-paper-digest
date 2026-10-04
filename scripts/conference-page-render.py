@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
+from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from runtime_guard import require_external_runtime
 
 
@@ -550,9 +551,13 @@ def render_packet(packet):
     for concept_id in [assignment.get('primaryTaskId'), assignment.get('primaryMethodId'), *assignment.get('conceptIds', [])]:
         if concept_id and concept_id not in ordered:
             ordered.append(concept_id)
-    tag_stage = ((manifest or {}).get('stages') or {}).get('taxonomySeal') or {}
+    tag_record = read_tag_stage_record(manifest, paper.get('analysisStageCheckpoints'))
+    tag_stage = tag_record['stage'] or {}
+    tag_contract = ((manifest or {}).get('contracts') or {}).get(tag_record['contractKey'])
+    selection_contract = tag_stage.get('selectionContract') if tag_record['format'] == 'current' else tag_contract
     if assignment.get('flatCompatContract') != FLAT_TAG_CONTRACT \
-            or assignment.get('selectionContract') != ((manifest or {}).get('contracts') or {}).get('taxonomy') \
+            or (tag_record['format'] == 'current' and tag_contract != TAG_STAGE_RECORD_CONTRACT) \
+            or assignment.get('selectionContract') != selection_contract \
             or assignment.get('registryVersion') != tag_stage.get('registryVersion') \
             or assignment.get('registrySha256') != tag_stage.get('registrySha256') \
             or assignment.get('primaryTaskId') != tag_stage.get('primaryTaskId') \

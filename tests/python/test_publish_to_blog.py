@@ -1051,6 +1051,39 @@ class PublishToBlogReviewTest(unittest.TestCase):
             self.assertFalse(any('论文评价章节重复' in issue for issue in issues))
             self.assertEqual(path.read_text(encoding='utf-8'), content)
 
+    def test_current_tag_stage_is_the_actual_core_summary_upstream(self):
+        paper = llm_api_publication_fixture()
+        manifest = paper['analysisManifest']
+        manifest['contracts'].pop('taxonomy', None)
+        manifest['contracts']['tagSelectionRecord'] = 'paper-tag-stage-record-v2'
+        manifest['stages']['tagSelection'] = {
+            'status': 'not_needed',
+            'outputAnalysisSha256': manifest['stages']['coreSummaryRepair']['inputAnalysisSha256'],
+        }
+        paper['analysisStageCheckpoints'] = {'tagSelection': paper['analysis']}
+        original = copy.deepcopy(paper)
+        self.assertIsNotNone(publish_to_blog._validated_detailed_core_summary(paper, paper['parsed']))
+        page, _ = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
+        self.assertEqual(paper, original)
+        for stage in (None, {}, {'status': 'failed'}, {'status': 'complete', 'outputAnalysisSha256': 'bad'}):
+            bad = copy.deepcopy(paper)
+            bad['analysisManifest']['stages']['tagSelection'] = stage
+            with self.assertRaisesRegex(PublishDataValidationError, '标签阶段记录缺失或无效'):
+                publish_to_blog._validated_detailed_core_summary(bad, bad['parsed'])
+        missing = copy.deepcopy(paper)
+        del missing['analysisManifest']['stages']['tagSelection']
+        with self.assertRaisesRegex(PublishDataValidationError, '标签阶段记录缺失或无效'):
+            publish_to_blog._validated_detailed_core_summary(missing, missing['parsed'])
+        bad = copy.deepcopy(paper)
+        bad['analysisStageCheckpoints']['tagSelection'] += '\n变化'
+        with self.assertRaisesRegex(PublishDataValidationError, '标签阶段正文或摘要'):
+            publish_to_blog._validated_detailed_core_summary(bad, bad['parsed'])
+        bad = copy.deepcopy(paper)
+        bad['analysisStageCheckpoints']['taxonomySeal'] = bad['analysisStageCheckpoints']['tagSelection']
+        with self.assertRaisesRegex(PublishDataValidationError, '不能混用新旧格式'):
+            publish_to_blog._validated_detailed_core_summary(bad, bad['parsed'])
+
     def test_current_v3_core_summary_is_replayed_instead_of_one_sentence_thesis(self):
         paper = llm_api_publication_fixture()
         summary = paper['parsed']['summary']
@@ -7196,6 +7229,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertIn('sealed_tutorial_preview.py', dependency_names)
         self.assertIn('tutorial_payload_verifier.py', dependency_names)
         self.assertIn('markdown_hugo_gate.py', dependency_names)
+        self.assertIn('tag_stage_record.py', dependency_names)
         self.assertNotIn('llm_account_pool.py', dependency_names)
 
     def test_review_protocol_fingerprint_binds_model_code_hugo_and_is_cached(self):
@@ -7357,6 +7391,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertIn('manual-review-blog.py', dependency_names)
         self.assertIn('llm_account_pool.py', dependency_names)
         self.assertIn('markdown_hugo_gate.py', dependency_names)
+        self.assertIn('tag_stage_record.py', dependency_names)
         self.assertIn('tutorial_payload_verifier.py', dependency_names)
 
         current = publish_to_blog.generation_template_fingerprint()

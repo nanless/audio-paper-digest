@@ -76,6 +76,7 @@ from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_require
 from runtime_guard import require_external_runtime
 from llm_usage import with_llm_usage_context
 from utils import strip_md, parse_analysis, read_tag_validation
+from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from analysis_sections import (
     evaluation_heading_issue, extract_evaluation_section, find_evaluation_headings,
 )
@@ -3922,11 +3923,16 @@ def _validated_detailed_core_summary(paper, parsed):
     if stage.get('bindingSha256') != _stable_json_sha256(binding_body):
         raise PublishDataValidationError('读者文章的详细核心摘要绑定 SHA 与按原字段重新计算的结果不一致。')
     structure = stages.get('structureRepair') if isinstance(stages, dict) else None
-    tag_stage = stages.get('taxonomySeal') if isinstance(stages, dict) else None
-    tag_contract = contracts.get('taxonomy')
-    has_tag_stage = isinstance(stages, dict) and 'taxonomySeal' in stages
-    if tag_contract is not None or has_tag_stage:
-        if tag_contract != TAG_SELECTION_CONTRACT \
+    try:
+        tag_record = read_tag_stage_record(manifest, paper.get('analysisStageCheckpoints'))
+    except ValueError as error:
+        raise PublishDataValidationError(str(error)) from error
+    tag_stage = tag_record['stage']
+    tag_contract = contracts.get(tag_record['contractKey'])
+    has_tag_stage = isinstance(stages, dict) and tag_record['stageKey'] in stages
+    if tag_record['format'] == 'current' or tag_contract is not None or has_tag_stage:
+        expected_contract = TAG_STAGE_RECORD_CONTRACT if tag_record['format'] == 'current' else TAG_SELECTION_CONTRACT
+        if tag_contract != expected_contract \
                 or not isinstance(tag_stage, dict) \
                 or tag_stage.get('status') not in {'complete', 'not_needed'} \
                 or not re.fullmatch(
@@ -3936,10 +3942,8 @@ def _validated_detailed_core_summary(paper, parsed):
                 '读者文章的详细核心摘要所依赖的标签阶段记录缺失或无效。'
             )
         upstream = tag_stage
-        upstream_label = 'taxonomySeal'
-        checkpoints = paper.get('analysisStageCheckpoints')
-        upstream_checkpoint = checkpoints.get(upstream_label) \
-            if isinstance(checkpoints, dict) else None
+        upstream_label = tag_record['stageKey']
+        upstream_checkpoint = tag_record['checkpoint']
         checkpoint_parsed = parse_analysis(upstream_checkpoint) \
             if isinstance(upstream_checkpoint, str) else None
         checkpoint_summary = checkpoint_parsed.get('summary') \
@@ -3957,9 +3961,9 @@ def _validated_detailed_core_summary(paper, parsed):
                 '读者文章的详细核心摘要所依赖的标签阶段正文或摘要缺失、格式无效，或正文、摘要或其他章节的 SHA 与阶段记录不一致。'
             )
     else:
-        # 旧记录的标签协议值为 None，且未保存 taxonomySeal 阶段键时，
+        # 旧记录的标签协议值为 None，且未保存旧标签阶段键时，
         # 摘要阶段可以直接连接 structureRepair。协议值不是 None 或阶段键已出现时，
-        # 本函数必须检查标签阶段，不能回退到结构阶段。
+        # 本函数必须检查标签阶段，不能回退到结构阶段；新格式也不使用此例外。
         upstream = structure
         upstream_label = 'structureRepair'
     if not isinstance(upstream, dict) \
@@ -9963,6 +9967,7 @@ def generation_template_fingerprint():
         'publish_common.py': script_dir / 'publish_common.py',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
+        'tag_stage_record.py': script_dir / 'tag_stage_record.py',
         'path_config.py': script_dir / 'path_config.py',
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
         'manual/sealed_tutorial_preview.py': MANUAL_SCRIPTS_DIR / 'sealed_tutorial_preview.py',
@@ -10093,6 +10098,7 @@ def review_protocol_fingerprint():
         'llm_account_pool.py': script_dir / 'llm_account_pool.py',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
+        'tag_stage_record.py': script_dir / 'tag_stage_record.py',
     }
     dependencies = {
         name: _sha256_file(path)

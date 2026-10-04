@@ -1330,6 +1330,8 @@ describe('analyzePaperWithRetry', () => {
             paper => { paper.analysisManifest.stages.coreSummaryRepair = { status: 'complete' }; },
             paper => { paper.analysisManifest.contracts.taxonomy = 'paper-taxonomy-selection-v1'; },
             paper => { paper.analysisManifest.stages.taxonomySeal = { status: 'not_needed' }; },
+            paper => { paper.analysisManifest.contracts.tagSelectionRecord = 'paper-tag-stage-record-v2'; },
+            paper => { paper.analysisManifest.stages.tagSelection = { status: 'not_needed' }; },
             paper => { paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = '0'.repeat(64); },
             paper => { paper.apiReaderPlan.sourceBindingsSha256 = '0'.repeat(64); },
             paper => { paper.analysisManifest.stages.primaryAnalysis.updatedAt = '2026-09-07T00:00:00.000+08:00'; },

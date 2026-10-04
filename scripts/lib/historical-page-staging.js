@@ -35,6 +35,7 @@ const RENDERER_IMPLEMENTATION_FILES = Object.freeze([
     'scripts/project_env.py',
     'scripts/utils.py',
     'scripts/analysis_sections.py',
+    'scripts/tag_stage_record.py',
     'manual/scripts/tutorial_payload_verifier.py',
     'scripts/markdown_hugo_gate.py',
     'manual/scripts/sealed_tutorial_preview.py',

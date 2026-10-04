@@ -312,7 +312,8 @@ function coreSnapshot(fx) {
 function currentStage(fx) {
     const analysis = JSON.parse(fs.readFileSync(fx.analysisFile, 'utf8'));
     return { analysis, paper: analysis.papers[0],
-        stage: analysis.papers[0].analysisManifest.stages.taxonomySeal };
+        stage: require('../scripts/lib/tag-stage-record.js').readTagStageRecord(
+            analysis.papers[0].analysisManifest, analysis.papers[0].analysisStageCheckpoints).stage };
 }
 
 test('实际更新会保存分析、运行和进程记录，并归档原完成凭证', async t => {
@@ -356,7 +357,7 @@ test('实际更新会保存分析、运行和进程记录，并归档原完成�
         outputAnalysisSha256: stage.outputAnalysisSha256,
         inputProtectedProjectionSha256: stage.inputProtectedProjectionSha256,
         outputProtectedProjectionSha256: stage.outputProtectedProjectionSha256,
-        taxonomySurfaceSha256: stage.taxonomySurfaceSha256,
+        tagSectionAndPrimaryTagsSha256: stage.tagSectionAndPrimaryTagsSha256,
         primaryTaskId: stage.primaryTaskId,
         primaryMethodId: stage.primaryMethodId,
         conceptIds: stage.conceptIds

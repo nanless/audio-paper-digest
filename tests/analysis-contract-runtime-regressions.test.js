@@ -603,3 +603,123 @@ describe('标签合同读取新旧解析结果', () => {
         }), /正文标签未通过校验/);
     });
 });
+
+describe('标签阶段的新旧保存格式', () => {
+    const records = require('../scripts/lib/tag-stage-record.js');
+    function currentFixture(status = 'not_needed') {
+        const fixture = sealedPaper();
+        const paper = fixture.paper;
+        const originalStage = paper.analysisManifest.stages.taxonomySeal;
+        const stage = Object.fromEntries(Object.entries(originalStage).map(([key, value]) =>
+            key === 'taxonomySurfaceSha256' ? ['tagSectionAndPrimaryTagsSha256', value] : [key, value]));
+        stage.status = status;
+        stage.bindingSha256 = contract.manualSha256(Object.fromEntries(
+            records.TAG_STAGE_BINDING_FIELDS.map(key => [key, stage[key]])));
+        delete paper.analysisManifest.stages.taxonomySeal;
+        paper.analysisManifest.stages.tagSelection = stage;
+        delete paper.analysisManifest.contracts.taxonomy;
+        paper.analysisManifest.contracts.tagSelectionRecord = records.TAG_STAGE_RECORD_CONTRACT;
+        paper.analysisStageCheckpoints = { tagSelection: paper.analysis };
+        if (status === 'complete') paper.analysisStageCheckpoints.structureRepair = paper.analysis;
+        return { ...fixture, stage, originalStage };
+    }
+    it('读取旧记录保留原对象、十三字段顺序和原签名；新记录按新字段签名', () => {
+        const old = sealedPaper();
+        const bytes = JSON.stringify(old.paper);
+        const descriptor = records.readTagStageRecord(old.paper.analysisManifest, old.paper.analysisStageCheckpoints);
+        assert.strictEqual(descriptor.stage, old.stage);
+        assert.equal(descriptor.format, 'legacy');
+        assert.equal(descriptor.bindingFields[9], 'taxonomySurfaceSha256');
+        assert.equal(contract.validateTagStageProof(old.paper, old), null);
+        assert.equal(JSON.stringify(old.paper), bytes);
+        for (const status of ['complete', 'not_needed']) {
+            const current = currentFixture(status);
+            const saved = JSON.parse(JSON.stringify(current.paper));
+            assert.equal(contract.validateTagStageProof(saved, current), null);
+            const record = records.readTagStageRecord(saved.analysisManifest, saved.analysisStageCheckpoints);
+            assert.equal(record.format, 'current');
+            assert.equal(record.bindingFields.length, 13);
+            assert.equal(record.bindingFields[9], 'tagSectionAndPrimaryTagsSha256');
+            assert.notEqual(record.stage.bindingSha256, current.originalStage.bindingSha256);
+            record.stage.bindingSha256 = current.originalStage.bindingSha256;
+            assert.match(contract.validateTagStageProof(saved, current), /bindingSha256/);
+        }
+    });
+    it('每层双键与跨层混代即使相等或为 null 也拒绝，失败记录不要求完整凭证', () => {
+        for (const value of [null, {}]) {
+            for (const add of [
+                p => { p.analysisManifest.stages.taxonomySeal = value; },
+                p => { p.analysisManifest.contracts.taxonomy = value; },
+                p => { p.analysisStageCheckpoints.taxonomySeal = value; },
+                p => { p.analysisManifest.stages.tagSelection.taxonomySurfaceSha256 = value; }
+            ]) {
+                const fixture = currentFixture();
+                add(fixture.paper);
+                assert.match(contract.validateTagStageProof(fixture.paper, fixture), /不能混用新旧格式/);
+                assert.throws(() => records.readTagStageRecord(fixture.paper.analysisManifest,
+                    fixture.paper.analysisStageCheckpoints), /不能混用新旧格式/);
+            }
+        }
+        const same = currentFixture();
+        same.paper.analysisManifest.stages.taxonomySeal = same.stage;
+        assert.throws(() => records.readTagStageRecord(same.paper.analysisManifest), /不能混用/);
+        const wrongCheckpoint = currentFixture();
+        wrongCheckpoint.paper.analysisStageCheckpoints = { taxonomySeal: wrongCheckpoint.paper.analysis };
+        assert.match(contract.validateTagStageProof(wrongCheckpoint.paper, wrongCheckpoint), /不能混用/);
+        const failedStage = { status: 'transient_failure', error: '保存原失败原因' };
+        const partial = records.readTagStageRecord({ stages: { tagSelection: failedStage } });
+        assert.strictEqual(partial.stage, failedStage);
+        assert.equal(partial.format, 'current');
+        assert.equal(partial.checkpoint, undefined);
+        assert.throws(() => records.readTagStageRecord({ contracts: { tagSelectionRecord: 'unknown' } }), /格式版本无效/);
+        assert.equal(records.readTagStageRecord(Object.create({ stages: { taxonomySeal: same.stage } })).stage, undefined);
+        const array = []; array.tagSelection = same.stage;
+        assert.equal(records.readTagStageRecord({ stages: array }).format, null);
+        const inherited = Object.create({ tagSelection: same.stage });
+        assert.equal(records.readTagStageRecord({ stages: inherited }).stage, undefined);
+    });
+    it('新记录仍拒绝正文、检查点、概念和上下游 SHA 不一致', () => {
+        for (const mutate of [
+            f => { f.paper.analysis = f.paper.analysis.replace('#Transformer', '#Conformer'); },
+            f => { f.paper.analysisStageCheckpoints.tagSelection += '\n检查点变化'; },
+            f => { f.stage.conceptIds = ['task.unknown']; },
+            f => { f.paper.analysisManifest.stages.coreSummaryRepair.inputAnalysisSha256 = '0'.repeat(64); },
+            f => { f.paper.analysisStageCheckpoints.structureRepair += '\n输入变化'; }
+        ]) {
+            const fixture = currentFixture('complete'); mutate(fixture);
+            assert.ok(contract.validateTagStageProof(fixture.paper, fixture));
+        }
+    });
+    it('摘要不把无效的新标签阶段退回结构阶段；旧的未设标签记录保持原路径', () => {
+        const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
+        const old = validAnalysisPaper('2608.12345');
+        assert.equal(contract.validateCoreSummaryStageBinding(old), null);
+        const current = structuredClone(old);
+        const tagStage = Object.fromEntries(Object.entries(current.analysisManifest.stages.taxonomySeal)
+            .map(([key, value]) => [key === 'taxonomySurfaceSha256' ? 'tagSectionAndPrimaryTagsSha256' : key, value]));
+        tagStage.bindingSha256 = contract.manualSha256(Object.fromEntries(
+            records.TAG_STAGE_BINDING_FIELDS.map(key => [key, tagStage[key]])));
+        delete current.analysisManifest.stages.taxonomySeal;
+        delete current.analysisManifest.contracts.taxonomy;
+        current.analysisManifest.stages.tagSelection = tagStage;
+        current.analysisManifest.contracts.tagSelectionRecord = records.TAG_STAGE_RECORD_CONTRACT;
+        current.analysisStageCheckpoints = { tagSelection: current.analysis };
+        assert.equal(contract.validateCoreSummaryStageBinding(current), null);
+        const untagged = structuredClone(old);
+        delete untagged.analysisManifest.stages.taxonomySeal;
+        delete untagged.analysisManifest.contracts.taxonomy;
+        untagged.analysisStageCheckpoints = { structureRepair: untagged.analysis };
+        assert.equal(contract.validateCoreSummaryStageBinding(untagged), null);
+
+        const variants = [undefined, { status: 'pending' }, { status: 'complete', outputAnalysisSha256: 'bad' }];
+        for (const stage of variants) {
+            const paper = structuredClone(old);
+            delete paper.analysisManifest.stages.taxonomySeal;
+            delete paper.analysisManifest.contracts.taxonomy;
+            delete paper.analysisStageCheckpoints.taxonomySeal;
+            paper.analysisManifest.contracts.tagSelectionRecord = records.TAG_STAGE_RECORD_CONTRACT;
+            if (stage !== undefined) paper.analysisManifest.stages.tagSelection = stage;
+            assert.match(contract.validateCoreSummaryStageBinding(paper), /上游标签阶段记录/);
+        }
+    });
+});

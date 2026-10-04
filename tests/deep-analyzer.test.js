@@ -7436,3 +7436,95 @@ describe('论文评价迁移与结构恢复', () => {
         } finally { fs.readFileSync = originalRead; }
     });
 });
+
+describe('标签保存格式的实际执行与恢复边界', () => {
+    it('新指纹带实际记录格式和读取器源码，旧阶段按原闭包失效并保存原快照', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const records = require('../scripts/lib/tag-stage-record.js');
+        const crypto = require('node:crypto');
+        const input = validAnalysisText();
+        const source = 'speech evidence';
+        const evidence = deep.buildStageEvidenceContext('tagSelection', input, source);
+        // 捕获真实指纹输入，仅去除本批两项得到原同配置指纹；其余输入来自生产函数。
+        const originalCreateHash = crypto.createHash;
+        let payload;
+        let currentFingerprint;
+        try {
+            crypto.createHash = function(...args) {
+                const hash = originalCreateHash.apply(this, args);
+                const update = hash.update;
+                hash.update = function(value, ...rest) {
+                    if (typeof value === 'string' && value.startsWith('{')) {
+                        const candidate = JSON.parse(value);
+                        if (candidate.tagSelectionRecordContract === records.TAG_STAGE_RECORD_CONTRACT) payload = candidate;
+                    }
+                    return update.call(this, value, ...rest);
+                };
+                return hash;
+            };
+            currentFingerprint = deep.buildTextStageFingerprint('tagSelection', input, evidence);
+        } finally { crypto.createHash = originalCreateHash; }
+        assert.equal(payload.tagSelectionRecordContract, records.TAG_STAGE_RECORD_CONTRACT);
+        assert.equal(payload.tagStageRecordImplementationSha256, require('node:crypto')
+            .createHash('sha256').update(fs.readFileSync(path.resolve(__dirname,
+                '../scripts/lib/tag-stage-record.js'))).digest('hex'));
+        const oldPayload = { ...payload };
+        delete oldPayload.tagSelectionRecordContract;
+        delete oldPayload.tagStageRecordImplementationSha256;
+        const oldFingerprint = deep.stableFingerprint(oldPayload);
+        assert.notEqual(currentFingerprint, oldFingerprint);
+        const paper = { analysisCheckpoint: input, analysisStageCheckpoints: {
+            structureRepair: input, taxonomySeal: input, coreSummaryRepair: input,
+            scoringAudit: input, imageSupplement: input, apiReaderArticle: 'reader bytes'
+        }, analysisManifest: { version: 1, contracts: { taxonomy: 'paper-taxonomy-selection-v1' },
+            stages: { structureRepair: { status: 'complete' },
+                taxonomySeal: { status: 'complete', fingerprint: oldFingerprint },
+                coreSummaryRepair: { status: 'complete' }, scoringAudit: { status: 'complete' },
+                imageSupplement: { status: 'complete' }, apiReaderArticle: { status: 'complete' } } } };
+        const oldStages = structuredClone(paper.analysisManifest.stages);
+        const oldContracts = structuredClone(paper.analysisManifest.contracts);
+        const prepared = deep.prepareTextRecoveryStage(paper, paper.analysisManifest,
+            'tagSelection', input, source);
+        assert.equal(prepared.fingerprint, currentFingerprint);
+        assert.equal(prepared.invalidated, true);
+        assert.equal(prepared.analysis, input);
+        const snapshot = paper.analysisStaleSnapshots.at(-1);
+        assert.equal(snapshot.invalidatedStage, 'taxonomySeal');
+        assert.deepEqual(snapshot.payload.stages, oldStages);
+        assert.deepEqual(snapshot.payload.contracts, oldContracts);
+        assert.ok(deep.validateStaleAnalysisSnapshot(snapshot));
+        for (const key of ['taxonomySeal', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement']) {
+            assert.equal(paper.analysisManifest.stages[key], undefined);
+            assert.equal(paper.analysisStageCheckpoints[key], undefined);
+        }
+        assert.equal(paper.analysisManifest.stages.apiReaderArticle.status, 'complete');
+        assert.equal(paper.analysisStageCheckpoints.apiReaderArticle, 'reader bytes');
+        assert.equal(paper.analysisStageCheckpoints.structureRepair, input);
+        assert.equal(paper.analysisManifest.contracts?.taxonomy, undefined);
+    });
+    it('新失败阶段可续跑，真实保存接口只写新检查点且不新增 Manual 阶段', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const records = require('../scripts/lib/tag-stage-record.js');
+        const input = validAnalysisText();
+        const paper = { analysisCheckpoint: input, analysisStageCheckpoints: { structureRepair: input },
+            analysisManifest: { version: 1, stages: { structureRepair: { status: 'complete' },
+                tagSelection: { status: 'transient_failure', error: '先前失败', fingerprint: 'old' },
+                coreSummaryRepair: { status: 'complete' }, scoringAudit: { status: 'complete' } } } };
+        const manifest = deep.createAnalysisRecoveryManifest(paper);
+        assert.equal(manifest.stages.tagSelection.error, '先前失败');
+        assert.equal(manifest.stages.coreSummaryRepair, undefined);
+        assert.equal(manifest.stages.scoringAudit, undefined);
+        const prepared = deep.prepareTextRecoveryStage(paper, manifest, 'tagSelection', input, 'source');
+        assert.equal(prepared.invalidated, false);
+        manifest.contracts = { tagSelectionRecord: records.TAG_STAGE_RECORD_CONTRACT };
+        deep.markRecoveryStage(manifest, 'tagSelection', 'not_needed', { fingerprint: prepared.fingerprint });
+        deep.saveAnalysisCheckpoint(paper, input, manifest);
+        assert.equal(paper.analysisStageCheckpoints.tagSelection, input);
+        assert.equal(Object.hasOwn(paper.analysisStageCheckpoints, 'taxonomySeal'), false);
+        assert.equal(deep.isRecoveryStageComplete(manifest, 'tagSelection'), true);
+        assert.deepEqual(require('../scripts/analysis-contract.js').REQUIRED_RECOVERY_STAGES, [
+            'imageDownload', 'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision',
+            'tableRepair', 'methodRepair', 'structureRepair', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
+        ]);
+    });
+});

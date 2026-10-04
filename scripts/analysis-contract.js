@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./lib/tag-stage-record.js');
 const {
     PAPER_EVALUATION_TITLE,
     normalizeAnalysisSectionTitle,
@@ -219,6 +220,7 @@ const RECOVERY_STAGE_TERMINAL_STATUSES = Object.freeze({
     tableRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     methodRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     taxonomySeal: Object.freeze(['complete', 'not_needed']),
+    tagSelection: Object.freeze(['complete', 'not_needed']),
     coreSummaryRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     structureRepair: Object.freeze(['complete', 'not_needed', MANUAL_COMPLETE_STATUS]),
     scoringAudit: Object.freeze(['complete', MANUAL_COMPLETE_STATUS]),
@@ -1356,11 +1358,15 @@ function maskClassificationFields(analysis) {
 
 function validateTagStageProof(paper, options = {}) {
     const manifest = paper?.analysisManifest;
-    const stage = manifest?.stages?.taxonomySeal;
-    if (!isRecoveryStageTerminal('taxonomySeal', stage?.status)) return '标签阶段记录缺失，或状态不是 complete 或 not_needed。';
+    let tagRecord;
+    try { tagRecord = readTagStageRecord(manifest, paper?.analysisStageCheckpoints); }
+    catch (error) { return error.message; }
+    const stage = tagRecord.stage;
+    if (!isRecoveryStageTerminal(tagRecord.stageKey, stage?.status)) return '标签阶段记录缺失，或状态不是 complete 或 not_needed。';
     const tagRulesApi = require('./lib/tag-rules.js');
     const runtime = options.tagRules || tagRulesApi.getDefaultTagRules();
-    if (manifest?.contracts?.taxonomy !== runtime.selectionContract
+    if (manifest?.contracts?.[tagRecord.contractKey] !== (tagRecord.format === 'current'
+        ? TAG_STAGE_RECORD_CONTRACT : runtime.selectionContract)
         || stage.registryVersion !== runtime.registryVersion
         || (stage.projectionContract !== tagRulesApi.TAG_PROMPT_TEXT_CONTRACT
             && stage.projectionContract !== tagRulesApi.LEGACY_TAG_PROMPT_TEXT_CONTRACT)
@@ -1430,7 +1436,7 @@ function validateTagStageProof(paper, options = {}) {
         || !/^[a-f0-9]{64}$/.test(String(stage.inputProtectedProjectionSha256 || ''))
         || structure?.outputAnalysisSha256 !== stage.inputAnalysisSha256
         || stage.inputProtectedProjectionSha256 !== stage.outputProtectedProjectionSha256
-        || stage.taxonomySurfaceSha256 !== hashTagSectionAndPrimaryTags(paper.analysis)
+        || stage[tagRecord.hashKey] !== hashTagSectionAndPrimaryTags(paper.analysis)
         || manifest.stages?.coreSummaryRepair?.inputAnalysisSha256 !== stage.outputAnalysisSha256) {
         return '标签阶段的输入、输出、标签内容或受保护正文哈希不匹配，或与前后阶段的记录不一致。';
     }
@@ -1438,14 +1444,14 @@ function validateTagStageProof(paper, options = {}) {
         return '标签阶段标为 not_needed 时，记录中的输入与输出正文哈希必须相同。';
     }
     const checkpoints = paper?.analysisStageCheckpoints;
-    const tagCheckpointText = checkpoints?.taxonomySeal;
+    const tagCheckpointText = tagRecord.checkpoint;
     const maskedAnalysisText = typeof tagCheckpointText === 'string'
         ? maskClassificationFields(tagCheckpointText) : '';
     if (typeof tagCheckpointText !== 'string' || !maskedAnalysisText
         || crypto.createHash('sha256').update(tagCheckpointText).digest('hex') !== stage.outputAnalysisSha256
         || crypto.createHash('sha256').update(maskedAnalysisText).digest('hex')
             !== stage.outputProtectedProjectionSha256
-        || hashTagSectionAndPrimaryTags(tagCheckpointText) !== stage.taxonomySurfaceSha256) {
+        || hashTagSectionAndPrimaryTags(tagCheckpointText) !== stage[tagRecord.hashKey]) {
         return '标签阶段的正文检查点缺失，或正文、受保护内容和标签的哈希与阶段记录不符。';
     }
     if (stage.status === 'complete') {
@@ -1460,21 +1466,7 @@ function validateTagStageProof(paper, options = {}) {
             return '标签阶段标为 complete 时，必须保留与其输入正文及受保护正文哈希一致的结构修复检查点。';
         }
     }
-    const binding = {
-        registryVersion: stage.registryVersion,
-        registrySha256: stage.registrySha256,
-        projectionContract: stage.projectionContract,
-        projectionSha256: stage.projectionSha256,
-        selectionContract: stage.selectionContract,
-        inputAnalysisSha256: stage.inputAnalysisSha256,
-        outputAnalysisSha256: stage.outputAnalysisSha256,
-        inputProtectedProjectionSha256: stage.inputProtectedProjectionSha256,
-        outputProtectedProjectionSha256: stage.outputProtectedProjectionSha256,
-        taxonomySurfaceSha256: stage.taxonomySurfaceSha256,
-        primaryTaskId: stage.primaryTaskId,
-        primaryMethodId: stage.primaryMethodId,
-        conceptIds: stage.conceptIds
-    };
+    const binding = Object.fromEntries(tagRecord.bindingFields.map(field => [field, stage[field]]));
     if (stage.bindingSha256 !== manualSha256(binding)) return '标签阶段的 bindingSha256 与重新计算的阶段记录哈希不一致。';
     return null;
 }
@@ -1496,7 +1488,10 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     }
     if (stage.summarySha256 !== summarySha256) return '核心摘要正文的哈希与阶段记录不一致。';
     const structure = manifest?.stages?.structureRepair;
-    const tagStage = manifest?.stages?.taxonomySeal;
+    let tagRecord;
+    try { tagRecord = readTagStageRecord(manifest, paper?.analysisStageCheckpoints); }
+    catch (error) { return error.message; }
+    const tagStage = tagRecord.stage;
     const scoring = manifest?.stages?.scoringAudit;
     const requiredShaFields = [
         'inputAnalysisSha256', 'inputSummarySha256',
@@ -1506,10 +1501,13 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         return '核心摘要阶段的输入正文、输入摘要、受保护正文或阶段记录哈希缺失，或格式无效。';
     }
     const tagOutputAnalysisSha256 = String(tagStage?.outputAnalysisSha256 || '');
-    const hasTagStageOutput = isRecoveryStageTerminal('taxonomySeal', tagStage?.status)
+    const hasTagStageOutput = isRecoveryStageTerminal(tagRecord.stageKey, tagStage?.status)
         && /^[a-f0-9]{64}$/.test(tagOutputAnalysisSha256);
+    if (tagRecord.format === 'current' && !hasTagStageOutput) {
+        return '核心摘要的上游标签阶段记录缺失、尚未完成，或输出正文哈希无效。';
+    }
     const upstreamStage = hasTagStageOutput ? tagStage : structure;
-    const upstreamLabel = hasTagStageOutput ? 'taxonomySeal' : 'structureRepair';
+    const upstreamLabel = hasTagStageOutput ? tagRecord.checkpointKey : 'structureRepair';
     if (upstreamStage?.outputAnalysisSha256 !== stage.inputAnalysisSha256) {
         return `核心摘要的输入正文哈希与上一阶段 ${upstreamLabel} 的输出记录不一致。`;
     }

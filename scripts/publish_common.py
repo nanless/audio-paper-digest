@@ -49,6 +49,7 @@ from llm_account_pool import (
     select_api_key,
 )
 from utils import parse_analysis, read_tag_validation
+from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from analysis_sections import (
     EVALUATION_TITLE, LEGACY_EVALUATION_TITLE, normalize_analysis_section_title,
     evaluation_heading_issue, extract_evaluation_section,
@@ -1195,13 +1196,18 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     heading_issue = evaluation_heading_issue(paper.get('analysis'))
     if heading_issue:
         raise PublishDataValidationError(f'{paper_label} {heading_issue}')
+    try:
+        tag_record = read_tag_stage_record(manifest, paper.get('analysisStageCheckpoints'))
+    except ValueError as error:
+        raise PublishDataValidationError(f'{paper_label} {error}') from error
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+    expected_contract = TAG_STAGE_RECORD_CONTRACT if tag_record['format'] == 'current' else TAG_SELECTION_CONTRACT
     if not isinstance(contracts, dict) \
-            or contracts.get('taxonomy') != TAG_SELECTION_CONTRACT:
+            or contracts.get(tag_record['contractKey']) != expected_contract:
         raise PublishDataValidationError(
             f'{paper_label} 标签选择协议缺失，或不是当前支持的版本。')
     stages = manifest.get('stages') if isinstance(manifest, dict) else None
-    stage = stages.get('taxonomySeal') if isinstance(stages, dict) else None
+    stage = tag_record['stage']
     if not isinstance(stage, dict) or stage.get('status') not in {'complete', 'not_needed'}:
         raise PublishDataValidationError(f'{paper_label} 标签阶段记录缺失，或尚未完成。')
 
@@ -1233,7 +1239,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     sha_fields = (
         'inputAnalysisSha256', 'outputAnalysisSha256',
         'inputProtectedProjectionSha256', 'outputProtectedProjectionSha256',
-        'taxonomySurfaceSha256', 'bindingSha256',
+        tag_record['hashKey'], 'bindingSha256',
     )
     if any(not re.fullmatch(r'[a-f0-9]{64}', str(stage.get(field) or ''))
            for field in sha_fields):
@@ -1257,7 +1263,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
             f'{paper_label} 标签阶段标记为无需修复，但记录中的输入与输出正文 SHA 不一致。')
 
     current_analysis = str(paper.get('analysis') or '')
-    if stage['taxonomySurfaceSha256'] != _hash_tag_section_and_primary_tags(current_analysis):
+    if stage[tag_record['hashKey']] != _hash_tag_section_and_primary_tags(current_analysis):
         raise PublishDataValidationError(
             f'{paper_label} 最终正文中的标签章节或主标签字段与标签阶段记录的 SHA 不一致。')
     core_summary_stage = stages.get('coreSummaryRepair')
@@ -1277,8 +1283,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     checkpoints = paper.get('analysisStageCheckpoints')
     input_analysis = checkpoints.get('structureRepair') \
         if isinstance(checkpoints, dict) else None
-    output_analysis = checkpoints.get('taxonomySeal') \
-        if isinstance(checkpoints, dict) else None
+    output_analysis = tag_record['checkpoint']
     if not isinstance(output_analysis, str):
         raise PublishDataValidationError(
             f'{paper_label} 已完成的标签阶段缺少有效的输出正文。')
@@ -1288,7 +1293,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
             or text_sha(masked_output_analysis)
             != stage['outputProtectedProjectionSha256']
             or _hash_tag_section_and_primary_tags(output_analysis)
-            != stage['taxonomySurfaceSha256']):
+            != stage[tag_record['hashKey']]):
         raise PublishDataValidationError(
             f'{paper_label} 标签阶段保存的输出正文无效，或其正文、受保护正文或标签内容的 SHA 与阶段记录不一致。')
     if stage['status'] == 'complete':
@@ -1303,13 +1308,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
             raise PublishDataValidationError(
                 f'{paper_label} 标签阶段保存的输入正文无效，或其正文或受保护正文 SHA 与阶段记录不一致。')
 
-    binding_fields = (
-        'registryVersion', 'registrySha256', 'projectionContract',
-        'projectionSha256', 'selectionContract', 'inputAnalysisSha256',
-        'outputAnalysisSha256', 'inputProtectedProjectionSha256',
-        'outputProtectedProjectionSha256', 'taxonomySurfaceSha256',
-        'primaryTaskId', 'primaryMethodId', 'conceptIds',
-    )
+    binding_fields = tag_record['bindingFields']
     binding = {field: stage.get(field) for field in binding_fields}
     if stage['bindingSha256'] != _manual_hash(binding):
         raise PublishDataValidationError(
@@ -4471,7 +4470,12 @@ def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
                     'scoringAudit', 'imageSupplement',
                 ]
                 if not uses_manual_manifest:
-                    required_stages.insert(8, 'taxonomySeal')
+                    try:
+                        tag_record = read_tag_stage_record(
+                            manifest, paper.get('analysisStageCheckpoints'))
+                    except ValueError as error:
+                        raise PublishDataValidationError(f'{paper_label} {error}') from error
+                    required_stages.insert(8, tag_record['stageKey'])
                 terminal_statuses = {
                     'imageDownload': {'complete', 'skipped', 'no_candidates', 'no_downloadable_images', MANUAL_COMPLETE_STATUS},
                     'primaryAnalysis': {'complete', MANUAL_COMPLETE_STATUS},
@@ -4482,6 +4486,7 @@ def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
                     'methodRepair': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
                     'structureRepair': {'complete', 'not_needed', MANUAL_COMPLETE_STATUS},
                     'taxonomySeal': {'complete', 'not_needed'},
+                    'tagSelection': {'complete', 'not_needed'},
                     'scoringAudit': {'complete', MANUAL_COMPLETE_STATUS},
                     'imageSupplement': {
                         'complete', 'skipped', 'no_candidates',

@@ -914,7 +914,9 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
         || Object.prototype.hasOwnProperty.call(contracts || {}, 'coreSummary')
         || Object.prototype.hasOwnProperty.call(stages, 'coreSummaryRepair')
         || Object.prototype.hasOwnProperty.call(contracts || {}, 'taxonomy')
+        || Object.prototype.hasOwnProperty.call(contracts || {}, 'tagSelectionRecord')
         || Object.prototype.hasOwnProperty.call(stages, 'taxonomySeal')
+        || Object.prototype.hasOwnProperty.call(stages, 'tagSelection')
         || LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES.some(stage => {
             const completedAt = Date.parse(stages[stage]?.updatedAt || '');
             return !isRecoveryStageTerminal(stage, stages[stage]?.status)

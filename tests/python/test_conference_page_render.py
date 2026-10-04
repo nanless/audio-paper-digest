@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import importlib.util
 import json
@@ -50,6 +51,33 @@ class ConferencePageRenderTest(unittest.TestCase):
                          tableBindingCount=len(plan['tableBindings']), formulaBindingCount=len(plan['formulaBindings']))
             with self.assertRaisesRegex(ValueError, 'structure capability'):
                 MODULE.render_packet(packet)
+
+    def test_current_tag_stage_links_to_assignment_without_rewriting_legacy_packet(self):
+        legacy = self.packet()
+        original = copy.deepcopy(legacy)
+        old_result = MODULE.render_packet(legacy)
+        current = copy.deepcopy(legacy)
+        manifest = current['paper']['analysisManifest']
+        manifest['contracts'].pop('taxonomy')
+        manifest['contracts']['tagSelectionRecord'] = 'paper-tag-stage-record-v2'
+        stage = manifest['stages'].pop('taxonomySeal')
+        stage['selectionContract'] = current['taxonomy']['selectionContract']
+        manifest['stages']['tagSelection'] = stage
+        self.assertEqual(MODULE.render_packet(current), old_result)
+        self.assertEqual(legacy, original)
+        for contract in (None, 'unknown'):
+            bad = copy.deepcopy(current)
+            bad['paper']['analysisManifest']['contracts']['tagSelectionRecord'] = contract
+            with self.assertRaisesRegex(ValueError, '格式版本无效'):
+                MODULE.render_packet(bad)
+        bad = copy.deepcopy(current)
+        bad['paper']['analysisManifest']['stages']['taxonomySeal'] = stage
+        with self.assertRaisesRegex(ValueError, '不能混用新旧格式'):
+            MODULE.render_packet(bad)
+        bad = copy.deepcopy(current)
+        bad['paper']['analysisManifest']['stages']['tagSelection']['primaryTaskId'] = 'task.tts'
+        with self.assertRaisesRegex(ValueError, '标签选择记录与分析阶段记录'):
+            MODULE.render_packet(bad)
 
     def packet(self):
         paper_id = 'conference:icassp:2026:icassp-arnumber:100'

@@ -13,6 +13,7 @@ const crypto = require('node:crypto');
 const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const registryChange = require('./lib/tag-catalog-change.js');
+const { readTagStageRecord } = require('./lib/tag-stage-record.js');
 const resealApi = require('./lib/tag-record-update.js');
 
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -34,7 +35,7 @@ const USAGE = [
     "更新标签阶段记录：",
     "  默认只计算并输出报告，不更新分析或进程文件；--apply 才执行这些更新。",
     "  --from UUID        指定会议处理进程，目录为 data/runtime/conference-processes/<uuid>。",
-    "  --mode reproject   默认模式。按当前词表更新 taxonomySeal 中的词表、提示文本和",
+    "  --mode reproject   默认模式。按当前词表生成 tagSelection 标签阶段的词表、提示文本和",
     "                     bindingSha256 字段，并记录 registryUpgradeFrom。更新后须通过标签阶段检查。",
     "  --mode annotate    保留原阶段记录的已有字段，只添加 registryUpgradeFrom 升级说明。",
     "                     后续校验仍须核验旧快照、升级说明和当前词表，不能仅凭说明跳过检查。",
@@ -253,7 +254,10 @@ function resumeCandidate({ adapter, directory, runtime }) {
         || receipt.receiptSha256 !== adapter.stableHash(receiptBody)) {
         return null;
     }
-    const stage = analysis.papers?.[0]?.analysisManifest?.stages?.taxonomySeal;
+    const paper = analysis.papers?.[0];
+    let stage;
+    try { stage = readTagStageRecord(paper?.analysisManifest, paper?.analysisStageCheckpoints).stage; }
+    catch { return null; }
     if (!stage || stage.registrySha256 !== runtime.registrySha256 || !stage.registryUpgradeFrom) return null;
     return { directory, analysis, analysisSha256: analysisRecord.sha256,
         run, runSha256: runRecord.sha256, resumed: true };

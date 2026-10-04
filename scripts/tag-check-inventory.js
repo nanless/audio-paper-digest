@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { requireExternalRuntime } = require('./env-loader.js');
+const { readTagStageRecord } = require('./lib/tag-stage-record.js');
 const Config = require('./config.js');
 
 const INVENTORY_CONTRACT = 'paper-taxonomy-seal-inventory-v1';
@@ -28,8 +29,8 @@ const USAGE = [
     "  npm run tags:check-inventory -- --executions DIR --deep FILE --assignments DIR --registry FILE [--json]",
     "",
     "程序读取以下三处记录，按 registrySha256 分组：",
-    "  conference-analysis-executions/*/analysis.json 中的 stages.taxonomySeal.registrySha256 和 status；",
-    "  data/current/deep-analysis-result.json 中每篇论文的 analysisManifest.stages.taxonomySeal；",
+    "  conference-analysis-executions/*/analysis.json 中的新旧标签阶段 registrySha256 和 status；",
+    "  data/current/deep-analysis-result.json 中每篇论文的新旧标签阶段记录；",
     "  historical-taxonomy-assignments/*/*.json 中的 registrySha256。",
     "",
     "输出包括每组记录数量、与当前 config/tag-catalog.json 的 SHA 不同的组，以及各组示例 paperId。",
@@ -81,8 +82,8 @@ function readJson(io, file) {
     }
 }
 
-// 优先读取每篇论文的标签阶段记录；没有逐篇记录时才读取顶层 stages.taxonomySeal，
-// 避免同一次执行被重复计数。
+// 优先读取每篇论文的标签阶段记录；没有逐篇记录时，才读取顶层的新旧标签阶段。
+// 这样可以避免同一次执行被重复计数。
 function collectTagStageRecords(value, fallbackPaperId) {
     const entries = [];
     const push = (tagStageRecord, paperId) => {
@@ -97,14 +98,14 @@ function collectTagStageRecords(value, fallbackPaperId) {
     const papers = Array.isArray(value?.papers) ? value.papers : [];
     let found = 0;
     for (const paper of papers) {
-        const tagStageRecord = paper?.analysisManifest?.stages?.taxonomySeal;
+        const tagStageRecord = readTagStageRecord(paper?.analysisManifest, paper?.analysisStageCheckpoints).stage;
         if (tagStageRecord) {
             found += 1;
             // 优先使用执行或批次记录的 paperId，缺少时才使用逐篇论文的 ID。
             push(tagStageRecord, fallbackPaperId || paper.paperId || paper.id);
         }
     }
-    if (!found) push(value?.stages?.taxonomySeal, fallbackPaperId);
+    if (!found) push(readTagStageRecord(value, value?.analysisStageCheckpoints).stage, fallbackPaperId);
     return entries;
 }
 
@@ -129,7 +130,9 @@ function scanExecutions(dir, io) {
             continue;
         }
         state.files += 1;
-        const entries = collectTagStageRecords(loaded.value, loaded.value.paperId || name);
+        let entries;
+        try { entries = collectTagStageRecords(loaded.value, loaded.value.paperId || name); }
+        catch { state.unreadable += 1; state.withoutSeal += 1; continue; }
         if (!entries.length) state.withoutSeal += 1;
         for (const entry of entries) state.entries.push({ ...entry, source });
         state.seals += entries.length;
@@ -147,7 +150,9 @@ function scanDeep(file, io) {
         return state;
     }
     state.files = 1;
-    const entries = collectTagStageRecords(loaded.value, null);
+    let entries;
+    try { entries = collectTagStageRecords(loaded.value, null); }
+    catch { state.unreadable += 1; return state; }
     for (const entry of entries) state.entries.push({ ...entry, source });
     state.seals = entries.length;
     return state;

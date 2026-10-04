@@ -20,6 +20,9 @@ from tag_catalog import (
     load_tag_catalog, tag_prompt_text_sha256,
 )
 
+from tag_stage_record import (TAG_STAGE_RECORD_CONTRACT,
+                              TAG_STAGE_BINDING_FIELDS as CURRENT_TAG_STAGE_BINDING_FIELDS,
+                              LEGACY_TAG_STAGE_BINDING_FIELDS, read_tag_stage_record)
 from publish_common import (  # noqa: E402
     LlmAccountPoolConfigError,
     PublishLLMUnavailable,
@@ -131,7 +134,9 @@ def complete_paper():
 
 def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not_needed',
                          with_checkpoints=False,
-                         projection_contract=TAG_PROMPT_TEXT_CONTRACT):
+                         projection_contract=TAG_PROMPT_TEXT_CONTRACT, record_format='legacy'):
+    stage_key = 'tagSelection' if record_format == 'current' else 'taxonomySeal'
+    hash_key = 'tagSectionAndPrimaryTagsSha256' if record_format == 'current' else 'taxonomySurfaceSha256'
     output_analysis = paper['analysis']
     input_analysis = output_analysis if input_analysis is None else input_analysis
     parsed = parse_analysis(output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
@@ -153,15 +158,18 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
         'outputAnalysisSha256': output_sha,
         'inputProtectedProjectionSha256': masked_input_analysis_sha256,
         'outputProtectedProjectionSha256': masked_output_analysis_sha256,
-        'taxonomySurfaceSha256': _hash_tag_section_and_primary_tags(output_analysis),
+        hash_key: _hash_tag_section_and_primary_tags(output_analysis),
         'primaryTaskId': selection['primaryTaskId'],
         'primaryMethodId': selection['primaryMethodId'],
         'conceptIds': selection['conceptIds'],
     }
-    manifest.setdefault('contracts', {})['taxonomy'] = 'paper-taxonomy-selection-v1'
+    if record_format == 'current':
+        manifest.setdefault('contracts', {})['tagSelectionRecord'] = TAG_STAGE_RECORD_CONTRACT
+    else:
+        manifest.setdefault('contracts', {})['taxonomy'] = 'paper-taxonomy-selection-v1'
     manifest.setdefault('stages', {}).setdefault('structureRepair', {})[
         'outputAnalysisSha256'] = input_sha
-    manifest.setdefault('stages', {})['taxonomySeal'] = {
+    manifest.setdefault('stages', {})[stage_key] = {
         'status': status,
         'fingerprint': '1' * 64,
         **binding,
@@ -175,10 +183,10 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
     manifest['stages'].setdefault('scoringAudit', {'status': 'complete'})[
         'coreSummaryInputAnalysisSha256'] = output_sha
     paper['analysisStageCheckpoints'] = {
-        'taxonomySeal': output_analysis,
+        stage_key: output_analysis,
         **({'structureRepair': input_analysis} if with_checkpoints else {}),
     }
-    return manifest['stages']['taxonomySeal']
+    return manifest['stages'][stage_key]
 
 
 # taxonomySeal.bindingSha256 覆盖的 13 个字段（与 publish_common / Node 一致）。
@@ -2948,6 +2956,98 @@ primary_method_tag: #基准测试
         paper['analysisManifest']['stages']['scoringAudit']['status'] = 'transient_failure'
         with self.assertRaisesRegex(PublishDataValidationError, 'scoringAudit'):
             validate_papers_for_publish([paper])
+
+    def test_tag_stage_reader_preserves_partial_records_and_rejects_mixed_formats(self):
+        self.assertIsNone(read_tag_stage_record({})['format'])
+        for current in (False, True):
+            stage_key = 'tagSelection' if current else 'taxonomySeal'
+            contract_key = 'tagSelectionRecord' if current else 'taxonomy'
+            hash_key = 'tagSectionAndPrimaryTagsSha256' if current else 'taxonomySurfaceSha256'
+            other_stage_key = 'taxonomySeal' if current else 'tagSelection'
+            other_contract_key = 'taxonomy' if current else 'tagSelectionRecord'
+            other_hash_key = 'taxonomySurfaceSha256' if current else 'tagSectionAndPrimaryTagsSha256'
+            stage = {'status': 'failed'}
+            manifest = {'stages': {stage_key: stage}}
+            checkpoints = {stage_key: '原始正文'}
+            original = copy.deepcopy((manifest, checkpoints))
+            record = read_tag_stage_record(manifest, checkpoints)
+            self.assertIs(record['stage'], stage)
+            self.assertIs(record['checkpoint'], checkpoints[stage_key])
+            self.assertEqual(record['format'], 'current' if current else 'legacy')
+            self.assertEqual(record['hashKey'], hash_key)
+            self.assertEqual((manifest, checkpoints), original)
+            for value in (None, stage):
+                bad = copy.deepcopy(manifest)
+                bad['stages'][other_stage_key] = value
+                with self.assertRaisesRegex(ValueError, '不能混用新旧格式'):
+                    read_tag_stage_record(bad, checkpoints)
+                with self.assertRaisesRegex(ValueError, '不能混用新旧格式'):
+                    read_tag_stage_record(manifest, {**checkpoints, other_stage_key: value})
+            bad = copy.deepcopy(manifest)
+            bad['contracts'] = {other_contract_key: None}
+            with self.assertRaisesRegex(ValueError, '不能混用新旧格式'):
+                read_tag_stage_record(bad)
+            bad = copy.deepcopy(manifest)
+            bad['stages'][stage_key][other_hash_key] = None
+            with self.assertRaisesRegex(ValueError, '不能混用新旧格式'):
+                read_tag_stage_record(bad)
+            contract = TAG_STAGE_RECORD_CONTRACT if current else 'paper-taxonomy-selection-v1'
+            for value in (None, contract):
+                with self.assertRaisesRegex(ValueError, '不能混用新旧格式'):
+                    read_tag_stage_record({'contracts': {contract_key: contract, other_contract_key: value}})
+        for value in (None, '', 'paper-tag-stage-record-v3', 2):
+            with self.assertRaisesRegex(ValueError, '格式版本无效'):
+                read_tag_stage_record({'contracts': {'tagSelectionRecord': value}})
+
+    def test_current_tag_stage_roundtrip_checks_new_binding_and_original_checkpoints(self):
+        statuses = {
+            'imageDownload': 'complete', 'primaryAnalysis': 'complete',
+            'openSourceScan': 'complete', 'demoLinkScan': 'not_needed',
+            'revision': 'complete', 'tableRepair': 'not_needed',
+            'methodRepair': 'not_needed', 'structureRepair': 'not_needed',
+            'scoringAudit': 'complete', 'imageSupplement': 'no_candidates',
+        }
+        for status in ('complete', 'not_needed'):
+            for prompt_contract in (TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_PROMPT_TEXT_CONTRACT):
+                with self.subTest(status=status, prompt_contract=prompt_contract):
+                    paper = complete_paper()
+                    manifest = {'version': 1, 'stages': {
+                        name: {'status': terminal} for name, terminal in statuses.items()}}
+                    paper['analysisManifest'] = manifest
+                    stage = attach_tag_stage_record(
+                        paper, manifest, status=status, with_checkpoints=True,
+                        projection_contract=prompt_contract, record_format='current')
+                    original = copy.deepcopy(paper)
+                    with tempfile.TemporaryDirectory() as directory:
+                        path = Path(directory) / 'record.json'
+                        path.write_text(json.dumps(paper, ensure_ascii=False), encoding='utf-8')
+                        restored = json.loads(path.read_text(encoding='utf-8'))
+                    self.assertIsNone(_validate_tag_stage_record(restored, restored['analysisManifest'], '论文'))
+                    self.assertEqual(len(validate_papers_for_publish([restored])), 1)
+                    self.assertEqual(paper, original)
+                    self.assertEqual(tuple(field for field in CURRENT_TAG_STAGE_BINDING_FIELDS),
+                                     (*LEGACY_TAG_STAGE_BINDING_FIELDS[:9], 'tagSectionAndPrimaryTagsSha256',
+                                      *LEGACY_TAG_STAGE_BINDING_FIELDS[10:]))
+                    for field in ('tagSectionAndPrimaryTagsSha256', 'bindingSha256', 'primaryTaskId'):
+                        bad = copy.deepcopy(restored)
+                        bad['analysisManifest']['stages']['tagSelection'][field] = '0' * 64
+                        with self.assertRaises(PublishDataValidationError):
+                            _validate_tag_stage_record(bad, bad['analysisManifest'], '论文')
+                    bad = copy.deepcopy(restored)
+                    bad['analysisStageCheckpoints']['tagSelection'] += '\n正文变化'
+                    with self.assertRaises(PublishDataValidationError):
+                        _validate_tag_stage_record(bad, bad['analysisManifest'], '论文')
+                    bad = copy.deepcopy(restored)
+                    bad['analysisManifest']['stages']['coreSummaryRepair']['inputAnalysisSha256'] = '0' * 64
+                    with self.assertRaises(PublishDataValidationError):
+                        _validate_tag_stage_record(bad, bad['analysisManifest'], '论文')
+                    bad = copy.deepcopy(restored)
+                    new_stage = bad['analysisManifest']['stages']['tagSelection']
+                    old_binding = {field: new_stage.get(field) for field in LEGACY_TAG_STAGE_BINDING_FIELDS}
+                    old_binding['taxonomySurfaceSha256'] = stage['tagSectionAndPrimaryTagsSha256']
+                    new_stage['bindingSha256'] = _manual_hash(old_binding)
+                    with self.assertRaisesRegex(PublishDataValidationError, '绑定 SHA'):
+                        _validate_tag_stage_record(bad, bad['analysisManifest'], '论文')
 
     def test_python_replays_tag_stage_production_proof_and_rejects_drift(self):
         paper = complete_paper()

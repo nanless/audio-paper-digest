@@ -44,7 +44,7 @@ test('明确确认允许的破坏性变更后，工具按当前词表更新标�
     assert.equal(plan.item.registry.from, ADDITIVE_OLD_SHA);
     assert.equal(plan.item.registry.to, runtime().registrySha256);
 
-    const nextStage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
+    const nextStage = plan.analysis.papers[0].analysisManifest.stages.tagSelection;
     assert.equal(nextStage.registrySha256, runtime().registrySha256);
     assert.equal(nextStage.projectionSha256, runtime().projectionSha256);
     assert.equal(nextStage.projectionContract, TAG_PROMPT_TEXT_CONTRACT);
@@ -281,7 +281,7 @@ test('明确确认允许的破坏性变更后，可以更新标签阶段记录',
     assert.equal(plan.item.destructiveAcknowledgement.note,
         '人工确认：仅别名语义，conceptId 影响 none');
 
-    const stage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
+    const stage = plan.analysis.papers[0].analysisManifest.stages.tagSelection;
     assert.equal(stage.registrySha256, runtime().registrySha256);
     assert.equal(stage.registryUpgradeFrom.changeLevel, 'destructive');
     assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.reasonsHash,
@@ -296,7 +296,7 @@ test('明确确认允许的破坏性变更后，可以更新标签阶段记录',
     // 不给 note → 默认模板必须自带 from/to 字节 SHA。
     const defaulted = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA,
         projectionSha256: 'e'.repeat(64), acknowledgeDestructive: true });
-    const ack = defaulted.analysis.papers[0].analysisManifest.stages.taxonomySeal
+    const ack = defaulted.analysis.papers[0].analysisManifest.stages.tagSelection
         .registryUpgradeFrom.destructiveAcknowledgement;
     assert.ok(ack.note.includes(DESTRUCTIVE_OLD_SHA));
     assert.ok(ack.note.includes(runtime().registrySha256));
@@ -348,7 +348,7 @@ test('确认参数只记录用户确认，不改变词表变更的分类', () =>
     assert.equal(plan.ok, true, plan.item.errors.join('; '));
     assert.equal(plan.item.outcome, 'resealed');
     assert.equal(plan.item.changeLevel, 'destructive');
-    const stage = plan.analysis.papers[0].analysisManifest.stages.taxonomySeal;
+    const stage = plan.analysis.papers[0].analysisManifest.stages.tagSelection;
     assert.equal(stage.registryUpgradeFrom.changeLevel, 'destructive');
     assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
 });
@@ -431,7 +431,10 @@ test('旧、新标签缓存的注记与重新生成保留各自写入范围', ()
             assert.equal(Object.hasOwn(output.parsed, outputKey === 'tagValidation'
                 ? 'taxonomyValidation' : 'tagValidation'), false);
             assert.equal(output.analysis, paper.analysis);
-            assert.deepEqual(output.analysisStageCheckpoints, paper.analysisStageCheckpoints);
+            assert.deepEqual(output.analysisStageCheckpoints, mode === 'reproject'
+                ? Object.fromEntries(Object.entries(paper.analysisStageCheckpoints).map(([key, value]) =>
+                    [key === 'taxonomySeal' ? 'tagSelection' : key, value]))
+                : paper.analysisStageCheckpoints);
             assert.equal(JSON.stringify(original), before);
         }
     }
@@ -459,5 +462,59 @@ test('标签更新只读旧缓存且拒绝混用，不补造缺少的校验结�
             acknowledgeDestructive: true });
         assert.equal(plan.ok, true, plan.item.errors.join(';'));
         assert.deepEqual(plan.analysis.papers[0].parsed, cache);
+    }
+});
+
+test('显式重新生成迁移单个标签阶段格式；只读和注记保留旧键及签名', () => {
+    const records = require('../scripts/lib/tag-stage-record.js');
+    const old = analysisRecord();
+    const bytes = JSON.stringify(old);
+    const readOnly = reproject({ analysis: old });
+    assert.equal(readOnly.item.outcome, 'already-current');
+    assert.equal(JSON.stringify(old), bytes);
+    const from = analysisRecord({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+    from.papers[0].parsed.manualScoreOverride = { score: 9.1 };
+    const original = JSON.stringify(from);
+    const annotated = reproject({ analysis: from, mode: 'annotate', acknowledgeDestructive: true });
+    assert.equal(annotated.ok, true, annotated.item.errors.join('; '));
+    assert.equal(annotated.stage.bindingSha256, from.papers[0].analysisManifest.stages.taxonomySeal.bindingSha256);
+    assert.equal(records.readTagStageRecord(annotated.analysis.papers[0].analysisManifest,
+        annotated.analysis.papers[0].analysisStageCheckpoints).format, 'legacy');
+    const rebuilt = reproject({ analysis: from, acknowledgeDestructive: true });
+    assert.equal(rebuilt.ok, true, rebuilt.item.errors.join('; '));
+    const paper = rebuilt.analysis.papers[0];
+    const record = records.readTagStageRecord(paper.analysisManifest, paper.analysisStageCheckpoints);
+    assert.equal(record.format, 'current');
+    assert.equal(paper.analysisManifest.contracts.tagSelectionRecord, records.TAG_STAGE_RECORD_CONTRACT);
+    assert.equal(Object.hasOwn(paper.analysisManifest.stages, 'taxonomySeal'), false);
+    assert.equal(Object.hasOwn(paper.analysisManifest.contracts, 'taxonomy'), false);
+    assert.equal(Object.hasOwn(paper.analysisStageCheckpoints, 'taxonomySeal'), false);
+    assert.equal(Object.hasOwn(record.stage, 'taxonomySurfaceSha256'), false);
+    assert.equal(record.checkpoint, from.papers[0].analysisStageCheckpoints.taxonomySeal);
+    assert.equal(paper.analysis, from.papers[0].analysis);
+    assert.deepEqual(paper.parsed.manualScoreOverride, { score: 9.1 });
+    assert.equal(JSON.stringify(from), original);
+    const mixed = structuredClone(from);
+    mixed.papers[0].analysisManifest.stages.tagSelection = null;
+    const blocked = reproject({ analysis: mixed, acknowledgeDestructive: true });
+    assert.equal(blocked.item.status, 'blocked');
+    assert.match(blocked.item.errors.join(''), /不能混用新旧格式/);
+});
+
+test('重新生成新格式不能清洗旧记录的坏签名或父合同', () => {
+    for (const mutate of [
+        paper => { paper.analysisManifest.stages.taxonomySeal.bindingSha256 = '0'.repeat(64); },
+        paper => { paper.analysisManifest.contracts.taxonomy = 'wrong-selection-contract'; }
+    ]) {
+        const analysis = analysisRecord({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+        mutate(analysis.papers[0]);
+        const before = JSON.stringify(analysis);
+        const result = reproject({ analysis, acknowledgeDestructive: true });
+        assert.equal(result.ok, false);
+        assert.equal(result.analysis, null);
+        assert.equal(result.item.status, 'blocked');
+        assert.equal(result.item.outcome, 'binding-refused');
+        assert.match(result.item.errors.join(''), /原标签阶段的绑定签名或合同声明无效/);
+        assert.equal(JSON.stringify(analysis), before);
     }
 });

@@ -201,3 +201,24 @@ test('缺失扫描路径按空集合处理而不是崩溃', t => {
     assert.equal(inventory.sources['conference-analysis-executions'].missing, true);
     assert.equal(inventory.sources['deep-analysis-result'].missing, true);
 });
+
+test('盘点读取新旧阶段但不把冲突容器回退成合法旧记录', () => {
+    const api = require('../scripts/tag-check-inventory.js');
+    const contract = require('../scripts/lib/tag-stage-record.js').TAG_STAGE_RECORD_CONTRACT;
+    const current = { papers: [{ id: 'new', analysisManifest: {
+        contracts: { tagSelectionRecord: contract }, stages: { tagSelection: seal('not_needed', CURRENT) }
+    } }] };
+    const before = JSON.stringify(current);
+    const entries = api.collectTagStageRecords(current, null);
+    assert.deepEqual(entries, [{ paperId: 'new', registrySha256: CURRENT, status: 'not_needed' }]);
+    assert.equal(JSON.stringify(current), before);
+    const top = { stages: { tagSelection: seal('complete', CURRENT) },
+        contracts: { tagSelectionRecord: contract }, analysisStageCheckpoints: { tagSelection: 'saved' } };
+    assert.equal(api.collectTagStageRecords(top, 'top').length, 1);
+    top.analysisStageCheckpoints.taxonomySeal = null;
+    assert.throws(() => api.collectTagStageRecords(top, 'top'), /不能混用新旧格式/);
+    const mixed = structuredClone(current);
+    mixed.papers[0].analysisManifest.stages.taxonomySeal = null;
+    mixed.stages = { taxonomySeal: seal('complete', CURRENT) };
+    assert.throws(() => api.collectTagStageRecords(mixed, 'top'), /不能混用新旧格式/);
+});

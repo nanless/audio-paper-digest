@@ -110,6 +110,7 @@ const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     findReaderTablePasteDuplication,
     effectiveReaderTableRows, readerResultTableRequirement, renderReaderTableSelection,
     validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
+const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./lib/tag-stage-record.js');
 const { getDefaultTagRules } = require('./lib/tag-rules.js');
 const TAG_RULES = getDefaultTagRules();
 
@@ -8478,7 +8479,7 @@ const RECOVERY_STAGE_STATUSES = new Set([
 ]);
 const RECOVERY_STAGE_ORDER = Object.freeze([
     'primaryAnalysis', 'openSourceScan', 'demoLinkScan', 'revision', 'tableRepair',
-    'methodRepair', 'structureRepair', 'taxonomySeal', 'coreSummaryRepair',
+    'methodRepair', 'structureRepair', 'tagSelection', 'coreSummaryRepair',
     'scoringAudit', 'apiReaderArticle', 'imageSupplement'
 ]);
 // Execution order is not a dependency graph.  In particular the v3 Reader is
@@ -8488,26 +8489,26 @@ const RECOVERY_STAGE_ORDER = Object.freeze([
 const RECOVERY_STAGE_DEPENDENCIES = Object.freeze({
     primaryAnalysis: Object.freeze([
         'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
-        'structureRepair', 'taxonomySeal', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
+        'structureRepair', 'tagSelection', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
     ]),
     openSourceScan: Object.freeze([
-        'revision', 'tableRepair', 'methodRepair', 'structureRepair', 'taxonomySeal',
+        'revision', 'tableRepair', 'methodRepair', 'structureRepair', 'tagSelection',
         'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
     ]),
     demoLinkScan: Object.freeze(['apiReaderArticle', 'imageSupplement']),
     revision: Object.freeze([
-        'tableRepair', 'methodRepair', 'structureRepair', 'taxonomySeal',
+        'tableRepair', 'methodRepair', 'structureRepair', 'tagSelection',
         'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
     ]),
     tableRepair: Object.freeze([
-        'methodRepair', 'structureRepair', 'taxonomySeal', 'coreSummaryRepair',
+        'methodRepair', 'structureRepair', 'tagSelection', 'coreSummaryRepair',
         'scoringAudit', 'imageSupplement'
     ]),
     methodRepair: Object.freeze([
-        'structureRepair', 'taxonomySeal', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
+        'structureRepair', 'tagSelection', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement'
     ]),
-    structureRepair: Object.freeze(['taxonomySeal', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement']),
-    taxonomySeal: Object.freeze(['coreSummaryRepair', 'scoringAudit', 'imageSupplement']),
+    structureRepair: Object.freeze(['tagSelection', 'coreSummaryRepair', 'scoringAudit', 'imageSupplement']),
+    tagSelection: Object.freeze(['coreSummaryRepair', 'scoringAudit', 'imageSupplement']),
     coreSummaryRepair: Object.freeze(['scoringAudit', 'imageSupplement']),
     scoringAudit: Object.freeze(['imageSupplement']),
     apiReaderArticle: Object.freeze(['imageSupplement']),
@@ -8515,6 +8516,7 @@ const RECOVERY_STAGE_DEPENDENCIES = Object.freeze({
 });
 
 function recoveryInvalidationClosure(stage) {
+    if (stage === 'taxonomySeal') stage = 'tagSelection';
     const closure = new Set([stage]);
     const pending = [stage];
     while (pending.length) {
@@ -8534,7 +8536,7 @@ const RECOVERY_PROMPT_FILES = Object.freeze({
     revision: 'prompts/gap-fill.md',
     tableRepair: 'prompts/table-fill.md',
     methodRepair: 'prompts/method-fill.md',
-    taxonomySeal: 'prompts/tag-repair.md',
+    tagSelection: 'prompts/tag-repair.md',
     coreSummaryRepair: 'prompts/core-summary-repair.md',
     structureRepair: 'prompts/structure-repair.md',
     scoringAudit: 'prompts/scoring-audit.md',
@@ -8702,7 +8704,7 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
         taskLabel: 'STRUCTURE',
         typeAware: true
     },
-    taxonomySeal: {
+    tagSelection: {
         maxTokens: 8000,
         evidenceMaxChars: 30000,
         patterns: BROAD_EVIDENCE_PATTERNS,
@@ -8745,6 +8747,10 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
     if (!config) throw new Error(`未知的文本恢复阶段: ${stage}`);
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity();
     return stableFingerprint({
+        ...(stage === 'tagSelection' ? {
+            tagSelectionRecordContract: TAG_STAGE_RECORD_CONTRACT,
+            tagStageRecordImplementationSha256: promptTemplateSha256('scripts/lib/tag-stage-record.js')
+        } : {}),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         ...(['revision', 'structureRepair'].includes(stage) ? {
             analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js')
@@ -8758,7 +8764,7 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
         evidenceMaxChars: config.evidenceMaxChars,
         evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
         inputAnalysisSha256: crypto.createHash('sha256').update(String(inputAnalysis || '')).digest('hex'),
-        ...(['revision', 'structureRepair', 'taxonomySeal'].includes(stage)
+        ...(['revision', 'structureRepair', 'tagSelection'].includes(stage)
             ? tagRuleFingerprintFields() : {}),
         ...(stage === 'structureRepair'
             ? {
@@ -8772,22 +8778,36 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
     });
 }
 
+function physicalRecoveryStage(manifest, stage, checkpoints) {
+    if (stage !== 'tagSelection' && stage !== 'taxonomySeal') return stage;
+    return readTagStageRecord(manifest, checkpoints).stageKey;
+}
+
+// 新执行开始标签阶段时，才清除旧格式；读取或核验旧记录不会调用此函数。
+function beginTagSelectionStage(paper, manifest) {
+    const record = readTagStageRecord(manifest, paper.analysisStageCheckpoints);
+    if (record.format !== 'legacy') return;
+    delete manifest.stages.taxonomySeal;
+    if (manifest.contracts) delete manifest.contracts.taxonomy;
+    if (paper.analysisStageCheckpoints) delete paper.analysisStageCheckpoints.taxonomySeal;
+}
+
 function getTextStageInputAnalysis(paper, stage, currentAnalysis) {
-    const index = RECOVERY_STAGE_ORDER.indexOf(stage);
+    const index = RECOVERY_STAGE_ORDER.indexOf(stage === 'taxonomySeal' ? 'tagSelection' : stage);
     // Optional stages may be introduced without invalidating historical
     // manifests. Walk backward to the nearest actual checkpoint rather than
     // assuming the immediately preceding stage existed in that older run.
     for (let candidate = index - 1; candidate >= 0; candidate--) {
-        const checkpoint = paper.analysisStageCheckpoints?.[RECOVERY_STAGE_ORDER[candidate]];
+        const checkpoint = paper.analysisStageCheckpoints?.[physicalRecoveryStage(paper.analysisManifest, RECOVERY_STAGE_ORDER[candidate], paper.analysisStageCheckpoints)];
         if (typeof checkpoint === 'string') return checkpoint;
     }
     return String(currentAnalysis || '');
 }
 
 function previousStageCheckpoint(paper, stage) {
-    const index = RECOVERY_STAGE_ORDER.indexOf(stage);
+    const index = RECOVERY_STAGE_ORDER.indexOf(stage === 'taxonomySeal' ? 'tagSelection' : stage);
     for (let candidate = index - 1; candidate >= 0; candidate--) {
-        const checkpoint = paper.analysisStageCheckpoints?.[RECOVERY_STAGE_ORDER[candidate]];
+        const checkpoint = paper.analysisStageCheckpoints?.[physicalRecoveryStage(paper.analysisManifest, RECOVERY_STAGE_ORDER[candidate], paper.analysisStageCheckpoints)];
         if (typeof checkpoint === 'string') return checkpoint;
     }
     return null;
@@ -9694,11 +9714,13 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
 
 
 function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
-    const current = manifest.stages?.[stage];
+    const physicalStage = physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints);
+    const current = manifest.stages?.[physicalStage];
     if (!current || !isRecoveryStageComplete(manifest, stage) || current.fingerprint === fingerprint) return false;
-    captureStaleAnalysisSnapshot(paper, manifest, stage, fingerprint);
-    const stagesToDelete = RECOVERY_STAGE_DEPENDENCIES[stage]
-        ? recoveryInvalidationClosure(stage) : [stage];
+    captureStaleAnalysisSnapshot(paper, manifest, physicalStage, fingerprint);
+    const logicalStage = stage === 'taxonomySeal' ? 'tagSelection' : stage;
+    const stagesToDelete = RECOVERY_STAGE_DEPENDENCIES[logicalStage]
+        ? recoveryInvalidationClosure(logicalStage) : [stage];
     const checkpoints = paper.analysisStageCheckpoints || {};
     const previousCheckpoint = previousStageCheckpoint(paper, stage);
     if (previousCheckpoint !== null) {
@@ -9706,9 +9728,14 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
     } else {
         delete paper.analysisCheckpoint;
     }
+    const tagRecord = readTagStageRecord(manifest, checkpoints);
     for (const recoveryStage of stagesToDelete) {
-        delete manifest.stages[recoveryStage];
-        delete checkpoints[recoveryStage];
+        const key = recoveryStage === 'tagSelection' ? tagRecord.stageKey : recoveryStage;
+        delete manifest.stages[key];
+        delete checkpoints[key];
+    }
+    if (stagesToDelete.includes('tagSelection') && manifest.contracts) {
+        delete manifest.contracts[tagRecord.contractKey];
     }
     if (stagesToDelete.includes('structureRepair') && manifest.contracts) {
         delete manifest.contracts.experimentTables;
@@ -9777,21 +9804,23 @@ function createAnalysisRecoveryManifest(paper) {
     const stages = existing && existing.version === RECOVERY_MANIFEST_VERSION && existing.stages && typeof existing.stages === 'object'
         ? { ...existing.stages }
         : {};
+    const tagRecord = readTagStageRecord(existing, paper?.analysisStageCheckpoints);
+    const savedStageKey = stage => stage === 'tagSelection' ? tagRecord.stageKey : stage;
     const failedStages = RECOVERY_STAGE_ORDER.filter(stage => (
-        stages[stage] && !isRecoveryStageComplete({ stages }, stage)
+        stages[savedStageKey(stage)] && !isRecoveryStageComplete({ stages }, stage)
     ));
     for (const failedStage of failedStages) {
         for (const stage of recoveryInvalidationClosure(failedStage).filter(item => item !== failedStage)) {
-            delete stages[stage];
-            if (paper?.analysisStageCheckpoints) delete paper.analysisStageCheckpoints[stage];
+            delete stages[savedStageKey(stage)];
+            if (paper?.analysisStageCheckpoints) delete paper.analysisStageCheckpoints[savedStageKey(stage)];
         }
     }
     // 成功结果不会长期保存正文 checkpoint。强制重分析这类记录时，必须同时
     // 清除主分析及全部下游阶段，否则新正文会错误复用旧轮次的审校/评分状态。
     if (isRecoveryStageComplete({ stages }, 'primaryAnalysis') && !paper?.analysisCheckpoint) {
-        for (const stage of recoveryInvalidationClosure('primaryAnalysis')) delete stages[stage];
+        for (const stage of recoveryInvalidationClosure('primaryAnalysis')) delete stages[savedStageKey(stage)];
         for (const stage of recoveryInvalidationClosure('primaryAnalysis')) {
-            if (paper?.analysisStageCheckpoints) delete paper.analysisStageCheckpoints[stage];
+            if (paper?.analysisStageCheckpoints) delete paper.analysisStageCheckpoints[savedStageKey(stage)];
         }
     }
     const keepTableContract = isRecoveryStageComplete({ stages }, 'structureRepair')
@@ -9826,6 +9855,7 @@ function createAnalysisRecoveryManifest(paper) {
     const contracts = existing?.contracts && typeof existing.contracts === 'object'
         ? { ...existing.contracts }
         : {};
+    if (!stages[tagRecord.stageKey]) delete contracts[tagRecord.contractKey];
     if (keepTableContract) contracts.experimentTables = EXPERIMENT_TABLE_CONTRACT_VERSION;
     else delete contracts.experimentTables;
     if (keepMethodContract) contracts.methodDetail = METHOD_DETAIL_CONTRACT_VERSION;
@@ -9889,7 +9919,8 @@ function markRecoveryStage(manifest, stage, status, details = {}) {
 }
 
 function isRecoveryStageComplete(manifest, stage) {
-    return isRecoveryStageTerminal(stage, manifest?.stages?.[stage]?.status);
+    const physicalStage = physicalRecoveryStage(manifest, stage);
+    return isRecoveryStageTerminal(physicalStage, manifest?.stages?.[physicalStage]?.status);
 }
 
 function suppressOuterRetryAfterReaderExhaustion(error) {
@@ -9914,19 +9945,20 @@ function hasIncompleteRecoveryStage(manifest) {
 }
 
 function retainFinalTagCheckpoints(paper, analysisManifest) {
-    const tagStageStatus = analysisManifest?.stages?.taxonomySeal?.status;
+    const tagRecord = readTagStageRecord(analysisManifest, paper.analysisStageCheckpoints);
+    const tagStageStatus = tagRecord.stage?.status;
     if (!['complete', 'not_needed'].includes(tagStageStatus)) {
         delete paper.analysisStageCheckpoints;
         return;
     }
-    const tagCheckpointText = paper.analysisStageCheckpoints?.taxonomySeal;
+    const tagCheckpointText = tagRecord.checkpoint;
     if (typeof tagCheckpointText !== 'string') {
         throw contractRejectedError(
             '标签阶段完成后，必须保留该阶段的正文检查点。'
         );
     }
     if (tagStageStatus === 'not_needed') {
-        paper.analysisStageCheckpoints = { taxonomySeal: tagCheckpointText };
+        paper.analysisStageCheckpoints = { [tagRecord.checkpointKey]: tagCheckpointText };
         return;
     }
     const structureCheckpointText = paper.analysisStageCheckpoints?.structureRepair;
@@ -9935,7 +9967,7 @@ function retainFinalTagCheckpoints(paper, analysisManifest) {
             '标签阶段标为 complete 时，必须保留结构修复和标签阶段的两份正文检查点。'
         );
     }
-    paper.analysisStageCheckpoints = { structureRepair: structureCheckpointText, taxonomySeal: tagCheckpointText };
+    paper.analysisStageCheckpoints = { structureRepair: structureCheckpointText, [tagRecord.checkpointKey]: tagCheckpointText };
 }
 
 function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest = null) {
@@ -9948,9 +9980,10 @@ function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest
     }
     paper.analysisStageCheckpoints = paper.analysisStageCheckpoints || {};
     for (const stage of RECOVERY_STAGE_ORDER) {
+        const key = physicalRecoveryStage(analysisManifest, stage, paper.analysisStageCheckpoints);
         if (isRecoveryStageComplete(analysisManifest, stage)
-            && typeof paper.analysisStageCheckpoints[stage] !== 'string') {
-            paper.analysisStageCheckpoints[stage] = paper.analysisCheckpoint;
+            && typeof paper.analysisStageCheckpoints[key] !== 'string') {
+            paper.analysisStageCheckpoints[key] = paper.analysisCheckpoint;
         }
     }
     const persist = paper[Symbol.for('audio-paper-digest.analysisCheckpointCallback')];
@@ -14109,7 +14142,13 @@ async function analyzePaperDeepInternal(paper) {
         invalidateSourceBoundImageRecovery(paper);
     }
     if (paper.analysisCheckpoint && actualAnalysisInputChanged) {
-        for (const stage of RECOVERY_STAGE_ORDER) delete analysisManifest.stages[stage];
+        for (const stage of RECOVERY_STAGE_ORDER) {
+            delete analysisManifest.stages[physicalRecoveryStage(analysisManifest, stage, paper.analysisStageCheckpoints)];
+        }
+        if (analysisManifest.contracts) {
+            delete analysisManifest.contracts.taxonomy;
+            delete analysisManifest.contracts.tagSelectionRecord;
+        }
         delete paper.analysisCheckpoint;
         delete paper.analysisStageCheckpoints;
         console.log(`    [deep] ⚠️  实际分析输入发生变化，已清除主分析及依赖它的后续恢复记录`);
@@ -14725,31 +14764,32 @@ async function analyzePaperDeepInternal(paper) {
     let tagStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
-        'taxonomySeal',
+        'tagSelection',
         analysis,
         rawTextForAnalysis
     );
     analysis = tagStage.analysis;
     let tagValidationIssue = validateTagSectionContract(analysis, parseAnalysis(analysis));
-    if (isRecoveryStageComplete(analysisManifest, 'taxonomySeal') && tagValidationIssue) {
+    if (isRecoveryStageComplete(analysisManifest, 'tagSelection') && tagValidationIssue) {
         invalidateRecoveryStageIfChanged(
             paper,
             analysisManifest,
-            'taxonomySeal',
+            'tagSelection',
             `${tagStage.fingerprint}:invalid-${TAG_RULES.selectionContract}`
         );
         analysis = paper.analysisCheckpoint || tagStage.inputAnalysis;
         tagStage = prepareTextRecoveryStage(
             paper,
             analysisManifest,
-            'taxonomySeal',
+            'tagSelection',
             analysis,
             rawTextForAnalysis
         );
         analysis = tagStage.analysis;
         tagValidationIssue = validateTagSectionContract(analysis, parseAnalysis(analysis));
     }
-    if (!isRecoveryStageComplete(analysisManifest, 'taxonomySeal')) {
+    if (!isRecoveryStageComplete(analysisManifest, 'tagSelection')) {
+        beginTagSelectionStage(paper, analysisManifest);
         try {
             const before = analysis;
             // 标签不合规时，修复失败会阻断分析。主任务标签过于宽泛只记为告警，
@@ -14795,18 +14835,18 @@ async function analyzePaperDeepInternal(paper) {
                     .update(maskClassificationFields(before)).digest('hex'),
                 outputProtectedProjectionSha256: crypto.createHash('sha256')
                     .update(maskClassificationFields(analysis)).digest('hex'),
-                taxonomySurfaceSha256: hashTagSectionAndPrimaryTags(analysis),
+                tagSectionAndPrimaryTagsSha256: hashTagSectionAndPrimaryTags(analysis),
                 primaryTaskId: parsedForTagCheck.tagValidation.primaryTaskId,
                 primaryMethodId: parsedForTagCheck.tagValidation.primaryMethodId,
                 conceptIds: parsedForTagCheck.tagValidation.conceptIds
             };
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
-                taxonomy: TAG_RULES.selectionContract
+                tagSelectionRecord: TAG_STAGE_RECORD_CONTRACT
             };
             markRecoveryStage(
                 analysisManifest,
-                'taxonomySeal',
+                'tagSelection',
                 // 即使只是调整过于宽泛的主任务标签，只要正文有变化，也要记为 complete；
                 // not_needed 仅用于没有标签错误且正文逐字未变的结果。
                 (tagValidationIssue || analysis !== before) ? 'complete' : 'not_needed',
@@ -14822,7 +14862,7 @@ async function analyzePaperDeepInternal(paper) {
         } catch (error) {
             markRecoveryStage(
                 analysisManifest,
-                'taxonomySeal',
+                'tagSelection',
                 recoveryFailureStatus(error),
                 { error: error.message, fingerprint: tagStage.fingerprint }
             );
@@ -16305,8 +16345,8 @@ async function repairTagSelection(paper, analysis, evidenceContext, issue, optio
         });
         const raw = await callModelFn(
             [{ role: 'user', content: prompt }],
-            TEXT_RECOVERY_STAGE_CONFIG.taxonomySeal.maxTokens,
-            { usageContext: { stage: 'taxonomySeal' } }
+            TEXT_RECOVERY_STAGE_CONFIG.tagSelection.maxTokens,
+            { usageContext: { stage: 'tagSelection' } }
         );
         try {
             return applyTagSelection(analysis, parseTagRepairResult(raw), options);

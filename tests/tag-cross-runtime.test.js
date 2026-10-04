@@ -220,3 +220,95 @@ test('新旧标签缓存的字段冲突和缺失读取在两端一致', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), expected);
 });
+
+test('标签阶段的旧新完整绑定、只读结果和拒绝边界在两端一致', () => {
+    const records = require('../scripts/lib/tag-stage-record.js');
+    const contract = require('../scripts/analysis-contract.js');
+    const { validAnalysisPaper } = require('./valid-analysis-fixture.js');
+    const legacy = validAnalysisPaper('2608.12345');
+    const current = structuredClone(legacy);
+    const oldStage = current.analysisManifest.stages.taxonomySeal;
+    const newStage = Object.fromEntries(Object.entries(oldStage).map(([key, value]) =>
+        key === 'taxonomySurfaceSha256' ? ['tagSectionAndPrimaryTagsSha256', value] : [key, value]));
+    newStage.bindingSha256 = contract.manualSha256(Object.fromEntries(
+        records.TAG_STAGE_BINDING_FIELDS.map(key => [key, newStage[key]])));
+    delete current.analysisManifest.stages.taxonomySeal;
+    current.analysisManifest.stages.tagSelection = newStage;
+    delete current.analysisManifest.contracts.taxonomy;
+    current.analysisManifest.contracts.tagSelectionRecord = records.TAG_STAGE_RECORD_CONTRACT;
+    current.analysisStageCheckpoints.tagSelection = current.analysisStageCheckpoints.taxonomySeal;
+    delete current.analysisStageCheckpoints.taxonomySeal;
+    const fixtures = [];
+    for (const [name, paper, stageKey, checkpointKey] of [
+        ['旧', legacy, 'taxonomySeal', 'taxonomySeal'],
+        ['新', current, 'tagSelection', 'tagSelection']
+    ]) {
+        for (const status of ['complete', 'not_needed']) {
+            const value = structuredClone(paper);
+            value.analysisManifest.stages[stageKey].status = status;
+            if (status === 'complete') value.analysisStageCheckpoints.structureRepair = value.analysisStageCheckpoints[checkpointKey];
+            fixtures.push({ name: `${name}格式-${status}`, paper: value, valid: true });
+        }
+    }
+    const addInvalid = (name, mutate) => {
+        const paper = structuredClone(current);
+        mutate(paper);
+        fixtures.push({ name, paper, valid: false });
+    };
+    addInvalid('复制旧签名到新记录', p => { p.analysisManifest.stages.tagSelection.bindingSha256 = oldStage.bindingSha256; });
+    addInvalid('双阶段同值', p => { p.analysisManifest.stages.taxonomySeal = p.analysisManifest.stages.tagSelection; });
+    addInvalid('双阶段空值', p => { p.analysisManifest.stages.taxonomySeal = null; });
+    addInvalid('双合同空值', p => { p.analysisManifest.contracts.taxonomy = null; });
+    addInvalid('双检查点同值', p => { p.analysisStageCheckpoints.taxonomySeal = p.analysisStageCheckpoints.tagSelection; });
+    addInvalid('跨格式检查点', p => {
+        p.analysisStageCheckpoints.taxonomySeal = p.analysisStageCheckpoints.tagSelection;
+        delete p.analysisStageCheckpoints.tagSelection;
+    });
+    addInvalid('双内容哈希同值', p => {
+        p.analysisManifest.stages.tagSelection.taxonomySurfaceSha256 = p.analysisManifest.stages.tagSelection.tagSectionAndPrimaryTagsSha256;
+    });
+    addInvalid('未知保存版本', p => { p.analysisManifest.contracts.tagSelectionRecord = 'unknown'; });
+    addInvalid('检查点正文改变', p => { p.analysisStageCheckpoints.tagSelection += '\n检查点变化'; });
+    addInvalid('摘要输入改变', p => { p.analysisManifest.stages.coreSummaryRepair.inputAnalysisSha256 = '0'.repeat(64); });
+    fixtures.push({ name: '尚未完成的新阶段', valid: false,
+        paper: { analysisManifest: { stages: { tagSelection: { status: 'transient_failure', error: '原错误' } } } } });
+    const original = JSON.stringify(fixtures);
+    const expected = fixtures.map(({ name, paper, valid }) => {
+        let record, error = null;
+        try { record = records.readTagStageRecord(paper.analysisManifest, paper.analysisStageCheckpoints); }
+        catch (issue) { error = issue.message; }
+        const accepted = contract.validateTagStageProof(paper, { parsed: parseAnalysis(paper.analysis) }) === null;
+        assert.equal(accepted, valid, name);
+        if (!record) return { record: null, error, accepted };
+        const binding = record.stage?.bindingSha256
+            ? Object.fromEntries(record.bindingFields.map(key => [key, record.stage[key]])) : null;
+        return { record: { ...record, stage: record.stage ?? null, checkpoint: record.checkpoint ?? null },
+            binding, bindingSha256: binding ? contract.manualSha256(binding) : null, error, accepted };
+    });
+    const script = [
+        'import json,sys',
+        'sys.path.insert(0,"scripts")',
+        'from tag_stage_record import read_tag_stage_record',
+        'from publish_common import _validate_tag_stage_record, _manual_hash, PublishDataValidationError',
+        'out=[]',
+        'for item in json.load(sys.stdin):',
+        '    paper=item["paper"]; record=None; error=None',
+        '    try: record=read_tag_stage_record(paper.get("analysisManifest"),paper.get("analysisStageCheckpoints"))',
+        '    except ValueError as issue: error=str(issue)',
+        '    try: _validate_tag_stage_record(paper,paper.get("analysisManifest"),"论文"); accepted=True',
+        '    except PublishDataValidationError: accepted=False',
+        '    if record is None: out.append({"record":None,"error":error,"accepted":accepted}); continue',
+        '    stage=record["stage"]',
+        '    binding={key:stage.get(key) for key in record["bindingFields"]} if isinstance(stage,dict) and stage.get("bindingSha256") else None',
+        '    out.append({"record":record,"binding":binding,"bindingSha256":_manual_hash(binding) if binding is not None else None,"error":error,"accepted":accepted})',
+        'print(json.dumps(out,ensure_ascii=False))'
+    ].join('\n');
+    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
+        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(fixtures), encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024, timeout: 30000
+    });
+    assert.equal(result.error, undefined, String(result.error));
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), expected);
+    assert.equal(JSON.stringify(fixtures), original, '两端读取和验证不能改写原记录');
+});

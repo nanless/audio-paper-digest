@@ -1001,7 +1001,7 @@ def gate_fingerprint():
     return stable({name: sha_bytes(read_bytes(ROOT / 'scripts' / name)) for name in
                    ('publish-conference.py', 'conference_publication_gate.py',
                     'markdown_hugo_gate.py', 'conference-page-render.py',
-                    'publish_common.py', 'analysis_sections.py')})
+                    'publish_common.py', 'analysis_sections.py', 'tag_stage_record.py')})
 
 
 def publication_page_files(generation):
