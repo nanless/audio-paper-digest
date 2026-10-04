@@ -156,3 +156,22 @@ test('same analysis run retains every upgraded assignment without filename colli
     assert.equal(fs.existsSync(secondOutput.filename), true);
     assert.equal(fs.existsSync(upgradedOutput.filename), true);
 });
+
+
+test('历史标签分配读取旧缓存且拒绝混用，不新增缺少校验子字段门槛', () => {
+    const current = paper();
+    const expected = api.getConsistentClassificationLabels(current);
+    const legacy = structuredClone(current);
+    legacy.parsed = Object.fromEntries(Object.entries(legacy.parsed).map(([key, value]) =>
+        [key === 'tagValidation' ? 'taxonomyValidation' : key, value]));
+    const before = JSON.stringify(legacy);
+    assert.deepEqual(api.getConsistentClassificationLabels(legacy), expected);
+    assert.equal(JSON.stringify(legacy), before);
+    delete legacy.parsed.taxonomyValidation;
+    assert.deepEqual(api.getConsistentClassificationLabels(legacy), expected);
+    for (const value of [current.parsed.tagValidation, null, {}]) {
+        const mixed = structuredClone(current);
+        mixed.parsed.taxonomyValidation = value;
+        assert.throws(() => api.getConsistentClassificationLabels(mixed), /解析结果不能同时包含/);
+    }
+});

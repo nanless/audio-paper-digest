@@ -48,7 +48,7 @@ from llm_account_pool import (
     resolve_primary_api_key_pool,
     select_api_key,
 )
-from utils import parse_analysis
+from utils import parse_analysis, read_tag_validation
 from analysis_sections import (
     EVALUATION_TITLE, LEGACY_EVALUATION_TITLE, normalize_analysis_section_title,
     evaluation_heading_issue, extract_evaluation_section,
@@ -1319,7 +1319,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     if heading_issue:
         raise PublishDataValidationError(f'{paper_label} {heading_issue}')
     current_parsed = parse_analysis(current_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
-    current_validation = current_parsed.get('taxonomyValidation') or {}
+    current_validation = current_parsed.get('tagValidation') or {}
     expected_selection = {
         'primaryTaskId': current_validation.get('primaryTaskId'),
         'primaryMethodId': current_validation.get('primaryMethodId'),
@@ -1334,7 +1334,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
         if heading_issue:
             raise PublishDataValidationError(f'{paper_label} 标签阶段输出：{heading_issue}')
         output_validation = parse_analysis(
-            output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)['taxonomyValidation']
+            output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)['tagValidation']
         output_selection = {field: output_validation.get(field) for field in expected_selection}
         if not output_validation.get('valid') or output_selection != recorded_selection:
             raise PublishDataValidationError(
@@ -4137,6 +4137,11 @@ def validate_publish_parsed(
     if not isinstance(parsed, dict):
         raise PublishDataValidationError(f'{source} 必须是对象')
 
+    try:
+        read_tag_validation(parsed)
+    except ValueError as error:
+        raise PublishDataValidationError(str(error)) from error
+
     normalized = dict(parsed)
     document_type = normalized.get('documentType')
     if document_type not in ALLOWED_DOCUMENT_TYPES:
@@ -4345,7 +4350,10 @@ def _validate_current_analysis_tags(analysis, parsed, paper_label):
     expected_supplemental = [tag for tag in all_tags if tag not in {task_tag, method_tag}]
     if supplemental != expected_supplemental:
         raise PublishDataValidationError(f'{paper_label} 补充标签的内容或顺序与首行除主任务、主方法外的标签不一致。')
-    validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
+    try:
+        validation = read_tag_validation(parsed)
+    except ValueError as error:
+        raise PublishDataValidationError(str(error)) from error
     if not isinstance(validation, dict) or validation.get('valid') is not True:
         detail = (validation or {}).get('errors', ['缺少标签检查结果'])[0]
         raise PublishDataValidationError(f'{paper_label} 当前正文的标签选择未通过检查：{detail}')

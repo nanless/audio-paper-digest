@@ -75,7 +75,7 @@ from blog_repository_lock import shared_blog_repository_lock
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_required_fetch_proxy
 from runtime_guard import require_external_runtime
 from llm_usage import with_llm_usage_context
-from utils import strip_md, parse_analysis
+from utils import strip_md, parse_analysis, read_tag_validation
 from analysis_sections import (
     evaluation_heading_issue, extract_evaluation_section, find_evaluation_headings,
 )
@@ -3149,7 +3149,10 @@ def build_flat_tag_compat_metadata(parsed, *, required=False):
     旧记录维护时可以缺少当前标签选择记录；required 为 True 时必须提供有效记录。
     输入声明标签选择有效后，本函数仍按当前词表逐项核对 ID、中文名称、分类维度和主标签角色。
     """
-    validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
+    try:
+        validation = read_tag_validation(parsed)
+    except ValueError as error:
+        raise PublishDataValidationError(str(error)) from error
     if not isinstance(validation, dict) or validation.get('valid') is not True:
         if required:
             raise PublishDataValidationError('新页面缺少通过当前词表检查的标签选择记录。')
@@ -3206,6 +3209,10 @@ def build_researcher_workbench_bundle(
     get relabelled. Modern production pages must set ``require_reader`` and
     fail closed instead of publishing an incomplete workbench record.
     """
+    try:
+        read_tag_validation(parsed or paper.get('parsed'))
+    except ValueError as error:
+        raise PublishDataValidationError(str(error)) from error
     if reader_plan is None:
         api_reader_payload = api_reader_payload or _api_reader_payload(paper)
         v6_payload = _manual_v6_reader_payload(paper)
@@ -4150,6 +4157,12 @@ def build_index_context_line(parsed_analysis, aurl=''):
 def _current_batch_tag_metadata(papers):
     if not papers:
         return None
+    papers = list(papers)
+    try:
+        for paper in papers:
+            read_tag_validation(paper.get('parsed'))
+    except ValueError as error:
+        raise PublishDataValidationError(str(error)) from error
     selections = []
     for paper in papers:
         parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
@@ -6407,6 +6420,10 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         raise PublishDataValidationError(heading_issue)
     # main() replaces parsed with the validated analysis baseline before generation.
     parsed_analysis = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
+    try:
+        read_tag_validation(parsed_analysis)
+    except ValueError as error:
+        raise PublishDataValidationError(str(error)) from error
     # 补充 opensource 中缺失的具体链接
     if parsed_analysis and parsed_analysis.get('opensource'):
         parsed_analysis['opensource'] = enrich_opensource(parsed_analysis, paper)

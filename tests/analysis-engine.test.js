@@ -1312,7 +1312,7 @@ describe('analyzePaperWithRetry', () => {
             legacyEndToEnd.analysis, { legacyTags: true }
         );
         assert.strictEqual(
-            legacyEndToEnd.parsed.taxonomyValidation.primaryMethodId,
+            legacyEndToEnd.parsed.tagValidation.primaryMethodId,
             'method.end-to-end-learning'
         );
         assert.strictEqual(isLegacyApiAnalysisSuccessForReadOnlyValidation(legacyEndToEnd), true);

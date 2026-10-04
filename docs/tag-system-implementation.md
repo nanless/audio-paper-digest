@@ -27,6 +27,8 @@
 
 当前模型标签提示使用 `paper-tag-prompt-text-v2`；旧版 `paper-taxonomy-prompt-projection-v1` 仅按明确身份读取核验。提示更新没有升级词表或标签选择协议，也没有补签旧记录。历史页面展示仍使用其独立格式和 `historical-taxonomy-prompt-projection-v2` 哈希前缀；这里的旧展示版本与新版模型提示是两套接口，不能互换 SHA。提示核验、跨词表旧兼容范围和重新分析时的指纹变化见 [脚本说明](../scripts/README.md#词表变更与确认范围)。
 
+Node 与 Python 的新解析结果只写 `tagValidation`，旧缓存通过集中接口读取，不批量迁移。新旧字段混用时拒绝，旧缓存的评分覆盖仍按原规则核验。这个变化不改正式阶段名、十三字段绑定或页面元数据。会议实现指纹另记录 Python 解析器源码 SHA，使解析器及兼容读取函数的变化也参与恢复判断；旧凭证不补签。
+
 预览版本是 `paper-taxonomy-preview-v1`，绑定词表原始字节 SHA、博客 Git 提交及页面 SHA。每条记录保留原 `tags`、全部 `mappedIds` 和 `unresolvedTags`；只有展示用的 `displayIds` 去除冗余祖先，原始证据不删除。主任务只能来自显式字段，并须唯一解析为任务概念，不能用首标签补齐。
 
 预览的三种状态描述字面映射完整度：`legacy_mapped` 表示旧词全部可映射且没有显式主任务异常；`partial` 表示仍有未映射词或显式主任务无法核实；`unresolved` 表示尚无可用映射。三者都不是 `reviewed`，也不证明语义分类正确。缺少标签的页面仍保留记录。已知 arXiv ID 选最新页面为显示代表，并保留重复路径；未知 ID 按路径哈希独立保存，不能把全部显示记录称作唯一论文。

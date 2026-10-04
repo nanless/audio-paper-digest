@@ -461,6 +461,21 @@ def parse_scoring_dimensions(scoring_text):
     return {'valid': not errors, 'scores': scores, 'errors': errors}
 
 
+def read_tag_validation(parsed_analysis):
+    """只读新格式或旧缓存的标签检查结果；同时出现两种字段时拒绝。"""
+    if not isinstance(parsed_analysis, dict):
+        return None
+    if 'tagValidation' in parsed_analysis and 'taxonomyValidation' in parsed_analysis:
+        raise ValueError('解析结果不能同时包含 tagValidation 和旧字段 taxonomyValidation。')
+    if 'tagValidation' in parsed_analysis:
+        validation = parsed_analysis['tagValidation']
+    elif 'taxonomyValidation' in parsed_analysis:
+        validation = parsed_analysis['taxonomyValidation']
+    else:
+        return None
+    return validation if isinstance(validation, dict) else None
+
+
 def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     """解析深度分析文本为结构化字典"""
     if not analysis:
@@ -494,7 +509,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
         'hasModel': '',
         'hasDataset': '',
         'scoreValidation': {'valid': False, 'scores': {}, 'errors': ['缺少评分理由']},
-        'taxonomyValidation': {
+        'tagValidation': {
             'valid': False,
             'errors': ['缺少标签章节'],
             'registryVersion': registry['version'],
@@ -577,7 +592,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     selection_tags = r['tags'] if legacy_tags else raw_tag_list
     selection_task = r['primaryTaskTag'] if legacy_tags else extracted_task_tag
     selection_method = r['primaryMethodTag'] if legacy_tags else extracted_method_tag
-    r['taxonomyValidation'] = _validate_tag_selection(
+    r['tagValidation'] = _validate_tag_selection(
         registry, selection_tags, selection_task, selection_method)
 
     r['sotaClaim'] = machine_summary['sotaClaim']

@@ -65,17 +65,15 @@ function analysisRecord(options = {}) {
         inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(text)),
         outputProtectedProjectionSha256: textSha(contract.maskClassificationFields(text)),
         taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(text),
-        primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
-        primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
-        conceptIds: parsed.taxonomyValidation.conceptIds
+        primaryTaskId: parsed.tagValidation.primaryTaskId,
+        primaryMethodId: parsed.tagValidation.primaryMethodId,
+        conceptIds: parsed.tagValidation.conceptIds
     };
     const stage = { status: 'not_needed', ...binding, bindingSha256: contract.manualSha256(binding) };
     if (options.annotation) stage.registryUpgradeFrom = options.annotation;
-    // 缓存的 parsed 模拟“封口当时”的解析结果：registry SHA 跟着 stage 走。
-    const cachedParsed = {
-        ...parsed,
-        taxonomyValidation: { ...parsed.taxonomyValidation, registrySha256 }
-    };
+    // 保留旧字段的缓存种子：词表 SHA 与原阶段记录一致。
+    const cachedParsed = Object.fromEntries(Object.entries(parsed).map(([key, value]) =>
+        key === 'tagValidation' ? ['taxonomyValidation', { ...value, registrySha256 }] : [key, value]));
     const paper = {
         id: options.paperId ?? PAPER_ID,
         analysis: text,

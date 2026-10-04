@@ -78,7 +78,7 @@ class ChannelSnapshotEntryTest(unittest.TestCase):
             '## 评分\n8.5\n'
         )
         parsed = parse_analysis(analysis)
-        self.assertTrue(parsed['taxonomyValidation']['valid'])
+        self.assertTrue(parsed['tagValidation']['valid'])
         good = {'arxivId': '2607.00001', 'title': 'Good', 'analysis': analysis, 'parsed': parsed}
         legacy = {
             'arxivId': '2607.00002', 'title': 'Legacy', 'analysis': '',
@@ -109,6 +109,41 @@ class ChannelSnapshotEntryTest(unittest.TestCase):
         self.assertIn('#语音识别', degraded_md)
         self.assertIn('#语音识别', degraded_html)
 
+    def test_old_tag_cache_is_readable_but_mixed_fields_never_degrade_silently(self):
+        import copy
+        from utils import parse_analysis
+        from publish_common import PublishDataValidationError
+        analysis = (
+            '## 标签\n#语音识别 #Transformer #低资源\n'
+            '主任务标签：#语音识别\n主方法标签：#Transformer\n补充标签：#低资源\n'
+            '## 评分\n8.5\n')
+        parsed = parse_analysis(analysis)
+        paper = {'arxivId': '2607.00001', 'title': 'Paper',
+                 'analysis': analysis, 'parsed': parsed}
+        old = copy.deepcopy(paper)
+        old['parsed']['taxonomyValidation'] = old['parsed'].pop('tagValidation')
+        before = copy.deepcopy(old)
+        self.assertEqual(feishu.generate_overview_md([(8.5, paper, parsed)], [], '2026-07-13'),
+                         feishu.generate_overview_md([(8.5, old, old['parsed'])], [], '2026-07-13'))
+        self.assertEqual(wechat.build_overview([(8.5, paper, parsed)], []),
+                         wechat.build_overview([(8.5, old, old['parsed'])], []))
+        self.assertEqual(old, before)
+        for module in (wechat, feishu):
+            self.assertFalse(module.batch_has_invalid_tag_metadata(iter([old])))
+            self.assertTrue(module.batch_has_invalid_tag_metadata(iter([{'parsed': {}, 'analysis': ''}])))
+        for new_value, old_value in ((parsed['tagValidation'], parsed['tagValidation']),
+                                     (None, None), ({}, {})):
+            mixed = copy.deepcopy(paper)
+            mixed['parsed']['tagValidation'] = new_value
+            mixed['parsed']['taxonomyValidation'] = old_value
+            missing = {'parsed': {}, 'analysis': ''}
+            for module in (wechat, feishu):
+                with self.subTest(module=module.__name__, new_value=new_value):
+                    with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+                        module.batch_has_invalid_tag_metadata([missing, mixed])
+                    with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+                        module.batch_has_invalid_tag_metadata(iter([missing, mixed]))
+
     def test_registry_drift_also_degrades_the_batch(self):
         from utils import parse_analysis
 
@@ -122,8 +157,8 @@ class ChannelSnapshotEntryTest(unittest.TestCase):
         )
         parsed = parse_analysis(analysis)
         drifted = dict(parsed)
-        drifted['taxonomyValidation'] = {
-            **parsed['taxonomyValidation'], 'registrySha256': '0' * 64,
+        drifted['tagValidation'] = {
+            **parsed['tagValidation'], 'registrySha256': '0' * 64,
         }
         paper = {'arxivId': '2607.00003', 'title': 'Drift', 'analysis': analysis, 'parsed': drifted}
         self.assertTrue(feishu.batch_has_invalid_tag_metadata([paper]))

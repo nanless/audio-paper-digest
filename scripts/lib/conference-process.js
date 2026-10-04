@@ -93,7 +93,8 @@ const IMPLEMENTATION_FILES = Object.freeze([
     'scripts/llm-account-pool.js',
     'scripts/publish_common.py',
     'scripts/paper_identity.py',
-    'scripts/utils.js'
+    'scripts/utils.js',
+    'scripts/utils.py'
 ]);
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));

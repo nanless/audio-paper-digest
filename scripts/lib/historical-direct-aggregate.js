@@ -521,10 +521,10 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
     const parsed = parseAnalysis(analysis.analysis);
     const score = Number(parsed?.score); const labels = Array.isArray(parsed?.tags) ? parsed.tags.slice() : [];
     if (!Number.isFinite(score) || score < 0 || score > 10 || !text(String(parsed?.summary || '').trim(), `${item.paperId} core summary`, 20000)
-        || !parsed?.taxonomyValidation?.valid || !parsed.primaryTaskTag || !parsed.primaryMethodTag || labels.length < 3) {
+        || !parsed?.tagValidation?.valid || !parsed.primaryTaskTag || !parsed.primaryMethodTag || labels.length < 3) {
         fail(`${item.paperId} direct canonical analysis cannot supply aggregate fields`);
     }
-    const tagValidationResult = parsed.taxonomyValidation;
+    const tagValidationResult = parsed.tagValidation;
     if (tagValidationResult.registryVersion !== tagRules.registryVersion
         || tagValidationResult.registrySha256 !== tagRules.registrySha256) {
         fail(`${item.paperId} direct canonical taxonomy differs from current registry`);

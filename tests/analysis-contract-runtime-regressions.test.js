@@ -312,9 +312,9 @@ function sealedPaper(options = {}) {
         inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(analysis)),
         outputProtectedProjectionSha256: textSha(contract.maskClassificationFields(analysis)),
         taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(analysis),
-        primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
-        primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
-        conceptIds: options.conceptIds || parsed.taxonomyValidation.conceptIds
+        primaryTaskId: parsed.tagValidation.primaryTaskId,
+        primaryMethodId: parsed.tagValidation.primaryMethodId,
+        conceptIds: options.conceptIds || parsed.tagValidation.conceptIds
     };
     const stage = { status: 'not_needed', ...binding, bindingSha256: contract.manualSha256(binding) };
     if (options.annotation) stage.registryUpgradeFrom = options.annotation;
@@ -576,5 +576,30 @@ describe('标签提示版本的读取边界', () => {
         assert.match(validateSeal({ ...base, projectionSha256: 'e'.repeat(64),
             registrySnapshotOptions: { resolveSnapshot: () => { throw new Error('读取失败'); } }
         }), /无法完成词表升级核验：无法读取标签提示所需的旧词表快照/);
+    });
+});
+
+
+describe('标签合同读取新旧解析结果', () => {
+    it('旧缓存只读可核验，两字段混用返回诊断而不是抛错', () => {
+        const f = sealedPaper();
+        const legacy = Object.fromEntries(Object.entries(f.parsed).map(([key, value]) =>
+            [key === 'tagValidation' ? 'taxonomyValidation' : key, value]));
+        const before = JSON.stringify(legacy);
+        assert.equal(contract.validateTagStageProof(f.paper, { parsed: legacy, tagRules: f.runtime }), null);
+        assert.equal(contract.validateTagSectionContract(f.paper.analysis, legacy), null);
+        assert.equal(JSON.stringify(legacy), before);
+        for (const value of [f.parsed.tagValidation, null, {}]) {
+            const mixed = { ...f.parsed, taxonomyValidation: value };
+            assert.match(contract.validateTagStageProof(f.paper, { parsed: mixed, tagRules: f.runtime }),
+                /解析结果不能同时包含/);
+            for (const legacyTagSurface of [false, true]) {
+                assert.match(contract.validateTagSectionContract(f.paper.analysis, mixed, { legacyTagSurface }),
+                    /解析结果不能同时包含/);
+            }
+        }
+        assert.match(contract.validateTagStageProof(f.paper, {
+            parsed: { ...f.parsed, tagValidation: null }, tagRules: f.runtime
+        }), /正文标签未通过校验/);
     });
 });

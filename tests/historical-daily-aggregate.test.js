@@ -261,3 +261,30 @@ test('CLI dry-run never invokes writer and apply targets configured aggregate ro
     assert.equal(cli.main(['--apply', '--staging-runs', RUN, '--date', DATE], { api: fakeApi, config }).status, 'written');
     assert.equal(writes, 1);
 });
+
+
+test('历史汇总旧标签缓存只读兼容，评分缓存不增加标签完整性要求', () => {
+    const analysis = '## 评分\n8.0\n\n## 核心摘要\n用于汇总的原摘要。\n\n## 方法概述和架构\n原方法。';
+    const current = { title: 'Paper', analysis, parsed: require('../scripts/utils.js').parseAnalysis(analysis) };
+    const assignment = { status: 'assigned', assignmentSha256: 'a'.repeat(64), registrySha256: 'b'.repeat(64),
+        primaryTaskId: 'task.asr', primaryMethodId: 'method.transformer', concepts: [
+            { id: 'task.asr', facet: 'task', preferredLabel: { zh: '语音识别' } },
+            { id: 'method.transformer', facet: 'method', preferredLabel: { zh: 'Transformer' } }
+        ] };
+    const expected = api.buildDailyPaperDisplayRecord(current, assignment);
+    const legacy = structuredClone(current);
+    legacy.parsed = Object.fromEntries(Object.entries(legacy.parsed).map(([key, value]) =>
+        [key === 'tagValidation' ? 'taxonomyValidation' : key, value]));
+    const before = JSON.stringify(legacy);
+    assert.deepEqual(api.buildDailyPaperDisplayRecord(legacy, assignment), expected);
+    assert.equal(JSON.stringify(legacy), before);
+    for (const cache of [{ score: current.parsed.score, summary: current.parsed.summary },
+        { ...current.parsed, tagValidation: null }]) {
+        assert.deepEqual(api.buildDailyPaperDisplayRecord({ ...current, parsed: cache }, assignment), expected);
+    }
+    for (const value of [current.parsed.tagValidation, null, {}]) {
+        const mixed = structuredClone(current);
+        mixed.parsed.taxonomyValidation = value;
+        assert.throws(() => api.buildDailyPaperDisplayRecord(mixed, assignment), /解析结果不能同时包含/);
+    }
+});

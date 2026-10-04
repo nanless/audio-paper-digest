@@ -365,7 +365,7 @@ test('实际更新会保存分析、运行和进程记录，并归档原完成�
         parsed: utilsApi.parseAnalysis(paper.analysis, { tagRules: current }),
         tagRules: current
     }), null);
-    assert.equal(paper.parsed.taxonomyValidation.registrySha256, current.registrySha256);
+    assert.equal(paper.parsed.tagValidation.registrySha256, current.registrySha256);
 
     // run.json：逐字重封，receipt 绑定新 analysis 字节，真实 adapter 复核通过。
     const analysisBytes = fs.readFileSync(fx.analysisFile);

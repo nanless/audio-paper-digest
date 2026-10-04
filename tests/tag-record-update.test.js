@@ -57,8 +57,8 @@ test('明确确认允许的破坏性变更后，工具按当前词表更新标�
     // 正文与 checkpoint 逐字不变：只有 registry/projection/binding 与注记变化。
     assert.equal(plan.analysis.papers[0].analysis,
         analysisRecord({ registrySha256: ADDITIVE_OLD_SHA }).papers[0].analysis);
-    // 缓存的 parsed.taxonomyValidation 必须一并刷新，发布侧会直接读它。
-    const refreshed = plan.analysis.papers[0].parsed.taxonomyValidation;
+    // 显式重新生成后，缓存仅使用新的标签校验字段。
+    const refreshed = plan.analysis.papers[0].parsed.tagValidation;
     assert.equal(refreshed.registrySha256, runtime().registrySha256);
     assert.equal(refreshed.valid, true);
     assert.deepEqual(refreshed.conceptIds,
@@ -399,4 +399,65 @@ test('当前词表的旧 v1 标签记录只读核验，不转换版本或补签'
     assert.equal(result.item.outcome, 'already-current');
     assert.equal(result.analysis, null);
     assert.equal(JSON.stringify(analysis), before);
+});
+
+
+test('旧、新标签缓存的注记与重新生成保留各自写入范围', () => {
+    for (const inputKey of ['taxonomyValidation', 'tagValidation']) {
+        for (const mode of ['annotate', 'reproject']) {
+            const original = analysisRecord({ registrySha256: ADDITIVE_OLD_SHA,
+                projectionSha256: 'e'.repeat(64) });
+            const paper = original.papers[0];
+            if (inputKey === 'tagValidation') paper.parsed = Object.fromEntries(
+                Object.entries(paper.parsed).map(([key, value]) =>
+                    [key === 'taxonomyValidation' ? 'tagValidation' : key, value]));
+            // 旧缓存的附加信息和人工评分不能因改名被重新解析结果覆盖。
+            paper.parsed.score = '9.1';
+            paper.parsed.scoreOverride = { actor: 'reviewer', value: 9.1 };
+            paper.parsed[inputKey].errors = ['保留旧缓存说明'];
+            paper.parsed[inputKey].valid = false;
+            paper.parsed[inputKey].extra = { preserved: true };
+            const before = JSON.stringify(original);
+            const plan = resealApi.reprojectAnalysis({ analysis: original, runtime: runtime(), mode,
+                acknowledgeDestructive: true });
+            assert.equal(plan.ok, true, plan.item.errors.join('; '));
+            const output = plan.analysis.papers[0];
+            const outputKey = mode === 'annotate' ? inputKey : 'tagValidation';
+            const expectedParsed = Object.fromEntries(Object.entries(paper.parsed).map(([key, value]) =>
+                key === inputKey ? [outputKey, { ...value, registryVersion: runtime().registryVersion,
+                    registrySha256: runtime().registrySha256 }] : [key, value]));
+            assert.deepEqual(output.parsed, expectedParsed);
+            assert.deepEqual(Object.keys(output.parsed), Object.keys(expectedParsed));
+            assert.equal(Object.hasOwn(output.parsed, outputKey === 'tagValidation'
+                ? 'taxonomyValidation' : 'tagValidation'), false);
+            assert.equal(output.analysis, paper.analysis);
+            assert.deepEqual(output.analysisStageCheckpoints, paper.analysisStageCheckpoints);
+            assert.equal(JSON.stringify(original), before);
+        }
+    }
+});
+
+test('标签更新只读旧缓存且拒绝混用，不补造缺少的校验结果', () => {
+    const current = analysisRecord();
+    const before = JSON.stringify(current);
+    const already = resealApi.reprojectAnalysis({ analysis: current, runtime: runtime() });
+    assert.equal(already.item.outcome, 'already-current');
+    assert.equal(already.analysis, null);
+    assert.equal(JSON.stringify(current), before);
+    for (const value of [current.papers[0].parsed.taxonomyValidation, null, {}]) {
+        const mixed = structuredClone(current);
+        mixed.papers[0].parsed.tagValidation = value;
+        const plan = resealApi.reprojectAnalysis({ analysis: mixed, runtime: runtime() });
+        assert.equal(plan.item.status, 'blocked');
+        assert.equal(plan.analysis, null);
+        assert.match(plan.item.errors.join(';'), /解析结果不能同时包含/);
+    }
+    for (const cache of [null, {}, { taxonomyValidation: null }, { tagValidation: [] }]) {
+        const original = analysisRecord({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
+        original.papers[0].parsed = cache;
+        const plan = resealApi.reprojectAnalysis({ analysis: original, runtime: runtime(),
+            acknowledgeDestructive: true });
+        assert.equal(plan.ok, true, plan.item.errors.join(';'));
+        assert.deepEqual(plan.analysis.papers[0].parsed, cache);
+    }
 });

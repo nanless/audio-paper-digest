@@ -125,7 +125,7 @@ ${method === undefined ? '' : `主方法标签: ${method}`}
         'from utils import parse_analysis',
         'from publish_common import _hash_tag_section_and_primary_tags',
         'items=json.load(sys.stdin)',
-        'keys=("tags","primaryTaskTag","primaryMethodTag","taxonomyValidation")',
+        'keys=("tags","primaryTaskTag","primaryMethodTag","tagValidation")',
         'out=[]',
         'for item in items:',
         '    parsed=parse_analysis(item["text"],legacy_tags=item["legacyTags"])',
@@ -138,7 +138,7 @@ ${method === undefined ? '' : `主方法标签: ${method}`}
     });
     assert.equal(result.status, 0, result.stderr);
     const python = JSON.parse(result.stdout);
-    const keys = ['tags', 'primaryTaskTag', 'primaryMethodTag', 'taxonomyValidation'];
+    const keys = ['tags', 'primaryTaskTag', 'primaryMethodTag', 'tagValidation'];
     const node = fixtures.map(item => {
         const parsed = parseAnalysis(item.text, { legacyTags: item.legacyTags });
         return { ...Object.fromEntries(keys.map(key => [key, parsed[key]])),
@@ -184,6 +184,39 @@ test('评价标题的围栏、Unicode空白、CRLF和重复判别在两端一致
         cwd: path.resolve(__dirname, '..'), input: JSON.stringify(inputs), encoding: 'utf8', timeout: 120000
     });
     assert.equal(result.error, undefined, String(result.error));
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), expected);
+});
+
+test('新旧标签缓存的字段冲突和缺失读取在两端一致', () => {
+    const { readTagValidation } = require('../scripts/utils.js');
+    const value = { valid: true, errors: [], registryVersion: 'paper-taxonomy-v1',
+        registrySha256: 'a'.repeat(64), primaryTaskId: 'task.asr',
+        primaryMethodId: 'method.transformer', conceptIds: ['task.asr', 'method.transformer'],
+        specificityWarning: null };
+    const inputs = [null, [], {}, { tagValidation: value }, { taxonomyValidation: value },
+        { tagValidation: null }, { taxonomyValidation: [] }, { tagValidation: 'invalid' },
+        { tagValidation: {}, taxonomyValidation: {} }, { tagValidation: null, taxonomyValidation: null },
+        { tagValidation: value, taxonomyValidation: value },
+        { tagValidation: value, taxonomyValidation: { valid: false } }];
+    const expected = inputs.map(input => {
+        try { return { value: readTagValidation(input), error: null }; }
+        catch (error) { return { value: null, error: error.message }; }
+    });
+    const script = [
+        'import json,sys',
+        'sys.path.insert(0,"scripts")',
+        'from utils import read_tag_validation',
+        'out=[]',
+        'for item in json.load(sys.stdin):',
+        '    try: out.append({"value":read_tag_validation(item),"error":None})',
+        '    except ValueError as error: out.append({"value":None,"error":str(error)})',
+        'print(json.dumps(out,ensure_ascii=False))'
+    ].join('\n');
+    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
+        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(inputs), encoding: 'utf8',
+        maxBuffer: 16 * 1024 * 1024, timeout: 30000
+    });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), expected);
 });

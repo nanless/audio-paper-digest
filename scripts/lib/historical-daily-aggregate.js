@@ -149,6 +149,8 @@ function bindTopology({ crosswalkRoot, crosswalkId, inventoryRoot } = {}) {
 function buildDailyPaperDisplayRecord(paper, tagAssignment) {
     if (!paper || typeof paper !== 'object' || typeof paper.analysis !== 'string' || !paper.analysis.trim()
         || !paper.parsed || typeof paper.parsed !== 'object') fail('论文记录必须包含非空分析正文及解析结果对象。');
+    try { require('../utils.js').readTagValidation(paper.parsed); }
+    catch (error) { fail(error.message); }
     const reparsed = require('../utils.js').parseAnalysis(paper.analysis);
     if (!reparsed || stableHash({ summary: String(reparsed.summary || '').trim(), score: String(reparsed.score ?? '').trim() })
         !== stableHash({ summary: String(paper.parsed.summary || '').trim(), score: String(paper.parsed.score ?? '').trim() })) {

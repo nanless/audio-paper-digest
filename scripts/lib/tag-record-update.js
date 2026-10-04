@@ -103,6 +103,13 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
                 errors: [`标签阶段的状态为 ${stage?.status ?? '缺失'}，尚未完成，不能更新记录。`] }) };
     }
     const oldConceptIds = Array.isArray(stage.conceptIds) ? stage.conceptIds : [];
+    let cachedValidation;
+    try { cachedValidation = require('../utils.js').readTagValidation(paper.parsed); }
+    catch (error) {
+        return { ok: false, analysis: null,
+            item: stageResult({ ...base, status: 'blocked', outcome: 'binding-refused',
+                oldConceptIds, conceptIds: oldConceptIds, errors: [error.message] }) };
+    }
     const parsed = parseAnalysisText(paper.analysis, runtime);
     let paperRef = paper;
     const validate = () => contractApi.validateTagStageProof(paperRef, {
@@ -120,7 +127,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         }
         return { ok: false, analysis: null,
             item: stageResult({ ...base, status: 'assigned', outcome: 'already-current',
-                oldConceptIds, conceptIds: parsed.taxonomyValidation?.conceptIds ?? oldConceptIds,
+                oldConceptIds, conceptIds: parsed.tagValidation?.conceptIds ?? oldConceptIds,
                 changeLevel: 'none', errors: [] }) };
     }
 
@@ -156,7 +163,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         // 人工确认有效后，仍须核对正文标签的解析结果和更新后的阶段记录。
     }
 
-    const validation = parsed?.taxonomyValidation;
+    const validation = parsed?.tagValidation;
     if (!validation?.valid) {
         return { ok: false, analysis: null,
             item: stageResult({ ...base, status: 'blocked', outcome: 'selection-invalid',
@@ -196,17 +203,16 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         ...paper.analysisManifest,
         stages: { ...paper.analysisManifest.stages, taxonomySeal: nextStage }
     } };
-    // Python 发布端会优先读取已保存的 parsed.taxonomyValidation，因此更新
-    // 标签记录时也更新其中的词表版本与 SHA，使它们与当前解析结果一致。
-    if (paper.parsed && typeof paper.parsed === 'object' && paper.parsed.taxonomyValidation) {
-        nextPaper.parsed = {
-            ...paper.parsed,
-            taxonomyValidation: {
-                ...paper.parsed.taxonomyValidation,
+    // 注记保留缓存的原字段名；显式重新生成时只迁移标签子对象的字段名。
+    // 两种模式都只更新原子对象的词表版本和 SHA，不覆盖评分或人工修改。
+    if (cachedValidation) {
+        const cachedKey = Object.prototype.hasOwnProperty.call(paper.parsed, 'tagValidation')
+            ? 'tagValidation' : 'taxonomyValidation';
+        const outputKey = mode === 'reproject' ? 'tagValidation' : cachedKey;
+        nextPaper.parsed = Object.fromEntries(Object.entries(paper.parsed).map(([key, value]) =>
+            key === cachedKey ? [outputKey, { ...value,
                 registryVersion: validation.registryVersion,
-                registrySha256: validation.registrySha256
-            }
-        };
+                registrySha256: validation.registrySha256 }] : [key, value]));
     }
     paperRef = nextPaper;
     const issue = validate();

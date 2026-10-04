@@ -135,7 +135,7 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
     output_analysis = paper['analysis']
     input_analysis = output_analysis if input_analysis is None else input_analysis
     parsed = parse_analysis(output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
-    selection = parsed['taxonomyValidation']
+    selection = parsed['tagValidation']
     input_sha = hashlib.sha256(input_analysis.encode('utf-8')).hexdigest()
     output_sha = hashlib.sha256(output_analysis.encode('utf-8')).hexdigest()
     masked_input_analysis_sha256 = hashlib.sha256(
@@ -1457,8 +1457,8 @@ primary_method_tag: #基准测试
         parsed = parse_analysis(benchmark)
         self.assertEqual(parsed['primaryTaskTag'], '')
         self.assertEqual(parsed['primaryMethodTag'], '')
-        self.assertFalse(parsed['taxonomyValidation']['valid'])
-        self.assertEqual(parsed['taxonomyValidation']['conceptIds'], [])
+        self.assertFalse(parsed['tagValidation']['valid'])
+        self.assertEqual(parsed['tagValidation']['conceptIds'], [])
 
         valid = benchmark.replace(
             'primary_task_tag: #模型评估', 'primary_task_tag: #音频理解',
@@ -1475,14 +1475,14 @@ primary_method_tag: #基准测试
         parsed = parse_analysis(valid)
         self.assertEqual(parsed['primaryTaskTag'], '#音频理解')
         self.assertEqual(parsed['primaryMethodTag'], '#数据清洗')
-        self.assertTrue(parsed['taxonomyValidation']['valid'])
+        self.assertTrue(parsed['tagValidation']['valid'])
 
         model_family = valid.replace(
             'primary_method_tag: #数据清洗', 'primary_method_tag: #统一音频模型',
         ).replace('主方法标签：#数据清洗', '主方法标签：#统一音频模型')
         parsed = parse_analysis(model_family)
         self.assertEqual(parsed['primaryMethodTag'], '')
-        self.assertFalse(parsed['taxonomyValidation']['valid'])
+        self.assertFalse(parsed['tagValidation']['valid'])
 
     def test_empty_links_and_duplicate_alts(self):
         text = '![图]()\n![same](a.png)\n![same](b.png)\n[空]()'
@@ -2830,6 +2830,38 @@ primary_method_tag: #基准测试
         }
         parsed = resolve_publish_parsed(paper)
         self.assertEqual(parsed['score'], '6.5')
+
+    def test_old_tag_cache_preserves_scoring_baseline_and_rejects_mixed_fields(self):
+        original = complete_paper()
+        baseline = resolve_publish_parsed(original)
+        for key, value in (('taxonomyValidation', original['parsed']['tagValidation']),
+                           ('tagValidation', None), ('tagValidation', ['invalid']),
+                           (None, None)):
+            paper = copy.deepcopy(original)
+            paper['parsed'].pop('tagValidation')
+            if key is not None:
+                paper['parsed'][key] = copy.deepcopy(value)
+            before = copy.deepcopy(paper)
+            self.assertEqual(resolve_publish_parsed(paper), baseline)
+            self.assertEqual(paper, before)
+
+        old = copy.deepcopy(original)
+        old['parsed']['taxonomyValidation'] = old['parsed'].pop('tagValidation')
+        old['parsed']['engineeringScore'] = '1'
+        old['parsed']['score'] = '6.5'
+        old['parsedOverride'] = {
+            'type': 'manual', 'source': 'editor:fixture', 'reason': '人工复核工程价值',
+            'fields': ['engineeringScore', 'score'],
+        }
+        self.assertEqual(resolve_publish_parsed(old)['score'], '6.5')
+        for new_value, old_value in (({}, {}), (None, None),
+                                     (baseline['tagValidation'], baseline['tagValidation'])):
+            mixed = copy.deepcopy(original)
+            mixed['parsed']['tagValidation'] = new_value
+            mixed['parsed']['taxonomyValidation'] = old_value
+            with self.subTest(new_value=new_value):
+                with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+                    resolve_publish_parsed(mixed)
 
     def test_publish_baseline_ignores_stale_cached_body_fields(self):
         paper = complete_paper()

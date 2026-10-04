@@ -27,7 +27,7 @@ from publish_common import (
 )
 from tag_catalog import load_tag_catalog
 from analysis_sections import evaluation_heading_issue
-from utils import parse_analysis
+from utils import parse_analysis, read_tag_validation
 
 # ─── Feishu Config ────────────────────────────────────────────
 FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', '')
@@ -250,13 +250,23 @@ def batch_has_invalid_tag_metadata(papers):
     发布通道不允许这样静默降级：这里显式判定降级条件，由正文写出声明。
     """
     registry = load_tag_catalog()
+    papers = list(papers)
+    try:
+        for paper in papers:
+            if isinstance(paper, dict):
+                read_tag_validation(paper.get('parsed'))
+    except ValueError as error:
+        raise PublishDataValidationError(str(error)) from error
     for paper in papers:
         if not isinstance(paper, dict):
             return True
         parsed = paper.get('parsed')
         if not isinstance(parsed, dict):
             parsed = parse_analysis(paper.get('analysis', '')) or {}
-        validation = parsed.get('taxonomyValidation') if isinstance(parsed, dict) else None
+        try:
+            validation = read_tag_validation(parsed)
+        except ValueError as error:
+            raise PublishDataValidationError(str(error)) from error
         if not isinstance(validation, dict) or validation.get('valid') is not True \
                 or not str(parsed.get('primaryTaskTag') or '').strip() \
                 or validation.get('registryVersion') != registry['version'] \

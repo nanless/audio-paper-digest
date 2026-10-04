@@ -96,7 +96,7 @@ function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisTex
     const tagRules = require('../scripts/lib/tag-rules.js')
         .getDefaultTagRules();
     const tagValidationResult = require('../scripts/utils.js').parseAnalysis(analysis)
-        .taxonomyValidation;
+        .tagValidation;
     const classificationMaskedAnalysisSha256 = crypto.createHash('sha256')
         .update(contract.maskClassificationFields(analysis)).digest('hex');
     const tagStageProof = {

@@ -14757,7 +14757,7 @@ async function analyzePaperDeepInternal(paper) {
             // 上方对已完成阶段的额外检查只看标签是否合规，不因这条告警单独要求重跑。
             let repairFeedback = tagValidationIssue;
             if (!repairFeedback) {
-                const warning = parseAnalysis(analysis).taxonomyValidation?.specificityWarning;
+                const warning = parseAnalysis(analysis).tagValidation?.specificityWarning;
                 if (warning) repairFeedback = warning;
             }
             if (repairFeedback) {
@@ -14796,9 +14796,9 @@ async function analyzePaperDeepInternal(paper) {
                 outputProtectedProjectionSha256: crypto.createHash('sha256')
                     .update(maskClassificationFields(analysis)).digest('hex'),
                 taxonomySurfaceSha256: hashTagSectionAndPrimaryTags(analysis),
-                primaryTaskId: parsedForTagCheck.taxonomyValidation.primaryTaskId,
-                primaryMethodId: parsedForTagCheck.taxonomyValidation.primaryMethodId,
-                conceptIds: parsedForTagCheck.taxonomyValidation.conceptIds
+                primaryTaskId: parsedForTagCheck.tagValidation.primaryTaskId,
+                primaryMethodId: parsedForTagCheck.tagValidation.primaryMethodId,
+                conceptIds: parsedForTagCheck.tagValidation.conceptIds
             };
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
@@ -16161,7 +16161,7 @@ function normalizeAnalysisStructure(analysis) {
     // 覆盖这些值；否则保留机器摘要中的非空值，只给空缺补待处理标记。
     // 这里不从正文猜选标签，也不保证保留下来的标签已经合规。结构修复结束后，
     // 独立标签阶段依据当前词表核验，必要时按原文证据局部修复。
-    if (parsedBefore.taxonomyValidation?.valid) {
+    if (parsedBefore.tagValidation?.valid) {
         values.primary_task_tag = parsedBefore.primaryTaskTag;
         values.primary_method_tag = parsedBefore.primaryMethodTag;
     }
@@ -16285,9 +16285,9 @@ function applyTagSelection(analysis, selection, options = {}) {
     if (issue) throw contractRejectedError(`标签局部修复后仍未通过校验：${issue}`);
     // 启用 requireMostSpecificTask 时，修复结果的主任务标签不能再出现过于宽泛的告警。
     // 重试由修复函数控制；最终失败时是否保留原标签，由主流程决定。
-    if (options.requireMostSpecificTask && parsed.taxonomyValidation?.specificityWarning) {
+    if (options.requireMostSpecificTask && parsed.tagValidation?.specificityWarning) {
         throw contractRejectedError(
-            `标签局部修复后仍未通过校验：${parsed.taxonomyValidation.specificityWarning}`);
+            `标签局部修复后仍未通过校验：${parsed.tagValidation.specificityWarning}`);
     }
     return updated;
 }

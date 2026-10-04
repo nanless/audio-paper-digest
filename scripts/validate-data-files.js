@@ -16,7 +16,8 @@ const {
     normalizeScoreToOneDecimal,
     isOpenSourceScoreAnchor,
     OPEN_SOURCE_SCORE_ANCHORS,
-    parseAnalysis
+    parseAnalysis,
+    readTagValidation
 } = require('./utils.js');
 const {
     getInvalidAnalysisReason,
@@ -962,6 +963,8 @@ function validatePaperListFile(filePath, options = {}) {
             if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
                 addIssue(issues, filePath, `papers[${index}] 缺少有效 parsed 评分缓存`);
             } else {
+                try { readTagValidation(parsed); }
+                catch (error) { addIssue(issues, filePath, `papers[${index}] ${error.message}`); }
                 const score = numericScore(parsed.score);
                 if (parsed.score === undefined || parsed.score === '' || !Number.isFinite(score) || score < 0 || score > 10) {
                     addIssue(issues, filePath, `papers[${index}] parsed.score 非法: ${parsed.score}`);

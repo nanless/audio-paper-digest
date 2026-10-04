@@ -226,7 +226,7 @@ def render_packet(packet):
         projected['parsed']['tags'] = labels
         projected['parsed']['primaryTaskTag'] = f'#{concepts[assignment["primaryTaskId"]]["preferredLabel"]["zh"]}'
         projected['parsed']['primaryMethodTag'] = f'#{concepts[assignment["primaryMethodId"]]["preferredLabel"]["zh"]}'
-        projected['parsed']['taxonomyValidation'] = {
+        projected['parsed']['tagValidation'] = {
             'valid': True,
             'errors': [],
             'registryVersion': assignment['registryVersion'],

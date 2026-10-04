@@ -515,7 +515,7 @@ test('页面生成程序升级后，使用新的暂存身份，不覆盖原文�
         nodeSourceSha256: marker.repeat(64), rendererSourceSha256: 'b'.repeat(64), publisherSourceSha256: 'c'.repeat(64),
         publisherCommonSourceSha256: '2'.repeat(64),
         analysisSectionsSourceSha256: '3'.repeat(64), analysisSectionTitlesSourceSha256: '4'.repeat(64),
-        loaderSourceSha256: 'd'.repeat(64), parserSourceSha256: 'e'.repeat(64), taxonomySourceSha256: 'f'.repeat(64),
+        loaderSourceSha256: 'd'.repeat(64), parserSourceSha256: 'e'.repeat(64), pythonParserSourceSha256: '5'.repeat(64), taxonomySourceSha256: 'f'.repeat(64),
         identitySourceSha256: '1'.repeat(64) };
         return { ...body, implementationSha256: api.stableHash(body) }; };
     const firstDeps = { ...f.dependencies, implementationFingerprint: () => implementation('a') };
@@ -631,4 +631,45 @@ test('CLI requires full authority, configured roots and distinct UUID selections
     assert.equal(parsed.executionIds.length, 2);
     assert.throws(() => cli.parseArgs(['paper', '--apply', '--analysis-run', '11111111-1111-4111-8111-111111111111']), /Use/);
     assert.throws(() => cli.configured({ conferenceAnalysisDir: 'relative' }), /configured absolute path/);
+});
+
+
+test('会议缓存兼容旧标签字段，但不能混用新旧字段', () => {
+    const current = completed('88888888-8888-4888-8888-888888888888').analysis.papers[0];
+    const expected = api.getConsistentPublicationFields(current);
+    const legacy = structuredClone(current);
+    legacy.parsed = Object.fromEntries(Object.entries(legacy.parsed).map(([key, value]) =>
+        [key === 'tagValidation' ? 'taxonomyValidation' : key, value]));
+    const before = JSON.stringify(legacy);
+    assert.deepEqual(api.getConsistentPublicationFields(legacy), expected);
+    assert.equal(JSON.stringify(legacy), before);
+    delete legacy.parsed.taxonomyValidation;
+    assert.deepEqual(api.getConsistentPublicationFields(legacy), expected);
+    for (const value of [current.parsed.tagValidation, null, {}]) {
+        const mixed = structuredClone(current);
+        mixed.parsed.taxonomyValidation = value;
+        assert.throws(() => api.getConsistentPublicationFields(mixed), /解析结果不能同时包含/);
+    }
+});
+
+test('会议实现身份实际包含 Python 解析器全文，单独变化使身份失效', () => {
+    const baseline = api.implementationFingerprint();
+    const parserPath = path.resolve(__dirname, '../scripts/utils.py');
+    assert.equal(baseline.pythonParserSourceSha256, sha256(fs.readFileSync(parserPath)));
+    const originalRead = pageApi.readRegular;
+    try {
+        pageApi.readRegular = function(file, ...args) {
+            const result = originalRead(file, ...args);
+            if (path.resolve(file) !== parserPath) return result;
+            const bytes = Buffer.concat([result.bytes, Buffer.from('\n# changed Python parser dependency')]);
+            return { ...result, bytes, fileSha256: sha256(bytes) };
+        };
+        const changed = api.implementationFingerprint();
+        assert.notEqual(changed.pythonParserSourceSha256, baseline.pythonParserSourceSha256);
+        assert.notEqual(changed.implementationSha256, baseline.implementationSha256);
+        assert.equal(changed.parserSourceSha256, baseline.parserSourceSha256);
+        const { pythonParserSourceSha256: _changedPython, implementationSha256: _changedHash, ...otherChanged } = changed;
+        const { pythonParserSourceSha256: _originalPython, implementationSha256: _originalHash, ...otherOriginal } = baseline;
+        assert.deepEqual(otherChanged, otherOriginal);
+    } finally { pageApi.readRegular = originalRead; }
 });

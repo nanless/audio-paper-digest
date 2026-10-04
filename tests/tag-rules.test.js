@@ -147,9 +147,9 @@ test('主任务是否过于宽泛按整个词表判断；该告警不使已有�
     // 非叶主任务：valid 保持 true，只给出结构化 specificityWarning。
     // v1.1 换表后 #语音识别 的 active 后代由 1 个增至 6 个（新词表扩充 ASR 族）。
     const parsed = parseAnalysis(analysis);
-    assert.equal(parsed.taxonomyValidation.valid, true,
-        parsed.taxonomyValidation.errors.join('; '));
-    assert.equal(parsed.taxonomyValidation.specificityWarning,
+    assert.equal(parsed.tagValidation.valid, true,
+        parsed.tagValidation.errors.join('; '));
+    assert.equal(parsed.tagValidation.specificityWarning,
         '主任务标签过于宽泛：#语音识别 的下级概念中有未被选中的已启用概念（共 6 个）：'
         + '#音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复');
 
@@ -178,9 +178,9 @@ test('主任务是否过于宽泛按整个词表判断；该告警不使已有�
         outputProtectedProjectionSha256: textSha(
             require('../scripts/deep-analyzer.js').maskClassificationFields(analysis)),
         taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(analysis),
-        primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
-        primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
-        conceptIds: parsed.taxonomyValidation.conceptIds
+        primaryTaskId: parsed.tagValidation.primaryTaskId,
+        primaryMethodId: parsed.tagValidation.primaryMethodId,
+        conceptIds: parsed.tagValidation.conceptIds
     };
     const paper = {
         analysis,
@@ -232,14 +232,14 @@ primary_method_tag: #众包评测
 主方法标签：#众包评测
 补充标签：#多语言 #基准测试`;
     const parsed = parseAnalysis(analysis);
-    assert.equal(parsed.taxonomyValidation.valid, true,
-        parsed.taxonomyValidation.errors.join('; '));
-    assert.equal(parsed.taxonomyValidation.primaryTaskId, 'task.intelligibility');
-    assert.equal(parsed.taxonomyValidation.primaryMethodId, 'method.crowdsourced-evaluation');
+    assert.equal(parsed.tagValidation.valid, true,
+        parsed.tagValidation.errors.join('; '));
+    assert.equal(parsed.tagValidation.primaryTaskId, 'task.intelligibility');
+    assert.equal(parsed.tagValidation.primaryMethodId, 'method.crowdsourced-evaluation');
 
     const old = parseAnalysis(analysis.replaceAll('#众包评测', '#端到端'));
     assert.equal(old.primaryMethodTag, '');
-    assert.equal(old.taxonomyValidation.valid, false);
+    assert.equal(old.tagValidation.valid, false);
 
     const reorderedSupplemental = analysis.replace(
         '补充标签：#多语言 #基准测试',
@@ -279,9 +279,9 @@ primary_method_tag: #众包评测
         inputProtectedProjectionSha256: protectedSha,
         outputProtectedProjectionSha256: protectedSha,
         taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(analysis),
-        primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
-        primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
-        conceptIds: parsed.taxonomyValidation.conceptIds
+        primaryTaskId: parsed.tagValidation.primaryTaskId,
+        primaryMethodId: parsed.tagValidation.primaryMethodId,
+        conceptIds: parsed.tagValidation.conceptIds
     };
     const paper = {
         analysis,
@@ -343,9 +343,9 @@ primary_method_tag: #众包评测
         inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(inputAnalysis)),
         outputProtectedProjectionSha256: textSha(contract.maskClassificationFields(outputAnalysis)),
         taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(outputAnalysis),
-        primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
-        primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
-        conceptIds: parsed.taxonomyValidation.conceptIds
+        primaryTaskId: parsed.tagValidation.primaryTaskId,
+        primaryMethodId: parsed.tagValidation.primaryMethodId,
+        conceptIds: parsed.tagValidation.conceptIds
     };
     const paper = {
         analysis: outputAnalysis,

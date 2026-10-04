@@ -67,9 +67,9 @@ describe('taxonomy runtime analysis integration', () => {
             deep.maskClassificationFields(validAnalysisText())
         );
         const parsed = deep.parseAnalysis(repaired);
-        assert.strictEqual(parsed.taxonomyValidation.valid, true);
-        assert.strictEqual(parsed.taxonomyValidation.primaryTaskId, 'task.intelligibility');
-        assert.strictEqual(parsed.taxonomyValidation.primaryMethodId,
+        assert.strictEqual(parsed.tagValidation.valid, true);
+        assert.strictEqual(parsed.tagValidation.primaryTaskId, 'task.intelligibility');
+        assert.strictEqual(parsed.tagValidation.primaryMethodId,
             'method.crowdsourced-evaluation');
     });
 

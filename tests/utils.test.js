@@ -12,6 +12,7 @@ const {
     stripMd,
     parseMachineSummary,
     parseAnalysis,
+    readTagValidation,
     parseScoringDimensions,
     normalizeDocumentType,
     SCORING_RUBRIC_VERSION,
@@ -277,12 +278,12 @@ innovation: 2.0
         const spatial = parseAnalysis(`## 评分\n6.0/10\n\n## 机器摘要\nprimary_task_tag: #空间音频\nprimary_method_tag: #CNN\n\n## 标签\n#空间音频 #音视频生成 #CNN\n主任务标签：#空间音频\n主方法标签：#CNN`);
         assert.strictEqual(spatial.primaryTaskTag, '');
         assert.strictEqual(spatial.primaryMethodTag, '#CNN');
-        assert.strictEqual(spatial.taxonomyValidation.valid, false);
+        assert.strictEqual(spatial.tagValidation.valid, false);
 
         const benchmark = parseAnalysis(`## 评分\n6.0/10\n\n## 机器摘要\nprimary_task_tag: #模型评估\nprimary_method_tag: #基准测试\n\n## 标签\n#模型评估 #基准测试 #音频理解\n主任务标签：#模型评估\n主方法标签：#基准测试`);
         assert.strictEqual(benchmark.primaryTaskTag, '');
         assert.strictEqual(benchmark.primaryMethodTag, '');
-        assert.strictEqual(benchmark.taxonomyValidation.valid, false);
+        assert.strictEqual(benchmark.tagValidation.valid, false);
     });
 
     it('从八维评分理由重算总分并修正开源矛盾', () => {
@@ -1422,5 +1423,36 @@ describe('论文评价标题兼容', () => {
         assert.strictEqual(extractAnalysisSection(raw, '论文评价'), '真实的评价。');
         assert.strictEqual(parseAnalysis(raw).roast, '真实的评价。');
         assert.strictEqual(parseAnalysis('## 评分\n6.0/10').roast, '');
+    });
+});
+
+
+describe('标签校验缓存的字段读取', () => {
+    it('新解析仅输出新字段，旧缓存读取不改变对象或子对象', () => {
+        const analysis = require('./valid-analysis-fixture.js').validAnalysisText();
+        const parsed = parseAnalysis(analysis);
+        assert.strictEqual(Object.hasOwn(parsed, 'tagValidation'), true);
+        assert.strictEqual(Object.hasOwn(parsed, 'taxonomyValidation'), false);
+        const legacy = Object.fromEntries(Object.entries(parsed).map(([key, value]) =>
+            [key === 'tagValidation' ? 'taxonomyValidation' : key, value]));
+        const before = JSON.stringify(legacy);
+        assert.strictEqual(readTagValidation(legacy), parsed.tagValidation);
+        assert.strictEqual(readTagValidation(parsed), parsed.tagValidation);
+        assert.strictEqual(JSON.stringify(legacy), before);
+        for (const input of [null, false, [], {}, { tagValidation: null },
+            { taxonomyValidation: false }, { tagValidation: [] }, { taxonomyValidation: 'bad' }]) {
+            assert.strictEqual(readTagValidation(input), null);
+        }
+        const empty = {};
+        assert.strictEqual(readTagValidation({ tagValidation: empty }), empty);
+        assert.strictEqual(readTagValidation(Object.create({ taxonomyValidation: parsed.tagValidation })), null);
+    });
+    it('双字段相等、不同或为空时均明确拒绝', () => {
+        const valid = { valid: true };
+        for (const [current, legacy] of [[valid, valid], [valid, { valid: false }],
+            [null, null], [{}, {}], [null, valid], [undefined, undefined]]) {
+            assert.throws(() => readTagValidation({ tagValidation: current, taxonomyValidation: legacy }),
+                /解析结果不能同时包含 tagValidation 和旧字段 taxonomyValidation/);
+        }
     });
 });

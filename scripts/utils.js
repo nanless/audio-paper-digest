@@ -1259,6 +1259,20 @@ function parseScoringDimensions(scoringText) {
     return { valid: errors.length === 0, scores, errors };
 }
 
+// 兼容读取已保存的旧解析结果；同一对象不能混用两个字段。
+function readTagValidation(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const hasCurrent = Object.prototype.hasOwnProperty.call(parsed, 'tagValidation');
+    const hasLegacy = Object.prototype.hasOwnProperty.call(parsed, 'taxonomyValidation');
+    if (hasCurrent && hasLegacy) {
+        throw new Error('解析结果不能同时包含 tagValidation 和旧字段 taxonomyValidation。');
+    }
+    const validation = hasCurrent ? parsed.tagValidation
+        : hasLegacy ? parsed.taxonomyValidation : null;
+    return validation && typeof validation === 'object' && !Array.isArray(validation)
+        ? validation : null;
+}
+
 function parseAnalysis(analysis, options = {}) {
     if (getPaperEvaluationHeadingIssue(analysis)) return null;
     if (!analysis) return null;
@@ -1340,7 +1354,7 @@ function parseAnalysis(analysis, options = {}) {
         hasModel: '',
         hasDataset: '',
         scoreValidation: { valid: false, scores: {}, errors: ['缺少评分理由'] },
-        taxonomyValidation: {
+        tagValidation: {
             valid: false, errors: ['缺少标签章节'],
             registryVersion: tagRules.registryVersion,
             registrySha256: tagRules.registrySha256,
@@ -1442,7 +1456,7 @@ function parseAnalysis(analysis, options = {}) {
         ? getPreferredTagText(extractedTaskTag, 'task') : '';
     result.primaryMethodTag = _isMethodTag(extractedMethodTag)
         ? getPreferredTagText(extractedMethodTag, 'method') : '';
-    result.taxonomyValidation = tagRules.validateTagSelection({
+    result.tagValidation = tagRules.validateTagSelection({
         tags: legacyTags ? result.tags : rawTagList,
         primaryTaskTag: legacyTags ? result.primaryTaskTag : extractedTaskTag,
         primaryMethodTag: legacyTags ? result.primaryMethodTag : extractedMethodTag
@@ -1894,6 +1908,7 @@ module.exports = {
     stripMd,
     parseMachineSummary,
     parseAnalysis,
+    readTagValidation,
     parseScoringDimensions,
     ALLOWED_TAGS,
     PRIMARY_TASK_TAGS,

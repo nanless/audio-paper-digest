@@ -1492,3 +1492,30 @@ describe('validate-data-files', () => {
         assert.match(allIssues, /filter-decisions\.json 缺失/);
     });
 });
+
+
+describe('解析缓存标签字段的只读数据检查', () => {
+    it('旧单字段和缺少标签结果保持原检查，混用时报告清楚原因', t => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-tag-cache-'));
+        t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+        const filename = path.join(dir, 'deep-analysis-result.json');
+        const paper = completeAnalysisPaper('2607.00001');
+        const check = cache => {
+            fs.writeFileSync(filename, JSON.stringify({ papers: [{ ...paper, parsed: cache }] }));
+            return validatePaperListFile(filename, { deepAnalysis: true });
+        };
+        const baseline = check(paper.parsed);
+        const old = Object.fromEntries(Object.entries(paper.parsed).map(([key, value]) =>
+            [key === 'tagValidation' ? 'taxonomyValidation' : key, value]));
+        const before = JSON.stringify(old);
+        assert.deepStrictEqual(check(old), baseline);
+        assert.strictEqual(JSON.stringify(old), before);
+        const missing = { ...paper.parsed }; delete missing.tagValidation;
+        assert.deepStrictEqual(check(missing), baseline);
+        assert.deepStrictEqual(check({ ...paper.parsed, tagValidation: null }), baseline);
+        for (const value of [paper.parsed.tagValidation, null, {}]) {
+            assert.match(check({ ...paper.parsed, taxonomyValidation: value }).join('\n'),
+                /解析结果不能同时包含 tagValidation 和旧字段 taxonomyValidation/);
+        }
+    });
+});

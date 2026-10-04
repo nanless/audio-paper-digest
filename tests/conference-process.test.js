@@ -171,7 +171,7 @@ test('implementation fingerprint binds explicit analysis, Reader, identity, and 
         'scripts/deep-analyzer.js', 'scripts/analysis-engine.js',
         'scripts/config.js', 'scripts/env-loader.js', 'scripts/llm-account-pool.js',
         'scripts/lib/conference-analysis-context.js', 'scripts/lib/paper-identity.js',
-        'scripts/paper_identity.py', 'scripts/lib/reader-contract.js',
+        'scripts/paper_identity.py', 'scripts/utils.py', 'scripts/lib/reader-contract.js',
         'scripts/lib/reader-repair.js', 'scripts/lib/reader-tables.js',
         'scripts/lib/reader-resource-binding.js', 'scripts/lib/reader-resource-sync.js',
         'prompts/api-reader-article.md',
@@ -189,7 +189,7 @@ test('implementation fingerprint binds explicit analysis, Reader, identity, and 
         readFileSync: filename => sources.get(path.relative(root, filename)) });
     const baseline = fingerprint();
     for (const name of ['scripts/deep-analyzer.js', 'scripts/config.js', 'scripts/env-loader.js',
-        'scripts/llm-account-pool.js', 'scripts/paper_identity.py',
+        'scripts/llm-account-pool.js', 'scripts/paper_identity.py', 'scripts/utils.py',
         'scripts/lib/reader-resource-sync.js', 'prompts/api-reader-article.md']) {
         const original = sources.get(name); sources.set(name, Buffer.concat([original, Buffer.from('\nrepresentative drift')]));
         assert.notEqual(fingerprint(), baseline, name); sources.set(name, original);

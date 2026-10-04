@@ -234,7 +234,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 |---|---|
 | `config.js` | Node 参数与运行数据路径的集中配置。 |
 | `env-loader.js` | 从项目 `.env` 建立受控运行环境，检查直接 Node 和 Manual 入口的运行条件。 |
-| `utils.js` | 提供 Node 原子文件写入、时间、ID、提示词、LLM 协议和代理工具。 |
+| `utils.js` | 提供 Node 原子文件写入、时间、ID、分析解析、提示词、LLM 协议和代理工具；`readTagValidation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `llm-account-pool.js` | 管理 Node OpenCode Go 账号池，持续使用成功账号，识别额度错误，并保存跨进程账号状态。 |
 | `log-setup.js` | Node 终端/文件日志、时间戳和敏感信息脱敏。 |
@@ -244,7 +244,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `blog_repository_lock.py` | 管理共享博客锁，以 Git common-dir 协调不同项目工作区；核对 PID、hostname、token、lease、inode 和 SHA 后才回收或释放，不污染博客 Git。 |
 | `llm_account_pool.py` | 按与 Node 相同的数据格式和锁协议管理 OpenCode Go 账号池。 |
 | `llm_usage.py` | 记录 Python 发布请求的用量与失败事件，沿用跨运行请求归因格式。 |
-| `utils.py` | Python 评分解析与发布侧通用文本工具。 |
+| `utils.py` | Python 分析与评分解析、发布侧通用文本工具；`read_tag_validation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
 | `log_setup.py` | Python 统一日志与脱敏。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
@@ -317,6 +317,14 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 其中主任务恰好 1 个，次任务最多 2 个；祖先标签和后代标签不能同时存在。主任务必须是所选集合中最具体的
 任务，否则报错。如果整个词表中还有未选的有效后代，只返回 `specificityWarning` 告警，不改变 `valid`。
 这条告警仅供新的分类或修复步骤使用，不改变已核验阶段的恢复行为。别名只供显式旧格式解析。
+
+Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagValidation`，其中保存标签检查结果。
+`readTagValidation` 和 `read_tag_validation` 兼容读取旧缓存中的 `taxonomyValidation`，读取时不改写缓存。
+同一对象出现新旧两个字段会被拒绝，即使两值相同或其中一个为空；旧评分缓存缺少这项结果时，仍按各入口原规则处理。
+正式发布仍重新解析原正文，旧缓存不能代替标签、阶段和来源核验，也不能绕过人工评分覆盖的检查。
+
+标签更新工具的只读检查不迁移旧缓存。注记模式沿缓存原字段更新词表版本和 SHA；显式重新生成模式才在新输出副本中迁移标签字段，
+并保留缓存中的其余内容和评分覆盖。这个接口变化没有改正式标签阶段的名称或十三字段绑定。
 
 ### 词表变更与确认范围
 

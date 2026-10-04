@@ -184,6 +184,8 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
 }
 function getConsistentPublicationFields(paper) {
     const parsed = paper.parsed; const reparsed = require('../utils.js').parseAnalysis(paper.analysis);
+    try { require('../utils.js').readTagValidation(parsed); }
+    catch (error) { fail(error.message); }
     const pick = value => ({ tags: (value.tags || []).map(item => String(item).trim()),
         primaryTaskTag: String(value.primaryTaskTag || '').trim(), primaryMethodTag: String(value.primaryMethodTag || '').trim(),
         summary: String(value.summary || '').trim(), score: String(value.score || '').trim(),
@@ -213,10 +215,10 @@ function buildAssignment(loaded, tagCatalog) {
     // 标签选择未通过当前词表校验时，保存待审查的分配记录，不生成页面。
     // 如果标签选择已通过、但阶段记录不一致，则按完整性错误停止，
     // 不能把来源或记录损坏归为普通标签审查。
-    const unresolvedSelection = parsedAnalysis?.taxonomyValidation?.valid !== true;
+    const unresolvedSelection = parsedAnalysis?.tagValidation?.valid !== true;
     if (tagStageProofIssue && !unresolvedSelection) fail(`标签阶段记录未通过当前校验：${tagStageProofIssue}`);
     if (unresolvedSelection) {
-        for (const issue of parsedAnalysis.taxonomyValidation.errors || []) {
+        for (const issue of parsedAnalysis.tagValidation.errors || []) {
             reasons.push(`selection:${String(issue).slice(0, 200)}`);
         }
     }
@@ -283,6 +285,7 @@ function implementationFingerprint() {
         analysisSectionsSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'analysis_sections.py'), 2 * 1024 * 1024, 'conference analysis headings source').fileSha256,
         loaderSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'blog_entry_loader.py'), 2 * 1024 * 1024, 'conference renderer loader source').fileSha256,
         parserSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'utils.js'), 8 * 1024 * 1024, 'conference parser source').fileSha256,
+        pythonParserSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'utils.py'), 8 * 1024 * 1024, 'conference Python parser source').fileSha256,
         analysisSectionTitlesSourceSha256: pageApi.readRegular(path.join(__dirname, 'analysis-section-titles.js'), 2 * 1024 * 1024, 'conference analysis headings parser source').fileSha256,
         taxonomySourceSha256: pageApi.readRegular(path.join(__dirname, 'tag-catalog.js'), 4 * 1024 * 1024, 'conference taxonomy source').fileSha256,
         identitySourceSha256: pageApi.readRegular(path.join(__dirname, 'paper-identity.js'), 4 * 1024 * 1024, 'conference identity source').fileSha256 };
@@ -293,7 +296,7 @@ function fingerprint(dependencies) {
     const value = (dependencies.implementationFingerprint || implementationFingerprint)(); const body = structuredClone(value); delete body.implementationSha256;
     const expectedKeys = ['contract', 'version', 'nodeSourceSha256', 'rendererSourceSha256', 'publisherSourceSha256',
         'publisherCommonSourceSha256', 'analysisSectionsSourceSha256', 'analysisSectionTitlesSourceSha256',
-        'loaderSourceSha256', 'parserSourceSha256', 'taxonomySourceSha256', 'identitySourceSha256', 'implementationSha256'];
+        'loaderSourceSha256', 'parserSourceSha256', 'pythonParserSourceSha256', 'taxonomySourceSha256', 'identitySourceSha256', 'implementationSha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')
         || value.contract !== PROJECTION_CONTRACT || value.version !== VERSION || value.implementationSha256 !== stableHash(body)

@@ -60,6 +60,8 @@ function getConsistentClassificationLabels(paper) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof paper.analysis !== 'string' || !paper.analysis.trim()) {
         fail(`${paperIdOf(paper)} lacks canonical analysis/parsed labels`);
     }
+    try { require('../utils.js').readTagValidation(parsed); }
+    catch (error) { fail(error.message); }
     const reparsed = require('../utils.js').parseAnalysis(paper.analysis);
     const normalize = value => String(value || '').trim();
     const cached = { tags: Array.isArray(parsed.tags) ? parsed.tags.map(normalize) : null,
@@ -95,7 +97,7 @@ function buildAssignment({ runHandle, paper, tagCatalog } = {}) {
     tagCatalogApi.validateTagCatalog({ version: tagCatalog.version, facets: tagCatalog.facets, concepts: tagCatalog.concepts });
     const input = getConsistentClassificationLabels(paper); const reasons = []; const concepts = new Map();
     const currentTagValidation = require('../utils.js')
-        .parseAnalysis(paper.analysis)?.taxonomyValidation;
+        .parseAnalysis(paper.analysis)?.tagValidation;
     if (currentTagValidation?.valid === false) {
         reasons.push(`canonical-taxonomy:${currentTagValidation.errors?.[0] || 'invalid'}`);
     }

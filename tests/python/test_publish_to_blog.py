@@ -2947,13 +2947,70 @@ title: "Score rows"
         ordinary_page, _ = publish_to_blog.generate_paper_page(ordinary, '2026-08-31')
         self.assertNotIn('**来源版本说明**', ordinary_page)
 
+    def test_old_tag_cache_remains_readable_in_direct_page_entries(self):
+        paper = llm_api_publication_fixture()
+        paper['parsed']['tagValidation'] = publish_to_blog.parse_analysis(paper['analysis'])['tagValidation']
+        old = copy.deepcopy(paper)
+        old['parsed']['taxonomyValidation'] = old['parsed'].pop('tagValidation')
+        before = copy.deepcopy(old)
+        page, slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        self.assertEqual(publish_to_blog.generate_paper_page(old, '2026-08-31'), (page, slug))
+        self.assertEqual(
+            publish_to_blog.generate_index_page(
+                [(8.0, old, old['parsed'])], [], '2026-08-31', {old['arxivId']: slug}),
+            publish_to_blog.generate_index_page(
+                [(8.0, paper, paper['parsed'])], [], '2026-08-31', {paper['arxivId']: slug}))
+        self.assertEqual(
+            publish_to_blog.build_researcher_workbench_bundle(old, '2026-08-31'),
+            publish_to_blog.build_researcher_workbench_bundle(paper, '2026-08-31'))
+        self.assertEqual(publish_to_blog._current_batch_tag_metadata(iter([old])),
+                         publish_to_blog._current_batch_tag_metadata([paper]))
+        self.assertEqual(old, before)
+
+        tag_analysis = (
+            '## 标签\n#语音识别 #参数高效微调 #低资源\n'
+            '主任务标签：#语音识别\n主方法标签：#参数高效微调\n补充标签：#低资源\n')
+        current = {'analysis': tag_analysis,
+                   'parsed': publish_to_blog.parse_analysis(tag_analysis)}
+        self.assertTrue(current['parsed']['tagValidation']['valid'])
+        legacy = copy.deepcopy(current)
+        legacy['parsed']['taxonomyValidation'] = legacy['parsed'].pop('tagValidation')
+        saved = copy.deepcopy((current, legacy))
+        metadata = publish_to_blog._current_batch_tag_metadata([current])
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'])
+        self.assertEqual(publish_to_blog._current_batch_tag_metadata([legacy]), metadata)
+        self.assertEqual((current, legacy), saved)
+
+    def test_mixed_tag_cache_cannot_hide_behind_missing_reader_or_batch_metadata(self):
+        paper = llm_api_publication_fixture()
+        paper['parsed']['tagValidation'] = publish_to_blog.parse_analysis(paper['analysis'])['tagValidation']
+        mixed = copy.deepcopy(paper)
+        mixed['parsed']['taxonomyValidation'] = copy.deepcopy(mixed['parsed']['tagValidation'])
+        with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+            publish_to_blog.generate_paper_page(mixed, '2026-08-31')
+        with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+            publish_to_blog.build_researcher_workbench_bundle(mixed, '2026-08-31')
+        no_reader = {'parsed': {'tagValidation': None, 'taxonomyValidation': None}}
+        with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+            publish_to_blog.build_researcher_workbench_bundle(no_reader, '2026-08-31')
+        no_metadata = copy.deepcopy(paper)
+        no_metadata['parsed'].pop('tagValidation')
+        self.assertIsNone(publish_to_blog._current_batch_tag_metadata([no_metadata]))
+        with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+            publish_to_blog.generate_index_page(
+                [(8.0, no_metadata, no_metadata['parsed']),
+                 (8.0, mixed, mixed['parsed'])], [], '2026-08-31', {})
+        with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+            publish_to_blog._current_batch_tag_metadata(iter([no_metadata, mixed]))
+
     def test_current_tag_selection_keeps_flat_tags_and_adds_explicit_compat_metadata(self):
         paper = llm_api_publication_fixture()
         paper['parsed'].update({
             'tags': ['#语音识别', '#Transformer', '#低资源'],
             'primaryTaskTag': '#语音识别',
             'primaryMethodTag': '#Transformer',
-            'taxonomyValidation': {
+            'tagValidation': {
                 'valid': True,
                 'errors': [],
                 'registryVersion': publish_to_blog._PAGE_TAG_CATALOG['version'],
@@ -3010,7 +3067,7 @@ title: "Score rows"
                 'tags': [task, '#Transformer', '#低资源'],
                 'primaryTaskTag': task,
                 'primaryMethodTag': '#Transformer',
-                'taxonomyValidation': {
+                'tagValidation': {
                     'valid': True, 'errors': [],
                     'registryVersion': publish_to_blog._PAGE_TAG_CATALOG['version'],
                     'registrySha256': publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],

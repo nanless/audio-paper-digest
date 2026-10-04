@@ -1415,7 +1415,9 @@ function validateTagStageProof(paper, options = {}) {
         }
     }
     const parsed = options.parsed;
-    const validation = parsed?.taxonomyValidation;
+    let validation;
+    try { validation = require('./utils.js').readTagValidation(parsed); }
+    catch (error) { return error.message; }
     if (!validation?.valid
         || stage.primaryTaskId !== validation.primaryTaskId
         || stage.primaryMethodId !== validation.primaryMethodId
@@ -2220,6 +2222,9 @@ function validateMachineSummaryContract(analysis, parsed, options = {}) {
 }
 
 function validateTagSectionContract(analysis, parsed, options = {}) {
+    let validation;
+    try { validation = require('./utils.js').readTagValidation(parsed); }
+    catch (error) { return error.message; }
     const block = extractSection(analysis, '标签');
     const lines = block.split('\n').map(line => line.trim()).filter(Boolean);
     if (lines.length !== 4) return '标签章节必须恰好四行';
@@ -2245,8 +2250,8 @@ function validateTagSectionContract(analysis, parsed, options = {}) {
         }
         if (!parsed.primaryTaskTag) return '标签章节缺少可解析的主任务标签';
         if (!parsed.primaryMethodTag) return '标签章节缺少可解析的主方法标签';
-        if (parsed?.taxonomyValidation?.valid !== true) {
-            return `标签不符合当前词表要求： ${parsed?.taxonomyValidation?.errors?.[0] || '缺少验证结果'}`;
+        if (validation?.valid !== true) {
+            return `标签不符合当前词表要求： ${validation?.errors?.[0] || '缺少验证结果'}`;
         }
         if (allTags.length !== parsed.tags.length
         || allTags.some((tag, index) => tag !== parsed.tags[index])) {

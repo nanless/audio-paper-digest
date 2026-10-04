@@ -378,9 +378,9 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
             inputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
             outputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
             taxonomySurfaceSha256: contract.hashTagSectionAndPrimaryTags(locked.analysis),
-            primaryTaskId: parsedForTagCheck.taxonomyValidation.primaryTaskId,
-            primaryMethodId: parsedForTagCheck.taxonomyValidation.primaryMethodId,
-            conceptIds: parsedForTagCheck.taxonomyValidation.conceptIds
+            primaryTaskId: parsedForTagCheck.tagValidation.primaryTaskId,
+            primaryMethodId: parsedForTagCheck.tagValidation.primaryMethodId,
+            conceptIds: parsedForTagCheck.tagValidation.conceptIds
         };
         manifest.stages.structureRepair.outputAnalysisSha256 = tagInputAnalysisSha256;
         manifest.stages.taxonomySeal = {
