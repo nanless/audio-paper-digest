@@ -4561,6 +4561,50 @@ has_dataset: 否
         assert.match(updated, /has_model: 是/);
     });
 
+    it('资源链接更新识别旧追加内容，并保留原顺序的重复判断', () => {
+        const { updateOpensourceFromDemoLinks } = require('../scripts/deep-analyzer.js');
+        const links = [
+            'https://github.com/example/project',
+            'https://huggingface.co/example/model'
+        ];
+        const previousBlock = [
+            '**从 demo/项目页面验证发现（已更新开源评分）：**',
+            '- **代码仓库**：' + links[0],
+            '- **模型权重**：' + links[1]
+        ].join('\n');
+        const original = [
+            '## 评分', '5.0/10', '', '## 机器摘要', 'open_source: 0.5',
+            'has_code: 是', 'has_model: 是', 'has_dataset: 否', '',
+            '## 开源详情', previousBlock
+        ].join('\n');
+        assert.strictEqual(updateOpensourceFromDemoLinks(original, links), original);
+
+        const missingFlags = original.replace('has_code: 是', 'has_code: 否')
+            .replace('has_model: 是', 'has_model: 否');
+        assert.strictEqual(updateOpensourceFromDemoLinks(missingFlags, links), original);
+
+        const fresh = original.replace(previousBlock, '- 演示页：https://example.com/demo');
+        const first = updateOpensourceFromDemoLinks(fresh, links);
+        assert.notStrictEqual(first, fresh);
+        assert.strictEqual(updateOpensourceFromDemoLinks(first, links), first);
+
+        const reordered = updateOpensourceFromDemoLinks(original, [...links].reverse());
+        assert.strictEqual(reordered.split(links[0]).length, 3);
+        assert.strictEqual(reordered.split(links[1]).length, 3);
+        assert.ok(reordered.lastIndexOf(links[1]) < reordered.lastIndexOf(links[0]));
+        assert.ok(reordered.includes(previousBlock));
+
+        assert.strictEqual(updateOpensourceFromDemoLinks(original, links.slice(0, 1)), original);
+        assert.strictEqual(updateOpensourceFromDemoLinks(original, [links[0].slice(0, -1)]), original);
+
+        const withoutPreviousTitle = original.replace(previousBlock.split('\n')[0] + '\n', '');
+        const appended = updateOpensourceFromDemoLinks(withoutPreviousTitle, links);
+        assert.strictEqual(appended.split(links[0]).length, 3);
+        assert.strictEqual(appended.split(links[1]).length, 3);
+        assert.match(appended, /^open_source: 0\.5$/m);
+        assert.match(appended, /^5\.0\/10$/m);
+    });
+
     it('开源扫描同步结构化资源字段且不用缺失行覆盖旧值', () => {
         const { syncResourceFieldsFromOpenSource } = require('../scripts/deep-analyzer.js');
         const analysis = `## 机器摘要

@@ -14465,7 +14465,7 @@ async function analyzePaperDeepInternal(paper) {
             const beforeUpdate = analysis;
             analysis = updateOpensourceFromDemoLinks(analysis, demoFoundLinks);
             if (analysis !== beforeUpdate) {
-                console.log(`    [deep] ✅ 已根据 demo 扫描结果更新开源评分/描述`);
+                console.log(`    [deep] ✅ 已根据发现的资源链接更新资源标记和开源详情`);
             }
         }
         if (!demoScanError) {
@@ -16729,8 +16729,16 @@ function updateOpensourceFromDemoLinks(analysis, foundLinks) {
     }
 
     if (linkDescriptions.length > 0) {
-        const newContent = `\n\n**从 demo/项目页面验证发现（已更新开源评分）：**\n${linkDescriptions.join('\n')}`;
-        updated = appendSectionByTitle(updated, '开源详情', newContent);
+        const previousResourceBlock = normalizeSectionContent(
+            '开源详情',
+            `\n\n**从 demo/项目页面验证发现（已更新开源评分）：**\n${linkDescriptions.join('\n')}`
+        );
+        const existingResourceDetails = extractSectionByTitle(updated, '开源详情');
+        // 旧标题也参与重复检查；保留匹配的旧正文，避免提示改写后再次追加相同链接。
+        if (!existingResourceDetails.includes(previousResourceBlock)) {
+            const newContent = `\n\n**发现的资源链接：**\n${linkDescriptions.join('\n')}`;
+            updated = appendSectionByTitle(updated, '开源详情', newContent);
+        }
     }
 
     return updated;
