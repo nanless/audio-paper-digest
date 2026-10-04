@@ -365,7 +365,7 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
         const taxonomyParsed = require('../scripts/utils.js').parseAnalysis(locked.analysis);
         const taxonomyInputSha = runner.sha256(locked.analysis);
         const taxonomyProjectionSha = runner.sha256(
-            contract.taxonomyProtectedProjection(locked.analysis)
+            contract.maskClassificationFields(locked.analysis)
         );
         const taxonomyBinding = {
             registryVersion: tagRules.registryVersion,

@@ -1333,7 +1333,7 @@ function taxonomySectionBounds(analysis, title) {
     return { contentStart, end: next ? contentStart + next.index : analysis.length };
 }
 
-function taxonomyProtectedProjection(analysis) {
+function maskClassificationFields(analysis) {
     let source = String(analysis || '');
     const machine = taxonomySectionBounds(source, '机器摘要');
     if (!machine) return '';
@@ -1405,7 +1405,7 @@ function validateTaxonomyStageBinding(paper, options = {}) {
     const checkpoints = paper?.analysisStageCheckpoints;
     const tagCheckpointText = checkpoints?.taxonomySeal;
     const maskedAnalysisText = typeof tagCheckpointText === 'string'
-        ? taxonomyProtectedProjection(tagCheckpointText) : '';
+        ? maskClassificationFields(tagCheckpointText) : '';
     if (typeof tagCheckpointText !== 'string' || !maskedAnalysisText
         || crypto.createHash('sha256').update(tagCheckpointText).digest('hex') !== stage.outputAnalysisSha256
         || crypto.createHash('sha256').update(maskedAnalysisText).digest('hex')
@@ -1415,11 +1415,11 @@ function validateTaxonomyStageBinding(paper, options = {}) {
     }
     if (stage.status === 'complete') {
         const structureCheckpoint = checkpoints?.structureRepair;
-        const structureProjection = typeof structureCheckpoint === 'string'
-            ? taxonomyProtectedProjection(structureCheckpoint) : '';
-        if (typeof structureCheckpoint !== 'string' || !structureProjection
+        const maskedInputAnalysisText = typeof structureCheckpoint === 'string'
+            ? maskClassificationFields(structureCheckpoint) : '';
+        if (typeof structureCheckpoint !== 'string' || !maskedInputAnalysisText
             || crypto.createHash('sha256').update(structureCheckpoint).digest('hex') !== stage.inputAnalysisSha256
-            || crypto.createHash('sha256').update(structureProjection).digest('hex')
+            || crypto.createHash('sha256').update(maskedInputAnalysisText).digest('hex')
                 !== stage.inputProtectedProjectionSha256
         ) {
             return 'taxonomySeal=complete 缺少可逐字重放的 structure/taxonomy checkpoint';
@@ -2350,7 +2350,7 @@ module.exports = {
     validateCoreSummarySemanticContract,
     coreSummaryProjectionSha256,
     taxonomySurfaceSha256,
-    taxonomyProtectedProjection,
+    maskClassificationFields,
     validateTaxonomyStageBinding,
     validateCoreSummaryStageBinding,
     manualSha256,

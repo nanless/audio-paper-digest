@@ -98,7 +98,7 @@ function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisTex
     const taxonomyValidation = require('../scripts/utils.js').parseAnalysis(analysis)
         .taxonomyValidation;
     const taxonomyProjectionSha256 = crypto.createHash('sha256')
-        .update(contract.taxonomyProtectedProjection(analysis)).digest('hex');
+        .update(contract.maskClassificationFields(analysis)).digest('hex');
     const taxonomyBinding = {
         registryVersion: tagRules.registryVersion,
         registrySha256: tagRules.registrySha256,

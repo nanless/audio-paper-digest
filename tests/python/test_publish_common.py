@@ -63,7 +63,7 @@ from publish_common import (  # noqa: E402
     _manual_hash,
     _PUBLISH_TAXONOMY,
     _PUBLISH_TAXONOMY_PROJECTION_SHA256,
-    _taxonomy_protected_projection,
+    _mask_classification_fields,
     _taxonomy_surface_sha256,
     _validate_taxonomy_seal,
     _seal_registry_upgrade,
@@ -132,10 +132,10 @@ def attach_taxonomy_seal(paper, manifest, *, input_analysis=None, status='not_ne
     selection = parsed['taxonomyValidation']
     input_sha = hashlib.sha256(input_analysis.encode('utf-8')).hexdigest()
     output_sha = hashlib.sha256(output_analysis.encode('utf-8')).hexdigest()
-    input_projection_sha = hashlib.sha256(
-        _taxonomy_protected_projection(input_analysis).encode('utf-8')).hexdigest()
-    output_projection_sha = hashlib.sha256(
-        _taxonomy_protected_projection(output_analysis).encode('utf-8')).hexdigest()
+    masked_input_analysis_sha256 = hashlib.sha256(
+        _mask_classification_fields(input_analysis).encode('utf-8')).hexdigest()
+    masked_output_analysis_sha256 = hashlib.sha256(
+        _mask_classification_fields(output_analysis).encode('utf-8')).hexdigest()
     binding = {
         'registryVersion': _PUBLISH_TAXONOMY['version'],
         'registrySha256': _PUBLISH_TAXONOMY['registrySha256'],
@@ -144,8 +144,8 @@ def attach_taxonomy_seal(paper, manifest, *, input_analysis=None, status='not_ne
         'selectionContract': 'paper-taxonomy-selection-v1',
         'inputAnalysisSha256': input_sha,
         'outputAnalysisSha256': output_sha,
-        'inputProtectedProjectionSha256': input_projection_sha,
-        'outputProtectedProjectionSha256': output_projection_sha,
+        'inputProtectedProjectionSha256': masked_input_analysis_sha256,
+        'outputProtectedProjectionSha256': masked_output_analysis_sha256,
         'taxonomySurfaceSha256': _taxonomy_surface_sha256(output_analysis),
         'primaryTaskId': selection['primaryTaskId'],
         'primaryMethodId': selection['primaryMethodId'],

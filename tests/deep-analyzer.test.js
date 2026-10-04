@@ -63,8 +63,8 @@ describe('taxonomy runtime analysis integration', () => {
         assert.deepStrictEqual(budgets, [8000, 8000]);
         assert.match(prompts[1], /concept ID 集合或主角色非法/);
         assert.strictEqual(
-            deep.taxonomyProtectedProjection(repaired),
-            deep.taxonomyProtectedProjection(validAnalysisText())
+            deep.maskClassificationFields(repaired),
+            deep.maskClassificationFields(validAnalysisText())
         );
         const parsed = deep.parseAnalysis(repaired);
         assert.strictEqual(parsed.taxonomyValidation.valid, true);
@@ -6047,7 +6047,7 @@ has_dataset: 否
             getRepairableAnalysisStructureIssues,
             parseAnalysis,
             applyTaxonomySelection,
-            taxonomyProtectedProjection
+            maskClassificationFields
         } = require('../scripts/deep-analyzer.js');
         const { validateTagSectionContract } = require('../scripts/analysis-contract.js');
         const malformed = validAnalysisText()
@@ -6069,8 +6069,8 @@ has_dataset: 否
             primaryMethodTag: '#CNN'
         });
         assert.strictEqual(validateTagSectionContract(repaired, parseAnalysis(repaired)), null);
-        assert.strictEqual(taxonomyProtectedProjection(repaired),
-            taxonomyProtectedProjection(normalized));
+        assert.strictEqual(maskClassificationFields(repaired),
+            maskClassificationFields(normalized));
     });
 
     it('确定性规范化只修文档类型，不从正文猜空主任务和主方法', () => {

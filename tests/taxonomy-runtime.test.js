@@ -138,9 +138,9 @@ test('primary task specificity is a whole-registry warning that never invalidate
         inputAnalysisSha256: textSha(analysis),
         outputAnalysisSha256: textSha(analysis),
         inputProtectedProjectionSha256: textSha(
-            require('../scripts/deep-analyzer.js').taxonomyProtectedProjection(analysis)),
+            require('../scripts/deep-analyzer.js').maskClassificationFields(analysis)),
         outputProtectedProjectionSha256: textSha(
-            require('../scripts/deep-analyzer.js').taxonomyProtectedProjection(analysis)),
+            require('../scripts/deep-analyzer.js').maskClassificationFields(analysis)),
         taxonomySurfaceSha256: contract.taxonomySurfaceSha256(analysis),
         primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
         primaryMethodId: parsed.taxonomyValidation.primaryMethodId,
@@ -231,7 +231,7 @@ primary_method_tag: #众包评测
     const parsed = parseAnalysis(analysis);
     const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
     const protectedSha = textSha(require('../scripts/deep-analyzer.js')
-        .taxonomyProtectedProjection(analysis));
+        .maskClassificationFields(analysis));
     const binding = {
         registryVersion: runtime.registryVersion,
         registrySha256: runtime.registrySha256,
@@ -304,8 +304,8 @@ primary_method_tag: #众包评测
         selectionContract: runtime.selectionContract,
         inputAnalysisSha256: textSha(inputAnalysis),
         outputAnalysisSha256: textSha(outputAnalysis),
-        inputProtectedProjectionSha256: textSha(contract.taxonomyProtectedProjection(inputAnalysis)),
-        outputProtectedProjectionSha256: textSha(contract.taxonomyProtectedProjection(outputAnalysis)),
+        inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(inputAnalysis)),
+        outputProtectedProjectionSha256: textSha(contract.maskClassificationFields(outputAnalysis)),
         taxonomySurfaceSha256: contract.taxonomySurfaceSha256(outputAnalysis),
         primaryTaskId: parsed.taxonomyValidation.primaryTaskId,
         primaryMethodId: parsed.taxonomyValidation.primaryMethodId,

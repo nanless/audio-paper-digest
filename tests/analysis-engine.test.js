@@ -1391,7 +1391,7 @@ describe('analyzePaperWithRetry', () => {
         taxonomyStage.status = 'complete';
         taxonomyStage.inputAnalysisSha256 = structureSha;
         taxonomyStage.inputProtectedProjectionSha256 = crypto.createHash('sha256')
-            .update(contract.taxonomyProtectedProjection(structureAnalysis)).digest('hex');
+            .update(contract.maskClassificationFields(structureAnalysis)).digest('hex');
         taxonomyStage.bindingSha256 = contract.manualSha256({
             registryVersion: taxonomyStage.registryVersion,
             registrySha256: taxonomyStage.registrySha256,

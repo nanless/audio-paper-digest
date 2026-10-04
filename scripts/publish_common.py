@@ -616,7 +616,7 @@ def _replace_machine_taxonomy_fields(analysis, task_tag, method_tag):
     return f'{analysis[:content_start]}{body}{analysis[end:]}'
 
 
-def _taxonomy_protected_projection(analysis):
+def _mask_classification_fields(analysis):
     masked = _replace_machine_taxonomy_fields(
         str(analysis or ''), '__PRIMARY_TASK__', '__PRIMARY_METHOD__')
     return _replace_taxonomy_section_body(masked, '标签', '__TAXONOMY_SECTION__')
@@ -1243,10 +1243,10 @@ def _validate_taxonomy_seal(paper, manifest, paper_label):
     if not isinstance(output_analysis, str):
         raise PublishDataValidationError(
             f'{paper_label} taxonomySeal 成功态缺少 taxonomy checkpoint')
-    output_projection = _taxonomy_protected_projection(output_analysis)
-    if (not output_projection
+    masked_output_analysis = _mask_classification_fields(output_analysis)
+    if (not masked_output_analysis
             or text_sha(output_analysis) != stage['outputAnalysisSha256']
-            or text_sha(output_projection)
+            or text_sha(masked_output_analysis)
             != stage['outputProtectedProjectionSha256']
             or _taxonomy_surface_sha256(output_analysis)
             != stage['taxonomySurfaceSha256']):
@@ -1256,10 +1256,10 @@ def _validate_taxonomy_seal(paper, manifest, paper_label):
         if not isinstance(input_analysis, str):
             raise PublishDataValidationError(
                 f'{paper_label} taxonomySeal=complete 缺少 structure/taxonomy checkpoint')
-        input_projection = _taxonomy_protected_projection(input_analysis)
-        if (not input_projection
+        masked_input_analysis = _mask_classification_fields(input_analysis)
+        if (not masked_input_analysis
                 or text_sha(input_analysis) != stage['inputAnalysisSha256']
-                or text_sha(input_projection)
+                or text_sha(masked_input_analysis)
                 != stage['inputProtectedProjectionSha256']):
             raise PublishDataValidationError(
                 f'{paper_label} taxonomySeal 输入 checkpoint 不可重放')
@@ -1283,15 +1283,15 @@ def _validate_taxonomy_seal(paper, manifest, paper_label):
         'primaryMethodId': current_validation.get('primaryMethodId'),
         'conceptIds': current_validation.get('conceptIds'),
     }
-    sealed_selection = {field: stage.get(field) for field in expected_selection}
-    if not current_validation.get('valid') or expected_selection != sealed_selection:
+    recorded_selection = {field: stage.get(field) for field in expected_selection}
+    if not current_validation.get('valid') or expected_selection != recorded_selection:
         raise PublishDataValidationError(
             f'{paper_label} 当前 analysis taxonomy 与 sealed IDs 不一致')
     if stage['status'] == 'complete':
         output_validation = parse_analysis(
             output_analysis, taxonomy=_PUBLISH_TAXONOMY)['taxonomyValidation']
         output_selection = {field: output_validation.get(field) for field in expected_selection}
-        if not output_validation.get('valid') or output_selection != sealed_selection:
+        if not output_validation.get('valid') or output_selection != recorded_selection:
             raise PublishDataValidationError(
                 f'{paper_label} taxonomySeal parsed IDs 与 checkpoint 不一致')
 

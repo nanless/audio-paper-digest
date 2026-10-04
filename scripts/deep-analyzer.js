@@ -55,7 +55,7 @@ const {
     validateCoreSummarySemanticContract,
     coreSummaryProjectionSha256,
     taxonomySurfaceSha256,
-    taxonomyProtectedProjection,
+    maskClassificationFields,
     getInvalidAnalysisReason
 } = require('./analysis-contract.js');
 loadEnvFile();
@@ -14753,9 +14753,9 @@ async function analyzePaperDeepInternal(paper) {
                 inputAnalysisSha256: tagStage.inputAnalysisSha256,
                 outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
                 inputProtectedProjectionSha256: crypto.createHash('sha256')
-                    .update(taxonomyProtectedProjection(before)).digest('hex'),
+                    .update(maskClassificationFields(before)).digest('hex'),
                 outputProtectedProjectionSha256: crypto.createHash('sha256')
-                    .update(taxonomyProtectedProjection(analysis)).digest('hex'),
+                    .update(maskClassificationFields(analysis)).digest('hex'),
                 taxonomySurfaceSha256: taxonomySurfaceSha256(analysis),
                 primaryTaskId: parsedForTagCheck.taxonomyValidation.primaryTaskId,
                 primaryMethodId: parsedForTagCheck.taxonomyValidation.primaryMethodId,
@@ -16232,7 +16232,7 @@ function applyTaxonomySelection(analysis, selection, options = {}) {
     updated = replaceMachineTaxonomyFields(
         updated, selection.primaryTaskTag, selection.primaryMethodTag
     );
-    if (taxonomyProtectedProjection(updated) !== taxonomyProtectedProjection(original)) {
+    if (maskClassificationFields(updated) !== maskClassificationFields(original)) {
         throw contractRejectedError('taxonomy 局部修复改变了标签节和机器摘要两字段之外的字节');
     }
     const parsed = parseAnalysis(updated);
@@ -17059,7 +17059,7 @@ module.exports = {
     parseTaxonomyRepairResult,
     applyTaxonomySelection,
     repairTaxonomyTags,
-    taxonomyProtectedProjection,
+    maskClassificationFields,
     retainFinalTaxonomyCheckpoints,
     runtimePromptTemplateSha256,
     buildLegacyCoreSummaryV2PrimaryFingerprint,
