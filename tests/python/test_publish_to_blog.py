@@ -3715,19 +3715,19 @@ title: "Bad table"
         )
         altered_table = markdown.replace('| Baseline | 10.2 |', '| Baseline | 10.3 |')
         self.assertIn(
-            '字节与 canonical',
+            '页面深度解读与正式 Reader 正文的渲染结果不一致。',
             publish_to_blog._api_reader_page_binding_issue(altered_table, paper),
         )
         with tempfile.TemporaryDirectory() as tmp:
             page_path = Path(tmp) / '2026-08-31-reader.md'
             page_path.write_text(altered_table, encoding='utf-8')
             artifact = publish_to_blog.build_final_page_artifact(page_path, paper)
-            self.assertIn('字节与 canonical', artifact['apiReaderIssue'])
+            self.assertIn('页面深度解读与正式 Reader 正文的渲染结果不一致。', artifact['apiReaderIssue'])
         altered_author = markdown.replace(
             '- Researcher A：Institute A', '- Researcher A：Invented Institute',
         )
         self.assertIn(
-            '作者与机构段',
+            '页面中的作者和机构与已绑定来源的作者记录不一致。',
             publish_to_blog._api_reader_page_binding_issue(altered_author, paper),
         )
         altered_resource = markdown.replace(
@@ -3743,7 +3743,7 @@ title: "Bad table"
             r'\[\mathcal{L}=\lVert y-\hat{y}\rVert_2\]',
         )
         self.assertIn(
-            '字节与 canonical',
+            '页面深度解读与正式 Reader 正文的渲染结果不一致。',
             publish_to_blog._api_reader_page_binding_issue(altered_formula, paper),
         )
 
@@ -4362,7 +4362,7 @@ title: "Bad table"
         }
         with self.assertRaisesRegex(
                 publish_to_blog.PublishDataValidationError,
-                '禁止从旧 canonical 固定章节回拼正文'):
+                '不能从旧正式分析记录的固定章节拼接正文'):
             publish_to_blog.generate_paper_page(paper, '2026-08-27')
 
     def test_manual_v6_entry_render_uses_only_canonical_blocks_and_explicit_bindings(self):
@@ -7409,7 +7409,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 )
                 page.write_text('changed after worker\n', encoding='utf-8')
                 with self.assertRaisesRegex(
-                    publish_to_blog.PublishDataValidationError, 'review 后发生变化',
+                    publish_to_blog.PublishDataValidationError, '页面在审查后发生变化，不能生成审查凭证',
                 ):
                     publish_to_blog.validate_reviewed_file_hashes(
                         '2026-07-10', [page], manifest, reviewed,

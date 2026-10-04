@@ -5220,7 +5220,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
     if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
             or paper.get('sourceSha256') != source_sha \
             or stage.get('sourceBindingsSourceTextSha256') != source_sha:
-        raise PublishDataValidationError('API reader source-binding 全文 SHA 未闭环')
+        raise PublishDataValidationError('Reader 所用论文全文的 SHA 缺失、格式无效，或与论文记录、当前阶段的来源记录不一致。')
     if not re.fullmatch(r'[0-9a-f]{64}', str(structured_sha or '')) \
             or stage.get('structuredArtifactsSha256') != structured_sha:
         raise PublishDataValidationError('API reader structuredArtifacts SHA 未闭环')
@@ -5233,7 +5233,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
     canonical_tables = _api_reader_markdown_tables(canonical_reader_article) \
         if isinstance(canonical_reader_article, str) else rendered_tables
     if len(rendered_tables) != len(table_bindings):
-        raise PublishDataValidationError('API reader 正文表格数量与 source binding 不一致')
+        raise PublishDataValidationError('Reader 正文中的表格数与 plan.tableBindings 条目数不一致。')
     for index, (binding, rendered) in enumerate(zip(table_bindings, rendered_tables), 1):
         required = {
             'tableIndex', 'sourceType', 'sourceTableOrdinal',
@@ -6175,7 +6175,7 @@ def _api_reader_page_binding_issue(content, paper):
         )
         if marker_contract is None or marker_contract.group(1) != proof['contract'] \
                 or marker_sha is None or marker_sha.group(1) != proof['sha256']:
-            raise PublishDataValidationError('最终页面 source-binding frontmatter 与 canonical 不一致')
+            raise PublishDataValidationError('页面头部的表格与公式来源标记或 SHA 缺失，或与正式 Reader 记录不一致。')
         if marker_table_count is None \
                 or int(marker_table_count.group(1)) != proof['tableCount'] \
                 or marker_formula_count is None \
@@ -6239,13 +6239,13 @@ def _api_reader_page_binding_issue(content, paper):
             for author in author_proof['authors']
         )).strip()
         if actual_authors != expected_authors:
-            raise PublishDataValidationError('最终页面作者与机构段与 canonical identity 不一致')
+            raise PublishDataValidationError('页面中的作者和机构与已绑定来源的作者记录不一致。')
         projection = _build_api_reader_display_fields(paper, payload)
         if frontmatter_value('paper_digest_api_reader_decision_projection', r'"([^"]+)"') \
                 != API_READER_DECISION_PROJECTION_CONTRACT:
-            raise PublishDataValidationError('最终页面缺少现代 Reader 决策投影契约')
+            raise PublishDataValidationError('页面缺少有效的 Reader 展示字段标记 paper_digest_api_reader_decision_projection。')
         if h2_section('📌 核心摘要') != sanitize_markdown_for_publish(projection['summary']).strip():
-            raise PublishDataValidationError('最终页面核心摘要与签名 Reader 主线不一致')
+            raise PublishDataValidationError('页面核心摘要与当前 Reader 记录中应展示的摘要不一致。')
         if re.search(r'^##\s+(?:💬\s*毒舌点评|💡\s*研究者判断|📎\s*补充信息|⚖️\s*评分依据与证据)',
                      content, flags=re.MULTILINE):
             raise PublishDataValidationError('现代 Reader 页面混入未经独立事实审查的 canonical 解释')
@@ -6260,7 +6260,7 @@ def _api_reader_page_binding_issue(content, paper):
         if actual_scores is not None:
             actual_scores = re.split(r'^---\s*$', actual_scores, maxsplit=1, flags=re.MULTILINE)[0].strip()
         if actual_scores != sanitize_markdown_for_publish(projection['scoringReason']).strip():
-            raise PublishDataValidationError('最终页面评分明细与确定性系统评分投影不一致')
+            raise PublishDataValidationError('页面评分明细与按当前评分记录生成的说明不一致。')
         positive_claims = {
             'code': r'代码[^\n]{0,18}(?:已开源|已经开源|可以访问|可直接下载|仓库可用)',
             'model': r'(?:模型|权重)[^\n]{0,18}(?:已公开|已经公开|可以访问|可直接下载|权重可用)',
@@ -6286,7 +6286,7 @@ def _api_reader_page_binding_issue(content, paper):
         )).strip()
         page_article = content[article_start:article_start + len(expected_article)]
         if page_article != expected_article:
-            raise PublishDataValidationError('最终页面深度解读字节与 canonical reader article 不一致')
+            raise PublishDataValidationError('页面深度解读与正式 Reader 正文的渲染结果不一致。')
         page_proof = _validate_api_reader_source_bindings(paper, article=page_article)
         if page_proof != proof:
             raise PublishDataValidationError('最终页面表格/公式重放 proof 与 canonical 不一致')
@@ -6527,8 +6527,8 @@ def generate_paper_page(paper, date_str, category='论文速递'):
             MANUAL_DEPTH_CONTRACT_VERSION_V6,
     } and not reader_first:
         raise PublishDataValidationError(
-            f'{aid or title} 当前 Manual 页面缺少完整且哈希一致的 reader article；'
-            '禁止从旧 canonical 固定章节回拼正文，必须从论文证据冷启动生成新稿'
+            f'{aid or title} 当前 Manual 页面缺少完整且哈希一致的 Reader 正文；'
+            '不能从旧正式分析记录的固定章节拼接正文，须依据论文来源重新写作。'
         )
     workbench_bundle = (
         build_researcher_workbench_bundle(
@@ -7719,7 +7719,7 @@ def _review_single_paper(args):
         paper_file, paper, dry_run=True, source_content=content,
     )
     if fixed:
-        lines.append("    ⛔ 代码层存在可修复问题；最终 review 保持只读，请回到 generation 修复")
+        lines.append("    ⛔ 页面仍需修复；最终审查只读取页面，请回到生成阶段修复后再审查。")
     remaining_code_issues = issues
     blocking_count += len(remaining_code_issues)
     blocking_details.extend({'severity': 'error', 'description': str(issue)} for issue in remaining_code_issues)
@@ -7739,7 +7739,7 @@ def _review_single_paper(args):
     if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
         llm_issues = list(llm_issues or []) + [{
             'severity': 'error',
-            'description': 'LLM 文本 reviewer 明确返回 passed=false，fail closed',
+            'description': '文本审查返回 passed=false，但没有给出阻断原因；本次审查按失败处理。',
         }]
     if llm_issues:
         for issue in llm_issues:
@@ -7861,7 +7861,7 @@ def review_all_posts(
             index_file, dry_run=True, source_content=content,
         )
         if fixed:
-            print("    ⛔ 代码层存在可修复问题；最终 review 保持只读，请回到 generation 修复")
+            print("    ⛔ 页面仍需修复；最终审查只读取页面，请回到生成阶段修复后再审查。")
         remaining_code_issues = issues
         total_blocking_issues += len(remaining_code_issues)
         for issue in issues:
@@ -9540,7 +9540,7 @@ def manual_v6_production_proof(published_papers):
     bindings = manual_v6_publication_bindings(published_papers)
     if len(bindings) != len(published_papers):
         raise PublishDataValidationError(
-            '默认发布只接受全量 Manual v6 canonical；legacy v5 必须显式使用 maintenance 开关'
+            'Manual v6 发布批次中的所有论文记录都必须通过 v6 核验；维护旧 v5 记录时，请明确使用 --legacy-v5-maintenance。'
         )
     roots = {item['specRootSha256'] for item in bindings}
     if len(roots) != 1:
@@ -11220,7 +11220,7 @@ def validate_reviewed_file_hashes(date_str, publish_paths, manifest_path, file_r
         if result.get('passed') is not True or not re.fullmatch(r'[0-9a-f]{64}', str(reviewed_sha or '')):
             raise PublishDataValidationError(f'页面缺少已通过 review 的字节凭证: {relative}')
         if _sha256_file(path) != reviewed_sha:
-            raise PublishDataValidationError(f'页面在 review 后发生变化，拒绝签发凭证: {relative}')
+            raise PublishDataValidationError(f'页面在审查后发生变化，不能生成审查凭证：{relative}')
     if actual_paths != set(expectations):
         raise PublishDataValidationError('发布路径集合与 generation manifest 不一致')
     return True
@@ -12287,7 +12287,7 @@ def parse_generation_args(argv=None):
     """
     parser = argparse.ArgumentParser(
         prog=Path(sys.argv[0]).name,
-        description='只生成并安装博客页面及 generation manifest；不 review、不推送。',
+        description='生成并写入博客页面及本批次生成清单。本入口不执行审查或推送。',
         allow_abbrev=False,
     )
     parser.add_argument('data_file', nargs='?', help='可选的深度分析 JSON 文件')
@@ -12296,9 +12296,9 @@ def parse_generation_args(argv=None):
     parser.add_argument('--exclude-id', action='append', default=[], metavar='ARXIV_ID')
     parser.add_argument('--include-id', action='append', default=[], metavar='ARXIV_ID')
     parser.add_argument('--sealed-tutorial-preview', action='count', default=0,
-                        help='仅将受控单篇 tutorial preview 的 post.md 原字节发布')
+                        help='只把通过核验的单篇教程预览包中的 post.md 按原始字节写入博客。')
     parser.add_argument('--legacy-v5-maintenance', action='count', default=0,
-                        help='显式只读旧 v5 canonical 维护入口；禁止成为默认日更输入')
+                        help='显式读取旧 v5 分析记录进行维护。本开关不用于默认日更，生成过程仍会写入博客文件。')
     parser.add_argument('--all', action='count', default=0)
     parser.add_argument('--skip-push', action='count', default=0,
                         help='兼容旧调用；生成入口本身从不 push')
@@ -12420,13 +12420,13 @@ def generate_main(options=None):
         try:
             sealed_preview = load_sealed_tutorial_preview(today, normalized_include)
         except PublishDataValidationError as exc:
-            print(f"\n❌ sealed tutorial preview 预检失败，未读取 canonical、未写博客：{exc}")
+            print(f"\n❌ 教程预览检查失败，未读取正式分析记录，也未写入博客页面：{exc}")
             sys.exit(1)
         papers = [sealed_preview['snapshot']]
         normalized_excluded = []
         print(
-            f'🔒 sealed tutorial preview：{normalized_include}；'
-            '原字节发布，不读取 canonical、不 sanitize、不生成汇总页'
+            f'🔒 单篇教程预览：{normalized_include}；'
+            '将按 post.md 的原始字节写入博客页面，不读取正式分析记录、不清洗正文，也不生成汇总页。'
         )
     else:
         publication_mode = LEGACY_V5_MAINTENANCE_MODE if legacy_v5_maintenance else None
