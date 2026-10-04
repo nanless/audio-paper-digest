@@ -14420,7 +14420,7 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
-    // 第2.5轮：检查 demo 页面中的开源链接
+    // 先读取元数据中的资源链接；正文尚无开源链接时，再检查演示页、项目页或仓库 README。
     let demoFoundLinks = resolveMetadataResourceLinks(paper);
     if (!isRecoveryStageComplete(analysisManifest, 'demoLinkScan')) {
         let demoScanError = null;
@@ -14460,7 +14460,7 @@ async function analyzePaperDeepInternal(paper) {
             markRecoveryStage(analysisManifest, 'demoLinkScan', 'transient_failure', { error: e.message });
         }
 
-        // 第2.6轮：根据 demo 扫描结果更新开源评分和描述
+        // 根据发现的资源链接，更新机器摘要中的资源字段和开源详情。
         if (demoFoundLinks.length > 0) {
             const beforeUpdate = analysis;
             analysis = updateOpensourceFromDemoLinks(analysis, demoFoundLinks);
@@ -14525,7 +14525,7 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
-    // 第3.5轮：检查并修复实验结果中缺失的表格
+    // 检查实验表格是否遗漏或不符合要求，必要时调用模型补充实验结果。
     const tableRepairStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
@@ -14561,7 +14561,7 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
-    // 第3.6轮：检查并修复方法概述部分不够详细的问题
+    // 方法概述已有内容但不够详细时，调用模型补充这一节。
     const methodRepairStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
@@ -14602,7 +14602,7 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
-    // 第3.65轮：修复缺失/重复章节、机器摘要和标签契约。
+    // 修复章节和机器摘要的结构问题，并检查实验表格与方法、结果的正文；标签选择另行核验。
     const structureRepairStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
@@ -14638,9 +14638,9 @@ async function analyzePaperDeepInternal(paper) {
                 }
                 console.log(`    [deep] ✅ 最终结构修复完成`);
             }
-            // 结构修复模型会重写完整正文，偶尔把前一阶段已达标的方法章节
-            // 压缩回短摘要。这里在最终拒绝前重新走一次方法补充，避免让
-            // 一个下游修复阶段破坏已满足 detailed-v1 的上游契约。
+            // 结构修复可能把原本合格的方法说明缩短。保存本阶段结果前，
+            // 重新检查表格和方法；必要时补充方法章节，再核验完整结构，
+            // 确保方法章节仍符合 detailed-v1 的要求。
             const finalization = await finalizeStructureRepairOutput(
                 paper,
                 analysis,
@@ -14680,9 +14680,9 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
-    // 第3.66轮：结构修复只负责正文结构；taxonomy 独立使用原文证据
-    // 封口。合法标签不调用模型，非法时只替换标签节与机器摘要中的两个
-    // taxonomy 字段，避免为分类错误重写全文。
+    // 结构修复完成后，单独依据原文证据核验并修复标签。
+    // 标签不合规时必须修复；主任务标签过于宽泛时，也会尝试改选。
+    // 局部修复只允许改动标签节，以及机器摘要中的主任务和主方法标签字段。
     let taxonomySealStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
@@ -14713,11 +14713,9 @@ async function analyzePaperDeepInternal(paper) {
     if (!isRecoveryStageComplete(analysisManifest, 'taxonomySeal')) {
         try {
             const before = analysis;
-            // 阻断性问题（合同硬错误）必须修复；主任务“欠具体”只是一条
-            // 结构化告警（selection 合同规则②），仅在新指派路径消费：这里
-            // 借同一 repair 让模型改选更具体后代。告警修复失败不得让整篇
-            // 分析挂掉，也不参与 sealed stage 的回放判定（上面
-            // validateTagSectionContract 的结果只含硬错误）。
+            // 标签不合规时，修复失败会阻断分析。主任务标签过于宽泛只记为告警，
+            // 仅在本阶段尚未完成时尝试改选；失败则保留原标签。
+            // 上方对已完成阶段的额外检查只看标签是否合规，不因这条告警单独要求重跑。
             let repairFeedback = taxonomyIssue;
             if (!repairFeedback) {
                 const warning = parseAnalysis(analysis).taxonomyValidation?.specificityWarning;
@@ -14731,8 +14729,8 @@ async function analyzePaperDeepInternal(paper) {
                         analysis,
                         taxonomySealStage.evidenceContext,
                         repairFeedback,
-                        // 仅当本轮修复由欠具体告警驱动时，才要求修复结果
-                        // 真的改选到更具体后代；硬错误驱动的修复不受此限。
+                        // 只有因主任务标签过于宽泛而触发修复时，才要求修复后的主任务标签不再出现这条告警；
+                        // 修复标签合规错误时，不附加这一要求。
                         { requireMostSpecificTask: !taxonomyIssue }
                     );
                 } catch (error) {
@@ -14770,8 +14768,8 @@ async function analyzePaperDeepInternal(paper) {
             markRecoveryStage(
                 analysisManifest,
                 'taxonomySeal',
-                // 欠具体告警触发的修复一旦真的改了字节，也必须按 complete
-                // 封口（not_needed 要求输入输出逐字相同）。
+                // 即使只是调整过于宽泛的主任务标签，只要正文有变化，也要记为 complete；
+                // not_needed 仅用于没有标签错误且正文逐字未变的结果。
                 (taxonomyIssue || analysis !== before) ? 'complete' : 'not_needed',
                 {
                     fingerprint: taxonomySealStage.fingerprint,
@@ -14794,9 +14792,9 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
-    // 第3.67轮：结构与 taxonomy 封口之后执行核心摘要最终门禁。结构修复可能为补齐标题
-    // 重写整篇 canonical，因此摘要合同不能在它之前封口。这里始终只替换
-    // `核心摘要` 的 section body，并逐字校验其余 12 节没有变化。
+    // 结构和标签修复完成后，再检查核心摘要。结构修复可能改写全文，
+    // 因此要在它之后核验摘要是否合格。需要修复时，只替换“核心摘要”的正文，
+    // 并逐字确认其余 12 节及摘要正文以外的全部文本没有变化。
     let coreSummaryRepairStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
@@ -14898,9 +14896,9 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
 
-    // 第3.7轮：在评分前先把开源状态收敛到真实网络验证结果。只有
-    // SSRF/重定向验证成功的 2xx/3xx 资源才能支撑“可用”声明；超时/5xx
-    // 保留为 retryable 暂不可达，不把整篇永久判死。
+    // 评分前，先核对资源链接的来源和可达状态，再同步开源声明。
+    // 只有通过公网地址与重定向检查、返回 2xx/3xx 的资源，或已绑定元数据且满足完整 README 验证要求的仓库，才能标为可用。
+    // 超时或 5xx 等暂时故障按 retryable 保存；代理配置等错误仍按原流程抛出。
     const structuralAnalysis = typeof paper.analysisStageCheckpoints?.coreSummaryRepair === 'string'
         ? paper.analysisStageCheckpoints.coreSummaryRepair
         : analysis;
