@@ -129,7 +129,7 @@ class SealedTutorialPreviewTest(unittest.TestCase):
     def test_loads_exact_post_and_returns_prose_free_snapshot(self):
         temporary, current, date_str, paper_id, post_path = self.make_fixture()
         self.addCleanup(temporary.cleanup)
-        result = sealed.load_sealed_tutorial_preview(
+        result = sealed.load_verified_tutorial_preview(
             date_str, paper_id, current_dir=current,
         )
         self.assertEqual(result['postText'], post_path.read_text(encoding='utf-8'))
@@ -165,7 +165,7 @@ class SealedTutorialPreviewTest(unittest.TestCase):
                 old_copy.write_bytes(old_bytes)
                 module_path = authority_root / 'manual/scripts/sealed_tutorial_preview.py'
                 with mock.patch.object(sealed, '__file__', str(module_path)):
-                    original = sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
+                    original = sealed.load_verified_tutorial_preview(date_str, paper_id, current_dir=current)
                     self.assertEqual(original['postText'], post_path.read_text(encoding='utf-8'))
                     contract_path.write_bytes(old_bytes + '\n测试中的下一版编辑要求。\n'.encode('utf-8'))
                     binding = manifest['inputs']['referenceContract']
@@ -180,7 +180,7 @@ class SealedTutorialPreviewTest(unittest.TestCase):
                     self.assertEqual(manifest['output']['postSha256'], sha(post_path.read_bytes()))
                     self.assertEqual(manifest['output']['bytes'], len(post_path.read_bytes()))
                     with self.assertRaises(sealed.PublishDataValidationError) as failure:
-                        sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
+                        sealed.load_verified_tutorial_preview(date_str, paper_id, current_dir=current)
                     self.assertEqual(
                         str(failure.exception),
                         f'preview.inputs.referenceContract {expected_error}',
@@ -190,7 +190,7 @@ class SealedTutorialPreviewTest(unittest.TestCase):
                     else:
                         binding.update(path=str(contract_path.resolve()), sha256=sha(contract_path.read_bytes()))
                         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
-                    restored = sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
+                    restored = sealed.load_verified_tutorial_preview(date_str, paper_id, current_dir=current)
                     self.assertEqual(restored['postText'], original['postText'])
 
     def test_post_byte_tamper_fails_closed(self):
@@ -198,7 +198,7 @@ class SealedTutorialPreviewTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         post_path.write_text(post_path.read_text(encoding='utf-8') + 'tamper', encoding='utf-8')
         with self.assertRaisesRegex(sealed.PublishDataValidationError, '单篇教程预览的 post.md SHA 或字节数与清单记录不一致。'):
-            sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
+            sealed.load_verified_tutorial_preview(date_str, paper_id, current_dir=current)
 
     def test_symlinked_article_fails_closed(self):
         temporary, current, date_str, paper_id, _post_path = self.make_fixture()
@@ -208,7 +208,7 @@ class SealedTutorialPreviewTest(unittest.TestCase):
         article.rename(target)
         article.symlink_to(target)
         with self.assertRaisesRegex(sealed.PublishDataValidationError, '符号链接'):
-            sealed.load_sealed_tutorial_preview(date_str, paper_id, current_dir=current)
+            sealed.load_verified_tutorial_preview(date_str, paper_id, current_dir=current)
 
 
 if __name__ == '__main__':

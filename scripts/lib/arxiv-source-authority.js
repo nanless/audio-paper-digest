@@ -43,9 +43,9 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const stableHash = authorityApi.stableHash;
 const prettyBytes = authorityApi.prettyBytes;
-function canonical(value) {
-    if (Array.isArray(value)) return value.map(canonical);
-    if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+function sortJsonKeys(value) {
+    if (Array.isArray(value)) return value.map(sortJsonKeys);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortJsonKeys(value[key])]));
     return value;
 }
 const nowIso = value => {
@@ -157,7 +157,7 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
     }
     // Canonical JSON sorts object keys; re-seal the exact same public source
     // payload after canonicalization so later byte replay can verify it.
-    const durableArtifactBody = canonical(artifactBody);
+    const durableArtifactBody = sortJsonKeys(artifactBody);
     const durableStructuredArtifacts = { ...durableArtifactBody,
         payloadSha256: sha256(JSON.stringify(durableArtifactBody)) };
     const sourceUrl = details.source === 'html'

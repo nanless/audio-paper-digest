@@ -1164,7 +1164,7 @@ const RESULT_DIRECTION_PATTERNS = Object.freeze({
 });
 const READER_DIRECTION_MARK_RE = /(?:[↑↓←→↔↕↗↘↙↖]|\\(?:up|down|left|right|ne|se|sw|nw)arrow\b)/iu;
 
-function canonicalNumericLexeme(value) {
+function normalizeNumericLexeme(value) {
     const normalized = normalizeNfkc(value).toLowerCase()
         .replace(/[\u2212\u2012\u2013\u2014]/gu, '-')
         .replace(/,/g, '');
@@ -1188,7 +1188,7 @@ function numericLexemes(value) {
         `[-+]?(?:\\d{1,3}(?:,\\d{3})+|\\d+)?(?:\\.\\d+)(?:[eE][-+]?\\d+)?|[-+]?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:[eE][-+]?\\d+)?|\\b(?:${numberWords})\\b`,
         'gi'
     )) || [];
-    return matches.map(canonicalNumericLexeme);
+    return matches.map(normalizeNumericLexeme);
 }
 
 function normalizedSemanticText(value) {

@@ -842,7 +842,7 @@ def generate(conference_id, process_id):
         if existing.exists() and read_json(existing).get('version') == 2:
             previous_record = read_json(existing)
             check_self_hash(previous_record, 'generationSha256')
-            projection_changed = previous_record.get('implementationSha256') != gate_fingerprint()
+            implementation_changed = previous_record.get('implementationSha256') != gate_fingerprint()
             needs_rebase = (
                 not can_resume_existing_generation(
                     repo, previous_record.get('baseHead'),
@@ -861,7 +861,7 @@ def generate(conference_id, process_id):
             else:
                 previous, _, _ = validate_generation(
                     conference_id, process_id, repo, images,
-                    allow_owned_target_drift=projection_changed,
+                    allow_owned_target_drift=implementation_changed,
                     new_image_source_sha={item['path']: item['sourceSha256']
                                           for item in image_files},
                     new_source_sha={item['path']: item['sourceSha256']

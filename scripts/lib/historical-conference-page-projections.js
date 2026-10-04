@@ -33,14 +33,14 @@ const fail = message => { throw new HistoricalConferencePageProjectionError(mess
 const plain = value => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const clone = value => JSON.parse(JSON.stringify(value));
-function canonical(value) {
-    if (Array.isArray(value)) return value.map(canonical);
-    if (plain(value)) return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+function sortJsonKeys(value) {
+    if (Array.isArray(value)) return value.map(sortJsonKeys);
+    if (plain(value)) return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortJsonKeys(value[key])]));
     return value;
 }
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
-const stableHash = value => sha256(JSON.stringify(canonical(value)));
-const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
+const stableHash = value => sha256(JSON.stringify(sortJsonKeys(value)));
+const prettyBytes = value => Buffer.from(`${JSON.stringify(sortJsonKeys(value), null, 2)}\n`, 'utf8');
 const validSha = value => SHA_RE.test(String(value || ''));
 
 function exact(value, fields, label) {
@@ -162,7 +162,7 @@ function normalizeInventory(value) {
 // source record contributes its exact fingerprint and, only when different,
 // the fingerprint after removing complete inline TeX spans.  A collision
 // between either representation remains an error at the caller.
-function titleProjectionFingerprintSha256s(title, label = 'conference metadata title') {
+function getPageTitleFingerprints(title, label = 'conference metadata title') {
     const exactFingerprint = conference.titleFingerprint(title, label);
     const omittedInlineTex = title.replace(/\$(?:\\[\s\S]|[^$\\])*\$/gu, '');
     if (!omittedInlineTex.trim()) return [exactFingerprint];
@@ -191,7 +191,7 @@ function metadataTitle(source, paperId, cache) {
     }
     const title = records[metadata.recordIndex].title || records[metadata.recordIndex].name;
     return { exact: conference.titleFingerprint(title, 'conference metadata title'),
-        projections: titleProjectionFingerprintSha256s(title, 'conference metadata title') };
+        projections: getPageTitleFingerprints(title, 'conference metadata title') };
 }
 
 function selectConferenceSources(entry, cache) {
@@ -214,7 +214,7 @@ function conferenceScopeFor(paperId) {
     return { type: 'conference', key: `${match[1]}-${match[2]}` };
 }
 
-function buildConferencePageProjections({ catalog, catalogFileSha256, inventory, blogRoot } = {}) {
+function buildConferencePageMappings({ catalog, catalogFileSha256, inventory, blogRoot } = {}) {
     if (!validSha(catalogFileSha256)) fail('catalog file SHA is required');
     const currentCatalog = normalizeCurrentCatalog(catalog); const entries = currentCatalog.entries
         .filter(entry => entry.paperId.startsWith('conference:')).map(clone);
@@ -267,7 +267,7 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
         values.push({ ...page, titleFingerprintSha256: null, mapping: binding.mapping,
             dailyIcmlBinding: binding }); pagesByPaperId.set(paperId, values);
     }
-    const projections = entries.map(entry => {
+    const pageMappings = entries.map(entry => {
         const pages = (pagesByPaperId.get(entry.paperId) || []).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
         if (!pages.length) fail(`${entry.paperId} has no frozen historical conference page projection`);
         return { paperId: entry.paperId, sourceSetSha256: stableHash(sourceByPaperId.get(entry.paperId)),
@@ -278,12 +278,12 @@ function buildConferencePageProjections({ catalog, catalogFileSha256, inventory,
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     const body = { contract: CONTRACT, version: VERSION, catalogFileSha256,
         inventory: { ledgerSha256: history.ledgerSha256, pageSetSha256: history.pageSetSha256 },
-        projections, projectionSetSha256: stableHash(projections),
+        projections: pageMappings, projectionSetSha256: stableHash(pageMappings),
         unmatchedPages: unmatchedPages.sort((left, right) => left.pageKey.localeCompare(right.pageKey)) };
     return { ...body, artifactSha256: stableHash(body) };
 }
 
-function normalizeProjectionArtifact(value) {
+function normalizeConferencePageMappingRecord(value) {
     exact(value, ['contract', 'version', 'catalogFileSha256', 'inventory', 'projections',
         'projectionSetSha256', 'unmatchedPages', 'artifactSha256'], 'conference page projection artifact');
     if (value.contract !== CONTRACT || value.version !== VERSION || !validSha(value.catalogFileSha256)
@@ -291,7 +291,7 @@ function normalizeProjectionArtifact(value) {
         || !validSha(value.inventory.pageSetSha256) || !Array.isArray(value.projections)
         || !Array.isArray(value.unmatchedPages) || !validSha(value.projectionSetSha256)
         || !validSha(value.artifactSha256)) fail('conference page projection artifact is malformed');
-    const seenPages = new Set(); const projections = value.projections.map((item, index) => {
+    const seenPages = new Set(); const pageMappings = value.projections.map((item, index) => {
         exact(item, ['paperId', 'sourceSetSha256', 'pageKeys', 'pages'], `projections[${index}]`);
         if (typeof item.paperId !== 'string' || !item.paperId.startsWith('conference:')
             || !validSha(item.sourceSetSha256) || !Array.isArray(item.pageKeys) || !item.pageKeys.length
@@ -325,8 +325,8 @@ function normalizeProjectionArtifact(value) {
         return { paperId: item.paperId, sourceSetSha256: item.sourceSetSha256,
             pageKeys: item.pageKeys.slice(), pages };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
-    if (new Set(projections.map(item => item.paperId)).size !== projections.length
-        || projections.some((item, index) => index && projections[index - 1].paperId.localeCompare(item.paperId) >= 0)) {
+    if (new Set(pageMappings.map(item => item.paperId)).size !== pageMappings.length
+        || pageMappings.some((item, index) => index && pageMappings[index - 1].paperId.localeCompare(item.paperId) >= 0)) {
         fail('conference projections duplicate or are unordered');
     }
     const unmatchedPages = value.unmatchedPages.map((page, index) => {
@@ -338,17 +338,17 @@ function normalizeProjectionArtifact(value) {
         seenPages.add(page.pageKey); return clone(page);
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     const body = { contract: CONTRACT, version: VERSION, catalogFileSha256: value.catalogFileSha256,
-        inventory: clone(value.inventory), projections, projectionSetSha256: value.projectionSetSha256, unmatchedPages };
-    if (stableHash(projections) !== value.projectionSetSha256 || stableHash(body) !== value.artifactSha256) {
+        inventory: clone(value.inventory), projections: pageMappings, projectionSetSha256: value.projectionSetSha256, unmatchedPages };
+    if (stableHash(pageMappings) !== value.projectionSetSha256 || stableHash(body) !== value.artifactSha256) {
         fail('conference page projection hash binding drifted');
     }
     return { ...body, artifactSha256: value.artifactSha256 };
 }
 
-function writeProjectionArtifact({ root, outputName, artifact } = {}) {
+function writeConferencePageMappingRecord({ root, outputName, artifact } = {}) {
     if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('projection output name is unsafe');
     const directory = safeDirectory(root, 'conference projection root', true);
-    const normalized = normalizeProjectionArtifact(artifact); const filename = path.join(directory, outputName);
+    const normalized = normalizeConferencePageMappingRecord(artifact); const filename = path.join(directory, outputName);
     const bytes = prettyBytes(normalized); let fd;
     try {
         fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
@@ -372,12 +372,12 @@ function buildFromFiles({ catalogFile, inventoryFile, blogRoot } = {}) {
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
         fail('current scoped v5 catalog inventory file binding drifted');
     }
-    return buildConferencePageProjections({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
+    return buildConferencePageMappings({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, blogRoot });
 }
 
 module.exports = { CONTRACT, VERSION, CATALOG_CONTRACT, SAFE_NAME_RE, HistoricalConferencePageProjectionError,
     stableHash, prettyBytes, safeDirectory, readStableFile, readStableJson, normalizeCatalog, normalizeInventory,
-    titleProjectionFingerprintSha256s, selectConferenceSources,
-    buildConferencePageProjections, normalizeProjectionArtifact,
-    writeProjectionArtifact, buildFromFiles };
+    getPageTitleFingerprints, selectConferenceSources,
+    buildConferencePageMappings, normalizeConferencePageMappingRecord,
+    writeConferencePageMappingRecord, buildFromFiles };

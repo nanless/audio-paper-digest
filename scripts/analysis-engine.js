@@ -1308,7 +1308,7 @@ function getAnalysisRunStatus(stats = {}, remainingFailures = stats.failed || 0)
     return success > 0 ? 'partial_failed' : 'failed';
 }
 
-function getCanonicalAnalysisRunSummary(papers) {
+function getAnalysisRunSummary(papers) {
     const records = Array.isArray(papers) ? papers : [];
     const remaining = records.filter(paper => !isSuccessfulAnalysisRecord(paper)).length;
     const success = records.length - remaining;
@@ -1913,16 +1913,16 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
     return Array.from(map.values());
 }
 
-function mergeCanonicalAnalysisState(paper, canonical) {
-    if (!canonical) return { ...paper };
-    const merged = { ...canonical, ...paper };
+function mergeStoredAnalysisState(paper, storedAnalysisRecord) {
+    if (!storedAnalysisRecord) return { ...paper };
+    const merged = { ...storedAnalysisRecord, ...paper };
     for (const field of ANALYSIS_RECOVERY_FIELDS) {
-        if (Object.prototype.hasOwnProperty.call(canonical, field)) merged[field] = canonical[field];
+        if (Object.prototype.hasOwnProperty.call(storedAnalysisRecord, field)) merged[field] = storedAnalysisRecord[field];
     }
     return merged;
 }
 
-function loadCanonicalAnalysisRecord(filePath, paper) {
+function loadStoredAnalysisRecord(filePath, paper) {
     const data = readJsonFileStrict(filePath, { allowMissing: true });
     const papers = Array.isArray(data) ? data : (data?.papers || []);
     const id = normalizedId(paper);
@@ -1940,8 +1940,8 @@ module.exports = {
     hasValidAnalysisBody,
     createFileSaver,
     mergePapersById,
-    mergeCanonicalAnalysisState,
-    loadCanonicalAnalysisRecord,
+    mergeStoredAnalysisState,
+    loadStoredAnalysisRecord,
     readJsonFileStrict,
     initializeJsonFileLocked,
     LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
@@ -1967,7 +1967,7 @@ module.exports = {
     API_READER_SOURCE_BINDING_CONTRACT,
     SCORING_STABILITY_RESOLUTION_CONTRACT,
     getAnalysisRunStatus,
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
     isSealedApiAnalysisEligibleForCoreSummaryRecovery,

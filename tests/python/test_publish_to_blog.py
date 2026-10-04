@@ -7320,7 +7320,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 },
             }
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)):
-                self.assertIsNone(publish_to_blog._manual_review_provenance_error(
+                self.assertIsNone(publish_to_blog._manual_review_record_error(
                     receipt, date_str=date_str,
                     generation_manifest_sha256=manifest_sha,
                     expected_base_head=base_head,
@@ -7328,7 +7328,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 escaped = json.loads(json.dumps(receipt))
                 escaped['files'][0]['path'] = '../escaped.md'
                 escaped['reviewProvenance']['files'][0]['path'] = '../escaped.md'
-                self.assertIn('路径越界', publish_to_blog._manual_review_provenance_error(
+                self.assertIn('路径越界', publish_to_blog._manual_review_record_error(
                     escaped, date_str=date_str,
                     generation_manifest_sha256=manifest_sha,
                     expected_base_head=base_head,
@@ -7339,7 +7339,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 ] = 'gpt-5.6-sol'
                 self.assertIn(
                     'reviewSubagent',
-                    publish_to_blog._manual_review_provenance_error(
+                    publish_to_blog._manual_review_record_error(
                         wrong_model, date_str=date_str,
                         generation_manifest_sha256=manifest_sha,
                         expected_base_head=base_head,
@@ -7351,7 +7351,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 ] = 'review-2608-12345'
                 self.assertIn(
                     'taskName 必须逐页全局唯一',
-                    publish_to_blog._manual_review_provenance_error(
+                    publish_to_blog._manual_review_record_error(
                         duplicate_task, date_str=date_str,
                         generation_manifest_sha256=manifest_sha,
                         expected_base_head=base_head,
@@ -7363,14 +7363,14 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 ]['paperId']
                 self.assertIn(
                     'paperId 缺失或非法',
-                    publish_to_blog._manual_review_provenance_error(
+                    publish_to_blog._manual_review_record_error(
                         missing_paper_id, date_str=date_str,
                         generation_manifest_sha256=manifest_sha,
                         expected_base_head=base_head,
                     ),
                 )
                 receipt['reviewProvenance']['files'][1]['deleted'] = False
-                self.assertIn('删除语义不一致', publish_to_blog._manual_review_provenance_error(
+                self.assertIn('删除语义不一致', publish_to_blog._manual_review_record_error(
                     receipt, date_str=date_str,
                     generation_manifest_sha256=manifest_sha,
                     expected_base_head=base_head,

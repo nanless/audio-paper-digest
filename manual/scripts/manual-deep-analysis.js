@@ -47,7 +47,7 @@ const {
     mergeAndSaveResults,
     isSuccessfulAnalysisRecord,
     withPaperAnalysisLock,
-    loadCanonicalAnalysisRecord,
+    loadStoredAnalysisRecord,
     updateJsonFileLocked
 } = require('../../scripts/analysis-engine.js');
 const {
@@ -599,19 +599,19 @@ function manualCanonicalReuseFingerprint(record) {
     });
 }
 
-function shouldReuseCanonical(canonical, expectedRecord, force = false) {
-    if (force || !isSuccessfulAnalysisRecord(canonical) || !isSuccessfulAnalysisRecord(expectedRecord)) {
+function shouldReuseCanonical(storedAnalysisRecord, expectedRecord, force = false) {
+    if (force || !isSuccessfulAnalysisRecord(storedAnalysisRecord) || !isSuccessfulAnalysisRecord(expectedRecord)) {
         return false;
     }
-    const canonicalFingerprint = manualCanonicalReuseFingerprint(canonical);
+    const canonicalFingerprint = manualCanonicalReuseFingerprint(storedAnalysisRecord);
     const expectedFingerprint = manualCanonicalReuseFingerprint(expectedRecord);
     return Boolean(canonicalFingerprint && canonicalFingerprint === expectedFingerprint);
 }
 
-function manualCanonicalWriteDecision(canonical, expectedRecord, force = false) {
-    if (!isSuccessfulAnalysisRecord(canonical)) return 'write';
+function manualCanonicalWriteDecision(storedAnalysisRecord, expectedRecord, force = false) {
+    if (!isSuccessfulAnalysisRecord(storedAnalysisRecord)) return 'write';
     if (force) return 'write';
-    if (shouldReuseCanonical(canonical, expectedRecord, false)) return 'reuse';
+    if (shouldReuseCanonical(storedAnalysisRecord, expectedRecord, false)) return 'reuse';
     throw new Error(
         `${normalizedId(expectedRecord) || '当前论文'} 已有成功 canonical，`
         + '但本次 spec/prompt/全文/图片或审计指纹不同；拒绝无 --force 覆盖'
@@ -1900,7 +1900,7 @@ async function run() {
     }
     if (v6Production && !force) {
         const legacySuccessIds = papers.map(paper => {
-            const current = loadCanonicalAnalysisRecord(canonicalPath, paper);
+            const current = loadStoredAnalysisRecord(canonicalPath, paper);
             return current?.analysisStatus === 'success' && current.manualDepth !== MANUAL_DEPTH_V6
                 ? normalizedId(paper)
                 : null;
@@ -1919,10 +1919,10 @@ async function run() {
         const paperSpec = specPapers[id] || specPapers[paper.arxivId];
         try {
             await withPaperAnalysisLock(paper, async () => {
-                const canonical = loadCanonicalAnalysisRecord(canonicalPath, paper);
+                const storedAnalysisRecord = loadStoredAnalysisRecord(canonicalPath, paper);
                 const effectivePaper = {
                     ...paper,
-                    ...(canonical || {}),
+                    ...(storedAnalysisRecord || {}),
                     ...(paperSpec.titleOverride ? { title: paperSpec.titleOverride } : {})
                 };
                 let record;
@@ -1973,7 +1973,7 @@ async function run() {
                         }
                     );
                     const writeDecision = manualCanonicalWriteDecision(
-                        canonical, expectedRecord, force,
+                        storedAnalysisRecord, expectedRecord, force,
                     );
                     if (writeDecision === 'reuse') {
                         skipped++;

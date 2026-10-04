@@ -14,7 +14,7 @@ const {
     normalizeReaderWorkflowLeakageSurface,
     normalizeReaderFigureMetricUnits,
     repairReportedTextSpacing,
-    canonicalReaderBridgeTerm,
+    normalizeReaderBridgeTerm,
     findReaderBridgeParagraph
 } = require('../scripts/deep-analyzer.js');
 const { apiReaderV3BindsCanonical } = require('../scripts/analysis-engine.js');
@@ -103,7 +103,7 @@ test('rebinds bridges after bounded Chinese-numeral typography normalization', (
         ['十折交叉验证', '置换检验', '**10 折交叉验证 × 置换检验：** 两者分别用于稳定评估与检验结果可靠性。']
     ];
     for (const [left, right, paragraph] of cases) {
-        assert.equal(canonicalReaderBridgeTerm(left), canonicalReaderBridgeTerm(
+        assert.equal(normalizeReaderBridgeTerm(left), normalizeReaderBridgeTerm(
             paragraph.match(/\*\*(.+?)：\*\*/u)[1].split(' × ')[0]
         ));
         assert.equal(

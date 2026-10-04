@@ -16,7 +16,7 @@ const runnerApi = require('./historical-direct-rewrite-runner.js');
 const aggregateApi = require('./historical-direct-aggregate.js');
 const directPageStagingApi = require('./historical-direct-page-staging.js');
 const freshArxivSourceApi = require('./fresh-arxiv-rewrite-source.js');
-const projectionIo = require('./historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 
 const PLAN_CONTRACT = 'historical-direct-publication-plan-v1';
 const GENERATION_CONTRACT = 'historical-direct-publication-generation-v1';

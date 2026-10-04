@@ -12,7 +12,7 @@ const planApi = require('./historical-direct-rewrite-plan.js');
 const runner = require('./historical-direct-rewrite-runner.js');
 const aggregateApi = require('./historical-direct-aggregate.js');
 const directPages = require('./historical-direct-page-staging.js');
-const projectionIo = require('./historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 
 const PAUSE_CONTRACT = 'historical-direct-rewrite-pause-request-v1';
 const STATUS_CONTRACT = 'historical-direct-rewrite-status-v1';
@@ -112,7 +112,7 @@ function normalizeSourceStatus(value, plan, generation) {
 function readSourceStatus({ sourceRoot, plan, generation = 1 } = {}) {
     const paths = sourceControlPaths({ sourceRoot, plan, generation });
     if (!fs.existsSync(paths.statusFile)) return null;
-    const loaded = projectionIo.readStableJson(paths.statusFile, 'direct source status');
+    const loaded = conferencePageMappingsApi.readStableJson(paths.statusFile, 'direct source status');
     return { filename: paths.statusFile, fileSha256: loaded.fileSha256,
         status: normalizeSourceStatus(loaded.value, plan, generation) };
 }
@@ -205,7 +205,7 @@ function normalizePauseRecord(value, plan, generation) {
 }
 function readPauseFile(filename, plan, generation) {
     if (!fs.existsSync(filename)) return null;
-    const loaded = projectionIo.readStableJson(filename, 'direct rewrite pause request');
+    const loaded = conferencePageMappingsApi.readStableJson(filename, 'direct rewrite pause request');
     return { record: normalizePauseRecord(loaded.value, plan, generation), fileSha256: loaded.fileSha256 };
 }
 function writePauseRequest({ phase = 'analysis', registryRoot, sourceRoot, plan, generation = 1,
@@ -259,7 +259,7 @@ function registrySnapshot({ registryFile, plan, currentRendererImplementationSha
             currentRendererImplementationSha256, currentStagedCount: 0,
             staleStagedCount: 0, staleStagedPaperIds: [], lastUpdatedAt: null, recentFailures: [] };
     }
-    const loaded = projectionIo.readStableJson(registryFile, 'direct rewrite registry');
+    const loaded = conferencePageMappingsApi.readStableJson(registryFile, 'direct rewrite registry');
     const registry = runner.normalizeRegistry(loaded.value, plan); const counts = runner.registryCounts(registry);
     const updates = registry.entries.map(item => item.updatedAt).filter(Boolean).sort();
     const recentFailures = registry.entries.filter(item => ['failed', 'analysis_partial'].includes(item.status))
@@ -293,7 +293,7 @@ function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) 
         for (const entry of safeChildren(runRoot).filter(item => item.isFile() && /^(?:daily|conference|conference-task)-[a-z0-9-]+\.json$/.test(item.name))) {
             const filename = path.join(runRoot, entry.name);
             try {
-                const loaded = projectionIo.readStableJson(filename, 'direct aggregate status input'); const value = loaded.value;
+                const loaded = conferencePageMappingsApi.readStableJson(filename, 'direct aggregate status input'); const value = loaded.value;
                 if (value?.contract !== aggregateApi.CONTRACT || value?.version !== aggregateApi.VERSION
                     || value?.status !== 'complete' || value?.source?.planSha256 !== plan.planSha256) continue;
                 const body = structuredClone(value); const manifestSha256 = body.manifestSha256; delete body.manifestSha256;
@@ -305,7 +305,7 @@ function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) 
                     || !SHA_RE.test(value.outputPage?.contentSha256 || '')) fail('direct aggregate output page binding is invalid');
                 const pageFile = path.resolve(runRoot, ...stagedPath.split('/'));
                 if (!pageFile.startsWith(`${path.resolve(runRoot, 'pages')}${path.sep}`)
-                    || projectionIo.readStableFile(pageFile, 'direct aggregate status page').fileSha256 !== value.outputPage.contentSha256) {
+                    || conferencePageMappingsApi.readStableFile(pageFile, 'direct aggregate status page').fileSha256 !== value.outputPage.contentSha256) {
                     fail('direct aggregate output page bytes drifted');
                 }
                 const key = `${value.scope}:${value.key}`; const prior = found.get(key);
@@ -339,7 +339,7 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
     for (const entry of safeChildren(aggregateProjectionRoot).filter(item => item.isFile() && item.name.endsWith('.json'))) {
         const filename = path.join(aggregateProjectionRoot, entry.name);
         try {
-            const loaded = projectionIo.readStableJson(filename, 'direct aggregate projection status input'); const value = loaded.value;
+            const loaded = conferencePageMappingsApi.readStableJson(filename, 'direct aggregate projection status input'); const value = loaded.value;
             if (value?.contract !== aggregateApi.PROJECTION_CONTRACT || value?.version !== aggregateApi.PROJECTION_VERSION
                 || value?.planSha256 !== plan.planSha256) continue;
             const normalized = aggregateApi.normalizeAggregateProjection(value, plan);
@@ -431,7 +431,7 @@ function sourceSnapshot({ sourceRoot, plan, generation = 1, verifySources = fals
 function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, aggregateProjectionRoot,
     sourceRoot, publicationRoot, publicationId = null, blogRepo = null, remoteName = 'origin', liveRemote = null,
     verifySources = false, observedAt = new Date().toISOString() } = {}, dependencies = {}) {
-    const loaded = projectionIo.readStableJson(planFile, 'direct rewrite status plan');
+    const loaded = conferencePageMappingsApi.readStableJson(planFile, 'direct rewrite status plan');
     const plan = planApi.normalizePlan(loaded.value); const paths = controlPaths({ registryRoot, plan, generation });
     const pause = readPauseFile(paths.pauseFile, plan, generation); const sourcePaths = sourceControlPaths({ sourceRoot, plan, generation });
     const sourcePause = readPauseFile(sourcePaths.pauseFile, plan, generation);

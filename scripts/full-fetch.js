@@ -27,9 +27,9 @@ const {
     withFileLockSync,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     getAnalysisExitCode,
-    mergeCanonicalAnalysisState
+    mergeStoredAnalysisState
 } = require('./analysis-engine.js');
 const {
     markPaperDigestStatus,
@@ -494,7 +494,7 @@ function loadCurrentSuccessfulAnalysisIds(filePath = RESULT_FILE, today = null) 
     return ids;
 }
 
-function loadCanonicalAnalysisRecord(filePath, paper) {
+function loadStoredAnalysisRecord(filePath, paper) {
     const data = readJsonFileStrict(filePath, { allowMissing: true });
     const papers = Array.isArray(data) ? data : (data?.papers || []);
     const id = normalizedId(paper);
@@ -1093,7 +1093,7 @@ function cleanOldData(filePath, name, today, options = {}) {
             data.batchDate = today;
             data.stats = data.stats && typeof data.stats === 'object' ? data.stats : {};
             if (name === 'deep-analysis-result') {
-                const summary = getCanonicalAnalysisRunSummary(data.papers);
+                const summary = getAnalysisRunSummary(data.papers);
                 data.status = summary.status;
                 data.stats.analysisStatus = summary.status;
                 data.stats.remainingFailed = summary.remaining;
@@ -1737,13 +1737,13 @@ async function runFullFetch() {
         });
     }
     const papersToAnalyze = filteredNew.map(paper => {
-        const canonical = mergeCanonicalAnalysisState(paper, loadCanonicalAnalysisRecord(outputFile, paper));
-        return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(canonical, dailySourcePlan) : canonical;
+        const storedAnalysisRecord = mergeStoredAnalysisState(paper, loadStoredAnalysisRecord(outputFile, paper));
+        return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(storedAnalysisRecord, dailySourcePlan) : storedAnalysisRecord;
     });
     const skippedAlreadyAnalyzed = dailySourcePlan
         ? filteredNew.filter(paper => {
-            const canonical = loadCanonicalAnalysisRecord(outputFile, paper);
-            return isSuccessfulAnalysisRecord(canonical) && dailyFreshSources.isPaperBoundToPlan(canonical, dailySourcePlan);
+            const storedAnalysisRecord = loadStoredAnalysisRecord(outputFile, paper);
+            return isSuccessfulAnalysisRecord(storedAnalysisRecord) && dailyFreshSources.isPaperBoundToPlan(storedAnalysisRecord, dailySourcePlan);
         }).length
         : 0;
     if (skippedAlreadyAnalyzed > 0) {
@@ -1775,12 +1775,12 @@ async function runFullFetch() {
         retryDelayMs: ANALYSIS_RETRY_DELAY_MS,
         analyzeFn: dailySourcePlan ? dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan) : null,
         preparePaperLocked: paper => {
-            const canonical = loadCanonicalAnalysisRecord(outputFile, paper);
-            if (dailySourcePlan && isSuccessfulAnalysisRecord(canonical)
-                && dailyFreshSources.isPaperBoundToPlan(canonical, dailySourcePlan)) {
-                return { paper: canonical, skip: true, reason: '该论文已由其他进程完成' };
+            const storedAnalysisRecord = loadStoredAnalysisRecord(outputFile, paper);
+            if (dailySourcePlan && isSuccessfulAnalysisRecord(storedAnalysisRecord)
+                && dailyFreshSources.isPaperBoundToPlan(storedAnalysisRecord, dailySourcePlan)) {
+                return { paper: storedAnalysisRecord, skip: true, reason: '该论文已由其他进程完成' };
             }
-            const merged = mergeCanonicalAnalysisState(paper, canonical);
+            const merged = mergeStoredAnalysisState(paper, storedAnalysisRecord);
             return { paper: dailySourcePlan ? dailyFreshSources.prepareDailyPaper(merged, dailySourcePlan) : merged, skip: false };
         },
         onPaperResultLocked: async (paper, result) => {
@@ -1820,8 +1820,8 @@ async function runFullFetch() {
             console.log(`  ── 批次 ${batchNum}/${totalBatches} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchSkipped > 0 ? ` | 跳过 ${batchSkipped}` : ''}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
 
             const snapshot = readJsonFileStrict(outputFile, { allowMissing: true });
-            const canonicalPapers = Array.isArray(snapshot) ? snapshot : (snapshot?.papers || []);
-            console.log(`  💾 批次状态已更新: 本批成功 ${batchSuccess} 篇（canonical 共 ${canonicalPapers.length} 篇）`);
+            const savedAnalysisPapers = Array.isArray(snapshot) ? snapshot : (snapshot?.papers || []);
+            console.log(`  💾 批次状态已更新: 本批成功 ${batchSuccess} 篇（canonical 共 ${savedAnalysisPapers.length} 篇）`);
         }
     });
     const { stats: analysisStats } = dailySourcePlan
@@ -1986,8 +1986,8 @@ module.exports = {
     getFatalEmptyCandidateSourceFailures,
     loadCompleteFilteredForToday,
     loadCurrentSuccessfulAnalysisIds,
-    loadCanonicalAnalysisRecord,
-    mergeCanonicalAnalysisState,
+    loadStoredAnalysisRecord,
+    mergeStoredAnalysisState,
     loadAnalyzedIdsFromArchive,
     loadTodayPapersFromDatabase,
     saveFinalAnalysisResults,

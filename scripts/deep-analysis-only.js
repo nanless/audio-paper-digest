@@ -14,9 +14,9 @@ const {
     readJsonFileStrict,
     updateJsonFileLocked,
     mergePapersById,
-    mergeCanonicalAnalysisState,
+    mergeStoredAnalysisState,
     isSuccessfulAnalysisRecord,
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
@@ -94,7 +94,7 @@ function finalizeDeepZeroWorkState(resultPath, filteredData, today) {
     return updateJsonFileLocked(resultPath, current => {
         validateDeepAnalysisInput(current, filteredData, today);
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const { remaining, success, status } = getCanonicalAnalysisRunSummary(currentPapers);
+        const { remaining, success, status } = getAnalysisRunSummary(currentPapers);
         const now = getBeijingISOString();
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
@@ -158,15 +158,15 @@ async function runDeepAnalysis(options = {}) {
     const notAnalyzed = papers
         .filter(p => !isSuccessfulAnalysisRecord(p)
             || !dailyFreshSources.isPaperBoundToPlan(p, dailySourcePlan))
-        .map(canonical => mergeCanonicalAnalysisState(
-            freshById.get(normalizedId(canonical)) || canonical,
-            canonical
+        .map(storedAnalysisRecord => mergeStoredAnalysisState(
+            freshById.get(normalizedId(storedAnalysisRecord)) || storedAnalysisRecord,
+            storedAnalysisRecord
         ))
         .map(paper => dailyFreshSources.prepareDailyPaper(paper, dailySourcePlan));
     if (notAnalyzed.length === 0) {
         const finalPayload = finalizeDeepZeroWorkState(resultPath, filteredData, today);
         updateAnalysisDigestStatuses(finalPayload.papers, { batchDate: today });
-        const summary = getCanonicalAnalysisRunSummary(finalPayload.papers);
+        const summary = getAnalysisRunSummary(finalPayload.papers);
         console.log(summary.status === 'complete'
             ? '✅ 所有论文已分析完成！'
             : `⚠️ 检测到并发更新，仍有 ${summary.remaining} 篇未完成`);
@@ -210,7 +210,7 @@ async function runDeepAnalysis(options = {}) {
             }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    latest ? mergeCanonicalAnalysisState(paper, latest) : paper,
+                    latest ? mergeStoredAnalysisState(paper, latest) : paper,
                     dailySourcePlan
                 ),
                 skip: false
@@ -245,12 +245,12 @@ async function runDeepAnalysis(options = {}) {
                 const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
                 const {
                     remaining,
-                    success: canonicalSuccess,
-                    status: canonicalStatus
-                } = getCanonicalAnalysisRunSummary(currentPapers);
+                    success: savedAnalysisSuccess,
+                    status: savedAnalysisStatus
+                } = getAnalysisRunSummary(currentPapers);
                 const progressStatus = processed < notAnalyzed.length
                     ? 'running'
-                    : canonicalStatus;
+                    : savedAnalysisStatus;
                 const payload = {
                     ...(!Array.isArray(current) && current ? current : {}),
                     lastUpdated: getBeijingISOString(),
@@ -259,7 +259,7 @@ async function runDeepAnalysis(options = {}) {
                     stats: {
                         ...(!Array.isArray(current) ? current?.stats : {}),
                         ...saveStats,
-                        analyzedSuccess: canonicalSuccess,
+                        analyzedSuccess: savedAnalysisSuccess,
                         analyzedFailed: remaining,
                         remainingFailed: remaining,
                         analysisStatus: progressStatus
@@ -277,7 +277,7 @@ async function runDeepAnalysis(options = {}) {
 
     const finalPayload = updateJsonFileLocked(resultPath, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const { remaining, success: canonicalSuccess, status } = getCanonicalAnalysisRunSummary(currentPapers);
+        const { remaining, success: savedAnalysisSuccess, status } = getAnalysisRunSummary(currentPapers);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: currentPapers,
@@ -285,7 +285,7 @@ async function runDeepAnalysis(options = {}) {
             deepAnalysisLastAttemptAt: getBeijingISOString(),
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
-                analyzedSuccess: canonicalSuccess,
+                analyzedSuccess: savedAnalysisSuccess,
                 analyzedFailed: remaining,
                 remainingFailed: remaining,
                 totalAfterMerge: currentPapers.length,
@@ -296,7 +296,7 @@ async function runDeepAnalysis(options = {}) {
         else delete payload.deepAnalysisCompletedAt;
         return payload;
     });
-    const { remaining, status } = getCanonicalAnalysisRunSummary(finalPayload.papers);
+    const { remaining, status } = getAnalysisRunSummary(finalPayload.papers);
 
     console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 深度分析状态: ${status}`);
     console.log(`📊 统计:`);

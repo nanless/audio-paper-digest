@@ -1097,13 +1097,13 @@ test('missing result table repair moves one stable experiment table/binding into
         atomicOperation: context.atomicOperation
     }), /atomic table-move postconditions/);
 
-    const donorBlock = table(4);
-    assert.ok(draft.sections[6].body.endsWith(donorBlock));
+    const tableMarkdownToMove = table(4);
+    assert.ok(draft.sections[6].body.endsWith(tableMarkdownToMove));
     const resultBlock = '\n\n表 4 的主结果比较条件。\n\n'
         + '| 方法 | 条件 | 指标 A | 指标 B |\n| --- | --- | --- | --- |\n'
         + '| 方法 4 | 设置 40 | 400 | 4000 |\n\n表 4 的结果解释与边界。';
     const validPatch = patchFor(draft, [
-        ['/sections/6/body', draft.sections[6].body.slice(0, -donorBlock.length)],
+        ['/sections/6/body', draft.sections[6].body.slice(0, -tableMarkdownToMove.length)],
         ['/sections/7/body', `${draft.sections[7].body}${resultBlock}`],
         ['/tableBindings/3', structuredClone(draft.tableBindings[3])]
     ]);
@@ -1158,11 +1158,11 @@ test('result-table relocation still applies when table and binding streams are a
     const operation = context.atomicOperation;
     assert.equal(operation.kind, 'relocate_result_table_v1');
     assert.equal(operation.donorGlobalTableIndex, 2);
-    const donor = block('设置表2', '11');
+    const tableMarkdownToMove = block('设置表2', '11');
     const moved = block('设置表2', '11');
     const binding = structuredClone(draft.tableBindings[1]);
     const merged = applyReaderPatch(draft, patchFor(draft, [
-        ['/sections/6/body', draft.sections[6].body.slice(0, -donor.length)],
+        ['/sections/6/body', draft.sections[6].body.slice(0, -tableMarkdownToMove.length)],
         ['/sections/7/body', `${moved}${draft.sections[7].body}`],
         ['/tableBindings/1', binding]
     ]), context.targets.map(target => target.path), { atomicOperation: operation });

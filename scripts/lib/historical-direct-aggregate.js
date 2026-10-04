@@ -11,7 +11,7 @@ const planApi = require('./historical-direct-rewrite-plan.js');
 const runnerApi = require('./historical-direct-rewrite-runner.js');
 const directPages = require('./historical-direct-page-staging.js');
 const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
-const projectionIo = require('./historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 const { parseAnalysis } = require('../utils.js');
 const tagRules = require('./tag-rules.js').getDefaultTagRules();
 
@@ -63,7 +63,7 @@ function text(value, label, maximum = 50000) {
 }
 function safeRoot(value, label, create = false) {
     if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} must be an absolute directory`);
-    return projectionIo.safeDirectory(value, label, create);
+    return conferencePageMappingsApi.safeDirectory(value, label, create);
 }
 function inside(root, target, label) {
     if (typeof target !== 'string' || !path.isAbsolute(target)) fail(`${label} must be an absolute path`);
@@ -72,7 +72,7 @@ function inside(root, target, label) {
     return resolved;
 }
 function readJson(filename, label, maximum = 128 * 1024 * 1024) {
-    try { return projectionIo.readStableJson(filename, label, maximum); }
+    try { return conferencePageMappingsApi.readStableJson(filename, label, maximum); }
     catch (error) {
         if (error instanceof HistoricalDirectAggregateError) throw error;
         fail(`${label} is unreadable: ${error.message}`);
@@ -393,7 +393,7 @@ function writeAggregateProjection({ root, outputName, projection, plan } = {}) {
         return { status: 'created', filename, fileSha256: sha256(bytes), projection: normalized };
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        const existing = projectionIo.readStableFile(filename, 'existing direct aggregate projection');
+        const existing = conferencePageMappingsApi.readStableFile(filename, 'existing direct aggregate projection');
         if (!existing.bytes.equals(bytes)) fail(`refuses to overwrite different direct aggregate projection: ${outputName}`);
         return { status: 'recovered', filename, fileSha256: existing.fileSha256, projection: normalized };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
@@ -855,10 +855,10 @@ function writeExactAggregateFile(filename, bytes, label) {
         fs.writeFileSync(fd, payload); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        const current = projectionIo.readStableFile(filename, `existing ${label}`);
+        const current = conferencePageMappingsApi.readStableFile(filename, `existing ${label}`);
         if (!current.bytes.equals(payload)) fail(`refuses to overwrite different ${label}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
-    const stored = projectionIo.readStableFile(filename, label);
+    const stored = conferencePageMappingsApi.readStableFile(filename, label);
     if (!stored.bytes.equals(payload)) fail(`${label} write verification failed`);
     return stored.fileSha256;
 }

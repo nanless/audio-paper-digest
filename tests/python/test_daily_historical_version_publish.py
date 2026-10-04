@@ -50,7 +50,7 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
         analyze: async paper => {
             const details = direct.getDirectRewriteSource(paper);
             const manifest = { sourceAcquisition: { sourceSha256: sha(details.text) } };
-            direct.attachDirectSourceProvenance(paper, manifest, details);
+            direct.attachDirectSourceRecord(paper, manifest, details);
             return { ...paper, sourceSha256: sha(details.text), analysisManifest: manifest };
         }
     });

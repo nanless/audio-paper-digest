@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const conferenceAuthority = require('./historical-conference-crawl-authority.js');
 const conferenceManifestApi = require('./historical-conference-local-sources.js');
-const projectionApi = require('./historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 const icmlPosterApi = require('./historical-icml-poster-authority.js');
 const alternatePdfApi = require('./historical-icml-alternate-pdf-source.js');
@@ -99,7 +99,7 @@ function exact(value, fields, label) {
 }
 
 function readStableJson(filename, label) {
-    try { return projectionApi.readStableJson(filename, label, MAX_MANIFEST_BYTES); }
+    try { return conferencePageMappingsApi.readStableJson(filename, label, MAX_MANIFEST_BYTES); }
     catch (error) { fail(`${label} is unreadable: ${error.message}`); }
 }
 
@@ -132,7 +132,7 @@ function selectedConferenceSource(sources, pageFingerprints, paperId) {
 function scopeConferenceEntries({ conferenceManifest, inventory, blogRoot } = {}) {
     try { conferenceManifestApi.assertManifest(conferenceManifest); }
     catch (error) { fail(`approved conference local-source manifest is invalid: ${error.message}`); }
-    const history = projectionApi.normalizeInventory(inventory);
+    const history = conferencePageMappingsApi.normalizeInventory(inventory);
     if (typeof blogRoot !== 'string' || !path.isAbsolute(blogRoot)) fail('blogRoot must be an absolute path');
     const sourceCache = new Map(); const candidatesByScopeAndTitle = new Map(); const entriesByPaperId = new Map();
     for (const record of conferenceManifest.records) {
@@ -145,7 +145,7 @@ function scopeConferenceEntries({ conferenceManifest, inventory, blogRoot } = {}
         // pages.  Keep that evidence path exclusively on the earlier deep
         // crawler/accepted snapshots.
         const titleSources = record.sources.filter(source => source.sourceSet !== 'workspace-icml-official-poster-2026');
-        try { sources = projectionApi.selectConferenceSources({ paperId: record.paperId, sources: clone(titleSources) }, sourceCache); }
+        try { sources = conferencePageMappingsApi.selectConferenceSources({ paperId: record.paperId, sources: clone(titleSources) }, sourceCache); }
         catch { continue; } // No available retained PDF is not a direct local input.
         const scope = conferenceScopeFor(record.paperId);
         entriesByPaperId.set(record.paperId, { paperId: record.paperId, sources });
@@ -182,7 +182,7 @@ function scopeConferenceEntries({ conferenceManifest, inventory, blogRoot } = {}
 }
 
 function dailyPrimaryArxivBindingsFromFrozenInventory(value, blogRoot) {
-    const history = projectionApi.normalizeInventory(value); const bindings = [];
+    const history = conferencePageMappingsApi.normalizeInventory(value); const bindings = [];
     for (const page of history.pages) {
         if (page.scope.type !== 'daily' || !['conflict', 'multiple'].includes(page.identityHints?.status)) continue;
         try { bindings.push(dailyPrimaryArxiv.build({ blogRoot, page, identityHints: page.identityHints })); }
@@ -209,7 +209,7 @@ function dailyIcmlPosterEntries({ conferenceManifest, inventory, blogRoot } = {}
     const handle = icmlPosterApi.loadPosterAuthority({ snapshotFile });
     const authority = icmlPosterApi.authorityHandleSnapshot(handle);
     if (authority.authoritySha256 !== authoritySha256) fail('ICML poster source authority SHA does not replay');
-    const history = projectionApi.normalizeInventory(inventory);
+    const history = conferencePageMappingsApi.normalizeInventory(inventory);
     const summaries = new Map(inventory.pages.filter(page => page?.kind === 'daily-summary')
         .map(page => [page.scope?.key, page]));
     const bindings = [];
@@ -240,7 +240,7 @@ function dailyIcmlPosterEntries({ conferenceManifest, inventory, blogRoot } = {}
 }
 
 function arxivEntriesFromFrozenInventory(value, dailyPrimaryArxivBindings = []) {
-    const history = projectionApi.normalizeInventory(value);
+    const history = conferencePageMappingsApi.normalizeInventory(value);
     const rawPages = new Map(value.pages.filter(page => page?.kind === 'paper').map(page => [page.pageId, page]));
     const paperIds = new Set(); let singlePageCount = 0;
     for (const page of history.pages) {
@@ -270,7 +270,7 @@ function inputDescriptor(loaded, selectedPapers) {
 function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}) {
     const conference = typeof conferenceManifest?.filename === 'string' ? conferenceManifest : readStableJson(conferenceManifest, 'approved conference local-source manifest');
     const inventory = typeof inventoryFile?.filename === 'string' ? inventoryFile : readStableJson(inventoryFile, 'frozen historical inventory');
-    const normalizedInventory = projectionApi.normalizeInventory(inventory.value);
+    const normalizedInventory = conferencePageMappingsApi.normalizeInventory(inventory.value);
     const dailyPrimaryArxivBindings = dailyPrimaryArxivBindingsFromFrozenInventory(inventory.value, blogRoot);
     const arxiv = arxivEntriesFromFrozenInventory(inventory.value, dailyPrimaryArxivBindings);
     const scopedConference = scopeConferenceEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });
@@ -470,7 +470,7 @@ function writeCatalog({ catalogRoot, name, catalog } = {}) {
         return { status: 'created', filename, fileSha256: sha256(bytes), catalog: normalized };
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        const existing = projectionApi.readStableFile(filename, 'existing direct v5 catalog');
+        const existing = conferencePageMappingsApi.readStableFile(filename, 'existing direct v5 catalog');
         if (!existing.bytes.equals(bytes)) fail(`refuses to overwrite a different scoped local input catalog: ${name}`);
         return { status: 'recovered', filename, fileSha256: sha256(bytes), catalog: normalized };
     } finally { if (fd !== undefined) fs.closeSync(fd); }

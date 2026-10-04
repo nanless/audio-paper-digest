@@ -7,7 +7,7 @@ const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const planApi = require('./lib/historical-direct-rewrite-plan.js');
-const projectionApi = require('./lib/historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('./lib/historical-conference-page-projections.js');
 const control = require('./lib/historical-direct-control.js');
 
 const USAGE = '--dry-run|--apply --plan ABSOLUTE.json [--queue all|arxiv|conference] [--generation N] [--arxiv-concurrency 1-8] [--conference-concurrency 1-8] [--paper-ids ID[,ID...]] [--max-papers N|--limit N]';
@@ -45,7 +45,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         || !path.isAbsolute(files.historicalArxivFreshFailureHandoffDir)) {
         throw new Error('freshArxivFetchedSourcesDir and historicalArxivFreshFailureHandoffDir must be configured absolute paths');
     }
-    const loaded = projectionApi.readStableJson(options.planFile, 'direct rewrite plan');
+    const loaded = conferencePageMappingsApi.readStableJson(options.planFile, 'direct rewrite plan');
     const plan = planApi.normalizePlan(loaded.value);
     const generation = String(options.arxivGeneration).padStart(6, '0');
     const base = path.join(files.freshArxivFetchedSourcesDir, `.${plan.planSha256}.generation-${generation}.source`);

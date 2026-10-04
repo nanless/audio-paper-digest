@@ -24,12 +24,12 @@ const {
     LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
     HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY,
     HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS,
-    mergeCanonicalAnalysisState,
+    mergeStoredAnalysisState,
     isSuccessfulAnalysisRecord,
     scoringStabilityIsResolved,
     apiReaderV3BindsCanonical,
     getAnalysisRunStatus,
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
     isSealedApiAnalysisEligibleForCoreSummaryRecovery,
@@ -1318,7 +1318,7 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(isLegacyApiAnalysisSuccessForReadOnlyValidation(legacyEndToEnd), true);
         assert.strictEqual(isSuccessfulAnalysisRecord(legacyEndToEnd), false);
         assert.strictEqual(isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacy), true);
-        assert.deepStrictEqual(getCanonicalAnalysisRunSummary([legacy]), {
+        assert.deepStrictEqual(getAnalysisRunSummary([legacy]), {
             success: 0, remaining: 1, status: 'failed'
         });
         assert.deepStrictEqual(getReadOnlyValidationAnalysisRunSummary([legacy]), {
@@ -1499,7 +1499,7 @@ describe('analyzePaperWithRetry', () => {
     });
 
     it('新鲜论文元数据优先，canonical 只恢复分析状态字段', () => {
-        const merged = mergeCanonicalAnalysisState(
+        const merged = mergeStoredAnalysisState(
             { arxivId: '2604.00025v2', title: 'Fresh title', abstract: 'Fresh abstract', authors: ['New'],
                 latestAnalysisAttemptErrorScope: 'paper', latestAnalysisAttemptErrorCategory: 'network',
                 latestAnalysisAttemptErrorStatus: 503 },
@@ -1913,7 +1913,7 @@ describe('analysis run status', () => {
     it('续跑状态按 canonical 全量成功数计算，不把已有成功漏算为 failed', () => {
         const papers = Array.from({ length: 9 }, (_, index) => validAnalysisPaper(`2604.${String(index + 1).padStart(5, '0')}`));
         papers.push({ arxivId: '2604.99999', error: 'latest attempt failed' });
-        assert.deepStrictEqual(getCanonicalAnalysisRunSummary(papers), {
+        assert.deepStrictEqual(getAnalysisRunSummary(papers), {
             success: 9,
             remaining: 1,
             status: 'partial_failed'

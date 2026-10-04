@@ -74,7 +74,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = self.write_payload(tmp, attestation())
             expected_digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            payload, digest = manual_review_blog._load_attestation(path)
+            payload, digest = manual_review_blog._load_review_statement(path)
         self.assertEqual(payload['version'], 3)
         self.assertEqual(payload['files'][0]['checks'], FILE_CHECKS)
         self.assertEqual(digest, expected_digest)
@@ -107,12 +107,12 @@ class ManualReviewAttestationTest(unittest.TestCase):
         }
         exact = attestation()
         exact['publicationScope'] = generation['publicationScope']
-        manual_review_blog._validate_attestation_publication_scope(
+        manual_review_blog._validate_review_statement_scope(
             Module, generation, exact,
         )
         mismatched = attestation()
         with self.assertRaisesRegex(Module.PublishDataValidationError, '作用域'):
-            manual_review_blog._validate_attestation_publication_scope(
+            manual_review_blog._validate_review_statement_scope(
                 Module, generation, mismatched,
             )
 
@@ -130,10 +130,10 @@ class ManualReviewAttestationTest(unittest.TestCase):
             }],
         }
         with self.assertRaisesRegex(Module.PublishDataValidationError, '必须使用 attestation v3'):
-            manual_review_blog._require_current_attestation_version(
+            manual_review_blog._require_current_review_statement_version(
                 Module, generation, {'version': 2},
             )
-        manual_review_blog._require_current_attestation_version(
+        manual_review_blog._require_current_review_statement_version(
             Module, generation, {'version': 3},
         )
 
@@ -156,7 +156,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
                 with self.subTest(index=index):
                     path = self.write_payload(tmp, payload)
                     with self.assertRaises(ValueError):
-                        manual_review_blog._load_attestation(path)
+                        manual_review_blog._load_review_statement(path)
 
     def test_rejects_attestation_when_deterministic_review_mutated_final_bytes(self):
         class Module:
@@ -213,7 +213,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
             'imageFindings': [],
         })
         with tempfile.TemporaryDirectory() as tmp:
-            parsed, _digest = manual_review_blog._load_attestation(
+            parsed, _digest = manual_review_blog._load_review_statement(
                 self.write_payload(tmp, payload),
             )
         self.assertTrue(parsed['files'][1]['deleted'])
@@ -237,7 +237,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
         })
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, '逐文件独立'):
-                manual_review_blog._load_attestation(self.write_payload(tmp, payload))
+                manual_review_blog._load_review_statement(self.write_payload(tmp, payload))
 
     def test_v3_requires_unique_page_tasks_and_paper_id(self):
         payload = attestation()
@@ -250,12 +250,12 @@ class ManualReviewAttestationTest(unittest.TestCase):
         payload['files'].append(second)
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, 'taskName 必须逐页唯一'):
-                manual_review_blog._load_attestation(self.write_payload(tmp, payload))
+                manual_review_blog._load_review_statement(self.write_payload(tmp, payload))
         payload['files'][1]['reviewSubagent']['taskName'] = 'paper-review-2608-54321'
         del payload['files'][1]['reviewSubagent']['paperId']
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, 'paperId'):
-                manual_review_blog._load_attestation(self.write_payload(tmp, payload))
+                manual_review_blog._load_review_statement(self.write_payload(tmp, payload))
 
     def test_v3_requires_terra_high_review_subagent(self):
         for field, value in (
@@ -266,7 +266,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
             payload['files'][0]['reviewSubagent'][field] = value
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
                 with self.assertRaisesRegex(ValueError, 'gpt-5.6-terra/high'):
-                    manual_review_blog._load_attestation(
+                    manual_review_blog._load_review_statement(
                         self.write_payload(tmp, payload),
                     )
 

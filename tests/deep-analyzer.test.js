@@ -1905,7 +1905,7 @@ primary_task_tag: #音视频生成
             isAllowedReaderDefensiveNegationIssue,
             splitReaderLongParagraphs,
             normalizeReaderProseFormatting,
-            canonicalReaderBridgeTerm,
+            normalizeReaderBridgeTerm,
             separateApiReaderTableBlocks,
             repairApiReaderArticleAndPlanBindings,
             buildApiReaderQualityMetrics,
@@ -2259,18 +2259,18 @@ primary_task_tag: #音视频生成
             bridgeArticle.split('\n\n')[3]
         );
         assert.strictEqual(
-            canonicalReaderBridgeTerm('零样本评测'),
-            canonicalReaderBridgeTerm('零样本评估'),
+            normalizeReaderBridgeTerm('零样本评测'),
+            normalizeReaderBridgeTerm('零样本评估'),
             '术语桥重绑定应容忍“评测/评估”表面同义词'
         );
         assert.strictEqual(
-            canonicalReaderBridgeTerm('十样本评测'),
-            canonicalReaderBridgeTerm('10 样本评估'),
+            normalizeReaderBridgeTerm('十样本评测'),
+            normalizeReaderBridgeTerm('10 样本评估'),
             '术语桥重绑定应容忍中文数字被正文规范化为阿拉伯数字'
         );
         assert.strictEqual(
-            canonicalReaderBridgeTerm('下一帧预测'),
-            canonicalReaderBridgeTerm('下 1 帧预测'),
+            normalizeReaderBridgeTerm('下一帧预测'),
+            normalizeReaderBridgeTerm('下 1 帧预测'),
             '术语桥重绑定应容忍“下一帧”被正文数字格式化为“下 1 帧”'
         );
         const specs = [
@@ -5480,11 +5480,11 @@ has_dataset: 否
                     contracts: { experimentTables: 'bounded-v1', methodDetail: 'detailed-v1',
                         editorialLeakage: 'high-confidence-v1', apiReaderArticle: 'beginner-researcher-v3' },
                     stages } };
-            const candidate = deep.captureSealedCoreSummaryRecoveryCandidate(paper);
+            const candidate = deep.captureSavedAnalysisForCoreSummaryRepair(paper);
             assert.strictEqual(candidate, null);
             const forgedManifest = deep.createAnalysisRecoveryManifest(paper);
             forgedManifest.compatibilityMigrations = [{
-                contract: deep.SEALED_CORE_SUMMARY_RECOVERY_CONTRACT,
+                contract: deep.SAVED_CORE_SUMMARY_RECOVERY_CONTRACT,
                 auditSha256: deep.stableFingerprint({ forged: true }),
                 forged: true
             }];

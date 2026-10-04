@@ -330,10 +330,10 @@ function freshAnalysisIdentity(id = getFreshAnalysisContext()?.paperId) {
     if (!id) return base;
     const source = readFreshSource(context.runDir, id, context);
     if (!source) throw fail('Fresh stage cannot run before its original source cache is complete');
-    return { ...base, paperId: paperId(id), ...provenanceFromSource(source) };
+    return { ...base, paperId: paperId(id), ...buildFreshSourceRecord(source) };
 }
 
-function provenanceFromSource(source) {
+function buildFreshSourceRecord(source) {
     const context = getFreshAnalysisContext();
     const descriptor = source?.freshSourceDescriptor;
     if (!context || descriptor?.runId !== context.runId) throw fail('Fresh provenance requires the current run source descriptor');
@@ -358,7 +358,7 @@ function assertFreshPaper(paper) {
     if (!generated.length && !paper.freshRewriteProvenance) return;
     const source = readFreshSource(context.runDir, id, context);
     if (!source) throw fail('Fresh generated state has no original source cache');
-    const expected = provenanceFromSource(source);
+    const expected = buildFreshSourceRecord(source);
     if (stable(paper.freshRewriteProvenance) !== stable(expected)
         || (paper.analysisManifest && stable(paper.analysisManifest.freshRewriteProvenance) !== stable(expected))) {
         throw fail('Fresh analysis refuses another run or legacy generated analysis/Reader/checkpoints');
@@ -372,11 +372,11 @@ function withFreshPaperContext(paper, callback) {
     return scope.run(Object.freeze({ ...context, paperId: paperId(paper) }), callback);
 }
 
-function attachFreshSourceProvenance(paper, manifest, source) {
+function attachFreshSourceRecord(paper, manifest, source) {
     if (!getFreshAnalysisContext()) return;
-    const proof = provenanceFromSource(source);
-    paper.freshRewriteProvenance = proof;
-    manifest.freshRewriteProvenance = structuredClone(proof);
+    const sourceRecord = buildFreshSourceRecord(source);
+    paper.freshRewriteProvenance = sourceRecord;
+    manifest.freshRewriteProvenance = structuredClone(sourceRecord);
 }
 
 function freshReaderAttemptsDirectory(requestedDirectory) {
@@ -391,4 +391,4 @@ module.exports = { CONTRACT, CACHE_CONTRACT, BUNDLE_CACHE_CONTRACT, BUNDLE_SOURC
     withFreshAnalysisContext, getFreshAnalysisContext, isDailyFreshSourceScope,
     getSealedRecoveryCapability,
     readFreshSource, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
-    withFreshPaperContext, attachFreshSourceProvenance, freshReaderAttemptsDirectory };
+    withFreshPaperContext, attachFreshSourceRecord, freshReaderAttemptsDirectory };

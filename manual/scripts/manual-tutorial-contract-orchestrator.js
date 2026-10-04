@@ -36,8 +36,8 @@ const {
 } = require('./manual-longform-contract.js');
 
 const MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT = 'manual-tutorial-validation-orchestrator-v1';
-const TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT = 'manual-table-transcription-attestation-v1';
-const DEFAULT_TABLE_ATTESTATION_ROOT = path.resolve(
+const TABLE_TRANSCRIPTION_REVIEW_CONTRACT = 'manual-table-transcription-attestation-v1';
+const DEFAULT_TABLE_REVIEW_ROOT = path.resolve(
     __dirname, '..', '..', 'data', 'current', 'manual-tutorial-previews'
 );
 const SHA256_RE = /^[a-f0-9]{64}$/;
@@ -56,7 +56,7 @@ const PROTOCOL_DESCRIPTOR = Object.freeze({
     version: 1,
     tutorialQuality: MANUAL_TUTORIAL_QUALITY_CONTRACT,
     artifactPlanVersion: TUTORIAL_ARTIFACT_PLAN_VERSION,
-    tableTranscriptionAttestation: TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT,
+    tableTranscriptionAttestation: TABLE_TRANSCRIPTION_REVIEW_CONTRACT,
     readerPathOrdering: 'reader-tutorial-partial-order-v2',
     researcherFocus: MANUAL_RESEARCH_CONTRACT_VERSION,
     readerFormat: READER_FORMAT_CONTRACT_VERSION,
@@ -114,13 +114,13 @@ function fileSha256(filePath) {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
-function loadTableTranscriptionAttestation(binding, paperId, articleFileSha256, allowedRoot) {
+function loadTableTranscriptionReviewRecord(binding, paperId, articleFileSha256, allowedRoot) {
     if (!binding || typeof binding !== 'object' || Array.isArray(binding)
-        || binding.contract !== TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT
+        || binding.contract !== TABLE_TRANSCRIPTION_REVIEW_CONTRACT
         || !SHA256_RE.test(String(binding.sha256 || ''))) {
         throw new Error(`${paperId} quality.tableTranscriptionAttestation 缺少受控审查文件绑定`);
     }
-    const root = path.resolve(allowedRoot || DEFAULT_TABLE_ATTESTATION_ROOT);
+    const root = path.resolve(allowedRoot || DEFAULT_TABLE_REVIEW_ROOT);
     const filePath = path.resolve(String(binding.path || ''));
     const relative = path.relative(root, filePath);
     if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
@@ -129,23 +129,23 @@ function loadTableTranscriptionAttestation(binding, paperId, articleFileSha256, 
         || fs.lstatSync(filePath).isSymbolicLink() || fileSha256(filePath) !== binding.sha256) {
         throw new Error(`${paperId} table transcription attestation 路径、文件或 SHA 非法`);
     }
-    let attestation;
+    let transcriptionReviewRecord;
     try {
-        attestation = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        transcriptionReviewRecord = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     } catch (error) {
         throw new Error(`${paperId} table transcription attestation 不是 JSON: ${error.message}`);
     }
-    const provenance = attestation?.provenance || {};
-    if (attestation?.version !== 1 || attestation?.contract !== TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT
-        || normalizedId(attestation.paperId) !== paperId || attestation.passed !== true
-        || !Array.isArray(attestation.blockers) || attestation.blockers.length !== 0
-        || attestation.articleSha256 !== articleFileSha256
-        || provenance.model !== 'gpt-5.6-terra' || provenance.reasoningEffort !== 'high'
-        || provenance.independentTask !== true || !String(provenance.taskName || '').trim()
-        || !Array.isArray(attestation.tables)) {
+    const reviewTaskRecord = transcriptionReviewRecord?.provenance || {};
+    if (transcriptionReviewRecord?.version !== 1 || transcriptionReviewRecord?.contract !== TABLE_TRANSCRIPTION_REVIEW_CONTRACT
+        || normalizedId(transcriptionReviewRecord.paperId) !== paperId || transcriptionReviewRecord.passed !== true
+        || !Array.isArray(transcriptionReviewRecord.blockers) || transcriptionReviewRecord.blockers.length !== 0
+        || transcriptionReviewRecord.articleSha256 !== articleFileSha256
+        || reviewTaskRecord.model !== 'gpt-5.6-terra' || reviewTaskRecord.reasoningEffort !== 'high'
+        || reviewTaskRecord.independentTask !== true || !String(reviewTaskRecord.taskName || '').trim()
+        || !Array.isArray(transcriptionReviewRecord.tables)) {
         throw new Error(`${paperId} table transcription attestation 未通过或未绑定 Terra/high 独立审查`);
     }
-    return { value: attestation, path: filePath };
+    return { value: transcriptionReviewRecord, path: filePath };
 }
 
 function validateQualityArtifactPlanBinding(qualityPacket, artifactPlan, paperId, options = {}) {
@@ -159,7 +159,7 @@ function validateQualityArtifactPlanBinding(qualityPacket, artifactPlan, paperId
     const tableDispositions = new Map(
         (qualityPacket?.artifactDisposition?.tables || []).map(item => [item?.artifactId, item])
     );
-    let attestation = null;
+    let transcriptionReviewRecord = null;
     for (const source of artifactPlan.tables || []) {
         const item = tableDispositions.get(source.id);
         const expected = source.disposition === 'appendix' ? 'appendix_full' : 'inline_full';
@@ -167,13 +167,13 @@ function validateQualityArtifactPlanBinding(qualityPacket, artifactPlan, paperId
             throw new Error(`${paperId} quality 表格处置与 artifact plan 不一致: ${source.id}`);
         }
         if (item.fullTableMarkdown === source.renderedMarkdown) continue;
-        attestation ||= loadTableTranscriptionAttestation(
+        transcriptionReviewRecord ||= loadTableTranscriptionReviewRecord(
             qualityPacket.tableTranscriptionAttestation,
             paperId,
             options.articleFileSha256,
             options.tableAttestationRoot
         );
-        const reviewed = attestation.value.tables.find(entry => entry?.artifactId === source.id);
+        const reviewed = transcriptionReviewRecord.value.tables.find(entry => entry?.artifactId === source.id);
         if (!reviewed || reviewed.status !== 'passed' || reviewed.complete !== true
             || reviewed.sourceMatrixSha256 !== source.sourceMatrixSha256
             || reviewed.articleBlockSha256 !== crypto.createHash('sha256')
@@ -297,7 +297,7 @@ function validateManualTutorialLongformBundle(bundle, article, artifactIndex, op
 
 module.exports = {
     MANUAL_TUTORIAL_ORCHESTRATOR_CONTRACT,
-    TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT,
+    TABLE_TRANSCRIPTION_REVIEW_CONTRACT,
     MANUAL_TUTORIAL_ORCHESTRATOR_FINGERPRINT,
     PROTOCOL_DESCRIPTOR,
     SCORE_DIMENSIONS,
@@ -305,7 +305,7 @@ module.exports = {
     validateTutorialScorePresentation,
     artifactPlanBindingSha256,
     validateQualityArtifactPlanBinding,
-    loadTableTranscriptionAttestation,
+    loadTableTranscriptionReviewRecord,
     validateTutorialPayloadBundle,
     validateManualTutorialReaderBundle,
     validateManualTutorialLongformBundle

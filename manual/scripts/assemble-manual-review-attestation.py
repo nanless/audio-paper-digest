@@ -78,7 +78,7 @@ def main():
     with module.publication_scope(include_id):
         manifest_path = module.generation_manifest_path(date)
         shard_dir = module.manual_review_page_dir(date)
-        output_path = module.manual_review_attestation_path(date)
+        output_path = module.manual_review_statement_path(date)
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
         module._validate_active_publication_scope(manifest)
         expected = {item['path']: item for item in manifest['files']}

@@ -31,9 +31,9 @@ function fail(message) {
 function clone(value) { return structuredClone(value); }
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 function stableHash(value) {
-    const canonical = item => Array.isArray(item) ? item.map(canonical)
-        : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, canonical(item[key])])) : item;
-    return sha256(JSON.stringify(canonical(value)));
+    const sortJsonKeys = item => Array.isArray(item) ? item.map(sortJsonKeys)
+        : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sortJsonKeys(item[key])])) : item;
+    return sha256(JSON.stringify(sortJsonKeys(value)));
 }
 
 function paperId(paper) {
@@ -176,7 +176,7 @@ function directReaderCandidateCommitDeferred() {
 function directPrimaryImageDownloader() { return scope.getStore()?.downloadPrimaryImage || null; }
 function directSupplementaryReaderImages() { return scope.getStore()?.supplementaryReaderImages || []; }
 
-function getDirectSourceProvenance(paper = getDirectRewriteAnalysisContext()?.paperId) {
+function getDirectSourceRecord(paper = getDirectRewriteAnalysisContext()?.paperId) {
     const context = scope.getStore();
     if (!context || !context.runId) return null;
     if (paperId(paper) !== context.paperId) fail('direct provenance was requested for another paper');
@@ -192,17 +192,17 @@ function getDirectSourceProvenance(paper = getDirectRewriteAnalysisContext()?.pa
         sourceOnly: true, oldGeneratedTextIncluded: false };
 }
 
-function attachDirectSourceProvenance(paper, manifest, source) {
+function attachDirectSourceRecord(paper, manifest, source) {
     const context = scope.getStore();
     if (!context || !context.runId) return;
     if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) fail('direct analysis manifest is invalid');
-    const proof = getDirectSourceProvenance(paper);
-    if (sha256(String(source?.text || '')) !== proof.sourceSha256
-        || source?.structuredArtifacts?.payloadSha256 !== proof.structuredArtifactsSha256) {
+    const sourceRecord = getDirectSourceRecord(paper);
+    if (sha256(String(source?.text || '')) !== sourceRecord.sourceSha256
+        || source?.structuredArtifacts?.payloadSha256 !== sourceRecord.structuredArtifactsSha256) {
         fail('direct analysis tried to attach provenance from another source');
     }
-    paper.freshRewriteProvenance = proof;
-    manifest.freshRewriteProvenance = clone(proof);
+    paper.freshRewriteProvenance = sourceRecord;
+    manifest.freshRewriteProvenance = clone(sourceRecord);
 }
 
 function stripEphemeralFigureFields(figure) {
@@ -239,5 +239,5 @@ module.exports = { PROVENANCE_CONTRACT, EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT,
     withDirectRewriteAnalysisSource, getDirectRewriteAnalysisContext, getDirectRewriteSource,
     directReaderAttemptsDirectory, directReaderMaterializer, directPrimaryImageDownloader, stripEphemeralFigureFields,
     directReaderCandidateCommitDeferred,
-    directSupplementaryReaderImages, getDirectSourceProvenance, attachDirectSourceProvenance,
+    directSupplementaryReaderImages, getDirectSourceRecord, attachDirectSourceRecord,
     assertNoPersistentFigureFields, paperId, stableHash };

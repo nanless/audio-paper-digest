@@ -349,14 +349,14 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
     engine.isSuccessfulAnalysisRecord = () => false;
     engine.analyzeBatch = async (papers, options) => {
         const locked = options.preparePaperLocked(papers[0]).paper;
-        const candidate = deep.captureSealedCoreSummaryRecoveryCandidate(locked);
+        const candidate = deep.captureSavedAnalysisForCoreSummaryRepair(locked);
         assert.ok(candidate, 'complete file-bound run must mint a candidate');
         const manifest = deep.createAnalysisRecoveryManifest(locked);
         manifest.sourceAcquisition = { ...base.analysisManifest.sourceAcquisition };
         manifest.freshRewriteProvenance = { ...provenance };
         const readerBefore = JSON.stringify({ article: locked.apiReaderArticle,
             plan: locked.apiReaderPlan, stage: manifest.stages.apiReaderArticle });
-        assert.equal(deep.adoptSealedCoreSummaryRecoveryCandidate(candidate, locked, manifest,
+        assert.equal(deep.restoreSavedStagesForCoreSummaryRepair(candidate, locked, manifest,
             manifest.sourceAcquisition, sourceText), true);
         assert.equal(deep.canReuseStageForCoreSummaryRecovery(
             locked, manifest, sourceText, 'structureRepair'), true);

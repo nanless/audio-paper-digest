@@ -13,7 +13,7 @@ const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
 const directControl = require('../scripts/lib/historical-direct-control.js');
 const freshArxiv = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
-const conferenceProjections = require('../scripts/lib/historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('../scripts/lib/historical-conference-page-projections.js');
 const icmlPosterApi = require('../scripts/lib/historical-icml-poster-authority.js');
 const engine = require('../scripts/analysis-engine.js');
 const { validAnalysisPaper, validLegacyApiAnalysisPaper } = require('./valid-analysis-fixture.js');
@@ -179,7 +179,7 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
     ].concat(mixedDailyConference ? [{ paperId: 'conference:icml:2026:openreview-forum-id:Icml_123',
         sources: [icmlSource] }] : []) });
     const catalogSha = jsonSha(catalog);
-    const conference = conferenceProjections.buildConferencePageProjections({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
+    const conference = conferencePageMappingsApi.buildConferencePageMappings({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
     const plan = planApi.buildDirectRewritePlan({ catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections: conference });
     const projection = direct.buildAggregateProjection({ plan, inventory });
     const paths = { planFile: path.join(root, 'plan.json'), projectionFile: path.join(root, 'aggregate-projection.json'),

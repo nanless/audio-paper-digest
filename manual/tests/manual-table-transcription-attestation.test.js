@@ -7,8 +7,8 @@ const path = require('path');
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-    TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT,
-    loadTableTranscriptionAttestation
+    TABLE_TRANSCRIPTION_REVIEW_CONTRACT,
+    loadTableTranscriptionReviewRecord
 } = require('../scripts/manual-tutorial-contract-orchestrator.js');
 
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -20,7 +20,7 @@ function fixture() {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     const articleSha256 = 'a'.repeat(64);
     const value = {
-        version: 1, contract: TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT,
+        version: 1, contract: TABLE_TRANSCRIPTION_REVIEW_CONTRACT,
         paperId, articleSha256, passed: true, blockers: [], tables: [],
         provenance: {
             model: 'gpt-5.6-terra', reasoningEffort: 'high',
@@ -34,8 +34,8 @@ function fixture() {
 describe('manual table transcription attestation', () => {
     it('接受路径受控、SHA 正确且绑定当前文章的 Terra/high 独立逐表审查', () => {
         const f = fixture();
-        const result = loadTableTranscriptionAttestation({
-            contract: TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT,
+        const result = loadTableTranscriptionReviewRecord({
+            contract: TABLE_TRANSCRIPTION_REVIEW_CONTRACT,
             path: f.filePath,
             sha256: sha(fs.readFileSync(f.filePath))
         }, f.paperId, f.articleSha256, f.root);
@@ -47,11 +47,11 @@ describe('manual table transcription attestation', () => {
         f.value.provenance.model = 'unknown';
         fs.writeFileSync(f.filePath, JSON.stringify(f.value));
         const binding = {
-            contract: TABLE_TRANSCRIPTION_ATTESTATION_CONTRACT,
+            contract: TABLE_TRANSCRIPTION_REVIEW_CONTRACT,
             path: f.filePath,
             sha256: sha(fs.readFileSync(f.filePath))
         };
-        assert.throws(() => loadTableTranscriptionAttestation(
+        assert.throws(() => loadTableTranscriptionReviewRecord(
             binding, f.paperId, f.articleSha256, f.root
         ), /Terra\/high/);
     });

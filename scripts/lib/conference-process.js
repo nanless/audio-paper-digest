@@ -95,13 +95,13 @@ const IMPLEMENTATION_FILES = Object.freeze([
 ]);
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));
-function canonical(value) {
-    if (Array.isArray(value)) return value.map(canonical);
-    if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+function sortJsonKeys(value) {
+    if (Array.isArray(value)) return value.map(sortJsonKeys);
+    if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortJsonKeys(value[key])]));
     return value;
 }
-const stableHash = value => sha256(JSON.stringify(canonical(value)));
-const canonicalBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`);
+const stableHash = value => sha256(JSON.stringify(sortJsonKeys(value)));
+const canonicalBytes = value => Buffer.from(`${JSON.stringify(sortJsonKeys(value), null, 2)}\n`);
 
 function exactKeys(value, expected, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)

@@ -22,7 +22,7 @@ const {
     isSuccessfulAnalysisRecord,
     withPaperAnalysisLock,
     apiReaderV3BindsCanonical,
-    getCanonicalAnalysisRunSummary
+    getAnalysisRunSummary
 } = require('./analysis-engine.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const { effectiveReaderTableRows } = require('./lib/reader-tables.js');
@@ -264,16 +264,16 @@ async function refreshApiReader(targetId, options = {}) {
         const lockedDailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(latest, {
             papers: latestPapers, label: 'API Reader recovery'
         });
-        const canonical = latestPapers.find(paper => normalizedId(paper) === requested);
-        if (!canonical || (!isSuccessfulAnalysisRecord(canonical)
-            && !(options.scoringAndReader && canRepairScoringBinding(canonical))
-            && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(canonical)))) {
+        const storedAnalysisRecord = latestPapers.find(paper => normalizedId(paper) === requested);
+        if (!storedAnalysisRecord || (!isSuccessfulAnalysisRecord(storedAnalysisRecord)
+            && !(options.scoringAndReader && canRepairScoringBinding(storedAnalysisRecord))
+            && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(storedAnalysisRecord)))) {
             throw new Error(`${requested} canonical 在加锁后发生变化`);
         }
-        if (!dailyFreshSources.isPaperBoundToPlan(canonical, lockedDailySourcePlan)) {
+        if (!dailyFreshSources.isPaperBoundToPlan(storedAnalysisRecord, lockedDailySourcePlan)) {
             throw new Error(`${requested} canonical 未由当前 sealed daily source generation 生成；请先运行 npm run reanalyze`);
         }
-        const inputIdentity = paperRefreshInputIdentity(canonical);
+        const inputIdentity = paperRefreshInputIdentity(storedAnalysisRecord);
         const refreshLabel = options.authorsOnly
             ? '作者机构绑定'
             : options.figuresOnly
@@ -283,21 +283,21 @@ async function refreshApiReader(targetId, options = {}) {
             : options.scoringAndReader
                 ? '评分复验与读者文章'
                 : '读者文章';
-        console.log(`📄 只刷新${refreshLabel}: ${canonical.title || requested}`);
+        console.log(`📄 只刷新${refreshLabel}: ${storedAnalysisRecord.title || requested}`);
         const refreshOperations = options.operations || {};
         const refreshFromSealedSource = async sourceDetails => options.authorsOnly
-            ? (refreshOperations.authors || refreshApiReaderAuthorsFromSource)(canonical, sourceDetails)
+            ? (refreshOperations.authors || refreshApiReaderAuthorsFromSource)(storedAnalysisRecord, sourceDetails)
             : options.figuresOnly
-                ? await (refreshOperations.figures || refreshApiReaderFiguresFromSource)(canonical, sourceDetails)
+                ? await (refreshOperations.figures || refreshApiReaderFiguresFromSource)(storedAnalysisRecord, sourceDetails)
                 : options.scoringAndReader
                     ? await (refreshOperations.scoringAndReader || refreshApiScoringAndReaderFromSource)(
-                        canonical, sourceDetails, { reviewFeedback: options.reviewFeedback }
+                        storedAnalysisRecord, sourceDetails, { reviewFeedback: options.reviewFeedback }
                     )
-                    : await (refreshOperations.article || refreshApiReaderArticleFromSource)(canonical, sourceDetails, {
+                    : await (refreshOperations.article || refreshApiReaderArticleFromSource)(storedAnalysisRecord, sourceDetails, {
                         reviewFeedback: options.reviewFeedback
                     });
         const repairSurfaceBindings = sourceDetails => {
-                const repaired = JSON.parse(JSON.stringify(canonical));
+                const repaired = JSON.parse(JSON.stringify(storedAnalysisRecord));
                 repaired.apiReaderArticle = normalizeApiReaderFigureMarkdown(
                     repaired.apiReaderArticle,
                     repaired.apiReaderFigures
@@ -384,7 +384,7 @@ async function refreshApiReader(targetId, options = {}) {
         const refreshed = await dailyFreshSources.withDailyFreshAnalysisContext(lockedDailySourcePlan, () =>
             dailyFreshSources.withDailyFreshPaperSource(
                 lockedDailySourcePlan,
-                canonical,
+                storedAnalysisRecord,
                 options.surfaceBindingsOnly ? repairSurfaceBindings : refreshFromSealedSource,
                 options
             )
@@ -408,22 +408,22 @@ async function refreshApiReader(targetId, options = {}) {
             const updated = [...rows];
             updated[targetIndex] = refreshed;
             if (Array.isArray(payload)) return updated;
-            const canonicalSummary = getCanonicalAnalysisRunSummary(updated);
+            const analysisRunSummary = getAnalysisRunSummary(updated);
             const now = getBeijingISOString();
             const next = {
                 ...payload,
                 papers: updated,
-                status: canonicalSummary.status,
+                status: analysisRunSummary.status,
                 stats: {
                     ...(payload.stats || {}),
-                    analysisStatus: canonicalSummary.status,
-                    remainingFailed: canonicalSummary.remaining,
-                    analyzedSuccess: canonicalSummary.success,
-                    analyzedFailed: canonicalSummary.remaining
+                    analysisStatus: analysisRunSummary.status,
+                    remainingFailed: analysisRunSummary.remaining,
+                    analyzedSuccess: analysisRunSummary.success,
+                    analyzedFailed: analysisRunSummary.remaining
                 },
                 lastUpdated: now
             };
-            if (canonicalSummary.status === 'complete') next.deepAnalysisCompletedAt = now;
+            if (analysisRunSummary.status === 'complete') next.deepAnalysisCompletedAt = now;
             else delete next.deepAnalysisCompletedAt;
             return next;
         });

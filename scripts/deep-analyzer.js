@@ -1815,7 +1815,7 @@ function readerNumericTokenMatches(value) {
     // 直接在原文上匹配（不做 NFKC 拷贝），保证 match.index 可直接用于原文切片；
     // 之前先 NFKC 再匹配，遇到 ﬁ/ﬂ 等合字会让索引整体漂移，导致按索引切出的
     // quote 落在错误位置、token 永远对不上。全角数字/小数点/百分号与数学减号
-    // 纳入字符类；比较归一化仍由 canonicalReaderNumericToken 负责。
+    // 纳入字符类；比较归一化仍由 normalizeReaderNumericToken 负责。
     // 注意：en/em dash 不算减号，避免把页码范围误读成负数。
     const digit = '[\\d\\uFF10-\\uFF19]';
     const sign = '[-+\\uFF0D\\u2212]';
@@ -1932,7 +1932,7 @@ function readerNumericTokenMatches(value) {
     return matches.sort((left, right) => left.index - right.index);
 }
 
-function canonicalReaderNumericToken(raw) {
+function normalizeReaderNumericToken(raw) {
     // 千分位逗号只在“恰好三位一组”时归一化（44,000 → 44000），避免把
     // 枚举“1,2”或小数逗号误合并；NFKC 与去空白后模型与原文走同一归一化。
     // 多组千分位（1,234,567）需循环到稳定。
@@ -1994,13 +1994,13 @@ function readerDoubledHalfToken(surface) {
 function readerNumericTokens(value) {
     const tokens = [];
     for (const match of readerNumericTokenMatches(value)) {
-        const canonical = canonicalReaderNumericToken(match[0]);
-        tokens.push(canonical);
+        const normalizedNumericToken = normalizeReaderNumericToken(match[0]);
+        tokens.push(normalizedNumericToken);
         // 双写粘连的半部与整体同时索引，让“模型写干净值、原文是粘连串”可绑定。
         const half = readerDoubledHalfToken(match[0]);
         if (half) {
-            const halfToken = canonicalReaderNumericToken(half);
-            if (halfToken !== canonical) tokens.push(halfToken);
+            const halfToken = normalizeReaderNumericToken(half);
+            if (halfToken !== normalizedNumericToken) tokens.push(halfToken);
         }
     }
     return tokens;
@@ -2058,9 +2058,9 @@ function exactSourceExcerpt(sourceText, index, length, maxChars = 800) {
 function sourceNumericTokenExpansions(raw) {
     // 与 readerNumericTokens 同一套展开（含双写粘连半部），供 derive 在来源侧
     // 使用；否则渲染侧的半部 token（如 4096）在来源侧永远找不到。
-    const out = new Set([canonicalReaderNumericToken(raw)]);
+    const out = new Set([normalizeReaderNumericToken(raw)]);
     const half = readerDoubledHalfToken(raw);
-    if (half) out.add(canonicalReaderNumericToken(half));
+    if (half) out.add(normalizeReaderNumericToken(half));
     return out;
 }
 
@@ -2076,7 +2076,7 @@ function readerSourceQuoteCoversNumericToken(token, quoteCorpus, allowSplitUnit 
     // unit-relaxation of the reader gate.
     const match = String(token || '').match(/^([-+]?\d+(?:\.\d+)?)(db|ms|hz|khz|mhz|gb|mb|kb|pp|%|s|h)$/i);
     if (!match) return false;
-    const numberToken = canonicalReaderNumericToken(match[1]);
+    const numberToken = normalizeReaderNumericToken(match[1]);
     if (!readerNumericTokens(corpus).includes(numberToken)) return false;
     const escapeRegExp = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const unit = match[2].toLowerCase() === 'db' ? 'dB' : match[2];
@@ -2131,8 +2131,8 @@ function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}
         for (const match of sourceMatches) {
             const exact = sourceNumericTokenExpansions(match[0]).has(token);
             const fallback = allowSplitUnit && unitlessFallback
-                && canonicalReaderNumericToken(match[0])
-                    === canonicalReaderNumericToken(unitlessFallback[1]);
+                && normalizeReaderNumericToken(match[0])
+                    === normalizeReaderNumericToken(unitlessFallback[1]);
             if (!exact && !fallback) continue;
             if (!Number.isInteger(match.index)) continue;
             const quote = exactSourceExcerpt(
@@ -2771,7 +2771,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     };
 }
 
-function canonicalReaderBridgeTerm(term) {
+function normalizeReaderBridgeTerm(term) {
     const numeralMap = {
         一: '1', 二: '2', 两: '2', 三: '3', 四: '4', 五: '5',
         六: '6', 七: '7', 八: '8', 九: '9', 十: '10'
@@ -2856,15 +2856,15 @@ function issueInProtectedReaderQuote(issue, article) {
 
 function findReaderBridgeParagraph(articleBlocks, terms) {
     if (!Array.isArray(terms) || terms.length !== 2) return null;
-    const expected = terms.map(canonicalReaderBridgeTerm);
+    const expected = terms.map(normalizeReaderBridgeTerm);
     const matches = articleBlocks.filter(block => {
         const heading = /^\s*(?:\*\*\s*)?(.+?)\s*(?:：|:)\s*(?:\*\*)?/.exec(String(block).trim())?.[1];
         if (!heading) return false;
         const actualTerms = heading.split(/\s*×\s*|\s+x\s+/iu);
         if (actualTerms.length !== 2) return false;
-        const canonical = actualTerms.map(canonicalReaderBridgeTerm);
-        const sameOrder = canonical.every((value, index) => value === expected[index]);
-        const reverseOrder = canonical.every((value, index) => value === expected[1 - index]);
+        const normalizedActualTerms = actualTerms.map(normalizeReaderBridgeTerm);
+        const sameOrder = normalizedActualTerms.every((value, index) => value === expected[index]);
+        const reverseOrder = normalizedActualTerms.every((value, index) => value === expected[1 - index]);
         return sameOrder || reverseOrder;
     });
     return matches.length === 1 ? matches[0] : null;
@@ -5561,8 +5561,8 @@ function normalizeReaderSourceQuotes(candidate, sourceText) {
                         /^([-+]?\d+(?:\.\d+)?)(?:db|ms|hz|khz|mhz|gb|mb|kb|pp|%|s|h)$/i
                     );
                     return Boolean(unitless)
-                        && canonicalReaderNumericToken(match[0])
-                            === canonicalReaderNumericToken(unitless[1]);
+                        && normalizeReaderNumericToken(match[0])
+                            === normalizeReaderNumericToken(unitless[1]);
                 });
                 if (!matchesTarget) continue;
                 const unitTarget = [...targetNumbers].find(token => {
@@ -5570,8 +5570,8 @@ function normalizeReaderSourceQuotes(candidate, sourceText) {
                         /^([-+]?\d+(?:\.\d+)?)(db|ms|hz|khz|mhz|gb|mb|kb|pp|%|s|h)$/i
                     );
                     return Boolean(unitless)
-                        && canonicalReaderNumericToken(match[0])
-                            === canonicalReaderNumericToken(unitless[1]);
+                        && normalizeReaderNumericToken(match[0])
+                            === normalizeReaderNumericToken(unitless[1]);
                 });
                 if (unitTarget) {
                     const unit = unitTarget.match(
@@ -8049,7 +8049,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     if (!paper || typeof paper !== 'object') throw new Error('评分复验需要 canonical paper');
     const manifest = paper.analysisManifest;
     require('./lib/fresh-analysis-context.js')
-        .attachFreshSourceProvenance(paper, manifest, sourceDetails);
+        .attachFreshSourceRecord(paper, manifest, sourceDetails);
     let analysis = String(paper.analysis || '');
     const sourceText = String(sourceDetails?.text || '');
     const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
@@ -9153,7 +9153,7 @@ function classifyImageDownloadStatus({
 
 function persistImageDiscoveryFailure(
     paper,
-    sourceProvenance,
+    sourceAcquisitionRecord,
     sourceWarnings,
     analysisManifest,
     imageManifest,
@@ -9163,7 +9163,7 @@ function persistImageDiscoveryFailure(
     const error = `图片发现瞬时失败，等待正常重试: ${discoveryError.message}`;
     return {
         ...paper,
-        ...sourceProvenance,
+        ...sourceAcquisitionRecord,
         sourceWarnings: [...sourceWarnings, error],
         analysis: null,
         parsed: null,
@@ -9289,13 +9289,13 @@ function buildLegacyCoreSummaryV2EvidenceContext(stage, inputAnalysis, sourceTex
 }
 
 const LEGACY_STRUCTURE_COMPATIBILITY_CONTRACT = 'core-summary-v3-legacy-structure-reuse-v1';
-const SEALED_CORE_SUMMARY_RECOVERY_CONTRACT = 'core-summary-v3-sealed-canonical-recovery-v1';
-const SEALED_CORE_SUMMARY_REUSED_STAGES = Object.freeze([
+const SAVED_CORE_SUMMARY_RECOVERY_CONTRACT = 'core-summary-v3-sealed-canonical-recovery-v1';
+const SAVED_CORE_SUMMARY_REUSED_STAGES = Object.freeze([
     'primaryAnalysis', 'openSourceScan', 'revision', 'tableRepair',
     'methodRepair', 'structureRepair'
 ]);
 
-function captureSealedCoreSummaryRecoveryCandidate(paper) {
+function captureSavedAnalysisForCoreSummaryRepair(paper) {
     const freshContext = require('./lib/fresh-analysis-context.js');
     const freshIdentity = freshContext.freshAnalysisIdentity(
         getPaperArxivId(paper)
@@ -9309,7 +9309,7 @@ function captureSealedCoreSummaryRecoveryCandidate(paper) {
         || typeof paper?.analysis !== 'string' || !paper.analysis.trim()) return null;
     const legacyManifest = structuredClone(paper.analysisManifest);
     const body = {
-        contract: SEALED_CORE_SUMMARY_RECOVERY_CONTRACT,
+        contract: SAVED_CORE_SUMMARY_RECOVERY_CONTRACT,
         paperId: getPaperArxivId(paper),
         legacyAnalysis: paper.analysis,
         legacyAnalysisSha256: crypto.createHash('sha256').update(paper.analysis).digest('hex'),
@@ -9328,8 +9328,8 @@ function captureSealedCoreSummaryRecoveryCandidate(paper) {
     return { ...body, candidateSha256: stableFingerprint(body) };
 }
 
-function validateSealedCoreSummaryRecoveryCandidate(candidate, paper, sourceProvenance, sourceText) {
-    if (!candidate || candidate.contract !== SEALED_CORE_SUMMARY_RECOVERY_CONTRACT) return false;
+function isSavedCoreSummaryRepairCandidateValid(candidate, paper, sourceAcquisitionRecord, sourceText) {
+    if (!candidate || candidate.contract !== SAVED_CORE_SUMMARY_RECOVERY_CONTRACT) return false;
     const { candidateSha256, ...body } = candidate;
     const arxivId = getPaperArxivId(paper);
     const freshContext = require('./lib/fresh-analysis-context.js');
@@ -9363,10 +9363,10 @@ function validateSealedCoreSummaryRecoveryCandidate(candidate, paper, sourceProv
         && capabilitySnapshot?.recordSha256 === candidate.sealedRecordSha256
         && capabilitySnapshot?.analysisFileSha256 === candidate.sealedAnalysisFileSha256
         && capabilitySnapshot?.sourceSnapshotSha256 === candidate.sealedSourceSnapshotSha256
-        && sourceFields.every(field => legacySource?.[field] === sourceProvenance?.[field])
-        && sourceProvenance?.sourceSha256 === crypto.createHash('sha256')
+        && sourceFields.every(field => legacySource?.[field] === sourceAcquisitionRecord?.[field])
+        && sourceAcquisitionRecord?.sourceSha256 === crypto.createHash('sha256')
             .update(String(sourceText || '')).digest('hex')
-        && paper.sourceSha256 === sourceProvenance?.sourceSha256
+        && paper.sourceSha256 === sourceAcquisitionRecord?.sourceSha256
         && require('./analysis-engine.js').isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacyPaper)
         && require('./analysis-engine.js').apiReaderV3BindsCanonical(legacyPaper)
         && getRepairableAnalysisStructureIssues(candidate.legacyAnalysis, {
@@ -9376,11 +9376,11 @@ function validateSealedCoreSummaryRecoveryCandidate(candidate, paper, sourceProv
         && !validateMethodDetailContract(candidate.legacyAnalysis));
 }
 
-function adoptSealedCoreSummaryRecoveryCandidate(
-    candidate, paper, manifest, sourceProvenance, sourceText
+function restoreSavedStagesForCoreSummaryRepair(
+    candidate, paper, manifest, sourceAcquisitionRecord, sourceText
 ) {
-    if (!validateSealedCoreSummaryRecoveryCandidate(
-        candidate, paper, sourceProvenance, sourceText
+    if (!isSavedCoreSummaryRepairCandidateValid(
+        candidate, paper, sourceAcquisitionRecord, sourceText
     )) return false;
     const capability = require('./lib/fresh-analysis-context.js')
         .getSealedRecoveryCapability(candidate.paperId);
@@ -9401,15 +9401,15 @@ function adoptSealedCoreSummaryRecoveryCandidate(
     delete legacyContracts.coreSummary;
     delete legacyContracts.imageNarrative;
     const auditBody = {
-        contract: SEALED_CORE_SUMMARY_RECOVERY_CONTRACT,
+        contract: SAVED_CORE_SUMMARY_RECOVERY_CONTRACT,
         paperId: candidate.paperId,
         legacyAnalysisSha256: candidate.legacyAnalysisSha256,
         legacySummaryExteriorSha256: candidate.legacySummaryExteriorSha256,
         legacyManifestSha256: candidate.legacyManifestSha256,
         legacyManifest: candidate.legacyManifest,
-        sourceSha256: sourceProvenance.sourceSha256,
-        usedTextSha256: sourceProvenance.usedTextSha256,
-        structuredArtifactsSha256: sourceProvenance.structuredArtifactsSha256,
+        sourceSha256: sourceAcquisitionRecord.sourceSha256,
+        usedTextSha256: sourceAcquisitionRecord.usedTextSha256,
+        structuredArtifactsSha256: sourceAcquisitionRecord.structuredArtifactsSha256,
         freshIdentitySha256: candidate.freshIdentitySha256,
         freshRewriteProvenanceSha256: candidate.freshRewriteProvenanceSha256,
         candidateSha256: candidate.candidateSha256,
@@ -9420,14 +9420,14 @@ function adoptSealedCoreSummaryRecoveryCandidate(
         migratedAt: getBeijingISOString()
     };
     const audit = { ...auditBody, auditSha256: stableFingerprint(auditBody) };
-    for (const stage of SEALED_CORE_SUMMARY_REUSED_STAGES) {
+    for (const stage of SAVED_CORE_SUMMARY_REUSED_STAGES) {
         legacyStages[stage] = { ...legacyStages[stage],
             sealedCanonicalRecoveryAuditSha256: audit.auditSha256 };
     }
     legacyStages.structureRepair.outputAnalysisSha256 = candidate.legacyAnalysisSha256;
     manifest.stages = { ...legacyStages, apiReaderArticle: preservedReaderStage };
     manifest.contracts = legacyContracts;
-    manifest.sourceAcquisition = { ...sourceProvenance };
+    manifest.sourceAcquisition = { ...sourceAcquisitionRecord };
     manifest.freshRewriteProvenance = structuredClone(paper.freshRewriteProvenance);
     manifest.compatibilityMigrations = [
         ...(Array.isArray(manifest.compatibilityMigrations)
@@ -9436,7 +9436,7 @@ function adoptSealedCoreSummaryRecoveryCandidate(
     ].slice(-4);
     paper.analysisCheckpoint = candidate.legacyAnalysis;
     paper.analysisStageCheckpoints = Object.fromEntries(
-        SEALED_CORE_SUMMARY_REUSED_STAGES.map(stage => [stage, candidate.legacyAnalysis])
+        SAVED_CORE_SUMMARY_REUSED_STAGES.map(stage => [stage, candidate.legacyAnalysis])
     );
     paper.analysis = candidate.legacyAnalysis;
     paper.parsed = parseAnalysis(candidate.legacyAnalysis);
@@ -9444,9 +9444,9 @@ function adoptSealedCoreSummaryRecoveryCandidate(
 }
 
 function canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage) {
-    if (!SEALED_CORE_SUMMARY_REUSED_STAGES.includes(stage)) return false;
+    if (!SAVED_CORE_SUMMARY_REUSED_STAGES.includes(stage)) return false;
     const audit = (manifest?.compatibilityMigrations || []).find(item => (
-        item?.contract === SEALED_CORE_SUMMARY_RECOVERY_CONTRACT
+        item?.contract === SAVED_CORE_SUMMARY_RECOVERY_CONTRACT
         && item?.auditSha256 === manifest?.stages?.[stage]?.sealedCanonicalRecoveryAuditSha256
     ));
     if (!audit) return false;
@@ -13951,7 +13951,7 @@ async function analyzePaperDeepInternal(paper) {
         throw new Error('Direct rewrite source and conference source cannot both be active');
     }
     const previousScore = Number.parseFloat(paper?.parsed?.score);
-    const sealedCoreSummaryRecoveryCandidate = captureSealedCoreSummaryRecoveryCandidate(paper);
+    const savedCoreSummaryRepairCandidate = captureSavedAnalysisForCoreSummaryRepair(paper);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
@@ -13991,8 +13991,8 @@ async function analyzePaperDeepInternal(paper) {
     // direct scope. All other source-only executions retain the fresh-run
     // source proof. Both paths bind the exact supplied text/artifacts before
     // any analysis or Reader checkpoint can be persisted.
-    if (directSource) directRewriteContext.attachDirectSourceProvenance(paper, analysisManifest, sourceDetails);
-    else require('./lib/fresh-analysis-context.js').attachFreshSourceProvenance(paper, analysisManifest, sourceDetails);
+    if (directSource) directRewriteContext.attachDirectSourceRecord(paper, analysisManifest, sourceDetails);
+    else require('./lib/fresh-analysis-context.js').attachFreshSourceRecord(paper, analysisManifest, sourceDetails);
 
     const textProfile = resolveConferenceTextProfile(paper, sourceDetails, fullText);
     const { hasFullText } = textProfile;
@@ -14016,7 +14016,7 @@ async function analyzePaperDeepInternal(paper) {
     if (!hasFullText && sourceDetails.source === 'unavailable') {
         sourceWarnings.push('全文不可用，本次分析仅使用摘要');
     }
-    const sourceProvenance = {
+    const sourceAcquisitionRecord = {
         analysisSource,
         sourceId: sourceDetails.sourceId || '',
         sourceTextChars: rawTextForAnalysis.length,
@@ -14075,9 +14075,9 @@ async function analyzePaperDeepInternal(paper) {
             error
         };
     }
-    Object.assign(paper, sourceProvenance, { sourceWarnings });
+    Object.assign(paper, sourceAcquisitionRecord, { sourceWarnings });
     delete analysisManifest.sourceAcquisitionLatestFailure;
-    const actualAnalysisInputChanged = hasActualAnalysisInputChanged(previousSource, sourceProvenance);
+    const actualAnalysisInputChanged = hasActualAnalysisInputChanged(previousSource, sourceAcquisitionRecord);
     if (actualAnalysisInputChanged) {
         invalidateSourceBoundImageRecovery(paper);
     }
@@ -14087,7 +14087,7 @@ async function analyzePaperDeepInternal(paper) {
         delete paper.analysisStageCheckpoints;
         console.log(`    [deep] ⚠️  checkpoint 实际分析输入指纹变化，已清除主分析及下游恢复状态`);
     }
-    analysisManifest.sourceAcquisition = sourceProvenance;
+    analysisManifest.sourceAcquisition = sourceAcquisitionRecord;
     const recoveryFingerprints = buildRecoveryFingerprints(paper, textForAnalysis, arxivId);
     if (migrateSealedSourceOnlyReaderBeforeAnalysis(
         paper,
@@ -14099,21 +14099,21 @@ async function analyzePaperDeepInternal(paper) {
     )) {
         console.log('    [deep] ♻️  已在主分析重跑前封口 source-only Reader，避免重复生成');
     }
-    const adoptedSealedCoreSummary = adoptSealedCoreSummaryRecoveryCandidate(
-        sealedCoreSummaryRecoveryCandidate,
+    const restoredSavedStagesForSummaryRepair = restoreSavedStagesForCoreSummaryRepair(
+        savedCoreSummaryRepairCandidate,
         paper,
         analysisManifest,
-        sourceProvenance,
+        sourceAcquisitionRecord,
         rawTextForAnalysis
     );
-    const sealedCoreSummaryRecoveryActive = adoptedSealedCoreSummary
+    const savedCoreSummaryRepairActive = restoredSavedStagesForSummaryRepair
         || canReuseStageForCoreSummaryRecovery(
             paper, analysisManifest, rawTextForAnalysis, 'primaryAnalysis'
         );
-    if (adoptedSealedCoreSummary) {
+    if (restoredSavedStagesForSummaryRepair) {
         console.log('    [deep] ♻️  已封口 legacy canonical，仅执行核心摘要单节修复与评分重审');
     }
-    const migratedCoreSummaryV3 = sealedCoreSummaryRecoveryActive
+    const migratedCoreSummaryV3 = savedCoreSummaryRepairActive
         || tryMigrateCoreSummaryV3LegacyCheckpoints(
         paper,
         analysisManifest,
@@ -14127,7 +14127,7 @@ async function analyzePaperDeepInternal(paper) {
             paper, analysisManifest, 'primaryAnalysis', recoveryFingerprints.primaryAnalysis
         );
     }
-    if (!sealedCoreSummaryRecoveryActive) {
+    if (!savedCoreSummaryRepairActive) {
         invalidateRecoveryStageIfChanged(
             paper, analysisManifest, 'demoLinkScan', recoveryFingerprints.demoLinkScan
         );
@@ -14145,11 +14145,11 @@ async function analyzePaperDeepInternal(paper) {
             rawTextForAnalysis
         );
     }
-    console.log(`    [deep] 文本来源: ${analysisSource} | chars=${rawTextForAnalysis.length} | confidence=${sourceProvenance.analysisConfidence} | warnings=${sourceWarnings.length}`);
+    console.log(`    [deep] 文本来源: ${analysisSource} | chars=${rawTextForAnalysis.length} | confidence=${sourceAcquisitionRecord.analysisConfidence} | warnings=${sourceWarnings.length}`);
 
     if (!textForAnalysis || textForAnalysis.trim().length < 10) {
         console.log(`    [deep] ⚠️  论文无有效文本内容（全文和摘要均为空），无法分析`);
-        return { ...paper, ...sourceProvenance, sourceWarnings, analysis: null, analysisManifest, error: '论文无有效文本内容' };
+        return { ...paper, ...sourceAcquisitionRecord, sourceWarnings, analysis: null, analysisManifest, error: '论文无有效文本内容' };
     }
 
     // 优先使用预提供的图片 URL（ICML/会议场景），否则从 arXiv 抓取
@@ -14221,7 +14221,7 @@ async function analyzePaperDeepInternal(paper) {
     }
 
     const hasFullTextIntro = hasFullText
-        ? (sourceProvenance.truncated ? '以下是论文全文节选，请只依据已提供内容分析。' : '以下是论文全文，请仔细阅读所有技术细节。')
+        ? (sourceAcquisitionRecord.truncated ? '以下是论文全文节选，请只依据已提供内容分析。' : '以下是论文全文，请仔细阅读所有技术细节。')
         : '以下是论文摘要；由于全文不可用，请降低事实判断和评分置信度，不得声称已经核对全文细节。';
 
     // Conference PDFs intentionally have no trusted Figure URL. Their page
@@ -14278,7 +14278,7 @@ async function analyzePaperDeepInternal(paper) {
     if (imageDiscoveryError) {
         return persistImageDiscoveryFailure(
             paper,
-            sourceProvenance,
+            sourceAcquisitionRecord,
             sourceWarnings,
             analysisManifest,
             imageManifest,
@@ -14324,7 +14324,7 @@ async function analyzePaperDeepInternal(paper) {
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.error(`    [deep] 主模型文本分析失败: ${err.message}`);
             return {
-                ...paper, ...sourceProvenance, sourceWarnings,
+                ...paper, ...sourceAcquisitionRecord, sourceWarnings,
                 analysis: null, analysisManifest, imageManifest,
                 error: err.message,
                 errorCode: err.code || null,
@@ -14355,7 +14355,7 @@ async function analyzePaperDeepInternal(paper) {
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.error(`    [deep] 文本分析失败: ${err.message}`);
             return {
-                ...paper, ...sourceProvenance, sourceWarnings,
+                ...paper, ...sourceAcquisitionRecord, sourceWarnings,
                 analysis: null, analysisManifest, imageManifest,
                 error: err.message,
                 errorCode: err.code || null,
@@ -14834,12 +14834,12 @@ async function analyzePaperDeepInternal(paper) {
                 analysis = fixed;
                 console.log('    [deep] ✅ 核心摘要最终门禁通过，其他 12 节字节保持不变');
             }
-            const sealedSummaryIssue = getCoreSummaryDetailIssue(
+            const coreSummaryIssue = getCoreSummaryDetailIssue(
                 analysis,
                 { sourceText: rawTextForAnalysis }
             );
-            if (sealedSummaryIssue) {
-                throw contractRejectedError(`核心摘要最终门禁失败: ${sealedSummaryIssue}`);
+            if (coreSummaryIssue) {
+                throw contractRejectedError(`核心摘要最终门禁失败: ${coreSummaryIssue}`);
             }
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
@@ -15441,7 +15441,7 @@ async function analyzePaperDeepInternal(paper) {
         analysis = preImageAnalysis;
     }
     const hasBoundApiReaderFigures = hasCompleteApiReaderFigureBinding(paper, analysisManifest);
-    if (sealedCoreSummaryRecoveryActive
+    if (savedCoreSummaryRepairActive
         && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         analysis = preImageAnalysis;
         selectedImageUrls = [];
@@ -15555,7 +15555,7 @@ async function analyzePaperDeepInternal(paper) {
             .map(([stage, details]) => `${stage}:${details.status}`);
         return {
             ...paper,
-            ...sourceProvenance,
+            ...sourceAcquisitionRecord,
             sourceWarnings,
             analysis: null,
             parsed: null,
@@ -15577,7 +15577,7 @@ async function analyzePaperDeepInternal(paper) {
 
     return {
         ...paper,
-        ...sourceProvenance,
+        ...sourceAcquisitionRecord,
         sourceWarnings,
         analysis: analysis,
         imageUrls: selectedImageUrls,
@@ -17010,7 +17010,7 @@ module.exports = {
     normalizeReaderFigureMetricUnits,
     repairApiReaderArticleAndPlanBindings,
     collapseRepeatedReaderBridgeHeadings,
-    canonicalReaderBridgeTerm,
+    normalizeReaderBridgeTerm,
     findReaderBridgeParagraph,
     restoreApiReaderInjectionMarkers,
     makeReaderHeadingSpecific,
@@ -17056,10 +17056,10 @@ module.exports = {
     buildLegacyCoreSummaryV2PrimaryFingerprint,
     buildLegacyCoreSummaryV2TextFingerprint,
     buildLegacyCoreSummaryV2EvidenceContext,
-    SEALED_CORE_SUMMARY_RECOVERY_CONTRACT,
-    captureSealedCoreSummaryRecoveryCandidate,
-    validateSealedCoreSummaryRecoveryCandidate,
-    adoptSealedCoreSummaryRecoveryCandidate,
+    SAVED_CORE_SUMMARY_RECOVERY_CONTRACT,
+    captureSavedAnalysisForCoreSummaryRepair,
+    isSavedCoreSummaryRepairCandidateValid,
+    restoreSavedStagesForCoreSummaryRepair,
     canReuseStageForCoreSummaryRecovery,
     coreSummaryV3MigrationPromptSetIsAllowed,
     currentCoreSummaryV3MigrationPromptsAreExact,

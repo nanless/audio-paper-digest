@@ -35,7 +35,7 @@ const {
     validateManualTakeoverManifest
 } = require('./analysis-contract.js');
 const {
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
     scoringStabilityIsResolved,
@@ -819,7 +819,7 @@ function getValidationAnalysisRunSummary(papers, options = {}) {
     const waivedIds = options.waivedIds || new Set();
     const isSuccess = paper => options.allowLegacyCoreSummarySuccess === true
         ? getReadOnlyValidationAnalysisRunSummary([paper]).success === 1
-        : getCanonicalAnalysisRunSummary([paper]).success === 1;
+        : getAnalysisRunSummary([paper]).success === 1;
     const remaining = records.filter(paper => (
         !waivedIds.has(normalizedId(paper)) && !isSuccess(paper)
     )).length;

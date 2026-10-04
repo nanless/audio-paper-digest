@@ -1132,10 +1132,10 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
     """_validate_tag_stage_record 的升级分支：不一致即抛 PublishDataValidationError。"""
     from_sha = str(stage.get('registrySha256') or '')
     to_sha = _PUBLISH_TAG_CATALOG['registrySha256']
-    projection_sha = str(stage.get('projectionSha256') or '')
+    stage_prompt_text_sha256 = str(stage.get('projectionSha256') or '')
     # 词表升级时，projectionSha256 记录原标签阶段使用的提示文本 SHA。
     # 此处只检查 SHA 格式，不要求等于当前提示文本的 SHA；升级条件随后另行核验。
-    if not _SHA256_RE.fullmatch(projection_sha):
+    if not _SHA256_RE.fullmatch(stage_prompt_text_sha256):
         raise PublishDataValidationError(
             f'{paper_label} taxonomySeal registry 升级被拒 [reason=projection-sha-invalid] '
             f'from={from_sha} to={to_sha}: projectionSha256 必须是 64 位十六进制 SHA')
@@ -1422,17 +1422,17 @@ def _manual_v6_signed_compatibility(paper, manifest=None):
     contracts = manifest.get('contracts')
     takeover = manifest.get('manualTakeover')
     acquisition = manifest.get('sourceAcquisition')
-    provenance = paper.get('manualV6Provenance')
+    v6_record = paper.get('manualV6Provenance')
     return (
         paper.get('manualV6CompatibilityMode') == MANUAL_V6_SIGNED_COMPATIBILITY_MODE
         and isinstance(contracts, dict)
         and contracts.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V6
         and paper.get('manualDepth') == MANUAL_DEPTH_CONTRACT_VERSION_V6
-        and isinstance(provenance, dict)
-        and provenance.get('runtimeMode') == 'production'
-        and provenance.get('v5BridgeMode') == MANUAL_V6_SIGNED_COMPATIBILITY_MODE
+        and isinstance(v6_record, dict)
+        and v6_record.get('runtimeMode') == 'production'
+        and v6_record.get('v5BridgeMode') == MANUAL_V6_SIGNED_COMPATIBILITY_MODE
         and isinstance(takeover, dict)
-        and takeover.get('v6Provenance') == provenance
+        and takeover.get('v6Provenance') == v6_record
         and isinstance(acquisition, dict)
         and acquisition.get('v5BridgeMode') == MANUAL_V6_SIGNED_COMPATIBILITY_MODE
     )
@@ -1618,29 +1618,29 @@ def validate_manual_v6_payload(paper):
 
     artifact = paper.get('manualArtifactIndex')
     bundle = paper.get('manualReaderLongform')
-    provenance = paper.get('manualV6Provenance')
+    v6_record = paper.get('manualV6Provenance')
     takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
-    takeover_provenance = takeover.get('v6Provenance') if isinstance(takeover, dict) else None
+    takeover_v6_record = takeover.get('v6Provenance') if isinstance(takeover, dict) else None
     acquisition = manifest.get('sourceAcquisition') if isinstance(manifest, dict) else None
-    if not all(isinstance(value, dict) for value in (artifact, bundle, provenance, takeover_provenance, acquisition)):
+    if not all(isinstance(value, dict) for value in (artifact, bundle, v6_record, takeover_v6_record, acquisition)):
         raise PublishDataValidationError(f'{paper_label} Manual v6 artifact/longform/provenance 不完整')
-    if provenance.get('specVersion') != 6 or takeover_provenance != provenance:
+    if v6_record.get('specVersion') != 6 or takeover_v6_record != v6_record:
         raise PublishDataValidationError(f'{paper_label} Manual v6 provenance 副本不一致')
-    if provenance.get('runtimeMode') != 'production':
+    if v6_record.get('runtimeMode') != 'production':
         raise PublishDataValidationError(
             f'{paper_label} Manual v6 论文记录的运行模式必须为 production；shadow 模式的运行结果不能用于发布。'
         )
-    if provenance.get('readerLongformContract') != MANUAL_LONGFORM_CONTRACT_VERSION_V2:
+    if v6_record.get('readerLongformContract') != MANUAL_LONGFORM_CONTRACT_VERSION_V2:
         raise PublishDataValidationError(f'{paper_label} Manual v6 readerLongformContract 非法')
     for field in _MANUAL_V6_SHA_FIELDS:
-        value = str(provenance.get(field) or '')
+        value = str(v6_record.get(field) or '')
         if not re.fullmatch(r'[a-f0-9]{64}', value):
             raise PublishDataValidationError(f'{paper_label} manualV6Provenance.{field} 非法')
         if field in acquisition and acquisition.get(field) != value:
             raise PublishDataValidationError(f'{paper_label} sourceAcquisition.{field} 与 v6 provenance 不一致')
     for field in ('specRootSha256', 'paperSpecSha256', 'sealedRecordSha256',
                   'recordFileSha256', 'artifactIndexSha256', 'artifactIndexFileSha256'):
-        if acquisition.get(field) != provenance[field]:
+        if acquisition.get(field) != v6_record[field]:
             raise PublishDataValidationError(f'{paper_label} sourceAcquisition 缺少 {field} 的强绑定')
 
     if (artifact.get('version') != 1
@@ -1668,7 +1668,7 @@ def validate_manual_v6_payload(paper):
     artifact_sha = _manual_v6_hash(payload)
     if (artifact.get('artifactIndexSha256') != artifact_sha
             or artifact.get('outputSha256') != artifact_sha
-            or provenance.get('artifactIndexSha256') != artifact_sha):
+            or v6_record.get('artifactIndexSha256') != artifact_sha):
         raise PublishDataValidationError(f'{paper_label} ArtifactIndex semantic SHA 漂移')
     counts = artifact.get('counts')
     if not isinstance(counts, dict):
@@ -1686,7 +1686,7 @@ def validate_manual_v6_payload(paper):
             or bundle.get('artifactIndexSha256') != artifact_sha):
         raise PublishDataValidationError(f'{paper_label} reader-longform-v2 身份绑定非法')
     bundle_sha = _manual_v6_hash(bundle)
-    if (provenance.get('readerLongformSha256') != bundle_sha
+    if (v6_record.get('readerLongformSha256') != bundle_sha
             or acquisition.get('readerLongformSha256') != bundle_sha):
         raise PublishDataValidationError(f'{paper_label} reader-longform-v2 semantic SHA 漂移')
     blocks = bundle.get('blocks')
@@ -1694,7 +1694,7 @@ def validate_manual_v6_payload(paper):
         raise PublishDataValidationError(f'{paper_label} reader-longform-v2 blocks 必须为 6-32 个')
     block_by_id = {}
     source_ids = {item['id'] for item in artifact['sourceSpans'] if isinstance(item, dict) and item.get('id')}
-    signed_legacy_projection = _manual_v6_signed_compatibility(paper, manifest)
+    uses_signed_legacy_format = _manual_v6_signed_compatibility(paper, manifest)
     inventory = {field: _manual_v6_inventory_ids(artifact, field)
                  for field in ('tables', 'figures', 'formulas', 'acronyms', 'citations')}
     positions = {}
@@ -1737,7 +1737,7 @@ def validate_manual_v6_payload(paper):
     article_sha = _manual_v6_text_sha(article)
     if bundle.get('articleSha256') != article_sha:
         raise PublishDataValidationError(f'{paper_label} longform article SHA 与 blocks 重放不一致')
-    if provenance.get('readerLongformArticleSha256') != article_sha:
+    if v6_record.get('readerLongformArticleSha256') != article_sha:
         raise PublishDataValidationError(f'{paper_label} provenance 未绑定 longform article SHA')
     if isinstance(takeover.get('readerArticle'), str) \
             and _manual_v6_text(takeover['readerArticle']) != article:
@@ -1785,7 +1785,7 @@ def validate_manual_v6_payload(paper):
             times.append(datetime.fromisoformat(value))
         if not times[0] <= times[1] <= times[2]:
             raise PublishDataValidationError(f'{paper_label} {receipt_name} 时间顺序非法')
-    task_names = provenance.get('taskNames')
+    task_names = v6_record.get('taskNames')
     expected_task_name_keys = {
         'author', 'technicalScoring', 'pedagogyReadability', 'authorRevision'
     }
@@ -1822,7 +1822,7 @@ def validate_manual_v6_payload(paper):
             block = block_by_id.get(item.get('blockId'))
             rendered = (
                 _manual_v6_text(item.get('renderedMarkdown'))
-                if signed_legacy_projection else _manual_v6_render_table(source)
+                if uses_signed_legacy_format else _manual_v6_render_table(source)
             )
             if (not block or item.get('renderedMarkdown') != rendered
                     or item.get('renderedFragmentSha256') != _manual_v6_text_sha(rendered)
@@ -1920,7 +1920,7 @@ def validate_manual_v6_payload(paper):
 
     return {
         'paperId': paper_id, 'article': article, 'articleSha256': article_sha,
-        'artifactIndexSha256': artifact_sha, 'provenance': dict(provenance),
+        'artifactIndexSha256': artifact_sha, 'provenance': dict(v6_record),
         'bundle': bundle, 'artifactIndex': artifact, 'deterministicTables': deterministic_tables,
     }
 
@@ -3775,20 +3775,20 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
             v6_payload = validate_manual_v6_payload(paper)
         except PublishDataValidationError as exc:
             return f'最终 Manual v6 页面的正式论文记录未通过验证：{exc}'
-        provenance = v6_payload['provenance']
+        v6_record = v6_payload['provenance']
         marker_values = {
             'paper_digest_v6_runtime_mode': 'production',
             'paper_digest_reader_longform': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
-            'paper_digest_reader_longform_sha256': provenance['readerLongformSha256'],
+            'paper_digest_reader_longform_sha256': v6_record['readerLongformSha256'],
             'paper_digest_reader_article_sha256': v6_payload['articleSha256'],
             'paper_digest_artifact_index_sha256': v6_payload['artifactIndexSha256'],
-            'paper_digest_v6_spec_root_sha256': provenance['specRootSha256'],
-            'paper_digest_v6_paper_spec_sha256': provenance['paperSpecSha256'],
-            'paper_digest_v6_sealed_record_sha256': provenance['sealedRecordSha256'],
-            'paper_digest_v6_record_file_sha256': provenance['recordFileSha256'],
-            'paper_digest_v6_artifact_index_file_sha256': provenance['artifactIndexFileSha256'],
-            'paper_digest_v6_records_envelope_file_sha256': provenance['recordsEnvelopeFileSha256'],
-            'paper_digest_v6_task_evidence_sha256': provenance['taskEvidenceSha256'],
+            'paper_digest_v6_spec_root_sha256': v6_record['specRootSha256'],
+            'paper_digest_v6_paper_spec_sha256': v6_record['paperSpecSha256'],
+            'paper_digest_v6_sealed_record_sha256': v6_record['sealedRecordSha256'],
+            'paper_digest_v6_record_file_sha256': v6_record['recordFileSha256'],
+            'paper_digest_v6_artifact_index_file_sha256': v6_record['artifactIndexFileSha256'],
+            'paper_digest_v6_records_envelope_file_sha256': v6_record['recordsEnvelopeFileSha256'],
+            'paper_digest_v6_task_evidence_sha256': v6_record['taskEvidenceSha256'],
         }
         for field, expected in marker_values.items():
             match = re.search(
@@ -3904,9 +3904,9 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
     if not document_type:
         match = re.search(r'(?:^|[|\n])\s*文档类型[：:]\s*([^|\n]+)', reader_view)
         document_type = match.group(1).strip() if match else ''
-    canonical_results = ''
+    saved_results_section = ''
     if isinstance(paper, dict):
-        canonical_results = _extract_analysis_section(
+        saved_results_section = _extract_analysis_section(
             str(paper.get('analysis') or ''), '实验结果',
         )
     if not is_v5_reader_article:
@@ -3919,7 +3919,7 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
             # experiment section is authoritative: using the whole analysis here
             # lets words such as "消融" or "退化" in methods/limits create false
             # source obligations that never existed in the experiment evidence.
-            source_text=canonical_results,
+            source_text=saved_results_section,
         )
         if table_issue:
             return f'最终 Markdown evidence-rich 表格无效: {table_issue}'

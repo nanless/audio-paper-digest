@@ -65,7 +65,7 @@ def _parse_args(module, argv=None):
     )
 
 
-def _load_attestation(path):
+def _load_review_statement(path):
     try:
         raw = path.read_bytes()
         payload = json.loads(raw.decode('utf-8'))
@@ -193,7 +193,7 @@ def _load_attestation(path):
     return payload, hashlib.sha256(raw).hexdigest()
 
 
-def _validate_file_specific_notes(module, attestation_by_path, actual_paths, deletions, date_str,
+def _validate_file_specific_notes(module, review_file_records_by_path, actual_paths, deletions, date_str,
                                   require_subagent_images=False):
     """Require each note to carry an identifier that can only belong to its page."""
     seen_semantic_notes = set()
@@ -221,7 +221,7 @@ def _validate_file_specific_notes(module, attestation_by_path, actual_paths, del
         seen_semantic_notes.add(key)
 
     for relative, resolved in actual_paths.items():
-        item = attestation_by_path[relative]
+        item = review_file_records_by_path[relative]
         notes = item['notes']
         if deletions[relative]:
             stem = Path(relative).stem
@@ -273,7 +273,7 @@ def _validate_file_specific_notes(module, attestation_by_path, actual_paths, del
             require_unique_semantics(notes, (date_str,), relative)
 
 
-def _require_current_attestation_version(module, generation_payload, attestation):
+def _require_current_review_statement_version(module, generation_payload, attestation):
     if generation_payload.get('schemaVersion') != 3:
         return
     requires_v3 = any(
@@ -288,7 +288,7 @@ def _require_current_attestation_version(module, generation_payload, attestation
         )
 
 
-def _validate_attestation_publication_scope(module, generation_payload, attestation):
+def _validate_review_statement_scope(module, generation_payload, attestation):
     generation_scope = generation_payload.get('publicationScope')
     attestation_scope = attestation.get('publicationScope')
     if generation_scope != attestation_scope:
@@ -363,15 +363,15 @@ def _run(module, date_str, attestation_path):
         raise module.PublishDataValidationError(
             '当前 generation 已有发布证据但未能严格复核，拒绝覆盖 receipt'
         )
-    attestation, attestation_sha = _load_attestation(attestation_path)
+    attestation, attestation_sha = _load_review_statement(attestation_path)
     try:
         generation_payload = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise module.PublishDataValidationError('generation manifest 无法解析') from exc
     authoritative_by_id = {}
     if generation_payload.get('schemaVersion') == 3:
-        _require_current_attestation_version(module, generation_payload, attestation)
-        _validate_attestation_publication_scope(module, generation_payload, attestation)
+        _require_current_review_statement_version(module, generation_payload, attestation)
+        _validate_review_statement_scope(module, generation_payload, attestation)
         for paper in generation_payload.get('publishedPapers') or []:
             if not isinstance(paper, dict):
                 raise module.PublishDataValidationError(
@@ -489,21 +489,21 @@ def _run(module, date_str, attestation_path):
     if len(reviewed) != len([path for path in paths if Path(path).is_file()]):
         raise module.PublishDataValidationError('reviewed 文件数量在签发前发生变化')
     manifest_sha = _sha256(manifest_path)
-    provenance = dict(attestation)
-    provenance.pop('checks', None)
-    provenance['completedAt'] = _now_bj()
-    provenance['checks'] = attestation['checks']
-    provenance['attestationSha256'] = attestation_sha
-    provenance['generationManifestSha256'] = manifest_sha
-    provenance['baseHead'] = base_head
-    provenance['fileCount'] = len(paths)
-    provenance['reviewProtocolFingerprint'] = protocol
-    provenance['deterministicFixes'] = fixes
-    provenance['checkedFiles'] = checked_files
+    manual_review_record = dict(attestation)
+    manual_review_record.pop('checks', None)
+    manual_review_record['completedAt'] = _now_bj()
+    manual_review_record['checks'] = attestation['checks']
+    manual_review_record['attestationSha256'] = attestation_sha
+    manual_review_record['generationManifestSha256'] = manifest_sha
+    manual_review_record['baseHead'] = base_head
+    manual_review_record['fileCount'] = len(paths)
+    manual_review_record['reviewProtocolFingerprint'] = protocol
+    manual_review_record['deterministicFixes'] = fixes
+    manual_review_record['checkedFiles'] = checked_files
     receipt = module.save_review_receipt(
         date_str, paths, gate, expected_base_head=base_head,
         generation_manifest=manifest_path, reviewed_results=reviewed,
-        review_provenance=provenance,
+        manual_review_record=manual_review_record,
     )
     print(f'🧾 manual_complete 审查凭证: {receipt}')
     print(f'   provenance SHA: {attestation_sha}')
@@ -518,7 +518,7 @@ def main():
     try:
         date_str, attestation, include_id = _parse_args(module)
         with module.publication_scope(include_id):
-            expected_attestation = module.manual_review_attestation_path(date_str)
+            expected_attestation = module.manual_review_statement_path(date_str)
             if include_id and attestation != expected_attestation.resolve():
                 raise module.PublishDataValidationError(
                     f'单篇灰度 Manual review 只接受隔离 attestation: {expected_attestation}'

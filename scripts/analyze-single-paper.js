@@ -16,10 +16,10 @@ const {
     updateJsonFileLocked,
     initializeJsonFileLocked,
     mergePapersById,
-    mergeCanonicalAnalysisState,
+    mergeStoredAnalysisState,
     persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     withPaperAnalysisLock
 } = require('./analysis-engine.js');
 const {
@@ -101,30 +101,30 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
     const analysisResult = await withPaperAnalysisLock(targetPaper, async () => {
         const latestData = readJsonFileStrict(resultPath, { allowMissing: true }) || { papers: [] };
         const latestPapers = Array.isArray(latestData) ? latestData : (latestData.papers || []);
-        const canonical = latestPapers.find(p => normalizedId(p) === targetNormalizedId);
+        const storedAnalysisRecord = latestPapers.find(p => normalizedId(p) === targetNormalizedId);
         const analysisBatchDate = inferAnalysisBatchDate(
-            [canonical, targetPaper],
+            [storedAnalysisRecord, targetPaper],
             Array.isArray(latestData) ? {} : latestData,
             fallbackBatchDate
         );
-        if (canonical && isSuccessfulAnalysisRecord(canonical) && !forceReanalyze) {
+        if (storedAnalysisRecord && isSuccessfulAnalysisRecord(storedAnalysisRecord) && !forceReanalyze) {
             console.log('⚠️ 该论文已由其他进程完成，跳过');
             updateJsonFileLocked(resultPath, current => {
                 const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-                const canonicalSummary = getCanonicalAnalysisRunSummary(currentPapers);
+                const analysisRunSummary = getAnalysisRunSummary(currentPapers);
                 const payload = {
                     ...(!Array.isArray(current) && current ? current : {}),
                     papers: currentPapers,
-                    status: canonicalSummary.status,
+                    status: analysisRunSummary.status,
                     lastUpdated: getBeijingISOString(),
                     stats: {
                         ...(!Array.isArray(current) ? current?.stats : {}),
-                        analysisStatus: canonicalSummary.status,
-                        remainingFailed: canonicalSummary.remaining,
+                        analysisStatus: analysisRunSummary.status,
+                        remainingFailed: analysisRunSummary.remaining,
                         singleAnalysisStatus: 'skipped'
                     }
                 };
-                if (canonicalSummary.status === 'complete') {
+                if (analysisRunSummary.status === 'complete') {
                     payload.deepAnalysisCompletedAt = getBeijingISOString();
                 } else {
                     delete payload.deepAnalysisCompletedAt;
@@ -134,8 +134,8 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
             return { status: 'skipped', exitCode: 0 };
         }
         // deep-analysis-result.json 是恢复状态的权威来源；papers.json 只补充元数据。
-        const paperForAnalysis = canonical
-            ? mergeCanonicalAnalysisState(targetPaper, canonical)
+        const paperForAnalysis = storedAnalysisRecord
+            ? mergeStoredAnalysisState(targetPaper, storedAnalysisRecord)
             : targetPaper;
         const r = await analyzePaperWithRetry(paperForAnalysis, {
             maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
@@ -152,20 +152,20 @@ async function analyzeSinglePaper(targetArxivId, options = {}) {
                 [attempted],
                 { preserveSuccessfulAnalysis: true }
             );
-            const canonicalSummary = getCanonicalAnalysisRunSummary(mergedPapers);
+            const analysisRunSummary = getAnalysisRunSummary(mergedPapers);
             const next = {
                 ...(!Array.isArray(current) && current ? current : {}),
                 papers: mergedPapers,
                 lastUpdated: getBeijingISOString(),
-                status: canonicalSummary.status,
+                status: analysisRunSummary.status,
                 stats: {
                     ...(!Array.isArray(current) ? current?.stats : {}),
-                    analysisStatus: canonicalSummary.status,
-                    remainingFailed: canonicalSummary.remaining,
+                    analysisStatus: analysisRunSummary.status,
+                    remainingFailed: analysisRunSummary.remaining,
                     singleAnalysisStatus: r.success ? 'complete' : 'failed'
                 }
             };
-            if (canonicalSummary.status === 'complete') {
+            if (analysisRunSummary.status === 'complete') {
                 next.deepAnalysisCompletedAt = getBeijingISOString();
             } else {
                 delete next.deepAnalysisCompletedAt;

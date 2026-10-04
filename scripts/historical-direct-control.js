@@ -5,7 +5,7 @@ const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
-const projectionIo = require('./lib/historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('./lib/historical-conference-page-projections.js');
 const planApi = require('./lib/historical-direct-rewrite-plan.js');
 const control = require('./lib/historical-direct-control.js');
 
@@ -44,7 +44,7 @@ function parseArgs(argv) {
             liveRemote: values['--publication-id'] ? values['--live-remote'] !== 'false' : false } : {}) };
 }
 function loadPlan(filename) {
-    return planApi.normalizePlan(projectionIo.readStableJson(filename, 'direct rewrite control plan').value);
+    return planApi.normalizePlan(conferencePageMappingsApi.readStableJson(filename, 'direct rewrite control plan').value);
 }
 function roots(runtime = {}) {
     const files = runtime.files || Config.FILES;

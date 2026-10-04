@@ -16,7 +16,7 @@ const {
     updateJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
@@ -51,7 +51,7 @@ function retireIncompleteReaderCandidates(directory, paperIds, options = {}) {
 function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
     return updateJsonFileLocked(resultPath, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const { remaining, success, status } = getCanonicalAnalysisRunSummary(currentPapers);
+        const { remaining, success, status } = getAnalysisRunSummary(currentPapers);
         const now = getBeijingISOString();
         const batchDate = inferAnalysisBatchDate(
             currentPapers,
@@ -119,7 +119,7 @@ async function main(options = {}) {
         updateAnalysisDigestStatuses(finalPayload.papers, {
             batchDate: finalPayload.batchDate
         });
-        const summary = getCanonicalAnalysisRunSummary(finalPayload.papers);
+        const summary = getAnalysisRunSummary(finalPayload.papers);
         console.log(summary.status === 'complete' ? '所有论文已分析完成！' : `检测到并发更新，仍有 ${summary.remaining} 篇未完成`);
         return {
             status: summary.status,
@@ -198,12 +198,12 @@ async function main(options = {}) {
                 const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
                 const {
                     remaining,
-                    success: canonicalSuccess,
-                    status: canonicalStatus
-                } = getCanonicalAnalysisRunSummary(currentPapers);
+                    success: savedAnalysisSuccess,
+                    status: savedAnalysisStatus
+                } = getAnalysisRunSummary(currentPapers);
                 const progressStatus = processed < notAnalyzed.length
                     ? 'running'
-                    : canonicalStatus;
+                    : savedAnalysisStatus;
                 const payload = {
                     ...(!Array.isArray(current) && current ? current : {}),
                     lastUpdated: getBeijingISOString(),
@@ -212,7 +212,7 @@ async function main(options = {}) {
                     stats: {
                         ...(!Array.isArray(current) ? current?.stats : {}),
                         ...saveStats,
-                        analyzedSuccess: canonicalSuccess,
+                        analyzedSuccess: savedAnalysisSuccess,
                         analyzedFailed: remaining,
                         remainingFailed: remaining,
                         analysisStatus: progressStatus
@@ -234,7 +234,7 @@ async function main(options = {}) {
     if (sourceSummary) console.log(`文本来源: ${sourceSummary}`);
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const { remaining, success: canonicalSuccess, status } = getCanonicalAnalysisRunSummary(currentPapers);
+        const { remaining, success: savedAnalysisSuccess, status } = getAnalysisRunSummary(currentPapers);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: currentPapers,
@@ -242,7 +242,7 @@ async function main(options = {}) {
             lastUpdated: getBeijingISOString(),
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
-                analyzedSuccess: canonicalSuccess,
+                analyzedSuccess: savedAnalysisSuccess,
                 analyzedFailed: remaining,
                 remainingFailed: remaining,
                 analysisStatus: status
@@ -252,7 +252,7 @@ async function main(options = {}) {
         else delete payload.deepAnalysisCompletedAt;
         return payload;
     });
-    const { remaining, status } = getCanonicalAnalysisRunSummary(finalPayload.papers);
+    const { remaining, status } = getAnalysisRunSummary(finalPayload.papers);
     console.log(`剩余未分析: ${remaining}`);
     console.log(`运行状态: ${status}`);
     return { status, exitCode: getAnalysisExitCode(status), stats, remaining };

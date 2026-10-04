@@ -65,7 +65,7 @@ test('历史版本信息进入日更分析和结果，两条来源证明保持�
             assert.deepEqual(paper.sourceVersion, runtime.sourceVersion);
             assert.deepEqual(directSource.sourceVersion, runtime.sourceVersion);
             const manifest = { sourceAcquisition: { sourceSha256: sha(source.text) } };
-            direct.attachDirectSourceProvenance(paper, manifest, directSource);
+            direct.attachDirectSourceRecord(paper, manifest, directSource);
             assert.equal(paper.freshRewriteProvenance.sourceVersionIdentitySha256, runtime.sourceVersion.identitySha256);
             assert.equal(fresh.freshAnalysisIdentity(id).sourceVersionIdentitySha256, runtime.sourceVersion.identitySha256);
             // The analyzer's stage checkpoints copy the input paper. Verify

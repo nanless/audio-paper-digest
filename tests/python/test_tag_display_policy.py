@@ -268,7 +268,7 @@ class PresentationPolicyTests(unittest.TestCase):
         path=self.root/'receipt.json';self.write(path,json.dumps(receipt).encode())
         self.env.update({'review_receipt_path':lambda date:path,
             'review_protocol_fingerprint':lambda:'offline-protocol',
-            '_manual_review_provenance_error':lambda *a,**kw:None,
+            '_manual_review_record_error':lambda *a,**kw:None,
             'validate_current_generation_template':lambda *a:None,
             '_validate_active_publication_scope':lambda *a:None,
             'validate_generation_visual_contract':lambda *a:None})

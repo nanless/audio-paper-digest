@@ -10,7 +10,7 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const planApi = require('./lib/historical-direct-rewrite-plan.js');
 const runner = require('./lib/historical-direct-rewrite-runner.js');
-const projections = require('./lib/historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('./lib/historical-conference-page-projections.js');
 
 const USAGE = '--dry-run|--apply --plan ABSOLUTE.json [--queue all|arxiv|conference] [--generation N] [--concurrency 1-8] [--paper-ids ID[,ID...]] [--max-papers N|--limit N]';
 function parsePaperIds(value) {
@@ -43,7 +43,7 @@ function parseArgs(argv) {
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-direct-rewrite-run.js');
     const options = parseArgs(argv); const files = runtime.files || Config.FILES;
-    const loaded = projections.readStableJson(options.planFile, 'direct rewrite plan'); const plan = planApi.normalizePlan(loaded.value);
+    const loaded = conferencePageMappingsApi.readStableJson(options.planFile, 'direct rewrite plan'); const plan = planApi.normalizePlan(loaded.value);
     let stopSignal = null;
     const onSignal = signal => {
         if (stopSignal === null) console.error(`[historical-direct-rewrite-run] received ${signal}; finishing active papers before pausing`);

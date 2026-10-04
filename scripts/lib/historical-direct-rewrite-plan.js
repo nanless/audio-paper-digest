@@ -7,7 +7,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const conferenceProjections = require('./historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 const localSources = require('./historical-conference-local-sources.js');
 const dailyPrimaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 const icmlPosterApi = require('./historical-icml-poster-authority.js');
@@ -208,7 +208,7 @@ function normalizeHistoricalArxivLink(value, expectedArxivId) {
 }
 
 function normalizedConferenceProjections(value, { catalogFileSha256, inventory }) {
-    const artifact = conferenceProjections.normalizeProjectionArtifact(value);
+    const artifact = conferencePageMappingsApi.normalizeConferencePageMappingRecord(value);
     if (artifact.catalogFileSha256 !== catalogFileSha256 || artifact.inventory.ledgerSha256 !== inventory.ledgerSha256
         || artifact.inventory.pageSetSha256 !== inventory.pageSetSha256) {
         fail('conference page projection artifact is bound to a different catalog or inventory');
@@ -664,10 +664,10 @@ function readArxivFreshFailureHandoff({ root, handoffName } = {}) {
     if (!SAFE_NAME_RE.test(String(handoffName || '')) || !handoffName.startsWith(ARXIV_FRESH_FAILURE_HANDOFF_PREFIX)) {
         fail('arXiv fresh failure handoff name is unsafe');
     }
-    const directory = conferenceProjections.safeDirectory(root, 'arXiv fresh failure handoff root');
+    const directory = conferencePageMappingsApi.safeDirectory(root, 'arXiv fresh failure handoff root');
     const filename = path.resolve(directory, handoffName);
     if (path.dirname(filename) !== directory) fail('arXiv fresh failure handoff escapes its root');
-    const loaded = conferenceProjections.readStableJson(filename, 'arXiv fresh failure handoff');
+    const loaded = conferencePageMappingsApi.readStableJson(filename, 'arXiv fresh failure handoff');
     const handoff = normalizeArxivFreshFailureHandoff(loaded.value);
     if (!loaded.bytes.equals(prettyBytes(handoff))) fail('arXiv fresh failure handoff bytes are not canonical');
     return { filename: fs.realpathSync(filename), fileSha256: loaded.fileSha256, handoff };
@@ -675,7 +675,7 @@ function readArxivFreshFailureHandoff({ root, handoffName } = {}) {
 
 function writeArxivFreshFailureHandoff({ root, plan, paperId, generation, error, observedAt } = {}) {
     const handoff = buildArxivFreshFailureHandoff({ plan, paperId, generation, error, observedAt });
-    const directory = conferenceProjections.safeDirectory(root, 'arXiv fresh failure handoff root', true);
+    const directory = conferencePageMappingsApi.safeDirectory(root, 'arXiv fresh failure handoff root', true);
     const handoffName = arxivFreshFailureHandoffName(handoff); const filename = path.join(directory, handoffName);
     const bytes = prettyBytes(handoff); let fd;
     try {
@@ -696,8 +696,8 @@ function writeArxivFreshFailureHandoff({ root, plan, paperId, generation, error,
 
 function writePlan({ root, outputName, plan } = {}) {
     if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('plan output name is unsafe');
-    const normalized = normalizePlan(plan); const directory = conferenceProjections.safeDirectory
-        ? conferenceProjections.safeDirectory(root, 'direct rewrite plan root', true)
+    const normalized = normalizePlan(plan); const directory = conferencePageMappingsApi.safeDirectory
+        ? conferencePageMappingsApi.safeDirectory(root, 'direct rewrite plan root', true)
         : (() => { if (!path.isAbsolute(root)) fail('direct rewrite plan root must be absolute'); fs.mkdirSync(root, { recursive: true, mode: 0o700 }); return root; })();
     const filename = path.join(directory, outputName); const bytes = prettyBytes(normalized); let fd;
     try {
@@ -707,7 +707,7 @@ function writePlan({ root, outputName, plan } = {}) {
         return { status: 'created', filename, plan: normalized };
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        if (!conferenceProjections.readStableFile(filename, 'existing direct rewrite plan').bytes.equals(bytes)) {
+        if (!conferencePageMappingsApi.readStableFile(filename, 'existing direct rewrite plan').bytes.equals(bytes)) {
             fail(`refuses to overwrite different direct rewrite plan: ${outputName}`);
         }
         return { status: 'recovered', filename, plan: normalized };
@@ -762,10 +762,10 @@ function readUnprojectedCatalogReport({ root, reportName } = {}) {
     if (!SAFE_NAME_RE.test(String(reportName || '')) || !reportName.startsWith(UNPROJECTED_REPORT_PREFIX)) {
         fail('unprojected direct rewrite catalog report name is unsafe');
     }
-    const directory = conferenceProjections.safeDirectory(root, 'unprojected direct rewrite catalog report root');
+    const directory = conferencePageMappingsApi.safeDirectory(root, 'unprojected direct rewrite catalog report root');
     const filename = path.resolve(directory, reportName);
     if (path.dirname(filename) !== directory) fail('unprojected direct rewrite catalog report escapes its root');
-    const loaded = conferenceProjections.readStableJson(filename, 'unprojected direct rewrite catalog report');
+    const loaded = conferencePageMappingsApi.readStableJson(filename, 'unprojected direct rewrite catalog report');
     const report = normalizeUnprojectedCatalogReport(loaded.value);
     if (!loaded.bytes.equals(prettyBytes(report))) fail('unprojected direct rewrite catalog report bytes are not canonical');
     return { filename: fs.realpathSync(filename), fileSha256: loaded.fileSha256, report };
@@ -773,7 +773,7 @@ function readUnprojectedCatalogReport({ root, reportName } = {}) {
 
 function writeUnprojectedCatalogReport({ root, plan } = {}) {
     const report = buildUnprojectedCatalogReport({ plan });
-    const directory = conferenceProjections.safeDirectory(root, 'unprojected direct rewrite catalog report root', true);
+    const directory = conferencePageMappingsApi.safeDirectory(root, 'unprojected direct rewrite catalog report root', true);
     const reportName = unprojectedCatalogReportName(report); const filename = path.join(directory, reportName);
     const bytes = prettyBytes(report); let fd;
     try {
@@ -793,9 +793,9 @@ function writeUnprojectedCatalogReport({ root, plan } = {}) {
 }
 
 function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile } = {}) {
-    const catalog = conferenceProjections.readStableJson(catalogFile, 'local source catalog');
-    const inventory = conferenceProjections.readStableJson(inventoryFile, 'historical inventory');
-    const projection = conferenceProjections.readStableJson(conferenceProjectionFile, 'conference page projection');
+    const catalog = conferencePageMappingsApi.readStableJson(catalogFile, 'local source catalog');
+    const inventory = conferencePageMappingsApi.readStableJson(inventoryFile, 'historical inventory');
+    const projection = conferencePageMappingsApi.readStableJson(conferenceProjectionFile, 'conference page projection');
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
@@ -866,7 +866,7 @@ function verifyConferenceWriterInputs(item) {
     for (const source of item.route.writerInputs) {
         try { localSources.validateSource(source, item.paperId); }
         catch (error) { fail(`${item.paperId} retained source binding changed after planning: ${error.message}`); }
-        const metadata = conferenceProjections.readStableFile(source.metadata.absolutePath, 'retained conference metadata', 64 * 1024 * 1024);
+        const metadata = conferencePageMappingsApi.readStableFile(source.metadata.absolutePath, 'retained conference metadata', 64 * 1024 * 1024);
         if (metadata.fileSha256 !== source.metadata.sha256) {
             fail(`${item.paperId} retained conference metadata changed after planning`);
         }

@@ -10,9 +10,9 @@ const test = require('node:test');
 const catalog = require('../scripts/lib/historical-direct-rewrite-input-catalog.js');
 const conferenceSources = require('../scripts/lib/historical-conference-local-sources.js');
 const inputsCli = require('../scripts/historical-direct-rewrite-inputs.js');
-const projectionsCli = require('../scripts/historical-conference-page-projections.js');
+const conferencePageMappingsCli = require('../scripts/historical-conference-page-projections.js');
 const planCli = require('../scripts/historical-direct-rewrite-plan.js');
-const projectionApi = require('../scripts/lib/historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('../scripts/lib/historical-conference-page-projections.js');
 const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -151,13 +151,13 @@ test('CLI produces a scoped v5 catalog and its projection-to-plan dry-run succee
     if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(f.catalogRoot, 'current.json')).mode & 0o777, 0o600);
     const second = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
     assert.equal(second.status, 'recovered');
-    const projection = projectionsCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile], {
+    const projection = conferencePageMappingsCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile], {
         files: { historicalConferencePageProjectionDir: f.projectionRoot }, blogRoot: f.blog
     });
     assert.deepEqual({ projections: projection.projections, projectedPages: projection.projectedPages, unmatchedPages: projection.unmatchedPages }, { projections: 4, projectedPages: 5, unmatchedPages: 0 });
     const projectionArtifact = require('../scripts/lib/historical-conference-page-projections.js').buildFromFiles({ catalogFile: written.filename, inventoryFile: f.inventoryFile, blogRoot: f.blog });
     const projectionFile = path.join(f.projectionRoot, 'conference-page-projections-v3.json');
-    require('../scripts/lib/historical-conference-page-projections.js').writeProjectionArtifact({ root: f.projectionRoot, outputName: 'conference-page-projections-v3.json', artifact: projectionArtifact });
+    require('../scripts/lib/historical-conference-page-projections.js').writeConferencePageMappingRecord({ root: f.projectionRoot, outputName: 'conference-page-projections-v3.json', artifact: projectionArtifact });
     const plan = planCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile, '--conference-projections', projectionFile], {
         files: { historicalDirectRewritePlanDir: f.planRoot, historicalDirectRewriteUnprojectedReportDir: f.reportRoot }
     });
@@ -178,10 +178,10 @@ test('projection and plan reject legacy v3/v4 and malformed v5 bytes through the
         inventoryFile: f.inventoryFile, blogRoot: f.blog });
     const legacyV3 = { contract: 'merged-good-historical-local-data-v3', version: 3,
         scope: current.scope, inputs: current.inputs, summary: current.summary, entries: current.entries };
-    assert.throws(() => projectionApi.normalizeCatalog(legacyV3), /current scoped v5 local source catalog/);
+    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV3), /current scoped v5 local source catalog/);
     assert.throws(() => planApi.normalizeCatalog(legacyV3), /current scoped v5 local source catalog/);
     const legacyV4 = structuredClone(current); legacyV4.contract = 'merged-good-historical-local-data-v4'; legacyV4.version = 4;
-    assert.throws(() => projectionApi.normalizeCatalog(legacyV4), /current scoped v5 local source catalog/);
+    assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacyV4), /current scoped v5 local source catalog/);
     assert.throws(() => planApi.normalizeCatalog(legacyV4), /current scoped v5 local source catalog/);
     const cases = [
         value => { delete value.scopeBinding; },
@@ -194,7 +194,7 @@ test('projection and plan reject legacy v3/v4 and malformed v5 bytes through the
     ];
     for (const mutate of cases) {
         const legacy = structuredClone(current); mutate(legacy);
-        assert.throws(() => projectionApi.normalizeCatalog(legacy), /current scoped v5 local source catalog/);
+        assert.throws(() => conferencePageMappingsApi.normalizeCatalog(legacy), /current scoped v5 local source catalog/);
         assert.throws(() => planApi.normalizeCatalog(legacy), /current scoped v5 local source catalog/);
     }
 });

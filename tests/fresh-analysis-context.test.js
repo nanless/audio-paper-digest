@@ -134,7 +134,7 @@ test('daily bundle mode seals PDF/TXT/manifest once and replays only that genera
     assert.equal(captures, 1, 'same generation must not fetch again');
     assert.equal(replayed.freshSourceDescriptor.sourceManifestSha256, first.freshSourceDescriptor.sourceManifestSha256);
     const paper = { arxivId: f.id }; const analysisManifest = { stages: {} };
-    await fresh.withFreshAnalysisContext(identity, () => fresh.attachFreshSourceProvenance(paper, analysisManifest, replayed));
+    await fresh.withFreshAnalysisContext(identity, () => fresh.attachFreshSourceRecord(paper, analysisManifest, replayed));
     assert.equal(paper.freshRewriteProvenance.sourceGeneration, generation);
     assert.equal(paper.freshRewriteProvenance.sourceManifestSha256, replayed.freshSourceDescriptor.sourceManifestSha256);
 });
@@ -222,7 +222,7 @@ test('fresh paper rejects legacy/cross-run generated text and binds same-run che
         assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, fullText: f.text }), /caller-provided text/);
         const source = await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));
         const paper = { arxivId: f.id }; const manifest = { stages: {} };
-        fresh.attachFreshSourceProvenance(paper, manifest, source);
+        fresh.attachFreshSourceRecord(paper, manifest, source);
         assert.equal(paper.freshRewriteProvenance.sourceOnly, true);
         assert.equal(paper.freshRewriteProvenance.oldGeneratedTextIncluded, false);
         paper.analysisManifest = manifest; paper.analysisCheckpoint = 'new run partial analysis';
@@ -238,7 +238,7 @@ test('the first persisted analysis checkpoint already carries exact fresh source
     await fresh.withFreshAnalysisContext(f.context, async () => {
         const source = await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));
         const paper = { arxivId: f.id }; const manifest = { stages: {} };
-        fresh.attachFreshSourceProvenance(paper, manifest, source);
+        fresh.attachFreshSourceRecord(paper, manifest, source);
         let observed = 0;
         paper[Symbol.for('audio-paper-digest.analysisCheckpointCallback')] = checkpoint => {
             observed++;

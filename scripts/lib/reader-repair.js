@@ -525,8 +525,8 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         const beforeTables = locateReaderDraftTables(draft);
         const afterTables = locateReaderDraftTables(merged);
         const countInSection = (tables, index) => tables.filter(table => table.sectionIndex === index).length;
-        const donorBefore = countInSection(beforeTables, operation.donorSectionIndex);
-        const donorAfter = countInSection(afterTables, operation.donorSectionIndex);
+        const sourceTableCountBefore = countInSection(beforeTables, operation.donorSectionIndex);
+        const sourceTableCountAfter = countInSection(afterTables, operation.donorSectionIndex);
         const destinationBefore = countInSection(beforeTables, operation.destinationSectionIndex);
         const destinationAfter = countInSection(afterTables, operation.destinationSectionIndex);
         const destinationTables = afterTables.filter(table => (
@@ -541,7 +541,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
                 === hashDraft(nodeAt(merged, operation.donorSectionPath))
             || hashDraft(nodeAt(draft, operation.destinationSectionPath))
                 === hashDraft(nodeAt(merged, operation.destinationSectionPath))
-            || donorAfter !== donorBefore - 1
+            || sourceTableCountAfter !== sourceTableCountBefore - 1
             || destinationAfter < destinationBefore + 1
             || afterTables.length !== merged.tableBindings.length
             || !relocated
@@ -812,7 +812,7 @@ function buildMissingResultTableOperation(draft, issues) {
             };
         }
     }
-    const donor = locatedTables.filter(table => (
+    const tableToMove = locatedTables.filter(table => (
         typeof table.table?.markdown === 'string'
         && table.table.markdown.trim().length > 0
         && Number.isInteger(table.bindingIndex)
@@ -823,24 +823,24 @@ function buildMissingResultTableOperation(draft, issues) {
             - (draft.sections?.[right.sectionIndex]?.kind === 'experiment_setup' ? 0 : 1)
         || right.tableIndex - left.tableIndex
     ))[0];
-    if (!donor || destinationSectionIndex < 0) return null;
-    const donorSectionPath = donor.path;
+    if (!tableToMove || destinationSectionIndex < 0) return null;
+    const sourceSectionPath = tableToMove.path;
     const destinationSectionPath = `/sections/${destinationSectionIndex}/body`;
-    const bindingPath = `/tableBindings/${donor.bindingIndex}`;
+    const bindingPath = `/tableBindings/${tableToMove.bindingIndex}`;
     return {
         kind: 'relocate_result_table_v1',
-        donorGlobalTableIndex: donor.tableIndex,
-        donorTableMarkdownSha256: hashDraft(donor.table.markdown),
-        preserveDonorMarkdown: draft.tableBindings?.[donor.bindingIndex]?.sourceType === 'artifact_table',
-        donorOrdinalInSection: locatedTables.filter(table => table.sectionIndex === donor.sectionIndex
-            && table.line <= donor.line).length,
-        donorSectionIndex: donor.sectionIndex,
+        donorGlobalTableIndex: tableToMove.tableIndex,
+        donorTableMarkdownSha256: hashDraft(tableToMove.table.markdown),
+        preserveDonorMarkdown: draft.tableBindings?.[tableToMove.bindingIndex]?.sourceType === 'artifact_table',
+        donorOrdinalInSection: locatedTables.filter(table => table.sectionIndex === tableToMove.sectionIndex
+            && table.line <= tableToMove.line).length,
+        donorSectionIndex: tableToMove.sectionIndex,
         destinationSectionIndex,
-        bindingIndex: donor.bindingIndex,
-        donorSectionPath,
+        bindingIndex: tableToMove.bindingIndex,
+        donorSectionPath: sourceSectionPath,
         destinationSectionPath,
         bindingPath,
-        requiredReplacementPaths: [donorSectionPath, destinationSectionPath, bindingPath],
+        requiredReplacementPaths: [sourceSectionPath, destinationSectionPath, bindingPath],
         requiredPostconditions: [
             'donor section loses exactly one Markdown table',
             'destination result/ablation section gains exactly one numeric Markdown table',

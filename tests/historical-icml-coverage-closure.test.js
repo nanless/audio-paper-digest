@@ -10,7 +10,7 @@ const test = require('node:test');
 const pdfSource = require('../scripts/lib/historical-icml-alternate-pdf-source.js');
 const localSources = require('../scripts/lib/historical-conference-local-sources.js');
 const catalogApi = require('../scripts/lib/historical-direct-rewrite-input-catalog.js');
-const projectionApi = require('../scripts/lib/historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('../scripts/lib/historical-conference-page-projections.js');
 const planApi = require('../scripts/lib/historical-direct-rewrite-plan.js');
 
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -49,9 +49,9 @@ function buildChain({ root, blogRoot, inventoryFile, snapshotFile, pdfRoot, fres
     const catalog = catalogApi.buildScopedCatalog({ conferenceManifest: manifestProof.filename,
         inventoryFile, blogRoot });
     const catalogProof = writeProof(path.join(root, `scoped-catalog-${suffix}.json`), catalogApi.prettyBytes(catalog));
-    const projection = projectionApi.buildFromFiles({ catalogFile: catalogProof.filename, inventoryFile, blogRoot });
+    const projection = conferencePageMappingsApi.buildFromFiles({ catalogFile: catalogProof.filename, inventoryFile, blogRoot });
     const projectionProof = writeProof(path.join(root, `conference-projection-${suffix}.json`),
-        projectionApi.prettyBytes(projection));
+        conferencePageMappingsApi.prettyBytes(projection));
     const plan = planApi.buildFromFiles({ catalogFile: catalogProof.filename, inventoryFile,
         conferenceProjectionFile: projectionProof.filename });
     return { manifest, catalog, projection, plan };

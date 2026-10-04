@@ -21,7 +21,7 @@ const {
     readJsonFileStrict,
     updateJsonFileLocked,
     mergePapersById,
-    mergeCanonicalAnalysisState,
+    mergeStoredAnalysisState,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
     getAnalysisExitCode
@@ -409,7 +409,7 @@ async function main(targetDate, options = {}) {
             const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (!latest) return { paper, skip: false };
-            const latestForReanalysis = mergeCanonicalAnalysisState(paper, latest);
+            const latestForReanalysis = mergeStoredAnalysisState(paper, latest);
             delete latestForReanalysis.analysis;
             delete latestForReanalysis.parsed;
             delete latestForReanalysis.error;

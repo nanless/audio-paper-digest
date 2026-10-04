@@ -854,14 +854,14 @@ describe('full-fetch helpers', () => {
         const current = path.join(dir, 'current', 'deep-analysis-result.json');
         const archiveDir = path.join(dir, 'archive');
         const archiveDay = path.join(archiveDir, '2026-07-12');
-        const canonical = path.join(archiveDay, 'deep-analysis-result.json');
+        const storedAnalysisFile = path.join(archiveDay, 'deep-analysis-result.json');
         fs.mkdirSync(path.dirname(current), { recursive: true });
         fs.mkdirSync(archiveDay, { recursive: true });
         fs.writeFileSync(current, JSON.stringify({
             timestamp: '2026-07-12T18:00:00+08:00',
             papers: [{ arxivId: '2607.70002', title: 'latest current' }]
         }));
-        fs.writeFileSync(canonical, JSON.stringify({
+        fs.writeFileSync(storedAnalysisFile, JSON.stringify({
             timestamp: '2026-07-12T09:00:00+08:00',
             papers: [{ arxivId: '2607.70001', title: 'old canonical' }]
         }));
@@ -869,7 +869,7 @@ describe('full-fetch helpers', () => {
         autoArchiveCurrentData('2026-07-13', { targets: [current], archiveDir });
 
         assert.strictEqual(fs.existsSync(current), false);
-        assert.strictEqual(JSON.parse(fs.readFileSync(canonical, 'utf8')).papers[0].title, 'latest current');
+        assert.strictEqual(JSON.parse(fs.readFileSync(storedAnalysisFile, 'utf8')).papers[0].title, 'latest current');
         const conflicts = fs.readdirSync(archiveDay).filter(name => name.includes('-conflict-'));
         assert.strictEqual(conflicts.length, 1);
         assert.strictEqual(
@@ -883,9 +883,9 @@ describe('full-fetch helpers', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-archive-failure-'));
         const current = path.join(dir, 'current', 'deep-analysis-result.json');
         const archiveDir = path.join(dir, 'archive');
-        const canonical = path.join(archiveDir, '2026-07-12', 'deep-analysis-result.json');
+        const storedAnalysisFile = path.join(archiveDir, '2026-07-12', 'deep-analysis-result.json');
         fs.mkdirSync(path.dirname(current), { recursive: true });
-        fs.mkdirSync(canonical, { recursive: true });
+        fs.mkdirSync(storedAnalysisFile, { recursive: true });
         fs.writeFileSync(current, JSON.stringify({
             timestamp: '2026-07-12T18:00:00+08:00',
             papers: [{ arxivId: '2607.70003' }]
@@ -894,7 +894,7 @@ describe('full-fetch helpers', () => {
         autoArchiveCurrentData('2026-07-13', { targets: [current], archiveDir });
 
         assert.strictEqual(fs.existsSync(current), true);
-        assert.strictEqual(fs.statSync(canonical).isDirectory(), true);
+        assert.strictEqual(fs.statSync(storedAnalysisFile).isDirectory(), true);
     });
 
     it('清理旧分析记录后锁内重算 canonical 聚合状态和批次', () => {
@@ -936,13 +936,13 @@ describe('full-fetch helpers', () => {
     });
 
     it('full-fetch 续跑会把 canonical 失败记录的阶段 checkpoint 合并回筛选输入', () => {
-        const { mergeCanonicalAnalysisState } = require('../scripts/full-fetch.js');
+        const { mergeStoredAnalysisState } = require('../scripts/full-fetch.js');
         const filtered = {
             arxivId: '2607.40001v2',
             title: 'fresh metadata',
             abstract: 'fresh abstract'
         };
-        const canonical = {
+        const storedAnalysisRecord = {
             arxivId: '2607.40001v1',
             title: 'old metadata',
             analysis: null,
@@ -954,13 +954,13 @@ describe('full-fetch helpers', () => {
             },
             analysisRecoveryImageManifest: { candidates: [{ url: 'https://example.com/a.png' }] }
         };
-        const merged = mergeCanonicalAnalysisState(filtered, canonical);
+        const merged = mergeStoredAnalysisState(filtered, storedAnalysisRecord);
         assert.strictEqual(merged.title, 'fresh metadata');
         assert.strictEqual(merged.abstract, 'fresh abstract');
         assert.strictEqual(merged.analysisCheckpoint, 'body after revision');
-        assert.deepStrictEqual(merged.analysisStageCheckpoints, canonical.analysisStageCheckpoints);
-        assert.deepStrictEqual(merged.analysisManifest, canonical.analysisManifest);
-        assert.deepStrictEqual(merged.analysisRecoveryImageManifest, canonical.analysisRecoveryImageManifest);
+        assert.deepStrictEqual(merged.analysisStageCheckpoints, storedAnalysisRecord.analysisStageCheckpoints);
+        assert.deepStrictEqual(merged.analysisManifest, storedAnalysisRecord.analysisManifest);
+        assert.deepStrictEqual(merged.analysisRecoveryImageManifest, storedAnalysisRecord.analysisRecoveryImageManifest);
     });
 
     it('legacy 分析结果只迁移一次到 current，校验成功后移除旧文件', () => {

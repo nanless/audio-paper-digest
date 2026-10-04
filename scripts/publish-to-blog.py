@@ -99,7 +99,7 @@ from markdown_hugo_gate import (
     rendered_page_candidates as _rendered_page_candidates,
     rendered_article_fragment as _rendered_article_fragment,
 )
-from sealed_tutorial_preview import load_sealed_tutorial_preview
+from sealed_tutorial_preview import load_verified_tutorial_preview
 
 BLOG_REPO = os.path.expanduser(
     os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
@@ -229,7 +229,7 @@ def _reviewed_path_set_sha256(files):
     return _stable_json_sha256(entries)
 
 
-def _manual_review_provenance_error(receipt, *, date_str=None,
+def _manual_review_record_error(receipt, *, date_str=None,
                                     generation_manifest_sha256=None,
                                     expected_base_head=None):
     """Validate an explicitly human/agent-attested review receipt.
@@ -243,23 +243,23 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
         return None
     if mode != MANUAL_REVIEW_MODE:
         return f'审查凭证 reviewMode 非法: {mode}'
-    provenance = receipt.get('reviewProvenance')
-    if not isinstance(provenance, dict):
+    manual_review_record = receipt.get('reviewProvenance')
+    if not isinstance(manual_review_record, dict):
         return 'manual_complete 审查缺少 reviewProvenance'
-    if provenance.get('version') not in (1, 2, 3) or provenance.get('mode') != MANUAL_REVIEW_MODE:
+    if manual_review_record.get('version') not in (1, 2, 3) or manual_review_record.get('mode') != MANUAL_REVIEW_MODE:
         return 'manual_complete reviewProvenance 版本或模式非法'
-    legacy_v1 = provenance.get('version') == 1
-    current_v3 = provenance.get('version') == 3
-    if not isinstance(provenance.get('agent'), str) or not provenance['agent'].strip():
+    legacy_v1 = manual_review_record.get('version') == 1
+    current_v3 = manual_review_record.get('version') == 3
+    if not isinstance(manual_review_record.get('agent'), str) or not manual_review_record['agent'].strip():
         return 'manual_complete reviewProvenance 缺少 agent'
-    if provenance.get('basis') != 'deterministic_and_manual_semantic_review':
+    if manual_review_record.get('basis') != 'deterministic_and_manual_semantic_review':
         return 'manual_complete reviewProvenance basis 必须为完整确定性+人工语义审查'
-    if not isinstance(provenance.get('reason'), str) or len(provenance['reason'].strip()) < 20:
+    if not isinstance(manual_review_record.get('reason'), str) or len(manual_review_record['reason'].strip()) < 20:
         return 'manual_complete reviewProvenance reason 过短'
-    completed_at = provenance.get('completedAt')
+    completed_at = manual_review_record.get('completedAt')
     if not isinstance(completed_at, str) or not BEIJING_TIMESTAMP_RE.fullmatch(completed_at):
         return 'manual_complete reviewProvenance completedAt 必须为北京时间戳'
-    checks = provenance.get('checks')
+    checks = manual_review_record.get('checks')
     required_checks = {
         'generationManifestVerified', 'baseHeadVerified', 'fileHashesVerified',
         'frontmatterVerified', 'markdownVerified', 'contentSemanticsVerified',
@@ -271,20 +271,20 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
         or any(checks.get(key) is not True for key in required_checks)
     ):
         return 'manual_complete reviewProvenance checks 必须完整且全部为 true'
-    manifest_sha = provenance.get('generationManifestSha256')
+    manifest_sha = manual_review_record.get('generationManifestSha256')
     if not re.fullmatch(r'[0-9a-f]{64}', str(manifest_sha or '')):
         return 'manual_complete provenance 缺少 generationManifestSha256'
     if generation_manifest_sha256 is not None and manifest_sha != generation_manifest_sha256:
         return 'manual_complete provenance 与 generation manifest SHA 不一致'
-    base_head = provenance.get('baseHead')
+    base_head = manual_review_record.get('baseHead')
     if not re.fullmatch(r'[0-9a-f]{40}', str(base_head or '').lower()):
         return 'manual_complete provenance 缺少合法 baseHead'
     if expected_base_head is not None and str(base_head).lower() != str(expected_base_head).lower():
         return 'manual_complete provenance 与 review 基线不一致'
-    file_count = provenance.get('fileCount')
+    file_count = manual_review_record.get('fileCount')
     if not isinstance(file_count, int) or file_count <= 0:
         return 'manual_complete provenance fileCount 非法'
-    attested_files = provenance.get('files')
+    attested_files = manual_review_record.get('files')
     receipt_files = receipt.get('files')
     if legacy_v1:
         # v1 never carried per-page attestations. It is accepted only as
@@ -297,7 +297,7 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
             return 'manual_complete provenance v1 仅允许只读历史发布证据'
         if not isinstance(receipt_files, list) or len(receipt_files) != file_count:
             return 'manual_complete provenance v1 fileCount 与 receipt 文件数不一致'
-        path_set_sha = provenance.get('reviewedPathSetSha256')
+        path_set_sha = manual_review_record.get('reviewedPathSetSha256')
         if path_set_sha != _reviewed_path_set_sha256(receipt_files):
             return 'manual_complete provenance v1 reviewedPathSetSha256 不一致'
         return None
@@ -464,10 +464,10 @@ def _manual_review_provenance_error(receipt, *, date_str=None,
                 return semantic_error
     if seen_attested_paths != set(receipt_by_path):
         return 'manual_complete provenance 逐文件集合与 receipt 不一致'
-    path_set_sha = provenance.get('reviewedPathSetSha256')
+    path_set_sha = manual_review_record.get('reviewedPathSetSha256')
     if not re.fullmatch(r'[0-9a-f]{64}', str(path_set_sha or '')):
         return 'manual_complete provenance 缺少 reviewedPathSetSha256'
-    protocol = provenance.get('reviewProtocolFingerprint')
+    protocol = manual_review_record.get('reviewProtocolFingerprint')
     if not re.fullmatch(r'[0-9a-f]{64}', str(protocol or '')):
         return 'manual_complete provenance 缺少 reviewProtocolFingerprint'
     return None
@@ -4975,7 +4975,7 @@ def _normalize_api_reader_source_cell(value):
 
 
 def _canonical_api_reader_numeric_token(raw):
-    """与 Node 端 canonicalReaderNumericToken 保持同一归一化标准。
+    """与 Node 端 normalizeReaderNumericToken 保持同一归一化标准。
 
     两端门禁必须对同一输入得出同一 token 集合，否则分析侧通过的内容会在
     发布侧被拒绝（或反之）。规则：千分位逗号归一、去空白小写、尾零归一、
@@ -5219,9 +5219,9 @@ def _validate_api_reader_source_bindings(paper, article=None):
         raise PublishDataValidationError('读者文章的表格或公式来源记录条数与阶段记录不一致。')
 
     rendered_tables = _api_reader_markdown_tables(article)
-    canonical_reader_article = paper.get('apiReaderArticle')
-    canonical_tables = _api_reader_markdown_tables(canonical_reader_article) \
-        if isinstance(canonical_reader_article, str) else rendered_tables
+    saved_reader_article = paper.get('apiReaderArticle')
+    saved_reader_tables = _api_reader_markdown_tables(saved_reader_article) \
+        if isinstance(saved_reader_article, str) else rendered_tables
     if len(rendered_tables) != len(table_bindings):
         raise PublishDataValidationError('Reader 正文中的表格数与 plan.tableBindings 条目数不一致。')
     for index, (binding, rendered) in enumerate(zip(table_bindings, rendered_tables), 1):
@@ -5231,11 +5231,11 @@ def _validate_api_reader_source_bindings(paper, article=None):
         }
         if not isinstance(binding, dict) or set(binding) not in (required, required | {'sourceTableDomSha256'}):
             raise PublishDataValidationError(f'表格来源记录 tableBindings[{index - 1}] 格式无效、缺少必要字段，或含有不允许的字段。')
-        canonical_rendered = canonical_tables[index - 1] \
-            if index <= len(canonical_tables) else None
-        if binding.get('tableIndex') != index or canonical_rendered is None \
+        saved_rendered_table = saved_reader_tables[index - 1] \
+            if index <= len(saved_reader_tables) else None
+        if binding.get('tableIndex') != index or saved_rendered_table is None \
                 or binding.get('renderedTableSha256') != _javascript_string_sha256(
-                    canonical_rendered['markdown']
+                    saved_rendered_table['markdown']
                 ):
             raise PublishDataValidationError(f'第 {index} 个表格的序号、保存正文中的表格或渲染 SHA 与来源记录不一致。')
         rendered_rows = [rendered['header'], *rendered['rows']]
@@ -7447,7 +7447,7 @@ def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
     replayed_payload_sha = _daily_fresh_sha256(
         _daily_fresh_compact_json_bytes(_daily_fresh_canonical(artifact_payload))
     )
-    sealed_layoutless_text = (
+    has_text_only_source_record = (
         artifacts.get('version') == 1
         and artifacts.get('source') == 'fresh_arxiv_text_without_layout'
         and all(isinstance(artifacts.get(key), list) and not artifacts[key]
@@ -7465,7 +7465,7 @@ def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
             # hash itself matches exactly.
             or (replayed_payload_sha != payload_sha
                 and not str(artifacts.get('parserVersion') or '').strip()
-                and not sealed_layoutless_text)
+                and not has_text_only_source_record)
     ):
         raise PublishDataValidationError(f'{paper_id} source-runtime.json structuredArtifacts 未绑定 sealed TXT')
     text_manifest = manifest.get('text')
@@ -7594,11 +7594,11 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
         return
     papers = payload.get('papers')
     run_claimed = 'dailyFreshSourceRun' in payload
-    provenance_claimed = isinstance(papers, list) and any(
+    claims_fresh_source_record = isinstance(papers, list) and any(
         isinstance(paper, dict) and 'freshRewriteProvenance' in paper
         for paper in papers
     )
-    if not run_claimed and not provenance_claimed:
+    if not run_claimed and not claims_fresh_source_record:
         return
     if not isinstance(papers, list) or not papers:
         raise PublishDataValidationError('dailyFreshSourceRun 要求非空 papers 数组')
@@ -9342,7 +9342,7 @@ def manual_review_page_dir(date_str):
     return CURRENT_DIR / 'manual-blog-review-pages' / _publication_state_stem(date_str)
 
 
-def manual_review_attestation_path(date_str):
+def manual_review_statement_path(date_str):
     return CURRENT_DIR / f'manual-review-attestation-{_publication_state_stem(date_str)}.json'
 
 
@@ -11456,7 +11456,7 @@ def has_publication_evidence_for_generation(
 
 def save_review_receipt(
     date_str, publish_paths, hugo_gate, expected_base_head=None,
-    generation_manifest=None, reviewed_results=None, review_provenance=None,
+    generation_manifest=None, reviewed_results=None, manual_review_record=None,
 ):
     """Persist the exact reviewed blog manifest for a later push-only command."""
     if generation_manifest is None:
@@ -11584,25 +11584,25 @@ def save_review_receipt(
         'publicationScope': publication_scope_value,
         'files': files,
     }
-    if review_provenance is not None:
-        if not isinstance(review_provenance, dict):
+    if manual_review_record is not None:
+        if not isinstance(manual_review_record, dict):
             raise PublishDataValidationError('review_provenance 必须是对象')
-        provenance = dict(review_provenance)
-        provenance.setdefault('generationManifestSha256', receipt['generationManifestSha256'])
-        provenance.setdefault('baseHead', current_head)
-        provenance.setdefault('fileCount', len(files))
-        provenance.setdefault('reviewedPathSetSha256', _reviewed_path_set_sha256(files))
-        provenance.setdefault('reviewProtocolFingerprint', receipt['reviewProtocolFingerprint'])
+        manual_review_record_copy = dict(manual_review_record)
+        manual_review_record_copy.setdefault('generationManifestSha256', receipt['generationManifestSha256'])
+        manual_review_record_copy.setdefault('baseHead', current_head)
+        manual_review_record_copy.setdefault('fileCount', len(files))
+        manual_review_record_copy.setdefault('reviewedPathSetSha256', _reviewed_path_set_sha256(files))
+        manual_review_record_copy.setdefault('reviewProtocolFingerprint', receipt['reviewProtocolFingerprint'])
         receipt['reviewMode'] = MANUAL_REVIEW_MODE
-        receipt['reviewProvenance'] = provenance
-        provenance_error = _manual_review_provenance_error(
+        receipt['reviewProvenance'] = manual_review_record_copy
+        manual_review_error = _manual_review_record_error(
             receipt,
             date_str=date_str,
             generation_manifest_sha256=receipt['generationManifestSha256'],
             expected_base_head=current_head,
         )
-        if provenance_error:
-            raise PublishDataValidationError(provenance_error)
+        if manual_review_error:
+            raise PublishDataValidationError(manual_review_error)
     path = review_receipt_path(date_str)
     atomic_write_json(path, receipt, ensure_ascii=False, indent=2)
     return path
@@ -12101,14 +12101,14 @@ def load_verified_review_receipt(date_str):
         or _sha256_file(manifest_path) != expected_manifest_sha
     ):
         raise PublishDataValidationError('审查凭证绑定的 generation manifest 缺失或已变化')
-    provenance_error = _manual_review_provenance_error(
+    manual_review_error = _manual_review_record_error(
         receipt,
         date_str=date_str,
         generation_manifest_sha256=expected_manifest_sha,
         expected_base_head=receipt.get('baseHead'),
     )
-    if provenance_error:
-        raise PublishDataValidationError(provenance_error)
+    if manual_review_error:
+        raise PublishDataValidationError(manual_review_error)
     try:
         generation_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -12203,12 +12203,12 @@ def load_verified_review_receipt(date_str):
     if seen != set(expectations):
         raise PublishDataValidationError('审查凭证文件集合与 generation manifest 不一致')
     if receipt.get('reviewMode') == MANUAL_REVIEW_MODE:
-        provenance = receipt['reviewProvenance']
-        if provenance.get('fileCount') != len(records):
+        manual_review_record = receipt['reviewProvenance']
+        if manual_review_record.get('fileCount') != len(records):
             raise PublishDataValidationError('manual_complete provenance fileCount 与凭证不一致')
-        if provenance.get('reviewedPathSetSha256') != _reviewed_path_set_sha256(records):
+        if manual_review_record.get('reviewedPathSetSha256') != _reviewed_path_set_sha256(records):
             raise PublishDataValidationError('manual_complete provenance 文件集合哈希不一致')
-        if provenance.get('reviewProtocolFingerprint') != receipt.get('reviewProtocolFingerprint'):
+        if manual_review_record.get('reviewProtocolFingerprint') != receipt.get('reviewProtocolFingerprint'):
             raise PublishDataValidationError('manual_complete provenance 协议指纹不一致')
     return paths, path
 
@@ -12382,7 +12382,7 @@ def generate_main(options=None):
     publish_all = options['publish_all']
     excluded_ids = options['excluded_ids']
     include_id = options.get('include_id')
-    sealed_tutorial_preview = bool(options.get('sealed_tutorial_preview'))
+    use_tutorial_preview = bool(options.get('sealed_tutorial_preview'))
     legacy_v5_maintenance = bool(options.get('legacy_v5_maintenance'))
 
     try:
@@ -12392,17 +12392,17 @@ def generate_main(options=None):
         print(f"\n❌ 发布目标校验失败: {exc}")
         sys.exit(1)
     print(f"📅 博客日期: {today}")
-    sealed_preview = None
+    tutorial_preview = None
     input_source_reference = None
-    if sealed_tutorial_preview:
+    if use_tutorial_preview:
         publication_mode = SEALED_TUTORIAL_PREVIEW_MODE
         normalized_include = normalize_publish_arxiv_id(include_id)
         try:
-            sealed_preview = load_sealed_tutorial_preview(today, normalized_include)
+            tutorial_preview = load_verified_tutorial_preview(today, normalized_include)
         except PublishDataValidationError as exc:
             print(f"\n❌ 教程预览检查失败，未读取正式分析记录，也未写入博客页面：{exc}")
             sys.exit(1)
-        papers = [sealed_preview['snapshot']]
+        papers = [tutorial_preview['snapshot']]
         normalized_excluded = []
         print(
             f'🔒 单篇教程预览：{normalized_include}；'
@@ -12459,7 +12459,7 @@ def generate_main(options=None):
             f'目标批次 {today} 没有论文可生成；已阻止复用该日期的旧 generation/review/push 证据'
         )
 
-    if sealed_preview is None:
+    if tutorial_preview is None:
         try:
             papers = validate_papers_for_publish(papers)
             papers = apply_publish_image_exclusions(papers)
@@ -12469,14 +12469,14 @@ def generate_main(options=None):
         except PublishDataValidationError as exc:
             print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
             sys.exit(1)
-    if sealed_preview is not None:
+    if tutorial_preview is not None:
         # A single-page sealed release has no digest index to rank.  Its score
         # is already rendered and hash-bound inside post.md; reparsing a
         # canonical analysis here would violate the cold-start boundary.
         scored, unscored = [], list(papers)
     else:
         scored, unscored = score_and_sort(papers)
-    baseline_label = 'sealed tutorial preview' if sealed_preview else 'analysis 重解析结果'
+    baseline_label = 'sealed tutorial preview' if tutorial_preview else 'analysis 重解析结果'
     print(f"✅ 发布数据预检通过: {len(papers)} 篇论文以 {baseline_label} 为发布基线")
 
     input_fingerprint = generation_input_fingerprint(
@@ -12506,7 +12506,7 @@ def generate_main(options=None):
             '无法全部复核；已保留既有 generation/receipt，拒绝重新生成覆盖。'
             '请先恢复网络与原 remote，或人工核查证据漂移'
         )
-    if sealed_preview is None:
+    if tutorial_preview is None:
         try:
             if publication_mode is None:
                 publication_mode = infer_generation_publication_mode(papers)
@@ -12556,8 +12556,8 @@ def generate_main(options=None):
             slug = record['filename'][len(today) + 1:-3]
             paper_slugs[paper.get('arxivId', '')] = slug
             if record.get('status') != 'generated':
-                if sealed_preview is not None:
-                    paper_md = sealed_preview['postText']
+                if tutorial_preview is not None:
+                    paper_md = tutorial_preview['postText']
                     slug = paper_slug(paper.get('title', ''), paper.get('arxivId', ''))
                 else:
                     paper_md, slug = generate_paper_page(paper, today, category)
@@ -12584,8 +12584,8 @@ def generate_main(options=None):
                     raise PublishDataValidationError(
                         f'论文页 generation checkpoint 损坏: {record["filename"]}'
                     )
-                if sealed_preview is not None:
-                    if paper_file.read_text(encoding='utf-8') != sealed_preview['postText']:
+                if tutorial_preview is not None:
+                    if paper_file.read_text(encoding='utf-8') != tutorial_preview['postText']:
                         raise PublishDataValidationError(
                             f'{paper.get("arxivId", "unknown")} sealed generation checkpoint '
                             '不再逐字等于 post.md'

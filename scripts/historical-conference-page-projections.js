@@ -38,7 +38,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     if (!options.apply) return { status: 'dry-run', projections: artifact.projections.length,
         projectedPages: artifact.projections.reduce((count, item) => count + item.pages.length, 0),
         unmatchedPages: artifact.unmatchedPages.length, artifactSha256: artifact.artifactSha256 };
-    const written = api.writeProjectionArtifact({ root: files.historicalConferencePageProjectionDir,
+    const written = api.writeConferencePageMappingRecord({ root: files.historicalConferencePageProjectionDir,
         outputName: options.outputName, artifact });
     return { status: written.status, filename: written.filename, projections: artifact.projections.length,
         projectedPages: artifact.projections.reduce((count, item) => count + item.pages.length, 0),

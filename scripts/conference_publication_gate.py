@@ -109,7 +109,7 @@ class Page(HTMLParser):
             if self.cell is not None:
                 self.cell.append(data)
 
-    def projection(self):
+    def visible_content_fields(self):
         # Browser/minifier whitespace does not alter the approved content.
         return {'text': re.sub(r'\s+', '', ''.join(self.text)), 'images': self.images,
                 'tables': [[re.sub(r'\s+', '', cell) for cell in table] for table in self.tables]}
@@ -260,9 +260,9 @@ def inspect_html(markdown, rendered, image_records, image_base):
             if any(not re.search(r'(?<![\d.])' + re.escape(token) + r'(?![A-Za-z\d.])', actual)
                    for token in tokens):
                 raise ValueError('HTML 表格数字/单位未在对应单元格保留')
-    projection = page.projection()
+    visible_content = page.visible_content_fields()
     return {'url': url, 'htmlSha256': digest(rendered.encode()),
-            'projectionSha256': digest(json.dumps(projection, ensure_ascii=False, sort_keys=True).encode()),
+            'projectionSha256': digest(json.dumps(visible_content, ensure_ascii=False, sort_keys=True).encode()),
             'imageUrls': page.images, 'tableCount': len(page.tables), 'formulaCount': len(formulas),
             'layers': {'htmlMechanical': 'passed', 'semanticReview': 'not_performed',
                        'visualInspection': 'not_performed', 'mathBrowserExecution': 'not_performed'}}
@@ -360,8 +360,8 @@ def verify_publication_urls(pages, image_records, image_base):
         if result['contentType'] != 'text/html' or result['url'] != expected['url']:
             raise ValueError('线上页面类型/最终 URL 不匹配')
         page = Page(result['body'].decode('utf-8'))
-        projection = digest(json.dumps(page.projection(), ensure_ascii=False, sort_keys=True).encode())
-        if projection != expected['projectionSha256'] or page.canonicals != [expected['url']] \
+        visible_content_sha256 = digest(json.dumps(page.visible_content_fields(), ensure_ascii=False, sort_keys=True).encode())
+        if visible_content_sha256 != expected['projectionSha256'] or page.canonicals != [expected['url']] \
                 or (expected['formulaCount'] and not page.math_runtime):
             raise ValueError('线上正文/图片/表格/公式未匹配已审 HTML')
 

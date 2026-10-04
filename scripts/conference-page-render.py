@@ -152,7 +152,7 @@ def paper_source_resource_binding(resource):
         and normalized_repository_source_token(token) == original
 
 
-def sealed_reader_sources(paper, manifest, stage, capabilities):
+def validate_reader_source_records(paper, manifest, stage, capabilities):
     plan, article = paper.get('apiReaderPlan'), paper.get('apiReaderArticle')
     authors, resources = paper.get('apiReaderAuthors'), paper.get('apiReaderResources')
     contracts = (manifest or {}).get('contracts') or {}
@@ -167,7 +167,7 @@ def sealed_reader_sources(paper, manifest, stage, capabilities):
     figures = paper.get('apiReaderFigures')
     source_bindings_sha = stable_sha({
         'tableBindings': plan.get('tableBindings'), 'formulaBindings': plan.get('formulaBindings')})
-    common_seal = paper.get('apiReaderArticleSha256') == article_sha and stage.get('articleSha256') == article_sha \
+    common_records_match = paper.get('apiReaderArticleSha256') == article_sha and stage.get('articleSha256') == article_sha \
         and paper.get('apiReaderPlanSha256') == plan_sha and stage.get('planSha256') == plan_sha \
         and plan.get('sourceBindingsSha256') == source_bindings_sha \
         and stage.get('sourceBindingsContractVersion') == SOURCE_BINDINGS_CONTRACT \
@@ -175,25 +175,25 @@ def sealed_reader_sources(paper, manifest, stage, capabilities):
         and re.fullmatch(r'[a-f0-9]{64}', str(stage.get('structuredArtifactsSha256') or '')) \
         and stage.get('structuredArtifactsSha256') == ((manifest or {}).get('sourceAcquisition') or {}).get('structuredArtifactsSha256')
     if capabilities == WEAK:
-        sealed = common_seal and figures == [] and plan.get('figurePlacements') == [] \
+        reader_records_match = common_records_match and figures == [] and plan.get('figurePlacements') == [] \
             and plan.get('tableBindings') == [] and plan.get('formulaBindings') == [] \
             and stage.get('figureCount') == 0 and stage.get('tableBindingCount') == 0 \
             and stage.get('formulaBindingCount') == 0 and stage.get('figuresSha256') == stable_sha([])
     elif capabilities in (FULL, PDF_VISUAL):
-        sealed = common_seal and isinstance(figures, list) and isinstance(plan.get('figurePlacements'), list) \
+        reader_records_match = common_records_match and isinstance(figures, list) and isinstance(plan.get('figurePlacements'), list) \
             and isinstance(plan.get('tableBindings'), list) and isinstance(plan.get('formulaBindings'), list) \
             and stage.get('figureCount') == len(figures) \
             and stage.get('tableBindingCount') == len(plan['tableBindings']) \
             and stage.get('formulaBindingCount') == len(plan['formulaBindings']) \
             and stage.get('figuresSha256') == stable_sha(figures)
         if capabilities == PDF_VISUAL:
-            sealed = sealed and plan.get('formulaBindings') == [] and all(
+            reader_records_match = reader_records_match and plan.get('formulaBindings') == [] and all(
                 isinstance(binding, dict) and binding.get('sourceType') == 'source_quotes'
                 and binding.get('sourceTableOrdinal') is None
                 for binding in plan.get('tableBindings', []))
     else:
-        sealed = False
-    if not sealed:
+        reader_records_match = False
+    if not reader_records_match:
         raise ValueError('conference Reader bytes/plan/structure capability is not sealed; unavailable structure cannot be inferred')
     if not isinstance(authors, dict) or contracts.get('apiReaderAuthorIdentity') != 'api-reader-author-identity-v1' \
             or stable_sha(authors) != stage.get('readerAuthorsSha256') \
@@ -257,7 +257,7 @@ def score_line(parsed):
     return f'**{score:.1f}/10** | {detail}'
 
 
-def resource_projection(resources):
+def render_resource_lines(resources):
     labels = {'code': '代码相关资源', 'model': '模型相关资源', 'dataset': '数据相关资源',
               'demo': '演示资源', 'reproduction': '复现相关资源', 'third_party': '第三方资源'}
     statuses = {'available': '链接可访问', 'unavailable': '链接不可用',
@@ -286,7 +286,7 @@ def resource_projection(resources):
     return lines
 
 
-def scoring_projection(paper, parsed, stage):
+def render_scoring_notes(paper, parsed, stage):
     lines = ['评分属于系统判断，不是论文实验结果；八维数值与总分见页首，原始审计记录保留在后端。']
     for label, value in (('评分规则', paper.get('scoringRubricVersion') or parsed.get('scoringRubricVersion')),
                          ('评分模型', stage.get('model')), ('评分请求协议', stage.get('protocol'))):
@@ -310,7 +310,7 @@ def scoring_stability_is_resolved(stage):
         and re.fullmatch(r'[a-f0-9]{64}', str(resolution.get('secondAuditSha256') or '')) is not None
 
 
-def formula_image_projection(evidence, paper_id, conference_id, pdf_url):
+def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
     """Project authenticated PDF crops as visible images, never display TeX."""
     if evidence is None:
         return [], []
@@ -480,7 +480,7 @@ def render_packet(packet):
         raise ValueError('会议论文的标签记录或来源能力记录无效，标签记录不属于当前论文，或来源能力不在允许范围内。')
     manifest = paper.get('analysisManifest')
     stage = ((manifest or {}).get('stages') or {}).get('apiReaderArticle') or {}
-    plan, article, authors, resources = sealed_reader_sources(paper, manifest, stage, capabilities)
+    plan, article, authors, resources = validate_reader_source_records(paper, manifest, stage, capabilities)
     assets = []
     if capabilities in (FULL, PDF_VISUAL):
         asset_by_url = {}
@@ -582,7 +582,7 @@ def render_packet(packet):
         raise ValueError('official conference publication URLs are not canonical-bound')
     if capabilities == WEAK and packet.get('formulaEvidence'):
         raise ValueError('weak source cannot carry formula image evidence')
-    formula_lines, formula_assets = formula_image_projection(
+    formula_lines, formula_assets = render_formula_image_section(
         packet.get('formulaEvidence'), paper_id, conference['id'], pdf_url)
     assets.extend(formula_assets)
     publisher = load_publish_to_blog()
@@ -636,9 +636,9 @@ def render_packet(packet):
     for author in authors:
         lines.append(f'- {author["name"]}：{"；".join(author["affiliations"])}')
     lines.extend(['', '## 📌 核心摘要', '', summary, '', '## 🔗 开源与复现资源', '',
-                  *resource_projection(resources), '', '## 🧭 深度解读', '', article.strip(), '',
+                  *render_resource_lines(resources), '', '## 🧭 深度解读', '', article.strip(), '',
                   *formula_lines,
-                  '## ⚖️ 评分明细', '', *scoring_projection(paper, parsed, scoring_stage), ''])
+                  '## ⚖️ 评分明细', '', *render_scoring_notes(paper, parsed, scoring_stage), ''])
     lines.extend(['---', '', f'[← 返回 {conference["id"]} 论文汇总]({packet["aggregateUrl"]})', ''])
     lines[-1:] = [hide_arxiv_links(line) for line in lines[-1:]]
     markdown = repair_formula_delimiters(hide_arxiv_links('\n'.join(lines)))

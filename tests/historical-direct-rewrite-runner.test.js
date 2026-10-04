@@ -8,7 +8,7 @@ const path = require('node:path');
 const test = require('node:test');
 const planner = require('../scripts/lib/historical-direct-rewrite-plan.js');
 const localSources = require('../scripts/lib/historical-conference-local-sources.js');
-const projections = require('../scripts/lib/historical-conference-page-projections.js');
+const conferencePageMappingsApi = require('../scripts/lib/historical-conference-page-projections.js');
 const runnerModule = require('../scripts/lib/historical-direct-rewrite-runner.js');
 const runner = { ...runnerModule, runDirectRewrite: (options, dependencies = {}) =>
     runnerModule.runDirectRewrite(options, withPublicationMetadata(dependencies)) };
@@ -232,7 +232,7 @@ function fixture(t) {
                 acquisition, pdfIdentityBindingSha256 }, sourceBindingSha256 }] }
     ] };
     const catalogSha = sha(Buffer.from(JSON.stringify(catalog)));
-    const conferencePageProjections = projections.buildConferencePageProjections({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
+    const conferencePageProjections = conferencePageMappingsApi.buildConferencePageMappings({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
     const plan = planner.buildDirectRewritePlan({ catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections });
     // Most runner tests exercise analysis behavior and therefore start after a
     // simulated successful scheduler phase. Dedicated prerequisite tests below

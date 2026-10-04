@@ -16,7 +16,7 @@ const {
     updateJsonFileLocked,
     mergePapersById,
     isSuccessfulAnalysisRecord,
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
@@ -220,7 +220,7 @@ async function reanalyzeAll(options = {}) {
 
     const finalPayload = updateJsonFileLocked(DATA_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const { remaining: remainingFailed, status } = getCanonicalAnalysisRunSummary(currentPapers);
+        const { remaining: remainingFailed, status } = getAnalysisRunSummary(currentPapers);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: getBeijingISOString(),

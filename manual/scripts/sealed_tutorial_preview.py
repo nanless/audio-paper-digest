@@ -103,7 +103,7 @@ def _find_filtered_metadata(date_str, paper_id, current_dir):
     return matches[0], filtered_path
 
 
-def load_sealed_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR):
+def load_verified_tutorial_preview(date_str, paper_id, *, current_dir=CURRENT_DIR):
     """按原字节读取 post.md，不改写其正文，返回页面文本及不含分析正文的发布记录。"""
     paper_id = normalize_publish_arxiv_id(paper_id)
     if not paper_id:

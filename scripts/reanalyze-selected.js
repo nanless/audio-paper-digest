@@ -22,7 +22,7 @@ const {
     mergePapersById,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
-    getCanonicalAnalysisRunSummary,
+    getAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
@@ -259,23 +259,23 @@ async function reanalyzeSelected(ids) {
         const remainingFailed = missingIds.length
             + [...foundIds].filter(id => !isSuccessfulAnalysisRecord(canonicalById.get(id))).length;
         const status = getAnalysisRunStatus({ success: idSet.size - remainingFailed }, remainingFailed);
-        const canonicalSummary = getCanonicalAnalysisRunSummary(currentPapers);
+        const analysisRunSummary = getAnalysisRunSummary(currentPapers);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             timestamp: updatedAt,
             batchDate,
-            status: canonicalSummary.status,
+            status: analysisRunSummary.status,
             papers: currentPapers,
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
                 ...data.stats,
-                analysisStatus: canonicalSummary.status,
-                remainingFailed: canonicalSummary.remaining,
+                analysisStatus: analysisRunSummary.status,
+                remainingFailed: analysisRunSummary.remaining,
                 selectedReanalyzeStatus: status,
                 selectedReanalyzeRemainingFailed: remainingFailed
             }
         };
-        if (canonicalSummary.status === 'complete') {
+        if (analysisRunSummary.status === 'complete') {
             payload.deepAnalysisCompletedAt = getBeijingISOString();
         } else {
             delete payload.deepAnalysisCompletedAt;

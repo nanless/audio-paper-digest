@@ -228,7 +228,7 @@ class BlogStageEntryTest(unittest.TestCase):
                     publish_module.publication_scope(paper_id):
                 manifest_path = publish_module.generation_manifest_path('2026-07-10')
                 shard_dir = publish_module.manual_review_page_dir('2026-07-10')
-                output_path = publish_module.manual_review_attestation_path('2026-07-10')
+                output_path = publish_module.manual_review_statement_path('2026-07-10')
             shard_dir.mkdir(parents=True)
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
             manifest_path.write_text(__import__('json').dumps({
