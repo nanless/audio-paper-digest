@@ -4447,7 +4447,7 @@ title: "Bad table"
         shadow = manual_v6_publication_fixture()
         shadow['manualV6Provenance']['runtimeMode'] = 'shadow'
         shadow['analysisManifest']['manualTakeover']['v6Provenance']['runtimeMode'] = 'shadow'
-        with self.assertRaisesRegex(PublishDataValidationError, 'shadow 禁止发布'):
+        with self.assertRaisesRegex(PublishDataValidationError, 'Manual v6 论文记录的运行模式必须为 production；shadow 模式的运行结果不能用于发布。'):
             publish_to_blog.generate_paper_page(shadow, '2026-08-28')
 
         missing_revision = manual_v6_publication_fixture()
@@ -4488,10 +4488,10 @@ title: "Bad table"
         pristine_issue = publish_to_blog.validate_final_manual_v4_markdown(
             sanitized, paper,
         ) or ''
-        self.assertNotIn('确定性渲染', pristine_issue)
+        self.assertNotIn('最终 Manual v6 页面的深度解读与正式正文块的渲染结果不一致。', pristine_issue)
         altered = sanitized.replace('完整方法由 8.4% 降到 7.1%', '完整方法由 8.4% 降到 7.2%')
         self.assertIn(
-            '确定性渲染',
+            '最终 Manual v6 页面的深度解读与正式正文块的渲染结果不一致。',
             publish_to_blog.validate_final_manual_v4_markdown(altered, paper),
         )
 

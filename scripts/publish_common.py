@@ -1597,7 +1597,7 @@ def validate_manual_v6_payload(paper):
     witness and is never a rendering input.
     """
     if not isinstance(paper, dict):
-        raise PublishDataValidationError('Manual v6 canonical 论文必须是对象')
+        raise PublishDataValidationError('Manual v6 的正式论文记录必须是 JSON 对象。')
     paper_label = str(paper.get('arxivId') or paper.get('id') or '<unknown paper>')
     paper_id = normalize_publish_arxiv_id(paper_label)
     manifest = paper.get('analysisManifest')
@@ -1630,7 +1630,7 @@ def validate_manual_v6_payload(paper):
         raise PublishDataValidationError(f'{paper_label} Manual v6 provenance 副本不一致')
     if provenance.get('runtimeMode') != 'production':
         raise PublishDataValidationError(
-            f'{paper_label} Manual v6 canonical 不是 production runtime；shadow 禁止发布'
+            f'{paper_label} Manual v6 论文记录的运行模式必须为 production；shadow 模式的运行结果不能用于发布。'
         )
     if provenance.get('readerLongformContract') != MANUAL_LONGFORM_CONTRACT_VERSION_V2:
         raise PublishDataValidationError(f'{paper_label} Manual v6 readerLongformContract 非法')
@@ -1664,7 +1664,7 @@ def validate_manual_v6_payload(paper):
         if not isinstance(artifact.get(field), list):
             raise PublishDataValidationError(f'{paper_label} ArtifactIndex.{field} 缺失')
     if artifact.get('images') != artifact.get('figures'):
-        raise PublishDataValidationError(f'{paper_label} ArtifactIndex images/figures 兼容投影不一致')
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex 中兼容字段 images 与 figures 的内容不一致。')
     payload = {key: value for key, value in artifact.items()
                if key not in {'artifactIndexSha256', 'outputSha256'}}
     artifact_sha = _manual_v6_hash(payload)
@@ -3772,11 +3772,11 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
     v6_payload = None
     if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V6:
         if not isinstance(paper, dict):
-            return '最终 Manual v6 页面缺少 authoritative canonical paper'
+            return '核验最终 Manual v6 页面时，必须提供对应的正式论文记录。'
         try:
             v6_payload = validate_manual_v6_payload(paper)
         except PublishDataValidationError as exc:
-            return f'最终 Manual v6 canonical 闭环无效: {exc}'
+            return f'最终 Manual v6 页面的正式论文记录未通过验证：{exc}'
         provenance = v6_payload['provenance']
         marker_values = {
             'paper_digest_v6_runtime_mode': 'production',
@@ -3810,7 +3810,7 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
             '\n<details>\n<summary>📎 论文与评分元数据</summary>', 1,
         )[0].strip()
         if actual_article != expected_article:
-            return '最终 Manual v6 深度正文不再是 canonical blocks 的确定性渲染'
+            return '最终 Manual v6 页面的深度解读与正式正文块的渲染结果不一致。'
         scoring_reason = str((paper.get('parsed') or {}).get('scoringReason') or '').strip()
         scoring_section = _extract_analysis_section(
             reader_view, '评分依据与证据（展开查看）',
@@ -3821,7 +3821,7 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
             scoring_reason, flags=re.MULTILINE,
         )).strip()
         if not expected_scoring or expected_scoring not in scoring_section:
-            return '最终 Manual v6 评分依据没有与 canonical scoringReason 闭环'
+            return '正式评分记录的展示内容为空，或最终 Manual v6 页面的评分依据没有完整包含这份内容。'
         for table in v6_payload['deterministicTables']:
             if table not in actual_article:
                 return '最终 Manual v6 页面遗漏或改写了 ArtifactIndex 确定性表格'
@@ -4866,7 +4866,7 @@ def _open_publish_json_with_account_pool(
         ) from exc
     if api_type != expected_api_type or actual_canonical_url != expected_canonical_url:
         raise LlmAccountPoolConfigError(
-            'LLM 请求 URL 与声明的 endpoint/model canonical 路由不一致，已拒绝发送凭据'
+            'LLM 请求地址或接口类型与配置的端点、模型不匹配，未发送凭据。'
         )
     state_file = Path(state_file or LLM_ACCOUNT_POOL_STATE_FILE)
     if len(api_keys) > 1 and not is_opencode_go_endpoint(endpoint):

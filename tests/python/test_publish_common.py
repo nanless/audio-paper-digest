@@ -1831,7 +1831,7 @@ primary_method_tag: #基准测试
     def test_credential_helper_rejects_api_url_identity_drift_before_headers(self):
         with mock.patch('publish_common.build_publish_headers') as build_headers:
             with self.assertRaisesRegex(
-                    LlmAccountPoolConfigError, 'canonical 路由不一致'):
+                    LlmAccountPoolConfigError, 'LLM 请求地址或接口类型与配置的端点、模型不匹配，未发送凭据。'):
                 _open_publish_json_with_account_pool(
                     api_url='https://evil.example/v1/chat/completions',
                     endpoint='https://api.example.com/v1',
