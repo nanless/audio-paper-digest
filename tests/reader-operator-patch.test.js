@@ -214,7 +214,7 @@ function installSignedParent(f, mutate = () => {}) {
                     sourceBindingsContractVersion: plan.sourceBindingsContract, sourceBindingsSha256: plan.sourceBindingsSha256,
                     sourceBindingsSourceTextSha256: sourceSha256, tableBindingCount: 0, formulaBindingCount: 0,
                     structuredArtifactsSha256: provenance.structuredArtifactsSha256 } } } };
-    assert.equal(require('../scripts/analysis-engine.js').apiReaderV3BindsCanonical(parent), true);
+    assert.equal(require('../scripts/analysis-engine.js').hasValidApiReaderV3Records(parent), true);
     mutate(parent);
     fs.writeFileSync(path.join(f.runDir, 'analysis.json'), JSON.stringify({ papers: [parent] }), { mode: 0o600 });
     return parent;
@@ -235,7 +235,7 @@ test('signed-revision scratch patches preserve successful parent bytes and every
     const candidateBytes = fs.readFileSync(f.candidateFile), identitySha = repair.hashDraft(f.identity);
     const result = await f.apply(); assert.equal(result.status, 'failed');
     assert.deepEqual(fs.readFileSync(parentPath), parentBytes);
-    assert.equal(require('../scripts/analysis-engine.js').apiReaderV3BindsCanonical(parent), true);
+    assert.equal(require('../scripts/analysis-engine.js').hasValidApiReaderV3Records(parent), true);
     const saved = repair.loadFailedCandidate(f.candidateDir, f.identity);
     for (const key of Object.keys(f.payload).filter(key => !['draft', 'rawDraft'].includes(key))) {
         assert.deepEqual(saved[key], f.payload[key]);

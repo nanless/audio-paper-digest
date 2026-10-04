@@ -176,7 +176,7 @@ async function reanalyzeSelected(ids) {
     const analyzedResults = [];
     const attemptResults = [];
     let digestStatusUpdated = 0;
-    const runSealedDailyAnalysis = () => analyzeBatch(toReanalyze, {
+    const runAnalysisFromDailySources = () => analyzeBatch(toReanalyze, {
         checkpointFilePath: RESULT_FILE,
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(RESULT_FILE);
@@ -227,7 +227,7 @@ async function reanalyzeSelected(ids) {
         }
     });
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(
-        dailySourcePlan, runSealedDailyAnalysis
+        dailySourcePlan, runAnalysisFromDailySources
     );
 
     // 合并结果：用新结果替换旧结果
@@ -255,9 +255,9 @@ async function reanalyzeSelected(ids) {
 
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const canonicalById = new Map(currentPapers.map(paper => [normalizedId(paper), paper]));
+        const savedAnalysisById = new Map(currentPapers.map(paper => [normalizedId(paper), paper]));
         const remainingFailed = missingIds.length
-            + [...foundIds].filter(id => !isSuccessfulAnalysisRecord(canonicalById.get(id))).length;
+            + [...foundIds].filter(id => !isSuccessfulAnalysisRecord(savedAnalysisById.get(id))).length;
         const status = getAnalysisRunStatus({ success: idSet.size - remainingFailed }, remainingFailed);
         const analysisRunSummary = getAnalysisRunSummary(currentPapers);
         const payload = {

@@ -115,7 +115,7 @@ function gitState(blogRepo) {
     return state;
 }
 
-function canonicalPapers(payload) {
+function getSavedAnalysisPapers(payload) {
     if (!payload || Array.isArray(payload) || !Array.isArray(payload.papers)
         || !Number.isSafeInteger(payload.generation) || payload.generation < 0) throw new Error('Canonical needs papers and a safe generation');
     const ids = payload.papers.map(idOf);
@@ -126,7 +126,7 @@ function canonicalPapers(payload) {
 function paperDate(paper, fallback) { return paper.fetchBatchDate || paper.batchDate || String(paper.fetchedAt || '').slice(0, 10) || fallback; }
 
 function targetCoverage(payload, ctx) {
-    const papers = canonicalPapers(payload);
+    const papers = getSavedAnalysisPapers(payload);
     if (payload.batchDate !== ctx.date) throw new Error('Canonical batch date differs from the rewrite baseline');
     const selected = papers.filter(paper => ctx.paperIds.includes(idOf(paper)));
     const dateIds = papers.filter(paper => paperDate(paper, payload.batchDate) === ctx.date).map(idOf).sort();
@@ -384,7 +384,7 @@ function promoteRun(options) {
     const inputSha256 = jsonHash(analysis);
     return withBatchPaperLocks(ctx, options, () => withFileLockSync(ctx.canonicalPath, () => {
         const canonicalRaw = readBytes(ctx.canonicalPath); const canonical = JSON.parse(canonicalRaw);
-        canonicalPapers(canonical);
+        getSavedAnalysisPapers(canonical);
         validateNewBatch();
         const intentPath = path.join(ctx.runDir, 'promotion.json');
         const priorIntent = fs.existsSync(intentPath) ? readJson(intentPath) : null;

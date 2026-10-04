@@ -1187,7 +1187,7 @@ function executionDirectory(root, item, sourceDescriptor) {
     return path.join(safeDirectory(root, true, 'execution root'), item.runId,
         item.route.kind === 'arxiv-fresh-fetch' ? sourceDescriptor.sourceRunIdentitySha256 : 'conference-local');
 }
-function directProvenanceFor(item, sourceDescriptor) {
+function buildDirectSourceRecord(item, sourceDescriptor) {
     if (!sourceDescriptor || sourceDescriptor.paperId !== item.paperId
         || !SHA.test(String(sourceDescriptor.textSha256 || ''))
         || !SHA.test(String(sourceDescriptor.structuredArtifactsSha256 || ''))
@@ -1207,7 +1207,7 @@ function directProvenanceFor(item, sourceDescriptor) {
 }
 
 function validateInterruptedSourceDescriptor(item, sourceDescriptor, generation) {
-    directProvenanceFor(item, sourceDescriptor);
+    buildDirectSourceRecord(item, sourceDescriptor);
     const sourceFields = item.route.kind === 'arxiv-fresh-fetch'
         ? ['kind', 'paperId', 'generation', 'sourceId', 'textSha256', 'structuredArtifactsSha256',
             'pdfSha256', 'sourceManifestSha256', 'sourceBinding', 'sourceRunIdentitySha256',
@@ -1408,10 +1408,10 @@ function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis 
     if (!engine.isSuccessfulAnalysisRecord(analysis)) {
         fail(`${item.paperId} analysis is incomplete or failed; refusing staging`);
     }
-    if (!engine.apiReaderV3BindsCanonical(analysis)) {
+    if (!engine.hasValidApiReaderV3Records(analysis)) {
         fail(`${item.paperId} API Reader/provenance is incomplete; refusing staging`);
     }
-    const expected = directProvenanceFor(item, sourceDescriptor);
+    const expected = buildDirectSourceRecord(item, sourceDescriptor);
     if (!analysis.freshRewriteProvenance || !analysis.analysisManifest?.freshRewriteProvenance
         || stableHash(analysis.freshRewriteProvenance) !== stableHash(expected)
         || stableHash(analysis.analysisManifest.freshRewriteProvenance) !== stableHash(expected)
@@ -1986,7 +1986,7 @@ module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOV
     reconcileLegacyPaperLockReclaimAudits, hasRecoverableAnalysisState, sourcePrerequisiteSnapshot,
     priorPreprintAnalysisDisclosure, extractConferenceSource, ephemeralArxivMaterializer, ephemeralArxivPrimaryImageDownloader,
     withEphemeralConferenceFigures, selectConferenceVisualPages, renderConferencePdfPages,
-    directProvenanceFor, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
+    buildDirectSourceRecord, assertDirectAnalysisReadyForStaging, replayDirectPageStaging,
     validateInterruptedSourceDescriptor, recoverInterruptedRegistryEntry,
     replayCompletedAnalysisForStaging, resealCompletedAnalysisSurfaceRepair,
     stageDirectExecution, defaultAnalyze, sealedFailureHandoff, runDirectRewrite };

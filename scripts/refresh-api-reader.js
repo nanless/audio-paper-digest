@@ -21,7 +21,7 @@ const {
     updateJsonFileLocked,
     isSuccessfulAnalysisRecord,
     withPaperAnalysisLock,
-    apiReaderV3BindsCanonical,
+    hasValidApiReaderV3Records,
     getAnalysisRunSummary
 } = require('./analysis-engine.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
@@ -133,11 +133,11 @@ function paperRefreshInputIdentity(paper) {
 }
 
 function hasCurrentReaderV3(paper) {
-    return apiReaderV3BindsCanonical(paper)
+    return hasValidApiReaderV3Records(paper)
         && !paper?.latestAnalysisAttemptError;
 }
 
-function resolvePersistedCanonicalBatchDate(payload) {
+function resolveSavedAnalysisBatchDate(payload) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '';
     const explicit = normalizeCompatibleBatchDate(payload.batchDate);
     if (explicit) return explicit;
@@ -163,9 +163,9 @@ function resolveBatchRefreshIds(options) {
         throw new Error('按日期全量刷新时，分析结果必须是包含论文数组的对象。');
     }
     const papers = payload.papers;
-    const canonicalBatchDate = resolvePersistedCanonicalBatchDate(payload);
-    if (canonicalBatchDate !== options.date) {
-        throw new Error(`分析结果的批次日期为 ${canonicalBatchDate || '未知'}，不能按 ${options.date} 全量刷新。`);
+    const savedBatchDate = resolveSavedAnalysisBatchDate(payload);
+    if (savedBatchDate !== options.date) {
+        throw new Error(`分析结果的批次日期为 ${savedBatchDate || '未知'}，不能按 ${options.date} 全量刷新。`);
     }
     const currentReaderCheck = options.isCurrentReaderFn || hasCurrentReaderV3;
     const pending = options.surfaceBindingsOnly
@@ -285,7 +285,7 @@ async function refreshApiReader(targetId, options = {}) {
                 : '读者文章';
         console.log(`📄 只刷新${refreshLabel}: ${storedAnalysisRecord.title || requested}`);
         const refreshOperations = options.operations || {};
-        const refreshFromSealedSource = async sourceDetails => options.authorsOnly
+        const refreshFromDailySource = async sourceDetails => options.authorsOnly
             ? (refreshOperations.authors || refreshApiReaderAuthorsFromSource)(storedAnalysisRecord, sourceDetails)
             : options.figuresOnly
                 ? await (refreshOperations.figures || refreshApiReaderFiguresFromSource)(storedAnalysisRecord, sourceDetails)
@@ -383,7 +383,7 @@ async function refreshApiReader(targetId, options = {}) {
             dailyFreshSources.withDailyFreshPaperSource(
                 lockedDailySourcePlan,
                 storedAnalysisRecord,
-                options.surfaceBindingsOnly ? repairSurfaceBindings : refreshFromSealedSource,
+                options.surfaceBindingsOnly ? repairSurfaceBindings : refreshFromDailySource,
                 options
             )
         );
@@ -470,7 +470,7 @@ module.exports = {
     parseRefreshCliArgs,
     resolveBatchRefreshIds,
     hasCurrentReaderV3,
-    resolvePersistedCanonicalBatchDate,
+    resolveSavedAnalysisBatchDate,
     paperRefreshInputIdentity,
     canRepairScoringBinding,
     MAX_REFRESH_CONCURRENCY

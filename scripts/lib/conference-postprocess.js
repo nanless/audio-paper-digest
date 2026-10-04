@@ -93,7 +93,7 @@ function validateReaderAndScoring(paper) {
         || contracts.apiReaderSourceBindings !== SOURCE_BINDINGS_CONTRACT
         || paper?.apiReaderPlan?.contract !== READER_CONTRACT
         || paper?.apiReaderPlan?.sourceBindingsContract !== SOURCE_BINDINGS_CONTRACT
-        || !analysisEngine.apiReaderV3BindsCanonical(paper)) {
+        || !analysisEngine.hasValidApiReaderV3Records(paper)) {
         fail('读者文章、来源绑定规则或文章与正式分析的对应记录未通过校验。');
     }
     if (scoring.status !== 'complete' || scoring.scoringContract !== SCORING_CONTRACT

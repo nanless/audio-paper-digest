@@ -140,7 +140,7 @@ async function main(options = {}) {
         return payload;
     });
 
-    const runSealedDailyAnalysis = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
+    const runAnalysisFromDailySources = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
         checkpointFilePath: RESULT_FILE,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
@@ -225,7 +225,7 @@ async function main(options = {}) {
             console.log(`   已更新批次统计到 ${RESULT_FILE}`);
         }
     });
-    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runSealedDailyAnalysis);
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
 
     console.log('\n=== 批量分析完成 ===');
     console.log(`成功: ${stats.success} | 失败: ${stats.failed} | 总计处理: ${notAnalyzed.length}`);

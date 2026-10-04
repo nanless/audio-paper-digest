@@ -11,7 +11,7 @@ const FRESHNESS_CONTRACT = 'fresh-source-analysis-v1';
 const BUNDLE_SOURCE_MODE = 'sealed-arxiv-bundle-v1';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[0-9a-f]{64}$/;
-const SEALED_RECOVERY_CAPABILITIES = new WeakMap();
+const SAVED_ANALYSIS_RECOVERY_PERMISSIONS = new WeakMap();
 const ORIGINAL_METADATA_FIELDS = Object.freeze([
     'arxivId', 'paper_id', 'title', 'authors', 'categories', 'abstract', 'source', 'sources', 'fetchedAt'
 ]);
@@ -24,18 +24,18 @@ function stableHash(value) {
 const isBundleExpectation = value => value?.sourceMode === BUNDLE_SOURCE_MODE
     && Number.isSafeInteger(value.sourceGeneration) && value.sourceGeneration >= 1;
 
-function mintSealedRecoveryCapabilities(loaded, selectedIds, sourceRecords) {
+function createSavedAnalysisRecoveryPermissions(loaded, selectedIds, sourceRecords) {
     const analysisFileSha256 = loaded.analysisFileSha256;
     if (loaded.run.status !== 'complete' || loaded.analysis.status !== 'complete'
         || loaded.run.analysisSha256 !== analysisFileSha256) return new Map();
-    const capabilities = new Map();
+    const recoveryPermissions = new Map();
     for (const paper of loaded.analysis.papers) {
         const id = paperId(paper);
         if (!selectedIds.includes(id)) continue;
         const descriptor = sourceRecords[id];
-        assertFreshProvenance(paper, loaded.run, descriptor);
+        assertFreshSourceRecordMatchesRun(paper, loaded.run, descriptor);
         const handle = Object.freeze(Object.create(null));
-        SEALED_RECOVERY_CAPABILITIES.set(handle, {
+        SAVED_ANALYSIS_RECOVERY_PERMISSIONS.set(handle, {
             runId: loaded.run.runId,
             paperId: id,
             recordSha256: stableHash(paper),
@@ -47,20 +47,20 @@ function mintSealedRecoveryCapabilities(loaded, selectedIds, sourceRecords) {
                 sourceManifestSha256: descriptor.sourceManifestSha256 } : {}),
             consumed: false
         });
-        capabilities.set(id, handle);
+        recoveryPermissions.set(id, handle);
     }
-    return capabilities;
+    return recoveryPermissions;
 }
 
-function sealedRecoveryCapabilitySnapshot(handle, options = {}) {
-    const state = handle && SEALED_RECOVERY_CAPABILITIES.get(handle);
+function getSavedAnalysisRecoveryPermissionDetails(handle, options = {}) {
+    const state = handle && SAVED_ANALYSIS_RECOVERY_PERMISSIONS.get(handle);
     if (!state || state.consumed && options.allowConsumed !== true) return null;
     const { consumed, ...snapshot } = state;
     return { ...snapshot, consumed };
 }
 
-function consumeSealedRecoveryCapability(handle, expected = {}) {
-    const state = handle && SEALED_RECOVERY_CAPABILITIES.get(handle);
+function consumeSavedAnalysisRecoveryPermission(handle, expected = {}) {
+    const state = handle && SAVED_ANALYSIS_RECOVERY_PERMISSIONS.get(handle);
     if (!state || state.consumed) return false;
     for (const [field, value] of Object.entries(expected)) {
         if (state[field] !== value) return false;
@@ -249,25 +249,25 @@ function assertAnalysisEnvelope(analysis, run, inputs) {
         if (stableHash(metadataOnly(paper)) !== stableHash(originals.get(id))) throw new Error(`${id} original metadata drifted inside fresh rewrite`);
         const hasGeneratedText = Boolean(paper.analysis || paper.analysisCheckpoint || paper.apiReaderArticle || paper.apiReaderPlan
             || Object.values(paper.analysisStageCheckpoints || {}).some(Boolean));
-        if (hasGeneratedText) assertFreshProvenance(paper, run);
+        if (hasGeneratedText) assertFreshSourceRecordMatchesRun(paper, run);
     }
 }
 
-function assertFreshProvenance(paper, run, descriptor = null) {
+function assertFreshSourceRecordMatchesRun(paper, run, descriptor = null) {
     const id = paperId(paper);
-    const provenance = paper.freshRewriteProvenance;
+    const sourceRecord = paper.freshRewriteProvenance;
     const expected = descriptor || run.sourceRecords?.[id] || run.sourceExpectations[id];
-    if (!provenance || provenance.contract !== FRESHNESS_CONTRACT || provenance.runId !== run.runId
-        || provenance.sourceOnly !== true || provenance.oldGeneratedTextIncluded !== false
-        || !expected || provenance.sourceSha256 !== expected.sourceSha256
-        || provenance.structuredArtifactsSha256 !== expected.structuredArtifactsSha256
-        || !SHA_RE.test(provenance.sourceSnapshotSha256 || '')
-        || stableHash(paper.analysisManifest?.freshRewriteProvenance || null) !== stableHash(provenance)
-        || (descriptor && provenance.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256)
-        || (isBundleExpectation(run.sourceExpectations[id]) && (!Number.isSafeInteger(provenance.sourceGeneration)
-            || provenance.sourceGeneration !== expected.sourceGeneration
-            || provenance.sourceManifestSha256 !== expected.sourceManifestSha256
-            || !SHA_RE.test(provenance.sourceManifestSha256 || '')))) {
+    if (!sourceRecord || sourceRecord.contract !== FRESHNESS_CONTRACT || sourceRecord.runId !== run.runId
+        || sourceRecord.sourceOnly !== true || sourceRecord.oldGeneratedTextIncluded !== false
+        || !expected || sourceRecord.sourceSha256 !== expected.sourceSha256
+        || sourceRecord.structuredArtifactsSha256 !== expected.structuredArtifactsSha256
+        || !SHA_RE.test(sourceRecord.sourceSnapshotSha256 || '')
+        || stableHash(paper.analysisManifest?.freshRewriteProvenance || null) !== stableHash(sourceRecord)
+        || (descriptor && sourceRecord.sourceSnapshotSha256 !== descriptor.sourceSnapshotSha256)
+        || (isBundleExpectation(run.sourceExpectations[id]) && (!Number.isSafeInteger(sourceRecord.sourceGeneration)
+            || sourceRecord.sourceGeneration !== expected.sourceGeneration
+            || sourceRecord.sourceManifestSha256 !== expected.sourceManifestSha256
+            || !SHA_RE.test(sourceRecord.sourceManifestSha256 || '')))) {
         throw new Error(`${id} generated text is not bound to this fresh run and source snapshot`);
     }
     return true;
@@ -304,14 +304,14 @@ async function prepareRewrite(options, overrides = {}) {
     if (issues.length) throw new Error(`Current data must pass read-only validation before prepare: ${issues.join('; ')}`);
     const filteredFile = readRegularJson(deps.files.filteredPapers);
     const rawFile = readRegularJson(deps.files.rawCandidates);
-    const canonicalFile = readRegularJson(deps.files.deepAnalysisResult);
+    const analysisFileRecord = readRegularJson(deps.files.deepAnalysisResult);
     const filtered = filteredFile.value;
     const raw = rawFile.value;
-    const canonical = canonicalFile.value;
+    const analysisPayload = analysisFileRecord.value;
     if (filtered?.status !== 'complete' || filtered.batchDate !== options.date || raw?.batchDate !== options.date
-        || canonical?.batchDate !== options.date) throw new Error('Fresh rewrite date does not match raw/filtered/canonical batch');
+        || analysisPayload?.batchDate !== options.date) throw new Error('Fresh rewrite date does not match raw/filtered/canonical batch');
     const ids = sortedIds(filtered.papers);
-    if (stableHash(sortedIds(canonical.papers)) !== stableHash(ids)) throw new Error('Fresh rewrite canonical and filtered sets differ');
+    if (stableHash(sortedIds(analysisPayload.papers)) !== stableHash(ids)) throw new Error('Fresh rewrite canonical and filtered sets differ');
     sortedIds(raw.papers);
     const rawById = new Map(raw.papers.map(paper => [paperId(paper), paper]));
     const papers = ids.map(id => {
@@ -324,8 +324,8 @@ async function prepareRewrite(options, overrides = {}) {
     fs.mkdirSync(runDir, { mode: 0o700 });
     try {
         const baseline = await deps.prepareBaseline({ runDir, date: options.date, paperIds: ids });
-        if (baseline.canonicalSha256 !== canonicalFile.sha256
-            || readRegularJson(deps.files.deepAnalysisResult).sha256 !== canonicalFile.sha256
+        if (baseline.canonicalSha256 !== analysisFileRecord.sha256
+            || readRegularJson(deps.files.deepAnalysisResult).sha256 !== analysisFileRecord.sha256
             || readRegularJson(deps.files.filteredPapers).sha256 !== filteredFile.sha256
             || readRegularJson(deps.files.rawCandidates).sha256 !== rawFile.sha256) {
             throw new Error('Original raw/filtered/canonical bytes changed while preparing the fresh baseline');
@@ -436,20 +436,20 @@ async function analyzeRewrite(options, overrides = {}) {
         const selectedPapers = loaded.analysis.papers.filter(paper => selectedSet.has(paperId(paper)));
         const sources = sourceState(loaded, deps);
         if (sources.missing.length) throw new Error(`Run sources phase first; missing ${sources.missing.length} verified sources`);
-        const sealedRecoveryCapabilities = productionCapabilityPath
-            ? mintSealedRecoveryCapabilities(loaded, selectedIds, sources.records)
+        const savedAnalysisRecoveryPermissions = productionCapabilityPath
+            ? createSavedAnalysisRecoveryPermissions(loaded, selectedIds, sources.records)
             : new Map();
         const analysisPath = path.join(loaded.runDir, 'analysis.json');
         const complete = paper => {
             if (!deps.isSuccessfulAnalysisRecord(paper)) return false;
-            assertFreshProvenance(paper, loaded.run, sources.records[paperId(paper)]);
+            assertFreshSourceRecordMatchesRun(paper, loaded.run, sources.records[paperId(paper)]);
             return true;
         };
         let fatal = null;
         try {
             await deps.withFreshAnalysisContext({ runId: loaded.run.runId, runDir: loaded.runDir,
                 sourceExpectations: loaded.run.sourceExpectations,
-                sealedRecoveryCapabilities,
+                savedAnalysisRecoveryPermissions,
                 refreshReaderDiagnostics: options.refreshReaderDiagnostics === true
             }, () => {
                 updateRun(loaded, current => ({ status: 'analyzing',
@@ -487,7 +487,7 @@ async function analyzeRewrite(options, overrides = {}) {
                 },
                 onPaperResultLocked: async (paper, result) => {
                     const attempted = result.result || { ...paper, analysis: null, parsed: null, error: result.error || 'Fresh analysis failed' };
-                    if (attempted.analysis || attempted.analysisCheckpoint || attempted.apiReaderArticle) assertFreshProvenance(attempted, loaded.run, sources.records[paperId(paper)]);
+                    if (attempted.analysis || attempted.analysisCheckpoint || attempted.apiReaderArticle) assertFreshSourceRecordMatchesRun(attempted, loaded.run, sources.records[paperId(paper)]);
                     deps.updateJsonFileLocked(analysisPath, current => {
                         assertAnalysisEnvelope(current, loaded.run, loaded.inputs);
                         const papers = deps.mergePapersById(current.papers, [attempted], { preserveSuccessfulAnalysis: true });
@@ -520,7 +520,7 @@ function rewriteStatus(options, overrides = {}) {
     const sources = sourceState(loaded, deps);
     const successful = loaded.analysis.papers.filter(paper => {
         if (!deps.isSuccessfulAnalysisRecord(paper)) return false;
-        assertFreshProvenance(paper, loaded.run, sources.records[paperId(paper)]);
+        assertFreshSourceRecordMatchesRun(paper, loaded.run, sources.records[paperId(paper)]);
         return true;
     }).map(paperId);
     return { runId: loaded.run.runId, date: loaded.run.date, status: loaded.run.status,
@@ -541,7 +541,7 @@ async function promoteRewrite(options, overrides = {}) {
         }
         for (const paper of loaded.analysis.papers) {
             if (!deps.isSuccessfulAnalysisRecord(paper)) throw new Error(`${paperId(paper)} is not a complete analysis`);
-            assertFreshProvenance(paper, loaded.run, sources.records[paperId(paper)]);
+            assertFreshSourceRecordMatchesRun(paper, loaded.run, sources.records[paperId(paper)]);
         }
         if (loaded.run.analysisSha256 !== readRegularJson(path.join(loaded.runDir, 'analysis.json')).sha256) throw new Error('Fresh analysis bytes changed after completion');
         const promoted = await deps.promoteRun({ runDir: loaded.runDir, run: loaded.run, analysis: loaded.analysis });
@@ -599,7 +599,7 @@ async function acceptReaderOperatorFactReview(request, overrides = {}) {
 
 module.exports = { RUN_CONTRACT, INPUT_CONTRACT, ANALYSIS_CONTRACT, FRESHNESS_CONTRACT, ORIGINAL_METADATA_FIELDS,
     stableHash, sha256, paperId, parseRewriteArgs, metadataOnly, assertSafeDirectory, readRegularJson,
-    writeImmutableJson, assertAnalysisEnvelope, assertFreshProvenance, loadRun,
-    sealedRecoveryCapabilitySnapshot, consumeSealedRecoveryCapability,
+    writeImmutableJson, assertAnalysisEnvelope, assertFreshSourceRecordMatchesRun, loadRun,
+    getSavedAnalysisRecoveryPermissionDetails, consumeSavedAnalysisRecoveryPermission,
     prepareRewrite, collectRewriteSources, analyzeRewrite, rewriteStatus, promoteRewrite, patchRewrite, signedPatchRewrite,
     acceptReaderOperatorFactReview };

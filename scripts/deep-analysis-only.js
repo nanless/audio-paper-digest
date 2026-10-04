@@ -188,7 +188,7 @@ async function runDeepAnalysis(options = {}) {
         return payload;
     });
 
-    const runSealedDailyAnalysis = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
+    const runAnalysisFromDailySources = () => (options.analyzeBatch || analyzeBatch)(notAnalyzed, {
         checkpointFilePath: resultPath,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
@@ -271,7 +271,7 @@ async function runDeepAnalysis(options = {}) {
             console.log(`  💾 已更新批次统计 (${saveStats.success + saveStats.failed}/${notAnalyzed.length})`);
         }
     });
-    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runSealedDailyAnalysis);
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
 
     const finalPayload = updateJsonFileLocked(resultPath, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);

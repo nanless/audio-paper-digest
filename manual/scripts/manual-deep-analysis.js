@@ -116,7 +116,7 @@ const STAGE_PROMPT_FILES = Object.freeze({
     imageSupplement: 'image-supplement.md'
 });
 const CURRENT_MANUAL_SPEC_VERSIONS = new Set([4, 5]);
-const MANUAL_CANONICAL_WORKER_COUNT = 3;
+const MANUAL_ANALYSIS_WORKER_COUNT = 3;
 const MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION = 1;
 const MANUAL_EXTERNAL_RESOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 // Hugging Face dataset pages can take longer than 15 seconds through the
@@ -290,7 +290,7 @@ function loadFilteredBatchForDate(date, filteredPath = Config.FILES.filteredPape
  * to that replay.  Historical v4 keeps a narrower source/image closure so an
  * immutable old artifact remains ingestible after the assembler advances.
  */
-function validateManualV4AssemblerProvenance(spec, options = {}) {
+function validateManualV4AssemblyInputs(spec, options = {}) {
     if (!spec || !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)) {
         throw new Error('assembler provenance 只适用于 Manual v4/v5 spec');
     }
@@ -424,7 +424,7 @@ function validateManualV4AssemblerProvenance(spec, options = {}) {
     };
 }
 
-function validateManualV6AssemblerProvenance(spec, options = {}) {
+function validateManualV6AssemblyInputs(spec, options = {}) {
     if (!spec || spec.version !== MANUAL_SPEC_VERSION_V6 || spec.status !== 'complete') {
         throw new Error('Manual v6 ingestion 只接受 complete Manual spec v6');
     }
@@ -496,7 +496,7 @@ function validateManualV6AssemblerProvenance(spec, options = {}) {
     };
 }
 
-function manualCanonicalReuseFingerprint(record) {
+function getManualAnalysisReuseHash(record) {
     if (!record || typeof record !== 'object') return null;
     const manifest = record.analysisManifest;
     const takeover = manifest?.manualTakeover;
@@ -599,30 +599,30 @@ function manualCanonicalReuseFingerprint(record) {
     });
 }
 
-function shouldReuseCanonical(storedAnalysisRecord, expectedRecord, force = false) {
+function canReuseSavedManualAnalysis(storedAnalysisRecord, expectedRecord, force = false) {
     if (force || !isSuccessfulAnalysisRecord(storedAnalysisRecord) || !isSuccessfulAnalysisRecord(expectedRecord)) {
         return false;
     }
-    const canonicalFingerprint = manualCanonicalReuseFingerprint(storedAnalysisRecord);
-    const expectedFingerprint = manualCanonicalReuseFingerprint(expectedRecord);
-    return Boolean(canonicalFingerprint && canonicalFingerprint === expectedFingerprint);
+    const savedRecordReuseHash = getManualAnalysisReuseHash(storedAnalysisRecord);
+    const expectedFingerprint = getManualAnalysisReuseHash(expectedRecord);
+    return Boolean(savedRecordReuseHash && savedRecordReuseHash === expectedFingerprint);
 }
 
-function manualCanonicalWriteDecision(storedAnalysisRecord, expectedRecord, force = false) {
+function getManualAnalysisWriteDecision(storedAnalysisRecord, expectedRecord, force = false) {
     if (!isSuccessfulAnalysisRecord(storedAnalysisRecord)) return 'write';
     if (force) return 'write';
-    if (shouldReuseCanonical(storedAnalysisRecord, expectedRecord, false)) return 'reuse';
+    if (canReuseSavedManualAnalysis(storedAnalysisRecord, expectedRecord, false)) return 'reuse';
     throw new Error(
         `${normalizedId(expectedRecord) || '当前论文'} 已有成功 canonical，`
         + '但本次 spec/prompt/全文/图片或审计指纹不同；拒绝无 --force 覆盖'
     );
 }
 
-function finalizeManualCanonicalState(filePath, options) {
+function finalizeManualAnalysisBatchState(filePath, options) {
     const date = options?.date;
     const expectedIds = [...new Set((options?.expectedIds || []).map(normalizedId).filter(Boolean))];
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || expectedIds.length === 0) {
-        throw new Error('finalizeManualCanonicalState 需要合法 date 与非空 expectedIds');
+        throw new Error('finalizeManualAnalysisBatchState 需要合法 date 与非空 expectedIds');
     }
     return updateJsonFileLocked(filePath, current => {
         const currentObject = current && !Array.isArray(current) ? current : {};
@@ -1142,7 +1142,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     const selectedRequested = configuredImageUrls;
     const insertedUrlSet = new Set(imageInsertion.selectedImageUrls);
     const legacySelectedImages = preparedImages.filter(info => insertedUrlSet.has(info.url));
-    const canonicalImageArtifacts = isManualV4
+    const imageInsertionArtifacts = isManualV4
         ? normalizeManualV4ImageArtifacts({
             configuredImageUrls,
             preparedImages: configuredImageUrls.map(
@@ -1157,7 +1157,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             insertionPlan: manualImagePlan,
             insertionDiagnostics: imageInsertion.insertionDiagnostics
         };
-    const selectedImages = canonicalImageArtifacts.selectedImages;
+    const selectedImages = imageInsertionArtifacts.selectedImages;
     const preparedByUrl = new Map(preparedImages.map(info => [info.url, info]));
     const figureDecisionByUrl = new Map(
         (spec.figureReview?.decisions || []).map(item => [item.url, item])
@@ -1204,8 +1204,8 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
     });
     const imageSelectionEvidenceSha256 = manualSha256({
         selected: normalizedSelectedEvidence,
-        insertionPlan: canonicalImageArtifacts.insertionPlan,
-        insertionDiagnostics: canonicalImageArtifacts.insertionDiagnostics
+        insertionPlan: imageInsertionArtifacts.insertionPlan,
+        insertionDiagnostics: imageInsertionArtifacts.insertionDiagnostics
     });
     const stageContextSha256 = {
         imageDownload: imageDownloadEvidenceSha256,
@@ -1425,8 +1425,8 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         downloadOutcomes: Array.isArray(options.imageDownloadOutcomes) ? options.imageDownloadOutcomes : [],
         downloadEvidenceSha256: imageDownloadEvidenceSha256,
         selectionEvidenceSha256: imageSelectionEvidenceSha256,
-        insertionPlan: canonicalImageArtifacts.insertionPlan,
-        insertionDiagnostics: canonicalImageArtifacts.insertionDiagnostics,
+        insertionPlan: imageInsertionArtifacts.insertionPlan,
+        insertionDiagnostics: imageInsertionArtifacts.insertionDiagnostics,
         selected: selectedImages.map((info, index) => ({
             index: index + 1,
             ...info,
@@ -1828,7 +1828,7 @@ async function verifyAndCacheExternalResource(url) {
     return outcome;
 }
 
-async function runFixedWorkers(items, processItem, workerCount = MANUAL_CANONICAL_WORKER_COUNT) {
+async function runFixedWorkers(items, processItem, workerCount = MANUAL_ANALYSIS_WORKER_COUNT) {
     if (!Array.isArray(items)) throw new Error('worker items 必须是数组');
     if (typeof processItem !== 'function') throw new Error('worker processItem 必须是函数');
     if (!Number.isInteger(workerCount) || workerCount < 1) throw new Error('workerCount 必须是正整数');
@@ -1871,18 +1871,18 @@ async function run() {
             throw new Error(`spec v6 必须来自日期级受控 ${v6RuntimeMode} 路径且不得是符号链接`);
         }
     }
-    const provenance = spec.version === MANUAL_SPEC_VERSION_V6
-        ? validateManualV6AssemblerProvenance(spec, { date, runtimeMode: v6RuntimeMode })
+    const verifiedAssemblyInputs = spec.version === MANUAL_SPEC_VERSION_V6
+        ? validateManualV6AssemblyInputs(spec, { date, runtimeMode: v6RuntimeMode })
         : (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
-            ? validateManualV4AssemblerProvenance(spec, { date })
+            ? validateManualV4AssemblyInputs(spec, { date })
             : null);
-    const canonicalPath = v6RuntimeMode
+    const analysisFilePath = v6RuntimeMode
         ? resolveManualV6RuntimePaths(Config.CURRENT_DIR, date, v6RuntimeMode).canonicalPath
         : Config.FILES.deepAnalysisResult;
     const currentPromptBindings = buildStagePromptBindings();
     const promptBindings = resolveManualSpecPromptBindings(spec, currentPromptBindings);
     const promptSha256 = promptBindings.primaryAnalysis.sha256;
-    const papers = provenance ? provenance.filtered.papers : filteredPapersForDate(date);
+    const papers = verifiedAssemblyInputs ? verifiedAssemblyInputs.filtered.papers : filteredPapersForDate(date);
     const specPapers = spec.papers;
     if (!specPapers || typeof specPapers !== 'object' || Array.isArray(specPapers)) {
         throw new Error('manual spec.papers 必须是对象');
@@ -1900,7 +1900,7 @@ async function run() {
     }
     if (v6Production && !force) {
         const legacySuccessIds = papers.map(paper => {
-            const current = loadStoredAnalysisRecord(canonicalPath, paper);
+            const current = loadStoredAnalysisRecord(analysisFilePath, paper);
             return current?.analysisStatus === 'success' && current.manualDepth !== MANUAL_DEPTH_V6
                 ? normalizedId(paper)
                 : null;
@@ -1919,7 +1919,7 @@ async function run() {
         const paperSpec = specPapers[id] || specPapers[paper.arxivId];
         try {
             await withPaperAnalysisLock(paper, async () => {
-                const storedAnalysisRecord = loadStoredAnalysisRecord(canonicalPath, paper);
+                const storedAnalysisRecord = loadStoredAnalysisRecord(analysisFilePath, paper);
                 const effectivePaper = {
                     ...paper,
                     ...(storedAnalysisRecord || {}),
@@ -1949,7 +1949,7 @@ async function run() {
                                 : (spec.version === 4
                                     ? MANUAL_DEPTH_CONTRACT_VERSION_V4
                                     : MANUAL_DEPTH_CONTRACT_VERSION_V3)),
-                            ...(provenance ? {
+                            ...(verifiedAssemblyInputs ? {
                                 manualProvenance: {
                                     specVersion: spec.version,
                                     fullTextManifestSha256: spec.fullTextManifest.sha256,
@@ -1957,9 +1957,9 @@ async function run() {
                                     ...(spec.version === 5 ? {
                                         tutorialPayloadContract: spec.tutorialPayloadContract || null,
                                         freshAuthority: {
-                                            currentRoot: provenance.currentRoot,
-                                            filteredPath: provenance.filteredPath,
-                                            artifactManifestPath: provenance.artifactManifestPath
+                                            currentRoot: verifiedAssemblyInputs.currentRoot,
+                                            filteredPath: verifiedAssemblyInputs.filteredPath,
+                                            artifactManifestPath: verifiedAssemblyInputs.artifactManifestPath
                                         }
                                     } : {}),
                                     ...(spec.version === MANUAL_SPEC_VERSION_V6
@@ -1972,7 +1972,7 @@ async function run() {
                             } : {})
                         }
                     );
-                    const writeDecision = manualCanonicalWriteDecision(
+                    const writeDecision = getManualAnalysisWriteDecision(
                         storedAnalysisRecord, expectedRecord, force,
                     );
                     if (writeDecision === 'reuse') {
@@ -1994,7 +1994,7 @@ async function run() {
                     failures.set(id, error.message);
                 }
 
-                await mergeAndSaveResults([record], canonicalPath, {
+                await mergeAndSaveResults([record], analysisFilePath, {
                     batchDate: date,
                     status: 'running',
                     stats: { analysisStatus: 'running', pipelineStatus: 'analysis_running' }
@@ -2015,9 +2015,9 @@ async function run() {
         if (sha256File(specPath) !== specFileSha256) {
             throw new Error('Manual spec v6 文件在 ingestion 期间发生变化，保留逐篇 checkpoint 但拒绝收口');
         }
-        validateManualV6AssemblerProvenance(spec, { date, runtimeMode: v6RuntimeMode });
+        validateManualV6AssemblyInputs(spec, { date, runtimeMode: v6RuntimeMode });
     }
-    const saved = finalizeManualCanonicalState(canonicalPath, {
+    const saved = finalizeManualAnalysisBatchState(analysisFilePath, {
         date,
         expectedIds: papers.map(normalizedId),
         ...(v6RuntimeMode ? { requiredManualV6Runtime: v6RuntimeMode } : {}),
@@ -2050,7 +2050,7 @@ async function run() {
                 role: v6RuntimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
                     ? 'production_canonical_v6'
                     : 'shadow_canonical_v6',
-                path: canonicalPath
+                path: analysisFilePath
             }]
         });
     }
@@ -2062,7 +2062,7 @@ async function run() {
         }
         process.exitCode = 2;
     }
-    console.log(`全文/Prompt provenance 已写入: ${canonicalPath}`);
+    console.log(`全文/Prompt provenance 已写入: ${analysisFilePath}`);
 }
 
 if (require.main === module) {
@@ -2079,13 +2079,13 @@ module.exports = {
     buildStagePromptBindings,
     conciseManualImageCaption,
     normalizeManualV4ImageArtifacts,
-    manualCanonicalReuseFingerprint,
-    manualCanonicalWriteDecision,
+    getManualAnalysisReuseHash,
+    getManualAnalysisWriteDecision,
     resolveManualSpecPromptBindings,
     loadFilteredBatchForDate,
-    validateManualV4AssemblerProvenance,
-    validateManualV6AssemblerProvenance,
-    finalizeManualCanonicalState,
+    validateManualV4AssemblyInputs,
+    validateManualV6AssemblyInputs,
+    finalizeManualAnalysisBatchState,
     prepareManualImages,
     verifyManualExternalResources,
     readCachedExternalResourceOutcome,
@@ -2095,6 +2095,6 @@ module.exports = {
     filteredPapersForDate,
     parseArgs,
     assertExplicitManualV6Mode,
-    shouldReuseCanonical,
+    canReuseSavedManualAnalysis,
     run
 };

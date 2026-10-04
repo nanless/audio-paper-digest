@@ -11,8 +11,8 @@ const {
     REQUIRED_RECOVERY_STAGES,
     manualSha256,
     manualTextSha256,
-    validateFreshAuthoringCanonicalBinding,
-    validateTutorialPayloadCanonicalBinding,
+    validateFreshAuthoringRecordConsistency,
+    validateTutorialPayloadRecordConsistency,
     validateManualTakeoverManifest,
     validateManualDepthContract,
     MANUAL_DEPTH_CONTRACT_VERSION_V2,
@@ -26,9 +26,9 @@ const {
     buildManualRecord,
     buildStagePromptBindings,
     conciseManualImageCaption,
-    finalizeManualCanonicalState,
-    manualCanonicalReuseFingerprint,
-    manualCanonicalWriteDecision,
+    finalizeManualAnalysisBatchState,
+    getManualAnalysisReuseHash,
+    getManualAnalysisWriteDecision,
     normalizeDiscoveredHttpsLinks,
     normalizeManualV4ImageArtifacts,
     parseArgs,
@@ -36,7 +36,7 @@ const {
     readCachedExternalResourceOutcome,
     resolveManualSpecPromptBindings,
     runFixedWorkers,
-    shouldReuseCanonical,
+    canReuseSavedManualAnalysis,
     writeCachedExternalResourceOutcome
 } = require('../scripts/manual-deep-analysis.js');
 const {
@@ -340,7 +340,7 @@ describe('manual canonical runtime controls', () => {
 describe('manual v5 fresh canonical compatibility', () => {
     it('历史 v5 无 fresh marker 时不追溯判坏', () => {
         const manifest = { contracts: { manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5 } };
-        assert.equal(validateFreshAuthoringCanonicalBinding(manifest, {}), null);
+        assert.equal(validateFreshAuthoringRecordConsistency(manifest, {}), null);
     });
 
     it('新 v5 fresh marker 存在但缺 receipt 时必须失败', () => {
@@ -349,20 +349,20 @@ describe('manual v5 fresh canonical compatibility', () => {
             freshAuthoring: 'fresh-authoring-v1'
         } };
         assert.match(
-            validateFreshAuthoringCanonicalBinding(manifest, {}),
+            validateFreshAuthoringRecordConsistency(manifest, {}),
             /manualTakeover\.freshAuthoring 缺失/
         );
     });
 
     it('历史 v5 无 tutorial marker 只读兼容，新 marker 缺 sealed payload 时失败', () => {
         const historical = { contracts: { manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5 } };
-        assert.equal(validateTutorialPayloadCanonicalBinding(historical, {}), null);
+        assert.equal(validateTutorialPayloadRecordConsistency(historical, {}), null);
         const current = { contracts: {
             manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5,
             tutorialPayload: 'manual-v5-tutorial-payload-v1'
         }, sourceAcquisition: { sourceId: '2608.12345' } };
         assert.match(
-            validateTutorialPayloadCanonicalBinding(current, {}),
+            validateTutorialPayloadRecordConsistency(current, {}),
             /manualTakeover\.tutorialPayload 缺失/
         );
     });
@@ -537,19 +537,19 @@ describe('manual_complete v3 deep-analysis contract', () => {
         }));
         const insertion = applyImageInsertionPlan(detailedAnalysis(), plans, imageInfos, 4);
         assert.deepStrictEqual(insertion.selectedImageUrls, expectedUrls);
-        const canonical = normalizeManualV4ImageArtifacts({
+        const imageInsertionArtifacts = normalizeManualV4ImageArtifacts({
             configuredImageUrls,
             preparedImages: imageInfos,
             insertionPlan: plans,
             insertionDiagnostics: insertion.insertionDiagnostics,
             orderedSelectedImageUrls: insertion.selectedImageUrls
         });
-        assert.deepStrictEqual(canonical.selectedImages.map(item => item.url), expectedUrls);
-        assert.deepStrictEqual(canonical.insertionPlan.map(item => item.imageNumber), [1, 2]);
-        assert.deepStrictEqual(canonical.insertionPlan.map(item => item.url), expectedUrls);
-        assert.deepStrictEqual(canonical.insertionDiagnostics.map(item => item.imageNumber), [1, 2]);
+        assert.deepStrictEqual(imageInsertionArtifacts.selectedImages.map(item => item.url), expectedUrls);
+        assert.deepStrictEqual(imageInsertionArtifacts.insertionPlan.map(item => item.imageNumber), [1, 2]);
+        assert.deepStrictEqual(imageInsertionArtifacts.insertionPlan.map(item => item.url), expectedUrls);
+        assert.deepStrictEqual(imageInsertionArtifacts.insertionDiagnostics.map(item => item.imageNumber), [1, 2]);
         assert.deepStrictEqual(
-            canonical.insertionPlan.map(item => item.paragraphId),
+            imageInsertionArtifacts.insertionPlan.map(item => item.paragraphId),
             expectedUrls.map(url => plans[configuredImageUrls.indexOf(url)].paragraphId)
         );
         const bodyOrder = [...insertion.analysis.matchAll(/!\[(?:\\.|[^\]\\])*\]\((https:\/\/[^)]+)\)/g)]
@@ -722,8 +722,8 @@ describe('manual_complete v3 deep-analysis contract', () => {
             }
         );
         assert.equal(record.analysisSource, 'provided_full_text');
-        assert.equal(shouldReuseCanonical(record, record, false), true);
-        assert.equal(shouldReuseCanonical(record, record, true), false);
+        assert.equal(canReuseSavedManualAnalysis(record, record, false), true);
+        assert.equal(canReuseSavedManualAnalysis(record, record, true), false);
         assert.equal(record.analysisManifest.manualTakeover.version, 2);
         assert.equal(record.digestStatus.latestAttemptStatus, 'analyzed');
         assert.equal(record.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.attempts, 3);
@@ -820,10 +820,10 @@ describe('manual_complete v3 deep-analysis contract', () => {
             }
         );
         assert.notEqual(
-            manualCanonicalReuseFingerprint(record),
-            manualCanonicalReuseFingerprint(changedImageRecord)
+            getManualAnalysisReuseHash(record),
+            getManualAnalysisReuseHash(changedImageRecord)
         );
-        assert.equal(shouldReuseCanonical(record, changedImageRecord), false);
+        assert.equal(canReuseSavedManualAnalysis(record, changedImageRecord), false);
 
         spec.selectedImageUrls = ['https://example.com/unverified.png'];
         spec.imageSelectionMode = 'manual_explicit';
@@ -837,8 +837,8 @@ describe('manual_complete v3 deep-analysis contract', () => {
     });
 
     it('默认只复用 analysis、全文、证据、审计和逐阶段 prompt 均未过期的 canonical', () => {
-        const canonical = buildReusableRecord().record;
-        assert.equal(shouldReuseCanonical(canonical, canonical), true);
+        const storedAnalysisRecord = buildReusableRecord().record;
+        assert.equal(canReuseSavedManualAnalysis(storedAnalysisRecord, storedAnalysisRecord), true);
 
         const staleAnalysis = buildReusableRecord({
             mutateSpec: spec => {
@@ -875,43 +875,43 @@ describe('manual_complete v3 deep-analysis contract', () => {
             ['stage prompt', stalePrompt]
         ]) {
             assert.notEqual(
-                manualCanonicalReuseFingerprint(canonical),
-                manualCanonicalReuseFingerprint(candidate),
+                getManualAnalysisReuseHash(storedAnalysisRecord),
+                getManualAnalysisReuseHash(candidate),
                 `${label} 必须进入复用指纹`
             );
-            assert.equal(shouldReuseCanonical(canonical, candidate), false, `${label} 变化必须重建`);
+            assert.equal(canReuseSavedManualAnalysis(storedAnalysisRecord, candidate), false, `${label} 变化必须重建`);
         }
     });
 
     it('成功 canonical 只有同指纹默认复用，差异必须显式 --force 才能写入', () => {
-        const canonical = buildReusableRecord().record;
+        const storedAnalysisRecord = buildReusableRecord().record;
         const changed = buildReusableRecord({ sourceSuffix: '\nchanged source evidence' }).record;
-        assert.equal(manualCanonicalWriteDecision(canonical, canonical, false), 'reuse');
+        assert.equal(getManualAnalysisWriteDecision(storedAnalysisRecord, storedAnalysisRecord, false), 'reuse');
         assert.throws(
-            () => manualCanonicalWriteDecision(canonical, changed, false),
+            () => getManualAnalysisWriteDecision(storedAnalysisRecord, changed, false),
             /拒绝无 --force 覆盖/
         );
-        assert.equal(manualCanonicalWriteDecision(canonical, changed, true), 'write');
-        assert.equal(manualCanonicalWriteDecision(null, changed, false), 'write');
+        assert.equal(getManualAnalysisWriteDecision(storedAnalysisRecord, changed, true), 'write');
+        assert.equal(getManualAnalysisWriteDecision(null, changed, false), 'write');
     });
 
     it('resultClaims 只改逐字段 binding 也必须失效 canonical 复用指纹', () => {
-        const canonical = promoteReusableRecordToV4(buildReusableRecord().record);
-        const changed = JSON.parse(JSON.stringify(canonical));
+        const storedAnalysisRecord = promoteReusableRecordToV4(buildReusableRecord().record);
+        const changed = JSON.parse(JSON.stringify(storedAnalysisRecord));
         changed.analysisManifest.manualTakeover.resultClaims[0].sourceBindings.method = '完整方法与同预算基线';
         changed.analysisManifest.manualTakeover.resultClaimsSha256 = manualSha256({
             claims: changed.analysisManifest.manualTakeover.resultClaims,
             exception: null
         });
         assert.notEqual(
-            manualCanonicalReuseFingerprint(canonical),
-            manualCanonicalReuseFingerprint(changed)
+            getManualAnalysisReuseHash(storedAnalysisRecord),
+            getManualAnalysisReuseHash(changed)
         );
     });
 
     it('resultClaimsException 或 readabilityRubric 变化必须失效 canonical 复用指纹', () => {
-        const canonical = promoteReusableRecordToV4(buildReusableRecord().record);
-        const changedException = JSON.parse(JSON.stringify(canonical));
+        const storedAnalysisRecord = promoteReusableRecordToV4(buildReusableRecord().record);
+        const changedException = JSON.parse(JSON.stringify(storedAnalysisRecord));
         changedException.analysisManifest.manualTakeover.resultClaimsException = {
             type: 'qualitative',
             reason: '仅用于确认例外字段确实进入复用指纹。',
@@ -921,7 +921,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
             claims: changedException.analysisManifest.manualTakeover.resultClaims,
             exception: changedException.analysisManifest.manualTakeover.resultClaimsException
         });
-        const changedRubric = JSON.parse(JSON.stringify(canonical));
+        const changedRubric = JSON.parse(JSON.stringify(storedAnalysisRecord));
         changedRubric.analysisManifest.manualTakeover.readabilityRubric
             .dimensions.paragraphLogic.reason += '本轮重新审核。';
         changedRubric.analysisManifest.manualTakeover.readabilityRubricSha256 = manualSha256(
@@ -929,8 +929,8 @@ describe('manual_complete v3 deep-analysis contract', () => {
         );
         for (const candidate of [changedException, changedRubric]) {
             assert.notEqual(
-                manualCanonicalReuseFingerprint(canonical),
-                manualCanonicalReuseFingerprint(candidate)
+                getManualAnalysisReuseHash(storedAnalysisRecord),
+                getManualAnalysisReuseHash(candidate)
             );
         }
     });
@@ -939,19 +939,19 @@ describe('manual_complete v3 deep-analysis contract', () => {
         const historicalV3 = buildReusableRecord().record;
         const expectedV4 = promoteReusableRecordToV4(historicalV3);
         assert.notEqual(
-            manualCanonicalReuseFingerprint(historicalV3),
-            manualCanonicalReuseFingerprint(expectedV4)
+            getManualAnalysisReuseHash(historicalV3),
+            getManualAnalysisReuseHash(expectedV4)
         );
     });
 
     it('v6 顶层 ArtifactIndex/longform/provenance 任一变化都失效复用指纹', () => {
-        const canonical = buildReusableRecord().record;
-        canonical.manualArtifactIndex = { version: 1, outputSha256: 'a'.repeat(64) };
-        canonical.manualReaderLongform = {
+        const storedAnalysisRecord = buildReusableRecord().record;
+        storedAnalysisRecord.manualArtifactIndex = { version: 1, outputSha256: 'a'.repeat(64) };
+        storedAnalysisRecord.manualReaderLongform = {
             version: 2, contract: 'reader-longform-v2', articleSha256: 'b'.repeat(64)
         };
-        canonical.manualV6Provenance = { specVersion: 6, specRootSha256: 'c'.repeat(64) };
-        canonical.analysisManifest.manualTakeover.v6Provenance = canonical.manualV6Provenance;
+        storedAnalysisRecord.manualV6Provenance = { specVersion: 6, specRootSha256: 'c'.repeat(64) };
+        storedAnalysisRecord.analysisManifest.manualTakeover.v6Provenance = storedAnalysisRecord.manualV6Provenance;
         for (const mutate of [
             value => { value.manualArtifactIndex.outputSha256 = 'd'.repeat(64); },
             value => { value.manualReaderLongform.articleSha256 = 'd'.repeat(64); },
@@ -960,11 +960,11 @@ describe('manual_complete v3 deep-analysis contract', () => {
                 value.analysisManifest.manualTakeover.v6Provenance = value.manualV6Provenance;
             }
         ]) {
-            const changed = JSON.parse(JSON.stringify(canonical));
+            const changed = JSON.parse(JSON.stringify(storedAnalysisRecord));
             mutate(changed);
             assert.notEqual(
-                manualCanonicalReuseFingerprint(canonical),
-                manualCanonicalReuseFingerprint(changed)
+                getManualAnalysisReuseHash(storedAnalysisRecord),
+                getManualAnalysisReuseHash(changed)
             );
         }
     });
@@ -990,7 +990,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
             papers: [stalePriorBatch, first, second]
         }));
 
-        const completed = finalizeManualCanonicalState(resultPath, {
+        const completed = finalizeManualAnalysisBatchState(resultPath, {
             date: '2026-08-20',
             expectedIds: ['2608.21001', '2608.21002'],
             stats: { success: 0, failed: 99, failedIds: ['stale-local-failure'] }
@@ -1020,7 +1020,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
         };
         fs.writeFileSync(resultPath, JSON.stringify(latestOnDisk));
 
-        const partial = finalizeManualCanonicalState(resultPath, {
+        const partial = finalizeManualAnalysisBatchState(resultPath, {
             date: '2026-08-20',
             expectedIds: ['2608.21001', '2608.21002'],
             stats: { success: 2, failed: 0 }

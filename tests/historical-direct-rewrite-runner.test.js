@@ -536,7 +536,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
         structuredArtifactsSha256: provenance.structuredArtifactsSha256
     });
     paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
-    assert.equal(engine.apiReaderV3BindsCanonical(paper), true, 'test fixture must satisfy the current Reader contract');
+    assert.equal(engine.hasValidApiReaderV3Records(paper), true, 'test fixture must satisfy the current Reader contract');
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true, 'test fixture must satisfy the current analysis contract');
     return paper;
 }

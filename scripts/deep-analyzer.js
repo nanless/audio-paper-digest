@@ -6952,9 +6952,9 @@ function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback) {
     if (!String(reviewFeedback || '').trim()) return null;
     // Reuse the production byte/provenance validator rather than trusting a
     // complete flag or accepting a newly supplied draft as an existing Reader.
-    const { apiReaderV3BindsCanonical } = require('./analysis-engine.js');
+    const { hasValidApiReaderV3Records } = require('./analysis-engine.js');
     const currentReaderValid = !paper?.latestAnalysisAttemptError
-        && apiReaderV3BindsCanonical(paper);
+        && hasValidApiReaderV3Records(paper);
     const staleReaderStage = currentReaderValid
         ? null : recoverableStaleReaderRevisionStage(paper, sourceText);
     if (!currentReaderValid && !staleReaderStage) {
@@ -7835,28 +7835,28 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     });
 }
 
-async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, draft, provenance) {
+async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, draft, operatorRevisionRecord) {
     const previousStage = structuredClone(paper.analysisManifest?.stages?.apiReaderArticle);
     const parentAnalysis = paper.analysis;
-    if (provenance?.contract !== 'reader-signed-operator-v1' || provenance.executionKind !== 'operator'
-        || provenance.newApiRequests !== 0 || !require('./analysis-engine.js').apiReaderV3BindsCanonical(paper)
-        || provenance.parentPaperSha256 !== stableFingerprint(paper)
-        || provenance.parentArticleSha256 !== paper.apiReaderArticleSha256
-        || provenance.parentPlanSha256 !== paper.apiReaderPlanSha256
-        || provenance.runId !== paper.freshRewriteProvenance?.runId
-        || provenance.sourceSha256 !== paper.sourceSha256
-        || provenance.sourceSnapshotSha256 !== sourceDetails.freshSourceDescriptor?.sourceSnapshotSha256) {
+    if (operatorRevisionRecord?.contract !== 'reader-signed-operator-v1' || operatorRevisionRecord.executionKind !== 'operator'
+        || operatorRevisionRecord.newApiRequests !== 0 || !require('./analysis-engine.js').hasValidApiReaderV3Records(paper)
+        || operatorRevisionRecord.parentPaperSha256 !== stableFingerprint(paper)
+        || operatorRevisionRecord.parentArticleSha256 !== paper.apiReaderArticleSha256
+        || operatorRevisionRecord.parentPlanSha256 !== paper.apiReaderPlanSha256
+        || operatorRevisionRecord.runId !== paper.freshRewriteProvenance?.runId
+        || operatorRevisionRecord.sourceSha256 !== paper.sourceSha256
+        || operatorRevisionRecord.sourceSnapshotSha256 !== sourceDetails.freshSourceDescriptor?.sourceSnapshotSha256) {
         throw new Error('Operator finalization requires a valid signed parent and explicit execution provenance');
     }
     if (typeof parentAnalysis === 'string'
         && applyApiReaderResourceAvailability(parentAnalysis, paper.apiReaderResources) !== parentAnalysis) {
         throw new Error('Reader operator patch requires explicit resource synchronization first; canonical analysis is outside its scope');
     }
-    require('./lib/reader-signed-draft.js').reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId: provenance.runId });
-    if (crypto.createHash('sha256').update(JSON.stringify(draft)).digest('hex') !== provenance.afterDraftSha256) {
+    require('./lib/reader-signed-draft.js').reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId: operatorRevisionRecord.runId });
+    if (crypto.createHash('sha256').update(JSON.stringify(draft)).digest('hex') !== operatorRevisionRecord.afterDraftSha256) {
         throw new Error('Operator finalization draft SHA mismatch');
     }
-    const evidence = buildApiReaderEvidenceContext('', sourceDetails.text, sourceDetails.structuredArtifacts, provenance.paperId);
+    const evidence = buildApiReaderEvidenceContext('', sourceDetails.text, sourceDetails.structuredArtifacts, operatorRevisionRecord.paperId);
     const parsed = parseApiReaderArticleResult(JSON.stringify(draft), {
         arxivId: getPaperArxivId(paper),
         requiredVersion: 3, requireIntegratedTables: true,
@@ -7875,11 +7875,11 @@ async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, 
         execution: {
             executionKind: 'operator', contentMode: 'reader-source-operator-revision-v1',
             model: 'operator-local', protocol: 'local_operator',
-            fingerprint: stableFingerprint(provenance),
+            fingerprint: stableFingerprint(operatorRevisionRecord),
             attempts: previousStage.attempts,
             originApiStage: previousStage.originApiStage || previousStage,
-            operatorHistory: [...(previousStage.operatorHistory || []), provenance],
-            operatorProvenance: provenance,
+            operatorHistory: [...(previousStage.operatorHistory || []), operatorRevisionRecord],
+            operatorProvenance: operatorRevisionRecord,
             ...(previousStage.fullAttempts !== undefined ? { fullAttempts: previousStage.fullAttempts } : {}),
             ...(previousStage.transportFailures !== undefined ? { transportFailures: previousStage.transportFailures } : {})
         }
@@ -7889,7 +7889,7 @@ async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, 
     }
     finalized.readerFactReview = { status: 'pending', executionKind: 'operator',
         articleSha256: finalized.apiReaderArticleSha256, planSha256: finalized.apiReaderPlanSha256,
-        patchFileSha256: provenance.patchFileSha256, parentPaperSha256: provenance.parentPaperSha256 };
+        patchFileSha256: operatorRevisionRecord.patchFileSha256, parentPaperSha256: operatorRevisionRecord.parentPaperSha256 };
     return finalized;
 }
 
@@ -8057,7 +8057,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     const requestedReviewFeedbackSha256 = requestedReviewFeedback
         ? crypto.createHash('sha256').update(requestedReviewFeedback).digest('hex')
         : null;
-    const existingReaderReusable = require('./analysis-engine.js').apiReaderV3BindsCanonical(paper)
+    const existingReaderReusable = require('./analysis-engine.js').hasValidApiReaderV3Records(paper)
         && paper.analysisManifest?.stages?.apiReaderArticle?.reviewFeedbackSha256
             === requestedReviewFeedbackSha256;
     const existingReaderResourceSha256 = paper.apiReaderResources?.identitySha256 || '';
@@ -8089,7 +8089,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         && Number.isFinite(failedAt)
         && Number.isFinite(readerRefreshedAt)
         && readerRefreshedAt > failedAt
-        && require('./analysis-engine.js').apiReaderV3BindsCanonical(paper)) {
+        && require('./analysis-engine.js').hasValidApiReaderV3Records(paper)) {
         delete paper.latestAnalysisAttemptError;
         delete paper.latestAnalysisAttemptAt;
         delete paper.latestAnalysisAttemptErrorCode;
@@ -9022,7 +9022,7 @@ function migrateSourceOnlyApiReaderFingerprint(
     // This replays every production SHA/source-binding/author/resource proof;
     // changing only a now-removed artificial analysis dependency is safe only
     // when the stored Reader itself is still fully publishable.
-    if (!require('./analysis-engine.js').apiReaderV3BindsCanonical(paper)) return false;
+    if (!require('./analysis-engine.js').hasValidApiReaderV3Records(paper)) return false;
     const migration = {
         contract: 'api-reader-source-only-fingerprint-migration-v1',
         previousFingerprint: legacyFingerprint,
@@ -9299,12 +9299,12 @@ function captureSavedAnalysisForCoreSummaryRepair(paper) {
     const freshIdentity = freshContext.freshAnalysisIdentity(
         getPaperArxivId(paper)
     );
-    const capability = freshContext.getSealedRecoveryCapability(getPaperArxivId(paper));
-    const capabilitySnapshot = require('./lib/fresh-rewrite-run.js')
-        .sealedRecoveryCapabilitySnapshot(capability);
-    if (!freshIdentity || !capabilitySnapshot
-        || capabilitySnapshot.recordSha256 !== stableFingerprint(paper)
-        || !require('./analysis-engine.js').isSealedApiAnalysisEligibleForCoreSummaryRecovery(paper)
+    const recoveryPermission = freshContext.getSavedAnalysisRecoveryPermission(getPaperArxivId(paper));
+    const recoveryPermissionDetails = require('./lib/fresh-rewrite-run.js')
+        .getSavedAnalysisRecoveryPermissionDetails(recoveryPermission);
+    if (!freshIdentity || !recoveryPermissionDetails
+        || recoveryPermissionDetails.recordSha256 !== stableFingerprint(paper)
+        || !require('./analysis-engine.js').canRepairCoreSummaryFromSavedAnalysis(paper)
         || typeof paper?.analysis !== 'string' || !paper.analysis.trim()) return null;
     const legacyManifest = structuredClone(paper.analysisManifest);
     const body = {
@@ -9319,10 +9319,10 @@ function captureSavedAnalysisForCoreSummaryRepair(paper) {
         freshIdentitySha256: stableFingerprint(freshIdentity),
         freshRewriteProvenance: structuredClone(paper.freshRewriteProvenance),
         freshRewriteProvenanceSha256: stableFingerprint(paper.freshRewriteProvenance),
-        sealedRunId: capabilitySnapshot.runId,
-        sealedRecordSha256: capabilitySnapshot.recordSha256,
-        sealedAnalysisFileSha256: capabilitySnapshot.analysisFileSha256,
-        sealedSourceSnapshotSha256: capabilitySnapshot.sourceSnapshotSha256
+        sealedRunId: recoveryPermissionDetails.runId,
+        sealedRecordSha256: recoveryPermissionDetails.recordSha256,
+        sealedAnalysisFileSha256: recoveryPermissionDetails.analysisFileSha256,
+        sealedSourceSnapshotSha256: recoveryPermissionDetails.sourceSnapshotSha256
     };
     return { ...body, candidateSha256: stableFingerprint(body) };
 }
@@ -9333,9 +9333,9 @@ function isSavedCoreSummaryRepairCandidateValid(candidate, paper, sourceAcquisit
     const arxivId = getPaperArxivId(paper);
     const freshContext = require('./lib/fresh-analysis-context.js');
     const freshIdentity = freshContext.freshAnalysisIdentity(arxivId);
-    const capability = freshContext.getSealedRecoveryCapability(arxivId);
-    const capabilitySnapshot = require('./lib/fresh-rewrite-run.js')
-        .sealedRecoveryCapabilitySnapshot(capability);
+    const recoveryPermission = freshContext.getSavedAnalysisRecoveryPermission(arxivId);
+    const recoveryPermissionDetails = require('./lib/fresh-rewrite-run.js')
+        .getSavedAnalysisRecoveryPermissionDetails(recoveryPermission);
     const legacySource = candidate.legacyManifest?.sourceAcquisition;
     const sourceFields = [
         'analysisSource', 'sourceId', 'sourceSha256', 'usedTextSha256',
@@ -9357,17 +9357,17 @@ function isSavedCoreSummaryRepairCandidateValid(candidate, paper, sourceAcquisit
             === stableFingerprint(candidate.freshRewriteProvenance)
         && candidate.freshRewriteProvenanceSha256
             === stableFingerprint(paper.freshRewriteProvenance)
-        && capabilitySnapshot?.runId === candidate.sealedRunId
-        && capabilitySnapshot?.paperId === candidate.paperId
-        && capabilitySnapshot?.recordSha256 === candidate.sealedRecordSha256
-        && capabilitySnapshot?.analysisFileSha256 === candidate.sealedAnalysisFileSha256
-        && capabilitySnapshot?.sourceSnapshotSha256 === candidate.sealedSourceSnapshotSha256
+        && recoveryPermissionDetails?.runId === candidate.sealedRunId
+        && recoveryPermissionDetails?.paperId === candidate.paperId
+        && recoveryPermissionDetails?.recordSha256 === candidate.sealedRecordSha256
+        && recoveryPermissionDetails?.analysisFileSha256 === candidate.sealedAnalysisFileSha256
+        && recoveryPermissionDetails?.sourceSnapshotSha256 === candidate.sealedSourceSnapshotSha256
         && sourceFields.every(field => legacySource?.[field] === sourceAcquisitionRecord?.[field])
         && sourceAcquisitionRecord?.sourceSha256 === crypto.createHash('sha256')
             .update(String(sourceText || '')).digest('hex')
         && paper.sourceSha256 === sourceAcquisitionRecord?.sourceSha256
-        && require('./analysis-engine.js').isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacyPaper)
-        && require('./analysis-engine.js').apiReaderV3BindsCanonical(legacyPaper)
+        && require('./analysis-engine.js').canRepairCoreSummaryFromSavedAnalysis(legacyPaper)
+        && require('./analysis-engine.js').hasValidApiReaderV3Records(legacyPaper)
         && getRepairableAnalysisStructureIssues(candidate.legacyAnalysis, {
             sourceText
         }).length === 0
@@ -9381,9 +9381,9 @@ function restoreSavedStagesForCoreSummaryRepair(
     if (!isSavedCoreSummaryRepairCandidateValid(
         candidate, paper, sourceAcquisitionRecord, sourceText
     )) return false;
-    const capability = require('./lib/fresh-analysis-context.js')
-        .getSealedRecoveryCapability(candidate.paperId);
-    if (!require('./lib/fresh-rewrite-run.js').consumeSealedRecoveryCapability(capability, {
+    const recoveryPermission = require('./lib/fresh-analysis-context.js')
+        .getSavedAnalysisRecoveryPermission(candidate.paperId);
+    if (!require('./lib/fresh-rewrite-run.js').consumeSavedAnalysisRecoveryPermission(recoveryPermission, {
         runId: candidate.sealedRunId,
         paperId: candidate.paperId,
         recordSha256: candidate.sealedRecordSha256,
@@ -9453,10 +9453,10 @@ function canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage)
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity(
         getPaperArxivId(paper)
     );
-    const capability = require('./lib/fresh-analysis-context.js')
-        .getSealedRecoveryCapability(getPaperArxivId(paper));
-    const capabilitySnapshot = require('./lib/fresh-rewrite-run.js')
-        .sealedRecoveryCapabilitySnapshot(capability, { allowConsumed: true });
+    const recoveryPermission = require('./lib/fresh-analysis-context.js')
+        .getSavedAnalysisRecoveryPermission(getPaperArxivId(paper));
+    const recoveryPermissionDetails = require('./lib/fresh-rewrite-run.js')
+        .getSavedAnalysisRecoveryPermissionDetails(recoveryPermission, { allowConsumed: true });
     const checkpoint = paper?.analysisStageCheckpoints?.[stage];
     const legacyPaper = { ...paper, analysis: checkpoint,
         parsed: parseAnalysis(checkpoint), analysisManifest: audit.legacyManifest };
@@ -9484,13 +9484,13 @@ function canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage)
         && freshIdentity && stableFingerprint(freshIdentity) === audit.freshIdentitySha256
         && stableFingerprint(paper.freshRewriteProvenance)
             === audit.freshRewriteProvenanceSha256
-        && capabilitySnapshot?.consumed === true
-        && capabilitySnapshot?.runId === audit.sealedRunId
-        && capabilitySnapshot?.paperId === audit.paperId
-        && capabilitySnapshot?.recordSha256 === audit.sealedRecordSha256
-        && capabilitySnapshot?.analysisFileSha256 === audit.sealedAnalysisFileSha256
-        && capabilitySnapshot?.sourceSnapshotSha256 === audit.sealedSourceSnapshotSha256
-        && require('./analysis-engine.js').isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacyPaper)
+        && recoveryPermissionDetails?.consumed === true
+        && recoveryPermissionDetails?.runId === audit.sealedRunId
+        && recoveryPermissionDetails?.paperId === audit.paperId
+        && recoveryPermissionDetails?.recordSha256 === audit.sealedRecordSha256
+        && recoveryPermissionDetails?.analysisFileSha256 === audit.sealedAnalysisFileSha256
+        && recoveryPermissionDetails?.sourceSnapshotSha256 === audit.sealedSourceSnapshotSha256
+        && require('./analysis-engine.js').canRepairCoreSummaryFromSavedAnalysis(legacyPaper)
         && getRepairableAnalysisStructureIssues(checkpoint, { sourceText }).length === 0
         && !validateMethodDetailContract(checkpoint));
 }
@@ -9847,7 +9847,7 @@ const MANUAL_ONLY_ANALYSIS_CONTRACT_KEYS = new Set([
     'authorLineage'
 ]);
 
-function stripManualAnalysisProvenance(paper) {
+function removeManualAnalysisFields(paper) {
     if (!paper || typeof paper !== 'object') return paper;
     for (const key of Object.keys(paper)) {
         if (/^manual/i.test(key)) delete paper[key];
@@ -13938,7 +13938,7 @@ async function analyzePaperDeep(paper) {
 }
 
 async function analyzePaperDeepInternal(paper) {
-    stripManualAnalysisProvenance(paper);
+    removeManualAnalysisFields(paper);
     sanitizePaperImageRecovery(paper);
     const arxivId = getPaperArxivId(paper);
     const directRewriteContext = require('./lib/direct-rewrite-analysis-context.js');
@@ -17078,7 +17078,7 @@ module.exports = {
     makeModelHttpError,
     modelFingerprint,
     createAnalysisRecoveryManifest,
-    stripManualAnalysisProvenance,
+    removeManualAnalysisFields,
     markRecoveryStage,
     isRecoveryStageComplete,
     suppressOuterRetryAfterReaderExhaustion,

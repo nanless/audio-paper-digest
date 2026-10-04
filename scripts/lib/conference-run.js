@@ -136,15 +136,15 @@ function normalizeUsage(value = {}) {
     return usage;
 }
 
-function projectionDigest(projection) {
-    const { projectionSha256, ...bound } = projection;
+function getConferencePaperRecordHash(paperRecord) {
+    const { projectionSha256, ...bound } = paperRecord;
     return stableHash(bound);
 }
 
-function normalizeProjection(value, paperId) {
+function normalizeConferencePaperRecord(value, paperId) {
     assertExactFields(value, ['contract', 'paperId', 'sourceSha256', 'readerSha256', 'taxonomySha256',
         'scoringSha256', 'publicationSha256', 'summary', 'projectionSha256'], `${paperId} projection`);
-    const projection = {
+    const paperRecord = {
         contract: value.contract,
         paperId: value.paperId,
         sourceSha256: value.sourceSha256,
@@ -155,18 +155,18 @@ function normalizeProjection(value, paperId) {
         summary: value.summary,
         projectionSha256: value.projectionSha256
     };
-    if (projection.contract !== PAPER_PROJECTION_CONTRACT || projection.paperId !== paperId) {
+    if (paperRecord.contract !== PAPER_PROJECTION_CONTRACT || paperRecord.paperId !== paperId) {
         fail(`${paperId} projection identity is malformed`);
     }
     for (const key of ['sourceSha256', 'readerSha256', 'taxonomySha256', 'scoringSha256', 'publicationSha256', 'projectionSha256']) {
-        assertSha(projection[key], `${paperId} projection ${key}`);
+        assertSha(paperRecord[key], `${paperId} projection ${key}`);
     }
-    if (!projection.summary || typeof projection.summary !== 'object' || Array.isArray(projection.summary)
-        || ![Object.prototype, null].includes(Object.getPrototypeOf(projection.summary))) {
+    if (!paperRecord.summary || typeof paperRecord.summary !== 'object' || Array.isArray(paperRecord.summary)
+        || ![Object.prototype, null].includes(Object.getPrototypeOf(paperRecord.summary))) {
         fail(`${paperId} projection summary must be an object`);
     }
-    if (projection.projectionSha256 !== projectionDigest(projection)) fail(`${paperId} projection SHA does not bind its content`);
-    return canonical(projection);
+    if (paperRecord.projectionSha256 !== getConferencePaperRecordHash(paperRecord)) fail(`${paperId} projection SHA does not bind its content`);
+    return canonical(paperRecord);
 }
 
 function normalizePaperState(value, paperId) {
@@ -177,7 +177,7 @@ function normalizePaperState(value, paperId) {
     for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(`${paperId} state has unknown field ${key}`);
     const state = { status: value.status, usage: normalizeUsage(value.usage) };
     if (state.status === 'completed') {
-        state.projection = normalizeProjection(value.projection, paperId);
+        state.projection = normalizeConferencePaperRecord(value.projection, paperId);
         if (value.reason !== undefined) fail(`${paperId} completed state cannot have a reason`);
     } else {
         if (value.projection !== undefined && value.projection !== null) fail(`${paperId} incomplete state cannot carry a projection`);
@@ -447,7 +447,7 @@ function assertPublishableConferenceInput(input) {
 module.exports = {
     VERSION, CONTRACT, LEDGER_BINDING_CONTRACT, PAPER_PROJECTION_CONTRACT, SUMMARY_INPUT_CONTRACT,
     COMPLETION_PROOF_REQUIRED, STATUS_TRANSITIONS, USAGE_FIELDS,
-    sha256, stableHash, normalizeMembers, normalizeShards, normalizeUsage, normalizeProjection,
+    sha256, stableHash, normalizeMembers, normalizeShards, normalizeUsage, normalizeConferencePaperRecord,
     createConferenceRun, createConferenceRunFromVerifiedLedger, assertConferenceRun, assertConferenceRunFromVerifiedLedger,
     transitionPaperState, buildConferenceAggregateInput,
     assertPublishableConferenceInput

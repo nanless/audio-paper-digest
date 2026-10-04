@@ -186,12 +186,12 @@ def _discovery_binding(value: Any) -> dict[str, Any]:
     }
 
 
-def _source_provenance(value: Any, label: str) -> dict[str, str]:
-    provenance = _exact_object(value, ["kind", "locator", "retrievedAt"], f"{label}.provenance")
-    kind = _plain_text(provenance["kind"], f"{label}.provenance.kind")
+def _validate_source_acquisition_details(value: Any, label: str) -> dict[str, str]:
+    acquisition_details = _exact_object(value, ["kind", "locator", "retrievedAt"], f"{label}.provenance")
+    kind = _plain_text(acquisition_details["kind"], f"{label}.provenance.kind")
     if kind not in SOURCE_KINDS:
         raise _fail(f"{label}.provenance.kind is unsupported")
-    retrieved_at = _plain_text(provenance["retrievedAt"], f"{label}.provenance.retrievedAt")
+    retrieved_at = _plain_text(acquisition_details["retrievedAt"], f"{label}.provenance.retrievedAt")
     if not ISO_TIMESTAMP_RE.fullmatch(retrieved_at):
         raise _fail(f"{label}.provenance.retrievedAt must be a canonical UTC timestamp")
     try:
@@ -200,7 +200,7 @@ def _source_provenance(value: Any, label: str) -> dict[str, str]:
             raise ValueError("timestamp does not round-trip")
     except ValueError as exc:
         raise _fail(f"{label}.provenance.retrievedAt must be a canonical UTC timestamp") from exc
-    return {"kind": kind, "locator": _plain_text(provenance["locator"], f"{label}.provenance.locator", 2000),
+    return {"kind": kind, "locator": _plain_text(acquisition_details["locator"], f"{label}.provenance.locator", 2000),
         "retrievedAt": retrieved_at}
 
 
@@ -290,12 +290,12 @@ def validate_request(value: Any, manifest_name: str) -> dict[str, Any]:
                 "sha256": _expected_sha(metadata["sha256"], "source.metadata.sha256"),
                 "identityEvidence": _identity_evidence(metadata["identityEvidence"]),
                 "discoveryBinding": _discovery_binding(metadata["discoveryBinding"]),
-                "provenance": _source_provenance(metadata["provenance"], "source.metadata"),
+                "provenance": _validate_source_acquisition_details(metadata["provenance"], "source.metadata"),
             },
             "pdf": {
                 "file": _safe_name(pdf["file"], SAFE_PDF_NAME, "source.pdf.file"),
                 "sha256": _expected_sha(pdf["sha256"], "source.pdf.sha256"),
-                "provenance": _source_provenance(pdf["provenance"], "source.pdf"),
+                "provenance": _validate_source_acquisition_details(pdf["provenance"], "source.pdf"),
             },
         },
         "outputs": {

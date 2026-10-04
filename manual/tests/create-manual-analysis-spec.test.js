@@ -21,7 +21,7 @@ const {
     buildCompleteEntry
 } = require('../scripts/manual-fetch-fulltext.js');
 const {
-    validateManualV4AssemblerProvenance
+    validateManualV4AssemblyInputs
 } = require('../scripts/manual-deep-analysis.js');
 const {
     FRESH_AUTHORING_CONTRACT,
@@ -987,7 +987,7 @@ describe('strict reusable manual v4 spec assembler', () => {
             filteredPath,
             manifestPath: f.manifestPath
         };
-        assert.doesNotThrow(() => validateManualV4AssemblerProvenance(spec, options));
+        assert.doesNotThrow(() => validateManualV4AssemblyInputs(spec, options));
 
         const arbitraryTextPath = path.join(f.root, 'operator-substitute.txt');
         fs.writeFileSync(arbitraryTextPath, sourceText());
@@ -996,7 +996,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         arbitraryText.papers[ID].sourceSha256 = require('node:crypto')
             .createHash('sha256').update(fs.readFileSync(arbitraryTextPath)).digest('hex');
         assert.throws(
-            () => validateManualV4AssemblerProvenance(arbitraryText, options),
+            () => validateManualV4AssemblyInputs(arbitraryText, options),
             /未与同批 manifest 闭环/
         );
 
@@ -1007,21 +1007,21 @@ describe('strict reusable manual v4 spec assembler', () => {
             source: 'manual'
         });
         assert.throws(
-            () => validateManualV4AssemblerProvenance(arbitraryImage, options),
+            () => validateManualV4AssemblyInputs(arbitraryImage, options),
             /imageInfos 未与同批 manifest 闭环/
         );
 
         const missingRecords = JSON.parse(JSON.stringify(spec));
         missingRecords.recordsSources = [];
         assert.throws(
-            () => validateManualV4AssemblerProvenance(missingRecords, options),
+            () => validateManualV4AssemblyInputs(missingRecords, options),
             /缺少 recordsSources/
         );
 
         const downgraded = JSON.parse(JSON.stringify(spec));
         downgraded.version = spec.version === 5 ? 4 : 5;
         assert.throws(
-            () => validateManualV4AssemblerProvenance(downgraded, options),
+            () => validateManualV4AssemblyInputs(downgraded, options),
             /spec v[45] 与 records v[23] 版本映射不一致|版本降级\/升级非法/
         );
     });

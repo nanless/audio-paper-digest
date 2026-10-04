@@ -1976,7 +1976,7 @@ MANUAL_RESULT_DIRECTION_PATTERNS = (
 )
 
 
-def _manual_canonical_numeric_lexeme(value):
+def _normalize_manual_numeric_lexeme(value):
     normalized = unicodedata.normalize('NFKC', str(value or '')).lower()
     normalized = re.sub(r'[\u2212\u2012\u2013\u2014]', '-', normalized).replace(',', '')
     if normalized in MANUAL_ENGLISH_NUMBER_WORDS:
@@ -2016,7 +2016,7 @@ def _manual_numeric_lexemes(value):
         normalized,
         flags=re.I,
     )
-    return [_manual_canonical_numeric_lexeme(item) for item in matches]
+    return [_normalize_manual_numeric_lexeme(item) for item in matches]
 
 
 def _manual_normalized_semantic_text(value):
@@ -4359,10 +4359,10 @@ def parse_publish_arxiv_identity(arxiv_id):
     }
 
 
-def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
+def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
     """Validate every paper before creating any publish artifact.
 
-    ``validate_manual_provenance=False`` is reserved for the derived
+    ``validate_manual_stage_records=False`` is reserved for the derived
     publication-image-exclusion view.  Its canonical provenance was validated
     immediately before derivation; all reader-visible contracts are still
     rerun against the modified analysis.
@@ -4377,7 +4377,7 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
             if not isinstance(paper, dict):
                 raise PublishDataValidationError('论文记录必须是对象')
             paper_label = paper.get('arxivId') or paper.get('title') or '<unknown paper>'
-            if not validate_manual_provenance:
+            if not validate_manual_stage_records:
                 _validate_publish_image_exclusion_view(paper, paper_label)
             if paper.get('latestAnalysisAttemptError'):
                 raise PublishDataValidationError(
@@ -4427,7 +4427,7 @@ def validate_papers_for_publish(papers, *, validate_manual_provenance=True):
                     raise PublishDataValidationError(
                         f'{paper_label} 深度分析阶段尚未全部完成: {detail}'
                     )
-                if validate_manual_provenance:
+                if validate_manual_stage_records:
                     _validate_manual_takeover_manifest(paper, manifest, paper_label)
                 if not uses_manual_manifest:
                     _validate_tag_stage_record(paper, manifest, paper_label)

@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { apiReaderV3BindsCanonical } = require('../analysis-engine.js');
+const { hasValidApiReaderV3Records } = require('../analysis-engine.js');
 const { restoreApiReaderInjectionMarkers, parseApiReaderArticleResult, injectApiReaderFigures,
     buildApiReaderEvidenceContext, normalizeReaderProseFormatting, stableFingerprint } = require('../deep-analyzer.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
@@ -24,7 +24,7 @@ const MATERIALIZED_KEYS = new Set(['cachePath', 'assetFilename', 'assetMediaType
 // input representation of the existing signed output can be returned.
 function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId }) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(runId || '')
-        || paper?.latestAnalysisAttemptError || !apiReaderV3BindsCanonical(paper)) fail('invalid signed parent or run');
+        || paper?.latestAnalysisAttemptError || !hasValidApiReaderV3Records(paper)) fail('invalid signed parent or run');
     const id = paper.arxivId || paper.paper_id;
     const { freshSourceDescriptor: descriptor, ...sourceSnapshot } = sourceDetails || {};
     const artifacts = sourceDetails?.structuredArtifacts;

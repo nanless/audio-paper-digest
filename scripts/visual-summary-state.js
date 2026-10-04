@@ -17,7 +17,7 @@ const {
 } = require('./utils.js');
 const {
     isSuccessfulAnalysisRecord,
-    apiReaderV3BindsCanonical,
+    hasValidApiReaderV3Records,
     updateJsonFileLocked,
     withFileLockSync,
     readJsonFileStrict
@@ -481,7 +481,7 @@ function isModernReaderVisualPaper(paper) {
 }
 
 function signedReaderVisualSource(paper) {
-    if (paper?.latestAnalysisAttemptError || !apiReaderV3BindsCanonical(paper)) {
+    if (paper?.latestAnalysisAttemptError || !hasValidApiReaderV3Records(paper)) {
         throw new Error(`${normalizedId(paper)} 视觉文案缺少有效已签 Reader，禁止回退 canonical 摘要`);
     }
     const plan = paper.apiReaderPlan, article = paper.apiReaderArticle;

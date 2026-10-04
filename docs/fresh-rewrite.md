@@ -104,7 +104,7 @@ npm run rewrite:source -- analyze --run-id "$rewrite_run_id" --ids 2609.03586,26
 
 本段仅适用于前述兼容身份满足条件的旧运行。发现具体事实错误后，可在本运行 `patches/` 创建局部补丁。程序先取得运行操作锁，再取得同篇分析锁，等待正在执行的分析结束；不接受成功或已归档候选、跨运行路径及陈旧 SHA，也不直接修改已核验成功正文。
 
-`reader-source-only-v1` 用于尚无成功解读的首次新稿，已有成功分析或有效解读时拒绝此方式。`reader-source-signed-revision-v1` 用于定向修订中尚未完成的草稿，必须在论文锁内重读父稿，通过 `apiReaderV3BindsCanonical`，核验正文、计划、阶段来源及完整来源 SHA。没有有效同源父稿就拒绝，不能用布尔开关授权覆盖成功稿。
+`reader-source-only-v1` 用于尚无成功解读的首次新稿，已有成功分析或有效解读时拒绝此方式。`reader-source-signed-revision-v1` 用于定向修订中尚未完成的草稿，必须在论文锁内重读父稿，通过 `hasValidApiReaderV3Records`，核验正文、计划、阶段来源及完整来源 SHA。没有有效同源父稿就拒绝，不能用布尔开关授权覆盖成功稿。
 
 ```bash
 # 按原文审查本运行候选，创建 patches/reviewed.json 并 chmod 600

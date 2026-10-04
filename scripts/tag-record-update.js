@@ -623,7 +623,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
             pageRestageRequired: 'pageProof 与页面字节不在本工具范围，重封后须重跑确定性 postprocess'
         },
         items: plan.items,
-        summary: resealApi.summarizeReseal({ items: plan.items }),
+        summary: resealApi.summarizeTagRecordUpdates({ items: plan.items }),
         plannedWrites: plan.writes.length
     };
     if (options.acknowledgeDestructive) {

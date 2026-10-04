@@ -100,7 +100,7 @@ describe('taxonomy runtime analysis integration', () => {
 describe('API reanalysis provenance boundary', () => {
     it('剥离旧 Manual 字段与合同但保留 API 恢复合同', () => {
         const {
-            stripManualAnalysisProvenance,
+            removeManualAnalysisFields,
             createAnalysisRecoveryManifest
         } = require('../scripts/deep-analyzer.js');
         const paper = {
@@ -121,7 +121,7 @@ describe('API reanalysis provenance boundary', () => {
                 }
             }
         };
-        stripManualAnalysisProvenance(paper);
+        removeManualAnalysisFields(paper);
         assert.strictEqual(paper.manualDepth, undefined);
         assert.strictEqual(paper.manualArtifactIndex, undefined);
         assert.strictEqual(paper.manualV6Provenance, undefined);
@@ -5431,8 +5431,8 @@ has_dataset: 否
         const deep = require('../scripts/deep-analyzer.js');
         const engine = require('../scripts/analysis-engine.js');
         const fresh = require('../scripts/lib/fresh-analysis-context.js');
-        const originalEligible = engine.isSealedApiAnalysisEligibleForCoreSummaryRecovery;
-        const originalReader = engine.apiReaderV3BindsCanonical;
+        const originalEligible = engine.canRepairCoreSummaryFromSavedAnalysis;
+        const originalReader = engine.hasValidApiReaderV3Records;
         const originalFreshIdentity = fresh.freshAnalysisIdentity;
         const sourceText = `${require('../scripts/analysis-contract.js').extractSection(
             validAnalysisText(), '实验结果'
@@ -5444,8 +5444,8 @@ has_dataset: 否
             sourceOnly: true, oldGeneratedTextIncluded: false };
         const freshIdentity = { ...freshRewriteProvenance, paperId: '2604.12527',
             inputSetSha256: '4'.repeat(64) };
-        engine.isSealedApiAnalysisEligibleForCoreSummaryRecovery = paper => paper.legacyProofValid !== false;
-        engine.apiReaderV3BindsCanonical = paper => paper.readerProofValid !== false;
+        engine.canRepairCoreSummaryFromSavedAnalysis = paper => paper.legacyProofValid !== false;
+        engine.hasValidApiReaderV3Records = paper => paper.readerProofValid !== false;
         fresh.freshAnalysisIdentity = () => freshIdentity;
         try {
             const shallowSummary = '本文针对噪声语音识别任务中输入线索受损与输出错误累积的问题展开研究。方法先编码局部声学特征，再融合长程上下文并由解码器输出文字序列，各模块分别承担表征、融合与预测职责。实验显示方法有效，但摘要没有完整交代定量设置、适用边界与训练推理成本。';
@@ -5492,8 +5492,8 @@ has_dataset: 否
                 paper, forgedManifest, sourceText, 'structureRepair'
             ), false);
         } finally {
-            engine.isSealedApiAnalysisEligibleForCoreSummaryRecovery = originalEligible;
-            engine.apiReaderV3BindsCanonical = originalReader;
+            engine.canRepairCoreSummaryFromSavedAnalysis = originalEligible;
+            engine.hasValidApiReaderV3Records = originalReader;
             fresh.freshAnalysisIdentity = originalFreshIdentity;
         }
     });

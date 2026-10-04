@@ -89,25 +89,25 @@ function readJson(io, file) {
 
 // 逐篇 seal 优先；没有任何逐篇 seal 时才回落到顶层 stages.taxonomySeal，
 // 避免同一次执行被重复计数。
-function sealEntries(value, fallbackPaperId) {
+function collectTagStageRecords(value, fallbackPaperId) {
     const entries = [];
-    const push = (seal, paperId) => {
-        if (!seal || typeof seal !== 'object' || Array.isArray(seal)) return;
-        const raw = typeof seal.registrySha256 === 'string' ? seal.registrySha256 : '';
+    const push = (tagStageRecord, paperId) => {
+        if (!tagStageRecord || typeof tagStageRecord !== 'object' || Array.isArray(tagStageRecord)) return;
+        const raw = typeof tagStageRecord.registrySha256 === 'string' ? tagStageRecord.registrySha256 : '';
         entries.push({
             paperId: typeof paperId === 'string' && paperId ? paperId : null,
             registrySha256: SHA256_RE.test(raw) ? raw : null,
-            status: typeof seal.status === 'string' && seal.status ? seal.status : 'unknown'
+            status: typeof tagStageRecord.status === 'string' && tagStageRecord.status ? tagStageRecord.status : 'unknown'
         });
     };
     const papers = Array.isArray(value?.papers) ? value.papers : [];
     let found = 0;
     for (const paper of papers) {
-        const seal = paper?.analysisManifest?.stages?.taxonomySeal;
-        if (seal) {
+        const tagStageRecord = paper?.analysisManifest?.stages?.taxonomySeal;
+        if (tagStageRecord) {
             found += 1;
             // 执行/批次级 paperId 是 canonical 身份，逐篇 id 只作回落。
-            push(seal, fallbackPaperId || paper.paperId || paper.id);
+            push(tagStageRecord, fallbackPaperId || paper.paperId || paper.id);
         }
     }
     if (!found) push(value?.stages?.taxonomySeal, fallbackPaperId);
@@ -135,7 +135,7 @@ function scanExecutions(dir, io) {
             continue;
         }
         state.files += 1;
-        const entries = sealEntries(loaded.value, loaded.value.paperId || name);
+        const entries = collectTagStageRecords(loaded.value, loaded.value.paperId || name);
         if (!entries.length) state.withoutSeal += 1;
         for (const entry of entries) state.entries.push({ ...entry, source });
         state.seals += entries.length;
@@ -153,7 +153,7 @@ function scanDeep(file, io) {
         return state;
     }
     state.files = 1;
-    const entries = sealEntries(loaded.value, null);
+    const entries = collectTagStageRecords(loaded.value, null);
     for (const entry of entries) state.entries.push({ ...entry, source });
     state.seals = entries.length;
     return state;
@@ -345,4 +345,4 @@ if (require.main === module) {
     }
 }
 
-module.exports = { INVENTORY_CONTRACT, parseArgs, sealEntries, collect, formatHuman, main };
+module.exports = { INVENTORY_CONTRACT, parseArgs, collectTagStageRecords, collect, formatHuman, main };

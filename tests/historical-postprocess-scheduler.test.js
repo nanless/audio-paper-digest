@@ -86,7 +86,7 @@ test('sealed per-paper runs are assigned/staged concurrently and two runs aggreg
     assert.equal(f.aggregateCalls.length, 1);
     assert.equal(f.aggregateCalls[0].aggregates[0].inputs.options.stagingRunIds.length, 2);
     const checkpoint = JSON.parse(fs.readFileSync(result.checkpoint));
-    assert.equal(checkpoint.checkpointSha256, api.sealCheckpoint({ ...checkpoint, checkpointSha256: undefined }).checkpointSha256);
+    assert.equal(checkpoint.checkpointSha256, api.withCheckpointHash({ ...checkpoint, checkpointSha256: undefined }).checkpointSha256);
     const firstSha = sha(fs.readFileSync(result.checkpoint));
     const repeated = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 3 }, f.deps);

@@ -157,7 +157,7 @@ async function reanalyzeAll(options = {}) {
         return payload;
     });
 
-    const runSealedDailyAnalysis = () => (options.analyzeBatch || analyzeBatch)(papers, {
+    const runAnalysisFromDailySources = () => (options.analyzeBatch || analyzeBatch)(papers, {
         checkpointFilePath: DATA_FILE,
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(DATA_FILE);
@@ -216,7 +216,7 @@ async function reanalyzeAll(options = {}) {
             if (!result.skipped) console.log(`[reanalyze] 💾 单篇结果已保存 (${attemptResults.length}/${papers.length})`);
         }
     });
-    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runSealedDailyAnalysis);
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
 
     const finalPayload = updateJsonFileLocked(DATA_FILE, current => {
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);

@@ -6,7 +6,7 @@ const {
     buildApiReaderGenerationStart,
     stableFingerprint
 } = require('../scripts/deep-analyzer.js');
-const { apiReaderV3BindsCanonical } = require('../scripts/analysis-engine.js');
+const { hasValidApiReaderV3Records } = require('../scripts/analysis-engine.js');
 
 const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 const sourceText = 'This is the same verified paper source used to produce the Reader.';
@@ -66,7 +66,7 @@ function fixture() {
             }
         }
     };
-    assert.equal(apiReaderV3BindsCanonical(paper), true, 'fixture must satisfy the production validator');
+    assert.equal(hasValidApiReaderV3Records(paper), true, 'fixture must satisfy the production validator');
     return paper;
 }
 

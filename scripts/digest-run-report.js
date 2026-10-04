@@ -12,7 +12,7 @@ const {
     isSuccessfulAnalysisRecord,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
-    apiReaderV3BindsCanonical
+    hasValidApiReaderV3Records
 } = require('./analysis-engine.js');
 const { setupScriptLogging } = require('./log-setup.js');
 const { validateDailyFreshSourceRun } = require('./validate-data-files.js');
@@ -160,7 +160,7 @@ function llmApiPaperComplete(paper) {
         && reader.planSha256 === paper.apiReaderPlanSha256
         && reader.figuresSha256 === stableSha256(paper?.apiReaderFigures || [])
         && reader.readerAuthorsSha256 === stableSha256(paper?.apiReaderAuthors || {})
-        && apiReaderV3BindsCanonical(paper)
+        && hasValidApiReaderV3Records(paper)
     );
 }
 

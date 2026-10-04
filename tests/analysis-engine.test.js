@@ -27,12 +27,12 @@ const {
     mergeStoredAnalysisState,
     isSuccessfulAnalysisRecord,
     scoringStabilityIsResolved,
-    apiReaderV3BindsCanonical,
+    hasValidApiReaderV3Records,
     getAnalysisRunStatus,
     getAnalysisRunSummary,
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
-    isSealedApiAnalysisEligibleForCoreSummaryRecovery,
+    canRepairCoreSummaryFromSavedAnalysis,
     getAnalysisExitCode
 } = require('../scripts/analysis-engine.js');
 const {
@@ -1057,7 +1057,7 @@ describe('analyzePaperWithRetry', () => {
         };
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), false);
         bindValidApiReaderV3(automatic);
-        assert.strictEqual(apiReaderV3BindsCanonical(automatic), true);
+        assert.strictEqual(hasValidApiReaderV3Records(automatic), true);
         const conferencePdf = structuredClone(automatic);
         const pdfStableHash = value => crypto.createHash('sha256')
             .update(JSON.stringify((function stable(item) {
@@ -1088,7 +1088,7 @@ describe('analyzePaperWithRetry', () => {
             pdfStableHash(conferencePdf.apiReaderAuthors);
         conferencePdf.analysisManifest.stages.apiReaderArticle.readerAuthorIdentitySha256 =
             conferencePdf.apiReaderAuthors.identitySha256;
-        assert.strictEqual(apiReaderV3BindsCanonical(conferencePdf), true,
+        assert.strictEqual(hasValidApiReaderV3Records(conferencePdf), true,
             'a SHA-bound conference PDF text author identity must pass canonical proof');
         const emptyAuthors = structuredClone(automatic);
         emptyAuthors.authors = [];
@@ -1111,7 +1111,7 @@ describe('analyzePaperWithRetry', () => {
             .update(JSON.stringify(emptyIdentityStable(emptyAuthors.apiReaderAuthors))).digest('hex');
         emptyAuthors.analysisManifest.stages.apiReaderArticle.authorIdentitySha256 =
             emptyAuthors.apiReaderAuthors.identitySha256;
-        assert.strictEqual(apiReaderV3BindsCanonical(emptyAuthors), false,
+        assert.strictEqual(hasValidApiReaderV3Records(emptyAuthors), false,
             'a self-consistent but empty author identity must fail closed');
         const ephemeral = structuredClone(automatic);
         const stable = value => Array.isArray(value) ? value.map(stable)
@@ -1130,12 +1130,12 @@ describe('analyzePaperWithRetry', () => {
         ephemeral.analysisManifest.stages.apiReaderArticle.figuresSha256 = stableHash(
             ephemeral.apiReaderFigures
         );
-        assert.strictEqual(apiReaderV3BindsCanonical(ephemeral), true);
+        assert.strictEqual(hasValidApiReaderV3Records(ephemeral), true);
         ephemeral.apiReaderFigures[0].assetSha256 = 'bad';
         ephemeral.analysisManifest.stages.apiReaderArticle.figuresSha256 = stableHash(
             ephemeral.apiReaderFigures
         );
-        assert.strictEqual(apiReaderV3BindsCanonical(ephemeral), false);
+        assert.strictEqual(hasValidApiReaderV3Records(ephemeral), false);
         const deep = require('../scripts/deep-analyzer.js');
         const readerBytesBefore = JSON.stringify({
             article: automatic.apiReaderArticle,
@@ -1186,10 +1186,10 @@ describe('analyzePaperWithRetry', () => {
         };
         automatic.apiReaderArticle += '\n\n![Figure under laboratory \\[28\\]](https://arxiv.org/html/2403.14817v1/figure.png)';
         resealArticle();
-        assert.strictEqual(apiReaderV3BindsCanonical(automatic), true);
+        assert.strictEqual(hasValidApiReaderV3Records(automatic), true);
         automatic.apiReaderArticle += '\n\n\\[x=1\\]';
         resealArticle();
-        assert.strictEqual(apiReaderV3BindsCanonical(automatic), false);
+        assert.strictEqual(hasValidApiReaderV3Records(automatic), false);
 
         const nonApi = validAnalysisPaper('2604.00021v5');
         assert.strictEqual(isSuccessfulAnalysisRecord(nonApi), true);
@@ -1317,7 +1317,7 @@ describe('analyzePaperWithRetry', () => {
         );
         assert.strictEqual(isLegacyApiAnalysisSuccessForReadOnlyValidation(legacyEndToEnd), true);
         assert.strictEqual(isSuccessfulAnalysisRecord(legacyEndToEnd), false);
-        assert.strictEqual(isSealedApiAnalysisEligibleForCoreSummaryRecovery(legacy), true);
+        assert.strictEqual(canRepairCoreSummaryFromSavedAnalysis(legacy), true);
         assert.deepStrictEqual(getAnalysisRunSummary([legacy]), {
             success: 0, remaining: 1, status: 'failed'
         });

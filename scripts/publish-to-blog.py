@@ -283,7 +283,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
     file_count = manual_review_record.get('fileCount')
     if not isinstance(file_count, int) or file_count <= 0:
         return '人工审查记录中的文件数量必须是正整数。'
-    attested_files = manual_review_record.get('files')
+    review_file_details = manual_review_record.get('files')
     receipt_files = receipt.get('files')
     if legacy_v1:
         # v1 never carried per-page attestations. It is accepted only as
@@ -305,7 +305,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
         'experimentComparisons', 'reproducibility', 'limitations',
         'scoring', 'images',
     }
-    if not isinstance(attested_files, list) or len(attested_files) != file_count:
+    if not isinstance(review_file_details, list) or len(review_file_details) != file_count:
         return '人工审查记录必须保留逐文件审查明细，且条目数量须与记录的文件数量一致。'
     if not isinstance(receipt_files, list) or len(receipt_files) != file_count:
         return '人工审查记录中的文件数量与发布凭证的文件清单不一致。'
@@ -324,7 +324,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
             for token in tokens
         )
 
-    seen_attested_paths = set()
+    seen_review_file_paths = set()
     seen_notes = set()
     seen_semantic_notes = set()
     seen_review_tasks = set()
@@ -340,7 +340,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
         seen_semantic_notes.add(key)
         return None
 
-    for item in attested_files:
+    for item in review_file_details:
         if not isinstance(item, dict):
             return '人工审查记录中的每条文件明细必须是对象。'
         allowed_fields = {'path', 'sha256', 'checks', 'notes', 'deleted'}
@@ -352,12 +352,12 @@ def _manual_review_record_error(receipt, *, date_str=None,
                 or not set(item).issubset(allowed_fields):
             return '人工审查记录的文件明细缺少必要字段，或含有不允许的字段。'
         path = item.get('path')
-        if not isinstance(path, str) or path in seen_attested_paths or path not in receipt_by_path:
+        if not isinstance(path, str) or path in seen_review_file_paths or path not in receipt_by_path:
             return '人工审查记录中的文件路径格式无效、重复，或不在发布凭证的文件清单中。'
         relative_path = Path(path)
         if relative_path.is_absolute() or '..' in relative_path.parts:
             return f'人工审查记录必须使用不含 .. 的博客仓库相对路径：{path}'
-        seen_attested_paths.add(path)
+        seen_review_file_paths.add(path)
         receipt_item = receipt_by_path[path]
         deleted = receipt_item.get('deleted') is True
         if deleted != (item.get('deleted') is True) \
@@ -461,7 +461,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
             )
             if semantic_error:
                 return semantic_error
-    if seen_attested_paths != set(receipt_by_path):
+    if seen_review_file_paths != set(receipt_by_path):
         return '人工审查记录中的文件集合与发布凭证不一致。'
     path_set_sha = manual_review_record.get('reviewedPathSetSha256')
     if not re.fullmatch(r'[0-9a-f]{64}', str(path_set_sha or '')):
@@ -1657,7 +1657,7 @@ _IMAGE_REPO_SUFFIX_MIME = {
 }
 
 
-def _load_local_image_repo_projection(url):
+def _load_review_image_from_local_repo(url):
     """Read our own pre-push image-repository URL from the local worktree.
 
     Conference review runs before push: generate stages figure bytes into the
@@ -1717,7 +1717,7 @@ def _load_review_image(url):
         media_type, raw = _prepare_raster_for_review(media_type, raw)
         return {'media_type': media_type, 'data': base64.b64encode(raw).decode('ascii')}
     if url.startswith('https://'):
-        local_payload = _load_local_image_repo_projection(url)
+        local_payload = _load_review_image_from_local_repo(url)
         if local_payload is not None:
             return local_payload
         return _download_review_image(url)
@@ -4027,7 +4027,7 @@ def _build_api_reader_display_fields(paper, payload=None):
     }
 
 
-def _api_reader_index_projection_issue(content, papers):
+def _api_reader_index_display_fields_issue(content, papers):
     """Replay modern per-paper decision blocks in an immutable daily index."""
     blocks = re.split(r'^### ', content.split('## 📋 论文列表', 1)[-1], flags=re.MULTILINE)[1:]
     for paper in papers:
@@ -4973,7 +4973,7 @@ def _normalize_api_reader_source_cell(value):
     return re.sub(r'\s+', ' ', value).strip()
 
 
-def _canonical_api_reader_numeric_token(raw):
+def _normalize_api_reader_numeric_token(raw):
     """与 Node 端 normalizeReaderNumericToken 保持同一归一化标准。
 
     两端门禁必须对同一输入得出同一 token 集合，否则分析侧通过的内容会在
@@ -4981,8 +4981,8 @@ def _canonical_api_reader_numeric_token(raw):
     四位年份英文复数去掉裸 s。
     """
     # NFKC 不映射数学减号 U+2212 与全角连字符 U+FF0D，显式归一（与 Node 一致）。
-    surface = unicodedata.normalize('NFKC', str(raw or '')).replace('−', '-').replace('－', '-')
-    token = surface
+    normalized_text = unicodedata.normalize('NFKC', str(raw or '')).replace('−', '-').replace('－', '-')
+    token = normalized_text
     previous = None
 
     while token != previous:
@@ -4999,7 +4999,7 @@ def _canonical_api_reader_numeric_token(raw):
     if not (number == number and abs(number) != float('inf')):
         return token
     suffix = match.group(2) or ''
-    if re.fullmatch(r'\d{4}s', surface.strip(), flags=re.IGNORECASE) \
+    if re.fullmatch(r'\d{4}s', normalized_text.strip(), flags=re.IGNORECASE) \
             and re.fullmatch(r'\d{4}', match.group(1)) \
             and 1000 <= int(match.group(1)) <= 2999 and suffix == 's':
         suffix = ''
@@ -5064,14 +5064,14 @@ def _api_reader_numeric_tokens(value):
     )
     tokens = []
     for match in pattern.finditer(unicodedata.normalize('NFKC', numeric_surface)):
-        canonical = _canonical_api_reader_numeric_token(match.group(0))
-        tokens.append(canonical)
+        normalized_numeric_token = _normalize_api_reader_numeric_token(match.group(0))
+        tokens.append(normalized_numeric_token)
         # 与 Node 端 readerNumericTokens 同一条双写粘连规则（4096+4096、
         # 8.218.21、40964096s 同时索引半部；短半部不拆，避免误读 2020/1212）。
         half = _reader_doubled_half_token(match.group(0))
         if half:
-            half_token = _canonical_api_reader_numeric_token(half)
-            if half_token != canonical:
+            half_token = _normalize_api_reader_numeric_token(half)
+            if half_token != normalized_numeric_token:
                 tokens.append(half_token)
 
     # LaTeXML can concatenate a visible thousands-grouped integer with its
@@ -5084,7 +5084,7 @@ def _api_reader_numeric_tokens(value):
         r'(?![A-Za-z0-9０-９,，])'
     )
     for match in duplicated_grouped_integer.finditer(original_surface):
-        tokens.append(_canonical_api_reader_numeric_token(match.group(1)))
+        tokens.append(_normalize_api_reader_numeric_token(match.group(1)))
 
     # Match Node's exact LaTeXML statistic alias. The HTML text extractor may
     # flatten one displayed thousands-grouped value and its TeX annotation as
@@ -5133,7 +5133,7 @@ def _api_reader_numeric_tokens(value):
             if left and right and left == right:
                 splits.append((run[:index], run[index:]))
         if len(splits) == 1:
-            tokens.append(_canonical_api_reader_numeric_token(
+            tokens.append(_normalize_api_reader_numeric_token(
                 f'{splits[0][0]} {match.group(2)}'
             ))
 
@@ -5142,7 +5142,7 @@ def _api_reader_numeric_tokens(value):
         right = exact_number(match.group(2).replace('{', '').replace('}', ''))
         if not left or left != right:
             continue
-        alias = _canonical_api_reader_numeric_token(
+        alias = _normalize_api_reader_numeric_token(
             f'{match.group(1)} {match.group(3)}'
         )
         tokens.append(alias)
@@ -5163,7 +5163,7 @@ def _api_reader_numeric_tokens(value):
         tex_unit = ''.join(re.findall(
             r'\\(?:mathrm|textrm|text)\{([A-Za-z]+)\}', match.group(4)))
         if left and left == right and tex_unit.lower() == match.group(2).lower():
-            tokens.append(_canonical_api_reader_numeric_token(
+            tokens.append(_normalize_api_reader_numeric_token(
                 f'{match.group(1)} {match.group(2)}'))
     return tokens
 
@@ -6420,15 +6420,15 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     )
     v6_marker = ''
     if v6_payload:
-        provenance = v6_payload['provenance']
+        manual_v6_bindings = v6_payload['provenance']
         v6_marker = (
             'paper_digest_v6_runtime_mode: "production"\n'
             f'paper_digest_reader_longform: "{MANUAL_LONGFORM_CONTRACT_VERSION_V2}"\n'
-            f'paper_digest_reader_longform_sha256: "{provenance["readerLongformSha256"]}"\n'
+            f'paper_digest_reader_longform_sha256: "{manual_v6_bindings["readerLongformSha256"]}"\n'
             f'paper_digest_reader_article_sha256: "{v6_payload["articleSha256"]}"\n'
             f'paper_digest_artifact_index_sha256: "{v6_payload["artifactIndexSha256"]}"\n'
             + ''.join(
-                f'paper_digest_v6_{marker}: "{provenance[field]}"\n'
+                f'paper_digest_v6_{marker}: "{manual_v6_bindings[field]}"\n'
                 for marker, field in (
                     ('spec_root_sha256', 'specRootSha256'),
                     ('paper_spec_sha256', 'paperSpecSha256'),
@@ -7093,8 +7093,8 @@ def classify_review_failure(issues):
 
 
 def _paper_fresh_run_id(paper):
-    provenance = paper.get('freshRewriteProvenance') if isinstance(paper, dict) else None
-    run_id = provenance.get('runId') if isinstance(provenance, dict) else None
+    fresh_source_details = paper.get('freshRewriteProvenance') if isinstance(paper, dict) else None
+    run_id = fresh_source_details.get('runId') if isinstance(fresh_source_details, dict) else None
     return run_id if isinstance(run_id, str) and re.fullmatch(
         r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', run_id,
     ) else None
@@ -8175,7 +8175,7 @@ def validate_staged_posts(
             )
         api_reader_issue = artifact['apiReaderIssue']
         if path.name == f'{date_str}.md' and authoritative_papers:
-            api_reader_issue = _api_reader_index_projection_issue(
+            api_reader_issue = _api_reader_index_display_fields_issue(
                 artifact['content'], list(authoritative_papers.values()),
             )
             artifact['apiReaderIssue'] = api_reader_issue
@@ -9486,22 +9486,22 @@ def manual_v6_publication_bindings(published_papers):
                 or contracts.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V6:
             continue
         payload = validate_manual_v6_payload(paper)
-        provenance = payload['provenance']
+        manual_v6_bindings = payload['provenance']
         bindings.append({
             'paperId': payload['paperId'],
             'manualDepth': MANUAL_DEPTH_CONTRACT_VERSION_V6,
-            'runtimeMode': provenance['runtimeMode'],
-            'specVersion': provenance['specVersion'],
-            'specRootSha256': provenance['specRootSha256'],
-            'paperSpecSha256': provenance['paperSpecSha256'],
-            'recordSemanticSha256': provenance['sealedRecordSha256'],
-            'recordFileSha256': provenance['recordFileSha256'],
+            'runtimeMode': manual_v6_bindings['runtimeMode'],
+            'specVersion': manual_v6_bindings['specVersion'],
+            'specRootSha256': manual_v6_bindings['specRootSha256'],
+            'paperSpecSha256': manual_v6_bindings['paperSpecSha256'],
+            'recordSemanticSha256': manual_v6_bindings['sealedRecordSha256'],
+            'recordFileSha256': manual_v6_bindings['recordFileSha256'],
             'artifactIndexSha256': payload['artifactIndexSha256'],
-            'artifactIndexFileSha256': provenance['artifactIndexFileSha256'],
-            'recordsEnvelopeFileSha256': provenance['recordsEnvelopeFileSha256'],
-            'taskEvidenceSha256': provenance['taskEvidenceSha256'],
+            'artifactIndexFileSha256': manual_v6_bindings['artifactIndexFileSha256'],
+            'recordsEnvelopeFileSha256': manual_v6_bindings['recordsEnvelopeFileSha256'],
+            'taskEvidenceSha256': manual_v6_bindings['taskEvidenceSha256'],
             'readerLongformContract': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
-            'readerLongformSha256': provenance['readerLongformSha256'],
+            'readerLongformSha256': manual_v6_bindings['readerLongformSha256'],
             'readerArticleSha256': payload['articleSha256'],
         })
     return sorted(bindings, key=lambda item: item['paperId'])
@@ -12463,7 +12463,7 @@ def generate_main(options=None):
             papers = validate_papers_for_publish(papers)
             papers = apply_publish_image_exclusions(papers)
             papers = validate_papers_for_publish(
-                papers, validate_manual_provenance=False,
+                papers, validate_manual_stage_records=False,
             )
         except PublishDataValidationError as exc:
             print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")

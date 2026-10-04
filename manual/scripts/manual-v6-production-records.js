@@ -192,13 +192,13 @@ function verifyTaskArtifactsAgainstState(state, paperId) {
     }
 }
 
-function sealedRecordSemanticSha256(record) {
+function hashManualReviewRecord(record) {
     const payload = structuredClone(record);
     delete payload.sealedRecordSha256;
     return stableSha256(payload);
 }
 
-function sealRecordFromValidatedState(state, paperId, artifactRoot, options = {}) {
+function writeVerifiedManualReviewRecord(state, paperId, artifactRoot, options = {}) {
     const tasks = state.papers[paperId].tasks;
     verifyTaskArtifactsAgainstState(state, paperId);
     const closure = assertProductionRevisionClosure(state, paperId, artifactRoot);
@@ -249,7 +249,7 @@ function sealRecordFromValidatedState(state, paperId, artifactRoot, options = {}
         resolvedFindingSha256s: resolved,
         notes: closure.output.notes
     };
-    record.sealedRecordSha256 = sealedRecordSemanticSha256(record);
+    record.sealedRecordSha256 = hashManualReviewRecord(record);
     const sealedPath = path.join(artifactRoot, 'sealed', 'record-v4.json');
     const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`, 'utf8');
     const existing = fs.lstatSync(sealedPath, { throwIfNoEntry: false });
@@ -279,12 +279,12 @@ function buildPaperDescriptor(state, paperId, expectedRoot, options = {}) {
     const artifactIndexFile = readJsonFile(
         path.join(expectedRoot, artifactRef.path), `${paperId}.ArtifactIndex`
     );
-    const sealed = sealRecordFromValidatedState(state, paperId, expectedRoot, {
+    const reviewRecordResult = writeVerifiedManualReviewRecord(state, paperId, expectedRoot, {
         ...options,
         artifactIndex: artifactIndexFile.value,
         artifactIndexFileSha256: sha256Bytes(artifactIndexFile.bytes)
     });
-    const sealedPath = sealed.sealedPath;
+    const sealedPath = reviewRecordResult.sealedPath;
     const record = readJsonFile(sealedPath, `${paperId}.sealed record`);
     if (record.value.version !== 4 || record.value.manualDepth !== 'full-text-evidence-v6'
         || record.value.paperId !== paperId || !record.value.sealedRecordSha256) {
@@ -446,10 +446,10 @@ module.exports = {
     parseArgs,
     assertValidatedProductionState,
     verifyTaskArtifactsAgainstState,
-    sealedRecordSemanticSha256,
+    hashManualReviewRecord,
     normalizeLegacyArtifactIndexBinding,
     assertProductionRevisionClosure,
-    sealRecordFromValidatedState,
+    writeVerifiedManualReviewRecord,
     buildPaperDescriptor,
     buildRecordsEnvelope,
     assembleRecordsEnvelope,

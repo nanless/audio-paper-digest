@@ -57,7 +57,7 @@ async function prepareReaderOperatorPatchResult({ parent, sourceDetails, run, re
     const paper = await deep.finalizeOperatorApiReaderArticleFromSource(
         structuredClone(parent), sourceDetails, draft, provenance
     );
-    if (!require('../analysis-engine.js').apiReaderV3BindsCanonical(paper)) throw new Error('Operator output failed production sealing');
+    if (!require('../analysis-engine.js').hasValidApiReaderV3Records(paper)) throw new Error('Operator output failed production sealing');
     return { contract: CONTRACT, provenance, paper, paperSha256: runner.stableHash(paper) };
 }
 
@@ -150,7 +150,7 @@ async function applyReaderOperatorPatch({ loaded, patchFile }, deps) {
             || output.provenance.parentPaperSha256 !== request.parentPaperSha256
             || output.provenance.patchFileSha256 !== requestFile.sha256
             || output.provenance.sourceSnapshotSha256 !== sourceDetails.freshSourceDescriptor.sourceSnapshotSha256
-            || !require('../analysis-engine.js').apiReaderV3BindsCanonical(output.paper)) throw new Error('Signed operator durable output drift');
+            || !require('../analysis-engine.js').hasValidApiReaderV3Records(output.paper)) throw new Error('Signed operator durable output drift');
         immutable(path.join(directory, 'output.json'), output);
         if (deps.afterOutput) await deps.afterOutput();
         if (readPrivate(filename).sha256 !== requestFile.sha256) throw new Error('Signed operator patch bytes changed');
@@ -232,7 +232,7 @@ async function acceptReaderOperatorFactReview({ loaded, request }, deps) {
             || receipt.paper.apiReaderArticleSha256 !== request.articleSha256
             || receipt.paper.apiReaderPlanSha256 !== request.planSha256
             || receipt.paper.sourceSha256 !== request.sourceSha256
-            || !require('../analysis-engine.js').apiReaderV3BindsCanonical(receipt.paper)) throw new Error('Fact acceptance durable receipt drift');
+            || !require('../analysis-engine.js').hasValidApiReaderV3Records(receipt.paper)) throw new Error('Fact acceptance durable receipt drift');
         if (deps.afterFactReceipt) await deps.afterFactReceipt();
         if (readPrivate(path.join(runDir, 'source-audits', request.reportFile), false).sha256 !== request.reportSha256) {
             throw new Error('Fact report bytes changed before installation');

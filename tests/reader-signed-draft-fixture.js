@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const deep = require('../scripts/deep-analyzer.js');
 const { stableHash: hash, sha256: sha } = require('../scripts/lib/fresh-rewrite-run.js');
-const { apiReaderV3BindsCanonical } = require('../scripts/analysis-engine.js');
+const { hasValidApiReaderV3Records } = require('../scripts/analysis-engine.js');
 const runId = '11111111-2222-4333-8444-555555555555', paperId = '2609.12345';
 const stableObject = value => {
     if (Array.isArray(value)) return value.map(stableObject);
@@ -15,7 +15,7 @@ function sign(paper) {
     paper.apiReaderArticleSha256 = sha(paper.apiReaderArticle); paper.apiReaderPlanSha256 = hash(plan);
     Object.assign(stage, { articleSha256: paper.apiReaderArticleSha256, planSha256: paper.apiReaderPlanSha256,
         figuresSha256: hash(paper.apiReaderFigures), sourceBindingsSha256: plan.sourceBindingsSha256 });
-    assert.equal(apiReaderV3BindsCanonical(paper), true);
+    assert.equal(hasValidApiReaderV3Records(paper), true);
 }
 
 function fixture(options = {}) {

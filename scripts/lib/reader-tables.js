@@ -363,7 +363,7 @@ function assessReaderTableSelectionEligibility(table) {
 // inventing a cell: move the sole selected header to the front, or prepend the
 // sole declared header when the model selected data rows only.  Multiple
 // possible headers remain ambiguous and must go through a bounded local repair.
-function canonicalizeReaderSelectionRows(sourceRows, headerRows) {
+function putReaderTableHeaderFirst(sourceRows, headerRows) {
     if (!Array.isArray(sourceRows) || !Array.isArray(headerRows)) return sourceRows;
     const headers = new Set(headerRows); const selectedHeaders = sourceRows.filter(row => headers.has(row));
     if (selectedHeaders.length === 1) {
@@ -438,7 +438,7 @@ function renderReaderTableSelection(binding, artifacts) {
     const effectiveRows = effectiveReaderTableRows(table);
     const headerRows = effectiveRows.inferred
         ? effectiveRows.headerRows : effectiveReaderTableHeaderRows(table);
-    const sourceRows = canonicalizeReaderSelectionRows(requestedSourceRows, headerRows);
+    const sourceRows = putReaderTableHeaderFirst(requestedSourceRows, headerRows);
     if (!headerRows.includes(sourceRows[0])
         || sourceRows.slice(1).some(row => headerRows.includes(row))) {
         throw new Error(`${label} 第一行必须是原表头，其余行必须是数据行；`
@@ -543,6 +543,6 @@ module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CON
     hasExplicitRepeatedScientificMeasurement, bracketedNumericVectors,
     hasSourceBoundRepeatedNumericVector, hasSourceBoundRepeatedRangeChain,
     findReaderTablePasteDuplication, assessReaderTableSelectionEligibility,
-    effectiveReaderTableRows, effectiveReaderTableHeaderRows, canonicalizeReaderSelectionRows,
+    effectiveReaderTableRows, effectiveReaderTableHeaderRows, putReaderTableHeaderFirst,
     renderReaderTableSelection, repairUniqueReaderTableSelectionHeader,
     compileReaderTableSelections };

@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const { parseAnalysis } = require('../utils.js');
 const { stableHash } = require('./fresh-rewrite-run.js');
-const { scoringAuditBindsFinalAnalysis, apiReaderV3BindsCanonical } = require('../analysis-engine.js');
+const { scoringAuditBindsFinalAnalysis, hasValidApiReaderV3Records } = require('../analysis-engine.js');
 const { paperSourceQuoteBindsOriginalUrl } = require('./reader-resource-binding.js');
 const CONTRACT = 'reader-resource-availability-sync-v1';
 const sha = text => crypto.createHash('sha256').update(String(text)).digest('hex');
@@ -13,7 +13,7 @@ const protectedReaderKeys = ['apiReaderArticle','apiReaderPlan','apiReaderFigure
 
 function readerResourceIdentityRebind(paper, manifest, resources) {
     const stage = manifest.stages.apiReaderArticle;
-    if (stage?.status !== 'complete' || apiReaderV3BindsCanonical(paper)) return null;
+    if (stage?.status !== 'complete' || hasValidApiReaderV3Records(paper)) return null;
     if (stage.resourceCount !== resources.resources.length) {
         throw new Error('读者文章与正式分析的绑定无效，不能仅靠同步资源状态修复。');
     }
@@ -23,7 +23,7 @@ function readerResourceIdentityRebind(paper, manifest, resources) {
         ...paper,
         analysisManifest: { ...manifest, stages: reboundStages }
     };
-    if (!apiReaderV3BindsCanonical(rebound)) {
+    if (!hasValidApiReaderV3Records(rebound)) {
         throw new Error('读者文章与正式分析的绑定无效，不能仅靠同步资源状态修复。');
     }
     return {
@@ -137,7 +137,7 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
     if (stableHash(stages.scoringAudit.audit) !== auditSha
         || stableHash(Object.fromEntries(protectedReaderKeys.map(key => [key, next[key]]))) !== beforeReader
         || !scoringAuditBindsFinalAnalysis(next)
-        || (stages.apiReaderArticle?.status === 'complete' && !apiReaderV3BindsCanonical(next))) {
+        || (stages.apiReaderArticle?.status === 'complete' && !hasValidApiReaderV3Records(next))) {
         throw new Error('同步资源状态后，评分审查内容、读者文章内容或阶段绑定未能保持要求。');
     }
     Object.assign(paper, next);

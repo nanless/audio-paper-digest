@@ -9,7 +9,7 @@ const { renderReaderTableSelection, compileReaderTableSelections,
     hasExplicitRepeatedScientificMeasurement, hasSourceBoundRepeatedNumericVector,
     hasSourceBoundRepeatedRangeChain,
     effectiveReaderTableRows,
-    canonicalizeReaderSelectionRows } = require('../scripts/lib/reader-tables.js');
+    putReaderTableHeaderFirst } = require('../scripts/lib/reader-tables.js');
 
 function artifactsFixture() {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
@@ -288,9 +288,9 @@ test('source row/column selection preserves multilevel headers, spanning DOM ide
 
 test('selection deterministically moves or prepends an unambiguous source header without changing data cells', () => {
     const { artifacts } = artifactsFixture();
-    assert.deepEqual(canonicalizeReaderSelectionRows([2, 1, 3], [0, 1]), [1, 2, 3]);
-    assert.deepEqual(canonicalizeReaderSelectionRows([1, 2], [0]), [0, 1, 2]);
-    assert.deepEqual(canonicalizeReaderSelectionRows([2, 3], [0, 1]), [2, 3],
+    assert.deepEqual(putReaderTableHeaderFirst([2, 1, 3], [0, 1]), [1, 2, 3]);
+    assert.deepEqual(putReaderTableHeaderFirst([1, 2], [0]), [0, 1, 2]);
+    assert.deepEqual(putReaderTableHeaderFirst([2, 3], [0, 1]), [2, 3],
         'multiple absent header candidates remain ambiguous');
 
     const moved = selected(); moved.selection.sourceRows = [2, 1, 3];

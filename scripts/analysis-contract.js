@@ -1616,7 +1616,7 @@ function validateManualEvidenceLedger(ledger, sourceText = '') {
     return null;
 }
 
-function validateFreshAuthoringCanonicalBinding(manifest, takeover) {
+function validateFreshAuthoringRecordConsistency(manifest, takeover) {
     const marker = manifest?.contracts?.freshAuthoring;
     // Historical v5 canonical records predate the file-backed fresh-authoring
     // contract. Keep them readable for validation/migration, while every new
@@ -1635,7 +1635,7 @@ function validateFreshAuthoringCanonicalBinding(manifest, takeover) {
     return null;
 }
 
-function validateTutorialPayloadCanonicalBinding(manifest, takeover) {
+function validateTutorialPayloadRecordConsistency(manifest, takeover) {
     const marker = manifest?.contracts?.tutorialPayload;
     // Historical v5 records without the marker remain readable only.  The
     // publisher separately refuses to package them as a new tutorial page.
@@ -1771,9 +1771,9 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         if (manifest?.contracts?.researcherFocus !== MANUAL_RESEARCH_CONTRACT_VERSION) {
             return `manual v5 必须绑定 researcherFocus=${MANUAL_RESEARCH_CONTRACT_VERSION}`;
         }
-        const freshAuthoringIssue = validateFreshAuthoringCanonicalBinding(manifest, takeover);
+        const freshAuthoringIssue = validateFreshAuthoringRecordConsistency(manifest, takeover);
         if (freshAuthoringIssue) return freshAuthoringIssue;
-        const tutorialPayloadIssue = validateTutorialPayloadCanonicalBinding(manifest, takeover);
+        const tutorialPayloadIssue = validateTutorialPayloadRecordConsistency(manifest, takeover);
         if (tutorialPayloadIssue) return tutorialPayloadIssue;
         try {
             validateResearchBrief(takeover.researchBrief, {
@@ -2358,8 +2358,8 @@ module.exports = {
     manualTextSha256,
     findManualBoilerplate,
     validateManualEvidenceLedger,
-    validateFreshAuthoringCanonicalBinding,
-    validateTutorialPayloadCanonicalBinding,
+    validateFreshAuthoringRecordConsistency,
+    validateTutorialPayloadRecordConsistency,
     validateManualTakeoverManifest,
     getInvalidAnalysisReason
 };

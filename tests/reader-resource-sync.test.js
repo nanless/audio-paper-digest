@@ -67,7 +67,7 @@ function sealReader(paper) {
         sourceBindingsContractVersion:'api-reader-source-bindings-v4',
         sourceBindingsSha256:plan.sourceBindingsSha256,sourceBindingsSourceTextSha256:paper.sourceSha256,
         tableBindingCount:0,formulaBindingCount:0,structuredArtifactsSha256:'b'.repeat(64)};
-    assert(engine.apiReaderV3BindsCanonical(paper));
+    assert(engine.hasValidApiReaderV3Records(paper));
 }
 
 function refreshAvailability(f) {
@@ -160,9 +160,9 @@ test('Reader resource availability refresh rebinds only its identity while prese
     const before={article:f.paper.apiReaderArticle,plan:structuredClone(f.paper.apiReaderPlan),
         figures:structuredClone(f.paper.apiReaderFigures),authors:structuredClone(f.paper.apiReaderAuthors),
         audit:structuredClone(f.paper.analysisManifest.stages.scoringAudit.audit)};
-    assert(!engine.apiReaderV3BindsCanonical(f.paper));
+    assert(!engine.hasValidApiReaderV3Records(f.paper));
     const result=sync(f.paper,f.sourceDetails);
-    assert(engine.apiReaderV3BindsCanonical(result));
+    assert(engine.hasValidApiReaderV3Records(result));
     assert.equal(result.apiReaderArticle,before.article);assert.deepEqual(result.apiReaderPlan,before.plan);
     assert.deepEqual(result.apiReaderFigures,before.figures);assert.deepEqual(result.apiReaderAuthors,before.authors);
     assert.deepEqual(result.analysisManifest.stages.scoringAudit.audit,before.audit);

@@ -111,12 +111,12 @@ function withFreshAnalysisContext(identity, callback) {
     }
     for (const expectation of Object.values(checked.sourceExpectations)) Object.freeze(expectation);
     Object.freeze(checked.sourceExpectations);
-    const capabilities = identity.sealedRecoveryCapabilities === undefined
-        ? new Map() : identity.sealedRecoveryCapabilities;
-    if (!(capabilities instanceof Map)
-        || [...capabilities.entries()].some(([id, handle]) => {
+    const recoveryPermissions = identity.savedAnalysisRecoveryPermissions === undefined
+        ? new Map() : identity.savedAnalysisRecoveryPermissions;
+    if (!(recoveryPermissions instanceof Map)
+        || [...recoveryPermissions.entries()].some(([id, handle]) => {
             const snapshot = require('./fresh-rewrite-run.js')
-                .sealedRecoveryCapabilitySnapshot(handle);
+                .getSavedAnalysisRecoveryPermissionDetails(handle);
             const expected = checked.sourceExpectations[id];
             return !expected || snapshot?.runId !== checked.runId
                 || snapshot.paperId !== id
@@ -128,7 +128,7 @@ function withFreshAnalysisContext(identity, callback) {
     const { withLlmUsageContext } = require('./llm-usage.js');
     const context = Object.freeze({ ...checked,
         refreshReaderDiagnostics: identity.refreshReaderDiagnostics === true,
-        sealedRecoveryCapabilities: new Map(capabilities),
+        savedAnalysisRecoveryPermissions: new Map(recoveryPermissions),
         pendingSources: new Map() });
     return scope.run(context,
         () => withLlmUsageContext({ runId: checked.runId }, callback));
@@ -145,10 +145,10 @@ function isDailyFreshSourceScope() {
     return getFreshAnalysisContext()?.runContract === DAILY_SOURCE_RUN_CONTRACT;
 }
 
-function getSealedRecoveryCapability(id = getFreshAnalysisContext()?.paperId) {
+function getSavedAnalysisRecoveryPermission(id = getFreshAnalysisContext()?.paperId) {
     const context = getFreshAnalysisContext();
     if (!context || !id) return null;
-    return context.sealedRecoveryCapabilities.get(paperId(id)) || null;
+    return context.savedAnalysisRecoveryPermissions.get(paperId(id)) || null;
 }
 
 function validateSource(details, id, expectation) {
@@ -177,7 +177,7 @@ function sourceDirectory(context, id) { return path.join(context.runDir, 'source
 
 function bundleRoot(context) { return path.join(context.runDir, 'sources'); }
 
-function detailsFromSealedBundle(stored) {
+function buildSourceDetailsFromBundle(stored) {
     // The sealed source bundle already validates its non-pixel runtime metadata
     // against the persisted PDF/TXT manifest. Replaying it preserves exact
     // table/formula bindings and figure discovery for daily Reader runs; it
@@ -214,7 +214,7 @@ function readBundleFreshSource(checked, id, expectation) {
     if (!sourceApi.generationExists(root, id, expectation.sourceGeneration)) return null;
     const stored = sourceApi.readFreshArxivRewriteSource({ rootDir: root, arxivId: id,
         generation: expectation.sourceGeneration });
-    const source = detailsFromSealedBundle(stored);
+    const source = buildSourceDetailsFromBundle(stored);
     source.freshSourceDescriptor.runId = checked.runId;
     if (source.freshSourceDescriptor.paperId !== id
         || source.freshSourceDescriptor.sourceGeneration !== expectation.sourceGeneration
@@ -286,9 +286,9 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
             const sourceApi = require('./fresh-arxiv-rewrite-source.js');
             await sourceApi.captureFreshArxivRewriteSource({ rootDir: bundleRoot(context), arxivId: id,
                 generation: expectation.sourceGeneration });
-            const sealed = readFreshSource(context.runDir, id, context);
-            if (!sealed) throw fail('Fresh source bundle capture did not seal a readable source');
-            return sealed;
+            const sourceDetails = readFreshSource(context.runDir, id, context);
+            if (!sourceDetails) throw fail('Fresh source bundle capture did not seal a readable source');
+            return sourceDetails;
         }
         const directory = sourceDirectory(context, id);
         let details;
@@ -389,6 +389,6 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
 
 module.exports = { CONTRACT, CACHE_CONTRACT, BUNDLE_CACHE_CONTRACT, BUNDLE_SOURCE_MODE, DAILY_SOURCE_RUN_CONTRACT, isBundleExpectation,
     withFreshAnalysisContext, getFreshAnalysisContext, isDailyFreshSourceScope,
-    getSealedRecoveryCapability,
+    getSavedAnalysisRecoveryPermission,
     readFreshSource, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
     withFreshPaperContext, attachFreshSourceRecord, freshReaderAttemptsDirectory };

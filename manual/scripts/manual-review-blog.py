@@ -270,7 +270,7 @@ def _validate_file_specific_notes(module, review_file_records_by_path, actual_pa
             require_unique_semantics(notes, (date_str,), relative)
 
 
-def _require_current_review_statement_version(module, generation_payload, attestation):
+def _require_current_review_statement_version(module, generation_payload, review_statement):
     if generation_payload.get('schemaVersion') != 3:
         return
     requires_v3 = any(
@@ -279,22 +279,22 @@ def _require_current_review_statement_version(module, generation_payload, attest
              == 'full-text-evidence-v5')
         for paper in generation_payload.get('publishedPapers') or []
     )
-    if requires_v3 and attestation.get('version') != 3:
+    if requires_v3 and review_statement.get('version') != 3:
         raise module.PublishDataValidationError(
             'Manual v5 新页面必须使用 v3 人工审查声明；历史 v2 声明不能替代独立单页任务和逐图审查记录。'
         )
 
 
-def _validate_review_statement_scope(module, generation_payload, attestation):
+def _validate_review_statement_scope(module, generation_payload, review_statement):
     generation_scope = generation_payload.get('publicationScope')
-    attestation_scope = attestation.get('publicationScope')
-    if generation_scope != attestation_scope:
+    statement_publication_scope = review_statement.get('publicationScope')
+    if generation_scope != statement_publication_scope:
         raise module.PublishDataValidationError(
             '人工审查声明的发布范围与生成清单不一致。'
         )
     if generation_scope is not None:
         module._validate_active_publication_scope(generation_payload)
-        if attestation.get('version') != 3 or len(attestation.get('files') or []) != 1:
+        if review_statement.get('version') != 3 or len(review_statement.get('files') or []) != 1:
             raise module.PublishDataValidationError(
                 '单篇试发布必须使用 v3 人工审查声明，且声明中只能包含一个页面。'
             )
@@ -348,7 +348,7 @@ def _reject_deterministic_fixes(module, fixes):
     )
 
 
-def _run(module, date_str, attestation_path):
+def _run(module, date_str, review_statement_path):
     blog_repo, content_dir = module.validate_publish_target()
     paths, manifest_path = module.load_generation_manifest(date_str)
     base_head = module.validate_git_publish_branch()
@@ -360,15 +360,15 @@ def _run(module, date_str, attestation_path):
         raise module.PublishDataValidationError(
             '本次生成结果已有发布记录，但未通过严格复核，不能覆盖原发布凭证。'
         )
-    attestation, attestation_sha = _load_review_statement(attestation_path)
+    review_statement, review_statement_sha256 = _load_review_statement(review_statement_path)
     try:
         generation_payload = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise module.PublishDataValidationError('生成清单无法解析。') from exc
     authoritative_by_id = {}
     if generation_payload.get('schemaVersion') == 3:
-        _require_current_review_statement_version(module, generation_payload, attestation)
-        _validate_review_statement_scope(module, generation_payload, attestation)
+        _require_current_review_statement_version(module, generation_payload, review_statement)
+        _validate_review_statement_scope(module, generation_payload, review_statement)
         for paper in generation_payload.get('publishedPapers') or []:
             if not isinstance(paper, dict):
                 raise module.PublishDataValidationError(
@@ -381,7 +381,7 @@ def _run(module, date_str, attestation_path):
                 )
             authoritative_by_id[paper_id] = paper
     expected_attested = {}
-    for item in attestation['files']:
+    for item in review_statement['files']:
         expected_attested[item['path']] = item
     deletion_expectations = module.generation_manifest_expectations(manifest_path, date_str)
     actual_paths = {}
@@ -419,7 +419,7 @@ def _run(module, date_str, attestation_path):
             raise module.PublishDataValidationError(f'文件内容 SHA 与人工审查声明不一致：{relative}')
     _validate_file_specific_notes(
         module, expected_attested, actual_paths, deletion_expectations, date_str,
-        require_subagent_images=attestation.get('version') == 3,
+        require_subagent_images=review_statement.get('version') == 3,
     )
 
     # 人工审查只核对已审文件，不改写页面。预演检查若发现页面需要自动修正，
@@ -485,11 +485,11 @@ def _run(module, date_str, attestation_path):
     if len(reviewed) != len([path for path in paths if Path(path).is_file()]):
         raise module.PublishDataValidationError('已审文件数量在凭证签发前发生变化。')
     manifest_sha = _sha256(manifest_path)
-    manual_review_record = dict(attestation)
+    manual_review_record = dict(review_statement)
     manual_review_record.pop('checks', None)
     manual_review_record['completedAt'] = _now_bj()
-    manual_review_record['checks'] = attestation['checks']
-    manual_review_record['attestationSha256'] = attestation_sha
+    manual_review_record['checks'] = review_statement['checks']
+    manual_review_record['attestationSha256'] = review_statement_sha256
     manual_review_record['generationManifestSha256'] = manifest_sha
     manual_review_record['baseHead'] = base_head
     manual_review_record['fileCount'] = len(paths)
@@ -502,7 +502,7 @@ def _run(module, date_str, attestation_path):
         manual_review_record=manual_review_record,
     )
     print(f'🧾 已签发人工审查凭证：{receipt}')
-    print(f'   人工审查声明文件 SHA：{attestation_sha}')
+    print(f'   人工审查声明文件 SHA：{review_statement_sha256}')
     return receipt
 
 
@@ -512,15 +512,15 @@ def main():
     setup_script_logging(__file__)
     module = load_publish_to_blog()
     try:
-        date_str, attestation, include_id = _parse_args(module)
+        date_str, review_statement_path, include_id = _parse_args(module)
         with module.publication_scope(include_id):
-            expected_attestation = module.manual_review_statement_path(date_str)
-            if include_id and attestation != expected_attestation.resolve():
+            expected_statement_path = module.manual_review_statement_path(date_str)
+            if include_id and review_statement_path != expected_statement_path.resolve():
                 raise module.PublishDataValidationError(
-                    f'单篇试发布只接受对应的独立人工审查声明：{expected_attestation}'
+                    f'单篇试发布只接受对应的独立人工审查声明：{expected_statement_path}'
                 )
             with module.blog_publication_lock(date_str):
-                receipt = _run(module, date_str, attestation)
+                receipt = _run(module, date_str, review_statement_path)
     except (ValueError, module.PublishDataValidationError) as exc:
         print(f'\n❌ 人工审查或凭证签发失败：{exc}')
         sys.exit(1)

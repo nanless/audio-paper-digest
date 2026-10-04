@@ -39,7 +39,7 @@ const {
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
     scoringStabilityIsResolved,
-    apiReaderV3BindsCanonical
+    hasValidApiReaderV3Records
 } = require('./analysis-engine.js');
 const {
     MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
@@ -458,7 +458,7 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
                 `${prefix}.stages.scoringAudit 评分稳定性告警尚未形成有效二次审计 resolution`
             );
         }
-        if (options.requireComplete && !apiReaderV3BindsCanonical(options.paper)) {
+        if (options.requireComplete && !hasValidApiReaderV3Records(options.paper)) {
             addIssue(
                 issues,
                 filePath,

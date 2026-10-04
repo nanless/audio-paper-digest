@@ -877,7 +877,7 @@ function getIncompleteAnalysisContentReason(paper) {
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
         if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审查记录与最终正文不一致。';
         if (!scoringStabilityIsResolved(scoring)) return '评分稳定性检查未通过。';
-        if (!apiReaderV3BindsCanonical(paper)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
+        if (!hasValidApiReaderV3Records(paper)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
     }
     return null;
 }
@@ -927,7 +927,7 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
     return scoring?.scoringContract === 'api-scoring-audit-v2'
         && scoringAuditBindsFinalAnalysis(paper)
         && scoringStabilityIsResolved(scoring)
-        && apiReaderV3BindsCanonical(paper)
+        && hasValidApiReaderV3Records(paper)
         && !validateManualTakeoverManifest(
             manifest,
             manifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
@@ -935,7 +935,7 @@ function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
         );
 }
 
-function isSealedApiAnalysisEligibleForCoreSummaryRecovery(paper) {
+function canRepairCoreSummaryFromSavedAnalysis(paper) {
     if (isLegacyApiAnalysisSuccessForReadOnlyValidation(paper)) return true;
     const manifest = paper?.analysisManifest;
     const stages = manifest?.stages;
@@ -957,7 +957,7 @@ function isSealedApiAnalysisEligibleForCoreSummaryRecovery(paper) {
     return scoring?.scoringContract === 'api-scoring-audit-v2'
         && scoringAuditBindsFinalAnalysis(paper)
         && scoringStabilityIsResolved(scoring)
-        && apiReaderV3BindsCanonical(paper);
+        && hasValidApiReaderV3Records(paper);
 }
 
 function getReadOnlyValidationAnalysisRunSummary(papers) {
@@ -1018,7 +1018,7 @@ function scoringStabilityIsResolved(scoring) {
     );
 }
 
-function apiReaderV3BindsCanonical(paper) {
+function hasValidApiReaderV3Records(paper) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.apiReaderArticle;
     const plan = paper?.apiReaderPlan;
@@ -1958,7 +1958,7 @@ module.exports = {
     isSuccessfulAnalysisRecord,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
-    apiReaderV3BindsCanonical,
+    hasValidApiReaderV3Records,
     API_READER_QUALITY_METRICS_CONTRACT,
     API_READER_SOURCE_BINDING_CONTRACT,
     SCORING_STABILITY_RESOLUTION_CONTRACT,
@@ -1966,7 +1966,7 @@ module.exports = {
     getAnalysisRunSummary,
     getReadOnlyValidationAnalysisRunSummary,
     isLegacyApiAnalysisSuccessForReadOnlyValidation,
-    isSealedApiAnalysisEligibleForCoreSummaryRecovery,
+    canRepairCoreSummaryFromSavedAnalysis,
     getAnalysisExitCode,
     getInvalidAnalysisReason,
     hasRequiredSections,

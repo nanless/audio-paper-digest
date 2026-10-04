@@ -121,7 +121,7 @@ test('预览报告包含逐篇差异，以及已分配、受阻和跳过的结�
     const assigned = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
         acknowledgeDestructive: true });
     const blocked = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
-    const summary = resealApi.summarizeReseal({ items: [
+    const summary = resealApi.summarizeTagRecordUpdates({ items: [
         { ...assigned.item }, { ...blocked.item },
         { paperId: PAPER_ID, status: 'skipped', outcome: 'not-complete', needsHuman: false }
     ] });

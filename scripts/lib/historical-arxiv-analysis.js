@@ -178,7 +178,7 @@ function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir, now = new Da
     if (storageSealed && loaded.analysis.papers.length === 1
         && engine.isSuccessfulAnalysisRecord(paper)) {
         try {
-            currentContractComplete = fresh.assertFreshProvenance(
+            currentContractComplete = fresh.assertFreshSourceRecordMatchesRun(
                 paper, loaded.run, loaded.run.sourceRecords?.[arxivId]
             ) === true;
         } catch {

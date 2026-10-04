@@ -12,7 +12,7 @@ const { submitTask } = require('../scripts/manual-v6-task-runner.js');
 const {
     parseArgs,
     normalizeLegacyArtifactIndexBinding,
-    sealRecordFromValidatedState
+    writeVerifiedManualReviewRecord
 } = require('../scripts/manual-v6-production-records.js');
 
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -203,17 +203,17 @@ describe('Manual v6 production records envelope assembler', () => {
             runnerTask.packetFileSha256 = packetFile.fileSha256;
             runnerTask.packetSha256 = packet.packetSha256;
         }
-        const sealed = sealRecordFromValidatedState(state, id, root);
-        assert.equal(sealed.record.editorial.longformBundle.authorReceipt.taskName, 'author-task');
-        assert.equal(sealed.record.editorial.longformBundle.finalRevisionAuthorReceipt.taskName, 'revision-task');
-        assert.equal(sealed.record.reviewResolution.readerArticleSha256, finalSha);
-        const semantic = structuredClone(sealed.record); delete semantic.sealedRecordSha256;
-        assert.equal(sealed.record.sealedRecordSha256, stableSha256(semantic));
-        const firstBytes = fs.readFileSync(sealed.sealedPath);
-        sealRecordFromValidatedState(state, id, root);
-        assert.ok(firstBytes.equals(fs.readFileSync(sealed.sealedPath)));
+        const reviewRecordResult = writeVerifiedManualReviewRecord(state, id, root);
+        assert.equal(reviewRecordResult.record.editorial.longformBundle.authorReceipt.taskName, 'author-task');
+        assert.equal(reviewRecordResult.record.editorial.longformBundle.finalRevisionAuthorReceipt.taskName, 'revision-task');
+        assert.equal(reviewRecordResult.record.reviewResolution.readerArticleSha256, finalSha);
+        const recordHashInput = structuredClone(reviewRecordResult.record); delete recordHashInput.sealedRecordSha256;
+        assert.equal(reviewRecordResult.record.sealedRecordSha256, stableSha256(recordHashInput));
+        const firstBytes = fs.readFileSync(reviewRecordResult.sealedPath);
+        writeVerifiedManualReviewRecord(state, id, root);
+        assert.ok(firstBytes.equals(fs.readFileSync(reviewRecordResult.sealedPath)));
         fs.appendFileSync(technicalReceiptFile.path, ' ');
-        assert.throws(() => sealRecordFromValidatedState(state, id, root), /runner validated state/);
+        assert.throws(() => writeVerifiedManualReviewRecord(state, id, root), /runner validated state/);
         fs.rmSync(root, { recursive: true, force: true });
     });
 

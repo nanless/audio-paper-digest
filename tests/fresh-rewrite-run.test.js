@@ -186,7 +186,7 @@ test('sealed recovery capabilities mint only from an exact complete run and bind
     const sealedBefore = runner.loadRun(RUN_ID, f.deps);
     let observed = null;
     const inspectContext = async (identity, callback) => {
-        observed = identity.sealedRecoveryCapabilities;
+        observed = identity.savedAnalysisRecoveryPermissions;
         return callback();
     };
     const Config = require('../scripts/config.js');
@@ -213,21 +213,21 @@ test('sealed recovery capabilities mint only from an exact complete run and bind
     assert.ok(observed instanceof Map);
     assert.equal(observed.size, 2);
     const handle = observed.get('2609.00001');
-    const snapshot = runner.sealedRecoveryCapabilitySnapshot(handle);
+    const snapshot = runner.getSavedAnalysisRecoveryPermissionDetails(handle);
     const complete = runner.loadRun(RUN_ID, f.deps);
     assert.equal(snapshot.runId, RUN_ID);
     assert.equal(snapshot.paperId, '2609.00001');
     assert.equal(snapshot.analysisFileSha256, sealedBefore.run.analysisSha256);
     assert.equal(snapshot.recordSha256,
         runner.stableHash(complete.analysis.papers.find(paper => paper.arxivId === '2609.00001')));
-    assert.equal(runner.consumeSealedRecoveryCapability(handle, {
+    assert.equal(runner.consumeSavedAnalysisRecoveryPermission(handle, {
         runId: crypto.randomUUID()
     }), false, 'a capability cannot be copied to another run identity');
-    assert.equal(runner.consumeSealedRecoveryCapability(handle, {
+    assert.equal(runner.consumeSavedAnalysisRecoveryPermission(handle, {
         runId: RUN_ID, paperId: '2609.00001', recordSha256: snapshot.recordSha256
     }), true);
-    assert.equal(runner.sealedRecoveryCapabilitySnapshot(handle), null, 'one-shot capability is spent');
-    assert.equal(runner.sealedRecoveryCapabilitySnapshot(handle, { allowConsumed: true }).consumed, true);
+    assert.equal(runner.getSavedAnalysisRecoveryPermissionDetails(handle), null, 'one-shot capability is spent');
+    assert.equal(runner.getSavedAnalysisRecoveryPermissionDetails(handle, { allowConsumed: true }).consumed, true);
 
     observed = null;
     await runner.analyzeRewrite({ runId: RUN_ID }, {
@@ -254,7 +254,7 @@ test('partial analysis runs never mint sealed recovery capabilities', async t =>
     await runner.analyzeRewrite({ runId: RUN_ID, ids: ['2609.00002'] }, {
         ...f.deps,
         withFreshAnalysisContext: async (identity, callback) => {
-            observed = identity.sealedRecoveryCapabilities;
+            observed = identity.savedAnalysisRecoveryPermissions;
             return callback();
         }
     });
@@ -333,15 +333,15 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
     const originalRoot = Config.FILES.freshRewriteRunsDir;
     const originalReadSource = freshContext.readFreshSource;
     const originalContext = freshContext.withFreshAnalysisContext;
-    const originalGetCapability = freshContext.getSealedRecoveryCapability;
+    const originalGetCapability = freshContext.getSavedAnalysisRecoveryPermission;
     const originalFreshIdentity = freshContext.freshAnalysisIdentity;
     const originalAnalyzeBatch = engine.analyzeBatch;
     const originalSuccessful = engine.isSuccessfulAnalysisRecord;
     Config.FILES.freshRewriteRunsDir = f.deps.rootDir;
     freshContext.readFreshSource = f.deps.readFreshSource;
     freshContext.withFreshAnalysisContext = async (identity, callback) => {
-        const handle = identity.sealedRecoveryCapabilities.get(base.arxivId);
-        freshContext.getSealedRecoveryCapability = () => handle;
+        const handle = identity.savedAnalysisRecoveryPermissions.get(base.arxivId);
+        freshContext.getSavedAnalysisRecoveryPermission = () => handle;
         freshContext.freshAnalysisIdentity = () => ({ ...provenance,
             paperId: base.arxivId, inputSetSha256: runner.stableHash(run.paperIds) });
         return callback();
@@ -430,7 +430,7 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
         Config.FILES.freshRewriteRunsDir = originalRoot;
         freshContext.readFreshSource = originalReadSource;
         freshContext.withFreshAnalysisContext = originalContext;
-        freshContext.getSealedRecoveryCapability = originalGetCapability;
+        freshContext.getSavedAnalysisRecoveryPermission = originalGetCapability;
         freshContext.freshAnalysisIdentity = originalFreshIdentity;
         engine.analyzeBatch = originalAnalyzeBatch;
         engine.isSuccessfulAnalysisRecord = originalSuccessful;

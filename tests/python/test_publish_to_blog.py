@@ -967,13 +967,13 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertEqual(page.count(publish_to_blog.format_complete_score_line(paper['parsed'])), 1)
         self.assertEqual(page.count('标签：#空间音频'), 1)
         self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
-        self.assertIsNone(publish_to_blog._api_reader_index_projection_issue(index, [paper]))
+        self.assertIsNone(publish_to_blog._api_reader_index_display_fields_issue(index, [paper]))
         for changed in (
                 page.replace('## 📌 核心摘要\n\n' + summary, '## 📌 核心摘要\n\n虚构摘要'),
                 page.replace('## ⚖️ 评分明细', '## ⚖️ 未绑定评分解释'),
                 page.replace('## 🧭 深度解读', '## 💬 毒舌点评\n\n错误前言\n\n## 🧭 深度解读')):
             self.assertIsNotNone(publish_to_blog._api_reader_page_binding_issue(changed, paper))
-        self.assertIsNotNone(publish_to_blog._api_reader_index_projection_issue(
+        self.assertIsNotNone(publish_to_blog._api_reader_index_display_fields_issue(
             index.replace(summary, '未经事实核查的旧摘要'), [paper],
         ))
 
@@ -1629,7 +1629,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         markdown = publish_to_blog.generate_index_page(
             [], [paper], '2026-08-31', {paper['arxivId']: 'fixture'},
         )
-        self.assertIsNone(publish_to_blog._api_reader_index_projection_issue(markdown, [paper]))
+        self.assertIsNone(publish_to_blog._api_reader_index_display_fields_issue(markdown, [paper]))
         with tempfile.TemporaryDirectory() as tmp:
             index = Path(tmp) / '2026-08-31.md'
             index.write_text(markdown.replace(paper['parsed']['summary'],
@@ -1968,17 +1968,17 @@ class PublishToBlogReviewTest(unittest.TestCase):
                             mocks['save_review_receipt'].assert_called_once()
                         self.assertEqual(page.read_bytes(), original_bytes)
 
-    def test_api_reader_numeric_tokens_match_node_canonicalization(self):
-        canon = publish_to_blog._canonical_api_reader_numeric_token
-        self.assertEqual(canon('04'), '4')
-        self.assertEqual(canon('2.00'), '2')
-        self.assertEqual(canon('44,000'), '44000')
-        self.assertEqual(canon('1,234,567'), '1234567')
-        self.assertEqual(canon('1,2'), '1,2')
-        self.assertEqual(canon('2025s'), '2025')
-        self.assertEqual(canon('2025 s'), '2025s')
-        self.assertEqual(canon('5s'), '5s')
-        self.assertEqual(canon('20 dB'), '20db')
+    def test_api_reader_numeric_tokens_match_node_normalization(self):
+        normalize_numeric_token = publish_to_blog._normalize_api_reader_numeric_token
+        self.assertEqual(normalize_numeric_token('04'), '4')
+        self.assertEqual(normalize_numeric_token('2.00'), '2')
+        self.assertEqual(normalize_numeric_token('44,000'), '44000')
+        self.assertEqual(normalize_numeric_token('1,234,567'), '1234567')
+        self.assertEqual(normalize_numeric_token('1,2'), '1,2')
+        self.assertEqual(normalize_numeric_token('2025s'), '2025')
+        self.assertEqual(normalize_numeric_token('2025 s'), '2025s')
+        self.assertEqual(normalize_numeric_token('5s'), '5s')
+        self.assertEqual(normalize_numeric_token('20 dB'), '20db')
         grouped = publish_to_blog._api_reader_numeric_tokens(
             'Counts are 6,005, 50,324, 1,234,567, and １，２３４.'
         )
@@ -1988,7 +1988,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertNotIn('12', enumerated)
         self.assertIn('1', enumerated)
         self.assertIn('2', enumerated)
-        self.assertEqual(canon('.119'), '0.119')
+        self.assertEqual(normalize_numeric_token('.119'), '0.119')
         tokens = publish_to_blog._api_reader_numeric_tokens(
             '共 40964096 个样本，2020 年，1212 项'
         )
@@ -2253,7 +2253,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 ('20202020 s', '2020 s', '2020')):
             quote = f'The measured quantity is {surface} under the shared protocol.'
             tokens = publish_to_blog._api_reader_numeric_tokens(quote)
-            self.assertIn(publish_to_blog._canonical_api_reader_numeric_token(correct), tokens)
+            self.assertIn(publish_to_blog._normalize_api_reader_numeric_token(correct), tokens)
             self.assertNotIn(bare, tokens)
             for value, accepted in ((correct, True), (bare, False)):
                 paper = llm_api_publication_fixture()
@@ -2868,7 +2868,7 @@ title: "Score rows"
                 self.assertIn(f'[arXiv 原文]({selected_url})', index)
                 self.assertIn('**来源版本说明**', index)
                 self.assertIn('本文依据官方历史版本 [2609.12409v2]', index)
-                self.assertIsNone(publish_to_blog._api_reader_index_projection_issue(index, [paper]))
+                self.assertIsNone(publish_to_blog._api_reader_index_display_fields_issue(index, [paper]))
         ordinary = llm_api_publication_fixture()
         ordinary_page, _ = publish_to_blog.generate_paper_page(ordinary, '2026-08-31')
         self.assertNotIn('**来源版本说明**', ordinary_page)

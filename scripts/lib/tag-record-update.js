@@ -274,7 +274,7 @@ function rebuildStage(stage, runtime, annotation, contractApi) {
     };
 }
 
-function summarizeReseal(report) {
+function summarizeTagRecordUpdates(report) {
     const items = Array.isArray(report?.items) ? report.items : [];
     const counts = { assigned: 0, blocked: 0, skipped: 0 };
     const outcomes = {};
@@ -355,7 +355,7 @@ module.exports = {
     NEEDS_HUMAN_OUTCOMES,
     reprojectAnalysis,
     rebuildStage,
-    summarizeReseal,
+    summarizeTagRecordUpdates,
     scanStaleAssignments,
     idDiff
 };

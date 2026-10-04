@@ -113,12 +113,12 @@ function dependencies(overrides) {
 }
 
 function validateScratchParent(current, identity, details, run, deps) {
-    const { apiReaderV3BindsCanonical } = require('../analysis-engine.js');
+    const { hasValidApiReaderV3Records } = require('../analysis-engine.js');
     if (!current || (current.arxivId || current.paper_id) !== identity.paperId) {
         throw new Error('Operator patch requires the current same-run analysis record');
     }
     if (identity.contentMode === READER_SOURCE_CONTENT_MODE) {
-        if (apiReaderV3BindsCanonical(current) || deps.isSuccessfulAnalysisRecord(current)) {
+        if (hasValidApiReaderV3Records(current) || deps.isSuccessfulAnalysisRecord(current)) {
             throw new Error('Source-only operator patch cannot edit a successful analysis or signed Reader');
         }
         return;
@@ -126,10 +126,10 @@ function validateScratchParent(current, identity, details, run, deps) {
     // This only permits editing failed scratch. The signed-revision service
     // must still recompute the parent + feedback input identity before it can
     // consume the candidate; a valid current parent is not a revision receipt.
-    if (current.latestAnalysisAttemptError || !apiReaderV3BindsCanonical(current)) {
+    if (current.latestAnalysisAttemptError || !hasValidApiReaderV3Records(current)) {
         throw new Error('Signed-revision operator patch requires a valid signed parent Reader');
     }
-    require('./fresh-rewrite-run.js').assertFreshProvenance(current, run, details.freshSourceDescriptor);
+    require('./fresh-rewrite-run.js').assertFreshSourceRecordMatchesRun(current, run, details.freshSourceDescriptor);
     if (current.sourceSha256 !== identity.sourceSha256
         || current.analysisManifest.sourceAcquisition.structuredArtifactsSha256
             !== details.freshSourceDescriptor.structuredArtifactsSha256) {

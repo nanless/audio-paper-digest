@@ -8,7 +8,7 @@ const Config = require('../scripts/config.js');
 const {
     parseRefreshCliArgs,
     resolveBatchRefreshIds,
-    resolvePersistedCanonicalBatchDate,
+    resolveSavedAnalysisBatchDate,
     hasCurrentReaderV3,
     canRepairScoringBinding,
     MAX_REFRESH_CONCURRENCY
@@ -142,15 +142,15 @@ describe('refresh-api-reader batch CLI', () => {
     });
 
     it('accepts a historical envelope timestamp without inventing a wall-clock batch', () => {
-        assert.strictEqual(resolvePersistedCanonicalBatchDate({
+        assert.strictEqual(resolveSavedAnalysisBatchDate({
             timestamp: '2026-09-02T13:46:46.159+08:00',
             lastUpdated: '2026-09-02T17:07:45.682+08:00'
         }), '2026-09-02');
-        assert.strictEqual(resolvePersistedCanonicalBatchDate({
+        assert.strictEqual(resolveSavedAnalysisBatchDate({
             batchDate: '2026-09-01',
             timestamp: '2026-09-02T00:01:00+08:00'
         }), '2026-09-01');
-        assert.strictEqual(resolvePersistedCanonicalBatchDate({}), '');
+        assert.strictEqual(resolveSavedAnalysisBatchDate({}), '');
     });
 
     it('repairs scoring from a signed v3 revision seed after a transient Reader failure', () => {

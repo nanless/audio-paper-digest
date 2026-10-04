@@ -37,7 +37,7 @@ function checkpointPath(root, crosswalkId, registrySha256, rendererImplementatio
     const directory = fresh.assertSafeDirectory(root, create);
     return path.join(directory, `${crosswalkId}.${registrySha256}.${rendererImplementationSha256}.json`);
 }
-function sealCheckpoint(value) { const body = structuredClone(value); delete body.checkpointSha256;
+function withCheckpointHash(value) { const body = structuredClone(value); delete body.checkpointSha256;
     return { ...body, checkpointSha256: stableHash(body) }; }
 function validateCheckpoint(value, crosswalkId, registrySha256, rendererImplementationSha256) {
     if (!value || value.contract !== CONTRACT || value.version !== VERSION || value.crosswalkId !== crosswalkId
@@ -152,7 +152,7 @@ function defaultDependencies() {
 function updateCheckpoint(filename, crosswalkId, registrySha256, rendererImplementationSha256, deps, mutate) {
     return deps.updateLocked(filename, current => {
         const prior = current ? validateCheckpoint(current, crosswalkId, registrySha256, rendererImplementationSha256)
-            : sealCheckpoint({ contract: CONTRACT, version: VERSION, crosswalkId, registrySha256,
+            : withCheckpointHash({ contract: CONTRACT, version: VERSION, crosswalkId, registrySha256,
                 rendererImplementationSha256,
                 generation: 1, createdAt: deps.now(), updatedAt: deps.now(), items: {}, daily: {} });
         const next = mutate(structuredClone(prior)); delete next.checkpointSha256;
@@ -161,7 +161,7 @@ function updateCheckpoint(filename, crosswalkId, registrySha256, rendererImpleme
         const nextSemantic = structuredClone(next); delete nextSemantic.updatedAt; delete nextSemantic.generation;
         if (current && stableHash(priorSemantic) === stableHash(nextSemantic)) return undefined;
         next.generation = (current?.generation || 0) + 1;
-        next.updatedAt = deps.now(); return sealCheckpoint(next);
+        next.updatedAt = deps.now(); return withCheckpointHash(next);
     }, { allowMissing: true });
 }
 
@@ -364,5 +364,5 @@ async function runHistoricalPostprocess(options, overrides = {}) {
 }
 
 module.exports = { CONTRACT, VERSION, ANALYSIS_SCHEDULER_CONTRACT, stableHash, deterministicStagingRunId,
-    checkpointPath, sealCheckpoint, validateCheckpoint, readAnalysisScheduler, analysisSchedulerItemBinding, completeItems,
+    checkpointPath, withCheckpointHash, validateCheckpoint, readAnalysisScheduler, analysisSchedulerItemBinding, completeItems,
     mapConcurrent, runHistoricalPostprocess };

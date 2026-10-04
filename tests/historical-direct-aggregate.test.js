@@ -67,7 +67,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     for (const field of ['coreSummaryInputAnalysisSha256', 'inputCoreSummarySha256', 'outputCoreSummarySha256']) {
         paper.analysisManifest.stages.scoringAudit[field] = current.analysisManifest.stages.scoringAudit[field];
     }
-    const provenance = runner.directProvenanceFor(item, sourceDescriptor);
+    const provenance = runner.buildDirectSourceRecord(item, sourceDescriptor);
     paper.directPaperId = item.paperId; paper.title = `Fresh ${item.paperId}`; paper.sourceSha256 = provenance.sourceSha256;
     paper.freshRewriteProvenance = provenance; paper.analysisManifest.freshRewriteProvenance = structuredClone(provenance);
     paper.analysisManifest.sourceAcquisition = { analysisSource: sourceDetails.source, sourceId: sourceDetails.sourceId,
@@ -88,7 +88,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
         readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256, resourceIdentitySha256: paper.apiReaderResources.identitySha256,
         sourceBindingsSourceTextSha256: provenance.sourceSha256, structuredArtifactsSha256: provenance.structuredArtifactsSha256 });
     paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
-    assert.equal(engine.apiReaderV3BindsCanonical(paper), true);
+    assert.equal(engine.hasValidApiReaderV3Records(paper), true);
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
     return paper;
 }

@@ -52,18 +52,18 @@ def inject_direct_publication_source(projected, publication_source):
         raise ValueError('direct arXiv publication source proof is required')
     abstract = publication_source.get('abstract')
     abstract_sha = publication_source.get('abstractSha256')
-    provenance = projected.get('freshRewriteProvenance')
+    fresh_source_details = projected.get('freshRewriteProvenance')
     if publication_source.get('contract') != DIRECT_PUBLICATION_SOURCE_CONTRACT \
             or publication_source.get('version') != 1 \
             or publication_source.get('paperId') != projected.get('directPaperId') \
             or publication_source.get('paperId') != f'arxiv:{arxiv_id}' \
             or not SHA256_RE.fullmatch(str(publication_source.get('sourceSnapshotSha256') or '')) \
             or not SHA256_RE.fullmatch(str(publication_source.get('sourceTextSha256') or '')) \
-            or not isinstance(provenance, dict) \
+            or not isinstance(fresh_source_details, dict) \
             or publication_source.get('sourceSnapshotSha256') \
-                != provenance.get('sourceSnapshotSha256') \
+                != fresh_source_details.get('sourceSnapshotSha256') \
             or publication_source.get('sourceTextSha256') \
-                != provenance.get('sourceSha256') \
+                != fresh_source_details.get('sourceSha256') \
             or not isinstance(abstract, str) or not abstract \
             or abstract != abstract.strip() or '\r' in abstract or '\0' in abstract \
             or len(abstract.encode('utf-8')) > 200000 \
@@ -100,7 +100,7 @@ def inject_direct_publication_source(projected, publication_source):
                            'sourceManifestSha256')) \
                 or sidecar.get('abstractSha256') != abstract_sha \
                 or sidecar.get('sourceManifestSha256') \
-                    != provenance.get('sourceManifestSha256') \
+                    != fresh_source_details.get('sourceManifestSha256') \
                 or sidecar.get('sourceSnapshotSha256') \
                     != publication_source.get('sourceSnapshotSha256') \
                 or sidecar.get('sourceTextSha256') \
@@ -126,7 +126,7 @@ def inject_direct_publication_source(projected, publication_source):
                     and sidecar.get('observedAt')
                     < sidecar.get('sourceLatestCapturedAt')) \
                 or sidecar.get('querySourceId') != sidecar.get('sourceId') \
-                or sidecar.get('generation') != provenance.get('sourceGeneration') \
+                or sidecar.get('generation') != fresh_source_details.get('sourceGeneration') \
                 or sidecar.get('sourceName') != expected_source_name:
             raise ValueError('direct arXiv publication metadata sidecar proof is invalid')
     if projected.get('abstract') not in (None, abstract):

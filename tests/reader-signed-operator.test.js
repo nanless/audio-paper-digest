@@ -53,7 +53,7 @@ test('real parser and shared sealing install operator provenance, preserve API o
     global.fetch=async()=>{calls++;throw new Error('no network is authorized');};t.after(()=>{global.fetch=oldFetch;});
     const result=await f.apply();assert.equal(result.status,'fact_review_pending');assert.equal(calls,0);
     const analysis=f.read('analysis'),paper=analysis.papers[0],stage=paper.analysisManifest.stages.apiReaderArticle;
-    assert.equal(engine.apiReaderV3BindsCanonical(paper),true);assert.equal(JSON.stringify(f.paper),parent);
+    assert.equal(engine.hasValidApiReaderV3Records(paper),true);assert.equal(JSON.stringify(f.paper),parent);
     assert.equal(stage.executionKind,'operator');assert.equal(stage.model,'operator-local');
     assert.equal(stage.promptTemplateSha256,undefined);assert.equal(stage.temperature,undefined);
     assert.deepEqual(stage.originApiStage,f.paper.analysisManifest.stages.apiReaderArticle);
@@ -96,7 +96,7 @@ test('archived operator output recovers unchanged when the current implementatio
         const output = JSON.parse(outputBytes), intent = JSON.parse(intentBytes);
         assert.equal(runner.stableHash(output), intent.outputSha256);
         assert.equal(output.paperSha256, runner.stableHash(output.paper));
-        assert.equal(engine.apiReaderV3BindsCanonical(output.paper), true);
+        assert.equal(engine.hasValidApiReaderV3Records(output.paper), true);
         assert.equal(f.read('analysis').status, 'complete');
         assert.equal(f.read('run').status, 'complete');
 
@@ -120,7 +120,7 @@ test('archived operator output recovers unchanged when the current implementatio
             assert.equal(result.newApiRequests, 0);
             assert.equal(result.paperSha256, output.paperSha256);
             assert.equal(runner.stableHash(f.read('analysis').papers[0]), output.paperSha256);
-            assert.equal(engine.apiReaderV3BindsCanonical(f.read('analysis').papers[0]), true);
+            assert.equal(engine.hasValidApiReaderV3Records(f.read('analysis').papers[0]), true);
             assert.equal(f.read('run').analysisSha256, runner.readRegularJson(path.join(f.runDir, 'analysis.json')).sha256);
             assert.deepEqual(fs.readFileSync(outputPath), outputBytes);
             assert.deepEqual(fs.readFileSync(path.join(archive, 'intent.json')), intentBytes);
@@ -186,7 +186,7 @@ test('an operator intent without output rejects only the changed output SHA and 
             assert.equal(candidate.provenance.patchFileSha256, patchSha256);
             assert.equal(candidate.provenance.sourceSnapshotSha256, f.sourceDetails.freshSourceDescriptor.sourceSnapshotSha256);
             assert.equal(candidate.provenance.appliedAt, intent.appliedAt);
-            assert.equal(engine.apiReaderV3BindsCanonical(candidate.paper), true);
+            assert.equal(engine.hasValidApiReaderV3Records(candidate.paper), true);
             assert.notEqual(runner.stableHash(candidate), intent.outputSha256);
             await assert.rejects(f.apply(), { message: 'Signed operator durable output drift' });
             for (const [filename, bytes] of originalFiles) assert.deepEqual(fs.readFileSync(filename), bytes);
@@ -201,7 +201,7 @@ test('an operator intent without output rejects only the changed output SHA and 
         assert.equal(result.newApiRequests, 0);
         assert.equal(runner.stableHash(restoredOutput), intent.outputSha256);
         assert.equal(restoredOutput.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(originalBytes));
-        assert.equal(engine.apiReaderV3BindsCanonical(f.read('analysis').papers[0]), true);
+        assert.equal(engine.hasValidApiReaderV3Records(f.read('analysis').papers[0]), true);
         assert.equal(f.read('run').analysisSha256, runner.readRegularJson(path.join(f.runDir, 'analysis.json')).sha256);
         for (const filename of paths.slice(2)) assert.deepEqual(fs.readFileSync(filename), originalFiles.get(filename));
         assert.equal(fetchCalls, 0);
