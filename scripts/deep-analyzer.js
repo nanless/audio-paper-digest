@@ -734,24 +734,24 @@ function applyScoringEvidenceCaps(audit) {
     if (!profile) return audit;
     const updated = structuredClone(audit);
     const capsApplied = [];
-    const cap = (dimension, maximum, rule) => {
+    const cap = (dimension, maximum, rule, explanation) => {
         const item = updated.dimensions[dimension];
         if (!item || item.score <= maximum) return;
         capsApplied.push({ rule, dimension, before: item.score, after: maximum });
         item.score = maximum;
-        item.reason = `${item.reason} 代码根据证据画像应用「${rule}」上限。`;
+        item.reason = `${item.reason} ${explanation}，本项最高计 ${maximum.toFixed(1)} 分。`;
     };
     if (profile.multiComponentClaimed && profile.ablationStatus === 'none') {
-        cap('experimentalSufficiency', 1.2, 'multi_component_without_direct_ablation');
+        cap('experimentalSufficiency', 1.2, 'multi_component_without_direct_ablation', '多组件的因果贡献缺少直接消融支持');
     }
     if (profile.multiComponentClaimed && profile.ablationStatus === 'partial') {
-        cap('experimentalSufficiency', 1.3, 'multi_component_with_partial_ablation');
+        cap('experimentalSufficiency', 1.3, 'multi_component_with_partial_ablation', '多组件的因果贡献只有部分消融支持');
     }
     if (profile.targetEvaluation === 'internal' && !profile.sampleScaleReported) {
-        cap('experimentalSufficiency', 1.2, 'internal_evaluation_without_sample_scale');
+        cap('experimentalSufficiency', 1.2, 'internal_evaluation_without_sample_scale', '内部评测未报告样本规模');
     }
     if (profile.engineeringEvidence === 'claim_only') {
-        cap('engineering', 1.0, 'engineering_claim_without_measured_or_reusable_evidence');
+        cap('engineering', 1.0, 'engineering_claim_without_measured_or_reusable_evidence', '当前证据仅以叙述或间接指标支持工程价值，未包含部署测量或可复用的工程成果');
     }
     const recalculated = recalculateScoringAudit(updated);
     if (recalculated.confidence !== '高' && recalculated.total > 9.0) {
