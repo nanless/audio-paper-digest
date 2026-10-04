@@ -80,11 +80,10 @@ function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
 }
 
 async function main(options = {}) {
-    // This is a daily recovery entrypoint.  A legacy result file has no
-    // sealed PDF/TXT run reference, so it must never be promoted and then
-    // allowed to fall back through deep-analyzer's historical fetch path.
+    // 这个入口只继续已有日更分析。旧结果文件没有对应的封存 PDF 和文本记录，
+    // 不能把它迁为当前结果后，再让分析器通过旧抓取路径补取来源。
     if (!fs.existsSync(RESULT_FILE)) {
-        throw new Error('batch recovery requires current canonical with a sealed daily PDF/TXT source run; rerun npm run digest:prepare');
+        throw new Error('继续批量分析需要已有日更分析记录及对应的 PDF 和文本来源文件。目标日期是北京时间当天时，请重新运行 npm run digest:prepare；历史日期应保留失败记录，并按历史维护流程处理。');
     }
     console.log('=== 批量论文分析 ===');
     console.log(`数据文件: ${RESULT_FILE}`);
@@ -111,7 +110,7 @@ async function main(options = {}) {
             dailySourcePlan.readerAttemptsDir,
             new Set(notAnalyzed.map(normalizedId).filter(Boolean))
         );
-        if (retired > 0) console.log(`已保留并退休 ${retired} 个未完成论文的旧 Reader 失败候选`);
+        if (retired > 0) console.log(`已保留并停用 ${retired} 份未完成论文的旧读者文章草稿`);
     }
 
     if (notAnalyzed.length === 0) {

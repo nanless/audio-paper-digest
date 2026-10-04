@@ -26,7 +26,7 @@ const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 loadEnvFile();
 
 function parseTargetDate(argv = process.argv.slice(2)) {
-    if (!Array.isArray(argv)) throw new TypeError('argv 必须是数组');
+    if (!Array.isArray(argv)) throw new TypeError('命令行参数 argv 必须是数组。');
     if (argv.length === 0) return getBeijingDateString();
     if (argv.length !== 2 || argv[0] !== '--date') {
         throw new Error('用法: npm run deep -- --date YYYY-MM-DD');
@@ -44,11 +44,11 @@ function parseTargetDate(argv = process.argv.slice(2)) {
 
 function validateCompleteFilteredForToday(filteredData, today) {
     if (!filteredData || filteredData.status !== 'complete' || !Array.isArray(filteredData.papers)) {
-        throw new Error('筛选结果未完成或 papers 字段无效，拒绝启动深度分析');
+        throw new Error('筛选尚未完成，或论文列表 papers 不是数组，不能开始深度分析。');
     }
     const recordDate = filteredData.batchDate || getRecordDate(filteredData);
     if (recordDate !== today) {
-        throw new Error(`筛选结果不是当日批次: 期望 ${today}，实际 ${recordDate || '未知'}`);
+        throw new Error(`筛选结果的日期与目标批次不一致：目标日期为 ${today}，记录日期为 ${recordDate || '未知'}。`);
     }
     return filteredData;
 }
@@ -56,7 +56,7 @@ function validateCompleteFilteredForToday(filteredData, today) {
 function validateDeepAnalysisInput(existingData, filteredData, today) {
     const recordDate = existingData?.batchDate || getRecordDate(existingData);
     if (recordDate !== today) {
-        throw new Error(`分析结果不是当日批次: 期望 ${today}，实际 ${recordDate || '未知'}`);
+        throw new Error(`分析结果的日期与目标批次不一致：目标日期为 ${today}，记录日期为 ${recordDate || '未知'}。`);
     }
     const existingPapers = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
     const expectedIds = new Set(filteredData.papers.map(normalizedId).filter(Boolean));
@@ -64,7 +64,7 @@ function validateDeepAnalysisInput(existingData, filteredData, today) {
     const missing = [...expectedIds].filter(id => !actualIds.has(id));
     const unexpected = [...actualIds].filter(id => !expectedIds.has(id));
     if (missing.length > 0 || unexpected.length > 0) {
-        throw new Error(`分析结果与当日筛选结果不一致: 缺少 ${missing.length} 篇，多出 ${unexpected.length} 篇`);
+        throw new Error(`分析结果与目标日期的筛选集合不一致：缺少 ${missing.length} 篇，多出 ${unexpected.length} 篇。`);
     }
     return existingData;
 }
@@ -86,7 +86,7 @@ function repairMissingAnalysisRecords(resultPath, existingData, filteredData) {
             lastUpdated: getBeijingISOString()
         };
     });
-    console.log(`🔧 已按当日筛选基线补回 ${missingPapers.length} 篇中断前未写入的论文记录，保留为待分析状态`);
+    console.log(`🔧 已根据目标日期的筛选结果补回 ${missingPapers.length} 篇中断前未保存的论文，等待继续分析`);
     return repaired;
 }
 
@@ -127,13 +127,11 @@ async function runDeepAnalysis(options = {}) {
 
     const resultPath = currentPath;
 
-    // A recovery must never revive an analysis file from the legacy location
-    // or initialise one from filtered metadata.  Neither contains a sealed
-    // source-run reference, so doing so would make deep-analyzer fetch legacy
-    // text/cache data.  full-fetch owns source capture and is the only writer
-    // allowed to create the daily plan.
+    // 续跑不能从旧位置恢复结果文件，也不能只根据筛选元数据新建分析结果。
+    // 这两种数据都没有日更封存来源记录，可能让分析器改用旧文本或缓存。
+    // 日更来源计划只能由 full-fetch 在取得并封存来源文件后创建。
     if (!fs.existsSync(resultPath)) {
-        throw new Error('仅续分析要求当前 canonical 已绑定 sealed daily PDF/TXT source run；请重新运行 npm run digest:prepare');
+        throw new Error('继续分析需要已有日更分析记录及对应的 PDF 和文本来源文件。目标日期是北京时间当天时，请重新运行 npm run digest:prepare；历史日期应保留失败记录，并按历史维护流程处理。');
     }
 
     let existingData = readJsonFileStrict(resultPath);
@@ -152,7 +150,7 @@ async function runDeepAnalysis(options = {}) {
         isSuccessfulAnalysisRecord(paper)
         && dailyFreshSources.isPaperBoundToPlan(paper, dailySourcePlan)
     )).length;
-    console.log(`📊 读取到 ${papers.length} 篇筛选后的论文 (已由当前 sealed source 分析: ${analyzedCount})\n`);
+    console.log(`📊 读取到 ${papers.length} 篇筛选后的论文，其中 ${analyzedCount} 篇已有与当前封存来源对应的成功分析\n`);
 
     const freshById = new Map(filteredData.papers.map(paper => [normalizedId(paper), paper]));
     const notAnalyzed = papers

@@ -46,12 +46,12 @@ describe('refresh-api-reader batch CLI', () => {
             ]),
             /1-5/
         );
-        assert.throws(() => parseRefreshCliArgs(['--unknown']), /未知参数/);
+        assert.throws(() => parseRefreshCliArgs(['--unknown']), /无法识别参数/);
         assert.throws(
             () => parseRefreshCliArgs([
                 '--all', '--date', '2026-09-01', '--concurrency', '2.5'
             ]),
-            /必须为整数/
+            /的值必须是整数/
         );
         assert.throws(
             () => parseRefreshCliArgs(['--all', '--date', '2026-02-30']),
@@ -59,25 +59,25 @@ describe('refresh-api-reader batch CLI', () => {
         );
         assert.throws(
             () => parseRefreshCliArgs(['--all', '--all', '--date', '2026-09-01']),
-            /参数重复/
+            /不能重复使用/
         );
         assert.throws(
             () => parseRefreshCliArgs([
                 '--surface-bindings-only', '--scoring-and-reader', '2608.1'
             ]),
-            /刷新模式参数不能同时使用/
+            /同一次刷新只能选择一种模式/
         );
         assert.throws(
             () => parseRefreshCliArgs([
                 '--all', '--date', '2026-09-01', '--feedback', '错误'
             ]),
-            /一个显式论文 ID/
+            /只能指定一个论文 ID/
         );
         assert.throws(
             () => parseRefreshCliArgs([
                 '--figures-only', '--feedback', '错误', '2608.1'
             ]),
-            /只能用于完整读者文章刷新/
+            /只能用于刷新完整读者文章/
         );
     });
 
@@ -133,7 +133,7 @@ describe('refresh-api-reader batch CLI', () => {
             assert.strictEqual(hasCurrentReaderV3({ arxivId: 'missing-plan' }), false);
             assert.throws(
                 () => resolveBatchRefreshIds({ ...options, date: '2026-08-31' }),
-                /拒绝按 2026-08-31/
+                /不能按 2026-08-31 全量刷新/
             );
         } finally {
             Config.FILES.deepAnalysisResult = previous;

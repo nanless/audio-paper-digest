@@ -275,7 +275,7 @@ describe('mergeAndSaveResults', () => {
 
         await assert.rejects(
             mergeAndSaveResults([{ arxivId: '2604.99999', analysis: 'new' }], file),
-            /JSON 文件损坏或不可读，已阻止覆盖/
+            /JSON 文件内容无效或无法读取，无法继续处理/
         );
         assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
     });
@@ -284,7 +284,7 @@ describe('mergeAndSaveResults', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-null-'));
         const file = path.join(dir, 'deep-analysis-result.json');
         fs.writeFileSync(file, 'null');
-        assert.throws(() => updateJsonFileLocked(file, () => ({ papers: [] })), /顶层必须是对象或数组/);
+        assert.throws(() => updateJsonFileLocked(file, () => ({ papers: [] })), /顶层内容必须是对象或数组/);
         assert.strictEqual(fs.readFileSync(file, 'utf8'), 'null');
     });
 
@@ -1247,7 +1247,7 @@ describe('analyzePaperWithRetry', () => {
             analyzeFn: async () => wrongStage
         });
         assert.strictEqual(rejected.success, false);
-        assert.match(rejected.error, /恢复阶段未全部进入/);
+        assert.match(rejected.error, /仍有必需的分析阶段未达到允许的完成状态/);
 
         const paper = { arxivId: '2604.00023', title: 'Recoverable' };
         const attempt = await analyzePaperWithRetry(paper, {

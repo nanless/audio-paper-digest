@@ -1748,7 +1748,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
                         return_value='2' * 64,
                     ), self.assertRaisesRegex(
                         publish_to_blog.PublishDataValidationError,
-                        '重跑 review.*重签',
+                        '重新运行审查.*重新签发本批发布凭证',
                     ):
                 publish_to_blog.load_verified_review_receipt('2026-07-10')
 
@@ -6396,7 +6396,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 paths, _receipt = publish_to_blog.load_verified_review_receipt('2026-07-10')
                 self.assertEqual(set(paths), {path.resolve() for path in publish_paths})
                 page.write_text('changed after review\n', encoding='utf-8')
-                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'review 后已变更'):
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '文件内容在审查后发生变化，不能推送'):
                     publish_to_blog.load_verified_review_receipt('2026-07-10')
 
     def test_index_blob_must_match_review_receipt_after_git_add(self):
@@ -7239,7 +7239,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 'schemaVersion': 3, 'templateFingerprint': current,
             })
         with self.assertRaisesRegex(
-                publish_to_blog.PublishDataValidationError, '格式标识非法',
+                publish_to_blog.PublishDataValidationError, '生成清单的模板格式标记不符合要求。',
         ):
             publish_to_blog.validate_current_generation_template({
                 'schemaVersion': 3, 'templateFingerprint': 'not-a-sha',
@@ -7328,7 +7328,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 escaped = json.loads(json.dumps(receipt))
                 escaped['files'][0]['path'] = '../escaped.md'
                 escaped['reviewProvenance']['files'][0]['path'] = '../escaped.md'
-                self.assertIn('路径越界', publish_to_blog._manual_review_record_error(
+                self.assertIn('必须使用不含 .. 的博客仓库相对路径', publish_to_blog._manual_review_record_error(
                     escaped, date_str=date_str,
                     generation_manifest_sha256=manifest_sha,
                     expected_base_head=base_head,
@@ -7338,7 +7338,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     'model'
                 ] = 'gpt-5.6-sol'
                 self.assertIn(
-                    'reviewSubagent',
+                    '独立单页审查任务、模型及推理等级',
                     publish_to_blog._manual_review_record_error(
                         wrong_model, date_str=date_str,
                         generation_manifest_sha256=manifest_sha,
@@ -7350,7 +7350,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     'taskName'
                 ] = 'review-2608-12345'
                 self.assertIn(
-                    'taskName 必须逐页全局唯一',
+                    '独立审查任务名称必须全局唯一',
                     publish_to_blog._manual_review_record_error(
                         duplicate_task, date_str=date_str,
                         generation_manifest_sha256=manifest_sha,
@@ -7362,7 +7362,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     'reviewSubagent'
                 ]['paperId']
                 self.assertIn(
-                    'paperId 缺失或非法',
+                    'paperId 缺失或不是规范的 arXiv ID',
                     publish_to_blog._manual_review_record_error(
                         missing_paper_id, date_str=date_str,
                         generation_manifest_sha256=manifest_sha,
@@ -7370,7 +7370,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     ),
                 )
                 receipt['reviewProvenance']['files'][1]['deleted'] = False
-                self.assertIn('删除语义不一致', publish_to_blog._manual_review_record_error(
+                self.assertIn('文件 SHA 或删除标记与发布凭证不一致', publish_to_blog._manual_review_record_error(
                     receipt, date_str=date_str,
                     generation_manifest_sha256=manifest_sha,
                     expected_base_head=base_head,
@@ -7432,7 +7432,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                     )
                 page.unlink()
                 with self.assertRaisesRegex(
-                    publish_to_blog.PublishDataValidationError, 'review 期间消失',
+                    publish_to_blog.PublishDataValidationError, '页面在审查期间消失',
                 ):
                     publish_to_blog.save_review_receipt(
                         '2026-07-10', [page], 'hugo',
@@ -7453,7 +7453,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 manifest['generatedAt'] = 'tampered'
                 manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
                 with self.assertRaisesRegex(
-                    publish_to_blog.PublishDataValidationError, 'manifest 缺失或已变化',
+                    publish_to_blog.PublishDataValidationError, '发布凭证中的生成清单 SHA 格式无效，或对应清单缺失、内容已变化。',
                 ):
                     publish_to_blog.load_verified_review_receipt('2026-07-10')
 

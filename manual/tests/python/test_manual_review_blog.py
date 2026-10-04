@@ -111,7 +111,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
             Module, generation, exact,
         )
         mismatched = attestation()
-        with self.assertRaisesRegex(Module.PublishDataValidationError, '作用域'):
+        with self.assertRaisesRegex(Module.PublishDataValidationError, '发布范围与生成清单不一致'):
             manual_review_blog._validate_review_statement_scope(
                 Module, generation, mismatched,
             )
@@ -129,7 +129,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
                 },
             }],
         }
-        with self.assertRaisesRegex(Module.PublishDataValidationError, '必须使用 attestation v3'):
+        with self.assertRaisesRegex(Module.PublishDataValidationError, '必须使用 v3 人工审查声明'):
             manual_review_blog._require_current_review_statement_version(
                 Module, generation, {'version': 2},
             )
@@ -164,7 +164,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
                 pass
 
         manual_review_blog._reject_deterministic_fixes(Module, [])
-        with self.assertRaisesRegex(Module.PublishDataValidationError, '旧 attestation 已失效'):
+        with self.assertRaisesRegex(Module.PublishDataValidationError, '原人工审查声明已失效'):
             manual_review_blog._reject_deterministic_fixes(Module, [
                 {'path': '/tmp/content/posts/changed.md', 'issues': ['重复段落']},
             ])
@@ -249,7 +249,7 @@ class ManualReviewAttestationTest(unittest.TestCase):
         second['reviewSubagent']['paperId'] = '2608.54321'
         payload['files'].append(second)
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(ValueError, 'taskName 必须逐页唯一'):
+            with self.assertRaisesRegex(ValueError, '审查任务名称必须逐页唯一'):
                 manual_review_blog._load_review_statement(self.write_payload(tmp, payload))
         payload['files'][1]['reviewSubagent']['taskName'] = 'paper-review-2608-54321'
         del payload['files'][1]['reviewSubagent']['paperId']

@@ -9281,9 +9281,8 @@ function buildLegacyCoreSummaryV2EvidenceContext(stage, inputAnalysis, sourceTex
         return buildStageEvidenceContext(stage, inputAnalysis, sourceText);
     }
     const config = TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair;
-    // v2 used the type-aware default branch, which included canonical analysis
-    // excerpts. Reconstruct it only to authenticate the old checkpoint; new
-    // summary authoring is source-only.
+    // v2 的默认证据构造包含已有分析片段。这里只重建旧输入，以核验旧阶段记录；
+    // 新摘要仍只根据论文原文编写。
     return buildTypeAwareSourceContext(inputAnalysis, sourceText, config.evidenceMaxChars,
         config.patterns, config.taskLabel);
 }
@@ -9669,7 +9668,7 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
         )).slice(-1),
         migrationSnapshot
     ];
-    console.log('    [deep] ♻️  已严格复用 v2 主分析与结构 checkpoint，仅失效核心摘要及下游');
+    console.log('    [deep] ♻️  已核验并复用 v2 的主分析和结构修复记录；核心摘要及其后续依赖阶段需要重新执行');
     return true;
 }
 
@@ -9720,7 +9719,7 @@ function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
         if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
     }
     paper.analysisStageCheckpoints = checkpoints;
-    console.log(`    [deep] ⚠️  ${stage} 指纹变化，已失效该阶段及下游恢复状态`);
+    console.log(`    [deep] ⚠️  阶段 ${stage} 的输入指纹发生变化，已清除该阶段及依赖它的后续恢复记录`);
     return true;
 }
 
@@ -9862,7 +9861,7 @@ function stripManualAnalysisProvenance(paper) {
 }
 
 function markRecoveryStage(manifest, stage, status, details = {}) {
-    if (!RECOVERY_STAGE_STATUSES.has(status)) throw new Error(`非法恢复阶段状态: ${status}`);
+    if (!RECOVERY_STAGE_STATUSES.has(status)) throw new Error(`恢复阶段的状态 ${status} 不在允许的状态列表中。`);
     const updatedAt = getBeijingISOString();
     manifest.stages[stage] = { status, ...details, updatedAt };
     manifest.updatedAt = updatedAt;
@@ -14034,7 +14033,7 @@ async function analyzePaperDeepInternal(paper) {
     };
     const previousSource = analysisManifest.sourceAcquisition;
     if (shouldRetainFullTextCheckpoint(paper, previousSource, hasFullText, sourceFetchError)) {
-        const error = `全文临时不可用，已保留全文 checkpoint: ${sourceFetchError.message}`;
+        const error = `全文暂时无法取得，已保留已有的全文分析阶段记录：${sourceFetchError.message}`;
         console.log(`    [deep] ⚠️  ${error}`);
         analysisManifest.sourceAcquisitionLatestFailure = {
             attemptedAt: getBeijingISOString(),
@@ -14059,7 +14058,7 @@ async function analyzePaperDeepInternal(paper) {
         };
     }
     if (sourceFetchError) {
-        const error = `全文瞬时不可用，等待正常重试: ${sourceFetchError.message}`;
+        const error = `全文暂时无法取得，需要稍后重试：${sourceFetchError.message}`;
         analysisManifest.sourceAcquisitionLatestFailure = {
             attemptedAt: getBeijingISOString(),
             error: sourceFetchError.message,
@@ -14085,7 +14084,7 @@ async function analyzePaperDeepInternal(paper) {
         for (const stage of RECOVERY_STAGE_ORDER) delete analysisManifest.stages[stage];
         delete paper.analysisCheckpoint;
         delete paper.analysisStageCheckpoints;
-        console.log(`    [deep] ⚠️  checkpoint 实际分析输入指纹变化，已清除主分析及下游恢复状态`);
+        console.log(`    [deep] ⚠️  实际分析输入发生变化，已清除主分析及依赖它的后续恢复记录`);
     }
     analysisManifest.sourceAcquisition = sourceAcquisitionRecord;
     const recoveryFingerprints = buildRecoveryFingerprints(paper, textForAnalysis, arxivId);
@@ -14097,7 +14096,7 @@ async function analyzePaperDeepInternal(paper) {
         sourceDetails.structuredArtifacts,
         arxivId
     )) {
-        console.log('    [deep] ♻️  已在主分析重跑前封口 source-only Reader，避免重复生成');
+        console.log('    [deep] ♻️  重新执行主分析前，已核验并更新只使用论文来源证据的读者文章记录，避免重复生成文章');
     }
     const restoredSavedStagesForSummaryRepair = restoreSavedStagesForCoreSummaryRepair(
         savedCoreSummaryRepairCandidate,
@@ -14111,7 +14110,7 @@ async function analyzePaperDeepInternal(paper) {
             paper, analysisManifest, rawTextForAnalysis, 'primaryAnalysis'
         );
     if (restoredSavedStagesForSummaryRepair) {
-        console.log('    [deep] ♻️  已封口 legacy canonical，仅执行核心摘要单节修复与评分重审');
+        console.log('    [deep] ♻️  已核验并复用旧分析阶段，本次只修复核心摘要并重新审查评分');
     }
     const migratedCoreSummaryV3 = savedCoreSummaryRepairActive
         || tryMigrateCoreSummaryV3LegacyCheckpoints(
@@ -14818,12 +14817,12 @@ async function analyzePaperDeepInternal(paper) {
         try {
             if (missingCoreSummary || duplicateCoreSummary) {
                 throw contractRejectedError(
-                    '结构修复完成后核心摘要仍缺失或重复，拒绝用单节修复掩盖结构错误'
+                    '结构修复完成后，核心摘要仍缺失或重复，不能通过单节修复处理这个结构错误。'
                 );
             }
             let changed = false;
             if (summaryIssue) {
-                console.log(`    [deep] 🔧 核心摘要执行结构后单节修复: ${summaryIssue}`);
+                console.log(`    [deep] 🔧 结构检查后，只修复核心摘要这一节：${summaryIssue}`);
                 const fixed = await repairCoreSummarySection(
                     paper,
                     analysis,
@@ -14832,14 +14831,14 @@ async function analyzePaperDeepInternal(paper) {
                 );
                 changed = fixed !== analysis;
                 analysis = fixed;
-                console.log('    [deep] ✅ 核心摘要最终门禁通过，其他 12 节字节保持不变');
+                console.log('    [deep] ✅ 核心摘要已通过最终检查，其他 12 节的内容逐字未变');
             }
             const coreSummaryIssue = getCoreSummaryDetailIssue(
                 analysis,
                 { sourceText: rawTextForAnalysis }
             );
             if (coreSummaryIssue) {
-                throw contractRejectedError(`核心摘要最终门禁失败: ${coreSummaryIssue}`);
+                throw contractRejectedError(`核心摘要未通过最终检查：${coreSummaryIssue}`);
             }
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
@@ -14958,7 +14957,7 @@ async function analyzePaperDeepInternal(paper) {
                 delete paper.analysisStageCheckpoints.scoringAudit;
                 delete paper.analysisStageCheckpoints.imageSupplement;
             }
-            console.log(`    [deep] ⚠️  评分审计指纹变化，已失效评分与插图；source-only Reader 保持独立`);
+            console.log(`    [deep] ⚠️  评分审查的输入指纹发生变化，已清除评分和插图阶段记录；只使用论文来源证据的读者文章不受影响`);
         }
     }
     if (!isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
@@ -15154,7 +15153,7 @@ async function analyzePaperDeepInternal(paper) {
     }
 
     // 保留 13 节 analysis 与评分作为机器兼容层。Reader 在评分后调度，
-    // 但写作输入仅用原文证据与真实像素，不传入 canonical 生成正文。
+    // 文章只根据原文证据和实际图片编写，不把主分析正文传给模型。
     // 因此 Reader 身份只绑定真实输入；摘要或评分变化不得触发昂贵重写。
     // Scoring/Reader invalidation may discard stale paper fields, but must not
     // discard the resource identity freshly verified for this same execution.
@@ -15188,7 +15187,7 @@ async function analyzePaperDeepInternal(paper) {
         apiReaderFingerprint,
         legacyApiReaderFingerprint
     )) {
-        console.log('    [deep] ♻️  Reader 原文证据未漂移，已移除无效的 canonical analysis 指纹依赖');
+        console.log('    [deep] ♻️  读者文章使用的原文证据未变，已移除对主分析正文指纹的旧依赖');
     }
     if (invalidateApiReaderForResourceCountChange(
         paper, analysisManifest, verifiedReaderResources, apiReaderFingerprint
@@ -15452,7 +15451,7 @@ async function analyzePaperDeepInternal(paper) {
             officialFiguresSha256: stableFingerprint(paper.apiReaderFigures || []),
             fingerprint: imageSupplementFingerprint
         });
-        console.log('    [deep] ℹ️  核心摘要窄恢复跳过插图重写，保留 source-only Reader 图文证据');
+        console.log('    [deep] ℹ️  本次摘要修复不重写插图，保留根据论文来源生成的读者文章及图片证据');
     } else if (hasBoundApiReaderFigures && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         analysis = preImageAnalysis;
         selectedImageUrls = [];

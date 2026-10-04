@@ -109,7 +109,7 @@ async function reanalyzeAll(options = {}) {
         if (error.code !== 'ENOENT') throw error;
     }
     if (retiredReaderCandidates > 0) {
-        console.log(`[reanalyze] 已保留并退休 ${retiredReaderCandidates} 个旧 Reader 失败候选`);
+        console.log(`[reanalyze] 已保留并停用 ${retiredReaderCandidates} 份旧读者文章草稿`);
     }
     console.log(`[reanalyze] 共 ${papers.length} 篇论文需要重新分析`);
     console.log(`[reanalyze] 模型: ${process.env.PAPER_ANALYZER_MODEL}`);
@@ -266,9 +266,9 @@ async function reanalyzeAll(options = {}) {
 if (require.main === module) {
     reanalyzeAll().then(result => {
         if (result.status === 'complete') {
-            console.log('\n[reanalyze] 文本重分析完成；可继续生成、review 并发布全部博客');
+            console.log('\n[reanalyze] 文本重新分析已完成，可以继续生成、审查和发布博客');
         } else {
-            console.error(`\n[reanalyze] 尚有 ${result.failed} 篇未恢复，禁止视为完整批次`);
+            console.error(`\n[reanalyze] 还有 ${result.failed} 篇未完成分析，本批次尚未完成`);
         }
         process.exitCode = result.exitCode;
     }).catch(err => {

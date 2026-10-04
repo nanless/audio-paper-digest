@@ -37,7 +37,7 @@ def valid_review_subagent(subagent):
 
 
 def valid_review_shard(relative, expected_item, item):
-    """Validate a shard against generation, including explicit deletion."""
+    """按生成清单核对单页审查记录，包括已删除文件的记录。"""
     if not isinstance(item, dict) or item.get('issues'):
         return False
     deleted = expected_item.get('deleted') is True
@@ -91,7 +91,7 @@ def main():
                 relative = relative.split(marker, 1)[1]
             if relative in expected:
                 if relative in shards:
-                    raise SystemExit(f'duplicate review shard path: {relative}')
+                    raise SystemExit(f'单页审查记录包含重复的文件路径：{relative}')
                 shards[relative] = item
     missing = sorted(set(expected) - set(shards))
     if args.plan:
@@ -124,7 +124,7 @@ def main():
         }, ensure_ascii=False))
         return
     if missing:
-        raise SystemExit(f'missing review shards: {missing}')
+        raise SystemExit(f'以下文件缺少独立审查记录：{missing}')
     files = []
     seen_tasks = set()
     for relative, expected_item in expected.items():
@@ -135,13 +135,13 @@ def main():
             sha256 != expected_item.get('sha256')
             or (item.get('deleted') is True) != deleted
         ):
-            raise SystemExit(f'stale review shard: {relative}')
+            raise SystemExit(f'单页审查记录中的文件 SHA 或删除标记与生成清单不一致：{relative}')
         subagent = item.get('reviewSubagent') or {}
         if not valid_review_shard(relative, expected_item, item):
-            raise SystemExit(f'failed review shard: {relative}')
+            raise SystemExit(f'单页审查记录未通过核验：{relative}')
         task_name = subagent['taskName'].strip()
         if task_name in seen_tasks:
-            raise SystemExit(f'duplicate review subagent taskName: {task_name}')
+            raise SystemExit(f'不同文件复用了同一个独立审查任务名称：{task_name}')
         seen_tasks.add(task_name)
         notes = item['notes']
         paper_id_match = re.search(r'(\d{4}[.-]\d{5})(?=\.md$)', relative)
@@ -181,7 +181,7 @@ def main():
     if manifest.get('publicationScope') is not None:
         payload['publicationScope'] = manifest['publicationScope']
     atomic_write_json(output_path, payload, mode=0o600)
-    print(f'assembled {len(files)} files: {output_path}')
+    print(f'已汇总 {len(files)} 个文件的人工审查声明：{output_path}')
 
 
 if __name__ == '__main__':

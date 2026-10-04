@@ -258,12 +258,12 @@ function loadFetchCheckpoint(today, candidateFingerprint, filePath = FETCH_CHECK
     if (!Array.isArray(data.historicalDedupIds) || !Array.isArray(data.categoryOrder)) return null;
     for (const [categoryId, entry] of Object.entries(data.arxiv)) {
         if (!hasValidFetchSourceIntegrity(entry)) {
-            console.log(`  [fetch] arXiv ${categoryId} checkpoint 内容完整性校验失败，仅重抓该来源`);
+            console.log(`  [fetch] arXiv ${categoryId} 的抓取记录未通过完整性检查，只重新抓取这个来源`);
             delete data.arxiv[categoryId];
         }
     }
     if (data.huggingface && !hasValidFetchSourceIntegrity(data.huggingface)) {
-        console.log('  [fetch] HuggingFace checkpoint 内容完整性校验失败，仅重抓该来源');
+        console.log('  [fetch] HuggingFace 的抓取记录未通过完整性检查，只重新抓取这个来源');
         data.huggingface = null;
     }
     return data;
@@ -744,7 +744,7 @@ function writeFilterArtifacts({
 
     writeFileAtomic(FILTERED_FILE, JSON.stringify({
         timestamp,
-        // 这是筛选过程中的 checkpoint，不是可供深度分析复用的最终批次。
+        // 这里保存的是筛选进度，尚不是可供深度分析使用的完整批次。
         // 只有后续归档去重完成后，才会由主流程写入 status=complete。
         status: sourceFailure ? 'source_partial_failed' : 'filtering',
         filterModel,
@@ -933,10 +933,10 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}
                         fs.copyFileSync(archivePath, backupPath);
                         writeFileAtomic(archivePath, currentContent);
                         if (fs.readFileSync(archivePath, 'utf8') !== currentContent) {
-                            throw new Error('替换 canonical 归档后的内容校验失败');
+                            throw new Error('用当前文件内容更新归档后，归档内容与写入内容不一致。');
                         }
                         archived++;
-                        console.log(`  [归档] current 已成为 canonical，旧归档另存为 ${path.basename(backupPath)}`);
+                        console.log(`  [归档] 当前文件内容已写入归档，原归档另存为 ${path.basename(backupPath)}`);
                     }
                 } catch (e) {
                     console.log(`  [归档] 校验已有归档失败 ${path.basename(filePath)}: ${e.message}`);
@@ -972,17 +972,17 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}
 }
 
 /**
- * 一次性把旧版 data/deep-analysis-result.json 迁移到 current 权威路径。
- * 仅在 current 不存在时迁移；写入成功且可重新读取后才删除 legacy。
+ * 根据旧版论文数组推断唯一的批次日期。
+ * 优先使用有效的显式日期，否则从时间戳推断；无法确认或日期不唯一时拒绝继续。
  */
 function inferLegacyAnalysisArrayBatchDate(papers) {
     if (!Array.isArray(papers) || papers.length === 0) {
-        throw new Error('legacy 顶层数组为空，无法可靠推断批次日期');
+        throw new Error('旧分析结果必须是非空的论文数组，才能可靠推断批次日期。');
     }
     const inferredDates = [];
     for (const paper of papers) {
         if (!paper || typeof paper !== 'object' || Array.isArray(paper)) {
-            throw new Error('legacy 顶层数组包含非法论文条目，无法可靠推断批次日期');
+            throw new Error('旧分析数组含有无效的论文记录，无法可靠推断批次日期。');
         }
         const explicitBatchDate = String(paper.digestStatus?.batchDate || paper.batchDate || '');
         const dateMatch = explicitBatchDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -1004,13 +1004,13 @@ function inferLegacyAnalysisArrayBatchDate(papers) {
             inferredDate = String(normalizedTimestamp || '').match(/^(\d{4}-\d{2}-\d{2})/)?.[1] || '';
         }
         if (!inferredDate) {
-            throw new Error(`legacy 论文 ${normalizedId(paper) || '(缺少 ID)'} 缺少可验证的批次日期`);
+            throw new Error(`旧论文记录 ${normalizedId(paper) || '(缺少 ID)'} 没有可核验的批次日期。`);
         }
         inferredDates.push(inferredDate);
     }
     const uniqueDates = [...new Set(inferredDates)];
     if (uniqueDates.length !== 1) {
-        throw new Error(`legacy 顶层数组包含多个批次日期，拒绝迁移: ${uniqueDates.join(', ')}`);
+        throw new Error(`旧分析数组包含多个批次日期，无法迁移：${uniqueDates.join(', ')}`);
     }
     return uniqueDates[0];
 }
@@ -1024,6 +1024,10 @@ function withOrderedFileLocksSync(filePaths, callback) {
     return acquire(0);
 }
 
+/**
+ * 将旧版分析结果迁移到当前结果文件。只有当前文件不存在时才迁移；
+ * 写入成功并通过读取检查后，才删除旧文件。
+ */
 function migrateLegacyAnalysisResultToCurrent(
     currentFile = RESULT_FILE,
     legacyFile = LEGACY_RESULT_FILE
@@ -1043,15 +1047,15 @@ function migrateLegacyAnalysisResultToCurrent(
             };
         }
         if (!payload || !Array.isArray(payload.papers)) {
-            throw new Error(`legacy 分析结果 schema 非法，拒绝迁移: ${legacyFile}`);
+            throw new Error(`旧分析结果缺少有效的论文数组，无法迁移：${legacyFile}`);
         }
         writeFileAtomic(currentFile, JSON.stringify(payload, null, 2));
         const verified = readJsonFileStrict(currentFile);
         if (!verified || !Array.isArray(verified.papers)) {
-            throw new Error(`legacy 分析结果迁移后校验失败: ${currentFile}`);
+            throw new Error(`旧分析结果迁移后未通过读取检查：${currentFile}`);
         }
         fs.unlinkSync(legacyFile);
-        console.log(`📦 已将 legacy 分析结果迁移到权威路径并移除旧文件: ${currentFile}`);
+        console.log(`📦 旧分析结果已迁移到当前结果文件，并已删除旧文件：${currentFile}`);
         return true;
     });
 }
@@ -1178,7 +1182,7 @@ async function runFullFetch() {
     const historicalDedupIds = buildHistoricalDedupBaseline(papersData, today, publishedIds);
     const existingIds = new Set(historicalDedupIds);
     const historicalExistingIds = new Set(historicalDedupIds);
-    console.log(`历史去重基线 ${existingIds.size} 篇（排除今日批次状态，保证同日续跑候选不缩水）\n`);
+    console.log(`历史论文去重列表共 ${existingIds.size} 篇；已排除今日记录，避免同日续跑时漏掉候选论文\n`);
     const candidateFingerprints = buildCandidateFingerprints(historicalExistingIds, publishedIds);
 
     let arxivPapers = [];
@@ -1255,7 +1259,7 @@ async function runFullFetch() {
         };
         sourceHealth = rawCandidates?.sourceHealth || completedFiltered.sourceHealth || sourceHealth;
     } else if (resumableFilter) {
-        console.log(`⏭️ 检测到今日来源健康的筛选 checkpoint，跳过抓取，仅续跑 ${resumableFilter.coverage.missingIds.length} 篇未决论文`);
+        console.log(`⏭️ 今日筛选记录中的来源均可复用，跳过抓取，继续筛选 ${resumableFilter.coverage.missingIds.length} 篇尚未确定结果的论文`);
         const rawCandidates = resumableFilter.rawCandidates;
         batchStartedAt = rawCandidates.timestamp || batchStartedAt;
         batchDate = rawCandidates.batchDate || today;
@@ -1321,7 +1325,7 @@ async function runFullFetch() {
         batchDate = fetchCheckpoint.batchDate || today;
         batchId = fetchCheckpoint.batchId || batchId;
         if (stableHash(fetchCheckpoint.historicalDedupIds) !== stableHash(historicalDedupIds)) {
-            throw new Error('抓取 checkpoint 的历史去重基线与当前候选指纹不一致，拒绝混用');
+            throw new Error('抓取记录中的历史去重列表与本次计算的去重列表不一致，不能混用。');
         }
         saveFetchCheckpoint(fetchCheckpoint);
         // ========== 第一步：从 arxiv 抓取 ==========
@@ -1332,7 +1336,7 @@ async function runFullFetch() {
         if (shuffledCategories.some(category => !category)
                 || fetchCheckpoint.categoryOrder.length !== categories.length
                 || new Set(fetchCheckpoint.categoryOrder).size !== categories.length) {
-            throw new Error('抓取 checkpoint 的 categoryOrder 与当前来源配置不一致');
+            throw new Error('抓取记录的类别顺序 categoryOrder 与当前来源配置不一致。');
         }
         console.log(`  请求顺序: ${shuffledCategories.map(c => c.id).join(' → ')}\n`);
 
@@ -1347,7 +1351,7 @@ async function runFullFetch() {
             const category = shuffledCategories[i];
             const cachedCategory = fetchCheckpoint.arxiv[category.id];
             if (isReusableArxivCheckpoint(cachedCategory)) {
-                console.log(`  [${i+1}/${shuffledCategories.length}] 复用抓取 checkpoint: ${category.name} (${category.id}) ${cachedCategory.papers.length} 篇`);
+                console.log(`  [${i+1}/${shuffledCategories.length}] 复用已有抓取结果：${category.name} (${category.id})，共 ${cachedCategory.papers.length} 篇`);
                 sourceHealth.arxiv.categories.push(cachedCategory.health);
                 for (const p of cachedCategory.papers) {
                     p.fetchedAt = batchStartedAt;
@@ -1469,7 +1473,7 @@ async function runFullFetch() {
         if (cachedHf?.status === 'complete' && cachedHf.health?.ok === true && Array.isArray(cachedHf.papers)) {
             hfPapers = cachedHf.papers;
             sourceHealth.huggingface = cachedHf.health;
-            console.log(`  复用 HuggingFace 抓取 checkpoint: ${hfPapers.length} 篇`);
+            console.log(`  复用已有的 HuggingFace 抓取结果，共 ${hfPapers.length} 篇`);
         } else try {
             hfPapers = await fetchHuggingFacePapers(historicalExistingIds, {
                 days: Config.HUGGINGFACE_CONFIG.defaultDays,
@@ -1799,7 +1803,7 @@ async function runFullFetch() {
         onPaperDone: (idx, total, paper, result, duration) => {
             const durSec = (duration / 1000).toFixed(1);
             if (result.skipped) {
-                console.log(`  [${idx + 1}/${total}] ⏭️ 已有成功分析，保持 canonical 不变 | ${paper.title.substring(0, 50)}...`);
+                console.log(`  [${idx + 1}/${total}] ⏭️ 已有成功的分析结果，保留原记录 | ${paper.title.substring(0, 50)}...`);
             } else if (result.success) {
                 const score = result.parsed?.score ? `[${result.parsed.score}分]` : '[N/A]';
                 const rank = result.parsed?.rankBucket || '未分档';
@@ -1821,7 +1825,7 @@ async function runFullFetch() {
 
             const snapshot = readJsonFileStrict(outputFile, { allowMissing: true });
             const savedAnalysisPapers = Array.isArray(snapshot) ? snapshot : (snapshot?.papers || []);
-            console.log(`  💾 批次状态已更新: 本批成功 ${batchSuccess} 篇（canonical 共 ${savedAnalysisPapers.length} 篇）`);
+            console.log(`  💾 批次状态已更新: 本批成功 ${batchSuccess} 篇，结果文件中共保存 ${savedAnalysisPapers.length} 篇`);
         }
     });
     const { stats: analysisStats } = dailySourcePlan
@@ -1861,7 +1865,7 @@ async function runFullFetch() {
                 for (const b of backups.slice(10)) {
                     fs.unlinkSync(b.path);
                 }
-                console.log(`  已清理 ${backups.length - 10} 个旧 backup`);
+                console.log(`  已删除 ${backups.length - 10} 个旧备份`);
             }
         } catch (e) {
             // ignore cleanup errors

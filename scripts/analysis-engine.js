@@ -54,7 +54,7 @@ function readJsonFileStrict(filePath, options = {}) {
     try {
         const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
         if (parsed === null || (typeof parsed !== 'object')) {
-            throw new Error('顶层必须是对象或数组');
+            throw new Error('JSON 文件的顶层内容必须是对象或数组。');
         }
         return parsed;
     } catch (error) {
@@ -62,7 +62,7 @@ function readJsonFileStrict(filePath, options = {}) {
         if (error.code === 'ENOENT') {
             throw new Error(`JSON 文件不存在: ${filePath}`);
         }
-        throw new Error(`JSON 文件损坏或不可读，已阻止覆盖 ${filePath}: ${error.message}`);
+        throw new Error(`JSON 文件内容无效或无法读取，无法继续处理 ${filePath}：${error.message}`);
     }
 }
 
@@ -72,22 +72,19 @@ function sleepSync(ms) {
 
 const FILE_LOCK_OWNER_KEYS = Object.freeze(['acquiredAt', 'hostname', 'pid', 'token']);
 const FILE_LOCK_TOKEN_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
-// This capability is intentionally opaque.  It is passed only by durable
-// outer operation locks whose process owns no protected work after it exits.
-// All canonical paper and ordinary file locks keep their lease-based policy.
+// 这项恢复权限只交给持久化的外层操作锁；其持有进程退出后，不再负责受锁保护的工作。
+// 单篇分析锁和普通文件锁仍按原有租期规则处理。
 const LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY = Symbol(
     'local-dead-process-operation-lock-recovery-v1'
 );
-// Operator-only recovery for a deliberately audited local workspace.  The
-// caller must independently confirm that the owner PID is dead; this is not
-// used by ordinary process retries and does not weaken regular paper locks.
+// 这项恢复权限仅供操作者审查过的本地工作区使用。调用者必须另行确认
+// 原持有进程已经退出；普通重试不会使用它，单篇分析锁的原有规则仍然有效。
 const OPERATOR_CONFIRMED_DEAD_OPERATION_LOCK_RECOVERY = Symbol(
     'operator-confirmed-dead-operation-lock-recovery-v1'
 );
-// This narrower capability exists only for a sealed historical-direct paper
-// execution.  It upgrades one pre-hardening 0755/0644 canonical lock whose
-// hostname no longer matches this machine, after a deliberately long lease.
-// Ordinary canonical locks and callers never receive this symbol.
+// 这项恢复权限仅供已核验的历史论文直接重写使用。它在较长租期到期后，
+// 可以回收旧权限为 0755/0644、且记录主机名不同于当前机器的单篇分析锁。
+// 普通单篇分析锁和其他调用者不会取得这个符号。
 const HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY = Symbol(
     'historical-direct-remote-legacy-paper-lock-recovery-v1'
 );
@@ -475,7 +472,7 @@ function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
             });
             finalizeHistoricalAudit = options.prepareHistoricalDirectLegacyLockReclaim(intent);
             if (typeof finalizeHistoricalAudit !== 'function') {
-                throw new Error('historical direct legacy lock audit prepare callback must return a synchronous finalizer');
+                throw new Error('历史论文旧锁的审查回调必须返回同步完成的收尾函数。');
             }
             // The audit sink is outside the lock directory and is treated as
             // untrusted. Re-read every inode and marker after it returns so it
@@ -508,7 +505,7 @@ function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
             });
             const callbackResult = finalizeHistoricalAudit(completion);
             if (callbackResult && typeof callbackResult.then === 'function') {
-                throw new Error('historical direct legacy lock audit finalizer must be synchronous');
+                throw new Error('历史论文旧锁的审查收尾函数必须同步完成。');
             }
         }
         return true;
@@ -651,9 +648,8 @@ function installFileLockOwner(lockPath, owner) {
 }
 
 function hardenNewFileLockDirectory(lockPath) {
-    // mkdir(2) applies umask before Node can open the directory descriptor.
-    // Restore owner-only access, then bind the descriptor inode to the one
-    // captured immediately after our exclusive mkdir.
+    // 创建目录时，系统会先应用 umask。将权限恢复为仅持有人可访问后，
+    // 再确认打开的目录与刚创建的目录属于同一设备和文件节点。
     fs.chmodSync(lockPath, 0o700);
     const flags = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
         | (fs.constants.O_DIRECTORY || 0);
@@ -662,7 +658,7 @@ function hardenNewFileLockDirectory(lockPath) {
         fs.fchmodSync(fd, 0o700); fs.fsyncSync(fd);
         const stat = fs.fstatSync(fd);
         if (!stat.isDirectory() || (stat.mode & 0o777) !== 0o700) {
-            throw new Error(`文件锁目录权限无法收紧到 0700: ${lockPath}`);
+            throw new Error(`文件锁目录不是有效目录，或其权限无法设为 0700：${lockPath}`);
         }
         return { dev: stat.dev, ino: stat.ino };
     } finally { fs.closeSync(fd); }
@@ -708,7 +704,7 @@ function acquireFileLockSync(filePath, options = {}) {
             try {
                 const hardened = hardenNewFileLockDirectory(lockPath);
                 if (hardened.dev !== createdDirectory.dev || hardened.ino !== createdDirectory.ino) {
-                    throw new Error(`文件锁目录创建后身份变化: ${lockPath}`);
+                    throw new Error(`文件锁目录创建后，设备或文件节点发生变化：${lockPath}`);
                 }
                 createdDirectory = hardened;
                 const acquiredSnapshot = installFileLockOwner(lockPath, {
@@ -725,7 +721,7 @@ function acquireFileLockSync(filePath, options = {}) {
                     || acquiredSnapshot.directory.dev !== createdDirectory.dev
                     || acquiredSnapshot.directory.ino !== createdDirectory.ino
                     || JSON.stringify(acquiredSnapshot.entryNames) !== JSON.stringify(['owner.json'])) {
-                    throw new Error(`文件锁 owner 写入后身份不稳定: ${lockPath}`);
+                    throw new Error(`写入锁的持有人记录后，目录、权限或持有人信息未通过核验：${lockPath}`);
                 }
                 return createLockRelease(lockPath, ownerToken, acquiredSnapshot);
             } catch (ownerError) {
@@ -763,7 +759,7 @@ async function acquireFileLock(filePath, options = {}) {
             try {
                 const hardened = hardenNewFileLockDirectory(lockPath);
                 if (hardened.dev !== createdDirectory.dev || hardened.ino !== createdDirectory.ino) {
-                    throw new Error(`文件锁目录创建后身份变化: ${lockPath}`);
+                    throw new Error(`文件锁目录创建后，设备或文件节点发生变化：${lockPath}`);
                 }
                 createdDirectory = hardened;
                 const acquiredSnapshot = installFileLockOwner(lockPath, {
@@ -780,7 +776,7 @@ async function acquireFileLock(filePath, options = {}) {
                     || acquiredSnapshot.directory.dev !== createdDirectory.dev
                     || acquiredSnapshot.directory.ino !== createdDirectory.ino
                     || JSON.stringify(acquiredSnapshot.entryNames) !== JSON.stringify(['owner.json'])) {
-                    throw new Error(`文件锁 owner 写入后身份不稳定: ${lockPath}`);
+                    throw new Error(`写入锁的持有人记录后，目录、权限或持有人信息未通过核验：${lockPath}`);
                 }
                 return createLockRelease(lockPath, ownerToken, acquiredSnapshot);
             } catch (ownerError) {
@@ -806,7 +802,7 @@ function withFileLockSync(filePath, callback, options = {}) {
     try {
         return callback();
     } finally {
-        if (!release()) console.warn(`[file-lock] 锁身份已变化，拒绝释放: ${filePath}.lock`);
+        if (!release()) console.warn(`[file-lock] 锁记录或目录已发生变化，拒绝释放：${filePath}.lock`);
     }
 }
 
@@ -815,7 +811,7 @@ async function withFileLock(filePath, callback, options = {}) {
     try {
         return await callback();
     } finally {
-        if (!release()) console.warn(`[file-lock] 锁身份已变化，拒绝释放: ${filePath}.lock`);
+        if (!release()) console.warn(`[file-lock] 锁记录或目录已发生变化，拒绝释放：${filePath}.lock`);
     }
 }
 
@@ -838,7 +834,7 @@ function updateJsonFileLocked(filePath, updater, options = {}) {
         const current = readJsonFileStrict(filePath, { allowMissing: options.allowMissing !== false });
         const next = updater(current);
         if (next && typeof next.then === 'function') {
-            throw new Error('updateJsonFileLocked 的 updater 必须是同步函数');
+            throw new Error('updateJsonFileLocked 的 updater 回调必须同步返回更新结果。');
         }
         if (next === undefined) return current;
         const currentGeneration = Number.isInteger(current?.generation) ? current.generation : 0;
@@ -857,31 +853,31 @@ function initializeJsonFileLocked(filePath, fallbackValue, options = {}) {
 }
 
 function getIncompleteAnalysisContentReason(paper) {
-    if (!hasValidAnalysisBody(paper)) return '分析正文未通过内容合同';
+    if (!hasValidAnalysisBody(paper)) return '分析正文未通过内容检查。';
     if (!paper.analysisManifest || paper.analysisManifest.version !== 1) {
-        return 'analysisManifest 缺失或版本非法';
+        return '分析阶段记录 analysisManifest 缺失，或其版本无效。';
     }
     const stages = paper.analysisManifest.stages;
     if (!stages || typeof stages !== 'object' || REQUIRED_RECOVERY_STAGES.some(stage =>
         !isRecoveryStageTerminal(stage, stages[stage]?.status))) {
-        return '必需恢复阶段未全部进入允许终态';
+        return '仍有必需的分析阶段未达到允许的完成状态。';
     }
     const tagStageProofIssue = !paper.analysisManifest.manualTakeover
         ? validateTagStageProof(paper, { parsed: parseAnalysis(paper.analysis) })
         : null;
-    if (tagStageProofIssue) return `taxonomySeal 证明无法重放: ${tagStageProofIssue}`;
+    if (tagStageProofIssue) return `标签阶段记录未通过核验：${tagStageProofIssue}`;
     const coreSummaryBindingIssue = validateCoreSummaryStageBinding(paper);
-    if (coreSummaryBindingIssue) return `核心摘要证明无法重放: ${coreSummaryBindingIssue}`;
+    if (coreSummaryBindingIssue) return `核心摘要的对应记录未通过核验：${coreSummaryBindingIssue}`;
     if (validateManualTakeoverManifest(
         paper.analysisManifest,
         paper.analysisManifest.sourceAcquisition?.sourceSha256 || paper.sourceSha256 || '',
         { analysis: paper.analysis, imageManifest: paper.imageManifest }
-    )) return 'manual takeover 证明无法重放';
+    )) return '人工接续分析的记录未通过核验。';
     const scoring = stages.scoringAudit;
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
-        if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审计未绑定最终正文';
-        if (!scoringStabilityIsResolved(scoring)) return '评分稳定性未解决';
-        if (!apiReaderV3BindsCanonical(paper)) return 'API Reader source-only 证明无法重放';
+        if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审查记录与最终正文不一致。';
+        if (!scoringStabilityIsResolved(scoring)) return '评分稳定性检查未通过。';
+        if (!apiReaderV3BindsCanonical(paper)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
     }
     return null;
 }
@@ -1204,7 +1200,7 @@ function apiReaderV3BindsCanonical(paper) {
     const failedDiagnosticChecks = Object.entries(diagnosticChecks)
         .filter(([, passed]) => !passed).map(([name]) => name);
     if (failedDiagnosticChecks.length > 0) {
-        console.warn(`[analysis-engine] API Reader v3 证明失败项: ${failedDiagnosticChecks.join(', ')}`);
+        console.warn(`[analysis-engine] 读者文章 v3 的以下核验项未通过：${failedDiagnosticChecks.join(', ')}`);
     }
     return Boolean(
         paper.apiReaderArticleSha256 === articleSha256
@@ -1280,8 +1276,8 @@ function isSuccessfulAnalysisRecord(paper) {
 
 function hasValidAnalysisBody(paper, options = {}) {
     if (!paper || typeof paper.analysis !== 'string' || !paper.analysis.trim()) return false;
-    // Recovery manifests describe the latest attempt, not whether an older body is usable.
-    // Re-parse the body independently so repeated failed saves cannot erase valid content.
+    // 阶段记录描述的是最近一次尝试，不能据此判断旧正文是否仍可使用。
+    // 单独重新解析正文，避免多次保存失败结果时误删已有的有效内容。
     try {
         const parsed = parseAnalysis(paper.analysis, {
             legacyTags: options.legacyTags === true
@@ -1393,7 +1389,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 const rejectionReason = invalidReason || recoveryReason;
                 if (rejectionReason) {
                     lastError = rejectionReason;
-                    console.warn(`[analysis-engine] 完整性门禁拒绝: ${rejectionReason}`);
+                    console.warn(`[analysis-engine] 分析结果未通过完整性检查：${rejectionReason}`);
                     if (attempt < maxRetries) {
                         if (onRetry) onRetry(attempt + 1, new Error(rejectionReason), paper);
                         await sleep(retryDelayMs);
@@ -1521,7 +1517,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
  * @param {Function} options.onSave - 保存回调 (results, stats) => Promise<void> | void
  * @param {Function} options.shouldSkip - 是否跳过某篇 (paper) => boolean
  * @param {Function} options.analyzeFn - 可选自定义单篇分析函数，默认使用 deep-analyzer.js
- * @param {Object} options.paperLockOptions - 可选 canonical 单篇锁等待/陈旧策略
+ * @param {Object} options.paperLockOptions - 可选的单篇分析锁设置，包括等待时间和过期处理方式
  * @returns {Promise<Object>} { results: Object[], stats: Object }
  */
 async function analyzeBatch(papers, options = {}) {
@@ -1545,10 +1541,10 @@ async function analyzeBatch(papers, options = {}) {
     } = options;
 
     if (!Number.isInteger(concurrency) || concurrency < 1) {
-        throw new RangeError(`[analyzeBatch] concurrency 必须是正整数，收到: ${concurrency}`);
+        throw new RangeError(`[analyzeBatch] 并发数 concurrency 必须是正整数，当前值为 ${concurrency}。`);
     }
     if (!Array.isArray(papers)) {
-        throw new TypeError('[analyzeBatch] papers 必须是数组');
+        throw new TypeError('[analyzeBatch] 论文列表 papers 必须是数组。');
     }
 
     const outcomes = new Array(papers.length);
@@ -1585,7 +1581,7 @@ async function analyzeBatch(papers, options = {}) {
                 }
             }
         } catch (e) {
-            console.error(`[analyzeBatch] shouldSkip 回调异常: ${e.message}`);
+            console.error(`[analyzeBatch] 判断是否跳过论文的 shouldSkip 回调失败：${e.message}`);
         }
 
         if (onPaperStart) {
@@ -1609,7 +1605,7 @@ async function analyzeBatch(papers, options = {}) {
                     if (onPaperCheckpointLocked) {
                         const returned = onPaperCheckpointLocked(checkpoint);
                         if (returned && typeof returned.then === 'function') {
-                            throw new Error('onPaperCheckpointLocked 必须同步完成，以保证崩溃前 checkpoint 已落盘');
+                            throw new Error('onPaperCheckpointLocked 必须同步完成，确保中断前已保存阶段记录。');
                         }
                     } else if (checkpointFilePath) {
                         persistAnalysisCheckpoint(checkpointFilePath, checkpoint);
@@ -1764,7 +1760,7 @@ function persistAnalysisCheckpoint(filePath, paper) {
         analysis: null,
         parsed: null,
         error: paper.analysisManifest
-            ? '深度分析阶段执行中，已保存 checkpoint'
+            ? '深度分析仍在进行，已保存阶段记录。'
             : (paper.error || '深度分析未完成')
     };
     return updateJsonFileLocked(filePath, current => {
@@ -1844,10 +1840,10 @@ function createFileSaver(filePath, baseData = {}) {
     };
 }
 
-// 辅助：合并论文列表（按 ID 去重，新的覆盖旧的）
+// 按论文 ID 合并列表。默认使用新记录；需要保留成功正文时，另按完整性检查处理。
 function mergePapersById(existingPapers, newPapers, options = {}) {
     if (!Array.isArray(existingPapers) || !Array.isArray(newPapers)) {
-        throw new Error('分析结果 papers 必须是数组，已阻止覆盖结构异常的 JSON');
+        throw new Error('待合并的两份论文列表都必须是数组，无法合并当前输入。');
     }
     const map = new Map();
     for (const p of existingPapers) {

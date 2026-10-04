@@ -178,7 +178,7 @@ test('daily recovery source plan fails closed when the canonical has no sealed b
     }), /requires current dailyFreshSourceRun/);
 });
 
-test('batch 只退休显式未完成论文的 Reader 失败候选', () => {
+test('batch 只停用明确未完成论文的旧读者文章草稿', () => {
     const { retireIncompleteReaderCandidates } = require('../scripts/batch-analyze.js');
     const names = ['a'.repeat(64) + '.json', 'b'.repeat(64) + '.json', 'ignored.txt'];
     const envelopes = new Map([

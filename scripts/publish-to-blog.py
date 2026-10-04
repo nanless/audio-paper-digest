@@ -217,7 +217,7 @@ def _publication_state_stem(date_str):
 
 
 def _reviewed_path_set_sha256(files):
-    """Hash the exact reviewed path/deletion/SHA set for provenance binding."""
+    """对已审文件的路径、删除标记和 SHA 集合计算哈希，用于核对审查记录。"""
     entries = []
     for record in files:
         entries.append({
@@ -232,33 +232,32 @@ def _reviewed_path_set_sha256(files):
 def _manual_review_record_error(receipt, *, date_str=None,
                                     generation_manifest_sha256=None,
                                     expected_base_head=None):
-    """Validate an explicitly human/agent-attested review receipt.
+    """核对人工审查记录是否满足要求，并与发布凭证相符。
 
-    ``manual_complete`` is deliberately not an implicit fallback for an LLM
-    outage.  It is a separate, auditable mode whose attestation is bound to
-    the exact generation manifest and Git base used for the review.
+    ``manual_complete`` 是单独记录的人工审查方式，不会因模型服务故障自动启用。
+    审查记录必须对应本次生成清单及审查时使用的 Git 基线。
     """
     mode = receipt.get('reviewMode')
     if mode is None:
         return None
     if mode != MANUAL_REVIEW_MODE:
-        return f'审查凭证 reviewMode 非法: {mode}'
+        return f'审查凭证中的审查方式不符合要求：{mode}'
     manual_review_record = receipt.get('reviewProvenance')
     if not isinstance(manual_review_record, dict):
-        return 'manual_complete 审查缺少 reviewProvenance'
+        return '发布凭证缺少有效的人工审查记录。'
     if manual_review_record.get('version') not in (1, 2, 3) or manual_review_record.get('mode') != MANUAL_REVIEW_MODE:
-        return 'manual_complete reviewProvenance 版本或模式非法'
+        return '人工审查记录的版本或审查方式不符合要求。'
     legacy_v1 = manual_review_record.get('version') == 1
     current_v3 = manual_review_record.get('version') == 3
     if not isinstance(manual_review_record.get('agent'), str) or not manual_review_record['agent'].strip():
-        return 'manual_complete reviewProvenance 缺少 agent'
+        return '人工审查记录必须填写非空的审查者名称。'
     if manual_review_record.get('basis') != 'deterministic_and_manual_semantic_review':
-        return 'manual_complete reviewProvenance basis 必须为完整确定性+人工语义审查'
+        return '人工审查记录必须注明已完成代码检查和人工语义审查。'
     if not isinstance(manual_review_record.get('reason'), str) or len(manual_review_record['reason'].strip()) < 20:
-        return 'manual_complete reviewProvenance reason 过短'
+        return '人工审查记录中的审查理由必须是至少 20 个字符的非空文字。'
     completed_at = manual_review_record.get('completedAt')
     if not isinstance(completed_at, str) or not BEIJING_TIMESTAMP_RE.fullmatch(completed_at):
-        return 'manual_complete reviewProvenance completedAt 必须为北京时间戳'
+        return '人工审查记录中的完成时间必须符合北京时间格式。'
     checks = manual_review_record.get('checks')
     required_checks = {
         'generationManifestVerified', 'baseHeadVerified', 'fileHashesVerified',
@@ -270,20 +269,20 @@ def _manual_review_record_error(receipt, *, date_str=None,
         or set(checks) != required_checks
         or any(checks.get(key) is not True for key in required_checks)
     ):
-        return 'manual_complete reviewProvenance checks 必须完整且全部为 true'
+        return '人工审查记录必须完整列出规定的检查项，并将每项结果标为 true。'
     manifest_sha = manual_review_record.get('generationManifestSha256')
     if not re.fullmatch(r'[0-9a-f]{64}', str(manifest_sha or '')):
-        return 'manual_complete provenance 缺少 generationManifestSha256'
+        return '人工审查记录中的生成清单 SHA 缺失或格式无效。'
     if generation_manifest_sha256 is not None and manifest_sha != generation_manifest_sha256:
-        return 'manual_complete provenance 与 generation manifest SHA 不一致'
+        return '人工审查记录中的生成清单 SHA 与本次清单不一致。'
     base_head = manual_review_record.get('baseHead')
     if not re.fullmatch(r'[0-9a-f]{40}', str(base_head or '').lower()):
-        return 'manual_complete provenance 缺少合法 baseHead'
+        return '人工审查记录中的 Git 基线缺失或格式无效。'
     if expected_base_head is not None and str(base_head).lower() != str(expected_base_head).lower():
-        return 'manual_complete provenance 与 review 基线不一致'
+        return '人工审查记录中的 Git 基线与审查基线不一致。'
     file_count = manual_review_record.get('fileCount')
     if not isinstance(file_count, int) or file_count <= 0:
-        return 'manual_complete provenance fileCount 非法'
+        return '人工审查记录中的文件数量必须是正整数。'
     attested_files = manual_review_record.get('files')
     receipt_files = receipt.get('files')
     if legacy_v1:
@@ -294,12 +293,12 @@ def _manual_review_record_error(receipt, *, date_str=None,
             'publicationCommit', 'remoteVerifiedOid', 'remoteVerifiedAt',
             'remoteIdentitySha256',
         )):
-            return 'manual_complete provenance v1 仅允许只读历史发布证据'
+            return 'v1 人工审查记录只能用于读取已发布的历史凭证，不能授权新的推送。'
         if not isinstance(receipt_files, list) or len(receipt_files) != file_count:
-            return 'manual_complete provenance v1 fileCount 与 receipt 文件数不一致'
+            return 'v1 人工审查记录中的文件数量与发布凭证的文件清单不一致。'
         path_set_sha = manual_review_record.get('reviewedPathSetSha256')
         if path_set_sha != _reviewed_path_set_sha256(receipt_files):
-            return 'manual_complete provenance v1 reviewedPathSetSha256 不一致'
+            return 'v1 人工审查记录中的已审文件集合哈希与发布凭证不一致。'
         return None
     required_file_checks = {
         'titleAndMetadata', 'technicalNarrative', 'factualClaims',
@@ -307,9 +306,9 @@ def _manual_review_record_error(receipt, *, date_str=None,
         'scoring', 'images',
     }
     if not isinstance(attested_files, list) or len(attested_files) != file_count:
-        return 'manual_complete provenance 必须保留逐文件语义审查明细'
+        return '人工审查记录必须保留逐文件审查明细，且条目数量须与记录的文件数量一致。'
     if not isinstance(receipt_files, list) or len(receipt_files) != file_count:
-        return 'manual_complete provenance fileCount 与 receipt 文件数不一致'
+        return '人工审查记录中的文件数量与发布凭证的文件清单不一致。'
     receipt_by_path = {
         item.get('path'): item for item in receipt_files
         if isinstance(item, dict) and isinstance(item.get('path'), str)
@@ -337,13 +336,13 @@ def _manual_review_record_error(receipt, *, date_str=None,
                 basis = basis.replace(str(identifier), '<page>')
         key = re.sub(r'[\W_]+', '', basis, flags=re.UNICODE).casefold()
         if key in seen_semantic_notes:
-            return f'manual_complete provenance notes 去除页面 ID 后仍重复: {path}'
+            return f'人工审查说明在去除页面 ID 后仍重复，未体现各页面的独立审查结果：{path}'
         seen_semantic_notes.add(key)
         return None
 
     for item in attested_files:
         if not isinstance(item, dict):
-            return 'manual_complete provenance 逐文件必须是对象'
+            return '人工审查记录中的每条文件明细必须是对象。'
         allowed_fields = {'path', 'sha256', 'checks', 'notes', 'deleted'}
         required_fields = {'path', 'sha256', 'checks', 'notes'}
         if current_v3:
@@ -351,30 +350,30 @@ def _manual_review_record_error(receipt, *, date_str=None,
             required_fields.update({'reviewSubagent', 'imageFindings'})
         if not required_fields.issubset(item) \
                 or not set(item).issubset(allowed_fields):
-            return 'manual_complete provenance 逐文件字段非法'
+            return '人工审查记录的文件明细缺少必要字段，或含有不允许的字段。'
         path = item.get('path')
         if not isinstance(path, str) or path in seen_attested_paths or path not in receipt_by_path:
-            return 'manual_complete provenance 逐文件路径非法、重复或不在 receipt'
+            return '人工审查记录中的文件路径格式无效、重复，或不在发布凭证的文件清单中。'
         relative_path = Path(path)
         if relative_path.is_absolute() or '..' in relative_path.parts:
-            return f'manual_complete provenance 逐文件路径越界: {path}'
+            return f'人工审查记录必须使用不含 .. 的博客仓库相对路径：{path}'
         seen_attested_paths.add(path)
         receipt_item = receipt_by_path[path]
         deleted = receipt_item.get('deleted') is True
         if deleted != (item.get('deleted') is True) \
                 or item.get('sha256') != receipt_item.get('sha256'):
-            return f'manual_complete provenance 逐文件 SHA/删除语义不一致: {path}'
+            return f'人工审查记录中的文件 SHA 或删除标记与发布凭证不一致：{path}'
         item_checks = item.get('checks')
         if deleted:
             if item_checks != {'deletionVerified': True}:
-                return f'manual_complete provenance 删除项检查不完整: {path}'
+                return f'已删除文件的审查记录必须只包含结果为 true 的删除确认项：{path}'
         elif (
                 not isinstance(item_checks, dict)
                 or set(item_checks) != required_file_checks
                 or any(item_checks.get(key) is not True for key in required_file_checks)):
-            return f'manual_complete provenance 逐文件检查不完整: {path}'
+            return f'文件审查记录必须完整列出规定的检查项，并将每项结果标为 true：{path}'
         if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
-            return f'manual_complete provenance 逐文件 notes 过短: {path}'
+            return f'文件审查说明必须是至少 20 个字符的非空文字：{path}'
         subagent = item.get('reviewSubagent')
         if current_v3 and (not isinstance(subagent, dict) or subagent.get('version') != 1
                 or not isinstance(subagent.get('taskName'), str)
@@ -383,21 +382,21 @@ def _manual_review_record_error(receipt, *, date_str=None,
                 or subagent.get('isolatedContext') is not True
                 or subagent.get('model') != MANUAL_REVIEW_SUBAGENT_MODEL
                 or subagent.get('reasoningEffort') != MANUAL_REVIEW_SUBAGENT_REASONING):
-            return f'manual_complete provenance 缺少独立单页 reviewSubagent: {path}'
+            return f'文件审查记录未按规定记录独立单页审查任务、模型及推理等级：{path}'
         if current_v3 and not isinstance(item.get('imageFindings'), list):
-            return f'manual_complete provenance imageFindings 非法: {path}'
+            return f'文件审查记录中的逐图检查结果必须是数组：{path}'
         if current_v3:
             task_name = subagent['taskName'].strip()
             if task_name in seen_review_tasks:
-                return 'manual_complete provenance reviewSubagent.taskName 必须逐页全局唯一'
+                return '各页面的独立审查任务名称必须全局唯一，不能跨页面复用。'
             seen_review_tasks.add(task_name)
         normalized_notes = re.sub(r'[\W_]+', '', item['notes'], flags=re.UNICODE).casefold()
         if normalized_notes in seen_notes:
-            return 'manual_complete provenance 逐文件 notes 不独立'
+            return '文件审查说明重复，未体现各页面的独立审查结果。'
         seen_notes.add(normalized_notes)
         if deleted:
             if '删除' not in item['notes'] or Path(path).stem not in item['notes']:
-                return f'manual_complete provenance 删除项 notes 缺少页面特有事实: {path}'
+                return f'删除项的审查说明必须包含“删除”和对应页面不含扩展名的文件名：{path}'
             semantic_error = require_unique_note_semantics(
                 item['notes'], (Path(path).stem, date_str), path,
             )
@@ -409,27 +408,27 @@ def _manual_review_record_error(receipt, *, date_str=None,
             try:
                 target.relative_to(repo_root)
             except ValueError:
-                return f'manual_complete provenance 逐文件路径越界: {path}'
+                return f'人工审查记录中的文件路径越界，不能指向博客仓库之外：{path}'
             try:
                 content = target.read_text(encoding='utf-8')
             except (OSError, UnicodeError):
-                return f'manual_complete provenance 无法读取已审查页面: {path}'
+                return f'无法读取人工审查记录对应的页面：{path}'
             arxiv_match = re.search(
                 r'^paper_digest_arxiv_id:\s*"?([^"\s]+)"?\s*$', content, re.MULTILINE,
             )
             if arxiv_match and arxiv_match.group(1) not in item['notes']:
-                return f'manual_complete provenance 论文页 notes 缺少 arXiv ID: {path}'
+                return f'论文页的审查说明缺少本页的 arXiv ID：{path}'
             if current_v3 and arxiv_match:
                 paper_id = subagent.get('paperId')
                 if not re.fullmatch(r'\d{4}\.\d{5}', str(paper_id or '')):
-                    return f'manual_complete provenance 论文页 reviewSubagent.paperId 缺失或非法: {path}'
+                    return f'论文页审查任务中的 paperId 缺失或不是规范的 arXiv ID：{path}'
                 if normalize_publish_arxiv_id(paper_id) != \
                         normalize_publish_arxiv_id(arxiv_match.group(1)):
-                    return f'manual_complete provenance reviewSubagent.paperId 与页面不一致: {path}'
+                    return f'审查任务中的 paperId 与页面的论文 ID 不一致：{path}'
             image_urls = [image.get('url') for image in parse_markdown_images(content)]
             findings = item.get('imageFindings')
             if current_v3 and [finding.get('url') for finding in findings if isinstance(finding, dict)] != image_urls:
-                return f'manual_complete provenance imageFindings 未按正文顺序逐图覆盖: {path}'
+                return f'逐图审查记录未按正文顺序完整覆盖页面中的图片：{path}'
             for finding in findings if current_v3 else []:
                 if (not isinstance(finding, dict)
                         or set(finding) != {
@@ -445,16 +444,16 @@ def _manual_review_record_error(receipt, *, date_str=None,
                                for fact in finding['visibleFacts'])
                         or not isinstance(finding.get('notes'), str)
                         or len(finding['notes'].strip()) < 20):
-                    return f'manual_complete provenance 逐图像素事实审查不完整: {path}'
+                    return f'逐图审查记录的格式、检查结果或可见事实说明不符合要求：{path}'
             if arxiv_match and not notes_bind_reader_fact(
                     item['notes'], content, (arxiv_match.group(1), date_str)):
-                return f'manual_complete provenance 论文页 notes 缺少正文技术词或实验数字: {path}'
+                return f'论文页的审查说明缺少可在正文中核对的技术词或实验数字：{path}'
             if not arxiv_match and (
                     not date_str or date_str not in item['notes'] or '汇总' not in item['notes']):
-                return f'manual_complete provenance 汇总页 notes 缺少日期与页面事实: {path}'
+                return f'汇总页的审查说明必须包含批次日期和“汇总”字样：{path}'
             if not arxiv_match and not notes_bind_reader_fact(
                     item['notes'], content, (date_str,)):
-                return f'manual_complete provenance 汇总页 notes 缺少正文排名、数量或论文术语: {path}'
+                return f'汇总页的审查说明缺少可在正文中核对的排名、数量或论文术语：{path}'
             semantic_error = require_unique_note_semantics(
                 item['notes'],
                 ((arxiv_match.group(1) if arxiv_match else None), date_str),
@@ -463,13 +462,13 @@ def _manual_review_record_error(receipt, *, date_str=None,
             if semantic_error:
                 return semantic_error
     if seen_attested_paths != set(receipt_by_path):
-        return 'manual_complete provenance 逐文件集合与 receipt 不一致'
+        return '人工审查记录中的文件集合与发布凭证不一致。'
     path_set_sha = manual_review_record.get('reviewedPathSetSha256')
     if not re.fullmatch(r'[0-9a-f]{64}', str(path_set_sha or '')):
-        return 'manual_complete provenance 缺少 reviewedPathSetSha256'
+        return '人工审查记录中的已审文件集合哈希缺失或格式无效。'
     protocol = manual_review_record.get('reviewProtocolFingerprint')
     if not re.fullmatch(r'[0-9a-f]{64}', str(protocol or '')):
-        return 'manual_complete provenance 缺少 reviewProtocolFingerprint'
+        return '人工审查记录中的审查规则指纹缺失或格式无效。'
     return None
 
 
@@ -9946,12 +9945,12 @@ def generation_template_fingerprint():
 
 
 def validate_current_generation_template(manifest):
-    """Validate the format marker without invalidating already generated bytes."""
+    """检查生成清单的格式标记，不改写已生成页面。"""
     if manifest.get('schemaVersion') != 3:
         return True
     actual = str(manifest.get('templateFingerprint') or '')
     if not re.fullmatch(r'[0-9a-f]{64}', actual):
-        raise PublishDataValidationError('generation 模板格式标识非法')
+        raise PublishDataValidationError('生成清单的模板格式标记不符合要求。')
     return True
 
 
@@ -11194,7 +11193,7 @@ def validate_reviewed_file_hashes(date_str, publish_paths, manifest_path, file_r
                 raise PublishDataValidationError(f'generation 预期删除的文件重新出现: {relative}')
             continue
         if not path.is_file():
-            raise PublishDataValidationError(f'generation 预期存在的页面在 review 期间消失: {relative}')
+            raise PublishDataValidationError(f'生成清单中应当存在的页面在审查期间消失：{relative}')
         result = file_results.get(str(path.resolve()), {})
         reviewed_sha = result.get('reviewedSha256')
         if result.get('passed') is not True or not re.fullmatch(r'[0-9a-f]{64}', str(reviewed_sha or '')):
@@ -11458,11 +11457,11 @@ def save_review_receipt(
     date_str, publish_paths, hugo_gate, expected_base_head=None,
     generation_manifest=None, reviewed_results=None, manual_review_record=None,
 ):
-    """Persist the exact reviewed blog manifest for a later push-only command."""
+    """保存已审文件及本次生成清单的对应记录，供后续推送核验。"""
     if generation_manifest is None:
-        raise PublishDataValidationError('签发审查凭证必须绑定 generation manifest')
+        raise PublishDataValidationError('签发审查凭证时必须提供本次生成清单。')
     if reviewed_results is None:
-        raise PublishDataValidationError('签发审查凭证必须绑定逐文件 review 字节凭证')
+        raise PublishDataValidationError('签发审查凭证时必须提供各文件的审查结果及已审内容哈希。')
     current_protocol = review_protocol_fingerprint()
     for result in reviewed_results.values():
         if result.get('passed') is True:
@@ -11486,19 +11485,19 @@ def save_review_receipt(
         path, relative = _manifest_record(item, repo)
         expected_deleted = expectations.get(relative) if expectations is not None else not path.is_file()
         if expectations is not None and relative not in expectations:
-            raise PublishDataValidationError(f'审查路径不在 generation manifest: {relative}')
+            raise PublishDataValidationError(f'审查文件的路径不在本次生成清单中：{relative}')
         exists = path.is_file()
         if expected_deleted and exists:
-            raise PublishDataValidationError(f'generation 预期删除的文件重新出现: {relative}')
+            raise PublishDataValidationError(f'本次生成清单要求删除的文件重新出现：{relative}')
         if not expected_deleted and not exists:
-            raise PublishDataValidationError(f'generation 预期存在的页面在 review 期间消失: {relative}')
+            raise PublishDataValidationError(f'本次生成清单要求存在的页面在审查期间消失：{relative}')
         reviewed_sha = (
             None if expected_deleted
             else reviewed_results.get(str(path.resolve()), {}).get('reviewedSha256')
         )
         actual_sha = _sha256_file(path) if exists else None
         if not expected_deleted and actual_sha != reviewed_sha:
-            raise PublishDataValidationError(f'页面在 receipt 签发时发生变化: {relative}')
+            raise PublishDataValidationError(f'页面内容在审查凭证签发时发生变化：{relative}')
         files.append({
             'path': relative,
             'deleted': expected_deleted,
@@ -11515,11 +11514,11 @@ def save_review_receipt(
             ),
         })
     if expectations is not None and {record['path'] for record in files} != set(expectations):
-        raise PublishDataValidationError('审查路径集合与 generation manifest 不一致')
+        raise PublishDataValidationError('审查文件的路径集合与本次生成清单不一致。')
     current_head = validate_git_publish_branch()
     if expected_base_head is not None and current_head != str(expected_base_head).lower():
         raise PublishDataValidationError(
-            'review 期间博客 main 基线发生变化，拒绝签发审查凭证'
+            '审查期间博客仓库的 main 基线发生变化，不能签发审查凭证。'
         )
     file_image_modes = {
         record['imageReviewMode'] for record in files if not record['deleted']
@@ -11586,7 +11585,7 @@ def save_review_receipt(
     }
     if manual_review_record is not None:
         if not isinstance(manual_review_record, dict):
-            raise PublishDataValidationError('review_provenance 必须是对象')
+            raise PublishDataValidationError('人工审查记录必须是对象。')
         manual_review_record_copy = dict(manual_review_record)
         manual_review_record_copy.setdefault('generationManifestSha256', receipt['generationManifestSha256'])
         manual_review_record_copy.setdefault('baseHead', current_head)
@@ -12073,11 +12072,11 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
 
 
 def load_verified_review_receipt(date_str):
-    """Load a strict review receipt and verify every current blog file hash."""
+    """读取严格审查凭证，并逐项核对当前博客文件的内容哈希。"""
     path = review_receipt_path(date_str)
     if not path.is_file():
         raise PublishDataValidationError(
-            f'缺少已通过审查的发布凭证: {path}；请先不带 --push 运行 review'
+            f'缺少已通过审查的发布凭证：{path}；请先运行审查，且不传 --push。'
         )
     try:
         receipt = json.loads(path.read_text(encoding='utf-8'))
@@ -12086,12 +12085,12 @@ def load_verified_review_receipt(date_str):
     if receipt.get('schemaVersion') != 3 or receipt.get('date') != date_str:
         raise PublishDataValidationError('审查凭证版本或日期不匹配')
     if receipt.get('strictReview') is not True:
-        raise PublishDataValidationError('审查凭证不是严格 review 结果')
+        raise PublishDataValidationError('发布凭证未标明已通过严格审查。')
     if receipt.get('hugoGate') != 'hugo':
-        raise PublishDataValidationError('审查凭证未通过 Hugo staging gate')
+        raise PublishDataValidationError('发布凭证未记录通过 Hugo 构建检查。')
     if receipt.get('reviewProtocolFingerprint') != review_protocol_fingerprint():
         raise PublishDataValidationError(
-            '当前审查协议已变化；请重跑 review 复用未变页通过证据并重签批次 receipt'
+            '当前审查协议已变化；请重新运行审查，复用内容未变页面的通过记录，并重新签发本批发布凭证。'
         )
     manifest_path = generation_manifest_path(date_str)
     expected_manifest_sha = receipt.get('generationManifestSha256')
@@ -12100,7 +12099,7 @@ def load_verified_review_receipt(date_str):
         or not manifest_path.is_file()
         or _sha256_file(manifest_path) != expected_manifest_sha
     ):
-        raise PublishDataValidationError('审查凭证绑定的 generation manifest 缺失或已变化')
+        raise PublishDataValidationError('发布凭证中的生成清单 SHA 格式无效，或对应清单缺失、内容已变化。')
     manual_review_error = _manual_review_record_error(
         receipt,
         date_str=date_str,
@@ -12112,7 +12111,7 @@ def load_verified_review_receipt(date_str):
     try:
         generation_manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise PublishDataValidationError('generation manifest 无法解析') from exc
+        raise PublishDataValidationError('生成清单无法解析。') from exc
     validate_current_generation_template(generation_manifest)
     publication_scope_value = _validate_active_publication_scope(generation_manifest)
     validate_generation_visual_contract(generation_manifest, date_str)
@@ -12127,7 +12126,7 @@ def load_verified_review_receipt(date_str):
         or receipt.get('generationInputSourceReference')
         != generation_manifest.get('inputSourceReference')
     ):
-        raise PublishDataValidationError('审查凭证未绑定已反向验证的 generation 输入快照')
+        raise PublishDataValidationError('发布凭证中的生成输入核验记录不符合要求，或与本次生成清单不一致。')
     if (
         receipt.get('publicationMode') != generation_manifest.get('publicationMode')
         or receipt.get('manualV6ProductionFingerprint')
@@ -12135,7 +12134,7 @@ def load_verified_review_receipt(date_str):
         or receipt.get('llmApiProductionFingerprint')
         != generation_manifest.get('llmApiProductionFingerprint')
     ):
-        raise PublishDataValidationError('审查凭证未绑定 generation production 模式/证明')
+        raise PublishDataValidationError('发布凭证中的发布模式或正式生成记录与本次生成清单不一致。')
     expected_visual_capability = _expected_post_publish_visuals(
         generation_manifest, publication_scope_value,
     )
@@ -12144,9 +12143,9 @@ def load_verified_review_receipt(date_str):
         receipt_visual_capability is not None
         and receipt_visual_capability != expected_visual_capability
     ):
-        raise PublishDataValidationError('审查凭证的发布后视觉能力与 generation manifest 不一致')
+        raise PublishDataValidationError('发布凭证中的发布后图片任务设置与本次生成清单不一致。')
     if receipt.get('publicationScope') != publication_scope_value:
-        raise PublishDataValidationError('审查凭证的发布作用域与 generation manifest 不一致')
+        raise PublishDataValidationError('发布凭证中的发布范围与本次生成清单不一致。')
     expectations = generation_manifest_expectations(manifest_path, date_str)
     records = receipt.get('files')
     if not isinstance(records, list) or not records:
@@ -12156,7 +12155,7 @@ def load_verified_review_receipt(date_str):
         if isinstance(record, dict) and record.get('deleted') is not True
     }
     if not file_image_modes or not file_image_modes.issubset({'multimodal', 'deterministic_only', 'manual_semantic'}):
-        raise PublishDataValidationError('审查凭证逐文件图片 review 模式非法')
+        raise PublishDataValidationError('发布凭证中的逐文件图片审查方式不符合要求。')
     expected_image_mode = (
         next(iter(file_image_modes)) if len(file_image_modes) == 1 else 'mixed'
     )
@@ -12166,14 +12165,14 @@ def load_verified_review_receipt(date_str):
         or image_review.get('mode') != expected_image_mode
         or not isinstance(image_review.get('secondaryModelConfigured'), bool)
     ):
-        raise PublishDataValidationError('审查凭证图片 review 汇总与逐文件证据不一致')
+        raise PublishDataValidationError('发布凭证中的图片审查汇总格式无效，或与逐文件审查记录不一致。')
 
     repo = Path(BLOG_REPO).expanduser().resolve()
     paths = []
     seen = set()
     for record in records:
         if not isinstance(record, dict) or not isinstance(record.get('path'), str):
-            raise PublishDataValidationError('审查凭证文件记录格式非法')
+            raise PublishDataValidationError('发布凭证中的文件记录格式无效，或文件路径不是字符串。')
         relative = Path(record['path'])
         if relative.is_absolute():
             raise PublishDataValidationError(f'审查凭证包含非法路径: {relative}')
@@ -12183,33 +12182,33 @@ def load_verified_review_receipt(date_str):
             raise PublishDataValidationError(f'审查凭证包含重复路径: {key}')
         seen.add(key)
         if key not in expectations or expectations[key] != (record.get('deleted') is True):
-            raise PublishDataValidationError(f'审查凭证删除语义与 generation manifest 不一致: {key}')
+            raise PublishDataValidationError(f'发布凭证中的文件路径或删除标记与本次生成清单不一致：{key}')
         if record.get('deleted') is True:
             if target.exists():
-                raise PublishDataValidationError(f'review 后应删除的文件重新出现: {key}')
+                raise PublishDataValidationError(f'审查后，已确认删除的文件重新出现：{key}')
         else:
             expected = record.get('sha256')
             if not target.is_file() or not re.fullmatch(r'[0-9a-f]{64}', str(expected or '')):
-                raise PublishDataValidationError(f'已审查文件缺失或哈希非法: {key}')
+                raise PublishDataValidationError(f'已审文件缺失，或凭证中的内容哈希格式无效：{key}')
             evidence_protocol = record.get('reviewProtocolFingerprint')
             if evidence_protocol != receipt.get('reviewProtocolFingerprint'):
                 raise PublishDataValidationError(
-                    f'逐文件凭证未重绑当前批次协议: {key}'
+                    f'逐文件凭证中的审查协议指纹与本批发布凭证不一致：{key}'
                 )
             actual = _sha256_file(target)
             if actual != expected:
-                raise PublishDataValidationError(f'文件在 review 后已变更，拒绝推送: {key}')
+                raise PublishDataValidationError(f'文件内容在审查后发生变化，不能推送：{key}')
         paths.append(target)
     if seen != set(expectations):
-        raise PublishDataValidationError('审查凭证文件集合与 generation manifest 不一致')
+        raise PublishDataValidationError('发布凭证中的文件集合与本次生成清单不一致。')
     if receipt.get('reviewMode') == MANUAL_REVIEW_MODE:
         manual_review_record = receipt['reviewProvenance']
         if manual_review_record.get('fileCount') != len(records):
-            raise PublishDataValidationError('manual_complete provenance fileCount 与凭证不一致')
+            raise PublishDataValidationError('人工审查记录中的文件数量与发布凭证不一致。')
         if manual_review_record.get('reviewedPathSetSha256') != _reviewed_path_set_sha256(records):
-            raise PublishDataValidationError('manual_complete provenance 文件集合哈希不一致')
+            raise PublishDataValidationError('人工审查记录中的文件集合哈希与发布凭证不一致。')
         if manual_review_record.get('reviewProtocolFingerprint') != receipt.get('reviewProtocolFingerprint'):
-            raise PublishDataValidationError('manual_complete provenance 协议指纹不一致')
+            raise PublishDataValidationError('人工审查记录中的审查协议指纹与发布凭证不一致。')
     return paths, path
 
 

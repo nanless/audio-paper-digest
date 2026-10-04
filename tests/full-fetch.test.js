@@ -91,7 +91,7 @@ describe('full-fetch helpers', () => {
         ]);
     });
 
-    it('从抓取 checkpoint 建立跨类别 normalized-ID 摘要缓存', async () => {
+    it('从抓取记录建立按规范化论文 ID 共享的摘要缓存', async () => {
         const {
             applyFetchSourceIntegrity,
             buildSharedAbstractCache
@@ -153,7 +153,7 @@ describe('full-fetch helpers', () => {
         assert.match(health.generatedAt, /^\d{4}-\d{2}-\d{2}T/);
     });
 
-    it('成功和失败类别都把累计重试等待写入 sourceHealth 与 checkpoint', () => {
+    it('成功和失败类别都会在来源状态和抓取记录中保存累计重试等待时间', () => {
         const {
             buildArxivCategoryHealth,
             saveFetchCheckpoint
@@ -552,7 +552,7 @@ describe('full-fetch helpers', () => {
         }), null);
     });
 
-    it('抓取 checkpoint 只复用同日且候选指纹一致的来源结果', () => {
+    it('抓取记录只复用同日且候选指纹一致的来源结果', () => {
         const { loadFetchCheckpoint, saveFetchCheckpoint } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-fetch-checkpoint-'));
         const file = path.join(dir, 'fetch-checkpoint.json');
@@ -582,7 +582,7 @@ describe('full-fetch helpers', () => {
         }), false);
     });
 
-    it('抓取 checkpoint 内容被篡改时只丢弃损坏来源', () => {
+    it('抓取记录内容被改动时，只丢弃损坏来源的结果', () => {
         const { loadFetchCheckpoint, saveFetchCheckpoint } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-fetch-tamper-'));
         const file = path.join(dir, 'fetch-checkpoint.json');
@@ -607,7 +607,7 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(loaded.huggingface.papers.length, 1);
     });
 
-    it('抓取 checkpoint 来源缺少 count/hash 时仅使该来源失效', () => {
+    it('抓取记录缺少来源数量或哈希时，只停用这个来源的结果', () => {
         const { loadFetchCheckpoint, saveFetchCheckpoint } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-fetch-missing-integrity-'));
         const file = path.join(dir, 'fetch-checkpoint.json');
@@ -722,7 +722,7 @@ describe('full-fetch helpers', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-final-corrupt-'));
         const file = path.join(dir, 'deep-analysis-result.json');
         fs.writeFileSync(file, '{broken');
-        assert.throws(() => saveFinalAnalysisResults(file, [], []), /JSON 文件损坏或不可读/);
+        assert.throws(() => saveFinalAnalysisResults(file, [], []), /JSON 文件内容无效或无法读取/);
         assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
     });
 
@@ -801,7 +801,7 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(saved.papers.map(paper => paper.arxivId), ['2607.22000']);
     });
 
-    it('full-fetch 收尾只更新统计，不会把旧累计正文覆盖 canonical 新结果', () => {
+    it('full-fetch 收尾只更新统计，不会用旧累计正文覆盖已保存的新结果', () => {
         const { finalizeAnalysisResults } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-finalize-metadata-'));
         const file = path.join(dir, 'deep-analysis-result.json');
@@ -848,7 +848,7 @@ describe('full-fetch helpers', () => {
         );
     });
 
-    it('归档冲突时 current 成为固定 canonical，旧 canonical 留作冲突备份', () => {
+    it('归档冲突时保存当前文件内容，并将原归档另存为备份', () => {
         const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-archive-conflict-'));
         const current = path.join(dir, 'current', 'deep-analysis-result.json');
@@ -878,7 +878,7 @@ describe('full-fetch helpers', () => {
         );
     });
 
-    it('归档 canonical 替换或校验失败时保留 current', () => {
+    it('归档更新或校验失败时保留当前文件', () => {
         const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-archive-failure-'));
         const current = path.join(dir, 'current', 'deep-analysis-result.json');
@@ -897,7 +897,7 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(fs.statSync(storedAnalysisFile).isDirectory(), true);
     });
 
-    it('清理旧分析记录后锁内重算 canonical 聚合状态和批次', () => {
+    it('清理旧分析记录后，在锁内重新计算保存结果的汇总状态和批次', () => {
         const { cleanOldData } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-clean-canonical-'));
         const file = path.join(dir, 'deep-analysis-result.json');
@@ -935,7 +935,7 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(papers.map(p => p.arxivId), ['2607.00001', '2607.00002']);
     });
 
-    it('full-fetch 续跑会把 canonical 失败记录的阶段 checkpoint 合并回筛选输入', () => {
+    it('full-fetch 续跑时，将已保存失败记录中的阶段进度合并回筛选输入', () => {
         const { mergeStoredAnalysisState } = require('../scripts/full-fetch.js');
         const filtered = {
             arxivId: '2607.40001v2',
@@ -963,7 +963,7 @@ describe('full-fetch helpers', () => {
         assert.deepStrictEqual(merged.analysisRecoveryImageManifest, storedAnalysisRecord.analysisRecoveryImageManifest);
     });
 
-    it('legacy 分析结果只迁移一次到 current，校验成功后移除旧文件', () => {
+    it('旧分析结果只迁移一次到当前文件，校验成功后删除旧文件', () => {
         const { migrateLegacyAnalysisResultToCurrent } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-legacy-migrate-'));
         const current = path.join(dir, 'current', 'deep-analysis-result.json');
@@ -979,7 +979,7 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(migrateLegacyAnalysisResultToCurrent(current, legacy), false);
     });
 
-    it('legacy 顶层数组从论文时间推断北京时间批次，不会伪装成迁移当天', () => {
+    it('旧分析数组根据论文时间推断北京时间批次，不会使用迁移当天的日期', () => {
         const {
             inferLegacyAnalysisArrayBatchDate,
             migrateLegacyAnalysisResultToCurrent
@@ -1001,7 +1001,7 @@ describe('full-fetch helpers', () => {
         assert.strictEqual(fs.existsSync(legacy), false);
     });
 
-    it('legacy 顶层数组无法可靠推断单一批次时 fail-closed 且不删除原文件', () => {
+    it('旧分析数组无法确认唯一批次日期时停止迁移，并保留原文件', () => {
         const { migrateLegacyAnalysisResultToCurrent } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-legacy-array-invalid-'));
         const current = path.join(dir, 'current', 'deep-analysis-result.json');
@@ -1013,7 +1013,7 @@ describe('full-fetch helpers', () => {
 
         assert.throws(
             () => migrateLegacyAnalysisResultToCurrent(current, legacy),
-            /缺少可验证的批次日期/
+            /没有可核验的批次日期/
         );
         assert.strictEqual(fs.existsSync(current), false);
         assert.strictEqual(fs.existsSync(legacy), true);

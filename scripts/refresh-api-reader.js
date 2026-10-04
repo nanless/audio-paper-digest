@@ -51,7 +51,7 @@ function parseRefreshCliArgs(args) {
     for (let index = 0; index < args.length; index++) {
         const value = args[index];
         if (value.startsWith('--')) {
-            if (seenFlags.has(value)) throw new Error(`参数重复: ${value}`);
+            if (seenFlags.has(value)) throw new Error(`参数 ${value} 不能重复使用。`);
             seenFlags.add(value);
         }
         if (value === '--authors-only') options.authorsOnly = true;
@@ -61,16 +61,16 @@ function parseRefreshCliArgs(args) {
         else if (value === '--all') options.all = true;
         else if (value === '--date' || value === '--concurrency' || value === '--feedback') {
             const next = args[index + 1];
-            if (!next || next.startsWith('--')) throw new Error(`${value} 缺少参数`);
+            if (!next || next.startsWith('--')) throw new Error(`参数 ${value} 缺少对应的值。`);
             index += 1;
             if (value === '--date') options.date = next;
             else if (value === '--feedback') options.reviewFeedback = next.trim();
             else {
-                if (!/^\d+$/.test(next)) throw new Error('--concurrency 必须为整数');
+                if (!/^\d+$/.test(next)) throw new Error('--concurrency 的值必须是整数。');
                 options.concurrency = Number.parseInt(next, 10);
             }
         } else if (value.startsWith('--')) {
-            throw new Error(`未知参数: ${value}`);
+            throw new Error(`无法识别参数 ${value}。`);
         } else {
             options.ids.push(value);
         }
@@ -78,14 +78,14 @@ function parseRefreshCliArgs(args) {
     if ([options.authorsOnly, options.scoringAndReader, options.figuresOnly,
         options.surfaceBindingsOnly]
         .filter(Boolean).length > 1) {
-        throw new Error('刷新模式参数不能同时使用');
+        throw new Error('同一次刷新只能选择一种模式。');
     }
     if (!Number.isInteger(options.concurrency)
         || options.concurrency < 1 || options.concurrency > MAX_REFRESH_CONCURRENCY) {
-        throw new Error(`--concurrency 必须为 1-${MAX_REFRESH_CONCURRENCY} 的整数`);
+        throw new Error(`--concurrency 的值必须是 1-${MAX_REFRESH_CONCURRENCY} 之间的整数。`);
     }
     if (options.all) {
-        if (options.ids.length > 0) throw new Error('--all 不能与显式论文 ID 同时使用');
+        if (options.ids.length > 0) throw new Error('--all 不能与指定的论文 ID 同时使用。');
         const dateMatch = String(options.date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
         const validDate = dateMatch && (() => {
             const year = Number(dateMatch[1]);
@@ -97,23 +97,23 @@ function parseRefreshCliArgs(args) {
                 && parsed.getUTCDate() === day;
         })();
         if (!validDate) {
-            throw new Error('--all 必须同时提供 --date YYYY-MM-DD');
+            throw new Error('使用 --all 时，必须同时提供有效的日期：--date YYYY-MM-DD。');
         }
     } else if (options.date) {
-        throw new Error('--date 只能与 --all 同时使用');
+        throw new Error('--date 只能用于 --all 全量刷新。');
     }
     if (!options.all && options.ids.length === 0) {
-        throw new Error('必须提供论文 ID，或使用 --all --date YYYY-MM-DD');
+        throw new Error('请指定论文 ID，或使用 --all --date YYYY-MM-DD 刷新整个批次。');
     }
     if (options.reviewFeedback) {
         if (options.all || options.ids.length !== 1) {
-            throw new Error('--feedback 只允许绑定一个显式论文 ID');
+            throw new Error('使用 --feedback 时，只能指定一个论文 ID。');
         }
         if (options.authorsOnly || options.figuresOnly || options.surfaceBindingsOnly) {
-            throw new Error('--feedback 只能用于完整读者文章刷新或评分+读者刷新');
+            throw new Error('--feedback 只能用于刷新完整读者文章，或同时重新审查评分并刷新文章。');
         }
         if (options.reviewFeedback.length > 4000) {
-            throw new Error('--feedback 最多 4000 字符');
+            throw new Error('--feedback 的内容不能超过 4000 个字符。');
         }
     }
     return options;
@@ -160,19 +160,19 @@ function resolveBatchRefreshIds(options) {
     if (!options.all) return options.ids;
     const payload = readJsonFileStrict(Config.FILES.deepAnalysisResult);
     if (Array.isArray(payload) || !Array.isArray(payload?.papers)) {
-        throw new Error('按日期全量刷新只接受带 batchDate 的 canonical object envelope');
+        throw new Error('按日期全量刷新时，分析结果必须是包含论文数组的对象。');
     }
     const papers = payload.papers;
     const canonicalBatchDate = resolvePersistedCanonicalBatchDate(payload);
     if (canonicalBatchDate !== options.date) {
-        throw new Error(`当前深度分析批次为 ${canonicalBatchDate || '未知'}，拒绝按 ${options.date} 全量刷新`);
+        throw new Error(`分析结果的批次日期为 ${canonicalBatchDate || '未知'}，不能按 ${options.date} 全量刷新。`);
     }
     const currentReaderCheck = options.isCurrentReaderFn || hasCurrentReaderV3;
     const pending = options.surfaceBindingsOnly
         ? papers
         : papers.filter(paper => !currentReaderCheck(paper));
     console.log(
-        `📋 API reader 全量刷新: date=${options.date}`
+        `📋 读者文章全量刷新，批次日期为 ${options.date}`
         + ` | papers=${papers.length} | pending=${pending.length}`
         + ` | current_v3=${papers.length - pending.length}`
         + ` | concurrency=${options.concurrency}`
@@ -255,7 +255,7 @@ async function refreshApiReader(targetId, options = {}) {
     if (!existing || (!isSuccessfulAnalysisRecord(existing)
         && !(options.scoringAndReader && canRepairScoringBinding(existing))
         && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing)))) {
-        throw new Error(`${requested} 不存在完整 canonical，拒绝只刷新读者文章`);
+        throw new Error(`${requested} 的已有分析记录不满足所选刷新模式的条件，不能开始刷新。`);
     }
 
     return withPaperAnalysisLock(existing, async () => {
@@ -268,20 +268,20 @@ async function refreshApiReader(targetId, options = {}) {
         if (!storedAnalysisRecord || (!isSuccessfulAnalysisRecord(storedAnalysisRecord)
             && !(options.scoringAndReader && canRepairScoringBinding(storedAnalysisRecord))
             && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(storedAnalysisRecord)))) {
-            throw new Error(`${requested} canonical 在加锁后发生变化`);
+            throw new Error(`取得分析锁后，${requested} 的记录已不存在，或不再满足所选刷新模式的条件。`);
         }
         if (!dailyFreshSources.isPaperBoundToPlan(storedAnalysisRecord, lockedDailySourcePlan)) {
-            throw new Error(`${requested} canonical 未由当前 sealed daily source generation 生成；请先运行 npm run reanalyze`);
+            throw new Error(`${requested} 的分析结果与当前封存的日更来源不一致；请使用 npm run reanalyze 根据已封存来源重新分析。`);
         }
         const inputIdentity = paperRefreshInputIdentity(storedAnalysisRecord);
         const refreshLabel = options.authorsOnly
-            ? '作者机构绑定'
+            ? '作者与机构信息'
             : options.figuresOnly
-                ? '论文图资产'
+                ? '论文图片'
             : options.surfaceBindingsOnly
-                ? '读者计划表面绑定'
+                ? '文章内容与计划记录的对应关系'
             : options.scoringAndReader
-                ? '评分复验与读者文章'
+                ? '评分重新审查与读者文章'
                 : '读者文章';
         console.log(`📄 只刷新${refreshLabel}: ${storedAnalysisRecord.title || requested}`);
         const refreshOperations = options.operations || {};
@@ -329,7 +329,7 @@ async function refreshApiReader(targetId, options = {}) {
                         const original = table.cells.find(candidate => candidate.row === 0
                             && candidate.column === cell.sourceColumn);
                         if (!original || table.matrix[0][cell.sourceColumn] !== original.text) {
-                            throw new Error('Reader 原表列标题无法唯一重放');
+                            throw new Error('读者文章的原表列标题缺少对应单元格，或与原表文本不一致。');
                         }
                         return { ...cell, sourceRow: 0, sourceText: original.text,
                             renderedText: original.text, sourceDomSha256: original.sourceDomSha256 };
@@ -347,7 +347,7 @@ async function refreshApiReader(targetId, options = {}) {
                     !== repaired.apiReaderArticleSha256
                     || repaired.analysisManifest.stages.apiReaderArticle.sourceBindingsSha256
                         !== repaired.apiReaderPlan.sourceBindingsSha256) {
-                    throw new Error(`${requested} 表面修复未签发完整正文与来源绑定证明`);
+                    throw new Error(`${requested} 的文章内容调整后，正文或来源对应记录的 SHA 不一致。`);
                 }
                 const actualHeadings = [...repaired.apiReaderArticle.matchAll(/^###\s+(.+?)\s*$/gm)]
                     .map(match => match[1].trim());
@@ -355,7 +355,7 @@ async function refreshApiReader(targetId, options = {}) {
                 if (!Array.isArray(plannedHeadings)
                     || actualHeadings.length !== plannedHeadings.length
                     || actualHeadings.some((heading, index) => heading !== plannedHeadings[index])) {
-                    throw new Error(`${requested} 读者计划小节标题无法与最终正文精确闭环`);
+                    throw new Error(`${requested} 的文章小节标题与计划记录不一致。`);
                 }
                 const bridges = repaired.apiReaderPlan?.conceptBridges;
                 if (!Array.isArray(bridges) || bridges.some(bridge => (
@@ -363,7 +363,7 @@ async function refreshApiReader(targetId, options = {}) {
                     || !repaired.apiReaderArticle.includes(bridge.explanation)
                     || repaired.apiReaderArticle.includes(String(bridge?.marker || ''))
                 ))) {
-                    throw new Error(`${requested} 读者计划表面绑定无法从最终正文闭环`);
+                    throw new Error(`${requested} 的文章计划中的术语组合说明格式无效、未出现在正文中，或正文仍含未替换的标记。`);
                 }
                 const articleFigureUrls = [...repaired.apiReaderArticle
                     .matchAll(/!\[(?:\\.|[^\]\\])*\]\((https:\/\/[^\s)]+)\)/g)]
@@ -373,14 +373,12 @@ async function refreshApiReader(targetId, options = {}) {
                     : [];
                 if (articleFigureUrls.length !== boundFigureUrls.length
                     || articleFigureUrls.some((url, index) => url !== boundFigureUrls[index])) {
-                    throw new Error(`${requested} 正文图片顺序无法与结构化 figure 闭环`);
+                    throw new Error(`${requested} 的正文图片数量或顺序与图片记录不一致。`);
                 }
                 return repaired;
             };
-        // Even the deterministic surface-only operation runs inside the
-        // source/figure scope. This makes every Reader recovery prove the
-        // exact bundle before it can touch canonical bytes and prevents a
-        // later surface repair from acquiring a legacy figure/cache shortcut.
+        // 即使只调整正文与计划记录的对应关系，也要使用已核验的日更来源和图片。
+        // 修改已保存的结果前，必须核对对应的封存文件，不能改用旧图片或缓存。
         const refreshed = await dailyFreshSources.withDailyFreshAnalysisContext(lockedDailySourcePlan, () =>
             dailyFreshSources.withDailyFreshPaperSource(
                 lockedDailySourcePlan,
@@ -391,19 +389,19 @@ async function refreshApiReader(targetId, options = {}) {
         );
         const savedPayload = updateJsonFileLocked(resultPath, payload => {
             const rows = Array.isArray(payload) ? payload : payload.papers;
-            if (!Array.isArray(rows)) throw new Error('deep canonical papers 不是数组');
+            if (!Array.isArray(rows)) throw new Error('分析结果中的论文列表 papers 不是数组。');
             const matches = rows.map((paper, index) => (
                 normalizedId(paper) === requested ? index : -1
             )).filter(index => index >= 0);
             if (matches.length !== 1) {
-                throw new Error(`${requested} canonical 提交时命中 ${matches.length} 条，拒绝覆盖`);
+                throw new Error(`保存 ${requested} 的刷新结果时，发现 ${matches.length} 条对应记录，无法确定应更新哪一条。`);
             }
             const targetIndex = matches[0];
             if (paperRefreshInputIdentity(rows[targetIndex]) !== inputIdentity) {
                 throw new Error(`${requested} canonical_changed_during_refresh`);
             }
             if (normalizedId(refreshed) !== requested) {
-                throw new Error(`${requested} 刷新结果 ID 漂移`);
+                throw new Error(`${requested} 的刷新结果对应了另一个论文 ID，不能保存。`);
             }
             const updated = [...rows];
             updated[targetIndex] = refreshed;
@@ -434,13 +432,13 @@ async function refreshApiReader(targetId, options = {}) {
         );
         const sync = updateAnalysisDigestStatuses([savedRecord], { batchDate });
         console.log(options.surfaceBindingsOnly
-            ? `✅ 读者计划表面绑定完成 | plan_sha=${savedRecord.apiReaderPlanSha256}`
+            ? `✅ 文章内容与计划记录已对应 | plan_sha=${savedRecord.apiReaderPlanSha256}`
                 + ` | papers_sync=${sync.updated}`
             : options.authorsOnly
-            ? `✅ 作者机构刷新完成 | authors=${refreshed.apiReaderAuthors.authors.length} | papers_sync=${sync.updated}`
+            ? `✅ 作者与机构信息已刷新 | authors=${refreshed.apiReaderAuthors.authors.length} | papers_sync=${sync.updated}`
             : options.figuresOnly
-                ? `✅ 论文图资产刷新完成 | figures=${refreshed.apiReaderFigures.length} | papers_sync=${sync.updated}`
-            : `✅ ${options.scoringAndReader ? '评分复验与读者文章' : '读者文章'}刷新完成`
+                ? `✅ 论文图片已刷新 | figures=${refreshed.apiReaderFigures.length} | papers_sync=${sync.updated}`
+            : `✅ ${options.scoringAndReader ? '评分重新审查与读者文章' : '读者文章'}刷新完成`
                 + ` | score=${refreshed.parsed?.score}`
                 + ` | sections=${refreshed.apiReaderPlan.sections.length}`
                 + ` | figures=${refreshed.apiReaderFigures.length}`
@@ -455,7 +453,7 @@ if (require.main === module) {
         const options = parseRefreshCliArgs(process.argv.slice(2));
         const ids = resolveBatchRefreshIds(options);
         refreshApiReaders(ids, options).then(results => {
-            console.log(`✅ API reader 批量刷新完成: ${results.length} 篇`);
+            console.log(`✅ 读者文章批量刷新已完成: ${results.length} 篇`);
         }).catch(error => {
             console.error(`❌ API 读者文章刷新失败: ${error.message}`);
             process.exitCode = 1;

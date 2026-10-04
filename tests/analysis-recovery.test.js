@@ -229,7 +229,7 @@ describe('papers database recovery safety', () => {
         fs.writeFileSync(current, '{broken');
         fs.writeFileSync(legacy, JSON.stringify({ papers: { old: { arxivId: 'old' } } }));
 
-        assert.throws(() => loadPapersDatabase(current, legacy), /JSON 文件损坏或不可读/);
+        assert.throws(() => loadPapersDatabase(current, legacy), /JSON 文件内容无效或无法读取/);
         assert.strictEqual(fs.readFileSync(current, 'utf8'), '{broken');
     });
 
@@ -693,12 +693,12 @@ describe('entry recovery contracts', () => {
             timestamp: '2026-07-09T09:00:00+08:00',
             status: 'complete',
             papers: []
-        }, today), /不是当日批次/);
+        }, today), /筛选结果的日期与目标批次不一致/);
         assert.throws(() => validateCompleteFilteredForToday({
             timestamp: `${today}T09:00:00+08:00`,
             status: 'filtering',
             papers: []
-        }, today), /筛选结果未完成/);
+        }, today), /筛选尚未完成，或论文列表 papers 不是数组/);
     });
 
     it('deep-only 拒绝过期或与筛选论文集合不一致的分析结果', () => {
@@ -715,14 +715,14 @@ describe('entry recovery contracts', () => {
         assert.throws(() => validateDeepAnalysisInput({
             timestamp: '2026-07-09T10:00:00+08:00',
             papers: filtered.papers
-        }, filtered, today), /分析结果不是当日批次/);
+        }, filtered, today), /分析结果的日期与目标批次不一致/);
         assert.throws(() => validateDeepAnalysisInput({
             timestamp: `${today}T10:00:00+08:00`,
             papers: [{ arxivId: '2607.1' }]
-        }, filtered, today), /与当日筛选结果不一致/);
+        }, filtered, today), /与目标日期的筛选集合不一致/);
     });
 
-    it('batch zero-work 收尾锁内重读 canonical，不会把新失败硬写成 complete', () => {
+    it('batch 没有待处理论文时仍在锁内重读结果，不会把新失败记录误记为完成', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-zero-work-reread-'));
         const file = path.join(dir, 'deep-analysis-result.json');
         fs.writeFileSync(file, JSON.stringify({
@@ -756,7 +756,7 @@ describe('entry recovery contracts', () => {
         assert.strictEqual(saved.status, 'complete');
     });
 
-    it('deep-only zero-work 收尾在同一锁内重验 expected 集合和 canonical 状态', () => {
+    it('仅续分析没有待处理论文时，仍在同一锁内核对目标论文集合和已保存状态', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deep-zero-work-reread-'));
         const file = path.join(dir, 'deep-analysis-result.json');
         const today = '2026-07-10';
@@ -786,7 +786,7 @@ describe('entry recovery contracts', () => {
         }));
         assert.throws(
             () => finalizeDeepZeroWorkState(file, filtered, today),
-            /与当日筛选结果不一致/
+            /与目标日期的筛选集合不一致/
         );
     });
 });
