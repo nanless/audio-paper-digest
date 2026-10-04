@@ -536,7 +536,7 @@ test('locked reread resumes only this run checkpoint and rejects foreign generat
         } });
     assert.equal(observed, true); assert.equal(result.exitCode, 1);
     rewrite(current => { current.papers[0].freshRewriteProvenance.runId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'; });
-    await assert.rejects(runner.analyzeRewrite({ runId: RUN_ID }, f.deps), /not bound to this fresh run/);
+    await assert.rejects(runner.analyzeRewrite({ runId: RUN_ID }, f.deps), /record does not match this rewrite run and source snapshot/);
     assert.equal(f.counters.analysis, 0);
 });
 
@@ -568,7 +568,7 @@ test('input drift, source cache drift and missing successful results block promo
     assert.throws(() => runner.rewriteStatus({ runId: RUN_ID }, f.deps), /cache changed/);
     assert.equal(f.counters.promotion, 0);
     fs.appendFileSync(path.join(prepared.runDir, 'inputs.json'), ' ');
-    assert.throws(() => runner.rewriteStatus({ runId: RUN_ID }, f.deps), /input bytes/);
+    assert.throws(() => runner.rewriteStatus({ runId: RUN_ID }, f.deps), /Saved rewrite inputs have an invalid format or do not match this run, date, paper set, or input file hash/);
 });
 
 test('symlink run/file escape and sandbox entry are fail closed', async t => {

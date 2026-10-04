@@ -3032,7 +3032,7 @@ title: "Score rows"
                 victim.write_bytes(victim.read_bytes() + b'tampered\n')
                 with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    'generation 后页面字节',
+                    '文件内容或删除状态与生成时的记录不一致',
                 ):
                     publish_to_blog.validate_generation_manifest_file_bytes(
                         manifest_path, '2026-08-31',
@@ -4620,7 +4620,7 @@ title: "Bad table"
                 )
                 publish_to_blog._validate_generation_input_integrity(manifest, date_str)
                 manifest['llmApiBindings'][0]['readerArticleSha256'] = '0' * 64
-                with self.assertRaisesRegex(PublishDataValidationError, 'LLM API'):
+                with self.assertRaisesRegex(PublishDataValidationError, '正式生成清单中的 API 发布核验记录与论文记录不一致'):
                     publish_to_blog._validate_generation_input_integrity(manifest, date_str)
 
         tampered = llm_api_publication_fixture()
@@ -4860,7 +4860,7 @@ primary_method_tag: #Transformer
                     json.dumps(tampered, ensure_ascii=False), encoding='utf-8',
                 )
                 with self.assertRaisesRegex(
-                    publish_to_blog.PublishDataValidationError, '反向重算',
+                    publish_to_blog.PublishDataValidationError, '正式生成清单的输入指纹与按论文快照及生成选项重新计算的结果不一致',
                 ):
                     publish_to_blog.load_generation_manifest(date_str)
 
@@ -7989,7 +7989,7 @@ body
                 paper_page.write_text(paper_page.read_text(encoding='utf-8') + 'tampered\n', encoding='utf-8')
                 with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    '文件字节与生成清单不一致',
+                    'v3 生成记录中的文件内容或删除状态与生成清单不一致',
                 ):
                     publish_to_blog.load_generation_manifest('2026-07-10')
                 reviewed = {str(paper_page.resolve()): {
@@ -7998,7 +7998,7 @@ body
                 }}
                 with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    'generation 后页面字节',
+                    '文件内容或删除状态与生成时的记录不一致',
                 ):
                     publish_to_blog.save_review_receipt(
                         '2026-07-10', [paper_page, index], 'hugo',
@@ -8039,7 +8039,7 @@ body
                 )
                 with self.assertRaisesRegex(
                         PublishDataValidationError,
-                        'freshRewriteProvenance.*inputSourceReference',
+                        '使用新来源重写的论文缺少生成输入的来源文件记录',
                 ):
                     review_blog._run_review(publish_to_blog, date_str)
                 remote_head = git(_remote, 'rev-parse', 'refs/heads/main').stdout.strip()

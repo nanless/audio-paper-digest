@@ -194,7 +194,7 @@ test('read-only cache replay rejects changed sidecars and symlink directories wi
     await fresh.withFreshAnalysisContext(f.context, () => fresh.fetchFreshSource(f.id, async () => structuredClone(f.details)));
     const directory = path.join(f.context.runDir, 'sources', f.id);
     fs.writeFileSync(path.join(directory, 'source.txt'), 'changed');
-    assert.throws(() => fresh.readFreshSource(f.context.runDir, f.id, f.context), /sidecar/);
+    assert.throws(() => fresh.readFreshSource(f.context.runDir, f.id, f.context), /The source text or artifact files do not match the saved source details/);
     fs.writeFileSync(path.join(directory, 'source.txt'), f.text);
     const moved = `${directory}-saved`; fs.renameSync(directory, moved); fs.symlinkSync(moved, directory);
     assert.throws(() => fresh.readFreshSource(f.context.runDir, f.id, f.context), /Unsafe fresh directory/);
@@ -218,7 +218,7 @@ test('fresh paper rejects legacy/cross-run generated text and binds same-run che
     const f = fixture(t);
     await fresh.withFreshAnalysisContext(f.context, async () => {
         assert.doesNotThrow(() => fresh.assertFreshPaper({ arxivId: f.id, title: 'Original metadata', abstract: 'Original abstract' }));
-        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, analysis: 'old analysis' }), /no original source cache/);
+        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, analysis: 'old analysis' }), /Generated analysis has no corresponding source files in this run/);
         assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, fullText: f.text }), /caller-provided text/);
         const source = await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));
         const paper = { arxivId: f.id }; const manifest = { stages: {} };
@@ -228,8 +228,8 @@ test('fresh paper rejects legacy/cross-run generated text and binds same-run che
         paper.analysisManifest = manifest; paper.analysisCheckpoint = 'new run partial analysis';
         assert.doesNotThrow(() => fresh.assertFreshPaper(paper));
         paper.freshRewriteProvenance = { ...paper.freshRewriteProvenance, runId: crypto.randomUUID() };
-        assert.throws(() => fresh.assertFreshPaper(paper), /legacy generated/);
-        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, apiReaderArticle: 'old reader' }), /legacy generated/);
+        assert.throws(() => fresh.assertFreshPaper(paper), /The analysis or its stage manifest has a missing or inconsistent source record for this run/);
+        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, apiReaderArticle: 'old reader' }), /The analysis or its stage manifest has a missing or inconsistent source record for this run/);
     });
 });
 
@@ -290,6 +290,6 @@ test('fresh Reader candidates cannot use old global directories and signed revis
         const envelope = JSON.parse(fs.readFileSync(path.join(candidates, fs.readdirSync(candidates)[0]), 'utf8'));
         assert.equal(envelope.identity.freshAnalysis.runId, f.context.runId);
         assert.equal(envelope.identity.freshAnalysis.sourceSnapshotSha256, sha(JSON.stringify(f.details)));
-        await assert.rejects(deep.analyzePaperDeep({ arxivId: f.id, analysis: 'previous date generated text' }), /legacy generated/);
+        await assert.rejects(deep.analyzePaperDeep({ arxivId: f.id, analysis: 'previous date generated text' }), /The analysis or its stage manifest has a missing or inconsistent source record for this run/);
     });
 });

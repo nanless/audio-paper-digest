@@ -997,7 +997,7 @@ describe('strict reusable manual v4 spec assembler', () => {
             .createHash('sha256').update(fs.readFileSync(arbitraryTextPath)).digest('hex');
         assert.throws(
             () => validateManualV4AssemblyInputs(arbitraryText, options),
-            /未与同批 manifest 闭环/
+            /全文路径、论文元数据、输入与来源记录或图片列表，与同批全文清单不一致/
         );
 
         const arbitraryImage = JSON.parse(JSON.stringify(spec));
@@ -1008,21 +1008,21 @@ describe('strict reusable manual v4 spec assembler', () => {
         });
         assert.throws(
             () => validateManualV4AssemblyInputs(arbitraryImage, options),
-            /imageInfos 未与同批 manifest 闭环/
+            /全文路径、论文元数据、输入与来源记录或图片列表，与同批全文清单不一致/
         );
 
         const missingRecords = JSON.parse(JSON.stringify(spec));
         missingRecords.recordsSources = [];
         assert.throws(
             () => validateManualV4AssemblyInputs(missingRecords, options),
-            /缺少 recordsSources/
+            /recordsSources 中提供至少一份分析记录文件/
         );
 
         const downgraded = JSON.parse(JSON.stringify(spec));
         downgraded.version = spec.version === 5 ? 4 : 5;
         assert.throws(
             () => validateManualV4AssemblyInputs(downgraded, options),
-            /spec v[45] 与 records v[23] 版本映射不一致|版本降级\/升级非法/
+            /人工分析配置 v[45] 与分析记录 v[23] 不符合对应的版本要求|提供的人工分析配置为 v[45]，重新组装的配置为 v[45]；两者版本必须一致/
         );
     });
 

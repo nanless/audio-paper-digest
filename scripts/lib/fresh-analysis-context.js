@@ -82,7 +82,7 @@ function validateRun(runDir, identity) {
     if (!matchedRoot) throw fail('Fresh runDir must be the configured root/runId directory');
     safeDirectory(resolvedRunDir);
     const run = readJson(path.join(resolvedRunDir, 'run.json'));
-    if (run.runId !== runId || run.contract !== matchedRoot.contract || run.version !== 1) throw fail('Fresh run manifest identity mismatch');
+    if (run.runId !== runId || run.contract !== matchedRoot.contract || run.version !== 1) throw fail('The source run manifest has an invalid format or does not match the requested run.');
     const expectations = identity?.sourceExpectations;
     if (!expectations || typeof expectations !== 'object' || Array.isArray(expectations)
         || stable(expectations) !== stable(run.sourceExpectations)) throw fail('Fresh source expectations differ from the run manifest');
@@ -94,7 +94,7 @@ function validateRun(runDir, identity) {
         const expectation = expectations[id];
         if (paperId(id) !== id || (!isBundleExpectation(expectation)
             && (!validSha(expectation?.sourceSha256) || !validSha(expectation?.structuredArtifactsSha256)))) {
-            throw fail(`Fresh baseline lacks an exact source contract: ${id}`);
+            throw fail(`The expected source record for ${id} does not provide a valid paper ID and the required source hashes or bundle generation.`);
         }
         if (expectations[id].sourceId !== undefined && paperId(expectations[id].sourceId) !== id) {
             throw fail(`Fresh sourceId belongs to another paper: ${id}`);
@@ -124,7 +124,7 @@ function withFreshAnalysisContext(identity, callback) {
                     || snapshot.structuredArtifactsSha256 !== expected.structuredArtifactsSha256))
                 || (isBundleExpectation(expected) && (snapshot.sourceGeneration !== expected.sourceGeneration
                     || !validSha(snapshot.sourceManifestSha256)));
-        })) throw fail('Fresh sealed recovery capabilities are invalid or forged');
+        })) throw fail('Saved-analysis recovery permissions have an invalid format or do not match this run and its expected sources.');
     const { withLlmUsageContext } = require('./llm-usage.js');
     const context = Object.freeze({ ...checked,
         refreshReaderDiagnostics: identity.refreshReaderDiagnostics === true,
@@ -154,21 +154,21 @@ function getSavedAnalysisRecoveryPermission(id = getFreshAnalysisContext()?.pape
 function validateSource(details, id, expectation) {
     if (!details || typeof details !== 'object' || Array.isArray(details)
         || Object.keys(details).some(key => /^(?:analysis|parsed$|apiReader|freshRewrite|freshSource)/.test(key))) {
-        throw fail('Fresh source cache cannot contain generated analysis, Reader, checkpoint or provenance fields');
+        throw fail('Source details are missing, have an invalid format, or contain generated analysis, Reader, checkpoint, or source-record fields.');
     }
     const minimum = require('../config.js').ANALYSIS_CONFIG.fullTextMinCharsForFull;
     if (!['html', 'pdf'].includes(details.source) || typeof details.text !== 'string'
         || details.text.length <= minimum || paperId(details.sourceId) !== id
-        || sha(details.text) !== expectation.sourceSha256) throw fail(`Fresh full-text source does not match baseline: ${id}`);
+        || sha(details.text) !== expectation.sourceSha256) throw fail(`Source text for ${id} has an invalid format, is too short, or does not match the expected paper and content hash.`);
     const artifacts = details.structuredArtifacts;
     if (!artifacts || typeof artifacts !== 'object' || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)) {
-        throw fail('Fresh source requires full structuredArtifacts, not a generated summary');
+        throw fail('Source details must include a structuredArtifacts object with table and formula arrays.');
     }
     const { payloadSha256, ...body } = artifacts;
     if (!validSha(payloadSha256) || sha(JSON.stringify(body)) !== payloadSha256
         || payloadSha256 !== expectation.structuredArtifactsSha256
         || artifacts.flattenedTextSha256 !== expectation.sourceSha256) {
-        throw fail(`Fresh structuredArtifacts/source SHA drift: ${id}`);
+        throw fail(`Structured artifacts for ${id} have an invalid content hash or do not match the expected artifacts and source text.`);
     }
     return details;
 }
@@ -186,7 +186,7 @@ function buildSourceDetailsFromBundle(stored) {
     if (!runtime || runtime.paperId !== stored.manifest.paperId
         || runtime.text !== stored.text || runtime.source !== stored.manifest.text.source
         || runtime.sourceId !== stored.manifest.text.sourceId) {
-        throw fail('Fresh sealed bundle runtime metadata drift');
+        throw fail('Source bundle runtime metadata is missing or does not match its manifest and text.');
     }
     const details = { text: runtime.text, source: runtime.source, sourceId: runtime.sourceId,
         imageInfos: structuredClone(runtime.imageInfos), structuredArtifacts: structuredClone(runtime.structuredArtifacts),
@@ -219,7 +219,7 @@ function readBundleFreshSource(checked, id, expectation) {
     if (source.freshSourceDescriptor.paperId !== id
         || source.freshSourceDescriptor.sourceGeneration !== expectation.sourceGeneration
         || !validSha(source.freshSourceDescriptor.sourceManifestSha256)) {
-        throw fail('Fresh sealed source bundle identity drift');
+        throw fail('The source bundle has an invalid manifest hash or does not match the expected paper and generation.');
     }
     return source;
 }
@@ -237,13 +237,13 @@ function readFreshSource(runDir, paper, identity) {
     if (descriptor.contract !== CACHE_CONTRACT || descriptor.version !== 1 || descriptor.runId !== checked.runId
         || descriptor.paperId !== id || descriptor.sourceSha256 !== expectation.sourceSha256
         || descriptor.structuredArtifactsSha256 !== expectation.structuredArtifactsSha256
-        || !validSha(descriptor.sourceSnapshotSha256)) throw fail('Fresh source descriptor identity drift');
+        || !validSha(descriptor.sourceSnapshotSha256)) throw fail('The source descriptor has an invalid format or does not match this run, paper, and expected source hashes.');
     const bytes = readBytes(path.join(directory, 'source-details.json'));
     if (sha(bytes) !== descriptor.sourceSnapshotSha256) throw fail('Fresh source snapshot bytes changed');
     const details = validateSource(JSON.parse(bytes.toString('utf8')), id, expectation);
     if (sha(readBytes(path.join(directory, 'source.txt'))) !== expectation.sourceSha256
         || readBytes(path.join(directory, 'artifacts.json')).toString('utf8') !== JSON.stringify(details.structuredArtifacts)) {
-        throw fail('Fresh source sidecar files do not replay their sourceDetails');
+        throw fail('The source text or artifact files do not match the saved source details.');
     }
     return { ...details, freshSourceDescriptor: descriptor };
 }
@@ -287,7 +287,7 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
             await sourceApi.captureFreshArxivRewriteSource({ rootDir: bundleRoot(context), arxivId: id,
                 generation: expectation.sourceGeneration });
             const sourceDetails = readFreshSource(context.runDir, id, context);
-            if (!sourceDetails) throw fail('Fresh source bundle capture did not seal a readable source');
+            if (!sourceDetails) throw fail('The captured source files could not be read back as a complete source bundle.');
             return sourceDetails;
         }
         const directory = sourceDirectory(context, id);
@@ -329,14 +329,14 @@ function freshAnalysisIdentity(id = getFreshAnalysisContext()?.paperId) {
     const base = { contract: CONTRACT, runId: context.runId, inputSetSha256: context.inputSetSha256 };
     if (!id) return base;
     const source = readFreshSource(context.runDir, id, context);
-    if (!source) throw fail('Fresh stage cannot run before its original source cache is complete');
+    if (!source) throw fail('The source files for this run must be complete before an analysis stage can start.');
     return { ...base, paperId: paperId(id), ...buildFreshSourceRecord(source) };
 }
 
 function buildFreshSourceRecord(source) {
     const context = getFreshAnalysisContext();
     const descriptor = source?.freshSourceDescriptor;
-    if (!context || descriptor?.runId !== context.runId) throw fail('Fresh provenance requires the current run source descriptor');
+    if (!context || descriptor?.runId !== context.runId) throw fail('A source record requires the current run context and its corresponding source descriptor.');
     return { contract: CONTRACT, runId: context.runId, sourceSha256: descriptor.sourceSha256,
         structuredArtifactsSha256: descriptor.structuredArtifactsSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
         ...(descriptor.contract === BUNDLE_CACHE_CONTRACT ? { sourceGeneration: descriptor.sourceGeneration,
@@ -357,11 +357,11 @@ function assertFreshPaper(paper) {
         && paper[key] !== undefined && paper[key] !== null && paper[key] !== '');
     if (!generated.length && !paper.freshRewriteProvenance) return;
     const source = readFreshSource(context.runDir, id, context);
-    if (!source) throw fail('Fresh generated state has no original source cache');
+    if (!source) throw fail('Generated analysis has no corresponding source files in this run.');
     const expected = buildFreshSourceRecord(source);
     if (stable(paper.freshRewriteProvenance) !== stable(expected)
         || (paper.analysisManifest && stable(paper.analysisManifest.freshRewriteProvenance) !== stable(expected))) {
-        throw fail('Fresh analysis refuses another run or legacy generated analysis/Reader/checkpoints');
+        throw fail('The analysis or its stage manifest has a missing or inconsistent source record for this run.');
     }
 }
 

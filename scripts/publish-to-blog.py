@@ -4974,11 +4974,11 @@ def _normalize_api_reader_source_cell(value):
 
 
 def _normalize_api_reader_numeric_token(raw):
-    """与 Node 端 normalizeReaderNumericToken 保持同一归一化标准。
+    """规范化读者文章和来源引文中的数字，便于比较。
 
-    两端门禁必须对同一输入得出同一 token 集合，否则分析侧通过的内容会在
-    发布侧被拒绝（或反之）。规则：千分位逗号归一、去空白小写、尾零归一、
-    四位年份英文复数去掉裸 s。
+    这里处理千分位、空白、大小写和多余尾零，并对年份及秒数采用与
+    Node 端对应的约定。数字输出沿用 Python 现有的浮点格式，
+    不保证任意输入都与 JavaScript 得到逐字相同的结果。
     """
     # NFKC 不映射数学减号 U+2212 与全角连字符 U+FF0D，显式归一（与 Node 一致）。
     normalized_text = unicodedata.normalize('NFKC', str(raw or '')).replace('−', '-').replace('－', '-')
@@ -9508,14 +9508,13 @@ def manual_v6_publication_bindings(published_papers):
 
 
 def manual_v6_production_proof(published_papers):
-    """Build the batch proof required by every production-v6 generation.
+    """生成 Manual v6 批次所需的发布核验信息。
 
-    ``specRootSha256`` is the official spec-v6 Merkle root.  Per-paper
-    bindings retain the exact paper shard, sealed records-v4 envelope,
-    ArtifactIndex, task evidence and reader-longform identities.
+    specRootSha256 是 v6 配置的 Merkle 根哈希，用于标识整组配置文件。
+    逐篇记录保留论文配置分片、v4 材料记录、文件索引、任务证据及长文记录的对应信息。
     """
     if not isinstance(published_papers, list) or not published_papers:
-        raise PublishDataValidationError('production v6 发布批次不能为空')
+        raise PublishDataValidationError('Manual v6 发布批次必须是非空的论文数组。')
     bindings = manual_v6_publication_bindings(published_papers)
     if len(bindings) != len(published_papers):
         raise PublishDataValidationError(
@@ -9523,10 +9522,10 @@ def manual_v6_production_proof(published_papers):
         )
     roots = {item['specRootSha256'] for item in bindings}
     if len(roots) != 1:
-        raise PublishDataValidationError('production v6 论文未绑定同一个 spec v6 Merkle root')
+        raise PublishDataValidationError('Manual v6 论文记录使用的配置根哈希不一致。')
     paper_ids = [item['paperId'] for item in bindings]
     if len(set(paper_ids)) != len(paper_ids):
-        raise PublishDataValidationError('production v6 论文 ID 重复')
+        raise PublishDataValidationError('Manual v6 发布批次中存在重复的论文 ID。')
     return {
         'contract': MANUAL_V6_PRODUCTION_CONTRACT,
         'manualDepth': MANUAL_DEPTH_CONTRACT_VERSION_V6,
@@ -9542,7 +9541,7 @@ def manual_v6_production_proof(published_papers):
 
 
 def llm_api_publication_bindings(published_papers):
-    """Replay each API canonical and bind the exact article/scoring/source bytes."""
+    """逐篇核对 API 分析记录，返回文章、评分和来源的哈希及对应信息。"""
     bindings = []
     for paper in published_papers:
         if not isinstance(paper, dict):
@@ -9554,7 +9553,7 @@ def llm_api_publication_bindings(published_papers):
             continue
         if contracts.get('coreSummary') != CORE_SUMMARY_DETAILED_CONTRACT:
             raise PublishDataValidationError(
-                'LLM API production 必须绑定 core-summary-detailed-v3'
+                'API 正式发布必须使用 core-summary-detailed-v3 详细核心摘要规则。'
             )
         reader = _api_reader_payload(paper)
         analysis = paper.get('analysis')
@@ -9565,13 +9564,13 @@ def llm_api_publication_bindings(published_papers):
         source = manifest.get('sourceAcquisition') \
             if isinstance(manifest.get('sourceAcquisition'), dict) else {}
         if not isinstance(analysis, str) or not analysis.strip():
-            raise PublishDataValidationError('LLM API production canonical 缺少最终 analysis')
+            raise PublishDataValidationError('API 正式发布缺少有效的最终分析正文。')
         analysis_sha = _javascript_string_sha256(analysis)
         source_sha = source.get('sourceSha256')
         paper_source_sha = paper.get('sourceSha256')
         if not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or '')) \
                 or paper_source_sha != source_sha:
-            raise PublishDataValidationError('LLM API production 来源 SHA 未闭环')
+            raise PublishDataValidationError('API 正式发布的来源 SHA 格式无效，或与论文记录不一致。')
         scoring_binds_final = scoring.get('outputAnalysisSha256') == analysis_sha
         if (
             scoring.get('status') != 'complete'
@@ -9580,25 +9579,25 @@ def llm_api_publication_bindings(published_papers):
             or not re.fullmatch(r'[0-9a-f]{64}', str(scoring.get('auditSha256') or ''))
             or not re.fullmatch(r'[0-9a-f]{64}', str(scoring.get('evidenceSha256') or ''))
         ):
-            raise PublishDataValidationError('LLM API production 评分审计未闭环')
+            raise PublishDataValidationError('API 正式发布的评分审计状态、规则、正文对应关系或哈希不符合要求。')
         model = reader_stage.get('model')
         protocol = reader_stage.get('protocol')
         if not isinstance(model, str) or not model.strip() \
                 or not isinstance(protocol, str) or not protocol.strip():
-            raise PublishDataValidationError('LLM API production 读者文章缺少模型/协议绑定')
+            raise PublishDataValidationError('API 正式发布的读者文章缺少有效的模型或协议记录。')
         final_score = scoring.get('finalScore')
         parsed = paper.get('parsed') if isinstance(paper.get('parsed'), dict) else {}
         try:
             parsed_score = float(parsed.get('score'))
             final_score_number = float(final_score)
         except (TypeError, ValueError) as exc:
-            raise PublishDataValidationError('LLM API production 最终评分非法') from exc
+            raise PublishDataValidationError('API 正式发布的最终评分无法转换为数字。') from exc
         if not math.isfinite(parsed_score) or not math.isfinite(final_score_number) \
                 or abs(parsed_score - final_score_number) > 1e-9:
-            raise PublishDataValidationError('LLM API production parsed 与评分审计总分不一致')
+            raise PublishDataValidationError('API 正式发布的解析总分或评分审计总分不是有限数值，或两者不一致。')
         core_summary = _validated_detailed_core_summary(paper, parsed)
         if core_summary is None:
-            raise PublishDataValidationError('LLM API production 缺少已封口的详细核心摘要')
+            raise PublishDataValidationError('API 正式发布缺少经过核验的详细核心摘要。')
         core_summary_stage = stages.get('coreSummaryRepair')
         paper_id = normalize_publish_arxiv_id(
             paper.get('arxivId') or paper.get('paper_id')
@@ -9641,19 +9640,19 @@ def llm_api_publication_bindings(published_papers):
 
 
 def llm_api_production_proof(published_papers):
-    """Build the proof required for a fully API-authored production generation."""
+    """核对批次中每篇论文的 API 发布要求，生成批次发布证明。"""
     if not isinstance(published_papers, list) or not published_papers:
-        raise PublishDataValidationError('LLM API production 发布批次不能为空')
+        raise PublishDataValidationError('API 正式发布的批次必须是非空的论文数组。')
     bindings = llm_api_publication_bindings(published_papers)
     if len(bindings) != len(published_papers):
         raise PublishDataValidationError(
-            'LLM API production 只接受 reader/scoring/source 全部闭环的 API canonical'
+            'API 正式发布要求每篇论文的读者文章、评分审计和来源记录都通过核验。'
         )
     if manual_v6_publication_bindings(published_papers):
-        raise PublishDataValidationError('LLM API production 不得混入 Manual v6 canonical')
+        raise PublishDataValidationError('API 正式发布的批次中不能混入 Manual v6 论文记录。')
     paper_ids = [item['paperId'] for item in bindings]
     if len(set(paper_ids)) != len(paper_ids):
-        raise PublishDataValidationError('LLM API production 论文 ID 重复')
+        raise PublishDataValidationError('API 正式发布的批次中存在重复的论文 ID。')
     return {
         'contract': LLM_API_PRODUCTION_CONTRACT,
         'readerContract': LLM_API_READER_CONTRACT,
@@ -9668,18 +9667,18 @@ def llm_api_production_proof(published_papers):
 
 
 def infer_generation_publication_mode(papers):
-    """Infer only homogeneous production inputs; legacy always stays explicit."""
+    """按全部论文记录的对应关系选择发布模式；旧 v5 维护模式须明确指定。"""
     if len(manual_v6_publication_bindings(papers)) == len(papers):
         return MANUAL_V6_PRODUCTION_MODE
     if len(llm_api_publication_bindings(papers)) == len(papers):
         return LLM_API_PRODUCTION_MODE
     raise PublishDataValidationError(
-        '默认发布输入既不是完整 Manual v6，也不是完整 LLM API production canonical'
+        '发布输入未全部满足 Manual v6 要求，也未全部满足 API 正式发布要求。'
     )
 
 
 def validate_generation_publication_mode(papers, publication_mode):
-    """Fail closed on an implicit v5 fallback or a mixed v5/v6 generation."""
+    """按指定模式核对发布输入，拒绝将 Manual v6 记录按旧 v5 模式处理。"""
     if publication_mode == MANUAL_V6_PRODUCTION_MODE:
         return manual_v6_production_proof(papers)
     if publication_mode == LLM_API_PRODUCTION_MODE:
@@ -9687,7 +9686,7 @@ def validate_generation_publication_mode(papers, publication_mode):
     if publication_mode == LEGACY_V5_MAINTENANCE_MODE:
         if manual_v6_publication_bindings(papers):
             raise PublishDataValidationError(
-                'legacy v5 maintenance 输入不得混入或降级 Manual v6 canonical'
+                '旧 v5 维护模式不能混入 Manual v6 论文记录，也不能将这些记录按旧版本处理。'
             )
         return None
     if publication_mode == SEALED_TUTORIAL_PREVIEW_MODE:
@@ -9791,7 +9790,7 @@ def generation_input_fingerprint(
 
 
 def _validate_generation_input_integrity(manifest, date_str):
-    """Recompute every schema-v3 input binding from its authoritative snapshot."""
+    """按论文快照和相关来源记录重新计算生成输入，核对记录、发布证明及其指纹。"""
     published_papers = manifest.get('publishedPapers')
     category = manifest.get('category')
     publish_all = manifest.get('publishAll')
@@ -9803,7 +9802,7 @@ def _validate_generation_input_integrity(manifest, date_str):
         or not published_papers
     ):
         raise PublishDataValidationError(
-            '正式生成清单缺少 category、publishAll 或已发布论文权威快照'
+            '正式生成清单中的类别、发布全部论文的选项或论文快照缺失，或格式无效。'
         )
     actual_input = str(manifest.get('inputFingerprint') or '')
     scope = _validate_publication_scope(manifest, published_papers)
@@ -9821,7 +9820,7 @@ def _validate_generation_input_integrity(manifest, date_str):
             and input_source_reference is None
     ):
         raise PublishDataValidationError(
-            'freshRewriteProvenance 发布论文缺少 generation inputSourceReference'
+            '使用新来源重写的论文缺少生成输入的来源文件记录。'
         )
     if input_source_reference is not None:
         # Check source bytes before fingerprint replay, so a changed archive or
@@ -9834,14 +9833,14 @@ def _validate_generation_input_integrity(manifest, date_str):
     )
     if actual_input != expected_input:
         raise PublishDataValidationError(
-            '正式生成清单 inputFingerprint 无法从 publishedPapers 反向重算'
+            '正式生成清单的输入指纹与按论文快照及生成选项重新计算的结果不一致。'
         )
     if manifest.get('publishedPapersFingerprintContract') != PUBLISHED_PAPERS_FINGERPRINT_CONTRACT:
-        raise PublishDataValidationError('正式生成清单缺少已发布论文快照指纹契约')
+        raise PublishDataValidationError('正式生成清单缺少要求的论文快照指纹规则版本。')
     actual_snapshot = str(manifest.get('publishedPapersFingerprint') or '')
     expected_snapshot = published_papers_fingerprint(published_papers)
     if actual_snapshot != expected_snapshot:
-        raise PublishDataValidationError('正式生成清单已发布论文权威快照指纹不匹配')
+        raise PublishDataValidationError('正式生成清单中的论文快照指纹与实际快照不一致。')
     expected_v6 = manual_v6_publication_bindings(published_papers)
     actual_v6 = manifest.get('manualV6Bindings')
     # Historical v5-only schema-v3 generations predate the explicit field.
@@ -9850,52 +9849,52 @@ def _validate_generation_input_integrity(manifest, date_str):
     historical_v5_without_bindings = actual_v6 is None and not expected_v6
     if not historical_v5_without_bindings:
         if actual_v6 != expected_v6:
-            raise PublishDataValidationError('正式生成清单 Manual v6 显式 provenance 绑定不匹配')
+            raise PublishDataValidationError('正式生成清单中的 Manual v6 文件对应记录与论文记录不一致。')
         expected_v6_fingerprint = _stable_json_sha256(expected_v6)
         if manifest.get('manualV6BindingsFingerprint') != expected_v6_fingerprint:
-            raise PublishDataValidationError('正式生成清单 Manual v6 provenance 指纹不匹配')
+            raise PublishDataValidationError('正式生成清单中的 Manual v6 文件对应记录指纹不一致。')
     expected_api = llm_api_publication_bindings(published_papers)
     actual_api = manifest.get('llmApiBindings')
     if actual_api is not None or expected_api:
         if actual_api != expected_api:
-            raise PublishDataValidationError('正式生成清单 LLM API 显式绑定不匹配')
+            raise PublishDataValidationError('正式生成清单中的 API 发布核验记录与论文记录不一致。')
         if manifest.get('llmApiBindingsFingerprint') != _stable_json_sha256(expected_api):
-            raise PublishDataValidationError('正式生成清单 LLM API 绑定指纹不匹配')
+            raise PublishDataValidationError('正式生成清单中的 API 发布核验记录指纹不一致。')
     publication_mode = manifest.get('publicationMode')
     production_proof = manifest.get('manualV6Production')
     api_proof = manifest.get('llmApiProduction')
     if publication_mode == MANUAL_V6_PRODUCTION_MODE:
         if expected_api or api_proof is not None:
-            raise PublishDataValidationError('Manual v6 generation 混入 LLM API 证明')
+            raise PublishDataValidationError('Manual v6 生成清单中不能包含 API 发布证明。')
         expected_proof = manual_v6_production_proof(published_papers)
         if production_proof != expected_proof:
             raise PublishDataValidationError(
-                '正式 generation 未强绑定 spec v6/records v4/Merkle/longform provenance'
+                '正式生成清单中的 Manual v6 发布证明与配置、材料记录及长文核验结果不一致。'
             )
         expected_proof_sha = _stable_json_sha256(expected_proof)
         if manifest.get('manualV6ProductionFingerprint') != expected_proof_sha:
-            raise PublishDataValidationError('正式 generation production v6 证明指纹不匹配')
+            raise PublishDataValidationError('正式生成清单中的 Manual v6 发布证明指纹不一致。')
     elif publication_mode == LLM_API_PRODUCTION_MODE:
         if expected_v6 or production_proof is not None:
-            raise PublishDataValidationError('LLM API generation 混入 Manual v6 证明')
+            raise PublishDataValidationError('API 生成清单中不能包含 Manual v6 发布证明。')
         expected_proof = llm_api_production_proof(published_papers)
         if api_proof != expected_proof:
-            raise PublishDataValidationError('正式 generation 未强绑定 LLM API production 证明')
+            raise PublishDataValidationError('正式生成清单中的 API 发布证明与实际核验结果不一致。')
         expected_proof_sha = _stable_json_sha256(expected_proof)
         if manifest.get('llmApiProductionFingerprint') != expected_proof_sha:
-            raise PublishDataValidationError('正式 generation LLM API production 证明指纹不匹配')
+            raise PublishDataValidationError('正式生成清单中的 API 发布证明指纹不一致。')
     elif publication_mode == LEGACY_V5_MAINTENANCE_MODE:
         if expected_v6 or expected_api or production_proof is not None or api_proof is not None:
-            raise PublishDataValidationError('legacy v5 maintenance generation 混入 production 证明')
+            raise PublishDataValidationError('旧 v5 维护模式的生成清单中不能包含正式发布证明。')
     elif publication_mode == SEALED_TUTORIAL_PREVIEW_MODE:
         if scope is None or production_proof is not None or api_proof is not None:
-            raise PublishDataValidationError('sealed tutorial generation 模式或 production 证明非法')
+            raise PublishDataValidationError('教程预览模式缺少单篇发布范围，或包含不允许的正式发布证明。')
     elif publication_mode is None and not expected_v6 and not expected_api:
         # Immutable schema-v3 history from before the production-mode field is
         # readable only as legacy maintenance.  It can never enter visuals.
         pass
     else:
-        raise PublishDataValidationError('generation publicationMode 缺失或非法')
+        raise PublishDataValidationError('生成清单的发布模式缺失或不符合要求。')
     return expected_input, expected_snapshot
 
 
@@ -10119,9 +10118,9 @@ def _load_json_object(path, label):
     try:
         value = json.loads(Path(path).read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise PublishDataValidationError(f'{label}无法解析: {path}') from exc
+        raise PublishDataValidationError(f'{label}无法读取或解析：{path}') from exc
     if not isinstance(value, dict):
-        raise PublishDataValidationError(f'{label}格式非法: {path}')
+        raise PublishDataValidationError(f'{label}的内容必须是 JSON 对象：{path}')
     return value
 
 
@@ -10332,7 +10331,7 @@ def _manifest_record(path, repo):
     try:
         relative = path.relative_to(repo)
     except ValueError as exc:
-        raise PublishDataValidationError(f'博客清单路径逃逸仓库: {path}') from exc
+        raise PublishDataValidationError(f'博客清单中的文件位于仓库之外：{path}') from exc
     is_post = relative.parts[:2] == ('content', 'posts') and len(relative.parts) == 3
     is_visual_asset = (
         relative.parts[:3] == ('static', 'images', 'visual-summaries')
@@ -10364,7 +10363,7 @@ def _manifest_record(path, repo):
             is_post or is_visual_asset or is_digest_cover
             or is_reader_asset or is_researcher_sidecar
             or _is_tag_catalog_file_path(relative)):
-        raise PublishDataValidationError(f'博客清单包含非受控路径: {relative}')
+        raise PublishDataValidationError(f'博客清单中包含不允许发布的路径：{relative}')
     return path, relative.as_posix()
 
 
@@ -10433,17 +10432,17 @@ def _validate_manifest_path_date(target, repo, date_str):
         asset_date = Path(relative).parts[3]
         if asset_date != validated_date:
             raise PublishDataValidationError(
-                f'视觉摘要资产批次日期不匹配: {relative}'
+                f'论文长图的批次日期与目标日期不一致：{relative}'
             )
     if relative.startswith('static/images/digest-covers/'):
         asset_date = Path(relative).parts[3]
         if asset_date != validated_date:
-            raise PublishDataValidationError(f'汇总页封面批次日期不匹配: {relative}')
+            raise PublishDataValidationError(f'汇总页封面的批次日期与目标日期不一致：{relative}')
     if relative.startswith('static/data/papers/'):
         asset_date = Path(relative).parts[3]
         if asset_date != validated_date:
             raise PublishDataValidationError(
-                f'researcher sidecar 批次日期不匹配: {relative}'
+                f'论文附属数据文件的批次日期与目标日期不一致：{relative}'
             )
     return relative
 
@@ -10501,16 +10500,16 @@ def save_generation_manifest(
     }
     if input_fingerprint:
         if not isinstance(published_papers, list) or not published_papers:
-            raise PublishDataValidationError('正式 generation manifest 缺少已发布论文权威快照')
+            raise PublishDataValidationError('正式生成清单必须包含非空的论文快照数组。')
         if not isinstance(publish_all, bool):
-            raise PublishDataValidationError('正式 generation manifest publishAll 必须是布尔值')
+            raise PublishDataValidationError('正式生成清单中的发布全部论文选项必须是布尔值。')
         expected_input = generation_input_fingerprint(
             published_papers, validated_date, validated_category, publish_all,
             include_id, input_source_reference=input_source_reference,
         )
         if input_fingerprint != expected_input:
             raise PublishDataValidationError(
-                '拒绝保存无法从 publishedPapers 反向重算的 inputFingerprint'
+                '输入指纹与按本次输入及选项重新计算的结果不一致，不能保存生成清单。'
             )
         if publication_mode is None:
             publication_mode = infer_generation_publication_mode(published_papers)
@@ -10783,23 +10782,23 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
 
 
 def load_generation_manifest(date_str):
-    """Load and constrain the generation manifest without performing review."""
+    """读取生成清单，核对版本、日期、允许的路径及相应版本的文件要求；不执行页面审查。"""
     manifest_path = generation_manifest_path(date_str)
     if not manifest_path.is_file():
         raise PublishDataValidationError(
-            f'缺少生成清单: {manifest_path}；请先运行 generate-blog.py'
+            f'缺少生成清单：{manifest_path}；请先运行 generate-blog.py'
         )
     try:
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise PublishDataValidationError(f'生成清单无法解析: {manifest_path}') from exc
+        raise PublishDataValidationError(f'生成清单无法读取或解析：{manifest_path}') from exc
     if manifest.get('schemaVersion') not in {1, 2, 3} or manifest.get('date') != date_str:
-        raise PublishDataValidationError('生成清单版本或日期不匹配')
+        raise PublishDataValidationError('生成清单的版本不受支持，或日期与目标日期不一致。')
     _validate_active_publication_scope(manifest)
     validate_current_generation_template(manifest)
     records = manifest.get('files')
     if not isinstance(records, list) or not records:
-        raise PublishDataValidationError('生成清单中没有文件')
+        raise PublishDataValidationError('生成清单必须包含非空的文件记录数组。')
     repo = Path(BLOG_REPO).expanduser().resolve()
     paths = []
     seen = set()
@@ -10809,27 +10808,27 @@ def load_generation_manifest(date_str):
             or not isinstance(record.get('path'), str)
             or not isinstance(record.get('deleted'), bool)
         ):
-            raise PublishDataValidationError('生成清单文件记录格式非法')
+            raise PublishDataValidationError('生成清单中的文件记录格式无效，或路径、删除标记不符合要求。')
         if manifest.get('schemaVersion') in {2, 3}:
             expected_sha = record.get('sha256')
             if record['deleted']:
                 if expected_sha is not None:
-                    raise PublishDataValidationError('生成清单删除记录不应包含 SHA-256')
+                    raise PublishDataValidationError('生成清单中标记为删除的文件不应包含 SHA-256。')
             elif not re.fullmatch(r'[0-9a-f]{64}', str(expected_sha or '')):
-                raise PublishDataValidationError('生成清单非删除记录缺少合法 SHA-256')
+                raise PublishDataValidationError('生成清单中未标记为删除的文件缺少有效的 SHA-256。')
         relative = Path(record['path'])
         if relative.is_absolute():
-            raise PublishDataValidationError(f'生成清单包含绝对路径: {relative}')
+            raise PublishDataValidationError(f'生成清单中的文件路径必须是相对路径：{relative}')
         target = (repo / relative).resolve()
         normalized = _validate_manifest_path_date(target, repo, date_str)
         if normalized in seen:
-            raise PublishDataValidationError(f'生成清单包含重复路径: {normalized}')
+            raise PublishDataValidationError(f'生成清单中存在重复的文件路径：{normalized}')
         seen.add(normalized)
         if record['deleted']:
             if target.exists():
-                raise PublishDataValidationError(f'生成清单标记删除但文件仍存在: {normalized}')
+                raise PublishDataValidationError(f'生成清单中标记为删除的文件仍然存在：{normalized}')
         elif not target.is_file():
-            raise PublishDataValidationError(f'生成文件缺失: {normalized}')
+            raise PublishDataValidationError(f'生成清单中应当存在的文件未找到：{normalized}')
         if manifest.get('schemaVersion') == 3:
             expected = {
                 'deleted': record['deleted'],
@@ -10837,7 +10836,7 @@ def load_generation_manifest(date_str):
             }
             if _file_fingerprint(target) != expected:
                 raise PublishDataValidationError(
-                    f'generation schema v3 文件字节与生成清单不一致: {normalized}'
+                    f'v3 生成记录中的文件内容或删除状态与生成清单不一致：{normalized}'
                 )
         paths.append(target)
     validate_generation_visual_contract(manifest, date_str, repo)
@@ -10847,13 +10846,13 @@ def load_generation_manifest(date_str):
 
 
 def generation_manifest_expectations(manifest_path, date_str):
-    """Return strict path -> expected deletion state from the generation manifest."""
+    """读取生成清单，返回各发布路径对应的预期删除状态；不核对文件内容哈希。"""
     manifest = _load_json_object(manifest_path, '生成清单')
     if manifest.get('schemaVersion') not in {1, 2, 3} or manifest.get('date') != date_str:
-        raise PublishDataValidationError('生成清单版本或日期不匹配')
+        raise PublishDataValidationError('生成清单的版本不受支持，或日期与目标日期不一致。')
     records = manifest.get('files')
     if not isinstance(records, list) or not records:
-        raise PublishDataValidationError('生成清单中没有文件')
+        raise PublishDataValidationError('生成清单必须包含非空的文件记录数组。')
     repo = Path(BLOG_REPO).expanduser().resolve()
     expectations = {}
     for record in records:
@@ -10862,30 +10861,30 @@ def generation_manifest_expectations(manifest_path, date_str):
             or not isinstance(record.get('path'), str)
             or not isinstance(record.get('deleted'), bool)
         ):
-            raise PublishDataValidationError('生成清单文件记录格式非法')
+            raise PublishDataValidationError('生成清单中的文件记录格式无效，或路径、删除标记不符合要求。')
         target = (repo / record['path']).resolve()
         relative = _validate_manifest_path_date(target, repo, date_str)
         if relative in expectations:
-            raise PublishDataValidationError(f'生成清单包含重复路径: {relative}')
+            raise PublishDataValidationError(f'生成清单中存在重复的文件路径：{relative}')
         expectations[relative] = record['deleted']
     return expectations
 
 
 def validate_generation_manifest_file_bytes(manifest_path, date_str):
-    """Verify immutable schema-v3 generation bytes and explicit deletions.
+    """核对 v3 生成清单中的文件内容及删除状态。
 
-    Historical schema v1/v2 manifests remain read-only maintenance evidence;
-    they predate this byte contract and are never upgraded or rewritten here.
+    v1、v2 清单只检查版本和日期后便返回，不接受本函数的文件内容核验，
+    也不会在这里升级或改写。
     """
     manifest = _load_json_object(manifest_path, '生成清单')
     if manifest.get('date') != date_str or manifest.get('schemaVersion') not in {1, 2, 3}:
-        raise PublishDataValidationError('生成清单版本或日期不匹配')
+        raise PublishDataValidationError('生成清单的版本不受支持，或日期与目标日期不一致。')
     if manifest.get('schemaVersion') != 3:
         return True
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = manifest.get('files')
     if not isinstance(records, list) or not records:
-        raise PublishDataValidationError('生成清单中没有文件')
+        raise PublishDataValidationError('生成清单必须包含非空的文件记录数组。')
     seen = set()
     for record in records:
         if (
@@ -10893,25 +10892,25 @@ def validate_generation_manifest_file_bytes(manifest_path, date_str):
             or not isinstance(record.get('path'), str)
             or not isinstance(record.get('deleted'), bool)
         ):
-            raise PublishDataValidationError('生成清单文件记录格式非法')
+            raise PublishDataValidationError('生成清单中的文件记录格式无效，或路径、删除标记不符合要求。')
         target = (repo / record['path']).resolve()
         relative = _validate_manifest_path_date(target, repo, date_str)
         if relative in seen:
-            raise PublishDataValidationError(f'生成清单包含重复路径: {relative}')
+            raise PublishDataValidationError(f'生成清单中存在重复的文件路径：{relative}')
         seen.add(relative)
         expected_sha = record.get('sha256')
         if record['deleted']:
             if expected_sha is not None:
-                raise PublishDataValidationError(f'生成清单删除项必须使用 null SHA: {relative}')
+                raise PublishDataValidationError(f'生成清单中标记为删除的文件，其 SHA 必须为 null：{relative}')
         elif not re.fullmatch(r'[0-9a-f]{64}', str(expected_sha or '')):
-            raise PublishDataValidationError(f'生成清单页面 SHA 非法: {relative}')
+            raise PublishDataValidationError(f'生成清单中的文件 SHA 缺失或格式无效：{relative}')
         expected = {
             'deleted': record['deleted'],
             'sha256': None if record['deleted'] else expected_sha,
         }
         if _file_fingerprint(target) != expected:
             raise PublishDataValidationError(
-                f'generation 后页面字节或删除状态已变化: {relative}'
+                f'文件内容或删除状态与生成时的记录不一致：{relative}'
             )
     return True
 
@@ -11177,7 +11176,7 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
 
 
 def validate_reviewed_file_hashes(date_str, publish_paths, manifest_path, file_results):
-    """Fail if any reviewed byte changes or an expected page disappears."""
+    """核对生成时的文件状态、审查通过结果及内容哈希，拒绝缺失、变化或范围不符的发布文件。"""
     validate_generation_manifest_file_bytes(manifest_path, date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
     expectations = generation_manifest_expectations(manifest_path, date_str)
@@ -11186,22 +11185,22 @@ def validate_reviewed_file_hashes(date_str, publish_paths, manifest_path, file_r
         path, relative = _manifest_record(item, repo)
         actual_paths.add(relative)
         if relative not in expectations:
-            raise PublishDataValidationError(f'发布路径不在 generation manifest: {relative}')
+            raise PublishDataValidationError(f'发布路径未列入本次生成清单：{relative}')
         expected_deleted = expectations[relative]
         if expected_deleted:
             if path.exists():
-                raise PublishDataValidationError(f'generation 预期删除的文件重新出现: {relative}')
+                raise PublishDataValidationError(f'生成清单中预期删除的文件重新出现：{relative}')
             continue
         if not path.is_file():
             raise PublishDataValidationError(f'生成清单中应当存在的页面在审查期间消失：{relative}')
         result = file_results.get(str(path.resolve()), {})
         reviewed_sha = result.get('reviewedSha256')
         if result.get('passed') is not True or not re.fullmatch(r'[0-9a-f]{64}', str(reviewed_sha or '')):
-            raise PublishDataValidationError(f'页面缺少已通过 review 的字节凭证: {relative}')
+            raise PublishDataValidationError(f'页面缺少有效的审查通过结果或已审内容哈希：{relative}')
         if _sha256_file(path) != reviewed_sha:
             raise PublishDataValidationError(f'页面在审查后发生变化，不能生成审查凭证：{relative}')
     if actual_paths != set(expectations):
-        raise PublishDataValidationError('发布路径集合与 generation manifest 不一致')
+        raise PublishDataValidationError('发布路径集合与本次生成清单不一致。')
     return True
 
 

@@ -139,9 +139,9 @@ function readJson(filePath, label) {
     try {
         value = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     } catch (error) {
-        throw new Error(`${label} 不可读或 JSON 损坏: ${filePath}: ${error.message}`);
+        throw new Error(`${label} 无法读取，或其中的 JSON 内容无效：${filePath}；原因：${error.message}`);
     }
-    if (!value || typeof value !== 'object') throw new Error(`${label} 顶层必须是对象: ${filePath}`);
+    if (!value || typeof value !== 'object') throw new Error(`${label} 的顶层内容必须是对象或数组：${filePath}`);
     return value;
 }
 
@@ -150,32 +150,32 @@ function parseArgs(argv) {
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === '--force') {
-            if (options.force) throw new Error('参数重复: --force');
+            if (options.force) throw new Error('--force 不能重复指定。');
             options.force = true;
             continue;
         }
         if (arg === '--v6-shadow') {
             if (options.v6Shadow || options.v6Production) {
-                throw new Error('--v6-production 与 --v6-shadow 必须且只能指定一个');
+                throw new Error('--v6-production 与 --v6-shadow 不能同时指定，也不能重复指定。');
             }
             options.v6Shadow = true;
             continue;
         }
         if (arg === '--v6-production') {
             if (options.v6Production || options.v6Shadow) {
-                throw new Error('--v6-production 与 --v6-shadow 必须且只能指定一个');
+                throw new Error('--v6-production 与 --v6-shadow 不能同时指定，也不能重复指定。');
             }
             options.v6Production = true;
             continue;
         }
-        if (!['--date', '--spec'].includes(arg)) throw new Error(`未知参数: ${arg}`);
-        if (options[arg.slice(2)] !== undefined) throw new Error(`参数重复: ${arg}`);
+        if (!['--date', '--spec'].includes(arg)) throw new Error(`无法识别参数 ${arg}。`);
+        if (options[arg.slice(2)] !== undefined) throw new Error(`参数 ${arg} 不能重复指定。`);
         const value = argv[++i];
-        if (!value || value.startsWith('--')) throw new Error(`${arg} 缺少值`);
+        if (!value || value.startsWith('--')) throw new Error(`参数 ${arg} 后必须提供一个值。`);
         options[arg.slice(2)] = value;
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date || '')) throw new Error('--date 必须是 YYYY-MM-DD');
-    if (!options.spec) throw new Error('--spec 必须指定人工分析规格 JSON');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date || '')) throw new Error('--date 必须按 YYYY-MM-DD 格式填写。');
+    if (!options.spec) throw new Error('请通过 --spec 指定人工分析配置的 JSON 文件。');
     return options;
 }
 
@@ -184,7 +184,7 @@ function assertExplicitManualV6Mode(spec, options = {}) {
     const isV6 = spec?.version === MANUAL_SPEC_VERSION_V6;
     const selected = Number(Boolean(options.v6Production)) + Number(Boolean(options.v6Shadow));
     if ((isV6 && selected !== 1) || (!isV6 && selected !== 0)) {
-        throw new Error('spec v6 必须且只能通过 --v6-production 或 --v6-shadow 显式运行，禁止文件存在即自动切换');
+        throw new Error('人工分析 v6 必须明确选择 --v6-production 或 --v6-shadow，且只能选择一种模式；其他版本不能使用这两个选项。');
     }
     return isV6;
 }
@@ -216,56 +216,55 @@ function buildStagePromptBindings() {
 function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromptBindings()) {
     if (!spec || (spec.version !== 3 && !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
         && spec.version !== MANUAL_SPEC_VERSION_V6)) {
-        throw new Error('manual spec prompt 绑定只支持历史 version=3、兼容 version=4/5 或显式 production/shadow version=6');
+        throw new Error('人工分析提示文件的对应记录只支持历史 v3、兼容 v4/v5，以及明确选择正式或影子模式的 v6 配置。');
     }
     if (spec.manualAuthoringPromptPath !== 'manual/prompts/manual-analysis-record.md') {
-        throw new Error('manual spec 的 Manual 成稿规范路径非法');
+        throw new Error('人工分析配置必须引用指定的 Manual 成稿规范文件。');
     }
     const currentAuthoringSha256 = sha256File(MANUAL_AUTHORING_PROMPT_PATH);
     if (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version) || spec.version === MANUAL_SPEC_VERSION_V6) {
         if (spec.promptSha256 && spec.promptSha256 !== currentBindings.primaryAnalysis.sha256) {
-            throw new Error('manual spec.promptSha256 与当前 deep-analysis prompt 不一致');
+            throw new Error('人工分析配置的 promptSha256 与当前主分析提示文件的 SHA 不一致。');
         }
         if (spec.manualAuthoringPromptSha256 !== currentAuthoringSha256) {
-            throw new Error('manual spec 的 Manual 成稿规范 SHA 与当前 manual/prompts/manual-analysis-record.md 不一致');
+            throw new Error('人工分析配置中的成稿规范 SHA 与当前 manual/prompts/manual-analysis-record.md 文件不一致。');
         }
         if (spec.stagePromptSha256 !== undefined) {
             if (!spec.stagePromptSha256 || typeof spec.stagePromptSha256 !== 'object'
                 || Array.isArray(spec.stagePromptSha256)) {
-                throw new Error('manual spec.stagePromptSha256 必须是逐阶段对象');
+                throw new Error('人工分析配置的 stagePromptSha256 必须是按阶段记录 SHA 的对象，不能是数组。');
             }
             for (const stage of REQUIRED_RECOVERY_STAGES) {
                 if (spec.stagePromptSha256[stage] !== currentBindings[stage].sha256) {
-                    throw new Error(`manual spec.stagePromptSha256.${stage} 与当前阶段模板/契约不一致`);
+                    throw new Error(`人工分析配置中 ${stage} 阶段的提示文件或阶段规则 SHA 与当前值不一致。`);
                 }
             }
         }
         return currentBindings;
     }
 
-    // Historical v3 specs are immutable, already-materialized attestations.
-    // Requiring their hashes to equal today's edited prompts would make the
-    // documented v3 replay path impossible.  Preserve the hashes declared by
-    // that spec, while still requiring a complete, internally consistent set
-    // of known stage bindings.  Current v4 never enters this branch.
+    // Historical v3 specs retain their originally declared prompt hashes.
+    // Check that all required stages are present and internally consistent;
+    // requiring today's prompt hashes would prevent loading these old specs.
+    // Current v4, v5, and v6 specs use the current bindings above.
     if (!/^[a-f0-9]{64}$/.test(String(spec.promptSha256 || ''))
         || !/^[a-f0-9]{64}$/.test(String(spec.manualAuthoringPromptSha256 || ''))) {
-        throw new Error('历史 manual v3 spec 缺少合法 prompt SHA-256');
+        throw new Error('历史人工分析 v3 配置中的主分析提示 SHA 或成稿规范 SHA 缺失或格式无效。');
     }
     if (!spec.stagePromptSha256 || typeof spec.stagePromptSha256 !== 'object'
         || Array.isArray(spec.stagePromptSha256)
         || Object.keys(spec.stagePromptSha256).length !== REQUIRED_RECOVERY_STAGES.length) {
-        throw new Error('历史 manual v3 spec.stagePromptSha256 必须精确覆盖全部阶段');
+        throw new Error('历史人工分析 v3 配置必须在 stagePromptSha256 中完整记录所有阶段，不能缺少或多出阶段。');
     }
     const historicalBindings = Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
         const sha256 = spec.stagePromptSha256[stage];
         if (!/^[a-f0-9]{64}$/.test(String(sha256 || ''))) {
-            throw new Error(`历史 manual v3 spec.stagePromptSha256.${stage} 不是合法 SHA-256`);
+            throw new Error(`历史人工分析 v3 配置中 ${stage} 阶段的 SHA-256 格式无效。`);
         }
         return [stage, { source: currentBindings[stage].source, sha256 }];
     }));
     if (historicalBindings.primaryAnalysis.sha256 !== spec.promptSha256) {
-        throw new Error('历史 manual v3 spec.promptSha256 与 primaryAnalysis 阶段不一致');
+        throw new Error('历史人工分析 v3 配置的 promptSha256 与主分析阶段记录的 SHA 不一致。');
     }
     return historicalBindings;
 }
@@ -273,26 +272,25 @@ function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromp
 function loadFilteredBatchForDate(date, filteredPath = Config.FILES.filteredPapers) {
     const data = readJson(filteredPath, 'filtered-papers');
     if (data.batchDate !== date || data.status !== 'complete' || !Array.isArray(data.papers)) {
-        throw new Error(`filtered-papers.json 不是 ${date} 的 complete 批次`);
+        throw new Error(`filtered-papers.json 的日期不是 ${date}、筛选尚未完成，或论文列表不是数组。`);
     }
     const ids = new Set();
     for (const paper of data.papers) {
         const id = normalizedId(paper);
-        if (!id || ids.has(id)) throw new Error(`filtered papers 含非法或重复 ID: ${id || '(missing)'}`);
+        if (!id || ids.has(id)) throw new Error(`筛选论文列表中的 ID 在规范化后为空或重复：${id || '(missing)'}`);
         ids.add(id);
     }
     return data;
 }
 
 /**
- * Replays the official assembler from its bound filtered batch, full-text
- * manifest and records files.  Current specs must be byte-semantically equal
- * to that replay.  Historical v4 keeps a narrower source/image closure so an
- * immutable old artifact remains ingestible after the assembler advances.
+ * Checks the filtered batch, full-text manifest, and analysis-record files,
+ * then rebuilds the v4 or v5 spec from those inputs. The rebuilt spec and
+ * supplied spec must have the same stable object hash.
  */
 function validateManualV4AssemblyInputs(spec, options = {}) {
     if (!spec || !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)) {
-        throw new Error('assembler provenance 只适用于 Manual v4/v5 spec');
+        throw new Error('组装输入核验只支持人工分析 v4/v5 配置。');
     }
     const date = options.date || spec.date;
     const filteredPath = options.filteredPath || Config.FILES.filteredPapers;
@@ -301,17 +299,17 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
         || path.join(Config.CURRENT_DIR, 'manual-full-text', date, 'manifest.json');
     const declaredManifest = spec.fullTextManifest;
     if (!declaredManifest || typeof declaredManifest !== 'object' || Array.isArray(declaredManifest)) {
-        throw new Error('Manual v4/v5 spec 缺少 fullTextManifest assembler provenance');
+        throw new Error('人工分析 v4/v5 配置中的全文清单记录缺失或格式无效。');
     }
     if (path.resolve(String(declaredManifest.path || '')) !== path.resolve(expectedManifestPath)) {
-        throw new Error('manual spec.fullTextManifest.path 不是当前日期的受控全文 manifest');
+        throw new Error('人工分析配置中的全文清单路径与当前日期指定的路径不一致。');
     }
     if (fs.lstatSync(expectedManifestPath).isSymbolicLink()) {
-        throw new Error('manual full-text manifest 不得通过符号链接替换');
+        throw new Error('人工分析全文清单不能是符号链接。');
     }
     const manifestBuffer = fs.readFileSync(expectedManifestPath);
     if (sha256Buffer(manifestBuffer) !== declaredManifest.sha256) {
-        throw new Error('manual spec.fullTextManifest.sha256 与受控 manifest 不一致');
+        throw new Error('人工分析配置记录的全文清单 SHA 与当前文件内容不一致。');
     }
     const manifest = readJson(expectedManifestPath, 'manual full-text manifest');
     const {
@@ -329,19 +327,19 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
         || spec.filteredBatchSha256 !== context.filteredBatchSha256
         || declaredManifest.filteredBatchSha256 !== context.filteredBatchSha256
         || declaredManifest.paperCount !== filtered.papers.length) {
-        throw new Error('manual spec/full-text manifest 与当前 filtered 完整批次指纹不一致');
+        throw new Error('人工分析配置、全文清单或筛选结果的批次信息、论文数量、状态或输入记录不一致。');
     }
     if (!manifest.papers || typeof manifest.papers !== 'object' || Array.isArray(manifest.papers)) {
-        throw new Error('manual full-text manifest.papers 非法');
+        throw new Error('人工分析全文清单中的 papers 必须是对象，不能是数组。');
     }
     const manifestIds = Object.keys(manifest.papers).map(normalizedId);
     if (manifestIds.length !== context.inputs.length || new Set(manifestIds).size !== context.inputs.length) {
-        throw new Error('manual full-text manifest 论文集合与 filtered 不一致');
+        throw new Error('全文清单中的论文数量与筛选结果不一致，或规范化后的论文 ID 存在重复。');
     }
     for (const input of context.inputs) {
         const entry = manifest.papers[input.id];
         if (!isReusableFullTextCheckpoint(entry, input.filePath, input)) {
-            throw new Error(`${input.id} full-text checkpoint 路径、版本、来源身份或内容指纹无效`);
+            throw new Error(`${input.id} 的全文检查点路径、版本、来源记录或内容 SHA 无效。`);
         }
         const realEntryPath = fs.realpathSync(entry.path);
         const realManifestDir = fs.realpathSync(path.dirname(expectedManifestPath));
@@ -349,7 +347,7 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
         if (fs.lstatSync(entry.path).isSymbolicLink()
             || !relativeEntryPath || relativeEntryPath.startsWith(`..${path.sep}`)
             || path.isAbsolute(relativeEntryPath)) {
-            throw new Error(`${input.id} full-text checkpoint 越出同批受控目录或使用符号链接`);
+            throw new Error(`${input.id} 的全文检查点使用了符号链接，或没有位于同一批次的指定目录中。`);
         }
         const paperSpec = spec.papers?.[input.id];
         if (!paperSpec
@@ -360,27 +358,27 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
             || paperSpec.paperInputSha256 !== input.paperInputSha256
             || paperSpec.filteredBatchSha256 !== context.filteredBatchSha256
             || stableSha256(paperSpec.imageInfos || []) !== stableSha256(entry.imageInfos || [])) {
-            throw new Error(`${input.id} spec 全文、metadata、input/source identity 或 imageInfos 未与同批 manifest 闭环`);
+            throw new Error(`${input.id} 的全文路径、论文元数据、输入与来源记录或图片列表，与同批全文清单不一致。`);
         }
     }
     if (!Array.isArray(spec.recordsSources) || spec.recordsSources.length === 0) {
-        throw new Error('manual spec 缺少 recordsSources assembler provenance');
+        throw new Error('人工分析配置必须在 recordsSources 中提供至少一份分析记录文件。');
     }
     const sourcePaths = new Set();
     const recordInputs = spec.recordsSources.map((source, index) => {
         if (!source || typeof source !== 'object' || Array.isArray(source)
             || typeof source.path !== 'string' || !/^[a-f0-9]{64}$/.test(String(source.sha256 || ''))) {
-            throw new Error(`manual spec.recordsSources[${index}] 非法`);
+            throw new Error(`人工分析配置中的 recordsSources[${index}] 必须提供文件路径和格式有效的 SHA-256。`);
         }
         const sourcePath = path.resolve(source.path);
-        if (sourcePaths.has(sourcePath)) throw new Error(`manual spec.recordsSources 含重复路径: ${sourcePath}`);
+        if (sourcePaths.has(sourcePath)) throw new Error(`人工分析配置的 recordsSources 重复引用了同一文件：${sourcePath}`);
         sourcePaths.add(sourcePath);
         if (fs.lstatSync(sourcePath).isSymbolicLink()) {
-            throw new Error(`manual records source 不得使用符号链接: ${sourcePath}`);
+            throw new Error(`人工分析记录文件不能是符号链接：${sourcePath}`);
         }
         const buffer = fs.readFileSync(sourcePath);
         if (sha256Buffer(buffer) !== source.sha256) {
-            throw new Error(`manual records source SHA 不一致: ${sourcePath}`);
+            throw new Error(`人工分析记录文件的 SHA 与配置中的值不一致：${sourcePath}`);
         }
         return { path: sourcePath, document: readJson(sourcePath, 'manual analysis records') };
     });
@@ -395,7 +393,7 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
     if (mergedRecords.recordsVersion !== expectedRecordsVersion
         || spec.recordsVersion !== expectedRecordsVersion) {
         throw new Error(
-            `manual spec v${spec.version} 与 records v${mergedRecords.recordsVersion} 版本映射不一致`
+            `人工分析配置 v${spec.version} 与分析记录 v${mergedRecords.recordsVersion} 不符合对应的版本要求。`
         );
     }
     const rebuilt = assembler.buildSpec({
@@ -410,11 +408,11 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
     });
     if (rebuilt.version !== spec.version) {
         throw new Error(
-            `manual spec 版本降级/升级非法: supplied=v${spec.version}, rebuilt=v${rebuilt.version}`
+            `提供的人工分析配置为 v${spec.version}，重新组装的配置为 v${rebuilt.version}；两者版本必须一致。`
         );
     }
     if (stableSha256(rebuilt) !== stableSha256(spec)) {
-        throw new Error('manual spec 不是当前 official assembler 对已绑定 records/全文的原子输出');
+        throw new Error('人工分析配置与当前组装程序根据已记录的分析文件和全文文件重新生成的结果不一致。');
     }
     return {
         filtered, manifest, context, rebuilt,
@@ -426,13 +424,13 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
 
 function validateManualV6AssemblyInputs(spec, options = {}) {
     if (!spec || spec.version !== MANUAL_SPEC_VERSION_V6 || spec.status !== 'complete') {
-        throw new Error('Manual v6 ingestion 只接受 complete Manual spec v6');
+        throw new Error('人工分析配置的版本必须为 v6，状态必须为 complete。');
     }
     const date = options.date || spec.date;
     const runtimeMode = options.runtimeMode;
     const runtimePaths = resolveManualV6RuntimePaths(Config.CURRENT_DIR, date, runtimeMode);
     if (spec.runtimeMode !== runtimeMode) {
-        throw new Error('Manual spec v6 runtimeMode 与显式运行模式不一致');
+        throw new Error('人工分析 v6 配置中的 runtimeMode 与明确选择的运行模式不一致。');
     }
     const filteredPath = options.filteredPath || Config.FILES.filteredPapers;
     const fullTextManifestPath = path.join(Config.CURRENT_DIR, 'manual-full-text', date, 'manifest.json');
@@ -448,7 +446,7 @@ function validateManualV6AssemblyInputs(spec, options = {}) {
         if (!declared || path.resolve(String(declared.path || '')) !== path.resolve(expectedPath)
             || fs.lstatSync(expectedPath).isSymbolicLink()
             || sha256File(expectedPath) !== declared.sha256) {
-            throw new Error(`Manual spec v6 ${label} 未绑定受控真实文件字节`);
+            throw new Error(`人工分析 v6 配置中的 ${label} 缺失、路径或 SHA 与指定文件不一致，或该文件是符号链接。`);
         }
     }
     const assembler = require('./create-manual-analysis-spec-v6.js');
@@ -467,7 +465,7 @@ function validateManualV6AssemblyInputs(spec, options = {}) {
             || spec.recordsSources?.length !== 1
             || path.resolve(String(spec.recordsSources[0]?.path || '')) !== path.resolve(runtimePaths.recordsEnvelopePath)
             || spec.recordsSources[0]?.sha256 !== recordsEnvelope.sha256) {
-            throw new Error('正式 Manual spec v6 未绑定唯一受控 records-v4.json 原始 envelope');
+            throw new Error('正式人工分析 v6 配置必须只引用指定的 records-v4.json 文件，且文件信息、路径和 SHA 必须一致。');
         }
     }
     const rebuilt = assembler.buildSpecV6({
@@ -486,7 +484,7 @@ function validateManualV6AssemblyInputs(spec, options = {}) {
         generatedAt: spec.generatedAt
     });
     if (manualV6StableSha256(rebuilt) !== manualV6StableSha256(spec)) {
-        throw new Error('Manual spec v6 不是 official assembler 对当前真实字节的确定性重放结果');
+        throw new Error('人工分析 v6 配置与当前组装程序根据这些文件重新生成的结果不一致。');
     }
     return {
         filtered: readJson(filteredPath, 'filtered-papers'),
@@ -613,8 +611,8 @@ function getManualAnalysisWriteDecision(storedAnalysisRecord, expectedRecord, fo
     if (force) return 'write';
     if (canReuseSavedManualAnalysis(storedAnalysisRecord, expectedRecord, false)) return 'reuse';
     throw new Error(
-        `${normalizedId(expectedRecord) || '当前论文'} 已有成功 canonical，`
-        + '但本次 spec/prompt/全文/图片或审计指纹不同；拒绝无 --force 覆盖'
+        `${normalizedId(expectedRecord) || '当前论文'} 已有成功的分析记录，`
+        + '但本次记录未通过复用检查；请核对正文、来源、提示文件、图片和审查记录，确认需要覆盖后再明确使用 --force。'
     );
 }
 
@@ -622,7 +620,7 @@ function finalizeManualAnalysisBatchState(filePath, options) {
     const date = options?.date;
     const expectedIds = [...new Set((options?.expectedIds || []).map(normalizedId).filter(Boolean))];
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || expectedIds.length === 0) {
-        throw new Error('finalizeManualAnalysisBatchState 需要合法 date 与非空 expectedIds');
+        throw new Error('finalizeManualAnalysisBatchState 的 date 必须符合 YYYY-MM-DD 格式，目标论文 ID 列表 expectedIds 在规范化后不能为空。');
     }
     return updateJsonFileLocked(filePath, current => {
         const currentObject = current && !Array.isArray(current) ? current : {};
@@ -650,9 +648,9 @@ function finalizeManualAnalysisBatchState(filePath, options) {
             timestamp: now,
             batchDate: date,
             status,
-            // data/current is a single-batch canonical snapshot.  Keeping
-            // papers from an older batch makes every source/full-text binding
-            // validate against the wrong manifest and breaks exact coverage.
+            // Current data contains one batch. Keep only its expected papers
+            // so an older batch is not checked against this batch's source
+            // manifest or included in its coverage counts.
             papers: currentBatchPapers,
             stats: {
                 ...(currentObject.stats || {}),
@@ -691,13 +689,13 @@ function buildStageEvidence(
     stageContextSha256 = {}
 ) {
     const byStage = spec.reviewedClaimsByStage;
-    if (!byStage || typeof byStage !== 'object') throw new Error('manualAudit.reviewedClaimsByStage 缺失');
+    if (!byStage || typeof byStage !== 'object') throw new Error('人工分析必须在 reviewedClaimsByStage 中按阶段提供审查声明。');
     const result = {};
     for (const stage of REQUIRED_RECOVERY_STAGES) {
         const claims = byStage[stage];
         if (!Array.isArray(claims) || claims.length === 0
             || claims.some(claim => typeof claim !== 'string' || claim.trim().length < 12)) {
-            throw new Error(`manualAudit.reviewedClaimsByStage.${stage} 必须包含具体审查声明`);
+            throw new Error(`${stage} 阶段的审查声明必须是非空数组，每条声明都必须是字符串，去除首尾空白后至少包含 12 个字符。`);
         }
         // A manual run has no remote model response to fingerprint.  Bind
         // each offline stage to its own reviewed claim bundle instead of
@@ -708,7 +706,7 @@ function buildStageEvidence(
         const attempts = spec.stageReviewAttemptsByStage?.[stage]
             ?? spec.manualAudit?.passes?.length;
         if (!Number.isInteger(attempts) || attempts < 2) {
-            throw new Error(`manualAudit.stageReviewAttemptsByStage.${stage} 必须记录至少两次实际审查`);
+            throw new Error(`${stage} 阶段的实际审查次数必须是整数，且至少为两次。`);
         }
         const stageInputSha256 = manualSha256({
             stage,
@@ -824,7 +822,7 @@ function normalizeManualV4ImageArtifacts({
         || insertionPlan.length !== expectedCount
         || insertionDiagnostics.length !== expectedCount
         || orderedSelectedImageUrls.length !== expectedCount) {
-        throw new Error('Manual v4 图片、插图计划、诊断与最终正文出现次数不一致');
+        throw new Error('Manual v4 的图片、插图计划、插入检查结果和最终正文中的图片数量必须一致。');
     }
 
     const preparedByUrl = new Map(preparedImages.map(info => [info.url, info]));
@@ -835,7 +833,7 @@ function normalizeManualV4ImageArtifacts({
     if (preparedByUrl.size !== expectedCount || planByUrl.size !== expectedCount
         || diagnosticByImageNumber.size !== expectedCount
         || new Set(orderedSelectedImageUrls).size !== expectedCount) {
-        throw new Error('Manual v4 图片 URL 或插图编号重复，无法保持逐图计划绑定');
+        throw new Error('Manual v4 的图片网址或插图编号重复，无法将每张图片与其插图计划一一对应。');
     }
 
     const selectedImages = [];
@@ -846,14 +844,13 @@ function normalizeManualV4ImageArtifacts({
         const plan = planByUrl.get(url);
         const diagnostic = plan && diagnosticByImageNumber.get(plan.imageNumber);
         if (!prepared || !plan || !diagnostic || diagnostic.inserted !== true) {
-            throw new Error(`Manual v4 最终正文图片未与已验证计划闭环: ${url}`);
+            throw new Error(`Manual v4 正文中的图片缺少对应的已下载图片、插图计划或成功插入记录：${url}`);
         }
         const imageNumber = index + 1;
         selectedImages.push(prepared);
-        // The canonical takeover validator replays the reader article from
-        // imageManifest.insertionPlan.  Keep the selected URL on each plan;
-        // dropping it here made every otherwise valid image appear as
-        // `unknown` during provenance validation.
+        // The saved insertion plan is used to rebuild and check the Reader
+        // article. Keep each selected URL on its plan so the corresponding
+        // image can be found during that check.
         orderedInsertionPlan.push({ ...plan, imageNumber, url });
         orderedInsertionDiagnostics.push({ ...diagnostic, imageNumber });
     }
@@ -887,23 +884,23 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         }]))
         : promptInput;
     const promptSha256 = promptBindings.primaryAnalysis.sha256;
-    if (!spec || typeof spec !== 'object') throw new Error(`${normalizedId(paper)} 缺少规格对象`);
-    if (typeof spec.analysis !== 'string' || !spec.analysis.trim()) throw new Error(`${normalizedId(paper)} 缺少 analysis`);
+    if (!spec || typeof spec !== 'object') throw new Error(`${normalizedId(paper)} 的人工分析配置缺失或不是对象。`);
+    if (typeof spec.analysis !== 'string' || !spec.analysis.trim()) throw new Error(`${normalizedId(paper)} 的分析正文缺失、不是字符串或为空白。`);
     const sourcePath = path.resolve(PROJECT_ROOT, String(spec.fullTextPath || ''));
     const tempRoot = fs.realpathSync(os.tmpdir());
     const resolvedSourcePath = fs.existsSync(sourcePath) ? fs.realpathSync(sourcePath) : sourcePath;
     if (!resolvedSourcePath.startsWith(`${PROJECT_ROOT}${path.sep}`)
         && !resolvedSourcePath.startsWith(`${tempRoot}${path.sep}`)
         && !resolvedSourcePath.startsWith('/private/tmp/')) {
-        throw new Error(`${normalizedId(paper)} fullTextPath 不在项目或受控临时目录内`);
+        throw new Error(`${normalizedId(paper)} 的全文文件必须位于项目目录或允许的临时目录中。`);
     }
-    if (!fs.existsSync(sourcePath)) throw new Error(`${normalizedId(paper)} fullTextPath 不存在: ${sourcePath}`);
+    if (!fs.existsSync(sourcePath)) throw new Error(`${normalizedId(paper)} 的全文文件不存在：${sourcePath}`);
     const sourceBuffer = fs.readFileSync(sourcePath);
     const sourceText = sourceBuffer.toString('utf8');
-    if (sourceText.length < 1000) throw new Error(`${normalizedId(paper)} 全文过短，拒绝降级为 manual full_text`);
+    if (sourceText.length < 1000) throw new Error(`${normalizedId(paper)} 的全文不足 1000 个字符，不能据此生成完整全文分析记录。`);
     const sourceSha256 = sha256Buffer(sourceBuffer);
     if (spec.sourceSha256 && spec.sourceSha256 !== sourceSha256) {
-        throw new Error(`${normalizedId(paper)} sourceSha256 与 fullTextPath 不一致`);
+        throw new Error(`${normalizedId(paper)} 配置中的 sourceSha256 与全文文件内容的 SHA 不一致。`);
     }
     let freshAuthoring = null;
     let tutorialPayload = null;
@@ -920,7 +917,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             paperInputSha256: spec.paperInputSha256
         });
         if (spec.paperSourceIdentity?.contract !== MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT) {
-            throw new Error(`${normalizedId(paper)} spec 缺少逐论文来源身份 marker`);
+            throw new Error(`${normalizedId(paper)} 的配置缺少有效的逐篇论文来源记录。`);
         }
         paperSourceIdentity = validateManualPaperSourceIdentity(spec.paperSourceIdentity, {
             date,
@@ -967,7 +964,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         const payloadMarker = provenance.tutorialPayloadContract;
         if (payloadMarker !== undefined && payloadMarker !== null
             && payloadMarker !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT) {
-            throw new Error(`${normalizedId(paper)} tutorial payload 契约标记非法`);
+            throw new Error(`${normalizedId(paper)} 的教程内容记录使用了不支持的格式标识。`);
         }
         if (payloadMarker === MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT) {
             const tutorialPaths = defaultTutorialPayloadPaths(
@@ -999,7 +996,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         resultClaims: spec.resultClaims,
         evidenceLedger: spec.evidenceLedger
     });
-    if (invalidReason) throw new Error(`${normalizedId(paper)} 分析契约失败: ${invalidReason}`);
+    if (invalidReason) throw new Error(`${normalizedId(paper)} 的分析正文未通过检查：${invalidReason}`);
     const preparedImages = Array.isArray(options.preparedImages) ? options.preparedImages : [];
     const hasConfiguredImageSelection = Array.isArray(spec.selectedImageUrls);
     const configuredImageUrls = hasConfiguredImageSelection ? spec.selectedImageUrls : [];
@@ -1013,11 +1010,11 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         url => !preparedImages.some(info => info.url === url)
     );
     if (unavailableRequested.length > 0 && spec.imageSelectionMode === 'manual_explicit') {
-        throw new Error(`${normalizedId(paper)} selectedImageUrls 含未通过安全下载校验的图片: ${unavailableRequested.join(', ')}`);
+        throw new Error(`${normalizedId(paper)} 选择的以下图片未通过安全下载检查：${unavailableRequested.join(', ')}`);
     }
     const configuredImagePlan = Array.isArray(spec.imageInsertions) ? spec.imageInsertions : [];
     if (isManualV4 && configuredImagePlan.length !== configuredImageUrls.length) {
-        throw new Error(`${normalizedId(paper)} 每个 selectedImageUrls 必须有一条人工 imageInsertions 叙事绑定`);
+        throw new Error(`${normalizedId(paper)} 选择的每张图片都必须有一条对应的人工插图说明。`);
     }
     const manualImagePlan = isManualV4
         ? configuredImagePlan.map((item, index) => ({
@@ -1059,7 +1056,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         && (imageInsertion.selectedImageUrls.length !== configuredImageUrls.length
             || rejectedImageInsertions.length > 0)) {
         const reasons = rejectedImageInsertions.map(item => item.rejectionReason || 'unknown').join(', ');
-        throw new Error(`${normalizedId(paper)} 人工逐图叙事未完整插入: ${reasons || 'selected_count_mismatch'}`);
+        throw new Error(`${normalizedId(paper)} 的图片未全部按人工说明插入正文：${reasons || 'selected_count_mismatch'}`);
     }
     const finalAnalysis = normalizeExperimentTableNumericFormatting(imageInsertion.analysis);
     const finalParsed = parseAnalysis(finalAnalysis);
@@ -1075,17 +1072,17 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         resultClaims: spec.resultClaims,
         evidenceLedger: spec.evidenceLedger
     });
-    if (finalInvalidReason) throw new Error(`${normalizedId(paper)} 插图后分析契约失败: ${finalInvalidReason}`);
+    if (finalInvalidReason) throw new Error(`${normalizedId(paper)} 插入图片后的分析正文未通过检查：${finalInvalidReason}`);
     const manualDepthIssue = signedV6CompatibilityOverride ? null : validateManualDepthContract(finalAnalysis, {
         sourceText,
         manualDepthContractVersion: validationDepthContractVersion,
         researchBrief: spec.researchBrief,
         openSourceEvidence: spec.openSourceEvidence
     });
-    if (manualDepthIssue) throw new Error(`${normalizedId(paper)} manual 深度契约失败: ${manualDepthIssue}`);
+    if (manualDepthIssue) throw new Error(`${normalizedId(paper)} 的人工分析未达到规定的内容深度：${manualDepthIssue}`);
     const editorialQuality = validateEditorialQuality(finalAnalysis);
     if (isManualV4 && !editorialQuality.valid && !signedV6CompatibilityOverride) {
-        throw new Error(`${normalizedId(paper)} Manual v4 读者文本质量失败: ${editorialQuality.issues.slice(0, 8).map(item => item.code).join(', ')}`);
+        throw new Error(`${normalizedId(paper)} 的 Manual v4 正文未通过文本质量检查：${editorialQuality.issues.slice(0, 8).map(item => item.code).join(', ')}`);
     }
     const resultClaims = Array.isArray(spec.resultClaims) ? spec.resultClaims : [];
     const resultClaimsValidation = validateResultClaims(resultClaims, sourceText, {
@@ -1094,7 +1091,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         readerResultsText: finalParsed.results || ''
     });
     if (isManualV4 && !resultClaimsValidation.valid && !signedV6CompatibilityOverride) {
-        throw new Error(`${normalizedId(paper)} Manual v4 resultClaims 失败: ${resultClaimsValidation.errors.join('；')}`);
+        throw new Error(`${normalizedId(paper)} 的 Manual v4 结果声明未通过检查：${resultClaimsValidation.errors.join('；')}`);
     }
     const signedV6ReaderArticle = signedV6CompatibilityOverride
         ? spec.readerLongform.blocks.map(block => `### ${block.heading}\n\n${block.markdown}`).join('\n\n')
@@ -1125,15 +1122,15 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         : null;
     const readability = validateReadabilityRubric(spec.readabilityRubric);
     if (isManualV4 && (!readability.valid || !readability.passing)) {
-        throw new Error(`${normalizedId(paper)} Manual v4 readabilityRubric 失败: ${readability.errors.join('；') || `total=${readability.total}`}`);
+        throw new Error(`${normalizedId(paper)} 的 Manual v4 可读性检查未通过：${readability.errors.join('；') || `total=${readability.total}`}`);
     }
     const analysisSha256 = manualTextSha256(finalAnalysis);
     const audit = spec.manualAudit;
     if (!audit || typeof audit !== 'object' || audit.version !== 1) {
-        throw new Error(`${normalizedId(paper)} 缺少 manualAudit v1`);
+        throw new Error(`${normalizedId(paper)} 的人工审查记录缺失、格式无效或版本不是 v1。`);
     }
     if (!Array.isArray(audit.passes) || audit.attempts !== audit.passes.length) {
-        throw new Error(`${normalizedId(paper)} manualAudit.attempts 必须等于实际 passes 数量`);
+        throw new Error(`${normalizedId(paper)} 的人工审查 passes 必须是数组，attempts 必须等于该数组记录的实际审查次数。`);
     }
     const auditSha256 = manualSha256(audit);
     const evidenceLedger = spec.evidenceLedger;
@@ -1220,7 +1217,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             || !spec.taskEvidence?.taskNames
             || spec.artifactIndex?.outputSha256 !== spec.recordProvenance?.artifactIndexSha256
             || manualV6StableSha256(spec.readerLongform) !== spec.recordProvenance?.readerLongformSha256) {
-            throw new Error(`${normalizedId(paper)} spec v6 longform/ArtifactIndex/record provenance 不闭环`);
+            throw new Error(`${normalizedId(paper)} 的人工分析 v6 深度版本、运行模式、正文格式或任务记录不符合要求，或正文及内容索引的 SHA 与对应记录不一致。`);
         }
         manualV6Provenance = {
             specVersion: MANUAL_SPEC_VERSION_V6,
@@ -1243,12 +1240,12 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             || new Set(Object.values(taskNames)).size !== 4
             || taskNames.author !== spec.readerLongform.authorReceipt?.taskName
             || taskNames.authorRevision !== spec.readerLongform.finalRevisionAuthorReceipt?.taskName) {
-            throw new Error(`${normalizedId(paper)} spec v6 author/reviewer task lineage 不闭环`);
+            throw new Error(`${normalizedId(paper)} 的人工分析 v6 必须完整记录四项不同的任务名称，且写稿与修订任务名必须与正文的作者记录一致。`);
         }
         if (Object.entries(manualV6Provenance).some(([key, value]) => (
             key.endsWith('Sha256') && !/^[a-f0-9]{64}$/.test(String(value || ''))
         ))) {
-            throw new Error(`${normalizedId(paper)} spec v6 provenance 含缺失或非法 SHA-256`);
+            throw new Error(`${normalizedId(paper)} 的人工分析 v6 对应记录中的 SHA-256 缺失或格式无效。`);
         }
     }
     const takeover = {
@@ -1461,7 +1458,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             runtimeMode: spec.runtimeMode
         } : {})
     });
-    if (manifestIssue) throw new Error(`${normalizedId(paper)} manual provenance 失败: ${manifestIssue}`);
+    if (manifestIssue) throw new Error(`${normalizedId(paper)} 的人工分析记录未通过来源和阶段检查：${manifestIssue}`);
     return {
         ...paper,
         analysis: finalAnalysis,
@@ -1829,9 +1826,9 @@ async function verifyAndCacheExternalResource(url) {
 }
 
 async function runFixedWorkers(items, processItem, workerCount = MANUAL_ANALYSIS_WORKER_COUNT) {
-    if (!Array.isArray(items)) throw new Error('worker items 必须是数组');
-    if (typeof processItem !== 'function') throw new Error('worker processItem 必须是函数');
-    if (!Number.isInteger(workerCount) || workerCount < 1) throw new Error('workerCount 必须是正整数');
+    if (!Array.isArray(items)) throw new Error('待处理条目 items 必须是数组。');
+    if (typeof processItem !== 'function') throw new Error('处理每个条目的 processItem 必须是函数。');
+    if (!Number.isInteger(workerCount) || workerCount < 1) throw new Error('工作池的并发数量 workerCount 必须是正整数。');
     let nextIndex = 0;
     const workers = Array.from(
         { length: Math.min(workerCount, items.length) },
@@ -1855,10 +1852,10 @@ async function run() {
     if ((spec.version !== 3 && !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
         && spec.version !== MANUAL_SPEC_VERSION_V6)
         || spec.mode !== MANUAL_COMPLETE_STATUS) {
-        throw new Error('manual spec 必须是历史 version=3、兼容 version=4/5 或正式/影子 version=6，且 mode=manual_complete');
+        throw new Error('人工分析配置只支持历史 v3、兼容 v4/v5，以及正式或影子模式的 v6，且 mode 必须为 manual_complete。');
     }
     assertExplicitManualV6Mode(spec, { v6Production, v6Shadow });
-    if (spec.date !== date) throw new Error('manual spec.date 与 --date 不一致');
+    if (spec.date !== date) throw new Error('人工分析配置中的日期与 --date 指定的日期不一致。');
     const v6RuntimeMode = v6Production
         ? MANUAL_V6_RUNTIME_MODE_PRODUCTION
         : (v6Shadow ? MANUAL_V6_RUNTIME_MODE_SHADOW : null);
@@ -1868,7 +1865,7 @@ async function run() {
         ).specPath;
         if (path.resolve(specPath) !== path.resolve(expectedSpecPath)
             || fs.lstatSync(specPath).isSymbolicLink()) {
-            throw new Error(`spec v6 必须来自日期级受控 ${v6RuntimeMode} 路径且不得是符号链接`);
+            throw new Error(`人工分析 v6 配置必须使用 ${v6RuntimeMode} 模式下为该日期指定的文件路径，且该文件不能是符号链接。`);
         }
     }
     const verifiedAssemblyInputs = spec.version === MANUAL_SPEC_VERSION_V6
@@ -1885,18 +1882,18 @@ async function run() {
     const papers = verifiedAssemblyInputs ? verifiedAssemblyInputs.filtered.papers : filteredPapersForDate(date);
     const specPapers = spec.papers;
     if (!specPapers || typeof specPapers !== 'object' || Array.isArray(specPapers)) {
-        throw new Error('manual spec.papers 必须是对象');
+        throw new Error('人工分析配置中的 papers 必须是对象，不能是数组。');
     }
     const expectedIds = new Set(papers.map(normalizedId));
     const suppliedKeys = Object.keys(specPapers);
     const suppliedIds = new Set(suppliedKeys.map(normalizedId));
     if (suppliedIds.size !== suppliedKeys.length || suppliedKeys.some(key => !normalizedId(key))) {
-        throw new Error('manual spec.papers 含非法或规范化重复 ID');
+        throw new Error('人工分析配置中的论文 ID 在规范化后为空，或出现重复 ID。');
     }
     const missing = [...expectedIds].filter(id => !suppliedIds.has(id));
     const extra = [...suppliedIds].filter(id => !expectedIds.has(id));
     if (missing.length || extra.length) {
-        throw new Error(`manual spec 论文集合不一致: missing=${missing.join(',') || '-'} extra=${extra.join(',') || '-'}`);
+        throw new Error(`人工分析配置中的论文集合与筛选结果不一致：缺少 ${missing.join(',') || '-'}；多出 ${extra.join(',') || '-'}。`);
     }
     if (v6Production && !force) {
         const legacySuccessIds = papers.map(paper => {
@@ -1906,7 +1903,7 @@ async function run() {
                 : null;
         }).filter(Boolean);
         if (legacySuccessIds.length) {
-            throw new Error(`正式 v6 不得静默复用非 v6 canonical；请核验后显式 --force: ${legacySuccessIds.join(',')}`);
+            throw new Error(`正式人工分析 v6 不能直接复用以下非 v6 成功记录；请先核对差异，再明确使用 --force：${legacySuccessIds.join(',')}`);
         }
     }
     const failures = new Map();
@@ -2013,7 +2010,7 @@ async function run() {
     });
     if (v6RuntimeMode) {
         if (sha256File(specPath) !== specFileSha256) {
-            throw new Error('Manual spec v6 文件在 ingestion 期间发生变化，保留逐篇 checkpoint 但拒绝收口');
+            throw new Error('人工分析 v6 配置文件在处理期间发生变化；已保存的逐篇检查点会保留，本次不再更新最终批次状态。');
         }
         validateManualV6AssemblyInputs(spec, { date, runtimeMode: v6RuntimeMode });
     }
@@ -2054,15 +2051,15 @@ async function run() {
             }]
         });
     }
-    console.log(`manual_complete 离线分析 canonical 共 ${saved.papers.length} 篇，本轮成功写入 ${persisted} 篇、失败 checkpoint ${failedPersisted} 篇、复用 ${skipped} 篇；当前批次成功 ${saved.stats.success} 篇、失败 ${saved.stats.failed} 篇，API 调用 0 次`);
+    console.log(`人工离线分析记录共 ${saved.papers.length} 篇，本轮成功写入 ${persisted} 篇、保存失败检查点 ${failedPersisted} 篇、复用 ${skipped} 篇；当前批次成功 ${saved.stats.success} 篇、失败 ${saved.stats.failed} 篇，API 调用 0 次。`);
     if (saved.stats.failed > 0) {
-        console.error(`manual_complete 当前 canonical 仍有 ${saved.stats.failed} 篇失败:`);
+        console.error(`当前批次仍有 ${saved.stats.failed} 篇人工分析失败：`);
         for (const id of saved.stats.failedIds) {
-            console.error(`  - ${id}: ${failures.get(id) || '当前 canonical 未达到成功契约'}`);
+            console.error(`  - ${id}: ${failures.get(id) || '当前分析记录尚未通过成功条件检查'}`);
         }
         process.exitCode = 2;
     }
-    console.log(`全文/Prompt provenance 已写入: ${analysisFilePath}`);
+    console.log(`人工分析记录及全文、提示文件的对应信息已保存至：${analysisFilePath}`);
 }
 
 if (require.main === module) {

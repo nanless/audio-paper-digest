@@ -233,7 +233,7 @@ function assertSourceExpectations(expectations, ids) {
         const expectation = expectations[id];
         if (!isBundleExpectation(expectation)
             && (!SHA_RE.test(expectation?.sourceSha256 || '') || !SHA_RE.test(expectation?.structuredArtifactsSha256 || ''))) {
-            throw new Error(`${id} lacks a sealed source contract for a fresh rewrite`);
+            throw new Error(`${id} has no valid expected source hashes or source-bundle generation for this rewrite.`);
         }
     }
 }
@@ -241,12 +241,12 @@ function assertSourceExpectations(expectations, ids) {
 function assertAnalysisEnvelope(analysis, run, inputs) {
     if (!analysis || analysis.contract !== ANALYSIS_CONTRACT || analysis.runId !== run.runId
         || analysis.batchDate !== run.date || stableHash(sortedIds(analysis.papers)) !== run.paperSetSha256) {
-        throw new Error('Fresh rewrite analysis envelope has a different run/date/paper set');
+        throw new Error('The analysis record has an invalid format or does not match this rewrite run, date, and paper set.');
     }
     const originals = new Map(inputs.papers.map(paper => [paperId(paper), paper]));
     for (const paper of analysis.papers) {
         const id = paperId(paper);
-        if (stableHash(metadataOnly(paper)) !== stableHash(originals.get(id))) throw new Error(`${id} original metadata drifted inside fresh rewrite`);
+        if (stableHash(metadataOnly(paper)) !== stableHash(originals.get(id))) throw new Error(`The original metadata for ${id} differs from the saved rewrite input.`);
         const hasGeneratedText = Boolean(paper.analysis || paper.analysisCheckpoint || paper.apiReaderArticle || paper.apiReaderPlan
             || Object.values(paper.analysisStageCheckpoints || {}).some(Boolean));
         if (hasGeneratedText) assertFreshSourceRecordMatchesRun(paper, run);
@@ -268,7 +268,7 @@ function assertFreshSourceRecordMatchesRun(paper, run, descriptor = null) {
             || sourceRecord.sourceGeneration !== expected.sourceGeneration
             || sourceRecord.sourceManifestSha256 !== expected.sourceManifestSha256
             || !SHA_RE.test(sourceRecord.sourceManifestSha256 || '')))) {
-        throw new Error(`${id} generated text is not bound to this fresh run and source snapshot`);
+        throw new Error(`Generated text for ${id} has a missing or invalid source record, or its record does not match this rewrite run and source snapshot.`);
     }
     return true;
 }
@@ -279,16 +279,16 @@ function loadRun(runId, deps) {
     const run = readRegularJson(path.join(runDir, 'run.json')).value;
     if (run?.version !== 1 || run.contract !== RUN_CONTRACT || run.runId !== runId || !validDate(run.date)
         || !Array.isArray(run.paperIds) || stableHash(sortedIds(run.paperIds)) !== run.paperSetSha256
-        || run.identitySha256 !== identityHash(run)) throw new Error('Fresh rewrite run identity is invalid or drifted');
+        || run.identitySha256 !== identityHash(run)) throw new Error('The rewrite run has an invalid format or inconsistent run, date, paper-set, or record hashes.');
     assertSourceExpectations(run.sourceExpectations, run.paperIds);
     const inputFile = readRegularJson(path.join(runDir, 'inputs.json'));
     const inputs = inputFile.value;
     if (inputFile.sha256 !== run.inputsSha256 || inputs?.contract !== INPUT_CONTRACT || inputs.runId !== runId
         || inputs.date !== run.date || stableHash(sortedIds(inputs.papers)) !== run.paperSetSha256) {
-        throw new Error('Fresh rewrite original input bytes or identity changed');
+        throw new Error('Saved rewrite inputs have an invalid format or do not match this run, date, paper set, or input file hash.');
     }
     for (const paper of inputs.papers) {
-        if (Object.keys(paper).some(key => !ORIGINAL_METADATA_FIELDS.includes(key))) throw new Error('Fresh rewrite inputs contain non-original fields');
+        if (Object.keys(paper).some(key => !ORIGINAL_METADATA_FIELDS.includes(key))) throw new Error('Rewrite inputs may contain only original paper metadata fields.');
         metadataOnly(paper);
     }
     const analysisFile = readRegularJson(path.join(runDir, 'analysis.json'));
@@ -309,9 +309,9 @@ async function prepareRewrite(options, overrides = {}) {
     const raw = rawFile.value;
     const analysisPayload = analysisFileRecord.value;
     if (filtered?.status !== 'complete' || filtered.batchDate !== options.date || raw?.batchDate !== options.date
-        || analysisPayload?.batchDate !== options.date) throw new Error('Fresh rewrite date does not match raw/filtered/canonical batch');
+        || analysisPayload?.batchDate !== options.date) throw new Error('Raw candidates, filtered papers, or saved analysis do not match the requested date, or filtering is not complete.');
     const ids = sortedIds(filtered.papers);
-    if (stableHash(sortedIds(analysisPayload.papers)) !== stableHash(ids)) throw new Error('Fresh rewrite canonical and filtered sets differ');
+    if (stableHash(sortedIds(analysisPayload.papers)) !== stableHash(ids)) throw new Error('The saved analysis and filtered results contain different paper sets.');
     sortedIds(raw.papers);
     const rawById = new Map(raw.papers.map(paper => [paperId(paper), paper]));
     const papers = ids.map(id => {
@@ -328,7 +328,7 @@ async function prepareRewrite(options, overrides = {}) {
             || readRegularJson(deps.files.deepAnalysisResult).sha256 !== analysisFileRecord.sha256
             || readRegularJson(deps.files.filteredPapers).sha256 !== filteredFile.sha256
             || readRegularJson(deps.files.rawCandidates).sha256 !== rawFile.sha256) {
-            throw new Error('Original raw/filtered/canonical bytes changed while preparing the fresh baseline');
+            throw new Error('Raw candidates, filtered results, or saved analysis bytes changed while the rewrite baseline was being prepared.');
         }
         assertSourceExpectations(baseline.sourceExpectations, ids);
         const inputs = { version: 1, contract: INPUT_CONTRACT, runId, date: options.date, papers };

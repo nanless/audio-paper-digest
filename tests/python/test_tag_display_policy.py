@@ -226,13 +226,13 @@ class PresentationPolicyTests(unittest.TestCase):
     def test_generation_policy_drift_even_json_whitespace_blocks_review(self):
         self.transaction()
         self.policy_write(self.policy_bytes+b' ')
-        with self.assertRaisesRegex(self.error,'generation 后'):self.byte_gate()
+        with self.assertRaisesRegex(self.error,'文件内容或删除状态与生成时的记录不一致'):self.byte_gate()
         self.assertGreater(self.call('review_tag_catalog_files',DATE,self.paths,self.manifest_path,{}),0)
 
     def test_policy_removed_after_generation_cannot_silently_downgrade(self):
         self.transaction()
         for relative in POLICIES: (self.repo/relative).unlink()
-        with self.assertRaisesRegex(self.error,'generation 后'): self.byte_gate()
+        with self.assertRaisesRegex(self.error,'文件内容或删除状态与生成时的记录不一致'): self.byte_gate()
         self.assertGreater(self.call('review_tag_catalog_files',DATE,self.paths,self.manifest_path,{}),0)
 
     def test_source_registry_advance_is_unknown_even_if_richer(self):
@@ -283,7 +283,7 @@ class PresentationPolicyTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             self.assertFalse(self.call('git_push',DATE,self.paths))
-        self.assertIn('generation 后', output.getvalue())
+        self.assertIn('文件内容或删除状态与生成时的记录不一致', output.getvalue())
         self.assertNotIn('恢复失败', output.getvalue())
         self.assertEqual(self.git('rev-parse','HEAD').stdout,self.before_head)
         self.assertEqual(self.git('write-tree').stdout,index)

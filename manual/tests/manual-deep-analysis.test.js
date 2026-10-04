@@ -424,22 +424,22 @@ describe('manual_complete v3 deep-analysis contract', () => {
         );
         assert.throws(
             () => parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--unknown']),
-            /未知参数/
+            /无法识别参数 --unknown/
         );
         assert.throws(
             () => parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--force', '--force']),
-            /参数重复/
+            /--force 不能重复指定/
         );
         assert.doesNotThrow(() => assertExplicitManualV6Mode({ version: 5 }, false));
         assert.doesNotThrow(() => assertExplicitManualV6Mode({ version: 6 }, true));
         assert.doesNotThrow(() => assertExplicitManualV6Mode(
             { version: 6 }, { v6Production: true, v6Shadow: false }
         ));
-        assert.throws(() => assertExplicitManualV6Mode({ version: 6 }, false), /显式运行/);
-        assert.throws(() => assertExplicitManualV6Mode({ version: 5 }, true), /显式运行/);
+        assert.throws(() => assertExplicitManualV6Mode({ version: 6 }, false), /人工分析 v6 必须明确选择 --v6-production 或 --v6-shadow/);
+        assert.throws(() => assertExplicitManualV6Mode({ version: 5 }, true), /人工分析 v6 必须明确选择 --v6-production 或 --v6-shadow/);
         assert.throws(() => parseArgs([
             '--v6-production', '--v6-shadow', '--date', '2026-08-20', '--spec', 'manual.json'
-        ]), /必须且只能/);
+        ]), /--v6-production 与 --v6-shadow 不能同时指定，也不能重复指定/);
     });
 
     it('历史 v3 spec 保留自身 prompt SHA，v4 必须绑定当前 prompt', () => {
@@ -461,7 +461,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
 
         assert.throws(
             () => resolveManualSpecPromptBindings({ ...historical, version: 4 }, current),
-            /与当前 deep-analysis prompt 不一致/
+            /promptSha256 与当前主分析提示文件的 SHA 不一致/
         );
         const currentV5 = {
             ...historical,
@@ -482,7 +482,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
         delete incomplete.stagePromptSha256.imageSupplement;
         assert.throws(
             () => resolveManualSpecPromptBindings(incomplete, current),
-            /必须精确覆盖全部阶段/
+            /stagePromptSha256 中完整记录所有阶段，不能缺少或多出阶段/
         );
     });
 
@@ -832,7 +832,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
                 preparedImages,
                 manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3
             }),
-            /未通过安全下载校验/
+            /未通过安全下载检查/
         );
     });
 
@@ -889,7 +889,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
         assert.equal(getManualAnalysisWriteDecision(storedAnalysisRecord, storedAnalysisRecord, false), 'reuse');
         assert.throws(
             () => getManualAnalysisWriteDecision(storedAnalysisRecord, changed, false),
-            /拒绝无 --force 覆盖/
+            /本次记录未通过复用检查；请核对正文、来源、提示文件、图片和审查记录，确认需要覆盖后再明确使用 --force/
         );
         assert.equal(getManualAnalysisWriteDecision(storedAnalysisRecord, changed, true), 'write');
         assert.equal(getManualAnalysisWriteDecision(null, changed, false), 'write');
