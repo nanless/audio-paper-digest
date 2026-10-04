@@ -73,7 +73,7 @@ test('staging intent and manifest reject a renderer implementation change under 
     const replacement = '4'.repeat(64);
     assert.throws(() => api.stageHistoricalPages({ ...args,
         rendererImplementationSha256: replacement }, { ...f.dependencies,
-        rendererImplementationSha256: () => replacement }), /different selected inputs|implementation/);
+        rendererImplementationSha256: () => replacement }), /已有页面生成记录与本次选择的论文、页面或生成器实现不一致|生成器的实际实现指纹与预期指纹不一致/);
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.root, STAGING, 'manifest.json')))
         .rendererImplementationSha256, RENDERER_SHA);
 });
@@ -85,7 +85,7 @@ test('renderer implementation drift during rendering cannot produce a manifest',
         crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
         tagCatalogPath: '/unused', stagingRoot: f.root }, { ...f.dependencies,
         rendererImplementationSha256: () => reads++ === 0 ? RENDERER_SHA : '4'.repeat(64) }),
-    /changed while rendering/);
+    /页面生成期间，生成器的实现指纹发生变化/);
     assert.equal(fs.existsSync(path.join(f.root, STAGING, 'manifest.json')), false);
 });
 
@@ -97,7 +97,7 @@ test('exact page left after an interrupted write resumes under the same intent a
     let reads = 0;
     assert.throws(() => api.stageHistoricalPages(args, { ...f.dependencies,
         rendererImplementationSha256: () => reads++ === 0 ? RENDERER_SHA : '4'.repeat(64) }),
-    /changed while rendering/);
+    /页面生成期间，生成器的实现指纹发生变化/);
     const partial = path.join(f.root, STAGING, 'pages/content/posts/page-0.md');
     fs.mkdirSync(path.dirname(partial), { recursive: true });
     fs.writeFileSync(partial, '---\ndate: 2026-04-19\n---\nNEW PAGE');
@@ -156,7 +156,7 @@ test('selected binding replay tolerates later unrelated or same-identity pages b
     advanced.identityGroups[0].pageKeys.push(extraKey);
     assert.equal(api.replaySelectedBindings(manifest, advanced).length, 1);
     advanced.assignments[manifest.selectedBindings[0].pages[0].pageKey].decisionArtifactSha256 = '0'.repeat(64);
-    assert.throws(() => api.replaySelectedBindings(manifest, advanced), /changed/);
+    assert.throws(() => api.replaySelectedBindings(manifest, advanced), /当前论文与页面的对应记录与生成清单记录的输入不一致/);
 });
 
 test('staging selects the rebuilt current assignment and accepts a legacy name only when exact', t => {
@@ -181,7 +181,7 @@ test('staging selects the rebuilt current assignment and accepts a legacy name o
         REGISTRY_SHA, f.assignment).legacyFilename, false);
     assert.equal(fs.existsSync(legacy), true, 'the stale legacy audit remains immutable');
     assert.throws(() => api.findAssignment(path.join(f.root, 'taxonomy'), paperId, null,
-        REGISTRY_SHA, f.assignment), /required/);
+        REGISTRY_SHA, f.assignment), /查找标签记录所需的绝对目录、运行 ID、词表 SHA 或重新计算的预期记录缺失、格式无效或不一致/);
 });
 
 test('dry-run validates inputs but writes no staging directory', t => {
@@ -203,9 +203,9 @@ test('assignment reader rejects duplicate JSON keys and symlinks', t => {
     const f = fixture(t); const dir = path.join(f.root, 'unsafe'); fs.mkdirSync(dir);
     const name = `arxiv-2604.12527.taxonomy.${REGISTRY_SHA}.json`; const target = path.join(dir, name);
     fs.writeFileSync(target, `{"contract":"paper-taxonomy-assignment-v1","version":1,"status":"assigned","status":"blocked","paperId":"arxiv:2604.12527","analysisRunId":"${ANALYSIS_RUN}","registrySha256":"${REGISTRY_SHA}","assignmentSha256":"${'a'.repeat(64)}"}`);
-    assert.throws(() => api.readAssignment(target), /duplicate JSON key/);
+    assert.throws(() => api.readAssignment(target), /JSON 中出现重复字段/);
     const link = path.join(dir, `arxiv-2604.12528.taxonomy.${REGISTRY_SHA}.json`); fs.symlinkSync(target, link);
-    assert.throws(() => api.readAssignment(link), /unsafe/);
+    assert.throws(() => api.readAssignment(link), /必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件/);
 });
 
 test('page staging rejects asset traversal and an existing symlink run directory', t => {
@@ -214,7 +214,7 @@ test('page staging rejects asset traversal and an existing symlink run directory
         limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
         tagCatalogPath: '/unused', stagingRoot: f.root };
     assert.throws(() => api.stageHistoricalPages(args, { ...f.dependencies,
-        render: () => ({ markdown: 'FRESH', assets: [{ path: 'static/images/papers/../../../../escape.bin', base64: 'eA==' }] }) }), /unsafe staged asset/);
+        render: () => ({ markdown: 'FRESH', assets: [{ path: 'static/images/papers/../../../../escape.bin', base64: 'eA==' }] }) }), /资源路径或 base64 数据格式无效/);
     const outside = path.join(f.root, 'outside'); fs.mkdirSync(outside);
     const symlinkRun = '55555555-5555-4555-8555-555555555555'; fs.symlinkSync(outside, path.join(f.root, symlinkRun));
     assert.throws(() => api.stageHistoricalPages({ ...args, stagingRunId: symlinkRun }, f.dependencies), /Unsafe fresh rewrite directory/);
@@ -226,7 +226,7 @@ test('page staging rejects a self-hashed assignment that differs from determinis
         analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',
         tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root }, {
         ...f.dependencies, buildAssignment: () => ({ forged: true, assignmentSha256: 'f'.repeat(64) })
-    }), /not the deterministic current-registry projection/);
+    }), /标签记录与按当前词表重新计算的记录不一致/);
 });
 
 test('prepared assignment A cannot stage analysis B under A staging identity', t => {
@@ -244,7 +244,7 @@ test('prepared assignment A cannot stage analysis B under A staging identity', t
         stagingRunId: STAGING, expectedStagingRunId: STAGING,
         expectedAssignment: staleExpected, analysisRunId: ANALYSIS_RUN, limit: 'pilot',
         crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
-        tagCatalogPath: '/unused', stagingRoot: f.root }, f.dependencies), /identity drifted/);
+        tagCatalogPath: '/unused', stagingRoot: f.root }, f.dependencies), /预期标签记录或页面生成运行 ID 与本次选择不一致/);
     assert.equal(fs.existsSync(path.join(f.root, STAGING)), false,
         'assignment drift must fail before writing staging intent or directories');
 });
@@ -253,7 +253,7 @@ test('writeExact rejects leaf and parent symlinks on recovery paths', t => {
     const f = fixture(t); const outside = path.join(f.root, 'outside.bin'); fs.writeFileSync(outside, 'outside');
     const safe = path.join(f.root, 'safe'); fs.mkdirSync(safe);
     const leaf = path.join(safe, 'leaf.bin'); fs.symlinkSync(outside, leaf);
-    assert.throws(() => api.writeExact(leaf, Buffer.from('fresh')), /unsafe/);
+    assert.throws(() => api.writeExact(leaf, Buffer.from('fresh')), /必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件/);
     const parent = path.join(f.root, 'linked-parent'); fs.symlinkSync(safe, parent);
     assert.throws(() => api.writeExact(path.join(parent, 'child.bin'), Buffer.from('fresh')), /Unsafe fresh rewrite directory/);
 });
@@ -279,5 +279,5 @@ test('manifest-less legacy partial files are rejected because they lack an input
     assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
         stagingRunId: runId, analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused',
         analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root },
-    f.dependencies), /unbound partial files/);
+    f.dependencies), /生成目录中的文件与本次输入和生成结果不完全对应，无法生成清单/);
 });

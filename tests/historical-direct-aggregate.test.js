@@ -393,7 +393,7 @@ test('direct aggregate rejects missing, extended, or source-drifted publication 
     for (const variant of variants) {
         writeJson(filename, variant);
         assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE }),
-            /staging input has unknown or missing fields|publication source is not bound/);
+            /staging input has unknown or missing fields|发布来源记录格式无效，或与来源快照、全文及摘要哈希不一致/);
     }
     writeJson(filename, original);
 });

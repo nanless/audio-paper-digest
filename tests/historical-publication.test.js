@@ -287,7 +287,7 @@ test('resume rejects extra bundle files, intermediate source symlinks, and dupli
 
     const duplicate = fixture(t); const planFile = path.join(duplicate.outputRoot, PLAN, 'plan.json');
     const bytes = fs.readFileSync(planFile); fs.writeFileSync(planFile, Buffer.concat([Buffer.from('{"contract":"attacker",'), bytes.subarray(1)]));
-    assert.throws(() => api.loadPlan({ outputRoot: duplicate.outputRoot, planId: PLAN }), /duplicate JSON key/);
+    assert.throws(() => api.loadPlan({ outputRoot: duplicate.outputRoot, planId: PLAN }), /中出现重复的 JSON 字段：contract/);
 });
 
 test('git blob lookup distinguishes absent paths from Git failures', t => {

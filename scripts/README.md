@@ -66,8 +66,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-record-update.js` | Node 库 | 仅更新分析结果中的分类记录：新词表必须仍解析出完全相同的 conceptIds，否则拒绝并列出需人工或模型重选的论文。另只读扫描失效历史分类文件并汇总报告，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果解析标签，映射 concept ID、去除祖先标签并生成逐篇分类文件。文件名同时包含词表 SHA 与分类 SHA，分析升级不覆盖旧记录；旧版仅按词表 SHA 命名的文件，只有逐字段等于当前重建结果时才允许读取。 |
-| `lib/historical-page-staging.js` | Node 库 | 将完成的分析与新分类渲染到 crosswalk 保留的单篇路径。同一论文的重复历史页面共用新分析；结果写入独立私有目录，并保存逐页 SHA。 |
-| `lib/historical-daily-aggregate.js` | Node 库 | 核验并合并单篇私有页面、crosswalk、历史页面清单及新分析/分类，按稳定顺序重建每日汇总和清单；不读取旧汇总正文。 |
+| `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（crosswalk）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |
+| `lib/historical-daily-aggregate.js` | Node 库 | 核对单篇私有页面、页面对应表、历史页面清单及当前分析和标签记录，按固定顺序生成每日汇总及清单。保留原汇总路径和网址，不读取旧汇总正文。 |
 | `lib/historical-postprocess-scheduler.js` | Node 库 | 处理来源核验通过且已完成的旧历史分析队列，依次重新分类、生成单篇页面和完整日期汇总。检查点核验当前分析文件与分类 SHA；每次汇总读取同日全部当前成员，论文升级后其全部日期页面都须更新。最多并发 3，不写博客。 |
 | `lib/conference-postprocess.js` | Node 库 | 只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
 | `lib/historical-publication.js` | Node 库 | 核验旧路线的论文页与日汇总来源链，固定干净 main、远端、Hugo、Git 基线和阶段依赖，再生成不可变私有文件；此入口不写博客、不审查，也不提交或推送。 |
@@ -137,7 +137,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/historical-direct-rewrite-plan.js` | Node 库 | 从严格的当前来源目录、历史清单和会议页面对应记录生成可重新核验的路由计划，并以自身 SHA 记录未覆盖论文页及 scope/hint-status 汇总。唯一白名单跨标题预印本须有可自校验的来源披露；普通 v5 路由保持旧字节结构以恢复长任务。不调用模型、网络、crosswalk，也不读取旧正文。 |
 | `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行直接重写计划前核验同计划、同来源获取序号的 scheduler-ready 记录与来源字节，保存来源对应的分析恢复检查点以便跨进程续跑；只有原文分析和 Reader 都完整时才生成私有页面。 |
 | `lib/historical-direct-control.js` | Node 库 | 按计划和来源获取序号管理不可变暂停请求、安全恢复与来源检查点，并只读汇总任务、registry、汇总和发布阻断项；不调用模型或修改博客。 |
-| `lib/historical-direct-page-staging.js` | Node 库 | 将直接重写的封存来源、分析与 Reader 渲染成历史单篇私有页面。跨标题预印本显示非 camera-ready 提示；当前稿 PDF 返回 404 而采用同论文旧 `vN` 时显示“当前稿不可用”，并核验披露、清单与页面 SHA。 |
+| `lib/historical-direct-page-staging.js` | Node 库 | 用直接重写所保存的来源、分析和解读正文生成历史单篇私有页面，并核对输入、清单及页面 SHA。采用标题不同的早期预印本时，页首说明它不是会议定稿（camera-ready）；当前稿 PDF 返回 404 而采用同篇旧 `vN` 时，页首说明“当前稿不可用”。 |
 | `lib/historical-direct-aggregate.js` | Node 库 | 根据直接重写记录和页面对应记录重建日汇总、会议汇总及会议任务私有页面，不读取旧正文。页面对应记录 v3 用冻结链接确定任务成员，无论文汇总记录为 `retain-unchanged`，并核验全部历史页面覆盖。`reader-facing-v3` 只按主任务统计热门方向，保留双语链接标题、八维评分、分档、文档类型、arXiv、作者机构与资源状态；采用旧 arXiv `vN` 时，排行榜与条目均显示当前稿不可用和实际官方链接。 |
 | `lib/historical-direct-tag-supplement.js` | Node 库 | 只读核验已完成直接重写的来源、分析与私有页面，按原分类版本提取概念及主角色。补充记录对应历史页面整文件与正文 SHA，保留旧正文和标签，单列失败，不把未完成分析当成已核验结果。 |
 | `lib/historical-source-identity-supplement.js` | Node 库 | 独立核验封存 arXiv 或会议元数据/PDF 的身份及旧页精确 SHA，仅补身份、官方来源和论文版本披露，不生成分类或正文完成证明。 |
@@ -172,14 +172,14 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `icmc-proceedings.py` | 从官方 ICMC 2026 合并 proceedings PDF 的书签和目录提取论文顺序、页范围与作者元数据，并按页范围无栅格化拆分单篇 PDF；不调用模型、不改写原始图表公式。 |
 | `history-inventory.py` | 只读扫描配置博客的历史页面、URL 和汇总关系。dry-run 不写文件，apply 在干净 main 上成对保存不可变页面清单与凭证。 |
 | `historical_page_scan.py` | 按 `historical-page-ledger-v1` 扫描历史页面，不收集旧正文；记录稳定 pageId/cohort、逐次链接目标、待核分类、Git tree 与远端 main。扫描前后及 `O_EXCL` 保存前核验 CAS。 |
-| `historical-page-render.py` | 只从完成的正式分析结果和已分配分类任务包渲染历史论文页；不读取旧页面正文。 |
+| `historical-page-render.py` | 根据上游核验过的历史论文输入生成单篇页面。普通历史路径使用标签分配记录，直接重写路径使用保存的分析和来源记录；正文从分析结果重新解析，不使用旧页面正文。 |
 | `page-source-crosswalk.js` | 从直接命名的历史清单与凭证创建独立 crosswalk，管理受控决定和 CAS。普通磁盘 arXiv 来源文件不能获得发布授权；finalize 要求全体 verified，且来源可在现场重新核验。 |
 | `history-conflict-identity.js` | 在同一进程核验官方 arXiv 来源，再将操作者明确选定的已有冲突提示记录为 verified 决定，并按 CAS 写入；不读取旧正文或标题。 |
 | `arxiv-source-authority.js` | 按规范 arXiv ID 规划或获取官方全文，用于维护来源授权；不属于 direct 路线或 arXiv 获取失败备用批次的选择器。dry-run 不联网、不写文件。 |
 | `historical-arxiv-analysis.js` | 用现场核验的 arXiv 全文和白名单原始抓取元数据创建独立原文分析 run。analyze 调用现有多阶段引擎，结果不写入日更 current。 |
 | `historical-arxiv-analysis-scheduler.js` | 仅调度旧备用路线中 finalized crosswalk 的历史 arXiv 分析。`new-full`、`reader-recovery`、`all` 只维护旧队列，不能阻断或替代 direct-local。 |
 | `historical-tag-assignment.js` | 对完成的历史分析逐篇或批量重新分类。dry-run 不写文件，apply 只保存独立分类结果，不调用模型。 |
-| `historical-page-staging.js` | 按显式分析 run 和当前词表 SHA 选择精确对应的分类结果，再从 verified crosswalk 生成私有单篇页面；不写博客。 |
+| `historical-page-staging.js` | 按指定分析运行和当前词表 SHA 选择对应的标签记录，再依据已核验的页面对应表生成私有单篇页面，不写入博客。 |
 | `historical-daily-aggregate.js` | 按 `--staging-runs UUID[,UUID...]` 合并多份单篇页面，重建私有日汇总清单，保留原路径与 URL。dry-run 不写文件，apply 也不写博客。 |
 | `historical-publication.js` | plan 固定旧历史发布输入、博客基线与逐路径操作；generate 再核验生成来源，以 `O_EXCL` 保存私有文件。没有认证汇总时拒绝 conference refs。 |
 | `historical-postprocess-scheduler.js` | 处理旧备用 crosswalk 分析的重新分类、单篇页面和日汇总，并保存恢复记录；direct-local 使用 `historical-direct-aggregate.js`。 |

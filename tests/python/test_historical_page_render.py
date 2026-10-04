@@ -61,7 +61,7 @@ class HistoricalPageRenderTests(unittest.TestCase):
                 renderer.read_packet_bytes(['renderer', '--input-file', packet]),
                 b'{"paper":{"title":"test"}}',
             )
-            with self.assertRaisesRegex(ValueError, 'must be absolute'):
+            with self.assertRaisesRegex(ValueError, '页面生成输入文件必须使用绝对路径'):
                 renderer.read_packet_bytes([
                     'renderer', '--input-file', 'relative-packet.json',
                 ])
@@ -230,11 +230,11 @@ class HistoricalPageRenderTests(unittest.TestCase):
                 {**proof, 'sourceTextSha256': 'c' * 64},
                 {**proof, 'abstractSha256': 'c' * 64},
                 {**proof, 'unexpected': True}):
-            with self.assertRaisesRegex(ValueError, 'publication source proof'):
+            with self.assertRaisesRegex(ValueError, '历史 arXiv 发布来源记录'):
                 renderer.inject_direct_publication_source(dict(paper), changed)
         without_provenance = dict(paper)
         without_provenance.pop('freshRewriteProvenance')
-        with self.assertRaisesRegex(ValueError, 'publication source proof'):
+        with self.assertRaisesRegex(ValueError, '历史 arXiv 发布来源记录'):
             renderer.inject_direct_publication_source(without_provenance, proof)
 
     def test_direct_arxiv_renderer_validates_metadata_sidecar_binding(self):
@@ -295,7 +295,7 @@ class HistoricalPageRenderTests(unittest.TestCase):
                  'sourceName': ('https://export.arxiv.org/api/query?'
                                 f'id_list={paper["arxivId"]}v1&max_results=1')},
                 {**sidecar, 'unexpected': True}):
-            with self.assertRaisesRegex(ValueError, 'metadata sidecar proof'):
+            with self.assertRaisesRegex(ValueError, '历史 arXiv 元数据记录'):
                 renderer.inject_direct_publication_source(
                     dict(paper), {**proof, 'metadataSidecar': changed},
                 )
@@ -305,7 +305,7 @@ class HistoricalPageRenderTests(unittest.TestCase):
             'directPaperId': 'conference:icassp:2026:icassp-arnumber:100',
             'id': 'conference:icassp:2026:icassp-arnumber:100',
         }
-        with self.assertRaisesRegex(ValueError, 'conference packet'):
+        with self.assertRaisesRegex(ValueError, '未使用 arXiv 标识的历史页面输入'):
             renderer.inject_direct_publication_source(paper, {'contract': 'wrong'})
 
 

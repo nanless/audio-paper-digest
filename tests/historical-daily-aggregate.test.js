@@ -65,7 +65,7 @@ test('daily aggregate ranks deterministically and uses only fresh canonical/taxo
 
 test('partial staging is blocked and cannot impersonate a complete daily aggregate', () => {
     const f = aggregateFixture(); f.stagedPages.pop();
-    assert.throws(() => api.buildDailyAggregates({ inputs: f, date: DATE }), /exactly cover selected daily paper pages/);
+    assert.throws(() => api.buildDailyAggregates({ inputs: f, date: DATE }), /生成记录中存在重复页面，或未覆盖所选日期的全部论文页/);
 });
 
 test('targeted date ignores other fully authenticated staged cohorts', () => {
@@ -142,9 +142,9 @@ test('two real per-paper staging producers merge into one complete daily aggrega
 
 test('mixed taxonomy registries and verified identity drift fail closed', () => {
     const mixed = aggregateFixture(); mixed.stagedPages[0].canonical.taxonomyRegistrySha256 = '8'.repeat(64);
-    assert.throws(() => api.buildDailyAggregates({ inputs: mixed, date: DATE }), /taxonomy registry differs/);
+    assert.throws(() => api.buildDailyAggregates({ inputs: mixed, date: DATE }), /论文使用了不同的标签词表 SHA/);
     const drifted = aggregateFixture(); drifted.topology.state.assignments[drifted.stagedPages[0].pageKey].sourceAuthority.paperId = 'arxiv:2604.99999';
-    assert.throws(() => api.buildDailyAggregates({ inputs: drifted, date: DATE }), /identity\/path differs/);
+    assert.throws(() => api.buildDailyAggregates({ inputs: drifted, date: DATE }), /缺少已核验的对应记录，或论文标识、路径或网址不一致/);
 });
 
 test('mixed renderer implementations cannot form one daily aggregate', () => {
@@ -153,7 +153,7 @@ test('mixed renderer implementations cannot form one daily aggregate', () => {
         rendererImplementationSha256: '7'.repeat(64), manifestSha256: '6'.repeat(64) },
     manifestFileSha256: '5'.repeat(64) });
     assert.throws(() => api.buildDailyAggregates({ inputs: mixed, date: DATE }),
-        /renderer implementation binding is missing or mixed/);
+        /每日汇总缺少有效的页面生成器实现指纹，或所用指纹不一致/);
 });
 
 test('new unrelated crosswalk progress does not invalidate unchanged staged page/group binding', () => {
@@ -203,7 +203,7 @@ test('completed page staging loader replays manifest and every rendered page SHA
     fs.writeFileSync(path.join(runRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
     assert.equal(api.loadCompletedPageStaging({ stagingRoot: root, stagingRunId: RUN }).manifest.pages.length, 1);
     fs.appendFileSync(path.join(runRoot, page.stagedPath), 'drift');
-    assert.throws(() => api.loadCompletedPageStaging({ stagingRoot: root, stagingRunId: RUN }), /bytes drifted/);
+    assert.throws(() => api.loadCompletedPageStaging({ stagingRoot: root, stagingRunId: RUN }), /文件 SHA 与生成清单不一致/);
 });
 
 test('completed page staging loader replays every asset size/SHA', t => {
@@ -228,7 +228,7 @@ test('completed page staging loader replays every asset size/SHA', t => {
     fs.writeFileSync(path.join(runRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
     assert.equal(api.loadCompletedPageStaging({ stagingRoot: root, stagingRunId: RUN }).manifest.assets.length, 1);
     fs.appendFileSync(path.join(runRoot, 'assets', asset.path), 'drift');
-    assert.throws(() => api.loadCompletedPageStaging({ stagingRoot: root, stagingRunId: RUN }), /asset bytes drifted/);
+    assert.throws(() => api.loadCompletedPageStaging({ stagingRoot: root, stagingRunId: RUN }), /文件 SHA 或字节数与生成清单不一致/);
 });
 
 test('apply writes isolated immutable manifest while replay is idempotent', t => {
@@ -241,7 +241,7 @@ test('apply writes isolated immutable manifest while replay is idempotent', t =>
     assert.equal(first[0].fileSha256, second[0].fileSha256);
     assert.equal(fs.statSync(first[0].filename).mode & 0o777, 0o600);
     const changed = structuredClone(aggregate); changed[0].markdown += 'drift';
-    assert.throws(() => api.writeAggregates({ outputRoot: root, aggregateRunId, aggregates: changed }), /refuses to overwrite/);
+    assert.throws(() => api.writeAggregates({ outputRoot: root, aggregateRunId, aggregates: changed }), /已有每日汇总文件与本次内容不同，拒绝覆盖/);
 });
 
 test('CLI dry-run never invokes writer and apply targets configured aggregate root', () => {

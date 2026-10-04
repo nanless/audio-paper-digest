@@ -94,7 +94,7 @@ test('direct arXiv publication source rejects identity, source, and abstract SHA
         { ...f.publicationSource, abstractSha256: sha('another abstract') },
     ]) {
         assert.throws(() => api.stageDirectPages(options(f, { publicationSource })),
-            /publication source is not bound/);
+            /发布来源记录格式无效，或与来源快照、全文及摘要哈希不一致/);
     }
 });
 
@@ -137,16 +137,16 @@ test('direct page staging seals an exact metadata sidecar proof and rejects ever
         const other = fixture(t);
         assert.throws(() => api.stageDirectPages(options(other, {
             publicationSource: { ...other.publicationSource, metadataSidecar: drifted }
-        })), /sidecar|schema|not bound/);
+        })), /元数据对应记录格式无效，或其来源、版本、时间和哈希与来源记录不一致|元数据对应记录 包含未知字段或缺少必需字段/);
     }
     const missing = { ...f.publicationSource }; delete missing.metadataSidecar;
-    assert.throws(() => api.stageDirectPages(options(f, { publicationSource: missing })), /sidecar is required/);
+    assert.throws(() => api.stageDirectPages(options(f, { publicationSource: missing })), /缺少官方论文元数据对应记录/);
 });
 
 test('direct page staging fails closed when a rendered page byte changes after its source/Reader/projection seal', t => {
     const f = fixture(t); const result = api.stageDirectPages(options(f));
     fs.appendFileSync(path.join(f.root, 'staging', result.pages[0].stagedPath), 'tamper');
-    assert.throws(() => api.stageDirectPages(options(f)), /rendered page bytes drifted/);
+    assert.throws(() => api.stageDirectPages(options(f)), /生成页面 SHA 与清单不一致/);
 });
 
 test('different-title prior preprint adds a visible top disclosure whose bytes are sealed by the page and manifest SHAs', t => {
@@ -220,7 +220,7 @@ test('withdrawn arXiv historical version evidence injects an exact top warning a
     forged.pageSetSha256 = api.stableHash(forged.pages);
     const body = { ...forged }; delete body.manifestSha256; forged.manifestSha256 = api.stableHash(body);
     fs.writeFileSync(manifestFile, `${JSON.stringify(forged, null, 2)}\n`);
-    assert.throws(() => api.stageDirectPages(options(f)), /disclosure is absent or not at the top/);
+    assert.throws(() => api.stageDirectPages(options(f)), /来源版本说明缺失、内容不一致或未位于页面正文开头/);
 });
 
 test('prior-preprint staging rejects a missing route disclosure and an unterminated front matter block', t => {
@@ -229,6 +229,6 @@ test('prior-preprint staging rejects a missing route disclosure and an untermina
     f.item.route = { kind: 'conference-local-pdf', writerInputs: [{ pdf: { acquisition: {
         versionRelation: 'author-prior-preprint-with-different-title', sourceTitle: 'title', sourceDoi: 'doi'
     } } }] };
-    assert.throws(() => api.priorPreprintDisclosureProof(f.item), /must be an object/);
-    assert.throws(() => api.injectTopDisclosure('---\ntitle: broken\nbody', '> warning'), /unterminated Hugo front matter/);
+    assert.throws(() => api.priorPreprintDisclosureProof(f.item), /早期预印本说明 必须是对象/);
+    assert.throws(() => api.injectTopDisclosure('---\ntitle: broken\nbody', '> warning'), /Hugo 页头缺少结束标记/);
 });

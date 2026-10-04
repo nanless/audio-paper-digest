@@ -38,7 +38,7 @@ def inject_direct_publication_source(projected, publication_source):
     arxiv_id = projected.get('arxivId')
     if not arxiv_id:
         if publication_source is not None:
-            raise ValueError('direct conference packet cannot carry arXiv publication source')
+            raise ValueError('未使用 arXiv 标识的历史页面输入不能携带 arXiv 发布来源记录。')
         return projected
     fields = {
         'contract', 'version', 'paperId', 'sourceSnapshotSha256',
@@ -49,7 +49,7 @@ def inject_direct_publication_source(projected, publication_source):
     fields.add('metadataSidecar')
     if not isinstance(publication_source, dict) \
             or set(publication_source) != fields:
-        raise ValueError('direct arXiv publication source proof is required')
+        raise ValueError('历史 arXiv 发布来源记录缺失、不是对象，或字段集合不符合要求。')
     abstract = publication_source.get('abstract')
     abstract_sha = publication_source.get('abstractSha256')
     fresh_source_details = projected.get('freshRewriteProvenance')
@@ -69,9 +69,9 @@ def inject_direct_publication_source(projected, publication_source):
             or len(abstract.encode('utf-8')) > 200000 \
             or not SHA256_RE.fullmatch(str(abstract_sha or '')) \
             or hashlib.sha256(abstract.encode('utf-8')).hexdigest() != abstract_sha:
-        raise ValueError('direct arXiv publication source proof is invalid')
+        raise ValueError('历史 arXiv 发布来源记录的格式、论文对应关系、摘要内容或 SHA 不符合要求。')
     if not has_metadata_sidecar:
-        raise ValueError('direct arXiv publication metadata sidecar proof is required')
+        raise ValueError('历史 arXiv 发布来源缺少元数据记录。')
     if has_metadata_sidecar:
         sidecar = publication_source.get('metadataSidecar')
         sidecar_fields = {
@@ -128,9 +128,9 @@ def inject_direct_publication_source(projected, publication_source):
                 or sidecar.get('querySourceId') != sidecar.get('sourceId') \
                 or sidecar.get('generation') != fresh_source_details.get('sourceGeneration') \
                 or sidecar.get('sourceName') != expected_source_name:
-            raise ValueError('direct arXiv publication metadata sidecar proof is invalid')
+            raise ValueError('历史 arXiv 元数据记录的格式、日期顺序、来源版本或 SHA 对应关系不符合要求。')
     if projected.get('abstract') not in (None, abstract):
-        raise ValueError('direct arXiv publication source conflicts with analysis abstract')
+        raise ValueError('历史 arXiv 发布来源中的摘要与分析记录中的摘要不一致。')
     projected['abstract'] = abstract
     return projected
 
@@ -141,22 +141,20 @@ def render_packet(packet):
     date = packet.get('cohortDate')
     direct = packet.get('directStaging') is True
     if not isinstance(paper, dict):
-        raise ValueError('paper object is required')
+        raise ValueError('历史页面生成输入中的论文记录必须为对象。')
     if direct:
-        # Node binds direct historical rewrites to an independently captured
-        # source/run packet. This path does not require a legacy crosswalk or
-        # a separate postprocess tag assignment. The recorded analysis already
-        # contains the tag section and primary tag fields; parse them below
-        # instead of importing tags from an old page.
+        # 上游 Node 将直接历史重写结果与独立保存的来源及运行记录绑定。
+        # 这一路径不读取旧页面对应表，也不另外导入后处理标签；
+        # 下文从分析正文中的标签节和主标签字段重新解析。
         if not isinstance(paper.get('directPaperId'), str) or not paper['directPaperId']:
-            raise ValueError('direct staging paper identity is required')
+            raise ValueError('直接生成历史页面时，论文 ID 必须为非空字符串。')
         projected = dict(paper)
         projected = inject_direct_publication_source(
             projected, packet.get('publicationSource')
         )
     else:
         if packet.get('publicationSource') is not None:
-            raise ValueError('non-direct packet cannot carry publication source proof')
+            raise ValueError('非直接生成的历史页面输入不能携带发布来源记录。')
         if not isinstance(assignment, dict):
             raise ValueError('历史论文缺少有效的标签选择记录。')
         if assignment.get('status') != 'assigned' or assignment.get('paperId') != f'arxiv:{paper.get("arxivId")}':
@@ -175,23 +173,20 @@ def render_packet(packet):
         projected = dict(paper)
     publisher = load_publish_to_blog()
     if direct and not projected.get('arxivId'):
-        # Conference-only direct sources have no arXiv identity.  The normal
-        # publisher intentionally requires one for its citation/workbench
-        # sidecars, so render the same reader-first page surface here without
-        # inventing an arXiv ID or touching any old conference post.  The Node
-        # adapter has already replayed the sealed Reader/source/projection
-        # bindings before this renderer is called.
+        # 直接生成的会议论文没有 arXiv 标识，常规发布器生成引用资料时却需要它。
+        # 因此这里直接生成会议论文的页面，不伪造 ID，也不修改已有会议页面。
+        # 调用前，上游 Node 已核对解读正文、来源及展示记录的对应关系。
         parsed = publisher.parse_analysis(projected.get('analysis', ''))
         if not isinstance(parsed, dict):
-            raise ValueError('sealed direct conference analysis cannot be reparsed')
+            raise ValueError('无法将历史会议论文的分析正文解析为对象。')
         tag_metadata = publisher.build_flat_tag_compat_metadata(parsed, required=True)
         title = publisher.plain_title_for_publish(projected.get('title', ''))
         if not title:
-            raise ValueError('direct conference title is required')
+            raise ValueError('历史会议论文的标题不能为空。')
         reader_title = str((projected.get('apiReaderPlan') or {}).get('readerTitle') or title).strip()
         article = str(projected.get('apiReaderArticle') or '').strip()
         if not article:
-            raise ValueError('direct conference Reader article is required')
+            raise ValueError('历史会议论文的解读正文不能为空。')
         figures = projected.get('apiReaderFigures')
         article = publisher.render_ephemeral_api_reader_figures(
             article, [] if figures is None else figures
@@ -222,13 +217,11 @@ def render_packet(packet):
         frontmatter.extend(['## 🧭 深度解读', '', article, '', '---',
             f'[← 返回 {date} 语音/音乐/音频论文速递](/posts/{date}/)', ''])
         return {'markdown': publisher.sanitize_markdown_for_publish('\n'.join(frontmatter)), 'assets': []}
-    # Historical staging must not trust a cached ``parsed`` object for scores,
-    # summaries, dimensions, or prose.  Rebuild every publication field from
-    # the sealed canonical analysis, then apply only the deterministic current
-    # tag metadata below.
+    # 评分、摘要和正文须重新从保存的分析正文解析，不能直接使用缓存 parsed。
+    # 非直接生成分支随后按已核对的标签记录更新标签元数据。
     projected['parsed'] = publisher.parse_analysis(paper.get('analysis', ''))
     if not isinstance(projected['parsed'], dict):
-        raise ValueError('sealed canonical analysis cannot be reparsed for publication')
+        raise ValueError('无法将历史论文的分析正文解析为对象，不能据此生成页面。')
     if not direct:
         projected['parsed']['tags'] = labels
         projected['parsed']['primaryTaskTag'] = f'#{concepts[assignment["primaryTaskId"]]["preferredLabel"]["zh"]}'
@@ -260,20 +253,20 @@ def read_packet_bytes(argv):
     elif len(argv) == 3 and argv[1] == '--input-file':
         filename = Path(argv[2])
         if not filename.is_absolute():
-            raise ValueError('projection packet input file must be absolute')
+            raise ValueError('页面生成输入文件必须使用绝对路径。')
         flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
         descriptor = os.open(filename, flags)
         try:
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                raise ValueError('projection packet input must be a regular file')
+                raise ValueError('页面生成输入必须是普通文件。')
             with os.fdopen(descriptor, 'rb', closefd=False) as handle:
                 raw = handle.read(MAX_PACKET_BYTES + 1)
         finally:
             os.close(descriptor)
     else:
-        raise ValueError('use --input-file ABSOLUTE.json or stdin')
+        raise ValueError('请通过标准输入提供页面生成数据，或使用 --input-file 指定 JSON 文件的绝对路径。')
     if len(raw) > MAX_PACKET_BYTES:
-        raise ValueError('projection packet is too large')
+        raise ValueError('页面生成输入大小超过允许上限。')
     return raw
 
 
