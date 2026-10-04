@@ -999,7 +999,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             'taxonomySeal': taxonomy_chained['analysis'],
         }
         self.assertIsNotNone(
-            publish_to_blog._sealed_detailed_core_summary(
+            publish_to_blog._validated_detailed_core_summary(
                 taxonomy_chained, taxonomy_chained['parsed'],
             )
         )
@@ -1076,7 +1076,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         }
 
         self.assertEqual(
-            publish_to_blog._sealed_detailed_core_summary(
+            publish_to_blog._validated_detailed_core_summary(
                 paper, publish_to_blog.parse_analysis(paper['analysis'])
             ),
             paper['parsed']['summary'],
@@ -1086,7 +1086,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         drifted['analysisStageCheckpoints']['taxonomySeal'] += '\n'
         with self.assertRaisesRegex(
                 PublishDataValidationError, 'taxonomySeal checkpoint 重放'):
-            publish_to_blog._sealed_detailed_core_summary(
+            publish_to_blog._validated_detailed_core_summary(
                 drifted, publish_to_blog.parse_analysis(drifted['analysis'])
             )
 
@@ -1094,7 +1094,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         del incomplete['analysisManifest']['stages']['taxonomySeal']
         with self.assertRaisesRegex(
                 PublishDataValidationError, '上游 taxonomySeal 非法'):
-            publish_to_blog._sealed_detailed_core_summary(
+            publish_to_blog._validated_detailed_core_summary(
                 incomplete, publish_to_blog.parse_analysis(incomplete['analysis'])
             )
 
@@ -1462,7 +1462,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
             'outputCoreSummarySha256': summary_sha,
         })
         self.assertEqual(
-            publish_to_blog._sealed_detailed_core_summary(paper, parsed),
+            publish_to_blog._validated_detailed_core_summary(paper, parsed),
             summary,
         )
 

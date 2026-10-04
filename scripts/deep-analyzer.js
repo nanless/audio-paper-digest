@@ -8791,7 +8791,7 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
     const inputAnalysisSha256 = crypto.createHash('sha256').update(inputAnalysis).digest('hex');
     const compatibilityReused = (stage === 'structureRepair'
         && legacyStructureCompatibilityIsValid(paper, manifest, sourceText))
-        || sealedCoreSummaryRecoveryIsValid(paper, manifest, sourceText, stage);
+        || canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage);
     const invalidated = compatibilityReused
         ? false : invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint);
     return {
@@ -9446,7 +9446,7 @@ function adoptSealedCoreSummaryRecoveryCandidate(
     return true;
 }
 
-function sealedCoreSummaryRecoveryIsValid(paper, manifest, sourceText, stage) {
+function canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage) {
     if (!SEALED_CORE_SUMMARY_REUSED_STAGES.includes(stage)) return false;
     const audit = (manifest?.compatibilityMigrations || []).find(item => (
         item?.contract === SEALED_CORE_SUMMARY_RECOVERY_CONTRACT
@@ -9913,13 +9913,13 @@ function retainFinalTaxonomyCheckpoints(paper, analysisManifest) {
         paper.analysisStageCheckpoints = { taxonomySeal: tagCheckpointText };
         return;
     }
-    const structureRepair = paper.analysisStageCheckpoints?.structureRepair;
-    if (typeof structureRepair !== 'string') {
+    const structureCheckpointText = paper.analysisStageCheckpoints?.structureRepair;
+    if (typeof structureCheckpointText !== 'string') {
         throw contractRejectedError(
             'taxonomySeal=complete 成功态必须保留 structureRepair/taxonomySeal 两份逐字 checkpoint'
         );
     }
-    paper.analysisStageCheckpoints = { structureRepair, taxonomySeal: tagCheckpointText };
+    paper.analysisStageCheckpoints = { structureRepair: structureCheckpointText, taxonomySeal: tagCheckpointText };
 }
 
 function saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest = null) {
@@ -14117,7 +14117,7 @@ async function analyzePaperDeepInternal(paper) {
         rawTextForAnalysis
     );
     const sealedCoreSummaryRecoveryActive = adoptedSealedCoreSummary
-        || sealedCoreSummaryRecoveryIsValid(
+        || canReuseStageForCoreSummaryRecovery(
             paper, analysisManifest, rawTextForAnalysis, 'primaryAnalysis'
         );
     if (adoptedSealedCoreSummary) {
@@ -17069,7 +17069,7 @@ module.exports = {
     captureSealedCoreSummaryRecoveryCandidate,
     validateSealedCoreSummaryRecoveryCandidate,
     adoptSealedCoreSummaryRecoveryCandidate,
-    sealedCoreSummaryRecoveryIsValid,
+    canReuseStageForCoreSummaryRecovery,
     coreSummaryV3MigrationPromptSetIsAllowed,
     currentCoreSummaryV3MigrationPromptsAreExact,
     tryMigrateCoreSummaryV3LegacyCheckpoints,

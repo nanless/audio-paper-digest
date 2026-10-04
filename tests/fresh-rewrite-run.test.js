@@ -358,7 +358,7 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
             plan: locked.apiReaderPlan, stage: manifest.stages.apiReaderArticle });
         assert.equal(deep.adoptSealedCoreSummaryRecoveryCandidate(candidate, locked, manifest,
             manifest.sourceAcquisition, sourceText), true);
-        assert.equal(deep.sealedCoreSummaryRecoveryIsValid(
+        assert.equal(deep.canReuseStageForCoreSummaryRecovery(
             locked, manifest, sourceText, 'structureRepair'), true);
         const tagRules = require('../scripts/lib/taxonomy-runtime.js')
             .getDefaultTagRules();

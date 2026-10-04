@@ -1319,7 +1319,7 @@ function taxonomySurfaceSha256(analysis) {
         .digest('hex');
 }
 
-function taxonomySectionBounds(analysis, title) {
+function findAnalysisSectionBounds(analysis, title) {
     const match = new RegExp(
         `(^|\\n)((#{2,3})\\s*(?:\\d+[.\\s]+)?${escapeRegExp(title)}[：:\\s]*\\n)`,
         'm'
@@ -1335,9 +1335,9 @@ function taxonomySectionBounds(analysis, title) {
 
 function maskClassificationFields(analysis) {
     let source = String(analysis || '');
-    const machine = taxonomySectionBounds(source, '机器摘要');
-    if (!machine) return '';
-    let body = source.slice(machine.contentStart, machine.end);
+    const machineSummaryBounds = findAnalysisSectionBounds(source, '机器摘要');
+    if (!machineSummaryBounds) return '';
+    let body = source.slice(machineSummaryBounds.contentStart, machineSummaryBounds.end);
     for (const [key, value] of [
         ['primary_task_tag', '__PRIMARY_TASK__'],
         ['primary_method_tag', '__PRIMARY_METHOD__']
@@ -1346,10 +1346,10 @@ function maskClassificationFields(analysis) {
         if ((body.match(pattern) || []).length !== 1) return '';
         body = body.replace(pattern, `${key}: ${value}`);
     }
-    source = `${source.slice(0, machine.contentStart)}${body}${source.slice(machine.end)}`;
-    const tags = taxonomySectionBounds(source, '标签');
-    if (!tags) return '';
-    return `${source.slice(0, tags.contentStart)}__TAXONOMY_SECTION__${source.slice(tags.end)}`;
+    source = `${source.slice(0, machineSummaryBounds.contentStart)}${body}${source.slice(machineSummaryBounds.end)}`;
+    const tagSectionBounds = findAnalysisSectionBounds(source, '标签');
+    if (!tagSectionBounds) return '';
+    return `${source.slice(0, tagSectionBounds.contentStart)}__TAXONOMY_SECTION__${source.slice(tagSectionBounds.end)}`;
 }
 
 function validateTaxonomyStageBinding(paper, options = {}) {
@@ -1461,7 +1461,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     }
     if (stage.summarySha256 !== summarySha256) return '核心摘要正文未绑定阶段 SHA';
     const structure = manifest?.stages?.structureRepair;
-    const taxonomy = manifest?.stages?.taxonomySeal;
+    const tagStage = manifest?.stages?.taxonomySeal;
     const scoring = manifest?.stages?.scoringAudit;
     const requiredShaFields = [
         'inputAnalysisSha256', 'inputSummarySha256',
@@ -1470,11 +1470,11 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (requiredShaFields.some(field => !/^[a-f0-9]{64}$/.test(String(stage[field] || '')))) {
         return '核心摘要阶段缺少可重放输入/投影 SHA 链';
     }
-    const taxonomyOutputSha256 = String(taxonomy?.outputAnalysisSha256 || '');
-    const hasTaxonomyOutput = isRecoveryStageTerminal('taxonomySeal', taxonomy?.status)
-        && /^[a-f0-9]{64}$/.test(taxonomyOutputSha256);
-    const upstreamStage = hasTaxonomyOutput ? taxonomy : structure;
-    const upstreamLabel = hasTaxonomyOutput ? 'taxonomySeal' : 'structureRepair';
+    const tagOutputAnalysisSha256 = String(tagStage?.outputAnalysisSha256 || '');
+    const hasTagStageOutput = isRecoveryStageTerminal('taxonomySeal', tagStage?.status)
+        && /^[a-f0-9]{64}$/.test(tagOutputAnalysisSha256);
+    const upstreamStage = hasTagStageOutput ? tagStage : structure;
+    const upstreamLabel = hasTagStageOutput ? 'taxonomySeal' : 'structureRepair';
     if (upstreamStage?.outputAnalysisSha256 !== stage.inputAnalysisSha256) {
         return `核心摘要输入没有绑定 ${upstreamLabel} 输出`;
     }

@@ -3858,7 +3858,7 @@ def _detailed_core_summary_semantic_issue(summary):
     return '；'.join(issues) if issues else None
 
 
-def _sealed_detailed_core_summary(paper, parsed):
+def _validated_detailed_core_summary(paper, parsed):
     """Return the current detailed summary, or None for pre-v3 records.
 
     The reader plan's one-sentence thesis remains page metadata/description.
@@ -3879,8 +3879,8 @@ def _sealed_detailed_core_summary(paper, parsed):
             or stage.get('contractVersion') != CORE_SUMMARY_DETAILED_CONTRACT:
         raise PublishDataValidationError('现代 Reader 的详细核心摘要阶段未按 v3 封口')
     analysis = paper.get('analysis')
-    canonical = parse_analysis(analysis) if isinstance(analysis, str) else None
-    summary = canonical.get('summary') if isinstance(canonical, dict) else None
+    stored_analysis_fields = parse_analysis(analysis) if isinstance(analysis, str) else None
+    summary = stored_analysis_fields.get('summary') if isinstance(stored_analysis_fields, dict) else None
     if not isinstance(summary, str) or not summary.strip():
         raise PublishDataValidationError('现代 Reader 缺少详细核心摘要正文')
     summary = summary.strip()
@@ -3918,20 +3918,20 @@ def _sealed_detailed_core_summary(paper, parsed):
     if stage.get('bindingSha256') != _stable_json_sha256(binding_body):
         raise PublishDataValidationError('现代 Reader 的详细核心摘要 binding SHA 不可重放')
     structure = stages.get('structureRepair') if isinstance(stages, dict) else None
-    taxonomy = stages.get('taxonomySeal') if isinstance(stages, dict) else None
-    taxonomy_declared = contracts.get('taxonomy')
-    taxonomy_present = isinstance(stages, dict) and 'taxonomySeal' in stages
-    if taxonomy_declared is not None or taxonomy_present:
-        if taxonomy_declared != TAXONOMY_SELECTION_CONTRACT \
-                or not isinstance(taxonomy, dict) \
-                or taxonomy.get('status') not in {'complete', 'not_needed'} \
+    tag_stage = stages.get('taxonomySeal') if isinstance(stages, dict) else None
+    tag_contract = contracts.get('taxonomy')
+    has_tag_stage = isinstance(stages, dict) and 'taxonomySeal' in stages
+    if tag_contract is not None or has_tag_stage:
+        if tag_contract != TAXONOMY_SELECTION_CONTRACT \
+                or not isinstance(tag_stage, dict) \
+                or tag_stage.get('status') not in {'complete', 'not_needed'} \
                 or not re.fullmatch(
-                    r'[0-9a-f]{64}', str(taxonomy.get('outputAnalysisSha256') or '')
+                    r'[0-9a-f]{64}', str(tag_stage.get('outputAnalysisSha256') or '')
                 ):
             raise PublishDataValidationError(
                 '现代 Reader 的详细核心摘要上游 taxonomySeal 非法'
             )
-        upstream = taxonomy
+        upstream = tag_stage
         upstream_label = 'taxonomySeal'
         checkpoints = paper.get('analysisStageCheckpoints')
         upstream_checkpoint = checkpoints.get(upstream_label) \
@@ -4023,7 +4023,7 @@ def _build_api_reader_display_fields(paper, payload=None):
         if isinstance(value, str) and value.strip():
             safe_value = html.escape(re.sub(r'\s+', ' ', value.strip()))
             scoring_note_lines.append(f'- {label}：{safe_value}')
-    detailed_summary = _sealed_detailed_core_summary(paper, parsed)
+    detailed_summary = _validated_detailed_core_summary(paper, parsed)
     visible_summary = detailed_summary or payload['plan']['oneSentenceThesis'].strip()
     # Preserve the sealed source summary while repairing this exact duplicated
     # bilingual term in the deterministic publication projection.
@@ -9617,7 +9617,7 @@ def llm_api_publication_bindings(published_papers):
         if not math.isfinite(parsed_score) or not math.isfinite(final_score_number) \
                 or abs(parsed_score - final_score_number) > 1e-9:
             raise PublishDataValidationError('LLM API production parsed 与评分审计总分不一致')
-        core_summary = _sealed_detailed_core_summary(paper, parsed)
+        core_summary = _validated_detailed_core_summary(paper, parsed)
         if core_summary is None:
             raise PublishDataValidationError('LLM API production 缺少已封口的详细核心摘要')
         core_summary_stage = stages.get('coreSummaryRepair')

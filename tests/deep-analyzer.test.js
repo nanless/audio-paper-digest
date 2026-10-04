@@ -5488,7 +5488,7 @@ has_dataset: 否
                 auditSha256: deep.stableFingerprint({ forged: true }),
                 forged: true
             }];
-            assert.strictEqual(deep.sealedCoreSummaryRecoveryIsValid(
+            assert.strictEqual(deep.canReuseStageForCoreSummaryRecovery(
                 paper, forgedManifest, sourceText, 'structureRepair'
             ), false);
         } finally {
