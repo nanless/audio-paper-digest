@@ -3143,6 +3143,70 @@ primary_method_tag: #基准测试
             _acknowledgement_eligibility(eligible_detail)['eligibleReasons'],
             ['alias-removed', 'broader-id-changed', 'preferred-label-changed'])
 
+        confirmation_hash = '2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273'
+        reversed_detail = copy.deepcopy(eligible_detail)
+        reversed_detail['reasons'].reverse()
+        self.assertEqual(_destructive_reasons_hash(reversed_detail), confirmation_hash)
+        reworded_detail = copy.deepcopy(eligible_detail)
+        for reason in reworded_detail['reasons']:
+            reason['message'] = '重新说明这项变化。'
+        self.assertEqual(_destructive_reasons_hash(reworded_detail), confirmation_hash)
+        changed_structure = copy.deepcopy(eligible_detail)
+        destructive_reason = next(reason for reason in changed_structure['reasons']
+                                  if reason['level'] == 'destructive')
+        destructive_reason['conceptId'] = 'method.another-concept'
+        self.assertNotEqual(_destructive_reasons_hash(changed_structure), confirmation_hash)
+        repeated_reason = copy.deepcopy(eligible_detail)
+        repeated_reason['reasons'].append(copy.deepcopy(next(
+            reason for reason in eligible_detail['reasons']
+            if reason['level'] == 'destructive')))
+        self.assertNotEqual(_destructive_reasons_hash(repeated_reason), confirmation_hash)
+
+        # 这里检查理由的确认资格，不绕过词表校验去触发分类分支。
+        # definition 和 scope-note 的实际变化仍由分类器归为 additive。
+        allowed_codes = [
+            'preferred-label-changed', 'broader-id-changed', 'alias-removed',
+            'label-collision', 'definition-updated', 'scope-note-updated',
+        ]
+        forbidden_codes = [
+            'concept-removed', 'facet-removed', 'status-deactivated',
+            'version-changed', 'concept-facet-changed',
+            'active-label-not-globally-unique', 'unknown-change',
+        ]
+        for code in allowed_codes:
+            with self.subTest(allowed_reason=code):
+                detail = {'changeLevel': 'destructive', 'reasons': [
+                    {'level': 'destructive', 'code': code, 'message': '说明变化'},
+                    {'level': 'additive', 'code': 'concept-added', 'message': '新增概念'},
+                ]}
+                self.assertEqual(_acknowledgement_eligibility(detail), {
+                    'eligible': True, 'eligibleReasons': [code], 'ineligibleReasons': [],
+                })
+        for code in forbidden_codes:
+            for codes in ([code], ['alias-removed', code], [code, 'alias-removed']):
+                with self.subTest(forbidden_reasons=codes):
+                    detail = {'changeLevel': 'destructive', 'reasons': [
+                        {'level': 'destructive', 'code': item, 'message': '说明变化'}
+                        for item in codes
+                    ]}
+                    self.assertEqual(_acknowledgement_eligibility(detail), {
+                        'eligible': False,
+                        'eligibleReasons': ['alias-removed'] if len(codes) > 1 else [],
+                        'ineligibleReasons': [code],
+                    })
+        for level, expected in [('none', True), ('additive', True),
+                                ('destructive', False), ('unknown', False), (None, False)]:
+            with self.subTest(empty_reasons_level=level):
+                detail = {'reasons': []}
+                if level is not None:
+                    detail['changeLevel'] = level
+                self.assertEqual(_acknowledgement_eligibility(detail), {
+                    'eligible': expected, 'eligibleReasons': [], 'ineligibleReasons': [],
+                })
+        self.assertEqual(_acknowledgement_eligibility(None), {
+            'eligible': False, 'eligibleReasons': [], 'ineligibleReasons': [],
+        })
+
         # 不可确认集合：旧表多一个概念、新表已删除 → concept-removed。
         synthetic = copy.deepcopy(current)
         synthetic.pop('registrySha256', None)
@@ -3250,6 +3314,47 @@ primary_method_tag: #基准测试
     def test_python_registry_upgrade_gate_matches_node_fixture(self):
         # 跨端一致性：同一 (旧SHA, 注记, conceptIds) 输入，Python 输出必须与 Node
         # 侧生成的 fixture 期望逐项一致（JS 测试用同一份 fixture 再跑一遍 Node 侧）。
+        display_expectations = {
+            'additive-upgrade-allowed': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',
+            },
+            'missing-annotation-rejected': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',
+                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.flow-matching 删除了别名“flow matching”，使用该别名的旧标签需要重新核对；概念 method.self-supervised 删除了别名“ssl learning”，使用该别名的旧标签需要重新核对；概念 task.speech-spoofing 的上级概念（broaderId）由 null 改为 task.audio-forgery，祖先关系随之改变，也可能影响主任务是否符合最具体概念的要求；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认',
+            },
+            'no-snapshot-rejected': {
+            },
+            'destructive-lying-annotation-rejected': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
+                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认',
+            },
+            'annotation-level-mismatch-rejected': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',
+            },
+            'stale-concept-id-rejected': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',
+            },
+            'invalid-from-sha-rejected': {
+            },
+            'destructive-acknowledged-allowed': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
+            },
+            'destructive-ack-missing-rejected': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
+                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认',
+            },
+            'destructive-ack-wrong-hash-rejected': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
+                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructiveAcknowledgement.reasonsHash 与本次复算 destructive reasons 不一致',
+            },
+            'destructive-ack-concept-impact-rejected': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
+                'error': 'registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructiveAcknowledgement.conceptIdImpact 必须为 none',
+            },
+            'destructive-ack-stale-concept-id-rejected': {
+                'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。',
+            },
+        }
         fixture = cross_end_fixture()
         for case in fixture['cases']:
             with self.subTest(case=case['name']):
@@ -3267,7 +3372,8 @@ primary_method_tag: #基准测试
                     'counts': detail.get('counts'),
                     'error': normalize_seal_error(outcome['error']),
                 }
-                self.assertEqual(view, case['expect'])
+                expected = {**case['expect'], **display_expectations[case['name']]}
+                self.assertEqual(view, expected)
 
     def test_versioned_publish_preflight_enforces_bounded_experiment_tables(self):
         headers = ['方法', '数据集'] + [f'M{i}' for i in range(1, 9)]

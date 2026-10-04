@@ -36,7 +36,7 @@ function annotationFor(fromRegistrySha256, options = {}) {
     // 对落在可确认白名单内的 destructive 自动携带 ack。显式传
     // acknowledgeDestructive:false 的用例仍按原样被拒（用于验证无 ack 失败路径）。
     const eligible = changeLevel === 'destructive'
-        && registryChange.isAcknowledgementEligible(detail) === true;
+        && registryChange.canAcknowledgeRegistryChange(detail) === true;
     const acknowledge = options.acknowledgeDestructive === undefined
         ? eligible : options.acknowledgeDestructive === true;
     return registryChange.buildRegistryUpgradeAnnotation({

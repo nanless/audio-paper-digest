@@ -273,7 +273,7 @@ function annotationFor(fromRegistrySha256) {
     // 合法可放行的注记”，故自动携带白名单 ack（显式篡改/缺注记的拒绝场景仍由各用例
     // 自行构造，不经本助手）。
     const eligible = changeLevel === 'destructive'
-        && registryChange.isAcknowledgementEligible(detail) === true;
+        && registryChange.canAcknowledgeRegistryChange(detail) === true;
     return registryChange.buildRegistryUpgradeAnnotation({
         from, to: current, changeLevel, detail,
         note: `确定性重投影，升级自 ${fromRegistrySha256.slice(0, 8)}`,

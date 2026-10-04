@@ -57,7 +57,7 @@ test('identical registry bytes classify as none with empty reasons', () => {
     const detail = expectLevel(registry, registry, 'none');
     assert.equal(detail.reasons.length, 0);
     assert.equal(detail.oldRegistrySha256, detail.newRegistrySha256);
-    assert.match(detail.summary, /语义零变化/);
+    assert.equal(detail.summary, '本次检查未发现会影响分类的词表变化；文件字节或未检查的内容仍可能不同。');
 });
 
 test('adding concepts, aliases, definitions and deprecation-free fields is additive', () => {
@@ -164,7 +164,7 @@ test('cross-facet collisions over every registry label are destructive (label-co
     assert.equal(collisions[0].tag, '#语音识别');
     assert.deepEqual([...collisions[0].conceptIds].sort(), ['method.transformer', 'task.asr']);
     assert.deepEqual([...collisions[0].facets].sort(), ['method', 'task']);
-    assert.match(collisions[0].message, /跨分面重复/);
+    assert.equal(collisions[0].message, '标签“#语音识别”同时对应分面 task / method 中的概念 task.asr / method.transformer，无法唯一确定分类概念');
     assert.equal(detail.summary.includes('label-collision×1'), true);
 
     // 英文首选标签同样参与扫描。
@@ -227,7 +227,7 @@ test('real historical registry transitions classify as documented', () => {
         ['concept-added', 'label-collision']);
     assert.equal(introduced.reasons.filter(reason => reason.code === 'label-collision').length, 2);
     assert.equal(introduced.counts.conceptsAdded, 1);
-    assert.equal(introduced.summary, 'destructive: label-collision×2、concept-added×1');
+    assert.equal(introduced.summary, '词表变更属于 destructive；各项原因及数量为：label-collision×2、concept-added×1。');
 
     // seed → current(v1.1)：+58 概念 / +5 别名 / 2 处 definition / 8 处 scopeNote，
     // 但同时删了 flow-matching、self-supervised 两条别名，task.speech-spoofing 的
@@ -237,9 +237,9 @@ test('real historical registry transitions classify as documented', () => {
         'concept-added', 'alias-added', 'alias-removed', 'broader-id-changed',
         'preferred-label-changed', 'definition-updated', 'scope-note-updated'
     ]);
-    assert.equal(upgraded.summary, 'destructive: alias-removed×2、broader-id-changed×1'
+    assert.equal(upgraded.summary, '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1'
         + '、preferred-label-changed×2、alias-added×5、concept-added×58'
-        + '、definition-updated×2、scope-note-updated×8');
+        + '、definition-updated×2、scope-note-updated×8。');
     assert.equal(upgraded.counts.oldConcepts, 204);
     assert.equal(upgraded.counts.newConcepts, 262);
     assert.equal(upgraded.counts.conceptsAdded, 58);
@@ -257,9 +257,9 @@ test('real historical registry transitions classify as documented', () => {
     assert.equal(removals.filter(reason =>
         reason.conceptId === 'method.end-to-end-learning').length, 3);
     assert.equal(detail.counts.conceptsAdded, 57);
-    assert.equal(detail.summary, 'destructive: alias-removed×5、broader-id-changed×1'
+    assert.equal(detail.summary, '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1'
         + '、preferred-label-changed×2、alias-added×7、concept-added×57'
-        + '、definition-updated×2、scope-note-updated×8');
+        + '、definition-updated×2、scope-note-updated×8。');
 });
 
 test('snapshots resolve by byte SHA and refuse mismatching content', () => {
@@ -290,7 +290,7 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
     const to = taxonomyApi.loadTaxonomy(CURRENT);
     const { changeLevel, detail } = api.classifyRegistryChange(from, to);
     assert.equal(changeLevel, 'destructive');
-    assert.equal(api.isAcknowledgementEligible(detail), true);
+    assert.equal(api.canAcknowledgeRegistryChange(detail), true);
 
     const annotation = api.buildRegistryUpgradeAnnotation({
         from, to, changeLevel, detail, note: '确定性重投影：可确认 destructive 显式确认',
@@ -342,7 +342,7 @@ test('seal upgrade gate admits acknowledged destructive upgrades, fails closed o
     const seed = taxonomyApi.loadTaxonomy(OLD_SEED);
     const { changeLevel, detail } = api.classifyRegistryChange(seed, current);
     assert.equal(changeLevel, 'destructive');
-    assert.equal(api.isAcknowledgementEligible(detail), true);
+    assert.equal(api.canAcknowledgeRegistryChange(detail), true);
     const annotation = api.buildRegistryUpgradeAnnotation({
         from: seed,
         to: current,
@@ -476,23 +476,173 @@ function nodeViewOf(result) {
     };
 }
 
+
+// 原共享向量的输入、确认哈希与结构期望保持；这里只列新的完整显示文字。
+const CROSS_END_DISPLAY_EXPECTATIONS = {
+    "additive-upgrade-allowed": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。",
+        "error": null
+    },
+    "missing-annotation-rejected": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。",
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.flow-matching 删除了别名“flow matching”，使用该别名的旧标签需要重新核对；概念 method.self-supervised 删除了别名“ssl learning”，使用该别名的旧标签需要重新核对；概念 task.speech-spoofing 的上级概念（broaderId）由 null 改为 task.audio-forgery，祖先关系随之改变，也可能影响主任务是否符合最具体概念的要求；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
+    },
+    "no-snapshot-rejected": {
+        "summary": null,
+        "error": "无法取得 registry 升级前快照 0000000000000000000000000000000000000000000000000000000000000000，按 fail-closed 拒绝 taxonomySeal"
+    },
+    "destructive-lying-annotation-rejected": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
+    },
+    "annotation-level-mismatch-rejected": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。",
+        "error": "registryUpgradeFrom 校验失败: registryUpgradeFrom.changeLevel=none 与复算结果 destructive 不一致"
+    },
+    "stale-concept-id-rejected": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。",
+        "error": "taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: task.not-a-concept(缺失)"
+    },
+    "invalid-from-sha-rejected": {
+        "summary": null,
+        "error": "taxonomySeal 记录的 registrySha256 非法，拒绝放行"
+    },
+    "destructive-acknowledged-allowed": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
+        "error": null
+    },
+    "destructive-ack-missing-rejected": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructive 变更必须携带 destructiveAcknowledgement 显式确认"
+    },
+    "destructive-ack-wrong-hash-rejected": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructiveAcknowledgement.reasonsHash 与本次复算 destructive reasons 不一致"
+    },
+    "destructive-ack-concept-impact-rejected": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
+        "error": "registry 变更判定为 destructive，taxonomySeal 不得沿用概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对；概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对；显式确认无效: destructiveAcknowledgement.conceptIdImpact 必须为 none"
+    },
+    "destructive-ack-stale-concept-id-rejected": {
+        "summary": "词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1、preferred-label-changed×2、alias-added×7、concept-added×57、definition-updated×2、scope-note-updated×8。",
+        "error": "taxonomySeal 的 conceptIds 在当前 registry 中不再全部 active: task.not-a-concept(缺失)"
+    }
+};
+
+const ORDERED_HISTORY_REASON_EXPECTATIONS = [
+    {
+        "level": "destructive",
+        "code": "alias-removed",
+        "message": "概念 method.end-to-end-learning 删除了别名“e2e”，使用该别名的旧标签需要重新核对",
+        "conceptId": "method.end-to-end-learning"
+    },
+    {
+        "level": "destructive",
+        "code": "alias-removed",
+        "message": "概念 method.end-to-end-learning 删除了别名“end-to-end”，使用该别名的旧标签需要重新核对",
+        "conceptId": "method.end-to-end-learning"
+    },
+    {
+        "level": "destructive",
+        "code": "alias-removed",
+        "message": "概念 method.end-to-end-learning 删除了别名“端到端”，使用该别名的旧标签需要重新核对",
+        "conceptId": "method.end-to-end-learning"
+    },
+    {
+        "level": "destructive",
+        "code": "preferred-label-changed",
+        "message": "概念 task.music-understanding 的首选标签（preferredLabel.en）由“Music understanding”改为“Music analysis”",
+        "conceptId": "task.music-understanding"
+    },
+    {
+        "level": "destructive",
+        "code": "preferred-label-changed",
+        "message": "概念 task.music-understanding 的首选标签（preferredLabel.zh）由“音乐理解”改为“音乐分析”",
+        "conceptId": "task.music-understanding"
+    }
+];
+
+function historyReasonSubset(reasons) {
+    return reasons.filter(reason => (reason.code === 'alias-removed'
+        && reason.conceptId === 'method.end-to-end-learning')
+        || (reason.code === 'preferred-label-changed'
+            && reason.conceptId === 'task.music-understanding'));
+}
+
+// 完整 reason 对象按出现次数比对；本函数不用于证明各端原→新顺序。
+function fullReasonCounts(reasons) {
+    const counts = new Map();
+    for (const reason of reasons) {
+        const key = JSON.stringify(Object.fromEntries(
+            Object.keys(reason).sort().map(field => [field, reason[field]])
+        ));
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return [...counts].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+}
+
 test('Node and Python registry upgrade gates agree on the shared fixture', () => {
     const fixture = JSON.parse(fs.readFileSync(CROSS_END_FIXTURE, 'utf8'));
     assert.equal(fixture.contract, 'paper-taxonomy-registry-upgrade-cross-end-fixture-v1');
     const current = taxonomyApi.loadTaxonomy(CURRENT);
-
+    assert.deepEqual(Object.keys(CROSS_END_DISPLAY_EXPECTATIONS).sort(),
+        fixture.cases.map(item => item.name).sort());
+    const classificationInputs = [
+        { name: 'alias-removal-to-current',
+            from: JSON.parse(fs.readFileSync(OLD_ALIAS_REMOVAL, 'utf8')), to: raw() },
+        { name: 'seed-to-current',
+            from: JSON.parse(fs.readFileSync(OLD_SEED, 'utf8')), to: raw() },
+        { name: 'current-to-current', from: raw(), to: raw() }
+    ];
+    const pythonProgram = [
+        'import json, runpy, sys',
+        "runpy.run_path(sys.argv[1], run_name='__main__')",
+        'from publish_common import _classify_registry_change, _destructive_reasons_hash, _acknowledgement_eligibility',
+        'rows = []',
+        'for item in json.load(sys.stdin):',
+        "    result = _classify_registry_change(item['from'], item['to'])",
+        "    detail = result['detail']",
+        "    rows.append({'name': item['name'], 'result': result, 'destructiveReasonsHash': _destructive_reasons_hash(detail), 'eligibility': _acknowledgement_eligibility(detail)})",
+        "print('CROSS_END_REASONS:' + json.dumps(rows, ensure_ascii=False, sort_keys=True))"
+    ].join('\n');
     const run = spawnSync('bash', [
-        path.join(PROJECT_ROOT, 'scripts/python-runtime.sh'),
+        path.join(PROJECT_ROOT, 'scripts/python-runtime.sh'), '-c', pythonProgram,
         path.join(PROJECT_ROOT, 'tests/python/registry_upgrade_cross_end.py')
-    ], { cwd: PROJECT_ROOT, encoding: 'utf8', timeout: 180000 });
+    ], { cwd: PROJECT_ROOT, encoding: 'utf8', timeout: 180000,
+        input: JSON.stringify(classificationInputs) });
     assert.equal(run.status, 0, `Python harness 失败:\n${run.stderr}`);
-    const line = String(run.stdout).split(/\r?\n/)
-        .find(text => text.startsWith('CROSS_END_RESULT:'));
+    const lines = String(run.stdout).split(/\r?\n/);
+    const resultLines = lines.filter(text => text.startsWith('CROSS_END_RESULT:'));
+    const reasonLines = lines.filter(text => text.startsWith('CROSS_END_REASONS:'));
+    assert.equal(resultLines.length, 1, run.stdout);
+    assert.equal(reasonLines.length, 1, run.stdout);
+    const line = resultLines[0];
     assert.ok(line, `Python harness 缺少结果行:\n${run.stdout}`);
     const pythonResults = JSON.parse(line.slice('CROSS_END_RESULT:'.length));
     assert.equal(pythonResults.length, fixture.cases.length);
+    const pythonClassifications = JSON.parse(reasonLines[0].slice('CROSS_END_REASONS:'.length));
+    assert.equal(pythonClassifications.length, classificationInputs.length);
+    for (const item of classificationInputs) {
+        const nodeResult = api.classifyRegistryChange(item.from, item.to);
+        const pythonResult = pythonClassifications.find(entry => entry.name === item.name);
+        assert.ok(pythonResult, item.name);
+        assert.equal(nodeResult.changeLevel, pythonResult.result.changeLevel, item.name);
+        const { reasons: nodeReasons, ...nodeDetail } = nodeResult.detail;
+        const { reasons: pythonReasons, ...pythonDetail } = pythonResult.result.detail;
+        assert.deepEqual(nodeDetail, pythonDetail, item.name);
+        assert.deepEqual(fullReasonCounts(nodeReasons), fullReasonCounts(pythonReasons), item.name);
+        assert.equal(api.destructiveReasonsHash(nodeResult.detail),
+            pythonResult.destructiveReasonsHash, item.name);
+        assert.deepEqual(api.acknowledgementEligibility(nodeResult.detail),
+            pythonResult.eligibility, item.name);
+        if (item.name === 'alias-removal-to-current') {
+            assert.deepEqual(historyReasonSubset(nodeReasons), ORDERED_HISTORY_REASON_EXPECTATIONS);
+            assert.deepEqual(historyReasonSubset(pythonReasons), ORDERED_HISTORY_REASON_EXPECTATIONS);
+        }
+    }
 
     for (const item of fixture.cases) {
+        const expected = { ...item.expect, ...CROSS_END_DISPLAY_EXPECTATIONS[item.name] };
         const nodeResult = api.validateSealRegistryUpgrade({
             fromRegistrySha256: item.fromRegistrySha256,
             currentRegistry: current,
@@ -503,7 +653,7 @@ test('Node and Python registry upgrade gates agree on the shared fixture', () =>
         const pythonResult = pythonResults.find(entry => entry.name === item.name);
         assert.ok(pythonResult, `Python 侧缺少用例 ${item.name}`);
 
-        assert.deepEqual(nodeViewOf(nodeResult), item.expect, `Node 输出偏离 fixture: ${item.name}`);
+        assert.deepEqual(nodeViewOf(nodeResult), expected, `Node 输出偏离 fixture: ${item.name}`);
         assert.deepEqual({
             ok: pythonResult.ok,
             changeLevel: pythonResult.changeLevel,
@@ -511,7 +661,7 @@ test('Node and Python registry upgrade gates agree on the shared fixture', () =>
             reasonCodes: pythonResult.reasonCodes,
             counts: pythonResult.counts,
             error: normalizeError(pythonResult.error)
-        }, item.expect, `Python 输出偏离 fixture: ${item.name}`);
+        }, expected, `Python 输出偏离 fixture: ${item.name}`);
     }
 });
 
@@ -537,13 +687,13 @@ test('acknowledgement eligibility is an explicit whitelist of parse-semantic cha
         assert.equal(eligibility.eligible, true, code);
         assert.deepEqual(eligibility.eligibleReasons, [code]);
         assert.deepEqual(eligibility.ineligibleReasons, []);
-        assert.equal(api.isAcknowledgementEligible(detailWith([code])), true, code);
+        assert.equal(api.canAcknowledgeRegistryChange(detailWith([code])), true, code);
     }
     for (const code of UNACKNOWLEDGEABLE_CODES) {
         const eligibility = api.acknowledgementEligibility(detailWith([code]));
         assert.equal(eligibility.eligible, false, code);
         assert.deepEqual(eligibility.ineligibleReasons, [code]);
-        assert.equal(api.isAcknowledgementEligible(detailWith([code])), false, code);
+        assert.equal(api.canAcknowledgeRegistryChange(detailWith([code])), false, code);
     }
     // 白名单与不可确认集合必须互斥。
     for (const code of api.ACKNOWLEDGEMENT_FORBIDDEN_CODES) {
@@ -551,26 +701,26 @@ test('acknowledgement eligibility is an explicit whitelist of parse-semantic cha
         assert.ok(UNACKNOWLEDGEABLE_CODES.includes(code), code);
     }
     // 混入任一白名单外的 destructive 理由即整体不可确认。
-    assert.equal(api.isAcknowledgementEligible(detailWith(['alias-removed', 'concept-removed'])), false);
-    assert.equal(api.isAcknowledgementEligible(detailWith(['concept-removed', 'alias-removed'])), false);
+    assert.equal(api.canAcknowledgeRegistryChange(detailWith(['alias-removed', 'concept-removed'])), false);
+    assert.equal(api.canAcknowledgeRegistryChange(detailWith(['concept-removed', 'alias-removed'])), false);
     // additive/none 无需确认，天然放行；分级缺失或 destructive 却数不出理由 → fail-closed。
-    assert.equal(api.isAcknowledgementEligible({ changeLevel: 'additive',
+    assert.equal(api.canAcknowledgeRegistryChange({ changeLevel: 'additive',
         reasons: [{ level: 'additive', code: 'concept-added', message: 'x' }] }), true);
-    assert.equal(api.isAcknowledgementEligible({ changeLevel: 'none', reasons: [] }), true);
-    assert.equal(api.isAcknowledgementEligible({ changeLevel: 'destructive', reasons: [] }), false);
-    assert.equal(api.isAcknowledgementEligible(null), false);
-    assert.equal(api.isAcknowledgementEligible({ reasons: [] }), false);
+    assert.equal(api.canAcknowledgeRegistryChange({ changeLevel: 'none', reasons: [] }), true);
+    assert.equal(api.canAcknowledgeRegistryChange({ changeLevel: 'destructive', reasons: [] }), false);
+    assert.equal(api.canAcknowledgeRegistryChange(null), false);
+    assert.equal(api.canAcknowledgeRegistryChange({ reasons: [] }), false);
     // 真实改动的分级不被确认逻辑改写。
     const relabel = clone(raw());
     byId(relabel, 'task.asr').preferredLabel.zh = '自动语音转写';
     const real = api.classifyRegistryChange(raw(), relabel);
     assert.equal(real.changeLevel, 'destructive');
-    assert.equal(api.isAcknowledgementEligible(real.detail), true);
+    assert.equal(api.canAcknowledgeRegistryChange(real.detail), true);
     const removal = clone(raw());
     removal.concepts = removal.concepts.filter(concept => concept.id !== 'task.wake-word');
     const gone = api.classifyRegistryChange(raw(), removal);
     assert.equal(gone.changeLevel, 'destructive');
-    assert.equal(api.isAcknowledgementEligible(gone.detail), false);
+    assert.equal(api.canAcknowledgeRegistryChange(gone.detail), false);
 });
 
 test('destructive reasonsHash is a stable, message-independent fingerprint of the recomputed detail', () => {
@@ -624,7 +774,7 @@ test('the seal gate admits an acknowledged destructive upgrade only when all fou
     const conceptIds = ['task.asr', 'method.transformer'];
     const { changeLevel, detail } = api.classifyRegistryChange(from, current);
     assert.equal(changeLevel, 'destructive');
-    assert.equal(api.isAcknowledgementEligible(detail), true);
+    assert.equal(api.canAcknowledgeRegistryChange(detail), true);
     const annotation = api.buildRegistryUpgradeAnnotation({
         from, to: current, changeLevel, detail,
         note: '确定性重投影：别名语义人工确认',
@@ -704,7 +854,7 @@ test('the seal gate admits an acknowledged destructive upgrade only when all fou
     const syntheticRegistry = { ...synthetic, registrySha256: syntheticSha };
     const snapshotOptions = { registryHistory: { [syntheticSha]: syntheticRegistry } };
     const syntheticDetail = api.classifyRegistryChange(syntheticRegistry, current).detail;
-    assert.equal(api.isAcknowledgementEligible(syntheticDetail), false);
+    assert.equal(api.canAcknowledgeRegistryChange(syntheticDetail), false);
     const ineligibleAnnotation = api.buildRegistryUpgradeAnnotation({
         from: syntheticRegistry, to: current, changeLevel: 'additive',
         detail: api.classifyRegistryChange(syntheticRegistry, current).detail, note: 'x'

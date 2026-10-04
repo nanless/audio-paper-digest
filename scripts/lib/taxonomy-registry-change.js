@@ -26,11 +26,11 @@ const REGISTRY_UPGRADE_REASON_CAP = 32;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 
 // ——— destructive 显式确认通道（AGENTS.md“显式授权的白名单例外”） ———
-// 哲学：门禁默认对 destructive 一刀切拒绝；唯一的例外必须是**白名单 + 绑定 +
-// 显式提示**——只放行“概念不增不减、旧 conceptIds 全部仍 active、纯粹改标签
-// 解析语义”的改动，并要求注记里携带与本次复算逐字绑定的确认（reasonsHash）。
-// 确认字段只作用于 registryUpgradeFrom 注记，不进 bindingSha256（评审已记录），
-// 也不改变 classifyRegistryChange 的分级结果：destructive 永远是 destructive。
+// destructive 变更默认拒绝；只有其中的破坏性理由全部属于可确认白名单，
+// 并携带与本次复算绑定的显式确认时，才可能沿用旧分类记录。
+// 同一次变更可以新增概念，但不能混入删除概念等白名单外的破坏性理由；
+// 旧 conceptIds 对应的概念仍须全部有效，旧快照与升级注记也须通过核验。
+// 确认只写入 registryUpgradeFrom，不参与 bindingSha256，也不改变变更分级。
 const ACKNOWLEDGEMENT_ELIGIBLE_CODES = Object.freeze([
     // 改首选标签 / 改祖先边 / 删别名：正文里的中文首选标签仍解析到同一 conceptId，
     // 只是“旧标签文字”在新表里的落点变了，重投影后 conceptIds 逐字不变。
@@ -47,7 +47,7 @@ const ACKNOWLEDGEMENT_ELIGIBLE_CODES = Object.freeze([
 ]);
 // 白名单之外一律不可确认：删概念、删分面、降级、版本升级、迁分面、active
 // 首选标签全局撞车 —— 这些改动会让已封口 conceptIds 或运行时本身失效，
-// 只能整篇重新分析或人工/LLM 重新选标签。isAcknowledgementEligible 用白名单
+// 只能整篇重新分析或人工/LLM 重新选标签。canAcknowledgeRegistryChange 用白名单
 // 判定，本常量只作为文档与测试的显式对照表。
 const ACKNOWLEDGEMENT_FORBIDDEN_CODES = Object.freeze([
     'concept-removed',
@@ -148,7 +148,7 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
 
     if (from.version !== to.version) {
         note('destructive', 'version-changed',
-            `registry 版本从 ${from.version} 变为 ${to.version}，必须整篇重新分析`);
+            `词表版本从 ${from.version} 改为 ${to.version}，必须重新分析整篇论文`);
     }
 
     const oldFacets = new Map(from.facets.map(facet => [facet.id, facet]));
@@ -156,17 +156,17 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
     for (const id of [...oldFacets.keys()].sort()) {
         if (!newFacets.has(id)) {
             counts.facetsRemoved += 1;
-            note('destructive', 'facet-removed', `删除分面 ${id}，该分面下全部概念随语义消失`, { facet: id });
+            note('destructive', 'facet-removed', `删除了分面 ${id}，旧记录中的这一分类维度在新词表中已没有定义`, { facet: id });
         }
     }
     for (const id of [...newFacets.keys()].sort()) {
         if (!oldFacets.has(id)) {
             counts.facetsAdded += 1;
-            note('additive', 'facet-added', `新增分面 ${id}`, { facet: id });
+            note('additive', 'facet-added', `新增了分面 ${id}`, { facet: id });
         } else if (oldFacets.get(id).label !== newFacets.get(id).label) {
             // 分面 id 决定解析与投影，label 只用于展示。
             note('additive', 'facet-label-updated',
-                `分面 ${id} 展示名由“${oldFacets.get(id).label}”改为“${newFacets.get(id).label}”，不影响标签解析`,
+                `分面 ${id} 的显示名称由“${oldFacets.get(id).label}”改为“${newFacets.get(id).label}”，标签解析方式不变`,
                 { facet: id });
         }
     }
@@ -178,7 +178,7 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
         if (newConcepts.has(id)) continue;
         counts.conceptsRemoved += 1;
         note('destructive', 'concept-removed',
-            `删除概念 ${id}，已封口论文引用它时无法再重放`, { conceptId: id });
+            `删除了概念 ${id}，引用它的旧分类绑定无法通过当前词表校验`, { conceptId: id });
     }
 
     for (const concept of to.concepts) {
@@ -187,8 +187,8 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
         note('additive',
             concept.status === 'active' ? 'concept-added' : 'deprecated-concept-added',
             concept.status === 'active'
-                ? `新增 active 概念 ${concept.id}（只增加可选项）`
-                : `新增 deprecated 概念 ${concept.id}（不可被选择，不影响旧封口）`,
+                ? `新增了可选择的概念 ${concept.id}`
+                : `新增了已停用的概念 ${concept.id}，不能用于新的分类选择`,
             { conceptId: concept.id });
     }
 
@@ -198,25 +198,25 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
         const changes = [];
         if (previous.facet !== concept.facet) {
             changes.push(['destructive', 'concept-facet-changed',
-                `概念 ${concept.id} 从分面 ${previous.facet} 迁到 ${concept.facet}`]);
+                `概念 ${concept.id} 所属分面由 ${previous.facet} 改为 ${concept.facet}`]);
         }
         for (const language of ['zh', 'en']) {
             if (previous.preferredLabel[language] !== concept.preferredLabel[language]) {
                 changes.push(['destructive', 'preferred-label-changed',
-                    `概念 ${concept.id} 的 preferredLabel.${language} 由“${previous.preferredLabel[language]}”改为“${concept.preferredLabel[language]}”`]);
+                    `概念 ${concept.id} 的首选标签（preferredLabel.${language}）由“${previous.preferredLabel[language]}”改为“${concept.preferredLabel[language]}”`]);
             }
         }
         if (previous.broaderId !== concept.broaderId) {
             changes.push(['destructive', 'broader-id-changed',
-                `概念 ${concept.id} 的 broaderId 由 ${previous.broaderId ?? 'null'} 改为 ${concept.broaderId ?? 'null'}，祖先链与主任务“最具体”判定随之改变`]);
+                `概念 ${concept.id} 的上级概念（broaderId）由 ${previous.broaderId ?? 'null'} 改为 ${concept.broaderId ?? 'null'}，祖先关系随之改变，也可能影响主任务是否符合最具体概念的要求`]);
         }
         if (previous.status !== concept.status) {
             if (concept.status !== 'active') {
                 changes.push(['destructive', 'status-deactivated',
-                    `概念 ${concept.id} 的 status 由 active 改为 ${concept.status}，旧封口的 conceptId 不再 active`]);
+                    `概念 ${concept.id} 的状态由可选择改为停用（${concept.status}），引用它的旧分类绑定不能继续沿用`]);
             } else {
                 changes.push(['additive', 'status-reactivated',
-                    `概念 ${concept.id} 的 status 由 deprecated 恢复为 active（重新开放可选项）`]);
+                    `概念 ${concept.id} 已恢复为可选择状态，可用于新的分类`]);
             }
         }
         const oldAliases = new Set(previous.aliases.map(value => taxonomyApi.normalizeLabel(value)).filter(Boolean));
@@ -225,25 +225,25 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
             if (newAliases.has(alias)) continue;
             counts.aliasesRemoved += 1;
             changes.push(['destructive', 'alias-removed',
-                `概念 ${concept.id} 删除别名“${alias}”，该标签的解析语义改变`]);
+                `概念 ${concept.id} 删除了别名“${alias}”，使用该别名的旧标签需要重新核对`]);
         }
         for (const alias of [...newAliases].sort()) {
             if (oldAliases.has(alias)) continue;
             counts.aliasesAdded += 1;
             changes.push(['additive', 'alias-added',
-                `概念 ${concept.id} 新增别名“${alias}”`]);
+                `概念 ${concept.id} 新增了别名“${alias}”`]);
         }
         if (previous.definition !== concept.definition) {
             changes.push(['additive', 'definition-updated',
-                `概念 ${concept.id} 的 definition 文本更新（不参与标签解析）`]);
+                `概念 ${concept.id} 的定义（definition）已更新，标签解析规则不变`]);
         }
         if (previous.scopeNote !== concept.scopeNote) {
             changes.push(['additive', 'scope-note-updated',
-                `概念 ${concept.id} 的 scopeNote 文本更新（不参与标签解析）`]);
+                `概念 ${concept.id} 的适用范围说明（scopeNote）已更新，标签解析规则不变`]);
         }
         if (previous.replacedBy !== concept.replacedBy) {
             changes.push(['additive', 'replacement-updated',
-                `deprecated 概念 ${concept.id} 的 replacedBy 由 ${previous.replacedBy ?? 'null'} 改为 ${concept.replacedBy ?? 'null'}（不参与标签解析）`]);
+                `概念 ${concept.id} 的替代概念（replacedBy）由 ${previous.replacedBy ?? 'null'} 改为 ${concept.replacedBy ?? 'null'}，标签解析规则不变`]);
         }
         if (changes.length) counts.conceptsChanged += 1;
         for (const [level, code, message] of changes) note(level, code, message, { conceptId: concept.id });
@@ -252,13 +252,13 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
     const globalTags = activeGlobalTags(to);
     if (!globalTags.ok) {
         note('destructive', 'active-label-not-globally-unique',
-            `active 中文首选标签 ${globalTags.tag} 在 ${globalTags.ids.join(' / ')} 间重复，运行时会拒绝加载`,
+            `可选择概念的中文首选标签 ${globalTags.tag} 在概念 ${globalTags.ids.join(' / ')} 中重复，分类程序会拒绝这份词表`,
             { tag: globalTags.tag, conceptIds: globalTags.ids });
     }
 
     for (const collision of crossFacetLabelCollisions(to)) {
         note('destructive', 'label-collision',
-            `标签“#${collision.label}”同时出现在分面 ${collision.facets.join(' / ')}（${collision.conceptIds.join(' / ')}），跨分面重复会让解析候选不再唯一`,
+            `标签“#${collision.label}”同时对应分面 ${collision.facets.join(' / ')} 中的概念 ${collision.conceptIds.join(' / ')}，无法唯一确定分类概念`,
             { tag: `#${collision.label}`, facets: collision.facets, conceptIds: collision.conceptIds });
     }
 
@@ -278,8 +278,8 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
             .map(([code, count]) => `${code}×${count}`);
     };
     const summary = changeLevel === 'none'
-        ? 'registry 语义零变化（仅字节或未记录差异）'
-        : `${changeLevel}: ${[...tally('destructive'), ...tally('additive')].join('、')}`;
+        ? '本次检查未发现会影响分类的词表变化；文件字节或未检查的内容仍可能不同。'
+        : `词表变更属于 ${changeLevel}；各项原因及数量为：${[...tally('destructive'), ...tally('additive')].join('、')}。`;
 
     return {
         changeLevel,
@@ -337,7 +337,7 @@ function acknowledgementEligibility(changeDetail) {
     return { eligible, eligibleReasons, ineligibleReasons };
 }
 
-function isAcknowledgementEligible(changeDetail) {
+function canAcknowledgeRegistryChange(changeDetail) {
     return acknowledgementEligibility(changeDetail).eligible;
 }
 
@@ -611,7 +611,7 @@ module.exports = {
     destructiveReasons,
     destructiveReasonsHash,
     acknowledgementEligibility,
-    isAcknowledgementEligible,
+    canAcknowledgeRegistryChange,
     buildDestructiveAcknowledgement,
     validateDestructiveAcknowledgement,
     buildRegistryUpgradeAnnotation,

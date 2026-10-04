@@ -323,10 +323,11 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 只有新增内容的变更（`additive`）可直接沿用已核验的 `taxonomySeal`。破坏既有记录的变更（`destructive`）默认拒绝，并报告
 `blocked` 与 `needsHuman`；只有明确确认且属于允许范围的改动才能重新生成分类记录。
 
-`isAcknowledgementEligible` 判断可确认范围；命令 `--classify` 输出 `acknowledgementEligible`、
+`canAcknowledgeRegistryChange` 判断可确认范围；命令 `--classify` 输出 `acknowledgementEligible`、
 `eligibleReasons` 和 `ineligibleReasons`，应先看结果再决定。允许确认的原因包括
 `preferred-label-changed`、`broader-id-changed`、`alias-removed`、`label-collision` 及 definition/scope 类。
-前提是概念没有增删，原 `conceptIds` 对应的概念仍全部有效；旧快照须可读取，其他注记也须自洽。
+新增概念本身不妨碍确认，但删除概念等白名单外的破坏性变更仍会被拒绝。
+原 `conceptIds` 对应的概念仍须全部有效；旧快照须可读取，升级注记也须与复算结果一致。
 
 以下原因不能确认，即使给出确认参数也仍然拒绝：`concept-removed`、`facet-removed`、
 `status-deactivated`、`version-changed`、`concept-facet-changed`、`active-label-not-globally-unique`。

@@ -759,7 +759,7 @@ def _classify_registry_change(old_registry, new_registry):
 
     if frm['version'] != to['version']:
         note('destructive', 'version-changed',
-             f"registry 版本从 {frm['version']} 变为 {to['version']}，必须整篇重新分析")
+             f"词表版本从 {frm['version']} 改为 {to['version']}，必须重新分析整篇论文")
 
     old_facets = {facet['id']: facet for facet in frm['facets']}
     new_facets = {facet['id']: facet for facet in to['facets']}
@@ -767,15 +767,15 @@ def _classify_registry_change(old_registry, new_registry):
         if facet_id not in new_facets:
             counts['facetsRemoved'] += 1
             note('destructive', 'facet-removed',
-                 f'删除分面 {facet_id}，该分面下全部概念随语义消失', facet=facet_id)
+                 f'删除了分面 {facet_id}，旧记录中的这一分类维度在新词表中已没有定义', facet=facet_id)
     for facet_id in sorted(new_facets):
         if facet_id not in old_facets:
             counts['facetsAdded'] += 1
-            note('additive', 'facet-added', f'新增分面 {facet_id}', facet=facet_id)
+            note('additive', 'facet-added', f'新增了分面 {facet_id}', facet=facet_id)
         elif old_facets[facet_id]['label'] != new_facets[facet_id]['label']:
             note('additive', 'facet-label-updated',
-                 f"分面 {facet_id} 展示名由“{old_facets[facet_id]['label']}”"
-                 f"改为“{new_facets[facet_id]['label']}”，不影响标签解析",
+                 f"分面 {facet_id} 的显示名称由“{old_facets[facet_id]['label']}”"
+                 f"改为“{new_facets[facet_id]['label']}”，标签解析方式不变",
                  facet=facet_id)
 
     old_concepts = {concept['id']: concept for concept in frm['concepts']}
@@ -786,7 +786,7 @@ def _classify_registry_change(old_registry, new_registry):
             continue
         counts['conceptsRemoved'] += 1
         note('destructive', 'concept-removed',
-             f'删除概念 {concept_id}，已封口论文引用它时无法再重放', conceptId=concept_id)
+             f'删除了概念 {concept_id}，引用它的旧分类绑定无法通过当前词表校验', conceptId=concept_id)
 
     for concept in to['concepts']:
         if concept['id'] in old_concepts:
@@ -794,10 +794,10 @@ def _classify_registry_change(old_registry, new_registry):
         counts['conceptsAdded'] += 1
         if concept['status'] == 'active':
             note('additive', 'concept-added',
-                 f"新增 active 概念 {concept['id']}（只增加可选项）", conceptId=concept['id'])
+                 f"新增了可选择的概念 {concept['id']}", conceptId=concept['id'])
         else:
             note('additive', 'deprecated-concept-added',
-                 f"新增 deprecated 概念 {concept['id']}（不可被选择，不影响旧封口）",
+                 f"新增了已停用的概念 {concept['id']}，不能用于新的分类选择",
                  conceptId=concept['id'])
 
     for concept in to['concepts']:
@@ -807,29 +807,29 @@ def _classify_registry_change(old_registry, new_registry):
         changes = []
         if previous['facet'] != concept['facet']:
             changes.append(('destructive', 'concept-facet-changed',
-                            f"概念 {concept['id']} 从分面 {previous['facet']} 迁到 {concept['facet']}"))
+                            f"概念 {concept['id']} 所属分面由 {previous['facet']} 改为 {concept['facet']}"))
         for language in ('zh', 'en'):
             if previous['preferredLabel'][language] != concept['preferredLabel'][language]:
                 changes.append(('destructive', 'preferred-label-changed',
-                                f"概念 {concept['id']} 的 preferredLabel.{language} 由"
+                                f"概念 {concept['id']} 的首选标签（preferredLabel.{language}）由"
                                 f"“{previous['preferredLabel'][language]}”改为"
                                 f"“{concept['preferredLabel'][language]}”"))
         if previous['broaderId'] != concept['broaderId']:
             changes.append(('destructive', 'broader-id-changed',
-                            f"概念 {concept['id']} 的 broaderId 由 "
+                            f"概念 {concept['id']} 的上级概念（broaderId）由 "
                             f"{previous['broaderId'] if previous['broaderId'] is not None else 'null'}"
                             f" 改为 "
                             f"{concept['broaderId'] if concept['broaderId'] is not None else 'null'}，"
-                            '祖先链与主任务“最具体”判定随之改变'))
+                            '祖先关系随之改变，也可能影响主任务是否符合最具体概念的要求'))
         if previous['status'] != concept['status']:
             if concept['status'] != 'active':
                 changes.append(('destructive', 'status-deactivated',
-                                f"概念 {concept['id']} 的 status 由 active 改为 {concept['status']}，"
-                                '旧封口的 conceptId 不再 active'))
+                                f"概念 {concept['id']} 的状态由可选择改为停用（{concept['status']}），"
+                                '引用它的旧分类绑定不能继续沿用'))
             else:
                 changes.append(('additive', 'status-reactivated',
-                                f"概念 {concept['id']} 的 status 由 deprecated 恢复为 active"
-                                '（重新开放可选项）'))
+                                f"概念 {concept['id']} 已恢复为可选择状态"
+                                '，可用于新的分类'))
         old_aliases = {normalize_label(value) for value in previous['aliases']} - {''}
         new_aliases = {normalize_label(value) for value in concept['aliases']} - {''}
         for alias in sorted(old_aliases):
@@ -837,26 +837,26 @@ def _classify_registry_change(old_registry, new_registry):
                 continue
             counts['aliasesRemoved'] += 1
             changes.append(('destructive', 'alias-removed',
-                            f'概念 {concept["id"]} 删除别名“{alias}”，该标签的解析语义改变'))
+                            f'概念 {concept["id"]} 删除了别名“{alias}”，使用该别名的旧标签需要重新核对'))
         for alias in sorted(new_aliases):
             if alias in old_aliases:
                 continue
             counts['aliasesAdded'] += 1
             changes.append(('additive', 'alias-added',
-                            f'概念 {concept["id"]} 新增别名“{alias}”'))
+                            f'概念 {concept["id"]} 新增了别名“{alias}”'))
         if previous['definition'] != concept['definition']:
             changes.append(('additive', 'definition-updated',
-                            f'概念 {concept["id"]} 的 definition 文本更新（不参与标签解析）'))
+                            f'概念 {concept["id"]} 的定义（definition）已更新，标签解析规则不变'))
         if previous['scopeNote'] != concept['scopeNote']:
             changes.append(('additive', 'scope-note-updated',
-                            f'概念 {concept["id"]} 的 scopeNote 文本更新（不参与标签解析）'))
+                            f'概念 {concept["id"]} 的适用范围说明（scopeNote）已更新，标签解析规则不变'))
         if previous['replacedBy'] != concept['replacedBy']:
             changes.append(('additive', 'replacement-updated',
-                            f"deprecated 概念 {concept['id']} 的 replacedBy 由 "
+                            f"概念 {concept['id']} 的替代概念（replacedBy）由 "
                             f"{previous['replacedBy'] if previous['replacedBy'] is not None else 'null'}"
                             f" 改为 "
                             f"{concept['replacedBy'] if concept['replacedBy'] is not None else 'null'}"
-                            '（不参与标签解析）'))
+                            '，标签解析规则不变'))
         if changes:
             counts['conceptsChanged'] += 1
         for level, code, message in changes:
@@ -865,14 +865,14 @@ def _classify_registry_change(old_registry, new_registry):
     global_tag = _active_global_tag(to)
     if global_tag is not None:
         note('destructive', 'active-label-not-globally-unique',
-             f"active 中文首选标签 {global_tag['tag']} 在 {' / '.join(global_tag['ids'])}"
-             ' 间重复，运行时会拒绝加载',
+             f"可选择概念的中文首选标签 {global_tag['tag']} 在概念 {' / '.join(global_tag['ids'])}"
+             ' 中重复，分类程序会拒绝这份词表',
              tag=global_tag['tag'], conceptIds=global_tag['ids'])
 
     for collision in _cross_facet_label_collisions(to):
         note('destructive', 'label-collision',
-             f"标签“#{collision['label']}”同时出现在分面 {' / '.join(collision['facets'])}"
-             f"（{' / '.join(collision['conceptIds'])}），跨分面重复会让解析候选不再唯一",
+             f"标签“#{collision['label']}”同时对应分面 {' / '.join(collision['facets'])}"
+             f" 中的概念 {' / '.join(collision['conceptIds'])}，无法唯一确定分类概念",
              tag=f"#{collision['label']}", facets=collision['facets'],
              conceptIds=collision['conceptIds'])
 
@@ -892,9 +892,9 @@ def _classify_registry_change(old_registry, new_registry):
         return [f'{code}×{count}' for code, count in sorted(grouped.items())]
 
     if change_level == 'none':
-        summary = 'registry 语义零变化（仅字节或未记录差异）'
+        summary = '本次检查未发现会影响分类的词表变化；文件字节或未检查的内容仍可能不同。'
     else:
-        summary = f"{change_level}: {'、'.join(tally('destructive') + tally('additive'))}"
+        summary = f"词表变更属于 {change_level}；各项原因及数量为：{'、'.join(tally('destructive') + tally('additive'))}。"
     detail = {
         'changeLevel': change_level,
         'oldRegistrySha256': frm['registrySha256'],
@@ -909,9 +909,10 @@ def _classify_registry_change(old_registry, new_registry):
 
 
 # ——— destructive 显式确认通道（Node ACKNOWLEDGEMENT_ELIGIBLE_CODES 的镜像） ———
-# 白名单 + 绑定 + 显式提示：只有“概念增删为零、旧 conceptIds 全部仍 active”的
-# 解析语义改动可被人工确认；删概念/删分面/降级/版本升级/迁分面/全局标签撞车
-# 永远不可确认，注记写得再自洽也翻不了案。
+# destructive 变更只有在破坏性理由全部属于可确认白名单，并携带与本次复算
+# 绑定的显式确认时，才可能沿用旧分类记录。新增概念本身不妨碍确认，但不能
+# 混入删除概念等白名单外的破坏性理由；旧 conceptIds 对应的概念仍须全部有效，
+# 旧快照与升级注记也须通过核验。
 _ACK_ELIGIBLE_CODES = (
     'preferred-label-changed',
     'broader-id-changed',
