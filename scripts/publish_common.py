@@ -953,8 +953,8 @@ def _destructive_reasons(change_detail):
 
 def _serialize_destructive_reason(reason):
     """去掉原因中的 level 和 message 后，按键排序生成紧凑 JSON，供破坏性原因哈希计算使用；输出格式与 Node 保持一致。"""
-    canonical = {key: reason[key] for key in sorted(reason) if key not in ('level', 'message')}
-    return json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    reason_fields = {key: reason[key] for key in sorted(reason) if key not in ('level', 'message')}
+    return json.dumps(reason_fields, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
 def _destructive_reasons_hash(change_detail):
@@ -1230,8 +1230,8 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
         raise PublishDataValidationError(f'{paper_label} 标签阶段记录缺失，或尚未完成。')
 
     # 按保存记录选择提示版本；读取旧版时不改写提示 SHA 或绑定哈希。
-    projection_contract = stage.get('projectionContract')
-    if not isinstance(projection_contract, str) or projection_contract not in (
+    prompt_text_contract = stage.get('projectionContract')
+    if not isinstance(prompt_text_contract, str) or prompt_text_contract not in (
             LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT):
         raise PublishDataValidationError(
             f'{paper_label} 标签阶段记录中的提示文本协议版本不受支持。')
@@ -1252,7 +1252,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
         for field, expected in (
                 ('registrySha256', _PUBLISH_TAG_CATALOG['registrySha256']),
                 ('projectionSha256', tag_prompt_text_sha256(
-                    _PUBLISH_TAG_CATALOG, projection_contract))):
+                    _PUBLISH_TAG_CATALOG, prompt_text_contract))):
             if stage.get(field) != expected:
                 raise PublishDataValidationError(
                     f'{paper_label} 标签阶段记录中的 {field} 与当前词表、提示文本或标签选择协议不一致。')
@@ -1370,7 +1370,7 @@ def _manual_paper_identity_mode(contracts, paper_label='paper'):
         if contracts.get('freshAuthoring') is not None \
                 or contracts.get('tutorialPayload') is not None:
             raise PublishDataValidationError(
-                f'{paper_label} fresh/tutorial canonical 缺少逐论文来源身份'
+                f'{paper_label} 声明了新写作或教程材料记录，但缺少逐篇来源身份记录。'
             )
         return 'historical_per_entry'
     if identity_marker != MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT:
@@ -5515,7 +5515,7 @@ def validate_review_payload(review, *, required=False, context='LLM review', iss
 
 
 def load_papers(data_file=None):
-    """Load the standard current canonical; legacy inputs must be explicit."""
+    """读取论文列表；未指定文件时使用当前正式分析结果。"""
     if data_file is None:
         data_file = DEEP_ANALYSIS_RESULT_FILE
     with open(data_file, encoding='utf-8') as f:
@@ -5528,7 +5528,7 @@ def load_papers(data_file=None):
 
 
 def load_papers_for_publication_date(date_str, data_file=None):
-    """Load a channel input with controlled historical archive fallback."""
+    """读取指定发布日期的分析资料；未显式指定文件时，由受控日期解析器选择当前结果或归档。"""
     selected = Path(data_file) if data_file is not None else resolve_deep_analysis_result_for_date(date_str)
     if data_file is None and selected != Path(resolve_deep_analysis_result_path()):
         print(f'♻️ 当前分析文件不属于目标批次，改用受控归档: {selected}')

@@ -501,12 +501,12 @@ function buildDigestRunReport(targetDate, options = {}) {
     if (!analysisComplete) errors.push(
         productionAnalysisComplete
             ? '深度分析集合未精确覆盖筛选结果'
-            : '正式 current canonical 既不是完整 Manual v6，也不是完整 LLM API production'
+            : '当前分析资料既未满足 Manual v6 的完整要求，也未满足 API 正式发布的完整要求。'
     );
     if (llmApiComplete && !dailySourceComplete) {
-        errors.push(`日更 sealed TXT/PDF source run 不完整: ${dailySourceIssues.join('; ') || '缺少 dailyFreshSourceRun'}`);
+        errors.push(`日更来源运行记录及封存的 TXT/PDF 不完整：${dailySourceIssues.join('; ') || '缺少 dailyFreshSourceRun'}`);
     }
-    if (!reviewComplete) errors.push('博客严格 review 或远端发布验证未完成');
+    if (!reviewComplete) errors.push('博客审查或远端发布验证尚未完成。');
     if (!visualGateComplete) errors.push('TOP 10 论文长图状态或资产校验未完成');
     if (!coverGateComplete) errors.push('汇总封面状态或资产校验未完成');
     const overallComplete = (

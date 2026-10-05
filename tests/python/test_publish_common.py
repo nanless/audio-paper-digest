@@ -135,7 +135,7 @@ def complete_paper():
 
 def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not_needed',
                          with_checkpoints=False,
-                         projection_contract=TAG_PROMPT_TEXT_CONTRACT, record_format='legacy',
+                         prompt_text_contract=TAG_PROMPT_TEXT_CONTRACT, record_format='legacy',
                          selection_contract=TAG_SELECTION_CONTRACT):
     stage_key = 'tagSelection' if record_format == 'current' else 'taxonomySeal'
     hash_key = 'tagSectionAndPrimaryTagsSha256' if record_format == 'current' else 'taxonomySurfaceSha256'
@@ -152,9 +152,9 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
     binding = {
         'registryVersion': _PUBLISH_TAG_CATALOG['version'],
         'registrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
-        'projectionContract': projection_contract,
+        'projectionContract': prompt_text_contract,
         'projectionSha256': tag_prompt_text_sha256(
-            _PUBLISH_TAG_CATALOG, projection_contract),
+            _PUBLISH_TAG_CATALOG, prompt_text_contract),
         'selectionContract': selection_contract,
         'inputAnalysisSha256': input_sha,
         'outputAnalysisSha256': output_sha,
@@ -480,7 +480,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         for marker in ('freshAuthoring', 'tutorialPayload'):
             with self.subTest(marker=marker), self.assertRaisesRegex(
                     PublishDataValidationError,
-                    'fresh/tutorial canonical 缺少逐论文来源身份'):
+                    '声明了新写作或教程材料记录，但缺少逐篇来源身份记录。'):
                 _manual_paper_identity_mode({
                     'manualDepth': 'full-text-evidence-v5',
                     marker: f'{marker}-fixture',
@@ -3025,7 +3025,7 @@ primary_method_tag: #基准测试
                     paper['analysisManifest'] = manifest
                     stage = attach_tag_stage_record(
                         paper, manifest, status=status, with_checkpoints=True,
-                        projection_contract=prompt_contract, record_format='current')
+                        prompt_text_contract=prompt_contract, record_format='current')
                     original = copy.deepcopy(paper)
                     with tempfile.TemporaryDirectory() as directory:
                         path = Path(directory) / 'record.json'
@@ -3210,7 +3210,7 @@ primary_method_tag: #基准测试
         paper = complete_paper()
         manifest = {'version': 1}
         stage = attach_tag_stage_record(
-            paper, manifest, projection_contract=LEGACY_TAG_PROMPT_TEXT_CONTRACT)
+            paper, manifest, prompt_text_contract=LEGACY_TAG_PROMPT_TEXT_CONTRACT)
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
         # 阶段记录引用旧词表时，升级说明必须与重新计算的变更一致。
@@ -3235,7 +3235,7 @@ primary_method_tag: #基准测试
         paper = complete_paper()
         manifest = {'version': 1}
         stage = attach_tag_stage_record(
-            paper, manifest, projection_contract=LEGACY_TAG_PROMPT_TEXT_CONTRACT)
+            paper, manifest, prompt_text_contract=LEGACY_TAG_PROMPT_TEXT_CONTRACT)
         rebind_tag_stage_record(stage, registry_sha256=case['fromRegistrySha256'],
                              annotation=case['annotation'])
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
@@ -3258,7 +3258,7 @@ primary_method_tag: #基准测试
                     manifest = {'version': 1}
                     stage = attach_tag_stage_record(
                         paper, manifest, status=status, with_checkpoints=True,
-                        projection_contract=contract)
+                        prompt_text_contract=contract)
                     saved_paper = copy.deepcopy(paper)
                     saved_manifest = copy.deepcopy(manifest)
                     self.assertIsNone(_validate_tag_stage_record(

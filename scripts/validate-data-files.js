@@ -104,7 +104,7 @@ function resolveManualPaperIdentityMode(manifest) {
     const tutorialMarker = manifest?.contracts?.tutorialPayload;
     if (identityMarker === undefined) {
         if (freshMarker !== undefined || tutorialMarker !== undefined) {
-            throw new Error('fresh/tutorial canonical 缺少逐论文来源身份，禁止按历史记录放行');
+            throw new Error('声明了新写作或教程材料记录，但缺少逐篇来源身份记录，不能按历史资料处理。');
         }
         return 'historical_per_entry';
     }
@@ -520,11 +520,11 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
         || normalizedId(paper);
     const paperIds = papers.map(dailyPaperId);
     const sortedPaperIds = [...paperIds].sort();
-    const sealedPaperIds = [...plan.paperIds].sort();
+    const sourceRunPaperIds = [...plan.paperIds].sort();
     if (paperIds.some(id => !id) || new Set(paperIds).size !== paperIds.length
-        || sortedPaperIds.length !== sealedPaperIds.length
-        || !sortedPaperIds.every((id, index) => id === sealedPaperIds[index])) {
-        addIssue(issues, filePath, 'dailyFreshSourceRun 的 sealed paper set 必须精确覆盖 deep papers');
+        || sortedPaperIds.length !== sourceRunPaperIds.length
+        || !sortedPaperIds.every((id, index) => id === sourceRunPaperIds[index])) {
+        addIssue(issues, filePath, 'dailyFreshSourceRun 中的论文集合与深度分析论文集合不完全一致，或论文标识为空、重复。');
         return;
     }
     for (const [index, paper] of papers.entries()) {
@@ -787,23 +787,23 @@ function validateDeepAnalysisMetadata(filePath, data, papers, issues, options = 
         addIssue(issues, filePath, 'deepAnalysisCompletedAt 必须是北京时间 ISO 时间戳');
     }
     if (['complete', 'partial_failed', 'failed'].includes(data.status)) {
-        const canonicalSummary = getValidationAnalysisRunSummary(papers, {
+        const analysisRunSummary = getValidationAnalysisRunSummary(papers, {
             allowLegacyCoreSummarySuccess: options.allowLegacyCoreSummarySuccess === true,
             waivedIds: options.analysisWaiver?.paperIds || new Set()
         });
-        if (canonicalSummary.status !== data.status) {
+        if (analysisRunSummary.status !== data.status) {
             addIssue(
                 issues,
                 filePath,
-                `status (${data.status}) 与 canonical 论文状态 (${canonicalSummary.status}) 不一致`
+                `status (${data.status}) 与逐篇检查得到的批次状态 (${analysisRunSummary.status}) 不一致`
             );
         }
         if (stats.remainingFailed !== undefined
-            && stats.remainingFailed !== canonicalSummary.remaining) {
+            && stats.remainingFailed !== analysisRunSummary.remaining) {
             addIssue(
                 issues,
                 filePath,
-                `stats.remainingFailed (${stats.remainingFailed}) 与 canonical 未完成数 (${canonicalSummary.remaining}) 不一致`
+                `stats.remainingFailed (${stats.remainingFailed}) 与逐篇检查得到的未完成数量 (${analysisRunSummary.remaining}) 不一致`
             );
         }
     }

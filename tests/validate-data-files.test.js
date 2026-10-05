@@ -372,13 +372,13 @@ describe('validate-data-files', () => {
                 manualDepth: 'full-text-evidence-v5',
                 freshAuthoring: 'fresh-authoring-v1'
             }
-        }), /fresh\/tutorial canonical 缺少逐论文来源身份/);
+        }), /声明了新写作或教程材料记录，但缺少逐篇来源身份记录，不能按历史资料处理。/);
         assert.throws(() => resolveManualPaperIdentityMode({
             contracts: {
                 manualDepth: 'full-text-evidence-v5',
                 tutorialPayload: 'manual-v5-tutorial-payload-v1'
             }
-        }), /fresh\/tutorial canonical 缺少逐论文来源身份/);
+        }), /声明了新写作或教程材料记录，但缺少逐篇来源身份记录，不能按历史资料处理。/);
         assert.equal(resolveManualPaperIdentityMode({
             contracts: {
                 manualDepth: 'full-text-evidence-v5',
@@ -666,7 +666,7 @@ describe('validate-data-files', () => {
 
         assert.match(
             validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n'),
-            /status \(complete\) 与 canonical 论文状态 \(failed\) 不一致/
+            /status \(complete\) 与逐篇检查得到的批次状态 \(failed\) 不一致/
         );
     });
 
@@ -991,7 +991,7 @@ describe('validate-data-files', () => {
         assert.match(issues, /方法契约无效.*中文字符不足/);
         assert.match(issues, /status \(partial_failed\) 与 stats\.analysisStatus \(complete\) 不一致/);
         assert.match(issues, /非 complete 状态不得保留 deepAnalysisCompletedAt/);
-        assert.match(issues, /status \(partial_failed\) 与 canonical 论文状态 \(failed\) 不一致/);
+        assert.match(issues, /status \(partial_failed\) 与逐篇检查得到的批次状态 \(failed\) 不一致/);
 
         stages.primaryAnalysis.status = 'complete';
         fs.writeFileSync(resultFile, JSON.stringify({
@@ -1007,7 +1007,7 @@ describe('validate-data-files', () => {
         const remainingIssues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
         assert.match(
             remainingIssues,
-            /stats\.remainingFailed \(1\) 与 canonical 未完成数 \(0\) 不一致/
+            /stats\.remainingFailed \(1\) 与逐篇检查得到的未完成数量 \(0\) 不一致/
         );
     });
 
