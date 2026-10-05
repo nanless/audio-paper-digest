@@ -129,7 +129,7 @@ function buildExecution({ analysisRoot, executionId, record }) {
 
 function fixture(t, options = {}) {
     const oldRegistrySha256 = options.registrySha256 ?? ADDITIVE_OLD_SHA;
-    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'taxonomy-reseal-apply-'));
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tag-record-update-apply-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const files = {
         conferenceProcessDir: path.join(root, 'processes'),

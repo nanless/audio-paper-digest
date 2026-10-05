@@ -250,11 +250,11 @@ check HTTP 200, the official address, and the title of every target digest and p
 these records. If deployment fails, read its logs, repair the problem, and wait for successful
 redeployment. `digest:status` does not yet perform deployment or live-page checks.
 
-During the transition to the new tag system, new pages retain Hugo's flat `tags` field but must also carry
-`paper-taxonomy-flat-tags-compat-v1`, the current registry version/SHA, each tag's `concept`/`facet`,
-`paper_digest_primary_task`, and `paper_digest_primary_method`. Old pages and tag URLs remain
-unchanged. Aggregate “popular directions” count only explicit primary tasks; the site-wide tag list
-must identify itself as a mixed index of old and new labels.
+During the tag migration, new pages keep Hugo's flat `tags` field and declare `paper-tag-flat-tags-v2`
+in `paper_digest_tags_contract`. They must also record and verify the current tag catalog version and SHA,
+each tag's `concept` and `facet`, and the explicit `paper_digest_primary_task` and
+`paper_digest_primary_method`. Existing pages and tag URLs remain unchanged. Aggregate “popular directions”
+count only explicit primary tasks; the site-wide tag list must explain that it contains both old and new labels.
 
 Single-paper `--include-id`, exclusions through `--exclude-id`, and historical sealed previews are
 explicit maintenance scopes. Their IDs must remain identical across all applicable stages; a

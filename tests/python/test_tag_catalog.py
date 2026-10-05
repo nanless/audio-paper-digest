@@ -202,7 +202,7 @@ class PreviewBuilderTest(unittest.TestCase):
         self.registry.write_text(json.dumps(registry()), encoding='utf-8')
         self.output = self.root / 'preview'
         self.git('init', '-q')
-        self.git('config', 'user.name', 'Taxonomy Fixture')
+        self.git('config', 'user.name', 'Tag Catalog Fixture')
         self.git('config', 'user.email', 'fixture@example.invalid')
 
     def tearDown(self):
