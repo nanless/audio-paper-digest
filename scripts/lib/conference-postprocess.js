@@ -16,10 +16,14 @@ const analysisContract = require('../analysis-contract.js');
 const tagRulesApi = require('./tag-rules.js');
 const sourceContextApi = require('./conference-source-context.js');
 
-const CONTRACT = 'conference-paper-page-staging-v1';
+const CONTRACT = 'conference-paper-page-staging-v2';
+const PAGE_VERSION = 2;
+const LEGACY_PAGE_CONTRACT = 'conference-paper-page-staging-v1';
 const AGGREGATE_CONTRACT = 'conference-aggregate-staging-v2';
 const AGGREGATE_VERSION = 2;
-const ASSIGNMENT_CONTRACT = 'conference-taxonomy-assignment-v1';
+const ASSIGNMENT_CONTRACT = 'conference-tag-assignment-v2';
+const ASSIGNMENT_VERSION = 2;
+const LEGACY_ASSIGNMENT_CONTRACT = 'conference-taxonomy-assignment-v1';
 const PROJECTION_CONTRACT = 'conference-page-projection-v2';
 const PROJECTION_VERSION = 2;
 const HIERARCHY_CONTRACT = 'conference-tag-hierarchy-v2';
@@ -209,7 +213,31 @@ function resolve(tagCatalog, label, facet, reasons, role) {
     if (found.length !== 1 || found[0].status !== 'active') { reasons.push(`${role}:${found.length ? 'ambiguous-or-deprecated' : 'unknown'}:${label}`); return null; }
     return found[0];
 }
-function buildAssignment(loaded, tagCatalog) {
+function isKnownAssignmentFormat(value) {
+    return value?.contract === ASSIGNMENT_CONTRACT && value.version === ASSIGNMENT_VERSION
+        || value?.contract === LEGACY_ASSIGNMENT_CONTRACT && value.version === VERSION;
+}
+function readStageTagMetadata(manifest) {
+    const current = manifest.contract === CONTRACT && manifest.version === PAGE_VERSION;
+    const legacy = manifest.contract === LEGACY_PAGE_CONTRACT && manifest.version === VERSION;
+    if (!current && !legacy) fail('会议论文页面的保存格式版本不受支持。');
+    for (const [oldKey, newKey] of [['taxonomy', 'tagMetadata'], ['taxonomyAssignmentFileSha256', 'tagAssignmentFileSha256']]) {
+        if (Object.hasOwn(manifest, oldKey) && Object.hasOwn(manifest, newKey)) fail('会议论文页面不能混用新旧标签字段。');
+        if (Object.hasOwn(manifest, current ? oldKey : newKey)) fail('会议论文页面的标签字段与保存格式版本不一致。');
+    }
+    const tagMetadata = manifest[current ? 'tagMetadata' : 'taxonomy'];
+    const tagAssignmentFileSha256 = manifest[current ? 'tagAssignmentFileSha256' : 'taxonomyAssignmentFileSha256'];
+    if (!tagMetadata || typeof tagMetadata !== 'object' || Array.isArray(tagMetadata)
+        || !isKnownAssignmentFormat(tagMetadata)
+        || tagMetadata.contract !== (current ? ASSIGNMENT_CONTRACT : LEGACY_ASSIGNMENT_CONTRACT)
+        || current && (typeof tagAssignmentFileSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(tagAssignmentFileSha256))) {
+        fail('会议论文页面的标签记录或分配文件哈希不符合保存格式要求。');
+    }
+    return { tagMetadata, tagAssignmentFileSha256 };
+}
+function buildAssignment(loaded, tagCatalog, savedAssignment) {
+    // 旧格式仅用于核验原记录的完整复算；生成器始终使用当前默认格式。
+    if (savedAssignment !== undefined && !isKnownAssignmentFormat(savedAssignment)) fail('原标签分配记录的格式版本不受支持。');
     const paper = loaded.analysis.papers[0], input = getConsistentPublicationFields(paper), reasons = [], concepts = new Map();
     const tagRules = tagRulesApi.createTagRules({ tagCatalog });
     const parsedAnalysis = require('../utils.js').parseAnalysis(paper.analysis);
@@ -247,7 +275,8 @@ function buildAssignment(loaded, tagCatalog) {
     const ids = tagCatalogApi.pruneAncestors(tagCatalog, [...concepts.keys()].sort()).sort();
     if ((task && !ids.includes(task.id)) || (method && !ids.includes(method.id))) reasons.push('primary-concept:ancestor-pruned');
     const blockedReasons = [...new Set(reasons)].sort(); const receipt = loaded.run.completionReceipt;
-    const body = { contract: ASSIGNMENT_CONTRACT, version: VERSION, paperId: loaded.run.paperId,
+    const body = { contract: savedAssignment === undefined ? ASSIGNMENT_CONTRACT : savedAssignment.contract,
+        version: savedAssignment === undefined ? ASSIGNMENT_VERSION : savedAssignment.version, paperId: loaded.run.paperId,
         analysisExecutionId: loaded.run.executionId, analysisSha256: loaded.analysisFileSha256,
         completionReceiptSha256: receipt.receiptSha256, sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
         registryVersion: tagRules.registryVersion, registrySha256: tagCatalog.registrySha256,
@@ -375,12 +404,12 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     });
     if (new Set(assetFiles.map(asset => asset.path)).size !== assetFiles.length) fail('conference renderer returned duplicate assets');
     const pageBytes = Buffer.from(rendered.markdown, 'utf8'); const assignmentBytes = canonicalBytes(assignment);
-    const body = { contract: CONTRACT, version: VERSION, status: 'complete', paperId: loaded.run.paperId,
+    const body = { contract: CONTRACT, version: PAGE_VERSION, status: 'complete', paperId: loaded.run.paperId,
         analysisExecutionId: loaded.run.executionId, analysisSha256: loaded.analysisFileSha256,
         completionReceiptSha256: loaded.run.completionReceipt.receiptSha256, sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
         identity: loaded.identity, identitySha256: loaded.identitySha256, implementation,
         capabilities: structuredClone(loaded.run.capabilities), date,
-        taxonomy: assignment, taxonomyAssignmentFileSha256: sha256(assignmentBytes), pagePath: `content/posts/${stem}.md`,
+        tagMetadata: assignment, tagAssignmentFileSha256: sha256(assignmentBytes), pagePath: `content/posts/${stem}.md`,
         primaryUrl: `/posts/${stem}/`, contentSha256: sha256(pageBytes), title: loaded.analysis.papers[0].title,
         publication: structuredClone(loaded.publication), readerContract: READER_CONTRACT,
         sourceBindingsContract: SOURCE_BINDINGS_CONTRACT, scoringContract: SCORING_CONTRACT,
@@ -456,10 +485,10 @@ function loadStage({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pla
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('生成会议页面期间，相关实现指纹发生变化。');
     if (expected.assignment.status !== 'assigned') fail('当前论文的标签分配尚未完成，不能读取已生成页面。');
     const directory = stageDirectory(stagingRoot, executionId, tagCatalog.registrySha256, implementation.implementationSha256); rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
-    const assignmentRecord = pageApi.readRegular(path.join(directory, 'assignment.json'), 16 * 1024 * 1024, 'conference taxonomy assignment');
+    const assignmentRecord = pageApi.readRegular(path.join(directory, 'assignment.json'), 16 * 1024 * 1024, '会议标签分配记录');
     const manifestRecord = pageApi.readRegular(path.join(directory, 'manifest.json'), 16 * 1024 * 1024, 'conference page manifest');
     const pageRecord = pageApi.readRegular(path.join(directory, 'page.md'), 32 * 1024 * 1024, 'conference staged page');
-    const assignment = pageApi.strictJson(assignmentRecord.bytes, 'conference taxonomy assignment');
+    const assignment = pageApi.strictJson(assignmentRecord.bytes, '会议标签分配记录');
     const manifest = pageApi.strictJson(manifestRecord.bytes, 'conference page manifest');
     if (!assignmentRecord.bytes.equals(expected.assignmentBytes) || !manifestRecord.bytes.equals(canonicalBytes(expected.manifest))
         || !pageRecord.bytes.equals(expected.pageBytes) || stableHash(assignment) !== stableHash(expected.assignment)
@@ -468,7 +497,7 @@ function loadStage({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pla
         const record = pageApi.readRegular(path.join(directory, 'assets', ...asset.path.split('/')), 32 * 1024 * 1024, 'conference staged asset');
         if (record.fileSha256 !== asset.sha256 || record.bytes.length !== asset.size) fail(`conference staged asset drifted: ${asset.path}`);
     }
-    return { directory, manifest, manifestFileSha256: manifestRecord.fileSha256,
+    return { directory, manifest, ...readStageTagMetadata(manifest), manifestFileSha256: manifestRecord.fileSha256,
         assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 };
 }
 function repairFormulaDelimiters(markdown) {
@@ -619,13 +648,13 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
         for (const implementationName of fs.readdirSync(registry).sort()) {
             const directory = safeStageChild(registry, implementationName, 'preserved projection');
             rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
-            const assignmentRecord = pageApi.readRegular(path.join(directory, 'assignment.json'), 16 * 1024 * 1024, 'preserved conference taxonomy assignment');
+            const assignmentRecord = pageApi.readRegular(path.join(directory, 'assignment.json'), 16 * 1024 * 1024, '保留的会议标签分配记录');
             const manifestRecord = pageApi.readRegular(path.join(directory, 'manifest.json'), 16 * 1024 * 1024, 'preserved conference page manifest');
             const pageRecord = pageApi.readRegular(path.join(directory, 'page.md'), 32 * 1024 * 1024, 'preserved conference staged page');
-            const assignment = pageApi.strictJson(assignmentRecord.bytes, 'preserved conference taxonomy assignment');
+            const assignment = pageApi.strictJson(assignmentRecord.bytes, '保留的会议标签分配记录');
             const manifest = pageApi.strictJson(manifestRecord.bytes, 'preserved conference page manifest');
             const manifestBody = { ...manifest }; delete manifestBody.manifestSha256;
-            if (manifest.contract !== CONTRACT || manifest.version !== VERSION || manifest.status !== 'complete'
+            if (manifest.status !== 'complete'
                 || manifest.paperId !== paperId || manifest.analysisExecutionId !== executionId
                 || manifest.manifestSha256 !== stableHash(manifestBody)
                 || manifest.contentSha256 !== sha256(pageRecord.bytes)
@@ -633,11 +662,15 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
                 || manifest.manifestSha256 !== pageProof.manifestSha256
                 || manifest.pagePath !== pageProof.pagePath) continue;
             const assignmentBody = { ...assignment }; delete assignmentBody.assignmentSha256;
-            if (assignment.contract !== ASSIGNMENT_CONTRACT || assignment.version !== VERSION
-                || assignment.paperId !== paperId || assignment.analysisExecutionId !== executionId
-                || assignment.status !== 'assigned' || assignment.assignmentSha256 !== stableHash(assignmentBody)
-                || manifest.taxonomy?.assignmentSha256 !== assignment.assignmentSha256
-                || manifest.taxonomy?.registrySha256 !== assignment.registrySha256) {
+            if (assignment.paperId !== paperId || assignment.analysisExecutionId !== executionId
+                || assignment.status !== 'assigned' || assignment.assignmentSha256 !== stableHash(assignmentBody)) {
+                fail(`论文 ${paperId} 原页面的标签分配身份、哈希或页面绑定不符合要求。`);
+            }
+            const tagFields = readStageTagMetadata(manifest);
+            if (!isKnownAssignmentFormat(assignment) || assignment.contract !== tagFields.tagMetadata.contract
+                || assignment.version !== tagFields.tagMetadata.version
+                || tagFields.tagMetadata.assignmentSha256 !== assignment.assignmentSha256
+                || tagFields.tagMetadata.registrySha256 !== assignment.registrySha256) {
                 fail(`论文 ${paperId} 原页面的标签分配身份、哈希或页面绑定不符合要求。`);
             }
             const declaredAssets = manifest.assets || [];
@@ -662,7 +695,7 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
             const repairedPageBytes = repair ? Buffer.from((repairMode === 'caption-only'
                 ? repairCaptionQuotedGlossLinks : repairPreservedPage)(pageRecord.bytes.toString('utf8')), 'utf8') : pageRecord.bytes;
             if (repairedPageBytes.equals(pageRecord.bytes)) {
-                matches.push({ status: 'staged', directory, manifest, manifestFileSha256: manifestRecord.fileSha256,
+                matches.push({ status: 'staged', directory, manifest, ...tagFields, manifestFileSha256: manifestRecord.fileSha256,
                     assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: pageRecord.fileSha256 });
                 continue;
             }
@@ -692,7 +725,7 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
                 pageApi.writeExact(targetAsset, pageApi.readRegular(sourceAsset, 32 * 1024 * 1024, 'preserved conference asset').bytes);
             }
             pageApi.writeExact(path.join(repairDirectory, 'manifest.json'), canonicalBytes(repairedManifest));
-            matches.push({ status: 'staged', directory: repairDirectory, manifest: repairedManifest,
+            matches.push({ status: 'staged', directory: repairDirectory, manifest: repairedManifest, ...tagFields,
                 manifestFileSha256: pageApi.readRegular(path.join(repairDirectory, 'manifest.json'), 16 * 1024 * 1024, 'repaired conference page manifest').fileSha256,
                 assignmentFileSha256: assignmentRecord.fileSha256, pageFileSha256: sha256(repairedPageBytes),
                 repairedFrom: { manifestSha256: manifest.manifestSha256, contentSha256: manifest.contentSha256 } });
@@ -881,8 +914,8 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         readerTitle: item.manifest.readerTitle, summary: item.manifest.summary,
         score: item.manifest.score, scoreDimensions: structuredClone(item.manifest.scoreDimensions),
         rankBucket: item.manifest.rankBucket, documentType: item.manifest.documentType,
-        primaryTask: item.manifest.taxonomy.concepts.find(concept => concept.id === item.manifest.taxonomy.primaryTaskId).preferredLabel.zh,
-        primaryMethod: item.manifest.taxonomy.concepts.find(concept => concept.id === item.manifest.taxonomy.primaryMethodId).preferredLabel.zh,
+        primaryTask: item.tagMetadata.concepts.find(concept => concept.id === item.tagMetadata.primaryTaskId).preferredLabel.zh,
+        primaryMethod: item.tagMetadata.concepts.find(concept => concept.id === item.tagMetadata.primaryMethodId).preferredLabel.zh,
         authors: structuredClone(item.manifest.authors),
         // Conference pages are isolated to the official proceedings identity.
         // Related arXiv links can still exist in the sealed Reader evidence,
@@ -890,23 +923,23 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         resources: structuredClone(item.manifest.resources).filter(resource => !isArxivResource(resource)),
         officialRecordUrl: item.manifest.publication.recordUrl, officialPdfUrl: item.manifest.publication.pdfUrl,
         pagePath: item.manifest.pagePath, url: item.manifest.primaryUrl,
-        tagAssignmentSha256: item.manifest.taxonomy.assignmentSha256,
-        labels: item.manifest.taxonomy.concepts.map(concept => concept.preferredLabel.zh),
+        tagAssignmentSha256: item.tagMetadata.assignmentSha256,
+        labels: item.tagMetadata.concepts.map(concept => concept.preferredLabel.zh),
         pageContentSha256: item.manifest.contentSha256, pageManifestSha256: item.manifest.manifestSha256,
         pageManifestFileSha256: item.manifestFileSha256, assignmentFileSha256: item.assignmentFileSha256 }))
         .sort((left, right) => right.score - left.score || left.paperId.localeCompare(right.paperId))
         .map((item, index) => ({ rank: index + 1, ...item }));
-    const aggregateTagMetadata = members.length ? stages[0].manifest.taxonomy : null;
-    if (!aggregateTagMetadata || stages.some(item => item.manifest.taxonomy.registrySha256 !== tagCatalog.registrySha256
-        || item.manifest.taxonomy.registryVersion !== aggregateTagMetadata.registryVersion
-        || item.manifest.taxonomy.selectionContract !== aggregateTagMetadata.selectionContract
+    const aggregateTagMetadata = members.length ? stages[0].tagMetadata : null;
+    if (!aggregateTagMetadata || stages.some(item => item.tagMetadata.registrySha256 !== tagCatalog.registrySha256
+        || item.tagMetadata.registryVersion !== aggregateTagMetadata.registryVersion
+        || item.tagMetadata.selectionContract !== aggregateTagMetadata.selectionContract
         || ![tagRulesApi.TAG_FLAT_COMPAT_CONTRACT, tagRulesApi.LEGACY_TAG_FLAT_COMPAT_CONTRACT]
-            .includes(item.manifest.taxonomy.flatCompatContract))) fail('汇总成员的标签元数据缺失，或词表版本、哈希及标签规则不一致。');
+            .includes(item.tagMetadata.flatCompatContract))) fail('汇总成员的标签元数据缺失，或词表版本、哈希及标签规则不一致。');
     // 所有成员的词表与标签规则一致后，再按其概念 ID 构建层级。directCount 统计
     // 直接使用该概念的论文数；subtreeCount 统计使用该概念或任一后代概念的论文数，
     // 同一篇论文只计一次，不能把下级标签的频次直接相加。
     const hierarchy = aggregateHierarchy(tagCatalog,
-        stages.map(item => item.manifest.taxonomy.conceptIds));
+        stages.map(item => item.tagMetadata.conceptIds));
     const directions = [...members.reduce((counts, item) => counts.set(item.primaryTask,
         (counts.get(item.primaryTask) || 0) + 1), new Map()).entries()]
         .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-CN'));
@@ -915,7 +948,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     // 不能只凭显示出来的标签文字重新推断概念。
     const taskConceptByLabel = new Map();
     for (const stage of stages) {
-        const tagAssignment = stage.manifest.taxonomy;
+        const tagAssignment = stage.tagMetadata;
         const concept = tagAssignment.concepts.find(item => item.id === tagAssignment.primaryTaskId);
         if (!concept || concept.facet !== 'task') fail('汇总缺少主任务概念，或该概念不属于任务这一分类维度。');
         // Keys are sorted to match the single-page frontmatter JSON spelling.
@@ -996,7 +1029,8 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     return { status: apply ? 'staged' : 'dry-run', manifest };
 }
 
-module.exports = { CONTRACT, AGGREGATE_CONTRACT, AGGREGATE_VERSION, ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, HIERARCHY_CONTRACT,
+module.exports = { CONTRACT, PAGE_VERSION, LEGACY_PAGE_CONTRACT, AGGREGATE_CONTRACT, AGGREGATE_VERSION,
+    ASSIGNMENT_CONTRACT, ASSIGNMENT_VERSION, LEGACY_ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, HIERARCHY_CONTRACT,
     VERSION, stableHash, planProof,
     loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,

@@ -1128,6 +1128,33 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
         members: f.members.map(item => ({ paperId: item.paperId, tagAssignmentSha256: H(item.paperId) })) };
     const variants = [
         ['current', null],
+        ['page-current', null, null],
+        ['page-mixed-metadata-same', null, x => { x.taxonomy = x.tagMetadata; }],
+        ['page-mixed-metadata-null', null, x => { x.taxonomy = null; x.tagMetadata = null; }],
+        ['page-mixed-file-sha-same', null, x => { x.taxonomyAssignmentFileSha256 = x.tagAssignmentFileSha256; }],
+        ['page-mixed-file-sha-null', null, x => { x.taxonomyAssignmentFileSha256 = null; x.tagAssignmentFileSha256 = null; }],
+        ['page-wrong-version', null, x => { x.version = 1; }],
+        ['page-unknown-format', null, x => { x.contract = 'conference-paper-page-staging-v3'; }],
+        ['page-wrong-family', null, x => { x.taxonomy = x.tagMetadata; delete x.tagMetadata; }],
+        ['page-null-metadata', null, x => { x.tagMetadata = null; }],
+        ['page-null-file-sha', null, x => { x.tagAssignmentFileSha256 = null; }],
+        ['page-old-assignment', null, x => { x.tagMetadata.contract = 'conference-taxonomy-assignment-v1'; x.tagMetadata.version = 1; }],
+        ['page-legacy-new-assignment', null, x => {
+            x.contract = 'conference-paper-page-staging-v1'; x.version = 1;
+            x.taxonomy = x.tagMetadata; delete x.tagMetadata;
+            x.taxonomyAssignmentFileSha256 = x.tagAssignmentFileSha256; delete x.tagAssignmentFileSha256;
+        }],
+        ['page-legacy-unknown-assignment', null, x => {
+            x.contract = 'conference-paper-page-staging-v1'; x.version = 1;
+            x.taxonomy = { contract: 'conference-tag-assignment-v3', version: 3 }; delete x.tagMetadata;
+            x.taxonomyAssignmentFileSha256 = x.tagAssignmentFileSha256; delete x.tagAssignmentFileSha256;
+        }],
+        ['page-legacy-partial-assignment', null, x => {
+            x.contract = 'conference-paper-page-staging-v1'; x.version = 1;
+            x.taxonomy = { contract: 'conference-taxonomy-assignment-v1' }; delete x.tagMetadata;
+            x.taxonomyAssignmentFileSha256 = x.tagAssignmentFileSha256; delete x.tagAssignmentFileSha256;
+        }],
+        ['page-bad-sha-before-mixed', null, x => { x.taxonomy = x.tagMetadata; }],
         ['wrong-version', x => { x.version = 1; }],
         ['unknown-format', x => { x.contract = 'conference-aggregate-staging-v3'; }],
         ['missing-metadata', x => { delete x.tagMetadata; }],
@@ -1147,10 +1174,31 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
         ['bad-sha-before-mixed', x => { x.taxonomy = x.tagMetadata; }]
     ];
     const formatRoot = path.join(f.root, 'aggregate-format-fixtures');
-    for (const [name, change] of variants) {
+    const originalPageFiles = [...h.stagedByExecution.keys()].flatMap(executionId =>
+        ['manifest.json', 'page.md'].map(name => {
+            const filename = path.join(f.files.conferencePageStagingDir, executionId, name);
+            return { filename, bytes: fs.readFileSync(filename) };
+        }));
+    for (const [name, change, pageChange] of variants) {
         const body = structuredClone(currentBody); change?.(body);
         const manifest = { ...body, manifestSha256: H(name === 'bad-sha-before-mixed' ? currentBody : body) };
         const state = structuredClone(promotedState);
+        // 子页也是合成格式资料；保原正文，只重绑此独立样本的父记录。
+        const pages = path.join(formatRoot, name, 'pages');
+        fs.cpSync(f.files.conferencePageStagingDir, pages, { recursive: true });
+        if (name.startsWith('page-')) {
+            const paperId = Object.keys(state.items).sort()[0], item = state.items[paperId];
+            const filename = path.join(pages, item.analysisRunId, 'manifest.json');
+            const { manifestSha256: _oldPageSha, ...oldPageBody } = JSON.parse(fs.readFileSync(filename));
+            const pageBody = { ...oldPageBody, contract: 'conference-paper-page-staging-v2', version: 2,
+                tagMetadata: { contract: 'conference-tag-assignment-v2', version: 2 },
+                tagAssignmentFileSha256: H('synthetic assignment file bytes') };
+            const correctPageSha = H(pageBody); pageChange?.(pageBody);
+            const pageManifest = { ...pageBody, manifestSha256:
+                name === 'page-bad-sha-before-mixed' ? correctPageSha : H(pageBody) };
+            fs.writeFileSync(filename, JSON.stringify(pageManifest));
+            item.pageProof.manifestSha256 = pageManifest.manifestSha256;
+        }
         state.aggregate = { ...state.aggregate, manifestSha256: manifest.manifestSha256 };
         const completionBody = processApi.completionBodyFor(state, receipt.planReceiptSha256, state.aggregate);
         const completion = { ...completionBody, receiptSha256: H(completionBody) };
@@ -1165,21 +1213,31 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
         fs.writeFileSync(path.join(aggregate, 'manifest.json'), JSON.stringify(manifest));
         fs.writeFileSync(path.join(aggregate, 'aggregate.md'), legacyBody.markdown);
     }
-    const formatCode = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_formats',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\np.PAGE_ROOT=Path(sys.argv[2]);root=Path(sys.argv[3]);results={}\nfor folder in sorted(root.iterdir()):\n p.PROCESS_ROOT=folder/'processes';p.AGGREGATE_ROOT=folder/'aggregates'\n try:\n  b=p.process_bundle('odyssey-2026',sys.argv[4]);results[folder.name]={'files':len(b['files']),'status':b['state']['status']}\n except p.ConferencePublicationError as error:\n  results[folder.name]={'error':str(error)}\nprint(json.dumps(results))`;
+    const formatCode = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_formats',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\nroot=Path(sys.argv[3]);results={}\nfor folder in sorted(root.iterdir()):\n p.PAGE_ROOT=folder/'pages';p.PROCESS_ROOT=folder/'processes';p.AGGREGATE_ROOT=folder/'aggregates'\n try:\n  b=p.process_bundle('odyssey-2026',sys.argv[4]);results[folder.name]={'files':len(b['files']),'status':b['state']['status']}\n except p.ConferencePublicationError as error:\n  results[folder.name]={'error':str(error)}\nprint(json.dumps(results))`;
     const formats = JSON.parse(childProcess.execFileSync('bash', [path.join(__dirname, '..', 'scripts', 'python-runtime.sh'),
         '-c', formatCode, path.join(__dirname, '..', 'scripts'), f.files.conferencePageStagingDir,
         formatRoot, promoted.processId], { encoding: 'utf8' }));
     assert.deepEqual(formats.current, { files: 4, status: 'complete' });
+    assert.deepEqual(formats['page-current'], { files: 4, status: 'complete' });
     assert.match(formats['bad-sha-before-mixed'].error, /aggregate staging 与 completion proof 不一致/);
     const specificErrors = {
+        'page-bad-sha-before-mixed': /论文暂存记录与进程凭证不一致：/,
+        'page-null-metadata': /会议论文页面的标签分配记录格式版本无效。/,
+        'page-null-file-sha': /会议论文页面的标签分配文件哈希格式无效。/,
+        'page-old-assignment': /会议论文页面的标签分配记录格式版本无效。/,
+        'page-legacy-new-assignment': /旧版会议论文页面的标签分配记录格式版本无效。/,
+        'page-legacy-unknown-assignment': /旧版会议论文页面的标签分配记录格式版本无效。/,
+        'page-legacy-partial-assignment': /旧版会议论文页面的标签分配记录格式版本无效。/,
         'missing-metadata': /新版会议汇总缺少标签记录或层级字段。/,
         'missing-hierarchy': /新版会议汇总缺少标签记录或层级字段。/,
         'null-metadata': /新版会议汇总的标签记录格式无效。/,
         'null-member-sha': /新版会议汇总成员的标签分配哈希格式无效。/
     };
     for (const [name] of variants.slice(1, -1)) {
+        if (name === 'page-current') continue;
         assert.match(formats[name].error, specificErrors[name] || /不能混用|格式版本不受支持|格式版本不一致/);
     }
+    for (const saved of originalPageFiles) assert.deepEqual(fs.readFileSync(saved.filename), saved.bytes);
     assert.deepEqual(fs.readFileSync(path.join(aggregateDirectory, 'manifest.json')), originalAggregateBytes);
     assert.deepEqual(fs.readFileSync(path.join(path.dirname(promotedStateFile), 'completion-receipt.json')), originalReceiptBytes);
     assert.deepEqual(fs.readFileSync(originalFile), originalBytes);

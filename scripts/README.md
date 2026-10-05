@@ -371,11 +371,13 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 新页面的扁平标签协议为 `paper-tag-flat-tags-v2`。新上下文文件使用 `paper-research-context-v2`、`schemaVersion=2`，标签信息保存在 `assessment.tagMetadata`。旧 `researcher-sidecars-v1`、`schemaVersion=1` 的 `assessment.taxonomy` 仍按原格式读取；搜索字段和词表资产后续分别迁移。
 新上下文的页面附属文件记录带有明确的 `contract`；旧记录缺少这一标识时，核验器按旧格式重建原字节，不根据标签协议猜上下文格式。三个引用文件不因这项改名改变格式或内容。
 
-新会议汇总使用 `conference-aggregate-staging-v2`、`version=2`，标签信息和层级统计分别保存在 `tagMetadata`、`tagHierarchy`，成员的标签分配 SHA 为 `tagAssignmentSha256`。层级格式为 `conference-tag-hierarchy-v2`。Python 发布器先核对汇总记录的规范对象 SHA、完成记录和 Markdown 原字节，再按明确版本读取字段；旧 v1 汇总按原字段读取，新旧字段混用会被拒绝。独立汇总版本不改变子论文页、标签分配或旧证明的格式，也不会重写已保存的阶段文件。
+新会议汇总使用 `conference-aggregate-staging-v2`、`version=2`，标签信息和层级统计分别保存在 `tagMetadata`、`tagHierarchy`，成员的标签分配 SHA 为 `tagAssignmentSha256`。层级格式为 `conference-tag-hierarchy-v2`。Python 发布器先核对汇总记录的规范对象 SHA、完成记录和 Markdown 原字节，再按明确版本读取字段；旧 v1 汇总按原字段读取，新旧字段混用会被拒绝。汇总版本与子论文页、标签分配的版本分别管理，旧证明和已保存的阶段文件保持。
 
 页面的标签字段有六项：`contract`、`selection_contract`、`registry_version`、`registry_sha256`、`concepts` 和 `scope`。
 同一页只能使用 `paper_digest_tags_*` 或旧 `paper_digest_taxonomy_*` 中的一组，混用会被拒绝，即使值相同或为空。
 历史补充和导出的字段判断不会改写旧页面或保存证明，原页面 SHA 与来源绑定仍须通过；网站模板也会阻止混用页面构建。
+新会议子论文页保存为 `conference-paper-page-staging-v2`、`version=2`，使用 `tagMetadata` 和 `tagAssignmentFileSha256`；标签分配保存为 `conference-tag-assignment-v2`、`version=2`。生成器只写新版，保留阶段读取器核对原页面、分配记录和证明后，分别读取明确的新旧格式，不改写旧对象。汇总可使用两版已核成员。修正旧图注时，按原分配格式重新计算期望并比较完整记录及原文件 SHA，避免版本改名影响恢复。发布器核对原页面和完成证明后读取格式；它不读取 `assignment.json`，不能把格式检查当作该文件的原字节核验。
+
 旧 `paper-taxonomy-flat-tags-compat-v1` 记录按原声明读取。新字段族可能包含上一批已保存的旧协议，读取时不改写；新生成只使用 `paper-tag-flat-tags-v2`。两版标签含义相同，未知协议不能通过已核验标签判断。会议汇总可以读取两版合法成员，但新汇总页面明确写新版，不沿用首篇成员的旧协议。
 旧页面审查按页面声明的协议重建预期标签和附属资料字节；原页面、资料及来源 SHA 仍逐项核验。
 新的历史扫描政策为 `historical-page-scan-policy-v4`，使用 `tagRoutes` 和 `schema-checked-hash-default-whitelist-v4`。

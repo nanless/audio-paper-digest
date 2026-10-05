@@ -144,7 +144,14 @@ test('会议页面生成会核对完成记录、论文身份和标签，并按�
     assert.equal(result.status, 'staged'); assert.equal(result.manifest.paperId, f.runs.get(f.one).run.paperId);
     assert.equal(result.manifest.identity.kind, 'conference'); assert.equal(result.manifest.identity.arxivId, null);
     assert.equal(result.manifest.identity.source.status, 'official');
-    assert.equal(result.manifest.taxonomy.flatCompatContract, 'paper-tag-flat-tags-v2');
+    assert.equal(result.manifest.contract, 'conference-paper-page-staging-v2');
+    assert.equal(result.manifest.version, 2);
+    assert.equal(api.PAGE_VERSION, 2); assert.equal(api.ASSIGNMENT_VERSION, 2); assert.equal(api.VERSION, 1);
+    assert.equal(result.manifest.tagMetadata.contract, 'conference-tag-assignment-v2');
+    assert.equal(result.manifest.tagMetadata.version, 2);
+    assert.equal(result.manifest.tagMetadata.flatCompatContract, 'paper-tag-flat-tags-v2');
+    assert.equal(Object.hasOwn(result.manifest, 'taxonomy'), false);
+    assert.equal(Object.hasOwn(result.manifest, 'taxonomyAssignmentFileSha256'), false);
     assert.equal(result.manifest.readerContract, 'beginner-researcher-v3');
     assert.equal(result.manifest.sourceBindingsContract, 'api-reader-source-bindings-v4');
     assert.equal(result.manifest.scoringContract, 'api-scoring-audit-v2');
@@ -154,6 +161,8 @@ test('会议页面生成会核对完成记录、论文身份和标签，并按�
     const replayed = api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
     assert.equal(replayed.manifest.manifestSha256, result.manifest.manifestSha256);
+    assert.equal(replayed.tagMetadata, replayed.manifest.tagMetadata);
+    assert.equal(result.manifest.tagAssignmentFileSha256, sha256(fs.readFileSync(path.join(replayed.directory, 'assignment.json'))));
     assert.ok(fs.existsSync(path.join(stagingRoot, f.one, registry.registrySha256,
         result.manifest.implementation.implementationSha256, 'page.md')));
     assert.equal(api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
@@ -224,7 +233,7 @@ print(json.dumps({'structuredArtifacts':a,'sourceBinding':{'pdfSha256':hashlib.s
     assert.equal(result.manifest.assets.length, 1);
     const asset = result.manifest.assets[0];
     assert.match(asset.path, /^static\/images\/conference\/icassp-2026\/[a-f0-9]{12}\/figure-1\.png$/);
-    const directory = path.join(stagingRoot, f.one, result.manifest.taxonomy.registrySha256,
+    const directory = path.join(stagingRoot, f.one, result.manifest.tagMetadata.registrySha256,
         result.manifest.implementation.implementationSha256);
     const png = fs.readFileSync(path.join(directory, 'assets', asset.path));
     assert.equal(sha256(png), asset.sha256);
@@ -341,7 +350,28 @@ test('aggregate replays every selected stage and emits only when the full explic
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /会议暂存的分类记录、页面或清单与当前分析结果、词表和生成程序的输出不一致/);
 });
 
-test('会议新汇总固定使用 v2，保留旧成员原始分配及页面证明并拒未知协议', t => {
+// 独立合成保存资料：只在初次创建测试文件前签名，不改已有旧样本。
+function saveSyntheticStage(stagingRoot, manifest, assignment, pageBytes) {
+    const directory = path.join(stagingRoot, manifest.analysisExecutionId, assignment.registrySha256,
+        manifest.implementation.implementationSha256);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    pageApi.writeExact(path.join(directory, 'assignment.json'), Buffer.from(JSON.stringify(assignment)));
+    pageApi.writeExact(path.join(directory, 'manifest.json'), Buffer.from(JSON.stringify(manifest)));
+    pageApi.writeExact(path.join(directory, 'page.md'), pageBytes);
+    return { directory, pageProof: { manifestSha256: manifest.manifestSha256,
+        contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
+}
+function legacyStageRecords(current, markdown) {
+    const { assignmentSha256: _assignmentSha, ...assignmentBody } = current.tagMetadata;
+    Object.assign(assignmentBody, { contract: 'conference-taxonomy-assignment-v1', version: 1 });
+    const assignment = { ...assignmentBody, assignmentSha256: api.stableHash(assignmentBody) };
+    const { manifestSha256: _manifestSha, tagMetadata: _metadata, tagAssignmentFileSha256: _fileSha, ...body } = current;
+    Object.assign(body, { contract: 'conference-paper-page-staging-v1', version: 1, taxonomy: assignment,
+        taxonomyAssignmentFileSha256: sha256(Buffer.from(JSON.stringify(assignment))), contentSha256: sha256(markdown) });
+    return { assignment, manifest: { ...body, manifestSha256: api.stableHash(body) } };
+}
+
+test('会议新汇总固定使用 v2，保留新旧成员原始分配及页面证明并拒未知协议', t => {
     const tagRulesApi = require('../scripts/lib/tag-rules.js');
     const stageMembers = (f, firstContract) => {
         const stagingRoot = path.join(f.root, 'preserved-staging'), preservedStages = {}, originals = new Map();
@@ -349,16 +379,22 @@ test('会议新汇总固定使用 v2，保留旧成员原始分配及页面证�
             const createTagRules = tagRulesApi.createTagRules;
             let staged;
             try {
-                // 模拟旧 writer 的默认值，让实际生成器直接保存旧记录；读取时不重新签名。
+                // 第一成员保存明确旧格式合成资料；第二成员由实际当前 writer 保存。
                 tagRulesApi.createTagRules = options => ({ ...createTagRules(options),
                     flatCompatContract: executionId === f.one ? firstContract : tagRulesApi.TAG_FLAT_COMPAT_CONTRACT });
                 staged = api.stagePaper({ analysisRoot: 'ignored', executionId, tagCatalogPath: TAG_CATALOG_PATH,
-                    stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+                    stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: executionId !== f.one }, f.dependencies);
             } finally { tagRulesApi.createTagRules = createTagRules; }
+            if (executionId === f.one) {
+                const legacy = legacyStageRecords(staged.manifest, Buffer.from(staged.markdown));
+                saveSyntheticStage(stagingRoot, legacy.manifest, legacy.assignment, Buffer.from(staged.markdown));
+                staged.manifest = legacy.manifest;
+            }
             const manifest = staged.manifest;
             preservedStages[executionId] = { paperId: manifest.paperId, pageProof: {
                 manifestSha256: manifest.manifestSha256, contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
-            const directory = path.join(stagingRoot, executionId, manifest.taxonomy.registrySha256,
+            const metadata = manifest.tagMetadata || manifest.taxonomy;
+            const directory = path.join(stagingRoot, executionId, metadata.registrySha256,
                 manifest.implementation.implementationSha256);
             for (const name of ['assignment.json', 'manifest.json', 'page.md']) {
                 const file = path.join(directory, name); originals.set(file, fs.readFileSync(file));
@@ -380,14 +416,76 @@ test('会议新汇总固定使用 v2，保留旧成员原始分配及页面证�
             .map(([, bytes]) => JSON.parse(bytes)).find(item => item.paperId === member.paperId);
         assert.equal(member.tagAssignmentSha256, assignment.assignmentSha256);
         assert.equal(Object.hasOwn(member, 'taxonomyAssignmentSha256'), false);
-        assert.equal(assignment.contract, 'conference-taxonomy-assignment-v1');
-        assert.equal(assignment.version, 1);
+        const legacy = member.paperId === f.runs.get(f.one).run.paperId;
+        assert.equal(assignment.contract, legacy ? 'conference-taxonomy-assignment-v1' : 'conference-tag-assignment-v2');
+        assert.equal(assignment.version, legacy ? 1 : 2);
     }
     for (const [file, bytes] of retained.originals) assert.deepEqual(fs.readFileSync(file), bytes);
+    const currentManifest = [...retained.originals].filter(([file]) => path.basename(file) === 'manifest.json')
+        .map(([, bytes]) => JSON.parse(bytes)).find(item => item.version === 2);
+    const currentAssignment = currentManifest.tagMetadata;
+    const currentPage = [...retained.originals].find(([file]) => file.includes(f.two) && path.basename(file) === 'page.md')[1];
+    const rejected = [
+        ['mixed-same', x => { x.taxonomy = x.tagMetadata; }, /不能混用/],
+        ['mixed-null', x => { x.taxonomy = null; x.tagMetadata = null; }, /不能混用/],
+        ['mixed-file-null', x => { x.taxonomyAssignmentFileSha256 = null; }, /不能混用/],
+        ['null-metadata', x => { x.tagMetadata = null; }, /保存格式要求/],
+        ['null-file-sha', x => { x.tagAssignmentFileSha256 = null; }, /保存格式要求/],
+        ['wrong-family', x => { x.taxonomy = x.tagMetadata; delete x.tagMetadata; }, /格式版本不一致/],
+        ['wrong-version', x => { x.version = 1; }, /保存格式版本不受支持/],
+        ['wrong-assignment', x => { x.tagMetadata = { ...x.tagMetadata, contract: 'conference-taxonomy-assignment-v1', version: 1 }; }, /保存格式要求/],
+        ['bad-assignment-sha-before-mixed', x => { x.taxonomy = x.tagMetadata; }, /原页面的标签分配身份、哈希或页面绑定不符合要求/],
+        ['bad-sha-before-mixed', x => { x.taxonomy = x.tagMetadata; }, /not uniquely bound/]
+    ];
+    for (const [name, change, pattern] of rejected) {
+        const manifest = structuredClone(currentManifest); change(manifest);
+        if (name !== 'bad-sha-before-mixed') {
+            const { manifestSha256: _previousSha, ...body } = manifest; manifest.manifestSha256 = api.stableHash(body);
+        }
+        const stagingRoot = path.join(f.root, name);
+        const assignment = name === 'bad-assignment-sha-before-mixed' ? { ...currentAssignment, extra: 'changed' } : currentAssignment;
+        const saved = saveSyntheticStage(stagingRoot, manifest, assignment, currentPage);
+        assert.throws(() => api.loadPreservedStage({ stagingRoot, executionId: f.two, paperId: manifest.paperId,
+            pageProof: saved.pageProof }), pattern);
+    }
     const invalid = fixture(t), unknown = stageMembers(invalid, 'paper-tag-flat-tags-unknown');
     assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [invalid.one, invalid.two],
         tagCatalogPath: TAG_CATALOG_PATH, ...unknown, aggregateRoot: path.join(invalid.root, 'aggregate'),
         planHandle: invalid.planHandle, sourceRoot: invalid.sourceRoot }, invalid.dependencies), /标签元数据缺失/);
+});
+
+test('旧会议图注修正保留原分配文件，并按其原格式完整复算标签记录', t => {
+    const f = fixture(t), stagingRoot = path.join(f.root, 'legacy-caption-stage');
+    const dependencies = { ...f.dependencies, render: packet => ({
+        markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\n*论文图 2。[ph5P](‘beat’) 表示音标与释义。*`, assets: [] }) };
+    const current = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
+        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, dependencies);
+    const legacy = legacyStageRecords(current.manifest, Buffer.from(current.markdown));
+    const saved = saveSyntheticStage(stagingRoot, legacy.manifest, legacy.assignment, Buffer.from(current.markdown));
+    const originals = new Map(['assignment.json', 'manifest.json', 'page.md']
+        .map(name => [path.join(saved.directory, name), fs.readFileSync(path.join(saved.directory, name))]));
+    const policy = { contract: 'conference-caption-only-page-repair-policy-v1', mode: 'caption-only',
+        implementationSha256: sha256(fs.readFileSync(require.resolve('../scripts/lib/conference-postprocess.js'))) };
+    const restored = api.loadPreservedStage({ stagingRoot, executionId: f.one, paperId: legacy.manifest.paperId,
+        pageProof: saved.pageProof, repair: true, repairMode: 'caption-only', repairPolicy: policy });
+    assert.equal(restored.manifest.contract, 'conference-paper-page-staging-v1');
+    assert.equal(restored.manifest.version, 1);
+    assert.equal(restored.tagMetadata, restored.manifest.taxonomy);
+    assert.equal(Object.hasOwn(restored.manifest, 'tagMetadata'), false);
+    assert.equal(restored.tagAssignmentFileSha256, legacy.manifest.taxonomyAssignmentFileSha256);
+    assert.equal(restored.assignmentFileSha256, restored.tagAssignmentFileSha256);
+    assert.deepEqual(fs.readFileSync(path.join(restored.directory, 'assignment.json')), originals.get(path.join(saved.directory, 'assignment.json')));
+    assert.notEqual(restored.directory, saved.directory);
+    assert.equal(restored.repairedFrom.manifestSha256, legacy.manifest.manifestSha256);
+    assert.match(fs.readFileSync(path.join(restored.directory, 'page.md'), 'utf8'), /&#91;ph5P&#93;/);
+    const loaded = api.loadCompleted({ analysisRoot: 'ignored', executionId: f.one, planHandle: f.planHandle,
+        sourceRoot: f.sourceRoot }, f.dependencies);
+    const catalog = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
+    const recomputed = api.buildAssignment(loaded, catalog, restored.tagMetadata);
+    assert.deepEqual(recomputed, restored.tagMetadata);
+    assert.notEqual(api.stableHash(api.buildAssignment(loaded, catalog)), api.stableHash(restored.tagMetadata));
+    assert.throws(() => api.buildAssignment(loaded, catalog, { ...restored.tagMetadata, version: 2 }), /原标签分配记录的格式版本不受支持/);
+    for (const [file, bytes] of originals) assert.deepEqual(fs.readFileSync(file), bytes);
 });
 
 test('aggregate rejects a selected-member subset and executions from another authenticated plan', t => {
@@ -666,6 +764,8 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
     const review = api.stagePaper(args, f.dependencies);
     assert.equal(review.status, 'blocked');
     assert.equal(review.assignment.status, 'blocked');
+    assert.equal(review.assignment.contract, 'conference-tag-assignment-v2');
+    assert.equal(review.assignment.version, 2);
     assert.ok(review.assignment.blockedReasons.includes('primary-task:unknown:#不存在的主任务'));
     assert.ok(review.assignment.blockedReasons.some(reason => reason.startsWith('selection:')));
     assert.deepEqual(review.assignment.conceptIds, []);
@@ -688,6 +788,8 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
     assert.deepEqual(fs.readdirSync(implementationRoot).sort(), ['assignment.json', 'manifest.json', 'page.md']);
     const assignment = JSON.parse(fs.readFileSync(path.join(implementationRoot, 'assignment.json'), 'utf8'));
     assert.equal(assignment.status, 'assigned');
+    assert.equal(assignment.contract, 'conference-tag-assignment-v2');
+    assert.equal(assignment.version, 2);
     assert.equal(assignment.primaryTaskId, 'task.asr');
     assert.equal(api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies).manifest.manifestSha256,

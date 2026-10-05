@@ -408,6 +408,38 @@ def _validate_aggregate_tag_format(manifest):
             raise ConferencePublicationError('新版会议汇总成员的标签分配哈希格式无效。')
 
 
+def _validate_paper_tag_format(manifest):
+    """核对已绑定页面的保存格式，不代替标签分配文件的原字节核验。"""
+    formats = {'conference-paper-page-staging-v1': 1,
+               'conference-paper-page-staging-v2': 2}
+    version, contract = manifest.get('version'), manifest.get('contract')
+    if (type(version) is not int or not isinstance(contract, str)
+            or formats.get(contract) != version):
+        raise ConferencePublicationError('会议论文页面的格式版本不受支持。')
+    current = version == 2
+    for old_key, new_key in (('taxonomy', 'tagMetadata'),
+                             ('taxonomyAssignmentFileSha256', 'tagAssignmentFileSha256')):
+        if old_key in manifest and new_key in manifest:
+            raise ConferencePublicationError('会议论文页面不能混用新旧标签字段。')
+        if (old_key if current else new_key) in manifest:
+            raise ConferencePublicationError('会议论文页面的标签字段与格式版本不一致。')
+    if not current:
+        assignment = manifest.get('taxonomy')
+        if isinstance(assignment, dict) and ('contract' in assignment or 'version' in assignment):
+            if (assignment.get('contract') != 'conference-taxonomy-assignment-v1'
+                    or type(assignment.get('version')) is not int or assignment['version'] != 1):
+                raise ConferencePublicationError('旧版会议论文页面的标签分配记录格式版本无效。')
+        return
+    assignment = manifest.get('tagMetadata')
+    assignment_file_sha = manifest.get('tagAssignmentFileSha256')
+    if (not isinstance(assignment, dict)
+            or assignment.get('contract') != 'conference-tag-assignment-v2'
+            or type(assignment.get('version')) is not int or assignment['version'] != 2):
+        raise ConferencePublicationError('会议论文页面的标签分配记录格式版本无效。')
+    if not isinstance(assignment_file_sha, str) or not SHA_RE.fullmatch(assignment_file_sha):
+        raise ConferencePublicationError('会议论文页面的标签分配文件哈希格式无效。')
+
+
 def process_bundle(conference_id, process_id):
     safe_uuid(process_id, 'processId')
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,80}', conference_id or ''):
@@ -463,14 +495,14 @@ def process_bundle(conference_id, process_id):
         manifest = read_json(manifest_path)
         page_path = safe_relative(manifest.get('pagePath'), f'{paper_id} pagePath')
         page_bytes = read_bytes(manifest_path.parent / 'page.md')
-        if manifest.get('contract') != 'conference-paper-page-staging-v1' \
-                or manifest.get('status') != 'complete' or manifest.get('paperId') != paper_id \
+        if manifest.get('status') != 'complete' or manifest.get('paperId') != paper_id \
                 or manifest.get('analysisExecutionId') != item.get('analysisRunId') \
                 or manifest.get('contentSha256') != sha_bytes(page_bytes) \
                 or manifest.get('contentSha256') != proof.get('contentSha256') \
                 or manifest.get('manifestSha256') != proof.get('manifestSha256') \
                 or manifest_sha(manifest) != proof.get('manifestSha256'):
-            raise ConferencePublicationError(f'论文 staging 与 process proof 不一致: {paper_id}')
+            raise ConferencePublicationError(f'论文暂存记录与进程凭证不一致：{paper_id}')
+        _validate_paper_tag_format(manifest)
         text = page_bytes.decode('utf-8')
         required = [f'paper_digest_paper_id: "{paper_id}"',
                     'paper_digest_source_kind: conference',

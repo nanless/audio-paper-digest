@@ -252,9 +252,9 @@ async function promoteCaptionOnly(current, plan, deps) {
         const staged = deps.postprocess.loadPreservedStage({ stagingRoot: deps.files.conferencePageStagingDir,
             executionId: original.analysisRunId, paperId: original.paperId, pageProof: original.pageProof,
             repair: true, repairMode: 'caption-only', repairPolicy: plan.pageRepairPolicy });
-        const assignment = deps.postprocess.buildAssignment(loaded, tagCatalog);
-        if (assignment.status !== 'assigned' || api.stableHash(assignment) !== api.stableHash(staged.manifest.taxonomy)
-            || staged.assignmentFileSha256 !== staged.manifest.taxonomyAssignmentFileSha256
+        const assignment = deps.postprocess.buildAssignment(loaded, tagCatalog, staged.tagMetadata);
+        if (assignment.status !== 'assigned' || api.stableHash(assignment) !== api.stableHash(staged.tagMetadata)
+            || staged.assignmentFileSha256 !== staged.tagAssignmentFileSha256
             || api.stableHash({ analysisSha256: staged.manifest.analysisSha256,
                 completionReceiptSha256: staged.manifest.completionReceiptSha256,
                 sourceSnapshotSha256: staged.manifest.sourceSnapshotSha256 }) !== api.stableHash(causal)) {
