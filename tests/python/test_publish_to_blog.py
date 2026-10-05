@@ -3092,6 +3092,10 @@ title: "Score rows"
         bundle = publish_to_blog.build_researcher_workbench_bundle(
             paper, '2026-08-31',
         )
+        self.assertIn('tagMetadata', bundle)
+        self.assertNotIn('taxonomy', bundle)
+        self.assertEqual(bundle['tagMetadata']['registrySha256'],
+                         publish_to_blog._PAGE_TAG_CATALOG['registrySha256'])
         context = json.loads(next(
             raw for path, raw in bundle['sidecars'].items()
             if path.name == 'rethink-context.json'

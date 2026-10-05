@@ -343,7 +343,7 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     const assignment = buildAssignment(loaded, tagCatalog); if (assignment.status !== 'assigned') return { assignment };
     const stem = safeStem(loaded), conferenceId = loaded.run.conference.id;
     const date = loaded.run.completionReceipt.completedAt.slice(0, 10);
-    const packet = { paper: { ...structuredClone(loaded.analysis.papers[0]), paper_id: loaded.run.paperId }, taxonomy: assignment,
+    const packet = { paper: { ...structuredClone(loaded.analysis.papers[0]), paper_id: loaded.run.paperId }, tagMetadata: assignment,
         paper_id: loaded.run.paperId, conference: loaded.run.conference, capabilities: loaded.run.capabilities,
         publication: structuredClone(loaded.publication), date,
         figureAssets: conferenceFigureAssets(loaded),

@@ -467,7 +467,10 @@ def repair_formula_delimiters(markdown):
 
 
 def render_packet(packet):
-    paper, assignment = packet.get('paper'), packet.get('taxonomy')
+    if 'tagMetadata' in packet and 'taxonomy' in packet:
+        raise ValueError('页面生成输入不能同时包含 tagMetadata 和旧字段 taxonomy。')
+    paper = packet.get('paper')
+    assignment = packet.get('tagMetadata') if 'tagMetadata' in packet else packet.get('taxonomy')
     paper_id, conference, capabilities = packet.get('paper_id'), packet.get('conference'), packet.get('capabilities')
     if not isinstance(paper, dict) or not isinstance(assignment, dict) or not PAPER_ID.fullmatch(str(paper_id or '')):
         raise ValueError('会议论文及其标签记录必须为对象，且论文 ID 必须符合会议论文格式。')

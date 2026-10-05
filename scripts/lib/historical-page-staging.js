@@ -443,7 +443,7 @@ function stageHistoricalPages(options, dependencies = {}) {
     const preparedPages = []; const preparedAssets = new Map();
     for (const group of selected) for (const page of group.pages) {
         const rendered = (dependencies.render || defaultRender)({ paper: group.paper,
-            taxonomy: group.taxonomy, cohortDate: page.cohortDate });
+            tagMetadata: group.taxonomy, cohortDate: page.cohortDate });
         const markdown = typeof rendered === 'string' ? rendered : rendered.markdown;
         for (const asset of typeof rendered === 'string' ? [] : rendered.assets) {
             if (!asset || typeof asset.path !== 'string' || !/^(?:static\/images\/papers|static\/data\/papers)\/[A-Za-z0-9._\/-]+$/.test(asset.path)

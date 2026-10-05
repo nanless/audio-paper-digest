@@ -3344,7 +3344,7 @@ def build_researcher_workbench_bundle(
         'authors': authors,
         'primaryTask': primary_task,
         'primaryMethod': primary_method,
-        'taxonomy': tag_metadata,
+        'tagMetadata': tag_metadata,
         'score': score,
         'rankBucket': rank_bucket,
         'documentType': document_type,
@@ -3382,7 +3382,7 @@ def _researcher_workbench_frontmatter(bundle):
         'null' if identity['versionedId'] is None
         else json.dumps(identity['versionedId'], ensure_ascii=False)
     )
-    tag_metadata = bundle.get('taxonomy')
+    tag_metadata = bundle.get('tagMetadata')
     tag_frontmatter = ''
     if tag_metadata:
         tag_frontmatter = (
@@ -3451,7 +3451,7 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
         'paper_digest_sidecars': bundle['sidecarRecords'],
         'description': bundle['oneSentenceThesis'],
     }
-    tag_metadata = bundle.get('taxonomy')
+    tag_metadata = bundle.get('tagMetadata')
     if tag_metadata:
         expected.update({
             'paper_digest_taxonomy_contract': tag_metadata['contract'],

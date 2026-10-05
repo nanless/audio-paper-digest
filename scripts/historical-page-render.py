@@ -137,7 +137,9 @@ def inject_direct_publication_source(projected, publication_source):
 
 def render_packet(packet):
     paper = packet.get('paper')
-    assignment = packet.get('taxonomy')
+    if 'tagMetadata' in packet and 'taxonomy' in packet:
+        raise ValueError('页面生成输入不能同时包含 tagMetadata 和旧字段 taxonomy。')
+    assignment = packet.get('tagMetadata') if 'tagMetadata' in packet else packet.get('taxonomy')
     date = packet.get('cohortDate')
     direct = packet.get('directStaging') is True
     if not isinstance(paper, dict):

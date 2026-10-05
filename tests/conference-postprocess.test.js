@@ -127,7 +127,12 @@ function fixture(t, extraRuns = []) {
     const dependencies = { loadConferenceAnalysis: ({ executionId }) => structuredClone(runs.get(executionId)),
         planHandleAuthority: handle => { if (handle?.key !== 'a') throw new Error('wrong plan'); return structuredClone(planAuthority); },
         verifyPlanAuthority: (loaded, handle) => { if (loaded.planKey !== handle?.key) throw new Error('cross-plan'); return true; },
-        isSuccessful: () => true, render: packet => ({ markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\n${packet.paper.parsed.summary}\n`, assets: [] }) };
+        isSuccessful: () => true, render: packet => {
+            assert.equal(Object.hasOwn(packet, 'taxonomy'), false);
+            assert.equal(packet.tagMetadata.paperId, packet.paper_id);
+            assert.equal(packet.tagMetadata.status, 'assigned');
+            return { markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\n${packet.paper.parsed.summary}\n`, assets: [] };
+        } };
     const extra = extraRuns.map(item => item.executionId);
     return { root, one, two, extra, runs, planHandle, sourceRoot: path.join(root, 'source'), dependencies };
 }

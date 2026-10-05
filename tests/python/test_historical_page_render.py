@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import base64
 import hashlib
 import json
@@ -85,9 +86,27 @@ class HistoricalPageRenderTests(unittest.TestCase):
                 {'id': 'research_focus.robustness', 'facet': 'research_focus', 'preferredLabel': {'zh': '鲁棒性'}},
             ],
         }
-        result = renderer.render_packet({
+        legacy_packet = {
             'paper': paper, 'taxonomy': assignment, 'cohortDate': '2026-09-04',
-        })
+        }
+        original = copy.deepcopy(legacy_packet)
+        result = renderer.render_packet(legacy_packet)
+        current_packet = copy.deepcopy(legacy_packet)
+        current_packet['tagMetadata'] = current_packet.pop('taxonomy')
+        current_original = copy.deepcopy(current_packet)
+        self.assertEqual(renderer.render_packet(current_packet), result)
+        self.assertEqual(legacy_packet, original)
+        self.assertEqual(current_packet, current_original)
+        for value in (None, current_packet['tagMetadata']):
+            mixed = copy.deepcopy(current_packet)
+            mixed['taxonomy'] = value
+            with self.assertRaisesRegex(ValueError, '不能同时包含 tagMetadata 和旧字段 taxonomy'):
+                renderer.render_packet(mixed)
+        with self.assertRaisesRegex(ValueError, '不能同时包含 tagMetadata 和旧字段 taxonomy'):
+            renderer.render_packet({'tagMetadata': None, 'taxonomy': None})
+        current_packet['tagMetadata'] = None
+        with self.assertRaisesRegex(ValueError, '缺少有效的标签选择记录'):
+            renderer.render_packet(current_packet)
         self.assertIn('tags: [声源定位, Transformer, 鲁棒性]', result['markdown'])
         self.assertIn('paper_digest_primary_method: "Transformer"', result['markdown'])
         self.assertIn(sealed_summary, result['markdown'])

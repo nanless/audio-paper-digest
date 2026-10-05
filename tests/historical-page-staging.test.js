@@ -40,7 +40,12 @@ function fixture(t) {
         loadTagCatalog: () => ({ registrySha256: REGISTRY_SHA }),
         loadRun: () => ({}), runSnapshot: () => ({ analysisFileSha256: 'a'.repeat(64), papers: [paper] }),
         buildAssignment: () => assignment,
-        render: packet => { assert.equal(packet.paper.apiReaderArticle, 'NEW_READER_ONLY'); return `---\ndate: ${packet.cohortDate}\n---\nNEW PAGE`; },
+        render: packet => {
+            assert.equal(Object.hasOwn(packet, 'taxonomy'), false);
+            assert.deepEqual(packet.tagMetadata, assignment);
+            assert.equal(packet.paper.apiReaderArticle, 'NEW_READER_ONLY');
+            return `---\ndate: ${packet.cohortDate}\n---\nNEW PAGE`;
+        },
         now: () => '2026-09-07T00:00:00.000Z' };
     return { root, dependencies, state, paper, assignment };
 }

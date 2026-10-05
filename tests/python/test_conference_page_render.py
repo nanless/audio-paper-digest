@@ -97,6 +97,27 @@ class ConferencePageRenderTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '标签选择记录与分析阶段记录'):
                 MODULE.render_packet(bad)
 
+    def test_tag_metadata_packet_matches_legacy_and_rejects_both_fields(self):
+        legacy = self.packet()
+        original = copy.deepcopy(legacy)
+        expected = MODULE.render_packet(legacy)
+        current = copy.deepcopy(legacy)
+        current['tagMetadata'] = current.pop('taxonomy')
+        current_original = copy.deepcopy(current)
+        self.assertEqual(MODULE.render_packet(current), expected)
+        self.assertEqual(legacy, original)
+        self.assertEqual(current, current_original)
+        for value in (None, current['tagMetadata']):
+            mixed = copy.deepcopy(current)
+            mixed['taxonomy'] = value
+            with self.assertRaisesRegex(ValueError, '不能同时包含 tagMetadata 和旧字段 taxonomy'):
+                MODULE.render_packet(mixed)
+        with self.assertRaisesRegex(ValueError, '不能同时包含 tagMetadata 和旧字段 taxonomy'):
+            MODULE.render_packet({'tagMetadata': None, 'taxonomy': None})
+        current['tagMetadata'] = None
+        with self.assertRaisesRegex(ValueError, '标签记录必须为对象'):
+            MODULE.render_packet(current)
+
     def packet(self):
         paper_id = 'conference:icassp:2026:icassp-arnumber:100'
         article = '这是只来自会议分析 Reader 的全新解读正文。'
