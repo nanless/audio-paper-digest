@@ -261,7 +261,7 @@ describe('production analysis contract regressions', () => {
     });
 });
 
-// ——— Registry 版本化（P2-2/C7）：taxonomySeal 的 additive 放宽与 fail-closed ———
+// 检查词表更新后沿用标签阶段记录的条件，以及各项核验失败时的拒绝结果。
 const REGISTRY_FILE = path.resolve(__dirname, '../config/tag-catalog.json');
 const ADDITIVE_OLD_SHA = 'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf';
 const DESTRUCTIVE_OLD_SHA = '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a';
@@ -270,9 +270,8 @@ function annotationFor(fromRegistrySha256) {
     const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
-    // 换表（v1.1）后 dcf83f84→当前 为可确认 destructive；本助手的意图是“构造一份
-    // 合法可放行的注记”，故自动携带白名单 ack（显式篡改/缺注记的拒绝场景仍由各用例
-    // 自行构造，不经本助手）。
+    // 本助手构造可用于核验的升级说明，因此为当前允许确认的破坏性变更附加明确确认。
+    // 缺少说明、缺少确认或字段被篡改的反例由各用例单独构造。
     const eligible = changeLevel === 'destructive'
         && registryChange.canAcknowledgeRegistryChange(detail) === true;
     return registryChange.buildRegistryUpgradeAnnotation({
@@ -391,9 +390,9 @@ describe('taxonomySeal registry upgrade gate', () => {
             annotation,
             ...overrides
         });
-        // 显式确认 + 影响面 none + 四门齐 → 放行，下游逐字绑定照旧重放。
+        // 快照、明确确认、升级说明和原概念均通过检查后，标签阶段记录仍按原规则核验正文与检查点。
         assert.strictEqual(seal(), null);
-        // 缺确认 / 哈希不符 / 影响面非 none → 照旧拒绝。
+        // 缺少确认、原因哈希不符，或 conceptIdImpact 不是 none 时，均返回拒绝原因。
         const withoutAck = { ...annotation };
         delete withoutAck.destructiveAcknowledgement;
         assert.match(seal({ annotation: withoutAck }), /显式确认无效/);
@@ -405,7 +404,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         } }), /conceptIdImpact/);
         // 注记谎报 additive：确认不能把 destructive 翻案成 additive。
         assert.match(seal({ annotation: { ...annotation, changeLevel: 'additive' } }), /destructive/);
-        // conceptIds 非 active：确认不能替代第 ④ 条门。
+        // 即使确认有效，引用缺失或已停用的概念仍须被拒绝。
         const fixture = sealedPaper({ registrySha256: DESTRUCTIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64), annotation });
         fixture.stage.conceptIds = [...fixture.stage.conceptIds, 'task.ghost-concept'];
@@ -474,7 +473,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         }), /toRegistrySha256/);
     });
 
-    it('still replays every downstream byte binding after an admitted upgrade', () => {
+    it('词表升级核验通过后，阶段绑定哈希和正文检查点仍须有效', () => {
         const fixture = sealedPaper({
             registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64),
@@ -623,7 +622,7 @@ describe('标签阶段的新旧保存格式', () => {
         if (status === 'complete') paper.analysisStageCheckpoints.structureRepair = paper.analysis;
         return { ...fixture, stage, originalStage };
     }
-    it('读取旧记录保留原对象、十三字段顺序和原签名；新记录按新字段签名', () => {
+    it('读取旧记录保留原引用、十三字段顺序及内容哈希，新记录按新字段计算哈希', () => {
         const old = sealedPaper();
         const bytes = JSON.stringify(old.paper);
         const descriptor = records.readTagStageRecord(old.paper.analysisManifest, old.paper.analysisStageCheckpoints);

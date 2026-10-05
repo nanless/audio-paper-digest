@@ -1,16 +1,12 @@
 'use strict';
 
-// 评审缺口 #6：taxonomy-reseal `--apply` 写入路径的集成测试。
-//
-// 为什么单独一个文件：这里要为每条场景构造一份 tmp 目录里的完整假 conference
-// process（intent/source/analysis/run 执行链 + state.json + completion-receipt），
-// 与 tests/tag-record-update.test.js 里纯内存的只读重放用例是两类东西；混在一个
-// 文件里会让夹具失败掩盖合同用例的回归。运行命令
-// `node --test tests/taxonomy-reseal*.js` 同时覆盖两个文件。
-//
-// 全部 fixture 都落在 os.tmpdir()：假 process 目录、假 analysis 执行目录、
-// 假 registry 快照目录（文件名仍是内容字节 SHA）。绝不读写真实
-// data/runtime/conference-processes/，也不修改 config/ 下任何字节。
+// 这些集成测试检查标签记录更新工具的 --apply 写入流程。
+// 每个用例都在系统临时目录中构造会议处理、来源、分析和运行记录，
+// 包括 state.json 与完成凭证；内存中的记录核验另见 tag-record-update.test.js。
+// 两类测试分别覆盖文件写入和记录规则，避免夹具构造失败掩盖规则回归。
+// 可用 node --test tests/tag-record-update*.test.js 运行这两份测试。
+// 临时词表快照仍以文件内容 SHA 命名。这里不写入真实运行目录，
+// 也不修改 config/ 下的源文件。
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -61,8 +57,8 @@ function executionIdentity() {
     });
 }
 
-// 与生产同构的完整执行链：intent → source → analysis → run，最后用真实
-// adapter.sealCompletedRun 封成 complete run。全部字节都在 tmp 目录里生成。
+// 在临时目录中按生产读取器要求构造意图、来源、分析和运行记录，
+// 再调用 adapter.sealCompletedRun 生成完成记录，供真实写入流程核验。
 function buildExecution({ analysisRoot, executionId, record }) {
     const directory = path.join(analysisRoot, executionId);
     const paperId = record.paperId;
@@ -272,8 +268,8 @@ function planOf(fx) {
         analysisRoot: fx.files.conferenceAnalysisDir,
         runtime: tagRules(),
         mode: 'reproject',
-        // 换表后 dcf83f84→当前 为可确认的 destructive；happy-path 规划的意图是
-        // “合法可写”，故显式携带 ack（test4 的 blocked 场景不经本助手，直接走 CLI 无 flag）。
+        // 默认夹具用于测试可写入的更新，因此提供这次破坏性变更所需的明确确认。
+        // 缺少确认的拒绝用例直接调用 CLI，不使用本助手生成确认。
         acknowledgeDestructive: true,
         snapshotOptions: { historyDir: fx.historyDir }
     }) };
@@ -337,7 +333,7 @@ test('实际更新会保存分析、运行和进程记录，并归档原完成�
     // 注意：main 用降级后的 running 状态调用 nextStepFor，因此 nextStep 恒为
     // null（既有行为，不在本任务改动范围内）。
 
-    // analysis.json：stage registry/projection 重封到当前，bindingSha256 闭环通过。
+    // analysis.json 中的标签阶段记录更新到当前词表，并重新核对十三字段内容哈希。
     const current = tagRules();
     const { paper, stage } = currentStage(fx);
     assert.equal(stage.registrySha256, current.registrySha256);
@@ -368,7 +364,7 @@ test('实际更新会保存分析、运行和进程记录，并归档原完成�
     }), null);
     assert.equal(paper.parsed.tagValidation.registrySha256, current.registrySha256);
 
-    // run.json：逐字重封，receipt 绑定新 analysis 字节，真实 adapter 复核通过。
+    // run.json 及其完成凭证更新为对应新的分析文件字节，随后由真实读取器重新核验。
     const analysisBytes = fs.readFileSync(fx.analysisFile);
     const run = JSON.parse(fs.readFileSync(fx.runFile, 'utf8'));
     assert.equal(run.status, 'complete');
@@ -383,7 +379,7 @@ test('实际更新会保存分析、运行和进程记录，并归档原完成�
         analysisRoot: fx.files.conferenceAnalysisDir, executionId: fx.executionId });
     assert.equal(verified.analysisFileSha256, sha256(analysisBytes));
 
-    // state.json：complete → running，aggregate/completion 置空，generation+1。
+    // 进程状态退回 running，清空汇总及完成凭证字段，并将 generation 增加一。
     const state = processApi.assertState(JSON.parse(fs.readFileSync(fx.stateFile, 'utf8')));
     assert.equal(state.status, 'running');
     assert.equal(state.aggregate, null);
@@ -437,8 +433,8 @@ test('分析文件内容发生变化时，更新会在写入前停止', async t 
     assert.equal(plan.writes.length, 1);
     const before = coreSnapshot(fx);
 
-    // 篡改 analysis 并把 run 链一起重封成“自洽的新证据”：CAS 仍必须按规划期
-    // 记住的字节 SHA 拒绝写入。
+    // 修改分析文件后，同时更新运行记录及其完成凭证，使对应关系仍然成立。
+    // 写入检查仍须发现当前文件 SHA 与规划时不同，并拒绝覆盖。
     const record = JSON.parse(fs.readFileSync(fx.analysisFile, 'utf8'));
     const tamperedBytes = Buffer.from(`${JSON.stringify(record, null, 4)}\n`);
     writeFile(fx.analysisFile, tamperedBytes);
@@ -578,8 +574,8 @@ test('已有归档内容的哈希与文件名不符时，--archive-snapshot 拒�
     const tampered = Buffer.from('{"registry": "tampered"}\n');
     writeFile(target, tampered);
 
-    // “文件名≠内容 SHA”就是同一道门：目标名由源字节 SHA 推导，盘上的字节
-    // 已经不是它 → 既不覆盖也不改名，直接拒绝。
+    // 目标文件名由原词表的内容 SHA 决定。已有文件的实际内容与该 SHA 不符时，
+    // 归档操作必须拒绝继续，不能覆盖文件或给错误内容改名。
     assert.equal(sha256(fs.readFileSync(target)) !== sha, true, '被篡改文件的字节 SHA 已不等于文件名');
     await assert.rejects(() => runMain(['--archive-snapshot'], { files: fx.files }),
         /拒绝覆盖|不一致/);
@@ -594,14 +590,14 @@ test('已有归档内容的哈希与文件名不符时，--archive-snapshot 拒�
     assert.equal(fs.readFileSync(target).equals(fx.bytes), true);
 });
 
-// ——— destructive 显式确认通道在真实（tmp 夹具）写入链路上的行为 ———
+// 在系统临时目录中检查明确确认参数对真实文件写入流程的影响。
 test('提供 --acknowledge-destructive 后，进程可以更新允许确认的破坏性变更', async t => {
     const fx = fixture(t, { registrySha256: DESTRUCTIVE_OLD_SHA, annotation: false });
     const runtime = runtimeFor(fx);
     const before = coreSnapshot(fx);
     const previousExitCode = process.exitCode;
     try {
-        // 不带 flag：行为与从前完全一致 —— blocked、退出码 1、零写入。
+        // 未提供确认参数时，工具返回 blocked、设置退出码 1，且不写入文件。
         const blocked = await runMain(['--from', fx.processId], runtime);
         assert.equal(blocked.report.items[0].status, 'blocked');
         assert.equal(blocked.report.items[0].outcome, 'destructive-change');
@@ -612,7 +608,7 @@ test('提供 --acknowledge-destructive 后，进程可以更新允许确认的�
         assert.deepEqual(coreSnapshot(fx), before, 'blocked 时一个字节都不写');
         process.exitCode = previousExitCode;
 
-        // dry-run + flag：进入 reproject，注记写入确认字段，仍不写任何文件。
+        // 提供确认参数但未指定 --apply 时，只计算更新结果和确认说明，不写入文件。
         const planned = await runMain(['--from', fx.processId, '--acknowledge-destructive',
             '--acknowledge-note', '人工确认：仅删别名，conceptId 影响 none'], runtime);
         assert.equal(planned.report.items[0].status, 'assigned');
@@ -629,7 +625,7 @@ test('提供 --acknowledge-destructive 后，进程可以更新允许确认的�
         assert.equal(process.exitCode, previousExitCode, '无 blocked 论文时不设失败退出码');
         assert.deepEqual(coreSnapshot(fx), before, 'dry-run 一个字节都不写');
 
-        // --apply：analysis/run/state 按 SHA CAS 重封，complete 进程退回 running。
+        // 指定 --apply 后，先核对规划时记录的 SHA，再更新分析、运行及进程文件；进程退回 running。
         const applied = await runMain(['--from', fx.processId, '--apply',
             '--acknowledge-destructive'], runtime);
         assert.equal(applied.report.written, true);
@@ -646,7 +642,7 @@ test('提供 --acknowledge-destructive 后，进程可以更新允许确认的�
         assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.conceptIdImpact, 'none');
         assert.match(stage.registryUpgradeFrom.destructiveAcknowledgement.note,
             /^已明确确认本次词表更新中的破坏性变更：[a-f0-9]{64} → [a-f0-9]{64}；所选概念 ID 保持不变。$/);
-        // 重封后 binding 必须重新闭合，Python 发布端同一注记也必须能过。
+        // 写入后的标签阶段记录必须再次通过 Node 的内容及对应关系核验。
         assert.strictEqual(contract.validateTagStageProof(paper, {
             parsed: utilsApi.parseAnalysis(paper.analysis, { tagRules: current }),
             tagRules: current

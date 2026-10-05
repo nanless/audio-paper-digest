@@ -15,7 +15,8 @@ const own = (value, key) => value !== null && typeof value === 'object' && !Arra
 
 const ownValue = (value, key) => own(value, key) ? value[key] : undefined;
 
-// 只识别保存格式并返回原引用。失败阶段不必已有完整合同、签名或正文检查点。
+// 此函数只识别保存格式，并返回原阶段和检查点的引用。
+// 失败阶段可以尚未包含完整的格式声明、内容哈希或正文检查点。
 function readTagStageRecord(manifest, checkpoints) {
     const stages = ownValue(manifest, 'stages');
     const contracts = ownValue(manifest, 'contracts');

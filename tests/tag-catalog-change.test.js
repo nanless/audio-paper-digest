@@ -31,11 +31,10 @@ function expectLevel(oldRegistry, newRegistry, expected, expectedCodes = []) {
     return detail;
 }
 
-// ——— 合成 additive 过渡（换表口径下唯一可复现的 additive 路径） ———
-// 三份历史快照（dcf83f84 / 3f9a14c9 / 15c82a56）→ current(v1.1) 现在全部复算为
-// destructive；“additive 放行 / additive 不得带确认字段”这类门只能用一份合成旧表
-// 来复现：从当前表去掉一个无人引用的叶子概念，旧 → 新就只剩 concept-added。
-// 合成表不落盘，按字节 SHA 注入 registryHistory 后由快照门原样取回。
+// 为非破坏性更新构造一个只缺少当前词表叶子概念的旧词表。
+// 从该旧词表更新到当前词表时，只出现新增概念这一原因。
+// 所用历史快照更新到当前 v1.1 词表则包含破坏性变更，不能作为这个分支的正例。
+// 合成快照只在内存中注入，不保存到词表目录。
 const ADDITIVE_FROM_CONCEPT_ID = 'task.wake-word';
 
 function syntheticAdditiveUpgrade(current) {
@@ -148,10 +147,9 @@ test('colliding active Chinese preferred labels across facets are destructive', 
         && reason.conceptIds.length === 2));
 });
 
-// 评审复现场景：把另一分面已占用的标签当别名加进来 —— validateTagCatalog 的
-// 标签唯一性只在分面内（scripts/lib/tag-catalog.js 的 key 是 facet\0归一
-// 标签），registry 校验能过、旧分级还会判 additive，但解析期该标签的候选数
-// 会由 1 变 2，所以必须判 destructive / label-collision。
+// 同一分类维度内，不同概念的标签按统一规则处理后名称相同时，validateTagCatalog 会拒绝词表。
+// 本用例增加另一个维度已使用的标签。词表本身仍可通过校验，但解析候选会增加，
+// 因而这次变更须判为破坏性变更，并记录 label-collision。
 test('cross-facet collisions over every registry label are destructive (label-collision)', () => {
     const aliasCollision = clone(raw());
     byId(aliasCollision, 'method.transformer').aliases.push('语音识别');
@@ -332,11 +330,11 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
     }), /生成的词表升级说明不能为空，且长度不能超过/);
 });
 
-// 换表口径：历史快照 → current(v1.1) 全部复算为 destructive，四门中的第 ② 条门
-// 只能由“与本次复算绑定的 destructiveAcknowledgement”打开；第 ①③④ 条门（快照
-// 取回、注记自洽、conceptIds 仍 active）一条不少，缺任一仍 fail-closed。additive
-// 复算的放行路径改用合成旧表复现（见 syntheticAdditiveUpgrade）。
-test('seal upgrade gate admits acknowledged destructive upgrades, fails closed otherwise', () => {
+// 所用历史快照更新到当前 v1.1 词表时，都包含破坏性变更。
+// 继续沿用记录必须取得旧快照，核对与重算原因对应的明确确认及升级说明，
+// 并确认原概念仍在当前词表中启用。缺少任一条件都应返回拒绝结果。
+// 非破坏性分支使用 syntheticAdditiveUpgrade 构造的旧词表测试。
+test('按变更等级核验词表升级，任何检查失败都拒绝沿用记录', () => {
     const current = tagCatalogApi.loadTagCatalog(CURRENT);
     const conceptIds = ['task.asr', 'method.transformer'];
     const seed = tagCatalogApi.loadTagCatalog(OLD_SEED);
@@ -352,7 +350,7 @@ test('seal upgrade gate admits acknowledged destructive upgrades, fails closed o
         acknowledgeDestructive: true
     });
 
-    // 可确认 destructive + 合法 ack 注记 → 放行，且分级仍是 destructive（不翻案）。
+    // 明确确认与其余核验均有效时，允许沿用记录；变更等级仍为 destructive。
     const allowed = api.validateSealRegistryUpgrade({
         fromRegistrySha256: seed.registrySha256,
         currentRegistry: current,
@@ -363,7 +361,7 @@ test('seal upgrade gate admits acknowledged destructive upgrades, fails closed o
     assert.equal(allowed.ok, true, allowed.error);
     assert.equal(allowed.changeLevel, 'destructive');
 
-    // destructive 缺 ack 注记 → 第 ② 条门先拒（注记字段门还没轮到）。
+    // 破坏性变更缺少明确确认时，先返回确认错误，不继续检查升级说明的其他字段。
     const missingAnnotation = api.validateSealRegistryUpgrade({
         fromRegistrySha256: seed.registrySha256,
         currentRegistry: current,
@@ -443,7 +441,7 @@ test('seal upgrade gate admits acknowledged destructive upgrades, fails closed o
     assert.match(additiveMissingAnnotation.error, /registryUpgradeFrom/);
 });
 
-// ——— 跨端一致性：同一 (旧SHA, 注记, conceptIds) 输入必须让 Node 与 Python 同向 ———
+// 对相同的旧词表 SHA、升级说明和概念 ID，比较 Node 与 Python 的核验结果。
 const CROSS_END_FIXTURE = path.resolve(__dirname, 'fixtures/registry-upgrade-cross-end.json');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
@@ -703,7 +701,7 @@ test('acknowledgement eligibility is an explicit whitelist of parse-semantic cha
     // 混入任一白名单外的 destructive 理由即整体不可确认。
     assert.equal(api.canAcknowledgeRegistryChange(detailWith(['alias-removed', 'concept-removed'])), false);
     assert.equal(api.canAcknowledgeRegistryChange(detailWith(['concept-removed', 'alias-removed'])), false);
-    // additive/none 无需确认，天然放行；分级缺失或 destructive 却数不出理由 → fail-closed。
+    // additive 和 none 不需要破坏性变更确认；等级缺失，或 destructive 没有相应原因时，不能确认。
     assert.equal(api.canAcknowledgeRegistryChange({ changeLevel: 'additive',
         reasons: [{ level: 'additive', code: 'concept-added', message: 'x' }] }), true);
     assert.equal(api.canAcknowledgeRegistryChange({ changeLevel: 'none', reasons: [] }), true);
@@ -768,7 +766,7 @@ test('destructive reasonsHash is a stable, message-independent fingerprint of th
     }), /本次破坏性变更不属于可人工确认的范围：concept-removed/);
 });
 
-test('the seal gate admits an acknowledged destructive upgrade only when all four doors hold', () => {
+test('只有快照、明确确认、升级说明和原概念均通过核验，才能沿用破坏性更新前的标签记录', () => {
     const current = tagCatalogApi.loadTagCatalog(CURRENT);
     const from = tagCatalogApi.loadTagCatalog(OLD_ALIAS_REMOVAL);
     const conceptIds = ['task.asr', 'method.transformer'];
@@ -790,13 +788,13 @@ test('the seal gate admits an acknowledged destructive upgrade only when all fou
         ...overrides
     });
 
-    // ①+②+③+④ 全部成立 → 放行（分级仍是 destructive，不被翻案）。
+    // 四项核验均通过时允许沿用记录，变更等级仍为 destructive。
     const allowed = seal();
     assert.equal(allowed.ok, true, allowed.error);
     assert.equal(allowed.changeLevel, 'destructive');
     assert.equal(allowed.detail.changeLevel, 'destructive');
 
-    // ② 确认缺失 / 哈希不符 / 影响面非 none / 未知字段 / note 非法 → 拒。
+    // 确认缺失、原因哈希不符、conceptIdImpact 不是 none，或字段及说明格式无效时，均须拒绝。
     const ack = annotation.destructiveAcknowledgement;
     const withAck = patch => ({ ...annotation,
         destructiveAcknowledgement: { ...ack, ...patch } });

@@ -231,8 +231,8 @@ function reprojectAnalysis({ analysis, runtime: tagRules, mode = 'reproject', sn
             Object.entries(paper.analysisStageCheckpoints).map(([key, value]) =>
                 key === tagRecord.checkpointKey ? ['tagSelection', value] : [key, value]));
     }
-    // 注记保留缓存的原字段名；显式重新生成时只迁移标签子对象的字段名。
-    // 两种模式都只更新原子对象的词表版本和 SHA，不覆盖评分或人工修改。
+    // 注记模式保留缓存的原字段名；显式重新生成时，只把标签校验子对象的字段名改为新名称。
+    // 两种模式都只更新该子对象的词表版本和 SHA，保留评分及人工修改。
     if (cachedTagValidation) {
         const cachedKey = Object.prototype.hasOwnProperty.call(paper.parsed, 'tagValidation')
             ? 'tagValidation' : 'taxonomyValidation';

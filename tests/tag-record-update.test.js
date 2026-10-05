@@ -28,8 +28,8 @@ test('标签阶段已使用当前词表时，只核验记录，不写入文件',
     assert.equal(plan.item.pageRestageRequired, false);
 });
 
-// 换表（v1.1）后 dcf83f84→当前 的分级为“可确认的 destructive”（改名/改边/删别名，
-// conceptIds 零影响）——确定性重投影语义不变，仅注记需携带白名单 ack。
+// dcf83f84 快照更新到当前 v1.1 词表时，首选标签、上级关系和别名发生了变化，
+// 程序将其判为允许明确确认的破坏性变更。本用例保持所选概念 ID，并提供对应确认。
 test('明确确认允许的破坏性变更后，工具按当前词表更新标签阶段记录，不调用模型', () => {
     const plan = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
         acknowledgeDestructive: true });
@@ -54,7 +54,7 @@ test('明确确认允许的破坏性变更后，工具按当前词表更新标�
     assert.notEqual(nextStage.bindingSha256, analysisRecord({
         registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64)
     }).papers[0].analysisManifest.stages.taxonomySeal.bindingSha256);
-    // 正文与 checkpoint 逐字不变：只有 registry/projection/binding 与注记变化。
+    // 正文内容保持不变；阶段记录更新词表与提示文本字段、内容哈希及升级说明。
     assert.equal(plan.analysis.papers[0].analysis,
         analysisRecord({ registrySha256: ADDITIVE_OLD_SHA }).papers[0].analysis);
     // 显式重新生成后，缓存仅使用新的标签校验字段。
@@ -217,8 +217,8 @@ test('命令参数支持更新记录、标记旧文件、比较词表和归档�
     assert.throws(() => cli.parseArgs(['--archive-snapshot', '--report', 'a.json']), /用法：/);
     assert.throws(() => cli.parseArgs(['--archive-snapshot', '--from', uuid]), /用法：/);
     assert.throws(() => cli.parseArgs(['--from', uuid, '--report', '../escape.json']), /report/);
-    // --acknowledge-destructive 只属于 reseal：与 --archive-snapshot / --mark-stale /
-    // --classify 互斥；--acknowledge-note 必须依附 --acknowledge-destructive。
+    // --acknowledge-destructive 只用于更新标签记录，不能与归档快照、标记旧文件或比较词表同时使用。
+    // 指定 --acknowledge-note 时，必须同时指定 --acknowledge-destructive。
     assert.throws(() => cli.parseArgs(['--archive-snapshot', '--acknowledge-destructive']), /用法：/);
     assert.throws(() => cli.parseArgs(['--mark-stale', '--acknowledge-destructive']), /用法：/);
     assert.throws(() => cli.parseArgs(['--classify', '--old', 'a.json', '--new', 'b.json',
@@ -249,10 +249,9 @@ const OLD_ALIAS_REMOVAL = path.join(REGISTRY_HISTORY,
 const OLD_SEED = path.join(REGISTRY_HISTORY,
     'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf.json');
 
-// 构造“旧表多一个概念、新表已删除”的 registry：复算必为 destructive +
-// concept-removed，属于不可确认集合。loadTagCatalog 只接受
-// version/facets/concepts 三个字段，所以这里不带 registrySha256；
-// 快照注入点再按需补上（normalizeRegistry 接受对象形态的字节 SHA）。
+// 为旧词表增加一个当前词表不存在的概念，使更新包含删除概念这一不可确认的破坏性变更。
+// loadTagCatalog 只接受 version、facets 和 concepts 字段，因此构造时不加入 registrySha256；
+// 注入旧快照时，再提供核验所需的文件字节 SHA。
 function registryWithExtraConcept() {
     const next = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
     next.concepts.push({
@@ -286,7 +285,7 @@ test('明确确认允许的破坏性变更后，可以更新标签阶段记录',
     assert.equal(stage.registryUpgradeFrom.changeLevel, 'destructive');
     assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.reasonsHash,
         plan.item.destructiveAcknowledgement.reasonsHash);
-    // 正文与 checkpoint 逐字不变；重封后 binding 必须重新闭合（第 4 条门）。
+    // 正文保持不变；更新后的阶段记录仍须通过标签阶段内容及对应关系核验。
     assert.equal(plan.analysis.papers[0].analysis,
         analysisRecord({ registrySha256: DESTRUCTIVE_OLD_SHA }).papers[0].analysis);
     assert.strictEqual(contract.validateTagStageProof(plan.analysis.papers[0], {
@@ -334,9 +333,9 @@ test('未提供确认参数时，允许确认的破坏性变更仍会阻止更�
     }
 });
 
-// 分级由 registry 内容决定、与 flag 无关：换表后 dcf83f84→当前 恒为可确认 destructive——
-// 无 flag 被拦（分类不变），带 flag 仅在注记上开白名单口子；原“additive 不得携带
-// ack”的构建器约束由 tests/tag-catalog-change.test.js 的 ack 用例覆盖。
+// 变更等级由新旧词表内容决定，确认参数不会把破坏性变更改为非破坏性变更。
+// dcf83f84 到当前词表的更新只有提供有效确认后才可继续。
+// 非破坏性变更不能携带确认字段，相关构建器用例见 tag-catalog-change.test.js。
 test('确认参数只记录用户确认，不改变词表变更的分类', () => {
     const without = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
     assert.equal(without.item.changeLevel, 'destructive');
@@ -465,7 +464,7 @@ test('标签更新只读旧缓存且拒绝混用，不补造缺少的校验结�
     }
 });
 
-test('显式重新生成迁移单个标签阶段格式；只读和注记保留旧键及签名', () => {
+test('显式重新生成采用新标签阶段格式，只读和注记保留旧字段及原内容哈希', () => {
     const records = require('../scripts/lib/tag-stage-record.js');
     const old = analysisRecord();
     const bytes = JSON.stringify(old);
@@ -501,7 +500,7 @@ test('显式重新生成迁移单个标签阶段格式；只读和注记保留�
     assert.match(blocked.item.errors.join(''), /不能混用新旧格式/);
 });
 
-test('重新生成新格式不能清洗旧记录的坏签名或父合同', () => {
+test('重新生成前须拒绝原绑定哈希无效或格式声明错误的标签记录', () => {
     for (const mutate of [
         paper => { paper.analysisManifest.stages.taxonomySeal.bindingSha256 = '0'.repeat(64); },
         paper => { paper.analysisManifest.contracts.taxonomy = 'wrong-selection-contract'; }

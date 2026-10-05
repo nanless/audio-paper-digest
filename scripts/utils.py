@@ -185,9 +185,8 @@ def parse_machine_summary(analysis):
 
 _DEFAULT_TAG_CATALOG = load_tag_catalog()
 
-# These compatibility exports are projections of the registry, never a second
-# hand-maintained vocabulary.  A model family remains a supplementary tag and
-# cannot occupy the primary method role.
+# 这些兼容导出都由词表生成，不另维护一份标签清单。
+# 模型家族只作为补充标签，不能代替主方法。
 ALLOWED_TAGS = set(active_preferred_labels(_DEFAULT_TAG_CATALOG))
 PRIMARY_TASK_TAGS = set(active_preferred_labels(_DEFAULT_TAG_CATALOG, ('task',)))
 PRIMARY_METHOD_TAGS = set(active_preferred_labels(
@@ -227,7 +226,7 @@ def _resolve_analysis_tag(raw, tag_catalog, *, facets=None, legacy_tags=False):
 
 
 def _tag_tokens(raw_line, *, legacy_tags=False):
-    """Extract explicit hashtags; only legacy mode may add omitted hashes."""
+    """提取明确带井号的标签；只有兼容历史标签且整行没有这种标签时，才为分隔出的词补上井号。"""
     if not isinstance(raw_line, str):
         return []
     hashtags = re.findall(r'#\S+', raw_line)
@@ -477,7 +476,7 @@ def read_tag_validation(parsed_analysis):
 
 
 def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
-    """解析深度分析文本为结构化字典"""
+    """将分析正文解析为字段字典，并记录标签检查结果。空输入或论文评价标题存在冲突时返回 None。"""
     if not analysis:
         return None
     if evaluation_heading_issue(analysis):
@@ -485,8 +484,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     if type(legacy_tags) is not bool:
         raise ValueError('legacy_tags must be bool')
     registry = _DEFAULT_TAG_CATALOG if tag_catalog is None else tag_catalog
-    # Validation happens before parsing so a malformed registry can never turn
-    # an unknown production label into an accepted string by accident.
+    # 先核验词表，再解析正文；词表格式无效时不能继续接受其中的标签。
     active_preferred_labels(registry)
     r = {
         'machineSummary': None,
@@ -524,8 +522,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     m = re.search(r'##\s*评分\s*\n\s*\*?(\d+\.?\d*)\*?', analysis)
     r['score'] = m.group(1) if m else ''
 
-    # Only explicit role fields are authoritative.  The general tag list is
-    # never interpreted as first=task/second=method.
+    # 主任务和主方法必须由对应字段明确给出，不能按标签列表中的位置推断。
     extracted_task_tag = None
     extracted_method_tag = None
     tag_section_match = re.search(r'##\s*标签\s*\n([\s\S]*?)(?=\n##\s|\n【|$)', analysis)
@@ -549,9 +546,8 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
                 if legacy_tags:
                     concept, _error = _resolve_analysis_tag(
                         token, registry, legacy_tags=True)
-                    # Legacy aliases can be globally ambiguous while an exact
-                    # explicit task/method role line disambiguates them.  Do
-                    # not extend this exception to supplemental tags.
+                    # 历史别名在整个词表中可能有歧义；只有原词与明确的主任务或主方法字段
+                    # 相同时，才按该角色查找。这一兼容处理不适用于补充标签。
                     if concept is None and token.strip() == str(extracted_task_tag or '').strip():
                         concept, _error = _resolve_analysis_tag(
                             token, registry, facets=('task',), legacy_tags=True)

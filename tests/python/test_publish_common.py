@@ -189,7 +189,7 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
     return manifest['stages'][stage_key]
 
 
-# taxonomySeal.bindingSha256 覆盖的 13 个字段（与 publish_common / Node 一致）。
+# 以下为旧格式标签阶段绑定哈希使用的十三个字段，字段名和顺序与发布检查及 Node 一致。
 TAG_STAGE_BINDING_FIELDS = (
     'registryVersion', 'registrySha256', 'projectionContract',
     'projectionSha256', 'selectionContract', 'inputAnalysisSha256',
@@ -207,7 +207,7 @@ def cross_end_fixture():
 
 def rebind_tag_stage_record(stage, *, registry_sha256=None, annotation=None,
                          drop_annotation=False, projection_sha256=None, concept_ids=None):
-    """改写封口记录后按 13 字段重签 bindingSha256（bindingSha256 算法不动）。"""
+    """修改测试中的标签阶段记录后，按本辅助函数使用的十三个字段重新计算 bindingSha256。"""
     if registry_sha256 is not None:
         stage['registrySha256'] = registry_sha256
     if concept_ids is not None:
@@ -224,10 +224,10 @@ def rebind_tag_stage_record(stage, *, registry_sha256=None, annotation=None,
 
 
 def normalize_seal_error(value):
-    """同码原因的 message 排序依赖 localeCompare 所在 locale；error 只在
-    “（…）内分号列表”上排序归一后再比较（与 Node 测试侧同一规则）。括号之后的
-    尾巴（destructive 显式确认的拒绝理由）必须逐字保留，否则两端确认语义漂移
-    会被归一掩盖。"""
+    """两端原因排列可能受 localeCompare 的运行环境影响。
+
+    将第一个“（”与最后一个“）”之间的文字按分号拆分、排序，再拼回比较；
+    外层括号不保留，括号以外的拒绝说明逐字保留。"""
     if value is None:
         return None
     start = value.find('（')
@@ -3125,8 +3125,8 @@ primary_method_tag: #基准测试
                 complete_without_checkpoints['analysisManifest'],
                 complete_without_checkpoints['arxivId'])
 
-        # A repair limited to tag selection changes the masked fields but preserves
-        # every protected byte and is accepted when the proof is resealed.
+        # 修复只改变标签字段时，遮盖这些字段后的其余正文保持原字节；
+        # 重新计算测试记录的绑定哈希后应通过。
         repaired = copy.deepcopy(paper)
         legacy_input = repaired['analysis'].replace('#语音识别', '#ASR')
         attach_tag_stage_record(
@@ -3135,7 +3135,7 @@ primary_method_tag: #基准测试
         self.assertIsNone(_validate_tag_stage_record(
             repaired, repaired['analysisManifest'], repaired['arxivId']))
 
-        # Even a fully rehashed binding cannot authorize edits outside the tag fields.
+        # 即使重新计算了绑定哈希，也不能允许标签字段以外的正文变化。
         protected_drift = copy.deepcopy(paper)
         drifted_input = protected_drift['analysis'].replace(
             '具体理由充分', '输入阶段的其他正文已变化', 1)
@@ -3147,8 +3147,8 @@ primary_method_tag: #基准测试
                 protected_drift, protected_drift['analysisManifest'],
                 protected_drift['arxivId'])
 
-    # ——— 换表放行：taxonomySeal registry 升级分支（Node validateSealRegistryUpgrade 镜像） ———
-    def test_tag_stage_upgrade_gate_allows_additive_registry_change(self):
+    # 以下测试检查词表变化后能否沿用标签阶段记录，与 Node 的升级规则作对照。
+    def test_tag_stage_upgrade_accepts_legacy_prompt_hash_formats(self):
         additive = next(case for case in cross_end_fixture()['cases']
                         if case['name'] == 'additive-upgrade-allowed')
         paper = complete_paper()
@@ -3157,12 +3157,13 @@ primary_method_tag: #基准测试
             paper, manifest, projection_contract=LEGACY_TAG_PROMPT_TEXT_CONTRACT)
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
-        # 旧 SHA + 与复算一致的 additive 注记 → 放行（Node 放行的状态发布端不再拒）。
+        # 阶段记录引用旧词表时，升级说明必须与重新计算的变更一致。
         rebind_tag_stage_record(stage, registry_sha256=additive['fromRegistrySha256'],
                              annotation=additive['annotation'])
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
-        # 明确旧版的升级分支只核 SHA 格式，保留原来允许的两种记录值。
+        # 此处显式使用旧版提示，保留原兼容规则允许的三种 SHA 格式值；
+        # 通过检查不表示已精确认证旧提示全文。
         for projection in ('e' * 64, tag_prompt_text_sha256(
                 _PUBLISH_TAG_CATALOG, LEGACY_TAG_PROMPT_TEXT_CONTRACT),
                 _PUBLISH_TAG_PROMPT_TEXT_SHA256):
@@ -3171,8 +3172,8 @@ primary_method_tag: #基准测试
             self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
     def test_tag_stage_upgrade_gate_allows_acknowledged_destructive_change(self):
-        """Node --acknowledge-destructive 重封出来的 stage，发布端必须同样放行；
-        去掉确认字段后必须照旧拒绝（双端一致性，P0-1 不回退）。"""
+        """带有有效破坏性变更确认的标签阶段记录应被发布检查接受；
+        删除确认字段后仍须拒绝，与 Node 的结果保持一致。"""
         case = next(item for item in cross_end_fixture()['cases']
                     if item['name'] == 'destructive-acknowledged-allowed')
         paper = complete_paper()
@@ -3183,7 +3184,7 @@ primary_method_tag: #基准测试
                              annotation=case['annotation'])
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
-        # 注记里去掉 destructiveAcknowledgement → reason=destructive 拒绝。
+        # 删除 destructiveAcknowledgement 后，应以 reason=destructive 拒绝沿用。
         stripped = {key: value for key, value in case['annotation'].items()
                     if key != 'destructiveAcknowledgement'}
         rebind_tag_stage_record(stage, registry_sha256=case['fromRegistrySha256'],
@@ -3288,14 +3289,14 @@ primary_method_tag: #基准测试
             with self.assertRaisesRegex(PublishDataValidationError, 'reason=snapshot-missing'):
                 _validate_tag_stage_record(paper, manifest, paper['arxivId'])
 
-    def test_tag_stage_current_registry_path_keeps_hard_equality(self):
+    def test_tag_stage_current_catalog_requires_matching_versions_and_hashes(self):
         paper = complete_paper()
         manifest = {'version': 1}
         stage = attach_tag_stage_record(paper, manifest)
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
-        # 当前 SHA 分支：原硬等值行为不变（registryVersion / registrySha256 /
-        # projectionSha256 仍逐字段比对本地 registry 与 projection）。
+        # 阶段与当前词表使用同一 SHA 时，词表版本及提示 SHA
+        # 必须与当前词表和保存的提示版本逐项对应。
         stage['projectionSha256'] = '0' * 64
         with self.assertRaisesRegex(
                 PublishDataValidationError,
@@ -3311,12 +3312,13 @@ primary_method_tag: #基准测试
         stage['registryVersion'] = _PUBLISH_TAG_CATALOG['version']
         self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
 
-    def test_tag_stage_upgrade_gate_fails_closed_on_every_broken_input(self):
+    def test_tag_stage_upgrade_rejects_invalid_snapshots_annotations_and_concepts(self):
         fixture = cross_end_fixture()
         cases = {case['name']: case for case in fixture['cases']}
         expectations = {
-            # 换表（v1.1）后该用例的旧快照对当前复算为 destructive——ack 门先于注记门，
-            # 缺注记的首拒因由 annotation-invalid 变为 destructive（拒绝对意图不变）。
+            # 词表更新后，这份旧快照与当前词表之间已有破坏性变更。
+            # 人工确认检查先于升级说明检查，所以缺少说明的记录先以 destructive 拒绝；
+            # 原输入仍然不能被接受。
             'missing-annotation-rejected': 'reason=destructive',
             'no-snapshot-rejected': 'reason=snapshot-missing',
             'destructive-lying-annotation-rejected': 'reason=destructive',
@@ -3346,8 +3348,8 @@ primary_method_tag: #基准测试
                     self.assertIn('codes=', message)
                     self.assertIn('alias-removed', message)
 
-        # 升级分支仍要求 projectionSha256 是合法 SHA（stage 值与当前值都接受，
-        # 但不能是垃圾串）。
+        # 提示 SHA 首先必须符合十六进制格式；这个用例用格式无效的值
+        # 验证最先触发的拒绝原因。
         paper = complete_paper()
         manifest = {'version': 1}
         stage = attach_tag_stage_record(paper, manifest)
@@ -3359,17 +3361,18 @@ primary_method_tag: #基准测试
             _validate_tag_stage_record(paper, manifest, paper['arxivId'])
 
     def test_tag_stage_destructive_acknowledgement_gate(self):
-        """destructive 只有“显式确认 + 可确认白名单 + 影响面 none”才放行；
-        四条基础门（快照、注记自洽、概念 active、复算分级）一条不少。
-        与 Node validateSealRegistryUpgrade 同向：不可确认的 destructive 注记
-        写得再自洽也翻不了案。"""
+        """确认记录的 conceptIdImpact 必须为 none，所选概念仍须在当前词表中有效。
+
+        确认不能替代旧快照、升级说明、当前概念有效性及重新计算的变更检查；
+        不允许确认的变更仍须拒绝。"""
         current = _PUBLISH_TAG_CATALOG
         destructive_from = Path(ROOT) / 'config' / 'tag-catalog-history' / (
             '3f9a14c9d753716b428b8ca27a9d93b92b3ae93cfbffc1a24f60573ff8ef234a.json')
         old_registry = json.loads(destructive_from.read_bytes().decode('utf-8'))
 
-        # reasonsHash 跨端常量：Node 与 Python 对同一复算 detail 必须同哈希。
-        # v1.1 换表（2026-09-30）后 detail 含删别名/改边/改首选名 → 哈希与理由集合随实测更新。
+        # 同一份变更详情在 Node 和 Python 中应产生相同的原因哈希。
+        # 下面的固定值对应 2026-09-30 词表更新后，历史快照与当前词表之间
+        # 的别名、上级关系和首选名称变化。
         eligible_detail = _classify_registry_change(
             {**old_registry, 'registrySha256': destructive_from.stem}, current)['detail']
         self.assertEqual(eligible_detail['changeLevel'], 'destructive')
@@ -3445,7 +3448,7 @@ primary_method_tag: #基准测试
             'eligible': False, 'eligibleReasons': [], 'ineligibleReasons': [],
         })
 
-        # 不可确认集合：旧表多一个概念、新表已删除 → concept-removed。
+        # 旧词表中的概念在新词表已删除，这类变更不允许人工确认。
         synthetic = copy.deepcopy(current)
         synthetic.pop('registrySha256', None)
         synthetic['concepts'] = list(synthetic['concepts']) + [{
@@ -3492,23 +3495,23 @@ primary_method_tag: #基准测试
                 self.assertIn('不属于可人工确认的范围', rejected['error'])
                 self.assertIn('concept-removed', rejected['error'])
 
-                # 第 ① 条门：快照取不回时，确认不能替代快照。
+                # 不能取得旧快照时，即使提供确认也必须拒绝。
                 missing = _seal_registry_upgrade('0' * 64, ['task.asr'], annotation)
                 self.assertFalse(missing['ok'])
                 self.assertEqual(missing['reasonCode'], 'snapshot-missing')
 
-        # 注记形态锁死：非 destructive 变更携带确认字段 → 拒。
-        # v1.1 换表后真实历史快照对当前全为 destructive——按 Node 侧同款思路，
-        # 用“当前表去掉未被引用的 task.wake-word”合成 additive 旧表（仅写测试 tmp
-        # 目录，不碰生产 config/tag-catalog-history）复现该门。
+        # 非破坏性变更的说明中不能附带破坏性变更确认。真实旧快照当前已不适合
+        # 构造新增概念用例，因此在测试临时目录生成一份仅缺少未被引用概念的旧词表；
+        # 不改生产历史目录。
         synthetic_old = json.loads(json.dumps(current))
         synthetic_old['concepts'] = [
             c for c in synthetic_old['concepts'] if c['id'] != 'task.wake-word']
         self.assertFalse(any(c.get('broaderId') == 'task.wake-word'
                              for c in synthetic_old['concepts']),
                          'task.wake-word 必须无子节点才可作为合成删除对象')
-        # 只保留 schema 三键：若 current 带内嵌 registrySha256，写进文件会与
-        # “文件名==内容字节 SHA”校验冲突（snapshot-missing）。
+        # 写入词表文件时只保留 version、facets、concepts 三个字段。
+        # registrySha256 是加载后附加的元数据，写回文件会先被词表字段校验拒绝，
+        # 快照读取因此返回 None。
         synthetic_old = {k: synthetic_old[k]
                          for k in ('version', 'facets', 'concepts') if k in synthetic_old}
         synthetic_bytes = json.dumps(synthetic_old, ensure_ascii=False, indent=2).encode('utf-8')
@@ -3550,8 +3553,8 @@ primary_method_tag: #基准测试
         self.assertIn('非破坏性变更', lying['error'])
 
     def test_python_registry_upgrade_gate_matches_node_fixture(self):
-        # 跨端一致性：同一 (旧SHA, 注记, conceptIds) 输入，Python 输出必须与 Node
-        # 侧生成的 fixture 期望逐项一致（JS 测试用同一份 fixture 再跑一遍 Node 侧）。
+        # Python 与 Node 使用同一份旧词表 SHA、升级说明和概念 ID 输入，逐项比较处理结果。
+        # 另一个 JavaScript 测试读取相同 fixture；本 Python 方法不执行 Node。
         display_expectations = {
             'additive-upgrade-allowed': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',

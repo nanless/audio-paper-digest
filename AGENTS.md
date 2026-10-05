@@ -108,7 +108,7 @@ Muse 模型使用 OpenAI Responses，`/v1` 转为 `/v1/responses`。所有 Node 
   固定 SSRN 标题、作者、DOI，以及 PDF、获取凭证和来源 SHA；浏览器下载只能经 `--import-file` 导入并记录
   `networkResponseObserved: false`。计划、模型输入和最终页面必须明确提示非 camera-ready；不得推广到其他论文。
 
-## 内容与评分门禁
+## 内容与评分检查
 
 默认 API 正式分析正文的 13 个一级标题用于机器解析。最终博客正文来自 `beginner-researcher-v3` API Reader；表格与公式的来源另由 `api-reader-source-bindings-v4` 记录和核验：
 
@@ -118,7 +118,7 @@ Muse 模型使用 OpenAI Responses，`/v1` 转为 `/v1/responses`。所有 Node 
 - 每个表格单元格必须对应原表 DOM 单元格，或用全文逐字引文覆盖全部数字与单位；展示公式只可由结构化原始 TeX 注入。
 - 作者姓名与机构须逐项对应 HTML DOM、论文元数据，或明确的不可得状态；资源链接须逐项对应原文/Demo 证据、重定向终点与可达状态，只有 `available` 可支撑“已开源/可用”声明。
 - 汇总页 `reader-facing-v3` 中排行榜及中英文题目都指向独立博客；标签/评分不重复，排名、文档类型和 arXiv 位于评分后、作者机构前；汇总页和单篇页的可见 HTTPS URL 必须可点击。
-- 新发布页面在 Hugo `tags` 扁平字段中只写当前词表中有效的中文首选标签。唯一例外是 `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` 这 8 个既定英文专名，可保留原形，但每个必须配至少一条中文别名。页面还须写入并验证 `paper-taxonomy-flat-tags-compat-v1`、词表 SHA、逐标签 `concept`/`facet`、显式主任务与主方法。旧页面和旧标签 URL 不批量改写。兼容期汇总“热门方向”只统计主任务；标签页必须明确标示新旧混合，不能把扁平计数冒充九分面统计。
+- 新发布页面在 Hugo `tags` 扁平字段中只写当前词表中有效的中文首选标签。唯一例外是 `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` 这 8 个既定英文专名，可保留原形，但每个必须配至少一条中文别名。页面还须写入并验证 `paper-taxonomy-flat-tags-compat-v1`、词表 SHA、逐标签 `concept`/`facet`、显式主任务与主方法。旧页面和旧标签 URL 不批量改写。兼容期汇总“热门方向”只统计主任务；标签页必须明确标示新旧混合，不能把扁平标签计数当作按九个分类维度统计的结果。
 - 论文图须依次呈现导读、看图路径、原图、图注和解释；未传入像素不得猜坐标轴、曲线、颜色或模块。
 - 评分使用八个维度，按文档类型判断适用证据。每个缺陷只归一个主要维度，代码重算总分并封顶 10。缺失证据不得写成技术错误。
 - 摘要级分析默认不可发布；只有显式 `allowAbstractAnalysisPublish: true` 才允许并显示降级提示。

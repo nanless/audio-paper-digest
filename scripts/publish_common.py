@@ -653,12 +653,9 @@ def _hash_tag_section_and_primary_tags(analysis):
     return hashlib.sha256(tag_hash_input.encode('utf-8')).hexdigest()
 
 
-# 标签词表更新后，Python 发布检查按 Node 的规则决定能否沿用原标签阶段记录。
-# 对应规则见 scripts/lib/tag-catalog-change.js 的 classifyRegistryChange、
-# validateSealRegistryUpgrade，以及 scripts/analysis-contract.js 的词表 SHA 分支。
-# 词表 SHA 改变本身不是拒绝理由；变更类型、升级说明和所选概念仍须通过检查。
-# 两端允许沿用或拒绝沿用的条件应保持一致。
-# 这些私有检查只服务于发布端，不改变 scripts/tag_catalog.py 的共享规则。
+# 词表更新后，发布端重新比较新旧词表，并核对升级说明及所选概念是否仍有效。
+# 共享变更规则对应 scripts/lib/tag-catalog-change.js；提示文本的版本和 SHA
+# 另按本发布检查的兼容规则核验。这里只检查能否沿用标签阶段记录，不重新生成记录。
 from tag_catalog import _JS_WHITESPACE, normalize_label, validate_tag_catalog  # noqa: E402
 
 _REGISTRY_CHANGE_LEVELS = ('none', 'additive', 'destructive')
@@ -669,7 +666,7 @@ _SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
 
 
 def _tag_catalog_history_dir():
-    """config/tag-catalog-history/（与 Node FILES.tagCatalogHistoryDir 同源）。"""
+    """返回标签词表历史目录；它与 Node 配置的 FILES.tagCatalogHistoryDir 指向相同位置。"""
     import tag_paths
     return Path(tag_paths.TAG_CATALOG_FILE).parent / 'tag-catalog-history'
 
@@ -698,7 +695,7 @@ def _resolve_registry_snapshot(registry_sha256):
         return None
     try:
         loaded = load_tag_catalog(_tag_catalog_history_dir() / f'{sha}.json')
-    except Exception:  # noqa: BLE001 - 取回失败一律 fail-closed 返回 None
+    except Exception:  # noqa: BLE001 - 读取或校验失败时返回 None，调用方不能据此沿用旧记录。
         return None
     if loaded.get('registrySha256') != sha:
         return None
@@ -720,11 +717,11 @@ def _active_global_tag(registry):
 
 
 def _cross_facet_label_collisions(registry):
-    """to registry 全部标签的跨分面重复扫描（Node crossFacetLabelCollisions 镜像）。
+    """检查整个词表中跨分类维度的名称重复。
 
-    覆盖 active+deprecated 概念的 zh/en 首选与全部别名，统一经 normalize_label
-    归一；同一归一标签落在 ≥2 个分面即解析歧义。validateTagCatalog 的唯一性只在
-    分面内成立，所以这类碰撞必须在这里判 destructive。
+    包括已启用及已停用概念的中英文首选名称和别名。名称按同一规则处理后，
+    若对应多个维度，查找结果可能产生歧义；变更分类器会将这类情况列为破坏性变更。
+    词表自身的名称唯一性只在各维度内检查。
     """
     by_label = {}
     for concept in registry['concepts']:
@@ -915,11 +912,9 @@ def _classify_registry_change(old_registry, new_registry):
     return {'changeLevel': change_level, 'detail': detail}
 
 
-# ——— destructive 显式确认通道（Node ACKNOWLEDGEMENT_ELIGIBLE_CODES 的镜像） ———
-# destructive 变更只有在破坏性理由全部属于可确认白名单，并携带与本次复算
-# 绑定的显式确认时，才可能沿用旧分类记录。新增概念本身不妨碍确认，但不能
-# 混入删除概念等白名单外的破坏性理由；旧 conceptIds 对应的概念仍须全部有效，
-# 旧快照与升级注记也须通过核验。
+# 人工确认只适用于允许确认的破坏性变更原因，且必须对应本次重新计算的结果。
+# 新增概念不妨碍确认，但删除概念等不允许确认的原因仍会阻断沿用。
+# 所选概念、旧快照和升级说明还须分别通过检查。
 _ACK_ELIGIBLE_CODES = (
     'preferred-label-changed',
     'broader-id-changed',
@@ -949,27 +944,29 @@ def _destructive_reasons(change_detail):
 
 
 def _destructive_reason_fingerprint(reason):
-    """结构化字段（排除 message/level）按键序的无空白 JSON —— 与 Node 逐字一致。"""
+    """去掉原因中的 level 和 message 后，按键排序生成紧凑 JSON，供破坏性原因哈希计算使用；输出格式与 Node 保持一致。"""
     canonical = {key: reason[key] for key in sorted(reason) if key not in ('level', 'message')}
     return json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
 def _destructive_reasons_hash(change_detail):
-    """复算 destructive reasons 的稳定哈希：两端同输入必须同哈希。"""
+    """将破坏性原因的 JSON 文本排序，用一个换行连接，再按 UTF-8 计算 SHA-256。
+
+    重复原因仍参与计算，原因顺序和 message 改写不影响结果。"""
     fingerprints = sorted(_destructive_reason_fingerprint(reason)
                           for reason in _destructive_reasons(change_detail))
     return hashlib.sha256('\n'.join(fingerprints).encode('utf-8')).hexdigest()
 
 
 def _acknowledgement_eligibility(change_detail):
-    """Node acknowledgementEligibility 的镜像：分级不变，只判定可确认性。"""
+    """判断这次变更是否允许人工确认，不改变原变更等级。"""
     change_level = (change_detail or {}).get('changeLevel')
     codes = sorted({reason.get('code') for reason in _destructive_reasons(change_detail)
                     if reason.get('code')})
     eligible_reasons = [code for code in codes if code in _ACK_ELIGIBLE_CODES]
     ineligible_reasons = [code for code in codes if code not in _ACK_ELIGIBLE_CODES]
-    # fail-closed：分级缺失/未知、destructive 却数不出理由、或混入白名单外理由
-    # → 一律不可确认（与 Node 同判）。
+    # 等级缺失或未知、破坏性变更没有可确认原因，或者包含不允许确认的原因时，
+    # 都返回不可确认。
     known_level = change_level in _REGISTRY_CHANGE_LEVELS
     if known_level and not ineligible_reasons:
         if change_level == 'destructive':
@@ -1133,12 +1130,15 @@ def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
                 'concept-not-active', change_level, detail)
         return {'ok': True, 'error': None, 'reasonCode': None,
                 'changeLevel': change_level, 'detail': detail}
-    except Exception as error:  # noqa: BLE001 - 与 Node 一致：异常折算 fail-closed
+    except Exception as error:  # noqa: BLE001 - 核验中出现异常时返回拒绝结果，保留异常说明。
         return fail(f'无法完成词表升级核验：{error}', 'classify-failed')
 
 
 def _validate_tag_stage_catalog_upgrade(stage, paper_label):
-    """_validate_tag_stage_record 的升级分支：不一致即抛 PublishDataValidationError。"""
+    """核验标签阶段记录使用旧词表时能否沿用。
+
+    旧版提示仍按原格式和升级规则检查；新版提示必须根据同一次读取的旧快照
+    重新计算 SHA。失败时抛出 PublishDataValidationError。"""
     from_sha = str(stage.get('registrySha256') or '')
     to_sha = _PUBLISH_TAG_CATALOG['registrySha256']
     stage_prompt_text_sha256 = str(stage.get('projectionSha256') or '')
@@ -1211,7 +1211,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     if not isinstance(stage, dict) or stage.get('status') not in {'complete', 'not_needed'}:
         raise PublishDataValidationError(f'{paper_label} 标签阶段记录缺失，或尚未完成。')
 
-    # 提示版本按保存记录选择；读取旧版不改写其提示 SHA 或绑定签名。
+    # 按保存记录选择提示版本；读取旧版时不改写提示 SHA 或绑定哈希。
     projection_contract = stage.get('projectionContract')
     if not isinstance(projection_contract, str) or projection_contract not in (
             LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT):
