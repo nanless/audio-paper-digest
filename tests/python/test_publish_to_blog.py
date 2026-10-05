@@ -5544,7 +5544,7 @@ paper_digest_reader_quality: "reader-facing-v3"
             (posts / '2026-07-10.md').write_text(markdown, encoding='utf-8')
             with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    '汇总页读者质量门禁失败'):
+                    '汇总页内容不符合读者阅读要求'):
                 publish_to_blog.validate_staged_posts(posts, '2026-07-10')
 
     def test_manual_v4_marker_survives_render_and_final_staging_gate_blocks_bad_page(self):
@@ -5586,10 +5586,10 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             page.write_text(markdown, encoding='utf-8')
             fixed, issues = publish_to_blog.review_and_fix_post(page)
             self.assertFalse(fixed)
-            self.assertTrue(any('Manual v4 最终 Markdown 门禁失败' in issue for issue in issues))
+            self.assertTrue(any('Manual v4 的最终 Markdown 内容未通过检查' in issue for issue in issues))
             with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError,
-                    'Manual v4 最终 Markdown 门禁失败'):
+                    'Manual v4 最终 Markdown 内容未通过检查'):
                 publish_to_blog.validate_staged_posts(posts, '2026-07-10')
 
     def test_hugo_gate_uses_staging_destination_without_blog_lock(self):

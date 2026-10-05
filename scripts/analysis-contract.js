@@ -1656,14 +1656,14 @@ function validateFreshAuthoringRecordConsistency(manifest, takeover) {
     // v5 record emitted by manual-deep-analysis carries the explicit marker.
     if (marker === undefined) return null;
     if (marker !== FRESH_AUTHORING_CONTRACT) {
-        return `manual v5 freshAuthoring 契约标记非法: ${String(marker)}`;
+        return `Manual v5 的 freshAuthoring 格式标识不符合要求：${String(marker)}`;
     }
     if (!takeover?.freshAuthoring
         || takeover.freshAuthoring.contract !== FRESH_AUTHORING_CONTRACT
         || takeover.freshAuthoring.mode !== FRESH_AUTHORING_MODE
         || takeover.freshAuthoring.prohibitedProseInputs?.length !== 0
         || takeover.freshAuthoringSha256 !== manualSha256(takeover.freshAuthoring)) {
-        return 'manualTakeover.freshAuthoring 缺失、允许旧 prose 或 SHA 不闭环';
+        return '独立成稿记录 freshAuthoring 缺失，格式、生成方式或输入限制不符合要求，或内容 SHA 不一致。';
     }
     return null;
 }
@@ -1674,7 +1674,7 @@ function validateTutorialPayloadRecordConsistency(manifest, takeover) {
     // publisher separately refuses to package them as a new tutorial page.
     if (marker === undefined) return null;
     if (marker !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT) {
-        return `manual v5 tutorialPayload 契约标记非法: ${String(marker)}`;
+        return `Manual v5 的 tutorialPayload 格式标识不符合要求：${String(marker)}`;
     }
     const payload = takeover?.tutorialPayload;
     if (!payload || payload.contract !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
@@ -1683,7 +1683,7 @@ function validateTutorialPayloadRecordConsistency(manifest, takeover) {
         || payload.freshAuthoringReceiptSha256 !== takeover?.freshAuthoring?.receiptSha256
         || takeover.tutorialPayloadSha256 !== manualSha256(payload)
         || payload.receiptSha256 !== manualSha256((({ receiptSha256: _sha, ...rest }) => rest)(payload))) {
-        return 'manualTakeover.tutorialPayload 缺失或与 fresh/article/receipt SHA 不闭环';
+        return '教程正文记录 tutorialPayload 缺失，格式或论文编号不符合要求，或正文、成稿凭证和记录内容的 SHA 不一致。';
     }
     return null;
 }
@@ -1691,7 +1691,7 @@ function validateTutorialPayloadRecordConsistency(manifest, takeover) {
 function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options = {}) {
     if (takeover.version !== MANUAL_COMPLETE_PROVENANCE_VERSION
         || takeover.mode !== MANUAL_COMPLETE_STATUS) {
-        return 'manualTakeover.version/mode 必须为 manual_complete v2';
+        return '人工分析记录的 version 必须为 2，mode 必须为 manual_complete。';
     }
     if (typeof takeover.agent !== 'string' || !takeover.agent.trim()) {
         return 'manualTakeover.agent 缺失';
@@ -1782,22 +1782,22 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
                 : extractSection(options.analysis, '实验结果')
         });
         if (!resultClaims.valid) {
-            return `manualTakeover.resultClaims 未闭环: ${resultClaims.errors.join('；')}`;
+            return `结果声明 resultClaims 未通过核验：${resultClaims.errors.join('；')}`;
         }
         if (!/^[a-f0-9]{64}$/.test(String(takeover.resultClaimsSha256 || ''))
             || takeover.resultClaimsSha256 !== manualSha256({
                 claims: takeover.resultClaims,
                 exception: takeover.resultClaimsException || null
             })) {
-            return 'manualTakeover.resultClaimsSha256 不匹配';
+            return '结果声明的 resultClaimsSha256 格式无效，或与声明及例外记录重算的 SHA 不一致。';
         }
         const readability = validateReadabilityRubric(takeover.readabilityRubric);
         if (!readability.valid || !readability.passing) {
-            return `manualTakeover.readabilityRubric 未通过: ${readability.errors.join('；') || `total=${readability.total}`}`;
+            return `可读性检查 readabilityRubric 未通过：${readability.errors.join('；') || `total=${readability.total}`}`;
         }
         if (!/^[a-f0-9]{64}$/.test(String(takeover.readabilityRubricSha256 || ''))
             || takeover.readabilityRubricSha256 !== manualSha256(takeover.readabilityRubric)) {
-            return 'manualTakeover.readabilityRubricSha256 不匹配';
+            return '可读性检查的 readabilityRubricSha256 格式无效，或与检查记录重算的 SHA 不一致。';
         }
     }
     if (manifest?.contracts?.manualDepth === MANUAL_DEPTH_CONTRACT_VERSION_V5) {
@@ -2096,7 +2096,7 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
     }
     const takeover = manifest?.manualTakeover;
     if (!takeover || typeof takeover !== 'object' || Array.isArray(takeover)) {
-        return 'manual_complete 阶段缺少 manualTakeover provenance';
+        return '人工分析的 manualTakeover 记录缺失或格式无效。';
     }
     if (takeover.version === MANUAL_COMPLETE_PROVENANCE_VERSION) {
         return validateManualV2Takeover(manifest, takeover, sourceSha256, options);

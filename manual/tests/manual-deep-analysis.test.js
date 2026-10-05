@@ -350,7 +350,7 @@ describe('manual v5 fresh canonical compatibility', () => {
         } };
         assert.match(
             validateFreshAuthoringRecordConsistency(manifest, {}),
-            /manualTakeover\.freshAuthoring 缺失/
+            /独立成稿记录 freshAuthoring 缺失/
         );
     });
 
@@ -363,7 +363,7 @@ describe('manual v5 fresh canonical compatibility', () => {
         }, sourceAcquisition: { sourceId: '2608.12345' } };
         assert.match(
             validateTutorialPayloadRecordConsistency(current, {}),
-            /manualTakeover\.tutorialPayload 缺失/
+            /教程正文记录 tutorialPayload 缺失/
         );
     });
 });

@@ -1060,9 +1060,8 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
             structured_output=True,
         )
     except PublishLLMUnavailable as primary_error:
-        # DeepSeek 偶尔把严格 JSON review 的预算全部消耗在隐藏推理上。
-        # 发布审查仍必须经过同一 JSON 契约；在主模型基础设施失败时，
-        # 仅切换到已配置的副模型重做本次文本审查，不降低门禁或伪造通过。
+        # 主模型请求不可用时，只有本次必须完成模型审查且已配置副模型，
+        # 才用副模型重新审查文本；返回结果仍须满足相同的 JSON 要求。
         secondary_model = os.environ.get('PAPER_ANALYZER_SECONDARY_MODEL', '').strip()
         if not required or not secondary_model:
             raise
@@ -7103,13 +7102,13 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
 
     manual_v4_issue = validate_final_manual_v4_markdown(content, paper)
     if manual_v4_issue:
-        issues.append(f'Manual v4 最终 Markdown 门禁失败: {manual_v4_issue}')
+        issues.append(f'Manual v4 的最终 Markdown 内容未通过检查：{manual_v4_issue}')
     api_reader_issue = _api_reader_page_binding_issue(content, paper)
     if api_reader_issue:
         issues.append(f'读者文章的最终 Markdown 内容未通过来源核验：{api_reader_issue}')
     index_quality_issue = validate_digest_index_reader_quality(content)
     if index_quality_issue:
-        issues.append(f'汇总页读者质量门禁失败: {index_quality_issue}')
+        issues.append(f'汇总页的内容不符合读者阅读要求：{index_quality_issue}')
 
     return fixed, issues
 
@@ -7187,7 +7186,7 @@ def validate_generation_input_source_reference(manifest, target_date):
     differs from current.
     """
     if not isinstance(manifest, dict):
-        raise PublishDataValidationError('generation 输入来源必须由对象清单承载')
+        raise PublishDataValidationError('生成清单必须是对象，才能读取其中的输入来源记录。')
     reference = manifest.get('inputSourceReference')
     if reference is None:
         return None
@@ -8208,12 +8207,12 @@ def validate_staged_posts(
         markdown_format_issues = artifact['markdownFormatIssues']
         if markdown_format_issues:
             raise PublishDataValidationError(
-                f'{path.name} Markdown/Hugo 格式门禁失败: ' + '; '.join(markdown_format_issues)
+                f'{path.name} 的 Markdown 或 Hugo 格式不符合要求：' + '; '.join(markdown_format_issues)
             )
         manual_v4_issue = artifact['manualIssue']
         if manual_v4_issue:
             raise PublishDataValidationError(
-                f'{path.name} Manual v4 最终 Markdown 门禁失败: {manual_v4_issue}'
+                f'{path.name} 的 Manual v4 最终 Markdown 内容未通过检查：{manual_v4_issue}'
             )
         api_reader_issue = artifact['apiReaderIssue']
         if path.name == f'{date_str}.md' and authoritative_papers:
@@ -8229,7 +8228,7 @@ def validate_staged_posts(
         index_quality_issue = artifact['indexQualityIssue']
         if index_quality_issue:
             raise PublishDataValidationError(
-                f'{path.name} 汇总页读者质量门禁失败: {index_quality_issue}'
+                f'{path.name} 的汇总页内容不符合读者阅读要求：{index_quality_issue}'
             )
         if artifact_cache is not None:
             artifact_cache[str(path.resolve())] = artifact
@@ -8292,7 +8291,7 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
     if not hugo:
         if required:
             raise PublishDataValidationError('正式 --push 要求 Hugo 可用，当前未找到 hugo 命令')
-        print('  ℹ️ Hugo 不可用，已执行严格 YAML/Markdown 回退门禁')
+        print('  ℹ️ 未找到 Hugo，本次跳过构建检查。')
         return 'fallback'
     source_files = (
         sorted(
@@ -8360,10 +8359,10 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
             detail = (result.stderr or result.stdout or '').strip()
             if result.timed_out:
                 raise PublishDataValidationError(
-                    f'Hugo 构建门禁超过硬超时 {timeout_seconds}s，已终止完整进程组: '
+                    f'Hugo 构建超时（上限为 {timeout_seconds} 秒），已终止整个进程组：'
                     f'{detail[-2000:]}'
                 )
-            raise PublishDataValidationError(f'Hugo 构建门禁失败: {detail[-2000:]}')
+            raise PublishDataValidationError(f'Hugo 构建失败：{detail[-2000:]}')
         source_artifacts = []
         for path in source_files:
             try:
@@ -8375,7 +8374,7 @@ def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None
         rendered_issues = validate_hugo_rendered_html_gate(output_dir, source_artifacts)
         if rendered_issues:
             raise PublishDataValidationError(
-                'Hugo 渲染 HTML 格式门禁失败: ' + '; '.join(rendered_issues)
+                'Hugo 生成的 HTML 格式不符合要求：' + '; '.join(rendered_issues)
             )
     print('  ✅ Hugo staging 构建通过')
     return 'hugo'
