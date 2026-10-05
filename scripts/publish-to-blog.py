@@ -167,6 +167,8 @@ MANUAL_REVIEW_MODE = 'manual_complete'
 FINAL_PAGE_ARTIFACT_VERSION = 1
 RESEARCHER_WORKBENCH_CONTRACT = 'researcher-workbench-v1'
 RESEARCHER_SIDECAR_CONTRACT = 'researcher-sidecars-v1'
+RESEARCH_CONTEXT_CONTRACT = 'paper-research-context-v2'
+LEGACY_RESEARCH_CONTEXT_CONTRACT = RESEARCHER_SIDECAR_CONTRACT
 FLAT_TAG_COMPAT_CONTRACT = TAG_FLAT_COMPAT_CONTRACT
 _PAGE_TAG_CATALOG = load_tag_catalog()
 _PAGE_ACTIVE_TAGS_BY_ID = {
@@ -3208,11 +3210,14 @@ def build_flat_tag_compat_metadata(
 def build_researcher_workbench_bundle(
         paper, date_str, *, parsed=None, reader_plan=None,
         api_reader_payload=None, require_reader=False,
-        flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT):
+        flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT,
+        context_contract=RESEARCH_CONTEXT_CONTRACT):
     """生成论文页的基本信息及四份同站点附属文件。
 
     缺少导读计划的旧维护页面保持原标签。正式生成须设置 require_reader，资料不完整时停止生成。
     """
+    if context_contract not in (LEGACY_RESEARCH_CONTEXT_CONTRACT, RESEARCH_CONTEXT_CONTRACT):
+        raise PublishDataValidationError('论文上下文文件的格式版本不受支持。')
     if flat_tag_contract not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_COMPAT_CONTRACT):
         raise PublishDataValidationError('页面标签的格式版本不受支持。')
     try:
@@ -3288,14 +3293,17 @@ def build_researcher_workbench_bundle(
     citation.update({'schemaVersion': 1, 'id': citation_id, 'type': 'preprint'})
     context = dict(common)
     context.update({
-        'schemaVersion': 1,
+        'contract': context_contract,
+        'schemaVersion': 1 if context_contract == LEGACY_RESEARCH_CONTEXT_CONTRACT else 2,
         'readerTitle': reader_title,
         'oneSentenceThesis': one_sentence,
         'abstract': abstract,
         'abstractSha256': abstract_sha,
         'assessment': {
             'primaryTask': primary_task,
-            **({'primaryMethod': primary_method, 'taxonomy': tag_metadata} if tag_metadata else {}),
+            **({'primaryMethod': primary_method,
+                'taxonomy' if context_contract == LEGACY_RESEARCH_CONTEXT_CONTRACT else 'tagMetadata': tag_metadata}
+               if tag_metadata else {}),
             'score': score,
             'rankBucket': rank_bucket,
             'documentType': document_type,
@@ -3340,6 +3348,8 @@ def build_researcher_workbench_bundle(
         }
         for relative, raw in sidecars.items()
     }
+    if context_contract == RESEARCH_CONTEXT_CONTRACT:
+        sidecar_records['rethink-context.json']['contract'] = RESEARCH_CONTEXT_CONTRACT
     return {
         'contract': RESEARCHER_WORKBENCH_CONTRACT,
         'readerTitle': reader_title,
@@ -3437,6 +3447,20 @@ def _page_flat_tag_contract(frontmatter):
     return contract
 
 
+def _page_context_contract(frontmatter):
+    """读取页面附属文件记录中的上下文格式；旧记录按原格式核对。"""
+    sidecars = frontmatter.get('paper_digest_sidecars')
+    record = sidecars.get('rethink-context.json') if isinstance(sidecars, dict) else None
+    if not isinstance(record, dict):
+        raise PublishDataValidationError('页面缺少论文上下文文件的有效记录。')
+    if 'contract' not in record:
+        return LEGACY_RESEARCH_CONTEXT_CONTRACT
+    contract = record['contract']
+    if contract not in (LEGACY_RESEARCH_CONTEXT_CONTRACT, RESEARCH_CONTEXT_CONTRACT):
+        raise PublishDataValidationError('论文上下文文件的格式版本不受支持。')
+    return contract
+
+
 def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
     flat_tag_contract = _page_flat_tag_contract(frontmatter)
     has_legacy_tags = any('paper_digest_taxonomy_' + field in frontmatter for field in
@@ -3459,6 +3483,7 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
         paper, date_str, reader_plan=reader_plan,
         api_reader_payload=api_reader_payload, require_reader=True,
         flat_tag_contract=flat_tag_contract,
+        context_contract=_page_context_contract(frontmatter),
     )
     identity = bundle['identity']
     expected = {
@@ -10768,6 +10793,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
     paper_ids = set()
     workbench_paper_ids = set()
     workbench_flat_contracts = {}
+    workbench_context_contracts = {}
     for record in manifest.get('files') or []:
         if not isinstance(record, dict) or record.get('deleted') is True:
             continue
@@ -10811,6 +10837,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
                 if paper_id in workbench_flat_contracts:
                     raise PublishDataValidationError('同一篇论文对应多个页面，无法确定附属文件属于哪个页面。')
                 workbench_flat_contracts[paper_id] = _page_flat_tag_contract(page_frontmatter)
+                workbench_context_contracts[paper_id] = _page_context_contract(page_frontmatter)
     if not paper_ids:
         raise PublishDataValidationError('生成清单中没有可绑定视觉摘要的论文页')
     if manifest.get('schemaVersion') == 3:
@@ -10855,6 +10882,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
                 paper, date_str, reader_plan=reader_plan,
                 api_reader_payload=api_reader_payload, require_reader=True,
                 flat_tag_contract=workbench_flat_contracts[paper_id],
+                context_contract=workbench_context_contracts[paper_id],
             )
             for relative, raw in bundle['sidecars'].items():
                 relative_text = relative.as_posix()
@@ -11180,6 +11208,7 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             paper, date_str, reader_plan=reader_plan,
             api_reader_payload=api_reader_payload, require_reader=True,
             flat_tag_contract=_page_flat_tag_contract(matching_frontmatter[0]),
+            context_contract=_page_context_contract(matching_frontmatter[0]),
         )
         for sidecar_relative, sidecar_raw in bundle['sidecars'].items():
             key = sidecar_relative.as_posix()

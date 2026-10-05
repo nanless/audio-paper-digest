@@ -406,9 +406,22 @@ function fetchContextSidecarJson(url, options = {}) {
 }
 
 function validateContextSidecar(payload, prefill) {
-    if (!isPlainObject(payload) || payload.schemaVersion !== 1
-        || payload.contract !== 'researcher-sidecars-v1') {
-        fail('CONTEXT_LOAD_FAILED', '本站论文上下文合同无效', 502);
+    const isCurrentContext = isPlainObject(payload)
+        && payload.contract === 'paper-research-context-v2' && payload.schemaVersion === 2;
+    const isLegacyContext = isPlainObject(payload)
+        && payload.contract === 'researcher-sidecars-v1' && payload.schemaVersion === 1;
+    if (!isCurrentContext && !isLegacyContext) {
+        fail('CONTEXT_LOAD_FAILED', '本站论文资料的格式或版本号无效。', 502);
+    }
+    const hasLegacyTags = payload.assessment != null
+        && Object.hasOwn(payload.assessment, 'taxonomy');
+    const hasCurrentTags = payload.assessment != null
+        && Object.hasOwn(payload.assessment, 'tagMetadata');
+    if (hasLegacyTags && hasCurrentTags) {
+        fail('CONTEXT_LOAD_FAILED', '本站论文上下文不能同时包含新旧标签字段。', 502);
+    }
+    if ((isCurrentContext && hasLegacyTags) || (isLegacyContext && hasCurrentTags)) {
+        fail('CONTEXT_LOAD_FAILED', '本站论文上下文的标签字段与格式版本不一致。', 502);
     }
     const contextIdentity = parseArxivId(payload.arxivVersionedId || payload.arxivId);
     const expectedVersion = contextIdentity.versionedId
@@ -433,7 +446,7 @@ function validateContextSidecar(payload, prefill) {
     if (payload.abstractSha256 !== abstractSha) {
         fail('CONTEXT_LOAD_FAILED', '本站论文上下文摘要 SHA 不一致', 502);
     }
-    const originalTitle = normalizedString(payload.originalTitle, 'sidecar originalTitle', {
+    const originalTitle = normalizedString(payload.originalTitle, '论文上下文原始标题', {
         maxChars: 2000
     }).replace(/\s+/g, ' ');
     if (/[\u0000-\u001f\u007f]/.test(originalTitle)) {
@@ -446,7 +459,7 @@ function validateContextSidecar(payload, prefill) {
         if (!isPlainObject(author)) {
             fail('CONTEXT_LOAD_FAILED', `本站论文第 ${index + 1} 位作者无效`, 502);
         }
-        const name = normalizedString(author.name, `sidecar author ${index + 1}`, {
+        const name = normalizedString(author.name, `论文上下文第 ${index + 1} 位作者`, {
             maxChars: 500
         }).replace(/\s+/g, ' ');
         if (/[\u0000-\u001f\u007f]/.test(name)) {
@@ -460,7 +473,7 @@ function validateContextSidecar(payload, prefill) {
         arxivId: contextIdentity.resolvedId,
         sourceContext: JSON.stringify(payload, null, 2),
         citationMetadata: {
-            source: 'researcher-sidecars-v1',
+            source: payload.contract,
             title: originalTitle,
             authors: citationAuthors
         }
@@ -942,7 +955,7 @@ byId('protocol').value=boot.defaultProtocol;
 const prefill=boot.prefill||{};
 const configuration=boot.configuration||{};
 byId('configurationState').textContent=!configuration.modelConfigured?'项目默认模型尚未完整配置。AI 可在下方填写已批准的服务与临时 key；Zotero 和 PDF 可独立使用。':!configuration.protocolSupported?'项目默认模型协议暂不受本机助手支持，请选择已批准的 OpenAI Responses 或 Chat 服务。':configuration.modelNeedsProxy&&!configuration.proxyConfigured?'默认模型需要 HTTP CONNECT 代理，请在项目 .env 配置 HTTPS_PROXY 后重启助手。':'默认模型配置已载入。检查连接不会调用模型或产生模型费用。';
-if(prefill.title||prefill.arxivId||prefill.sourceUrl||prefill.contextUrl||prefill.selectionMode||prefill.excerptMode){byId('paperPrefill').hidden=false;byId('paperTitle').textContent=prefill.title||'论文上下文';byId('paperId').textContent=prefill.arxivId?('arXiv: '+prefill.arxivId):'';if(prefill.sourceUrl){byId('paperSource').href=prefill.sourceUrl;byId('paperSource').hidden=false;}byId('contextState').textContent=prefill.excerptMode?'已预填博客导读摘录，非论文原文，未经来源绑定验证。发送前请核对或补充原文。':prefill.contextLoadError||(prefill.selectionMode?(prefill.contextUrl?'已载入选中段落和本站摘要上下文；发送前请检查。':'已载入你明确选中的段落；发送前请检查。'):(prefill.contextUrl?'已从本站受控 sidecar 载入上下文；发送前请检查。':'未自动载入原文，请手动粘贴。'));}
+if(prefill.title||prefill.arxivId||prefill.sourceUrl||prefill.contextUrl||prefill.selectionMode||prefill.excerptMode){byId('paperPrefill').hidden=false;byId('paperTitle').textContent=prefill.title||'论文上下文';byId('paperId').textContent=prefill.arxivId?('arXiv: '+prefill.arxivId):'';if(prefill.sourceUrl){byId('paperSource').href=prefill.sourceUrl;byId('paperSource').hidden=false;}byId('contextState').textContent=prefill.excerptMode?'已预填博客导读摘录，非论文原文，未经来源绑定验证。发送前请核对或补充原文。':prefill.contextLoadError||(prefill.selectionMode?(prefill.contextUrl?'已载入选中段落和本站摘要上下文；发送前请检查。':'已载入你明确选中的段落；发送前请检查。'):(prefill.contextUrl?'已从本站论文资料载入上下文；发送前请检查。':'未自动载入原文，请手动粘贴。'));}
 byId('source').value=prefill.sourceContext||'';
 byId('question').value=prefill.defaultQuestion||'';
 if(window.location.search){window.history.replaceState(null,'','/ui');}
@@ -950,7 +963,7 @@ const zoteroButton=byId('zoteroImport');
 byId('zoteroRetry').href=boot.zoteroReopenUrl;
 function localFailure(error){return error&&error.message==='Failed to fetch'?'本机助手连接已断开。请在项目目录运行 npm run paper:rethink，然后从博客重新打开这篇论文；当前文本可先复制保存。':String(error&&error.message||'未知错误');}
 byId('checkLocal').addEventListener('click',async()=>{const status=byId('localStatus');const button=byId('checkLocal');button.disabled=true;status.textContent='正在检查本机配置与 Zotero…';try{const response=await fetch('/v1/local/status',{credentials:'omit',cache:'no-store',headers:{'${SESSION_HEADER}':boot.sessionToken}});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error?.message||('HTTP '+response.status));status.textContent=(data.configuration.modelConfigured?'模型必需配置已齐全；实际可用性在发送后确认。':'模型配置未齐全，请检查 .env 中的 PAPER_ANALYZER_API_KEY、MODEL、ENDPOINT。')+' '+(data.zotero.available?'Zotero Desktop Connector 已连接；请选择目标库或分类后确认导入。':'Zotero Desktop 未连接；请启动 Zotero Desktop 后重新检查。浏览器扩展不是此导入方式的前提。');}catch(error){status.textContent=localFailure(error);}finally{button.disabled=false;}});
-if(boot.zoteroPlan){const authors=boot.zoteroPlan.authors.length?boot.zoteroPlan.authors.join('；'):'作者未从可信来源取得';const source=boot.zoteroPlan.source==='researcher-sidecars-v1'?'来源：已验证的本站 publication sidecar':'来源：历史博客页预填（作者不可得）';byId('zoteroPreview').textContent=boot.zoteroPlan.title+' · arXiv '+boot.zoteroPlan.arxivId+' · '+authors+' · '+source;}else{byId('zoteroPreview').textContent='当前页面没有足够的标题与 arXiv ID，无法生成导入记录。';zoteroButton.disabled=true;}
+if(boot.zoteroPlan){const authors=boot.zoteroPlan.authors.length?boot.zoteroPlan.authors.join('；'):'作者未从可信来源取得';const source=['paper-research-context-v2','researcher-sidecars-v1'].includes(boot.zoteroPlan.source)?'来源：已核验的本站论文资料':'来源：历史博客页预填（作者不可得）';byId('zoteroPreview').textContent=boot.zoteroPlan.title+' · arXiv '+boot.zoteroPlan.arxivId+' · '+authors+' · '+source;}else{byId('zoteroPreview').textContent='当前页面没有足够的标题与 arXiv ID，无法生成导入记录。';zoteroButton.disabled=true;}
 zoteroButton.addEventListener('click',async()=>{const status=byId('zoteroStatus');if(!boot.zoteroTicket){status.textContent='导入凭证不可用，请重新打开这篇论文的确认页。';byId('zoteroRetry').hidden=false;return;}zoteroButton.disabled=true;status.textContent='正在写入 Zotero…';try{const response=await fetch('/v1/zotero/import',{method:'POST',credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer',headers:{'Content-Type':'application/json','${SESSION_HEADER}':boot.sessionToken},body:JSON.stringify({ticket:boot.zoteroTicket})});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error?.message||('HTTP '+response.status));status.textContent='已导入 Zotero。为防重复，本凭证已失效。';boot.zoteroTicket='';}catch(error){status.textContent='导入未确认：'+localFailure(error)+'。请先检查 Zotero 中是否已保存，避免重复导入。';byId('zoteroRetry').hidden=false;}});
 if(prefill.action==='zotero'){byId('zoteroTitle').focus();}else if(prefill.arxivId||prefill.selectionMode){byId('rethinkTitle').focus();}
 byId('form').addEventListener('submit',async event=>{

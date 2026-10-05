@@ -447,6 +447,40 @@ describe('paper rethink UI prefill policy', () => {
         assert.strictEqual(legacyPrefill.arxivId, '2609.03620');
     });
 
+    it('rejects mismatched context formats and tag fields by their own presence', () => {
+        const url = new URL('http://127.0.0.1:43128/ui');
+        url.search = new URLSearchParams({
+            arxivId: '2609.03620v2',
+            contextUrl: '/audio-paper-digest-blog/data/papers/2026-09-05/2609-03620/rethink-context.json'
+        }).toString();
+        const parsed = parseUiPrefill(url, prefillOptions);
+        for (const overrides of [
+            { contract: 'paper-research-context-v2', schemaVersion: 1 },
+            { contract: 'researcher-sidecars-v1', schemaVersion: 2 },
+            { contract: 'paper-research-context-v3', schemaVersion: 2 },
+            { contract: 'paper-research-context-v2', schemaVersion: '2' }
+        ]) {
+            assert.throws(() => validateContextSidecar(contextSidecar(overrides), parsed),
+                error => error.code === 'CONTEXT_LOAD_FAILED' && /格式或版本号无效/.test(error.message));
+        }
+        for (const [contract, schemaVersion, wrongField] of [
+            ['researcher-sidecars-v1', 1, 'tagMetadata'],
+            ['paper-research-context-v2', 2, 'taxonomy']
+        ]) {
+            assert.throws(() => validateContextSidecar(contextSidecar({
+                contract, schemaVersion, assessment: { [wrongField]: null }
+            }), parsed), error => error.code === 'CONTEXT_LOAD_FAILED' && /格式版本不一致/.test(error.message));
+            for (const value of [null, { contract: 'paper-tag-flat-tags-v2' }]) {
+                assert.throws(() => validateContextSidecar(contextSidecar({
+                    contract, schemaVersion, assessment: { taxonomy: value, tagMetadata: value }
+                }), parsed), error => error.code === 'CONTEXT_LOAD_FAILED' && /同时包含新旧/.test(error.message));
+            }
+            assert.strictEqual(validateContextSidecar(contextSidecar({
+                contract, schemaVersion
+            }), parsed).citationMetadata.source, contract);
+        }
+    });
+
     it('rejects key-like/unknown/duplicate query fields without reflecting their value', () => {
         for (const query of [
             '?apiKey=secret-canary',
@@ -565,17 +599,30 @@ describe('paper rethink UI prefill policy', () => {
         assert.ok(!JSON.stringify(failedContext).includes('network-secret'));
     });
 
-    it('prefers a valid source-bound sidecar and a deliberate selection over any page excerpt', async () => {
+    it('prefers verified paper context and a deliberate selection over any page excerpt', async () => {
         const url = new URL('http://127.0.0.1:43128/ui');
         url.search = new URLSearchParams({
             arxivId: '2609.03620v2', pageExcerpt: 'UNVERIFIED_EXCERPT_CANARY',
             contextUrl: '/audio-paper-digest-blog/data/papers/2026-09-05/2609-03620/rethink-context.json'
         }).toString();
-        const options = { ...prefillOptions, contextLoader: async () => contextSidecar() };
-        const bound = await loadUiPrefill(url, options);
-        assert.strictEqual(bound.excerptMode, false);
-        assert.match(bound.sourceContext, /Authoritative abstract text/);
-        assert.ok(!JSON.stringify(bound).includes('UNVERIFIED_EXCERPT_CANARY'));
+        for (const [contract, schemaVersion, tagField] of [
+            ['researcher-sidecars-v1', 1, 'taxonomy'],
+            ['paper-research-context-v2', 2, 'tagMetadata']
+        ]) {
+            const payload = contextSidecar({ contract, schemaVersion, assessment: {
+                ...contextSidecar().assessment,
+                [tagField]: { contract: 'paper-tag-flat-tags-v2' }
+            } });
+            const original = JSON.stringify(payload);
+            const options = { ...prefillOptions, contextLoader: async () => payload };
+            const bound = await loadUiPrefill(url, options);
+            assert.strictEqual(bound.excerptMode, false);
+            assert.match(bound.sourceContext, /Authoritative abstract text/);
+            assert.deepStrictEqual(JSON.parse(bound.sourceContext), payload);
+            assert.strictEqual(bound.citationMetadata.source, contract);
+            assert.strictEqual(JSON.stringify(payload), original);
+            assert.ok(!JSON.stringify(bound).includes('UNVERIFIED_EXCERPT_CANARY'));
+        }
         url.searchParams.set('selectedText', '用户选段');
         url.searchParams.delete('contextUrl');
         const selected = await loadUiPrefill(url, prefillOptions);
@@ -615,7 +662,7 @@ describe('Zotero citation planning', () => {
         assert.strictEqual(requests, 1);
     });
 
-    it('uses verified sidecar title/authors and produces escaped versioned BibTeX', () => {
+    it('uses verified paper context for titles, authors and escaped versioned BibTeX', () => {
         const url = new URL('http://127.0.0.1:43128/ui');
         url.searchParams.set('title', 'Untrusted fallback title');
         url.searchParams.set('arxivId', '2609.03620v2');
@@ -641,6 +688,15 @@ describe('Zotero citation planning', () => {
         assert.match(bibtex, /Safe \\& Exact\\_\\\{Title\\\}/);
         assert.match(bibtex, /\{Ada \\& Example\}/);
         assert.ok(!bibtex.includes('\r'));
+        const current = validateContextSidecar(contextSidecar({
+            contract: 'paper-research-context-v2', schemaVersion: 2,
+            originalTitle: 'Safe & Exact_{Title}',
+            authors: [{ name: 'Ada & Example', affiliations: [] }],
+            assessment: { tagMetadata: { contract: 'paper-tag-flat-tags-v2' } }
+        }), parsed);
+        const currentPlan = buildZoteroCitationPlan(current);
+        assert.strictEqual(currentPlan.source, 'paper-research-context-v2');
+        assert.strictEqual(buildZoteroBibtex(currentPlan), bibtex);
     });
 
     it('degrades legacy metadata without inventing authors', () => {
@@ -1001,6 +1057,37 @@ describe('paper rethink HTTP boundary', () => {
         });
         assert.strictEqual(limited.statusCode, 429);
         assert.strictEqual(downloads, 1);
+    });
+
+    it('shows the verified paper source for both context formats in the real UI', async t => {
+        let payload;
+        const server = await listenForTest(t, {
+            contextLoader: async () => payload,
+            zoteroImportFn: async () => assert.fail('loading the UI must not import a citation')
+        });
+        if (!server) return;
+        const query = new URLSearchParams({
+            arxivId: '2609.03620v2',
+            contextUrl: '/audio-paper-digest-blog/data/papers/2026-09-05/2609-03620/rethink-context.json'
+        });
+        for (const [contract, schemaVersion] of [
+            ['researcher-sidecars-v1', 1], ['paper-research-context-v2', 2]
+        ]) {
+            payload = contextSidecar({ contract, schemaVersion });
+            const page = await httpRequest(server, { path: `/ui?${query}` });
+            assert.strictEqual(page.statusCode, 200);
+            const script = page.text.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)?.[1];
+            const elements = new Map();
+            require('node:vm').runInNewContext(script, {
+                document: { getElementById: id => {
+                    if (!elements.has(id)) elements.set(id, { addEventListener() {}, focus() {} });
+                    return elements.get(id);
+                } },
+                window: { location: { search: '' }, history: { replaceState() {} }, addEventListener() {} }
+            });
+            assert.match(elements.get('zoteroPreview').textContent, /来源：已核验的本站论文资料/);
+            assert.match(elements.get('contextState').textContent, /已从本站论文资料载入上下文/);
+        }
     });
 
     it('imports into Zotero only after local UI confirmation with a one-use ticket', async t => {

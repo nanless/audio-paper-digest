@@ -2,7 +2,7 @@
 
 2026-09-06 起，博客已取消全部本机助手入口，包括本机 AI、Zotero 确认页和 PDF 下载服务。读者使用[纯网页阅读工具](blog-reading-tools.md)，无需运行本项目、启动服务或填写 API 密钥。博客前端也不再向本机服务传递地址或参数。
 
-服务源码和 `researcher-sidecars-v1` 静态附属文件格式仍保留。这份说明供维护旧接口时查阅，下面的博客工具栏、导航和预填设计属于退出集成前的行为，不能据此恢复博客功能。源码中残留的旧启动或重开提示，也不代表今天的博客提供这些入口。
+服务源码和静态附属文件仍保留。当前上下文格式为 `paper-research-context-v2`、`schemaVersion=2`，标签信息使用 `assessment.tagMetadata`；旧 `researcher-sidecars-v1`、`schemaVersion=1` 及原 `assessment.taxonomy` 只读兼容。这份说明供维护旧接口时查阅，下面的博客工具栏、导航和预填设计属于退出集成前的行为，不能据此恢复博客功能。源码中残留的旧启动或重开提示，也不代表今天的博客提供这些入口。
 
 ## 旧设计解决的问题
 
@@ -139,7 +139,7 @@ HTTPS 到 HTTP loopback 导航可能使浏览器移除 referrer，它既可缺�
 
 服务以 BibTeX 请求固定 `127.0.0.1:23119/connector/import`，写入 Zotero 当前选中的库或分类。对 Zotero 10 的本机 HTTP 加固还发送 `Zotero-Allowed-Request: true`。公共博客不能取得本机 UI 的 origin/session 条件，也不共享它的票据、端口或权限。
 
-有 `researcher-sidecars-v1` 时，引用使用经过论文身份、摘要 SHA 与受控 HTTPS 路径核验的 `rethink-context.json` 标题和作者。旧页没有附属文件时只用携带的标题与严格规范 arXiv ID，作者显示未知，不从正文猜测。Connector 未启动、超时或拒绝时保留稳定错误与重新确认身份链接。
+有新版或明确旧版论文上下文文件时，引用使用经过论文身份、摘要 SHA 与受控 HTTPS 路径核验的 `rethink-context.json` 标题和作者。旧页没有附属文件时只用携带的标题与严格规范 arXiv ID，作者显示未知，不从正文猜测。Connector 未启动、超时或拒绝时保留稳定错误与重新确认身份链接。
 
 导入接口不保证自动保存 PDF 附件。旧“打开 PDF”只是官方 `https://arxiv.org/pdf/<严格ID>.pdf` 导航，浏览器可能预览；附件下载与文献导入是两个分别由用户触发的动作。
 

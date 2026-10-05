@@ -3126,7 +3126,7 @@ title: "Score rows"
         ))
         self.assertEqual(context['assessment']['primaryMethod'], 'Transformer')
         self.assertEqual(
-            context['assessment']['taxonomy']['registrySha256'],
+            context['assessment']['tagMetadata']['registrySha256'],
             publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
 
@@ -3152,20 +3152,52 @@ title: "Score rows"
         for path, raw in legacy['sidecars'].items():
             if path.name == 'rethink-context.json':
                 expected = json.loads(current['sidecars'][path])
-                expected['assessment']['taxonomy']['contract'] = publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT
+                expected['assessment']['tagMetadata']['contract'] = publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT
                 self.assertEqual(raw, publish_to_blog._json_sidecar_bytes(expected))
             else:
                 self.assertEqual(raw, current['sidecars'][path])
+        old_context_bundles = []
+        for flat_contract in (publish_to_blog.FLAT_TAG_COMPAT_CONTRACT,
+                              publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT):
+            old_context = publish_to_blog.build_researcher_workbench_bundle(
+                paper, '2026-08-31', flat_tag_contract=flat_contract,
+                context_contract=publish_to_blog.LEGACY_RESEARCH_CONTEXT_CONTRACT)
+            old_context_bundles.append(old_context)
+            self.assertNotIn('contract', old_context['sidecarRecords']['rethink-context.json'])
+            for path, raw in old_context['sidecars'].items():
+                if path.name == 'rethink-context.json':
+                    expected = json.loads(current['sidecars'][path])
+                    expected['contract'] = 'researcher-sidecars-v1'
+                    expected['schemaVersion'] = 1
+                    expected['assessment']['taxonomy'] = expected['assessment'].pop('tagMetadata')
+                    expected['assessment']['taxonomy']['contract'] = flat_contract
+                    self.assertEqual(raw, publish_to_blog._json_sidecar_bytes(expected))
+                else:
+                    self.assertEqual(raw, current['sidecars'][path])
+        self.assertEqual(current['sidecarRecords']['rethink-context.json']['contract'],
+                         'paper-research-context-v2')
+        current_context = json.loads(next(raw for path, raw in current['sidecars'].items()
+                                          if path.name == 'rethink-context.json'))
+        self.assertEqual((current_context['contract'], current_context['schemaVersion']),
+                         ('paper-research-context-v2', 2))
+        self.assertIn('tagMetadata', current_context['assessment'])
+        self.assertNotIn('taxonomy', current_context['assessment'])
         current_page, slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
         legacy_page = current_page.replace(
             'paper_digest_tags_contract: "paper-tag-flat-tags-v2"',
             'paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"').replace(
                 current['sidecarRecords']['rethink-context.json']['sha256'],
                 legacy['sidecarRecords']['rethink-context.json']['sha256'])
-        for page_text, bundle in (
-                (current_page, current), (legacy_page, legacy),
-                (current_page.replace('paper_digest_tags_', 'paper_digest_taxonomy_'), current),
-                (legacy_page.replace('paper_digest_tags_', 'paper_digest_taxonomy_'), legacy)):
+        page_bundles = [(current_page, current), (legacy_page, legacy)]
+        for old_context in old_context_bundles:
+            old_page = current_page.replace(
+                publish_to_blog._researcher_workbench_frontmatter(current),
+                publish_to_blog._researcher_workbench_frontmatter(old_context))
+            self.assertNotEqual(old_page, current_page)
+            page_bundles.append((old_page, old_context))
+        page_bundles += [(page_text.replace('paper_digest_tags_', 'paper_digest_taxonomy_'), bundle)
+                         for page_text, bundle in tuple(page_bundles)]
+        for page_text, bundle in page_bundles:
             with self.subTest(contract=bundle['tagMetadata']['contract']), tempfile.TemporaryDirectory() as tmp:
                 repo = Path(tmp) / 'blog'
                 page = repo / 'content' / 'posts' / f'2026-08-31-{slug}.md'
@@ -3200,7 +3232,33 @@ title: "Score rows"
                     self.assertEqual(publish_to_blog.attest_api_reader_assets(
                         '2026-08-31', paths, manifest_path, results), 0)
                     self.assertTrue(all(results[str(path.resolve())]['passed'] for path in paths))
-                    with mock.patch.object(publish_to_blog, '_page_flat_tag_contract') as selector:
+                    context_path = next(path for path in paths if path.name == 'rethink-context.json')
+                    saved_manifest_bytes = manifest_path.read_bytes()
+                    for mixed in (False, True):
+                        invalid_context = json.loads(original_bytes[context_path])
+                        if mixed:
+                            tag_key = 'tagMetadata' if invalid_context['schemaVersion'] == 2 else 'taxonomy'
+                            other_key = 'taxonomy' if tag_key == 'tagMetadata' else 'tagMetadata'
+                            invalid_context['assessment'][other_key] = copy.deepcopy(
+                                invalid_context['assessment'][tag_key])
+                        else:
+                            invalid_context['schemaVersion'] = 1 if invalid_context['schemaVersion'] == 2 else 2
+                        invalid_raw = publish_to_blog._json_sidecar_bytes(invalid_context)
+                        context_path.write_bytes(invalid_raw)
+                        invalid_manifest = copy.deepcopy(manifest)
+                        for record in invalid_manifest['files']:
+                            if record['path'] == context_path.relative_to(repo).as_posix():
+                                record['sha256'] = hashlib.sha256(invalid_raw).hexdigest()
+                                break
+                        manifest_path.write_text(json.dumps(invalid_manifest, ensure_ascii=False), encoding='utf-8')
+                        with self.assertRaisesRegex(PublishDataValidationError, 'researcher sidecar manifest SHA 不一致'):
+                            publish_to_blog.validate_generation_visual_contract(invalid_manifest, '2026-08-31', repo)
+                        self.assertGreater(publish_to_blog.attest_api_reader_assets(
+                            '2026-08-31', paths, manifest_path, {}, preflight_only=True), 0)
+                        context_path.write_bytes(original_bytes[context_path])
+                        manifest_path.write_bytes(saved_manifest_bytes)
+                    with mock.patch.object(publish_to_blog, '_page_flat_tag_contract') as selector, \
+                            mock.patch.object(publish_to_blog, '_page_context_contract') as context_selector:
                         page.write_text(page_text.replace(
                             f'"{bundle["tagMetadata"]["contract"]}"', '"unrecognized-tag-format"', 1),
                             encoding='utf-8')
@@ -3210,6 +3268,7 @@ title: "Score rows"
                             publish_to_blog.attest_api_reader_assets(
                                 '2026-08-31', paths, manifest_path, {}, preflight_only=True)
                         selector.assert_not_called()
+                        context_selector.assert_not_called()
                         page.write_bytes(original_bytes[page])
                         original_manifest = manifest_path.read_bytes()
                         for record in manifest['files']:
@@ -3223,6 +3282,7 @@ title: "Score rows"
                             publish_to_blog.attest_api_reader_assets(
                                 '2026-08-31', paths, manifest_path, {}, preflight_only=True)
                         selector.assert_not_called()
+                        context_selector.assert_not_called()
                         manifest_path.write_bytes(original_manifest)
                 self.assertEqual({path: path.read_bytes() for path in paths}, original_bytes)
         self.assertEqual(paper, original_paper)
@@ -3234,6 +3294,22 @@ title: "Score rows"
             frontmatter['paper_digest_tags_contract'] = invalid
             with self.assertRaisesRegex(PublishDataValidationError, '版本不受支持'):
                 publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, '2026-08-31')
+        for invalid in (None, '', 'unknown', [], {}):
+            with self.subTest(context_contract=invalid), self.assertRaisesRegex(PublishDataValidationError, '版本不受支持'):
+                publish_to_blog.build_researcher_workbench_bundle(
+                    paper, '2026-08-31', context_contract=invalid)
+            frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
+            frontmatter['paper_digest_sidecars']['rethink-context.json']['contract'] = invalid
+            with self.assertRaisesRegex(PublishDataValidationError, '版本不受支持'):
+                publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, '2026-08-31')
+        frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
+        frontmatter['paper_digest_sidecars']['rethink-context.json']['sha256'] = '0' * 64
+        with self.assertRaisesRegex(PublishDataValidationError, 'paper_digest_sidecars'):
+            publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, '2026-08-31')
+        frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
+        frontmatter['paper_digest_sidecars']['rethink-context.json'].pop('contract')
+        with self.assertRaisesRegex(PublishDataValidationError, 'paper_digest_sidecars'):
+            publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, '2026-08-31')
         frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
         old_field_family = {key.replace('paper_digest_tags_', 'paper_digest_taxonomy_', 1)
                         if key.startswith('paper_digest_tags_') else key: value

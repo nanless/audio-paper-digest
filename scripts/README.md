@@ -366,7 +366,8 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 会议和历史页面的新临时渲染输入使用 `tagMetadata` 传递标签记录。读取器仍能读取旧包的 `taxonomy`，
 但同一个包同时包含两个字段时会拒绝处理，即使两者值相同或为空。读取旧包不会改写保存记录或重算原绑定。
 发布器的内部页面组合结果也使用 `tagMetadata`。新页面使用 `paper_digest_tags_*` 字段，网站仍能读取已有页面的旧字段；
-新页面的扁平标签协议为 `paper-tag-flat-tags-v2`。`assessment.taxonomy`、搜索字段和词表资产另有格式约束，后续分别迁移。
+新页面的扁平标签协议为 `paper-tag-flat-tags-v2`。新上下文文件使用 `paper-research-context-v2`、`schemaVersion=2`，标签信息保存在 `assessment.tagMetadata`。旧 `researcher-sidecars-v1`、`schemaVersion=1` 的 `assessment.taxonomy` 仍按原格式读取；搜索字段和词表资产后续分别迁移。
+新上下文的页面附属文件记录带有明确的 `contract`；旧记录缺少这一标识时，核验器按旧格式重建原字节，不根据标签协议猜上下文格式。三个引用文件不因这项改名改变格式或内容。
 
 页面的标签字段有六项：`contract`、`selection_contract`、`registry_version`、`registry_sha256`、`concepts` 和 `scope`。
 同一页只能使用 `paper_digest_tags_*` 或旧 `paper_digest_taxonomy_*` 中的一组，混用会被拒绝，即使值相同或为空。
