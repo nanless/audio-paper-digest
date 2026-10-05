@@ -671,8 +671,8 @@ function collectDraftIssues(draft, parserError, options = {}) {
             issues.push({ path: null, code: 'reader_result_table_missing', message: error.message });
         }
     }
-    // This is a preflight estimate, not a second length gate. The parser later
-    // counts its normalized/compiled article, which remains authoritative.
+    // 这里只预估小节标题、正文和术语组合解释的汉字数量，不另设篇幅门槛。
+    // 最终仍以解析器规范化并组装完整文章后的统计为准。
     const countText = draft.sections.map(section => `${section?.heading || ''}\n${section?.body || ''}`).join('\n')
         + draft.conceptBridges.map(bridge => `${(Array.isArray(bridge?.terms) ? bridge.terms : []).join(' ')} ${bridge?.explanation || ''}`).join('\n');
     const chineseChars = (countText.match(/[\u3400-\u9fff]/g) || []).length;
@@ -918,7 +918,9 @@ function buildRepairTargets(draft, issues) {
         const message = String(issue?.message || '');
         if (!(/marker 必须唯一独占一段并位于声明 kind 小节/.test(message)
             || (/未形成有效术语桥/.test(message)
-                && /已有marker必须唯一独占一段且位于声明小节/.test(message)))) return null;
+                && /已有marker必须唯一独占一段且位于声明小节/.test(message))
+            || (/的占位标记、解释长度或所在小节不符合要求/.test(message)
+                && /已有占位标记须在指定小节中独占一段，且全文只能出现一次/.test(message)))) return null;
         const pathIndex = /^\/conceptBridges\/(\d+)$/.exec(String(issue?.path || ''))?.[1];
         const messageIndex = /conceptBridges\[(\d+)\]/.exec(message)?.[1];
         const index = Number(pathIndex ?? messageIndex);

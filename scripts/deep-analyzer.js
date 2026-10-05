@@ -5983,12 +5983,12 @@ function parseApiReaderArticleResult(raw, options = {}) {
         if (marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
             || explanation.length < 45 || explanation.length > 320 || !candidate || markerOccurrences > 1) {
             throw new Error(
-                `读者文章 conceptBridges[${index}] 未形成有效术语桥`
+                `读者文章 conceptBridges[${index}] 的占位标记、解释长度或所在小节不符合要求`
                 + `（terms=${bridge.terms.join(' × ')}`
                 + `, sectionKind=${bridge.sectionKind}`
                 + `, marker=${marker || '空'}`
                 + `, explanationChars=${explanation.length}`
-                + `, markerBound=${Boolean(candidate)}, markerOccurrences=${markerOccurrences}；已有marker必须唯一独占一段且位于声明小节）`
+                + `, markerBound=${Boolean(candidate)}, markerOccurrences=${markerOccurrences}；已有占位标记须在指定小节中独占一段，且全文只能出现一次）`
             );
         }
         const exactBridgeParagraph = Array.isArray(options.exactSignedBridgeSurfaces)
@@ -6114,7 +6114,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     )).join('\n\n');
     for (const bridge of conceptBridges) {
         if (!article.includes(bridge.marker)) {
-            throw new Error(`读者文章术语桥 marker 丢失: ${bridge.marker}`);
+            throw new Error(`读者文章中缺少术语组合解释的占位标记：${bridge.marker}`);
         }
         article = article.replace(bridge.marker, bridge.explanation);
     }
@@ -6315,7 +6315,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
         );
         if (!paragraph) {
             throw new Error(
-                `读者文章术语桥无法从最终正文重绑定: ${bridge.terms.join(' × ')}`
+                `最终正文中没有唯一匹配这组术语的解释段落：${bridge.terms.join(' × ')}`
             );
         }
         return { ...bridge, explanation: paragraph };
@@ -8398,7 +8398,7 @@ function rollbackLegacyImageSupplementForModernReader(
         || scoringStage?.status !== 'complete'
         || imageStage.outputAnalysisSha256 !== currentSha256
         || imageStage.inputAnalysisSha256 !== scoringStage.outputAnalysisSha256) {
-        throw new Error('现代 Reader 的 legacy imageSupplement 三-SHA 链不闭合，拒绝确定性回滚');
+        throw new Error('分析正文格式无效或为空、评分阶段未完成，或旧插图前后正文的 SHA 记录不一致，不能自动移除旧插图。');
     }
 
     const imageManifest = paper?.imageManifest;
@@ -8415,7 +8415,7 @@ function rollbackLegacyImageSupplementForModernReader(
             || item.imageNumber !== plans[index]?.imageNumber
             || item.section !== plans[index]?.section
             || String(item.paragraphId || '') !== String(plans[index]?.paragraphId || ''))) {
-        throw new Error('现代 Reader 的 legacy imageSupplement 缺少可逆插图计划，拒绝确定性回滚');
+        throw new Error('旧插图的计划、候选图片、下载记录或插入结果缺失、格式无效或相互不对应，不能自动移除旧插图。');
     }
 
     const candidateByUrl = new Map(candidates.map(candidate => [candidate?.url, candidate]));
@@ -8428,12 +8428,12 @@ function rollbackLegacyImageSupplementForModernReader(
     for (const plan of [...plans].reverse()) {
         const imageInfo = usableImageInfos[Number(plan?.imageNumber) - 1];
         if (!imageInfo || !Number.isInteger(Number(plan?.imageNumber))) {
-            throw new Error('现代 Reader 的 legacy imageSupplement 候选序号不可逆，拒绝确定性回滚');
+            throw new Error('旧插图计划中的图片编号不能转换为整数，或找不到对应图片，不能自动移除旧插图。');
         }
         const block = buildImageInsertionBlock(plan, imageInfo);
         const inserted = `\n\n${block}\n\n\n`;
         if (restored.split(inserted).length !== 2) {
-            throw new Error('现代 Reader 的 legacy imageSupplement 插入块不唯一，拒绝确定性回滚');
+            throw new Error('正文中没有唯一匹配的旧插图段落，不能自动移除旧插图。');
         }
         restored = restored.replace(inserted, '\n\n');
         blockSha256s.unshift(crypto.createHash('sha256').update(block).digest('hex'));
@@ -8441,7 +8441,7 @@ function rollbackLegacyImageSupplementForModernReader(
     const restoredSha256 = crypto.createHash('sha256').update(restored).digest('hex');
     if (restoredSha256 !== imageStage.inputAnalysisSha256
         || restoredSha256 !== scoringStage.outputAnalysisSha256) {
-        throw new Error('现代 Reader 的 legacy imageSupplement 逆移除未命中评分正文 SHA，拒绝确定性回滚');
+        throw new Error('移除旧插图后的正文 SHA 与插图前记录或评分正文记录不一致，无法确认恢复结果。');
     }
 
     const figuresSha256 = stableFingerprint(paper.apiReaderFigures);

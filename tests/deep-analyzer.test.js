@@ -2327,17 +2327,17 @@ primary_task_tag: #音视频生成
         assert.strictEqual(
             normalizeReaderBridgeTerm('零样本评测'),
             normalizeReaderBridgeTerm('零样本评估'),
-            '术语桥重绑定应容忍“评测/评估”表面同义词'
+            '术语归一化应将“评测”和“评估”视为相同写法'
         );
         assert.strictEqual(
             normalizeReaderBridgeTerm('十样本评测'),
             normalizeReaderBridgeTerm('10 样本评估'),
-            '术语桥重绑定应容忍中文数字被正文规范化为阿拉伯数字'
+            '术语中的中文数字与对应阿拉伯数字应归一化为相同结果'
         );
         assert.strictEqual(
             normalizeReaderBridgeTerm('下一帧预测'),
             normalizeReaderBridgeTerm('下 1 帧预测'),
-            '术语桥重绑定应容忍“下一帧”被正文数字格式化为“下 1 帧”'
+            '“下一帧”与正文规范化后的“下 1 帧”应归一化为相同结果'
         );
         const specs = [
             ['background', '声音片段为什么会让传统判别器失去方向？', '背景任务输入输出失败案例直觉动机读者边界'],
@@ -3264,7 +3264,7 @@ primary_task_tag: #音视频生成
             hash(corrupted.analysis);
         assert.throws(
             () => repairApiReaderArticleAndPlanBindings(corrupted, corrupted.analysisManifest),
-            /插入块不唯一/
+            /没有唯一匹配的旧插图段落/
         );
     });
 

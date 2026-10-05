@@ -1749,7 +1749,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     )
                 llm.assert_not_called()
 
-    def test_modern_bridge_render_spacing_preserves_signed_bytes_and_table_formula_proof(self):
+    def test_reader_term_heading_spacing_preserves_records_tables_and_formulas(self):
         paper = llm_api_publication_fixture()
         bridge = paper['apiReaderPlan']['conceptBridges'][0]
         old = bridge['explanation']
@@ -1765,11 +1765,11 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIn('| Baseline | 10.2 |', page)
         self.assertIn(r'\[\mathcal{L}=\lVert y-\hat{y}\rVert_1\]', page)
         fenced = '```text\n\n' + replacement + '\n\n```'
-        self.assertEqual(publish_to_blog._modern_api_bridge_render_spacing(
+        self.assertEqual(publish_to_blog._add_reader_term_heading_spaces(
             fenced, {'conceptBridges': [bridge]},
         ), fenced)
         unrelated = '**未声明术语：**保留原文'
-        self.assertEqual(publish_to_blog._modern_api_bridge_render_spacing(
+        self.assertEqual(publish_to_blog._add_reader_term_heading_spaces(
             unrelated, {'conceptBridges': []},
         ), unrelated)
 

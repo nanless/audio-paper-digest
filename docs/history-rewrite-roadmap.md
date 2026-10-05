@@ -251,7 +251,7 @@ planned history:analyze finalize --run-id UUID
 
 ### 6.5 P2 验收
 
-U/U 正式分析和 Reader 须通过 `isSuccessfulAnalysisRecord`、`hasValidApiReaderV3Records` 及来源重放。13 个标题、篇幅、术语桥、主结果覆盖、评分、作者/机构、资源可达性和结构证据分别检查。
+U/U 正式分析和 Reader 须通过 `isSuccessfulAnalysisRecord`、`hasValidApiReaderV3Records` 及来源重放。13 个标题、篇幅、术语组合解释、主结果覆盖、评分、作者/机构、资源可达性和结构证据分别检查。
 
 每篇事实报告绑定最终文章（article）SHA，操作补丁改变内容后，旧报告即失效。服务商用量按论文、阶段和尝试汇总（identity/stage/attempt），未知回执单列，不能说成零。重复页面不得触发第二次正式分析或 Reader 主生成。
 

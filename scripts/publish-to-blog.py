@@ -4937,7 +4937,7 @@ def _api_reader_markdown_tables(article):
 
 
 def _normalize_api_reader_display_artifacts(value):
-    """Remove only an exact repeated LaTeXML CI annotation from display text."""
+    """清理显示文本中重复的置信区间注释，以及连续重复的加粗说明标题。"""
     value = str(value or '')
     value = re.sub(
         r'(\[\s*([+−-]?\d+(?:\.\d+)?)\s*,\s*([+−-]?\d+(?:\.\d+)?)\s*\])'
@@ -4948,9 +4948,8 @@ def _normalize_api_reader_display_artifacts(value):
         ) else match[0],
         value,
     )
-    # A repeated bilingual bridge label can be emitted as two adjacent bold
-    # spans, leaving the second span malformed in rendered Hugo HTML. Collapse
-    # only an exact same-label repetition; its explanatory prose is unchanged.
+    # 连续重复的加粗说明标题可能使 Hugo 错误解析第二处加粗标记。
+    # 这里只合并标题文字和冒号完全相同的重复部分，后面的解释正文保持不变。
     return re.sub(
         r'\*\*([^*\n]+?)([：:])\*\*\s*\*\*\s*\1\2\*\*\s*',
         r'**\1\2** ',
@@ -5687,7 +5686,7 @@ def _validate_api_reader_resource_identity(paper):
     }
 
 
-def _modern_api_bridge_render_spacing(article, plan):
+def _add_reader_term_heading_spaces(article, plan):
     """按编辑计划为术语说明段的加粗标题后补空格，避免 CommonMark 误解析相邻文字。
 
     处理只作用于发布视图，不改写论文记录中的正文或编辑计划，表格与公式字节也保留。
@@ -5717,7 +5716,7 @@ def _modern_api_bridge_render_spacing(article, plan):
             r'(?:\A|(?<=\n\n))' + re.escape(explanation) + r'(?=\n\n|\Z)', article,
         ))
         if len(matches) != 1:
-            raise PublishDataValidationError('现代 Reader 术语桥缺少唯一完整渲染段落')
+            raise PublishDataValidationError('编辑计划中的术语说明没有在正文中恰好对应一个完整段落。')
         start = matches[0].start()
         if not any(begin <= start < end for begin, end in fences):
             insertions.append(start + prefix.end())
@@ -5727,12 +5726,11 @@ def _modern_api_bridge_render_spacing(article, plan):
 
 
 def _apply_reader_display_fixes(article):
-    """Apply narrowly reviewed typo fixes without mutating signed Reader bytes."""
+    """对显示文本应用指定的错字和集合符号修正，返回处理后的文本，不改写保存的读者正文。"""
     replacements = {
         '指标抽取代吗': '指标抽取代码',
-        # Bare underscores are parsed as emphasis by Goldmark.  Keep the
-        # signed Reader bytes intact, but render this reviewed token pair as
-        # inline code so the semantic set names remain visible verbatim.
+        # Goldmark 可能把裸下划线解析为强调标记。显示时将这组集合名称改为行内代码，
+        # 保留符号的可见写法；保存的正文不改写。
         'S_yes/S_no': '`S_yes`/`S_no`',
     }
     for old, new in replacements.items():
@@ -6111,7 +6109,7 @@ def _api_reader_payload(paper):
         reader_authors = None
         figure_persistence = None
     rendered_article = _apply_reader_display_fixes(
-        _modern_api_bridge_render_spacing(article, plan)
+        _add_reader_term_heading_spaces(article, plan)
     ) if reader_contract == LLM_API_READER_CONTRACT else article
     if reader_contract == LLM_API_READER_CONTRACT:
         rendered_article = _normalize_api_reader_display_artifacts(rendered_article)

@@ -165,6 +165,16 @@ test('multiple duplicated concept markers stay within the patch contract and onl
     ]);
     assert.equal(paths.length, 6);
     assert.ok(paths.every(pointer => pointer.startsWith('/sections/')));
+    const currentIssues = structuredClone(issues);
+    currentIssues[0].message = currentIssues[0].message
+        .replace('未形成有效术语桥', '的占位标记、解释长度或所在小节不符合要求')
+        .replace('已有marker必须唯一独占一段且位于声明小节',
+            '已有占位标记须在指定小节中独占一段，且全文只能出现一次');
+    assert.deepEqual(buildRepairTargets(draft, currentIssues).map(target => target.path), paths);
+    const legacyDiagnosticPaths = buildRepairTargets(draft, [issues[0]]).map(target => target.path);
+    assert.deepEqual(legacyDiagnosticPaths, ['/sections/3/body', '/sections/4/body']);
+    assert.deepEqual(buildRepairTargets(draft, [currentIssues[0]]).map(target => target.path),
+        legacyDiagnosticPaths);
 });
 
 test('mixed blocking diagnostics can never authorize more nodes than the patch protocol accepts', () => {
@@ -550,7 +560,7 @@ test('an exhausted candidate receives a free full-parser replay: valid retires, 
         const invalidBridges = structuredClone(valid);
         invalidBridges.conceptBridges[0].marker = badMarker;
         assert.throws(() => parseApiReaderArticleResult(JSON.stringify(invalidBridges), parserOptions),
-            /conceptBridges\[0\].*未形成有效术语桥/);
+            /conceptBridges\[0\].*的占位标记、解释长度或所在小节不符合要求/);
     }
     const filename = path.join(directory, fs.readdirSync(directory)[0]);
     const envelope = JSON.parse(fs.readFileSync(filename, 'utf8'));
