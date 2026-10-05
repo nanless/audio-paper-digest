@@ -778,10 +778,10 @@ describe('manual_complete v3 deep-analysis contract', () => {
         const tamperCases = [
             ['inputSha256', candidate => {
                 candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.inputSha256 = 'c'.repeat(64);
-            }, /inputSha256 闭环校验失败/],
+            }, /inputSha256 与该阶段输入记录重新计算的 SHA 不一致/],
             ['auditSha256', candidate => {
                 candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.auditSha256 = 'c'.repeat(64);
-            }, /auditSha256 闭环校验失败/],
+            }, /auditSha256 与阶段输入及审核记录重新计算的 SHA 不一致/],
             ['outputSha256', candidate => {
                 candidate.analysisManifest.manualTakeover.stageEvidence.primaryAnalysis.outputSha256 = 'c'.repeat(64);
             }, /outputSha256 与最终正文 SHA 不一致/],
@@ -805,7 +805,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
         }
         const damagedImageManifest = JSON.parse(JSON.stringify(record));
         damagedImageManifest.imageManifest.downloadOutcomes.push({ url: 'https://example.com/tampered.png', status: 'complete' });
-        assert.match(validateRecord(damagedImageManifest), /imageManifest\.downloadEvidenceSha256 闭环校验失败/);
+        assert.match(validateRecord(damagedImageManifest), /图片下载记录的 downloadEvidenceSha256 与候选图片及下载结果重新计算的 SHA 不一致/);
         assert.equal(isSuccessfulAnalysisRecord(damagedImageManifest), false);
 
         const changedImageRecord = buildManualRecord(

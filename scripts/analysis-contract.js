@@ -1962,7 +1962,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             outcomes: imageManifest.downloadOutcomes
         });
         if (imageManifest.downloadEvidenceSha256 !== expectedDownloadContext) {
-            return 'manual imageManifest.downloadEvidenceSha256 闭环校验失败';
+            return '图片下载记录的 downloadEvidenceSha256 与候选图片及下载结果重新计算的 SHA 不一致。';
         }
         const normalizedSelected = imageManifest.selected.map(normalizeImageEvidence);
         const expectedSelectionContext = imageManifest.version >= 2
@@ -1973,7 +1973,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             })
             : manualSha256(normalizedSelected);
         if (imageManifest.selectionEvidenceSha256 !== expectedSelectionContext) {
-            return 'manual imageManifest.selectionEvidenceSha256 闭环校验失败';
+            return '选图记录的 selectionEvidenceSha256 与按当前清单版本从选中图片及相关字段重新计算的 SHA 不一致。';
         }
     }
     for (const stage of MANUAL_STAGE_EVIDENCE_STAGES) {
@@ -2057,7 +2057,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             });
         }
         if (item.inputSha256 !== expectedInputSha256) {
-            return `manualTakeover.stageEvidence.${stage}.inputSha256 闭环校验失败`;
+            return `阶段 ${stage} 的 inputSha256 与该阶段输入记录重新计算的 SHA 不一致。`;
         }
         const expectedAuditSha256 = manualSha256({
             stage,
@@ -2066,7 +2066,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             stageInputSha256: item.inputSha256
         });
         if (item.auditSha256 !== expectedAuditSha256) {
-            return `manualTakeover.stageEvidence.${stage}.auditSha256 闭环校验失败`;
+            return `阶段 ${stage} 的 auditSha256 与阶段输入及审核记录重新计算的 SHA 不一致。`;
         }
     }
     return null;

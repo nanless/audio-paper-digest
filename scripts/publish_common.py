@@ -393,12 +393,12 @@ def validate_image_narrative_contract(paper):
             plan = unresolved_plans.pop(matched_index) if matched_index is not None else None
         if plan is None:
             return (
-                f'{url} 没有绑定同一 URL/索引的已审计插图计划，'
-                '相邻正文没有与已审计插图计划精确闭环'
+                f'{url} 未找到对应的已审查插图计划；'
+                '图片 URL、索引或相邻正文无法与计划对应。'
             )
         if (_normalize_image_narrative_text(plan.get('lead')) != lead
                 or _normalize_image_narrative_text(plan.get('explanation')) != explanation):
-            return f'{url} 的相邻正文没有与已审计插图计划精确闭环'
+            return f'{url} 的图前导读或图后解释与已审查插图计划不一致。'
         plans_by_url.pop(url, None)
     if plans_by_url or unresolved_plans:
         return '存在没有落入最终正文的已审计插图计划'
@@ -570,7 +570,7 @@ def _validate_publish_image_exclusion_view(paper, paper_label):
                 or stage.get('figureCount') != len(figures) \
                 or stage.get('figuresSha256') != figures_sha:
             raise PublishDataValidationError(
-                f'{paper_label} API reader 发布图片排除后的 stage 未闭环'
+                f'{paper_label} 排除发布图片后，读者文章阶段记录的正文 SHA、图片数量或图片记录 SHA 与当前内容不一致。'
             )
     manifest = paper.get('analysisManifest')
     takeover = manifest.get('manualTakeover') if isinstance(manifest, dict) else None
@@ -1722,9 +1722,9 @@ def validate_manual_v6_payload(paper):
     for field in ('sections', 'tables', 'figures', 'formulas', 'references', 'acronyms',
                   'citations', 'baselines', 'datasets', 'metrics'):
         if counts.get(field) != len(artifact[field]):
-            raise PublishDataValidationError(f'{paper_label} ArtifactIndex.counts.{field} 不闭环')
+            raise PublishDataValidationError(f'{paper_label} ArtifactIndex 中 {field} 的数量缺失，或与对应清单的条数不一致。')
     if counts.get('images') != len(artifact['figures']):
-        raise PublishDataValidationError(f'{paper_label} ArtifactIndex.counts.images 不闭环')
+        raise PublishDataValidationError(f'{paper_label} ArtifactIndex 中的图片数量缺失，或与 figures 清单的条数不一致。')
 
     if (bundle.get('version') != 2
             or bundle.get('contract') != MANUAL_LONGFORM_CONTRACT_VERSION_V2
@@ -1839,7 +1839,7 @@ def validate_manual_v6_payload(paper):
             or len(set(task_names.values())) != 4
             or task_names.get('author') != receipt.get('taskName')
             or task_names.get('authorRevision') != final_receipt.get('taskName')):
-        raise PublishDataValidationError(f'{paper_label} v6 四任务 author/reviewer lineage 不闭环')
+        raise PublishDataValidationError(f'{paper_label} Manual v6 的四项任务名称记录格式不符合要求、名称不唯一，或作者名称与初稿及修订稿凭证不一致。')
 
     table_dispositions = bundle.get('tables')
     if not isinstance(table_dispositions, list):
@@ -2385,7 +2385,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
     signed_v6_compatibility = _manual_v6_signed_compatibility(paper, manifest)
     if paper.get('manualV6CompatibilityMode') is not None and not signed_v6_compatibility:
         raise PublishDataValidationError(
-            f'{paper_label} Manual v6 compatibility 标记未与 production provenance 闭环'
+            f'{paper_label} Manual v6 的兼容标记、版本、运行模式或来源记录不符合要求，或相关记录缺失。'
         )
     if signed_v6_compatibility:
         # Production V6 replaces the legacy V4/V5 resultClaims, stageReviews,
@@ -2578,7 +2578,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                     or [item.get('url') for item in outcomes
                         if isinstance(item, dict)] != declared_urls):
                 raise PublishDataValidationError(
-                    f'{paper_label} manual v5 外部资源验证未逐 URL 闭环'
+                    f'{paper_label} Manual v5 外部资源核验记录的格式、版本、状态或访问结果不符合要求，或 URL 内容及顺序与声明不一致。'
                 )
             acquisition = manifest.get('sourceAcquisition')
             if not isinstance(acquisition, dict):
@@ -2648,7 +2648,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                         or (artifact_index.get('inventoryHealth') or {}).get('status') != 'complete'
                         or artifact_index.get('artifactIndexSha256') != artifact_entry.get('artifactIndexSha256')):
                     raise PublishDataValidationError(
-                        f'{paper_label} 逐论文 ArtifactIndex 未与全文、manifest 和真实文件闭环'
+                        f'{paper_label} 单篇 ArtifactIndex 的完成状态、论文或来源信息不符合要求，或快照、清单与实际文件的字节数或 SHA 不一致。'
                     )
                 expected_identity = {
                     'contract': MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,
@@ -2743,7 +2743,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             })
             if image_manifest.get('downloadEvidenceSha256') != expected_download_context:
                 raise PublishDataValidationError(
-                    f'{paper_label} manual imageManifest.downloadEvidenceSha256 闭环校验失败'
+                    f'{paper_label} 图片下载记录的 downloadEvidenceSha256 与候选图片及下载结果重新计算的 SHA 不一致。'
                 )
             normalized_selected = [
                 normalize_image_evidence(item) for item in image_manifest['selected']
@@ -2758,7 +2758,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 expected_selection_context = _manual_hash(normalized_selected)
             if image_manifest.get('selectionEvidenceSha256') != expected_selection_context:
                 raise PublishDataValidationError(
-                    f'{paper_label} manual imageManifest.selectionEvidenceSha256 闭环校验失败'
+                    f'{paper_label} 选图记录的 selectionEvidenceSha256 与按当前清单版本从选中图片及相关字段重新计算的 SHA 不一致。'
                 )
         for stage in MANUAL_STAGE_EVIDENCE_STAGES:
             item = evidence.get(stage)
@@ -2824,7 +2824,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                     'claims': claims,
                 })
             if item['inputSha256'] != expected_input_sha:
-                raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.inputSha256 闭环校验失败')
+                raise PublishDataValidationError(f'{paper_label} 阶段 {stage} 的 inputSha256 与该阶段输入记录重新计算的 SHA 不一致。')
             expected_audit_sha = _manual_hash({
                 'stage': stage,
                 'claims': claims,
@@ -2832,7 +2832,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 'stageInputSha256': item['inputSha256'],
             })
             if item['auditSha256'] != expected_audit_sha:
-                raise PublishDataValidationError(f'{paper_label} manual stageEvidence.{stage}.auditSha256 闭环校验失败')
+                raise PublishDataValidationError(f'{paper_label} 阶段 {stage} 的 auditSha256 与阶段输入及审核记录重新计算的 SHA 不一致。')
         if manual_depth == MANUAL_DEPTH_CONTRACT_VERSION_V6:
             validate_manual_v6_payload(paper)
         return
@@ -3918,7 +3918,7 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
                 reader_section='深度解读' if is_v5_reader_article else '实验结果',
             )
         except PublishDataValidationError as exc:
-            return f'最终 Markdown resultClaims 读者可见闭环无效: {exc}'
+            return f'最终页面的结果声明与读者正文的对应检查未通过：{exc}'
 
     selected = None
     if isinstance(paper, dict) and isinstance(paper.get('selectedImageUrls'), list):

@@ -620,7 +620,7 @@ describe('validate-data-files', () => {
         });
         fs.writeFileSync(resultFile, JSON.stringify(payload));
         const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
-        assert.match(issues, /imageManifest\.selectionEvidenceSha256 闭环校验失败/);
+        assert.match(issues, /选图记录的 selectionEvidenceSha256 与按当前清单版本从选中图片及相关字段重新计算的 SHA 不一致/);
     });
 
     it('papers.json 拒绝 key-ID 冲突和规范化重复映射', () => {

@@ -1113,7 +1113,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             'parsed': {'documentType': '方法研究'},
         }
         issue = validate_final_manual_v4_markdown(markdown, paper)
-        self.assertIn('resultClaims 读者可见闭环无效', issue)
+        self.assertIn('最终页面的结果声明与读者正文的对应检查未通过', issue)
         self.assertIn('readerBindings 未共同落在', issue)
 
         passing = copy.deepcopy(paper)
@@ -1183,7 +1183,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
 
         tampered = copy.deepcopy(paper)
         tampered['analysis'] = tampered['analysis'].replace('不同块长的 WER 差异', '完全不同的图后说明')
-        self.assertIn('没有与已审计插图计划精确闭环', validate_image_narrative_contract(tampered))
+        self.assertIn('未找到对应的已审查插图计划', validate_image_narrative_contract(tampered))
 
     def test_context_bound_image_contract_binds_order_and_each_url_to_its_plan(self):
         first_url = 'https://arxiv.org/html/2608.29999/figure1.png'
@@ -1237,7 +1237,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             '## 实验结果\n实验正文先说明数据集、基线和指标方向。',
             block(second_url, first_lead, first_explanation, 'WER curves'),
         ))
-        self.assertIn('相邻正文没有与已审计插图计划精确闭环',
+        self.assertIn('图前导读或图后解释与已审查插图计划不一致',
                       validate_image_narrative_contract(swapped_prose))
 
     def test_manual_v4_publish_result_claims_require_three_nonempty_source_bound_numbers(self):
@@ -1345,10 +1345,10 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         cases.append(('review', candidate, 'review 未确认'))
         candidate = copy.deepcopy((paper, manifest))
         candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['inputSha256'] = 'c' * 64
-        cases.append(('input', candidate, 'inputSha256 闭环校验失败'))
+        cases.append(('input', candidate, 'inputSha256 与该阶段输入记录重新计算的 SHA 不一致'))
         candidate = copy.deepcopy((paper, manifest))
         candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['auditSha256'] = 'c' * 64
-        cases.append(('audit', candidate, 'auditSha256 闭环校验失败'))
+        cases.append(('audit', candidate, 'auditSha256 与阶段输入及审核记录重新计算的 SHA 不一致'))
         candidate = copy.deepcopy((paper, manifest))
         candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['outputSha256'] = 'c' * 64
         cases.append(('output', candidate, 'outputSha256 与最终正文 SHA 不一致'))
@@ -1366,7 +1366,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         cases.append(('context', candidate, 'contextSha256 与 imageManifest.downloadEvidenceSha256 不一致'))
         candidate = copy.deepcopy((paper, manifest))
         candidate[0]['imageManifest']['downloadOutcomes'].append({'url': 'https://example.com/tampered.png', 'status': 'complete'})
-        cases.append(('image context hash', candidate, 'imageManifest.downloadEvidenceSha256 闭环校验失败'))
+        cases.append(('image context hash', candidate, '图片下载记录的 downloadEvidenceSha256 与候选图片及下载结果重新计算的 SHA 不一致'))
 
         for label, (candidate_paper, candidate_manifest), message in cases:
             with self.subTest(label=label), self.assertRaisesRegex(PublishDataValidationError, message):
