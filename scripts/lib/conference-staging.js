@@ -171,7 +171,7 @@ function bindInputs({ selectionHandle, discoveryHandle, extractionManifest, extr
     const extraction = normalizeExtractionManifest(extractionManifest);
     assertSha(extractionFileSha256, 'extractionFileSha256');
     const catalog = filterApi.catalogFromDiscoveryHandle(discoveryHandle);
-    if (selection.contract !== filterApi.SELECTION_HANDLE_CONTRACT || selection.version !== filterApi.VERSION
+    if (selection.contract !== filterApi.SELECTION_HANDLE_CONTRACT || selection.version !== filterApi.SELECTION_HANDLE_VERSION
         || selection.conferenceId !== discovery.candidateManifest.conference.id
         || selection.catalogSha256 !== discovery.catalogSha256
         || catalog.catalogSha256 !== discovery.catalogSha256) {

@@ -164,8 +164,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `official-conference-acquire.js` | 在日更工作区按集中配置执行 `catalog/download/status/verify`，固定来源身份、项目 CONNECT 代理和官方地址白名单，不接受任意输出目录。`download` 可显式配置 1–5 路并发和 0–5 次同 URL 瞬时网络重试。 |
 | `conference-plan.js` | 核验发现、筛选、暂存、导入全链，以及已审计划与词表 SHA，成对生成不可覆盖的 run 和计划凭证。 |
 | `conference-execution.js` | 核验 run、计划、导入、暂存、筛选、发现全链，再创建独立执行目录并用受控补丁/CAS 推进；不写日更 `current`。 |
-| `conference-filter.js` | 用同一会议认证候选双文件和完整证据 run 创建专属 v5 spec，再创建、检查、应用受控筛选决定。手工入口不能构造或加载 LLM actor；生产模型记录只由受控 runner 生成。 |
-| `conference-filter-run.js` | 只在显式 `--apply` 时核验与当前候选、报告及证据 run 精确对应的会议 v5 spec，再逐篇调用固定公共 `requestLlmJson()`。先处理 pending；failed 仅显式限次退避重试。崩溃后先恢复已有记录，不能自动重复计费。 |
+| `conference-filter.js` | 用同一会议认证候选文件和报告及完整摘要证据生成 v6 配置，再创建、检查或应用筛选决定。旧 v5 配置只供已有任务恢复。手工入口不能构造或加载 LLM actor；生产模型记录只由受控 runner 生成。 |
+| `conference-filter-run.js` | 只在显式 `--apply` 时核验配置与当前候选、报告和摘要证据一致，再逐篇调用公共 `requestLlmJson()`；新任务使用 v6，已有 v5 任务按原记录恢复。先处理 pending；failed 仅显式限次退避重试。崩溃后先恢复已有记录，不能自动重复计费。 |
 | `conference-filter-evidence.js` | 模型筛选前，根据认证候选中的封存 PDF 提取全文和 `abstract-locator-v1` 原文摘要定位证据，保存可恢复的候选与报告；不作筛选决定，不请求模型。 |
 | `conference-filter-evidence-extract.py` | 证据提取使用的固定 PyMuPDF 子进程，只从受控来源目录读取请求、元数据和 PDF，输出页文本、逐页 PNG 审计、图表及公式候选、摘要定位和可核验凭证；不联网，不调用模型。 |
 | `conference-staging.js` | 将完整入选集和已审提取结果一一核验，生成不可覆盖的导入清单与凭证；不复制文件，不调用模型。 |

@@ -24,7 +24,7 @@ function spec(f, overrides = {}) {
     const evidence = filter.evidenceBindingFromHandle(f.evidenceHandle, catalog);
     return { contract: filter.SPEC_CONTRACT, version: filter.SPEC_VERSION, filterPolicySha256: h('policy'), promptSha256: h('prompt'),
     model: 'muse-spark-1.2-contributor', endpointProtocol: 'openai-responses', endpointIdentitySha256: h('endpoint'),
-    taxonomyRegistrySha256: h('taxonomy'), evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
+    tagCatalogSha256: h('tag catalog'), evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
     discovery: { contract: catalog.contract, conferenceId: catalog.conferenceId,
         catalogSha256: catalog.catalogSha256, reportSha256: discoverySnapshot.reportSha256,
         candidateSetSha256: filter.stableHash(catalog.members) }, evidence, ...overrides };
@@ -161,7 +161,7 @@ test('prepare audits deterministic keyword rejection while short abstracts fail 
     assert.equal(keywordInput.requestEnvelopeSha256.length, 64);
 });
 
-test('bulk keyword prepare authenticates source collections once and preserves the v5 CAS chain across checkpoints', t => {
+test('bulk keyword prepare authenticates source collections once and preserves the CAS chain across checkpoints', t => {
     const records = Array.from({ length: 140 }, (_, index) => ({
         arnumber: String(1000 + index),
         title: `Generic optimization study ${index}`,
@@ -234,7 +234,7 @@ test('conference filtering uses the daily prompt block and daily structured deci
 test('production filter accepts authenticated official proceedings and preserves stable source identities', t => {
     const f = officialFixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const boundSpec = filter.normalizeSpec(spec(f));
-    assert.equal(boundSpec.version, 5);
+    assert.equal(boundSpec.version, 6);
     assert.deepEqual(boundSpec.evidence.locator,
         evidenceApi.locatorBindingForConference({ id: 'aaai-2026', year: 2026 }));
     assert.equal(boundSpec.evidence.locator.profile, evidenceApi.AAAI_LOCATOR_PROFILE);
@@ -280,7 +280,7 @@ test('per-conference spec rejects legacy shared shape, unregistered locators, an
         evidenceApi.locatorBindingForConference({ id: 'icassp-2026', year: 2026 }));
     assert.equal(Object.hasOwn(bound.evidence.locator, 'profile'), false);
     const production = filter.buildProductionSpec({ endpoint: 'https://example.test/v1',
-        model: 'muse-spark-1.3-contributor', tagCatalogSha256: h('taxonomy'),
+        model: 'muse-spark-1.3-contributor', tagCatalogSha256: h('tag catalog'),
         discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle });
     assert.equal(production.discovery.conferenceId, 'icassp-2026');
     assert.equal(production.discovery.catalogSha256, bound.discovery.catalogSha256);
@@ -288,7 +288,7 @@ test('per-conference spec rejects legacy shared shape, unregistered locators, an
     assert.throws(() => filter.normalizeSpec({ contract: 'conference-filter-spec-v4', version: 4,
         filterPolicySha256: h('policy'), promptSha256: h('prompt'), model: bound.model,
         endpointProtocol: bound.endpointProtocol, endpointIdentitySha256: h('endpoint'),
-        taxonomyRegistrySha256: h('taxonomy'), evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
+        taxonomyRegistrySha256: h('tag catalog'), evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
         evidenceLocatorContract: evidenceApi.LOCATOR_CONTRACT,
         evidenceLocatorImplementationSha256: evidenceApi.LOCATOR_IMPLEMENTATION_SHA256 }), /contract\/version|unknown or missing/);
     const unregistered = structuredClone(bound);
@@ -479,4 +479,37 @@ test('CLI requires catalog+report+spec and decision artifacts, not raw patches',
         { command: 'apply', filterId: ids[0], decisionName: 'one.json', owner: 'worker.1' });
     for (const args of [['prepare', '--catalog', 'x.json', '--spec', 'x.json'],
         ['apply', '--filter', ids[0], '--patch', 'one.json', '--owner', 'worker.1']]) assert.throws(() => cli.parseArgs(args));
+});
+
+
+test('当前筛选配置和任务只输出新词表字段，混用与错代明确拒绝', t => {
+    const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+    const boundSpec = spec(f), state = prepare(f);
+    assert.equal(boundSpec.contract, 'conference-filter-spec-v6'); assert.equal(boundSpec.version, 6);
+    assert.equal(state.contract, 'conference-filter-v6'); assert.equal(state.version, 6);
+    assert.equal(state.input.tagCatalogSha256, boundSpec.tagCatalogSha256);
+    assert.equal(Object.hasOwn(state.input, 'taxonomyRegistrySha256'), false);
+    for (const value of [boundSpec.tagCatalogSha256, null]) {
+        assert.throws(() => filter.normalizeSpec({ ...boundSpec, taxonomyRegistrySha256: value }), /不能混用新旧词表哈希字段/);
+        const mixed = structuredClone(state); mixed.input.taxonomyRegistrySha256 = value;
+        const input = { ...mixed.input }; delete input.inputSha256;
+        mixed.input.inputSha256 = filter.stableHash(input);
+        mixed.stateSha256 = filter.stableHash({ filterId: mixed.filterId, createdAt: mixed.createdAt,
+            input: mixed.input, decisions: mixed.decisions, completion: mixed.completion,
+            attempts: mixed.attempts.map(({ nextStateSha256: _next, ...attempt }) => attempt) });
+        assert.throws(() => filter.assertFilterState(mixed), /不能混用新旧词表哈希字段/);
+        mixed.stateSha256 = 'a'.repeat(64);
+        assert.throws(() => filter.assertFilterState(mixed), /state SHA drifted/);
+    }
+    for (const changed of [{ contract: 'conference-filter-spec-v5' }, { version: 5 }, { version: '6' },
+        { contract: 'conference-filter-spec-v7' }]) {
+        assert.throws(() => filter.normalizeSpec({ ...boundSpec, ...changed }), /contract\/version mismatch/);
+    }
+    for (const changed of [{ contract: 'conference-filter-v5' }, { version: 5 }, { version: '6' },
+        { contract: 'conference-filter-v7' }]) {
+        assert.throws(() => filter.assertFilterState({ ...state, ...changed }), /contract\/version mismatch/);
+    }
+    const wrongField = { ...boundSpec, taxonomyRegistrySha256: boundSpec.tagCatalogSha256 };
+    delete wrongField.tagCatalogSha256;
+    assert.throws(() => filter.normalizeSpec(wrongField), /词表哈希字段与记录格式不一致/);
 });

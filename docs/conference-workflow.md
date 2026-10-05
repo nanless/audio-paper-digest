@@ -113,34 +113,36 @@ npm run conference:new:evidence -- apply \
 
 ## 配置与执行会议筛选
 
-`conference-filter-v5` 绑定完整 discovery、完整摘要证据 catalog/report、各篇回执及定位信息、来源 SHA、选择规则、提示词、模型、协议和标签登记表 SHA。`included`、`excluded`、`pending`、`failed` 分别记录，全集没有 pending/failed 才能 complete。
+当前 `conference-filter-v6` 保存候选发现记录、完整摘要证据目录与报告、逐篇回执和定位信息，并绑定来源 SHA、选择规则、提示词、模型、请求格式和标签词表 SHA。记录分别标明入选、排除、待处理或失败；全部论文处理完成且没有失败，任务才记为 `complete`。
 
 `conference:new:filter` 管理配置、状态和显式人工决定；`conference:new:filter:run` 是生产 LLM 筛选入口。它逐篇核验官方记录和完整输入，通过 `requestLlmJson()` 使用项目路由、代理及 sticky 账号池：
 
 ```bash
 npm run conference:new:filter -- spec --catalog NAME.json --report REPORT.json \
-  --evidence-run EVIDENCE_RUN_UUID --output CONFERENCE-FILTER-V5.json
+  --evidence-run EVIDENCE_RUN_UUID --output CONFERENCE-FILTER-V6.json
 npm run conference:new:filter -- prepare --catalog NAME.json --report REPORT.json \
-  --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER-V5.json
+  --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER-V6.json
 npm run conference:new:filter:run -- --apply --catalog NAME.json --report REPORT.json \
-  --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER-V5.json \
+  --evidence-run EVIDENCE_RUN_UUID --spec CONFERENCE-FILTER-V6.json \
   --filter UUID --owner filter.worker --limit 1
 npm run conference:new:filter -- status --filter UUID
 npm run conference:new:filter -- apply --filter UUID --decision DECISION.json --owner OPERATOR
 ```
 
+新任务只使用 v6 配置；模型请求记录使用 `conference-filter-llm-request-v3`。旧 v5 配置只供原 UUID 的已有任务恢复，核验原记录后仍按原格式继续，不能用它创建新任务。新旧词表字段不能同时出现，即使值相同或为空。决定、选择回执、选择凭据和锁记录仍使用各自的版本5，不能把它们当成任务版本6。
+
 每会配置位于 `data/runtime/conference-filter-specs/`，只能由 `spec` 从同会认证的 discovery 双文件及完整摘要证据运行生成，不能跨会议共享。以下字段示例中的占位 SHA 须按相应文件原字节或规范化对象真实计算，不能直接通过校验：
 
 ```json
 {
-  "contract": "conference-filter-spec-v5",
-  "version": 5,
+  "contract": "conference-filter-spec-v6",
+  "version": 6,
   "filterPolicySha256": "<64-hex-current-policy-sha256>",
   "promptSha256": "<64-hex-current-prompt-sha256>",
   "model": "muse-spark-1.3-contributor",
   "endpointProtocol": "openai-responses",
   "endpointIdentitySha256": "4de319c45169889bd6be02e65d8a8eec1003647910ba0a54490345ae52276af3",
-  "taxonomyRegistrySha256": "<64-hex-current-registry-bytes-sha256>",
+  "tagCatalogSha256": "<64-hex-current-tag-catalog-file-sha256>",
   "evidenceCatalogContract": "conference-filter-evidence-catalog-v1",
   "discovery": {
     "contract": "conference-discovery-catalog-v2",
@@ -345,7 +347,7 @@ npm run conference:new:process -- --source-upgrade-promote \
 
 `conference-source-ledger-v1` 固定一个会议和年份。主身份使用 IEEE `arnumber`、OpenReview `forumId` 或会议官方 paper ID；题目只能帮助人工寻找候选，不作身份或去重键。公开主键使用 `paper-identity-v1` 的完整形式，例如 `conference:icassp:2026:icassp-arnumber:10910001`。短 `sourceIdentity=icassp-arnumber:10910001` 只在账本内定位来源。
 
-账本记录官方 metadata SHA、受控 PDF 的相对路径和字节 SHA、提取文本及结构化证据 SHA、提取器版本、来源和身份审查状态。身份缺失、无全文或来源冲突保持 blocked，不能进入分析或发布。四类来源文件格式未变，所以 ledger 仍为 v1；discovery、staging、import、plan、run 和 execution 使用各自 v2 协议，筛选状态及配置为 v5，均须核验完整 `paperId`。早期 `icassp-2026:icassp-arnumber:10910001` 临时 ID 会被拒绝，没有自动运行数据迁移入口。
+账本记录官方 metadata SHA、受控 PDF 的相对路径和字节 SHA、提取文本及结构化证据 SHA、提取器版本、来源和身份审查状态。身份缺失、无全文或来源冲突保持 blocked，不能进入分析或发布。四类来源文件格式未变，所以 ledger 仍为 v1；discovery、staging、import、plan、run 和 execution 使用各自 v2 协议，新筛选状态及配置为 v6，已有 v5 任务按原格式恢复，均须核验完整 `paperId`。早期 `icassp-2026:icassp-arnumber:10910001` 临时 ID 会被拒绝，没有自动运行数据迁移入口。
 
 本机 PDF 和逐篇 metadata 先放 `conference-staging-sources`，提取并复核后由 importer 复制到私有 `conference-sources`。账本、缓存、运行状态和本机绝对路径均在 `data/runtime/`，不提交 Git；仓库只跟踪实现、协议、校验器、测试和文档。
 

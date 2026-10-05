@@ -17,18 +17,10 @@ const Config = require('../config.js');
 const utilsApi = require('../utils.js');
 const fixedRequestLlmJson = utilsApi.requestLlmJson;
 
-const VERSION = 6;
-const CONTRACT = 'conference-filter-v6';
-const LEGACY_VERSION = 5;
-const LEGACY_CONTRACT = 'conference-filter-v5';
-const SPEC_VERSION = 6;
-const SPEC_CONTRACT = 'conference-filter-spec-v6';
-const LEGACY_SPEC_VERSION = 5;
-const LEGACY_SPEC_CONTRACT = 'conference-filter-spec-v5';
-const DECISION_VERSION = 5;
-const SELECTION_RECEIPT_VERSION = 5;
-const SELECTION_HANDLE_VERSION = 5;
-const LOCK_OWNER_VERSION = 5;
+const VERSION = 5;
+const CONTRACT = 'conference-filter-v5';
+const SPEC_VERSION = 5;
+const SPEC_CONTRACT = 'conference-filter-spec-v5';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -50,10 +42,7 @@ const SELECTION_HANDLES = new WeakSet();
 const SELECTION_HANDLE_DATA = new WeakMap();
 const LLM_ARTIFACT_AUTHORITY = Symbol('conference-filter-llm-runner');
 const KEYWORD_ARTIFACT_AUTHORITY = Symbol('conference-filter-keyword-prefilter');
-const LLM_REQUEST_CONTRACT = 'conference-filter-llm-request-v3';
-const LLM_REQUEST_VERSION = 3;
-const LEGACY_LLM_REQUEST_CONTRACT = 'conference-filter-llm-request-v2';
-const LEGACY_LLM_REQUEST_VERSION = 2;
+const LLM_REQUEST_CONTRACT = 'conference-filter-llm-request-v2';
 const LLM_INTENT_CONTRACT = 'conference-filter-llm-intent-v2';
 const LLM_TRANSPORT_RECEIPT_CONTRACT = 'conference-filter-llm-transport-receipt-v1';
 const LOCK_OWNER_CONTRACT = 'conference-filter-lock-owner-v1';
@@ -292,44 +281,11 @@ function discoveryDocumentToFilterCatalog(value, { documentSha256 } = {}) {
         catalogSha256: assertSha(documentSha256, 'discovery document SHA'), members });
 }
 
-function isLegacySpec(value) {
-    if (value?.contract === LEGACY_SPEC_CONTRACT && value.version === LEGACY_SPEC_VERSION) return true;
-    if (value?.contract === SPEC_CONTRACT && value.version === SPEC_VERSION) return false;
-    fail('filter spec contract/version mismatch');
-}
-function isLegacyState(value) {
-    if (value?.contract === LEGACY_CONTRACT && value.version === LEGACY_VERSION) return true;
-    if (value?.contract === CONTRACT && value.version === VERSION) return false;
-    fail('contract/version mismatch');
-}
-function isLegacyRequest(value) {
-    if (value?.contract === LEGACY_LLM_REQUEST_CONTRACT && value.version === LEGACY_LLM_REQUEST_VERSION) return true;
-    if (value?.contract === LLM_REQUEST_CONTRACT && value.version === LLM_REQUEST_VERSION) return false;
-    fail('LLM request contract/version mismatch');
-}
-function tagCatalogField(value, legacy, label) {
-    if (!isPlainObject(value)) fail(`${label} 必须是普通对象。`);
-    if (Object.hasOwn(value, 'taxonomyRegistrySha256') && Object.hasOwn(value, 'tagCatalogSha256')) {
-        fail(`${label} 不能混用新旧词表哈希字段。`);
-    }
-    const field = legacy ? 'taxonomyRegistrySha256' : 'tagCatalogSha256';
-    if (Object.hasOwn(value, legacy ? 'tagCatalogSha256' : 'taxonomyRegistrySha256')) {
-        fail(`${label} 的词表哈希字段与记录格式不一致。`);
-    }
-    return field;
-}
-function assertRequestFormatForState(state, envelope) {
-    if (isLegacyState(state) !== isLegacyRequest(envelope)) {
-        fail('请求格式与筛选记录不一致。');
-    }
-}
-
 function normalizeSpec(value) {
-    const legacy = isLegacySpec(value);
-    const catalogField = tagCatalogField(value, legacy, '筛选配置');
     exact(value, ['contract', 'version', 'filterPolicySha256', 'promptSha256', 'model', 'endpointProtocol',
-        'endpointIdentitySha256', catalogField, 'evidenceCatalogContract', 'discovery',
+        'endpointIdentitySha256', 'taxonomyRegistrySha256', 'evidenceCatalogContract', 'discovery',
         'evidence'], 'filter spec');
+    if (value.contract !== SPEC_CONTRACT || value.version !== SPEC_VERSION) fail('filter spec contract/version mismatch');
     const model = nonempty(value.model, 'filter spec model', /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/);
     if (!PROTOCOLS.has(value.endpointProtocol)) fail('filter spec endpointProtocol is unsupported');
     exact(value.discovery, ['contract', 'conferenceId', 'catalogSha256', 'reportSha256',
@@ -349,20 +305,15 @@ function normalizeSpec(value) {
         fail('filter spec evidence locator is not a registered binding for its conference');
     }
     return {
-        contract: value.contract, version: value.version,
+        contract: SPEC_CONTRACT, version: SPEC_VERSION,
         filterPolicySha256: assertSha(value.filterPolicySha256, 'filter spec filterPolicySha256'),
         promptSha256: assertSha(value.promptSha256, 'filter spec promptSha256'), model,
         endpointProtocol: value.endpointProtocol,
         endpointIdentitySha256: assertSha(value.endpointIdentitySha256, 'filter spec endpointIdentitySha256'),
-        [catalogField]: assertSha(value[catalogField], `filter spec ${catalogField}`),
+        taxonomyRegistrySha256: assertSha(value.taxonomyRegistrySha256, 'filter spec taxonomyRegistrySha256'),
         evidenceCatalogContract: nonempty(value.evidenceCatalogContract, 'filter spec evidenceCatalogContract'),
         discovery, evidence
     };
-}
-
-function tagCatalogSha256ForSpec(value) {
-    const spec = normalizeSpec(value);
-    return spec[tagCatalogField(spec, isLegacySpec(spec), '筛选配置')];
 }
 
 function normalizeLocatorBinding(value, label = 'filter evidence locator') {
@@ -415,7 +366,6 @@ function evidenceBindingFromHandle(evidenceHandle, catalog) {
 
 function inputBinding(catalog, spec, evidenceBinding) {
     const normalizedCatalog = normalizeCatalog(catalog); const normalizedSpec = normalizeSpec(spec);
-    const catalogField = tagCatalogField(normalizedSpec, isLegacySpec(normalizedSpec), '筛选配置');
     const normalizedEvidence = normalizeEvidenceBinding(evidenceBinding, normalizedCatalog);
     const candidateSetSha256 = stableHash(normalizedCatalog.members);
     const bound = {
@@ -424,7 +374,7 @@ function inputBinding(catalog, spec, evidenceBinding) {
         filterPolicySha256: normalizedSpec.filterPolicySha256, promptSha256: normalizedSpec.promptSha256,
         model: normalizedSpec.model, endpointProtocol: normalizedSpec.endpointProtocol,
         endpointIdentitySha256: normalizedSpec.endpointIdentitySha256,
-        [catalogField]: normalizedSpec[catalogField],
+        taxonomyRegistrySha256: normalizedSpec.taxonomyRegistrySha256,
         evidenceCatalogContract: normalizedSpec.evidenceCatalogContract,
         specSha256: stableHash(normalizedSpec),
         evidence: normalizedEvidence
@@ -512,7 +462,7 @@ function normalizeDecisionArtifact(value) {
         'sourceSha256', 'actor', 'model', 'endpointProtocol', 'endpointIdentitySha256',
         'requestEnvelopeSha256', 'transportReceiptSha256', 'request', 'response', 'result', 'createdAt',
         'artifactSha256'], 'decision artifact');
-    if (value.contract !== DECISION_CONTRACT || value.version !== DECISION_VERSION) fail('decision artifact contract/version mismatch');
+    if (value.contract !== DECISION_CONTRACT || value.version !== VERSION) fail('decision artifact contract/version mismatch');
     nonempty(value.filterId, 'decision artifact filterId', UUID_RE);
     nonempty(value.operationId, 'decision artifact operationId', UUID_RE);
     assertSha(value.expectedStateSha256, 'decision artifact expectedStateSha256');
@@ -572,7 +522,7 @@ function buildDecisionArtifactFromCheckedState({ state: checked, paperId, operat
     nonempty(paperId, 'decision artifact paperId', PAPER_ID_RE);
     if (!Object.prototype.hasOwnProperty.call(checked.decisions, paperId)) fail('decision artifact references a non-candidate paper');
     const response = responseBytes === null ? null : byteRecord(responseBytes, 'decision response');
-    const artifact = { contract: DECISION_CONTRACT, version: DECISION_VERSION, filterId: checked.filterId, operationId,
+    const artifact = { contract: DECISION_CONTRACT, version: VERSION, filterId: checked.filterId, operationId,
         expectedStateSha256: checked.stateSha256, paperId,
         sourceSha256: checked.decisions[paperId].sourceSha256, actor, model, endpointProtocol,
         endpointIdentitySha256, requestEnvelopeSha256, transportReceiptSha256,
@@ -673,17 +623,14 @@ function normalizePatch(value) {
 
 function assertFilterState(value) {
     exact(value, ['version', 'contract', 'filterId', 'createdAt', 'input', 'decisions', 'completion', 'attempts', 'stateSha256'], 'filter state');
-    const legacy = isLegacyState(value);
-    if (!Array.isArray(value.attempts) || value.attempts.some(attempt => !isPlainObject(attempt))) fail('attempts must be an array of plain objects');
-    if (assertSha(value.stateSha256, 'stateSha256') !== stateDigest(value)) fail('state SHA drifted');
-    const catalogField = tagCatalogField(value.input, legacy, '筛选输入');
+    if (value.version !== VERSION || value.contract !== CONTRACT) fail('contract/version mismatch');
     nonempty(value.filterId, 'filterId', UUID_RE); timestamp(value.createdAt, 'createdAt');
     exact(value.input, ['discoveryContract', 'conferenceId', 'catalogSha256', 'candidateSetSha256', 'filterPolicySha256',
-        'promptSha256', 'model', 'endpointProtocol', 'endpointIdentitySha256', catalogField,
+        'promptSha256', 'model', 'endpointProtocol', 'endpointIdentitySha256', 'taxonomyRegistrySha256',
         'evidenceCatalogContract', 'specSha256', 'evidence', 'inputSha256'], 'input binding');
     const inputWithoutSha = { ...value.input }; delete inputWithoutSha.inputSha256;
     for (const field of ['catalogSha256', 'candidateSetSha256', 'filterPolicySha256', 'promptSha256',
-        'endpointIdentitySha256', catalogField, 'specSha256']) {
+        'endpointIdentitySha256', 'taxonomyRegistrySha256', 'specSha256']) {
         assertSha(value.input[field], `input.${field}`);
     }
     nonempty(value.input.discoveryContract, 'input.discoveryContract'); nonempty(value.input.conferenceId, 'input.conferenceId');
@@ -704,7 +651,7 @@ function assertFilterState(value) {
     if (!Array.isArray(value.attempts)) fail('attempts must be an array');
     const initial = Object.fromEntries(paperIds.map(paperId => [paperId, initialDecision(decisions[paperId].sourceSha256)]));
     const replayed = clone(initial); const attempts = []; const operations = new Set();
-    const base = { version: value.version, contract: value.contract, filterId: value.filterId, createdAt: value.createdAt,
+    const base = { version: VERSION, contract: CONTRACT, filterId: value.filterId, createdAt: value.createdAt,
         input: clone(value.input), decisions: clone(initial), completion: completionFor(initial), attempts: [] };
     const digestChain = new StateDigestChain(base);
     let previousDigest = digestChain.materialize().stateSha256; let previousTime = value.createdAt;
@@ -745,7 +692,7 @@ function assertFilterState(value) {
     }
     if (stableHash(replayed) !== stableHash(decisions)) fail('decisions do not match append-only attempt history');
     const completion = normalizeCompletion(value.completion, decisions);
-    const rebuilt = { version: value.version, contract: value.contract, filterId: value.filterId, createdAt: value.createdAt,
+    const rebuilt = { version: VERSION, contract: CONTRACT, filterId: value.filterId, createdAt: value.createdAt,
         input: clone(value.input), decisions, completion, attempts };
     const digest = stateDigest(rebuilt); assertSha(value.stateSha256, 'stateSha256');
     if (value.stateSha256 !== digest) fail('state SHA drifted');
@@ -754,9 +701,8 @@ function assertFilterState(value) {
 }
 
 function assertBoundInputsFromCheckedState(checked, { catalog, spec, evidenceBinding }) {
-    if (isLegacyState(checked) !== isLegacySpec(normalizeSpec(spec))) fail('筛选配置与任务记录的格式不一致。');
     const expected = inputBinding(catalog, spec, evidenceBinding);
-    if (stableHash(checked.input) !== stableHash(expected)) fail('catalog, source, prompt, model, protocol, policy, or tag catalog input drifted');
+    if (stableHash(checked.input) !== stableHash(expected)) fail('catalog, source, prompt, model, protocol, policy, or taxonomy input drifted');
     return checked;
 }
 
@@ -834,14 +780,14 @@ function replaceRegular(filename, bytes) {
 function lockOwnerRecord(owner, now, token = crypto.randomUUID()) {
     nonempty(owner, 'owner', OWNER_RE); nonempty(token, 'lock owner token', UUID_RE);
     const startedAt = nowIso(now);
-    const body = { contract: LOCK_OWNER_CONTRACT, version: LOCK_OWNER_VERSION, owner, pid: process.pid,
+    const body = { contract: LOCK_OWNER_CONTRACT, version: VERSION, owner, pid: process.pid,
         hostname: os.hostname(), token, startedAt, heartbeatAt: startedAt, leaseMs: LOCK_STALE_MS };
     return { ...body, ownerSha256: stableHash(body) };
 }
 function validateLockOwner(value) {
     exact(value, ['contract', 'version', 'owner', 'pid', 'hostname', 'token', 'startedAt', 'heartbeatAt',
         'leaseMs', 'ownerSha256'], 'filter lock owner');
-    if (value.contract !== LOCK_OWNER_CONTRACT || value.version !== LOCK_OWNER_VERSION) fail('filter lock owner contract/version mismatch');
+    if (value.contract !== LOCK_OWNER_CONTRACT || value.version !== VERSION) fail('filter lock owner contract/version mismatch');
     nonempty(value.owner, 'filter lock owner', OWNER_RE);
     if (!Number.isSafeInteger(value.pid) || value.pid < 1) fail('filter lock PID is malformed');
     nonempty(value.hostname, 'filter lock hostname');
@@ -967,15 +913,7 @@ function prepareFilter({ filterRoot, discoveryHandle, evidenceHandle, spec, filt
         || stableHash(normalizedSpec.evidence) !== stableHash(evidenceBinding)) {
         fail('filter spec does not bind this authenticated discovery and evidence run');
     }
-    nonempty(filterId, 'filterId', UUID_RE);
-    if (isLegacySpec(normalizedSpec)) {
-        // 旧任务只有通过完整核验后才能继续，不能借旧配置创建新任务。
-        const existing = readFilter({ filterRoot, filterId });
-        const bound = assertBoundInputsFromCheckedState(existing,
-            { catalog: normalizedCatalog, spec: normalizedSpec, evidenceBinding });
-        return applyKeywordPrefilter({ filterRoot, filterId, discoveryHandle, evidenceHandle, state: bound, now });
-    }
-    const root = safeDirectory(filterRoot, true);
+    const root = safeDirectory(filterRoot, true); nonempty(filterId, 'filterId', UUID_RE);
     const decisions = Object.fromEntries(normalizedCatalog.members.map(member => [member.paperId, initialDecision(member.sourceSha256)]));
     const state = { version: VERSION, contract: CONTRACT, filterId, createdAt: nowIso(now),
         input: inputBinding(normalizedCatalog, normalizedSpec, evidenceBinding), decisions,
@@ -1113,7 +1051,6 @@ function readFilter({ filterRoot, filterId } = {}) {
             const intent = normalizeLlmIntent(readJson(intentFile, `LLM intent for attempt ${index}`).value);
             const receiptFile = safeDirectJson(path.join(directory, 'llm-responses'), `llm-${artifact.operationId}.json`);
             const receipt = normalizeTransportReceipt(readJson(receiptFile, `transport receipt for attempt ${index}`).value);
-            assertRequestFormatForState(state, envelopeFromRecord(intent.envelope));
             if (intent.intentSha256 !== receipt.intentSha256 || intent.operationId !== artifact.operationId
                 || intent.request.sha256 !== artifact.request.sha256
                 || intent.requestEnvelopeSha256 !== artifact.requestEnvelopeSha256
@@ -1168,7 +1105,7 @@ function selectionReceiptFromCheckedState(checked) {
         .map(([paperId, decision]) => ({ paperId, sourceSha256: decision.sourceSha256,
             decisionArtifactSha256: artifacts.get(paperId) }));
     const selectedMemberSetSha256 = stableHash(included.map(item => item.paperId));
-    const bound = { contract: SELECTION_RECEIPT_CONTRACT, version: SELECTION_RECEIPT_VERSION, filterId: checked.filterId,
+    const bound = { contract: SELECTION_RECEIPT_CONTRACT, version: VERSION, filterId: checked.filterId,
         inputSha256: checked.input.inputSha256, stateSha256: checked.stateSha256,
         filterPolicySha256: checked.input.filterPolicySha256, selectedMemberSetSha256,
         completionSha256: stableHash(checked.completion), included };
@@ -1248,7 +1185,7 @@ function loadSelectionHandle(filterRoot, filterId, discoveryHandle) {
         return { paperId: item.paperId, sourceIdentity, sourceSha256: item.sourceSha256,
             decisionArtifactSha256: item.decisionArtifactSha256 };
     });
-    const snapshot = { contract: SELECTION_HANDLE_CONTRACT, version: SELECTION_HANDLE_VERSION,
+    const snapshot = { contract: SELECTION_HANDLE_CONTRACT, version: VERSION,
         filterId: state.filterId, conferenceId: state.input.conferenceId,
         catalogSha256: state.input.catalogSha256, inputSha256: state.input.inputSha256,
         stateSha256: state.stateSha256, filterPolicySha256: receipt.filterPolicySha256,
@@ -1447,10 +1384,7 @@ function requestEnvelopeFromReplay({ state, paperId, discovery, replay, evidence
         ? evidenceFromSnapshot({ state, paperId, snapshot: evidenceSnapshot, officialRecord: replay.metadataRecord })
         : null;
     if (!projected) fail('authenticated evidence snapshot is required');
-    const legacy = isLegacyState(state);
-    const catalogField = tagCatalogField(state.input, legacy, '筛选输入');
-    const body = { contract: legacy ? LEGACY_LLM_REQUEST_CONTRACT : LLM_REQUEST_CONTRACT,
-        version: legacy ? LEGACY_LLM_REQUEST_VERSION : LLM_REQUEST_VERSION, filterId: state.filterId,
+    const body = { contract: LLM_REQUEST_CONTRACT, version: 2, filterId: state.filterId,
         expectedStateSha256: state.stateSha256, paperId, sourceSha256: decision.sourceSha256,
         discovery: { contract: discovery.candidateManifest.contract, catalogSha256: discovery.catalogSha256,
             conference: replay.conference, adapter: replay.adapter, sourceIdentity, identity: replay.identity,
@@ -1461,7 +1395,7 @@ function requestEnvelopeFromReplay({ state, paperId, discovery, replay, evidence
             promptSha256: state.input.promptSha256, model: state.input.model,
             endpointProtocol: state.input.endpointProtocol,
             endpointIdentitySha256: state.input.endpointIdentitySha256,
-            [catalogField]: state.input[catalogField],
+            taxonomyRegistrySha256: state.input.taxonomyRegistrySha256,
             evidenceCatalogContract: state.input.evidenceCatalogContract,
             specSha256: state.input.specSha256,
             evidenceLocator: clone(state.input.evidence.locator),
@@ -1472,7 +1406,6 @@ function requestEnvelopeFromReplay({ state, paperId, discovery, replay, evidence
 }
 
 function requestEnvelope({ state, paperId, discoveryHandle, evidenceHandle }) {
-    state = assertFilterState(state);
     const discovery = trustedDiscovery(discoveryHandle);
     const matches = discovery.candidateManifest.members.filter(member => (
         paperIdentity.canonicalConferencePaperId(discovery.candidateManifest.conference, member.identity) === paperId
@@ -1510,17 +1443,16 @@ function buildProductionSpec({ endpoint, model, tagCatalogSha256, discoveryHandl
     return normalizeSpec({ contract: SPEC_CONTRACT, version: SPEC_VERSION,
         filterPolicySha256: LLM_FILTER_POLICY_SHA256, promptSha256: LLM_FILTER_PROMPT_SHA256,
         model, endpointProtocol, endpointIdentitySha256: endpointIdentitySha256(endpoint, model),
-        tagCatalogSha256, evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
+        taxonomyRegistrySha256: tagCatalogSha256, evidenceCatalogContract: evidenceApi.CATALOG_CONTRACT,
         discovery: { contract: catalog.contract, conferenceId: catalog.conferenceId,
             catalogSha256: catalog.catalogSha256, reportSha256: discovery.reportSha256,
             candidateSetSha256: stableHash(catalog.members) }, evidence });
 }
 
 function writeFilterSpec({ specRoot, specName, spec } = {}) {
-    const normalized = normalizeSpec(spec);
-    if (isLegacySpec(normalized)) fail('新筛选配置必须使用当前记录格式。');
     const root = safeDirectory(specRoot, true);
     const filename = safeDirectJson(root, specName, { mustExist: false });
+    const normalized = normalizeSpec(spec);
     writeExclusive(filename, `${JSON.stringify(normalized, null, 2)}\n`);
     return filename;
 }
@@ -1528,10 +1460,7 @@ function writeFilterSpec({ specRoot, specName, spec } = {}) {
 function normalizeRequestEnvelope(value) {
     exact(value, ['contract', 'version', 'filterId', 'expectedStateSha256', 'paperId', 'sourceSha256',
         'discovery', 'evidence', 'filter', 'metadataRecord', 'requestSha256'], 'LLM request envelope');
-    const legacy = isLegacyRequest(value);
-    const body = clone(value); delete body.requestSha256;
-    if (assertSha(value.requestSha256, 'LLM request requestSha256') !== stableHash(body)) fail('LLM request self-SHA drifted');
-    const catalogField = tagCatalogField(value.filter, legacy, '请求中的筛选配置');
+    if (value.contract !== LLM_REQUEST_CONTRACT || value.version !== 2) fail('LLM request contract/version mismatch');
     nonempty(value.filterId, 'LLM request filterId', UUID_RE);
     assertSha(value.expectedStateSha256, 'LLM request expectedStateSha256');
     nonempty(value.paperId, 'LLM request paperId', PAPER_ID_RE); assertSha(value.sourceSha256, 'LLM request sourceSha256');
@@ -1568,11 +1497,11 @@ function normalizeRequestEnvelope(value) {
         fail('LLM request effective metadata record SHA drifted');
     }
     exact(value.filter, ['inputSha256', 'filterPolicySha256', 'promptSha256', 'model', 'endpointProtocol',
-        'endpointIdentitySha256', catalogField, 'evidenceCatalogContract',
+        'endpointIdentitySha256', 'taxonomyRegistrySha256', 'evidenceCatalogContract',
         'specSha256', 'evidenceLocator', 'coreConferenceFallbackVersion',
         'conferenceCategoryLabel'], 'LLM request filter binding');
     for (const field of ['inputSha256', 'filterPolicySha256', 'promptSha256', 'endpointIdentitySha256',
-        catalogField, 'specSha256']) {
+        'taxonomyRegistrySha256', 'specSha256']) {
         assertSha(value.filter[field], `LLM request filter.${field}`);
     }
     nonempty(value.filter.model, 'LLM request model');
@@ -1586,6 +1515,8 @@ function normalizeRequestEnvelope(value) {
         || value.filter.conferenceCategoryLabel !== (CORE_AUDIO_CONFERENCE_LABELS[value.discovery.conference.id] || null)) {
         fail('LLM request conference category fallback mapping drifted');
     }
+    const body = clone(value); delete body.requestSha256;
+    if (assertSha(value.requestSha256, 'LLM request requestSha256') !== stableHash(body)) fail('LLM request self-SHA drifted');
     return clone(value);
 }
 
@@ -1651,8 +1582,6 @@ function assertRequestBinding(request, { state, paperId, discoveryHandle, eviden
         ? requestEnvelope({ state, paperId, discoveryHandle, evidenceHandle })
         : normalizeRequestEnvelope(expectedEnvelope);
     const preservedEnvelope = normalizeRequestEnvelope(envelope);
-    assertRequestFormatForState(state, preservedEnvelope);
-    assertRequestFormatForState(state, expected);
     if (stableHash(preservedEnvelope) !== stableHash(expected)
         || parsed.prompt !== renderDailyFilterPrompt(preservedEnvelope)) {
         fail('preserved LLM request does not bind current source metadata, filter input, and rendered daily prompt');
@@ -1671,7 +1600,6 @@ function normalizeLlmIntent(value) {
         'sourceSha256', 'actorId', 'endpointIdentitySha256', 'inputSha256', 'requestEnvelopeSha256',
         'envelope', 'usageContextSha256', 'attemptNumber', 'request', 'createdAt', 'intentSha256'], 'LLM intent');
     if (value.contract !== LLM_INTENT_CONTRACT || value.version !== 2) fail('LLM intent contract/version mismatch');
-    if (assertSha(value.intentSha256, 'LLM intent self-SHA') !== intentDigest(value)) fail('LLM intent self-SHA drifted');
     nonempty(value.filterId, 'LLM intent filterId', UUID_RE); nonempty(value.operationId, 'LLM intent operationId', UUID_RE);
     assertSha(value.expectedStateSha256, 'LLM intent expected state SHA'); nonempty(value.paperId, 'LLM intent paperId', PAPER_ID_RE);
     assertSha(value.sourceSha256, 'LLM intent source SHA'); nonempty(value.actorId, 'LLM intent actor', OWNER_RE);
@@ -1692,6 +1620,7 @@ function normalizeLlmIntent(value) {
         fail('LLM intent request is not the single-user daily filter prompt bound by its envelope');
     }
     timestamp(value.createdAt, 'LLM intent createdAt');
+    if (assertSha(value.intentSha256, 'LLM intent self-SHA') !== intentDigest(value)) fail('LLM intent self-SHA drifted');
     return clone(value);
 }
 
@@ -1869,7 +1798,6 @@ function incompleteIntent(directory, state) {
         const intent = normalizeLlmIntent(readJson(safeDirectJson(intents, name), 'LLM intent').value);
         if (name !== `llm-${intent.operationId}.json`) fail('LLM intent filename does not bind operationId');
         if (intent.filterId !== state.filterId) fail('LLM intent belongs to another filter');
-        assertRequestFormatForState(state, envelopeFromRecord(intent.envelope));
         if (!state.attempts.some(attempt => attempt.operationId === intent.operationId)) incomplete.push(intent);
     }
     if (incomplete.length > 1) fail('multiple incomplete LLM intents require operator review');
@@ -2217,11 +2145,8 @@ function selectNextCandidate(state, { retryFailed = false, maxAttempts = 3, retr
 }
 
 module.exports = {
-    VERSION, CONTRACT, LEGACY_VERSION, LEGACY_CONTRACT, SPEC_VERSION, SPEC_CONTRACT,
-    LEGACY_SPEC_VERSION, LEGACY_SPEC_CONTRACT, DECISION_VERSION, DECISION_CONTRACT,
-    SELECTION_RECEIPT_VERSION, SELECTION_RECEIPT_CONTRACT, SELECTION_HANDLE_VERSION, LOCK_OWNER_VERSION,
-    SELECTION_HANDLE_CONTRACT, LLM_REQUEST_CONTRACT, LLM_REQUEST_VERSION,
-    LEGACY_LLM_REQUEST_CONTRACT, LEGACY_LLM_REQUEST_VERSION, LLM_INTENT_CONTRACT,
+    VERSION, CONTRACT, SPEC_VERSION, SPEC_CONTRACT, DECISION_CONTRACT, SELECTION_RECEIPT_CONTRACT,
+    SELECTION_HANDLE_CONTRACT, LLM_REQUEST_CONTRACT, LLM_INTENT_CONTRACT,
     LLM_TRANSPORT_RECEIPT_CONTRACT, LOCK_OWNER_CONTRACT, LOCK_STALE_MS,
     LLM_FILTER_POLICY, LLM_FILTER_PROMPT,
     LLM_FILTER_POLICY_SHA256, LLM_FILTER_PROMPT_SHA256, FILTER_CONFIG_BINDING, FILTER_CONFIG_SHA256,
@@ -2229,7 +2154,7 @@ module.exports = {
     CORE_AUDIO_CONFERENCE_LABELS,
     MAX_DECISION_PAYLOAD_BYTES, MAX_LLM_REQUEST_BYTES,
     UUID_RE, SAFE_JSON_NAME, PROTOCOLS, stableHash,
-    normalizeCatalog, normalizeSpec, tagCatalogSha256ForSpec, normalizeLocatorBinding, normalizeEvidenceBinding,
+    normalizeCatalog, normalizeSpec, normalizeLocatorBinding, normalizeEvidenceBinding,
     evidenceBindingFromHandle, normalizeUsage, inputBinding,
     catalogFromDiscoveryHandle, completionFor, normalizePatch, normalizeDecisionArtifact, buildDecisionArtifact,
     assertFilterState, assertBoundInputs, safeDirectory, filterDirectory, safeDirectJson, prepareFilter, readFilter,

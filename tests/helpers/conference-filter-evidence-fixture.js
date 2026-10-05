@@ -44,7 +44,7 @@ function createFilterSpec({ discoveryHandle, evidenceHandle, overrides = {} }) {
         contract: filter.SPEC_CONTRACT, version: filter.SPEC_VERSION,
         filterPolicySha256: sha256('policy'), promptSha256: sha256('prompt'),
         model: 'fixture', endpointProtocol: 'openai-responses',
-        endpointIdentitySha256: sha256('endpoint identity'), taxonomyRegistrySha256: sha256('taxonomy'),
+        endpointIdentitySha256: sha256('endpoint identity'), tagCatalogSha256: sha256('tag catalog'),
         evidenceCatalogContract: evidence.CATALOG_CONTRACT,
         discovery: { contract: catalog.contract, conferenceId: catalog.conferenceId,
             catalogSha256: catalog.catalogSha256, reportSha256: snapshot.reportSha256,
@@ -54,4 +54,22 @@ function createFilterSpec({ discoveryHandle, evidenceHandle, overrides = {} }) {
     };
 }
 
-module.exports = { RUN_ID, createEvidenceHandle, createFilterSpec };
+// 旧源码由本批前提交直接捕获；只在临时离线样本中运行，不代替当前生产模块。
+const LEGACY_FILTER_SOURCE_SHA256 = '862980b2599471e4ff0a67290da69594e02c0d66771e9f37501123447033c0c2';
+function loadLegacyFilter(requestLlmJson = async () => { throw new Error('旧样本禁止联网'); }) {
+    const Module = require('node:module');
+    const filename = path.resolve(__dirname, '../../scripts/lib/conference-filter.js');
+    const raw = fs.readFileSync(path.join(__dirname, '../fixtures/conference-filter-v5-source.txt'));
+    if (sha256(raw) !== LEGACY_FILTER_SOURCE_SHA256) throw new Error('旧筛选源码归档的内容哈希不匹配');
+    const utils = require('../../scripts/utils.js');
+    const originalRequest = utils.requestLlmJson;
+    try {
+        utils.requestLlmJson = requestLlmJson;
+        const loaded = new Module(filename, module);
+        loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
+        loaded._compile(raw.toString('utf8'), filename);
+        return loaded.exports;
+    } finally { utils.requestLlmJson = originalRequest; }
+}
+
+module.exports = { RUN_ID, createEvidenceHandle, createFilterSpec, loadLegacyFilter, LEGACY_FILTER_SOURCE_SHA256 };

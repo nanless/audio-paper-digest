@@ -14,6 +14,8 @@ const ledger = require('../scripts/lib/conference-source-ledger.js');
 const runner = require('../scripts/conference-filter-run.js');
 const Config = require('../scripts/config.js');
 const paperIdentity = require('../scripts/lib/paper-identity.js');
+const { loadLegacyFilter } = require('./helpers/conference-filter-evidence-fixture.js');
+const utils = require('../scripts/utils.js');
 
 const filterId = '11111111-1111-4111-8111-111111111111';
 const lockToken = '22222222-2222-4222-8222-222222222222';
@@ -58,7 +60,7 @@ async function serverFixture(t, replies = []) {
     return { calls, endpoint: `http://127.0.0.1:${server.address().port}/v1` };
 }
 
-function fixture(t, endpoint, metadata = null, model = 'fixture-filter-model') {
+function fixture(t, endpoint, metadata = null, model = 'fixture-filter-model', filterApi = filter) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-filter-runner-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const dirs = Object.fromEntries(['catalogs', 'reports', 'evidence', 'specs', 'filters']
@@ -100,17 +102,17 @@ function fixture(t, endpoint, metadata = null, model = 'fixture-filter-model') {
                 verification: { verificationSha256: 'b'.repeat(64) } };
         } });
     const evidenceHandle = evidenceApi.loadEvidenceHandle({ evidenceRunsRoot: dirs.evidence, runId: evidenceRunId, discoveryHandle });
-    const tagCatalogPath = path.join(root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n', { mode: 0o600 });
-    const spec = filter.buildProductionSpec({ endpoint, model,
+    const tagCatalogPath = path.join(root, 'tag-catalog.json'); fs.writeFileSync(tagCatalogPath, '{"version":"fixture"}\n', { mode: 0o600 });
+    const spec = filterApi.buildProductionSpec({ endpoint, model,
         tagCatalogSha256: sha(fs.readFileSync(tagCatalogPath)), discoveryHandle, evidenceHandle });
     fs.writeFileSync(path.join(dirs.specs, 'spec.json'), `${JSON.stringify(spec)}\n`, { mode: 0o600 });
-    filter.prepareFilter({ filterRoot: dirs.filters, discoveryHandle, evidenceHandle, spec, filterId, now: stamp });
+    filterApi.prepareFilter({ filterRoot: dirs.filters, discoveryHandle, evidenceHandle, spec, filterId, now: stamp });
     const files = { conferenceDiscoveryCatalogDir: dirs.catalogs, conferenceDiscoveryReportDir: dirs.reports,
         conferenceFilterEvidenceRunsDir: dirs.evidence, conferenceFilterSpecsDir: dirs.specs,
         conferenceFiltersDir: dirs.filters, tagCatalogFile: tagCatalogPath,
         llmAccountPoolState: path.join(root, 'account-pool.json') };
     const env = { PAPER_ANALYZER_ENDPOINT: endpoint, PAPER_ANALYZER_API_KEY: 'fixture-key', PAPER_ANALYZER_MODEL: model };
-    return { root, dirs, spec, files, env };
+    return { root, dirs, spec, files, env, discoveryHandle, evidenceHandle };
 }
 
 function args(extra = []) {
@@ -129,6 +131,10 @@ test('production runner uses real common transport and preserves bound intent, r
     const result = await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
     const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
     assert.equal(result.processed[0].status, 'included'); assert.equal(service.calls.length, 1);
+    assert.equal(f.spec.contract, 'conference-filter-spec-v6'); assert.equal(f.spec.version, 6);
+    assert.equal(state.contract, 'conference-filter-v6'); assert.equal(state.version, 6);
+    assert.equal(state.input.tagCatalogSha256, f.spec.tagCatalogSha256);
+    assert.equal(Object.hasOwn(state.input, 'taxonomyRegistrySha256'), false);
     assert.equal(service.calls[0].url, '/v1/chat/completions'); assert.equal(service.calls[0].headers.authorization, 'Bearer fixture-key');
     assert.equal(service.calls[0].body.messages.length, 1);
     assert.equal(service.calls[0].body.messages[0].role, 'user');
@@ -137,6 +143,9 @@ test('production runner uses real common transport and preserves bound intent, r
     const envelope = JSON.parse(Buffer.from(intent.envelope.data, 'base64'));
     assert.equal(service.calls[0].body.messages[0].content, filter.renderDailyFilterPrompt(envelope));
     assert.doesNotMatch(service.calls[0].body.messages[0].content, /conference-filter-llm-request/);
+    assert.equal(envelope.contract, 'conference-filter-llm-request-v3'); assert.equal(envelope.version, 3);
+    assert.equal(envelope.filter.tagCatalogSha256, f.spec.tagCatalogSha256);
+    assert.equal(Object.hasOwn(envelope.filter, 'taxonomyRegistrySha256'), false);
     assert.equal(envelope.paperId, pid('100')); assert.equal(envelope.metadataRecord.arnumber, '100');
     assert.equal(envelope.discovery.metadataIndex, 0); assert.equal(envelope.sourceSha256, state.decisions[pid('100')].sourceSha256);
     const artifactFile = onlyJson(path.join(root, 'decisions')); const artifact = JSON.parse(fs.readFileSync(artifactFile));
@@ -146,6 +155,24 @@ test('production runner uses real common transport and preserves bound intent, r
     assert.equal(receipt.usageLedgerBindings.length, 1);
     assert.equal(receipt.usageLedgerBindings[0].persistence, 'unavailable');
     assert.deepEqual(artifact.result.usage, { requests: 1, inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+    // 完整重新绑定测试副本，确保拒绝来自格式门而非遗漏的对象哈希。
+    for (const mutate of [
+        copy => { copy.filter.taxonomyRegistrySha256 = copy.filter.tagCatalogSha256; },
+        copy => { copy.filter.taxonomyRegistrySha256 = null; },
+        copy => { copy.version = 2; },
+        copy => { copy.contract = 'conference-filter-llm-request-v2'; },
+        copy => { copy.contract = 'conference-filter-llm-request-v4'; }
+    ]) {
+        const copy = structuredClone(envelope); mutate(copy);
+        const requestBody = { ...copy }; delete requestBody.requestSha256;
+        copy.requestSha256 = filter.stableHash(requestBody);
+        const bytes = Buffer.from(JSON.stringify(copy));
+        const changedIntent = { ...intent, requestEnvelopeSha256: copy.requestSha256,
+            envelope: { encoding: 'base64', size: bytes.length, sha256: sha(bytes), data: bytes.toString('base64') } };
+        const intentBody = { ...changedIntent }; delete intentBody.intentSha256;
+        changedIntent.intentSha256 = filter.stableHash(intentBody);
+        assert.throws(() => filter.normalizeLlmIntent(changedIntent), /不能混用新旧词表哈希字段|LLM request contract\/version mismatch/);
+    }
     const legacy = { ...intent, contract: 'conference-filter-llm-intent-v1', version: 1 }; delete legacy.envelope;
     assert.throws(() => filter.normalizeLlmIntent(legacy), /unknown or missing fields|contract\/version mismatch/);
     assert.equal(filter.runLlmDecision, undefined);
@@ -362,7 +389,7 @@ test('lock reclaim is fail-closed for live owners and safe for a stale dead owne
     const directory = path.join(f.dirs.filters, filterId); const lock = path.join(directory, 'operation.lock');
     function writeLock(processId) {
         fs.mkdirSync(lock, { mode: 0o700 });
-        const body = { contract: filter.LOCK_OWNER_CONTRACT, version: filter.VERSION, owner: 'fixture.lock', pid: processId,
+        const body = { contract: filter.LOCK_OWNER_CONTRACT, version: filter.LOCK_OWNER_VERSION, owner: 'fixture.lock', pid: processId,
             hostname: os.hostname(), token: lockToken, startedAt: stamp, heartbeatAt: stamp, leaseMs: filter.LOCK_STALE_MS };
         const record = { ...body, ownerSha256: filter.stableHash(body) };
         fs.writeFileSync(path.join(lock, 'owner.json'), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
@@ -402,4 +429,111 @@ test('runner CLI parser rejects unsafe or ambiguous retry controls', () => {
     assert.equal(runner.parseArgs([...args(), '--retry-failed']).retryFailed, true);
     assert.throws(() => filter.parseLlmDecisionText('{"decision":"included","reason":"x","extra":1}'), /unknown or missing/);
     assert.throws(() => filter.parseLlmDecisionText('```json\n{}\n```'), /strict JSON/);
+});
+
+
+// 配置仅供原生成器的离线替身使用，不向任何模型服务发请求。
+function legacyLlmConfig(f) {
+    const endpoint = f.env.PAPER_ANALYZER_ENDPOINT, model = f.env.PAPER_ANALYZER_MODEL;
+    const apiType = utils.detectApiType(endpoint, model);
+    return { endpoint, model, apiType, apiUrl: utils.buildApiUrl(apiType, endpoint),
+        apiKeys: ['fixture-key'], headers: utils.buildHeaders(apiType, 'fixture-key', ''),
+        accountPoolStateFile: f.files.llmAccountPoolState, timeoutMs: Config.FILTER_CONFIG.timeoutMs,
+        maxTokens: Config.FILTER_CONFIG.maxTokens, maxResponseBytes: Config.FILTER_CONFIG.conferenceMaxResponseBytes,
+        temperature: Config.FILTER_CONFIG.temperature };
+}
+function mockLegacyFilter(calls) {
+    return loadLegacyFilter(async (...request) => {
+        calls.push(request);
+        const body = chatResponse('{"decision":"included","reason":"Offline fixture: speech is primary."}');
+        return { statusCode: 200, body, raw: JSON.stringify(body) };
+    });
+}
+
+test('原v5生成器的已保存响应在同UUID恢复，不重复请求且不改写原证明', async t => {
+    const service = await serverFixture(t); const originalCalls = [];
+    const legacy = mockLegacyFilter(originalCalls);
+    const f = fixture(t, service.endpoint, null, 'fixture-filter-model', legacy);
+    const stateFile = path.join(f.dirs.filters, filterId, 'state.json');
+    const specFile = path.join(f.dirs.specs, 'spec.json'); const originalSpecBytes = fs.readFileSync(specFile);
+    const initialState = fs.readFileSync(stateFile); assert.equal(JSON.parse(initialState).version, 5);
+    assert.deepEqual(filter.prepareFilter({ filterRoot: f.dirs.filters, filterId,
+        discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle, spec: f.spec, now: stamp }), JSON.parse(initialState));
+    assert.deepEqual(fs.readFileSync(stateFile), initialState);
+    assert.throws(() => filter.writeFilterSpec({ specRoot: f.dirs.specs, specName: 'new-legacy.json', spec: f.spec }),
+        /新筛选配置必须使用当前记录格式/);
+    assert.equal(fs.existsSync(path.join(f.dirs.specs, 'new-legacy.json')), false);
+    const freshId = '33333333-3333-4333-8333-333333333333';
+    assert.throws(() => filter.prepareFilter({ filterRoot: f.dirs.filters, filterId: freshId,
+        discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle, spec: f.spec, now: stamp }), /ENOENT/);
+    assert.equal(fs.existsSync(path.join(f.dirs.filters, freshId)), false);
+    const originalOpen = fs.openSync; let interrupted = false;
+    fs.openSync = function (filename, ...rest) {
+        if (!interrupted && String(filename).includes('/decisions/llm-')) {
+            interrupted = true; const error = new Error('fixture legacy artifact interrupted'); error.code = 'EIO'; throw error;
+        }
+        return originalOpen.call(this, filename, ...rest);
+    };
+    try {
+        await assert.rejects(() => legacy.advanceProductionLlmDecisions({ filterRoot: f.dirs.filters, filterId,
+            discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle, spec: f.spec,
+            owner: 'legacy.capture', llm: legacyLlmConfig(f), limit: 1 }), /legacy artifact interrupted/);
+    } finally { fs.openSync = originalOpen; }
+    assert.equal(originalCalls.length, 1); assert.deepEqual(fs.readFileSync(stateFile), initialState);
+    const intentFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-intents'));
+    const responseFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-responses'));
+    const intentBytes = fs.readFileSync(intentFile), responseBytes = fs.readFileSync(responseFile);
+    const intent = JSON.parse(intentBytes), envelope = JSON.parse(Buffer.from(intent.envelope.data, 'base64'));
+    assert.equal(f.spec.contract, 'conference-filter-spec-v5'); assert.equal(f.spec.version, 5);
+    assert.equal(envelope.contract, 'conference-filter-llm-request-v2'); assert.equal(envelope.version, 2);
+    assert.equal(envelope.filter.taxonomyRegistrySha256, f.spec.taxonomyRegistrySha256);
+    assert.equal(Object.hasOwn(envelope.filter, 'tagCatalogSha256'), false);
+    assert.equal(sha(Buffer.from(intent.envelope.data, 'base64')), intent.envelope.sha256);
+    const envelopeBody = { ...envelope }; delete envelopeBody.requestSha256;
+    assert.equal(filter.stableHash(envelopeBody), envelope.requestSha256);
+    const result = await runner.main(args(['--limit', '2']), { files: f.files, env: f.env });
+    const restoredState = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
+    assert.equal(result.processed.length, 2); assert.equal(service.calls.length, 1);
+    assert.equal(originalCalls.length, 1, '原替身请求只发生一次，恢复已保存响应不再请求');
+    assert.equal(restoredState.contract, 'conference-filter-v5'); assert.equal(restoredState.version, 5);
+    assert.equal(restoredState.filterId, filterId); assert.equal(restoredState.completion.status, 'complete');
+    assert.deepEqual(fs.readFileSync(specFile), originalSpecBytes);
+    assert.deepEqual(fs.readFileSync(intentFile), intentBytes); assert.deepEqual(fs.readFileSync(responseFile), responseBytes);
+    const handle = filter.loadSelectionHandle(f.dirs.filters, filterId, f.discoveryHandle);
+    assert.equal(filter.selectionHandleSnapshot(handle).version, 5);
+    const completedStateBytes = fs.readFileSync(stateFile);
+    assert.deepEqual((await runner.main(args(), { files: f.files, env: {} })).processed, []);
+    assert.deepEqual(fs.readFileSync(stateFile), completedStateBytes); assert.equal(service.calls.length, 1);
+    const artifactFile = path.join(f.dirs.filters, filterId, 'decisions', restoredState.attempts[0].decisionArtifactName);
+    const artifactBytes = fs.readFileSync(artifactFile);
+    fs.writeFileSync(artifactFile, Buffer.concat([artifactBytes, Buffer.from(' ')]));
+    assert.throws(() => filter.readFilter({ filterRoot: f.dirs.filters, filterId }), /decision artifact replay drifted/);
+});
+
+test('原v5未完成intent无响应时保留未知结果，不重复请求', async t => {
+    const service = await serverFixture(t);
+    const originalCalls = [], legacy = mockLegacyFilter(originalCalls);
+    const f = fixture(t, service.endpoint, [{ arnumber: '100', title: 'Speech enhancement' }],
+        'fixture-filter-model', legacy);
+    const originalOpen = fs.openSync; let interrupted = false;
+    fs.openSync = function (filename, ...rest) {
+        if (!interrupted && String(filename).includes('/llm-responses/')) {
+            interrupted = true; const error = new Error('fixture legacy response interrupted'); error.code = 'EIO'; throw error;
+        }
+        return originalOpen.call(this, filename, ...rest);
+    };
+    try {
+        await assert.rejects(() => legacy.advanceProductionLlmDecisions({ filterRoot: f.dirs.filters, filterId,
+            discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle, spec: f.spec,
+            owner: 'legacy.capture', llm: legacyLlmConfig(f), limit: 1 }), /legacy response interrupted/);
+    } finally { fs.openSync = originalOpen; }
+    const intentFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-intents'));
+    const intentBytes = fs.readFileSync(intentFile);
+    const result = await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
+    const restoredState = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
+    assert.equal(originalCalls.length, 1); assert.equal(service.calls.length, 0);
+    assert.equal(restoredState.version, 5);
+    assert.equal(restoredState.decisions[pid('100')].status, 'failed');
+    assert.match(restoredState.decisions[pid('100')].reason, /^LLM_TRANSPORT_UNAVAILABLE:INTERRUPTED_/);
+    assert.deepEqual(fs.readFileSync(intentFile), intentBytes);
 });

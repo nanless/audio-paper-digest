@@ -55,7 +55,7 @@ function readConfiguredJson(directory, name) {
 function verifyTagCatalogFileBinding(files, spec) {
     if (typeof files.tagCatalogFile !== 'string') throw new Error('Configured tagCatalogFile is required');
     const loaded = ledgerApi.readRegularJson(files.tagCatalogFile);
-    if (loaded.sha256 !== spec.taxonomyRegistrySha256) throw new Error('Configured taxonomy registry SHA drifted from filter spec');
+    if (loaded.sha256 !== filterApi.tagCatalogSha256ForSpec(spec)) throw new Error('配置词表的文件 SHA 与筛选配置记录不一致。');
 }
 
 function summary(state) {
