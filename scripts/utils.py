@@ -15,7 +15,7 @@ from analysis_sections import evaluation_heading_issue, extract_evaluation_secti
 from tag_catalog import (LABEL_MODE_LEGACY,
                             active_preferred_labels, ancestors, load_tag_catalog,
                             prune_ancestors, resolve_label_candidates,
-                            _registry_data)
+                            _validate_tag_catalog_content)
 
 BJ_TZ = timezone(timedelta(hours=8))
 SCORING_RUBRIC_VERSION = 'type-aware-v1'
@@ -301,7 +301,7 @@ def _validate_tag_selection(tag_catalog, tags, primary_task_tag, primary_method_
         # tag_catalog.ancestors() 每次都会完整核验词表；逐个查询所有启用概念
         # 会使选择检查达到 O(N²)。Node 的 tag-rules.activeDescendants
         # 使用相同规则。
-        data = _registry_data(tag_catalog)
+        data = _validate_tag_catalog_content(tag_catalog)
         parent_by_id = {concept['id']: concept['broaderId']
                         for concept in data['concepts']}
 

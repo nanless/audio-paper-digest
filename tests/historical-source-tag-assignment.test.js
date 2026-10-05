@@ -6,48 +6,48 @@ const concepts = ['task.asr', 'method.self-supervised', 'setting.multilingual'].
 const raw = { primaryTaskId: concepts[0].id, primaryMethodId: concepts[1].id, concepts };
 const evidence = concepts[0].quote;
 test('source-only classification verifies exact source quotes and explicit roles', () => {
-    const decision = api.parseDecision(JSON.stringify(raw), runtime, evidence);
+    const decision = api.parseTagSelectionResponse(JSON.stringify(raw), runtime, evidence);
     assert.equal(decision.primaryTaskId, raw.primaryTaskId); assert.equal(decision.concepts[2].quoteStart, 0);
 });
 test('unseen quotes, duplicate concepts, invented IDs and mixed primary facets reject', () => {
-    assert.throws(() => api.parseDecision(JSON.stringify(raw), runtime, 'unrelated source'), /引文必须同时存在于所给证据和来源全文中/);
-    assert.throws(() => api.parseDecision(JSON.stringify(raw), runtime, evidence, 'Only a selection window label, no quote in source.'), /引文必须同时存在于所给证据和来源全文中/);
-    assert.throws(() => api.parseDecision(JSON.stringify({ ...raw, concepts: [concepts[0], concepts[0], concepts[2]] }), runtime, evidence), /同一个概念不能重复入选/);
-    assert.throws(() => api.parseDecision(JSON.stringify({ ...raw, primaryMethodId: raw.primaryTaskId }), runtime, evidence), /主任务、主方法或所选概念的上下级关系/);
-    assert.throws(() => api.parseDecision(JSON.stringify({ ...raw, concepts: [...concepts.slice(0,2), { ...concepts[2], id: 'task.fake' }] }), runtime, evidence), /引文必须同时存在于所给证据和来源全文中/);
+    assert.throws(() => api.parseTagSelectionResponse(JSON.stringify(raw), runtime, 'unrelated source'), /引文必须同时存在于所给证据和来源全文中/);
+    assert.throws(() => api.parseTagSelectionResponse(JSON.stringify(raw), runtime, evidence, 'Only a selection window label, no quote in source.'), /引文必须同时存在于所给证据和来源全文中/);
+    assert.throws(() => api.parseTagSelectionResponse(JSON.stringify({ ...raw, concepts: [concepts[0], concepts[0], concepts[2]] }), runtime, evidence), /同一个概念不能重复入选/);
+    assert.throws(() => api.parseTagSelectionResponse(JSON.stringify({ ...raw, primaryMethodId: raw.primaryTaskId }), runtime, evidence), /主任务、主方法或所选概念的上下级关系/);
+    assert.throws(() => api.parseTagSelectionResponse(JSON.stringify({ ...raw, concepts: [...concepts.slice(0,2), { ...concepts[2], id: 'task.fake' }] }), runtime, evidence), /引文必须同时存在于所给证据和来源全文中/);
 });
 test('duplicate JSON role fields and fenced model text reject', () => {
-    assert.throws(() => api.parseDecision('{"primaryTaskId":"a","primaryTaskId":"b","primaryMethodId":"c","concepts":[]}', runtime, evidence), /分类响应缺少必要的顶层字段，或同一字段出现多次/);
-    assert.throws(() => api.parseDecision('```json\n' + JSON.stringify(raw) + '\n```', runtime, evidence), /不能使用代码围栏/);
+    assert.throws(() => api.parseTagSelectionResponse('{"primaryTaskId":"a","primaryTaskId":"b","primaryMethodId":"c","concepts":[]}', runtime, evidence), /分类响应缺少必要的顶层字段，或同一字段出现多次/);
+    assert.throws(() => api.parseTagSelectionResponse('```json\n' + JSON.stringify(raw) + '\n```', runtime, evidence), /不能使用代码围栏/);
 });
 test('independent review must explicitly accept with no issues and no duplicate keys', () => {
-    assert.deepEqual(api.parseReview('{"accepted":true,"issues":[]}'), { accepted: true, issues: [] });
-    assert.throws(() => api.parseReview('{"accepted":false,"issues":["method is not core"]}'), /独立标签审核未通过/);
-    assert.throws(() => api.parseReview('{"accepted":false,"accepted":true,"issues":[]}'), /审核响应缺少必要字段，或同一字段出现多次/);
-    assert.throws(() => api.parseReview('{"accepted":true,"issues":[],"other":1}'), /独立标签审核未通过/);
+    assert.deepEqual(api.parseTagReviewResponse('{"accepted":true,"issues":[]}'), { accepted: true, issues: [] });
+    assert.throws(() => api.parseTagReviewResponse('{"accepted":false,"issues":["method is not core"]}'), /独立标签审核未通过/);
+    assert.throws(() => api.parseTagReviewResponse('{"accepted":false,"accepted":true,"issues":[]}'), /审核响应缺少必要字段，或同一字段出现多次/);
+    assert.throws(() => api.parseTagReviewResponse('{"accepted":true,"issues":[],"other":1}'), /独立标签审核未通过/);
 });
 test('removed or inactive concepts and primary roles absent from selection reject', () => {
     const missing = { ...raw, concepts: raw.concepts.map(c => ({ ...c })) };
     missing.concepts[0].id = 'task.deleted-from-registry';
-    assert.throws(() => api.parseDecision(JSON.stringify(missing), runtime, evidence), /引文必须同时存在于所给证据和来源全文中/);
+    assert.throws(() => api.parseTagSelectionResponse(JSON.stringify(missing), runtime, evidence), /引文必须同时存在于所给证据和来源全文中/);
     const activeTask = runtime.tagCatalog.concepts.find(c => c.status === 'active' && c.facet === 'task' && c.id !== raw.primaryTaskId);
-    assert.throws(() => api.parseDecision(JSON.stringify({ ...raw, primaryTaskId: activeTask.id }), runtime, evidence), /主任务、主方法或所选概念的上下级关系/);
+    assert.throws(() => api.parseTagSelectionResponse(JSON.stringify({ ...raw, primaryTaskId: activeTask.id }), runtime, evidence), /主任务、主方法或所选概念的上下级关系/);
 });
 test('cache must bind source, registry, fingerprint, injected quotes and independent review', () => {
     const sn = require('../scripts/lib/source-evidence-snippets.js');
     const hash = require('../scripts/lib/historical-direct-rewrite-runner.js').stableHash;
     const crypto = require('node:crypto'),sha = v => crypto.createHash('sha256').update(v).digest('hex');
-    const text = evidence.repeat(3),bundle = sn.buildSnippets(text),source = { text, source: { paperId: 'arxiv:2601.00001', textSha256: sha(text), pdfSha256: 'a'.repeat(64) } };
+    const text = evidence.repeat(3),bundle = sn.buildSourceEvidenceSnippets(text),source = { text, source: { paperId: 'arxiv:2601.00001', textSha256: sha(text), pdfSha256: 'a'.repeat(64) } };
     const modelResponseText = JSON.stringify({ ...raw, concepts: raw.concepts.map(c => ({ id: c.id, evidenceId: bundle.snippets[0].id, rationale: c.rationale })) });
-    const injected = sn.injectEvidence(modelResponseText,bundle),decision = api.parseDecision(injected.responseText,runtime,bundle.projection,text);
+    const injected = sn.fillConceptQuotesFromSnippets(modelResponseText,bundle),decision = api.parseTagSelectionResponse(injected.responseText,runtime,bundle.projection,text);
     const reviewProof = { decisionSha256:hash(decision),sourceTextSha256:source.source.textSha256,evidenceSha256:bundle.evidenceSha256,registrySha256:runtime.registrySha256,response:{accepted:true,issues:[]} };
     const body = { fingerprint:'fp',source:source.source,registrySha256:runtime.registrySha256,modelResponseText,modelResponseSha256:sha(modelResponseText),responseText:injected.responseText,responseSha256:sha(injected.responseText),quoteSelections:injected.selections,reviewProof,reviewProofSha256:hash(reviewProof),...decision };
     const record = { ...body, proofSha256:hash(body) },options = { fingerprint:'fp',runtime,bundle,source };
-    assert.equal(api.validateCachedDecision(record,options).primaryTaskId,raw.primaryTaskId);
-    assert.throws(() => api.validateCachedDecision(record,{...options,fingerprint:'other-model-route'}),/保存的分类结果与本次指纹、来源或词表不一致/);
-    assert.throws(() => api.validateCachedDecision(record,{...options,source:{...source,source:{...source.source,pdfSha256:'b'.repeat(64)}}}),/保存的分类结果与本次指纹、来源或词表不一致/);
+    assert.equal(api.validateCachedTagSelection(record,options).primaryTaskId,raw.primaryTaskId);
+    assert.throws(() => api.validateCachedTagSelection(record,{...options,fingerprint:'other-model-route'}),/保存的分类结果与本次指纹、来源或词表不一致/);
+    assert.throws(() => api.validateCachedTagSelection(record,{...options,source:{...source,source:{...source.source,pdfSha256:'b'.repeat(64)}}}),/保存的分类结果与本次指纹、来源或词表不一致/);
     const tampered = structuredClone(body);tampered.reviewProof.sourceTextSha256='c'.repeat(64);tampered.reviewProofSha256=hash(tampered.reviewProof);
-    assert.throws(() => api.validateCachedDecision({...tampered,proofSha256:hash(tampered)},options),/保存的独立审核记录缺失/);
+    assert.throws(() => api.validateCachedTagSelection({...tampered,proofSha256:hash(tampered)},options),/保存的独立审核记录缺失/);
 });
 test('typed account pool exhaustion is run stopping but classification issues are per paper', () => {
     const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
@@ -91,16 +91,16 @@ test('conference descriptor binds extracted full text and PDF to the verified pu
  const binding={sourceSet:input.sourceSet,provenance:input.provenance,metadataSha256:input.metadata.sha256,metadataRecordIndex:0,metadataIdentityBindingSha256:input.metadata.metadataIdentityBindingSha256,pdfSha256:input.pdf.sha256,pdfBytes:1000,pdfIdentityBindingSha256:input.pdf.pdfIdentityBindingSha256,sourceBindingSha256:input.sourceBindingSha256,acquisition:identityApi.publicAcquisition(input.pdf.acquisition),acquisitionSha256:runner.stableHash(input.pdf.acquisition)};
  const identity={kind:item.route.kind,paperId,sourceId:paperId,writerInputsSha256:runner.stableHash(item.route.writerInputs),sourceBindings:[binding],originalTitle:'Exact original',sourceUrl:'https://openreview.net/forum?id=example123',pdfUrl:'',provenanceDisclosure:'历史本地封存来源；未记录下载时网络响应。',privateUnexpectedPath:'/private/not-public'};
  const extracted={pdfSha256:input.pdf.sha256,sourceDetails:{paperId,sourceId:paperId,text:'Actual extracted PDF text, not a metadata title or abstract.',structuredArtifacts:{payloadSha256:'f'.repeat(64)}}};
- const descriptor=api.conferenceSourceDescriptor(item,identity,extracted);
+ const descriptor=api.buildConferenceSourceRecord(item,identity,extracted);
  assert.deepEqual(descriptor.sourceBindings,identity.sourceBindings);assert.equal(descriptor.pdfSha256,input.pdf.sha256);assert.notEqual(descriptor.textSha256,runner.stableHash(identity.originalTitle));assert.equal(Object.hasOwn(descriptor,'privateUnexpectedPath'),false);
  const changed=structuredClone(identity);changed.sourceBindings[0].metadataIdentityBindingSha256='f'.repeat(64);
- assert.throws(()=>api.conferenceSourceDescriptor(item,changed,extracted),/会议来源的对应记录或 PDF SHA/);
- assert.throws(()=>api.conferenceSourceDescriptor(item,{...identity,paperId:'arxiv:2601.00001'},extracted),/会议来源记录与当前论文、提取结果或写入材料/);
- assert.throws(()=>api.conferenceSourceDescriptor(item,{...identity,sourceBindings:[]},extracted),/会议来源记录与当前论文、提取结果或写入材料/);
- assert.throws(()=>api.conferenceSourceDescriptor(item,identity,{...extracted,pdfSha256:'a'.repeat(64)}),/会议来源的对应记录或 PDF SHA/);
- assert.throws(()=>api.conferenceSourceDescriptor(item,{...identity,versionRelation:'invented-preprint'},extracted),/会议来源的版本、标题、DOI 或版本说明/);
- assert.throws(()=>api.conferenceSourceDescriptor(item,{...identity,provenanceDisclosure:''},extracted),/保留的本地来源缺少获取情况说明/);
- assert.throws(()=>api.conferenceSourceDescriptor(item,{...identity,sourceUrl:'https://arxiv.org/abs/2601.00001'},extracted),/会议官方来源地址不一致/);
+ assert.throws(()=>api.buildConferenceSourceRecord(item,changed,extracted),/会议来源的对应记录或 PDF SHA/);
+ assert.throws(()=>api.buildConferenceSourceRecord(item,{...identity,paperId:'arxiv:2601.00001'},extracted),/会议来源记录与当前论文、提取结果或写入材料/);
+ assert.throws(()=>api.buildConferenceSourceRecord(item,{...identity,sourceBindings:[]},extracted),/会议来源记录与当前论文、提取结果或写入材料/);
+ assert.throws(()=>api.buildConferenceSourceRecord(item,identity,{...extracted,pdfSha256:'a'.repeat(64)}),/会议来源的对应记录或 PDF SHA/);
+ assert.throws(()=>api.buildConferenceSourceRecord(item,{...identity,versionRelation:'invented-preprint'},extracted),/会议来源的版本、标题、DOI 或版本说明/);
+ assert.throws(()=>api.buildConferenceSourceRecord(item,{...identity,provenanceDisclosure:''},extracted),/保留的本地来源缺少获取情况说明/);
+ assert.throws(()=>api.buildConferenceSourceRecord(item,{...identity,sourceUrl:'https://arxiv.org/abs/2601.00001'},extracted),/会议官方来源地址不一致/);
 });
 
 async function sourceClassificationFixture(t, respond) {
@@ -198,7 +198,7 @@ test('actual source classification prompts reach selection, independent review a
         assert.ok(decision.concepts.every(c => fixture.text.includes(c.quote)));
         assert.deepEqual(decision.quoteSelections.map(c => c.evidenceId), ['s00001', 's00001', 's00001']);
         assert.equal(fixture.fs.readFileSync(fixture.path.join(fixture.options.blogRoot, fixture.pagePath), 'utf8'), fixture.page);
-        const directPrompt = fixture.api.promptFor({ paperId: 'paper', title: 'title', evidence: fixture.text,
+        const directPrompt = fixture.api.buildQuotedTagSelectionPrompt({ paperId: 'paper', title: 'title', evidence: fixture.text,
             projection: runtime.projection, feedback: '' });
         assert.match(directPrompt, /20–1000个字符的连续逐字引文/);
         assert.match(directPrompt, /"quote":"原文逐字引文"/);

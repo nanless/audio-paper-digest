@@ -143,7 +143,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/historical-direct-tag-supplement.js` | Node 库 | 只读核验已完成直接重写的来源、分析与私有页面，按原分类版本提取概念及主角色。补充记录对应历史页面整文件与正文 SHA，保留旧正文和标签，单列失败，不把未完成分析当成已核验结果。 |
 | `lib/historical-source-identity-supplement.js` | Node 库 | 独立核验封存 arXiv 或会议元数据/PDF 的身份及旧页精确 SHA，仅补身份、官方来源和论文版本披露，不生成分类或正文完成证明。 |
 | `lib/historical-source-tag-assignment.js` | Node 库 | 对尚无有效正式分类的历史页，用编号原文片段选择标签，程序填入逐字引文后再独立审核。模型请求使用公共路由；记录明确区分词表未覆盖、待审和账号耗尽后未处理的论文。 |
-| `lib/source-evidence-snippets.js` | Node 库 | 从封存原文均衡提取有长度上限的连续片段，模型仅选择片段编号；代码写入原文引文、UTF16 位置和 SHA，拒绝未知编号。 |
+| `lib/source-evidence-snippets.js` | Node 库 | `buildSourceEvidenceSnippets` 按字符预算提取并编号连续原文片段；`fillConceptQuotesFromSnippets` 按模型选择的编号填入原文引文。保留原始空白及 UTF16 位置，拒绝未知编号。 |
 | `lib/source-classification-scheduler.js` | Node 库 | 以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |
 | `lib/source-classification-failures.js` | Node 库 | 只根据公共请求层的结构化错误识别账号或服务故障，并停止新请求。正文校验失败和输出截断仍按单篇处理，不根据错误文案猜故障或切账号。 |
 | `lib/historical-tag-checkpoint-export.js` | Node 库 | 读取并核验分类检查点或部分运行记录、来源、原文引文及独立审核，按排除集合导出页面分类记录。支持原连续处理范围与并发已处理集合；采用集合格式时只读取决策对应文件名的缓存。 |
@@ -210,7 +210,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `historical-direct-review.py` | 协调历史直接重写的逐页语义审查，复用正式发布的 LLM 与多模态审查，保存对应输入、模型、提示词和代码的检查点；全部页面通过后才生成最终凭证。 |
 | `paper_identity.py` | 实现与 Node 相同的 `paper-identity-v1`，用共享测试向量核对身份与 SHA 结果。 |
 | `tag_catalog.py` | 与 Node 共用分类词表，显式解析当前格式或旧格式标签并精确映射概念。新正式页面只接受有效的中文首选标签及 [既定英文专名例外](../AGENTS.md#内容与评分门禁)；未知或歧义标签报错，不自行缩小含义。 |
-| `tag_paths.py` | 集中配置独立标签预览的 Python 路径，复用项目根与环境，不改变正式发布 `path_config` 的模板指纹。 |
+| `tag_paths.py` | 集中定义标签词表及私有预览路径，按显式参数、环境变量和默认目录依次选择博客路径；目录存在与仓库身份由调用方另行检查。 |
 | `build-tag-preview.py` | 根据历史页面元数据生成私有标签索引、旧标签处理表和待评审报告，不改写博客。按名称或别名作字面对照；七种处理状态和证据要求见本页的分类词表维护说明。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `batch-analyze.js` | 用当前正式分析结果绑定的日更 PDF/TXT 批量分析未完成论文。`--retry-failed-readers` 仅归档并停用这些论文的失败 Reader 候选；没有对应来源记录时停止。 |
@@ -246,7 +246,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `llm_account_pool.py` | 按与 Node 相同的数据格式和锁协议管理 OpenCode Go 账号池。 |
 | `llm_usage.py` | 记录 Python 发布请求的用量与失败事件，沿用跨运行请求归因格式。 |
 | `utils.py` | Python 分析与评分解析、发布侧通用文本工具；`read_tag_validation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
-| `tag_stage_record.py` | 只读识别标签阶段保存格式，供发布、摘要和会议页面核验使用；与 Node 遵守相同的新旧格式规则。 |
+| `tag_stage_record.py` | 只读识别标签阶段的新旧保存格式，返回原阶段、检查点及实际字段名；格式可读不代表哈希或发布资格已经通过。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
 | `log_setup.py` | Python 统一日志与脱敏。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
@@ -419,6 +419,19 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 下列命令只在历史工作区运行。它们生成独立补充记录，不替换历史正文或正式发布状态。
 
+来源分类和证据片段库使用以下接口。直接引文接口要求模型返回 `quote`；当前历史分类流程要求模型返回片段编号 `evidenceId`，随后由程序填入原文引文，两种格式分别解析。公开的 `projection`、`evidence` 等选项和保存字段继续沿用原格式。
+
+| 函数 | 作用 |
+|---|---|
+| `parseTagSelectionResponse` | 解析标签选择响应，并核对字段、概念、原文引文和主标签规则。 |
+| `parseTagReviewResponse` | 解析独立审核响应，拒绝未通过或仍有问题的结果。 |
+| `validateCachedTagSelection` | 核对分类缓存的内容哈希、来源、引文和独立审核记录，返回重新解析的选择结果。 |
+| `loadPaperSourceDetails` | 读取指定论文的来源，返回正文、标题和来源记录。 |
+| `buildConferenceSourceRecord` | 根据指定会议材料及提取结果构造来源记录，并检查两者是否对应。 |
+| `buildQuotedTagSelectionPrompt` | 生成要求模型直接提供原文引文的标签选择提示。 |
+| `buildSourceEvidenceSnippets` | 按字符预算提取、选择并编号连续原文片段。 |
+| `fillConceptQuotesFromSnippets` | 根据片段编号填入原文引文，返回供后续解析的响应及片段选择记录。 |
+
 完整命令入口继续调用 `exportCheckpoint`。库内的页面记录操作使用以下接口：
 
 | 函数 | 作用 |
@@ -435,9 +448,7 @@ npm run history:source-identity -- --plan ABS --registry ABS --blog ABS --snapsh
 npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID --checkpoint ABS [--exclude-paper-ids ID,...]
 ```
 
-分类按请求保存 selection/review/decision 检查点。同 UUID 须核验全部输入后才能续跑；账号耗尽时只写
-编号 partial，不占用最终产物。导出支持 checkpoint 与 partial 两种不可变封装，只采用已完成项，
-保留原证明，不请求模型。
+运行保存论文选择集合，以及标签选择响应、独立审核和分类决策的检查点。使用同一 UUID 继续运行时，仍须核对输入；账号用量耗尽后保存编号的部分运行记录，不占用最终产物文件。导出器读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录。报告同时保留失败项和未处理论文，不请求模型。
 
 暂停后重跑原 UUID 可继续分类。要从正规 checkpoint 开始新的论文集合，使用
 `--resume-after-checkpoint ABS --resume-after-export ABS`；partial 不能当作续跑 checkpoint。

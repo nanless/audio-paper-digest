@@ -3,7 +3,7 @@ const crypto = require('node:crypto');
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const CONTRACT = 'sealed-source-evidence-snippets-v1';
 
-function buildSnippets(source, { maxChars = 50000, maxSnippetChars = 800 } = {}) {
+function buildSourceEvidenceSnippets(source, { maxChars = 50000, maxSnippetChars = 800 } = {}) {
     if (typeof source !== 'string' || source.length < 100 || !Number.isInteger(maxChars) || maxChars < 1000
         || !Number.isInteger(maxSnippetChars) || maxSnippetChars < 100 || maxSnippetChars > 1000) throw new Error('来源正文必须是至少 100 个字符的字符串；总字符上限必须是至少 1000 的整数，单段字符上限必须是 100–1000 的整数。');
     const chunks = []; let offset = 0;
@@ -35,7 +35,7 @@ function buildSnippets(source, { maxChars = 50000, maxSnippetChars = 800 } = {})
         snippets: selected, projection: evidenceText, evidenceSha256: digest(evidenceText) };
 }
 
-function injectEvidence(raw, evidenceSnippets) {
+function fillConceptQuotesFromSnippets(raw, evidenceSnippets) {
     const text = String(raw).trim();
     if (!text.startsWith('{') || !text.endsWith('}')) throw new Error('标签选择响应必须直接以 JSON 对象开头和结尾，不能包在代码围栏中。');
     for (const key of ['primaryTaskId','primaryMethodId','concepts']) if ((text.match(new RegExp(`"${key}"\\s*:`, 'g')) || []).length !== 1) throw new Error('标签选择响应必须各包含一次 primaryTaskId、primaryMethodId 和 concepts 字段。');
@@ -50,4 +50,4 @@ function injectEvidence(raw, evidenceSnippets) {
     return { responseText: JSON.stringify({ primaryTaskId:value.primaryTaskId, primaryMethodId:value.primaryMethodId, concepts }),
         selections: value.concepts.map(c => ({ conceptId:c.id, evidenceId:c.evidenceId, ...snippetsById.get(c.evidenceId) })) };
 }
-module.exports = { CONTRACT, buildSnippets, injectEvidence };
+module.exports = { CONTRACT, buildSourceEvidenceSnippets, fillConceptQuotesFromSnippets };

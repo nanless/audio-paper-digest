@@ -248,7 +248,7 @@ async function exportCheckpoint(options) {
             !selection.value.paperIds.includes(record.paperId) ||
             acceptedClassificationsByPaperId.has(record.paperId))
             fail("分类缓存文件名与论文编号及请求指纹不一致，或者缓存属于未入选论文、同一论文的缓存重复。");
-        const sourceDetails = await api.loadSource(planItemsByPaperId.get(record.paperId), config, 1);
+        const sourceDetails = await api.loadPaperSourceDetails(planItemsByPaperId.get(record.paperId), config, 1);
         // 以下两个明确排除的论文仍计入已处理集合，但不导出其分类记录。若旧缓存没有
         // PDF 版本字段而本次来源对象已有该字段，仅在用于比对的来源对象中去除新增字段。
         if (excludedPaperIds.includes(record.paperId) &&
@@ -258,12 +258,12 @@ async function exportCheckpoint(options) {
             delete sourceDetails.source.pdfVersionBinding;
             delete sourceDetails.source.sourceVersionWarning;
         }
-        api.validateCachedDecision(
+        api.validateCachedTagSelection(
             record,
             {
                 fingerprint: record.fingerprint,
                 runtime: tagRules,
-                bundle: snippets.buildSnippets(sourceDetails.text),
+                bundle: snippets.buildSourceEvidenceSnippets(sourceDetails.text),
                 source: sourceDetails
             }
         );

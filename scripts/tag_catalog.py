@@ -17,7 +17,7 @@ TAG_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1'
 TAG_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
 CONCEPT_KEYS = {'id', 'facet', 'preferredLabel', 'aliases', 'broaderId',
                 'definition', 'scopeNote', 'status', 'replacedBy'}
-# ECMAScript String.trim whitespace, including BOM (Python str.strip differs).
+# 按 ECMAScript String.trim 的空白字符处理，包括 BOM；Python 默认 strip 的字符范围与它不同。
 _JS_WHITESPACE = '\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
 
 
@@ -30,95 +30,96 @@ def normalize_label(value):
     return re.sub('[A-Z]', lambda match: match.group().lower(), result)
 
 
-def _object(value, keys, name):
+def _require_exact_object_fields(value, keys, name):
     if type(value) is not dict or set(value) != set(keys):
         raise ValueError(f'{name} 必须是对象，且字段不能缺失或超出允许范围。')
 
 
-def _string(value, name):
+def _validate_catalog_string(value, name):
     if (not isinstance(value, str) or not value.strip(_JS_WHITESPACE)
             or value != value.strip(_JS_WHITESPACE) or re.search(r'[\x00-\x1f\x7f]', value)):
         raise ValueError(f'{name} 必须是非空字符串，不能含首尾空白或控制字符。')
 
 
 def validate_tag_catalog(data):
-    _object(data, {'version', 'facets', 'concepts'}, '标签词表')
+    _require_exact_object_fields(data, {'version', 'facets', 'concepts'}, '标签词表')
     if data['version'] != 'paper-taxonomy-v1':
         raise ValueError('标签词表的版本不受支持。')
     if not isinstance(data['facets'], list) or len(data['facets']) != len(FACET_IDS):
         raise ValueError('标签词表的分类维度必须是包含九项的列表。')
-    facets = set()
+    seen_facet_ids = set()
     for facet in data['facets']:
-        _object(facet, {'id', 'label'}, '分类维度记录')
-        if facet['id'] not in FACET_IDS or facet['id'] in facets:
+        _require_exact_object_fields(facet, {'id', 'label'}, '分类维度记录')
+        if facet['id'] not in FACET_IDS or facet['id'] in seen_facet_ids:
             raise ValueError('标签词表含有未知或重复的分类维度。')
-        _string(facet['label'], '分类维度名称')
-        facets.add(facet['id'])
+        _validate_catalog_string(facet['label'], '分类维度名称')
+        seen_facet_ids.add(facet['id'])
     if not isinstance(data['concepts'], list) or not data['concepts']:
         raise ValueError('标签词表中的概念必须是非空列表。')
-    ids, labels = {}, {}
+    concepts_by_id, concept_ids_by_facet_and_label = {}, {}
     for concept in data['concepts']:
-        _object(concept, CONCEPT_KEYS, '概念记录')
-        facet, cid = concept['facet'], concept['id']
-        if (not isinstance(facet, str) or facet not in facets or not isinstance(cid, str)
-                or not re.fullmatch(re.escape(facet) + r'\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*', cid)
-                or cid in ids):
+        _require_exact_object_fields(concept, CONCEPT_KEYS, '概念记录')
+        facet, concept_id = concept['facet'], concept['id']
+        if (not isinstance(facet, str) or facet not in seen_facet_ids or not isinstance(concept_id, str)
+                or not re.fullmatch(re.escape(facet) + r'\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*', concept_id)
+                or concept_id in concepts_by_id):
             raise ValueError('概念的分类维度或 ID 格式无效，或 ID 重复。')
-        _object(concept['preferredLabel'], {'zh', 'en'}, f'{cid}.preferredLabel')
+        _require_exact_object_fields(concept['preferredLabel'], {'zh', 'en'}, f'{concept_id}.preferredLabel')
         for language in ('zh', 'en'):
-            _string(concept['preferredLabel'][language], f'{cid}.{language}')
-        _string(concept['definition'], f'{cid}.definition')
-        _string(concept['scopeNote'], f'{cid}.scopeNote')
+            _validate_catalog_string(concept['preferredLabel'][language], f'{concept_id}.{language}')
+        _validate_catalog_string(concept['definition'], f'{concept_id}.definition')
+        _validate_catalog_string(concept['scopeNote'], f'{concept_id}.scopeNote')
         if not isinstance(concept['aliases'], list):
-            raise ValueError(f'{cid} 的别名必须为列表。')
-        aliases = set()
+            raise ValueError(f'{concept_id} 的别名必须为列表。')
+        normalized_aliases = set()
         for alias in concept['aliases']:
-            _string(alias, f'{cid}.alias')
+            _validate_catalog_string(alias, f'{concept_id}.alias')
             normalized = normalize_label(alias)
-            if not normalized or normalized in aliases:
-                raise ValueError(f'{cid} 的别名经统一格式处理后为空，或存在重复。')
-            aliases.add(normalized)
+            if not normalized or normalized in normalized_aliases:
+                raise ValueError(f'{concept_id} 的别名经统一格式处理后为空，或存在重复。')
+            normalized_aliases.add(normalized)
         if concept['status'] not in ('active', 'deprecated'):
-            raise ValueError(f'{cid} 的状态必须为 active 或 deprecated。')
+            raise ValueError(f'{concept_id} 的状态必须为 active 或 deprecated。')
         if concept['broaderId'] is not None and not isinstance(concept['broaderId'], str):
-            raise ValueError(f'{cid} 的上级概念 ID 必须为字符串或 null。')
+            raise ValueError(f'{concept_id} 的上级概念 ID 必须为字符串或 null。')
         if concept['status'] == 'active' and concept['replacedBy'] is not None:
-            raise ValueError(f'{cid} 已启用，不能设置替代概念。')
+            raise ValueError(f'{concept_id} 已启用，不能设置替代概念。')
         if concept['status'] == 'deprecated' and (not isinstance(concept['replacedBy'], str) or not concept['replacedBy']):
-            raise ValueError(f'{cid} 已停用，必须填写非空字符串形式的替代概念 ID。')
-        ids[cid] = concept
+            raise ValueError(f'{concept_id} 已停用，必须填写非空字符串形式的替代概念 ID。')
+        concepts_by_id[concept_id] = concept
         for label in [*concept['preferredLabel'].values(), *concept['aliases']]:
             normalized = normalize_label(label)
             if not normalized:
-                raise ValueError(f'{cid} 的名称经统一格式处理后为空。')
+                raise ValueError(f'{concept_id} 的名称经统一格式处理后为空。')
             key = (facet, normalized)
-            if key in labels and labels[key] != cid:
+            if key in concept_ids_by_facet_and_label and concept_ids_by_facet_and_label[key] != concept_id:
                 raise ValueError(f'分类维度 {facet} 中的名称 {label} 对应多个概念。')
-            labels[key] = cid
+            concept_ids_by_facet_and_label[key] = concept_id
     for concept in data['concepts']:
-        cid, parent_id = concept['id'], concept['broaderId']
+        concept_id, parent_id = concept['id'], concept['broaderId']
         if parent_id is not None:
-            parent = ids.get(parent_id)
+            parent = concepts_by_id.get(parent_id)
             if not parent or parent['facet'] != concept['facet'] or parent['status'] != 'active':
-                raise ValueError(f'{cid} 的上级概念必须存在、已启用，并属于同一分类维度。')
+                raise ValueError(f'{concept_id} 的上级概念必须存在、已启用，并属于同一分类维度。')
         if concept['status'] == 'deprecated':
-            replacement = ids.get(concept['replacedBy'])
-            if (not replacement or replacement['id'] == cid or replacement['status'] != 'active'
+            replacement = concepts_by_id.get(concept['replacedBy'])
+            if (not replacement or replacement['id'] == concept_id or replacement['status'] != 'active'
                     or replacement['facet'] != concept['facet']):
-                raise ValueError(f'{cid} 的替代概念必须是同一分类维度中另一个已启用的概念。')
-        seen = {cid}
+                raise ValueError(f'{concept_id} 的替代概念必须是同一分类维度中另一个已启用的概念。')
+        seen = {concept_id}
         while parent_id is not None:
             if parent_id in seen:
-                raise ValueError(f'{cid} 的上级概念链存在循环。')
+                raise ValueError(f'{concept_id} 的上级概念链存在循环。')
             seen.add(parent_id)
-            parent = ids.get(parent_id)
+            parent = concepts_by_id.get(parent_id)
             if not parent:
-                raise ValueError(f'{cid} 的上级概念链包含不存在的概念。')
+                raise ValueError(f'{concept_id} 的上级概念链包含不存在的概念。')
             parent_id = parent['broaderId']
     return data
 
 
-def _registry_data(tag_catalog):
+def _validate_tag_catalog_content(tag_catalog):
+    """核验词表及可选 SHA 字段的格式，返回不含 SHA 元数据的词表内容。"""
     if not isinstance(tag_catalog, dict):
         raise ValueError('标签词表必须为对象。')
     expected = {'version', 'facets', 'concepts'}
@@ -126,7 +127,7 @@ def _registry_data(tag_catalog):
         expected.add('registrySha256')
         if not isinstance(tag_catalog['registrySha256'], str) or not re.fullmatch(r'[a-f0-9]{64}', tag_catalog['registrySha256']):
             raise ValueError('标签词表记录中的 registrySha256 格式无效。')
-    _object(tag_catalog, expected, '标签词表')
+    _require_exact_object_fields(tag_catalog, expected, '标签词表')
     return validate_tag_catalog({key: tag_catalog.get(key) for key in ('version', 'facets', 'concepts')})
 
 
@@ -144,15 +145,15 @@ def load_tag_catalog(file_path=None):
                 raise ValueError('标签词表 JSON 中含有重复字段。')
             value[key] = item
         return value
-    # Match Node's fatal TextDecoder: UTF-8 BOM is discarded for parsing, while
-    # the digest continues to bind the complete original byte sequence.
+    # 解析时移除 UTF-8 BOM，并按 Node TextDecoder 的规则拒绝无效编码；
+    # SHA 仍根据完整原始文件字节计算。
     data = validate_tag_catalog(json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique_object))
     return {**data, 'registrySha256': hashlib.sha256(raw).hexdigest()}
 
 
 def active_preferred_labels(tag_catalog, facets=None):
     """返回指定分类维度中已启用概念的中文首选名称。"""
-    data = _registry_data(tag_catalog)
+    data = _validate_tag_catalog_content(tag_catalog)
     if facets is None:
         selected_facets = set(FACET_IDS)
     else:
@@ -173,14 +174,14 @@ def build_tag_prompt_text(tag_catalog, prompt_text_contract=TAG_PROMPT_TEXT_CONT
     if not isinstance(prompt_text_contract, str) or prompt_text_contract not in (
             LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT):
         raise ValueError('标签提示文本的版本不受支持。')
-    data = _registry_data(tag_catalog)
+    data = _validate_tag_catalog_content(tag_catalog)
     registry_sha = tag_catalog.get('registrySha256')
     if not isinstance(registry_sha, str) or not re.fullmatch(r'[a-f0-9]{64}', registry_sha):
         raise ValueError('生成标签提示文本需要格式有效的词表 SHA。')
-    facet_order = {facet['id']: index for index, facet in enumerate(data['facets'])}
-    active = sorted(
+    facet_position_by_id = {facet['id']: index for index, facet in enumerate(data['facets'])}
+    active_concepts = sorted(
         (concept for concept in data['concepts'] if concept['status'] == 'active'),
-        key=lambda concept: (facet_order[concept['facet']], concept['id']),
+        key=lambda concept: (facet_position_by_id[concept['facet']], concept['id']),
     )
     lines = [
         f'contract={prompt_text_contract}',
@@ -191,15 +192,15 @@ def build_tag_prompt_text(tag_catalog, prompt_text_contract=TAG_PROMPT_TEXT_CONT
          '只能选择以下已启用概念的中文首选标签。ID 用于区分概念；不要创建新标签，也不要改用同义词。'),
     ]
     current_facet = None
-    for concept in active:
+    for concept in active_concepts:
         if concept['facet'] != current_facet:
             current_facet = concept['facet']
             lines.append(f'[{current_facet}]')
-        compact = lambda value: re.sub(
+        format_prompt_field = lambda value: re.sub(
             r'\s+', ' ', re.sub(r'[\r\n|]+', ' ', str(value or ''))).strip()
         lines.append('|'.join((
             concept['id'], f'#{concept["preferredLabel"]["zh"]}',
-            compact(concept['definition']), compact(concept['scopeNote']),
+            format_prompt_field(concept['definition']), format_prompt_field(concept['scopeNote']),
         )))
     return '\n'.join(lines) + '\n'
 
@@ -217,7 +218,7 @@ def resolve_label_candidates(tag_catalog, label, facet=None, *, mode=LABEL_MODE_
     使用 legacy；生产调用须使用 resolve_current_label 或明确传入 mode='current'。
     调用方仍须拒绝停用概念，不能自动沿 replacedBy 改用替代概念。
     """
-    data = _registry_data(tag_catalog)
+    data = _validate_tag_catalog_content(tag_catalog)
     if facet is not None and facet not in FACET_IDS:
         raise ValueError(f'未知的分类维度：{facet}。')
     if mode not in LABEL_MODES:
@@ -225,7 +226,7 @@ def resolve_label_candidates(tag_catalog, label, facet=None, *, mode=LABEL_MODE_
     normalized = normalize_label(label)
     if not normalized:
         return []
-    matches = []
+    matching_concepts = []
     for concept in data['concepts']:
         if facet is not None and concept['facet'] != facet:
             continue
@@ -236,13 +237,13 @@ def resolve_label_candidates(tag_catalog, label, facet=None, *, mode=LABEL_MODE_
         else:
             labels = (*concept['preferredLabel'].values(), *concept['aliases'])
         if any(normalize_label(value) == normalized for value in labels):
-            matches.append(concept)
-    return matches
+            matching_concepts.append(concept)
+    return matching_concepts
 
 
 def resolve_label(tag_catalog, label, facet=None, *, mode=LABEL_MODE_LEGACY):
-    matches = resolve_label_candidates(tag_catalog, label, facet, mode=mode)
-    return matches[0] if len(matches) == 1 else None
+    matching_concepts = resolve_label_candidates(tag_catalog, label, facet, mode=mode)
+    return matching_concepts[0] if len(matching_concepts) == 1 else None
 
 
 def resolve_current_label(tag_catalog, label, facet=None):
@@ -251,19 +252,19 @@ def resolve_current_label(tag_catalog, label, facet=None):
 
 
 def ancestors(tag_catalog, cid):
-    data = _registry_data(tag_catalog)
-    ids = {concept['id']: concept for concept in data['concepts']}
-    if not isinstance(cid, str) or cid not in ids:
+    data = _validate_tag_catalog_content(tag_catalog)
+    concepts_by_id = {concept['id']: concept for concept in data['concepts']}
+    if not isinstance(cid, str) or cid not in concepts_by_id:
         raise ValueError(f'概念 ID 不是字符串，或词表中不存在此 ID：{cid}。')
-    result, parent_id = [], ids[cid]['broaderId']
+    ancestor_ids, parent_id = [], concepts_by_id[cid]['broaderId']
     while parent_id is not None:
-        result.append(parent_id)
-        parent_id = ids[parent_id]['broaderId']
-    return result
+        ancestor_ids.append(parent_id)
+        parent_id = concepts_by_id[parent_id]['broaderId']
+    return ancestor_ids
 
 
 def prune_ancestors(tag_catalog, ids):
-    _registry_data(tag_catalog)
+    _validate_tag_catalog_content(tag_catalog)
     if not isinstance(ids, list) or any(not isinstance(cid, str) for cid in ids):
         raise ValueError('概念 ID 必须为字符串列表。')
     covered = {parent for cid in ids for parent in ancestors(tag_catalog, cid)}
