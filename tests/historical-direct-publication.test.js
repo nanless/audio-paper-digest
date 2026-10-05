@@ -377,8 +377,24 @@ test('deterministic publication review requires one exact top warning for a vers
 
 test('review protocol fingerprints fresh source, runner and page-staging implementations', () => {
     const names = api.reviewProtocolImplementationFiles().map(filename => path.basename(filename));
+    assert.ok(names.includes('page-tag-metadata.js'));
+    assert.ok(names.includes('package-lock.json'));
     assert.ok(names.includes('fresh-arxiv-rewrite-source.js'));
     assert.ok(names.includes('historical-direct-rewrite-runner.js'));
     assert.ok(names.includes('historical-direct-page-staging.js'));
     assert.match(api.reviewProtocolFingerprint({ hugoVersion: 'hugo v0.fixture' }), /^[a-f0-9]{64}$/);
+});
+
+test('页面审查接受新旧单一标签字段族，先核原页面 SHA 再拒混用', () => {
+    const page = fields => Buffer.from(`---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\n${fields}\ndraft: false\n---\nBody.\n`);
+    const contract = 'paper-taxonomy-flat-tags-compat-v1';
+    for (const family of ['tags', 'taxonomy']) {
+        const bytes = page(`paper_digest_${family}_contract: "${contract}"`);
+        const original = Buffer.from(bytes);
+        assert.doesNotThrow(() => api.deterministicReview({ path: 'content/posts/one.md', sha256: sha(bytes) }, bytes));
+        assert.deepEqual(bytes, original);
+    }
+    const mixed = page(`paper_digest_tags_contract: "${contract}"\n"paper_digest_taxonomy_concepts": null`);
+    assert.throws(() => api.deterministicReview({ path: 'content/posts/one.md', sha256: sha(mixed) }, mixed), /新旧标签字段/);
+    assert.throws(() => api.deterministicReview({ path: 'content/posts/one.md', sha256: hash('a') }, mixed), /review bytes drifted/);
 });

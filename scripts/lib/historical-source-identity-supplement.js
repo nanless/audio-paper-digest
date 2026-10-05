@@ -6,6 +6,7 @@ const fresh = require('./fresh-arxiv-rewrite-source.js');
 const io = require('./historical-conference-page-projections.js');
 const supplements = require('./historical-direct-tag-supplement.js');
 const alternate = require('./historical-icml-alternate-pdf-source.js');
+const { hasPageTagMetadata } = require('./page-tag-metadata.js');
 const CONTRACT = 'historical-source-identity-supplement-v1';
 const digest = v => crypto.createHash('sha256').update(v).digest('hex');
 const fail = m => { throw new Error(`Historical source identity rejected: ${m}`); };
@@ -135,7 +136,8 @@ async function buildIdentitySupplement(options) {
                 const file = path.resolve(options.blogRoot,page.pagePath);
                 if (!file.startsWith(path.resolve(options.blogRoot)+path.sep)) fail('page path escapes blog root');
                 const loaded = io.readStableFile(file,'identity frozen page');
-                if (/^paper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1/m.test(loaded.bytes.toString('utf8').split('---',3)[1]||'')) continue;
+                if (loaded.fileSha256 !== page.pageContentSha256) fail('frozen page SHA changed');
+                if (hasPageTagMetadata(loaded.bytes)) continue;
                 projections.push([page.pagePath,identityRecord(item,page,loaded.bytes,source,options,plan,planFileSha256)]);
             }
             const replay = sourceIdentity(item,config,1);

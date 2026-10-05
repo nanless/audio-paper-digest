@@ -47,7 +47,7 @@ DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-|$)")
 PAGE_ID_CONTRACT = "historical-page-id-v1"
 LINK_TYPES = {"markdown-inline", "html-anchor"}
 LINK_STATUSES = {"resolved", "unresolved", "ambiguous"}
-PUBLICATION_EVIDENCE_FIELDS = {
+LEGACY_PUBLICATION_EVIDENCE_FIELDS = {
     "paper_digest_abstract_sha256", "paper_digest_api_reader_article_sha256",
     "paper_digest_api_reader_author_count", "paper_digest_api_reader_author_identity_contract",
     "paper_digest_api_reader_author_identity_sha256", "paper_digest_api_reader_contract",
@@ -70,7 +70,13 @@ PUBLICATION_EVIDENCE_FIELDS = {
     "paper_digest_tutorial_payload_sha256", "paper_digest_tutorial_quality_sha256",
     "paper_digest_workbench_contract",
 }
-SCAN_POLICY = {
+LEGACY_TAG_FIELDS = {"paper_digest_taxonomy_" + field for field in (
+    "contract", "selection_contract", "registry_version", "registry_sha256", "concepts", "scope")}
+TAG_FIELDS = {"paper_digest_tags_" + field for field in (
+    "contract", "selection_contract", "registry_version", "registry_sha256", "concepts", "scope")}
+PUBLICATION_EVIDENCE_FIELDS = LEGACY_PUBLICATION_EVIDENCE_FIELDS | TAG_FIELDS
+
+LEGACY_SCAN_POLICY = {
     "contract": "historical-page-scan-policy-v3",
     "bodyRetention": "sha256-only",
     "identityHints": "frontmatter-filename-explicit-links-v1",
@@ -80,6 +86,13 @@ SCAN_POLICY = {
     "publicationEvidence": "schema-checked-hash-default-whitelist-v3",
     "targetRecordBinding": "target-page-snapshot-sha256-v1",
 }
+
+SCAN_POLICY = {key: value for key, value in LEGACY_SCAN_POLICY.items() if key != "taxonomyRoutes"}
+SCAN_POLICY.update({
+    "contract": "historical-page-scan-policy-v4",
+    "tagRoutes": "unverified-candidates-v2",
+    "publicationEvidence": "schema-checked-hash-default-whitelist-v4",
+})
 
 PRESERVED_PUBLICATION_STRING_FIELDS = {
     "paper_digest_arxiv_id",
@@ -639,6 +652,8 @@ def _strict_post_link_occurrences(body: str, page_url: str, base: str) -> list[d
 
 
 def _publication_evidence(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
+    if TAG_FIELDS.intersection(frontmatter) and LEGACY_TAG_FIELDS.intersection(frontmatter):
+        raise _fail("页面不能同时包含 paper_digest_tags_* 和旧字段 paper_digest_taxonomy_*。")
     result = []
     for field in sorted(key for key in frontmatter if key in PUBLICATION_EVIDENCE_FIELDS):
         value = _json_value(frontmatter[field])
@@ -911,6 +926,9 @@ def validate_ledger(value: Any) -> dict[str, Any]:
                            "ledgerSha256"}, "historical page ledger")
     if value["contract"] != LEDGER_CONTRACT or value["version"] != VERSION:
         raise _fail("historical page ledger contract/version is unsupported")
+    body = dict(value); body.pop("ledgerSha256")
+    if _sha(value["ledgerSha256"], "ledgerSha256") != stable_hash(body):
+        raise _fail("ledgerSha256 drifted")
     source = _exact(value["source"], {"branch", "head", "clean", "statusSha256", "remoteName",
                                      "remoteIdentitySha256", "remoteMain", "baseUrl", "hugoConfig",
                                      "contentRoot", "hugoRuntime", "gitObjectFormat", "contentTreeOid", "trackedPages"},
@@ -959,14 +977,17 @@ def validate_ledger(value: Any) -> dict[str, Any]:
     for field in ("pageCount", "publishedPageCount"):
         if not isinstance(hugo_runtime[field], int) or isinstance(hugo_runtime[field], bool) or hugo_runtime[field] < 0:
             raise _fail(f"source.hugoRuntime.{field} is invalid")
-    _exact(value["policy"], set(SCAN_POLICY), "scan policy")
-    if value["policy"] != SCAN_POLICY:
-        raise _fail("scan policy differs from supported v2")
+    if value["policy"] == LEGACY_SCAN_POLICY:
+        evidence_fields = LEGACY_PUBLICATION_EVIDENCE_FIELDS
+    elif value["policy"] == SCAN_POLICY:
+        evidence_fields = PUBLICATION_EVIDENCE_FIELDS
+    else:
+        raise _fail("scan policy differs from supported v3/v4")
     if not isinstance(value["pages"], list) or not value["pages"]:
         raise _fail("ledger pages must be non-empty")
     paths = []
     for index, page in enumerate(value["pages"]):
-        _validate_page(page, index)
+        _validate_page(page, index, evidence_fields)
         for field in (page["primaryUrl"], *page["aliases"],
                       *(link["targetUrl"] for link in page["outboundPostLinks"])):
             if _canonical_blog_url(field, source["baseUrl"]) != field:
@@ -1042,13 +1063,10 @@ def validate_ledger(value: Any) -> dict[str, Any]:
         "ambiguousOutboundPostLinks": sum(item["status"] == "ambiguous" for item in expected_outbound)}
     if counts != expected_counts:
         raise _fail("ledger counts drifted")
-    body = dict(value); body.pop("ledgerSha256")
-    if _sha(value["ledgerSha256"], "ledgerSha256") != stable_hash(body):
-        raise _fail("ledgerSha256 drifted")
     return _json_value(value)
 
 
-def _validate_page(page: Any, index: int) -> None:
+def _validate_page(page: Any, index: int, publication_fields: set[str]) -> None:
     page = _exact(page, {"pageId", "path", "gitBlobOid", "contentBytes", "contentSha256",
                          "frontmatterBytes", "frontmatterSha256", "bodyBytes", "bodySha256",
                          "primaryUrl", "aliases", "kind", "scope",
@@ -1176,7 +1194,7 @@ def _validate_page(page: Any, index: int) -> None:
     for evidence in page["publicationEvidenceRefs"]:
         _exact(evidence, {"field", "valueType", "value", "valueSha256"}, "publication evidence reference")
         field = _safe_text(evidence["field"], "publication evidence field")
-        if field not in PUBLICATION_EVIDENCE_FIELDS:
+        if field not in publication_fields:
             raise _fail("publication evidence field is unsupported")
         if evidence["valueType"] not in allowed_types:
             raise _fail("publication evidence valueType is unsupported")
@@ -1209,6 +1227,8 @@ def _validate_page(page: Any, index: int) -> None:
         evidence_fields.append(field)
     if evidence_fields != sorted(set(evidence_fields)):
         raise _fail("publication evidence fields must be unique and sorted")
+    if TAG_FIELDS.intersection(evidence_fields) and LEGACY_TAG_FIELDS.intersection(evidence_fields):
+        raise _fail("页面不能同时包含 paper_digest_tags_* 和旧字段 paper_digest_taxonomy_*。")
     if not isinstance(page["legacyTaxonomyCandidates"], list):
         raise _fail("legacy taxonomy candidates must be an array")
     for candidate in page["legacyTaxonomyCandidates"]:

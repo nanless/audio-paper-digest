@@ -229,7 +229,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertNotIn('paper_digest_arxiv_id', result['markdown'])
         self.assertNotIn('arxiv.org', result['markdown'].lower())
         self.assertIn('表格、公式与 Figure 均不可用', result['markdown'])
-        self.assertIn('paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"', result['markdown'])
+        self.assertIn('paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"', result['markdown'])
         self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v3"', result['markdown'])
         self.assertIn('paper_digest_api_reader_source_binding_contract: "api-reader-source-bindings-v4"', result['markdown'])
         self.assertIn('paper_digest_api_reader_decision_projection: "api-reader-decision-projection-v2"', result['markdown'])

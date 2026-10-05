@@ -174,7 +174,7 @@ _PAGE_ACTIVE_TAGS_BY_ID = {
 }
 # 只读 registry 快照：博客端（Hugo 模板 + 浏览器搜索）需要 id/facet/zh/en/
 # aliases/ancestorIds，而页面 frontmatter 只带 {id, facet, label}。快照字节
-# 只由 registry 决定，因此与 ``paper_digest_taxonomy_registry_sha256`` 同源。
+# 只由 registry 决定，因此与 ``paper_digest_tags_registry_sha256`` 同源。
 TAG_CATALOG_SNAPSHOT_CONTRACT = 'paper-taxonomy-registry-snapshot-v1'
 # Hugo 只把 ``data/`` 当模板输入，不会发布到 ``public/``；浏览器端搜索因此
 # 还需要一份字节完全相同的静态副本。
@@ -3386,11 +3386,11 @@ def _researcher_workbench_frontmatter(bundle):
     tag_frontmatter = ''
     if tag_metadata:
         tag_frontmatter = (
-            f'paper_digest_taxonomy_contract: "{tag_metadata["contract"]}"\n'
-            f'paper_digest_taxonomy_selection_contract: "{tag_metadata["selectionContract"]}"\n'
-            f'paper_digest_taxonomy_registry_version: "{tag_metadata["registryVersion"]}"\n'
-            f'paper_digest_taxonomy_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
-            f'paper_digest_taxonomy_concepts: '
+            f'paper_digest_tags_contract: "{tag_metadata["contract"]}"\n'
+            f'paper_digest_tags_selection_contract: "{tag_metadata["selectionContract"]}"\n'
+            f'paper_digest_tags_registry_version: "{tag_metadata["registryVersion"]}"\n'
+            f'paper_digest_tags_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
+            f'paper_digest_tags_concepts: '
             f'{json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}\n'
             f'paper_digest_primary_method: {json.dumps(tag_metadata["primaryMethod"], ensure_ascii=False)}\n'
         )
@@ -3415,6 +3415,12 @@ def _researcher_workbench_frontmatter(bundle):
 
 
 def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
+    tag_field_names = ('contract', 'selection_contract', 'registry_version',
+                       'registry_sha256', 'concepts', 'scope')
+    has_current_tags = any('paper_digest_tags_' + field in frontmatter for field in tag_field_names)
+    has_legacy_tags = any('paper_digest_taxonomy_' + field in frontmatter for field in tag_field_names)
+    if has_current_tags and has_legacy_tags:
+        raise PublishDataValidationError('页面不能同时包含 paper_digest_tags_* 和旧字段 paper_digest_taxonomy_*。')
     if frontmatter.get('paper_digest_workbench_contract') is None:
         return True
     if frontmatter.get('paper_digest_workbench_contract') != RESEARCHER_WORKBENCH_CONTRACT:
@@ -3454,13 +3460,17 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
     tag_metadata = bundle.get('tagMetadata')
     if tag_metadata:
         expected.update({
-            'paper_digest_taxonomy_contract': tag_metadata['contract'],
-            'paper_digest_taxonomy_selection_contract': tag_metadata['selectionContract'],
-            'paper_digest_taxonomy_registry_version': tag_metadata['registryVersion'],
-            'paper_digest_taxonomy_registry_sha256': tag_metadata['registrySha256'],
-            'paper_digest_taxonomy_concepts': tag_metadata['concepts'],
+            'paper_digest_tags_contract': tag_metadata['contract'],
+            'paper_digest_tags_selection_contract': tag_metadata['selectionContract'],
+            'paper_digest_tags_registry_version': tag_metadata['registryVersion'],
+            'paper_digest_tags_registry_sha256': tag_metadata['registrySha256'],
+            'paper_digest_tags_concepts': tag_metadata['concepts'],
             'paper_digest_primary_method': tag_metadata['primaryMethod'],
         })
+    if has_legacy_tags:
+        expected = {field.replace('paper_digest_tags_', 'paper_digest_taxonomy_', 1)
+                    if field.startswith('paper_digest_tags_') else field: value
+                    for field, value in expected.items()}
     for field, value in expected.items():
         if frontmatter.get(field) != value:
             raise PublishDataValidationError(
@@ -4208,11 +4218,11 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category='论�
     tag_frontmatter = ''
     if tag_metadata:
         tag_frontmatter = (
-            f'paper_digest_taxonomy_contract: "{tag_metadata["contract"]}"\n'
-            f'paper_digest_taxonomy_selection_contract: "{tag_metadata["selectionContract"]}"\n'
-            f'paper_digest_taxonomy_registry_version: "{tag_metadata["registryVersion"]}"\n'
-            f'paper_digest_taxonomy_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
-            'paper_digest_taxonomy_scope: "aggregate-primary-task-counts"\n'
+            f'paper_digest_tags_contract: "{tag_metadata["contract"]}"\n'
+            f'paper_digest_tags_selection_contract: "{tag_metadata["selectionContract"]}"\n'
+            f'paper_digest_tags_registry_version: "{tag_metadata["registryVersion"]}"\n'
+            f'paper_digest_tags_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
+            'paper_digest_tags_scope: "aggregate-primary-task-counts"\n'
         )
 
     conference_title = f'ICML 2026 论文速递' if category == 'icml-2026' else f'语音/音乐/音频论文速递 {date_str}'

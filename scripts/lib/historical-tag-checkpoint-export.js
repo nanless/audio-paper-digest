@@ -7,6 +7,7 @@ const io = require('./historical-conference-page-projections.js'),
 const api = require('./historical-source-tag-assignment.js'),
     writer = require('./historical-direct-tag-supplement.js');
 const snippets = require('./source-evidence-snippets.js');
+const { hasPageTagMetadata } = require('./page-tag-metadata.js');
 const digest = v => crypto.createHash('sha256').update(v).digest('hex');
 const fail = m => {
     throw new Error("来源标签检查点导出被拒绝：" + m);
@@ -286,9 +287,9 @@ async function exportCheckpoint(options) {
             record = acceptedClassificationsByPaperId.get(id);
         for (const page of item.pages) {
             const loaded = io.readStableFile(path.join(options.blogRoot, page.pagePath), 'original classified frozen page');
-            if (/^paper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1/m.test(
-                    loaded.bytes.toString('utf8').split('---', 3)[1] || ''
-                )) {
+            if (loaded.fileSha256 !== page.pageContentSha256)
+                fail("读取页面的 SHA 与计划不一致。");
+            if (hasPageTagMetadata(loaded.bytes)) {
                 if (Object.hasOwn(records, page.pagePath))
                     fail("页面已声明正式标签兼容格式，却仍保留在检查点的分类补充记录中。");
                 continue;

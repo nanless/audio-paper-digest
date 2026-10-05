@@ -17,6 +17,7 @@ const aggregateApi = require('./historical-direct-aggregate.js');
 const directPageStagingApi = require('./historical-direct-page-staging.js');
 const freshArxivSourceApi = require('./fresh-arxiv-rewrite-source.js');
 const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
+const { hasPageTagMetadata } = require('./page-tag-metadata.js');
 
 const PLAN_CONTRACT = 'historical-direct-publication-plan-v1';
 const GENERATION_CONTRACT = 'historical-direct-publication-generation-v1';
@@ -498,6 +499,8 @@ function loadGeneration(loadedPlan) {
 
 function reviewProtocolImplementationFiles() {
     return [__filename, require.resolve('./historical-direct-aggregate.js'),
+        require.resolve('./page-tag-metadata.js'),
+        path.resolve(__dirname, '../../package-lock.json'),
         require.resolve('./fresh-arxiv-rewrite-source.js'), require.resolve('./historical-direct-rewrite-runner.js'),
         require.resolve('./historical-direct-page-staging.js'),
         require.resolve('./historical-arxiv-publication-metadata.js'), require.resolve('./arxiv-metadata-source.js'),
@@ -541,7 +544,7 @@ function deterministicReview(record, bytes) {
         const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         if (!text.startsWith('---\n') || !/\npaper_digest_pipeline_owned:\s*true\s*\n/.test(text)
             || !/\npaper_digest_page_type:\s*(?:paper|index)\s*\n/.test(text)
-            || !/\npaper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1["']?\s*\n/.test(text)
+            || !hasPageTagMetadata(bytes)
             || /\ndraft:\s*true\s*\n/.test(text)) fail(`historical Markdown deterministic gate failed: ${record.path}`);
         for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
             const target = match[1].trim();

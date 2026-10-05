@@ -309,6 +309,44 @@ function load(f) {
     return api.loadHistoricalInventoryHandle({ inventoryRoot: f.inventory, ledgerName: f.ledgerName, receiptName: f.receiptName });
 }
 
+test('页面扫描 v3 原凭证原样读取，v4 支持新字段且拒混用和未核原 SHA', t => {
+    const f = fixture(t);
+    const ledgerFile = path.join(f.inventory, f.ledgerName);
+    const receiptFile = path.join(f.inventory, f.receiptName);
+    const originalLedger = fs.readFileSync(ledgerFile), originalReceipt = fs.readFileSync(receiptFile);
+    assert.deepEqual(api.inventoryHandleSnapshot(load(f)).ledger.policy, f.ledger.policy);
+    assert.deepEqual(fs.readFileSync(ledgerFile), originalLedger);
+    assert.deepEqual(fs.readFileSync(receiptFile), originalReceipt);
+    const current = structuredClone(f.ledger);
+    current.policy = { contract: 'historical-page-scan-policy-v4', bodyRetention: 'sha256-only',
+        identityHints: 'frontmatter-filename-explicit-links-v1', outboundLinks: 'strict-balanced-inline-occurrences-v3',
+        linkOffsetUnit: 'utf8-byte-body-relative', tagRoutes: 'unverified-candidates-v2',
+        publicationEvidence: 'schema-checked-hash-default-whitelist-v4',
+        targetRecordBinding: 'target-page-snapshot-sha256-v1' };
+    const paper = current.pages.find(page => page.kind === 'paper');
+    paper.publicationEvidenceRefs.push({ field: 'paper_digest_tags_contract', valueType: 'string', value: null,
+        valueSha256: api.stableHash('paper-taxonomy-flat-tags-compat-v1') });
+    paper.publicationEvidenceRefs.sort((a, b) => a.field.localeCompare(b.field));
+    rehashPage(paper); rehashLedger(current);
+    assert.deepEqual(api.validateHistoricalLedger(current), current);
+    const legacy = structuredClone(current); legacy.policy = structuredClone(f.ledger.policy); rehashLedger(legacy);
+    assert.throws(() => api.validateHistoricalLedger(legacy), /publication evidence field\/type is unsupported/);
+    const mixed = structuredClone(current), mixedPaper = mixed.pages.find(page => page.kind === 'paper');
+    mixedPaper.publicationEvidenceRefs.push({ field: 'paper_digest_taxonomy_concepts', valueType: 'null', value: null,
+        valueSha256: api.stableHash(null) });
+    mixedPaper.publicationEvidenceRefs.sort((a, b) => a.field.localeCompare(b.field));
+    rehashPage(mixedPaper); rehashLedger(mixed);
+    assert.throws(() => api.validateHistoricalLedger(mixed), /新旧标签字段/);
+    const badSha = structuredClone(mixed); badSha.ledgerSha256 = sha('wrong original ledger');
+    assert.throws(() => api.validateHistoricalLedger(badSha), /ledger self-SHA drifted/);
+    const unknown = structuredClone(current); unknown.policy.contract = 'historical-page-scan-policy-unknown'; rehashLedger(unknown);
+    assert.throws(() => api.validateHistoricalLedger(unknown), /scan policy is unsupported/);
+    const badReceipt = JSON.parse(originalReceipt);
+    badReceipt.ledger.fileSha256 = sha('wrong original bytes');
+    fs.writeFileSync(receiptFile, api.prettyBytes(badReceipt));
+    assert.throws(() => load(f), /receipt self-SHA drifted/);
+});
+
 test('opaque inventory loader replays canonical ledger/receipt and rejects forged handles or byte drift', t => {
     const f = fixture(t); const handle = load(f); const snapshot = api.inventoryHandleSnapshot(handle);
     assert.equal(snapshot.ledger.pages.length, 2); assert.equal(snapshot.receipt.ledger.name, f.ledgerName);

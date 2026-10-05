@@ -283,7 +283,8 @@ test('production Node stage invokes the generic Python renderer without an arXiv
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, dependencies);
     assert.match(result.markdown, /paper_digest_paper_id: "conference:icassp:2026:icassp-arnumber:101"/);
     assert.match(result.markdown, /表格、公式与 Figure 均不可用/);
-    assert.match(result.markdown, /paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"/);
+    assert.match(result.markdown, /paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"/);
+    assert.doesNotMatch(result.markdown, /^paper_digest_taxonomy_/m);
     assert.match(result.markdown, /paper_digest_api_reader_contract: "beginner-researcher-v3"/);
     assert.match(result.markdown, /paper_digest_api_reader_source_binding_contract: "api-reader-source-bindings-v4"/);
     assert.match(result.markdown, /paper_digest_api_reader_decision_projection: "api-reader-decision-projection-v2"/);
@@ -312,11 +313,11 @@ test('aggregate replays every selected stage and emits only when the full explic
     // 汇总页必须携带支撑“热门方向只统计主任务”的 concept 数据，
     // 结构与单篇页一致（{facet,id,label}），scope 语义保持不变。
     const conceptsLine = result.manifest.markdown.split('\n')
-        .find(line => line.startsWith('paper_digest_taxonomy_concepts: '));
+        .find(line => line.startsWith('paper_digest_tags_concepts: '));
     assert.equal(conceptsLine,
-        'paper_digest_taxonomy_concepts: [{"facet":"task","id":"task.asr","label":"语音识别"}]');
+        'paper_digest_tags_concepts: [{"facet":"task","id":"task.asr","label":"语音识别"}]');
     assert.match(result.manifest.markdown,
-        /paper_digest_taxonomy_concepts: .*?\npaper_digest_taxonomy_scope: "aggregate-primary-task-counts"/);
+        /paper_digest_tags_concepts: .*?\npaper_digest_tags_scope: "aggregate-primary-task-counts"/);
     assert.match(result.manifest.markdown, /paper_digest_reader_quality: "reader-facing-v3"/);
     assert.match(result.manifest.markdown, /paper_digest_page_type: index/);
     assert.match(result.manifest.markdown, /^date: 2026-09-07$/m);
@@ -464,7 +465,7 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
     assert.ok(section.includes('#### 研究重点'));
     assert.equal(section.includes('#### 应用'), false);
     assert.equal(section.includes('音频分离'), false);
-    assert.ok(markdown.includes(`paper_digest_taxonomy_registry_sha256: "${registry.registrySha256}"`));
+    assert.ok(markdown.includes(`paper_digest_tags_registry_sha256: "${registry.registrySha256}"`));
     // 落盘字节与 manifest 完全一致，且层级统计随 manifest 一起封存。
     const directory = path.join(aggregateRoot, 'icassp-2026', result.manifest.aggregateId);
     assert.equal(fs.readFileSync(path.join(directory, 'aggregate.md'), 'utf8'), markdown);

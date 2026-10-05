@@ -1,10 +1,12 @@
 import json
+import copy
 import os
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -12,6 +14,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+
+import historical_page_scan as page_scan
 
 from historical_page_scan import (  # noqa: E402
     HistoricalPageInventoryError,
@@ -171,6 +175,42 @@ class HistoricalPageScanTest(unittest.TestCase):
         self.assertEqual(ledger["source"]["trackedPages"]["count"], 4)
         self.assertEqual(validate_ledger(json.loads(serialized)), ledger)
 
+    def test_current_tag_fields_scan_with_v4_and_legacy_v3_stays_read_only(self):
+        with mock.patch.object(page_scan, 'SCAN_POLICY', page_scan.LEGACY_SCAN_POLICY):
+            legacy = scan_historical_pages(self.repo, require_clean_main=True)
+        original_legacy = copy.deepcopy(legacy)
+        self.assertEqual(validate_ledger(legacy), original_legacy)
+        self.assertEqual(legacy, original_legacy)
+        page_path = self.repo / 'content' / 'posts' / '2026-01-01-paper-2601-00001.md'
+        raw = page_path.read_text(encoding='utf-8')
+        page_path.write_text(raw.replace('paper_digest_taxonomy_', 'paper_digest_tags_'), encoding='utf-8')
+        run_git(self.repo, 'add', '.')
+        run_git(self.repo, 'commit', '-m', 'current tag frontmatter')
+        current = scan_historical_pages(self.repo, require_clean_main=True)
+        self.assertEqual(current['policy'], page_scan.SCAN_POLICY)
+        self.assertIn('tagRoutes', current['policy'])
+        self.assertNotIn('taxonomyRoutes', current['policy'])
+        paper = next(page for page in current['pages'] if page['path'].endswith('paper-2601-00001.md'))
+        fields = {item['field'] for item in paper['publicationEvidenceRefs']}
+        self.assertIn('paper_digest_tags_contract', fields)
+        self.assertNotIn('paper_digest_taxonomy_contract', fields)
+        self.assertEqual(validate_ledger(current), current)
+        # An old policy cannot acquire the new evidence whitelist by changing only its identity.
+        forged = copy.deepcopy(current)
+        forged['policy'] = copy.deepcopy(page_scan.LEGACY_SCAN_POLICY)
+        forged['ledgerSha256'] = page_scan.stable_hash({key: value for key, value in forged.items()
+                                                       if key != 'ledgerSha256'})
+        with self.assertRaisesRegex(HistoricalPageInventoryError, 'publication evidence field is unsupported'):
+            validate_ledger(forged)
+        for value in (None, 'paper-taxonomy-flat-tags-compat-v1'):
+            with self.assertRaisesRegex(HistoricalPageInventoryError, '不能同时包含'):
+                page_scan._publication_evidence({'paper_digest_tags_contract': value,
+                                                 'paper_digest_taxonomy_scope': None})
+        bad_hash = copy.deepcopy(legacy)
+        bad_hash['policy'] = copy.deepcopy(page_scan.SCAN_POLICY)
+        with self.assertRaisesRegex(HistoricalPageInventoryError, 'ledgerSha256 drifted'):
+            validate_ledger(bad_hash)
+
     def test_pair_is_canonical_o_excl_0600_and_replayable(self):
         ledger = scan_historical_pages(self.repo, require_clean_main=True)
         output = self.root / "inventory"
@@ -241,8 +281,12 @@ class HistoricalPageScanTest(unittest.TestCase):
         raw = json.loads(Path(paths["ledger"]).read_text(encoding="utf-8"))
         raw["pages"][0]["bodySha256"] = "0" * 64
         Path(paths["ledger"]).write_text(json.dumps(raw, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-        with self.assertRaisesRegex(HistoricalPageInventoryError, "snapshotSha256|recordSha256"):
+        with self.assertRaisesRegex(HistoricalPageInventoryError, "ledgerSha256 drifted"):
             load_inventory_pair(Path(paths["ledger"]), Path(paths["receipt"]))
+        raw['ledgerSha256'] = page_scan.stable_hash({key: value for key, value in raw.items()
+                                                   if key != 'ledgerSha256'})
+        with self.assertRaisesRegex(HistoricalPageInventoryError, "snapshotSha256|recordSha256"):
+            validate_ledger(raw)
         Path(paths["ledger"]).write_bytes(b'{"contract":"one","contract":"two"}\n')
         with self.assertRaisesRegex(HistoricalPageInventoryError, "duplicate keys"):
             load_inventory_pair(Path(paths["ledger"]), Path(paths["receipt"]))

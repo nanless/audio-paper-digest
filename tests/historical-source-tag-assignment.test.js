@@ -103,7 +103,7 @@ test('conference descriptor binds extracted full text and PDF to the verified pu
  assert.throws(()=>api.buildConferenceSourceRecord(item,{...identity,sourceUrl:'https://arxiv.org/abs/2601.00001'},extracted),/会议官方来源地址不一致/);
 });
 
-async function sourceClassificationFixture(t, respond) {
+async function sourceClassificationFixture(t, respond, metadataFamily = null) {
     const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
     const crypto = require('node:crypto'), Module = require('node:module');
     const fresh = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
@@ -122,7 +122,10 @@ async function sourceClassificationFixture(t, respond) {
         fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\nOffline source fixture\n%%EOF\n'),
             url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: '2026-09-07T00:00:02.000Z' })
     });
-    const pagePath = 'content/posts/one.md', page = '---\ntitle: Historical paper\n---\nOriginal historical body.\n';
+    const tagFields = metadataFamily === 'mixed'
+        ? 'paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"\n"paper_digest_taxonomy_scope": null\n'
+        : metadataFamily ? `paper_digest_${metadataFamily}_contract: "paper-taxonomy-flat-tags-compat-v1"\n` : '';
+    const pagePath = 'content/posts/one.md', page = `---\ntitle: Historical paper\n${tagFields}---\nOriginal historical body.\n`;
     fs.mkdirSync(path.join(blogRoot, 'content/posts'), { recursive: true });
     fs.writeFileSync(path.join(blogRoot, pagePath), page, { mode: 0o600 });
     const item = { paperId, runId: 'offline-source-tags', route: { kind: 'arxiv-fresh-fetch', arxivId: id },
@@ -162,7 +165,7 @@ async function sourceClassificationFixture(t, respond) {
         concepts: raw.concepts.map(c => ({ id: c.id, evidenceId: 's00001', rationale: c.rationale })) });
     const options = { outputDirectory: path.join(root, 'output'), blogRoot, runId: 'offline-source-tags',
         registrySnapshot: path.resolve(__dirname, '../config/tag-catalog.json'), concurrency: 1 };
-    return { fs, path, root, calls, sha, text, page, pagePath, normalResponse,
+    return { fs, path, root, calls, sha, text, page, pagePath, item, normalResponse,
         run: (outputDirectory, extra = {}) => loaded.exports.classifyRun({ ...options,
             ...(outputDirectory ? { outputDirectory } : {}), ...extra }), options, api: loaded.exports };
 }
@@ -204,6 +207,45 @@ test('actual source classification prompts reach selection, independent review a
         assert.match(directPrompt, /"quote":"原文逐字引文"/);
         assert.doesNotMatch(directPrompt, /"evidenceId"/);
     }
+});
+
+test('来源标签选择跳过已声明新旧标签格式的页面，先核原页面 SHA', async t => {
+    for (const family of ['tags', 'taxonomy']) {
+        const f = await sourceClassificationFixture(t, () => { throw new Error('已标记页面不应请求模型'); }, family);
+        const result = await f.run();
+        assert.deepEqual(result.report.failures, []);
+        assert.deepEqual(result.report.decisions, []);
+        assert.equal(f.calls.length, 0);
+        assert.equal(f.fs.readFileSync(f.path.join(f.options.blogRoot, f.pagePath), 'utf8'), f.page);
+        f.fs.writeFileSync(f.path.join(f.options.blogRoot, f.pagePath), `${f.page}Changed body.\n`);
+        await assert.rejects(f.run(), /历史页面内容与选定时的 SHA 不一致/);
+        assert.equal(f.calls.length, 0);
+    }
+    const f = await sourceClassificationFixture(t, () => { throw new Error('后续页面 SHA 不符时不应请求模型'); });
+    const secondPagePath = 'content/posts/two.md';
+    f.item.pages.push({ pagePath: secondPagePath, pageKey: 'two', pageContentSha256: f.sha(f.page) });
+    f.fs.writeFileSync(f.path.join(f.options.blogRoot, secondPagePath), f.page.replace('title: Historical paper\n',
+        'title: Historical paper\npaper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"\n'));
+    await assert.rejects(f.run(), /历史页面内容与选定时的 SHA 不一致/);
+    assert.equal(f.calls.length, 0);
+});
+
+test('来源标签选择拒绝混用字段，审核后新增标签字段不能绕过原页面 SHA', async t => {
+    const mixed = await sourceClassificationFixture(t, () => { throw new Error('混用页面不应请求模型'); }, 'mixed');
+    await assert.rejects(mixed.run(), /新旧标签字段/);
+    let f;
+    f = await sourceClassificationFixture(t, call => {
+        if (call.maxTokens === 3000) {
+            f.fs.writeFileSync(f.path.join(f.options.blogRoot, f.pagePath),
+                f.page.replace('title: Historical paper\n', 'title: Historical paper\npaper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"\n'));
+            return '{"accepted":true,"issues":[]}';
+        }
+        return f.normalResponse;
+    });
+    const result = await f.run();
+    assert.equal(result.report.failures.length, 1);
+    assert.match(result.report.failures[0].error, /历史页面内容与选定时的 SHA 不一致/);
+    assert.deepEqual(Object.keys(result.supplement.records), []);
 });
 
 test('actual source classification rejects saved attempt and review prompt SHA mismatches', async t => {

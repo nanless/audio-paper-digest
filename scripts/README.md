@@ -63,6 +63,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/filter-input-contract.js` | Node 库 | 计算筛选决定所对应的最小输入 SHA。 |
 | `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另提供别名解析和上下级查询。Node/Python 解析器及发布检查均使用词表原始字节计算的 SHA。 |
 | `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，也可按明确旧版生成核验文本。默认选择协议为 `paper-tag-selection-v2`，旧阶段按保存的版本读取，详见本页的分类词表维护说明。 |
+| `lib/page-tag-metadata.js` | Node 库 | 解析页面的 YAML 页首字段，识别新旧标签字段，拒绝混用与重复键；只检查实际顶层字段，不把描述或正文中的文字当作标签声明。 |
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；拒绝双格式混用，不改写或补签旧记录。 |
 | `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另只读盘点旧分类文件，不调用模型。 |
@@ -364,7 +365,14 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 会议和历史页面的新临时渲染输入使用 `tagMetadata` 传递标签记录。读取器仍能读取旧包的 `taxonomy`，
 但同一个包同时包含两个字段时会拒绝处理，即使两者值相同或为空。读取旧包不会改写保存记录或重算原绑定。
-发布器的内部页面组合结果也使用 `tagMetadata`；页面前端字段和外部 `assessment.taxonomy` 仍按现有网站格式输出，等待与模板一起迁移。
+发布器的内部页面组合结果也使用 `tagMetadata`。新页面使用 `paper_digest_tags_*` 字段，网站仍能读取已有页面的旧字段；
+外部 `assessment.taxonomy`、扁平标签协议与搜索和词表资产保持现有格式，后续与各自读取方一起迁移。
+
+页面的标签字段有六项：`contract`、`selection_contract`、`registry_version`、`registry_sha256`、`concepts` 和 `scope`。
+同一页只能使用 `paper_digest_tags_*` 或旧 `paper_digest_taxonomy_*` 中的一组，混用会被拒绝，即使值相同或为空。
+历史补充和导出的字段判断不会改写旧页面或保存证明，原页面 SHA 与来源绑定仍须通过；网站模板也会阻止混用页面构建。
+新的历史扫描政策为 `historical-page-scan-policy-v4`，使用 `tagRoutes` 和 `schema-checked-hash-default-whitelist-v4`。
+旧 v3 清单仍按完整原政策读取，不能用它声明新字段已受核验，也不会因此重签原清单。
 
 分析的当前指纹分别用 `tagCatalogVersion`、`tagCatalogSha256`、`tagPromptContract`、`tagPromptSha256` 和 `tagSelectionContract`
 记录词表、提示与选择规则。字段迁移会改变主分析、修订、结构修复和标签选择的输入指纹，旧检查点按原规则失效。

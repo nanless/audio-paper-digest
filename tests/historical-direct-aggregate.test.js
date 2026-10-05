@@ -360,10 +360,11 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.equal(Object.hasOwn(aggregate.source.sourceGeneration, 'historicalVersions'), false);
     assert.ok(aggregate.members.every(member => !Object.hasOwn(member, 'sourceVersion')));
     assert.doesNotMatch(aggregate.markdown, /当前稿不可用|分析官方历史版本/);
-    assert.match(aggregate.markdown, /FRESH_READER|source-only/);
-    assert.match(aggregate.markdown, /paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"/);
-    assert.match(aggregate.markdown, /paper_digest_taxonomy_registry_sha256: "[a-f0-9]{64}"/);
-    assert.match(aggregate.markdown, /站点标签页暂时兼容展示历史标签与新标签/);
+    assert.match(aggregate.markdown, /paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"/);
+    assert.doesNotMatch(aggregate.markdown, /^paper_digest_taxonomy_/m);
+    assert.match(aggregate.markdown, /paper_digest_tags_registry_sha256: "[a-f0-9]{64}"/);
+    assert.match(aggregate.markdown, /站点标签页同时显示历史标签与新标签/);
+    assert.match(aggregate.markdown, /每篇导读均依据原文重新撰写/);
     assert.match(aggregate.markdown, /paper_digest_reader_quality: "reader-facing-v3"/);
     assert.match(aggregate.markdown, /## ⚡ 今日概览[\s\S]*## 📋 论文列表/);
     assert.match(aggregate.markdown, /英文题目：\*\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)\*/);

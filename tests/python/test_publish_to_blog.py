@@ -3077,16 +3077,36 @@ title: "Score rows"
         self.assertEqual(frontmatter['tags'], ['语音识别', 'Transformer', '低资源'])
         self.assertEqual(frontmatter['paper_digest_primary_task'], '语音识别')
         self.assertEqual(frontmatter['paper_digest_primary_method'], 'Transformer')
+        original_frontmatter = copy.deepcopy(frontmatter)
+        self.assertTrue(publish_to_blog._validate_researcher_workbench_frontmatter(
+            frontmatter, paper, '2026-08-31'))
+        legacy_frontmatter = {key.replace('paper_digest_tags_', 'paper_digest_taxonomy_', 1)
+                              if key.startswith('paper_digest_tags_') else key: value
+                              for key, value in frontmatter.items()}
+        original_legacy = copy.deepcopy(legacy_frontmatter)
+        self.assertTrue(publish_to_blog._validate_researcher_workbench_frontmatter(
+            legacy_frontmatter, paper, '2026-08-31'))
+        self.assertEqual(frontmatter, original_frontmatter)
+        self.assertEqual(legacy_frontmatter, original_legacy)
+        for value in (None, frontmatter['paper_digest_tags_contract']):
+            mixed = copy.deepcopy(frontmatter)
+            mixed['paper_digest_taxonomy_contract'] = value
+            with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+                publish_to_blog._validate_researcher_workbench_frontmatter(mixed, paper, '2026-08-31')
+        with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
+            publish_to_blog._validate_researcher_workbench_frontmatter(
+                {'paper_digest_tags_scope': None, 'paper_digest_taxonomy_contract': None},
+                None, '2026-08-31')
         self.assertEqual(
-            frontmatter['paper_digest_taxonomy_contract'],
+            frontmatter['paper_digest_tags_contract'],
             publish_to_blog.FLAT_TAG_COMPAT_CONTRACT,
         )
         self.assertEqual(
-            frontmatter['paper_digest_taxonomy_registry_sha256'],
+            frontmatter['paper_digest_tags_registry_sha256'],
             publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
         self.assertEqual(
-            [item['id'] for item in frontmatter['paper_digest_taxonomy_concepts']],
+            [item['id'] for item in frontmatter['paper_digest_tags_concepts']],
             ['task.asr', 'method.transformer', 'setting.low-resource'],
         )
         bundle = publish_to_blog.build_researcher_workbench_bundle(

@@ -50,13 +50,20 @@ const PUBLICATION_EVIDENCE_FIELDS = new Set([
     'paper_digest_tutorial_payload_contract', 'paper_digest_tutorial_payload_sha256',
     'paper_digest_tutorial_quality_sha256', 'paper_digest_workbench_contract'
 ]);
+const { PAGE_TAG_FIELDS, LEGACY_PAGE_TAG_FIELDS } = require('./page-tag-metadata.js');
+const CURRENT_PUBLICATION_EVIDENCE_FIELDS = new Set([...PUBLICATION_EVIDENCE_FIELDS, ...PAGE_TAG_FIELDS]);
 const PRESERVED_PUBLICATION_STRING_FIELDS = new Set([
     'paper_digest_arxiv_id', 'paper_digest_arxiv_versioned_id', 'paper_digest_page_type'
 ]);
-const SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-policy-v3', bodyRetention: 'sha256-only',
+const LEGACY_SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-policy-v3', bodyRetention: 'sha256-only',
     identityHints: 'frontmatter-filename-explicit-links-v1', outboundLinks: 'strict-balanced-inline-occurrences-v3',
     linkOffsetUnit: 'utf8-byte-body-relative',
     taxonomyRoutes: 'unverified-candidates-v2', publicationEvidence: 'schema-checked-hash-default-whitelist-v3',
+    targetRecordBinding: 'target-page-snapshot-sha256-v1' });
+const SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-policy-v4', bodyRetention: 'sha256-only',
+    identityHints: 'frontmatter-filename-explicit-links-v1', outboundLinks: 'strict-balanced-inline-occurrences-v3',
+    linkOffsetUnit: 'utf8-byte-body-relative',
+    tagRoutes: 'unverified-candidates-v2', publicationEvidence: 'schema-checked-hash-default-whitelist-v4',
     targetRecordBinding: 'target-page-snapshot-sha256-v1' });
 const FINAL_REVIEW_STATUSES = new Set(['needs-review', 'blocked', 'conflict']);
 const ALL_STATUSES = new Set(['pending', ...FINAL_REVIEW_STATUSES, 'verified']);
@@ -258,7 +265,7 @@ function readRegular(filename, maximum, label) {
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-function validateHistoricalPage(page, index) {
+function validateHistoricalPage(page, index, legacyScan) {
     exact(page, ['pageId', 'path', 'gitBlobOid', 'contentBytes', 'contentSha256', 'frontmatterBytes',
         'frontmatterSha256', 'bodyBytes', 'bodySha256', 'primaryUrl', 'aliases', 'kind', 'scope', 'publishedDate', 'cohortDate',
         'legacyTaskKey', 'draft', 'published', 'legacy', 'identityHints', 'outboundPostLinks',
@@ -332,10 +339,16 @@ function validateHistoricalPage(page, index) {
         }
     });
     if (!Array.isArray(page.publicationEvidenceRefs)) fail('historical publicationEvidenceRefs must be an array');
+    const fieldNames = page.publicationEvidenceRefs.map(evidence => evidence?.field);
+    if (PAGE_TAG_FIELDS.some(field => fieldNames.includes(field))
+        && LEGACY_PAGE_TAG_FIELDS.some(field => fieldNames.includes(field))) {
+        fail('页面不能同时包含新旧标签字段。');
+    }
+    const allowedEvidenceFields = legacyScan ? PUBLICATION_EVIDENCE_FIELDS : CURRENT_PUBLICATION_EVIDENCE_FIELDS;
     const evidenceFields = [];
     for (const evidence of page.publicationEvidenceRefs) {
         exact(evidence, ['field', 'valueType', 'value', 'valueSha256'], 'historical publication evidence');
-        if (!PUBLICATION_EVIDENCE_FIELDS.has(evidence.field)
+        if (!allowedEvidenceFields.has(evidence.field)
             || !['null', 'boolean', 'integer', 'number', 'string', 'array', 'object'].includes(evidence.valueType)) {
             fail('historical publication evidence field/type is unsupported');
         }
@@ -391,6 +404,8 @@ function validateHistoricalLedger(value) {
     exact(value, ['contract', 'version', 'source', 'policy', 'pages', 'urlCollisions', 'outboundPostLinks',
         'outboundPostLinksSha256', 'counts', 'pageSetSha256', 'ledgerSha256'], 'historical page ledger');
     if (value.contract !== LEDGER_CONTRACT || value.version !== VERSION) fail('historical ledger contract/version is unsupported');
+    const ledgerBody = clone(value); delete ledgerBody.ledgerSha256;
+    if (assertSha(value.ledgerSha256, 'historical ledgerSha256') !== stableHash(ledgerBody)) fail('historical ledger self-SHA drifted');
     exact(value.source, ['branch', 'head', 'clean', 'statusSha256', 'remoteName', 'remoteIdentitySha256',
         'remoteMain', 'baseUrl', 'hugoConfig', 'contentRoot', 'gitObjectFormat', 'contentTreeOid',
         'trackedPages', 'hugoRuntime'], 'historical ledger source');
@@ -430,13 +445,15 @@ function validateHistoricalLedger(value) {
             fail(`historical Hugo ${field} is invalid`);
         }
     }
-    exact(value.policy, Object.keys(SCAN_POLICY), 'historical scan policy');
-    if (stableHash(value.policy) !== stableHash(SCAN_POLICY)) fail('historical scan policy is unsupported');
+    const legacyScan = stableHash(value.policy) === stableHash(LEGACY_SCAN_POLICY);
+    const policy = legacyScan ? LEGACY_SCAN_POLICY : SCAN_POLICY;
+    exact(value.policy, Object.keys(policy), 'historical scan policy');
+    if (stableHash(value.policy) !== stableHash(policy)) fail('historical scan policy is unsupported');
     if (!Array.isArray(value.pages) || !value.pages.length
         || !Array.isArray(value.urlCollisions) || !Array.isArray(value.outboundPostLinks) || !plain(value.counts)) {
         fail('historical ledger collections are malformed');
     }
-    const pages = value.pages.map(validateHistoricalPage);
+    const pages = value.pages.map((page, index) => validateHistoricalPage(page, index, legacyScan));
     const paths = pages.map(page => page.path);
     if (paths.some((item, index) => index && paths[index - 1] >= item)) fail('historical pages must be unique and path-sorted');
     if (assertSha(value.pageSetSha256, 'historical pageSetSha256') !== stableHash(pages)) fail('historical page set SHA drifted');
@@ -497,14 +514,14 @@ function validateHistoricalLedger(value) {
         unresolvedOutboundPostLinks: expectedOutbound.filter(link => link.status === 'unresolved').length,
         ambiguousOutboundPostLinks: expectedOutbound.filter(link => link.status === 'ambiguous').length };
     if (stableHash(value.counts) !== stableHash(expectedCounts)) fail('historical ledger counts drifted');
-    const ledgerBody = clone(value); delete ledgerBody.ledgerSha256;
-    if (assertSha(value.ledgerSha256, 'historical ledgerSha256') !== stableHash(ledgerBody)) fail('historical ledger self-SHA drifted');
     return { ...clone(value), pages };
 }
 
 function validateHistoricalReceipt(value, ledger, ledgerBytes, ledgerName) {
     exact(value, ['contract', 'version', 'ledger', 'repositorySnapshotSha256', 'receiptSha256'], 'historical receipt');
     if (value.contract !== LEDGER_RECEIPT_CONTRACT || value.version !== VERSION) fail('historical receipt contract/version is unsupported');
+    const body = clone(value); delete body.receiptSha256;
+    if (assertSha(value.receiptSha256, 'historical receiptSha256') !== stableHash(body)) fail('historical receipt self-SHA drifted');
     exact(value.ledger, ['name', 'fileSha256', 'ledgerSha256', 'pageSetSha256', 'pageCount'], 'historical receipt ledger');
     if (value.ledger.name !== ledgerName || value.ledger.fileSha256 !== sha256(ledgerBytes)
         || value.ledger.ledgerSha256 !== ledger.ledgerSha256 || value.ledger.pageSetSha256 !== ledger.pageSetSha256
@@ -513,8 +530,6 @@ function validateHistoricalReceipt(value, ledger, ledgerBytes, ledgerName) {
     if (assertSha(value.repositorySnapshotSha256, 'receipt repositorySnapshotSha256') !== stableHash(ledger.source)) {
         fail('historical receipt repository snapshot drifted');
     }
-    const body = clone(value); delete body.receiptSha256;
-    if (assertSha(value.receiptSha256, 'historical receiptSha256') !== stableHash(body)) fail('historical receipt self-SHA drifted');
     return clone(value);
 }
 
@@ -523,9 +538,12 @@ function loadHistoricalInventoryHandle({ inventoryRoot, ledgerName, receiptName 
     const receiptFile = safeDirectJson(inventoryRoot, receiptName);
     if (ledgerFile === receiptFile) fail('historical ledger and receipt files must differ');
     const ledgerLoaded = readRegular(ledgerFile, MAX_LEDGER_BYTES, 'historical page ledger');
+    const receiptLoaded = readRegular(receiptFile, MAX_RECEIPT_BYTES, 'historical page receipt');
+    const receiptBody = clone(receiptLoaded.value); delete receiptBody.receiptSha256;
+    if (assertSha(receiptLoaded.value.receiptSha256, 'historical receiptSha256') !== stableHash(receiptBody)) fail('historical receipt self-SHA drifted');
+    if (receiptLoaded.value.ledger?.fileSha256 !== sha256(ledgerLoaded.bytes)) fail('historical receipt does not bind the exact ledger');
     const ledger = validateHistoricalLedger(ledgerLoaded.value);
     if (!ledgerLoaded.bytes.equals(prettyBytes(ledger))) fail('historical page ledger bytes are not canonical');
-    const receiptLoaded = readRegular(receiptFile, MAX_RECEIPT_BYTES, 'historical page receipt');
     const receipt = validateHistoricalReceipt(receiptLoaded.value, ledger, ledgerLoaded.bytes, ledgerName);
     if (!receiptLoaded.bytes.equals(prettyBytes(receipt))) fail('historical page receipt bytes are not canonical');
     const snapshot = { ledger, receipt, ledgerFile: fs.realpathSync(ledgerFile), receiptFile: fs.realpathSync(receiptFile),

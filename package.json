@@ -176,7 +176,8 @@
   "homepage": "https://github.com/nanless/audio-paper-digest#readme",
   "dependencies": {
     "@napi-rs/canvas": "^0.1.80",
-        "cheerio": "^1.2.0"
+    "cheerio": "^1.2.0",
+    "yaml": "2.9.1"
   },
   "overrides": {
     "undici": "7.29.0"

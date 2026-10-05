@@ -11,6 +11,7 @@ const tagRulesApi = require('./tag-rules.js');
 const supplementApi = require('./historical-direct-tag-supplement.js');
 const scheduler = require('./source-classification-scheduler.js');
 const failureApi = require('./source-classification-failures.js');
+const { hasPageTagMetadata } = require('./page-tag-metadata.js');
 const CONTRACT = 'historical-source-taxonomy-classification-v1';
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(`来源标签分类被拒绝：${message}`); };
@@ -190,7 +191,14 @@ async function classifyRun(options) {
         const entry = runEntriesByPaperId.get(item.paperId);
         if (entry.status === 'staged' && entry.staging?.pageStaging?.rendererImplementationSha256 === rendererImplementationSha256
             && !options.includePaperIds?.includes(item.paperId)) return false;
-        return item.pages.some(page => !/^paper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1/m.test(io.readStableFile(path.join(options.blogRoot, page.pagePath), 'historical page used for source tag selection').bytes.toString('utf8').split('---',3)[1] || ''));
+        let needsTags = false;
+        for (const page of item.pages) {
+            const loaded = io.readStableFile(path.join(options.blogRoot, page.pagePath),
+                'historical page used for source tag selection');
+            if (loaded.fileSha256 !== page.pageContentSha256) fail('历史页面内容与选定时的 SHA 不一致。');
+            if (!hasPageTagMetadata(loaded.bytes)) needsTags = true;
+        }
+        return needsTags;
     });
     let resumeProvenance=null;
     if(options.resumeCheckpointFile) {
@@ -329,8 +337,8 @@ async function classifyRun(options) {
             const pageRecordEntries=[];
             for(const page of item.pages){
                 const loaded=io.readStableFile(path.join(options.blogRoot,page.pagePath),'historical page used by the accepted tag decision');
-                if(/^paper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1/m.test(loaded.bytes.toString('utf8').split('---',3)[1]||''))continue;
                 if(loaded.fileSha256!==page.pageContentSha256)fail('历史页面内容与选定时的 SHA 不一致。');
+                if(hasPageTagMetadata(loaded.bytes))continue;
                 const pageRecord={paperId:item.paperId,runId:options.runId,pageKey:page.pageKey,pageSha256:loaded.fileSha256,
                     bodySha256:digest(supplementApi.pageBody(loaded.bytes)),registrySha256:tagRules.registrySha256,registryVersion:tagRules.registryVersion,
                     concepts:record.concepts.map(({id,facet,label})=>({id,facet,label})),primaryTaskId:record.primaryTaskId,primaryTaskLabel:record.primaryTaskLabel,

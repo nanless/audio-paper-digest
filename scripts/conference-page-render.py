@@ -623,11 +623,11 @@ def render_packet(packet):
              f'paper_digest_api_reader_resource_count: {len(resources)}',
              'paper_digest_api_reader_decision_projection: "api-reader-decision-projection-v2"',
              f'paper_digest_scoring_contract: "{SCORING_CONTRACT}"',
-             f'paper_digest_taxonomy_contract: "{assignment["flatCompatContract"]}"',
-             f'paper_digest_taxonomy_selection_contract: "{assignment["selectionContract"]}"',
-             f'paper_digest_taxonomy_registry_version: "{assignment["registryVersion"]}"',
-             f'paper_digest_taxonomy_registry_sha256: "{assignment["registrySha256"]}"',
-             'paper_digest_taxonomy_concepts: ' + json.dumps([
+             f'paper_digest_tags_contract: "{assignment["flatCompatContract"]}"',
+             f'paper_digest_tags_selection_contract: "{assignment["selectionContract"]}"',
+             f'paper_digest_tags_registry_version: "{assignment["registryVersion"]}"',
+             f'paper_digest_tags_registry_sha256: "{assignment["registrySha256"]}"',
+             'paper_digest_tags_concepts: ' + json.dumps([
                  {'id': cid, 'facet': concepts[cid]['facet'], 'label': concepts[cid]['preferredLabel']['zh']}
                  for cid in assignment['conceptIds']], ensure_ascii=False, separators=(',', ':'), sort_keys=True),
              f'paper_digest_primary_task: {json.dumps(concepts[assignment["primaryTaskId"]]["preferredLabel"]["zh"], ensure_ascii=False)}',

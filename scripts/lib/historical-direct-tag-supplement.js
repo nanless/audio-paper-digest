@@ -10,6 +10,7 @@ const fresh = require('./fresh-arxiv-rewrite-source.js');
 const pages = require('./historical-direct-page-staging.js');
 const tagCatalogApi = require('./tag-catalog.js');
 const io = require('./historical-conference-page-projections.js');
+const { hasPageTagMetadata } = require('./page-tag-metadata.js');
 const CONTRACT = 'historical-direct-taxonomy-supplement-v1';
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(`Historical taxonomy supplement rejected: ${message}`); };
@@ -65,7 +66,8 @@ async function buildSupplement(options) {
             const file = path.resolve(options.blogRoot, page.pagePath);
             if (!file.startsWith(path.resolve(options.blogRoot) + path.sep)) fail('page path escapes blog root');
             const loaded = io.readStableFile(file, 'historical page');
-            return !/^paper_digest_taxonomy_contract:\s*["']?paper-taxonomy-flat-tags-compat-v1/m.test(loaded.bytes.toString('utf8').split('---', 3)[1] || '');
+            if (loaded.fileSha256 !== page.pageContentSha256) fail(`${page.pagePath}: frozen page bytes changed`);
+            return !hasPageTagMetadata(loaded.bytes);
         });
         if (!selectedPages.length) continue;
         if (options.limit && attempted >= options.limit) break;
