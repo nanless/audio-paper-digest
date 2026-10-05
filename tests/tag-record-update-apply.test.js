@@ -186,8 +186,8 @@ function fixture(t, options = {}) {
         filterPolicySha256: '3'.repeat(64),
         selectionReceiptSha256: '4'.repeat(64),
         selectedMemberSetSha256: '5'.repeat(64),
-        taxonomyVersion: tagRules().registryVersion,
-        taxonomyRegistrySha256: tagRules().registrySha256,
+        tagCatalogVersion: tagRules().registryVersion,
+        tagCatalogSha256: tagRules().registrySha256,
         implementationSha256: processApi.implementationSha256(),
         deepExecutionConfig: executionIdentity()
     };
