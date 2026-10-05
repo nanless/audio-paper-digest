@@ -1,7 +1,9 @@
 'use strict';
 
-// 根据已审会议计划和来源账本创建运行记录，逐项核验论文身份与输入文件。
-// 计划与账本保存在同一目录，文件位置由项目配置指定。
+// A deliberately small, offline bridge from a reviewed conference plan to an
+// executable run.  Plans live next to their source ledger and name every
+// source identity explicitly; this module never discovers PDFs, reads daily
+// state, invokes a model, or accepts caller-provided filesystem paths.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -11,15 +13,10 @@ const runApi = require('./conference-run.js');
 const importerApi = require('./conference-importer.js');
 const paperIdentity = require('./paper-identity.js');
 
-const PLAN_CONTRACT = 'conference-run-plan-v3';
-const LEGACY_PLAN_CONTRACT = 'conference-run-plan-v2';
+const PLAN_CONTRACT = 'conference-run-plan-v2';
 const SELECTION_CONTRACT = 'conference-selected-members-v2';
-const SECURE_RECEIPT_CONTRACT = 'conference-run-plan-secure-receipt-v3';
-const LEGACY_SECURE_RECEIPT_CONTRACT = 'conference-run-plan-secure-receipt-v2';
-const PLAN_VERSION = 3;
-const SECURE_RECEIPT_VERSION = 3;
-const VERSION = PLAN_VERSION;
-const LEGACY_VERSION = 2;
+const SECURE_RECEIPT_CONTRACT = 'conference-run-plan-secure-receipt-v2';
+const VERSION = 2;
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,319}$/;
@@ -140,55 +137,28 @@ function normalizeShards(value, members) {
     return shards;
 }
 
-function planFormat(value, receipt = false) {
-    plain(value, receipt ? 'secure plan receipt' : 'conference run plan');
-    const currentContract = receipt ? SECURE_RECEIPT_CONTRACT : PLAN_CONTRACT;
-    const currentVersion = receipt ? SECURE_RECEIPT_VERSION : PLAN_VERSION;
-    const oldContract = receipt ? LEGACY_SECURE_RECEIPT_CONTRACT : LEGACY_PLAN_CONTRACT;
-    if (value.contract === currentContract && value.version === currentVersion) return currentVersion;
-    if (value.contract === oldContract && value.version === LEGACY_VERSION) return LEGACY_VERSION;
-    fail('会议计划记录的格式标识和版本不属于支持的组合。');
-}
-function tagMetadataField(value, format) {
-    const current = Object.hasOwn(value, 'tagMetadata');
-    const legacy = Object.hasOwn(value, 'taxonomy');
-    if (current && legacy) fail('会议计划记录不能混用新旧标签字段。');
-    if ((format === PLAN_VERSION && legacy) || (format === LEGACY_VERSION && current)) {
-        fail('会议计划记录的标签字段与格式版本不一致。');
-    }
-    return format === LEGACY_VERSION ? 'taxonomy' : 'tagMetadata';
-}
 function normalizePlan(value) {
-    const format = planFormat(value);
-    const tagField = tagMetadataField(value, format);
-    exact(value, ['contract', 'version', 'ledgerName', tagField, 'selectionPolicy', 'shards'], 'conference run plan');
+    exact(value, ['contract', 'version', 'ledgerName', 'taxonomy', 'selectionPolicy', 'shards'], 'conference run plan');
+    if (value.contract !== PLAN_CONTRACT || value.version !== VERSION) fail('unsupported conference run plan contract');
     const ledgerName = safeName(value.ledgerName, 'plan ledgerName');
-    exact(value[tagField], ['version', 'sha256'], '计划中的标签词表');
-    if (typeof value[tagField].version !== 'string' || !value[tagField].version.trim()) fail('计划中的标签词表版本不能为空。');
-    const tagCatalogIdentity = { version: value[tagField].version, sha256: sha(value[tagField].sha256, '计划中的词表 SHA') };
+    exact(value.taxonomy, ['version', 'sha256'], 'plan taxonomy');
+    if (typeof value.taxonomy.version !== 'string' || !value.taxonomy.version.trim()) fail('plan taxonomy.version must be non-empty');
+    const tagCatalogIdentity = { version: value.taxonomy.version, sha256: sha(value.taxonomy.sha256, 'plan taxonomy.sha256') };
     const selectionPolicy = normalizeSelection(value.selectionPolicy);
     const shards = normalizeShards(value.shards, selectionPolicy.identities);
-    return { contract: value.contract, version: value.version, ledgerName, [tagField]: tagCatalogIdentity, selectionPolicy, shards };
-}
-function tagMetadataForPlan(value) {
-    const plan = normalizePlan(value);
-    return clone(plan[tagMetadataField(plan, planFormat(plan))]);
-}
-function tagMetadataForReceipt(value) {
-    const receipt = normalizeSecureReceipt(value);
-    return clone(receipt[tagMetadataField(receipt, planFormat(receipt, true))]);
+    return { contract: PLAN_CONTRACT, version: VERSION, ledgerName, taxonomy: tagCatalogIdentity, selectionPolicy, shards };
 }
 
 function readTagCatalogFile(filename) {
-    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail('配置的标签词表文件须使用绝对路径。');
+    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail('configured taxonomy registry must be an absolute filename');
     let canonicalFilename;
     try {
         const named = fs.lstatSync(filename);
-        if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1) fail('配置的标签词表须为普通文件，且不能使用符号链接或多个硬链接。');
+        if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1) fail('configured taxonomy registry must be a regular single-link file');
         canonicalFilename = fs.realpathSync(filename);
     } catch (error) { if (String(error.message || error).startsWith('Conference plan rejected:')) throw error; throw fail(error.message); }
     try { return ledgerApi.readRegularJson(canonicalFilename); }
-    catch (error) { throw fail(`无法安全读取配置的标签词表：${error.message}`); }
+    catch (error) { throw fail(`cannot securely read configured taxonomy registry: ${error.message}`); }
 }
 
 function receiptDigest(receipt) {
@@ -214,17 +184,6 @@ function createRunFromImportPlan({ files, importHandle, planName, runName }) {
     catch (error) { throw fail(error.message); }
     const imported = authority.snapshot;
     const loadedPlan = readRuntimeJson(files.conferenceSourceLedgerDir, planName);
-    if (loadedPlan.value.contract === LEGACY_PLAN_CONTRACT && loadedPlan.value.version === LEGACY_VERSION) {
-        // 旧裸计划不能创建新运行；只返回已完整核验的原文件对。
-        const runFile = safeRuntimeFile(files.conferenceRunsDir, runName);
-        const receiptName = receiptNameFor(runName);
-        const receiptFile = safeRuntimeFile(files.conferenceRunsDir, receiptName);
-        const handle = loadPlanHandle(runFile, receiptFile, loadedPlan.filename, importHandle, files.tagCatalogFile);
-        const saved = PLAN_HANDLE_DATA.get(handle);
-        return { plan: clone(saved.plan), run: clone(saved.run), receipt: clone(saved.receipt),
-            runFile, receiptName, receiptFile, runSha256: saved.runFileSha256,
-            receiptSha256: saved.receiptFileSha256, recovered: true };
-    }
     const plan = normalizePlan(loadedPlan.value);
     const ledgerName = path.basename(imported.ledgerFile);
     if (plan.ledgerName !== ledgerName) fail('plan ledgerName does not match authenticated import ledger');
@@ -243,9 +202,9 @@ function createRunFromImportPlan({ files, importHandle, planName, runName }) {
         }
     }
     const tagCatalogFile = readTagCatalogFile(files.tagCatalogFile);
-    if (plan.tagMetadata.sha256 !== tagCatalogFile.sha256) fail('计划中的词表 SHA 与配置的词表原文件不一致。');
+    if (plan.taxonomy.sha256 !== tagCatalogFile.sha256) fail('plan taxonomy SHA does not match the configured registry bytes');
     const run = runApi.createConferenceRunFromVerifiedLedger({ ledgerHandle: authority.ledgerHandle,
-        tagCatalogVersion: plan.tagMetadata.version,
+        taxonomyVersion: plan.taxonomy.version,
         filterPolicySha256: imported.receipt.filterPolicySha256,
         selectionReceiptSha256: imported.receipt.selectionReceiptSha256,
         selectedMemberSetSha256: imported.receipt.selectedMemberSetSha256,
@@ -256,9 +215,9 @@ function createRunFromImportPlan({ files, importHandle, planName, runName }) {
     const runBytes = serialize(run); const runSha256 = sha256(runBytes);
     const stagedReceipt = imported.staging.receipt;
     const receiptBody = {
-        contract: SECURE_RECEIPT_CONTRACT, version: SECURE_RECEIPT_VERSION, planName, planSha256: loadedPlan.sha256,
+        contract: SECURE_RECEIPT_CONTRACT, version: 2, planName, planSha256: loadedPlan.sha256,
         ledger: { name: ledgerName, sha256: imported.ledgerSha256, memberSetSha256: imported.ledger.memberSetSha256 },
-        tagMetadata: clone(plan.tagMetadata),
+        taxonomy: clone(plan.taxonomy),
         filter: { filterId: stagedReceipt.selection.filterId, catalogSha256: stagedReceipt.selection.catalogSha256,
             inputSha256: stagedReceipt.selection.inputSha256, stateSha256: stagedReceipt.selection.stateSha256,
             filterPolicySha256: stagedReceipt.selection.filterPolicySha256,
@@ -282,24 +241,23 @@ function createRunFromImportPlan({ files, importHandle, planName, runName }) {
 }
 
 function normalizeSecureReceipt(value) {
-    plain(value, 'secure plan receipt');
-    if (sha(value.receiptSha256, 'secure plan receipt receiptSha256') !== receiptDigest(value)) fail('secure plan receipt SHA drifted');
-    const format = planFormat(value, true);
-    const tagField = tagMetadataField(value, format);
-    exact(value, ['contract', 'version', 'planName', 'planSha256', 'ledger', tagField, 'filter', 'staging',
+    exact(value, ['contract', 'version', 'planName', 'planSha256', 'ledger', 'taxonomy', 'filter', 'staging',
         'import', 'members', 'shards', 'run', 'receiptSha256'], 'secure plan receipt');
+    if (value.contract !== SECURE_RECEIPT_CONTRACT || value.version !== 2) fail('secure plan receipt contract/version mismatch');
     safeName(value.planName, 'secure plan receipt planName'); sha(value.planSha256, 'secure plan receipt planSha256');
     exact(value.ledger, ['name', 'sha256', 'memberSetSha256'], 'secure plan receipt ledger'); safeName(value.ledger.name, 'ledger.name');
-    exact(value[tagField], ['version', 'sha256'], '凭证中的标签词表');
+    exact(value.taxonomy, ['version', 'sha256'], 'secure plan receipt taxonomy');
     exact(value.filter, ['filterId', 'catalogSha256', 'inputSha256', 'stateSha256', 'filterPolicySha256',
         'selectionReceiptSha256', 'selectedMemberSetSha256'], 'secure plan receipt filter');
     exact(value.staging, ['receiptSha256', 'receiptFileSha256', 'importManifestFileSha256'], 'secure plan receipt staging');
     exact(value.import, ['receiptSha256', 'receiptFileSha256', 'importManifestSha256'], 'secure plan receipt import');
     exact(value.run, ['name', 'sha256', 'identitySha256', 'stateSha256'], 'secure plan receipt run'); safeName(value.run.name, 'run.name');
-    for (const section of [value.ledger, value[tagField], value.filter, value.staging, value.import, value.run]) {
+    for (const section of [value.ledger, value.taxonomy, value.filter, value.staging, value.import, value.run]) {
         for (const [field, item] of Object.entries(section)) if (field.toLowerCase().includes('sha256')) sha(item, `secure plan receipt ${field}`);
     }
     normalizeMembers(value.members); normalizeShards(value.shards, value.members);
+    const body = clone(value); delete body.receiptSha256;
+    if (sha(value.receiptSha256, 'secure plan receipt receiptSha256') !== stableHash(body)) fail('secure plan receipt SHA drifted');
     return clone(value);
 }
 
@@ -313,21 +271,14 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
         loadedPlan = ledgerApi.readRegularJson(planFile);
     }
     catch (error) { throw fail(`plan bundle cannot be read safely: ${error.message}`); }
-    // 先核原凭证摘要及它绑定的原文件字节，再读取格式和标签字段。
-    plain(loadedReceipt.value, 'secure plan receipt');
-    if (loadedReceipt.value.receiptSha256 !== receiptDigest(loadedReceipt.value)) fail('secure plan receipt SHA drifted');
-    const rawReceipt = loadedReceipt.value;
-    if (rawReceipt.run?.name !== path.basename(runFile) || rawReceipt.run?.sha256 !== loadedRun.sha256) fail('plan receipt does not bind exact run file');
-    if (rawReceipt.planName !== path.basename(planFile) || rawReceipt.planSha256 !== loadedPlan.sha256) fail('plan receipt does not bind exact reviewed plan file');
-    const receipt = normalizeSecureReceipt(rawReceipt); const plan = normalizePlan(loadedPlan.value);
-    if (plan.version !== receipt.version) fail('会议计划与凭证的格式版本不一致。');
-    const receiptTags = tagMetadataForReceipt(receipt);
-    const planTags = tagMetadataForPlan(plan);
+    const receipt = normalizeSecureReceipt(loadedReceipt.value); const plan = normalizePlan(loadedPlan.value);
     const imported = authority.snapshot; const tagCatalogFile = readTagCatalogFile(tagCatalogPath);
+    if (receipt.run.name !== path.basename(runFile) || receipt.run.sha256 !== loadedRun.sha256) fail('plan receipt does not bind exact run file');
+    if (receipt.planName !== path.basename(planFile) || receipt.planSha256 !== loadedPlan.sha256) fail('plan receipt does not bind exact reviewed plan file');
     if (receipt.ledger.name !== path.basename(imported.ledgerFile) || receipt.ledger.sha256 !== imported.ledgerSha256
         || receipt.ledger.memberSetSha256 !== imported.ledger.memberSetSha256) fail('plan receipt does not bind authenticated import ledger');
-    if (receiptTags.sha256 !== tagCatalogFile.sha256) fail('计划凭证中的词表 SHA 与原文件不一致。');
-    if (plan.ledgerName !== receipt.ledger.name || stableHash(planTags) !== stableHash(receiptTags)
+    if (receipt.taxonomy.sha256 !== tagCatalogFile.sha256) fail('plan receipt taxonomy bytes drifted');
+    if (plan.ledgerName !== receipt.ledger.name || stableHash(plan.taxonomy) !== stableHash(receipt.taxonomy)
         || stableHash(plan.selectionPolicy.identities) !== stableHash(receipt.members)
         || stableHash(plan.shards) !== stableHash(receipt.shards)) fail('reviewed plan content drifted from plan receipt');
     const staged = imported.staging.receipt;
@@ -346,10 +297,6 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
         || stableHash(receipt.staging) !== stableHash(expectedStaging)
         || stableHash(receipt.import) !== stableHash(expectedImport)) fail('plan receipt upstream provenance drifted');
     const run = runApi.assertConferenceRunFromVerifiedLedger(loadedRun.value, authority.ledgerHandle);
-    if (run.version !== plan.version
-        || (run.version === runApi.RUN_VERSION && runApi.tagCatalogVersionForRun(run) !== planTags.version)) {
-        fail('会议运行记录与已核计划的格式或词表版本不一致。');
-    }
     if (run.ledgerSha256 !== imported.ledgerSha256 || run.ledgerSha256 !== receipt.ledger.sha256) {
         fail('run ledger SHA differs from the authenticated import/plan receipt');
     }
@@ -362,7 +309,7 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
     }
     if (stableHash(run.members) !== stableHash(imported.verifiedMembers)) fail('run is not the exact included/verified import set');
     const handle = Object.freeze(Object.create(null)); PLAN_HANDLES.add(handle);
-    PLAN_HANDLE_DATA.set(handle, Object.freeze({ plan: clone(loadedPlan.value), run: clone(run), receipt: clone(receipt),
+    PLAN_HANDLE_DATA.set(handle, Object.freeze({ run: clone(run), receipt: clone(receipt),
         receiptFileSha256: loadedReceipt.sha256, runFileSha256: loadedRun.sha256,
         ledgerHandle: authority.ledgerHandle, importHandle }));
     return handle;
@@ -390,9 +337,6 @@ function writeExclusive(filename, bytes) {
 }
 
 function applyRunPlan(result, io = fs) {
-    if (result.recovered || result.plan?.contract !== PLAN_CONTRACT || result.plan?.version !== PLAN_VERSION
-        || result.run?.contract !== runApi.CONTRACT || result.run?.version !== runApi.RUN_VERSION
-        || result.receipt?.contract !== SECURE_RECEIPT_CONTRACT || result.receipt?.version !== SECURE_RECEIPT_VERSION) fail('旧计划只能读取或恢复已有文件，不能新建运行文件。');
     const outputDirectory = path.dirname(result.runFile);
     if (path.dirname(result.receiptFile) !== outputDirectory) fail('run and plan receipt must share one runtime directory');
     let createdDirectory = false;
@@ -433,8 +377,8 @@ function applyRunPlan(result, io = fs) {
 
 function report(result, { applied = false } = {}) {
     return { status: applied ? 'created' : 'dry-run', kind: 'conference-verified-ledger-run', conference: result.run.conferenceId,
-        members: result.run.members.length, shards: result.run.shards.length, ledgerSha256: result.receipt.ledger.sha256,
-        planSha256: result.receipt.planSha256, tagCatalogSha256: tagMetadataForReceipt(result.receipt).sha256,
+        members: result.run.members.length, shards: result.run.shards.length, ledgerSha256: result.ledgerSha256,
+        planSha256: result.planSha256, taxonomySha256: result.taxonomySha256,
         filterPolicySha256: result.run.filterPolicySha256,
         selectionReceiptSha256: result.run.selectionReceiptSha256,
         selectedMemberSetSha256: result.run.selectedMemberSetSha256,
@@ -442,9 +386,7 @@ function report(result, { applied = false } = {}) {
         receiptName: result.receiptName, receiptSha256: result.receiptSha256, runIdentitySha256: result.run.identitySha256 };
 }
 
-module.exports = { PLAN_CONTRACT, LEGACY_PLAN_CONTRACT, SELECTION_CONTRACT, SECURE_RECEIPT_CONTRACT,
-    LEGACY_SECURE_RECEIPT_CONTRACT, VERSION, PLAN_VERSION, SECURE_RECEIPT_VERSION, LEGACY_VERSION,
-    tagMetadataForPlan, tagMetadataForReceipt, SAFE_JSON_NAME, stableHash,
+module.exports = { PLAN_CONTRACT, SELECTION_CONTRACT, SECURE_RECEIPT_CONTRACT, VERSION, SAFE_JSON_NAME, stableHash,
     safeRuntimeFile, readRuntimeJson, normalizePlan, receiptDigest, receiptNameFor,
     createRunFromImportPlan, normalizeSecureReceipt, loadPlanHandle, planHandleSnapshot, planHandleAuthority,
     applyRunPlan, report };

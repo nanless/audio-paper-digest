@@ -263,12 +263,12 @@ test('authenticated import, plan and execution preserve the full selection recei
     } finally { ledgerApi.loadLedger = oldPublicLedgerLoad; }
     assert.deepEqual(importer.importHandleSnapshot(importHandle).verifiedMembers,
         [{ paperId: pid('100'), sourceIdentity: 'icassp-arnumber:100' }]);
-    const tagCatalogPath = path.join(f.root, 'taxonomy.json'); fs.writeFileSync(tagCatalogPath, '{"version":"taxonomy-v1"}\n');
+    const tagCatalogPath = path.join(f.root, 'tag-catalog.json'); fs.writeFileSync(tagCatalogPath, '{"version":"paper-tag-catalog-v2"}\n');
     const runs = path.join(f.root, 'runs'); const executions = path.join(f.root, 'executions');
     const identities = importer.importHandleSnapshot(importHandle).verifiedMembers;
     const selectedMemberSetSha256 = planApi.stableHash(identities.map(member => member.paperId));
     const plan = { contract: planApi.PLAN_CONTRACT, version: planApi.VERSION, ledgerName: 'ledger.json',
-        taxonomy: { version: 'taxonomy-v1', sha256: sha(fs.readFileSync(tagCatalogPath)) },
+        tagMetadata: { version: 'paper-tag-catalog-v2', sha256: sha(fs.readFileSync(tagCatalogPath)) },
         selectionPolicy: { contract: planApi.SELECTION_CONTRACT, identities, selectedMemberSetSha256 },
         shards: [{ shardId: 'all', paperIds: identities.map(member => member.paperId) }] };
     fs.writeFileSync(path.join(f.output, 'plan.json'), `${JSON.stringify(plan, null, 2)}\n`);
@@ -280,6 +280,14 @@ test('authenticated import, plan and execution preserve the full selection recei
     assert.equal(dryPlan.status, 'dry-run'); assert.equal(fs.existsSync(runs), false);
     const appliedPlan = planCli.main(['--apply', ...planArgs], { files: planFiles });
     assert.equal(appliedPlan.status, 'created');
+    const writtenRun = JSON.parse(fs.readFileSync(path.join(runs, 'cli-run.json'), 'utf8'));
+    const writtenReceipt = JSON.parse(fs.readFileSync(path.join(runs, 'cli-run.plan-receipt.json'), 'utf8'));
+    assert.equal(writtenRun.version, 3);
+    assert.equal(writtenRun.tagCatalogVersion, plan.tagMetadata.version);
+    assert.equal(Object.hasOwn(writtenRun, 'taxonomyVersion'), false);
+    assert.equal(writtenReceipt.version, 3);
+    assert.deepEqual(writtenReceipt.tagMetadata, plan.tagMetadata);
+    assert.equal(Object.hasOwn(writtenReceipt, 'taxonomy'), false);
     assert.equal(fs.statSync(runs).mode & 0o777, 0o700);
     assert.equal(fs.existsSync(path.join(runs, 'cli-run.json')), true);
     assert.equal(fs.existsSync(path.join(runs, 'cli-run.plan-receipt.json')), true);

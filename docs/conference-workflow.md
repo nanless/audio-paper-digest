@@ -347,7 +347,7 @@ npm run conference:new:process -- --source-upgrade-promote \
 
 `conference-source-ledger-v1` 固定一个会议和年份。主身份使用 IEEE `arnumber`、OpenReview `forumId` 或会议官方 paper ID；题目只能帮助人工寻找候选，不作身份或去重键。公开主键使用 `paper-identity-v1` 的完整形式，例如 `conference:icassp:2026:icassp-arnumber:10910001`。短 `sourceIdentity=icassp-arnumber:10910001` 只在账本内定位来源。
 
-账本记录官方 metadata SHA、受控 PDF 的相对路径和字节 SHA、提取文本及结构化证据 SHA、提取器版本、来源和身份审查状态。身份缺失、无全文或来源冲突保持 blocked，不能进入分析或发布。四类来源文件格式未变，所以 ledger 仍为 v1；discovery、staging、import、plan、run 和 execution 使用各自 v2 协议，新筛选状态及配置为 v6，已有 v5 任务按原格式恢复，均须核验完整 `paperId`。早期 `icassp-2026:icassp-arnumber:10910001` 临时 ID 会被拒绝，没有自动运行数据迁移入口。
+账本记录官方 metadata SHA、受控 PDF 的相对路径和字节 SHA、提取文本及结构化证据 SHA、提取器版本、来源和身份审查状态。身份缺失、无全文或来源冲突保持 blocked，不能进入分析或发布。四类来源文件格式未变，所以 ledger 仍为 v1；发现、暂存和导入仍使用各自 v2 格式；新计划、运行及执行状态使用 v3 格式，新筛选状态及配置为 v6，已有 v5 任务按原格式恢复，均须核验完整 `paperId`。早期 `icassp-2026:icassp-arnumber:10910001` 临时 ID 会被拒绝，没有自动运行数据迁移入口。
 
 本机 PDF 和逐篇 metadata 先放 `conference-staging-sources`，提取并复核后由 importer 复制到私有 `conference-sources`。账本、缓存、运行状态和本机绝对路径均在 `data/runtime/`，不提交 Git；仓库只跟踪实现、协议、校验器、测试和文档。
 
@@ -483,16 +483,16 @@ npm run conference:import -- --dry-run \
 
 确认后改为 `--apply`。importer 从配置的 staging source 读取认证文件，复制到 `conference-sources`，在 `conference-ledgers` 以 `O_EXCL` 保存 ledger 和自动命名的 `icassp-2026-ledger.import-receipt.json`。
 
-`conference-run-plan-v2` 放在 `conference-ledgers`，精确列全部 included 且 verified 身份、当前标签 SHA 和完整无重叠分片。成员可按主题、session 或编号分片，但不能遗漏或重复：
+新计划使用 `conference-run-plan-v3`，保存在 `conference-ledgers`。计划逐项列出全部已入选且来源核验通过的论文身份、标签词表 SHA，以及没有重叠的处理分片。可以按主题、会议场次或编号分组，但不能遗漏或重复论文：
 
 ```json
 {
-  "contract": "conference-run-plan-v2",
-  "version": 2,
+  "contract": "conference-run-plan-v3",
+  "version": 3,
   "ledgerName": "icassp-2026-ledger.json",
-  "taxonomy": {
-    "version": "paper-taxonomy-v1",
-    "sha256": "<64-hex-current-registry-bytes-sha256>"
+  "tagMetadata": {
+    "version": "paper-tag-catalog-v2",
+    "sha256": "<64-hex-current-tag-catalog-file-sha256>"
   },
   "selectionPolicy": {
     "contract": "conference-selected-members-v2",
@@ -523,11 +523,13 @@ npm run conference:plan -- --dry-run \
   --plan icassp-2026-plan.json --run icassp-2026-run.json
 ```
 
-确认后改为 `--apply`。生成的 run 使用 `conference-run-v2`，它和自动命名的 `icassp-2026-run.plan-receipt.json` 在 `conference-runs` 成对创建，不可覆盖。运行分别固定 ledger、`filterPolicySha256`、`selectionReceiptSha256`、`selectedMemberSetSha256` 和标签版本，不能用一个 `selectionPolicySha256` 混指规则、筛选结果及成员集合。
+确认后改为 `--apply`。生成的运行记录使用 `conference-run-v3`，它和自动命名的 `icassp-2026-run.plan-receipt.json` 在 `conference-runs` 成对创建，不可覆盖。运行分别固定 ledger、`filterPolicySha256`、`selectionReceiptSha256`、`selectedMemberSetSha256` 和标签版本，不能用一个 `selectionPolicySha256` 混指规则、筛选结果及成员集合。
+
+当前计划凭证使用 `conference-run-plan-secure-receipt-v3`，计划和凭证中的词表记录为 `tagMetadata`；运行和执行模板中的词表版本为 `tagCatalogVersion`。旧 v2 文件对先按原文件字节和完整上游关系核验，再供已有任务恢复，不能把裸旧计划用于创建新的执行 UUID。新旧字段不能混用，即使值相同或为空。
 
 ### 隔离 execution 的创建与恢复
 
-prepare 不能只拿手写 run，必须重验 reviewed plan 和完整上游链：
+`prepare` 不能只使用手写的运行记录，必须核验已审计划和完整上游记录。新执行状态使用 `conference-execution-v3`，权限记录仍使用 `conference-execution-authority-v2`，两者分别核验版本。已有旧执行 UUID 可以按原格式继续；只有初始状态且未产生尝试记录的合法中断，才可补齐缺少的权限记录：
 
 ```bash
 npm run conference:execution -- prepare \

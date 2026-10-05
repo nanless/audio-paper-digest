@@ -49,7 +49,7 @@ test('conference CLI validates ledger files and run files only below configured 
     const ledgerHandle = loadLedgerHandle(path.join(ledgerDirectory, 'icassp-2026.json'));
     const paperId = paperIdentity.canonicalConferencePaperId(
         { id: 'icassp-2026', year: 2026 }, { type: 'icassp-arnumber', value: '1001' });
-    const run = createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'paper-taxonomy-v1',
+    const run = createConferenceRunFromVerifiedLedger({ ledgerHandle, tagCatalogVersion: 'paper-tag-catalog-v2',
         filterPolicySha256: 'a'.repeat(64), selectionReceiptSha256: 'b'.repeat(64),
         selectedMemberSetSha256: require('../scripts/lib/conference-run.js').stableHash([paperId]),
         members: [{ paperId, sourceIdentity: 'icassp-arnumber:1001' }], shards: [{ shardId: 'all', paperIds: [paperId] }] });

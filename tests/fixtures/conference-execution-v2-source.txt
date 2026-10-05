@@ -1,7 +1,9 @@
 'use strict';
 
-// 记录已导入会议计划的执行状态。读取或更新前，核对权限凭证、
-// 已认证计划和此前的状态变化记录。
+// Isolated, local-only execution state for an import-bound conference plan.
+// Every durable read/transition replays an immutable authority receipt against
+// a live authenticated plan handle. This module knows nothing about LLMs,
+// daily `data/current`, or publishing.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -10,12 +12,8 @@ const ledgerApi = require('./conference-source-ledger.js');
 const runApi = require('./conference-run.js');
 const planApi = require('./conference-plan.js');
 
-const EXECUTION_VERSION = 3;
-const VERSION = EXECUTION_VERSION;
-const CONTRACT = 'conference-execution-v3';
-const LEGACY_VERSION = 2;
-const LEGACY_CONTRACT = 'conference-execution-v2';
-const AUTHORITY_VERSION = 2;
+const VERSION = 2;
+const CONTRACT = 'conference-execution-v2';
 const AUTHORITY_CONTRACT = 'conference-execution-authority-v2';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
@@ -222,17 +220,11 @@ function sourceForPlan(run, planSnapshot) {
         selectedMemberSetSha256: receipt.filter.selectedMemberSetSha256
     };
 }
-function executionFormat(value) {
-    if (value.contract === CONTRACT && value.version === EXECUTION_VERSION) return EXECUTION_VERSION;
-    if (value.contract === LEGACY_CONTRACT && value.version === LEGACY_VERSION) return LEGACY_VERSION;
-    fail('会议执行记录的格式标识和版本不属于支持的组合。');
-}
 function runTemplate(run) {
     const value = {
         version: run.version, contract: run.contract, conferenceId: run.conferenceId,
         ledgerSha256: run.ledgerSha256, membershipSha256: run.membershipSha256,
-        [run.version === runApi.LEGACY_VERSION ? 'taxonomyVersion' : 'tagCatalogVersion']: runApi.tagCatalogVersionForRun(run),
-        filterPolicySha256: run.filterPolicySha256,
+        taxonomyVersion: run.taxonomyVersion, filterPolicySha256: run.filterPolicySha256,
         selectionReceiptSha256: run.selectionReceiptSha256,
         selectedMemberSetSha256: run.selectedMemberSetSha256,
         members: clone(run.members), shards: clone(run.shards), identitySha256: run.identitySha256
@@ -284,14 +276,14 @@ function authorityDigest(value) {
 function normalizeAuthority(value) {
     exact(value, ['contract', 'version', 'executionId', 'source', 'runTemplateSha256', 'authoritySha256'],
         'execution authority');
-    if (value.contract !== AUTHORITY_CONTRACT || value.version !== AUTHORITY_VERSION) fail('execution authority contract/version mismatch');
+    if (value.contract !== AUTHORITY_CONTRACT || value.version !== VERSION) fail('execution authority contract/version mismatch');
     assertUuid(value.executionId); const source = normalizeSource(value.source);
     assertSha(value.runTemplateSha256, 'execution authority runTemplateSha256');
     if (value.authoritySha256 !== authorityDigest(value)) fail('execution authority SHA drifted');
     return { ...clone(value), source };
 }
 function authorityFor(execution) {
-    const body = { contract: AUTHORITY_CONTRACT, version: AUTHORITY_VERSION, executionId: execution.executionId,
+    const body = { contract: AUTHORITY_CONTRACT, version: VERSION, executionId: execution.executionId,
         source: clone(execution.source), runTemplateSha256: stableHash(execution.runTemplate) };
     return { ...body, authoritySha256: stableHash(body) };
 }
@@ -337,8 +329,7 @@ function normalizeAttempt(value, paperIds, previousStates, template) {
 
 function assertConferenceExecution(value) {
     exact(value, ['version', 'contract', 'executionId', 'createdAt', 'source', 'runTemplate', 'paperStates', 'attempts', 'stateSha256'], 'execution');
-    const format = executionFormat(value);
-    if (value.runTemplate?.version !== format) fail('会议执行记录与运行模板的格式版本不一致。');
+    if (value.version !== VERSION || value.contract !== CONTRACT) fail('contract/version mismatch');
     assertUuid(value.executionId); assertTimestamp(value.createdAt, 'createdAt');
     const source = normalizeSource(value.source);
     if (!Array.isArray(value.attempts)) fail('attempts must be an array');
@@ -355,7 +346,7 @@ function assertConferenceExecution(value) {
     const paperIds = new Set(Object.keys(baselineStates));
     const history = clone(initialStates);
     const initialExecution = {
-        version: value.version, contract: value.contract, executionId: value.executionId, createdAt: value.createdAt,
+        version: VERSION, contract: CONTRACT, executionId: value.executionId, createdAt: value.createdAt,
         source, runTemplate: clone(value.runTemplate), paperStates: clone(initialStates), attempts: []
     };
     const initialDigest = stateDigest(initialExecution);
@@ -370,7 +361,7 @@ function assertConferenceExecution(value) {
         if (normalized.recordedAt < previousTime) fail('attempt recordedAt moves backwards in time');
         operations.add(normalized.operationId);
         const prefix = {
-            version: value.version, contract: value.contract, executionId: value.executionId, createdAt: value.createdAt,
+            version: VERSION, contract: CONTRACT, executionId: value.executionId, createdAt: value.createdAt,
             source, runTemplate: clone(value.runTemplate), paperStates: clone(history), attempts: [...attempts, normalized]
         };
         const prefixDigest = stateDigest(prefix);
@@ -385,7 +376,7 @@ function assertConferenceExecution(value) {
         }
     }
     const rebuilt = {
-        version: value.version, contract: value.contract, executionId: value.executionId, createdAt: value.createdAt,
+        version: VERSION, contract: CONTRACT, executionId: value.executionId, createdAt: value.createdAt,
         source, runTemplate: clone(value.runTemplate), paperStates: clone(baselineStates), attempts
     };
     const digest = stateDigest(rebuilt);
@@ -400,54 +391,6 @@ function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = cry
     catch (error) { fail(`requires an authenticated plan handle: ${error.message}`); }
     const verifiedRun = runApi.assertConferenceRunFromVerifiedLedger(authority.snapshot.run, authority.ledgerHandle);
     assertInitialRun(verifiedRun); assertUuid(executionId);
-    if (verifiedRun.version === runApi.LEGACY_VERSION) {
-        // 旧父计划只能恢复已有执行标识，不能重新创建旧状态。
-        if (typeof executionRoot !== 'string' || !path.isAbsolute(executionRoot)) fail('execution root must be absolute');
-        if (!fs.existsSync(path.resolve(executionRoot, executionId))) {
-            fail('旧会议计划只能恢复已有执行记录，不能创建新的执行标识。');
-        }
-        const directory = executionDirectory(executionRoot, executionId);
-        const allowed = new Set(['patches', 'authority.json', 'state.json']);
-        const entries = fs.readdirSync(directory);
-        if (entries.some(name => !allowed.has(name))) fail('existing execution directory contains unknown recovery content');
-        const expectedSource = sourceForPlan(verifiedRun, authority.snapshot);
-        const expectedTemplate = runTemplate(verifiedRun);
-        if (entries.includes('authority.json') && entries.includes('state.json')) {
-            const existing = readExecution({ executionRoot, executionId, planHandle });
-            if (existing.version !== LEGACY_VERSION
-                || stableHash(existing.source) !== stableHash(expectedSource)
-                || stableHash(existing.runTemplate) !== stableHash(expectedTemplate)) {
-                fail('existing executionId is bound to a different source plan');
-            }
-            ensurePatchDirectory(directory);
-            return existing;
-        }
-        if (entries.includes('authority.json')) {
-            normalizeAuthority(readRegularJson(
-                safeDirectFile(directory, 'authority.json'), 'execution recovery authority').value);
-            fail('authority-only execution cannot be recovered without its state history');
-        }
-        if (!entries.includes('state.json')) fail('旧执行目录缺少状态记录，不能重新创建旧运行。');
-        if (entries.includes('patches')) {
-            const patches = safeDirectory(path.join(directory, 'patches'));
-            if (fs.readdirSync(patches).length !== 0) fail('partial execution preparation has non-empty patches');
-        }
-        const existingState = assertConferenceExecution(readRegularJson(
-            safeDirectFile(directory, 'state.json'), 'execution recovery state').value);
-        if (existingState.version !== LEGACY_VERSION || existingState.executionId !== executionId
-            || existingState.attempts.length !== 0
-            || stableHash(existingState.source) !== stableHash(expectedSource)
-            || stableHash(existingState.runTemplate) !== stableHash(expectedTemplate)
-            || stableHash(existingState.paperStates) !== stableHash(verifiedRun.paperStates)) {
-            fail('partial execution state does not match the current authenticated plan');
-        }
-        // 原状态字节已核验且不改写；只补原格式权限文件和安全空目录。
-        ensurePatchDirectory(directory);
-        const recoveredAuthority = writeExclusive(path.join(directory, 'authority.json'),
-            `${JSON.stringify(authorityFor(existingState), null, 2)}\n`);
-        if (!recoveredAuthority.created) return readExecution({ executionRoot, executionId, planHandle });
-        return readExecution({ executionRoot, executionId, planHandle });
-    }
     const root = safeDirectory(executionRoot, true); const directory = path.resolve(root, executionId);
     const state = { version: VERSION, contract: CONTRACT, executionId, createdAt: nowIso(now),
         source: sourceForPlan(verifiedRun, authority.snapshot), runTemplate: runTemplate(verifiedRun),
@@ -626,8 +569,7 @@ function transitionExecutionFromPatchFile({ executionRoot, executionId, patchNam
 }
 
 module.exports = {
-    VERSION, EXECUTION_VERSION, CONTRACT, LEGACY_VERSION, LEGACY_CONTRACT, AUTHORITY_VERSION, AUTHORITY_CONTRACT,
-    UUID_RE, SAFE_JSON_NAME, safeDirectory, executionDirectory, ensurePatchDirectory,
+    VERSION, CONTRACT, AUTHORITY_CONTRACT, UUID_RE, SAFE_JSON_NAME, safeDirectory, executionDirectory, ensurePatchDirectory,
     assertConferenceExecution, prepareExecutionFromPlan, readExecution, transitionExecution,
     transitionExecutionFromPatchFile, normalizePatch
 };

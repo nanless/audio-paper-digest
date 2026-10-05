@@ -1,21 +1,17 @@
 'use strict';
 
-// 保存会议论文的成员、处理分组与状态变化，并通过哈希核验记录。
-// 汇总输入包含每篇论文的完成情况。
+// An offline, content-addressed plan for a conference rewrite.  This module is
+// deliberately not a scheduler: it neither reads PDFs nor invokes an LLM nor
+// writes a blog.  Its only job is to make the member set, sharding, status
+// transitions and summary hand-off independently auditable.
 const crypto = require('node:crypto');
 const paperIdentity = require('./paper-identity.js');
 
-const RUN_VERSION = 3;
-const VERSION = RUN_VERSION;
-const CONTRACT = 'conference-run-v3';
-const LEGACY_VERSION = 2;
-const LEGACY_CONTRACT = 'conference-run-v2';
+const VERSION = 2;
+const CONTRACT = 'conference-run-v2';
 const LEDGER_BINDING_CONTRACT = 'conference-run-ledger-binding-v2';
-const PAPER_PROJECTION_CONTRACT = 'conference-paper-projection-v3';
-const LEGACY_PAPER_PROJECTION_CONTRACT = 'conference-paper-projection-v2';
-const SUMMARY_INPUT_VERSION = 3;
-const SUMMARY_INPUT_CONTRACT = 'conference-summary-input-v3';
-const LEGACY_SUMMARY_INPUT_CONTRACT = 'conference-summary-input-v2';
+const PAPER_PROJECTION_CONTRACT = 'conference-paper-projection-v2';
+const SUMMARY_INPUT_CONTRACT = 'conference-summary-input-v2';
 const COMPLETION_PROOF_REQUIRED = 'completed state requires an authenticated conference completion-proof handle';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,319}$/;
@@ -140,59 +136,36 @@ function normalizeUsage(value = {}) {
     return usage;
 }
 
-// 旧格式仅供完整记录核验和已有状态恢复，不能由公共构造器选择。
-function runFormat(run) {
-    assertPlainObject(run, 'run');
-    if (run.contract === CONTRACT && run.version === RUN_VERSION) return RUN_VERSION;
-    if (run.contract === LEGACY_CONTRACT && run.version === LEGACY_VERSION) return LEGACY_VERSION;
-    fail('会议运行记录的格式标识和版本不属于支持的组合。');
-}
-function tagCatalogVersionField(value, format) {
-    const current = Object.hasOwn(value, 'tagCatalogVersion');
-    const legacy = Object.hasOwn(value, 'taxonomyVersion');
-    if (current && legacy) fail('会议运行记录不能混用新旧词表版本字段。');
-    if ((format === RUN_VERSION && legacy) || (format === LEGACY_VERSION && current)) {
-        fail('会议运行记录的词表版本字段与格式版本不一致。');
-    }
-    return format === LEGACY_VERSION ? 'taxonomyVersion' : 'tagCatalogVersion';
-}
-function tagCatalogVersionForRun(value) {
-    const run = assertConferenceRun(value);
-    return run[tagCatalogVersionField(run, runFormat(run))];
-}
-
 function getConferencePaperRecordHash(paperRecord) {
     const { projectionSha256, ...bound } = paperRecord;
     return stableHash(bound);
 }
 
 function normalizeConferencePaperRecord(value, paperId) {
-    assertPlainObject(value, `${paperId} projection`);
-    if (value.projectionSha256 !== getConferencePaperRecordHash(value)) fail(`${paperId} projection SHA does not bind its content`);
-    let tagField;
-    if (value.contract === PAPER_PROJECTION_CONTRACT) tagField = 'tagMetadataSha256';
-    else if (value.contract === LEGACY_PAPER_PROJECTION_CONTRACT) tagField = 'taxonomySha256';
-    else fail(`${paperId} projection identity is malformed`);
-    if (Object.hasOwn(value, 'tagMetadataSha256') && Object.hasOwn(value, 'taxonomySha256')) {
-        fail('论文完成记录不能混用新旧标签摘要字段。');
-    }
-    assertExactFields(value, ['contract', 'paperId', 'sourceSha256', 'readerSha256', tagField,
+    assertExactFields(value, ['contract', 'paperId', 'sourceSha256', 'readerSha256', 'taxonomySha256',
         'scoringSha256', 'publicationSha256', 'summary', 'projectionSha256'], `${paperId} projection`);
     const paperRecord = {
-        contract: value.contract, paperId: value.paperId,
-        sourceSha256: value.sourceSha256, readerSha256: value.readerSha256,
-        [tagField]: value[tagField], scoringSha256: value.scoringSha256,
-        publicationSha256: value.publicationSha256, summary: value.summary,
+        contract: value.contract,
+        paperId: value.paperId,
+        sourceSha256: value.sourceSha256,
+        readerSha256: value.readerSha256,
+        taxonomySha256: value.taxonomySha256,
+        scoringSha256: value.scoringSha256,
+        publicationSha256: value.publicationSha256,
+        summary: value.summary,
         projectionSha256: value.projectionSha256
     };
-    if (paperRecord.paperId !== paperId) fail(`${paperId} projection identity is malformed`);
-    for (const key of ['sourceSha256', 'readerSha256', tagField, 'scoringSha256', 'publicationSha256', 'projectionSha256']) {
+    if (paperRecord.contract !== PAPER_PROJECTION_CONTRACT || paperRecord.paperId !== paperId) {
+        fail(`${paperId} projection identity is malformed`);
+    }
+    for (const key of ['sourceSha256', 'readerSha256', 'taxonomySha256', 'scoringSha256', 'publicationSha256', 'projectionSha256']) {
         assertSha(paperRecord[key], `${paperId} projection ${key}`);
     }
     if (!paperRecord.summary || typeof paperRecord.summary !== 'object' || Array.isArray(paperRecord.summary)
         || ![Object.prototype, null].includes(Object.getPrototypeOf(paperRecord.summary))) {
         fail(`${paperId} projection summary must be an object`);
     }
+    if (paperRecord.projectionSha256 !== getConferencePaperRecordHash(paperRecord)) fail(`${paperId} projection SHA does not bind its content`);
     return canonical(paperRecord);
 }
 
@@ -227,8 +200,7 @@ function immutableIdentity(run) {
     const identity = {
         version: run.version, contract: run.contract, conferenceId: run.conferenceId,
         ledgerSha256: run.ledgerSha256, membershipSha256: run.membershipSha256,
-        [tagCatalogVersionField(run, runFormat(run))]: run[tagCatalogVersionField(run, runFormat(run))],
-        filterPolicySha256: run.filterPolicySha256,
+        taxonomyVersion: run.taxonomyVersion, filterPolicySha256: run.filterPolicySha256,
         selectionReceiptSha256: run.selectionReceiptSha256,
         selectedMemberSetSha256: run.selectedMemberSetSha256,
         members: run.members, shards: run.shards
@@ -265,22 +237,21 @@ function normalizeLedgerBinding(value, members, ledgerSha256, conferenceId) {
     return canonical({ ...bound, bindingSha256 });
 }
 
-function createRun(input, { allowInitialStates = false, ledgerBinding = undefined, format = RUN_VERSION } = {}) {
+function createRun(input, { allowInitialStates = false, ledgerBinding = undefined } = {}) {
     assertPlainObject(input, 'input');
-    const versionField = tagCatalogVersionField(input, format);
-    const allowedInput = ['conferenceId', 'ledgerSha256', 'membershipSha256', versionField,
+    const allowedInput = ['conferenceId', 'ledgerSha256', 'membershipSha256', 'taxonomyVersion',
         'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256', 'members', 'shards', 'paperStates'];
     for (const key of Object.keys(input)) if (!allowedInput.includes(key)) fail(`input has unknown field ${key}`);
     if (typeof input.conferenceId !== 'string' || !CONFERENCE_RE.test(input.conferenceId)) fail('conferenceId is malformed');
-    if (typeof input[versionField] !== 'string' || !TAG_CATALOG_VERSION_PATTERN.test(input[versionField])) fail(`${versionField} is malformed`);
+    if (typeof input.taxonomyVersion !== 'string' || !TAG_CATALOG_VERSION_PATTERN.test(input.taxonomyVersion)) fail('taxonomyVersion is malformed');
     const members = normalizeMembers(input.members, input.conferenceId);
     const paperIds = members.map(member => member.paperId);
     const membershipSha256 = stableHash(members);
     if (input.membershipSha256 !== undefined && input.membershipSha256 !== membershipSha256) fail('membershipSha256 does not bind members');
     const run = {
-        version: format, contract: format === LEGACY_VERSION ? LEGACY_CONTRACT : CONTRACT, conferenceId: input.conferenceId,
+        version: VERSION, contract: CONTRACT, conferenceId: input.conferenceId,
         ledgerSha256: assertSha(input.ledgerSha256, 'ledgerSha256'), membershipSha256,
-        [versionField]: input[versionField],
+        taxonomyVersion: input.taxonomyVersion,
         filterPolicySha256: assertSha(input.filterPolicySha256, 'filterPolicySha256'),
         selectionReceiptSha256: assertSha(input.selectionReceiptSha256, 'selectionReceiptSha256'),
         selectedMemberSetSha256: assertSha(input.selectedMemberSetSha256, 'selectedMemberSetSha256'),
@@ -331,7 +302,7 @@ function trustedLedger(handle) {
 }
 
 function createConferenceRunFromVerifiedLedger(input) {
-    assertExactFields(input, ['ledgerHandle', 'tagCatalogVersion', 'filterPolicySha256', 'selectionReceiptSha256',
+    assertExactFields(input, ['ledgerHandle', 'taxonomyVersion', 'filterPolicySha256', 'selectionReceiptSha256',
         'selectedMemberSetSha256', 'members', 'shards'], 'verified ledger run input');
     const loaded = trustedLedger(input.ledgerHandle);
     const ledger = loaded.ledger;
@@ -350,7 +321,7 @@ function createConferenceRunFromVerifiedLedger(input) {
     const provisional = {
         conferenceId: ledger.conference.id,
         ledgerSha256,
-        tagCatalogVersion: input.tagCatalogVersion,
+        taxonomyVersion: input.taxonomyVersion,
         filterPolicySha256: input.filterPolicySha256,
         selectionReceiptSha256: input.selectionReceiptSha256,
         selectedMemberSetSha256: input.selectedMemberSetSha256,
@@ -363,20 +334,19 @@ function createConferenceRunFromVerifiedLedger(input) {
 
 function assertConferenceRun(run) {
     assertPlainObject(run, 'run');
-    const format = runFormat(run);
-    const versionField = tagCatalogVersionField(run, format);
-    const expectedKeys = ['version', 'contract', 'conferenceId', 'ledgerSha256', 'membershipSha256', versionField,
+    if (run.version !== VERSION || run.contract !== CONTRACT) fail('contract/version mismatch');
+    const expectedKeys = ['version', 'contract', 'conferenceId', 'ledgerSha256', 'membershipSha256', 'taxonomyVersion',
         'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256',
         'members', 'shards', 'paperStates', 'identitySha256', 'stateSha256'];
     if (run.ledgerBinding !== undefined) expectedKeys.push('ledgerBinding');
     assertExactFields(run, expectedKeys, 'run');
     const reconstructed = createRun({
         conferenceId: run.conferenceId, ledgerSha256: run.ledgerSha256, membershipSha256: run.membershipSha256,
-        [versionField]: run[versionField], filterPolicySha256: run.filterPolicySha256,
+        taxonomyVersion: run.taxonomyVersion, filterPolicySha256: run.filterPolicySha256,
         selectionReceiptSha256: run.selectionReceiptSha256,
         selectedMemberSetSha256: run.selectedMemberSetSha256,
         members: run.members, shards: run.shards, paperStates: run.paperStates
-    }, { allowInitialStates: true, ledgerBinding: run.ledgerBinding, format });
+    }, { allowInitialStates: true, ledgerBinding: run.ledgerBinding });
     if (Object.values(reconstructed.paperStates).some(state => state.status === 'completed')) {
         fail(COMPLETION_PROOF_REQUIRED);
     }
@@ -451,10 +421,10 @@ function buildConferenceAggregateInput(run, trustedLedgerContext) {
     const excluded = Object.fromEntries(Object.keys(STATUS_TRANSITIONS).map(status => [status,
         paperIds.filter(id => current.paperStates[id].status === status)]));
     const input = {
-        version: SUMMARY_INPUT_VERSION, contract: SUMMARY_INPUT_CONTRACT, conferenceId: current.conferenceId,
+        version: VERSION, contract: SUMMARY_INPUT_CONTRACT, conferenceId: current.conferenceId,
         runIdentitySha256: current.identitySha256, runStateSha256: current.stateSha256,
         ledgerSha256: current.ledgerSha256, membershipSha256: current.membershipSha256,
-        tagCatalogVersion: tagCatalogVersionForRun(current), filterPolicySha256: current.filterPolicySha256,
+        taxonomyVersion: current.taxonomyVersion, filterPolicySha256: current.filterPolicySha256,
         selectionReceiptSha256: current.selectionReceiptSha256,
         selectedMemberSetSha256: current.selectedMemberSetSha256,
         ledgerBinding: current.ledgerBinding,
@@ -475,9 +445,7 @@ function assertPublishableConferenceInput(input) {
 }
 
 module.exports = {
-    VERSION, RUN_VERSION, CONTRACT, LEGACY_VERSION, LEGACY_CONTRACT, LEDGER_BINDING_CONTRACT,
-    PAPER_PROJECTION_CONTRACT, LEGACY_PAPER_PROJECTION_CONTRACT, SUMMARY_INPUT_VERSION, SUMMARY_INPUT_CONTRACT,
-    LEGACY_SUMMARY_INPUT_CONTRACT, tagCatalogVersionForRun,
+    VERSION, CONTRACT, LEDGER_BINDING_CONTRACT, PAPER_PROJECTION_CONTRACT, SUMMARY_INPUT_CONTRACT,
     COMPLETION_PROOF_REQUIRED, STATUS_TRANSITIONS, USAGE_FIELDS,
     sha256, stableHash, normalizeMembers, normalizeShards, normalizeUsage, normalizeConferencePaperRecord,
     createConferenceRun, createConferenceRunFromVerifiedLedger, assertConferenceRun, assertConferenceRunFromVerifiedLedger,

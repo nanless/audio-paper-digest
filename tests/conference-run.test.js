@@ -8,6 +8,7 @@ const path = require('node:path');
 const conference = require('../scripts/lib/conference-run.js');
 const ledgerApi = require('../scripts/lib/conference-source-ledger.js');
 const paperIdentity = require('../scripts/lib/paper-identity.js');
+const { loadOriginalConferenceApis } = require('./helpers/conference-production-plan-fixture.js');
 
 const sha = value => conference.sha256(value);
 const pid = value => paperIdentity.canonicalConferencePaperId(
@@ -19,7 +20,7 @@ const members = [
 ];
 const selectionProof = () => ({ filterPolicySha256: sha('policy'), selectionReceiptSha256: sha('selection receipt'),
     selectedMemberSetSha256: conference.stableHash(members.map(member => member.paperId)) });
-const base = () => ({ conferenceId: 'icassp-2026', ledgerSha256: sha('ledger'), taxonomyVersion: 'paper-taxonomy-v2',
+const base = () => ({ conferenceId: 'icassp-2026', ledgerSha256: sha('ledger'), tagCatalogVersion: 'paper-tag-catalog-v2',
     ...selectionProof(), members, shards: [
         { shardId: 'shard-b', paperIds: [pid('300')] },
         { shardId: 'shard-a', paperIds: [pid('200'), pid('100')] }
@@ -44,20 +45,23 @@ function boundRun(states) {
     const filename = path.join(directory, 'ledger.json'); ledgerApi.writeLedger(filename, ledger);
     const ledgerHandle = ledgerApi.loadLedgerHandle(filename); const { ledgerSha256 } = ledgerApi.ledgerHandleSnapshot(ledgerHandle);
     fs.rmSync(directory, { recursive: true, force: true });
-    const run = conference.createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'paper-taxonomy-v2',
+    const run = conference.createConferenceRunFromVerifiedLedger({ ledgerHandle, tagCatalogVersion: 'paper-tag-catalog-v2',
         ...selectionProof(), members, shards: base().shards });
     return { run, ledger, ledgerSha256, ledgerHandle };
 }
 function projection(paperId) {
     const value = { contract: conference.PAPER_PROJECTION_CONTRACT, paperId,
         sourceSha256: sha(`source:${paperId}`), readerSha256: sha(`reader:${paperId}`),
-        taxonomySha256: sha(`taxonomy:${paperId}`), scoringSha256: sha(`scoring:${paperId}`),
+        tagMetadataSha256: sha(`tag metadata:${paperId}`), scoringSha256: sha(`scoring:${paperId}`),
         publicationSha256: sha(`publication:${paperId}`), summary: { title: `Title ${paperId}`, score: 9.2 } };
     return { ...value, projectionSha256: conference.stableHash(value) };
 }
 test('conference run freezes ordered member/source identities, member digest and full non-overlapping shards', () => {
     const run = conference.createConferenceRun(base());
     assert.equal(run.contract, conference.CONTRACT);
+    assert.equal(run.version, 3);
+    assert.equal(run.tagCatalogVersion, base().tagCatalogVersion);
+    assert.equal(Object.hasOwn(run, 'taxonomyVersion'), false);
     assert.deepEqual(run.members.map(member => member.paperId), [pid('100'), pid('200'), pid('300')]);
     assert.deepEqual(run.shards.map(shard => shard.shardId), ['shard-a', 'shard-b']);
     assert.equal(run.membershipSha256, conference.stableHash(run.members));
@@ -68,11 +72,54 @@ test('conference run freezes ordered member/source identities, member digest and
     assert.throws(() => conference.createConferenceRun({ ...base(), membershipSha256: sha('not members') }), /does not bind members/);
 });
 
-test('run identity detects immutable source, taxonomy, policy, membership and shard drift', () => {
+test('运行和论文记录拒绝混用不同版本的标签字段', () => {
+    for (const oldValue of [base().tagCatalogVersion, null]) {
+        assert.throws(() => conference.createConferenceRun({ ...base(), taxonomyVersion: oldValue }), /不能混用新旧词表版本字段/);
+    }
+    const run = conference.createConferenceRun(base());
+    for (const [contract, version] of [[conference.CONTRACT, 2], ['conference-run-v9', 3]]) {
+        assert.throws(() => conference.assertConferenceRun({ ...run, contract, version }), /不属于支持的组合/);
+    }
+    const record = projection(pid('100'));
+    assert.deepEqual(conference.normalizeConferencePaperRecord(record, pid('100')), record);
+    assert.equal(Object.hasOwn(record, 'taxonomySha256'), false);
+    for (const oldValue of [record.tagMetadataSha256, null]) {
+        const mixed = { ...record, taxonomySha256: oldValue };
+        assert.throws(() => conference.normalizeConferencePaperRecord(mixed, pid('100')), /projection SHA/);
+        const { projectionSha256: _oldSha, ...body } = mixed;
+        mixed.projectionSha256 = conference.stableHash(body);
+        assert.throws(() => conference.normalizeConferencePaperRecord(mixed, pid('100')), /不能混用新旧标签摘要字段/);
+    }
+});
+
+test('读取旧运行和论文样本时保留原记录及摘要', () => {
+    const original = loadOriginalConferenceApis().run;
+    const oldRun = original.createConferenceRun({ conferenceId: 'icassp-2026', ledgerSha256: sha('ledger'),
+        taxonomyVersion: 'paper-taxonomy-v2', ...selectionProof(), members, shards: base().shards });
+    const before = structuredClone(oldRun);
+    assert.deepEqual(conference.assertConferenceRun(oldRun), oldRun);
+    assert.equal(conference.tagCatalogVersionForRun(oldRun), 'paper-taxonomy-v2');
+    const continued = conference.transitionPaperState(oldRun, pid('100'), { status: 'source_ready', usage: { requests: 1 } });
+    assert.equal(continued.version, 2);
+    assert.equal(continued.contract, 'conference-run-v2');
+    assert.equal(continued.identitySha256, oldRun.identitySha256);
+    assert.equal(Object.hasOwn(continued, 'tagCatalogVersion'), false);
+    assert.deepEqual(oldRun, before);
+    // 这是原校验器生成的合成摘要样本，不是已完成论文的发布证明。
+    const body = { contract: original.PAPER_PROJECTION_CONTRACT, paperId: pid('100'),
+        sourceSha256: sha('source'), readerSha256: sha('reader'), taxonomySha256: sha('tag metadata'),
+        scoringSha256: sha('scoring'), publicationSha256: sha('publication'), summary: { title: 'Original', score: 9 } };
+    const oldRecord = original.normalizeConferencePaperRecord({ ...body, projectionSha256: original.stableHash(body) }, pid('100'));
+    assert.deepEqual(conference.normalizeConferencePaperRecord(oldRecord, pid('100')), oldRecord);
+    assert.throws(() => conference.transitionPaperState(continued, pid('100'), { status: 'completed', usage: { requests: 1 },
+        projection: oldRecord }), /completion-proof handle/);
+});
+
+test('运行记录核对来源、词表、选择规则、成员和分片是否变化', () => {
     const run = conference.createConferenceRun(base());
     for (const altered of [
         { ...run, ledgerSha256: sha('other ledger') },
-        { ...run, taxonomyVersion: 'paper-taxonomy-v3' },
+        { ...run, tagCatalogVersion: 'paper-tag-catalog-v3' },
         { ...run, filterPolicySha256: sha('other policy') },
         { ...run, selectionReceiptSha256: sha('other receipt') },
         { ...run, selectedMemberSetSha256: sha('other members') },
@@ -103,13 +150,13 @@ test('completed state is unavailable until an authenticated completion-proof han
 test('only a verified ledger can create an executable run, with exact canonical source identities', () => {
     const { run, ledger, ledgerSha256, ledgerHandle } = boundRun();
     assert.equal(conference.assertConferenceRunFromVerifiedLedger(run, ledgerHandle).identitySha256, run.identitySha256);
-    assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'paper-taxonomy-v2', ...selectionProof(),
+    assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledgerHandle, tagCatalogVersion: 'paper-tag-catalog-v2', ...selectionProof(),
         members: [{ ...members[0], sourceIdentity: 'ieee-arnumber:100' }, ...members.slice(1)], shards: base().shards }), /not present/);
     const blockedLedger = verifiedLedger(); const blocked = blockedLedger.members.find(member => member.identity.value === '200');
     blocked.availability.artifacts = 'absent'; blocked.artifactsFile = null; blocked.artifactsSha256 = null;
     blocked.provenance.artifacts = null; blocked.status.state = 'blocked'; blocked.status.evidence = blocked.status.evidence.filter(item => item.kind !== 'artifacts');
     assert.equal(ledgerApi.validateLedger(blockedLedger), blockedLedger);
-    assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledgerHandle: structuredClone(ledgerHandle), taxonomyVersion: 'paper-taxonomy-v2', ...selectionProof(), members, shards: base().shards }), /authenticated loaded ledger handle/);
+    assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledgerHandle: structuredClone(ledgerHandle), tagCatalogVersion: 'paper-tag-catalog-v2', ...selectionProof(), members, shards: base().shards }), /authenticated loaded ledger handle/);
     const forged = conference.createConferenceRun({ ...base(), ledgerSha256 });
     assert.throws(() => conference.assertConferenceRunFromVerifiedLedger(forged, ledgerHandle), /lacks a verified ledger binding/);
 });
@@ -141,6 +188,9 @@ test('summary hand-off remains draft-only and marks every incomplete member as e
     const one = conference.buildConferenceAggregateInput(run, context);
     const two = conference.buildConferenceAggregateInput(conference.assertConferenceRun(run), context);
     assert.deepEqual(one, two);
+    assert.equal(one.version, 3);
+    assert.equal(one.tagCatalogVersion, run.tagCatalogVersion);
+    assert.equal(Object.hasOwn(one, 'taxonomyVersion'), false);
     assert.equal(one.status, 'partial'); assert.equal(one.publicationEligible, false);
     assert.deepEqual(one.papers, []);
     assert.deepEqual(one.excluded.analyzing, [pid('100')]);

@@ -12,7 +12,7 @@ const planApi = require('../scripts/lib/conference-plan.js');
 const execution = require('../scripts/lib/conference-execution.js');
 const cli = require('../scripts/conference-execution.js');
 const paperIdentity = require('../scripts/lib/paper-identity.js');
-const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
+const { productionPlanFixture, loadOriginalConferenceApis } = require('./helpers/conference-production-plan-fixture.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const stamp = '2026-09-06T00:00:00.000Z';
@@ -35,7 +35,7 @@ function fixture(t) {
     const ledgerHandle = ledgerApi.loadLedgerHandle(ledgerFile);
     const members = [{ paperId, sourceIdentity: 'icassp-arnumber:1001' }];
     const selectedMemberSetSha256 = runApi.stableHash([paperId]);
-    const run = runApi.createConferenceRunFromVerifiedLedger({ ledgerHandle, taxonomyVersion: 'taxonomy-v1',
+    const run = runApi.createConferenceRunFromVerifiedLedger({ ledgerHandle, tagCatalogVersion: 'paper-tag-catalog-v2',
         filterPolicySha256: sha('filter policy'), selectionReceiptSha256: sha('selection receipt'),
         selectedMemberSetSha256, members, shards: [{ shardId: 'all', paperIds: [paperId] }] });
     const snapshot = { run, receipt: { receiptSha256: sha('plan receipt'),
@@ -51,7 +51,7 @@ function fixture(t) {
     return { root, handle, snapshot };
 }
 
-test('v2 prepare requires plan authority and writes a durable immutable authority receipt', t => {
+test('新版执行准备须核验计划，并保存独立版本的权限凭证', t => {
     const f = fixture(t);
     assert.equal(execution.prepareExecution, undefined);
     assert.throws(() => execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: {}, executionId }), /authenticated plan handle/);
@@ -62,11 +62,111 @@ test('v2 prepare requires plan authority and writes a durable immutable authorit
     assert.equal(fs.statSync(path.join(directory, 'authority.json')).mode & 0o777, 0o600);
     const authority = JSON.parse(fs.readFileSync(path.join(directory, 'authority.json'), 'utf8'));
     assert.equal(authority.contract, execution.AUTHORITY_CONTRACT);
+    assert.equal(state.version, 3);
+    assert.equal(authority.version, 2);
+    assert.equal(Object.hasOwn(state.runTemplate, 'taxonomyVersion'), false);
+    assert.equal(state.runTemplate.tagCatalogVersion, 'paper-tag-catalog-v2');
     assert.equal(execution.readExecution({ executionRoot: f.root, executionId, planHandle: f.handle }).stateSha256,
         state.stateSha256);
     assert.throws(() => execution.readExecution({ executionRoot: f.root, executionId, planHandle: {} }), /authenticated plan handle/);
     assert.equal(execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle,
         executionId, now: '2026-09-07T00:00:00.000Z' }).stateSha256, state.stateSha256);
+});
+
+test('旧执行任务在原UUID继续，保留权限文件和已有执行记录', t => {
+    const original = loadOriginalConferenceApis();
+    const f = productionPlanFixture(t, { planApi: original.plan });
+    const executionRoot = path.join(f.root, 'executions');
+    const initial = original.execution.prepareExecutionFromPlan({ executionRoot, planHandle: f.planHandle, executionId, now: stamp });
+    const firstPatch = { operationId, expectedStateSha256: initial.stateSha256, paperId: f.paperId,
+        nextState: { status: 'source_ready', usage: { requests: 1 } } };
+    const oldState = original.execution.transitionExecution({ executionRoot, executionId, planHandle: f.planHandle,
+        owner: 'original-offline-fixture', now: stamp, patch: firstPatch });
+    const directory = path.join(executionRoot, executionId);
+    const stateFile = path.join(directory, 'state.json');
+    const authorityFile = path.join(directory, 'authority.json');
+    const stateRaw = fs.readFileSync(stateFile); const authorityRaw = fs.readFileSync(authorityFile);
+    const upstreamFiles = [path.join(f.roots.ledgers, 'plan.json'), path.join(f.roots.runs, 'run.json'),
+        path.join(f.roots.runs, 'run.plan-receipt.json')];
+    const upstreamRaw = upstreamFiles.map(filename => fs.readFileSync(filename));
+    const planHandle = planApi.loadPlanHandle(upstreamFiles[1], upstreamFiles[2], upstreamFiles[0], f.importHandle, f.tagCatalogPath);
+    const restored = execution.prepareExecutionFromPlan({ executionRoot, planHandle, executionId, now: '2026-09-07T00:00:00.000Z' });
+    assert.deepEqual(restored, oldState);
+    assert.deepEqual(execution.transitionExecution({ executionRoot, planHandle, executionId,
+        owner: 'current-worker', patch: firstPatch }), oldState);
+    assert.deepEqual(fs.readFileSync(stateFile), stateRaw);
+    assert.deepEqual(fs.readFileSync(authorityFile), authorityRaw);
+    assert.equal(JSON.parse(authorityRaw).version, 2);
+    assert.equal(fs.statSync(authorityFile).mode & 0o777, 0o600);
+
+    const next = execution.transitionExecution({ executionRoot, planHandle, executionId, owner: 'current-worker',
+        now: '2026-09-07T00:00:00.000Z', patch: { operationId: operationId2,
+            expectedStateSha256: oldState.stateSha256, paperId: f.paperId,
+            nextState: { status: 'analyzing', usage: { requests: 2 } } } });
+    assert.equal(next.version, 2);
+    assert.equal(next.contract, 'conference-execution-v2');
+    assert.deepEqual(next.attempts[0], oldState.attempts[0]);
+    assert.equal(next.attempts.length, 2);
+    assert.equal(next.runTemplate.taxonomyVersion, f.planned.run.taxonomyVersion);
+    assert.equal(Object.hasOwn(next.runTemplate, 'tagCatalogVersion'), false);
+    assert.deepEqual(fs.readFileSync(authorityFile), authorityRaw);
+    upstreamFiles.forEach((filename, index) => assert.deepEqual(fs.readFileSync(filename), upstreamRaw[index]));
+
+    const newId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    assert.throws(() => execution.prepareExecutionFromPlan({ executionRoot, planHandle, executionId: newId, now: stamp }), /不能创建新的执行标识/);
+    assert.equal(fs.existsSync(path.join(executionRoot, newId)), false);
+    assert.throws(() => execution.prepareExecutionFromPlan({ executionRoot: path.join(f.root, 'absent-executions'),
+        planHandle, executionId: newId, now: stamp }), /不能创建新的执行标识/);
+    assert.equal(fs.existsSync(path.join(f.root, 'absent-executions')), false);
+
+    // 模拟原 v2 写入初始 state 后、写入 authority 前的中断；不更改格式头。
+    const partialId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const originalInitial = original.execution.prepareExecutionFromPlan({ executionRoot, planHandle: f.planHandle,
+        executionId: partialId, now: stamp });
+    const partialDirectory = path.join(executionRoot, partialId);
+    const partialStateFile = path.join(partialDirectory, 'state.json');
+    const partialAuthorityFile = path.join(partialDirectory, 'authority.json');
+    const originalInitialRaw = fs.readFileSync(partialStateFile);
+    const expectedAuthorityRaw = fs.readFileSync(partialAuthorityFile);
+    fs.unlinkSync(partialAuthorityFile);
+    fs.rmdirSync(path.join(partialDirectory, 'patches'));
+    const recoveredInitial = execution.prepareExecutionFromPlan({ executionRoot, planHandle,
+        executionId: partialId, now: '2026-09-07T00:00:00.000Z' });
+    assert.deepEqual(recoveredInitial, originalInitial);
+    assert.equal(recoveredInitial.attempts.length, 0);
+    assert.deepEqual(fs.readFileSync(partialStateFile), originalInitialRaw);
+    assert.deepEqual(fs.readFileSync(partialAuthorityFile), expectedAuthorityRaw);
+    assert.deepEqual(fs.readdirSync(path.join(partialDirectory, 'patches')), []);
+
+    original.execution.transitionExecution({ executionRoot, planHandle: f.planHandle,
+        executionId: partialId, owner: 'original-offline-fixture', now: stamp,
+        patch: { operationId, expectedStateSha256: originalInitial.stateSha256, paperId: f.paperId,
+            nextState: { status: 'source_ready', usage: {} } } });
+    const progressedRaw = fs.readFileSync(partialStateFile);
+    fs.unlinkSync(partialAuthorityFile);
+    assert.throws(() => execution.prepareExecutionFromPlan({ executionRoot, planHandle, executionId: partialId, now: stamp }),
+        /partial execution state does not match the current authenticated plan/);
+    assert.deepEqual(fs.readFileSync(partialStateFile), progressedRaw);
+    assert.equal(fs.existsSync(partialAuthorityFile), false);
+    assert.deepEqual(fs.readdirSync(path.join(partialDirectory, 'patches')), []);
+
+    assert.throws(() => execution.transitionExecution({ executionRoot, planHandle, executionId,
+        owner: 'current-worker', patch: { operationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            expectedStateSha256: next.stateSha256, paperId: f.paperId,
+            nextState: { status: 'completed', usage: { requests: 2 }, projection: {} } } }), /completion-proof receipt bundle/);
+});
+
+test('执行模板拒绝混用词表字段，并核对状态的格式版本', t => {
+    const f = fixture(t);
+    const state = execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle, executionId, now: stamp });
+    for (const oldValue of [state.runTemplate.tagCatalogVersion, null]) {
+        const mixed = structuredClone(state); mixed.runTemplate.taxonomyVersion = oldValue;
+        assert.throws(() => execution.assertConferenceExecution(mixed), /不能混用新旧词表版本字段/);
+    }
+    for (const [contract, version] of [[execution.CONTRACT, 2], ['conference-execution-v9', 3]]) {
+        assert.throws(() => execution.assertConferenceExecution({ ...state, contract, version }), /不属于支持的组合/);
+    }
+    assert.throws(() => execution.assertConferenceExecution({ ...state, contract: 'conference-execution-v2', version: 2 }), /运行模板的格式版本不一致/);
 });
 
 test('prepare recovers only authenticated known half-products and remains retryable after staged EIO', t => {

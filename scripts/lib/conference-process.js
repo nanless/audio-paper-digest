@@ -658,18 +658,36 @@ function prepareShared(context, deps, createdAt) {
     const shards = [];
     for (let index = 0; index < planIdentities.length; index += 50) shards.push({ shardId: `part-${String(index / 50 + 1).padStart(4, '0')}`,
         paperIds: planIdentities.slice(index, index + 50).map(item => item.paperId) });
-    const planDoc = { contract: deps.plan.PLAN_CONTRACT, version: deps.plan.VERSION, ledgerName: names.ledger,
-        taxonomy: { version: tagCatalogVersion, sha256: tagCatalogFile.sha256 }, selectionPolicy: {
+    const planDoc = { contract: deps.plan.PLAN_CONTRACT, version: deps.plan.PLAN_VERSION, ledgerName: names.ledger,
+        tagMetadata: { version: tagCatalogVersion, sha256: tagCatalogFile.sha256 }, selectionPolicy: {
             contract: deps.plan.SELECTION_CONTRACT, identities: planIdentities,
             selectedMemberSetSha256: deps.plan.stableHash(planIdentities.map(item => item.paperId)) },
         shards };
-    exactFile(path.join(files.conferenceSourceLedgerDir, names.plan), canonicalBytes(planDoc));
-    const planned = deps.plan.createRunFromImportPlan({ files, importHandle, planName: names.plan, runName: names.run });
-    const runFile = path.join(files.conferenceRunsDir, names.run); const planReceiptFile = path.join(files.conferenceRunsDir, planned.receiptName);
-    if (!fs.existsSync(runFile) && !fs.existsSync(planReceiptFile)) deps.plan.applyRunPlan(planned);
+    const planFile = path.join(files.conferenceSourceLedgerDir, names.plan);
+    const runFile = path.join(files.conferenceRunsDir, names.run);
+    const planReceiptFile = path.join(files.conferenceRunsDir, deps.plan.receiptNameFor(names.run));
     if (fs.existsSync(runFile) !== fs.existsSync(planReceiptFile)) throw new Error('会议分析计划文件不完整，不能恢复；预期的计划和凭证必须同时存在。');
-    const planHandle = deps.plan.loadPlanHandle(runFile, planReceiptFile,
-        path.join(files.conferenceSourceLedgerDir, names.plan), importHandle, files.tagCatalogFile);
+    let planHandle;
+    if (fs.existsSync(runFile)) {
+        // 原文件对先完整核验，再比较当前来源和成员；不能以新版计划覆盖旧表示。
+        planHandle = deps.plan.loadPlanHandle(runFile, planReceiptFile, planFile, importHandle, files.tagCatalogFile);
+        const saved = deps.plan.planHandleSnapshot(planHandle);
+        if (saved.receipt.ledger.name !== names.ledger
+            || deps.plan.stableHash(deps.plan.tagMetadataForReceipt(saved.receipt)) !== deps.plan.stableHash(planDoc.tagMetadata)
+            || deps.plan.stableHash(saved.receipt.members) !== deps.plan.stableHash(planIdentities)
+            || deps.plan.stableHash(saved.receipt.shards) !== deps.plan.stableHash(shards)) {
+            throw new Error('已保存的会议计划与当前来源、标签词表或成员分片不一致。');
+        }
+    } else {
+        if (fs.existsSync(planFile)) {
+            const savedPlan = deps.plan.normalizePlan(deps.plan.readRuntimeJson(files.conferenceSourceLedgerDir, names.plan).value);
+            if (savedPlan.version === deps.plan.LEGACY_VERSION) throw new Error('旧会议计划缺少完整运行文件和凭证，请保留原文件并使用新的运行标识。');
+        }
+        exactFile(planFile, canonicalBytes(planDoc));
+        const planned = deps.plan.createRunFromImportPlan({ files, importHandle, planName: names.plan, runName: names.run });
+        deps.plan.applyRunPlan(planned);
+        planHandle = deps.plan.loadPlanHandle(runFile, planReceiptFile, planFile, importHandle, files.tagCatalogFile);
+    }
     return { planHandle, names, sealed, sourceCacheRoot: cacheRoot,
         sourceGenerationChanged: sealed.some(item => item.upgradedFrom),
         planReceiptSha256: deps.plan.planHandleSnapshot(planHandle).receipt.receiptSha256 };
