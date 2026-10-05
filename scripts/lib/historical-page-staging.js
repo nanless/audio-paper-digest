@@ -10,10 +10,12 @@ const tagAssignmentsApi = require('./historical-tag-assignment.js');
 const registryApi = require('./tag-catalog.js');
 const fresh = require('./fresh-rewrite-run.js');
 
-const CONTRACT = 'historical-paper-page-staging-v1';
-const INTENT_CONTRACT = 'historical-paper-page-staging-intent-v1';
+const CONTRACT = 'historical-paper-page-staging-v2';
+const LEGACY_CONTRACT = 'historical-paper-page-staging-v1';
+const INTENT_CONTRACT = 'historical-paper-page-staging-intent-v2';
+const LEGACY_INTENT_CONTRACT = 'historical-paper-page-staging-intent-v1';
 const RENDERER_IMPLEMENTATION_CONTRACT = 'historical-page-renderer-implementation-v1';
-const VERSION = 1;
+const VERSION = 2;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -250,7 +252,7 @@ function loadPageGenerationInputs({ crosswalkRoot, crosswalkId, analysisRoot, ta
             analysisRunId: assignment.value.analysisRunId, analysisFileSha256: run.analysisFileSha256,
             analysisRecordSha256: assignment.value.analysisRecordSha256,
             analysisSha256: assignment.value.analysisSha256,
-            taxonomy: assignment.value, taxonomyFileSha256: assignment.fileSha256, pages: projectedPages });
+            tagAssignment: assignment.value, tagAssignmentFileSha256: assignment.fileSha256, pages: projectedPages });
     }
     return { crosswalk: state, groups: results.sort((a, b) => a.paperId.localeCompare(b.paperId)) };
 }
@@ -288,6 +290,11 @@ function replaySelectedBindings(manifest, crosswalk) {
 }
 
 function pageInputBindings(groups) {
+    return formatPageInputBindings(groups, false);
+}
+
+// 旧字段只供已核验的原保存记录完整重放，不用于新生成。
+function formatPageInputBindings(groups, legacy) {
     return groups.flatMap(group => group.pages.map(page => ({ paperId: group.paperId,
         pageKey: page.pageKey, pagePath: page.pagePath, primaryUrl: page.primaryUrl,
         cohortDate: page.cohortDate, sourcePageContentSha256: page.pageContentSha256,
@@ -295,8 +302,35 @@ function pageInputBindings(groups) {
         analysisFileSha256: group.analysisFileSha256,
         analysisRecordSha256: group.analysisRecordSha256,
         analysisSha256: group.analysisSha256,
-        taxonomyAssignmentSha256: group.taxonomy.assignmentSha256,
-        taxonomyFileSha256: group.taxonomyFileSha256 }))).sort((a, b) => a.pagePath.localeCompare(b.pagePath));
+        [legacy ? 'taxonomyAssignmentSha256' : 'tagAssignmentSha256']: group.tagAssignment.assignmentSha256,
+        [legacy ? 'taxonomyFileSha256' : 'tagAssignmentFileSha256']: group.tagAssignmentFileSha256 }))).sort((a, b) => a.pagePath.localeCompare(b.pagePath));
+}
+
+function isLegacyPageFormat(value) {
+    if (value?.contract === LEGACY_CONTRACT && value.version === 1) return true;
+    if (value?.contract === CONTRACT && value.version === VERSION) return false;
+    throw new Error('历史页面生成清单的格式标识和版本不属于支持的组合。');
+}
+
+function assignmentProofForRecord(page, legacy) {
+    if (!page || typeof page !== 'object' || Array.isArray(page)) throw new Error('页面标签分配凭证必须为对象。');
+    const oldAssignment = Object.hasOwn(page, 'taxonomyAssignmentSha256');
+    const oldFile = Object.hasOwn(page, 'taxonomyFileSha256');
+    const newAssignment = Object.hasOwn(page, 'tagAssignmentSha256');
+    const newFile = Object.hasOwn(page, 'tagAssignmentFileSha256');
+    if ((oldAssignment || oldFile) && (newAssignment || newFile)) throw new Error('页面标签分配凭证不能混用新旧字段。');
+    if (legacy ? newAssignment || newFile || !oldAssignment || !oldFile
+        : oldAssignment || oldFile || !newAssignment || !newFile) throw new Error('页面标签分配凭证的字段与记录格式版本不一致。');
+    const assignmentSha256 = page[legacy ? 'taxonomyAssignmentSha256' : 'tagAssignmentSha256'];
+    const fileSha256 = page[legacy ? 'taxonomyFileSha256' : 'tagAssignmentFileSha256'];
+    if (typeof assignmentSha256 !== 'string' || typeof fileSha256 !== 'string'
+        || !SHA_RE.test(assignmentSha256) || !SHA_RE.test(fileSha256)) throw new Error('页面标签分配凭证的对象 SHA 或文件 SHA 格式无效。');
+    return { assignmentSha256, fileSha256 };
+}
+
+// 调用者先核验原完整清单及页面字节；这里只读取已核验页面的原格式凭证。
+function tagAssignmentProofFor(manifest, page) {
+    return assignmentProofForRecord(page, isLegacyPageFormat(manifest));
 }
 
 function normalizeStagingManifest(value) {
@@ -305,18 +339,25 @@ function normalizeStagingManifest(value) {
         'selectedBindings', 'selectedBindingSha256', 'manifestSha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expected.sort().join('\0')
-        || value.contract !== CONTRACT || value.version !== VERSION || !UUID_RE.test(value.stagingRunId || '')
+        || !UUID_RE.test(value.stagingRunId || '')
         || !SHA_RE.test(value.rendererImplementationSha256 || '') || !Array.isArray(value.pages)
         || !Array.isArray(value.assets) || !Array.isArray(value.selectedBindings)
         || value.pageSetSha256 !== stableHash(value.pages) || value.assetSetSha256 !== stableHash(value.assets)
-        || value.selectedBindingSha256 !== stableHash(value.selectedBindings)) throw new Error('历史页面生成清单的字段、版本或输入哈希无效。');
+        || value.selectedBindingSha256 !== stableHash(value.selectedBindings)) throw new Error('历史页面生成清单的字段或输入哈希无效。');
     const body = { ...value }; delete body.manifestSha256;
     if (!SHA_RE.test(value.manifestSha256 || '') || value.manifestSha256 !== stableHash(body)) throw new Error('历史页面生成清单自身的 SHA 缺失、格式无效或与内容不一致。');
+    const legacy = isLegacyPageFormat(value);
+    for (const page of value.pages) assignmentProofForRecord(page, legacy);
     return structuredClone(value);
 }
 
 function stagingIntent(options, loaded, selectedBindings, pageBindings, rendererImplementationSha256) {
-    const body = { contract: INTENT_CONTRACT, version: VERSION, stagingRunId: options.stagingRunId,
+    return formatStagingIntent(options, loaded, selectedBindings, pageBindings, rendererImplementationSha256, false);
+}
+
+function formatStagingIntent(options, loaded, selectedBindings, pageBindings, rendererImplementationSha256, legacy) {
+    const body = { contract: legacy ? LEGACY_INTENT_CONTRACT : INTENT_CONTRACT,
+        version: legacy ? 1 : VERSION, stagingRunId: options.stagingRunId,
         crosswalkId: loaded.crosswalk.crosswalkId, rendererImplementationSha256, selectedBindings,
         selectedBindingSha256: stableHash(selectedBindings), pageBindings,
         pageBindingSha256: stableHash(pageBindings) };
@@ -324,13 +365,15 @@ function stagingIntent(options, loaded, selectedBindings, pageBindings, renderer
 }
 
 function normalizeStagingIntent(value) {
-    if (!value || value.contract !== INTENT_CONTRACT || value.version !== VERSION
-        || !UUID_RE.test(value.stagingRunId || '') || !Array.isArray(value.selectedBindings)
+    if (!value || !UUID_RE.test(value.stagingRunId || '') || !Array.isArray(value.selectedBindings)
         || !SHA_RE.test(value.rendererImplementationSha256 || '') || !Array.isArray(value.pageBindings)
         || value.selectedBindingSha256 !== stableHash(value.selectedBindings)
-        || value.pageBindingSha256 !== stableHash(value.pageBindings)) throw new Error('历史页面生成输入记录的字段、版本或输入哈希无效。');
+        || value.pageBindingSha256 !== stableHash(value.pageBindings)) throw new Error('历史页面生成输入记录的字段或输入哈希无效。');
     const body = { ...value }; delete body.intentSha256;
     if (!SHA_RE.test(value.intentSha256 || '') || value.intentSha256 !== stableHash(body)) throw new Error('历史页面生成输入记录自身的 SHA 缺失、格式无效或与内容不一致。');
+    const legacy = value.contract === LEGACY_INTENT_CONTRACT && value.version === 1;
+    if (!legacy && !(value.contract === INTENT_CONTRACT && value.version === VERSION)) throw new Error('历史页面生成输入记录的格式标识和版本不属于支持的组合。');
+    for (const page of value.pageBindings) assignmentProofForRecord(page, legacy);
     return structuredClone(value);
 }
 
@@ -408,13 +451,49 @@ function stagedFileInventory(runRoot, maximum = 10000) {
     walk(runRoot); return files.sort();
 }
 
+function readExistingStaging(runRoot) {
+    const loadedIntent = readRegular(path.join(runRoot, 'intent.json'), 16 * 1024 * 1024, '已有页面生成输入记录');
+    const intent = normalizeStagingIntent(strictJson(loadedIntent.bytes, '已有页面生成输入记录'));
+    const loadedManifest = readRegular(path.join(runRoot, 'manifest.json'), 16 * 1024 * 1024, '已有页面生成清单');
+    const manifest = normalizeStagingManifest(strictJson(loadedManifest.bytes, '已有页面生成清单'));
+    for (const page of manifest.pages) {
+        const target = path.resolve(runRoot, ...page.stagedPath.split('/'));
+        if (!target.startsWith(`${runRoot}${path.sep}`)
+            || readRegular(target, 32 * 1024 * 1024, '待恢复页面').fileSha256 !== page.contentSha256) throw new Error('恢复页面的路径越出运行目录，或文件 SHA 与生成清单不一致。');
+    }
+    for (const asset of manifest.assets) {
+        const target = path.resolve(runRoot, 'assets', ...asset.path.split('/'));
+        if (!target.startsWith(`${path.join(runRoot, 'assets')}${path.sep}`)) throw new Error('恢复资源的路径越出了当前运行的资源目录。');
+        const found = readRegular(target, 64 * 1024 * 1024, '待恢复资源');
+        if (found.fileSha256 !== asset.sha256 || found.bytes.length !== asset.size) throw new Error('恢复资源的 SHA 或字节数与生成清单不一致。');
+    }
+    const assignmentProofs = Object.create(null);
+    for (const page of manifest.pages) {
+        const proof = { analysisRunId: page.analysisRunId, ...tagAssignmentProofFor(manifest, page) };
+        if (Object.hasOwn(assignmentProofs, page.paperId)
+            && stableHash(assignmentProofs[page.paperId]) !== stableHash(proof)) throw new Error(`论文 ${page.paperId} 的多个已保存页面绑定了不同的标签分配凭证。`);
+        assignmentProofs[page.paperId] = proof;
+    }
+    return { intent, manifest, assignmentProofs };
+}
+
 function stageHistoricalPages(options, dependencies = {}) {
     const rendererImplementationSha256 = currentRendererImplementationSha256(dependencies);
     if (options.rendererImplementationSha256 !== undefined
         && options.rendererImplementationSha256 !== rendererImplementationSha256) {
         throw new Error('历史页面生成器的实际实现指纹与预期指纹不一致。');
     }
-    const loaded = loadPageGenerationInputs(options, dependencies); const maximum = options.limit === 'pilot' ? 1 : options.limit === null ? loaded.groups.length : options.limit;
+    let existing = null;
+    if (options.apply && UUID_RE.test(options.stagingRunId || '')
+        && typeof options.stagingRoot === 'string' && path.isAbsolute(options.stagingRoot)
+        && fs.existsSync(path.join(options.stagingRoot, options.stagingRunId, 'manifest.json'))) {
+        const existingRoot = fresh.assertSafeDirectory(options.stagingRoot);
+        const existingRunRoot = fresh.assertSafeDirectory(path.join(existingRoot, options.stagingRunId));
+        existing = readExistingStaging(existingRunRoot);
+        if (existing.manifest.stagingRunId !== options.stagingRunId
+            || existing.manifest.rendererImplementationSha256 !== rendererImplementationSha256) throw new Error('已有页面生成记录与本次选择的论文、页面或生成器实现不一致。');
+    }
+    const loaded = loadPageGenerationInputs(existing ? { ...options, assignmentProofs: existing.assignmentProofs } : options, dependencies); const maximum = options.limit === 'pilot' ? 1 : options.limit === null ? loaded.groups.length : options.limit;
     const selected = loaded.groups.slice(0, maximum);
     if (options.expectedAssignment !== undefined) {
         const expected = options.expectedAssignment;
@@ -425,9 +504,9 @@ function stageHistoricalPages(options, dependencies = {}) {
             analysisFileSha256: group.analysisFileSha256,
             analysisRecordSha256: group.analysisRecordSha256,
             analysisSha256: group.analysisSha256,
-            registrySha256: group.taxonomy.registrySha256,
-            assignmentSha256: group.taxonomy.assignmentSha256,
-            taxonomyFileSha256: group.taxonomyFileSha256
+            registrySha256: group.tagAssignment.registrySha256,
+            assignmentSha256: group.tagAssignment.assignmentSha256,
+            tagAssignmentFileSha256: group.tagAssignmentFileSha256
         };
         if (!expected || typeof expected !== 'object' || Array.isArray(expected)
             || stableHash(actual) !== stableHash(expected)
@@ -447,31 +526,20 @@ function stageHistoricalPages(options, dependencies = {}) {
     const runRoot = fresh.assertSafeDirectory(path.join(root, options.stagingRunId), true);
     const selectedBindings = selectedBindingsFor(selected); const pageBindings = pageInputBindings(selected);
     const intent = stagingIntent(options, loaded, selectedBindings, pageBindings, rendererImplementationSha256);
-    const intentFile = path.join(runRoot, 'intent.json'); const manifestFile = path.join(runRoot, 'manifest.json');
-    if (fs.existsSync(manifestFile)) {
-        const loadedIntent = normalizeStagingIntent(strictJson(
-            readRegular(intentFile, 16 * 1024 * 1024, '已有页面生成输入记录').bytes, '已有页面生成输入记录'));
-        const loadedManifest = readRegular(manifestFile, 16 * 1024 * 1024, '已有页面生成清单');
-        const manifest = normalizeStagingManifest(strictJson(loadedManifest.bytes, '已有页面生成清单'));
+    const intentFile = path.join(runRoot, 'intent.json');
+    if (existing) {
+        const { intent: loadedIntent, manifest } = existing;
+        const legacy = isLegacyPageFormat(manifest);
+        const recoveredBindings = formatPageInputBindings(selected, legacy);
+        const recoveredIntent = formatStagingIntent(options, loaded, selectedBindings, recoveredBindings, rendererImplementationSha256, legacy);
         if (manifest.stagingRunId !== options.stagingRunId || manifest.crosswalkId !== loaded.crosswalk.crosswalkId
             || manifest.rendererImplementationSha256 !== rendererImplementationSha256
             || manifest.selectedBindingSha256 !== stableHash(selectedBindings)
-            || stableHash(loadedIntent) !== stableHash(intent)) throw new Error('已有页面生成记录与本次选择的论文、页面或生成器实现不一致。');
+            || stableHash(loadedIntent) !== stableHash(recoveredIntent)) throw new Error('已有页面生成记录与本次选择的论文、页面或生成器实现不一致。');
         replaySelectedBindings(manifest, loaded.crosswalk);
         const recoveredPageBindings = manifest.pages.map(page => { const copy = { ...page }; delete copy.contentSha256; return copy; });
-        if (stableHash(recoveredPageBindings) !== stableHash(pageInputBindings(selected))) {
+        if (stableHash(recoveredPageBindings) !== stableHash(recoveredBindings)) {
             throw new Error('恢复记录中的分析、标签或页面对应关系与本次输入不一致。');
-        }
-        for (const page of manifest.pages) {
-            const target = path.resolve(runRoot, ...page.stagedPath.split('/'));
-            if (!target.startsWith(`${runRoot}${path.sep}`)
-                || readRegular(target, 32 * 1024 * 1024, '待恢复页面').fileSha256 !== page.contentSha256) throw new Error('恢复页面的路径越出运行目录，或文件 SHA 与生成清单不一致。');
-        }
-        for (const asset of manifest.assets) {
-            const target = path.resolve(runRoot, 'assets', ...asset.path.split('/'));
-            if (!target.startsWith(`${path.join(runRoot, 'assets')}${path.sep}`)) throw new Error('恢复资源的路径越出了当前运行的资源目录。');
-            const found = readRegular(target, 64 * 1024 * 1024, '待恢复资源');
-            if (found.fileSha256 !== asset.sha256 || found.bytes.length !== asset.size) throw new Error('恢复资源的 SHA 或字节数与生成清单不一致。');
         }
         return { ...plan, status: 'recovered', stagingRunId: options.stagingRunId, stagingRoot: runRoot,
             pageCount: manifest.pages.length, manifestSha256: manifest.manifestSha256,
@@ -480,6 +548,10 @@ function stageHistoricalPages(options, dependencies = {}) {
     const priorEntries = fs.readdirSync(runRoot).sort();
     if (priorEntries.some(name => !['intent.json', 'pages', 'assets'].includes(name))) {
         throw new Error('旧运行目录中有无法与输入记录对应的未完成文件；请使用新的运行 ID。');
+    }
+    if (priorEntries.includes('intent.json')) {
+        const priorIntent = normalizeStagingIntent(strictJson(readRegular(intentFile, 16 * 1024 * 1024, '未完成的页面生成输入记录').bytes, '未完成的页面生成输入记录'));
+        if (priorIntent.contract === LEGACY_INTENT_CONTRACT) throw new Error('旧格式的页面生成输入记录尚无完整清单；请保留原文件并使用新的运行 ID。');
     }
     for (const name of priorEntries.filter(name => ['pages', 'assets'].includes(name))) {
         fresh.assertSafeDirectory(path.join(runRoot, name));
@@ -491,7 +563,7 @@ function stageHistoricalPages(options, dependencies = {}) {
     const preparedPages = []; const preparedAssets = new Map();
     for (const group of selected) for (const page of group.pages) {
         const rendered = (dependencies.render || defaultRender)({ paper: group.paper,
-            tagMetadata: group.taxonomy, cohortDate: page.cohortDate });
+            tagMetadata: group.tagAssignment, cohortDate: page.cohortDate });
         const markdown = typeof rendered === 'string' ? rendered : rendered.markdown;
         for (const asset of typeof rendered === 'string' ? [] : rendered.assets) {
             if (!asset || typeof asset.path !== 'string' || !/^(?:static\/images\/papers|static\/data\/papers)\/[A-Za-z0-9._\/-]+$/.test(asset.path)
@@ -517,8 +589,8 @@ function stageHistoricalPages(options, dependencies = {}) {
             analysisFileSha256: group.analysisFileSha256,
             analysisRecordSha256: group.analysisRecordSha256,
             analysisSha256: group.analysisSha256,
-            taxonomyAssignmentSha256: group.taxonomy.assignmentSha256,
-            taxonomyFileSha256: group.taxonomyFileSha256 } });
+            tagAssignmentSha256: group.tagAssignment.assignmentSha256,
+            tagAssignmentFileSha256: group.tagAssignmentFileSha256 } });
     }
     if (currentRendererImplementationSha256(dependencies) !== rendererImplementationSha256) {
         throw new Error('页面生成期间，生成器的实现指纹发生变化。');
@@ -559,9 +631,9 @@ function stageHistoricalPages(options, dependencies = {}) {
         manifest: structuredClone(manifest) };
 }
 
-module.exports = { CONTRACT, INTENT_CONTRACT, RENDERER_IMPLEMENTATION_CONTRACT, RENDERER_IMPLEMENTATION_FILES,
+module.exports = { CONTRACT, LEGACY_CONTRACT, INTENT_CONTRACT, LEGACY_INTENT_CONTRACT, RENDERER_IMPLEMENTATION_CONTRACT, RENDERER_IMPLEMENTATION_FILES,
     VERSION, rendererImplementationIdentity, currentRendererImplementationSha256,
     readAssignment, findAssignment, loadPageGenerationInputs,
-    selectedBindingsFor, replaySelectedBindings, pageInputBindings, normalizeStagingManifest,
+    selectedBindingsFor, replaySelectedBindings, pageInputBindings, tagAssignmentProofFor, normalizeStagingManifest,
     stagingIntent, normalizeStagingIntent, strictJson, readRegular, defaultRender, writeExact,
     stagedFileInventory, stageHistoricalPages };

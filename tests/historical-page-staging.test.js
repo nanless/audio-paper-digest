@@ -59,12 +59,98 @@ test('one canonical projects to every verified duplicate page while preserving p
     const manifest = JSON.parse(fs.readFileSync(path.join(f.root, STAGING, 'manifest.json')));
     assert.equal(api.normalizeStagingManifest(manifest).assets.length, 0);
     assert.equal(manifest.rendererImplementationSha256, RENDERER_SHA);
+    assert.equal(manifest.contract, 'historical-paper-page-staging-v2');
+    assert.equal(manifest.version, 2);
+    for (const page of manifest.pages) {
+        assert.equal(page.tagAssignmentSha256, f.assignment.assignmentSha256);
+        assert.equal(page.tagAssignmentFileSha256, 'e'.repeat(64));
+        assert.equal(Object.hasOwn(page, 'taxonomyAssignmentSha256'), false);
+        assert.equal(Object.hasOwn(page, 'taxonomyFileSha256'), false);
+    }
+    const intent = JSON.parse(fs.readFileSync(path.join(f.root, STAGING, 'intent.json')));
+    assert.equal(intent.contract, 'historical-paper-page-staging-intent-v2');
+    assert.equal(intent.version, 2);
+    assert.equal(api.rendererImplementationIdentity().version, 1);
     assert.equal(manifest.selectedBindingSha256, stableHash(manifest.selectedBindings));
     assert.deepEqual(manifest.pages.map(page => page.cohortDate), ['2026-04-19', '2026-04-21']);
     assert.deepEqual(manifest.pages.map(page => page.pagePath), ['content/posts/page-0.md', 'content/posts/page-1.md']);
     assert.match(fs.readFileSync(path.join(f.root, STAGING, 'pages/content/posts/page-0.md'), 'utf8'), /NEW PAGE/);
     assert.doesNotMatch(JSON.stringify(manifest), /old body|OLD_/);
     assert.equal(api.stageHistoricalPages(args, f.dependencies).status, 'recovered');
+});
+
+test('完整旧页面只读恢复仍选原标签文件，旁边新版分配不能替换原双 SHA', t => {
+    const f = fixture(t);
+    const assignmentApi = require('../scripts/lib/historical-tag-assignment.js');
+    const assignmentRoot = path.join(f.root, 'assignments');
+    const assignmentRunRoot = path.join(assignmentRoot, ANALYSIS_RUN);
+    fs.mkdirSync(assignmentRunRoot, { recursive: true });
+    const oldFile = path.join(assignmentRunRoot, assignmentApi.legacyAssignmentFilename(f.assignment.paperId, REGISTRY_SHA));
+    const oldBytes = Buffer.from(JSON.stringify(f.assignment));
+    fs.writeFileSync(oldFile, oldBytes, { mode: 0o600 });
+    const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: STAGING, limit: 'pilot',
+        analysisRunId: ANALYSIS_RUN, crosswalkRoot: '/unused', analysisRoot: '/unused',
+        tagAssignmentRoot: assignmentRoot, tagCatalogPath: '/unused', stagingRoot: f.root };
+    const dependencies = { ...f.dependencies, findAssignment: api.findAssignment };
+    api.stageHistoricalPages(args, dependencies);
+    const runRoot = path.join(f.root, STAGING);
+    // 合成完整旧表示以覆盖旧格式读取；真实当前 writer 已在上一用例核验。
+    const oldFields = record => {
+        const { tagAssignmentSha256, tagAssignmentFileSha256, ...rest } = record;
+        return { ...rest, taxonomyAssignmentSha256: tagAssignmentSha256, taxonomyFileSha256: tagAssignmentFileSha256 };
+    };
+    const manifest = JSON.parse(fs.readFileSync(path.join(runRoot, 'manifest.json')));
+    manifest.contract = api.LEGACY_CONTRACT; manifest.version = 1;
+    manifest.pages = manifest.pages.map(oldFields);
+    manifest.pageSetSha256 = stableHash(manifest.pages);
+    delete manifest.manifestSha256; manifest.manifestSha256 = stableHash(manifest);
+    const intent = JSON.parse(fs.readFileSync(path.join(runRoot, 'intent.json')));
+    intent.contract = api.LEGACY_INTENT_CONTRACT; intent.version = 1;
+    intent.pageBindings = intent.pageBindings.map(oldFields);
+    intent.pageBindingSha256 = stableHash(intent.pageBindings);
+    delete intent.intentSha256; intent.intentSha256 = stableHash(intent);
+    const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+    const intentBytes = Buffer.from(`${JSON.stringify(intent, null, 2)}\n`);
+    fs.writeFileSync(path.join(runRoot, 'manifest.json'), manifestBytes);
+    fs.writeFileSync(path.join(runRoot, 'intent.json'), intentBytes);
+    const { assignmentSha256: _oldSha, ...currentBody } = f.assignment;
+    Object.assign(currentBody, { contract: assignmentApi.CONTRACT, version: assignmentApi.VERSION });
+    const current = { ...currentBody, assignmentSha256: stableHash(currentBody) };
+    assignmentApi.writeAssignments({ outputRoot: assignmentRoot, assignments: [current] });
+    const replayDependencies = { ...dependencies, buildAssignment: () => current,
+        buildLegacyAssignment: () => f.assignment, render: () => assert.fail('恢复不能重新生成正文') };
+    const recovered = api.stageHistoricalPages(args, replayDependencies);
+    assert.equal(recovered.status, 'recovered');
+    assert.deepEqual(recovered.manifest, manifest);
+    assert.deepEqual(api.tagAssignmentProofFor(recovered.manifest, recovered.manifest.pages[0]),
+        { assignmentSha256: f.assignment.assignmentSha256, fileSha256: sha(oldBytes) });
+    assert.deepEqual(fs.readFileSync(oldFile), oldBytes);
+    assert.deepEqual(fs.readFileSync(path.join(runRoot, 'manifest.json')), manifestBytes);
+    assert.deepEqual(fs.readFileSync(path.join(runRoot, 'intent.json')), intentBytes);
+    for (const newValue of [manifest.pages[0].taxonomyAssignmentSha256, null]) {
+        const mixed = structuredClone(manifest);
+        mixed.pages[0].tagAssignmentSha256 = newValue;
+        mixed.pageSetSha256 = stableHash(mixed.pages);
+        delete mixed.manifestSha256; mixed.manifestSha256 = stableHash(mixed);
+        assert.throws(() => api.normalizeStagingManifest(mixed), /不能混用新旧字段/);
+        const badSha = structuredClone(mixed); badSha.manifestSha256 = '0'.repeat(64);
+        assert.throws(() => api.normalizeStagingManifest(badSha), /清单自身的 SHA/);
+    }
+    const wrongGeneration = structuredClone(manifest);
+    wrongGeneration.contract = api.CONTRACT; wrongGeneration.version = api.VERSION;
+    delete wrongGeneration.manifestSha256; wrongGeneration.manifestSha256 = stableHash(wrongGeneration);
+    assert.throws(() => api.normalizeStagingManifest(wrongGeneration), /字段与记录格式版本不一致/);
+    const wrongVersion = structuredClone(manifest); wrongVersion.version = 2;
+    delete wrongVersion.manifestSha256; wrongVersion.manifestSha256 = stableHash(wrongVersion);
+    assert.throws(() => api.normalizeStagingManifest(wrongVersion), /不属于支持的组合/);
+    const partialRoot = path.join(f.root, 'old-partial');
+    fs.mkdirSync(path.join(partialRoot, STAGING), { recursive: true });
+    fs.writeFileSync(path.join(partialRoot, STAGING, 'intent.json'), intentBytes);
+    assert.throws(() => api.stageHistoricalPages({ ...args, stagingRoot: partialRoot }, replayDependencies), /尚无完整清单.*新的运行 ID/);
+    assert.deepEqual(fs.readFileSync(path.join(partialRoot, STAGING, 'intent.json')), intentBytes);
+    fs.appendFileSync(oldFile, '\n');
+    assert.throws(() => api.stageHistoricalPages(args, replayDependencies), /原文件 SHA 不一致/);
+    assert.deepEqual(fs.readFileSync(path.join(runRoot, 'manifest.json')), manifestBytes);
 });
 
 test('staging intent and manifest reject a renderer implementation change under the same immutable run id', t => {
@@ -278,7 +364,7 @@ test('prepared assignment A cannot stage analysis B under A staging identity', t
         analysisSha256: '2'.repeat(64),
         registrySha256: f.assignment.registrySha256,
         assignmentSha256: '1'.repeat(64),
-        taxonomyFileSha256: 'e'.repeat(64)
+        tagAssignmentFileSha256: 'e'.repeat(64)
     };
     assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
         stagingRunId: STAGING, expectedStagingRunId: STAGING,

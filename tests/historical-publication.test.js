@@ -43,7 +43,7 @@ function fixture(t) {
         taxonomyFileSha256: 'c'.repeat(64) }];
     const stagedAssets = [{ path: assetPath, sha256: sha(newAsset), size: newAsset.length }];
     const selectedBindings = [{ paperId: stagedPages[0].paperId, pages: [stagedPages[0].pageKey] }];
-    const stageBody = { contract: daily.PAGE_STAGING_CONTRACT, version: 1, stagingRunId: STAGE, crosswalkId: PLAN,
+    const stageBody = { contract: 'historical-paper-page-staging-v1', version: 1, stagingRunId: STAGE, crosswalkId: PLAN,
         crosswalkStateSha256: 'd'.repeat(64), identityGroupsSha256: '1'.repeat(64),
         rendererImplementationSha256: RENDERER, createdAt: '2026-09-07T00:00:00.000Z',
         pages: stagedPages, pageSetSha256: daily.stableHash(stagedPages), assets: stagedAssets,
@@ -59,7 +59,7 @@ function fixture(t) {
         crosswalkStateSha256: 'd'.repeat(64), ledgerSha256: 'e'.repeat(64), pageSetSha256: 'f'.repeat(64),
         taxonomyRegistrySha256: '0'.repeat(64) };
     const members = [{ pageKey: stageManifest.pages[0].pageKey, pagePath, singlePageContentSha256: sha(newPage) }];
-    const aggregateBody = { contract: daily.CONTRACT, version: daily.VERSION, status: 'complete', date: DATE,
+    const aggregateBody = { contract: 'historical-daily-aggregate-staging-v1', version: 1, status: 'complete', date: DATE,
         outputPage: { pageKey: `page:${'3'.repeat(64)}`, path: dailyPath,
             primaryUrl: `https://example.test/posts/${DATE}/`, previousContentSha256: sha(oldDaily) },
         source: aggregateSource, members, memberSetSha256: daily.stableHash(members),
@@ -79,7 +79,7 @@ function fixture(t) {
         pageSetSha256: stageManifest.pageSetSha256, assetSetSha256: stageManifest.assetSetSha256,
         analysisBindingsSha256: api.stableHash(stageManifest.pages.map(page => ({ paperId: page.paperId, pageKey: page.pageKey,
             analysisRunId: page.analysisRunId, analysisFileSha256: page.analysisFileSha256,
-            taxonomyAssignmentSha256: page.taxonomyAssignmentSha256, taxonomyFileSha256: page.taxonomyFileSha256 }))) }];
+            tagAssignmentSha256: page.taxonomyAssignmentSha256, tagAssignmentFileSha256: page.taxonomyFileSha256 }))) }];
     const dailyProof = [{ aggregateRunId: AGG, date: DATE, manifestSha256: aggregate.manifestSha256,
         manifestFileSha256: sha(fs.readFileSync(aggFile)), stagingSetSha256: aggregateSource.stagingSetSha256,
         rendererImplementationSha256: RENDERER,
@@ -109,14 +109,17 @@ function fixture(t) {
 }
 
 test('plan freezes daily DAG, unique path ownership, producer SHA and no old authoring text', t => {
-    const f = fixture(t); assert.equal(f.plan.oldGeneratedTextIncluded, false); assert.equal(f.plan.batches.length, 1);
+    const f = fixture(t); assert.equal(f.plan.contract, 'historical-publication-plan-v2');
+    assert.equal(f.plan.version, 2);
+    assert.deepEqual(f.plan.producerContracts, ['historical-daily-aggregate-staging-v1', 'historical-paper-page-staging-v1']);
+    assert.equal(f.plan.oldGeneratedTextIncluded, false); assert.equal(f.plan.batches.length, 1);
     assert.equal(f.plan.batches[0].batchId, `daily-${DATE}`);
     assert.equal(new Set(f.plan.artifacts.map(item => item.path)).size, f.plan.artifacts.length);
     assert.ok(f.plan.artifacts.every(item => item.producer.manifestSha256));
     assert.doesNotMatch(JSON.stringify(f.plan), /OLD_PAGE|OLD_DAILY/);
     assert.throws(() => api.buildPlan({ planId: PLAN, pageStagingRunIds: [STAGE],
         dailyAggregates: [{ aggregateRunId: AGG, date: DATE }], conferenceRefs: ['conference:icassp:2026'] }, {
-        loadPageStaging: () => null, loadDailyAggregate: () => null }), /reserved but unsupported/);
+        loadPageStaging: () => null, loadDailyAggregate: () => null }), /暂不支持在此发布计划中引用会议汇总/);
 });
 
 test('same plan ID reuses the validated existing plan despite a later createdAt', t => {
@@ -144,7 +147,7 @@ test('atomic immutable write cleans a failed temporary file and never occupies t
     assert.deepEqual(fs.readdirSync(root), []);
     api.writeExact(target, Buffer.from('complete immutable payload'));
     assert.equal(fs.readFileSync(target, 'utf8'), 'complete immutable payload');
-    assert.throws(() => api.writeExact(target, Buffer.from('different')), /different bytes/);
+    assert.throws(() => api.writeExact(target, Buffer.from('different')), /已有文件内容不同，不能覆盖/);
 });
 
 test('plan rejects a stale inventory HEAD, content tree, or remote generation', t => {
@@ -158,20 +161,20 @@ test('plan rejects a stale inventory HEAD, content tree, or remote generation', 
         const replay = f.deps.replayProducerSet(); const proof = structuredClone(replay.proof); mutate(proof);
         const body = structuredClone(proof); delete body.proofSha256; proof.proofSha256 = api.stableHash(body);
         assert.throws(() => api.buildPlan(options, { ...f.deps,
-            replayProducerSet: () => ({ ...replay, proof }) }), /generation differs from the inventory baseline/);
+            replayProducerSet: () => ({ ...replay, proof }) }), /当前博客提交、内容树、远端身份或远端提交与页面盘点时的基线不一致/);
     }
 });
 
 test('public plan APIs reject traversal and reads detect parent-directory replacement', t => {
     const f = fixture(t);
-    assert.throws(() => api.loadPlan({ outputRoot: f.outputRoot, planId: '../escape' }), /plan ID must be a UUID/);
-    assert.throws(() => api.writePlan({ outputRoot: f.outputRoot, plan: { planId: '../escape' } }), /schema is invalid|plan ID/);
+    assert.throws(() => api.loadPlan({ outputRoot: f.outputRoot, planId: '../escape' }), /发布计划 ID 必须是有效的 UUID/);
+    assert.throws(() => api.writePlan({ outputRoot: f.outputRoot, plan: { planId: '../escape' } }), /必须是对象，且字段集合必须符合要求/);
     const parent = path.join(f.root, 'read-parent'); const moved = path.join(f.root, 'read-parent-moved');
     fs.mkdirSync(parent); const target = path.join(parent, 'value'); fs.writeFileSync(target, 'safe');
     let swapped = false;
     assert.throws(() => api.readRegular(target, 1024, { afterOpen: () => {
         fs.renameSync(parent, moved); fs.symlinkSync(moved, parent); swapped = true;
-    } }), /Unsafe fresh rewrite directory|source changed/);
+    } }), /Unsafe fresh rewrite directory|读取时文件的身份/);
     if (swapped) { fs.unlinkSync(parent); fs.renameSync(moved, parent); }
 });
 
@@ -200,11 +203,11 @@ test('crash after partial copy resumes exact bytes; producer tamper and baseline
     assert.equal(recovered.status, 'generated');
     fs.writeFileSync(path.join(f.stagingRoot, STAGE, 'pages', f.pagePath), 'TAMPER');
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
-        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, f.deps), /producer bytes drifted/);
+        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, f.deps), /生成来源文件的实际字节与发布计划中的内容哈希不一致/);
     fs.writeFileSync(path.join(f.stagingRoot, STAGE, 'pages', f.pagePath), f.newPage);
     fs.writeFileSync(path.join(f.blogRepo, f.pagePath), 'USER CHANGE');
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
-        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, f.deps), /worktree\/baseHead CAS/);
+        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, f.deps), /工作区文件与基线提交中的内容不一致/);
 });
 
 test('path/collision/symlink and dirty or diverged remote attacks are rejected', t => {
@@ -213,17 +216,17 @@ test('path/collision/symlink and dirty or diverged remote attacks are rejected',
             pagePath: '../escape.md', cohortDate: DATE, stagedPath: 'pages/escape', contentSha256: '6'.repeat(64), sourcePageContentSha256: '7'.repeat(64) }], assets: [] }, manifestFileSha256: '4'.repeat(64) }))());
     assert.throws(() => api.buildPlan({ planId: PLAN, pageStagingRunIds: [STAGE], blogRepo: f.blogRepo,
         dailyAggregates: [{ aggregateRunId: AGG, date: DATE }] }, { ...f.deps,
-        replayProducerSet: () => ({ staged: [badStage], aggregates: [], proof: f.plan.producerReplay }) }), /unsafe publication path/);
+        replayProducerSet: () => ({ staged: [badStage], aggregates: [], proof: f.plan.producerReplay }) }), /发布路径必须是允许范围内的规范相对路径/);
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
         blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, {
-        ...f.deps, blogState: () => ({ ...f.deps.blogState(), clean: false }) }), /clean main/);
+        ...f.deps, blogState: () => ({ ...f.deps.blogState(), clean: false }) }), /必须是干净的 main 分支/);
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
         blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, {
-        ...f.deps, blogState: () => ({ ...f.deps.blogState(), remoteOid: 'b'.repeat(40) }) }), /clean main/);
+        ...f.deps, blogState: () => ({ ...f.deps.blogState(), remoteOid: 'b'.repeat(40) }) }), /必须是干净的 main 分支/);
     const linkParent = path.join(f.blogRepo, 'static', 'data'); fs.mkdirSync(path.dirname(linkParent), { recursive: true });
     fs.symlinkSync(f.root, linkParent);
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
-        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, f.deps), /symlink/);
+        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, f.deps), /博客目标路径包含符号链接/);
 });
 
 test('re-signed plan injection and duplicate path ownership are rejected', t => {
@@ -233,7 +236,7 @@ test('re-signed plan injection and duplicate path ownership are rejected', t => 
     injected.artifactSetSha256 = api.stableHash(injected.artifacts);
     const body = structuredClone(injected); delete body.planSha256; injected.planSha256 = api.stableHash(body);
     fs.writeFileSync(filename, `${JSON.stringify(injected, null, 2)}\n`);
-    assert.throws(() => api.loadPlan({ outputRoot: f.outputRoot, planId: PLAN }), /schema is invalid/);
+    assert.throws(() => api.loadPlan({ outputRoot: f.outputRoot, planId: PLAN }), /必须是对象，且字段集合必须符合要求/);
 
     const page = f.plan.artifacts.find(item => item.path === f.pagePath);
     const makeStage = runId => ({ runRoot: path.join(f.stagingRoot, runId), manifestFileSha256: '4'.repeat(64), manifest: {
@@ -244,7 +247,7 @@ test('re-signed plan injection and duplicate path ownership are rejected', t => 
     assert.throws(() => api.buildPlan({ planId: '55555555-5555-4555-8555-555555555555', blogRepo: f.blogRepo,
         pageStagingRunIds: [STAGE, stage2], dailyAggregates: [{ aggregateRunId: AGG, date: DATE }] }, { ...f.deps,
         replayProducerSet: () => ({ staged: [makeStage(STAGE), makeStage(stage2)], aggregates: [], proof: f.plan.producerReplay })
-    }), /multiple producers claim/);
+    }), /同一发布路径被多个生成记录占用/);
 });
 
 test('asset create ownership and generate closing CAS fail closed', t => {
@@ -252,21 +255,21 @@ test('asset create ownership and generate closing CAS fail closed', t => {
     const asset = path.join(f.blogRepo, f.assetPath); fs.mkdirSync(path.dirname(asset), { recursive: true }); fs.writeFileSync(asset, existingAsset);
     f.baseline.set(f.assetPath, existingAsset);
     assert.throws(() => api.buildPlan({ planId: '66666666-6666-4666-8666-666666666666', blogRepo: f.blogRepo,
-        pageStagingRunIds: [STAGE], dailyAggregates: [{ aggregateRunId: AGG, date: DATE }] }, f.deps), /unowned asset already exists/);
+        pageStagingRunIds: [STAGE], dailyAggregates: [{ aggregateRunId: AGG, date: DATE }] }, f.deps), /待新建的资源文件已存在/);
 
     const clean = fixture(t); let snapshots = 0;
     assert.throws(() => api.generateBundle({ outputRoot: clean.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
         blogRepo: clean.blogRepo, stagingRoot: clean.stagingRoot, aggregateRoot: clean.aggregateRoot, apply: true }, {
         ...clean.deps, blogState: () => ++snapshots === 1 ? clean.deps.blogState()
             : { ...clean.deps.blogState(), head: 'd'.repeat(40), treeOid: 'e'.repeat(40), contentTreeOid: 'f'.repeat(40), remoteOid: 'd'.repeat(40) }
-    }), /changed while generating/);
+    }), /生成待发布文件期间，博客仓库状态发生变化/);
     assert.equal(fs.existsSync(path.join(clean.outputRoot, PLAN, 'generations', `daily-${DATE}`, 'manifest.json')), false);
 
     const ignored = fixture(t);
     assert.throws(() => api.generateBundle({ outputRoot: ignored.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
         blogRepo: ignored.blogRepo, stagingRoot: ignored.stagingRoot, aggregateRoot: ignored.aggregateRoot, apply: true }, {
         ...ignored.deps, afterCopy: () => fs.writeFileSync(path.join(ignored.blogRepo, ignored.pagePath), 'IGNORED RACE')
-    }), /closing worktree CAS/);
+    }), /生成结束时，工作区文件与原基线内容不一致/);
 });
 
 test('resume rejects extra bundle files, intermediate source symlinks, and duplicate-key plans', t => {
@@ -278,7 +281,7 @@ test('resume rejects extra bundle files, intermediate source symlinks, and dupli
     const extra = path.join(f.outputRoot, PLAN, 'generations', `daily-${DATE}`, 'bundle/content/posts/extra.md');
     fs.mkdirSync(path.dirname(extra), { recursive: true }); fs.writeFileSync(extra, 'EXTRA');
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
-        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: true }, f.deps), /extra entries/);
+        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: true }, f.deps), /存在额外条目/);
 
     const linked = fixture(t); const pages = path.join(linked.stagingRoot, STAGE, 'pages'); const realPages = `${pages}-real`;
     fs.renameSync(pages, realPages); fs.symlinkSync(realPages, pages);
@@ -300,8 +303,8 @@ test('git blob lookup distinguishes absent paths from Git failures', t => {
     execFileSync('git', ['-C', root, 'add', 'hugo.yaml']); execFileSync('git', ['-C', root, 'commit', '-m', 'fixture']);
     const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     assert.equal(api.defaultGitBlob(root, head, 'content/posts/missing.md'), null);
-    assert.throws(() => api.defaultGitBlob(root, 'f'.repeat(40), 'content/posts/missing.md'), /git ls-tree failed/);
-    assert.throws(() => api.defaultGitBlob(path.join(root, 'absent'), head, 'content/posts/missing.md'), /git ls-tree failed/);
+    assert.throws(() => api.defaultGitBlob(root, 'f'.repeat(40), 'content/posts/missing.md'), /Git 命令 ls-tree 执行失败/);
+    assert.throws(() => api.defaultGitBlob(path.join(root, 'absent'), head, 'content/posts/missing.md'), /Git 命令 ls-tree 执行失败/);
 });
 
 test('real blog snapshot binds clean main, tree, Hugo config, remote identity and remote OID', t => {
@@ -349,15 +352,15 @@ test('successor generation requires an intact authenticated predecessor bundle',
     plan.producerReplay.proofSha256 = api.stableHash(proofBody); plan.producerReplaySha256 = plan.producerReplay.proofSha256;
     const planBody = structuredClone(plan); delete planBody.planSha256; plan.planSha256 = api.stableHash(planBody);
     fs.writeFileSync(path.join(f.outputRoot, PLAN, 'plan.json'), `${JSON.stringify(plan, null, 2)}\n`);
-    const deps = { ...f.deps, replayProducerSet: () => ({ proof: plan.producerReplay }),
+    const deps = { ...f.deps, replayProducerSet: () => ({ ...f.deps.replayProducerSet(), proof: plan.producerReplay }),
         sourceBytes: (item, roots) => item.path === daily2Path ? fresh2 : api.sourceBytes(item, roots) };
     const options = { outputRoot: f.outputRoot, planId: PLAN, blogRepo: f.blogRepo,
         stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: true };
-    assert.throws(() => api.generateBundle({ ...options, batchId: batch2 }, deps), /predecessor batch/);
+    assert.throws(() => api.generateBundle({ ...options, batchId: batch2 }, deps), /缺少前置批次的生成记录目录/);
     api.generateBundle({ ...options, batchId: batch1 }, deps);
     const extra = path.join(f.outputRoot, PLAN, 'generations', batch1, 'bundle/content/posts/attacker.md');
     fs.writeFileSync(extra, 'EXTRA');
-    assert.throws(() => api.generateBundle({ ...options, batchId: batch2 }, deps), /extra entries/);
+    assert.throws(() => api.generateBundle({ ...options, batchId: batch2 }, deps), /存在额外条目/);
     fs.unlinkSync(extra);
     const result = api.generateBundle({ ...options, batchId: batch2 }, deps);
     assert.equal(result.manifest.predecessorProofs[0].batchId, batch1);
@@ -383,8 +386,8 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
         pages: [{ pageId: `page:${'3'.repeat(64)}`, path: f.dailyPath,
             primaryUrl: `https://example.test/posts/${DATE}/`, contentSha256: sha(f.oldDaily), kind: 'daily-summary',
             scope: { type: 'daily', key: DATE }, cohortDate: DATE }] } };
-    const projection = { crosswalk: state, groups: [{ paperId: page.paperId, paper, taxonomy: tagAssignment,
-        taxonomyFileSha256: page.taxonomyFileSha256, analysisRunId: page.analysisRunId,
+    const projection = { crosswalk: state, groups: [{ paperId: page.paperId, paper, tagAssignment,
+        tagAssignmentFileSha256: page.taxonomyFileSha256, analysisRunId: page.analysisRunId,
         analysisFileSha256: page.analysisFileSha256,
         analysisRecordSha256: page.analysisRecordSha256,
         analysisSha256: page.analysisSha256,
@@ -417,6 +420,63 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
         aggregateInputDependencies, replayAnalysisSources: () => f.plan.producerReplay.analysisSources,
         now: () => '2026-09-07T00:00:00.000Z' });
     assert.equal(plan.producerReplaySha256, replay.proof.proofSha256);
+    assert.deepEqual(plan.producerContracts, ['historical-daily-aggregate-staging-v2', 'historical-paper-page-staging-v1']);
+
+    // 由真实新版生成结果构造独立旧格式样本；随后完整原格式重放验证整个对象。
+    // 这不是修改已有运行数据，也不声称合成样本来自旧生产运行。
+    const legacyAggregate = structuredClone(aggregate[0]);
+    legacyAggregate.contract = daily.LEGACY_CONTRACT; legacyAggregate.version = 1;
+    legacyAggregate.source.taxonomyRegistrySha256 = legacyAggregate.source.tagCatalogSha256;
+    delete legacyAggregate.source.tagCatalogSha256;
+    for (const member of legacyAggregate.members) {
+        member.taxonomyAssignmentSha256 = member.tagAssignmentSha256; delete member.tagAssignmentSha256;
+    }
+    legacyAggregate.memberSetSha256 = daily.stableHash(legacyAggregate.members);
+    const aggregateBody = structuredClone(legacyAggregate); delete aggregateBody.manifestSha256;
+    legacyAggregate.manifestSha256 = daily.stableHash(aggregateBody);
+    const aggregateFile = path.join(f.aggregateRoot, AGG, `daily-${DATE}.json`);
+    fs.writeFileSync(aggregateFile, `${JSON.stringify(legacyAggregate, null, 2)}\n`);
+    const originalAggregateBytes = fs.readFileSync(aggregateFile);
+    const originalStageBytes = fs.readFileSync(path.join(f.stagingRoot, STAGE, 'manifest.json'));
+    const realDependencies = { ...planDependencies, aggregateInputDependencies,
+        replayAnalysisSources: () => f.plan.producerReplay.analysisSources,
+        now: () => '2026-09-07T00:00:00.000Z' };
+    const refs = { pageStagingRunIds: [STAGE], dailyAggregates: [{ aggregateRunId: AGG, date: DATE }],
+        blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot,
+        crosswalkRoot: '/unused', inventoryRoot: '/unused', analysisRoot: '/unused',
+        tagAssignmentRoot: '/unused', tagCatalogPath: '/unused' };
+    const legacyPlan = api.buildPlan({ ...refs, planId: '88888888-8888-4888-8888-888888888888' }, realDependencies);
+    legacyPlan.contract = api.LEGACY_PLAN_CONTRACT; legacyPlan.version = 1;
+    legacyPlan.producerContracts = ['historical-paper-page-staging-v1', 'historical-daily-aggregate-staging-v1'];
+    legacyPlan.producerReplay.pageStagingRuns[0].analysisBindingsSha256 = api.stableHash(f.stageManifest.pages.map(item => ({
+        paperId: item.paperId, pageKey: item.pageKey, analysisRunId: item.analysisRunId,
+        analysisFileSha256: item.analysisFileSha256, taxonomyAssignmentSha256: item.taxonomyAssignmentSha256,
+        taxonomyFileSha256: item.taxonomyFileSha256 })));
+    legacyPlan.producerReplay.pageStagingSetSha256 = api.stableHash(legacyPlan.producerReplay.pageStagingRuns);
+    const proofBody = structuredClone(legacyPlan.producerReplay); delete proofBody.proofSha256;
+    legacyPlan.producerReplay.proofSha256 = api.stableHash(proofBody);
+    legacyPlan.producerReplaySha256 = legacyPlan.producerReplay.proofSha256;
+    const planBody = structuredClone(legacyPlan); delete planBody.planSha256;
+    legacyPlan.planSha256 = api.stableHash(planBody);
+    assert.throws(() => api.writePlan({ outputRoot: f.outputRoot, plan: legacyPlan }), /新写入的发布计划必须使用当前格式/);
+    const legacyDir = path.join(f.outputRoot, legacyPlan.planId); fs.mkdirSync(legacyDir, { recursive: true });
+    const legacyFile = path.join(legacyDir, 'plan.json');
+    // 原 loadPlan 接受非格式化 JSON；重放须绑定这些原文件字节，而非重编码后的内容。
+    const originalPlanBytes = Buffer.from(JSON.stringify(legacyPlan)); fs.writeFileSync(legacyFile, originalPlanBytes);
+    assert.equal(api.loadPlan({ outputRoot: f.outputRoot, planId: legacyPlan.planId }).fileSha256, sha(originalPlanBytes));
+    assert.equal(api.writePlan({ outputRoot: f.outputRoot, plan: legacyPlan }).reused, true);
+    const generated = api.generateBundle({ ...refs, outputRoot: f.outputRoot, planId: legacyPlan.planId,
+        batchId: `daily-${DATE}`, apply: true }, realDependencies);
+    assert.equal(generated.manifest.contract, api.GENERATION_CONTRACT);
+    assert.equal(generated.manifest.version, 1);
+    assert.equal(generated.manifest.planFileSha256, sha(originalPlanBytes));
+    assert.equal(generated.manifest.producerReplaySha256, legacyPlan.producerReplaySha256);
+    assert.deepEqual(fs.readFileSync(legacyFile), originalPlanBytes);
+    assert.deepEqual(fs.readFileSync(aggregateFile), originalAggregateBytes);
+    assert.deepEqual(fs.readFileSync(path.join(f.stagingRoot, STAGE, 'manifest.json')), originalStageBytes);
+    const publicReplay = api.replayProducerSet({ ...refs, savedPlan: legacyPlan }, realDependencies);
+    assert.notEqual(publicReplay.proof.proofSha256, legacyPlan.producerReplaySha256,
+        'a caller-supplied legacy parent must not downgrade the public proof writer');
 });
 
 test('CLI keeps phase one explicit and rejects malformed producer refs', () => {

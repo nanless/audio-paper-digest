@@ -7,9 +7,10 @@ const fresh = require('./fresh-rewrite-run.js');
 const pageStaging = require('./historical-page-staging.js');
 const aggregateApi = require('./historical-daily-aggregate.js');
 
-const CONTRACT = 'historical-postprocess-scheduler-v1';
+const CONTRACT = 'historical-postprocess-scheduler-v2';
+const LEGACY_CONTRACT = 'historical-postprocess-scheduler-v1';
 const ANALYSIS_SCHEDULER_CONTRACT = 'historical-arxiv-analysis-scheduler-v1';
-const VERSION = 1;
+const VERSION = 2;
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const stableHash = fresh.stableHash;
@@ -25,14 +26,14 @@ function deterministicStagingRunId(crosswalkId, item, registrySha256, rendererIm
     if (!UUID_RE.test(crosswalkId || '') || !SHA_RE.test(registrySha256 || '')
         || !SHA_RE.test(rendererImplementationSha256 || '')
         || !SHA_RE.test(assignmentSha256 || '') || !item
-        || !/^arxiv:\d{4}\.\d{4,5}$/.test(item.paperId || '') || !UUID_RE.test(item.runId || '')) fail('staging identity is invalid');
-    if (!SHA_RE.test(item.analysisSchedulerItemSha256 || '')) fail('analysis scheduler item binding SHA is invalid');
+        || !/^arxiv:\d{4}\.\d{4,5}$/.test(item.paperId || '') || !UUID_RE.test(item.runId || '')) fail('页面暂存运行的身份字段或 SHA 格式无效。');
+    if (!SHA_RE.test(item.analysisSchedulerItemSha256 || '')) fail('分析调度条目对应的 SHA 格式无效。');
     return uuidFrom(`historical-postprocess-staging-v3\0${crosswalkId}\0${item.paperId}\0${item.runId}\0${registrySha256}\0${rendererImplementationSha256}\0${item.analysisSchedulerItemSha256}\0${assignmentSha256}`);
 }
 function checkpointPath(root, crosswalkId, registrySha256, rendererImplementationSha256, create = false) {
     if (typeof root !== 'string' || !path.isAbsolute(root) || !UUID_RE.test(crosswalkId || '')
         || !SHA_RE.test(registrySha256 || '') || !SHA_RE.test(rendererImplementationSha256 || '')) {
-        fail('configured checkpoint root, crosswalk UUID, registry SHA, and renderer implementation SHA required');
+        fail('检查点目录必须是绝对路径，来源对应记录 ID、词表 SHA 和页面生成程序 SHA 必须有效。');
     }
     const directory = fresh.assertSafeDirectory(root, create);
     return path.join(directory, `${crosswalkId}.${registrySha256}.${rendererImplementationSha256}.json`);
@@ -40,7 +41,13 @@ function checkpointPath(root, crosswalkId, registrySha256, rendererImplementatio
 function withCheckpointHash(value) { const body = structuredClone(value); delete body.checkpointSha256;
     return { ...body, checkpointSha256: stableHash(body) }; }
 function validateCheckpoint(value, crosswalkId, registrySha256, rendererImplementationSha256) {
-    if (!value || value.contract !== CONTRACT || value.version !== VERSION || value.crosswalkId !== crosswalkId
+    const body = structuredClone(value); if (body) delete body.checkpointSha256;
+    if (!value || !SHA_RE.test(value.checkpointSha256 || '') || value.checkpointSha256 !== stableHash(body)) {
+        fail('历史后处理检查点的内容哈希缺失、格式无效或与实际内容不一致。');
+    }
+    const legacy = value.contract === LEGACY_CONTRACT && value.version === 1;
+    const current = value.contract === CONTRACT && value.version === VERSION;
+    if ((!legacy && !current) || value.crosswalkId !== crosswalkId
         || value.registrySha256 !== registrySha256
         || value.rendererImplementationSha256 !== rendererImplementationSha256
         || !SHA_RE.test(value.rendererImplementationSha256 || '') || !value.items || typeof value.items !== 'object'
@@ -49,16 +56,19 @@ function validateCheckpoint(value, crosswalkId, registrySha256, rendererImplemen
     if (Object.values(value.items).some(item => !item || item.rendererImplementationSha256 !== rendererImplementationSha256)) {
         fail('历史后处理检查点中的论文没有绑定当前页面生成程序的实现指纹。');
     }
-    const body = structuredClone(value); delete body.checkpointSha256;
-    if (!SHA_RE.test(value.checkpointSha256 || '') || value.checkpointSha256 !== stableHash(body)) fail('历史后处理检查点的内容哈希缺失、格式无效或与实际内容不一致。');
+    const forbidden = legacy ? ['tagAssignmentSha256', 'tagAssignmentFileSha256']
+        : ['taxonomyAssignmentSha256', 'taxonomyFileSha256'];
+    if (Object.values(value.items).some(item => forbidden.some(key => Object.hasOwn(item, key)))) {
+        fail('历史后处理检查点中的标签字段与其格式版本不一致，或混用了新旧字段。');
+    }
     return structuredClone(value);
 }
 function readJsonFile(filename, label) { const loaded = pageStaging.readRegular(filename, 64 * 1024 * 1024, label);
     return { value: pageStaging.strictJson(loaded.bytes, label), fileSha256: loaded.fileSha256 }; }
 function readAnalysisScheduler(root, crosswalkId) {
-    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('analysis scheduler root must be configured absolute path');
+    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('分析调度记录的目录必须配置为绝对路径。');
     const directory = fresh.assertSafeDirectory(root); const filename = path.join(directory, `${crosswalkId}.json`);
-    const loaded = readJsonFile(filename, 'historical analysis scheduler'); const value = loaded.value;
+    const loaded = readJsonFile(filename, '历史分析调度记录'); const value = loaded.value;
     if (value.contract !== ANALYSIS_SCHEDULER_CONTRACT || value.version !== 1 || value.crosswalkId !== crosswalkId
         || !value.items || typeof value.items !== 'object' || Array.isArray(value.items)) fail('分析调度记录的身份、版本或论文集合格式不符合要求。');
     return { ...loaded, filename };
@@ -97,7 +107,7 @@ function assignmentIdentity(assignment, tagAssignmentFileSha256 = null) {
         analysisSha256: assignment.analysisSha256,
         registrySha256: assignment.registrySha256,
         assignmentSha256: assignment.assignmentSha256,
-        ...(tagAssignmentFileSha256 ? { taxonomyFileSha256: tagAssignmentFileSha256 } : {})
+        ...(tagAssignmentFileSha256 ? { tagAssignmentFileSha256: tagAssignmentFileSha256 } : {})
     };
 }
 
@@ -111,14 +121,15 @@ function assertStagedManifestProof(staged, stagingRunId, rendererImplementationS
         fail('页面生成未返回与本次运行、实现指纹及页面集合对应的清单记录。');
     }
     for (const page of manifest.pages) {
+        const tagProof = pageStaging.tagAssignmentProofFor(manifest, page);
         const actual = {
             paperId: page.paperId,
             analysisRunId: page.analysisRunId,
             analysisFileSha256: page.analysisFileSha256,
             analysisRecordSha256: page.analysisRecordSha256,
             analysisSha256: page.analysisSha256,
-            taxonomyAssignmentSha256: page.taxonomyAssignmentSha256,
-            taxonomyFileSha256: page.taxonomyFileSha256
+            tagAssignmentSha256: tagProof.assignmentSha256,
+            tagAssignmentFileSha256: tagProof.fileSha256
         };
         const wanted = {
             paperId: expected.paperId,
@@ -126,8 +137,8 @@ function assertStagedManifestProof(staged, stagingRunId, rendererImplementationS
             analysisFileSha256: expected.analysisFileSha256,
             analysisRecordSha256: expected.analysisRecordSha256,
             analysisSha256: expected.analysisSha256,
-            taxonomyAssignmentSha256: expected.assignmentSha256,
-            taxonomyFileSha256: expected.taxonomyFileSha256
+            tagAssignmentSha256: expected.assignmentSha256,
+            tagAssignmentFileSha256: expected.tagAssignmentFileSha256
         };
         if (stableHash(actual) !== stableHash(wanted)) {
             fail(`论文 ${expected.paperId} 的暂存清单与准备阶段的分析、标签分配记录不一致。`);
@@ -155,6 +166,7 @@ function updateCheckpoint(filename, crosswalkId, registrySha256, rendererImpleme
             : withCheckpointHash({ contract: CONTRACT, version: VERSION, crosswalkId, registrySha256,
                 rendererImplementationSha256,
                 generation: 1, createdAt: deps.now(), updatedAt: deps.now(), items: {}, daily: {} });
+        if (prior.contract === LEGACY_CONTRACT) fail('旧版历史后处理检查点只能读取，不能原地改签为新版。');
         const next = mutate(structuredClone(prior)); delete next.checkpointSha256;
         const priorSemantic = structuredClone(prior); delete priorSemantic.checkpointSha256;
         delete priorSemantic.updatedAt; delete priorSemantic.generation;
@@ -178,7 +190,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     if (!UUID_RE.test(options.crosswalkId || '') || !Number.isInteger(options.concurrency)
         || options.concurrency < 1 || options.concurrency > 3 || ![null, 'pilot'].includes(options.limit)
             && (!Number.isSafeInteger(options.limit) || options.limit < 1)
-        || options.date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(options.date || '')) fail('invalid options');
+        || options.date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(options.date || '')) fail('后处理参数中的日期、并发数、数量限制或来源对应记录 ID 无效。');
     const analysisScheduler = readAnalysisScheduler(files.historicalAnalysisSchedulerDir, options.crosswalkId);
     const tagCatalog = deps.loadTagCatalog(files.tagCatalogFile);
     if (!SHA_RE.test(tagCatalog.registrySha256 || '')) fail('当前标签词表的 SHA 格式无效。');
@@ -200,7 +212,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
             rendererImplementationSha256, item.currentAssignment?.assignmentSha256),
         analysisFileSha256: item.currentAssignment?.analysisFileSha256,
         analysisRecordSha256: item.currentAssignment?.analysisRecordSha256,
-        taxonomyAssignmentSha256: item.currentAssignment?.assignmentSha256,
+        tagAssignmentSha256: item.currentAssignment?.assignmentSha256,
         cohortDates: item.cohortDates || [] }));
     if (!options.apply) return { status: 'dry-run', crosswalkId: options.crosswalkId,
         registrySha256: tagCatalog.registrySha256, analysisSchedulerFileSha256: analysisScheduler.fileSha256,
@@ -221,8 +233,8 @@ async function runHistoricalPostprocess(options, overrides = {}) {
             assignmentProof = { analysisFileSha256: assignments[0].analysisFileSha256,
                 analysisRecordSha256: assignments[0].analysisRecordSha256,
                 analysisSha256: assignments[0].analysisSha256,
-                taxonomyAssignmentSha256: assignments[0].assignmentSha256,
-                taxonomyFileSha256: assignmentOutput.fileSha256 };
+                tagAssignmentSha256: assignments[0].assignmentSha256,
+                tagAssignmentFileSha256: assignmentOutput.fileSha256 };
             if (assignments[0].status !== 'assigned') {
                 // 标签分配尚未确定时，这篇论文及其对应日期不能发布，其他论文继续生成页面。
                 // 原因会进入标签审查队列，不能把单篇判断问题当成不明确的系统故障。
@@ -273,7 +285,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
             }); return record;
         }
     });
-    let checkpoint = validateCheckpoint(readJsonFile(filename, 'historical postprocess checkpoint').value,
+    let checkpoint = validateCheckpoint(readJsonFile(filename, '历史后处理检查点').value,
         options.crosswalkId, tagCatalog.registrySha256, rendererImplementationSha256);
     const pages = new Map(crosswalk.source.papers.map(page => [page.pageKey, page]));
     const pageOwners = new Map();
@@ -294,7 +306,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                 stagingRunId: deterministicStagingRunId(options.crosswalkId, item,
                     tagCatalog.registrySha256, rendererImplementationSha256,
                     assignment.assignmentSha256) });
-        } catch { /* A stale or unsealed member blocks its dates below. */ }
+        } catch { /* 已失效或未保存完整数据的论文会阻止其对应日期生成汇总。 */ }
     }
     const daily = [];
     for (const date of dates) {
@@ -312,7 +324,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                     && checkpointItem.analysisFileSha256 === current.assignment.analysisFileSha256
                     && checkpointItem.analysisRecordSha256 === current.assignment.analysisRecordSha256
                     && checkpointItem.analysisSha256 === current.assignment.analysisSha256
-                    && checkpointItem.taxonomyAssignmentSha256 === current.assignment.assignmentSha256
+                    && checkpointItem.tagAssignmentSha256 === current.assignment.assignmentSha256
                     && checkpointItem.stagingRunId === current.stagingRunId;
             });
         if (!ready) {
@@ -348,7 +360,7 @@ async function runHistoricalPostprocess(options, overrides = {}) {
             }); daily.push(record);
         }
     }
-    checkpoint = validateCheckpoint(readJsonFile(filename, 'historical postprocess checkpoint').value,
+    checkpoint = validateCheckpoint(readJsonFile(filename, '历史后处理检查点').value,
         options.crosswalkId, tagCatalog.registrySha256, rendererImplementationSha256);
     const reviewItems = outcomes.filter(item => item.reviewRequired)
         .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
@@ -363,6 +375,6 @@ async function runHistoricalPostprocess(options, overrides = {}) {
         checkpointSha256: checkpoint.checkpointSha256 };
 }
 
-module.exports = { CONTRACT, VERSION, ANALYSIS_SCHEDULER_CONTRACT, stableHash, deterministicStagingRunId,
+module.exports = { CONTRACT, LEGACY_CONTRACT, VERSION, ANALYSIS_SCHEDULER_CONTRACT, stableHash, deterministicStagingRunId,
     checkpointPath, withCheckpointHash, validateCheckpoint, readAnalysisScheduler, analysisSchedulerItemBinding, completeItems,
     mapConcurrent, runHistoricalPostprocess };

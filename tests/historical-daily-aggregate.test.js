@@ -16,7 +16,7 @@ const DATE = '2026-04-19';
 const RENDERER = '8'.repeat(64);
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
-function stagedPage(index, paperId, score, registry = '9'.repeat(64)) {
+function stagedPage(index, paperId, score, registry = '9'.repeat(64), legacy = false) {
     const pageKey = `page:${String(index).repeat(64)}`;
     return { paperId, pageKey, pagePath: `content/posts/fresh-${index}.md`,
         stagingRunId: RUN, stagingManifestSha256: 'e'.repeat(64),
@@ -26,11 +26,11 @@ function stagedPage(index, paperId, score, registry = '9'.repeat(64)) {
         analysisFileSha256: String(index + 4).repeat(64),
         analysisRecordSha256: String(index + 8).repeat(64),
         analysisSha256: String(index + 7).repeat(64),
-        taxonomyAssignmentSha256: String(index + 5).repeat(64),
-        taxonomyFileSha256: String(index + 6).repeat(64), canonical: {
+        [legacy ? 'taxonomyAssignmentSha256' : 'tagAssignmentSha256']: String(index + 5).repeat(64),
+        [legacy ? 'taxonomyFileSha256' : 'tagAssignmentFileSha256']: String(index + 6).repeat(64), canonical: {
             title: `NEW TITLE ${paperId}`, summary: `NEW SUMMARY ${paperId}`, score,
-            analysisSha256: String(index + 7).repeat(64), taxonomyAssignmentSha256: String(index + 5).repeat(64),
-            taxonomyRegistrySha256: registry, primaryTaskId: 'task.speech-enhancement', primaryTaskLabel: '语音增强',
+            analysisSha256: String(index + 7).repeat(64), tagAssignmentSha256: String(index + 5).repeat(64),
+            tagCatalogSha256: registry, primaryTaskId: 'task.speech-enhancement', primaryTaskLabel: '语音增强',
             primaryMethodId: 'method.tta', primaryMethodLabel: '测试时自适应', labels: ['语音增强', '测试时自适应'] } };
 }
 
@@ -51,7 +51,7 @@ function aggregateFixture() {
         manifestSha256: 'e'.repeat(64) }, manifestFileSha256: 'f'.repeat(64) }] };
 }
 
-test('daily aggregate ranks deterministically and uses only fresh canonical/taxonomy with retained links', () => {
+test('daily aggregate ranks deterministically and uses only fresh canonical analysis and tag assignments with retained links', () => {
     const f = aggregateFixture(); const [result] = api.buildDailyAggregates({ inputs: f, date: DATE });
     assert.deepEqual(result.members.map(item => item.paperId), ['arxiv:2604.00003', 'arxiv:2604.00001', 'arxiv:2604.00002']);
     assert.deepEqual(result.members.map(item => item.rank), [1, 2, 3]);
@@ -61,6 +61,15 @@ test('daily aggregate ranks deterministically and uses only fresh canonical/taxo
     assert.doesNotMatch(JSON.stringify(result), /SECRET OLD SUMMARY|OLD AGGREGATE BODY/);
     const body = { ...result }; delete body.manifestSha256;
     assert.equal(result.manifestSha256, api.stableHash(body));
+    assert.equal(result.contract, 'historical-daily-aggregate-staging-v2');
+    assert.equal(result.version, 2);
+    assert.equal(result.source.tagCatalogSha256, '9'.repeat(64));
+    assert.equal(Object.hasOwn(result.source, 'taxonomyRegistrySha256'), false);
+    for (const member of result.members) {
+        assert.match(member.tagAssignmentSha256, /^[a-f0-9]{64}$/);
+        assert.equal(Object.hasOwn(member, 'taxonomyAssignmentSha256'), false);
+    }
+    assert.deepEqual(api.replayDailyAggregate({ inputs: f, originalAggregate: result }), result);
 });
 
 test('partial staging is blocked and cannot impersonate a complete daily aggregate', () => {
@@ -122,7 +131,22 @@ test('two real per-paper staging producers merge into one complete daily aggrega
             tagCatalogPath: '/unused', stagingRoot }, dependencies);
         assert.equal(staged.pageCount, 1);
     }
-    // 原旧 stage 已保存；旁边另建当前 v2 合成分配，重放须仍选回原旧字节。
+    // 当前两份真实 producer 输出已保存；另建一份旧页面格式的合成副本，与新版共同读取。
+    const mixedStagingRoot = path.join(root, 'mixed-staging');
+    fs.cpSync(stagingRoot, mixedStagingRoot, { recursive: true });
+    const oldManifestFile = path.join(mixedStagingRoot, stagingRunIds[0], 'manifest.json');
+    const oldManifest = JSON.parse(fs.readFileSync(oldManifestFile));
+    assert.equal(oldManifest.contract, pageStagingApi.CONTRACT);
+    assert.equal(oldManifest.version, pageStagingApi.VERSION);
+    oldManifest.contract = pageStagingApi.LEGACY_CONTRACT; oldManifest.version = 1;
+    oldManifest.pages = oldManifest.pages.map(page => {
+        const { tagAssignmentSha256, tagAssignmentFileSha256, ...rest } = page;
+        return { ...rest, taxonomyAssignmentSha256: tagAssignmentSha256, taxonomyFileSha256: tagAssignmentFileSha256 };
+    });
+    oldManifest.pageSetSha256 = api.stableHash(oldManifest.pages);
+    delete oldManifest.manifestSha256; oldManifest.manifestSha256 = api.stableHash(oldManifest);
+    fs.writeFileSync(oldManifestFile, `${JSON.stringify(oldManifest, null, 2)}\n`);
+    // 新页面保存了原旧分配凭证；旁边另建当前 v2 合成分配，重放须仍选回原旧字节。
     const assignmentApi = require('../scripts/lib/historical-tag-assignment.js');
     const assignmentRoot = path.join(root, 'assignments'), currentAssignments = {}, oldFiles = [];
     for (const paperId of paperIds) {
@@ -143,20 +167,21 @@ test('two real per-paper staging producers merge into one complete daily aggrega
         pages: [{ pageId: `page:${'f'.repeat(64)}`, path: `content/posts/${DATE}.md`,
             primaryUrl: `https://example.test/blog/posts/${DATE}/`, contentSha256: 'f'.repeat(64),
             kind: 'daily-summary', scope: { type: 'daily', key: DATE }, cohortDate: DATE }] } };
-    const inputs = api.loadAggregateInputs({ stagingRoot, stagingRunIds, crosswalkRoot: '/unused',
+    const inputs = api.loadAggregateInputs({ stagingRoot: mixedStagingRoot, stagingRunIds, crosswalkRoot: '/unused',
         inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: assignmentRoot, tagCatalogPath: '/unused' }, {
         bindTopology: () => ({ state, inventory }),
         loadPageGenerationInputs: options => pageStagingApi.loadPageGenerationInputs(options, replayDependencies) });
     const [aggregate] = api.buildDailyAggregates({ inputs, date: DATE });
     assert.equal(aggregate.members.length, 2);
+    assert.deepEqual(inputs.stagedRuns.map(item => item.manifest.version), [1, 2]);
     assert.deepEqual(aggregate.members.map(item => item.paperId), ['arxiv:2604.00002', 'arxiv:2604.00001']);
     assert.equal(aggregate.source.stagingRuns.length, 2);
     assert.equal(aggregate.source.rendererImplementationSha256,
         pageStagingApi.currentRendererImplementationSha256());
     assert.equal(api.aggregateRunIdFor(stagingRunIds), api.aggregateRunIdFor([...stagingRunIds].reverse()));
     assert.doesNotMatch(aggregate.markdown, /OLD|legacy/i);
-    const originalStageBytes = stagingRunIds.map(id => fs.readFileSync(path.join(stagingRoot, id, 'manifest.json')));
-    const conflictRoot = path.join(root, 'conflicting-synthetic-stages'); fs.cpSync(stagingRoot, conflictRoot, { recursive: true });
+    const originalStageBytes = stagingRunIds.map(id => fs.readFileSync(path.join(mixedStagingRoot, id, 'manifest.json')));
+    const conflictRoot = path.join(root, 'conflicting-synthetic-stages'); fs.cpSync(mixedStagingRoot, conflictRoot, { recursive: true });
     const conflictFile = path.join(conflictRoot, stagingRunIds[1], 'manifest.json');
     const conflict = JSON.parse(fs.readFileSync(conflictFile));
     conflict.pages[0].paperId = paperIds[0]; conflict.pageSetSha256 = api.stableHash(conflict.pages);
@@ -164,16 +189,16 @@ test('two real per-paper staging producers merge into one complete daily aggrega
     fs.writeFileSync(conflictFile, JSON.stringify(conflict));
     assert.throws(() => api.loadAggregateInputs({ stagingRoot: conflictRoot, stagingRunIds }), /多个已保存页面绑定了不同的标签分配凭证/);
     fs.appendFileSync(oldFiles[0], '\n');
-    assert.throws(() => api.loadAggregateInputs({ stagingRoot, stagingRunIds, tagAssignmentRoot: assignmentRoot,
+    assert.throws(() => api.loadAggregateInputs({ stagingRoot: mixedStagingRoot, stagingRunIds, tagAssignmentRoot: assignmentRoot,
         analysisRoot: '/unused', tagCatalogPath: '/unused' }, { bindTopology: () => ({ state, inventory }),
         loadPageGenerationInputs: options => pageStagingApi.loadPageGenerationInputs(options, replayDependencies) }), /原文件 SHA 不一致/);
     for (let index = 0; index < stagingRunIds.length; index += 1) {
-        assert.deepEqual(fs.readFileSync(path.join(stagingRoot, stagingRunIds[index], 'manifest.json')), originalStageBytes[index]);
+        assert.deepEqual(fs.readFileSync(path.join(mixedStagingRoot, stagingRunIds[index], 'manifest.json')), originalStageBytes[index]);
     }
 });
 
-test('mixed taxonomy registries and verified identity drift fail closed', () => {
-    const mixed = aggregateFixture(); mixed.stagedPages[0].canonical.taxonomyRegistrySha256 = '8'.repeat(64);
+test('mixed tag catalogs and verified identity drift fail closed', () => {
+    const mixed = aggregateFixture(); mixed.stagedPages[0].canonical.tagCatalogSha256 = '8'.repeat(64);
     assert.throws(() => api.buildDailyAggregates({ inputs: mixed, date: DATE }), /论文使用了不同的标签词表 SHA/);
     const drifted = aggregateFixture(); drifted.topology.state.assignments[drifted.stagedPages[0].pageKey].sourceAuthority.paperId = 'arxiv:2604.99999';
     assert.throws(() => api.buildDailyAggregates({ inputs: drifted, date: DATE }), /缺少已核验的对应记录，或论文标识、路径或网址不一致/);
@@ -193,21 +218,21 @@ test('new unrelated crosswalk progress does not invalidate unchanged staged page
     const analysis = '## 评分\n8.0\n\n## 核心摘要\n全新且只来自 canonical 的摘要。\n\n## 方法概述和架构\n方法正文。';
     const paper = { arxivId: '2604.00001', title: 'Fresh canonical title', analysis,
         parsed: require('../scripts/utils.js').parseAnalysis(analysis) };
-    const tagAssignment = { status: 'assigned', assignmentSha256: page.taxonomyAssignmentSha256,
+    const tagAssignment = { status: 'assigned', assignmentSha256: page.tagAssignmentSha256,
         registrySha256: '9'.repeat(64), primaryTaskId: 'task.speech-enhancement', primaryMethodId: 'method.tta',
         concepts: [{ id: 'task.speech-enhancement', facet: 'task', preferredLabel: { zh: '语音增强' } },
             { id: 'method.tta', facet: 'method', preferredLabel: { zh: '测试时自适应' } }] };
     const currentState = { stateSha256: 'f'.repeat(64), identityGroupsSha256: 'e'.repeat(64) };
     const result = api.loadAggregateInputs({ stagingRoot: '/unused', stagingRunIds: [RUN], crosswalkRoot: '/unused',
         inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused' }, {
-        loadCompletedPageStaging: () => ({ manifest: { stagingRunId: RUN, crosswalkId: CROSSWALK,
+        loadCompletedPageStaging: () => ({ manifest: { contract: pageStagingApi.CONTRACT, version: pageStagingApi.VERSION, stagingRunId: RUN, crosswalkId: CROSSWALK,
             crosswalkStateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64),
             rendererImplementationSha256: RENDERER, pages: [page] },
         manifestFileSha256: 'c'.repeat(64) }),
         bindTopology: () => ({ state: currentState, inventory: {} }),
         replaySelectedBindings: () => [],
         loadPageGenerationInputs: () => ({ crosswalk: currentState, groups: [{ paperId: page.paperId,
-            paper, taxonomy: tagAssignment, taxonomyFileSha256: page.taxonomyFileSha256,
+            paper, tagAssignment, tagAssignmentFileSha256: page.tagAssignmentFileSha256,
             analysisRunId: page.analysisRunId, analysisFileSha256: page.analysisFileSha256,
             analysisRecordSha256: page.analysisRecordSha256,
             analysisSha256: page.analysisSha256,
@@ -220,12 +245,12 @@ test('new unrelated crosswalk progress does not invalidate unchanged staged page
 test('completed page staging loader replays manifest and every rendered page SHA', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-aggregate-input-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const runRoot = path.join(root, RUN); const page = stagedPage(1, 'arxiv:2604.00001', 8.1); delete page.canonical;
+    const runRoot = path.join(root, RUN); const page = stagedPage(1, 'arxiv:2604.00001', 8.1, '9'.repeat(64), true); delete page.canonical;
     delete page.stagingRunId; delete page.stagingManifestSha256;
     const bytes = Buffer.from('FRESH STAGED PAGE\n'); page.contentSha256 = sha(bytes);
     fs.mkdirSync(path.join(runRoot, 'pages/content/posts'), { recursive: true });
     fs.writeFileSync(path.join(runRoot, page.stagedPath), bytes);
-    const body = { contract: api.PAGE_STAGING_CONTRACT, version: 1, stagingRunId: RUN,
+    const body = { contract: pageStagingApi.LEGACY_CONTRACT, version: 1, stagingRunId: RUN,
         crosswalkId: CROSSWALK, crosswalkStateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64),
         rendererImplementationSha256: RENDERER,
         createdAt: '2026-09-07T00:00:00.000Z', pages: [page], pageSetSha256: api.stableHash([page]),
@@ -241,7 +266,7 @@ test('completed page staging loader replays manifest and every rendered page SHA
 test('completed page staging loader replays every asset size/SHA', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-aggregate-asset-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-    const runRoot = path.join(root, RUN); const page = stagedPage(1, 'arxiv:2604.00001', 8.1); delete page.canonical;
+    const runRoot = path.join(root, RUN); const page = stagedPage(1, 'arxiv:2604.00001', 8.1, '9'.repeat(64), true); delete page.canonical;
     delete page.stagingRunId; delete page.stagingManifestSha256;
     const pageBytes = Buffer.from('FRESH PAGE\n'); page.contentSha256 = sha(pageBytes);
     const assetBytes = Buffer.from('FRESH ASSET'); const asset = { path: 'static/images/papers/fresh.bin',
@@ -250,7 +275,7 @@ test('completed page staging loader replays every asset size/SHA', t => {
     fs.mkdirSync(path.join(runRoot, 'assets/static/images/papers'), { recursive: true });
     fs.writeFileSync(path.join(runRoot, page.stagedPath), pageBytes);
     fs.writeFileSync(path.join(runRoot, 'assets', asset.path), assetBytes);
-    const body = { contract: api.PAGE_STAGING_CONTRACT, version: 1, stagingRunId: RUN,
+    const body = { contract: pageStagingApi.LEGACY_CONTRACT, version: 1, stagingRunId: RUN,
         crosswalkId: CROSSWALK, crosswalkStateSha256: 'a'.repeat(64), identityGroupsSha256: 'b'.repeat(64),
         rendererImplementationSha256: RENDERER,
         createdAt: '2026-09-07T00:00:00.000Z', pages: [page], pageSetSha256: api.stableHash([page]),
@@ -273,7 +298,62 @@ test('apply writes isolated immutable manifest while replay is idempotent', t =>
     assert.equal(first[0].fileSha256, second[0].fileSha256);
     assert.equal(fs.statSync(first[0].filename).mode & 0o777, 0o600);
     const changed = structuredClone(aggregate); changed[0].markdown += 'drift';
+    changed[0].markdownSha256 = sha(Buffer.from(changed[0].markdown));
+    delete changed[0].manifestSha256; changed[0].manifestSha256 = api.stableHash(changed[0]);
     assert.throws(() => api.writeAggregates({ outputRoot: root, aggregateRunId, aggregates: changed }), /已有每日汇总文件与本次内容不同，拒绝覆盖/);
+});
+
+test('已保存每日汇总按原完整格式只读重放，混用和坏 SHA 不会改签旧文件', t => {
+    const inputs = aggregateFixture();
+    const [current] = api.buildDailyAggregates({ inputs, date: DATE });
+    // 明确合成原 v1 完整表示；不把旧保存对象改头后作为当前 writer 输出。
+    const legacy = structuredClone(current);
+    legacy.contract = api.LEGACY_CONTRACT; legacy.version = 1;
+    legacy.source.taxonomyRegistrySha256 = legacy.source.tagCatalogSha256;
+    delete legacy.source.tagCatalogSha256;
+    for (const member of legacy.members) {
+        member.taxonomyAssignmentSha256 = member.tagAssignmentSha256;
+        delete member.tagAssignmentSha256;
+    }
+    legacy.memberSetSha256 = api.stableHash(legacy.members);
+    delete legacy.manifestSha256; legacy.manifestSha256 = api.stableHash(legacy);
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-legacy-replay-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const filename = path.join(root, `daily-${DATE}.json`);
+    const originalBytes = Buffer.from(`${JSON.stringify(legacy, null, 2)}\n`);
+    fs.writeFileSync(filename, originalBytes, { mode: 0o600 });
+    const saved = api.strictJson(fs.readFileSync(filename), '原每日汇总');
+    assert.deepEqual(api.replayDailyAggregate({ inputs, originalAggregate: saved }), legacy);
+    assert.deepEqual(fs.readFileSync(filename), originalBytes);
+    assert.throws(() => api.writeAggregates({ outputRoot: root, aggregateRunId: RUN, aggregates: [saved] }), /必须使用当前格式/);
+    const seal = value => {
+        value.memberSetSha256 = api.stableHash(value.members);
+        delete value.manifestSha256; value.manifestSha256 = api.stableHash(value);
+        return value;
+    };
+    const variants = [
+        [value => { value.source.tagCatalogSha256 = value.source.taxonomyRegistrySha256; }, /不能混用/],
+        [value => { value.members[0].tagAssignmentSha256 = null; }, /不能混用/],
+        [value => { value.contract = api.CONTRACT; value.version = api.VERSION; }, /字段与格式版本不一致/],
+        [value => { value.version = 2; }, /不属于支持的组合/]
+    ];
+    for (const [mutate, expected] of variants) {
+        const value = structuredClone(legacy); mutate(value); seal(value);
+        assert.throws(() => api.replayDailyAggregate({ inputs, originalAggregate: value }), expected);
+        value.manifestSha256 = '0'.repeat(64);
+        assert.throws(() => api.replayDailyAggregate({ inputs, originalAggregate: value }), /记录自身的 SHA/);
+    }
+    for (const field of ['tagCatalogSha256', 'tagAssignmentSha256']) {
+        const invalidCurrent = structuredClone(current);
+        (field === 'tagCatalogSha256' ? invalidCurrent.source : invalidCurrent.members[0])[field] = null;
+        seal(invalidCurrent);
+        assert.throws(() => api.replayDailyAggregate({ inputs, originalAggregate: invalidCurrent }), /SHA 格式无效/);
+    }
+    const selfConsistentDrift = structuredClone(legacy);
+    selfConsistentDrift.members[0].summary += ' changed';
+    seal(selfConsistentDrift);
+    assert.throws(() => api.replayDailyAggregate({ inputs, originalAggregate: selfConsistentDrift }), /原完整记录.*重新计算/);
+    assert.deepEqual(fs.readFileSync(filename), originalBytes);
 });
 
 test('CLI dry-run never invokes writer and apply targets configured aggregate root', () => {

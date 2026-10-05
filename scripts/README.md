@@ -70,7 +70,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果选择标签，记录概念 ID 并去除上级重复标签。新版分配文件的名称包含词表 SHA 和分配 SHA；旧记录按原格式完整复算后读取，已有页面则按保存的对象及文件 SHA 找回原证据。 |
 | `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（crosswalk）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |
 | `lib/historical-daily-aggregate.js` | Node 库 | 核对单篇私有页面、页面对应表、历史页面清单及当前分析和标签记录，按固定顺序生成每日汇总及清单。保留原汇总路径和网址，不读取旧汇总正文。 |
-| `lib/historical-postprocess-scheduler.js` | Node 库 | 处理来源核验通过且已完成的旧历史分析队列，依次重新分类、生成单篇页面和完整日期汇总。检查点核验当前分析文件与分类 SHA；每次汇总读取同日全部当前成员，论文升级后其全部日期页面都须更新。最多并发 3，不写博客。 |
+| `lib/historical-postprocess-scheduler.js` | Node 库 | 处理来源核验通过且分析已完成的历史论文，依次分配标签、生成单篇页面和每日汇总。检查点保存分析文件和标签分配的 SHA；每次汇总读取同日全部成员，论文更新后，其涉及的各个日期都要重新汇总。最多并发处理 3 篇论文，结果保存在私有目录。 |
 | `lib/conference-postprocess.js` | Node 库 | 只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
 | `lib/historical-publication.js` | Node 库 | 核验旧路线的论文页与日汇总来源链，固定干净 main、远端、Hugo、Git 基线和阶段依赖，再生成不可变私有文件；此入口不写博客、不审查，也不提交或推送。 |
 | `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
@@ -182,7 +182,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `historical-arxiv-analysis-scheduler.js` | 仅调度旧备用路线中 finalized crosswalk 的历史 arXiv 分析。`new-full`、`reader-recovery`、`all` 只维护旧队列，不能阻断或替代 direct-local。 |
 | `historical-tag-assignment.js` | 对完成的历史分析逐篇或批量重新分类。dry-run 不写文件，apply 只保存独立分类结果，不调用模型。 |
 | `historical-page-staging.js` | 按指定分析运行和当前词表 SHA 选择对应的标签记录，再依据已核验的页面对应表生成私有单篇页面，不写入博客。 |
-| `historical-daily-aggregate.js` | 按 `--staging-runs UUID[,UUID...]` 合并多份单篇页面，重建私有日汇总清单，保留原路径与 URL。dry-run 不写文件，apply 也不写博客。 |
+| `historical-daily-aggregate.js` | 按 `--staging-runs UUID[,UUID...]` 读取多份已生成的单篇页面，重建每日汇总及清单，保留原路径与网址。默认只检查；加 `--apply` 后把结果保存到私有目录。 |
 | `historical-publication.js` | plan 固定旧历史发布输入、博客基线与逐路径操作；generate 再核验生成来源，以 `O_EXCL` 保存私有文件。没有认证汇总时拒绝 conference refs。 |
 | `historical-postprocess-scheduler.js` | 处理旧备用 crosswalk 分析的重新分类、单篇页面和日汇总，并保存恢复记录；direct-local 使用 `historical-direct-aggregate.js`。 |
 | `conference-postprocess.js` | 用完整会议计划授权参数逐篇重新分类并生成私有页面，或为计划全部入选成员生成私有汇总；所有根目录来自项目配置。 |
@@ -462,6 +462,10 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 测试样例可用 `--executions/--deep/--assignments/--registry` 显式指定路径；传入 `--assignments` 时只扫描指定目录。
 
 新版历史标签分配使用 `paper-tag-assignment-v2`、`version=2`，保存到 `data/runtime/historical-tag-assignments`，文件名使用 `.tags.`。旧 v1 的两种 `.taxonomy.` 文件名及原目录保留，不能覆写或移走。当前生成优先读取与预期结果对应的新版文件，文件无效时直接拒绝；已有页面恢复则先核对原页面清单，再用其中保存的分配对象 SHA 和文件 SHA 选择原记录。这样，即使旁边已有新版分配或排版不同的旧副本，也不会替换页面的原证据。同一论文多页保存的这两项 SHA 必须一致。
+
+历史单篇页面、页面输入记录、每日汇总和调度检查点使用各自的 v2 格式。页面和调度记录用 `tagAssignmentSha256` 表示标签分配记录的 SHA，用 `tagAssignmentFileSha256` 表示原文件的 SHA；每日汇总的词表 SHA 保存在 `tagCatalogSha256`。旧 v1 文件仍按原字段核验，读取时不改写。页面对应记录 `selectedBindings` 没有改名，其内容和 SHA 保持。
+
+历史发布计划使用 `historical-publication-plan-v2`、`version=2`，列出实际读取的页面和汇总格式；生成记录和输入记录仍使用各自原有的 v1 格式。恢复旧计划时，程序按原格式重建并比较完整证明，不把旧证明转换成新版。生成器源码变化会产生新的实现指纹；原本因实现不一致而不能恢复的页面，仍须重新生成。
 
 ### 历史标签预览
 

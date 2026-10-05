@@ -186,14 +186,14 @@ test('原历史分析完整复算旧分配，并按原文件 SHA 重放，不被
         tagAssignmentRoot: f.output, tagCatalogPath: path.join(__dirname, '..', 'config/tag-catalog.json') };
     const dependencies = { readCrosswalk: () => crosswalk, loadRun: () => f.handle,
         assignmentFiles: { historicalTagAssignmentDir: f.output, legacyHistoricalTagAssignmentDir: oldRoot } };
-    assert.deepEqual(staging.loadPageGenerationInputs(options, dependencies).groups[0].taxonomy, current);
+    assert.deepEqual(staging.loadPageGenerationInputs(options, dependencies).groups[0].tagAssignment, current);
     const pinned = { ...options, assignmentProofs: { [paperId]: { assignmentSha256: old.assignmentSha256, fileSha256: sha(oldBytes) } } };
     const restored = staging.loadPageGenerationInputs(pinned, dependencies).groups[0];
-    assert.deepEqual(restored.taxonomy, old); assert.equal(restored.taxonomyFileSha256, sha(oldBytes));
+    assert.deepEqual(restored.tagAssignment, old); assert.equal(restored.tagAssignmentFileSha256, sha(oldBytes));
     assert.deepEqual(fs.readFileSync(shortFile), oldBytes);
     // 完全相同的旧字节副本可以选回；不同排版仍须匹配原 raw SHA。
     fs.writeFileSync(hashedFile, oldBytes);
-    assert.deepEqual(staging.loadPageGenerationInputs(pinned, dependencies).groups[0].taxonomy, old);
+    assert.deepEqual(staging.loadPageGenerationInputs(pinned, dependencies).groups[0].tagAssignment, old);
     fs.writeFileSync(shortFile, Buffer.concat([oldBytes, Buffer.from('\n')]));
     fs.writeFileSync(hashedFile, api.canonicalBytes(old));
     assert.throws(() => staging.loadPageGenerationInputs(pinned, dependencies), /原文件 SHA 不一致/);

@@ -60,15 +60,15 @@ function fixture(t, secondStatus = 'complete') {
             const manifestSha256 = sha(`manifest:${options.stagingRunId}`);
             const expected = options.expectedAssignment;
             return { status: 'staged', manifestSha256, manifest: {
-                stagingRunId: options.stagingRunId,
+                contract: 'historical-paper-page-staging-v2', version: 2, stagingRunId: options.stagingRunId,
                 rendererImplementationSha256: options.rendererImplementationSha256,
                 manifestSha256,
                 pages: [{ paperId: expected.paperId, analysisRunId: expected.analysisRunId,
                     analysisFileSha256: expected.analysisFileSha256,
                     analysisRecordSha256: expected.analysisRecordSha256,
                     analysisSha256: expected.analysisSha256,
-                    taxonomyAssignmentSha256: expected.assignmentSha256,
-                    taxonomyFileSha256: expected.taxonomyFileSha256 }]
+                    tagAssignmentSha256: expected.assignmentSha256,
+                    tagAssignmentFileSha256: expected.tagAssignmentFileSha256 }]
             } }; },
         loadAggregateInputs: options => ({ options }),
         buildAggregates: ({ inputs, date }) => [{ date, manifestSha256: sha(`aggregate:${date}`), inputs }],
@@ -86,6 +86,10 @@ test('sealed per-paper runs are assigned/staged concurrently and two runs aggreg
     assert.equal(f.aggregateCalls.length, 1);
     assert.equal(f.aggregateCalls[0].aggregates[0].inputs.options.stagingRunIds.length, 2);
     const checkpoint = JSON.parse(fs.readFileSync(result.checkpoint));
+    assert.equal(checkpoint.contract, 'historical-postprocess-scheduler-v2');
+    assert.equal(checkpoint.version, 2);
+    assert.ok(Object.values(checkpoint.items).every(item => Object.hasOwn(item, 'tagAssignmentSha256')
+        && Object.hasOwn(item, 'tagAssignmentFileSha256') && !Object.hasOwn(item, 'taxonomyAssignmentSha256')));
     assert.equal(checkpoint.checkpointSha256, api.withCheckpointHash({ ...checkpoint, checkpointSha256: undefined }).checkpointSha256);
     const firstSha = sha(fs.readFileSync(result.checkpoint));
     const repeated = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
@@ -97,7 +101,7 @@ test('sealed per-paper runs are assigned/staged concurrently and two runs aggreg
     const rebound = { ...changedOnlyVolatile, paperId: f.paperIds[0],
         analysisSchedulerItemSha256: api.stableHash(api.analysisSchedulerItemBinding(f.paperIds[0], changedOnlyVolatile)) };
     assert.equal(api.deterministicStagingRunId(CROSSWALK, rebound, REGISTRY, RENDERER,
-        result.processed[0].taxonomyAssignmentSha256), result.processed[0].stagingRunId);
+        result.processed[0].tagAssignmentSha256), result.processed[0].stagingRunId);
 });
 
 test('renderer implementation change creates a new staging run and checkpoint without reusing old proof', async t => {
@@ -135,7 +139,7 @@ test('analysis assignment upgrade creates a new staging identity while retaining
     assert.notEqual(second.processed[0].stagingRunId, oldRunId);
     assert.equal(second.processed[0].analysisFileSha256, 'a'.repeat(64));
     assert.equal(second.processed[0].analysisRecordSha256, 'b'.repeat(64));
-    assert.equal(second.processed[0].taxonomyAssignmentSha256, 'd'.repeat(64));
+    assert.equal(second.processed[0].tagAssignmentSha256, 'd'.repeat(64));
     assert.ok(f.aggregateCalls.at(-1).aggregates[0].inputs.options.stagingRunIds
         .includes(second.processed[0].stagingRunId));
     assert.ok(!f.aggregateCalls.at(-1).aggregates[0].inputs.options.stagingRunIds.includes(oldRunId));
@@ -225,6 +229,32 @@ test('checkpoint self-SHA survives the production JSON updater generation field'
     const checkpoint = JSON.parse(fs.readFileSync(result.checkpoint));
     assert.doesNotThrow(() => api.validateCheckpoint(checkpoint, CROSSWALK, REGISTRY, RENDERER));
     assert.ok(checkpoint.generation >= 2);
+});
+
+test('legacy checkpoint remains readable but the locked updater cannot re-sign it', async t => {
+    const f = fixture(t, 'pending');
+    const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
+        date: DATE, limit: null, concurrency: 1 }, f.deps);
+    const current = JSON.parse(fs.readFileSync(result.checkpoint));
+    const old = structuredClone(current); old.contract = api.LEGACY_CONTRACT; old.version = 1;
+    for (const item of Object.values(old.items)) {
+        item.taxonomyAssignmentSha256 = item.tagAssignmentSha256; delete item.tagAssignmentSha256;
+        item.taxonomyFileSha256 = item.tagAssignmentFileSha256; delete item.tagAssignmentFileSha256;
+    }
+    const legacy = api.withCheckpointHash(old);
+    // 独立旧格式样本；当前生产写入器不会生成它，也不改写已有运行数据。
+    fs.writeFileSync(result.checkpoint, JSON.stringify(legacy));
+    const originalBytes = fs.readFileSync(result.checkpoint);
+    assert.deepEqual(api.validateCheckpoint(legacy, CROSSWALK, REGISTRY, RENDERER), legacy);
+    await assert.rejects(api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
+        date: DATE, limit: null, concurrency: 1 }, f.deps), /旧版历史后处理检查点只能读取/);
+    assert.deepEqual(fs.readFileSync(result.checkpoint), originalBytes);
+    for (const value of [legacy.items[f.paperIds[0]].taxonomyAssignmentSha256, null]) {
+        const mixed = structuredClone(legacy); mixed.items[f.paperIds[0]].tagAssignmentSha256 = value;
+        assert.throws(() => api.validateCheckpoint(api.withCheckpointHash(mixed), CROSSWALK, REGISTRY, RENDERER), /混用了新旧字段/);
+    }
+    const badHash = { ...legacy, contract: api.CONTRACT, version: api.VERSION };
+    assert.throws(() => api.validateCheckpoint(badHash, CROSSWALK, REGISTRY, RENDERER), /内容哈希/);
 });
 
 test('dry-run is zero-write and reports only sealed-complete scheduler candidates', async t => {

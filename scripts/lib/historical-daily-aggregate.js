@@ -11,8 +11,9 @@ const pageStagingApi = require('./historical-page-staging.js');
 const fresh = require('./fresh-rewrite-run.js');
 
 const PAGE_STAGING_CONTRACT = pageStagingApi.CONTRACT;
-const CONTRACT = 'historical-daily-aggregate-staging-v1';
-const VERSION = 1;
+const CONTRACT = 'historical-daily-aggregate-staging-v2';
+const LEGACY_CONTRACT = 'historical-daily-aggregate-staging-v1';
+const VERSION = 2;
 const UUID_RE = fresh.UUID_RE || /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -71,25 +72,29 @@ function normalizePageStagingManifest(value, stagingRunId) {
     exact(value, ['contract', 'version', 'stagingRunId', 'crosswalkId', 'crosswalkStateSha256',
         'identityGroupsSha256', 'rendererImplementationSha256', 'createdAt', 'pages', 'pageSetSha256', 'assets', 'assetSetSha256',
         'selectedBindings', 'selectedBindingSha256', 'manifestSha256'], '页面生成清单');
-    if (value.contract !== PAGE_STAGING_CONTRACT || value.version !== pageStagingApi.VERSION
-        || value.stagingRunId !== stagingRunId || !UUID_RE.test(value.crosswalkId)
+    const originalBody = clone(value); delete originalBody.manifestSha256;
+    if (!SHA_RE.test(value.manifestSha256 || '') || value.manifestSha256 !== stableHash(originalBody)) fail('页面生成清单自身的 SHA 缺失、格式无效，或与清单内容不一致。');
+    const legacy = value.contract === pageStagingApi.LEGACY_CONTRACT && value.version === 1;
+    if (!legacy && !(value.contract === PAGE_STAGING_CONTRACT && value.version === pageStagingApi.VERSION)) fail('页面生成清单的格式标识和版本不属于支持的组合。');
+    if (value.stagingRunId !== stagingRunId || !UUID_RE.test(value.crosswalkId)
         || !SHA_RE.test(value.crosswalkStateSha256) || !SHA_RE.test(value.identityGroupsSha256)
         || !SHA_RE.test(value.rendererImplementationSha256)
         || !SHA_RE.test(value.assetSetSha256) || !SHA_RE.test(value.selectedBindingSha256)
         || !Array.isArray(value.pages) || !value.pages.length) fail('页面生成清单的版本、运行标识、输入指纹或页面列表不符合要求。');
     if (Number.isNaN(Date.parse(value.createdAt)) || new Date(value.createdAt).toISOString() !== value.createdAt) fail('页面生成清单的创建时间必须是规范的 UTC 时间字符串。');
     const pages = value.pages.map((page, index) => {
+        pageStagingApi.tagAssignmentProofFor(value, page);
         exact(page, ['paperId', 'pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'sourcePageContentSha256',
             'stagedPath', 'contentSha256', 'analysisRunId', 'analysisFileSha256',
-            'analysisRecordSha256', 'analysisSha256', 'taxonomyAssignmentSha256',
-            'taxonomyFileSha256'], `页面生成清单中的页面项 ${index}`);
+            'analysisRecordSha256', 'analysisSha256',
+            legacy ? 'taxonomyAssignmentSha256' : 'tagAssignmentSha256',
+            legacy ? 'taxonomyFileSha256' : 'tagAssignmentFileSha256'], `页面生成清单中的页面项 ${index}`);
         if (!/^arxiv:\d{4}\.\d{4,5}$/.test(page.paperId) || !/^page:[a-f0-9]{64}$/.test(page.pageKey)
             || !/^content\/posts\/[a-zA-Z0-9._/-]+\.md$/.test(page.pagePath)
             || page.stagedPath !== path.posix.join('pages', page.pagePath)
             || !/^\d{4}-\d{2}-\d{2}$/.test(page.cohortDate) || !UUID_RE.test(page.analysisRunId)) fail(`页面生成清单中的页面项 ${index} 的论文标识、页面标识、路径、日期或分析运行 ID 不符合要求。`);
         for (const field of ['sourcePageContentSha256', 'contentSha256', 'analysisFileSha256',
-            'analysisRecordSha256', 'analysisSha256',
-            'taxonomyAssignmentSha256', 'taxonomyFileSha256']) if (!SHA_RE.test(page[field])) fail(`页面生成清单中的页面项 ${index} 的 ${field} 字段不是有效的 SHA 格式。`);
+            'analysisRecordSha256', 'analysisSha256']) if (!SHA_RE.test(page[field])) fail(`页面生成清单中的页面项 ${index} 的 ${field} 字段不是有效的 SHA 格式。`);
         let url; try { url = new URL(page.primaryUrl); } catch { fail(`页面生成清单中的页面项 ${index} 的正式网址无法解析。`); }
         if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) fail(`页面生成清单中的页面项 ${index} 的正式网址必须使用 HTTPS，且不能包含认证信息、查询参数或片段。`);
         return clone(page);
@@ -170,7 +175,7 @@ function buildDailyPaperDisplayRecord(paper, tagAssignment) {
     const method = concepts.find(item => item.id === tagAssignment.primaryMethodId && item.facet === 'method');
     if (!task || !method || new Set(concepts.map(item => item.id)).size !== concepts.length) fail('标签记录中的主任务或主方法未找到对应概念，或概念 ID 重复。');
     return { title, summary, score, analysisSha256: sha256(Buffer.from(paper.analysis, 'utf8')),
-        taxonomyAssignmentSha256: tagAssignment.assignmentSha256, taxonomyRegistrySha256: tagAssignment.registrySha256,
+        tagAssignmentSha256: tagAssignment.assignmentSha256, tagCatalogSha256: tagAssignment.registrySha256,
         primaryTaskId: task.id, primaryTaskLabel: task.label, primaryMethodId: method.id,
         primaryMethodLabel: method.label, labels: concepts.map(item => item.label) };
 }
@@ -183,8 +188,7 @@ function loadAggregateInputs(options, dependencies = {}) {
         stagingRoot: options.stagingRoot, stagingRunId }));
     const assignmentProofs = Object.create(null);
     for (const staged of stagedRuns) for (const page of staged.manifest.pages) {
-        const proof = { analysisRunId: page.analysisRunId, assignmentSha256: page.taxonomyAssignmentSha256,
-            fileSha256: page.taxonomyFileSha256 };
+        const proof = { analysisRunId: page.analysisRunId, ...pageStagingApi.tagAssignmentProofFor(staged.manifest, page) };
         if (Object.hasOwn(assignmentProofs, page.paperId) && stableHash(assignmentProofs[page.paperId]) !== stableHash(proof)) {
             fail(`论文 ${page.paperId} 的多个已保存页面绑定了不同的标签分配凭证。`);
         }
@@ -212,18 +216,19 @@ function loadAggregateInputs(options, dependencies = {}) {
         if (pageGenerationInputs.crosswalk.stateSha256 !== topology.state.stateSha256) fail('页面生成输入所用的页面对应表状态与当前状态不一致。');
         const groups = new Map(pageGenerationInputs.groups.map(group => [group.paperId, group]));
         for (const page of staged.manifest.pages) {
+            const proof = pageStagingApi.tagAssignmentProofFor(staged.manifest, page);
             const group = groups.get(page.paperId); const sourcePage = group?.pages.find(item => item.pageKey === page.pageKey);
             if (!group || !sourcePage || sourcePage.pagePath !== page.pagePath || sourcePage.primaryUrl !== page.primaryUrl
                 || sourcePage.cohortDate !== page.cohortDate || sourcePage.pageContentSha256 !== page.sourcePageContentSha256
                 || group.analysisRunId !== page.analysisRunId || group.analysisFileSha256 !== page.analysisFileSha256
                 || group.analysisRecordSha256 !== page.analysisRecordSha256
                 || group.analysisSha256 !== page.analysisSha256
-                || group.taxonomy.assignmentSha256 !== page.taxonomyAssignmentSha256
-                || group.taxonomyFileSha256 !== page.taxonomyFileSha256) fail(`页面 ${page.pageKey} 的生成记录与当前论文、分析、标签或页面对应记录不一致。`);
+                || group.tagAssignment.assignmentSha256 !== proof.assignmentSha256
+                || group.tagAssignmentFileSha256 !== proof.fileSha256) fail(`页面 ${page.pageKey} 的生成记录与当前论文、分析、标签或页面对应记录不一致。`);
             stagedPages.push({ ...page, stagingRunId: staged.manifest.stagingRunId,
                 stagingManifestSha256: staged.manifest.manifestSha256,
                 rendererImplementationSha256: staged.manifest.rendererImplementationSha256,
-                canonical: buildDailyPaperDisplayRecord(group.paper, group.taxonomy) });
+                canonical: buildDailyPaperDisplayRecord(group.paper, group.tagAssignment) });
         }
     }
     if (new Set(stagedPages.map(page => page.pageKey)).size !== stagedPages.length) fail('合并后的页面生成记录中存在重复页面。');
@@ -260,6 +265,11 @@ function renderDaily(date, members, labels) {
 }
 
 function buildDailyAggregates({ inputs, date = null } = {}) {
+    return formatDailyAggregates(inputs, date, false);
+}
+
+// 只有已核验的原保存汇总可以选择旧格式；普通生成入口始终写新版。
+function formatDailyAggregates(inputs, date, legacy) {
     const { state, inventory } = inputs.topology; const pages = inventory.ledger.pages;
     const rendererImplementationShas = [...new Set(inputs.stagedRuns
         .map(item => item.manifest.rendererImplementationSha256))];
@@ -287,34 +297,74 @@ function buildDailyAggregates({ inputs, date = null } = {}) {
                 stagingRunId: staged.stagingRunId, stagingManifestSha256: staged.stagingManifestSha256,
                 url: internalUrl(staged.primaryUrl), title: staged.canonical.title, summary: staged.canonical.summary,
                 score: staged.canonical.score, analysisSha256: staged.canonical.analysisSha256,
-                taxonomyAssignmentSha256: staged.canonical.taxonomyAssignmentSha256,
+                [legacy ? 'taxonomyAssignmentSha256' : 'tagAssignmentSha256']: staged.canonical.tagAssignmentSha256,
                 singlePageContentSha256: staged.contentSha256,
                 primaryTaskId: staged.canonical.primaryTaskId, primaryTaskLabel: staged.canonical.primaryTaskLabel,
                 primaryMethodId: staged.canonical.primaryMethodId, primaryMethodLabel: staged.canonical.primaryMethodLabel,
                 labels: staged.canonical.labels };
         }).sort((left, right) => right.score - left.score || left.paperId.localeCompare(right.paperId)
             || left.pagePath.localeCompare(right.pagePath)).map((item, index) => ({ rank: index + 1, ...item }));
-        const registryShas = new Set(paperPages.map(page => byPage.get(page.pageKey).canonical.taxonomyRegistrySha256));
+        const registryShas = new Set(paperPages.map(page => byPage.get(page.pageKey).canonical.tagCatalogSha256));
         if (registryShas.size !== 1) fail(`日期 ${cohortDate} 的论文使用了不同的标签词表 SHA。`);
         const summary = summaryPages[0]; const markdown = renderDaily(cohortDate, members, members.flatMap(item => item.labels));
         const stagingRuns = inputs.stagedRuns.map(item => ({ stagingRunId: item.manifest.stagingRunId,
             stagingManifestSha256: item.manifest.manifestSha256,
             stagingManifestFileSha256: item.manifestFileSha256 })).sort((a, b) => a.stagingRunId.localeCompare(b.stagingRunId));
-        const body = { contract: CONTRACT, version: VERSION, status: 'complete', date: cohortDate,
+        const body = { contract: legacy ? LEGACY_CONTRACT : CONTRACT, version: legacy ? 1 : VERSION, status: 'complete', date: cohortDate,
             outputPage: { pageKey: summary.pageId, path: summary.path, primaryUrl: summary.primaryUrl,
                 previousContentSha256: summary.contentSha256 },
             source: { stagingRuns, stagingSetSha256: stableHash(stagingRuns),
                 rendererImplementationSha256: rendererImplementationShas[0],
                 crosswalkId: state.crosswalkId, crosswalkStateSha256: state.stateSha256,
                 ledgerSha256: inventory.ledger.ledgerSha256, pageSetSha256: inventory.ledger.pageSetSha256,
-                taxonomyRegistrySha256: [...registryShas][0] },
+                [legacy ? 'taxonomyRegistrySha256' : 'tagCatalogSha256']: [...registryShas][0] },
             members, memberSetSha256: stableHash(members), markdown, markdownSha256: sha256(Buffer.from(markdown, 'utf8')) };
         return { ...body, manifestSha256: stableHash(body) };
     });
 }
 
+function normalizeDailyAggregate(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) fail('每日汇总记录必须为对象。');
+    const body = clone(value); delete body.manifestSha256;
+    if (!SHA_RE.test(value.manifestSha256 || '') || value.manifestSha256 !== stableHash(body)) fail('每日汇总记录自身的 SHA 缺失、格式无效或与内容不一致。');
+    if (value.status !== 'complete' || !/^\d{4}-\d{2}-\d{2}$/.test(value.date || '')
+        || typeof value.markdown !== 'string' || value.markdownSha256 !== sha256(Buffer.from(value.markdown, 'utf8'))
+        || !Array.isArray(value.members) || !value.members.length || value.memberSetSha256 !== stableHash(value.members)
+        || new Set(value.members.map(member => member.pageKey)).size !== value.members.length
+        || new Set(value.members.map(member => member.pagePath)).size !== value.members.length) fail('每日汇总记录的完成状态、日期、正文或成员集合的 SHA 无效。');
+    const legacy = value.contract === LEGACY_CONTRACT && value.version === 1;
+    if (!legacy && !(value.contract === CONTRACT && value.version === VERSION)) fail('每日汇总记录的格式标识和版本不属于支持的组合。');
+    if (!legacy && value.members.some(member => !member || typeof member !== 'object' || Array.isArray(member))) fail('新版每日汇总的每个成员必须为对象。');
+    const readSha = (record, oldField, newField) => {
+        const hasOld = Object.hasOwn(record, oldField); const hasNew = Object.hasOwn(record, newField);
+        if (hasOld && hasNew) fail('每日汇总记录不能混用新旧标签字段。');
+        if (legacy ? hasNew : hasOld || !hasNew) fail('每日汇总记录的标签字段与格式版本不一致。');
+        if (legacy && !hasOld) return;
+        const value = record[legacy ? oldField : newField];
+        if (typeof value !== 'string' || !SHA_RE.test(value)) fail('每日汇总记录中的标签分配或词表 SHA 格式无效。');
+    };
+    if (!legacy && (!value.source || typeof value.source !== 'object' || Array.isArray(value.source)
+        || !Array.isArray(value.source.stagingRuns)
+        || value.source.stagingSetSha256 !== stableHash(value.source.stagingRuns))) fail('新版每日汇总缺少完整的来源记录，或来源集合的 SHA 无效。');
+    if (value.source && typeof value.source === 'object') readSha(value.source, 'taxonomyRegistrySha256', 'tagCatalogSha256');
+    for (const member of value.members) readSha(member, 'taxonomyAssignmentSha256', 'tagAssignmentSha256');
+    return clone(value);
+}
+
+function replayDailyAggregate({ inputs, originalAggregate } = {}) {
+    const original = normalizeDailyAggregate(originalAggregate);
+    const legacy = original.contract === LEGACY_CONTRACT;
+    const [rebuilt] = formatDailyAggregates(inputs, original.date, legacy);
+    if (stableHash(rebuilt) !== stableHash(original)) fail('每日汇总的原完整记录与当前已核验来源重新计算的结果不一致。');
+    return rebuilt;
+}
+
 function writeAggregates({ outputRoot, aggregateRunId, aggregates } = {}) {
     if (!UUID_RE.test(String(aggregateRunId || '')) || !Array.isArray(aggregates) || !aggregates.length) fail('aggregateRunId 必须为 UUID v4，且每日汇总结果必须为非空数组。');
+    for (const aggregate of aggregates) {
+        if (aggregate?.contract !== CONTRACT || aggregate.version !== VERSION) fail('新写入的每日汇总必须使用当前格式。');
+        normalizeDailyAggregate(aggregate);
+    }
     const root = fresh.assertSafeDirectory(outputRoot, true);
     const runRoot = fresh.assertSafeDirectory(path.join(root, aggregateRunId), true); const outputs = [];
     for (const aggregate of aggregates) {
@@ -330,6 +380,6 @@ function writeAggregates({ outputRoot, aggregateRunId, aggregates } = {}) {
     return outputs;
 }
 
-module.exports = { PAGE_STAGING_CONTRACT, CONTRACT, VERSION, UUID_RE, stableHash, strictJson,
+module.exports = { PAGE_STAGING_CONTRACT, CONTRACT, LEGACY_CONTRACT, VERSION, UUID_RE, stableHash, strictJson,
     normalizePageStagingManifest, loadCompletedPageStaging, bindTopology, buildDailyPaperDisplayRecord,
-    loadAggregateInputs, aggregateRunIdFor, renderDaily, buildDailyAggregates, writeAggregates };
+    loadAggregateInputs, aggregateRunIdFor, renderDaily, buildDailyAggregates, normalizeDailyAggregate, replayDailyAggregate, writeAggregates };
