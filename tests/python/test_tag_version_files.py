@@ -187,7 +187,7 @@ class TagVersionFilesTests(unittest.TestCase):
         self.env['_git_relative_manifest'] = lambda paths: [relative]
         self.env['_run_git'] = lambda *args, **kw: SimpleNamespace(stdout=(f' M {relative}\0').encode())
         self.env['_sha256_file'] = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-        allowance = {relative: {'sha256': self.env['_sha256_file'](target), 'controlledTaxonomy': True}}
+        allowance = {relative: {'sha256': self.env['_sha256_file'](target), 'controlledTagFiles': True}}
         self.call('validate_manifest_clean_against_head', [target], allowance)
         target.write_text('{}')
         with self.assertRaises(self.error):

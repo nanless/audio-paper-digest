@@ -38,8 +38,8 @@ describe('conference source-bound open-source inventory', () => {
     });
 });
 
-describe('taxonomy runtime analysis integration', () => {
-    it('taxonomy repair retries with the first validation error and changes only allowed spans', async () => {
+describe('tag rules runtime analysis integration', () => {
+    it('tag repair retries with the first validation error and changes only allowed spans', async () => {
         const deep = require('../scripts/deep-analyzer.js');
         const prompts = [];
         const budgets = [];
@@ -133,25 +133,29 @@ describe('taxonomy runtime analysis integration', () => {
         assert.strictEqual(revisionPaper.analysisStageCheckpoints.revision, undefined);
     });
 
-    it('taxonomy prompt has no paper-specific 2403 answer example', () => {
+    it('tag repair prompt has no paper-specific 2403 answer example', () => {
         const prompt = fs.readFileSync(
             path.join(__dirname, '../prompts/tag-repair.md'), 'utf8'
         );
         assert.doesNotMatch(prompt, /task\.intelligibility|method\.crowdsourced-evaluation/);
     });
 
-    it('current fingerprints bind taxonomy while legacy summary fingerprints do not', () => {
+    it('current fingerprints bind tag rules while legacy summary fingerprints do not', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const fields = deep.tagRuleFingerprintFields();
-        assert.match(fields.taxonomyRegistrySha256, /^[a-f0-9]{64}$/);
-        assert.match(fields.taxonomyProjectionSha256, /^[a-f0-9]{64}$/);
-        assert.strictEqual(fields.taxonomyProjectionContract, 'paper-tag-prompt-text-v2');
+        assert.deepStrictEqual(Object.keys(fields).sort(), [
+            'tagCatalogVersion', 'tagCatalogSha256', 'tagPromptContract', 'tagPromptSha256', 'tagSelectionContract'
+        ].sort());
+        assert.match(fields.tagCatalogSha256, /^[a-f0-9]{64}$/);
+        assert.match(fields.tagPromptSha256, /^[a-f0-9]{64}$/);
+        assert.strictEqual(fields.tagPromptContract, 'paper-tag-prompt-text-v2');
         const rules = require('../scripts/lib/tag-rules.js');
+        assert.strictEqual(fields.tagCatalogVersion, rules.getDefaultTagRules().registryVersion);
         const legacyPrompt = rules.buildTagPromptText(rules.getDefaultTagRules().tagCatalog,
             rules.LEGACY_TAG_PROMPT_TEXT_CONTRACT);
         const legacySha = require('node:crypto').createHash('sha256').update(legacyPrompt).digest('hex');
-        assert.notStrictEqual(fields.taxonomyProjectionSha256, legacySha);
-        assert.strictEqual(fields.taxonomySelectionContract, 'paper-tag-selection-v2');
+        assert.notStrictEqual(fields.tagPromptSha256, legacySha);
+        assert.strictEqual(fields.tagSelectionContract, 'paper-tag-selection-v2');
         const input = validAnalysisText();
         const evidence = deep.buildStageEvidenceContext('revision', input, 'speech evidence');
         assert.notStrictEqual(
@@ -159,7 +163,7 @@ describe('taxonomy runtime analysis integration', () => {
             deep.buildLegacyCoreSummaryV2TextFingerprint('revision', input, evidence)
         );
         assert.strictEqual(deep.currentCoreSummaryV3MigrationPromptsAreExact(), false,
-            'taxonomy prompt rollout must not be admitted by the old summary-only allowlist');
+            'tag rules rollout must not be admitted by the old summary-only allowlist');
     });
 });
 

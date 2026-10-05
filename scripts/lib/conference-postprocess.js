@@ -19,7 +19,8 @@ const sourceContextApi = require('./conference-source-context.js');
 const CONTRACT = 'conference-paper-page-staging-v1';
 const AGGREGATE_CONTRACT = 'conference-aggregate-staging-v1';
 const ASSIGNMENT_CONTRACT = 'conference-taxonomy-assignment-v1';
-const PROJECTION_CONTRACT = 'conference-page-projection-v1';
+const PROJECTION_CONTRACT = 'conference-page-projection-v2';
+const PROJECTION_VERSION = 2;
 const HIERARCHY_CONTRACT = 'conference-taxonomy-hierarchy-v1';
 const VERSION = 1;
 const ID_RE = /^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/;
@@ -289,9 +290,9 @@ function implementationFingerprint() {
         parserSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'utils.js'), 8 * 1024 * 1024, 'conference parser source').fileSha256,
         pythonParserSourceSha256: pageApi.readRegular(path.join(__dirname, '..', 'utils.py'), 8 * 1024 * 1024, 'conference Python parser source').fileSha256,
         analysisSectionTitlesSourceSha256: pageApi.readRegular(path.join(__dirname, 'analysis-section-titles.js'), 2 * 1024 * 1024, 'conference analysis headings parser source').fileSha256,
-        taxonomySourceSha256: pageApi.readRegular(path.join(__dirname, 'tag-catalog.js'), 4 * 1024 * 1024, 'conference taxonomy source').fileSha256,
+        tagCatalogSourceSha256: pageApi.readRegular(path.join(__dirname, 'tag-catalog.js'), 4 * 1024 * 1024, 'conference tag catalog source').fileSha256,
         identitySourceSha256: pageApi.readRegular(path.join(__dirname, 'paper-identity.js'), 4 * 1024 * 1024, 'conference identity source').fileSha256 };
-    const body = { contract: PROJECTION_CONTRACT, version: VERSION, ...sources };
+    const body = { contract: PROJECTION_CONTRACT, version: PROJECTION_VERSION, ...sources };
     return { ...body, implementationSha256: stableHash(body) };
 }
 function fingerprint(dependencies) {
@@ -299,10 +300,10 @@ function fingerprint(dependencies) {
     const expectedKeys = ['contract', 'version', 'nodeSourceSha256', 'rendererSourceSha256', 'publisherSourceSha256',
         'publisherCommonSourceSha256', 'analysisSectionsSourceSha256', 'analysisSectionTitlesSourceSha256',
         'tagStageRecordSourceSha256', 'pythonTagStageRecordSourceSha256',
-        'loaderSourceSha256', 'parserSourceSha256', 'pythonParserSourceSha256', 'taxonomySourceSha256', 'identitySourceSha256', 'implementationSha256'];
+        'loaderSourceSha256', 'parserSourceSha256', 'pythonParserSourceSha256', 'tagCatalogSourceSha256', 'identitySourceSha256', 'implementationSha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')
-        || value.contract !== PROJECTION_CONTRACT || value.version !== VERSION || value.implementationSha256 !== stableHash(body)
+        || value.contract !== PROJECTION_CONTRACT || value.version !== PROJECTION_VERSION || value.implementationSha256 !== stableHash(body)
         || Object.entries(value).filter(([key]) => key.endsWith('Sha256')).some(([, sha]) => !/^[a-f0-9]{64}$/.test(sha || ''))) fail('会议页面生成程序的实现指纹不符合要求。');
     return value;
 }
@@ -993,7 +994,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     return { status: apply ? 'staged' : 'dry-run', manifest };
 }
 
-module.exports = { CONTRACT, AGGREGATE_CONTRACT, ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, HIERARCHY_CONTRACT,
+module.exports = { CONTRACT, AGGREGATE_CONTRACT, ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, HIERARCHY_CONTRACT,
     VERSION, stableHash, planProof,
     loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,

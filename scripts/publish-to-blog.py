@@ -8848,7 +8848,7 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
                 isinstance(allowance, dict) and allowance.get('controlledBinary')
             )
             controlled_tag_files = bool(
-                isinstance(allowance, dict) and allowance.get('controlledTaxonomy')
+                isinstance(allowance, dict) and allowance.get('controlledTagFiles')
             )
             if (not expected_sha or target.is_symlink()
                     or not target.is_file() or _sha256_file(target) != expected_sha):
@@ -9981,7 +9981,7 @@ def generation_template_fingerprint():
     return _stable_json_sha256({
         'dependencies': dependencies,
         'basePath': BASE_PATH,
-        'taxonomyRegistrySha256': _PAGE_TAG_CATALOG['registrySha256'],
+        'tagCatalogSha256': _PAGE_TAG_CATALOG['registrySha256'],
         'generationManifestSchema': 3,
         'generationJournalSchema': 1,
         'reviewFailureSchema': 3,
@@ -10287,7 +10287,7 @@ def prepare_generation_installation(
                     prior_exact[item['path']] = {
                         'sha256': item['sha256'],
                         'controlledBinary': is_api_reader_asset_path(target),
-                        'controlledTaxonomy': _is_tag_catalog_file_path(item['path']),
+                        'controlledTagFiles': _is_tag_catalog_file_path(item['path']),
                     }
         except PublishDataValidationError:
             prior_exact = {}

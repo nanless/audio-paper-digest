@@ -366,6 +366,12 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 但同一个包同时包含两个字段时会拒绝处理，即使两者值相同或为空。读取旧包不会改写保存记录或重算原绑定。
 发布器的内部页面组合结果也使用 `tagMetadata`；页面前端字段和外部 `assessment.taxonomy` 仍按现有网站格式输出，等待与模板一起迁移。
 
+分析的当前指纹分别用 `tagCatalogVersion`、`tagCatalogSha256`、`tagPromptContract`、`tagPromptSha256` 和 `tagSelectionContract`
+记录词表、提示与选择规则。字段迁移会改变主分析、修订、结构修复和标签选择的输入指纹，旧检查点按原规则失效。
+会议页面的实现指纹使用 `conference-page-projection-v2`、版本 2，`tagCatalogSourceSha256` 记录词表加载器的源码摘要；
+分配和页面清单仍使用各自原版本。升级后生成新的实现目录，原页面和原证明保留，不通过改写旧字段来沿用旧指纹。
+发布器的模板指纹用 `tagCatalogSha256` 记录词表内容摘要；临时文件许可用 `controlledTagFiles` 标明已核验的词表文件。
+
 当前标签阶段和选择元数据写入 `paper-tag-selection-v2`。读取旧记录时仍接受明确的 `paper-taxonomy-selection-v1`，
 但须按记录原字段和值核验全部绑定；新旧保存格式都可能包含旧选择协议，不能仅凭阶段格式判断选择协议。
 旧格式的合同声明必须与阶段中保存的选择协议一致。重新生成才写新协议，只读核验和词表升级注记不会替换旧协议或重算旧绑定。

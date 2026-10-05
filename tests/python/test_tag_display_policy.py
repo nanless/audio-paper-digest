@@ -252,7 +252,7 @@ class PresentationPolicyTests(unittest.TestCase):
 
     def test_prior_receipt_allows_exact_policy_only(self):
         self.transaction()
-        allowances={r['path']:{'sha256':r['sha256'],'controlledTaxonomy':True} for r in self.manifest['files']
+        allowances={r['path']:{'sha256':r['sha256'],'controlledTagFiles':True} for r in self.manifest['files']
                     if self.call('_is_tag_catalog_file_path',r['path'])}
         paths=[self.repo/p for p in allowances]
         self.call('validate_manifest_clean_against_head',paths,allowances)

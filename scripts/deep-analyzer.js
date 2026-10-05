@@ -116,11 +116,11 @@ const TAG_RULES = getDefaultTagRules();
 
 function tagRuleFingerprintFields() {
     return {
-        taxonomyRegistryVersion: TAG_RULES.registryVersion,
-        taxonomyRegistrySha256: TAG_RULES.registrySha256,
-        taxonomyProjectionContract: TAG_RULES.projectionContract,
-        taxonomyProjectionSha256: TAG_RULES.projectionSha256,
-        taxonomySelectionContract: TAG_RULES.selectionContract
+        tagCatalogVersion: TAG_RULES.registryVersion,
+        tagCatalogSha256: TAG_RULES.registrySha256,
+        tagPromptContract: TAG_RULES.projectionContract,
+        tagPromptSha256: TAG_RULES.projectionSha256,
+        tagSelectionContract: TAG_RULES.selectionContract
     };
 }
 

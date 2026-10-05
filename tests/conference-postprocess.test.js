@@ -516,12 +516,12 @@ test('loadStage re-renders current completion and rejects re-signed metadata or 
 
 test('页面生成程序升级后，使用新的暂存身份，不覆盖原文件', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
-    const implementation = marker => { const body = { contract: api.PROJECTION_CONTRACT, version: 1,
+    const implementation = marker => { const body = { contract: api.PROJECTION_CONTRACT, version: api.PROJECTION_VERSION,
         nodeSourceSha256: marker.repeat(64), rendererSourceSha256: 'b'.repeat(64), publisherSourceSha256: 'c'.repeat(64),
         publisherCommonSourceSha256: '2'.repeat(64),
         tagStageRecordSourceSha256: '6'.repeat(64), pythonTagStageRecordSourceSha256: '7'.repeat(64),
         analysisSectionsSourceSha256: '3'.repeat(64), analysisSectionTitlesSourceSha256: '4'.repeat(64),
-        loaderSourceSha256: 'd'.repeat(64), parserSourceSha256: 'e'.repeat(64), pythonParserSourceSha256: '5'.repeat(64), taxonomySourceSha256: 'f'.repeat(64),
+        loaderSourceSha256: 'd'.repeat(64), parserSourceSha256: 'e'.repeat(64), pythonParserSourceSha256: '5'.repeat(64), tagCatalogSourceSha256: 'f'.repeat(64),
         identitySourceSha256: '1'.repeat(64) };
         return { ...body, implementationSha256: api.stableHash(body) }; };
     const firstDeps = { ...f.dependencies, implementationFingerprint: () => implementation('a') };
@@ -529,6 +529,11 @@ test('页面生成程序升级后，使用新的暂存身份，不覆盖原文�
         render: packet => ({ markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\nUPGRADED\n`, assets: [] }) };
     const first = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, firstDeps);
+    assert.equal(first.manifest.implementation.contract, 'conference-page-projection-v2');
+    assert.equal(first.manifest.implementation.version, 2);
+    assert.equal(first.manifest.implementation.tagCatalogSourceSha256, 'f'.repeat(64));
+    assert.equal(Object.hasOwn(first.manifest.implementation, 'taxonomySourceSha256'), false);
+    assert.equal(api.VERSION, 1);
     const second = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, secondDeps);
     assert.notEqual(first.manifest.implementation.implementationSha256, second.manifest.implementation.implementationSha256);
@@ -680,11 +685,12 @@ test('会议实现身份实际包含 Python 解析器全文，单独变化使身
     } finally { pageApi.readRegular = originalRead; }
 });
 
-test('会议页面实现身份包含两端标签格式读取器的实际全文 SHA', () => {
+test('会议页面实现身份包含标签词表及两端标签格式读取器的实际全文 SHA', () => {
     const baseline = api.implementationFingerprint();
     for (const [relative, field] of [
         ['scripts/lib/tag-stage-record.js', 'tagStageRecordSourceSha256'],
-        ['scripts/tag_stage_record.py', 'pythonTagStageRecordSourceSha256']
+        ['scripts/tag_stage_record.py', 'pythonTagStageRecordSourceSha256'],
+        ['scripts/lib/tag-catalog.js', 'tagCatalogSourceSha256']
     ]) {
         const target = path.resolve(__dirname, '..', relative);
         assert.equal(baseline[field], sha256(fs.readFileSync(target)));
