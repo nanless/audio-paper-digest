@@ -645,7 +645,7 @@ test('提供 --acknowledge-destructive 后，进程可以更新允许确认的�
         assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.acknowledged, true);
         assert.equal(stage.registryUpgradeFrom.destructiveAcknowledgement.conceptIdImpact, 'none');
         assert.match(stage.registryUpgradeFrom.destructiveAcknowledgement.note,
-            /人工确认|显式确认/);
+            /^已明确确认本次词表更新中的破坏性变更：[a-f0-9]{64} → [a-f0-9]{64}；所选概念 ID 保持不变。$/);
         // 重封后 binding 必须重新闭合，Python 发布端同一注记也必须能过。
         assert.strictEqual(contract.validateTagStageProof(paper, {
             parsed: utilsApi.parseAnalysis(paper.analysis, { tagRules: current }),

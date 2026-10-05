@@ -289,13 +289,13 @@ class PreviewBuilderTest(unittest.TestCase):
         # 初始处理方式：唯一命中启用概念的中文首选名称时选 keep，经别名命中时选 alias。
         self.assertEqual(rows['语音任务']['disposition'], 'keep')
         self.assertEqual(rows['ASR']['disposition'], 'alias')
-        # 仅上位命中 → broader（status 仍是 needs_review，原值不静默改写）
+        # 原标签只包含一个候选中文标签时，初始处理方式为 broader；仍保留原标签并标为 needs_review。
         self.assertEqual(rows['自动语音识别']['disposition'], 'broader')
         self.assertEqual(rows['自动语音识别']['status'], 'needs_review')
         self.assertEqual(rows['自动语音识别']['conceptId'], '')
         evidence = json.loads(rows['自动语音识别']['evidence'])
         self.assertEqual(evidence['upperConceptId'], 'task.asr')
-        # 零命中与多上位命中都只能 pending，且必须写明原因/候选
+        # 没有候选或有多个候选时，暂不选择处理方式，并记录原因或候选。
         self.assertEqual(rows['totally-unknown']['disposition'], '')
         self.assertIn('词表中没有与该标签对应的名称或别名', json.loads(rows['totally-unknown']['evidence'])['reason'])
         multi = json.loads(rows['语音任务与语音识别']['evidence'])
@@ -405,7 +405,7 @@ class SevenStateDispositionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '采用 keep 处理方式时，status 必须为 mapped。'):
             preview.validate_disposition_rows([self.row(disposition='keep', status='needs_review',
                                                         conceptId='task.asr')])
-        # broader 只能来自“仅上位命中”
+        # broader 记录必须保留 needs_review 状态并提供候选概念 ID。
         with self.assertRaisesRegex(ValueError, 'broader 处理方式要求 status 为 needs_review，并在 evidence.upperConceptId 中填写上级概念 ID。'):
             preview.validate_disposition_rows([self.row(disposition='broader')])
         preview.validate_disposition_rows([self.row(disposition='broader',

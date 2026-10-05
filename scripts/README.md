@@ -65,7 +65,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，也可按明确旧版生成核验文本。选择规则仍按 `paper-taxonomy-selection-v1` 检查，详见本页的分类词表维护说明。 |
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；拒绝双格式混用，不改写或补签旧记录。 |
-| `lib/tag-record-update.js` | Node 库 | 仅更新分析结果中的分类记录：新词表必须仍解析出完全相同的 conceptIds，否则拒绝并列出需人工或模型重选的论文。另只读扫描失效历史分类文件并汇总报告，不调用模型。 |
+| `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另只读盘点旧分类文件，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果解析标签，映射 concept ID、去除祖先标签并生成逐篇分类文件。文件名同时包含词表 SHA 与分类 SHA，分析升级不覆盖旧记录；旧版仅按词表 SHA 命名的文件，只有逐字段等于当前重建结果时才允许读取。 |
 | `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（crosswalk）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |
 | `lib/historical-daily-aggregate.js` | Node 库 | 核对单篇私有页面、页面对应表、历史页面清单及当前分析和标签记录，按固定顺序生成每日汇总及清单。保留原汇总路径和网址，不读取旧汇总正文。 |
@@ -146,7 +146,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/source-evidence-snippets.js` | Node 库 | 从封存原文均衡提取有长度上限的连续片段，模型仅选择片段编号；代码写入原文引文、UTF16 位置和 SHA，拒绝未知编号。 |
 | `lib/source-classification-scheduler.js` | Node 库 | 以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |
 | `lib/source-classification-failures.js` | Node 库 | 只根据公共请求层的结构化错误识别账号或服务故障，并停止新请求。正文校验失败和输出截断仍按单篇处理，不根据错误文案猜故障或切账号。 |
-| `lib/historical-tag-checkpoint-export.js` | Node 库 | 核验不可变分类 checkpoint 或暂停 partial、来源、原文注入及独立审核，再按明确排除集导出原有页面证明。兼容串行前缀与并发完成集合；其他缓存不能算已完成。 |
+| `lib/historical-tag-checkpoint-export.js` | Node 库 | 读取并核验分类检查点或部分运行记录、来源、原文引文及独立审核，按排除集合导出页面分类记录。支持原连续处理范围与并发已处理集合；采用集合格式时只读取决策对应文件名的缓存。 |
 | `lib/historical-direct-publication.js` | Node 库 | 核验直接重写的全部私有页面、汇总对应记录 v3、汇总文件 v2 和显式视觉处置，执行可恢复的历史发布。固定博客基线；按路径与内容 SHA 复用逐页通过记录，重跑本批确定性/Hugo 检查并生成凭证，再处理激活回滚、Git 提交与远端 OID。 |
 
 ## 默认 LLM/API：恢复与维护入口
@@ -204,14 +204,14 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `historical-direct-tag-supplement.js` | 仅在历史工作区生成不可变分类补充和报告，不修改博客页面或发布状态。所需计划、词表、博客、快照及 run 参数见本页的历史补充维护说明。 |
 | `historical-source-tag-assignment.js` | 仅在历史工作区按原文生成分类补充，逐请求保存选择、审查和决定的检查点。同 UUID 核验输入后续跑；账号耗尽只保存编号 partial，不占用最终产物。参数见本页的历史补充维护说明。 |
 | `historical-source-identity-supplement.js` | 仅在历史工作区核验全部封存来源和没有正式分类记录的旧页，生成独立不可变身份证明，保留会议来源与论文版本披露，不请求模型。参数见本页的历史补充维护说明。 |
-| `historical-tag-checkpoint-export.js` | 从不可变 checkpoint 或 partial 导出已完成项，保留原证明，不调用模型。暂停恢复、排除集合和新 run 参数见本页的历史补充维护说明。 |
+| `historical-tag-checkpoint-export.js` | 从分类检查点或部分运行记录导出页面分类记录和处理报告，保留原分类缓存，不调用模型。恢复、排除集合和新运行参数见本页的历史补充维护说明。 |
 | `historical-direct-control.js` | 提供全历史长任务控制：`history:status` 单次或持续只读汇总 registry、暂停、锁、覆盖率、汇总和发布阻断项；`history:pause` 保存对应计划与获取序号的停止请求；`history:resume` 只在操作锁释放后恢复。 |
 | `historical-direct-publication.js` | 全历史直接重写发布入口：按 `plan → generate → review → publish → status` 驱动单一 publication UUID；发布阶段独占共享博客锁并验证远端 `main` OID。 |
 | `historical-direct-review.py` | 协调历史直接重写的逐页语义审查，复用正式发布的 LLM 与多模态审查，保存对应输入、模型、提示词和代码的检查点；全部页面通过后才生成最终凭证。 |
 | `paper_identity.py` | 实现与 Node 相同的 `paper-identity-v1`，用共享测试向量核对身份与 SHA 结果。 |
 | `tag_catalog.py` | 与 Node 共用分类词表，显式解析当前格式或旧格式标签并精确映射概念。新正式页面只接受有效的中文首选标签及 [既定英文专名例外](../AGENTS.md#内容与评分门禁)；未知或歧义标签报错，不自行缩小含义。 |
 | `tag_paths.py` | 集中配置独立标签预览的 Python 路径，复用项目根与环境，不改变正式发布 `path_config` 的模板指纹。 |
-| `build-tag-preview.py` | 只读扫描 Hugo 历史论文，生成带来源指纹的标签映射、旧词处置和待核报告，不修改博客或当前数据。七种处置状态和证据要求见本页的分类词表维护说明。 |
+| `build-tag-preview.py` | 根据历史页面元数据生成私有标签索引、旧标签处理表和待评审报告，不改写博客。按名称或别名作字面对照；七种处理状态和证据要求见本页的分类词表维护说明。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `batch-analyze.js` | 用当前正式分析结果绑定的日更 PDF/TXT 批量分析未完成论文。`--retry-failed-readers` 仅归档并停用这些论文的失败 Reader 候选；没有对应来源记录时停止。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
@@ -413,9 +413,20 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 `status/conceptId/facet/semanticReview` 列。默认不重新判断语义。`deprecated/out_of_scope` 必须附上
 跨会议零命中扫描证据和人工评审署名；`split_review` 必须列出候选词。缺少这些依据时停止。
 
+标签预览的候选查找函数为 `find_contained_tag_concepts`，只按文字包含关系查找概念。Python 预览函数的可选词表路径参数为 `tag_catalog_path`；仓库内调用均按位置传参，使用旧关键词名的外部调用须同步修改。保存的 `source`、`upperConceptId` 等字段及七种状态保持原格式。
+
 ## 历史补充维护说明
 
 下列命令只在历史工作区运行。它们生成独立补充记录，不替换历史正文或正式发布状态。
+
+完整命令入口继续调用 `exportCheckpoint`。库内的页面记录操作使用以下接口：
+
+| 函数 | 作用 |
+|---|---|
+| `filterAndValidatePageRecords` | 跳过排除集合中的论文，随后核验保留的页面记录。 |
+| `validatePageClassificationRecord` | 核对记录自身的内容哈希，以及它与分类记录的对应关系。 |
+| `validatePageRecordsAgainstPlan` | 核对记录所在路径、论文、页面编号和页面 SHA 是否与计划对应。 |
+| `buildPageClassificationRecord` | 从已读取的页面字节、分类记录和标签规则构造页面分类记录。 |
 
 ```bash
 npm run history:tag-supplement -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID

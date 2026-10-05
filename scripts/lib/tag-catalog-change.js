@@ -329,7 +329,7 @@ function buildDestructiveAcknowledgement({ detail, fromRegistrySha256, toRegistr
             + (eligibility.ineligibleReasons.join('、') || '变更详情缺失'));
     }
     const text = String(note ?? '').trim()
-        || `显式确认 destructive 重封：${fromRegistrySha256} → ${toRegistrySha256}，conceptId 影响 none`;
+        || `已明确确认本次词表更新中的破坏性变更：${fromRegistrySha256} → ${toRegistrySha256}；所选概念 ID 保持不变。`;
     if (!text || text.length > REGISTRY_UPGRADE_NOTE_MAX_CHARS) {
         throw new Error(`生成的人工确认说明不能为空，且长度不能超过 ${REGISTRY_UPGRADE_NOTE_MAX_CHARS} 个字符。`);
     }

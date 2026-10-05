@@ -204,7 +204,7 @@ function reprojectAnalysis({ analysis, runtime: tagRules, mode = 'reproject', sn
             to: tagRules.tagCatalog,
             changeLevel,
             detail,
-            note: `确定性重投影：${detail.summary}`,
+            note: `按当前词表核验标签并记录更新：${detail.summary}`,
             acknowledgeDestructive: changeLevel === 'destructive' && acknowledgeDestructive === true,
             acknowledgementNote
         });

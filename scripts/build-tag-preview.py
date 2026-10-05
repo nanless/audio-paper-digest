@@ -33,17 +33,17 @@ BUNDLE_VERSION = 'paper-taxonomy-preview-bundle-v1'
 MAX_PAGE_BYTES = 8 * 1024 * 1024
 ARXIV_ID = re.compile(r'\d{4}\.\d{4,5}(?:v[1-9]\d*)?')
 
-# 旧标签的七种处置方式（docs/tag-system-design.md 5.3）：每个旧标签最终必须落入其一，
-# 保留原值、不静默删除；空 disposition 表示“尚未处置”，不是第八态。
+# 旧标签的七种处理方式见 docs/tag-system-design.md 5.3。每个旧标签最终须选择一种方式；
+# 尚未选择时 disposition 留空，并保留原标签。
 DISPOSITION_SCHEMA = 'paper-taxonomy-seven-state-disposition-v1'
 DISPOSITIONS = ('keep', 'alias', 'broader', 'split_review', 'move_facet',
                 'deprecated', 'out_of_scope')
-# 旧列原样保留（语义不变），新列只做追加，兼容既有 CSV/报告消费方。
+# 保留旧 CSV 列及含义，只追加新列，方便已有读取程序继续使用。
 LEGACY_CSV_COLUMNS = ('tag', 'pageCount', 'status', 'conceptId', 'facet', 'semanticReview')
 DISPOSITION_CSV_COLUMNS = ('tag', 'pageCount', 'disposition', 'status', 'conceptId',
                            'facet', 'semanticReview', 'evidence')
 # 只匹配至少三个字符的中文首选名称，减少较短泛词造成的误匹配。
-MIN_UPPER_LABEL_CHARS = 3
+MIN_CONTAINED_LABEL_CHARS = 3
 PENDING_RULE = '尚未选择处理方式的标签保留原值，等待评审。采用 deprecated 或 out_of_scope 前，须提供跨会议扫描未命中的证据并经人工评审，不能仅依据某一个会议的出现频次作判断。'
 
 
@@ -71,7 +71,7 @@ def parse_evidence(value, where):
     raise ValueError(f'{where}: evidence 必须是 JSON 对象。')
 
 
-def upper_label_candidates(tag_catalog, tag):
+def find_contained_tag_concepts(tag_catalog, tag):
     """找出原标签中包含的已启用概念中文首选名称。
 
     只比较规范化后的文字，不判断概念的上下级关系，也不进行语义推断；
@@ -85,7 +85,7 @@ def upper_label_candidates(tag_catalog, tag):
         if concept['status'] != 'active':
             continue
         label = normalize_label(concept['preferredLabel']['zh'])
-        if len(label) >= MIN_UPPER_LABEL_CHARS and label != normalized and label in normalized:
+        if len(label) >= MIN_CONTAINED_LABEL_CHARS and label != normalized and label in normalized:
             contained_concepts_by_id.setdefault(concept['id'], {'conceptId': concept['id'],
                                              'label': concept['preferredLabel']['zh']})
     return [contained_concepts_by_id[cid] for cid in sorted(contained_concepts_by_id)]
@@ -106,7 +106,7 @@ def initial_disposition(tag, concept, tag_catalog):
         if normalized == normalize_label(concept['preferredLabel']['en']):
             return 'alias', {'matchKind': 'en_preferred_label'}
         return 'alias', {'matchKind': 'alias'}
-    candidates = upper_label_candidates(tag_catalog, tag)
+    candidates = find_contained_tag_concepts(tag_catalog, tag)
     if len(candidates) == 1:
         return 'broader', {'matchKind': 'upper_label_containment',
                            'upperConceptId': candidates[0]['conceptId'],
@@ -117,14 +117,17 @@ def initial_disposition(tag, concept, tag_catalog):
     return '', {'reason': '词表中没有与该标签对应的名称或别名，需要进一步进行语义判断或人工评审。'}
 
 
-def build_dispositions(counts, resolved, tag_catalog):
-    rows = [{'tag': tag, 'pageCount': count, 'disposition': None, 'status': 'mapped' if resolved[tag] else 'needs_review',
-             'conceptId': resolved[tag]['id'] if resolved[tag] else '',
-             'facet': resolved[tag]['facet'] if resolved[tag] else '',
-             'semanticReview': 'not_performed', 'evidence': None}
-            for tag, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+def build_dispositions(tag_page_counts, concepts_by_tag, tag_catalog):
+    rows = [
+        {'tag': tag, 'pageCount': count, 'disposition': None,
+         'status': 'mapped' if concepts_by_tag[tag] else 'needs_review',
+         'conceptId': concepts_by_tag[tag]['id'] if concepts_by_tag[tag] else '',
+         'facet': concepts_by_tag[tag]['facet'] if concepts_by_tag[tag] else '',
+         'semanticReview': 'not_performed', 'evidence': None}
+        for tag, count in sorted(tag_page_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
     for row in rows:
-        disposition, evidence = initial_disposition(row['tag'], resolved[row['tag']], tag_catalog)
+        disposition, evidence = initial_disposition(row['tag'], concepts_by_tag[row['tag']], tag_catalog)
         row['disposition'], row['evidence'] = disposition, evidence
     return validate_disposition_rows(rows)
 
@@ -198,9 +201,9 @@ def read_disposition_rows(text):
 
 
 def disposition_summary(dispositions):
-    counts = {state: sum(row['disposition'] == state for row in dispositions)
+    disposition_counts = {state: sum(row['disposition'] == state for row in dispositions)
               for state in DISPOSITIONS}
-    return {'dispositionSchema': DISPOSITION_SCHEMA, 'dispositionCounts': counts,
+    return {'dispositionSchema': DISPOSITION_SCHEMA, 'dispositionCounts': disposition_counts,
             'pendingDispositions': sum(not row['disposition'] for row in dispositions),
             'disposedDispositions': sum(bool(row['disposition']) for row in dispositions),
             'dispositionRule': PENDING_RULE}
@@ -372,11 +375,11 @@ def paper_metadata(repo, path, raw, base):
             '_sortDate': sort_date, '_primaryValues': primary_values}, None
 
 
-def classify_page(page, tag_catalog, resolved_labels):
+def classify_page(page, tag_catalog, concepts_by_tag):
     concepts_by_id = {concept['id']: concept for concept in tag_catalog['concepts']}
     mapped_concept_ids, unresolved_tags = [], []
     for tag in page['tags']:
-        concept = resolved_labels[tag]
+        concept = concepts_by_tag[tag]
         if concept is None:
             if tag not in unresolved_tags:
                 unresolved_tags.append(tag)
@@ -409,7 +412,9 @@ def validate_output_root(value, repo):
     output = Path(os.path.abspath(Path(value).expanduser()))
     project = path_config.PROJECT_ROOT.resolve()
     forbidden = [repo, path_config.CURRENT_DIR.resolve(), path_config.FRESH_REWRITE_RUNS_DIR.resolve()]
-    if output == project or output in project.parents or any(output == root or root in output.parents or output in root.parents for root in forbidden):
+    if (output == project or output in project.parents
+            or any(output == root or root in output.parents or output in root.parents
+                   for root in forbidden)):
         raise ValueError('标签预览输出目录与输入目录或受保护目录重叠。')
     if project in output.parents and project / 'data' / 'runtime' not in output.parents:
         raise ValueError('仓库内的标签预览输出必须保存在 data/runtime 下。')
@@ -432,13 +437,13 @@ def validate_output_root(value, repo):
     return output
 
 
-def _build_preview_locked(blog_repo, output, registry_path=None):
+def _build_preview_locked(blog_repo, output, tag_catalog_path=None):
     require_external_runtime('build-tag-preview.py')
     repo = safe_directory(blog_repo)
     destination = validate_output_root(output, repo)
     commit = git_snapshot(repo)
-    registry_path = Path(registry_path or tag_paths.TAG_CATALOG_FILE)
-    tag_catalog = load_tag_catalog(registry_path)
+    tag_catalog_path = Path(tag_catalog_path or tag_paths.TAG_CATALOG_FILE)
+    tag_catalog = load_tag_catalog(tag_catalog_path)
     base = blog_base_url(repo)
     paths = markdown_paths(repo)
     pages, excluded, page_content_hashes = [], [], []
@@ -469,7 +474,7 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
         page['duplicatePaths'] = []
     papers = [classify_page(page, tag_catalog, resolved_concepts) for page in representatives + pages_without_arxiv_id]
     papers.sort(key=lambda paper: (paper['date'], paper['relativePath']), reverse=True)
-    source = {'commit': commit, 'pagesSha256': stable_hash(page_content_hashes)}
+    blog_input_snapshot = {'commit': commit, 'pagesSha256': stable_hash(page_content_hashes)}
     summary = {'markdownPages': len(paths), 'paperPages': len(pages), 'excludedPages': len(excluded),
                'records': len(papers), 'knownIdCount': len(pages_by_arxiv_id),
                'knownIdPages': sum(map(len, pages_by_arxiv_id.values())), 'unknownIdPages': len(pages_without_arxiv_id),
@@ -482,19 +487,25 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
                'semanticallyReviewedRecords': 0}
     occurrences = collections.Counter(tag for page in pages for tag in page['tags'])
     dispositions = build_dispositions(tag_page_counts, resolved_concepts, tag_catalog)
-    summary.update({'mappedUniqueTags': sum(value is not None for value in resolved_concepts.values()),
-                    'tagOccurrences': sum(occurrences.values()),
-                    'mappedTagOccurrences': sum(count for tag, count in occurrences.items() if resolved_concepts[tag] is not None),
-                    'uniqueTagCoverage': sum(value is not None for value in resolved_concepts.values()) / len(tag_page_counts) if tag_page_counts else 0,
-                    'tagOccurrenceCoverage': sum(count for tag, count in occurrences.items() if resolved_concepts[tag] is not None)
-                        / sum(occurrences.values()) if occurrences else 0,
-                    'coverageMeaning': 'literal_registry_mapping_not_semantic_accuracy'})
+    summary.update({
+        'mappedUniqueTags': sum(value is not None for value in resolved_concepts.values()),
+        'tagOccurrences': sum(occurrences.values()),
+        'mappedTagOccurrences': sum(
+            count for tag, count in occurrences.items() if resolved_concepts[tag] is not None),
+        'uniqueTagCoverage': (
+            sum(value is not None for value in resolved_concepts.values()) / len(tag_page_counts)
+            if tag_page_counts else 0),
+        'tagOccurrenceCoverage': (
+            sum(count for tag, count in occurrences.items() if resolved_concepts[tag] is not None)
+            / sum(occurrences.values()) if occurrences else 0),
+        'coverageMeaning': 'literal_registry_mapping_not_semantic_accuracy'
+    })
     summary.update(disposition_summary(dispositions))
     index = {'version': VERSION, 'taxonomyVersion': tag_catalog['version'], 'registrySha256': tag_catalog['registrySha256'],
-             'source': source, 'summary': summary, 'facets': tag_catalog['facets'],
+             'source': blog_input_snapshot, 'summary': summary, 'facets': tag_catalog['facets'],
              'concepts': tag_catalog['concepts'], 'papers': papers}
     report = {'version': REPORT_VERSION, 'taxonomyVersion': tag_catalog['version'],
-              'registrySha256': tag_catalog['registrySha256'], 'source': source, 'summary': summary,
+              'registrySha256': tag_catalog['registrySha256'], 'source': blog_input_snapshot, 'summary': summary,
               'dispositionSchema': DISPOSITION_SCHEMA, 'dispositionRule': PENDING_RULE,
               'note': '本报告只统计标签名称与词表的字面对照结果，不代表语义分类正确。未取得论文 ID 的记录也不能证明彼此属于不同论文。',
               'pages': page_content_hashes, 'excluded': excluded, 'tagDispositions': dispositions,
@@ -507,10 +518,10 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     for path, expected in zip(paths, page_content_hashes):
         if sha256(read_regular(path)) != expected['sha256']:
             raise ValueError('生成标签预览期间，博客页面的 SHA 发生变化。')
-    if load_tag_catalog(registry_path)['registrySha256'] != tag_catalog['registrySha256']:
+    if load_tag_catalog(tag_catalog_path)['registrySha256'] != tag_catalog['registrySha256']:
         raise ValueError('生成标签预览期间，标签词表的 SHA 发生变化。')
-    public_text = json.dumps(index, ensure_ascii=False, indent=2) + '\n'
-    if str(repo) in public_text or str(path_config.PROJECT_ROOT) in public_text:
+    preview_index_json = json.dumps(index, ensure_ascii=False, indent=2) + '\n'
+    if str(repo) in preview_index_json or str(path_config.PROJECT_ROOT) in preview_index_json:
         raise ValueError('公开的标签预览元数据不得包含用户本地的绝对路径。')
     csv_text = io.StringIO(newline='')
     writer = csv.DictWriter(csv_text, fieldnames=list(DISPOSITION_CSV_COLUMNS))
@@ -523,8 +534,8 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     report_text = json.dumps(report, ensure_ascii=False, indent=2) + '\n'
     csv_output = csv_text.getvalue()
     preview_file_manifest = {'version': BUNDLE_VERSION, 'taxonomyVersion': tag_catalog['version'],
-              'registrySha256': tag_catalog['registrySha256'], 'source': source,
-              'files': {'index.json': sha256(public_text.encode('utf-8')),
+              'registrySha256': tag_catalog['registrySha256'], 'source': blog_input_snapshot,
+              'files': {'index.json': sha256(preview_index_json.encode('utf-8')),
                         'migration-report.json': sha256(report_text.encode('utf-8')),
                         'tag-disposition.csv': sha256(csv_output.encode('utf-8'))}}
     # 最后写入文件清单。中断可能留下不同批次的私有文件；
@@ -532,17 +543,17 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     validate_output_root(destination, repo)
     path_config.atomic_write_text(destination / 'migration-report.json', report_text, mode=0o600)
     path_config.atomic_write_text(destination / 'tag-disposition.csv', csv_output, mode=0o600)
-    path_config.atomic_write_text(destination / 'index.json', public_text, mode=0o600)
+    path_config.atomic_write_text(destination / 'index.json', preview_index_json, mode=0o600)
     path_config.atomic_write_json(destination / 'bundle-manifest.json', preview_file_manifest, mode=0o600)
     return index
 
 
-def build_preview(blog_repo, output, registry_path=None):
+def build_preview(blog_repo, output, tag_catalog_path=None):
     require_external_runtime('build-tag-preview.py')
     repo = safe_directory(blog_repo)
     destination = validate_output_root(output, repo)
     with path_config.file_lock(destination / '.preview-build'):
-        return _build_preview_locked(repo, destination, registry_path)
+        return _build_preview_locked(repo, destination, tag_catalog_path)
 
 
 def main(argv=None):
@@ -552,8 +563,8 @@ def main(argv=None):
     parser.add_argument('--blog-repo')
     parser.add_argument('--output', default=str(tag_paths.TAG_PREVIEW_DIR))
     args = parser.parse_args(argv)
-    # Validate the explicit spelling before the central resolver canonicalizes
-    # it, so passing a symlink is not silently turned into an accepted path.
+    # 先检查用户传入的路径，再交给统一路径解析器；
+    # 避免符号链接在解析后被当作普通路径接受。
     if args.blog_repo:
         safe_directory(args.blog_repo)
     result = build_preview(tag_paths.resolve_blog_repo_path(args.blog_repo), args.output)
