@@ -391,7 +391,11 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
         pages: [{ pageKey: page.pageKey, pagePath: page.pagePath,
             primaryUrl: page.primaryUrl, cohortDate: DATE, pageContentSha256: page.sourcePageContentSha256 }] }] };
     const aggregateInputDependencies = { bindTopology: () => ({ state, inventory }), replaySelectedBindings: () => [],
-        loadPageGenerationInputs: () => projection };
+        loadPageGenerationInputs: options => {
+            assert.deepEqual(options.assignmentProofs, { [page.paperId]: { analysisRunId: page.analysisRunId,
+                assignmentSha256: page.taxonomyAssignmentSha256, fileSha256: page.taxonomyFileSha256 } });
+            return projection;
+        } };
     const inputs = daily.loadAggregateInputs({ stagingRoot: f.stagingRoot, stagingRunIds: [STAGE],
         crosswalkRoot: '/unused', inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused' },
     aggregateInputDependencies);

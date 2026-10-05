@@ -67,7 +67,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；拒绝双格式混用，不改写或补签旧记录。 |
 | `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另只读盘点旧分类文件，不调用模型。 |
-| `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果解析标签，映射 concept ID、去除祖先标签并生成逐篇分类文件。文件名同时包含词表 SHA 与分类 SHA，分析升级不覆盖旧记录；旧版仅按词表 SHA 命名的文件，只有逐字段等于当前重建结果时才允许读取。 |
+| `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果选择标签，记录概念 ID 并去除上级重复标签。新版分配文件的名称包含词表 SHA 和分配 SHA；旧记录按原格式完整复算后读取，已有页面则按保存的对象及文件 SHA 找回原证据。 |
 | `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（crosswalk）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |
 | `lib/historical-daily-aggregate.js` | Node 库 | 核对单篇私有页面、页面对应表、历史页面清单及当前分析和标签记录，按固定顺序生成每日汇总及清单。保留原汇总路径和网址，不读取旧汇总正文。 |
 | `lib/historical-postprocess-scheduler.js` | Node 库 | 处理来源核验通过且已完成的旧历史分析队列，依次重新分类、生成单篇页面和完整日期汇总。检查点核验当前分析文件与分类 SHA；每次汇总读取同日全部当前成员，论文升级后其全部日期页面都须更新。最多并发 3，不写博客。 |
@@ -449,11 +449,13 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 `npm run tags:check-inventory [-- --json]` 只读扫描
 `conference-analysis-executions/*/analysis.json` 中的新旧标签阶段词表 SHA 和状态、
-`data/current/deep-analysis-result.json` 的逐篇分类记录，以及 `historical-taxonomy-assignments`。
-按 registry SHA 汇总数量、示例 paperId 及与当前 `config/tag-catalog.json` SHA 的差集。
+`data/current/deep-analysis-result.json` 的逐篇标签记录，以及新旧历史分配目录。
+默认读取 `historical-tag-assignments` 和保留的 `historical-taxonomy-assignments`，按词表 SHA 汇总数量、示例论文编号和与当前词表的差异。每份目录的统计与条目保留实际来源，不能因来源名称相同而覆盖计数。
 它不删除、改写、重新验证或调用模型。格式混用须明确报告为不可读，不能取其中一套字段继续统计。
 当前盘点输出使用 `paper-tag-record-inventory-v2`；原分组、计数和退出码保持。
-测试样例可用 `--executions/--deep/--assignments/--registry` 显式覆盖路径。
+测试样例可用 `--executions/--deep/--assignments/--registry` 显式指定路径；传入 `--assignments` 时只扫描指定目录。
+
+新版历史标签分配使用 `paper-tag-assignment-v2`、`version=2`，保存到 `data/runtime/historical-tag-assignments`，文件名使用 `.tags.`。旧 v1 的两种 `.taxonomy.` 文件名及原目录保留，不能覆写或移走。当前生成优先读取与预期结果对应的新版文件，文件无效时直接拒绝；已有页面恢复则先核对原页面清单，再用其中保存的分配对象 SHA 和文件 SHA 选择原记录。这样，即使旁边已有新版分配或排版不同的旧副本，也不会替换页面的原证据。同一论文多页保存的这两项 SHA 必须一致。
 
 ### 历史标签预览
 

@@ -76,7 +76,7 @@ const USAGE = [
     "  推荐使用 npm run conference:new:migrate-process。",
     "",
     "--mark-stale（只读）：",
-    "  列出 data/runtime/historical-taxonomy-assignments/ 中词表 SHA 与当前值不同的旧分类文件。",
+    "  默认扫描新旧历史标签分配目录，列出词表 SHA 与当前值不同的记录。",
     "  程序不会删除、改名或改写这些分类文件；指定 --report 时会另存报告。",
     "",
     "--classify（只读）：",
@@ -444,13 +444,22 @@ function applyReseal({ processDir, stateFile, plannedStateSha256, writes, plans,
 
 function markStaleReport({ files, runtime }) {
     const root = files.historicalTagAssignmentDir;
-    const scan = tagRecordUpdate.scanStaleAssignments({ root, currentRegistrySha256: runtime.registrySha256 });
+    const roots = [...new Set([root, files.legacyHistoricalTagAssignmentDir].filter(Boolean))];
+    const scans = roots.map(root => tagRecordUpdate.scanStaleAssignments({
+        root, currentRegistrySha256: runtime.registrySha256 }));
+    const scan = { root, currentRegistrySha256: runtime.registrySha256,
+        directories: scans.flatMap(scan => scan.directories),
+        entries: scans.flatMap(scan => scan.entries),
+        stale: scans.reduce((sum, scan) => sum + scan.stale, 0),
+        current: scans.reduce((sum, scan) => sum + scan.current, 0),
+        unreadable: scans.reduce((sum, scan) => sum + scan.unreadable, 0) };
     return {
         contract: 'paper-tag-stale-assignment-report-v2',
         version: 2,
         command: 'mark-stale',
         readOnly: true,
         root,
+        roots,
         registry: { version: runtime.registryVersion, sha256: runtime.registrySha256 },
         ...scan,
         note: '只读报告：stale=true 表示该分类记录中的词表 SHA 与当前词表不同；本工具不删除、改名或改写原文件。'

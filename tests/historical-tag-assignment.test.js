@@ -21,7 +21,7 @@ function paper(id = '2609.03622', analysis = validAnalysisText()) {
 }
 
 function runFixture(t, papers = [paper()]) {
-    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'history-taxonomy-'));
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'history-tags-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const runDir = path.join(root, 'runs', RUN_ID); fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
     const analysis = { version: 1, contract: 'fresh-rewrite-analysis-v1', runId: RUN_ID,
@@ -48,6 +48,7 @@ test('completed historical canonical maps exact concepts and binds all source SH
     const f = runFixture(t, [paper('2609.03622', analysis)]);
     const assignment = api.buildAssignments({ runHandle: f.handle, tagCatalog: registry() })[0];
     assert.equal(assignment.status, 'assigned');
+    assert.equal(assignment.contract, 'paper-tag-assignment-v2'); assert.equal(assignment.version, 2);
     assert.equal(assignment.primaryTaskId, 'task.av-asr');
     assert.equal(assignment.primaryMethodId, 'method.transformer');
     assert.ok(assignment.conceptIds.includes('task.av-asr'));
@@ -74,7 +75,13 @@ test('unknown, cross-facet ambiguous, deprecated, or missing primary labels beco
     const unknownAnalysis = validAnalysisText().replaceAll('#鲁棒性', '#在线');
     const f = runFixture(t, [paper('2609.03622', unknownAnalysis)]);
     const unknown = api.buildAssignment({ runHandle: f.handle, paper: f.analysis.papers[0], tagCatalog: registry() });
-    assert.equal(unknown.status, 'blocked'); assert.ok(unknown.blockedReasons.some(reason => reason.includes('canonical-taxonomy:')));
+    assert.equal(unknown.status, 'blocked'); assert.ok(unknown.blockedReasons.some(reason => reason.includes('analysis-tags:')));
+    const legacy = api.buildLegacyAssignment({ runHandle: f.handle, paper: f.analysis.papers[0], tagCatalog: registry() });
+    assert.equal(legacy.contract, 'paper-taxonomy-assignment-v1'); assert.equal(legacy.version, 1);
+    assert.ok(legacy.blockedReasons.some(reason => reason.includes('canonical-taxonomy:')));
+    const { assignmentSha256: legacySha, ...legacyBody } = legacy;
+    assert.equal(legacySha, api.stableHash(legacyBody));
+    assert.throws(() => api.writeAssignments({ outputRoot: f.output, assignments: [legacy] }), /只接受完整且哈希有效的新版/);
     assert.deepEqual(unknown.conceptIds, []); assert.equal(unknown.primaryTaskId, null);
 
     const ambiguousRegistry = registry();
@@ -96,7 +103,7 @@ test('loader rejects incomplete, non-historical, drifted, or stale parsed analys
             { ...f.dependencies, loadRun: () => ({ run: changed, analysis: f.analysis, runDir: f.runDir }) }));
     }
     const stale = structuredClone(f.analysis.papers[0]); stale.parsed.tags = ['#在线'];
-    assert.throws(() => api.buildAssignment({ runHandle: f.handle, paper: stale, tagCatalog: registry() }), /exact canonical record/);
+    assert.throws(() => api.buildAssignment({ runHandle: f.handle, paper: stale, tagCatalog: registry() }), /论文记录与该分析运行中的完整原记录不一致/);
 });
 
 test('CLI supports batch and single dry-run with zero writes; apply writes private idempotent artifacts', t => {
@@ -116,7 +123,7 @@ test('CLI supports batch and single dry-run with zero writes; apply writes priva
     assert.equal(fs.statSync(f.output).mode & 0o777, 0o700);
     assert.equal(fs.statSync(applied.outputs[0].filename).mode & 0o777, 0o600);
     assert.equal(path.basename(applied.outputs[0].filename),
-        `arxiv-2609.03622.taxonomy.${registry().registrySha256}.${applied.assignments[0].assignmentSha256}.json`);
+        `arxiv-2609.03622.tags.${registry().registrySha256}.${applied.assignments[0].assignmentSha256}.json`);
     assert.equal(cli.main(['assign', '--apply', '--analysis-run', RUN_ID,
         '--paper-id', 'arxiv:2609.03622'], runtime).outputs[0].fileSha256, applied.outputs[0].fileSha256);
     assert.throws(() => cli.parseArgs(['assign', '--dry-run', '--analysis-run', RUN_ID,
@@ -133,7 +140,7 @@ test('registry upgrades create a new immutable artifact beside the previous audi
     assert.notEqual(firstOutput.filename, secondOutput.filename);
     assert.equal(fs.existsSync(firstOutput.filename), true);
     assert.equal(fs.existsSync(secondOutput.filename), true);
-    assert.throws(() => api.assignmentFilename('arxiv:2609.03622'), /registry SHA/);
+    assert.throws(() => api.assignmentFilename('arxiv:2609.03622'), /有效的词表 SHA/);
 });
 
 test('same analysis run retains every upgraded assignment without filename collisions', t => {
@@ -155,6 +162,42 @@ test('same analysis run retains every upgraded assignment without filename colli
     assert.equal(fs.existsSync(firstOutput.filename), true);
     assert.equal(fs.existsSync(secondOutput.filename), true);
     assert.equal(fs.existsSync(upgradedOutput.filename), true);
+});
+
+test('原历史分析完整复算旧分配，并按原文件 SHA 重放，不被旁边新版替代', t => {
+    const f = runFixture(t), catalog = registry(), paperId = `arxiv:${f.analysis.papers[0].arxivId}`;
+    const old = api.buildLegacyAssignment({ runHandle: f.handle, paper: f.analysis.papers[0], tagCatalog: catalog });
+    const current = api.buildAssignment({ runHandle: f.handle, paper: f.analysis.papers[0], tagCatalog: catalog });
+    const oldRoot = path.join(f.root, 'old-assignments'), runRoot = path.join(oldRoot, RUN_ID);
+    fs.mkdirSync(runRoot, { recursive: true, mode: 0o700 });
+    const shortFile = path.join(runRoot, api.legacyAssignmentFilename(paperId, catalog.registrySha256));
+    const hashedFile = path.join(runRoot, api.legacyHashedAssignmentFilename(paperId, catalog.registrySha256, old.assignmentSha256));
+    const oldBytes = Buffer.from(JSON.stringify(old));
+    fs.writeFileSync(shortFile, oldBytes, { mode: 0o600 });
+    fs.writeFileSync(hashedFile, api.canonicalBytes(old), { mode: 0o600 });
+    api.writeAssignments({ outputRoot: f.output, assignments: [current] });
+    const pageKey = `page:${'1'.repeat(64)}`, crosswalkId = '11111111-1111-4111-8111-111111111111';
+    const crosswalk = { source: { papers: [{ pageKey, pagePath: 'content/posts/old.md', primaryUrl: 'https://example.test/old/',
+        cohortDate: '2026-09-04', pageContentSha256: '2'.repeat(64) }] },
+    identityGroups: [{ paperId, pageKeys: [pageKey] }],
+    assignments: { [pageKey]: { status: 'verified', sourceAuthority: { paperId } } } };
+    const staging = require('../scripts/lib/historical-page-staging.js');
+    const options = { crosswalkId, analysisRoot: path.join(f.root, 'runs'), analysisRunId: RUN_ID,
+        tagAssignmentRoot: f.output, tagCatalogPath: path.join(__dirname, '..', 'config/tag-catalog.json') };
+    const dependencies = { readCrosswalk: () => crosswalk, loadRun: () => f.handle,
+        assignmentFiles: { historicalTagAssignmentDir: f.output, legacyHistoricalTagAssignmentDir: oldRoot } };
+    assert.deepEqual(staging.loadPageGenerationInputs(options, dependencies).groups[0].taxonomy, current);
+    const pinned = { ...options, assignmentProofs: { [paperId]: { assignmentSha256: old.assignmentSha256, fileSha256: sha(oldBytes) } } };
+    const restored = staging.loadPageGenerationInputs(pinned, dependencies).groups[0];
+    assert.deepEqual(restored.taxonomy, old); assert.equal(restored.taxonomyFileSha256, sha(oldBytes));
+    assert.deepEqual(fs.readFileSync(shortFile), oldBytes);
+    // 完全相同的旧字节副本可以选回；不同排版仍须匹配原 raw SHA。
+    fs.writeFileSync(hashedFile, oldBytes);
+    assert.deepEqual(staging.loadPageGenerationInputs(pinned, dependencies).groups[0].taxonomy, old);
+    fs.writeFileSync(shortFile, Buffer.concat([oldBytes, Buffer.from('\n')]));
+    fs.writeFileSync(hashedFile, api.canonicalBytes(old));
+    assert.throws(() => staging.loadPageGenerationInputs(pinned, dependencies), /原文件 SHA 不一致/);
+    assert.throws(() => api.writeAssignments({ outputRoot: f.output, assignments: [old] }), /只接受完整且哈希有效的新版/);
 });
 
 

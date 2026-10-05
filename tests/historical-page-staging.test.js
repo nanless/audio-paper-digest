@@ -185,8 +185,43 @@ test('staging selects the rebuilt current assignment and accepts a legacy name o
     assert.equal(api.findAssignment(path.join(f.root, 'taxonomy'), paperId, ANALYSIS_RUN,
         REGISTRY_SHA, f.assignment).legacyFilename, false);
     assert.equal(fs.existsSync(legacy), true, 'the stale legacy audit remains immutable');
+    const { assignmentSha256: _oldSha, ...currentBody } = f.assignment;
+    Object.assign(currentBody, { contract: 'paper-tag-assignment-v2', version: 2 });
+    const current = { ...currentBody, assignmentSha256: stableHash(currentBody) };
+    const assignments = require('../scripts/lib/historical-tag-assignment.js');
+    const currentFile = path.join(dir, assignments.assignmentFilename(paperId, REGISTRY_SHA, current.assignmentSha256));
+    fs.writeFileSync(currentFile, JSON.stringify(current));
+    const lookup = { rebuildLegacyAssignment: () => f.assignment };
+    assert.deepEqual(api.findAssignment(path.join(f.root, 'taxonomy'), paperId, ANALYSIS_RUN, REGISTRY_SHA, current, lookup).value, current);
+    const originalLegacyBytes = fs.readFileSync(canonical);
+    fs.writeFileSync(currentFile, '{不是 JSON');
+    assert.throws(() => api.findAssignment(path.join(f.root, 'taxonomy'), paperId, ANALYSIS_RUN, REGISTRY_SHA, current, lookup), /JSON/);
+    assert.deepEqual(fs.readFileSync(canonical), originalLegacyBytes, '坏新版目标不会回退到有效旧文件');
+    fs.unlinkSync(currentFile);
+    const newRoot = path.join(f.root, 'new-default'), customRoot = path.join(f.root, 'custom');
+    const files = { historicalTagAssignmentDir: newRoot, legacyHistoricalTagAssignmentDir: path.join(f.root, 'taxonomy') };
+    assert.deepEqual(api.findAssignment(newRoot, paperId, ANALYSIS_RUN, REGISTRY_SHA, current, { ...lookup, files }).value, f.assignment);
+    assert.equal(api.findAssignment(customRoot, paperId, ANALYSIS_RUN, REGISTRY_SHA, current, { ...lookup, files }), null);
     assert.throws(() => api.findAssignment(path.join(f.root, 'taxonomy'), paperId, null,
         REGISTRY_SHA, f.assignment), /查找标签记录所需的绝对目录、运行 ID、词表 SHA 或重新计算的预期记录缺失、格式无效或不一致/);
+});
+
+test('标签分配文件核原对象 SHA 后严格检查已知版本与对应文件名', t => {
+    const f = fixture(t), assignments = require('../scripts/lib/historical-tag-assignment.js');
+    const dir = path.join(f.root, 'formats'); fs.mkdirSync(dir);
+    for (const [contract, version, currentName, pattern] of [
+        ['paper-tag-assignment-v2', 1, true, /格式版本不受支持/],
+        ['paper-tag-assignment-v3', 3, true, /格式版本不受支持/],
+        ['paper-taxonomy-assignment-v1', 1, true, /格式、哈希或文件名无效/]
+    ]) {
+        const { assignmentSha256: _oldSha, ...body } = f.assignment;
+        Object.assign(body, { contract, version });
+        const value = { ...body, assignmentSha256: stableHash(body) };
+        const name = (currentName ? assignments.assignmentFilename : assignments.legacyHashedAssignmentFilename)(
+            value.paperId, value.registrySha256, value.assignmentSha256);
+        const file = path.join(dir, name); fs.writeFileSync(file, JSON.stringify(value));
+        assert.throws(() => api.readAssignment(file), pattern);
+    }
 });
 
 test('dry-run validates inputs but writes no staging directory', t => {

@@ -112,28 +112,32 @@ function readRegular(filename, maximum, label) {
 }
 
 function readAssignment(filename) {
-    const loaded = readRegular(filename, 16 * 1024 * 1024, '标签分配记录');
+    return assignmentFromBytes(filename, readRegular(filename, 16 * 1024 * 1024, '标签分配记录'));
+}
+function assignmentFromBytes(filename, loaded) {
     const bytes = loaded.bytes; const value = strictJson(bytes, '标签分配记录');
     const body = { ...value }; delete body.assignmentSha256;
-    if (value.contract !== tagAssignmentsApi.CONTRACT || value.version !== tagAssignmentsApi.VERSION
-        || !['assigned', 'blocked'].includes(value.status) || !SHA_RE.test(value.assignmentSha256 || '')
+    if (!['assigned', 'blocked'].includes(value.status) || !SHA_RE.test(value.assignmentSha256 || '')
         || !SHA_RE.test(value.registrySha256 || '') || value.assignmentSha256 !== stableHash(body)
         || !/^[a-f0-9-]{36}$/i.test(value.analysisRunId || '')) {
         throw new Error(`标签分配记录的格式、哈希或文件名无效：${filename}`);
     }
+    const current = value.contract === tagAssignmentsApi.CONTRACT && value.version === tagAssignmentsApi.VERSION;
+    const legacy = value.contract === tagAssignmentsApi.LEGACY_CONTRACT && value.version === 1;
+    if (!current && !legacy) throw new Error(`标签分配记录的格式版本不受支持：${filename}`);
     const basename = path.basename(filename);
-    const currentAssignmentFilename = tagAssignmentsApi.assignmentFilename(
+    const hashedName = (current ? tagAssignmentsApi.assignmentFilename : tagAssignmentsApi.legacyHashedAssignmentFilename)(
         value.paperId, value.registrySha256, value.assignmentSha256
     );
     const legacyName = tagAssignmentsApi.legacyAssignmentFilename(value.paperId, value.registrySha256);
-    if (basename !== currentAssignmentFilename && basename !== legacyName) {
+    if (basename !== hashedName && !(legacy && basename === legacyName)) {
         throw new Error(`标签分配记录的格式、哈希或文件名无效：${filename}`);
     }
     return { value, bytes, fileSha256: sha256(bytes), filename,
-        legacyFilename: basename === legacyName };
+        legacyFilename: legacy && basename === legacyName };
 }
 
-function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAssignment) {
+function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAssignment, lookup = {}) {
     if (typeof root !== 'string' || !path.isAbsolute(root) || !UUID_RE.test(analysisRunId || '')
         || !SHA_RE.test(registrySha256 || '') || !expectedAssignment
         || expectedAssignment.paperId !== paperId || expectedAssignment.analysisRunId !== analysisRunId
@@ -141,28 +145,62 @@ function findAssignment(root, paperId, analysisRunId, registrySha256, expectedAs
         || !SHA_RE.test(expectedAssignment.assignmentSha256 || '')) {
         throw new Error('查找标签记录所需的绝对目录、运行 ID、词表 SHA 或重新计算的预期记录缺失、格式无效或不一致。');
     }
-    if (!fs.existsSync(root)) return null;
-    const safeRoot = fresh.assertSafeDirectory(root); const runRoot = path.join(safeRoot, analysisRunId);
-    if (!fs.existsSync(runRoot)) return null;
-    fresh.assertSafeDirectory(runRoot);
-    const currentAssignmentPath = path.join(runRoot, tagAssignmentsApi.assignmentFilename(
-        paperId, registrySha256, expectedAssignment.assignmentSha256
-    ));
-    const legacy = path.join(runRoot, tagAssignmentsApi.legacyAssignmentFilename(paperId, registrySha256));
-    const filename = fs.existsSync(currentAssignmentPath) ? currentAssignmentPath : fs.existsSync(legacy) ? legacy : null;
-    if (!filename) return null;
-    const loaded = readAssignment(filename);
-    if (loaded.value.analysisRunId !== analysisRunId || loaded.value.paperId !== paperId
-        || loaded.value.registrySha256 !== registrySha256) throw new Error(`论文 ${paperId} 的标签记录与指定论文、分析运行或词表不一致。`);
-    if (stableHash(loaded.value) !== stableHash(expectedAssignment)
-        || loaded.value.assignmentSha256 !== expectedAssignment.assignmentSha256) {
-        if (loaded.legacyFilename) return null;
-        throw new Error(`论文 ${paperId} 的标签记录与按当前分析和词表重新计算的记录不一致。`);
+    const files = lookup.files || require('../config.js').FILES;
+    const roots = [root];
+    if (typeof files.historicalTagAssignmentDir === 'string' && path.resolve(root) === path.resolve(files.historicalTagAssignmentDir)
+        && files.legacyHistoricalTagAssignmentDir
+        && path.resolve(files.legacyHistoricalTagAssignmentDir) !== path.resolve(root)) roots.push(files.legacyHistoricalTagAssignmentDir);
+    const runRoots = roots.filter(filename => fs.existsSync(filename)).map(filename => {
+        const runRoot = path.join(fresh.assertSafeDirectory(filename), analysisRunId);
+        return fs.existsSync(runRoot) ? fresh.assertSafeDirectory(runRoot) : null;
+    }).filter(Boolean);
+    const verify = (loaded, expected) => {
+        if (loaded.value.analysisRunId !== analysisRunId || loaded.value.paperId !== paperId
+            || loaded.value.registrySha256 !== registrySha256) throw new Error(`论文 ${paperId} 的标签记录与指定论文、分析运行或词表不一致。`);
+        if (stableHash(loaded.value) !== stableHash(expected) || loaded.value.assignmentSha256 !== expected.assignmentSha256) {
+            if (loaded.legacyFilename && !lookup.pinnedProof) return null;
+            throw new Error(`论文 ${paperId} 的标签记录与按原分析和词表重新计算的完整记录不一致。`);
+        }
+        return loaded.value.status === 'assigned' ? loaded : null;
+    };
+    const current = expectedAssignment.contract === tagAssignmentsApi.CONTRACT && expectedAssignment.version === tagAssignmentsApi.VERSION;
+    const legacyExpected = () => expectedAssignment.contract === tagAssignmentsApi.LEGACY_CONTRACT && expectedAssignment.version === 1
+        ? expectedAssignment : lookup.rebuildLegacyAssignment?.();
+    const pin = lookup.pinnedProof;
+    if (pin) {
+        if (!SHA_RE.test(pin.assignmentSha256 || '') || !SHA_RE.test(pin.fileSha256 || '')) throw new Error('原页面的标签分配对象 SHA 或文件 SHA 无效。');
+        const expected = current && expectedAssignment.assignmentSha256 === pin.assignmentSha256 ? expectedAssignment : legacyExpected();
+        if (!expected || expected.assignmentSha256 !== pin.assignmentSha256) throw new Error(`论文 ${paperId} 原页面的标签分配与完整复算结果不一致。`);
+        const names = expected.contract === tagAssignmentsApi.CONTRACT
+            ? [tagAssignmentsApi.assignmentFilename(paperId, registrySha256, expected.assignmentSha256)]
+            : [tagAssignmentsApi.legacyHashedAssignmentFilename(paperId, registrySha256, expected.assignmentSha256),
+                tagAssignmentsApi.legacyAssignmentFilename(paperId, registrySha256)];
+        for (const runRoot of runRoots) for (const name of names) {
+            const filename = path.join(runRoot, name);
+            if (!fs.existsSync(filename)) continue;
+            // 同一旧对象可以有不同 JSON 排版，先选原文件字节，再解析及核完整对象。
+            const record = readRegular(filename, 16 * 1024 * 1024, '原标签分配记录');
+            if (record.fileSha256 !== pin.fileSha256) continue;
+            return verify(assignmentFromBytes(filename, record), expected);
+        }
+        throw new Error(`论文 ${paperId} 原页面绑定的标签分配文件缺失，或原文件 SHA 不一致。`);
     }
-    return loaded.value.status === 'assigned' ? loaded : null;
+    if (current) for (const runRoot of runRoots) {
+        const filename = path.join(runRoot, tagAssignmentsApi.assignmentFilename(paperId, registrySha256, expectedAssignment.assignmentSha256));
+        if (fs.existsSync(filename)) return verify(readAssignment(filename), expectedAssignment);
+    }
+    const expected = legacyExpected();
+    if (!expected) return null;
+    for (const runRoot of runRoots) for (const name of [tagAssignmentsApi.legacyHashedAssignmentFilename(paperId, registrySha256, expected.assignmentSha256),
+        tagAssignmentsApi.legacyAssignmentFilename(paperId, registrySha256)]) {
+        const filename = path.join(runRoot, name);
+        if (fs.existsSync(filename)) return verify(readAssignment(filename), expected);
+    }
+    return null;
 }
 
-function loadPageGenerationInputs({ crosswalkRoot, crosswalkId, analysisRoot, tagAssignmentRoot, tagCatalogPath, analysisRunId } = {}, dependencies = {}) {
+function loadPageGenerationInputs({ crosswalkRoot, crosswalkId, analysisRoot, tagAssignmentRoot, tagCatalogPath, analysisRunId,
+    assignmentProofs } = {}, dependencies = {}) {
     const tagCatalog = (dependencies.loadTagCatalog || registryApi.loadTagCatalog)(tagCatalogPath);
     if (!SHA_RE.test(tagCatalog?.registrySha256 || '')) throw new Error('当前标签词表的 SHA 缺失或格式无效。');
     const state = (dependencies.readCrosswalk || crosswalkApi.readCrosswalk)({ crosswalkRoot, crosswalkId });
@@ -171,11 +209,19 @@ function loadPageGenerationInputs({ crosswalkRoot, crosswalkId, analysisRoot, ta
         analysisRoot, runId: analysisRunId }, dependencies.analysisDependencies || {});
     const run = (dependencies.runSnapshot || tagAssignmentsApi.runSnapshot)(handle);
     for (const group of state.identityGroups.filter(item => item.paperId.startsWith('arxiv:'))) {
+        if (assignmentProofs && !Object.hasOwn(assignmentProofs, group.paperId)) continue;
         const paper = run.papers.find(item => `arxiv:${fresh.paperId(item)}` === group.paperId);
         if (!paper) continue;
         const rebuilt = (dependencies.buildAssignment || tagAssignmentsApi.buildAssignment)({ runHandle: handle, paper, tagCatalog });
+        if (!(rebuilt?.contract === tagAssignmentsApi.CONTRACT && rebuilt.version === tagAssignmentsApi.VERSION
+            || rebuilt?.contract === tagAssignmentsApi.LEGACY_CONTRACT && rebuilt.version === 1)) {
+            throw new Error(`论文 ${group.paperId} 的标签记录与按当前词表重新计算的记录不一致。`);
+        }
+        let legacyRebuilt;
+        const rebuildLegacyAssignment = () => legacyRebuilt ||= (dependencies.buildLegacyAssignment || tagAssignmentsApi.buildLegacyAssignment)({ runHandle: handle, paper, tagCatalog });
         const assignment = (dependencies.findAssignment || findAssignment)(tagAssignmentRoot, group.paperId,
-            analysisRunId, tagCatalog.registrySha256, rebuilt);
+            analysisRunId, tagCatalog.registrySha256, rebuilt, { rebuildLegacyAssignment,
+                pinnedProof: assignmentProofs?.[group.paperId], files: dependencies.assignmentFiles });
         if (!assignment) continue;
         if (!paper || assignment.value.analysisFileSha256 !== run.analysisFileSha256
             || assignment.value.registrySha256 !== tagCatalog.registrySha256
@@ -183,8 +229,10 @@ function loadPageGenerationInputs({ crosswalkRoot, crosswalkId, analysisRoot, ta
             || assignment.value.analysisSha256 !== sha256(Buffer.from(paper.analysis, 'utf8'))) {
             throw new Error(`论文 ${group.paperId} 的标签记录与已完成的分析文件、正文或当前词表不一致。`);
         }
-        if (stableHash(rebuilt) !== stableHash(assignment.value)
-            || rebuilt.assignmentSha256 !== assignment.value.assignmentSha256) {
+        const expected = assignment.value.contract === rebuilt.contract && assignment.value.version === rebuilt.version
+            ? rebuilt : rebuildLegacyAssignment();
+        if (stableHash(expected) !== stableHash(assignment.value)
+            || expected.assignmentSha256 !== assignment.value.assignmentSha256) {
             throw new Error(`论文 ${group.paperId} 的标签记录与按当前词表重新计算的记录不一致。`);
         }
         const projectedPages = group.pageKeys.map(pageKey => {

@@ -122,14 +122,31 @@ test('two real per-paper staging producers merge into one complete daily aggrega
             tagCatalogPath: '/unused', stagingRoot }, dependencies);
         assert.equal(staged.pageCount, 1);
     }
+    // 原旧 stage 已保存；旁边另建当前 v2 合成分配，重放须仍选回原旧字节。
+    const assignmentApi = require('../scripts/lib/historical-tag-assignment.js');
+    const assignmentRoot = path.join(root, 'assignments'), currentAssignments = {}, oldFiles = [];
+    for (const paperId of paperIds) {
+        const old = assignments[paperId], runRoot = path.join(assignmentRoot, old.analysisRunId);
+        fs.mkdirSync(runRoot, { recursive: true, mode: 0o700 });
+        const file = path.join(runRoot, assignmentApi.legacyAssignmentFilename(paperId, registrySha256));
+        fs.writeFileSync(file, JSON.stringify(old), { mode: 0o600 }); oldFiles.push(file);
+        const { assignmentSha256: _oldSha, ...body } = old;
+        Object.assign(body, { contract: 'paper-tag-assignment-v2', version: 2 });
+        const current = { ...body, assignmentSha256: api.stableHash(body) };
+        currentAssignments[paperId] = current;
+        assignmentApi.writeAssignments({ outputRoot: assignmentRoot, assignments: [current] });
+    }
+    const replayDependencies = { ...dependencies, findAssignment: pageStagingApi.findAssignment,
+        buildAssignment: ({ paper }) => currentAssignments[`arxiv:${paper.arxivId}`],
+        buildLegacyAssignment: ({ paper }) => assignments[`arxiv:${paper.arxivId}`] };
     const inventory = { ledger: { ledgerSha256: 'd'.repeat(64), pageSetSha256: 'e'.repeat(64),
         pages: [{ pageId: `page:${'f'.repeat(64)}`, path: `content/posts/${DATE}.md`,
             primaryUrl: `https://example.test/blog/posts/${DATE}/`, contentSha256: 'f'.repeat(64),
             kind: 'daily-summary', scope: { type: 'daily', key: DATE }, cohortDate: DATE }] } };
     const inputs = api.loadAggregateInputs({ stagingRoot, stagingRunIds, crosswalkRoot: '/unused',
-        inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused' }, {
+        inventoryRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: assignmentRoot, tagCatalogPath: '/unused' }, {
         bindTopology: () => ({ state, inventory }),
-        loadPageGenerationInputs: options => pageStagingApi.loadPageGenerationInputs(options, dependencies) });
+        loadPageGenerationInputs: options => pageStagingApi.loadPageGenerationInputs(options, replayDependencies) });
     const [aggregate] = api.buildDailyAggregates({ inputs, date: DATE });
     assert.equal(aggregate.members.length, 2);
     assert.deepEqual(aggregate.members.map(item => item.paperId), ['arxiv:2604.00002', 'arxiv:2604.00001']);
@@ -138,6 +155,21 @@ test('two real per-paper staging producers merge into one complete daily aggrega
         pageStagingApi.currentRendererImplementationSha256());
     assert.equal(api.aggregateRunIdFor(stagingRunIds), api.aggregateRunIdFor([...stagingRunIds].reverse()));
     assert.doesNotMatch(aggregate.markdown, /OLD|legacy/i);
+    const originalStageBytes = stagingRunIds.map(id => fs.readFileSync(path.join(stagingRoot, id, 'manifest.json')));
+    const conflictRoot = path.join(root, 'conflicting-synthetic-stages'); fs.cpSync(stagingRoot, conflictRoot, { recursive: true });
+    const conflictFile = path.join(conflictRoot, stagingRunIds[1], 'manifest.json');
+    const conflict = JSON.parse(fs.readFileSync(conflictFile));
+    conflict.pages[0].paperId = paperIds[0]; conflict.pageSetSha256 = api.stableHash(conflict.pages);
+    delete conflict.manifestSha256; conflict.manifestSha256 = api.stableHash(conflict);
+    fs.writeFileSync(conflictFile, JSON.stringify(conflict));
+    assert.throws(() => api.loadAggregateInputs({ stagingRoot: conflictRoot, stagingRunIds }), /多个已保存页面绑定了不同的标签分配凭证/);
+    fs.appendFileSync(oldFiles[0], '\n');
+    assert.throws(() => api.loadAggregateInputs({ stagingRoot, stagingRunIds, tagAssignmentRoot: assignmentRoot,
+        analysisRoot: '/unused', tagCatalogPath: '/unused' }, { bindTopology: () => ({ state, inventory }),
+        loadPageGenerationInputs: options => pageStagingApi.loadPageGenerationInputs(options, replayDependencies) }), /原文件 SHA 不一致/);
+    for (let index = 0; index < stagingRunIds.length; index += 1) {
+        assert.deepEqual(fs.readFileSync(path.join(stagingRoot, stagingRunIds[index], 'manifest.json')), originalStageBytes[index]);
+    }
 });
 
 test('mixed taxonomy registries and verified identity drift fail closed', () => {

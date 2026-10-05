@@ -112,6 +112,7 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'historical-analysis-schedulers', root: path.join(runtime, 'historical-analysis-schedulers') },
         { key: 'historical-postprocess-schedulers', root: path.join(runtime, 'historical-postprocess-schedulers') },
         { key: 'historical-taxonomy-assignments', root: path.join(runtime, 'historical-taxonomy-assignments') },
+        { key: 'historical-tag-assignments', root: path.join(runtime, 'historical-tag-assignments') },
         { key: 'historical-page-staging', root: path.join(runtime, 'historical-page-staging') },
         { key: 'historical-daily-aggregates', root: path.join(runtime, 'historical-daily-aggregates') },
         { key: 'historical-publications', root: path.join(runtime, 'historical-publications') },

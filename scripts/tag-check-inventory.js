@@ -4,7 +4,7 @@
 // 更新词表前，读取会议、日更分析和历史分类文件中的标签阶段记录，并按词表 SHA 分组。
 // --mark-stale 只检查历史分类文件；本工具还读取会议和日更实际保存的记录。
 // 检查范围是 conference-analysis-executions/*/analysis.json、当前深度分析结果，
-// 以及 historical-taxonomy-assignments 中的分类文件。所有路径由集中配置或参数指定。
+// 以及新旧历史标签分配目录中的记录。默认读取这两个目录；指定参数时只读取指定目录。
 // 本工具只读取文件，不更新记录，也不调用模型。它提供清单，不判断发布资格；
 // 无论统计出多少旧词表 SHA，命令均以退出码 0 结束。
 
@@ -17,7 +17,7 @@ const Config = require('./config.js');
 
 const INVENTORY_CONTRACT = 'paper-tag-record-inventory-v2';
 const SHA256_RE = /^[a-f0-9]{64}$/;
-const FILENAME_SHA_RE = /\.taxonomy\.([a-f0-9]{64})(?:\.[a-f0-9]+)?\.json$/;
+const FILENAME_SHA_RE = /\.(?:tags|taxonomy)\.([a-f0-9]{64})(?:\.[a-f0-9]+)?\.json$/;
 const MAX_FILE_BYTES = 512 * 1024 * 1024;
 const SAMPLE_LIMIT = 3;
 
@@ -28,12 +28,13 @@ const USAGE = [
     "  npm run tags:check-inventory [-- --json]",
     "  npm run tags:check-inventory -- --executions DIR --deep FILE --assignments DIR --registry FILE [--json]",
     "",
-    "程序读取以下三处记录，按 registrySha256 分组：",
+    "程序读取以下记录，并按词表 SHA 分组：",
     "  conference-analysis-executions/*/analysis.json 中的新旧标签阶段 registrySha256 和 status；",
     "  data/current/deep-analysis-result.json 中每篇论文的新旧标签阶段记录；",
-    "  historical-taxonomy-assignments/*/*.json 中的 registrySha256。",
+    "  historical-tag-assignments 与旧 historical-taxonomy-assignments 中的 registrySha256。",
+    "  --assignments DIR 只扫描指定目录，不附加默认或旧目录。",
     "",
-    "输出包括每组记录数量、与当前 config/tag-catalog.json 的 SHA 不同的组，以及各组示例 paperId。",
+    "输出包含每组记录的数量、示例论文编号，以及对应词表与当前词表的差异。",
     "程序只读取文件，不删除、改写或更新记录，也不调用模型。",
     "此命令提供检查清单，不判断发布资格；无论记录使用新旧哪份词表，都以退出码 0 结束。"
 ].join('\n');
@@ -159,8 +160,8 @@ function scanDeep(file, io) {
 }
 
 function scanAssignments(dir, io) {
-    const source = 'historical-taxonomy-assignments';
-    const state = { source, directories: 0, files: 0, seals: 0, unreadable: 0, entries: [] };
+    const source = 'historical-tag-assignments';
+    const state = { source, root: dir, directories: 0, files: 0, seals: 0, unreadable: 0, entries: [] };
     let directories = [];
     try {
         directories = io.readdirSync(dir, { withFileTypes: true })
@@ -193,7 +194,7 @@ function scanAssignments(dir, io) {
                 paperId: typeof loaded.value.paperId === 'string' ? loaded.value.paperId : null,
                 registrySha256: raw, status: typeof loaded.value.status === 'string'
                     ? loaded.value.status : 'unknown',
-                source
+                source, root: dir, directory, file: name
             };
             state.entries.push(entry);
             state.seals += 1;
@@ -228,6 +229,8 @@ function collect(options = {}, io = fs) {
     const executionsDir = options.executionsDir || Config.FILES.conferenceAnalysisDir;
     const deepFile = options.deepFile || Config.FILES.deepAnalysisResult;
     const assignmentsDir = options.assignmentsDir || Config.FILES.historicalTagAssignmentDir;
+    const assignmentRoots = [...new Set(options.assignmentsDir ? [assignmentsDir]
+        : [assignmentsDir, Config.FILES.legacyHistoricalTagAssignmentDir].filter(Boolean))];
     const registryFile = options.registryFile || Config.FILES.tagCatalogFile;
 
     const registryBytes = io.readFileSync(registryFile);
@@ -235,7 +238,14 @@ function collect(options = {}, io = fs) {
 
     const executions = scanExecutions(executionsDir, io);
     const deep = scanDeep(deepFile, io);
-    const assignments = scanAssignments(assignmentsDir, io);
+    const assignmentScans = assignmentRoots.map(root => scanAssignments(root, io));
+    const assignments = { source: 'historical-tag-assignments', root: assignmentsDir,
+        roots: assignmentScans, entries: assignmentScans.flatMap(scan => scan.entries),
+        missing: assignmentScans.every(scan => scan.missing),
+        directories: assignmentScans.reduce((sum, scan) => sum + scan.directories, 0),
+        files: assignmentScans.reduce((sum, scan) => sum + scan.files, 0),
+        seals: assignmentScans.reduce((sum, scan) => sum + scan.seals, 0),
+        unreadable: assignmentScans.reduce((sum, scan) => sum + scan.unreadable, 0) };
     const scans = [executions, deep, assignments];
     const entries = scans.flatMap(scan => scan.entries);
 
@@ -251,6 +261,7 @@ function collect(options = {}, io = fs) {
         currentRegistrySha256,
         currentRegistryFile: path.basename(registryFile),
         sources: Object.fromEntries(scans.map(scan => [scan.source, {
+            ...(scan.roots ? { root: scan.root, roots: scan.roots } : {}),
             missing: Boolean(scan.missing),
             directories: scan.directories ?? null,
             files: scan.files, seals: scan.seals, unreadable: scan.unreadable,

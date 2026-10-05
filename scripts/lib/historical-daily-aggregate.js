@@ -181,6 +181,15 @@ function loadAggregateInputs(options, dependencies = {}) {
         || stagingRunIds.some(runId => !UUID_RE.test(runId))) fail('必须提供非空且没有重复项的页面生成运行 ID 数组，每个 ID 都须为 UUID v4。');
     const stagedRuns = stagingRunIds.map(stagingRunId => (dependencies.loadCompletedPageStaging || loadCompletedPageStaging)({
         stagingRoot: options.stagingRoot, stagingRunId }));
+    const assignmentProofs = Object.create(null);
+    for (const staged of stagedRuns) for (const page of staged.manifest.pages) {
+        const proof = { analysisRunId: page.analysisRunId, assignmentSha256: page.taxonomyAssignmentSha256,
+            fileSha256: page.taxonomyFileSha256 };
+        if (Object.hasOwn(assignmentProofs, page.paperId) && stableHash(assignmentProofs[page.paperId]) !== stableHash(proof)) {
+            fail(`论文 ${page.paperId} 的多个已保存页面绑定了不同的标签分配凭证。`);
+        }
+        assignmentProofs[page.paperId] = proof;
+    }
     const crosswalkIds = [...new Set(stagedRuns.map(item => item.manifest.crosswalkId))];
     if (crosswalkIds.length !== 1) fail('所有页面生成运行必须使用同一份页面对应表。');
     const rendererImplementationShas = [...new Set(stagedRuns
@@ -198,7 +207,8 @@ function loadAggregateInputs(options, dependencies = {}) {
         const pageGenerationInputs = (dependencies.loadPageGenerationInputs || pageStagingApi.loadPageGenerationInputs)({
             crosswalkRoot: options.crosswalkRoot, crosswalkId: staged.manifest.crosswalkId,
             analysisRoot: options.analysisRoot, tagAssignmentRoot: options.tagAssignmentRoot,
-            tagCatalogPath: options.tagCatalogPath, analysisRunId: analysisRunIds[0] }, dependencies.pageGenerationDependencies || {});
+            tagCatalogPath: options.tagCatalogPath, analysisRunId: analysisRunIds[0],
+            assignmentProofs: Object.fromEntries(staged.manifest.pages.map(page => [page.paperId, assignmentProofs[page.paperId]])) }, dependencies.pageGenerationDependencies || {});
         if (pageGenerationInputs.crosswalk.stateSha256 !== topology.state.stateSha256) fail('页面生成输入所用的页面对应表状态与当前状态不一致。');
         const groups = new Map(pageGenerationInputs.groups.map(group => [group.paperId, group]));
         for (const page of staged.manifest.pages) {

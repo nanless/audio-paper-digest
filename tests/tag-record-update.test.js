@@ -549,3 +549,44 @@ test('重新生成前须拒绝原绑定哈希无效或格式声明错误的标�
         assert.equal(JSON.stringify(analysis), before);
     }
 });
+
+
+test('失效报告默认合并明确的新旧根，自定义单根保持独占和原文件', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-stale-roots-'));
+    try {
+        const currentSha = 'b'.repeat(64);
+        const staleSha = 'a'.repeat(64);
+        const currentRoot = path.join(root, 'new');
+        const legacyRoot = path.join(root, 'old');
+        const currentFile = path.join(currentRoot, 'same-run', `paper.tags.${currentSha}.${staleSha}.json`);
+        const legacyFile = path.join(legacyRoot, 'same-run', `paper.taxonomy.${staleSha}.json`);
+        for (const file of [currentFile, legacyFile]) {
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.writeFileSync(file, '{}');
+        }
+        const bytes = [currentFile, legacyFile].map(file => fs.readFileSync(file));
+        const runtime = { registryVersion: 'fixture-v2', registrySha256: currentSha };
+        const files = { historicalTagAssignmentDir: currentRoot, legacyHistoricalTagAssignmentDir: legacyRoot };
+        const report = cli.markStaleReport({ files, runtime });
+        assert.equal(report.root, currentRoot);
+        assert.deepEqual(report.roots, [currentRoot, legacyRoot]);
+        assert.equal(report.current, 1);
+        assert.equal(report.stale, 1);
+        assert.deepEqual(report.entries.map(entry => entry.root), [currentRoot, legacyRoot]);
+        const custom = cli.markStaleReport({ files: { historicalTagAssignmentDir: legacyRoot }, runtime });
+        assert.deepEqual(custom.roots, [legacyRoot]);
+        assert.equal(custom.entries.length, 1);
+        assert.equal(custom.current, 0);
+        const missing = cli.markStaleReport({ files: { historicalTagAssignmentDir: path.join(root, 'missing') }, runtime });
+        assert.equal(missing.entries.length, 0);
+        const invalidRoot = path.join(root, 'not-a-directory');
+        fs.writeFileSync(invalidRoot, 'invalid');
+        assert.throws(() => cli.markStaleReport({ files: { ...files, historicalTagAssignmentDir: invalidRoot }, runtime }),
+            error => error.code === 'ENOTDIR');
+        for (const [index, file] of [currentFile, legacyFile].entries()) {
+            assert.deepEqual(fs.readFileSync(file), bytes[index]);
+        }
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

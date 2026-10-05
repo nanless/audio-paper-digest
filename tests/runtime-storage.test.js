@@ -37,7 +37,7 @@ const CONFERENCE_PROTECTED_KEYS = [
     'conference-source-recovery'
 ];
 const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-crosswalks',
-    'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-postprocess-schedulers', 'historical-taxonomy-assignments',
+    'historical-arxiv-batches', 'historical-analysis-schedulers', 'historical-postprocess-schedulers', 'historical-taxonomy-assignments', 'historical-tag-assignments',
     'historical-page-staging', 'historical-daily-aggregates', 'historical-publications', 'paper-source-authorities',
     'daily-fresh-source-runs', 'fetched-arxiv-sources', 'historical-arxiv-fresh-failure-handoffs',
     'historical-arxiv-publication-metadata', 'blog-republication-archives', 'canonical-maintenance',
@@ -90,6 +90,7 @@ function makeProject() {
         'data/runtime/historical-analysis-schedulers',
         'data/runtime/historical-postprocess-schedulers',
         'data/runtime/historical-taxonomy-assignments',
+        'data/runtime/historical-tag-assignments',
         'data/runtime/historical-page-staging',
         'data/runtime/historical-daily-aggregates',
         'data/runtime/paper-source-authorities',

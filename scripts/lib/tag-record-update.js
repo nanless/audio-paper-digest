@@ -318,7 +318,7 @@ function summarizeTagRecordUpdates(report) {
     };
 }
 
-// 列出 historical-taxonomy-assignments 中词表 SHA 与当前值不同的分类文件。
+// 扫描指定的标签分配目录，列出词表 SHA 与当前值不同的记录。
 // 此函数只读取文件，不删除、改名或改写原记录。
 function scanStaleAssignments({ root, currentRegistrySha256, readDir, readJson }) {
     const fs = require('node:fs');
@@ -345,12 +345,12 @@ function scanStaleAssignments({ root, currentRegistrySha256, readDir, readJson }
                 .map(entry => entry.name).filter(name => name.endsWith('.json')).sort();
         } catch {
             unreadable += 1;
-            entries.push({ directory, file: null, registrySha256: null,
+            entries.push({ root, directory, file: null, registrySha256: null,
                 stale: null, reason: '目录不可读' });
             continue;
         }
         for (const file of files) {
-            const match = file.match(/\.taxonomy\.([a-f0-9]{64})(?:\.[a-f0-9]+)?\.json$/);
+            const match = file.match(/\.(?:tags|taxonomy)\.([a-f0-9]{64})(?:\.[a-f0-9]+)?\.json$/);
             let sha = match ? match[1] : null;
             let paperId = null;
             let reason = null;
@@ -368,7 +368,7 @@ function scanStaleAssignments({ root, currentRegistrySha256, readDir, readJson }
             else if (isStale === true) stale += 1;
             else if (isStale === false) current += 1;
             else unreadable += 1;
-            entries.push({ directory, file, paperId, registrySha256: sha,
+            entries.push({ root, directory, file, paperId, registrySha256: sha,
                 stale: isStale, reason: reason || (isStale === null ? '文件未记录词表 SHA（registrySha256）。' : null) });
         }
     }

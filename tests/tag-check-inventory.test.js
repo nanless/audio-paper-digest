@@ -119,7 +119,7 @@ test('盘点脚本按 registrySha256 分组并给出与当前 SHA 的差集', t 
     assert.equal(executions.withoutSeal, 2);
     assert.equal(executions.unreadable, 0);
     assert.equal(inventory.sources['deep-analysis-result'].seals, 1);
-    assert.equal(inventory.sources['historical-taxonomy-assignments'].seals, 2);
+    assert.equal(inventory.sources['historical-tag-assignments'].seals, 2);
     assert.equal(inventory.totals.seals, 7);
     assert.equal(inventory.totals.sealsWithoutSha, 0);
     assert.equal(inventory.totals.unreadable, 0);
@@ -131,7 +131,7 @@ test('盘点脚本按 registrySha256 分组并给出与当前 SHA 的差集', t 
     assert.equal(bySha[CURRENT].matchesCurrent, true);
     assert.deepEqual(bySha[CURRENT].statuses, { complete: 2, not_needed: 1, blocked: 1 });
     assert.deepEqual(bySha[CURRENT].bySource,
-        { 'conference-analysis-executions': 3, 'historical-taxonomy-assignments': 1 });
+        { 'conference-analysis-executions': 3, 'historical-tag-assignments': 1 });
     assert.ok(bySha[CURRENT].samplePaperIds.includes('conference:demo:2026:conference-paper-id:one'));
     assert.ok(bySha[CURRENT].samplePaperIds.length <= 3);
     // 非当前 SHA：会议执行 + 深度分析共 2 条，历史指派 1 条
@@ -152,7 +152,7 @@ test('盘点脚本按 registrySha256 分组并给出与当前 SHA 的差集', t 
             { registrySha256: STALE_ONE, seals: 2, matchesCurrent: false,
                 bySource: { 'conference-analysis-executions': 1, 'deep-analysis-result': 1 } },
             { registrySha256: STALE_TWO, seals: 1, matchesCurrent: false,
-                bySource: { 'historical-taxonomy-assignments': 1 } }
+                bySource: { 'historical-tag-assignments': 1 } }
         ],
         sealsWithoutSha: 0,
         inSyncRatio: 0.5714
@@ -221,4 +221,51 @@ test('盘点读取新旧阶段但不把冲突容器回退成合法旧记录', ()
     mixed.papers[0].analysisManifest.stages.taxonomySeal = null;
     mixed.stages = { taxonomySeal: seal('complete', CURRENT) };
     assert.throws(() => api.collectTagStageRecords(mixed, 'top'), /不能混用新旧格式/);
+});
+
+
+test('默认盘点合并新旧目录且保留出处，自定义目录不附加旧根', t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-inventory-roots-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const paths = fixture(root);
+    const newRoot = path.join(root, 'historical-tag-assignments');
+    writeJson(path.join(newRoot, 'bbbbbbbb-0000-4000-8000-000000000001',
+        `arxiv-2609.00001.tags.${STALE_TWO}.${CURRENT}.json`),
+    { registrySha256: CURRENT, paperId: 'arxiv:2609.00001', status: 'assigned' });
+    const before = snapshot(root);
+    const config = require('../scripts/config.js');
+    const originalRoot = config.FILES.historicalTagAssignmentDir;
+    const originalLegacyRoot = config.FILES.legacyHistoricalTagAssignmentDir;
+    config.FILES.historicalTagAssignmentDir = newRoot;
+    config.FILES.legacyHistoricalTagAssignmentDir = paths.assignments;
+    try {
+        const api = require('../scripts/tag-check-inventory.js');
+        const options = { executionsDir: paths.executions, deepFile: paths.deepFile,
+            registryFile: paths.registryFile };
+        const inventory = api.collect(options);
+        const assignments = inventory.sources['historical-tag-assignments'];
+        assert.equal(assignments.root, newRoot);
+        assert.equal(assignments.seals, 3);
+        assert.deepEqual(assignments.roots.map(scan => scan.root), [newRoot, paths.assignments]);
+        assert.deepEqual(assignments.roots.map(scan => scan.seals), [1, 2]);
+        assert.equal(assignments.roots[0].entries[0].registrySha256, CURRENT,
+            'JSON 中的 SHA 仍优先于新文件名中的 SHA');
+        assert.equal(assignments.roots[0].entries[0].root, newRoot);
+        assert.equal(inventory.totals.seals, 8);
+        const custom = api.collect({ ...options, assignmentsDir: paths.assignments });
+        assert.deepEqual(custom.sources['historical-tag-assignments'].roots.map(scan => scan.root),
+            [paths.assignments]);
+        assert.equal(custom.totals.seals, 7);
+        const missing = api.collect({ ...options, assignmentsDir: path.join(root, 'missing') });
+        assert.equal(missing.sources['historical-tag-assignments'].seals, 0);
+        assert.equal(missing.sources['historical-tag-assignments'].roots.length, 1);
+        assert.throws(() => api.collect(options, { ...fs, readdirSync(directory, opts) {
+            if (directory === newRoot) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+            return fs.readdirSync(directory, opts);
+        } }), /denied/);
+        assert.equal(snapshot(root), before);
+    } finally {
+        config.FILES.historicalTagAssignmentDir = originalRoot;
+        config.FILES.legacyHistoricalTagAssignmentDir = originalLegacyRoot;
+    }
 });
