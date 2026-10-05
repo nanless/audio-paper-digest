@@ -15,7 +15,9 @@ SOURCE = Path(os.environ.get('SOURCE_PUBLISHER_PATH',
 NAMES = {'_validate_tag_display_policy', '_historical_tag_prompt_text_sha256',
     '_select_tag_display_version', 'build_tag_catalog_snapshot', 'tag_catalog_snapshot_bytes',
     '_validate_tag_catalog_snapshot', '_validate_tag_version_catalog', '_is_tag_catalog_file_path',
-    '_read_tag_catalog_file', 'tag_catalog_file_contents',
+    '_read_tag_catalog_file', 'tag_catalog_file_contents', '_legacy_tag_catalog_file_contents',
+    '_build_tag_catalog_display_snapshot', '_read_approved_tag_display_policy',
+    '_saved_tag_catalog_file_contents',
     'prepare_tag_catalog_staged_files', 'export_tag_catalog_files',
     '_manifest_record', 'review_tag_catalog_files', 'publish_manifest_paths',
     'prepare_generation_installation', 'resume_generation_installation',
@@ -39,7 +41,13 @@ class TagVersionFilesTests(unittest.TestCase):
         self.error = ValidationError
         self.env = {'Path': Path, 'json': json, 're': re, 'hashlib': hashlib,
             'PublishDataValidationError': ValidationError, 'BLOG_REPO': str(self.repo),
-            'TAG_CATALOG_SNAPSHOT_CONTRACT': 'paper-taxonomy-registry-snapshot-v1',
+            'TAG_CATALOG_SNAPSHOT_CONTRACT': 'paper-tag-catalog-snapshot-v2',
+            'LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT': 'paper-taxonomy-registry-snapshot-v1',
+            'TAG_CATALOG_VERSIONS_CONTRACT': 'paper-tag-catalog-versions-v2',
+            'LEGACY_TAG_CATALOG_VERSIONS_CONTRACT': 'paper-taxonomy-version-catalog-v1',
+            'TAG_PRESENTATION_POLICY_CONTRACT': 'paper-tag-presentation-policy-v2',
+            'LEGACY_TAG_PRESENTATION_POLICY_CONTRACT': 'paper-taxonomy-presentation-selection-v1',
+            'TAG_DISPLAY_POLICY_PATH': self.root / 'absent-approved-policy.json',
             'VISUAL_SUMMARY_KINDS': set(), 'RESEARCHER_SIDECAR_FILENAMES': set()}
         self.env['_atomic_write_bytes'] = self.write
         self.env['_sha256_file'] = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -50,7 +58,8 @@ class TagVersionFilesTests(unittest.TestCase):
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), 'exec'), self.env)
         self.current = self.call('build_tag_catalog_snapshot')
         self.old = json.loads(json.dumps(self.current))
-        self.old.update(registrySha256='a'*64, registryVersion='v1')
+        self.old.update(registrySha256='a'*64, registryVersion='v1',
+                        contract='paper-taxonomy-registry-snapshot-v1')
         self.old['concepts'][0]['zh'] = '旧名字'
         self.old['concepts'][0]['definition'] = '旧定义'
 
@@ -73,7 +82,7 @@ class TagVersionFilesTests(unittest.TestCase):
         self.seed()
         paths = self.call('export_tag_catalog_files', self.repo)
         self.assertEqual(len(paths), 8)
-        catalog = json.loads((self.repo/'data/taxonomy-catalog.json').read_text())
+        catalog = json.loads((self.repo/'data/tag-catalog-versions.json').read_text())
         self.assertEqual(catalog['currentSha256'], 'b'*64)
         self.assertEqual(catalog['snapshots'], [self.old, self.current])
         self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
@@ -150,7 +159,7 @@ class TagVersionFilesTests(unittest.TestCase):
         self.assertTrue(all(not record['delete'] and record['expectedSha256'] for record in records))
         self.call('resume_generation_installation', journal, self.root/'journal.json', posts)
         self.assertTrue(all(record['installed'] for record in records))
-        self.assertEqual(json.loads((self.repo/'data/taxonomy-registry.json').read_text()), self.current)
+        self.assertEqual(json.loads((self.repo/'data/tag-catalog-snapshot.json').read_text()), self.current)
 
     def test_review_covers_all_bytes_and_detects_tampering(self):
         paths = self.call('export_tag_catalog_files', self.repo)
@@ -219,7 +228,7 @@ class TagVersionFilesTests(unittest.TestCase):
         records = [{'path': path.relative_to(self.stage).as_posix(), 'delete': False,
                     'stagedRelativePath': path.relative_to(self.stage).as_posix(),
                     'expectedSha256': self.env['_sha256_file'](path)} for path in paths]
-        self.write(self.repo/'data/taxonomy-catalog.json', (self.stage/'data/taxonomy-catalog.json').read_bytes())
+        self.write(self.repo/'data/tag-catalog-versions.json', (self.stage/'data/tag-catalog-versions.json').read_bytes())
         with self.assertRaisesRegex(self.error, 'data 与 static/data 中的标签词表版本目录内容不一致。'):
             self.call('tag_catalog_file_contents', self.repo)
         resumed = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
@@ -230,6 +239,43 @@ class TagVersionFilesTests(unittest.TestCase):
             self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
                       installation={'files': records})
 
+
+    def test_new_display_does_not_replace_issued_snapshot_and_partial_new_files_reject(self):
+        self.seed()
+        original = (self.repo / 'data/taxonomy-registry.json').read_bytes()
+        assets = self.call('tag_catalog_file_contents', self.repo)
+        catalog = json.loads(assets['data/tag-catalog-versions.json'])
+        self.assertEqual(catalog['contract'], 'paper-tag-catalog-versions-v2')
+        self.assertEqual(catalog['snapshots'][0], self.old)
+        self.assertEqual(json.loads(assets['data/taxonomy-snapshots/'+'a'*64+'.json']), self.old)
+        self.call('export_tag_catalog_files', self.repo)
+        self.assertEqual((self.repo / 'data/taxonomy-registry.json').read_bytes(), original)
+        (self.repo / 'static/data/tag-catalog-versions.json').unlink()
+        with self.assertRaisesRegex(self.error, '新版标签显示文件缺少'):
+            self.call('tag_catalog_file_contents', self.repo)
+
+    def test_old_installation_and_review_preserve_bound_files_without_current_config(self):
+        self.seed()
+        assets = self.call('_legacy_tag_catalog_file_contents', self.repo, current=self.old)
+        for relative, raw in assets.items():
+            self.write(self.stage / relative, raw)
+        records = [{'path': relative, 'delete': False, 'stagedRelativePath': relative,
+                    'expectedSha256': hashlib.sha256(raw).hexdigest()} for relative, raw in assets.items()]
+        before = {relative: (self.stage / relative).read_bytes() for relative in assets}
+        paths = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                          installation={'files': records})
+        self.assertEqual({p.relative_to(self.stage).as_posix() for p in paths}, set(assets))
+        self.assertEqual({relative: (self.stage / relative).read_bytes() for relative in assets}, before)
+        manifest = {'files': [{'path': relative, 'deleted': False,
+            'sha256': hashlib.sha256(raw).hexdigest()} for relative, raw in assets.items()]}
+        for relative, raw in assets.items():
+            self.write(self.repo / relative, raw)
+        self.env['_load_json_object'] = lambda *args: manifest
+        self.assertEqual(self.call('review_tag_catalog_files', '2026-09-30',
+            [self.repo / relative for relative in assets], self.root/'manifest.json', {}), 0)
+        self.env['TAG_DISPLAY_POLICY_PATH'].write_text('{}')
+        self.assertEqual(self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+            installation={'files': records}), paths)
 
 if __name__ == '__main__':
     unittest.main()

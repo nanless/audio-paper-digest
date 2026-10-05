@@ -1,0 +1,8 @@
+{
+  "baseRegistrySha256": "85ed9e5a7cde6f58c3cb97b10d61401641dd2e39592680d2c343137bc7669d3a",
+  "baseSnapshotSha256": "e8cce8c131aec739ed33987d150256ac196a1c455ed4447e9c92d5ab83e60b7b",
+  "contract": "paper-tag-presentation-policy-v2",
+  "preferredProjectionSha256": "eb61a213102f53901a8d8d86a6e5f1c1eef08ab83ae704e4aec20313ebb31fd4",
+  "preferredRegistrySha256": "910a94021b085a190abcd5fd9603af3240160f9417293d5a90158bc4ef900d30",
+  "preferredSnapshotSha256": "4a50d0e785536e3ee3cca46b0c696fb81277cdbab518397ed89d94824d74ba1b"
+}

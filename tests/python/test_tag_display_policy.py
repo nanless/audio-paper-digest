@@ -36,6 +36,7 @@ class PresentationPolicyTests(unittest.TestCase):
     put = assets_test.TagVersionFilesTests.put
 
     def prepare(self, preferred=None):
+        self.policy_paths = list(POLICIES)
         preferred = preferred or list(PREFERRED)[1]
         self.base = json.loads((FIXTURES / (BASE + '.json')).read_text())
         self.preferred = json.loads((FIXTURES / (preferred + '.json')).read_text())
@@ -48,7 +49,7 @@ class PresentationPolicyTests(unittest.TestCase):
                 broaderId=n['ancestorIds'][-1] if n['ancestorIds'] else None,
                 **{k: n[k] for k in ('definition', 'scopeNote', 'status') if k in n})
                 for n in self.base['concepts']]}
-        self.assertEqual(self.call('build_tag_catalog_snapshot'), self.base)
+        self.assertEqual(self.call('build_tag_catalog_snapshot', snapshot_contract='paper-taxonomy-registry-snapshot-v1'), self.base)
         catalog = {'contract': 'paper-taxonomy-version-catalog-v1',
             'currentSha256': preferred, 'snapshots': [self.base, self.preferred]}
         for prefix in ('data', 'static/data'):
@@ -67,7 +68,7 @@ class PresentationPolicyTests(unittest.TestCase):
         self.policy_write(self.policy_bytes)
 
     def policy_write(self, raw):
-        for relative in POLICIES:
+        for relative in self.policy_paths:
             self.write(self.repo / relative, raw)
 
     def git(self, *args):
@@ -77,6 +78,16 @@ class PresentationPolicyTests(unittest.TestCase):
 
     def transaction(self):
         self.prepare()
+        self.env['_PAGE_TAG_CATALOG']['registrySha256'] = 'b'*64
+        self.env['_PAGE_TAG_CATALOG']['version'] = 'paper-tag-catalog-v2'
+        current = self.call('build_tag_catalog_snapshot')
+        self.policy = dict(self.policy, contract='paper-tag-presentation-policy-v2',
+            baseRegistrySha256='b'*64,
+            baseSnapshotSha256=hashlib.sha256(self.call('tag_catalog_snapshot_bytes', current)).hexdigest())
+        self.policy_bytes = (json.dumps(self.policy, ensure_ascii=False, indent=4)+'\n').encode()
+        self.write(self.env['TAG_DISPLAY_POLICY_PATH'], self.policy_bytes)
+        self.policy_paths = ['data/tag-presentation-policy.json', 'static/data/tag-presentation-policy.json']
+        self.policy_write(self.policy_bytes)
         self.git('init', '-q')
         self.git('config', 'user.name', 'Offline fixture')
         self.git('config', 'user.email', 'fixture@example.invalid')
@@ -126,20 +137,21 @@ class PresentationPolicyTests(unittest.TestCase):
         for preferred in PREFERRED:
             with self.subTest(preferred=preferred):
                 self.prepare(preferred)
-                assets = self.call('tag_catalog_file_contents', self.repo)
+                assets = self.call('_legacy_tag_catalog_file_contents', self.repo)
                 self.assertIn(len(assets), (10, 12))
-                for relative in POLICIES:
+                for relative in self.policy_paths:
                     self.assertEqual(assets[relative], self.policy_bytes)
                 self.assertEqual(json.loads(assets['data/taxonomy-registry.json']), self.preferred)
                 self.assertEqual(json.loads(assets['data/taxonomy-catalog.json'])['currentSha256'], preferred)
-                self.assertEqual(self.call('build_tag_catalog_snapshot'), self.base)
-                self.call('export_tag_catalog_files', self.repo)
-                self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
+                self.assertEqual(self.call('build_tag_catalog_snapshot', snapshot_contract='paper-taxonomy-registry-snapshot-v1'), self.base)
+                for relative, raw in assets.items():
+                    self.write(self.repo / relative, raw)
+                self.assertEqual(self.call('_legacy_tag_catalog_file_contents', self.repo), assets)
 
     def test_without_policy_keeps_original_base_selection(self):
         self.prepare()
-        for relative in POLICIES: (self.repo / relative).unlink()
-        assets = self.call('tag_catalog_file_contents', self.repo)
+        for relative in self.policy_paths: (self.repo / relative).unlink()
+        assets = self.call('_legacy_tag_catalog_file_contents', self.repo)
         self.assertEqual(len(assets), 8)
         self.assertEqual(json.loads(assets['data/taxonomy-registry.json']), self.base)
 
@@ -150,38 +162,38 @@ class PresentationPolicyTests(unittest.TestCase):
                 wrong = dict(self.policy); wrong[key] = '0'*64
                 self.policy_write(json.dumps(wrong).encode())
                 with self.assertRaises(self.error):
-                    self.call('prepare_tag_catalog_staged_files', self.stage, self.repo)
+                    self.call('_legacy_tag_catalog_file_contents', self.repo)
                 self.assertEqual(list(self.stage.iterdir()), [])
         wrong = dict(self.policy, downgradeAllowed=True)
         self.policy_write(json.dumps(wrong).encode())
-        with self.assertRaises(self.error): self.call('tag_catalog_file_contents', self.repo)
+        with self.assertRaises(self.error): self.call('_legacy_tag_catalog_file_contents', self.repo)
 
     def test_duplicate_key_and_semantically_equal_mirror_bytes_rejected(self):
         self.prepare()
-        self.write(self.repo/POLICIES[1], json.dumps(self.policy).encode())
-        with self.assertRaisesRegex(self.error, '标签展示策略只缺少一份副本，或 data 与 static/data 中的文件内容不完全一致。'): self.call('tag_catalog_file_contents', self.repo)
+        self.write(self.repo/self.policy_paths[1], json.dumps(self.policy).encode())
+        with self.assertRaisesRegex(self.error, '标签展示策略只缺少一份副本，或 data 与 static/data 中的文件内容不完全一致。'): self.call('_legacy_tag_catalog_file_contents', self.repo)
         raw = self.policy_bytes[:-2] + b', "contract":"paper-taxonomy-presentation-selection-v1"}\n'
         self.policy_write(raw)
-        with self.assertRaisesRegex(self.error, '重复键'): self.call('tag_catalog_file_contents', self.repo)
+        with self.assertRaisesRegex(self.error, '重复键'): self.call('_legacy_tag_catalog_file_contents', self.repo)
 
     def test_missing_mirror_archive_catalog_and_dangling_symlink_rejected(self):
         self.prepare()
-        for relative in [POLICIES[1], 'static/data/taxonomy-snapshots/'+self.preferred['registrySha256']+'.json',
+        for relative in [self.policy_paths[1], 'static/data/taxonomy-snapshots/'+self.preferred['registrySha256']+'.json',
                          'static/data/taxonomy-catalog.json']:
             with self.subTest(relative=relative):
                 path=self.repo/relative; raw=path.read_bytes(); path.unlink()
-                with self.assertRaises(self.error): self.call('tag_catalog_file_contents', self.repo)
+                with self.assertRaises(self.error): self.call('_legacy_tag_catalog_file_contents', self.repo)
                 path.write_bytes(raw)
-        path=self.repo/POLICIES[0]; path.unlink(); path.symlink_to(self.root/'missing')
-        with self.assertRaisesRegex(self.error, '符号链接'): self.call('tag_catalog_file_contents', self.repo)
+        path=self.repo/self.policy_paths[0]; path.unlink(); path.symlink_to(self.root/'missing')
+        with self.assertRaisesRegex(self.error, '符号链接'): self.call('_legacy_tag_catalog_file_contents', self.repo)
 
     def test_hardlink_and_parent_symlink_rejected(self):
         self.prepare()
-        path=self.repo/POLICIES[0]; other=self.root/'link'; os.link(path, other)
-        with self.assertRaisesRegex(self.error, '标签展示策略和快照必须是普通文件，且只能有一个硬链接。'): self.call('tag_catalog_file_contents', self.repo)
+        path=self.repo/self.policy_paths[0]; other=self.root/'link'; os.link(path, other)
+        with self.assertRaisesRegex(self.error, '标签展示策略和快照必须是普通文件，且只能有一个硬链接。'): self.call('_legacy_tag_catalog_file_contents', self.repo)
         other.unlink()
         data=self.repo/'static/data'; moved=self.repo/'static/moved'; data.rename(moved); data.symlink_to(moved)
-        with self.assertRaisesRegex(self.error, '符号链接'): self.call('tag_catalog_file_contents', self.repo)
+        with self.assertRaisesRegex(self.error, '符号链接'): self.call('_legacy_tag_catalog_file_contents', self.repo)
 
     def test_approved_bytes_cannot_hide_changed_base_concept_or_graph(self):
         self.prepare()
@@ -197,19 +209,19 @@ class PresentationPolicyTests(unittest.TestCase):
         self.policy['preferredSnapshotSha256']=hashlib.sha256(self.call('tag_catalog_snapshot_bytes',changed)).hexdigest()
         self.policy['preferredProjectionSha256']=self.call('_historical_tag_prompt_text_sha256',changed)
         self.policy_write(json.dumps(self.policy).encode())
-        with self.assertRaisesRegex(self.error, '标签展示策略选用的词表修改了已有概念，或改变了它们的顺序；只允许在原列表末尾追加概念。'): self.call('tag_catalog_file_contents',self.repo)
+        with self.assertRaisesRegex(self.error, '标签展示策略选用的词表修改了已有概念，或改变了它们的顺序；只允许在原列表末尾追加概念。'): self.call('_legacy_tag_catalog_file_contents',self.repo)
 
     def test_generation_journal_precise_members_install_and_idempotent_resume(self):
         self.transaction()
-        self.assertEqual(len(self.records),11)
+        self.assertEqual(len(self.records),13)
         self.assertEqual({r['path'] for r in self.records}, {p.relative_to(self.repo).as_posix() for p in self.paths})
-        for relative in POLICIES:
+        for relative in self.policy_paths:
             self.assertEqual((self.repo/relative).read_bytes(),self.policy_bytes)
             self.assertEqual((self.stage/relative).read_bytes(),self.policy_bytes)
         self.assertTrue(self.byte_gate())
         results={}
         self.assertEqual(self.call('review_tag_catalog_files', DATE,self.paths,self.manifest_path,results),0)
-        self.assertEqual(len(results),10)
+        self.assertEqual(len(results),12)
         self.assertEqual(self.call('resume_generation_installation',self.journal,self.root/'journal.json',self.posts),self.paths)
         self.assertEqual(self.git('rev-parse','HEAD').stdout,self.before_head)
 
@@ -231,7 +243,7 @@ class PresentationPolicyTests(unittest.TestCase):
 
     def test_policy_removed_after_generation_cannot_silently_downgrade(self):
         self.transaction()
-        for relative in POLICIES: (self.repo/relative).unlink()
+        for relative in self.policy_paths: (self.repo/relative).unlink()
         with self.assertRaisesRegex(self.error,'文件内容或删除状态与生成时的记录不一致'): self.byte_gate()
         self.assertGreater(self.call('review_tag_catalog_files',DATE,self.paths,self.manifest_path,{}),0)
 
@@ -239,7 +251,7 @@ class PresentationPolicyTests(unittest.TestCase):
         self.prepare()
         self.env['_PAGE_TAG_CATALOG']['registrySha256']='1'*64
         with self.assertRaisesRegex(self.error,'实际签发来源'):
-            self.call('tag_catalog_file_contents',self.repo)
+            self.call('_legacy_tag_catalog_file_contents',self.repo)
 
     def test_policy_and_archive_paths_only_exact_whitelist(self):
         self.prepare()
@@ -248,7 +260,7 @@ class PresentationPolicyTests(unittest.TestCase):
                      '/data/taxonomy-presentation-policy.json',
                      'static\\data\\taxonomy-presentation-policy.json']:
             with self.subTest(path=path): self.assertFalse(self.call('_is_tag_catalog_file_path',path))
-        for path in POLICIES: self.assertTrue(self.call('_is_tag_catalog_file_path',path))
+        for path in self.policy_paths: self.assertTrue(self.call('_is_tag_catalog_file_path',path))
 
     def test_prior_receipt_allows_exact_policy_only(self):
         self.transaction()
@@ -295,15 +307,55 @@ class PresentationPolicyTests(unittest.TestCase):
         # Existing installation resumes frozen original policy even if mirrored
         # current worktree bytes now diverge. It must not regenerate selection.
         changed=self.policy_bytes+b' '
-        self.write(self.repo/POLICIES[0],changed)
+        self.write(self.repo/self.policy_paths[0],changed)
         with self.assertRaises(self.error):self.call('resume_generation_installation',self.journal,self.root/'journal.json',self.posts)
         with self.assertRaises(self.error):self.call('tag_catalog_file_contents',self.repo)
         self.assertEqual(set(self.call('prepare_tag_catalog_staged_files',self.stage,self.repo,
             installation=self.journal['installation'])),set(self.assets))
-        self.write(self.stage/POLICIES[0],changed)
+        self.write(self.stage/self.policy_paths[0],changed)
         with self.assertRaises(self.error):self.call('prepare_tag_catalog_staged_files',self.stage,self.repo,
             installation=self.journal['installation'])
 
+
+    def test_new_policy_uses_new_base_but_original_preferred_proof(self):
+        self.transaction()
+        versions = json.loads((self.repo/'data/tag-catalog-versions.json').read_text())
+        issued = {item['registrySha256']: item for item in versions['snapshots']}
+        self.assertEqual(issued[self.preferred['registrySha256']], self.preferred)
+        display = json.loads((self.repo/'data/tag-catalog-snapshot.json').read_text())
+        self.assertEqual(display, dict(self.preferred, contract='paper-tag-catalog-snapshot-v2'))
+        self.assertEqual(issued['b'*64]['contract'], 'paper-tag-catalog-snapshot-v2')
+        self.assertEqual(self.policy['preferredSnapshotSha256'], PREFERRED[self.preferred['registrySha256']][0])
+        self.assertEqual(self.policy['preferredProjectionSha256'], PREFERRED[self.preferred['registrySha256']][1])
+        self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
+        self.env['_PAGE_TAG_CATALOG']['registrySha256'] = '1'*64
+        with self.assertRaisesRegex(self.error, '实际签发来源'):
+            self.call('tag_catalog_file_contents', self.repo)
+
+    def test_old_policy_bytes_restore_after_current_source_changes(self):
+        self.prepare()
+        assets = self.call('_legacy_tag_catalog_file_contents', self.repo)
+        for relative, raw in assets.items():
+            self.write(self.stage / relative, raw)
+        records = [{'path': relative, 'delete': False, 'stagedRelativePath': relative,
+            'expectedSha256': hashlib.sha256(raw).hexdigest()} for relative, raw in assets.items()]
+        self.env['_PAGE_TAG_CATALOG']['registrySha256'] = 'b'*64
+        self.env['TAG_DISPLAY_POLICY_PATH'].write_text('{}')
+        paths = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                          installation={'files': records})
+        self.assertEqual({p.relative_to(self.stage).as_posix() for p in paths}, set(assets))
+        for relative in self.policy_paths:
+            self.assertEqual((self.stage / relative).read_bytes(), self.policy_bytes)
+        # 即使记录跟随新 SHA 更新，改变归档排版也不能替代策略批准的原字节。
+        sha = self.preferred['registrySha256']
+        altered = (json.dumps(self.preferred, ensure_ascii=False, indent=2)+'\n').encode()
+        for prefix in ('data', 'static/data'):
+            relative = f'{prefix}/taxonomy-snapshots/{sha}.json'
+            self.write(self.stage / relative, altered)
+            next(record for record in records if record['path'] == relative)['expectedSha256'] = hashlib.sha256(altered).hexdigest()
+        with self.assertRaisesRegex(self.error, '归档原字节与批准的快照 SHA 不一致'):
+            self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                      installation={'files': records})
 
 if __name__ == '__main__':
     unittest.main()

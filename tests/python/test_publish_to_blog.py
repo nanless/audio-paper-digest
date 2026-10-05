@@ -940,6 +940,15 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def setUp(self):
+        # 临时博客测试不读取真实生产策略，避免合成输入冒用已批准的来源。
+        policy_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(policy_directory.cleanup)
+        policy_patch = mock.patch.object(publish_to_blog, 'TAG_DISPLAY_POLICY_PATH',
+            Path(policy_directory.name) / 'absent-policy.json')
+        policy_patch.start()
+        self.addCleanup(policy_patch.stop)
+
     def test_modern_reader_projection_excludes_all_unreviewed_canonical_prose(self):
         paper = llm_api_publication_fixture()
         for key in ('roast', 'opensource', 'scoringReason'):
@@ -8775,14 +8784,16 @@ body
             expected = publish_to_blog.tag_catalog_snapshot_bytes(
                 publish_to_blog.build_tag_catalog_snapshot(),
             )
-            written = publish_to_blog.export_tag_catalog_files(repo)
-            self.assertEqual(
-                [path.relative_to(repo).as_posix() for path in written],
-                list(publish_to_blog.tag_catalog_file_contents(repo)),
-            )
+            with mock.patch.object(publish_to_blog, 'TAG_DISPLAY_POLICY_PATH', root / 'absent-policy.json'):
+                written = publish_to_blog.export_tag_catalog_files(repo)
+            with mock.patch.object(publish_to_blog, 'TAG_DISPLAY_POLICY_PATH', root / 'absent-policy.json'):
+                self.assertEqual(
+                    [path.relative_to(repo).as_posix() for path in written],
+                    list(publish_to_blog.tag_catalog_file_contents(repo)),
+                )
             for relative in (
-                    'data/taxonomy-registry.json',
-                    'static/data/taxonomy-registry.json',
+                    'data/tag-catalog-snapshot.json',
+                    'static/data/tag-catalog-snapshot.json',
             ):
                 raw = (repo / relative).read_bytes()
                 self.assertEqual(raw, expected)
@@ -8793,7 +8804,8 @@ body
                 )
                 self.assertEqual(len(payload['concepts']), 262)  # v1.1 换表：228→262
             # 字节未变时不重写，避免把博客工作树弄脏
-            self.assertEqual(publish_to_blog.export_tag_catalog_files(repo), [])
+            with mock.patch.object(publish_to_blog, 'TAG_DISPLAY_POLICY_PATH', root / 'absent-policy.json'):
+                self.assertEqual(publish_to_blog.export_tag_catalog_files(repo), [])
 
     def test_generation_exports_tag_catalog_snapshot_into_blog_repo(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -8838,8 +8850,8 @@ body
                 with self.assertRaises(SystemExit):
                     publish_to_blog.generate_main(options)
             # journal 未建立时不允许先修改博客；版本资产随 staging 一起安装。
-            self.assertFalse((repo / 'data' / 'taxonomy-registry.json').exists())
-            self.assertFalse((repo / 'static' / 'data' / 'taxonomy-registry.json').exists())
+            self.assertFalse((repo / 'data' / 'tag-catalog-snapshot.json').exists())
+            self.assertFalse((repo / 'static' / 'data' / 'tag-catalog-snapshot.json').exists())
 
 
 if __name__ == '__main__':

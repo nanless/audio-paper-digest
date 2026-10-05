@@ -133,6 +133,8 @@ npm run tags:serve
 
 网站搜索索引使用 `tagContract`、`tagConcepts` 等标签字段，`tagCatalogSha256` 记录词表文件的 SHA。新版论文库、搜索和阅读导出继续读取旧索引，但同一条记录不能混用新旧字段。历史论文的来源证明和已核验分类仍按原版本检查。
 
+发布器与网站使用 `tag-catalog-snapshot.json`、`tag-catalog-versions.json` 和 `tag-presentation-policy.json`。显示词表和历史论文核验所用的原词表分别读取；旧版本文件保留原内容，新文件不能替代原来源证明。
+
 详见[实施与验收计划](docs/tag-system-implementation.md)和[标签设计](docs/tag-system-design.md)。
 
 ## 失败后从哪里继续
