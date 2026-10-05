@@ -1,8 +1,8 @@
 'use strict';
 
-// Deterministic daily/conference aggregate staging for the source-only direct
-// rewrite pipeline.  This module intentionally has no crosswalk, legacy
-// scheduler, old-page-body, crawler-current, network, or LLM dependency.
+// 根据直接来源重写运行生成每日、会议和会议任务汇总。
+// 本模块不使用页面对应表或旧调度器，不读取旧页面正文和抓取器当前数据，
+// 也不请求网络或模型。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -527,7 +527,7 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
     const tagValidationResult = parsed.tagValidation;
     if (tagValidationResult.registryVersion !== tagRules.registryVersion
         || tagValidationResult.registrySha256 !== tagRules.registrySha256) {
-        fail(`${item.paperId} direct canonical taxonomy differs from current registry`);
+        fail(`论文 ${item.paperId} 的分析所用标签词表版本或 SHA 与当前词表不一致。`);
     }
     const articleHeading = analysis.apiReaderArticle.match(/^#{1,6}\s+([^\n]+)$/m)?.[1]?.trim();
     const readerTitle = text(String(analysis.apiReaderPlan?.readerTitle || articleHeading || analysis.title).trim(),
@@ -562,7 +562,7 @@ function readAnalysis(entry, item, artifact, executionRoot, source) {
         resources: resources.map(resource => ({ type: resource.type,
             status: resource.status === null ? '未取得 HTTP 状态' : String(resource.status),
             availability: resource.availability, url: resource.finalUrl || resource.originalUrl })),
-        taxonomy: { selectionContract: tagRules.selectionContract,
+        tagMetadata: { selectionContract: tagRules.selectionContract,
             registryVersion: tagRules.registryVersion, registrySha256: tagRules.registrySha256 } };
 }
 function loadStagedMember({ plan, registryEntry, item, stagingRoot, executionRoot,
@@ -670,9 +670,9 @@ function renderAggregate(scope, key, members, options = {}) {
     const directionCounts = [...members.reduce((counts, item) => counts.set(item.canonical.primaryTaskLabel,
         (counts.get(item.canonical.primaryTaskLabel) || 0) + 1), new Map()).entries()]
         .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], 'zh-CN'));
-    const classificationMetadata = members[0]?.canonical.taxonomy;
-    if (!classificationMetadata || members.some(item => stableHash(item.canonical.taxonomy) !== stableHash(classificationMetadata))) {
-        fail(`${scope}:${key} aggregate taxonomy metadata is missing or mixed`);
+    const classificationMetadata = members[0]?.canonical.tagMetadata;
+    if (!classificationMetadata || members.some(item => stableHash(item.canonical.tagMetadata) !== stableHash(classificationMetadata))) {
+        fail(`汇总 ${scope}:${key} 的标签元数据缺失，或各篇论文的标签元数据不一致。`);
     }
     let output = `---\ntitle: "${display}"\ndraft: false\n`;
     output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;

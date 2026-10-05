@@ -349,10 +349,24 @@ test('aggregate projection closes task rendering and retain-unchanged coverage f
 });
 
 test('direct aggregate accepts a complete daily cohort and produces source-generation-bound markdown', async t => {
-    const f = await fixture(t); const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
+    const f = await fixture(t); const loadedInputs = inputs(f);
+    const selected = loadedInputs.members.get('arxiv:2608.00001');
+    const analysisFile = path.join(selected.entry.analysis.directory, 'analysis.json');
+    const originalAnalysisBytes = fs.readFileSync(analysisFile);
+    const member = direct.loadStagedMember({ ...loadedInputs,
+        registryEntry: selected.entry, item: selected.item });
+    assert.equal(Object.hasOwn(member.canonical, 'taxonomy'), false);
+    assert.deepEqual(member.canonical.tagMetadata, {
+        selectionContract: require('../scripts/lib/tag-rules.js').TAG_SELECTION_CONTRACT,
+        registryVersion: require('../scripts/lib/tag-rules.js').getDefaultTagRules().registryVersion,
+        registrySha256: require('../scripts/lib/tag-rules.js').getDefaultTagRules().registrySha256 });
+    assert.deepEqual(fs.readFileSync(analysisFile), originalAnalysisBytes);
+    const [aggregate] = direct.buildDirectAggregates({ inputs: loadedInputs, daily: DATE });
     assert.equal(aggregate.scope, 'daily'); assert.equal(aggregate.key, DATE);
     assert.equal(aggregate.outputPage.path, `content/posts/${DATE}.md`);
     assert.equal(aggregate.members.length, 2);
+    assert.ok(aggregate.members.every(member => !Object.hasOwn(member, 'tagMetadata')
+        && !Object.hasOwn(member, 'taxonomy')), '临时标签元数据不写入保存成员记录');
     assert.deepEqual(aggregate.members.map(item => item.paperId), ['arxiv:2608.00001', 'arxiv:2608.00002']);
     assert.equal(aggregate.source.sourceGeneration.generation, 1);
     assert.equal(aggregate.source.conferenceTaskCoverageSha256, f.projection.conferenceTaskCoverageSha256);

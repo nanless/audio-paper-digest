@@ -371,6 +371,8 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 新页面的扁平标签协议为 `paper-tag-flat-tags-v2`。新上下文文件使用 `paper-research-context-v2`、`schemaVersion=2`，标签信息保存在 `assessment.tagMetadata`。旧 `researcher-sidecars-v1`、`schemaVersion=1` 的 `assessment.taxonomy` 仍按原格式读取；搜索字段和词表资产后续分别迁移。
 新上下文的页面附属文件记录带有明确的 `contract`；旧记录缺少这一标识时，核验器按旧格式重建原字节，不根据标签协议猜上下文格式。三个引用文件不因这项改名改变格式或内容。
 
+直接来源历史汇总在内部也用 `tagMetadata` 传递分析所用的标签词表信息，汇总渲染和标签补充读取同一字段。这个临时对象不写入成员记录或补充证明，原分析文件和页面正文保持。历史标签补充的保存格式仍使用 `historical-direct-taxonomy-supplement-v1`；它与三条写入链及网站读取器的迁移另行处理。
+
 新会议汇总使用 `conference-aggregate-staging-v2`、`version=2`，标签信息和层级统计分别保存在 `tagMetadata`、`tagHierarchy`，成员的标签分配 SHA 为 `tagAssignmentSha256`。层级格式为 `conference-tag-hierarchy-v2`。Python 发布器先核对汇总记录的规范对象 SHA、完成记录和 Markdown 原字节，再按明确版本读取字段；旧 v1 汇总按原字段读取，新旧字段混用会被拒绝。汇总版本与子论文页、标签分配的版本分别管理，旧证明和已保存的阶段文件保持。
 
 页面的标签字段有六项：`contract`、`selection_contract`、`registry_version`、`registry_sha256`、`concepts` 和 `scope`。
