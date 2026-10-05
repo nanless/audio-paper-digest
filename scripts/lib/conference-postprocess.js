@@ -17,11 +17,12 @@ const tagRulesApi = require('./tag-rules.js');
 const sourceContextApi = require('./conference-source-context.js');
 
 const CONTRACT = 'conference-paper-page-staging-v1';
-const AGGREGATE_CONTRACT = 'conference-aggregate-staging-v1';
+const AGGREGATE_CONTRACT = 'conference-aggregate-staging-v2';
+const AGGREGATE_VERSION = 2;
 const ASSIGNMENT_CONTRACT = 'conference-taxonomy-assignment-v1';
 const PROJECTION_CONTRACT = 'conference-page-projection-v2';
 const PROJECTION_VERSION = 2;
-const HIERARCHY_CONTRACT = 'conference-taxonomy-hierarchy-v1';
+const HIERARCHY_CONTRACT = 'conference-tag-hierarchy-v2';
 const VERSION = 1;
 const ID_RE = /^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/;
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -889,7 +890,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         resources: structuredClone(item.manifest.resources).filter(resource => !isArxivResource(resource)),
         officialRecordUrl: item.manifest.publication.recordUrl, officialPdfUrl: item.manifest.publication.pdfUrl,
         pagePath: item.manifest.pagePath, url: item.manifest.primaryUrl,
-        taxonomyAssignmentSha256: item.manifest.taxonomy.assignmentSha256,
+        tagAssignmentSha256: item.manifest.taxonomy.assignmentSha256,
         labels: item.manifest.taxonomy.concepts.map(concept => concept.preferredLabel.zh),
         pageContentSha256: item.manifest.contentSha256, pageManifestSha256: item.manifest.manifestSha256,
         pageManifestFileSha256: item.manifestFileSha256, assignmentFileSha256: item.assignmentFileSha256 }))
@@ -973,14 +974,14 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     const aggregateImplementationSha256 = fingerprint(dependencies).implementationSha256;
     const aggregateId = stableHash({ planProofSha256: authenticated.proof.proofSha256,
         registrySha256: tagCatalog.registrySha256, selectionSetSha256, aggregateImplementationSha256 }).slice(0, 32);
-    const body = { contract: AGGREGATE_CONTRACT, version: VERSION, status: 'complete', aggregateId, conferenceId, date: aggregateDate,
+    const body = { contract: AGGREGATE_CONTRACT, version: AGGREGATE_VERSION, status: 'complete', aggregateId, conferenceId, date: aggregateDate,
         plan: authenticated.proof, readerQuality: READER_FACING_CONTRACT,
-        taxonomy: { contract: tagRulesApi.TAG_FLAT_COMPAT_CONTRACT, selectionContract: aggregateTagMetadata.selectionContract,
+        tagMetadata: { contract: tagRulesApi.TAG_FLAT_COMPAT_CONTRACT, selectionContract: aggregateTagMetadata.selectionContract,
             registryVersion: aggregateTagMetadata.registryVersion, registrySha256: tagCatalog.registrySha256,
             scope: 'aggregate-primary-task-counts' },
         primaryTaskCounts: directions.map(([label, count]) => ({ label, count })),
         // 兼容：primaryTaskCounts / 标签 头保持原样，多级统计只新增字段。
-        taxonomyHierarchy: hierarchy,
+        tagHierarchy: hierarchy,
         registrySha256: tagCatalog.registrySha256, selection, selectionSetSha256, members,
         memberSetSha256: stableHash(members), pagePath: `content/posts/conference-${conferenceId}.md`, markdown,
         markdownSha256: sha256(Buffer.from(markdown)) };
@@ -995,7 +996,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     return { status: apply ? 'staged' : 'dry-run', manifest };
 }
 
-module.exports = { CONTRACT, AGGREGATE_CONTRACT, ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, HIERARCHY_CONTRACT,
+module.exports = { CONTRACT, AGGREGATE_CONTRACT, AGGREGATE_VERSION, ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, HIERARCHY_CONTRACT,
     VERSION, stableHash, planProof,
     loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,

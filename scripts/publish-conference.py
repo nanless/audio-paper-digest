@@ -361,6 +361,53 @@ def remote_snapshot(repo):
             'remoteIdentitySha256': sha_bytes(remote_url.encode('utf-8'))}
 
 
+def _validate_aggregate_tag_format(manifest):
+    """在原汇总内容与完成记录核验后，检查版本及标签字段的保存格式。"""
+    formats = {'conference-aggregate-staging-v1': 1,
+               'conference-aggregate-staging-v2': 2}
+    version = manifest.get('version')
+    contract = manifest.get('contract')
+    if (type(version) is not int or not isinstance(contract, str)
+            or formats.get(contract) != version):
+        raise ConferencePublicationError('会议汇总的格式版本不受支持。')
+    current = version == 2
+    for old_key, new_key in (('taxonomy', 'tagMetadata'),
+                             ('taxonomyHierarchy', 'tagHierarchy')):
+        if old_key in manifest and new_key in manifest:
+            raise ConferencePublicationError('会议汇总不能混用新旧标签字段。')
+        if (old_key if current else new_key) in manifest:
+            raise ConferencePublicationError('会议汇总的标签字段与格式版本不一致。')
+        if current and new_key not in manifest:
+            raise ConferencePublicationError('新版会议汇总缺少标签记录或层级字段。')
+    if current and not isinstance(manifest['tagMetadata'], dict):
+        raise ConferencePublicationError('新版会议汇总的标签记录格式无效。')
+    hierarchy_key = 'tagHierarchy' if current else 'taxonomyHierarchy'
+    if hierarchy_key in manifest:
+        hierarchy = manifest[hierarchy_key]
+        expected = ('conference-tag-hierarchy-v2' if current
+                    else 'conference-taxonomy-hierarchy-v1')
+        if not isinstance(hierarchy, dict) or hierarchy.get('contract') != expected:
+            raise ConferencePublicationError('会议汇总的标签层级格式版本不受支持。')
+    members = manifest.get('members')
+    if current and not isinstance(members, list):
+        raise ConferencePublicationError('新版会议汇总缺少成员列表。')
+    for member in members if isinstance(members, list) else []:
+        if not isinstance(member, dict):
+            if current:
+                raise ConferencePublicationError('新版会议汇总的成员记录格式无效。')
+            continue
+        old_key, new_key = 'taxonomyAssignmentSha256', 'tagAssignmentSha256'
+        if old_key in member and new_key in member:
+            raise ConferencePublicationError('会议汇总成员不能混用新旧标签字段。')
+        if (old_key if current else new_key) in member:
+            raise ConferencePublicationError('会议汇总成员的标签字段与格式版本不一致。')
+        if current and new_key not in member:
+            raise ConferencePublicationError('新版会议汇总成员缺少标签分配哈希字段。')
+        if current and (not isinstance(member[new_key], str)
+                        or not SHA_RE.fullmatch(member[new_key])):
+            raise ConferencePublicationError('新版会议汇总成员的标签分配哈希格式无效。')
+
+
 def process_bundle(conference_id, process_id):
     safe_uuid(process_id, 'processId')
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,80}', conference_id or ''):
@@ -392,8 +439,7 @@ def process_bundle(conference_id, process_id):
     aggregate_dir = aggregate_path.parent
     aggregate_md = aggregate_dir / 'aggregate.md'
     aggregate_bytes = read_bytes(aggregate_md)
-    if aggregate_manifest.get('contract') != 'conference-aggregate-staging-v1' \
-            or aggregate_manifest.get('status') != 'complete' \
+    if aggregate_manifest.get('status') != 'complete' \
             or aggregate_manifest.get('conferenceId') != conference_id \
             or aggregate_manifest.get('aggregateId') != aggregate_proof.get('aggregateId') \
             or aggregate_manifest.get('pagePath') != aggregate_proof.get('pagePath') \
@@ -402,6 +448,7 @@ def process_bundle(conference_id, process_id):
             or aggregate_manifest.get('markdownSha256') != aggregate_proof.get('markdownSha256') \
             or manifest_sha(aggregate_manifest) != aggregate_proof.get('manifestSha256'):
         raise ConferencePublicationError('aggregate staging 与 completion proof 不一致')
+    _validate_aggregate_tag_format(aggregate_manifest)
     aggregate_target = safe_relative(aggregate_manifest['pagePath'], 'aggregate pagePath')
 
     files = []

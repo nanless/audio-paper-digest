@@ -308,7 +308,13 @@ test('aggregate replays every selected stage and emits only when the full explic
     assert.equal(result.manifest.members.length, 2); assert.equal(result.manifest.members[0].paperId, f.runs.get(f.one).run.paperId);
     assert.equal(result.manifest.date, '2026-09-07');
     assert.equal(result.manifest.readerQuality, 'reader-facing-v3');
-    assert.equal(result.manifest.taxonomy.scope, 'aggregate-primary-task-counts');
+    assert.equal(result.manifest.contract, 'conference-aggregate-staging-v2');
+    assert.equal(result.manifest.version, 2);
+    assert.equal(api.AGGREGATE_VERSION, 2);
+    assert.equal(api.VERSION, 1);
+    assert.equal(Object.hasOwn(result.manifest, 'taxonomy'), false);
+    assert.equal(Object.hasOwn(result.manifest, 'taxonomyHierarchy'), false);
+    assert.equal(result.manifest.tagMetadata.scope, 'aggregate-primary-task-counts');
     assert.deepEqual(result.manifest.primaryTaskCounts, [{ label: '语音识别', count: 2 }]);
     // 汇总页必须携带支撑“热门方向只统计主任务”的 concept 数据，
     // 结构与单篇页一致（{facet,id,label}），scope 语义保持不变。
@@ -364,7 +370,7 @@ test('会议新汇总固定使用 v2，保留旧成员原始分配及页面证�
     const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two],
         tagCatalogPath: TAG_CATALOG_PATH, ...retained, aggregateRoot: path.join(f.root, 'aggregate'),
         planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
-    assert.equal(result.manifest.taxonomy.contract, 'paper-tag-flat-tags-v2');
+    assert.equal(result.manifest.tagMetadata.contract, 'paper-tag-flat-tags-v2');
     assert.match(result.manifest.markdown, /paper_digest_tags_contract: "paper-tag-flat-tags-v2"/);
     for (const member of result.manifest.members) {
         const proof = Object.values(retained.preservedStages).find(item => item.paperId === member.paperId).pageProof;
@@ -372,7 +378,10 @@ test('会议新汇总固定使用 v2，保留旧成员原始分配及页面证�
         assert.equal(member.pageContentSha256, proof.contentSha256);
         const assignment = [...retained.originals].filter(([file]) => path.basename(file) === 'assignment.json')
             .map(([, bytes]) => JSON.parse(bytes)).find(item => item.paperId === member.paperId);
-        assert.equal(member.taxonomyAssignmentSha256, assignment.assignmentSha256);
+        assert.equal(member.tagAssignmentSha256, assignment.assignmentSha256);
+        assert.equal(Object.hasOwn(member, 'taxonomyAssignmentSha256'), false);
+        assert.equal(assignment.contract, 'conference-taxonomy-assignment-v1');
+        assert.equal(assignment.version, 1);
     }
     for (const [file, bytes] of retained.originals) assert.deepEqual(fs.readFileSync(file), bytes);
     const invalid = fixture(t), unknown = stageMembers(invalid, 'paper-tag-flat-tags-unknown');
@@ -473,8 +482,9 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
     const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
     const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
-    const hierarchy = result.manifest.taxonomyHierarchy;
+    const hierarchy = result.manifest.tagHierarchy;
     assert.equal(hierarchy.contract, api.HIERARCHY_CONTRACT);
+    assert.equal(hierarchy.contract, 'conference-tag-hierarchy-v2');
     assert.equal(hierarchy.registrySha256, registry.registrySha256);
     assert.equal(hierarchy.memberCount, 4);
     const task = hierarchy.facets.find(item => item.id === 'task');
@@ -489,9 +499,9 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
     // 兼容：既有字段一个都不动。
     assert.deepEqual(Object.fromEntries(result.manifest.primaryTaskCounts.map(item => [item.label, item.count])),
         { 语音识别: 2, 音视频语音识别: 1, 唇读: 1 });
-    assert.equal(result.manifest.taxonomy.contract, 'paper-tag-flat-tags-v2');
-    assert.equal(result.manifest.taxonomy.registrySha256, registry.registrySha256);
-    assert.equal(result.manifest.taxonomy.scope, 'aggregate-primary-task-counts');
+    assert.equal(result.manifest.tagMetadata.contract, 'paper-tag-flat-tags-v2');
+    assert.equal(result.manifest.tagMetadata.registrySha256, registry.registrySha256);
+    assert.equal(result.manifest.tagMetadata.scope, 'aggregate-primary-task-counts');
     assert.equal(result.manifest.registrySha256, registry.registrySha256);
     // 排版：热门方向表之后、评分排行榜之前，分面分节 + 缩进层级 + 可点开链接。
     const markdown = result.manifest.markdown;
@@ -517,7 +527,9 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
     assert.equal(fs.readFileSync(path.join(directory, 'aggregate.md'), 'utf8'), markdown);
     const written = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'));
     assert.equal(written.manifestSha256, result.manifest.manifestSha256);
-    assert.deepEqual(written.taxonomyHierarchy, hierarchy);
+    assert.deepEqual(written.tagHierarchy, hierarchy);
+    assert.equal(Object.hasOwn(written, 'taxonomy'), false);
+    assert.equal(Object.hasOwn(written, 'taxonomyHierarchy'), false);
 });
 
 test('Reader/scoring/taxonomy/publication compatibility gates cannot be bypassed by success stubs', t => {

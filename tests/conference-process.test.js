@@ -1115,6 +1115,74 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
         path.join(__dirname, '..', 'scripts'), f.files.conferenceProcessDir, f.files.conferencePageStagingDir,
         f.files.conferenceAggregateDir, promoted.processId], { encoding: 'utf8' });
     assert.deepEqual(JSON.parse(publisherRead), { files: 4, status: 'complete' });
+    // 原 v1 文件保持；以下均为独立合成资料，用真实发布读取门核格式及原 SHA 顺序。
+    // 当前 writer 的实际 v2 输出由 conference-postprocess 测试另行覆盖。
+    const aggregateDirectory = path.join(f.files.conferenceAggregateDir, 'odyssey-2026', promotedState.aggregate.aggregateId);
+    const originalAggregateBytes = fs.readFileSync(path.join(aggregateDirectory, 'manifest.json'));
+    const originalReceiptBytes = fs.readFileSync(path.join(path.dirname(promotedStateFile), 'completion-receipt.json'));
+    const legacyAggregate = JSON.parse(originalAggregateBytes);
+    const { manifestSha256: _legacySha, ...legacyBody } = legacyAggregate;
+    const currentBody = { ...legacyBody, contract: 'conference-aggregate-staging-v2', version: 2,
+        tagMetadata: { contract: 'paper-tag-flat-tags-v2' },
+        tagHierarchy: { contract: 'conference-tag-hierarchy-v2' },
+        members: f.members.map(item => ({ paperId: item.paperId, tagAssignmentSha256: H(item.paperId) })) };
+    const variants = [
+        ['current', null],
+        ['wrong-version', x => { x.version = 1; }],
+        ['unknown-format', x => { x.contract = 'conference-aggregate-staging-v3'; }],
+        ['missing-metadata', x => { delete x.tagMetadata; }],
+        ['missing-hierarchy', x => { delete x.tagHierarchy; }],
+        ['null-metadata', x => { x.tagMetadata = null; }],
+        ['null-member-sha', x => { x.members[0].tagAssignmentSha256 = null; }],
+        ['wrong-hierarchy', x => { x.tagHierarchy.contract = 'conference-taxonomy-hierarchy-v1'; }],
+        ['mixed-metadata-same', x => { x.taxonomy = x.tagMetadata; }],
+        ['mixed-metadata-null', x => { x.taxonomy = null; x.tagMetadata = null; }],
+        ['mixed-hierarchy-same', x => { x.taxonomyHierarchy = x.tagHierarchy; }],
+        ['mixed-hierarchy-null', x => { x.taxonomyHierarchy = null; x.tagHierarchy = null; }],
+        ['mixed-member-same', x => { x.members[0].taxonomyAssignmentSha256 = x.members[0].tagAssignmentSha256; }],
+        ['mixed-member-null', x => { x.members[0].taxonomyAssignmentSha256 = null; x.members[0].tagAssignmentSha256 = null; }],
+        ['wrong-root-family', x => { x.taxonomy = x.tagMetadata; delete x.tagMetadata; }],
+        ['wrong-member-family', x => { x.members[0].taxonomyAssignmentSha256 = x.members[0].tagAssignmentSha256; delete x.members[0].tagAssignmentSha256; }],
+        ['legacy-wrong-family', x => { x.contract = 'conference-aggregate-staging-v1'; x.version = 1; }],
+        ['bad-sha-before-mixed', x => { x.taxonomy = x.tagMetadata; }]
+    ];
+    const formatRoot = path.join(f.root, 'aggregate-format-fixtures');
+    for (const [name, change] of variants) {
+        const body = structuredClone(currentBody); change?.(body);
+        const manifest = { ...body, manifestSha256: H(name === 'bad-sha-before-mixed' ? currentBody : body) };
+        const state = structuredClone(promotedState);
+        state.aggregate = { ...state.aggregate, manifestSha256: manifest.manifestSha256 };
+        const completionBody = processApi.completionBodyFor(state, receipt.planReceiptSha256, state.aggregate);
+        const completion = { ...completionBody, receiptSha256: H(completionBody) };
+        state.completionReceiptSha256 = completion.receiptSha256;
+        state.stateSha256 = processApi.stateDigest(state);
+        processApi.validateCompletionReceipt(processApi.assertState(state), completion);
+        const processDirectory = path.join(formatRoot, name, 'processes', promoted.processId);
+        const aggregate = path.join(formatRoot, name, 'aggregates', 'odyssey-2026', manifest.aggregateId);
+        fs.mkdirSync(processDirectory, { recursive: true }); fs.mkdirSync(aggregate, { recursive: true });
+        fs.writeFileSync(path.join(processDirectory, 'state.json'), JSON.stringify(state));
+        fs.writeFileSync(path.join(processDirectory, 'completion-receipt.json'), JSON.stringify(completion));
+        fs.writeFileSync(path.join(aggregate, 'manifest.json'), JSON.stringify(manifest));
+        fs.writeFileSync(path.join(aggregate, 'aggregate.md'), legacyBody.markdown);
+    }
+    const formatCode = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_formats',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\np.PAGE_ROOT=Path(sys.argv[2]);root=Path(sys.argv[3]);results={}\nfor folder in sorted(root.iterdir()):\n p.PROCESS_ROOT=folder/'processes';p.AGGREGATE_ROOT=folder/'aggregates'\n try:\n  b=p.process_bundle('odyssey-2026',sys.argv[4]);results[folder.name]={'files':len(b['files']),'status':b['state']['status']}\n except p.ConferencePublicationError as error:\n  results[folder.name]={'error':str(error)}\nprint(json.dumps(results))`;
+    const formats = JSON.parse(childProcess.execFileSync('bash', [path.join(__dirname, '..', 'scripts', 'python-runtime.sh'),
+        '-c', formatCode, path.join(__dirname, '..', 'scripts'), f.files.conferencePageStagingDir,
+        formatRoot, promoted.processId], { encoding: 'utf8' }));
+    assert.deepEqual(formats.current, { files: 4, status: 'complete' });
+    assert.match(formats['bad-sha-before-mixed'].error, /aggregate staging 与 completion proof 不一致/);
+    const specificErrors = {
+        'missing-metadata': /新版会议汇总缺少标签记录或层级字段。/,
+        'missing-hierarchy': /新版会议汇总缺少标签记录或层级字段。/,
+        'null-metadata': /新版会议汇总的标签记录格式无效。/,
+        'null-member-sha': /新版会议汇总成员的标签分配哈希格式无效。/
+    };
+    for (const [name] of variants.slice(1, -1)) {
+        assert.match(formats[name].error, specificErrors[name] || /不能混用|格式版本不受支持|格式版本不一致/);
+    }
+    assert.deepEqual(fs.readFileSync(path.join(aggregateDirectory, 'manifest.json')), originalAggregateBytes);
+    assert.deepEqual(fs.readFileSync(path.join(path.dirname(promotedStateFile), 'completion-receipt.json')), originalReceiptBytes);
+    assert.deepEqual(fs.readFileSync(originalFile), originalBytes);
     const authArgs = ['--catalog', 'catalog.json', '--report', 'report.json', '--filter', f.authority.filterId,
         '--from', original.processId];
     assert.equal(cli.parseArgs(['--source-upgrade-plan', ...authArgs]).sourceUpgrade, 'plan');
