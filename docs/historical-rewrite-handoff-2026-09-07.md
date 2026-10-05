@@ -2,9 +2,9 @@
 
 本文保留 2026-09-07 的归档现场，用于定位旧运行文件、解释当时结果和未完成事项。下文的数字、提交、词表 SHA、任务 ID、配置和命令均属于旧记录，本次文字整理没有重新读取私有运行数据、下载目录或账号配置。所有历史命令块均不得执行；旧试点和逐级扩大条件不再是当前直接重写的门槛。
 
-当前任务按 [历史重写流程](history-rewrite.md) 操作：先将本地会议元数据/PDF 与冻结页面已有的单一 arXiv 链接合并，建立输入、页面对应关系和直接重写计划，不再需要 `--arxiv-manifest`。`direct-scheduler` 获取并封存来源，`direct-run` 只读同一计划和来源获取序号（plan/generation）下已标为 `ready` 的来源，随后 `direct-aggregate` 从完成结果生成汇总。arXiv 每次获取后封存文本、PDF、运行记录和来源清单（TXT/PDF/runtime/manifest），会议则重放本地元数据和 PDF SHA。会议输入缺失或损坏须停止该论文。
+当前任务按 [历史重写流程](history-rewrite.md) 操作：先将本地会议元数据和 PDF 与冻结页面已有的单一 arXiv 链接合并，建立输入、页面对应关系和直接重写计划，不再需要 `--arxiv-manifest`。`direct-scheduler` 获取并封存来源；`direct-run` 只读取同一计划、同一来源获取序号（`plan/generation`）下标为 `ready` 的来源；随后 `direct-aggregate` 从完成结果生成汇总。每次 arXiv 获取结束后，程序封存文本、PDF、运行记录和来源清单；会议来源则重新核对本地元数据和 PDF 的 SHA。会议输入缺失或损坏时，须停止处理对应论文。
 
-只有新 arXiv 来源获取失败后写出的命名、不可变交接文件才能进入 crosswalk 备用流程。旧 crosswalk 也保留显式旧状态维护写入，普通直接重写不依赖它。当前 `history:arxiv-batch` 只处理指定名称的交接文件（named handoffs），不接受旧 `--limit pilot`；旧 `history:analyze-batch` 和 `history:postprocess` 仍接受 `pilot|N`，而当前 direct 的 `--limit` 只接受整数，不接受 pilot，不能将这些参数一概称为已删除。
+只有新 arXiv 来源获取失败后生成的、具有明确文件名且不可变的交接文件，才能进入 crosswalk 备用流程。旧 crosswalk 仍保留显式维护旧状态的写入入口，普通直接重写不依赖它。当前 `history:arxiv-batch` 只处理指定名称的交接文件，不接受旧 `--limit pilot`；旧 `history:analyze-batch` 和 `history:postprocess` 仍接受 `pilot|N`，而当前直接重写的 `--limit` 只接受整数，不接受 pilot，不能将这些参数一概称为已删除。
 
 当前已有 [历史直接发布流程](history-direct-publication.md)，不同于下面尚未接通发布的旧 `history:publication` 私有流程。新会议见 [会议工作流](conference-workflow.md)。这些入口的存在不表示全部历史现场已处理完成；远端提交 OID 也不表示网页已上线，现行完成要求还包括对应部署和正式网页的 HTTP 200、地址、标题核验。
 
@@ -14,7 +14,7 @@
 
 当时全仓验证通过：Node `1504/1504`、Python `467/467`、Manual Python `24/24`，以及 JavaScript/Python/shell 语法和实际 `validate:data --allow-empty`。历史清单冻结了 4490 个已发布页面，其中 4185 个为论文页。这些旧数量不限制现在可核验的本地来源进入直接重写。
 
-当时旧 `history:publication` 只有安全 plan 和私有文件组的生成（bundle generate），全历史专属审查、实际博客激活、commit/push 凭证尚未实现。因此，暂存完成不能作为批量覆盖博客的理由。后来建立的会议本地来源目录入口 `history:conference-local-sources` 可核验 metadata/PDF SHA，与冻结页面对应关系一起用于直接重写，不必先进入旧会议执行流程或 crosswalk；这项当前入口说明不倒写为归档当天已经完成。
+当时旧 `history:publication` 只能核验发布计划并生成私有文件组，全历史专属审查、将文件安装到博客，以及提交和推送凭证尚未实现。因此，暂存完成不能作为批量覆盖博客的理由。后来建立的会议本地来源目录入口 `history:conference-local-sources` 可核验元数据和 PDF 的 SHA，再结合冻结页面的对应关系用于直接重写，不必先进入旧会议执行流程或 crosswalk；不能把这项后来建立的能力写成归档当天已经完成。
 
 ## 2. 归档时到底完成了什么
 
@@ -55,23 +55,23 @@ Node 和 Python 解析器当时都从同一份原始词表派生允许标签。�
 structureRepair -> taxonomySeal -> coreSummaryRepair -> scoringAudit
 ```
 
-标签首次合法时，`taxonomySeal=not_needed`，不调模型；非法时最多修复 2 次，每次 2500-token，返回 JSON concept ID。只允许替换完整 `## 标签` 节以及机器摘要的 `primary_task_tag`、`primary_method_tag` 两行。
+标签首次检查合法时，阶段状态为 `taxonomySeal=not_needed`，不调用模型；标签非法时，最多局部修复 2 次，每次使用 2500 token 的输出预算，模型以 JSON 返回概念 ID。修复只允许替换完整 `## 标签` 节，以及机器摘要中的 `primary_task_tag`、`primary_method_tag` 两行。
 
-`not_needed` 仍保存分类断点（taxonomy checkpoint）并逐字重放；`complete` 则同时保存结构与分类（structure/taxonomy）两份断点。Node 成功判断、`validate:data` 与 Python 发布预检独立重算词表、标签对应关系、选择协议、输入输出 SHA、受保护正文、实际标签文字（taxonomy surface）和概念 ID（concept IDs），以及 taxonomy→摘要→评分的下游 SHA 链。
+`not_needed` 仍保存标签检查点，并按原正文逐字复核；`complete` 则同时保存结构修复和标签检查两份检查点。Node 的完成判断、`validate:data` 和 Python 发布预检分别重新核对词表、标签对应关系、选择协议、输入输出 SHA、受保护正文、实际标签文字和概念 ID，以及标签阶段、摘要和评分之间的下游 SHA 对应关系。
 
 分类正确时没有增量模型调用；分类错误时仅重标，不为 3–5 个标签重写整篇。
 
 ### 2.4 Manual 流程不再猜主方法
 
-Manual V6 的初稿输入（author base）、生产输入包（production packet）、任务运行器（task runner）、修订绑定器（revision binder）、元数据修正（metadata correction）、记录封装（records envelope）和最终规格（spec）当时都已使用显式 `primaryMethodTag`。metadata correction 中的 `type/task/primaryMethodTag/tags` 须同批绑定，并通过分类校验；只改角色字段而不改完整标签集合会被拒绝。
+当时 Manual V6 的初稿输入、生产输入包、任务运行器、修订绑定器、元数据修正、记录封装和最终规格，都已使用显式 `primaryMethodTag`。元数据修正中的 `type/task/primaryMethodTag/tags` 须作为同一组核验，并通过标签检查；只改角色字段而不改完整标签集合会被拒绝。
 
 旧三字段修正文件（correction artifact）因而失效，须按新四字段协议重新准备。这是当时有意设定的兼容边界，不能加旁路让旧文件通过。
 
 ### 2.5 历史后处理的漂移与并发保护
 
-分类文件名同时绑定词表 SHA（registry SHA）和分类记录 SHA（assignment SHA）。旧的仅绑定词表文件（registry-only）只有逐字段等于重新计算结果时才可读取。暂存页面还绑定六项 SHA：分析文件、完整分析记录、分析正文、分类记录、调度条目和渲染器实现（analysis 文件、analysis record、analysis 正文、assignment、scheduler item、renderer implementation）。
+标签分配文件名同时包含词表 SHA 和分配记录 SHA。旧文件名只包含词表 SHA 的记录，只有逐字段等于重新计算结果时才可读取。暂存页面还绑定六项 SHA：分析文件、完整分析记录、分析正文、标签分配记录、调度条目和渲染器实现。
 
-暂存前后重新读取分类和分析记录，避免使用分类 A 却生成分析 B 的页面。同一论文跨日期出现时，升级分析会使相关日期汇总都失效，等待从全部成员重建。旧历史后处理 checkpoint 按来源对应表、词表和渲染器 SHA（crosswalk/registry/renderer）隔离，可留作审计，不能代表新的结果。
+暂存前后都重新读取标签分配和分析记录，避免使用一份标签分配却生成另一份分析的页面。同一论文跨日期出现时，更新分析会使相关日期的汇总失效，须从全部成员重新生成。旧历史后处理检查点按页面来源对应表、词表和渲染器的 SHA 分开保存，可以留作审计，但不能代表新的结果。
 
 <a id="26-会议测试接入-current-taxonomy"></a>
 ### 2.6 会议测试接入当时的分类校验
@@ -93,7 +93,7 @@ Manual V6 的初稿输入（author base）、生产输入包（production packet
 
 原目录 `/Users/francis7999/code/github_repos/audio-paper-digest` 负责新论文筛选、日更、审查和推送。长时间历史生产命令只在 `audio-paper-digest-rewrite-all` 执行；开始前用 `pwd` 核对目录和工作区角色，目录不符即停止。本文的命令块仍是不可执行的归档记录。
 
-两目录各保留 .git、.env 和 data/runtime，不能拼接 runtime JSON，也不能同时操作博客或推送同一代码远端。历史目录可保留私有 checkpoint；真正发布前，须停止日更发布，确认历史代码无未保存的跟踪文件改动，同步代码 origin/main 和博客 main，并重新生成绑定最新 Git/Hugo/OID 的发布计划和凭证，最终只允许一个工作区 commit/push。
+两个目录各自保留 `.git`、`.env` 和 `data/runtime`，不能拼接运行数据 JSON，也不能同时操作博客或推送同一代码远端。历史目录可以保留私有检查点；真正发布前，须停止日更发布，确认历史代码没有未保存的跟踪文件改动，同步代码 `origin/main` 和博客 `main`，重新生成与最新 Git、Hugo 和远端 OID 对应的发布计划及凭证。最终只允许一个工作区提交和推送。
 
 当时建议重跑全量生成和审查（producer/review）；现行审查可按页面路径和内容 SHA 复用已通过结果，但仍须重新完成当前批次检查并生成新凭证，详见开头的发布流程。
 
@@ -175,11 +175,11 @@ recoveryKind=full
 | `prepare_failed` | 9 |
 | 尚未 prepare | 10 |
 
-9 个 prepare_failed 当时都报“analysis run missing; checkpoint completion was not trusted”，须由调度器重新准备（prepare），不能手改为 complete。按当时 Prompt 和 taxonomy 重放后，可选择 123 个身份：12 个 analysis_partial、92 个 sources_ready、19 个 pending/prepare-recovery。new-full 队列为 111，reader-recovery 为 8；上面另列的 5 个 run 仍显示 analyzing，并持有绑定其他主机名（hostname）的锁。
+9 个 `prepare_failed` 当时都报“analysis run missing; checkpoint completion was not trusted”，须由调度器重新准备，不能手工改为 `complete`。按当时的模型提示和词表重新核验后，可选择 123 个论文身份：12 个 `analysis_partial`、92 个 `sources_ready`、19 个 `pending/prepare-recovery`。`new-full` 队列为 111，`reader-recovery` 为 8；上面另列的 5 个运行仍显示 `analyzing`，并持有属于其他主机的锁。
 
-本机 PID 消失不表示可以删锁，公共锁实现还须核验 lease、hostname、PID、inode 和 owner SHA。当时建议先预览再重跑同一调度器，不删除运行或 checkpoint。
+本机 PID 已不存在，不表示可以删除锁。公共锁实现还须核验租约、主机名、进程编号、文件索引节点和锁所有者记录的 SHA。当时建议先预览，再重跑同一调度器，不删除运行记录或检查点。
 
-所列试点预览当时选择 `arxiv:2403.14817`，运行 ID 为 `66759276-f030-4e3c-886e-6f5ca858b278`，日期为 `2026-08-06`，状态为 `analysis_partial`，恢复类型为 `recoveryKind=full`。这个旧试点后来已撤销。旧的仅摘要分析成功记录不能视为完整分析；Registry/Prompt 变化后，从 source-only 证据生成符合当时规则的正式结果。Reader 能否复用由独立来源身份检查决定，不能人工强制。
+所列试点预览当时选择 `arxiv:2403.14817`，运行 ID 为 `66759276-f030-4e3c-886e-6f5ca858b278`，日期为 `2026-08-06`，状态为 `analysis_partial`，恢复类型为 `recoveryKind=full`。这个旧试点后来已撤销。旧的仅摘要分析成功记录不能视为完整分析；词表或模型提示变化后，须只从原始来源证据生成符合当时规则的正式结果。读者文章能否复用，由独立的来源身份检查决定，不能人工强制。
 
 <a id="33-historical-postprocess"></a>
 ### 3.3 历史后处理
@@ -195,7 +195,7 @@ npm run history:postprocess -- --dry-run \
   --crosswalk 7e7c3bd4-630d-4f6b-9cf1-0a7f64d11328 --concurrency 3
 ```
 
-调度器有 2 个旧 complete，但在该词表下都为 unsealed，completeAvailable=0，没有可选条目（selected item）。后处理 checkpoint 仍使用旧 registry SHA `3f9a14...`，仅作审计，不能用于新页面。命令中的并发 3 也是旧现场记录。
+调度器中有 2 个旧 `complete`，但在该词表下均未通过核验（`unsealed`），`completeAvailable=0`，没有可选条目。后处理检查点仍使用旧词表 SHA `3f9a14...`，仅作审计，不能用于新页面。命令中的并发 3 也是旧现场记录。
 
 ### 3.4 ICASSP 2026
 
@@ -263,7 +263,7 @@ npm run history:postprocess -- --dry-run \
   --crosswalk 7e7c3bd4-630d-4f6b-9cf1-0a7f64d11328 --concurrency 3
 ```
 
-旧恢复原则是重跑同一命令，由断点决定位置，不删运行记录或断点（run/checkpoint）。试点的人工或 Agent 审查要求如下：摘要 6–9 句、按中文字符计 320–600，覆盖问题、方法、关键数字、边界和成本；输入不含旧博客或旧 Reader 正文；主任务和方法属于正确分面，3–5 标签不重复祖先；taxonomySeal 可由 Node/Python 重放；分项及总分吻合。若复用 Reader，source-only identity、article、plan、figure 和 source-binding SHA 不得漂移，不能将证据缺失写成技术错误。
+旧恢复原则是重跑同一命令，由检查点决定继续位置，不删除运行记录或检查点。试点的人工或 Agent 审查要求如下：摘要 6–9 句、按中文字符计 320–600，覆盖问题、方法、关键数字、边界和成本；输入不含旧博客或旧读者文章正文；主任务和方法属于正确分类维度，3–5 标签不重复祖先；旧 `taxonomySeal` 阶段可由 Node 和 Python 重新核验；分项及总分吻合。若复用读者文章，来源身份、文章、计划、图片和来源绑定的 SHA 须与原记录一致，不能将证据缺失写成技术错误。
 
 ```bash
 npm run history:postprocess -- --apply \
@@ -328,9 +328,9 @@ conference:discover
   -> conference postprocess/aggregate
 ```
 
-那份草案要求每步先 dry-run 再 apply。当时 `conference:analyze` 已复用深度分析与 Reader，`conference:postprocess paper|aggregate` 能重放完成凭证（completion）、分类和完整入选成员，但仍有四个缺口：
+那份草案要求每步先用 dry-run 预览，再用 apply 执行。当时 `conference:analyze` 已复用深度分析与读者文章生成，`conference:postprocess paper|aggregate` 能重新核验完成凭证（`completion`）、标签分配和完整入选成员，但仍有四个缺口：
 
-- 提取结果需要人工准备并复核；当时 weak PDF 未证明的表格、TeX 公式和图片保持 `unavailable`。
+- 提取结果需要人工准备并复核；当时证据较弱的 PDF 中，未获来源证明的表格、TeX 公式和图片仍标为 `unavailable`。
 - 后处理生成通用路径，尚未绑定清单中的旧路径和 URL。
 - 尚未覆盖 ICASSP 898、ICLR 267、ICML 137 个旧论文页、3 个会议汇总及 193 个任务页。
 - 会议汇总尚未接入旧历史发布入口，会议历史审查、推送和远端 OID 核验尚未接通。
@@ -355,9 +355,9 @@ npm run history:publication -- generate --apply \
   --plan-id UUID --batch-id daily-YYYY-MM-DD
 ```
 
-它们只生成受保护的私有发布文件，不写博客。草案要求另行实现并验证六项能力：全量审查 manifest/receipt、逐页最终 SHA 与 Hugo 检查、精确 Git delta 和旧 URL/alias 保留、activation/commit/push 事务、推送后 main OID 核验，以及单篇/每日/会议汇总的统一最终 status。
+它们只生成受保护的私有发布文件，不写博客。草案要求另行实现并验证六项能力：审查全部生成清单和凭证、核验逐页最终 SHA 并运行 Hugo 检查、限定精确 Git 差异并保留旧 URL 和别名、执行可恢复的激活与提交推送事务、核验推送后的 `main` OID，以及统一报告单篇、每日汇总和会议汇总的最终状态。
 
-不能把日更 blog:generate/blog:review/blog:push 强套到数千页历史发布文件组（bundle），除非先证明能绑定全部依赖和精确允许的差异和跨批次恢复。开头列出的当前直接发布已另建入口；保留这段旧缺口，不表示今天仍没有历史发布功能。
+不能直接用日更 blog:generate/blog:review/blog:push 处理数千页历史发布文件组，除非先证明它能核对全部依赖、限定精确允许的差异，并支持跨批次恢复。开头列出的当前直接发布已另建入口；保留这段旧缺口，不表示今天仍没有历史发布功能。
 
 ## 6. 当时拟定的完成定义（已废止）
 
