@@ -135,6 +135,8 @@ npm run tags:serve
 
 发布器与网站使用 `tag-catalog-snapshot.json`、`tag-catalog-versions.json` 和 `tag-presentation-policy.json`。显示词表和历史论文核验所用的原词表分别读取；旧版本文件保留原内容，新文件不能替代原来源证明。
 
+网站标签逻辑集中在 `tag-core.js`，目录交互使用 `tag-browser.js`，浏览器接口为 `ResearchTags`。模板和页面样式也按标签用途命名；标准 Hugo API 和历史证明中的原名称仍按其原定义读取。
+
 详见[实施与验收计划](docs/tag-system-implementation.md)和[标签设计](docs/tag-system-design.md)。
 
 ## 失败后从哪里继续
