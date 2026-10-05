@@ -28,9 +28,9 @@ function buildTagPromptText(tagCatalog, promptTextContract = TAG_PROMPT_TEXT_CON
         && promptTextContract !== LEGACY_TAG_PROMPT_TEXT_CONTRACT) {
         throw new Error('标签提示版本必须为 paper-tag-prompt-text-v2 或 paper-taxonomy-prompt-projection-v1。');
     }
-    const facets = new Map(tagCatalog.facets.map((facet, index) => [facet.id, { ...facet, index }]));
-    const active = tagCatalog.concepts.filter(concept => concept.status === 'active')
-        .sort((a, b) => facets.get(a.facet).index - facets.get(b.facet).index
+    const facetsById = new Map(tagCatalog.facets.map((facet, index) => [facet.id, { ...facet, index }]));
+    const activeConcepts = tagCatalog.concepts.filter(concept => concept.status === 'active')
+        .sort((a, b) => facetsById.get(a.facet).index - facetsById.get(b.facet).index
             || a.id.localeCompare(b.id));
     const lines = [
         `contract=${promptTextContract}`,
@@ -40,11 +40,11 @@ function buildTagPromptText(tagCatalog, promptTextContract = TAG_PROMPT_TEXT_CON
             ? '只允许输出下列 active 概念的中文首选标签；ID 用于消歧，不得自造标签或输出同义词。'
             : '只能选择以下已启用概念的中文首选标签。ID 用于区分概念；不要创建新标签，也不要改用同义词。'
     ];
-    let currentFacet = null;
-    for (const concept of active) {
-        if (concept.facet !== currentFacet) {
-            currentFacet = concept.facet;
-            lines.push(`[${currentFacet}]`);
+    let currentFacetId = null;
+    for (const concept of activeConcepts) {
+        if (concept.facet !== currentFacetId) {
+            currentFacetId = concept.facet;
+            lines.push(`[${currentFacetId}]`);
         }
         lines.push([
             concept.id,
@@ -69,19 +69,19 @@ function createTagRules(options = {}) {
         throw new Error('标签规则需要提供格式有效的词表文件 SHA。');
     }
 
-    const active = tagCatalog.concepts.filter(concept => concept.status === 'active');
+    const activeConcepts = tagCatalog.concepts.filter(concept => concept.status === 'active');
     const byPreferredTag = new Map();
-    for (const concept of active) {
+    for (const concept of activeConcepts) {
         const tag = preferredTag(concept);
         if (byPreferredTag.has(tag)) {
             throw new Error(`已启用概念的中文首选标签在词表中重复：${tag}`);
         }
         byPreferredTag.set(tag, concept);
     }
-    const projection = buildTagPromptText(tagCatalog);
+    const tagPromptText = buildTagPromptText(tagCatalog);
     const allowedTags = new Set(byPreferredTag.keys());
-    const taskTags = new Set(active.filter(concept => concept.facet === 'task').map(preferredTag));
-    const methodTags = new Set(active.filter(concept => concept.facet === 'method').map(preferredTag));
+    const taskTags = new Set(activeConcepts.filter(concept => concept.facet === 'task').map(preferredTag));
+    const methodTags = new Set(activeConcepts.filter(concept => concept.facet === 'method').map(preferredTag));
 
     function resolveCurrentTag(value, facet) {
         if (typeof value !== 'string') return null;
@@ -93,14 +93,14 @@ function createTagRules(options = {}) {
 
     function resolveLegacyTag(value, facet) {
         if (facet === 'method' && String(value || '').trim().replace(/^#/, '') === '端到端') {
-            const historicalMethod = active.find(
+            const historicalMethod = activeConcepts.find(
                 concept => concept.id === 'method.end-to-end-learning'
             );
             return historicalMethod ? structuredClone(historicalMethod) : null;
         }
-        const candidates = tagCatalogApi.resolveLabelCandidates(tagCatalog, value, facet)
+        const matchingConcepts = tagCatalogApi.resolveLabelCandidates(tagCatalog, value, facet)
             .filter(concept => concept.status === 'active');
-        return candidates.length === 1 ? candidates[0] : null;
+        return matchingConcepts.length === 1 ? matchingConcepts[0] : null;
     }
 
     // 在整个词表中查找主任务的已启用下级概念，并按词表原始顺序返回，
@@ -134,19 +134,19 @@ function createTagRules(options = {}) {
         rawTags.forEach((tag, index) => {
             if (!concepts[index]) errors.push(`标签不是词表中已启用概念的中文首选名称：${String(tag)}`);
         });
-        const ids = concepts.filter(Boolean).map(concept => concept.id);
-        if (new Set(ids).size !== ids.length) errors.push('标签列表包含重复概念。');
+        const selectedConceptIds = concepts.filter(Boolean).map(concept => concept.id);
+        if (new Set(selectedConceptIds).size !== selectedConceptIds.length) errors.push('标签列表包含重复概念。');
 
-        const task = resolveCurrentTag(selection.primaryTaskTag, 'task');
-        const method = resolveCurrentTag(selection.primaryMethodTag, 'method');
-        if (!task) errors.push('主任务标签必须使用词表中已启用任务概念的中文首选名称。');
-        if (!method) errors.push('主方法标签必须使用词表中已启用方法概念的中文首选名称。');
-        if (task && !ids.includes(task.id)) errors.push('主任务标签必须出现在完整标签列表中。');
-        if (method && !ids.includes(method.id)) errors.push('主方法标签必须出现在完整标签列表中。');
-        if (task && ids.some(id => tagCatalogApi.ancestors(tagCatalog, id).includes(task.id))) {
+        const primaryTaskConcept = resolveCurrentTag(selection.primaryTaskTag, 'task');
+        const primaryMethodConcept = resolveCurrentTag(selection.primaryMethodTag, 'method');
+        if (!primaryTaskConcept) errors.push('主任务标签必须使用词表中已启用任务概念的中文首选名称。');
+        if (!primaryMethodConcept) errors.push('主方法标签必须使用词表中已启用方法概念的中文首选名称。');
+        if (primaryTaskConcept && !selectedConceptIds.includes(primaryTaskConcept.id)) errors.push('主任务标签必须出现在完整标签列表中。');
+        if (primaryMethodConcept && !selectedConceptIds.includes(primaryMethodConcept.id)) errors.push('主方法标签必须出现在完整标签列表中。');
+        if (primaryTaskConcept && selectedConceptIds.some(id => tagCatalogApi.ancestors(tagCatalog, id).includes(primaryTaskConcept.id))) {
             errors.push('主任务标签必须是所选任务中最具体的概念。');
         }
-        if (ids.length && tagCatalogApi.pruneAncestors(tagCatalog, ids).length !== ids.length) {
+        if (selectedConceptIds.length && tagCatalogApi.pruneAncestors(tagCatalog, selectedConceptIds).length !== selectedConceptIds.length) {
             errors.push('标签不能同时包含上级概念及其下级概念。');
         }
 
@@ -162,13 +162,13 @@ function createTagRules(options = {}) {
         // 如果主任务还有尚未选择的已启用下级概念，返回告警供新标签选择阶段
         // 决定是否局部修复。告警不改变 valid，也不阻断已保存标签阶段记录的核验。
         let specificityWarning = null;
-        if (task) {
-            const missingDescendants = activeDescendants(task.id)
-                .filter(concept => !ids.includes(concept.id));
+        if (primaryTaskConcept) {
+            const missingDescendants = activeDescendants(primaryTaskConcept.id)
+                .filter(concept => !selectedConceptIds.includes(concept.id));
             if (missingDescendants.length > 0) {
                 const sample = missingDescendants.slice(0, 8).map(preferredTag).join(' ');
                 const tail = missingDescendants.length > 8 ? ' …' : '';
-                specificityWarning = `主任务标签过于宽泛：${preferredTag(task)} 的下级概念中有未被选中的已启用概念`
+                specificityWarning = `主任务标签过于宽泛：${preferredTag(primaryTaskConcept)} 的下级概念中有未被选中的已启用概念`
                     + `（共 ${missingDescendants.length} 个）：${sample}${tail}`;
             }
         }
@@ -178,9 +178,9 @@ function createTagRules(options = {}) {
             errors: [...new Set(errors)],
             registryVersion: tagCatalog.version,
             registrySha256: tagCatalog.registrySha256,
-            primaryTaskId: task?.id || null,
-            primaryMethodId: method?.id || null,
-            conceptIds: errors.length ? [] : ids,
+            primaryTaskId: primaryTaskConcept?.id || null,
+            primaryMethodId: primaryMethodConcept?.id || null,
+            conceptIds: errors.length ? [] : selectedConceptIds,
             specificityWarning
         };
     }
@@ -189,8 +189,8 @@ function createTagRules(options = {}) {
         tagCatalog: tagCatalog,
         registryVersion: tagCatalog.version,
         registrySha256: tagCatalog.registrySha256,
-        projection,
-        projectionSha256: sha256(projection),
+        projection: tagPromptText,
+        projectionSha256: sha256(tagPromptText),
         projectionContract: TAG_PROMPT_TEXT_CONTRACT,
         selectionContract: TAG_SELECTION_CONTRACT,
         flatCompatContract: TAG_FLAT_COMPAT_CONTRACT,
@@ -203,10 +203,10 @@ function createTagRules(options = {}) {
     });
 }
 
-let defaultRuntime;
+let defaultTagRules;
 function getDefaultTagRules() {
-    if (!defaultRuntime) defaultRuntime = createTagRules();
-    return defaultRuntime;
+    if (!defaultTagRules) defaultTagRules = createTagRules();
+    return defaultTagRules;
 }
 
 module.exports = {

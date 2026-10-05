@@ -10,9 +10,9 @@ test('checkpoint subset retains original proof exactly and excludes duplicate or
  const a=signed('arxiv:2601.00001'),b=signed('arxiv:2605.12987'),records={'a.md':a.page,'b.md':b.page};
  const result=api.filterSignedRecords(records,new Map([[a.classification.paperId,a.classification],[b.classification.paperId,b.classification]]),[b.classification.paperId]);
  assert.deepEqual(result,{'a.md':a.page});assert.equal(result['a.md'],a.page);assert.equal(records['b.md'].proofSha256,b.page.proofSha256);
- const changed={...a.page,primaryTaskId:'task.other'};assert.throws(()=>api.filterSignedRecords({'a.md':changed},new Map([[a.classification.paperId,a.classification]]),[]),/differs/);
+ const changed={...a.page,primaryTaskId:'task.other'};assert.throws(()=>api.filterSignedRecords({'a.md':changed},new Map([[a.classification.paperId,a.classification]]),[]),/页面记录的内容哈希不一致，或分类结果、请求指纹、论文、来源、概念及主标签与已接受的分类记录不对应/);
  const {proofSha256,...tampered}=a.page;tampered.classificationRecordSha256='a'.repeat(64);
- assert.throws(()=>api.verifyPageRecord({...tampered,proofSha256:runner.stableHash(tampered)},a.classification),/differs/);
+ assert.throws(()=>api.verifyPageRecord({...tampered,proofSha256:runner.stableHash(tampered)},a.classification),/页面记录的内容哈希不一致，或分类结果、请求指纹、论文、来源、概念及主标签与已接受的分类记录不对应/);
 });
 test('resume excludes exact processed prefix only with immutable content hash and matching selection',()=>{
  const selection={contract:classify.CONTRACT+'-selection',planSha256:'plan',registrySha256:'registry',paperIds:['arxiv:2601.00001','arxiv:2601.00002','arxiv:2601.00003']};
@@ -31,9 +31,9 @@ test('CLI accepts canonical conference IDs and rejects malformed or duplicate ex
  for(const raw of ['',ids[0]+','+ids[0],'https://arxiv.org/abs/2601.00001','conference:icml:2026:openreview-forum-id:../x','arxiv:2601.00001v2'])assert.throws(()=>cli.parsePaperIds(raw),/Invalid/);
  const selection={paperIds:ids},plan={queue:ids.map(paperId=>({paperId}))};
  assert.deepEqual(api.validateExcludedIds(ids,selection,plan),ids);
- assert.throws(()=>api.validateExcludedIds([ids[0],ids[0]],selection,plan),/duplicate/);
- assert.throws(()=>api.validateExcludedIds(ids,{paperIds:[ids[0]]},plan),/outside/);
- assert.throws(()=>api.validateExcludedIds(ids,selection,{queue:[]}),/outside/);
+ assert.throws(()=>api.validateExcludedIds([ids[0],ids[0]],selection,plan),/排除论文编号必须组成数组，不能重复，且必须同时属于原选择集合和计划/);
+ assert.throws(()=>api.validateExcludedIds(ids,{paperIds:[ids[0]]},plan),/排除论文编号必须组成数组，不能重复，且必须同时属于原选择集合和计划/);
+ assert.throws(()=>api.validateExcludedIds(ids,selection,{queue:[]}),/排除论文编号必须组成数组，不能重复，且必须同时属于原选择集合和计划/);
 });
 test('new remaining cohort accepts only an exact replay of the official checkpoint export report',()=>{
  const report={contract:classify.CONTRACT+'-checkpoint-export-report',processedPaperIds:['arxiv:2601.00001'],processed:1,acceptedCaches:1,remainingPaperIds:['arxiv:2601.00002']};
@@ -55,7 +55,7 @@ test('parallel export uses the exact completion set and treats later accepted ca
  const caches=new Map([['c',{proof:'signed'}],['d',{proof:'later cache'}]]);
  assert.deepEqual(api.processedIdsForExport(selection,checkpoint,caches),['a','c']);
  assert.deepEqual(ids.filter(id=>!api.processedIdsForExport(selection,checkpoint,caches).includes(id)),['b','d']);
- assert.throws(()=>api.processedIdsForExport(selection,checkpoint,new Map([['d',{}]])),/lacks replayed accepted/);
+ assert.throws(()=>api.processedIdsForExport(selection,checkpoint,new Map([['d',{}]])),/检查点中已接受的论文决策缺少已重新核验的分类缓存/);
  const fifty=Array.from({length:53},(_,i)=>'p'+i),done=fifty.filter((_,i)=>i!==2&&i!==3&&i!==5);
  const big={checkpointScheduling:'completion-set-v1',processedPaperIds:done,processed:50,decisions:done.map(paperId=>({paperId})),failures:[]};
  assert.deepEqual(api.processedIdsForExport({paperIds:fifty},big,new Map(fifty.map(id=>[id,{}]))),done);
@@ -83,7 +83,7 @@ test('partial exporter retains signed non-prefix completion and leaves extra cac
  assert.deepEqual(selection.paperIds.filter(id=>!completed.includes(id)),value.report.remainingPaperIds);
  assert.deepEqual(api.filterSignedRecords(normalized.supplement.records,caches,[]),original.supplement.records);
  assert.deepEqual(value,original);
- assert.throws(()=>api.normalizeCheckpoint(value,selection,{...options(value),filename:'partial-000002-'+ '0'.repeat(16)+'.json'}),/partial envelope/);
+ assert.throws(()=>api.normalizeCheckpoint(value,selection,{...options(value),filename:'partial-000002-'+ '0'.repeat(16)+'.json'}),/部分运行记录未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/);
  assert.throws(()=>api.normalizeCheckpoint(value,selection,{...options(value),registrySha256:'another'}),/续跑检查点或原选择记录的格式、身份、数量及文件名不符合要求/);
 });
 test('partial exporter rejects forged report counts, contracts, remaining closure and accepted projection',()=>{
@@ -95,13 +95,13 @@ test('partial exporter rejects forged report counts, contracts, remaining closur
   v=>v.report.stopped.paperId='outside',v=>v.supplement.records['c.md'].paperId=selection.paperIds[3]];
  for(const mutate of mutations){const changed=structuredClone(value);mutate(changed);assert.throws(()=>api.normalizeCheckpoint(changed,selection,options(changed)));}
  const changedSelection={...selection,paperIds:[selection.paperIds[0],selection.paperIds[0],selection.paperIds[2],selection.paperIds[3]]};
- assert.throws(()=>api.normalizeCheckpoint(value,changedSelection,options(value)),/partial envelope/);
+ assert.throws(()=>api.normalizeCheckpoint(value,changedSelection,options(value)),/部分运行记录未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/);
 });
 test('partial adapter cannot replace strict accepted cache/page binding replay',()=>{
  const {value,selection,proof,options}=partialFixture(),normalized=api.normalizeCheckpoint(value,selection,options(value));
- assert.throws(()=>api.processedIdsForExport(selection,normalized,new Map()),/lacks replayed accepted/);
+ assert.throws(()=>api.processedIdsForExport(selection,normalized,new Map()),/检查点中已接受的论文决策缺少已重新核验的分类缓存/);
  const changed=structuredClone(proof.classification);changed.reviewProof={accepted:false};
- assert.throws(()=>api.filterSignedRecords(normalized.supplement.records,new Map([[changed.paperId,changed]]),[]),/differs/);
+ assert.throws(()=>api.filterSignedRecords(normalized.supplement.records,new Map([[changed.paperId,changed]]),[]),/页面记录的内容哈希不一致，或分类结果、请求指纹、论文、来源、概念及主标签与已接受的分类记录不对应/);
  const fifty=Array.from({length:53},(_,i)=>'arxiv:2601.'+String(i+1).padStart(5,'0'));
  const big={contract:classify.CONTRACT+'-checkpoint',supplement:{contract:'historical-direct-taxonomy-supplement-v1',records:{}},
   report:{contract:classify.CONTRACT+'-report',state:'partial',selected:53,processed:50,decisions:[],
@@ -115,7 +115,7 @@ test('defined implementation-changed stop can rescue proofs without authorizing 
  const normalized=api.normalizeCheckpoint(value,selection,options(value));
  assert.deepEqual(normalized.processedPaperIds,[selection.paperIds[0],selection.paperIds[2]]);
  const forged=structuredClone(value);forged.report.stopped.status='unrecognized-stop';forged.report.stopped.error='implementation-changed';
- assert.throws(()=>api.normalizeCheckpoint(forged,selection,options(forged)),/partial envelope/);
+ assert.throws(()=>api.normalizeCheckpoint(forged,selection,options(forged)),/部分运行记录未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/);
  // Adaptation preserves original classification proofs; it never grants model
  // compatibility or changes the frozen producer implementation fingerprints.
  assert.equal(normalized.supplement.records['c.md'].proofSha256,value.supplement.records['c.md'].proofSha256);
@@ -133,17 +133,17 @@ test('selection and retained page keys bind the exact paper and frozen plan page
  assert.equal(api.verifyPageRecord(record,a.classification),record);
  // Moving a valid record changes no record proof bytes, but its dictionary key
  // must still be the page assigned to that exact paper in the frozen plan.
- assert.throws(()=>api.verifyRecordPlanBindings({'content/posts/forged.md':record},items),/key\/page identity/);
- assert.throws(()=>api.filterSignedRecords(api.verifyRecordPlanBindings({'content/posts/forged.md':record},items),new Map(),[paperId]),/key\/page identity/);
- assert.throws(()=>api.verifyRecordPlanBindings({[other.pagePath]:record},items),/key\/page identity/);
- assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,pageKey:other.pageKey}},items),/key\/page identity/);
- assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,pageSha256:other.pageContentSha256}},items),/key\/page identity/);
- assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,paperId:otherId}},items),/key\/page identity/);
- assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,paperId:'arxiv:2601.99999'}},items),/key\/page identity/);
- assert.throws(()=>api.validateSelectionPlan({paperIds:[paperId,'arxiv:2601.99999']},plan),/unknown plan member/);
- assert.throws(()=>api.validateSelectionPlan({paperIds:[paperId,paperId]},plan),/members differ/);
- assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],plan.queue[0]]}),/members differ/);
- assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[page]}]}),/paths duplicate/);
- assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[]}]}),/members differ/);
- assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[{...other,pageKey:undefined}]}]}),/paths duplicate or differ/);
+ assert.throws(()=>api.verifyRecordPlanBindings({'content/posts/forged.md':record},items),/页面记录无法对应计划中的论文和页面，或所在路径、页面编号及内容 SHA 不一致/);
+ assert.throws(()=>api.filterSignedRecords(api.verifyRecordPlanBindings({'content/posts/forged.md':record},items),new Map(),[paperId]),/页面记录无法对应计划中的论文和页面，或所在路径、页面编号及内容 SHA 不一致/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[other.pagePath]:record},items),/页面记录无法对应计划中的论文和页面，或所在路径、页面编号及内容 SHA 不一致/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,pageKey:other.pageKey}},items),/页面记录无法对应计划中的论文和页面，或所在路径、页面编号及内容 SHA 不一致/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,pageSha256:other.pageContentSha256}},items),/页面记录无法对应计划中的论文和页面，或所在路径、页面编号及内容 SHA 不一致/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,paperId:otherId}},items),/页面记录无法对应计划中的论文和页面，或所在路径、页面编号及内容 SHA 不一致/);
+ assert.throws(()=>api.verifyRecordPlanBindings({[page.pagePath]:{...record,paperId:'arxiv:2601.99999'}},items),/页面记录无法对应计划中的论文和页面，或所在路径、页面编号及内容 SHA 不一致/);
+ assert.throws(()=>api.validateSelectionPlan({paperIds:[paperId,'arxiv:2601.99999']},plan),/选择集合中包含计划未列出的论文编号/);
+ assert.throws(()=>api.validateSelectionPlan({paperIds:[paperId,paperId]},plan),/选择记录的 paperIds 和计划的 queue 必须是数组，论文编号不能重复/);
+ assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],plan.queue[0]]}),/选择记录的 paperIds 和计划的 queue 必须是数组，论文编号不能重复/);
+ assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[page]}]}),/计划中的页面路径必须是非空字符串且不能重复/);
+ assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[]}]}),/选择记录的 paperIds 和计划的 queue 必须是数组，论文编号不能重复/);
+ assert.throws(()=>api.validateSelectionPlan(selection,{queue:[plan.queue[0],{paperId:otherId,pages:[{...other,pageKey:undefined}]}]}),/计划中的页面路径必须是非空字符串且不能重复/);
 });

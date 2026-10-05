@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Build a private metadata-only tag preview index; never rewrite papers.
+"""根据历史博客元数据生成私有标签预览，不改写论文页面。
 
-Also emits the seven-state legacy tag disposition table
-(keep / alias / broader / split_review / move_facet / deprecated / out_of_scope)
-with the original tag and status columns preserved verbatim.
+同时输出旧标签的七种处理方式，保留原标签和状态列。
 """
 
 import argparse
@@ -44,9 +42,9 @@ DISPOSITIONS = ('keep', 'alias', 'broader', 'split_review', 'move_facet',
 LEGACY_CSV_COLUMNS = ('tag', 'pageCount', 'status', 'conceptId', 'facet', 'semanticReview')
 DISPOSITION_CSV_COLUMNS = ('tag', 'pageCount', 'disposition', 'status', 'conceptId',
                            'facet', 'semanticReview', 'evidence')
-# “仅上位命中”判定要求上位中文首选标签至少这么长，避免两字泛词误命中。
+# 只匹配至少三个字符的中文首选名称，减少较短泛词造成的误匹配。
 MIN_UPPER_LABEL_CHARS = 3
-PENDING_RULE = '未处置行保留原值待评审；deprecated/out_of_scope 必须有跨会零命中扫描证据 + 人工评审，禁按单会议频次判定'
+PENDING_RULE = '尚未选择处理方式的标签保留原值，等待评审。采用 deprecated 或 out_of_scope 前，须提供跨会议扫描未命中的证据并经人工评审，不能仅依据某一个会议的出现频次作判断。'
 
 
 def sha256(value):
@@ -74,22 +72,23 @@ def parse_evidence(value, where):
 
 
 def upper_label_candidates(tag_catalog, tag):
-    """确定性“仅上位命中”检测：未直接命中的标签里，唯一被包含的 active 上位标签。
+    """找出原标签中包含的已启用概念中文首选名称。
 
-    只做字面包含判断，不做任何语义推断；命中结果写进 evidence 供人工复核。
+    只比较规范化后的文字，不判断概念的上下级关系，也不进行语义推断；
+    结果供后续处理和人工复核使用。
     """
     normalized = normalize_label(tag)
     if not normalized:
         return []
-    found = {}
+    contained_concepts_by_id = {}
     for concept in tag_catalog['concepts']:
         if concept['status'] != 'active':
             continue
         label = normalize_label(concept['preferredLabel']['zh'])
         if len(label) >= MIN_UPPER_LABEL_CHARS and label != normalized and label in normalized:
-            found.setdefault(concept['id'], {'conceptId': concept['id'],
+            contained_concepts_by_id.setdefault(concept['id'], {'conceptId': concept['id'],
                                              'label': concept['preferredLabel']['zh']})
-    return [found[cid] for cid in sorted(found)]
+    return [contained_concepts_by_id[cid] for cid in sorted(contained_concepts_by_id)]
 
 
 def initial_disposition(tag, concept, tag_catalog):
@@ -100,7 +99,7 @@ def initial_disposition(tag, concept, tag_catalog):
     """
     if concept is not None:
         if concept['status'] != 'active':
-            return '', {'reason': '字面命中 deprecated 概念：须跨会零命中扫描 + 人工评审后才能判 deprecated'}
+            return '', {'reason': '字面匹配到了已弃用概念；须经跨会议扫描和人工评审，确认没有命中后再决定是否弃用。'}
         normalized = normalize_label(tag)
         if normalized == normalize_label(concept['preferredLabel']['zh']):
             return 'keep', {'matchKind': 'zh_preferred_label'}
@@ -113,9 +112,9 @@ def initial_disposition(tag, concept, tag_catalog):
                            'upperConceptId': candidates[0]['conceptId'],
                            'upperLabel': candidates[0]['label']}
     if candidates:
-        return '', {'reason': '同时命中多个上位标签，待人工判定是否拆分（可升级为 split_review）',
+        return '', {'reason': '原标签同时包含多个候选标签，需要人工判断是否拆分；确认后可采用 split_review。',
                     'candidates': candidates}
-    return '', {'reason': 'registry 字面解析零命中，待语义/人工评审'}
+    return '', {'reason': '词表中没有与该标签对应的名称或别名，需要进一步进行语义判断或人工评审。'}
 
 
 def build_dispositions(counts, resolved, tag_catalog):
@@ -353,13 +352,13 @@ def paper_metadata(repo, path, raw, base):
     filename = re.search(r'-(\d{4})-(\d{4,5})(?:v[1-9]\d*)?$', path.stem)
     if filename:
         identity_evidence.append(('.'.join(filename.groups()), 'filename'))
-    # Body is read solely for the same explicit primary-arxiv identity fallback
-    # as the prior audit. It is never included in any output or classification.
+    # 正文仅用于读取显式标注的 arXiv 链接以补充论文 ID；
+    # 正文内容不写入预览文件，也不参与标签分类。
     linked = set(re.findall(r'\[arxiv\]\(https://arxiv\.org/abs/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?\)', body, re.I))
     identity_evidence.extend((value, 'explicit_arxiv_link') for value in sorted(linked))
     if len({value for value, _origin in identity_evidence}) > 1:
         raise ValueError(f'页面 {relative} 中记录的 arXiv ID 相互冲突。')
-    pid, id_source = identity_evidence[0] if identity_evidence else (None, None)
+    arxiv_id, arxiv_id_source = identity_evidence[0] if identity_evidence else (None, None)
     primary_keys = ('paper_digest_primary_task', 'primaryTask', 'primary_task', 'primaryTaskTag', 'primary_task_tag')
     if any(key in frontmatter and frontmatter[key] is not None and not isinstance(frontmatter[key], str)
            for key in primary_keys):
@@ -367,43 +366,43 @@ def paper_metadata(repo, path, raw, base):
     primary_values = [{'field': key, 'value': value} for key, value in frontmatter.items()
                       if key in primary_keys
                       and isinstance(value, str) and value.strip()]
-    return {'id': pid, 'idSource': id_source, 'title': title, 'date': public_date,
+    return {'id': arxiv_id, 'idSource': arxiv_id_source, 'title': title, 'date': public_date,
             'url': page_url(repo, path, frontmatter, base), 'tags': tags,
             'sourceSha256': sha256(raw), 'relativePath': relative,
             '_sortDate': sort_date, '_primaryValues': primary_values}, None
 
 
 def classify_page(page, tag_catalog, resolved_labels):
-    by_id = {concept['id']: concept for concept in tag_catalog['concepts']}
-    mapped, unresolved = [], []
+    concepts_by_id = {concept['id']: concept for concept in tag_catalog['concepts']}
+    mapped_concept_ids, unresolved_tags = [], []
     for tag in page['tags']:
         concept = resolved_labels[tag]
         if concept is None:
-            if tag not in unresolved:
-                unresolved.append(tag)
-        elif concept['id'] not in mapped:
-            mapped.append(concept['id'])
+            if tag not in unresolved_tags:
+                unresolved_tags.append(tag)
+        elif concept['id'] not in mapped_concept_ids:
+            mapped_concept_ids.append(concept['id'])
     primary_matches = [resolve_label(
         tag_catalog, value['value'], 'task', mode=LABEL_MODE_LEGACY)
         for value in page['_primaryValues']]
     primary_ids = {concept['id'] for concept in primary_matches if concept is not None}
-    primary = next(iter(primary_ids)) if len(primary_ids) == 1 and all(primary_matches) else None
+    primary_task_id = next(iter(primary_ids)) if len(primary_ids) == 1 and all(primary_matches) else None
     primary_unresolved = [{**item, 'reason': 'conflicting_explicit_tasks' if len(primary_ids) > 1
                           else 'unknown_or_wrong_role'} for item, concept in zip(page['_primaryValues'], primary_matches)
                           if concept is None or len(primary_ids) > 1]
-    if primary is not None and primary not in mapped:
-        mapped.append(primary)
-    facet_ids = {facet: [cid for cid in mapped if by_id[cid]['facet'] == facet] for facet in FACET_IDS}
+    if primary_task_id is not None and primary_task_id not in mapped_concept_ids:
+        mapped_concept_ids.append(primary_task_id)
+    facet_ids = {facet: [cid for cid in mapped_concept_ids if concepts_by_id[cid]['facet'] == facet] for facet in FACET_IDS}
     ancestor_ids = {facet: list(dict.fromkeys(parent for cid in values for parent in ancestors(tag_catalog, cid)))
                     for facet, values in facet_ids.items()}
-    public = {key: value for key, value in page.items() if not key.startswith('_')}
-    public.update({'recordId': f'arxiv:{page["id"]}' if page['id'] else 'page:' + sha256(page['relativePath'].encode()),
-                   'mappedIds': mapped, 'displayIds': prune_ancestors(tag_catalog, mapped),
-                   'facetIds': facet_ids, 'ancestorIds': ancestor_ids, 'unresolvedTags': unresolved,
-                   'primaryTaskId': primary, 'primaryTaskSource': page['_primaryValues'],
+    classified_page = {key: value for key, value in page.items() if not key.startswith('_')}
+    classified_page.update({'recordId': f'arxiv:{page["id"]}' if page['id'] else 'page:' + sha256(page['relativePath'].encode()),
+                   'mappedIds': mapped_concept_ids, 'displayIds': prune_ancestors(tag_catalog, mapped_concept_ids),
+                   'facetIds': facet_ids, 'ancestorIds': ancestor_ids, 'unresolvedTags': unresolved_tags,
+                   'primaryTaskId': primary_task_id, 'primaryTaskSource': page['_primaryValues'],
                    'primaryUnresolved': primary_unresolved, 'classificationStatus':
-                       'unresolved' if not mapped else 'partial' if unresolved or primary_unresolved else 'legacy_mapped'})
-    return public
+                       'unresolved' if not mapped_concept_ids else 'partial' if unresolved_tags or primary_unresolved else 'legacy_mapped'})
+    return classified_page
 
 
 def validate_output_root(value, repo):
@@ -442,10 +441,10 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     tag_catalog = load_tag_catalog(registry_path)
     base = blog_base_url(repo)
     paths = markdown_paths(repo)
-    pages, excluded, hashes = [], [], []
+    pages, excluded, page_content_hashes = [], [], []
     for path in paths:
         raw = read_regular(path)
-        hashes.append({'relativePath': path.relative_to(repo).as_posix(), 'sha256': sha256(raw)})
+        page_content_hashes.append({'relativePath': path.relative_to(repo).as_posix(), 'sha256': sha256(raw)})
         page, reason = paper_metadata(repo, path, raw, base)
         if page is None:
             excluded.append({'relativePath': path.relative_to(repo).as_posix(), 'reason': reason})
@@ -453,41 +452,41 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
             pages.append(page)
     if not pages:
         raise ValueError('未找到可用于标签预览的论文页面。')
-    counts = collections.Counter(tag for page in pages for tag in set(page['tags']))
-    # This tool is an audit of historical Hugo metadata, so aliases are
-    # intentionally enabled here and nowhere in the production parser.
-    resolved = {tag: resolve_label(
-        tag_catalog, tag, mode=LABEL_MODE_LEGACY) for tag in counts}
-    groups, unknown = collections.defaultdict(list), []
+    tag_page_counts = collections.Counter(tag for page in pages for tag in set(page['tags']))
+    # 本工具核对历史 Hugo 元数据，因此按历史读取规则接受别名；
+    # 正式解析器仍只接受当前允许的名称。
+    resolved_concepts = {tag: resolve_label(
+        tag_catalog, tag, mode=LABEL_MODE_LEGACY) for tag in tag_page_counts}
+    pages_by_arxiv_id, pages_without_arxiv_id = collections.defaultdict(list), []
     for page in pages:
-        (groups[page['id']] if page['id'] else unknown).append(page)
+        (pages_by_arxiv_id[page['id']] if page['id'] else pages_without_arxiv_id).append(page)
     representatives = []
-    for group in groups.values():
+    for group in pages_by_arxiv_id.values():
         latest = max(group, key=lambda page: (page['_sortDate'], page['relativePath']))
         latest['duplicatePaths'] = sorted(page['relativePath'] for page in group if page is not latest)
         representatives.append(latest)
-    for page in unknown:
+    for page in pages_without_arxiv_id:
         page['duplicatePaths'] = []
-    papers = [classify_page(page, tag_catalog, resolved) for page in representatives + unknown]
+    papers = [classify_page(page, tag_catalog, resolved_concepts) for page in representatives + pages_without_arxiv_id]
     papers.sort(key=lambda paper: (paper['date'], paper['relativePath']), reverse=True)
-    source = {'commit': commit, 'pagesSha256': stable_hash(hashes)}
+    source = {'commit': commit, 'pagesSha256': stable_hash(page_content_hashes)}
     summary = {'markdownPages': len(paths), 'paperPages': len(pages), 'excludedPages': len(excluded),
-               'records': len(papers), 'knownIdCount': len(groups),
-               'knownIdPages': sum(map(len, groups.values())), 'unknownIdPages': len(unknown),
-               'duplicateIdGroups': sum(len(group) > 1 for group in groups.values()),
-               'uniqueTags': len(counts), 'unresolvedTags': sum(value is None for value in resolved.values()),
+               'records': len(papers), 'knownIdCount': len(pages_by_arxiv_id),
+               'knownIdPages': sum(map(len, pages_by_arxiv_id.values())), 'unknownIdPages': len(pages_without_arxiv_id),
+               'duplicateIdGroups': sum(len(group) > 1 for group in pages_by_arxiv_id.values()),
+               'uniqueTags': len(tag_page_counts), 'unresolvedTags': sum(value is None for value in resolved_concepts.values()),
                'unresolvedRecords': sum(paper['classificationStatus'] == 'unresolved' for paper in papers),
                'partialRecords': sum(paper['classificationStatus'] == 'partial' for paper in papers),
                'legacyMappedRecords': sum(paper['classificationStatus'] == 'legacy_mapped' for paper in papers),
                'explicitPrimaryTaskRecords': sum(paper['primaryTaskId'] is not None for paper in papers),
                'semanticallyReviewedRecords': 0}
     occurrences = collections.Counter(tag for page in pages for tag in page['tags'])
-    dispositions = build_dispositions(counts, resolved, tag_catalog)
-    summary.update({'mappedUniqueTags': sum(value is not None for value in resolved.values()),
+    dispositions = build_dispositions(tag_page_counts, resolved_concepts, tag_catalog)
+    summary.update({'mappedUniqueTags': sum(value is not None for value in resolved_concepts.values()),
                     'tagOccurrences': sum(occurrences.values()),
-                    'mappedTagOccurrences': sum(count for tag, count in occurrences.items() if resolved[tag] is not None),
-                    'uniqueTagCoverage': sum(value is not None for value in resolved.values()) / len(counts) if counts else 0,
-                    'tagOccurrenceCoverage': sum(count for tag, count in occurrences.items() if resolved[tag] is not None)
+                    'mappedTagOccurrences': sum(count for tag, count in occurrences.items() if resolved_concepts[tag] is not None),
+                    'uniqueTagCoverage': sum(value is not None for value in resolved_concepts.values()) / len(tag_page_counts) if tag_page_counts else 0,
+                    'tagOccurrenceCoverage': sum(count for tag, count in occurrences.items() if resolved_concepts[tag] is not None)
                         / sum(occurrences.values()) if occurrences else 0,
                     'coverageMeaning': 'literal_registry_mapping_not_semantic_accuracy'})
     summary.update(disposition_summary(dispositions))
@@ -497,15 +496,15 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
     report = {'version': REPORT_VERSION, 'taxonomyVersion': tag_catalog['version'],
               'registrySha256': tag_catalog['registrySha256'], 'source': source, 'summary': summary,
               'dispositionSchema': DISPOSITION_SCHEMA, 'dispositionRule': PENDING_RULE,
-              'note': 'Literal registry mapping only; not semantic classification. Unknown-ID records are not proven unique papers.',
-              'pages': hashes, 'excluded': excluded, 'tagDispositions': dispositions,
+              'note': '本报告只统计标签名称与词表的字面对照结果，不代表语义分类正确。未取得论文 ID 的记录也不能证明彼此属于不同论文。',
+              'pages': page_content_hashes, 'excluded': excluded, 'tagDispositions': dispositions,
               'duplicates': [{'id': pid, 'relativePaths': sorted(page['relativePath'] for page in group)}
-                             for pid, group in sorted(groups.items()) if len(group) > 1]}
-    # Verify all inputs again before installing any artifact; also catches
-    # ignored/untracked-file list drift that a Git HEAD check alone cannot see.
+                             for pid, group in sorted(pages_by_arxiv_id.items()) if len(group) > 1]}
+    # 写入输出前，再核对 Markdown 文件列表、Git 状态、页面内容 SHA 和词表 SHA。
+    # 仅检查 Git 提交不能发现忽略文件的变化。
     if markdown_paths(repo) != paths or git_snapshot(repo) != commit:
         raise ValueError('生成标签预览期间，博客文件列表或 Git 状态发生变化。')
-    for path, expected in zip(paths, hashes):
+    for path, expected in zip(paths, page_content_hashes):
         if sha256(read_regular(path)) != expected['sha256']:
             raise ValueError('生成标签预览期间，博客页面的 SHA 发生变化。')
     if load_tag_catalog(registry_path)['registrySha256'] != tag_catalog['registrySha256']:
@@ -523,19 +522,18 @@ def _build_preview_locked(blog_repo, output, registry_path=None):
                      for row in dispositions)
     report_text = json.dumps(report, ensure_ascii=False, indent=2) + '\n'
     csv_output = csv_text.getvalue()
-    bundle = {'version': BUNDLE_VERSION, 'taxonomyVersion': tag_catalog['version'],
+    preview_file_manifest = {'version': BUNDLE_VERSION, 'taxonomyVersion': tag_catalog['version'],
               'registrySha256': tag_catalog['registrySha256'], 'source': source,
               'files': {'index.json': sha256(public_text.encode('utf-8')),
                         'migration-report.json': sha256(report_text.encode('utf-8')),
                         'tag-disposition.csv': sha256(csv_output.encode('utf-8'))}}
-    # The bundle manifest is the publication point and is installed last.
-    # A crash may leave mixed private files, but the previous bundle cannot
-    # validate them; serving requires all three exact hashes to match.
+    # 最后写入文件清单。中断可能留下不同批次的私有文件；
+    # 读取端须核对三份文件的 SHA，旧清单不能认证新旧混合内容。
     validate_output_root(destination, repo)
     path_config.atomic_write_text(destination / 'migration-report.json', report_text, mode=0o600)
     path_config.atomic_write_text(destination / 'tag-disposition.csv', csv_output, mode=0o600)
     path_config.atomic_write_text(destination / 'index.json', public_text, mode=0o600)
-    path_config.atomic_write_json(destination / 'bundle-manifest.json', bundle, mode=0o600)
+    path_config.atomic_write_json(destination / 'bundle-manifest.json', preview_file_manifest, mode=0o600)
     return index
 
 

@@ -1,5 +1,7 @@
 代码命名研究与修正计划
 
+这份文档保留最初研究的基线、问题分类和迁移方案。统计来自 b388b883e17f0a59d799d17c69a1033907bdbb88，不代表当前代码中的缺陷数量；下文另说明已经完成的迁移与仍需处理的接口。各批实际修改、失败和验收见 docs/refactor-progress.txt。
+
 为什么要改 taxonomy
 
 taxonomy 意为分类体系，是分类与信息组织领域已有的术语。W3C 的 SKOS 文档也使用这个词，不能仅凭它出现就认定代码由 AI 编写。仓库历史显示，共享标签词表在 d0b3ab2 引入，后续逐步接入正式分析、标签检查和发布；这些名称有业务背景，但并不适合出现在所有位置。
@@ -42,25 +44,27 @@ Node 代理进一步解析了 101 份含 taxonomy 的 JavaScript 文件，找到
 
 名称夸大了检查结果。“封存”“已核验”“可用”各有不同条件。来源文件已保存不等于论文内容已独立审查，链接可达不等于许可明确或能够复现。改名和改文案时，应按照实际条件描述结果，不能借清理表达改变检查规则。
 
-第一批：分类基础函数与真实调用处
+最初的基础函数迁移方案（已实施）
 
-Node 函数按以下对应迁移：loadTaxonomy 改为 loadTagCatalog；validateTaxonomy 改为 validateTagCatalog；createTaxonomyRuntime 改为 createTagRules；getDefaultTaxonomyRuntime 改为 getDefaultTagRules；buildPromptProjection 改为 buildTagPromptText。Python 对应迁移 load_taxonomy、validate_taxonomy、build_prompt_projection、prompt_projection_sha256，分别使用 load_tag_catalog、validate_tag_catalog、build_tag_prompt_text、tag_prompt_text_sha256。
+最初方案按以下对应迁移 Node 函数：loadTaxonomy 改为 loadTagCatalog；validateTaxonomy 改为 validateTagCatalog；createTaxonomyRuntime 改为 createTagRules；getDefaultTaxonomyRuntime 改为 getDefaultTagRules；buildPromptProjection 改为 buildTagPromptText。Python 对应迁移 load_taxonomy、validate_taxonomy、build_prompt_projection、prompt_projection_sha256，分别使用 load_tag_catalog、validate_tag_catalog、build_tag_prompt_text、tag_prompt_text_sha256。
 
 词表模块的局部 taxonomy 使用 tagCatalog 或 tag_catalog；调用词表模块的 taxonomyApi 使用 tagCatalogApi，标签规则服务使用 tagRules 或 TAG_RULES。有一处 taxonomyApi 调用的却是历史分类分配模块，应单独改成 tagAssignmentsApi。每处名称都按实际职责判断。
 
-本批同步迁移导出、导入、成员调用、依赖注入和原测试，不添加一组长期并存的旧函数别名。跨端测试中嵌入的 Python 程序也需要同步。Python 参数还要检查关键字调用；对象简写要分清局部变量与字段。例如变量改名后，原输出仍需写成 taxonomy: tagCatalog，以保留当前格式。
+实施时已同步迁移导出、导入、成员调用、依赖注入和原测试，没有添加一组长期并存的旧函数别名。跨端测试中嵌入的 Python 程序也需要同步。Python 参数还要检查关键字调用；对象简写要分清局部变量与字段。例如变量改名后，原输出仍需写成 taxonomy: tagCatalog，以保留当时已有的保存格式。
 
 这批修改确实改变模块函数接口，也会改变函数名属性、未来错误栈和源码身份。不能声称接口或所有 SHA 都不变。标签文本、词表原字节、选择结果、持久字段和检查规则则应保持；旧凭证不因改名重新签发。
 
-后续修正顺序
+已经完成的迁移与后续工作
 
-先继续清理主分析和发布器中对象不明的局部变量与私有函数，按词表、检查结果、阶段记录、分析正文和展示内容分别命名。每组都核实际消费者和返回类型，避免用“分类”替换一切后又造成新的歧义。
+分类基础函数已按上述方案迁移。模块文件名、命令、导入和实现身份路径清单也已同步更新，原 paper-taxonomy.js 的职责现在由 tag-catalog.js 与 tag-rules.js 表达。实际提示文本生成使用 buildTagPromptText；新请求采用 paper-tag-prompt-text-v2，旧提示版本只用于按原记录重建核验文本。
 
-随后修改注释、错误提示和现行文档。Node 与 Python 共用的诊断要一起处理；重试和修复流程中按文字匹配的消费者必须同步。提示词改动还须检查第一个围栏、占位符、模型输出格式和阶段指纹。历史文档保留当时的数字、时态和完成范围。
+解析缓存的新写入字段为 tagValidation，标签阶段和检查点的新写入键为 tagSelection，阶段格式为 paper-tag-stage-record-v2。taxonomyValidation 和 taxonomySeal 用于读取旧记录，读取器按原字段核验；同一记录混用新旧字段会被拒绝。更名不授权手工改运行文件，也不会自动给旧记录补发新凭证。这两项格式迁移已完成，不能再把它们列为尚未开始的工作。
 
-模块文件名和命令名单独迁移。paper-taxonomy.js 已被会议处理和历史页面暂存的实现身份清单引用；改文件名时需要同步导入、命令、文档和这些路径清单。不能只移动文件，让身份核验继续寻找旧路径。
+仍需按用途检查局部变量、私有函数、注释和诊断，区分词表、检查结果、分析正文、阶段记录和页面展示内容。每组都应查真实返回值及完整调用链；错误文字被重试、修复或测试读取时，消费者须一起处理。提示词修改还须核对第一个围栏、占位符、输出格式和阶段指纹。
 
-最后处理现有字段和模型接口。taxonomyValidation、taxonomySeal、facet、projectionSha256、freshRewriteProvenance 等已经写入分析记录、检查点或发布证明。应设计新格式、旧格式读取和冲突拒绝规则，再迁移写入方和全部读取方；旧记录和历史页面不能批量替换字符串。这些名称暂时保留有明确兼容原因，不是永久免除清理。
+facet、projectionSha256、freshRewriteProvenance 以及表格修复计划中的 donorSectionPath 等保存字段和模型接口仍有消费者。迁移这些接口前须设计版本、旧格式读取及冲突拒绝规则，并同步写入方和读取方；不能因局部名称已经改为 sourceSectionPath 就认定模型格式也已迁移。词表、历史记录和页面中的旧协议名称须按各自用途判断，不能批量替换字符串。
+
+历史文档继续保留当时的数字、字段和完成范围；当前操作说明应使用现行接口，并明确旧格式的读取方式。
 
 如何判断修改是否可靠
 

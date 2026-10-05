@@ -297,7 +297,7 @@ class PreviewBuilderTest(unittest.TestCase):
         self.assertEqual(evidence['upperConceptId'], 'task.asr')
         # 零命中与多上位命中都只能 pending，且必须写明原因/候选
         self.assertEqual(rows['totally-unknown']['disposition'], '')
-        self.assertIn('零命中', json.loads(rows['totally-unknown']['evidence'])['reason'])
+        self.assertIn('词表中没有与该标签对应的名称或别名', json.loads(rows['totally-unknown']['evidence'])['reason'])
         multi = json.loads(rows['语音任务与语音识别']['evidence'])
         self.assertEqual(len(multi['candidates']), 2)
         summary = json.loads((self.output / 'migration-report.json').read_text())['summary']
@@ -483,4 +483,4 @@ class SevenStateDispositionTest(unittest.TestCase):
         # deprecated 命中只能是 pending：禁按单会议频次/零命中缺证据自动判 deprecated
         disposition, evidence = preview.initial_disposition('旧识别', by_id['task.old-asr'], data)
         self.assertEqual(disposition, '')
-        self.assertIn('跨会零命中扫描', evidence['reason'])
+        self.assertIn('须经跨会议扫描和人工评审，确认没有命中', evidence['reason'])

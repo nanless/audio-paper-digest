@@ -35,9 +35,9 @@ function idDiff(before, after) {
     };
 }
 
-function parseAnalysisText(text, runtime) {
+function parseAnalysisText(text, tagRules) {
     // utils.js 与 analysis-contract.js 互相依赖，因此在调用时加载，避免循环加载。
-    return require('../utils.js').parseAnalysis(text, { tagRules: runtime });
+    return require('../utils.js').parseAnalysis(text, { tagRules: tagRules });
 }
 
 function contract() {
@@ -73,97 +73,97 @@ function stageResult({ paper, analysisRunId, status, outcome, errors = [], ...ex
 // 为只含一篇论文的分析记录计算标签更新结果，不写入文件。
 // acknowledgeDestructive 仅适用于白名单内的破坏性变更；缺少确认或不属于
 // 可确认范围时，仍返回 blocked/destructive-change，并标明需要重新核对。
-function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOptions = {},
+function reprojectAnalysis({ analysis, runtime: tagRules, mode = 'reproject', snapshotOptions = {},
     acknowledgeDestructive = false, acknowledgementNote = null } = {}) {
     if (!RESEAL_MODES.includes(mode)) throw new Error(`不支持的标签记录更新模式：${mode}`);
-    if (!runtime || !runtime.registrySha256) throw new Error('更新标签记录需要提供标签规则及词表哈希。');
+    if (!tagRules || !tagRules.registrySha256) throw new Error('更新标签记录需要提供标签规则及词表哈希。');
     const contractApi = contract();
-    const record = analysis && typeof analysis === 'object' ? analysis : null;
-    const paper = record?.papers?.length === 1 ? record.papers[0] : null;
+    const analysisRecord = analysis && typeof analysis === 'object' ? analysis : null;
+    const paper = analysisRecord?.papers?.length === 1 ? analysisRecord.papers[0] : null;
     if (!paper) {
         return { ok: false, analysis: null,
-            item: { paperId: record?.paperId ?? null, analysisRunId: record?.executionId ?? null,
+            item: { paperId: analysisRecord?.paperId ?? null, analysisRunId: analysisRecord?.executionId ?? null,
                 status: 'blocked', outcome: 'unreadable-analysis', needsHuman: false,
-                registry: { from: null, to: runtime.registrySha256 }, changeLevel: null,
+                registry: { from: null, to: tagRules.registrySha256 }, changeLevel: null,
                 oldConceptIds: [], newConceptIds: [],
                 conceptIdsDiff: { added: [], removed: [] },
                 pageRestageRequired: false,
                 errors: ['分析记录必须恰好包含一篇论文。'] } };
     }
-    const executionId = typeof record.executionId === 'string' ? record.executionId : null;
+    const executionId = typeof analysisRecord.executionId === 'string' ? analysisRecord.executionId : null;
     let tagRecord;
     try { tagRecord = readTagStageRecord(paper.analysisManifest, paper.analysisStageCheckpoints); }
     catch (error) {
         return { ok: false, analysis: null, item: stageResult({ paper, analysisRunId: executionId,
-            fromRegistrySha256: null, toRegistrySha256: runtime.registrySha256,
+            fromRegistrySha256: null, toRegistrySha256: tagRules.registrySha256,
             status: 'blocked', outcome: 'binding-refused', errors: [error.message] }) };
     }
-    const stage = tagRecord.stage;
-    const base = {
+    const tagStage = tagRecord.stage;
+    const updateResultFields = {
         paper,
         analysisRunId: executionId,
-        fromRegistrySha256: typeof stage?.registrySha256 === 'string' ? stage.registrySha256 : null,
-        toRegistrySha256: runtime.registrySha256
+        fromRegistrySha256: typeof tagStage?.registrySha256 === 'string' ? tagStage.registrySha256 : null,
+        toRegistrySha256: tagRules.registrySha256
     };
-    if (!contractApi.isRecoveryStageTerminal(tagRecord.stageKey, stage?.status)) {
+    if (!contractApi.isRecoveryStageTerminal(tagRecord.stageKey, tagStage?.status)) {
         return { ok: false, analysis: null,
-            item: stageResult({ ...base, status: 'skipped', outcome: 'stage-not-terminal',
-                errors: [`标签阶段的状态为 ${stage?.status ?? '缺失'}，尚未完成，不能更新记录。`] }) };
+            item: stageResult({ ...updateResultFields, status: 'skipped', outcome: 'stage-not-terminal',
+                errors: [`标签阶段的状态为 ${tagStage?.status ?? '缺失'}，尚未完成，不能更新记录。`] }) };
     }
     if (mode === 'reproject') {
-        const originalBinding = Object.fromEntries(tagRecord.bindingFields.map(field => [field, stage[field]]));
-        const expectedContract = tagRecord.format === 'current'
-            ? TAG_STAGE_RECORD_CONTRACT : runtime.selectionContract;
-        if (stage.bindingSha256 !== contractApi.manualSha256(originalBinding)
-            || paper.analysisManifest?.contracts?.[tagRecord.contractKey] !== expectedContract) {
-            return { ok: false, analysis: null, item: stageResult({ ...base,
+        const originalStageBindingFields = Object.fromEntries(tagRecord.bindingFields.map(field => [field, tagStage[field]]));
+        const expectedStageRecordContract = tagRecord.format === 'current'
+            ? TAG_STAGE_RECORD_CONTRACT : tagRules.selectionContract;
+        if (tagStage.bindingSha256 !== contractApi.manualSha256(originalStageBindingFields)
+            || paper.analysisManifest?.contracts?.[tagRecord.contractKey] !== expectedStageRecordContract) {
+            return { ok: false, analysis: null, item: stageResult({ ...updateResultFields,
                 status: 'blocked', outcome: 'binding-refused',
                 errors: ['原标签阶段的绑定签名或合同声明无效，不能重新生成记录。'] }) };
         }
     }
-    const oldConceptIds = Array.isArray(stage.conceptIds) ? stage.conceptIds : [];
-    let cachedValidation;
-    try { cachedValidation = require('../utils.js').readTagValidation(paper.parsed); }
+    const oldConceptIds = Array.isArray(tagStage.conceptIds) ? tagStage.conceptIds : [];
+    let cachedTagValidation;
+    try { cachedTagValidation = require('../utils.js').readTagValidation(paper.parsed); }
     catch (error) {
         return { ok: false, analysis: null,
-            item: stageResult({ ...base, status: 'blocked', outcome: 'binding-refused',
+            item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'binding-refused',
                 oldConceptIds, conceptIds: oldConceptIds, errors: [error.message] }) };
     }
-    const parsed = parseAnalysisText(paper.analysis, runtime);
-    let paperRef = paper;
-    const validate = () => contractApi.validateTagStageProof(paperRef, {
-        parsed, tagRules: runtime, registrySnapshotOptions: snapshotOptions
+    const parsedAnalysis = parseAnalysisText(paper.analysis, tagRules);
+    let paperToValidate = paper;
+    const validate = () => contractApi.validateTagStageProof(paperToValidate, {
+        parsed: parsedAnalysis, tagRules: tagRules, registrySnapshotOptions: snapshotOptions
     });
 
     // 已使用当前词表时，只核验现有记录，不生成新的写入内容。
-    if (stage.registrySha256 === runtime.registrySha256) {
+    if (tagStage.registrySha256 === tagRules.registrySha256) {
         const issue = validate();
         if (issue) {
             return { ok: false, analysis: null,
-                item: stageResult({ ...base, status: 'blocked', outcome: 'binding-refused',
+                item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'binding-refused',
                     oldConceptIds, conceptIds: oldConceptIds,
                     changeLevel: 'none', errors: [issue] }) };
         }
         return { ok: false, analysis: null,
-            item: stageResult({ ...base, status: 'assigned', outcome: 'already-current',
-                oldConceptIds, conceptIds: parsed.tagValidation?.conceptIds ?? oldConceptIds,
+            item: stageResult({ ...updateResultFields, status: 'assigned', outcome: 'already-current',
+                oldConceptIds, conceptIds: parsedAnalysis.tagValidation?.conceptIds ?? oldConceptIds,
                 changeLevel: 'none', errors: [] }) };
     }
 
-    const snapshot = registryChange.resolveRegistrySnapshot(stage.registrySha256, snapshotOptions);
-    if (!snapshot) {
+    const previousTagCatalog = registryChange.resolveRegistrySnapshot(tagStage.registrySha256, snapshotOptions);
+    if (!previousTagCatalog) {
         return { ok: false, analysis: null,
-            item: stageResult({ ...base, status: 'blocked', outcome: 'missing-registry-snapshot',
+            item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'missing-registry-snapshot',
                 oldConceptIds, conceptIds: oldConceptIds, errors: [
-                    `无法取得词表更新前的快照 ${stage.registrySha256}，不能更新标签记录。`] }) };
+                    `无法取得词表更新前的快照 ${tagStage.registrySha256}，不能更新标签记录。`] }) };
     }
-    const { changeLevel, detail } = registryChange.classifyRegistryChange(snapshot, runtime.tagCatalog);
+    const { changeLevel, detail } = registryChange.classifyRegistryChange(previousTagCatalog, tagRules.tagCatalog);
     if (changeLevel === 'destructive') {
         const eligibility = registryChange.acknowledgementEligibility(detail);
         const baseError = '词表包含破坏性变更，需要重新分析整篇论文，或由人工或模型重新选择标签；本工具不调用模型。';
         if (!eligibility.eligible) {
             return { ok: false, analysis: null,
-                item: stageResult({ ...base, status: 'blocked', outcome: 'destructive-change',
+                item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'destructive-change',
                     oldConceptIds, conceptIds: oldConceptIds, changeLevel,
                     reasons: detail.reasons.filter(reason => reason.level === 'destructive')
                         .map(reason => reason.message),
@@ -172,7 +172,7 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         }
         if (!acknowledgeDestructive) {
             return { ok: false, analysis: null,
-                item: stageResult({ ...base, status: 'blocked', outcome: 'destructive-change',
+                item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'destructive-change',
                     oldConceptIds, conceptIds: oldConceptIds, changeLevel,
                     reasons: detail.reasons.filter(reason => reason.level === 'destructive')
                         .map(reason => reason.message),
@@ -182,26 +182,26 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         // 人工确认有效后，仍须核对正文标签的解析结果和更新后的阶段记录。
     }
 
-    const validation = parsed?.tagValidation;
-    if (!validation?.valid) {
+    const tagValidation = parsedAnalysis?.tagValidation;
+    if (!tagValidation?.valid) {
         return { ok: false, analysis: null,
-            item: stageResult({ ...base, status: 'blocked', outcome: 'selection-invalid',
+            item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'selection-invalid',
                 oldConceptIds, conceptIds: oldConceptIds, changeLevel,
-                errorsDetail: Array.isArray(validation?.errors) ? validation.errors : ['标签无法解析'],
+                errorsDetail: Array.isArray(tagValidation?.errors) ? tagValidation.errors : ['标签无法解析'],
                 errors: ['正文标签无法按当前词表解析，需要人工或模型重新选择标签；本工具不会调用模型。'] }) };
     }
-    if (!sameIds(validation.conceptIds, oldConceptIds)) {
+    if (!sameIds(tagValidation.conceptIds, oldConceptIds)) {
         return { ok: false, analysis: null,
-            item: stageResult({ ...base, status: 'blocked', outcome: 'concept-ids-changed',
-                oldConceptIds, conceptIds: validation.conceptIds, changeLevel,
+            item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'concept-ids-changed',
+                oldConceptIds, conceptIds: tagValidation.conceptIds, changeLevel,
                 errors: ['正文标签在当前词表中解析出的概念 ID 与原标签阶段记录不同，需要人工或模型重新核对；本工具不会调用模型。'] }) };
     }
 
-    let annotation;
+    let tagCatalogUpgradeRecord;
     try {
-        annotation = registryChange.buildRegistryUpgradeAnnotation({
-            from: snapshot,
-            to: runtime.tagCatalog,
+        tagCatalogUpgradeRecord = registryChange.buildRegistryUpgradeAnnotation({
+            from: previousTagCatalog,
+            to: tagRules.tagCatalog,
             changeLevel,
             detail,
             note: `确定性重投影：${detail.summary}`,
@@ -210,72 +210,72 @@ function reprojectAnalysis({ analysis, runtime, mode = 'reproject', snapshotOpti
         });
     } catch (error) {
         return { ok: false, analysis: null,
-            item: stageResult({ ...base, status: 'blocked', outcome: 'annotation-failed',
+            item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'annotation-failed',
                 oldConceptIds, conceptIds: oldConceptIds, changeLevel,
                 errors: [`无法生成词表更新说明：${error.message}`] }) };
     }
 
-    const nextStage = mode === 'reproject'
-        ? rebuildStage(stage, runtime, annotation, contractApi, tagRecord)
-        : { ...stage, registryUpgradeFrom: annotation };
-    const nextPaper = { ...paper, analysisManifest: {
+    const updatedTagStage = mode === 'reproject'
+        ? rebuildStage(tagStage, tagRules, tagCatalogUpgradeRecord, contractApi, tagRecord)
+        : { ...tagStage, registryUpgradeFrom: tagCatalogUpgradeRecord };
+    const updatedPaper = { ...paper, analysisManifest: {
         ...paper.analysisManifest,
         stages: Object.fromEntries(Object.entries(paper.analysisManifest.stages).map(([key, value]) =>
-            key === tagRecord.stageKey ? [mode === 'reproject' ? 'tagSelection' : key, nextStage] : [key, value]))
+            key === tagRecord.stageKey ? [mode === 'reproject' ? 'tagSelection' : key, updatedTagStage] : [key, value]))
     } };
     if (mode === 'reproject') {
-        nextPaper.analysisManifest.contracts = Object.fromEntries(
+        updatedPaper.analysisManifest.contracts = Object.fromEntries(
             Object.entries(paper.analysisManifest.contracts).map(([key, value]) =>
                 key === tagRecord.contractKey ? ['tagSelectionRecord', TAG_STAGE_RECORD_CONTRACT] : [key, value]));
-        nextPaper.analysisStageCheckpoints = Object.fromEntries(
+        updatedPaper.analysisStageCheckpoints = Object.fromEntries(
             Object.entries(paper.analysisStageCheckpoints).map(([key, value]) =>
                 key === tagRecord.checkpointKey ? ['tagSelection', value] : [key, value]));
     }
     // 注记保留缓存的原字段名；显式重新生成时只迁移标签子对象的字段名。
     // 两种模式都只更新原子对象的词表版本和 SHA，不覆盖评分或人工修改。
-    if (cachedValidation) {
+    if (cachedTagValidation) {
         const cachedKey = Object.prototype.hasOwnProperty.call(paper.parsed, 'tagValidation')
             ? 'tagValidation' : 'taxonomyValidation';
         const outputKey = mode === 'reproject' ? 'tagValidation' : cachedKey;
-        nextPaper.parsed = Object.fromEntries(Object.entries(paper.parsed).map(([key, value]) =>
+        updatedPaper.parsed = Object.fromEntries(Object.entries(paper.parsed).map(([key, value]) =>
             key === cachedKey ? [outputKey, { ...value,
-                registryVersion: validation.registryVersion,
-                registrySha256: validation.registrySha256 }] : [key, value]));
+                registryVersion: tagValidation.registryVersion,
+                registrySha256: tagValidation.registrySha256 }] : [key, value]));
     }
-    paperRef = nextPaper;
+    paperToValidate = updatedPaper;
     const issue = validate();
     if (issue) {
         return { ok: false, analysis: null,
-            item: stageResult({ ...base, status: 'blocked', outcome: 'binding-refused',
+            item: stageResult({ ...updateResultFields, status: 'blocked', outcome: 'binding-refused',
                 oldConceptIds, conceptIds: oldConceptIds, changeLevel,
                 errors: [`更新后的标签阶段记录未通过核验，不能写入：${issue}`] }) };
     }
-    const nextAnalysis = { ...record, papers: [nextPaper] };
+    const updatedAnalysisRecord = { ...analysisRecord, papers: [updatedPaper] };
     return {
         ok: true,
-        analysis: nextAnalysis,
-        stage: nextStage,
-        item: stageResult({ ...base,
+        analysis: updatedAnalysisRecord,
+        stage: updatedTagStage,
+        item: stageResult({ ...updateResultFields,
             status: 'assigned',
             outcome: mode === 'reproject' ? 'resealed' : 'annotated',
             oldConceptIds,
-            conceptIds: validation.conceptIds,
+            conceptIds: tagValidation.conceptIds,
             changeLevel,
             pageRestageRequired: true,
-            destructiveAcknowledgement: annotation.destructiveAcknowledgement,
+            destructiveAcknowledgement: tagCatalogUpgradeRecord.destructiveAcknowledgement,
             errors: [] })
     };
 }
 
 // 只更新阶段记录中的词表与提示文本字段、升级说明和 bindingSha256。正文及原检查点的 SHA
 // 保持不变，以便核心摘要和评分阶段继续核验它们对应的正文。
-function rebuildStage(stage, runtime, annotation, contractApi, tagRecord) {
-    const binding = {
-        registryVersion: runtime.registryVersion,
-        registrySha256: runtime.registrySha256,
-        projectionContract: runtime.projectionContract,
-        projectionSha256: runtime.projectionSha256,
-        selectionContract: runtime.selectionContract,
+function rebuildStage(stage, tagRules, annotation, contractApi, tagRecord) {
+    const tagStageBindingFields = {
+        registryVersion: tagRules.registryVersion,
+        registrySha256: tagRules.registrySha256,
+        projectionContract: tagRules.projectionContract,
+        projectionSha256: tagRules.projectionSha256,
+        selectionContract: tagRules.selectionContract,
         inputAnalysisSha256: stage.inputAnalysisSha256,
         outputAnalysisSha256: stage.outputAnalysisSha256,
         inputProtectedProjectionSha256: stage.inputProtectedProjectionSha256,
@@ -288,13 +288,13 @@ function rebuildStage(stage, runtime, annotation, contractApi, tagRecord) {
     return {
         ...Object.fromEntries(Object.entries(stage).map(([key, value]) =>
             key === tagRecord.hashKey ? ['tagSectionAndPrimaryTagsSha256', value] : [key, value])),
-        registryVersion: runtime.registryVersion,
-        registrySha256: runtime.registrySha256,
-        projectionContract: runtime.projectionContract,
-        projectionSha256: runtime.projectionSha256,
-        selectionContract: runtime.selectionContract,
+        registryVersion: tagRules.registryVersion,
+        registrySha256: tagRules.registrySha256,
+        projectionContract: tagRules.projectionContract,
+        projectionSha256: tagRules.projectionSha256,
+        selectionContract: tagRules.selectionContract,
         registryUpgradeFrom: annotation,
-        bindingSha256: contractApi.manualSha256(binding)
+        bindingSha256: contractApi.manualSha256(tagStageBindingFields)
     };
 }
 
