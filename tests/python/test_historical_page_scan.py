@@ -14,8 +14,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(ROOT / "tests" / "helpers"))
 
 import historical_page_scan as page_scan
+from historical_page_scan_original_fixture import load_original_page_scan
 
 from historical_page_scan import (  # noqa: E402
     HistoricalPageInventoryError,
@@ -40,6 +42,27 @@ CLI = load_cli()
 def run_git(repo, *args):
     subprocess.run(["git", "-C", str(repo), *args], check=True,
                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def bind_route_test_ledger(ledger):
+    """为故意改变候选字段的反例绑定全部页面与目标链接，保留其余原值。"""
+    for page in ledger["pages"]:
+        snapshot = {key: value for key, value in page.items()
+                    if key not in {"outboundPostLinks", "snapshotSha256", "recordSha256"}}
+        page["snapshotSha256"] = page_scan.stable_hash(snapshot)
+    by_id = {page["pageId"]: page for page in ledger["pages"]}
+    for page in ledger["pages"]:
+        for link in page["outboundPostLinks"]:
+            if link["status"] == "resolved":
+                link["targetRecordSha256"] = by_id[link["targetPageId"]]["snapshotSha256"]
+        page["recordSha256"] = page_scan.stable_hash({key: value for key, value in page.items()
+                                                    if key != "recordSha256"})
+    ledger["outboundPostLinks"] = [{"sourcePageId": page["pageId"], "sourcePath": page["path"], **link}
+                                   for page in ledger["pages"] for link in page["outboundPostLinks"]]
+    ledger["outboundPostLinksSha256"] = page_scan.stable_hash(ledger["outboundPostLinks"])
+    ledger["pageSetSha256"] = page_scan.stable_hash(ledger["pages"])
+    ledger["ledgerSha256"] = page_scan.stable_hash({key: value for key, value in ledger.items()
+                                                   if key != "ledgerSha256"})
 
 
 class HistoricalPageScanTest(unittest.TestCase):
@@ -140,9 +163,12 @@ class HistoricalPageScanTest(unittest.TestCase):
                             and link["status"] == "resolved" for link in paper["outboundPostLinks"]))
         self.assertTrue(any(link["sourcePath"] == paper["path"] and link["targetPageId"]
                             for link in ledger["outboundPostLinks"]))
-        self.assertTrue(any(route["taxonomy"] == "tags" and route["term"] == "语音识别"
+        self.assertTrue(any(route["routeGroup"] == "tags" and route["term"] == "语音识别"
                             and route["status"] == "unverified"
-                            for route in paper["legacyTaxonomyCandidates"]))
+                            for route in paper["legacyTagRouteCandidates"]))
+        self.assertNotIn("legacyTaxonomyCandidates", paper)
+        self.assertEqual(ledger["policy"]["contract"], "historical-page-scan-policy-v5")
+        self.assertEqual(ledger["policy"]["tagRoutes"], "unverified-candidates-v3")
         self.assertRegex(paper["pageId"], r"^page:[a-f0-9]{64}$")
         self.assertEqual(paper["publishedDate"], "2026-01-01")
         self.assertEqual(paper["cohortDate"], "2026-01-01")
@@ -175,12 +201,31 @@ class HistoricalPageScanTest(unittest.TestCase):
         self.assertEqual(ledger["source"]["trackedPages"]["count"], 4)
         self.assertEqual(validate_ledger(json.loads(serialized)), ledger)
 
-    def test_current_tag_fields_scan_with_v4_and_legacy_v3_stays_read_only(self):
-        with mock.patch.object(page_scan, 'SCAN_POLICY', page_scan.LEGACY_SCAN_POLICY):
-            legacy = scan_historical_pages(self.repo, require_clean_main=True)
-        original_legacy = copy.deepcopy(legacy)
-        self.assertEqual(validate_ledger(legacy), original_legacy)
-        self.assertEqual(legacy, original_legacy)
+    def test_current_tag_fields_scan_with_v5_and_original_v3_v4_stay_read_only(self):
+        original = load_original_page_scan()
+        for name, policy in (("v3", original.LEGACY_SCAN_POLICY), ("v4", original.SCAN_POLICY)):
+            # 两个旧版本都由已核完整原源码生成，测试配置只修改原模块。
+            with mock.patch.object(original, "SCAN_POLICY", policy):
+                legacy = original.scan_historical_pages(self.repo, require_clean_main=True)
+                output = self.root / name
+                paths = original.write_inventory_pair(output, "history.json", "history.receipt.json", legacy,
+                                                      expected_repo=self.repo)
+            ledger_raw = Path(paths["ledger"]).read_bytes()
+            receipt_raw = Path(paths["receipt"]).read_bytes()
+            original_legacy = copy.deepcopy(legacy)
+            loaded, receipt = page_scan.load_inventory_pair(Path(paths["ledger"]), Path(paths["receipt"]))
+            self.assertEqual(loaded, original_legacy)
+            self.assertEqual(validate_ledger(legacy), original_legacy)
+            self.assertEqual(legacy, original_legacy)
+            self.assertEqual(receipt["ledger"]["fileSha256"], page_scan.sha256_bytes(ledger_raw))
+            self.assertEqual(Path(paths["ledger"]).read_bytes(), ledger_raw)
+            self.assertEqual(Path(paths["receipt"]).read_bytes(), receipt_raw)
+            self.assertTrue(all("legacyTaxonomyCandidates" in page and "legacyTagRouteCandidates" not in page
+                                for page in loaded["pages"]))
+        for policy in (page_scan.LEGACY_SCAN_POLICY, page_scan.LEGACY_SCAN_POLICY_V4):
+            with mock.patch.object(page_scan, "SCAN_POLICY", policy):
+                with self.assertRaisesRegex(HistoricalPageInventoryError, "新的扫描只能使用当前标签链接候选格式"):
+                    scan_historical_pages(self.repo, require_clean_main=True)
         page_path = self.repo / 'content' / 'posts' / '2026-01-01-paper-2601-00001.md'
         raw = page_path.read_text(encoding='utf-8')
         page_path.write_text(raw.replace('paper_digest_taxonomy_', 'paper_digest_tags_'), encoding='utf-8')
@@ -188,6 +233,7 @@ class HistoricalPageScanTest(unittest.TestCase):
         run_git(self.repo, 'commit', '-m', 'current tag frontmatter')
         current = scan_historical_pages(self.repo, require_clean_main=True)
         self.assertEqual(current['policy'], page_scan.SCAN_POLICY)
+        self.assertEqual(current['policy']['contract'], 'historical-page-scan-policy-v5')
         self.assertIn('tagRoutes', current['policy'])
         self.assertNotIn('taxonomyRoutes', current['policy'])
         paper = next(page for page in current['pages'] if page['path'].endswith('paper-2601-00001.md'))
@@ -195,12 +241,12 @@ class HistoricalPageScanTest(unittest.TestCase):
         self.assertIn('paper_digest_tags_contract', fields)
         self.assertNotIn('paper_digest_taxonomy_contract', fields)
         self.assertEqual(validate_ledger(current), current)
-        # An old policy cannot acquire the new evidence whitelist by changing only its identity.
+        # 只改策略标识不能把新版候选变成原来的页面格式。
         forged = copy.deepcopy(current)
         forged['policy'] = copy.deepcopy(page_scan.LEGACY_SCAN_POLICY)
         forged['ledgerSha256'] = page_scan.stable_hash({key: value for key, value in forged.items()
                                                        if key != 'ledgerSha256'})
-        with self.assertRaisesRegex(HistoricalPageInventoryError, 'publication evidence field is unsupported'):
+        with self.assertRaisesRegex(HistoricalPageInventoryError, '与扫描策略不一致'):
             validate_ledger(forged)
         for value in (None, 'paper-taxonomy-flat-tags-compat-v1'):
             with self.assertRaisesRegex(HistoricalPageInventoryError, '不能同时包含'):
@@ -210,6 +256,46 @@ class HistoricalPageScanTest(unittest.TestCase):
         bad_hash['policy'] = copy.deepcopy(page_scan.SCAN_POLICY)
         with self.assertRaisesRegex(HistoricalPageInventoryError, 'ledgerSha256 drifted'):
             validate_ledger(bad_hash)
+
+    def test_route_candidate_mixed_fields_policy_and_original_hash_are_checked(self):
+        current = scan_historical_pages(self.repo, require_clean_main=True)
+        for extra in (None, copy.deepcopy(current["pages"][0]["legacyTagRouteCandidates"])):
+            mixed = copy.deepcopy(current)
+            mixed["pages"][0]["legacyTaxonomyCandidates"] = extra
+            bind_route_test_ledger(mixed)
+            before = copy.deepcopy(mixed)
+            with self.assertRaisesRegex(HistoricalPageInventoryError, "页面不能混用新旧标签链接候选字段"):
+                validate_ledger(mixed)
+            self.assertEqual(mixed, before)
+        for extra in (None, "tags"):
+            mixed = copy.deepcopy(current)
+            candidate = next(route for page in mixed["pages"] for route in page["legacyTagRouteCandidates"]
+                             if route["routeGroup"] == "tags")
+            candidate["taxonomy"] = extra
+            bind_route_test_ledger(mixed)
+            with self.assertRaisesRegex(HistoricalPageInventoryError, "候选不能混用新旧路由分组字段"):
+                validate_ledger(mixed)
+            broken = copy.deepcopy(mixed)
+            broken["ledgerSha256"] = "0" * 64
+            with self.assertRaisesRegex(HistoricalPageInventoryError, "ledgerSha256 drifted"):
+                validate_ledger(broken)
+        wrong_group = copy.deepcopy(current)
+        candidate = next(route for page in wrong_group["pages"] for route in page["legacyTagRouteCandidates"]
+                         if route["routeGroup"] == "tags")
+        candidate["taxonomy"] = candidate.pop("routeGroup")
+        bind_route_test_ledger(wrong_group)
+        with self.assertRaisesRegex(HistoricalPageInventoryError, "候选的路由分组字段与扫描策略不一致"):
+            validate_ledger(wrong_group)
+        wrong = copy.deepcopy(current)
+        wrong["policy"] = copy.deepcopy(page_scan.LEGACY_SCAN_POLICY_V4)
+        bind_route_test_ledger(wrong)
+        with self.assertRaisesRegex(HistoricalPageInventoryError, "与扫描策略不一致"):
+            validate_ledger(wrong)
+        unknown = copy.deepcopy(current)
+        unknown["policy"]["contract"] = "historical-page-scan-policy-unknown"
+        bind_route_test_ledger(unknown)
+        with self.assertRaisesRegex(HistoricalPageInventoryError, "扫描策略不是受支持的完整格式"):
+            validate_ledger(unknown)
 
     def test_pair_is_canonical_o_excl_0600_and_replayable(self):
         ledger = scan_historical_pages(self.repo, require_clean_main=True)
@@ -282,6 +368,8 @@ class HistoricalPageScanTest(unittest.TestCase):
         raw["pages"][0]["bodySha256"] = "0" * 64
         Path(paths["ledger"]).write_text(json.dumps(raw, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         with self.assertRaisesRegex(HistoricalPageInventoryError, "ledgerSha256 drifted"):
+            validate_ledger(raw)
+        with self.assertRaisesRegex(HistoricalPageInventoryError, "receipt does not bind the exact ledger file/content"):
             load_inventory_pair(Path(paths["ledger"]), Path(paths["receipt"]))
         raw['ledgerSha256'] = page_scan.stable_hash({key: value for key, value in raw.items()
                                                    if key != 'ledgerSha256'})

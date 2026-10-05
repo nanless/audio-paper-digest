@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""只读盘点历史 Hugo 页面，并保存扫描结果与配对凭证。
+"""Read-only historical Hugo page inventory with immutable paired evidence.
 
-扫描结果只保存正文摘要。读取正文是为了计算原字节的摘要，并提取后续核对
-论文来源所需的标识和链接；结果中不保存正文。
+The inventory never stores Markdown body text.  Bodies are read only to hash the
+exact bytes and derive bounded identity/link hints needed by a later crosswalk.
 """
 
 from __future__ import annotations
@@ -87,26 +87,12 @@ LEGACY_SCAN_POLICY = {
     "targetRecordBinding": "target-page-snapshot-sha256-v1",
 }
 
-LEGACY_SCAN_POLICY_V4 = {key: value for key, value in LEGACY_SCAN_POLICY.items() if key != "taxonomyRoutes"}
-LEGACY_SCAN_POLICY_V4.update({
+SCAN_POLICY = {key: value for key, value in LEGACY_SCAN_POLICY.items() if key != "taxonomyRoutes"}
+SCAN_POLICY.update({
     "contract": "historical-page-scan-policy-v4",
     "tagRoutes": "unverified-candidates-v2",
     "publicationEvidence": "schema-checked-hash-default-whitelist-v4",
 })
-
-SCAN_POLICY = {**LEGACY_SCAN_POLICY_V4,
-               "contract": "historical-page-scan-policy-v5",
-               "tagRoutes": "unverified-candidates-v3"}
-
-
-def _scan_fields(policy: Any) -> tuple[str, str, set[str]]:
-    if policy == LEGACY_SCAN_POLICY:
-        return "legacyTaxonomyCandidates", "taxonomy", LEGACY_PUBLICATION_EVIDENCE_FIELDS
-    if policy == LEGACY_SCAN_POLICY_V4:
-        return "legacyTaxonomyCandidates", "taxonomy", PUBLICATION_EVIDENCE_FIELDS
-    if policy == SCAN_POLICY:
-        return "legacyTagRouteCandidates", "routeGroup", PUBLICATION_EVIDENCE_FIELDS
-    raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：扫描策略不是受支持的完整格式。")
 
 PRESERVED_PUBLICATION_STRING_FIELDS = {
     "paper_digest_arxiv_id",
@@ -707,16 +693,16 @@ def _term_slug(value: str) -> str:
     normalized = re.sub(r"[/\\?#%]+", "-", normalized)
     normalized = re.sub(r"-{2,}", "-", normalized).strip("-")
     if not normalized or re.search(r"[\x00-\x1f\x7f]", normalized):
-        raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：历史标签无法安全转换为链接路径。")
+        raise _fail("legacy taxonomy term cannot be projected safely")
     return normalized
 
 
-def _tag_route_candidates(tags: list[str], categories: list[str], base: str, group_field: str) -> list[dict[str, str]]:
+def _legacy_tag_route_candidates(tags: list[str], categories: list[str], base: str) -> list[dict[str, str]]:
     candidates = []
     for tag_route_group, values in (("tags", tags), ("categories", categories)):
         for term in sorted(set(values)):
             route = urljoin(base, f"{tag_route_group}/{quote(_term_slug(term), safe='-._~')}/")
-            candidates.append({group_field: tag_route_group, "term": term, "status": "unverified",
+            candidates.append({"taxonomy": tag_route_group, "term": term, "status": "unverified",
                                "candidateUrl": route, "method": "legacy-term-normalization-v1"})
     return candidates
 
@@ -786,7 +772,7 @@ def _page_record(repo: Path, path: Path, raw: bytes, base: str, git_blob_oid: st
         "identityHints": _identity_hints(path, frontmatter, body),
         "outboundPostLinks": _strict_post_link_occurrences(body, primary_url, base),
         "publicationEvidenceRefs": _publication_evidence(frontmatter),
-        "legacyTagRouteCandidates": _tag_route_candidates(tags, categories, base, "routeGroup"),
+        "legacyTaxonomyCandidates": _legacy_tag_route_candidates(tags, categories, base),
     }
     return {**body_record, "snapshotSha256": stable_hash(_page_snapshot_body(body_record))}
 
@@ -867,8 +853,6 @@ def scan_historical_pages(blog_repo: Path, *, require_clean_main: bool = False,
                           remote_name: str = "origin",
                           after_scan_hook: Callable[[], None] | None = None) -> dict[str, Any]:
     """Build and self-validate one immutable snapshot without writing output."""
-    if SCAN_POLICY["contract"] != "historical-page-scan-policy-v5" or SCAN_POLICY["tagRoutes"] != "unverified-candidates-v3":
-        raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：新的扫描只能使用当前标签链接候选格式。")
     repo = _safe_directory(Path(blog_repo))
     before = _git_snapshot(repo, remote_name)
     if require_clean_main and (before["branch"] != "main" or not before["clean"]):
@@ -993,12 +977,17 @@ def validate_ledger(value: Any) -> dict[str, Any]:
     for field in ("pageCount", "publishedPageCount"):
         if not isinstance(hugo_runtime[field], int) or isinstance(hugo_runtime[field], bool) or hugo_runtime[field] < 0:
             raise _fail(f"source.hugoRuntime.{field} is invalid")
-    candidate_field, group_field, evidence_fields = _scan_fields(value["policy"])
+    if value["policy"] == LEGACY_SCAN_POLICY:
+        evidence_fields = LEGACY_PUBLICATION_EVIDENCE_FIELDS
+    elif value["policy"] == SCAN_POLICY:
+        evidence_fields = PUBLICATION_EVIDENCE_FIELDS
+    else:
+        raise _fail("scan policy differs from supported v3/v4")
     if not isinstance(value["pages"], list) or not value["pages"]:
         raise _fail("ledger pages must be non-empty")
     paths = []
     for index, page in enumerate(value["pages"]):
-        _validate_page(page, index, evidence_fields, candidate_field, group_field)
+        _validate_page(page, index, evidence_fields)
         for field in (page["primaryUrl"], *page["aliases"],
                       *(link["targetUrl"] for link in page["outboundPostLinks"])):
             if _canonical_blog_url(field, source["baseUrl"]) != field:
@@ -1009,10 +998,10 @@ def validate_ledger(value: Any) -> dict[str, Any]:
         if any(not unquote(urlsplit(link["targetUrl"]).path).startswith(posts_prefix)
                for link in page["outboundPostLinks"]):
             raise _fail(f"pages[{index}] outbound link is outside the posts route")
-        expected_candidates = _tag_route_candidates(page["legacy"]["tags"], page["legacy"]["categories"],
-                                                     source["baseUrl"], group_field)
-        if page[candidate_field] != expected_candidates:
-            raise HistoricalPageInventoryError(f"历史页面标签链接候选被拒绝：页面 {index} 的历史标签链接候选与原标签不一致。")
+        expected_candidates = _legacy_tag_route_candidates(page["legacy"]["tags"], page["legacy"]["categories"],
+                                                   source["baseUrl"])
+        if page["legacyTaxonomyCandidates"] != expected_candidates:
+            raise _fail(f"pages[{index}] legacy taxonomy candidates drifted")
         paths.append(page["path"])
     if paths != sorted(paths) or len(set(paths)) != len(paths):
         raise _fail("ledger page paths must be unique and sorted")
@@ -1077,20 +1066,13 @@ def validate_ledger(value: Any) -> dict[str, Any]:
     return _json_value(value)
 
 
-def _validate_page(page: Any, index: int, publication_fields: set[str], candidate_field: str, group_field: str) -> None:
-    if not isinstance(page, dict):
-        raise HistoricalPageInventoryError(f"历史页面标签链接候选被拒绝：页面 {index} 必须是对象。")
-    if "legacyTagRouteCandidates" in page and "legacyTaxonomyCandidates" in page:
-        raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：页面不能混用新旧标签链接候选字段。")
-    wrong_field = "legacyTaxonomyCandidates" if candidate_field == "legacyTagRouteCandidates" else "legacyTagRouteCandidates"
-    if wrong_field in page:
-        raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：页面的标签链接候选字段与扫描策略不一致。")
+def _validate_page(page: Any, index: int, publication_fields: set[str]) -> None:
     page = _exact(page, {"pageId", "path", "gitBlobOid", "contentBytes", "contentSha256",
                          "frontmatterBytes", "frontmatterSha256", "bodyBytes", "bodySha256",
                          "primaryUrl", "aliases", "kind", "scope",
                          "publishedDate", "cohortDate", "legacyTaskKey", "draft", "published",
                          "legacy", "identityHints", "outboundPostLinks", "publicationEvidenceRefs",
-                         candidate_field, "snapshotSha256", "recordSha256"}, f"pages[{index}]")
+                         "legacyTaxonomyCandidates", "snapshotSha256", "recordSha256"}, f"pages[{index}]")
     _safe_text(page["path"], f"pages[{index}].path")
     if (Path(page["path"]).is_absolute() or "\\" in page["path"]
             or any(part in ("", ".", "..") for part in page["path"].split("/"))
@@ -1247,22 +1229,16 @@ def _validate_page(page: Any, index: int, publication_fields: set[str], candidat
         raise _fail("publication evidence fields must be unique and sorted")
     if TAG_FIELDS.intersection(evidence_fields) and LEGACY_TAG_FIELDS.intersection(evidence_fields):
         raise _fail("页面不能同时包含 paper_digest_tags_* 和旧字段 paper_digest_taxonomy_*。")
-    if not isinstance(page[candidate_field], list):
-        raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：历史标签链接候选必须是数组。")
-    for candidate in page[candidate_field]:
-        if isinstance(candidate, dict):
-            if "routeGroup" in candidate and "taxonomy" in candidate:
-                raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：候选不能混用新旧路由分组字段。")
-            wrong_group = "taxonomy" if group_field == "routeGroup" else "routeGroup"
-            if wrong_group in candidate:
-                raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：候选的路由分组字段与扫描策略不一致。")
-        _exact(candidate, {group_field, "term", "status", "candidateUrl", "method"},
-               "tag route candidate")
-        if not isinstance(candidate[group_field], str) or candidate[group_field] not in {"tags", "categories"} or candidate["status"] != "unverified" \
+    if not isinstance(page["legacyTaxonomyCandidates"], list):
+        raise _fail("legacy taxonomy candidates must be an array")
+    for candidate in page["legacyTaxonomyCandidates"]:
+        _exact(candidate, {"taxonomy", "term", "status", "candidateUrl", "method"},
+               "legacy taxonomy candidate")
+        if candidate["taxonomy"] not in {"tags", "categories"} or candidate["status"] != "unverified" \
                 or candidate["method"] != "legacy-term-normalization-v1":
-            raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：历史标签链接候选的分组、状态或生成方式不受支持。")
-        _safe_text(candidate["term"], "tag term")
-        _safe_text(candidate["candidateUrl"], "tag candidate URL")
+            raise _fail("legacy taxonomy candidate is unsupported")
+        _safe_text(candidate["term"], "legacy taxonomy term")
+        _safe_text(candidate["candidateUrl"], "legacy taxonomy candidate URL")
     snapshot_body = _page_snapshot_body(page)
     if _sha(page["snapshotSha256"], f"pages[{index}].snapshotSha256") != stable_hash(snapshot_body):
         raise _fail(f"pages[{index}].snapshotSha256 drifted")
@@ -1285,7 +1261,8 @@ def build_receipt(ledger: dict[str, Any], ledger_name: str) -> tuple[bytes, dict
     return ledger_bytes, receipt, encoded_json(receipt)
 
 
-def _receipt_file_binding(value: Any, ledger_bytes: bytes, ledger_name: str) -> dict[str, Any]:
+def validate_receipt(value: Any, ledger: dict[str, Any], ledger_bytes: bytes, ledger_name: str) -> dict[str, Any]:
+    checked = validate_ledger(ledger)
     value = _exact(value, {"contract", "version", "ledger", "repositorySnapshotSha256", "receiptSha256"},
                    "historical page receipt")
     if value["contract"] != RECEIPT_CONTRACT or value["version"] != VERSION:
@@ -1294,19 +1271,8 @@ def _receipt_file_binding(value: Any, ledger_bytes: bytes, ledger_name: str) -> 
                    "receipt ledger binding")
     if not isinstance(bound["pageCount"], int) or isinstance(bound["pageCount"], bool) or bound["pageCount"] < 1:
         raise _fail("receipt ledger pageCount must be a positive integer")
-    body = dict(value); body.pop("receiptSha256")
-    if _sha(value["receiptSha256"], "receiptSha256") != stable_hash(body):
-        raise _fail("receiptSha256 drifted")
-    if bound["name"] != ledger_name or bound["fileSha256"] != sha256_bytes(ledger_bytes):
-        raise _fail("receipt does not bind the exact ledger file/content")
-    return value
-
-
-def validate_receipt(value: Any, ledger: dict[str, Any], ledger_bytes: bytes, ledger_name: str) -> dict[str, Any]:
-    value = _receipt_file_binding(value, ledger_bytes, ledger_name)
-    checked = validate_ledger(ledger)
-    bound = value["ledger"]
-    if (bound["ledgerSha256"] != checked["ledgerSha256"]
+    if (bound["name"] != ledger_name or bound["fileSha256"] != sha256_bytes(ledger_bytes)
+            or bound["ledgerSha256"] != checked["ledgerSha256"]
             or bound["pageSetSha256"] != checked["pageSetSha256"]
             or bound["pageCount"] != len(checked["pages"])):
         raise _fail("receipt does not bind the exact ledger file/content")
@@ -1397,13 +1363,10 @@ def load_inventory_pair(ledger_path: Path, receipt_path: Path) -> tuple[dict[str
         raise _fail("ledger and receipt must share one directory")
     ledger_raw = _read_regular(ledger_path, MAX_MARKDOWN_BYTES, "historical page ledger")
     receipt_raw = _read_regular(receipt_path, MAX_CONFIG_BYTES, "historical page receipt")
-    receipt = _strict_json(receipt_raw, "historical page receipt")
-    parsed_ledger = _strict_json(ledger_raw, "historical page ledger")
-    # JSON 仍先拒绝重复键；格式和资格检查只在原凭证及实际字节对应后进行。
-    _receipt_file_binding(receipt, ledger_raw, ledger_path.name)
-    ledger = validate_ledger(parsed_ledger)
+    ledger = validate_ledger(_strict_json(ledger_raw, "historical page ledger"))
     if encoded_json(ledger) != ledger_raw:
         raise _fail("historical page ledger bytes are not canonical")
+    receipt = _strict_json(receipt_raw, "historical page receipt")
     checked_receipt = validate_receipt(receipt, ledger, ledger_raw, ledger_path.name)
     if encoded_json(checked_receipt) != receipt_raw:
         raise _fail("historical page receipt bytes are not canonical")

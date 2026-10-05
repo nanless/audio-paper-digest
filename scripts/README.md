@@ -386,8 +386,8 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 旧 `paper-taxonomy-flat-tags-compat-v1` 记录按原声明读取。新字段族可能包含上一批已保存的旧协议，读取时不改写；新生成只使用 `paper-tag-flat-tags-v2`。两版标签含义相同，未知协议不能通过已核验标签判断。会议汇总可以读取两版合法成员，但新汇总页面明确写新版，不沿用首篇成员的旧协议。
 旧页面审查按页面声明的协议重建预期标签和附属资料字节；原页面、资料及来源 SHA 仍逐项核验。
-新的历史扫描政策为 `historical-page-scan-policy-v4`，使用 `tagRoutes` 和 `schema-checked-hash-default-whitelist-v4`。
-旧 v3 清单仍按完整原政策读取，不能用它声明新字段已受核验，也不会因此重签原清单。
+新的历史扫描策略为 `historical-page-scan-policy-v5`。页面用 `legacyTagRouteCandidates` 保存旧标签的候选链接，候选中的 `routeGroup` 区分 tags 和 categories；这些链接尚未核验，不能证明分类已经通过。`tagRoutes` 为 `unverified-candidates-v3`，发布证据仍使用原 v4 字段范围。
+旧 v3、v4 清单按各自完整原策略和原字段读取，原摘要与配对凭证保持。新旧候选字段混用、格式不对应或未知策略会被拒绝。新扫描生成新的结果和凭证，不覆盖旧文件；总文件、凭证及页面编号的独立版本不变。
 
 分析的当前指纹分别用 `tagCatalogVersion`、`tagCatalogSha256`、`tagPromptContract`、`tagPromptSha256` 和 `tagSelectionContract`
 记录词表、提示与选择规则。字段迁移会改变主分析、修订、结构修复和标签选择的输入指纹，旧检查点按原规则失效。

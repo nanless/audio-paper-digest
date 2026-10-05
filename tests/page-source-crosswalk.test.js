@@ -256,6 +256,7 @@ function record(pathname, kind, content) {
     return { ...withSnapshot, recordSha256: api.stableHash(withSnapshot) };
 }
 function historicalBundle(root) {
+    // 明确的旧 v3 合成样本，用于字段及状态反例；不是原扫描器捕获的产物。
     const inventory = path.join(root, 'inventory'); fs.mkdirSync(inventory);
     const pages = [record('content/posts/2026-01-01-paper-2601-00001.md', 'paper', 'SECRET OLD BODY'),
         record('content/posts/2026-01-01.md', 'daily-summary', 'summary')].sort((a, b) => a.path.localeCompare(b.path));
@@ -309,7 +310,7 @@ function load(f) {
     return api.loadHistoricalInventoryHandle({ inventoryRoot: f.inventory, ledgerName: f.ledgerName, receiptName: f.receiptName });
 }
 
-test('页面扫描 v3 原凭证原样读取，v4 支持新字段且拒混用和未核原 SHA', t => {
+test('合成扫描 v3 与 v4 样本按原格式读取，拒绝字段混用和错误原摘要', t => {
     const f = fixture(t);
     const ledgerFile = path.join(f.inventory, f.ledgerName);
     const receiptFile = path.join(f.inventory, f.receiptName);
@@ -340,7 +341,7 @@ test('页面扫描 v3 原凭证原样读取，v4 支持新字段且拒混用和�
     const badSha = structuredClone(mixed); badSha.ledgerSha256 = sha('wrong original ledger');
     assert.throws(() => api.validateHistoricalLedger(badSha), /ledger self-SHA drifted/);
     const unknown = structuredClone(current); unknown.policy.contract = 'historical-page-scan-policy-unknown'; rehashLedger(unknown);
-    assert.throws(() => api.validateHistoricalLedger(unknown), /scan policy is unsupported/);
+    assert.throws(() => api.validateHistoricalLedger(unknown), /历史页面扫描策略不受支持/);
     const badReceipt = JSON.parse(originalReceipt);
     badReceipt.ledger.fileSha256 = sha('wrong original bytes');
     fs.writeFileSync(receiptFile, api.prettyBytes(badReceipt));
@@ -406,7 +407,7 @@ test('opaque inventory loader replays canonical ledger/receipt and rejects forge
     assert.throws(() => api.validateHistoricalLedger(invalidEnum), /preserved publication string is invalid/);
 });
 
-test('loader accepts the exact canonical ledger/receipt bytes emitted by the Python inventory contract', t => {
+test('Python 根据合成旧清单生成的配对字节可由 Node 完整读取', t => {
     const f = fixture(t); const output = path.join(f.root, 'python-inventory'); fs.mkdirSync(output);
     const input = path.join(f.root, 'python-input.json'); fs.writeFileSync(input, JSON.stringify(f.ledger));
     const script = [
@@ -426,6 +427,119 @@ test('loader accepts the exact canonical ledger/receipt bytes emitted by the Pyt
     const handle = api.loadHistoricalInventoryHandle({ inventoryRoot: output, ledgerName: 'python.json',
         receiptName: 'python.receipt.json' });
     assert.equal(api.inventoryHandleSnapshot(handle).ledger.ledgerSha256, f.ledger.ledgerSha256);
+});
+
+function bindRouteTestLedger(ledger) {
+    for (const page of ledger.pages) {
+        const body = structuredClone(page);
+        delete body.outboundPostLinks; delete body.snapshotSha256; delete body.recordSha256;
+        page.snapshotSha256 = api.stableHash(body);
+    }
+    const byId = new Map(ledger.pages.map(page => [page.pageId, page]));
+    for (const page of ledger.pages) {
+        for (const link of page.outboundPostLinks) if (link.status === 'resolved') {
+            link.targetRecordSha256 = byId.get(link.targetPageId).snapshotSha256;
+        }
+        const body = structuredClone(page); delete body.recordSha256;
+        page.recordSha256 = api.stableHash(body);
+    }
+    ledger.outboundPostLinks = ledger.pages.flatMap(page => page.outboundPostLinks.map(link => (
+        { sourcePageId: page.pageId, sourcePath: page.path, ...link }
+    )));
+    ledger.outboundPostLinksSha256 = api.stableHash(ledger.outboundPostLinks);
+    rehashLedger(ledger);
+}
+
+test('真实 Python 新扫描和原实现两版扫描经配对凭证进入 Node，原字节及所有绑定保持', t => {
+    const f = fixture(t), output = path.join(f.root, 'actual-python-scans');
+    fs.mkdirSync(output, { mode: 0o700 });
+    const project = path.join(__dirname, '..');
+    const script = [
+        'import json,runpy,shutil,sys',
+        'from pathlib import Path',
+        'from unittest import mock',
+        'root=Path(sys.argv[1]); output=Path(sys.argv[2])',
+        'sys.path.insert(0,str(root/"scripts")); sys.path.insert(0,str(root/"tests/helpers"))',
+        'import historical_page_scan as current',
+        'from historical_page_scan_original_fixture import load_original_page_scan',
+        'original=load_original_page_scan()',
+        'tests=runpy.run_path(str(root/"tests/python/test_historical_page_scan.py"))',
+        'case=tests["HistoricalPageScanTest"]()',
+        'try:',
+        '    case.setUp()',
+        '    for label,module,policy in [("current",current,current.SCAN_POLICY),("v3",original,original.LEGACY_SCAN_POLICY),("v4",original,original.SCAN_POLICY)]:',
+        '        with mock.patch.object(module,"SCAN_POLICY",policy):',
+        '            ledger=module.scan_historical_pages(case.repo,require_clean_main=True)',
+        '            module.write_inventory_pair(output/label,"history.json","history.receipt.json",ledger,expected_repo=case.repo)',
+        '    shutil.copytree(case.repo,output/"fixture-blog")',
+        'finally:',
+        '    if hasattr(case,"temporary"): case.tearDown()',
+    ].join('\n');
+    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script, project, output], {
+        cwd: project, encoding: 'utf8'
+    });
+    assert.equal(result.status, 0, result.stderr);
+    let current;
+    for (const label of ['current', 'v3', 'v4']) {
+        const inventoryRoot = path.join(output, label);
+        const ledgerFile = path.join(inventoryRoot, 'history.json'), receiptFile = path.join(inventoryRoot, 'history.receipt.json');
+        const ledgerRaw = fs.readFileSync(ledgerFile), receiptRaw = fs.readFileSync(receiptFile);
+        const prior = JSON.parse(ledgerRaw), priorReceipt = JSON.parse(receiptRaw);
+        const handle = api.loadHistoricalInventoryHandle({ inventoryRoot, ledgerName: 'history.json', receiptName: 'history.receipt.json' });
+        const snapshot = api.inventoryHandleSnapshot(handle);
+        assert.deepEqual(snapshot.ledger, prior);
+        assert.deepEqual(snapshot.receipt, priorReceipt);
+        assert.equal(snapshot.ledgerFileSha256, sha(ledgerRaw));
+        assert.equal(snapshot.receiptFileSha256, sha(receiptRaw));
+        assert.equal(snapshot.receipt.ledger.fileSha256, sha(ledgerRaw));
+        assert.equal(snapshot.ledger.pages.length, 4);
+        assert.equal(snapshot.ledger.pageSetSha256, api.stableHash(prior.pages));
+        assert.deepEqual(fs.readFileSync(ledgerFile), ledgerRaw);
+        assert.deepEqual(fs.readFileSync(receiptFile), receiptRaw);
+        const newFormat = label === 'current';
+        assert.equal(prior.policy.contract, 'historical-page-scan-policy-' + (newFormat ? 'v5' : label));
+        for (const page of prior.pages) {
+            assert.equal(page.contentSha256, sha(fs.readFileSync(path.join(output, 'fixture-blog', page.path))));
+            assert.equal(Object.hasOwn(page, 'legacyTagRouteCandidates'), newFormat);
+            assert.equal(Object.hasOwn(page, 'legacyTaxonomyCandidates'), !newFormat);
+            for (const candidate of page[newFormat ? 'legacyTagRouteCandidates' : 'legacyTaxonomyCandidates']) {
+                assert.equal(Object.hasOwn(candidate, 'routeGroup'), newFormat);
+                assert.equal(Object.hasOwn(candidate, 'taxonomy'), !newFormat);
+                assert.equal(candidate.status, 'unverified');
+            }
+        }
+        const byId = new Map(prior.pages.map(page => [page.pageId, page]));
+        for (const link of prior.outboundPostLinks) if (link.status === 'resolved') {
+            assert.equal(link.targetRecordSha256, byId.get(link.targetPageId).snapshotSha256);
+        }
+        if (newFormat) current = prior;
+    }
+    for (const value of [null, structuredClone(current.pages[0].legacyTagRouteCandidates)]) {
+        const mixed = structuredClone(current);
+        mixed.pages[0].legacyTaxonomyCandidates = value;
+        bindRouteTestLedger(mixed);
+        assert.throws(() => api.validateHistoricalLedger(mixed), /页面不能混用新旧标签链接候选字段/);
+    }
+    for (const value of [null, 'tags']) {
+        const mixed = structuredClone(current);
+        const candidate = mixed.pages.flatMap(page => page.legacyTagRouteCandidates).find(route => route.routeGroup === 'tags');
+        candidate.taxonomy = value;
+        bindRouteTestLedger(mixed);
+        assert.throws(() => api.validateHistoricalLedger(mixed), /候选不能混用新旧路由分组字段/);
+        const broken = structuredClone(mixed); broken.ledgerSha256 = sha('bad original self');
+        assert.throws(() => api.validateHistoricalLedger(broken), /ledger self-SHA drifted/);
+    }
+    const wrong = structuredClone(current);
+    wrong.policy = JSON.parse(fs.readFileSync(path.join(output, 'v4', 'history.json'))).policy;
+    bindRouteTestLedger(wrong);
+    assert.throws(() => api.validateHistoricalLedger(wrong), /与扫描策略不一致/);
+    const unknown = structuredClone(current); unknown.policy.contract = 'historical-page-scan-policy-unknown';
+    bindRouteTestLedger(unknown);
+    assert.throws(() => api.validateHistoricalLedger(unknown), /历史页面扫描策略不受支持/);
+    const inventoryRoot = path.join(output, 'current');
+    fs.appendFileSync(path.join(inventoryRoot, 'history.json'), ' ');
+    assert.throws(() => api.loadHistoricalInventoryHandle({ inventoryRoot, ledgerName: 'history.json', receiptName: 'history.receipt.json' }),
+        /receipt does not bind the exact ledger/);
 });
 
 test('prepare selects every and only paper page without title/body, dry-run is zero-write and apply uses safe modes', t => {

@@ -60,11 +60,29 @@ const LEGACY_SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-polic
     linkOffsetUnit: 'utf8-byte-body-relative',
     taxonomyRoutes: 'unverified-candidates-v2', publicationEvidence: 'schema-checked-hash-default-whitelist-v3',
     targetRecordBinding: 'target-page-snapshot-sha256-v1' });
-const SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-policy-v4', bodyRetention: 'sha256-only',
+const PREVIOUS_SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-policy-v4', bodyRetention: 'sha256-only',
     identityHints: 'frontmatter-filename-explicit-links-v1', outboundLinks: 'strict-balanced-inline-occurrences-v3',
     linkOffsetUnit: 'utf8-byte-body-relative',
     tagRoutes: 'unverified-candidates-v2', publicationEvidence: 'schema-checked-hash-default-whitelist-v4',
     targetRecordBinding: 'target-page-snapshot-sha256-v1' });
+const SCAN_POLICY = Object.freeze({ ...PREVIOUS_SCAN_POLICY,
+    contract: 'historical-page-scan-policy-v5', tagRoutes: 'unverified-candidates-v3' });
+
+function scanFormatFor(policy) {
+    // 策略只选择对应字段；页面和来源仍按原完整对象核验，不转换旧记录。
+    const formats = [
+        { policy: LEGACY_SCAN_POLICY, evidenceFields: PUBLICATION_EVIDENCE_FIELDS,
+            candidateField: 'legacyTaxonomyCandidates', groupField: 'taxonomy' },
+        { policy: PREVIOUS_SCAN_POLICY, evidenceFields: CURRENT_PUBLICATION_EVIDENCE_FIELDS,
+            candidateField: 'legacyTaxonomyCandidates', groupField: 'taxonomy' },
+        { policy: SCAN_POLICY, evidenceFields: CURRENT_PUBLICATION_EVIDENCE_FIELDS,
+            candidateField: 'legacyTagRouteCandidates', groupField: 'routeGroup' }
+    ];
+    const format = formats.find(item => stableHash(policy) === stableHash(item.policy));
+    if (!format) throw new PageSourceCrosswalkError('历史页面扫描策略不受支持。');
+    exact(policy, Object.keys(format.policy), '历史页面扫描策略');
+    return format;
+}
 const FINAL_REVIEW_STATUSES = new Set(['needs-review', 'blocked', 'conflict']);
 const ALL_STATUSES = new Set(['pending', ...FINAL_REVIEW_STATUSES, 'verified']);
 const MAX_LEDGER_BYTES = 64 * 1024 * 1024;
@@ -265,11 +283,19 @@ function readRegular(filename, maximum, label) {
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-function validateHistoricalPage(page, index, legacyScan) {
+function validateHistoricalPage(page, index, scanFormat) {
+    const { candidateField, groupField, evidenceFields: allowedEvidenceFields } = scanFormat;
+    if (plain(page) && Object.hasOwn(page, 'legacyTagRouteCandidates') && Object.hasOwn(page, 'legacyTaxonomyCandidates')) {
+        throw new PageSourceCrosswalkError('页面不能混用新旧标签链接候选字段。');
+    }
+    const otherCandidateField = candidateField === 'legacyTagRouteCandidates' ? 'legacyTaxonomyCandidates' : 'legacyTagRouteCandidates';
+    if (plain(page) && Object.hasOwn(page, otherCandidateField)) {
+        throw new PageSourceCrosswalkError('页面的标签链接候选字段与扫描策略不一致。');
+    }
     exact(page, ['pageId', 'path', 'gitBlobOid', 'contentBytes', 'contentSha256', 'frontmatterBytes',
         'frontmatterSha256', 'bodyBytes', 'bodySha256', 'primaryUrl', 'aliases', 'kind', 'scope', 'publishedDate', 'cohortDate',
         'legacyTaskKey', 'draft', 'published', 'legacy', 'identityHints', 'outboundPostLinks',
-        'publicationEvidenceRefs', 'legacyTaxonomyCandidates', 'snapshotSha256', 'recordSha256'],
+        'publicationEvidenceRefs', candidateField, 'snapshotSha256', 'recordSha256'],
     `historical pages[${index}]`);
     text(page.path, `historical pages[${index}].path`);
     if (path.isAbsolute(page.path) || page.path.includes('\\') || page.path.split('/').some(part => ['', '.', '..'].includes(part))
@@ -344,7 +370,6 @@ function validateHistoricalPage(page, index, legacyScan) {
         && LEGACY_PAGE_TAG_FIELDS.some(field => fieldNames.includes(field))) {
         fail('页面不能同时包含新旧标签字段。');
     }
-    const allowedEvidenceFields = legacyScan ? PUBLICATION_EVIDENCE_FIELDS : CURRENT_PUBLICATION_EVIDENCE_FIELDS;
     const evidenceFields = [];
     for (const evidence of page.publicationEvidenceRefs) {
         exact(evidence, ['field', 'valueType', 'value', 'valueSha256'], 'historical publication evidence');
@@ -383,12 +408,19 @@ function validateHistoricalPage(page, index, legacyScan) {
     if (stableHash(evidenceFields) !== stableHash([...new Set(evidenceFields)].sort())) {
         fail('historical publication evidence fields must be unique and sorted');
     }
-    if (!Array.isArray(page.legacyTaxonomyCandidates)) fail('historical legacyTaxonomyCandidates must be an array');
-    for (const candidate of page.legacyTaxonomyCandidates) {
-        exact(candidate, ['taxonomy', 'term', 'status', 'candidateUrl', 'method'], 'historical taxonomy candidate');
-        if (!['tags', 'categories'].includes(candidate.taxonomy) || candidate.status !== 'unverified'
-            || candidate.method !== 'legacy-term-normalization-v1') fail('historical taxonomy candidate is unsupported');
-        text(candidate.term, 'historical taxonomy term'); text(candidate.candidateUrl, 'historical taxonomy candidate URL');
+    if (!Array.isArray(page[candidateField])) fail('历史页面的标签链接候选必须为数组。');
+    for (const candidate of page[candidateField]) {
+        if (plain(candidate) && Object.hasOwn(candidate, 'routeGroup') && Object.hasOwn(candidate, 'taxonomy')) {
+            throw new PageSourceCrosswalkError('候选不能混用新旧路由分组字段。');
+        }
+        const otherGroupField = groupField === 'routeGroup' ? 'taxonomy' : 'routeGroup';
+        if (plain(candidate) && Object.hasOwn(candidate, otherGroupField)) {
+            throw new PageSourceCrosswalkError('候选的路由分组字段与扫描策略不一致。');
+        }
+        exact(candidate, [groupField, 'term', 'status', 'candidateUrl', 'method'], '历史标签链接候选');
+        if (!['tags', 'categories'].includes(candidate[groupField]) || candidate.status !== 'unverified'
+            || candidate.method !== 'legacy-term-normalization-v1') fail('历史标签链接候选的类型或状态不受支持。');
+        text(candidate.term, '历史标签名称'); text(candidate.candidateUrl, '历史标签候选链接');
     }
     const snapshotBody = clone(page); delete snapshotBody.outboundPostLinks;
     delete snapshotBody.snapshotSha256; delete snapshotBody.recordSha256;
@@ -445,15 +477,12 @@ function validateHistoricalLedger(value) {
             fail(`historical Hugo ${field} is invalid`);
         }
     }
-    const legacyScan = stableHash(value.policy) === stableHash(LEGACY_SCAN_POLICY);
-    const policy = legacyScan ? LEGACY_SCAN_POLICY : SCAN_POLICY;
-    exact(value.policy, Object.keys(policy), 'historical scan policy');
-    if (stableHash(value.policy) !== stableHash(policy)) fail('historical scan policy is unsupported');
+    const scanFormat = scanFormatFor(value.policy);
     if (!Array.isArray(value.pages) || !value.pages.length
         || !Array.isArray(value.urlCollisions) || !Array.isArray(value.outboundPostLinks) || !plain(value.counts)) {
         fail('historical ledger collections are malformed');
     }
-    const pages = value.pages.map((page, index) => validateHistoricalPage(page, index, legacyScan));
+    const pages = value.pages.map((page, index) => validateHistoricalPage(page, index, scanFormat));
     const paths = pages.map(page => page.path);
     if (paths.some((item, index) => index && paths[index - 1] >= item)) fail('historical pages must be unique and path-sorted');
     if (assertSha(value.pageSetSha256, 'historical pageSetSha256') !== stableHash(pages)) fail('historical page set SHA drifted');
