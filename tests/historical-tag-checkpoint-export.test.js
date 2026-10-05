@@ -8,6 +8,7 @@ const api = require('../scripts/lib/historical-tag-checkpoint-export.js'),
 function makePageRecordFixture(paperId) {
     const classification = {
         paperId,
+        contract: classify.LEGACY_CONTRACT,
         fingerprint: 'f'.repeat(64),
         proofSha256: 'p',
         source: { paperId },
@@ -17,6 +18,8 @@ function makePageRecordFixture(paperId) {
     };
     const body = {
         paperId,
+        evidenceType: 'source-only-taxonomy',
+        classificationContract: classify.LEGACY_CONTRACT,
         classificationRecordSha256: runner.stableHash(classification),
         classificationProofSha256: classification.proofSha256,
         requestStageFingerprint: classification.fingerprint,
@@ -66,13 +69,13 @@ test(
     'resume excludes exact processed prefix only with immutable content hash and matching selection',
     () => {
         const selection = {
-            contract: classify.CONTRACT + '-selection',
+            contract: classify.LEGACY_CONTRACT + '-selection',
             planSha256: 'plan',
             registrySha256: 'registry',
             paperIds: ['arxiv:2601.00001', 'arxiv:2601.00002', 'arxiv:2601.00003']
         };
         const checkpoint = {
-            contract: classify.CONTRACT + '-checkpoint',
+            contract: classify.LEGACY_CONTRACT + '-checkpoint',
             supplement: { contract: 'historical-direct-taxonomy-supplement-v1', records: {} },
             processed: 2,
             decisions: [{ paperId: selection.paperIds[0], fingerprint: 'f'.repeat(64) }],
@@ -137,7 +140,7 @@ test(
             'conference:icml:2026:openreview-forum-id:../x',
             'arxiv:2601.00001v2'
         ])
-            assert.throws(() => cli.parsePaperIds(raw), /Invalid/);
+            assert.throws(() => cli.parsePaperIds(raw), /排除论文编号/);
         const selection = { paperIds: ids },
             plan = { queue: ids.map(paperId => ({ paperId })) };
         assert.deepEqual(api.validateExcludedIds(ids, selection, plan), ids);
@@ -157,7 +160,7 @@ test(
     'remaining paper selection requires an export report that matches the checked report',
     () => {
         const report = {
-            contract: classify.CONTRACT + '-checkpoint-export-report',
+            contract: classify.LEGACY_CONTRACT + '-checkpoint-export-report',
             processedPaperIds: ['arxiv:2601.00001'],
             processed: 1,
             acceptedCaches: 1,
@@ -173,13 +176,13 @@ test(
     'parallel completion checkpoint can safely exclude out-of-order completed IDs without skipping gaps',
     () => {
         const selection = {
-            contract: classify.CONTRACT + '-selection',
+            contract: classify.LEGACY_CONTRACT + '-selection',
             planSha256: 'plan',
             registrySha256: 'registry',
             paperIds: ['arxiv:2601.00001', 'arxiv:2601.00002', 'arxiv:2601.00003']
         };
         const checkpoint = {
-            contract: classify.CONTRACT + '-checkpoint',
+            contract: classify.LEGACY_CONTRACT + '-checkpoint',
             checkpointScheduling: 'completion-set-v1',
             processedPaperIds: [selection.paperIds[0], selection.paperIds[2]],
             supplement: { contract: 'historical-direct-taxonomy-supplement-v1', records: {} },
@@ -254,20 +257,20 @@ test(
 function partialFixture() {
     const paperIds = ['arxiv:2601.00001', 'arxiv:2601.00002', 'arxiv:2601.00003', 'arxiv:2601.00004'];
     const selection = {
-        contract: classify.CONTRACT + '-selection',
+        contract: classify.LEGACY_CONTRACT + '-selection',
         planSha256: 'plan',
         registrySha256: 'registry',
         paperIds
     };
     const proof = makePageRecordFixture(paperIds[2]);
     const value = {
-        contract: classify.CONTRACT + '-checkpoint',
+        contract: classify.LEGACY_CONTRACT + '-checkpoint',
         supplement: {
             contract: 'historical-direct-taxonomy-supplement-v1',
             records: { 'c.md': proof.page }
         },
         report: {
-            contract: classify.CONTRACT + '-report',
+            contract: classify.LEGACY_CONTRACT + '-report',
             state: 'partial',
             selected: 4,
             processed: 2,
@@ -325,7 +328,7 @@ test(
                     filename: 'partial-000002-' + '0'.repeat(16) + '.json'
                 }
             ),
-            /部分运行记录未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/
+            /部分运行记录的文件名与原完整记录的内容哈希不一致/
         );
         assert.throws(
             () => api.normalizeCheckpoint(value, selection, { ...options(value), registrySha256: 'another' }),
@@ -342,6 +345,8 @@ test(
             v => v.contract = 'wrong',
             v => v.report.contract = 'wrong',
             v => v.supplement.contract = 'wrong',
+            v => v.report.contract = classify.CONTRACT + '-report',
+            v => v.supplement.contract = 'historical-direct-tag-supplement-v2',
             v => v.report.state = 'complete',
             v => v.report.selected = 3,
             v => v.report.processed = 1,
@@ -390,10 +395,10 @@ test(
         );
         const fifty = Array.from({ length: 53 },(_, i) => 'arxiv:2601.' + String(i + 1).padStart(5, '0'));
         const big = {
-            contract: classify.CONTRACT + '-checkpoint',
+            contract: classify.LEGACY_CONTRACT + '-checkpoint',
             supplement: { contract: 'historical-direct-taxonomy-supplement-v1', records: {} },
             report: {
-                contract: classify.CONTRACT + '-report',
+                contract: classify.LEGACY_CONTRACT + '-report',
                 state: 'partial',
                 selected: 53,
                 processed: 50,

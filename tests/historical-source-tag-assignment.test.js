@@ -40,14 +40,19 @@ test('cache must bind source, registry, fingerprint, injected quotes and indepen
     const text = evidence.repeat(3),bundle = sn.buildSourceEvidenceSnippets(text),source = { text, source: { paperId: 'arxiv:2601.00001', textSha256: sha(text), pdfSha256: 'a'.repeat(64) } };
     const modelResponseText = JSON.stringify({ ...raw, concepts: raw.concepts.map(c => ({ id: c.id, evidenceId: bundle.snippets[0].id, rationale: c.rationale })) });
     const injected = sn.fillConceptQuotesFromSnippets(modelResponseText,bundle),decision = api.parseTagSelectionResponse(injected.responseText,runtime,bundle.projection,text);
-    const reviewProof = { decisionSha256:hash(decision),sourceTextSha256:source.source.textSha256,evidenceSha256:bundle.evidenceSha256,registrySha256:runtime.registrySha256,response:{accepted:true,issues:[]} };
-    const body = { fingerprint:'fp',source:source.source,registrySha256:runtime.registrySha256,modelResponseText,modelResponseSha256:sha(modelResponseText),responseText:injected.responseText,responseSha256:sha(injected.responseText),quoteSelections:injected.selections,reviewProof,reviewProofSha256:hash(reviewProof),...decision };
+    const reviewProof = { contract:api.CONTRACT+'-review',decisionSha256:hash(decision),sourceTextSha256:source.source.textSha256,evidenceSha256:bundle.evidenceSha256,registrySha256:runtime.registrySha256,response:{accepted:true,issues:[]} };
+    const body = { contract:api.CONTRACT,fingerprint:'fp',source:source.source,registrySha256:runtime.registrySha256,modelResponseText,modelResponseSha256:sha(modelResponseText),responseText:injected.responseText,responseSha256:sha(injected.responseText),quoteSelections:injected.selections,reviewProof,reviewProofSha256:hash(reviewProof),...decision };
     const record = { ...body, proofSha256:hash(body) },options = { fingerprint:'fp',runtime,bundle,source };
     assert.equal(api.validateCachedTagSelection(record,options).primaryTaskId,raw.primaryTaskId);
     assert.throws(() => api.validateCachedTagSelection(record,{...options,fingerprint:'other-model-route'}),/保存的分类结果与本次指纹、来源或词表不一致/);
     assert.throws(() => api.validateCachedTagSelection(record,{...options,source:{...source,source:{...source.source,pdfSha256:'b'.repeat(64)}}}),/保存的分类结果与本次指纹、来源或词表不一致/);
     const tampered = structuredClone(body);tampered.reviewProof.sourceTextSha256='c'.repeat(64);tampered.reviewProofSha256=hash(tampered.reviewProof);
     assert.throws(() => api.validateCachedTagSelection({...tampered,proofSha256:hash(tampered)},options),/保存的独立审核记录缺失/);
+    const wrongReviewFormat = structuredClone(body);
+    wrongReviewFormat.reviewProof.contract = api.LEGACY_CONTRACT + '-review';
+    wrongReviewFormat.reviewProofSha256 = hash(wrongReviewFormat.reviewProof);
+    assert.throws(() => api.validateCachedTagSelection({ ...wrongReviewFormat, proofSha256: hash(wrongReviewFormat) }, options),
+        /分类记录与审核记录格式不受支持，或不属于同一代格式/);
 });
 test('typed account pool exhaustion is run stopping but classification issues are per paper', () => {
     const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
@@ -56,27 +61,27 @@ test('typed account pool exhaustion is run stopping but classification issues ar
 });
 test('partial quota checkpoint does not occupy final names and can resume to larger final result',()=>{
  const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'source-taxonomy-resume-')));
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'source-tag-resume-')));
  try {
   const selected=[{paperId:'arxiv:2601.00001'},{paperId:'arxiv:2601.00002'}];
-  const first={contract:'historical-direct-taxonomy-supplement-v1',records:{'one.md':{paperId:selected[0].paperId}}};
+  const first={contract:require('../scripts/lib/historical-direct-tag-supplement.js').CONTRACT,records:{'one.md':{paperId:selected[0].paperId}}};
   const partial=api.persistRunResult(root,selected,first,[selected[0]],[],{paperId:selected[1].paperId,status:'account-pool-exhausted'});
   assert.equal(partial.state,'partial');assert.equal(partial.processed,1);assert.deepEqual(partial.remainingPaperIds,[selected[1].paperId]);
-  assert.equal(fs.existsSync(path.join(root,'taxonomy-history.json')),false);
+  assert.equal(fs.existsSync(path.join(root,'tag-history.json')),false);
   assert.equal(fs.existsSync(path.join(root,'report.json')),false);
   const final={...first,records:{...first.records,'two.md':{paperId:selected[1].paperId}}};
   const complete=api.persistRunResult(root,selected,final,selected,[]);
   assert.equal(complete.state,'complete');assert.equal(complete.processed,2);assert.equal(complete.remainingPaperIds.length,0);
-  assert.equal(Object.keys(JSON.parse(fs.readFileSync(path.join(root,'taxonomy-history.json'))).records).length,2);
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(path.join(root,'tag-history.json'))).records).length,2);
   assert.equal(fs.readdirSync(root).filter(n=>n.startsWith('partial-')).length,1);
   assert.throws(()=>api.persistRunResult(root,selected,first,[selected[0]],[]),/最终报告未覆盖本次全部所选论文/);
  } finally {fs.rmSync(root,{recursive:true,force:true});}
 });
 test('partial parallel completion reports the actual gaps instead of assuming a completed prefix',()=>{
  const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
- const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'source-taxonomy-parallel-')));
+ const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'source-tag-parallel-')));
  try {
-  const selected=['a','b','c'].map(paperId=>({paperId})),supplement={contract:'historical-direct-taxonomy-supplement-v1',records:{}};
+  const selected=['a','b','c'].map(paperId=>({paperId})),supplement={contract:require('../scripts/lib/historical-direct-tag-supplement.js').CONTRACT,records:{}};
   const partial=api.persistRunResult(root,selected,supplement,[selected[2]],[],{status:'operator-stopped'});
   assert.deepEqual(partial.remainingPaperIds,['a','b']);assert.equal(partial.processed,1);
   assert.throws(()=>api.persistRunResult(root,selected,supplement,[selected[2],selected[2]],[],{status:'operator-stopped'}),/已处理论文重复，或包含本次所选集合之外的论文/);
@@ -136,6 +141,23 @@ async function sourceClassificationFixture(t, respond, metadataFamily = null) {
     const realRequire = Module.createRequire(filename), loaded = new Module(filename, module);
     loaded.filename = filename; loaded.paths = Module._nodeModulePaths(path.dirname(filename));
     const calls = [];
+    let checkpointExporter;
+    function loadCheckpointExporter() {
+        if (checkpointExporter) return checkpointExporter;
+        const exportFilename = require.resolve('../scripts/lib/historical-tag-checkpoint-export.js');
+        const exportRequire = Module.createRequire(exportFilename), exportModule = new Module(exportFilename, module);
+        exportModule.filename = exportFilename;
+        exportModule.paths = Module._nodeModulePaths(path.dirname(exportFilename));
+        exportModule.require = request => {
+            if (request === '../config.js') return { FILES: { freshArxivFetchedSourcesDir: sourceRoot } };
+            if (request === './historical-source-tag-assignment.js') return loaded.exports;
+            if (request === './historical-direct-tag-supplement.js') return { ...supplement, readPlanRegistry: () => ({ plan, registry }) };
+            return exportRequire(request);
+        };
+        exportModule._compile(fs.readFileSync(exportFilename, 'utf8'), exportFilename);
+        checkpointExporter = exportModule.exports;
+        return checkpointExporter;
+    }
     // Only external plan/control/configuration/model entry points are substituted.
     // Source files, evidence injection, parser, scheduler and immutable writes remain real.
     loaded.require = request => {
@@ -158,6 +180,7 @@ async function sourceClassificationFixture(t, respond, metadataFamily = null) {
             } };
         if (request === './historical-direct-page-staging.js') return {
             currentRendererImplementationSha256: () => 'f'.repeat(64) };
+        if (request === './historical-tag-checkpoint-export.js') return loadCheckpointExporter();
         return realRequire(request);
     };
     loaded._compile(fs.readFileSync(filename, 'utf8'), filename);
@@ -165,7 +188,8 @@ async function sourceClassificationFixture(t, respond, metadataFamily = null) {
         concepts: raw.concepts.map(c => ({ id: c.id, evidenceId: 's00001', rationale: c.rationale })) });
     const options = { outputDirectory: path.join(root, 'output'), blogRoot, runId: 'offline-source-tags',
         registrySnapshot: path.resolve(__dirname, '../config/tag-catalog.json'), concurrency: 1 };
-    return { fs, path, root, calls, sha, text, page, pagePath, item, normalResponse,
+    return { fs, path, root, calls, sha, text, page, pagePath, item, normalResponse, plan, sourceRoot,
+        get exportApi() { return loadCheckpointExporter(); },
         run: (outputDirectory, extra = {}) => loaded.exports.classifyRun({ ...options,
             ...(outputDirectory ? { outputDirectory } : {}), ...extra }), options, api: loaded.exports };
 }
@@ -196,6 +220,20 @@ test('actual source classification prompts reach selection, independent review a
         const files = fixture.fs.readdirSync(fixture.options.outputDirectory);
         const decision = JSON.parse(fixture.fs.readFileSync(fixture.path.join(fixture.options.outputDirectory,
             files.find(name => name.startsWith('decision-'))), 'utf8'));
+        assert.equal(fixture.api.CONTRACT, 'historical-source-tag-classification-v2');
+        assert.equal(decision.contract, fixture.api.CONTRACT);
+        assert.equal(decision.reviewProof.contract, fixture.api.CONTRACT + '-review');
+        assert.equal(result.report.contract, fixture.api.CONTRACT + '-report');
+        assert.equal(result.supplement.contract, 'historical-direct-tag-supplement-v2');
+        assert.equal(result.supplement.records[fixture.pagePath].evidenceType, 'source-only-tags');
+        assert.equal(result.supplement.records[fixture.pagePath].classificationContract, decision.contract);
+        assert.equal(files.includes('taxonomy-history.json'), false);
+        assert.equal(files.includes('tag-history.json'), true);
+        for (const [prefix, suffix] of [['attempt-', '-attempt'], ['review-', '-review-attempt']]) {
+            const saved = JSON.parse(fixture.fs.readFileSync(fixture.path.join(fixture.options.outputDirectory,
+                files.find(name => name.startsWith(prefix))), 'utf8'));
+            assert.equal(saved.contract, fixture.api.CONTRACT + suffix);
+        }
         assert.equal(decision.modelResponseText, fixture.normalResponse);
         assert.equal(decision.reviewProof.promptSha256, fixture.sha(review.prompt));
         assert.ok(decision.concepts.every(c => fixture.text.includes(c.quote)));
@@ -248,7 +286,7 @@ test('来源标签选择拒绝混用字段，审核后新增标签字段不能�
     assert.deepEqual(Object.keys(result.supplement.records), []);
 });
 
-test('actual source classification rejects saved attempt and review prompt SHA mismatches', async t => {
+test('actual source classification rejects saved prompt SHA mismatches and wrong-generation request caches', async t => {
     let fixture;
     fixture = await sourceClassificationFixture(t, call => call.maxTokens === 3000
         ? '{"accepted":true,"issues":[]}' : fixture.normalResponse);
@@ -259,16 +297,30 @@ test('actual source classification rejects saved attempt and review prompt SHA m
     const reviewName = names.find(name => name.startsWith('review-'));
     const attemptBytes = fixture.fs.readFileSync(fixture.path.join(originalDirectory, attemptName));
     const reviewBytes = fixture.fs.readFileSync(fixture.path.join(originalDirectory, reviewName));
-    for (const target of ['attempt', 'review']) {
+    const decisionName = names.find(name => name.startsWith('decision-'));
+    const decisionBytes = fixture.fs.readFileSync(fixture.path.join(originalDirectory, decisionName));
+    for (const target of ['attempt', 'review', 'attempt-format', 'review-format', 'decision-format']) {
         const output = fixture.path.join(fixture.root, 'bad-' + target);
         fixture.fs.mkdirSync(output);
         const attempt = JSON.parse(attemptBytes), review = JSON.parse(reviewBytes);
         if (target === 'attempt') attempt.promptSha256 = fixture.sha('old selection prompt');
-        else review.promptSha256 = fixture.sha('old review prompt');
+        if (target === 'review') review.promptSha256 = fixture.sha('old review prompt');
+        if (target === 'attempt-format') attempt.contract = fixture.api.LEGACY_CONTRACT + '-attempt';
+        if (target === 'review-format') review.contract = fixture.api.LEGACY_CONTRACT + '-review-attempt';
+        if (target === 'decision-format') {
+            // 独立负例保持新请求指纹，却使用自洽的旧格式；原缓存文件不修改。
+            const { proofSha256, ...wrongGeneration } = JSON.parse(decisionBytes);
+            const hash = require('../scripts/lib/historical-direct-rewrite-runner.js').stableHash;
+            wrongGeneration.contract = fixture.api.LEGACY_CONTRACT;
+            wrongGeneration.reviewProof.contract = fixture.api.LEGACY_CONTRACT + '-review';
+            wrongGeneration.reviewProofSha256 = hash(wrongGeneration.reviewProof);
+            fixture.fs.writeFileSync(fixture.path.join(output, decisionName),
+                JSON.stringify({ ...wrongGeneration, proofSha256: hash(wrongGeneration) }), { mode: 0o600 });
+        }
         fixture.fs.writeFileSync(fixture.path.join(output, attemptName), JSON.stringify(attempt), { mode: 0o600 });
-        if (target === 'review') {
+        if (target.startsWith('review')) {
             fixture.fs.writeFileSync(fixture.path.join(output, reviewName), JSON.stringify(review), { mode: 0o600 });
-            const feedback = '来源标签分类被拒绝：审核尝试记录的提示 SHA 或响应 SHA 不一致。';
+            const feedback = '来源标签分类被拒绝：审核尝试记录的格式不符合要求，或提示 SHA 或响应 SHA 不一致。';
             const secondAttempt = { ...attempt, promptSha256: fixture.sha(fixture.calls[0].prompt + feedback) };
             fixture.fs.writeFileSync(fixture.path.join(output, attemptName.replace(/-1\.json$/, '-2.json')),
                 JSON.stringify(secondAttempt), { mode: 0o600 });
@@ -277,24 +329,26 @@ test('actual source classification rejects saved attempt and review prompt SHA m
         }
         const result = await fixture.run(output);
         assert.equal(result.report.decisions.length, 0); assert.equal(result.report.failures.length, 1);
-        assert.match(result.report.failures[0].error, target === 'attempt'
-            ? /分类尝试记录的指纹、提示 SHA 或响应 SHA 不一致/
-            : /审核尝试记录的提示 SHA 或响应 SHA 不一致/);
+        assert.match(result.report.failures[0].error, target.startsWith('attempt')
+            ? /分类尝试记录的格式不符合要求，或指纹、提示 SHA 或响应 SHA 不一致/
+            : target.startsWith('review') ? /审核尝试记录的格式不符合要求，或提示 SHA 或响应 SHA 不一致/
+                : /新运行的请求缓存必须采用当前分类格式/);
         assert.equal(fixture.calls.length, originalCalls);
     }
     assert.deepEqual(fixture.fs.readFileSync(fixture.path.join(originalDirectory, attemptName)), attemptBytes);
     assert.deepEqual(fixture.fs.readFileSync(fixture.path.join(originalDirectory, reviewName)), reviewBytes);
+    assert.deepEqual(fixture.fs.readFileSync(fixture.path.join(originalDirectory, decisionName)), decisionBytes);
 });
 
 test('actual uncovered response retains its status and explicit resume excludes the original processed set', async t => {
     const reason = '当前词表没有覆盖本文实际研究的主任务和主方法。';
     const fixture = await sourceClassificationFixture(t, () => JSON.stringify({
-        status: 'not-covered-by-current-taxonomy', reason, evidenceId: 's00001' }));
+        status: 'not-covered-by-current-tag-catalog', reason, evidenceId: 's00001' }));
     const result = await fixture.run();
     assert.equal(fixture.calls.length, 1); assert.equal(result.report.decisions.length, 0);
-    assert.equal(result.report.failures[0].status, 'not-covered-by-current-taxonomy');
+    assert.equal(result.report.failures[0].status, 'not-covered-by-current-tag-catalog');
     assert.equal(result.report.failures[0].error, '当前词表没有覆盖适用类别：' + reason);
-    assert.match(fixture.calls[0].prompt, /"status":"not-covered-by-current-taxonomy"/);
+    assert.match(fixture.calls[0].prompt, /"status":"not-covered-by-current-tag-catalog"/);
     const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
     const checkpoint = { contract: fixture.api.CONTRACT + '-checkpoint', processed: 1,
         decisions: [], failures: result.report.failures, supplement: result.supplement };
@@ -310,4 +364,92 @@ test('actual uncovered response retains its status and explicit resume excludes 
     assert.deepEqual(selection.paperIds, []);
     assert.deepEqual(selection.resumeProvenance.processedPaperIds, ['arxiv:2601.00001']);
     assert.deepEqual(fixture.fs.readFileSync(checkpointFile), originalBytes);
+    const wrongStatus = structuredClone(checkpoint);
+    wrongStatus.failures[0].status = 'not-covered-by-current-taxonomy';
+    const wrongCheckpointFile = fixture.path.join(fixture.options.outputDirectory,
+        'checkpoint-000001-' + runner.stableHash(wrongStatus).slice(0, 16) + '.json');
+    fixture.fs.writeFileSync(wrongCheckpointFile, JSON.stringify(wrongStatus), { mode: 0o600 });
+    await assert.rejects(fixture.run(fixture.path.join(fixture.root, 'wrong-status'),
+        { resumeCheckpointFile: wrongCheckpointFile }), /失败记录的状态、错误说明格式无效/);
+    assert.equal(fixture.calls.length, 1);
+});
+
+test('真实文件导出与续跑保留旧分类、子证明及原报告字节，正常导出只写新版包装', async t => {
+    const fixture = await sourceClassificationFixture(t, () => { throw new Error('旧已处理论文不应请求模型'); });
+    const supplement = require('../scripts/lib/historical-direct-tag-supplement.js');
+    const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
+    const snippets = require('../scripts/lib/source-evidence-snippets.js');
+    const hash = runner.stableHash, legacy = fixture.api.LEGACY_CONTRACT;
+    const sourceDetails = await fixture.api.loadPaperSourceDetails(fixture.item,
+        { FILES: { freshArxivFetchedSourcesDir: fixture.sourceRoot } }, 1);
+    const bundle = snippets.buildSourceEvidenceSnippets(sourceDetails.text);
+    const injected = snippets.fillConceptQuotesFromSnippets(fixture.normalResponse, bundle);
+    const decision = fixture.api.parseTagSelectionResponse(injected.responseText, runtime, bundle.projection, sourceDetails.text);
+    // 独立合成原 v1 格式样本，明确写全原字段；没有改签任何保存的原记录。
+    const reviewProof = { contract: legacy + '-review', decisionSha256: hash(decision),
+        sourceTextSha256: sourceDetails.source.textSha256, evidenceSha256: bundle.evidenceSha256,
+        registrySha256: runtime.registrySha256, promptSha256: fixture.sha('Original legacy review prompt'),
+        responseSha256: fixture.sha('{"accepted":true,"issues":[]}'), response: { accepted: true, issues: [] }, model: 'offline-legacy' };
+    const fingerprint = fixture.sha('Original legacy request fingerprint');
+    const body = { contract: legacy, paperId: fixture.item.paperId, runId: 'original-legacy-run', fingerprint,
+        registrySha256: runtime.registrySha256, source: sourceDetails.source, evidenceSha256: bundle.evidenceSha256,
+        evidenceSelectionContract: bundle.contract, modelResponseText: fixture.normalResponse,
+        modelResponseSha256: fixture.sha(fixture.normalResponse), responseText: injected.responseText,
+        responseSha256: fixture.sha(injected.responseText), quoteSelections: injected.selections,
+        reviewProof, reviewProofSha256: hash(reviewProof), ...decision };
+    const record = { ...body, proofSha256: hash(body) };
+    const pageFields = { paperId: fixture.item.paperId, runId: record.runId, pageKey: fixture.item.pages[0].pageKey,
+        pageSha256: fixture.sha(fixture.page), bodySha256: fixture.sha(supplement.pageBody(Buffer.from(fixture.page))),
+        registrySha256: runtime.registrySha256, registryVersion: runtime.registryVersion,
+        concepts: record.concepts.map(({ id, facet, label }) => ({ id, facet, label })),
+        primaryTaskId: record.primaryTaskId, primaryTaskLabel: record.primaryTaskLabel,
+        primaryMethodId: record.primaryMethodId, primaryMethodLabel: record.primaryMethodLabel,
+        evidenceType: 'source-only-taxonomy', classificationContract: legacy,
+        classificationRecordSha256: hash(record), classificationProofSha256: record.proofSha256,
+        source: record.source, evidence: record.concepts, evidenceSelectionContract: record.evidenceSelectionContract,
+        quoteSelections: record.quoteSelections, requestStageFingerprint: fingerprint,
+        reviewProof, reviewProofSha256: record.reviewProofSha256 };
+    const pageRecord = { ...pageFields, proofSha256: hash(pageFields) };
+    const directory = fixture.path.join(fixture.root, 'original-legacy-input');
+    const selected = { contract: legacy + '-selection', planSha256: fixture.plan.planSha256,
+        registrySha256: runtime.registrySha256, paperIds: [fixture.item.paperId] };
+    const selectionFile = supplement.writeImmutable(directory, 'selection.json', selected);
+    const cacheFile = supplement.writeImmutable(directory,
+        'decision-' + fixture.sha(record.paperId).slice(0,16) + '-' + fingerprint + '.json', record);
+    const checkpoint = { contract: legacy + '-checkpoint', checkpointScheduling: 'completion-set-v1',
+        processedPaperIds: [fixture.item.paperId], supplement: { contract: supplement.LEGACY_CONTRACT,
+            records: { [fixture.pagePath]: pageRecord } }, processed: 1,
+        decisions: [{ paperId: fixture.item.paperId, fingerprint }], failures: [] };
+    const checkpointFile = supplement.writeImmutable(directory, 'checkpoint-000001-' + hash(checkpoint).slice(0,16) + '.json', checkpoint);
+    const originalReport = { contract: legacy + '-checkpoint-export-report', checkpointFileSha256: checkpointFile.fileSha256,
+        selectionFileSha256: selectionFile.fileSha256, selected: 1, processed: 1,
+        processedPaperIds: [fixture.item.paperId], acceptedCaches: 1, rejected: 0, excludedPaperIds: [],
+        exportedPaperCount: 1, pageCount: 1, remainingPaperIds: [], failures: [] };
+    const reportFile = supplement.writeImmutable(directory, 'report.json', originalReport);
+    const inputs = [selectionFile, cacheFile, checkpointFile, reportFile];
+    const originalBytes = inputs.map(input => fixture.fs.readFileSync(input.filename));
+    const options = { ...fixture.options, checkpointFile: checkpointFile.filename };
+    // 正常输出不能通过 options 中的格式选项降级；旧 formatter 只用于原报告的只读核验。
+    const exported = await fixture.exportApi.exportCheckpoint({ ...options, reportFamily: legacy, legacy: true });
+    assert.equal(exported.supplement.contract, supplement.CONTRACT);
+    assert.equal(exported.report.contract, fixture.api.CONTRACT + '-checkpoint-export-report');
+    assert.deepEqual(exported.supplement.records[fixture.pagePath], pageRecord);
+    const replay = await fixture.exportApi.replayCheckpointExportReport(options, originalReport);
+    assert.deepEqual(replay.report, originalReport);
+    assert.deepEqual(replay.supplement.records[fixture.pagePath], pageRecord);
+    await assert.rejects(fixture.exportApi.replayCheckpointExportReport(options,
+        { ...originalReport, pageCount: 2 }), /重新核验的来源、缓存和检查点不一致/);
+    await assert.rejects(fixture.exportApi.replayCheckpointExportReport(options,
+        { ...originalReport, contract: legacy + '-checkpoint-export-report-future' }), /格式不受支持/);
+    const resumed = await fixture.run(fixture.path.join(fixture.root, 'new-remaining-run'),
+        { resumeCheckpointFile: checkpointFile.filename, resumeExportFile: reportFile.filename });
+    assert.equal(resumed.report.contract, fixture.api.CONTRACT + '-report');
+    assert.equal(resumed.report.processed, 0);
+    assert.equal(fixture.calls.length, 0);
+    for (const [index, input] of inputs.entries())
+        assert.deepEqual(fixture.fs.readFileSync(input.filename), originalBytes[index]);
+    assert.equal(fixture.fs.readFileSync(fixture.path.join(fixture.options.blogRoot, fixture.pagePath), 'utf8'), fixture.page);
+    fixture.fs.writeFileSync(fixture.path.join(fixture.options.blogRoot, fixture.pagePath), fixture.page + 'Changed body.\n');
+    await assert.rejects(fixture.exportApi.exportCheckpoint(options), /读取页面的 SHA 与计划不一致/);
+    assert.equal(fixture.calls.length, 0);
 });

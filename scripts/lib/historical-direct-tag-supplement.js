@@ -11,7 +11,8 @@ const pages = require('./historical-direct-page-staging.js');
 const tagCatalogApi = require('./tag-catalog.js');
 const io = require('./historical-conference-page-projections.js');
 const { hasPageTagMetadata } = require('./page-tag-metadata.js');
-const CONTRACT = 'historical-direct-taxonomy-supplement-v1';
+const CONTRACT = 'historical-direct-tag-supplement-v2';
+const LEGACY_CONTRACT = 'historical-direct-taxonomy-supplement-v1';
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(`历史页面标签补充记录被拒绝：${message}`); };
 
@@ -123,4 +124,4 @@ function writeImmutable(directory, name, value) {
     return { filename, fileSha256: digest(bytes) };
 }
 
-module.exports = { CONTRACT, pageBody, classify, readPlanRegistry, buildSupplement, writeImmutable };
+module.exports = { CONTRACT, LEGACY_CONTRACT, pageBody, classify, readPlanRegistry, buildSupplement, writeImmutable };

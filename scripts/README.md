@@ -371,7 +371,11 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 新页面的扁平标签协议为 `paper-tag-flat-tags-v2`。新上下文文件使用 `paper-research-context-v2`、`schemaVersion=2`，标签信息保存在 `assessment.tagMetadata`。旧 `researcher-sidecars-v1`、`schemaVersion=1` 的 `assessment.taxonomy` 仍按原格式读取；搜索字段和词表资产后续分别迁移。
 新上下文的页面附属文件记录带有明确的 `contract`；旧记录缺少这一标识时，核验器按旧格式重建原字节，不根据标签协议猜上下文格式。三个引用文件不因这项改名改变格式或内容。
 
-直接来源历史汇总在内部也用 `tagMetadata` 传递分析所用的标签词表信息，汇总渲染和标签补充读取同一字段。这个临时对象不写入成员记录或补充证明，原分析文件和页面正文保持。历史标签补充的保存格式仍使用 `historical-direct-taxonomy-supplement-v1`；它与三条写入链及网站读取器的迁移另行处理。
+直接来源历史汇总在内部也用 `tagMetadata` 传递分析所用的标签词表信息，汇总渲染和标签补充读取同一字段。这个临时对象不写入成员记录或补充证明，原分析文件和页面正文保持。
+
+历史页面的标签补充集合使用 `historical-direct-tag-supplement-v2`，分析补充、来源分类和检查点导出均保存为 `tag-history.json`。原 `historical-direct-taxonomy-supplement-v1` 和 `taxonomy-history.json` 按原格式读取，旧文件及逐页证明不会因读取而修改。分析补充与来源分类的新默认目录分别为 `historical-direct-tag-supplements`、`historical-source-tag-classifications`；原目录保留，自定义输出及显式旧检查点路径仍只使用指定位置。
+
+新的来源分类记录使用 `historical-source-tag-classification-v2`，选择、尝试、审核、检查点及报告使用对应格式。新页面证据类型为 `source-only-tags`；词表没有适用类别时，模型返回 `not-covered-by-current-tag-catalog`。程序仍根据片段编号填入原文引文，并独立审核分类。旧分类及审核须按对应的原版本完整核验，旧响应、引文和证明保持。导出旧检查点时，新集合可以收录已核验的旧逐页记录；恢复旧导出报告则按其原格式重新核对全部内容。
 
 新会议汇总使用 `conference-aggregate-staging-v2`、`version=2`，标签信息和层级统计分别保存在 `tagMetadata`、`tagHierarchy`，成员的标签分配 SHA 为 `tagAssignmentSha256`。层级格式为 `conference-tag-hierarchy-v2`。Python 发布器先核对汇总记录的规范对象 SHA、完成记录和 Markdown 原字节，再按明确版本读取字段；旧 v1 汇总按原字段读取，新旧字段混用会被拒绝。汇总版本与子论文页、标签分配的版本分别管理，旧证明和已保存的阶段文件保持。
 

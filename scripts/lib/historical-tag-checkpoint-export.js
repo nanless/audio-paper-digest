@@ -69,6 +69,9 @@ function validatePageClassificationRecord(record, classification) {
         record.primaryTaskId !== classification.primaryTaskId ||
         record.primaryMethodId !== classification.primaryMethodId)
         fail("页面记录的内容哈希不一致，或分类结果、请求指纹、论文、来源、概念及主标签与已接受的分类记录不对应。");
+    if (record.classificationContract !== classification.contract ||
+        record.evidenceType !== (classification.contract === api.LEGACY_CONTRACT ? 'source-only-taxonomy' : 'source-only-tags'))
+        fail('页面分类证明与已核验分类记录不属于同一代格式。');
     return record;
 }
 
@@ -87,6 +90,8 @@ function filterAndValidatePageRecords(records, classifications, excludePaperIds)
 function buildPageClassificationRecord(item, page, loaded, record, tagRules) {
     if (loaded.fileSha256 !== page.pageContentSha256 || record.paperId !== item.paperId)
         fail("读取页面的 SHA 与计划不一致，或分类记录中的论文编号与当前计划项不一致。");
+    if (![api.CONTRACT, api.LEGACY_CONTRACT].includes(record.contract))
+        fail('分类记录格式不受支持，无法重新核验页面证明。');
     const pageRecordFields = {
         paperId: item.paperId,
         runId: record.runId,
@@ -100,8 +105,8 @@ function buildPageClassificationRecord(item, page, loaded, record, tagRules) {
         primaryTaskLabel: record.primaryTaskLabel,
         primaryMethodId: record.primaryMethodId,
         primaryMethodLabel: record.primaryMethodLabel,
-        evidenceType: 'source-only-taxonomy',
-        classificationContract: api.CONTRACT,
+        evidenceType: record.contract === api.LEGACY_CONTRACT ? 'source-only-taxonomy' : 'source-only-tags',
+        classificationContract: record.contract,
         classificationRecordSha256: runner.stableHash(record),
         classificationProofSha256: record.proofSha256,
         source: record.source,
@@ -147,6 +152,11 @@ function normalizeCheckpoint(value, selection, options) {
     // 及文件名，再把实际已处理集合交给原检查点验证器；这不表示整批已经完成。
     const report = value.report,
         records = value.supplement?.records;
+    if (path.basename(options.filename) !== 'partial-' + String(report?.processed).padStart(6, '0') + '-'
+        + runner.stableHash(value).slice(0,16) + '.json')
+        fail('部分运行记录的文件名与原完整记录的内容哈希不一致。');
+    const family = value.contract === api.CONTRACT + '-checkpoint' ? api.CONTRACT
+        : value.contract === api.LEGACY_CONTRACT + '-checkpoint' ? api.LEGACY_CONTRACT : null;
     const statuses = new Set([
         'operator-stopped',
         'implementation-changed',
@@ -161,12 +171,12 @@ function normalizeCheckpoint(value, selection, options) {
         'model-account-state-unavailable',
         'model-service-response-unavailable'
     ]);
-    if (value.contract !== api.CONTRACT + '-checkpoint' ||
-        value.supplement?.contract !== writer.CONTRACT ||
+    if (!family ||
+        value.supplement?.contract !== (family === api.LEGACY_CONTRACT ? writer.LEGACY_CONTRACT : writer.CONTRACT) ||
         !records ||
         typeof records !== 'object' ||
         Array.isArray(records) ||
-        report?.contract !== api.CONTRACT + '-report' ||
+        report?.contract !== family + '-report' ||
         report.state !== 'partial' ||
         !Number.isSafeInteger(report.selected) ||
         report.selected < 1 ||
@@ -215,13 +225,13 @@ function normalizeCheckpoint(value, selection, options) {
     return normalized;
 }
 
-async function exportCheckpoint(options) {
+async function buildCheckpointExport(options, reportFamily) {
     const config = require('../config.js'),
         { plan } = writer.readPlanRegistry(options);
     const tagRules = require('./tag-rules.js').createTagRules({ registryPath: options.registrySnapshot });
     const checkpointDirectory = path.dirname(options.checkpointFile),
-        loadedCheckpointFile = io.readStableJson(options.checkpointFile, 'original immutable classifier checkpoint');
-    const selection = io.readStableJson(path.join(checkpointDirectory, 'selection.json'), 'original immutable selection');
+        loadedCheckpointFile = io.readStableJson(options.checkpointFile, '原不可覆盖的来源分类检查点');
+    const selection = io.readStableJson(path.join(checkpointDirectory, 'selection.json'), '原不可覆盖的论文选择记录');
     const checkpoint = {
         ...loadedCheckpointFile,
         value: normalizeCheckpoint(
@@ -234,6 +244,9 @@ async function exportCheckpoint(options) {
             }
         )
     };
+    const checkpointFamily = checkpoint.value.contract === api.LEGACY_CONTRACT + '-checkpoint' ? api.LEGACY_CONTRACT : api.CONTRACT;
+    if (reportFamily === api.LEGACY_CONTRACT && checkpointFamily !== api.LEGACY_CONTRACT)
+        fail('旧版导出报告不能用于新版检查点。');
     const planItemsByPaperId = validateSelectionPlan(selection.value, plan),
         acceptedClassificationsByPaperId = new Map(),
         excludedPaperIds = validateExcludedIds(options.excludePaperIds || [], selection.value, plan);
@@ -244,7 +257,7 @@ async function exportCheckpoint(options) {
         // 其他并行缓存即使已保存模型响应，本次也不读取或导出。
         if (usesCompletionSetCheckpoint && !checkpointCacheNames.has(filename))
             continue;
-        const record = io.readStableJson(path.join(checkpointDirectory, filename), 'accepted classifier cache').value;
+        const record = io.readStableJson(path.join(checkpointDirectory, filename), '已通过审核的分类缓存').value;
         if (filename !== 'decision-' + digest(record.paperId).slice(0, 16) + '-' + record.fingerprint + '.json' ||
             !selection.value.paperIds.includes(record.paperId) ||
             acceptedClassificationsByPaperId.has(record.paperId))
@@ -268,6 +281,8 @@ async function exportCheckpoint(options) {
                 source: sourceDetails
             }
         );
+        if (record.contract !== checkpointFamily)
+            fail('分类缓存与原检查点不属于同一代格式。');
         acceptedClassificationsByPaperId.set(record.paperId, record);
     }
     const processedPaperIds = processedIdsForExport(selection.value, checkpoint.value, acceptedClassificationsByPaperId);
@@ -286,7 +301,7 @@ async function exportCheckpoint(options) {
         const item = planItemsByPaperId.get(id),
             record = acceptedClassificationsByPaperId.get(id);
         for (const page of item.pages) {
-            const loaded = io.readStableFile(path.join(options.blogRoot, page.pagePath), 'original classified frozen page');
+            const loaded = io.readStableFile(path.join(options.blogRoot, page.pagePath), '原标签分类对应的冻结页面');
             if (loaded.fileSha256 !== page.pageContentSha256)
                 fail("读取页面的 SHA 与计划不一致。");
             if (hasPageTagMetadata(loaded.bytes)) {
@@ -306,7 +321,7 @@ async function exportCheckpoint(options) {
         fail("检查点中保留的部分页面记录，未能按原计划中的页面重新生成并核对。");
     const supplement = { contract: writer.CONTRACT, records };
     const report = {
-        contract: api.CONTRACT + '-checkpoint-export-report',
+        contract: reportFamily + '-checkpoint-export-report',
         checkpointFileSha256: checkpoint.fileSha256,
         selectionFileSha256: selection.fileSha256,
         selected: selection.value.paperIds.length,
@@ -322,6 +337,20 @@ async function exportCheckpoint(options) {
     };
     return { supplement, report };
 }
+
+async function exportCheckpoint(options) {
+    return buildCheckpointExport(options, api.CONTRACT);
+}
+
+// 只读恢复只根据原报告中明确支持的合同选择格式，不能通过调用选项降级新输出。
+async function replayCheckpointExportReport(options, originalReport) {
+    const family = originalReport?.contract === api.CONTRACT + '-checkpoint-export-report' ? api.CONTRACT
+        : originalReport?.contract === api.LEGACY_CONTRACT + '-checkpoint-export-report' ? api.LEGACY_CONTRACT : null;
+    if (!family) fail('原检查点导出报告的格式不受支持。');
+    const replay = await buildCheckpointExport({...options, excludePaperIds: originalReport.excludedPaperIds}, family);
+    api.validateResumeExportReport(originalReport, replay.report);
+    return replay;
+}
 module.exports = {
     validateExcludedIds,
     validateSelectionPlan,
@@ -331,5 +360,6 @@ module.exports = {
     buildPageClassificationRecord,
     processedIdsForExport,
     normalizeCheckpoint,
-    exportCheckpoint
+    exportCheckpoint,
+    replayCheckpointExportReport
 };

@@ -30,7 +30,7 @@ test('body parser preserves body bytes and rejects missing YAML delimiter', () =
     assert.throws(() => api.pageBody(Buffer.from([0xff])), /encoded data/);
 });
 test('body SHA matches Hugo RawContent for YAML LF and CRLF pages', t => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'taxonomy-body-fixture-'));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-body-fixture-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     fs.mkdirSync(path.join(root, 'content'), { recursive: true }); fs.mkdirSync(path.join(root, 'layouts/_default'), { recursive: true });
     fs.writeFileSync(path.join(root, 'hugo.toml'), 'baseURL="https://example.org/"\n');
@@ -53,8 +53,11 @@ test('canonical registry mismatch and guessed primary fail closed', () => {
     assert.throws(() => api.classify({ ...valid, primaryTaskLabel: '' }, tagCatalog), /无法唯一对应一个已启用的概念/);
 });
 test('immutable output recovers identical bytes and refuses overwrite', t => {
-    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'taxonomy-immutable-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tag-immutable-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    assert.equal(api.CONTRACT, 'historical-direct-tag-supplement-v2');
+    assert.equal(api.LEGACY_CONTRACT, 'historical-direct-taxonomy-supplement-v1');
     const first = api.writeImmutable(root, 'supplement.json', { a: 1 });
+    assert.equal(fs.statSync(first.filename).mode & 0o777, 0o600);
     assert.deepEqual(api.writeImmutable(root, 'supplement.json', { a: 1 }), first);
     assert.throws(() => api.writeImmutable(root, 'supplement.json', { a: 2 }), /EEXIST/);
 });

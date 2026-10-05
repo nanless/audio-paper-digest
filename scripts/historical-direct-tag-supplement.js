@@ -15,7 +15,7 @@ function parseArgs(argv) {
     return { planFile: values['--plan'], registryFile: values['--registry'], blogRoot: values['--blog'], registrySnapshot: values['--snapshot'], runId: values['--run-id'], limit: values['--limit'] ? Number(values['--limit']) : null };
 }
 async function main(argv = process.argv.slice(2)) {
-    requireExternalRuntime('historical-direct-taxonomy-supplement'); requireWorkspaceRole('history');
+    requireExternalRuntime('historical-direct-tag-supplement'); requireWorkspaceRole('history');
     const options = parseArgs(argv), config = require('./config.js'), api = require('./lib/historical-direct-tag-supplement.js');
     const outputRoot = config.FILES.historicalDirectTagSupplementDir;
     const { supplement, report } = await api.buildSupplement({ ...options, generation: 1,
@@ -23,7 +23,7 @@ async function main(argv = process.argv.slice(2)) {
         freshArxivSourceRoot: config.FILES.freshArxivFetchedSourcesDir, publicationMetadataRoot: config.FILES.historicalArxivPublicationMetadataDir,
         onProgress: progress => console.log(JSON.stringify({ progress })) });
     const directory = path.join(outputRoot, options.runId);
-    const outputs = [api.writeImmutable(directory, 'taxonomy-history.json', supplement), api.writeImmutable(directory, 'report.json', report)];
+    const outputs = [api.writeImmutable(directory, 'tag-history.json', supplement), api.writeImmutable(directory, 'report.json', report)];
     console.log(JSON.stringify({ attempted: report.attempted, paperCount: report.paperCount, pageCount: report.pageCount, failureCount: report.failures.length, outputs }));
     return { supplement, report, outputs };
 }
