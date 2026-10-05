@@ -58,6 +58,7 @@ from tag_catalog import (
     TAG_PROMPT_TEXT_CONTRACT,
     LEGACY_TAG_PROMPT_TEXT_CONTRACT,
     TAG_SELECTION_CONTRACT,
+    LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog,
     tag_prompt_text_sha256,
 )
@@ -662,8 +663,10 @@ from tag_catalog import (  # noqa: E402
 )
 
 _REGISTRY_CHANGE_LEVELS = ('none', 'additive', 'destructive')
-_REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1'
-_REGISTRY_UPGRADE_VERSION = 1
+_REGISTRY_UPGRADE_CONTRACT = 'paper-tag-catalog-upgrade-v2'
+_REGISTRY_UPGRADE_VERSION = 2
+_LEGACY_REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1'
+_LEGACY_REGISTRY_UPGRADE_VERSION = 1
 _REGISTRY_UPGRADE_NOTE_MAX_CHARS = 500
 _SHA256_RE = re.compile(r'^[a-f0-9]{64}$')
 
@@ -1018,10 +1021,12 @@ def _validate_registry_upgrade_annotation(annotation, expected):
     """核对词表升级说明与重新计算的结果；通过时返回 None，否则返回问题说明。"""
     if type(annotation) is not dict:
         return 'registryUpgradeFrom 升级说明缺失或不是普通对象。'
-    if annotation.get('contract') != _REGISTRY_UPGRADE_CONTRACT \
-            or annotation.get('version') != _REGISTRY_UPGRADE_VERSION:
-        return (f'registryUpgradeFrom 的格式标识和版本必须为 {_REGISTRY_UPGRADE_CONTRACT}'
-                f' v{_REGISTRY_UPGRADE_VERSION}。')
+    if type(annotation.get('version')) is not int or not any(
+            annotation.get('contract') == contract and annotation['version'] == version
+            for contract, version in (
+                (_LEGACY_REGISTRY_UPGRADE_CONTRACT, _LEGACY_REGISTRY_UPGRADE_VERSION),
+                (_REGISTRY_UPGRADE_CONTRACT, _REGISTRY_UPGRADE_VERSION))):
+        return 'registryUpgradeFrom 的格式标识和版本不属于支持的组合。'
     from_sha = annotation.get('fromRegistrySha256')
     if not isinstance(from_sha, str) or not _SHA256_RE.fullmatch(from_sha) \
             or from_sha != expected['fromRegistrySha256']:
@@ -1212,9 +1217,11 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     except ValueError as error:
         raise PublishDataValidationError(f'{paper_label} {error}') from error
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
-    expected_contract = TAG_STAGE_RECORD_CONTRACT if tag_record['format'] == 'current' else TAG_SELECTION_CONTRACT
-    if not isinstance(contracts, dict) \
-            or contracts.get(tag_record['contractKey']) != expected_contract:
+    supported_selection_contracts = (LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT)
+    if not isinstance(contracts, dict) or (
+            contracts.get(tag_record['contractKey']) != TAG_STAGE_RECORD_CONTRACT
+            if tag_record['format'] == 'current'
+            else contracts.get(tag_record['contractKey']) not in supported_selection_contracts):
         raise PublishDataValidationError(
             f'{paper_label} 标签选择协议缺失，或不是当前支持的版本。')
     stages = manifest.get('stages') if isinstance(manifest, dict) else None
@@ -1228,13 +1235,13 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
             LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT):
         raise PublishDataValidationError(
             f'{paper_label} 标签阶段记录中的提示文本协议版本不受支持。')
-    expected_static = {
-        'selectionContract': TAG_SELECTION_CONTRACT,
-    }
-    for field, expected in expected_static.items():
-        if stage.get(field) != expected:
-            raise PublishDataValidationError(
-                f'{paper_label} 标签阶段记录中的 {field} 与当前词表、提示文本或标签选择协议不一致。')
+    if stage.get('selectionContract') not in supported_selection_contracts:
+        raise PublishDataValidationError(
+            f'{paper_label} 标签阶段记录中的 selectionContract 与当前词表、提示文本或标签选择协议不一致。')
+    if tag_record['format'] != 'current' \
+            and contracts[tag_record['contractKey']] != stage['selectionContract']:
+        raise PublishDataValidationError(
+            f'{paper_label} 标签选择协议缺失，或不是当前支持的版本。')
     if (stage.get('registryVersion') != _PUBLISH_TAG_CATALOG['version']
             and not (stage.get('registrySha256') != _PUBLISH_TAG_CATALOG['registrySha256']
                      and stage.get('registryVersion') == LEGACY_TAG_CATALOG_VERSION

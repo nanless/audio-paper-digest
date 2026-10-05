@@ -12,6 +12,8 @@ const {
     TAG_PROMPT_TEXT_CONTRACT,
     LEGACY_TAG_PROMPT_TEXT_CONTRACT,
     TAG_SELECTION_CONTRACT,
+    LEGACY_TAG_SELECTION_CONTRACT,
+    isSupportedTagSelectionContract,
     TAG_FLAT_COMPAT_CONTRACT
 } = require('../scripts/lib/tag-rules.js');
 
@@ -21,6 +23,12 @@ test('runtime derives all active preferred labels, roles and compact projection 
     const runtime = createTagRules({ registryPath });
     assert.equal(runtime.projectionContract, TAG_PROMPT_TEXT_CONTRACT);
     assert.equal(runtime.selectionContract, TAG_SELECTION_CONTRACT);
+    assert.equal(runtime.selectionContract, 'paper-tag-selection-v2');
+    assert.equal(LEGACY_TAG_SELECTION_CONTRACT, 'paper-taxonomy-selection-v1');
+    assert.equal(isSupportedTagSelectionContract(runtime.selectionContract), true);
+    assert.equal(isSupportedTagSelectionContract(LEGACY_TAG_SELECTION_CONTRACT), true);
+    assert.equal(isSupportedTagSelectionContract('paper-tag-selection-v1'), false);
+    assert.equal(isSupportedTagSelectionContract(null), false);
     assert.equal(runtime.flatCompatContract, TAG_FLAT_COMPAT_CONTRACT);
     assert.equal(runtime.flatCompatContract, 'paper-taxonomy-flat-tags-compat-v1');
     assert.match(runtime.projectionSha256, /^[a-f0-9]{64}$/);
@@ -170,7 +178,7 @@ test('主任务是否过于宽泛按整个词表判断；该告警不使已有�
         registrySha256: runtime.registrySha256,
         projectionContract: runtime.projectionContract,
         projectionSha256: runtime.projectionSha256,
-        selectionContract: runtime.selectionContract,
+        selectionContract: LEGACY_TAG_SELECTION_CONTRACT,
         inputAnalysisSha256: textSha(analysis),
         outputAnalysisSha256: textSha(analysis),
         inputProtectedProjectionSha256: textSha(
@@ -186,7 +194,7 @@ test('主任务是否过于宽泛按整个词表判断；该告警不使已有�
         analysis,
         analysisStageCheckpoints: { taxonomySeal: analysis },
         analysisManifest: {
-            contracts: { taxonomy: runtime.selectionContract },
+            contracts: { taxonomy: LEGACY_TAG_SELECTION_CONTRACT },
             stages: {
                 structureRepair: { outputAnalysisSha256: binding.inputAnalysisSha256 },
                 taxonomySeal: {
@@ -273,7 +281,7 @@ primary_method_tag: #众包评测
         registrySha256: runtime.registrySha256,
         projectionContract: runtime.projectionContract,
         projectionSha256: runtime.projectionSha256,
-        selectionContract: runtime.selectionContract,
+        selectionContract: LEGACY_TAG_SELECTION_CONTRACT,
         inputAnalysisSha256: textSha(analysis),
         outputAnalysisSha256: textSha(analysis),
         inputProtectedProjectionSha256: protectedSha,
@@ -287,7 +295,7 @@ primary_method_tag: #众包评测
         analysis,
         analysisStageCheckpoints: { taxonomySeal: analysis },
         analysisManifest: {
-            contracts: { taxonomy: runtime.selectionContract },
+            contracts: { taxonomy: LEGACY_TAG_SELECTION_CONTRACT },
             stages: {
                 structureRepair: { outputAnalysisSha256: binding.inputAnalysisSha256 },
                 taxonomySeal: {
@@ -337,7 +345,7 @@ primary_method_tag: #众包评测
         registrySha256: runtime.registrySha256,
         projectionContract: runtime.projectionContract,
         projectionSha256: runtime.projectionSha256,
-        selectionContract: runtime.selectionContract,
+        selectionContract: LEGACY_TAG_SELECTION_CONTRACT,
         inputAnalysisSha256: textSha(inputAnalysis),
         outputAnalysisSha256: textSha(outputAnalysis),
         inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(inputAnalysis)),
@@ -354,7 +362,7 @@ primary_method_tag: #众包评测
             taxonomySeal: outputAnalysis
         },
         analysisManifest: {
-            contracts: { taxonomy: runtime.selectionContract },
+            contracts: { taxonomy: LEGACY_TAG_SELECTION_CONTRACT },
             stages: {
                 structureRepair: { outputAnalysisSha256: binding.inputAnalysisSha256 },
                 taxonomySeal: {

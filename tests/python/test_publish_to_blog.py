@@ -1058,6 +1058,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         manifest['contracts']['tagSelectionRecord'] = 'paper-tag-stage-record-v2'
         manifest['stages']['tagSelection'] = {
             'status': 'not_needed',
+            'selectionContract': publish_to_blog.TAG_SELECTION_CONTRACT,
             'outputAnalysisSha256': manifest['stages']['coreSummaryRepair']['inputAnalysisSha256'],
         }
         paper['analysisStageCheckpoints'] = {'tagSelection': paper['analysis']}
@@ -1097,6 +1098,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         )
         tag_stage_chained['analysisManifest']['stages']['taxonomySeal'] = {
             'status': 'complete',
+            'selectionContract': publish_to_blog.TAG_SELECTION_CONTRACT,
             'inputAnalysisSha256': 'a' * 64,
             'outputAnalysisSha256': tag_stage_chained['analysisManifest']['stages'][
                 'coreSummaryRepair'
@@ -1191,6 +1193,7 @@ class PublishToBlogReviewTest(unittest.TestCase):
         ] = structure_sha
         paper['analysisManifest']['stages']['taxonomySeal'] = {
             'status': 'complete',
+            'selectionContract': publish_to_blog.TAG_SELECTION_CONTRACT,
             'inputAnalysisSha256': structure_sha,
             'outputAnalysisSha256': analysis_sha,
         }
@@ -1204,6 +1207,17 @@ class PublishToBlogReviewTest(unittest.TestCase):
             ),
             paper['parsed']['summary'],
         )
+
+        legacy = copy.deepcopy(paper)
+        legacy['analysisManifest']['contracts']['taxonomy'] = publish_to_blog.LEGACY_TAG_SELECTION_CONTRACT
+        legacy['analysisManifest']['stages']['taxonomySeal']['selectionContract'] = publish_to_blog.LEGACY_TAG_SELECTION_CONTRACT
+        original = copy.deepcopy(legacy)
+        self.assertEqual(publish_to_blog._validated_detailed_core_summary(
+            legacy, legacy['parsed']), paper['parsed']['summary'])
+        self.assertEqual(legacy, original)
+        legacy['analysisManifest']['contracts']['taxonomy'] = publish_to_blog.TAG_SELECTION_CONTRACT
+        with self.assertRaisesRegex(PublishDataValidationError, '标签阶段记录缺失或无效'):
+            publish_to_blog._validated_detailed_core_summary(legacy, legacy['parsed'])
 
         drifted = copy.deepcopy(paper)
         drifted['analysisStageCheckpoints']['taxonomySeal'] += '\n'
@@ -3012,6 +3026,7 @@ title: "Score rows"
         metadata = publish_to_blog._current_batch_tag_metadata([current])
         self.assertIsNotNone(metadata)
         self.assertEqual(metadata['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'])
+        self.assertEqual(metadata['selectionContract'], 'paper-tag-selection-v2')
         self.assertEqual(publish_to_blog._current_batch_tag_metadata([legacy]), metadata)
         self.assertEqual((current, legacy), saved)
 

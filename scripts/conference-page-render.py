@@ -15,6 +15,7 @@ from urllib.parse import quote, urlsplit
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
+from tag_catalog import TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT
 from runtime_guard import require_external_runtime
 
 
@@ -555,9 +556,13 @@ def render_packet(packet):
     tag_stage = tag_record['stage'] or {}
     tag_contract = ((manifest or {}).get('contracts') or {}).get(tag_record['contractKey'])
     selection_contract = tag_stage.get('selectionContract') if tag_record['format'] == 'current' else tag_contract
+    supported_selection_contracts = (LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT)
     if assignment.get('flatCompatContract') != FLAT_TAG_CONTRACT \
             or (tag_record['format'] == 'current' and tag_contract != TAG_STAGE_RECORD_CONTRACT) \
-            or assignment.get('selectionContract') != selection_contract \
+            or assignment.get('selectionContract') not in supported_selection_contracts \
+            or selection_contract not in supported_selection_contracts \
+            or (tag_record['format'] != 'current' and 'selectionContract' in tag_stage
+                and tag_stage['selectionContract'] != tag_contract) \
             or assignment.get('registryVersion') != tag_stage.get('registryVersion') \
             or assignment.get('registrySha256') != tag_stage.get('registrySha256') \
             or assignment.get('primaryTaskId') != tag_stage.get('primaryTaskId') \

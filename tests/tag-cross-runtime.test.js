@@ -5,7 +5,8 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { loadTagCatalog, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/tag-catalog');
 const { getDefaultTagRules, buildTagPromptText, TAG_PROMPT_TEXT_CONTRACT,
-    LEGACY_TAG_PROMPT_TEXT_CONTRACT } = require('../scripts/lib/tag-rules');
+    LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_SELECTION_CONTRACT,
+    LEGACY_TAG_SELECTION_CONTRACT } = require('../scripts/lib/tag-rules');
 const crypto = require('node:crypto');
 const { hashTagSectionAndPrimaryTags } = require('../scripts/analysis-contract');
 const { parseAnalysis } = require('../scripts/utils');
@@ -33,6 +34,7 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
         '显式旧快照与旧提示格式的完整字节保持原 SHA');
     const expected={version:tagCatalog.version,registrySha256:tagCatalog.registrySha256,
         projectionSha256:getDefaultTagRules().projectionSha256,
+        selectionContract:TAG_SELECTION_CONTRACT,legacySelectionContract:LEGACY_TAG_SELECTION_CONTRACT,
         promptTexts,
         resolved:labels.map(label=>resolveLabel(tagCatalog,label)?.id||null),
         faceted:faceted.map(([label,facet])=>resolveLabel(tagCatalog,label,facet)?.id||null),
@@ -40,10 +42,11 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
     const script=[
         'import json, sys',
         'sys.path.insert(0,"scripts")',
-        'from tag_catalog import load_tag_catalog, resolve_label, ancestors, prune_ancestors, tag_prompt_text_sha256, build_tag_prompt_text',
+        'from tag_catalog import load_tag_catalog, resolve_label, ancestors, prune_ancestors, tag_prompt_text_sha256, build_tag_prompt_text, TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT',
         't=load_tag_catalog(); p=json.load(sys.stdin)',
         'prompt_texts=[{"projectionContract":v,"text":build_tag_prompt_text(t,v),"sha256":tag_prompt_text_sha256(t,v)} for v in ["paper-taxonomy-prompt-projection-v1","paper-tag-prompt-text-v2"]]',
         'r={"version":t["version"],"registrySha256":t["registrySha256"],"projectionSha256":tag_prompt_text_sha256(t),',
+        '"selectionContract":TAG_SELECTION_CONTRACT,"legacySelectionContract":LEGACY_TAG_SELECTION_CONTRACT,',
         '"promptTexts":prompt_texts,"resolved":[(resolve_label(t,s) or {}).get("id") for s in p["labels"]],',
         '"faceted":[(resolve_label(t,s,f) or {}).get("id") for s,f in p["faceted"]],',
         '"ancestors":[ancestors(t,s) for s in p["ids"]],',
@@ -254,6 +257,15 @@ test('标签阶段的旧新完整绑定、只读结果和拒绝边界在两端�
             fixtures.push({ name: `${name}格式-${status}`, paper: value, valid: true });
         }
     }
+    for (const [name, paper] of [['旧', legacy], ['新', current]]) {
+        const value = structuredClone(paper);
+        const record = records.readTagStageRecord(value.analysisManifest, value.analysisStageCheckpoints);
+        record.stage.selectionContract = 'paper-tag-selection-v2';
+        if (record.format === 'legacy') value.analysisManifest.contracts.taxonomy = record.stage.selectionContract;
+        record.stage.bindingSha256 = contract.manualSha256(Object.fromEntries(
+            record.bindingFields.map(key => [key, record.stage[key]])));
+        fixtures.push({ name: `${name}格式-新选择协议`, paper: value, valid: true });
+    }
     const addInvalid = (name, mutate) => {
         const paper = structuredClone(current);
         mutate(paper);
@@ -272,6 +284,15 @@ test('标签阶段的旧新完整绑定、只读结果和拒绝边界在两端�
         p.analysisManifest.stages.tagSelection.taxonomySurfaceSha256 = p.analysisManifest.stages.tagSelection.tagSectionAndPrimaryTagsSha256;
     });
     addInvalid('未知保存版本', p => { p.analysisManifest.contracts.tagSelectionRecord = 'unknown'; });
+    addInvalid('未知选择协议但绑定有效', p => {
+        const stage = p.analysisManifest.stages.tagSelection;
+        stage.selectionContract = 'unknown';
+        stage.bindingSha256 = contract.manualSha256(Object.fromEntries(
+            records.TAG_STAGE_BINDING_FIELDS.map(key => [key, stage[key]])));
+    });
+    const mismatchedLegacy = structuredClone(legacy);
+    mismatchedLegacy.analysisManifest.contracts.taxonomy = 'paper-tag-selection-v2';
+    fixtures.push({ name: '旧格式合同与选择协议错配', paper: mismatchedLegacy, valid: false });
     addInvalid('检查点正文改变', p => { p.analysisStageCheckpoints.tagSelection += '\n检查点变化'; });
     addInvalid('摘要输入改变', p => { p.analysisManifest.stages.coreSummaryRepair.inputAnalysisSha256 = '0'.repeat(64); });
     fixtures.push({ name: '尚未完成的新阶段', valid: false,

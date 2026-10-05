@@ -1366,14 +1366,14 @@ function validateTagStageProof(paper, options = {}) {
     const tagRulesApi = require('./lib/tag-rules.js');
     const runtime = options.tagRules || tagRulesApi.getDefaultTagRules();
     if (manifest?.contracts?.[tagRecord.contractKey] !== (tagRecord.format === 'current'
-        ? TAG_STAGE_RECORD_CONTRACT : runtime.selectionContract)
+        ? TAG_STAGE_RECORD_CONTRACT : stage.selectionContract)
         || (stage.registryVersion !== runtime.registryVersion
             && !(stage.registrySha256 !== runtime.registrySha256
                 && stage.registryVersion === 'paper-taxonomy-v1'
                 && runtime.registryVersion === 'paper-tag-catalog-v2'))
         || (stage.projectionContract !== tagRulesApi.TAG_PROMPT_TEXT_CONTRACT
             && stage.projectionContract !== tagRulesApi.LEGACY_TAG_PROMPT_TEXT_CONTRACT)
-        || stage.selectionContract !== runtime.selectionContract) {
+        || !tagRulesApi.isSupportedTagSelectionContract(stage.selectionContract)) {
         return '标签阶段记录中的词表版本、标签提示文本或标签选择规则与当前配置不一致。';
     }
     if (stage.registrySha256 !== runtime.registrySha256) {

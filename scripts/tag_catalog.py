@@ -15,7 +15,8 @@ LABEL_MODE_LEGACY = 'legacy'
 LABEL_MODES = (LABEL_MODE_CURRENT, LABEL_MODE_LEGACY)
 TAG_PROMPT_TEXT_CONTRACT = 'paper-tag-prompt-text-v2'
 LEGACY_TAG_PROMPT_TEXT_CONTRACT = 'paper-taxonomy-prompt-projection-v1'
-TAG_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1'
+TAG_SELECTION_CONTRACT = 'paper-tag-selection-v2'
+LEGACY_TAG_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1'
 TAG_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
 CONCEPT_KEYS = {'id', 'facet', 'preferredLabel', 'aliases', 'broaderId',
                 'definition', 'scopeNote', 'status', 'replacedBy'}

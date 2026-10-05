@@ -151,7 +151,7 @@ describe('taxonomy runtime analysis integration', () => {
             rules.LEGACY_TAG_PROMPT_TEXT_CONTRACT);
         const legacySha = require('node:crypto').createHash('sha256').update(legacyPrompt).digest('hex');
         assert.notStrictEqual(fields.taxonomyProjectionSha256, legacySha);
-        assert.strictEqual(fields.taxonomySelectionContract, 'paper-taxonomy-selection-v1');
+        assert.strictEqual(fields.taxonomySelectionContract, 'paper-tag-selection-v2');
         const input = validAnalysisText();
         const evidence = deep.buildStageEvidenceContext('revision', input, 'speech evidence');
         assert.notStrictEqual(

@@ -83,6 +83,7 @@ from analysis_sections import (
 from tag_catalog import (
     TAG_FLAT_COMPAT_CONTRACT,
     TAG_SELECTION_CONTRACT,
+    LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog,
 )
 from tutorial_payload_verifier import (
@@ -3930,9 +3931,12 @@ def _validated_detailed_core_summary(paper, parsed):
     tag_contract = contracts.get(tag_record['contractKey'])
     has_tag_stage = isinstance(stages, dict) and tag_record['stageKey'] in stages
     if tag_record['format'] == 'current' or tag_contract is not None or has_tag_stage:
-        expected_contract = TAG_STAGE_RECORD_CONTRACT if tag_record['format'] == 'current' else TAG_SELECTION_CONTRACT
+        expected_contract = (TAG_STAGE_RECORD_CONTRACT if tag_record['format'] == 'current'
+                             else tag_stage.get('selectionContract') if isinstance(tag_stage, dict) else None)
         if tag_contract != expected_contract \
                 or not isinstance(tag_stage, dict) \
+                or tag_stage.get('selectionContract') not in (
+                    LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT) \
                 or tag_stage.get('status') not in {'complete', 'not_needed'} \
                 or not re.fullmatch(
                     r'[0-9a-f]{64}', str(tag_stage.get('outputAnalysisSha256') or '')

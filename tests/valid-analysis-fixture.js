@@ -104,7 +104,7 @@ function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisTex
         registrySha256: tagRules.registrySha256,
         projectionContract: tagRules.projectionContract,
         projectionSha256: tagRules.projectionSha256,
-        selectionContract: tagRules.selectionContract,
+        selectionContract: 'paper-taxonomy-selection-v1',
         inputAnalysisSha256: analysisSha256,
         outputAnalysisSha256: analysisSha256,
         inputProtectedProjectionSha256: classificationMaskedAnalysisSha256,
@@ -143,7 +143,7 @@ function validAnalysisPaper(arxivId, extra = {}, analysisText = validAnalysisTex
         analysisManifest: { version: 1, stages,
             contracts: {
                 coreSummary: 'core-summary-detailed-v3',
-                taxonomy: tagRules.selectionContract
+                taxonomy: 'paper-taxonomy-selection-v1'
             } },
         ...extra
     };

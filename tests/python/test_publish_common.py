@@ -17,6 +17,7 @@ sys.path.insert(0, SCRIPTS)
 
 from tag_catalog import (
     TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_PROMPT_TEXT_CONTRACT,
+    TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog, tag_prompt_text_sha256,
 )
 
@@ -134,7 +135,8 @@ def complete_paper():
 
 def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not_needed',
                          with_checkpoints=False,
-                         projection_contract=TAG_PROMPT_TEXT_CONTRACT, record_format='legacy'):
+                         projection_contract=TAG_PROMPT_TEXT_CONTRACT, record_format='legacy',
+                         selection_contract=TAG_SELECTION_CONTRACT):
     stage_key = 'tagSelection' if record_format == 'current' else 'taxonomySeal'
     hash_key = 'tagSectionAndPrimaryTagsSha256' if record_format == 'current' else 'taxonomySurfaceSha256'
     output_analysis = paper['analysis']
@@ -153,7 +155,7 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
         'projectionContract': projection_contract,
         'projectionSha256': tag_prompt_text_sha256(
             _PUBLISH_TAG_CATALOG, projection_contract),
-        'selectionContract': 'paper-taxonomy-selection-v1',
+        'selectionContract': selection_contract,
         'inputAnalysisSha256': input_sha,
         'outputAnalysisSha256': output_sha,
         'inputProtectedProjectionSha256': masked_input_analysis_sha256,
@@ -166,7 +168,7 @@ def attach_tag_stage_record(paper, manifest, *, input_analysis=None, status='not
     if record_format == 'current':
         manifest.setdefault('contracts', {})['tagSelectionRecord'] = TAG_STAGE_RECORD_CONTRACT
     else:
-        manifest.setdefault('contracts', {})['taxonomy'] = 'paper-taxonomy-selection-v1'
+        manifest.setdefault('contracts', {})['taxonomy'] = selection_contract
     manifest.setdefault('stages', {}).setdefault('structureRepair', {})[
         'outputAnalysisSha256'] = input_sha
     manifest.setdefault('stages', {})[stage_key] = {
@@ -3155,6 +3157,53 @@ primary_method_tag: #基准测试
                 protected_drift['arxivId'])
 
     # 以下测试检查词表变化后能否沿用标签阶段记录，与 Node 的升级规则作对照。
+    def test_selection_protocols_preserve_old_bindings_and_reject_mismatched_parent(self):
+        for selection_contract in (LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT):
+            for record_format in ('legacy', 'current'):
+                with self.subTest(selection=selection_contract, format=record_format):
+                    paper = complete_paper()
+                    manifest = {'version': 1}
+                    stage = attach_tag_stage_record(
+                        paper, manifest, record_format=record_format,
+                        selection_contract=selection_contract)
+                    original = copy.deepcopy((paper, manifest))
+                    self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
+                    self.assertEqual((paper, manifest), original)
+                    if record_format == 'legacy':
+                        manifest['contracts']['taxonomy'] = (
+                            TAG_SELECTION_CONTRACT if selection_contract == LEGACY_TAG_SELECTION_CONTRACT
+                            else LEGACY_TAG_SELECTION_CONTRACT)
+                        with self.assertRaisesRegex(PublishDataValidationError, '标签选择协议'):
+                            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+                        manifest['contracts']['taxonomy'] = selection_contract
+                    stage['bindingSha256'] = '0' * 64
+                    with self.assertRaisesRegex(PublishDataValidationError, '绑定 SHA'):
+                        _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+
+    def test_upgrade_protocol_pairs_accept_old_records_without_rewriting_them(self):
+        from_sha = 'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d'
+        snapshot = load_tag_catalog(Path(ROOT) / 'config' / 'tag-catalog-history' / (from_sha + '.json'))
+        annotation = {
+            'contract': 'paper-tag-catalog-upgrade-v2', 'version': 2,
+            'fromRegistrySha256': from_sha, 'fromRegistryVersion': snapshot['version'],
+            'toRegistrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
+            'toRegistryVersion': _PUBLISH_TAG_CATALOG['version'],
+            'changeLevel': 'none', 'reasons': [], 'note': '仅迁移词表版本名称。',
+        }
+        for contract, version in (
+                ('paper-taxonomy-registry-upgrade-v1', 1), ('paper-tag-catalog-upgrade-v2', 2)):
+            candidate = {**annotation, 'contract': contract, 'version': version}
+            original = copy.deepcopy(candidate)
+            self.assertTrue(_validate_tag_catalog_upgrade(from_sha, ['task.asr'], candidate)['ok'])
+            self.assertEqual(candidate, original)
+        for contract, version in (
+                ('paper-taxonomy-registry-upgrade-v1', 2), ('paper-tag-catalog-upgrade-v2', 1),
+                ('unknown', 2)):
+            result = _validate_tag_catalog_upgrade(
+                from_sha, ['task.asr'], {**annotation, 'contract': contract, 'version': version})
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['reasonCode'], 'annotation-invalid')
+
     def test_tag_stage_upgrade_accepts_legacy_prompt_hash_formats(self):
         additive = next(case for case in cross_end_fixture()['cases']
                         if case['name'] == 'additive-upgrade-allowed')

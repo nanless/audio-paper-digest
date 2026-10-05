@@ -62,7 +62,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
 | `lib/filter-input-contract.js` | Node 库 | 计算筛选决定所对应的最小输入 SHA。 |
 | `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另提供别名解析和上下级查询。Node/Python 解析器及发布检查均使用词表原始字节计算的 SHA。 |
-| `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，也可按明确旧版生成核验文本。选择规则仍按 `paper-taxonomy-selection-v1` 检查，详见本页的分类词表维护说明。 |
+| `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，也可按明确旧版生成核验文本。默认选择协议为 `paper-tag-selection-v2`，旧阶段按保存的版本读取，详见本页的分类词表维护说明。 |
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；拒绝双格式混用，不改写或补签旧记录。 |
 | `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另只读盘点旧分类文件，不调用模型。 |
@@ -325,7 +325,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 ### 标签选择与具体程度
 
-`lib/tag-rules.js` 检查 `paper-taxonomy-selection-v1`：标签总数须为 3–5，任务类（`facet=task`）标签须有 1–3 个，
+`lib/tag-rules.js` 默认使用 `paper-tag-selection-v2`：标签总数须为 3–5，任务类（`facet=task`）标签须有 1–3 个，
 其中主任务恰好 1 个，次任务最多 2 个；祖先标签和后代标签不能同时存在。主任务必须是所选集合中最具体的
 任务，否则报错。如果整个词表中还有未选的有效后代，只返回 `specificityWarning` 告警，不改变 `valid`。
 这条告警仅供新的分类或修复步骤使用，不改变已核验阶段的恢复行为。别名只供显式旧格式解析。
@@ -339,7 +339,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 并保留缓存中的其余内容和评分覆盖。解析结果的字段名与正式阶段记录的保存格式分别核验。
 
 新的 API 标签阶段与正文检查点都使用 `tagSelection`。`contracts.tagSelectionRecord` 保存独立格式版本
-`paper-tag-stage-record-v2`，阶段内的标签选择协议仍保持原版本。`tagSectionAndPrimaryTagsSha256` 记录标签章节
+`paper-tag-stage-record-v2`，阶段内另保存实际使用的标签选择协议。`tagSectionAndPrimaryTagsSha256` 记录标签章节
 与机器摘要中主任务、主方法标签文本的哈希。
 
 `lib/tag-stage-record.js` 与 `tag_stage_record.py` 按明确格式读取记录。旧记录继续使用原阶段名、检查点、合同字段
@@ -361,6 +361,15 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 但显式续跑仍按原规则排除已处理集合，不会因提示改写就重审或重签全部旧决策。
 
 ### 词表变更与确认范围
+
+当前标签阶段和选择元数据写入 `paper-tag-selection-v2`。读取旧记录时仍接受明确的 `paper-taxonomy-selection-v1`，
+但须按记录原字段和值核验全部绑定；新旧保存格式都可能包含旧选择协议，不能仅凭阶段格式判断选择协议。
+旧格式的合同声明必须与阶段中保存的选择协议一致。重新生成才写新协议，只读核验和词表升级注记不会替换旧协议或重算旧绑定。
+会议渲染可将已核验的旧选择阶段对应到当前新选择记录，因为两代规则的含义相同；词表版本、SHA、主标签和概念集合仍须精确相等，未知选择协议不能通过。
+
+新生成的词表升级说明使用 `paper-tag-catalog-upgrade-v2`，版本号为 2。旧说明仍按 `paper-taxonomy-registry-upgrade-v1`、
+版本号 1 读取；这两个标识和版本必须分别配对，未知标识或混用版本会被拒绝。两种格式都须完整核对真实旧快照、
+新旧词表版本及 SHA、重算变更等级、允许的明确确认和所选概念，旧说明不因读取而改写。
 
 新模型请求使用 `paper-tag-prompt-text-v2` 标签提示。Node 的 `buildTagPromptText(tagCatalog, promptTextContract)`
 和 Python 的 `build_tag_prompt_text(tag_catalog, prompt_text_contract)` 默认使用新版；只有核验旧记录时才显式选择

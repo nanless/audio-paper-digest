@@ -15,7 +15,7 @@ const {
 const contract = require('../scripts/analysis-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
 const { createTagRules, buildTagPromptText, TAG_PROMPT_TEXT_CONTRACT,
-    LEGACY_TAG_PROMPT_TEXT_CONTRACT } = require('../scripts/lib/tag-rules.js');
+    LEGACY_TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT } = require('../scripts/lib/tag-rules.js');
 const registryChange = require('../scripts/lib/tag-catalog-change.js');
 const tagCatalogApi = require('../scripts/lib/tag-catalog.js');
 
@@ -307,7 +307,7 @@ function sealedPaper(options = {}) {
             options.registrySha256 && options.registrySha256 !== runtime.registrySha256
                 ? LEGACY_TAG_PROMPT_TEXT_CONTRACT : runtime.projectionContract),
         projectionSha256: options.projectionSha256 ?? runtime.projectionSha256,
-        selectionContract: options.selectionContract ?? runtime.selectionContract,
+        selectionContract: options.selectionContract ?? LEGACY_TAG_SELECTION_CONTRACT,
         inputAnalysisSha256: textSha(analysis),
         outputAnalysisSha256: textSha(analysis),
         inputProtectedProjectionSha256: textSha(contract.maskClassificationFields(analysis)),
@@ -327,7 +327,7 @@ function sealedPaper(options = {}) {
             analysis,
             analysisStageCheckpoints: { taxonomySeal: analysis },
             analysisManifest: {
-                contracts: { taxonomy: options.selectionContract ?? runtime.selectionContract },
+                contracts: { taxonomy: options.selectionContract ?? LEGACY_TAG_SELECTION_CONTRACT },
                 stages: {
                     structureRepair: { outputAnalysisSha256: binding.inputAnalysisSha256 },
                     taxonomySeal: stage,
@@ -641,6 +641,31 @@ describe('标签阶段的新旧保存格式', () => {
         if (status === 'complete') paper.analysisStageCheckpoints.structureRepair = paper.analysis;
         return { ...fixture, stage, originalStage };
     }
+    it('按保存的选择协议核验两种阶段格式，保留原绑定字节并拒绝未知或错配合同', () => {
+        for (const selectionContract of [LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT]) {
+            for (const fixture of [sealedPaper({ selectionContract }), currentFixture()]) {
+                fixture.stage.selectionContract = selectionContract;
+                const record = records.readTagStageRecord(fixture.paper.analysisManifest,
+                    fixture.paper.analysisStageCheckpoints);
+                fixture.stage.bindingSha256 = contract.manualSha256(Object.fromEntries(
+                    record.bindingFields.map(key => [key, fixture.stage[key]])));
+                const saved = JSON.stringify(fixture.paper);
+                assert.equal(contract.validateTagStageProof(fixture.paper, fixture), null);
+                assert.equal(JSON.stringify(fixture.paper), saved);
+            }
+        }
+        const mismatched = sealedPaper({ selectionContract: LEGACY_TAG_SELECTION_CONTRACT });
+        mismatched.paper.analysisManifest.contracts.taxonomy = TAG_SELECTION_CONTRACT;
+        assert.match(contract.validateTagStageProof(mismatched.paper, mismatched), /与当前配置不一致/);
+        for (const fixture of [sealedPaper({ selectionContract: 'unknown' }), currentFixture()]) {
+            const record = records.readTagStageRecord(fixture.paper.analysisManifest,
+                fixture.paper.analysisStageCheckpoints);
+            fixture.stage.selectionContract = 'unknown';
+            fixture.stage.bindingSha256 = contract.manualSha256(Object.fromEntries(
+                record.bindingFields.map(key => [key, fixture.stage[key]])));
+            assert.match(contract.validateTagStageProof(fixture.paper, fixture), /与当前配置不一致/);
+        }
+    });
     it('读取旧记录保留原引用、十三字段顺序及内容哈希，新记录按新字段计算哈希', () => {
         const old = sealedPaper();
         const bytes = JSON.stringify(old.paper);

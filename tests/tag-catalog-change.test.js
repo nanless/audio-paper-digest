@@ -295,7 +295,8 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
         acknowledgeDestructive: true
     });
     assert.equal(annotation.contract, api.REGISTRY_UPGRADE_CONTRACT);
-    assert.equal(annotation.version, 1);
+    assert.equal(annotation.contract, 'paper-tag-catalog-upgrade-v2');
+    assert.equal(annotation.version, 2);
     assert.equal(annotation.fromRegistrySha256, from.registrySha256);
     assert.equal(annotation.toRegistrySha256, to.registrySha256);
     assert.ok(annotation.reasons.includes('concept-added'));
@@ -315,6 +316,15 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
         detail
     };
     assert.equal(api.validateRegistryUpgradeAnnotation(annotation, expected), null);
+    const legacy = { ...annotation, contract: 'paper-taxonomy-registry-upgrade-v1', version: 1 };
+    const savedLegacy = JSON.stringify(legacy);
+    assert.equal(api.validateRegistryUpgradeAnnotation(legacy, expected), null);
+    assert.equal(JSON.stringify(legacy), savedLegacy);
+    for (const unsupported of [
+        { ...annotation, version: 1 }, { ...legacy, version: 2 },
+        { ...annotation, contract: 'unknown' }, { ...annotation, version: '2' }
+    ]) assert.equal(api.validateRegistryUpgradeAnnotation(unsupported, expected),
+        'registryUpgradeFrom 的格式标识和版本不属于支持的组合。');
     assert.match(api.validateRegistryUpgradeAnnotation({ ...annotation, note: '' }, expected), /note/);
     assert.match(api.validateRegistryUpgradeAnnotation(
         { ...annotation, toRegistrySha256: 'b'.repeat(64) }, expected), /toRegistrySha256/);

@@ -8,6 +8,7 @@
 
 const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./tag-stage-record.js');
 const registryChange = require('./tag-catalog-change.js');
+const { isSupportedTagSelectionContract } = require('./tag-rules.js');
 
 const RESEAL_MODES = Object.freeze(['reproject', 'annotate']);
 const RESEAL_REPORT_CONTRACT = 'paper-taxonomy-reseal-report-v1';
@@ -113,8 +114,9 @@ function reprojectAnalysis({ analysis, runtime: tagRules, mode = 'reproject', sn
     if (mode === 'reproject') {
         const originalStageBindingFields = Object.fromEntries(tagRecord.bindingFields.map(field => [field, tagStage[field]]));
         const expectedStageRecordContract = tagRecord.format === 'current'
-            ? TAG_STAGE_RECORD_CONTRACT : tagRules.selectionContract;
-        if (tagStage.bindingSha256 !== contractApi.manualSha256(originalStageBindingFields)
+            ? TAG_STAGE_RECORD_CONTRACT : tagStage.selectionContract;
+        if (!isSupportedTagSelectionContract(tagStage.selectionContract)
+            || tagStage.bindingSha256 !== contractApi.manualSha256(originalStageBindingFields)
             || paper.analysisManifest?.contracts?.[tagRecord.contractKey] !== expectedStageRecordContract) {
             return { ok: false, analysis: null, item: stageResult({ ...updateResultFields,
                 status: 'blocked', outcome: 'binding-refused',

@@ -28,6 +28,20 @@ test('标签阶段已使用当前词表时，只核验记录，不写入文件',
     assert.equal(plan.item.pageRestageRequired, false);
 });
 
+test('旧选择协议按原绑定读取；未知选择协议即使原签名有效也不能更新', () => {
+    const saved = analysisRecord({ selectionContract: 'paper-taxonomy-selection-v1' });
+    const bytes = JSON.stringify(saved);
+    const plan = reproject({ analysis: saved });
+    assert.equal(plan.item.outcome, 'already-current');
+    assert.equal(JSON.stringify(saved), bytes);
+    const unknown = analysisRecord({ selectionContract: 'unknown' });
+    const unknownBytes = JSON.stringify(unknown);
+    const rejected = reproject({ analysis: unknown });
+    assert.equal(rejected.item.outcome, 'binding-refused');
+    assert.equal(rejected.analysis, null);
+    assert.equal(JSON.stringify(unknown), unknownBytes);
+});
+
 // dcf83f84 快照更新到当前 v1.1 词表时，首选标签、上级关系和别名发生了变化，
 // 程序将其判为允许明确确认的破坏性变更。本用例保持所选概念 ID，并提供对应确认。
 test('明确确认允许的破坏性变更后，工具按当前词表更新标签阶段记录，不调用模型', () => {
@@ -45,6 +59,9 @@ test('明确确认允许的破坏性变更后，工具按当前词表更新标�
     assert.equal(plan.item.registry.to, runtime().registrySha256);
 
     const nextStage = plan.analysis.papers[0].analysisManifest.stages.tagSelection;
+    assert.equal(nextStage.selectionContract, 'paper-tag-selection-v2');
+    assert.equal(nextStage.registryUpgradeFrom.contract, 'paper-tag-catalog-upgrade-v2');
+    assert.equal(nextStage.registryUpgradeFrom.version, 2);
     assert.equal(nextStage.registrySha256, runtime().registrySha256);
     assert.equal(nextStage.projectionSha256, runtime().projectionSha256);
     assert.equal(nextStage.projectionContract, TAG_PROMPT_TEXT_CONTRACT);

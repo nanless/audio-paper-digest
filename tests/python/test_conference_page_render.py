@@ -79,6 +79,24 @@ class ConferencePageRenderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '标签选择记录与分析阶段记录'):
             MODULE.render_packet(bad)
 
+    def test_new_assignment_accepts_known_legacy_stage_without_changing_inputs(self):
+        packet = self.packet()
+        packet['paper']['analysisManifest']['stages']['taxonomySeal'][
+            'selectionContract'] = MODULE.LEGACY_TAG_SELECTION_CONTRACT
+        packet['taxonomy']['selectionContract'] = MODULE.TAG_SELECTION_CONTRACT
+        original = copy.deepcopy(packet)
+        self.assertIn('markdown', MODULE.render_packet(packet))
+        self.assertEqual(packet, original)
+        for change in (
+                lambda p: p['taxonomy'].__setitem__('selectionContract', 'unknown'),
+                lambda p: p['paper']['analysisManifest']['contracts'].__setitem__('taxonomy', 'unknown'),
+                lambda p: p['paper']['analysisManifest']['stages']['taxonomySeal'].__setitem__(
+                    'selectionContract', MODULE.TAG_SELECTION_CONTRACT)):
+            bad = copy.deepcopy(packet)
+            change(bad)
+            with self.assertRaisesRegex(ValueError, '标签选择记录与分析阶段记录'):
+                MODULE.render_packet(bad)
+
     def packet(self):
         paper_id = 'conference:icassp:2026:icassp-arnumber:100'
         article = '这是只来自会议分析 Reader 的全新解读正文。'

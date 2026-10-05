@@ -12,8 +12,10 @@ const crypto = require('node:crypto');
 const tagCatalogApi = require('./tag-catalog.js');
 
 const CHANGE_LEVELS = Object.freeze(['none', 'additive', 'destructive']);
-const REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1';
-const REGISTRY_UPGRADE_VERSION = 1;
+const REGISTRY_UPGRADE_CONTRACT = 'paper-tag-catalog-upgrade-v2';
+const REGISTRY_UPGRADE_VERSION = 2;
+const LEGACY_REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1';
+const LEGACY_REGISTRY_UPGRADE_VERSION = 1;
 const REGISTRY_UPGRADE_NOTE_MAX_CHARS = 500;
 const REGISTRY_UPGRADE_REASON_CAP = 32;
 const SHA256_RE = /^[a-f0-9]{64}$/;
@@ -460,8 +462,9 @@ function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
 // 破坏性变更须另外核对显式确认；其他字段仍须与本次词表和阶段记录一致。
 function validateRegistryUpgradeAnnotation(annotation, expected = {}) {
     if (!isPlainObject(annotation)) return 'registryUpgradeFrom 升级说明缺失或不是普通对象。';
-    if (annotation.contract !== REGISTRY_UPGRADE_CONTRACT || annotation.version !== REGISTRY_UPGRADE_VERSION) {
-        return `registryUpgradeFrom 的格式标识和版本必须为 ${REGISTRY_UPGRADE_CONTRACT} v${REGISTRY_UPGRADE_VERSION}。`;
+    if (!(annotation.contract === REGISTRY_UPGRADE_CONTRACT && annotation.version === REGISTRY_UPGRADE_VERSION)
+        && !(annotation.contract === LEGACY_REGISTRY_UPGRADE_CONTRACT && annotation.version === LEGACY_REGISTRY_UPGRADE_VERSION)) {
+        return 'registryUpgradeFrom 的格式标识和版本不属于支持的组合。';
     }
     if (!SHA256_RE.test(String(annotation.fromRegistrySha256 || ''))
         || annotation.fromRegistrySha256 !== expected.fromRegistrySha256) {
@@ -586,6 +589,8 @@ module.exports = {
     CHANGE_LEVELS,
     REGISTRY_UPGRADE_CONTRACT,
     REGISTRY_UPGRADE_VERSION,
+    LEGACY_REGISTRY_UPGRADE_CONTRACT,
+    LEGACY_REGISTRY_UPGRADE_VERSION,
     REGISTRY_UPGRADE_NOTE_MAX_CHARS,
     ACKNOWLEDGEMENT_ELIGIBLE_CODES,
     ACKNOWLEDGEMENT_FORBIDDEN_CODES,
