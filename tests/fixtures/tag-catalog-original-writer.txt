@@ -1,0 +1,49 @@
+def _legacy_tag_catalog_file_contents(blog_repo=None, *, current=None):
+    """写入前准备完整的词表历史快照，以及当前版本在两处目录中的副本。"""
+    repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
+    current = _validate_tag_catalog_snapshot(current if current is not None else
+        build_tag_catalog_snapshot(snapshot_contract=LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT))
+    versions = {}
+    def retain(snapshot):
+        _validate_tag_catalog_snapshot(snapshot)
+        sha = snapshot['registrySha256']
+        if sha in versions and versions[sha] != snapshot:
+            raise PublishDataValidationError(f'标签词表的同一个 SHA 对应了不同的快照内容：{sha}')
+        versions[sha] = snapshot
+    catalogs = []
+    for prefix in ('data', 'static/data'):
+        catalog = _read_tag_catalog_file(repo, f'{prefix}/taxonomy-catalog.json')
+        if catalog is not None:
+            _validate_tag_version_catalog(catalog)
+            catalogs.append(catalog)
+            for snapshot in catalog['snapshots']:
+                retain(snapshot)
+        snapshot = _read_tag_catalog_file(repo, f'{prefix}/taxonomy-registry.json')
+        if snapshot is not None:
+            retain(snapshot)
+        archive = repo / prefix / 'taxonomy-snapshots'
+        if archive.exists():
+            if archive.is_symlink() or not archive.is_dir():
+                raise PublishDataValidationError('标签词表归档路径必须是目录，且不得是符号链接。')
+            for target in sorted(archive.iterdir()):
+                if not re.fullmatch(r'[a-f0-9]{64}\.json', target.name):
+                    raise PublishDataValidationError('标签词表归档目录中存在不符合 SHA 文件命名要求的文件。')
+                snapshot = _read_tag_catalog_file(repo, target.relative_to(repo))
+                _validate_tag_catalog_snapshot(snapshot)
+                if target.stem != snapshot['registrySha256']:
+                    raise PublishDataValidationError('标签词表归档文件名中的 SHA 与快照记录不一致。')
+                retain(snapshot)
+    if len(catalogs) == 2 and catalogs[0] != catalogs[1]:
+        raise PublishDataValidationError('data 与 static/data 中的标签词表版本目录内容不一致。')
+    retain(current)
+    display, policy_assets = _select_tag_display_version(repo, current, versions, legacy=True)
+    catalog = {'contract': 'paper-taxonomy-version-catalog-v1',
+               'currentSha256': display['registrySha256'],
+               'snapshots': [versions[sha] for sha in sorted(versions)]}
+    assets = dict(policy_assets)
+    for prefix in ('data', 'static/data'):
+        assets[f'{prefix}/taxonomy-registry.json'] = tag_catalog_snapshot_bytes(display)
+        assets[f'{prefix}/taxonomy-catalog.json'] = tag_catalog_snapshot_bytes(catalog)
+        for sha, snapshot in sorted(versions.items()):
+            assets[f'{prefix}/taxonomy-snapshots/{sha}.json'] = tag_catalog_snapshot_bytes(snapshot)
+    return assets

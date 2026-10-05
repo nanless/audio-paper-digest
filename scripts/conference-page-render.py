@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a source-bound conference paper without inventing an arXiv identity."""
+"""根据已核验的来源记录生成会议论文页面，不为会议论文添加 arXiv 身份。"""
 
 import hashlib
 import base64
@@ -50,9 +50,8 @@ REQUIRED_ANALYSIS_SECTIONS = (
 
 
 def stable_sha(value):
-    # Preserve the historical bytes for valid Unicode while safely spelling
-    # lone UTF-16 surrogates emitted by malformed model text.  This matches
-    # Node's JSON.stringify escaping without ASCII-escaping all Chinese text.
+    # 有效 Unicode 保持原有序列化字节；模型文本中的孤立 UTF-16 代理字符使用转义。
+    # 此处与 Node 的 JSON.stringify 转义方式对应，不把全部中文转为 ASCII 转义。
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode(
         'utf-8', 'backslashreplace'
     )
@@ -76,9 +75,8 @@ def public_https(value, label, *, conference_only=False):
     labels = hostname.split('.')
     valid_dns = len(labels) > 1 and all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', item)
                                           for item in labels)
-    # URL fragments are client-side anchors (for example, a paper's #demo or
-    # #code section); they are not sent to the network and are safe to keep in
-    # the published clickable resource identity.
+    # 网址片段用于页面内定位，例如 #demo 或 #code，不会发送给网络服务器。
+    # 资源网址通过下方检查后，可以保留片段并生成可点击链接。
     if parsed.scheme != 'https' or parsed.username or parsed.password or port \
             or not hostname or literal or hostname == 'localhost' or hostname.endswith('.localhost') \
             or not valid_dns or (conference_only and (
@@ -88,7 +86,7 @@ def public_https(value, label, *, conference_only=False):
 
 
 def hide_arxiv_links(value):
-    """Keep conference pages conference-native without exposing preprint URLs."""
+    """隐藏正文中的 arXiv 预印本链接，会议版来源继续由页面的官方记录提供。"""
     text = str(value or '')
     note = '（预印本链接未在会议页展示）'
     text = re.sub(
@@ -204,37 +202,37 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
             or authors.get('identitySha256') != stable_sha(authors.get('identity')) \
             or stage.get('readerAuthorIdentitySha256') != authors.get('identitySha256') \
             or not isinstance(authors.get('authors'), list) or not authors['authors']:
-        raise ValueError('conference Reader author/affiliation identity is not sealed')
+        raise ValueError('会议论文解读的作者与机构记录格式无效、为空，或与格式声明及保存哈希不一致。')
     for author in authors['authors']:
         if not isinstance(author, dict) or not isinstance(author.get('name'), str) or not author['name'].strip() \
                 or not isinstance(author.get('affiliations'), list) or not author['affiliations'] \
                 or any(not isinstance(item, str) or not item.strip() for item in author['affiliations']):
-            raise ValueError('conference Reader author/affiliation projection is incomplete')
+            raise ValueError('会议论文解读的作者记录格式无效，或姓名及机构列表缺少非空文字。')
     if not isinstance(resources, dict) or contracts.get('apiReaderResourceIdentity') != 'api-reader-resource-identity-v1':
-        raise ValueError('conference Reader resource identity is not sealed')
+        raise ValueError('会议论文解读的资源记录格式无效，或格式声明不符合要求。')
     resource_identity = dict(resources)
     resource_identity.pop('identitySha256', None)
     if resources.get('identitySha256') != stable_sha(resource_identity) \
             or stage.get('resourceIdentitySha256') != resources.get('identitySha256') \
             or not isinstance(resources.get('resources'), list) \
             or stage.get('resourceCount') != len(resources['resources']):
-        raise ValueError('conference Reader resource identity SHA is not replayable')
+        raise ValueError('会议论文解读的资源列表不是数组，或条目数量或内容哈希与保存记录不一致。')
     for resource in resources['resources']:
         if not isinstance(resource, dict) or resource.get('availability') not in {
                 'available', 'unavailable', 'temporarily_unreachable'}:
-            raise ValueError('conference Reader resource projection is invalid')
+            raise ValueError('会议论文解读的资源条目必须是对象，且可达状态须为允许的值。')
         if resource.get('origin') == 'paper_source':
             if not paper_source_resource_binding(resource):
-                raise ValueError('conference Reader paper-source URL binding is invalid')
+                raise ValueError('无法按原文引句及保存记录核实会议论文解读中的资源原始网址。')
         elif resource.get('origin') != 'validated_demo' \
                 or resource.get('originalUrl') not in ((manifest.get('stages') or {}).get('demoLinkScan') or {}).get('discoveredLinks', []):
-            raise ValueError('conference Reader demo resource binding is invalid')
+            raise ValueError('会议论文解读的资源来源未标记为已核验演示，或原始网址不在演示链接扫描记录中。')
         # 历史记录中可能存在不完整的网址。资源已标记为不可用或暂时无法访问时，
         # 允许继续处理，但不能据此声称资源已开放，也不在这里删除原资源记录。
         # 资源标记为 available 时，原始地址与最终地址都必须通过公开 HTTPS 地址检查。
         try:
-            public_https(resource.get('originalUrl'), 'Reader resource original URL')
-            public_https(resource.get('finalUrl'), 'Reader resource final URL')
+            public_https(resource.get('originalUrl'), '资源的原始网址')
+            public_https(resource.get('finalUrl'), '资源的最终网址')
         except ValueError:
             if resource.get('availability') in {'unavailable', 'temporarily_unreachable'}:
                 print('会议论文解读中的资源链接未通过公开 HTTPS 地址检查；'

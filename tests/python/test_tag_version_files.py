@@ -36,7 +36,21 @@ class TagVersionFilesTests(unittest.TestCase):
         self.stage = self.root / 'stage'
         self.stage.mkdir()
         tree = ast.parse(SOURCE.read_text())
-        nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in NAMES]
+        current_names = NAMES - {'_legacy_tag_catalog_file_contents'}
+        nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                 and node.name in current_names]
+        # 旧生成器只用于离线构造旧格式测试资料，固定夹具不随 SOURCE 改变。
+        original_writer_path = (Path(__file__).resolve().parents[1] / 'fixtures'
+                                / 'tag-catalog-original-writer.txt')
+        original_writer_raw = original_writer_path.read_bytes()
+        self.assertEqual(hashlib.sha256(original_writer_raw).hexdigest(),
+                         '70b72b96a3b40a5be82b9f1c5b0e35093d51af2bc457fed84b71c0e7e7b87a3c')
+        original_writer_tree = ast.parse(original_writer_raw)
+        self.assertEqual(len(original_writer_tree.body), 1)
+        original_writer = original_writer_tree.body[0]
+        self.assertIsInstance(original_writer, ast.FunctionDef)
+        self.assertEqual(original_writer.name, '_legacy_tag_catalog_file_contents')
+        nodes.append(original_writer)
         self.assertEqual({node.name for node in nodes}, NAMES)
         class ValidationError(Exception):
             pass

@@ -887,9 +887,7 @@ function isCompleteAnalysisContent(paper) {
 }
 
 const LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES = Object.freeze(
-    REQUIRED_RECOVERY_STAGES.filter(stage => (
-        stage !== 'coreSummaryRepair' && stage !== 'taxonomySeal'
-    ))
+    REQUIRED_RECOVERY_STAGES.filter(stage => stage !== 'coreSummaryRepair')
 );
 const CORE_SUMMARY_V3_READ_ONLY_COMPATIBILITY_CUTOFF_MS = Date.parse(
     '2026-09-07T00:00:00.000+08:00'

@@ -149,13 +149,13 @@ class ConferencePageRenderTest(unittest.TestCase):
         resources_identity = {'contract': 'api-reader-resource-identity-v1',
                               'sourceTextSha256': '1' * 64, 'resources': []}
         resources = {**resources_identity, 'identitySha256': stable_sha(resources_identity)}
-        analysis = '\n\n'.join(f'## {heading}\n已通过封存证据验证的 canonical 内容。' for heading in MODULE.REQUIRED_ANALYSIS_SECTIONS)
+        analysis = '\n\n'.join(f'## {heading}\n已根据封存资料核验的分析内容。' for heading in MODULE.REQUIRED_ANALYSIS_SECTIONS)
         publication = {'contract': 'conference-official-publication-v1',
                        'recordUrl': 'https://ieeexplore.ieee.org/document/100',
                        'pdfUrl': 'https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=100'}
         paper = {'id': paper_id, 'conferencePaperId': paper_id, 'paper_id': paper_id, 'title': '会议论文',
                  'analysis': analysis, 'conferencePublication': publication,
-                 'parsed': {'summary': '全新 canonical 摘要。', 'score': '8.2',
+                 'parsed': {'summary': '本次分析生成的摘要。', 'score': '8.2',
                             'rankBucket': '前25%', 'documentType': '方法研究', 'scoringReason': '八维证据完整。',
                             'innovationScore': '1.7', 'technicalRigorScore': '1.3',
                             'experimentalSufficiencyScore': '1.2', 'clarityScore': '0.8',
@@ -461,7 +461,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         reader_stage = packet['paper']['analysisManifest']['stages']['apiReaderArticle']
         reader_stage['resourceIdentitySha256'] = stable_sha(identity)
         reader_stage['resourceCount'] = 1
-        with self.assertRaisesRegex(ValueError, 'original URL'):
+        with self.assertRaisesRegex(ValueError, '资源的原始网址'):
             MODULE.render_packet(packet)
 
 

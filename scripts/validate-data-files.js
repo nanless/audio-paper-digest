@@ -543,10 +543,10 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
                 || stableContentSha256(manifestProof) !== stableContentSha256(proof)
                 || paper.sourceSha256 !== descriptor.sourceSha256
                 || paper.analysisManifest?.sourceAcquisition?.sourceSha256 !== descriptor.sourceSha256) {
-                addIssue(issues, filePath, `${prefix} 未精确绑定 sealed TXT/PDF generation`);
+                addIssue(issues, filePath, `${prefix} 与封存的文本、PDF 或来源版本记录不一致。`);
             }
         } catch (error) {
-            addIssue(issues, filePath, `${prefix} sealed source 无法重放: ${error.message}`);
+            addIssue(issues, filePath, `${prefix} 无法读取或核验封存的论文来源：${error.message}`);
         }
     }
 }
