@@ -313,6 +313,16 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 ## 分类词表维护说明
 
+当前默认词表版本为 `paper-tag-catalog-v2`。Node 的 `loadTagCatalog()`、默认标签规则和 Python 的
+`load_tag_catalog()` 都要求这个版本；显式指定的历史快照仍可读取 `paper-taxonomy-v1`，并按原字节核对 SHA。
+这两个已知版本使用相同的字段结构。版本名称的单向迁移本身不算破坏性变更，但升级说明必须分别对应真实旧快照和当前词表的版本及 SHA。
+概念删除、替换、含义或维度变化仍按原规则判断，不能借版本改名绕过确认和标签阶段核验。反向降级及未知版本不在这个迁移范围内。
+
+会议和历史处理的当前审查报告使用 `tagReview`、`tagReviewQueue`，有实际队列文件时才返回 `tagReviewQueueFile`。
+会议新队列保存为 `tag-review-queue.json`，格式为 `conference-tag-review-queue-v2`，独立版本号为 2。
+旧检查点先按原哈希核验，程序只在内存中转换报告名称，不修改旧状态。只读报告可以返回确实存在的旧队列路径；
+重新生成队列时，程序先原子写入新文件，再移除旧队列缓存。标签未确定的论文仍不能自动重试或进入发布。
+
 ### 标签选择与具体程度
 
 `lib/tag-rules.js` 检查 `paper-taxonomy-selection-v1`：标签总数须为 3–5，任务类（`facet=task`）标签须有 1–3 个，

@@ -110,7 +110,7 @@ test('partial paper resumes with the same deterministic UUID and does not rerun 
     assert.deepEqual(cli.processStatus(options, { dependencies: f.deps }), {
         status: 'partial', processId: first.processId, conferenceId: f.authority.conferenceId,
         stateSha256: partial.stateSha256, papers: { complete: 1, analysis_partial: 1 },
-        completionReceiptSha256: null, taxonomyReview: 0
+        completionReceiptSha256: null, tagReview: 0
     });
     const second = await processApi.runConferenceProcess({ ...options, retryFailed: true }, { ...f.deps, processPaper: worker });
     assert.equal(second.status, 'complete');
@@ -706,7 +706,7 @@ test('exhausted model network failure does not stop later conference papers', as
     assert.equal(result.complete, 2);
 });
 
-test('taxonomy review keeps the batch moving, withholds the page and reports a visible queue', async t => {
+test('tag review keeps the batch moving, withholds the page and reports a visible queue', async t => {
     const f = fixture(t, 3); const options = { apply: true, concurrency: 2 };
     const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), 'conference-process-v1');
     const executionOf = paperId => processApi.deterministicUuid(processId, paperId, 'analysis');
@@ -735,18 +735,19 @@ test('taxonomy review keeps the batch moving, withholds the page and reports a v
     assert.equal(first.status, 'partial');
     assert.equal(first.complete, 2); assert.equal(first.failed, 1);
     assert.notEqual(first.stopped, true); assert.equal(first.batchFailure, undefined);
-    assert.equal(first.taxonomyReview, 1);
-    assert.deepEqual(first.taxonomyReviewQueue.map(item => item.blockedReasons), [blockedReasons]);
+    assert.equal(first.tagReview, 1);
+    assert.deepEqual(first.tagReviewQueue.map(item => item.blockedReasons), [blockedReasons]);
     const directory = path.join(f.files.conferenceProcessDir, first.processId);
-    assert.equal(first.taxonomyReviewQueueFile, path.join(directory, 'taxonomy-review-queue.json'));
+    assert.equal(first.tagReviewQueueFile, path.join(directory, 'tag-review-queue.json'));
     // The batch does not close while a tag assignment is unresolved: no receipt.
     assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), false);
 
-    const queue = JSON.parse(fs.readFileSync(first.taxonomyReviewQueueFile, 'utf8'));
-    assert.equal(queue.contract, processApi.TAG_REVIEW_QUEUE_CONTRACT);
-    assert.equal(queue.taxonomyReview, 1);
+    const queue = JSON.parse(fs.readFileSync(first.tagReviewQueueFile, 'utf8'));
+    assert.equal(queue.contract, 'conference-tag-review-queue-v2');
+    assert.equal(queue.version, 2);
+    assert.equal(queue.tagReview, 1);
     assert.equal(queue.items[0].paperId, reviewPaperId);
-    assert.equal(queue.items[0].status, 'needs_taxonomy_review');
+    assert.equal(queue.items[0].status, 'needs_tag_review');
     assert.deepEqual(queue.items[0].blockedReasons, blockedReasons);
     assert.match(queue.queueSha256, /^[a-f0-9]{64}$/);
 
@@ -754,8 +755,8 @@ test('taxonomy review keeps the batch moving, withholds the page and reports a v
     const review = state.items[reviewPaperId];
     assert.equal(review.status, 'analysis_partial');
     assert.equal(review.pageProof, null);
-    assert.equal(review.lastFailure.code, 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED');
-    assert.equal(review.lastFailure.category, 'taxonomy_review');
+    assert.equal(review.lastFailure.code, 'CONFERENCE_TAG_REVIEW_REQUIRED');
+    assert.equal(review.lastFailure.category, 'tag_review');
     assert.equal(review.lastFailure.systemic, false);
     assert.equal(review.lastFailure.retryable, false);
     assert.deepEqual(review.reviewRequired.blockedReasons, blockedReasons);
@@ -765,30 +766,108 @@ test('taxonomy review keeps the batch moving, withholds the page and reports a v
     }
 
     const status = cli.processStatus(options, { dependencies: f.deps });
-    assert.equal(status.taxonomyReview, 1);
-    assert.equal(status.taxonomyReviewQueue[0].paperId, reviewPaperId);
-    assert.deepEqual(status.taxonomyReviewQueue[0].blockedReasons, blockedReasons);
-    assert.equal(status.taxonomyReviewQueueFile, first.taxonomyReviewQueueFile);
+    assert.equal(status.tagReview, 1);
+    assert.equal(status.tagReviewQueue[0].paperId, reviewPaperId);
+    assert.deepEqual(status.tagReviewQueue[0].blockedReasons, blockedReasons);
+    assert.equal(status.tagReviewQueueFile, first.tagReviewQueueFile);
+
+    // 旧检查点和队列保留有效原始哈希，状态读取只投影新名称。
+    const stateFile = path.join(directory, 'state.json');
+    const legacyQueueFile = path.join(directory, 'taxonomy-review-queue.json');
+    review.lastFailure.code = 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED';
+    review.lastFailure.category = 'taxonomy_review';
+    review.reviewRequired.status = 'needs_taxonomy_review';
+    state.stateSha256 = processApi.stateDigest(state);
+    const legacyStateBytes = Buffer.from(JSON.stringify(state));
+    fs.writeFileSync(stateFile, legacyStateBytes);
+    const legacyQueue = { ...queue, contract: 'conference-taxonomy-review-queue-v1', version: 1,
+        taxonomyReview: queue.tagReview,
+        items: queue.items.map(item => ({ ...item, status: 'needs_taxonomy_review' })) };
+    delete legacyQueue.tagReview; delete legacyQueue.queueSha256;
+    legacyQueue.queueSha256 = processApi.stableHash(legacyQueue);
+    const legacyQueueBytes = Buffer.from(JSON.stringify(legacyQueue));
+    fs.rmSync(first.tagReviewQueueFile);
+    fs.writeFileSync(legacyQueueFile, legacyQueueBytes);
+    assert.equal(processApi.assertState(state).stateSha256, state.stateSha256);
+    const legacyStatus = cli.processStatus(options, { dependencies: f.deps });
+    assert.equal(legacyStatus.tagReview, 1);
+    assert.equal(legacyStatus.tagReviewQueue[0].status, 'needs_tag_review');
+    assert.equal(legacyStatus.tagReviewQueueFile, legacyQueueFile);
+    assert.equal(legacyStatus.taxonomyReview, undefined);
+    assert.deepEqual(fs.readFileSync(stateFile), legacyStateBytes);
+    assert.deepEqual(fs.readFileSync(legacyQueueFile), legacyQueueBytes);
+    assert.equal(fs.existsSync(first.tagReviewQueueFile), false);
+    fs.rmSync(legacyQueueFile);
+    assert.equal(cli.processStatus(options, { dependencies: f.deps }).tagReviewQueueFile, undefined);
+    fs.writeFileSync(legacyQueueFile, legacyQueueBytes);
+    const codeOnlyState = structuredClone(state);
+    delete codeOnlyState.items[reviewPaperId].reviewRequired;
+    codeOnlyState.stateSha256 = processApi.stateDigest(codeOnlyState);
+    const codeOnlyBytes = JSON.stringify(codeOnlyState);
+    assert.equal(processApi.buildTagReviewQueue(codeOnlyState).items[0].status, 'needs_tag_review');
+    assert.equal(JSON.stringify(codeOnlyState), codeOnlyBytes);
 
     // A deterministic review is never retried blindly...
     const quiet = await processApi.runConferenceProcess(options, deps);
-    assert.equal(quiet.status, 'partial'); assert.equal(quiet.taxonomyReview, 1);
+    assert.equal(quiet.status, 'partial'); assert.equal(quiet.tagReview, 1);
     assert.equal(stageCalls, 3);
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'state.json')))
         .items[reviewPaperId].attempts, 1);
+    assert.equal(fs.existsSync(legacyQueueFile), false);
+    const rebuiltQueue = JSON.parse(fs.readFileSync(quiet.tagReviewQueueFile));
+    assert.equal(rebuiltQueue.contract, 'conference-tag-review-queue-v2');
+    assert.equal(rebuiltQueue.version, 2);
+    assert.equal(rebuiltQueue.items[0].status, 'needs_tag_review');
+    const queueBody = { ...rebuiltQueue }; delete queueBody.queueSha256;
+    assert.equal(rebuiltQueue.queueSha256, processApi.stableHash(queueBody));
+    const quietState = processApi.assertState(JSON.parse(fs.readFileSync(stateFile)));
+    assert.equal(quietState.items[reviewPaperId].lastFailure.code, 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED');
+    assert.equal(quietState.items[reviewPaperId].reviewRequired.status, 'needs_taxonomy_review');
 
     // ...but an explicit release after the labels are fixed promotes it.
     fixed = true;
     const resumed = await processApi.runConferenceProcess({ ...options, retryFailed: true }, deps);
-    assert.equal(resumed.status, 'complete'); assert.equal(resumed.taxonomyReview, 0);
+    assert.equal(resumed.status, 'complete'); assert.equal(resumed.tagReview, 0);
     assert.equal(stageCalls, 4);
-    assert.equal(fs.existsSync(path.join(directory, 'taxonomy-review-queue.json')), false);
+    assert.equal(fs.existsSync(path.join(directory, 'tag-review-queue.json')), false);
+    assert.equal(fs.existsSync(legacyQueueFile), false);
     assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), true);
     const done = JSON.parse(fs.readFileSync(path.join(directory, 'state.json')));
     assert.equal(done.items[reviewPaperId].status, 'complete');
     assert.equal(done.items[reviewPaperId].reviewRequired, null);
     assert.ok(done.items[reviewPaperId].pageProof);
-    assert.equal(cli.processStatus(options, { dependencies: f.deps }).taxonomyReview, 0);
+    assert.equal(cli.processStatus(options, { dependencies: f.deps }).tagReview, 0);
+});
+
+test('tag review classification accepts old codes without authorizing a blind retry', () => {
+    const recovery = require('../scripts/lib/conference-process-recovery.js');
+    for (const code of ['CONFERENCE_TAG_REVIEW_REQUIRED', 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED']) {
+        const failure = recovery.classifyFailure(Object.assign(new Error('标签选择尚未确定'), { code }),
+            '2026-09-09T00:00:00Z');
+        assert.equal(failure.code, code); assert.equal(failure.category, 'tag_review');
+        assert.equal(failure.systemic, false); assert.equal(failure.retryable, false);
+        assert.equal(recovery.eligible({ status: 'analysis_partial', attempts: 1, lastFailure: failure }, failure.at), false);
+    }
+});
+
+test('tag queue replacement preserves the old cache on rename failure and empty queues clear both names', t => {
+    const f = fixture(t); const directory = f.root;
+    const legacyFile = path.join(directory, 'taxonomy-review-queue.json');
+    const currentFile = path.join(directory, 'tag-review-queue.json');
+    const oldBytes = Buffer.from('saved legacy queue'); fs.writeFileSync(legacyFile, oldBytes);
+    const rename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+        if (to === currentFile) throw new Error('fixture queue rename failed');
+        return rename(from, to);
+    };
+    try {
+        assert.throws(() => processApi.writeTagReviewQueue(directory, { tagReview: 1, items: [] }), /rename failed/);
+    } finally { fs.renameSync = rename; }
+    assert.deepEqual(fs.readFileSync(legacyFile), oldBytes);
+    assert.equal(fs.existsSync(currentFile), false);
+    fs.writeFileSync(currentFile, 'current queue');
+    assert.equal(processApi.writeTagReviewQueue(directory, { tagReview: 0, items: [] }), null);
+    assert.equal(fs.existsSync(legacyFile), false); assert.equal(fs.existsSync(currentFile), false);
 });
 
 test('migration provenance survives a crash between state and migration receipt', async t => {

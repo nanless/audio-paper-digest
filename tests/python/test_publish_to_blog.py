@@ -8505,7 +8505,7 @@ body
         self.assertEqual(
             snapshot['contract'], publish_to_blog.TAG_CATALOG_SNAPSHOT_CONTRACT,
         )
-        self.assertEqual(snapshot['registryVersion'], 'paper-taxonomy-v1')
+        self.assertEqual(snapshot['registryVersion'], 'paper-tag-catalog-v2')
         self.assertEqual(
             snapshot['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )

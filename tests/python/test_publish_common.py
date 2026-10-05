@@ -210,11 +210,18 @@ def rebind_tag_stage_record(stage, *, registry_sha256=None, annotation=None,
     """修改测试中的标签阶段记录后，按本辅助函数使用的十三个字段重新计算 bindingSha256。"""
     if registry_sha256 is not None:
         stage['registrySha256'] = registry_sha256
+        snapshot_path = Path(ROOT) / 'config' / 'tag-catalog-history' / f'{registry_sha256}.json'
+        if snapshot_path.is_file():
+            stage['registryVersion'] = load_tag_catalog(snapshot_path)['version']
     if concept_ids is not None:
         stage['conceptIds'] = concept_ids
     if drop_annotation:
         stage.pop('registryUpgradeFrom', None)
     elif annotation is not None:
+        annotation = copy.deepcopy(annotation)
+        if annotation.get('toRegistrySha256') == cross_end_fixture()['currentRegistrySha256']:
+            annotation['toRegistrySha256'] = _PUBLISH_TAG_CATALOG['registrySha256']
+            annotation['toRegistryVersion'] = _PUBLISH_TAG_CATALOG['version']
         stage['registryUpgradeFrom'] = annotation
     if projection_sha256 is not None:
         stage['projectionSha256'] = projection_sha256
@@ -3289,6 +3296,33 @@ primary_method_tag: #基准测试
             with self.assertRaisesRegex(PublishDataValidationError, 'reason=snapshot-missing'):
                 _validate_tag_stage_record(paper, manifest, paper['arxivId'])
 
+    def test_catalog_name_migration_checks_the_original_stage_snapshot_and_prompt(self):
+        from_sha = 'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d'
+        snapshot = load_tag_catalog(Path(ROOT) / 'config' / 'tag-catalog-history' / (from_sha + '.json'))
+        paper = complete_paper()
+        manifest = {'version': 1}
+        stage = attach_tag_stage_record(paper, manifest)
+        annotation = {
+            'contract': 'paper-taxonomy-registry-upgrade-v1', 'version': 1,
+            'fromRegistrySha256': from_sha, 'fromRegistryVersion': snapshot['version'],
+            'toRegistrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
+            'toRegistryVersion': _PUBLISH_TAG_CATALOG['version'],
+            'changeLevel': 'none', 'reasons': [], 'note': '仅迁移词表版本名称。',
+        }
+        rebind_tag_stage_record(stage, registry_sha256=from_sha, annotation=annotation,
+                               projection_sha256=tag_prompt_text_sha256(snapshot))
+        saved = copy.deepcopy((paper, manifest))
+        self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
+        self.assertEqual((paper, manifest), saved)
+        stage['registryVersion'] = _PUBLISH_TAG_CATALOG['version']
+        rebind_tag_stage_record(stage)
+        with self.assertRaisesRegex(PublishDataValidationError, '与旧词表快照不一致'):
+            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+        stage['registryVersion'] = snapshot['version']
+        rebind_tag_stage_record(stage, projection_sha256='e' * 64)
+        with self.assertRaisesRegex(PublishDataValidationError, '新版提示文本 SHA'):
+            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+
     def test_tag_stage_current_catalog_requires_matching_versions_and_hashes(self):
         paper = complete_paper()
         manifest = {'version': 1}
@@ -3343,7 +3377,7 @@ primary_method_tag: #基准测试
                 message = str(caught.exception)
                 self.assertIn(reason_pattern, message)
                 self.assertIn(f"from={case['fromRegistrySha256']}", message)
-                self.assertIn(f"to={fixture['currentRegistrySha256']}", message)
+                self.assertIn(f"to={_PUBLISH_TAG_CATALOG['registrySha256']}", message)
                 if name == 'destructive-lying-annotation-rejected':
                     self.assertIn('codes=', message)
                     self.assertIn('alias-removed', message)
@@ -3602,11 +3636,13 @@ primary_method_tag: #基准测试
             },
         }
         fixture = cross_end_fixture()
+        legacy_current = load_tag_catalog(
+            Path(ROOT) / 'config' / 'tag-catalog-history' / (fixture['currentRegistrySha256'] + '.json'))
         for case in fixture['cases']:
             with self.subTest(case=case['name']):
                 outcome = _validate_tag_catalog_upgrade(
                     case['fromRegistrySha256'], case.get('conceptIds'),
-                    case.get('annotation'))
+                    case.get('annotation'), current=legacy_current)
                 detail = outcome.get('detail') or {}
                 view = {
                     'ok': outcome['ok'],

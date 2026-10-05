@@ -14,6 +14,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
 from publish_common import _validate_tag_catalog_upgrade  # noqa: E402
+from tag_catalog import load_tag_catalog  # noqa: E402
 
 FIXTURE = os.path.join(ROOT, 'tests', 'fixtures', 'registry-upgrade-cross-end.json')
 MARKER = 'CROSS_END_RESULT:'
@@ -22,10 +23,13 @@ MARKER = 'CROSS_END_RESULT:'
 def main():
     with open(FIXTURE, encoding='utf-8') as handle:
         fixture = json.load(handle)
+    current = load_tag_catalog(os.path.join(
+        ROOT, 'config', 'tag-catalog-history', fixture['currentRegistrySha256'] + '.json'))
     results = []
     for case in fixture['cases']:
         outcome = _validate_tag_catalog_upgrade(
-            case['fromRegistrySha256'], case.get('conceptIds'), case.get('annotation'))
+            case['fromRegistrySha256'], case.get('conceptIds'), case.get('annotation'),
+            current=current)
         detail = outcome.get('detail') or {}
         results.append({
             'name': case['name'],

@@ -247,12 +247,12 @@ function classifyProcessLiveness(status) {
 
 function processProof(result, entry) {
     if (!result || typeof result !== 'object' || result.status !== 'complete') {
-        // Surface the pending `needs_taxonomy_review` papers instead of hiding
+        // Surface the pending `needs_tag_review` papers instead of hiding
         // them behind a generic "not complete" failure: the reader must see
         // which papers wait for tag assignment review and why.
-        const review = Array.isArray(result?.taxonomyReviewQueue) ? result.taxonomyReviewQueue : [];
+        const review = Array.isArray(result?.tagReviewQueue) ? result.tagReviewQueue : [];
         fail(review.length
-            ? `conference process for ${entry.conferenceId} is not complete; taxonomy review pending for `
+            ? `conference process for ${entry.conferenceId} is not complete; tag review pending for `
                 + `${review.length} paper(s): ${review.map(item => `${item.paperId} [`
                     + `${(item.blockedReasons || []).join(', ')}]`).join('; ')}`.slice(0, 2000)
             : `conference process for ${entry.conferenceId} is not complete`);

@@ -53,8 +53,11 @@ function analysisRecord(options = {}) {
     const parsed = parseAnalysis(text, { tagRules: current });
     const registrySha256 = options.registrySha256 ?? current.registrySha256;
     const projectionSha256 = options.projectionSha256 ?? current.projectionSha256;
+    const priorCatalog = registrySha256 !== current.registrySha256
+        ? registryChange.resolveRegistrySnapshot(registrySha256) : null;
+    const registryVersion = options.registryVersion ?? priorCatalog?.version ?? current.registryVersion;
     const binding = {
-        registryVersion: current.registryVersion,
+        registryVersion,
         registrySha256,
         projectionContract: options.projectionContract ?? (registrySha256 !== current.registrySha256
             ? LEGACY_TAG_PROMPT_TEXT_CONTRACT : current.projectionContract),
@@ -73,7 +76,7 @@ function analysisRecord(options = {}) {
     if (options.annotation) stage.registryUpgradeFrom = options.annotation;
     // 保留旧字段的缓存种子：词表 SHA 与原阶段记录一致。
     const cachedParsed = Object.fromEntries(Object.entries(parsed).map(([key, value]) =>
-        key === 'tagValidation' ? ['taxonomyValidation', { ...value, registrySha256 }] : [key, value]));
+        key === 'tagValidation' ? ['taxonomyValidation', { ...value, registryVersion, registrySha256 }] : [key, value]));
     const paper = {
         id: options.paperId ?? PAPER_ID,
         analysis: text,

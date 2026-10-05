@@ -309,6 +309,8 @@ test('registryUpgradeFrom annotation is built and verified against the recompute
         fromRegistrySha256: from.registrySha256,
         toRegistrySha256: to.registrySha256,
         registryVersion: to.version,
+        fromRegistryVersion: from.version,
+        toRegistryVersion: to.version,
         changeLevel,
         detail
     };
@@ -582,7 +584,8 @@ function fullReasonCounts(reasons) {
 test('Node and Python registry upgrade gates agree on the shared fixture', () => {
     const fixture = JSON.parse(fs.readFileSync(CROSS_END_FIXTURE, 'utf8'));
     assert.equal(fixture.contract, 'paper-taxonomy-registry-upgrade-cross-end-fixture-v1');
-    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    const current = tagCatalogApi.loadTagCatalog(
+        path.join(HISTORY, `${fixture.currentRegistrySha256}.json`));
     assert.deepEqual(Object.keys(CROSS_END_DISPLAY_EXPECTATIONS).sort(),
         fixture.cases.map(item => item.name).sort());
     const classificationInputs = [
@@ -590,6 +593,8 @@ test('Node and Python registry upgrade gates agree on the shared fixture', () =>
             from: JSON.parse(fs.readFileSync(OLD_ALIAS_REMOVAL, 'utf8')), to: raw() },
         { name: 'seed-to-current',
             from: JSON.parse(fs.readFileSync(OLD_SEED, 'utf8')), to: raw() },
+        { name: 'catalog-version-migration', from: { ...raw(), version: 'paper-taxonomy-v1' }, to: raw() },
+        { name: 'catalog-version-downgrade', from: raw(), to: { ...raw(), version: 'paper-taxonomy-v1' } },
         { name: 'current-to-current', from: raw(), to: raw() }
     ];
     const pythonProgram = [
@@ -871,4 +876,41 @@ test('只有快照、明确确认、升级说明和原概念均通过核验，�
     assert.equal(ineligible.changeLevel, 'destructive');
     assert.match(ineligible.error, /不属于可人工确认的范围/);
     assert.match(ineligible.error, /concept-removed/);
+});
+
+
+test('the known catalog name migration preserves checks and cannot hide a destructive change', () => {
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    const previous = tagCatalogApi.loadTagCatalog(path.join(HISTORY,
+        'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d.json'));
+    const saved = JSON.stringify(previous);
+    const { changeLevel, detail } = api.classifyRegistryChange(previous, current);
+    assert.equal(changeLevel, 'none');
+    assert.deepEqual(detail.reasons, []);
+    const annotation = api.buildRegistryUpgradeAnnotation({
+        from: previous, to: current, changeLevel, detail, note: '仅迁移词表版本名称。'
+    });
+    const check = (value = annotation, fromRegistryVersion = previous.version) => api.validateTagCatalogUpgrade({
+        fromRegistrySha256: previous.registrySha256, fromRegistryVersion,
+        currentRegistry: current, conceptIds: ['task.asr'], annotation: value
+    });
+    assert.equal(check().ok, true);
+    assert.equal(JSON.stringify(previous), saved);
+    assert.equal(check({ ...annotation, fromRegistryVersion: current.version }).ok, false);
+    assert.match(check(annotation, current.version).error, /与旧词表快照不一致/);
+    const reverse = api.classifyRegistryChange(current, previous);
+    assert.equal(reverse.changeLevel, 'destructive');
+    assert.ok(codes(reverse.detail).includes('version-changed'));
+    assert.equal(api.canAcknowledgeRegistryChange(reverse.detail), false);
+    assert.throws(() => api.buildRegistryUpgradeAnnotation({
+        from: current, to: previous, ...reverse, note: '不允许逆向版本迁移。', acknowledgeDestructive: true
+    }));
+    assert.throws(() => api.classifyRegistryChange(previous,
+        { ...current, version: 'paper-tag-catalog-v3' }), /版本不受支持/);
+    const removed = clone(current);
+    removed.concepts = removed.concepts.filter(item => item.id !== 'task.wake-word');
+    const deletion = api.classifyRegistryChange(previous, removed);
+    assert.equal(deletion.changeLevel, 'destructive');
+    assert.ok(codes(deletion.detail).includes('concept-removed'));
+    assert.equal(api.canAcknowledgeRegistryChange(deletion.detail), false);
 });

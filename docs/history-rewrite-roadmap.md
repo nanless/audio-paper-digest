@@ -57,7 +57,7 @@
 
 可以复用 `fresh-rewrite-run-v1` 的隔离运行、不可变输入、来源期望、阶段状态、同一运行恢复及用量和断点记录（checkpoint）；也可以复用 `fresh-analysis-context` 的 source-only 白名单、正文、结构和来源快照（sourceSnapshot）的 SHA、缓存提交标记和旧生成字段禁入检查。已有 arXiv HTML/PDF 获取、项目 CONNECT 代理、结构提取、图片与资源 URL 安全检查，以及普通操作补丁、对已核 Reader 的补丁（signed patch）、独立事实复验和正式记录写入时的 CAS 的恢复方式都有复用价值。
 
-单日日更的外层流程不能直接承载这份历史方案：
+单日日更的外层流程不能直接用于执行这份历史方案：
 
 - `rewrite:source prepare` 只读 `data/current` 的同日原始候选、入选集合和正式分析（raw/filtered/canonical），要求 batchDate、论文集合和来源精确对应，采用现代 arXiv ID，并为每篇生成独立页面和当日一张汇总页。
 - 它的基线要求旧正式记录已有来源证明、正式分析和 Reader，而多数历史记录不满足。

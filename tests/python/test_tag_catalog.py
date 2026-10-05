@@ -81,6 +81,24 @@ class RegistryTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '版本不受支持'):
                     tag_prompt_text_sha256(catalog, contract)
 
+    def test_catalog_versions_keep_explicit_legacy_bytes_and_require_current_default(self):
+        self.assertEqual(load_tag_catalog()['version'], 'paper-tag-catalog-v2')
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'legacy.json'
+            raw = json.dumps(registry(), ensure_ascii=False).encode('utf-8')
+            target.write_bytes(raw)
+            loaded = load_tag_catalog(target)
+            self.assertEqual(loaded['version'], 'paper-taxonomy-v1')
+            self.assertEqual(loaded['registrySha256'], hashlib.sha256(raw).hexdigest())
+            with mock.patch('tag_paths.TAG_CATALOG_FILE', target):
+                with self.assertRaisesRegex(ValueError, '当前标签词表必须使用 paper-tag-catalog-v2'):
+                    load_tag_catalog()
+        for version in (None, '', 'paper-tag-catalog-v3', 2, [], {}):
+            data = registry()
+            data['version'] = version
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, '版本不受支持'):
+                validate_tag_catalog(data)
+
     def test_flat_hugo_compat_contract_is_versioned(self):
         self.assertEqual(
             TAG_FLAT_COMPAT_CONTRACT,

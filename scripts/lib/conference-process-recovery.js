@@ -42,7 +42,9 @@ function classifyFailure(error, now) {
     // An unresolved tag assignment is a deterministic per-paper review
     // condition: it neither stops the batch nor retries by itself (the labels
     // must be fixed first), and it is reported through the review queue.
-    else if (code === 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED') category = 'taxonomy_review';
+    else if (code === 'CONFERENCE_TAG_REVIEW_REQUIRED'
+        // 旧失败记录仍可读取；当前分类名称统一使用 tag_review。
+        || code === 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED') category = 'tag_review';
     else if (/^(?:ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|REQUEST_DEADLINE_EXCEEDED|REQUEST_SOCKET_TIMEOUT)$/.test(code)) category = 'paper';
     else if (/HTTP\s*5\d\d\b|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|proxy|CONNECT tunnel/i.test(`${code} ${message}`)) category = 'transport';
     else if (/LLM_ACCOUNT_POOL_|model.*not.found|unsupported.model|missing.*API.key|implementation drifted|deep execution config drifted/i.test(`${code} ${message}`)) category = 'configuration';
@@ -51,7 +53,7 @@ function classifyFailure(error, now) {
     const systemic = ['quota', 'authentication', 'rate_limit', 'transport', 'configuration'].includes(category);
     return { category, code, message, systemic,
         retryable: !['quota', 'authentication', 'integrity', 'configuration', 'source_upgrade',
-            'taxonomy_review'].includes(category) && error?.retryable !== false, at: now };
+            'tag_review'].includes(category) && error?.retryable !== false, at: now };
 }
 
 function eligible(item, now) {

@@ -1367,7 +1367,10 @@ function validateTagStageProof(paper, options = {}) {
     const runtime = options.tagRules || tagRulesApi.getDefaultTagRules();
     if (manifest?.contracts?.[tagRecord.contractKey] !== (tagRecord.format === 'current'
         ? TAG_STAGE_RECORD_CONTRACT : runtime.selectionContract)
-        || stage.registryVersion !== runtime.registryVersion
+        || (stage.registryVersion !== runtime.registryVersion
+            && !(stage.registrySha256 !== runtime.registrySha256
+                && stage.registryVersion === 'paper-taxonomy-v1'
+                && runtime.registryVersion === 'paper-tag-catalog-v2'))
         || (stage.projectionContract !== tagRulesApi.TAG_PROMPT_TEXT_CONTRACT
             && stage.projectionContract !== tagRulesApi.LEGACY_TAG_PROMPT_TEXT_CONTRACT)
         || stage.selectionContract !== runtime.selectionContract) {
@@ -1401,6 +1404,7 @@ function validateTagStageProof(paper, options = {}) {
             currentRegistrySha256: runtime.registrySha256,
             conceptIds: stage.conceptIds,
             annotation: stage.registryUpgradeFrom,
+            fromRegistryVersion: stage.registryVersion,
             snapshotOptions
         });
         if (!upgrade.ok) return upgrade.error;

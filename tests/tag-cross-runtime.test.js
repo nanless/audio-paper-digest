@@ -25,8 +25,12 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
             return { projectionContract, text,
                 sha256: crypto.createHash('sha256').update(text, 'utf8').digest('hex') };
         });
-    assert.equal(promptTexts[0].sha256, '96813f030122a5d6b3b5b51da583b40002411355c3bbdfabed3a4b0b6b101b27',
-        '旧 v1 全文 SHA 来自 83e08cf 的实际格式器和冻结词表');
+    const legacyCatalog = loadTagCatalog(path.resolve(__dirname,
+        '../config/tag-catalog-history/a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d.json'));
+    assert.equal(crypto.createHash('sha256').update(
+        buildTagPromptText(legacyCatalog, LEGACY_TAG_PROMPT_TEXT_CONTRACT), 'utf8').digest('hex'),
+        '96813f030122a5d6b3b5b51da583b40002411355c3bbdfabed3a4b0b6b101b27',
+        '显式旧快照与旧提示格式的完整字节保持原 SHA');
     const expected={version:tagCatalog.version,registrySha256:tagCatalog.registrySha256,
         projectionSha256:getDefaultTagRules().projectionSha256,
         promptTexts,

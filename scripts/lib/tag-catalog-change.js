@@ -129,7 +129,9 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
         facetsRemoved: 0
     };
 
-    if (from.version !== to.version) {
+    if (from.version !== to.version
+        && !(from.version === tagCatalogApi.LEGACY_TAG_CATALOG_VERSION
+            && to.version === tagCatalogApi.TAG_CATALOG_VERSION)) {
         note('destructive', 'version-changed',
             `词表版本从 ${from.version} 改为 ${to.version}，必须重新分析整篇论文`);
     }
@@ -435,8 +437,10 @@ function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
     if (!SHA256_RE.test(annotation.fromRegistrySha256) || !SHA256_RE.test(annotation.toRegistrySha256)) {
         throw new Error('registryUpgradeFrom 中的新旧词表 SHA 必须格式有效。');
     }
-    if (!annotation.fromRegistryVersion || annotation.fromRegistryVersion !== annotation.toRegistryVersion) {
-        throw new Error('registryUpgradeFrom 中的新旧词表版本必须非空且一致。');
+    if (!annotation.fromRegistryVersion || (annotation.fromRegistryVersion !== annotation.toRegistryVersion
+        && !(annotation.fromRegistryVersion === tagCatalogApi.LEGACY_TAG_CATALOG_VERSION
+            && annotation.toRegistryVersion === tagCatalogApi.TAG_CATALOG_VERSION))) {
+        throw new Error('registryUpgradeFrom 中的新旧词表版本必须一致，或属于允许的单向版本迁移。');
     }
     if (changeLevel === 'destructive') {
         // 破坏性变更的升级说明必须包含与本次重新计算结果对应的显式确认。
@@ -467,8 +471,12 @@ function validateRegistryUpgradeAnnotation(annotation, expected = {}) {
         || annotation.toRegistrySha256 !== expected.toRegistrySha256) {
         return 'registryUpgradeFrom.toRegistrySha256 格式无效，或与当前词表 SHA 不一致。';
     }
-    if (!annotation.fromRegistryVersion || annotation.fromRegistryVersion !== expected.registryVersion
-        || annotation.toRegistryVersion !== expected.registryVersion) {
+    const fromVersion = Object.hasOwn(expected, 'fromRegistryVersion')
+        ? expected.fromRegistryVersion : expected.registryVersion;
+    const toVersion = Object.hasOwn(expected, 'toRegistryVersion')
+        ? expected.toRegistryVersion : expected.registryVersion;
+    if (!annotation.fromRegistryVersion || annotation.fromRegistryVersion !== fromVersion
+        || annotation.toRegistryVersion !== toVersion) {
         return 'registryUpgradeFrom 中的新旧词表版本缺失或与当前版本不一致。';
     }
     if (!CHANGE_LEVELS.includes(annotation.changeLevel)) {
@@ -512,7 +520,7 @@ function validateTagCatalogUpgrade(options = {}) {
 
 function checkTagCatalogUpgrade({
     fromRegistrySha256, currentRegistry, currentRegistrySha256, conceptIds,
-    annotation, snapshotOptions = {}
+    annotation, snapshotOptions = {}, fromRegistryVersion
 } = {}) {
     const fail = error => ({ ok: false, error, changeLevel: null, detail: null });
     const current = normalizeRegistry(currentRegistry, '当前词表');
@@ -525,6 +533,9 @@ function checkTagCatalogUpgrade({
     const snapshot = resolveRegistrySnapshot(fromRegistrySha256, snapshotOptions);
     if (!snapshot) {
         return fail(`无法取得更新前的词表快照 ${fromRegistrySha256}，不能沿用标签阶段记录。`);
+    }
+    if (fromRegistryVersion !== undefined && snapshot.version !== fromRegistryVersion) {
+        return fail('标签阶段记录中的词表版本与旧词表快照不一致。');
     }
     const { changeLevel, detail } = classifyRegistryChange(snapshot, current);
     // 有效的人工确认只能满足破坏性变更这一项，不能跳过快照、升级说明或概念检查。
@@ -547,6 +558,8 @@ function checkTagCatalogUpgrade({
         fromRegistrySha256: String(fromRegistrySha256),
         toRegistrySha256: currentSha,
         registryVersion: current.version,
+        fromRegistryVersion: snapshot.version,
+        toRegistryVersion: current.version,
         changeLevel,
         detail
     });

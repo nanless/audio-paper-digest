@@ -8,6 +8,8 @@ from pathlib import Path
 
 FACET_IDS = ('task', 'method', 'setting', 'signal', 'application',
              'research_focus', 'artifact', 'scientific_topic', 'model_family')
+TAG_CATALOG_VERSION = 'paper-tag-catalog-v2'
+LEGACY_TAG_CATALOG_VERSION = 'paper-taxonomy-v1'
 LABEL_MODE_CURRENT = 'current'
 LABEL_MODE_LEGACY = 'legacy'
 LABEL_MODES = (LABEL_MODE_CURRENT, LABEL_MODE_LEGACY)
@@ -43,7 +45,7 @@ def _validate_catalog_string(value, name):
 
 def validate_tag_catalog(data):
     _require_exact_object_fields(data, {'version', 'facets', 'concepts'}, '标签词表')
-    if data['version'] != 'paper-taxonomy-v1':
+    if data['version'] not in (TAG_CATALOG_VERSION, LEGACY_TAG_CATALOG_VERSION):
         raise ValueError('标签词表的版本不受支持。')
     if not isinstance(data['facets'], list) or len(data['facets']) != len(FACET_IDS):
         raise ValueError('标签词表的分类维度必须是包含九项的列表。')
@@ -132,7 +134,8 @@ def _validate_tag_catalog_content(tag_catalog):
 
 
 def load_tag_catalog(file_path=None):
-    if file_path is None:
+    uses_default_catalog = file_path is None
+    if uses_default_catalog:
         import tag_paths
         file_path = tag_paths.TAG_CATALOG_FILE
     raw = Path(file_path).read_bytes()
@@ -148,6 +151,8 @@ def load_tag_catalog(file_path=None):
     # 解析时移除 UTF-8 BOM，并按 Node TextDecoder 的规则拒绝无效编码；
     # SHA 仍根据完整原始文件字节计算。
     data = validate_tag_catalog(json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique_object))
+    if uses_default_catalog and data['version'] != TAG_CATALOG_VERSION:
+        raise ValueError('当前标签词表必须使用 paper-tag-catalog-v2。')
     return {**data, 'registrySha256': hashlib.sha256(raw).hexdigest()}
 
 

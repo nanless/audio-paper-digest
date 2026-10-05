@@ -229,10 +229,10 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                 const blockedReasons = [...new Set(assignments[0].blockedReasons || [])].sort();
                 const error = new Error(`论文 ${item.paperId} 的标签分配受阻：`
                     + `${blockedReasons.join('; ') || '标签选择尚未确定'}`);
-                error.code = 'HISTORICAL_TAXONOMY_REVIEW_REQUIRED';
+                error.code = 'HISTORICAL_TAG_REVIEW_REQUIRED';
                 error.retryable = false;
-                error.taxonomyReview = { paperId: item.paperId, analysisRunId: item.runId,
-                    status: 'needs_taxonomy_review', blockedReasons,
+                error.tagReview = { paperId: item.paperId, analysisRunId: item.runId,
+                    status: 'needs_tag_review', blockedReasons,
                     registrySha256: assignments[0].registrySha256 || null,
                     assignmentSha256: assignments[0].assignmentSha256 || null };
                 throw error;
@@ -265,8 +265,8 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                 analysisSchedulerItemSha256: item.analysisSchedulerItemSha256, registrySha256: tagCatalog.registrySha256,
                 rendererImplementationSha256, ...(assignmentProof || {}), stagingRunId,
                 lastError: String(error.message).slice(0, 2000),
-                ...(error.taxonomyReview ? { reviewRequired: { ...error.taxonomyReview,
-                    code: 'HISTORICAL_TAXONOMY_REVIEW_REQUIRED' } } : {}) };
+                ...(error.tagReview ? { reviewRequired: { ...error.tagReview,
+                    code: 'HISTORICAL_TAG_REVIEW_REQUIRED' } } : {}) };
             updateCheckpoint(filename, options.crosswalkId, tagCatalog.registrySha256,
                 rendererImplementationSha256, deps, value => {
                 value.items[item.paperId] = record; return value;
@@ -357,8 +357,8 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     return { status: outcomes.every(item => item.status === 'staged') && daily.every(item => item.status === 'staged')
         && selected.length === relevantComplete.length ? 'complete' : 'partial', crosswalkId: options.crosswalkId,
         registrySha256: tagCatalog.registrySha256, rendererImplementationSha256,
-        taxonomyReview: reviewItems.length,
-        ...(reviewItems.length ? { taxonomyReviewQueue: reviewItems } : {}),
+        tagReview: reviewItems.length,
+        ...(reviewItems.length ? { tagReviewQueue: reviewItems } : {}),
         processed: outcomes, daily, checkpoint: filename,
         checkpointSha256: checkpoint.checkpointSha256 };
 }

@@ -10,9 +10,9 @@ const registryPath = path.join(__dirname, '../config/tag-catalog.json');
 const raw = () => JSON.parse(fs.readFileSync(registryPath, 'utf8'));
 const concept = (r, id) => r.concepts.find(c => c.id === id);
 
-test('v1 registry is a complete nine-facet, bounded, defined vocabulary', () => {
+test('current tag catalog contains all nine facets and defined concepts', () => {
     const r = loadTagCatalog(registryPath);
-    assert.equal(r.version, 'paper-taxonomy-v1');
+    assert.equal(r.version, 'paper-tag-catalog-v2');
     assert.equal(r.facets.length, 9);
     // v1.1 换表（2026-09-30）：262 概念（+34 缺口词），上界随词表增长放宽至 280。
     assert.ok(r.concepts.length >= 150 && r.concepts.length <= 280);
@@ -153,4 +153,30 @@ test('load reads each file revision without stale global cache', t => {
     assert.notEqual(first.registrySha256, second.registrySha256);
     assert.notEqual(first.concepts[0].scopeNote, second.concepts[0].scopeNote);
     assert.equal(resolveLabel(first, 'ASR').id, 'task.asr');
+});
+
+
+test('default loading requires the current catalog while explicit legacy loading keeps its byte SHA', () => {
+    const config = require('../scripts/config.js');
+    const previousPath = config.FILES.tagCatalogFile;
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-catalog-version-'));
+    const target = path.join(directory, 'legacy.json');
+    const legacy = { ...raw(), version: 'paper-taxonomy-v1' };
+    const bytes = Buffer.from(JSON.stringify(legacy));
+    fs.writeFileSync(target, bytes);
+    try {
+        const loaded = loadTagCatalog(target);
+        assert.equal(loaded.version, 'paper-taxonomy-v1');
+        assert.equal(loaded.registrySha256, crypto.createHash('sha256').update(bytes).digest('hex'));
+        config.FILES.tagCatalogFile = target;
+        assert.throws(() => loadTagCatalog(), /当前标签词表必须使用 paper-tag-catalog-v2/);
+        assert.throws(() => require('../scripts/lib/tag-rules.js').createTagRules(),
+            /当前标签词表必须使用 paper-tag-catalog-v2/);
+        for (const version of [null, '', 'paper-tag-catalog-v3', 2, [], {}]) {
+            assert.throws(() => validateTagCatalog({ ...legacy, version }), /版本不受支持/);
+        }
+    } finally {
+        config.FILES.tagCatalogFile = previousPath;
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 });

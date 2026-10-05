@@ -11,8 +11,11 @@ const recovery = require('./conference-process-recovery.js');
 
 const CONTRACT = 'conference-process-v1';
 const COMPLETION_CONTRACT = 'conference-process-completion-receipt-v1';
-const TAG_REVIEW_QUEUE_CONTRACT = 'conference-taxonomy-review-queue-v1';
-const TAG_REVIEW_QUEUE_FILE = 'taxonomy-review-queue.json';
+const TAG_REVIEW_QUEUE_CONTRACT = 'conference-tag-review-queue-v2';
+const TAG_REVIEW_QUEUE_FILE = 'tag-review-queue.json';
+const TAG_REVIEW_QUEUE_VERSION = 2;
+// 旧队列仅用于读取已有报告路径；当前写入始终使用新文件名。
+const LEGACY_TAG_REVIEW_QUEUE_FILE = 'taxonomy-review-queue.json';
 const DEEP_EXECUTION_CONFIG_CONTRACT = 'conference-deep-execution-config-v1';
 const VERSION = 1;
 const DEEP_EXECUTION_CONFIG_VERSION = 1;
@@ -409,37 +412,46 @@ function buildTagReviewQueue(state) {
     const checked = assertState(state);
     const items = Object.values(checked.items)
         .filter(item => item.reviewRequired
+            || item.lastFailure?.code === 'CONFERENCE_TAG_REVIEW_REQUIRED'
+            // 保留旧检查点原字节与哈希，只在当前队列中转换输出名称。
             || item.lastFailure?.code === 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED')
         .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
-            status: 'needs_taxonomy_review',
+            status: 'needs_tag_review',
             blockedReasons: item.reviewRequired?.blockedReasons || [],
             registrySha256: item.reviewRequired?.registrySha256 || null,
             assignmentSha256: item.reviewRequired?.assignmentSha256 || null,
             lastError: item.lastError || null }))
         .sort((left, right) => left.paperId.localeCompare(right.paperId));
-    const body = { contract: TAG_REVIEW_QUEUE_CONTRACT, version: VERSION,
+    const body = { contract: TAG_REVIEW_QUEUE_CONTRACT, version: TAG_REVIEW_QUEUE_VERSION,
         processId: checked.processId, conferenceId: checked.authority.conferenceId,
-        stateGeneration: checked.generation, taxonomyReview: items.length, items };
+        stateGeneration: checked.generation, tagReview: items.length, items };
     return { ...body, queueSha256: stableHash(body) };
 }
 function writeTagReviewQueue(directory, queue) {
     const filename = path.join(directory, TAG_REVIEW_QUEUE_FILE);
-    if (!queue.taxonomyReview) {
+    const legacyFilename = path.join(directory, LEGACY_TAG_REVIEW_QUEUE_FILE);
+    if (!queue.tagReview) {
         if (fs.existsSync(filename)) fs.rmSync(filename);
+        if (fs.existsSync(legacyFilename)) fs.rmSync(legacyFilename);
         return null;
     }
     const bytes = Buffer.from(`${JSON.stringify(queue, null, 2)}\n`);
-    const temporary = path.join(directory, `.taxonomy-review-queue.${sha256(bytes).slice(0, 12)}.tmp`);
+    const temporary = path.join(directory, `.tag-review-queue.${sha256(bytes).slice(0, 12)}.tmp`);
     const descriptor = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
     try { fs.writeFileSync(descriptor, bytes); fs.fsyncSync(descriptor); }
     finally { fs.closeSync(descriptor); }
     fs.renameSync(temporary, filename);
+    if (fs.existsSync(legacyFilename)) fs.rmSync(legacyFilename);
     return filename;
 }
 function buildTagReviewQueueFields(queue, directory) {
-    if (!queue.taxonomyReview) return {};
-    return { taxonomyReviewQueue: queue.items,
-        taxonomyReviewQueueFile: path.join(directory, TAG_REVIEW_QUEUE_FILE) };
+    if (!queue.tagReview) return {};
+    const filename = path.join(directory, TAG_REVIEW_QUEUE_FILE);
+    const legacyFilename = path.join(directory, LEGACY_TAG_REVIEW_QUEUE_FILE);
+    const existingFile = fs.existsSync(filename) ? filename
+        : fs.existsSync(legacyFilename) ? legacyFilename : null;
+    return { tagReviewQueue: queue.items,
+        ...(existingFile ? { tagReviewQueueFile: existingFile } : {}) };
 }
 
 function defaultDependencies() {
@@ -702,10 +714,10 @@ async function processOne(context, shared, item, deps) {
         const blockedReasons = Array.isArray(assignment.blockedReasons) ? assignment.blockedReasons : [];
         const error = new Error(`论文 ${item.paperId} 的标签需要重新核对：`
             + `${blockedReasons.join('; ') || '标签选择尚未确定'}`);
-        error.code = 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED';
+        error.code = 'CONFERENCE_TAG_REVIEW_REQUIRED';
         error.retryable = false;
-        error.taxonomyReview = { paperId: item.paperId, analysisRunId: item.analysisRunId,
-            status: 'needs_taxonomy_review', blockedReasons,
+        error.tagReview = { paperId: item.paperId, analysisRunId: item.analysisRunId,
+            status: 'needs_tag_review', blockedReasons,
             registrySha256: assignment.registrySha256 || null,
             assignmentSha256: assignment.assignmentSha256 || null };
         throw error;
@@ -795,7 +807,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
             conferenceId: context.authority.conferenceId, stopped: true, batchFailure: state.batchFailure,
             complete: Object.values(state.items).filter(item => item.status === 'complete').length,
             failed: Object.values(state.items).filter(item => item.status !== 'complete').length,
-            taxonomyReview: review.taxonomyReview, ...buildTagReviewQueueFields(review, directory) };
+            tagReview: review.tagReview, ...buildTagReviewQueueFields(review, directory) };
     }
     const sourceContext = { ...context, authority: { ...context.authority,
         implementationSha256: recovery.sourceImplementation(state, directory, module.exports) } };
@@ -848,8 +860,8 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 status: 'analysis_partial', lastError: failure.message, lastFailure: failure,
                 // A tag assignment review is an explicit, per-paper pending state; it is
                 // reported through the review queue instead of a generic failure.
-                ...(error.taxonomyReview
-                    ? { reviewRequired: { ...error.taxonomyReview, classifiedAt: failure.at } }
+                ...(error.tagReview
+                    ? { reviewRequired: { ...error.tagReview, classifiedAt: failure.at } }
                     : {}),
                 retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString(), updatedAt: deps.now() }));
             if (failure.systemic) deps.engine.updateJsonFileLocked(stateFile, current => {
@@ -876,7 +888,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 complete: context.members.length - incomplete.length, failed: incomplete.length,
                 ...(state.batchFailure ? { stopped: true, batchFailure: state.batchFailure } : {}),
                 deferred: incomplete.filter(item => !recovery.eligible(item, deps.now())).length,
-                taxonomyReview: review.taxonomyReview, ...buildTagReviewQueueFields(review, directory) };
+                tagReview: review.tagReview, ...buildTagReviewQueueFields(review, directory) };
         }
     }
     // Every member is complete: no tag assignment review is pending, so any stale
@@ -911,7 +923,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     validateCompletionReceipt(assertState(state, expected), receipt, shared.planReceiptSha256);
     return { status: 'complete', processId, conferenceId: context.authority.conferenceId,
         papers: context.members.length, completionReceiptSha256: receipt.receiptSha256, aggregate: aggregateProof,
-        taxonomyReview: 0 };
+        tagReview: 0 };
 }
 
 async function runConferenceProcess(options, overrides = {}) {

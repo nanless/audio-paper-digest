@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 
 const FACET_IDS = Object.freeze(['task', 'method', 'setting', 'signal', 'application', 'research_focus', 'artifact', 'scientific_topic', 'model_family']);
+const TAG_CATALOG_VERSION = 'paper-tag-catalog-v2';
+const LEGACY_TAG_CATALOG_VERSION = 'paper-taxonomy-v1';
 const CONCEPT_KEYS = ['id', 'facet', 'preferredLabel', 'aliases', 'broaderId', 'definition', 'scopeNote', 'status', 'replacedBy'];
 
 // Keep this deliberately identical to Python: NFKC, strip, one #, ASCII-only lower.
@@ -28,7 +30,7 @@ function string(value, name) {
 
 function validateTagCatalog(data) {
     object(data, ['version', 'facets', 'concepts'], '标签词表');
-    if (data.version !== 'paper-taxonomy-v1') throw new Error('标签词表的版本不受支持。');
+    if (![TAG_CATALOG_VERSION, LEGACY_TAG_CATALOG_VERSION].includes(data.version)) throw new Error('标签词表的版本不受支持。');
     if (!Array.isArray(data.facets) || data.facets.length !== FACET_IDS.length) throw new Error('标签词表必须包含全部九个分类维度。');
     const facets = new Set();
     for (const facet of data.facets) {
@@ -130,6 +132,9 @@ function loadTagCatalog(filePath) {
         }
     }
     const data = validateTagCatalog(parsed);
+    if (filePath === undefined && data.version !== TAG_CATALOG_VERSION) {
+        throw new Error('当前标签词表必须使用 paper-tag-catalog-v2。');
+    }
     return { ...data, registrySha256: crypto.createHash('sha256').update(bytes).digest('hex') };
 }
 
@@ -170,5 +175,5 @@ function pruneAncestors(tagCatalog, ids) {
     return ids.filter(id => !covered.has(id));
 }
 
-module.exports = { loadTagCatalog, validateTagCatalog, normalizeLabel, resolveLabelCandidates,
+module.exports = { TAG_CATALOG_VERSION, LEGACY_TAG_CATALOG_VERSION, loadTagCatalog, validateTagCatalog, normalizeLabel, resolveLabelCandidates,
     resolveLabel, ancestors, pruneAncestors };

@@ -96,11 +96,8 @@ function processStatus(options, runtime = {}) {
     const review = api.buildTagReviewQueue(state);
     const result = { status: state.status, processId, conferenceId: state.authority.conferenceId,
         stateSha256: state.stateSha256, papers: counts, completionReceiptSha256: state.completionReceiptSha256,
-        taxonomyReview: review.taxonomyReview };
-    if (review.taxonomyReview) {
-        result.taxonomyReviewQueue = review.items;
-        result.taxonomyReviewQueueFile = path.join(directory, api.TAG_REVIEW_QUEUE_FILE);
-    }
+        tagReview: review.tagReview };
+    Object.assign(result, api.buildTagReviewQueueFields(review, directory));
     if (state.batchFailure) result.batchFailure = state.batchFailure;
     const operationLock = lockStatus(deps.engine, path.join(directory, '.operation'));
     if (operationLock) result.operationLock = operationLock;

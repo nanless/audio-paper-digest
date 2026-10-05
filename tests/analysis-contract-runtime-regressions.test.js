@@ -295,11 +295,13 @@ function acknowledgedAnnotationFor(fromRegistrySha256) {
 
 function sealedPaper(options = {}) {
     const runtime = createTagRules({ registryPath: REGISTRY_FILE });
+    const priorCatalog = options.registrySha256
+        ? registryChange.resolveRegistrySnapshot(options.registrySha256) : null;
     const analysis = validAnalysisText();
     const parsed = parseAnalysis(analysis, { tagRules: runtime });
     const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
     const binding = {
-        registryVersion: options.registryVersion ?? runtime.registryVersion,
+        registryVersion: options.registryVersion ?? priorCatalog?.version ?? runtime.registryVersion,
         registrySha256: options.registrySha256 ?? runtime.registrySha256,
         projectionContract: options.projectionContract ?? (
             options.registrySha256 && options.registrySha256 !== runtime.registrySha256
@@ -344,6 +346,23 @@ function validateSeal(options) {
         registrySnapshotOptions: options.registrySnapshotOptions
     });
 }
+
+it('旧词表仅迁移版本名称时，正式阶段仍须匹配原快照和提示', () => {
+    const fromSha = 'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d';
+    const snapshot = registryChange.resolveRegistrySnapshot(fromSha);
+    const options = { registrySha256: fromSha, projectionContract: TAG_PROMPT_TEXT_CONTRACT,
+        projectionSha256: crypto.createHash('sha256').update(
+            buildTagPromptText(snapshot, TAG_PROMPT_TEXT_CONTRACT), 'utf8').digest('hex'),
+        annotation: annotationFor(fromSha) };
+    const fixture = sealedPaper(options);
+    const saved = JSON.stringify(fixture.paper);
+    assert.equal(contract.validateTagStageProof(fixture.paper, fixture), null);
+    assert.equal(JSON.stringify(fixture.paper), saved);
+    assert.match(validateSeal({ ...options, registryVersion: fixture.runtime.registryVersion }),
+        /与旧词表快照不一致/);
+    assert.notEqual(validateSeal({ ...options, annotation: undefined }), null);
+    assert.match(validateSeal({ ...options, projectionSha256: 'e'.repeat(64) }), /提示 SHA/);
+});
 
 describe('taxonomySeal registry upgrade gate', () => {
     it('keeps a current seal valid without any upgrade annotation', () => {

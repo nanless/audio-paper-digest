@@ -656,7 +656,10 @@ def _hash_tag_section_and_primary_tags(analysis):
 # 词表更新后，发布端重新比较新旧词表，并核对升级说明及所选概念是否仍有效。
 # 共享变更规则对应 scripts/lib/tag-catalog-change.js；提示文本的版本和 SHA
 # 另按本发布检查的兼容规则核验。这里只检查能否沿用标签阶段记录，不重新生成记录。
-from tag_catalog import _JS_WHITESPACE, normalize_label, validate_tag_catalog  # noqa: E402
+from tag_catalog import (  # noqa: E402
+    _JS_WHITESPACE, normalize_label, validate_tag_catalog,
+    TAG_CATALOG_VERSION, LEGACY_TAG_CATALOG_VERSION,
+)
 
 _REGISTRY_CHANGE_LEVELS = ('none', 'additive', 'destructive')
 _REGISTRY_UPGRADE_CONTRACT = 'paper-taxonomy-registry-upgrade-v1'
@@ -761,7 +764,9 @@ def _classify_registry_change(old_registry, new_registry):
         'facetsRemoved': 0,
     }
 
-    if frm['version'] != to['version']:
+    if frm['version'] != to['version'] and not (
+            frm['version'] == LEGACY_TAG_CATALOG_VERSION
+            and to['version'] == TAG_CATALOG_VERSION):
         note('destructive', 'version-changed',
              f"词表版本从 {frm['version']} 改为 {to['version']}，必须重新分析整篇论文")
 
@@ -1026,8 +1031,8 @@ def _validate_registry_upgrade_annotation(annotation, expected):
             or to_sha != expected['toRegistrySha256']:
         return 'registryUpgradeFrom.toRegistrySha256 格式无效，或与当前词表 SHA 不一致。'
     if not annotation.get('fromRegistryVersion') \
-            or annotation.get('fromRegistryVersion') != expected['registryVersion'] \
-            or annotation.get('toRegistryVersion') != expected['registryVersion']:
+            or annotation.get('fromRegistryVersion') != expected.get('fromRegistryVersion', expected['registryVersion']) \
+            or annotation.get('toRegistryVersion') != expected.get('toRegistryVersion', expected['registryVersion']):
         return 'registryUpgradeFrom 中的新旧词表版本缺失或与当前版本不一致。'
     change_level = annotation.get('changeLevel')
     if change_level not in _REGISTRY_CHANGE_LEVELS:
@@ -1056,7 +1061,7 @@ def _validate_registry_upgrade_annotation(annotation, expected):
 
 def _validate_tag_catalog_upgrade(from_registry_sha256, concept_ids, annotation,
                            current=None, current_registry_sha256=None,
-                           snapshot_resolver=None):
+                           snapshot_resolver=None, from_registry_version=None):
     """按 Node 的规则核验标签词表升级；无法完成核验时返回拒绝结果。
 
     本函数先取得旧词表快照并重新判断变更，再核对升级说明和所选概念。
@@ -1086,6 +1091,8 @@ def _validate_tag_catalog_upgrade(from_registry_sha256, concept_ids, annotation,
         if snapshot is None:
             return fail(f'无法取得更新前的词表快照 {from_sha}，不能沿用标签阶段记录。',
                         'snapshot-missing')
+        if from_registry_version is not None and snapshot.get('version') != from_registry_version:
+            return fail('标签阶段记录中的词表版本与旧词表快照不一致。', 'annotation-invalid')
         classified = _classify_registry_change(snapshot, current_registry)
         change_level = classified['changeLevel']
         detail = classified['detail']
@@ -1109,6 +1116,8 @@ def _validate_tag_catalog_upgrade(from_registry_sha256, concept_ids, annotation,
             'fromRegistrySha256': from_sha,
             'toRegistrySha256': current_sha,
             'registryVersion': current_registry['version'],
+            'fromRegistryVersion': snapshot['version'],
+            'toRegistryVersion': current_registry['version'],
             'changeLevel': change_level,
             'detail': detail,
         })
@@ -1146,7 +1155,7 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
     # 旧版沿用原有的 SHA 格式检查与升级规则；新版还须按旧词表精确核验提示 SHA。
     if not _SHA256_RE.fullmatch(stage_prompt_text_sha256):
         raise PublishDataValidationError(
-            f'{paper_label} taxonomySeal registry 升级被拒 [reason=projection-sha-invalid] '
+            f'{paper_label} 标签阶段的词表升级被拒绝 [reason=projection-sha-invalid] '
             f'from={from_sha} to={to_sha}: projectionSha256 必须是 64 位十六进制 SHA')
     snapshot = None
     if stage.get('projectionContract') == TAG_PROMPT_TEXT_CONTRACT:
@@ -1160,10 +1169,12 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
             return snapshot
         result = _validate_tag_catalog_upgrade(
             from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'),
-            snapshot_resolver=capture_snapshot)
+            snapshot_resolver=capture_snapshot,
+            from_registry_version=stage.get('registryVersion'))
     else:
         result = _validate_tag_catalog_upgrade(
-            from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'))
+            from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'),
+            from_registry_version=stage.get('registryVersion'))
     if result['ok']:
         if stage.get('projectionContract') == TAG_PROMPT_TEXT_CONTRACT:
             if not isinstance(snapshot, dict):
@@ -1187,7 +1198,7 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
         if destructive_codes:
             codes = ' codes=' + ','.join(destructive_codes)
     raise PublishDataValidationError(
-        f'{paper_label} taxonomySeal registry 升级被拒 [reason={reason_code}{codes}] '
+        f'{paper_label} 标签阶段的词表升级被拒绝 [reason={reason_code}{codes}] '
         f'from={from_sha} to={to_sha}: {result["error"]}')
 
 
@@ -1218,13 +1229,18 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
         raise PublishDataValidationError(
             f'{paper_label} 标签阶段记录中的提示文本协议版本不受支持。')
     expected_static = {
-        'registryVersion': _PUBLISH_TAG_CATALOG['version'],
         'selectionContract': TAG_SELECTION_CONTRACT,
     }
     for field, expected in expected_static.items():
         if stage.get(field) != expected:
             raise PublishDataValidationError(
                 f'{paper_label} 标签阶段记录中的 {field} 与当前词表、提示文本或标签选择协议不一致。')
+    if (stage.get('registryVersion') != _PUBLISH_TAG_CATALOG['version']
+            and not (stage.get('registrySha256') != _PUBLISH_TAG_CATALOG['registrySha256']
+                     and stage.get('registryVersion') == LEGACY_TAG_CATALOG_VERSION
+                     and _PUBLISH_TAG_CATALOG['version'] == TAG_CATALOG_VERSION)):
+        raise PublishDataValidationError(
+            f'{paper_label} 标签阶段记录中的 registryVersion 与当前词表、提示文本或标签选择协议不一致。')
     if stage.get('registrySha256') == _PUBLISH_TAG_CATALOG['registrySha256']:
         for field, expected in (
                 ('registrySha256', _PUBLISH_TAG_CATALOG['registrySha256']),

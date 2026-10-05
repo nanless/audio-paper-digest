@@ -57,9 +57,9 @@ function buildTagPromptText(tagCatalog, promptTextContract = TAG_PROMPT_TEXT_CON
 }
 
 function createTagRules(options = {}) {
-    const tagCatalog = options.tagCatalog || tagCatalogApi.loadTagCatalog(
-        options.registryPath || DEFAULT_REGISTRY_PATH
-    );
+    const tagCatalog = options.tagCatalog || (options.registryPath
+        ? tagCatalogApi.loadTagCatalog(options.registryPath)
+        : tagCatalogApi.loadTagCatalog());
     tagCatalogApi.validateTagCatalog({
         version: tagCatalog.version,
         facets: tagCatalog.facets,
