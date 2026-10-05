@@ -1395,7 +1395,7 @@ function validateTagStageProof(paper, options = {}) {
             snapshotOptions = { registryHistory: new Map([[stage.registrySha256, snapshot]]) };
         }
         // 旧快照、升级说明、允许的变更及原概念有效性仍须全部通过原检查。
-        const upgrade = require('./lib/tag-catalog-change.js').validateSealRegistryUpgrade({
+        const upgrade = require('./lib/tag-catalog-change.js').validateTagCatalogUpgrade({
             fromRegistrySha256: stage.registrySha256,
             currentRegistry: runtime.tagCatalog,
             currentRegistrySha256: runtime.registrySha256,

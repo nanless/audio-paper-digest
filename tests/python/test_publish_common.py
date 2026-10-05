@@ -74,7 +74,7 @@ from publish_common import (  # noqa: E402
     _mask_classification_fields,
     _hash_tag_section_and_primary_tags,
     _validate_tag_stage_record,
-    _seal_registry_upgrade,
+    _validate_tag_catalog_upgrade,
     _classify_registry_change,
     _destructive_reasons_hash,
     _acknowledgement_eligibility,
@@ -3489,14 +3489,14 @@ primary_method_tag: #基准测试
                         'note': '人工确认：conceptId 影响 none',
                     },
                 }
-                rejected = _seal_registry_upgrade(snapshot_sha, ['task.asr'], annotation)
+                rejected = _validate_tag_catalog_upgrade(snapshot_sha, ['task.asr'], annotation)
                 self.assertFalse(rejected['ok'])
                 self.assertEqual(rejected['reasonCode'], 'destructive')
                 self.assertIn('不属于可人工确认的范围', rejected['error'])
                 self.assertIn('concept-removed', rejected['error'])
 
                 # 不能取得旧快照时，即使提供确认也必须拒绝。
-                missing = _seal_registry_upgrade('0' * 64, ['task.asr'], annotation)
+                missing = _validate_tag_catalog_upgrade('0' * 64, ['task.asr'], annotation)
                 self.assertFalse(missing['ok'])
                 self.assertEqual(missing['reasonCode'], 'snapshot-missing')
 
@@ -3543,11 +3543,11 @@ primary_method_tag: #基准测试
                 }
                 valid_additive = dict(annotated)
                 valid_additive.pop('destructiveAcknowledgement')
-                allowed = _seal_registry_upgrade(
+                allowed = _validate_tag_catalog_upgrade(
                     synthetic_sha, ['task.asr'], valid_additive)
                 self.assertTrue(allowed['ok'], allowed['error'])
                 self.assertEqual(allowed['changeLevel'], 'additive')
-                lying = _seal_registry_upgrade(synthetic_sha, ['task.asr'], annotated)
+                lying = _validate_tag_catalog_upgrade(synthetic_sha, ['task.asr'], annotated)
         self.assertFalse(lying['ok'])
         self.assertEqual(lying['reasonCode'], 'annotation-invalid')
         self.assertIn('非破坏性变更', lying['error'])
@@ -3604,7 +3604,7 @@ primary_method_tag: #基准测试
         fixture = cross_end_fixture()
         for case in fixture['cases']:
             with self.subTest(case=case['name']):
-                outcome = _seal_registry_upgrade(
+                outcome = _validate_tag_catalog_upgrade(
                     case['fromRegistrySha256'], case.get('conceptIds'),
                     case.get('annotation'))
                 detail = outcome.get('detail') or {}

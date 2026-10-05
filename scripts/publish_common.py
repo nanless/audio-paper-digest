@@ -943,7 +943,7 @@ def _destructive_reasons(change_detail):
             if isinstance(reason, dict) and reason.get('level') == 'destructive']
 
 
-def _destructive_reason_fingerprint(reason):
+def _serialize_destructive_reason(reason):
     """去掉原因中的 level 和 message 后，按键排序生成紧凑 JSON，供破坏性原因哈希计算使用；输出格式与 Node 保持一致。"""
     canonical = {key: reason[key] for key in sorted(reason) if key not in ('level', 'message')}
     return json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -953,9 +953,9 @@ def _destructive_reasons_hash(change_detail):
     """将破坏性原因的 JSON 文本排序，用一个换行连接，再按 UTF-8 计算 SHA-256。
 
     重复原因仍参与计算，原因顺序和 message 改写不影响结果。"""
-    fingerprints = sorted(_destructive_reason_fingerprint(reason)
+    serialized_reasons = sorted(_serialize_destructive_reason(reason)
                           for reason in _destructive_reasons(change_detail))
-    return hashlib.sha256('\n'.join(fingerprints).encode('utf-8')).hexdigest()
+    return hashlib.sha256('\n'.join(serialized_reasons).encode('utf-8')).hexdigest()
 
 
 def _acknowledgement_eligibility(change_detail):
@@ -1054,7 +1054,7 @@ def _validate_registry_upgrade_annotation(annotation, expected):
     return None
 
 
-def _seal_registry_upgrade(from_registry_sha256, concept_ids, annotation,
+def _validate_tag_catalog_upgrade(from_registry_sha256, concept_ids, annotation,
                            current=None, current_registry_sha256=None,
                            snapshot_resolver=None):
     """按 Node 的规则核验标签词表升级；无法完成核验时返回拒绝结果。
@@ -1158,11 +1158,11 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
                     raise ValueError('旧词表快照中的 SHA 与标签阶段记录绑定的词表 SHA 不一致。')
                 snapshot = {**snapshot, 'registrySha256': registry_sha256}
             return snapshot
-        result = _seal_registry_upgrade(
+        result = _validate_tag_catalog_upgrade(
             from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'),
             snapshot_resolver=capture_snapshot)
     else:
-        result = _seal_registry_upgrade(
+        result = _validate_tag_catalog_upgrade(
             from_sha, stage.get('conceptIds'), stage.get('registryUpgradeFrom'))
     if result['ok']:
         if stage.get('projectionContract') == TAG_PROMPT_TEXT_CONTRACT:

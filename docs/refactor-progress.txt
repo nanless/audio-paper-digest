@@ -2115,3 +2115,25 @@ Python 作者负责 publish-to-blog.py 与 test_publish_to_blog.py。一条诊�
 第二十九批限定本地验证退出 0，用时 90.023538 秒，期间源码保持不变。固定 Hugo 0.160.1 核对、全仓 JavaScript/Python/shell 语法及严格只读数据检查通过。六个受影响 JavaScript 模块共 372 项、9 个套件，全通过且没有跳过，测试耗时 26809.004666 毫秒；发布器 Python 248 项在 22.928 秒全部通过。没有源码尾修或补验。此结果只代表计划中的限定本地检查，不称完整 FULL；推送后仍须相同提交的两组完整 CI 通过。独立终审接续核交付身份和真实结果。
 
 第二十九批独立终审完成，未解决 P1/P2 为 0。六份代码及测试的 SHA 和权限与预审一致，十文件范围确认，无验证后代码修正。主代理已阅读短终审，现精确暂存、详细中文提交和正常推送，再核远端同一提交及完整自动检查；本地限定验证没有代替 CI。
+
+第二十九批已正常提交推送，提交为 d9de072f1454a74e95cc43e61e2482bb47f593ec，远端 main 核对一致。对应完整 CI 正在运行；后续验收将读取实际终态，不把限定本地结果称完整验收。
+
+第三十批正式计划：让词表升级检查与原因序列化的名称准确反映用途。三个只读方案与主代理补充均已完整阅读，范围九文件；不改参数、保存格式、模型提示、诊断、排序或哈希算法。
+
+Node 作者负责 tag-catalog-change.js、analysis-contract.js 和 tag-catalog-change.test.js。公开 validateSealRegistryUpgrade 改为 validateTagCatalogUpgrade，同步实际导出及十二调用；内部唯一被 wrapper 使用的 sealRegistryUpgrade 改为 checkTagCatalogUpgrade，异常仍只由原 wrapper 捕获。返回完整结果对象，不说成布尔检查或凭证生成。destructiveReasonFingerprint 改为 serializeDestructiveReason，原因哈希函数中的唯一局部数组 fingerprints 改为 serializedReasons。该中间结果是按键排序的紧凑 JSON 文本；真正 SHA 仍在原哈希函数计算，保留重复项、单个换行、原键和值。只迁准确绑定与公开 API 键，不保旧别名，不改其它属性键、顺序或函数。既有测试的唯一局部辅助函数 seal 改为 checkUpgrade，全部实际引用同步；三块邻接注释分别解释升级说明逐字段对应、非破坏性分支不能附确认，以及历史快照需要合成非破坏性样本的原因，不改任何输入或断言。
+
+Python 作者负责 publish_common.py、test_publish_common.py 及真实跨端辅助入口 registry_upgrade_cross_end.py。_seal_registry_upgrade 改为 _validate_tag_catalog_upgrade，_destructive_reason_fingerprint 改为 _serialize_destructive_reason；原因文本列表局部 fingerprints 改为 serialized_reasons，所有实际声明、导入及调用同步。升级返回原 ok/error/reasonCode/changeLevel/detail 字典，外层标签阶段核验继续处理旧新版提示 SHA 与 PublishDataValidationError；不能合并两层检查。辅助脚本头部自然说明读取共享样本、调用接口、输出以 CROSS_END_RESULT: 开头的一行 JSON，供 Node 子进程比较；纠正旧“标记前输出”说明，去掉 harness、喂给、升级门、镜像与 spawn 的拼接表达。实际标记、输出、样本读取和参数均保持。
+
+主代理同步 README 的现行 Python 接口引用，以及共享测试 fixture 顶层 note 中两个函数名。note 是普通接口说明，两实际入口只按 cases 和固定数据取样；仅替换两个名称，保持日期、数量、来源 SHA、旧失败句、contract、case name、expect与所有 cases 的原字节。字段 note 的文字及整文件 SHA 真实改变，不能称整个 fixture 完全不变。有限 JSON 对照须证明除 note 两词外所有结构和值相同，不触碰历史生产记录或旧凭证。进度记录计划和实际验收，不批改过去记录。
+
+两个序列化函数只返回文本，升级函数检查旧快照、重算等级、确认与说明、当前概念有效性；十三项阶段绑定仍由调用者负责。所选概念有效性不等于自动比较前后两集合，当前词表与旧词表相同在此升级入口仍拒绝。v1 提示兼容例外、v2 同次快照验证、异常优先级、所有输出消息、summary/note/ACK、JSON 与单 LF SHA 保持。函数名属性、公开导出、错误栈与源码 SHA 会真实变化，仓库外旧 API 或私有导入可能受影响，不补写旧缓存或凭证。
+
+两作者各一次精确名称、完整 AST、全部 raw tokens 与字节逆对照，Node 明确单列公开导出键，Python 单列辅助 docstring。使用已可用的解析器和能处理 BigInt 的既有检查方法，不重复已通过工具或业务验证；原权限保持。第三代理独立核职责、消费者和输出边界。作者停笔、主代理全文阅读实际差异、预审后冻结源码，本地只跑受影响的升级、阶段及跨端用例，加全仓语法、固定 Hugo 与严格数据检查。独立终审后精确暂存九文件、详细中文提交并正常推送；对应提交的两组 CI 必须完整通过才算本批验收，不把限定本地检查称为 FULL。不跑论文分析、历史维护或博客发布。
+
+第三十批作者已停笔，主代理已逐份阅读九文件实际差异与两作者报告，独立预审未解决 P1/P2 为 0。两作者有限静态均首次通过，独立精确字节和全树对照也首次通过；六份源码与测试身份及原权限一致，包括三份 0600 文件。公开升级 API、内部与测试辅助函数、两端序列化函数和局部文本数组全部真实消费者同步，原参数、错误、样本和哈希算法保持。共享 fixture 只更新 note 中两个现行接口引用，逆回后全文字节一致，cases、expect、contract 与全部数据保持。现冻结全部跟踪文件，统一限定本地验证，完成后仍须同提交双版本完整 CI。
+
+第二十九批远端验收完成：CI 37250586265 对应提交 d9de072f1454a74e95cc43e61e2482bb47f593ec，Node 20.x 与 22.x 两任务及各十四步骤均完成且成功，实际终态已核。
+
+第三十批限定本地验证退出 0，用时 49.260638 秒，期间源码保持不变。固定 Hugo、全仓 JS/Python/shell 语法和严格只读数据检查通过；五个受影响 JavaScript 文件共 80 项、5 个套件全部通过，无失败或跳过，测试耗时 6688.154667 毫秒；Python 发布检查 126 项在 4.381 秒通过。真实 Node 到 Python 的共享升级结果用例参与，不是只断言新函数名。没有代码尾修或补验，本地仍为限定检查。
+
+第三十批独立终审完成，未解决 P1/P2 为 0。九文件范围、六代码与测试 SHA 及权限均保持预审，无验证后修正；主代理已完整阅读终审和全部实际差异。现精确暂存、详细中文提交和正常推送，继续核相同远端提交及两组完整 CI。

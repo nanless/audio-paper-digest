@@ -282,7 +282,7 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
 // 确认原因的指纹只使用结构化字段，不包含 level 和 message。
 // 每条原因的键按字典序排列，再把各条序列化结果排序、拼接并计算 SHA。
 // Node 与 Python 使用相同规则，确保同一组原因得到相同的 reasonsHash。
-function destructiveReasonFingerprint(reason) {
+function serializeDestructiveReason(reason) {
     const canonical = {};
     for (const key of Object.keys(reason).sort()) {
         if (key === 'level' || key === 'message') continue;
@@ -297,8 +297,8 @@ function destructiveReasons(changeDetail) {
 }
 
 function destructiveReasonsHash(changeDetail) {
-    const fingerprints = destructiveReasons(changeDetail).map(destructiveReasonFingerprint).sort();
-    return crypto.createHash('sha256').update(fingerprints.join('\n')).digest('hex');
+    const serializedReasons = destructiveReasons(changeDetail).map(serializeDestructiveReason).sort();
+    return crypto.createHash('sha256').update(serializedReasons.join('\n')).digest('hex');
 }
 
 // 这里只判断破坏性原因是否全部属于可确认范围，不改变原变更等级。
@@ -497,9 +497,9 @@ function validateRegistryUpgradeAnnotation(annotation, expected = {}) {
 // 沿用旧标签阶段记录前，须取得旧快照并重新判断变更，核对升级说明，
 // 再确认原概念在当前词表中仍启用。破坏性变更还须符合白名单并提供有效确认。
 // 无法完成核验时返回拒绝结果，不向调用方抛出异常。
-function validateSealRegistryUpgrade(options = {}) {
+function validateTagCatalogUpgrade(options = {}) {
     try {
-        return sealRegistryUpgrade(options);
+        return checkTagCatalogUpgrade(options);
     } catch (error) {
         return {
             ok: false,
@@ -510,7 +510,7 @@ function validateSealRegistryUpgrade(options = {}) {
     }
 }
 
-function sealRegistryUpgrade({
+function checkTagCatalogUpgrade({
     fromRegistrySha256, currentRegistry, currentRegistrySha256, conceptIds,
     annotation, snapshotOptions = {}
 } = {}) {
@@ -588,5 +588,5 @@ module.exports = {
     validateDestructiveAcknowledgement,
     buildRegistryUpgradeAnnotation,
     validateRegistryUpgradeAnnotation,
-    validateSealRegistryUpgrade
+    validateTagCatalogUpgrade
 };

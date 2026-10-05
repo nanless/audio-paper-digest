@@ -351,7 +351,7 @@ test('按变更等级核验词表升级，任何检查失败都拒绝沿用记�
     });
 
     // 明确确认与其余核验均有效时，允许沿用记录；变更等级仍为 destructive。
-    const allowed = api.validateSealRegistryUpgrade({
+    const allowed = api.validateTagCatalogUpgrade({
         fromRegistrySha256: seed.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -362,7 +362,7 @@ test('按变更等级核验词表升级，任何检查失败都拒绝沿用记�
     assert.equal(allowed.changeLevel, 'destructive');
 
     // 破坏性变更缺少明确确认时，先返回确认错误，不继续检查升级说明的其他字段。
-    const missingAnnotation = api.validateSealRegistryUpgrade({
+    const missingAnnotation = api.validateTagCatalogUpgrade({
         fromRegistrySha256: seed.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -371,7 +371,7 @@ test('按变更等级核验词表升级，任何检查失败都拒绝沿用记�
     assert.equal(missingAnnotation.ok, false);
     assert.match(missingAnnotation.error, /显式确认无效.*destructiveAcknowledgement/);
 
-    const missingSnapshot = api.validateSealRegistryUpgrade({
+    const missingSnapshot = api.validateTagCatalogUpgrade({
         fromRegistrySha256: '0'.repeat(64),
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -389,7 +389,7 @@ test('按变更等级核验词表升级，任何检查失败都拒绝沿用记�
         detail: api.classifyRegistryChange(seed, current).detail,
         note: '谎报 additive'
     });
-    const destructive = api.validateSealRegistryUpgrade({
+    const destructive = api.validateTagCatalogUpgrade({
         fromRegistrySha256: aliasRemoval.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -400,7 +400,7 @@ test('按变更等级核验词表升级，任何检查失败都拒绝沿用记�
     assert.match(destructive.error, /破坏性变更/);
     assert.equal(destructive.changeLevel, 'destructive');
 
-    const staleConcept = api.validateSealRegistryUpgrade({
+    const staleConcept = api.validateTagCatalogUpgrade({
         fromRegistrySha256: seed.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -412,7 +412,7 @@ test('按变更等级核验词表升级，任何检查失败都拒绝沿用记�
 
     // —— additive 路径（合成旧表）：放行，且注记不携带确认字段 ——
     const additive = syntheticAdditiveUpgrade(current);
-    const additiveAllowed = api.validateSealRegistryUpgrade({
+    const additiveAllowed = api.validateTagCatalogUpgrade({
         fromRegistrySha256: additive.from.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -430,7 +430,7 @@ test('按变更等级核验词表升级，任何检查失败都拒绝沿用记�
     assert.equal(additiveAllowed.changeLevel, 'additive');
 
     // additive 缺注记：拒在注记门本身（与 destructive 的 ack 门区分开）。
-    const additiveMissingAnnotation = api.validateSealRegistryUpgrade({
+    const additiveMissingAnnotation = api.validateTagCatalogUpgrade({
         fromRegistrySha256: additive.from.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -641,7 +641,7 @@ test('Node and Python registry upgrade gates agree on the shared fixture', () =>
 
     for (const item of fixture.cases) {
         const expected = { ...item.expect, ...CROSS_END_DISPLAY_EXPECTATIONS[item.name] };
-        const nodeResult = api.validateSealRegistryUpgrade({
+        const nodeResult = api.validateTagCatalogUpgrade({
             fromRegistrySha256: item.fromRegistrySha256,
             currentRegistry: current,
             currentRegistrySha256: current.registrySha256,
@@ -779,7 +779,7 @@ test('只有快照、明确确认、升级说明和原概念均通过核验，�
         acknowledgeDestructive: true,
         acknowledgementNote: '人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none'
     });
-    const seal = (overrides = {}) => api.validateSealRegistryUpgrade({
+    const checkUpgrade = (overrides = {}) => api.validateTagCatalogUpgrade({
         fromRegistrySha256: from.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -789,7 +789,7 @@ test('只有快照、明确确认、升级说明和原概念均通过核验，�
     });
 
     // 四项核验均通过时允许沿用记录，变更等级仍为 destructive。
-    const allowed = seal();
+    const allowed = checkUpgrade();
     assert.equal(allowed.ok, true, allowed.error);
     assert.equal(allowed.changeLevel, 'destructive');
     assert.equal(allowed.detail.changeLevel, 'destructive');
@@ -800,29 +800,29 @@ test('只有快照、明确确认、升级说明和原概念均通过核验，�
         destructiveAcknowledgement: { ...ack, ...patch } });
     const noAck = { ...annotation };
     delete noAck.destructiveAcknowledgement;
-    assert.match(seal({ annotation: noAck }).error, /显式确认无效.*destructiveAcknowledgement/);
-    assert.match(seal({ annotation: withAck({ acknowledged: false }) }).error, /acknowledged/);
-    assert.match(seal({ annotation: withAck({ reasonsHash: '0'.repeat(64) }) }).error, /reasonsHash/);
-    assert.match(seal({ annotation: withAck({ reasonsHash: 'nope' }) }).error, /64 位十六进制/);
-    assert.match(seal({ annotation: withAck({ conceptIdImpact: 'removed' }) }).error, /conceptIdImpact/);
-    assert.match(seal({ annotation: withAck({ extra: true }) }).error, /未知字段/);
-    assert.match(seal({ annotation: withAck({ note: '   ' }) }).error, /note/);
+    assert.match(checkUpgrade({ annotation: noAck }).error, /显式确认无效.*destructiveAcknowledgement/);
+    assert.match(checkUpgrade({ annotation: withAck({ acknowledged: false }) }).error, /acknowledged/);
+    assert.match(checkUpgrade({ annotation: withAck({ reasonsHash: '0'.repeat(64) }) }).error, /reasonsHash/);
+    assert.match(checkUpgrade({ annotation: withAck({ reasonsHash: 'nope' }) }).error, /64 位十六进制/);
+    assert.match(checkUpgrade({ annotation: withAck({ conceptIdImpact: 'removed' }) }).error, /conceptIdImpact/);
+    assert.match(checkUpgrade({ annotation: withAck({ extra: true }) }).error, /未知字段/);
+    assert.match(checkUpgrade({ annotation: withAck({ note: '   ' }) }).error, /note/);
 
-    // ③ 注记其余字段仍逐项自洽（谎报 changeLevel 一律拒）。
-    assert.match(seal({ annotation: { ...annotation, changeLevel: 'additive' } }).error,
+    // 升级说明中的变更等级、目标词表 SHA 和格式标识都须与本次核验结果对应。
+    assert.match(checkUpgrade({ annotation: { ...annotation, changeLevel: 'additive' } }).error,
         /changeLevel/);
-    assert.match(seal({ annotation: { ...annotation, toRegistrySha256: 'b'.repeat(64) } }).error,
+    assert.match(checkUpgrade({ annotation: { ...annotation, toRegistrySha256: 'b'.repeat(64) } }).error,
         /toRegistrySha256/);
-    assert.match(seal({ annotation: { ...annotation, contract: 'other' } }).error, /格式标识和版本/);
-    // additive 变更不得携带确认字段（注记形态被锁死）。
-    // 换表口径：历史快照 → current 已无 additive 对，用合成旧表复现 additive 复算。
+    assert.match(checkUpgrade({ annotation: { ...annotation, contract: 'other' } }).error, /格式标识和版本/);
+    // 非破坏性变更的升级说明不能携带破坏性变更确认字段。
+    // 现有历史快照升级到当前词表时均存在破坏性变更，因此用合成旧词表验证非破坏性分支。
     const additive = syntheticAdditiveUpgrade(current);
     const additiveAnnotation = api.buildRegistryUpgradeAnnotation({
         from: additive.from, to: current,
         changeLevel: additive.changeLevel, detail: additive.detail,
         note: 'additive'
     });
-    const annotatedAdditive = api.validateSealRegistryUpgrade({
+    const annotatedAdditive = api.validateTagCatalogUpgrade({
         fromRegistrySha256: additive.from.registrySha256,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,
@@ -834,9 +834,9 @@ test('只有快照、明确确认、升级说明和原概念均通过核验，�
     assert.match(annotatedAdditive.error, /非破坏性变更/);
 
     // ④ conceptIds 非 active → 即便确认合法也拒。
-    assert.match(seal({ conceptIds: [...conceptIds, 'task.not-a-concept'] }).error, /缺失或已停用/);
+    assert.match(checkUpgrade({ conceptIds: [...conceptIds, 'task.not-a-concept'] }).error, /缺失或已停用/);
     // ① 快照取不回 → 拒（确认无法替代快照）。
-    assert.match(seal({ fromRegistrySha256: '0'.repeat(64),
+    assert.match(checkUpgrade({ fromRegistrySha256: '0'.repeat(64),
         annotation: { ...annotation, fromRegistrySha256: '0'.repeat(64) } }).error, /快照/);
 
     // 不可确认的 destructive：即便注记带完整合法确认也拒。
@@ -857,7 +857,7 @@ test('只有快照、明确确认、升级说明和原概念均通过核验，�
         from: syntheticRegistry, to: current, changeLevel: 'additive',
         detail: api.classifyRegistryChange(syntheticRegistry, current).detail, note: 'x'
     });
-    const ineligible = api.validateSealRegistryUpgrade({
+    const ineligible = api.validateTagCatalogUpgrade({
         fromRegistrySha256: syntheticSha,
         currentRegistry: current,
         currentRegistrySha256: current.registrySha256,

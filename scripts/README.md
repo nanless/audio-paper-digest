@@ -391,7 +391,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 确认参数只用于更新分类记录，不能与 `--archive-snapshot`、`--mark-stale` 或 `--classify` 一起使用；
 `--acknowledge-note` 必须与 `--acknowledge-destructive` 一起使用。不传确认参数时仍按原规则拒绝
 `destructive` 变更。确认记录不进入 `bindingSha256`；更新后仍须通过
-`analysis-contract.validateTagStageProof` 与 Python `_seal_registry_upgrade` 的同一确认检查。
+`analysis-contract.validateTagStageProof` 与 Python `_validate_tag_catalog_upgrade` 的同一确认检查。
 
 ### 修改词表前保存快照
 

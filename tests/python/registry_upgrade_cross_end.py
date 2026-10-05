@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""跨端一致性 harness（不是 unittest 用例）。
+"""跨端词表升级测试的辅助入口，不属于 unittest 用例。
 
-读取共享 fixture tests/fixtures/registry-upgrade-cross-end.json，把同一份
-(旧 registry SHA, registryUpgradeFrom 注记, conceptIds) 输入喂给 Python 侧
-升级门 `_seal_registry_upgrade`（scripts/publish_common.py，Node
-validateSealRegistryUpgrade 的镜像），并在一行标记前输出 JSON 结果，
-供 tests/tag-catalog-change.test.js spawn 后与 Node 输出逐项比对。
+读取共享样本 tests/fixtures/registry-upgrade-cross-end.json，调用 Python
+接口 _validate_tag_catalog_upgrade。以 CROSS_END_RESULT: 开头输出一行 JSON，
+供 tests/tag-catalog-change.test.js 与 Node 的结果逐项比较。
 """
 
 import json
@@ -15,7 +13,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
-from publish_common import _seal_registry_upgrade  # noqa: E402
+from publish_common import _validate_tag_catalog_upgrade  # noqa: E402
 
 FIXTURE = os.path.join(ROOT, 'tests', 'fixtures', 'registry-upgrade-cross-end.json')
 MARKER = 'CROSS_END_RESULT:'
@@ -26,7 +24,7 @@ def main():
         fixture = json.load(handle)
     results = []
     for case in fixture['cases']:
-        outcome = _seal_registry_upgrade(
+        outcome = _validate_tag_catalog_upgrade(
             case['fromRegistrySha256'], case.get('conceptIds'), case.get('annotation'))
         detail = outcome.get('detail') or {}
         results.append({
