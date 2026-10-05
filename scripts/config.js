@@ -169,7 +169,7 @@ const FILES = {
     // 核验标签记录的词表升级时，必须按保存的 SHA 取得旧词表；找不到就拒绝继续。
     tagCatalogHistoryDir: path.join(PROJECT_ROOT, 'config', 'tag-catalog-history'),
     tagPreviewDir: path.join(DATA_DIR, 'runtime', 'tag-preview'),
-    tagRecordUpdateReportDir: path.join(DATA_DIR, 'runtime', 'taxonomy-reseal-reports'),
+    tagRecordUpdateReportDir: path.join(DATA_DIR, 'runtime', 'tag-record-update-reports'),
     tagExplorerAssets: path.join(PROJECT_ROOT, 'web', 'tag-explorer'),
     // 跨日期、跨 Node/Python 的 provider 账号状态。它不是日批次数据，
     // 因此不能放进会被归档轮转的 current/。

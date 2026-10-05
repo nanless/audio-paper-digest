@@ -1,8 +1,8 @@
 'use strict';
 
-// taxonomy-reseal 测试共享夹具：当前词表 runtime、旧 registry 快照 SHA 命名、
-// “旧词表下封口”的 canonical analysis 记录。被只读重放测试与 --apply 写入测试
-// 共用，保证两边构造出的封口字节完全一致。
+// 标签记录更新测试的共享夹具：当前词表运行信息、按 SHA 命名的旧词表快照、
+// 依据旧词表保存的规范分析记录。只读重放与 --apply 写入测试共用，
+// 保证两边构造出的原记录字节完全一致。
 //
 // 只读取 config/ 下的真实词表与 config/tag-catalog-history/ 的按内容
 // 字节 SHA 命名快照，不写任何配置文件。

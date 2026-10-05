@@ -85,6 +85,7 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'taxonomy-preview', root: path.join(runtime, 'taxonomy-preview') },
         { key: 'tag-preview', root: path.join(runtime, 'tag-preview') },
         { key: 'taxonomy-reseal-reports', root: path.join(runtime, 'taxonomy-reseal-reports') },
+        { key: 'tag-record-update-reports', root: path.join(runtime, 'tag-record-update-reports') },
         { key: 'historical-page-inventories', root: path.join(runtime, 'historical-page-inventories') },
         { key: 'direct-local-inputs', root: path.join(runtime, 'direct-local-inputs') },
         { key: 'historical-conference-local-sources', root: path.join(runtime, 'historical-conference-local-sources') },

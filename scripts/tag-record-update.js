@@ -14,7 +14,7 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const registryChange = require('./lib/tag-catalog-change.js');
 const { readTagStageRecord } = require('./lib/tag-stage-record.js');
-const resealApi = require('./lib/tag-record-update.js');
+const tagRecordUpdate = require('./lib/tag-record-update.js');
 
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const REPORT_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -39,7 +39,7 @@ const USAGE = [
     "                     bindingSha256 字段，并记录 registryUpgradeFrom。更新后须通过标签阶段检查。",
     "  --mode annotate    保留原阶段记录的已有字段，只添加 registryUpgradeFrom 升级说明。",
     "                     后续校验仍须核验旧快照、升级说明和当前词表，不能仅凭说明跳过检查。",
-    "  --report NAME.json 另存报告到 data/runtime/taxonomy-reseal-reports/NAME.json；未启用 --apply 时也会写报告。",
+    "  --report NAME.json 另存报告到 data/runtime/tag-record-update-reports/NAME.json；未启用 --apply 时也会写报告。",
     "",
     "确认白名单允许的 destructive 变更：",
     "  --acknowledge-destructive",
@@ -161,7 +161,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     }
     if (!values['--from'] || !UUID_RE.test(values['--from'])) throw usageError();
     const mode = values['--mode'] || 'reproject';
-    if (!resealApi.RESEAL_MODES.includes(mode)) throw usageError();
+    if (!tagRecordUpdate.RESEAL_MODES.includes(mode)) throw usageError();
     return {
         command: 'reseal',
         processId: values['--from'],
@@ -295,7 +295,7 @@ function planProcessReseal({ state, adapter, analysisRoot, runtime, mode, snapsh
                 pageRestageRequired: false, errors: [`无法核验分析文件及其运行记录：${error.message}`] });
             continue;
         }
-        const plan = resealApi.reprojectAnalysis({ analysis: loaded.analysis, runtime, mode, snapshotOptions,
+        const plan = tagRecordUpdate.reprojectAnalysis({ analysis: loaded.analysis, runtime, mode, snapshotOptions,
             acknowledgeDestructive, acknowledgementNote });
         items.push(plan.item);
         if (!plan.ok && plan.item.outcome !== 'already-current') continue;
@@ -444,10 +444,10 @@ function applyReseal({ processDir, stateFile, plannedStateSha256, writes, plans,
 
 function markStaleReport({ files, runtime }) {
     const root = files.historicalTagAssignmentDir;
-    const scan = resealApi.scanStaleAssignments({ root, currentRegistrySha256: runtime.registrySha256 });
+    const scan = tagRecordUpdate.scanStaleAssignments({ root, currentRegistrySha256: runtime.registrySha256 });
     return {
-        contract: 'paper-taxonomy-stale-assignment-report-v1',
-        version: 1,
+        contract: 'paper-tag-stale-assignment-report-v2',
+        version: 2,
         command: 'mark-stale',
         readOnly: true,
         root,
@@ -597,11 +597,11 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         acknowledgementNote: options.acknowledgeNote
     });
     const report = {
-        contract: resealApi.RESEAL_REPORT_CONTRACT,
-        version: 1,
-        command: 'reseal',
+        contract: tagRecordUpdate.TAG_RECORD_UPDATE_REPORT_CONTRACT,
+        version: 2,
+        command: 'update-records',
         mode: options.apply ? 'apply' : 'dry-run',
-        resealMode: options.mode,
+        updateMode: options.mode,
         processId: options.processId,
         written: false,
         registry: { version: tagRules.registryVersion, sha256: tagRules.registrySha256 },
@@ -610,14 +610,14 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
             llmCalls: 0,
             deterministicReprojection: true,
             failClosed: '未通过标签阶段核验的论文记为 status=blocked，不写入更新；存在 blocked 论文时退出码为 1。',
-            needsHuman: resealApi.NEEDS_HUMAN_OUTCOMES,
+            needsHuman: tagRecordUpdate.NEEDS_HUMAN_OUTCOMES,
             destructiveAcknowledgement: '破坏性变更默认拒绝更新；--acknowledge-destructive 只适用于'
                 + ' 可人工确认的原因（preferred-label-changed / broader-id-changed / alias-removed /'
                 + ' label-collision / definition·scope 类），升级说明中须记录与本次重新计算结果对应的 destructiveAcknowledgement。',
             pageRestageRequired: '本工具不更新页面内容和 pageProof；更新标签记录后，须重新运行页面后处理。'
         },
         items: plan.items,
-        summary: resealApi.summarizeTagRecordUpdates({ items: plan.items }),
+        summary: tagRecordUpdate.summarizeTagRecordUpdates({ items: plan.items }),
         plannedWrites: plan.writes.length
     };
     if (options.acknowledgeDestructive) {

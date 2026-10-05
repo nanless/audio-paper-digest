@@ -106,7 +106,7 @@ test('盘点脚本按 registrySha256 分组并给出与当前 SHA 的差集', t 
     const inventory = JSON.parse(result.stdout);
     assert.equal(result.stderr.includes('CODEX_SANDBOX'), false);
 
-    assert.equal(inventory.contract, 'paper-taxonomy-seal-inventory-v1');
+    assert.equal(inventory.contract, 'paper-tag-record-inventory-v2');
     assert.equal(inventory.readOnly, true);
     assert.equal(inventory.currentRegistrySha256, CURRENT);
     assert.match(inventory.currentRegistrySha256, SHA_RE);
@@ -169,7 +169,7 @@ test('人类可读输出、退出码与参数校验', t => {
     const result = runCli(['--executions', paths.executions, '--deep', paths.deepFile,
         '--assignments', paths.assignments, '--registry', paths.registryFile]);
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /标签阶段记录检查（只读） paper-taxonomy-seal-inventory-v1/);
+    assert.match(result.stdout, /标签阶段记录检查（只读） paper-tag-record-inventory-v2/);
     assert.match(result.stdout, new RegExp(`当前词表 SHA： ${CURRENT}`));
     assert.match(result.stdout, /\[当前\] 标签阶段记录 4/);
     assert.match(result.stdout, new RegExp(`\\[非当前\\] 标签阶段记录 2`));

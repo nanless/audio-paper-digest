@@ -15,7 +15,7 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const { readTagStageRecord } = require('./lib/tag-stage-record.js');
 const Config = require('./config.js');
 
-const INVENTORY_CONTRACT = 'paper-taxonomy-seal-inventory-v1';
+const INVENTORY_CONTRACT = 'paper-tag-record-inventory-v2';
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const FILENAME_SHA_RE = /\.taxonomy\.([a-f0-9]{64})(?:\.[a-f0-9]+)?\.json$/;
 const MAX_FILE_BYTES = 512 * 1024 * 1024;

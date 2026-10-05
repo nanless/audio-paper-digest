@@ -425,6 +425,8 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 并将已完成进程退回运行状态（`complete` → `running`）。不重跑 Reader、评分或 LLM；分类对应关系无法核验时拒绝写入。
 `--mark-stale` 只读列出失效 assignment 文件；`--classify` 只分类词表变更。
 
+新更新报告使用 `paper-tag-record-update-report-v2`、`version=2`，输出的命令名称为 `update-records`，更新方式记录在 `updateMode`。失效记录报告使用 `paper-tag-stale-assignment-report-v2`、`version=2`。`--report NAME.json` 将报告保存到 `data/runtime/tag-record-update-reports/`；同名文件拒绝覆盖，旧目录和报告保留。报告版本只描述输出格式，不改变原标签记录的核验规则或赋予发布资格。
+
 破坏既有记录的变更（`destructive`）须显式使用 `--acknowledge-destructive`，且符合上面的原因白名单。可选
 `--acknowledge-note TEXT` 接受 1–500 字符；不传时用含 from/to 字节 SHA 的默认说明。程序将
 `destructiveAcknowledgement = {acknowledged:true, reasonsHash, conceptIdImpact:'none', note}` 写入
@@ -446,6 +448,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 `data/current/deep-analysis-result.json` 的逐篇分类记录，以及 `historical-taxonomy-assignments`。
 按 registry SHA 汇总数量、示例 paperId 及与当前 `config/tag-catalog.json` SHA 的差集。
 它不删除、改写、重新验证或调用模型。格式混用须明确报告为不可读，不能取其中一套字段继续统计。
+当前盘点输出使用 `paper-tag-record-inventory-v2`；原分组、计数和退出码保持。
 测试样例可用 `--executions/--deep/--assignments/--registry` 显式覆盖路径。
 
 ### 历史标签预览

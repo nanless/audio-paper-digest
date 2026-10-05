@@ -43,7 +43,7 @@ const HISTORY_PROTECTED_KEYS = ['historical-page-inventories', 'page-source-cros
     'historical-arxiv-publication-metadata', 'blog-republication-archives', 'canonical-maintenance',
     'daily-fetch-refresh-backups', 'fresh-rewrites', 'fresh-source-diagnostics', 'llm-usage',
     'publication-amendments', 'reader-attempts', 'reader-efficiency-evaluations', 'stale-locks',
-    'tag-taxonomy-audit', 'taxonomy-preview', 'tag-preview', 'taxonomy-reseal-reports',
+    'tag-taxonomy-audit', 'taxonomy-preview', 'tag-preview', 'taxonomy-reseal-reports', 'tag-record-update-reports',
     'direct-local-inputs', 'historical-conference-local-sources', 'historical-conference-page-projections',
     'historical-direct-rewrite-plans', 'historical-direct-rewrite-unprojected-reports',
     'historical-direct-rewrite-registries', 'historical-direct-rewrite-executions', 'historical-direct-rewrite-staging',
@@ -197,6 +197,11 @@ describe('runtime storage status', () => {
             }
             const plan = buildPrunePlan({ projectRoot, nowMs: NOW_MS, retentionDays: 30 });
             for (const oldFile of oldFiles) assert.ok(!plan.candidates.some(item => item.path === oldFile));
+            const applied = pruneStorage({ projectRoot, nowMs: NOW_MS, retentionDays: 30, apply: true });
+            assert.equal(applied.deletedCount, 0);
+            for (const [index, oldFile] of oldFiles.entries()) {
+                assert.equal(fs.readFileSync(oldFile, 'utf8'), protectedKeys[index]);
+            }
         } finally {
             fs.rmSync(projectRoot, { recursive: true, force: true });
         }

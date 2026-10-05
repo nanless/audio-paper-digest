@@ -320,6 +320,11 @@ test('实际更新会保存分析、运行和进程记录，并归档原完成�
     const { report } = await runMain(['--from', fx.processId, '--apply',
         '--acknowledge-destructive'], runtime);
 
+    assert.equal(report.contract, 'paper-tag-record-update-report-v2');
+    assert.equal(report.version, 2);
+    assert.equal(report.command, 'update-records');
+    assert.equal(report.updateMode, 'reproject');
+    assert.equal(Object.hasOwn(report, 'resealMode'), false);
     assert.equal(report.mode, 'apply');
     assert.equal(report.written, true);
     assert.equal(report.summary.assigned, 1);
@@ -481,6 +486,11 @@ test('有论文无法更新时，本次更新以退出码 1 结束', async t => 
     const previousExitCode = process.exitCode;
     try {
         const { report } = await runMain(['--from', fx.processId, '--apply'], runtime);
+        assert.equal(report.contract, 'paper-tag-record-update-report-v2');
+        assert.equal(report.version, 2);
+        assert.equal(report.command, 'update-records');
+        assert.equal(report.updateMode, 'reproject');
+        assert.equal(Object.hasOwn(report, 'resealMode'), false);
         assert.equal(process.exitCode, 1, '存在 blocked 论文时必须以退出码 1 结束');
         assert.equal(report.written, false);
         assert.equal(report.plannedWrites, 0);
@@ -608,9 +618,15 @@ test('提供 --acknowledge-destructive 后，进程可以更新允许确认的�
         assert.deepEqual(coreSnapshot(fx), before, 'blocked 时一个字节都不写');
         process.exitCode = previousExitCode;
 
-        // 提供确认参数但未指定 --apply 时，只计算更新结果和确认说明，不写入文件。
+        // 提供确认参数但未指定 --apply 时，只计算更新结果和确认说明；--report 另存报告，原输入保持。
         const planned = await runMain(['--from', fx.processId, '--acknowledge-destructive',
-            '--acknowledge-note', '人工确认：仅删别名，conceptId 影响 none'], runtime);
+            '--acknowledge-note', '人工确认：仅删别名，conceptId 影响 none',
+            '--report', 'planned.json'], runtime);
+        assert.equal(planned.report.contract, 'paper-tag-record-update-report-v2');
+        assert.equal(planned.report.version, 2);
+        assert.equal(planned.report.command, 'update-records');
+        assert.equal(planned.report.updateMode, 'reproject');
+        assert.equal(Object.hasOwn(planned.report, 'resealMode'), false);
         assert.equal(planned.report.items[0].status, 'assigned');
         assert.equal(planned.report.items[0].outcome, 'resealed');
         assert.equal(planned.report.items[0].changeLevel, 'destructive');
@@ -623,7 +639,18 @@ test('提供 --acknowledge-destructive 后，进程可以更新允许确认的�
         assert.equal(planned.report.destructiveAcknowledgement.note,
             '人工确认：仅删别名，conceptId 影响 none');
         assert.equal(process.exitCode, previousExitCode, '无 blocked 论文时不设失败退出码');
-        assert.deepEqual(coreSnapshot(fx), before, 'dry-run 一个字节都不写');
+        assert.deepEqual(coreSnapshot(fx), before, 'dry-run 不改分析、运行或进程字节');
+        const reportFile = path.join(fx.files.tagRecordUpdateReportDir, 'planned.json');
+        assert.equal(planned.report.reportFile, reportFile);
+        const reportBytes = fs.readFileSync(reportFile);
+        const { reportFile: _reportFile, ...savedReport } = planned.report;
+        assert.deepEqual(JSON.parse(reportBytes), savedReport);
+        assert.equal(fs.statSync(reportFile).mode & 0o777, 0o600);
+        assert.equal(fs.statSync(fx.files.tagRecordUpdateReportDir).mode & 0o777, 0o700);
+        await assert.rejects(() => runMain(['--from', fx.processId, '--acknowledge-destructive',
+            '--report', 'planned.json'], runtime), /报告文件已存在，拒绝覆盖/);
+        assert.deepEqual(fs.readFileSync(reportFile), reportBytes);
+        assert.deepEqual(coreSnapshot(fx), before, '同名报告拒绝覆盖时也不改原输入');
 
         // 指定 --apply 后，先核对规划时记录的 SHA，再更新分析、运行及进程文件；进程退回 running。
         const applied = await runMain(['--from', fx.processId, '--apply',

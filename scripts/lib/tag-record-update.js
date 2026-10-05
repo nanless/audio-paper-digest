@@ -11,7 +11,7 @@ const registryChange = require('./tag-catalog-change.js');
 const { isSupportedTagSelectionContract } = require('./tag-rules.js');
 
 const RESEAL_MODES = Object.freeze(['reproject', 'annotate']);
-const RESEAL_REPORT_CONTRACT = 'paper-taxonomy-reseal-report-v1';
+const TAG_RECORD_UPDATE_REPORT_CONTRACT = 'paper-tag-record-update-report-v2';
 const NEEDS_HUMAN_OUTCOMES = Object.freeze([
     'missing-registry-snapshot',
     'destructive-change',
@@ -377,7 +377,7 @@ function scanStaleAssignments({ root, currentRegistrySha256, readDir, readJson }
 
 module.exports = {
     RESEAL_MODES,
-    RESEAL_REPORT_CONTRACT,
+    TAG_RECORD_UPDATE_REPORT_CONTRACT,
     NEEDS_HUMAN_OUTCOMES,
     reprojectAnalysis,
     rebuildStage,

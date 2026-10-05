@@ -8,7 +8,7 @@ const path = require('node:path');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 const contract = require('../scripts/analysis-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
-const resealApi = require('../scripts/lib/tag-record-update.js');
+const tagRecordUpdate = require('../scripts/lib/tag-record-update.js');
 const cli = require('../scripts/tag-record-update.js');
 const { buildTagPromptText, TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_PROMPT_TEXT_CONTRACT }
     = require('../scripts/lib/tag-rules.js');
@@ -143,7 +143,7 @@ test('预览报告包含逐篇差异，以及已分配、受阻和跳过的结�
     const assigned = reproject({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64),
         acknowledgeDestructive: true });
     const blocked = reproject({ registrySha256: DESTRUCTIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
-    const summary = resealApi.summarizeTagRecordUpdates({ items: [
+    const summary = tagRecordUpdate.summarizeTagRecordUpdates({ items: [
         { ...assigned.item }, { ...blocked.item },
         { paperId: PAPER_ID, status: 'skipped', outcome: 'not-complete', needsHuman: false }
     ] });
@@ -168,7 +168,7 @@ test('预览报告包含逐篇差异，以及已分配、受阻和跳过的结�
 
 test('不支持的更新模式和格式不符的分析记录会被拒绝', () => {
     assert.throws(() => reproject({ mode: 'llm' }), /不支持的标签记录更新模式/);
-    const broken = resealApi.reprojectAnalysis({ analysis: { papers: [] }, runtime: runtime() });
+    const broken = tagRecordUpdate.reprojectAnalysis({ analysis: { papers: [] }, runtime: runtime() });
     assert.equal(broken.item.status, 'blocked');
     assert.equal(broken.item.outcome, 'unreadable-analysis');
 });
@@ -186,7 +186,12 @@ test('mark-stale 只报告旧标签分配文件，不改写原文件', () => {
         fs.writeFileSync(path.join(root, 'run-b', 'arxiv-2401.00003.taxonomy.json'), '{不是JSON');
 
         const before = fs.readdirSync(path.join(root, 'run-a'));
-        const scan = resealApi.scanStaleAssignments({ root, currentRegistrySha256: current });
+        const beforeFiles = Object.fromEntries(['run-a', 'run-b'].flatMap(directory =>
+            fs.readdirSync(path.join(root, directory)).map(name => {
+                const file = path.join(root, directory, name);
+                return [file, fs.readFileSync(file)];
+            })));
+        const scan = tagRecordUpdate.scanStaleAssignments({ root, currentRegistrySha256: current });
         assert.equal(scan.directories.length, 2);
         assert.equal(scan.stale, 1);
         assert.equal(scan.current, 1);
@@ -196,7 +201,17 @@ test('mark-stale 只报告旧标签分配文件，不改写原文件', () => {
         assert.equal(stale.registrySha256, 'a'.repeat(64));
         assert.deepEqual(fs.readdirSync(path.join(root, 'run-a')), before,
             'mark-stale 是只读的');
-        const missing = resealApi.scanStaleAssignments({
+        const report = cli.markStaleReport({ files: { historicalTagAssignmentDir: root },
+            runtime: { registryVersion: 'fixture-v1', registrySha256: current } });
+        assert.equal(report.contract, 'paper-tag-stale-assignment-report-v2');
+        assert.equal(report.version, 2);
+        assert.equal(report.command, 'mark-stale');
+        assert.equal(report.readOnly, true);
+        assert.deepEqual(report.entries, scan.entries);
+        for (const [file, bytes] of Object.entries(beforeFiles)) {
+            assert.deepEqual(fs.readFileSync(file), bytes, '新版失效报告不改变原分配文件');
+        }
+        const missing = tagRecordUpdate.scanStaleAssignments({
             root: path.join(root, 'nope'), currentRegistrySha256: current
         });
         assert.equal(missing.entries.length, 0);
@@ -434,7 +449,7 @@ test('旧、新标签缓存的注记与重新生成保留各自写入范围', ()
             paper.parsed[inputKey].valid = false;
             paper.parsed[inputKey].extra = { preserved: true };
             const before = JSON.stringify(original);
-            const plan = resealApi.reprojectAnalysis({ analysis: original, runtime: runtime(), mode,
+            const plan = tagRecordUpdate.reprojectAnalysis({ analysis: original, runtime: runtime(), mode,
                 acknowledgeDestructive: true });
             assert.equal(plan.ok, true, plan.item.errors.join('; '));
             const output = plan.analysis.papers[0];
@@ -459,14 +474,14 @@ test('旧、新标签缓存的注记与重新生成保留各自写入范围', ()
 test('标签更新只读旧缓存且拒绝混用，不补造缺少的校验结果', () => {
     const current = analysisRecord();
     const before = JSON.stringify(current);
-    const already = resealApi.reprojectAnalysis({ analysis: current, runtime: runtime() });
+    const already = tagRecordUpdate.reprojectAnalysis({ analysis: current, runtime: runtime() });
     assert.equal(already.item.outcome, 'already-current');
     assert.equal(already.analysis, null);
     assert.equal(JSON.stringify(current), before);
     for (const value of [current.papers[0].parsed.taxonomyValidation, null, {}]) {
         const mixed = structuredClone(current);
         mixed.papers[0].parsed.tagValidation = value;
-        const plan = resealApi.reprojectAnalysis({ analysis: mixed, runtime: runtime() });
+        const plan = tagRecordUpdate.reprojectAnalysis({ analysis: mixed, runtime: runtime() });
         assert.equal(plan.item.status, 'blocked');
         assert.equal(plan.analysis, null);
         assert.match(plan.item.errors.join(';'), /解析结果不能同时包含/);
@@ -474,7 +489,7 @@ test('标签更新只读旧缓存且拒绝混用，不补造缺少的校验结�
     for (const cache of [null, {}, { taxonomyValidation: null }, { tagValidation: [] }]) {
         const original = analysisRecord({ registrySha256: ADDITIVE_OLD_SHA, projectionSha256: 'e'.repeat(64) });
         original.papers[0].parsed = cache;
-        const plan = resealApi.reprojectAnalysis({ analysis: original, runtime: runtime(),
+        const plan = tagRecordUpdate.reprojectAnalysis({ analysis: original, runtime: runtime(),
             acknowledgeDestructive: true });
         assert.equal(plan.ok, true, plan.item.errors.join(';'));
         assert.deepEqual(plan.analysis.papers[0].parsed, cache);
