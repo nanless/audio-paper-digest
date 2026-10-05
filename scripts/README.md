@@ -42,8 +42,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 - `conference-queue.js`、`lib/conference-queue.js`：显式计划驱动的持久化会议总队列，逐会议推进处理、发布和验收，提供只读计划与状态。
 - `conference-workspace.js`：只读工作区诊断，区分 Git 未提交改动、进程存活与旧运行状态；配置诊断不输出密钥。
-- `lib/conference-process-recovery.js`：恢复批次寻址、失败分类、冷却与重试资格；迁移不能让已有完成记录被普通入口绕过。
-- `lib/conference-source-upgrade.js`：显式来源升级计划与授权执行，绑定原批次和新解析版本，保留旧来源与分析；不静默重跑受影响论文。
+- `lib/conference-process-recovery.js`：查找可恢复的会议进程，核验原身份、失败原因、等待时间和重试条件；实现变化不能让普通入口跳过已有进展并重新分析。
+- `lib/conference-source-upgrade.js`：生成来源升级计划并执行已授权的论文分析。新计划使用 v2 和当前词表字段；已有计划先核原授权及完整对应关系，保留原来源、分析和尝试记录。
 - `conference_publication_gate.py`：最终 HTML 与已部署 URL 的机械验收；不冒充语义审查或人工视觉确认。
 
 | 文件 | 类型 | 职责 |
@@ -107,8 +107,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/official-conference-general-providers.js` | Node 库 | 解析通用 AI/ML/CV/NLP 官方单篇记录并核验身份；无网络、无写入，供来源适配和测试样例审查。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口只能从已认证、不可伪造的计划句柄核验完整上游证明并读取会议全文；不导出 ledger/run 测试捷径。 |
 | `lib/conference-filter.js` | Node 库 | 固定候选、已核验的证据文件、逐篇凭证、日更提示词、关键词策略、会议领域标签，以及模型、接口地址和词表的指纹。状态为 `ready` 的摘要进入关键词和提示词筛选；其他项交给模型。程序保存意图、请求凭证和决定，并在写入前核对原状态。生产凭证只能由固定公共 LLM 路由生成，不接受请求实现注入；恢复时先核验旧锁和已有记录，避免重复执行。 |
-| `lib/conference-process.js` | Node 库 | 编排新会议完整入选集的官方 PDF 封存、导入、公共深度分析、Reader、评分、当前分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部分析并发固定为 1。稳定 UUID、逐篇检查点和完成凭证用于恢复并核验整批结果。 |
-| `migrate-conference-process.js` | CLI | 显式更新会议处理实现指纹，重新核验已完成页面或复用页面证明，归档旧完成凭证，再续跑未完成论文。 |
+| `lib/conference-process.js` | Node 库 | 对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
+| `migrate-conference-process.js` | CLI | 显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。 |
 | `migrate-conference-images.js` | CLI | 将已发布 AISTATS/UAI 页面的本地 Figure 复制到专用图片仓库并更新链接；拒绝覆盖不同图片字节，不自动提交或推送。 |
 | `publish-conference.py` | CLI | 按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。机械检查不能代替语义审查或浏览器视觉确认。 |
 | `waive-analysis-failures.js` | CLI | 记录用户明确同意跳过的当前日更分析失败项，保存对应现有文件的豁免记录；不覆盖失败尝试。 |

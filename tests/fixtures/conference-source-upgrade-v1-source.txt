@@ -7,33 +7,20 @@ const crypto = require('node:crypto');
 const api = require('./conference-process.js');
 const recovery = require('./conference-process-recovery.js');
 const extraction = require('./conference-extraction-receipt.js');
-const CONTRACT = 'conference-source-upgrade-plan-v2';
-const VERSION = 2;
-const LEGACY_CONTRACT = 'conference-source-upgrade-plan-v1';
-const LEGACY_VERSION = 1;
+const CONTRACT = 'conference-source-upgrade-plan-v1';
 const promotionProcessId = planSha256 => api.deterministicUuid(planSha256, 'conference-source-upgrade-process-v1');
 const executionIdFor = (planSha256, paperId) => api.deterministicUuid(promotionProcessId(planSha256), paperId, 'analysis');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 // 比较来源与筛选记录时，排除实现指纹和词表指纹。实现变化由迁移凭证另行核验；
 // 原词表字段参与进程身份计算，不能在更换词表后直接覆盖。
 // 是否允许沿用标签记录，由后续标签阶段和发布检查决定。
-const withoutImplementation = (authority, version = api.PROCESS_VERSION) => {
-    const copy = api.authorityWithoutTagCatalog(authority, version);
+const withoutImplementation = authority => {
+    const copy = { ...authority };
     delete copy.implementationSha256;
+    delete copy.taxonomyVersion;
+    delete copy.taxonomyRegistrySha256;
     return copy;
 };
-
-function assertSourceUpgradePlan(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('来源升级计划格式无效。');
-    const { planSha256, ...body } = value;
-    if (planSha256 !== api.stableHash(body)) throw new Error('来源升级计划的原内容摘要不一致。');
-    if (!(value.contract === CONTRACT && value.version === VERSION)
-        && !(value.contract === LEGACY_CONTRACT && value.version === LEGACY_VERSION)) {
-        throw new Error('来源升级计划的格式标识和版本不属于支持的组合。');
-    }
-    api.authorityForComparison(value.authority, value.version);
-    return value;
-}
 
 function load(options, deps) {
     if (options.pageRepairMode !== undefined && options.pageRepairMode !== 'caption-only') throw new Error('Unknown page repair mode');
@@ -41,7 +28,7 @@ function load(options, deps) {
     const directory = api.safeProcessDirectory(deps.files.conferenceProcessDir, options.fromProcessId, false);
     const state = api.assertState(recovery.readPrivateJson(path.join(directory, 'state.json')));
     if (state.processId !== options.fromProcessId
-        || api.stableHash(withoutImplementation(state.authority, state.version)) !== api.stableHash(withoutImplementation(context.authority))
+        || api.stableHash(withoutImplementation(state.authority)) !== api.stableHash(withoutImplementation(context.authority))
         || api.stableHash(Object.keys(state.items).sort()) !== api.stableHash(context.members.map(item => item.paperId).sort())) {
         throw new Error('来源升级所用的来源、筛选、其余配置或论文集合与原进程不一致。');
     }
@@ -149,7 +136,7 @@ function retainedItemSource(loaded, member, replay, deps) {
         nativeSharedSource: { receiptName: native.names.receipt, sourceProof: sourceProofOf(native.snapshot) } } };
 }
 
-function planWith(options, deps, loaded = load(options, deps), originalPlan = null) {
+function planWith(options, deps, loaded = load(options, deps)) {
     const { context, state, origin } = loaded;
     const papers = context.members.map(member => {
         const item = state.items[member.paperId];
@@ -194,18 +181,8 @@ function planWith(options, deps, loaded = load(options, deps), originalPlan = nu
             action: 'retain_original_unless_explicitly_selected_for_new_analysis',
             ...(retained.retainedSource ? { retainedSource: retained.retainedSource } : {}) };
     }).sort((a, b) => a.paperId.localeCompare(b.paperId));
-    let planAuthority = context.authority;
-    if (originalPlan?.version === LEGACY_VERSION) {
-        // 只读重放已核原计划，不改变其创建时使用的字段结构。
-        planAuthority = { ...context.authority };
-        delete planAuthority.tagCatalogVersion;
-        delete planAuthority.tagCatalogSha256;
-        if (Object.hasOwn(originalPlan.authority, 'taxonomyVersion')) planAuthority.taxonomyVersion = context.authority.tagCatalogVersion;
-        if (Object.hasOwn(originalPlan.authority, 'taxonomyRegistrySha256')) planAuthority.taxonomyRegistrySha256 = context.authority.tagCatalogSha256;
-    }
-    const body = { contract: originalPlan ? originalPlan.contract : CONTRACT, version: originalPlan ? originalPlan.version : VERSION,
-        fromProcessId: state.processId, originalStateSha256: state.stateSha256,
-        authority: planAuthority, sourceImplementationSha256: origin,
+    const body = { contract: CONTRACT, version: 1, fromProcessId: state.processId, originalStateSha256: state.stateSha256,
+        authority: context.authority, sourceImplementationSha256: origin,
         targetExtractor: { version: extraction.EXTRACTOR_VERSION, backendVersion: extraction.BACKEND_VERSION },
         papers, automaticStageReuse: false, originalResultsPreserved: true,
         ...(repairPolicy(options) ? { pageRepairPolicy: repairPolicy(options),
@@ -213,68 +190,6 @@ function planWith(options, deps, loaded = load(options, deps), originalPlan = nu
                 .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
                     analysisProof: item.analysisProof, pageProof: item.pageProof })) } : {}) };
     return { ...body, planSha256: api.stableHash(body) };
-}
-
-function authorizedPlanFor(options, deps, current) {
-    let originalPlan = null;
-    const inspectFolder = (directory, selected = null) => {
-        const stat = fs.lstatSync(directory);
-        if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o700
-            || fs.realpathSync(directory) !== directory) throw new Error('Unsafe source upgrade directory');
-        const planFile = path.join(directory, 'plan.json');
-        if (!fs.existsSync(planFile)) return;
-        const saved = assertSourceUpgradePlan(recovery.readPrivateJson(planFile));
-        if (saved.planSha256 !== options.planSha256) return;
-        if (saved.fromProcessId !== current.state.processId || saved.originalStateSha256 !== current.state.stateSha256) {
-            throw new Error('原来源升级计划与父进程记录不一致。');
-        }
-        const stateFile = path.join(directory, 'state.json');
-        if (fs.existsSync(stateFile)) {
-            const checkpoint = recovery.readPrivateJson(stateFile);
-            const ids = selected || checkpoint.selectedPaperIds;
-            if (!Array.isArray(ids)) throw new Error('Source upgrade selection is invalid');
-            const upgradeId = api.stableHash({ planSha256: saved.planSha256, selected: ids });
-            if (path.basename(directory) !== `source-upgrade-${upgradeId}`) throw new Error('Upgrade directory does not bind authorized selection');
-            validateState(checkpoint, saved, ids, upgradeId);
-        } else if (!selected) return;
-        originalPlan = saved;
-    };
-    if (Array.isArray(options.paperIds)) {
-        const selected = [...options.paperIds].sort();
-        const upgradeId = api.stableHash({ planSha256: options.planSha256, selected });
-        const directory = path.join(current.directory, `source-upgrade-${upgradeId}`);
-        if (fs.existsSync(directory)) inspectFolder(directory, selected);
-    } else {
-        for (const name of fs.readdirSync(current.directory).filter(name => /^source-upgrade-[a-f0-9]{64}$/.test(name))) {
-            const directory = path.join(current.directory, name);
-            const stateFile = path.join(directory, 'state.json');
-            if (!fs.existsSync(stateFile)) continue;
-            const checkpoint = recovery.readPrivateJson(stateFile);
-            if (checkpoint.planSha256 !== options.planSha256) continue;
-            if (checkpoint.stateSha256 !== api.stateDigest(checkpoint)) throw new Error('Source upgrade checkpoint integrity failed');
-            inspectFolder(directory);
-            if (originalPlan) break;
-        }
-        if (!originalPlan) {
-            const directory = path.join(deps.files.conferenceProcessDir, promotionProcessId(options.planSha256));
-            if (fs.existsSync(directory)) {
-                api.safeProcessDirectory(deps.files.conferenceProcessDir, promotionProcessId(options.planSha256), false);
-                const state = api.assertState(recovery.readPrivateJson(path.join(directory, 'state.json')));
-                const saved = assertSourceUpgradePlan(recovery.readPrivateJson(path.join(directory, 'source-upgrade-plan.json')));
-                if (state.status === 'complete') api.validateCompletionReceipt(state,
-                    recovery.readPrivateJson(path.join(directory, 'completion-receipt.json')));
-                recovery.sourceImplementation(state, directory, api);
-                if (saved.planSha256 !== options.planSha256 || saved.fromProcessId !== current.state.processId
-                    || saved.originalStateSha256 !== current.state.stateSha256) throw new Error('原来源升级计划与父进程记录不一致。');
-                originalPlan = saved;
-            }
-        }
-    }
-    const rebuilt = planWith(options, deps, current, originalPlan);
-    if (originalPlan && api.stableHash(rebuilt) !== api.stableHash(originalPlan)) {
-        throw new Error('原来源升级计划不能按原格式完整重放，请重新核验并授权计划。');
-    }
-    return originalPlan || rebuilt;
 }
 
 function planSourceUpgrade(options, overrides = {}) {
@@ -376,9 +291,8 @@ async function promoteCaptionOnly(current, plan, deps) {
         const aggregateProof = { manifestSha256: aggregate.manifest.manifestSha256,
             markdownSha256: aggregate.manifest.markdownSha256, aggregateId: aggregate.manifest.aggregateId,
             pagePath: aggregate.manifest.pagePath };
-        const draft = { contract: plan.version === LEGACY_VERSION ? api.LEGACY_CONTRACT : api.CONTRACT,
-            version: plan.version === LEGACY_VERSION ? api.LEGACY_VERSION : api.PROCESS_VERSION, generation: 1, processId,
-            createdAt: current.state.createdAt, updatedAt: deps.now(), authority: plan.authority,
+        const draft = { contract: api.CONTRACT, version: api.VERSION, generation: 1, processId,
+            createdAt: current.state.createdAt, updatedAt: deps.now(), authority: current.context.authority,
             status: 'running', items, aggregate: null, completionReceiptSha256: null, sourceUpgradePromotion: promotion };
         draft.stateSha256 = api.stateDigest(draft); api.assertState(draft);
         const body = api.completionBodyFor(draft, shared.planReceiptSha256, aggregateProof);
@@ -406,7 +320,7 @@ async function applySourceUpgrade(options, overrides = {}) {
     const loaded = load(options, deps);
     // Serialize with the original process so the authorized plan cannot drift.
     return deps.engine.withFileLock(path.join(loaded.directory, '.operation'), async () => {
-        const current = load(options, deps); const plan = authorizedPlanFor(options, deps, current);
+        const current = load(options, deps); const plan = planWith(options, deps, current);
         if (plan.planSha256 !== options.planSha256) throw new Error('Source upgrade plan drifted; inspect and authorize a new plan');
         api.assertRuntimeAuthorityUnchanged(current.context, deps, 'before authorized source upgrade');
         const selected = [...options.paperIds].sort();
@@ -478,8 +392,6 @@ async function applySourceUpgrade(options, overrides = {}) {
 }
 
 function validateState(state, plan, selected, upgradeId) {
-    if (!state || state.stateSha256 !== api.stateDigest(state)) throw new Error('Source upgrade checkpoint integrity failed');
-    assertSourceUpgradePlan(plan);
     if (state?.contract !== 'conference-source-upgrade-state-v1' || state.upgradeId !== upgradeId
         || !['pending', 'running', 'partial', 'complete'].includes(state.status)
         || !Number.isSafeInteger(state.generation) || state.generation < 1
@@ -503,7 +415,7 @@ async function promoteSourceUpgrade(options, overrides = {}) {
     if (!/^[a-f0-9]{64}$/.test(options.planSha256 || '')) throw new Error('Promotion requires the exact --plan-sha');
     const deps = { ...api.defaultDependencies(), ...overrides }; const loaded = load(options, deps);
     return deps.engine.withFileLock(path.join(loaded.directory, '.operation'), async () => {
-        const current = load(options, deps), plan = authorizedPlanFor(options, deps, current);
+        const current = load(options, deps), plan = planWith(options, deps, current);
         if (plan.planSha256 !== options.planSha256) throw new Error('Source upgrade plan drifted before promotion');
         api.assertRuntimeAuthorityUnchanged(current.context, deps, 'before source upgrade promotion');
         if (options.pageRepairMode === 'caption-only') return promoteCaptionOnly(current, plan, deps);
@@ -532,7 +444,7 @@ async function promoteSourceUpgrade(options, overrides = {}) {
                 // 不要求旧计划的 planSha256 与当前计划相同。
                 if (!options.preserveOriginalComplete && !options.preferUpgrade) continue;
                 const planFile = path.join(folder, 'plan.json'); if (!fs.existsSync(planFile)) continue;
-                statePlan = assertSourceUpgradePlan(recovery.readPrivateJson(planFile));
+                statePlan = recovery.readPrivateJson(planFile);
                 const planBody = { ...statePlan }; delete planBody.planSha256;
                 if (statePlan.planSha256 !== state.planSha256 || api.stableHash(planBody) !== statePlan.planSha256
                     || statePlan.fromProcessId !== current.state.processId
@@ -675,9 +587,8 @@ async function promoteSourceUpgrade(options, overrides = {}) {
                     ...(priorUpgradeIds.has(id) && !preserved.has(id)
                         ? { preservedPriorUpgradeComplete: true } : {}) }];
             }));
-            const draft = { contract: plan.version === LEGACY_VERSION ? api.LEGACY_CONTRACT : api.CONTRACT,
-                version: plan.version === LEGACY_VERSION ? api.LEGACY_VERSION : api.PROCESS_VERSION, generation: 1, processId,
-                createdAt: current.state.createdAt, updatedAt: deps.now(), authority: plan.authority,
+            const draft = { contract: api.CONTRACT, version: api.VERSION, generation: 1, processId,
+                createdAt: current.state.createdAt, updatedAt: deps.now(), authority: current.context.authority,
                 status: 'running', items, aggregate: null, completionReceiptSha256: null, sourceUpgradePromotion: promotion };
             draft.stateSha256 = api.stateDigest(draft); api.assertState(draft);
             const body = api.completionBodyFor(draft, shared.planReceiptSha256, aggregateProof);
@@ -695,5 +606,5 @@ async function promoteSourceUpgrade(options, overrides = {}) {
     }, { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
-module.exports = { CONTRACT, VERSION, LEGACY_CONTRACT, LEGACY_VERSION, assertSourceUpgradePlan, planSourceUpgrade, applySourceUpgrade, promoteSourceUpgrade, promotionProcessId, validateState,
+module.exports = { planSourceUpgrade, applySourceUpgrade, promoteSourceUpgrade, promotionProcessId, validateState,
     retainedItemSource, repairPolicy, replayRetainedShared };

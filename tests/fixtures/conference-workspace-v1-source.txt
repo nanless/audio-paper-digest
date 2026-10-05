@@ -22,10 +22,8 @@ const MAX_ENV_BYTES = 4 * 1024 * 1024;
 const NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
 const PROCESS_STATES = new Set(['pending', 'running', 'partial', 'complete']);
 const ITEM_STATES = new Set(['pending', 'source_sealed', 'analyzing', 'analysis_partial', 'complete']);
-const PROCESS_CONTRACT = 'conference-process-v2';
-const PROCESS_VERSION = 2;
-const LEGACY_PROCESS_CONTRACT = 'conference-process-v1';
-const LEGACY_PROCESS_VERSION = 1;
+const PROCESS_CONTRACT = 'conference-process-v1';
+const PROCESS_VERSION = 1;
 const UUID_RE = /^[a-f0-9-]{36}$/i;
 const SHA256_RE = /^[a-f0-9]{64}$/i;
 
@@ -294,28 +292,13 @@ function validateItems(items, processId) {
     });
 }
 
-function knownProcessFormat(state) {
-    return state?.contract === PROCESS_CONTRACT && state.version === PROCESS_VERSION
-        || state?.contract === LEGACY_PROCESS_CONTRACT && state.version === LEGACY_PROCESS_VERSION;
-}
-function validTagCatalogFields(authority, version) {
-    if (!authority || typeof authority !== 'object' || Array.isArray(authority)) return false;
-    const current = ['tagCatalogVersion', 'tagCatalogSha256'].some(key => Object.hasOwn(authority, key));
-    const legacy = ['taxonomyVersion', 'taxonomyRegistrySha256'].some(key => Object.hasOwn(authority, key));
-    if (current && legacy || version === PROCESS_VERSION && legacy || version === LEGACY_PROCESS_VERSION && current) return false;
-    return version === LEGACY_PROCESS_VERSION || typeof authority.tagCatalogVersion === 'string'
-        && Boolean(authority.tagCatalogVersion.trim()) && typeof authority.tagCatalogSha256 === 'string'
-        && SHA256_RE.test(authority.tagCatalogSha256);
-}
-
 function validateProcessStateShape(state, processId) {
     if (!state || typeof state !== 'object' || Array.isArray(state)
-        || !knownProcessFormat(state)
+        || state.contract !== PROCESS_CONTRACT || state.version !== PROCESS_VERSION
         || state.processId !== processId || !UUID_RE.test(state.processId || '')
         || !PROCESS_STATES.has(state.status)
         || !state.authority || typeof state.authority !== 'object' || Array.isArray(state.authority)
         || !SHA256_RE.test(state.authority.implementationSha256 || '')
-        || !validTagCatalogFields(state.authority, state.version)
         || !validateItems(state.items, state.processId)) return false;
     if (state.sourceImplementationSha256 !== undefined
         && !SHA256_RE.test(state.sourceImplementationSha256 || '')) return false;
@@ -342,13 +325,11 @@ function validateCompletionReceipt(state, processDir) {
     const expectedItems = Object.values(state.items).sort((a, b) => a.paperId.localeCompare(b.paperId))
         .map(item => ({ paperId: item.paperId, analysisRunId: item.analysisRunId,
             sourceProof: item.sourceProof, analysisProof: item.analysisProof, pageProof: item.pageProof }));
-    const valid = receipt.receiptSha256 === stableHash(body)
-        && receipt.contract === (state.version === PROCESS_VERSION
-            ? 'conference-process-completion-receipt-v2' : 'conference-process-completion-receipt-v1')
-        && receipt.version === state.version
-        && validTagCatalogFields(receipt.authority, receipt.version)
+    const valid = receipt.contract === 'conference-process-completion-receipt-v1'
+        && receipt.version === PROCESS_VERSION
         && receipt.processId === state.processId
         && SHA256_RE.test(receipt.planReceiptSha256 || '')
+        && receipt.receiptSha256 === stableHash(body)
         && receipt.receiptSha256 === state.completionReceiptSha256
         && stableHash(receipt.authority) === stableHash(state.authority)
         && stableHash(receipt.aggregate) === stableHash(state.aggregate)
@@ -412,14 +393,14 @@ function inspectProcessStates(options = {}) {
                 stateIntegrity.valid = stateIntegrity.declared === stateIntegrity.computed;
             } catch (_) { /* classified below */ }
         }
-        const stateShapeValid = stateIntegrity.valid && validateProcessStateShape(state, entry.name);
+        const stateShapeValid = validateProcessStateShape(state, entry.name);
         const schemaValid = stateShapeValid && stateIntegrity.valid;
         let completion = null;
         if (schemaValid && stateStatus === 'complete') completion = validateCompletionReceipt(state, processDir);
-        if (!stateIntegrity.valid) {
-            classification = 'invalid'; reason = 'state_sha_mismatch';
-        } else if (!stateShapeValid) {
+        if (!stateShapeValid) {
             classification = 'invalid'; reason = 'invalid_state_schema';
+        } else if (!stateIntegrity.valid) {
+            classification = 'invalid'; reason = 'state_sha_mismatch';
         } else if (!lock.valid) {
             classification = 'invalid'; reason = lock.reason;
         } else if (lock.active) {

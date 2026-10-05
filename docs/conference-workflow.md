@@ -198,7 +198,9 @@ npm run conference:new:process -- --status \
 
 入口只接受 complete、非空、来自 `official-proceedings` discovery 的选择，每个 included 成员必须是唯一 `exact` PDF。自动来源验收使用 `conference-deterministic-source-seal-v1`，表示程序按官方 metadata 的 `pdfFile` 核验文件，不表示人工审阅。程序内部安排提取、staging、import、plan，再完成共享深度分析、评分、解读、标签和单篇暂存页。
 
-每篇仍按固定 PyMuPDF 提取，重验 request、metadata、PDF、文本、结构化证据、回执及验证 SHA。process UUID 绑定选择、标签登记表原字节和实现指纹；每篇分析 UUID 根据 process UUID 和完整 `paperId` 确定性生成。状态在 `data/runtime/conference-processes/<process-uuid>/state.json`。
+每篇仍按固定 PyMuPDF 提取，重新核对提取请求、元数据、PDF、文本、结构化证据、回执及验证记录的 SHA。进程 UUID 由入选集合、词表原文件和实现指纹确定；每篇分析 UUID 再由进程 UUID 和完整 `paperId` 确定。状态保存在 `data/runtime/conference-processes/<process-uuid>/state.json`。
+
+新进程和完成凭证各自使用 v2 格式，词表身份字段为 `tagCatalogVersion`、`tagCatalogSha256`。已有 v1 记录先按原对象完整核验，再继续原 UUID，保留创建时的词表字段和值；读取不会给旧记录换格式或重算原身份。工作区盘点同时识别两版，但盘点通过不能代替正式完成及发布检查。队列和分析配置仍使用各自独立的版本。
 
 `--concurrency` 默认 1，范围 1–5，覆盖单篇处理生命周期；每篇进入分析引擎时内部并发为 1。相同身份重跑使用同一 UUID，完成论文不再请求模型，未完成论文从原分析检查点继续。只有来源依据、共享分析的完成回执、当前标签及单页清单均通过，论文才 complete；所有成员 complete 后才生成会议汇总及不可覆盖的 `completion-receipt.json`。
 
@@ -305,7 +307,7 @@ npm run conference:new:migrate-process -- --apply \
   --concurrency 3
 ```
 
-迁移默认并发 3、范围 1–5，重验原来源及固定成员。完成论文先由当前后处理重新生成并核验暂存页，不重新请求模型；未完成论文仍可能继续分析。`--reuse-complete-pages` 另要求重放后的页面路径及内容 SHA 不变。需要解除失败限制时可显式加 `--retry-failed`，迁移记录和原来源依据保留。迁移实现与升级来源是不同操作。
+迁移默认并发 3、范围 1–5，重新核验原来源和固定成员。完成论文先由当前后处理重新生成并核验暂存页，不重新请求模型；未完成论文仍可能继续分析。迁移继续原 UUID 和记录格式，保留原词表身份及已发生的尝试。`--reuse-complete-pages` 另要求重新核验后的页面路径及内容 SHA 不变。需要解除失败限制时可显式加 `--retry-failed`，迁移记录和原来源依据保留。迁移实现与升级来源是不同操作。
 
 ### 来源升级需要明确的新分析授权
 
@@ -324,6 +326,8 @@ npm run conference:new:process -- --source-upgrade-promote \
 ```
 
 `PLAN_SHA256` 必须等于刚核对的计划 SHA，`--paper-ids` 只列本会明确授权的新分析对象，`--authorize-new-analysis` 不能省略。未选择的旧成果保留；新提取组使用新的来源依据，不能放宽旧回执或覆写旧文件。来源获取或提取的 generation 不等于论文 `vN` 修订号。
+
+新来源升级计划使用 v2 格式和当前词表字段，随后建立同代的子进程。恢复已有计划时，先核原计划、授权、检查点及父进程对应关系，再按已核格式完整重算；原计划 SHA、尝试次数和已完成结果不能为了恢复而被替换。来源、成员或实现变化使原计划无法完整对应时，程序停止，须重新核对并明确授权新的计划。升级状态及提升记录仍保留各自原格式，不能随计划一起改版本。
 
 子集升级 complete 不等于整会完成。普通 promote 需要全成员升级结果；显式 `--preserve-original-complete` 可保留原完成项，`--prefer-upgrade` 优先用完成的升级项并保留其他原完成项，两者互斥。无论哪种方式，缺少完整可核验结果的成员都会阻止生成新会议结果。返回的新 `processId` 用于后续发布，原 process、分析和发布记录保留。计划没有承诺跨来源复用模型阶段，输入改变时须说明新分析成本。
 

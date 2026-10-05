@@ -9,20 +9,15 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const recovery = require('./conference-process-recovery.js');
 
-const CONTRACT = 'conference-process-v2';
-const LEGACY_CONTRACT = 'conference-process-v1';
-const COMPLETION_CONTRACT = 'conference-process-completion-receipt-v2';
-const LEGACY_COMPLETION_CONTRACT = 'conference-process-completion-receipt-v1';
-const PROCESS_VERSION = 2;
-const COMPLETION_VERSION = 2;
-const LEGACY_VERSION = 1;
+const CONTRACT = 'conference-process-v1';
+const COMPLETION_CONTRACT = 'conference-process-completion-receipt-v1';
 const TAG_REVIEW_QUEUE_CONTRACT = 'conference-tag-review-queue-v2';
 const TAG_REVIEW_QUEUE_FILE = 'tag-review-queue.json';
 const TAG_REVIEW_QUEUE_VERSION = 2;
 // 旧队列仅用于读取已有报告路径；当前写入始终使用新文件名。
 const LEGACY_TAG_REVIEW_QUEUE_FILE = 'taxonomy-review-queue.json';
 const DEEP_EXECUTION_CONFIG_CONTRACT = 'conference-deep-execution-config-v1';
-const VERSION = PROCESS_VERSION;
+const VERSION = 1;
 const DEEP_EXECUTION_CONFIG_VERSION = 1;
 const MAX_CONCURRENCY = 5;
 const DEEP_EXECUTION_LIMIT_FIELDS = Object.freeze([
@@ -269,57 +264,7 @@ function safeProcessDirectory(root, processId, create = false) {
     }
     return target;
 }
-function processFormat(value) {
-    if (value?.contract === CONTRACT && value.version === PROCESS_VERSION) return PROCESS_VERSION;
-    if (value?.contract === LEGACY_CONTRACT && value.version === LEGACY_VERSION) return LEGACY_VERSION;
-    throw new Error('会议进程记录的格式标识和版本不属于支持的组合。');
-}
-function authorityForComparison(authority, version) {
-    if (!authority || typeof authority !== 'object' || Array.isArray(authority)
-        || ![PROCESS_VERSION, LEGACY_VERSION].includes(version)) throw new Error('会议进程的权限记录或格式版本无效。');
-    const current = ['tagCatalogVersion', 'tagCatalogSha256'];
-    const legacy = ['taxonomyVersion', 'taxonomyRegistrySha256'];
-    const hasCurrent = current.some(key => Object.hasOwn(authority, key));
-    const hasLegacy = legacy.some(key => Object.hasOwn(authority, key));
-    if (hasCurrent && hasLegacy) throw new Error('会议进程不能混用新旧词表身份字段。');
-    if (version === PROCESS_VERSION && hasLegacy || version === LEGACY_VERSION && hasCurrent) {
-        throw new Error('会议进程的词表身份字段与格式版本不一致。');
-    }
-    if (version === PROCESS_VERSION && (typeof authority.tagCatalogVersion !== 'string'
-        || !authority.tagCatalogVersion.trim() || typeof authority.tagCatalogSha256 !== 'string'
-        || !/^[a-f0-9]{64}$/.test(authority.tagCatalogSha256))) {
-        throw new Error('会议进程的词表版本或原文件 SHA 无效。');
-    }
-    const view = { ...authority };
-    if (version === LEGACY_VERSION) {
-        for (const [oldKey, newKey] of [['taxonomyVersion', 'tagCatalogVersion'], ['taxonomyRegistrySha256', 'tagCatalogSha256']]) {
-            if (Object.hasOwn(authority, oldKey)) view[newKey] = authority[oldKey];
-            delete view[oldKey];
-        }
-    }
-    return view;
-}
-function authorityWithoutTagCatalog(authority, version) {
-    const view = authorityForComparison(authority, version);
-    delete view.tagCatalogVersion;
-    delete view.tagCatalogSha256;
-    return view;
-}
-function authorityForExistingState(state, currentAuthority) {
-    const checked = assertState(state);
-    authorityForComparison(currentAuthority, PROCESS_VERSION);
-    const authority = { ...currentAuthority };
-    delete authority.tagCatalogVersion;
-    delete authority.tagCatalogSha256;
-    const fields = checked.version === LEGACY_VERSION
-        ? ['taxonomyVersion', 'taxonomyRegistrySha256'] : ['tagCatalogVersion', 'tagCatalogSha256'];
-    for (const key of fields) if (Object.hasOwn(checked.authority, key)) authority[key] = checked.authority[key];
-    return authority;
-}
-
 function initialState(authority, members, processId, now) {
-    authorityForComparison(authority, PROCESS_VERSION);
-    if (processId !== deterministicUuid(stableHash(authority), CONTRACT)) throw new Error('新会议进程标识与当前权限记录不一致。');
     const items = Object.fromEntries(members.map(member => [member.paperId, {
         paperId: member.paperId, sourceIdentity: member.sourceIdentity,
         analysisRunId: deterministicUuid(processId, member.paperId, 'analysis'), status: 'pending',
@@ -330,15 +275,13 @@ function initialState(authority, members, processId, now) {
     value.stateSha256 = stateDigest(value); return value;
 }
 function assertState(value, expected = null) {
-    if (!value || value.stateSha256 !== stateDigest(value)
-        || !/^[a-f0-9-]{36}$/.test(value.processId || '')
+    if (!value || value.contract !== CONTRACT || value.version !== VERSION
+        || !/^[a-f0-9-]{36}$/.test(value.processId || '') || value.stateSha256 !== stateDigest(value)
         || !value.authority || !value.items || typeof value.items !== 'object'
         || !/^[a-f0-9]{64}$/.test(value.authority.implementationSha256 || '')
         || !['pending', 'running', 'partial', 'complete'].includes(value.status)) {
         throw new Error('Conference process checkpoint integrity failed');
     }
-    const format = processFormat(value);
-    authorityForComparison(value.authority, format);
     try { assertDeepExecutionConfigIdentity(value.authority.deepExecutionConfig); }
     catch (error) { throw new Error(`Conference process checkpoint deep execution config integrity failed: ${error.message}`); }
     if (value.sourceUpgradePromotion) {
@@ -376,15 +319,18 @@ function assertState(value, expected = null) {
         throw new Error('Conference process source implementation identity is invalid');
     }
     if (value.sourceImplementationSha256 && value.processId !== deterministicUuid(stableHash({
-        ...value.authority, implementationSha256: value.sourceImplementationSha256 }), value.contract)) {
+        ...value.authority, implementationSha256: value.sourceImplementationSha256 }), 'conference-process-v1')) {
         throw new Error('Conference process source implementation does not bind its original identity');
     }
     if (expected) {
         // 比较当前配置时，先排除进程创建时保存的词表版本和哈希。它们参与原 processId
         // 的计算，不能因更换词表就覆盖原值。是否允许继续使用标签记录，由后续标签阶段
         // 和发布检查决定。implementationSha256 仍参与比较，实现变化须先按迁移流程核验。
-        const valueAuthority = authorityWithoutTagCatalog(value.authority, format);
-        const expectedAuthority = authorityWithoutTagCatalog(expected.authority, PROCESS_VERSION);
+        const valueAuthority = { ...value.authority };
+        const expectedAuthority = { ...expected.authority };
+        for (const key of ['taxonomyVersion', 'taxonomyRegistrySha256']) {
+            delete valueAuthority[key]; delete expectedAuthority[key];
+        }
         if (stableHash(valueAuthority) !== stableHash(expectedAuthority)
             || stableHash(Object.keys(value.items).sort()) !== stableHash(expected.paperIds)) {
             throw new Error('会议进程记录的来源、筛选、配置或论文集合与当前输入不一致。');
@@ -429,10 +375,7 @@ function assertState(value, expected = null) {
     return value;
 }
 function completionBodyFor(state, planReceiptSha256, aggregate) {
-    const checked = assertState(state);
-    const legacy = checked.version === LEGACY_VERSION;
-    return { contract: legacy ? LEGACY_COMPLETION_CONTRACT : COMPLETION_CONTRACT,
-        version: legacy ? LEGACY_VERSION : COMPLETION_VERSION, processId: state.processId,
+    return { contract: COMPLETION_CONTRACT, version: VERSION, processId: state.processId,
         ...(state.sourceUpgradePromotion ? { sourceUpgradePromotion: clone(state.sourceUpgradePromotion) } : {}),
         authority: clone(state.authority), planReceiptSha256,
         items: Object.values(state.items).sort((a, b) => a.paperId.localeCompare(b.paperId)).map(item => ({
@@ -444,14 +387,9 @@ function validateCompletionReceipt(state, receipt, planReceiptSha256 = null) {
     if (checked.status !== 'complete') {
         throw new Error('Conference process completion receipt requires a complete checkpoint');
     }
-    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) throw new Error('Conference process completion receipt identity failed');
-    const body = clone(receipt); delete body.receiptSha256;
-    if (receipt.receiptSha256 !== stableHash(body)) throw new Error('Conference process completion receipt does not bind the current lifecycle');
-    const legacy = checked.version === LEGACY_VERSION;
-    if (receipt.contract !== (legacy ? LEGACY_COMPLETION_CONTRACT : COMPLETION_CONTRACT)
-        || receipt.version !== (legacy ? LEGACY_VERSION : COMPLETION_VERSION)
+    if (!receipt || receipt.contract !== COMPLETION_CONTRACT || receipt.version !== VERSION
         || receipt.processId !== checked.processId) throw new Error('Conference process completion receipt identity failed');
-    authorityForComparison(receipt.authority, checked.version);
+    const body = clone(receipt); delete body.receiptSha256;
     if (receipt.receiptSha256 !== stableHash(body)
         || stableHash(body.sourceUpgradePromotion || null) !== stableHash(checked.sourceUpgradePromotion || null)
         || checked.completionReceiptSha256 !== receipt.receiptSha256
@@ -576,7 +514,7 @@ function loadAuthority(options, deps) {
         selectedMemberSetSha256: selection.selectedMemberSetSha256,
         acquisitionReceiptSha256: acquisitionReceipt?.catalogReceiptSha256 || null,
         acquisitionPdfReceiptSetSha256: acquisitionReceipt?.pdfReceiptSetSha256 || null,
-        tagCatalogVersion, tagCatalogSha256: tagCatalogFile.sha256,
+        taxonomyVersion: tagCatalogVersion, taxonomyRegistrySha256: tagCatalogFile.sha256,
         implementationSha256: (deps.implementationSha256 || implementationSha256)(),
         deepExecutionConfig: currentDeepExecutionConfigIdentity(deps) };
     return { files, discoveryHandle, selectionHandle, discovery, selection, authority,
@@ -1025,10 +963,7 @@ async function runConferenceProcess(options, overrides = {}) {
     ), { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
-module.exports = { CONTRACT, LEGACY_CONTRACT, COMPLETION_CONTRACT, LEGACY_COMPLETION_CONTRACT,
-    PROCESS_VERSION, COMPLETION_VERSION, LEGACY_VERSION, VERSION,
-    authorityForComparison, authorityWithoutTagCatalog, authorityForExistingState,
-    TAG_REVIEW_QUEUE_CONTRACT, TAG_REVIEW_QUEUE_FILE,
+module.exports = { CONTRACT, COMPLETION_CONTRACT, TAG_REVIEW_QUEUE_CONTRACT, TAG_REVIEW_QUEUE_FILE, VERSION,
     MAX_CONCURRENCY, stableHash, deterministicUuid, canonicalBytes,
     DEEP_EXECUTION_CONFIG_CONTRACT, DEEP_EXECUTION_CONFIG_VERSION, DEEP_EXECUTION_LIMIT_FIELDS,
     deepExecutionConfigIdentity, assertDeepExecutionConfigIdentity, currentDeepExecutionConfigIdentity,

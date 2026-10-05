@@ -41,9 +41,14 @@ function parseArgs(argv) {
         reuseCompletePages: Boolean(values['--reuse-complete-pages']), retryFailed: Boolean(values['--retry-failed']) };
 }
 
-function withoutImplementation(authority, version = processApi.PROCESS_VERSION) {
-    const value = processApi.authorityWithoutTagCatalog(authority, version);
+function withoutImplementation(authority) {
+    const value = structuredClone(authority);
     delete value.implementationSha256;
+    // 换表后 state.taxonomy* 是进程身份史（processId 派生绑定原值，不可就地刷新），
+    // 与当前 config 的 标签 漂移属合法状态；封口层已按当前表强制
+    // （reseal + analysis-contract/publish_common 双端 seal 校验）。实现漂移仍照常桥接。
+    delete value.taxonomyVersion;
+    delete value.taxonomyRegistrySha256;
     return value;
 }
 
@@ -81,9 +86,9 @@ function migrateAndRun(options, runtime = {}) {
     const migrationFile = path.join(directory, 'implementation-migration.json');
     const runLocked = async () => {
         let state = processApi.assertState(cli.readSafeJson(stateFile));
-        if (processApi.stableHash(withoutImplementation(state.authority, state.version))
+        if (processApi.stableHash(withoutImplementation(state.authority))
             !== processApi.stableHash(withoutImplementation(context.authority))) {
-            throw new Error('来源、筛选或其余配置与原进程不一致，不能迁移实现。');
+            throw new Error('source/filter/taxonomy authority differs; refusing implementation migration');
         }
         if (processApi.stableHash(Object.keys(state.items).sort())
             !== processApi.stableHash(expectedPaperIds)) {
@@ -152,7 +157,7 @@ function migrateAndRun(options, runtime = {}) {
             if (state.authority.implementationSha256 !== currentImplementation || lifecycleNeedsRefresh) {
                 state = deps.engine.updateJsonFileLocked(stateFile, current => {
                     const checked = processApi.assertState(current);
-                    if (processApi.stableHash(withoutImplementation(checked.authority, checked.version))
+                    if (processApi.stableHash(withoutImplementation(checked.authority))
                         !== processApi.stableHash(withoutImplementation(context.authority))) {
                         throw new Error('checkpoint authority changed during implementation migration');
                     }
@@ -160,7 +165,7 @@ function migrateAndRun(options, runtime = {}) {
                         throw new Error('checkpoint changed during implementation migration');
                     }
                     const next = structuredClone(checked);
-                    next.authority = processApi.authorityForExistingState(checked, context.authority);
+                    next.authority = structuredClone(context.authority);
                     // A source-upgrade promoted process already binds its
                     // original implementation through sourceUpgradePromotion
                     // and its signed source-upgrade plan.  Adding the legacy

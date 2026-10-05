@@ -66,47 +66,18 @@ function eligible(item, now) {
 
 function resolveProcess(context, deps, api) {
     const root = deps.files.conferenceProcessDir;
-    api.authorityForComparison(context.authority, api.PROCESS_VERSION);
-    const derived = api.deterministicUuid(api.stableHash(context.authority), api.CONTRACT);
+    const derived = api.deterministicUuid(api.stableHash(context.authority), 'conference-process-v1');
     if (!fs.existsSync(root)) return derived;
     const matches = [], older = [];
-    const withoutImplementation = (value, version) => {
-        const copy = api.authorityForComparison(value, version);
-        delete copy.implementationSha256;
-        return copy;
-    };
+    const withoutImplementation = value => { const copy = { ...value }; delete copy.implementationSha256; return copy; };
     for (const id of fs.readdirSync(root).filter(name => /^[a-f0-9-]{36}$/.test(name))) {
         const directory = api.safeProcessDirectory(root, id, false), filename = path.join(directory, 'state.json');
         if (!fs.existsSync(filename)) continue;
-        const saved = readPrivateJson(filename);
-        // 先筛选来源、配置和词表值，跳过无关任务；此处不授予任何恢复资格。
-        // 匹配后仍须核验原完整摘要、格式和字段族，再作正式身份比较。
-        const candidateAuthority = { ...(saved?.authority || {}) };
-        const currentAuthority = { ...context.authority };
-        for (const key of ['implementationSha256', 'taxonomyVersion', 'taxonomyRegistrySha256', 'tagCatalogVersion', 'tagCatalogSha256']) {
-            delete candidateAuthority[key];
-            delete currentAuthority[key];
-        }
-        if (api.stableHash(candidateAuthority) !== api.stableHash(currentAuthority)) continue;
-        // 同一来源和配置下的混用字段不能因空值被当作无关词表跳过。
-        // 先核原状态摘要，再由正式字段检查拒绝混用。
-        const hasCurrentCatalog = ['tagCatalogVersion', 'tagCatalogSha256'].some(key => Object.hasOwn(saved.authority || {}, key));
-        const hasLegacyCatalog = ['taxonomyVersion', 'taxonomyRegistrySha256'].some(key => Object.hasOwn(saved.authority || {}, key));
-        if (hasCurrentCatalog && hasLegacyCatalog) api.assertState(saved);
-        const candidateCatalog = {
-            version: Object.hasOwn(saved.authority || {}, 'tagCatalogVersion')
-                ? saved.authority.tagCatalogVersion : saved.authority?.taxonomyVersion,
-            sha256: Object.hasOwn(saved.authority || {}, 'tagCatalogSha256')
-                ? saved.authority.tagCatalogSha256 : saved.authority?.taxonomyRegistrySha256
-        };
-        if (api.stableHash(candidateCatalog) !== api.stableHash({ version: context.authority.tagCatalogVersion,
-            sha256: context.authority.tagCatalogSha256 })) continue;
-        const state = api.assertState(saved);
-        if (api.stableHash(withoutImplementation(state.authority, state.version))
-            !== api.stableHash(withoutImplementation(context.authority, api.PROCESS_VERSION))) continue;
+        const state = readPrivateJson(filename);
+        if (api.stableHash(withoutImplementation(state.authority)) !== api.stableHash(withoutImplementation(context.authority))) continue;
+        api.assertState(state);
         if (state.processId !== id) throw new Error('Conference process directory identity mismatch');
-        if (api.stableHash(api.authorityForComparison(state.authority, state.version))
-            !== api.stableHash(api.authorityForComparison(context.authority, api.PROCESS_VERSION))) {
+        if (api.stableHash(state.authority) !== api.stableHash(context.authority)) {
             // A process can fail during shared source preparation before any
             // item is sealed or analyzed. In that narrow no-progress case,
             // an implementation change cannot invalidate analysis (there is
@@ -122,7 +93,7 @@ function resolveProcess(context, deps, api) {
         api.assertState(state, { authority: context.authority, paperIds: context.members.map(item => item.paperId).sort() });
         if (state.sourceUpgradePromotion) {
             sourceImplementation(state, directory, api);
-        } else if (id !== api.deterministicUuid(api.stableHash(state.authority), state.contract)) {
+        } else if (id !== derived) {
             const records = fs.readdirSync(directory).filter(name => /^implementation-migration(?:-[a-f0-9]{12})?\.json$/.test(name))
                 .map(name => readPrivateJson(path.join(directory, name)));
             const record = records.find(value => value.toImplementationSha256 === state.authority.implementationSha256);
@@ -151,26 +122,19 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
     api.assertState(state);
     if (ancestry.has(state.processId) || ancestry.size >= 64) throw new Error('Promotion provenance contains a cycle');
     const parents = new Set(ancestry); parents.add(state.processId);
-    const withoutImplementation = (value, version) => {
-        const copy = api.authorityForComparison(value, version);
-        delete copy.implementationSha256;
-        return copy;
-    };
+    const withoutImplementation = value => { const copy = { ...value }; delete copy.implementationSha256; return copy; };
     if (state.sourceUpgradePromotion) {
         const promotion = state.sourceUpgradePromotion;
-        const savedPlan = require('./conference-source-upgrade.js').assertSourceUpgradePlan(
-            readPrivateJson(path.join(directory, 'source-upgrade-plan.json')));
-        const { planSha256, ...plan } = savedPlan;
+        const { planSha256, ...plan } = readPrivateJson(path.join(directory, 'source-upgrade-plan.json'));
         if (planSha256 !== api.stableHash(plan) || planSha256 !== promotion.planSha256
-            || plan.version !== state.version
             // A promoted process may subsequently pass through an explicit
             // implementation migration.  The signed source-upgrade plan
             // necessarily retains the authority fingerprint from promotion,
             // while the checkpoint records the current implementation.  The
             // source/filter/member authority must still be identical; only
             // this audited implementation field may advance.
-            || api.stableHash(withoutImplementation(plan.authority, plan.version))
-                !== api.stableHash(withoutImplementation(state.authority, state.version))
+            || api.stableHash(withoutImplementation(plan.authority))
+                !== api.stableHash(withoutImplementation(state.authority))
             || plan.fromProcessId !== promotion.originalProcessId
             || plan.sourceImplementationSha256 !== promotion.sourceImplementationSha256
             || api.stableHash(plan.pageRepairPolicy || null) !== api.stableHash(promotion.pageRepairPolicy || null)
@@ -186,20 +150,17 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
             throw new Error('Promotion parent state does not bind the original plan');
         }
         const parentSource = sourceImplementation(parent, parentDirectory, api, parents);
-        const sourceAuthority = (value, version) => {
-            const copy = api.authorityWithoutTagCatalog(value, version);
-            delete copy.implementationSha256;
-            return copy;
-        };
+        const sourceAuthority = value => { const copy = withoutImplementation(value);
+            delete copy.taxonomyVersion; delete copy.taxonomyRegistrySha256; return copy; };
         if (parentSource !== plan.sourceImplementationSha256
-            || api.stableHash(sourceAuthority(parent.authority, parent.version)) !== api.stableHash(sourceAuthority(plan.authority, plan.version))
+            || api.stableHash(sourceAuthority(parent.authority)) !== api.stableHash(sourceAuthority(plan.authority))
             || plan.papers.some(item => parent.items[item.paperId]?.analysisRunId !== item.previousExecutionId
                 || parent.items[item.paperId]?.status !== item.previousStatus
                 || parent.items[item.paperId]?.sourceIdentity !== state.items[item.paperId]?.sourceIdentity)
             || (parent.sourceUpgradePromotion
                 ? api.deterministicUuid(parent.sourceUpgradePromotion.planSha256, 'conference-source-upgrade-process-v1')
                 : api.deterministicUuid(api.stableHash({ ...parent.authority, implementationSha256: parentSource }),
-                    parent.contract)) !== parent.processId) {
+                    'conference-process-v1')) !== parent.processId) {
             throw new Error('Promotion parent source/authority/UUID integrity failed');
         }
         if (parent.status === 'complete') api.validateCompletionReceipt(parent,
@@ -207,7 +168,7 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
         return promotion.sourceImplementationSha256;
     }
     const bindsOrigin = implementationSha256 => /^[a-f0-9]{64}$/.test(implementationSha256 || '')
-        && api.deterministicUuid(api.stableHash({ ...state.authority, implementationSha256 }), state.contract) === state.processId;
+        && api.deterministicUuid(api.stableHash({ ...state.authority, implementationSha256 }), 'conference-process-v1') === state.processId;
     if (state.sourceImplementationSha256) {
         if (!bindsOrigin(state.sourceImplementationSha256)) throw new Error('Source implementation does not bind original process UUID');
     }

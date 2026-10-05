@@ -16,6 +16,7 @@ const filter = require('../scripts/lib/conference-filter.js');
 const extractionFixture = require('./helpers/conference-extraction-fixture.js');
 const evidenceFixture = require('./helpers/conference-filter-evidence-fixture.js');
 const utils = require('../scripts/utils.js');
+const { loadOriginalConferenceProcessApis } = require('./helpers/conference-process-original-fixture.js');
 
 const H = value => processApi.stableHash(value);
 function executionIdentity({ env = {}, limits = {}, secondary = {} } = {}) {
@@ -34,20 +35,21 @@ function executionIdentity({ env = {}, limits = {}, secondary = {} } = {}) {
         utilsApi: utils
     });
 }
-function fixture(t, count = 1) {
+function fixture(t, count = 1, original = null) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-process-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const members = Array.from({ length: count }, (_, index) => ({
         paperId: `conference:odyssey:2026:conference-paper-id:paper.${index + 1}`,
         sourceIdentity: `conference-paper-id:paper.${index + 1}`
     }));
-    const runtimeAuthority = { implementationSha256: H('implementation'),
+    const runtimeAuthority = { implementationSha256: original ? original.implementationSha256 : H('implementation'),
         deepExecutionConfig: executionIdentity() };
     const authority = { conferenceId: 'odyssey-2026', catalogName: 'catalog.json', reportName: 'report.json',
         filterId: '11111111-1111-4111-8111-111111111111', catalogSha256: H('catalog'), reportSha256: H('report'),
         filterPolicySha256: H('policy'), selectionReceiptSha256: H('selection'),
-        selectedMemberSetSha256: H(members.map(item => item.paperId)), taxonomyVersion: 'taxonomy-v1',
-        taxonomyRegistrySha256: H('taxonomy'), implementationSha256: runtimeAuthority.implementationSha256,
+        selectedMemberSetSha256: H(members.map(item => item.paperId)),
+        ...(original ? { taxonomyVersion: 'taxonomy-v1', taxonomyRegistrySha256: H('taxonomy') }
+            : { tagCatalogVersion: 'paper-tag-catalog-v2', tagCatalogSha256: H('tag catalog') }), implementationSha256: runtimeAuthority.implementationSha256,
         deepExecutionConfig: runtimeAuthority.deepExecutionConfig };
     const files = { conferenceProcessDir: path.join(root, 'processes') };
     const context = { authority, members, files };
@@ -264,7 +266,7 @@ test('deep execution config drift changes process identity and cannot address an
     } });
     f.context.authority = { ...f.context.authority,
         deepExecutionConfig: f.runtimeAuthority.deepExecutionConfig };
-    const nextId = processApi.deterministicUuid(processApi.stableHash(f.context.authority), 'conference-process-v1');
+    const nextId = processApi.deterministicUuid(processApi.stableHash(f.context.authority), processApi.CONTRACT);
     assert.notEqual(nextId, first.processId);
     assert.equal(fs.existsSync(path.join(f.files.conferenceProcessDir, nextId)), false);
     assert.throws(() => cli.processStatus(options, { dependencies: f.deps }), /ENOENT|no such file/i);
@@ -311,7 +313,7 @@ test('same-authority apply calls serialize and an exception releases the operati
         return g.deps.prepareShared(...args);
     }, processPaper: async (_context, _shared, item) => success(item) };
     await assert.rejects(processApi.runConferenceProcess(options, recoverableDeps), /fixture crash/);
-    const processId = processApi.deterministicUuid(processApi.stableHash(g.authority), 'conference-process-v1');
+    const processId = processApi.deterministicUuid(processApi.stableHash(g.authority), processApi.CONTRACT);
     assert.equal(fs.existsSync(path.join(g.files.conferenceProcessDir, processId, '.operation.lock')), false);
     assert.equal((await processApi.runConferenceProcess(options, recoverableDeps)).status, 'complete');
 });
@@ -336,7 +338,7 @@ test('implementation drift before aggregate leaves the process incomplete withou
             return success(item);
         }
     }), /implementation drifted before aggregate/);
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), 'conference-process-v1');
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
     const directory = path.join(f.files.conferenceProcessDir, processId);
     const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(directory, 'state.json'))));
     assert.notEqual(state.status, 'complete');
@@ -363,7 +365,7 @@ test('final completion transaction rechecks config identity before publishing it
         withProcessLock: async (_target, callback) => callback(),
         processPaper: async (_context, _shared, item) => success(item)
     }), /deep execution config drifted during final completion transaction/);
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), 'conference-process-v1');
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
     const directory = path.join(f.files.conferenceProcessDir, processId);
     const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(directory, 'state.json'))));
     assert.notEqual(state.status, 'complete');
@@ -375,7 +377,7 @@ test('final completion transaction rechecks config identity before publishing it
 test('item CAS preserves a concurrently completed item and final transaction rechecks closure', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), 'conference-process-v1');
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
     const stateFile = path.join(f.files.conferenceProcessDir, processId, 'state.json');
     const completedByPeer = await processApi.runConferenceProcess(options, { ...f.deps,
         processPaper: async (_context, _shared, item) => {
@@ -393,7 +395,7 @@ test('item CAS preserves a concurrently completed item and final transaction rec
     assert.equal(JSON.parse(fs.readFileSync(stateFile)).items[f.members[0].paperId].status, 'complete');
 
     const g = fixture(t); const gProcessId = processApi.deterministicUuid(
-        processApi.stableHash(g.authority), 'conference-process-v1');
+        processApi.stableHash(g.authority), processApi.CONTRACT);
     const gStateFile = path.join(g.files.conferenceProcessDir, gProcessId, 'state.json');
     await assert.rejects(processApi.runConferenceProcess(options, { ...g.deps,
         processPaper: async (_context, _shared, item) => success(item),
@@ -639,7 +641,7 @@ test('implementation migration remains addressable and never reanalyzes complete
     // A previously created empty fork must not hide the migrated completed run.
     const dormant = JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, first.processId, 'state.json')));
     dormant.authority = f.context.authority;
-    dormant.processId = processApi.deterministicUuid(H(dormant.authority), 'conference-process-v1');
+    dormant.processId = processApi.deterministicUuid(H(dormant.authority), processApi.CONTRACT);
     dormant.status = 'pending'; dormant.aggregate = null; dormant.completionReceiptSha256 = null;
     for (const item of Object.values(dormant.items)) {
         Object.assign(item, { analysisRunId: processApi.deterministicUuid(dormant.processId, item.paperId, 'analysis'),
@@ -708,7 +710,7 @@ test('exhausted model network failure does not stop later conference papers', as
 
 test('tag review keeps the batch moving, withholds the page and reports a visible queue', async t => {
     const f = fixture(t, 3); const options = { apply: true, concurrency: 2 };
-    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), 'conference-process-v1');
+    const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
     const executionOf = paperId => processApi.deterministicUuid(processId, paperId, 'analysis');
     const reviewPaperId = f.members[1].paperId;
     const blockedReasons = ['primary-task:unknown:#不存在的主任务', 'selection:标签不是 active 中文首选标签: #不存在的主任务'];
@@ -1004,8 +1006,8 @@ test('changed text or artifacts reject complete proof reuse before models or mig
 // Shared fixture for the source-upgrade promote ledger modes: sealed historical
 // sources, a mocked discovery/prepareShared/staging/aggregate chain and a
 // switchable "new source generation" so upgrades visibly differ from originals.
-function sourceUpgradeFixture(t, count = 3) {
-    const f = fixture(t, count); const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+function sourceUpgradeFixture(t, count = 3, original = null) {
+    const f = fixture(t, count, original); const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
     f.files.conferenceStagingSourceDir = path.join(f.root, 'sources'); f.files.conferenceAnalysisDir = path.join(f.root, 'analysis');
     fs.mkdirSync(f.files.conferenceStagingSourceDir, { mode: 0o700 }); fs.mkdirSync(f.files.conferenceAnalysisDir, { mode: 0o700 });
     const sources = [];
@@ -1087,6 +1089,9 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
     h.control.creatingNewGeneration = true; h.control.calls = [];
     const options = { fromProcessId: original.processId, concurrency: 1 };
     const plan = upgrade.planSourceUpgrade(options, deps); assert.equal(plan.papers.length, 3);
+    assert.equal(plan.contract, 'conference-source-upgrade-plan-v2');
+    assert.equal(plan.version, 2);
+    assert.equal(Object.hasOwn(plan.authority, 'taxonomyRegistrySha256'), false);
     await assert.rejects(upgrade.applySourceUpgrade({ ...options, authorizeNewAnalysis: true, planSha256: plan.planSha256,
         paperIds: ['conference:odyssey:2026:conference-paper-id:unknown'] }, deps), /not in the authorized plan/);
     const selected = f.members[1].paperId;
@@ -1106,6 +1111,10 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
     const promotedState = processApi.assertState(JSON.parse(fs.readFileSync(promotedStateFile)));
     const receipt = JSON.parse(fs.readFileSync(path.join(path.dirname(promotedStateFile), 'completion-receipt.json')));
     processApi.validateCompletionReceipt(promotedState, receipt);
+    assert.equal(promotedState.contract, 'conference-process-v2');
+    assert.equal(promotedState.version, 2);
+    assert.equal(receipt.contract, 'conference-process-completion-receipt-v2');
+    assert.equal(receipt.version, 2);
     assert.equal(cli.processStatus(options, { dependencies: deps }).processId, promoted.processId);
     assert.equal((await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, deps)).processId, promoted.processId);
     assert.equal((await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, deps)).processId, promoted.processId);
@@ -1200,6 +1209,7 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
             item.pageProof.manifestSha256 = pageManifest.manifestSha256;
         }
         state.aggregate = { ...state.aggregate, manifestSha256: manifest.manifestSha256 };
+        state.stateSha256 = processApi.stateDigest(state);
         const completionBody = processApi.completionBodyFor(state, receipt.planReceiptSha256, state.aggregate);
         const completion = { ...completionBody, receiptSha256: H(completionBody) };
         state.completionReceiptSha256 = completion.receiptSha256;
@@ -1400,4 +1410,312 @@ test('promote --prefer-upgrade still refuses an originally incomplete member wit
         preferUpgrade: true }, h.deps),
         error => /^Promotion requires all conference members upgraded and complete; missing: /.test(error.message)
             && error.message.endsWith(failed));
+});
+
+function useCurrentTagAuthority(f, implementationSha256 = f.runtimeAuthority.implementationSha256) {
+    const authority = { ...f.context.authority,
+        tagCatalogVersion: f.context.authority.taxonomyVersion,
+        tagCatalogSha256: f.context.authority.taxonomyRegistrySha256, implementationSha256 };
+    delete authority.taxonomyVersion;
+    delete authority.taxonomyRegistrySha256;
+    f.context.authority = authority;
+    f.runtimeAuthority.implementationSha256 = implementationSha256;
+}
+
+test('原实现生成的完整旧进程按原 UUID 恢复，已完成论文不再次调用模型', async t => {
+    const original = loadOriginalConferenceProcessApis();
+    const f = fixture(t, 1, original);
+    let calls = 0;
+    const deps = { ...f.deps, processPaper: async (_c, _s, item) => { calls += 1; return success(item); } };
+    const first = await original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, deps);
+    const directory = path.join(f.files.conferenceProcessDir, first.processId);
+    const receiptBytes = fs.readFileSync(path.join(directory, 'completion-receipt.json'));
+    const originalState = JSON.parse(fs.readFileSync(path.join(directory, 'state.json')));
+    assert.equal(originalState.contract, 'conference-process-v1');
+    assert.equal(originalState.authority.implementationSha256, original.implementationSha256);
+    useCurrentTagAuthority(f);
+    const resumed = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...deps, processPaper: () => assert.fail('完成论文不能再次请求模型')
+    });
+    assert.equal(resumed.processId, first.processId);
+    assert.equal(calls, 1);
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(directory, 'state.json'))));
+    assert.equal(state.contract, originalState.contract);
+    assert.deepEqual(state.authority, originalState.authority);
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'completion-receipt.json')), receiptBytes);
+    assert.equal(Object.hasOwn(state.authority, 'tagCatalogSha256'), false);
+    f.context.authority.implementationSha256 = H('explicit migrated completed implementation');
+    f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
+    const migrated = await require('../scripts/migrate-conference-process.js').migrateAndRun({
+        apply: true, concurrency: 1, fromProcessId: first.processId
+    }, { dependencies: { ...deps,
+        processPaper: () => assert.fail('迁移完成论文不能再次请求模型'),
+        postprocess: { stagePaper: () => ({ status: 'staged', manifest: success(f.members[0]).pageProof }) }
+    } });
+    assert.equal(migrated.processId, first.processId);
+    assert.equal(calls, 1);
+    const migratedState = processApi.assertState(JSON.parse(fs.readFileSync(path.join(directory, 'state.json'))));
+    assert.equal(migratedState.contract, 'conference-process-v1');
+    assert.equal(migratedState.sourceImplementationSha256, original.implementationSha256);
+    assert.equal(migratedState.authority.taxonomyRegistrySha256, originalState.authority.taxonomyRegistrySha256);
+    assert.equal(Object.hasOwn(migratedState.authority, 'tagCatalogSha256'), false);
+    const archived = fs.readdirSync(directory).filter(name => /^completion-receipt-[a-f0-9]+(?:-[0-9]+)?\.json$/.test(name));
+    assert.ok(archived.some(name => fs.readFileSync(path.join(directory, name)).equals(receiptBytes)));
+});
+
+test('原费用失败记录先要求显式迁移，再沿原 UUID 和尝试记录恢复', async t => {
+    const original = loadOriginalConferenceProcessApis();
+    const f = fixture(t, 1, original);
+    let calls = 0;
+    const failed = await original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...f.deps, processPaper: () => {
+            calls += 1;
+            throw Object.assign(new Error('HTTP 401: Insufficient balance offline mock'),
+                { code: 'MODEL_HTTP_NON_RETRYABLE', retryable: false });
+        }
+    });
+    const directory = path.join(f.files.conferenceProcessDir, failed.processId);
+    const filename = path.join(directory, 'state.json');
+    const before = fs.readFileSync(filename), issued = JSON.parse(before);
+    useCurrentTagAuthority(f);
+    const blocked = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...f.deps, prepareShared: () => assert.fail('费用阻断不应重做来源准备'),
+        processPaper: () => assert.fail('费用阻断不应再次请求模型')
+    });
+    assert.equal(blocked.processId, failed.processId);
+    assert.equal(blocked.stopped, true);
+    assert.deepEqual(fs.readFileSync(filename), before);
+    // 实现变化是独立、明确的模拟；原实现生成的记录保持原字节。
+    f.context.authority.implementationSha256 = H('explicit current implementation');
+    f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
+    await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, f.deps), /migrate with --from/);
+    assert.deepEqual(fs.readFileSync(filename), before);
+    const migrated = await require('../scripts/migrate-conference-process.js').migrateAndRun({
+        apply: true, concurrency: 1, fromProcessId: failed.processId, retryFailed: true
+    }, { dependencies: { ...f.deps, processPaper: async (_c, _s, item) => { calls += 1; return success(item); } } });
+    assert.equal(migrated.processId, failed.processId);
+    assert.equal(migrated.status, 'complete');
+    assert.equal(calls, 2);
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(filename)));
+    const item = state.items[f.members[0].paperId];
+    assert.equal(state.contract, 'conference-process-v1');
+    assert.equal(state.authority.taxonomyVersion, issued.authority.taxonomyVersion);
+    assert.equal(state.authority.taxonomyRegistrySha256, issued.authority.taxonomyRegistrySha256);
+    assert.equal(Object.hasOwn(state.authority, 'tagCatalogSha256'), false);
+    assert.equal(item.attempts, 2);
+    assert.equal(item.retryReleases[0].attempts, 1);
+    assert.equal(item.retryReleases[0].previousFailure.category, 'quota');
+    assert.equal(item.analysisRunId, issued.items[item.paperId].analysisRunId);
+});
+
+test('原零尝试初始化例外保留，实现变化只创建新版进程而不覆盖旧状态', async t => {
+    const original = loadOriginalConferenceProcessApis();
+    const f = fixture(t, 1, original);
+    await assert.rejects(original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...f.deps, prepareShared: () => { throw new Error('offline preparation interruption'); }
+    }), /offline preparation interruption/);
+    const oldId = original.processApi.deterministicUuid(H(f.authority), original.processApi.CONTRACT);
+    const oldFile = path.join(f.files.conferenceProcessDir, oldId, 'state.json');
+    const oldBytes = fs.readFileSync(oldFile);
+    assert.equal(Object.values(JSON.parse(oldBytes).items)[0].attempts, 0);
+    useCurrentTagAuthority(f, H('new implementation without prior analysis'));
+    const current = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...f.deps, processPaper: async (_c, _s, item) => success(item)
+    });
+    assert.notEqual(current.processId, oldId);
+    assert.deepEqual(fs.readFileSync(oldFile), oldBytes);
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, current.processId, 'state.json'))));
+    assert.equal(state.contract, 'conference-process-v2');
+    assert.equal(state.version, 2);
+    assert.equal(Object.hasOwn(state.authority, 'taxonomyRegistrySha256'), false);
+});
+
+test('词表字段混用按存在性拒绝，原状态摘要损坏优先拒绝', async t => {
+    const f = fixture(t);
+    const result = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...f.deps, processPaper: async (_c, _s, item) => success(item)
+    });
+    const state = JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, result.processId, 'state.json')));
+    for (const value of [state.authority.tagCatalogSha256, null]) {
+        const mixed = structuredClone(state);
+        mixed.authority.taxonomyRegistrySha256 = value;
+        assert.throws(() => processApi.assertState(mixed), /checkpoint integrity failed/);
+        mixed.stateSha256 = processApi.stateDigest(mixed);
+        assert.throws(() => processApi.assertState(mixed), /不能混用/);
+    }
+    for (const change of [x => { x.tagCatalogSha256 = [x.tagCatalogSha256]; },
+        x => { x.tagCatalogVersion = '   '; }]) {
+        const invalid = structuredClone(state);
+        change(invalid.authority);
+        invalid.stateSha256 = processApi.stateDigest(invalid);
+        assert.throws(() => processApi.assertState(invalid), /词表版本或原文件 SHA 无效/);
+    }
+    const wrong = structuredClone(state);
+    wrong.version = 1;
+    wrong.stateSha256 = processApi.stateDigest(wrong);
+    assert.throws(() => processApi.assertState(wrong), /格式/);
+    const original = loadOriginalConferenceProcessApis();
+    const legacy = fixture(t, 1, original);
+    const issued = await original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...legacy.deps, processPaper: async (_c, _s, item) => success(item)
+    });
+    const legacyFile = path.join(legacy.files.conferenceProcessDir, issued.processId, 'state.json');
+    const mixedLegacy = JSON.parse(fs.readFileSync(legacyFile));
+    mixedLegacy.authority.tagCatalogSha256 = null;
+    useCurrentTagAuthority(legacy);
+    const directories = fs.readdirSync(legacy.files.conferenceProcessDir).sort();
+    const noWork = { ...legacy.deps,
+        prepareShared: () => assert.fail('混用状态不能进入来源准备'),
+        processPaper: () => assert.fail('混用状态不能请求模型') };
+    fs.writeFileSync(legacyFile, JSON.stringify(mixedLegacy), { mode: 0o600 });
+    await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, noWork),
+        /checkpoint integrity failed/);
+    assert.deepEqual(fs.readdirSync(legacy.files.conferenceProcessDir).sort(), directories);
+    mixedLegacy.stateSha256 = processApi.stateDigest(mixedLegacy);
+    fs.writeFileSync(legacyFile, JSON.stringify(mixedLegacy), { mode: 0o600 });
+    await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, noWork),
+        /不能混用新旧词表身份字段/);
+    assert.deepEqual(fs.readdirSync(legacy.files.conferenceProcessDir).sort(), directories);
+});
+
+test('原来源升级计划及费用检查点恢复时保持授权、原计划字节和尝试次数', async t => {
+    const original = loadOriginalConferenceProcessApis();
+    const h = sourceUpgradeFixture(t, 1, original);
+    const first = await original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps);
+    const parentFile = path.join(h.files.conferenceProcessDir, first.processId, 'state.json');
+    const parentBytes = fs.readFileSync(parentFile);
+    h.rememberOriginal(parentFile);
+    h.control.creatingNewGeneration = true;
+    const options = { fromProcessId: first.processId, concurrency: 1 };
+    const plan = original.upgrade.planSourceUpgrade(options, h.deps);
+    let calls = 0;
+    const deps = { ...h.deps, processPaper: async (...args) => {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error('HTTP 401: Insufficient balance offline mock'),
+            { code: 'MODEL_HTTP_NON_RETRYABLE', retryable: false });
+        return h.deps.processPaper(...args);
+    } };
+    const authorized = { ...options, authorizeNewAnalysis: true, planSha256: plan.planSha256,
+        paperIds: h.members.map(item => item.paperId) };
+    const partial = await original.upgrade.applySourceUpgrade(authorized, deps);
+    const directory = path.join(path.dirname(parentFile), `source-upgrade-${partial.upgradeId}`);
+    const planFile = path.join(directory, 'plan.json'), stateFile = path.join(directory, 'state.json');
+    const planBytes = fs.readFileSync(planFile), partialBytes = fs.readFileSync(stateFile);
+    const issued = JSON.parse(partialBytes);
+    assert.equal(plan.contract, 'conference-source-upgrade-plan-v1');
+    assert.equal(Object.values(issued.items)[0].attempts, 1);
+    useCurrentTagAuthority(h);
+    const upgrade = require('../scripts/lib/conference-source-upgrade.js');
+    const blocked = await upgrade.applySourceUpgrade(authorized, deps);
+    assert.equal(blocked.stopped, true);
+    assert.equal(calls, 1);
+    assert.deepEqual(fs.readFileSync(stateFile), partialBytes);
+    const complete = await upgrade.applySourceUpgrade({ ...authorized, retryFailed: true }, deps);
+    assert.equal(complete.status, 'complete');
+    assert.equal(calls, 2);
+    const state = JSON.parse(fs.readFileSync(stateFile));
+    assert.deepEqual(state.authorization, issued.authorization);
+    assert.equal(state.planSha256, issued.planSha256);
+    assert.equal(Object.values(state.items)[0].analysisRunId, Object.values(issued.items)[0].analysisRunId);
+    assert.equal(Object.values(state.items)[0].attempts, 2);
+    assert.deepEqual(fs.readFileSync(planFile), planBytes);
+    assert.deepEqual(fs.readFileSync(parentFile), parentBytes);
+    const promoted = await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, deps);
+    const childFile = path.join(h.files.conferenceProcessDir, promoted.processId, 'state.json');
+    const child = processApi.assertState(JSON.parse(fs.readFileSync(childFile)));
+    assert.equal(child.contract, 'conference-process-v1');
+    assert.equal(calls, 2);
+    const mixedChild = structuredClone(child);
+    mixedChild.contract = 'conference-process-v2'; mixedChild.version = 2;
+    mixedChild.authority.tagCatalogVersion = mixedChild.authority.taxonomyVersion;
+    mixedChild.authority.tagCatalogSha256 = mixedChild.authority.taxonomyRegistrySha256;
+    delete mixedChild.authority.taxonomyVersion; delete mixedChild.authority.taxonomyRegistrySha256;
+    mixedChild.stateSha256 = processApi.stateDigest(mixedChild);
+    fs.writeFileSync(childFile, processApi.canonicalBytes(mixedChild), { mode: 0o600 });
+    assert.throws(() => require('../scripts/lib/conference-process-recovery.js').sourceImplementation(
+        mixedChild, path.dirname(childFile), processApi), /promotion plan integrity failed/);
+});
+
+test('原升级计划写入后中断，可在原授权选择下补建检查点而不改计划', async t => {
+    const original = loadOriginalConferenceProcessApis();
+    const h = sourceUpgradeFixture(t, 1, original);
+    const result = await original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps);
+    const parentFile = path.join(h.files.conferenceProcessDir, result.processId, 'state.json');
+    const parentBytes = fs.readFileSync(parentFile);
+    h.rememberOriginal(parentFile);
+    h.control.creatingNewGeneration = true;
+    h.control.calls = [];
+    const options = { fromProcessId: result.processId, concurrency: 1 };
+    const plan = original.upgrade.planSourceUpgrade(options, h.deps);
+    const selected = h.members.map(item => item.paperId).sort();
+    const authorized = { ...options, authorizeNewAnalysis: true, planSha256: plan.planSha256, paperIds: selected };
+    await assert.rejects(original.upgrade.applySourceUpgrade(authorized, { ...h.deps, engine: {
+        ...engine, updateJsonFileLocked: (filename, ...args) => {
+            if (/source-upgrade-[a-f0-9]{64}\/state\.json$/.test(filename)) {
+                throw new Error('offline interruption before upgrade checkpoint');
+            }
+            return engine.updateJsonFileLocked(filename, ...args);
+        }
+    } }), /offline interruption before upgrade checkpoint/);
+    const upgradeId = H({ planSha256: plan.planSha256, selected });
+    const directory = path.join(path.dirname(parentFile), `source-upgrade-${upgradeId}`);
+    const planFile = path.join(directory, 'plan.json');
+    const planBytes = fs.readFileSync(planFile);
+    assert.equal(fs.existsSync(path.join(directory, 'state.json')), false);
+    assert.deepEqual(h.control.calls, []);
+    useCurrentTagAuthority(h);
+    const restored = await require('../scripts/lib/conference-source-upgrade.js').applySourceUpgrade(authorized, h.deps);
+    assert.equal(restored.upgradeId, upgradeId);
+    assert.equal(restored.status, 'complete');
+    const checkpoint = JSON.parse(fs.readFileSync(restored.stateFile));
+    assert.equal(checkpoint.planSha256, plan.planSha256);
+    assert.deepEqual(checkpoint.authorization, { newAnalysis: true, selectedPaperIds: selected, planSha256: plan.planSha256 });
+    assert.equal(Object.values(checkpoint.items)[0].attempts, 1);
+    assert.deepEqual(fs.readFileSync(planFile), planBytes);
+    assert.deepEqual(fs.readFileSync(parentFile), parentBytes);
+});
+
+test('无关原任务的损坏状态不会阻断目标任务，实际匹配状态仍先核原摘要', async t => {
+    const original = loadOriginalConferenceProcessApis();
+    const target = fixture(t, 1, original);
+    const completed = await original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...target.deps, processPaper: async (_c, _s, item) => success(item)
+    });
+    const targetFile = path.join(target.files.conferenceProcessDir, completed.processId, 'state.json');
+    for (const change of [
+        f => {
+            f.authority.catalogName = 'another-catalog.json';
+            f.authority.reportName = 'another-report.json';
+            f.members[0].paperId = 'conference:odyssey:2026:conference-paper-id:another-paper';
+            f.members[0].sourceIdentity = 'conference-paper-id:another-paper';
+            f.authority.selectedMemberSetSha256 = H(f.members.map(item => item.paperId));
+        },
+        f => {
+            f.authority.taxonomyVersion = 'another-issued-catalog';
+            f.authority.taxonomyRegistrySha256 = H('another issued catalog bytes');
+        }
+    ]) {
+        const unrelated = fixture(t, 1, original);
+        change(unrelated);
+        const result = await original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+            ...unrelated.deps, processPaper: async (_c, _s, item) => success(item)
+        });
+        const originalFile = path.join(unrelated.files.conferenceProcessDir, result.processId, 'state.json');
+        const state = JSON.parse(fs.readFileSync(originalFile));
+        state.generation += 1; // 故意破坏摘要；不是把新版对象改头伪造旧记录。
+        const directory = path.join(target.files.conferenceProcessDir, result.processId);
+        fs.mkdirSync(directory, { mode: 0o700 });
+        const filename = path.join(directory, 'state.json');
+        fs.writeFileSync(filename, JSON.stringify(state), { mode: 0o600 });
+    }
+    useCurrentTagAuthority(target);
+    const restored = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...target.deps, processPaper: () => assert.fail('目标论文已完成，不应再次调用模型')
+    });
+    assert.equal(restored.processId, completed.processId);
+    const matching = JSON.parse(fs.readFileSync(targetFile));
+    matching.generation += 1;
+    fs.writeFileSync(targetFile, JSON.stringify(matching), { mode: 0o600 });
+    await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, target.deps),
+        /checkpoint integrity failed/);
 });

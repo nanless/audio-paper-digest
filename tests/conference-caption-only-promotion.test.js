@@ -43,21 +43,21 @@ test('caption-only stage loader rejects unissued mode, code SHA and additional p
 
 function provenance(t) {
  const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'caption-parent-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
- const origin=H('issued original implementation'), authority={catalogSha256:H('catalog'),taxonomyVersion:'old',taxonomyRegistrySha256:H('old-registry'),implementationSha256:origin};
+ const origin=H('issued original implementation'), authority={catalogSha256:H('catalog'),tagCatalogVersion:'paper-tag-catalog-v2',tagCatalogSha256:H('old-registry'),implementationSha256:origin};
  const paperId='conference:interspeech:2026:conference-paper-id:du26b_interspeech';
- const parent={authority,items:{[paperId]:{analysisRunId:'33333333-3333-4333-8333-333333333333',status:'pending',sourceIdentity:'conference-paper-id:du26b_interspeech'}},status:'running'};
- parent.processId=api.deterministicUuid(H(authority),'conference-process-v1');parent.stateSha256=H(parent);
- const newer={...authority,taxonomyVersion:'a3',taxonomyRegistrySha256:H('a3'),implementationSha256:H('current')};
- const plan={authority:newer,fromProcessId:parent.processId,originalStateSha256:parent.stateSha256,sourceImplementationSha256:origin,papers:[{paperId,previousExecutionId:parent.items[paperId].analysisRunId,previousStatus:'pending'}]};plan.planSha256=H(plan);
- const child={processId:api.deterministicUuid(plan.planSha256,'conference-source-upgrade-process-v1'),authority:newer,items:structuredClone(parent.items),status:'running',sourceUpgradePromotion:{originalProcessId:parent.processId,sourceImplementationSha256:origin,planSha256:plan.planSha256}};
+ const parent={contract:api.CONTRACT,version:api.PROCESS_VERSION,authority,items:{[paperId]:{analysisRunId:'33333333-3333-4333-8333-333333333333',status:'pending',sourceIdentity:'conference-paper-id:du26b_interspeech'}},status:'running'};
+ parent.processId=api.deterministicUuid(H(authority),api.CONTRACT);parent.stateSha256=H(parent);
+ const newer={...authority,tagCatalogVersion:'paper-tag-catalog-v2',tagCatalogSha256:H('a3'),implementationSha256:H('current')};
+ const plan={contract:'conference-source-upgrade-plan-v2',version:2,authority:newer,fromProcessId:parent.processId,originalStateSha256:parent.stateSha256,sourceImplementationSha256:origin,papers:[{paperId,previousExecutionId:parent.items[paperId].analysisRunId,previousStatus:'pending'}]};plan.planSha256=H(plan);
+ const child={contract:api.CONTRACT,version:api.PROCESS_VERSION,processId:api.deterministicUuid(plan.planSha256,'conference-source-upgrade-process-v1'),authority:newer,items:structuredClone(parent.items),status:'running',sourceUpgradePromotion:{originalProcessId:parent.processId,sourceImplementationSha256:origin,planSha256:plan.planSha256}};
  const save=(state,p)=>{const dir=path.join(root,state.processId);fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.writeFileSync(path.join(dir,'state.json'),JSON.stringify(state),{mode:0o600});if(p)fs.writeFileSync(path.join(dir,'source-upgrade-plan.json'),JSON.stringify(p),{mode:0o600});return dir;};
  const childDir=save(child,plan);save(parent);
- // These focused provenance fixtures are explicitly synthetic. Full-state schema,
- // canonical, receipt and source proof replay is tested by the real 1354-page run.
+ // 这些是仅测试上级记录关系的合成样本，不代替完整进程、来源或发布资格核验。
+ // 完整原格式与当前格式调用链由 conference-process 测试另行覆盖。
  const focusedApi={...api,assertState:v=>v};
  return {root,parent,child,plan,childDir,origin,save,focusedApi};
 }
-test('original authority determines parent UUID, allowing a separately issued newer taxonomy',t=>{
+test('原权限记录决定上级 UUID，新的词表记录不能改写原身份',t=>{
  const f=provenance(t);assert.equal(recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),f.origin);
 });
 test('exact original state hash and source authority cannot be bypassed by rehashing a newer plan',t=>{
@@ -72,7 +72,7 @@ test('re-signed plan cannot change parent member status or source identity',t=>{
 });
 test('promoted-parent recursion checks its own plan and detects a parent cycle',t=>{
  const f=provenance(t);assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi,new Set([f.child.processId])),/cycle/);
- const secondPlan={authority:f.child.authority,fromProcessId:f.child.processId,originalStateSha256:H('child issued state'),sourceImplementationSha256:f.origin,papers:structuredClone(f.plan.papers)};
+ const secondPlan={contract:'conference-source-upgrade-plan-v2',version:2,authority:f.child.authority,fromProcessId:f.child.processId,originalStateSha256:H('child issued state'),sourceImplementationSha256:f.origin,papers:structuredClone(f.plan.papers)};
  f.child.stateSha256=secondPlan.originalStateSha256;f.save(f.child,f.plan);secondPlan.planSha256=H(secondPlan);
  const second={...structuredClone(f.child),processId:api.deterministicUuid(secondPlan.planSha256,'conference-source-upgrade-process-v1'),sourceUpgradePromotion:{originalProcessId:f.child.processId,sourceImplementationSha256:f.origin,planSha256:secondPlan.planSha256}};
  const dir=f.save(second,secondPlan);assert.equal(recovery.sourceImplementation(second,dir,f.focusedApi),f.origin);

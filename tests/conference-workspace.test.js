@@ -232,3 +232,47 @@ test('combined diagnostic is read-only in its contract and reports capacity plus
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test('工作区盘点读取实际新版完成凭证，仍不声明已经发布', async t => {
+    const api = require('../scripts/lib/conference-process.js');
+    const engine = require('../scripts/analysis-engine.js');
+    const root = fs.realpathSync(tempRoot());
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const H = api.stableHash;
+    const config = api.deepExecutionConfigIdentity({
+        env: { PAPER_ANALYZER_MODEL: 'offline-model', PAPER_ANALYZER_ENDPOINT: 'https://example.invalid/v1' },
+        analysisConfig: Object.fromEntries(api.DEEP_EXECUTION_LIMIT_FIELDS.map(field =>
+            [field, /Temperature$/.test(field) ? 0.1 : 1000]))
+    });
+    const files = { conferenceProcessDir: path.join(root, 'processes') };
+    const paperId = 'conference:odyssey:2026:conference-paper-id:offline-workspace';
+    const members = [{ paperId, sourceIdentity: 'conference-paper-id:offline-workspace' }];
+    const authority = { conferenceId: 'odyssey-2026', implementationSha256: H('offline implementation'),
+        tagCatalogVersion: 'paper-tag-catalog-v2', tagCatalogSha256: H('offline catalog'),
+        deepExecutionConfig: config };
+    const proof = { manifestSha256: H('page manifest'), contentSha256: H('page content'),
+        pagePath: 'content/posts/offline-workspace.md' };
+    const result = await api.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        files, engine, loadAuthority: () => ({ files, authority, members }),
+        implementationSha256: () => authority.implementationSha256,
+        deepExecutionConfigIdentity: () => config,
+        now: () => '2026-09-12T00:00:00.000Z',
+        prepareShared: async () => ({ planReceiptSha256: H('plan receipt'),
+            sealed: [{ paperId, proof: { textSha256: H('source text') } }] }),
+        processPaper: async () => ({ analysisProof: { analysisSha256: H('analysis') }, pageProof: proof }),
+        aggregate: async () => ({ manifest: { manifestSha256: H('aggregate manifest'),
+            markdownSha256: H('aggregate content'), aggregateId: H('aggregate').slice(0, 32),
+            pagePath: 'content/posts/conference-odyssey-2026.md' } })
+    });
+    const directory = path.join(files.conferenceProcessDir, result.processId);
+    const stateBytes = fs.readFileSync(path.join(directory, 'state.json'));
+    const receiptBytes = fs.readFileSync(path.join(directory, 'completion-receipt.json'));
+    assert.equal(JSON.parse(stateBytes).contract, 'conference-process-v2');
+    assert.equal(JSON.parse(receiptBytes).contract, 'conference-process-completion-receipt-v2');
+    const report = workspace.inspectProcessStates({ processRoot: files.conferenceProcessDir });
+    assert.equal(report.counts.validated_complete, 1);
+    assert.equal(report.counts.invalid, 0);
+    assert.equal(report.processes[0].publicationStatus, 'not_checked');
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'state.json')), stateBytes);
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'completion-receipt.json')), receiptBytes);
+});
