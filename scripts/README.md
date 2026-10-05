@@ -142,7 +142,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/historical-direct-page-staging.js` | Node 库 | 用直接重写所保存的来源、分析和解读正文生成历史单篇私有页面，并核对输入、清单及页面 SHA。采用标题不同的早期预印本时，页首说明它不是会议定稿（camera-ready）；当前稿 PDF 返回 404 而采用同篇旧 `vN` 时，页首说明“当前稿不可用”。 |
 | `lib/historical-direct-aggregate.js` | Node 库 | 根据直接重写记录和页面对应记录重建日汇总、会议汇总及会议任务私有页面，不读取旧正文。页面对应记录 v3 用冻结链接确定任务成员，无论文汇总记录为 `retain-unchanged`，并核验全部历史页面覆盖。`reader-facing-v3` 只按主任务统计热门方向，保留双语链接标题、八维评分、分档、文档类型、arXiv、作者机构与资源状态；采用旧 arXiv `vN` 时，排行榜与条目均显示当前稿不可用和实际官方链接。 |
 | `lib/historical-direct-tag-supplement.js` | Node 库 | 只读核验已完成直接重写的来源、分析与私有页面，按原分类版本提取概念及主角色。补充记录对应历史页面整文件与正文 SHA，保留旧正文和标签，单列失败，不把未完成分析当成已核验结果。 |
-| `lib/historical-source-identity-supplement.js` | Node 库 | 独立核验封存 arXiv 或会议元数据/PDF 的身份及旧页精确 SHA，仅补身份、官方来源和论文版本披露，不生成分类或正文完成证明。 |
+| `lib/historical-source-identity-supplement.js` | Node 库 | 核对封存的 arXiv 或会议来源是否对应论文，并核验原页面 SHA。新记录使用 v2 和 tagStatus；完整旧输出经原摘要和字节核验后可复用。身份记录不能证明分类或正文已经完成。 |
 | `lib/historical-source-tag-assignment.js` | Node 库 | 对尚无有效正式分类的历史页，用编号原文片段选择标签，程序填入逐字引文后再独立审核。模型请求使用公共路由；记录明确区分词表未覆盖、待审和账号耗尽后未处理的论文。 |
 | `lib/source-evidence-snippets.js` | Node 库 | `buildSourceEvidenceSnippets` 按字符预算提取并编号连续原文片段；`fillConceptQuotesFromSnippets` 按模型选择的编号填入原文引文。保留原始空白及 UTF16 位置，拒绝未知编号。 |
 | `lib/source-classification-scheduler.js` | Node 库 | 以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |
@@ -508,6 +508,8 @@ npm run history:source-tags -- --plan ABS --registry ABS --blog ABS --snapshot A
 npm run history:source-identity -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
 npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID --checkpoint ABS [--exclude-paper-ids ID,...]
 ```
+
+来源身份补充的新记录、检查点、总文件和报告使用 `historical-source-identity-supplement-v2`，标签状态字段为 `tagStatus`。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划，再按其原格式复算；全部字节一致才复用，原文件不改写。缺少完整输出、只有旧格式的部分检查点或文件校验失败时，命令停止，应保留原文件并使用新的运行标识。新版部分检查点仍按原续跑规则处理。身份核验不请求模型，也不能代替标签分类或正文审查。
 
 运行保存论文选择集合，以及标签选择响应、独立审核和分类决策的检查点。使用同一 UUID 继续运行时，仍须核对输入；账号用量耗尽后保存编号的部分运行记录，不占用最终产物文件。导出器读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录。报告同时保留失败项和未处理论文，不请求模型。
 
