@@ -15,6 +15,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from tag_catalog import (FACET_IDS, LABEL_MODE_LEGACY, TAG_FLAT_COMPAT_CONTRACT,
+                            LEGACY_TAG_FLAT_COMPAT_CONTRACT,
                             TAG_PROMPT_TEXT_CONTRACT, LEGACY_TAG_PROMPT_TEXT_CONTRACT,
                             build_tag_prompt_text, tag_prompt_text_sha256,
                             active_preferred_labels,
@@ -102,8 +103,10 @@ class RegistryTest(unittest.TestCase):
     def test_flat_hugo_compat_contract_is_versioned(self):
         self.assertEqual(
             TAG_FLAT_COMPAT_CONTRACT,
-            'paper-taxonomy-flat-tags-compat-v1',
+            'paper-tag-flat-tags-v2',
         )
+
+        self.assertEqual(LEGACY_TAG_FLAT_COMPAT_CONTRACT, 'paper-taxonomy-flat-tags-compat-v1')
 
     def test_current_resolution_only_exposes_active_chinese_preferred_labels(self):
         data = registry()

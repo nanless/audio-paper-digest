@@ -360,7 +360,7 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.equal(Object.hasOwn(aggregate.source.sourceGeneration, 'historicalVersions'), false);
     assert.ok(aggregate.members.every(member => !Object.hasOwn(member, 'sourceVersion')));
     assert.doesNotMatch(aggregate.markdown, /当前稿不可用|分析官方历史版本/);
-    assert.match(aggregate.markdown, /paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"/);
+    assert.match(aggregate.markdown, /paper_digest_tags_contract: "paper-tag-flat-tags-v2"/);
     assert.doesNotMatch(aggregate.markdown, /^paper_digest_taxonomy_/m);
     assert.match(aggregate.markdown, /paper_digest_tags_registry_sha256: "[a-f0-9]{64}"/);
     assert.match(aggregate.markdown, /站点标签页同时显示历史标签与新标签/);

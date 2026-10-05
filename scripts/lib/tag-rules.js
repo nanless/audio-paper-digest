@@ -8,7 +8,8 @@ const TAG_PROMPT_TEXT_CONTRACT = 'paper-tag-prompt-text-v2';
 const LEGACY_TAG_PROMPT_TEXT_CONTRACT = 'paper-taxonomy-prompt-projection-v1';
 const TAG_SELECTION_CONTRACT = 'paper-tag-selection-v2';
 const LEGACY_TAG_SELECTION_CONTRACT = 'paper-taxonomy-selection-v1';
-const TAG_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1';
+const TAG_FLAT_COMPAT_CONTRACT = 'paper-tag-flat-tags-v2';
+const LEGACY_TAG_FLAT_COMPAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1';
 const DEFAULT_REGISTRY_PATH = path.resolve(__dirname, '../../config/tag-catalog.json');
 
 // 旧保存记录按其声明核验；当前写入只使用 TAG_SELECTION_CONTRACT。
@@ -221,6 +222,7 @@ module.exports = {
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
     TAG_FLAT_COMPAT_CONTRACT,
+    LEGACY_TAG_FLAT_COMPAT_CONTRACT,
     DEFAULT_REGISTRY_PATH,
     buildTagPromptText,
     isSupportedTagSelectionContract,

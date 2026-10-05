@@ -130,7 +130,7 @@ class HistoricalPageRenderTests(unittest.TestCase):
             'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04',
         })
         self.assertIn('paper_digest_direct_paper_id:', result['markdown'])
-        self.assertIn('paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"', result['markdown'])
+        self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', result['markdown'])
         self.assertIn('paper_digest_primary_method: "Transformer"', result['markdown'])
         self.assertIn('conference:icassp:2026:icassp-arnumber:100', result['markdown'])
         self.assertIn('## 🧭 深度解读', result['markdown'])

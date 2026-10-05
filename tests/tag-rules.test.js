@@ -14,7 +14,8 @@ const {
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
     isSupportedTagSelectionContract,
-    TAG_FLAT_COMPAT_CONTRACT
+    TAG_FLAT_COMPAT_CONTRACT,
+    LEGACY_TAG_FLAT_COMPAT_CONTRACT
 } = require('../scripts/lib/tag-rules.js');
 
 const registryPath = path.resolve(__dirname, '../config/tag-catalog.json');
@@ -30,7 +31,8 @@ test('runtime derives all active preferred labels, roles and compact projection 
     assert.equal(isSupportedTagSelectionContract('paper-tag-selection-v1'), false);
     assert.equal(isSupportedTagSelectionContract(null), false);
     assert.equal(runtime.flatCompatContract, TAG_FLAT_COMPAT_CONTRACT);
-    assert.equal(runtime.flatCompatContract, 'paper-taxonomy-flat-tags-compat-v1');
+    assert.equal(runtime.flatCompatContract, 'paper-tag-flat-tags-v2');
+    assert.equal(LEGACY_TAG_FLAT_COMPAT_CONTRACT, 'paper-taxonomy-flat-tags-compat-v1');
     assert.match(runtime.projectionSha256, /^[a-f0-9]{64}$/);
     assert.ok(runtime.allowedTags.has('#众包评测'));
     assert.ok(runtime.methodTags.has('#众包评测'));

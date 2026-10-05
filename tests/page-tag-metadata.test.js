@@ -8,10 +8,12 @@ const contract = 'paper-taxonomy-flat-tags-compat-v1';
 
 test('页面标签识别支持当前字段及原样旧字段，不读取正文中的字段', () => {
     for (const family of ['tags', 'taxonomy']) {
-        const bytes = page(`paper_digest_${family}_contract: "${contract}"`);
-        const original = Buffer.from(bytes);
-        assert.equal(hasPageTagMetadata(bytes), true);
-        assert.deepEqual(bytes, original);
+        for (const version of ['paper-tag-flat-tags-v2', contract]) {
+            const bytes = page(`paper_digest_${family}_contract: "${version}"`);
+            const original = Buffer.from(bytes);
+            assert.equal(hasPageTagMetadata(bytes), true);
+            assert.deepEqual(bytes, original);
+        }
     }
     assert.equal(hasPageTagMetadata(page('title: Old page')), false);
     assert.equal(hasPageTagMetadata(Buffer.from(`---\ntitle: Old page\n---\npaper_digest_tags_contract: "${contract}"\n`)), false);
@@ -30,7 +32,7 @@ test('页面新旧标签字段不能混用，包括等值、null 和带引号的
 });
 
 test('页面标签格式标识须完整匹配，缺少或未知标识仍可进入旧页面补充', () => {
-    for (const value of ['null', 'paper-taxonomy-flat-tags-compat-v1-other', '"paper-taxonomy-flat-tags-compat-v1 trailing"']) {
+    for (const value of ['null', 'paper-tag-flat-tags-v3', 'paper-taxonomy-flat-tags-compat-v1-other', '"paper-taxonomy-flat-tags-compat-v1 trailing"']) {
         assert.equal(hasPageTagMetadata(page(`paper_digest_tags_contract: ${value}`)), false);
     }
     assert.equal(hasPageTagMetadata(page('paper_digest_tags_concepts: []')), false);

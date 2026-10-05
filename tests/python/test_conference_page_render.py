@@ -97,6 +97,20 @@ class ConferencePageRenderTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '标签选择记录与分析阶段记录'):
                 MODULE.render_packet(bad)
 
+    def test_flat_tag_protocol_reads_legacy_assignment_and_only_writes_current_page(self):
+        for contract in (MODULE.LEGACY_TAG_FLAT_COMPAT_CONTRACT, MODULE.FLAT_TAG_CONTRACT):
+            packet = self.packet()
+            packet['taxonomy']['flatCompatContract'] = contract
+            original = copy.deepcopy(packet)
+            page = MODULE.render_packet(packet)['markdown']
+            self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', page)
+            self.assertEqual(packet, original)
+        for contract in (None, '', 'unknown'):
+            packet = self.packet()
+            packet['taxonomy']['flatCompatContract'] = contract
+            with self.assertRaisesRegex(ValueError, '标签选择记录与分析阶段记录'):
+                MODULE.render_packet(packet)
+
     def test_tag_metadata_packet_matches_legacy_and_rejects_both_fields(self):
         legacy = self.packet()
         original = copy.deepcopy(legacy)
@@ -229,7 +243,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertNotIn('paper_digest_arxiv_id', result['markdown'])
         self.assertNotIn('arxiv.org', result['markdown'].lower())
         self.assertIn('表格、公式与 Figure 均不可用', result['markdown'])
-        self.assertIn('paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"', result['markdown'])
+        self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', result['markdown'])
         self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v3"', result['markdown'])
         self.assertIn('paper_digest_api_reader_source_binding_contract: "api-reader-source-bindings-v4"', result['markdown'])
         self.assertIn('paper_digest_api_reader_decision_projection: "api-reader-decision-projection-v2"', result['markdown'])

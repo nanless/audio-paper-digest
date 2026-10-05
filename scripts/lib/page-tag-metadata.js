@@ -1,12 +1,12 @@
 'use strict';
 
 const YAML = require('yaml');
+const { TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT } = require('./tag-rules.js');
 
 const PAGE_TAG_FIELD_SUFFIXES = ['contract', 'selection_contract', 'registry_version',
     'registry_sha256', 'concepts', 'scope'];
 const PAGE_TAG_FIELDS = PAGE_TAG_FIELD_SUFFIXES.map(suffix => `paper_digest_tags_${suffix}`);
 const LEGACY_PAGE_TAG_FIELDS = PAGE_TAG_FIELD_SUFFIXES.map(suffix => `paper_digest_taxonomy_${suffix}`);
-const FLAT_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1';
 
 function hasPageTagMetadata(bytes) {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -23,7 +23,8 @@ function hasPageTagMetadata(bytes) {
     const legacy = LEGACY_PAGE_TAG_FIELDS.some(key => fields.has(key));
     if (current && legacy) throw new Error('页面不能同时包含新旧标签字段。');
     if (!current && !legacy) return false;
-    return fields.get(current ? 'paper_digest_tags_contract' : 'paper_digest_taxonomy_contract') === FLAT_CONTRACT;
+    const contract = fields.get(current ? 'paper_digest_tags_contract' : 'paper_digest_taxonomy_contract');
+    return [TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT].includes(contract);
 }
 
 module.exports = { PAGE_TAG_FIELDS, LEGACY_PAGE_TAG_FIELDS, hasPageTagMetadata };

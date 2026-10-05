@@ -15,7 +15,8 @@ from urllib.parse import quote, urlsplit
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
-from tag_catalog import TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT
+from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
+                         TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT)
 from runtime_guard import require_external_runtime
 
 
@@ -27,7 +28,7 @@ READER_CONTRACT = 'beginner-researcher-v3'
 SOURCE_BINDINGS_CONTRACT = 'api-reader-source-bindings-v4'
 SCORING_CONTRACT = 'api-scoring-audit-v2'
 PUBLICATION_CONTRACT = 'conference-official-publication-v1'
-FLAT_TAG_CONTRACT = 'paper-taxonomy-flat-tags-compat-v1'
+FLAT_TAG_CONTRACT = TAG_FLAT_COMPAT_CONTRACT
 SOURCE_URL_NORMALIZATION_CONTRACT = 'paper-source-repository-url-normalization-v1'
 CONFERENCE_IMAGE_BASE_URL = os.environ.get(
     'PAPER_DIGEST_IMAGE_BASE_URL',
@@ -560,7 +561,7 @@ def render_packet(packet):
     tag_contract = ((manifest or {}).get('contracts') or {}).get(tag_record['contractKey'])
     selection_contract = tag_stage.get('selectionContract') if tag_record['format'] == 'current' else tag_contract
     supported_selection_contracts = (LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT)
-    if assignment.get('flatCompatContract') != FLAT_TAG_CONTRACT \
+    if assignment.get('flatCompatContract') not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_CONTRACT) \
             or (tag_record['format'] == 'current' and tag_contract != TAG_STAGE_RECORD_CONTRACT) \
             or assignment.get('selectionContract') not in supported_selection_contracts \
             or selection_contract not in supported_selection_contracts \
@@ -623,7 +624,7 @@ def render_packet(packet):
              f'paper_digest_api_reader_resource_count: {len(resources)}',
              'paper_digest_api_reader_decision_projection: "api-reader-decision-projection-v2"',
              f'paper_digest_scoring_contract: "{SCORING_CONTRACT}"',
-             f'paper_digest_tags_contract: "{assignment["flatCompatContract"]}"',
+             f'paper_digest_tags_contract: "{FLAT_TAG_CONTRACT}"',
              f'paper_digest_tags_selection_contract: "{assignment["selectionContract"]}"',
              f'paper_digest_tags_registry_version: "{assignment["registryVersion"]}"',
              f'paper_digest_tags_registry_sha256: "{assignment["registrySha256"]}"',

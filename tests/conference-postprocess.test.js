@@ -144,7 +144,7 @@ test('会议页面生成会核对完成记录、论文身份和标签，并按�
     assert.equal(result.status, 'staged'); assert.equal(result.manifest.paperId, f.runs.get(f.one).run.paperId);
     assert.equal(result.manifest.identity.kind, 'conference'); assert.equal(result.manifest.identity.arxivId, null);
     assert.equal(result.manifest.identity.source.status, 'official');
-    assert.equal(result.manifest.taxonomy.flatCompatContract, 'paper-taxonomy-flat-tags-compat-v1');
+    assert.equal(result.manifest.taxonomy.flatCompatContract, 'paper-tag-flat-tags-v2');
     assert.equal(result.manifest.readerContract, 'beginner-researcher-v3');
     assert.equal(result.manifest.sourceBindingsContract, 'api-reader-source-bindings-v4');
     assert.equal(result.manifest.scoringContract, 'api-scoring-audit-v2');
@@ -283,7 +283,7 @@ test('production Node stage invokes the generic Python renderer without an arXiv
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, dependencies);
     assert.match(result.markdown, /paper_digest_paper_id: "conference:icassp:2026:icassp-arnumber:101"/);
     assert.match(result.markdown, /表格、公式与 Figure 均不可用/);
-    assert.match(result.markdown, /paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"/);
+    assert.match(result.markdown, /paper_digest_tags_contract: "paper-tag-flat-tags-v2"/);
     assert.doesNotMatch(result.markdown, /^paper_digest_taxonomy_/m);
     assert.match(result.markdown, /paper_digest_api_reader_contract: "beginner-researcher-v3"/);
     assert.match(result.markdown, /paper_digest_api_reader_source_binding_contract: "api-reader-source-bindings-v4"/);
@@ -333,6 +333,52 @@ test('aggregate replays every selected stage and emits only when the full explic
     fs.appendFileSync(path.join(secondStage.directory, 'page.md'), 'drift');
     assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /会议暂存的分类记录、页面或清单与当前分析结果、词表和生成程序的输出不一致/);
+});
+
+test('会议新汇总固定使用 v2，保留旧成员原始分配及页面证明并拒未知协议', t => {
+    const tagRulesApi = require('../scripts/lib/tag-rules.js');
+    const stageMembers = (f, firstContract) => {
+        const stagingRoot = path.join(f.root, 'preserved-staging'), preservedStages = {}, originals = new Map();
+        for (const executionId of [f.one, f.two]) {
+            const createTagRules = tagRulesApi.createTagRules;
+            let staged;
+            try {
+                // 模拟旧 writer 的默认值，让实际生成器直接保存旧记录；读取时不重新签名。
+                tagRulesApi.createTagRules = options => ({ ...createTagRules(options),
+                    flatCompatContract: executionId === f.one ? firstContract : tagRulesApi.TAG_FLAT_COMPAT_CONTRACT });
+                staged = api.stagePaper({ analysisRoot: 'ignored', executionId, tagCatalogPath: TAG_CATALOG_PATH,
+                    stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+            } finally { tagRulesApi.createTagRules = createTagRules; }
+            const manifest = staged.manifest;
+            preservedStages[executionId] = { paperId: manifest.paperId, pageProof: {
+                manifestSha256: manifest.manifestSha256, contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
+            const directory = path.join(stagingRoot, executionId, manifest.taxonomy.registrySha256,
+                manifest.implementation.implementationSha256);
+            for (const name of ['assignment.json', 'manifest.json', 'page.md']) {
+                const file = path.join(directory, name); originals.set(file, fs.readFileSync(file));
+            }
+        }
+        return { stagingRoot, preservedStages, originals };
+    };
+    const f = fixture(t), retained = stageMembers(f, tagRulesApi.LEGACY_TAG_FLAT_COMPAT_CONTRACT);
+    const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two],
+        tagCatalogPath: TAG_CATALOG_PATH, ...retained, aggregateRoot: path.join(f.root, 'aggregate'),
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies);
+    assert.equal(result.manifest.taxonomy.contract, 'paper-tag-flat-tags-v2');
+    assert.match(result.manifest.markdown, /paper_digest_tags_contract: "paper-tag-flat-tags-v2"/);
+    for (const member of result.manifest.members) {
+        const proof = Object.values(retained.preservedStages).find(item => item.paperId === member.paperId).pageProof;
+        assert.equal(member.pageManifestSha256, proof.manifestSha256);
+        assert.equal(member.pageContentSha256, proof.contentSha256);
+        const assignment = [...retained.originals].filter(([file]) => path.basename(file) === 'assignment.json')
+            .map(([, bytes]) => JSON.parse(bytes)).find(item => item.paperId === member.paperId);
+        assert.equal(member.taxonomyAssignmentSha256, assignment.assignmentSha256);
+    }
+    for (const [file, bytes] of retained.originals) assert.deepEqual(fs.readFileSync(file), bytes);
+    const invalid = fixture(t), unknown = stageMembers(invalid, 'paper-tag-flat-tags-unknown');
+    assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [invalid.one, invalid.two],
+        tagCatalogPath: TAG_CATALOG_PATH, ...unknown, aggregateRoot: path.join(invalid.root, 'aggregate'),
+        planHandle: invalid.planHandle, sourceRoot: invalid.sourceRoot }, invalid.dependencies), /标签元数据缺失/);
 });
 
 test('aggregate rejects a selected-member subset and executions from another authenticated plan', t => {
@@ -443,7 +489,7 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
     // 兼容：既有字段一个都不动。
     assert.deepEqual(Object.fromEntries(result.manifest.primaryTaskCounts.map(item => [item.label, item.count])),
         { 语音识别: 2, 音视频语音识别: 1, 唇读: 1 });
-    assert.equal(result.manifest.taxonomy.contract, 'paper-taxonomy-flat-tags-compat-v1');
+    assert.equal(result.manifest.taxonomy.contract, 'paper-tag-flat-tags-v2');
     assert.equal(result.manifest.taxonomy.registrySha256, registry.registrySha256);
     assert.equal(result.manifest.taxonomy.scope, 'aggregate-primary-task-counts');
     assert.equal(result.manifest.registrySha256, registry.registrySha256);

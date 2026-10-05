@@ -82,6 +82,7 @@ from analysis_sections import (
 )
 from tag_catalog import (
     TAG_FLAT_COMPAT_CONTRACT,
+    LEGACY_TAG_FLAT_COMPAT_CONTRACT,
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog,
@@ -3144,12 +3145,15 @@ def export_tag_catalog_files(blog_repo=None):
     return written
 
 
-def build_flat_tag_compat_metadata(parsed, *, required=False):
+def build_flat_tag_compat_metadata(
+        parsed, *, required=False, flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT):
     """保留 Hugo 的 tags 字段，并记录当前词表中标签的含义和层级。
 
     旧记录维护时可以缺少当前标签选择记录；required 为 True 时必须提供有效记录。
     输入声明标签选择有效后，本函数仍按当前词表逐项核对 ID、中文名称、分类维度和主标签角色。
     """
+    if flat_tag_contract not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_COMPAT_CONTRACT):
+        raise PublishDataValidationError('页面标签的格式版本不受支持。')
     try:
         validation = read_tag_validation(parsed)
     except ValueError as error:
@@ -3189,7 +3193,7 @@ def build_flat_tag_compat_metadata(parsed, *, required=False):
             or primary_task_id not in concept_ids or primary_method_id not in concept_ids:
         raise PublishDataValidationError('页面的主任务或主方法不符合对应的分类、中文首选名称或已选概念。')
     return {
-        'contract': FLAT_TAG_COMPAT_CONTRACT,
+        'contract': flat_tag_contract,
         'selectionContract': TAG_SELECTION_CONTRACT,
         'registryVersion': _PAGE_TAG_CATALOG['version'],
         'registrySha256': _PAGE_TAG_CATALOG['registrySha256'],
@@ -3203,13 +3207,14 @@ def build_flat_tag_compat_metadata(parsed, *, required=False):
 
 def build_researcher_workbench_bundle(
         paper, date_str, *, parsed=None, reader_plan=None,
-        api_reader_payload=None, require_reader=False):
-    """Build deterministic page metadata and four same-origin sidecars.
+        api_reader_payload=None, require_reader=False,
+        flat_tag_contract=FLAT_TAG_COMPAT_CONTRACT):
+    """生成论文页的基本信息及四份同站点附属文件。
 
-    Legacy maintenance pages without a reader plan remain readable and do not
-    get relabelled. Modern production pages must set ``require_reader`` and
-    fail closed instead of publishing an incomplete workbench record.
+    缺少导读计划的旧维护页面保持原标签。正式生成须设置 require_reader，资料不完整时停止生成。
     """
+    if flat_tag_contract not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_COMPAT_CONTRACT):
+        raise PublishDataValidationError('页面标签的格式版本不受支持。')
     try:
         read_tag_validation(parsed or paper.get('parsed'))
     except ValueError as error:
@@ -3257,7 +3262,8 @@ def build_researcher_workbench_bundle(
         raw_primary_task.lstrip('#'),
         'researcher workbench primaryTask', maximum=200,
     )
-    tag_metadata = build_flat_tag_compat_metadata(parsed_analysis)
+    tag_metadata = build_flat_tag_compat_metadata(
+        parsed_analysis, flat_tag_contract=flat_tag_contract)
     primary_method = tag_metadata['primaryMethod'] if tag_metadata else None
     rank_bucket = _validated_workbench_text(
         parsed_analysis.get('rankBucket'), 'researcher workbench rankBucket', maximum=100,
@@ -3414,13 +3420,28 @@ def _researcher_workbench_frontmatter(bundle):
     )
 
 
-def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
+def _page_flat_tag_contract(frontmatter):
+    """读取页面声明的标签格式，用于核对原有元数据和附属文件。"""
     tag_field_names = ('contract', 'selection_contract', 'registry_version',
                        'registry_sha256', 'concepts', 'scope')
     has_current_tags = any('paper_digest_tags_' + field in frontmatter for field in tag_field_names)
     has_legacy_tags = any('paper_digest_taxonomy_' + field in frontmatter for field in tag_field_names)
     if has_current_tags and has_legacy_tags:
         raise PublishDataValidationError('页面不能同时包含 paper_digest_tags_* 和旧字段 paper_digest_taxonomy_*。')
+    if not has_current_tags and not has_legacy_tags:
+        return FLAT_TAG_COMPAT_CONTRACT
+    prefix = 'paper_digest_tags_' if has_current_tags else 'paper_digest_taxonomy_'
+    contract = frontmatter.get(prefix + 'contract')
+    if contract not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_COMPAT_CONTRACT):
+        raise PublishDataValidationError('页面标签的格式版本不受支持。')
+    return contract
+
+
+def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
+    flat_tag_contract = _page_flat_tag_contract(frontmatter)
+    has_legacy_tags = any('paper_digest_taxonomy_' + field in frontmatter for field in
+                          ('contract', 'selection_contract', 'registry_version',
+                           'registry_sha256', 'concepts', 'scope'))
     if frontmatter.get('paper_digest_workbench_contract') is None:
         return True
     if frontmatter.get('paper_digest_workbench_contract') != RESEARCHER_WORKBENCH_CONTRACT:
@@ -3437,6 +3458,7 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
     bundle = build_researcher_workbench_bundle(
         paper, date_str, reader_plan=reader_plan,
         api_reader_payload=api_reader_payload, require_reader=True,
+        flat_tag_contract=flat_tag_contract,
     )
     identity = bundle['identity']
     expected = {
@@ -10745,6 +10767,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
     repo = Path(repo or BLOG_REPO).expanduser().resolve()
     paper_ids = set()
     workbench_paper_ids = set()
+    workbench_flat_contracts = {}
     for record in manifest.get('files') or []:
         if not isinstance(record, dict) or record.get('deleted') is True:
             continue
@@ -10755,8 +10778,16 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
         if parts[:2] == ('content', 'posts') and relative.suffix == '.md':
             target = (repo / relative).resolve()
             if not target.is_file():
+                if manifest.get('schemaVersion') == 3:
+                    raise PublishDataValidationError(f'生成清单中的页面内容或删除状态与原记录不一致：{relative}')
                 continue
-            content = target.read_text(encoding='utf-8')
+            raw = target.read_bytes()
+            if manifest.get('schemaVersion') == 3 and (
+                    record.get('deleted') is not False
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(record.get('sha256') or ''))
+                    or hashlib.sha256(raw).hexdigest() != record['sha256']):
+                raise PublishDataValidationError(f'生成清单中的页面内容或删除状态与原记录不一致：{relative}')
+            content = raw.decode('utf-8')
             controlled_prefixes = (
                 f'{BASE_PATH.rstrip("/")}/images/visual-summaries/{date_str}/',
                 f'{BASE_PATH.rstrip("/")}/images/digest-covers/{date_str}/',
@@ -10776,6 +10807,10 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
                     rf'^paper_digest_workbench_contract:\s*"?{re.escape(RESEARCHER_WORKBENCH_CONTRACT)}"?\s*$',
                     content, re.MULTILINE):
                 workbench_paper_ids.add(paper_id)
+                page_frontmatter, _body = _parse_frontmatter_content(relative.as_posix(), content)
+                if paper_id in workbench_flat_contracts:
+                    raise PublishDataValidationError('同一篇论文对应多个页面，无法确定附属文件属于哪个页面。')
+                workbench_flat_contracts[paper_id] = _page_flat_tag_contract(page_frontmatter)
     if not paper_ids:
         raise PublishDataValidationError('生成清单中没有可绑定视觉摘要的论文页')
     if manifest.get('schemaVersion') == 3:
@@ -10819,6 +10854,7 @@ def validate_generation_visual_contract(manifest, date_str, repo=None):
             bundle = build_researcher_workbench_bundle(
                 paper, date_str, reader_plan=reader_plan,
                 api_reader_payload=api_reader_payload, require_reader=True,
+                flat_tag_contract=workbench_flat_contracts[paper_id],
             )
             for relative, raw in bundle['sidecars'].items():
                 relative_text = relative.as_posix()
@@ -11100,14 +11136,21 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
         Path(path).resolve() for path in publish_paths
         if Path(path).is_file() and Path(path).suffix == '.md'
     ]
-    page_urls = {
-        page: {item['url'] for item in parse_markdown_images(page.read_text(encoding='utf-8'))}
-        for page in pages
-    }
+    page_urls = {}
     page_frontmatter = {}
     for page in pages:
+        raw = page.read_bytes()
+        if manifest.get('schemaVersion') == 3:
+            relative = page.relative_to(repo).as_posix()
+            record = manifest_by_path.get(relative)
+            if (not isinstance(record, dict) or record.get('deleted') is not False
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(record.get('sha256') or ''))
+                    or hashlib.sha256(raw).hexdigest() != record['sha256']):
+                raise PublishDataValidationError(f'生成清单中的页面内容或删除状态与原记录不一致：{relative}')
+        content = raw.decode('utf-8')
+        page_urls[page] = {item['url'] for item in parse_markdown_images(content)}
         try:
-            page_frontmatter[page] = _load_frontmatter(page)[0]
+            page_frontmatter[page] = _parse_frontmatter_content(page, content)[0]
         except (OSError, UnicodeError, PublishDataValidationError):
             page_frontmatter[page] = {}
     expected_sidecars = {}
@@ -11125,9 +11168,18 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
             continue
         if not isinstance(reader_plan, dict):
             continue
+        matching_frontmatter = [
+            frontmatter for frontmatter in page_frontmatter.values()
+            if frontmatter.get('paper_digest_workbench_contract') == RESEARCHER_WORKBENCH_CONTRACT
+            and frontmatter.get('paper_digest_arxiv_id') == parse_publish_arxiv_identity(paper.get('arxivId'))['baseId']
+        ]
+        if len(matching_frontmatter) != 1:
+            # 没有唯一对应页面时，不建立期望附属文件；下方仍按原路径记为未通过。
+            continue
         bundle = build_researcher_workbench_bundle(
             paper, date_str, reader_plan=reader_plan,
             api_reader_payload=api_reader_payload, require_reader=True,
+            flat_tag_contract=_page_flat_tag_contract(matching_frontmatter[0]),
         )
         for sidecar_relative, sidecar_raw in bundle['sidecars'].items():
             key = sidecar_relative.as_posix()

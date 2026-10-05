@@ -500,6 +500,7 @@ function loadGeneration(loadedPlan) {
 function reviewProtocolImplementationFiles() {
     return [__filename, require.resolve('./historical-direct-aggregate.js'),
         require.resolve('./page-tag-metadata.js'),
+        require.resolve('./tag-rules.js'),
         path.resolve(__dirname, '../../package-lock.json'),
         require.resolve('./fresh-arxiv-rewrite-source.js'), require.resolve('./historical-direct-rewrite-runner.js'),
         require.resolve('./historical-direct-page-staging.js'),

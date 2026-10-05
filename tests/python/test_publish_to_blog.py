@@ -3083,6 +3083,10 @@ title: "Score rows"
         legacy_frontmatter = {key.replace('paper_digest_tags_', 'paper_digest_taxonomy_', 1)
                               if key.startswith('paper_digest_tags_') else key: value
                               for key, value in frontmatter.items()}
+        legacy_bundle = publish_to_blog.build_researcher_workbench_bundle(
+            paper, '2026-08-31', flat_tag_contract=publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT)
+        legacy_frontmatter['paper_digest_taxonomy_contract'] = publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT
+        legacy_frontmatter['paper_digest_sidecars'] = legacy_bundle['sidecarRecords']
         original_legacy = copy.deepcopy(legacy_frontmatter)
         self.assertTrue(publish_to_blog._validate_researcher_workbench_frontmatter(
             legacy_frontmatter, paper, '2026-08-31'))
@@ -3126,6 +3130,118 @@ title: "Score rows"
             publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
 
+    def test_flat_tag_protocol_preserves_legacy_sidecars_in_real_manifest_and_review(self):
+        paper = llm_api_publication_fixture()
+        paper['parsed'].update({
+            'tags': ['#语音识别', '#Transformer', '#低资源'],
+            'primaryTaskTag': '#语音识别', 'primaryMethodTag': '#Transformer',
+            'tagValidation': {
+                'valid': True, 'errors': [],
+                'registryVersion': publish_to_blog._PAGE_TAG_CATALOG['version'],
+                'registrySha256': publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
+                'primaryTaskId': 'task.asr', 'primaryMethodId': 'method.transformer',
+                'conceptIds': ['task.asr', 'method.transformer', 'setting.low-resource'],
+            },
+        })
+        original_paper = copy.deepcopy(paper)
+        current = publish_to_blog.build_researcher_workbench_bundle(paper, '2026-08-31')
+        legacy = publish_to_blog.build_researcher_workbench_bundle(
+            paper, '2026-08-31', flat_tag_contract=publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT)
+        self.assertEqual(current['tagMetadata']['contract'], 'paper-tag-flat-tags-v2')
+        self.assertEqual(legacy['tagMetadata']['contract'], 'paper-taxonomy-flat-tags-compat-v1')
+        for path, raw in legacy['sidecars'].items():
+            if path.name == 'rethink-context.json':
+                expected = json.loads(current['sidecars'][path])
+                expected['assessment']['taxonomy']['contract'] = publish_to_blog.LEGACY_TAG_FLAT_COMPAT_CONTRACT
+                self.assertEqual(raw, publish_to_blog._json_sidecar_bytes(expected))
+            else:
+                self.assertEqual(raw, current['sidecars'][path])
+        current_page, slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        legacy_page = current_page.replace(
+            'paper_digest_tags_contract: "paper-tag-flat-tags-v2"',
+            'paper_digest_tags_contract: "paper-taxonomy-flat-tags-compat-v1"').replace(
+                current['sidecarRecords']['rethink-context.json']['sha256'],
+                legacy['sidecarRecords']['rethink-context.json']['sha256'])
+        for page_text, bundle in (
+                (current_page, current), (legacy_page, legacy),
+                (current_page.replace('paper_digest_tags_', 'paper_digest_taxonomy_'), current),
+                (legacy_page.replace('paper_digest_tags_', 'paper_digest_taxonomy_'), legacy)):
+            with self.subTest(contract=bundle['tagMetadata']['contract']), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp) / 'blog'
+                page = repo / 'content' / 'posts' / f'2026-08-31-{slug}.md'
+                page.parent.mkdir(parents=True)
+                page.write_text(page_text, encoding='utf-8')
+                paths = [page]
+                for relative, raw in bundle['sidecars'].items():
+                    destination = repo / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(raw)
+                    paths.append(destination)
+                original_bytes = {path: path.read_bytes() for path in paths}
+                frontmatter, _body = publish_to_blog._parse_frontmatter_content(page.name, page_text)
+                self.assertTrue(publish_to_blog._validate_researcher_workbench_frontmatter(
+                    frontmatter, paper, '2026-08-31'))
+                with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                        mock.patch.object(publish_to_blog, 'CURRENT_DIR', Path(tmp) / 'current'), \
+                        publish_to_blog.publication_scope(paper['arxivId']):
+                    manifest_path = publish_to_blog.save_generation_manifest(
+                        '2026-08-31', paths,
+                        input_fingerprint=publish_to_blog.generation_input_fingerprint(
+                            [paper], '2026-08-31', '论文速递', False, paper['arxivId']),
+                        template_fingerprint=publish_to_blog.generation_template_fingerprint(),
+                        base_head='a' * 40, category='论文速递', published_papers=[paper],
+                        publish_all=False, include_id=paper['arxivId'],
+                        publication_mode=publish_to_blog.LLM_API_PRODUCTION_MODE)
+                    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                    self.assertTrue(publish_to_blog.validate_generation_visual_contract(
+                        manifest, '2026-08-31', repo))
+                    results = {str(page.resolve()): {'passed': True,
+                               'reviewedSha256': publish_to_blog._sha256_file(page)}}
+                    self.assertEqual(publish_to_blog.attest_api_reader_assets(
+                        '2026-08-31', paths, manifest_path, results), 0)
+                    self.assertTrue(all(results[str(path.resolve())]['passed'] for path in paths))
+                    with mock.patch.object(publish_to_blog, '_page_flat_tag_contract') as selector:
+                        page.write_text(page_text.replace(
+                            f'"{bundle["tagMetadata"]["contract"]}"', '"unrecognized-tag-format"', 1),
+                            encoding='utf-8')
+                        with self.assertRaisesRegex(PublishDataValidationError, '页面内容或删除状态与原记录不一致'):
+                            publish_to_blog.validate_generation_visual_contract(manifest, '2026-08-31', repo)
+                        with self.assertRaisesRegex(PublishDataValidationError, '页面内容或删除状态与原记录不一致'):
+                            publish_to_blog.attest_api_reader_assets(
+                                '2026-08-31', paths, manifest_path, {}, preflight_only=True)
+                        selector.assert_not_called()
+                        page.write_bytes(original_bytes[page])
+                        original_manifest = manifest_path.read_bytes()
+                        for record in manifest['files']:
+                            if record['path'] == page.relative_to(repo).as_posix():
+                                record.pop('sha256')
+                                break
+                        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding='utf-8')
+                        with self.assertRaisesRegex(PublishDataValidationError, '页面内容或删除状态与原记录不一致'):
+                            publish_to_blog.validate_generation_visual_contract(manifest, '2026-08-31', repo)
+                        with self.assertRaisesRegex(PublishDataValidationError, '页面内容或删除状态与原记录不一致'):
+                            publish_to_blog.attest_api_reader_assets(
+                                '2026-08-31', paths, manifest_path, {}, preflight_only=True)
+                        selector.assert_not_called()
+                        manifest_path.write_bytes(original_manifest)
+                self.assertEqual({path: path.read_bytes() for path in paths}, original_bytes)
+        self.assertEqual(paper, original_paper)
+        for invalid in (None, '', 'unknown', [], {}):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(PublishDataValidationError, '版本不受支持'):
+                publish_to_blog.build_researcher_workbench_bundle(
+                    paper, '2026-08-31', flat_tag_contract=invalid)
+            frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
+            frontmatter['paper_digest_tags_contract'] = invalid
+            with self.assertRaisesRegex(PublishDataValidationError, '版本不受支持'):
+                publish_to_blog._validate_researcher_workbench_frontmatter(frontmatter, paper, '2026-08-31')
+        frontmatter, _body = publish_to_blog._parse_frontmatter_content('paper.md', current_page)
+        old_field_family = {key.replace('paper_digest_tags_', 'paper_digest_taxonomy_', 1)
+                        if key.startswith('paper_digest_tags_') else key: value
+                        for key, value in frontmatter.items()}
+        self.assertTrue(publish_to_blog._validate_researcher_workbench_frontmatter(
+            old_field_family, paper, '2026-08-31'))
+        self.assertEqual(old_field_family['paper_digest_taxonomy_contract'], 'paper-tag-flat-tags-v2')
+
     def test_current_tag_selection_index_counts_only_primary_tasks_as_directions(self):
         first = llm_api_publication_fixture()
         second = copy.deepcopy(first)
@@ -3160,6 +3276,7 @@ title: "Score rows"
         self.assertIn('| #语音合成 | 1 篇 |', direction_table)
         self.assertNotIn('#Transformer', direction_table)
         self.assertIn('站点标签页暂时兼容展示历史标签与新标签', markdown)
+        self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', markdown)
 
     def test_researcher_sidecars_are_deterministic_safe_and_manifest_bound(self):
         paper = llm_api_publication_fixture()

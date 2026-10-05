@@ -899,7 +899,8 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     if (!aggregateTagMetadata || stages.some(item => item.manifest.taxonomy.registrySha256 !== tagCatalog.registrySha256
         || item.manifest.taxonomy.registryVersion !== aggregateTagMetadata.registryVersion
         || item.manifest.taxonomy.selectionContract !== aggregateTagMetadata.selectionContract
-        || item.manifest.taxonomy.flatCompatContract !== aggregateTagMetadata.flatCompatContract)) fail('汇总成员的标签元数据缺失，或词表版本、哈希及标签规则不一致。');
+        || ![tagRulesApi.TAG_FLAT_COMPAT_CONTRACT, tagRulesApi.LEGACY_TAG_FLAT_COMPAT_CONTRACT]
+            .includes(item.manifest.taxonomy.flatCompatContract))) fail('汇总成员的标签元数据缺失，或词表版本、哈希及标签规则不一致。');
     // 所有成员的词表与标签规则一致后，再按其概念 ID 构建层级。directCount 统计
     // 直接使用该概念的论文数；subtreeCount 统计使用该概念或任一后代概念的论文数，
     // 同一篇论文只计一次，不能把下级标签的频次直接相加。
@@ -933,7 +934,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         `tags: ${JSON.stringify(aggregateTags)}`, `categories: ${JSON.stringify([`${conferenceId} 论文`])}`,
         `description: "共收录 ${members.length} 篇 ${conferenceId} 会议论文深度解读"`,
         'paper_digest_page_type: index', `paper_digest_reader_quality: "${READER_FACING_CONTRACT}"`,
-        `paper_digest_tags_contract: "${aggregateTagMetadata.flatCompatContract}"`,
+        `paper_digest_tags_contract: "${tagRulesApi.TAG_FLAT_COMPAT_CONTRACT}"`,
         `paper_digest_tags_selection_contract: "${aggregateTagMetadata.selectionContract}"`,
         `paper_digest_tags_registry_version: "${aggregateTagMetadata.registryVersion}"`,
         `paper_digest_tags_registry_sha256: "${tagCatalog.registrySha256}"`,
@@ -974,7 +975,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         registrySha256: tagCatalog.registrySha256, selectionSetSha256, aggregateImplementationSha256 }).slice(0, 32);
     const body = { contract: AGGREGATE_CONTRACT, version: VERSION, status: 'complete', aggregateId, conferenceId, date: aggregateDate,
         plan: authenticated.proof, readerQuality: READER_FACING_CONTRACT,
-        taxonomy: { contract: aggregateTagMetadata.flatCompatContract, selectionContract: aggregateTagMetadata.selectionContract,
+        taxonomy: { contract: tagRulesApi.TAG_FLAT_COMPAT_CONTRACT, selectionContract: aggregateTagMetadata.selectionContract,
             registryVersion: aggregateTagMetadata.registryVersion, registrySha256: tagCatalog.registrySha256,
             scope: 'aggregate-primary-task-counts' },
         primaryTaskCounts: directions.map(([label, count]) => ({ label, count })),

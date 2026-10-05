@@ -378,6 +378,7 @@ test('deterministic publication review requires one exact top warning for a vers
 test('review protocol fingerprints fresh source, runner and page-staging implementations', () => {
     const names = api.reviewProtocolImplementationFiles().map(filename => path.basename(filename));
     assert.ok(names.includes('page-tag-metadata.js'));
+    assert.ok(names.includes('tag-rules.js'));
     assert.ok(names.includes('package-lock.json'));
     assert.ok(names.includes('fresh-arxiv-rewrite-source.js'));
     assert.ok(names.includes('historical-direct-rewrite-runner.js'));

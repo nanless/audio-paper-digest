@@ -2,7 +2,7 @@
 
 本文记录 [标签设计](tag-system-design.md) 的第一批只读预览实施、当次验收，以及后续生产接入的状态。第一批保持日更、Reader、评分与已发布博客字节不变，交付共享词表、历史标签映射、预览索引和检索工作台。这个阶段没有按原文重新分类，也没有改写旧标签 URL。
 
-后续已经把生产提示词、四行标签契约、标签核验阶段（新记录使用 `tagSelection`）和历史来源分类接入共享词表。新页面采用 `paper-taxonomy-flat-tags-compat-v1`：保留 Hugo `tags`，并记录词表、概念、分面、主任务和主方法。旧页和 URL 没有随预览批量改写，现有标签页明确显示为新旧混合索引。覆盖九个分类维度的网站导航、包含下级概念的上级查询、按原文重新分类全部历史论文及旧 URL 迁移仍需独立实施和验收。
+后续已经把生产提示词、四行标签契约、标签核验阶段（新记录使用 `tagSelection`）和历史来源分类接入共享词表。新页面采用 `paper-tag-flat-tags-v2`：保留 Hugo `tags`，并记录词表、概念、分面、主任务和主方法。旧页和 URL 没有随预览批量改写，现有标签页明确显示为新旧混合索引。覆盖九个分类维度的网站导航、包含下级概念的上级查询、按原文重新分类全部历史论文及旧 URL 迁移仍需独立实施和验收。
 
 当前受跟踪的 `config/tag-catalog.json` 有 262 个概念、9 个分类维度（对应 `facet` 字段），其中任务 108 个、方法 78 个。这是代码仓库配置的静态核对；下文 228 概念及历史页面数量属于原实施记录，不能当作今天的博客统计。
 
@@ -21,7 +21,7 @@
 
 ## 固定协议
 
-词表版本是 `paper-taxonomy-v1`，概念字段为 `id`、`facet`、`preferredLabel{zh,en}`、`aliases`、`broaderId`、`definition`、`scopeNote`、`status` 和 `replacedBy`。九分面为 `task`、`method`、`setting`、`signal`、`application`、`research_focus`、`artifact`、`scientific_topic` 和 `model_family`。v1 每个概念最多一个父级，父级须有效、同分面且不能成环。别名不得把 PEFT 收窄为 LoRA、把数据增强改成预训练，或把说话人识别等同于验证。
+当前词表版本是 `paper-tag-catalog-v2`；明确指定的旧快照仍可按 `paper-taxonomy-v1` 读取。两版字段结构相同，概念字段为 `id`、`facet`、`preferredLabel{zh,en}`、`aliases`、`broaderId`、`definition`、`scopeNote`、`status` 和 `replacedBy`。九分面为 `task`、`method`、`setting`、`signal`、`application`、`research_focus`、`artifact`、`scientific_topic` 和 `model_family`。每个概念最多一个父级，父级须有效、同分面且不能成环。别名不得把 PEFT 收窄为 LoRA、把数据增强改成预训练，或把说话人识别等同于验证。
 
 新生产选择要求有效概念的首选标签、一个显式主任务和一个显式主方法，两个角色都在总计 3–5 个标签中。首选名采用中文，只有 `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` 这 8 个既定英文专名保留原形，每项必须配至少一条中文别名；参见 [设计中的选择规则](tag-system-design.md#1-核心决策) 及第 6.1 节。维护词表时，保留英文首选名称的例外仅限上述八个专名，不能扩大范围。核心加载器检查名称、字段与层级，生产解析器精确匹配已登记的有效首选名；它们没有按汉字或八词清单自动判断首选名语言的检查。
 
@@ -29,7 +29,7 @@
 
 Node 与 Python 的新解析结果只写 `tagValidation`，旧缓存通过集中接口读取，不批量迁移。新旧字段混用时拒绝，旧缓存的评分覆盖仍按原规则核验。解析字段与阶段保存格式独立核验，页面元数据保持。会议实现指纹另记录 Python 解析器源码 SHA，使解析器及兼容读取函数的变化也参与恢复判断；旧凭证不补签。
 
-API 新阶段保存格式使用 `contracts.tagSelectionRecord=paper-tag-stage-record-v2`，阶段与正文检查点都叫 `tagSelection`。新绑定只将标签内容哈希字段改为 `tagSectionAndPrimaryTagsSha256`；旧绑定保留原十三字段及算法，读取旧记录不会重签。集中读取器拒绝双字段和跨格式混用；摘要上游和恢复检查使用对应格式的实际阶段与检查点。新写入、只读检查、注记及显式重新生成的范围见 [脚本说明](../scripts/README.md#标签选择与具体程度)。页面标签协议、历史分配记录及人工流程阶段集合没有连带升级。
+API 新阶段保存格式使用 `contracts.tagSelectionRecord=paper-tag-stage-record-v2`，阶段与正文检查点都叫 `tagSelection`。新绑定只将标签内容哈希字段改为 `tagSectionAndPrimaryTagsSha256`；旧绑定保留原十三字段及算法，读取旧记录不会重签。集中读取器拒绝双字段和跨格式混用；摘要上游和恢复检查使用对应格式的实际阶段与检查点。新写入、只读检查、注记及显式重新生成的范围见 [脚本说明](../scripts/README.md#标签选择与具体程度)。标签阶段保存格式与页面标签协议、历史分配记录及人工流程阶段集合分别核验。
 
 预览版本是 `paper-taxonomy-preview-v1`，绑定词表原始字节 SHA、博客 Git 提交及页面 SHA。每条记录保留原 `tags`、全部 `mappedIds` 和 `unresolvedTags`；只有展示用的 `displayIds` 去除冗余祖先，原始证据不删除。主任务只能来自显式字段，并须唯一解析为任务概念，不能用首标签补齐。
 

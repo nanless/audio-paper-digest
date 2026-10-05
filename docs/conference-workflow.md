@@ -200,7 +200,7 @@ npm run conference:new:process -- --status \
 
 `--concurrency` 默认 1，范围 1–5，覆盖单篇处理生命周期；每篇进入分析引擎时内部并发为 1。相同身份重跑使用同一 UUID，完成论文不再请求模型，未完成论文从原分析检查点继续。只有来源依据、共享分析的完成回执、当前标签及单页清单均通过，论文才 complete；所有成员 complete 后才生成会议汇总及不可覆盖的 `completion-receipt.json`。
 
-分类未能确定时，程序保存 `taxonomy-review-queue.json` 和具体阻断原因。这是单篇待处理条件，不是服务故障，也不能把未解决标签放进可发布汇总。
+分类未能确定时，程序保存 `tag-review-queue.json` 和具体阻断原因。这是单篇待处理条件，不是服务故障，也不能把未解决标签放进可发布汇总。
 
 只有 `--apply` 取得 process 操作锁，`--dry-run` 和 `--status` 只读且不取写锁。程序返回或抛出异常时在 `finally` 释放锁；进程退出遗留的锁只允许安全回收同机已死亡 owner，未知或仍存活 owner 不能擅自清理。逐篇更新另有状态 SHA 比较，禁止把 complete 回退成 analyzing 或 analysis_partial。最终完成事务在锁内重新确认全部成员及回执。
 

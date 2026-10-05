@@ -208,7 +208,7 @@ npm run blog:push -- --date YYYY-MM-DD
 
 远端 OID 和 `digest:status` 中的 `remoteVerified` 只证明 Git 提交已到远端。宣告上线或完成前，须另行确认对应发布提交（或保留本批已审页面字节的后续提交）的 GitHub Pages workflow 已成功 build/deploy，再逐页检查目标日期汇总页和单篇页面的 HTTP 200、正式地址与标题，并保存核验记录。部署失败时读取日志、修复并等待重新部署成功。状态命令尚未自动执行这些上线检查。
 
-标签迁移期间，新发布页面继续写 Hugo 兼容的扁平 `tags`，同时必须保存并核验 `paper-taxonomy-flat-tags-compat-v1`、当前词表的版本与 SHA、逐标签 `concept`/`facet`、`paper_digest_primary_task` 和 `paper_digest_primary_method`。旧页面与旧标签 URL 保持不变。汇总“热门方向”只按显式主任务统计，网页标签总表须说明其中包含新旧两种标签。
+标签迁移期间，新发布页面继续写 Hugo 兼容的扁平 `tags`，同时必须保存并核验 `paper-tag-flat-tags-v2`、当前词表的版本与 SHA、逐标签 `concept`/`facet`、`paper_digest_primary_task` 和 `paper_digest_primary_method`。旧页面与旧标签 URL 保持不变。汇总“热门方向”只按显式主任务统计，网页标签总表须说明其中包含新旧两种标签。
 
 逐页审查通过记录按“相对路径 + 内容 SHA”持久复用，只有该文件的内容 SHA 变化才重审。发布器代码变化时仍要重新渲染页面，以发现真实字节变化。新的页面清单、发布资格证明、模型、发布器代码、审查协议指纹或 Hugo 运行时变化，只要求重跑当前批次的确定性/Hugo 检查并生成新的审查凭证，不得让字节未变的文件重审。博客基线、远端名称、推送 URL 身份或凭证与当前批次不符时，仍须阻断推送。审查不能修改已审页面；修正须回到生成阶段。
 
