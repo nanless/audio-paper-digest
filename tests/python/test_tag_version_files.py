@@ -1,5 +1,7 @@
 """Isolated AST fixtures: no .env, API, daily writes or imported publisher main."""
 import ast
+import base64
+import copy
 import hashlib
 import json
 import os
@@ -86,8 +88,9 @@ class TagVersionFilesTests(unittest.TestCase):
         self.assertEqual(catalog['currentSha256'], 'b'*64)
         self.assertEqual(catalog['snapshots'], [self.old, self.current])
         self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
-        self.assertEqual((self.repo/'data/taxonomy-snapshots'/('a'*64+'.json')).read_bytes(),
-                         (self.repo/'static/data/taxonomy-snapshots'/('a'*64+'.json')).read_bytes())
+        self.assertEqual((self.repo/'data/tag-catalog-history'/('a'*64+'.json')).read_bytes(),
+                         (self.repo/'static/data/tag-catalog-history'/('a'*64+'.json')).read_bytes())
+        self.assertFalse((self.repo / 'data/taxonomy-snapshots').exists())
 
     def test_staging_never_installs_blog_assets(self):
         self.seed()
@@ -125,6 +128,9 @@ class TagVersionFilesTests(unittest.TestCase):
                          'data/../taxonomy-registry.json', 'data\\taxonomy-registry.json'):
             self.assertFalse(self.call('_is_tag_catalog_file_path', relative))
         self.assertTrue(self.call('_is_tag_catalog_file_path', 'data/taxonomy-registry.json'))
+        self.assertTrue(self.call('_is_tag_catalog_file_path', 'data/tag-catalog-history/'+'a'*64+'.json'))
+        self.assertTrue(self.call('_is_tag_catalog_file_path', 'static/data/tag-catalog-history/'+'a'*64+'.json'))
+        self.assertFalse(self.call('_is_tag_catalog_file_path', 'data/tag-catalog-history/not-a-sha.json'))
 
     def test_single_page_cannot_upgrade_global_registry(self):
         self.seed()
@@ -157,9 +163,14 @@ class TagVersionFilesTests(unittest.TestCase):
         self.assertEqual(len(records), 9)
         self.assertEqual(len(captured), 9)
         self.assertTrue(all(not record['delete'] and record['expectedSha256'] for record in records))
+        self.assertTrue(any('/tag-catalog-history/' in record['path'] for record in records))
+        self.assertFalse(any('/taxonomy-snapshots/' in record['path'] for record in records))
         self.call('resume_generation_installation', journal, self.root/'journal.json', posts)
         self.assertTrue(all(record['installed'] for record in records))
         self.assertEqual(json.loads((self.repo/'data/tag-catalog-snapshot.json').read_text()), self.current)
+        before = {record['path']: (self.repo / record['path']).read_bytes() for record in records}
+        self.call('resume_generation_installation', journal, self.root/'journal.json', posts)
+        self.assertEqual({record['path']: (self.repo / record['path']).read_bytes() for record in records}, before)
 
     def test_review_covers_all_bytes_and_detects_tampering(self):
         paths = self.call('export_tag_catalog_files', self.repo)
@@ -204,6 +215,20 @@ class TagVersionFilesTests(unittest.TestCase):
         allowance[relative]['sha256'] = self.env['_sha256_file'](target)
         with self.assertRaises(self.error):
             self.call('validate_manifest_clean_against_head', [target], allowance)
+        # 新目录也必须核归档文件名中的来源 SHA，不能只因记录字节匹配便放行。
+        archive = next(path for path in paths if path.parent.name == 'tag-catalog-history')
+        archive_relative = archive.relative_to(self.repo).as_posix()
+        self.env['_git_relative_manifest'] = lambda paths: [archive_relative]
+        self.env['_run_git'] = lambda *args, **kw: SimpleNamespace(stdout=(f' M {archive_relative}\0').encode())
+        archive_allowance = {archive_relative: {'sha256': self.env['_sha256_file'](archive),
+                                              'controlledTagFiles': True}}
+        self.call('validate_manifest_clean_against_head', [archive], archive_allowance)
+        wrong_source = json.loads(archive.read_bytes())
+        wrong_source['registrySha256'] = 'c'*64
+        archive.write_bytes(self.call('tag_catalog_snapshot_bytes', wrong_source))
+        archive_allowance[archive_relative]['sha256'] = self.env['_sha256_file'](archive)
+        with self.assertRaises(self.error):
+            self.call('validate_manifest_clean_against_head', [archive], archive_allowance)
 
     def test_source_integration_never_exports_before_generation_journal(self):
         tree = ast.parse(SOURCE.read_text())
@@ -247,7 +272,7 @@ class TagVersionFilesTests(unittest.TestCase):
         catalog = json.loads(assets['data/tag-catalog-versions.json'])
         self.assertEqual(catalog['contract'], 'paper-tag-catalog-versions-v2')
         self.assertEqual(catalog['snapshots'][0], self.old)
-        self.assertEqual(json.loads(assets['data/taxonomy-snapshots/'+'a'*64+'.json']), self.old)
+        self.assertEqual(json.loads(assets['data/tag-catalog-history/'+'a'*64+'.json']), self.old)
         self.call('export_tag_catalog_files', self.repo)
         self.assertEqual((self.repo / 'data/taxonomy-registry.json').read_bytes(), original)
         (self.repo / 'static/data/tag-catalog-versions.json').unlink()
@@ -276,6 +301,137 @@ class TagVersionFilesTests(unittest.TestCase):
         self.env['TAG_DISPLAY_POLICY_PATH'].write_text('{}')
         self.assertEqual(self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
             installation={'files': records}), paths)
+
+    def test_原实现生成的两类资产按原路径和字节恢复(self):
+        captured_raw = (Path(__file__).resolve().parents[1] / 'fixtures' /
+                        'tag-catalog-assets/original-display-bundles.json').read_bytes()
+        self.assertEqual(hashlib.sha256(captured_raw).hexdigest(),
+            '2895c3b77443aa1077f5fc00f62fea6159d183ed254e367e30f91e5b4bc273ae')
+        captured = json.loads(captured_raw)
+        self.assertEqual(captured['producerSourceSha256'],
+            '2185883ec8684445dfbb9883680c296ff4b92ff775f31b7077b53ebc068fcadc')
+        self.assertEqual(captured['producerCommit'], 'a8c9e258157d770391d67dbeae9071900acfbbe1')
+        default_formatter = self.env['tag_catalog_file_contents']
+        def forbidden_default(*args, **kwargs):
+            self.fail('恢复原资产不得调用当前默认生成器')
+        for family, bundle in captured['bundles'].items():
+            with self.subTest(family=family):
+                self.repo = self.root / family / 'blog'
+                self.stage = self.root / family / 'stage'
+                self.repo.mkdir(parents=True)
+                self.stage.mkdir()
+                self.env['BLOG_REPO'] = str(self.repo)
+                raw_files = {}
+                for relative, asset in bundle['assets'].items():
+                    raw = base64.b64decode(asset['rawBase64'], validate=True)
+                    self.assertEqual(len(raw), asset['bytes'])
+                    self.assertEqual(hashlib.sha256(raw).hexdigest(), asset['sha256'])
+                    raw_files[relative] = raw
+                    self.write(self.stage / relative, raw)
+                    self.write(self.repo / relative, raw)
+                self.write(self.stage / 'posts/2026-09-30-example.md', b'a page')
+                self.write(self.repo / 'content/posts/2026-09-30-example.md', b'a page')
+                original_installation = copy.deepcopy(bundle['installation'])
+                manifest = copy.deepcopy(bundle['manifest'])
+                self.env.update({'tag_catalog_file_contents': forbidden_default,
+                    '_load_json_object': lambda *args: manifest,
+                    '_file_fingerprint': lambda path: {'deleted': not path.exists(),
+                        'sha256': hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None},
+                    '_save_generation_journal': lambda *args: None})
+                try:
+                    paths = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                        installation=original_installation)
+                    self.assertEqual([path.relative_to(self.stage).as_posix() for path in paths],
+                                     bundle['recoveredPaths'])
+                    self.assertEqual({relative: (self.stage / relative).read_bytes() for relative in raw_files}, raw_files)
+                    journal = {'installation': copy.deepcopy(original_installation)}
+                    self.call('resume_generation_installation', journal, self.root/'journal.json', self.stage/'posts')
+                    self.assertEqual(journal['installation'], original_installation)
+                    results = {}
+                    self.assertEqual(self.call('review_tag_catalog_files', '2026-09-30',
+                        [self.repo / relative for relative in raw_files], self.root/'manifest.json', results), 0)
+                    self.assertEqual({Path(path).relative_to(self.repo).as_posix(): value for path, value in results.items()},
+                                     bundle['reviewResults'])
+                    self.assertEqual({relative: (self.repo / relative).read_bytes() for relative in raw_files}, raw_files)
+                    self.assertFalse((self.repo / 'data/tag-catalog-history').exists())
+                    self.assertEqual(original_installation, bundle['installation'])
+                    self.assertEqual(manifest, bundle['manifest'])
+                finally:
+                    self.env['tag_catalog_file_contents'] = default_formatter
+
+    def test_坏的新归档或缺失副本不能回退到旧目录(self):
+        self.seed()
+        for prefix in ('data', 'static/data'):
+            self.put(f'{prefix}/taxonomy-snapshots/'+ 'a'*64 + '.json', self.old)
+        for defect in ('invalid-json', 'missing-mirror', 'different-mirror-bytes',
+                       'conflicting-object', 'wrong-filename'):
+            with self.subTest(defect=defect):
+                current_root = self.repo / 'data/tag-catalog-history'
+                mirror_root = self.repo / 'static/data/tag-catalog-history'
+                for directory in (current_root, mirror_root):
+                    directory.mkdir(parents=True, exist_ok=True)
+                    for path in directory.iterdir():
+                        path.unlink()
+                raw = self.call('tag_catalog_snapshot_bytes', self.old)
+                if defect == 'invalid-json':
+                    raw = b'{not-json}'
+                elif defect == 'conflicting-object':
+                    changed = copy.deepcopy(self.old)
+                    changed['concepts'][0]['zh'] = '不同名称'
+                    raw = self.call('tag_catalog_snapshot_bytes', changed)
+                filename = ('c' if defect == 'wrong-filename' else 'a') * 64 + '.json'
+                self.write(current_root / filename, raw)
+                if defect != 'missing-mirror':
+                    mirror_raw = ((json.dumps(self.old, ensure_ascii=False, indent=2) + '\n').encode()
+                                  if defect == 'different-mirror-bytes' else raw)
+                    self.write(mirror_root / filename, mirror_raw)
+                with self.assertRaises(self.error):
+                    self.call('prepare_tag_catalog_staged_files', self.stage, self.repo)
+                self.assertEqual(list(self.stage.iterdir()), [])
+                self.assertEqual((self.repo/'data/taxonomy-snapshots'/('a'*64+'.json')).read_bytes(),
+                                 self.call('tag_catalog_snapshot_bytes', self.old))
+
+    def test_暂存资产先核原字节再拒绝混合归档目录(self):
+        self.seed()
+        assets = self.call('tag_catalog_file_contents', self.repo)
+        for relative, raw in assets.items():
+            self.write(self.stage / relative, raw)
+        records = [{'path': relative, 'delete': False, 'stagedRelativePath': relative,
+                    'expectedSha256': hashlib.sha256(raw).hexdigest()} for relative, raw in assets.items()]
+        original = copy.deepcopy(records)
+        record = next(item for item in records if '/tag-catalog-history/' in item['path'])
+        old_relative = record['path'].replace('/tag-catalog-history/', '/taxonomy-snapshots/')
+        source = self.stage / record['path']
+        target = self.stage / old_relative
+        self.write(target, source.read_bytes())
+        source.unlink()
+        record.update(path=old_relative, stagedRelativePath=old_relative)
+        target.write_bytes(b'{not-json}')
+        with self.assertRaisesRegex(self.error, '字节或 SHA 与原记录不一致'):
+            self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                      installation={'files': records})
+        target.write_bytes(assets[original[records.index(record)]['path']])
+        with self.assertRaisesRegex(self.error, '原标签词表文件集合缺少归档目录，或混用了不兼容的归档目录。'):
+            self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                      installation={'files': records})
+
+    def test_旧非选用归档保持原来的对象比较范围(self):
+        raw = (Path(__file__).resolve().parents[1] / 'fixtures' /
+               'tag-catalog-assets/original-display-bundles.json').read_bytes()
+        bundle = json.loads(raw)['bundles']['current-display-old-archive']
+        records = copy.deepcopy(bundle['installation']['files'])
+        for relative, asset in bundle['assets'].items():
+            self.write(self.stage / relative, base64.b64decode(asset['rawBase64']))
+        # 原读取器不要求没有展示策略约束的历史归档使用相同 JSON 排版。
+        relative = 'data/taxonomy-snapshots/' + 'a'*64 + '.json'
+        reformatted = (json.dumps(self.old, ensure_ascii=False, indent=2) + '\n').encode()
+        self.write(self.stage / relative, reformatted)
+        next(item for item in records if item['path'] == relative)['expectedSha256'] = hashlib.sha256(reformatted).hexdigest()
+        paths = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                          installation={'files': records})
+        self.assertEqual(len(paths), 8)
+        self.assertEqual((self.stage / relative).read_bytes(), reformatted)
+        self.assertNotEqual(reformatted, (self.stage / ('static/' + relative)).read_bytes())
 
 if __name__ == '__main__':
     unittest.main()

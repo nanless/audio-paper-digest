@@ -1,0 +1,569 @@
+{
+  "producerSourceSha256": "2185883ec8684445dfbb9883680c296ff4b92ff775f31b7077b53ebc068fcadc",
+  "producerCommit": "a8c9e258157d770391d67dbeae9071900acfbbe1",
+  "qualification": "原发布器通过既有隔离夹具生成；词表、Git边界和日志保存为夹具依赖，不称生产发布凭证。",
+  "bundles": {
+    "legacy-display-old-archive": {
+      "assets": {
+        "data/taxonomy-catalog.json": {
+          "rawBase64": "eyJjb250cmFjdCI6InBhcGVyLXRheG9ub215LXZlcnNpb24tY2F0YWxvZy12MSIsImN1cnJlbnRTaGEyNTYiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwic25hcHNob3RzIjpbeyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuaXp+WumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLml6flkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MSJ9LHsiY29uY2VwdHMiOlt7ImFsaWFzZXMiOltdLCJhbmNlc3RvcklkcyI6W10sImRlZmluaXRpb24iOiLljp/nmbvorrDlrprkuYkiLCJlbiI6Im5ldyIsImZhY2V0IjoidGFzayIsImlkIjoidGFzay5jaGlsZCIsInNjb3BlTm90ZSI6IuWOn+eZu+iusOaOkumZpOivtOaYjiIsInN0YXR1cyI6ImFjdGl2ZSIsInpoIjoi5paw5ZCN5a2XIn1dLCJjb250cmFjdCI6InBhcGVyLXRheG9ub215LXJlZ2lzdHJ5LXNuYXBzaG90LXYxIiwicmVnaXN0cnlTaGEyNTYiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicmVnaXN0cnlWZXJzaW9uIjoidjIifV19Cg==",
+          "sha256": "e5a19b248d25cfcb4d5699ee5da16a3faea59ca53a405f52da2879c3d7545b58",
+          "bytes": 838
+        },
+        "data/taxonomy-registry.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9Cg==",
+          "sha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+          "bytes": 349
+        },
+        "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuaXp+WumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLml6flkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MSJ9Cg==",
+          "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+          "bytes": 343
+        },
+        "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9Cg==",
+          "sha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+          "bytes": 349
+        },
+        "static/data/taxonomy-catalog.json": {
+          "rawBase64": "eyJjb250cmFjdCI6InBhcGVyLXRheG9ub215LXZlcnNpb24tY2F0YWxvZy12MSIsImN1cnJlbnRTaGEyNTYiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwic25hcHNob3RzIjpbeyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuaXp+WumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLml6flkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MSJ9LHsiY29uY2VwdHMiOlt7ImFsaWFzZXMiOltdLCJhbmNlc3RvcklkcyI6W10sImRlZmluaXRpb24iOiLljp/nmbvorrDlrprkuYkiLCJlbiI6Im5ldyIsImZhY2V0IjoidGFzayIsImlkIjoidGFzay5jaGlsZCIsInNjb3BlTm90ZSI6IuWOn+eZu+iusOaOkumZpOivtOaYjiIsInN0YXR1cyI6ImFjdGl2ZSIsInpoIjoi5paw5ZCN5a2XIn1dLCJjb250cmFjdCI6InBhcGVyLXRheG9ub215LXJlZ2lzdHJ5LXNuYXBzaG90LXYxIiwicmVnaXN0cnlTaGEyNTYiOiJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiIiwicmVnaXN0cnlWZXJzaW9uIjoidjIifV19Cg==",
+          "sha256": "e5a19b248d25cfcb4d5699ee5da16a3faea59ca53a405f52da2879c3d7545b58",
+          "bytes": 838
+        },
+        "static/data/taxonomy-registry.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9Cg==",
+          "sha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+          "bytes": 349
+        },
+        "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuaXp+WumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLml6flkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MSJ9Cg==",
+          "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+          "bytes": 343
+        },
+        "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9Cg==",
+          "sha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+          "bytes": 349
+        }
+      },
+      "installation": {
+        "files": [
+          {
+            "path": "content/posts/2026-09-30-example.md",
+            "delete": false,
+            "expectedSha256": "9a8eeff1d0bc6b9b7acf170b1168d6d07f193dc770d4c1864b03e48d775e8d1a",
+            "stagedRelativePath": "posts/2026-09-30-example.md",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "data/taxonomy-catalog.json",
+            "delete": false,
+            "expectedSha256": "e5a19b248d25cfcb4d5699ee5da16a3faea59ca53a405f52da2879c3d7545b58",
+            "stagedRelativePath": "data/taxonomy-catalog.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "data/taxonomy-registry.json",
+            "delete": false,
+            "expectedSha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+            "stagedRelativePath": "data/taxonomy-registry.json",
+            "before": {
+              "deleted": false,
+              "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e"
+            },
+            "installed": true
+          },
+          {
+            "path": "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "delete": false,
+            "expectedSha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+            "stagedRelativePath": "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "delete": false,
+            "expectedSha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+            "stagedRelativePath": "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "static/data/taxonomy-catalog.json",
+            "delete": false,
+            "expectedSha256": "e5a19b248d25cfcb4d5699ee5da16a3faea59ca53a405f52da2879c3d7545b58",
+            "stagedRelativePath": "static/data/taxonomy-catalog.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "static/data/taxonomy-registry.json",
+            "delete": false,
+            "expectedSha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+            "stagedRelativePath": "static/data/taxonomy-registry.json",
+            "before": {
+              "deleted": false,
+              "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e"
+            },
+            "installed": true
+          },
+          {
+            "path": "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "delete": false,
+            "expectedSha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+            "stagedRelativePath": "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "delete": false,
+            "expectedSha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+            "stagedRelativePath": "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          }
+        ]
+      },
+      "manifest": {
+        "files": [
+          {
+            "path": "content/posts/2026-09-30-example.md",
+            "deleted": false,
+            "sha256": "9a8eeff1d0bc6b9b7acf170b1168d6d07f193dc770d4c1864b03e48d775e8d1a"
+          },
+          {
+            "path": "data/taxonomy-catalog.json",
+            "deleted": false,
+            "sha256": "e5a19b248d25cfcb4d5699ee5da16a3faea59ca53a405f52da2879c3d7545b58"
+          },
+          {
+            "path": "data/taxonomy-registry.json",
+            "deleted": false,
+            "sha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c"
+          },
+          {
+            "path": "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "deleted": false,
+            "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e"
+          },
+          {
+            "path": "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "deleted": false,
+            "sha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c"
+          },
+          {
+            "path": "static/data/taxonomy-catalog.json",
+            "deleted": false,
+            "sha256": "e5a19b248d25cfcb4d5699ee5da16a3faea59ca53a405f52da2879c3d7545b58"
+          },
+          {
+            "path": "static/data/taxonomy-registry.json",
+            "deleted": false,
+            "sha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c"
+          },
+          {
+            "path": "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "deleted": false,
+            "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e"
+          },
+          {
+            "path": "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "deleted": false,
+            "sha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c"
+          }
+        ]
+      },
+      "reviewBlocking": 0,
+      "recoveredPaths": [
+        "data/taxonomy-catalog.json",
+        "data/taxonomy-registry.json",
+        "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+        "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+        "static/data/taxonomy-catalog.json",
+        "static/data/taxonomy-registry.json",
+        "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+        "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json"
+      ],
+      "reviewResults": {
+        "data/taxonomy-catalog.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "e5a19b248d25cfcb4d5699ee5da16a3faea59ca53a405f52da2879c3d7545b58",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "data/taxonomy-registry.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "static/data/taxonomy-catalog.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "e5a19b248d25cfcb4d5699ee5da16a3faea59ca53a405f52da2879c3d7545b58",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "static/data/taxonomy-registry.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "21ae4dcdc20843932b7b046e4efff2ee817f8228e00f477ad4fa4cb428ad031c",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        }
+      }
+    },
+    "current-display-old-archive": {
+      "assets": {
+        "data/tag-catalog-snapshot.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGFnLWNhdGFsb2ctc25hcHNob3QtdjIiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9Cg==",
+          "sha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+          "bytes": 343
+        },
+        "data/tag-catalog-versions.json": {
+          "rawBase64": "eyJjb250cmFjdCI6InBhcGVyLXRhZy1jYXRhbG9nLXZlcnNpb25zLXYyIiwiY3VycmVudFNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJzbmFwc2hvdHMiOlt7ImNvbmNlcHRzIjpbeyJhbGlhc2VzIjpbXSwiYW5jZXN0b3JJZHMiOltdLCJkZWZpbml0aW9uIjoi5pen5a6a5LmJIiwiZW4iOiJuZXciLCJmYWNldCI6InRhc2siLCJpZCI6InRhc2suY2hpbGQiLCJzY29wZU5vdGUiOiLljp/nmbvorrDmjpLpmaTor7TmmI4iLCJzdGF0dXMiOiJhY3RpdmUiLCJ6aCI6IuaXp+WQjeWtlyJ9XSwiY29udHJhY3QiOiJwYXBlci10YXhvbm9teS1yZWdpc3RyeS1zbmFwc2hvdC12MSIsInJlZ2lzdHJ5U2hhMjU2IjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInJlZ2lzdHJ5VmVyc2lvbiI6InYxIn0seyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGFnLWNhdGFsb2ctc25hcHNob3QtdjIiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9XX0K",
+          "sha256": "dae8951e81960894a5ffb890053cf5c5250d82be3789332e93e22bf45195d8d6",
+          "bytes": 828
+        },
+        "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuaXp+WumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLml6flkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MSJ9Cg==",
+          "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+          "bytes": 343
+        },
+        "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGFnLWNhdGFsb2ctc25hcHNob3QtdjIiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9Cg==",
+          "sha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+          "bytes": 343
+        },
+        "static/data/tag-catalog-snapshot.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGFnLWNhdGFsb2ctc25hcHNob3QtdjIiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9Cg==",
+          "sha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+          "bytes": 343
+        },
+        "static/data/tag-catalog-versions.json": {
+          "rawBase64": "eyJjb250cmFjdCI6InBhcGVyLXRhZy1jYXRhbG9nLXZlcnNpb25zLXYyIiwiY3VycmVudFNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJzbmFwc2hvdHMiOlt7ImNvbmNlcHRzIjpbeyJhbGlhc2VzIjpbXSwiYW5jZXN0b3JJZHMiOltdLCJkZWZpbml0aW9uIjoi5pen5a6a5LmJIiwiZW4iOiJuZXciLCJmYWNldCI6InRhc2siLCJpZCI6InRhc2suY2hpbGQiLCJzY29wZU5vdGUiOiLljp/nmbvorrDmjpLpmaTor7TmmI4iLCJzdGF0dXMiOiJhY3RpdmUiLCJ6aCI6IuaXp+WQjeWtlyJ9XSwiY29udHJhY3QiOiJwYXBlci10YXhvbm9teS1yZWdpc3RyeS1zbmFwc2hvdC12MSIsInJlZ2lzdHJ5U2hhMjU2IjoiYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInJlZ2lzdHJ5VmVyc2lvbiI6InYxIn0seyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGFnLWNhdGFsb2ctc25hcHNob3QtdjIiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9XX0K",
+          "sha256": "dae8951e81960894a5ffb890053cf5c5250d82be3789332e93e22bf45195d8d6",
+          "bytes": 828
+        },
+        "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuaXp+WumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLml6flkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGF4b25vbXktcmVnaXN0cnktc25hcHNob3QtdjEiLCJyZWdpc3RyeVNoYTI1NiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MSJ9Cg==",
+          "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+          "bytes": 343
+        },
+        "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "rawBase64": "eyJjb25jZXB0cyI6W3siYWxpYXNlcyI6W10sImFuY2VzdG9ySWRzIjpbXSwiZGVmaW5pdGlvbiI6IuWOn+eZu+iusOWumuS5iSIsImVuIjoibmV3IiwiZmFjZXQiOiJ0YXNrIiwiaWQiOiJ0YXNrLmNoaWxkIiwic2NvcGVOb3RlIjoi5Y6f55m76K6w5o6S6Zmk6K+05piOIiwic3RhdHVzIjoiYWN0aXZlIiwiemgiOiLmlrDlkI3lrZcifV0sImNvbnRyYWN0IjoicGFwZXItdGFnLWNhdGFsb2ctc25hcHNob3QtdjIiLCJyZWdpc3RyeVNoYTI1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIiLCJyZWdpc3RyeVZlcnNpb24iOiJ2MiJ9Cg==",
+          "sha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+          "bytes": 343
+        }
+      },
+      "installation": {
+        "files": [
+          {
+            "path": "content/posts/2026-09-30-example.md",
+            "delete": false,
+            "expectedSha256": "9a8eeff1d0bc6b9b7acf170b1168d6d07f193dc770d4c1864b03e48d775e8d1a",
+            "stagedRelativePath": "posts/2026-09-30-example.md",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "data/tag-catalog-snapshot.json",
+            "delete": false,
+            "expectedSha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+            "stagedRelativePath": "data/tag-catalog-snapshot.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "data/tag-catalog-versions.json",
+            "delete": false,
+            "expectedSha256": "dae8951e81960894a5ffb890053cf5c5250d82be3789332e93e22bf45195d8d6",
+            "stagedRelativePath": "data/tag-catalog-versions.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "delete": false,
+            "expectedSha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+            "stagedRelativePath": "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "delete": false,
+            "expectedSha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+            "stagedRelativePath": "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "static/data/tag-catalog-snapshot.json",
+            "delete": false,
+            "expectedSha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+            "stagedRelativePath": "static/data/tag-catalog-snapshot.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "static/data/tag-catalog-versions.json",
+            "delete": false,
+            "expectedSha256": "dae8951e81960894a5ffb890053cf5c5250d82be3789332e93e22bf45195d8d6",
+            "stagedRelativePath": "static/data/tag-catalog-versions.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "delete": false,
+            "expectedSha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+            "stagedRelativePath": "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          },
+          {
+            "path": "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "delete": false,
+            "expectedSha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+            "stagedRelativePath": "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "before": {
+              "deleted": true,
+              "sha256": null
+            },
+            "installed": true
+          }
+        ]
+      },
+      "manifest": {
+        "files": [
+          {
+            "path": "content/posts/2026-09-30-example.md",
+            "deleted": false,
+            "sha256": "9a8eeff1d0bc6b9b7acf170b1168d6d07f193dc770d4c1864b03e48d775e8d1a"
+          },
+          {
+            "path": "data/tag-catalog-snapshot.json",
+            "deleted": false,
+            "sha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58"
+          },
+          {
+            "path": "data/tag-catalog-versions.json",
+            "deleted": false,
+            "sha256": "dae8951e81960894a5ffb890053cf5c5250d82be3789332e93e22bf45195d8d6"
+          },
+          {
+            "path": "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "deleted": false,
+            "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e"
+          },
+          {
+            "path": "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "deleted": false,
+            "sha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58"
+          },
+          {
+            "path": "static/data/tag-catalog-snapshot.json",
+            "deleted": false,
+            "sha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58"
+          },
+          {
+            "path": "static/data/tag-catalog-versions.json",
+            "deleted": false,
+            "sha256": "dae8951e81960894a5ffb890053cf5c5250d82be3789332e93e22bf45195d8d6"
+          },
+          {
+            "path": "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            "deleted": false,
+            "sha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e"
+          },
+          {
+            "path": "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+            "deleted": false,
+            "sha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58"
+          }
+        ]
+      },
+      "reviewBlocking": 0,
+      "recoveredPaths": [
+        "data/tag-catalog-snapshot.json",
+        "data/tag-catalog-versions.json",
+        "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+        "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json",
+        "static/data/tag-catalog-snapshot.json",
+        "static/data/tag-catalog-versions.json",
+        "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+        "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json"
+      ],
+      "reviewResults": {
+        "data/tag-catalog-snapshot.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "data/tag-catalog-versions.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "dae8951e81960894a5ffb890053cf5c5250d82be3789332e93e22bf45195d8d6",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "static/data/tag-catalog-snapshot.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "static/data/tag-catalog-versions.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "dae8951e81960894a5ffb890053cf5c5250d82be3789332e93e22bf45195d8d6",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "static/data/taxonomy-snapshots/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "69d8fc649744cfca2edd5d0f19aa3d50131c6372fe81c77518037a0d8674745e",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        },
+        "static/data/taxonomy-snapshots/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json": {
+          "passed": true,
+          "completed": true,
+          "failureKind": null,
+          "blockingCount": 0,
+          "reviewedSha256": "59bee39d2ad2b7b2905fa4f86028ebcf4b1c05c760a62257707890334464ff58",
+          "imageReviewMode": "deterministic_only",
+          "tagReviewMode": "frozen-version-bytes-v1"
+        }
+      }
+    }
+  }
+}

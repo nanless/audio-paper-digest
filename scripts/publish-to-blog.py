@@ -2940,7 +2940,7 @@ def _historical_tag_prompt_text_sha256(snapshot):
 
 
 def _select_tag_display_version(repo, current, versions, *, legacy=False, approved_raw=None):
-    """按明确的展示策略选择词表版本，不改变单篇论文的签发记录。"""
+    """按明确的展示策略选择词表版本，不改变单篇论文当时保存的记录。"""
     filename = 'taxonomy-presentation-policy.json' if legacy else 'tag-presentation-policy.json'
     relatives = [f'data/{filename}', f'static/data/{filename}']
     def read_regular(relative):
@@ -2996,10 +2996,14 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
         raise PublishDataValidationError('标签展示策略记录的快照 SHA 或提示文本 SHA 与重新计算的结果不一致。')
     if preferred['concepts'][:len(current['concepts'])] != current['concepts']:
         raise PublishDataValidationError('标签展示策略选用的词表修改了已有概念，或改变了它们的顺序；只允许在原列表末尾追加概念。')
-    # Both archived copies and both catalog entries must already carry exactly
-    # this approved snapshot; a policy may not manufacture a missing version.
+    # 新归档目录已存在时，只核新目录；不能用旧目录掩盖缺失或损坏的新副本。
+    archive_name = 'taxonomy-snapshots'
+    if not legacy and any((repo / prefix / 'tag-catalog-history').exists()
+                          or (repo / prefix / 'tag-catalog-history').is_symlink()
+                          for prefix in ('data', 'static/data')):
+        archive_name = 'tag-catalog-history'
     for prefix in ('data', 'static/data'):
-        if read_regular(f'{prefix}/taxonomy-snapshots/{preferred_sha}.json') != raw:
+        if read_regular(f'{prefix}/{archive_name}/{preferred_sha}.json') != raw:
             raise PublishDataValidationError('标签展示策略选用版本的归档副本缺失，或文件内容与对应快照不完全一致。')
         catalog_name = 'taxonomy-catalog.json' if legacy else 'tag-catalog-versions.json'
         catalog = _read_tag_catalog_file(repo, f'{prefix}/{catalog_name}')
@@ -3023,8 +3027,9 @@ def _is_tag_catalog_file_path(relative):
             'data/tag-catalog-versions.json', 'static/data/tag-catalog-versions.json',
             'data/tag-presentation-policy.json', 'static/data/tag-presentation-policy.json'}:
         return True
-    return bool((parts[:2] == ('data', 'taxonomy-snapshots') and len(parts) == 3
-                 or parts[:3] == ('static', 'data', 'taxonomy-snapshots') and len(parts) == 4)
+    archive_names = {'taxonomy-snapshots', 'tag-catalog-history'}
+    return bool((len(parts) == 3 and parts[0] == 'data' and parts[1] in archive_names
+                 or len(parts) == 4 and parts[:2] == ('static', 'data') and parts[2] in archive_names)
                 and re.fullmatch(r'[a-f0-9]{64}\.json', parts[-1]))
 
 
@@ -3129,11 +3134,16 @@ def _read_approved_tag_display_policy():
 
 
 def tag_catalog_file_contents(blog_repo=None):
-    """准备新版显示文件，并保留原签发快照和历史文件的字节。"""
+    """准备新版显示文件和词表归档，保留原快照对象及旧文件的字节。"""
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
     current = _validate_tag_catalog_snapshot(build_tag_catalog_snapshot())
     versions = {}
     archive_bytes = {}
+    new_archive_paths = [repo / prefix / 'tag-catalog-history'
+                         for prefix in ('data', 'static/data')]
+    new_archive_presence = [path.exists() or path.is_symlink() for path in new_archive_paths]
+    if any(new_archive_presence) and not all(new_archive_presence):
+        raise PublishDataValidationError('新版标签词表归档缺少对应的目录副本。')
     def retain(snapshot):
         _validate_tag_catalog_snapshot(snapshot)
         sha = snapshot['registrySha256']
@@ -3168,19 +3178,27 @@ def tag_catalog_file_contents(blog_repo=None):
             if old_display.get('contract') != LEGACY_TAG_CATALOG_SNAPSHOT_CONTRACT:
                 raise PublishDataValidationError('旧标签显示文件的格式版本无效。')
             retain(old_display)
-        archive = repo / prefix / 'taxonomy-snapshots'
-        if archive.exists():
-            if archive.is_symlink() or not archive.is_dir():
-                raise PublishDataValidationError('标签词表归档路径必须是目录，且不得是符号链接。')
-            for target in sorted(archive.iterdir()):
-                if not re.fullmatch(r'[a-f0-9]{64}\.json', target.name):
-                    raise PublishDataValidationError('标签词表归档目录中存在不符合 SHA 文件命名要求的文件。')
-                snapshot = _read_tag_catalog_file(repo, target.relative_to(repo))
-                _validate_tag_catalog_snapshot(snapshot)
-                if target.stem != snapshot['registrySha256']:
-                    raise PublishDataValidationError('标签词表归档文件名中的 SHA 与快照记录不一致。')
-                retain(snapshot)
-                archive_bytes[target.relative_to(repo).as_posix()] = target.read_bytes()
+        for archive_name in ('taxonomy-snapshots', 'tag-catalog-history'):
+            archive = repo / prefix / archive_name
+            if archive.exists() or archive_name == 'tag-catalog-history' and archive.is_symlink():
+                if archive.is_symlink() or not archive.is_dir():
+                    raise PublishDataValidationError('标签词表归档路径必须是目录，且不得是符号链接。')
+                for target in sorted(archive.iterdir()):
+                    if not re.fullmatch(r'[a-f0-9]{64}\.json', target.name):
+                        raise PublishDataValidationError('标签词表归档目录中存在不符合 SHA 文件命名要求的文件。')
+                    snapshot = _read_tag_catalog_file(repo, target.relative_to(repo))
+                    _validate_tag_catalog_snapshot(snapshot)
+                    if target.stem != snapshot['registrySha256']:
+                        raise PublishDataValidationError('标签词表归档文件名中的 SHA 与快照记录不一致。')
+                    retain(snapshot)
+                    if archive_name == 'tag-catalog-history':
+                        archive_bytes[target.relative_to(repo).as_posix()] = target.read_bytes()
+    # 新归档是同一完整文件的两处副本；旧归档仍只按原规则比较对象。
+    for relative, raw in archive_bytes.items():
+        sha_filename = Path(relative).name
+        if any(archive_bytes.get(f'{prefix}/tag-catalog-history/{sha_filename}') != raw
+               for prefix in ('data', 'static/data')):
+            raise PublishDataValidationError('新版标签词表归档缺少对应副本，或两个副本的字节不一致。')
     if any(new_presence):
         displays = [_read_tag_catalog_file(repo, f'{prefix}/tag-catalog-snapshot.json')
                     for prefix in ('data', 'static/data')]
@@ -3204,7 +3222,7 @@ def tag_catalog_file_contents(blog_repo=None):
         assets[f'{prefix}/tag-catalog-snapshot.json'] = tag_catalog_snapshot_bytes(_build_tag_catalog_display_snapshot(display))
         assets[f'{prefix}/tag-catalog-versions.json'] = tag_catalog_snapshot_bytes(catalog)
         for sha, snapshot in sorted(versions.items()):
-            relative = f'{prefix}/taxonomy-snapshots/{sha}.json'
+            relative = f'{prefix}/tag-catalog-history/{sha}.json'
             assets[relative] = archive_bytes.get(relative, tag_catalog_snapshot_bytes(snapshot))
     return assets
 
@@ -3246,6 +3264,11 @@ def _saved_tag_catalog_file_contents(repo, records, *, installation=False):
         raise PublishDataValidationError('标签显示文件不能混用新旧文件集合。')
     if not raw_files:
         return {}
+    archive_names = {Path(relative).parent.name for relative in raw_files
+                     if Path(relative).parent.name in {'taxonomy-snapshots', 'tag-catalog-history'}}
+    if len(archive_names) != 1 or not current and 'tag-catalog-history' in archive_names:
+        raise PublishDataValidationError('原标签词表文件集合缺少归档目录，或混用了不兼容的归档目录。')
+    archive_name = next(iter(archive_names))
     snapshot_name = 'tag-catalog-snapshot.json' if current else 'taxonomy-registry.json'
     catalog_name = 'tag-catalog-versions.json' if current else 'taxonomy-catalog.json'
     policy_name = 'tag-presentation-policy.json' if current else 'taxonomy-presentation-policy.json'
@@ -3292,12 +3315,14 @@ def _saved_tag_catalog_file_contents(repo, records, *, installation=False):
         expected_paths.update(f'{prefix}/{policy_name}' for prefix in ('data', 'static/data'))
     for sha, snapshot in versions.items():
         for prefix in ('data', 'static/data'):
-            relative = f'{prefix}/taxonomy-snapshots/{sha}.json'
+            relative = f'{prefix}/{archive_name}/{sha}.json'
             raw = raw_files.get(relative)
             if raw is None or json.loads(raw.decode('utf-8')) != snapshot:
                 raise PublishDataValidationError('原标签版本目录缺少对应的完整归档副本。')
+            other = raw_files.get(f'static/data/{archive_name}/{sha}.json')
+            if archive_name == 'tag-catalog-history' and raw != other:
+                raise PublishDataValidationError('新版标签词表归档的两个副本字节不一致。')
             if policy_raw is not None and sha == policy['preferredRegistrySha256']:
-                other = raw_files.get(f'static/data/taxonomy-snapshots/{sha}.json')
                 if (hashlib.sha256(raw).hexdigest() != policy['preferredSnapshotSha256']
                         or raw != other):
                     raise PublishDataValidationError('标签展示策略选用版本的归档原字节与批准的快照 SHA 不一致。')
@@ -9161,7 +9186,7 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
                         _validate_tag_version_catalog(payload)
                     else:
                         _validate_tag_catalog_snapshot(payload)
-                        if target.parent.name == 'taxonomy-snapshots' and target.stem != payload['registrySha256']:
+                        if target.parent.name in {'taxonomy-snapshots', 'tag-catalog-history'} and target.stem != payload['registrySha256']:
                             raise PublishDataValidationError('标签词表归档文件名中的 SHA 与快照记录不一致。')
                 except (OSError, ValueError, UnicodeError, PublishDataValidationError):
                     unsafe.append(entry)

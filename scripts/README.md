@@ -395,6 +395,8 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 分配和页面清单仍使用各自原版本。升级后生成新的实现目录，原页面和原证明保留，不通过改写旧字段来沿用旧指纹。
 发布器的模板指纹用 `tagCatalogSha256` 记录词表内容摘要；临时文件许可用 `controlledTagFiles` 标明已核验的词表文件。
 
+博客新生成的词表归档保存在 `data/tag-catalog-history/<SHA>.json` 和 `static/data/tag-catalog-history/<SHA>.json`，两份文件须逐字节相同。原 `taxonomy-snapshots` 只供读取和恢复，保留原路径；已有安装记录先核对完整文件 SHA，再按其保存的文件集合恢复，不调用新生成器补目录。快照对象、来源 SHA、概念顺序及展示策略的六个字段保持，所选归档仍核对批准的原文件字节。详见 [展示词表说明](../docs/tag-display-policy.md)。
+
 当前标签阶段和选择元数据写入 `paper-tag-selection-v2`。读取旧记录时仍接受明确的 `paper-taxonomy-selection-v1`，
 但须按记录原字段和值核验全部绑定；新旧保存格式都可能包含旧选择协议，不能仅凭阶段格式判断选择协议。
 旧格式的合同声明必须与阶段中保存的选择协议一致。重新生成才写新协议，只读核验和词表升级注记不会替换旧协议或重算旧绑定。

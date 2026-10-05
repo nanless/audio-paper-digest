@@ -328,6 +328,11 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertEqual(self.policy['preferredSnapshotSha256'], PREFERRED[self.preferred['registrySha256']][0])
         self.assertEqual(self.policy['preferredProjectionSha256'], PREFERRED[self.preferred['registrySha256']][1])
         self.assertEqual(self.call('export_tag_catalog_files', self.repo), [])
+        relative = 'data/tag-catalog-history/'+self.preferred['registrySha256']+'.json'
+        self.assertIn(self.repo / relative, self.paths)
+        self.assertFalse(any('/taxonomy-snapshots/' in item['path'] for item in self.records))
+        self.assertEqual((self.repo / relative).read_bytes(),
+                         (self.repo/'data/taxonomy-snapshots'/(self.preferred['registrySha256']+'.json')).read_bytes())
         self.env['_PAGE_TAG_CATALOG']['registrySha256'] = '1'*64
         with self.assertRaisesRegex(self.error, '实际签发来源'):
             self.call('tag_catalog_file_contents', self.repo)
@@ -356,6 +361,51 @@ class PresentationPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(self.error, '归档原字节与批准的快照 SHA 不一致'):
             self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
                       installation={'files': records})
+
+    def test_当前归档完整安装和审查只复用保存的原字节(self):
+        self.transaction()
+        records = self.journal['installation']['files']
+        archive_paths = [item['path'] for item in records if '/tag-catalog-history/' in item['path']]
+        self.assertEqual(len(archive_paths), 6)
+        self.assertFalse(any('/taxonomy-snapshots/' in item['path'] for item in records))
+        before = {item['path']: (self.repo / item['path']).read_bytes() for item in records}
+        saved_records = copy.deepcopy(records)
+        def forbidden_default(*args, **kwargs):
+            self.fail('安装恢复和审查不得调用当前默认生成器')
+        self.env['tag_catalog_file_contents'] = forbidden_default
+        paths = self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                          installation=self.journal['installation'])
+        self.assertEqual({path.relative_to(self.stage).as_posix() for path in paths},
+                         {item['path'] for item in records if item['path'].startswith(('data/', 'static/data/'))})
+        self.call('resume_generation_installation', self.journal, self.root/'journal.json', self.posts)
+        self.assertEqual(records, saved_records)
+        self.assertTrue(self.byte_gate())
+        results = {}
+        self.assertEqual(self.call('review_tag_catalog_files', DATE,
+            [self.repo / item['path'] for item in records], self.manifest_path, results), 0)
+        self.assertEqual(len(results), 12)
+        self.assertEqual({item['path']: (self.repo / item['path']).read_bytes() for item in records}, before)
+
+    def test_当前归档先核保存的原字节再核展示策略所选快照(self):
+        self.transaction()
+        sha = self.preferred['registrySha256']
+        relatives = [f'{prefix}/tag-catalog-history/{sha}.json' for prefix in ('data', 'static/data')]
+        raw = (json.dumps(self.preferred, ensure_ascii=False, indent=2) + '\n').encode()
+        records = copy.deepcopy(self.journal['installation']['files'])
+        for relative in relatives:
+            self.write(self.stage / relative, raw)
+        # 原安装 SHA 未更新时，字节不符必须先于策略或 JSON 内容判断。
+        with self.assertRaisesRegex(self.error, '字节或 SHA 与原记录不一致'):
+            self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                      installation={'files': records})
+        for item in records:
+            if item['path'] in relatives:
+                item['expectedSha256'] = hashlib.sha256(raw).hexdigest()
+        # 即使两个副本对象相等且各自记录匹配，批准的首选快照仍绑定原始文件 SHA。
+        with self.assertRaisesRegex(self.error, '归档原字节与批准的快照 SHA 不一致'):
+            self.call('prepare_tag_catalog_staged_files', self.stage, self.repo,
+                      installation={'files': records})
+
 
 if __name__ == '__main__':
     unittest.main()
