@@ -168,7 +168,7 @@ const FILES = {
     // 保存升级前词表的原始字节，文件名使用这些字节的 SHA。
     // 核验标签记录的词表升级时，必须按保存的 SHA 取得旧词表；找不到就拒绝继续。
     tagCatalogHistoryDir: path.join(PROJECT_ROOT, 'config', 'tag-catalog-history'),
-    tagPreviewDir: path.join(DATA_DIR, 'runtime', 'taxonomy-preview'),
+    tagPreviewDir: path.join(DATA_DIR, 'runtime', 'tag-preview'),
     tagRecordUpdateReportDir: path.join(DATA_DIR, 'runtime', 'taxonomy-reseal-reports'),
     tagExplorerAssets: path.join(PROJECT_ROOT, 'web', 'tag-explorer'),
     // 跨日期、跨 Node/Python 的 provider 账号状态。它不是日批次数据，

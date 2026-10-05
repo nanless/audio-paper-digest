@@ -4,7 +4,7 @@ from pathlib import Path
 from path_config import PROJECT_ROOT, DATA_DIR
 
 TAG_CATALOG_FILE = PROJECT_ROOT / 'config' / 'tag-catalog.json'
-TAG_PREVIEW_DIR = DATA_DIR / 'runtime' / 'taxonomy-preview'
+TAG_PREVIEW_DIR = DATA_DIR / 'runtime' / 'tag-preview'
 
 
 def resolve_blog_repo_path(explicit=None):

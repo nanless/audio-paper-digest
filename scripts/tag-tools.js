@@ -8,6 +8,27 @@ const crypto = require('node:crypto');
 const { requireExternalRuntime } = require('./env-loader');
 const Config = require('./config');
 
+const PREVIEW_FORMAT = Object.freeze({
+    bundle: 'paper-tag-preview-bundle-v2', index: 'paper-tag-preview-v2',
+    report: 'paper-tag-migration-report-v2', disposition: 'paper-tag-seven-state-disposition-v2',
+    catalogField: 'tagCatalogVersion', otherCatalogField: 'taxonomyVersion'
+});
+const LEGACY_PREVIEW_FORMAT = Object.freeze({
+    bundle: 'paper-taxonomy-preview-bundle-v1', index: 'paper-taxonomy-preview-v1',
+    report: 'paper-taxonomy-migration-report-v1', disposition: 'paper-taxonomy-seven-state-disposition-v1',
+    catalogField: 'taxonomyVersion', otherCatalogField: 'tagCatalogVersion'
+});
+
+function previewCatalogVersion(value, format) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.hasOwn(value, format.otherCatalogField)
+        || !Object.hasOwn(value, format.catalogField)
+        || typeof value[format.catalogField] !== 'string' || !value[format.catalogField].trim()) {
+        throw new Error('预览的词表版本字段缺失、混用或与格式版本不一致。');
+    }
+    return value[format.catalogField];
+}
+
 function parseArgs(args) {
     const [command, ...rest] = args;
     if (!['validate', 'serve'].includes(command)) throw new Error('Use tags:validate or tags:serve [--port 8766]');
@@ -38,10 +59,8 @@ function readPreviewBundle(indexPath, tagCatalog) {
     const manifestBytes = readSafeFile(manifestPath);
     const manifest = JSON.parse(manifestBytes);
     const names = ['index.json', 'migration-report.json', 'tag-disposition.csv'];
-    if (manifest.version !== 'paper-taxonomy-preview-bundle-v1'
-        || manifest.taxonomyVersion !== tagCatalog.version || manifest.registrySha256 !== tagCatalog.registrySha256
-        || !manifest.files || Object.keys(manifest.files).sort().join(',') !== names.slice().sort().join(',')) {
-        throw new Error('Incomplete preview bundle; rerun npm run tags:preview');
+    if (!manifest.files || Object.keys(manifest.files).sort().join(',') !== names.slice().sort().join(',')) {
+        throw new Error('预览文件清单不完整，请重新运行 npm run tags:preview。');
     }
     const files = new Map();
     for (const name of names) {
@@ -51,22 +70,41 @@ function readPreviewBundle(indexPath, tagCatalog) {
         files.set(name, bytes);
     }
     if (!readSafeFile(manifestPath).equals(manifestBytes)) throw new Error('Preview bundle changed while reading');
+    const format = manifest.version === PREVIEW_FORMAT.bundle ? PREVIEW_FORMAT
+        : manifest.version === LEGACY_PREVIEW_FORMAT.bundle ? LEGACY_PREVIEW_FORMAT : null;
+    if (!format) throw new Error('预览文件清单的格式版本不受支持。');
     const snapshot = JSON.parse(files.get('index.json'));
-    if (snapshot.source?.commit !== manifest.source?.commit
-        || snapshot.source?.pagesSha256 !== manifest.source?.pagesSha256
-        || !/^[a-f0-9]{40,64}$/.test(String(manifest.source?.commit || ''))
-        || !/^[a-f0-9]{64}$/.test(String(manifest.source?.pagesSha256 || ''))) throw new Error('Preview source binding differs');
+    const report = JSON.parse(files.get('migration-report.json'));
+    const dispositionRecords = [snapshot.summary, report.summary, report];
+    const hasDisposition = dispositionRecords.map(value => value != null && Object.hasOwn(value, 'dispositionSchema'));
+    const summaryObjects = snapshot.summary !== null && typeof snapshot.summary === 'object' && !Array.isArray(snapshot.summary)
+        && report.summary !== null && typeof report.summary === 'object' && !Array.isArray(report.summary);
+    const earlyLegacyBundle = format === LEGACY_PREVIEW_FORMAT && summaryObjects
+        && hasDisposition.every(present => !present);
+    if (snapshot.version !== format.index || report.version !== format.report
+        || !summaryObjects
+        || (!earlyLegacyBundle && (!hasDisposition.every(Boolean)
+            || dispositionRecords.some(value => value.dispositionSchema !== format.disposition)))) {
+        throw new Error('预览索引、报告和标签处理方式的格式版本不一致。');
+    }
+    for (const value of [manifest, snapshot, report]) {
+        if (previewCatalogVersion(value, format) !== tagCatalog.version
+            || value.registrySha256 !== tagCatalog.registrySha256) {
+            throw new Error('预览绑定的词表版本或 SHA 已变化，请重新运行 npm run tags:preview。');
+        }
+        if (value.source?.commit !== manifest.source?.commit
+            || value.source?.pagesSha256 !== manifest.source?.pagesSha256
+            || !/^[a-f0-9]{40,64}$/.test(String(manifest.source?.commit || ''))
+            || !/^[a-f0-9]{64}$/.test(String(manifest.source?.pagesSha256 || ''))) {
+            throw new Error('预览绑定的博客提交或页面 SHA 不一致。');
+        }
+    }
     return files.get('index.json');
 }
 
 function loadAssets({ indexPath, assetDir, tagCatalog }) {
     const data = readPreviewBundle(indexPath, tagCatalog);
     const snapshot = JSON.parse(data.toString('utf8'));
-    if (snapshot.version !== 'paper-taxonomy-preview-v1'
-        || snapshot.taxonomyVersion !== tagCatalog.version
-        || snapshot.registrySha256 !== tagCatalog.registrySha256) {
-        throw new Error('Preview registry changed; rerun npm run tags:preview');
-    }
     require('../web/tag-explorer/app.js').validateSnapshot(snapshot);
     return new Map([
         ['/', { type: 'text/html; charset=utf-8', bytes: readSafeFile(path.join(assetDir, 'index.html')) }],
@@ -116,8 +154,8 @@ function main(argv = process.argv.slice(2)) {
     const server = createPreviewServer(assets);
     server.on('error', error => { console.error(`Preview failed: ${error.message}`); process.exitCode = 1; });
     server.listen(options.port, '127.0.0.1', () => {
-        console.log(`标签映射预览（不是正式语义重标）: http://127.0.0.1:${options.port}/`);
-        console.log('只读快照；按 Ctrl+C 停止。不提供本机AI、下载代办或其他本机助手服务。');
+        console.log(`标签预览：http://127.0.0.1:${options.port}/`);
+        console.log('此预览只核对已有标签，不会重新给论文分类。按 Ctrl+C 停止。');
     });
     const stop = () => { server.close(); server.closeIdleConnections(); };
     process.once('SIGINT', stop); process.once('SIGTERM', stop);

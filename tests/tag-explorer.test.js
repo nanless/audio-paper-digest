@@ -26,11 +26,19 @@ function paper(recordId, ids, unknown = []) {
 }
 function data() {
     return { version: 'paper-taxonomy-preview-v1', taxonomyVersion: 'v1', registrySha256: sha,
-        source: {}, summary: {}, concepts, papers: [
+        source: {}, summary: { dispositionSchema: 'paper-taxonomy-seven-state-disposition-v1' }, concepts, papers: [
             paper('a', ['task.asr', 'method.lora', 'setting.low']),
             paper('b', ['task.tts', 'method.lora']), paper('c', ['task.asr'], ['稀有旧词']),
             paper('d', [], ['未知领域'])
         ] };
+}
+function currentData() {
+    const input = data();
+    input.version = 'paper-tag-preview-v2';
+    input.tagCatalogVersion = input.taxonomyVersion;
+    delete input.taxonomyVersion;
+    input.summary.dispositionSchema = 'paper-tag-seven-state-disposition-v2';
+    return input;
 }
 test('parent selection includes all descendant papers; OR within and AND across facets', () => {
     const index = validateIndex(data());
@@ -113,8 +121,32 @@ test('page markup is accessible and implementation does not inject source HTML',
     assert.match(html, /for="search"/); assert.match(html, /历史标签映射预览/);
 });
 test('server validation shares the same strict snapshot contract', () => {
-    const input = data(); assert.equal(validateSnapshot(input), input);
-    input.registrySha256 = 'broken'; assert.throws(() => validateSnapshot(input));
+    for (const input of [data(), currentData()]) {
+        const original = JSON.stringify(input);
+        assert.equal(validateSnapshot(input), input);
+        assert.equal(JSON.stringify(input), original);
+        input.registrySha256 = 'broken'; assert.throws(() => validateSnapshot(input));
+    }
+});
+test('preview catalog fields and disposition schema must match the declared generation', () => {
+    for (const makeInput of [data, currentData]) {
+        for (const value of [null, 'v1']) {
+            const input = makeInput();
+            input[input.version === 'paper-tag-preview-v2' ? 'taxonomyVersion' : 'tagCatalogVersion'] = value;
+            assert.throws(() => validateSnapshot(input));
+        }
+        const wrongField = makeInput();
+        const current = wrongField.version === 'paper-tag-preview-v2';
+        wrongField[current ? 'taxonomyVersion' : 'tagCatalogVersion'] = 'v1';
+        delete wrongField[current ? 'tagCatalogVersion' : 'taxonomyVersion'];
+        assert.throws(() => validateSnapshot(wrongField));
+        const wrongDisposition = makeInput();
+        wrongDisposition.summary.dispositionSchema = current
+            ? 'paper-taxonomy-seven-state-disposition-v1' : 'paper-tag-seven-state-disposition-v2';
+        assert.throws(() => validateSnapshot(wrongDisposition));
+        wrongDisposition.summary.dispositionSchema = null;
+        assert.throws(() => validateSnapshot(wrongDisposition));
+    }
 });
 function fakeDocument() {
     const nodes = new Map();
@@ -172,4 +204,17 @@ test('valid empty snapshot is distinct from failure and always fetches local ind
     assert.equal(doc.nodes.get('error').hidden, true);
     assert.equal(doc.nodes.get('controls').disabled, false);
     assert.match(doc.nodes.get('empty').textContent, /不包含论文记录/);
+});
+test('both preview generations display the same catalog version and SHA without changing input', async () => {
+    const earlyLegacy=data(); delete earlyLegacy.summary.dispositionSchema;
+    for (const input of [data(), currentData(), earlyLegacy]) {
+        const doc = fakeDocument(), original = JSON.stringify(input);
+        await mount(doc, async () => ({ ok: true, json: async () => input }));
+        assert.equal(doc.nodes.get('error').hidden, true);
+        assert.equal(doc.nodes.get('dataset-meta').textContent,
+            '词表版本 v1 · SHA ' + sha.slice(0, 12) + ' · 历史记录 4');
+        assert.equal(JSON.stringify(input), original);
+        assert.equal(Object.hasOwn(input, input.version === 'paper-tag-preview-v2'
+            ? 'taxonomyVersion' : 'tagCatalogVersion'), false);
+    }
 });

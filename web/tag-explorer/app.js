@@ -5,7 +5,8 @@
     else { root.TagExplorer = api; api.mount(root.document, root.fetch.bind(root)); }
 }(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
-    const VERSION = 'paper-taxonomy-preview-v1';
+    const VERSION = 'paper-tag-preview-v2';
+    const LEGACY_VERSION = 'paper-taxonomy-preview-v1';
     const SHA = /^[a-f0-9]{64}$/;
     const FACETS = { task: '任务', method: '方法', setting: '条件', signal: '研究信号',
         application: '应用', research_focus: '研究重点', artifact: '产物',
@@ -25,10 +26,17 @@
         } catch (_) { return null; }
     }
     function validateIndex(data) {
-        requireValue(object(data) && data.version === VERSION, '版本不受支持');
-        requireValue(typeof data.taxonomyVersion === 'string' && data.taxonomyVersion.trim()
+        requireValue(object(data) && (data.version === VERSION || data.version === LEGACY_VERSION), '版本不受支持');
+        const catalogField = data.version === VERSION ? 'tagCatalogVersion' : 'taxonomyVersion';
+        const otherCatalogField = data.version === VERSION ? 'taxonomyVersion' : 'tagCatalogVersion';
+        requireValue(!Object.hasOwn(data, otherCatalogField) && Object.hasOwn(data, catalogField)
+            && typeof data[catalogField] === 'string' && data[catalogField].trim()
             && SHA.test(data.registrySha256 || ''), '词表版本或 SHA 缺失');
         requireValue(object(data.source) && object(data.summary), '来源摘要缺失');
+        requireValue((data.version === LEGACY_VERSION && !Object.hasOwn(data.summary, 'dispositionSchema'))
+            || (Object.hasOwn(data.summary, 'dispositionSchema') && data.summary.dispositionSchema === (data.version === VERSION
+                ? 'paper-tag-seven-state-disposition-v2' : 'paper-taxonomy-seven-state-disposition-v1')),
+        '标签处理方式与索引格式版本不一致');
         requireValue(Array.isArray(data.concepts) && Array.isArray(data.papers), '概念或论文不是数组');
         const byId = new Map();
         for (const c of data.concepts) {
@@ -204,7 +212,8 @@
                 const response = await fetcher('./index.json', { cache: 'no-store', credentials: 'same-origin' });
                 if (!response.ok) throw new Error('索引请求失败（HTTP ' + response.status + '）');
                 index = validateIndex(await response.json());
-                $('dataset-meta').textContent = '词表 ' + index.taxonomyVersion + ' · registry ' + index.registrySha256.slice(0, 12)
+                const tagCatalogVersion = index.version === VERSION ? index.tagCatalogVersion : index.taxonomyVersion;
+                $('dataset-meta').textContent = '词表版本 ' + tagCatalogVersion + ' · SHA ' + index.registrySha256.slice(0, 12)
                     + ' · 历史记录 ' + index.papers.length;
                 $('controls').disabled = false; renderFacets(); renderResults();
             } catch (error) {

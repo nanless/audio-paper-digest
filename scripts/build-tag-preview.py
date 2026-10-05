@@ -27,15 +27,15 @@ from tag_catalog import (FACET_IDS, LABEL_MODE_LEGACY, ancestors,
 from project_env import build_child_process_env, load_project_env
 from runtime_guard import require_external_runtime
 
-VERSION = 'paper-taxonomy-preview-v1'
-REPORT_VERSION = 'paper-taxonomy-migration-report-v1'
-BUNDLE_VERSION = 'paper-taxonomy-preview-bundle-v1'
+VERSION = 'paper-tag-preview-v2'
+REPORT_VERSION = 'paper-tag-migration-report-v2'
+BUNDLE_VERSION = 'paper-tag-preview-bundle-v2'
 MAX_PAGE_BYTES = 8 * 1024 * 1024
 ARXIV_ID = re.compile(r'\d{4}\.\d{4,5}(?:v[1-9]\d*)?')
 
 # 旧标签的七种处理方式见 docs/tag-system-design.md 5.3。每个旧标签最终须选择一种方式；
 # 尚未选择时 disposition 留空，并保留原标签。
-DISPOSITION_SCHEMA = 'paper-taxonomy-seven-state-disposition-v1'
+DISPOSITION_SCHEMA = 'paper-tag-seven-state-disposition-v2'
 DISPOSITIONS = ('keep', 'alias', 'broader', 'split_review', 'move_facet',
                 'deprecated', 'out_of_scope')
 # 保留旧 CSV 列及含义，只追加新列，方便已有读取程序继续使用。
@@ -501,10 +501,10 @@ def _build_preview_locked(blog_repo, output, tag_catalog_path=None):
         'coverageMeaning': 'literal_registry_mapping_not_semantic_accuracy'
     })
     summary.update(disposition_summary(dispositions))
-    index = {'version': VERSION, 'taxonomyVersion': tag_catalog['version'], 'registrySha256': tag_catalog['registrySha256'],
+    index = {'version': VERSION, 'tagCatalogVersion': tag_catalog['version'], 'registrySha256': tag_catalog['registrySha256'],
              'source': blog_input_snapshot, 'summary': summary, 'facets': tag_catalog['facets'],
              'concepts': tag_catalog['concepts'], 'papers': papers}
-    report = {'version': REPORT_VERSION, 'taxonomyVersion': tag_catalog['version'],
+    report = {'version': REPORT_VERSION, 'tagCatalogVersion': tag_catalog['version'],
               'registrySha256': tag_catalog['registrySha256'], 'source': blog_input_snapshot, 'summary': summary,
               'dispositionSchema': DISPOSITION_SCHEMA, 'dispositionRule': PENDING_RULE,
               'note': '本报告只统计标签名称与词表的字面对照结果，不代表语义分类正确。未取得论文 ID 的记录也不能证明彼此属于不同论文。',
@@ -533,7 +533,7 @@ def _build_preview_locked(blog_repo, output, tag_catalog_path=None):
                      for row in dispositions)
     report_text = json.dumps(report, ensure_ascii=False, indent=2) + '\n'
     csv_output = csv_text.getvalue()
-    preview_file_manifest = {'version': BUNDLE_VERSION, 'taxonomyVersion': tag_catalog['version'],
+    preview_file_manifest = {'version': BUNDLE_VERSION, 'tagCatalogVersion': tag_catalog['version'],
               'registrySha256': tag_catalog['registrySha256'], 'source': blog_input_snapshot,
               'files': {'index.json': sha256(preview_index_json.encode('utf-8')),
                         'migration-report.json': sha256(report_text.encode('utf-8')),

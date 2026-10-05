@@ -314,6 +314,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 ## 分类词表维护说明
 
+标签预览的新索引、报告、文件清单和处置记录使用 `paper-tag-*-v2` 格式，词表版本字段为 `tagCatalogVersion`，默认输出目录为 `data/runtime/tag-preview/`。读取器在核对原文件 SHA 后检查整套版本、词表与来源；旧预览仍按原格式读取，新生成器不会覆盖旧目录中的 v1 文件。预览只核对已有页面的标签，不修改论文库、分析结果或博客。
+
 当前默认词表版本为 `paper-tag-catalog-v2`。Node 的 `loadTagCatalog()`、默认标签规则和 Python 的
 `load_tag_catalog()` 都要求这个版本；显式指定的历史快照仍可读取 `paper-taxonomy-v1`，并按原字节核对 SHA。
 这两个已知版本使用相同的字段结构。版本名称的单向迁移本身不算破坏性变更，但升级说明必须分别对应真实旧快照和当前词表的版本及 SHA。

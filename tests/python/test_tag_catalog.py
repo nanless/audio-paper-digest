@@ -230,6 +230,11 @@ class PreviewBuilderTest(unittest.TestCase):
         page = self.page(tags=['语音任务', 'ASR', '参数高效微调', 'LoRA', 'unknown'])
         self.commit(); before = page.read_bytes()
         result = self.build(); item = result['papers'][0]
+        self.assertEqual(result['version'], 'paper-tag-preview-v2')
+        self.assertEqual(result['tagCatalogVersion'], registry()['version'])
+        self.assertNotIn('taxonomyVersion', result)
+        self.assertEqual(result['summary']['dispositionSchema'], 'paper-tag-seven-state-disposition-v2')
+        self.assertEqual(preview.tag_paths.TAG_PREVIEW_DIR.parts[-2:], ('runtime', 'tag-preview'))
         self.assertEqual(item['tags'], ['语音任务', 'ASR', '参数高效微调', 'LoRA', 'unknown'])
         self.assertEqual(item['mappedIds'], ['task.speech', 'task.asr', 'method.peft', 'method.lora'])
         self.assertEqual(item['displayIds'], ['task.asr', 'method.lora'])
@@ -245,6 +250,14 @@ class PreviewBuilderTest(unittest.TestCase):
         for filename in ('index.json', 'migration-report.json', 'tag-disposition.csv', 'bundle-manifest.json'):
             self.assertEqual(stat.S_IMODE((self.output / filename).stat().st_mode), 0o600)
         bundle = json.loads((self.output / 'bundle-manifest.json').read_text())
+        self.assertEqual(bundle['version'], 'paper-tag-preview-bundle-v2')
+        report = json.loads((self.output / 'migration-report.json').read_text())
+        self.assertEqual(report['version'], 'paper-tag-migration-report-v2')
+        for document in (bundle, report):
+            self.assertEqual(document['tagCatalogVersion'], result['tagCatalogVersion'])
+            self.assertNotIn('taxonomyVersion', document)
+        self.assertEqual(report['dispositionSchema'], 'paper-tag-seven-state-disposition-v2')
+        self.assertEqual(report['summary']['dispositionSchema'], report['dispositionSchema'])
         for name, digest in bundle['files'].items():
             self.assertEqual(hashlib.sha256((self.output / name).read_bytes()).hexdigest(), digest)
 
@@ -379,6 +392,43 @@ class PreviewBuilderTest(unittest.TestCase):
         page.write_text(page.read_text().replace('2609.00002v1', '2609.00001v2'))
         self.commit()
         self.assertEqual(self.build()['papers'][0]['id'], '2609.00001')
+
+    def test_current_preview_rejects_overwriting_legacy_bundle_without_changing_files(self):
+        page = self.page()
+        self.commit()
+        self.build()
+        original_page = page.read_bytes()
+        versions = {'index.json': 'paper-taxonomy-preview-v1',
+                    'migration-report.json': 'paper-taxonomy-migration-report-v1',
+                    'bundle-manifest.json': 'paper-taxonomy-preview-bundle-v1'}
+        for name, version in versions.items():
+            target = self.output / name
+            document = json.loads(target.read_bytes())
+            document['version'] = version
+            document['taxonomyVersion'] = document.pop('tagCatalogVersion')
+            if 'summary' in document:
+                document['summary']['dispositionSchema'] = 'paper-taxonomy-seven-state-disposition-v1'
+            if 'dispositionSchema' in document:
+                document['dispositionSchema'] = 'paper-taxonomy-seven-state-disposition-v1'
+            target.write_text(json.dumps(document, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        manifest_path = self.output / 'bundle-manifest.json'
+        manifest = json.loads(manifest_path.read_bytes())
+        for name in manifest['files']:
+            manifest['files'][name] = hashlib.sha256((self.output / name).read_bytes()).hexdigest()
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        before = {name: ((self.output / name).read_bytes(), stat.S_IMODE((self.output / name).stat().st_mode))
+                  for name in (*manifest['files'], 'bundle-manifest.json')}
+        with self.assertRaisesRegex(ValueError, '已有索引的版本不符合标签预览协议，拒绝覆盖。'):
+            self.build()
+        self.assertEqual({name: ((self.output / name).read_bytes(), stat.S_IMODE((self.output / name).stat().st_mode))
+                          for name in before}, before)
+        self.assertEqual(page.read_bytes(), original_page)
+        new_output = self.root / 'current-preview'
+        current = preview.build_preview(self.repo, new_output, self.registry)
+        self.assertEqual(current['version'], 'paper-tag-preview-v2')
+        self.assertEqual((new_output / 'tag-disposition.csv').read_bytes(), before['tag-disposition.csv'][0])
+        self.assertEqual({name: ((self.output / name).read_bytes(), stat.S_IMODE((self.output / name).stat().st_mode))
+                          for name in before}, before)
 
     def test_interrupted_bundle_write_is_detectable_and_rebuild_recovers(self):
         self.page(); self.commit(); self.build()

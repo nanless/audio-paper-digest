@@ -31,7 +31,7 @@ Node 与 Python 的新解析结果只写 `tagValidation`，旧缓存通过集中
 
 API 新阶段保存格式使用 `contracts.tagSelectionRecord=paper-tag-stage-record-v2`，阶段与正文检查点都叫 `tagSelection`。新绑定只将标签内容哈希字段改为 `tagSectionAndPrimaryTagsSha256`；旧绑定保留原十三字段及算法，读取旧记录不会重签。集中读取器拒绝双字段和跨格式混用；摘要上游和恢复检查使用对应格式的实际阶段与检查点。新写入、只读检查、注记及显式重新生成的范围见 [脚本说明](../scripts/README.md#标签选择与具体程度)。标签阶段保存格式与页面标签协议、历史分配记录及人工流程阶段集合分别核验。
 
-预览版本是 `paper-taxonomy-preview-v1`，绑定词表原始字节 SHA、博客 Git 提交及页面 SHA。每条记录保留原 `tags`、全部 `mappedIds` 和 `unresolvedTags`；只有展示用的 `displayIds` 去除冗余祖先，原始证据不删除。主任务只能来自显式字段，并须唯一解析为任务概念，不能用首标签补齐。
+新预览使用 `paper-tag-preview-v2`，词表版本字段为 `tagCatalogVersion`。报告、文件清单和标签处置格式也使用对应的 v2 标识。读取器先核对三份文件的原字节 SHA，再检查格式、词表和来源是否一致；旧 v1 预览按原字段读取，不能与新格式混用。每条记录保留原 `tags`、全部 `mappedIds` 和 `unresolvedTags`；只有展示用的 `displayIds` 去除冗余祖先，原始证据不删除。主任务只能来自显式字段，并须唯一解析为任务概念，不能用首标签补齐。
 
 预览的三种状态描述字面映射完整度：`legacy_mapped` 表示旧词全部可映射且没有显式主任务异常；`partial` 表示仍有未映射词或显式主任务无法核实；`unresolved` 表示尚无可用映射。三者都不是 `reviewed`，也不证明语义分类正确。缺少标签的页面仍保留记录。已知 arXiv ID 选最新页面为显示代表，并保留重复路径；未知 ID 按路径哈希独立保存，不能把全部显示记录称作唯一论文。
 
@@ -78,7 +78,7 @@ API 新阶段保存格式使用 `contracts.tagSelectionRecord=paper-tag-stage-re
 
 ### 实际验收
 
-旧预览保存的索引、词表与博客提交 SHA 只证明当次输入和结果一致。词表新增或修订后，不能把旧值当作当前生产 SHA；当前值须由严格加载器从 `config/tag-catalog.json` 原始字节重新计算。预览输出位于 `data/runtime/taxonomy-preview/`，包含 `index.json`、`migration-report.json`、`tag-disposition.csv` 和 `bundle-manifest.json`，文件权限为 `0600`。
+旧预览保存的索引、词表与博客提交 SHA 只证明当次输入和结果一致。词表新增或修订后，不能把旧值当作当前生产 SHA；当前值须由严格加载器从 `config/tag-catalog.json` 原始字节重新计算。新预览默认输出到 `data/runtime/tag-preview/`，包含 `index.json`、`migration-report.json`、`tag-disposition.csv` 和 `bundle-manifest.json`，文件权限为 `0600`。旧 `taxonomy-preview` 目录保留；新生成器拒绝覆盖旧格式文件，运行数据保护同时登记新旧目录。
 
 当次数据联验中，ASR 含子节点查询得到 600 条，AV-ASR 得到 4 条；LoRA 的 13 条包含在 PEFT 父查询的 178 条中。未映射或主任务待核筛选得到 1370 条，等于 1044 条部分映射加 326 条尚无映射。30 条显式主任务保留来源，4039 条缺失主任务没有用首标签填补。Edge 成功加载 4069 条真实记录，回归用例覆盖非空渲染、手机与桌面初始折叠及展示去重。
 
