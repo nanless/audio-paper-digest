@@ -450,7 +450,7 @@ function mockLegacyFilter(calls) {
     });
 }
 
-test('原v5生成器的已保存响应在同UUID恢复，不重复请求且不改写原证明', async t => {
+test('原 v5 生成器的已保存响应在同 UUID 恢复，不重复请求且不改写原证明', async t => {
     const service = await serverFixture(t); const originalCalls = [];
     const legacy = mockLegacyFilter(originalCalls);
     const f = fixture(t, service.endpoint, null, 'fixture-filter-model', legacy);
@@ -510,7 +510,7 @@ test('原v5生成器的已保存响应在同UUID恢复，不重复请求且不�
     assert.throws(() => filter.readFilter({ filterRoot: f.dirs.filters, filterId }), /decision artifact replay drifted/);
 });
 
-test('原v5未完成intent无响应时保留未知结果，不重复请求', async t => {
+test('原 v5 未完成 intent 无响应时保留未知结果，不重复请求', async t => {
     const service = await serverFixture(t);
     const originalCalls = [], legacy = mockLegacyFilter(originalCalls);
     const f = fixture(t, service.endpoint, [{ arnumber: '100', title: 'Speech enhancement' }],

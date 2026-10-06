@@ -73,7 +73,7 @@ test('新版执行准备须核验计划，并保存独立版本的权限凭证',
         executionId, now: '2026-09-07T00:00:00.000Z' }).stateSha256, state.stateSha256);
 });
 
-test('旧执行任务在原UUID继续，保留权限文件和已有执行记录', t => {
+test('旧执行任务在原 UUID 继续，保留权限文件和已有执行记录', t => {
     const original = loadOriginalConferenceApis();
     const f = productionPlanFixture(t, { planApi: original.plan });
     const executionRoot = path.join(f.root, 'executions');

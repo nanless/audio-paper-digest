@@ -50,7 +50,7 @@ describe('Reader 明确量级是完整数值，不是可单独替换的后缀', 
         }
     });
 
-    it('代码/公式/逐字引文/URL不改，阿拉伯数字近邻不影响非量级术语', () => {
+    it('代码/公式/逐字引文/URL 不改，阿拉伯数字近邻不影响非量级术语', () => {
         const literal = '`12.5万词与45万对`\n\n\\(24万步与45万对\\)\n\n> 原文：12.5万词与45万对\n\n“200亿参数与45万对”\n\nhttps://example.com/45万对';
         assert.equal(repair(literal), literal);
         assert.equal(repair('三分之一倍频程与3.5倍收益。'), '三分之一倍频程与 3.5 倍收益。');

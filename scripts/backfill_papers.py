@@ -3,7 +3,7 @@ from log_setup import setup_script_logging
 setup_script_logging(__file__)
 
 """
-后台补录：耐限流地抓取所有论文ID并写入 papers.json
+后台补录：耐限流地抓取所有论文 ID 并写入 papers.json
 使用 requests + timeout，避免挂起
 """
 

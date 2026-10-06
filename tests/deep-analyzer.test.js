@@ -1027,7 +1027,7 @@ describe('deep-analyzer 的小节辅助函数', () => {
         assert.strictEqual(classified.scope, 'run');
     });
 
-    it('账号认证错误保持运行级非重试分类而不降级成普通request错误', () => {
+    it('账号认证错误保持运行级非重试分类而不降级成普通 request 错误', () => {
         const { classifyModelRequestError } = require('../scripts/deep-analyzer.js');
         const classified = classifyModelRequestError(Object.assign(new Error('auth failed'), {
             code: 'LLM_ACCOUNT_AUTH_ERROR', scope: 'run'
@@ -3698,7 +3698,7 @@ primary_task_tag: #音视频生成
         ), /关键数字缺少 exact quote\/cell 证据: 0\.48%/);
     });
 
-    it('表格叙事只分隔heading与已有说明，绝不补写比较结论或缺失证据', () => {
+    it('表格叙事只分隔 heading 与已有说明，绝不补写比较结论或缺失证据', () => {
         const { ensureApiReaderTableNarratives, relocateExplicitReaderTableExplanations,
             validateApiReaderTableNarratives } = require('../scripts/deep-analyzer.js');
         const before = '这张表在相同测试集上比较增强前后的信号质量，各行使用相同的评价指标。';
@@ -3912,7 +3912,7 @@ primary_task_tag: #音视频生成
         assert.equal(normalizeReaderProseFormatting(paired, issues), '非引用阈值 0.55；原文“零点五五”。');
     });
 
-    it('三分之一倍频程只在issue精确上下文豁免，普通一倍和错位索引仍阻断', () => {
+    it('三分之一倍频程只在 issue 精确上下文豁免，普通一倍和错位索引仍阻断', () => {
         const { isAllowedReaderNarrativeNumeralIssue, buildApiReaderQualityMetrics,
             normalizeReaderProseFormatting } = require('../scripts/deep-analyzer.js');
         const { validateEditorialQuality } = require('../scripts/editorial-quality.js');
@@ -4160,7 +4160,7 @@ primary_task_tag: #音视频生成
         assert.equal(normalize('建议再跑一次四特征叠加实验。'), '建议再跑 1 次四特征叠加实验。');
     });
 
-    it('2609.02941 TeX颜色前缀只解包明确修饰且保留原字quote、符号和单位', () => {
+    it('2609.02941 TeX 颜色前缀只解包明确修饰且保留原字 quote、符号和单位', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
         const sourceText = 'Original table values:\n\\textcolorblue58.62\n\\textcolorblue62.37\n'
@@ -4218,7 +4218,7 @@ primary_task_tag: #音视频生成
         ), []);
     });
 
-    it('2609.03622 原表小数双写保留完整match，可按原字quote绑定干净值且不猜拆非重复串', () => {
+    it('2609.03622 原表小数双写保留完整 match，可按原字 quote 绑定干净值且不猜拆非重复串', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
         // 这是表 1 里各 DOM 单元格拍平之后的精确内容。
@@ -4254,7 +4254,7 @@ primary_task_tag: #音视频生成
             'Malformed continuation 3.093.093 is not a complete repeated scalar.'), []);
     });
 
-    it('短行quote保留原始空白并在首匹配无效时继续，单位门禁仍区分1与1 s', () => {
+    it('短行 quote 保留原始空白并在首匹配无效时继续，单位门禁仍区分1与1 s', () => {
         const { deriveExactTableSourceQuotes } = require('../scripts/deep-analyzer.js');
         const table = value => `| Value |\n| --- |\n| ${value} |`;
         const indented = '  7\r\n\r\n   Evaluation setup\r\n  reported count\r\n';
@@ -4295,7 +4295,7 @@ primary_task_tag: #音视频生成
         assert.strictEqual(readerSourceQuoteCoversNumericToken('-38.1db', 'The total THD is -38.1.', true), false);
     });
 
-    it('原表下一行英文词不冒充单位，完整seconds与s等价且原有单位跨空白可重放', () => {
+    it('原表下一行英文词不冒充单位，完整 seconds 与 s 等价且原有单位跨空白可重放', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
         const sourceText = 'EARS-WHAM\nNoisy input\n2.092.09\n2.722.72\n2.39\n'
@@ -4327,7 +4327,7 @@ primary_task_tag: #音视频生成
         }
     });
 
-    it('双写恢复保留dB/秒/百分号，禁止裸值借带单位来源或自行补单位', () => {
+    it('双写恢复保留 dB/秒/百分号，禁止裸值借带单位来源或自行补单位', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
         const table = value => `| Metric | Measurement |\n| --- | --- |\n| Checked | ${value} |`;

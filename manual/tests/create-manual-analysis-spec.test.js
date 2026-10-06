@@ -1070,7 +1070,7 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
 
 
 describe('人工分析的论文评价标题', () => {
-    it('新组装使用新标题，保留原review字段和正文', () => {
+    it('新组装使用新标题，保留原 review 字段和正文', () => {
         const record = validRecord();
         const original = JSON.stringify(record);
         const analysis = buildAnalysis({ arxivId: ID, title: 'Evaluation title', authors: ['Test Author'] }, record);

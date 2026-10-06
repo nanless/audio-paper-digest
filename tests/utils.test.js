@@ -1376,7 +1376,7 @@ has_dataset: 否
 
 
 describe('论文评价标题兼容', () => {
-    it('旧正文读取保持字节和SHA，新正文的解析值一致', () => {
+    it('旧正文读取保持字节和 SHA，新正文的解析值一致', () => {
         const crypto = require('node:crypto');
         const { validAnalysisText } = require('./valid-analysis-fixture.js');
         const legacy = validAnalysisText();

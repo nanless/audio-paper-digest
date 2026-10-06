@@ -156,7 +156,7 @@ ${method === undefined ? '' : `主方法标签: ${method}`}
 });
 
 
-test('评价标题的围栏、Unicode空白、CRLF和重复判别在两端一致', () => {
+test('评价标题的围栏、Unicode 空白、CRLF 和重复判别在两端一致', () => {
     const rules = require('../scripts/lib/analysis-section-titles.js');
     const inputs = [
         '## 毒舌点评\n旧评价。\n## 核心摘要\n摘要。',

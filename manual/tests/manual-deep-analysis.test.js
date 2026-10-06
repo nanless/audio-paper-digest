@@ -1126,7 +1126,7 @@ describe('Manual full-text-evidence-v3 读者可见质量检查', () => {
 
 
 describe('旧人工评价记录的读取兼容', () => {
-    it('旧账本章节名保持原值与SHA，重复正文不能通过缓存或Manual入口', () => {
+    it('旧账本章节名保持原值与 SHA，重复正文不能通过缓存或 Manual 入口', () => {
         const fixture = baseSpec();
         const takeover = fixture.manifest.manualTakeover;
         takeover.evidenceLedger.push({ ...takeover.evidenceLedger[0], id: 'E07', section: '毒舌点评' });

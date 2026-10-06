@@ -234,7 +234,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         # 点击首页的"发布图文笔记"大按钮
         clicked = False
         try:
-            # 策略1: 用get_by_text精确匹配并点击
+            # 策略1: 用 get_by_text 精确匹配并点击
             pic_btn = page.get_by_text("发布图文笔记", exact=False)
             if await pic_btn.count() > 0:
                 # 找第一个可见的
@@ -246,7 +246,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                         clicked = True
                         break
             if not clicked:
-                # 策略2: mouse.click强制点击
+                # 策略2: mouse.click 强制点击
                 loc = page.locator('text=发布图文笔记').first
                 if await loc.count() > 0:
                     box = await loc.bounding_box()
@@ -258,7 +258,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
             print(f"[xhs] 点击图文按钮异常: {e}")
 
         if not clicked:
-            # 策略3: evaluate找可点击祖先
+            # 策略3: evaluate 找可点击祖先
             try:
                 result = await page.evaluate('''() => {
                     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
@@ -266,7 +266,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                     while (node = walker.nextNode()) {
                         if (node.textContent.trim() === '发布图文笔记') {
                             let el = node.parentElement;
-                            // 向上找5层，找a/button/可点击div
+                            // 向上找5层，找 a/button/可点击 div
                             for (let i = 0; i < 5; i++) {
                                 if (!el) break;
                                 const tag = el.tagName.toLowerCase();
@@ -285,10 +285,10 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                     }
                     return 'not found';
                 }''')
-                print(f"[xhs] DOM点击图文: {result}")
+                print(f"[xhs] DOM 点击图文: {result}")
                 clicked = True
             except Exception as e2:
-                print(f"[xhs] DOM点击异常: {e2}")
+                print(f"[xhs] DOM 点击异常: {e2}")
 
         await page.wait_for_timeout(3000)
 
@@ -363,7 +363,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         # ── 2. 填写标题 ──
         title_filled = False
         try:
-            # 策略A: 多种CSS选择器
+            # 策略 A: 多种 CSS 选择器
             title_selectors = [
                 'input[placeholder*="标题"]', 'input[placeholder*="填写标题"]',
                 'textarea[placeholder*="标题"]', 'textarea[placeholder*="填写标题"]',
@@ -400,16 +400,16 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                 print(f"[xhs] 标题已填写: {title[:MAX_TITLE_LEN]}")
                 title_filled = True
             else:
-                print("[xhs] ⚠️ 未找到标题输入框（CSS选择器）")
+                print("[xhs] ⚠️ 未找到标题输入框（CSS 选择器）")
         except Exception as e:
             print(f"[xhs] ⚠️ 填写标题失败: {e}")
 
-        # 策略B: 通过evaluate直接操作DOM（兜底）
+        # 策略 B: 通过 evaluate 直接操作 DOM（兜底）
         if not title_filled:
             try:
                 await page.evaluate(f'''
                     (title) => {{
-                        // 方法1: 找placeholder含"标题"的input/textarea
+                        // 方法1: 找 placeholder 含"标题"的 input/textarea
                         const inputs = document.querySelectorAll('input, textarea');
                         for (const el of inputs) {{
                             const ph = el.getAttribute('placeholder') || '';
@@ -420,14 +420,14 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                                 return 'found by placeholder';
                             }}
                         }}
-                        // 方法2: 找maxlength=20的input
+                        // 方法2: 找 maxlength=20的 input
                         const m20 = document.querySelector('input[maxlength="20"]');
                         if (m20) {{
                             m20.value = title;
                             m20.dispatchEvent(new Event('input', {{ bubbles: true }}));
                             return 'found by maxlength';
                         }}
-                        // 方法3: 第一个type=text的input
+                        // 方法3: 第一个 type=text 的 input
                         const firstText = document.querySelector('input[type="text"]');
                         if (firstText) {{
                             firstText.value = title;
@@ -437,15 +437,15 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                         return 'not found';
                     }}
                 ''', title[:MAX_TITLE_LEN])
-                print(f"[xhs] 标题已通过DOM evaluate填写")
+                print(f"[xhs] 标题已通过 DOM evaluate 填写")
                 title_filled = True
             except Exception as e2:
-                print(f"[xhs] ⚠️ DOM evaluate填写标题也失败: {e2}")
+                print(f"[xhs] ⚠️ DOM evaluate 填写标题也失败: {e2}")
 
         # ── 3. 填写正文 ──
         body_filled = False
         try:
-            # 策略A: CSS选择器
+            # 策略 A: CSS 选择器
             body_selectors = [
                 'div[contenteditable="true"]',
                 'div[contenteditable=""]',
@@ -474,11 +474,11 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                 print(f"[xhs] 正文已填写 ({len(body[:MAX_BODY_LEN])} 字)")
                 body_filled = True
             else:
-                print("[xhs] ⚠️ 未找到正文输入框（CSS选择器）")
+                print("[xhs] ⚠️ 未找到正文输入框（CSS 选择器）")
         except Exception as e:
             print(f"[xhs] ⚠️ 填写正文失败: {e}")
 
-        # 策略B: DOM evaluate兜底
+        # 策略 B: DOM evaluate 兜底
         if not body_filled:
             try:
                 await page.evaluate(f'''
@@ -501,7 +501,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                                 return 'found role=textbox';
                             }}
                         }}
-                        // 方法3: 大textarea
+                        // 方法3: 大 textarea
                         const tas = document.querySelectorAll('textarea');
                         for (const el of tas) {{
                             if (el.offsetHeight > 50 || el.getAttribute('maxlength') > 100) {{
@@ -513,10 +513,10 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                         return 'not found';
                     }}
                 ''', body[:MAX_BODY_LEN])
-                print(f"[xhs] 正文已通过DOM evaluate填写")
+                print(f"[xhs] 正文已通过 DOM evaluate 填写")
                 body_filled = True
             except Exception as e2:
-                print(f"[xhs] ⚠️ DOM evaluate填写正文也失败: {e2}")
+                print(f"[xhs] ⚠️ DOM evaluate 填写正文也失败: {e2}")
 
         # 如果都没填上，提示手动复制
         if not title_filled or not body_filled:
@@ -575,11 +575,11 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                 publish_clicked = True
                 await page.wait_for_timeout(5000)
             else:
-                print("[xhs] ⚠️ 未找到发布按钮（CSS选择器）")
+                print("[xhs] ⚠️ 未找到发布按钮（CSS 选择器）")
         except Exception as e:
             print(f"[xhs] ⚠️ 点击发布失败: {e}")
 
-        # 兜底：DOM evaluate找发布按钮
+        # 兜底：DOM evaluate 找发布按钮
         if not publish_clicked:
             try:
                 result = await page.evaluate('''() => {
@@ -593,7 +593,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                     return 'not found';
                 }''')
                 if result == 'clicked':
-                    print("[xhs] ✅ 已通过DOM evaluate点击发布")
+                    print("[xhs] ✅ 已通过 DOM evaluate 点击发布")
                     publish_clicked = True
                     await page.wait_for_timeout(5000)
                 else:
@@ -624,7 +624,7 @@ def parse_xiaohongshu_md(md_path: Path) -> tuple[str, str]:
     """
     text = md_path.read_text(encoding="utf-8")
 
-    # 第一行通常是大标题，如 "✅ 2026-05-01 语音/AI论文速递 | 21篇精选"
+    # 第一行通常是大标题，如 "✅ 2026-05-01 语音/AI 论文速递 | 21篇精选"
     lines = text.strip().split("\n")
     title = ""
     body = text

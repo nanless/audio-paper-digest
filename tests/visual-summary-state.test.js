@@ -165,7 +165,7 @@ describe('modern Reader 视觉来源闭环', () => {
         }
     }
 
-    it('文案/thesis/完整QA段落身份只来自签名Reader，忽略canonical毒化文案及旧选图', () => withReader(reader => {
+    it('文案/thesis/完整 QA 段落身份只来自签名 Reader，忽略 canonical 毒化文案及旧选图', () => withReader(reader => {
         reader.selectedImageUrls = ['https://example.com/poison.png'];
         reader.imageManifest = { selected: reader.selectedImageUrls };
         const context = buildGenerationContext(reader);
@@ -184,7 +184,7 @@ describe('modern Reader 视觉来源闭环', () => {
         assert.equal(Object.hasOwn(context.referenceImages[0], 'pixelSeen'), false);
     }));
 
-    it('canonical文案变化不影响modern来源指纹，签名Reader修订必须改变指纹', () => withReader((reader, sign) => {
+    it('canonical 文案变化不影响 modern 来源指纹，签名 Reader 修订必须改变指纹', () => withReader((reader, sign) => {
         const first = analysisSha256(reader);
         reader.parsed.summary = 'another unsupported summary';
         reader.analysis = 'another canonical body';
@@ -194,7 +194,7 @@ describe('modern Reader 视觉来源闭环', () => {
         assert.notEqual(analysisSha256(reader), first);
     }));
 
-    it('仅投影/QA选择逻辑改变也使旧complete成图失效，Reader和prompt保持原身份', () => withReader((reader, _sign, dir) => {
+    it('仅投影/QA 选择逻辑改变也使旧 complete 成图失效，Reader 和 prompt 保持原身份', () => withReader((reader, _sign, dir) => {
         const Module = require('node:module');
         const filename = require.resolve('../scripts/visual-summary-state.js');
         const source = fs.readFileSync(filename, 'utf8');
@@ -234,7 +234,7 @@ describe('modern Reader 视觉来源闭环', () => {
         } finally { Config.FILES.visualSummaryAssetDir = oldRoot; }
     }));
 
-    it('坏article/plan/figure或像素证据身份均失败关闭，不降级旧文案', () => withReader(reader => {
+    it('坏 article/plan/figure 或像素证据身份均失败关闭，不降级旧文案', () => withReader(reader => {
         for (const mutate of [
             p => { p.apiReaderArticle += 'drift'; },
             p => { p.apiReaderPlan.oneSentenceThesis = 'drift'; },
@@ -246,7 +246,7 @@ describe('modern Reader 视觉来源闭环', () => {
         }
     }));
 
-    it('同签名但错章节映射、私网或跨论文URL及伪cache路径仍拒绝', () => withReader((reader, sign) => {
+    it('同签名但错章节映射、私网或跨论文 URL 及伪 cache 路径仍拒绝', () => withReader((reader, sign) => {
         for (const mutate of [
             p => { p.apiReaderPlan.sections[0].heading += 'drift'; },
             p => { p.apiReaderFigures[0].url = 'https://127.0.0.1/a.png'; },
@@ -258,7 +258,7 @@ describe('modern Reader 视觉来源闭环', () => {
         }
     }));
 
-    it('当前asset字节漂移、叶子及父目录symlink都拒绝', () => withReader((reader, _sign, dir) => {
+    it('当前 asset 字节漂移、叶子及父目录 symlink 都拒绝', () => withReader((reader, _sign, dir) => {
         const file = reader.apiReaderFigures[0].cachePath;
         fs.writeFileSync(file, Buffer.alloc(PNG.length));
         assert.throws(() => selectVisualReferenceImages(reader), /SHA/);
@@ -297,7 +297,7 @@ describe('modern Reader 视觉来源闭环', () => {
         assert.equal(context.sourceIdentity.imageEvidenceCount, reader.apiReaderFigures.length);
     }));
 
-    it('离线prepare仍输出受控绝对PNG路径且保留签名原图身份', () => withReader(reader => {
+    it('离线 prepare 仍输出受控绝对 PNG 路径且保留签名原图身份', () => withReader(reader => {
         const context = buildGenerationContext(reader);
         const manifest = { batchDate: '2026-07-13', papers: { [reader.arxivId]: {
             arxivId: reader.arxivId, rank: 1, title: reader.title,
