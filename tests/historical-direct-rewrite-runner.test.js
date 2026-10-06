@@ -234,9 +234,9 @@ function fixture(t) {
     const catalogSha = sha(Buffer.from(JSON.stringify(catalog)));
     const conferencePageProjections = conferencePageMappingsApi.buildConferencePageMappings({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
     const plan = planner.buildDirectRewritePlan({ catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections });
-    // Most runner tests exercise analysis behavior and therefore start after a
-    // simulated successful scheduler phase. Dedicated prerequisite tests below
-    // remove or alter this self-hashed status explicitly.
+    // 大多数 runner 测试关心的是分析行为，所以都从
+    // 模拟成功的调度阶段之后开始。下面另有专门的前置条件测试，
+    // 会显式删掉或改动这个参与自哈希的状态。
     const sourceRoot = path.join(root, 'runtime', 'fetched-arxiv');
     for (const generation of [1, 2]) {
         directControl.loadOrCreateSourceStatus({ sourceRoot, plan, generation, apply: true,
@@ -485,8 +485,8 @@ test('different-title prior preprint produces an explicit source title, DOI, and
     }), /not the reviewed exception/);
 });
 
-// Use the real current analysis and Reader predicates. This gives direct-runner
-// tests a sealed record without making an LLM/API request.
+// 用真实的当前分析判定和 Reader 判定。这样直连 runner 的测试
+// 不用发 LLM/API 请求，也能拿到一条已保存并核验的记录。
 function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     const paper = validLegacyApiAnalysisPaper('2601.00001');
     const current = validAnalysisPaper('2601.00001');
@@ -943,8 +943,8 @@ test('two direct runners atomically replay after immediately reclaiming one fres
     assert.equal(stageFiles(f.root).length, 1);
 });
 
-// A defaultAnalyze result can contain a per-paper error without throwing. It
-// must still fail the registry/run and must never write an analysis or stage.
+// defaultAnalyze 的返回值可能带着单篇错误而不抛异常。
+// 这种情况仍须让登记和本次运行失败，绝不能写入分析结果或暂存页。
 test('defaultAnalyze incomplete result is failed and never persisted or staged', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {

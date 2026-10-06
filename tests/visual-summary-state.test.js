@@ -215,8 +215,8 @@ describe('modern Reader 视觉来源闭环', () => {
                 ['method: blocks(methods)', 'method: blocks(methods.slice(0, -1))'],
                 ['metricClaims: claims(results)', 'metricClaims: claims(results).slice(0, 1)']
             ]) {
-                // Compile an isolated projection revision in memory, never edit
-                // production source or run a real visual planning operation.
+                // 只在内存里编译一份独立的汇总页版本，
+                // 不改生产源码，也不真的跑视觉规划。
                 assert.ok(source.includes(before));
                 const revised = new Module(filename, module);
                 revised.filename = filename; revised.paths = module.paths;
@@ -661,8 +661,8 @@ describe('visual summary state', () => {
                 preparedManifest.papers['2607.12345'].cards.infographic.taskToken
             );
 
-            // An unrelated manifest generation increment must not invalidate a
-            // per-paper prepared input whose task token and image hashes match.
+            // 清单代次无关地加一，不应让某篇论文已准备好的输入失效——
+            // 只要它的任务令牌和图片哈希都还对得上。
             const unrelatedUpdate = structuredClone(preparedManifest);
             unrelatedUpdate.updatedAt = '2026-07-13T12:00:00+08:00';
             unrelatedUpdate.generation += 1;

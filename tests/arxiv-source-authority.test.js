@@ -72,7 +72,7 @@ function spawnLockHolder(root, id, existingHandlerMarker = null) {
     return { child, ready, stderr: () => stderr };
 }
 
-test('dry-run validates direct identity/name but performs no network or writes', async t => {
+test('预演只校验直连身份和名称，不联网也不写文件', async t => {
     const parent = fixture(t); const root = path.join(parent, 'missing-authority-root'); let calls = 0;
     mockOfficialFetcher(t, async () => { calls++; return source(); });
     const result = await api.prepareArxivSourceAuthority({ authorityRoot: root, arxivId: '2601.00001',
@@ -82,7 +82,7 @@ test('dry-run validates direct identity/name but performs no network or writes',
     assert.throws(() => api.identityFor('2601.00001v2'), /versionless/);
 });
 
-test('apply preserves request/source/snapshot/receipt/authority and recovers without refetching', async t => {
+test('实际执行保留请求、来源、快照、凭证和授权，恢复时不重新抓取', async t => {
     const root = fixture(t); let calls = 0;
     mockOfficialFetcher(t, async id => { calls++; return source(id); });
     const options = { authorityRoot: root, arxivId: '2601.00001', authorityName: 'arxiv-2601.00001.json',
@@ -112,7 +112,7 @@ test('apply preserves request/source/snapshot/receipt/authority and recovers wit
         authorityApi.replayAuthorityHandle(live.authorityHandle, { requireProduction: true })).productionAuthorized, true);
 });
 
-test('recovery resumes after durable request and refuses partial or changed source evidence', async t => {
+test('请求落盘之后才能续跑，来源证据不完整或变了就拒绝', async t => {
     const root = fixture(t); const names = api.namesFor('arxiv-2601.00001.json', '2601.00001');
     const request = api.requestFor({ arxivId: '2601.00001', authorityName: names.authorityName, operationId, now: stamp });
     fs.writeFileSync(path.join(root, names.requestName), authorityApi.prettyBytes(request), { mode: 0o600 });
@@ -126,7 +126,7 @@ test('recovery resumes after durable request and refuses partial or changed sour
         authorityName: names.authorityName }), /chain drifted|proof file\/SHA drifted/);
 });
 
-test('partial source pair is fail-closed and generated fields/source aliases are rejected', async t => {
+test('来源配对不完整时直接失败，生成的字段和来源别名一律拒绝', async t => {
     const root = fixture(t); const names = api.namesFor('arxiv-2601.00001.json', '2601.00001');
     const request = api.requestFor({ arxivId: '2601.00001', authorityName: names.authorityName, operationId, now: stamp });
     fs.writeFileSync(path.join(root, names.requestName), authorityApi.prettyBytes(request), { mode: 0o600 });
@@ -138,7 +138,7 @@ test('partial source pair is fail-closed and generated fields/source aliases are
     assert.throws(() => api.normalizeFetchedSource(source('2601.99999'), '2601.00001', stamp), /another paper/);
 });
 
-test('CLI accepts only explicit mode, normalized ID and direct authority name', async t => {
+test('命令行只接受显式模式、归一化 ID 和直连授权名称', async t => {
     const root = fixture(t);
     assert.throws(() => cli.parseArgs(['--apply', '--id', '2601.00001v2', '--authority', 'arxiv-2601.00001.json']), /versionless/);
     const output = await cli.main(['--dry-run', '--id', '2601.00001', '--authority', 'arxiv-2601.00001.json'],
@@ -146,7 +146,7 @@ test('CLI accepts only explicit mode, normalized ID and direct authority name', 
     assert.equal(output.status, 'dry-run'); assert.equal(output.productionAuthorized, false);
 });
 
-test('source lock uses opaque exact-owner release and refuses ABA replacement', t => {
+test('来源锁用不透明的精确持有者释放，拒绝 ABA 式替换', t => {
     const root = fixture(t); const target = lockPath(root);
     const first = api.acquireLock(root, '2601.00001');
     assert.throws(() => api.releaseLock(target), /authenticated source lock handle/);
@@ -159,7 +159,7 @@ test('source lock uses opaque exact-owner release and refuses ABA replacement', 
     fs.renameSync(displaced, target); api.releaseLock(first);
 });
 
-test('stale empty/invalid/remote locks recover exactly while fresh or extra evidence fails closed', t => {
+test('过期的空锁、无效锁和远端锁可以精确恢复，但新鲜的或多余的证据一律失败', t => {
     const root = fixture(t); const id = '2601.00001';
     writeLock(root, id, { empty: true }); let handle = api.acquireLock(root, id); api.releaseLock(handle);
     writeLock(root, id, { invalid: true }); handle = api.acquireLock(root, id); api.releaseLock(handle);
@@ -187,7 +187,7 @@ test('stale empty/invalid/remote locks recover exactly while fresh or extra evid
     assert.equal(fs.readFileSync(path.join(protectedLock, 'extra'), 'utf8'), 'do not delete');
 });
 
-test('stale local live/EPERM owners are never reclaimed and only ESRCH permits takeover', t => {
+test('过期的本地存活或 EPERM 持有者绝不回收，只有 ESRCH 才允许接管', t => {
     const root = fixture(t); const id = '2601.00001';
     writeLock(root, id, { pid: process.pid });
     assert.throws(() => api.acquireLock(root, id), /source operation is locked/);
@@ -207,7 +207,7 @@ test('stale local live/EPERM owners are never reclaimed and only ESRCH permits t
     api.releaseLock(handle);
 });
 
-test('heartbeat between reclaim CAS and final removal preserves the renewed lock', t => {
+test('回收 CAS 与最终删除之间有心跳时，保留续期后的锁', t => {
     const root = fixture(t); const id = '2601.00001'; const target = writeLock(root, id);
     let injected = 0;
     assert.throws(() => api.acquireLock(root, id, {
@@ -222,7 +222,7 @@ test('heartbeat between reclaim CAS and final removal preserves the renewed lock
     assert.equal(fs.existsSync(`${target}.reclaim`), false);
 });
 
-test('short owner write removes only its own half-product and leaves no occupied lock', t => {
+test('持有者写入不完整时只删掉自己那份半成品，不留下被占用的锁', t => {
     const root = fixture(t); let calls = 0;
     const io = { ...fs, writeSync(fd, buffer, offset, length, position) {
         calls += 1;
@@ -233,7 +233,7 @@ test('short owner write removes only its own half-product and leaves no occupied
     assert.equal(fs.existsSync(lockPath(root)), false);
 });
 
-test('two stale reclaimers serialize; default SIGTERM releases only the winning lock', async t => {
+test('两个过期回收者串行执行；默认 SIGTERM 只释放胜出的那把锁', async t => {
     const root = fixture(t); const id = '2601.00001'; writeLock(root, id);
     const left = spawnLockHolder(root, id); const right = spawnLockHolder(root, id);
     t.after(() => { for (const item of [left, right]) if (item.child.exitCode === null && item.child.signalCode === null) item.child.kill('SIGKILL'); });
@@ -248,7 +248,7 @@ test('two stale reclaimers serialize; default SIGTERM releases only the winning 
     assert.equal(fs.existsSync(lockPath(root, id)), false);
 });
 
-test('source lock signal cleanup preserves a caller-installed SIGTERM handler', async t => {
+test('来源锁的信号清理会保留调用方自己装的 SIGTERM 处理器', async t => {
     const root = fixture(t); const marker = path.join(root, 'caller-signal-handler');
     const holder = spawnLockHolder(root, '2601.00001', marker);
     t.after(() => { if (holder.child.exitCode === null && holder.child.signalCode === null) holder.child.kill('SIGKILL'); });
@@ -258,7 +258,7 @@ test('source lock signal cleanup preserves a caller-installed SIGTERM handler', 
     assert.equal(fs.existsSync(lockPath(root)), false);
 });
 
-test('SIGTERM with caller handler retains an in-flight fetch lock and forbids post-signal writes', async t => {
+test('调用方装了处理器时，SIGTERM 会保留进行中的抓取锁，并禁止信号之后再写入', async t => {
     const root = fixture(t); const id = '2601.00001'; const marker = path.join(root, 'signal-state');
     const modulePath = path.join(__dirname, '..', 'scripts', 'lib', 'arxiv-source-authority.js');
     const deepPath = path.join(__dirname, '..', 'scripts', 'deep-analyzer.js');

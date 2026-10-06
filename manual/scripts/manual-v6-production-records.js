@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-/** Assemble the one controlled production records-v4 descriptor envelope. No prose is generated. */
+/** 装配唯一一份受控的 production records-v4 描述外层对象。这里不生成任何正文。 */
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');

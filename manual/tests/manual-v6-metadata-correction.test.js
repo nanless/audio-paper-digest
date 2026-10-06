@@ -156,7 +156,7 @@ function receiptFixture(packet, correction) {
     };
 }
 
-describe('Manual v6 explicit metadata correction protocol', () => {
+describe('Manual v6 显式元数据更正协议', () => {
     it('只接受规定的文档类型、明确的主任务和主方法，以及规范的 3–5 标签字符串', () => {
         assert.deepEqual(validateExactMetadataFields({
             type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',

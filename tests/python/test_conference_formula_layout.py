@@ -49,7 +49,7 @@ class FormulaLayoutTest(unittest.TestCase):
                 self.assertLessEqual(crop["bbox"][1], glyph["bbox"][1])
                 self.assertGreaterEqual(crop["bbox"][2], glyph["bbox"][2])
                 self.assertGreaterEqual(crop["bbox"][3], glyph["bbox"][3])
-            # The formula rectangle points to real, retained page pixels.
+            # 公式矩形指向的是真实保留的页面像素。
             pixmap = fitz.Pixmap(png)
             self.assertLess(candidate["bbox"][0], candidate["bbox"][2])
             self.assertLessEqual(candidate["bbox"][2], pixmap.width)

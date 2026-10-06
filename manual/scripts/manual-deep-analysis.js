@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 /**
- * Offline/manual deep-analysis ingestion.
+ * 离线人工深度分析的录入命令。
  *
- * This command never calls an LLM API.  The operator supplies a
- * per-paper analysis draft, the exact full-text file used to write it, an
- * evidence ledger, and an audited review record.  Every paper is validated and
- * persisted under its own analysis lock; failures are saved only as resumable
- * ingestion checkpoints and never as publishable manual_complete content.
+ * 这条命令不调用任何 LLM。操作者自己提供每篇论文的分析稿、写稿时实际使用的
+ * 全文文件、证据清单和审查记录。每篇论文都在自己的分析锁内校验并落盘；中途
+ * 失败只留下可续跑的录入检查点，不会写成能发布的 manual_complete 内容。
  */
 
 const fs = require('fs');
@@ -119,9 +117,8 @@ const CURRENT_MANUAL_SPEC_VERSIONS = new Set([4, 5]);
 const MANUAL_ANALYSIS_WORKER_COUNT = 3;
 const MANUAL_EXTERNAL_RESOURCE_CACHE_VERSION = 1;
 const MANUAL_EXTERNAL_RESOURCE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-// Hugging Face dataset pages can take longer than 15 seconds through the
-// required project proxy. Keep a finite absolute deadline while avoiding a
-// false publication failure on an otherwise reachable public resource.
+// Hugging Face 数据集页面走项目代理时可能超过 15 秒。这里给一个有限的绝对
+// 截止时间，同时避免把一个实际能访问的公开资源误判成发布失败。
 const MANUAL_EXTERNAL_RESOURCE_TIMEOUT_MS = 45 * 1000;
 const externalResourceVerificationInFlight = new Map();
 const execFileAsync = promisify(execFile);
@@ -243,10 +240,9 @@ function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromp
         return currentBindings;
     }
 
-    // Historical v3 specs retain their originally declared prompt hashes.
-    // Check that all required stages are present and internally consistent;
-    // requiring today's prompt hashes would prevent loading these old specs.
-    // Current v4, v5, and v6 specs use the current bindings above.
+    // 历史的 v3 配置保留它当初声明的提示哈希。这里只检查所有必需阶段都在、
+    // 而且彼此自洽；要是强求今天的提示哈希，这些旧配置就再也读不进来了。
+    // 当前的 v4、v5、v6 配置走上面那套当前绑定。
     if (!/^[a-f0-9]{64}$/.test(String(spec.promptSha256 || ''))
         || !/^[a-f0-9]{64}$/.test(String(spec.manualAuthoringPromptSha256 || ''))) {
         throw new Error('历史人工分析 v3 配置中的主分析提示 SHA 或成稿规范 SHA 缺失或格式无效。');
@@ -284,9 +280,8 @@ function loadFilteredBatchForDate(date, filteredPath = Config.FILES.filteredPape
 }
 
 /**
- * Checks the filtered batch, full-text manifest, and analysis-record files,
- * then rebuilds the v4 or v5 spec from those inputs. The rebuilt spec and
- * supplied spec must have the same stable object hash.
+ * 检查筛选批次、全文清单和分析记录文件，再用这些输入重新装配一遍 v4 或 v5
+ * 配置。重新装配出来的配置必须与传进来的配置有相同的稳定对象哈希。
  */
 function validateManualV4AssemblyInputs(spec, options = {}) {
     if (!spec || !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)) {
@@ -383,8 +378,8 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
         return { path: sourcePath, document: readJson(sourcePath, 'manual analysis records') };
     });
 
-    // Lazy require avoids the intentional assembler -> ingestion prompt-binding
-    // dependency becoming an initialization cycle.
+    // 这里延迟 require：装配器反过来依赖本文件的提示绑定，直接放在顶部会形成
+    // 初始化循环。
     const assembler = require('./create-manual-analysis-spec.js');
     const mergedRecords = assembler.mergeRecordsEnvelopes(recordInputs, date);
     const expectedRecordsVersion = spec.version === 5
@@ -648,9 +643,8 @@ function finalizeManualAnalysisBatchState(filePath, options) {
             timestamp: now,
             batchDate: date,
             status,
-            // Current data contains one batch. Keep only its expected papers
-            // so an older batch is not checked against this batch's source
-            // manifest or included in its coverage counts.
+            // 当前数据只装一个批次。这里只保留本批次应有的论文，免得旧批次的
+            // 论文被拿去对照本批次的来源清单，或者被算进本批次的覆盖率。
             papers: currentBatchPapers,
             stats: {
                 ...(currentObject.stats || {}),
@@ -697,11 +691,10 @@ function buildStageEvidence(
             || claims.some(claim => typeof claim !== 'string' || claim.trim().length < 12)) {
             throw new Error(`${stage} 阶段的审查声明必须是非空数组，每条声明都必须是字符串，去除首尾空白后至少包含 12 个字符。`);
         }
-        // A manual run has no remote model response to fingerprint.  Bind
-        // each offline stage to its own reviewed claim bundle instead of
-        // pretending every stage consumed the same generic analysis input.
-        // The final output may legitimately have one SHA (the offline editor
-        // writes once), but the stage input/audit hashes must remain distinct.
+        // 人工运行没有远端模型响应可以取指纹。这里把每个离线阶段绑到它自己那份
+        // 审查过的声明上，而不是假装所有阶段吃的是同一份通用分析输入。最终输出
+        // 可以只有一个 SHA（离线编辑只写一次），但各阶段的输入哈希和审查哈希必须
+        // 各不相同。
         const binding = promptBindings[stage];
         const attempts = spec.stageReviewAttemptsByStage?.[stage]
             ?? spec.manualAudit?.passes?.length;
@@ -756,18 +749,15 @@ function conciseManualImageCaption(value, maxChars = 240) {
         .replace(/([A-Za-z]{1,12}\s*[=<>]\s*-?\d+(?:\.\d+)?%?)\s*\1/gi, '$1')
         .trim();
     if (!text) return '论文图示';
-    // Blog alt text must remain a complete semantic unit.  A previous hard
-    // character slice produced captions ending at half a clause (or even half
-    // a word), which looked materially worse than the API-authored pages and
-    // could hide the condition attached to a result.  Prefer a complete first
-    // sentence when a genuinely multi-sentence caption is long; otherwise keep
-    // the source caption intact.  Semicolons are deliberately not terminators.
+    // 博客的替代文本必须是一段完整的意思。以前按固定字符数硬切，结果图注会
+    // 断在半个分句甚至半个词上，看起来比 API 生成的页面差很多，还可能把结论
+    // 附带的前提条件切掉。原文图注确实有多句又太长时，优先取完整的第一句；
+    // 否则整条原图注照用。这里刻意不把分号当句末。
     if (text.length <= maxChars) return text;
     const firstSentence = text.match(/^.{20,}?[.!?。！？](?=\s|$)/)?.[0];
     if (firstSentence && firstSentence.length <= maxChars) return firstSentence;
-    // arXiv HTML occasionally exposes an already-truncated caption that is
-    // shorter than our own limit.  A long clause without terminal punctuation
-    // is not safe to publish verbatim; replace it with a complete semantic alt.
+    // arXiv HTML 偶尔给出的图注本身就已经被截断，比我们自己的长度上限还短。
+    // 一个没有句末标点的长分句不适合原样发布，换成一条完整的替代文本。
     const section = manualImageSection(text);
     if (section === '方法概述和架构') return '论文方法与系统结构总览图';
     if (section === '实验结果') return '论文关键实验比较图';
@@ -777,9 +767,8 @@ function conciseManualImageCaption(value, maxChars = 240) {
     return '论文实现细节示意图';
 }
 
-// Kept only so an already-materialized v3 spec can still be replayed. New v4
-// specs must carry explicit, context-bound imageInsertions and never enter this
-// branch.
+// 保留这段代码只是为了还能重新核对已经写好的 v3 配置。新的 v4 配置必须带上
+// 明确、与上下文绑定的 imageInsertions，不会走到这个分支。
 function buildLegacyV3ManualImagePlan(analysis, imageInfos, maxInsertions = 3) {
     const anchors = require('../../scripts/deep-analyzer.js').buildImageAnchorCatalog(analysis);
     const plans = [];
@@ -848,9 +837,8 @@ function normalizeManualV4ImageArtifacts({
         }
         const imageNumber = index + 1;
         selectedImages.push(prepared);
-        // The saved insertion plan is used to rebuild and check the Reader
-        // article. Keep each selected URL on its plan so the corresponding
-        // image can be found during that check.
+        // 保存下来的插图计划会用来重建并检查读者文章。把每张选中的图对应的
+        // URL 留在它自己的计划条目上，检查时才能找到那张图。
         orderedInsertionPlan.push({ ...plan, imageNumber, url });
         orderedInsertionDiagnostics.push({ ...diagnostic, imageNumber });
     }

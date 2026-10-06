@@ -36,8 +36,8 @@ def layout_pdf(offset=0):
         for col, value in enumerate(values):
             page.insert_text((xs[col] + 5, ys[row] + 20), value, fontsize=11)
     page.insert_text((45, 575), "x = y^2 + z", fontsize=11)
-    # Actual positioned fraction/superscript/multi-line matrix, whose PDF
-    # reading order cannot establish original LaTeX semantics.
+    # 真实排版的分数、上标和多行矩阵：按 PDF
+    # 阅读顺序无法还原原始 LaTeX 的语义。
     page.insert_text((345, 555), "L =", fontsize=11)
     page.insert_text((380, 547), "a + b", fontsize=11)
     page.draw_line((378, 552), (415, 552))

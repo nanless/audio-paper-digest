@@ -258,8 +258,8 @@ class TagVersionFilesTests(unittest.TestCase):
     def test_interrupted_mirror_install_recovers_only_journal_staging_bytes(self):
         self.seed()
         self.call('export_tag_catalog_files', self.repo)
-        # Prepare a third version so one replacement leaves data/static catalog
-        # temporarily different, while the original complete stage remains intact.
+        # 先准备第三个版本，这样替换一次之后 data/static 里的词表
+        # 会短暂不一致，而原来那个完整阶段仍然完好。
         self.env['_PAGE_TAG_CATALOG']['registrySha256'] = 'c'*64
         self.env['_PAGE_TAG_CATALOG']['version'] = 'v3'
         self.env['_PAGE_TAG_CATALOG']['concepts'][0]['preferredLabel']['zh'] = '最新名字'

@@ -53,7 +53,7 @@ function extractorWith(textBytes) {
     };
 }
 
-test('provider fixtures yield exact ready spans and ambiguity fails open', () => {
+test('各来源的固定数据给出精确的就绪片段，有歧义时按放行处理', () => {
     for (const name of ['acl.txt', 'cvpr.txt', 'pmlr.txt']) {
         const bytes = fixture(name); const result = api.locateAbstract(bytes, artifactFor(bytes));
         assert.equal(result.status, 'ready', name);
@@ -72,7 +72,7 @@ test('provider fixtures yield exact ready spans and ambiguity fails open', () =>
         artifactFor(fixture('aaai-duplicate-introduction.txt')), api.AAAI_LOCATOR_PROFILE).status, 'ambiguous');
 });
 
-test('locator profiles preserve the default hash and scope the AAAI grammar', () => {
+test('定位配置保留默认哈希，并把 AAAI 语法限定在范围内', () => {
     assert.equal(api.LOCATOR_IMPLEMENTATION_SHA256,
         'aea85b736cfbfc8a5758df6451a231b49a5d1e534a0015ea22952ef570c1d08c');
     assert.deepEqual(api.locatorBindingForConference({ id: 'iwslt-2026', year: 2026 }), {
@@ -93,7 +93,7 @@ test('locator profiles preserve the default hash and scope the AAAI grammar', ()
     assert.throws(() => api.normalizeState(legacy, aaaiSnapshot, legacy.binding.runId), /run locator/);
 });
 
-test('authenticated discovery stages resumable evidence and signs catalog only when complete', () => {
+test('已核验的发现会暂存可续跑的证据，只有完整时才给目录签名', () => {
     const site = workspace([{ id: 'paper-1', title: 'One' }, { id: 'paper-2', title: 'Two' }]);
     const runId = '11111111-1111-4111-8111-111111111111';
     const first = api.prepareEvidence({ evidenceRunsRoot: site.runs, runId, discoveryHandle: site.handle,
@@ -113,7 +113,7 @@ test('authenticated discovery stages resumable evidence and signs catalog only w
     assert.throws(() => api.evidenceHandleSnapshot({}, paper.member.paperId), /authenticated evidence handle/);
 });
 
-test('status is read-only and fails closed when a final artifact is missing', () => {
+test('状态查询只读，最终产物缺失时直接失败', () => {
     const site = workspace(); const runId = '66666666-6666-4666-8666-666666666666';
     api.prepareEvidence({ evidenceRunsRoot: site.runs, runId, discoveryHandle: site.handle,
         apply: true, extract: extractorWith(fixture('acl.txt')) });
@@ -124,7 +124,7 @@ test('status is read-only and fails closed when a final artifact is missing', ()
     assert.equal(fs.existsSync(reportFile), false);
 });
 
-test('resume fails closed after extracted text tampering', () => {
+test('提取文本被篡改后，续跑直接失败', () => {
     const site = workspace(); const runId = '22222222-2222-4222-8222-222222222222';
     api.prepareEvidence({ evidenceRunsRoot: site.runs, runId, discoveryHandle: site.handle,
         apply: true, extract: extractorWith(fixture('cvpr.txt')) });
@@ -133,7 +133,7 @@ test('resume fails closed after extracted text tampering', () => {
     assert.throws(() => api.inspectEvidence({ evidenceRunsRoot: site.runs, runId, discoveryHandle: site.handle }), /tampered/);
 });
 
-test('a complete receipt left ahead of state is adopted on resume', () => {
+test('凭证已经完整但状态还没跟上时，续跑会采纳这份凭证', () => {
     const site = workspace([{ id: 'paper-1', title: 'One' }, { id: 'paper-2', title: 'Two' }]);
     const runId = '44444444-4444-4444-8444-444444444444';
     api.prepareEvidence({ evidenceRunsRoot: site.runs, runId, discoveryHandle: site.handle,
@@ -149,7 +149,7 @@ test('a complete receipt left ahead of state is adopted on resume', () => {
     assert.equal(resumed.counts.ready, 1); assert.equal(resumed.counts.pending, 1);
 });
 
-test('exact three-input interruption prefixes resume for the four observed providers', async t => {
+test('对已观察的四个来源，三种输入的精确中断前缀都能续跑', async t => {
     const providers = ['aistats-2026', 'eacl-2026', 'cvpr-2026', 'acl-2026'];
     for (const [index, provider] of providers.entries()) {
         await t.test(provider, () => {
@@ -169,7 +169,7 @@ test('exact three-input interruption prefixes resume for the four observed provi
     }
 });
 
-test('interrupted output subsets and extra files remain operator-review failures', () => {
+test('中断的输出子集和多余文件仍算需要人工复查的失败', () => {
     for (const extraName of ['text.txt', 'unexpected.tmp']) {
         const site = workspace();
         const runId = extraName === 'text.txt' ? 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -185,7 +185,7 @@ test('interrupted output subsets and extra files remain operator-review failures
     }
 });
 
-test('plan is zero-write, CLI is bounded, and daily role mapping is explicit', () => {
+test('计划不写文件，命令行有边界，日更角色映射是显式的', () => {
     const site = workspace(); const runId = '33333333-3333-4333-8333-333333333333';
     const plan = api.prepareEvidence({ evidenceRunsRoot: site.runs, runId, discoveryHandle: site.handle,
         apply: false, limit: 1 });
@@ -209,7 +209,7 @@ test('plan is zero-write, CLI is bounded, and daily role mapping is explicit', (
     }
 });
 
-test('explicit all mode requires the authenticated total and completes in one invocation', () => {
+test('显式的全量模式要求已核验的总数，并在一次调用里跑完', () => {
     const site = workspace([{ id: 'paper-1', title: 'One' }, { id: 'paper-2', title: 'Two' },
         { id: 'paper-3', title: 'Three' }]);
     const mismatchRun = '77777777-7777-4777-8777-777777777777';

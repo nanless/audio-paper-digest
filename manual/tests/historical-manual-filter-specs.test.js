@@ -7,9 +7,9 @@ const path = require('node:path');
 const archivePath = path.join(__dirname, 'fixtures', 'historical-manual-filter-specs.json');
 const archive = JSON.parse(fs.readFileSync(archivePath, 'utf8'));
 
-// This immutable fixture replaces the former date-specific generators for
-// 2026-08-20, 2026-08-25, and 2026-08-27. Keep replaying every candidate and
-// the exact original spec bytes; never restore hard-coded production scripts.
+// 这份固定数据取代了原先按日期生成的 2026-08-20、2026-08-25 和 2026-08-27 三份脚本。
+// 每个候选和原始 spec 字节都要照原样重新核对，
+// 不要退回写死日期的生产脚本。
 
 function sha256(value) {
     return crypto.createHash('sha256').update(value).digest('hex');
@@ -50,8 +50,8 @@ function reconstructSpec(entry) {
     };
 }
 
-describe('immutable historical Manual filter archives', () => {
-    it('reconstructs every candidate decision and the exact original spec bytes', () => {
+describe('不可变的历史 Manual 筛选归档', () => {
+    it('还原每个候选决定和原始 spec 字节', () => {
         assert.equal(archive.version, 1);
         assert.equal(archive.contract, 'historical-manual-filter-spec-archive-v1');
         assert.deepEqual(archive.reviewedFields, ['title', 'abstract', 'categories', 'sources']);
@@ -122,7 +122,7 @@ describe('immutable historical Manual filter archives', () => {
         }
     });
 
-    it('does not retain executable date-specific production generators', () => {
+    it('不再保留按日期写死的可执行生产生成脚本', () => {
         for (const entry of archive.entries) {
             const fileName = `create-${entry.date}-manual-filter-spec.js`;
             const generators = [
@@ -135,7 +135,7 @@ describe('immutable historical Manual filter archives', () => {
         }
     });
 
-    it('matches retained local runtime source snapshots when they are available', (t) => {
+    it('本地运行时来源快照存在时，与其逐一比对', (t) => {
         const repositoryRoot = path.join(__dirname, '..', '..');
         let verified = 0;
         for (const entry of archive.entries) {

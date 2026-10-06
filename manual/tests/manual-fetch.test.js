@@ -25,7 +25,7 @@ const {
 } = require('../scripts/manual-fetch-fulltext.js');
 const { applyFetchSourceIntegrity, getFetchSourcesSha256 } = require('../../scripts/full-fetch.js');
 
-describe('manual fetch data consistency helpers', () => {
+describe('Manual 抓取的数据一致性辅助函数', () => {
     it('日期级跨进程锁让重复阶段快速失败并报告 owner', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-run-lock-'));
         const lockTarget = path.join(dir, '2026-08-25');
@@ -76,7 +76,7 @@ describe('manual fetch data consistency helpers', () => {
         }
     });
 
-    it('rejects manual decision keys that collapse to the same normalized arXiv ID', () => {
+    it('拒绝归一化后指向同一 arXiv ID 的 Manual 决定键', () => {
         assert.throws(() => assertUniqueNormalizedDecisionKeys({
             '2608.00001': { related: true },
             '2608.00001v2': { related: false }
@@ -87,7 +87,7 @@ describe('manual fetch data consistency helpers', () => {
         }));
     });
 
-    it('records actual blog skip counts and keeps source totals from the pre-skip set', () => {
+    it('记录真实的博客跳过数，来源总数仍按跳过之前的集合算', () => {
         const before = [
             { arxivId: '2608.00001', sources: ['arxiv'] },
             { arxivId: '2608.00002', sources: ['huggingface'] },
@@ -102,7 +102,7 @@ describe('manual fetch data consistency helpers', () => {
         assert.equal(stats.both, 1);
     });
 
-    it('keeps core categories first and excludes only archived HuggingFace-related papers', () => {
+    it('核心类别排在前，只排除已归档的 HuggingFace 相关论文', () => {
         const order = initialCategoryOrder();
         assert.deepEqual(order.slice(0, 3), ['eess.AS', 'cs.SD', 'eess.SP']);
         assert.equal(new Set(order).size, order.length);
@@ -117,12 +117,12 @@ describe('manual fetch data consistency helpers', () => {
         assert.deepEqual(result.filteredRelated.map(paper => paper.arxivId), ['2608.00001', '2608.00003']);
     });
 
-    it('exposes the resumable full-text entry in package scripts', () => {
+    it('在 package scripts 里暴露可续跑的全文入口', () => {
         const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
         assert.equal(pkg.scripts['manual:fulltext'], 'node manual/scripts/manual-fetch-fulltext.js');
     });
 
-    it('binds manual selection input to the complete per-source fetch checkpoint', () => {
+    it('把 Manual 选择输入绑定到每个来源的完整抓取检查点', () => {
         const categoryIds = initialCategoryOrder();
         const checkpoint = {
             batchDate: '2026-08-25',
@@ -157,7 +157,7 @@ describe('manual fetch data consistency helpers', () => {
         );
     });
 
-    it('persists positive, negative, and archive-excluded manual decisions with safe statuses', () => {
+    it('落盘正面、负面和归档排除的 Manual 决定，并给出安全状态', () => {
         const papersData = { papers: {} };
         const raw = [
             { arxivId: '2608.00001', title: 'negative' },
@@ -185,7 +185,7 @@ describe('manual fetch data consistency helpers', () => {
         assert.equal(papersData.papers['2608.00001'].digestStatus.filterDecision, false);
     });
 
-    it('binds full-text reuse to batch, metadata, exact version, source identity, and saved bytes', async () => {
+    it('全文复用同时绑定批次、元数据、精确版本、来源身份和已保存字节', async () => {
         assert.equal(getRequestedArxivId({ arxivId: '2608.00001', paper_id: '2608.00001v3' }), '2608.00001v3');
         assert.throws(
             () => getRequestedArxivId({ arxivId: '2608.00001v1', paper_id: '2608.00001v2' }),
@@ -253,7 +253,7 @@ describe('manual fetch data consistency helpers', () => {
         assert.equal(isReusableFullTextCheckpoint(entry, file, inputV1), false);
     });
 
-    it('merges concurrent manifest writers under the project file lock', async () => {
+    it('并发的清单写入在项目文件锁下合并', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-fulltext-concurrent-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const filtered = {

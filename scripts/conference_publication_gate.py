@@ -1,6 +1,6 @@
-"""Mechanical HTML and deployed-URL checks, never semantic or visual attestation.
+"""对 HTML 与已部署 URL 做机械检查，不涉及语义或视觉判断。
 
-Imports do not load .env, contact a provider, or write runtime files.
+导入本模块不会读取 .env、访问外部服务，也不会写运行时文件。
 """
 
 import hashlib
@@ -39,7 +39,7 @@ def public_url(url):
 
 
 class Page(HTMLParser):
-    """Track the balanced post-content subtree, including nested divs."""
+    """跟踪配平的 post-content 子树，嵌套 div 一并算在内。"""
     VOID = {'img', 'br', 'hr', 'input', 'meta', 'link', 'source', 'wbr', 'area', 'base', 'embed', 'param', 'col'}
 
     def __init__(self, source):
@@ -77,7 +77,7 @@ class Page(HTMLParser):
             if tag in {'th', 'td'}:
                 self.cell = []
             if 'katex-error' in attrs.get('class', '').split() or tag == 'merror':
-                raise ValueError('HTML 数学渲染包含错误')
+                raise ValueError(f"HTML 数学渲染包含错误：{tag}，class={attrs.get('class', '')!r}")
         if tag not in self.VOID:
             self.stack.append(tag)
 
@@ -90,12 +90,12 @@ class Page(HTMLParser):
         if tag in self.VOID:
             return
         if not self.stack or self.stack[-1] != tag:
-            raise ValueError('HTML 标签嵌套不闭合')
+            raise ValueError(f'HTML 标签嵌套不闭合：遇到 </{tag}>，当前栈顶为 {self.stack[-1] if self.stack else None}')
         if self.depth is not None:
             self.body_html.append(f'</{tag}>')
         if self.depth is not None and tag in {'th', 'td'} and self.cell is not None:
             if not self.tables:
-                raise ValueError('表格单元格缺少 table')
+                raise ValueError(f'表格单元格缺少 table：遇到 <{tag}> 时还没有 table')
             self.tables[-1].append(''.join(self.cell).strip())
             self.cell = None
         self.stack.pop()
@@ -110,7 +110,7 @@ class Page(HTMLParser):
                 self.cell.append(data)
 
     def visible_content_fields(self):
-        # Browser/minifier whitespace does not alter the approved content.
+        # 浏览器或压缩工具调整空白，不影响已审内容。
         return {'text': re.sub(r'\s+', '', ''.join(self.text)), 'images': self.images,
                 'tables': [[re.sub(r'\s+', '', cell) for cell in table] for table in self.tables]}
 
@@ -126,10 +126,8 @@ def markdown_tables(body):
                 or not lines[index - 1].strip().startswith('|'):
             index += 1
             continue
-        # Once a header/separator pair is found, consume the complete
-        # contiguous pipe block. A Reader projection may contain an explicit
-        # all-dash row at either the beginning or end of the block; it is data
-        # in this table, not another table separator.
+        # 找到表头与分隔行之后，把整段连续的竖线行一起读进来。解读稿里
+        # 可能在本表首尾放一整行全横线，那是表内数据，不是另一张表的分隔行。
         rows = [lines[index - 1]]
         cursor = index + 1
         while cursor < len(lines) and lines[cursor].strip().startswith('|'):
@@ -142,28 +140,26 @@ def markdown_tables(body):
 
 
 def mask_markdown_image_alts(text):
-    """Hide image-label bytes from the math/format scan.
+    r"""在数学与格式扫描前遮住图片标签里的字节。
 
-    Figure captions may contain TeX-looking literals such as ``f\[k\]``.
-    They must stay escaped so Markdown parses the image correctly, but they
-    are not formulas in the article body and their text is not emitted as a
-    post-content text node by Hugo.
+    图注里可能出现 ``f\[k\]`` 这类像 TeX 的字面量。它们必须保持转义，
+    Markdown 才能正确解析图片；但正文里并没有这些公式，Hugo 也不会把
+    这段文字渲染成 post-content 文本节点。
     """
     image = re.compile(r'!\[([^\n]*?)\]\(([^)\n]+)\)')
     return image.sub(lambda match: f'![]({match.group(2)})', str(text))
 
 
 def mask_rendered_currency_dollars(text):
-    """Mask literal numeric currency markers emitted from escaped Markdown.
+    """遮住转义 Markdown 渲染出来的金额符号。
 
-    Goldmark renders ``\\$32`` as the visible text ``$32``.  Conference
-    prose may legitimately contain such amounts, so the rendered gate must
-    preserve the Markdown escape decision instead of treating every visible
-    dollar as TeX.  Math-like forms such as ``$5+2$`` and ``$5x`` remain
-    unmasked and therefore still fail the shared delimiter check.
+    Goldmark 把 ``\\$32`` 渲染成可见文本 ``$32``。会议正文里出现这种金额
+    是正常的，所以渲染后的检查要沿用 Markdown 的转义决定，不能见到美元符号
+    就当成 TeX。``$5+2$``、``$5x`` 这类像公式的写法不遮，仍由共用的定界符
+    检查判失败。
     """
-    # Match standalone/range amounts, keeping a dollar before a mathematical
-    # operator or another dollar outside the waiver.
+    # 只匹配单独金额或金额区间；美元符号后面跟数学运算符或另一个美元符号的，
+    # 不在此列。
     standalone = re.compile(
         r'(?<![\\$A-Za-z0-9_])\$(?=\s*[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)'
         r'(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?'
@@ -177,14 +173,14 @@ def inspect_html(markdown, rendered, image_records, image_base):
 
     page = Page(rendered)
     if len(page.canonicals) != 1:
-        raise ValueError('HTML canonical URL 不唯一')
+        raise ValueError(f'HTML canonical URL 不唯一：实际 {len(page.canonicals)} 个')
     url = public_url(page.canonicals[0])
     body = markdown.split('---', 2)[-1] if markdown.startswith('---\n') else markdown
     body_for_format = mask_markdown_image_alts(body)
-    # Shared deterministic math validation; this does not execute MathJax.
+    # 走共用的确定性数学检查，这里不会真正执行 MathJax。
     text = ''.join(page.text)
     issues = math_and_emphasis_issues(body_for_format, 'Markdown')
-    # Use visible text for TeX preservation; shared HTML mask handles literal cells.
+    # 用可见文本核对 TeX 是否保留；表内字面量交给共用的 HTML 遮罩处理。
     rendered_body = mask_rendered_symbolic_table_cells(''.join(page.body_html))
     rendered_body = mask_rendered_currency_dollars(rendered_body)
     issues += math_and_emphasis_issues(rendered_body,
@@ -195,71 +191,61 @@ def inspect_html(markdown, rendered, image_records, image_base):
     for display, inline in formulas:
         formula = re.sub(r'\s+', '', html.unescape(display or inline))
         if formula not in re.sub(r'\s+', '', text):
-            raise ValueError('HTML 公式内容丢失/被 Markdown 改写')
+            raise ValueError(f'HTML 公式内容丢失/被 Markdown 改写：{formula}')
     if formulas and not page.math_runtime:
         raise ValueError('HTML 公式缺少数学渲染运行时；仅完成静态检查')
-    # A figure alt-text may contain escaped Markdown brackets, e.g. ``\[b\]``.
-    # Do not mistake the escaped closing bracket for the end of the alt-text.
+    # 图的替代文本里可能有转义的 Markdown 方括号，例如 ``\[b\]``。
+    # 别把转义的右括号当成替代文本的结尾。
     expected = re.findall(r'!\[[^\n]*?\]\(([^)\s]+)(?:\s+[^)]*)?\)', body)
     if page.images != expected:
-        raise ValueError('HTML 图片 URL/顺序与 Markdown 不一致')
+        raise ValueError(f'HTML 图片 URL/顺序与 Markdown 不一致：Markdown 期望 {expected}，HTML 实际 {page.images}')
     assets = {f'{image_base}/{r["path"]}': r for r in image_records}
     for image in page.images:
         public_url(image)
         if image not in assets:
-            raise ValueError('HTML 图片未绑定已封存图床资产')
+            raise ValueError(f'HTML 图片未绑定已封存图床资产：{image}')
     tables = markdown_tables(body)
     if len(tables) != len(page.tables):
-        raise ValueError('HTML 表格数量与 Markdown 不一致')
+        raise ValueError(f'HTML 表格数量与 Markdown 不一致：Markdown 为 {len(tables)} 张，HTML 为 {len(page.tables)} 张')
     for expected_cells, cells in zip(tables, page.tables):
         if len(expected_cells) != len(cells):
-            raise ValueError('HTML 表格单元格数量不一致')
+            raise ValueError(f'HTML 表格单元格数量不一致：Markdown 为 {len(expected_cells)} 个，HTML 为 {len(cells)} 个')
         for source, actual in zip(expected_cells, cells):
-            # Verify numbers/units remain in the corresponding cell. Formatting
-            # markup is deliberately ignored, not mistaken for semantic review.
-            # Link destinations are not visible table-cell content; extracting
-            # their numeric-looking year/slug tokens would create false failures.
+            # 核对数字与单位是否留在对应单元格。这里有意忽略格式标记，
+            # 不把它当作语义审查。链接目标不算可见的单元格内容，
+            # 若把其中像年份、编号的数字也抽出来，只会造成误报。
             visible_source = re.sub(
                 r'\[((?:\\.|[^\\\]])*)\]\([^)]*\)', r'\1', source,
             )
-            # Goldmark renders an escaped punctuation mark as the literal
-            # punctuation.  Normalize an escaped decimal point before token
-            # extraction; otherwise `5\.1` is incorrectly scanned as the
-            # standalone measurement `5`, while the HTML cell contains `5.1`.
+            # Goldmark 会把转义标点渲染成标点本身。抽数字前先把转义的小数点
+            # 还原，否则 `5\.1` 会被误判成单独的测量值 `5`，而 HTML 单元格里
+            # 其实是 `5.1`。
             visible_source = visible_source.replace(r'\.', '.')
-            # Likewise, an escaped hyphen in a title/range is literal
-            # punctuation. Keep it as ``8-10`` so the second number is not
-            # misclassified as a negative measurement.
+            # 同理，标题或区间里转义的连字符就是标点本身。保留成 ``8-10``，
+            # 免得第二个数字被当成负的测量值。
             visible_source = visible_source.replace(r'\-', '-')
-            # Aggregate labels encode literal parentheses as HTML entities so
-            # they cannot be mistaken for TeX delimiters. Decode entities
-            # before extracting numeric tokens; otherwise ``&#40;`` and
-            # ``&#41;`` would introduce phantom measurements 40 and 41.
+            # 汇总页标签把括号写成 HTML 实体，避免被当成 TeX 定界符。抽数字前
+            # 先解实体，否则 ``&#40;`` 与 ``&#41;`` 会凭空多出 40、41 两个测量值。
             visible_source = html.unescape(visible_source)
-            # A hyphen inside an identifier such as Qwen3-8B is not a
-            # negative numeric sign.  Require a sign to start outside an
-            # alphanumeric token, while still preserving genuine -0.5/ +2%
-            # values at cell boundaries or after whitespace.
-            # Do not treat the numeric prefix of an identifier such as
-            # `2023.acl-long.23` as a measurement. The previous expression
-            # extracted `2023` and then rejected it because the following
-            # `.acl` was intentionally considered a token boundary. A
-            # decimal value (for example `0.7173`) is still extracted.
-            # Goldmark renders a Markdown time range such as `00:06--00:24`
-            # with an en dash. Normalize that equivalent source spelling so
-            # the second timestamp is not misread as a negative number.
+            # Qwen3-8B 这类标识符里的连字符不是负号。要求符号出现在字母数字
+            # 记号之外，同时保留单元格边界或空白之后真正的 -0.5、+2% 数值。
+            # `2023.acl-long.23` 这类标识符的数字前缀不算测量值。旧写法会抽出
+            # `2023`，又因为后面的 `.acl` 被当作记号边界而判它失败。小数
+            # （例如 `0.7173`）仍然照抽。
+            # Goldmark 会把 `00:06--00:24` 这样的 Markdown 时间区间渲染成短破折号。
+            # 先把等价的源写法归一化，第二个时间戳才不会被读成负数。
             visible_source = re.sub(
                 r'(?<!\d)(\d{1,2}:\d{2})--(?=\d{1,2}:\d{2}(?!\d))',
                 r'\1–',
                 visible_source,
             )
-            # Treat Unicode letters as identifier characters too.  Otherwise
-            # a loss name such as ``λ1*Lalign`` yields a phantom numeric token
-            # ``1`` in Markdown, while Goldmark emits ``λ1Lalign`` in HTML.
+            # Unicode 字母也算标识符字符。否则 ``λ1*Lalign`` 这样的损失项名在
+            # Markdown 里会多出数字记号 ``1``，而 Goldmark 输出的 HTML 是
+            # ``λ1Lalign``。
             tokens = re.findall(r'(?<![^\W_.])(?<!\.)(?!(?:[-+]?\d+)(?:\.\d+){2,}(?![A-Za-z\d.]))[-+]?\d+(?:\.\d+)?(?:%|[A-Za-z]+)?(?![^\W_.])(?!\.)', visible_source)
             if any(not re.search(r'(?<![\d.])' + re.escape(token) + r'(?![A-Za-z\d.])', actual)
                    for token in tokens):
-                raise ValueError('HTML 表格数字/单位未在对应单元格保留')
+                raise ValueError(f'HTML 表格数字/单位未在对应单元格保留：Markdown 期望数字 {tokens}，HTML 单元格实际为 {actual!r}')
     visible_content = page.visible_content_fields()
     return {'url': url, 'htmlSha256': digest(rendered.encode()),
             'projectionSha256': digest(json.dumps(visible_content, ensure_ascii=False, sort_keys=True).encode()),
@@ -270,8 +256,8 @@ def inspect_html(markdown, rendered, image_records, image_base):
 
 @lru_cache(maxsize=1)
 def safe_transport():
-    # Reuse the publisher's SSRF/DNS/CONNECT peer validation, not urllib's
-    # ambient proxy handler or a second unvalidated DNS lookup.
+    # 复用发布器那套 SSRF/DNS/CONNECT 对端校验，不用 urllib 自带的代理处理，
+    # 也不另做一次未校验的 DNS 解析。
     from blog_entry_loader import load_publish_to_blog
     return load_publish_to_blog()
 
@@ -309,7 +295,7 @@ def fetch_public(url):
                     redirected = True
                     break
                 if response.status != 200:
-                    raise ValueError(f'URL 验收 HTTP {response.status}')
+                    raise ValueError(f'URL 验收 HTTP {response.status}（期望 200）')
                 chunks, size = [], 0
                 while True:
                     shared._remaining_deadline_seconds(deadline, '会议 URL 验收')
@@ -318,16 +304,14 @@ def fetch_public(url):
                         break
                     size += len(chunk)
                     if size > MAX_BYTES:
-                        raise ValueError('URL 验收响应过大')
+                        raise ValueError(f'URL 验收响应过大：已读取 {size} 字节，上限 {MAX_BYTES}')
                     chunks.append(chunk)
                 return {'url': current, 'body': b''.join(chunks),
                         'contentType': response.headers.get('Content-Type', '').split(';')[0].lower()}
             except (urllib3.exceptions.HTTPError, OSError):
-                # GitHub's raw edge can occasionally reset a CONNECT tunnel
-                # or close a TLS stream while the immutable object is still
-                # perfectly healthy. Retry only transport failures, within
-                # this URL's existing absolute deadline; HTTP status, digest,
-                # redirect, and HTML errors remain deterministic failures.
+                # GitHub 的 raw 节点偶尔会重置 CONNECT 隧道或关掉 TLS 连接，
+                # 而对象本身完全正常。只重试传输层失败，且不超出该 URL 原有的
+                # 绝对截止时间；HTTP 状态、摘要、重定向和 HTML 错误一律直接判失败。
                 if transport_attempt >= FETCH_TRANSPORT_ATTEMPTS - 1:
                     raise
                 remaining = shared._remaining_deadline_seconds(deadline, '会议 URL 验收')
@@ -343,27 +327,26 @@ def fetch_public(url):
 
 
 def verify_publication_urls(pages, image_records, image_base):
-    # Conference batches can contain hundreds of pages and thousands of
-    # immutable PNGs. Keep the transport validation in fetch_public(), but do
-    # independent GETs with a small bounded pool. executor.map preserves input
-    # order, so the signed acceptance bytes remain deterministic.
+    # 会议批次可能有几百个页面、几千张不变的 PNG。传输层校验仍留在
+    # fetch_public()，这里只用一个小规模有界线程池发独立 GET。
+    # executor.map 保持输入顺序，验收记录里的字节顺序因此是确定的。
     try:
         concurrency = int(os.environ.get(
             'PD_CONFERENCE_ONLINE_VERIFY_CONCURRENCY', '4'))
     except ValueError:
-        raise ValueError('会议线上验收并发必须是整数') from None
+        raise ValueError(f"会议线上验收并发必须是整数：实际 {os.environ.get('PD_CONFERENCE_ONLINE_VERIFY_CONCURRENCY', '')!r}") from None
     if not 1 <= concurrency <= 16:
-        raise ValueError('会议线上验收并发必须在 1–16 之间')
+        raise ValueError(f'会议线上验收并发必须在 1–16 之间：实际 {concurrency}')
 
     def page_check(expected):
         result = fetch_public(expected['url'])
         if result['contentType'] != 'text/html' or result['url'] != expected['url']:
-            raise ValueError('线上页面类型/最终 URL 不匹配')
+            raise ValueError(f'线上页面类型/最终 URL 不匹配：实际 {result["url"]}（{result["contentType"]}），期望 {expected["url"]}（text/html）')
         page = Page(result['body'].decode('utf-8'))
         visible_content_sha256 = digest(json.dumps(page.visible_content_fields(), ensure_ascii=False, sort_keys=True).encode())
         if visible_content_sha256 != expected['projectionSha256'] or page.canonicals != [expected['url']] \
                 or (expected['formulaCount'] and not page.math_runtime):
-            raise ValueError('线上正文/图片/表格/公式未匹配已审 HTML')
+            raise ValueError(f'线上正文/图片/表格/公式未匹配已审 HTML：已审摘要 {expected["projectionSha256"]}，线上摘要 {visible_content_sha256}')
 
         return {'url': expected['url'], 'sha256': digest(result['body'])}
 
@@ -371,7 +354,8 @@ def verify_publication_urls(pages, image_records, image_base):
         url = public_url(f'{image_base}/{record["path"]}')
         result = fetch_public(url)
         if result['contentType'] != 'image/png' or digest(result['body']) != record['sourceSha256']:
-            raise ValueError('线上图片 MIME/实际字节与封存资产不一致')
+            raise ValueError(f'线上图片 MIME/实际字节与封存资产不一致：MIME 实际 {result["contentType"]}、'
+                             f'期望 image/png；字节 SHA 实际 {digest(result["body"])}、期望 {record["sourceSha256"]}')
         validate_png(result['body'])
         return {'url': url, 'finalUrl': result['url'], 'sha256': digest(result['body'])}
 
@@ -388,7 +372,7 @@ def validate_png(data):
     from PIL import Image
     with Image.open(io.BytesIO(data)) as image:
         if image.format != 'PNG' or image.width <= 0 or image.height <= 0:
-            raise ValueError('图片不是可解码 PNG')
+            raise ValueError(f'图片不是可解码 PNG：format={image.format!r}，{image.width}x{image.height}')
         image.verify()
     with Image.open(io.BytesIO(data)) as image:
         image.load()

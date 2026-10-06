@@ -15,7 +15,7 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 
 const EXECUTION = '77777777-7777-4777-8777-777777777777';
 
-test('legacy PDF matrices and text-layer tex never become Reader source cells or LaTeX', () => {
+test('旧版 PDF 矩阵和文本层 tex 永远不会变成 Reader 来源单元格或 LaTeX', () => {
     const source = { paperId: 'conference:icassp:2026:icassp-arnumber:100',
         text: 'PDF evidence text. '.repeat(400), sourceBinding: { pdfSha256: '1'.repeat(64) },
         structuredArtifacts: { profile: 'replayable-pdf-layout-v1',
@@ -44,7 +44,7 @@ function emptyReaderResourceIdentity(text) {
     return { ...body, identitySha256: deep.stableFingerprint(body) };
 }
 
-test('official proceedings metadata survives into the conference canonical publication identity', () => {
+test('官方论文集元数据会带进会议的正式发布身份', () => {
     const source = {
         paperId: 'conference:iwslt:2026:conference-paper-id:2026.iwslt-1.1',
         conference: { id: 'iwslt-2026', year: 2026 },
@@ -86,7 +86,7 @@ function successfulReaderDraft() {
     return draft;
 }
 
-test('replayable conference PDF prepares isolated canonical identity with structured capabilities', t => {
+test('可复核的会议 PDF 准备出隔离的正式身份和结构化能力', t => {
     const fixture = productionPlanFixture(t);
     const analysisRoot = path.join(fixture.root, 'analysis');
     assert.throws(() => adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
@@ -109,7 +109,7 @@ test('replayable conference PDF prepares isolated canonical identity with struct
         executionId: EXECUTION }).recovered, true);
 });
 
-test('prepare intent recovers every authenticated prefix and rejects a re-signed mismatch', t => {
+test('准备意图能恢复每个已核验的前缀，重新签名后对不上就拒绝', t => {
     const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis-recovery');
     for (const [index, crashAfter] of ['intent.json', 'source.json', 'analysis.json'].entries()) {
         const executionId = `${index + 1}aaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`;
@@ -134,7 +134,7 @@ test('prepare intent recovers every authenticated prefix and rejects a re-signed
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId }), /differs from authenticated prepare intent/);
 });
 
-test('atomic analysis writer removes its own short EIO temporary and legacy executions fail with migration guidance', t => {
+test('原子分析写入器会删掉自己写坏的 EIO 临时文件；旧版执行失败时给出迁移提示', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-analysis-write-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const filename = path.join(root, 'record.json');
     let calls = 0; const io = { openSync: fs.openSync, closeSync: fs.closeSync, fsyncSync: fs.fsyncSync,
@@ -158,7 +158,7 @@ test('atomic analysis writer removes its own short EIO temporary and legacy exec
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId: partialId }), /partial lacks prepare intent/);
 });
 
-test('prepare intent binds the untouched pending analysis authoring input', t => {
+test('准备意图绑定未经改动的待分析撰写输入', t => {
     const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis-input-binding');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
@@ -167,7 +167,7 @@ test('prepare intent binds the untouched pending analysis authoring input', t =>
     assert.throws(() => adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }), /evidence drifted/);
 });
 
-test('mock common analysis observes source only through authenticated context and persists isolated canonical', async t => {
+test('模拟的常规分析只通过已核验上下文读取来源，并落盘隔离的正式记录', async t => {
     const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
@@ -206,7 +206,7 @@ test('mock common analysis observes source only through authenticated context an
     assert.equal(resumed.recovered, true); assert.equal(calls, 1);
 });
 
-test('completed analysis left before run sealing is deterministically recovered only with live plan authority', async t => {
+test('运行保存之前留下的已完成分析，只有在计划授权仍然有效时才能确定地恢复', async t => {
     const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
@@ -229,7 +229,7 @@ test('completed analysis left before run sealing is deterministically recovered 
     assert.throws(() => adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }), /does not bind canonical analysis/);
 });
 
-test('legacy sealed completion with running stats is demoted, normalized, and rebound under the paper lock', async t => {
+test('旧版已保存且带运行中统计的完成记录会被降级、归一化，并在论文锁内重新绑定', async t => {
     const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis-sealed-status-recovery');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
@@ -257,7 +257,7 @@ test('legacy sealed completion with running stats is demoted, normalized, and re
     assert.equal(sealed.run.completionReceipt.analysisSha256, sealed.analysisFileSha256);
 });
 
-test('conference source context rejects arXiv aliases and mismatched identities', () => {
+test('会议来源上下文拒绝 arXiv 别名和身份不符的情况', () => {
     const details = { text: 'x'.repeat(2000), source: 'conference_pdf_text' };
     assert.throws(() => context.withConferenceAnalysisSource({ executionId: EXECUTION, executionDir: '/tmp/conference-analysis',
         paperId: 'conference:icassp:2026:icassp-arnumber:100', sourceDetails: details }, () =>
@@ -269,7 +269,7 @@ test('conference source context rejects arXiv aliases and mismatched identities'
     /different canonical/);
 });
 
-test('conference source context preserves official paper IDs containing dots', () => {
+test('会议来源上下文保留含点的官方论文 ID', () => {
     const paperId = 'conference:acl:2026:conference-paper-id:2026.acl-long.17';
     const details = { text: 'official proceedings text', source: 'conference_pdf_text' };
     const value = context.withConferenceAnalysisSource({ executionId: EXECUTION, executionDir: '/tmp/conference-analysis',
@@ -277,7 +277,7 @@ test('conference source context preserves official paper IDs containing dots', (
     assert.deepEqual(value, details);
 });
 
-test('conference analysis CLI requires complete authority for prepare and supports isolated status/analyze', async () => {
+test('会议分析命令行要求准备阶段有完整授权，并支持隔离的状态和 analyze', async () => {
     const authorityPairs = executionCli.AUTHORITY_FLAGS.flatMap(flag => [flag,
         flag === '--filter' ? '11111111-1111-4111-8111-111111111111' : `${flag.slice(2)}.json`]);
     const paperId = 'conference:icassp:2026:icassp-arnumber:100';
@@ -301,7 +301,7 @@ test('conference analysis CLI requires complete authority for prepare and suppor
     assert.equal(called, true); assert.equal(result.paperId, paperId);
 });
 
-test('real Reader entry uses execution-local attempts, empty figures short-circuit, and author fallback is conference-specific', async t => {
+test('真实 Reader 入口按本次执行记尝试次数，空图片直接短路，作者回退是会议专属的', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-reader-integration-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const paperId = 'conference:icassp:2026:icassp-arnumber:100';
@@ -338,7 +338,7 @@ test('real Reader entry uses execution-local attempts, empty figures short-circu
     });
 });
 
-test('weak PDF Reader policy forces empty structure bindings and retries a nonempty model draft in full', async t => {
+test('弱 PDF Reader 策略强制空的结构绑定，非空的模型草稿要整篇重试', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-reader-success-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const paperId = 'conference:icassp:2026:icassp-arnumber:100';
@@ -398,7 +398,7 @@ test('weak PDF Reader policy forces empty structure bindings and retries a nonem
     }), /会议 weak source 正文禁止 Markdown 表格/);
 });
 
-test('authenticated weak Reader rejects an unverified open-source claim and repairs only its section', async t => {
+test('已核验的弱 Reader 拒绝未经核实的开源声明，且只修它所在的小节', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-reader-resource-claim-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const paperId = 'conference:icassp:2026:icassp-arnumber:101';

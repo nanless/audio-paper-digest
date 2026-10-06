@@ -23,7 +23,7 @@ const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 const heading = '**声学先验 × 测试时适应：**';
 const explanation = ' 声学先验负责描述干净语音，测试时适应负责更新当前输入的增强模型，两者共同指导增强过程。';
 
-test('only exact consecutive paragraph-leading bridge headings collapse, including multiple copies', () => {
+test('只有精确且连续出现在段首的桥接标题会合并，多份副本也一样', () => {
     for (const count of [2, 3, 5]) {
         const raw = Array(count).fill(heading).join(' ') + explanation;
         const once = collapseRepeatedReaderBridgeHeadings(raw);
@@ -33,7 +33,7 @@ test('only exact consecutive paragraph-leading bridge headings collapse, includi
     assert.equal(collapseRepeatedReaderBridgeHeadings(heading + '\n' + heading + explanation), heading + explanation);
 });
 
-test('repairs only the established one-character entropy term and leaves Reader facts lossless', () => {
+test('只修复已确认的单字熵术语，Reader 事实保持不变', () => {
     const candidate = { sections: [{ body: '指标包括问题熵与 APES。' }], conceptBridges: [
         { terms: ['熵', 'APES'], explanation: '熵负责描述分布。' }
     ] };
@@ -57,7 +57,7 @@ test('repairs only the established one-character entropy term and leaves Reader 
     }
 });
 
-test('removes only a known trailing bridge-field leak and keeps strict term validation for other arrays', () => {
+test('只去掉已知的桥接字段尾部泄漏，其它数组仍做严格术语校验', () => {
     const candidate = { sections: [{ body: '音素识别、音位与 component 都在正文出现。' }], conceptBridges: [
         { terms: ['音素识别', '音位', 'sectionKind', 'component'], explanation: '术语组合说明。' }
     ] };
@@ -71,7 +71,7 @@ test('removes only a known trailing bridge-field leak and keeps strict term vali
     assert.equal(unrelated.conceptBridges[0].terms.length, 3);
 });
 
-test('repairs only a duplicated bridge-term suffix when the prefix is article-visible', () => {
+test('只有前缀在文章里可见时，才修复重复的桥接术语后缀', () => {
     const candidate = {
         sections: [{ body: '本文比较声音事件定位与检测和六自由度，并说明两者如何协同。' }],
         conceptBridges: [{
@@ -96,7 +96,7 @@ test('repairs only a duplicated bridge-term suffix when the prefix is article-vi
     ]);
 });
 
-test('rebinds bridges after bounded Chinese-numeral typography normalization', () => {
+test('中文数字排版做有限归一化之后重新绑定桥接', () => {
     const cases = [
         ['叠加论', '三模态叠加显示', '**叠加论 × 3 模态叠加显示：** 两者分别描述组合视角与显示方式。'],
         ['无线标记', '六自由度头部位姿', '**无线标记 × 6 自由度头部位姿：** 两者分别提供标记信息与姿态信息。'],
@@ -122,7 +122,7 @@ test('rebinds bridges after bounded Chinese-numeral typography normalization', (
     );
 });
 
-test('repairs both issue-bound Han/ASCII directions without touching quotes, fences, or selected tables', () => {
+test('修复两个方向的汉字/ASCII 问题，不动引号、围栏和已选表格', () => {
     const table = [
         '| 方法 | 说明 |',
         '| --- | --- |',
@@ -154,14 +154,14 @@ test('repairs both issue-bound Han/ASCII directions without touching quotes, fen
     assert.match(candidate.sections[0].body, /\| A \| Conformer编码器 \|/u);
 });
 
-test('normalizes tilde-decorated Latin names before the editorial gate', () => {
+test('进入编辑检查之前，归一化带波浪号的拉丁名', () => {
     assert.equal(
         normalizeReaderProseFormatting('运行 bellplay~环境 与 rtcmix~数据。'),
         '运行 bellplay~ 环境 与 rtcmix~ 数据。'
     );
 });
 
-test('preserves exact PDF cell bytes while normalizing surrounding Reader prose', () => {
+test('归一化周边 Reader 正文时，PDF 单元格字节保持原样', () => {
     const table = '| Model | 0-12kHz | 12-18kHz |\n| --- | --- | --- |\n| Ours | 1.24 | 1.39 |';
     const article = `量化结果应保留来源表格。\n\n${table}\n\n表后解释保留比较方向。`;
     const normalized = normalizeReaderProsePreservingSelectedTables(article, [1]);
@@ -170,7 +170,7 @@ test('preserves exact PDF cell bytes while normalizing surrounding Reader prose'
     assert.ok(normalized.includes('量化结果应保留来源表格。'));
 });
 
-test('replays selected artifact-table cells after later cleanup passes', () => {
+test('后续清理跑完之后，重新核对选中的产物表格单元格', () => {
     const domSha = 'a'.repeat(64);
     const table = {
         ordinal: 8, recoveryStatus: 'complete', cells: [
@@ -194,7 +194,7 @@ test('replays selected artifact-table cells after later cleanup passes', () => {
     assert.equal(restored, '| Model | 0-12kHz |\n| --- | --- |\n| Ours | 1.24 |');
 });
 
-test('different headings, inline citations, separate paragraphs, tables and fenced examples are unchanged', () => {
+test('不同的标题、行内引文、独立段落、表格和围栏示例都不变', () => {
     for (const raw of [
         heading + ' **声学先验 × 监督训练：**' + explanation,
         '**声学先验×测试时适应：** ' + heading + explanation,
@@ -260,7 +260,7 @@ function signedFixture() {
     return paper;
 }
 
-test('surface repair preserves production binding, reseals actual bytes and metrics without claiming a new LLM run', () => {
+test('内容修复保留生产绑定，按实际字节和指标重新记录，但不声称跑过新的 LLM', () => {
     const paper = signedFixture();
     const before = structuredClone(paper);
     const stage = paper.analysisManifest.stages.apiReaderArticle;
@@ -287,7 +287,7 @@ test('surface repair preserves production binding, reseals actual bytes and metr
     assert.equal(JSON.stringify(paper), once);
 });
 
-test('surface metrics replay only bound Figure and TeX injections back to the parser quality view', () => {
+test('内容指标只把已绑定的图和 TeX 注入复核回解析器质量视图', () => {
     const figure = { ordinal: 1, label: 'Figure 1', caption: 'A result chart.',
         url: 'https://arxiv.org/html/2609.03622v1/fig.png' };
     const focus = '先对比四个频谱面板中的噪声变化';

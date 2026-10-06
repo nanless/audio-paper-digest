@@ -144,8 +144,8 @@ function fixture() {
     };
 }
 
-describe('Manual v5 cold-start author packet', () => {
-    it('materializes an exact single-paper allowlist and closes the work-queue input SHA', () => {
+describe('Manual v5 冷启动作者包', () => {
+    it('生成精确的单篇白名单，并锁定工作队列输入 SHA', () => {
         const fx = fixture();
         const built = materializeAuthorPacket(fx.options);
         assert.equal(built.packet.contract, PACKET_CONTRACT);
@@ -179,7 +179,7 @@ describe('Manual v5 cold-start author packet', () => {
         assert.equal(queue.dispatch[0].packet.expectedPacketSha256, built.packet.packetSha256);
     });
 
-    it('rejects source symlinks and symlink-spoofed packet roots', () => {
+    it('拒绝来源符号链接和伪装成符号链接的包根目录', () => {
         const fx = fixture();
         const realSource = `${fx.input.filePath}.real`;
         fs.renameSync(fx.input.filePath, realSource);
@@ -194,7 +194,7 @@ describe('Manual v5 cold-start author packet', () => {
         assert.throws(() => materializeAuthorPacket(fx2.options), /symlink|父路径/);
     });
 
-    it('rejects path escape, extra allowlist entries and extra directory inputs', () => {
+    it('拒绝路径逃逸、白名单外的条目和多余的目录输入', () => {
         const fx = fixture();
         assert.throws(() => buildAuthorPacket({
             ...fx.options,
@@ -216,7 +216,7 @@ describe('Manual v5 cold-start author packet', () => {
         assert.throws(() => materializeAuthorPacket(fx.options), /额外输入/);
     });
 
-    it('fails closed when fulltext or ArtifactIndex identity drifts', () => {
+    it('全文或 ArtifactIndex 身份漂移时直接失败', () => {
         const fx = fixture();
         const manifest = JSON.parse(fs.readFileSync(fx.options.fulltextManifestPath, 'utf8'));
         manifest.papers[ID].paperInputSha256 = 'f'.repeat(64);
@@ -230,7 +230,7 @@ describe('Manual v5 cold-start author packet', () => {
         assert.throws(() => buildAuthorPacket(fx2.options), /checkpoint 未与当前全文|身份/);
     });
 
-    it('does not open forbidden canonical, old article, quality or review prose', () => {
+    it('不读取被禁止的正式记录、旧文章、质量文案或审查文案', () => {
         const fx = fixture();
         const forbiddenPaths = [
             write(path.join(fx.current, 'deep-analysis-result.json'), '{ invalid canonical'),

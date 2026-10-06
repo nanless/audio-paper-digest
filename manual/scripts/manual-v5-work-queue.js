@@ -2,13 +2,12 @@
 'use strict';
 
 /**
- * Read-only observer for the default Manual v5 paper queue.
+ * 默认 Manual v5 论文队列的只读观察者。
  *
- * The observer never claims work, starts a subagent, edits records/canonical
- * data, or changes blog state.  It derives readiness from immutable artifacts
- * and writes only an isolated observability snapshot.  Active claims can only
- * come from an explicit orchestrator observation file whose task input SHA
- * still matches the current derived task.
+ * 这个观察者不领取任务、不启动 subagent、不改记录或正式数据，也不动博客状态。
+ * 它的就绪判断完全来自已经固定的产物，写出去的只有一份隔离的观察快照。正在
+ * 被领取的任务只可能来自编排器显式给出的观察文件，而且那份文件里的任务输入
+ * SHA 还必须和当前推导出的任务一致。
  */
 const fs = require('fs');
 const path = require('path');

@@ -48,7 +48,7 @@ function fixture(t, { sourceId } = {}) {
     write(path.join(currentDir, `blog-generation-manifest-${date}.json`), { files: [...entries,
         { path: asset, sha256: sha('pixels'), deleted: false }], publishedPapers: papers });
     write(path.join(currentDir, `blog-review-receipt-${date}.json`), { files: entries, publicationCommit: 'a'.repeat(40) });
-    // The real baseline has a newer single-paper publication than the batch receipt.
+    // 真实基线里有一篇单篇发布比批次凭证更新。
     write(path.join(blogRepo, entries[0].path), page(paperIds[0], 'newer single-paper body'));
     write(path.join(currentDir, `blog-generation-manifest-${date}-single-${paperIds[0].replace('.', '-')}.json`), {
         files: [{ path: entries[0].path, sha256: sha(fs.readFileSync(path.join(blogRepo, entries[0].path))), deleted: false },
@@ -97,7 +97,7 @@ function fixture(t, { sourceId } = {}) {
     return { ...options, baseline, run, analysis, promote, outside, entries, asset, sidecar, hooks, outsidePage };
 }
 
-test('prepare backs actual 31 pages including newer single release, assets, data and private immutable recovery files', t => {
+test('准备阶段备份实际的 31 个页面，含较新的单篇发布、素材、数据和私有不可变恢复文件', t => {
     const f = fixture(t);
     const baseline = JSON.parse(fs.readFileSync(path.join(f.runDir, 'baseline.json')));
     assert.equal(baseline.pages.length, 31);
@@ -116,7 +116,7 @@ test('prepare backs actual 31 pages including newer single release, assets, data
     assert.throws(() => prepareBaseline(f), /backup|baseline/i);
 });
 
-test('new baseline audits the original arXiv version while requiring a new sealed source generation', t => {
+test('新基线审查原始 arXiv 版本，同时要求有新的已保存来源代次', t => {
     const f = fixture(t, { sourceId: '2609.00001v1' });
     assert.deepEqual(f.baseline.sourceExpectations['2609.00001'], {
         sourceMode: 'sealed-arxiv-bundle-v1', sourceGeneration: 1
@@ -125,13 +125,13 @@ test('new baseline audits the original arXiv version while requiring a new seale
     assert.deepEqual(prepareBaseline(f), f.baseline);
 });
 
-test('baseline refuses malformed or cross-paper original source IDs', t => {
+test('基线拒绝格式错误或跨论文的原始来源 ID', t => {
     for (const sourceId of ['2609.99999v1', 'https://arxiv.org/abs/2609.00001v1', '2609.00001v0', '2609.00001v1/other']) {
         assert.throws(() => fixture(t, { sourceId }), /source ID does not identify/);
     }
 });
 
-test('promote atomically replaces all 30 fresh papers, increments generation, preserves date-external data and resumes exactly', t => {
+test('promote 原子替换全部 30 篇当日论文，递增代次，保留日期之外的数据，并能精确续跑', t => {
     const f = fixture(t); const result = f.promote();
     const current = JSON.parse(fs.readFileSync(f.canonicalPath));
     assert.equal(current.generation, 8);
@@ -147,14 +147,14 @@ test('promote atomically replaces all 30 fresh papers, increments generation, pr
     assert.equal(fs.readFileSync(path.join(f.blogRepo, f.outsidePage), 'utf8'), 'outside-date page remains unchanged');
 });
 
-test('promote refuses baseline CAS drift without touching changed canonical', t => {
+test('基线 CAS 漂移时 promote 拒绝，且不碰已被改动的正式记录', t => {
     const f = fixture(t); const current = JSON.parse(fs.readFileSync(f.canonicalPath)); current.generation++;
     write(f.canonicalPath, current); const before = fs.readFileSync(f.canonicalPath);
     assert.throws(() => f.promote(), /baseline|CAS/i);
     assert.deepEqual(fs.readFileSync(f.canonicalPath), before);
 });
 
-test('promote refuses changed batch inputs and source snapshot evidence before canonical replacement', t => {
+test('正式替换之前，批次输入或来源快照证据一变，promote 就拒绝', t => {
     const f = fixture(t); const before = fs.readFileSync(f.canonicalPath);
     const filtered = path.join(f.currentDir, 'filtered-papers.json'); const original = fs.readFileSync(filtered);
     write(filtered, { batchDate: '2026-09-05', papers: [] });

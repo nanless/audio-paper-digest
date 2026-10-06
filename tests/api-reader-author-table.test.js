@@ -6,8 +6,8 @@ const crypto = require('node:crypto');
 const cheerio = require('cheerio');
 const { parseArxivReaderAuthors, resolveApiReaderAuthors } = require('../scripts/deep-analyzer.js');
 
-// Structural excerpt of arXiv 2609.03622 HTML: no .ltx_authors or citation
-// metadata; author superscripts and affiliation superscripts are explicit.
+// 摘自 arXiv 2609.03622 HTML 的结构片段：没有 .ltx_authors，也没有引文
+// 元数据；作者上标和机构上标都是显式写出的。
 const authorTable = `<table id="p2.1" class="ltx_tabular ltx_guessed_headers">
 <thead><tr><th><span class="ltx_text ltx_font_italic">Sofiene Kammoun<sup><span>1</span></sup>   Simon Leglaive<sup><span>1</span></sup>   Xavier Alameda-Pineda<sup><span>2</span></sup>   Timo Gerkmann<sup>3</sup></span></th></tr></thead>
 <tbody>
@@ -22,8 +22,8 @@ const expected = [
     { name: 'Timo Gerkmann', affiliations: ['Signal Processing Group, University of Hamburg, Germany'] }
 ];
 
-describe('API Reader explicit author-table identity', () => {
-    it('maps each author superscript to its unique institution row and binds the whole DOM', () => {
+describe('API Reader 显式的作者表身份', () => {
+    it('把每个作者上标映射到唯一的机构行，并绑定整个 DOM', () => {
         const $ = cheerio.load(authorTable + '<section class="ltx_section">Introduction</section>');
         const parsed = parseArxivReaderAuthors($);
         assert.deepEqual(parsed.authors, expected);
@@ -40,7 +40,7 @@ describe('API Reader explicit author-table identity', () => {
         }
     });
 
-    it('follows labels rather than institution-row order and supports explicit multiple affiliations', () => {
+    it('按标签而不是机构行顺序匹配，并支持显式的多重机构', () => {
         const table = `<table><tr><th>Ada Example<sup>2,1</sup> Ben Example<sup>1</sup></th></tr>
         <tr><td><sup>2</sup>Institute Two</td></tr><tr><td><sup>1</sup>Institute One</td></tr></table>`;
         assert.deepEqual(parseArxivReaderAuthors(cheerio.load(table)).authors, [
@@ -49,7 +49,7 @@ describe('API Reader explicit author-table identity', () => {
         ]);
     });
 
-    it('refuses missing, duplicated, nonnumeric and ambiguous mappings instead of guessing', () => {
+    it('映射缺失、重复、非数字或有歧义时直接拒绝，不猜', () => {
         const variants = [
             authorTable.replace('Timo Gerkmann<sup>3</sup>', 'Timo Gerkmann<sup>4</sup>'),
             authorTable.replace('<sup><span>3</span></sup>', '<sup><span>2</span></sup>'),
@@ -62,7 +62,7 @@ describe('API Reader explicit author-table identity', () => {
         for (const html of variants) assert.deepEqual(parseArxivReaderAuthors(cheerio.load(html)).authors, []);
     });
 
-    it('preserves existing author metadata precedence and changes proof when an institution changes', () => {
+    it('保留现有作者元数据的优先级，机构一变证明就变', () => {
         const withMetadata = '<meta name="citation_author" content="Metadata Author">' + authorTable;
         assert.deepEqual(parseArxivReaderAuthors(cheerio.load(withMetadata)).authors, [
             { name: 'Metadata Author', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }

@@ -91,8 +91,8 @@ function allMusicCapsArtifact() {
     return fallbackAllMusicCapsFixture();
 }
 
-describe('Manual tutorial artifact projection', () => {
-    it('accepts the three original AllMusicCaps HTTPS SVG figures and rejects the three funder logos', () => {
+describe('Manual 教程产物的汇总', () => {
+    it('接受 AllMusicCaps 原有的三张 HTTPS SVG 图，拒绝三个资助方 logo', () => {
         const index = allMusicCapsArtifact();
         const decisions = index.figures.map(classifyFigureCandidate);
         assert.equal(decisions.filter(item => item.eligible).length, 3);
@@ -104,7 +104,7 @@ describe('Manual tutorial artifact projection', () => {
         }).eligible, false);
     });
 
-    it('renders all three AllMusicCaps tables deterministically with complete numeric fidelity', () => {
+    it('以确定结果渲染 AllMusicCaps 的三张表，数字完全保真', () => {
         const index = allMusicCapsArtifact();
         assert.equal(index.tables.length, 3);
         const plan = buildTutorialArtifactPlan(index);
@@ -120,7 +120,7 @@ describe('Manual tutorial artifact projection', () => {
         assert.doesNotThrow(() => validateTutorialArtifactPlan(index, plan));
     });
 
-    it('flattens colspan-expanded headers into ordinary Markdown columns without simulated spans', () => {
+    it('把跨列展开的表头拍平成普通 Markdown 列，不模拟跨列', () => {
         const index = allMusicCapsArtifact();
         const source = index.tables.find(item => item.id === 'TAB0002');
         const rendered = renderMarkdownTable(source);
@@ -141,7 +141,7 @@ describe('Manual tutorial artifact projection', () => {
         assert.deepEqual(numericCellIds(source), buildTutorialArtifactPlan(index).tables.find(item => item.id === 'TAB0002').numericCellIds);
     });
 
-    it('flattens multirow Table 1 and splits Table 3 logical header groups without repeated colspan labels', () => {
+    it('拍平跨行的表 1，并拆开表 3 的逻辑表头分组，不重复跨列标签', () => {
         const index = allMusicCapsArtifact();
         const tableOne = renderMarkdownTable(index.tables.find(item => item.id === 'TAB0001'));
         const tableThree = renderMarkdownTable(index.tables.find(item => item.id === 'TAB0003'));
@@ -152,7 +152,7 @@ describe('Manual tutorial artifact projection', () => {
         assert.doesNotMatch(tableThree, /^\|  \| MLP Probing \| MLP Probing \|/m);
     });
 
-    it('cleans only duplicate display symbols while retaining source SHA binding and numeric values', () => {
+    it('只清理重复的展示符号，保留来源 SHA 绑定和数值', () => {
         const index = allMusicCapsArtifact();
         const plan = buildTutorialArtifactPlan(index);
         const tableOne = plan.tables.find(item => item.id === 'TAB0001');
@@ -185,7 +185,7 @@ describe('Manual tutorial artifact projection', () => {
         assert.doesNotThrow(() => validateTutorialArtifactPlan(index, plan));
     });
 
-    it('neutralizes repeated sign fragments without guessing their direction and audits every transformed cell', () => {
+    it('消除重复的正负号片段但不猜方向，并逐格记录变换', () => {
         const source = table('TAB9000', 'other', 'Ambiguous extracted signs', [
             ['delta', 'query'], ['--12', 'a'], ['+-3.5%', 'b'], ['+7', 'ordinary positive'], ['-8', 'ordinary negative']
         ]);
@@ -196,7 +196,7 @@ describe('Manual tutorial artifact projection', () => {
         assert.match(renderMarkdownTable(source), /方向按未知处理/);
     });
 
-    it('fails closed on an omitted figure, numeric-cell drift, and altered deterministic table bytes', () => {
+    it('漏图、数字单元格漂移或确定性表格字节被改动时直接失败', () => {
         const index = allMusicCapsArtifact();
         const plan = buildTutorialArtifactPlan(index);
         const missingFigure = structuredClone(plan);

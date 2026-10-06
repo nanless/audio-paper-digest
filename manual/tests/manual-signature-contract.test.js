@@ -15,7 +15,7 @@ const vectors = JSON.parse(fs.readFileSync(
     path.join(__dirname, 'fixtures', 'manual-stable-json-vectors.json'), 'utf8'
 ));
 
-describe('Manual cross-runtime signature contract', () => {
+describe('Manual 跨运行时签名约定', () => {
     it('共享向量固定 stable JSON、Unicode 字节、NFKC 文本与 SHA', () => {
         assert.equal(vectors.contract, MANUAL_SIGNATURE_CONTRACT);
         for (const vector of vectors.accepted) {

@@ -18,7 +18,7 @@ const { buildManifestContext } = require('../scripts/manual-fetch-fulltext.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
-describe('official Manual records v4/spec v6 assembler', () => {
+describe('官方 Manual records v4 / spec v6 组装器', () => {
     it('CLI 必须显式选择 production/shadow 且拒绝任意 --output', () => {
         assert.deepEqual(parseArgs([
             '--production', '--date', '2026-08-28', '--records', 'a.json', '--records', 'b.json'

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Merge independently reviewed Manual filter shards into one exact-coverage spec. */
+/** 把几份各自审查过的 Manual 筛选分片合成一份逐条覆盖的配置。 */
 const fs = require('fs');
 const path = require('path');
 const Config = require('../../scripts/config.js');

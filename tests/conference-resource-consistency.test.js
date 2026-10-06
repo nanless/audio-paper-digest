@@ -58,7 +58,7 @@ function auditWithOpenSource(score, reason) {
     };
 }
 
-test('authenticated weak conference source binds a bare repository token to verified HTTPS and scoring', async () => {
+test('已核验的弱会议来源把裸仓库标识绑定到已核验的 HTTPS 和评分', async () => {
     const paperId = 'conference:uai:2026:conference-paper-id:zhang26a';
     const text = 'We detail each component below. Code\nis available at github.com/ZhanqiZhang66/align.\nReproduction settings follow.';
     const details = weakDetails(paperId, text);
@@ -107,7 +107,7 @@ test('authenticated weak conference source binds a bare repository token to veri
     assert.doesNotMatch(contradictoryReason.dimensions.openSource.reason, /尚未发布/);
 });
 
-test('weak-source extraction remains conference-authenticated and ambiguous references do not become code', async () => {
+test('弱来源提取仍需会议级核验，有歧义的引用不会变成代码', async () => {
     const paperId = 'conference:uai:2026:conference-paper-id:reference26a';
     const text = 'Related work can be found at github.com/example/reference-project.';
     const details = weakDetails(paperId, text);
@@ -139,7 +139,7 @@ test('weak-source extraction remains conference-authenticated and ambiguous refe
     );
 });
 
-test('weak conference extraction reuses multi-facet and safe line-wrap repository binding', () => {
+test('弱会议提取复用多 facet 和安全的换行仓库绑定', () => {
     const source = 'Code and dataset are available at huggingface.co/example/\nshared-assets.';
     const candidates = deep.extractWeakConferenceSourceResourceCandidates(source);
     assert.deepEqual(candidates, binding.extractPaperSourceRepositoryCandidates(source));
@@ -188,7 +188,7 @@ test('weak conference extraction reuses multi-facet and safe line-wrap repositor
     ), []);
 });
 
-test('shared repository retains code and checkpoint facets and binds a comma status tail', async () => {
+test('共用仓库保留代码和检查点 facet，并绑定逗号分隔的状态尾部', async () => {
     const paperId = 'conference:eacl:2026:conference-paper-id:2026.eacl-long.149';
     const text = 'The code and checkpoints are available at https://github.com/audiosae/audiosae_demo.';
     const details = weakDetails(paperId, text);
@@ -234,7 +234,7 @@ test('shared repository retains code and checkpoint facets and binds a comma sta
     );
 });
 
-test('Reader receives verified unavailable status and cannot treat a source URL as currently public', async () => {
+test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当成当前公开可用', async () => {
     const paperId = 'conference:uai:2026:conference-paper-id:unavailable26a';
     const text = 'Code is available at github.com/example/unavailable-project.';
     const details = weakDetails(paperId, text);
@@ -808,7 +808,7 @@ test('Reader receives verified unavailable status and cannot treat a source URL 
     );
 });
 
-test('canonical open-source detail rows project each verified status and preserve unverified rows', async () => {
+test('正式的开源明细行会逐条呈现已核验状态，并保留未核验的行', async () => {
     const sourceText = [
         'Code: https://github.com/example/code.',
         'Model weights: https://huggingface.co/example/model.',
@@ -876,7 +876,7 @@ test('canonical open-source detail rows project each verified status and preserv
     assert.match(unchangedRows, /资源可达性验证：未发现可验证的官方 HTTPS 资源 URL/);
 });
 
-test('repository token normalizer rejects credentials, ports, query strings and encoded traversal', () => {
+test('仓库标识归一化拒绝凭证、端口、查询串和编码过的路径穿越', () => {
     for (const value of [
         'https://user:pass@github.com/owner/repo',
         'github.com:8443/owner/repo',
@@ -890,7 +890,7 @@ test('repository token normalizer rejects credentials, ports, query strings and 
     }
 });
 
-test('resource reachability authenticates a large or continuous GET 200 response from headers only', async () => {
+test('资源可达性只凭响应头就确认大体积或流式的 GET 200', async () => {
     const calls = [];
     const result = await deep.verifyApiReaderResourceUrl('https://github.com/example/large-repository', {
         validateUrlImpl: async raw => new URL(raw),
@@ -910,7 +910,7 @@ test('resource reachability authenticates a large or continuous GET 200 response
     assert.equal(Object.hasOwn(calls[0], 'maxBytes'), false);
 });
 
-test('resource reachability uses one headers-only GET per hop and revalidates a redirect target', async () => {
+test('资源可达性每跳只发一次只取响应头的 GET，并重新校验重定向目标', async () => {
     const calls = [];
     const validations = [];
     const result = await deep.verifyApiReaderResourceUrl('https://github.com/example/repository', {
@@ -944,7 +944,7 @@ test('resource reachability uses one headers-only GET per hop and revalidates a 
     }]);
 });
 
-test('resource reachability classifies GET terminal statuses without reading response bodies', async () => {
+test('资源可达性只按 GET 的终态分类，不读响应体', async () => {
     const verifyStatus = status => deep.verifyApiReaderResourceUrl('https://github.com/example/repository', {
         validateUrlImpl: async raw => new URL(raw),
         requestImpl: async (_raw, options) => {
@@ -961,7 +961,7 @@ test('resource reachability classifies GET terminal statuses without reading res
     }
 });
 
-test('resource reachability hard-fails a redirect whose next hop resolves to private space', async () => {
+test('重定向的下一跳解析到私网地址时，资源可达性直接判失败', async () => {
     let requests = 0;
     await assert.rejects(deep.verifyApiReaderResourceUrl('https://github.com/example/repository', {
         validateUrlImpl: async raw => {
@@ -1004,7 +1004,7 @@ function pinnedDependencies(stream, state) {
     };
 }
 
-test('headers-only pinned response settles after cancellation and exposes no fake empty body', async () => {
+test('只取响应头的固定 IP 请求在取消之后会正常收尾，不会给出假的空响应体', async () => {
     const state = {};
     const stream = new Readable({ read() {} });
     stream.statusCode = 200;
@@ -1022,7 +1022,7 @@ test('headers-only pinned response settles after cancellation and exposes no fak
     state.request.emit('error', new Error('late request error after cancellation'));
 });
 
-test('default pinned buffer mode retains RESPONSE_TOO_LARGE protection', async () => {
+test('默认的固定 IP 缓冲模式仍然保留 RESPONSE_TOO_LARGE 保护', async () => {
     const state = {};
     const stream = Readable.from([Buffer.alloc(4), Buffer.alloc(4)]);
     stream.statusCode = 200;
@@ -1034,7 +1034,7 @@ test('default pinned buffer mode retains RESPONSE_TOO_LARGE protection', async (
     assert.equal(state.agentDestroyed, true);
 });
 
-test('conference Reader resource gate distinguishes explicit denials, dataset repositories and third-party tools', () => {
+test('会议 Reader 的资源检查能区分明确的拒绝、数据集仓库和第三方工具', () => {
     const sourceText = '';
     const available = (type, url) => ({
         type,
@@ -1116,7 +1116,7 @@ test('conference Reader resource gate distinguishes explicit denials, dataset re
     }, datasetIdentity, sourceText));
 });
 
-test('multi-pass scoring consensus remains replayable after a noisy second audit', () => {
+test('第二轮审查有噪声时，多轮评分的共识仍然可以复核', () => {
     const hash = 'a'.repeat(64);
     const stage = {
         stabilityWarning: true,

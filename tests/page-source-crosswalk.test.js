@@ -853,8 +853,8 @@ test('self-authored arXiv fixtures cannot authorize verified decisions in the co
     { cwd: path.join(__dirname, '..'), encoding: 'utf8' });
     assert.equal(child.status, 9); assert.match(child.stderr, /fixture bundles cannot verify history/);
 
-    // A state written by the earlier permissive implementation must not be
-    // grandfathered into a production final receipt.
+    // 早期宽松实现写下的状态，
+    // 不能被当成合法记录带进生产环境的最终凭证。
     const snapshot = authorityApi.authorityHandleSnapshot(authorityHandle);
     const sourceAuthority = { paperId: snapshot.authority.paperId, identity: snapshot.authority.identity,
         identitySha256: snapshot.authority.identitySha256, identityRecordSha256: snapshot.authority.identityRecordSha256,

@@ -188,7 +188,7 @@ describe('OpenCode Go sticky account state', () => {
         const second = selectApiKey(keys, ENDPOINT, file, { nowMs: 1100 });
         assert.strictEqual(second.apiKey, 'account-b-secret');
 
-        // A has recovered, but successful B remains sticky instead of failing back.
+        // A 已经恢复，但之前成功的 B 仍然保持选中，不会切回去。
         const stillSecond = selectApiKey(keys, ENDPOINT, file, { nowMs: 3000 });
         assert.strictEqual(stillSecond.apiKey, 'account-b-secret');
         const raw = fs.readFileSync(file, 'utf8');

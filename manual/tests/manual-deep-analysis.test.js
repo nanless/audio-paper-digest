@@ -273,8 +273,8 @@ function promoteReusableRecordToV4(record) {
     return promoted;
 }
 
-describe('manual canonical runtime controls', () => {
-    it('normalizes discovered bare public domains to HTTPS before caching provenance', () => {
+describe('Manual 正式运行时的控制项', () => {
+    it('缓存来源之前，把发现的裸公网域名统一补成 HTTPS', () => {
         assert.deepStrictEqual(normalizeDiscoveredHttpsLinks([
             'github.com/example/project',
             'https://example.com/demo',
@@ -337,7 +337,7 @@ describe('manual canonical runtime controls', () => {
     });
 });
 
-describe('manual v5 fresh canonical compatibility', () => {
+describe('Manual v5 当日正式记录的兼容性', () => {
     it('历史 v5 无 fresh marker 时不追溯判坏', () => {
         const manifest = { contracts: { manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5 } };
         assert.equal(validateFreshAuthoringRecordConsistency(manifest, {}), null);
@@ -368,7 +368,7 @@ describe('manual v5 fresh canonical compatibility', () => {
     });
 });
 
-describe('manual_complete v3 deep-analysis contract', () => {
+describe('manual_complete v3 深度分析约定', () => {
     it('保留完整图注意义，不以字符数或分号制造半句截断', () => {
         const longSingleSentence = `Fig. 1: ${'Illustration of the considered active sonar scenario '.repeat(5).trim()} in a time-varying multipath channel.`;
         const normalized = conciseManualImageCaption(longSingleSentence, 80);
@@ -400,7 +400,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
         );
     });
 
-    it('accepts explicit force takeover but rejects unknown or duplicate flags', () => {
+    it('允许显式强制接管，拒绝未知或重复的参数', () => {
         assert.deepEqual(
             parseArgs(['--date', '2026-08-20', '--spec', 'manual.json', '--force']),
             {
@@ -698,8 +698,8 @@ describe('manual_complete v3 deep-analysis contract', () => {
             explanation: '图中箭头从声学特征编码器进入上下文融合模块；该结构只回扣训练阶段使用公开数据的流程，不能说明未披露超参数。'
         }];
         const paper = { arxivId: '2608.20000', title: 'Fixture paper', authors: [], categories: [] };
-        // The fixture source is intentionally repeated so the bounded full-text gate passes;
-        // source quotes remain exact substrings after normalization.
+        // 固定数据里的原文故意重复，好让有长度上限的全文检查通过；
+        // 归一化之后，原文引用仍然是精确的子串。
         const promptBindings = buildStagePromptBindings();
         const preparedImages = [{
             url: spec.imageInfos[0].url,
@@ -1039,7 +1039,7 @@ describe('manual_complete v3 deep-analysis contract', () => {
     });
 });
 
-describe('manual full-text-evidence-v2 quality gates', () => {
+describe('Manual full-text-evidence-v2 质量检查', () => {
     const v2Options = sourceText => ({ sourceText, manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V2 });
 
     it('合规正文同时通过 v1 与 v2 契约', () => {
@@ -1097,7 +1097,7 @@ describe('manual full-text-evidence-v2 quality gates', () => {
     });
 });
 
-describe('manual full-text-evidence-v3 reader-visible quality gates', () => {
+describe('Manual full-text-evidence-v3 读者可见质量检查', () => {
     const v3Options = sourceText => ({ sourceText, manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V3 });
 
     it('接受具有论证推进、比较实验、复现信息和双层局限的正文', () => {

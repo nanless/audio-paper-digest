@@ -25,8 +25,8 @@ function paper(pageKey, arxivId, suffix = '') {
 }
 function state() {
     const papers = [paper(key('a'), '2601.00001', 'a'), paper(key('b'), '2601.00001', 'b'),
-        // Same arXiv hint, deliberately absent from the handoff. A pending-page
-        // sweep would incorrectly include this page.
+        // arXiv 提示相同，但故意不出现在交接清单里。
+        // 待处理页面的扫描如果把它算进来就错了。
         paper(key('c'), '2601.00001', 'c'), paper(key('d'), '2601.00002', 'd')];
     return { source: { ...source, papers }, assignments: Object.fromEntries(papers.map(item => [item.pageKey,
         { status: 'pending', sourceAuthority: null }])), completion: { verified: 0, total: papers.length } };

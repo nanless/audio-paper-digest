@@ -82,12 +82,12 @@ test('旧计划和凭证可按原字节读取，但不能创建另一份运行�
     }
 });
 
-test('legacy ledger-only plan constructors are not exposed', () => {
+test('旧版只写账目的计划构造函数不再对外暴露', () => {
     assert.equal(plan.createRunFromPlan, undefined);
     assert.equal(plan.createPlanReceipt, undefined);
 });
 
-test('plan filenames remain direct JSON names', () => {
+test('计划文件名仍然是直接的 JSON 名', () => {
     assert.throws(() => plan.receiptNameFor('../run.json'), /safe direct JSON/);
     assert.equal(plan.receiptNameFor('run.json'), 'run.plan-receipt.json');
 });

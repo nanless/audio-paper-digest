@@ -1,13 +1,12 @@
 'use strict';
 
 /**
- * One sealed, file-backed tutorial payload for default Manual v5.
+ * 默认 Manual v5 用的一份教程材料，落在文件里，内容经过核验。
  *
- * The payload joins the cold-start article, the independent tutorial quality
- * packet and the deterministic ArtifactIndex projection.  Every consumer
- * reopens the two JSON files and the article/ArtifactIndex authorities before
- * trusting the receipt; copying a stale quality result beside a new article is
- * therefore insufficient.
+ * 这份材料把冷启动写出的文章、独立产出的教程质量检查结果，以及按 ArtifactIndex
+ * 固定推导出的展示内容合在一起。每个使用方都要重新打开那两个 JSON 文件和文章、
+ * ArtifactIndex 这两份依据文件，确认内容没变之后才认这份核验记录；所以把旧的
+ * 质量检查结果直接搬到新文章旁边是过不了关的。
  */
 
 const fs = require('fs');

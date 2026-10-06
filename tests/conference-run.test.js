@@ -56,7 +56,7 @@ function projection(paperId) {
         publicationSha256: sha(`publication:${paperId}`), summary: { title: `Title ${paperId}`, score: 9.2 } };
     return { ...value, projectionSha256: conference.stableHash(value) };
 }
-test('conference run freezes ordered member/source identities, member digest and full non-overlapping shards', () => {
+test('会议运行冻结有序的成员和来源身份、成员摘要，以及完整且互不重叠的分片', () => {
     const run = conference.createConferenceRun(base());
     assert.equal(run.contract, conference.CONTRACT);
     assert.equal(run.version, 3);
@@ -131,7 +131,7 @@ test('运行记录核对来源、词表、选择规则、成员和分片是否�
     assert.notEqual(next.stateSha256, run.stateSha256);
 });
 
-test('completed state is unavailable until an authenticated completion-proof handle exists', () => {
+test('在拿到已核验的完成证明句柄之前，完成状态不可用', () => {
     let run = conference.createConferenceRun(base());
     assert.throws(() => conference.transitionPaperState(run, pid('100'), { status: 'completed', usage: {},
         projection: projection(pid('100')) }), /completion-proof handle/);
@@ -147,7 +147,7 @@ test('completed state is unavailable until an authenticated completion-proof han
     assert.throws(() => conference.assertConferenceRun(forged), /completion-proof handle/);
 });
 
-test('only a verified ledger can create an executable run, with exact canonical source identities', () => {
+test('只有已核验的账目才能创建可执行的运行，且来源身份必须是精确的正式身份', () => {
     const { run, ledger, ledgerSha256, ledgerHandle } = boundRun();
     assert.equal(conference.assertConferenceRunFromVerifiedLedger(run, ledgerHandle).identitySha256, run.identitySha256);
     assert.throws(() => conference.createConferenceRunFromVerifiedLedger({ ledgerHandle, tagCatalogVersion: 'paper-tag-catalog-v2', ...selectionProof(),
@@ -161,7 +161,7 @@ test('only a verified ledger can create an executable run, with exact canonical 
     assert.throws(() => conference.assertConferenceRunFromVerifiedLedger(forged, ledgerHandle), /lacks a verified ledger binding/);
 });
 
-test('creation cannot inject completed states, unknown fields, or a fabricated binding', () => {
+test('创建过程不能注入已完成状态、未知字段或伪造的绑定', () => {
     const pending = Object.fromEntries(members.map(member => [member.paperId, { status: 'pending', usage: {} }]));
     assert.doesNotThrow(() => conference.createConferenceRun({ ...base(), paperStates: pending }));
     const completed = structuredClone(pending); completed[members[0].paperId] = { status: 'completed', usage: {}, projection: projection(members[0].paperId) };
@@ -170,7 +170,7 @@ test('creation cannot inject completed states, unknown fields, or a fabricated b
     assert.throws(() => conference.createConferenceRun({ ...base(), ledgerBinding: {} }), /unknown field/);
 });
 
-test('usage is monotonic across every transition and cannot be cleared after reporting', () => {
+test('用量在每次转换中单调递增，上报之后也不能清零', () => {
     let run = conference.createConferenceRun(base());
     run = conference.transitionPaperState(run, members[0].paperId, { status: 'source_ready', usage: { requests: 2, totalTokens: 20 } });
     assert.throws(() => conference.transitionPaperState(run, members[0].paperId, { status: 'analyzing', usage: { requests: 1, totalTokens: 20 } }), /cannot regress/);
@@ -179,7 +179,7 @@ test('usage is monotonic across every transition and cannot be cleared after rep
     assert.equal(run.paperStates[members[0].paperId].usage.totalTokens, 21);
 });
 
-test('summary hand-off remains draft-only and marks every incomplete member as excluded', () => {
+test('交接给汇总的内容始终只是草稿，每个不完整的成员都标记为排除', () => {
     const trusted = boundRun(); let run = trusted.run;
     run = conference.transitionPaperState(run, pid('100'), { status: 'source_ready', usage: { requests: 1, totalTokens: 50 } });
     run = conference.transitionPaperState(run, pid('100'), { status: 'analyzing', usage: { requests: 2, totalTokens: 100 } });
@@ -202,7 +202,7 @@ test('summary hand-off remains draft-only and marks every incomplete member as e
     assert.doesNotMatch(JSON.stringify(one.papers), /missing local full text/);
 });
 
-test('legacy run API cannot create or validate a publishable conference aggregate', () => {
+test('旧版运行 API 不能创建或校验可发布的会议汇总', () => {
     const trusted = boundRun(); let run = trusted.run;
     const context = { ledgerHandle: trusted.ledgerHandle };
     const input = conference.buildConferenceAggregateInput(run, context);
@@ -215,7 +215,7 @@ test('legacy run API cannot create or validate a publishable conference aggregat
     }), /completion-proof handle/);
 });
 
-test('failed and blocked states need a reason and can only resume through source_ready', () => {
+test('失败和受阻状态必须给出原因，而且只能经由 source_ready 续跑', () => {
     let run = conference.createConferenceRun(base());
     assert.throws(() => conference.transitionPaperState(run, pid('100'), { status: 'blocked', usage: {} }), /requires a reason/);
     run = conference.transitionPaperState(run, pid('100'), { status: 'blocked', usage: {}, reason: 'ledger mismatch' });

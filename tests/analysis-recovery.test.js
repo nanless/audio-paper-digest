@@ -41,7 +41,7 @@ const { isSuccessfulAnalysisRecord } = require('../scripts/analysis-engine.js');
 
 const execFileAsync = promisify(execFile);
 
-describe('papers database recovery safety', () => {
+describe('论文库恢复的安全性', () => {
     it('papers writer 使用紧凑 JSON 且不改变字段语义', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-db-compact-'));
         const file = path.join(dir, 'papers.json');
@@ -321,7 +321,7 @@ describe('papers database recovery safety', () => {
     });
 });
 
-describe('entry recovery contracts', () => {
+describe('入口恢复约定', () => {
     it('refilter 按篇保存决定，并仅在日期和筛选配置指纹一致时复用', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'refilter-decisions-'));
         const checkpoint = path.join(dir, 'refilter-filter-decisions.json');

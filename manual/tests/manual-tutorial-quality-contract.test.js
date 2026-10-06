@@ -61,7 +61,7 @@ function fixture() {
     return { packet, article, artifactIndex: { tables: [{ id: 'T1' }], figures: [{ id: 'F1' }] } };
 }
 
-describe('Manual tutorial quality contract', () => {
+describe('Manual 教程质量约定', () => {
     it('接收含完整表格、因果桥、复现和三类读者收束的研究生教程 packet', () => {
         const { packet, article, artifactIndex } = fixture();
         const result = validateManualTutorialQualityPacket(packet, article, artifactIndex);

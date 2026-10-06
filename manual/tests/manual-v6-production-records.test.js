@@ -53,7 +53,7 @@ function minimalUnsealedLongform(paperId) {
     };
 }
 
-describe('Manual v6 production records envelope assembler', () => {
+describe('Manual v6 生产 records 外层对象组装器', () => {
     it('CLI 只接受固定日期与显式 force', () => {
         assert.deepEqual(parseArgs(['--date', '2026-08-29']), {
             date: '2026-08-29', force: false

@@ -1,12 +1,11 @@
 'use strict';
 
 /**
- * Shared, file-backed provenance contract for default Manual v5 authoring.
+ * 默认 Manual v5 写作流程共用的来源核验约定，依据落在文件上。
  *
- * This module proves that the reader article was emitted as a new controlled
- * article.md from the current paper's evidence packet.  A matching hash stored
- * beside an old readerArticle is deliberately insufficient: every authority
- * file is reopened, path-checked and hashed at each pipeline boundary.
+ * 这个模块要证明读者文章是从当前这篇论文的证据材料新写出来的、受控的
+ * article.md。只把一串匹配的哈希放在旧的 readerArticle 旁边是不够的：每到一个
+ * 流程边界，作为依据的文件都要重新打开、重新检查路径、重新算一遍哈希。
  */
 
 const fs = require('fs');

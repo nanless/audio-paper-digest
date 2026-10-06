@@ -253,7 +253,7 @@ function submitReview(fx, role, taskName) {
     submitTask(fx.state, claim.claimId, { outputPath, receiptPath });
 }
 
-describe('Manual v6 persistent task runner', () => {
+describe('Manual v6 持久任务执行器', () => {
     it('production author submit 在接收签名草稿时门禁 type/task/primaryMethodTag/tags', () => {
         const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-author-base-')));
         fs.mkdirSync(path.join(root, 'draft'));

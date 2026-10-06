@@ -29,14 +29,14 @@ const {
     getFetchRetryDelayMs
 } = require('../scripts/fetch-papers.js');
 
-describe('Muse filter transport policy', () => {
+describe('Muse 筛选的传输策略', () => {
     it('Muse 与其他模型均保留配置批次（2026-09-03 放宽并发）', () => {
         assert.strictEqual(getEffectiveFilterBatchSize(5, 'muse-spark-1.2-contributor'), 5);
         assert.strictEqual(getEffectiveFilterBatchSize(5, 'kimi-for-coding'), 5);
     });
 });
 
-describe('Responses filter terminal status', () => {
+describe('Responses 筛选的终态', () => {
     it('先拒绝 max_output_tokens 截断，不接受其中的非空部分正文', () => {
         assert.throws(() => extractFilterResponseContent('openai_responses', {
             status: 'incomplete',
@@ -55,7 +55,7 @@ describe('Responses filter terminal status', () => {
     });
 });
 
-describe('filter request retry classification and circuit breaker', () => {
+describe('筛选请求的重试分类与熔断', () => {
     const filterConfig = {
         endpoint: 'https://filter.example/v1',
         key: 'test-filter-key-secret',
@@ -427,7 +427,7 @@ describe('filterPapersByKeywords', () => {
     });
 });
 
-describe('filterPapersWithLLM resume decisions', () => {
+describe('filterPapersWithLLM 的续跑决定', () => {
     it('复用已有筛选决策时不调用模型，并按原论文顺序返回相关论文', async () => {
         const papers = [
             { arxivId: '2604.00001', title: 'Speech Paper', abstract: 'speech' },
@@ -951,7 +951,7 @@ describe('抓取健康状态', () => {
     });
 });
 
-describe('arXiv parsers', () => {
+describe('arXiv 解析器', () => {
     it('recent 健康签名拒绝通用 dl 错误页并接受 arXiv 条目/明确空页', () => {
         assert.strictEqual(hasRecentResponseSignature('<html><dl><dt>Error</dt></dl></html>'), false);
         assert.strictEqual(hasRecentResponseSignature(`
@@ -1040,7 +1040,7 @@ describe('arXiv parsers', () => {
     });
 });
 
-describe('arXiv proxy preflight', () => {
+describe('arXiv 代理预检', () => {
     it('仅配置 SOCKS ALL_PROXY 时在网络调用前拒绝执行', async () => {
         const keys = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'];
         const original = Object.fromEntries(keys.map(key => [key, process.env[key]]));

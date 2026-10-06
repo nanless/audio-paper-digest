@@ -54,7 +54,7 @@ function fixture(t) {
     return { root, metadataFile: path.join(root, 'metadata.json'), provider };
 }
 
-test('new official discovery binds and replays the complete acquisition receipt chain', t => {
+test('新的官方发现绑定并复核完整的获取凭证链', t => {
     const f = fixture(t);
     const found = discovery.discoverConference({ adapter: 'official-proceedings', conferenceId: 'iwslt-2026',
         year: 2026, metadataFile: f.metadataFile, pdfRoot: f.root, acquisitionRoot: f.root });
@@ -71,7 +71,7 @@ test('new official discovery binds and replays the complete acquisition receipt 
     assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /catalog receipt|acquisition receipt|paper set/i);
 });
 
-test('new-conference CLI rejects official discovery without acquisition-root', t => {
+test('新建会议命令行在缺少 acquisition-root 时拒绝官方发现', t => {
     const f = fixture(t);
     const previous = process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
     process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE = '1';

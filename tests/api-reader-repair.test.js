@@ -67,7 +67,7 @@ function countIssue(actualCount = 3, message = '表格不足，请补齐。') {
     return { path: null, code: TABLE_COUNT_ISSUE_CODE, requiredCount: 4, actualCount, message };
 }
 
-test('local replacements preserve every unselected node and reject stale/unauthorized patches', () => {
+test('局部替换保留每个未选中的节点，拒绝过期或未授权的补丁', () => {
     const draft = fixture();
     const original = JSON.stringify(draft);
     const pointer = '/sections/2/body';
@@ -94,7 +94,7 @@ test('local replacements preserve every unselected node and reject stale/unautho
     assert.throws(() => applyReaderPatch(draft, patch, []), /unauthorized/);
 });
 
-test('stale-node recovery rebuilds an exact target from the current candidate SHA', () => {
+test('过期节点恢复按当前候选 SHA 重建精确目标', () => {
     const draft = fixture();
     const pointer = '/sections/8/body';
     const stale = '0'.repeat(64);
@@ -105,7 +105,7 @@ test('stale-node recovery rebuilds an exact target from the current candidate SH
     assert.notEqual(targets[0].oldSha256, stale);
 });
 
-test('blocking marker repairs do not expand into diagnostic-only table rewrites', () => {
+test('阻塞性标记的修复不会扩大成只作诊断的表格改写', () => {
     const draft = fixture();
     draft.conceptBridges[2].sectionKind = 'problem';
     const marker = draft.conceptBridges[2].marker;
@@ -133,7 +133,7 @@ test('blocking marker repairs do not expand into diagnostic-only table rewrites'
         'diagnostics remain actionable when no blocking issue exists');
 });
 
-test('multiple duplicated concept markers stay within the patch contract and only authorize bodies', () => {
+test('多个重复的概念标记仍在补丁约定范围内，且只授权正文', () => {
     const draft = fixture();
     for (const bridge of draft.conceptBridges) {
         draft.sections[3].body = draft.sections[3].body.replace(bridge.marker, '');
@@ -177,7 +177,7 @@ test('multiple duplicated concept markers stay within the patch contract and onl
         legacyDiagnosticPaths);
 });
 
-test('mixed blocking diagnostics can never authorize more nodes than the patch protocol accepts', () => {
+test('混合的阻塞诊断最多只能授权补丁协议允许的节点数，不会再多了', () => {
     const draft = fixture();
     ['background', 'related_work', 'problem', 'component'].forEach((sectionKind, index) => {
         draft.conceptBridges[index].sectionKind = sectionKind;
@@ -192,7 +192,7 @@ test('mixed blocking diagnostics can never authorize more nodes than the patch p
     assert.equal(paths[0], '/readerTitle');
 });
 
-test('patch rejects duplicate, overlapping, prototype, unknown and out-of-range paths', () => {
+test('补丁拒绝重复、重叠、原型、未知和越界的路径', () => {
     const draft = fixture();
     const patch = patchFor(draft, [['/sections/0/body', '修复']]);
     patch.replacements.push(structuredClone(patch.replacements[0]));
@@ -210,7 +210,7 @@ test('patch rejects duplicate, overlapping, prototype, unknown and out-of-range 
     assert.equal({}.polluted, undefined);
 });
 
-test('draft shape distinguishes a bounded full retry from patchable nodes', () => {
+test('草稿形态区分有上限的整篇重试和可打补丁的节点', () => {
     assert.ok(parseRepairableDraft(JSON.stringify(fixture())));
     assert.equal(parseRepairableDraft('broken JSON'), null);
     for (const change of [draft => { draft.sections = []; }, draft => { draft.version = 2; },
@@ -219,7 +219,7 @@ test('draft shape distinguishes a bounded full retry from patchable nodes', () =
     }
 });
 
-test('patch cannot introduce or alter a figure whose pixels were absent from the repair request', () => {
+test('修复请求里没有像素的图，补丁不能新增也不能改动', () => {
     const draft = fixture();
     draft.figurePlacements.push({ figureOrdinal: 2, marker: '[[FIGURE_2]]', targetKind: 'result', focusPoints: [] });
     const patch = patchFor(draft, [['/sections/7/body', '图前说明\n\n[[FIGURE_2]]\n\n图后解释']]);
@@ -227,7 +227,7 @@ test('patch cannot introduce or alter a figure whose pixels were absent from the
     assert.doesNotThrow(() => applyReaderPatch(draft, patch, ['/sections/7/body'], { availableFigureOrdinals: [2] }));
 });
 
-test('independent diagnostics expose multiple bad nodes and bind their associated markers', () => {
+test('独立诊断能暴露多个问题节点，并绑定各自关联的标记', () => {
     const draft = fixture();
     draft.sections[0].body = '太短';
     draft.sections[1].body = '也太短';
@@ -245,7 +245,7 @@ test('independent diagnostics expose multiple bad nodes and bind their associate
     assert.equal(context.evidence, '完整来源');
 });
 
-test('deterministic table selections expose the binding and its marker section as patch targets', () => {
+test('结果确定的表格选择会把绑定及其标记所在小节暴露为补丁目标', () => {
     const draft = fixture();
     draft.tableBindings.push({ tableIndex: 1, selection: { sourceTableOrdinal: 2, sourceRows: [0, 1], sourceColumns: [0, 2] } });
     draft.sections[7].body += '\n\n[[TABLE_1]]';
@@ -256,7 +256,7 @@ test('deterministic table selections expose the binding and its marker section a
     assert.ok(collectDraftIssues(draft).some(issue => issue.path === '/tableBindings/0'));
 });
 
-test('a misplaced figure repair exposes the binding, declared section and actual marker section together', () => {
+test('图位置错位的修复会同时暴露绑定、声明的小节和实际标记小节', () => {
     const draft = fixture();
     draft.figurePlacements.push({ figureOrdinal: 4, marker: '[[FIGURE_4]]',
         targetKind: 'result', focusPoints: ['先看横轴与纵轴分别编码什么', '再比较各条件的相对变化方向'] });
@@ -271,7 +271,7 @@ test('a misplaced figure repair exposes the binding, declared section and actual
     }
 });
 
-test('an unresolved quantitative Chinese numeral targets its attached-count section instead of every body', () => {
+test('未解决的量化中文数字只指向它所属计数的小节，而不是所有正文', () => {
     const draft = fixture();
     draft.sections[0].body += '停顿一次后继续。';
     draft.sections[10].body += '建议再跑一次四特征叠加实验。';
@@ -280,7 +280,7 @@ test('an unresolved quantitative Chinese numeral targets its attached-count sect
     assert.deepEqual(targets.map(target => target.path), ['/sections/10/body']);
 });
 
-test('NFKC-normalized quantitative surfaces still target the exact full-width punctuation section', () => {
+test('NFKC 归一化之后的量化内容仍指向精确的全角标点小节', () => {
     const draft = fixture();
     draft.sections[11].body += '待验证的问题有三：一是延迟，二是成本，三是泛化。';
     const targets = buildRepairTargets(draft, [{ path: null,
@@ -288,7 +288,7 @@ test('NFKC-normalized quantitative surfaces still target the exact full-width pu
     assert.deepEqual(targets.map(target => target.path), ['/sections/11/body']);
 });
 
-test('comparison-unit prose localizes to its exact section without authorizing table bindings', () => {
+test('比较单位文案只定位到精确小节，不授权表格绑定', () => {
     const draft = fixture();
     const excerpt = '该表后的解释是：WER 从 30.65 降至 29.41，体现可懂度提升。';
     draft.sections[8].body += `\n\n${excerpt}`;
@@ -300,7 +300,7 @@ test('comparison-unit prose localizes to its exact section without authorizing t
     assert.deepEqual(targets.map(target => target.path), ['/sections/8/body']);
 });
 
-test('a broken prose excerpt targets the exact containing section even when other diagnostics exist', () => {
+test('即使还有其它诊断，损坏的正文片段也只指向它所在的那个小节', () => {
     const draft = fixture();
     const excerpt = '但在降级条件下受环境噪声影响更大，因此绝对分更低，但相对排序仍然合理';
     draft.sections[7].body += `\n\n${excerpt}。`;
@@ -311,7 +311,7 @@ test('a broken prose excerpt targets the exact containing section even when othe
     assert.ok(targets.some(target => target.path === '/sections/7/body'));
 });
 
-test('ambiguous selection-header repair targets only the small binding node', () => {
+test('有歧义的选择表头修复只指向那个小的绑定节点', () => {
     const draft = fixture();
     draft.tableBindings.push({ tableIndex: 1, selection: {
         sourceTableOrdinal: 4, sourceRows: [3, 4], sourceColumns: [0, 1] } });
@@ -322,7 +322,7 @@ test('ambiguous selection-header repair targets only the small binding node', ()
     assert.deepEqual(targets.map(target => target.path), ['/tableBindings/0']);
 });
 
-test('all malformed quote bindings, marker-only tables and insufficient length are diagnosed in one pass', () => {
+test('所有格式错误的引用绑定、只有标记的表格和长度不足，一次全部诊断出来', () => {
     const draft = fixture();
     draft.tableBindings = [1, 2].map(tableIndex => ({ tableIndex, sourceType: 'source_quotes', sourceTableOrdinal: null,
         cellBindings: [{ renderedRow: 0, renderedColumn: 0, quoteIndex: 0, value: '数据集' }], sourceQuotes: ['3.093.09'] }));
@@ -344,7 +344,7 @@ test('all malformed quote bindings, marker-only tables and insufficient length a
     assert.equal(targets.some(target => /^\/sections\/\d+$/.test(target.path)), false, 'body diagnostics never duplicate whole section targets');
 });
 
-test('malformed internal concept values produce diagnostics rather than exceptions', () => {
+test('内部概念值不合法时给出诊断，而不是抛异常', () => {
     for (const terms of ['声学表示', { term: '声学表示' }, null]) {
         const draft = fixture(); draft.conceptBridges[0].terms = terms;
         assert.ok(parseRepairableDraft(draft));
@@ -353,7 +353,7 @@ test('malformed internal concept values produce diagnostics rather than exceptio
     }
 });
 
-test('a section-shape repair target subsumes its body without duplicate prompt context', () => {
+test('小节形态的修复目标包含其正文，但不重复提示上下文', () => {
     const draft = fixture();
     const targets = buildRepairTargets(draft, [{ path: '/sections/0/body', message: 'sections[0].body 需要修改' },
         { path: '/sections/0', message: 'sections[0].heading 需要修改' }]);
@@ -361,7 +361,7 @@ test('a section-shape repair target subsumes its body without duplicate prompt c
     assert.ok(!targets.some(target => target.path === '/sections/0/body'));
 });
 
-test('candidate storage is atomic, private, input-specific, and never a success receipt', t => {
+test('候选存储是原子的、私有的、按输入区分的，而且绝不是成功凭证', t => {
     const directory = temporary(t);
     const identity = { version: REPAIR_VERSION, input: 'a', source: 'b', model: 'c', prompt: 'd' };
     assert.equal(loadFailedCandidate(directory, identity), null);
@@ -379,7 +379,7 @@ test('candidate storage is atomic, private, input-specific, and never a success 
     assert.throws(() => loadFailedCandidate(directory, identity), /Corrupt/);
 });
 
-test('candidate rejects symlink directories/files, altered identity and damaged JSON', t => {
+test('候选拒绝符号链接目录或文件、被改动的身份和损坏的 JSON', t => {
     const directory = temporary(t);
     const identity = { model: 'm' };
     const targetDirectory = path.join(directory, 'target'); fs.mkdirSync(targetDirectory);
@@ -399,7 +399,7 @@ test('candidate rejects symlink directories/files, altered identity and damaged 
     assert.equal(fs.readFileSync(target, 'utf8'), '{}');
 });
 
-test('resolved failures are recoverably retired and cannot resurrect as a candidate', t => {
+test('已解决的失败可以恢复地退场，不会重新变成候选', t => {
     const directory = temporary(t);
     const identity = { input: 'same signed input' };
     const original = saveFailedCandidate(directory, identity, failed());
@@ -415,7 +415,7 @@ test('resolved failures are recoverably retired and cannot resurrect as a candid
     assert.equal(retireFailedCandidate(directory, identity), null);
 });
 
-test('production loop bounds malformed full replies and persists the failure', async t => {
+test('生产循环对格式错误的整篇回复设上限，并落盘失败', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     let calls = 0;
@@ -435,7 +435,7 @@ test('production loop bounds malformed full replies and persists the failure', a
     assert.equal(envelope.payload.draft, null);
 });
 
-test('production resume requests only a patch and still rejects incomplete merged prose', async t => {
+test('生产续跑只请求补丁，合并后正文不完整仍然拒绝', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99992', title: '离线恢复' };
@@ -468,7 +468,7 @@ test('production resume requests only a patch and still rejects incomplete merge
     assert.equal(envelope.payload.draft.readerTitle, '声音表示如何与语义条件连接起来');
 });
 
-test('production recovery persists canonical section/table pairs with raw-to-canonical SHA mappings', async t => {
+test('生产恢复落盘正式的小节/表格配对，并记录原始到正式的 SHA 映射', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const { normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
     const directory = temporary(t);
@@ -505,7 +505,7 @@ test('production recovery persists canonical section/table pairs with raw-to-can
     assert.deepEqual(JSON.parse(fs.readFileSync(filename, 'utf8')).payload.draftOrderMappings, [normalized.mapping]);
 });
 
-test('an exhausted candidate receives a free full-parser replay: valid retires, invalid cannot request again', async t => {
+test('用尽的候选可以免费重跑一次完整解析：有效就退场，无效就不能再请求', async t => {
     const { generateApiReaderArticleDetailed, parseApiReaderArticleResult,
         stableFingerprint } = require('../scripts/deep-analyzer.js');
     const crypto = require('node:crypto');
@@ -571,7 +571,7 @@ test('an exhausted candidate receives a free full-parser replay: valid retires, 
     assert.equal(result.resumedCandidate, true); assert.match(result.retiredCandidate, /resolved\.json$/);
 });
 
-test('production stops unchanged patches and refuses another call on exhausted recovery', async t => {
+test('生产遇到没带来变化的补丁就停下，恢复用尽后不再调用', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99993', title: '离线无进展' };
@@ -587,7 +587,7 @@ test('production stops unchanged patches and refuses another call on exhausted r
     assert.equal(calls, 2);
 });
 
-test('distinct malformed patches consume attempts without falsely exhausting unchanged-draft no-progress', async t => {
+test('不同的格式错误补丁会消耗尝试次数，但不会误判成草稿未变的无进展而耗尽', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99972', title: '损坏补丁恢复' };
@@ -628,7 +628,7 @@ test('distinct malformed patches consume attempts without falsely exhausting unc
     assert.equal(envelope.payload.noProgress, 0);
 });
 
-test('Reader patch parser only restores omitted enclosing array/root EOF delimiters', () => {
+test('Reader 补丁解析器只补回被省略的外层数组或根对象结束符', () => {
     const { parseReaderPatchJson } = require('../scripts/lib/reader-repair.js');
     const patch = {
         version: 1,
@@ -651,7 +651,7 @@ test('Reader patch parser only restores omitted enclosing array/root EOF delimit
     assert.throws(() => parseReaderPatchJson('{"version":1,"replacements":[}'), SyntaxError);
 });
 
-test('global wide-table repair targets exactly one diagnosed section and binding pair', () => {
+test('全局宽表修复只指向一个诊断出的小节和绑定配对', () => {
     const { buildRepairTargets } = require('../scripts/lib/reader-repair.js');
     const draft = fixture();
     draft.sections[0].body += '\n\n表 1 的比较问题与解释足够长，供局部修复定位。\n\n'
@@ -688,7 +688,7 @@ test('global wide-table repair targets exactly one diagnosed section and binding
     ], 'even without a per-table diagnostic the global gate must stay on one table pair');
 });
 
-test('global wide-table repair prefers a narrow table isolated in the smallest section', () => {
+test('全局宽表修复优先选最小小节里单独存在的窄表', () => {
     const { buildRepairTargets } = require('../scripts/lib/reader-repair.js');
     const draft = fixture();
     const table = (name, columns) => {
@@ -714,7 +714,7 @@ test('global wide-table repair prefers a narrow table isolated in the smallest s
     ]);
 });
 
-test('missing narrative table repair targets only the final table section and missing binding', () => {
+test('缺失叙述表格的修复只指向最后一个小节和缺失的绑定', () => {
     const draft = fixture();
     for (const [offset, sectionIndex] of [6, 7, 8].entries()) {
         draft.sections[sectionIndex].body += `\n\n表 ${offset + 1} 的比较问题与解释足够长，供局部补表修复定位。\n\n`
@@ -733,7 +733,7 @@ test('missing narrative table repair targets only the final table section and mi
     ]);
 });
 
-test('minimum narrative table repair atomically appends one table and one binding', () => {
+test('最小叙述表格修复原子地追加一张表和一条绑定', () => {
     const draft = fixture();
     const block = (name, value) => `\n\n${name} 比较相同条件下的两组结果与指标方向。\n\n`
         + '| 方法 | 条件 | 指标 A | 指标 B | 指标 C |\n| --- | --- | --- | --- | --- |\n'
@@ -762,7 +762,7 @@ test('minimum narrative table repair atomically appends one table and one bindin
     assert.equal(merged.tableBindings[3].tableIndex, 4);
 });
 
-test('minimum narrative table recovery binds one already-authored trailing table without rewriting it', () => {
+test('最小叙述表格恢复绑定一篇已写好的结尾表格，不改写它', () => {
     const draft = fixture();
     const block = (name, value) => `\n\n${name} 比较相同条件下的两组结果与指标方向。\n\n`
         + '| 方法 | 条件 | 指标 A | 指标 B | 指标 C |\n| --- | --- | --- | --- | --- |\n'
@@ -789,7 +789,7 @@ test('minimum narrative table recovery binds one already-authored trailing table
     assert.equal(merged.tableBindings.length, 4);
 });
 
-test('coded count diagnostics preserve old repair targets and both saved failure comparisons', () => {
+test('带码的计数诊断保留旧的修复目标，以及两份已保存的失败对比', () => {
     const draft = countRepairFixture();
     const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
     const natural = countIssue();
@@ -807,7 +807,7 @@ test('coded count diagnostics preserve old repair targets and both saved failure
     assert.notEqual(hashDraft([natural]), hashDraft([misleading]), 'generic object hashes retain exact message bytes');
 });
 
-test('count progress depends on reported counts and required thresholds rather than message numbers', () => {
+test('计数进展取决于上报的计数和必需阈值，而不是文案里的数字', () => {
     const first = countIssue(1, '需要4张表，目前1张');
     const improved = countIssue(2, 'tableBindings[9] 当前999，仍缺888');
     const stalled = countIssue(2, '另一种自然说法，没有数字');
@@ -824,7 +824,7 @@ test('count progress depends on reported counts and required thresholds rather t
         validationFailureSignature([{ ...first, requiredCount: 5 }]));
 });
 
-test('malformed coded counts cannot borrow legacy numbers or authorize message-selected repair nodes', () => {
+test('格式错误的带码计数不能借用旧数字，也不能授权按文案选出的修复节点', () => {
     const draft = countRepairFixture();
     const legacyText = '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3；tableBindings[0] source-binding v4';
     const invalid = [
@@ -848,7 +848,7 @@ test('malformed coded counts cannot borrow legacy numbers or authorize message-s
     assert.equal(readTableCountIssue({ ...countIssue(), code: 'another_issue', message: legacyText }), null);
 });
 
-test('valid counts preserve structural fallback targets while diagnostic-only counts select none', () => {
+test('有效计数保留结构回退目标，只作诊断的计数不选任何目标', () => {
     const draft = countRepairFixture();
     draft.sections[8].kind = 'component';
     const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
@@ -872,7 +872,7 @@ test('valid counts preserve structural fallback targets while diagnostic-only co
     assert.deepEqual(buildRepairTargets(draft, [diagnostic, other]).map(target => target.path), ['/sections/2/body']);
 });
 
-test('typed reported count three still binds the fourth authored table without rewriting its body', () => {
+test('带类型的上报计数 3 仍绑定第四张已写好的表，不改写其正文', () => {
     const draft = countRepairFixture(4, 3);
     const context = buildRepairContext(draft, [countIssue(3)], '完整来源');
     assert.equal(context.atomicOperation.kind, 'bind_trailing_narrative_table_v1');
@@ -887,7 +887,7 @@ test('typed reported count three still binds the fourth authored table without r
     assert.deepEqual(merged.tableBindings.slice(0, 3), draft.tableBindings);
 });
 
-test('production requests a bounded structural patch when a valid count has no atomic operation', async t => {
+test('有效计数没有原子操作可用时，生产请求一个有限的结构补丁', async t => {
     const deep = require('../scripts/deep-analyzer.js');
     const signed = require('./reader-signed-draft-fixture.js').fixture({ noFigures: true });
     const draft = signed.draft;
@@ -928,7 +928,7 @@ test('production requests a bounded structural patch when a valid count has no a
     assert.equal(stored.payload.issues.filter(issue => issue.code === TABLE_COUNT_ISSUE_CODE).length, 1);
 });
 
-test('collecting a coded count error yields one diagnostic without swallowing another parser failure', () => {
+test('收集带码计数错误时只产出一条诊断，不会吞掉另一个解析失败', () => {
     const { validateApiReaderTableNarratives } = require('../scripts/deep-analyzer.js');
     let error;
     try { validateApiReaderTableNarratives('', 4); } catch (caught) { error = caught; }
@@ -946,7 +946,7 @@ test('collecting a coded count error yields one diagnostic without swallowing an
     assert.deepEqual(buildRepairTargets(draft, collected), buildRepairTargets(draft, [collected[0]]));
 });
 
-test('production count feedback and patch-rejection retention do not read coded diagnostic wording', async t => {
+test('生产的计数反馈和补丁拒绝保留都不读带码诊断的措辞', async t => {
     const deep = require('../scripts/deep-analyzer.js');
     const repair = require('../scripts/lib/reader-repair.js');
     const signed = require('./reader-signed-draft-fixture.js').fixture({ noFigures: true });
@@ -988,7 +988,7 @@ test('production count feedback and patch-rejection retention do not read coded 
     assert.ok(stored.payload.issues.some(issue => issue.message.startsWith('Reader patch rejected:')));
 });
 
-test('legacy recovery bytes are authenticated before count compatibility and never rewritten', t => {
+test('旧版恢复字节先核验再谈计数兼容，而且绝不改写', t => {
     const directory = temporary(t);
     const identity = { version: REPAIR_VERSION, paperId: '2609.99970' };
     const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
@@ -1017,7 +1017,7 @@ test('legacy recovery bytes are authenticated before count compatibility and nev
     assert.throws(() => loadFailedCandidate(directory, identity), /Corrupt or drifted/);
 });
 
-test('production normalization ignores typed count prose but keeps unrelated issue-bound repairs', async t => {
+test('生产归一化忽略带类型的计数文案，但保留不相干的问题修复', async t => {
     const deep = require('../scripts/deep-analyzer.js');
     const repair = require('../scripts/lib/reader-repair.js');
     const draft = fixture();
@@ -1066,7 +1066,7 @@ test('production normalization ignores typed count prose but keeps unrelated iss
         beforePatch.sections[1].body.replace('三阶段', ' 3 个阶段'));
 });
 
-test('missing result table repair moves one stable experiment table/binding into result', () => {
+test('缺失结果表的修复把一张稳定的实验表及其绑定挪到结果小节', () => {
     const draft = fixture();
     const table = index => `\n\n表 ${index} 的比较条件。\n\n`
         + '| 配置项 | 数值 | 单位 |\n| --- | --- | --- |\n'
@@ -1125,7 +1125,7 @@ test('missing result table repair moves one stable experiment table/binding into
     assert.ok(merged.sections[7].body.includes('| 方法 4 | 设置 40 | 400 | 4000 |'));
 });
 
-test('missing result table addition closes a prior binding gap without moving setup evidence', () => {
+test('补上缺失的结果表会填掉此前的绑定缺口，但不搬动设置证据', () => {
     const draft = fixture();
     const block = (name, value) => `\n\n| 方法 | 指标 | 条件 | 结果 A | 结果 B | 结果 C |\n| --- | --- | --- | --- | --- | --- |\n| ${name} | ${value} | 对照 ${value} | ${value}00 | ${value}000 | ${value}0000 |`;
     draft.sections[6].body += block('设置表', '10');
@@ -1154,7 +1154,7 @@ test('missing result table addition closes a prior binding gap without moving se
         (draft.sections[7].body.match(/^\|/gm) || []).length + 3);
 });
 
-test('result-table relocation still applies when table and binding streams are already closed', () => {
+test('表格和绑定流已经关闭时，结果表搬迁仍然生效', () => {
     const draft = fixture();
     const block = (name, value) => `\n\n| 方法 | 指标 | 条件 | 结果 A | 结果 B | 结果 C |\n| --- | --- | --- | --- | --- | --- |\n| ${name} | ${value} | 对照 ${value} | ${value}00 | ${value}000 | ${value}0000 |`;
     draft.sections[6].body += block('设置表', '10') + block('设置表2', '11');
@@ -1182,7 +1182,7 @@ test('result-table relocation still applies when table and binding streams are a
         (draft.sections[7].body.match(/^\|/gm) || []).length + 3);
 });
 
-test('result-table repair does not treat a selection marker as Markdown donor', () => {
+test('结果表修复不会把选择标记当成 Markdown 来源小节', () => {
     const draft = fixture();
     draft.sections[6].body += '\n\n[[TABLE_1]]';
     draft.tableBindings = [{
@@ -1196,7 +1196,7 @@ test('result-table repair does not treat a selection marker as Markdown donor', 
     assert.ok(context.targets.length > 0);
 });
 
-test('normalized validation signatures stop the same binding issue after two changing drafts', async t => {
+test('归一化校验签名在两次草稿变化之后叫停同一个绑定问题', async t => {
     const first = [{ path: null, message: '读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 200；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=1 text="dev 划分约 200–430 utterances" missing=200。' }];
     const second = [{ path: null, message: '读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 430；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=1 text="dev 划分约 200–430 utterances" missing=430。' }];
     assert.equal(validationFailureSignature(first), validationFailureSignature(second));
@@ -1224,7 +1224,7 @@ test('normalized validation signatures stop the same binding issue after two cha
         'the patch changed the draft, but the exact unchanged issue still counts as no progress');
 });
 
-test('validation signatures preserve monotonic deficit improvement while ignoring volatile wording', () => {
+test('校验签名保留单调改善的缺口，忽略易变的措辞', () => {
     const issue = (current, remaining, wording = '当前') => [{ path: null, code: 'reader_length_preflight',
         message: `读者文章篇幅预估：${wording} ${current}，仍缺 ${remaining}。` }];
     const first = validationFailureSignature(issue(200, 120));
@@ -1239,14 +1239,14 @@ test('validation signatures preserve monotonic deficit improvement while ignorin
         'a regression is not progress merely because its numbers changed');
 });
 
-test('public candidate save cannot mint an implementation allowance from a bare field', t => {
+test('公开的候选保存不能凭一个裸字段造出实现许可', t => {
     const directory = temporary(t); const identity = { paperId: '2609.99976', sourceSha256: 'a'.repeat(64) };
     assert.throws(() => saveFailedCandidate(directory, identity, { status: 'failed', draft: fixture(),
         rawDraft: '', issues: [], attempts: 1, fullAttempts: 1, noProgress: 0, failureSignature: '',
         implementationRepairAllowance: 1 }), /recovery-revision proof/);
 });
 
-test('self-consistent fake revision fields cannot mint an implementation allowance proof', t => {
+test('自洽的伪造修订字段不能造出实现许可证明', t => {
     const directory = temporary(t); const identity = { paperId: '2609.99975',
         freshAnalysis: { runId: '11111111-1111-4111-8111-111111111111', paperId: '2609.99975' } };
     const audit = { contract: 'fake-revision-contract', runId: identity.freshAnalysis.runId,
@@ -1264,7 +1264,7 @@ test('self-consistent fake revision fields cannot mint an implementation allowan
         readerRecoveryRevisions: [audit], implementationRepairAllowanceProof: proof }), /valid recovery-revision proof/);
 });
 
-test('a changed validation issue may continue and transport errors do not advance its streak', async t => {
+test('校验问题变了可以继续，传输错误不计入连续次数', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t); const paper = { arxivId: '2609.99977', title: '门禁变化继续修复' };
     const draft = fixture(); draft.readerTitle = '短'; draft.sections[0].body = '太短';
@@ -1286,7 +1286,7 @@ test('a changed validation issue may continue and transport errors do not advanc
     assert.equal(envelope.payload.transportFailures, 1);
 });
 
-test('transport failure preserves the latest candidate and source drift starts a separate identity', async t => {
+test('传输失败保留最新候选，来源漂移则另起一个身份', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99994', title: '离线网络故障' };
@@ -1323,7 +1323,7 @@ test('transport failure preserves the latest candidate and source drift starts a
     assert.equal(fs.readFileSync(path.join(directory, firstFilename), 'utf8'), JSON.stringify(envelope));
 });
 
-test('changed pixel evidence refuses candidate reuse before another model request', async t => {
+test('像素证据变了就拒绝复用候选，不再发起模型请求', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const candidateDirectory = path.join(directory, 'candidates');
@@ -1350,7 +1350,7 @@ test('changed pixel evidence refuses candidate reuse before another model reques
     assert.equal(calls, 2);
 });
 
-test('direct source scope persists a separate ephemeral pixel binding and rejects a changed callback image', async t => {
+test('直连来源范围单独保存临时的像素绑定，回调图片一变就拒绝', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
     const directory = temporary(t); const paper = { arxivId: '2609.99985', title: '直接来源临时像素' };
@@ -1381,7 +1381,7 @@ test('direct source scope persists a separate ephemeral pixel binding and reject
     assert.equal(calls, 1);
 });
 
-test('historical direct accepts one preflight fetch, defers candidate retirement, and resumes with zero LLM calls', async t => {
+test('历史直连允许一次预检抓取，推迟候选退场，并以零次 LLM 调用续跑', async t => {
     const deep = require('../scripts/deep-analyzer.js');
     const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
     const signed = require('./reader-signed-draft-fixture.js').fixture();
@@ -1435,7 +1435,7 @@ test('historical direct accepts one preflight fetch, defers candidate retirement
     assert.equal(fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).length, 0);
 });
 
-test('two initial network failures do not consume received-content or malformed-root budgets', async t => {
+test('最初两次网络失败不消耗已收内容或格式错误根对象的额度', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99996', title: '初次生成网络恢复' };
@@ -1467,7 +1467,7 @@ test('two initial network failures do not consume received-content or malformed-
     assert.equal(envelope.payload.transportFailures, 2);
 });
 
-test('historical pre-model Figure transient stays retryable and creates no candidate or LLM attempt', async t => {
+test('历史流程里模型之前的图片临时故障仍可重试，不产生候选也不发起 LLM 请求', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t); const url = 'https://arxiv.org/html/2509.24457v1/conf_conv.png';
     const sourceEvidence = `FIGURE_1: confidence intervals\nFIGURE_1_URL: ${url}`;
@@ -1496,7 +1496,7 @@ test('historical pre-model Figure transient stays retryable and creates no candi
     assert.equal(modelCalls, 0); assert.deepEqual(fs.readdirSync(directory), []);
 });
 
-test('network failure during a patch preserves the candidate and resumes a patch with the same content attempt', async t => {
+test('打补丁时网络失败会保留候选，并用同一次内容尝试继续打补丁', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99997', title: '局部修复网络恢复' };
@@ -1530,7 +1530,7 @@ test('network failure during a patch preserves the candidate and resumes a patch
     assert.equal(envelope.payload.draft.sections[0].body, '太短');
 });
 
-test('changing the actual content-attempt budget changes candidate identity', async t => {
+test('实际的内容尝试额度一变，候选身份就跟着变', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99998', title: '预算身份检查' };
@@ -1551,7 +1551,7 @@ test('changing the actual content-attempt budget changes candidate identity', as
     assert.deepEqual(budgets.sort(), [1, 2]);
 });
 
-test('received truncated or incomplete full responses consume content and full budgets across invocations', async t => {
+test('收到截断或不完整的整篇回复会跨多次调用消耗内容和整篇额度', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     for (const code of ['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE']) {
         const directory = temporary(t);
@@ -1580,7 +1580,7 @@ test('received truncated or incomplete full responses consume content and full b
     }
 });
 
-test('received truncated or incomplete patch responses consume content budget without modifying the prior candidate', async t => {
+test('收到截断或不完整的补丁回复只消耗内容额度，不改动此前的候选', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1624,7 +1624,7 @@ test('received truncated or incomplete patch responses consume content budget wi
     }
 });
 
-test('a non-final exact 8000-token patch truncation immediately uses the one bounded 16000-token slot', async t => {
+test('非最后一次的补丁在 8000 token 处精确截断时，立刻用掉那个唯一的 16000 token 槽位', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1677,7 +1677,7 @@ test('a non-final exact 8000-token patch truncation immediately uses the one bou
     assert.equal(afterRetry.payload.fullAttempts, 1, 'the resumed invocation made zero full Reader requests');
 });
 
-test('a final ordinary attempt truncated at 8000 receives exactly one bounded 16000 retry slot', async t => {
+test('最后一次普通尝试在 8000 处截断时，只得到一次有上限的 16000 重试槽位', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1727,7 +1727,7 @@ test('a final ordinary attempt truncated at 8000 receives exactly one bounded 16
     assert.equal(calls.length, 3, 'the one larger retry cannot be repeated');
 });
 
-test('an implementation-lineage slot truncated at 8000 cannot stack a second 16000 slot', async t => {
+test('实现谱系的槽位在 8000 处截断后，不能再叠加第二个 16000 槽位', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1759,7 +1759,7 @@ test('an implementation-lineage slot truncated at 8000 cannot stack a second 160
     assert.equal(calls, 2, 'the consumed implementation lineage blocks a stacked 16000 response');
 });
 
-test('a transport failure before the final-slot 16000 response preserves the same retry without consuming content', async t => {
+test('最后槽位的 16000 回复之前发生传输失败，保留同一次重试且不消耗内容', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1807,7 +1807,7 @@ test('a transport failure before the final-slot 16000 response preserves the sam
     assert.deepEqual(calls.map(call => call.tokens), [48000, 8000, 16000, 16000]);
 });
 
-// Fixed complete outputs captured from fcee227 before this implementation.
+// 固定下来的完整输出，取自本实现之前的提交 fcee227。
 const tableOrderCases = [
   {
     "name": "missing-binding",
@@ -2669,7 +2669,7 @@ test('真实排序异常保留五组旧完整诊断的顺序、重复路径、�
             assert.equal(error.code, 'READER_DRAFT_ORDER_AMBIGUOUS');
             assert.equal(error.message, newTableOrderMessage);
             const issues = collectDraftIssues(draft, error);
-            // Only this fixed old producer sentence gains the new display and typed code.
+            // 只有这句固定的旧生产文案会同时得到新的展示字段和带类型的 code。
             const expected = row.issues.map(issue => issue.message === oldTableOrderMessage
                 ? { ...issue, message: newTableOrderMessage, code: tableOrderCode } : issue);
             assert.equal(JSON.stringify(issues), JSON.stringify(expected));
@@ -2801,7 +2801,7 @@ test('比较只稳定本组说明，保留字段、键序、重复和直接子�
     assert.deepEqual(buildRepairTargets(draft, changed), buildRepairTargets(draft, original));
     for (const variant of [[original[1], original[0]], [{ ...original[0], extra: 9 }, original[1]]]) {
         assert.notEqual(hashRecoveryIssues(variant), hashRecoveryIssues(original));
-        // The existing validation gate sorts path/code/message and ignores extra fields.
+        // 现有的校验检查会按 path/code/message 排序，并忽略多余字段。
         assert.equal(validationFailureSignature(variant), validationFailureSignature(original));
     }
     for (const variant of [original.slice(0, 1), [{ ...original[0], path: '/sections/7/body' }, original[1]]]) {
@@ -2822,7 +2822,7 @@ test('比较只稳定本组说明，保留字段、键序、重复和直接子�
         issue => { issue.readerIssues.reverse(); }, issue => { issue.readerIssues[3].message = 13; }]) {
         const variant = structuredClone(nested); mutate(variant);
         assert.notEqual(hashRecoveryIssues([nested]), hashRecoveryIssues([variant]));
-        // Nested evidence belongs to the recovery hash, not the original validation gate.
+        // 嵌套的证据算进恢复哈希，不属于原来的校验检查。
         assert.equal(validationFailureSignature([nested]), validationFailureSignature([variant]));
     }
 });
@@ -2986,8 +2986,8 @@ test('实际生成和续跑没有表格修复节点时不新增请求，并保�
     const originalCollector = repair.collectDraftIssues;
     t.after(() => { repair.collectDraftIssues = originalCollector; });
     let injectedMetadata = false, parserFailures = 0, latestPayload;
-    // This deliberately injects a legal diagnostic with no matching 0/0 structure.
-    // The real producer does not emit it; normalization and the complete parser still run.
+    // 这里故意注入一条合法诊断，但它没有对应的 0/0 结构。
+    // 真正的生产代码不会发这条诊断；归一化和完整解析流程照常执行。
     repair.collectDraftIssues = (draft, error, options) => {
         const real = originalCollector(draft, error, options);
         assert.ok(real.some(issue => issue.code === TABLE_COUNT_ISSUE_CODE));
@@ -3115,8 +3115,8 @@ test('无目标真实续跑保留实际迁移的未用凭证，消耗后也不�
     const sourceText = 'This offline source describes controlled acoustic observations without numerical claims. '.repeat(
         Math.ceil((Config.ANALYSIS_CONFIG.fullTextMinCharsForFull + 1) / 85) + 1);
     const sha = value => crypto.createHash('sha256').update(value).digest('hex');
-    // This is a real legacy cache fixture accepted by its original loader, not a
-    // modern sealed HTML/PDF generation or a publishable source bundle.
+    // 这是一份真实的旧版缓存固定数据，原来的加载器能读它；
+    // 它不是新版保存的 HTML/PDF 产物，也不是可发布的来源包。
     const artifactBody = { figures: [], flattenedTextSha256: sha(sourceText), formulas: [],
         parserVersion: 'offline-empty-source-v1', tables: [], version: 1 };
     const artifacts = { ...artifactBody, payloadSha256: sha(JSON.stringify(artifactBody)) };

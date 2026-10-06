@@ -159,8 +159,8 @@ function build(fx, extra = {}) {
     });
 }
 
-describe('Manual v5 observable work queue', () => {
-    it('derives author finished, reviewer ready, page blocked and a 3-slot dispatch', () => {
+describe('Manual v5 可观察工作队列', () => {
+    it('推导出作者完成、审查者就绪、页面受阻，以及三个槽位的派发', () => {
         const fx = fixture();
         const report = build(fx);
         assert.equal(report.papers[ID].tasks.author.status, 'finished');
@@ -172,7 +172,7 @@ describe('Manual v5 observable work queue', () => {
         assert.match(report.papers[ID].tasks.reviewer.inputSha256, /^[a-f0-9]{64}$/);
     });
 
-    it('accepts only matching explicit observations as claimed and never infers timing from timestamps', () => {
+    it('只有明确且对得上的观测才算已认领，绝不从时间戳推断耗时', () => {
         const fx = fixture();
         const initial = build(fx);
         const reviewer = initial.papers[ID].tasks.reviewer;
@@ -208,7 +208,7 @@ describe('Manual v5 observable work queue', () => {
         assert.equal(completed.get(`${ID}:author`).runtimeMs.value, 600);
     });
 
-    it('marks reviewer/page review finished only after independent review and current page SHA pass', () => {
+    it('只有独立审查和当前页面 SHA 都通过，才把审查者或页面审查标为完成', () => {
         const fx = fixture();
         fx.author.scoringCalibration = {
             independentReview: true, reviewerTaskName: `paper-${ID}-scoring`,
@@ -237,7 +237,7 @@ describe('Manual v5 observable work queue', () => {
         assert.equal(report.summary.finished, 3);
     });
 
-    it('fails closed on malformed observations and CLI arguments', () => {
+    it('观测数据或命令行参数不合法时直接失败', () => {
         assert.throws(() => validateObservations({
             version: 1, mode: OBSERVATIONS_MODE, date: DATE,
             tasks: [{ paperId: ID, role: 'author', status: 'claimed', inputSha256: 'bad', taskName: 'task' }]

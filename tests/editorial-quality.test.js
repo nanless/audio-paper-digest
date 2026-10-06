@@ -39,8 +39,8 @@ function sixSections(overrides = {}) {
     };
 }
 
-describe('Manual v4 editorial quality primitives', () => {
-    it('collapses only immediately duplicated decimal extraction tokens', () => {
+describe('Manual v4 编辑质量的基础函数', () => {
+    it('只合并紧挨着重复的小数提取片段', () => {
         assert.deepEqual(
             numericLexemes('MRR rises by 3.73.7, 2.82.8, and 0.50.5.'),
             ['3.7', '2.8', '0.5']
@@ -51,7 +51,7 @@ describe('Manual v4 editorial quality primitives', () => {
         );
     });
 
-    it('blocks precise Chinese quantitative forms but allows ordinals and vague non-numeric wording', () => {
+    it('拦住精确的中文定量表述，但放行序数和含糊的非数字说法', () => {
         const findings = findQuantitativeChineseNumerals([
             '调用率为百分之二十五，准确率从七十二点五降到三十点四二。',
             '主数据含二千二百零八个动作，窗口为四秒，实验使用五个随机种子。',
@@ -85,7 +85,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.ok(findQuantitativeChineseNumerals('阈值：三，系统训练三 GPU 小时，开销为三 mac、三 gb，评分范围为三至五等级。').length >= 5);
     });
 
-    it('blocks technical counts, malformed mixed numerals and batch-writing scaffolds', () => {
+    it('拦住技术性计数、格式错误的混合数字和批量写作套话', () => {
         const findings = findQuantitativeChineseNumerals([
             'LoRA 秩为八、缩放系数三十二，输入为二百五十六维。',
             '板测延迟为几10 毫秒，显存为二点6 MB。',
@@ -156,7 +156,7 @@ describe('Manual v4 editorial quality primitives', () => {
         );
     });
 
-    it('normalizes only issue-bound stage counts in ordinary Reader prose', () => {
+    it('只归一化普通 Reader 正文里与问题绑定的阶段计数', () => {
         const source = [
             '训练采用三阶段课程。',
             '`三阶段` 与“原文三阶段”保持逐字。',
@@ -180,7 +180,7 @@ describe('Manual v4 editorial quality primitives', () => {
             'quantitative_chinese_numeral', match: '两阶段' }]), source);
     });
 
-    it('normalizes an issue-bound Arabic coefficient with the exact trillion scale', () => {
+    it('归一化与问题绑定的阿拉伯数字系数及其精确的万亿量级', () => {
         const source = '预训练规模约4万亿token；`4万亿token` 与“原文 4万亿token”保持逐字。';
         const issues = [{ path: null,
             message: '读者文章文风校验失败: quantitative_chinese_numeral:万亿 token' }];
@@ -190,7 +190,7 @@ describe('Manual v4 editorial quality primitives', () => {
         );
     });
 
-    it('normalizes exact simple empirical counts from persisted issues', () => {
+    it('归一化已落盘问题里精确的简单经验计数', () => {
         const source = '模型包含三分支，并在一对测试样本上进行比较。';
         const issues = [
             { code: 'quantitative_chinese_numeral', match: '三分支' },
@@ -202,7 +202,7 @@ describe('Manual v4 editorial quality primitives', () => {
         );
     });
 
-    it('does not read the scale suffix in an Arabic comparison as a Chinese count classifier', () => {
+    it('不会把阿拉伯数字比较里的量级后缀读成中文量词', () => {
         assert.deepEqual(findQuantitativeChineseNumerals(
             '第一段约 500 万对 48 万，此外为 2,459 对 6,578。'
         ), []);
@@ -211,32 +211,32 @@ describe('Manual v4 editorial quality primitives', () => {
         ]);
     });
 
-    it('accepts comparison values whose unit is declared by the metric label', () => {
+    it('接受单位由指标标签声明的比较数值', () => {
         assert.deepEqual(findMissingComparisonUnits(
             'WER（%）从 2.132 升到 2.175，SIM（无量纲）从 0.672 降到 0.668；'
             + '词错误率（WER，单位为%）从 2 到 4 到 8 时轻微上升。'
         ), []);
     });
 
-    it('does not treat experiment-set counts as metric values', () => {
+    it('不会把实验组数当成指标值', () => {
         assert.deepEqual(findMissingComparisonUnits(
             '论文在 4 套测试上报告总体准确率等指标，并给出相对基线的提升幅度。'
         ), []);
     });
 
-    it('does not treat dataset counts in a qualitative bridge as metric values', () => {
+    it('不会把定性桥接里的数据集数量当成指标值', () => {
         assert.deepEqual(findMissingComparisonUnits(
             '证据是 2 数据集的准确率与消融下降。'
         ), []);
     });
 
-    it('does not treat speaker counts as bare percentage-scale metric values', () => {
+    it('不会把说话人数量当成裸的百分比量级指标值', () => {
         assert.deepEqual(findMissingComparisonUnits(
             '说话人数从 1 人增至 4 人时性能一致下降，开源基线在超过 2 人时计数准确率接近零。'
         ), []);
     });
 
-    it('blocks numeric-unit adhesion and digit-damaged Chinese connectives without flagging identifiers', () => {
+    it('拦住数字与单位粘连和数字损坏的中文连接词，但不误报标识符', () => {
         const findings = findNumericTypographyDefects([
             '该实验包括5个场景，训练50轮，提升19.5个百分点，并把误差从81.7降至81.0。',
             '论文发现T=2已足够；下1步比较同1组数据，8个候选再归1组合。',
@@ -288,7 +288,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.deepEqual(findNumericTypographyDefects('系统根据注意力一次性保留缓存。'), []);
     });
 
-    it('detects redundant numbering and bare editorial field labels only when they are reader-visible lines', () => {
+    it('只有当冗余编号和裸的编辑字段标签出现在读者可见的行里时才报', () => {
         assert.equal(findDoubleNumbering('1. 第一项贡献是稀疏门控。\n2. 第 2 个增量是延迟审计。').length, 2);
         assert.equal(findDoubleNumbering('1. 稀疏门控。\n2. 延迟审计。').length, 0);
         assert.equal(findDoubleNumbering('正文比较第 2 个条件与基线。', { implicitList: true }).length, 0);
@@ -321,7 +321,7 @@ describe('Manual v4 editorial quality primitives', () => {
         );
     });
 
-    it('blocks assembler-owned headings inside editorial fields and duplicated rendered headings', () => {
+    it('拦住编辑字段里属于组装器的标题，以及重复渲染的标题', () => {
         const embedded = validateEditorialQuality(sixSections({
             limits: '### 论文证据直接支持的边界\n证据有限。\n\n### 进一步审视\n仍需开放域验证。'
         }));
@@ -340,7 +340,7 @@ describe('Manual v4 editorial quality primitives', () => {
         )));
     });
 
-    it('finds exact long-sentence duplication without flagging short connective fragments', () => {
+    it('能找出完全重复的长句，但不误报短的连接片段', () => {
         const repeated = '该实验在相同数据划分、相同预算和相同解码设置下比较两个系统，因此差异可以归因于门控策略。';
         const sections = sixSections({
             summary: `${repeated} 这是摘要的边界。`,
@@ -352,7 +352,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.deepEqual(duplicates[0].occurrences.map(item => item.section), ['summary', 'results']);
     });
 
-    it('finds high-confidence cross-section near duplicates while preserving related but independently written prose', () => {
+    it('能找出跨小节的高置信近似重复，同时保留相关但独立写成的正文', () => {
         const sections = sixSections({
             summary: '在 EK-100 的固定 25% 调用预算下，间隔门控把动作覆盖率从 40.9% 提高到 46.8%，而声学筛选成本约为 3%。',
             results: '在 EK-100 固定 25% 调用预算下，加入间隔门控后，动作覆盖率由 40.9% 提升至 46.8%；声学前线成本约 3%。',
@@ -362,7 +362,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.equal(findCrossSectionNearDuplicates(sixSections(), { threshold: 0.65 }).length, 0);
     });
 
-    it('blocks one multi-number fact signature reused in more than two core sections', () => {
+    it('拦住同一个多数字事实签名被三个以上核心小节复用', () => {
         const fact = '在测试集上，方法的 WER 从 14.3% 降至 12.6%，并把 F-score 从 62.2 提高到 81.7。';
         const sections = sixSections({ summary: fact, results: fact, details: fact });
         const findings = findCrossSectionNumericFactReuse(sections);
@@ -371,7 +371,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.equal(findCrossSectionNumericFactReuse(sixSections({ summary: fact, results: fact })).length, 0);
     });
 
-    it('uses two paragraph length levels and excludes limitations from defensive-negation saturation', () => {
+    it('用两档段落长度，并把局限说明排除在防御性否定饱和统计之外', () => {
         const warningParagraph = `${'该设置提供受控比较，'.repeat(24)}因此需要结合指标方向读取。`;
         const errorParagraph = `${'该设置提供受控比较，'.repeat(38)}因此需要结合指标方向读取。`;
         assert.equal(findLongParagraphs(sixSections({ summary: warningParagraph }))[0].severity, 'warning');
@@ -386,7 +386,7 @@ describe('Manual v4 editorial quality primitives', () => {
         })), []);
     });
 
-    it('applies paragraph overload checks to reader-visible author and auxiliary sections', () => {
+    it('对读者可见的作者小节和辅助小节也做段落过载检查', () => {
         const authorBlock = `作者团队围绕实验设计展开说明${'；这段作者叙事仍在重复机构信息'.repeat(24)}`;
         const findings = findLongParagraphs({ ...sixSections(), authors: authorBlock, openSource: '代码状态清楚。' });
         assert.ok(findings.some(item => item.section === 'authors' && item.severity === 'error'));
@@ -395,7 +395,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.deepEqual(findLongParagraphs({ ...sixSections(), authors: `作者列表：甲${'；机构信息'.repeat(24)}` }), []);
     });
 
-    it('detects Han/ASCII adhesions but ignores URLs and inline code', () => {
+    it('能发现汉字与 ASCII 粘连，但忽略 URL 和行内代码', () => {
         const findings = findTechnicalTermAdhesions('推理时 LoRA缩放，Qwen-CoT在开发集选 gamma。指标为 F-score依赖设置。');
         assert.ok(findings.some(item => /LoRA缩/.test(item.match)));
         assert.ok(findings.some(item => /Qwen-CoT在/.test(item.match)));
@@ -411,7 +411,7 @@ describe('Manual v4 editorial quality primitives', () => {
         assert.deepEqual(findTechnicalTermAdhesions('增强版记作 GatherMOS-ZS* 中。'), []);
     });
 
-    it('detects percentage-score deltas and asymmetric comparisons missing nearby units', () => {
+    it('能发现百分比得分差值和缺少邻近单位的非对称比较', () => {
         const findings = findMissingComparisonUnits([
             '准确率最大提升分别为三十八点四一和六十九点七一。',
             '理论能耗为九十七对三百二十二毫焦。'
@@ -508,7 +508,7 @@ describe('Manual v4 editorial quality primitives', () => {
         ));
     });
 
-    it('finds batch-wide sentence templates at the configured paper threshold', () => {
+    it('按配置的论文数阈值找出整批共用的句子模板', () => {
         const template = '下图展示论文的关键实验比较，读图时需同时保留数据集、指标方向和实验条件。';
         const papers = [1, 2, 3, 4].map(index => ({
             id: `paper-${index}`,
@@ -522,7 +522,7 @@ describe('Manual v4 editorial quality primitives', () => {
     });
 });
 
-describe('Manual v4 readability rubric schema', () => {
+describe('Manual v4 可读性评分结构', () => {
     function rubric(score = 2) {
         return {
             paperId: '2608.22359',
@@ -534,7 +534,7 @@ describe('Manual v4 readability rubric schema', () => {
         };
     }
 
-    it('accepts complete evidence-backed scores and applies the 12/14 no-zero floor', () => {
+    it('接受证据完整的评分，并套用 12/14 的下限，出零分即不通过', () => {
         const accepted = validateReadabilityRubric(rubric());
         assert.equal(accepted.valid, true);
         assert.equal(accepted.passing, true);
@@ -549,7 +549,7 @@ describe('Manual v4 readability rubric schema', () => {
         assert.equal(validateReadabilityRubric(zero).passing, false);
     });
 
-    it('rejects missing dimensions, generic reasons, empty evidence and unknown keys', () => {
+    it('拒绝缺失维度、笼统理由、空证据和未知键', () => {
         const invalid = rubric();
         delete invalid.dimensions.sentenceRhythm;
         invalid.dimensions.paragraphLogic.reason = '很好';
@@ -561,7 +561,7 @@ describe('Manual v4 readability rubric schema', () => {
     });
 });
 
-describe('Manual v4 structured result claims', () => {
+describe('Manual v4 结构化结论声明', () => {
     const sourceText = [
         '在 EK-100 测试集、25% 调用预算下，间隔调度的动作覆盖率为 46.8%，直接排序为 40.9%。',
         '在相同视频时长的全扫描成本审计中，声学筛选成本约为全扫描的 3%，低于光流筛选的 75%。',
@@ -637,7 +637,7 @@ describe('Manual v4 structured result claims', () => {
         ];
     }
 
-    it('accepts three locally bound claims and NFKC/whitespace-equivalent continuous quotes', () => {
+    it('接受三条本地绑定的结论，以及 NFKC 和空白等价下的连续引用', () => {
         const input = claims();
         input[0].sourceQuote = '在 EK-100 测试集、25% 调用预算下，\n间隔调度的动作覆盖率为 46.8%，直接排序为 40.9%。';
         const result = validateResultClaims(input, sourceText);
@@ -645,7 +645,7 @@ describe('Manual v4 structured result claims', () => {
         assert.equal(result.minimumClaims, 3);
     });
 
-    it('rejects missing fields, non-source quotes and values absent from their quote', () => {
+    it('拒绝缺失字段、非来源引用，以及引用里找不到的数值', () => {
         const input = claims();
         delete input[0].baseline;
         input[1].sourceQuote = '这句话不在绑定全文里。';
@@ -655,7 +655,7 @@ describe('Manual v4 structured result claims', () => {
         assert.match(result.errors.join('\n'), /baseline 缺失|未按 NFKC|91\.7 未出现在/);
     });
 
-    it('requires exact source/reader binding keys and rejects unbound field evidence', () => {
+    it('要求精确的来源和 reader 绑定键，拒绝未绑定的字段证据', () => {
         const input = claims();
         input[0].sourceBindings.method = '不存在的方法证据';
         delete input[1].readerBindings.metric;
@@ -666,7 +666,7 @@ describe('Manual v4 structured result claims', () => {
         assert.match(result.errors.join('\n'), /readerBindings 必须且只能包含/);
     });
 
-    it('rejects duplicate claims, arbitrary direction values and eight-field fragment reuse', () => {
+    it('拒绝重复结论、任意方向值，以及八个字段的片段复用', () => {
         const input = claims();
         input[1] = JSON.parse(JSON.stringify(input[0]));
         input[2].direction = 'banana';
@@ -680,7 +680,7 @@ describe('Manual v4 structured result claims', () => {
         assert.match(result.errors.join('\n'), /同一证据片段最多绑定 3 个字段/);
     });
 
-    it('can revalidate stored claim schema without reloading full text while retaining claim-local numbers', () => {
+    it('不重载全文也能重新校验已存结论结构，并保留结论内的数字', () => {
         const storedClaims = claims();
         assert.equal(validateResultClaims(storedClaims, '', {
             requireSourceBinding: false,
@@ -693,7 +693,7 @@ describe('Manual v4 structured result claims', () => {
         }).valid, false);
     });
 
-    it('rejects a source-bound result number omitted from the reader-visible experiment section', () => {
+    it('来源绑定的结果数字没出现在读者可见的实验小节里，就拒绝', () => {
         const result = validateResultClaims(claims(), sourceText, {
             readerResultsText: '实验结果只报告 46.8% 与 40.9%，其余设置见正文。'
         });
@@ -701,7 +701,7 @@ describe('Manual v4 structured result claims', () => {
         assert.match(result.errors.join('\n'), /readerBindings 未共同落在.*同一局部证据块/);
     });
 
-    it('does not let a section-global number impersonate a claim-local reader block', () => {
+    it('不让整个小节的数字冒充结论内的 reader 块', () => {
         const input = claims();
         const reader = [
             '另一个完全无关的实验报告 46.8%、3%、62.2 和 81.7。',
@@ -717,7 +717,7 @@ describe('Manual v4 structured result claims', () => {
         assert.match(result.errors.join('\n'), /readerBindings 未共同落在.*同一局部证据块/);
     });
 
-    it('treats leading-zero decimals, thousands separators and small English number words as equal', () => {
+    it('把前导零小数、千位分隔符和小写英文数词视为等同', () => {
         const quote = 'On Demo test, Proposed reports .40 score, 5,400 clips, and Ten pairs versus Base.';
         const claim = {
             datasetOrSetting: 'Demo', splitOrCondition: 'test', method: 'Proposed',
@@ -743,7 +743,7 @@ describe('Manual v4 structured result claims', () => {
         assert.equal(result.valid, true, result.errors.join('\n'));
     });
 
-    it('allows explicit notReported without inventing a number and rejects mixed sentinels', () => {
+    it('允许显式的 notReported，但不许编造数字，混合哨兵值一律拒绝', () => {
         const input = claims();
         input[0] = {
             datasetOrSetting: '理论稳定性分析',
@@ -773,7 +773,7 @@ describe('Manual v4 structured result claims', () => {
         assert.match(validateResultClaims(input, sourceText).errors.join('\n'), /必须使用 \{notReported:true, reason\}/);
     });
 
-    it('requires an explicit source-bound exception for theoretical or qualitative documents', () => {
+    it('理论或定性文档必须给出显式的、来源绑定的例外', () => {
         const oneClaim = [claims()[0]];
         assert.match(validateResultClaims(oneClaim, sourceText).errors.join('\n'), /至少需要 3 条/);
         const accepted = validateResultClaims(oneClaim, sourceText, {
@@ -797,8 +797,8 @@ describe('Manual v4 structured result claims', () => {
     });
 });
 
-describe('Manual v4 aggregate gate', () => {
-    it('parses Chinese Markdown section aliases without leaking the next heading into the prior body', () => {
+describe('Manual v4 汇总检查', () => {
+    it('解析中文 Markdown 小节别名时，不会把下一个标题漏进上一段正文', () => {
         const markdown = [
             '## 核心摘要',
             '调用率为百分之二十五。',
@@ -818,7 +818,7 @@ describe('Manual v4 aggregate gate', () => {
         assert.equal(result.issues.some(item => item.section === 'method' && /实验结果/.test(item.match || '')), false);
     });
 
-    it('does not force conceptual headings or indefinite prose into Arabic counters', () => {
+    it('不会把概念性标题或不定指正文硬塞进阿拉伯数字计数', () => {
         const sections = sixSections({
             summary: '这不是一个好看的总分，而是对错误来源的拆解。',
             method: '### 两种视图如何给错误分账\n\n模型分别读取音高与节奏证据。'
@@ -828,7 +828,7 @@ describe('Manual v4 aggregate gate', () => {
         assert.equal(issues.some(item => /一个|两种/.test(item.match || '')), false);
     });
 
-    it('validates rendered level-three emoji headings instead of returning a false empty pass', () => {
+    it('会校验渲染出来的三级 emoji 标题，而不是误报空通过', () => {
         const rendered = `### 👥 作者与机构\n作者列表：甲。\n\n`
             + `### 📌 核心摘要\n下1 步核对数据。\n\n`
             + `### 🔬 细节详述\n复现信息完整。\n\n`
@@ -838,7 +838,7 @@ describe('Manual v4 aggregate gate', () => {
         assert.ok(result.issues.some(item => item.section === 'summary' && item.code === 'numeric_typography'));
     });
 
-    it('returns blocking issues without mutating the supplied sections', () => {
+    it('返回阻塞性问题，但不改动传入的小节', () => {
         const sections = sixSections({
             summary: '1. 第一项贡献在百分之二十五预算下提高覆盖率。论文证据直接支持的边界',
             method: '模型通过 LoRA缩放控制适配强度。',

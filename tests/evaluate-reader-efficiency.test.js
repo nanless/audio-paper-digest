@@ -36,7 +36,7 @@ function fixture(t) {
     return { root, options, sourceText, artifacts, paper };
 }
 
-test('CLI defaults to offline and requires explicit, unique input/output flags', () => {
+test('命令行默认离线，并要求显式且互不重复的输入输出参数', () => {
     const argv = ['--paper', '2609.99980v2', '--source-text', '/private/tmp/source.txt', '--artifacts', '/private/tmp/artifacts.json',
         '--paper-snapshot', '/private/tmp/paper.json', '--output-dir', '/private/tmp/evaluation'];
     assert.equal(parseArgs(argv).live, false);
@@ -49,7 +49,7 @@ test('CLI defaults to offline and requires explicit, unique input/output flags',
     assert.equal(BUDGETS.transportAttemptsPerRequest, 1);
 });
 
-test('source and artifact payload must replay the same signed snapshot', t => {
+test('来源载荷和产物载荷必须复核同一份已签名快照', t => {
     const f = fixture(t);
     assert.equal(loadInputs(f.options).artifactSha256, f.artifacts.payloadSha256);
     fs.writeFileSync(f.options.sourceTextPath, f.sourceText + ' changed');
@@ -65,7 +65,7 @@ test('source and artifact payload must replay the same signed snapshot', t => {
     assert.throws(() => loadInputs(f.options), /summary cannot be re-signed/);
 });
 
-test('baseline replay rejects altered plan/article, formula identity and exact quote provenance', t => {
+test('基线复核拒绝被改动的计划或文章、公式身份，以及精确引用来源', t => {
     const f = fixture(t);
     assert.equal(replaySnapshotPlan(f.paper, f.artifacts, f.sourceText).status, 'replayed');
     const changed = structuredClone(f.paper); changed.apiReaderArticle += 'new';
@@ -75,7 +75,7 @@ test('baseline replay rejects altered plan/article, formula identity and exact q
     assert.throws(() => replaySnapshotPlan(f.paper, f.artifacts, 'different source'), /source quote/);
 });
 
-test('only existing figure cache bytes with the recorded SHA are accepted', t => {
+test('只接受已存在且 SHA 与记录一致的图片缓存字节', t => {
     const f = fixture(t);
     const cachePath = path.join(f.root, 'figure.png');
     fs.writeFileSync(cachePath, 'fixture pixels');
@@ -85,7 +85,7 @@ test('only existing figure cache bytes with the recorded SHA are accepted', t =>
     assert.throws(() => snapshotFigures(f.paper), /SHA mismatch/);
 });
 
-test('output refuses current, overlapping inputs, existing content and symlink directories', t => {
+test('输出拒绝当前目录、重叠输入、已存在内容和符号链接目录', t => {
     const f = fixture(t);
     const current = path.join(f.root, 'current'); fs.mkdirSync(current);
     assert.throws(() => safeOutputDirectory(path.join(current, 'experiment'), [], current), /outside data\/current/);
@@ -98,7 +98,7 @@ test('output refuses current, overlapping inputs, existing content and symlink d
     assert.equal(fs.readFileSync(path.join(existing, 'keep.txt'), 'utf8'), 'keep');
 });
 
-test('default offline evaluation makes no model calls, writes a private report, and preserves source/canonical files', async t => {
+test('默认离线评估不调模型，写一份私有报告，并保留来源和正式文件', async t => {
     const f = fixture(t);
     const before = [f.options.sourceTextPath, f.options.artifactsPath, f.options.snapshotPath]
         .map(filename => sha(fs.readFileSync(filename)));
@@ -116,7 +116,7 @@ test('default offline evaluation makes no model calls, writes a private report, 
     assert.equal(fs.statSync(path.join(f.options.outputDir, 'report.json')).mode & 0o777, 0o600);
 });
 
-test('invalid archived artifact writes a failure report without loading model code', async t => {
+test('归档产物无效时写一份失败报告，不加载模型代码', async t => {
     const f = fixture(t);
     fs.writeFileSync(f.options.artifactsPath, JSON.stringify({ text: f.sourceText, tables: [], formulas: [] }));
     const report = await evaluate(f.options);

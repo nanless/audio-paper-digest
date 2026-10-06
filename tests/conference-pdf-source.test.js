@@ -30,9 +30,9 @@ function resign(descriptor) {
 }
 
 function fixture({ bytes = Buffer.from('%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<<>>\n%%EOF\n', 'binary') } = {}) {
-    // macOS commonly exposes /var as a compatibility symlink to /private/var.
-    // Keep the controlled-root fixture below the repository so this test also
-    // exercises the adapter's intentional refusal of symlinked root ancestry.
+    // macOS 上的 /var 通常是指向 /private/var 的兼容符号链接。
+    // 把受控根目录的固定数据放在仓库下面，这样这条测试
+    // 也能顺带验证适配器会拒绝根目录带符号链接的路径。
     const root = fs.mkdtempSync(path.join(process.cwd(), '.conference-pdf-source-'));
     temporary.push(root);
     fs.mkdirSync(path.join(root, 'papers'), { mode: 0o700 });
@@ -93,7 +93,7 @@ function ledgerFixture() {
     return { ...f, ledger, ledgerHandle, ledgerSha256, first: ledger.members[0], second: ledger.members[1] };
 }
 
-test('local PDF source descriptor binds verified identity, bytes and explicit unavailable extraction', () => {
+test('本地 PDF 来源描述符绑定已核验的身份、字节，并显式标明提取不可得', () => {
     const f = fixture();
     const result = source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record });
     assert.equal(result.descriptor.contract, 'conference-pdf-source-v1');
@@ -108,7 +108,7 @@ test('local PDF source descriptor binds verified identity, bytes and explicit un
     assert.deepEqual(source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: result.descriptor }), result.descriptor);
 });
 
-test('local extraction records replayable hashes and refuses formula availability without reliable structured TeX', () => {
+test('本地提取记录可复核的哈希；没有可靠的结构化 TeX 时，不声称公式可用', () => {
     const f = fixture();
     assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record,
         extractPdf: () => ({ extractorVersion: 'pdftotext-24.02', text: 'plain extracted text', formulaTeX: { available: true } }),
@@ -138,7 +138,7 @@ test('local extraction records replayable hashes and refuses formula availabilit
         text: reliable.text, structuredArtifacts: reliable.structuredArtifacts, formulaTeX: reliable.formulaTeX });
 });
 
-test('only a regular single-link PDF below the limit inside the controlled root is accepted', t => {
+test('只接受受控根目录内、大小不超限、且只有一条硬链接的普通 PDF', t => {
     const f = fixture();
     for (const pdfRelativePath of ['/tmp/outside.pdf', '../outside.pdf', 'papers/../example.pdf', 'papers\\example.pdf']) {
         assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: { ...f.record, pdfRelativePath } }),
@@ -155,7 +155,7 @@ test('only a regular single-link PDF below the limit inside the controlled root 
     t.diagnostic('security checks reject traversal, symbolic links, hard links, and oversized files');
 });
 
-test('bad header, changed bytes, bad record hash and mutated descriptors fail closed', () => {
+test('文件头不对、字节变了、记录哈希不符或描述符被改动，一律直接失败', () => {
     const bad = fixture({ bytes: Buffer.from('not a PDF') });
     assert.throws(() => source.buildConferencePdfSource({ cacheRoot: bad.root, record: bad.record }), /standard PDF/);
     const f = fixture();
@@ -167,7 +167,7 @@ test('bad header, changed bytes, bad record hash and mutated descriptors fail cl
     assert.throws(() => source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: result.descriptor }), /bytes no longer replay/);
 });
 
-test('ledger bridge admits only the selected verified member and binds all non-PDF source SHA values', () => {
+test('账目桥接只放行选中的已核验成员，并绑定所有非 PDF 来源的 SHA', () => {
     const f = ledgerFixture();
     const identityKey = ledgerApi.identityKey(f.first.identity);
     const result = source.buildConferencePdfSourceFromLedger({
@@ -200,7 +200,7 @@ test('ledger bridge admits only the selected verified member and binds all non-P
     }), /authenticated loaded ledger handle/);
 });
 
-test('ledger replay rejects cross-member, cross-ledger, source drift, and recomputed descriptor-field forgery', () => {
+test('账目复核拒绝跨成员、跨账目、来源漂移，以及重算描述符字段的伪造', () => {
     const f = ledgerFixture();
     const firstKey = ledgerApi.identityKey(f.first.identity);
     const secondKey = ledgerApi.identityKey(f.second.identity);

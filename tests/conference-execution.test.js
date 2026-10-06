@@ -169,7 +169,7 @@ test('执行模板拒绝混用词表字段，并核对状态的格式版本', t 
     assert.throws(() => execution.assertConferenceExecution({ ...state, contract: 'conference-execution-v2', version: 2 }), /运行模板的格式版本不一致/);
 });
 
-test('prepare recovers only authenticated known half-products and remains retryable after staged EIO', t => {
+test('准备阶段只恢复已核验的已知半成品，暂存写入遇到 EIO 后仍可重试', t => {
     const f = fixture(t);
     const ids = [
         '44444444-4444-4444-8444-444444444444', '55555555-5555-4555-8555-555555555555',
@@ -238,7 +238,7 @@ test('prepare recovers only authenticated known half-products and remains retrya
         executionId: interruptedId, now: stamp }).attempts.length, 0);
 });
 
-test('real plan concurrent authority link preserves the successful bundle and remains idempotent', t => {
+test('真实计划的并发授权链接保留成功的打包结果，且保持幂等', t => {
     const f = productionPlanFixture(t); const executionRoot = path.join(f.root, 'executions');
     const concurrentId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
     const originalLink = fs.linkSync; let collided = false;
@@ -263,7 +263,7 @@ test('real plan concurrent authority link preserves the successful bundle and re
         executionId: concurrentId, now: '2026-09-07T00:00:00.000Z' }).stateSha256, state.stateSha256);
 });
 
-test('prepare rollback never deletes a state path whose created inode was replaced before EIO', t => {
+test('准备回滚不会删掉这样的状态路径：它新建的 inode 在 EIO 之前已被替换', t => {
     const f = fixture(t); const interruptedId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
     const stateFile = path.join(f.root, interruptedId, 'state.json');
     const originalWrite = fs.writeFileSync; let writes = 0;
@@ -283,7 +283,7 @@ test('prepare rollback never deletes a state path whose created inode was replac
         executionId: interruptedId, now: stamp }), /execution recovery state/);
 });
 
-test('status/transition replay durable authority and reject authority or state drift', t => {
+test('状态查询和转换会复核已落盘的授权，拒绝授权或状态漂移', t => {
     const f = fixture(t);
     let state = execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle, executionId, now: stamp });
     state = execution.transitionExecution({ executionRoot: f.root, executionId, planHandle: f.handle, owner: 'worker', now: stamp,
@@ -299,7 +299,7 @@ test('status/transition replay durable authority and reject authority or state d
     assert.throws(() => execution.readExecution({ executionRoot: f.root, executionId, planHandle: f.handle }), /does not replay/);
 });
 
-test('transition preserves CAS, operation idempotency, lock and patch-path boundaries, and replays attempts', t => {
+test('转换保留 CAS、操作幂等、锁和补丁路径边界，并复核尝试记录', t => {
     const f = fixture(t);
     let state = execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle, executionId, now: stamp });
     const first = { operationId, expectedStateSha256: state.stateSha256, paperId,
@@ -333,7 +333,7 @@ test('transition preserves CAS, operation idempotency, lock and patch-path bound
         /patch SHA does not bind patch content|state SHA drifted/);
 });
 
-test('insecure legacy execution source and completed transitions remain rejected', t => {
+test('不安全的旧版执行来源和已完成的转换仍然拒绝', t => {
     const f = fixture(t);
     const state = execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle, executionId, now: stamp });
     const insecure = structuredClone(state);
@@ -345,7 +345,7 @@ test('insecure legacy execution source and completed transitions remain rejected
             nextState: { status: 'completed', usage: {}, projection: {} } } }), /completion-proof receipt bundle/);
 });
 
-test('every execution CLI command requires the complete upstream authority chain', () => {
+test('执行阶段的每条 CLI 命令都要求完整的上游授权链', () => {
     const authority = ['--run', 'run.json', '--plan-receipt', 'run.plan-receipt.json', '--plan', 'plan.json',
         '--ledger', 'ledger.json', '--import-receipt', 'ledger.import-receipt.json', '--import', 'import.json',
         '--staging-receipt', 'staging.json', '--filter', executionId, '--catalog', 'catalog.json', '--report', 'report.json'];

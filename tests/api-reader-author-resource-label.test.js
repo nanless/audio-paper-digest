@@ -6,8 +6,8 @@ const cheerio = require('cheerio');
 const { parseArxivReaderAuthors, resolveApiReaderAuthors, refreshApiReaderAuthorsFromSource }
     = require('../scripts/deep-analyzer.js');
 
-// Exact author DOM read from arXiv 2609.03423. Its SHA matches the immutable
-// fresh source snapshot; there are no citation affiliation metadata or thanks.
+// 从 arXiv 2609.03423 原样读出的作者 DOM，其 SHA 与不可变的
+// 当日来源快照一致；里面没有引文机构信息，也没有致谢。
 const authorDom = `<div class="ltx_authors">
 <span class="ltx_creator ltx_role_author">
 <span class="ltx_personname">Puneet Mathur
@@ -28,13 +28,13 @@ const expected = [
 const oldParsed = { sourceDomSha256: domSha, authors: [expected[0],
     { name: 'Dinesh Manocha', affiliations: ['Project Page:'] }] };
 
-describe('Reader resource labels are not author affiliations', () => {
-    it('replays the exact 03423 DOM and never borrows another author institution', () => {
+describe('Reader 资源标签不是作者机构', () => {
+    it('照原样复核 03423 的 DOM，绝不借用别的作者机构', () => {
         const parsed = parseArxivReaderAuthors(cheerio.load(authorDom));
         assert.equal(parsed.sourceDomSha256, domSha);
         assert.deepEqual(parsed.authors, expected);
     });
-    it('repairs old source metadata only in derived identity, retaining source bytes', () => {
+    it('只在派生身份里修正旧来源元数据，保留来源字节', () => {
         const source = { text: 'Immutable full source', readerAuthors: structuredClone(oldParsed) };
         const before = JSON.stringify(source);
         const result = resolveApiReaderAuthors({ authors: expected.map(a => a.name) }, source);
@@ -43,11 +43,11 @@ describe('Reader resource labels are not author affiliations', () => {
         assert.equal(result.identity.authors[1].nameBinding.sourceKind, 'html_dom');
         assert.equal(JSON.stringify(source), before);
     });
-    it('does not bypass label validation when paper metadata author names are absent', () => {
+    it('论文元数据里没有作者姓名时，不跳过标签校验', () => {
         const result = resolveApiReaderAuthors({}, { text: 'source', readerAuthors: oldParsed });
         assert.deepEqual(result.authors, expected);
     });
-    it('recognizes only explicit resource labels and preserves real institution words', () => {
+    it('只认明确的资源标签，保留真实的机构名称', () => {
         for (const label of ['Project Page:', 'Project website:', 'Code:', 'Demo page:', 'Dataset link:']) {
             const html = authorDom.replace('Project Page:', label);
             assert.deepEqual(parseArxivReaderAuthors(cheerio.load(html)).authors, expected);
@@ -56,7 +56,7 @@ describe('Reader resource labels are not author affiliations', () => {
             .replace(/<a href="https:\/\/dsb-ifeval.github.io"[^>]*>.*?<\/a>/, '');
         assert.equal(parseArxivReaderAuthors(cheerio.load(html)).authors[1].affiliations[0], 'Project Research Institute');
     });
-    it('authors-only refresh changes binding proof but not Reader, plan, score or source', () => {
+    it('只刷新作者时，绑定证明会变，Reader、计划、评分和来源不变', () => {
         const source = { text: 'Immutable full source', readerAuthors: structuredClone(oldParsed) };
         const sourceSha256 = crypto.createHash('sha256').update(source.text).digest('hex');
         const paper = { authors: expected.map(a => a.name), sourceSha256,

@@ -70,7 +70,7 @@ function fixture() {
     return paper;
 }
 
-test('feedback revision seeds exact signed article and plan, with source and revision hashes', () => {
+test('反馈修订的种子精确锁定已签名文章和计划，并带上来源与修订哈希', () => {
     const paper = fixture();
     const before = JSON.stringify(paper);
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, '只修正图的颜色对应');
@@ -84,7 +84,7 @@ test('feedback revision seeds exact signed article and plan, with source and rev
     assert.equal(JSON.stringify(paper), before, 'seed preparation must be read-only');
 });
 
-test('seeded generation starts at repair temperature and requests full schema without rewriting correct content', () => {
+test('带种子的生成从修复温度开始，请求完整 schema，但不改写正确内容', () => {
     const paper = fixture();
     const reviewFeedback = '修正数据角色';
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback);
@@ -98,7 +98,7 @@ test('seeded generation starts at repair temperature and requests full schema wi
     assert.match(start.reviewFeedbackPrefix, /不得直接返回参考用的/);
 });
 
-test('default generation and no-feedback refresh do not seed or change temperature', () => {
+test('默认生成和无反馈刷新既不设种子，也不改温度', () => {
     assert.equal(prepareApiReaderRevisionSeed({}, 'irrelevant', ''), null);
     const start = buildApiReaderGenerationStart({});
     assert.equal(start.previousDraft, '无');
@@ -107,7 +107,7 @@ test('default generation and no-feedback refresh do not seed or change temperatu
     assert.equal(start.reviewFeedbackPrefix, '');
 });
 
-test('incomplete, tampered, stale-stage and wrong-source Readers fail closed as revision seeds', () => {
+test('不完整、被篡改、阶段过期或来源不对的 Reader，作为修订种子一律拒绝', () => {
     for (const tamper of [
         paper => { paper.apiReaderArticle += '未签名改写'; },
         paper => { paper.apiReaderPlan.sections[0].heading = '未签名标题'; },
@@ -124,7 +124,7 @@ test('incomplete, tampered, stale-stage and wrong-source Readers fail closed as 
     assert.throws(() => prepareApiReaderRevisionSeed({}, sourceText, '修正事实'), /定向修订需要完整的读者文章/);
 });
 
-test('caller-supplied drafts cannot bypass seed validation and changed signed inputs change the seed identity', () => {
+test('调用方提供的草稿不能绕过种子校验，已签名输入一变种子身份就变', () => {
     const paper = fixture();
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, '修正事实');
     assert.throws(() => buildApiReaderGenerationStart(paper, {

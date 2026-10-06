@@ -1630,8 +1630,8 @@ describe('analyzeBatch', () => {
             await new Promise(resolve => setImmediate(resolve));
             const startedBeforeSave = started.slice();
             releaseFailedSave();
-            // Finish any extra work started by the broken implementation so the
-            // regression test reports its assertions without leaving promises open.
+            // 先收尾那段故意写坏的实现启动的额外任务，
+            // 让回归测试正常报告断言结果，不留下悬空的 Promise。
             for (let attempt = 0; attempt < 10; attempt++) {
                 for (const paper of papers.slice(2)) resolvers.get(paper.arxivId)?.();
                 await new Promise(resolve => setImmediate(resolve));
@@ -1902,7 +1902,7 @@ describe('analyzeBatch', () => {
     });
 });
 
-describe('analysis run status', () => {
+describe('分析运行状态', () => {
     it('区分 complete、partial_failed 和 failed 并映射非零退出码', () => {
         assert.strictEqual(getAnalysisRunStatus({ success: 2, failed: 0 }), 'complete');
         assert.strictEqual(getAnalysisRunStatus({ success: 2, failed: 1 }), 'partial_failed');
@@ -2210,7 +2210,7 @@ describe('analysis run status', () => {
         }
     });
 
-    it('historical direct legacy recovery races produce one audit and preserve mutual exclusion', async () => {
+    it('历史直连的旧版恢复竞争只产生一次审查记录，并保持互斥', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-lock-direct-legacy-race-'));
         const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
         fs.mkdirSync(lockPath, { mode: 0o755 }); fs.chmodSync(lockPath, 0o755);
@@ -2235,7 +2235,7 @@ describe('analysis run status', () => {
         assert.equal(fs.existsSync(lockPath), false);
     });
 
-    it('historical direct audit prepare failure or lock mutation cannot delete the observed legacy owner', () => {
+    it('历史直连审查准备失败或锁被改动时，不能删掉观察到的旧版持有者', () => {
         const makeLock = name => {
             const dir = fs.mkdtempSync(path.join(os.tmpdir(), `paper-lock-direct-audit-failure-${name}-`));
             const target = path.join(dir, 'result.json'); const lockPath = `${target}.lock`;
@@ -2338,7 +2338,7 @@ describe('analysis run status', () => {
     });
 });
 
-describe('selected reanalysis stats', () => {
+describe('选中重分析的统计', () => {
     it('只把旧评分契约恢复为当前契约的论文计入恢复数', () => {
         const { updateReanalysisStats } = require('../scripts/reanalyze-selected.js');
         const data = {

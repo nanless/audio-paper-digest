@@ -141,8 +141,8 @@ class HistoricalPageRenderTests(unittest.TestCase):
         paper = llm_api_ephemeral_figure_fixture()
         figure_url = paper['apiReaderFigures'][0]['url']
         paper['directPaperId'] = f'arxiv:{paper["arxivId"]}'
-        # The direct route reparses the sealed canonical surface instead of
-        # importing the legacy tag assignment used by the other fixture.
+        # 直连路径会重新解析已保存并核验的分析记录，
+        # 而不是导入另一份固定数据用的旧版标签分配。
         paper['analysis'] += (
             '\n\n## 标签\n#音乐源分离 #Transformer #鲁棒性\n'
             '主任务标签: #音乐源分离\n主方法标签: #Transformer'

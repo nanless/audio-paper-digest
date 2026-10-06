@@ -36,10 +36,9 @@ function normalizedPaperId(value) {
 }
 
 /**
- * Builds the immutable identity of one paper's evidence inputs. Batch-level
- * manifest bytes are deliberately excluded: they are collection indexes, so
- * another paper's checkpoint must not invalidate this paper. The caller still
- * validates batch completeness and the real paths independently.
+ * 算出一篇论文证据输入的固定标识。批次级清单的字节刻意排除在外：那是整批的
+ * 索引，别的论文换了检查点不该让这篇论文失效。批次是否完整、路径是否真实，
+ * 仍然由调用方自己核对。
  */
 function buildManualPaperSourceIdentity(options = {}) {
     const date = String(options.date || '');

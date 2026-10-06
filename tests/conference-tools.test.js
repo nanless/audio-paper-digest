@@ -31,13 +31,13 @@ function fixtureMember(root) {
     };
 }
 
-test('conference maintenance CLI accepts only configured direct filenames', () => {
+test('会议维护命令行只接受配置里直接给出的文件名', () => {
     assert.deepEqual(parseArgs(['validate-ledger', '--ledger', 'icassp-2026.json']), { command: 'validate-ledger', ledgerName: 'icassp-2026.json' });
     assert.deepEqual(parseArgs(['validate-run', '--run', 'run-1.json', '--ledger', 'icassp-2026.json']), { command: 'validate-run', runName: 'run-1.json', ledgerName: 'icassp-2026.json' });
     for (const args of [[], ['validate-ledger', '--ledger', '../x.json'], ['verify-ledger', '--run', 'x.json'], ['validate-run', '--run', 'x.json', '--extra'], ['validate-run', '--run', 'x.json', '--ledger', '../x.json']]) assert.throws(() => parseArgs(args));
 });
 
-test('conference CLI validates ledger files and run files only below configured roots', t => {
+test('会议命令行只校验配置根目录之下的账目文件和运行文件', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-tools-test-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const ledgerDirectory = path.join(root, 'ledgers'); const sourceRoot = path.join(root, 'sources'); const runsDirectory = path.join(root, 'runs');

@@ -409,9 +409,9 @@ def manual_v6_publication_fixture():
         },
         'selectedImageUrls': [],
     }
-    # Seal from the final in-memory blocks last.  Keeping this in one tail
-    # step makes later fixture edits unable to leave an earlier article,
-    # receipt, takeover copy or bundle semantic hash stale.
+    # 最后再从内存里的最终区块生成保存记录。把它放在尾部一步完成，
+    # 后面改动固定数据时，就不会留下过期的文章、
+    # 凭证、接管副本或打包文件语义哈希。
     final_article = '\n\n'.join(
         f'### {_manual_v6_text(block["heading"])}\n\n{_manual_v6_text(block["markdown"])}'
         for block in paper['manualReaderLongform']['blocks']
@@ -812,8 +812,8 @@ def valid_png(payload_suffix=b'', width=768, height=1200):
             + struct.pack('>I', zlib.crc32(kind + payload) & 0xffffffff)
         )
     ihdr = struct.pack('>IIBBBBB', width, height, 8, 0, 0, 0, 0)
-    # Valid 8-bit grayscale rows. Change the final pixel to produce a distinct
-    # but still structurally valid PNG when callers request a suffix.
+    # 合法的 8 位灰度行。改动最后一个像素，
+    # 这样调用方加后缀时能得到一张不同但结构依然合法的 PNG。
     scanline = bytearray((width + 1) * height)
     if payload_suffix:
         scanline[-1] = zlib.crc32(payload_suffix) & 0xff
@@ -838,9 +838,9 @@ def init_blog_repo(root, with_remote=False):
     posts.mkdir(parents=True)
     readme = repo / 'README.md'
     readme.write_text('blog\n', encoding='utf-8')
-    # Review receipts bind the Hugo runtime. Every synthetic blog repository
-    # therefore needs a minimal committed runtime instead of relying on the
-    # real BLOG_REPO or weakening the production fail-closed check.
+    # 审查凭证会绑定 Hugo 运行时。所以每个合成的博客仓库
+    # 都要带一个最小但已提交的运行时，而不是去用
+    # 真实的 BLOG_REPO，也不能放松生产侧的失败即停检查。
     hugo_config = repo / 'hugo.yaml'
     hugo_config.write_text('baseURL: https://example.test/\n', encoding='utf-8')
     git(repo, 'add', '--', 'README.md', 'hugo.yaml')
@@ -4802,8 +4802,8 @@ title: "Bad table"
         self.assertIn('#### 逐行读取完整结果表', markdown)
         self.assertIn('**LibriSpeech test-clean 完整结果**', markdown)
         self.assertIn('| 完整方法 | 7.1% |', markdown)
-        # The publisher nests canonical block headings but does not use a
-        # separately supplied Markdown article as its rendering authority.
+        # 发布器会把标准区块标题嵌套起来，但不会把
+        # 另外传入的 Markdown 文章当成渲染依据。
         self.assertNotRegex(markdown, r'(?m)^### 逐行读取完整结果表$')
 
         bindings = publish_to_blog.manual_v6_publication_bindings([paper])
@@ -4813,8 +4813,8 @@ title: "Bad table"
         self.assertEqual(bindings[0]['readerArticleSha256'], payload['articleSha256'])
 
     def test_manual_v6_longform_string_sha_matches_node_raw_utf8_vector(self):
-        # manual-longform-contract.js hashes String(value) bytes directly;
-        # this guards against accidentally switching to workflow stable JSON.
+        # manual-longform-contract.js 直接对 String(value) 的字节求哈希；
+        # 这条用来防止不小心改成按 workflow 的稳定 JSON 求哈希。
         self.assertEqual(
             _manual_v6_text_sha('中|A\n'),
             '84996bd499282e0fed65f8ddee3bf3aae24edbe1cb31bea3496c723960d96dbf',
@@ -4903,9 +4903,9 @@ title: "Bad table"
         paper = manual_v6_publication_fixture()
         markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-28')
         sanitized = publish_to_blog.sanitize_markdown_for_publish(markdown)
-        # This compact publisher fixture deliberately omits the large v5
-        # resultClaims ledger, so a pristine page may fail later at that
-        # independent gate.  It must first pass the v6 deterministic replay.
+        # 这份精简的发布器固定数据故意不带庞大的 v5
+        # resultClaims 账目，所以一个本来干净的页面可能在那道
+        # 独立检查上失败。它首先要通过 v6 的确定性复核。
         pristine_issue = publish_to_blog.validate_final_manual_v4_markdown(
             sanitized, paper,
         ) or ''
@@ -5424,8 +5424,8 @@ primary_method_tag: #Transformer
             (Path(ROOT) / 'tests' / 'fixtures' / 'published-papers-fingerprint-probe.json')
             .read_text(encoding='utf-8')
         )
-        # Shared with the Node-side probe. U+E000 sorts before non-BMP keys by
-        # Unicode code point, but after their leading surrogate by JS UTF-16.
+        # 和 Node 侧的探针共用。按 Unicode 码点，U+E000 排在非 BMP 键之前；
+        # 但按 JS 的 UTF-16，它排在这些键的前导代理项之后。
         self.assertEqual(
             publish_to_blog.published_papers_fingerprint(probe),
             '3ee65da42ed04aa221d4429d960f7b60ed86fb5bee62f428ec67d2f8d2171882',
@@ -6837,7 +6837,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 publish_paths = [page]
                 save_bound_review_receipt('2026-07-10', publish_paths)
                 receipt, _path, _head = publish_to_blog._load_push_receipt('2026-07-10')
-                # Not staged yet: index still contains the supposedly deleted page.
+                # 还没暂存：索引里仍然有那个本该删掉的页面。
                 with self.assertRaisesRegex(
                     publish_to_blog.PublishDataValidationError, 'index.*仍包含',
                 ):
@@ -7007,10 +7007,10 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 plan['priorResults'][str(passed.resolve())]['reviewedSha256'],
                 publish_to_blog._sha256_file(passed),
             )
-            # The current fingerprint is recorded on the newly assembled
-            # batch receipt, but it never turns identical page bytes into a
-            # review target.  Model, publisher-code and Hugo changes all flow
-            # through this same fingerprint boundary.
+            # 当前指纹会记在新组装的
+            # 批次凭证上，但页面字节没变时，它不会让页面重新进入
+            # 审查。模型、发布器代码和 Hugo 的任何改动，
+            # 都从这一个指纹边界进来。
             self.assertEqual(
                 plan['priorResults'][str(passed.resolve())]
                 ['reviewProtocolFingerprint'],
@@ -7160,7 +7160,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 first_record = journal['installation']['files'][0]
                 first_target = repo / first_record['path']
                 first_source = stage / first_target.name
-                # Simulate SIGKILL after target replacement but before installed=true flush.
+                # 模拟在目标文件替换之后、installed=true 落盘之前收到 SIGKILL。
                 first_target.write_text(first_source.read_text(encoding='utf-8'), encoding='utf-8')
                 installed = publish_to_blog.resume_generation_installation(
                     journal, journal_path, stage,
@@ -7524,9 +7524,9 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             theme_layout.write_text('<html>{{ block "main" . }}{{ end }}</html>\n')
             theme_readme = repo / 'themes' / 'PaperMod' / 'README.md'
             theme_readme.write_text('theme documentation first\n')
-            # Large content/media files are intentionally outside the runtime
-            # contract; generated page bytes and referenced images have their
-            # own review/manifest bindings.
+            # 大的内容/媒体文件故意不纳入运行时
+            # 约定；生成的页面字节和被引用的图片
+            # 各有自己的审查和清单绑定。
             (repo / 'static' / 'paper.png').write_bytes(b'first')
             generated_sidecar = (
                 repo / 'static' / 'data' / 'papers' / '2026-09-05'

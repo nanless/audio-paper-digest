@@ -36,14 +36,14 @@ npm run workspace:role -- status
 
 当前实现支持以下固定来源：
 
-| 类别 | 来源代号（provider） |
+| 类别 | 来源代号 |
 |---|---|
 | 语音、音频和音乐 | `odyssey-2026`、`chime-2026`、`jep-2026`、`speechprosody-2026`、`interspeech-2026`、`iwslt-2026`、`eusipco-2026`、`nime-2026`、`dafx-2026`、`icmc-2026`。 |
 | AI、机器学习、视觉和语言 | `aaai-2026`（OJS 第 40 卷）、`aistats-2026`（PMLR v300）、`uai-2026`（PMLR v337）、`cvpr-2026`（CVF 主会）、`acl-2026`、`eacl-2026`。 |
 
 ACL/EACL 只纳入主会 `long`、`short` 和 `findings`，排除卷首、全集 PDF、workshop 和非论文演讲；Odyssey keynote 摘要页也不作为单篇论文。CHiME、JEP、Speech Prosody 和 Interspeech 使用各自官方 ISCA Archive 目录。
 
-ICMC 2026 只有一份合并论文集 PDF。程序先保存原 PDF，再按官方目录大纲（outline）的物理页范围切成单篇，生成页码对应表和绑定原始 PDF SHA 的回执；该切片路径实际串行执行。不能从源 PDF 恢复的页面或结构保留为证据状态，不用猜测的题目、表格或公式补齐。
+ICMC 2026 只有一份合并论文集 PDF。程序先保存原 PDF，再按官方目录大纲的物理页范围切成单篇，生成页码对应表和绑定原始 PDF SHA 的回执；该切片路径实际串行执行。不能从源 PDF 恢复的页面或结构保留为证据状态，不用猜测的题目、表格或公式补齐。
 
 AAAI 第 40 卷分为 48 个独立 OJS issue，`/issue/current` 只代表其中一期。目录获取只接受代码固定的 48 个官方 URL，每期保存 `responses/issues/issue-NN-OJSID.html` 及响应回执。48 对记录全部可重验、标题与卷期相符且官方 article ID 跨期唯一，才输出聚合 `metadata.json` 和目录回执。中断后重跑可恢复完整的期刊响应与回执对，单期不能充当全集。
 

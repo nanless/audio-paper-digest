@@ -1,8 +1,8 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const api=require('../scripts/lib/conference-postprocess.js');
-// Expectations are pinned outputs of the prior repair pipeline. Complex captions
-// must add no new delta; prior repairs are not promised to preserve raw input.
+// 预期值是上一版修复流程固定下来的输出。复杂的图注
+// 不应再产生新的改动；上一版修复本来就不保证保留原始输入。
 const cases=[
   {
     "source": "*论文图 2。`[p](‘beat’)`*",

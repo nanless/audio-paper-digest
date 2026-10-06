@@ -31,7 +31,7 @@ function fixture() {
     return { root, paperId, filePath, articleSha256, value };
 }
 
-describe('manual table transcription attestation', () => {
+describe('Manual 表格转录核验记录', () => {
     it('接受路径受控、SHA 正确且绑定当前文章的 Terra/high 独立逐表审查', () => {
         const f = fixture();
         const result = loadTableTranscriptionReviewRecord({

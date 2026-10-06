@@ -110,7 +110,7 @@ function stage(f, value = extraction(f.sources, f.first.handle), overrides = {})
         importManifestName: 'import.json', ...overrides });
 }
 
-test('authenticated selection and discovery stage exactly the included identities with all source SHA bindings', t => {
+test('已核验的选择和发现只暂存入选身份，并带上全部来源 SHA 绑定', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const result = stage(f);
     assert.equal(result.importManifest.contract, importer.CONTRACT);
@@ -126,7 +126,7 @@ test('authenticated selection and discovery stage exactly the included identitie
     assert.equal(receiptSha256, staging.stableHash(body));
 });
 
-test('excluded, missing, extra, aliased, forged and cross-discovery inputs fail closed', t => {
+test('被排除、缺失、多余、有别名、伪造以及跨发现的输入，一律直接失败', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     assert.throws(() => stage(f, extraction(f.sources, f.first.handle, ['100', '300'])), /excluded or extra|exactly cover/);
     assert.throws(() => stage(f, extraction(f.sources, f.first.handle, ['100'])), /exactly cover/);
@@ -141,7 +141,7 @@ test('excluded, missing, extra, aliased, forged and cross-discovery inputs fail 
     assert.throws(() => stage(f, extraction(f.sources, f.first.handle), { discoveryHandle: other.handle }), /does not bind/);
 });
 
-test('only a unique exact discovery candidate can enter staging and metadata/PDF bindings are causal', t => {
+test('只有唯一且精确的发现候选才能进暂存，且元数据与 PDF 的绑定是因果对应的', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const replay100 = discovery.replayDiscoveryMember(f.first.handle, 'icassp-arnumber:100');
     const wrong100 = extractionMember(f.sources, '100', f.first.handle, { discoveryBinding: {
@@ -167,7 +167,7 @@ test('only a unique exact discovery candidate can enter staging and metadata/PDF
     assert.throws(() => stage(f, pdfManifest), /unique exact discovery candidate/);
 });
 
-test('normalized, ambiguous, and unmatched discovery members cannot stage without a resolution receipt', t => {
+test('归一化、有歧义和未匹配的发现成员，没有解决凭证就不能暂存', t => {
     for (const mode of ['normalized', 'ambiguous', 'unmatched']) {
         const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), `conference-${mode}-`));
         t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -176,7 +176,7 @@ test('normalized, ambiguous, and unmatched discovery members cannot stage withou
     }
 });
 
-test('staging rejects changed extraction receipt, extractor, PDF, text, or artifact bytes', t => {
+test('提取凭证、提取器、PDF、文本或产物字节一变，暂存就拒绝', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const reviewed = extraction(f.sources, f.first.handle);
     const receiptFile = path.join(f.sources, '100-receipt.json');
@@ -196,7 +196,7 @@ test('staging rejects changed extraction receipt, extractor, PDF, text, or artif
     assert.throws(() => extractionReceipt.extractionHandleSnapshot({}), /authenticated extraction handle/);
 });
 
-test('CLI dry-run is non-writing and apply creates an immutable O_EXCL pair in configured staging output', t => {
+test('命令行预演不写文件；实际执行在配置的暂存输出目录里用 O_EXCL 创建不可变配对', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const value = extraction(f.sources, f.first.handle); const extractionFile = path.join(f.specs, 'reviewed.json');
     fs.writeFileSync(extractionFile, staging.canonicalBytes(value), { mode: 0o600 });
@@ -220,7 +220,7 @@ test('CLI dry-run is non-writing and apply creates an immutable O_EXCL pair in c
     assert.equal(fs.readdirSync(f.output).sort().join(','), 'import.json,receipt.json');
 });
 
-test('staging handle replays exact manifest/receipt bytes and current selection/discovery', t => {
+test('暂存句柄会复核精确的清单和凭证字节，以及当前的选择和发现结果', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const result = stage(f); const importFile = path.join(f.output, 'import.json'); const receiptFile = path.join(f.output, 'receipt.json');
     fs.writeFileSync(importFile, result.importBytes, { mode: 0o600 }); fs.writeFileSync(receiptFile, result.receiptBytes, { mode: 0o600 });
@@ -236,7 +236,7 @@ test('staging handle replays exact manifest/receipt bytes and current selection/
         /receipt SHA/);
 });
 
-test('downstream import replays Python extraction and rejects deleted derived bytes', t => {
+test('下游导入会复核 Python 提取结果，派生字节被删就拒绝', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const result = stage(f); const importFile = path.join(f.output, 'import.json');
     const receiptFile = path.join(f.output, 'receipt.json');
@@ -250,7 +250,7 @@ test('downstream import replays Python extraction and rejects deleted derived by
         sourceRoot: f.sources, cacheRoot: cache, updatedAt: stamp }), /extraction replay failed|missing or inaccessible/);
 });
 
-test('CLI accepts only direct configured names and a canonical filter UUID', () => {
+test('命令行只接受配置里直接给出的名称和一个标准筛选 UUID', () => {
     assert.deepEqual(cli.parseArgs(['--dry-run', '--catalog', 'c.json', '--report', 'r.json', '--filter', filterId,
         '--extraction', 'e.json', '--import-output', 'i.json', '--receipt-output', 's.json']),
     { apply: false, catalogName: 'c.json', reportName: 'r.json', filterId,

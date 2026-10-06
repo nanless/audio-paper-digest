@@ -14,7 +14,7 @@ const {
 } = require('../scripts/manual-research-contract.js');
 const { validateResultClaims } = require('../../scripts/editorial-quality.js');
 
-describe('Manual v5 audio researcher contract', () => {
+describe('Manual v5 音频研究者约定', () => {
     it('新论文编辑蓝图必须形成中心矛盾、递进问题、证据柱和小节计划', () => {
         const plan = {
             version: 1,

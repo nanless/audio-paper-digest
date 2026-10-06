@@ -438,8 +438,8 @@ test(
             () => api.normalizeCheckpoint(forged, selection, options(forged)),
             /部分运行记录未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/
         );
-        // Export keeps the original classification records and their hashes. It does not
-        // authorize model resume or change the saved implementation fingerprints.
+        // 导出会保留原始分类记录及其哈希，但不会
+        // 授权模型续跑，也不改动已保存的实现指纹。
         assert.equal(normalized.supplement.records['c.md'].proofSha256, value.supplement.records['c.md'].proofSha256);
     }
 );
@@ -476,8 +476,8 @@ test(
             records = {[page.pagePath]: record, [other.pagePath]: otherRecord };
         assert.equal(api.validatePageRecordsAgainstPlan(records, items), records);
         assert.equal(api.validatePageClassificationRecord(record, a.classification), record);
-        // Moving a page classification record leaves its content hash unchanged, but its
-        // dictionary key must still identify the planned page for that paper.
+        // 挪动一条页面分类记录不会改变它的内容哈希，但它的
+        // 字典键仍须指向该论文计划生成的那个页面。
         assert.throws(
             () => api.validatePageRecordsAgainstPlan({ 'content/posts/forged.md': record }, items),
             /页面记录无法对应计划中的论文和页面，或所在路径、页面编号及内容 SHA 不一致/

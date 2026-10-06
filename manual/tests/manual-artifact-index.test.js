@@ -120,7 +120,7 @@ describe('Manual ArtifactIndex v1', () => {
         ), true);
     });
 
-    it('builds deterministic, replayable single-paper inventories with longform-compatible projections', () => {
+    it('生成结果确定、可复核的单篇清单，且与长文格式兼容', () => {
         const { input, text, sourceEntry, structuredArtifacts } = fixture();
         const options = {
             paperId: input.id,
@@ -163,7 +163,7 @@ describe('Manual ArtifactIndex v1', () => {
         assert.doesNotThrow(() => validateArtifactIndex(index, options));
     });
 
-    it('projects a numbered DOM-native framed Figure as auditable non-raster evidence', () => {
+    it('把带编号的 DOM 原生带框图作为可核对的非位图证据', () => {
         const { input, text, sourceEntry } = fixture();
         const html = `<article><figure class="ltx_figure">
           <p><span class="ltx_framed"><span class="ltx_p">Shared task instruction and prompt variants.</span></span></p>
@@ -195,7 +195,7 @@ describe('Manual ArtifactIndex v1', () => {
         assert.doesNotThrow(() => validateArtifactIndex(index, options));
     });
 
-    it('fails closed on cross-paper input identity and semantic output tampering', () => {
+    it('跨论文输入身份不符或输出语义被篡改时直接失败', () => {
         const { input, text, sourceEntry, structuredArtifacts } = fixture();
         const options = {
             paperId: input.id, sourceText: text,
@@ -221,7 +221,7 @@ describe('Manual ArtifactIndex v1', () => {
         );
     });
 
-    it('checkpoints beside manifest v2, validates file bytes, and resumes only the failed paper', () => {
+    it('在 manifest v2 旁边存检查点，校验文件字节，只续跑失败的那篇', () => {
         const { dir, context, input, text, sourceEntry, structuredArtifacts } = fixture();
         const fullManifestPath = path.join(dir, 'manifest.json');
         initializeManifestLocked(fullManifestPath, context);
@@ -259,7 +259,7 @@ describe('Manual ArtifactIndex v1', () => {
         assert.equal(readArtifactManifestLocked(artifactContext).papers[input.id].outputSha256, entry.outputSha256);
     });
 
-    it('binds reuse to the exact structured source snapshot, not only flattened text', () => {
+    it('复用绑定到精确的结构化来源快照，而不只是拍平的文本', () => {
         const { dir, context, input, text, sourceEntry, structuredArtifacts } = fixture();
         const artifactContext = buildArtifactManifestContext(context, dir);
         initializeArtifactManifestLocked(artifactContext);
@@ -278,7 +278,7 @@ describe('Manual ArtifactIndex v1', () => {
         }), false);
     });
 
-    it('marks PDF/text fallback incomplete when captions or formula structure cannot be recovered', () => {
+    it('图注或公式结构无法还原时，把 PDF/文本回退标为不完整', () => {
         const { input, text, sourceEntry } = fixture();
         const pdfText = `${text}\nTable 9: Main results\nSystem WER\nBaseline 4.8\nEq. (3) defines the loss = a + b.`;
         const sourceSha256 = require('node:crypto').createHash('sha256').update(pdfText).digest('hex');

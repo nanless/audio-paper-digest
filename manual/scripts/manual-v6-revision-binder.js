@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-/** Deterministically bind a Terra-authored final article and compact semantic map to V6 revision artifacts. */
+/** 按固定规则，把 Terra 写出的最终文章和精简语义映射绑定到 V6 修订产物上。 */
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -328,12 +328,11 @@ function normalizeEvidenceLedgerIds(payloadValue) {
     const mapping = new Map();
     const canonicalIds = new Set();
     ledger.forEach((item, index) => {
-        // Early production-v6 author packets predated the author-output ID gate and
-        // a few otherwise valid drafts therefore contain an ordered ledger with no
-        // IDs at all.  Assigning an ID is identity plumbing, not semantic authoring:
-        // preserve the immutable ledger order and use the same E1..E999 namespace
-        // accepted for explicit draft IDs.  The recursive pass below then rewrites
-        // every exact dependent value/key atomically to the final E01..E999 form.
+        // 早期的 production-v6 写作材料包还没有作者输出 ID 这道检查，所以少数
+        // 本来有效的草稿里，那份有序记录表一个 ID 都没有。补一个 ID 只是补标识，
+        // 不属于内容创作：保留记录表原有的顺序，沿用显式草稿 ID 已经接受的
+        // E1..E999 命名空间。下面那趟递归会把所有依赖它的值和键一次性改写成
+        // 最终的 E01..E999 形式。
         const rawId = String(item?.id || '').trim();
         const match = rawId.match(/^E(\d{1,3})$/);
         if (rawId && !match && !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(rawId)) {
@@ -375,11 +374,10 @@ function normalizeEvidenceLedgerIds(payloadValue) {
 }
 
 function revisionBasePayloadPath(root) {
-    // A prior binder attempt may have left a fully formed payload at the output
-    // path.  Reading it would make a supposedly cold-start revision inherit old
-    // prose, scores and review bindings.  The only authoritative semantic base is
-    // the runner-validated author draft that is present in the revision packet's
-    // allowlist; the binder may overwrite its own output, but never consume it.
+    // 上一次绑定尝试可能在输出路径上留下一份写完整的产物。读它会让一次本该
+    // 冷启动的修订继承旧的正文、评分和审查绑定。唯一能作为内容基准的，是
+    // 修订材料包白名单里那份经 runner 校验过的作者草稿；绑定器可以覆盖自己
+    // 的输出，但绝不能拿它当输入。
     return path.join(root, 'draft', 'author-record.json');
 }
 
@@ -596,10 +594,9 @@ function applyRevisionAuthorPatches(payload, map, options = {}) {
             }
             normalized[dimension] = [...ids];
         }
-        // Scores, reviewer identity and calibration prose remain immutable and
-        // reviewer-owned.  The revision leaf may only relink legacy article
-        // anchors to the final evidence ledger; the independent audit then
-        // verifies those bindings before the payload can be signed.
+        // 评分、审查者身份和评分说明文字保持不变，归审查者所有。修订这一步
+        // 只能把旧文章里的证据锚点重新指到最终的证据清单上；随后独立的审查
+        // 会核对这些绑定，通过了产物才算确认。
         output.scoringCalibration = {
             ...output.scoringCalibration,
             evidenceIdsByDimension: normalized
@@ -647,9 +644,9 @@ function applyRevisionAuthorPatches(payload, map, options = {}) {
 }
 
 function applyReviewDecisionsAndRevisionPatches(payload, map, technicalReview, pedagogyReview, options = {}) {
-    // Reviewer-owned scores, identity and calibration prose are authoritative.
-    // Apply them first, then let the revision leaf relink only the explicitly
-    // allowlisted evidence-ID map; reversing the order restores legacy anchors.
+    // 审查者给的评分、身份和评分说明文字是权威值。先把它们应用上去，再让修订
+    // 这一步只重绑白名单里明确列出的证据 ID 映射；顺序反过来，旧锚点又会被
+    // 恢复回来。
     return applyRevisionAuthorPatches(
         applyValidatedReviewDecisions(payload, technicalReview, pedagogyReview),
         map,

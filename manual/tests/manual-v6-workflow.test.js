@@ -36,7 +36,7 @@ function freshArtifacts() {
     ];
 }
 
-describe('Manual v6 workflow and Merkle spec', () => {
+describe('Manual v6 工作流与 Merkle spec', () => {
     it('production 与 shadow runtime 使用互斥日期根，production canonical 指向 current', () => {
         const current = path.join(os.tmpdir(), 'manual-v6-current');
         const production = resolveManualV6RuntimePaths(current, '2026-08-28', 'production');

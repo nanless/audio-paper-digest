@@ -25,8 +25,8 @@ const completeTable = ordinal => ({
     ]
 });
 
-describe('Reader table inventory feedback', () => {
-    it('makes a PDF-text source with no recovered table matrix explicitly unselectable', () => {
+describe('Reader 表格清单反馈', () => {
+    it('把没能还原出表格矩阵的 PDF 文本来源显式标为不可选', () => {
         const evidence = buildApiReaderArtifactEvidence({
             sourceKind: 'pdf_text',
             health: { status: 'incomplete', detected: { tables: 5 }, recovered: { tables: 0 } },
@@ -35,7 +35,7 @@ describe('Reader table inventory feedback', () => {
         assert.match(evidence, /^TABLE_ORDINALS_AVAILABLE: \[\]$/m);
     });
 
-    it('lists only uniquely identified, complete and selection-eligible table ordinals', () => {
+    it('只列出唯一可识别、完整且可选中的表格序号', () => {
         const incomplete = { ...completeTable(2), recoveryStatus: 'incomplete' };
         const dirty = completeTable(3);
         dirty.matrix[0][0] = '';
@@ -49,7 +49,7 @@ describe('Reader table inventory feedback', () => {
         assert.match(evidence, /^TABLE_ORDINALS_AVAILABLE: \[1\]$/m);
     });
 
-    it('turns an unavailable selection identity failure into empty-inventory guidance', () => {
+    it('选择身份不可得导致的失败会转成空清单提示', () => {
         assert.match(
             buildApiReaderValidationFeedback(
                 new Error('读者文章 tableBindings[0] selection 原表身份或恢复状态非法')

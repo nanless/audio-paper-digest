@@ -74,7 +74,7 @@ npm run history:direct-publication -- status --publication-id UUID
 
 `PD_HISTORY_REVIEW_CONCURRENCY` 默认 5，范围 1–5。历史 Python 审查只保留一个不超过并发数的活动页面窗口，读完本轮已结束结果后再补新页；结构化 `scope=run` 错误先保存失败记录，再抛出异常并停止补新页，等待已经开始的页面结束。这个行为来自历史审查自身实现，不能推广为所有 Python 发布入口的规则。
 
-每个通过的分块和页面保存可恢复断点记录（checkpoint）。失败尝试记录（`attempt`）留作审计，不当作成功或永久失败缓存；每次运行每个审查单元最多调用一次审查器，请求层仍有有界重试。三次网络或余额失败不会永久阻止下一次恢复，无需删除失败记录。
+每个通过的分块和页面保存可恢复的断点记录。失败尝试记录（`attempt`）留作审计，不当作成功或永久失败缓存；每次运行每个审查单元最多调用一次审查器，请求层仍有有界重试。三次网络或余额失败不会永久阻止下一次恢复，无需删除失败记录。
 
 逐页通过记录永久按相对路径与实际页面内容 SHA 查找。模型、endpoint SHA、Prompt/实现 SHA、预算、并发、Hugo 或 generation/plan 元数据变化时，须重跑当前批次确定性检查与 Hugo、生成新审查凭证（review receipt），但不能重审内容 SHA 未变的页。只有页面内容 SHA 改变才重新审查该页；文本块可以复用各自输入 SHA 的通过记录。图片子审查同时绑定整页内容 SHA，避免图片 URL 不变、周围解释却改变时沿用旧结论。
 
@@ -90,7 +90,7 @@ npm run history:direct-publication -- status --publication-id UUID
 
 ## 远端与网页验收
 
-默认 `status` 再次查询真实远端，只有 receipt、远端身份及 `refs/heads/main` OID 对应，才允许进入 Git 发布终态。`status --live-remote false` 仅作离线诊断，永远不会给出完整发布状态。
+默认 `status` 再次查询真实远端，只有 receipt、远端身份及 `refs/heads/main` OID 对应，才允许进入 Git 发布终态。`status --live-remote false` 仅作离线诊断，不会给出完整发布状态。
 
 Git 发布状态 `complete` 不表示网站已上线，也不把视觉标成完成。向用户确认本次任务完成前，仍须人工检查对应 publication commit（或保留本批已审页面字节的后续提交）的 GitHub Pages build/deploy 均成功，并逐页核验全部已发布单篇、每日、会议及任务汇总的 HTTP 200、正式地址和标题，保存部署与页面核验记录。当前历史 status 没有自动执行这些检查；部署失败时须读取日志、修复并继续验收。
 

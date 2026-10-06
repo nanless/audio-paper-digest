@@ -28,8 +28,8 @@ DATE = '2026-10-01'
 
 
 class PresentationPolicyTests(unittest.TestCase):
-    # Reuse the AST isolation infrastructure, without inheriting/rerunning its
-    # cases. Additional real production transaction functions are AST-loaded.
+    # 复用 AST 隔离那套基础设施，但不继承也不重跑它的
+    # 用例。另外几个真实的生产事务函数也是按 AST 加载的。
     setUp = assets_test.TagVersionFilesTests.setUp
     call = assets_test.TagVersionFilesTests.call
     write = staticmethod(assets_test.TagVersionFilesTests.write)
@@ -40,8 +40,8 @@ class PresentationPolicyTests(unittest.TestCase):
         preferred = preferred or list(PREFERRED)[1]
         self.base = json.loads((FIXTURES / (BASE + '.json')).read_text())
         self.preferred = json.loads((FIXTURES / (preferred + '.json')).read_text())
-        # Reconstruct the raw runtime fields consumed by the actual snapshot
-        # builder. This is not a replacement registry or a signing operation.
+        # 重建真实快照构建函数要读的那些原始运行时字段。
+        # 这里既不是替换词表，也不是签名操作。
         self.env['_PAGE_TAG_CATALOG'] = {
             'version': self.base['registryVersion'], 'registrySha256': BASE,
             'concepts': [dict(id=n['id'], facet=n['facet'],
@@ -63,7 +63,7 @@ class PresentationPolicyTests(unittest.TestCase):
             'preferredRegistrySha256': preferred,
             'preferredSnapshotSha256': PREFERRED[preferred][0],
             'preferredProjectionSha256': PREFERRED[preferred][1]}
-        # Deliberately preserve noncanonical original bytes, including indent.
+        # 故意保留非标准的原始字节，包括缩进。
         self.policy_bytes = (json.dumps(self.policy, ensure_ascii=False, indent=4)+'\n').encode()
         self.policy_write(self.policy_bytes)
 
@@ -198,8 +198,8 @@ class PresentationPolicyTests(unittest.TestCase):
     def test_approved_bytes_cannot_hide_changed_base_concept_or_graph(self):
         self.prepare()
         changed=copy.deepcopy(self.preferred); changed['concepts'][0]['zh'] += '改'
-        # Even with freshly altered policy digests, the additive semantic check
-        # must reject changed existing labels/definitions/parents.
+        # 即使策略摘要刚刚被改过，这个增量语义检查
+        # 仍须拒绝已有标签、定义和父级的改动。
         for prefix in ('data', 'static/data'):
             catalog=json.loads((self.repo/f'{prefix}/taxonomy-catalog.json').read_text())
             catalog['snapshots'][1]=changed
@@ -227,8 +227,8 @@ class PresentationPolicyTests(unittest.TestCase):
 
     def test_policy_change_before_installation_rejected_by_real_git_ownership(self):
         self.transaction()
-        # New staging prepared before a foreign policy edit is not authority to
-        # overwrite that edit; the real git status rejects the unreceipted bytes.
+        # 在外来策略改动之前准备好的新暂存内容，
+        # 无权覆盖那次改动；真实的 git status 会拒绝没有凭证的字节。
         self.policy_write(self.policy_bytes+b' ')
         self.journal={}
         with self.assertRaisesRegex(self.error,'人工'):
@@ -288,9 +288,9 @@ class PresentationPolicyTests(unittest.TestCase):
         index=self.git('write-tree').stdout
         self.policy_write(self.policy_bytes+b' ')
         dirty=self.git('status','--porcelain=v1','-z').stdout
-        # Full production git_push, load_verified_review_receipt, and byte
-        # validator are executed. Unrelated protocol/model provenance prelude
-        # alone is stubbed. Every git call after the byte gate is prohibited.
+        # 生产用的 git_push、load_verified_review_receipt 和字节校验器
+        # 都会真实执行。只有不相干的协议/模型来源前置步骤被替换成桩。
+        # 过了字节检查之后的每一次 git 调用都被禁止。
         self.env['_run_git']=lambda *a,**kw: self.fail('push attempted Git mutation/remote operation')
         output = io.StringIO()
         with redirect_stdout(output):
@@ -304,8 +304,8 @@ class PresentationPolicyTests(unittest.TestCase):
 
     def test_interrupted_policy_installation_uses_only_frozen_stage_and_rejects_drift(self):
         self.transaction()
-        # Existing installation resumes frozen original policy even if mirrored
-        # current worktree bytes now diverge. It must not regenerate selection.
+        # 已安装的版本会沿用冻结的原始策略，即使镜像出来的
+        # 当前工作区字节已经不同。它不能重新生成选择结果。
         changed=self.policy_bytes+b' '
         self.write(self.repo/self.policy_paths[0],changed)
         with self.assertRaises(self.error):self.call('resume_generation_installation',self.journal,self.root/'journal.json',self.posts)

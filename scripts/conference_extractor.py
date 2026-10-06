@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Deterministic, local extraction for staged conference PDFs.
+"""对暂存的会议 PDF 做本地确定性抽取。
 
-The extractor keeps the original PDF as the authority and derives a
-replayable page-text map plus conservative table, formula, and Figure records
-from that PDF.  It never uses the network or an LLM.  A structure is only
-emitted when the PDF text/layout contains enough evidence to bind it to a
-page; uncertain structures are omitted rather than invented.
+抽取器以原始 PDF 为准，从它派生可重放的逐页文本映射，以及尽量保守的表格、
+公式和插图记录。全程不联网，也不用 LLM。只有 PDF 的文字或版面提供了足够证据、
+能把结构绑到某一页时才输出；拿不准的结构宁可不写，也不臆造。
 """
 
 from __future__ import annotations
@@ -72,19 +70,19 @@ ISO_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 
 
 class ConferenceExtractionError(RuntimeError):
-    """Base class for rejected extraction work."""
+    """抽取被拒绝时的基类异常。"""
 
 
 class ConferenceExtractionIntegrityError(ConferenceExtractionError):
-    """The request, source, or destination crossed the trusted boundary."""
+    """请求、来源或输出位置越过了可信边界。"""
 
 
 class ConferenceExtractionDependencyError(ConferenceExtractionError):
-    """The pinned PDF extraction backend is not available."""
+    """固定版本的 PDF 抽取后端不可用。"""
 
 
 class ConferencePdfExtractionError(ConferenceExtractionError):
-    """The PDF backend could not extract the staged document."""
+    """PDF 后端无法抽取暂存文档。"""
 
 
 @dataclass(frozen=True)
@@ -98,16 +96,16 @@ class ExtractionBackend:
 
 @contextlib.contextmanager
 def _quiet_pymupdf_output():
-    """Keep native MuPDF diagnostics out of the extractor's JSON stdout."""
+    """别让 MuPDF 的原生诊断混进抽取器 stdout 上的 JSON。"""
     try:
         sys.stdout.flush()
     except Exception:
         pass
     saved_stdout = os.dup(1)
     try:
-        # PyMuPDF can emit C-level diagnostics directly to fd 1.  Python's
-        # redirect_stdout cannot intercept those bytes, but the Node replay
-        # contract requires stdout to contain exactly one JSON object.
+        # PyMuPDF 会绕过 Python 层，把 C 层诊断直接写到 fd 1。
+        # redirect_stdout 拦不住这些字节，而 Node 重放约定要求 stdout 上
+        # 只能有一个 JSON 对象。
         os.dup2(2, 1)
         with contextlib.redirect_stdout(io.StringIO()):
             yield
@@ -133,7 +131,7 @@ def _exact_object(value: Any, fields: Iterable[str], label: str) -> dict[str, An
         raise _fail(f"{label} must be an object")
     expected = sorted(fields)
     if sorted(value.keys()) != expected:
-        raise _fail(f"{label} has unknown or missing fields")
+        raise _fail(f"{label} has unknown or missing fields: expected {expected}, actual {sorted(value.keys())}")
     return value
 
 
@@ -190,16 +188,16 @@ def _validate_source_acquisition_details(value: Any, label: str) -> dict[str, st
     acquisition_details = _exact_object(value, ["kind", "locator", "retrievedAt"], f"{label}.provenance")
     kind = _plain_text(acquisition_details["kind"], f"{label}.provenance.kind")
     if kind not in SOURCE_KINDS:
-        raise _fail(f"{label}.provenance.kind is unsupported")
+        raise _fail(f"{label}.provenance.kind is unsupported: actual {kind!r}, supported {sorted(SOURCE_KINDS)}")
     retrieved_at = _plain_text(acquisition_details["retrievedAt"], f"{label}.provenance.retrievedAt")
     if not ISO_TIMESTAMP_RE.fullmatch(retrieved_at):
-        raise _fail(f"{label}.provenance.retrievedAt must be a canonical UTC timestamp")
+        raise _fail(f"{label}.provenance.retrievedAt must be a canonical UTC timestamp: actual {retrieved_at!r}")
     try:
         from datetime import datetime
         if datetime.fromisoformat(retrieved_at.replace("Z", "+00:00")).isoformat(timespec="milliseconds").replace("+00:00", "Z") != retrieved_at:
             raise ValueError("timestamp does not round-trip")
     except ValueError as exc:
-        raise _fail(f"{label}.provenance.retrievedAt must be a canonical UTC timestamp") from exc
+        raise _fail(f"{label}.provenance.retrievedAt must be a canonical UTC timestamp: actual {retrieved_at!r}") from exc
     return {"kind": kind, "locator": _plain_text(acquisition_details["locator"], f"{label}.provenance.locator", 2000),
         "retrievedAt": retrieved_at}
 
@@ -210,12 +208,12 @@ def _resolve_pointer(document: Any, pointer: str, label: str) -> Any:
         key = encoded.replace("~1", "/").replace("~0", "~")
         if isinstance(current, list):
             if not re.fullmatch(r"(?:0|[1-9]\d*)", key) or int(key) >= len(current):
-                raise _fail(f"{label} does not resolve in metadata")
+                raise _fail(f"{label} does not resolve in metadata: {pointer!r}")
             current = current[int(key)]
         elif isinstance(current, dict) and key in current:
             current = current[key]
         else:
-            raise _fail(f"{label} does not resolve in metadata")
+            raise _fail(f"{label} does not resolve in metadata: {pointer!r}")
     return current
 
 
@@ -228,15 +226,15 @@ def _validate_metadata_identity(metadata: dict[str, Any], request: dict[str, Any
     if (not isinstance(conference_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,79}", conference_id)
             or not isinstance(conference_year, int) or isinstance(conference_year, bool)
             or not 1900 <= conference_year <= 2100):
-        raise _fail("metadata conference identity is malformed")
+        raise _fail(f"metadata conference identity is malformed: conferenceId={conference_id!r}, conferenceYear={conference_year!r}")
     if request["sourceIdentity"] != f"{identity_type}:{identity_value}":
-        raise _fail("metadata identity evidence does not bind paperId/sourceIdentity")
+        raise _fail(f"metadata identity evidence does not bind paperId/sourceIdentity: evidence {identity_type!r}:{identity_value!r}, actual sourceIdentity {request['sourceIdentity']!r}")
     try:
         assert_canonical_conference_paper_id(request["paperId"],
             {"id": conference_id, "year": conference_year},
             {"type": identity_type, "value": identity_value})
     except ValueError as exc:
-        raise _fail("metadata identity evidence does not bind canonical paperId") from exc
+        raise _fail(f"metadata identity evidence does not bind canonical paperId: {request['paperId']!r} vs {conference_id!r}/{conference_year} {identity_type}:{identity_value}") from exc
 
 
 def _strict_json_object(raw: bytes, label: str) -> dict[str, Any]:
@@ -266,7 +264,7 @@ def validate_request(value: Any, manifest_name: str) -> dict[str, Any]:
         "extraction request",
     )
     if request["contract"] != REQUEST_CONTRACT or request["version"] != CONTRACT_VERSION:
-        raise _fail("extraction request contract/version is unsupported")
+        raise _fail(f"extraction request contract/version is unsupported: expected {REQUEST_CONTRACT!r} v{CONTRACT_VERSION}, actual {request['contract']!r} v{request['version']!r}")
     paper_id = _plain_text(request["paperId"], "paperId")
     source_identity = _plain_text(request["sourceIdentity"], "sourceIdentity")
     source = _exact_object(request["source"], ["metadata", "pdf"], "source")
@@ -312,10 +310,10 @@ def validate_request(value: Any, manifest_name: str) -> dict[str, Any]:
     if (normalized["options"]["minimumTextCharacters"] not in SUPPORTED_MINIMUM_TEXT_CHARACTERS
             or normalized["options"]["normalization"] != NORMALIZATION
             or normalized["options"]["pageSeparator"] != PAGE_SEPARATOR):
-        raise _fail("extraction options must exactly match the supported conference profile")
+        raise _fail(f"extraction options must exactly match the supported conference profile: minimumTextCharacters={normalized['options']['minimumTextCharacters']!r} (supported {sorted(SUPPORTED_MINIMUM_TEXT_CHARACTERS)}), normalization={normalized['options']['normalization']!r} (supported {NORMALIZATION!r}), pageSeparator={normalized['options']['pageSeparator']!r} (supported {PAGE_SEPARATOR!r})")
     names = [manifest_name, metadata["file"], pdf["file"], *normalized["outputs"].values()]
     if len(set(names)) != len(names):
-        raise _fail("manifest, input, and output filenames must all differ")
+        raise _fail(f"manifest, input, and output filenames must all differ: duplicated {sorted({name for name in names if names.count(name) > 1})}")
     return normalized
 
 
@@ -341,7 +339,7 @@ def _read_regular_single_link(root_fd: int, name: str, maximum: int, label: str)
         raise _fail(f"{label} is missing or inaccessible") from exc
     if (not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode)
             or before.st_nlink != 1 or before.st_size > maximum):
-        raise _fail(f"{label} must be a bounded regular single-link file")
+        raise _fail(f"{label} must be a bounded regular single-link file: mode={oct(before.st_mode)}, nlink={before.st_nlink}, size={before.st_size}, max={maximum}")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         fd = os.open(name, flags, dir_fd=root_fd)
@@ -375,10 +373,9 @@ def _normalize_page_text(value: Any) -> str:
         value = ""
     if not isinstance(value, str):
         raise ConferencePdfExtractionError("PDF backend returned non-text page content")
-    # Some otherwise readable PDFs contain UTF-16 surrogate code points in a
-    # font encoding map.  Keep valid pairs as their Unicode scalar value and
-    # replace only unpaired surrogates so the sealed artifact remains strict
-    # UTF-8 instead of turning a recoverable page into PDF_EXTRACTION_FAILED.
+    # 有些 PDF 本身能读，只是字体编码表里带了 UTF-16 代理码位。合法的代理对
+    # 按 Unicode 标量值保留，只替换落单的代理码位；这样封存产物仍是严格
+    # UTF-8，不至于把本可恢复的一页变成 PDF_EXTRACTION_FAILED。
     value = value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
     value = unicodedata.normalize("NFC", value.replace("\r\n", "\n").replace("\r", "\n"))
     return "\n".join(line.rstrip() for line in value.split("\n")).strip("\n")
@@ -390,17 +387,15 @@ def _visual_text(value: str, maximum: int = 4000) -> str:
 
 
 def _json_safe_deep(value: Any) -> Any:
-    """Recursively keep every string strict UTF-8 for canonical JSON sealing.
+    """递归把每个字符串都收拾成严格 UTF-8，供规范化 JSON 封存使用。
 
-    PyMuPDF can surface lone UTF-16 surrogate code points from broken font
-    encoding maps (seen in formula glyph runs and table candidate cells).
-    `_normalize_page_text` already recovers such page text; audit bodies and
-    structured artifacts additionally embed raw candidate strings that never
-    pass through it.  Without this pass `json.dumps(..., ensure_ascii=False)`
-    raises UnicodeEncodeError while sealing the visual audit hash, turning a
-    recoverable page into a batch-failing PDF_VISUAL_AUDIT_FAILED block.
-    Valid surrogate pairs decode to their scalar value; only unpaired
-    surrogates are replaced — matching `_normalize_page_text` policy.
+    PyMuPDF 会从损坏的字体编码表里带出落单的 UTF-16 代理码位（公式字形串和
+    表格候选单元格里都见过）。`_normalize_page_text` 已经能恢复这类页面文本，
+    但审计正文和结构化产物还会嵌入没经过它的原始候选字符串。少了这一遍，
+    在计算视觉审计哈希时 `json.dumps(..., ensure_ascii=False)` 会抛
+    UnicodeEncodeError，把本可恢复的一页变成整批失败的
+    PDF_VISUAL_AUDIT_FAILED。合法代理对解码成标量值，只有落单的代理码位被
+    替换，与 `_normalize_page_text` 的策略保持一致。
     """
     if isinstance(value, str):
         if any("\ud800" <= character <= "\udfff" for character in value):
@@ -417,9 +412,9 @@ def _bbox(value: Any) -> list[float]:
     normalized = []
     for item in value:
         rounded = round(float(item), 3)
-        # JSON.stringify emits 1 for an integral JavaScript Number while
-        # Python's json.dumps emits 1.0. Normalize here so the visual-audit
-        # hash replays identically across the Python extractor and Node gate.
+        # JavaScript 的 JSON.stringify 把整数写成 1，Python 的 json.dumps 写成
+        # 1.0。这里先归一化，视觉审计哈希在 Python 抽取器和 Node 检查器两边
+        # 才能重放出同一个值。
         normalized.append(int(rounded) if rounded.is_integer() else rounded)
     return normalized
 
@@ -433,12 +428,11 @@ def _formula_candidate(text: str) -> bool:
 
 
 def _layout_tex(glyphs: list[dict[str, Any]]) -> str | None:
-    """Recover only a bounded, single-baseline alphabet with one script level.
+    """只还原范围有限、同一基线、且上下标各不超过一层的那种式子。
 
-    This is a layout-derived expression, never the author's original TeX.
-    Fractions, radicals, unknown glyphs, overlapping bases and ambiguous script
-    attachment are intentionally left in the pixel-bound candidate ledger.
-    The result is only a source annotation; it cannot enter publishable tex.
+    这是从版面推出来的写法，绝不是作者原始的 TeX。分式、根号、未知字形、
+    基线重叠以及上下标归属不清的，都有意留在与像素绑定的候选记录里。
+    结果只作来源标注，进不了可发布的 tex。
     """
     if not glyphs or len(glyphs) > 160:
         return None
@@ -500,7 +494,7 @@ def _layout_tex(glyphs: list[dict[str, Any]]) -> str | None:
 
 
 def _formula_layout_candidates(page: Any) -> list[dict[str, Any]]:
-    """Keep all nearby glyphs, including isolated superscript/subscript lines."""
+    """把附近的字形都收进来，孤立的上下标行也不例外。"""
     glyphs = []
     for block in page.get_text("rawdict").get("blocks", []):
         if block.get("type") != 0:
@@ -526,9 +520,8 @@ def _formula_layout_candidates(page: Any) -> list[dict[str, Any]]:
             continue
         selected = {seed}
         pending = [seed]
-        # Connected glyph neighbourhood, not just lines containing an operator.
-        # Vertical adjacency retains stacked fractions so they cannot be
-        # mistaken for a complete, shortened baseline expression.
+        # 取连通的字形邻域，而不是只看含运算符的行。保留竖直相邻的字形，
+        # 堆叠分式才不会被误当成一个完整却缩短了的基线式子。
         while pending:
             current = glyphs[pending.pop()]
             a = current["bbox"]
@@ -549,8 +542,8 @@ def _formula_layout_candidates(page: Any) -> list[dict[str, Any]]:
                 max(g["bbox"][2] for g in members), max(g["bbox"][3] for g in members)]
         layout = {"contract": "pdf-formula-glyph-layout-v1", "bbox": bbox, "glyphs": members}
         tex = _layout_tex(members)
-        # A rule line or other drawing inside the expression may encode a
-        # fraction, overbar, radical, etc. It is evidence, not decoration.
+        # 式子内部的横线或其他绘图可能表示分式、上划线、根号等。那是证据，
+        # 不是装饰。
         overlapping_drawings = [d["rect"] for d in drawings
                                 if d["rect"].x0 <= bbox[2] and d["rect"].x1 >= bbox[0]
                                 and d["rect"].y0 <= bbox[3] and d["rect"].y1 >= bbox[1]]
@@ -576,14 +569,11 @@ def _formula_layout_candidates(page: Any) -> list[dict[str, Any]]:
 
 
 def _caption_candidate(text: str) -> tuple[str, int] | None:
-    """Recognize a caption line, not a prose citation to a Figure/Table.
+    """认出真正的图注行，别把正文里提到图表的句子也算进来。
 
-    A PDF text layer commonly contains sentences such as ``Figure 2 presents``
-    in the body. Treating every such line as a visual candidate made page
-    selection drift toward nearly the whole paper. Captions in the supported
-    conference layouts start with their label and number; keep this heuristic
-    deliberately conservative because the page PNG remains the authoritative
-    visual evidence.
+    PDF 文本层里常有 ``Figure 2 presents`` 这样的正文句子。若把每行都当成
+    视觉候选，选页范围会扩大到接近整篇论文。支持的会议版式里，图注都以
+    标签加编号开头；这个判断有意保守，因为原页 PNG 才是权威的视觉证据。
     """
     match = re.match(
         r"^\s*(?:(figure|fig\.?|table|tab\.?)\s*(\d+)|([图表])\s*(\d+))"
@@ -600,7 +590,7 @@ def _caption_candidate(text: str) -> tuple[str, int] | None:
 
 
 def _build_visual_audit(document: Any) -> dict[str, Any]:
-    """Build deterministic visual evidence using a PyMuPDF document."""
+    """用 PyMuPDF 文档生成确定的视觉证据。"""
     pages: list[dict[str, Any]] = []
     table_candidates: list[dict[str, Any]] = []
     formula_candidates: list[dict[str, Any]] = []
@@ -613,7 +603,7 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
         visual_bytes += len(png_bytes)
         if visual_bytes > MAX_VISUAL_AUDIT_BYTES:
             raise ConferencePdfExtractionError(
-                f"visual audit exceeds the derived artifact limit ({MAX_VISUAL_AUDIT_BYTES} bytes)"
+                f"visual audit exceeds the derived artifact limit ({MAX_VISUAL_AUDIT_BYTES} bytes): actual {visual_bytes}"
             )
         render_sha = sha256_bytes(png_bytes)
         pages.append({
@@ -704,8 +694,8 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
                     "rows": len(matrix),
                     "columns": len(matrix[0]) if matrix else 0,
                     "matrixSha256": _stable_hash(matrix) if rectangular else None,
-                    # Keep the literal cells and geometry for review. A rectangular
-                    # result alone does not establish correct reading order or units.
+                    # 原样保留单元格与坐标供复核。仅仅结果是个矩形，
+                    # 并不能说明阅读顺序或单位正确。
                     "rawCells": matrix,
                     "cellBboxes": [(_bbox(cell) if cell is not None else None)
                                    for cell in table.cells],
@@ -748,7 +738,7 @@ def _build_visual_audit(document: Any) -> dict[str, Any]:
 
 
 def load_pypdf_backend() -> ExtractionBackend:
-    """Load the pinned PyMuPDF backend lazily (legacy function name retained)."""
+    """按需加载固定版本的 PyMuPDF 后端（沿用旧函数名）。"""
     try:
         fitz = importlib.import_module("fitz")
     except ImportError as exc:
@@ -765,19 +755,19 @@ def load_pypdf_backend() -> ExtractionBackend:
                 if document.needs_pass:
                     raise ConferencePdfExtractionError("encrypted PDFs are unsupported")
                 if len(document) > MAX_PAGES:
-                    raise ConferencePdfExtractionError(f"PDF page count exceeds {MAX_PAGES}")
+                    raise ConferencePdfExtractionError(f"PDF page count exceeds {MAX_PAGES}: actual {len(document)}")
                 pages = []
                 extracted_bytes = 0
                 for page in document:
                     text = _normalize_page_text(page.get_text("text", sort=True))
                     extracted_bytes += len(text.encode("utf-8")) + len(PAGE_SEPARATOR.encode("utf-8"))
                     if extracted_bytes > MAX_DERIVED_BYTES:
-                        raise ConferencePdfExtractionError("extracted text exceeds the derived artifact limit")
+                        raise ConferencePdfExtractionError(f"extracted text exceeds the derived artifact limit: {extracted_bytes} > {MAX_DERIVED_BYTES}")
                     pages.append(text)
                 document.close()
         except ConferencePdfExtractionError:
             raise
-        except Exception as exc:  # PyMuPDF exposes version-specific parse exceptions.
+        except Exception as exc:  # PyMuPDF 的解析异常因版本而异。
             raise ConferencePdfExtractionError(
                 f"PyMuPDF could not extract the PDF ({type(exc).__name__})"
             ) from exc
@@ -816,12 +806,9 @@ def load_pypdf_backend() -> ExtractionBackend:
         match = re.match(rf"^\s*{label}\s+(\d+)(?:\s*([:.\-–—])\s*|\s+)(.*)$", raw, re.IGNORECASE)
         if not match:
             return None
-        # A prose reference such as “Table 2 shows ...” is not a caption and
-        # must not become the next caption boundary.  Real captions either
-        # use punctuation after the number or begin their title with a
-        # capital/Chinese character.  This keeps wrapped captions supported
-        # while preventing a narrative paragraph from truncating the table
-        # immediately below it.
+        # “Table 2 shows ...” 这类正文引用不是图注，不能当作下一条图注的
+        # 边界。真正的图注要么在编号后带标点，要么标题以大写字母或汉字开头。
+        # 这样既支持换行的图注，也不会让叙述段落截断它正下方的表格。
         title = match.group(3).strip()
         if match.group(2) is None and title and title[0].islower():
             return None
@@ -833,8 +820,8 @@ def load_pypdf_backend() -> ExtractionBackend:
         for block in page.get_text("dict", sort=False).get("blocks", []):
             if block.get("type") != 0:
                 continue
-            # Text blocks may merge two side-by-side captions. Find labels at
-            # line level, then attach continuation lines only in that column.
+            # 一个文本块可能把并排的两条图注并在一起。在行一级找标签，
+            # 续行只接到同一栏里。
             lines = block.get("lines", [])
             for index, line in enumerate(lines):
                 raw = "".join(span.get("text", "") for span in line.get("spans", []))
@@ -916,13 +903,11 @@ def load_pypdf_backend() -> ExtractionBackend:
         return [sum(cluster) / len(cluster) for cluster in clusters]
 
     def layout_table_records(page: Any, page_number: int, next_ordinal: int) -> list[dict[str, Any]]:
-        """Recover borderless tables from caption-bounded word geometry.
+        """按图注围出的词坐标，恢复没有框线的表格。
 
-        A large fraction of conference tables have no ruling lines, so
-        ``find_tables`` cannot recover them.  This fallback uses metric-column
-        positions from the table's header and keeps every cell as extracted
-        text.  It never invents values or converts the result to a numeric
-        matrix.
+        会议论文里相当一部分表格没有框线，``find_tables`` 取不到。这个兜底
+        办法用表头给出的指标列位置，单元格一律保留抽取到的文本，不凭空补值，
+        也不把结果转成数值矩阵。
         """
         captions = caption_blocks(page, "Table")
         records: list[dict[str, Any]] = []
@@ -935,10 +920,8 @@ def load_pypdf_backend() -> ExtractionBackend:
             full_width = x1 - x0 >= page_width * 0.60
             region_x0 = 50.0 if full_width else max(0.0, x0 - 3.0)
             region_x1 = page_width - 50.0 if full_width else min(page_width, x1 + 3.0)
-            # Captions in two-column PDFs are interleaved by vertical position.
-            # The next caption on the page may belong to the other column, so
-            # only use a horizontally overlapping caption as this table's
-            # boundary; otherwise the table may be truncated mid-row.
+            # 双栏 PDF 的图注按竖直位置交错。页面上后一条图注可能属于另一栏，
+            # 所以只有横向重叠的图注才算本表的边界，否则表格可能被截到半行。
             stop_y = float(page.rect.height)
             for following in captions[caption_index + 1:]:
                 if min(region_x1, following["bbox"][2]) - max(region_x0, following["bbox"][0]) > 10:
@@ -993,20 +976,18 @@ def load_pypdf_backend() -> ExtractionBackend:
                         if any(current[index] for index in range(1, len(current))):
                             rows.append(current)
                         elif current[0]:
-                            # The receipt contract (conference-pdf-extraction-
-                            # receipt-v2) bounds every cell at 500 characters;
-                            # keep wrapped-label merges inside that bound so a
-                            # long label can never fail replay downstream.
+                            # 凭证约定（conference-pdf-extraction-receipt-v2）
+                            # 把每个单元格限制在 500 字符内；合并换行标签时也要
+                            # 守住这个上限，长标签才不会让下游重放失败。
                             cells[0] = clean_structure_text(f"{current[0]} {cells[0]}", 500)
                     current = cells
                     last_data_y = line[0]["y0"]
                 elif current is not None:
                     if last_data_y is not None and line[0]["y0"] - last_data_y > 22:
                         break
-                    # Borderless tables often wrap a new method/configuration
-                    # label onto a line before its metric cells.  A leading
-                    # capital or plus sign marks that new row; lowercase
-                    # continuation lines remain part of the current cell.
+                    # 无框线表格常把新的方法或配置标签单独换到指标单元格之前
+                    # 一行。首字母大写或加号开头表示新的一行；小写的续行仍算
+                    # 当前单元格的一部分。
                     first_token = cells[0].split(" ", 1)[0] if cells[0] else ""
                     if first_token and (first_token[0].isupper() or first_token[0] in "+−"):
                         rows.append(current)
@@ -1090,21 +1071,18 @@ def load_pypdf_backend() -> ExtractionBackend:
                             "sourceRef": f"pdf:table:{next_ordinal}:page:{page_number}",
                             "recoveryStatus": "complete"})
             next_ordinal += 1
-        # The line-based recovery above can recover one table on a page while
-        # missing another (most commonly when the second table is borderless
-        # or has a wrapped configuration column).  Always run the geometry
-        # fallback and add only captions that were not already recovered; a
-        # page is allowed to contain more than one independent table.
+        # 上面的按行恢复可能找到了一页里的一张表，却漏掉另一张（多见于第二张
+        # 无框线，或配置列换行）。兜底的几何方法一律要跑，只补还没恢复的图注；
+        # 一页里本来就可以有多张互不相干的表。
         existing_captions = {record["caption"] for record in records}
         fallback_records = layout_table_records(page, page_number, next_ordinal)
         for record in fallback_records:
             existing_index = next((index for index, current in enumerate(records)
                                    if current["caption"] == record["caption"]), None)
             if existing_index is not None:
-                # Prefer the geometry result when the heuristic parser only
-                # recovered a subset of the data rows (for example, a row
-                # whose metric is a standalone dash).  Preserve the original
-                # ordinal so downstream source references remain stable.
+                # 启发式解析只恢复了部分数据行时（例如某行指标就是一个单独
+                # 的横线），优先用几何方法的结果。序号沿用原来的，下游来源
+                # 引用才不会变。
                 current_cells = records[existing_index].get("cells", [])
                 candidate_cells = record.get("cells", [])
                 current_score = sum(bool(cell) for row in current_cells for cell in row)
@@ -1118,13 +1096,11 @@ def load_pypdf_backend() -> ExtractionBackend:
             records.append(record)
             existing_captions.add(record["caption"])
             next_ordinal += 1
-        # The geometry fallback pre-assigns ordinals for every caption it can
-        # recover, but the merge above drops fallback twins whose caption the
-        # line-based path already recovered.  That leaves ordinal gaps (and
-        # duplicate numbers against the next page, whose base is len(tables)+1)
-        # which the receipt contract rejects ("table records must be ordered
-        # and complete").  Renumber densely by insertion order so the returned
-        # base stays contiguous with the caller's running total.
+        # 几何兜底会给它能恢复的每条图注都预分序号，但上面的合并丢掉了那些
+        # 按行路径已恢复的同名图注，于是序号出现空档（还会和下一页冲突，
+        # 因为下一页的基数是 len(tables)+1）。凭证约定不接受这种记录
+        # ("table records must be ordered and complete")。这里按插入顺序
+        # 重新连续编号，返回的基数才能和调用方累加的序号接上。
         for index, record in enumerate(records):
             ordinal = base_ordinal + index
             if record.get("ordinal") != ordinal or record.get("sourceRef") != f"pdf:table:{ordinal}:page:{page_number}":
@@ -1138,10 +1114,9 @@ def load_pypdf_backend() -> ExtractionBackend:
         candidates = _formula_layout_candidates(page)
         if not candidates:
             return [], next_ordinal
-        # Bind the structure record to the exact page render already retained
-        # by visual_audit.  Re-rendering a page through a second PyMuPDF
-        # document can differ in PNG metadata for a small subset of PDFs,
-        # which would otherwise make a genuine formula look unbound.
+        # 让结构记录绑定到 visual_audit 已经留下的那张原页渲染图。少数 PDF 用
+        # 第二个 PyMuPDF 文档重渲染时，PNG 元数据会有差异，那样真公式反而
+        # 看起来没有绑定。
         render_sha = render_sha or sha256_bytes(page.get_pixmap(dpi=VISUAL_RENDER_DPI, alpha=False).tobytes("png"))
         records = []
         for candidate in candidates:
@@ -1182,17 +1157,14 @@ def load_pypdf_backend() -> ExtractionBackend:
                     continue
                 x0, y0, x1, _ = caption["bbox"]
                 midpoint = float(page.rect.width) / 2
-                # A caption that straddles the column gutter (its bbox crosses
-                # the midpoint) belongs to a cross-gutter Figure.  The 60% width
-                # threshold alone misses the ~52%-wide captions such Figures
-                # use, and the column fallback then clips every subplot the
-                # Figure keeps in the other column (verified left-edge pixel
-                # cuts on interspeech_2026 aghniya26 Figure 3).
+                # 跨过栏间空白（bbox 越过页面中线）的图注属于跨栏插图。只看
+                # 60% 宽度会漏掉这类插图常用的约 52% 宽图注，退回按栏处理又会
+                # 裁掉插图留在另一栏的子图（interspeech_2026 aghniya26 的
+                # 图 3 已核对到左边缘像素被切）。
                 full_width = (x1 - x0 >= float(page.rect.width) * 0.60) \
                     or (x0 < midpoint < x1)
-                # A short caption is not the horizontal extent of its Figure.
-                # Use the column, and never use the opposite column's caption
-                # as a vertical clipping boundary.
+                # 图注短，不代表插图的横向范围就短。按栏取范围，绝不用另一栏
+                # 的图注当竖直裁切边界。
                 region_x0 = 0.0 if full_width or (x0 + x1) / 2 < midpoint else midpoint
                 region_x1 = float(page.rect.width) if full_width or (x0 + x1) / 2 >= midpoint else midpoint
                 previous_y = max([0.0, *[other["bbox"][3] + 5
@@ -1204,10 +1176,9 @@ def load_pypdf_backend() -> ExtractionBackend:
                     rect = drawing.get("rect")
                     if not rect or rect.width < 2 or rect.height < 2:
                         continue
-                    # A few conference PDFs expose the figure's clipping
-                    # path as a drawing that extends beyond the media box.
-                    # It is a page-level mask, not figure content; accepting
-                    # it makes the crop swallow the neighbouring text column.
+                    # 少数会议 PDF 会把插图的裁切路径暴露成超出页面框的绘图。
+                    # 那是整页的遮罩，不是插图内容；收下它会让裁切范围吞掉
+                    # 旁边的文字栏。
                     if (rect.x0 < -1.0 or rect.y0 < -1.0
                             or rect.x1 > float(page.rect.width) + 1.0
                             or rect.y1 > float(page.rect.height) + 1.0):
@@ -1217,17 +1188,14 @@ def load_pypdf_backend() -> ExtractionBackend:
                     all_drawings.append(rect)
                 wide_containers = [rect for rect in all_drawings
                                    if rect.width >= float(page.rect.width) * 0.55
-                                   # Full-width figures in two-column conference
-                                   # PDFs are often only 20–35% of a page tall;
-                                   # requiring 35% misclassifies a four-panel
-                                   # figure as the caption's narrow column.
+                                   # 双栏会议 PDF 里的通栏插图常常只占页高的
+                                   # 20–35%；卡到 35% 会把四联插图误判成图注
+                                   # 所在的那一窄栏。
                                    and rect.height >= float(page.rect.height) * 0.20
                                    and rect.y0 < y0 - 2 and rect.y1 >= previous_y]
                 if wide_containers:
-                    # Some conference PDFs place labels just outside the
-                    # drawing's inner content box.  Expand to the actual
-                    # wide figure container, not to the whole page (which
-                    # could pull the neighbouring text column into the crop).
+                    # 有些会议 PDF 把标签放在绘图内容框之外一点点。要扩到真正的
+                    # 通栏插图容器，而不是整页（整页会把旁边的文字栏也卷进裁切）。
                     region_x0 = max(0.0, min(rect.x0 for rect in wide_containers) - 8.0)
                     region_x1 = min(float(page.rect.width), max(rect.x1 for rect in wide_containers) + 8.0)
                 rects = []
@@ -1241,16 +1209,14 @@ def load_pypdf_backend() -> ExtractionBackend:
                     if rect.x1 >= region_x0 and rect.x0 <= region_x1 and rect.y1 <= y0 - 2 and rect.y1 >= previous_y:
                         rects.append(rect)
                 asset = None
-                # A caption alone cannot turn unrelated graphics elsewhere on
-                # the page into a Figure. Leave distant candidates visual-only.
+                # 光有图注，不能把页面上别处不相干的图形变成插图。离得远的
+                # 候选只留作视觉证据。
                 if rects and y0 - max(rect.y1 for rect in rects) > 60:
                     rects = []
                 if rects:
-                    # Column bounds are only a safe default envelope: when the
-                    # drawing/image union reaches past the gutter, the Figure
-                    # genuinely crosses columns.  Expand (never shrink) the
-                    # envelope to the union ± label slack so subplots and their
-                    # axis labels are never clipped from the left/right edge.
+                    # 按栏给的范围只是安全的默认值：当绘图与图片的并集越过栏间
+                    # 空白，说明插图确实跨栏。把范围扩到并集再加减标签余量
+                    # （只扩不缩），子图及其坐标轴标签才不会被左右边缘切掉。
                     region_x0 = max(0.0, min(region_x0, min(rect.x0 for rect in rects) - 8.0))
                     region_x1 = min(float(page.rect.width), max(region_x1, max(rect.x1 for rect in rects) + 8.0))
                     if wide_containers:
@@ -1263,11 +1229,9 @@ def load_pypdf_backend() -> ExtractionBackend:
                     else:
                         visual = pymupdf.Rect(min(rect.x0 for rect in rects), min(rect.y0 for rect in rects),
                                               max(rect.x1 for rect in rects), max(rect.y1 for rect in rects))
-                        # Text labels such as "Lookup Embedding" and
-                        # "Patch + Position Embedding" are not drawing/image
-                        # blocks, so the union of visual primitives alone is
-                        # too narrow.  The caption's column bounds are the
-                        # safe horizontal envelope for those labels.
+                        # "Lookup Embedding"、"Patch + Position Embedding"
+                        # 这类文字标签不属于绘图或图片块，只按视觉图元求并集会
+                        # 偏窄。这些标签的横向安全范围就是图注所在栏的边界。
                         visual = pymupdf.Rect(region_x0, max(previous_y, visual.y0 - 5),
                                               region_x1, min(y0 - 2, visual.y1 + 5))
                     for scale in (1.6, 1.3, 1.0, 0.8, 0.6):
@@ -1279,8 +1243,8 @@ def load_pypdf_backend() -> ExtractionBackend:
                             total_asset_bytes += len(raw)
                             break
                 if asset is None:
-                    # The visual audit still records the candidate and original
-                    # page. No crop means no complete, publishable Figure.
+                    # 视觉审计里仍留有候选和原页。没有裁切图，就没有完整、
+                    # 可发布的插图。
                     continue
                 seen_numbers.add(caption["number"])
                 ordinal = len(records) + 1
@@ -1294,13 +1258,11 @@ def load_pypdf_backend() -> ExtractionBackend:
                             visual_audit: dict[str, Any] | None = None) -> dict[str, list[dict[str, Any]]]:
         try:
             pdf_document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-            # A caller that does not provide the authenticated page audit has
-            # not established that a table-bearing layout is safe to promote
-            # into replayable cells/formula crops. Keep those regions as
-            # literal visual-audit candidates; production extraction passes
-            # the sealed audit explicitly before enabling the richer FULL
-            # projection. This prevents a convenient direct helper call from
-            # silently turning arbitrary PDF geometry into source structure.
+            # 调用方没有提供经认证的原页审计，就无法说明含表格的版面可以安全
+            # 提升成可重放的单元格或公式裁切图。这些区域一律只留作视觉审计
+            # 候选；生产抽取会先显式传入已封存的审计，再启用更完整的 FULL
+            # 投影。这样随手直接调用这个辅助函数时，不会悄悄把任意 PDF 几何
+            # 变成来源结构。
             conservative_visual_only = False
             if visual_audit is None:
                 audit_probe = _build_visual_audit(pdf_document)
@@ -1374,10 +1336,9 @@ def _page_ranges(pages: list[str]) -> tuple[bytes, list[dict[str, Any]]]:
         encoded = page.encode("utf-8")
         start = len(payload)
         payload.extend(encoded)
-        # The current source-context contract requires every page range to be
-        # non-empty and the ranges to exactly partition the flattened text.
-        # A trailing separator also gives a genuinely blank PDF page a safe,
-        # explicit range without inventing textual content for that page.
+        # 现行来源上下文约定要求每页区间非空，且各区间正好拼成整段扁平文本。
+        # 末尾补一个分隔符，真正空白的 PDF 页也能拿到明确且安全的区间，
+        # 不必为它编造文字内容。
         payload.extend(separator)
         ranges.append({
             "page": index + 1,
@@ -1392,7 +1353,7 @@ def _json_bytes(value: dict[str, Any]) -> bytes:
 
 
 def _compact_json_bytes(value: dict[str, Any]) -> bytes:
-    """Match JavaScript JSON.stringify for the JSON values authored here."""
+    """让这里自己生成的 JSON 值与 JavaScript 的 JSON.stringify 一致。"""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
@@ -1445,7 +1406,7 @@ def run_extraction(
     source_root: Path = DEFAULT_STAGING_SOURCE_DIR,
     backend: ExtractionBackend | None = None,
 ) -> dict[str, Any]:
-    """Validate and optionally materialize one immutable extraction bundle."""
+    """校验一份不可变的抽取产物，必要时落盘写出。"""
     manifest_name = _safe_name(manifest_name, SAFE_JSON_NAME, "manifest name")
     root_fd = _open_root(Path(source_root))
     try:
@@ -1457,11 +1418,11 @@ def run_extraction(
         metadata = _strict_json_object(metadata_bytes, "metadata")
         pdf_bytes = _read_regular_single_link(root_fd, pdf_name, MAX_PDF_BYTES, "PDF")
         if sha256_bytes(metadata_bytes) != request["source"]["metadata"]["sha256"]:
-            raise _fail("metadata SHA-256 differs from the extraction request")
+            raise _fail(f"metadata SHA-256 differs from the extraction request: actual {sha256_bytes(metadata_bytes)}, expected {request['source']['metadata']['sha256']}")
         _validate_metadata_identity(metadata, request)
         pdf_sha = sha256_bytes(pdf_bytes)
         if pdf_sha != request["source"]["pdf"]["sha256"]:
-            raise _fail("PDF SHA-256 differs from the extraction request")
+            raise _fail(f"PDF SHA-256 differs from the extraction request: actual {pdf_sha}, expected {request['source']['pdf']['sha256']}")
         if not pdf_bytes.startswith(b"%PDF-"):
             raise _fail("PDF source does not have a standard PDF header")
         for output_name in request["outputs"].values():
@@ -1497,7 +1458,7 @@ def run_extraction(
         if pages is not None:
             if not isinstance(pages, list) or len(pages) > MAX_PAGES:
                 pages = None
-                extraction_error = ConferencePdfExtractionError("PDF backend returned an invalid page collection")
+                extraction_error = ConferencePdfExtractionError("PDF backend returned an invalid page collection (expected list with at most MAX_PAGES pages)")
             elif not pages:
                 extraction_error = ConferencePdfExtractionError("PDF contains no pages")
             else:
@@ -1506,7 +1467,7 @@ def run_extraction(
                 page_count = len(pages)
                 non_whitespace = sum(1 for character in text_bytes.decode("utf-8") if not character.isspace())
                 if len(text_bytes) > MAX_DERIVED_BYTES:
-                    extraction_error = ConferencePdfExtractionError("extracted text exceeds the derived artifact limit")
+                    extraction_error = ConferencePdfExtractionError(f"extracted text exceeds the derived artifact limit: {len(text_bytes)} > {MAX_DERIVED_BYTES}")
                     text_bytes = None
                 if text_bytes is None:
                     status = "blocked"
@@ -1537,7 +1498,7 @@ def run_extraction(
                         short = non_whitespace < minimum_text_characters
                         status = "blocked" if short else "ready"
                         blocked_reason = ({"code": "TEXT_TOO_SHORT", "message":
-                            f"extracted non-whitespace text is below {minimum_text_characters} characters"}
+                            f"extracted non-whitespace text is below {minimum_text_characters} characters: actual {non_whitespace}"}
                             if short else None)
                         artifact = {
                             "contract": ARTIFACT_CONTRACT,
@@ -1554,7 +1515,7 @@ def run_extraction(
                         artifact["payloadSha256"] = sha256_bytes(_compact_json_bytes(artifact))
                         artifact_bytes = _json_bytes(artifact)
                         if len(artifact_bytes) > MAX_DERIVED_BYTES:
-                            raise _fail("structured artifact exceeds the derived artifact limit")
+                            raise _fail(f"structured artifact exceeds the derived artifact limit: {len(artifact_bytes)} > {MAX_DERIVED_BYTES}")
         if pages is None or extraction_error is not None and artifact_bytes is None:
             status = "blocked"
             blocked_reason = blocked_reason or {
@@ -1619,7 +1580,7 @@ def run_extraction(
 
 
 def verify_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING_SOURCE_DIR) -> dict[str, Any]:
-    """Re-run the pinned structured extractor from the original PDF and compare every output byte."""
+    """从原始 PDF 重跑固定版本的结构抽取器，逐字节比对每个输出。"""
     manifest_name = _safe_name(manifest_name, SAFE_JSON_NAME, "manifest name")
     root_fd = _open_root(Path(source_root))
     try:
@@ -1658,7 +1619,7 @@ def verify_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING
                 os.close(fd)
         result = run_extraction(manifest_name, apply=True, source_root=replay_root)
         if result["status"] != "ready":
-            raise _fail("replayed extraction is not ready")
+            raise _fail(f"replayed extraction is not ready: status={result['status']!r}")
         replayed_outputs = {
             key: (replay_root / name).read_bytes()
             for key, name in request["outputs"].items()
@@ -1666,7 +1627,7 @@ def verify_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING
 
     for key in request["outputs"]:
         if current_outputs[key] != replayed_outputs[key]:
-            raise _fail(f"existing {key} differs from a fresh pinned extraction replay")
+            raise _fail(f"existing {key} differs from a fresh pinned extraction replay: actual {sha256_bytes(current_outputs[key])}, expected {sha256_bytes(replayed_outputs[key])}")
     receipt = _strict_json_object(replayed_outputs["receiptFile"], "replayed receipt")
     body = {
         "contract": VERIFICATION_CONTRACT,
@@ -1686,7 +1647,7 @@ def verify_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING
 
 
 def verify_blocked_extraction(manifest_name: str, *, source_root: Path = DEFAULT_STAGING_SOURCE_DIR) -> dict[str, Any]:
-    """Replay a blocked extraction without promoting it to a staging-ready receipt."""
+    """重放被阻断的抽取，但不把它升格成可用于暂存的凭证。"""
     manifest_name = _safe_name(manifest_name, SAFE_JSON_NAME, "manifest name")
     root_fd = _open_root(Path(source_root))
     try:
@@ -1716,10 +1677,10 @@ def verify_blocked_extraction(manifest_name: str, *, source_root: Path = DEFAULT
                 os.close(fd)
         result = run_extraction(manifest_name, apply=True, source_root=replay_root)
         if result["status"] != "blocked":
-            raise _fail("replayed extraction is not blocked")
+            raise _fail(f"replayed extraction is not blocked: status={result['status']!r}")
         produced = set(result["outputs"])
         if request["outputs"]["receiptFile"] not in produced:
-            raise _fail("blocked extraction replay did not produce its receipt")
+            raise _fail(f"blocked extraction replay did not produce its receipt: produced {sorted(produced)}")
         replayed_outputs = {key: (replay_root / name).read_bytes()
             for key, name in request["outputs"].items() if name in produced}
 
@@ -1728,7 +1689,7 @@ def verify_blocked_extraction(manifest_name: str, *, source_root: Path = DEFAULT
         if (_read_regular_single_link(root_fd, manifest_name, MAX_MANIFEST_BYTES, "current manifest") != manifest_bytes
                 or _read_regular_single_link(root_fd, metadata_name, MAX_METADATA_BYTES, "current metadata") != metadata_bytes
                 or _read_regular_single_link(root_fd, pdf_name, MAX_PDF_BYTES, "current PDF") != pdf_bytes):
-            raise _fail("blocked extraction inputs changed during replay")
+            raise _fail("blocked extraction inputs changed during replay: manifest, metadata, or PDF")
         current_outputs: dict[str, bytes] = {}
         for key, name in request["outputs"].items():
             if name in produced:
@@ -1745,7 +1706,7 @@ def verify_blocked_extraction(manifest_name: str, *, source_root: Path = DEFAULT
 
     for key, replayed in replayed_outputs.items():
         if current_outputs[key] != replayed:
-            raise _fail(f"existing blocked {key} differs from a fresh pinned extraction replay")
+            raise _fail(f"existing blocked {key} differs from a fresh pinned extraction replay: actual {sha256_bytes(current_outputs[key])}, expected {sha256_bytes(replayed)}")
     receipt = _strict_json_object(replayed_outputs["receiptFile"], "replayed blocked receipt")
     _exact_object(receipt, ["contract", "version", "status", "textReplayable", "structuredReplayable",
         "paperId", "sourceIdentity", "request", "source", "extractor", "options", "pageCount", "text",
@@ -1753,15 +1714,15 @@ def verify_blocked_extraction(manifest_name: str, *, source_root: Path = DEFAULT
     if (receipt["contract"] != RECEIPT_CONTRACT or receipt["version"] != CONTRACT_VERSION
             or receipt["status"] != "blocked" or receipt["textReplayable"] is not False
             or receipt["structuredReplayable"] is not False):
-        raise _fail("blocked extraction receipt contract/status is invalid")
+        raise _fail(f"blocked extraction receipt contract/status is invalid: contract={receipt['contract']!r} (expected {RECEIPT_CONTRACT!r}), version={receipt['version']!r} (expected {CONTRACT_VERSION}), status={receipt['status']!r} (expected 'blocked'), textReplayable={receipt['textReplayable']!r}, structuredReplayable={receipt['structuredReplayable']!r}")
     reason = _exact_object(receipt["blockedReason"], ["code", "message"], "blockedReason")
     if reason["code"] not in {"TEXT_TOO_SHORT", "PDF_EXTRACTION_FAILED"}:
-        raise _fail("blocked extraction reason code is unsupported")
+        raise _fail(f"blocked extraction reason code is unsupported: actual {reason['code']!r}, supported ['PDF_EXTRACTION_FAILED', 'TEXT_TOO_SHORT']")
     _plain_text(reason["message"], "blockedReason.message", 2000)
     receipt_body = dict(receipt)
     receipt_sha = _expected_sha(receipt_body.pop("receiptSha256"), "blocked receipt.receiptSha256")
     if receipt_sha != _stable_hash(receipt_body):
-        raise _fail("blocked extraction receipt self-SHA drifted")
+        raise _fail(f"blocked extraction receipt self-SHA drifted: declared {receipt_sha}, recomputed {_stable_hash(receipt_body)}")
     text_sha = None if "textFile" not in replayed_outputs else sha256_bytes(replayed_outputs["textFile"])
     artifacts_sha = None if "artifactsFile" not in replayed_outputs else sha256_bytes(replayed_outputs["artifactsFile"])
     body = {

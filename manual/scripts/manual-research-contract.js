@@ -23,9 +23,8 @@ const SCORING_DIMENSIONS = Object.freeze([
 const INSERTION_SECTIONS = new Set([
     '核心摘要', '方法概述和架构', '核心创新点', '实验结果', '细节详述', '局限与问题'
 ]);
-// v3 is deliberately a new opt-in record contract.  Published v1/v2
-// records remain readable, while a newly authored tutorial cannot pass by
-// merely being a 2,400-character prose expansion of the old fixed sections.
+// v3 是一条需要显式选用的新记录约定。已发布的 v1/v2 记录仍然可以读，但新写的
+// 教程不能只把旧的固定小节扩写到 2,400 字就算过关。
 const TUTORIAL_CONTRACT_VERSION = 'graduate-researcher-tutorial-v1';
 const READER_FORMAT_CONTRACT_VERSION = 'graduate-researcher-tutorial-quality-v2';
 const REQUIRED_TUTORIAL_KINDS = Object.freeze([
@@ -44,8 +43,8 @@ const BEIJING_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]
 
 function normalizeEvidence(value) {
     return String(value || '').normalize('NFKC')
-        // LaTeXML can expose both the accessible multiplication glyph and its
-        // TeX fallback (`×\\times`) in the same flattened source span.
+        // LaTeXML 有时会在同一段拍平的原文里同时给出可访问的乘号字形和它的
+        // TeX 写法（`×\\times`）。
         .replace(/×\\times/gi, '×')
         .replace(/(\d)\\times(?=\d)/gi, '$1×')
         .replace(/\s+/g, '').trim();
@@ -339,9 +338,8 @@ function validateTutorialArticle(plan, text, options = {}) {
 }
 
 /**
- * v2 turns the editorial blueprint into a reader-visible contract.  v1 is
- * deliberately retained for already-published Manual v5 batches: forcing
- * historical records to invent headings would invalidate their receipts.
+ * v2 把编辑方案变成一条读者可见的约束。v1 保留下来是为了已经发布的 Manual v5
+ * 批次：让历史记录凭空补出小节标题，会让它们原先的核验记录全部作废。
  */
 function validateEditorialPlanBindings(plan, analysis, evidenceLedger = [], label = 'editorialPlan') {
     if (!plan || plan.version !== 2) return;
@@ -398,9 +396,9 @@ function validateEditorialPlanBindings(plan, analysis, evidenceLedger = [], labe
 }
 
 /**
- * The canonical analysis deliberately retains fixed machine-checkable sections.
- * v2 additionally carries a separate reader article for the published page:
- * it must be a real argument, not a relabelled copy of those fixed sections.
+ * 当前保存的分析结果保留了固定的、机器可校验的小节。v2 另外为发布页面带一份
+ * 独立的读者文章：它必须是一篇真正的论述，不能只是把那几个固定小节换个标题
+ * 抄一遍。
  */
 function validateReaderArticle(plan, article, evidenceLedger = [], options = {}) {
     if (!plan || plan.version !== 2) return null;
@@ -467,12 +465,10 @@ function validateReaderArticle(plan, article, evidenceLedger = [], options = {})
         }
     }
     const imageInsertions = options.imageInsertions || [];
-    // The v5 reader article is the reader-facing source of truth.  It is not
-    // enough for an insertion URL to occur somewhere in prose: publication
-    // intentionally renders this article instead of the legacy analysis, so
-    // every approved image must remain a standalone Markdown image block in
-    // the same audited order.  This also prevents a bare URL from silently
-    // disappearing when Markdown is rendered.
+    // v5 的读者文章才是发布时真正给读者看的内容。插图 URL 只出现在正文某处
+    // 是不够的：发布时会渲染这篇文章而不是旧的分析正文，所以每张批准的图都必须
+    // 是一个独立的 Markdown 图片块，并且顺序与审查时一致。这样也能避免一个裸
+    // URL 在 Markdown 渲染后悄悄消失。
     const articleBlocks = text.split(/\n\s*\n/).map(block => block.trim()).filter(Boolean);
     const markdownImageUrls = articleBlocks.map(block => {
         const match = block.match(/^!\[(?:\\.|[^\]\\])*\]\((https:\/\/[^)\s]+)(?:\s+["'][^"']*["'])?\)$/);
@@ -515,10 +511,9 @@ function validateReaderArticle(plan, article, evidenceLedger = [], options = {})
 }
 
 /**
- * The paper evaluation is a compact editorial judgment, not a second generic abstract.
- * Keeping its two claims tied to phrases already used in the long-form article
- * makes the published verdict auditable without forcing citation markup into
- * the reader-facing copy.
+ * 论文评价是一段简短的编辑判断，不是第二份泛泛的摘要。它的两条判断都复用
+ * 长文里已经出现过的说法，这样发布的结论可以逐句核对，又不用把引用标记塞进
+ * 给读者看的文字里。
  */
 function validateEditorialReview(review, readerArticle, options = {}) {
     const label = options.label || 'editorial.review';
@@ -544,8 +539,8 @@ function validateEditorialReview(review, readerArticle, options = {}) {
     }
     const article = String(readerArticle || '');
     if (!article.trim()) throw new Error(`${label} 必须绑定非空 readerArticle`);
-    // A six-character shared phrase is long enough to be paper-specific in
-    // Chinese prose, yet does not force the review to quote whole sentences.
+    // 六个汉字的重合片段，在中文里已经足以说明是这篇论文特有的说法，又不必让
+    // 评价去整句引用。
     const hasArticleAnchor = paragraph => {
         const candidates = paragraph.match(/[\u3400-\u9fff]{6,}|[A-Za-z][A-Za-z0-9_-]{7,}/g) || [];
         return candidates.some(candidate => {
@@ -1048,10 +1043,9 @@ function validateExactFactCoverage(analysis, sourceText, options = {}) {
                 `(?:${numberPattern}.{0,40}${unitPattern}|${unitPattern}.{0,40}${numberPattern})`,
                 'iu'
             ).test(body)) return true;
-            // PDF/HTML table extraction often emits a unit once in the header
-            // and values hundreds of characters later. Permit the wider
-            // window only inside an explicitly identified Table block; prose
-            // elsewhere still requires local value-unit co-occurrence.
+            // PDF/HTML 表格抽取经常把单位放在表头，数值却出现在几百字符之后。
+            // 只有在明确识别出的 Table 块里才放宽这个距离；其他正文仍然要求
+            // 数值和单位在附近同时出现。
             const numberRegex = new RegExp(numberPattern, 'giu');
             for (const match of body.matchAll(numberRegex)) {
                 const window = body.slice(Math.max(0, match.index - 800), match.index + 800);

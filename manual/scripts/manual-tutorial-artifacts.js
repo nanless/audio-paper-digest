@@ -1,13 +1,12 @@
 'use strict';
 
 /**
- * Deterministic reader-facing projections of a single Manual ArtifactIndex.
+ * 按固定规则把一份 Manual ArtifactIndex 变成给读者看的教程素材。
  *
- * This module deliberately does not download, transform, or publish assets.
- * It turns the already-bound ArtifactIndex into an auditable tutorial plan:
- * every table, figure, and formula receives one disposition; recoverable
- * tables are rendered byte-for-byte from their matrix; and all numeric cells
- * of result tables are carried into the coverage matrix.
+ * 这个模块不下载、不转换、也不发布素材。它把已经绑定好的 ArtifactIndex 整理
+ * 成一份可审计的教程方案：每张表、每张图、每个公式都会得到一个明确的处置
+ * 结论；可恢复表格由源矩阵确定性完整渲染，渲染结果与其 SHA 一并绑定，结果表里的数值单元格全部记进覆盖率
+ * 矩阵。
  */
 
 const crypto = require('crypto');
@@ -54,12 +53,10 @@ function unsignedNumericTokens(value) {
 }
 
 /**
- * Cleans only extraction artefacts where a Unicode symbol and its LaTeX
- * spelling were emitted consecutively.  It intentionally never normalizes a
- * an ordinary numeric token. Repeated sign sequences attached to a number are
- * not interpretable evidence: they are projected to an unsigned display value
- * plus a marker. The raw matrix and per-cell transformation ledger remain the
- * provenance source, so the display layer never guesses a direction.
+ * 只清理一类抽取瑕疵：Unicode 符号和它的 LaTeX 写法被连续输出在一起。普通
+ * 数值 token 一律不做归一化。数值前重复出现的符号无法解释成证据，这里把它
+ * 显示成去掉符号的数值再加一个标记。原始矩阵和逐单元格的转换记录才是依据
+ * 来源，展示层不会去猜方向。
  */
 function sanitizeTableDisplayText(value) {
     const source = normalizeText(value);
@@ -129,8 +126,7 @@ function numericCellIds(table) {
     normalizeMatrix(table).forEach((row, rowIndex) => {
         row.forEach((cell, columnIndex) => {
             if (!isNumericCell(cell)) return;
-            // Cell identity is deliberately bound to the normalized raw value,
-            // never to the reader-facing projection.
+            // 单元格标识刻意绑定归一化之后的原始值，不绑定给读者看的展示值。
             cells.push(`${id}:r${rowIndex}:c${columnIndex}:${sha256(cell).slice(0, 12)}`);
         });
     });
@@ -168,11 +164,10 @@ function buildTableDisplayRecord(table) {
         });
         return displayValue;
     }));
-    // LaTeXML occasionally loses a multirow label on the K-Means half of a
-    // GMM/K-Means pair, or shifts the next model label upward.  The pair is
-    // structurally unambiguous when two adjacent rows explicitly say GMM then
-    // K-Means.  Repair only the display label, never a numeric cell, and keep
-    // an auditable transformation entry tied to both raw rows.
+    // LaTeXML 偶尔会丢掉 GMM/K-Means 这一对里 K-Means 那一半的跨行标签，或者
+    // 把下一个模型标签往上挪。当相邻两行明确写着 GMM 再 K-Means 时，这一对在
+    // 结构上没有歧义。这里只修显示标签，绝不动数值单元格，并且留下一条同时
+    // 绑定原始两行的转换记录。
     for (let rowIndex = 0; rowIndex + 1 < displayMatrix.length; rowIndex++) {
         const current = displayMatrix[rowIndex];
         const next = displayMatrix[rowIndex + 1];
@@ -217,10 +212,9 @@ function hasDistinctColumnNames(row) {
 }
 
 /**
- * Flatten the hierarchy of an HTML table header into one Markdown header per
- * column.  This deliberately represents every non-empty source header cell,
- * but never repeats a colspan label merely to imitate an HTML span.  The raw
- * matrix remains the identity/numeric source; this is strictly a display plan.
+ * 把 HTML 表头的层级结构拍平成每列一个 Markdown 表头。这里刻意把每个非空的
+ * 原始表头单元格都表示出来，但不会为了模仿 HTML 的合并而重复 colspan 标签。
+ * 原始矩阵仍然是标识和数值的依据，这一步只决定怎么显示。
  */
 function flattenHeaderRows(headerRows) {
     const width = headerRows[0]?.length || 0;
@@ -252,9 +246,9 @@ function isTextHeavyRecordMatrix(matrix) {
     if (!Array.isArray(matrix) || matrix.length < 2) return false;
     const width = matrix[0]?.length || 0;
     if (width < 3 || width > 8 || matrix.some(row => row.length !== width)) return false;
-    // Descriptive protocol/tag catalog tables may contain digits in names such as
-    // Banking77, S&P 500 or 10-K, so a numeric-token test would misclassify
-    // them as result tables.  Long record fields are the stable signal.
+    // 协议表、标签表这类描述性表格的名字里可能带数字，比如 Banking77、
+    // S&P 500、10-K，所以拿「有没有数字 token」来判断会把它们错认成结果表。
+    // 记录字段偏长才是稳定的特征。
     const fields = matrix.slice(1).flatMap(row => row.slice(1).map(normalizeText));
     const averageLength = fields.reduce((sum, value) => sum + value.length, 0) / Math.max(1, fields.length);
     return averageLength >= 24 && fields.some(value => value.length >= 48)
@@ -274,8 +268,8 @@ function renderTextHeavyRecordMatrix(matrix) {
 
 function isWideGroupedNumericMatrix(matrix) {
     if (!Array.isArray(matrix) || matrix.length < 4 || (matrix[0]?.length || 0) <= 8) return false;
-    // Metric labels such as L0/L1/L2 and dataset names such as S&P 500
-    // contain digits, so header detection cannot use numeric-token absence.
+    // 指标名如 L0/L1/L2、数据集名如 S&P 500 都含数字，所以判断表头时不能用
+    // 「有没有数字 token」作为依据。
     return normalizeText(matrix[0][0]) === normalizeText(matrix[1][0])
         && normalizeText(matrix[0][1]) === normalizeText(matrix[1][1])
         && matrix.slice(2).some(row => hasNumericValue(row));
@@ -336,9 +330,8 @@ function deriveDisplayTableLayout(table, displayMatrix = null) {
             if (!blocks.length && !tableLabel) tableLabel = label;
             else blocks.push({ type: 'group', label });
             cursor += 1;
-            // A query/result group may be immediately followed by data.  It
-            // inherits the preceding ordinary header; it is not itself a
-            // header and must never be rendered as a fabricated colspan row.
+            // 查询/结果分组后面可能紧跟着数据。它继承前面那个普通表头，自己
+            // 不是表头，也绝不能渲染成一个凭空造出来的 colspan 行。
             if (blocks.length && blocks.at(-1).type === 'group' && hasNumericValue(matrix[cursor])) {
                 const priorTable = [...blocks].reverse().find(block => block.type === 'table');
                 if (!priorTable) continue;
@@ -353,16 +346,16 @@ function deriveDisplayTableLayout(table, displayMatrix = null) {
         }
         const headerRows = [];
         while (cursor < matrix.length && !hasNumericValue(matrix[cursor])) {
-            // A repeated nonnumeric row after a concrete header starts a new
-            // logical table section (for example the MLP-probing half of a
-            // wide ablation table), rather than a fake colspan row.
+            // 具体表头之后又出现一行重复的非数字行，说明这里开始了一个新的逻辑
+            // 表格区段（比如宽消融表的 MLP probing 那一半），而不是一个假的
+            // colspan 行。
             if (headerRows.length && repeatedNonEmptyLabel(matrix[cursor])) break;
             headerRows.push(matrix[cursor]);
             cursor += 1;
         }
         if (!headerRows.length) {
-            // A malformed all-text row is still visible as a one-column group
-            // rather than silently disappearing from the source projection.
+            // 一行格式不对的全文本行也要作为一个单列分组露出来，不能从原文
+            // 清单里悄悄消失。
             blocks.push({ type: 'group', label: matrix[cursor].filter(Boolean).join(' / ') || '未命名分组' });
             cursor += 1;
             continue;
@@ -385,10 +378,8 @@ function renderMarkdownTable(table) {
     const layout = textHeavy || wideNumeric ? null : deriveDisplayTableLayout(table, tableDisplayRecord.displayMatrix);
     let caption = sanitizeTableDisplayText(table.caption || table.label || table.id);
     if (tableDisplayRecord.transformations.length) {
-        // Once a damaged sign has been neutralized, directional prose in the
-        // source caption would contradict the displayed values.  Preserve the
-        // comparison identity while removing only claims that require the
-        // unreadable sign direction.
+        // 符号损坏一旦被中和，原图注里带方向的描述就和显示的数值矛盾了。
+        // 这里保留比较对象本身，只删掉那些依赖这个读不出来的符号方向的表述。
         caption = caption
             .replace(/largest\s+rank\s+improvement/gi, 'reported rank differences')
             .replace(/rank\s+improvement/gi, 'rank difference')

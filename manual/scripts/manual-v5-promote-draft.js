@@ -2,9 +2,8 @@
 'use strict';
 
 /**
- * Promote one independently reviewed fresh-paper revision into the only path
- * accepted by the v5 tutorial assembler.  This is a byte-for-byte promotion,
- * never a prose rewrite.
+ * 把一篇经过独立审查的新论文修订稿，推到 v5 教程装配器唯一接受的那个路径上。
+ * 这里只搬字节，不改正文一个字。
  */
 
 const crypto = require('crypto');

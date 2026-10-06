@@ -128,7 +128,7 @@ function apply(f, state, paperId, status, operationId, options = {}) {
         decisionHandle: decision.handle, owner: 'worker', now: options.now || stamp });
 }
 
-test('production prepare requires authenticated discovery and closes over source identities', t => {
+test('生产准备要求已核验的发现，并锁定来源身份', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
     assert.deepEqual(Object.keys(state.decisions), papers); assert.equal(state.completion.pending, 2);
@@ -138,7 +138,7 @@ test('production prepare requires authenticated discovery and closes over source
         /authenticated discovery handle/);
 });
 
-test('prepare audits deterministic keyword rejection while short abstracts fail open to LLM', t => {
+test('准备阶段记录确定性关键词拒绝，摘要太短时按放行处理交给 LLM', t => {
     const f = fixture([
         { arnumber: '100', title: 'Generic optimization', abstract: 'This paper studies a general convex optimization method with convergence bounds across several synthetic benchmarks and mathematical settings.' },
         { arnumber: '200', title: 'Generic optimization follow-up', abstract: '' }
@@ -161,7 +161,7 @@ test('prepare audits deterministic keyword rejection while short abstracts fail 
     assert.equal(keywordInput.requestEnvelopeSha256.length, 64);
 });
 
-test('bulk keyword prepare authenticates source collections once and preserves the CAS chain across checkpoints', t => {
+test('批量关键词准备只核验一次来源集合，并跨检查点保留 CAS 链', t => {
     const records = Array.from({ length: 140 }, (_, index) => ({
         arnumber: String(1000 + index),
         title: `Generic optimization study ${index}`,
@@ -195,7 +195,7 @@ test('bulk keyword prepare authenticates source collections once and preserves t
     assert.equal(replayed.attempts[127].nextStateSha256, replayed.attempts[128].priorStateSha256);
 });
 
-test('core audio conferences fail open while broad conferences retain deterministic rejection', () => {
+test('核心音频会议按放行处理，宽泛会议仍保留确定性拒绝', () => {
     const examples = [
         { conferenceId: 'chime-2026', title: 'Multichannel Speech Enhancement' },
         { conferenceId: 'dafx-2026', title: 'Efficient Plate Reverberator Design' },
@@ -222,7 +222,7 @@ test('core audio conferences fail open while broad conferences retain determinis
         filter.CORE_CONFERENCE_FALLBACK_VERSION);
 });
 
-test('conference filtering uses the daily prompt block and daily structured decision parser', () => {
+test('会议筛选使用日更提示块和日更结构化决定解析器', () => {
     assert.match(filter.LLM_FILTER_PROMPT, /语音、音频或音乐处理/);
     assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter.md', {
         title: '{title}', abstract: '{abstract}', categories: '{categories}'
@@ -231,7 +231,7 @@ test('conference filtering uses the daily prompt block and daily structured deci
         { status: 'included', reason: '音频是核心输入。', parseSource: 'conclusion_line' });
 });
 
-test('production filter accepts authenticated official proceedings and preserves stable source identities', t => {
+test('生产筛选接受已核验的官方论文集，并保留稳定的来源身份', t => {
     const f = officialFixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const boundSpec = filter.normalizeSpec(spec(f));
     assert.equal(boundSpec.version, 6);
@@ -251,7 +251,7 @@ test('production filter accepts authenticated official proceedings and preserves
     assert.equal(envelope.discovery.sourceIdentity, 'conference-paper-id:AAAI-2026.002');
 });
 
-test('keyword CAS digest canonicalizes CVPR mixed-case IDs independently of locale iteration order', t => {
+test('关键词 CAS 摘要把 CVPR 大小写混杂的 ID 归一化，不受语言环境迭代顺序影响', t => {
     const genericAbstract = 'This paper studies a general visual optimization method with convergence bounds across several synthetic benchmarks and mathematical settings.';
     const papers = [
         { id: 'Bai_DRiffusion_Draft-and-Refine_Process_Parallelizes_Diffusion_Models_with_Ease_CVPR_2026_paper',
@@ -273,7 +273,7 @@ test('keyword CAS digest canonicalizes CVPR mixed-case IDs independently of loca
     assert.equal(filter.readFilter({ filterRoot: f.filters, filterId: ids[0] }).stateSha256, state.stateSha256);
 });
 
-test('per-conference spec rejects legacy shared shape, unregistered locators, and another evidence run', t => {
+test('分会议 spec 拒绝旧版共用结构、未注册的定位配置和另一次证据运行的产物', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const bound = spec(f);
     assert.deepEqual(bound.evidence.locator,
@@ -299,7 +299,7 @@ test('per-conference spec rejects legacy shared shape, unregistered locators, an
         evidenceHandle: f.evidenceHandle, spec: otherRun, filterId: ids[3] }), /does not bind this authenticated/);
 });
 
-test('ready evidence becomes the prompt abstract and is cryptographically bound', t => {
+test('就绪的证据会变成提示里的摘要，并做哈希绑定', t => {
     const abstract = 'This paper studies a generic convex optimization method with convergence bounds across several synthetic benchmarks and mathematical settings.';
     const f = fixture([{ arnumber: '100', title: 'Generic optimization', abstract }]);
     t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
@@ -313,7 +313,7 @@ test('ready evidence becomes the prompt abstract and is cryptographically bound'
     assert.equal(state.decisions[papers[0]].status, 'excluded');
 });
 
-test('non-ready evidence preserves metadata but always fails open to LLM', t => {
+test('未就绪的证据保留元数据，但一律放行交给 LLM', t => {
     const f = fixture([{ arnumber: '100', title: 'Generic optimization', abstract: '' }]);
     t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
@@ -327,7 +327,7 @@ test('non-ready evidence preserves metadata but always fails open to LLM', t => 
     assert.equal(evaluation.evidenceFailOpen, true);
 });
 
-test('filter rejects unauthenticated and tampered evidence before preparing', t => {
+test('筛选在准备之前就拒绝未核验和被篡改的证据', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     assert.throws(() => filter.prepareFilter({ filterRoot: f.filters, discoveryHandle: f.discoveryHandle,
         evidenceHandle: structuredClone(f.evidenceHandle), spec: spec(f), filterId: ids[3] }), /authenticated evidence/);
@@ -338,7 +338,7 @@ test('filter rejects unauthenticated and tampered evidence before preparing', t 
         evidenceHandle: f.evidenceHandle, spec: spec(f), filterId: ids[3] }), /evidence|receipt|drift|JSON/);
 });
 
-test('daily prompt categories preserve conference, human domain label, and track', () => {
+test('日更提示的类别保留会议、人类可读领域标签和 track', () => {
     const prompt = filter.renderDailyFilterPrompt({
         discovery: { conference: { id: 'dafx-2026', year: 2026 } },
         metadataRecord: { title: 'PolyADAA', abstract: 'A nonlinear audio circuit emulation method.', track: 'Audio Effects Modeling' }
@@ -353,7 +353,7 @@ test('daily prompt categories preserve conference, human domain label, and track
     ['dafx-2026', 'Digital Audio Effects', 'Audio Effects Modeling']);
 });
 
-test('final decisions require preserved evidence and receipt contains included identities only', t => {
+test('最终决定要求证据已保留，凭证里只写入选的身份', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     let state = prepare(f);
     state = apply(f, state, papers[0], 'included', ids[1]);
@@ -371,7 +371,7 @@ test('final decisions require preserved evidence and receipt contains included i
         decisionName: `${ids[1]}.json`, artifact: {} }), /artifact|exclusively/);
 });
 
-test('idempotent final-decision retry heals a selection receipt write interrupted after complete state', t => {
+test('状态已经完整但选择凭证写到一半就中断时，幂等的最终决定重试能补上', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     let state = prepare(f);
     state = apply(f, state, papers[0], 'included', ids[1]);
@@ -403,7 +403,7 @@ test('idempotent final-decision retry heals a selection receipt write interrupte
     assert.equal(filter.readSelectionReceipt({ filterRoot: f.filters, filterId: ids[0] }).filterId, ids[0]);
 });
 
-test('handwritten LLM actors and forged handles fail closed', t => {
+test('手写的 LLM actor 和伪造的句柄一律拒绝', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
     assert.throws(() => filter.applyDecision({ filterRoot: f.filters, filterId: ids[0], decisionHandle: {}, owner: 'worker' }), /authenticated decision/);
@@ -423,7 +423,7 @@ test('handwritten LLM actors and forged handles fail closed', t => {
     assert.equal(filter.adaptDiscoveryCatalog, undefined); assert.equal(filter.discoveryDocumentToFilterCatalog, undefined);
 });
 
-test('decision bytes are replayed and drift fails closed', t => {
+test('决定字节会被复核，漂移就直接失败', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     let state = prepare(f); const decision = artifactHandle(f, state, papers[0], 'included', ids[1]);
     state = filter.applyDecision({ filterRoot: f.filters, filterId: ids[0], decisionHandle: decision.handle, owner: 'worker', now: stamp });
@@ -432,7 +432,7 @@ test('decision bytes are replayed and drift fails closed', t => {
     assert.throws(() => filter.readFilter({ filterRoot: f.filters, filterId: ids[0] }), /SHA drifted|artifact replay drifted|size\/base64/);
 });
 
-test('failed remains retryable, cumulative usage monotonic, final cannot change', t => {
+test('失败仍可重试，累计用量单调递增，最终结果不可更改', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     let state = prepare(f); state = apply(f, state, papers[0], 'failed', ids[1]);
     assert.equal(state.completion.failed, 1); assert.equal(state.completion.excluded, 0);
@@ -440,7 +440,7 @@ test('failed remains retryable, cumulative usage monotonic, final cannot change'
     assert.throws(() => apply(f, state, papers[0], 'excluded', ids[3]), /final decision cannot be changed/);
 });
 
-test('manual decision cannot impersonate a model or protocol', t => {
+test('人工决定不能冒充模型或协议', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
     assert.throws(() => filter.buildDecisionArtifact({ state, paperId: papers[0], operationId: ids[1],
@@ -449,7 +449,7 @@ test('manual decision cannot impersonate a model or protocol', t => {
     /manual decision must use/);
 });
 
-test('operation idempotency is bound to the exact preserved decision artifact', t => {
+test('操作幂等绑定到精确保留的决定产物', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
     const first = artifactHandle(f, state, papers[0], 'included', ids[1]);
@@ -465,7 +465,7 @@ test('operation idempotency is bound to the exact preserved decision artifact', 
     assert.equal(applied.attempts.length, 1);
 });
 
-test('CLI requires catalog+report+spec and decision artifacts, not raw patches', () => {
+test('命令行要求目录、上报、spec 和决定产物，不接受原始补丁', () => {
     assert.deepEqual(cli.parseArgs(['spec', '--catalog', 'icassp.json', '--report', 'icassp-report.json',
         '--evidence-run', evidenceRunId, '--output', 'icassp-filter-v5.json']),
     { command: 'spec', catalogName: 'icassp.json', reportName: 'icassp-report.json', evidenceRunId,

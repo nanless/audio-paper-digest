@@ -16,7 +16,7 @@ const {
     validateManualTutorialLongformBundle
 } = require('../scripts/manual-tutorial-contract-orchestrator.js');
 
-describe('Manual longform table reader rendering', () => {
+describe('Manual 长文表格的 reader 渲染', () => {
     it('只清理 LaTeXML 可见文本与 TeX fallback 的确定性重影', () => {
         assert.equal(sanitizeArtifactTableCellForReader('binary {0,1}\\{0,1\\}'), 'binary {0,1}');
         assert.equal(sanitizeArtifactTableCellForReader('𝒰{3,…,7}\\mathcal{U}\\{3,\\ldots,7\\}'), 'U{3,...,7}');
@@ -130,8 +130,8 @@ describe('Manual longform table reader rendering', () => {
                 { row: 1, column: 0, colspan: 1, header: true, text: 'Model' },
                 { row: 1, column: 1, colspan: 1, header: true, text: 'Audio' },
                 { row: 1, column: 2, colspan: 1, header: true, text: 'Video' },
-                // LaTeXML may incorrectly mark numeric body rows as headers;
-                // the first measurement row remains a deterministic fallback.
+                // LaTeXML 有时会把正文里的数字行错标成表头；
+                // 这时仍以第一行测量数据作为固定回退。
                 { row: 2, column: 0, colspan: 1, header: true, text: 'A' }
             ],
             matrix: [
@@ -276,7 +276,7 @@ function fixture() {
     return { article, artifactIndex, bundle };
 }
 
-describe('Manual v6 longform contract', () => {
+describe('Manual v6 长文约定', () => {
     it('接受可逐字重放并完整处置表图公式的教学正文', () => {
         const { article, artifactIndex, bundle } = fixture();
         const result = validateManualLongformBundle(bundle, article, artifactIndex, {

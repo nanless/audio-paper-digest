@@ -169,7 +169,7 @@ test('会议页面生成会核对完成记录、论文身份和标签，并按�
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies).manifest.manifestSha256, result.manifest.manifestSha256);
 });
 
-test('preserved conference pages rewrite local Figure paths to the dedicated image repository', () => {
+test('保留的会议页面把本地图片路径改写到专用图床仓库', () => {
     const markdown = '![Figure 1](/images/conference/aistats-2026/470f332ff69e/figure-1.png)';
     const repaired = api.repairConferenceImageUrls(markdown);
     assert.equal(repaired,
@@ -178,26 +178,26 @@ test('preserved conference pages rewrite local Figure paths to the dedicated ima
     assert.equal(api.repairConferenceImageUrls(repaired), repaired);
 });
 
-test('preserved conference pages escape literal currency dollars without changing prose values', () => {
+test('保留的会议页面转义字面的货币美元符号，但不改正文里的数值', () => {
     const repaired = api.repairPreservedPage('成本为$32,000,000，高于$2,000；区间为$60-80 USD。');
     assert.equal(repaired, '成本为\\$32,000,000，高于\\$2,000；区间为\\$60-80 USD。');
     assert.equal(api.repairPreservedPage(repaired), repaired);
 });
 
-test('preserved conference pages escape compact technical notation stars', () => {
+test('保留的会议页面转义紧凑技术记法里的星号', () => {
     const repaired = api.repairPreservedPage('**H1*-H2* × 谐噪比：** 数值越低越偏向嘎裂。');
     assert.equal(repaired, '**H1\\*-H2\\* × 谐噪比：** 数值越低越偏向嘎裂。');
     assert.equal(api.repairPreservedPage(repaired), repaired);
 });
 
-test('preserved conference page repairs never alter YAML frontmatter', () => {
+test('保留的会议页面修复绝不改动 YAML frontmatter', () => {
     const page = '---\ndescription: "H1*-H2* costs $32"\n---\n\n**H1*-H2*:** cost $32.';
     const repaired = api.repairPreservedPage(page);
     assert.equal(repaired,
         '---\ndescription: "H1*-H2* costs $32"\n---\n\n**H1\\*-H2\\*:** cost \\$32.');
 });
 
-test('preserved conference pages repair significance and linguistic notation stars', () => {
+test('保留的会议页面修复显著性标记和语言学记法里的星号', () => {
     const page = '---\ntitle: "Stars"\n---\n\n| p |\n|---|\n| p=0.002** |\n\nFigure *Vː2 and *mättīsin.';
     const repaired = api.repairPreservedPage(page);
     assert.equal(repaired,
@@ -205,7 +205,7 @@ test('preserved conference pages repair significance and linguistic notation sta
     assert.equal(api.repairPreservedPage(repaired), repaired);
 });
 
-test('real PDF formula crop reaches staged Markdown, PNG bytes and figure inventory', t => {
+test('真实的 PDF 公式裁剪能进到暂存 Markdown、PNG 字节和图片清单', t => {
     const f = fixture(t), loaded = f.runs.get(f.one);
     const source = JSON.parse(require('node:child_process').execFileSync('bash', [
         path.resolve(__dirname, '../scripts/python-runtime.sh'), '-B', '-c', `
@@ -248,7 +248,7 @@ print(json.dumps({'structuredArtifacts':a,'sourceBinding':{'pdfSha256':hashlib.s
     result.manifest.manifestSha256);
 });
 
-test('IWSLT conference-paper-id with dots remains a conference identity', t => {
+test('含点的 IWSLT conference-paper-id 仍算会议身份', t => {
     const f = fixture(t); const loaded = f.runs.get(f.one);
     const paperId = 'conference:iwslt:2026:conference-paper-id:IWSLT.2026.001';
     const paper = loaded.analysis.papers[0];
@@ -273,7 +273,7 @@ test('IWSLT conference-paper-id with dots remains a conference identity', t => {
     assert.doesNotMatch(result.markdown, /arxiv/i);
 });
 
-test('completion drift, arXiv renderer leakage and weak assets fail closed', t => {
+test('完成状态漂移、arXiv 渲染器泄漏和弱素材一律直接失败', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     f.runs.get(f.one).run.completionReceipt.analysisSha256 = 'c'.repeat(64);
     assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
@@ -285,7 +285,7 @@ test('completion drift, arXiv renderer leakage and weak assets fail closed', t =
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, { ...f.dependencies, render: () => ({ markdown: 'generic', assets: [{ path: 'x' }] }) }), /weak assets/);
 });
 
-test('production Node stage invokes the generic Python renderer without an arXiv identity', t => {
+test('生产 Node 阶段调用通用 Python 渲染器，不带 arXiv 身份', t => {
     const f = fixture(t); const dependencies = { ...f.dependencies }; delete dependencies.render;
     const stagingRoot = path.join(f.root, 'dry-staging');
     const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
@@ -307,7 +307,7 @@ test('production Node stage invokes the generic Python renderer without an arXiv
     assert.equal(fs.existsSync(stagingRoot), false);
 });
 
-test('aggregate replays every selected stage and emits only when the full explicit selection is complete', t => {
+test('汇总会复核每个选中的阶段，只有显式选择全部完成时才输出', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging'); const aggregateRoot = path.join(f.root, 'aggregate');
     f.runs.get(f.one).analysis.papers[0].title = 'Bad [link](https://evil.invalid) # heading';
     for (const executionId of [f.one, f.two]) api.stagePaper({ analysisRoot: 'ignored', executionId,
@@ -488,7 +488,7 @@ test('旧会议图注修正保留原分配文件，并按其原格式完整复�
     for (const [file, bytes] of originals) assert.deepEqual(fs.readFileSync(file), bytes);
 });
 
-test('aggregate rejects a selected-member subset and executions from another authenticated plan', t => {
+test('汇总拒绝选中的成员子集，以及来自另一份已核验计划的执行', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging'); const aggregateRoot = path.join(f.root, 'aggregate');
     for (const executionId of [f.one, f.two]) api.stagePaper({ analysisRoot: 'ignored', executionId,
         tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
@@ -566,7 +566,7 @@ test('多层标签统计分别计算每一级的直接使用篇数和包含下�
     assert.equal(lines.some(line => line.startsWith('#### 应用')), false);
 });
 
-test('aggregate renders the multi-level tag drill-down and seals it in the manifest', t => {
+test('汇总渲染多级标签下钻，并把它写进清单', t => {
     const tagged = tag => validAnalysisText().replaceAll('#语音识别', tag);
     const f = fixture(t, [
         { executionId: '33333333-3333-4333-8333-333333333333', index: 3,
@@ -630,7 +630,7 @@ test('aggregate renders the multi-level tag drill-down and seals it in the manif
     assert.equal(Object.hasOwn(written, 'taxonomyHierarchy'), false);
 });
 
-test('Reader/scoring/taxonomy/publication compatibility gates cannot be bypassed by success stubs', t => {
+test('Reader、评分、词表和发布这几道兼容检查，不能靠成功桩绕过', t => {
     const f = fixture(t); const args = { analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot: path.join(f.root, 'staging'), planHandle: f.planHandle, sourceRoot: f.sourceRoot };
     f.runs.get(f.one).analysis.papers[0].analysisManifest.contracts.apiReaderSourceBindings = 'api-reader-source-bindings-v3';
@@ -655,7 +655,7 @@ test('Reader/scoring/taxonomy/publication compatibility gates cannot be bypassed
     assert.throws(() => api.stagePaper(args, f.dependencies), /基于全文的分析/);
 });
 
-test('loadStage re-renders current completion and rejects re-signed metadata or extra files', t => {
+test('loadStage 会重新渲染当前完成结果，拒绝重新签名的元数据或多余文件', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     const staged = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
@@ -700,7 +700,7 @@ test('页面生成程序升级后，使用新的暂存身份，不覆盖原文�
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, secondDeps).directory);
 });
 
-test('real plan authority, source replay and sealed analysis can stage one conference paper', async t => {
+test('真实计划授权、来源复核和已保存并核验的分析，可以暂存一篇会议论文', async t => {
     const fixture = productionPlanFixture(t); const executionId = '99999999-9999-4999-8999-999999999999';
     const analysisRoot = path.join(fixture.root, 'analysis'); const stagingRoot = path.join(fixture.root, 'page-staging');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
@@ -725,7 +725,7 @@ test('real plan authority, source replay and sealed analysis can stage one confe
         api.stableHash([fixture.paperId])); assert.equal(aggregate.manifest.members.length, 1);
 });
 
-test('analysis loader rejects a re-signed source file whose actual SHA no longer matches run.json', t => {
+test('重新签名的来源文件实际 SHA 与 run.json 不符时，分析加载器拒绝', t => {
     const fixture = productionPlanFixture(t); const executionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const analysisRoot = path.join(fixture.root, 'analysis');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
@@ -739,7 +739,7 @@ test('analysis loader rejects a re-signed source file whose actual SHA no longer
     assert.throws(() => adapter.loadConferenceAnalysis({ analysisRoot, executionId }), /evidence drifted/);
 });
 
-test('shared immutable staging writer removes its own short EIO file and retries safely', t => {
+test('共用的不可变暂存写入器会删掉自己写坏的 EIO 文件，并安全重试', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-short-write-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const filename = path.join(root, 'page.md');
     let calls = 0; const io = { openSync: fs.openSync, closeSync: fs.closeSync, fsyncSync: fs.fsyncSync,
@@ -752,7 +752,7 @@ test('shared immutable staging writer removes its own short EIO file and retries
     assert.equal(pageApi.writeExact(filename, Buffer.from('complete bytes')), sha256('complete bytes'));
 });
 
-test('an unresolved primary task becomes a review assignment, never a page, and is promoted after the fix', t => {
+test('未解决的主任务会变成审查分配，绝不会变成页面，修好之后再提升', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'review-staging');
     const unknownTaskText = validAnalysisText()
         .replace('primary_task_tag: #语音识别', 'primary_task_tag: #不存在的主任务')
@@ -771,7 +771,7 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
     assert.deepEqual(review.assignment.conceptIds, []);
     assert.equal(review.assignment.primaryTaskId, null);
     assert.match(review.assignment.registrySha256, /^[a-f0-9]{64}$/);
-    // Fail-closed: the blocked paper stages its assignment placeholder only.
+    // 直接失败：被拦下的论文只会写入分配占位页。
     const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
     const registryRoot = path.join(stagingRoot, f.one, registry.registrySha256);
     const implementationRoot = path.join(registryRoot, fs.readdirSync(registryRoot)[0]);
@@ -779,8 +779,8 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
     assert.equal(fs.existsSync(path.join(implementationRoot, 'page.md')), false);
     assert.equal(fs.existsSync(path.join(implementationRoot, 'manifest.json')), false);
 
-    // Fixing the labels re-runs postprocess: the placeholder is superseded and
-    // the paper is promoted to a real staged page under the same execution.
+    // 修好标签后重跑后处理：占位页被替换，
+    // 同一轮执行里这篇论文就升级成真正的暂存页。
     f.runs.set(f.one, completed(f.one, 1));
     const staged = api.stagePaper(args, f.dependencies);
     assert.equal(staged.status, 'staged');
@@ -796,7 +796,7 @@ test('an unresolved primary task becomes a review assignment, never a page, and 
     staged.manifest.manifestSha256);
 });
 
-test('CLI requires full authority, configured roots and distinct UUID selections', () => {
+test('命令行要求完整授权、已配置的根目录和互不相同的 UUID 选择', () => {
     const authority = executionCli.AUTHORITY_FLAGS.flatMap(flag => [flag, flag === '--filter' ? '33333333-3333-4333-8333-333333333333' : 'proof.json']);
     const parsed = cli.parseArgs(['aggregate', '--dry-run', ...authority,
         '--analysis-runs', '11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222']);

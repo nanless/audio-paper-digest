@@ -214,6 +214,23 @@ npm run blog:push -- --date YYYY-MM-DD
 
 单篇 `--include-id`、排除 `--exclude-id` 和历史封存预览属于显式维护功能，参数必须在三阶段保持一致；单篇发布不能作为整批发布或整批视觉完成的依据。
 
+## 历史直接重写
+
+全历史任务只能在 `audio-paper-digest-rewrite-all` 工作区执行。当前路线 `direct-local-first` 先把来源和私有产物准备好，再独立发布：
+
+```text
+保留的会议元数据/PDF + 冻结的历史 arXiv 链接
+  → direct-inputs → conference-projections → direct-plan
+  → direct-scheduler → direct-run → 私有页面 / direct-aggregate
+  → history:direct-publication: plan → generate → review → publish → status
+```
+
+每轮 arXiv 重写都会重新获取官方文本、PDF、运行元数据和清单，保存在 `data/runtime/fetched-arxiv-sources/` 下。保留的 arXiv 文本、PDF、图片、旧分析和旧博客正文都不进入写作输入。会议论文只有在 SHA 核验通过后，才使用保留的元数据和 PDF。同一篇论文只分析一次，再据此生成对应的全部历史页面。
+
+`crosswalk` 只是新一轮 arXiv 获取失败后的备用路线，只接收命名且不可变的交接文件。保留的会议来源不可用或损坏时，这条直接路线在该论文上停止，既不进入 `crosswalk`，也不影响队列中其余论文。独立发布入口要求来源和页面覆盖完整、审查通过、Git 基线与远端检查有效。`activate --apply` 已被禁用；激活、提交、推送和 OID 核验统一由 `publish --apply` 在共享博客锁内完成。入口存在不代表某次全历史重写或发布已经完成。参数细节见[历史重写](docs/history-rewrite.md)与[独立历史发布](docs/history-direct-publication.md)。
+
+ICML/OpenReview 的替代 PDF 默认一律拒绝。唯一经用户授权的跨标题例外是 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：代码白名单必须核对它的 poster/forum、固定 SSRN 标题、作者、DOI、PDF、获取凭证和来源 SHA。浏览器下载只能通过 `--import-file` 导入，并记录 `networkResponseObserved: false`。计划、模型输入和最终页面都必须写明这不是 camera-ready，该例外不得推广到其他论文。
+
 ## 7. 发布后视觉
 
 远端 OID 验证后，`push-blog.py` 规划 TOP 10 论文长图和一张汇总封面。项目脚本只管理图片任务、参考文件和状态，实际绘图只能由 Codex 内置 `image_gen` 完成。

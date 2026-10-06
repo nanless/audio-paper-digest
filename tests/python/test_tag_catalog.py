@@ -116,8 +116,8 @@ class RegistryTest(unittest.TestCase):
         for label in ('ASR', 'asr', ' ＃ＡＳＲ ', '\ufeff#ASR\ufeff',
                       'Automatic speech recognition'):
             self.assertIsNone(resolve_current_label(data, label))
-            # The generic library resolver retains its historical namespace;
-            # production parsing opts into current mode independently.
+            # 通用库里的解析函数仍保留历史命名空间；
+            # 生产解析另行选择当前模式。
             self.assertEqual(resolve_label(data, label)['id'], 'task.asr')
             self.assertEqual(resolve_label(data, label, mode=LABEL_MODE_LEGACY)['id'],
                              'task.asr')

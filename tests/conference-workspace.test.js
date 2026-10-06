@@ -50,7 +50,7 @@ function completeItem(marker) {
     };
 }
 
-test('env duplicate diagnostics only expose key and line numbers, never values', () => {
+test('环境变量重复的诊断只暴露键名和行号，绝不暴露值', () => {
     const root = tempRoot();
     try {
         const envFile = path.join(root, '.env');
@@ -72,7 +72,7 @@ test('env duplicate diagnostics only expose key and line numbers, never values',
     }
 });
 
-test('process diagnostics mark active only for a live local PID, and distinguish stale/complete/invalid', () => {
+test('进程诊断只有本地 PID 还活着才标为活跃，并区分过期、完成和无效', () => {
     const root = tempRoot();
     try {
         const processRoot = path.join(root, 'data/runtime/conference-processes');
@@ -168,7 +168,7 @@ test('process diagnostics mark active only for a live local PID, and distinguish
     }
 });
 
-test('git diagnostics return per-file dirty status for code, blog, and image repositories', () => {
+test('git 诊断会分别返回代码、博客和图床仓库的逐文件脏状态', () => {
     const root = tempRoot();
     try {
         const repos = {
@@ -199,7 +199,7 @@ test('git diagnostics return per-file dirty status for code, blog, and image rep
     }
 });
 
-test('combined diagnostic is read-only in its contract and reports capacity plus all surfaces', () => {
+test('合并诊断在约定上是只读的，并报告容量和各项内容', () => {
     const root = tempRoot();
     try {
         for (const relative of ['data/current', 'data/archive', 'data/runtime/conference-processes', 'code', 'blog', 'image']) {

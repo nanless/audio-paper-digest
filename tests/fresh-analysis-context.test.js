@@ -31,7 +31,7 @@ function fixture(t) {
     return { directory, id, text, artifacts, details, sourceExpectations, makeRun, context: makeRun() };
 }
 
-test('fresh context restricts UUID/root/manifest/source-set identities and never leaks outside its scope', async t => {
+test('当日上下文限定 UUID、根目录、清单和来源集合身份，绝不泄漏到范围之外', async t => {
     const f = fixture(t);
     assert.equal(fresh.getFreshAnalysisContext(), null);
     await fresh.withFreshAnalysisContext(f.context, async () => {
@@ -52,7 +52,7 @@ test('fresh context restricts UUID/root/manifest/source-set identities and never
     assert.throws(() => fresh.withFreshAnalysisContext(changed, () => {}), /expectations differ/);
 });
 
-test('fresh run usage context survives awaits and nested paper scopes without leaking between concurrent runs', async t => {
+test('当日运行的用量上下文能跨 await 和嵌套论文范围，且不在并发运行之间泄漏', async t => {
     const f = fixture(t);
     const usage = require('../scripts/lib/llm-usage.js');
     const secondRun = f.makeRun();
@@ -71,7 +71,7 @@ test('fresh run usage context survives awaits and nested paper scopes without le
     assert.equal(usage.usageContext().runId ?? null, null);
 });
 
-test('fresh source fetch stores exact full originals, deduplicates simultaneous fetches, and replays without network', async t => {
+test('当日来源抓取按原样保存完整原文，并发抓取去重，复核时不联网', async t => {
     const f = fixture(t); let calls = 0;
     assert.equal(fresh.readFreshSource(f.context.runDir, f.id, f.context), null);
     await fresh.withFreshAnalysisContext(f.context, async () => {
@@ -92,7 +92,7 @@ test('fresh source fetch stores exact full originals, deduplicates simultaneous 
     assert.equal(fs.readFileSync(path.join(directory, 'source-details.json'), 'utf8'), JSON.stringify(f.details));
 });
 
-test('daily bundle mode seals PDF/TXT/manifest once and replays only that generation without the legacy text cache', async t => {
+test('日更打包模式只保存一次 PDF、TXT 和清单，复核时只用这一代，不读旧版文本缓存', async t => {
     const f = fixture(t); const generation = 1;
     const sourceExpectations = { [f.id]: { sourceMode: fresh.BUNDLE_SOURCE_MODE, sourceGeneration: generation } };
     const manifest = JSON.parse(fs.readFileSync(path.join(f.context.runDir, 'run.json'), 'utf8'));
@@ -139,7 +139,7 @@ test('daily bundle mode seals PDF/TXT/manifest once and replays only that genera
     assert.equal(paper.freshRewriteProvenance.sourceManifestSha256, replayed.freshSourceDescriptor.sourceManifestSha256);
 });
 
-test('source resolution keeps the baseline version or caller version and rejects cross-paper sourceId', async t => {
+test('来源解析保留基线版本或调用方版本，拒绝跨论文的 sourceId', async t => {
     const f = fixture(t);
     const deep = require('../scripts/deep-analyzer.js');
     const originalFetch = deep.fetchArxivTextDetailed;
@@ -163,7 +163,7 @@ test('source resolution keeps the baseline version or caller version and rejects
     assert.equal(requested.length, 4);
 });
 
-test('source expectations cannot drift while an original fetch is in flight', async t => {
+test('原始抓取还在进行时，来源预期不能漂移', async t => {
     const f = fixture(t);
     await assert.rejects(fresh.withFreshAnalysisContext(f.context, () => fresh.fetchFreshSource(f.id, async () => {
         const filename = path.join(f.context.runDir, 'run.json');
@@ -175,7 +175,7 @@ test('source expectations cannot drift while an original fetch is in flight', as
     assert.equal(fs.existsSync(path.join(f.context.runDir, 'sources', f.id, 'source.json')), false);
 });
 
-test('source text/artifact drift, summaries and old generated state are rejected before any cache commit', async t => {
+test('缓存提交之前，来源文本或产物漂移、摘要和旧的生成状态一律拒绝', async t => {
     const f = fixture(t);
     for (const mutate of [details => { details.text += 'drift'; },
         details => { details.structuredArtifacts.tables.push({ invented: true }); },
@@ -189,7 +189,7 @@ test('source text/artifact drift, summaries and old generated state are rejected
     }
 });
 
-test('read-only cache replay rejects changed sidecars and symlink directories without a fallback fetch', async t => {
+test('只读缓存复核拒绝被改动的附属文件和符号链接目录，且不回退去重新抓取', async t => {
     const f = fixture(t);
     await fresh.withFreshAnalysisContext(f.context, () => fresh.fetchFreshSource(f.id, async () => structuredClone(f.details)));
     const directory = path.join(f.context.runDir, 'sources', f.id);
@@ -202,7 +202,7 @@ test('read-only cache replay rejects changed sidecars and symlink directories wi
         async () => { throw new Error('unexpected network'); })), /Unsafe fresh directory/);
 });
 
-test('interrupted source commit can finish from verified original details without refetching', async t => {
+test('来源提交中断后，可以凭已核验的原始明细写完，不必重新抓取', async t => {
     const f = fixture(t);
     await fresh.withFreshAnalysisContext(f.context, () => fresh.fetchFreshSource(f.id, async () => structuredClone(f.details)));
     const marker = path.join(f.context.runDir, 'sources', f.id, 'source.json');
@@ -214,7 +214,7 @@ test('interrupted source commit can finish from verified original details withou
     assert.ok(fs.existsSync(marker));
 });
 
-test('fresh paper rejects legacy/cross-run generated text and binds same-run checkpoints to original snapshots', async t => {
+test('当日论文拒绝旧版或跨运行生成的文本，并把同一次运行的检查点绑定到原始快照', async t => {
     const f = fixture(t);
     await fresh.withFreshAnalysisContext(f.context, async () => {
         assert.doesNotThrow(() => fresh.assertFreshPaper({ arxivId: f.id, title: 'Original metadata', abstract: 'Original abstract' }));
@@ -233,7 +233,7 @@ test('fresh paper rejects legacy/cross-run generated text and binds same-run che
     });
 });
 
-test('the first persisted analysis checkpoint already carries exact fresh source provenance', async t => {
+test('第一个落盘的分析检查点就已经带上精确的当日来源出处', async t => {
     const f = fixture(t); const deep = require('../scripts/deep-analyzer.js');
     await fresh.withFreshAnalysisContext(f.context, async () => {
         const source = await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));
@@ -252,7 +252,7 @@ test('the first persisted analysis checkpoint already carries exact fresh source
     });
 });
 
-test('deep primary/Reader fingerprints are isolated by run and ordinary fingerprints remain unchanged', async t => {
+test('深度主分析和 Reader 指纹按运行隔离，普通指纹保持不变', async t => {
     const f = fixture(t);
     const deep = require('../scripts/deep-analyzer.js');
     const paper = { arxivId: f.id, title: 'Original title', authors: ['Original author'] };
@@ -273,7 +273,7 @@ test('deep primary/Reader fingerprints are isolated by run and ordinary fingerpr
     assert.deepEqual(deep.buildRecoveryFingerprints(paper, f.text, f.id), normal);
 });
 
-test('fresh Reader candidates cannot use old global directories and signed revisions cannot ingest another run', async t => {
+test('当日 Reader 候选不能用旧的全局目录，已签名修订也不能录入另一次运行', async t => {
     const f = fixture(t); const deep = require('../scripts/deep-analyzer.js');
     await fresh.withFreshAnalysisContext(f.context, async () => {
         await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));

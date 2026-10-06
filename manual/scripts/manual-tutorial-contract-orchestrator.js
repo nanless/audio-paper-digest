@@ -1,15 +1,15 @@
 'use strict';
 
 /**
- * The single public validation entry point for newly-authored Manual tutorials.
+ * 新写作的 Manual 教程统一走这一个公开校验入口。
  *
- * The three underlying modules remain pure, independently testable validators:
- * - tutorial quality checks reader pedagogy and Markdown;
- * - tutorial artifacts checks deterministic source inventory coverage;
- * - research/longform checks evidence bindings and exact block replay.
+ * 底下三个模块各自保持纯粹，也能单独测试：
+ * - 教程质量：检查面向读者的讲解方式和 Markdown；
+ * - 教程素材：检查原文素材清单是否被逐项覆盖；
+ * - research/longform：检查证据绑定，以及正文是否按原文块逐块对上。
  *
- * Preview, sealed v5 payloads and v6 ingestion call this orchestrator instead
- * of composing a slightly different subset of those validators themselves.
+ * 预览、v5 已核验材料、v6 录入都调用这个编排器，不再各自挑其中一部分校验器
+ * 拼一遍。
  */
 
 const crypto = require('crypto');
@@ -252,16 +252,15 @@ function validateTutorialPayloadBundle(input) {
 }
 
 function validateManualTutorialReaderBundle(plan, article, evidenceLedger = [], options = {}) {
-    // Do not exercise the historical direct longform compatibility seam in
-    // manual-research-contract; the orchestrator owns cross-validator order.
+    // 不要走 manual-research-contract 里那条历史遗留的 longform 直连兼容分支；
+    // 跨校验器的调用顺序由这个编排器负责。
     const researchOptions = { ...options };
     delete researchOptions.longformBundle;
     delete researchOptions.artifactIndex;
-    // V6 reader-longform-v2 is an exact replay of every sealed block, while
-    // the legacy editorial plan intentionally contains at most eight anchor
-    // sections.  In this path the plan headings must remain an ordered
-    // subsequence; validateManualLongformBundle below owns the complete and
-    // exact heading/block replay.
+    // v6 的 reader-longform-v2 要求正文与每个已核验原文块逐一对应，而旧的编辑
+    // 方案最多只列八个小节锚点。走这条路径时，方案里的小节标题只要求按顺序
+    // 出现在正文中，完整且严格的标题与原文块比对由下面的
+    // validateManualLongformBundle 负责。
     researchOptions.allowLongformHeadingExpansion = Boolean(
         options.longformBundle && options.artifactIndex
     );
@@ -282,8 +281,7 @@ function validateManualTutorialReaderBundle(plan, article, evidenceLedger = [], 
             }
         );
     }
-    // Preserve the historical return type used by spec/canonical assemblers;
-    // the protocol identity is sealed separately in the v5 tutorial payload.
+    // 保持 spec 和正式装配器用惯的历史返回类型；协议标识另外记在 v5 教程材料里。
     return readerArticle;
 }
 

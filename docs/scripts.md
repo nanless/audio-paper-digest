@@ -16,7 +16,7 @@ npm run workspace:role -- status
 
 首次确认用途后，用 `npm run workspace:role -- set daily|history` 绑定。整库复制后，角色标记仍指向旧真实路径；确认副本用于历史工作后才执行 `npm run workspace:role -- set history --force`。标记是 Git 忽略、权限为 `0600` 的本机文件。
 
-## 日更脚本阶段与业务终态
+## 日更脚本阶段与最终状态
 
 | 命令 | 用途 |
 |---|---|
@@ -50,7 +50,7 @@ npm run workspace:role -- status
 
 `full-fetch.js` 只抓取其启动时的北京时间当天。后台只处理数据时可直接运行 `node scripts/full-fetch.js`，避免 npm/TTY 包装干扰；仍须遵守相同环境、角色和沙箱外运行要求。
 
-`deep`、`batch`、`reanalyze` 和 `api:reader:refresh` 只读取 `deep-analysis-result.json.dailyFreshSourceRun` 指定的文件，并核验 `batchDate`、论文集合及每篇 `source.txt`、`source.pdf`、runtime 和 manifest。它们不补抓来源或使用旧缓存。缺失、损坏或 SHA 不符时在模型/图片请求前停止。目标仍为北京时间当天才重新运行 `npm run digest:prepare -- DATE`；历史日期保留失败记录，按历史维护处理，不能手改检查点。
+`deep`、`batch`、`reanalyze` 和 `api:reader:refresh` 只读取 `deep-analysis-result.json.dailyFreshSourceRun` 指定的文件，并核验 `batchDate`、论文集合及每篇 `source.txt`、`source.pdf`、runtime 和 manifest。它们不补抓来源或使用旧缓存。这些文件缺失、损坏或 SHA 不符时，程序在发出模型或图片请求前停止。目标仍为北京时间当天才重新运行 `npm run digest:prepare -- DATE`；历史日期保留失败记录，按历史维护处理，不能手改检查点。
 
 ## 博客事务
 
@@ -167,7 +167,7 @@ projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文
 
 正常 direct 任务不依赖 crosswalk。`history:crosswalk` 仍保留显式旧状态维护：`prepare --apply`、`apply`、`apply-verified` 和 `finalize` 可以按来源授权及 CAS 检查写入状态或凭证，并非全部只读。备用 `history:arxiv-batch` 必须给出 `--handoffs NAME.json[,NAME.json...]`，只接受 scheduler/run 保存的命名、不可变的新 arXiv 获取失败交接文件，不枚举 pending 页面。会议本地来源缺失或损坏只使该项失败，不进入这条备用批处理。`history:local-crawl-batch`、`archive-crawl-batch` 和 `history:conference-crawl-batch` 已停用，不能写 crosswalk。详见[历史重写底座](history-rewrite.md)。
 
-## 视觉状态机
+## 视觉任务状态
 
 | 命令 | 行为 |
 |---|---|

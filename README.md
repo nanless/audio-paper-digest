@@ -43,10 +43,11 @@ OpenReview 不可达时，默认停止，不自行改用其他来源。唯一由
 “非 camera-ready”，并记录可核验的来源标题、DOI、获取凭证和来源 SHA。
 
 同一篇论文只重写一次，再生成对应历史 URL 的页面。`crosswalk` 备用路线仅接收新一轮 arXiv 获取失败后
-生成的命名交接文件。长任务可分批处理、查看状态、安全暂停和续跑。分析先生成私有页面，再由
-`history:direct-publication` 按 `plan → generate → review → publish → status` 发布；全部来源、页面覆盖、
-审查、Git 基线与远端检查通过前不得覆盖博客。入口存在不代表全历史已处理或发布完成。详见
-[历史重写](docs/history-rewrite.md)与[独立历史发布](docs/history-direct-publication.md)。
+生成的命名交接文件。长任务可分批处理、查看状态、安全暂停和续跑。来源准备按 `direct-inputs` →
+`conference-projections` → `direct-plan` → `direct-scheduler` → `direct-run` 依次完成，产出私有页面和
+`direct-aggregate` 汇总，再由 `history:direct-publication` 按 `plan → generate → review → publish → status`
+发布；全部来源、页面覆盖、审查、Git 基线与远端检查通过前不得覆盖博客。入口存在不代表全历史已处理或
+发布完成。详见[历史重写](docs/history-rewrite.md)与[独立历史发布](docs/history-direct-publication.md)。
 
 ## 5 分钟开始
 

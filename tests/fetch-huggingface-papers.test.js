@@ -13,7 +13,7 @@ const {
     fetchWithCurl
 } = require('../scripts/fetch-huggingface-papers.js');
 
-describe('HuggingFace curl proxy isolation', () => {
+describe('HuggingFace curl 的代理隔离', () => {
     it('显式指定项目代理并清空 curl noproxy 绕过列表', () => {
         assert.deepStrictEqual(
             buildCurlArgs('socks5h://127.0.0.1:7897', 'https://huggingface.co/api/papers', 60),
@@ -141,7 +141,7 @@ describe('mergeAndDeduplicate', () => {
     });
 });
 
-describe('HuggingFace date guards', () => {
+describe('HuggingFace 日期守卫', () => {
     it('缺少 publishedAt 的 daily paper 会被跳过', () => {
         const paper = convertDailyPaper({
             paper: {

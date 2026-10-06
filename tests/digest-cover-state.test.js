@@ -37,7 +37,7 @@ function planDigestCover(options) {
     return planDigestCoverImpl({ publication: TEST_PUBLICATION, ...options });
 }
 
-describe('digest cover CLI', () => {
+describe('digest cover 命令行', () => {
     it('紧凑任务只打印排行数量和 manifest 路径', () => {
         const compact = compactDigestCoverTask({
             batchDate: '2026-07-13',
@@ -119,7 +119,7 @@ function paper(id, score, task, title) {
     });
 }
 
-describe('digest cover state', () => {
+describe('digest cover 状态', () => {
     it('封面完成态必须保留合法排行榜 QA 声明', () => {
         const original = Config.FILES.digestCoverAssetDir;
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-qa-state-'));

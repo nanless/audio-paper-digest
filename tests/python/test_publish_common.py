@@ -497,16 +497,16 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             })
 
     def test_manual_numeric_lexemes_collapse_only_adjacent_duplicate_decimals(self):
-        # PDF/HTML MathML fallbacks may duplicate the same rendered decimal
-        # without a separator.  Source quotes are intentionally retained as
-        # raw evidence; only numeric comparison sees the normalized token.
+        # PDF/HTML 的 MathML 回退可能把同一个小数重复渲染两遍而没有分隔符。
+        # 原文引用要按原样保留作为证据；
+        # 只有数值比较才会看到归一化之后的那个数。
         self.assertEqual(_manual_numeric_lexemes('raw 3.73.7'), ['3.7'])
         self.assertEqual(_manual_numeric_lexemes('raw 4.644.64 / 1.751.75'), [
             '4.64', '1.75',
         ])
 
-        # Do not coalesce ordinary repeated values with a separator, or a
-        # different adjacent decimal sequence that merely looks similar.
+        # 带分隔符的普通重复值不要合并，
+        # 只是长得像的相邻小数序列也不要合并。
         self.assertEqual(_manual_numeric_lexemes('3.7 3.7'), ['3.7', '3.7'])
         self.assertNotEqual(_manual_numeric_lexemes('4.644.65'), ['4.64'])
 
@@ -515,8 +515,8 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         claim['sourceQuote'] = claim['sourceQuote'].replace('3.7', '3.73.7')
         claim['sourceBindings']['value'] = '3.73.7'
 
-        # The raw source quote must remain auditable, while binding and claim
-        # comparison recognize its duplicated rendering as the same 3.7.
+        # 原始原文引用必须保持可核对，同时绑定和结论比较
+        # 要能认出重复渲染出来的就是同一个 3.7。
         self.assertIn('3.73.7', claim['sourceQuote'])
         self.assertIsNone(_validate_manual_result_claim_bindings(
             claim, 'sourceBindings', claim['sourceQuote'], 'fixture',
@@ -874,10 +874,10 @@ paper_digest_manual_depth: "full-text-evidence-v5"
             )],
             [url],
         )
-        # This compact fixture intentionally omits the authoritative v5
-        # result-claim payload.  The final gate may therefore reject it for
-        # that independent reason, but it must no longer reject the same
-        # self-linked image twice as a selectedImageUrls ordering mismatch.
+        # 这份精简固定数据故意不带权威的 v5 结论声明载荷。
+        # 因此最终检查可能因为这条独立原因拒掉它，
+        # 但它不该再把同一个自链图片
+        # 当成 selectedImageUrls 顺序不符而重复报错。
         self.assertNotIn(
             '图片 URL/顺序',
             validate_final_manual_v4_markdown(sanitized, paper) or '',
@@ -940,12 +940,12 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             1,
         )))
 
-        # Keep the final Python publish gate isomorphic with the Node
-        # editorial gate: it counts Han characters, while sentence punctuation
-        # has an independent limit, and nested Markdown headings split prose.
-        # The old fallback counted the five Chinese full stops as characters,
-        # turning this 258-Han, five-sentence paragraph into a false >260
-        # hard failure.
+        # 让 Python 侧的最终发布检查和 Node 侧的编辑检查保持一致：
+        # 它统计汉字数，句末标点另有独立上限，
+        # 嵌套的 Markdown 标题会切分正文。
+        # 旧的回退实现把五个中文句号也算成字符，
+        # 于是这段 258 个汉字、五个句子的段落
+        # 被误判成超过 260 的硬失败。
         punctuation_boundary = '\n'.join((
             '### 这是一条嵌套标题，不应并入正文长度',
             '甲' * 258 + '。' * 5,
@@ -1989,7 +1989,7 @@ primary_method_tag: #基准测试
                               model='muse-spark-1.2-contributor', api_type='openai-responses',
                               api_keys=keys, payload={}, opener=opener, timeout=5,
                               state_file=state_file, usage_sink=lambda _event: None)
-                # Use the actual protocol discriminator, not a duplicate constant.
+                # 要用真实的协议判别字段，不要另抄一份常量。
                 from publish_common import detect_publish_api_type
                 kwargs['api_type'] = detect_publish_api_type(endpoint, kwargs['model'])
                 if message != 'Invalid API key':

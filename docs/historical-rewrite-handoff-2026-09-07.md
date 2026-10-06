@@ -40,14 +40,14 @@
 | `scientific_topic` | 11 | 主要解释什么科学现象 |
 | `model_family` | 5 | 哪类基础模型承担关键角色 |
 
-当时每篇正式分析须显式提供 1 个主任务标签（task）和 1 个主方法标签（method），共 3–5 个标签，逐字使用有效中文首选名。旧规则禁止别名、英文名、已废弃名称（deprecated）和自造标签；这是那一版本的规则，不能用来否定现行已明确允许的英文专名例外。同一概念、同义项和祖先后代不能重复，主任务须为所选任务中最具体的概念；有独立证据的并列方法可补充，但不能从标签顺序猜主方法。
+当时每篇正式分析须显式提供 1 个主任务标签和 1 个主方法标签，共 3–5 个标签，逐字使用有效中文首选名。旧规则禁止别名、英文名、已废弃名称和自造标签；这是那一版本的规则，不能用来否定现行已明确允许的英文专名例外。同一概念、同义项和祖先后代不能重复，主任务须为所选任务中最具体的概念；有独立证据的并列方法可补充，但不能从标签顺序猜主方法。
 
 词表补充了数据集构建、数据标注、评测协议、基准设计、众包评测、心理声学实验、系统综述、文献计量和形式化分析等研究方法，使数据集、基准、主观听测、用户研究、综述和理论论文不必用 Transformer、模型族或另一个任务冒充主方法。
 
 Node 和 Python 解析器当时都从同一份原始词表派生允许标签。旧别名只供显式只读迁移；真正早于分类协议的成功记录可被 `validate:data` 读取，却不能当作当时的正式生产成功记录，也不能凭旧标签直接生成新页面。
 
 <a id="23-taxonomyseal-局部封口"></a>
-### 2.3 分类检查与局部修复（taxonomySeal）
+### 2.3 分类检查与局部修复（`taxonomySeal`）
 
 当时分析顺序为：
 
@@ -65,7 +65,7 @@ structureRepair -> taxonomySeal -> coreSummaryRepair -> scoringAudit
 
 当时 Manual V6 的初稿输入、生产输入包、任务运行器、修订绑定器、元数据修正、记录封装和最终规格，都已使用显式 `primaryMethodTag`。元数据修正中的 `type/task/primaryMethodTag/tags` 须作为同一组核验，并通过标签检查；只改角色字段而不改完整标签集合会被拒绝。
 
-旧三字段修正文件（correction artifact）因而失效，须按新四字段协议重新准备。这是当时有意设定的兼容边界，不能加旁路让旧文件通过。
+旧三字段修正文件因而失效，须按新四字段协议重新准备。这是当时有意设定的兼容边界，不能加旁路让旧文件通过。
 
 ### 2.5 历史后处理的漂移与并发保护
 
@@ -76,7 +76,7 @@ structureRepair -> taxonomySeal -> coreSummaryRepair -> scoringAudit
 <a id="26-会议测试接入-current-taxonomy"></a>
 ### 2.6 会议测试接入当时的分类校验
 
-当时 `tests/conference-postprocess.test.js` 已换掉只含两个标签且缺少主角色行的旧测试数据，改用稳定 concept ID 从分类实现生成 3 个有效首选标签，并核验 task、method 和层级关系。会议后处理（postprocess）的聚焦测试 `11/11` 通过，没有放宽生产检查。
+当时 `tests/conference-postprocess.test.js` 已换掉只含两个标签且缺少主角色行的旧测试数据，改用稳定 concept ID 从分类实现生成 3 个有效首选标签，并核验 task、method 和层级关系。会议后处理的聚焦测试 `11/11` 通过，没有放宽生产检查。
 
 <a id="3-已废止私有运行状态只用于解释旧-runtime"></a>
 ## 3. 已废止的私有运行状态（只用于解释旧运行记录）
@@ -95,7 +95,7 @@ structureRepair -> taxonomySeal -> coreSummaryRepair -> scoringAudit
 
 两个目录各自保留 `.git`、`.env` 和 `data/runtime`，不能拼接运行数据 JSON，也不能同时操作博客或推送同一代码远端。历史目录可以保留私有检查点；真正发布前，须停止日更发布，确认历史代码没有未保存的跟踪文件改动，同步代码 `origin/main` 和博客 `main`，重新生成与最新 Git、Hugo 和远端 OID 对应的发布计划及凭证。最终只允许一个工作区提交和推送。
 
-当时建议重跑全量生成和审查（producer/review）；现行审查可按页面路径和内容 SHA 复用已通过结果，但仍须重新完成当前批次检查并生成新凭证，详见开头的发布流程。
+当时建议重跑全量生成和审查；现行审查可按页面路径和内容 SHA 复用已通过结果，但仍须重新完成当前批次检查并生成新凭证，详见开头的发布流程。
 
 ### 3.1 Crosswalk
 
@@ -125,13 +125,13 @@ completion=incomplete
 
 | 类型 | 页面数 | 处理方式 |
 |---|---:|---|
-| 唯一 arXiv 线索（hint） | 2549 | 当时拟由 `history:arxiv-batch` 获取官方来源并核验 |
-| 含 arXiv 候选的冲突或多条线索（conflict/multiple） | 82 | 当时须选清单已有线索，再用 `history:resolve-conflict` |
-| 唯一 OpenReview 线索（hint） | 128 | 须取得官方来源授权并绑定页面 |
+| 唯一 arXiv 线索 | 2549 | 当时拟由 `history:arxiv-batch` 获取官方来源并核验 |
+| 含 arXiv 候选的冲突或多条线索 | 82 | 当时须选清单已有线索，再用 `history:resolve-conflict` |
+| 唯一 OpenReview 线索 | 128 | 须取得官方来源授权并绑定页面 |
 | 无 arXiv 的冲突页 | 2 | 须取得会议或其他官方身份记录 |
-| 没有身份线索（identity hint） | 1277 | 当时建议保持阻断；其中 ICASSP 894、ICLR 267、日更（daily）116 |
+| 没有身份线索 | 1277 | 当时建议保持阻断；其中 ICASSP 894、ICLR 267、日更 116 |
 
-当时清单共有 4490 页：4185 论文页、109 个日汇总（daily）、3 会议汇总和 193 个任务页（task）（ICASSP 140、ICLR 53）。论文范围为 daily 2883、ICASSP 898、ICLR 267、ICML 137。
+当时清单共有 4490 页：4185 论文页、109 个日汇总、3 会议汇总和 193 个任务页（ICASSP 140、ICLR 53）。论文范围为 daily 2883、ICASSP 898、ICLR 267、ICML 137。
 
 不能手工删除 crosswalk 的 operation.lock。apply 遇到占用时，只能由脚本核验 owner、lease 和进程存活后恢复，不能使用 `rm -rf`。
 
@@ -213,9 +213,9 @@ data/current/icassp_2026_deep_analyzers-excluded.json
 data/current/output/icassp-2026-report.md
 ```
 
-这些文件不能作为 `conference-source-ledger-v1` 的获授权来源，不能跳过目录获取、筛选、PDF 提取、暂存结果复核和导入（discovery/filter/extraction/staging/import）。当时 data/runtime 中也没有可继续的真实 ICASSP 会议执行记录。
+这些文件不能作为 `conference-source-ledger-v1` 的获授权来源，不能跳过目录获取、筛选、PDF 提取、暂存结果复核和导入。当时 data/runtime 中也没有可继续的真实 ICASSP 会议执行记录。
 
-旧只读盘点记录为 3694 条元数据、3694 份 PDF：1652 个精确匹配（exact）、2040 个归一化匹配（normalized）、2 个歧义匹配（ambiguous）、0 个未匹配（unmatched）、1 个孤立文件（orphan）。歧义涉及同标题 `Robust Multimodal Representation Learning in Healthcare` 的 arnumber `11460772` / `11464483`；孤立文件是 `Robust Multimodal Representation Learning in Healthcare (11464483).pdf`。须用人工或官方身份记录解歧，不能凭标题自动认定。
+旧只读盘点记录为 3694 条元数据、3694 份 PDF：1652 个精确匹配、2040 个归一化匹配、2 个歧义匹配、0 个未匹配、1 个孤立文件。歧义涉及同标题 `Robust Multimodal Representation Learning in Healthcare` 的 arnumber `11460772` / `11464483`；孤立文件是 `Robust Multimodal Representation Learning in Healthcare (11464483).pdf`。须用人工或官方身份记录解歧，不能凭标题自动认定。
 
 ## 4. 旧会话开场记录（不执行）
 
@@ -275,7 +275,7 @@ npm run history:postprocess -- --apply \
 
 ### 阶段 B：扩大已验证 arXiv 子集
 
-旧草案要求试点通过后按 12、50、其余已核验论文身份（verified identity）分级，而不是立即使用最大并发：
+旧草案要求试点通过后按 12、50、其余已核验论文身份分级，而不是立即使用最大并发：
 
 ```bash
 npm run history:analyze-batch -- --dry-run \
@@ -293,7 +293,7 @@ npm run history:postprocess -- --apply \
 
 每一级拟记录主分析首次通过率、分类零调用通过率、摘要局部修复率、Reader 重试率、平均输入输出 token、失败类型和切号理由。按当时机制，只有明确 GoUsageLimitError 才切 OpenCode Go 账号，普通 429、5xx、网络错误、截断和正文检查失败不切号。原记录称本机 .env 已有账号池，密钥不得进入日志、文档或 Git；本次没有核验当前配置。
 
-每批分析后拟运行后处理（postprocess），汇总页确定性生成，不再调用 LLM。这个旧扩大方案现在不执行。
+每批分析后拟运行后处理，汇总页确定性生成，不再调用 LLM。这个旧扩大方案现在不执行。
 
 ### 阶段 C：闭合剩余 4038 页的来源身份
 
@@ -308,13 +308,13 @@ npm run history:arxiv-batch -- --apply \
   --owner codex.history --limit pilot --concurrency 1
 ```
 
-随后拟改用数值 limit、最多 3 并发，每批重新读取 crosswalk 状态。这些 arxiv-batch 命令已不受当前参数解析器支持，只保留历史原形；不能扫描普通 pending。当前入口只接新 arXiv 获取失败后生成的命名交接文件（handoff），见开头说明。analyze-batch/postprocess 的 pilot|N 参数没有因此删除。
+随后拟改用数值 limit、最多 3 并发，每批重新读取 crosswalk 状态。这些 arxiv-batch 命令已不受当前参数解析器支持，只保留历史原形；不能扫描普通 pending。当前入口只接新 arXiv 获取失败后生成的命名交接文件，见开头说明。analyze-batch/postprocess 的 pilot|N 参数没有因此删除。
 
 旧多线索和冲突线索须由 history:resolve-conflict 选择 inventory 已有的非标题线索，标题相似度不能产生 verified。无可靠 arXiv 身份的页面拟交会议或其他来源适配器，旧正文、旧标题、PDF 文件名相似度和搜索结果不能当成已核身份。原方案只有 pending=0 且全部来源授权可重放才 finalize，不能在此前报告“全部历史论文”已核验。
 
 ### 阶段 D：ICASSP 2026 真实会议链
 
-当时先要求官方元数据与 PDF 对应，仅有 PDF 目录不能启动正式目录获取（discovery）；拟按以下旧分离流程执行：
+当时先要求官方元数据与 PDF 对应，仅有 PDF 目录不能启动正式目录获取；拟按以下旧分离流程执行：
 
 ```text
 conference:discover
@@ -335,7 +335,7 @@ conference:discover
 - 尚未覆盖 ICASSP 898、ICLR 267、ICML 137 个旧论文页、3 个会议汇总及 193 个任务页。
 - 会议汇总尚未接入旧历史发布入口，会议历史审查、推送和远端 OID 核验尚未接通。
 
-因此，当时只建议做 3–5 篇隔离试点（pilot），不能手写完成状态补丁（completed patch），也不能把通用路径试验说成旧会议页面已重写。这些限制描述当时能力；今天的新会议使用会议工作流的 process 入口，历史页面使用直接重写，不重走这个分离链。
+因此，当时只建议做 3–5 篇隔离试点，不能手写完成状态补丁，也不能把通用路径试验说成旧会议页面已重写。这些限制描述当时能力；今天的新会议使用会议工作流的 process 入口，历史页面使用直接重写，不重走这个分离链。
 
 当时还要求按论文主身份去重，会议与 arXiv 合并须有可审计的双身份关联证据，不能仅凭标题。会议汇总分别列目录总数、已核身份、来源可用、分析完成、未纳入或阻断原因，并只读取完成的单篇结果。
 
@@ -361,13 +361,13 @@ npm run history:publication -- generate --apply \
 
 ## 6. 当时拟定的完成定义（已废止）
 
-归档草案将“全部历史博客已重写、重标并发布”限定为：4185 个冻结论文页面的来源均可重放，每篇唯一论文只从原始来源证据（source-only）生成一次分析和 Reader；摘要、评分、Reader 和分类证明符合当时版本且能核验。3–5 标签来自同一词表，主任务和主方法明确，没有别名输出或祖先重复。
+归档草案将“全部历史博客已重写、重标并发布”限定为：4185 个冻结论文页面的来源均可重放，每篇唯一论文只从原始来源证据生成一次分析和 Reader；摘要、评分、Reader 和分类证明符合当时版本且能核验。3–5 标签来自同一词表，主任务和主方法明确，没有别名输出或祖先重复。
 
-重复页面使用同一论文结果分别生成，保留原 URL。每日及会议汇总只读取完整成员；全量审查没有阻断问题，固定 Hugo 检查通过，博客只提交 manifest 允许的差异。推送后远端 main OID 与本地提交相同，最终状态列明页面数、唯一论文数、成功、失败和阻断数，不能将部分完成（partial）称为全部完成（complete）。
+重复页面使用同一论文结果分别生成，保留原 URL。每日及会议汇总只读取完整成员；全量审查没有阻断问题，固定 Hugo 检查通过，博客只提交 manifest 允许的差异。推送后远端 main OID 与本地提交相同，最终状态列明页面数、唯一论文数、成功、失败和阻断数，不能将部分完成称为全部完成。
 
 原文后来补充的 direct 来源要求，在现在的流程中指本地已核来源直接使用，只有新 arXiv 获取失败的命名不可变交接文件才走已解决的 crosswalk 备用。它不改变上面旧现场数字，也不能替代现行完整发布检查。
 
-2026-09-07 那次用户明确排除生图，因此当时的重写完成条件不包括图片生成。这一范围记录不授予本次或未来任务排除视觉的权限，也不产生新的视觉豁免（waiver）；以后是否排除或豁免视觉须以实际用户要求为准，不据此调用 `image_gen`。
+2026-09-07 那次用户明确排除生图，因此当时的重写完成条件不包括图片生成。这一范围记录不授予本次或未来任务排除视觉的权限，也不产生新的视觉豁免；以后是否排除或豁免视觉须以实际用户要求为准，不据此调用 `image_gen`。
 
 ## 7. 仍有效的禁止捷径
 

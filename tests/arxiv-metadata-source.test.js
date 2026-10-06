@@ -10,7 +10,7 @@ const atom = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><en
 <summary>Official abstract with evidence.</summary><author><name>Author One</name></author>
 <category term="cs.SD"/></entry></feed>`;
 
-test('official Atom adapter uses mandatory proxy and returns source-only stable metadata proof', async () => {
+test('官方 Atom 适配器强制走代理，并返回只含来源的稳定元数据证明', async () => {
     let requested = null;
     const result = await api.fetchOfficialArxivMetadata('2609.03622', {
         detectProxy: () => 'http://127.0.0.1:7897',
@@ -31,7 +31,7 @@ test('official Atom adapter uses mandatory proxy and returns source-only stable 
     assert.doesNotMatch(JSON.stringify(result.metadata), /analysis|apiReader|blog/i);
 });
 
-test('official Atom adapter binds an exact version query and rejects ambiguous raw identity fields', async () => {
+test('官方 Atom 适配器绑定精确版本查询，拒绝有歧义的原始身份字段', async () => {
     const versioned = api.parseOfficialArxivMetadataResponse('2609.03622', atom, {
         querySourceId: '2609.03622v1', hasSignature: () => true,
         parseXml: () => Object.assign([{ arxivId: '2609.03622v1', title: 'Official title',
@@ -59,7 +59,7 @@ test('official Atom adapter binds an exact version query and rejects ambiguous r
     }), /identity\/version\/timestamps/);
 });
 
-test('official Atom adapter fails closed without proxy or exact identity coverage', async () => {
+test('没有代理或身份覆盖不精确时，官方 Atom 适配器直接失败', async () => {
     await assert.rejects(api.fetchOfficialArxivMetadata('2609.03622', { detectProxy: () => '' }), /proxy/);
     await assert.rejects(api.fetchOfficialArxivMetadata('2609.03622', {
         detectProxy: () => 'http://127.0.0.1:7897', requestFn: async () => ({ status: 200, data: atom }),
@@ -69,7 +69,7 @@ test('official Atom adapter fails closed without proxy or exact identity coverag
     }), /another paper/);
 });
 
-test('production-style Atom scheduling retries explicit 429 through one shared host queue', async () => {
+test('生产式 Atom 调度通过一个共用的主机队列重试明确的 429', async () => {
     const statuses = [429, 200]; const hosts = [];
     const result = await api.fetchOfficialArxivMetadata('2609.03622', {
         detectProxy: () => 'http://127.0.0.1:7897',
@@ -84,7 +84,7 @@ test('production-style Atom scheduling retries explicit 429 through one shared h
     assert.deepEqual(hosts, ['export.arxiv.org', 'export.arxiv.org']);
 });
 
-test('official Atom adapter retries bounded transport and 5xx failures before sealing data', async () => {
+test('官方 Atom 适配器在保存数据之前，对有上限的传输和 5xx 失败做重试', async () => {
     const outcomes = [
         Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
         { status: 503, data: 'temporarily unavailable' },
@@ -108,7 +108,7 @@ test('official Atom adapter retries bounded transport and 5xx failures before se
     assert.deepEqual(hosts, ['export.arxiv.org', 'export.arxiv.org', 'export.arxiv.org']);
 });
 
-test('official Atom adapter exposes an exhausted socket failure as a typed retryable outcome', async () => {
+test('官方 Atom 适配器把用尽的 socket 失败暴露为带类型的可重试结果', async () => {
     let calls = 0;
     await assert.rejects(api.fetchOfficialArxivMetadata('2609.03622', {
         detectProxy: () => 'http://127.0.0.1:7897',

@@ -75,7 +75,7 @@ function success(item) {
         pagePath: `content/posts/${item.paperId.split(':').at(-1)}.md` } };
 }
 
-test('one-paper mock E2E closes source, shared analysis, page and aggregate under one immutable receipt', async t => {
+test('单篇模拟端到端把来源、共用分析、页面和汇总收在一份不可变凭证下', async t => {
     const f = fixture(t); let calls = 0;
     const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 3 };
@@ -92,7 +92,7 @@ test('one-paper mock E2E closes source, shared analysis, page and aggregate unde
     assert.equal(resumed.status, 'complete'); assert.equal(resumed.processId, processId); assert.equal(calls, 1);
 });
 
-test('partial paper resumes with the same deterministic UUID and does not rerun completed peers', async t => {
+test('部分完成的论文用同一个确定性 UUID 续跑，不重跑已完成的同伴', async t => {
     const f = fixture(t, 2); const attempts = new Map();
     const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 2 };
@@ -122,7 +122,7 @@ test('partial paper resumes with the same deterministic UUID and does not rerun 
         processApi.deterministicUuid(second.processId, item.paperId, 'analysis'));
 });
 
-test('state status and completion receipt reject incoherent lifecycle claims', async t => {
+test('状态查询和完成凭证拒绝前后矛盾的生命周期声明', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     const completed = await processApi.runConferenceProcess(options, { ...f.deps,
@@ -159,7 +159,7 @@ test('state status and completion receipt reject incoherent lifecycle claims', a
         /completion receipt requires a complete checkpoint/);
 });
 
-test('scheduler bounds the complete per-paper lifecycle at three', async t => {
+test('调度器把每篇论文的完整生命周期上限设为三', async t => {
     const f = fixture(t, 7); let active = 0, maximum = 0;
     const result = await processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',
         reportName: 'report.json', filterId: f.authority.filterId, concurrency: 3 }, { ...f.deps,
@@ -168,7 +168,7 @@ test('scheduler bounds the complete per-paper lifecycle at three', async t => {
     assert.equal(result.status, 'complete'); assert.equal(maximum, 3);
 });
 
-test('implementation fingerprint binds explicit analysis, Reader, identity, and prompt dependencies', () => {
+test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', () => {
     const required = [
         'scripts/deep-analyzer.js', 'scripts/analysis-engine.js',
         'scripts/config.js', 'scripts/env-loader.js', 'scripts/llm-account-pool.js',
@@ -199,7 +199,7 @@ test('implementation fingerprint binds explicit analysis, Reader, identity, and 
     assert.equal(fingerprint(), baseline);
 });
 
-test('deep execution identity canonicalizes routes, binds semantic config, and excludes every secret', () => {
+test('深度执行身份会归一化路由、绑定语义配置，并排除所有密钥', () => {
     const secretA = 'sk-fixture-primary-a';
     const secretSecondary = 'sk-secondary-must-not-be-read';
     const secretHeader = 'Bearer private-header-value';
@@ -253,7 +253,7 @@ test('deep execution identity canonicalizes routes, binds semantic config, and e
     for (const value of changed) assert.notEqual(value.identitySha256, baseline.identitySha256);
 });
 
-test('deep execution config drift changes process identity and cannot address an old complete process', async t => {
+test('深度执行配置漂移会改变进程身份，也就无法再指向旧的已完成进程', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     const first = await processApi.runConferenceProcess(options, { ...f.deps,
@@ -272,7 +272,7 @@ test('deep execution config drift changes process identity and cannot address an
     assert.throws(() => cli.processStatus(options, { dependencies: f.deps }), /ENOENT|no such file/i);
 });
 
-test('apply holds one recoverable process operation lock while dry-run takes no write lock', async t => {
+test('实际执行持有一把可恢复的进程操作锁，预演则不取写锁', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     let observedLock = null;
@@ -292,7 +292,7 @@ test('apply holds one recoverable process operation lock while dry-run takes no 
     assert.equal(observedLock, null);
 });
 
-test('same-authority apply calls serialize and an exception releases the operation lock for recovery', async t => {
+test('同授权的实际执行串行执行，抛异常时释放操作锁以便恢复', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     let calls = 0; let releaseFirst;
@@ -318,7 +318,7 @@ test('same-authority apply calls serialize and an exception releases the operati
     assert.equal((await processApi.runConferenceProcess(options, recoverableDeps)).status, 'complete');
 });
 
-test('operation lock rejects runtime authority drift before shared preparation', async t => {
+test('操作锁在共用准备之前就拒绝运行时授权漂移', async t => {
     const f = fixture(t); let prepared = false;
     f.runtimeAuthority.deepExecutionConfig = executionIdentity({ limits: { apiMaxTokens: 2001 } });
     await assert.rejects(processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',
@@ -329,7 +329,7 @@ test('operation lock rejects runtime authority drift before shared preparation',
     assert.equal(prepared, false);
 });
 
-test('implementation drift before aggregate leaves the process incomplete without a completion receipt', async t => {
+test('汇总之前实现漂移，会让进程停在未完成状态，且不生成完成凭证', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     await assert.rejects(processApi.runConferenceProcess(options, { ...f.deps,
@@ -346,7 +346,7 @@ test('implementation drift before aggregate leaves the process incomplete withou
     assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), false);
 });
 
-test('final completion transaction rechecks config identity before publishing its receipt', async t => {
+test('最终完成事务在发布凭证之前，会再核对一次配置身份', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     const checkingEngine = { ...engine,
@@ -374,7 +374,7 @@ test('final completion transaction rechecks config identity before publishing it
     assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), false);
 });
 
-test('item CAS preserves a concurrently completed item and final transaction rechecks closure', async t => {
+test('条目 CAS 会保留并发完成的条目，最终事务会再核对一次是否闭合', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
@@ -415,7 +415,7 @@ test('item CAS preserves a concurrently completed item and final transaction rec
     assert.equal(incomplete.items[g.members[0].paperId].status, 'analysis_partial');
 });
 
-test('checkpoint and completion receipt tampering fail closed', async t => {
+test('检查点或完成凭证被篡改，一律直接失败', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     const complete = await processApi.runConferenceProcess(options, { ...f.deps,
@@ -435,7 +435,7 @@ test('checkpoint and completion receipt tampering fail closed', async t => {
     assert.throws(() => cli.processStatus(options, { dependencies: g.deps }), /completion receipt/);
 });
 
-test('automated source acceptance is explicit and cannot be called a manual review', () => {
+test('自动的来源接受是显式的，不能称作人工审查', () => {
     const members = [{ paperId: 'conference:odyssey:2026:conference-paper-id:a.1',
         sourceIdentity: 'conference-paper-id:a.1', receiptName: 'a-receipt.json' }];
     const value = staging.normalizeExtractionManifest({ contract: staging.AUTOMATED_EXTRACTION_CONTRACT,
@@ -447,7 +447,7 @@ test('automated source acceptance is explicit and cannot be called a manual revi
         acceptance: { ...value.acceptance, method: 'manual-review' } }), /method is unsupported/);
 });
 
-test('real official exact-PDF source seal reaches authenticated staging/import/plan without a human review claim', async t => {
+test('真实的官方精确 PDF 来源保存后，能在不声称人工审查的前提下进到已核验的暂存、导入和计划', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-process-source-seal-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const names = ['catalogs', 'reports', 'filters', 'specs', 'source', 'staging', 'cache', 'ledgers',
@@ -507,8 +507,8 @@ test('real official exact-PDF source seal reaches authenticated staging/import/p
     assert.ok(fs.existsSync(path.join(files.conferenceSourceLedgerDir, shared.names.ledger)));
     assert.ok(fs.existsSync(path.join(files.conferenceRunsDir, shared.names.run)));
 
-    // Simulate an obsolete pin. Its bytes are never accepted as current evidence:
-    // the new bundle must be regenerated from the independently authenticated PDF.
+    // 模拟一个过期的 pin。它的字节永远不会被当成当前证据：
+    // 新的打包文件必须从单独核验过的 PDF 重新生成。
     const oldReceiptFile = path.join(files.conferenceStagingSourceDir, shared.sealed[0].receiptName);
     const oldReceipt = JSON.parse(fs.readFileSync(oldReceiptFile)); oldReceipt.extractor.version = '0.0.0';
     delete oldReceipt.receiptSha256; oldReceipt.receiptSha256 = H(oldReceipt);
@@ -517,8 +517,8 @@ test('real official exact-PDF source seal reaches authenticated staging/import/p
     fs.writeFileSync(analysisSentinel, '{"analysis":"must remain byte-identical"}', { mode: 0o600 });
     let extractions = 0;
     const upgradedDeps = { ...deps, execFileSync: (...args) => { extractions += 1; return deps.execFileSync(...args); } };
-    // Historical process fixture binds the old receipt, while production sealer
-    // must authenticate a newly extracted generation for the explicit fork.
+    // 历史流程固定数据绑定的是旧凭证，而生产侧的保存逻辑
+    // 必须为这次显式分叉核验新提取出来的一代来源。
     const legacyShared = structuredClone({ ...shared, planHandle: undefined });
     legacyShared.planHandle = shared.planHandle;
     legacyShared.sealed[0].proof.receiptSha256 = oldReceipt.receiptSha256;
@@ -570,7 +570,7 @@ test('real official exact-PDF source seal reaches authenticated staging/import/p
     assert.equal(extractions, 1);
 });
 
-test('CLI caps concurrency and disables the old new-conference bypasses', () => {
+test('命令行给并发设上限，并关掉旧版新建会议的绕过口子', () => {
     const parsed = cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
         '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '3']);
     assert.equal(parsed.concurrency, 3);
@@ -582,7 +582,7 @@ test('CLI caps concurrency and disables the old new-conference bypasses', () => 
     assert.throws(() => cli.parseArgs(['--legacy-disabled', 'analyze']), /must use conference:new:process/);
 });
 
-test('401 balance failure stops dispatch, survives resume and explicitly releases only unfinished work', async t => {
+test('401 余额失败会停止派发，能跨续跑保留，并且只显式释放未完成的工作', async t => {
     const f = fixture(t, 5); const options = { apply: true, concurrency: 1 };
     let calls = 0;
     const worker = async (_context, _shared, item) => {
@@ -602,7 +602,7 @@ test('401 balance failure stops dispatch, survives resume and explicitly release
     assert.equal(resumed.status, 'complete'); assert.equal(calls, 6);
 });
 
-test('ordinary retry observes cooldown and capped attempts, explicit release retains failure history', async t => {
+test('普通重试遵守冷却和有上限的尝试次数，显式放行则保留失败历史', async t => {
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
     let now = Date.parse('2026-09-09T00:00:00Z'), calls = 0;
     const deps = { ...f.deps, now: () => new Date(now).toISOString(), processPaper: async () => {
@@ -618,7 +618,7 @@ test('ordinary retry observes cooldown and capped attempts, explicit release ret
     assert.equal(item.retryReleases[0].attempts, 3); assert.match(item.retryReleases[0].previousFailure.message, /validation/);
 });
 
-test('partial adapter failure preserves canonical error classification', async t => {
+test('适配器部分失败时，保留标准的错误分类', async t => {
     const f = fixture(t);
     const deps = { ...f.deps, adapter: {
         prepareConferenceAnalysis: () => {}, analyzeConference: async () => ({ status: 'partial' }),
@@ -629,7 +629,7 @@ test('partial adapter failure preserves canonical error classification', async t
         error => error.message.includes('Insufficient balance') && error.code === 'MODEL_HTTP_NON_RETRYABLE' && error.retryable === false);
 });
 
-test('implementation migration remains addressable and never reanalyzes completed papers', async t => {
+test('实现迁移仍可寻址，并且绝不重分析已完成的论文', async t => {
     const migration = require('../scripts/migrate-conference-process.js');
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
     const first = await processApi.runConferenceProcess(options, { ...f.deps,
@@ -638,7 +638,7 @@ test('implementation migration remains addressable and never reanalyzes complete
     f.context.authority = { ...f.authority, implementationSha256: H('new implementation') };
     f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
     assert.throws(() => cli.processStatus(options, { dependencies: f.deps }), /migrate with --from/);
-    // A previously created empty fork must not hide the migrated completed run.
+    // 之前建的空分叉不能盖住已经迁移过来的完成记录。
     const dormant = JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, first.processId, 'state.json')));
     dormant.authority = f.context.authority;
     dormant.processId = processApi.deterministicUuid(H(dormant.authority), processApi.CONTRACT);
@@ -662,7 +662,7 @@ test('implementation migration remains addressable and never reanalyzes complete
     assert.equal(resumed.status, 'complete'); assert.equal(resumed.processId, first.processId);
 });
 
-test('workers drain in-flight work but do not dispatch after a systemic failure', async t => {
+test('系统性失败后，worker 会把手上的活做完，但不再派发新任务', async t => {
     const f = fixture(t, 7); let calls = 0;
     let release; const inFlight = new Promise(resolve => { release = resolve; });
     const result = await processApi.runConferenceProcess({ apply: true, concurrency: 3 }, { ...f.deps,
@@ -675,7 +675,7 @@ test('workers drain in-flight work but do not dispatch after a systemic failure'
     assert.equal(calls, 3); assert.equal(result.complete, 2);
 });
 
-test('single-paper demo failure does not stop the conference batch', async t => {
+test('单篇演示失败不会中断会议批次', async t => {
     const f = fixture(t, 4); let calls = 0;
     const result = await processApi.runConferenceProcess({ apply: true, concurrency: 2 }, { ...f.deps,
         processPaper: async (_context, _shared, item) => {
@@ -692,7 +692,7 @@ test('single-paper demo failure does not stop the conference batch', async t => 
     assert.equal(result.complete, 3);
 });
 
-test('exhausted model network failure does not stop later conference papers', async t => {
+test('模型网络失败已经用尽，也不影响后面的会议论文', async t => {
     const f = fixture(t, 3); let calls = 0;
     const result = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, { ...f.deps,
         processPaper: async (_context, _shared, item) => {
@@ -708,7 +708,7 @@ test('exhausted model network failure does not stop later conference papers', as
     assert.equal(result.complete, 2);
 });
 
-test('tag review keeps the batch moving, withholds the page and reports a visible queue', async t => {
+test('标签审查让批次继续走，先扣住页面，并报告一个可见的队列', async t => {
     const f = fixture(t, 3); const options = { apply: true, concurrency: 2 };
     const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);
     const executionOf = paperId => processApi.deterministicUuid(processId, paperId, 'analysis');
@@ -741,7 +741,7 @@ test('tag review keeps the batch moving, withholds the page and reports a visibl
     assert.deepEqual(first.tagReviewQueue.map(item => item.blockedReasons), [blockedReasons]);
     const directory = path.join(f.files.conferenceProcessDir, first.processId);
     assert.equal(first.tagReviewQueueFile, path.join(directory, 'tag-review-queue.json'));
-    // The batch does not close while a tag assignment is unresolved: no receipt.
+    // 只要还有标签分配没定下来，这一批就不算结束：不会生成凭证。
     assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), false);
 
     const queue = JSON.parse(fs.readFileSync(first.tagReviewQueueFile, 'utf8'));
@@ -809,7 +809,7 @@ test('tag review keeps the batch moving, withholds the page and reports a visibl
     assert.equal(processApi.buildTagReviewQueue(codeOnlyState).items[0].status, 'needs_tag_review');
     assert.equal(JSON.stringify(codeOnlyState), codeOnlyBytes);
 
-    // A deterministic review is never retried blindly...
+    // 结果确定的审查不会盲目重试……
     const quiet = await processApi.runConferenceProcess(options, deps);
     assert.equal(quiet.status, 'partial'); assert.equal(quiet.tagReview, 1);
     assert.equal(stageCalls, 3);
@@ -826,7 +826,7 @@ test('tag review keeps the batch moving, withholds the page and reports a visibl
     assert.equal(quietState.items[reviewPaperId].lastFailure.code, 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED');
     assert.equal(quietState.items[reviewPaperId].reviewRequired.status, 'needs_taxonomy_review');
 
-    // ...but an explicit release after the labels are fixed promotes it.
+    // ……但标签修好之后显式放行，它就能升级。
     fixed = true;
     const resumed = await processApi.runConferenceProcess({ ...options, retryFailed: true }, deps);
     assert.equal(resumed.status, 'complete'); assert.equal(resumed.tagReview, 0);
@@ -841,7 +841,7 @@ test('tag review keeps the batch moving, withholds the page and reports a visibl
     assert.equal(cli.processStatus(options, { dependencies: f.deps }).tagReview, 0);
 });
 
-test('tag review classification accepts old codes without authorizing a blind retry', () => {
+test('标签审查分类接受旧错误码，但不授权盲目重试', () => {
     const recovery = require('../scripts/lib/conference-process-recovery.js');
     for (const code of ['CONFERENCE_TAG_REVIEW_REQUIRED', 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED']) {
         const failure = recovery.classifyFailure(Object.assign(new Error('标签选择尚未确定'), { code }),
@@ -852,7 +852,7 @@ test('tag review classification accepts old codes without authorizing a blind re
     }
 });
 
-test('tag queue replacement preserves the old cache on rename failure and empty queues clear both names', t => {
+test('标签队列替换在重命名失败时保留旧缓存，空队列则把两个名字都清掉', t => {
     const f = fixture(t); const directory = f.root;
     const legacyFile = path.join(directory, 'taxonomy-review-queue.json');
     const currentFile = path.join(directory, 'tag-review-queue.json');
@@ -872,7 +872,7 @@ test('tag queue replacement preserves the old cache on rename failure and empty 
     assert.equal(fs.existsSync(legacyFile), false); assert.equal(fs.existsSync(currentFile), false);
 });
 
-test('migration provenance survives a crash between state and migration receipt', async t => {
+test('状态与迁移凭证之间崩溃时，迁移来源记录仍然保留', async t => {
     const migration = require('../scripts/migrate-conference-process.js');
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
     const deps = { ...f.deps, processPaper: async (_c, _s, item) => success(item),
@@ -894,7 +894,7 @@ test('migration provenance survives a crash between state and migration receipt'
     assert.equal(cli.processStatus(options, { dependencies: deps }).processId, first.processId);
 });
 
-test('legacy partial imports canonical 401 classification before any model or source preparation', async t => {
+test('旧版部分导入在模型或来源准备之前，先把 401 归类写进正式记录', async t => {
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
     const first = await processApi.runConferenceProcess(options, { ...f.deps,
         processPaper: () => { throw new Error('analysis remained partial'); } });
@@ -913,7 +913,7 @@ test('legacy partial imports canonical 401 classification before any model or so
     assert.equal(result.stopped, true); assert.equal(result.batchFailure.category, 'quota');
 });
 
-test('source generation upgrade never resets an existing analysis on plan mismatch', async t => {
+test('计划对不上时，来源代次升级不会重置已有分析', async t => {
     const f = fixture(t); f.files.conferenceAnalysisDir = path.join(f.root, 'analyses');
     const executionId = '11111111-1111-4111-8111-111111111111';
     const directory = path.join(f.files.conferenceAnalysisDir, executionId);
@@ -929,7 +929,7 @@ test('source generation upgrade never resets an existing analysis on plan mismat
     assert.equal(fs.readFileSync(path.join(directory, 'run.json'), 'utf8'), 'preserve old run');
 });
 
-test('retry release is an explicit apply-only CLI flag', () => {
+test('重试放行是一个显式的、只在 apply 时可用的命令行参数', () => {
     const args = ['--catalog', 'catalog.json', '--report', 'report.json', '--filter', '11111111-1111-4111-8111-111111111111'];
     assert.equal(cli.parseArgs(['--apply', '--retry-failed', ...args]).retryFailed, true);
     assert.throws(() => cli.parseArgs(['--status', ...args, '--retry-failed']), /Use/);
@@ -938,7 +938,7 @@ test('retry release is an explicit apply-only CLI flag', () => {
         '--from', '11111111-1111-4111-8111-111111111111', '--retry-failed']).retryFailed, true);
 });
 
-test('multi-hop legacy migrations trace receipt parents to the UUID-bound origin', async t => {
+test('多跳的旧版迁移沿凭证父级一路追到绑定 UUID 的起点', async t => {
     const migration = require('../scripts/migrate-conference-process.js');
     const recovery = require('../scripts/lib/conference-process-recovery.js');
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
@@ -951,7 +951,7 @@ test('multi-hop legacy migrations trace receipt parents to the UUID-bound origin
     const origin = f.authority.implementationSha256;
     const directory = path.join(f.files.conferenceProcessDir, first.processId);
     const versions = [origin];
-    // Exercise twelve hops, including legacy receipts with immediate parents.
+    // 走满十二跳，其中包含父提交就是直接父级、中间没有其他提交的旧凭证。
     for (let index = 1; index <= 12; index += 1) {
         const implementation = H(`multi-hop-${index}`); versions.push(implementation);
         f.context.authority = { ...f.authority, implementationSha256: implementation };
@@ -979,7 +979,7 @@ test('multi-hop legacy migrations trace receipt parents to the UUID-bound origin
     assert.throws(() => recovery.sourceImplementation(state, directory, processApi), /missing or ambiguous/);
 });
 
-test('changed text or artifacts reject complete proof reuse before models or migration mutation', async t => {
+test('文本或产物一变，就在调用模型或改动迁移之前拒绝复用完整证明', async t => {
     const migration = require('../scripts/migrate-conference-process.js');
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
     const first = await processApi.runConferenceProcess(options, { ...f.deps,
@@ -1003,9 +1003,9 @@ test('changed text or artifacts reject complete proof reuse before models or mig
     }
 });
 
-// Shared fixture for the source-upgrade promote ledger modes: sealed historical
-// sources, a mocked discovery/prepareShared/staging/aggregate chain and a
-// switchable "new source generation" so upgrades visibly differ from originals.
+// 来源升级各提升模式共用的固定数据：已保存并核验的历史来源、
+// 模拟的 discovery/prepareShared/staging/aggregate 调用链，以及
+// 一个可切换的「新来源代次」，好让升级结果与原始记录明显不同。
 function sourceUpgradeFixture(t, count = 3, original = null) {
     const f = fixture(t, count, original); const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
     f.files.conferenceStagingSourceDir = path.join(f.root, 'sources'); f.files.conferenceAnalysisDir = path.join(f.root, 'analysis');
@@ -1050,7 +1050,7 @@ function sourceUpgradeFixture(t, count = 3, original = null) {
             control.stageCalls.push(executionId);
             return { status: 'staged', manifest: stagedByExecution.get(executionId) };
         },
-        // Preserved ledger members replay the remembered original stage bytes.
+        // 保留的账目成员会照原样重新核对当时记录的阶段字节。
         loadPreservedStage: ({ executionId, paperId }) => {
             control.preservedCalls.push(paperId);
             const item = control.originalItems && control.originalItems.get(paperId);
@@ -1080,7 +1080,7 @@ function sourceUpgradeFixture(t, count = 3, original = null) {
     return { ...f, deps, sources, control, stagedByExecution, rememberOriginal };
 }
 
-test('source upgrade authorizes only an explicit subset and preserves unselected and original results', async t => {
+test('来源升级只授权显式子集，并保留未选中的和原始的结果', async t => {
     const upgrade = require('../scripts/lib/conference-source-upgrade.js');
     const h = sourceUpgradeFixture(t, 3); const f = h; const deps = h.deps;
     const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, deps);
@@ -1260,7 +1260,7 @@ test('source upgrade authorizes only an explicit subset and preserves unselected
     assert.deepEqual(parsed.paperIds, [selected]); assert.equal(parsed.authorizeNewAnalysis, true);
 });
 
-test('promote CLI accepts exactly one promote ledger mode flag', () => {
+test('promote 命令行只接受一个 promote 账目模式参数', () => {
     const shared = ['--catalog', 'catalog.json', '--report', 'report.json',
         '--filter', '11111111-1111-4111-8111-111111111111', '--from', '22222222-2222-4222-8222-222222222222'];
     const promote = ['--source-upgrade-promote', ...shared, '--plan-sha', 'a'.repeat(64)];
@@ -1276,7 +1276,7 @@ test('promote CLI accepts exactly one promote ledger mode flag', () => {
         '--prefer-upgrade']), /Use/);
 });
 
-test('promote --prefer-upgrade books upgraded members first, preserves the rest and seals a checkable ledger', async t => {
+test('promote --prefer-upgrade 先登记升级过的成员，保留其余成员，并生成可核对的账目', async t => {
     const upgrade = require('../scripts/lib/conference-source-upgrade.js');
     const h = sourceUpgradeFixture(t, 3);
     const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps);
@@ -1345,7 +1345,7 @@ test('promote --prefer-upgrade books upgraded members first, preserves the rest 
         /Source upgrade preferUpgrade ledger arrays are missing/);
 });
 
-test('promote --preserve-original-complete keeps original results verbatim and ignores upgraded results', async t => {
+test('promote --preserve-original-complete 原样保留原始结果，忽略升级后的结果', async t => {
     const upgrade = require('../scripts/lib/conference-source-upgrade.js');
     const h = sourceUpgradeFixture(t, 3);
     const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps);
@@ -1388,7 +1388,7 @@ test('promote --preserve-original-complete keeps original results verbatim and i
     }
 });
 
-test('promote --prefer-upgrade still refuses an originally incomplete member without an upgraded result', async t => {
+test('成员原本不完整又没有升级结果时，promote --prefer-upgrade 仍然拒绝', async t => {
     const upgrade = require('../scripts/lib/conference-source-upgrade.js');
     const h = sourceUpgradeFixture(t, 3);
     const failed = h.members[2].paperId;

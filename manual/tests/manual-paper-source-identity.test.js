@@ -35,8 +35,8 @@ function fixture(id = '2608.12345') {
     return { date: '2026-08-27', paperId: id, fullTextEntry, artifactEntry };
 }
 
-describe('manual per-paper source identity', () => {
-    it('does not depend on another paper or a date-level manifest byte hash', () => {
+describe('Manual 单篇来源身份', () => {
+    it('不依赖其它论文，也不依赖日期级清单的字节哈希', () => {
         const own = fixture();
         const before = buildManualPaperSourceIdentity(own);
         const unrelatedManifestState = {
@@ -52,7 +52,7 @@ describe('manual per-paper source identity', () => {
         assert.equal(after.sha256, before.sha256);
     });
 
-    it('fails closed when this paper full text, images, structured evidence, or ArtifactIndex changes', () => {
+    it('本篇的全文、图片、结构化证据或 ArtifactIndex 一变就直接失败', () => {
         const own = fixture();
         const declared = buildManualPaperSourceIdentity(own);
         assert.doesNotThrow(() => validateManualPaperSourceIdentity(declared, own));

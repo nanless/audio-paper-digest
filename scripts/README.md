@@ -4,20 +4,20 @@
 [Manual 子系统](../manual/README.md)
 
 这里保留默认 LLM/API 流程、共享发布与视觉模块，以及可选渠道入口。显式
-Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本目录重新新增
-`manual-*.js` 或 Manual 专属 prompt、文档与测试。
+Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不再新增
+`manual-*.js`，也不放 Manual 专属的 prompt、文档和测试。
 
 ## 从哪里开始
 
 - 完整日更由根目录 [`run-daily-digest.sh`](../run-daily-digest.sh) 编排；默认走
-  LLM/API，使用 `npm run digest:prepare -- YYYY-MM-DD`。只有显式 `--manual` 或
+  LLM/API，入口是 `npm run digest:prepare -- YYYY-MM-DD`。只有显式 `--manual` 或
   `digest:manual` 才进入 `manual/`。
 - 全历史任务只在历史工作区运行。先准备来源、分析和私有页面，再使用独立的
-  `history:direct-publication` 发布；命令存在不代表历史任务或发布已完成。
+  `history:direct-publication` 发布；命令存在不等于历史任务已经完成或已经上线。
 - `package.json` 是命令别名的权威清单。直接执行任意项目脚本仍必须遵守项目根
   `AGENTS.md` 的工作区角色、沙箱外运行、代理、凭据与发布要求。
 - 本目录中的 `analysis-contract.js`、`validate-data-files.js` 和博客发布模块仍会读取
-  `manual/`，用于复验已有 Manual 产物；这是共享兼容边界，不代表默认 API 会启动
+  `manual/`，用来复验已有的 Manual 产物；这是共享兼容边界，默认 API 不会因此启动
   Manual 写作流程。
 
 | 需求 | 推荐入口 |
@@ -29,63 +29,63 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | 查整轮最终状态 | `npm run digest:status -- --date YYYY-MM-DD` |
 | 查某个文件职责 | 继续阅读下方分类索引 |
 
-单阶段命令适用于开发或明确的恢复任务，不能代替完整日更。最终完成还须人工核验部署与网页，并完成
+单阶段命令适用于开发和明确的恢复任务，不能代替完整日更。最终完成还须人工核验部署与网页，并完成
 或明确豁免发布后视觉；`digest:status` 尚未自动核验部署和网页。特殊重发步骤见本页末尾的
 [同日全量重写后的重发](#同日全量重写后的重发)。
 
 索引中的文件名、字段和协议名保持代码原形。SHA 用于核验文件内容和对应关系；CAS 指写入前核对
-当前内容仍与读取时一致；`O_EXCL` 表示拒绝覆盖已存在文件。它们不能代替论文内容审查。
+当前内容仍与读取时一致；`O_EXCL` 表示拒绝覆盖已存在文件。这些机制只看文件和字节，论文内容对不对仍要人判断。
 
 ## 默认 LLM/API：抓取、筛选与分析
 
 会议恢复与发布维护：
 
-- `conference-queue.js`、`lib/conference-queue.js`：显式计划驱动的持久化会议总队列，逐会议推进处理、发布和验收，提供只读计划与状态。
-- `conference-workspace.js`：只读工作区诊断，区分 Git 未提交改动、进程存活与旧运行状态；配置诊断不输出密钥。
-- `lib/conference-process-recovery.js`：查找可恢复的会议进程，核验原身份、失败原因、等待时间和重试条件；实现变化不能让普通入口跳过已有进展并重新分析。
-- `lib/conference-source-upgrade.js`：生成来源升级计划并执行已授权的论文分析。新计划使用 v2 和当前词表字段；已有计划先核原授权及完整对应关系，保留原来源、分析和尝试记录。
-- `conference_publication_gate.py`：最终 HTML 与已部署 URL 的机械验收；不冒充语义审查或人工视觉确认。
+- `conference-queue.js`、`lib/conference-queue.js`：会议总队列，由显式计划驱动并持久保存；逐个会议推进处理、发布和验收，另有只读的计划与状态查询。
+- `conference-workspace.js`：只读诊断工作区状态，Git 未提交改动、进程是否存活、旧运行状态分别判断；检查配置时不输出密钥。
+- `lib/conference-process-recovery.js`：查找可恢复的会议进程，核验原身份、失败原因、等待时间和重试条件；即使实现变了，普通入口也不会跳过已有进展重做分析。
+- `lib/conference-source-upgrade.js`：生成来源升级计划并执行已授权的论文分析。新计划使用 v2 和当前词表字段；已有计划先核对原授权和完整对应关系，再保留原来源、分析和尝试记录。
+- `conference_publication_gate.py`：只检查最终 HTML 和已部署 URL，不做语义判断，也不替人做视觉确认。
 
 | 文件 | 类型 | 职责 |
 |---|---|---|
-| `full-fetch.js` | Node 入口 | 编排默认数据流程：归档、抓取、筛选、去重、深度分析，并逐篇保存结果。 |
-| `lib/daily-fresh-source-plan.js` | Node 库 | 日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片仅为当前请求临时准备。 |
-| `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 为每轮 arXiv 来源获取原子保存官方文本、PDF、无像素的来源元数据和清单。只有当前稿 PDF 明确返回 404，才允许使用同一论文的官方 `vN` PDF；文本必须从该 PDF 提取，并按条件生成可自校验的 `sourceVersion`。普通来源文件保持原结构兼容。 |
-| `lib/direct-rewrite-analysis-context.js` | Node 库 | 用 AsyncLocalStorage 隔离历史重写和日更的来源文件，阻止旧正文或缓存进入分析，限制 Reader 图片只能临时使用；论文历史版本的身份 SHA 随来源记录进入所有分析阶段。 |
-| `fetch-papers.js` | Node 模块/入口 | arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选。 |
+| `full-fetch.js` | Node 入口 | 编排默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。 |
+| `lib/daily-fresh-source-plan.js` | Node 库 | 日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |
+| `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 每轮 arXiv 来源获取时，用原子写入保存官方文本、PDF、不含像素的来源元数据和清单。只有当前稿 PDF 明确返回 404，才允许改用同一论文的官方 `vN` PDF；文本必须从该 PDF 提取，并按条件生成可自校验的 `sourceVersion`。普通来源文件仍按原结构读取。 |
+| `lib/direct-rewrite-analysis-context.js` | Node 库 | 用 AsyncLocalStorage 隔离历史重写和日更的来源文件，让旧正文和缓存进不了分析，Reader 图片只能用临时文件；论文历史版本的身份 SHA 随来源记录进入所有分析阶段。 |
+| `fetch-papers.js` | Node 模块/入口 | 负责 arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选。 |
 | `fetch-huggingface-papers.js` | Node 模块/入口 | 通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
-| `deep-analyzer.js` | Node 核心 | 获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，减少不必要的整篇重做。 |
+| `deep-analyzer.js` | Node 核心 | 获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `analysis-engine.js` | Node 共享 | 管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成。 |
-| `analysis-contract.js` | Node 共享 | 核验 API 分析结构、评分、方法和表格要求，并兼容读取历史 Manual 结果。 |
+| `analysis-contract.js` | Node 共享 | 核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
 | `editorial-quality.js` | Node 共享 | 检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |
-| `digest-status.js` | Node 共享 | `papers.json` 的分析状态、批次日期和恢复状态同步。 |
+| `digest-status.js` | Node 共享 | 同步 `papers.json` 的分析状态、批次日期和恢复状态。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
-| `lib/filter-input-contract.js` | Node 库 | 计算筛选决定所对应的最小输入 SHA。 |
-| `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另提供别名解析和上下级查询。Node/Python 解析器及发布检查均使用词表原始字节计算的 SHA。 |
-| `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，也可按明确旧版生成核验文本。默认选择协议为 `paper-tag-selection-v2`，旧阶段按保存的版本读取，详见本页的分类词表维护说明。 |
-| `lib/page-tag-metadata.js` | Node 库 | 解析页面的 YAML 页首字段，识别新旧标签字段，拒绝混用与重复键；只检查实际顶层字段，不把描述或正文中的文字当作标签声明。 |
+| `lib/filter-input-contract.js` | Node 库 | 算出筛选决定对应的最小输入 SHA。 |
+| `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另外可按别名解析，也能查上下级。Node/Python 解析器和发布检查都用词表原始字节计算 SHA。 |
+| `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，指定旧版本时，也能生成核验文本。默认选择协议为 `paper-tag-selection-v2`，旧阶段按保存的版本读取，详见本页的分类词表维护说明。 |
+| `lib/page-tag-metadata.js` | Node 库 | 解析页面的 YAML 页首字段，识别新旧标签字段，拒绝混用与重复键；只认实际存在的顶层字段，描述或正文里的文字不算标签声明。 |
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
-| `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；拒绝双格式混用，不改写或补签旧记录。 |
-| `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另只读盘点旧分类文件，不调用模型。 |
+| `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；两种格式混用时拒绝，也不会改写或补签旧记录。 |
+| `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另外可只读盘点旧分类文件，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果选择标签，记录概念 ID 并去除上级重复标签。新版分配文件的名称包含词表 SHA 和分配 SHA；旧记录按原格式完整复算后读取，已有页面则按保存的对象及文件 SHA 找回原证据。 |
-| `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（crosswalk）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |
+| `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（`crosswalk`）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |
 | `lib/historical-daily-aggregate.js` | Node 库 | 核对单篇私有页面、页面对应表、历史页面清单及当前分析和标签记录，按固定顺序生成每日汇总及清单。保留原汇总路径和网址，不读取旧汇总正文。 |
 | `lib/historical-postprocess-scheduler.js` | Node 库 | 处理来源核验通过且分析已完成的历史论文，依次分配标签、生成单篇页面和每日汇总。检查点保存分析文件和标签分配的 SHA；每次汇总读取同日全部成员，论文更新后，其涉及的各个日期都要重新汇总。最多并发处理 3 篇论文，结果保存在私有目录。 |
 | `lib/conference-postprocess.js` | Node 库 | 只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
 | `lib/historical-publication.js` | Node 库 | 核验旧路线的论文页与日汇总来源链，固定干净 main、远端、Hugo、Git 基线和阶段依赖，再生成不可变私有文件；此入口不写博客、不审查，也不提交或推送。 |
-| `lib/keyword-prefilter.js` | Node 库 | 版本化高召回音频关键词预筛。 |
-| `lib/reader-repair.js` | Node 库 | 保存失败 Reader 草稿，核验节点 SHA，应用有界局部补丁并检测无进展。表数量诊断使用结构字段选择修复，草稿不能作为允许发布的证明。 |
-| `lib/reader-operator-patch.js` | Node 库 | 显式应用同一全新重写 run 的人工局部补丁，核验来源、节点 SHA 和完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档与重复执行记录，不生成成功正文证明。 |
-| `lib/reader-signed-draft.js` | Node 库 | 将本次同源、已核验的 Reader 还原为严格等价输入。只有真实解析和原图注入后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当成原始 API JSON。 |
-| `lib/reader-signed-operator.js` | Node 库 | 显式修订同一 run 的已核验 Reader，检查完整父稿 CAS，再还原、解析并按共同流程封存结果；通过不可变意图记录恢复输出。只写隔离分析并要求事实复核，不调用 API。 |
+| `lib/keyword-prefilter.js` | Node 库 | 音频关键词预筛，追求高召回，按版本管理。 |
+| `lib/reader-repair.js` | Node 库 | 保存失败 Reader 草稿，核验节点 SHA，应用有界局部补丁并检测无进展。表数量诊断使用结构字段选择修复，草稿不等于可以发布。 |
+| `lib/reader-operator-patch.js` | Node 库 | 显式应用同一全新重写 run 的人工局部补丁，核验来源、节点 SHA 和完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档和重复执行记录，不生成任何成功正文凭证。 |
+| `lib/reader-signed-draft.js` | Node 库 | 把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有真正解析并注入原图之后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |
+| `lib/reader-signed-operator.js` | Node 库 | 显式修订同一 run 的已核验 Reader，检查完整父稿 CAS，再还原、解析并按共同流程封存结果；恢复输出时依赖不可变的意图记录。只写隔离分析并要求事实复核，不调用 API。 |
 | `lib/reader-resource-binding.js` | Node 库 | 提取并规范化论文中的 GitHub、GitLab、Hugging Face 和 ModelScope 链接，保留原始 URL、逐字原文片段及资源类型，使换行 URL 也能准确核验来源。 |
-| `lib/reader-resource-sync.js` | Node 库 | 将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。评分所依赖的可用性证据变化时拒绝同步，要求正常评分审计；不联网、不写文件。 |
+| `lib/reader-resource-sync.js` | Node 库 | 将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
 | `lib/reader-draft-order.js` | Node 库 | 调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
-| `lib/reader-source-diagnostics.js` | Node 库 | 把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的只读修复建议；不自动改数字或放宽来源检查。 |
-| `lib/reader-recovery-revision.js` | Node 库 | 显式迁移同源失败候选的诊断，保留付费请求计数、索引调整与旧无进展状态，归档原字节；表数量文案不能触发正文规范化。迁移不生成成功证明。 |
-| `lib/reader-contract.js` | Node 库 | 集中规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
+| `lib/reader-source-diagnostics.js` | Node 库 | 把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
+| `lib/reader-recovery-revision.js` | Node 库 | 显式迁移同源失败候选的诊断，保留付费请求计数、索引调整与旧无进展状态，归档原字节；表数量文案不能触发正文规范化。迁移不会产出成功凭证。 |
+| `lib/reader-contract.js` | Node 库 | 规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
 | `lib/reader-tables.js` | Node 库 | 将 TABLE 标记与原表行列选择展开为 Markdown 和逐格来源记录，保留表头对应关系，拒绝错位和越界。 |
-| `lib/llm-usage.js` | Node 库 | 规范化真实请求用量，按论文和阶段归因；服务未提供的计费用量保持不可得。 |
+| `lib/llm-usage.js` | Node 库 | 规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。 |
 | `lib/fresh-rewrite-run.js` | Node 库 | 从白名单中的原始元数据创建独立重写 run，准备同源文件，只恢复本 run 的分析，并在完整结果验证通过后更新正式数据。 |
 | `workspace-role.js` | 入口与共享运行检查 | 用不跟踪入 Git、权限为 `0600` 且绑定仓库真实路径的标记区分 `daily` 与 `history`。`set` 原子保存或显式切换角色，`exec` 在 npm 生产入口启动前检查角色；直接 Node/Python 入口再由公共运行检查核验。 |
 | `lib/fresh-analysis-context.js` | Node 库 | 隔离全新重写 run 的来源文件与深度分析上下文，重新核验来源 SHA；拒绝旧生成正文和其他 run 的检查点。 |
@@ -93,7 +93,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/conference-source-ledger.js` | Node 库 | 管理会议来源身份、四类文件 SHA 和审查证据；文件不可变保存，读取时重新核验本地来源。标题不能作为论文身份。 |
 | `lib/conference-pdf-source.js` | Node 库 | 核验受控本机 PDF 的字节、路径和链接，生成可重新核验的来源描述；没有可靠结构化 TeX 时明确标记公式不可用。 |
 | `lib/pdf-layout.js` / `pdf-layout-extract.py` | Node/Python 库 | 提供所有纯 PDF 来源共用的 PyMuPDF 提取与临时 PNG 渲染：按页记录正文、图片、表格、公式及论文图候选，供视觉审计使用。PDF 内嵌图片不自动等于论文图；会议 Reader 按证据最多临时取 6 页。保存的记录不含像素，无原始 TeX 时不生成可发布公式。 |
-| `lib/conference-run.js` | Node 库 | 固定会议成员、分片、分类策略、选择策略版本和逐篇状态。通用状态接口拒绝直接写 `completed`；聚合发布接口仍要求尚未实现的认证完成证明，不能据此宣告会议可发布。 |
+| `lib/conference-run.js` | Node 库 | 固定会议成员、分片、分类策略、选择策略版本和逐篇状态。通用状态接口拒绝直接写 `completed`；聚合发布接口还要求一项尚未实现的认证完成证明，因此不能据此宣布会议可以发布。 |
 | `lib/conference-plan.js` | Node 库 | 只从已认证的导入记录、已审计划和当前词表生成 run 与计划凭证，核验相互对应的输入；拒绝任意路径、别名和不完整成员集。 |
 | `lib/conference-importer.js` | Node 库 | 根据已认证的暂存记录，把会议元数据、PDF 和提取结果安全导入私有缓存，再保存来源清单和导入凭证；低层清单辅助函数仅供隔离测试。 |
 | `lib/conference-execution.js` | Node 库 | 只从认证计划创建独立执行目录并保存不可变授权凭证。每次读取或推进都核验计划，以锁、CAS 和受控补丁保存结果；通用接口仍拒绝直接写入完成状态。 |
@@ -101,8 +101,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/conference-analysis-adapter.js` | Node 库 | 重新核验完整会议计划与来源后调用公共深度分析引擎。准备阶段先保存不可变意图，再用原子文件和精确前缀恢复分析结果、检查点与完成凭证。旧执行记录缺少意图记录时不自动迁移，须用同一认证计划新建执行记录和 UUID。 |
 | `lib/conference-discovery.js` | Node 库 | 只读扫描 ICASSP/ICLR/ICML 或严格 `official-proceedings` 元数据快照和本机 PDF 目录，生成候选与匹配报告。新会议只按元数据稳定 official ID/`pdfFile` 匹配，标题不能作为身份。 |
 | `analysis-waiver.js` | Node 库 | 核验用户针对当前日更批次的分析豁免，检查 deep、filtered、papers 三份文件的精确字节和逐篇来源 SHA；不修改分析正文。 |
-| `recover-conference-process-locks.js` | CLI | 只在操作者确认本工作区且锁的 owner PID 已死亡时，按文件锁协议恢复旧 operation lock；活锁和不完整锁均跳过。 |
-| `lib/conference-filter-evidence.js` | Node 库 | 从认证候选记录批量核验官方精确 PDF，由固定 PyMuPDF 提取页文本、视觉审计和原文摘要定位证据。保存可恢复的证据 run、候选及报告；非 ready 项不能直接排除，须交给 LLM。 |
+| `recover-conference-process-locks.js` | CLI | 只在操作者确认本工作区、且锁的持有进程 PID 已经退出时，按文件锁协议恢复旧操作锁；活锁和不完整的锁一律跳过。 |
+| `lib/conference-filter-evidence.js` | Node 库 | 从认证候选记录批量核验官方精确 PDF，由固定 PyMuPDF 提取页文本、视觉审计和原文摘要定位证据。保存可恢复的证据 run、候选及报告；非 ready 项一律交给 LLM，不能直接排除。 |
 | `lib/official-conference-acquisition.js` | Node 库 | 按固定 2026 官方 index/record/PDF 白名单抓取会议元数据与 PDF，`PROVIDERS` 是来源清单的唯一依据。AAAI volume 40 用固定 48-issue 清单，核验逐 issue 响应凭证、SHA 和跨 issue article ID 唯一性；其他来源用单索引。索引和逐篇下载以 `0600`、`O_EXCL` 保存，恢复时完整核验。 |
 | `lib/official-conference-general-providers.js` | Node 库 | 解析通用 AI/ML/CV/NLP 官方单篇记录并核验身份；无网络、无写入，供来源适配和测试样例审查。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口只能从已认证、不可伪造的计划句柄核验完整上游证明并读取会议全文；不导出 ledger/run 测试捷径。 |
@@ -110,16 +110,16 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/conference-process.js` | Node 库 | 对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
 | `migrate-conference-process.js` | CLI | 显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。 |
 | `migrate-conference-images.js` | CLI | 将已发布 AISTATS/UAI 页面的本地 Figure 复制到专用图片仓库并更新链接；拒绝覆盖不同图片字节，不自动提交或推送。 |
-| `publish-conference.py` | CLI | 按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。机械检查不能代替语义审查或浏览器视觉确认。 |
+| `publish-conference.py` | CLI | 按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。以上都是机械检查，语义审查和浏览器里的视觉效果仍要人工确认。 |
 | `waive-analysis-failures.js` | CLI | 记录用户明确同意跳过的当前日更分析失败项，保存对应现有文件的豁免记录；不覆盖失败尝试。 |
 | `lib/conference-extraction-receipt.js` | Node 库 | 核验请求、来源和提取文件；每次加载时由固定 Python/PyMuPDF 临时重新提取并比较结果。视觉审计含逐页 PNG、内嵌图片、表格、Figure、公式候选和 SHA；无原始 TeX 时禁止绑定公式文本。 |
-| `lib/conference-staging.js` | Node 库 | 将认证的会议入选集与人工复核的提取结果一一核验，生成导入清单和凭证；排除项或身份别名不能进入。 |
+| `lib/conference-staging.js` | Node 库 | 将认证的会议入选集与人工复核的提取结果一一核验，生成导入清单和凭证；排除项和身份别名都不能进入。 |
 | `lib/paper-identity.js` | Node 库 | 实现 Node `paper-identity-v1` 身份规范化、官方来源 URL 检查和稳定 SHA；不替换既有 arXiv 辅助函数。 |
-| `lib/paper-source-authority.js` | Node 库 | 核验规范论文身份、完整身份记录、来源快照、凭证和全文 SHA，返回只含来源且不可伪造的句柄。普通磁盘 arXiv 加载器不能恢复发布授权；会议路径还要求当前进程真实计划句柄。 |
+| `lib/paper-source-authority.js` | Node 库 | 核验规范论文身份、完整身份记录、来源快照、凭证和全文 SHA，返回只含来源且不可伪造的句柄。普通磁盘 arXiv 加载器不能恢复发布授权；会议路径还要求当前进程持有真实计划句柄。 |
 | `lib/arxiv-source-authority.js` | Node 库 | 使用默认强制代理抓取器获取官方 arXiv 全文，依次保存请求、观察结果、全文、快照、凭证和授权依据。支持 `O_EXCL` 恢复，拒绝旧博客正文。 |
 | `lib/arxiv-metadata-source.js` | Node 库 | 通过项目 HTTP CONNECT 获取单篇 arXiv Atom 元数据，核验原始响应 SHA，并提取白名单中的标题、摘要、作者与类别。 |
 | `lib/historical-arxiv-publication-metadata.js` | Node 库 | 为历史直接重写计划的每篇 arXiv 论文封存仅用于发布的 Atom 附件。读取时核验原始 Atom、元数据、摘要 SHA、精确 `vN` 查询或无版本 ID 的观察时间窗，以及原来源获取序号、清单与快照；不修改四份原来源文件。 |
-| `lib/page-source-crosswalk.js` | Node 库 | 跨运行核验历史页面清单，在锁内以 CAS 和只追加决定记录 pageId、页面 SHA 与发布授权来源。同一身份的多页确定性分组；标题不能用于 verified 判定。finalize 和每次读取最终凭证时都重新验证来源。 |
+| `lib/page-source-crosswalk.js` | Node 库 | 跨运行核验历史页面清单，在锁内以 CAS 和只追加决定记录 pageId、页面 SHA 与发布授权来源。同一身份的多页确定性分组；标题不能用来判定 verified。finalize 和每次读取最终凭证时都重新验证来源。 |
 | `lib/history-conflict-identity.js` | Node 库 | 保留旧版冲突解析功能；当前直接重写策略不把状态为 `conflict/multiple` 的页面送入正式 crosswalk。 |
 | `lib/historical-arxiv-analysis.js` | Node 库 | 将现场核验的 arXiv 全文和官方 Atom 元数据用于可恢复的独立原文分析 run，不读取旧生成正文。 |
 | `lib/historical-arxiv-analysis-scheduler.js` | Node 库 | 仅用于旧备用路线：从 crosswalk 中 verified 的唯一 arXiv 身份组生成稳定 run ID；不调度正常 direct-local 历史重写。 |
@@ -128,7 +128,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `lib/historical-local-crawl-authority.js` | Node 库 | 汇总归档与当前本地抓取记录中的稳定 arXiv 身份；不联网，不读取正文。 |
 | `lib/historical-archive-crawl-batch.js` | Node 库 | 只读审查已有归档抓取记录。旧 crosswalk 写入功能已停用，调用时直接拒绝。 |
 | `lib/historical-conference-crawl-authority.js` | Node 库 | 用已有会议元数据和 PDF 的稳定会议 ID 提供身份依据，支持重新核验 ICASSP、ICLR 本地来源。 |
-| `lib/historical-conference-crawl-batch.js` | Node 库 | 保留旧版只读辅助功能，crosswalk 写入功能已停用。会议标题指纹只能用于直接重写的页面对应，不得写入 crosswalk。 |
+| `lib/historical-conference-crawl-batch.js` | Node 库 | 保留旧版只读辅助功能，crosswalk 写入功能已停用。会议标题指纹只能用于直接重写的页面对应，不能写进 crosswalk。 |
 | `lib/historical-conference-local-sources.js` | Node 库 | 生成 `historical-conference-local-sources-v2`。除既有会议元数据和 PDF 外，还按认证 ICML poster→OpenReview forum ID 合并 ICML 来源；只读已有目录及运行目录中的新文件，新 PDF 必须对应唯一 OpenReview/替代来源凭证。逐项记录元数据、论文记录、PDF 获取与来源 SHA；缺 PDF 时明确标为 unavailable。 |
 | `lib/historical-conference-page-projections.js` | Node 库 | 读取历史清单、页面标题和已保留的会议来源，核对文件 SHA 后确定论文对应哪些页面。页面文件参与校验，旧正文不作为重写输入。 |
 | `lib/historical-direct-rewrite-input-catalog.js` | Node 库 | 结合历史清单中的唯一 arXiv 提示、严格主评分行身份、ICML poster 与可路由身份、会议本地来源清单，生成 `merged-good-historical-local-data-v5`。身份记录仅保存字节区间和哈希，不把旧正文送入写作。 |
@@ -154,7 +154,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 | 文件 | 职责 |
 |---|---|
-| `tag-tools.js` | 校验分类词表，并在回环地址提供仅四个只读路由的静态预览服务；不提供本机助手或正式数据迁移。 |
+| `tag-tools.js` | 校验分类词表，并在回环地址提供静态预览服务，只开四个只读路由；不提供本机助手，也不做正式数据迁移。 |
 | `tag-record-update.js` | 仅重新生成分类记录，不重跑 Reader、评分或 LLM。默认预览，写入前核验 SHA 与原分类身份；参数、确认白名单及快照步骤见本页的分类词表维护说明。 |
 | `tag-check-inventory.js` | 只读盘点会议、日更及历史分类记录，按词表 SHA 汇总状态、数量和示例论文，列出与当前词表的差异。扫描字段、路径和测试参数见本页的分类词表维护说明。 |
 | `conference-tools.js` | 只读校验私有会议 ledger/run；只接受受控运行目录内的直接文件名，不导入 PDF、不联网、不调用模型。 |
@@ -162,14 +162,14 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `conference-import.js` | 仅接受暂存/导入双文件与完整发现、筛选记录，复制认证来源并成对保存来源清单和导入凭证；不接受任意路径。 |
 | `conference-discover.js` | 只读扫描显式会议元数据/PDF 目录，按 `O_EXCL` 保存候选与报告；不确认身份，不调用模型。 |
 | `official-conference-acquire.js` | 在日更工作区按集中配置执行 `catalog/download/status/verify`，固定来源身份、项目 CONNECT 代理和官方地址白名单，不接受任意输出目录。`download` 可显式配置 1–5 路并发和 0–5 次同 URL 瞬时网络重试。 |
-| `conference-plan.js` | 核验发现、筛选、暂存、导入全链，以及已审计划与词表 SHA，成对生成不可覆盖的 run 和计划凭证。 |
-| `conference-execution.js` | 核验 run、计划、导入、暂存、筛选、发现全链，再创建独立执行目录并用受控补丁/CAS 推进；不写日更 `current`。 |
+| `conference-plan.js` | 核验发现、筛选、暂存、导入的整条链，以及已审计划和词表 SHA，成对生成不可覆盖的 run 和计划凭证。 |
+| `conference-execution.js` | 核验 run、计划、导入、暂存、筛选、发现的整条链，再创建独立执行目录，用受控补丁和 CAS 推进；不写日更 `current`。 |
 | `conference-filter.js` | 用同一会议已核验的候选及报告双文件和完整证据运行记录创建专属 v6 筛选配置，再创建、检查或应用受控筛选决定。旧 v5 配置只用于核验和继续同一 UUID 的原运行。手工入口不能创建或加载标为模型决定的记录；这类记录只能由受控运行器生成。 |
 | `conference-filter-run.js` | 只在显式 `--apply` 时核验与候选、报告及证据运行记录对应的筛选配置，再逐篇调用固定公共 `requestLlmJson()`。新执行使用 v6 配置，已核验的旧 v5 运行按原格式继续。先处理 `pending`；`failed` 仅在显式授权、尝试次数和退避条件满足时重试。中断后先恢复已有记录，不能自动重复计费。 |
 | `conference-filter-evidence.js` | 模型筛选前，根据认证候选中的封存 PDF 提取全文和 `abstract-locator-v1` 原文摘要定位证据，保存可恢复的候选与报告；不作筛选决定，不请求模型。 |
 | `conference-filter-evidence-extract.py` | 证据提取使用的固定 PyMuPDF 子进程，只从受控来源目录读取请求、元数据和 PDF，输出页文本、逐页 PNG 审计、图表及公式候选、摘要定位和可核验凭证；不联网，不调用模型。 |
 | `conference-staging.js` | 将完整入选集和已审提取结果一一核验，生成不可覆盖的导入清单与凭证；不复制文件，不调用模型。 |
-| `conference-extract.py` | 从暂存来源中的一篇显式 PDF 提取页文本和视觉审计。`--verify --source-root ABS` 用固定 PyMuPDF 临时重新提取，比较已有文件的全部字节；公式缺少原始 TeX 时仍不能作为展示公式发布。 |
+| `conference-extract.py` | 从暂存来源中的一篇显式 PDF 提取页文本和视觉审计。`--verify --source-root ABS` 用固定 PyMuPDF 临时重新提取，比较已有文件的全部字节；公式缺少原始 TeX 时不能发布为展示公式。 |
 | `conference_extractor.py` | 实现会议 PDF 提取：核验文件与 SHA，记录 UTF-8 字节偏移，生成页文本、PNG、图片与版面候选；以 `O_EXCL` 保存，按结构字段报告 blocked/integrity 状态。 |
 | `icmc-proceedings.py` | 从官方 ICMC 2026 合并 proceedings PDF 的书签和目录提取论文顺序、页范围与作者元数据，并按页范围无栅格化拆分单篇 PDF；不调用模型、不改写原始图表公式。 |
 | `history-inventory.py` | 只读扫描配置博客的历史页面、URL 和汇总关系。dry-run 不写文件，apply 在干净 main 上成对保存不可变页面清单与凭证。 |
@@ -177,7 +177,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `historical-page-render.py` | 根据上游核验过的历史论文输入生成单篇页面。普通历史路径使用标签分配记录，直接重写路径使用保存的分析和来源记录；正文从分析结果重新解析，不使用旧页面正文。 |
 | `page-source-crosswalk.js` | 从直接命名的历史清单与凭证创建独立 crosswalk，管理受控决定和 CAS。普通磁盘 arXiv 来源文件不能获得发布授权；finalize 要求全体 verified，且来源可在现场重新核验。 |
 | `history-conflict-identity.js` | 在同一进程核验官方 arXiv 来源，再将操作者明确选定的已有冲突提示记录为 verified 决定，并按 CAS 写入；不读取旧正文或标题。 |
-| `arxiv-source-authority.js` | 按规范 arXiv ID 规划或获取官方全文，用于维护来源授权；不属于 direct 路线或 arXiv 获取失败备用批次的选择器。dry-run 不联网、不写文件。 |
+| `arxiv-source-authority.js` | 按规范 arXiv ID 规划或获取官方全文，用来维护来源授权；它不是 direct 路线或 arXiv 获取失败备用批次的选择器。dry-run 不联网、不写文件。 |
 | `historical-arxiv-analysis.js` | 用现场核验的 arXiv 全文和白名单原始抓取元数据创建独立原文分析 run。analyze 调用现有多阶段引擎，结果不写入日更 current。 |
 | `historical-arxiv-analysis-scheduler.js` | 仅调度旧备用路线中 finalized crosswalk 的历史 arXiv 分析。`new-full`、`reader-recovery`、`all` 只维护旧队列，不能阻断或替代 direct-local。 |
 | `historical-tag-assignment.js` | 对完成的历史分析逐篇或批量重新分类。dry-run 不写文件，apply 只保存独立分类结果，不调用模型。 |
@@ -191,7 +191,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `historical-arxiv-batch.js` | 备用入口只接收 `--handoffs NAME.json[,NAME.json...]` 命名、不可变的 arXiv 获取失败交接文件，逐页核验冻结清单、页面 SHA 和非标题链接；不扫描 crosswalk pending 页、不调用模型，也不阻断 direct 队列。 |
 | `historical-archive-crawl-batch.js` | 已停用的兼容入口，调用时直接拒绝；已有归档抓取数据只能由 direct 路线读取。 |
 | `historical-local-crawl-batch.js` | `historical-archive-crawl-batch.js` 已停用兼容入口的别名，调用时直接拒绝。 |
-| `historical-conference-crawl-batch.js` | 已停用的兼容入口，调用时直接拒绝；会议元数据、PDF 和精确标题指纹只能用于 direct 本地来源与页面对应，不得写 crosswalk。 |
+| `historical-conference-crawl-batch.js` | 已停用的兼容入口，调用时直接拒绝；会议元数据、PDF 和精确标题指纹只能用于 direct 本地来源与页面对应，不能写进 crosswalk。 |
 | `historical-conference-local-sources.js` | 只读生成本地会议来源清单 v2，必须显式传绝对 `--icml-poster-snapshot` 与已有 `--icml-pdf-root`。新 PDF 和获取凭证根目录由参数或集中配置提供；不接触历史页、crosswalk、模型、网络或发布。 |
 | `historical-openreview-pdf-source.js` | 为一个已认证 ICML/OpenReview forum ID 规划或封存缺失官方 PDF。dry-run 不联网、不写文件；PDF 保存到本地来源清单实际读取的 ICML PDF 根，凭证单独进入运行目录。 |
 | `historical-icml-alternate-pdf-source.js` | 只封存代码白名单中的 ICML 替代来源，固定 poster/forum、标题、作者与来源 URL。`--import-file` 仅允许 `n1mAjfRDZ6`，重新提取并匹配标题、作者、日期和跨页特征文本，以非网络获取凭证记录浏览器下载导入。 |
@@ -234,22 +234,22 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 | 文件 | 职责 |
 |---|---|
-| `config.js` | Node 参数与运行数据路径的集中配置。 |
+| `config.js` | 集中保存 Node 参数与运行数据路径。 |
 | `env-loader.js` | 从项目 `.env` 建立受控运行环境，检查直接 Node 和 Manual 入口的运行条件。 |
 | `utils.js` | 提供 Node 原子文件写入、时间、ID、分析解析、提示词、LLM 协议和代理工具；`readTagValidation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `llm-account-pool.js` | 管理 Node OpenCode Go 账号池，持续使用成功账号，识别额度错误，并保存跨进程账号状态。 |
-| `log-setup.js` | Node 终端/文件日志、时间戳和敏感信息脱敏。 |
+| `log-setup.js` | 记录 Node 终端和文件日志，加时间戳，并对敏感信息脱敏。 |
 | `runtime-storage.js` | 只读统计运行存储，按文件引用关系预览受控缓存或日志清理；只有显式 `--apply` 才清理。 |
-| `project_env.py` | Python 项目环境、最小子进程环境与代理加载。 |
-| `path_config.py` | Python 共享路径、日期与原子写配置。 |
+| `project_env.py` | 加载 Python 项目环境、最小子进程环境和代理设置。 |
+| `path_config.py` | 定义 Python 共享路径、日期与原子写入配置。 |
 | `blog_repository_lock.py` | 管理共享博客锁，以 Git common-dir 协调不同项目工作区；核对 PID、hostname、token、lease、inode 和 SHA 后才回收或释放，不污染博客 Git。 |
 | `llm_account_pool.py` | 按与 Node 相同的数据格式和锁协议管理 OpenCode Go 账号池。 |
 | `llm_usage.py` | 记录 Python 发布请求的用量与失败事件，沿用跨运行请求归因格式。 |
 | `utils.py` | Python 分析与评分解析、发布侧通用文本工具；`read_tag_validation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
-| `tag_stage_record.py` | 只读识别标签阶段的新旧保存格式，返回原阶段、检查点及实际字段名；格式可读不代表哈希或发布资格已经通过。 |
+| `tag_stage_record.py` | 只读识别标签阶段的新旧保存格式，返回原阶段、检查点及实际字段名；格式可读不等于哈希和发布资格已经通过。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
-| `log_setup.py` | Python 统一日志与脱敏。 |
+| `log_setup.py` | 统一 Python 日志并脱敏。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
 | `python-runtime.sh` | 为默认博客/视觉入口选择并校验 Python 3.11+ 与 OpenSSL，可由 `PD_PYTHON_BIN` 覆写。 |
 
@@ -271,8 +271,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 | 文件 | 类型 | 职责 |
 |---|---|---|
-| `visual-summary-state.js` | Node 入口/状态机 | 规划、校验、登记和归档 TOP 10 论文长图。当前 v3 只使用已核验 Reader 的 thesis 与完整章节；日更核对官方论文图身份后返回空引用路径，不取旧缓存。QA 对应章节 SHA，不退回正式分析摘要。 |
-| `digest-cover-state.js` | Node 入口/状态机 | 每日汇总封面任务规划、校验、登记、失败和历史归档。 |
+| `visual-summary-state.js` | Node 入口/状态机 | 规划、校验、登记和归档 TOP 10 论文长图。当前 v3 只使用已核验 Reader 的 thesis 与完整章节；日更核对官方论文图身份后返回空引用路径，不取旧缓存。QA 记录对应章节的 SHA，不回退到正式分析摘要。 |
+| `digest-cover-state.js` | Node 入口/状态机 | 规划、校验、登记每日汇总封面任务，处理失败并归档历史记录。 |
 | `visual-summary-integration.js` | Node 共享 | 在同一发布证明下协调论文长图与汇总封面。 |
 | `plan-post-publish-visuals.py` | Python 入口 | 博客远端发布核验通过后调用共用视觉规划接口。 |
 | `render-visual-summary.py` | Python 调试入口 | 按固定规则在本地渲染，仅用于调试或离线兜底，不替代正式生图工具。 |
@@ -288,7 +288,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 | `publish-wechat-full.py` | 生成或发布微信公众号内容。 |
 | `publish-to-feishu.py` | 生成飞书文档。 |
 | `publish-xiaohongshu.py` | 生成小红书文案与汇总内容。 |
-| `xiaohongshu-publisher.py` | 小红书登录及浏览器自动发布入口。 |
+| `xiaohongshu-publisher.py` | 登录小红书，并用浏览器自动发布。 |
 
 ## Manual 与历史兼容边界
 
@@ -296,7 +296,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
   [`manual/scripts/`](../manual/scripts/)；对应测试在
   [`manual/tests/`](../manual/tests/)。
 - `scripts/analysis-contract.js` 与 `scripts/validate-data-files.js` 会导入 Manual
-  核验器，以确保默认工具能读取已有产物并拒绝损坏的历史产物。
+  核验器，让默认工具能读取已有产物，同时拒绝损坏的历史产物。
 - 博客共享层同样保留 Manual 只读验证，但默认 `digest:prepare` 不会调用 Manual 的
   写作、任务注册或结果写入入口。
 
@@ -309,8 +309,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 
 执行前会核验旧凭证各自的原提交、当前 Hugo 仓库干净 HEAD、实时远端 OID 与身份、基线字节及已提升的
 正式分析结果。中断时使用同一命令恢复。按日期设置的 pending 检查会持续阻断 generate/review/push，
-不得手删标记或凭证。成功后按 `blog:generate → blog:review → blog:push` 重建发布依据。
-旧视觉豁免不会自动适用于新发布；完成后再次调用此入口，也不会停用新一轮生成记录。
+标记和凭证都不能手删。成功后按 `blog:generate → blog:review → blog:push` 重建发布依据。
+旧视觉豁免不会自动沿用到新发布；完成后再次调用此入口，也不会停用新一轮生成记录。
 
 ## 分类词表维护说明
 
@@ -336,7 +336,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，不要在本�
 Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagValidation`，其中保存标签检查结果。
 `readTagValidation` 和 `read_tag_validation` 兼容读取旧缓存中的 `taxonomyValidation`，读取时不改写缓存。
 同一对象出现新旧两个字段会被拒绝，即使两值相同或其中一个为空；旧评分缓存缺少这项结果时，仍按各入口原规则处理。
-正式发布仍重新解析原正文，旧缓存不能代替标签、阶段和来源核验，也不能绕过人工评分覆盖的检查。
+正式发布仍会重新解析原正文：标签、阶段和来源核验都要重做，人工评分覆盖过的检查也一样。
 
 标签更新工具的只读检查不迁移旧缓存。注记模式沿缓存原字段更新词表版本和 SHA；显式重新生成模式才在新输出副本中迁移标签字段，
 并保留缓存中的其余内容和评分覆盖。解析结果的字段名与正式阶段记录的保存格式分别核验。
@@ -386,7 +386,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 旧 `paper-taxonomy-flat-tags-compat-v1` 记录按原声明读取。新字段族可能包含上一批已保存的旧协议，读取时不改写；新生成只使用 `paper-tag-flat-tags-v2`。两版标签含义相同，未知协议不能通过已核验标签判断。会议汇总可以读取两版合法成员，但新汇总页面明确写新版，不沿用首篇成员的旧协议。
 旧页面审查按页面声明的协议重建预期标签和附属资料字节；原页面、资料及来源 SHA 仍逐项核验。
-新的历史扫描策略为 `historical-page-scan-policy-v5`。页面用 `legacyTagRouteCandidates` 保存旧标签的候选链接，候选中的 `routeGroup` 区分 tags 和 categories；这些链接尚未核验，不能证明分类已经通过。`tagRoutes` 为 `unverified-candidates-v3`，发布证据仍使用原 v4 字段范围。
+新的历史扫描策略为 `historical-page-scan-policy-v5`。页面用 `legacyTagRouteCandidates` 保存旧标签的候选链接，候选中的 `routeGroup` 区分 tags 和 categories；这些链接还没核验，不能当作分类已通过的依据。`tagRoutes` 为 `unverified-candidates-v3`，发布证据仍使用原 v4 字段范围。
 旧 v3、v4 清单按各自完整原策略和原字段读取，原摘要与配对凭证保持。新旧候选字段混用、格式不对应或未知策略会被拒绝。新扫描生成新的结果和凭证，不覆盖旧文件；总文件、凭证及页面编号的独立版本不变。
 
 分析的当前指纹分别用 `tagCatalogVersion`、`tagCatalogSha256`、`tagPromptContract`、`tagPromptSha256` 和 `tagSelectionContract`
@@ -412,7 +412,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 词表 SHA 相同时，读取器按记录保存的提示版本精确核对全文 SHA。词表升级后，新版还须按旧词表快照核对提示 SHA，
 并通过原有升级检查。旧版跨词表记录保留原兼容范围：Node 不单独核对提示 SHA，Python 只检查其格式；
-两端仍核对旧快照、升级说明、确认范围和概念是否有效。不能把这条旧兼容分支当作旧提示全文的精确认证。
+两端仍核对旧快照、升级说明、确认范围和概念是否有效。这条旧兼容分支不能当作旧提示全文的精确认证。
 核验不会重写旧记录。显式重新分析时，新提示身份进入原阶段指纹；不匹配的旧检查点仍按原规则失效。
 
 `lib/tag-catalog-change.js` 将变更分为 `none`、`additive`、`destructive`，按字节 SHA 从
@@ -511,9 +511,9 @@ npm run history:source-identity -- --plan ABS --registry ABS --blog ABS --snapsh
 npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID --checkpoint ABS [--exclude-paper-ids ID,...]
 ```
 
-来源身份补充的新记录、检查点、总文件和报告使用 `historical-source-identity-supplement-v2`，标签状态字段为 `tagStatus`。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划，再按其原格式复算；全部字节一致才复用，原文件不改写。缺少完整输出、只有旧格式的部分检查点或文件校验失败时，命令停止，应保留原文件并使用新的运行标识。新版部分检查点仍按原续跑规则处理。身份核验不请求模型，也不能代替标签分类或正文审查。
+来源身份补充的新记录、检查点、总文件和报告使用 `historical-source-identity-supplement-v2`，标签状态字段为 `tagStatus`。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划，再按其原格式复算；全部字节一致才复用，原文件不改写。缺少完整输出、只有旧格式的部分检查点或文件校验失败时，命令停止，应保留原文件并使用新的运行标识。新版部分检查点仍按原续跑规则处理。身份核验不请求模型，标签分类和正文审查仍要单独做。
 
-运行保存论文选择集合，以及标签选择响应、独立审核和分类决策的检查点。使用同一 UUID 继续运行时，仍须核对输入；账号用量耗尽后保存编号的部分运行记录，不占用最终产物文件。导出器读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录。报告同时保留失败项和未处理论文，不请求模型。
+运行时保存论文选择集合，以及标签选择响应、独立审核和分类决策的检查点。使用同一 UUID 继续运行时，仍须核对输入；账号用量耗尽后保存编号的部分运行记录，不占用最终产物文件。导出器读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录。报告同时保留失败项和未处理论文，不请求模型。
 
 暂停后重跑原 UUID 可继续分类。要从正规 checkpoint 开始新的论文集合，使用
 `--resume-after-checkpoint ABS --resume-after-export ABS`；partial 不能当作续跑 checkpoint。

@@ -122,7 +122,7 @@ class GitPublicationTest(unittest.TestCase):
     def test_remote_advance_is_rejected(self):
         commit = self.commit()
         self.git(self.blog, 'push', 'origin', 'HEAD:main')
-        # A remote-only advancement cannot be mistaken for a publication retry.
+        # 只有远端前进过，这种情况不能被当成一次发布重试。
         other = self.root / 'other'
         subprocess.run(['git', 'clone', '-b', 'main', str(self.root / 'blog.git'), str(other)],
                        env=self.env, capture_output=True, check=True)
@@ -146,7 +146,7 @@ class GitPublicationTest(unittest.TestCase):
         self.assertEqual(publisher.changed_paths(self.images, snapshot['head'], commit), {new['path']})
         publisher.push_delta(self.images, records, snapshot['head'], snapshot['remoteIdentitySha256'], commit)
         self.assertEqual(publisher.commit_delta(*args), commit)
-        # Fresh transaction with all files already published is a no-op.
+        # 所有文件都已发布时，再开一次新事务等于什么也不做。
         self.assertEqual(publisher.commit_delta(self.images, records, commit,
                          snapshot['remoteIdentitySha256'], 'noop'), commit)
 
@@ -171,7 +171,7 @@ class GitPublicationTest(unittest.TestCase):
         self.git(self.blog, 'add', 'hugo.toml', 'layouts')
         self.git(self.blog, 'commit', '-m', 'fixture Hugo')
         baseline = self.git(self.blog, 'rev-parse', 'HEAD').strip()
-        # These uncommitted edits must never influence the rendered proof.
+        # 这些没提交的改动，绝不能影响渲染出来的证明页。
         template.write_text('{{ invalid_template_call }}')
         self.record_file(self.blog, 'content/unrelated.md', b'---\ninvalid: [\n---')
         body = b'---\ntitle: Test\ndate: 2020-01-01\n---\n<div><p>Nested intro</p></div>\n\n| A | B |\n| --- | --- |\n| 5ms | 8% |\n'
@@ -224,7 +224,7 @@ class GitPublicationTest(unittest.TestCase):
         self.assertFalse(any(call.args[1] in {'fetch', 'checkout', 'submodule', 'pull'}
                              for call in commands.call_args_list))
         self.assertEqual(theme_layout.read_text(), '{{ broken_dirty_template }}')
-        # A gitlink whose OID is absent locally must fail without auto-fetch.
+        # gitlink 指向的 OID 在本地不存在时，必须直接失败，不能自动抓取。
         self.git(self.blog, 'update-index', '--cacheinfo', '160000,' + 'f' * 40 + ',themes/Fixture')
         self.git(self.blog, 'commit', '-m', 'unavailable gitlink fixture')
         missing_base = self.git(self.blog, 'rev-parse', 'HEAD').strip()
@@ -372,7 +372,7 @@ class GitPublicationTest(unittest.TestCase):
                 state = publisher.status(self.cid, self.pid)
                 self.assertTrue(state['complete'])
                 self.assertEqual(state['onlineUrlEvidence']['mode'], 'historical_snapshot')
-            # Even with a valid v2 publication, explicit verify must GET again.
+            # 即使已经有一份有效的 v2 发布记录，显式校验仍须重新发 GET 请求。
             with mock.patch.object(publisher, 'verify_publication_urls', return_value=self.acceptance) as request:
                 state = publisher.verify(self.cid, self.pid)
                 request.assert_called_once()
@@ -418,7 +418,7 @@ class GitPublicationTest(unittest.TestCase):
         self.assertEqual(state['layers']['onlineUrls'], 'pending')
 
     def publish_second_conference(self):
-        # Both remotes advance exactly as they do when a queue publishes B after A.
+        # 两个远端的前进方式，和队列先发 A 再发 B 时完全一样。
         for repo, path in ((self.blog, 'content/posts/conference-b.md'),
                            (self.images, 'b-2026/bbbbbbbbbbbb/figure-1.png')):
             snapshot = publisher.remote_snapshot(repo)

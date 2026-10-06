@@ -52,8 +52,8 @@ function makeFixture(options = {}) {
     });
     const fullDir = path.join(currentDir, 'manual-full-text', date);
     fs.mkdirSync(fullDir, { recursive: true });
-    // Deliberately invalid as structure: a correct shadow reader must never use
-    // flattened text to invent table/formula completeness.
+    // 这里故意让结构不合法：合格的影子 reader 绝不能
+    // 靠拍平的文本编造出表格或公式的完整结构。
     fs.writeFileSync(path.join(fullDir, `${id}.txt`), 'Table 1  1  2\n$$x=1$$');
     const sourceEntry = { status: 'complete', path: path.join(fullDir, `${id}.txt`) };
     if (options.structured !== false) {
@@ -139,7 +139,7 @@ function makeFixture(options = {}) {
     return { root, currentDir, archiveDir, shadowRoot, workspaceDir, fullDir, date, id };
 }
 
-describe('Manual v6 shadow audit', () => {
+describe('Manual v6 影子审查', () => {
     it('历史扁平全文缺少结构快照时明确 blocked，绝不把 txt 推导为完整 inventory', () => {
         const fixture = makeFixture({ date: '2026-08-27', structured: false });
         const report = buildShadowReport({
@@ -263,13 +263,13 @@ function reportFixture(date, duration, cacheRate, quality = {}) {
         summary: { quality }
     };
     const stable = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
-    // IDs are already ordered and contain no object-key ambiguity.
+    // ID 本身已经有序，也不存在对象键的歧义。
     report.paperSet.sha256 = stable(report.paperSet.ids);
     report.inputFingerprint = embeddedInputFingerprint(report);
     return report;
 }
 
-describe('Manual shadow benchmark', () => {
+describe('Manual 影子基准', () => {
     it('少于三批明确 insufficient_samples，unknown 不当作 0', () => {
         const result = aggregateShadowReports([
             reportFixture('2026-08-25', 100, null),

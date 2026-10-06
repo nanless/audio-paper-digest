@@ -137,7 +137,7 @@ function loadAll(fx, paths) {
     }));
 }
 
-describe('Manual observed performance report', () => {
+describe('Manual 实测性能报告', () => {
     it('少于三个不同批次只报告 insufficient_data，三个批次才计算 nearest-rank P50/P95', () => {
         assert.equal(MIN_BATCH_SAMPLES, 3);
         assert.deepEqual(summarize([{ date: '2026-08-26', value: 1 }, { date: '2026-08-27', value: 2 }]), {

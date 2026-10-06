@@ -218,7 +218,7 @@
                 $('controls').disabled = false; renderFacets(); renderResults();
             } catch (error) {
                 index = null; $('error').hidden = false; $('controls').disabled = true;
-                $('error-message').textContent = '没有显示任何成功结果。' + String(error.message || error)
+                $('error-message').textContent = '索引加载失败。' + String(error.message || error)
                     + '。请通过本地 HTTP 预览服务打开，并确认 index.json 由正式预览构建器生成。';
                 $('dataset-meta').textContent = '索引不可用'; $('result-count').textContent = '加载失败，记录数未知';
             } finally { $('retry').disabled = false; }

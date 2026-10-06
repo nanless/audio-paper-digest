@@ -119,7 +119,7 @@ function planFile(t, value) {
     return filename;
 }
 
-test('explicit plan parsing and dry-run/status never create queue state or call workers', async t => {
+test('显式解析计划和预演、状态查询都不会创建队列状态或调用 worker', async t => {
     const f = fixture(t, 1); const events = [];
     const filename = path.join(f.root, 'plan.json');
     fs.writeFileSync(filename, `${JSON.stringify(f.plan)}\n`, { mode: 0o600 });
@@ -131,7 +131,7 @@ test('explicit plan parsing and dry-run/status never create queue state or call 
     assert.deepEqual(events, []); assert.equal(fs.existsSync(f.files.conferenceQueueDir), false);
 });
 
-test('apply closes each conference in order and does not rerun published entries', async t => {
+test('按顺序关闭每个会议，已发布的条目不会重跑', async t => {
     const f = fixture(t, 2); const events = []; let failSecond = true;
     const deps = dependencies(f, events, {
         apply: async entry => {
@@ -155,7 +155,7 @@ test('apply closes each conference in order and does not rerun published entries
     assert.deepEqual(second.entries.map(entry => entry.status), ['published', 'published']);
 });
 
-test('a tag review queue is reported by the queue instead of a generic process failure', async t => {
+test('标签审查队列由队列本身上报，不会报成笼统的流程失败', async t => {
     const f = fixture(t, 1); const events = [];
     const blockedReasons = ['primary-task:unknown:#不存在的主任务'];
     const paperId = 'conference:odyssey:2026:conference-paper-id:paper.7';
@@ -172,7 +172,7 @@ test('a tag review queue is reported by the queue instead of a generic process f
     assert.equal(events.includes('generate:odyssey-2026'), false);
 });
 
-test('a publisher failure is retained at its stage and resume uses the complete process', async t => {
+test('发布器失败会保留在它所在的阶段，续跑时使用完整的流程状态', async t => {
     const f = fixture(t, 1); const events = []; let failReview = true;
     const deps = dependencies(f, events, {
         review: async entry => {
@@ -194,7 +194,7 @@ test('a publisher failure is retained at its stage and resume uses the complete 
     assert.equal(events[0], 'review:odyssey-2026');
 });
 
-test('running process is active only with a live owner; an old running checkpoint is resumed', async t => {
+test('只有持有者还活着，运行中的流程才算活跃；旧的运行中检查点会续跑', async t => {
     const f = fixture(t, 1); const events = []; let live = true;
     const deps = dependencies(f, events, {
         status: async entry => live ? { status: 'running', conferenceId: entry.conferenceId,
@@ -209,7 +209,7 @@ test('running process is active only with a live owner; an old running checkpoin
     assert.equal(resumed.status, 'complete'); assert.equal(events.includes('process:apply:odyssey-2026'), true);
 });
 
-test('verify cannot close a queue without the publisher publish.json v2 receipt', async t => {
+test('没有发布器的 publish.json v2 凭证，verify 不能关闭队列', async t => {
     const f = fixture(t, 1); const events = [];
     const deps = dependencies(f, events, { push: async entry => ({
         status: 'pushed', publishReceipt: publisherReceipts(entry, processIdFor(entry)).publish
@@ -222,7 +222,7 @@ test('verify cannot close a queue without the publisher publish.json v2 receipt'
     assert.equal(result.entries[0].status, 'paused'); assert.match(result.entries[0].failure.message, /receipt/i);
 });
 
-test('legacy publish.json v1 is terminal published evidence and never re-enters process', async t => {
+test('旧版 publish.json v1 是终态的已发布证据，不会再进流程', async t => {
     const f = fixture(t, 1); const events = [];
     const entry = f.plan.conferences[0]; const processId = processIdFor(entry);
     const body = { contract: 'conference-blog-publish-v1', version: 1,
@@ -238,7 +238,7 @@ test('legacy publish.json v1 is terminal published evidence and never re-enters 
     assert.deepEqual(events, ['verify:odyssey-2026']);
 });
 
-test('discovered v2 publication still runs the real verify stage before queue completion', async t => {
+test('发现已有 v2 发布记录时，队列完成之前仍要跑真实的 verify 阶段', async t => {
     const f = fixture(t, 1); const events = []; const entry = f.plan.conferences[0];
     const processId = processIdFor(entry); const receipts = publisherReceipts(entry, processId);
     writePublishReceipt(f, entry, processId, receipts.publish);
@@ -252,7 +252,7 @@ test('discovered v2 publication still runs the real verify stage before queue co
     assert.equal(result.status, 'complete'); assert.deepEqual(events, ['verify:odyssey-2026']);
 });
 
-test('apply rejects a complete queue when its durable published proof drifts', async t => {
+test('队列看起来完整，但已落盘的发布证明漂移时，apply 拒绝', async t => {
     const f = fixture(t, 1); const events = []; const deps = dependencies(f, events);
     const first = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan }, deps);
     assert.equal(first.status, 'complete');
@@ -263,7 +263,7 @@ test('apply rejects a complete queue when its durable published proof drifts', a
     await assert.rejects(queue.runConferenceQueue({ mode: 'apply', plan: f.plan }, deps), /self-SHA|drift/i);
 });
 
-test('public publisher subprocess boundary uses verify and closes only on publish.json v2', async t => {
+test('对外的发布器子进程边界走 verify，并且只在 publish.json v2 存在时关闭', async t => {
     const f = fixture(t, 1); const entry = f.plan.conferences[0]; const processId = processIdFor(entry);
     const receipts = publisherReceipts(entry, processId);
     const publication = path.join(f.files.conferencePublicationDir, entry.conferenceId, processId);
@@ -292,7 +292,7 @@ test('public publisher subprocess boundary uses verify and closes only on publis
     assert.equal(result.entries[0].receipts.verify.receiptSha256, receipts.publish.publishSha256);
 });
 
-test('published discovery scans past a stale processId and rejects non-plan or ambiguous history', async t => {
+test('已发布发现的扫描会跳过过期的 processId，拒绝非计划或有歧义的历史', async t => {
     const f = fixture(t, 1); const entry = f.plan.conferences[0];
     const staleProcessId = UUIDS[1]; const currentProcessId = UUIDS[2];
     const otherProcessId = '44444444-4444-4444-8444-444444444444';
@@ -329,7 +329,7 @@ test('published discovery scans past a stale processId and rejects non-plan or a
     assert.throws(() => deps.publisher.findPublished(entry, staleProcessId, { readOnly: true }), /current plan|refusing/i);
 });
 
-test('CLI requires an explicit absolute plan and exposes only read-only modes without apply', () => {
+test('命令行要求显式的绝对路径计划，并且只提供只读模式，不带 apply', () => {
     assert.deepEqual(cli.parseArgs(['--dry-run', '--plan', '/tmp/selected.json']), {
         mode: 'dry-run', apply: false, statusOnly: false, planFile: '/tmp/selected.json', retryFailed: false
     });

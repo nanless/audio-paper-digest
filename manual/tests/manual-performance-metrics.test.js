@@ -31,7 +31,7 @@ function fixture() {
     return { root, current, archive, shadow, input, output };
 }
 
-describe('Manual observed performance metrics', () => {
+describe('Manual 实测性能指标', () => {
     it('只保存单调时钟真实值、真实 I/O SHA 和显式 unknown queue', () => {
         const item = fixture();
         const metric = buildStageMetric({

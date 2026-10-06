@@ -12,8 +12,8 @@ before(() => {
     process.env.PAPER_ANALYZER_MODEL = process.env.PAPER_ANALYZER_MODEL || 'gpt-4o-mini';
 });
 
-describe('conference source-bound open-source inventory', () => {
-    it('does not spend a model request on a deterministic six-line PDF inventory', async () => {
+describe('会议来源绑定的开源清单', () => {
+    it('结果确定的六行 PDF 清单不会浪费一次模型请求', async () => {
         const deep = require('../scripts/deep-analyzer.js');
         const result = await deep.scanOpensource(
             { source: 'conference', title: 'Conference paper' },
@@ -25,7 +25,7 @@ describe('conference source-bound open-source inventory', () => {
         assert.doesNotMatch(result, /arXiv/);
     });
 
-    it('builds a source-only open-source fallback from exact repository URLs', () => {
+    it('用精确的仓库 URL 拼出只含来源的开源回退', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const result = deep.buildDeterministicOpenSourceScan(
             'The implementation is available at: '
@@ -38,8 +38,8 @@ describe('conference source-bound open-source inventory', () => {
     });
 });
 
-describe('tag rules runtime analysis integration', () => {
-    it('tag repair retries with the first validation error and changes only allowed spans', async () => {
+describe('标签规则的运行时分析集成', () => {
+    it('标签修复带上第一条校验错误重试，并且只改允许的片段', async () => {
         const deep = require('../scripts/deep-analyzer.js');
         const prompts = [];
         const budgets = [];
@@ -133,14 +133,14 @@ describe('tag rules runtime analysis integration', () => {
         assert.strictEqual(revisionPaper.analysisStageCheckpoints.revision, undefined);
     });
 
-    it('tag repair prompt has no paper-specific 2403 answer example', () => {
+    it('标签修复提示词里没有 2403 那篇的专属答案示例', () => {
         const prompt = fs.readFileSync(
             path.join(__dirname, '../prompts/tag-repair.md'), 'utf8'
         );
         assert.doesNotMatch(prompt, /task\.intelligibility|method\.crowdsourced-evaluation/);
     });
 
-    it('current fingerprints bind tag rules while legacy summary fingerprints do not', () => {
+    it('当前指纹会绑定标签规则，旧版摘要指纹则不会', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const fields = deep.tagRuleFingerprintFields();
         assert.deepStrictEqual(Object.keys(fields).sort(), [
@@ -167,7 +167,7 @@ describe('tag rules runtime analysis integration', () => {
     });
 });
 
-describe('API reanalysis provenance boundary', () => {
+describe('API 重分析的来源边界', () => {
     it('剥离旧 Manual 字段与合同但保留 API 恢复合同', () => {
         const {
             removeManualAnalysisFields,
@@ -202,7 +202,7 @@ describe('API reanalysis provenance boundary', () => {
     });
 });
 
-describe('arXiv HTML full-text health gate', () => {
+describe('arXiv HTML 全文健康检查', () => {
     it('拒绝字符数很长但没有论文段落和章节的元数据空壳', () => {
         const { assessArxivHtmlFullText } = require('../scripts/deep-analyzer.js');
         const shell = `<html><body><div>${'Sponsor author navigation '.repeat(400)}</div></body></html>`;
@@ -659,7 +659,7 @@ describe('arXiv HTML full-text health gate', () => {
     });
 });
 
-describe('deep-analyzer section helpers', () => {
+describe('deep-analyzer 的小节辅助函数', () => {
     it('表格排序反馈只依据合法诊断结构，兼容完整旧异常', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const { READER_SECTION_KINDS, normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
@@ -4221,8 +4221,8 @@ primary_task_tag: #音视频生成
     it('2609.03622 原表小数双写保留完整match，可按原字quote绑定干净值且不猜拆非重复串', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
-        // These are the exact flattened DOM cell surfaces of Table 1. The
-        // original mathematical text and its TeX annotation are concatenated.
+        // 这是表 1 里各 DOM 单元格拍平之后的精确内容。
+        // 原始数学文本和它的 TeX 标注拼在一起。
         const sourceText = 'DNS Challenge\nNoisy input\n2.222.22\n3.193.19\n2.382.38\n'
             + 'SE w/o TTA (k=0)(k=0)\n3.093.09\n3.503.50\n3.803.80\n'
             + 'SE w/ TTA\n+0.05+0.05\n−0.02-0.02\n+0.15+0.15\n';
@@ -5455,8 +5455,8 @@ has_dataset: 否
         newerIncompatible.capturedAt = 'later';
         paper.analysisStaleSnapshots.push(newerIncompatible);
 
-        // Simulate a failed/interrupted replacement request persisting an empty
-        // working checkpoint.  The sealed old success must remain recoverable.
+        // 模拟一次失败或中断的替换请求，只留下一个空的
+        // 工作中检查点。此前保存并核验的成功记录必须仍然可以恢复。
         manifest.stages.primaryAnalysis = { status: 'transient_failure', error: 'interrupted' };
         deep.saveAnalysisCheckpoint(paper, '', manifest);
         const currentPrimary = deep.buildRecoveryFingerprints(
@@ -6760,7 +6760,7 @@ has_dataset: 否
         /必须保留该阶段的正文检查点/);
     });
 
-    it('failed scoring cleanup follows dependency DAG and does not erase source-only Reader', () => {
+    it('评分失败后的清理按依赖 DAG 进行，不会删掉只含来源的 Reader', () => {
         const { createAnalysisRecoveryManifest } = require('../scripts/deep-analyzer.js');
         const paper = {
             analysisCheckpoint: 'summary checkpoint',
@@ -7336,8 +7336,8 @@ has_dataset: 否
     });
 });
 
-describe('open-source evidence request safety', () => {
-    it('removes LaTeX backslashes that break double-decoding JSON gateways', () => {
+describe('开源证据请求的安全性', () => {
+    it('去掉会让双重解码 JSON 网关出错的 LaTeX 反斜杠', () => {
         const { sanitizeOpenSourceEvidence } = require('../scripts/deep-analyzer.js');
         const source = String.raw`\underline{x} and \mathbf{G}` + '\uD835';
         const sanitized = sanitizeOpenSourceEvidence(source);
@@ -7346,7 +7346,7 @@ describe('open-source evidence request safety', () => {
         assert.doesNotMatch(sanitized, /[\u0000-\u001F\u007F]/);
     });
 
-    it('cleans invalid text characters while preserving prompt LaTeX and image payloads', () => {
+    it('清理非法文本字符，同时保留提示词里的 LaTeX 和图片载荷', () => {
         const { sanitizeModelMessages } = require('../scripts/deep-analyzer.js');
         const messages = sanitizeModelMessages([{ role: 'user', content: [
             { type: 'text', text: String.raw`formula \underline{x}` + '\uD835' },
@@ -7357,7 +7357,7 @@ describe('open-source evidence request safety', () => {
         assert.doesNotThrow(() => JSON.parse(JSON.stringify(messages)));
     });
 
-    it('can opt into backslash sanitization for isolated evidence blocks', () => {
+    it('可以只对隔离的证据块启用反斜杠清理', () => {
         const { sanitizeModelMessages } = require('../scripts/deep-analyzer.js');
         const messages = sanitizeModelMessages([
             { role: 'user', content: String.raw`evidence \underline{x}` }

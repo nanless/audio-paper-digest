@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Fetch only the full-text evidence needed by the offline manual analyst. */
+/** 只抓离线人工分析需要的全文证据。 */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -264,10 +264,9 @@ async function fetchFullTextForInput(input, fetchFn = fetchArxivTextDetailed) {
 
 function isReusableStructuredSnapshotForCurrentParser(sourceEntry, structuredArtifacts) {
     if (sourceEntry?.source !== 'html') return true;
-    // v4 changes the table candidate inventory as well as cell extraction:
-    // earlier "complete" snapshots could omit standalone semantic span
-    // tables. Do not bless an older parser merely because its own, narrower
-    // inventory closed.
+    // v4 同时改了表格候选清单和单元格抽取：更早那批标着 "complete" 的快照可能
+    // 漏掉独立的语义 span 表。不能因为旧解析器自己那份更窄的清单已经收全，就
+    // 认定它可以复用。
     return structuredArtifacts?.parserVersion === ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION;
 }
 
@@ -304,9 +303,8 @@ async function runFullText(date = process.argv[2]) {
             if (isReusableFullTextCheckpoint(sourceEntry, input.filePath, input)) {
                 try {
                     const structuredArtifacts = loadStructuredArtifactSnapshot(input, sourceEntry);
-                    // A parser revision is an evidence-contract revision.  Do
-                    // not silently reuse a snapshot that predates a recovery
-                    // fix, even if its flattened text remains byte-identical.
+                    // 解析器版本变了，证据约定就变了。即使拍平后的文本逐字节
+                    // 相同，也不要悄悄复用修复之前留下的快照。
                     structuredSnapshotReusable = isReusableStructuredSnapshotForCurrentParser(
                         sourceEntry, structuredArtifacts
                     );

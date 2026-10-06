@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 /**
- * Offline selection companion for the manual_complete pipeline.
+ * manual_complete 流程里做离线筛选的配套命令。
  *
- * `--raw` performs only arXiv/HuggingFace retrieval and writes a complete,
- * provenance-bound candidate set.  It never calls an LLM.  `--select` then
- * accepts an operator-reviewed decision map and writes the normal four filter
- * artifacts, with an explicit manual_offline contract and every candidate
- * decided exactly once.
+ * `--raw` 只抓 arXiv 和 Hugging Face，把当天候选完整写下来，每个候选都记着
+ * 自己来自哪次请求；这一步不调用 LLM。`--select` 接收人工审过的决定表，按
+ * manual_offline 约定写出常规的四个筛选产物，要求每个候选恰好被决定一次。
  */
 
 const fs = require('fs');
@@ -285,11 +283,10 @@ async function fetchRaw(date) {
     }
     saveFetchCheckpoint(checkpoint, Config.FILES.fetchCheckpoint);
 
-    // Category orchestration is sequential, and the same scheduler also guards
-    // abstract fan-out at the real socket edge. Healthy traffic uses a small
-    // host cooldown; transient failures and 429 raise the next-host eligibility.
-    // Retry sleeps happen concurrently with that eligibility window, so there
-    // is no second fixed category penalty after a successful retry.
+    // 类别之间是串行抓取的，同一套调度器也在真实 socket 出口上限制摘要请求的
+    // 并发。流量正常时主机只冷却很短一段；遇到瞬时失败或 429，这台主机下一次
+    // 可用的时刻会往后推。重试等待与这个可用窗口同时推进，所以一次重试成功
+    // 之后，不会再额外叠加一次固定的类别惩罚。
     const arxivRequestScheduler = createHostTaskScheduler({
         cooldownAfter: outcome => getAdaptiveHostCooldownMs(outcome, {
             healthyDelayMs: Config.ARXIV_CONFIG.hostHealthyCooldownMs,

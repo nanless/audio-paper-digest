@@ -90,8 +90,8 @@ function fixture() {
     };
 }
 
-describe('Manual v5 fresh-authoring-v1 file contract', () => {
-    it('accepts exact raw/NFKC bytes and the optional official project evidence', () => {
+describe('Manual v5 fresh-authoring-v1 文件约定', () => {
+    it('接受原样字节和 NFKC 字节，以及可选的官方项目证据', () => {
         const f = fixture();
         const normalized = validateFreshAuthoringReceipt(f.receipt, {
             paperId: ID, articlePath: f.files.articlePath, readerArticle: f.article,
@@ -102,7 +102,7 @@ describe('Manual v5 fresh-authoring-v1 file contract', () => {
         assert.doesNotThrow(() => resolveArtifactAuthority(f.artifactManifestPath, f.artifactExpected));
     });
 
-    it('rejects old-prose declarations and article drift', () => {
+    it('拒绝旧文案声明和文章漂移', () => {
         const f = fixture();
         const options = {
             paperId: ID, articlePath: f.files.articlePath, readerArticle: f.article,
@@ -115,7 +115,7 @@ describe('Manual v5 fresh-authoring-v1 file contract', () => {
         assert.throws(() => validateFreshAuthoringReceipt(f.receipt, options), /raw\/NFKC SHA/);
     });
 
-    it('checks current bytes at the authority paths supplied by the caller', context => {
+    it('在调用方给出的权威路径上核对当前字节', context => {
         const f = fixture();
         context.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
         const contractPath = f.files.editorialContractPath;
@@ -157,7 +157,7 @@ describe('Manual v5 fresh-authoring-v1 file contract', () => {
         assert.doesNotThrow(() => validateFreshAuthoringReceipt(oldCopyReceipt, oldCopyOptions));
     });
 
-    it('rejects incomplete ArtifactIndex even when all declared hashes match', () => {
+    it('即使声明的哈希全部对得上，ArtifactIndex 不完整也要拒绝', () => {
         const f = fixture();
         const manifest = JSON.parse(fs.readFileSync(f.artifactManifestPath, 'utf8'));
         manifest.papers[ID].status = 'incomplete';

@@ -9,8 +9,8 @@ const {
     normalizeReaderProseFormatting
 } = require('../scripts/deep-analyzer.js');
 
-describe('Reader formula inventory feedback', () => {
-    it('makes an empty sealed formula inventory explicit', () => {
+describe('Reader 公式清单反馈', () => {
+    it('把空的已保存公式清单显式写出来', () => {
         const evidence = buildApiReaderArtifactEvidence({
             formulas: [], tables: [], figures: []
         });
@@ -18,7 +18,7 @@ describe('Reader formula inventory feedback', () => {
         assert.match(evidence, /FORMULA_ORDINALS_AVAILABLE: \[\]/);
     });
 
-    it('lists only complete formulas with usable TeX', () => {
+    it('只列出带可用 TeX 的完整公式', () => {
         const evidence = buildApiReaderArtifactEvidence({
             formulas: [
                 { ordinal: 1, recoveryStatus: 'complete', latex: 'a=b' },
@@ -33,7 +33,7 @@ describe('Reader formula inventory feedback', () => {
         assert.doesNotMatch(evidence, /FORMULA_3:/);
     });
 
-    it('turns native JSON parser errors and empty formula errors into targeted guidance', () => {
+    it('把原生 JSON 解析错误和空公式错误变成有针对性的提示', () => {
         assert.match(
             buildApiReaderValidationFeedback(new SyntaxError("Expected ',' or ']' after array element in JSON")),
             /JSON 转义/
@@ -44,7 +44,7 @@ describe('Reader formula inventory feedback', () => {
         );
     });
 
-    it('inserts a Han boundary space after a starred technical variant', () => {
+    it('带星号的技术变体后面补一个汉字边界空格', () => {
         assert.strictEqual(
             normalizeReaderProseFormatting('GatherMOS-ZS*中的对照更严格。'),
             'GatherMOS-ZS* 中的对照更严格。'

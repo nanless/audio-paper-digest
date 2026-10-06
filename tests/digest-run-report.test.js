@@ -103,8 +103,8 @@ function withDigestPaths(root, callback) {
     }
 }
 
-describe('digest run report', () => {
-    it('accepts only a user visual waiver bound to current publication and exact manifests', () => {
+describe('日更运行报告', () => {
+    it('只接受与当前发布和精确清单绑定的用户视觉豁免', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'visual-waiver-'));
         const visualPath = path.join(dir, 'visual.json');
         const coverPath = path.join(dir, 'cover.json');

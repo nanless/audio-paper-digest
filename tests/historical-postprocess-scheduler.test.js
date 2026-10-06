@@ -297,8 +297,8 @@ test('blocked deterministic tag assignment is preserved as an audit artifact but
         date: DATE, limit: null, concurrency: 1 }, f.deps);
     assert.equal(result.processed[0].status, 'failed'); assert.equal(f.assignmentWrites(), 1);
     assert.equal(f.stageCalls.length, 0); assert.match(result.processed[0].lastError, /标签分配受阻/);
-    // The pending classification is an explicit, visible review queue entry:
-    // its reasons travel with the checkpoint item and with the run report.
+    // 待定分类会明确出现在审查队列里：
+    // 它的原因同时跟着检查点条目和运行报告走。
     assert.equal(result.tagReview, 1);
     assert.deepEqual(result.tagReviewQueue, [{ paperId: f.paperIds[0],
         analysisRunId: f.runIds[0], status: 'needs_tag_review',

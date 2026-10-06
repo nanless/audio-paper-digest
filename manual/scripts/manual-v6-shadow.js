@@ -2,12 +2,11 @@
 'use strict';
 
 /**
- * Manual v6 shadow audit.
+ * Manual v6 影子审查。
  *
- * This command never fetches, assembles canonical data, renders a blog page,
- * or publishes. It reads already-persisted batch artifacts and may write only
- * beneath Config.FILES.manualV6ShadowDir after an explicit --output or
- * --init-shadow request.
+ * 这条命令不抓取、不装配正式数据、不渲染博客页面，也不发布。它只读已经落盘的
+ * 批次产物，并且只有在显式带上 --output 或 --init-shadow 时，才会在
+ * Config.FILES.manualV6ShadowDir 之下写文件。
  */
 
 const fs = require('fs');

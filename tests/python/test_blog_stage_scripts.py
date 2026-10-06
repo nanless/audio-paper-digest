@@ -335,7 +335,7 @@ class BlogStageEntryTest(unittest.TestCase):
         generate = mock.Mock()
         module = SimpleNamespace(main=generate)
         with mock.patch.object(generate_blog, 'load_publish_to_blog', return_value=module):
-            # The executable guard is not active on import; call the same entry target.
+            # 直接 import 时那段可执行守卫不会生效，所以要调用同一个入口目标。
             generate_blog.load_publish_to_blog().main()
         generate.assert_called_once_with()
 
@@ -396,8 +396,8 @@ body
             git_push = mock.Mock(side_effect=AssertionError('review must not push'))
             receipt_path = Path(tmp) / 'receipt.json'
             failure_path = Path(tmp) / 'failure.json'
-            # This test isolates stage dispatch. Use an actual supported legacy
-            # manifest rather than a nonexistent path that fails before review.
+            # 这条测试只想验证阶段分发。要用一份真实受支持的旧版清单，
+            # 而不是一个根本不存在、还没进审查就失败的路径。
             manifest_path = Path(tmp) / 'manifest.json'
             manifest_path.write_text(json.dumps({
                 'schemaVersion': 1,

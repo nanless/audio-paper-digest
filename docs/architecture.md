@@ -103,7 +103,7 @@ Reader 的各协议分别检查不同对象：
 | LLM account pool lock | 跨日期账号选择与冷却状态 | 选择账号或确认额度时短暂持锁，HTTP 请求始终在锁外 |
 | blog repository/date lock | 页面生成、审查、Git index、commit 与 push | 检查持有者与子进程，不得直接删除活锁 |
 
-锁等待时检查 owner PID、hostname、heartbeat 和父子进程。只有实现确认租约与持有者符合失效条件时才可回收，不能只因命令慢就删锁。
+等待锁时，程序会核对锁持有者的 owner PID、hostname、heartbeat 以及父子进程关系。只有实现确认租约与持有者符合失效条件时才可回收，不能只因命令慢就删锁。
 
 ## 设计边界
 

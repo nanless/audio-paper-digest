@@ -125,7 +125,7 @@ function onlyJson(directory) {
     assert.equal(names.length, 1); return path.join(directory, names[0]);
 }
 
-test('production runner uses real common transport and preserves bound intent, raw response, and usage', async t => {
+test('生产 runner 用真实的公共传输，并保留绑定的意图、原始回复和用量', async t => {
     const service = await serverFixture(t, [{ body: chatResponse('{"decision":"included","reason":"Primary contribution is speech enhancement."}') }]);
     const f = fixture(t, service.endpoint);
     const result = await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
@@ -181,7 +181,7 @@ test('production runner uses real common transport and preserves bound intent, r
         /transport injection is forbidden/);
 });
 
-test('a bounded production batch fully replays filter state once and preserves per-paper durable CAS', async t => {
+test('一个有上限的生产批次完整复核一次筛选状态，并保留每篇已落盘的 CAS', async t => {
     const service = await serverFixture(t, [
         { body: chatResponse('{"decision":"included","reason":"Speech enhancement is primary."}') },
         { body: chatResponse('{"decision":"excluded","reason":"Audio is incidental."}') },
@@ -220,7 +220,7 @@ test('a bounded production batch fully replays filter state once and preserves p
     assert.deepEqual(noWork.processed, [], 'a complete filter retains the previous lazy credential boundary');
 });
 
-test('OpenAI Responses durable request is also exactly one daily user prompt', async t => {
+test('OpenAI Responses 的落盘请求同时就是一条日更用户提示', async t => {
     const service = await serverFixture(t, [{ body: responsesResponse('理由：语音增强是核心任务。\n结论：相关') }]);
     const f = fixture(t, `${service.endpoint}/responses`, null, 'fixture-filter-model');
     await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
@@ -232,7 +232,7 @@ test('OpenAI Responses durable request is also exactly one daily user prompt', a
     assert.doesNotMatch(body.input[0].content[0].text, /conference-filter-llm-request/);
 });
 
-test('OpenAI Responses durable retries use the daily 4096-token floor and daily attempt limit', async t => {
+test('OpenAI Responses 的落盘重试沿用日更的 4096 token 下限和日更尝试上限', async t => {
     const service = await serverFixture(t, [
         { body: truncatedResponsesResponse() },
         { body: truncatedResponsesResponse() },
@@ -255,7 +255,7 @@ test('OpenAI Responses durable retries use the daily 4096-token floor and daily 
     assert.equal(state.attempts.filter(attempt => attempt.paperId === pid('100')).length, 4);
 });
 
-test('partial provider usage is durable failed evidence rather than a post-billing throw', async t => {
+test('来源只给出部分用量时，落盘成失败证据，而不是计费之后抛异常', async t => {
     const service = await serverFixture(t, [{ body: chatResponse('{"decision":"included","reason":"Audio."}',
         { prompt_tokens: 5, completion_tokens: 2 }) }]);
     const f = fixture(t, service.endpoint);
@@ -267,7 +267,7 @@ test('partial provider usage is durable failed evidence rather than a post-billi
         { requests: 1, inputTokens: 5, outputTokens: 2, totalTokens: null });
 });
 
-test('an explicit retry can finalize after earlier transport usage became unavailable', async t => {
+test('此前的传输用量拿不到时，显式重试仍然可以收尾', async t => {
     const service = await serverFixture(t, [{ raw: 'not-json' },
         { body: chatResponse('{"decision":"included","reason":"Audio is primary."}') }]);
     const f = fixture(t, service.endpoint, [{ arnumber: '100', title: 'Speech enhancement' }]);
@@ -283,7 +283,7 @@ test('an explicit retry can finalize after earlier transport usage became unavai
         { requests: 2, inputTokens: null, outputTokens: null, totalTokens: null });
 });
 
-test('pending papers precede failed retries and failed work requires explicit bounded retry', async t => {
+test('待处理论文排在失败重试之前，失败的工作必须显式且有限地重试', async t => {
     const service = await serverFixture(t, [
         { body: chatResponse('not-json') },
         { body: chatResponse('{"decision":"excluded","reason":"Not an audio contribution."}') }
@@ -302,8 +302,8 @@ test('pending papers precede failed retries and failed work requires explicit bo
     assert.equal(filter.selectNextCandidate(state, { retryFailed: true, retryBackoffMs: Number.MAX_SAFE_INTEGER }), null);
 });
 
-test('crashes after request do not produce a second billed call on recovery', async t => {
-    await t.test('missing transport receipt becomes typed unavailable evidence', async t => {
+test('请求之后崩溃，恢复时不会产生第二次计费调用', async t => {
+    await t.test('传输凭证缺失会变成带类型的不可得证据', async t => {
         const service = await serverFixture(t); const f = fixture(t, service.endpoint);
         const original = fs.openSync; let injected = false;
         fs.openSync = function (filename, ...rest) {
@@ -317,7 +317,7 @@ test('crashes after request do not produce a second billed call on recovery', as
         assert.equal(service.calls.length, 1); assert.equal(state.decisions[pid('100')].status, 'failed');
         assert.match(state.decisions[pid('100')].reason, /^LLM_TRANSPORT_UNAVAILABLE:INTERRUPTED_/);
     });
-    await t.test('preserved response is reused when artifact write failed', async t => {
+    await t.test('产物写入失败时，复用已保留的回复', async t => {
         const service = await serverFixture(t); const f = fixture(t, service.endpoint);
         const original = fs.openSync; let injected = false;
         fs.openSync = function (filename, ...rest) {
@@ -330,7 +330,7 @@ test('crashes after request do not produce a second billed call on recovery', as
         assert.equal(service.calls.length, 1);
         assert.equal(filter.readFilter({ filterRoot: f.dirs.filters, filterId }).decisions[pid('100')].status, 'included');
     });
-    await t.test('preserved artifact is applied when state CAS write failed', async t => {
+    await t.test('状态 CAS 写入失败时，直接应用已保留的产物', async t => {
         const service = await serverFixture(t); const f = fixture(t, service.endpoint);
         const original = fs.renameSync; let injected = false;
         fs.renameSync = function (source, target) {
@@ -345,7 +345,7 @@ test('crashes after request do not produce a second billed call on recovery', as
     });
 });
 
-test('live concurrent runner cannot race a paid request', async t => {
+test('并发的活跃 runner 不能抢跑一次已付费请求', async t => {
     const service = await serverFixture(t, [{ delayMs: 100,
         body: chatResponse('{"decision":"included","reason":"Audio is primary."}') }]);
     const f = fixture(t, service.endpoint);
@@ -355,7 +355,7 @@ test('live concurrent runner cannot race a paid request', async t => {
     await first; assert.equal(service.calls.length, 1);
 });
 
-test('endpoint and request drift fail before a second transport', async t => {
+test('端点和请求漂移会在第二次传输之前就失败', async t => {
     const service = await serverFixture(t); const other = await serverFixture(t); const f = fixture(t, service.endpoint);
     await assert.rejects(() => runner.main(args(['--limit', '1']), { files: f.files,
         env: { ...f.env, PAPER_ANALYZER_ENDPOINT: other.endpoint } }), /endpoint differs/);
@@ -384,7 +384,7 @@ test('endpoint and request drift fail before a second transport', async t => {
     assert.equal(service.calls.length, 1);
 });
 
-test('lock reclaim is fail-closed for live owners and safe for a stale dead owner', async t => {
+test('锁回收对存活持有者一律拒绝，对已死且过期的持有者则安全回收', async t => {
     const service = await serverFixture(t); const f = fixture(t, service.endpoint);
     const directory = path.join(f.dirs.filters, filterId); const lock = path.join(directory, 'operation.lock');
     function writeLock(processId) {
@@ -407,14 +407,14 @@ test('lock reclaim is fail-closed for live owners and safe for a stale dead owne
     assert.equal(service.calls.length, 1);
 });
 
-test('oversize request is rejected before transport and malformed provider bytes are not copied into reason', async t => {
-    await t.test('oversize metadata', async t => {
+test('过大的请求在传输之前就被拒绝，来源返回的坏字节不会抄进理由', async t => {
+    await t.test('过大的元数据', async t => {
         const service = await serverFixture(t); const huge = 'x'.repeat(filter.MAX_LLM_REQUEST_BYTES + 1024);
         const f = fixture(t, service.endpoint, [{ arnumber: '100', title: 'Speech', supplemental: huge }]);
         await assert.rejects(() => runner.main(args(['--limit', '1']), { files: f.files, env: f.env }), /durable evidence limit/);
         assert.equal(service.calls.length, 0);
     });
-    await t.test('malformed raw response', async t => {
+    await t.test('格式错误的原始回复', async t => {
         const service = await serverFixture(t, [{ raw: 'provider-secret-fragment:not-json' }]); const f = fixture(t, service.endpoint);
         await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
         const decision = filter.readFilter({ filterRoot: f.dirs.filters, filterId }).decisions[pid('100')];
@@ -422,7 +422,7 @@ test('oversize request is rejected before transport and malformed provider bytes
     });
 });
 
-test('runner CLI parser rejects unsafe or ambiguous retry controls', () => {
+test('runner 命令行解析器拒绝不安全或有歧义的重试控制项', () => {
     assert.throws(() => runner.parseArgs(['--apply', '--catalog', '../x.json']), /safe|Missing|Use/);
     assert.throws(() => runner.parseArgs(['--dry-run', '--catalog', 'x.json']), /must be --apply/);
     assert.throws(() => runner.parseArgs([...args(), '--retry-failed', '--retry-failed']), /Use/);

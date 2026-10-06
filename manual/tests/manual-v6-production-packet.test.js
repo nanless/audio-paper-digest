@@ -44,7 +44,7 @@ function populateAuthorMinimums(draft) {
     return draft;
 }
 
-describe('Manual v6 production packet materializer', () => {
+describe('Manual v6 生产包生成器', () => {
     it('新 packet 内联角色输出 schema 与稳定签名算法，旧 packet 仍可兼容校验', () => {
         const technical = taskOutputContract('technical_scoring');
         assert.equal(technical.fixedOutputPath, 'reviews/technical-scoring.json');

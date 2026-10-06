@@ -26,7 +26,7 @@ function fixture() {
     return { root, current, archive, shadow, raw, checkpoint };
 }
 
-describe('manual raw fetch observed metrics', () => {
+describe('Manual 原始抓取实测指标', () => {
     it('绑定输出 SHA 并汇总类别/摘要缓存、重试与 host wait', () => {
         const item = fixture();
         const metric = buildRawFetchMetric({

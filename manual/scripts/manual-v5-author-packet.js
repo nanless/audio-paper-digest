@@ -2,13 +2,12 @@
 'use strict';
 
 /**
- * Materialize one auditable, cold-start author packet for default Manual v5.
+ * 为默认 Manual v5 生成一份可审计的冷启动写作材料包。
  *
- * The packet is a deny-by-default read allowlist.  It projects exactly one
- * filtered-paper metadata object and binds the current full text, complete
- * ArtifactIndex, repository prompt/editorial contract/blank schema, and an
- * optional official-project evidence file.  Historical prose paths are only
- * declared as forbidden policy strings: this module never opens them.
+ * 这份材料包是一张默认拒绝的读取白名单。它只取出一篇入选论文的元数据，
+ * 并绑定当前全文、完整的 ArtifactIndex、仓库里的提示词、编辑规范、空白检查
+ * 模板，以及可选的官方项目证据文件。历史正文的路径只作为禁止项写在策略里，
+ * 这个模块从来不会去打开它们。
  */
 
 const fs = require('fs');
@@ -121,9 +120,9 @@ function assertExistingDirectoryNoSymlink(directoryPath, label) {
     if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) {
         throw new Error(`${label} 必须是存在的真实目录且不得为 symlink: ${declared}`);
     }
-    // macOS exposes /var as /private/var.  Canonicalize that system alias and
-    // enforce all child containment against the canonical root instead of
-    // misclassifying the OS alias as an attacker-controlled parent symlink.
+    // macOS 把 /var 暴露成 /private/var。这里先把这类系统别名解析掉，之后所有
+    // 子路径包含检查都拿解析后的根目录来比，免得把系统别名误判成攻击者控制的
+    // 上层 symlink。
     return fs.realpathSync(declared);
 }
 

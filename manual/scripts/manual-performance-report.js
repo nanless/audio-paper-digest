@@ -2,13 +2,12 @@
 'use strict';
 
 /**
- * Read-only aggregation of observed Manual performance sidecars.
+ * 只读汇总 Manual 运行中实际记录下来的性能数据文件。
  *
- * This command never starts workflow stages and never infers durations from
- * timestamps. Every consumed sidecar and every file identity it binds is
- * reopened before a percentile is calculated. Three distinct batch dates are
- * required for every reported metric; otherwise the state is
- * `insufficient_data`, never zero and never a theoretical estimate.
+ * 这条命令不会启动任何流程阶段，也不会拿时间戳去推算耗时。算分位数之前，每个
+ * 被采用的记录文件、以及它绑定的每个文件标识，都会重新打开核对一遍。任何一项
+ * 指标都要求至少三个不同批次的日期，否则状态记为 `insufficient_data`，既不会
+ * 填 0，也不会给理论估算值。
  */
 const fs = require('fs');
 const path = require('path');
@@ -200,9 +199,9 @@ function recordedAt(value, label) {
 
 function loadVerifiedSidecar(filePath, options = {}) {
     const projectRoot = path.resolve(options.projectRoot || Config.PROJECT_ROOT);
-    // The default report follows the production-v6 metrics root. Historical
-    // callers may still inject shadowRoot explicitly when auditing an isolated
-    // shadow run; legacy v5 queue sidecars remain a separate compatibility root.
+    // 默认报告读 production-v6 的指标目录。要单独审查一次隔离的 shadow 运行时，
+    // 历史调用方仍然可以显式传入 shadowRoot；v5 工作队列那批记录文件另有一个
+    // 兼容目录。
     const shadowRoot = path.resolve(options.shadowRoot || Config.FILES.manualV6Dir);
     const v5Root = path.resolve(options.v5Root || Config.FILES.manualV5ObservabilityDir);
     const resolved = path.resolve(filePath);

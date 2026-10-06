@@ -36,8 +36,8 @@ const triageCoreSummary =
     + '该结论适用边界为依赖冻结 AcuLa 编码器与外部报告库质量，描述子缺失或检索失配时增益衰减，尚未验证跨设备与前瞻性临床外推。'
     + '原文未披露端到端训练成本，推理成本随阈值可调，Tier-H 单次调用以 Gemini 3 Pro 为默认后端且检索深度超过 3 篇后收益趋于饱和。';
 
-describe('production analysis contract regressions', () => {
-    it('does not confuse symbolic score prose and layout numbers with measured results', () => {
+describe('生产分析约定的回归', () => {
+    it('不会把符号化乐谱文案和版面数字误当成实测结果', () => {
         const sourceText = [
             'A public web demo11',
             ' 1',
@@ -58,7 +58,7 @@ describe('production analysis contract regressions', () => {
         ), true);
     });
 
-    it('accepts source metrics used by the current historical batch', () => {
+    it('接受当前历史批次实际使用的来源指标', () => {
         const cases = [
             ['SAR', '63.0%', '35.5%'],
             ['BMSR', '0.95', '0.89'],
@@ -87,19 +87,19 @@ describe('production analysis contract regressions', () => {
         }
     });
 
-    it('accepts codec compression rate as a measured result metric', () => {
+    it('把编解码压缩率接受为实测结果指标', () => {
         const result = '在 28 首立体声 48 kHz 16 位自建集的统一评测设置下，OLAC 的压缩率为 56.8%，低于 FLAC -8 的压缩率 57.6%，比较对象、数值与方向均可核对。';
         const sourceText = 'Evaluation on 28 stereo tracks reports a compression ratio of 56.8% for OLAC versus 57.6% for FLAC -8.';
         assert.strictEqual(getCoreSummaryDetailIssue(withResultSentence(result), { sourceText }), null);
     });
 
-    it('keeps a complete real-time-factor comparison available for core-summary repair', () => {
+    it('为核心摘要修复保留一份完整的实时率对比', () => {
         const result = '在 16 个英语与多语言测试集的统一评测设置下，本文系统的实时率为 1454 倍实时，高于同类自回归模型的实时率 48.3 倍实时，比较对象、数值与方向均可核对。';
         const sourceText = 'Evaluation on 16 English and multilingual test sets reports a real-time factor of 1454 times real time versus 48.3 times real time for an autoregressive baseline.';
         assert.strictEqual(getCoreSummaryDetailIssue(withResultSentence(result), { sourceText }), null);
     });
 
-    it('keeps metric token boundaries while accepting historical Acc variants', () => {
+    it('接受历史上的 Acc 变体，同时保持指标词边界', () => {
         const audioMae = withResultSentence(
             '在公开基准评测设置下，AudioMAE 从基线的 0.42 降至 0.31，比较对象、数值与方向都可由原文核对。'
         );
@@ -126,7 +126,7 @@ describe('production analysis contract regressions', () => {
         }), null);
     });
 
-    it('2604.16659 accepts exact JSR while preserving token boundaries', () => {
+    it('2604.16659：接受精确的 JSR，同时保持词边界', () => {
         const result = '在 SD-QA 与 AdvBench 基准评测设置下，Kimi-Audio 的 JSR 从预训练基线的 4.62% 升至语义近端 25% 微调后的 87.12%，比较对象、数值与方向均可核对，并用于判断主要方法是否稳定成立。';
         const sourceText = 'Experiment result: Jailbreak Success Rate (JSR) on AdvBench increases from 4.62% to 87.12% after semantic-proximal fine-tuning on 25% of SD-QA.';
         assert.strictEqual(getCoreSummaryDetailIssue(withResultSentence(result), { sourceText }), null);
@@ -137,7 +137,7 @@ describe('production analysis contract regressions', () => {
         }
     });
 
-    it('2604.17248 accepts exact nTVD while preserving token boundaries', () => {
+    it('2604.17248：接受精确的 nTVD，同时保持词边界', () => {
         const result = '在 12 个 LALM 的 CREMA-D 性别维度 Advisory 任务评测设置下，DeSTA 的 nTVD 达 45.87，高于同任务均值 14.02，比较对象、数值与方向均可核对，并用于判断主要方法是否稳定成立。';
         const sourceText = 'Evaluation result on CREMA-D reports normalized Total Variation Distance (nTVD) 45.87 for DeSTA Advisory versus a task mean of 14.02.';
         assert.strictEqual(getCoreSummaryDetailIssue(withResultSentence(result), { sourceText }), null);
@@ -148,7 +148,7 @@ describe('production analysis contract regressions', () => {
         }
     });
 
-    it('2604.17358 accepts TPI-Test and exact RSF while preserving token boundaries', () => {
+    it('2604.17358：接受 TPI-Test 和精确的 RSF，同时保持词边界', () => {
         const result = '在 TPI-Test 上，TPI-Full 的 RSF 从 Qwen2.5-Omni-7B 基线的 0.24 提升至 0.83，比较对象、数值与方向均可核对，并直接验证主要机制在同一任务设置下稳定成立。';
         const sourceText = 'Evaluation result on TPI-Test reports that RSF improves from 0.24 to 0.83.';
         assert.strictEqual(getCoreSummaryDetailIssue(withResultSentence(result), { sourceText }), null);
@@ -159,7 +159,7 @@ describe('production analysis contract regressions', () => {
         }
     });
 
-    it('2604.16700 removes only duplicated line-footnote numerals from source evidence', () => {
+    it('2604.16700：只从来源证据里去掉重复的行内脚注数字', () => {
         const unavailable = withResultSentence(
             '原文未提供可核对的关键定量结果，因此摘要不猜测实验数字，所有边界均以原文披露为准。'
         );
@@ -181,7 +181,7 @@ describe('production analysis contract regressions', () => {
         }), /关键定量结果/);
     });
 
-    it('2604.12647 accepts AUROC only with distinct action-bearing Tier stages', () => {
+    it('2604.12647：只有各 Tier 阶段动作不同时，才接受 AUROC', () => {
         const sourceText = 'Experiment results on nine respiratory classification tasks report mean AUROC 0.744 versus the CLAP baseline 0.573.';
         assert.strictEqual(getCoreSummaryDetailIssue(withCoreSummary(triageCoreSummary), {
             sourceText
@@ -203,7 +203,7 @@ describe('production analysis contract regressions', () => {
             /指标名称/);
     });
 
-    it('joins PDF soft lines before deciding that source quantitative evidence is absent', () => {
+    it('先合并 PDF 的软换行，再判断来源是否缺少定量证据', () => {
         const unavailable = withResultSentence(
             '原文未提供可核对的关键定量结果，因此摘要不猜测实验数字。'
         );
@@ -213,7 +213,7 @@ describe('production analysis contract regressions', () => {
         assert.match(issue, /已有证据包含关键定量结果/);
     });
 
-    it('recognizes a measured-loss comparison whose experiment context is in the preceding sentences', () => {
+    it('能认出实验背景写在前几句里的实测损失对比', () => {
         const result = '在 GiantMIDI-Piano 测试集的消融设置下，所提方法的 MSE 从基线的 0.0351 降至 0.0155，比较对象、指标、数值与方向均可由原文核对。';
         const sourceText = 'An ablation experiment removed the fractional Fourier transform. '
             + 'We conduct a comparative evaluation and apply the resulting loss function values to the test set. '
@@ -238,7 +238,7 @@ describe('production analysis contract regressions', () => {
         }
     });
 
-    it('recognizes explicit negative-result vocabulary without accepting an unrelated result', () => {
+    it('能认出明确的负面结果措辞，但不会接受不相干的结果', () => {
         const analysis = validAnalysisText().replace(
             /## 实验结果\n[\s\S]*?(?=\n## 细节详述)/,
             '## 实验结果\n对照比较显示该设置是负结果，性能从 89.10% 回落至 85.50%，降幅可直接核对。\n'
@@ -364,12 +364,12 @@ it('旧词表仅迁移版本名称时，正式阶段仍须匹配原快照和提�
     assert.match(validateSeal({ ...options, projectionSha256: 'e'.repeat(64) }), /提示 SHA/);
 });
 
-describe('taxonomySeal registry upgrade gate', () => {
-    it('keeps a current seal valid without any upgrade annotation', () => {
+describe('taxonomySeal 词表升级检查', () => {
+    it('没有任何升级标注时，当前保存记录仍然有效', () => {
         assert.strictEqual(validateSeal({}), null);
     });
 
-    it('admits an additive upgrade when registryUpgradeFrom is recorded', () => {
+    it('记录 registryUpgradeFrom 时，允许增量升级', () => {
         assert.strictEqual(validateSeal({
             registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64),
@@ -377,7 +377,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         }), null);
     });
 
-    it('rejects an old seal that carries no registryUpgradeFrom', () => {
+    it('拒绝不带 registryUpgradeFrom 的旧保存记录', () => {
         // 换表后旧封口对当前为 destructive，缺注记时先走破坏性拒绝分支——
         // 文案不再出现字面 registryUpgradeFrom，但仍明确指向升级注记机制（意图不变：必拒）。
         assert.match(validateSeal({
@@ -386,7 +386,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         }), /registryUpgradeFrom|不能直接沿用|destructiveAcknowledgement/);
     });
 
-    it('rejects a destructive upgrade even when the annotation claims additive', () => {
+    it('即使标注声称是增量，破坏性升级也要拒绝', () => {
         const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
         const from = registryChange.resolveRegistrySnapshot(DESTRUCTIVE_OLD_SHA);
         const lying = { ...annotationFor(ADDITIVE_OLD_SHA), fromRegistrySha256: from.registrySha256 };
@@ -399,7 +399,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         assert.match(issue, /破坏性变更/);
     });
 
-    it('admits a destructive upgrade only with an acknowledgement bound to the recomputed detail', () => {
+    it('只有确认信息与重算后的明细绑定，才允许破坏性升级', () => {
         const annotation = acknowledgedAnnotationFor(DESTRUCTIVE_OLD_SHA);
         assert.equal(annotation.changeLevel, 'destructive');
         assert.ok(annotation.destructiveAcknowledgement);
@@ -432,7 +432,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         }), /原标签阶段记录引用的以下概念在当前词表中缺失或已停用/);
     });
 
-    it('never admits a destructive change outside the acknowledgement whitelist', () => {
+    it('白名单之外的破坏性改动一律不放行', () => {
         const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
         const synthetic = structuredClone(current);
         synthetic.concepts.push({
@@ -459,7 +459,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         assert.match(issue, /concept-removed/);
     });
 
-    it('fails closed when the pre-upgrade registry snapshot cannot be resolved', () => {
+    it('升级前的词表快照取不到时直接失败', () => {
         assert.match(validateSeal({
             registrySha256: '0'.repeat(64),
             projectionSha256: 'e'.repeat(64),
@@ -467,7 +467,7 @@ describe('taxonomySeal registry upgrade gate', () => {
         }), /快照/);
     });
 
-    it('rejects conceptIds that are missing or inactive in the current registry', () => {
+    it('拒绝在当前词表里缺失或已停用的 conceptIds', () => {
         const fixture = sealedPaper({ registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64), annotation: annotationFor(ADDITIVE_OLD_SHA) });
         fixture.stage.conceptIds = [...fixture.stage.conceptIds, 'task.ghost-concept'];
@@ -476,15 +476,15 @@ describe('taxonomySeal registry upgrade gate', () => {
         }), /原标签阶段记录引用的以下概念在当前词表中缺失或已停用/);
     });
 
-    it('rejects projection drift while the registry SHA already matches', () => {
+    it('词表 SHA 已经对上时，仍拒绝汇总内容漂移', () => {
         assert.match(validateSeal({ projectionSha256: 'e'.repeat(64) }), /词表版本、标签提示文本或标签选择规则与当前配置不一致/);
     });
 
-    it('rejects a registry version bump outright', () => {
+    it('词表版本号直接加一，一律拒绝', () => {
         assert.match(validateSeal({ registryVersion: 'paper-taxonomy-v2' }), /词表版本、标签提示文本或标签选择规则与当前配置不一致/);
     });
 
-    it('rejects an annotation that does not target the current registry SHA', () => {
+    it('拒绝没有指向当前词表 SHA 的标注', () => {
         assert.match(validateSeal({
             registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64),

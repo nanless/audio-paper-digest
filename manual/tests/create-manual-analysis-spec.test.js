@@ -504,15 +504,15 @@ function attachFreshAuthoring(f, record) {
     return record;
 }
 
-describe('strict reusable manual v4 spec assembler', () => {
-    it('binds semicolon-joined adjacent author lines without fuzzy matching', () => {
+describe('严格可复用的 Manual v4 spec 组装器', () => {
+    it('用分号连接的相邻作者行按原样绑定，不做模糊匹配', () => {
         const source = 'Weilong Huang, Shrishti Saha Shetu, Emanuël A. P. Habets\nInternational Audio Laboratories Erlangen∗';
         assert.equal(sourceContainsBoundQuote(source,
             'Weilong Huang, Shrishti Saha Shetu, Emanuël A. P. Habets; International Audio Laboratories Erlangen'), true);
         assert.equal(sourceContainsBoundQuote(source,
             'Weilong Huang, Missing Author; International Audio Laboratories Erlangen'), false);
     });
-    it('does not strip the integer part of a decimal quantity at an innovation paragraph start', () => {
+    it('创新段开头的十进制数值不会被截掉整数部分', () => {
         const record = validRecord();
         record.editorial.innovations = `1.3B URL 本身不等于训练集。${'该段继续说明总池、子集和边界之间的区别。'.repeat(6)}\n\n`
             + innovationProse();
@@ -525,7 +525,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.doesNotMatch(analysis, /1\. 3B URL 本身不等于训练集/);
     });
 
-    it('preserves Manual v5 subsection headings in the innovation container', () => {
+    it('创新容器里保留 Manual v5 的子节标题', () => {
         const record = validRecord();
         record.editorial.innovations = `### 先解释真正的创新\n\n${innovationProse()}`;
         const analysis = buildAnalysis({
@@ -537,7 +537,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.doesNotMatch(analysis, /1\. ### 先解释真正的创新/);
     });
 
-    it('splits an overlong editorial method at sentence boundaries without duplicating text', () => {
+    it('过长的编辑方法在句子边界处拆分，不重复文本', () => {
         const source = Array.from({ length: 4 }, (_, paragraphIndex) => (
             Array.from({ length: 6 }, (_, sentenceIndex) => (
                 `第${paragraphIndex + 1}段第${sentenceIndex + 1}句描述本篇论文的输入、组件、训练、输出和实验边界，并保留足够长度用于安全断段。`
@@ -548,7 +548,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.equal(balanced.replace(/\s+/g, ''), source.replace(/\s+/g, ''));
     });
 
-    it('parses repeated --records and rejects unknown flags', () => {
+    it('解析重复出现的 --records，并拒绝未知参数', () => {
         assert.deepEqual(parseArgs([
             '--date', DATE,
             '--records', 'part-a.json',
@@ -558,7 +558,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.throws(() => parseArgs(['--date', DATE]), /至少指定一个/);
     });
 
-    it('validates records fields, eight dimensions, and actual audit passes', () => {
+    it('校验 records 字段、八个维度和真实审查通过记录', () => {
         const record = validateRecord(validRecord(), ID);
         assert.equal(record.dims.length, 8);
         assert.equal(record.stageReviewAttemptsByStage.primaryAnalysis, 3);
@@ -631,7 +631,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.doesNotThrow(() => validateRecord(reversedBinding, ID));
     });
 
-    it('legacy reviewed claims cover every required stage and reject missing evidence shapes', () => {
+    it('旧版已审结论覆盖每个必需阶段，并拒绝缺失的证据形态', () => {
         const chunks = sourceText().split('\n'); const record = validRecord();
         const reviewed = reviewedClaimsByStage(record, chunks, []);
         const required = require('../../scripts/analysis-contract.js').REQUIRED_RECOVERY_STAGES;
@@ -643,7 +643,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.throws(() => reviewedClaimsByStage(record, chunks, {}), /imageInfos 必须是数组/);
     });
 
-    it('rejects duplicate papers across shards and cross-date envelopes', () => {
+    it('拒绝跨分片和跨日期外层对象里的重复论文', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-record-shards-'));
         const first = path.join(root, 'first.json');
         const second = path.join(root, 'second.json');
@@ -660,7 +660,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         ), /date 与 --date 不一致/);
     });
 
-    it('rejects a normalized long editorial sentence reused by three papers', () => {
+    it('拒绝被三篇论文复用的同一条归一化长编辑句', () => {
         const shared = '该段统一声称模型依次完成输入编码、跨层交互、目标解码和受控评测，却没有写出任何属于单篇论文的组件名称、数据条件或测量结果';
         const papers = {};
         ['2608.29991', '2608.29992', '2608.29993'].forEach((id, index) => {
@@ -677,7 +677,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         );
     });
 
-    it('rejects one complete scoring reason reused by three papers', () => {
+    it('拒绝被三篇论文复用的同一条完整评分理由', () => {
         const shared = '该维评分完全沿用固定模板，只罗列方法、实验、资源和部署四类名词，没有引用本篇论文的具体证据。';
         const papers = {};
         ['2608.29981', '2608.29982', '2608.29983'].forEach((id, index) => {
@@ -693,7 +693,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         );
     });
 
-    it('allows two-paper reuse, short terms, and similar but paper-specific facts', () => {
+    it('允许两篇复用、短术语，以及相似但各篇专属的事实', () => {
         const papers = {};
         ['2608.29971', '2608.29972', '2608.29973'].forEach((id, index) => {
             const record = distinctRecord(id, `事实论文${index + 1}`);
@@ -708,7 +708,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.doesNotThrow(() => assertNoCrossPaperTemplateReuse(papers));
     });
 
-    it('ignores shared Markdown table delimiter rows as structural syntax', () => {
+    it('共用的 Markdown 表格分隔行按结构语法忽略', () => {
         const papers = {};
         ['2608.29961', '2608.29962', '2608.29963'].forEach((id, index) => {
             const record = distinctRecord(id, `表格论文${index + 1}`);
@@ -723,7 +723,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.doesNotThrow(() => assertNoCrossPaperTemplateReuse(papers));
     });
 
-    it('binds the exact fingerprinted v2 full-text path and manifest images', () => {
+    it('绑定带指纹的 v2 全文路径和清单里的图片', () => {
         const f = fixture();
         const spec = buildSpec({
             date: DATE,
@@ -870,7 +870,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         }), /authorInfo\.sourceQuote 不存在/);
     });
 
-    it('records v3 assembles Manual v5 with isolated paper/reviewer provenance', () => {
+    it('records v3 组装 Manual v5 时，论文与审查者的来源各自独立', () => {
         const f = fixture();
         const currentPath = path.join(f.root, 'manual-records-v3.json');
         const current = currentEnvelope({ [ID]: attachFreshAuthoring(f, currentV3Record()) });
@@ -912,7 +912,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         }), /fresh-authoring-v1/);
     });
 
-    it('allows the narrow Manual v5 all-reject image exception and rejects incomplete or generic variants', () => {
+    it('只允许 Manual v5 那个很窄的全拒图片例外，其余不完整或笼统的变体一律拒绝', () => {
         const f = fixture();
         const makeRecord = () => {
             const record = attachFreshAuthoring(f, currentV3Record());
@@ -968,7 +968,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         assert.throws(() => validateRecord(nonEmptyPlan, ID, 'all-reject-nonempty-plan', { recordsVersion: 3 }), /等长并逐项绑定/);
     });
 
-    it('ingestion replays the official assembler and rejects hand-written source/image bypasses', () => {
+    it('入库时重跑官方组装器，拒绝手写来源或绕过图片流程', () => {
         const f = fixture();
         const filteredPath = path.join(f.root, 'filtered-papers.json');
         writeJson(filteredPath, f.filtered);
@@ -1026,7 +1026,7 @@ describe('strict reusable manual v4 spec assembler', () => {
         );
     });
 
-    it('rejects missing records, manifest v1, source tampering, and filtered batch drift', () => {
+    it('拒绝缺失 records、manifest v1、来源被篡改以及筛选批次漂移', () => {
         const f = fixture();
         assert.throws(() => buildSpec({
             date: DATE,

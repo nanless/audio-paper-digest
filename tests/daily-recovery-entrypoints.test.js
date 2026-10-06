@@ -1,10 +1,10 @@
 'use strict';
 
-// These are orchestration tests, not network/LLM tests.  They seal a tiny
-// official-looking PDF/TXT pair through the real source-store contract, then
-// run every daily recovery entrypoint with its analyzer/Reader operation
-// mocked.  The mocks assert that the only text they can see is the sealed
-// bundle and that the active figure context is ephemeral/direct.
+// 这些是编排测试，不走网络也不调 LLM。它们按真实的来源存储约定
+// 保存一对很小的、形似官方来源的 PDF/TXT，然后
+// 把分析器/Reader 操作替换成模拟实现，逐一跑过每个日更恢复入口。
+// 模拟实现会断言：它能看到的文本只有那对已保存并核验的文件，
+// 而且当前图片上下文是临时目录里的、直接给定的。
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -54,7 +54,7 @@ function mockBatch(label, seen) {
     };
 }
 
-test('daily recovery entrypoints replay only current sealed PDF/TXT sources and Reader refresh has a direct ephemeral context', async t => {
+test('日更恢复入口只复核当前已保存的 PDF/TXT 来源，Reader 刷新则用直连的临时上下文', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-recovery-entrypoints-'));
     const previous = Object.fromEntries(['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'filteredPapers', 'papers']
         .map(key => [key, Config.FILES[key]]));
@@ -67,8 +67,8 @@ test('daily recovery entrypoints replay only current sealed PDF/TXT sources and 
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    // Load after Config is redirected because batch/reanalyze intentionally
-    // capture their configured daily canonical path at module initialisation.
+    // 要在 Config 重定向之后再加载，因为 batch/reanalyze 会在模块初始化时
+    // 就记下配置里的日更正式路径。
     const deepOnly = require('../scripts/deep-analysis-only.js');
     const batch = require('../scripts/batch-analyze.js');
     const reanalyze = require('../scripts/reanalyze.js');
@@ -88,9 +88,9 @@ test('daily recovery entrypoints replay only current sealed PDF/TXT sources and 
         }
     });
     assert.equal(captureCalls, 1);
-    // This is deliberately a structurally successful but unbound old
-    // canonical. All three analysis entries must select it again instead of
-    // treating success as a reason to bypass the current sealed generation.
+    // 这里故意放一条结构上成功、但没有绑定当前来源的旧分析记录。
+    // 三个分析入口都必须重新选中它，
+    // 不能因为「上次成功」就跳过当前这代已保存并核验的来源。
     const unboundLegacy = validAnalysisPaper(ID, { title: paper.title });
     const envelope = {
         batchDate: DATE,
@@ -124,8 +124,8 @@ test('daily recovery entrypoints replay only current sealed PDF/TXT sources and 
     }
     assert.equal(captureCalls, 1, 'recovery must replay the sealed pair and cannot recapture/fetch');
 
-    // Make the same canonical complete solely to exercise the Reader branch;
-    // the custom operation proves source and figure scope without a model call.
+    // 把同一份分析记录补成完成状态，只是为了走到 Reader 分支；
+    // 自定义操作不调模型，就能证明来源和图片的范围。
     const complete = validAnalysisPaper(ID, { title: paper.title });
     const descriptor = daily.readDailyFreshSource(plan, complete).freshSourceDescriptor;
     complete.sourceSha256 = descriptor.sourceSha256;
@@ -172,7 +172,7 @@ test('daily recovery entrypoints replay only current sealed PDF/TXT sources and 
 
 function normalized(paper) { return String(paper?.arxivId || '').replace(/v\d+$/, ''); }
 
-test('daily recovery source plan fails closed when the canonical has no sealed bundle reference', () => {
+test('正式记录里没有已保存打包引用时，日更恢复来源计划直接失败', () => {
     assert.throws(() => daily.requireDailyFreshSourceRecoveryPlan({ batchDate: DATE, papers: [{ arxivId: ID }] }, {
         label: 'test recovery'
     }), /requires current dailyFreshSourceRun/);

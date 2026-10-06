@@ -2,12 +2,11 @@
 'use strict';
 
 /**
- * Explicit, single-paper metadata correction protocol for production v6.
+ * production v6 里显式的单篇元数据更正约定。
  *
- * This is deliberately not a normalizer.  A Terra/high leaf must author a
- * correction and receipt.  The batch manifest then binds the original
- * revision output/payload bytes, the correction bytes, and a sorted Merkle
- * root before the records sealer may apply the four permitted fields.
+ * 它不是归一化器。更正内容和核验记录必须由 Terra/high 这一层写出来。批次清单
+ * 会把原来的修订产物和 payload 字节、更正字节，以及一棵排序后的 Merkle 根绑在
+ * 一起；做完这些，记录封装器才能应用那四个允许修改的字段。
  */
 const crypto = require('crypto');
 const fs = require('fs');

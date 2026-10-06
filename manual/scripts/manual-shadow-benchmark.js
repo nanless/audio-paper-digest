@@ -59,8 +59,8 @@ function metricValue(metric, key = 'durationMs') {
 }
 
 function qualityValue(value) {
-    // Numeric input remains readable for pre-release test fixtures, while all
-    // reports produced by manual-v6-shadow use the explicit state object.
+    // 发布前的测试夹具可以直接给数值；manual-v6-shadow 产出的报告一律用显式的
+    // 状态对象。
     if (Number.isFinite(value)) return value;
     return value?.status === 'known' && Number.isFinite(value.value) ? value.value : null;
 }
@@ -183,7 +183,7 @@ function loadVerifiedShadowReport(filePath, options = {}) {
             throw new Error(`benchmark shadow input 文件 SHA/bytes 已变化: ${input.path}`);
         }
     }
-    // Also validates current contract and the embedded input fingerprint.
+    // 这一步同时校验当前约定和报告里嵌入的输入指纹。
     aggregateShadowReports([report]);
     return {
         report,

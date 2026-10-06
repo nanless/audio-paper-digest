@@ -158,8 +158,8 @@ async function sourceClassificationFixture(t, respond, metadataFamily = null) {
         checkpointExporter = exportModule.exports;
         return checkpointExporter;
     }
-    // Only external plan/control/configuration/model entry points are substituted.
-    // Source files, evidence injection, parser, scheduler and immutable writes remain real.
+    // 只替换对外的计划、控制、配置和模型入口。
+    // 来源文件、证据注入、解析器、调度器和不可变写入都保持真实实现。
     loaded.require = request => {
         if (request === '../config.js') return { FILES: { freshArxivFetchedSourcesDir: sourceRoot } };
         if (request === '../deep-analyzer.js') return { callModel: async (messages, maxTokens, options) => {

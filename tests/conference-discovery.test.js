@@ -35,7 +35,7 @@ function writeCanonical(filename, value) {
     fs.writeFileSync(filename, discovery.canonicalBytes(value), { mode: 0o600 });
 }
 
-test('ICASSP freezes metadata/catalog bytes and reports exact, normalized, ambiguous, unmatched without verification', t => {
+test('ICASSP 冻结元数据和目录字节，并报告精确、归一化、有歧义、未匹配四种结果，但不做核实', t => {
     const f = fixture(t);
     writeJson(f.metadata, [
         { arnumber: '100', title: 'Exact Paper' },
@@ -59,7 +59,7 @@ test('ICASSP freezes metadata/catalog bytes and reports exact, normalized, ambig
     assert.deepEqual(report.counts, { metadataRecords: 4, pdfFiles: 5, exact: 1, normalized: 1, ambiguous: 1, unmatched: 1, orphanPdfFiles: 1 });
 });
 
-test('duplicate ICASSP titles sharing one exact PDF are ambiguous rather than auto-bound', t => {
+test('多个 ICASSP 标题指向同一份精确 PDF 时算有歧义，不自动绑定', t => {
     const f = fixture(t);
     writeJson(f.metadata, [{ arnumber: '1', title: 'Same' }, { arnumber: '2', title: 'Same' }]);
     writePdf(f.pdf, 'Same.pdf');
@@ -67,7 +67,7 @@ test('duplicate ICASSP titles sharing one exact PDF are ambiguous rather than au
     assert.deepEqual(result.manifest.members.map(member => member.match.kind), ['ambiguous', 'ambiguous']);
 });
 
-test('ICLR uses forum_id and only exact root <id>.pdf, never title or nested basename', t => {
+test('ICLR 用 forum_id，并且只认根目录下精确的 <id>.pdf，绝不按标题或嵌套文件名匹配', t => {
     const f = fixture(t);
     writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'A title' }, { forum_id: 'XyZ987_65', title: 'AbCdef_12' }]);
     writePdf(f.pdf, 'AbCdef_12.pdf');
@@ -78,7 +78,7 @@ test('ICLR uses forum_id and only exact root <id>.pdf, never title or nested bas
     assert.deepEqual(result.manifest.members[0].identity, { type: 'openreview-forum-id', value: 'AbCdef_12' });
 });
 
-test('ICML records an optional numeric alias but keeps OpenReview ID as sole primary identity and match key', t => {
+test('ICML 记录一个可选的数字别名，但主身份和匹配键只用 OpenReview ID', t => {
     const f = fixture(t);
     writeJson(f.metadata, { conference: 'ICML 2026', papers: [
         { id: 'OpenRv_123', paper_number: 63469, title: 'Paper title' },
@@ -95,7 +95,7 @@ test('ICML records an optional numeric alias but keeps OpenReview ID as sole pri
     assert.equal(result.manifest.members[1].match.kind, 'exact');
 });
 
-test('official proceedings closes conference identity and matches PDFs only by exact metadata.pdfFile', t => {
+test('官方论文集锁定会议身份，PDF 只按精确的 metadata.pdfFile 匹配', t => {
     const f = fixture(t);
     writeJson(f.metadata, { conference: { id: 'cvpr-2026', year: 2026 }, papers: [
         { id: 'CVPR.2026-001_camera', title: 'Exact official PDF', authors: ['A. Author', 'B. Author'],
@@ -127,7 +127,7 @@ test('official proceedings closes conference identity and matches PDFs only by e
         year: 2025, metadataFile: f.metadata, pdfRoot: f.pdf }), /must match conferenceId and year/);
 });
 
-test('official proceedings metadata schema, identifiers, URLs, and PDF paths fail closed', t => {
+test('官方论文集的元数据结构、标识、URL 和 PDF 路径不合法时直接失败', t => {
     const f = fixture(t);
     const record = { id: 'ACL.2026-main.1', title: 'Paper', authors: ['Author'], abstract: '', pdfFile: null,
         recordUrl: 'https://aclanthology.org/2026.acl-long.1/', pdfUrl: null, doi: null, track: 'Long' };
@@ -159,7 +159,7 @@ test('official proceedings metadata schema, identifiers, URLs, and PDF paths fai
     }
 });
 
-test('rejects duplicate identities, conflicting IDs/aliases, duplicate JSON keys, and noncanonical identities', t => {
+test('拒绝重复身份、冲突的 ID 或别名、重复的 JSON 键以及非标准身份', t => {
     const f = fixture(t);
     writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }, { forum_id: 'AbCdef_12', title: 'Two' }]);
     assert.throws(() => discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /duplicate primary identities/);
@@ -173,7 +173,7 @@ test('rejects duplicate identities, conflicting IDs/aliases, duplicate JSON keys
     assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /canonical positive integer/);
 });
 
-test('rejects symlink, hardlink, FIFO, malformed PDF, unsafe metadata, and relative source paths', t => {
+test('拒绝符号链接、硬链接、FIFO、损坏的 PDF、不安全的元数据和相对来源路径', t => {
     const f = fixture(t); writeJson(f.metadata, [{ arnumber: '1', title: 'One' }]);
     const original = writePdf(f.pdf, 'one.pdf');
     fs.symlinkSync(original, path.join(f.pdf, 'linked.pdf'));
@@ -192,7 +192,7 @@ test('rejects symlink, hardlink, FIFO, malformed PDF, unsafe metadata, and relat
     assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /single-link/);
 });
 
-test('CLI dry-run writes nothing; apply writes bound O_EXCL artifacts and rolls back reservations on collision', t => {
+test('命令行预演不写任何东西；实际执行用 O_EXCL 写绑定产物，遇到冲突就回滚预留', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const base = ['--adapter', 'iclr', '--year', '2026', '--metadata', f.metadata, '--pdf-root', f.pdf];
     const files = { conferenceDiscoveryCatalogDir: f.catalogs, conferenceDiscoveryReportDir: f.reports };
@@ -212,7 +212,7 @@ test('CLI dry-run writes nothing; apply writes bound O_EXCL artifacts and rolls 
     }
 });
 
-test('CLI requires and forwards an exact official conference ID while preserving legacy arguments', () => {
+test('命令行要求并透传精确的官方会议 ID，同时保留旧版参数', () => {
     const base = ['--adapter', 'official-proceedings', '--year', '2026', '--metadata', '/tmp/metadata.json', '--pdf-root', '/tmp/pdf'];
     assert.throws(() => cli.parseCommand(['--dry-run', ...base]), /requires --conference-id/);
     const parsed = cli.parseCommand(['--dry-run', ...base, '--conference-id', 'ijcai-ecai-2026']);
@@ -223,14 +223,14 @@ test('CLI requires and forwards an exact official conference ID while preserving
         '--metadata', '/tmp/metadata.json', '--pdf-root', '/tmp/pdf']), 'conferenceId'), false);
 });
 
-test('apply refuses outputs inside the catalog root', t => {
+test('实际执行拒绝把输出写到目录根之内', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const result = discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
     assert.throws(() => cli.writeOutputsOnce({ catalogDir: f.pdf, catalogName: 'candidate.json', candidate: result.manifest,
         reportDir: f.reports, reportName: 'report.json', report: result.report, forbiddenRoot: result.manifest.pdfRoot }), /must not be inside pdfRoot/);
 });
 
-test('strict bundle validation replays every source, candidate, cardinality, count, and member-set binding', t => {
+test('严格的打包校验会复核每个来源、候选、基数、计数和成员集合绑定', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const original = discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
     assert.equal(discovery.validateDiscoveryBundle(original.manifest, original.report).catalogSha256,
@@ -256,7 +256,7 @@ test('strict bundle validation replays every source, candidate, cardinality, cou
     assert.throws(() => discovery.validateDiscoveryBundle(original.manifest, reportDrift), /canonical candidate manifest bytes/);
 });
 
-test('loaded discovery handle requires canonical paired files, is unforgeable, and returns defensive snapshots', t => {
+test('加载后的发现句柄要求成对的正式文件，无法伪造，并返回防御性快照', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const result = discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
     const catalogName = 'iclr-2026.json'; const reportName = 'iclr-2026.report.json';
@@ -277,7 +277,7 @@ test('loaded discovery handle requires canonical paired files, is unforgeable, a
     assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /exact canonical bytes/);
 });
 
-test('loaded discovery handle rejects cross-paired reports, duplicate keys, and descriptor tampering', t => {
+test('加载后的发现句柄拒绝交叉配对的上报、重复的键和被改动的描述符', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const result = discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
     const catalogFile = path.join(f.catalogs, 'catalog.json'); const reportFile = path.join(f.reports, 'report.json');

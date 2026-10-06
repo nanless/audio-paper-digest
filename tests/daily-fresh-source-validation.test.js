@@ -12,7 +12,7 @@ const { validateDailyFreshSourceRun } = require('../scripts/validate-data-files.
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
-test('daily current validation replays the sealed TXT/PDF pair and provenance', async t => {
+test('日更当前校验会复核已保存的 TXT/PDF 配对和来源', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-source-validation-'));
     const previous = Config.FILES.dailyFreshSourceRunsDir;
     Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'daily-runs');

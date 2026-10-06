@@ -2,7 +2,7 @@
 
 ## How to Use This Page
 
-This page lists commands by task. See [scripts/README.md](../../scripts/README.md) for file responsibilities; `package.json` defines aliases. Manual commands are in [manual/README.md](../../manual/README.md). DATE, ID, UUID, and uppercase paths are placeholders. Brackets mark optional arguments; a vertical bar separates alternatives.
+This page lists commands by task. File responsibilities live in [scripts/README.md](../../scripts/README.md), and `package.json` defines the aliases. Manual commands are in [manual/README.md](../../manual/README.md). DATE, ID, UUID, and uppercase paths are placeholders; brackets mark optional arguments, and a vertical bar separates alternatives.
 
 ## Complete Daily Run
 
@@ -14,9 +14,9 @@ This page lists commands by task. See [scripts/README.md](../../scripts/README.m
 | `npm run digest:status -- --date DATE` | Read the current status snapshot |
 | `npm run digest:waive-visuals -- --date DATE --reason TEXT` | Record visuals waived by explicit user request |
 
-`digest:manual` requires an explicit request for human processing. Exit 0 from the default entry establishes only that its script stages passed.
+`digest:manual` requires an explicit request for human processing. Exit 0 from the default entry only means its script stages passed.
 
-Completion also requires successful GitHub Pages build/deploy for the publication commit, or a later commit preserving the reviewed page bytes. Manually check HTTP 200, the official address, and title of every digest and paper page, and keep the results. Create, inspect, and record infographics and the cover with the built-in image tool, unless a valid user waiver applies only to visuals. Read `digest:status` afterward; it does not yet check deployment or live pages.
+Completion also requires a successful GitHub Pages build/deploy for the publication commit, or for a later commit that preserves the reviewed page bytes. Check HTTP 200, the official address, and the title of every digest and paper page by hand, and keep the results. Create, inspect, and record the infographics and cover with the built-in image tool, unless a valid user waiver covers visuals alone. Read `digest:status` afterward; it does not yet check deployment or live pages.
 
 ## Workspace Role
 
@@ -29,7 +29,7 @@ After confirming the checkout's purpose, bind it with `npm run workspace:role --
 | Command | Behavior |
 |---|---|
 | `npm run fetch` | Archive, fetch, filter, and analyze; no publication |
-| `npm run deep -- --date DATE` | Resume unfinished analysis using current sealed text/PDF |
+| `npm run deep -- --date DATE` | Resume unfinished analysis using the current saved text/PDF |
 | `npm run batch` | Analyze unfinished papers in accepted analysis records |
 | `npm run batch -- --retry-failed-readers` | Archive and disable failed Reader candidates for unfinished papers, then resume |
 | `npm run reanalyze -- --concurrency N` | Archive and disable all old failed Reader candidates, clear Reader/image-supplement state, and force reanalysis from bound sources |
@@ -38,13 +38,13 @@ After confirming the checkout's purpose, bind it with `npm run workspace:role --
 | `node scripts/refilter-reanalyze-by-date.js DATE` | Controlled historical refilter/reanalysis |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | Refresh scores/Reader from bound sources; prepare figures only for the active call |
 | `npm run validate:data` | Read-only current data validation |
-| `npm run keyword:recall` | Replay keyword-filter gold data |
+| `npm run keyword:recall` | Recheck keyword-filter gold data |
 | `npm run backfill` | Backfill historical IDs only |
 | `npm run paper:rethink` | Historical maintenance tool; no longer integrated into the blog or needed by readers; see the [archived interface documentation](../paper-rethink-companion.md) |
 
 `full-fetch.js` fetches only the Beijing date on which it starts. Background data-only work may call `node scripts/full-fetch.js` directly to avoid npm/TTY wrapper issues; the same environment, role, and outside-sandbox requirements still apply.
 
-`deep`, `batch`, `reanalyze`, and `api:reader:refresh` read only `deep-analysis-result.json.dailyFreshSourceRun`. They validate batchDate, paper membership, and every `source.txt`, `source.pdf`, runtime record, and manifest. Missing, damaged, or mismatched files fail before model/figure requests. Rerun `npm run digest:prepare -- DATE` only while the target date is Beijing today. For historical dates, retain failures and use historical maintenance. Never refetch through these recovery entries, substitute old caches, or patch checkpoints.
+`deep`, `batch`, `reanalyze`, and `api:reader:refresh` read only the sources recorded in `deep-analysis-result.json.dailyFreshSourceRun`. They validate the batch date, paper membership, and every `source.txt`, `source.pdf`, runtime record, and manifest. Missing, damaged, or mismatched files fail before any model or figure request. Rerun `npm run digest:prepare -- DATE` only while the target date is Beijing today. For historical dates, keep the failures and use historical maintenance. Never refetch through these recovery entries, substitute old caches, or patch checkpoints.
 
 ## Blog Transaction
 
@@ -56,9 +56,9 @@ After confirming the checkout's purpose, bind it with `npm run workspace:role --
 | `--include-id ID` | Single-paper scope; the same ID across applicable stages |
 | `--exclude-id ID` | Explicit generation exclusion; repeatable |
 
-The manifest records the chosen current file, dated archive, or `--data-file` as `generation-input-source-reference-v1`. Its absolute path, byte count, and SHA-256 enter the input fingerprint. Review and push replay that exact file and its `dailyFreshSourceRun`, never the then-current `DEEP_ANALYSIS_RESULT_FILE`. Input or sealed text/PDF changes require generation again.
+The manifest records the chosen current file, dated archive, or `--data-file` as `generation-input-source-reference-v1`. Its absolute path, byte count, and SHA-256 enter the input fingerprint. Review and push re-read that exact file and its `dailyFreshSourceRun`, never the `DEEP_ANALYSIS_RESULT_FILE` of the moment. If the input or the saved text/PDF changes, generate again.
 
-Passed page reviews are permanently reused by relative path and content SHA. Publisher changes still rerender pages; manifest, code, model, protocol, or Hugo changes require current batch checks and a new receipt. Only a changed page content SHA triggers page re-review. Baseline and remote-identity checks remain mandatory.
+A passed page review is reused permanently by relative path and content SHA. Publisher changes still rerender pages; manifest, code, model, protocol, or Hugo changes require current batch checks and a new receipt. Only a changed page content SHA triggers another page review. Baseline and remote-identity checks stay mandatory.
 
 Each stage takes the shared lock under the blog's Git common-dir, then its project/date lock. Two checkouts targeting one blog cannot concurrently modify its worktree, index, or HEAD. The shared lock is outside tracked blog files; recovery and release remove only a lock whose inode, token, and SHA still match. `publish-to-blog.py` is shared implementation and a generation compatibility entry, not a bypass around the stages.
 

@@ -82,7 +82,7 @@ function fixture() {
     };
 }
 
-describe('manual v5 reviewed draft promotion', () => {
+describe('Manual v5 已审草稿的提升', () => {
     it('只把三审通过且 SHA 一致的 fresh revision 原字节提升到受控 draft', () => {
         const f = fixture();
         const result = promoteManualV5Draft({

@@ -57,7 +57,7 @@ test('scientific topics and neural input do not get coerced into engineering ASR
 test('ancestry and pruning preserve leaf order and unrelated branches', () => {
     const r = raw();
     assert.deepEqual(ancestors(r, 'task.av-asr'), ['task.asr']);
-    // Music tasks may operate on symbols/scores, not only audio waveforms.
+    // 音乐类任务处理的可能是符号或乐谱，不只是音频波形。
     assert.deepEqual(ancestors(r, 'task.music-generation'), []);
     assert.deepEqual(ancestors(r, 'task.music-retrieval'), []);
     assert.deepEqual(ancestors(r, 'task.av-speech-separation'), ['task.av-source-separation', 'task.audio-separation']);

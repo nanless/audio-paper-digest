@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish one completed conference process as an isolated blog delta."""
+"""把一个已完成的会议流程作为独立的博客增量发布出去。"""
 
 from project_env import load_project_env
 
@@ -127,9 +127,9 @@ def write_exact(filename, data, mode=0o600):
         if read_bytes(filename) != data:
             raise ConferencePublicationError(f'拒绝覆盖不同字节: {filename}')
         return False
-    # Write a complete fsynced inode and link it into place atomically. This
-    # keeps the final receipt/PNG absent when the temporary write fails, while
-    # O_NOFOLLOW and the no-overwrite link preserve the trusted boundary.
+    # 先把完整内容写入临时 inode 并 fsync，再原子地链接到位。这样临时写入
+    # 失败时最终凭证或 PNG 不会留下半成品；O_NOFOLLOW 与不覆盖的链接方式
+    # 同时守住了可信边界。
     fd, temporary = tempfile.mkstemp(prefix=f'.{filename.name}.', dir=filename.parent)
     try:
         os.fchmod(fd, mode)
@@ -160,7 +160,7 @@ def write_exact(filename, data, mode=0o600):
 
 
 def rewrite_unpublished_receipt(filename, data, label, invariant):
-    """Rebind an unpublished receipt after a safe blog-base advancement."""
+    """博客基线安全前移后，重新绑定尚未发布的凭证。"""
     filename = Path(filename)
     if not filename.exists():
         return write_exact(filename, data)
@@ -224,13 +224,13 @@ def git(repo, *args, check=True, binary=False):
     result = subprocess.run(['git', '-C', str(repo), *args], cwd=ROOT, env=env,
                             capture_output=True, text=not binary, check=False)
     if check and result.returncode != 0:
-        # Remote URLs and Git stderr may contain credentials.
+        # 远端 URL 和 Git stderr 里可能带凭据。
         raise ConferencePublicationError(f'Git {args[0]} 失败（exit {result.returncode}）')
     return result
 
 
 def blob_sha(repo, revision, path):
-    """Hash Git bytes, never the possibly different working tree (also supports PNG)."""
+    """对 Git 里的字节求哈希，不碰可能不一致的工作区文件（PNG 同样适用）。"""
     env = build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
     result = subprocess.run(['git', '-C', str(repo), 'show', f'{revision}:{path}'],
                             cwd=ROOT, env=env, capture_output=True, check=False)
@@ -241,8 +241,11 @@ def blob_sha(repo, revision, path):
 
 def verify_blobs(repo, revision, records):
     for record in records:
-        if blob_sha(repo, revision, record['path']) != record['sourceSha256']:
-            raise ConferencePublicationError(f'Git {revision} blob SHA 不一致: {record["path"]}')
+        actual = blob_sha(repo, revision, record['path'])
+        if actual != record['sourceSha256']:
+            raise ConferencePublicationError(
+                f'Git {revision} blob SHA 不一致: {record["path"]}，实际 {actual}，'
+                f'期望 {record["sourceSha256"]}')
 
 
 def expected_delta(repo, base, records):
@@ -263,7 +266,9 @@ def verify_own_commit(repo, commit, base, records):
         parents = git(repo, 'rev-list', '--parents', '-n', '1', commit).stdout.split()
         changed = git(repo, 'diff', '--name-only', base, commit).stdout.splitlines()
         if parents != [commit, base] or sorted(changed) != delta:
-            raise ConferencePublicationError('恢复 commit 的 parent 或精确 delta 不匹配')
+            raise ConferencePublicationError(
+                f'恢复 commit 的 parent 或精确 delta 不匹配：parent={parents}，'
+                f'期望 [{commit}, {base}]；diff 文件={sorted(changed)}，期望 {delta}')
     verify_blobs(repo, commit, records)
 
 
@@ -276,7 +281,7 @@ def commit_exact_delta(repo, records, base, remote_before, identity, message):
     cached = git(repo, 'diff', '--cached', '--name-only').stdout.splitlines()
     if not set(cached).issubset(delta):
         raise ConferencePublicationError(f'已有非本次 staged 文件: {cached}')
-    # Reject stale staged bytes before git add can silently replace them.
+    # 在 git add 悄悄替换之前，先把暂存区里的旧字节挡掉。
     verify_blobs(repo, '', [record for record in records if record['path'] in cached])
     if head != base:
         verify_own_commit(repo, head, base, records)
@@ -288,7 +293,8 @@ def commit_exact_delta(repo, records, base, remote_before, identity, message):
         git(repo, 'add', '--', *delta)
         staged = git(repo, 'diff', '--cached', '--name-only').stdout.splitlines()
         if sorted(staged) != delta:
-            raise ConferencePublicationError('staged delta 与本次变更不一致')
+            raise ConferencePublicationError(
+                f'staged delta 与本次变更不一致：暂存区 {sorted(staged)}，期望 {delta}')
         verify_blobs(repo, '', records)
         git(repo, 'commit', '-m', message)
         head = git(repo, 'rev-parse', 'HEAD').stdout.strip().lower()
@@ -347,8 +353,8 @@ def remote_snapshot(repo):
     if len(push_urls) != 1 or not push_urls[0].strip():
         raise ConferencePublicationError('origin 必须只有一个 push URL，拒绝多目标发布')
     remote_url = push_urls[0].strip()
-    # origin may have a different fetch URL. Query the exact destination whose
-    # identity we bind, not the fetch remote (which can already be ahead).
+    # origin 的 fetch URL 可能不同。要查的是我们绑定身份的那个确切推送目标，
+    # 而不是 fetch 远端（它可能已经领先）。
     remote = git(repo, 'ls-remote', '--', remote_url, 'refs/heads/main').stdout.strip().split()
     if branch != 'main' or not re.fullmatch(r'[0-9a-f]{40}', head) or not remote_url \
             or len(remote) != 2 or remote[1] != 'refs/heads/main':
@@ -369,43 +375,62 @@ def _validate_aggregate_tag_format(manifest):
     contract = manifest.get('contract')
     if (type(version) is not int or not isinstance(contract, str)
             or formats.get(contract) != version):
-        raise ConferencePublicationError('会议汇总的格式版本不受支持。')
+        raise ConferencePublicationError(
+            f'会议汇总的格式版本不受支持。contract={contract!r}, version={version!r}，'
+            f'仅支持 {formats}。')
     current = version == 2
     for old_key, new_key in (('taxonomy', 'tagMetadata'),
                              ('taxonomyHierarchy', 'tagHierarchy')):
         if old_key in manifest and new_key in manifest:
-            raise ConferencePublicationError('会议汇总不能混用新旧标签字段。')
+            raise ConferencePublicationError(
+                f'会议汇总不能混用新旧标签字段。{old_key} 与 {new_key} 同时存在。')
         if (old_key if current else new_key) in manifest:
-            raise ConferencePublicationError('会议汇总的标签字段与格式版本不一致。')
+            raise ConferencePublicationError(
+                f'会议汇总的标签字段与格式版本不一致。version={version} 时只允许 '
+                f'{old_key if current else new_key}。')
         if current and new_key not in manifest:
-            raise ConferencePublicationError('新版会议汇总缺少标签记录或层级字段。')
+            raise ConferencePublicationError(
+                f'新版会议汇总缺少标签记录或层级字段。缺少 {new_key}。')
     if current and not isinstance(manifest['tagMetadata'], dict):
-        raise ConferencePublicationError('新版会议汇总的标签记录格式无效。')
+        raise ConferencePublicationError(
+            f'新版会议汇总的标签记录格式无效。实际类型 '
+            f'{type(manifest["tagMetadata"]).__name__}，期望 dict。')
     hierarchy_key = 'tagHierarchy' if current else 'taxonomyHierarchy'
     if hierarchy_key in manifest:
         hierarchy = manifest[hierarchy_key]
         expected = ('conference-tag-hierarchy-v2' if current
                     else 'conference-taxonomy-hierarchy-v1')
         if not isinstance(hierarchy, dict) or hierarchy.get('contract') != expected:
-            raise ConferencePublicationError('会议汇总的标签层级格式版本不受支持。')
+            actual = (hierarchy.get('contract') if isinstance(hierarchy, dict)
+                      else type(hierarchy).__name__)
+            raise ConferencePublicationError(
+                f'会议汇总的标签层级格式版本不受支持。contract={actual!r}，期望 {expected!r}。')
     members = manifest.get('members')
     if current and not isinstance(members, list):
-        raise ConferencePublicationError('新版会议汇总缺少成员列表。')
+        raise ConferencePublicationError(
+            f'新版会议汇总缺少成员列表。实际类型 {type(members).__name__}，期望 list。')
     for member in members if isinstance(members, list) else []:
         if not isinstance(member, dict):
             if current:
-                raise ConferencePublicationError('新版会议汇总的成员记录格式无效。')
+                raise ConferencePublicationError(
+                    f'新版会议汇总的成员记录格式无效。实际类型 {type(member).__name__}，期望 dict。')
             continue
         old_key, new_key = 'taxonomyAssignmentSha256', 'tagAssignmentSha256'
         if old_key in member and new_key in member:
-            raise ConferencePublicationError('会议汇总成员不能混用新旧标签字段。')
+            raise ConferencePublicationError(
+                f'会议汇总成员不能混用新旧标签字段。{old_key} 与 {new_key} 同时存在。')
         if (old_key if current else new_key) in member:
-            raise ConferencePublicationError('会议汇总成员的标签字段与格式版本不一致。')
+            raise ConferencePublicationError(
+                f'会议汇总成员的标签字段与格式版本不一致。version={version} 时只允许 '
+                f'{old_key if current else new_key}。')
         if current and new_key not in member:
-            raise ConferencePublicationError('新版会议汇总成员缺少标签分配哈希字段。')
+            raise ConferencePublicationError(
+                f'新版会议汇总成员缺少标签分配哈希字段。缺少 {new_key}。')
         if current and (not isinstance(member[new_key], str)
                         or not SHA_RE.fullmatch(member[new_key])):
-            raise ConferencePublicationError('新版会议汇总成员的标签分配哈希格式无效。')
+            raise ConferencePublicationError(
+                f'新版会议汇总成员的标签分配哈希格式无效。实际 {member[new_key]!r}，'
+                f'期望 64 位小写十六进制。')
 
 
 def _validate_paper_tag_format(manifest):
@@ -415,29 +440,44 @@ def _validate_paper_tag_format(manifest):
     version, contract = manifest.get('version'), manifest.get('contract')
     if (type(version) is not int or not isinstance(contract, str)
             or formats.get(contract) != version):
-        raise ConferencePublicationError('会议论文页面的格式版本不受支持。')
+        raise ConferencePublicationError(
+            f'会议论文页面的格式版本不受支持。contract={contract!r}, version={version!r}，'
+            f'仅支持 {formats}。')
     current = version == 2
     for old_key, new_key in (('taxonomy', 'tagMetadata'),
                              ('taxonomyAssignmentFileSha256', 'tagAssignmentFileSha256')):
         if old_key in manifest and new_key in manifest:
-            raise ConferencePublicationError('会议论文页面不能混用新旧标签字段。')
+            raise ConferencePublicationError(
+                f'会议论文页面不能混用新旧标签字段。{old_key} 与 {new_key} 同时存在。')
         if (old_key if current else new_key) in manifest:
-            raise ConferencePublicationError('会议论文页面的标签字段与格式版本不一致。')
+            raise ConferencePublicationError(
+                f'会议论文页面的标签字段与格式版本不一致。version={version} 时只允许 '
+                f'{old_key if current else new_key}。')
     if not current:
         assignment = manifest.get('taxonomy')
         if isinstance(assignment, dict) and ('contract' in assignment or 'version' in assignment):
             if (assignment.get('contract') != 'conference-taxonomy-assignment-v1'
                     or type(assignment.get('version')) is not int or assignment['version'] != 1):
-                raise ConferencePublicationError('旧版会议论文页面的标签分配记录格式版本无效。')
+                raise ConferencePublicationError(
+                    f'旧版会议论文页面的标签分配记录格式版本无效。'
+                    f'contract={assignment.get("contract")!r}, version={assignment.get("version")!r}，'
+                    f'期望 conference-taxonomy-assignment-v1 v1。')
         return
     assignment = manifest.get('tagMetadata')
     assignment_file_sha = manifest.get('tagAssignmentFileSha256')
     if (not isinstance(assignment, dict)
             or assignment.get('contract') != 'conference-tag-assignment-v2'
             or type(assignment.get('version')) is not int or assignment['version'] != 2):
-        raise ConferencePublicationError('会议论文页面的标签分配记录格式版本无效。')
+        actual_contract = (assignment.get('contract') if isinstance(assignment, dict)
+                           else type(assignment).__name__)
+        actual_version = assignment.get('version') if isinstance(assignment, dict) else None
+        raise ConferencePublicationError(
+            f'会议论文页面的标签分配记录格式版本无效。contract={actual_contract!r}, '
+            f'version={actual_version!r}，期望 conference-tag-assignment-v2 v2。')
     if not isinstance(assignment_file_sha, str) or not SHA_RE.fullmatch(assignment_file_sha):
-        raise ConferencePublicationError('会议论文页面的标签分配文件哈希格式无效。')
+        raise ConferencePublicationError(
+            f'会议论文页面的标签分配文件哈希格式无效。实际 {assignment_file_sha!r}，'
+            f'期望 64 位小写十六进制。')
 
 
 def process_bundle(conference_id, process_id):
@@ -479,7 +519,9 @@ def process_bundle(conference_id, process_id):
             or aggregate_manifest.get('markdown') != aggregate_bytes.decode('utf-8') \
             or aggregate_manifest.get('markdownSha256') != aggregate_proof.get('markdownSha256') \
             or manifest_sha(aggregate_manifest) != aggregate_proof.get('manifestSha256'):
-        raise ConferencePublicationError('aggregate staging 与 completion proof 不一致')
+        raise ConferencePublicationError(
+            'aggregate staging 与 completion proof 不一致：'
+            'status/conferenceId/aggregateId/pagePath/markdownSha256/markdown/manifestSha256 至少一项不符')
     _validate_aggregate_tag_format(aggregate_manifest)
     aggregate_target = safe_relative(aggregate_manifest['pagePath'], 'aggregate pagePath')
 
@@ -539,11 +581,10 @@ def process_bundle(conference_id, process_id):
                                 'manifestSha256': proof['manifestSha256'],
                                 'sourceSha256': sha_bytes(asset_bytes), 'size': len(asset_bytes)})
 
-        # A page can be internally valid while its referenced PNGs are absent
-        # from the publication delta.  That happened in the first EACL
-        # publication: the Markdown pages were committed, but static/images/
-        # was left untracked, so every Figure was a broken online URL.  Close
-        # the page-to-asset edge here before generation and push.
+        # 页面自身没问题，它引用的 PNG 却可能不在本次发布增量里。第一次 EACL
+        # 发布就出过这事：Markdown 页面提交了，static/images/ 却没跟踪，
+        # 结果每张插图都是打不开的线上 URL。所以在生成和推送之前，
+        # 这里先把页面到资产的这条边收口。
         referenced_asset_paths = set()
         for url in CONFERENCE_IMAGE_RE.findall(text):
             asset_path = conference_asset_path_from_url(url)
@@ -593,12 +634,11 @@ def find_manifest(root, expected_sha, label):
     key = str(root)
     index = _MANIFEST_INDEX.get(key)
     if index is None:
-        # One directory walk per root per process.  Page/aggregate staging is
-        # read-only while a publish phase runs, so a manifestSha256 → paths map
-        # turns the per-paper lookup from a full O(N) re-scan (measured 3.4 s ×
-        # 1354 papers ≈ 77 min for Interspeech 2026) into a single ~3 s build
-        # plus O(1) hits.  Duplicate SHAs remain visible as multi-entry lists,
-        # and the per-file symlink/JSON-failure semantics match the scan below.
+        # 每个进程、每个根目录只遍历一次。发布阶段页面与汇总暂存目录是只读的，
+        # 用一张 manifestSha256 → 路径的映射，逐篇查找就从整目录重扫
+        # （Interspeech 2026 实测 3.4 秒 × 1354 篇 ≈ 77 分钟）变成一次约 3 秒
+        # 的建表加 O(1) 命中。SHA 重复时仍以多值列表呈现；逐文件的符号链接和
+        # JSON 失败处理与下面的扫描保持一致。
         index = {}
         for filename in root.rglob('manifest.json'):
             try:
@@ -692,10 +732,13 @@ def expected_delta(repo, base, records):
 
 def verify_tree(repo, base, tree, records):
     if changed_paths(repo, base, tree) != expected_delta(repo, base, records):
-        raise ConferencePublicationError('Git tree 包含非本次精确 delta')
+        raise ConferencePublicationError(
+            f'Git tree 包含非本次精确 delta：实际 {sorted(changed_paths(repo, base, tree))}，'
+            f'期望 {sorted(expected_delta(repo, base, records))}')
     for record in records:
         if not blob_matches(repo, tree, record):
-            raise ConferencePublicationError(f'Git tree 实际 blob/模式不匹配: {record["path"]}')
+            raise ConferencePublicationError(
+                f'Git tree 实际 blob/模式不匹配: {record["path"]}，期望 blob {record["sourceSha256"]} 且模式 100644')
 
 
 def transaction_snapshot(repo, base, identity, records, new_source_sha=None):
@@ -714,7 +757,7 @@ def transaction_snapshot(repo, base, identity, records, new_source_sha=None):
 
 
 def rebase_target_changes(repository, base, current, paths, label):
-    """Inspect every intervening commit, including merge parents and reversions."""
+    """逐个检查中间的每个提交，合并父提交和回退也算在内。"""
     touched = set()
     raw = git(repository, 'log', '--format=', '--raw', '--no-abbrev',
               '--no-renames', '-m', '-z', f'{base}..{current}').stdout.split('\0')
@@ -731,8 +774,8 @@ def rebase_target_changes(repository, base, current, paths, label):
         if path in paths:
             touched.add(path)
             old_mode, new_mode = fields[0][1:], fields[1]
-            # A first publication may add a regular file. Executable/symlink/
-            # directory modes or an intervening deletion are never recovery.
+            # 首次发布可能新增一个普通文件。可执行位、符号链接、目录模式，
+            # 或者中间发生过删除，都不算可恢复的情况。
             if old_mode not in {'000000', '100644'} or new_mode != '100644':
                 raise ConferencePublicationError(f'{label}目标在基线迁移期间发生模式变化: {path}')
         index += 2
@@ -741,12 +784,11 @@ def rebase_target_changes(repository, base, current, paths, label):
 
 def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot,
                                 new_source_sha=None, new_image_source_sha=None):
-    """Permit generate to reseal over unrelated main commits, never push directly.
+    """允许 generate 在无关的 main 提交之上重新生成凭证，但绝不允许直接推送。
 
-    Previously published targets must still be exact generation blobs. Targets
-    not yet published may retain their original base blobs (or absence), only
-    when no intervening commit touched them and their worktree is still exact.
-    transaction_snapshot/push retain their stricter exact-publication rules.
+    已发布过的目标必须仍是 generation 记录的精确 blob。尚未发布的目标可以保留
+    原基线 blob（或原本不存在），前提是中间没有提交碰过它，且工作区仍是精确
+    字节。transaction_snapshot/push 仍沿用更严的精确发布规则。
     """
     if snapshot['head'] != snapshot['remoteMain'] \
             or image_snapshot['head'] != image_snapshot['remoteMain']:
@@ -817,7 +859,7 @@ def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot
 
 
 def can_resume_existing_generation(repository, base, identity, records):
-    """Return whether the existing receipt is still in the normal retry shape."""
+    """判断现有凭证是否还处于正常的重试形态。"""
     try:
         transaction_snapshot(repository, base, identity, records)
     except ConferencePublicationError:
@@ -860,7 +902,7 @@ def push_delta(repo, records, base, identity, commit):
         raise ConferencePublicationError('推送前 HEAD 漂移')
     verify_tree(repo, base, commit, records)
     if before['remoteMain'] != commit:
-        # Push the verified OID, not a mutable HEAD ref.
+        # 推送已经核验过的 OID，不推可变的 HEAD 引用。
         git(repo, 'push', 'origin', f'{commit}:refs/heads/main')
     after = transaction_snapshot(repo, base, identity, records)
     if after['remoteMain'] != commit or after['head'] != commit:
@@ -869,7 +911,7 @@ def push_delta(repo, records, base, identity, commit):
 
 
 def publish_image_delta(repo, records, conference_id):
-    """Assets are the complete set; delta is only what differs from the saved base."""
+    """资产是完整集合；增量只取相对已保存基线的差异部分。"""
     with shared_blog_repository_lock(repo, owner=f'conference-images:{conference_id}'):
         snapshot = remote_snapshot(repo)
         identity = snapshot['remoteIdentitySha256']
@@ -890,7 +932,7 @@ def publish_image_delta(repo, records, conference_id):
         for record in records:
             if sha_bytes(read_bytes(under(repo, record['path'], '图片目标'))) != record['sourceSha256']:
                 raise ConferencePublicationError(f'图片目标 SHA 不一致: {record["path"]}')
-        # An already published asset set can survive unrelated later remote commits.
+        # 已发布过的资产集合，可以不受之后无关远端提交的影响。
         if snapshot['head'] == snapshot['remoteMain'] and not expected_delta(repo, snapshot['head'], records):
             cached = git(repo, 'diff', '--cached', '--name-only').stdout.splitlines()
             if cached:
@@ -907,7 +949,7 @@ def generate(conference_id, process_id):
     with shared_blog_repository_lock(repo, owner=f'conference-generate:{conference_id}'), \
             shared_blog_repository_lock(images, owner=f'conference-generate-images:{conference_id}'):
         if (publication_dir(conference_id, process_id) / 'publish.json').exists():
-            # A schema upgrade is never authority to regenerate published work.
+            # 格式升级不能成为重新生成已发布内容的理由。
             result = publication_state(conference_id, process_id)
             print(json.dumps(result, ensure_ascii=False))
             return result
@@ -951,11 +993,9 @@ def generate(conference_id, process_id):
             if same_implementation and not completion_changed and (previous['files'] != files
                     or previous['imageFiles'] != image_files):
                 raise ConferencePublicationError('同一 process 的发布内容已变化')
-            # The staged bytes are a projection of the current renderer and
-            # publisher contract.  A renderer/gate change must re-project the
-            # same completed papers so review never validates stale Markdown.
-            # Older v2 receipts do not have this fingerprint and therefore
-            # intentionally take the regeneration path once.
+            # 暂存字节是当前渲染器与发布约定的产物。渲染器或检查器一变，就必须
+            # 把同一批已完成论文重新产出，review 才不会去审过期的 Markdown。
+            # 更早的 v2 凭证没有这个指纹，因此会有意走一次重新生成。
             if same_implementation and not completion_changed and not rebased:
                 print(json.dumps({'status': 'already-generated', 'conferenceId': conference_id}))
                 return
@@ -965,7 +1005,7 @@ def generate(conference_id, process_id):
         verify_index(images, image_snapshot['head'], image_files)
         dirty = set(git(repo, 'diff', '--name-only', '-z').stdout.rstrip('\0').split('\0')) - {''}
         if dirty & {record['path'] for record in files}:
-            # An interrupted generation may already have installed exact bytes.
+            # 中断的生成可能已经把精确字节写到位了。
             for record in files:
                 if record['path'] in dirty and sha_bytes(target_bytes(repo, record)) != record['sourceSha256']:
                     raise ConferencePublicationError(f'会议目标存在人工修改: {record["path"]}')
@@ -1006,11 +1046,9 @@ def generate(conference_id, process_id):
                 and previous.get('version') in {1, 2}
                 and previous.get('conferenceId') == conference_id
                 and previous.get('processId') == process_id
-                # process_bundle() has already authenticated the current
-                # complete process and every current staging byte. An
-                # unpublished receipt may therefore be superseded when that
-                # same process was deterministically migrated (including a
-                # projection-only change).
+                # process_bundle() 已经认证过当前这个完整流程和每一份暂存字节。
+                # 因此只要同一个流程是确定性地迁移过来的（哪怕只是展示内容
+                # 变了），未发布的凭证就可以被替换。
             )
         )
         print(json.dumps({'status': 'generated', 'conferenceId': conference_id,
@@ -1027,7 +1065,10 @@ def validate_generation(conference_id, process_id, repo, images, *,
     if generation.get('contract') != 'conference-blog-generation-v1' or generation.get('version') not in {1, 2} \
             or declared != stable(body) or generation.get('conferenceId') != conference_id \
             or generation.get('processId') != process_id:
-        raise ConferencePublicationError('generation receipt 无效')
+        raise ConferencePublicationError(
+            f'generation receipt 无效：contract={generation.get("contract")!r}，'
+            f'version={generation.get("version")!r}，自哈希 {"通过" if declared == stable(body) else "不符"}，'
+            f'conferenceId={generation.get("conferenceId")!r}，processId={generation.get("processId")!r}')
     if generation['baseHead'] != generation['remoteMainBefore'] \
             or generation['imageBaseHead'] != generation['imageRemoteMainBefore']:
         raise ConferencePublicationError('generation 基线未与远端闭合')
@@ -1084,13 +1125,13 @@ def gate_fingerprint():
 
 
 def publication_page_files(generation):
-    """Return renderable page records, excluding legacy inline image assets."""
+    """返回可渲染的页面记录，排除旧式内联图片资产。"""
     return [record for record in generation['files']
             if record.get('kind') != 'asset']
 
 
 def publication_image_files(generation):
-    """Normalize v1 blog-local assets to the v2 external image record shape."""
+    """把 v1 的博客本地资产整理成 v2 外部图片记录的形态。"""
     image_files = generation.get('imageFiles')
     if isinstance(image_files, list):
         return image_files
@@ -1106,10 +1147,10 @@ def has_image_repository_proof(generation):
 
 
 def export_baseline(repo, base, destination, *, _ancestors=()):
-    """Export an exact committed tree, recursively replaying local gitlink OIDs.
+    """导出某个提交的精确目录树，并递归重放本地 gitlink 指向的 OID。
 
-    No checkout/submodule update/fetch and no reads of tracked worktree files.
-    Public integration interface: export_baseline(repo, commit_oid, empty_temp_dir).
+    不做 checkout、不更新子模块、不 fetch，也不读已跟踪的工作区文件。
+    对外集成接口：export_baseline(repo, commit_oid, empty_temp_dir)。
     """
     repo, destination = Path(repo), Path(destination)
     identity = (str(repo.resolve()), base)
@@ -1148,9 +1189,9 @@ def export_baseline(repo, base, destination, *, _ancestors=()):
         target.mkdir(parents=True, exist_ok=True)
         export_baseline(submodule, oid, target, _ancestors=(*_ancestors, identity))
     if not _ancestors:
-        # enableGitInfo needs history even for an archive-based build. Give Hugo
-        # a detached, temporary repository borrowing only the original objects.
-        # No checkout, index update, new commit, or write to the source repository.
+        # 即使基于归档构建，enableGitInfo 也需要历史。给 Hugo 一个游离的临时
+        # 仓库，只借用原始对象库。不 checkout、不更新索引、不新建提交，
+        # 也不写源仓库。
         common = Path(git(repo, 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
         git(destination, 'init', '-q')
         write_exact(destination / '.git/objects/info/alternates',
@@ -1158,7 +1199,7 @@ def export_baseline(repo, base, destination, *, _ancestors=()):
         git(destination, '-c', 'core.logAllRefUpdates=false', 'update-ref', '--no-deref', 'HEAD', base)
 
 
-# Explicit integration alias for the queue/review caller.
+# 供队列与 review 调用方使用的显式集成别名。
 export_review_tree = export_baseline
 
 
@@ -1217,7 +1258,7 @@ def run_hugo(repo, generation):
 
 
 def blog_runtime_present(repo):
-    """Return whether the target checkout contains the Hugo inputs required by review."""
+    """判断目标检出目录里是否有 review 所需的 Hugo 输入。"""
     repo = Path(repo)
     config = any((repo / name).is_file() for name in ('hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json'))
     render_tree = any((repo / name).is_dir() for name in ('layouts', 'assets', 'themes'))
@@ -1228,11 +1269,9 @@ def content_review_protocol(module, repo=None):
     try:
         fingerprint = module.review_protocol_fingerprint()
     except Exception:
-        # Offline unit-test repositories intentionally contain only a Git
-        # worktree and a staged page. The real blog checkout has Hugo config
-        # and templates; only that checkout may produce the production
-        # protocol fingerprint. Direct review_pages callers still receive the
-        # original exception when no repository context was supplied.
+        # 离线单元测试用的仓库有意只放一个 Git 工作区和一个暂存页面。真正的博客
+        # 检出目录有 Hugo 配置和模板，只有它才能产出生产协议指纹。没有传仓库
+        # 上下文时，直接调用 review_pages 的调用方仍会拿到原来的异常。
         if repo is None or blog_runtime_present(repo):
             raise
         fingerprint = 'conference-review-fixture-no-runtime-v1'
@@ -1241,11 +1280,10 @@ def content_review_protocol(module, repo=None):
 
 
 def raise_content_review_failure(record, digest, protocol, stage, findings, message, **details):
-    """Preserve a failed verdict for inspection, never as reusable pass evidence.
+    """把失败结论留档供排查，绝不当成可复用的通过证据。
 
-    Keep the reviewed page identity and the exact findings, but no page/chunk,
-    proposed replacement, prompt or image bytes. Content-addressed records are
-    immutable and repeated identical failures are safe to record again.
+    保留被审页面的身份和具体问题，但不存页面或分块内容、建议替换文本、
+    提示词和图片字节。记录按内容寻址，本身不可变；同样的失败重复记录是安全的。
     """
     body = {'contract': 'conference-page-content-review-failure-v1',
             'path': safe_relative(record['path'], 'review 失败页面'),
@@ -1259,11 +1297,11 @@ def raise_content_review_failure(record, digest, protocol, stage, findings, mess
 
 
 def review_pages(repo, records, workers=None):
-    """Reuse only passing path+byte evidence; rerun deterministic gates every time.
+    """只复用「路径 + 字节」都通过的证据；确定性检查每次都要重跑。
 
-    Dispatch is sequential: do not catch reviewer exceptions here. In particular,
-    scope=run account failures must escape with their original type/code before
-    any subsequent chunk, image or page is requested or a pass is persisted.
+    派发是串行的，这里不要捕获审查器异常。尤其是 scope=run 的账号失败，
+    必须带着原类型和错误码抛出，不能等到后续分块、图片或页面发出请求、
+    或写入了通过记录之后才处理。
     """
     from markdown_hugo_gate import parse_frontmatter_content, validate_markdown_format_gate
     module = load_publish_to_blog()
@@ -1362,10 +1400,9 @@ def review(conference_id, process_id):
             conference_id, process_id, repo, images, allow_committed=True)
         reviewer = load_publish_to_blog()
         if hasattr(reviewer, 'BLOG_REPO') and not blog_runtime_present(repo):
-            # A bare Git fixture cannot run the real Hugo/LLM reviewer. Keep a
-            # deterministic review receipt for that isolated compatibility
-            # path; production repositories always have the Hugo runtime and
-            # therefore take review_pages() below.
+            # 只有一个裸 Git 夹具跑不了真正的 Hugo/LLM 审查。这条隔离的兼容
+            # 路径留一份确定的 review 凭证；生产仓库都有 Hugo 运行时，
+            # 会走下面的 review_pages()。
             protocol = content_review_protocol(reviewer, repo)
             content_review = {
                 'status': 'passed', 'protocol': protocol,
@@ -1376,9 +1413,8 @@ def review(conference_id, process_id):
             }
         else:
             content_review = review_pages(repo, generation['files'])
-        # Rebuild Hugo from the authenticated generation and run the semantic /
-        # multimodal review before sealing the receipt. The review is read-only
-        # with respect to the blog and image repositories.
+        # 按已认证的 generation 重建 Hugo，跑完语义与多模态 review 之后再封凭证。
+        # 整个 review 对博客仓库和图片仓库都是只读的。
         hugo = run_hugo(repo, generation)
         if content_review.get('status') != 'passed':
             raise ConferencePublicationError('会议页面语义 review 未通过')
@@ -1433,7 +1469,7 @@ def validate_review(generation, receipt, *, current=True):
 
 
 def accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote):
-    """Sign completion only after actual deployed bytes pass GET verification."""
+    """只有实际部署的字节通过 GET 验收之后，才签完成凭证。"""
     existing = publication_dir(conference_id, process_id) / 'publish.json'
     if existing.exists():
         published = read_json(existing)
@@ -1443,7 +1479,7 @@ def accept_publication(conference_id, process_id, generation, receipt, commit, i
         acceptance = verify_publication_urls(receipt['hugo']['pages'],
                                               generation['imageFiles'], IMAGE_BASE_URL)
     except Exception as exc:
-        # Never emit transport exception strings: redirects/proxies can contain secrets.
+        # 绝不把传输层异常文本写出去：重定向地址和代理里可能带密钥。
         raise ConferencePublicationError('远端已推送，但实际 URL 验收未通过；可重试 verify') from exc
     verify_published_tree(blog_repo(), commit, generation['remoteIdentitySha256'], generation['files'])
     verify_published_tree(image_repo(), image_commit, generation['imageRemoteIdentitySha256'], generation['imageFiles'])
@@ -1509,7 +1545,7 @@ def online_attempts(directory):
 
 
 def fresh_online_acceptance(directory, repo, images, generation, published, mechanical, commit, image_commit):
-    """Every explicit verify starts a durable attempt, never reuses an old GET."""
+    """每次显式 verify 都开一次可留档的尝试，绝不复用旧的 GET 结果。"""
     image_files = publication_image_files(generation)
     with shared_blog_repository_lock(repo, owner='conference-online-reverify'), \
             shared_blog_repository_lock(images, owner='conference-online-reverify-images'):
@@ -1536,7 +1572,7 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
                 verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], image_files)
         except Exception as exc:
             failure = exc
-            # Do not persist transport exception text (may contain secrets).
+            # 不落盘传输层异常文本（可能带密钥）。
             acceptance = {'status': 'failed', 'errorCode': 'online_verification_failed'}
         result_body = {'contract': 'conference-online-acceptance-result-v1',
                        'intentSha256': intent['intentSha256'], 'publishSha256': published['publishSha256'],
@@ -1548,7 +1584,7 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
 
 
 def apply_online_snapshot(directory, published, mechanical, result, *, fresh=False):
-    """Status reports stored evidence, including the most recent failed/pending attempt."""
+    """状态报告如实反映已存证据，包括最近一次失败或未完成的尝试。"""
     evidence = {'mode': 'fresh_get' if fresh else 'historical_snapshot',
                 'status': 'passed', 'receiptPath': str(directory / 'publish.json')}
     attempts = online_attempts(directory)
@@ -1598,7 +1634,9 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
             or published.get('reviewSha256') != receipt['reviewSha256'] \
             or published.get('files') != generation['files'] or receipt.get('files') != generation['files'] \
             or receipt.get('imageFiles', 0) != generation.get('imageFiles', 0):
-        raise ConferencePublicationError('旧发布凭证链不闭合')
+        raise ConferencePublicationError(
+            '旧发布凭证链不闭合：contract/版本、generationSha256、reviewSha256、'
+            'files 或 imageFiles 至少一项不符')
     commit = published.get('publicationCommit')
     image_commit = published.get('imagePublicationCommit') or generation.get('imagePublicationCommit')
     verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
@@ -1617,7 +1655,7 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
         return apply_online_snapshot(directory, published, receipt['hugo'], result, fresh=verify_urls)
     if published.get('version') != 1:
         raise ConferencePublicationError('不支持的 publication receipt 版本')
-    # Keep all v1 bytes immutable. Revalidation is a separate, append-only proof.
+    # v1 的字节一律不动。重新核验另出一份只追加的证明。
     result['status'] = 'legacy_unverified'
     proof_path = directory / 'verification-v2.json'
     had_legacy_proof = proof_path.exists()
@@ -1662,7 +1700,7 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
 
 
 def publication_state(conference_id, process_id, *, verify_urls=False):
-    """Queue interface: verify writes acceptance only; status never commits/pushes/writes."""
+    """队列接口：verify 只写验收记录；status 不提交、不推送、不写文件。"""
     repo, images = blog_repo(), image_repo()
     layers = {'htmlMechanical': 'pending', 'remoteOid': 'pending', 'onlineUrls': 'pending',
               'semanticReview': 'not_performed', 'visualInspection': 'not_performed',
@@ -1684,7 +1722,7 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
     validate_review(generation, receipt)
     layers['htmlMechanical'] = 'passed'
     result['nextAction'] = 'push'
-    # Exact bytes must be committed and present at each actual push remote.
+    # 精确字节必须已提交，并且存在于每个实际推送的远端。
     for repository, current, base, records in (
             (repo, snapshot, generation['baseHead'], generation['files']),
             (images, image_snapshot, generation['imageBaseHead'], generation['imageFiles'])):
@@ -1698,7 +1736,7 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
     result['nextAction'] = 'verify'
     existing = publication_dir(conference_id, process_id) / 'publish.json'
     if verify_urls:
-        # Serialize receipt creation with push, including across worktrees.
+        # 让凭证创建与 push 串行化，跨多个工作区也一样。
         with shared_blog_repository_lock(repo, owner=f'conference-verify:{conference_id}'):
             generation, current, current_images = validate_generation(conference_id, process_id, repo, images)
             if current != snapshot or current_images != image_snapshot:
@@ -1730,16 +1768,15 @@ def verify(conference_id, process_id):
 def push(conference_id, process_id):
     repo, images = blog_repo(), image_repo()
     if (publication_dir(conference_id, process_id) / 'publish.json').exists():
-        # Push replay reads status; only explicit verify starts a new online GET.
+        # 重放 push 时只读状态；只有显式 verify 才会重新发起线上 GET。
         return status(conference_id, process_id)
     with shared_blog_repository_lock(repo, owner=f'conference-push:{conference_id}'):
         with shared_blog_repository_lock(images, owner=f'conference-images:{conference_id}'):
             generation, _, _ = validate_generation(conference_id, process_id, repo, images)
             receipt = load_review(conference_id, process_id)
             validate_review(generation, receipt)
-            # Preserve the historical v1 transaction contract for an already
-            # staged legacy generation. New v2 generations always take the
-            # stronger URL-acceptance path below.
+            # 对已经暂存的旧 generation，保留历史上的 v1 事务约定。
+            # 新的 v2 generation 一律走下面更严格的 URL 验收路径。
             if generation.get('version') == 1:
                 image_commit = commit_delta(
                     images, generation['imageFiles'], generation['imageBaseHead'],
@@ -1764,7 +1801,7 @@ def push(conference_id, process_id):
                                   'processId': process_id, 'publicationCommit': commit,
                                   'remoteVerifiedOid': remote['remoteMain']}, ensure_ascii=False))
                 return
-            # Validate BOTH indexes before making any remote change.
+            # 动远端之前，两个索引都要先校验。
             verify_index(repo, generation['baseHead'], generation['files'])
             verify_index(images, generation['imageBaseHead'], generation['imageFiles'])
             image_commit = commit_delta(

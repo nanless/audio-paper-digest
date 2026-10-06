@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-test('atomic JSON updates preserve a pre-existing private file mode and generation semantics', t => {
+test('原子的 JSON 更新会保留文件原有的私有权限和代次语义', t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'private-atomic-test-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const filename = path.join(directory, 'run.json');

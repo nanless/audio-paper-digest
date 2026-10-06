@@ -51,7 +51,7 @@ function syntheticAdditiveUpgrade(current) {
     return { from: withSha, snapshotOptions, changeLevel, detail };
 }
 
-test('identical registry bytes classify as none with empty reasons', () => {
+test('词表字节完全相同就归类为无变化，理由为空', () => {
     const registry = tagCatalogApi.loadTagCatalog(CURRENT);
     const detail = expectLevel(registry, registry, 'none');
     assert.equal(detail.reasons.length, 0);
@@ -59,7 +59,7 @@ test('identical registry bytes classify as none with empty reasons', () => {
     assert.equal(detail.summary, '本次检查未发现会影响分类的词表变化；文件字节或未检查的内容仍可能不同。');
 });
 
-test('adding concepts, aliases, definitions and deprecation-free fields is additive', () => {
+test('新增概念、别名、定义，以及不带弃用的字段，都算增量', () => {
     const next = clone(raw());
     next.concepts.push({
         id: 'task.example-new-task',
@@ -84,7 +84,7 @@ test('adding concepts, aliases, definitions and deprecation-free fields is addit
     assert.equal(detail.reasons.some(reason => reason.level === 'destructive'), false);
 });
 
-test('deleting a concept, relabelling, repointing broaderId, deactivating and dropping aliases are destructive', () => {
+test('删除概念、改标签、改指 broaderId、停用和删除别名，都算破坏性', () => {
     const removal = clone(raw());
     removal.concepts = removal.concepts.filter(concept => concept.id !== 'task.wake-word');
     expectLevel(raw(), removal, 'destructive', ['concept-removed']);
@@ -116,7 +116,7 @@ test('deleting a concept, relabelling, repointing broaderId, deactivating and dr
     assert.ok(dropped);
 });
 
-test('reactivating a deprecated concept is additive', () => {
+test('重新启用已弃用的概念算增量', () => {
     const deprecated = clone(raw());
     const victim = byId(deprecated, 'task.wake-word');
     victim.status = 'deprecated';
@@ -127,7 +127,7 @@ test('reactivating a deprecated concept is additive', () => {
     assert.equal(detail.counts.conceptsAdded, 0);
 });
 
-test('colliding active Chinese preferred labels across facets are destructive', () => {
+test('不同 facet 之间启用的中文首选标签撞车，算破坏性', () => {
     const next = clone(raw());
     next.concepts.push({
         id: 'artifact.voice-recognition',
@@ -150,7 +150,7 @@ test('colliding active Chinese preferred labels across facets are destructive', 
 // 同一分类维度内，不同概念的标签按统一规则处理后名称相同时，validateTagCatalog 会拒绝词表。
 // 本用例增加另一个维度已使用的标签。词表本身仍可通过校验，但解析候选会增加，
 // 因而这次变更须判为破坏性变更，并记录 label-collision。
-test('cross-facet collisions over every registry label are destructive (label-collision)', () => {
+test('任意词表标签跨 facet 撞车都算破坏性（label-collision）', () => {
     const aliasCollision = clone(raw());
     byId(aliasCollision, 'method.transformer').aliases.push('语音识别');
     tagCatalogApi.validateTagCatalog(aliasCollision);
@@ -200,7 +200,7 @@ test('cross-facet collisions over every registry label are destructive (label-co
     }, /分类维度 method 中的标签对应了多个概念：端到端学习/);
 });
 
-test('registry validation still fails closed on an impossible facet migration', () => {
+test('遇到不可能的 facet 迁移时，词表校验仍然直接失败', () => {
     const migrated = clone(raw());
     byId(migrated, 'task.asr').facet = 'method';
     assert.throws(() => api.classifyRegistryChange(raw(), migrated), /概念 ID 的格式或所属分类维度无效，或 ID 重复：task\.asr/);
@@ -212,7 +212,7 @@ test('registry validation still fails closed on an impossible facet migration', 
 // 的 additive 过渡在 v1.1 里同时删了别名、改了 broaderId 与首选标签，所以
 // seed → current 也翻成了 destructive（可确认白名单内）。“按文档分类”的测试
 // 意图不变：期望仍逐条写死，任何分级漂移都会立刻暴露。
-test('real historical registry transitions classify as documented', () => {
+test('真实的历史词表迁移结果与文档记录一致', () => {
     const seed = tagCatalogApi.loadTagCatalog(OLD_SEED);
     const aliasRemoval = tagCatalogApi.loadTagCatalog(OLD_ALIAS_REMOVAL);
     const current = tagCatalogApi.loadTagCatalog(CURRENT);
@@ -260,7 +260,7 @@ test('real historical registry transitions classify as documented', () => {
         + '、definition-updated×2、scope-note-updated×8。');
 });
 
-test('snapshots resolve by byte SHA and refuse mismatching content', () => {
+test('快照按字节 SHA 解析，内容对不上就拒绝', () => {
     const sha = crypto.createHash('sha256').update(fs.readFileSync(OLD_SEED)).digest('hex');
     const snapshot = api.resolveRegistrySnapshot(sha);
     assert.equal(snapshot.registrySha256, sha);
@@ -283,7 +283,7 @@ test('snapshots resolve by byte SHA and refuse mismatching content', () => {
 // 换表口径：seed → current(v1.1) 复算是**可确认 destructive**（删 2 条别名、
 // 改 broaderId、改首选标签），不再有“additive 注记直接放行”的形态；destructive
 // 注记的唯一合法构造就是显式 acknowledgeDestructive=true（构建期 fail-closed）。
-test('registryUpgradeFrom annotation is built and verified against the recomputed level', () => {
+test('registryUpgradeFrom 标注会生成，并按重算出的级别校验', () => {
     const from = tagCatalogApi.loadTagCatalog(OLD_SEED);
     const to = tagCatalogApi.loadTagCatalog(CURRENT);
     const { changeLevel, detail } = api.classifyRegistryChange(from, to);
@@ -591,7 +591,7 @@ function fullReasonCounts(reasons) {
     return [...counts].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
 }
 
-test('Node and Python registry upgrade gates agree on the shared fixture', () => {
+test('面对同一份固定数据，Node 与 Python 的词表升级检查结论一致', () => {
     const fixture = JSON.parse(fs.readFileSync(CROSS_END_FIXTURE, 'utf8'));
     assert.equal(fixture.contract, 'paper-taxonomy-registry-upgrade-cross-end-fixture-v1');
     const current = tagCatalogApi.loadTagCatalog(
@@ -694,7 +694,7 @@ const detailWith = codes => ({
     reasons: codes.map(code => ({ level: 'destructive', code, message: `${code} 的说明` }))
 });
 
-test('acknowledgement eligibility is an explicit whitelist of parse-semantic changes', () => {
+test('可确认的范围是一份显式的白名单，只含影响解析语义的改动', () => {
     for (const code of ACK_FIELD_CODES) {
         const eligibility = api.acknowledgementEligibility(detailWith([code]));
         assert.equal(eligibility.eligible, true, code);
@@ -736,7 +736,7 @@ test('acknowledgement eligibility is an explicit whitelist of parse-semantic cha
     assert.equal(api.canAcknowledgeRegistryChange(gone.detail), false);
 });
 
-test('destructive reasonsHash is a stable, message-independent fingerprint of the recomputed detail', () => {
+test('破坏性改动的 reasonsHash 是重算明细的稳定指纹，与文案无关', () => {
     const from = tagCatalogApi.loadTagCatalog(OLD_ALIAS_REMOVAL);
     const current = tagCatalogApi.loadTagCatalog(CURRENT);
     const { detail } = api.classifyRegistryChange(from, current);
@@ -889,7 +889,7 @@ test('只有快照、明确确认、升级说明和原概念均通过核验，�
 });
 
 
-test('the known catalog name migration preserves checks and cannot hide a destructive change', () => {
+test('已知的目录改名迁移会保留各项检查，藏不住破坏性改动', () => {
     const current = tagCatalogApi.loadTagCatalog(CURRENT);
     const previous = tagCatalogApi.loadTagCatalog(path.join(HISTORY,
         'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d.json'));

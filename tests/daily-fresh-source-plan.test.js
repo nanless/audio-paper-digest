@@ -68,15 +68,15 @@ test('历史版本信息进入日更分析和结果，两条来源证明保持�
             direct.attachDirectSourceRecord(paper, manifest, directSource);
             assert.equal(paper.freshRewriteProvenance.sourceVersionIdentitySha256, runtime.sourceVersion.identitySha256);
             assert.equal(fresh.freshAnalysisIdentity(id).sourceVersionIdentitySha256, runtime.sourceVersion.identitySha256);
-            // The analyzer's stage checkpoints copy the input paper. Verify
-            // that version metadata is present before the first such save.
+            // 分析器保存阶段检查点时会复制输入的论文对象。要确认
+            // 第一次保存之前，来源版本元数据就已经在了。
             const checkpoint = JSON.parse(JSON.stringify({ ...paper, analysisManifest: manifest }));
             assert.deepEqual(checkpoint.sourceVersion, runtime.sourceVersion);
             assert.equal(checkpoint.analysisManifest.freshRewriteProvenance.sourceVersionIdentitySha256,
                 runtime.sourceVersion.identitySha256);
             paper.sourceVersion.selectedSourceId = `${id}v1`;
-            // Return an independent object to verify that the wrapper retains
-            // source metadata as well as mutations made by the usual analyzer.
+            // 返回一个独立对象，用来确认包装层既保留了来源元数据，
+            // 也保留了常规分析器做出的修改。
             return { arxivId: id, analysis: 'new analysis', sourceSha256: sha(source.text),
                 freshRewriteProvenance: paper.freshRewriteProvenance, analysisManifest: manifest };
         }
@@ -119,7 +119,7 @@ test('传递标题和历史版本信息不改变已有来源快照的字段与�
     assert.deepEqual(source.sourceVersion, runtime.sourceVersion);
 });
 
-test('daily Reader materializer reuses Figure bytes captured in the same invocation', async () => {
+test('日更 Reader 生成器复用同一次调用里抓到的图片字节', async () => {
     const bytes = Buffer.from('same-invocation-image-bytes');
     const url = 'https://arxiv.org/html/2609.12345/figure.png';
     const cached = {
@@ -139,7 +139,7 @@ test('daily Reader materializer reuses Figure bytes captured in the same invocat
     assert.equal(materialized[0].assetMediaType, cached.mime);
 });
 
-test('daily Reader materializer reuses an official SVG captured in the same invocation', async () => {
+test('日更 Reader 生成器复用同一次调用里抓到的官方 SVG', async () => {
     const bytes = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>');
     const url = 'https://arxiv.org/html/2609.12345/figure.svg';
     const cached = {
@@ -159,7 +159,7 @@ test('daily Reader materializer reuses an official SVG captured in the same invo
     assert.equal(materialized[0].assetMediaType, cached.mime);
 });
 
-test('default daily source plan seals PDF/TXT/manifest before its analysis callback and never invokes a legacy text path', async t => {
+test('默认的日更来源计划在分析回调之前就保存 PDF、TXT 和清单，绝不走旧版文本路径', async t => {
     const f = fixture(t); const id = '2609.12345'; let captureCalls = 0; let legacyTextCalls = 0; let analysisCalls = 0;
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'daily-mocked-batch',
         papers: [{ arxivId: id, title: 'Daily source test', abstract: 'metadata only' }] });
@@ -235,7 +235,7 @@ test('default daily source plan seals PDF/TXT/manifest before its analysis callb
     assert.doesNotMatch(JSON.stringify(manifest), /(?:rawBytes|assetBytes|base64|image-cache|api-reader-assets)/);
 });
 
-test('daily source plan clears a legacy successful analysis unless it proves the current sealed manifest', async t => {
+test('旧版成功分析若不能证明它对应当前保存的清单，日更来源计划就把它清掉', async t => {
     fixture(t); const id = '2609.12346';
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'daily-mocked-batch-2', papers: [{ arxivId: id }] });
     await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options => require('../scripts/lib/fresh-arxiv-rewrite-source.js')
@@ -259,7 +259,7 @@ test('daily source plan clears a legacy successful analysis unless it proves the
     assert.equal(daily.isPaperBoundToPlan(prepared, plan), false);
 });
 
-test('daily source binding requires the manifest provenance mirror and source acquisition SHA', async t => {
+test('日更来源绑定要求清单来源镜像和来源获取 SHA', async t => {
     fixture(t); const id = '2609.12348';
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'daily-mocked-batch-4', papers: [{ arxivId: id }] });
     await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options => require('../scripts/lib/fresh-arxiv-rewrite-source.js')
@@ -304,7 +304,7 @@ test('daily source binding requires the manifest provenance mirror and source ac
     assert.equal(Object.hasOwn(output, 'sourceVersion'), false);
 });
 
-test('daily source reference replays only the exact sealed run manifest', async t => {
+test('日更来源引用只复核那次精确保存的运行清单', async t => {
     fixture(t); const id = '2609.12347';
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'daily-mocked-batch-3', papers: [{ arxivId: id }] });
     await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options => require('../scripts/lib/fresh-arxiv-rewrite-source.js')
@@ -319,7 +319,7 @@ test('daily source reference replays only the exact sealed run manifest', async 
     assert.throws(() => daily.readDailyFreshSourcePlan({ ...reference, runManifestSha256: '0'.repeat(64) }), /SHA drifted/);
 });
 
-test('direct daily scope rejects caller-held legacy image URLs even if a caller bypasses paper preparation', () => {
+test('即使调用方绕过论文准备，直连日更范围也拒绝调用方自带的旧版图片 URL', () => {
     const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
     const deep = require('../scripts/deep-analyzer.js');
     const source = { paperId: 'arxiv:2609.12349', source: 'html', sourceId: '2609.12349', text: 'fresh source text',

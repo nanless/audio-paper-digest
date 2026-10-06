@@ -109,8 +109,8 @@ class ConferencePublishTests(unittest.TestCase):
         self.command('-C', self.repo, 'add', record['path'])
         self.command('-C', self.repo, 'commit', '-m', 'offline candidate')
         candidate = self.command('-C', self.repo, 'rev-parse', 'HEAD')
-        # Fetch side already has the candidate, but the actual push destination
-        # is still at the saved base: recovery must not falsely skip its push.
+        # 抓取侧已经有候选提交，但真正的推送目标
+        # 还停在保存的基线：恢复流程不能因此误以为不用推。
         self.command('-C', self.repo, 'push', fetch_remote, 'HEAD:main')
         snapshot = M.remote_snapshot(self.repo)
         self.assertEqual(snapshot['remoteMain'], self.base['head'])
@@ -342,8 +342,8 @@ class ConferencePublishTests(unittest.TestCase):
         # 固定顺序执行；生产默认 PD_BLOG_REVIEW_CONCURRENCY=5 并行（顺序语义不变，
         # 只是页间并发），其余用例不受影响。
         os.environ['PD_BLOG_REVIEW_CONCURRENCY'] = '1'
-        # Exercise the real shared text/image reviewers, mocking only the API
-        # boundary and image bytes. A configured secondary must not be tried.
+        # 跑真实的共用文本/图片审查器，只模拟 API
+        # 边界和图片字节。即使配了备用账号，这里也不该尝试切换。
         reviewer = M.load_publish_to_blog()
         for stage in ('text', 'image'):
             for error_type in (LlmAccountAuthError, LlmAccountPoolExhaustedError):
@@ -454,7 +454,7 @@ class ConferencePublishTests(unittest.TestCase):
         self.advance_main(images, 'other-conference/other.png', b'unrelated image')
         self.check_rebase(images, previous)
         self.assertFalse(M.blob_matches(self.repo, 'HEAD', previous['files'][0]))
-        # The recovery check does not make the old baseline valid for push.
+        # 恢复检查通过，并不代表旧的基线就可以用来推送。
         with self.assertRaises(M.ConferencePublicationError):
             M.transaction_snapshot(self.repo, previous['baseHead'],
                                    previous['remoteIdentitySha256'], previous['files'])
@@ -569,7 +569,7 @@ class ConferencePublishTests(unittest.TestCase):
         self.command('-C', self.repo, 'commit', '--allow-empty', '-m', 'local only')
         with self.assertRaisesRegex(M.ConferencePublicationError, '未同步'):
             self.check_rebase(images, previous)
-        # An actual replacement history in the isolated bare remote is refused.
+        # 隔离的裸远端里如果真有替换过的历史，必须拒绝。
         self.command('-C', self.repo, 'checkout', '--orphan', 'replacement')
         self.command('-C', self.repo, 'commit', '-m', 'unrelated root')
         self.command('-C', self.repo, 'branch', '-M', 'main')

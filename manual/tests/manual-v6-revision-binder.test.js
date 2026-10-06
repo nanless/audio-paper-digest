@@ -17,7 +17,7 @@ function paragraph(heading) {
     return `本节围绕${heading}建立一段可核对的教学叙事，明确交代输入、组件职责、比较条件、实验结论和不能外推的边界。为了让研究生沿证据链继续推导，文字还区分论文直接报告的事实与仍需额外实验确认的判断，避免只记住孤立结论。`;
 }
 
-describe('Manual v6 deterministic revision binder', () => {
+describe('Manual v6 确定性修订绑定器', () => {
     it('永远从 runner validated author record 建基，禁止读取遗留 revision payload', () => {
         const root = path.resolve('/tmp/manual-v6-paper');
         assert.equal(

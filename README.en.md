@@ -15,23 +15,23 @@ Fetch candidate papers from arXiv and HuggingFace Papers, filter and analyze the
 
 ## Default behavior
 
-The default route uses an LLM through its API:
+The default route is LLM/API:
 
 ```text
 arXiv + HuggingFace
-  → keyword prefilter → per-paper LLM filter → seal this run's official arXiv text/PDF
+  → keyword prefilter → per-paper LLM filter → capture this run's official arXiv text/PDF
   → staged full-text analysis and scoring
   → blog generate → review → push / remote-OID verification
   → TOP 10 infographics and digest cover → final status gate
 ```
 
 - `digest:prepare` and `digest:api` are aliases for the same default route.
-- After filtering and before deep analysis, every selected arXiv paper is captured into a sealed source
+- After filtering and before deep analysis, every selected arXiv paper is captured into a saved source
   generation at `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`.
   It contains `source.txt`, `source.pdf`, `source-runtime.json`, and `source-manifest.json`. Analysis,
   Reader, generate, review, and push validate and use that exact bundle. Images for a model request
   are prepared in the system temporary directory and cleaned up afterward; their pixels are never saved in a runtime cache.
-- Manual runs only when explicitly selected; API, network, or quota failures never switch to it automatically.
+- Manual runs only when someone explicitly selects it; API, network, or quota failures never switch to it automatically.
 - WeChat, Feishu, and Xiaohongshu are optional integrations, not part of the default daily run.
 
 ## Start in five minutes
@@ -65,7 +65,7 @@ Accounts are not rotated to balance load. See [Setup](docs/en/setup.md) for the 
 protocol, and proxy requirements. Project commands must run outside the sandbox; entrypoints reject a
 restricted sandbox before network access, logging, or writes.
 
-Confirm the purpose of this checkout, then inspect its role:
+Confirm what this checkout is for, then inspect its role:
 
 ```bash
 npm run workspace:role -- status
@@ -104,7 +104,7 @@ A complete daily run means all of the following:
    digest and paper page, and saves the deployment and page-check records.
 4. TOP 10 infographics and the digest cover are recorded, or an explicit waiver binds the current publication.
 5. A fresh `digest:status` report, read after the last push or image record, lists no incomplete stage.
-   This command does not yet verify deployment or live pages; it cannot replace step 3.
+   This command does not yet verify deployment or live pages, so it cannot replace step 3.
 
 Once the blog is published, a visual failure does not revoke it and must not trigger blog regeneration
 or another page review.
@@ -121,14 +121,16 @@ frozen historical arXiv links ─────────┘                    
                                                                             └→ direct-aggregate
 ```
 
-- The arXiv route fetches and seals a new official `source.txt`, `source.pdf`, runtime metadata, and
+- When OpenReview is unreachable, the default is to stop rather than switch to another source on its own.
+- The arXiv route fetches and saves a new official `source.txt`, `source.pdf`, runtime metadata, and
   manifest for every generation under `data/runtime/fetched-arxiv-sources/`; it never uses retained
   arXiv text, PDF, figures, old posts, old analyses, or old Reader prose as writing input.
-- The conference route replays the retained local metadata/PDF SHA selected by the frozen-page
-  projection. One canonical paper is analyzed once and then projected to every frozen historical page.
+- The conference route rechecks the retained local metadata/PDF SHA selected by the frozen-page
+  projection. One paper is analyzed once and then projected to every frozen historical page.
 - A crosswalk is a strict arXiv-failure-only fallback: it accepts only a named immutable arXiv
   fresh-acquisition handoff. An unavailable or damaged retained conference source fails its direct route closed;
   it never enters a crosswalk and does not gate the remaining direct queue.
+- Long tasks can be run in batches, inspected, paused safely, and resumed.
 - Analysis first produces private source, analysis, page, and aggregate files. The independent
   `history:direct-publication` entry provides `plan → generate → review → publish → status`. It requires
   complete source and page coverage, successful reviews, and valid Git baseline and remote checks
@@ -145,8 +147,8 @@ The active commands and exact absolute-path arguments are documented in the Chin
 | Purpose | Command |
 |---|---|
 | Default daily run | `npm run digest:prepare -- YYYY-MM-DD` |
-| Resume incomplete analysis | `npm run deep -- --date YYYY-MM-DD` (replays only the sealed PDF/TXT bundle) |
-| Refresh API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader` (replays only the sealed PDF/TXT bundle) |
+| Resume incomplete analysis | `npm run deep -- --date YYYY-MM-DD` (reuses only the saved PDF/TXT bundle) |
+| Refresh API Reader | `npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader` (reuses only the saved PDF/TXT bundle) |
 | Validate current data | `npm run validate:data` |
 | Inspect runtime storage | `npm run storage:status` |
 | Preview reference-aware pruning | `npm run storage:prune` |
@@ -166,9 +168,13 @@ npm run tags:preview
 npm run tags:serve
 ```
 
-The shared tag catalog defines stable IDs, parent relationships, and classification dimensions such as task and method. The preview reads the configured Hugo checkout and retains both original tags and tags that could not be matched to the catalog.
+The shared tag catalog defines stable IDs, parent relationships, and classification dimensions such as task and method. The preview reads the configured Hugo checkout and keeps both original tags and tags that could not be matched to the catalog.
 
-You can search by a parent tag. When you select several tags in one dimension, matching any one is enough; conditions from different dimensions must all match. The results show how old labels map to the catalog. **They do not establish that a paper has been semantically reclassified and reviewed.** The preview leaves articles, scores, and existing tag URLs unchanged and makes no paper-model API requests. Its static server runs only on the local loopback address.
+You can search by a parent tag. When you select several tags in one dimension, matching any one is enough; conditions from different dimensions must all match. The results show how old labels map to the catalog, and **you cannot conclude from them that a paper has been reclassified against its source and reviewed.** The preview leaves articles, scores, and existing tag URLs unchanged and makes no paper-model API requests. Its static server runs only on the local loopback address.
+
+The site search index uses tag fields such as `tagContract` and `tagConcepts`, and `tagCatalogSha256` records the SHA of the catalog file. The new paper library, search, and reading exports keep reading the old index, but a single record cannot mix old and new fields. Historical paper source proof and already-verified classification are still checked against their original versions.
+
+The publisher and the site use `tag-catalog-snapshot.json`, `tag-catalog-versions.json`, and `tag-presentation-policy.json`. Tag logic lives in `tag-core.js`, catalog interaction in `tag-browser.js`, and the browser interface is `ResearchTags`. The display catalog and the original catalog used to verify historical papers are read separately; old-version files keep their original content, and a new file cannot replace the original source proof. The standard Hugo API and the original names in historical proofs are still read by their original definitions.
 
 See the [implementation plan](docs/tag-system-implementation.md) and [tag design](docs/tag-system-design.md) (Chinese).
 
@@ -176,17 +182,17 @@ See the [implementation plan](docs/tag-system-implementation.md) and [tag design
 
 - Interrupted fetch/filter: rerun the default entry; checkpoints that pass validation are reused.
 - Only some analyses failed: run `npm run deep -- --date YYYY-MM-DD` or targeted reanalysis. These
-  recovery commands read only the current analysis data's bound source bundle. They never refetch, create
-  replacement source files, or reuse legacy text/cache. If files are missing or their SHA no longer matches,
+  recovery commands read only the source bundle bound to the current analysis data. They never refetch, create
+  replacement source files, or reuse legacy text or caches. If files are missing or their SHA no longer matches,
   rerun `npm run digest:prepare -- YYYY-MM-DD` only while the target date is still Beijing today.
-  For historical dates, retain the failure records and follow the historical maintenance workflow.
+  For historical dates, keep the failure records and follow the historical maintenance workflow.
 - Blog review/push failed: resume with `npm run blog:review -- --date YYYY-MM-DD` or `npm run blog:push -- --date YYYY-MM-DD`.
 - Visual tasks are missing or stale: run `npm run visual:post-publish -- --date YYYY-MM-DD`; do not republish the blog.
 - Unsure which stage failed: start with [Troubleshooting](docs/en/troubleshooting.md) and
   [Workflow](docs/en/workflow.md).
 
 A fresh fetch may bind only Beijing today. Historical dates must resume from existing controlled data;
-they cannot be fabricated by running a new crawl under an old date.
+they cannot be produced by running a new crawl under an old date.
 
 ## Architecture
 
@@ -201,8 +207,8 @@ Codex visual layer
   built-in image generation / visual QA / asset record
 ```
 
-Default API and explicit Manual share publication and visual boundaries, but keep independent content
-evidence and provenance. Manual scripts, prompts, tests, and workflow live under
+Default API and explicit Manual share publication and visual tooling, but each keeps its own content
+evidence and provenance, and the two must not be mixed in one batch. Manual scripts, prompts, tests, and workflow live under
 [`manual/`](manual/README.md).
 
 ## Data and outputs
@@ -211,7 +217,7 @@ evidence and provenance. Manual scripts, prompts, tests, and workflow live under
 |---|---|
 | `data/current/` | Current candidates, filtering, analysis, publication receipts, and visual state |
 | `data/archive/<date>/` | Daily snapshots and final visual assets |
-| `data/runtime/daily-fresh-source-runs/` | Daily official PDF/TXT source generations used by API analysis and publication replay |
+| `data/runtime/daily-fresh-source-runs/` | Daily official PDF/TXT source generations that API analysis and publication read and recheck |
 | `data/runtime/fetched-arxiv-sources/` | Official PDF/TXT source generations for historical direct arXiv rewrites |
 | other historical `data/runtime/` directories | Rewrite plans, private analysis, pages, and aggregates; creating them does not publish the blog |
 | `logs/` | Redacted run logs; file logging can be disabled in `.env` |

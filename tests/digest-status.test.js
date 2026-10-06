@@ -16,7 +16,7 @@ const {
     updateAnalysisDigestStatuses
 } = require('../scripts/digest-status.js');
 
-describe('digest status helpers', () => {
+describe('digest status 辅助函数', () => {
     it('统一生成 digestStatus 元数据', () => {
         const paper = markPaperDigestStatus(
             { arxivId: '2607.00001', digestStatus: { filterModel: 'm1' } },

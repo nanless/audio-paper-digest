@@ -42,7 +42,7 @@ function pdfResponse(id, suffix = 'one') {
         url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: '2026-09-07T00:00:02.000Z' };
 }
 
-test('fresh arXiv generation atomically persists official text/PDF plus non-pixel source metadata', async t => {
+test('当日 arXiv 生成会原子地落盘官方文本、PDF 和非像素来源元数据', async t => {
     const f = fixture(t); const id = '2403.14817'; let textCalls = 0; let pdfCalls = 0;
     const result = await source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1,
         now: '2026-09-07T00:00:00.000Z', extractorVersion: 'test-extractor-v9' }, {
@@ -73,7 +73,7 @@ test('fresh arXiv generation atomically persists official text/PDF plus non-pixe
     assert.equal(fs.existsSync(f.currentRoot), false, 'source capture must not touch data/current');
 });
 
-test('withdrawn current PDF seals a self-hashed same-version fallback and forces source text from those PDF bytes', async t => {
+test('当前 PDF 已撤下时，保存一份参与自哈希的同版本回退，并强制用这些 PDF 字节作为来源文本', async t => {
     const f = fixture(t); const id = '2604.14654'; const selected = `${id}v1`;
     const rawPdf = { bytes: Buffer.from('%PDF-1.7\nwithdrawn historical version\n%%EOF\n'),
         sourceId: selected, url: `https://arxiv.org/pdf/${selected}.pdf`,
@@ -114,7 +114,7 @@ test('withdrawn current PDF seals a self-hashed same-version fallback and forces
     assert.equal(replay.sourceManifestSha256, result.sourceManifestSha256);
 });
 
-test('versioned PDF validation rejects cross-paper URLs, query/fragment smuggling, and unproved current availability', async t => {
+test('带版本的 PDF 校验拒绝跨论文 URL、查询串或片段夹带，以及无法证明的当前可用性', async t => {
     const f = fixture(t); const id = '2604.14654'; const common = { rootDir: f.sourceRoot, arxivId: id,
         now: '2026-09-07T00:00:00.000Z' };
     const text = async () => ({ ...textResponse(id), sourceId: `${id}v1`, url: `https://arxiv.org/html/${id}v1` });
@@ -132,7 +132,7 @@ test('versioned PDF validation rejects cross-paper URLs, query/fragment smugglin
     }), /requires a sealed current unversioned PDF HTTP 404/);
 });
 
-test('versioned PDF validation accepts the official arXiv redirect spelling without a .pdf suffix', async t => {
+test('带版本的 PDF 校验接受官方 arXiv 那种不带 .pdf 后缀的重定向写法', async t => {
     const f = fixture(t); const id = '2604.14654'; const selected = `${id}v1`;
     const result = await source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1,
         now: '2026-09-07T00:00:00.000Z' }, {
@@ -149,7 +149,7 @@ test('versioned PDF validation accepts the official arXiv redirect spelling with
         .runtimeDetails.sourceVersion.selectedSourceId, selected);
 });
 
-test('each new generation fetches a fresh text/PDF pair while same-generation resume replays only its sealed pair', async t => {
+test('每个新代次都重新抓取文本和 PDF 配对，同代次续跑则只复核已保存的那一对', async t => {
     const f = fixture(t); const id = '2403.14817'; let textCalls = 0; let pdfCalls = 0;
     const deps = {
         fetchText: async requested => textResponse(requested, `text-${++textCalls}`),
@@ -172,7 +172,7 @@ test('each new generation fetches a fresh text/PDF pair while same-generation re
     assert.deepEqual({ textCalls, pdfCalls }, { textCalls: 2, pdfCalls: 2 });
 });
 
-test('interrupted capture leaves no partial generation and retry re-fetches then seals both artifacts', async t => {
+test('抓取中断不会留下半成品代次，重试时重新抓取再保存两份产物', async t => {
     const f = fixture(t); const id = '2403.14817'; let textCalls = 0; let pdfCalls = 0;
     const options = { rootDir: f.sourceRoot, arxivId: id, generation: 1, now: '2026-09-07T00:00:00.000Z' };
     const fetchers = {
@@ -193,7 +193,7 @@ test('interrupted capture leaves no partial generation and retry re-fetches then
         ['source-manifest.json', 'source-runtime.json', 'source.pdf', 'source.txt']);
 });
 
-test('default adapters use only uncached official text/PDF/figure fetchers, never legacy local caches', async t => {
+test('默认适配器只用不走缓存的官方文本、PDF 和图片抓取器，绝不用旧版本地缓存', async t => {
     const f = fixture(t); const id = '2403.14817'; const deep = require('../scripts/deep-analyzer.js');
     const originalText = deep.fetchArxivHtmlTextDetailedUncached;
     const originalPdf = deep.fetchArxivPdfUncached;
@@ -226,7 +226,7 @@ test('default adapters use only uncached official text/PDF/figure fetchers, neve
     assert.equal(fs.existsSync(f.currentRoot), false);
 });
 
-test('HTML fallback extracts text from the single sealed PDF response and rejects an independently fetched PDF text result', async t => {
+test('HTML 回退只从那一份已保存的 PDF 响应里提取文本，拒绝另外抓来的 PDF 文本结果', async t => {
     const f = fixture(t); const id = '2403.14817'; let pdfCalls = 0; let extracted = 0;
     const rawPdf = pdfResponse(id, 'the-only-raw-pdf');
     const captured = await source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1,
@@ -252,7 +252,7 @@ test('HTML fallback extracts text from the single sealed PDF response and reject
     }), /independent PDF fallback/);
 });
 
-test('ephemeral figures keep URLs and bytes out of runtime, provide only temporary bytes, and clean up after success', async t => {
+test('临时图片不把 URL 和字节写进运行目录，只提供临时字节，成功后清理', async t => {
     const f = fixture(t); const id = '2403.14817';
     await source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1,
         now: '2026-09-07T00:00:00.000Z' }, {
@@ -283,7 +283,7 @@ test('ephemeral figures keep URLs and bytes out of runtime, provide only tempora
         /x1\.png|image-cache|api-reader-assets/);
 });
 
-test('ephemeral figures are cleaned on callback and fetch failure and reject persistent temporary roots', async t => {
+test('临时图片在回调或抓取失败时也会清理，并且拒绝持久的临时根目录', async t => {
     const f = fixture(t); const id = '2403.14817'; const figureUrl = `https://arxiv.org/html/${id}/x1.png`;
     await assert.rejects(source.withEphemeralArxivFigures({ arxivId: id, figures: [{ ordinal: 1, url: figureUrl }],
         temporaryRoot: f.temporaryRoot, sourceRoot: f.sourceRoot }, async () => {
@@ -303,7 +303,7 @@ test('ephemeral figures are cleaned on callback and fetch failure and reject per
     /OS-temporary directory outside Config\.DATA_DIR/);
 });
 
-test('ephemeral Figure fetch retries only transient network/status failures and preserves permanent gates', async t => {
+test('临时图片抓取只重试暂时性的网络或状态失败，永久性检查照旧', async t => {
     const f = fixture(t); const id = '2403.14817';
     const figureUrl = `https://arxiv.org/html/${id}/x1.png`;
     for (const status of [408, 425, 429, 500, 503]) {
@@ -376,7 +376,7 @@ test('ephemeral Figure fetch retries only transient network/status failures and 
 });
 
 
-test('same-generation recovery replays hash-bound table/formula/figure metadata without storing pixels', async t => {
+test('同代次恢复会复核绑定哈希的表格、公式和图片元数据，但不存像素', async t => {
     const f = fixture(t); const id = '2403.14817';
     const table = { ordinal: 1, caption: 'Table 1', rows: [[{ text: 'metric' }, { text: '0.91' }]], sourceDomSha256: sha256('table') };
     const formula = { ordinal: 1, latex: 'x=y', sourceDomSha256: sha256('formula') };

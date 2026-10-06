@@ -7,7 +7,7 @@ const {
     createHostTaskScheduler
 } = require('../scripts/lib/fetch-scheduler.js');
 
-describe('host-level adaptive fetch scheduler', () => {
+describe('主机级自适应抓取调度器', () => {
     it('同 host 串行并应用健康冷却，不阻塞其他 host', async () => {
         let now = 1000;
         const sleeps = [];

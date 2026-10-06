@@ -67,7 +67,7 @@ function makeLedger(root, members) {
     };
 }
 
-test('conference-source-ledger-v1 accepts all supported non-title identities and binds local source SHA evidence', t => {
+test('conference-source-ledger-v1 接受所有受支持的非标题身份，并绑定本地来源 SHA 证据', t => {
     const root = fixture(t);
     const source = ledger.createLedger({ id: 'icassp-2026', year: 2026 }, [
         member(root, 'openreview-forum-id', 'AbCdef_12'),
@@ -86,7 +86,7 @@ test('conference-source-ledger-v1 accepts all supported non-title identities and
     assert.throws(() => ledger.validateLedger(withTitle), /unexpected/);
 });
 
-test('member list is canonicalized by identity only and rejects duplicate, unsorted, or stale member hashes', t => {
+test('成员列表只按身份归一化，拒绝重复、未排序或过期的成员哈希', t => {
     const root = fixture(t);
     const first = member(root, 'icassp-arnumber', '100');
     const second = member(root, 'openreview-forum-id', 'Forum_2');
@@ -104,7 +104,7 @@ test('member list is canonicalized by identity only and rejects duplicate, unsor
     assert.throws(() => ledger.validateLedger(stale), /memberSetSha256 mismatch/);
 });
 
-test('schema fails closed on unbound evidence, malformed statuses, and invalid identity spellings', t => {
+test('证据未绑定、状态不合法或身份写法无效时，schema 直接失败', t => {
     const root = fixture(t);
     const source = makeLedger(root, [member(root, 'icassp-arnumber', '101')]);
     const badEvidence = structuredClone(source);
@@ -123,7 +123,7 @@ test('schema fails closed on unbound evidence, malformed statuses, and invalid i
     ]) assert.throws(() => ledger.validateIdentity({ type, value }));
 });
 
-test('identity-verified members can remain blocked or needs-review with explicitly absent replay artifacts', t => {
+test('身份已核验的成员仍可以是受阻或待复查，此时会显式标明复核产物缺失', t => {
     const root = fixture(t);
     const base = member(root, 'icassp-arnumber', '102');
     const blocked = removeArtifact(removeArtifact(removeArtifact(base, 'artifacts'), 'text'), 'pdf');
@@ -141,15 +141,15 @@ test('identity-verified members can remain blocked or needs-review with explicit
     absentWithEvidence.members[0].status.evidence.push({ kind: 'pdf', sha256: base.pdfSha256 });
     assert.throws(() => ledger.validateLedger(absentWithEvidence), /exactly the present/);
 
-    // The stale physical artifact is deliberately left in the cache.  A
-    // blocked ledger may be inspected, but its absent artifact is not part of
-    // byte replay and cannot accidentally turn the member into ready.
+    // 过期的实体产物故意留在缓存里。被拦下的账目
+    // 允许查看，但缺失的产物不参与字节复核，
+    // 也就不会意外把该成员变成就绪状态。
     const onlyArtifactsAbsent = removeArtifact(base, 'artifacts');
     fs.writeFileSync(path.join(root, base.artifactsFile), 'stale absent bytes');
     assert.throws(() => ledger.verifyMemberFiles(makeLedger(root, [onlyArtifactsAbsent]), root), /non-verified members.*not ready/);
 });
 
-test('complete replay artifacts, complete SHA evidence, and derived extraction provenance are exclusive to verified members', t => {
+test('完整的复核产物、完整的 SHA 证据和派生提取来源，只有已核验成员才有', t => {
     const root = fixture(t);
     const base = member(root, 'conference-paper-id', '103');
     const nonVerifiedComplete = structuredClone(base);
@@ -177,7 +177,7 @@ test('complete replay artifacts, complete SHA evidence, and derived extraction p
     assert.throws(() => ledger.validateLedger(makeLedger(root, [unknownProvenance])), /unexpected or missing/);
 });
 
-test('createLedger upgrades only the old all-present in-memory authoring shape, while persisted ledgers remain fail-closed', t => {
+test('createLedger 只升级旧版那种全部到齐的内存撰写结构，已落盘的账目仍然直接失败', t => {
     const root = fixture(t);
     const canonical = member(root, 'icassp-arnumber', '104');
     const legacy = structuredClone(canonical);
@@ -189,7 +189,7 @@ test('createLedger upgrades only the old all-present in-memory authoring shape, 
     assert.throws(() => ledger.validateLedger({ ...created, members: [legacy] }), /unexpected or missing/);
 });
 
-test('all source files are portable relative paths; traversal, absolute paths, aliases, and symlinks are rejected', t => {
+test('所有来源文件都用可移植的相对路径；路径穿越、绝对路径、别名和符号链接一律拒绝', t => {
     const root = fixture(t);
     const source = makeLedger(root, [member(root, 'conference-paper-id', '1')]);
     for (const unsafe of ['/private/file.pdf', '../escape.txt', 'a/../b', 'C:\\temp\\paper.pdf', 'a//b', './paper.pdf']) {
@@ -206,7 +206,7 @@ test('all source files are portable relative paths; traversal, absolute paths, a
     assert.throws(() => ledger.verifyMemberFiles(source, root), /Unsafe ledger artifact/);
 });
 
-test('ledger JSON reads and immutable writes reject duplicate keys, links, unsafe output, and byte drift', t => {
+test('账目 JSON 的读取和不可变写入拒绝重复键、链接、不安全的输出和字节漂移', t => {
     const root = fixture(t);
     const source = makeLedger(root, [member(root, 'icassp-arnumber', '109')]);
     const output = path.join(root, 'ledger.json');

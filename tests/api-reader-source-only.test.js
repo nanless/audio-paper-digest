@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { READER_SOURCE_CONTENT_MODE } = require('../scripts/lib/reader-contract.js');
 
-test('Reader evidence is invariant to canonical prose and retains original-source markers', () => {
+test('Reader 证据不受正式正文影响，并保留原始来源标记', () => {
     const { buildApiReaderEvidenceContext } = require('../scripts/deep-analyzer.js');
     const source = 'ORIGINAL_SOURCE_ONLY_MARKER. The paper reports the evaluation protocol and measured results.';
     const artifacts = { tables: [], formulas: [], figures: [] };
@@ -17,7 +17,7 @@ test('Reader evidence is invariant to canonical prose and retains original-sourc
     assert.doesNotMatch(first, /OLD_CANONICAL_CLAIM|DIFFERENT_GENERATED_CLAIM/);
 });
 
-test('daily structured Reader evidence keeps tables and formulas without conference weak policy', () => {
+test('日更的结构化 Reader 证据保留表格和公式，不套用会议的弱策略', () => {
     const { buildApiReaderEvidenceContext } = require('../scripts/deep-analyzer.js');
     const conference = require('../scripts/lib/conference-analysis-context.js');
     const source = 'DAILY_STRUCTURED_SOURCE. Table 1 reports accuracy 91.2 and the method defines L equals CE.';
@@ -42,7 +42,7 @@ test('daily structured Reader evidence keeps tables and formulas without confere
     assert.doesNotMatch(evidence, /\[READER_CAPABILITY_POLICY\]/);
 });
 
-test('first actual Reader request excludes canonical and existing Reader while preserving source evidence', async t => {
+test('第一次真正的 Reader 请求排除正式记录和已有 Reader，同时保留来源证据', async t => {
     const { generateApiReaderArticleDetailed, buildApiReaderEvidenceContext } = require('../scripts/deep-analyzer.js');
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-source-only-test-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -74,7 +74,7 @@ test('first actual Reader request excludes canonical and existing Reader while p
     assert.equal(envelopes[0].payload.rawDraft, '无');
 });
 
-test('source-only prompt removes canonical context and avoids prompting untested causal explanations', () => {
+test('只用来源的提示词去掉正式记录上下文，也不去提示未经检验的因果解释', () => {
     const prompt = fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-article.md'), 'utf8');
     assert.doesNotMatch(prompt, /\{existingAnalysis\}|现有 canonical 分析/);
     assert.match(prompt, /原文给出的安排理由和已验证对照/);
