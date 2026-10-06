@@ -133,12 +133,33 @@ function canonical(value) {
     if (plain(value)) return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
     return value;
 }
+// Python 侧（historical_page_scan.py 的 _json_value）先把整数取值的浮点转成 int 再
+// 交给 json.dumps，所以整数取值这里也写整数文本。非整型 float 用 repr 的最短往返
+// 表示：十进制指数小于 -4 或不小于 16 时写成科学计数法，指数至少两位并带符号
+// （2e-05、1e+16）。JSON.stringify 用 ECMAScript 规则（0.00002、1e-7、1e+21），
+// 两条规则在指数区间和指数位数上都不同。
+function pythonNumberText(value) {
+    if (Number.isInteger(value)) return BigInt(value).toString();
+    const [mantissa, exponentText] = value.toExponential().split('e');
+    const exponent = Number(exponentText);
+    if (exponent < -4 || exponent >= 16) {
+        return `${mantissa}e${exponent < 0 ? '-' : '+'}${String(Math.abs(exponent)).padStart(2, '0')}`;
+    }
+    const negative = mantissa.startsWith('-');
+    const digits = mantissa.replace('-', '').replace('.', '');
+    const point = exponent + 1;
+    const body = point <= 0
+        ? `0.${'0'.repeat(-point)}${digits}`
+        : `${digits.slice(0, point)}.${digits.slice(point)}`;
+    return negative ? `-${body}` : body;
+}
 function pythonJson(value, indent = 0) {
     function render(item, depth, forceFloat = false) {
         if (item === null || typeof item === 'boolean') return JSON.stringify(item);
         if (typeof item === 'number') {
             if (!Number.isFinite(item)) fail('JSON evidence contains a non-finite number');
-            return forceFloat && Number.isInteger(item) ? `${item}.0` : JSON.stringify(item);
+            if (forceFloat && Number.isInteger(item)) return `${item}.0`;
+            return pythonNumberText(item);
         }
         if (typeof item === 'string') return JSON.stringify(item);
         const newline = indent ? '\n' : ''; const separator = indent ? ',\n' : ',';
