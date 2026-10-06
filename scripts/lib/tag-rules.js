@@ -29,6 +29,19 @@ function compactText(value) {
     return String(value || '').replace(/[\r\n|]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// 按 Unicode 码点比较，结果与 Python 的 sorted() 一致。
+// 不能直接用 < 比较：JS 比的是 UTF-16 码元，遇到 emoji 这类非 BMP 字符会排出
+// 与码点不同的顺序（例如 U+1F600 会排到 U+FFFD 前面）。
+const codePointCompare = (a, b) => {
+    const left = Array.from(String(a), char => char.codePointAt(0));
+    const right = Array.from(String(b), char => char.codePointAt(0));
+    const shared = Math.min(left.length, right.length);
+    for (let index = 0; index < shared; index += 1) {
+        if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+    }
+    return left.length === right.length ? 0 : (left.length < right.length ? -1 : 1);
+};
+
 // 新请求默认使用 v2；v1 仅用于按旧阶段记录的版本重建核验文本。
 function buildTagPromptText(tagCatalog, promptTextContract = TAG_PROMPT_TEXT_CONTRACT) {
     if (promptTextContract !== TAG_PROMPT_TEXT_CONTRACT
@@ -38,7 +51,7 @@ function buildTagPromptText(tagCatalog, promptTextContract = TAG_PROMPT_TEXT_CON
     const facetsById = new Map(tagCatalog.facets.map((facet, index) => [facet.id, { ...facet, index }]));
     const activeConcepts = tagCatalog.concepts.filter(concept => concept.status === 'active')
         .sort((a, b) => facetsById.get(a.facet).index - facetsById.get(b.facet).index
-            || a.id.localeCompare(b.id));
+            || codePointCompare(a.id, b.id));
     const lines = [
         `contract=${promptTextContract}`,
         `registry_version=${tagCatalog.version}`,

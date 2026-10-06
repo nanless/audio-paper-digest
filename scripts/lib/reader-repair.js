@@ -34,6 +34,11 @@ const codePointCompare = (a, b) => {
     }
     return left.length === right.length ? 0 : (left.length < right.length ? -1 : 1);
 };
+// 这个文件有两种排序，用途不同，不要混用：
+// codePointCompare 按码点比较，用于必须与 Python 的 sorted() 对齐的地方；
+// codeUnitCompare 按 UTF-16 码元比较，与 Array#sort() 的默认顺序一致，用于
+// 校验由 .sort() 规范化过的字段列表。两者只在非 BMP 字符上不同。
+const codeUnitCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const TABLE_COUNT_ISSUE_CODE = 'reader_table_count_insufficient';
 const LEGACY_TABLE_BINDING_ORDER_MESSAGE = 'Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格';
 const TABLE_BINDING_ORDER_ERROR_CODE = 'READER_DRAFT_ORDER_AMBIGUOUS';
@@ -316,7 +321,7 @@ function validateImplementationAllowance(payload, identity, directory) {
         || proof.contract !== IMPLEMENTATION_ALLOWANCE_CONTRACT
         || !Array.isArray(proof.changedFields) || !proof.changedFields.length
         || proof.changedFields.some(field => !IMPLEMENTATION_ALLOWANCE_FIELDS.has(field))
-        || proof.changedFields.some((field, index) => index && proof.changedFields[index - 1].localeCompare(field) >= 0)
+        || proof.changedFields.some((field, index) => index && codeUnitCompare(proof.changedFields[index - 1], field) >= 0)
         || !audit || audit.contract !== 'reader-recovery-diagnostics-revision-v1'
         || (identity?.freshAnalysis?.runId ? audit.runId !== identity.freshAnalysis.runId
             : conference?.executionId ? !conferenceScopeValid

@@ -273,7 +273,7 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
         for (const reason of reasons.filter(item => item.level === level)) {
             grouped.set(reason.code, (grouped.get(reason.code) || 0) + 1);
         }
-        return [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+        return [...grouped.entries()].sort((a, b) => codePointCompare(a[0], b[0]))
             .map(([code, count]) => `${code}×${count}`);
     };
     const summary = changeLevel === 'none'
