@@ -47,5 +47,5 @@ test('daily current validation replays the sealed TXT/PDF pair and provenance', 
     fs.appendFileSync(path.join(plan.sourcesDir, id, 'generation-000001', 'source.pdf'), 'drift');
     const drifted = []; validateDailyFreshSourceRun(path.join(root, 'deep-analysis-result.json'), data, data.papers, drifted);
     assert.equal(drifted.length, 1);
-    assert.match(drifted[0], /sealed source/);
+    assert.match(drifted[0], /无法读取或核验封存的论文来源/);
 });
