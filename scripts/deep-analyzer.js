@@ -8545,6 +8545,72 @@ const RECOVERY_PROMPT_FILES = Object.freeze({
     imageSupplement: 'prompts/image-supplement.md'
 });
 
+// prompts/*.md 的首个围栏正文参与文本阶段指纹。已发布的 v1 正文永久冻结，
+// 路径仍由 RECOVERY_PROMPT_FILES 给出；自然化改写只新增 -v2 文件。写入固定用
+// 当前版本，读取按记录里声明的版本选路径重算：字段缺失按 v1 处理，未知版本报错。
+const ANALYSIS_PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1';
+const PROMPT_FILE_VERSIONS = Object.freeze({
+    openSourceScan: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+        path: RECOVERY_PROMPT_FILES.openSourceScan
+    }),
+    revision: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+        path: RECOVERY_PROMPT_FILES.revision
+    }),
+    tableRepair: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+        path: RECOVERY_PROMPT_FILES.tableRepair
+    }),
+    methodRepair: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+        path: RECOVERY_PROMPT_FILES.methodRepair
+    }),
+    coreSummaryRepair: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+        path: RECOVERY_PROMPT_FILES.coreSummaryRepair
+    }),
+    structureRepair: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+        path: RECOVERY_PROMPT_FILES.structureRepair
+    }),
+    tagSelection: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+        path: RECOVERY_PROMPT_FILES.tagSelection
+    })
+});
+
+function currentPromptTextContract(stage) {
+    const entry = PROMPT_FILE_VERSIONS[stage];
+    if (!entry) throw new Error(`阶段 ${stage} 没有登记提示词版本`);
+    return entry.contract;
+}
+
+// v1 一律走 RECOVERY_PROMPT_FILES 的冻结路径，不跟着当前版本走，
+// 否则升到 v2 之后旧记录会被按 v2 文件重算。
+function promptFilePathForContract(stage, promptTextContract) {
+    const declared = String(promptTextContract || '') || ANALYSIS_PROMPT_TEXT_V1_CONTRACT;
+    if (declared === ANALYSIS_PROMPT_TEXT_V1_CONTRACT) {
+        const frozen = RECOVERY_PROMPT_FILES[stage];
+        if (!frozen) throw new Error(`阶段 ${stage} 没有冻结的 v1 提示词路径`);
+        return frozen;
+    }
+    const entry = PROMPT_FILE_VERSIONS[stage];
+    if (entry && declared === entry.contract) return entry.path;
+    const known = [ANALYSIS_PROMPT_TEXT_V1_CONTRACT];
+    if (entry && !known.includes(entry.contract)) known.push(entry.contract);
+    throw new Error(`阶段 ${stage} 的提示词版本 ${declared} 没有登记；只认识 ${known.join(' 和 ')}。`);
+}
+
+// 已经完成的阶段按它自己声明的版本重算：旧记录没有这个字段，只能按 v1 的历史
+// 形状核验，替它补新形状会让全部旧检查点失效。尚未完成的阶段按当前版本写入。
+function textStagePromptTextContract(paper, manifest, stage) {
+    if (!isRecoveryStageComplete(manifest, stage)) return currentPromptTextContract(stage);
+    const physicalStage = physicalRecoveryStage(manifest, stage, paper?.analysisStageCheckpoints);
+    const record = manifest?.stages?.[physicalStage];
+    return typeof record?.promptTextContract === 'string' ? record.promptTextContract : '';
+}
+
 function stableFingerprint(value) {
     const normalize = item => {
         if (Array.isArray(item)) return item.map(normalize);
@@ -8743,11 +8809,17 @@ function buildStageEvidenceContext(stage, analysis, sourceText) {
     return config.sanitize ? sanitizeOpenSourceEvidence(evidence) : evidence;
 }
 
-function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
+// 不传 promptTextContract 表示按 v1 的历史形状算：哈希输入里没有这个字段，与
+// 改动前逐字节一致。要用新版本（含 v1 的新记录）时由调用方显式传当前版本，
+// 这样忘记传参的旧记录核验不会静默换指纹。
+function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, promptTextContract) {
     const config = TEXT_RECOVERY_STAGE_CONFIG[stage];
     if (!config) throw new Error(`未知的文本恢复阶段: ${stage}`);
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity();
+    const declaredPromptTextContract = String(promptTextContract || '');
     return stableFingerprint({
+        ...(declaredPromptTextContract
+            ? { promptTextContract: declaredPromptTextContract } : {}),
         ...(stage === 'tagSelection' ? {
             tagSelectionRecordContract: TAG_STAGE_RECORD_CONTRACT,
             tagStageRecordImplementationSha256: promptTemplateSha256('scripts/lib/tag-stage-record.js')
@@ -8758,7 +8830,8 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext) {
         } : {}),
         ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, config.maxTokens),
         promptTemplateSha256: promptTemplateSha256(
-            RECOVERY_PROMPT_FILES[stage],
+            promptFilePathForContract(stage,
+                declaredPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
             stage === 'coreSummaryRepair' ? CORE_SUMMARY_CONTRACT_VERSION : ''
         ),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
@@ -8818,7 +8891,9 @@ function previousStageCheckpoint(paper, stage) {
 function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourceText) {
     const inputAnalysis = getTextStageInputAnalysis(paper, stage, currentAnalysis);
     const evidenceContext = buildStageEvidenceContext(stage, inputAnalysis, sourceText);
-    const fingerprint = buildTextStageFingerprint(stage, inputAnalysis, evidenceContext);
+    const promptTextContract = textStagePromptTextContract(paper, manifest, stage);
+    const fingerprint = buildTextStageFingerprint(
+        stage, inputAnalysis, evidenceContext, promptTextContract);
     const evidenceSha256 = crypto.createHash('sha256').update(evidenceContext).digest('hex');
     const inputAnalysisSha256 = crypto.createHash('sha256').update(inputAnalysis).digest('hex');
     const compatibilityReused = (stage === 'structureRepair'
@@ -8835,6 +8910,7 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
         evidenceChars: evidenceContext.length,
         evidenceSha256,
         inputAnalysisSha256,
+        promptTextContract,
         fingerprint: compatibilityReused ? manifest.stages[stage].fingerprint : fingerprint,
         compatibilityReused,
         invalidated
@@ -9658,7 +9734,10 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
     for (const stage of ['openSourceScan', 'revision', 'tableRepair', 'methodRepair']) {
         const input = getTextStageInputAnalysis(paper, stage, paper.analysisCheckpoint);
         const evidence = buildStageEvidenceContext(stage, input, sourceText);
-        manifest.stages[stage].fingerprint = buildTextStageFingerprint(stage, input, evidence);
+        const promptTextContract = currentPromptTextContract(stage);
+        manifest.stages[stage].fingerprint = buildTextStageFingerprint(
+            stage, input, evidence, promptTextContract);
+        manifest.stages[stage].promptTextContract = promptTextContract;
     }
     const legacyStructureInput = getLegacyStageInput(
         'structureRepair', checkpoints, candidatePayload.analysisCheckpoint);
@@ -9689,7 +9768,8 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
     const coreInput = getTextStageInputAnalysis(paper, 'coreSummaryRepair', structureAnalysis);
     const coreEvidence = buildStageEvidenceContext('coreSummaryRepair', coreInput, sourceText);
     const currentCoreFingerprint = buildTextStageFingerprint(
-        'coreSummaryRepair', coreInput, coreEvidence
+        'coreSummaryRepair', coreInput, coreEvidence,
+        currentPromptTextContract('coreSummaryRepair')
     );
     invalidateRecoveryStageIfChanged(
         paper, manifest, 'coreSummaryRepair', currentCoreFingerprint
@@ -14469,6 +14549,8 @@ async function analyzePaperDeepInternal(paper) {
                 evidenceChars: openSourceStage.evidenceChars,
                 evidenceSha256: openSourceStage.evidenceSha256,
                 inputAnalysisSha256: openSourceStage.inputAnalysisSha256,
+                ...(openSourceStage.promptTextContract
+                    ? { promptTextContract: openSourceStage.promptTextContract } : {}),
                 fingerprint: openSourceStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -14586,6 +14668,8 @@ async function analyzePaperDeepInternal(paper) {
                 evidenceChars: revisionStage.evidenceChars,
                 evidenceSha256: revisionStage.evidenceSha256,
                 inputAnalysisSha256: revisionStage.inputAnalysisSha256,
+                ...(revisionStage.promptTextContract
+                    ? { promptTextContract: revisionStage.promptTextContract } : {}),
                 fingerprint: revisionStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -14623,6 +14707,8 @@ async function analyzePaperDeepInternal(paper) {
                 evidenceChars: tableRepairStage.evidenceChars,
                 evidenceSha256: tableRepairStage.evidenceSha256,
                 inputAnalysisSha256: tableRepairStage.inputAnalysisSha256,
+                ...(tableRepairStage.promptTextContract
+                    ? { promptTextContract: tableRepairStage.promptTextContract } : {}),
                 fingerprint: tableRepairStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -14659,6 +14745,8 @@ async function analyzePaperDeepInternal(paper) {
                 evidenceChars: methodRepairStage.evidenceChars,
                 evidenceSha256: methodRepairStage.evidenceSha256,
                 inputAnalysisSha256: methodRepairStage.inputAnalysisSha256,
+                ...(methodRepairStage.promptTextContract
+                    ? { promptTextContract: methodRepairStage.promptTextContract } : {}),
                 fingerprint: methodRepairStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -14744,6 +14832,8 @@ async function analyzePaperDeepInternal(paper) {
                     evidenceSha256: structureRepairStage.evidenceSha256,
                     inputAnalysisSha256: structureRepairStage.inputAnalysisSha256,
                     outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
+                    ...(structureRepairStage.promptTextContract
+                        ? { promptTextContract: structureRepairStage.promptTextContract } : {}),
                     fingerprint: structureRepairStage.fingerprint
                 }
             );
@@ -14856,6 +14946,8 @@ async function analyzePaperDeepInternal(paper) {
                     fingerprint: tagStage.fingerprint,
                     evidenceChars: tagStage.evidenceChars,
                     evidenceSha256: tagStage.evidenceSha256,
+                    ...(tagStage.promptTextContract
+                        ? { promptTextContract: tagStage.promptTextContract } : {}),
                     ...tagStageProof,
                     bindingSha256: stableFingerprint(tagStageProof)
                 }
@@ -14962,6 +15054,8 @@ async function analyzePaperDeepInternal(paper) {
                 inputAnalysisSha256: coreSummaryRepairStage.inputAnalysisSha256,
                 ...summaryBinding,
                 bindingSha256: stableFingerprint(summaryBinding),
+                ...(coreSummaryRepairStage.promptTextContract
+                    ? { promptTextContract: coreSummaryRepairStage.promptTextContract } : {}),
                 fingerprint: coreSummaryRepairStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -17166,6 +17260,10 @@ module.exports = {
     buildTypeAwareSourceContext,
     buildTaskEvidenceContext,
     buildStageEvidenceContext,
+    ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+    PROMPT_FILE_VERSIONS,
+    currentPromptTextContract,
+    promptFilePathForContract,
     buildTextStageFingerprint,
     tagRuleFingerprintFields,
     parseTagRepairResult,

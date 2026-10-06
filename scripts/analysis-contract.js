@@ -1568,9 +1568,37 @@ function manualStableValue(value) {
     return Object.fromEntries(Object.keys(value).sort().map(key => [key, manualStableValue(value[key])]));
 }
 
+// Python 的 _manual_hash 用 _manual_js_number_text 写数字，两边必须是同一套规则：
+// ECMAScript 规定的最短十进制（0.00002 不用指数，1e-7 与 1e21 用指数，1.0 写 1）。
+// 这里把数字文本单独列出来，两端共用一组向量，避免再退回 Python json.dumps 的
+// 2e-05 / 1e+17 / 1.0 写法。JSON.stringify 的数字输出就是这条规则。
+function manualNumberText(value) {
+    if (!Number.isFinite(value)) return 'null';
+    return JSON.stringify(value);
+}
+
+function manualCanonicalJson(value) {
+    if (typeof value === 'number') return manualNumberText(value);
+    if (value === null || typeof value === 'boolean' || typeof value === 'string') {
+        return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map(item => (
+            item === undefined || typeof item === 'function' ? 'null' : manualCanonicalJson(item)
+        )).join(',')}]`;
+    }
+    if (value && typeof value === 'object') {
+        return `{${Object.keys(value).sort()
+            .filter(key => value[key] !== undefined && typeof value[key] !== 'function')
+            .map(key => `${JSON.stringify(key)}:${manualCanonicalJson(value[key])}`)
+            .join(',')}}`;
+    }
+    return JSON.stringify(value);
+}
+
 function manualSha256(value) {
     return crypto.createHash('sha256')
-        .update(JSON.stringify(manualStableValue(value)))
+        .update(manualCanonicalJson(manualStableValue(value)))
         .digest('hex');
 }
 

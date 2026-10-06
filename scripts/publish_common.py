@@ -30,6 +30,7 @@ from path_config import (
     CURRENT_DIR,
     DEEP_ANALYSIS_RESULT_FILE,
     LLM_ACCOUNT_POOL_STATE_FILE,
+    PROJECT_ROOT,
     read_json_strict,
     resolve_deep_analysis_result_for_date,
     resolve_deep_analysis_result_path,
@@ -581,8 +582,91 @@ def _validate_publish_image_exclusion_view(paper, paper_label):
         )
 
 
+def _manual_js_number_text(value):
+    """按 ECMAScript 的 Number::toString 写数字文本，与 Node 的 JSON.stringify 一致。
+
+    json.dumps 用 repr：0.00002 写成 2e-05、1e17 写成 1e+17、整数浮点写成 1.0，
+    而 Node 写 0.00002、100000000000000000、1。这些差异会让 manualSha256 与
+    _manual_hash 对同一对象算出不同哈希。
+    """
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, int):
+        return str(value)
+    if value != value or value in (math.inf, -math.inf):
+        return 'null'
+    if value == 0:
+        return '0'
+    text = repr(float(value))
+    negative = text.startswith('-')
+    if negative:
+        text = text[1:]
+    mantissa, marker, exponent_text = text.partition('e')
+    exponent = int(exponent_text) if marker else 0
+    integer_part, _, fraction_part = mantissa.partition('.')
+    combined = integer_part + fraction_part
+    stripped = combined.lstrip('0')
+    leading_zeros = len(combined) - len(stripped)
+    digits = stripped.rstrip('0') or '0'
+    # point 是十进制小数点相对 digits 首位的位置，对应 ECMAScript 算法里的 n。
+    point = len(integer_part) - leading_zeros + exponent
+    length = len(digits)
+    if length <= point <= 21:
+        body = digits + '0' * (point - length)
+    elif 0 < point <= 21:
+        body = f'{digits[:point]}.{digits[point:]}'
+    elif -6 < point <= 0:
+        body = '0.' + '0' * (-point) + digits
+    else:
+        exponent_out = point - 1
+        head = digits if length == 1 else f'{digits[0]}.{digits[1:]}'
+        body = f'{head}e{"+" if exponent_out >= 0 else "-"}{abs(exponent_out)}'
+    return f'-{body}' if negative else body
+
+
+def _manual_canonical_json(value):
+    if value is None:
+        return 'null'
+    if isinstance(value, (bool, int, float)):
+        return _manual_js_number_text(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, list):
+        return '[' + ','.join(_manual_canonical_json(item) for item in value) + ']'
+    if isinstance(value, dict):
+        return '{' + ','.join(
+            f'{json.dumps(key, ensure_ascii=False)}:{_manual_canonical_json(value[key])}'
+            for key in sorted(value)
+        ) + '}'
+    # 其他类型交给 json.dumps，保持改动前的行为（含它抛出的 TypeError）。
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
 def _manual_hash(value):
-    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+    return hashlib.sha256(_manual_canonical_json(value).encode('utf-8')).hexdigest()
+
+
+_PROMPT_FENCE_RE = re.compile(r'^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1', re.M)
+
+
+def runtime_prompt_template_sha256(relative_path, contract_version=''):
+    """按 Node 的 runtimePromptTemplateSha256 算提示词首个围栏块的 SHA。
+
+    哈希输入必须与 JS 的 JSON.stringify({runtimePrompt, contractVersion}) 逐字节
+    相同：字典按插入顺序写，不排序；ensure_ascii 必须是 False，默认的 True 会把
+    中文写成 \\uXXXX，两端从此对不上。读文件也要走 bytes：read_text 会做通用换行
+    转换，把 CRLF 折成 LF，而 Node 原样保留 \\r。
+    """
+    content = (PROJECT_ROOT / str(relative_path)).read_bytes().decode('utf-8')
+    block_match = _PROMPT_FENCE_RE.search(content)
+    if block_match is None:
+        raise ValueError(f'Prompt 文件 {relative_path} 中未找到 fenced code block')
+    payload = json.dumps(
+        {'runtimePrompt': block_match.group(2), 'contractVersion': str(contract_version or '')},
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 
 _PUBLISH_TAG_CATALOG = load_tag_catalog()
