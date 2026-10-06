@@ -19,6 +19,18 @@ const LEGACY_REGISTRY_UPGRADE_VERSION = 1;
 const REGISTRY_UPGRADE_NOTE_MAX_CHARS = 500;
 const REGISTRY_UPGRADE_REASON_CAP = 32;
 const SHA256_RE = /^[a-f0-9]{64}$/;
+// 按 Unicode 码点比较，结果与 Python 的 sorted() 一致。
+// 不能直接用 < 比较：JS 比的是 UTF-16 码元，遇到 emoji 这类非 BMP 字符会排出
+// 与码点不同的顺序（例如 U+1F600 会排到 U+FFFD 前面）。
+const codePointCompare = (a, b) => {
+    const left = Array.from(String(a), char => char.codePointAt(0));
+    const right = Array.from(String(b), char => char.codePointAt(0));
+    const shared = Math.min(left.length, right.length);
+    for (let index = 0; index < shared; index += 1) {
+        if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+    }
+    return left.length === right.length ? 0 : (left.length < right.length ? -1 : 1);
+};
 
 // 人工确认只适用于以下破坏性变更原因。同次变更可以新增概念，但不能包含
 // 删除概念等白名单外的破坏性原因；原概念、旧快照和升级说明仍须通过核验。
@@ -249,9 +261,9 @@ function classifyRegistryChange(oldRegistry, newRegistry) {
             { tag: `#${collision.label}`, facets: collision.facets, conceptIds: collision.conceptIds });
     }
 
-    reasons.sort((a, b) => a.code.localeCompare(b.code)
-        || String(a.conceptId || a.facet || '').localeCompare(String(b.conceptId || b.facet || ''))
-        || a.message.localeCompare(b.message));
+    reasons.sort((a, b) => codePointCompare(a.code, b.code)
+        || codePointCompare(String(a.conceptId || a.facet || ''), String(b.conceptId || b.facet || ''))
+        || codePointCompare(a.message, b.message));
     const destructive = reasons.filter(reason => reason.level === 'destructive');
     const additive = reasons.filter(reason => reason.level === 'additive');
     const changeLevel = destructive.length ? 'destructive' : additive.length ? 'additive' : 'none';

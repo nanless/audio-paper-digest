@@ -22,6 +22,18 @@ const IMPLEMENTATION_ALLOWANCE_FIELDS = new Set(['repairImplementationSha256', '
 const hashDraft = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const shaText = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+// 按 Unicode 码点比较，结果与 Python 的 sorted() 一致。
+// 不能直接用 < 比较：JS 比的是 UTF-16 码元，遇到 emoji 这类非 BMP 字符会排出
+// 与码点不同的顺序（例如 U+1F600 会排到 U+FFFD 前面）。
+const codePointCompare = (a, b) => {
+    const left = Array.from(String(a), char => char.codePointAt(0));
+    const right = Array.from(String(b), char => char.codePointAt(0));
+    const shared = Math.min(left.length, right.length);
+    for (let index = 0; index < shared; index += 1) {
+        if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+    }
+    return left.length === right.length ? 0 : (left.length < right.length ? -1 : 1);
+};
 const TABLE_COUNT_ISSUE_CODE = 'reader_table_count_insufficient';
 const LEGACY_TABLE_BINDING_ORDER_MESSAGE = 'Reader 正文重排前表格与绑定无法唯一闭合；请按当前 candidate 正文顺序补齐 tableBindings 与 selection marker，禁止猜测或丢弃表格';
 const TABLE_BINDING_ORDER_ERROR_CODE = 'READER_DRAFT_ORDER_AMBIGUOUS';
@@ -206,12 +218,12 @@ function validationFailureSignature(issues) {
     const selected = (blocking.length ? blocking : values).map(recoveryIssueProjection);
     const gates = selected.map(issue => ({ path: issue?.path ?? null, code: issue?.code || null,
         message: normalizeValidationMessage(issue?.message) }))
-        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+        .sort((a, b) => codePointCompare(JSON.stringify(a), JSON.stringify(b)));
     const deficits = selected.flatMap(issue => {
         const gate = { path: issue?.path ?? null, code: issue?.code || null,
             message: normalizeValidationMessage(issue?.message) };
         return validationDeficits(issue?.message, JSON.stringify(gate));
-    }).sort((a, b) => a.key.localeCompare(b.key));
+    }).sort((a, b) => codePointCompare(a.key, b.key));
     return VALIDATION_SIGNATURE_PREFIX + JSON.stringify({ gateSha256: hashDraft(gates), deficits });
 }
 
