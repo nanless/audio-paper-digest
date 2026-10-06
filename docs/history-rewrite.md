@@ -271,7 +271,7 @@ npm run history:postprocess -- --apply --crosswalk UUID --date YYYY-MM-DD --conc
 
 通用 `apply-verified` 从磁盘重载 arXiv 来源时得到 `productionAuthorized=false`，不能以旧测试文件或自行构造的新磁盘链取得生产权限。会议来源还须本进程内已核验的 plan 对象，CLI 不能凭文件恢复这项能力，相应写入或 finalize 会拒绝。旧流程所需页面 decision 必须精确绑定，不能按标题自动确认。
 
-同论文的多个页面按 `paperId`、`pageKey` 排序形成 `identityGroups`，只有全部页面通过授权核验且为 `verified` 才算完整。`finalize` 逐项核对来源，独占创建不可变 `page-source-crosswalk-final-receipt-v1`。证明缺失、替换、SHA 漂移或上游会议对象无法恢复均拒绝。后续使用最终凭证（`final receipt`）仍须当前生产授权解析器/对象再次核验，只持有状态和凭证文件不构成持久生产授权。
+同论文的多个页面按 `paperId`、`pageKey` 排序形成 `identityGroups`，只有全部页面通过授权核验且为 `verified` 才算完整。`finalize` 逐项核对来源，独占创建不可变 `page-source-crosswalk-final-receipt-v1`；证明缺失、替换或 SHA 漂移均拒绝。会议来源在命令行下恒为 fail-closed：生产用的会议 plan-authority bundle loader 还没有接入，只要完成状态里出现会议来源上下文（`conference-plan-source-context`），`finalize` 就直接报错退出，不会写出最终凭证。后续使用最终凭证（`final receipt`）仍须当前生产授权解析器/对象再次核验，只持有状态和凭证文件不构成持久生产授权。
 
 ### 锁与中断恢复
 

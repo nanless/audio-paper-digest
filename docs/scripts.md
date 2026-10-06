@@ -149,7 +149,7 @@ npm run history:resume -- --plan /abs/direct-rewrite-plan-v5.json --phase source
 
 未传 `--publication-id` 时，普通/watch 状态完全离线，只说明未选择发布。传入后默认现场核对远端 main 与 receipt 的远端身份/OID；`--live-remote false` 只作离线诊断，不能得到 complete。发布状态是单次检查，不能与 watch 同用，并会深核全部 arXiv 文件和会议来源 SHA。
 
-完整状态取决于计划的全部论文、来源、日汇总、会议汇总和精确任务页覆盖，以及绑定同一 plan SHA 的发布完成状态。数量从 plan/projection 推导，并非固定要求 3824 篇、107 日加 3 会或 193 任务；这些数字只能说明特定历史计划，不能当通用阈值。`completion.blockers` 会列出未覆盖页面、失败或未生成页面的论文、缺失汇总，以及未选择、未完成或计划不符的发布。
+完整状态取决于计划的全部论文、来源、日汇总、会议汇总和精确任务页覆盖，以及绑定同一 plan SHA 的发布完成状态。数量从 plan/projection 推导，并非固定要求 4185 篇、109 日加 3 会或 193 任务；这些数字只能说明特定历史计划，不能当通用阈值。`completion.blockers` 会列出未覆盖页面、失败或未生成页面的论文、缺失汇总，以及未选择、未完成或计划不符的发布。
 
 ### 汇总与独立发布
 

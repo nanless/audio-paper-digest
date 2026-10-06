@@ -251,7 +251,7 @@ redeploy. `digest:status` does not yet perform deployment or live-page checks.
 
 During the tag migration, new pages keep Hugo's flat `tags` field and declare `paper-tag-flat-tags-v2`
 in `paper_digest_tags_contract`. They must also record and verify the current tag catalog version and SHA,
-each tag's `concept` and `facet`, and the explicit `paper_digest_primary_task` and
+each tag's `{id, facet, label}`, and the explicit `paper_digest_primary_task` and
 `paper_digest_primary_method`. Existing pages and tag URLs stay unchanged. Aggregate “popular directions”
 count only explicit primary tasks; the site-wide tag list must explain that it mixes old and new labels.
 
