@@ -20,7 +20,7 @@ const {
 
 const registryPath = path.resolve(__dirname, '../config/tag-catalog.json');
 
-test('runtime derives all active preferred labels, roles and compact projection from registry', () => {
+test('运行时从词表推导出全部启用的首选标签、角色和紧凑投影', () => {
     const runtime = createTagRules({ registryPath });
     assert.equal(runtime.projectionContract, TAG_PROMPT_TEXT_CONTRACT);
     assert.equal(runtime.selectionContract, TAG_SELECTION_CONTRACT);
@@ -77,7 +77,7 @@ test('标签提示保留 v1 全文字节，默认 v2 只更换版本和说明', 
     }
 });
 
-test('current selection accepts only preferred Chinese labels and rejects hierarchy duplication', () => {
+test('当前选择只接受首选中文标签，拒绝层级重复', () => {
     const runtime = createTagRules({ registryPath });
     const valid = runtime.validateTagSelection({
         tags: ['#语音可懂度评估', '#众包评测', '#多语言', '#基准测试'],
@@ -104,7 +104,7 @@ test('current selection accepts only preferred Chinese labels and rejects hierar
     assert.match(redundant.errors.join('\n'), /最具体|上级概念/);
 });
 
-test('selection contract caps the task facet at one primary plus two supplemental tasks', () => {
+test('选择约定把 task facet 限制为一个主任务加两个补充任务', () => {
     const runtime = createTagRules({ registryPath });
     const fourTasks = runtime.validateTagSelection({
         tags: ['#语音合成', '#语音克隆', '#音视频生成', '#音频理解', '#Transformer'],
@@ -212,7 +212,7 @@ test('主任务是否过于宽泛按整个词表判断；该告警不使已有�
     }), null);
 });
 
-test('research-method coverage gives dataset, benchmark, subjective, review and theory papers a real method', () => {
+test('研究方法覆盖让数据集、基准、主观、综述和理论类论文都有真正的方法标签', () => {
     const runtime = createTagRules({ registryPath });
     const cases = [
         ['dataset', ['#语音识别', '#数据集构建', '#数据集'], '#语音识别', '#数据集构建'],
@@ -231,7 +231,7 @@ test('research-method coverage gives dataset, benchmark, subjective, review and 
     }
 });
 
-test('2403 crowdsourced intelligibility fixture cannot reuse end-to-end alias as method', () => {
+test('2403 众包可懂度夹具不能把端到端别名当成方法', () => {
     const analysis = `## 机器摘要
 primary_task_tag: #语音可懂度评估
 primary_method_tag: #众包评测

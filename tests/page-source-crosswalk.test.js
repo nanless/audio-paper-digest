@@ -348,7 +348,7 @@ test('合成扫描 v3 与 v4 样本按原格式读取，拒绝字段混用和错
     assert.throws(() => load(f), /receipt self-SHA drifted/);
 });
 
-test('opaque inventory loader replays canonical ledger/receipt and rejects forged handles or byte drift', t => {
+test('不透明清单加载器复核规范账目与凭证，拒绝伪造句柄或字节漂移', t => {
     const f = fixture(t); const handle = load(f); const snapshot = api.inventoryHandleSnapshot(handle);
     assert.equal(snapshot.ledger.pages.length, 2); assert.equal(snapshot.receipt.ledger.name, f.ledgerName);
     const paper = snapshot.ledger.pages.find(page => page.kind === 'paper');
@@ -542,7 +542,7 @@ test('真实 Python 新扫描和原实现两版扫描经配对凭证进入 Node�
         /receipt does not bind the exact ledger/);
 });
 
-test('prepare selects every and only paper page without title/body, dry-run is zero-write and apply uses safe modes', t => {
+test('prepare 只挑出没有标题与正文的论文页，试运行不写盘，apply 使用安全模式', t => {
     const f = fixture(t); const roots = { inventoryRoot: f.inventory, crosswalkRoot: f.crosswalk };
     const args = ['prepare', '--dry-run', '--ledger', f.ledgerName, '--receipt', f.receiptName, '--crosswalk', ids[0]];
     const dry = cli.main(args, { roots, now: stamp });
@@ -562,7 +562,7 @@ test('prepare selects every and only paper page without title/body, dry-run is z
     assert.equal(status.status, 'valid'); assert.equal(status.pending, 1);
 });
 
-test('prepare rolls back injected EIO and recovers only verifiable known half-products', t => {
+test('prepare 回滚注入的 EIO，且只恢复可核验的已知半成品', t => {
     const f = fixture(t); const handle = load(f);
     for (const [offset, stage] of ['afterDirectoryCreate', 'afterDecisionsCreate', 'afterStateWrite'].entries()) {
         const crosswalkId = ids[offset + 3];
@@ -605,7 +605,7 @@ test('prepare rolls back injected EIO and recovers only verifiable known half-pr
         crosswalkId: linkedId, now: stamp, apply: true }), /unsafe directory/);
 });
 
-test('decision application is CAS-bound, append-only and idempotent by exact operation evidence', t => {
+test('决定写入绑定 CAS、只追加，并以精确操作证据保证幂等', t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
     const artifact = api.buildDecisionArtifact({ state, pageKey, operationId: ids[1], actorId: 'reviewer.1',
@@ -638,7 +638,7 @@ test('decision application is CAS-bound, append-only and idempotent by exact ope
     assert.throws(() => api.readCrosswalk({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0] }), /replay drifted/);
 });
 
-test('operation lock never steals a live PID and rejects fresh-dead, symlink, extra, or tampered evidence', t => {
+test('操作锁绝不抢占存活 PID，拒绝刚死、符号链接、多余或被篡改的证据', t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
     const artifact = api.buildDecisionArtifact({ state, pageKey, operationId: ids[1], actorId: 'reviewer',
@@ -674,7 +674,7 @@ test('operation lock never steals a live PID and rejects fresh-dead, symlink, ex
         owner: 'worker', now: stamp }), /self-SHA drifted/);
 });
 
-test('operation lock reclaims only a verified stale lock owned by a dead local PID', t => {
+test('只有本机已死 PID 留下的、经核验的过期锁才会被回收', t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
     const artifact = api.buildDecisionArtifact({ state, pageKey, operationId: ids[1], actorId: 'reviewer',
@@ -689,7 +689,7 @@ test('operation lock reclaims only a verified stale lock owned by a dead local P
     assert.equal(fs.existsSync(path.join(directory, 'operation.lock.reclaim')), false);
 });
 
-test('local crawler recovery capabilities bypass the lease only for a strict same-host dead owner', t => {
+test('只有严格的同主机已死持有者才允许本地抓取恢复能力绕过租约', t => {
     const f = fixture(t); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true });
     const directory = path.join(f.crosswalk, ids[0]); const lockPath = path.join(directory, 'operation.lock');
@@ -729,7 +729,7 @@ test('local crawler recovery capabilities bypass the lease only for a strict sam
         { recoveryPolicy: api.HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY }), /self-SHA drifted/);
 });
 
-test('operation lock reclaims a verified remote lock only after its lease expires', t => {
+test('远端锁只有在租约到期且核验通过后才回收', t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
     const artifact = api.buildDecisionArtifact({ state, pageKey, operationId: ids[1], actorId: 'reviewer',
@@ -746,7 +746,7 @@ test('operation lock reclaims a verified remote lock only after its lease expire
     assert.equal(fs.existsSync(path.join(directory, 'operation.lock.reclaim')), false);
 });
 
-test('SIGINT releases only the child-owned lock and leaves canonical state bytes intact', async t => {
+test('SIGINT 只释放子进程持有的锁，规范状态字节保持不变', async t => {
     const f = fixture(t); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true });
     const directory = path.join(f.crosswalk, ids[0]);
@@ -763,7 +763,7 @@ test('SIGINT releases only the child-owned lock and leaves canonical state bytes
     assert.equal(fs.readdirSync(directory).some(name => /^\.state\..+\.tmp$/.test(name)), false);
 });
 
-test('SIGTERM uses the same exact-owner cleanup and exits with 143', async t => {
+test('SIGTERM 走同样的精确持有者清理，并以 143 退出', async t => {
     const f = fixture(t); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[2], now: stamp, apply: true });
     const directory = path.join(f.crosswalk, ids[2]); const holder = spawnLockHolder(directory);
@@ -774,7 +774,7 @@ test('SIGTERM uses the same exact-owner cleanup and exits with 143', async t => 
     assert.equal(fs.existsSync(path.join(directory, 'operation.lock')), false);
 });
 
-test('SIGINT delivered during synchronous state replacement cannot tear the atomic state', async t => {
+test('同步替换状态期间收到 SIGINT 也不会撕裂原子状态', async t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk,
         inventoryHandle: load(f), crosswalkId: ids[5], now: stamp, apply: true });
     const pageKey = Object.keys(state.assignments)[0];
@@ -796,8 +796,8 @@ test('SIGINT delivered during synchronous state replacement cannot tear the atom
     assert.equal(fs.readdirSync(directory).some(name => /^\.state\..+\.tmp$/.test(name)), false);
 });
 
-test('SIGINT refuses owner-file inode replacement and concurrent lock-owner replacement', async t => {
-    await t.test('owner inode replaced with identical bytes', async tt => {
+test('SIGINT 拒绝替换持有者文件 inode，也拒绝并发替换锁持有者', async t => {
+    await t.test('持有者 inode 被换成字节相同的文件', async tt => {
         const f = fixture(tt); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
             crosswalkId: ids[3], now: stamp, apply: true });
         const directory = path.join(f.crosswalk, ids[3]); const lockPath = path.join(directory, 'operation.lock');
@@ -813,7 +813,7 @@ test('SIGINT refuses owner-file inode replacement and concurrent lock-owner repl
         assert.deepEqual(fs.readFileSync(ownerPath), ownerBytes);
     });
 
-    await t.test('operation lock directory replaced by another live owner', async tt => {
+    await t.test('操作锁目录被另一个存活持有者替换', async tt => {
         const f = fixture(tt); api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
             crosswalkId: ids[4], now: stamp, apply: true });
         const directory = path.join(f.crosswalk, ids[4]); const lockPath = path.join(directory, 'operation.lock');
@@ -831,7 +831,7 @@ test('SIGINT refuses owner-file inode replacement and concurrent lock-owner repl
     });
 });
 
-test('self-authored arXiv fixtures cannot authorize verified decisions in the core API or a separate CLI process', t => {
+test('自造的 arXiv 夹具无法在核心 API 或独立 CLI 进程中授权已核验的决定', t => {
     const f = fixture(t); const authorityRoot = path.join(f.root, 'authorities');
     const authorityHandle = writeArxivAuthority(authorityRoot);
     const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
@@ -890,7 +890,7 @@ test('self-authored arXiv fixtures cannot authorize verified decisions in the co
     assert.equal(fs.existsSync(path.join(f.crosswalk, ids[0], 'final-receipt.json')), false);
 });
 
-test('official arXiv adapter authority can drive the verified crosswalk CLI path', async t => {
+test('arXiv 官方适配器授权可以驱动已核验的来源对照 CLI 路径', async t => {
     const f = fixture(t); const authorityRoot = path.join(f.root, 'authorities');
     const originalFetch = deep.fetchArxivTextDetailedUncached;
     t.after(() => { deep.fetchArxivTextDetailedUncached = originalFetch; });
@@ -913,7 +913,7 @@ test('official arXiv adapter authority can drive the verified crosswalk CLI path
     assert.equal(output.crosswalk.completion, 'complete');
 });
 
-test('explicit conflict resolver accepts only an existing non-title hint with exact production authority', async t => {
+test('显式冲突解决器只接受已存在、非标题且带精确生产授权的提示', async t => {
     const f = fixture(t); useArxivConflictHints(f); const authorityRoot = path.join(f.root, 'authorities');
     const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true });
@@ -946,7 +946,7 @@ test('explicit conflict resolver accepts only an existing non-title hint with ex
     assert.match(updated.assignments[pageKey].reason, /Operator selected existing non-title hint/);
 });
 
-test('conflict resolver rejects single pages, durable-only authority, and authority/selection mismatch', async t => {
+test('冲突解决器拒绝单页、仅有持久化授权，以及授权与选择不匹配的情况', async t => {
     const single = fixture(t);
     const singleState = api.prepareCrosswalk({ crosswalkRoot: single.crosswalk, inventoryHandle: load(single),
         crosswalkId: ids[0], now: stamp, apply: true });
@@ -979,7 +979,7 @@ test('conflict resolver rejects single pages, durable-only authority, and author
     /does not exactly match/);
 });
 
-test('archive crawl identity authority closes an exact archived arXiv hint without becoming a full-text authority', t => {
+test('归档抓取身份授权可以结清一条精确的归档 arXiv 提示，但不会升级为全文授权', t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true });
     const dataRoot = path.join(f.root, 'data'); const archiveDirectory = path.join(dataRoot, 'archive', '2026-01-01');
@@ -1005,7 +1005,7 @@ test('archive crawl identity authority closes an exact archived arXiv hint witho
     assert.throws(() => authorityApi.authorityHandleSnapshot(prepared.authorityHandle), /authenticated paper source authority/);
 });
 
-test('current local crawler authority finalization dispatches separate local, legacy, and snapshot roots', t => {
+test('当前本地抓取授权的收尾分别走本地、旧版和快照三个根目录', t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true }); const pageKey = Object.keys(state.assignments)[0];
     const dataRoot = path.join(f.root, 'data'); const current = path.join(dataRoot, 'current'); const authorityRoot = path.join(f.root, 'paper-authorities');
@@ -1030,7 +1030,7 @@ test('current local crawler authority finalization dispatches separate local, le
         localCrawlSnapshotRoot: snapshotRoot, localCrawlDataRoot: dataRoot }).receipt.receiptSha256, finalized.receipt.receiptSha256);
 });
 
-test('retained local conference crawler metadata and PDF authority verifies an exact OpenReview page hint', t => {
+test('留存的本地会议抓取元数据与 PDF 授权可核验一条精确的 OpenReview 页面提示', t => {
     const f = fixture(t); useOpenReviewHint(f); const dataRoot = path.join(f.root, 'data');
     const current = path.join(dataRoot, 'current'); const pdfRoot = path.join(dataRoot, 'pdfs', 'icml2026');
     fs.mkdirSync(current, { recursive: true, mode: 0o700 }); fs.mkdirSync(pdfRoot, { recursive: true, mode: 0o700 });
@@ -1055,7 +1055,7 @@ test('retained local conference crawler metadata and PDF authority verifies an e
     assert.equal(conferenceCrawlAuthorityApi.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), prepared.authorityHandle);
 });
 
-test('verified conference decision replays locked bytes and final receipt requires live production authority', t => {
+test('已核验的会议决定复核锁定字节，最终凭证要求实时生产授权', t => {
     const f = fixture(t); useConferenceHint(f); const authorityRoot = path.join(f.root, 'authorities');
     const production = writeConferenceAuthority(t, authorityRoot);
     const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
@@ -1126,7 +1126,7 @@ test('verified conference decision replays locked bytes and final receipt requir
         authorityResolver: production.resolver }), /proof file\/SHA drifted|canonical pretty JSON/);
 });
 
-test('same canonical identity across pages forms one deterministic group and rejects conflicting records', t => {
+test('跨页的同一规范身份归为一个确定分组，冲突记录一律拒绝', t => {
     const f = fixture(t); useConferenceHint(f); const authorityRoot = path.join(f.root, 'authorities');
     const production = writeConferenceAuthority(t, authorityRoot);
     const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
@@ -1152,7 +1152,7 @@ test('same canonical identity across pages forms one deterministic group and rej
     assert.equal(state.completion.pending, 1);
 });
 
-test('paths, links, duplicate JSON and CLI grammar fail closed without writes', t => {
+test('路径、链接、重复 JSON 和 CLI 语法有问题时直接失败，不写盘', t => {
     const f = fixture(t); const roots = { inventoryRoot: f.inventory, crosswalkRoot: f.crosswalk };
     assert.throws(() => cli.parseArgs(['prepare', '--dry-run', '--ledger', '../x.json', '--receipt', 'r.json']));
     assert.throws(() => cli.parseArgs(['status', '--crosswalk', '../x']));
@@ -1166,4 +1166,118 @@ test('paths, links, duplicate JSON and CLI grammar fail closed without writes', 
     const dry = cli.main(['prepare', '--dry-run', '--ledger', f.ledgerName, '--receipt', f.receiptName,
         '--crosswalk', ids[0]], { roots, now: stamp });
     assert.equal(dry.status, 'dry-run'); assert.equal(fs.existsSync(f.crosswalk), false);
+});
+
+// 下面两条断言守的是历史清单与 Python 扫描器之间的跨语言哈希一致性。两边各自算
+// 一遍 pageSetSha256 / ledgerSha256 / receiptSha256，只有把同一份数据序列化成同一
+// 串字节才算通过。现在没事靠的是两个隐含前提，前提失效不会报错，只会静默分歧。
+const NON_BMP_KEY = /[\u{10000}-\u{10FFFF}]/u;
+
+function collectKeys(value, prefix = 'root', found = []) {
+    if (Array.isArray(value)) {
+        value.forEach((item, index) => collectKeys(item, `${prefix}[${index}]`, found));
+    } else if (value && typeof value === 'object') {
+        for (const [key, item] of Object.entries(value)) {
+            if (NON_BMP_KEY.test(key) || /[^\x20-\x7e]/.test(key)) found.push(`${prefix}/${key}`);
+            collectKeys(item, `${prefix}/${key}`, found);
+        }
+    }
+    return found;
+}
+
+test('被哈希的历史清单键全部是 ASCII，非 ASCII 只出现在值里', t => {
+    const f = fixture(t);
+    const current = structuredClone(f.ledger);
+    current.policy = { contract: 'historical-page-scan-policy-v5', bodyRetention: 'sha256-only',
+        identityHints: 'frontmatter-filename-explicit-links-v1', outboundLinks: 'strict-balanced-inline-occurrences-v3',
+        linkOffsetUnit: 'utf8-byte-body-relative', tagRoutes: 'unverified-candidates-v3',
+        publicationEvidence: 'schema-checked-hash-default-whitelist-v4',
+        targetRecordBinding: 'target-page-snapshot-sha256-v1' };
+    rehashLedger(current);
+    // 前提：清单、凭证、策略与 crosswalk 状态（含 counts 的 pending/needsReview）里
+    // 所有被哈希的 map，键都是固定 ASCII 字面量。键一旦出现非 BMP 字符，JS 的 UTF-16
+    // 码元排序与 Python 的码点排序就会给出不同顺序（U+1F600 的代理对首元 D83D 小于
+    // U+FFFD），排序后的键进哈希，两端 SHA 分歧，表现为「ledger self-SHA drifted /
+    // page set SHA drifted」而两边都自认正确。
+    const state = api.buildInitialState(load(f), { crosswalkId: ids[0], now: stamp });
+    assert.ok('pending' in state.completion && 'needsReview' in state.completion,
+        'state.completion 必须带 pending/needsReview，否则这条断言没覆盖到被哈希的 counts 键');
+    assert.deepEqual(collectKeys({ ledger: f.ledger, receipt: f.receipt, current, state }),
+        [], '被哈希的键集合里出现了非 ASCII 键；非 BMP 键会让 JS 的码元序与 Python 的码点序分歧，跨语言哈希不再一致');
+    assert.deepEqual(collectKeys({ [String.fromCodePoint(0x1F600)]: 1, ok: { [String.fromCodePoint(0x1F642)]: 2 } }).length,
+        2, '键遍历器必须能认出注入的 emoji 键；认不出就说明这条断言是空的');
+    // 值里本来就有中文（legacy 标签术语），用它确认断言区分的是键而不是值。
+    const term = f.ledger.pages.flatMap(page => page.legacyTaxonomyCandidates).map(candidate => candidate.term);
+    assert.ok(term.some(value => /[^\x20-\x7e]/.test(value)), '样本值里应当有中文，否则这条断言测不到「键与值的区别」');
+});
+
+test('历史页 crosswalk 的 number 证据前提：整型浮点双向拒绝，forceFloat 分支不可达', t => {
+    const f = fixture(t);
+    const withNumber = (value, valueType = 'number') => {
+        const ledger = structuredClone(f.ledger);
+        const paper = ledger.pages.find(page => page.kind === 'paper');
+        const entry = paper.publicationEvidenceRefs.find(item => item.field === 'paper_digest_api_reader_contract');
+        entry.valueType = valueType; entry.value = value; entry.valueSha256 = api.stableHash(value);
+        rehashPage(paper); rehashLedger(ledger);
+        return ledger;
+    };
+    // 前提：valueType == "number" 只接受非整型浮点。整数取值的浮点必须落到
+    // valueType == "integer"（Python 的 _json_value 也是这么转的）。破坏它的后果：
+    // JS 的 pythonJson 会走 forceFloat 分支把 7 写成 "7.0"，Python 的 json.dumps
+    // 写 "7"，两端稳定哈希分歧（见下面的 intHash/floatHash 对比）。
+    const integerLedger = withNumber(7);
+    assert.throws(() => api.validateHistoricalLedger(integerLedger),
+        /number publication evidence has the wrong value type/,
+        'number 证据里的整数值必须被拒绝，否则 JS 的 forceFloat 分支会被走到，跨语言哈希分歧');
+    assert.deepEqual(api.validateHistoricalLedger(withNumber(7.5)), withNumber(7.5),
+        '非整型浮点才是 number 分支唯一可达的输入');
+
+    const project = path.join(__dirname, '..');
+    const floatInput = path.join(f.root, 'number-evidence-float.json');
+    const intInput = path.join(f.root, 'number-evidence-int.json');
+    fs.writeFileSync(floatInput, JSON.stringify(withNumber(7.5)));
+    fs.writeFileSync(intInput, JSON.stringify(integerLedger));
+    const script = [
+        'import json,sys',
+        'sys.path.insert(0, sys.argv[1])',
+        'from historical_page_scan import validate_ledger, _publication_evidence, _page_snapshot_body, stable_hash',
+        'validate_ledger(json.load(open(sys.argv[2], encoding="utf-8")))',
+        // 整数值那份清单的 SHA 是 Node 用 forceFloat 算的（值写成 7.0），Python 复算
+        // 得到的是 7，两边不一致。先用 Python 自己的口径把摘要补一致，才能把校验推进
+        // 到证据类型分支，看到 Python 拒绝的是类型而不是摘要。
+        'def rehash(ledger):',
+        '    for page in ledger["pages"]:',
+        '        page["snapshotSha256"]=stable_hash(_page_snapshot_body(page))',
+        '        page["recordSha256"]=stable_hash({k:v for k,v in page.items() if k!="recordSha256"})',
+        '    ledger["pageSetSha256"]=stable_hash(ledger["pages"])',
+        '    ledger["ledgerSha256"]=stable_hash({k:v for k,v in ledger.items() if k!="ledgerSha256"})',
+        '    return ledger',
+        'rejected=None',
+        'try:',
+        '    validate_ledger(rehash(json.load(open(sys.argv[3], encoding="utf-8"))))',
+        'except Exception as exc:',
+        '    rejected=str(exc)',
+        'frontmatter={"paper_digest_score":7.0,"paper_digest_reader_quality":6.5}',
+        'int_evidence={"field":"paper_digest_score","valueType":"number","value":7,"valueSha256":"0"*64}',
+        'float_evidence={"field":"paper_digest_score","valueType":"number","value":7.5,"valueSha256":"0"*64}',
+        'print(json.dumps({"floatAccepted":True,"intRejected":rejected,',
+        '    "frontmatterTypes":[[e["field"],e["valueType"],e["value"]] for e in _publication_evidence(frontmatter)],',
+        '    "intHash":stable_hash(int_evidence),"floatHash":stable_hash(float_evidence)},ensure_ascii=False))',
+    ].join('\n');
+    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script, path.join(project, 'scripts'),
+        floatInput, intInput], { cwd: project, encoding: 'utf8' });
+    assert.equal(result.status, 0, `Python 侧复核失败：${result.stderr}`);
+    const python = JSON.parse(result.stdout);
+    assert.equal(python.floatAccepted, true);
+    assert.match(String(python.intRejected), /number publication evidence has the wrong value type/,
+        'Python 的 number 分支也必须拒绝整数值，否则两端对同一份证据的取舍不同');
+    assert.deepEqual(python.frontmatterTypes,
+        [['paper_digest_reader_quality', 'number', 6.5], ['paper_digest_score', 'integer', 7]],
+        'frontmatter 里的 7.0 必须先转成 integer，6.5 才留在 number');
+    const intEvidence = { field: 'paper_digest_score', valueType: 'number', value: 7, valueSha256: '0'.repeat(64) };
+    const floatEvidence = { field: 'paper_digest_score', valueType: 'number', value: 7.5, valueSha256: '0'.repeat(64) };
+    assert.equal(python.floatHash, api.stableHash(floatEvidence),
+        'number 分支唯一可达的输入（非整型浮点）两端必须同哈希');
+    assert.notEqual(python.intHash, api.stableHash(intEvidence),
+        '这就是要守的分歧：整数值走 number 分支时 JS 写 7.0、Python 写 7，两端稳定哈希不同');
 });

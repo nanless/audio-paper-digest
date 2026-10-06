@@ -23,7 +23,7 @@ function fixture(t) {
     return { root, dataRoot, archiveRecord, currentId, identityRoot: path.join(root, 'local-identities'), snapshotRoot: path.join(root, 'identity-snapshots'), legacyIdentityRoot: path.join(root, 'legacy-identities') };
 }
 
-test('current papers map accepts no paper_id, stores only ID/SHA evidence, and replays after current changes', t => {
+test('当前论文映射不接受 paper_id，只保存 ID 与 SHA 证据，并在当前数据变化后复核', t => {
     const f = fixture(t); const index = local.scanLocalCrawlPapers({ dataRoot: f.dataRoot });
     const current = index.matches.get(f.currentId).find(item => item.sourceKind === 'current');
     assert.deepEqual(current.recordIdentity, { arxivId: f.currentId, paperId: f.currentId });
@@ -45,7 +45,7 @@ test('current papers map accepts no paper_id, stores only ID/SHA evidence, and r
         dataRoot: f.dataRoot, authorityName: prepared.authorityName }));
 });
 
-test('current papers reader admits a 126 MiB valid snapshot within its 128 MiB bound', t => {
+test('当前论文读取器在 128 MiB 上限内接受 126 MiB 的合法快照', t => {
     const f = fixture(t); const filename = path.join(f.dataRoot, 'current', 'papers.json');
     const prefix = JSON.stringify({ papers: { '2602.99999': { arxivId: '2602.99999' } }, padding: '' });
     const bytes = (126 * 1024 * 1024) - Buffer.byteLength(prefix) + 1;
@@ -55,7 +55,7 @@ test('current papers reader admits a 126 MiB valid snapshot within its 128 MiB b
     assert.equal(loaded.records.filter(item => item.identity).length, 1);
 });
 
-test('legacy archive identities replay through the separate legacy root without state migration', t => {
+test('旧版归档身份经独立的旧版根目录复核，不做状态迁移', t => {
     const f = fixture(t); const archiveFile = path.join(f.dataRoot, 'archive', '2026-02-03', 'filtered-papers.json');
     const records = Array.from({ length: 5 }, (_value, index) => {
         const id = `2602.0000${index + 1}`; return { arxivId: id, paper_id: id, title: `metadata ${index}` };

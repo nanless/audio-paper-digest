@@ -65,7 +65,7 @@ function writeOpenreviewReceipt(f, forumId) {
     fs.writeFileSync(receiptFile, api.prettyBytes(receipt), { mode: 0o600 });
     return { receipt, receiptFile, pdfFile };
 }
-test('buildLocalSourcesManifest keeps only stable source coordinates and local PDF descriptors', t => {
+test('buildLocalSourcesManifest 只保留稳定的来源坐标和本地 PDF 描述符', t => {
     const f = fixture(t); const manifest = build(f);
     assert.equal(manifest.contract, 'historical-conference-local-sources-v2');
     assert.equal(manifest.summary.canonicalPapers, 6); assert.equal(manifest.summary.sourceRecords, 7);
@@ -98,13 +98,13 @@ test('buildLocalSourcesManifest keeps only stable source coordinates and local P
     assert.equal(encoded.includes('accepted title is not output'), false);
     assert.equal(api.assertManifest(manifest), manifest);
 });
-test('collector records a missing PDF as unavailable without dropping its local metadata identity', t => {
+test('收集器把缺失的 PDF 记为不可用，但不丢掉它的本地元数据身份', t => {
     const f = fixture(t); fs.unlinkSync(path.join(f.root, 'icassp.pdf'));
     const manifest = build(f);
     const item = manifest.records.find(record => record.paperId === 'conference:icassp:2026:icassp-arnumber:100');
     assert.equal(item.sources[0].pdf.availability, 'missing'); assert.equal(manifest.summary.directRewriteEligible, 4);
 });
-test('fresh overlay requires and exactly binds one acquisition receipt', t => {
+test('新增覆盖要求且只绑定一份获取凭证', t => {
     const f = fixture(t); const proof = writeOpenreviewReceipt(f, f.rawOnlyId);
     const manifest = build(f); const source = manifest.records.find(item => item.paperId.endsWith(`:${f.rawOnlyId}`)).sources[0];
     assert.equal(source.pdf.absolutePath, proof.pdfFile);
@@ -117,21 +117,21 @@ test('fresh overlay requires and exactly binds one acquisition receipt', t => {
     fs.writeFileSync(path.join(f.alternateReceipts, `alternate-${f.rawOnlyId}.json`), '{}\n');
     assert.throws(() => build(f), /both OpenReview and alternate PDF receipts/);
 });
-test('fresh overlay rejects receiptless bytes and conflicting retained bytes', t => {
+test('新增覆盖拒绝没有凭证的字节和与保留字节冲突的内容', t => {
     const f = fixture(t); fs.writeFileSync(path.join(f.icmlFreshPdfs, `${f.rawOnlyId}.pdf`), pdf(), { mode: 0o600 });
     assert.throws(() => build(f), /fresh runtime PDF has no acquisition receipt/);
     writeOpenreviewReceipt(f, f.rawOnlyId);
     fs.writeFileSync(path.join(f.icmlPdfs, `${f.rawOnlyId}.pdf`), Buffer.from('%PDF-different\n'), { mode: 0o600 });
     assert.throws(() => build(f), /conflicting retained and fresh PDF bytes/);
 });
-test('writeManifest is immutable and recovers only byte-identical output', t => {
+test('writeManifest 不可变，只在输出字节完全相同时复用', t => {
     const f = fixture(t); const manifest = build(f);
     const outputRoot = path.join(f.root, 'runtime'); const first = api.writeManifest({ root: outputRoot, outputName: 'sources.json', manifest });
     const second = api.writeManifest({ root: outputRoot, outputName: 'sources.json', manifest });
     assert.equal(first.status, 'created'); assert.equal(second.status, 'recovered');
 });
 
-test('v2 rejects old manifests and any re-signed metadata, PDF, source, or duplicate-source drift', t => {
+test('v2 拒绝旧版清单，以及任何重新签名的元数据、PDF、来源或重复来源漂移', t => {
     const f = fixture(t); const manifest = build(f);
     assert.throws(() => api.assertManifest({ ...manifest,
         contract: 'historical-conference-local-sources-v1', version: 1 }), /invalid envelope/);
@@ -150,7 +150,7 @@ test('v2 rejects old manifests and any re-signed metadata, PDF, source, or dupli
     }
 });
 
-test('production build and CLI require explicit absolute ICML snapshot and PDF roots', t => {
+test('生产构建和命令行要求显式的绝对 ICML 快照目录和 PDF 目录', t => {
     const f = fixture(t);
     assert.throws(() => api.buildLocalSourcesManifest({ dataRoot: f.dataRoot,
         iclrAcceptedRoot: f.acceptedRoot }), /explicit absolute ICML/);

@@ -82,7 +82,7 @@ function refreshAvailability(f) {
     return previousIdentitySha256;
 }
 
-test('demo availability projection updates canonical/parsed/terminal checkpoints with explicit non-API provenance',()=>{
+test('Demo 可用性结果更新规范、解析和终态检查点，并显式标注非 API 来源',()=>{
     const f=fixture(),before=structuredClone(f.paper),oldAudit=JSON.stringify(before.analysisManifest.stages.scoringAudit.audit);
     const result=sync(f.paper,f.sourceDetails);
     assert.match(result.parsed.opensource,/demo=temporarily_unreachable/);
@@ -104,7 +104,7 @@ test('demo availability projection updates canonical/parsed/terminal checkpoints
     const bytes=JSON.stringify(result);sync(result,f.sourceDetails);assert.equal(JSON.stringify(result),bytes);
 });
 
-test('code/model/dataset availability evidence changes refuse stale scoring without mutating input',()=>{
+test('代码、模型、数据集可用性证据变化时拒绝沿用旧评分，且不改动输入',()=>{
     for(const type of ['code','model','dataset']) {
         const f=fixture(type,'available'),before=JSON.stringify(f.paper);
         assert.throws(()=>sync(f.paper,f.sourceDetails),/必须重新审查评分/);
@@ -112,7 +112,7 @@ test('code/model/dataset availability evidence changes refuse stale scoring with
     }
 });
 
-test('already synchronized resource projection is a no-op before Reader signature repair checks',()=>{
+test('资源已同步时，在 Reader 签名修复检查之前就是空操作',()=>{
     const f=fixture();
     const synchronized=deep.applyApiReaderResourceAvailability(f.paper.analysis,f.resources);
     f.paper.analysis=synchronized;
@@ -127,7 +127,7 @@ test('already synchronized resource projection is a no-op before Reader signatur
     assert.equal(JSON.stringify(f.paper),before);
 });
 
-test('identity/source/scoring/checkpoint drift fails closed',()=>{
+test('身份、来源、评分或检查点漂移时直接失败',()=>{
     for(const mutate of [f=>{f.resources.identitySha256='0'.repeat(64);},f=>{f.sourceDetails.text+='drift';},
         f=>{f.paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256='0'.repeat(64);},
         f=>{f.paper.analysisCheckpoint='non-terminal checkpoint';}]) {
@@ -136,7 +136,7 @@ test('identity/source/scoring/checkpoint drift fails closed',()=>{
     }
 });
 
-test('image-supplement proof chain and scored checkpoint are both rebound with preserved original output identity',()=>{
+test('图片补充证明链与已评分检查点一起重新绑定，同时保留原始输出身份',()=>{
     const f=fixture(),base=f.paper.analysis;
     f.paper.analysis=base+'\n';f.paper.analysisCheckpoint=f.paper.analysis;
     f.paper.analysisManifest.stages.imageSupplement={status:'complete',inputAnalysisSha256:sha(base),outputAnalysisSha256:sha(f.paper.analysis)};
@@ -146,7 +146,7 @@ test('image-supplement proof chain and scored checkpoint are both rebound with p
     assert.equal(f.paper.analysisManifest.stages.scoringAudit.resourceAvailabilitySynchronizations[0].originalScoringOutputAnalysisSha256,sha(base));
 });
 
-test('Reader invalidation cannot silently convert the execution-local verified identity to empty resources',()=>{
+test('Reader 失效不会悄悄把执行期已核验身份变成空资源',()=>{
     const f=fixture(),verified=f.resources;
     f.paper.analysisManifest.stages.apiReaderArticle={status:'complete',fingerprint:'old'};
     deep.invalidateRecoveryStageIfChanged(f.paper,f.paper.analysisManifest,'apiReaderArticle','new');
@@ -155,7 +155,7 @@ test('Reader invalidation cannot silently convert the execution-local verified i
     assert.match(deep.applyApiReaderResourceAvailability(f.paper.analysis,verified),/demo=temporarily_unreachable/);
 });
 
-test('Reader resource availability refresh rebinds only its identity while preserving signed bytes and audit',()=>{
+test('Reader 资源可用性刷新只重新绑定身份，保留已签名字节和审计记录',()=>{
     const f=fixture(),previousIdentitySha256=refreshAvailability(f);
     const before={article:f.paper.apiReaderArticle,plan:structuredClone(f.paper.apiReaderPlan),
         figures:structuredClone(f.paper.apiReaderFigures),authors:structuredClone(f.paper.apiReaderAuthors),
@@ -173,7 +173,7 @@ test('Reader resource availability refresh rebinds only its identity while prese
         currentIdentitySha256:result.apiReaderResources.identitySha256,resourceCount:1});
 });
 
-test('Reader resource identity rebind rejects signed bytes, audit, or resource-count drift',()=>{
+test('Reader 资源身份重绑拒绝已签名字节、审计记录或资源数量漂移',()=>{
     const mutations=[
         f=>{f.paper.apiReaderArticle+=' drift';},
         f=>{f.paper.apiReaderPlan={...f.paper.apiReaderPlan,drift:true};},
@@ -191,7 +191,7 @@ test('Reader resource identity rebind rejects signed bytes, audit, or resource-c
     }
 });
 
-test('paper-source bare repository token replays through resource synchronization',()=>{
+test('论文来源的裸仓库令牌经资源同步复核',()=>{
     const f=fixture();
     const token='github.com/example/demo';
     f.sourceDetails.text=`Demo: ${token}\nThis is the original source evidence.`;
@@ -214,7 +214,7 @@ test('paper-source bare repository token replays through resource synchronizatio
     assert.match(f.paper.parsed.opensource,/demo=temporarily_unreachable/);
 });
 
-test('paper-source extraction preserves every explicit typed facet for one official URL',()=>{
+test('论文来源提取为一个官方 URL 保留每一个显式类型化维度',()=>{
     for(const [text,expected] of [
         ['Data and code are available at https://github.com/example/project.', ['code','dataset']],
         ['Code and checkpoints are available at github.com/example/project.', ['code','model']],
@@ -247,7 +247,7 @@ test('paper-source extraction preserves every explicit typed facet for one offic
     );
 });
 
-test('paper-source extraction deterministically rejoins bounded PDF URL line wraps',()=>{
+test('论文来源提取确定性地拼回被折行的有界 PDF URL',()=>{
     for(const [text,expectedUrl] of [
         ['Code is available at https://\ngithub.com/example/project.', 'https://github.com/example/project'],
         ['Data and code are available at github.com/example/\nproject.', 'https://github.com/example/project'],
@@ -265,7 +265,7 @@ test('paper-source extraction deterministically rejoins bounded PDF URL line wra
     }
 });
 
-test('paper-source line-wrap recovery rejects cross-paragraph and unsafe repository tokens',()=>{
+test('论文来源折行恢复拒绝跨段落和不安全的仓库令牌',()=>{
     for(const text of [
         'Code is available at github.com/example/\n\nprivate.',
         'Code is available at https://user:pass@\ngithub.com/example/private.',

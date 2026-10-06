@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const { buildFilterInputSha256: buildFromContract } = require('../scripts/lib/filter-input-contract.js');
 const { buildFilterInputSha256: buildFromFetcher } = require('../scripts/fetch-papers.js');
 
-describe('filter-input-contract', () => {
+describe('filter-input-contract 筛选输入契约', () => {
     it('筛选生成端复用共享哈希契约，且不受分类原始顺序影响', () => {
         const paper = {
             title: '  Audio Paper  ',

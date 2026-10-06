@@ -75,7 +75,7 @@ ${dimensions.join('\n')}
 }
 
 describe('writeFileAtomic', () => {
-    it('creates new runtime files with private permissions and preserves an existing mode', () => {
+    it('新建运行时文件用私有权限，已有文件的权限模式保持不变', () => {
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-atomic-'));
         const filename = path.join(directory, 'state.json');
         try {
@@ -109,7 +109,7 @@ describe('stripMd', () => {
     });
 });
 
-describe('fetch proxy dispatcher', () => {
+describe('fetch 代理调度器', () => {
     it('拒绝将 SOCKS URL 用于 Node arXiv fetch dispatcher', () => {
         assert.throws(
             () => createProxyDispatcher('socks5h://127.0.0.1:7897'),
@@ -775,7 +775,7 @@ describe('parseResponseText', () => {
     });
 });
 
-describe('OpenAI Responses output truncation', () => {
+describe('OpenAI Responses 输出截断', () => {
     it('把 max_output_tokens 的 incomplete 结果转成可识别截断错误', () => {
         const error = getResponsesOutputTruncationError({
             status: 'incomplete',
@@ -792,7 +792,7 @@ describe('OpenAI Responses output truncation', () => {
     });
 });
 
-describe('OpenAI Responses SSE parsing', () => {
+describe('OpenAI Responses SSE 解析', () => {
     it('优先重放 completed response', () => {
         const completed = parseSseResponse([
             'event: response.output_text.delta',
@@ -835,7 +835,7 @@ describe('OpenAI Responses SSE parsing', () => {
     });
 });
 
-describe('LLM proxy policy', () => {
+describe('LLM 代理策略', () => {
     it('OpenCode Go Muse Spark Contributor 必须走代理', () => {
         assert.strictEqual(
             requiresLlmProxy(
@@ -1298,7 +1298,7 @@ describe('loadPrompt', () => {
     });
 });
 
-describe('LLM request invariants', () => {
+describe('LLM 请求的固定约定', () => {
     it('筛选和深度分析统一走按供应商隔离代理策略的请求封装', () => {
         const root = path.join(__dirname, '..');
         const fetchPapers = fs.readFileSync(path.join(root, 'scripts', 'fetch-papers.js'), 'utf8');
@@ -1313,7 +1313,7 @@ describe('LLM request invariants', () => {
     });
 });
 
-describe('image markdown parsing', () => {
+describe('图片 Markdown 解析', () => {
     it('保留方法和实验章节中的 Markdown 图片引用', () => {
         const analysis = `## 评分
 8.0

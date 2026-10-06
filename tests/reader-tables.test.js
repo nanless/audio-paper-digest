@@ -22,7 +22,7 @@ const selected = (tableIndex = 1, ordinal = 1) => ({ tableIndex, selection: {
     sourceTableOrdinal: ordinal, sourceRows: ordinal === 1 ? [1, 2, 3] : [0, 1, 2], sourceColumns: [0, 1, 2]
 } });
 
-test('table evidence explicitly supplies source header rows and shape without guessing its scientific role', () => {
+test('表格证据显式给出原表头行和形状，不猜它的科学角色', () => {
     const { artifacts } = artifactsFixture();
     const evidence = require('../scripts/deep-analyzer.js').buildApiReaderArtifactEvidence(artifacts);
     const headerRows = JSON.parse(evidence.match(/^TABLE_1_HEADER_ROWS: (.+)$/m)[1]);
@@ -37,7 +37,7 @@ test('table evidence explicitly supplies source header rows and shape without gu
     assert.match(authorEvidence, /TABLE_1_SHAPE: .*"role":"unknown"/);
 });
 
-test('dirty MathML, blank headers and all-header rows are rejected before selection with evidence-visible reasons', () => {
+test('脏 MathML、空表头和整行表头在选择之前就被拒绝，并给出可见理由', () => {
     const { artifacts } = artifactsFixture();
     const table = structuredClone(artifacts.tables[1]);
     table.matrix[0][0] = '';
@@ -63,7 +63,7 @@ test('dirty MathML, blank headers and all-header rows are rejected before select
     assert.match(visible.action, /source_quotes/);
 });
 
-test('cleanup eligibility is conservative and does not convert arbitrary values or units', () => {
+test('清理资格的判定保守，不擅自换算任意数值或单位', () => {
     const { artifacts } = artifactsFixture();
     for (const text of ['2.222.22', '3.093.09', '22.96 ±\\pm 0.08', 'k=\\tilde{k}']) {
         const table = structuredClone(artifacts.tables[1]);
@@ -80,7 +80,7 @@ test('cleanup eligibility is conservative and does not convert arbitrary values 
     }
 });
 
-test('legacy row-header contagion is repaired only with grouped DOM spans and numeric body semantics', () => {
+test('旧版行表头蔓延只在有分组 DOM 跨度和数值正文语义时修复', () => {
     const sha = 'a'.repeat(64);
     const matrix = [
         ['SLM', 'Smooth', 'Smooth'],
@@ -127,7 +127,7 @@ test('legacy row-header contagion is repaired only with grouped DOM spans and nu
     }
 });
 
-test('2512.09066 repeated scientific learning rates need staged semantics while extraction shadows still fail', () => {
+test('2512.09066 重复的科学学习率需要分阶段语义，而提取影子仍然失败', () => {
     const cell = '10k、5k、2k，5e-5、2e-5、2e-5，批量16';
     assert.match(findReaderTablePasteDuplication(cell), /粘连复写/);
     assert.equal(findReaderTablePasteDuplication(cell, { columnIndex: 2,
@@ -148,7 +148,7 @@ test('2512.09066 repeated scientific learning rates need staged semantics while 
     'a legitimate learning-rate list cannot hide a later extraction shadow');
 });
 
-test('explicit staged scientific measurements use real whitespace and digit regex tokens', () => {
+test('显式分阶段的科学测量使用真实空白和数字正则 token', () => {
     assert.equal(hasExplicitRepeatedScientificMeasurement(
         'stage 1 lr 5e-5、2e-5、2e-5'), true);
     assert.equal(hasExplicitRepeatedScientificMeasurement(
@@ -159,14 +159,14 @@ test('explicit staged scientific measurements use real whitespace and digit rege
         'stage 1 lr 5e-5、2e-5、1e-5'), false);
 });
 
-test('adjacent decimal prefixes are not mistaken for pasted numeric copies', () => {
+test('相邻的小数前缀不会被误当成粘贴来的数字副本', () => {
     assert.equal(findReaderTablePasteDuplication(
         '5.1%, 2.7%, 2.5%, and 4.15% in mAP@{0.5, 0.75, 0.9, 0.95}'
     ), null);
     assert.match(findReaderTablePasteDuplication('45, 45, 100, 45, 45'), /粘连复写/);
 });
 
-test('2512.10571 repeated split sizes require an exact three-way dataset context', () => {
+test('2512.10571 重复的划分大小需要精确的三方数据集上下文', () => {
     const cell = '71k / 1k / 1k clips';
     const chineseContext = {
         columnIndex: 2,
@@ -194,7 +194,7 @@ test('2512.10571 repeated split sizes require an exact three-way dataset context
     }
 });
 
-test('2604.09371 repeated weight vectors require exact source order and multiplicity', () => {
+test('2604.09371 重复的权重向量需要精确的原表顺序和重数', () => {
     const source = 'Changing the layer-wise loss weights from [2,1,...,1] to '
         + 'a steeper schedule [8,4,3,2,2,2,2,2,1,...,1] yields comparable scores.';
     const exact = '权重由[2,1,…,1]改为[8,4,3,2,2,2,2,2,1,…,1]';
@@ -217,7 +217,7 @@ test('2604.09371 repeated weight vectors require exact source order and multipli
     ), /粘连复写/, 'an exact source vector cannot hide a duplicated whole cell');
 });
 
-test('source-bound vector exemption is limited to explicit weight schedule or layer semantics', () => {
+test('绑定来源的向量豁免只限显式的权重调度或层语义', () => {
     const vector = '[8,4,3,2,2,2,2,2,1,…,1]';
     assert.match(findReaderTablePasteDuplication(vector, {
         columnIndex: 1, header: ['ID', '值'], row: ['sample', vector], sourceTexts: [vector]
@@ -227,7 +227,7 @@ test('source-bound vector exemption is limited to explicit weight schedule or la
     }), null);
 });
 
-test('source-bound repeated room-dimension ranges are not mistaken for pasted text', () => {
+test('绑定来源的重复房间尺寸区间不会被误当成粘贴文本', () => {
     const cell = '[4,20]×[4,20]×[3,10] m';
     const context = {
         columnIndex: 1,
@@ -244,7 +244,7 @@ test('source-bound repeated room-dimension ranges are not mistaken for pasted te
     ), false);
 });
 
-test('2604.15804 source-bound repeated colon ratio is not mistaken for pasted text', () => {
+test('2604.15804 绑定来源的重复冒号比值不会被误当成粘贴文本', () => {
     const ratio = '3.5 : 3.5 : 3';
     const context = {
         columnIndex: 5,
@@ -264,7 +264,7 @@ test('2604.15804 source-bound repeated colon ratio is not mistaken for pasted te
     }), /粘连复写/, 'a source-bound ratio cannot hide a duplicated whole cell');
 });
 
-test('source row/column selection preserves multilevel headers, spanning DOM identity, values and legacy v4 output', () => {
+test('原表行列选择保留多级表头、跨行跨列的 DOM 身份、数值和旧版 v4 输出', () => {
     const { artifacts, sourceText } = artifactsFixture();
     const bindings = [selected(), selected(2, 2)];
     bindings[1].selection.sourceColumns = [0, 2, 1];
@@ -286,7 +286,7 @@ test('source row/column selection preserves multilevel headers, spanning DOM ide
     assert.match(bound.sourceBindingsSha256, /^[a-f0-9]{64}$/);
 });
 
-test('selection deterministically moves or prepends an unambiguous source header without changing data cells', () => {
+test('选择会确定性地移动或前置唯一的原表头，不改数据单元格', () => {
     const { artifacts } = artifactsFixture();
     assert.deepEqual(putReaderTableHeaderFirst([2, 1, 3], [0, 1]), [1, 2, 3]);
     assert.deepEqual(putReaderTableHeaderFirst([1, 2], [0]), [0, 1, 2]);
@@ -301,7 +301,7 @@ test('selection deterministically moves or prepends an unambiguous source header
     assert.deepEqual([...new Set(prependedResult.binding.cellBindings.map(cell => cell.sourceRow))], [0, 1, 2]);
 });
 
-test('selection rejects duplicate/out-of-range coordinates, fake headers, mixed payload and malformed source matrices', () => {
+test('选择拒绝重复或越界坐标、伪造表头、混合载荷和格式错误的原表矩阵', () => {
     const { artifacts } = artifactsFixture();
     for (const mutate of [
         binding => { binding.selection.sourceRows = [1, 2, 2]; },
@@ -374,7 +374,7 @@ test('唯一原表头可确定性补回，多级表头仍失败关闭', () => {
     ), /第一行必须是原表头/);
 });
 
-test('table marker must be unique, standalone, correctly ordered and fully bound', () => {
+test('表格标记必须唯一、独立成行、顺序正确且完整绑定', () => {
     const { artifacts } = artifactsFixture();
     for (const body of ['inline [[TABLE_1]]', '[[TABLE_1]]\n\n[[TABLE_1]]', '[[TABLE_2]]\n\n[[TABLE_1]]']) {
         assert.throws(() => compileReaderTableSelections([{ body }], [selected()], artifacts));
@@ -384,7 +384,7 @@ test('table marker must be unique, standalone, correctly ordered and fully bound
     assert.throws(() => compileReaderTableSelections([{ body: '| a | b |\n| --- | --- |\n| 1 | 2 |\n\n[[TABLE_1]]' }], [selected()], artifacts), /顺序/);
 });
 
-test('unsafe source markup is rejected and final source SHA/cell checks still govern compiled selections', () => {
+test('不安全的原表标记会被拒绝，最终的原表 SHA 和单元格检查仍约束编译结果', () => {
     const { artifacts, sourceText } = artifactsFixture();
     for (const text of ['a | b', 'line\nbreak', '<script>bad</script>', '[link](javascript:bad)', '[[FIGURE_1]]']) {
         const bad = structuredClone(artifacts);
@@ -401,7 +401,7 @@ test('unsafe source markup is rejected and final source SHA/cell checks still go
         selectionTableIndexes: compiled.selectionTableIndexes }), /不一致/);
 });
 
-test('full Reader parser compiles two selected wide tables and still emits the existing v3/v4 contract', () => {
+test('完整 Reader 解析器编译两个选中的宽表，仍输出既有的 v3/v4 契约', () => {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText, parseApiReaderArticleResult } = require('../scripts/deep-analyzer.js');
     const header = '<thead><tr><th>System</th><th>WER</th><th>CER</th><th>Latency</th><th>Memory</th></tr></thead>';
     const rows = '<tbody><tr><td>Baseline</td><td>4.8%</td><td>3.1%</td><td>2 ms</td><td>8 GB</td></tr><tr><td>Proposed</td><td>4.1%</td><td>2.9%</td><td>3 ms</td><td>9 GB</td></tr></tbody>';

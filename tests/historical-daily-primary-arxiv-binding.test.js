@@ -40,7 +40,7 @@ function hints(id = '2605.00329', selectedSources = ['body:arxiv-link']) {
     ].sort((left, right) => left.value.localeCompare(right.value)) };
 }
 
-test('binds the sole strict legacy score-row link without exposing old prose', t => {
+test('绑定唯一一条严格的旧版评分行链接，且不暴露旧正文', t => {
     const root = fixture(t); const relative = 'content/posts/2026-05-04-primary.md';
     const page = writePage(root, relative, post({ extra: 'Related work: https://arxiv.org/abs/2210.13352\nPOISON_OLD_BODY\n' }));
     const binding = api.build({ blogRoot: root, page, identityHints: hints() });
@@ -56,7 +56,7 @@ test('binds the sole strict legacy score-row link without exposing old prose', t
     assert.deepEqual(api.normalize(binding), binding);
 });
 
-test('requires frontmatter, filename, score row, and candidate provenance to agree when present', t => {
+test('frontmatter、文件名、评分行和候选来源只要存在就必须一致', t => {
     const root = fixture(t); const relative = 'content/posts/2026-07-16-primary-2605-00329.md';
     const page = writePage(root, relative, post({ frontmatterId: '2605.00329', version: '' }));
     const sources = ['body:arxiv-link', 'filename', 'frontmatter:paper_digest_arxiv_id'];
@@ -66,7 +66,7 @@ test('requires frontmatter, filename, score row, and candidate provenance to agr
     assert.deepEqual(binding.candidateSources, sources);
 });
 
-test('allows two frozen pages to bind the same canonical arXiv identity', t => {
+test('允许两个冻结页面绑定同一个规范 arXiv 身份', t => {
     const root = fixture(t); const ids = [];
     for (const [index, day] of ['26', '27'].entries()) {
         const relative = `content/posts/2026-05-${day}-duplicate.md`;
@@ -77,7 +77,7 @@ test('allows two frozen pages to bind the same canonical arXiv identity', t => {
     assert.deepEqual(ids, ['2605.25605', '2605.25605']);
 });
 
-test('accepts a unique selected arXiv candidate from multiple-scheme hints', t => {
+test('从多种方案的提示中接受唯一选中的 arXiv 候选', t => {
     const root = fixture(t); const relative = 'content/posts/multiple-schemes.md';
     const page = writePage(root, relative, post());
     const identityHints = { status: 'multiple', candidates: [
@@ -87,21 +87,21 @@ test('accepts a unique selected arXiv candidate from multiple-scheme hints', t =
     assert.equal(api.build({ blogRoot: root, page, identityHints }).arxivId, '2605.00329');
 });
 
-test('rejects multiple labelled links even when they target the same ID', t => {
+test('即使指向同一个 ID，多个带标注的链接也拒绝', t => {
     const root = fixture(t); const relative = 'content/posts/duplicate-link.md';
     const bytes = `${post()}\n🔥 **8/10** | 前25% | [arxiv](https://arxiv.org/abs/2605.00329)\n`;
     const page = writePage(root, relative, bytes);
     assert.throws(() => api.build({ blogRoot: root, page, identityHints: hints() }), /exactly one \[arxiv\]/);
 });
 
-test('rejects a labelled arXiv link outside the strict score metadata row', t => {
+test('严格评分元数据行之外的带标注 arXiv 链接一律拒绝', t => {
     const root = fixture(t); const relative = 'content/posts/non-score.md';
     const bytes = post().replace('✅ **7.5/10** | 前25% | #音频生成 | ', 'Related work: ');
     const page = writePage(root, relative, bytes);
     assert.throws(() => api.build({ blogRoot: root, page, identityHints: hints() }), /strict score metadata row/);
 });
 
-test('rejects noncanonical arXiv destinations', t => {
+test('非规范的 arXiv 目标地址一律拒绝', t => {
     for (const [index, url] of [
         'http://arxiv.org/abs/2605.00329',
         'https://arxiv.org/pdf/2605.00329.pdf',
@@ -118,7 +118,7 @@ test('rejects noncanonical arXiv destinations', t => {
     }
 });
 
-test('rejects a selection absent from hints or missing body-link provenance', t => {
+test('不在提示中或缺少正文链接来源的选择一律拒绝', t => {
     const root = fixture(t); const relative = 'content/posts/provenance.md';
     const page = writePage(root, relative, post());
     assert.throws(() => api.build({ blogRoot: root, page, identityHints: hints('2605.99999') }), /not a unique frozen/);
@@ -126,7 +126,7 @@ test('rejects a selection absent from hints or missing body-link provenance', t 
         identityHints: hints('2605.00329', ['filename']) }), /missing body source evidence/);
 });
 
-test('rejects frontmatter and filename disagreement or missing matching provenance', t => {
+test('frontmatter 与文件名不一致或缺少对应来源时拒绝', t => {
     const root = fixture(t);
     const declaredPage = writePage(root, 'content/posts/declared.md', post({ frontmatterId: '2605.00001' }));
     assert.throws(() => api.build({ blogRoot: root, page: declaredPage,
@@ -139,7 +139,7 @@ test('rejects frontmatter and filename disagreement or missing matching provenan
         identityHints: hints() }), /frontmatter arXiv evidence is absent/);
 });
 
-test('rejects byte drift, unsafe paths, symlinks, invalid UTF-8, and loose frontmatter', t => {
+test('拒绝字节漂移、不安全路径、符号链接、非法 UTF-8 和宽松 frontmatter', t => {
     const root = fixture(t); const relative = 'content/posts/safety.md'; const bytes = post();
     const page = writePage(root, relative, bytes);
     const drifted = { ...page, pageContentSha256: 'b'.repeat(64) };
@@ -155,7 +155,7 @@ test('rejects byte drift, unsafe paths, symlinks, invalid UTF-8, and loose front
     assert.throws(() => api.build({ blogRoot: root, page: loose, identityHints: hints() }), /lacks strict frontmatter/);
 });
 
-test('normalizer rejects tampering and unknown fields', t => {
+test('归一化器拒绝篡改和未知字段', t => {
     const root = fixture(t); const relative = 'content/posts/normalize.md';
     const page = writePage(root, relative, post());
     const binding = api.build({ blogRoot: root, page, identityHints: hints() });

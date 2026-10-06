@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 const { hashTagSectionAndPrimaryTags } = require('../scripts/analysis-contract');
 const { parseAnalysis } = require('../scripts/utils');
 
-test('all shared taxonomy labels, aliases and ancestors agree across Node and Python', () => {
+test('两端共用的词表标签、别名和祖先链在 Node 与 Python 下一致', () => {
     const tagCatalog=loadTagCatalog();
     const labels=[];
     for(const concept of tagCatalog.concepts) for(const label of [concept.preferredLabel.zh,concept.preferredLabel.en,...concept.aliases]) {
@@ -63,7 +63,7 @@ test('all shared taxonomy labels, aliases and ancestors agree across Node and Py
     assert.deepEqual(JSON.parse(result.stdout),expected);
 });
 
-test('current and explicit legacy analysis taxonomy contracts agree across Node and Python', () => {
+test('当前词表和显式旧版词表的分析约定在 Node 与 Python 下一致', () => {
     const document = ({ tags, task, method, summaryTask = task, summaryMethod = method }) => `## 评分
 6.0/10
 

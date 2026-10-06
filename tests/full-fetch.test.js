@@ -39,7 +39,7 @@ function writeResumeCheckpoint(dir, common, options = {}) {
     return { file, checkpoint: JSON.parse(fs.readFileSync(file)) };
 }
 
-describe('full-fetch helpers', () => {
+describe('full-fetch 辅助函数', () => {
     it('Muse 代理长请求与其他模型都保留配置并发', () => {
         const { getEffectiveAnalysisConcurrency } = require('../scripts/full-fetch.js');
         assert.strictEqual(getEffectiveAnalysisConcurrency(

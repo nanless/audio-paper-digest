@@ -44,7 +44,7 @@ function fixture(t) {
     return { root, snapshotFile, blogRoot, pdfRoot, direct, tau, summary, records };
 }
 
-test('authenticates the complete raw ICML snapshot and exposes exact poster/forum lookups', t => {
+test('校验完整的 ICML 原始快照，并提供精确的 poster/forum 查询', t => {
     const f = fixture(t); const handle = api.loadPosterAuthority({ snapshotFile: f.snapshotFile });
     const snapshot = api.authorityHandleSnapshot(handle);
     assert.equal(snapshot.contract, api.CONTRACT); assert.equal(snapshot.snapshot.records, 2);
@@ -56,7 +56,7 @@ test('authenticates the complete raw ICML snapshot and exposes exact poster/foru
     assert.throws(() => api.lookupByPoster({}, '60632'), /authenticated ICML poster authority handle/);
 });
 
-test('rejects the simplified data/icml2026_papers.json shape and duplicate JSON keys', t => {
+test('拒绝简化的 data/icml2026_papers.json 结构和重复 JSON 键', t => {
     const f = fixture(t);
     writeJson(f.snapshotFile, { conference: 'ICML 2026', count: 1,
         papers: [{ id: '60632', title: 'Paper', url: 'https://icml.cc/virtual/2026/poster/60632' }] });
@@ -65,7 +65,7 @@ test('rejects the simplified data/icml2026_papers.json shape and duplicate JSON 
     assert.throws(() => api.loadPosterAuthority({ snapshotFile: f.snapshotFile }), /duplicate keys/);
 });
 
-test('fails closed on incomplete snapshots, duplicate identities, or non-canonical records', async t => {
+test('快照不完整、身份重复或记录非规范时直接失败', async t => {
     const f = fixture(t); const good = f.records;
     const invalid = [
         { value: { count: 3, next: null, previous: null, results: good }, pattern: /complete raw ICML/ },
@@ -85,7 +85,7 @@ test('fails closed on incomplete snapshots, duplicate identities, or non-canonic
     });
 });
 
-test('replays a direct frozen child-page poster without retaining historical prose', t => {
+test('复核直接冻结的子页面 poster，不保留历史正文', t => {
     const f = fixture(t); const handle = api.loadPosterAuthority({ snapshotFile: f.snapshotFile });
     const binding = api.bindDailyPage({ authorityHandle: handle, blogRoot: f.blogRoot, page: f.direct });
     assert.equal(binding.contract, api.DAILY_BINDING_CONTRACT);
@@ -96,7 +96,7 @@ test('replays a direct frozen child-page poster without retaining historical pro
         blogRoot: f.blogRoot, page: f.direct }).bindingSha256, binding.bindingSha256);
 });
 
-test('tau-Voice uses one frozen summary section, exact child URL, and one poster', t => {
+test('tau-Voice 使用一个冻结的摘要小节、精确的子页面 URL 和一个 poster', t => {
     const f = fixture(t); const handle = api.loadPosterAuthority({ snapshotFile: f.snapshotFile });
     const binding = api.bindDailyPage({ authorityHandle: handle, blogRoot: f.blogRoot,
         page: f.tau, summaryPage: f.summary });
@@ -110,7 +110,7 @@ test('tau-Voice uses one frozen summary section, exact child URL, and one poster
         page: f.tau, summaryPage: f.summary }).bindingSha256, binding.bindingSha256);
 });
 
-test('summary fallback rejects a missing, duplicated, or multi-poster child section', t => {
+test('摘要兜底拒绝缺失、重复或含多个 poster 的子页面小节', t => {
     const f = fixture(t); const handle = api.loadPosterAuthority({ snapshotFile: f.snapshotFile });
     assert.throws(() => api.bindDailyPage({ authorityHandle: handle, blogRoot: f.blogRoot, page: f.tau }), /no poster and no frozen daily summary/);
     const summaryFile = path.join(f.blogRoot, f.summary.path);
@@ -123,7 +123,7 @@ test('summary fallback rejects a missing, duplicated, or multi-poster child sect
         page: f.tau, summaryPage: summary }), /exactly one ICML poster/);
 });
 
-test('local forum-ID PDF descriptors bind authority, identity, path, and exact bytes', t => {
+test('本地 forum-ID PDF 描述符绑定授权、身份、路径和精确字节', t => {
     const f = fixture(t); const handle = api.loadPosterAuthority({ snapshotFile: f.snapshotFile });
     const filename = path.join(f.pdfRoot, 'yHT8piYc8u.pdf');
     fs.writeFileSync(filename, '%PDF-1.4\nfixture\n%%EOF\n', { mode: 0o600 });
@@ -137,7 +137,7 @@ test('local forum-ID PDF descriptors bind authority, identity, path, and exact b
         pdfRoot: f.pdfRoot }), /no longer replays/);
 });
 
-test('all handles and bindings fail after authenticated source bytes drift', t => {
+test('已核验来源字节漂移后，所有句柄和绑定都失败', t => {
     const f = fixture(t); const handle = api.loadPosterAuthority({ snapshotFile: f.snapshotFile });
     fs.appendFileSync(f.snapshotFile, ' ');
     assert.throws(() => api.replayPosterAuthority(handle), /changed after authentication/);

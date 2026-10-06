@@ -10,7 +10,7 @@ const registryPath = path.join(__dirname, '../config/tag-catalog.json');
 const raw = () => JSON.parse(fs.readFileSync(registryPath, 'utf8'));
 const concept = (r, id) => r.concepts.find(c => c.id === id);
 
-test('current tag catalog contains all nine facets and defined concepts', () => {
+test('当前词表包含全部九个 facet 和已定义的概念', () => {
     const r = loadTagCatalog(registryPath);
     assert.equal(r.version, 'paper-tag-catalog-v2');
     assert.equal(r.facets.length, 9);
@@ -20,7 +20,7 @@ test('current tag catalog contains all nine facets and defined concepts', () => 
     assert.equal(validateTagCatalog(raw()).version, r.version);
 });
 
-test('normalization is NFKC + one hash + trim + ASCII lower, no fuzzy guessing', () => {
+test('归一化只做 NFKC、去掉一个 #、去首尾空白和 ASCII 小写，不做模糊匹配', () => {
     const r = raw();
     assert.equal(resolveLabel(r, '  ＃ ＡＳＲ  ').id, 'task.asr');
     assert.equal(resolveLabel(r, 'automatic speech recognition').id, 'task.asr');
@@ -32,7 +32,7 @@ test('normalization is NFKC + one hash + trim + ASCII lower, no fuzzy guessing',
     assert.equal(resolveLabel(r, ''), null);
 });
 
-test('nearby concepts must not be silently interchanged', () => {
+test('相邻概念不能被悄悄互换', () => {
     const r = raw();
     for (const [label, id] of [
         ['参数高效微调', 'method.peft'], ['LoRA', 'method.lora'], ['Adapter', 'method.adapter'],
@@ -44,7 +44,7 @@ test('nearby concepts must not be silently interchanged', () => {
     for (const label of ['说话人分离', '在线', '离线', '未说明', '蛋白质工程', '医学图像重建']) assert.equal(resolveLabel(r, label), null);
 });
 
-test('scientific topics and neural input do not get coerced into engineering ASR', () => {
+test('科学主题和神经输入不会被硬塞进工程 ASR', () => {
     const r = raw();
     for (const label of ['发声与构音', '言语感知', '韵律', '听觉与音乐认知', '语言习得', '言语障碍', '社会语音学']) {
         assert.equal(resolveLabel(r, label).facet, 'scientific_topic');
@@ -54,7 +54,7 @@ test('scientific topics and neural input do not get coerced into engineering ASR
     assert.equal(resolveLabel(r, '脑信号').facet, 'signal');
 });
 
-test('ancestry and pruning preserve leaf order and unrelated branches', () => {
+test('祖先链和剪枝保留叶节点顺序与不相干分支', () => {
     const r = raw();
     assert.deepEqual(ancestors(r, 'task.av-asr'), ['task.asr']);
     // 音乐类任务处理的可能是符号或乐谱，不只是音频波形。
@@ -69,7 +69,7 @@ test('ancestry and pruning preserve leaf order and unrelated branches', () => {
     assert.throws(() => pruneAncestors(r, 'task.asr'), /字符串数组/);
 });
 
-test('bare end-to-end belongs only to setting; explicit learning label resolves method', () => {
+test('裸的端到端只归 setting，显式带学习字样的标签才解析到 method', () => {
     const r = raw();
     assert.equal(resolveLabel(r, '#端到端').id, 'setting.end-to-end');
     assert.equal(resolveLabel(r, '#端到端', 'method'), null);
@@ -83,7 +83,7 @@ test('bare end-to-end belongs only to setting; explicit learning label resolves 
     assert.throws(() => resolveLabel(r, 'ASR', 'unknown'), /未知的分类维度/);
 });
 
-test('no Unicode-wide casefold is applied', () => {
+test('不做 Unicode 全量大小写折叠', () => {
     const r = raw();
     concept(r, 'method.transformer').aliases.push('Straße');
     assert.equal(resolveLabel(r, 'straße').id, 'method.transformer');
@@ -112,9 +112,9 @@ for (const [name, mutate] of [
     ['deprecated missing replacement', r => { r.concepts[0].status = 'deprecated'; }],
     ['deprecated self replacement', r => { Object.assign(r.concepts[0], { status: 'deprecated', replacedBy: r.concepts[0].id }); }],
     ['deprecated cross-facet replacement', r => { Object.assign(r.concepts[0], { status: 'deprecated', replacedBy: 'method.peft' }); }],
-]) test(`reject ${name}`, () => { const r = raw(); mutate(r); assert.throws(() => validateTagCatalog(r)); });
+]) test(`拒绝 ${name}`, () => { const r = raw(); mutate(r); assert.throws(() => validateTagCatalog(r)); });
 
-test('deprecated entries stay explicit and require an active same-facet replacement', () => {
+test('已弃用条目必须显式标注，并要求同一 facet 内有启用中的替代项', () => {
     const r = raw();
     const old = structuredClone(concept(r, 'method.peft'));
     Object.assign(old, { id: 'method.old-peft', preferredLabel: { zh: '旧适配名称', en: 'Old adaptation label' }, aliases: [], status: 'deprecated', replacedBy: 'method.peft' });
@@ -124,7 +124,7 @@ test('deprecated entries stay explicit and require an active same-facet replacem
     assert.throws(() => validateTagCatalog(r), /概念 method\.lora 的上级概念必须存在、已启用，并属于同一分类维度。/);
 });
 
-test('raw JSON duplicate keys, malformed JSON, and invalid loaded metadata fail closed', t => {
+test('原始 JSON 重复键、JSON 格式错误和加载的元数据不合法都直接失败', t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taxonomy-invalid-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const p = path.join(dir, 'registry.json');
@@ -140,7 +140,7 @@ test('raw JSON duplicate keys, malformed JSON, and invalid loaded metadata fail 
     assert.throws(() => validateTagCatalog(Object.assign(Object.create({ polluted: true }), raw())), /标签词表 必须是普通对象。/);
 });
 
-test('load reads each file revision without stale global cache', t => {
+test('加载每次都读文件的最新版本，不缓存旧结果', t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taxonomy-cache-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const p = path.join(dir, 'registry.json');
@@ -156,7 +156,7 @@ test('load reads each file revision without stale global cache', t => {
 });
 
 
-test('default loading requires the current catalog while explicit legacy loading keeps its byte SHA', () => {
+test('默认加载要求当前词表，显式加载旧版词表时保留它的字节 SHA', () => {
     const config = require('../scripts/config.js');
     const previousPath = config.FILES.tagCatalogFile;
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-catalog-version-'));

@@ -81,7 +81,7 @@ function frozenHistoricalRun(t, { runId, arxivId, runStatus, analysisStatus, leg
     return { rootDir, runDir, run, paper };
 }
 
-test('live authority creates an isolated fresh-engine run without old generated fields', async t => {
+test('实时授权创建隔离的全新引擎运行，不带旧的生成字段', async t => {
     const root = fixture(t); const authorityRoot = path.join(root, 'authority'); fs.mkdirSync(authorityRoot);
     const runRoot = path.join(root, 'runs');
     const original = deep.fetchArxivTextDetailedUncached; deep.fetchArxivTextDetailedUncached = async () => source();
@@ -115,26 +115,26 @@ test('live authority creates an isolated fresh-engine run without old generated 
         metadataProof: proof, date: '2026-09-04', rootDir: runRoot }), /production-authorized/);
 });
 
-test('generated or non-source metadata is rejected before creating a run', () => {
+test('生成或非来源元数据在创建运行之前就被拒绝', () => {
     assert.throws(() => history.normalizedMetadata({ arxivId: '2609.03622', title: 'x', abstract: 'y', analysis: 'old' }, '2609.03622'), /old analysis/);
     assert.throws(() => history.normalizedMetadata({ arxivId: '2609.03622', title: 'x', abstract: 'y', score: 9 }, '2609.03622'), /non-source/);
 });
 
-test('CLI rejects calendar-invalid dates', () => {
+test('命令行拒绝日历上不存在的日期', () => {
     assert.equal(cli.validDate('2026-09-04'), true);
     assert.equal(cli.validDate('2026-02-30'), false);
     assert.throws(() => cli.parseArgs(['prepare', '--dry-run', '--id', '2609.03622',
         '--date', '2026-02-30', '--authority', 'arxiv-2609.03622.json']), /Use/);
 });
 
-test('prepare CLI requires an explicit stable run ID for recovery', () => {
+test('准备命令行要求为恢复给出显式的稳定运行 ID', () => {
     const args = ['prepare', '--dry-run', '--run-id', RUN_ID, '--id', '2609.03622',
         '--date', '2026-09-04', '--authority', 'arxiv-2609.03622.json'];
     assert.equal(cli.parseArgs(args).runId, RUN_ID);
     assert.throws(() => cli.parseArgs(args.filter((_, index) => ![2, 3].includes(index))), /Use/);
 });
 
-test('isolated run executes the fresh analysis callbacks and persists its own canonical', async t => {
+test('隔离运行执行全新分析回调，并保存自己的正式记录', async t => {
     const root = fixture(t); const authorityRoot = path.join(root, 'authority'); fs.mkdirSync(authorityRoot);
     const runRoot = path.join(root, 'runs');
     const original = deep.fetchArxivTextDetailedUncached; deep.fetchArxivTextDetailedUncached = async () => source();
@@ -189,7 +189,7 @@ test('isolated run executes the fresh analysis callbacks and persists its own ca
         arxivId: '2609.03622', rootDir: runRoot }), /does not seal/);
 });
 
-test('frozen 2403/2512 v2 storage seals are explicitly queued for full contract upgrade', t => {
+test('冻结的 2403/2512 v2 存储记录被显式排队做完整契约升级', t => {
     const fixtures = [
         ['66759276-f030-4e3c-886e-6f5ca858b278', '2403.14817'],
         ['2a95c85b-f493-4d82-9ef1-758d7dfe2705', '2512.14629']
@@ -209,7 +209,7 @@ test('frozen 2403/2512 v2 storage seals are explicitly queued for full contract 
     }
 });
 
-test('frozen interrupted 2602 run without an operation lock is recoverable', t => {
+test('冻结的、无操作锁的 2602 中断运行可以恢复', t => {
     const runId = 'd663ab14-abae-4196-a363-a8d295befce5';
     const frozen = frozenHistoricalRun(t, { runId, arxivId: '2602.05847',
         runStatus: 'analyzing', analysisStatus: 'running' });
@@ -223,7 +223,7 @@ test('frozen interrupted 2602 run without an operation lock is recoverable', t =
     assert.equal(recovered.recoveryKind, 'full');
 });
 
-test('frozen interrupted 2602 recovery blocks a live operation owner and accepts only an old dead owner', t => {
+test('冻结的 2602 中断恢复会阻塞仍在运行的操作属主，只接受已失效的旧属主', t => {
     const runId = 'd663ab14-abae-4196-a363-a8d295befce5';
     const frozen = frozenHistoricalRun(t, { runId, arxivId: '2602.05847',
         runStatus: 'analyzing', analysisStatus: 'running' });

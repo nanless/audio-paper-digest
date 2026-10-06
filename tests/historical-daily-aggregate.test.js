@@ -51,7 +51,7 @@ function aggregateFixture() {
         manifestSha256: 'e'.repeat(64) }, manifestFileSha256: 'f'.repeat(64) }] };
 }
 
-test('daily aggregate ranks deterministically and uses only fresh canonical analysis and tag assignments with retained links', () => {
+test('每日汇总确定性地排名，只使用全新正式分析和带保留链接的标签分配', () => {
     const f = aggregateFixture(); const [result] = api.buildDailyAggregates({ inputs: f, date: DATE });
     assert.deepEqual(result.members.map(item => item.paperId), ['arxiv:2604.00003', 'arxiv:2604.00001', 'arxiv:2604.00002']);
     assert.deepEqual(result.members.map(item => item.rank), [1, 2, 3]);
@@ -72,17 +72,17 @@ test('daily aggregate ranks deterministically and uses only fresh canonical anal
     assert.deepEqual(api.replayDailyAggregate({ inputs: f, originalAggregate: result }), result);
 });
 
-test('partial staging is blocked and cannot impersonate a complete daily aggregate', () => {
+test('半成品暂存被阻塞，无法冒充完整的每日汇总', () => {
     const f = aggregateFixture(); f.stagedPages.pop();
     assert.throws(() => api.buildDailyAggregates({ inputs: f, date: DATE }), /生成记录中存在重复页面，或未覆盖所选日期的全部论文页/);
 });
 
-test('targeted date ignores other fully authenticated staged cohorts', () => {
+test('指定日期会忽略其他完全认证过的暂存批次', () => {
     const f = aggregateFixture(); f.stagedPages.push({ ...stagedPage(4, 'arxiv:2604.00004', 7.2), cohortDate: '2026-04-20' });
     assert.equal(api.buildDailyAggregates({ inputs: f, date: DATE }).length, 1);
 });
 
-test('two real per-paper staging producers merge into one complete daily aggregate', t => {
+test('两个真实的逐篇暂存产出合并为一个完整每日汇总', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-multi-producer-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const stagingRoot = path.join(root, 'staging'); const registrySha256 = '9'.repeat(64);
@@ -197,14 +197,14 @@ test('two real per-paper staging producers merge into one complete daily aggrega
     }
 });
 
-test('mixed tag catalogs and verified identity drift fail closed', () => {
+test('混用标签词表和已核验身份漂移都直接失败', () => {
     const mixed = aggregateFixture(); mixed.stagedPages[0].canonical.tagCatalogSha256 = '8'.repeat(64);
     assert.throws(() => api.buildDailyAggregates({ inputs: mixed, date: DATE }), /论文使用了不同的标签词表 SHA/);
     const drifted = aggregateFixture(); drifted.topology.state.assignments[drifted.stagedPages[0].pageKey].sourceAuthority.paperId = 'arxiv:2604.99999';
     assert.throws(() => api.buildDailyAggregates({ inputs: drifted, date: DATE }), /缺少已核验的对应记录，或论文标识、路径或网址不一致/);
 });
 
-test('mixed renderer implementations cannot form one daily aggregate', () => {
+test('混用的渲染器实现不能组成一个每日汇总', () => {
     const mixed = aggregateFixture();
     mixed.stagedRuns.push({ manifest: { stagingRunId: '33333333-3333-4333-8333-333333333333',
         rendererImplementationSha256: '7'.repeat(64), manifestSha256: '6'.repeat(64) },
@@ -213,7 +213,7 @@ test('mixed renderer implementations cannot form one daily aggregate', () => {
         /每日汇总缺少有效的页面生成器实现指纹，或所用指纹不一致/);
 });
 
-test('new unrelated crosswalk progress does not invalidate unchanged staged page/group binding', () => {
+test('新的无关对照表进度不会让未变的暂存页面与分组绑定失效', () => {
     const page = stagedPage(1, 'arxiv:2604.00001', 8.0); delete page.canonical;
     const analysis = '## 评分\n8.0\n\n## 核心摘要\n全新且只来自 canonical 的摘要。\n\n## 方法概述和架构\n方法正文。';
     const paper = { arxivId: '2604.00001', title: 'Fresh canonical title', analysis,
@@ -242,7 +242,7 @@ test('new unrelated crosswalk progress does not invalidate unchanged staged page
     assert.equal(result.topology.state.stateSha256, 'f'.repeat(64));
 });
 
-test('completed page staging loader replays manifest and every rendered page SHA', t => {
+test('已完成的页面暂存加载器复核清单和每个渲染页面的 SHA', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-aggregate-input-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const runRoot = path.join(root, RUN); const page = stagedPage(1, 'arxiv:2604.00001', 8.1, '9'.repeat(64), true); delete page.canonical;
@@ -263,7 +263,7 @@ test('completed page staging loader replays manifest and every rendered page SHA
     assert.throws(() => api.loadCompletedPageStaging({ stagingRoot: root, stagingRunId: RUN }), /文件 SHA 与生成清单不一致/);
 });
 
-test('completed page staging loader replays every asset size/SHA', t => {
+test('已完成的页面暂存加载器复核每个素材的大小和 SHA', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-aggregate-asset-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const runRoot = path.join(root, RUN); const page = stagedPage(1, 'arxiv:2604.00001', 8.1, '9'.repeat(64), true); delete page.canonical;
@@ -288,7 +288,7 @@ test('completed page staging loader replays every asset size/SHA', t => {
     assert.throws(() => api.loadCompletedPageStaging({ stagingRoot: root, stagingRunId: RUN }), /文件 SHA 或字节数与生成清单不一致/);
 });
 
-test('apply writes isolated immutable manifest while replay is idempotent', t => {
+test('写入会生成隔离的不可变清单，复核则幂等', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-aggregate-output-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const aggregate = api.buildDailyAggregates({ inputs: aggregateFixture(), date: DATE });
@@ -356,7 +356,7 @@ test('已保存每日汇总按原完整格式只读重放，混用和坏 SHA 不
     assert.deepEqual(fs.readFileSync(filename), originalBytes);
 });
 
-test('CLI dry-run never invokes writer and apply targets configured aggregate root', () => {
+test('命令行预演绝不调用写入器，写入则指向配置的汇总根目录', () => {
     assert.equal(cli.parseArgs(['--dry-run', '--staging-runs', RUN, '--date', DATE]).date, DATE);
     assert.throws(() => cli.parseArgs(['--apply', '--staging-runs', 'bad']), /Use/);
     assert.throws(() => cli.parseArgs(['--apply', '--staging-runs', `${RUN},${RUN}`]), /Use/);

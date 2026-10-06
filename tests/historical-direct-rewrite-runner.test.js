@@ -21,7 +21,7 @@ const { validAnalysisPaper, validLegacyApiAnalysisPaper } = require('./valid-ana
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
-test('global failures require typed run scope or an explicit account error code', () => {
+test('全局失败必须带类型化的运行作用域，或有明确的账号错误码', () => {
     for (const value of [new Error('HTTP 401: Insufficient balance'),
         { error: 'LLM_ACCOUNT_POOL_EXHAUSTED', retryable: false },
         { code: 'MODEL_HTTP_NON_RETRYABLE', status: 403 }, { retryable: false },
@@ -35,14 +35,14 @@ test('global failures require typed run scope or an explicit account error code'
         latestAnalysisAttemptErrorCode: 'MODEL_HTTP_NON_RETRYABLE', latestAnalysisAttemptErrorStatus: 401 } }), 'account-authentication-failed');
 });
 
-test('diagnostic truncation preserves root cause and removes credentials first', () => {
+test('诊断截断保留根因，并先去掉凭证', () => {
     const value = runner.safeErrorText(new Error('Traceback Authorization: Bearer secret-token\n'
         + 'frame\n'.repeat(900) + '\nRootCause: sk-test-secret https://user:password@example.test/?token=secret'));
     assert.ok(value.length <= 2000); assert.match(value, /RootCause:/);
     assert.doesNotMatch(value, /sk-test|secret-token|user:password|token=secret/);
 });
 
-test('bounded rejects only after all in-flight workers settle and stops claiming work', async () => {
+test('有界并发在拒绝之前先等所有在跑的 worker 结束，并停止再领任务', async () => {
     let release; const gate = new Promise(resolve => { release = resolve; });
     let entered; const started = new Promise(resolve => { entered = resolve; });
     const seen = []; let settled = false;
@@ -57,7 +57,7 @@ test('bounded rejects only after all in-flight workers settle and stops claiming
     release(); await rejection; assert.deepEqual(seen, [0, 1]);
 });
 
-test('bounded pause-check rejection also drains the other worker', async () => {
+test('有界并发的暂停检查被拒绝时，也会把另一个 worker 排空', async () => {
     let release; const gate = new Promise(resolve => { release = resolve; });
     let checks = 0; let settled = false;
     const pending = runner.bounded([0, 1, 2], 2, async () => { await gate; }, async () => {
@@ -69,7 +69,7 @@ test('bounded pause-check rejection also drains the other worker', async () => {
     assert.equal(settled, false); release(); await rejection;
 });
 
-test('three-worker account circuit stops a longer queue after the first global failure', async () => {
+test('三 worker 的账号熔断在第一次全局失败后就停下更长的队列', async () => {
     let stopped = false; const claimed = []; let active = 0;
     let release; const gate = new Promise(resolve => { release = resolve; });
     const result = await runner.bounded([0, 1, 2, 3, 4, 5], 3, async item => {
@@ -83,7 +83,7 @@ test('three-worker account circuit stops a longer queue after the first global f
     assert.deepEqual(result.values.sort(), [0, 1, 2]);
 });
 
-test('typed account failure persists pause and leaves unclaimed papers unchanged', async t => {
+test('带类型的账号失败会落盘暂停标记，未被领取的论文保持原样', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0; let ticks = 0;
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 1 }, {
         captureFreshArxivRewriteSource: directArxivCapture(),
@@ -100,7 +100,7 @@ test('typed account failure persists pause and leaves unclaimed papers unchanged
     assert.ok(failed.updatedAt > pause.record.requestedAt);
 });
 
-test('recovery structured failure pauses even when final validation error is generic', async t => {
+test('恢复期的结构化失败即使最终校验错误很笼统，也会暂停', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 1 }, {
         captureFreshArxivRewriteSource: directArxivCapture(),
@@ -117,7 +117,7 @@ test('recovery structured failure pauses even when final validation error is gen
     assert.equal(result.pauseReason.code, 'account-authentication-failed');
 });
 
-test('signal-shaped graceful pause persists a compatible marker without starting analysis', async t => {
+test('信号形态的优雅暂停会落盘兼容的标记，且不启动分析', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots }, {
         shouldPause: async () => ({ code: 'SIGTERM', detail: 'User requested graceful pause via SIGTERM' }),
@@ -128,7 +128,7 @@ test('signal-shaped graceful pause persists a compatible marker without starting
     assert.equal(directControl.readPauseFile(result.pauseFile, f.plan, 1).record.reason.code, 'SIGTERM');
 });
 
-test('fatal progress failure keeps the operation lock until another active analysis finishes', async t => {
+test('致命的进展失败会一直持有操作锁，直到另一个在跑的分析结束', async t => {
     const f = fixture(t); const roots = files(f.root); let release; let entered;
     const gate = new Promise(resolve => { release = resolve; });
     const started = new Promise(resolve => { entered = resolve; });
@@ -152,7 +152,7 @@ test('fatal progress failure keeps the operation lock until another active analy
     assert.equal(fs.existsSync(`${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`), false);
 });
 
-test('limit selection and metadata prerequisites observe the locked registry, not original prefix', async t => {
+test('数量上限选择和元数据前置条件看的是锁内注册表，不是最初的前缀', async t => {
     const f = fixture(t); const roots = files(f.root); let locked = false; const checked = [];
     await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, maxPapers: 1 }, {
         captureFreshArxivRewriteSource: directArxivCapture(), renderDirectPage,
@@ -257,7 +257,7 @@ function allFiles(root) {
     }; visit(root); return values;
 }
 
-test('direct analysis input carries only the fresh-source title, never a frozen historical page title', t => {
+test('直连分析输入只带全新来源的标题，绝不用冻结的历史页面标题', t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
     const input = runner.directPaper(item, { title: '  Fresh official source title  ' });
     assert.equal(input.title, 'Fresh official source title');
@@ -265,7 +265,7 @@ test('direct analysis input carries only the fresh-source title, never a frozen 
     assert.doesNotMatch(JSON.stringify(input), /ArXiv page|POISON_OLD_BLOG_BODY/);
 });
 
-test('conference PDF author evidence parses symbol and numeric superscripts from the sealed preamble', () => {
+test('会议 PDF 作者证据从已保存并核验的页首解析符号和数字上标', () => {
     const symbol = runner.parseConferencePdfAuthors([
         'A Paper Title',
         'Hoan My Tran†, Aghilas Sini∗, David Guennec†,',
@@ -306,7 +306,7 @@ test('conference PDF author evidence parses symbol and numeric superscripts from
     assert.equal(numeric.sourceEvidenceSha256.length, 64);
 });
 
-test('conference direct paper carries only authors parsed from the current PDF source', t => {
+test('会议直连论文只带从当前 PDF 来源解析出的作者', t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'conference-local-pdf');
     const input = runner.directPaper(item, {
         title: 'Fresh conference title',
@@ -317,7 +317,7 @@ test('conference direct paper carries only authors parsed from the current PDF s
     assert.doesNotMatch(JSON.stringify(input), /POISON_OLD_BLOG_BODY|POISON_METADATA_TITLE/);
 });
 
-test('completed historical Reader refreshes only an empty author identity from official metadata', () => {
+test('已完成的历史 Reader 只用官方元数据补上空的作者身份', () => {
     const sourceSha256 = sha('sealed source');
     const paper = {
         authors: ['Yash Vishe', 'Eric Xue'], sourceSha256,
@@ -351,7 +351,7 @@ test('completed historical Reader refreshes only an empty author identity from o
         /lacks official publication authors/);
 });
 
-test('sealed arXiv publication abstract extraction accepts explicit bounded layouts and rejects ambiguity', () => {
+test('已保存并核验的 arXiv 出版物摘要提取接受显式的有界版式，拒绝有歧义的情况', () => {
     const expected = 'First exact sentence. Second exact sentence.';
     assert.equal(runner.extractSealedArxivAbstract([
         'Official title', 'Abstract', 'First exact sentence.\nSecond exact sentence.', 'Keywordsspeech, audio',
@@ -418,7 +418,7 @@ test('sealed arXiv publication abstract extraction accepts explicit bounded layo
     ), /no explicit Keywords\/Index Terms\/Introduction boundary/);
 });
 
-test('publication source always requires an exact official metadata sidecar, independently of diagnostic text parsing', () => {
+test('发布来源始终要求精确的官方元数据附属文件，与诊断文本解析无关', () => {
     const item = { paperId: 'arxiv:2601.00001', route: { kind: 'arxiv-fresh-fetch', arxivId: '2601.00001' } };
     const text = 'Official title\nBody without an Abstract marker\n1 Introduction\nBody';
     const sourceDetails = { paperId: item.paperId, source: 'html', sourceId: '2601.00001', text,
@@ -464,7 +464,7 @@ test('publication source always requires an exact official metadata sidecar, ind
     }), /sidecar is unavailable/);
 });
 
-test('different-title prior preprint produces an explicit source title, DOI, and non-camera-ready analysis notice only for that relation', () => {
+test('标题不同的先前预印本只在那种关系下给出明确的来源标题、DOI 和非最终稿提示', () => {
     const item = { paperId: 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6' };
     const acquisition = {
         versionRelation: 'author-prior-preprint-with-different-title',
@@ -541,7 +541,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     return paper;
 }
 
-test('generic direct runner captures model payloads from fresh sources only and stages without runtime image assets', async t => {
+test('通用直连运行器只从全新来源捕获模型载荷，暂存时不带运行时图片资源', async t => {
     const f = fixture(t); const capturedModelPayloads = [];
     const freshText = [
         'Fresh official title', 'Abstract',
@@ -669,7 +669,7 @@ function asInterruptedAnalysisComplete(registry, plan, paperId, at = '2026-09-08
     return runner.transition(next, plan, paperId, 'analysis_complete', { analysis: staged.analysis }, at);
 }
 
-test('direct-run selection is plan-ordered, bounded, and rejects duplicate or out-of-queue IDs', async t => {
+test('直连运行的选题按计划顺序、有数量上限，并拒绝重复或不在队列里的 ID', async t => {
     const f = fixture(t); const roots = files(f.root);
     const ids = f.plan.queue.map(item => item.paperId); const reversed = ids.slice().reverse();
     const dryRun = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
@@ -686,7 +686,7 @@ test('direct-run selection is plan-ordered, bounded, and rejects duplicate or ou
     assert.equal(fs.existsSync(roots.registryRoot), false, 'dry-run must not create the registry/control directory');
 });
 
-test('direct-run apply fails before source/model work unless scheduler marked every selected paper ready', async t => {
+test('调度器没有把每篇选中的论文标成就绪时，直连运行在取来源和调模型之前就失败', async t => {
     const f = fixture(t); const roots = files(f.root); let captures = 0; let analyses = 0;
     const statusFile = directControl.sourceControlPaths({ sourceRoot: roots.freshArxivSourceRoot,
         plan: f.plan, generation: 1 }).statusFile;
@@ -706,7 +706,7 @@ test('direct-run apply fails before source/model work unless scheduler marked ev
     assert.deepEqual(dry.sourcePrerequisite.notReadyPaperIds, ['arxiv:2601.00001']);
 });
 
-test('direct-run rejects a missing publication sidecar before any arXiv analysis', async t => {
+test('直连运行在任何 arXiv 分析之前就拒绝缺失的发布附属文件', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0;
     const missing = () => { const error = new Error('sidecar absent before analysis'); error.code = 'ENOENT'; throw error; };
     await assert.rejects(runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
@@ -718,7 +718,7 @@ test('direct-run rejects a missing publication sidecar before any arXiv analysis
     assert.equal(analyses, 0);
 });
 
-test('source status reports lightweight conference path/size drift and opt-in deep SHA drift', t => {
+test('来源状态会报出轻量的会议路径和大小漂移，以及按需开启的深层 SHA 漂移', t => {
     const f = fixture(t); const roots = files(f.root); const pdf = path.join(f.root, 'conference.pdf');
     const healthy = directControl.sourceSnapshot({ sourceRoot: roots.freshArxivSourceRoot, plan: f.plan });
     assert.deepEqual({ ready: healthy.conference.ready, failed: healthy.conference.failed,
@@ -735,7 +735,7 @@ test('source status reports lightweight conference path/size drift and opt-in de
     assert.equal(missing.conference.missing, 1);
 });
 
-test('direct-run CLI parses stable scopes and rejects ambiguous limits or malformed paper sets', () => {
+test('直连运行命令行解析稳定的作用域，拒绝有歧义的上限或格式错误的论文集合', () => {
     const plan = '/tmp/direct-plan.json';
     const parsed = runnerCli.parseArgs(['--apply', '--plan', plan, '--paper-ids',
         'arxiv:2601.00001,conference:icassp:2026:icassp-arnumber:100', '--max-papers', '2',
@@ -748,7 +748,7 @@ test('direct-run CLI parses stable scopes and rejects ambiguous limits or malfor
     assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--pause-file', '/tmp/custom.pause']), /Use/);
 });
 
-test('implicit max-papers advances past staged entries while explicit IDs remain replayable', async t => {
+test('隐式的 max-papers 会跳过已暂存的条目，显式 ID 仍然可复核', async t => {
     const f = fixture(t); const roots = files(f.root); const conferenceId = f.plan.queue
         .find(item => item.route.kind === 'conference-local-pdf').paperId;
     const dependencies = { extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
@@ -765,7 +765,7 @@ test('implicit max-papers advances past staged entries while explicit IDs remain
     assert.deepEqual(explicit.paperIds, [conferenceId]); assert.equal(explicit.selection.skippedCompletedCount, 0);
 });
 
-test('stale renderer staging is requeued and page-only restaged without overwriting analysis or old pages', async t => {
+test('渲染器过期时重新排队，只重做页面暂存，不覆盖分析和旧页面', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.route.kind === 'conference-local-pdf');
     const firstRenderer = 'a'.repeat(64); const secondRenderer = 'b'.repeat(64); let analyses = 0;
@@ -806,7 +806,7 @@ test('stale renderer staging is requeued and page-only restaged without overwrit
     assert.equal(stageFiles(f.root).length, 2);
 });
 
-test('persistent pause marker stops before new work and the same selection resumes after marker removal', async t => {
+test('持久的暂停标记会在接新活之前停下，标记删掉后同一批选择继续', async t => {
     const f = fixture(t); const roots = files(f.root);
     const pauseFile = runner.defaultPauseFilePath(roots.registryRoot, f.plan, 1);
     directControl.writePauseRequest({ registryRoot: roots.registryRoot, plan: f.plan, generation: 1,
@@ -830,7 +830,7 @@ test('persistent pause marker stops before new work and the same selection resum
     assert.equal(resumed.registryCounts.staged, 2); assert.equal(analyses, 2);
 });
 
-test('a pause requested by progress finishes the active paper and resumes without redoing sealed work', async t => {
+test('进展触发的暂停会做完当前论文，续跑时不重做已保存并核验的工作', async t => {
     const f = fixture(t); const roots = files(f.root); const pauseFile = runner.defaultPauseFilePath(roots.registryRoot, f.plan, 1);
     const sourceText = ['Official title', 'Abstract', 'Pause boundary exact abstract. '.repeat(8),
         'Keywords: speech', '1 Introduction', 'PAUSE_BOUNDARY_FRESH_ARXIV_TEXT '.repeat(80)].join('\n'); let analyses = 0;
@@ -862,7 +862,7 @@ test('a pause requested by progress finishes the active paper and resumes withou
     assert.equal(resumed.registryCounts.staged, 2); assert.equal(analyses, 2, 'the staged arXiv paper is replayed, not re-analyzed');
 });
 
-test('plan-generation operation lock prevents concurrent direct runners from loading one registry', async t => {
+test('计划生成的操作锁防止并发的直连运行器同时加载同一份注册表', async t => {
     const f = fixture(t); const roots = files(f.root); let releaseAnalysis;
     const analysisGate = new Promise(resolve => { releaseAnalysis = resolve; });
     let enteredAnalysis; const entered = new Promise(resolve => { enteredAnalysis = resolve; });
@@ -886,7 +886,7 @@ test('plan-generation operation lock prevents concurrent direct runners from loa
     assert.equal(fs.existsSync(`${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`), false);
 });
 
-test('direct runner wires the opaque local-dead recovery policy only to its outer operation lock', async t => {
+test('直连运行器只把不透明的本机死亡回收策略接到外层操作锁上', async t => {
     const f = fixture(t); const roots = files(f.root); let receivedOptions = null;
     const forgedPolicy = Symbol('not-the-internal-capability');
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
@@ -906,7 +906,7 @@ test('direct runner wires the opaque local-dead recovery policy only to its oute
     assert.equal(receivedOptions.recoveryPolicy, engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY);
 });
 
-test('two direct runners atomically replay after immediately reclaiming one fresh same-host dead operation owner', async t => {
+test('两个直连运行器立刻回收同一个刚死亡的同主机操作持有者后，原子地复核', async t => {
     const f = fixture(t); const roots = files(f.root);
     const lockPath = `${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`;
     fs.mkdirSync(lockPath, { recursive: true, mode: 0o700 }); fs.chmodSync(lockPath, 0o700);
@@ -945,7 +945,7 @@ test('two direct runners atomically replay after immediately reclaiming one fres
 
 // defaultAnalyze 的返回值可能带着单篇错误而不抛异常。
 // 这种情况仍须让登记和本次运行失败，绝不能写入分析结果或暂存页。
-test('defaultAnalyze incomplete result is failed and never persisted or staged', async t => {
+test('defaultAnalyze 遇到不完整结果就判失败，绝不落盘或暂存', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
         captureFreshArxivRewriteSource: directArxivCapture(),
@@ -962,7 +962,7 @@ test('defaultAnalyze incomplete result is failed and never persisted or staged',
     assert.deepEqual(allFiles(path.join(f.root, 'runtime', 'executions')).filter(name => path.basename(name) === 'analysis.json'), []);
 });
 
-test('defaultAnalyze persists recoverable checkpoints across processes and resumes without staging the partial attempt', async t => {
+test('defaultAnalyze 跨进程落盘可恢复的检查点，续跑时不暂存那次不完整的尝试', async t => {
     const f = fixture(t); const roots = files(f.root); let engineRuns = 0;
     const partial = { directPaperId: 'arxiv:2601.00001', arxivId: '2601.00001',
         analysis: null, parsed: null, analysisCheckpoint: 'recoverable canonical checkpoint',
@@ -1023,7 +1023,7 @@ test('defaultAnalyze persists recoverable checkpoints across processes and resum
     assert.equal(second.registryCounts.staged, 1); assert.equal(engineRuns, 2);
 });
 
-test('analyzing crash replays a same-source recovery receipt before continuing in the same run', async t => {
+test('analyzing 阶段崩溃后先复核同来源的恢复凭证，再在同一轮里继续', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     const seeded = await seedFailedArxivExecution(f, roots);
@@ -1075,7 +1075,7 @@ test('analyzing crash replays a same-source recovery receipt before continuing i
         recoverySha256: receipt.recoverySha256 }]);
 });
 
-test('analyzing crash without recovery is persisted as failed before the same run sources again', async t => {
+test('analyzing 崩溃且没有恢复记录时先落盘为失败，然后同一轮再取来源', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     const seeded = await seedFailedArxivExecution(f, roots);
@@ -1104,7 +1104,7 @@ test('analyzing crash without recovery is persisted as failed before the same ru
         [['analyzing', 'failed', 'missing']]);
 });
 
-test('analyzing crash rejects a recovery envelope bound to another source snapshot', async t => {
+test('analyzing 崩溃时拒绝绑定到另一份来源快照的恢复外层对象', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     const seeded = await seedFailedArxivExecution(f, roots);
@@ -1129,7 +1129,7 @@ test('analyzing crash rejects a recovery envelope bound to another source snapsh
     assert.deepEqual(entry.source, seeded.entry.source);
 });
 
-test('sourcing and source_ready crash states normalize through failed and retry in the same run', async t => {
+test('sourcing 和 source_ready 的崩溃状态归一到失败，并在同一轮里重试', async t => {
     for (const crashStatus of ['sourcing', 'source_ready']) {
         const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
             .find(entry => entry.paperId === 'arxiv:2601.00001');
@@ -1164,7 +1164,7 @@ test('sourcing and source_ready crash states normalize through failed and retry 
     }
 });
 
-test('analysis_complete crash strictly replays source and analysis receipts directly into staging', async t => {
+test('analysis_complete 崩溃后严格复核来源和分析凭证，直接进暂存', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     let captures = 0; let analyses = 0;
@@ -1206,7 +1206,7 @@ test('analysis_complete crash strictly replays source and analysis receipts dire
         audit.recoveryStatus]), [['analysis_complete', 'staged', 'completed-analysis-replayed']]);
 });
 
-test('analysis_complete Reader surface repair is atomically resealed before no-LLM staging replay', async t => {
+test('analysis_complete 的 Reader 正文修复在无 LLM 的暂存复核之前原子地重新保存并核验', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     let analyses = 0; const capture = directArxivCapture();
@@ -1252,7 +1252,7 @@ test('analysis_complete Reader surface repair is atomically resealed before no-L
     ]]);
 });
 
-test('completed analysis staging failure never falls through to analysis and the next run retries staging', async t => {
+test('分析已完成但暂存失败时绝不回退到分析，下一轮只重试暂存', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     let captures = 0; let analyses = 0; const capture = directArxivCapture();
@@ -1304,7 +1304,7 @@ test('completed analysis staging failure never falls through to analysis and the
     ]);
 });
 
-test('analysis_complete with drifted analysis bytes fails closed without same-run reanalysis', async t => {
+test('analysis_complete 的分析字节漂移时直接失败，不在同一轮重分析', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     let analyses = 0; const capture = directArxivCapture();
@@ -1349,7 +1349,7 @@ test('analysis_complete with drifted analysis bytes fails closed without same-ru
     assert.equal(analyses, 2, 'the next explicit run may perform one normal analysis');
 });
 
-test('missing current Reader blocks staging even when canonical analysis otherwise parses', async t => {
+test('即使规范分析本身能解析，缺少当前 Reader 也会挡住暂存', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
         captureFreshArxivRewriteSource: directArxivCapture(),
@@ -1360,7 +1360,7 @@ test('missing current Reader blocks staging even when canonical analysis otherwi
     assert.equal(stageFiles(f.root).length, 0);
 });
 
-test('missing fresh provenance blocks staging after the complete Reader contract passes', async t => {
+test('完整 Reader 约定通过后，缺少全新来源出处仍然挡住暂存', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
         captureFreshArxivRewriteSource: directArxivCapture(),
@@ -1376,7 +1376,7 @@ test('missing fresh provenance blocks staging after the complete Reader contract
     assert.equal(stageFiles(f.root).length, 0);
 });
 
-test('arXiv Reader pixels exist only during an OS-temporary callback and returned records contain bytes but no path', async t => {
+test('arXiv Reader 像素只在操作系统临时回调期间存在，返回的记录有字节但没有路径', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-ephemeral-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const sourceRoot = path.join(root, 'persistent-sources'); const temporaryRoot = path.join(root, 'os-temporary');
@@ -1396,7 +1396,7 @@ test('arXiv Reader pixels exist only during an OS-temporary callback and returne
         /evidence asset SHA is invalid/);
 });
 
-test('arXiv Reader materializer skips one permanently oversized optional Figure and keeps its peer', async t => {
+test('arXiv Reader 的图片生成器跳过一张始终超大的可选图，保留另一张', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-reader-partial-figures-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const figures = [1, 2].map(ordinal => ({ ordinal,
@@ -1418,7 +1418,7 @@ test('arXiv Reader materializer skips one permanently oversized optional Figure 
     assert.deepEqual(fs.readdirSync(root), []);
 });
 
-test('arXiv Reader materializer skips one permanently missing optional Figure and keeps its peer', async t => {
+test('arXiv Reader 的图片生成器跳过一张始终缺失的可选图，保留另一张', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-reader-missing-figure-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const figures = [1, 2].map(ordinal => ({ ordinal,
@@ -1439,7 +1439,7 @@ test('arXiv Reader materializer skips one permanently missing optional Figure an
     assert.deepEqual(fs.readdirSync(root), []);
 });
 
-test('conference PDF pixels are rendered only under OS temp and retained only as in-memory request evidence', async t => {
+test('会议 PDF 像素只在操作系统临时目录里渲染，并且只作为内存中的请求证据保留', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-conference-ephemeral-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const temporaryRoot = path.join(root, 'os-temporary'); const pdf = path.join(root, 'paper.pdf'); write(pdf, '%PDF-1.4\n%%EOF\n');
@@ -1460,7 +1460,7 @@ test('conference PDF pixels are rendered only under OS temp and retained only as
     }), /cannot use a persistent runtime directory/);
 });
 
-test('conference visual page selection caps PDF page pixels and prioritizes real Figure/table evidence', () => {
+test('会议视觉选页给 PDF 页像素设上限，并优先选真正的图和表证据', () => {
     const audit = {
         pages: Array.from({ length: 22 }, (_, index) => ({ page: index + 1 })),
         figureCandidates: [{ page: 2 }, { page: 4 }, { page: 4 }, { page: 7 }, { page: 9 }],
@@ -1472,7 +1472,7 @@ test('conference visual page selection caps PDF page pixels and prioritizes real
     assert.deepEqual(runner.selectConferenceVisualPages({ pages: [] }), []);
 });
 
-test('a new arXiv generation receives an isolated direct registry and cannot recover the prior generation staging', async t => {
+test('新的 arXiv 代次拿到隔离的直连注册表，无法恢复上一代的暂存', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0;
     const capture = options => freshSource.captureFreshArxivRewriteSource(options, {
         fetchText: async id => ({ text: ['Official title', 'Abstract',
@@ -1492,7 +1492,7 @@ test('a new arXiv generation receives an isolated direct registry and cannot rec
     assert.match(path.basename(second.registryFile), /arxiv-generation-000002/);
 });
 
-test('direct-run never turns a missing scheduler-owned arXiv bundle into a network retry or handoff', async t => {
+test('调度器负责的 arXiv 包缺失时，直连运行绝不改成网络重试或转交', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0;
     const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
         now: () => '2026-09-07T00:00:00.000Z',
@@ -1511,7 +1511,7 @@ test('direct-run never turns a missing scheduler-owned arXiv bundle into a netwo
     assert.equal(second.results[0].status, 'failed'); assert.equal(analyses, 0);
 });
 
-test('conference staged recovery rejects post-stage PDF and metadata mutations before returning recovered', async t => {
+test('会议暂存恢复在返回「已恢复」之前，拒绝暂存之后的 PDF 和元数据改动', async t => {
     const mutations = [
         { name: 'PDF', mutate: f => fs.appendFileSync(path.join(f.root, 'conference.pdf'), 'mutated PDF bytes') },
         { name: 'metadata', mutate: f => fs.appendFileSync(path.join(f.root, 'metadata.json'), '\nmutated metadata bytes') }
@@ -1532,7 +1532,7 @@ test('conference staged recovery rejects post-stage PDF and metadata mutations b
     }
 });
 
-test('default runner engine preserves conference PDF pages through nested analysis/Reader scope and cleans them afterward', async t => {
+test('默认运行器引擎让会议 PDF 页面贯穿嵌套的分析和 Reader 作用域，事后清理干净', async t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'conference-local-pdf');
     const temporaryRoot = path.join(f.root, 'os-temporary'); const executionDirectory = path.join(f.root, 'runtime', 'execution');
     const extracted = await runner.extractConferenceSource(item, { extractPdfText: async () => 'conference source '.repeat(100) });
@@ -1548,7 +1548,7 @@ test('default runner engine preserves conference PDF pages through nested analys
                     paperLockTimeoutMs: 37,
                     engine: { analyzeBatch: async (papers, options) => {
                         assert.deepEqual(options.paperLockOptions, { timeoutMs: 37 });
-                        await Promise.resolve(); // cross an async boundary as Reader generation does
+                        await Promise.resolve(); // 跨一次异步边界，和 Reader 生成时一样
                         const active = context.getDirectRewriteAnalysisContext();
                         const readerPages = context.directSupplementaryReaderImages();
                         assert.equal(active.paperId, item.paperId);
@@ -1571,7 +1571,7 @@ test('default runner engine preserves conference PDF pages through nested analys
     assert.deepEqual(fs.readdirSync(temporaryRoot), []);
 });
 
-test('sealed historical direct scope injects the opaque legacy-lock capability and seals its audit', async t => {
+test('已保存并核验的历史直连作用域注入不透明的旧版锁凭证，并把审计记录一并保存并核验', async t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
     const executionDirectory = path.join(f.root, 'runtime', 'execution');
     const text = 'sealed direct source '.repeat(100);
@@ -1624,7 +1624,7 @@ test('sealed historical direct scope injects the opaque legacy-lock capability a
     assert.equal(sealedCompletion.intentAuditSha256, sealedIntent.auditSha256);
 });
 
-test('legacy lock audit keeps unique repeated intents and replays missing completions after a write failure', t => {
+test('旧版锁审计保留去重后的重复意图，并在写入失败后复核缺失的完成记录', t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
     const executionDirectory = path.join(f.root, 'runtime', 'legacy-audit-replay');
     const sourceDescriptor = { sourceSnapshotSha256: sha('source-snapshot') };
@@ -1666,7 +1666,7 @@ test('legacy lock audit keeps unique repeated intents and replays missing comple
     assert.deepEqual(before, names.sort().map(name => [name, sha(fs.readFileSync(path.join(executionDirectory, name)))]));
 });
 
-test('default runner engine exposes an arXiv primary downloader backed only by ephemeral bytes', async t => {
+test('默认运行器引擎暴露的 arXiv 主下载器只靠临时字节支撑', async t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
     const temporaryRoot = path.join(f.root, 'os-temporary'); const executionDirectory = path.join(f.root, 'runtime', 'execution');
     const sourceDetails = { paperId: item.paperId, source: 'html', sourceId: item.route.arxivId,
@@ -1692,7 +1692,7 @@ test('default runner engine exposes an arXiv primary downloader backed only by e
     assert.equal(fs.existsSync(path.join(f.root, 'data', 'current', 'image-cache')), false);
 });
 
-test('direct runner retry of a failed same generation reuses table/formula/figure metadata without refetching source bytes', async t => {
+test('直连运行器重试同一代的失败时复用表格、公式和图元数据，不重新抓来源字节', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
     const figureUrl = 'https://arxiv.org/html/2601.00001/figure-1.png';
     const sourceText = ['Official title', 'Abstract', 'Table and formula exact abstract. '.repeat(8),
@@ -1728,7 +1728,7 @@ test('direct runner retry of a failed same generation reuses table/formula/figur
     assert.equal(analysisCalls, 2);
 });
 
-test('actual Reader request receives a conference PDF page from the direct scope and leaves no pixels after rejection', async t => {
+test('真实 Reader 请求从直连作用域拿到一页会议 PDF，被拒绝后不留任何像素', async t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'conference-local-pdf');
     const temporaryRoot = path.join(f.root, 'os-temporary'); const executionDirectory = path.join(f.root, 'runtime', 'execution');
     const extracted = await runner.extractConferenceSource(item, { extractPdfText: async () => 'conference source '.repeat(100) });

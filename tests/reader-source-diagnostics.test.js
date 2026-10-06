@@ -18,7 +18,7 @@ function diagnose(renderedRows, sourceTable, options = {}) {
     sourceText: sourceTable.matrix.map(row => row.join('\n')).join('\n'), ...options });
 }
 
-test('percent declared in source header diagnoses body edit and exact DOM coordinates', () => {
+test('来源表头已声明的百分比可诊断正文改动并给出精确 DOM 坐标', () => {
     const source = table([['Method', 'Accuracy (%)'], ['Model-A', '96.4']]);
     const [issue] = diagnose([['Method', 'Accuracy (%)'], ['Model-A', '96.4%']], source, {
         binding: { sourceType: 'artifact_table', sourceTableOrdinal: 1, cellBindings: [
@@ -33,7 +33,7 @@ test('percent declared in source header diagnoses body edit and exact DOM coordi
     assert.match(issue.message, /不能逐格追加%/);
 });
 
-test('percent moved into an independent column points back to original suffixed cell', () => {
+test('百分比被挪进独立列时，会指回原来带后缀的单元格', () => {
     const source = table([['Method', 'Accuracy'], ['Model-B', '96.4%'], ['Model-C', '3.3%']]);
     const [issue] = diagnose([['方法', '准确率', '单位'], ['Model-B', '96.4', '%']], source);
     assert.equal(issue.candidates.length, 1);
@@ -44,7 +44,7 @@ test('percent moved into an independent column points back to original suffixed 
     assert.ok(issue.sourceQuotes.every(item => source.matrix.map(row => row.join('\n')).join('\n').includes(item.quote)));
 });
 
-test('same number in unrelated rows and bibliography cannot discover a candidate', () => {
+test('无关行和参考文献里的相同数字无法产生候选项', () => {
     const source = table([['Reference', 'Count'], ['Reference-X', '96.4%']]);
     const [issue] = diagnose([['Method', 'Accuracy'], ['Model-B', '96.4']], source,
         { sourceText: 'References\n[96] Model-B produced a result.\n96.4%' });
@@ -53,15 +53,15 @@ test('same number in unrelated rows and bibliography cannot discover a candidate
     assert.match(issue.message, /没有找到能通过行标签和列标题对应/);
 });
 
-test('row and metric anchors outrank a numeric coincidence in a different metric', () => {
+test('行与指标锚点优先于另一指标上的数字巧合', () => {
     const source = table([['Method', 'WER', 'CER'], ['Model-A', '3.345%', '3.3%']]);
     const [issue] = diagnose([['Method', 'WER'], ['Model-A', '3.3%']], source);
     assert.equal(issue.candidates[0].sourceColumn, 1);
     assert.equal(issue.candidates[0].difference, 'possible_rounding');
-    assert.equal(issue.candidates.length, 2); // Ambiguity stays explicit, not a chosen answer.
+    assert.equal(issue.candidates.length, 2); // 歧义保持原样，不替它选一个答案。
 });
 
-test('spelling classifications never equate different units or numeric scaling', () => {
+test('拼写分类绝不把不同单位或不同数量级视为等价', () => {
     assert.equal(describeDifference('1234', '1,234'), 'thousands_separator_differs');
     assert.equal(describeDifference('1.2', '1.234'), 'possible_rounding');
     assert.equal(describeDifference('1 s', '1 ms'), 'unit_spelling_differs');
@@ -69,7 +69,7 @@ test('spelling classifications never equate different units or numeric scaling',
     assert.equal(describeDifference('3.3%', '3.345 ms'), 'different_source_value');
 });
 
-test('diagnostics preserve input and refuse cells without DOM provenance', () => {
+test('诊断保持输入不变，拒绝没有 DOM 来源的单元格', () => {
     const source = table([['Method', 'WER'], ['Model-A', '3.3%']]);
     source.cells[3].sourceDomSha256 = null;
     const before = JSON.stringify(source);
@@ -78,11 +78,11 @@ test('diagnostics preserve input and refuse cells without DOM provenance', () =>
     assert.equal(JSON.stringify(source), before);
 });
 
-test('non source failures do not add speculative numeric diagnostics', () => {
+test('非来源类失败不追加推测性的数字诊断', () => {
     assert.deepEqual(buildReaderSourceDiagnostics({ draft: {}, parserError: new Error('文章篇幅不足') }), []);
 });
 
-test('public wrapper locates the exact candidate body after another selection marker', () => {
+test('公开包装器在另一个选择标记之后定位到精确的候选正文', () => {
     const source = table([['Method', 'WER'], ['Model-A', '3.3%']]);
     const draft = { sections: [{ kind: 'background', body: '[[TABLE_1]]' },
         { kind: 'result', body: '| Method | WER |\n| --- | --- |\n| Model-A | 3.3 |' }],
@@ -98,7 +98,7 @@ test('public wrapper locates the exact candidate body after another selection ma
     assert.match(issues[0].message, /可供核对的原文片段 L3/);
 });
 
-test('a declared source sentence supports a percentage-placement hint without a matching DOM table', () => {
+test('已声明的原文句子在没有对应 DOM 表格时也能支撑百分比位置提示', () => {
     const quote = 'For named entities, Hybrid Search recovers 96.4% of the improvement achieved by beam search.';
     const [issue] = diagnose([['指标', '比例', '单位'], ['命名实体改善恢复', '96.4', '%']],
         table([['Method', 'WER'], ['Other', '12.1']]), { sourceText: quote,
@@ -108,7 +108,7 @@ test('a declared source sentence supports a percentage-placement hint without a 
     assert.match(issue.message, /这句话是否对应当前行的实验，仍须由人工或模型核对/);
 });
 
-test('unrelated global prose, fabricated quotes and reference numbers are never suggested', () => {
+test('无关的全局正文、编造的引文和参考文献编号一律不作为建议', () => {
     const bibliography = '[96] Model A. Benchmark improvements. 4% of data.';
     const [issue] = diagnose([['方法', '数值'], ['模型', '4']], table([['Method', 'WER'], ['Other', '12.1']]),
         { sourceText: 'The method achieved 4% gain.\n' + bibliography,
@@ -117,7 +117,7 @@ test('unrelated global prose, fabricated quotes and reference numbers are never 
     assert.deepEqual(issue.candidates, []);
 });
 
-test('Chinese row labels get table-only context with two English anchors despite all-header source metadata', () => {
+test('来源元数据全是表头，中文行标签仍只取表格上下文加两个英文锚点', () => {
     const source = table([['System', 'Require-ITN (%)', 'Forbid-ITN (%)'],
         ['System', 'I-CER', 'FSPR'], ['Cascaded', '8.19', '25.60'],
         ['FunASR-Nano', '58.76', '95.18'], ['DF-ASR', '4.64', '95.18']]);
@@ -141,7 +141,7 @@ test('Chinese row labels get table-only context with two English anchors despite
     assert.equal(singleAnchor.tableContexts, undefined);
 });
 
-test('translated labels expose one uniquely corroborated DOM table as a hint without granting a binding', () => {
+test('翻译后的标签只把唯一得到印证的 DOM 表格作为提示，不授予绑定', () => {
     const source = table([
         ['Method', 'AVSBench V1m J&F', 'Delta'],
         ['w/o CL', '78.60', '-'],
@@ -180,7 +180,7 @@ test('translated labels expose one uniquely corroborated DOM table as a hint wit
     assert.equal(ambiguous.tableContexts, undefined);
 });
 
-test('image-estimated numbers absent from text and DOM are directed out of Markdown tables', () => {
+test('正文和 DOM 中都不存在的图片估算数字，会被引导移出 Markdown 表格', () => {
     const source = table([['Layer pair', 'Mean'], ['layer 1 vs layer 24', '0.060']]);
     const rendered = [
         ['比较对象', '均值越高越相似'],
@@ -203,7 +203,7 @@ test('image-estimated numbers absent from text and DOM are directed out of Markd
     assert.match(issues[0].message, /原文未逐项报告；图中仅显示定性趋势/);
 });
 
-test('explicit per-cell missing token diagnoses Chinese mixed prose against declared original percentage', () => {
+test('显式的逐单元格缺失标记可对照已声明原值诊断中文混排正文', () => {
     const quote = 'Hybrid Search further reduces average NE-ER by 3.3% while maintaining comparable WER.';
     const draft = { sections: [{ body: '| 方法 | 增量 | 单位 |\n| --- | --- | --- |\n| 方案 | 额外降低3.3 | % |' }],
         tableBindings: [{ tableIndex: 1, sourceType: 'source_quotes', sourceQuotes: [quote] }] };
@@ -218,7 +218,7 @@ test('explicit per-cell missing token diagnoses Chinese mixed prose against decl
     assert.deepEqual(mismatchedToken.quoteCandidates, []);
 });
 
-test('unique whitespace-only quote recovery returns original newlines and thin spaces, not a rewritten quote', () => {
+test('唯一仅靠空白匹配的引文恢复返回原换行和窄空格，而不是改写后的引文', () => {
     const original = 'PESQ-gradient masking is computed once\nper clip and adds roughly\n150\u2009ms, with 21\u2009ms vs. 171\u2009ms latency.';
     const declared = original.replace(/\s+/g, ' ');
     const options = { binding: { sourceQuotes: [declared] }, sourceText: original,
@@ -237,7 +237,7 @@ test('unique whitespace-only quote recovery returns original newlines and thin s
     assert.deepEqual(changed.quoteCandidates, []);
 });
 
-test('first-attempt spelling guidance states both unit conventions without granting source equivalence', () => {
+test('首次拼写提示会说明两种单位写法，但不认定来源等价', () => {
     const notice = readerNumericSpellingGuidance();
     assert.match(notice, /171 ms、96.4%/);
     assert.match(notice, /独立的单位列不能替代同格单位/);
@@ -249,7 +249,7 @@ test('first-attempt spelling guidance states both unit conventions without grant
     assert.match(notice, /完整来源检查/);
 });
 
-test('canonical missing token cannot turn an explicit two-decimal cell into an integer-rounding guess', () => {
+test('规范的缺失标记不会把明确的两位小数单元格变成取整猜测', () => {
     const quote = 'The proposed model reports a value of 2.35% on the named benchmark.';
     const [issue] = diagnose([['方法', '比例'], ['级联模型', '2.00%']], table([['x', 'y']]),
         { sourceText: quote, binding: { sourceQuotes: [quote] },

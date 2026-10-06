@@ -108,7 +108,7 @@ function fixture(t) {
         oldPage, oldDaily, newPage, newDaily, newAsset, stageManifest, aggregate, plan, baseline, deps };
 }
 
-test('plan freezes daily DAG, unique path ownership, producer SHA and no old authoring text', t => {
+test('计划冻结每日 DAG、唯一的路径归属、生产器 SHA，且不含旧写作文本', t => {
     const f = fixture(t); assert.equal(f.plan.contract, 'historical-publication-plan-v2');
     assert.equal(f.plan.version, 2);
     assert.deepEqual(f.plan.producerContracts, ['historical-daily-aggregate-staging-v1', 'historical-paper-page-staging-v1']);
@@ -122,7 +122,7 @@ test('plan freezes daily DAG, unique path ownership, producer SHA and no old aut
         loadPageStaging: () => null, loadDailyAggregate: () => null }), /暂不支持在此发布计划中引用会议汇总/);
 });
 
-test('same plan ID reuses the validated existing plan despite a later createdAt', t => {
+test('计划 ID 相同时复用已校验的现有计划，即使 createdAt 更晚', t => {
     const f = fixture(t);
     const rebuilt = api.buildPlan({ planId: PLAN, pageStagingRunIds: [STAGE], blogRepo: f.blogRepo,
         dailyAggregates: [{ aggregateRunId: AGG, date: DATE }], conferenceRefs: [] }, {
@@ -134,7 +134,7 @@ test('same plan ID reuses the validated existing plan despite a later createdAt'
     assert.equal(api.loadPlan({ outputRoot: f.outputRoot, planId: PLAN }).plan.createdAt, '2026-09-07T00:00:00.000Z');
 });
 
-test('atomic immutable write cleans a failed temporary file and never occupies the target', t => {
+test('原子不可变写入会清掉失败的临时文件，绝不占用目标路径', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-publication-write-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const target = path.join(root, 'artifact.json'); let writes = 0;
@@ -150,7 +150,7 @@ test('atomic immutable write cleans a failed temporary file and never occupies t
     assert.throws(() => api.writeExact(target, Buffer.from('different')), /已有文件内容不同，不能覆盖/);
 });
 
-test('plan rejects a stale inventory HEAD, content tree, or remote generation', t => {
+test('计划拒绝过期的清单 HEAD、内容树或远端代次', t => {
     const f = fixture(t); const options = { planId: '77777777-7777-4777-8777-777777777777',
         pageStagingRunIds: [STAGE], blogRepo: f.blogRepo, dailyAggregates: [{ aggregateRunId: AGG, date: DATE }] };
     for (const mutate of [
@@ -165,7 +165,7 @@ test('plan rejects a stale inventory HEAD, content tree, or remote generation', 
     }
 });
 
-test('public plan APIs reject traversal and reads detect parent-directory replacement', t => {
+test('公开的计划接口拒绝路径穿越，读取时能发现父目录被替换', t => {
     const f = fixture(t);
     assert.throws(() => api.loadPlan({ outputRoot: f.outputRoot, planId: '../escape' }), /发布计划 ID 必须是有效的 UUID/);
     assert.throws(() => api.writePlan({ outputRoot: f.outputRoot, plan: { planId: '../escape' } }), /必须是对象，且字段集合必须符合要求/);
@@ -178,7 +178,7 @@ test('public plan APIs reject traversal and reads detect parent-directory replac
     if (swapped) { fs.unlinkSync(parent); fs.renameSync(moved, parent); }
 });
 
-test('bundle-first generate verifies clean main/remote/baseline and never mutates blog', t => {
+test('生成时先校验干净的 main、远端和基线，绝不改动博客', t => {
     const f = fixture(t); const beforePage = fs.readFileSync(path.join(f.blogRepo, f.pagePath));
     let sourceReads = 0; const deps = { ...f.deps, sourceBytes: (item, roots) => { sourceReads++; return api.sourceBytes(item, roots); } };
     const result = api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
@@ -192,7 +192,7 @@ test('bundle-first generate verifies clean main/remote/baseline and never mutate
     assert.equal(fs.existsSync(path.join(f.blogRepo, f.assetPath)), false);
 });
 
-test('crash after partial copy resumes exact bytes; producer tamper and baseline drift fail closed', t => {
+test('部分复制后崩溃能按原字节续跑；生产器被篡改和基线漂移都直接失败', t => {
     const f = fixture(t); let crashed = false;
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
         blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: true }, {
@@ -210,7 +210,7 @@ test('crash after partial copy resumes exact bytes; producer tamper and baseline
         blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, f.deps), /工作区文件与基线提交中的内容不一致/);
 });
 
-test('path/collision/symlink and dirty or diverged remote attacks are rejected', t => {
+test('路径、冲突、符号链接，以及脏的或分叉的远端攻击都被拒绝', t => {
     const f = fixture(t); const badStage = structuredClone((() => ({ runRoot: '', manifest: {
         stagingRunId: STAGE, manifestSha256: '1'.repeat(64), pages: [{ paperId: 'arxiv:2609.03622', pageKey: `page:${'2'.repeat(64)}`,
             pagePath: '../escape.md', cohortDate: DATE, stagedPath: 'pages/escape', contentSha256: '6'.repeat(64), sourcePageContentSha256: '7'.repeat(64) }], assets: [] }, manifestFileSha256: '4'.repeat(64) }))());
@@ -229,7 +229,7 @@ test('path/collision/symlink and dirty or diverged remote attacks are rejected',
         blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, f.deps), /博客目标路径包含符号链接/);
 });
 
-test('re-signed plan injection and duplicate path ownership are rejected', t => {
+test('重新签名的计划注入和重复的路径归属都被拒绝', t => {
     const f = fixture(t); const filename = path.join(f.outputRoot, PLAN, 'plan.json');
     const injected = JSON.parse(fs.readFileSync(filename));
     injected.artifacts[0].oldBody = 'OLD TEXT MUST NEVER ENTER THE PLAN';
@@ -250,7 +250,7 @@ test('re-signed plan injection and duplicate path ownership are rejected', t => 
     }), /同一发布路径被多个生成记录占用/);
 });
 
-test('asset create ownership and generate closing CAS fail closed', t => {
+test('资源创建的归属和生成收尾的 CAS 一旦不符就直接失败', t => {
     const f = fixture(t); const existingAsset = Buffer.from('FOREIGN ASSET');
     const asset = path.join(f.blogRepo, f.assetPath); fs.mkdirSync(path.dirname(asset), { recursive: true }); fs.writeFileSync(asset, existingAsset);
     f.baseline.set(f.assetPath, existingAsset);
@@ -272,7 +272,7 @@ test('asset create ownership and generate closing CAS fail closed', t => {
     }), /生成结束时，工作区文件与原基线内容不一致/);
 });
 
-test('resume rejects extra bundle files, intermediate source symlinks, and duplicate-key plans', t => {
+test('续跑拒绝多余的包文件、中间来源符号链接和重复键的计划', t => {
     const f = fixture(t); let crashed = false;
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
         blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: true }, {
@@ -293,7 +293,7 @@ test('resume rejects extra bundle files, intermediate source symlinks, and dupli
     assert.throws(() => api.loadPlan({ outputRoot: duplicate.outputRoot, planId: PLAN }), /中出现重复的 JSON 字段：contract/);
 });
 
-test('git blob lookup distinguishes absent paths from Git failures', t => {
+test('git blob 查询区分路径不存在和 Git 出错', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-publication-git-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     execFileSync('git', ['init', '-b', 'main', root]);
@@ -307,7 +307,7 @@ test('git blob lookup distinguishes absent paths from Git failures', t => {
     assert.throws(() => api.defaultGitBlob(path.join(root, 'absent'), head, 'content/posts/missing.md'), /Git 命令 ls-tree 执行失败/);
 });
 
-test('real blog snapshot binds clean main, tree, Hugo config, remote identity and remote OID', t => {
+test('真实博客快照绑定干净的 main、tree、Hugo 配置、远端身份和远端 OID', t => {
     const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-publication-remote-'));
     t.after(() => fs.rmSync(base, { recursive: true, force: true }));
     const repo = path.join(base, 'blog'); const remote = path.join(base, 'remote.git');
@@ -326,7 +326,7 @@ test('real blog snapshot binds clean main, tree, Hugo config, remote identity an
     assert.equal(state.hugoConfig.sha256, sha(fs.readFileSync(path.join(repo, 'hugo.yaml'))));
 });
 
-test('successor generation requires an intact authenticated predecessor bundle', t => {
+test('后继代次要求上一代包完整且通过认证', t => {
     const f = fixture(t); const date2 = '2026-09-05'; const batch1 = `daily-${DATE}`; const batch2 = `daily-${date2}`;
     const daily2Path = `content/posts/${date2}.md`; const old2 = Buffer.from('OLD SECOND DAILY'); const fresh2 = Buffer.from('NEW SECOND DAILY');
     const target = path.join(f.blogRepo, daily2Path); fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, old2);
@@ -366,7 +366,7 @@ test('successor generation requires an intact authenticated predecessor bundle',
     assert.equal(result.manifest.predecessorProofs[0].batchId, batch1);
 });
 
-test('real producer loaders replay staged bytes and rebuild the daily manifest', t => {
+test('真实生产器加载器复核暂存字节并重建每日清单', t => {
     const f = fixture(t); const page = f.stageManifest.pages[0];
     const analysis = '## 评分\n8.2\n\n## 核心摘要\n只来自新 canonical 的摘要。\n\n## 方法概述和架构\nFresh method.';
     const paper = { arxivId: '2609.03622', title: 'Fresh canonical title', analysis,
@@ -479,7 +479,7 @@ test('real producer loaders replay staged bytes and rebuild the daily manifest',
         'a caller-supplied legacy parent must not downgrade the public proof writer');
 });
 
-test('CLI keeps phase one explicit and rejects malformed producer refs', () => {
+test('命令行要求显式指定第一阶段，拒绝格式错误的生产器引用', () => {
     assert.equal(cli.parseArgs(['plan', '--dry-run', '--plan-id', PLAN, '--page-staging-runs', STAGE,
         '--daily-aggregates', `${AGG}@${DATE}`]).dailyAggregates[0].date, DATE);
     assert.equal(cli.parseArgs(['generate', '--apply', '--plan-id', PLAN, '--batch-id', `daily-${DATE}`]).apply, true);

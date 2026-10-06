@@ -75,7 +75,7 @@ function fixture(t) {
     return { directory, originals, files, sourceExpectations, cache, counters, deps, descriptor, freshPaper };
 }
 
-test('CLI requires an explicit phase; no default API path, date override, reset or arbitrary output path', () => {
+test('命令行要求显式阶段，没有默认 API 路径、日期覆写、重置或任意输出路径', () => {
     assert.deepEqual(runner.parseRewriteArgs(['prepare', '--date', '2026-09-04']), { action: 'prepare', date: '2026-09-04' });
     assert.deepEqual(runner.parseRewriteArgs(['analyze', '--run-id', RUN_ID, '--concurrency', '3']),
         { action: 'analyze', runId: RUN_ID, concurrency: 3 });
@@ -93,7 +93,7 @@ test('CLI requires an explicit phase; no default API path, date override, reset 
     }
 });
 
-test('analyze --ids accepts only a non-empty unique normalized subset syntax', () => {
+test('analyze --ids 只接受非空、不重复且归一化的子集写法', () => {
     assert.deepEqual(runner.parseRewriteArgs(['analyze', '--run-id', RUN_ID, '--ids', '2609.00001,2609.00002']),
         { action: 'analyze', runId: RUN_ID, ids: ['2609.00001', '2609.00002'] });
     for (const value of ['', ',', '2609.00001,', ',2609.00001', '2609.00001,2609.00001',
@@ -107,7 +107,7 @@ test('analyze --ids accepts only a non-empty unique normalized subset syntax', (
         '--ids', '2609.00001', '--ids', '2609.00002']), /repeated/);
 });
 
-test('subset analysis calls only requested papers, preserves unselected state and Reader budget bytes, and reports whole-run partial', async t => {
+test('子集分析只调用被点名的论文，保留未选中状态和 Reader 预算字节，并把整轮报成部分完成', async t => {
     const f = fixture(t);
     const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
@@ -151,7 +151,7 @@ test('subset analysis calls only requested papers, preserves unselected state an
     await assert.rejects(runner.promoteRewrite({ runId: RUN_ID }, f.deps), /requires all sources and analysis/);
 });
 
-test('invalid or out-of-run subsets reject before run/analysis writes or engine calls', async t => {
+test('不合法或不属于本轮的子集在写运行或分析文件、调用引擎之前就被拒绝', async t => {
     const f = fixture(t);
     const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
@@ -164,7 +164,7 @@ test('invalid or out-of-run subsets reject before run/analysis writes or engine 
     assert.equal(f.counters.analysis, 0); assert.equal(f.counters.context, 0);
 });
 
-test('subsets retain whole-run success counting and complete only when the last missing paper succeeds', async t => {
+test('子集沿用整轮的成功计数，只有最后一篇缺失论文成功才算完成', async t => {
     const f = fixture(t);
     await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
@@ -178,7 +178,7 @@ test('subsets retain whole-run success counting and complete only when the last 
     assert.equal(status.diagnostics.outerAnalysisEntries['2609.00002'].count, 1);
 });
 
-test('sealed recovery capabilities mint only from an exact complete run and bind one opaque record identity', async t => {
+test('已保存并核验的恢复凭证只由完全一致的完整运行签发，并绑定一个不透明的记录身份', async t => {
     const f = fixture(t);
     await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
@@ -245,7 +245,7 @@ test('sealed recovery capabilities mint only from an exact complete run and bind
     assert.equal(observed.size, 0, 'analysis SHA drift cannot mint a capability');
 });
 
-test('partial analysis runs never mint sealed recovery capabilities', async t => {
+test('部分完成的分析运行绝不签发已保存并核验的恢复凭证', async t => {
     const f = fixture(t);
     await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
@@ -262,7 +262,7 @@ test('partial analysis runs never mint sealed recovery capabilities', async t =>
     assert.equal(observed.size, 0);
 });
 
-test('complete fresh run mints one-shot capability for summary plus scoring while preserving Reader', async t => {
+test('完整全新运行签发一次性的摘要加评分凭证，同时保留 Reader', async t => {
     const f = fixture(t);
     const contract = require('../scripts/analysis-contract.js');
     const engine = require('../scripts/analysis-engine.js');
@@ -439,7 +439,7 @@ test('complete fresh run mints one-shot capability for summary plus scoring whil
         { primaryCalls: 0, readerCalls: 0, summaryCalls: 1, scoringCalls: 1 });
 });
 
-test('prepare uses only raw metadata, pins exact inputs, preserves canonical, and status never fetches', async t => {
+test('prepare 只用原始元数据，固定精确输入，保留规范结果，status 绝不抓取', async t => {
     const f = fixture(t); const before = fs.readFileSync(f.files.deepAnalysisResult);
     const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     assert.equal(prepared.runId, RUN_ID); assert.equal(prepared.paperCount, 2);
@@ -454,7 +454,7 @@ test('prepare uses only raw metadata, pins exact inputs, preserves canonical, an
     assert.equal(f.counters.analysis, 0);
 });
 
-test('prepare refuses incomplete data, mismatched date/set, duplicates and an existing run directory', async t => {
+test('prepare 拒绝不完整的数据、日期或集合不匹配、重复项和已存在的运行目录', async t => {
     const f = fixture(t);
     await assert.rejects(runner.prepareRewrite({ date: '2026-09-04' }, { ...f.deps, validateData: () => ['source mismatch'] }), /read-only validation/);
     await assert.rejects(runner.prepareRewrite({ date: '2026-09-03' }, f.deps), /date/);
@@ -463,7 +463,7 @@ test('prepare refuses incomplete data, mismatched date/set, duplicates and an ex
     assert.throws(() => runner.metadataOnly({ arxivId: '2609.00001', title: 'x', abstract: '' }), /original title and abstract/);
 });
 
-test('explicit sources/analyze/promote phases preserve run identity and never feed prior-run prose', async t => {
+test('显式的 sources/analyze/promote 阶段保留运行身份，绝不把上一轮正文喂进去', async t => {
     const f = fixture(t); const canonicalBefore = fs.readFileSync(f.files.deepAnalysisResult);
     await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     const sources = await runner.collectRewriteSources({ runId: RUN_ID, concurrency: 2 }, f.deps);
@@ -482,7 +482,7 @@ test('explicit sources/analyze/promote phases preserve run identity and never fe
     await assert.rejects(runner.analyzeRewrite({ runId: RUN_ID }, f.deps), /immutable/);
 });
 
-test('raw input mutation during baseline capture cannot certify a prepared run', async t => {
+test('基线捕获期间原始输入被改动，就不能认定这次准备合格', async t => {
     const f = fixture(t);
     await assert.rejects(runner.prepareRewrite({ date: '2026-09-04' }, { ...f.deps,
         prepareBaseline: async options => {
@@ -494,7 +494,7 @@ test('raw input mutation during baseline capture cannot certify a prepared run',
     assert.equal(fs.existsSync(path.join(f.deps.rootDir, RUN_ID, 'run.json')), false);
 });
 
-test('the actual source-context reader accepts the prepared manifest and status remains offline', async t => {
+test('真实的来源上下文读取器接受准备好的清单，status 保持离线', async t => {
     const f = fixture(t);
     const Config = require('../scripts/config.js');
     const originalRoot = Config.FILES.freshRewriteRunsDir;
@@ -513,7 +513,7 @@ test('the actual source-context reader accepts the prepared manifest and status 
     assert.equal(f.counters.sources, 0);
 });
 
-test('locked reread resumes only this run checkpoint and rejects foreign generated records before analysis', async t => {
+test('锁内重读只续跑本轮的检查点，并在分析前拒绝外来的生成记录', async t => {
     const f = fixture(t);
     const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
@@ -540,7 +540,7 @@ test('locked reread resumes only this run checkpoint and rejects foreign generat
     assert.equal(f.counters.analysis, 0);
 });
 
-test('outer engine entry diagnostics accumulate across CLI resumes without imposing a new content limit', async t => {
+test('外层引擎入口的诊断在命令行续跑之间累加，不额外加新的内容上限', async t => {
     const f = fixture(t);
     await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
@@ -559,7 +559,7 @@ test('outer engine entry diagnostics accumulate across CLI resumes without impos
     assert.equal(status.analysisComplete, 0);
 });
 
-test('input drift, source cache drift and missing successful results block promotion before its writer runs', async t => {
+test('输入漂移、来源缓存漂移和缺少成功结果会在 promote 写入之前挡住它', async t => {
     const f = fixture(t);
     const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await assert.rejects(runner.promoteRewrite({ runId: RUN_ID }, f.deps), /requires all sources/);
@@ -571,7 +571,7 @@ test('input drift, source cache drift and missing successful results block promo
     assert.throws(() => runner.rewriteStatus({ runId: RUN_ID }, f.deps), /Saved rewrite inputs have an invalid format or do not match this run, date, paper set, or input file hash/);
 });
 
-test('symlink run/file escape and sandbox entry are fail closed', async t => {
+test('符号链接逃出运行目录或文件，以及在沙箱内启动，都直接失败', async t => {
     const f = fixture(t);
     const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     const inputs = path.join(prepared.runDir, 'inputs.json');
@@ -583,7 +583,7 @@ test('symlink run/file escape and sandbox entry are fail closed', async t => {
     assert.notEqual(child.status, 0); assert.match(child.stderr, /必须在沙箱外运行/);
 });
 
-test('operator patch holds the run operation lock then the paper lock and never changes analysis/run status', async t => {
+test('运维补丁先拿运行操作锁再拿论文锁，绝不改动分析或运行状态', async t => {
     const f = fixture(t);
     const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);

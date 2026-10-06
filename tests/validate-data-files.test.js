@@ -1,5 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -49,6 +50,21 @@ function papersSha256(papers) {
 
 function filterInputSha256(paper) {
     return buildFilterInputSha256(paper);
+}
+
+// manualSha256 / _manual_hash 都按排序后的键序列化，而 JS 的 Object.keys().sort() 比
+// UTF-16 码元、Python 的 sort_keys=True 比码点。非 BMP 键会让两边排出不同顺序，哈希
+// 随之分歧。这里把「被哈希的键都是 ASCII」这个隐含前提变成可执行断言。
+function collectNonAsciiKeys(value, prefix = 'root', found = []) {
+    if (Array.isArray(value)) {
+        value.forEach((item, index) => collectNonAsciiKeys(item, `${prefix}[${index}]`, found));
+    } else if (value && typeof value === 'object') {
+        for (const [key, item] of Object.entries(value)) {
+            if (/[^\x20-\x7e]/.test(key)) found.push(`${prefix}/${key}`);
+            collectNonAsciiKeys(item, `${prefix}/${key}`, found);
+        }
+    }
+    return found;
 }
 
 function completeAnalysisPaper(id, extra = {}) {
@@ -606,6 +622,48 @@ describe('validate-data-files', () => {
         const { resultFile } = writeManualV4BindingFixture(dir, { invalidClaimQuote: false });
         const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
         assert.match(issues, /manual 深度契约无效/);
+    });
+
+    it('被 manualSha256/_manual_hash 哈希的键全部是 ASCII，非 BMP 键会让两端分歧', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manual-hash-keys-'));
+        const { resultFile } = writeManualV4BindingFixture(dir, { invalidClaimQuote: false });
+        const takeover = JSON.parse(fs.readFileSync(resultFile, 'utf8'))
+            .papers[0].analysisManifest.manualTakeover;
+        // 前提：manualTakeover 及其被哈希的子对象，键都是固定 ASCII 字面量。键一旦出现
+        // 非 BMP 字符，JS 的 UTF-16 码元序与 Python 的码点序会分歧（U+1F600 排在 U+FFFD
+        // 之前 vs 之后），排序后的键进哈希，两端 SHA 不同，发布门禁报「……不匹配」而两边
+        // 都自认正确。
+        assert.deepStrictEqual(collectNonAsciiKeys(takeover), [],
+            'manualTakeover 里出现了非 ASCII 键；非 BMP 键会让 JS 的码元序与 Python 的码点序分歧，跨语言哈希不再一致');
+        assert.strictEqual(collectNonAsciiKeys({ [String.fromCodePoint(0x1F600)]: 1 }).length, 1,
+            '键遍历器必须能认出注入的 emoji 键；认不出就说明这条断言是空的');
+        assert.match(JSON.stringify(takeover), /[\u4e00-\u9fff]/,
+            'takeover 的值里有中文，用它确认断言区分的是键而不是值');
+
+        const project = path.join(__dirname, '..');
+        const input = path.join(dir, 'manual-takeover.json');
+        fs.writeFileSync(input, JSON.stringify(takeover));
+        const script = [
+            'import json,sys',
+            'sys.path.insert(0, sys.argv[1])',
+            'from publish_common import _manual_hash',
+            'takeover=json.load(open(sys.argv[2], encoding="utf-8"))',
+            'non_bmp={chr(0x1F600):2,"\ufffd":1}',
+            'bmp={"a":1,"\ufffd":2}',
+            'print(json.dumps({"takeoverHash":_manual_hash(takeover),',
+            '    "nonBmpHash":_manual_hash(non_bmp),"bmpHash":_manual_hash(bmp)},ensure_ascii=False))'
+        ].join('\n');
+        const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script,
+            path.join(project, 'scripts'), input], { cwd: project, encoding: 'utf8' });
+        assert.strictEqual(result.status, 0, `Python 侧复核失败：${result.stderr}`);
+        const python = JSON.parse(result.stdout);
+        assert.strictEqual(python.takeoverHash, manualSha256(takeover),
+            '同一份真实 manualTakeover 两端必须同哈希；不同说明被哈希的键里有非 ASCII');
+        const nonBmpKeys = { [String.fromCodePoint(0x1F600)]: 2, '\ufffd': 1 };
+        assert.notStrictEqual(python.nonBmpHash, manualSha256(nonBmpKeys),
+            '这就是要守的分歧：非 BMP 键让 JS 的码元序与 Python 的码点序不同，两端稳定哈希不同');
+        assert.strictEqual(python.bmpHash, manualSha256({ a: 1, '\ufffd': 2 }),
+            '全 BMP 键（含 U+FFFD）两端排序一致，哈希相同');
     });
 
     it('validate:data 重算顶层 Manual imageManifest 证据哈希并拒绝篡改', () => {

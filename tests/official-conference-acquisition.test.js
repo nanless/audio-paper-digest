@@ -123,7 +123,7 @@ function temporaryRoot(t) {
     return { base, outputRoot: path.join(base, 'run') };
 }
 
-test('all fixed provider adapters emit the strict core metadata schema from pure single-index fixtures', () => {
+test('所有固定来源适配器都能从纯单索引夹具产出严格的核心元数据结构', () => {
     for (const [providerId, fixture] of Object.entries(FIXTURES)) {
         const metadata = acquisition.parseCatalog(providerId, fixture);
         assertCoreSchema(metadata, providerId);
@@ -164,7 +164,7 @@ test('all fixed provider adapters emit the strict core metadata schema from pure
         ['Long Papers', 'Findings']);
 });
 
-test('AAAI fixes all 48 non-contiguous volume 40 issues and refuses a single issue as the proceedings catalog', () => {
+test('AAAI 固定卷 40 的 48 个不连续期号，拒绝把单个期号当作论文集目录', () => {
     const provider = acquisition.PROVIDERS['aaai-2026'];
     assert.equal(provider.archiveUrl, 'https://ojs.aaai.org/index.php/AAAI/issue/archive');
     assert.equal(provider.issues.length, 48);
@@ -209,7 +209,7 @@ test('AAAI fixes all 48 non-contiguous volume 40 issues and refuses a single iss
     assert.throws(() => acquisition.validateRedirectTarget(provider, download, view, 'pdf'), /view-to-download/u);
 });
 
-test('CVF derives the exact same-stem official PDF when a visible link is absent', () => {
+test('CVF 在没有可见链接时按同名文件推出精确的官方 PDF', () => {
     const html = `<!doctype html><dl><dt class="ptitle"><a href="/content/CVPR2026/html/Xiao_Audio_CVPR_2026_paper.html">Audio</a></dt>
 <dd>Ada Example<br></dd></dl>`;
     const paper = acquisition.parseCatalog('cvpr-2026', html).papers[0];
@@ -217,7 +217,7 @@ test('CVF derives the exact same-stem official PDF when a visible link is absent
         'https://openaccess.thecvf.com/content/CVPR2026/papers/Xiao_Audio_CVPR_2026_paper.pdf');
 });
 
-test('new provider index, record, and PDF allowlists are exact and exclude volume/frontmatter artifacts', () => {
+test('新增来源的索引、记录和 PDF 白名单都是精确的，排除卷目录和前置页产物', () => {
     assert.deepEqual({ aistats: acquisition.PROVIDERS['aistats-2026'].indexUrl,
         uai: acquisition.PROVIDERS['uai-2026'].indexUrl,
         cvpr: acquisition.PROVIDERS['cvpr-2026'].indexUrl,
@@ -246,7 +246,7 @@ test('new provider index, record, and PDF allowlists are exact and exclude volum
     assert.throws(() => acquisition.parseCatalog('aistats-2026', FIXTURES['uai-2026']), /non-empty|metadata|papers/u);
 });
 
-test('Odyssey excludes keynote abstract pages that have no proceedings PDF', () => {
+test('Odyssey 排除没有论文集 PDF 的主旨报告摘要页', () => {
     const html = `${ODYSSEY_FIXTURE}<div class="w3-card"><div class="w3-container">
 <h4>Keynote: Invited Speech</h4><a href="speaker26_odyssey.html">Invited Speech</a>
 </div></div>`;
@@ -254,7 +254,7 @@ test('Odyssey excludes keynote abstract pages that have no proceedings PDF', () 
     assert.deepEqual(metadata.papers.map(paper => paper.id), ['alpha26_odyssey']);
 });
 
-test('Interspeech parses the ISCA index shape and excludes keynote abstract pages', () => {
+test('Interspeech 解析 ISCA 索引结构，排除主旨报告摘要页', () => {
     const html = `<!doctype html><main>${ISCA_ENTRY.replaceAll('SUFFIX', 'interspeech')}
 <div class="w3-card"><h4>Keynote1 - Invited Talk</h4>
 <a class="w3-text" href="speaker26_interspeech.html"><p>Invited Talk<br>
@@ -266,7 +266,7 @@ test('Interspeech parses the ISCA index shape and excludes keynote abstract page
     assert.equal(metadata.conference.id, 'interspeech-2026');
 });
 
-test('Interspeech allowlist accepts only the fixed ISCA index/record/PDF paths', () => {
+test('Interspeech 白名单只接受固定的 ISCA 索引、记录和 PDF 路径', () => {
     const provider = acquisition.PROVIDERS['interspeech-2026'];
     assert.equal(acquisition.validateFetchUrl(provider,
         'https://www.isca-archive.org/interspeech_2026/chen26q_interspeech.pdf', 'pdf'),
@@ -283,7 +283,7 @@ test('Interspeech allowlist accepts only the fixed ISCA index/record/PDF paths',
         'https://www.isca-archive.org/odyssey_2026/index.html', 'index'), /rejected/u);
 });
 
-test('DAFx merges repeated program appearances only when their official PDF identity and metadata agree', () => {
+test('DAFx 只在官方 PDF 身份和元数据一致时才合并重复的日程条目', () => {
     const item = `<div class="paper-item"><div class="p-title">Differentiable Audio Effect</div>
 <div class="p-authors">Alice Example, Bob Example and Carol Example</div>
 <div class="p-pdf"><a href="/assets/papers/DAFx26_paper_15.pdf">PDF</a></div>
@@ -298,7 +298,7 @@ test('DAFx merges repeated program appearances only when their official PDF iden
     'https://dafx26.mit.edu/assets/papers/DAFx26_demo_57.pdf');
 });
 
-test('HTTPS provider allowlists reject mirrors, HTTP, queries, and unrelated official paths', () => {
+test('HTTPS 来源白名单拒绝镜像站、HTTP、带查询串和不相干的官方路径', () => {
     const provider = acquisition.PROVIDERS['iwslt-2026'];
     assert.equal(acquisition.validateFetchUrl(provider, 'https://aclanthology.org/2026.iwslt-1.1.pdf', 'pdf'),
         'https://aclanthology.org/2026.iwslt-1.1.pdf');
@@ -310,7 +310,7 @@ test('HTTPS provider allowlists reject mirrors, HTTP, queries, and unrelated off
     ]) assert.throws(() => acquisition.validateFetchUrl(provider, value, 'pdf'), /rejected/u);
 });
 
-test('catalog dry-run plans artifacts without creating output directories or needing a proxy', async t => {
+test('目录预演只规划产物，不建输出目录，也不需要代理', async t => {
     const { outputRoot } = temporaryRoot(t);
     const result = await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: false });
     assert.equal(result.mode, 'dry-run');
@@ -319,7 +319,7 @@ test('catalog dry-run plans artifacts without creating output directories or nee
         'metadata.json', 'catalog.receipt.json']);
 });
 
-test('AAAI catalog seals and replays every issue independently before emitting the complete paper set', async t => {
+test('AAAI 目录先把每个期号独立保存并核验、再复核，然后才给出完整论文集合', async t => {
     const { outputRoot } = temporaryRoot(t); const provider = acquisition.PROVIDERS['aaai-2026'];
     const dryRun = await acquisition.acquireCatalog({ providerId: 'aaai-2026', outputRoot, apply: false });
     assert.equal(dryRun.issueCount, 48);
@@ -363,7 +363,7 @@ test('AAAI catalog seals and replays every issue independently before emitting t
     assert.throws(() => acquisition.replayCatalog('aaai-2026', outputRoot), /differs from receipt/u);
 });
 
-test('AAAI interrupted catalogs preserve sealed issue pairs but remain partial until all 48 issues close', async t => {
+test('AAAI 目录中断时保留已保存并核验的期号配对，但在 48 个期号全部收齐前仍是部分完成', async t => {
     const { outputRoot } = temporaryRoot(t); const provider = acquisition.PROVIDERS['aaai-2026']; let calls = 0;
     await assert.rejects(acquisition.acquireCatalog({ providerId: 'aaai-2026', outputRoot, apply: true },
         dependencies(async url => {
@@ -385,7 +385,7 @@ test('AAAI interrupted catalogs preserve sealed issue pairs but remain partial u
     assert.equal(resumedCalls, 47); assert.equal(completed.writes.issueResponsesRecovered, 1);
 });
 
-test('AAAI catalog fails closed on a stable paper ID repeated across separate issues', async t => {
+test('同一个稳定论文 ID 跨期号重复时，AAAI 目录直接失败', async t => {
     const { outputRoot } = temporaryRoot(t); const provider = acquisition.PROVIDERS['aaai-2026'];
     await assert.rejects(acquisition.acquireCatalog({ providerId: 'aaai-2026', outputRoot, apply: true },
         dependencies(async url => {
@@ -396,7 +396,7 @@ test('AAAI catalog fails closed on a stable paper ID repeated across separate is
     assert.equal(fs.existsSync(path.join(outputRoot, 'metadata.json')), false);
 });
 
-test('AAAI PDF download follows exactly one identity-preserving OJS view-to-download redirect', async t => {
+test('AAAI 的 PDF 下载只跟随一次保持身份的 OJS 查看转下载重定向', async t => {
     const { outputRoot } = temporaryRoot(t); const provider = acquisition.PROVIDERS['aaai-2026'];
     await acquisition.acquireCatalog({ providerId: 'aaai-2026', outputRoot, apply: true },
         dependencies(async url => {
@@ -423,7 +423,7 @@ test('AAAI PDF download follows exactly one identity-preserving OJS view-to-down
     assert.equal(verified.verified, 1); assert.equal(verified.missing.length, 47);
 });
 
-test('catalog apply seals response and metadata at 0600, then resumes without network', async t => {
+test('目录实际执行把响应和元数据以 0600 保存并核验，之后不联网也能续跑', async t => {
     const { outputRoot } = temporaryRoot(t); let calls = 0;
     const deps = dependencies(async url => {
         calls += 1;
@@ -443,7 +443,7 @@ test('catalog apply seals response and metadata at 0600, then resumes without ne
     assert.equal(calls, 1);
 });
 
-test('PMLR raw GitHub PDF flows through catalog, download, status, receipt replay, and verify', async t => {
+test('PMLR 的 GitHub 原始 PDF 会走完目录、下载、状态、凭证复核和校验', async t => {
     const { outputRoot } = temporaryRoot(t); const requested = [];
     const deps = dependencies(async url => {
         requested.push(url);
@@ -468,7 +468,7 @@ test('PMLR raw GitHub PDF flows through catalog, download, status, receipt repla
         'https://raw.githubusercontent.com/mlresearch/v300/main/assets/smith26a/smith26a.pdf']);
 });
 
-test('PDF download keeps sealed progress across failure, manually follows allowlisted redirect, and verifies SHA receipts', async t => {
+test('PDF 下载在失败后保留已保存并核验的进度，手动跟随白名单重定向，并校验 SHA 凭证', async t => {
     const { outputRoot } = temporaryRoot(t);
     await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true },
         dependencies(async () => httpResponse(ODYSSEY_TWO_FIXTURE, 'text/html')));
@@ -505,7 +505,7 @@ test('PDF download keeps sealed progress across failure, manually follows allowl
     assert.throws(() => acquisition.verifyAcquisition({ providerId: 'odyssey-2026', outputRoot }), /differs from receipt/u);
 });
 
-test('download dry-run and verify report incomplete catalog without writing PDFs', async t => {
+test('下载预演和校验报告目录不完整，但不写 PDF', async t => {
     const { outputRoot } = temporaryRoot(t);
     await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true },
         dependencies(async () => httpResponse(ODYSSEY_FIXTURE, 'text/html')));
@@ -517,7 +517,7 @@ test('download dry-run and verify report incomplete catalog without writing PDFs
     assert.equal(verified.complete, false);
 });
 
-test('explicit bounded concurrency downloads distinct papers and waits for all workers', async t => {
+test('显式的有界并发下载不同论文，并等所有 worker 结束', async t => {
     const { outputRoot } = temporaryRoot(t);
     await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true },
         dependencies(async () => httpResponse(ODYSSEY_TWO_FIXTURE, 'text/html')));
@@ -537,7 +537,7 @@ test('explicit bounded concurrency downloads distinct papers and waits for all w
         apply: true, concurrency: 6 }), /concurrency/u);
 });
 
-test('explicit retry budget retries only a transient same-URL failure', async t => {
+test('显式的重试预算只重试同一 URL 的暂时性失败', async t => {
     const { outputRoot } = temporaryRoot(t);
     await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true },
         dependencies(async () => httpResponse(ODYSSEY_FIXTURE, 'text/html')));
@@ -556,7 +556,7 @@ test('explicit retry budget retries only a transient same-URL failure', async t 
     assert.deepEqual(delays, [500]);
 });
 
-test('CLI requires explicit provider identity and year, uses only configured runtime root, and gates modes', () => {
+test('命令行要求显式的来源身份和年份，只用配置的运行时根目录，并对各模式设门禁', () => {
     const root = path.join(os.tmpdir(), 'conference-runs');
     const parsed = cli.parseArgs(['catalog', '--provider', 'odyssey-2026', '--conference-id', 'odyssey-2026',
         '--year', '2026', '--dry-run'], { acquisitionRoot: root });

@@ -42,7 +42,7 @@ function stateForIds(ids) {
 }
 function fixture(t) { const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'history-scheduler-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root; }
 
-test('verified duplicate pages collapse to one deterministic analysis identity and earliest cohort date', () => {
+test('已核验的重复页面收敛为一个确定性分析身份，并取最早的同批日期', () => {
     const groups = scheduler.groupsFromCrosswalk(state());
     assert.equal(groups.length, 2); assert.equal(groups[0].pageKeys.length, 2);
     assert.deepEqual(groups[0].cohortDates, ['2026-04-19', '2026-04-21']);
@@ -51,7 +51,7 @@ test('verified duplicate pages collapse to one deterministic analysis identity a
     assert.match(groups[0].runId, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
 });
 
-test('only current-contract storage seals count complete and queue all resumes full upgrades', () => {
+test('只有当前契约的存储记录才算完成，其余排队做完整契约升级', () => {
     const group = scheduler.groupsFromCrosswalk(state())[0];
     assert.equal(scheduler.recoveredSchedulerStatus({ status: 'complete',
         storageSealed: true, currentContractComplete: false }), 'analysis_partial');
@@ -65,7 +65,7 @@ test('only current-contract storage seals count complete and queue all resumes f
         now: '2026-09-07T00:00:00.000Z' }), [group]);
 });
 
-test('an active analyzing operation is never selected even if Reader recovery looks eligible', () => {
+test('即使 Reader 恢复看起来可用，也不会选中正在进行的分析操作', () => {
     const group = scheduler.groupsFromCrosswalk(state())[0];
     const item = { status: 'analyzing', recoveryKind: 'reader', exhausted: false,
         nextEligibleAt: null };
@@ -79,7 +79,7 @@ test('an active analyzing operation is never selected even if Reader recovery lo
     }), []);
 });
 
-test('active analyzing reconciliation performs no Reader scan, authority prepare, or analysis', async t => {
+test('正在分析的对账不扫 Reader、不准备授权、也不做分析', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -101,7 +101,7 @@ test('active analyzing reconciliation performs no Reader scan, authority prepare
     assert.equal(result.complete, 1);
 });
 
-test('pilot then full rerun skips complete identity and resumes the remaining unique identity', async t => {
+test('先试点再全量重跑：跳过已完成身份，续跑剩下的唯一身份', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -122,7 +122,7 @@ test('pilot then full rerun skips complete identity and resumes the remaining un
     assert.equal(second.complete, 2); assert.deepEqual(calls, { metadata: 2, authority: 2, prepare: 2, analyze: 2 });
 });
 
-test('analyze concurrency one completes each authority preparation before fetching the next paper', async t => {
+test('分析并发为 1 时，每篇论文的授权准备完成后才取下一篇', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -143,7 +143,7 @@ test('analyze concurrency one completes each authority preparation before fetchi
     ]);
 });
 
-test('analyze concurrency bounds the complete per-paper lifecycle', async t => {
+test('分析并发限制的是每篇论文完整生命周期的并发数', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -166,7 +166,7 @@ test('analyze concurrency bounds the complete per-paper lifecycle', async t => {
     assert.equal(active.size, 0);
 });
 
-test('analyze continues after prepare failure without analyzing the failed paper', async t => {
+test('准备失败后分析继续，但不分析那篇失败的论文', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -189,7 +189,7 @@ test('analyze continues after prepare failure without analyzing the failed paper
     assert.equal(result.failed, 1);
 });
 
-test('durable scheduler operation lock prevents two instances from repeating one Reader attempt', async t => {
+test('持久调度器操作锁防止两个实例重复同一次 Reader 尝试', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -215,7 +215,7 @@ test('durable scheduler operation lock prevents two instances from repeating one
     assert.equal(authorities, 1);
 });
 
-test('scheduler wires its local-dead recovery capability only to the outer operation lock', async t => {
+test('调度器只把本地失效恢复能力接到外层操作锁', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -234,7 +234,7 @@ test('scheduler wires its local-dead recovery capability only to the outer opera
     assert.equal(result.prepared, 1);
 });
 
-test('prepare returns the current checkpoint item instead of reusing stale recovery permission', async t => {
+test('准备阶段返回当前检查点条目，不复用过期的恢复许可', async t => {
     const engine = require('../scripts/analysis-engine.js');
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
@@ -268,7 +268,7 @@ test('prepare returns the current checkpoint item instead of reusing stale recov
     assert.deepEqual(refresh, [false]);
 });
 
-test('a sealed current-contract run wins when analyze throws after durable completion', async t => {
+test('持久完成之后分析抛错时，以已保存并核验的当前契约运行为准', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -287,7 +287,7 @@ test('a sealed current-contract run wins when analyze throws after durable compl
     assert.equal(result.failed, 0);
 });
 
-test('prepare-time race to complete is re-read and never enters analyze', async t => {
+test('准备阶段抢跑完成的情况会重新读取，绝不进入分析', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -305,7 +305,7 @@ test('prepare-time race to complete is re-read and never enters analyze', async 
     assert.equal(result.complete, 1);
 });
 
-test('worker recovery failure waits for sibling completion before rejecting', async t => {
+test('工作进程恢复失败时会等同批同伴完成后再拒绝', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -328,7 +328,7 @@ test('worker recovery failure waits for sibling completion before rejecting', as
     assert.equal(siblingFinished, true);
 });
 
-test('prepare-only honors concurrency and never enters analysis', async t => {
+test('只做准备时遵守并发上限，绝不进入分析', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -346,7 +346,7 @@ test('prepare-only honors concurrency and never enters analysis', async t => {
     assert.equal(analyzed, 0);
 });
 
-test('scheduler CLI is dry-run by default only when explicitly requested and caps concurrency at three', () => {
+test('调度器命令行只在显式要求时默认预演，并发上限为三', () => {
     assert.deepEqual(cli.parseArgs(['--dry-run', '--crosswalk', CROSSWALK, '--stage', 'prepare-only', '--limit', 'pilot', '--concurrency', '3']),
         { apply: false, crosswalkId: CROSSWALK, stage: 'prepare-only', queue: 'all', limit: 'pilot', concurrency: 3 });
     assert.equal(cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--stage', 'analyze',
@@ -361,7 +361,7 @@ test('scheduler CLI is dry-run by default only when explicitly requested and cap
     assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--stage', 'analyze', '--concurrency', '4']), /Use/);
 });
 
-test('untouched pending v5 checkpoint migrates to the stable v4-compatible run ID', async t => {
+test('未改动的待处理 v5 检查点迁移到稳定的、兼容 v4 的运行 ID', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -382,7 +382,7 @@ test('untouched pending v5 checkpoint migrates to the stable v4-compatible run I
     assert.match(migrated.items[groups[0].paperId].runId, /^[a-f0-9-]{14}4/);
 });
 
-test('legacy checkpoint without explicit identity hashes migrates only when its old group SHA proves them', async t => {
+test('缺少显式身份哈希的旧检查点，只有旧组 SHA 能证明身份时才迁移', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -411,7 +411,7 @@ test('legacy checkpoint without explicit identity hashes migrates only when its 
         stage: 'analyze', limit: 'pilot', concurrency: 1 }, { files, readCrosswalk: () => state(), recoverRun: () => null }), /binding drifted/);
 });
 
-test('a later duplicate page extends the checkpoint without changing the existing analysis run/date', async t => {
+test('后出现的重复页面只扩展检查点，不改动已有分析的运行 ID 和日期', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -440,7 +440,7 @@ test('a later duplicate page extends the checkpoint without changing the existin
     assert.equal(checkpoint.items[priorGroup.paperId].pageKeys.length, 3);
 });
 
-test('resuming a prepared run refetches and verifies live authority before analysis', async t => {
+test('续跑已准备的运行会在分析前重新抓取并核验实时授权', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -458,7 +458,7 @@ test('resuming a prepared run refetches and verifies live authority before analy
     assert.deepEqual({ live, verified, analyzed }, { live: 1, verified: 1, analyzed: 1 });
 });
 
-test('analyze cannot mark complete until recover observes a sealed run proof', async t => {
+test('恢复阶段看到已保存并核验的运行证明之前，分析不能标记完成', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -472,7 +472,7 @@ test('analyze cannot mark complete until recover observes a sealed run proof', a
     assert.equal(result.complete, 0); assert.equal(result.failed, 1);
 });
 
-test('checkpoint complete is downgraded when its sealed run is missing', async t => {
+test('已保存并核验的运行缺失时，检查点的完成状态会被降级', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -492,7 +492,7 @@ test('checkpoint complete is downgraded when its sealed run is missing', async t
     assert.equal(prepared, 1);
 });
 
-test('new-full classifies before limit and never live-prepares a skipped Reader partial', async t => {
+test('new-full 先分类再限流，绝不为跳过的 Reader 半成品做实时准备', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -514,7 +514,7 @@ test('new-full classifies before limit and never live-prepares a skipped Reader 
     assert.equal(metadata, 1); assert.equal(analyzed, 1);
 });
 
-test('dry-run reports the queue-filtered offline selection without prepare or checkpoint writes', async t => {
+test('预演只报告按队列过滤后的离线选择，不准备也不写检查点', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -533,7 +533,7 @@ test('dry-run reports the queue-filtered offline selection without prepare or ch
     assert.equal(fs.existsSync(files.historicalAnalysisSchedulerDir), false);
 });
 
-test('paperIds scope is applied before recovery, limit and live prepare, and unknown IDs fail offline', async t => {
+test('paperIds 范围先于恢复、限流和实时准备生效，未知 ID 在离线阶段直接失败', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -561,7 +561,7 @@ test('paperIds scope is applied before recovery, limit and live prepare, and unk
         limit: 'pilot', concurrency: 1 }, deps), /duplicate-free/);
 });
 
-test('reader-recovery retries only an eligible upstream-complete partial and persists exhaustion idempotently', async t => {
+test('reader-recovery 只重试上游已完成且符合条件的半成品，并幂等地保存耗尽状态', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -592,7 +592,7 @@ test('reader-recovery retries only an eligible upstream-complete partial and per
     assert.equal(checkpoint.items[groups[0].paperId].failureSignature, 'same-content-failure');
 });
 
-test('Reader transport cooldown is stable while scanned and restarts only after an actual retry', async t => {
+test('扫描期间 Reader 传输冷却保持不变，只有真正重试后才重新计时', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -622,7 +622,7 @@ test('Reader transport cooldown is stable while scanned and restarts only after 
     await run(); assert.deepEqual({ live, analyzed }, { live: 1, analyzed: 1 });
 });
 
-test('a Reader implementation fingerprint change clears old exhaustion', () => {
+test('Reader 实现指纹变化会清除旧的耗尽记录', () => {
     assert.deepEqual(scheduler.mergeRecoveryState({ recoveryFingerprint: 'old', failureSignature: 'same', exhausted: true,
         nextEligibleAt: '2026-09-08T00:00:00.000Z' }, { recoveryKind: 'reader', recoveryFingerprint: 'new',
         failureSignature: 'same', exhausted: true, cooldownMs: scheduler.READER_TRANSPORT_COOLDOWN_MS },
@@ -641,7 +641,7 @@ test('a Reader implementation fingerprint change clears old exhaustion', () => {
     assert.equal(attempted.implementationRecoveryPendingFingerprint, null);
 });
 
-test('implementation recovery pending fingerprint enables diagnostic migration for exactly its attempted run', async t => {
+test('实现恢复的待处理指纹只为它实际尝试过的那次运行开启诊断迁移', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
@@ -670,7 +670,7 @@ test('implementation recovery pending fingerprint enables diagnostic migration f
     assert.deepEqual(refreshValues, [true], 'consumed implementation recovery cannot migrate a second time');
 });
 
-test('an exact operator patch audit unlocks one full-gate replay and is then consumed', t => {
+test('精确的人工补丁审计解锁一次全门禁复核，随后即被消费', t => {
     const root = fixture(t); const runId = '22222222-2222-4222-8222-222222222222'; const paperId = '2601.18904';
     const runDir = path.join(root, runId); const repair = require('../scripts/lib/reader-repair.js');
     const fresh = require('../scripts/lib/fresh-rewrite-run.js');

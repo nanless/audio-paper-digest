@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { fixture, sign } = require('./reader-signed-draft-fixture.js');
 const { reconstructReaderDraftFromVerifiedArticle } = require('../scripts/lib/reader-signed-draft.js');
 
-test('signed Reader exactly round-trips bridges, headings, source quotes, formula and materialized figure bindings without mutation',()=>{
+test('已签名的 Reader 原样往返桥接、标题、原文引文、公式和已生成的图片绑定，不做改动',()=>{
     const f=fixture(),before=JSON.stringify(f),result=reconstructReaderDraftFromVerifiedArticle(f);
     assert.equal(JSON.stringify(f),before);assert.equal(result.proof.articleSha256,f.paper.apiReaderArticleSha256);
     assert.equal(result.proof.planSha256,f.paper.apiReaderPlanSha256);assert.equal(result.proof.apiGenerated,false);
@@ -18,7 +18,7 @@ test('signed Reader exactly round-trips bridges, headings, source quotes, formul
     assert.equal(JSON.stringify(f),before);
 });
 
-test('artifact table coordinate bindings strip derived cell proof then rebuild exactly',()=>{
+test('产物表格坐标绑定先剥掉派生的单元格证明，再精确重建',()=>{
     const f=fixture({artifactTable:true}),result=reconstructReaderDraftFromVerifiedArticle(f);
     assert.equal(result.draft.tableBindings[1].sourceType,'artifact_table');
     assert.deepEqual(Object.keys(result.draft.tableBindings[1].cellBindings[0]).sort(),
@@ -26,7 +26,7 @@ test('artifact table coordinate bindings strip derived cell proof then rebuild e
     assert.equal(result.proof.planSha256,f.paper.apiReaderPlanSha256);
 });
 
-test('04102 exact historical bridge prefix with zero or one space round-trips without changing signed bytes',()=>{
+test('04102 精确历史桥接前缀在零个或一个空格下往返，不改动已签名字节',()=>{
     for (const spacing of ['', ' ']) {
         const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0];
         const old=bridge.explanation;
@@ -43,7 +43,7 @@ test('04102 exact historical bridge prefix with zero or one space round-trips wi
     }
 });
 
-test('bridge inverse refuses multi-space/tab boundary and duplicate exact paragraphs rather than choosing one',()=>{
+test('桥接逆操作遇到多空格或制表符边界、以及重复的完全相同段落时拒绝，而不是任选一个',()=>{
     for (const spacing of ['  ', '\t', '\n']) {
         const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0],old=bridge.explanation;
         bridge.explanation=old.replace('：** ', '：**'+spacing);
@@ -56,7 +56,7 @@ test('bridge inverse refuses multi-space/tab boundary and duplicate exact paragr
     assert.throws(()=>reconstructReaderDraftFromVerifiedArticle(f),/unique exact paragraph/);
 });
 
-test('irreversible signed text shortened below current bridge gate fails rather than padding it',()=>{
+test('已签名文本被截短到当前桥接门槛以下时直接失败，而不是补齐',()=>{
     const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0];
     const shortened=`**${bridge.terms[0]} × ${bridge.terms[1]}：** 原文解释过短。`;
     f.paper.apiReaderArticle=f.paper.apiReaderArticle.replace(bridge.explanation,shortened);
@@ -66,7 +66,7 @@ test('irreversible signed text shortened below current bridge gate fails rather 
     assert.equal(JSON.stringify(f),before);
 });
 
-test('source snapshot, run and signed parent tampering are refused',()=>{
+test('来源快照、运行和已签名父级的篡改一律拒绝',()=>{
     for(const mutate of [f=>{f.runId='22222222-2222-4222-8222-222222222222';},
         f=>{f.sourceDetails.text+='x';},f=>{f.sourceDetails.structuredArtifacts.formulas[0].latex='z=x.';},
         f=>{f.paper.freshRewriteProvenance.sourceSnapshotSha256='0'.repeat(64);},
@@ -75,7 +75,7 @@ test('source snapshot, run and signed parent tampering are refused',()=>{
     }
 });
 
-test('even re-signed ambiguity and round-trip drift refuse to invent or normalize content',()=>{
+test('即使重新签名，歧义和往返漂移也不会去编造或归一化内容',()=>{
     for(const mutate of [
         f=>{f.paper.apiReaderPlan.sections[1].heading=f.paper.apiReaderPlan.sections[0].heading;},
         f=>{f.paper.apiReaderArticle+='\n\n'+f.paper.apiReaderPlan.conceptBridges[0].explanation;},

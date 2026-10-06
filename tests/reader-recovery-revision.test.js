@@ -202,7 +202,7 @@ test('仅捕获严格合法排序异常，依赖注入的其他错误或坏子�
     }
 });
 
-test('explicit same-run revision preserves paid budgets, records mappings, archives evidence and is idempotent', t => {
+test('显式的同一次运行修订保留已付费额度、记录映射、归档证据，并且幂等', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     for (const key of ['attempts', 'fullAttempts', 'transportFailures']) assert.equal(migrated[key], f.payload[key]);
@@ -224,7 +224,7 @@ test('explicit same-run revision preserves paid budgets, records mappings, archi
     assert.deepEqual(fs.readdirSync(f.directory), names);
 });
 
-test('diagnostic migration removes only a proven paragraph-final dangling connector', t => {
+test('诊断迁移只删除已证实的段末悬空连接词', t => {
     const f = fixture(t);
     const dangling = '模型在 2 个数据集上有一定鲁棒性，但';
     const complete = '模型虽然下降，但回落更平缓，但未测试关系型提示。';
@@ -242,7 +242,7 @@ test('diagnostic migration removes only a proven paragraph-final dangling connec
         hashDraft(migrated.draft));
 });
 
-test('diagnostic migration normalizes only an issue-bound stage count in ordinary prose', t => {
+test('诊断迁移只归一化普通正文里与问题绑定的阶段数', t => {
     const f = fixture(t);
     const protectedText = '`三阶段`、“三阶段”、$三阶段$、[[CONCEPT_BRIDGE_3]]';
     f.payload.draft.sections[0].body = `训练采用三阶段课程。\n\n${protectedText}`;
@@ -262,7 +262,7 @@ test('diagnostic migration normalizes only an issue-bound stage count in ordinar
         migrated.readerRecoveryRevisions.at(-1).outputDraftSha256);
 });
 
-test('ordinary calls and an unenabled fresh scope never scan or migrate an old candidate', t => {
+test('普通调用和未启用的全新范围都不扫描也不迁移旧候选', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     assert.equal(loadReaderRecoveryRevision(f.directory, f.identity), null);
     assert.equal(withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: false }, () =>
@@ -270,7 +270,7 @@ test('ordinary calls and an unenabled fresh scope never scan or migrate an old c
     assert.equal(fs.readdirSync(f.directory).length, 1);
 });
 
-test('diagnostic migration cannot use coded table-count prose to rewrite numeral surfaces', t => {
+test('诊断迁移不能用带码的表格计数正文改写数字表面', t => {
     const f = fixture(t);
     f.payload.draft.sections[0].body = '训练采用两阶段流程，另有三阶段对照。';
     f.payload.draft.conceptBridges[0] = { explanation: '两阶段流程连接三阶段对照。' };
@@ -291,7 +291,7 @@ test('diagnostic migration cannot use coded table-count prose to rewrite numeral
     }
 });
 
-test('unenabled fresh scope wins over a nested direct source context used by daily analysis', t => {
+test('未启用的全新范围优先于日更分析使用的嵌套直接来源上下文', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const sourceDetails = { paperId: `arxiv:${f.identity.paperId}`, source: 'html',
         sourceId: f.identity.paperId, text: 'sealed daily source',
@@ -308,7 +308,7 @@ test('unenabled fresh scope wins over a nested direct source context used by dai
     assert.equal(fs.readdirSync(f.directory).length, 1);
 });
 
-test('source, model, prompt, run and budget drift cannot reuse a candidate', t => {
+test('来源、模型、提示词、运行和额度发生漂移就不能复用候选', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     for (const mutate of [id => { id.model.maxTokens = 24000; }, id => { id.maxAttempts = 5; },
         id => { id.repairMaxTokens = 16000; }, id => { id.promptSha256 = 'new prompt'; },
@@ -323,7 +323,7 @@ test('source, model, prompt, run and budget drift cannot reuse a candidate', t =
     assert.equal(fs.readdirSync(f.directory).length, 1);
 });
 
-test('a newly authenticated Reader capability policy cannot reuse a legacy failed candidate', t => {
+test('新认证的 Reader 能力策略不能复用旧的失败候选', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const policyIdentity = {
         ...f.oldIdentity,
@@ -335,14 +335,14 @@ test('a newly authenticated Reader capability policy cannot reuse a legacy faile
     assert.deepEqual(fs.readdirSync(f.directory), [`${hashDraft(f.oldIdentity)}.json`]);
 });
 
-test('multiple compatible candidates refuse migration instead of guessing the latest budget', t => {
+test('多个兼容候选拒绝迁移，不猜哪个额度最新', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     saveFailedCandidate(f.directory, { ...f.oldIdentity, repairImplementationSha256: '9'.repeat(64) }, { ...f.payload, attempts: 5 });
     assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /Ambiguous/);
     assert.equal(fs.readdirSync(f.directory).length, 2);
 });
 
-test('an exact new candidate wins without touching older candidates or its no-progress flag', t => {
+test('精确匹配的新候选胜出，不碰旧候选及其无进展标记', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     saveFailedCandidate(f.directory, f.identity, { ...f.payload, attempts: 6 });
     const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
@@ -350,14 +350,14 @@ test('an exact new candidate wins without touching older candidates or its no-pr
     assert.equal(fs.readdirSync(f.directory).length, 2);
 });
 
-test('only a changed implementation permits resetting no-progress, never the contract label alone', t => {
+test('只有实现变了才允许重置无进展标记，光换契约标签不行', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, { ...f.oldIdentity, draftOrderContract: 'label only' }));
     assert.equal(loaded.noProgress, 2); assert.equal(loaded.failureSignature, 'old failure');
     assert.equal(loaded.readerRecoveryRevisions[0].clearedNoProgress, false);
 });
 
-test('a table-compiler implementation change migrates the draft for full revalidation without restoring budgets', t => {
+test('表格编译器实现变化会迁移草稿以做完整重新校验，但不恢复额度', t => {
     const f = fixture(t);
     const oldIdentity = { ...f.oldIdentity, repairImplementationSha256: f.identity.repairImplementationSha256,
         tableCompilerSha256: '1'.repeat(64) };
@@ -370,7 +370,7 @@ test('a table-compiler implementation change migrates the draft for full revalid
     assert.ok(loaded.readerRecoveryRevisions[0].changedFields.includes('tableCompilerSha256'));
 });
 
-test('historical direct scope migrates the same source-bound failed candidate after table compiler repair', t => {
+test('历史直接范围在表格编译器修复后迁移同一个绑定来源的失败候选', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-direct-revision-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const directory = path.join(root, 'reader-attempts'); const runId = crypto.randomUUID();
@@ -421,7 +421,7 @@ test('historical direct scope migrates the same source-bound failed candidate af
         /implementation repair allowance|historical direct/i);
 });
 
-test('an exhausted paid budget retains its counters but receives exactly one implementation repair slot', t => {
+test('已耗尽的付费额度保留计数，但恰好得到一个实现修复名额', t => {
     const f = fixture(t); const pointer = '/sections/8/body';
     const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2,
         issues: [{ path: null, message: `Reader patch rejected: Reader patch has stale node SHA: ${pointer}` }] };
@@ -440,7 +440,7 @@ test('an exhausted paid budget retains its counters but receives exactly one imp
     assert.equal(repair.readerAttemptLimit(6, 7, loaded.draft, 0), 7);
 });
 
-test('implementation allowance proof is consumed once and cannot be restored', t => {
+test('实现额度证明只能消费一次，无法恢复', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     const proof = migrated.implementationRepairAllowanceProof;
@@ -451,7 +451,7 @@ test('implementation allowance proof is consumed once and cannot be restored', t
         { ...consumed, implementationRepairAllowanceProof: proof }), /already consumed/);
 });
 
-test('later implementation changes cannot stack new attempts after the lineage allowance was consumed', t => {
+test('沿袭额度消费完之后，后续实现变化不能再叠加新尝试', t => {
     const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
     saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
     const first = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
@@ -475,7 +475,7 @@ test('later implementation changes cannot stack new attempts after the lineage a
     assert.equal(repair.readerAttemptLimit(6, next.attempts, next.draft, 0), 7);
 });
 
-test('an unused lineage allowance transfers across identity change without creating a second slot', t => {
+test('未使用的沿袭额度在身份变化后转移，不会产生第二个名额', t => {
     const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
     saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
     const first = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
@@ -491,7 +491,7 @@ test('an unused lineage allowance transfers across identity change without creat
     assert.equal(repair.readerAttemptLimit(6, transferred.attempts, transferred.draft, 1), 7);
 });
 
-test('parser, editorial and mechanical gate implementation changes each permit one diagnostic migration', async t => {
+test('解析器、编辑和机械门禁三类实现变化各允许一次诊断迁移', async t => {
     for (const field of ['parserImplementationSha256', 'editorialImplementationSha256',
         'mechanicalContractSha256']) {
         await t.test(field, tt => {
@@ -508,7 +508,7 @@ test('parser, editorial and mechanical gate implementation changes each permit o
     }
 });
 
-test('pixel drift cannot migrate a candidate while an exact legacy pixel payload can be bound', t => {
+test('图片漂移不能迁移候选，而精确的旧版图片载荷可以绑定', t => {
     const f = fixture(t); const oldPixels = [{ ordinal: 1, sha256: '6'.repeat(64) }];
     const oldIdentity = { ...f.identity, parserImplementationSha256: '4'.repeat(64) };
     const oldPayload = { ...f.payload, imageEvidence: oldPixels };
@@ -519,7 +519,7 @@ test('pixel drift cannot migrate a candidate while an exact legacy pixel payload
     assert.deepEqual(loadFailedCandidate(f.directory, oldIdentity), oldPayload);
 });
 
-test('ephemeral direct/daily pixel bindings use their own payload field and reject drift', t => {
+test('临时的直接/日更图片绑定使用自己的载荷字段，并拒绝漂移', t => {
     const f = fixture(t);
     const oldIdentity = { ...f.identity, parserImplementationSha256: '4'.repeat(64) };
     const ephemeralImageEvidence = {
@@ -539,7 +539,7 @@ test('ephemeral direct/daily pixel bindings use their own payload field and reje
     assert.deepEqual(migrated.ephemeralImageEvidence, ephemeralImageEvidence);
 });
 
-test('corrupt and symlink candidate files fail closed before a new candidate is installed', t => {
+test('候选文件损坏或是符号链接时，在装入新候选之前直接失败', t => {
     const f = fixture(t); const filename = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     fs.writeFileSync(filename, '{invalid JSON', { mode: 0o600 });
     assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /JSON/);
@@ -565,7 +565,7 @@ function interruptArchival(f) {
     return filename;
 }
 
-test('archive EIO after installing new candidate is completed on exact-candidate reentry without resetting budgets', t => {
+test('装入新候选后归档出现 EIO，精确候选重入时补完，不重置额度', t => {
     const f = fixture(t); interruptArchival(f);
     const before = loadFailedCandidate(f.directory, f.identity);
     assert.match(before.readerRecoveryRevisions[0].oldEnvelopeSha256, /^[a-f0-9]{64}$/);
@@ -578,7 +578,7 @@ test('archive EIO after installing new candidate is completed on exact-candidate
     assert.deepEqual(f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), resumed);
 });
 
-test('EIO reentry refuses complete old-payload drift even when draft and all counters are unchanged', t => {
+test('EIO 重入即使草稿和所有计数都没变，也拒绝完整的旧载荷漂移', t => {
     const f = fixture(t); interruptArchival(f);
     saveFailedCandidate(f.directory, f.oldIdentity, { ...f.payload,
         issues: [{ path: null, message: 'changed old diagnostics' }], imageEvidence: [{ changed: true }] });
@@ -586,7 +586,7 @@ test('EIO reentry refuses complete old-payload drift even when draft and all cou
     assert.ok(loadFailedCandidate(f.directory, f.oldIdentity));
 });
 
-test('missing archive and old evidence refuse reentry, and archived bytes remain verified on later loads', t => {
+test('归档或旧证据缺失就拒绝重入，之后加载时归档字节仍保持已核验', t => {
     const f = fixture(t); const filename = interruptArchival(f);
     fs.unlinkSync(filename);
     assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /ENOENT|changed during audit/);
@@ -597,7 +597,7 @@ test('missing archive and old evidence refuse reentry, and archived bytes remain
     assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /drifted/);
 });
 
-test('archive traversal and archive symlinks are refused on exact-candidate reentry', t => {
+test('精确候选重入时拒绝归档路径穿越和归档符号链接', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     const archive = path.join(f.directory, migrated.readerRecoveryRevisions[0].archivedName);

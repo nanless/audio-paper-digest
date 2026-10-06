@@ -50,7 +50,7 @@ async function fixture(t, suffix = '', sourceId = ID) {
     return { root, sourceRoot, sidecarRoot };
 }
 
-test('publication metadata sidecar seals raw Atom and replays every source/record/abstract SHA', async t => {
+test('出版元数据附带文件保存并核验原始 Atom，并复核每个来源、记录和摘要 SHA', async t => {
     const f = await fixture(t); const result = sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: official(),
         now: '2026-01-04T00:00:00.000Z' });
@@ -75,7 +75,7 @@ test('publication metadata sidecar seals raw Atom and replays every source/recor
     assert.deepEqual(recovered.authors, ['Author One']);
 });
 
-test('verified legacy Atom author whitespace is normalized only in the returned view', async t => {
+test('已核验的旧版 Atom 作者空白只在返回视图里归一化', async t => {
     const f = await fixture(t, 'author-whitespace');
     const raw = atom().replace('<name>Author One</name>', '<name>  Author One  </name>');
     const parsed = metadataApi.parseOfficialArxivMetadataResponse(ID, raw, { querySourceId: ID });
@@ -96,7 +96,7 @@ test('verified legacy Atom author whitespace is normalized only in the returned 
     assert.deepEqual(fs.readFileSync(metadataFile), before.metadata);
 });
 
-test('publication metadata sidecar rejects semantic observed-time and raw entry-version drift', async t => {
+test('出版元数据附带文件拒绝语义观测时间和原始条目版本漂移', async t => {
     const observed = await fixture(t, 'observed-drift');
     sidecars.sealPublicationMetadata({ rootDir: observed.sidecarRoot, sourceRoot: observed.sourceRoot,
         arxivId: ID, generation: 1, officialResult: official() });
@@ -116,7 +116,7 @@ test('publication metadata sidecar rejects semantic observed-time and raw entry-
         sourceRoot: version.sourceRoot, arxivId: ID, generation: 1 }), /drift|response/i);
 });
 
-test('publication metadata sidecar accepts only Atom state no newer than its sealed source', async t => {
+test('出版元数据附带文件只接受不新于已保存并核验来源的 Atom 状态', async t => {
     const early = await fixture(t, 'early');
     assert.equal(sidecars.sealPublicationMetadata({ rootDir: early.sidecarRoot, sourceRoot: early.sourceRoot,
         arxivId: ID, generation: 1, officialResult: official() }).status, 'sealed');
@@ -146,7 +146,7 @@ test('publication metadata sidecar accepts only Atom state no newer than its sea
 });
 
 for (const target of [sidecars.ATOM_NAME, sidecars.METADATA_NAME, sidecars.MANIFEST_NAME]) {
-    test(`publication metadata sidecar rejects ${target} byte drift`, async t => {
+    test(`出版元数据附带文件拒绝 ${target} 的字节漂移`, async t => {
         const f = await fixture(t, target); sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
             sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: official() });
         const filename = path.join(sidecars.sidecarDirectory(f.sidecarRoot, ID, 1), target);
@@ -156,7 +156,7 @@ for (const target of [sidecars.ATOM_NAME, sidecars.METADATA_NAME, sidecars.MANIF
     });
 }
 
-test('publication metadata sidecar rejects wrong paper, proof, historical source version, and extra files', async t => {
+test('出版元数据附带文件拒绝论文、证明、历史来源版本不符，以及多余文件', async t => {
     const f = await fixture(t); const wrong = official('2601.00002');
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: wrong }), /belongs|replayed|response|query source ID/i);
@@ -170,7 +170,7 @@ test('publication metadata sidecar rejects wrong paper, proof, historical source
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /unexpected files/);
 });
 
-test('publication metadata sidecar rejects source generation bytes, manifest, snapshot, and text drift', async t => {
+test('出版元数据附带文件拒绝来源代次字节、清单、快照和文本漂移', async t => {
     const f = await fixture(t); sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: official() });
     const sourceManifest = path.join(f.sourceRoot, ID, 'generation-000001', 'source-manifest.json');
@@ -192,7 +192,7 @@ test('publication metadata sidecar rejects source generation bytes, manifest, sn
         sourceRoot: other.sourceRoot, arxivId: ID, generation: 2 }), /ENOENT|generation/i);
 });
 
-test('publication metadata sidecar rejects public permissions and hard-linked evidence', async t => {
+test('出版元数据附带文件拒绝公开权限和硬链接证据', async t => {
     const f = await fixture(t); sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: official() });
     const directory = sidecars.sidecarDirectory(f.sidecarRoot, ID, 1);
@@ -206,7 +206,7 @@ test('publication metadata sidecar rejects public permissions and hard-linked ev
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /unsafe.*Atom/i);
 });
 
-test('reusable historical Atom requires its raw bytes, official proof, and exact metadata record', async t => {
+test('可复用的历史 Atom 要求原始字节、官方证明和精确的元数据记录', async t => {
     const f = await fixture(t); const runs = path.join(f.root, 'runs'); fs.mkdirSync(runs, { mode: 0o700 });
     const runId = '11111111-1111-4111-8111-111111111111'; const directory = path.join(runs, runId);
     fs.mkdirSync(directory, { mode: 0o700 }); const result = official();
@@ -233,7 +233,7 @@ test('reusable historical Atom requires its raw bytes, official proof, and exact
     assert.equal(sidecars.findReusableOfficialAtom({ freshRewriteRoot: runs, arxivId: ID }), null);
 });
 
-test('publication metadata CLI parsing and parser-failure selection are plan-scoped and fail closed', () => {
+test('出版元数据命令行的解析和解析失败选择都限定在计划范围内，并直接失败', () => {
     const parsed = cli.parseArgs(['--apply', '--plan', '/tmp/plan.json', '--generation', '1',
         '--all-parser-failures', '--concurrency', '3']);
     assert.equal(parsed.planFile, '/tmp/plan.json'); assert.equal(parsed.allParserFailures, true);
@@ -260,7 +260,7 @@ test('publication metadata CLI parsing and parser-failure selection are plan-sco
     }), /implementation bug/);
 });
 
-test('publication metadata CLI dry-run/apply stay plan-scoped and use only injected official transport', async t => {
+test('出版元数据命令行的预演和写入都限定在计划范围内，只用注入的官方传输', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'publication-metadata-cli-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const planFile = path.join(root, 'plan.json'); fs.writeFileSync(planFile, '{}', { mode: 0o600 });
@@ -304,7 +304,7 @@ test('publication metadata CLI dry-run/apply stay plan-scoped and use only injec
     assert.equal(fetches, 1); assert.equal(applied.fetched, 1); assert.equal(applied.status, 'complete');
 });
 
-test('publication metadata batch retains a transient failure, seals peers, exits partial, and resumes idempotently', async t => {
+test('出版元数据批次保留瞬时失败、保存并核验同伴、以部分完成退出，并可幂等续跑', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'publication-metadata-partial-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const planFile = path.join(root, 'plan.json'); fs.writeFileSync(planFile, '{}', { mode: 0o600 });

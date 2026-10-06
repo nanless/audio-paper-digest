@@ -48,7 +48,7 @@ function setup(t, options={}) {
     return {...f,request,run,rootDir,runDir,other,patchFile,writeRequest,read,reload,apply,accept};
 }
 
-test('real parser and shared sealing install operator provenance, preserve API origin and require fact review without any fetch',async t=>{
+test('真实解析器和共用保存核验会写入人工来源、保留 API 出处，并要求事实复核，全程不抓取',async t=>{
     const f=setup(t),parent=JSON.stringify(f.paper),oldFetch=global.fetch;let calls=0;
     global.fetch=async()=>{calls++;throw new Error('no network is authorized');};t.after(()=>{global.fetch=oldFetch;});
     const result=await f.apply();assert.equal(result.status,'fact_review_pending');assert.equal(calls,0);
@@ -69,7 +69,7 @@ test('real parser and shared sealing install operator provenance, preserve API o
     assert.equal(fs.statSync(path.join(archive,'output.json')).mode&0o777,0o600);
 });
 
-test('durable intent/output, analysis installation and run SHA interruption recover without API or duplicate operator history',async t=>{
+test('持久意图、输出、分析装入和运行 SHA 中断都能恢复，不需要 API，也不重复人工历史',async t=>{
     for(const hook of ['afterIntent','afterOutput','afterAnalysis','afterRun']) {
         const f=setup(t);
         await assert.rejects(f.apply({[hook]:()=>{throw new Error('injected interruption');}}),/injected/);
@@ -80,7 +80,7 @@ test('durable intent/output, analysis installation and run SHA interruption reco
     }
 });
 
-test('archived operator output recovers unchanged when the current implementation SHA differs', async t => {
+test('当前实现 SHA 不同时，归档的人工输出原样恢复', async t => {
     const f = setup(t);
     const originalFetch = global.fetch;
     let fetchCalls = 0;
@@ -134,7 +134,7 @@ test('archived operator output recovers unchanged when the current implementatio
     }
 });
 
-test('an operator intent without output rejects only the changed output SHA and recovers with the original implementation', async t => {
+test('只有意图没有输出的人工记录只拒绝变化过的输出 SHA，并用原实现恢复', async t => {
     const f = setup(t);
     const originalFetch = global.fetch;
     let fetchCalls = 0;
@@ -210,7 +210,7 @@ test('an operator intent without output rejects only the changed output SHA and 
     }
 });
 
-test('stale parent, invalid source/draft/node, append and production gate failures leave analysis and archives unchanged',async t=>{
+test('父级过期、来源/草稿/节点非法、追加和生产门禁失败都让分析和归档保持不变',async t=>{
     for(const mutate of [f=>{f.request.parentPaperSha256='0'.repeat(64);},
         f=>{f.request.sourceSha256='0'.repeat(64);},f=>{f.request.patch.draftSha256='0'.repeat(64);},
         f=>{f.request.patch.replacements[0].oldSha256='0'.repeat(64);},
@@ -222,7 +222,7 @@ test('stale parent, invalid source/draft/node, append and production gate failur
     }
 });
 
-test('durable output corruption and competing parent installation fail closed',async t=>{
+test('持久输出损坏和父级装入冲突都直接失败',async t=>{
     for(const corrupt of [true,false]) {
         const f=setup(t);await assert.rejects(f.apply({afterOutput:()=>{throw new Error('stop');}}));
         if(corrupt){const archive=fs.readdirSync(path.join(f.runDir,'patches','signed-operator-archive'))[0];
@@ -235,7 +235,7 @@ test('durable output corruption and competing parent installation fail closed',a
     }
 });
 
-test('operator never downloads a missing or foreign signed pixel cache',async t=>{
+test('人工流程绝不下缺的或外来的已签名图片缓存',async t=>{
     const f=setup(t,{noFigures:false});let fetches=0;const old=global.fetch;
     global.fetch=async()=>{fetches++;throw new Error('unexpected fetch');};t.after(()=>{global.fetch=old;});
     await assert.rejects(prepareReaderOperatorPatchResult({parent:f.paper,sourceDetails:f.sourceDetails,run:f.run,
@@ -243,7 +243,7 @@ test('operator never downloads a missing or foreign signed pixel cache',async t=
     assert.equal(fetches,0);
 });
 
-test('Reader operator rejects a canonical availability mismatch instead of silently synchronizing outside its node patch',async t=>{
+test('Reader 人工流程拒绝正式可用状态不匹配，不会在节点补丁之外悄悄同步',async t=>{
     const f=setup(t);
     f.paper.analysis=require('./valid-analysis-fixture.js').validAnalysisText();
     f.paper.parsed=require('../scripts/utils.js').parseAnalysis(f.paper.analysis);
@@ -255,7 +255,7 @@ test('Reader operator rejects a canonical availability mismatch instead of silen
     assert.equal(JSON.stringify(f.paper),before);
 });
 
-test('signed-patch CLI is explicit and rejects other-stage flags and paths',()=>{
+test('已签名补丁命令行要求显式参数，拒绝其他阶段的标志和路径',()=>{
     const id='11111111-2222-4333-8444-555555555555';
     assert.equal(runner.parseRewriteArgs(['signed-patch','--run-id',id,'--patch','reviewed.json']).action,'signed-patch');
     for(const tail of [['--ids','2609.12345'],['--concurrency','1'],['--refresh-reader-diagnostics']])
@@ -275,7 +275,7 @@ function reportRequest(f) {
     request.reportSha256=runner.sha256(text);return request;
 }
 
-test('explicit SHA-bound independent fact acceptance restores complete and preserves article/plan/API origin',async t=>{
+test('显式绑定 SHA 的独立事实验收恢复为完成，并保留文章、计划和 API 出处',async t=>{
     const f=setup(t);await f.apply();const request=reportRequest(f),before=f.read('analysis').papers[0];
     const result=await f.accept(request),after=f.read('analysis').papers[0];
     assert.equal(result.status,'complete');assert.equal(after.readerFactReview.status,'complete');
@@ -287,7 +287,7 @@ test('explicit SHA-bound independent fact acceptance restores complete and prese
     assert.deepEqual(fs.readFileSync(path.join(f.runDir,'analysis.json')),bytes);
 });
 
-test('fact receipt and analysis-install interruptions recover with exact report and no duplicate mutation',async t=>{
+test('事实凭证和分析装入中断能以精确报告恢复，不重复改动',async t=>{
     for(const hook of ['afterFactReceipt','afterFactAnalysis']) {
         const f=setup(t);await f.apply();const request=reportRequest(f);
         await assert.rejects(f.accept(request,{[hook]:()=>{throw new Error('fact interruption');}}),/interruption/);
@@ -295,7 +295,7 @@ test('fact receipt and analysis-install interruptions recover with exact report 
     }
 });
 
-test('fact acceptance rejects stale paper, report hash, cross-run, traversal, unsafe mode and report race',async t=>{
+test('事实验收拒绝过期论文、报告哈希不符、跨运行、路径穿越、不安全模式和报告竞争',async t=>{
     for(const change of [r=>{r.parentPaperSha256='0'.repeat(64);},r=>{r.reportSha256='0'.repeat(64);},
         r=>{r.runId='22222222-2222-4222-8222-222222222222';},r=>{r.reportFile='../review.md';},
         r=>{r.verdict='fail';}]) {
@@ -309,7 +309,7 @@ test('fact acceptance rejects stale paper, report hash, cross-run, traversal, un
     assert.deepEqual(fs.readFileSync(path.join(f.runDir,'analysis.json')),before);
 });
 
-test('single-paper fact acceptance preserves pre-existing batch review and newer external failures',async t=>{
+test('单篇事实验收保留已有的批次审查记录和更新的外部失败',async t=>{
     for(const [baseline,later] of [['fact_review_pending',null],['fact_review_revision_failed',null],['complete','fact_review_revision_failed']]) {
         const f=setup(t);
         for(const name of ['run','analysis']) {const value=f.read(name);value.status=baseline;
@@ -323,7 +323,7 @@ test('single-paper fact acceptance preserves pre-existing batch review and newer
     }
 });
 
-test('run-level review failure remains authoritative when analysis was complete',async t=>{
+test('分析已完成时，运行级审查失败仍然有效',async t=>{
     for(const baseline of ['fact_review_pending','fact_review_revision_failed']) {
         const f=setup(t),run=f.read('run');run.status=baseline;
         fs.writeFileSync(path.join(f.runDir,'run.json'),JSON.stringify(run));

@@ -33,7 +33,7 @@ function authorizedPriorPreprintSource() {
             provenanceStatement: profile.provenanceStatement, openreviewResponseBytes: false } } };
 }
 
-test('only the code-reviewed title-different prior preprint is direct-routable with a self-hashed disclosure', () => {
+test('只有经过代码审查的标题不同的先前预印本可以直接路由，并带自哈希披露', () => {
     assert.equal(catalog.directEligibleConferenceSource({ pdf: { availability: 'available',
         acquisition: { versionRelation: catalog.BLOCKED_CROSS_VERSION_RELATION } } }), false);
     assert.equal(catalog.directEligibleConferenceSource({ pdf: { availability: 'available',
@@ -121,7 +121,7 @@ function inputArgs(f, mode = '--dry-run') {
         '--blog-root', f.blog, '--name', 'scoped-historical-local-data-v5.json'];
 }
 
-test('scoped v5 builder derives fresh arXiv identities from frozen evidence and retains only exact local conference records', t => {
+test('限定范围的 v5 构建器从冻结证据推导全新 arXiv 身份，只保留精确匹配的本地会议记录', t => {
     const f = fixture(t); const value = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest, inventoryFile: f.inventoryFile, blogRoot: f.blog });
     assert.equal(value.contract, 'merged-good-historical-local-data-v5');
     assert.deepEqual(value.summary, { arxivPapers: 1, arxivPages: 2, singleArxivPages: 2,
@@ -139,7 +139,7 @@ test('scoped v5 builder derives fresh arXiv identities from frozen evidence and 
     assert.deepEqual(catalog.normalizeCatalog(value), value);
 });
 
-test('CLI produces a scoped v5 catalog and its projection-to-plan dry-run succeeds', t => {
+test('命令行生成限定范围的 v5 目录，其投影到计划的预演通过', t => {
     const f = fixture(t); const parsed = inputsCli.parseArgs(inputArgs(f));
     assert.equal(parsed.apply, false); assert.equal(parsed.name, 'scoped-historical-local-data-v5.json');
     const written = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
@@ -166,13 +166,13 @@ test('CLI produces a scoped v5 catalog and its projection-to-plan dry-run succee
         complete: plan.paperPageCoverageComplete }, { frozen: 7, uncovered: 0, complete: true });
 });
 
-test('CLI rejects the removed arXiv-manifest prerequisite and incomplete scope', t => {
+test('命令行拒绝已移除的 arXiv 清单前置条件和范围不完整的输入', t => {
     const f = fixture(t);
     assert.throws(() => inputsCli.parseArgs(['--dry-run', '--arxiv-manifest', '/tmp/old.json', '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile, '--blog-root', f.blog]), /Use/);
     assert.throws(() => inputsCli.parseArgs(['--dry-run', '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile]), /Use/);
 });
 
-test('projection and plan reject legacy v3/v4 and malformed v5 bytes through the producer strict validator', t => {
+test('投影和计划通过产出端严格校验器拒绝旧版 v3/v4 和格式错误的 v5 字节', t => {
     const f = fixture(t);
     const current = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
         inventoryFile: f.inventoryFile, blogRoot: f.blog });
@@ -199,7 +199,7 @@ test('projection and plan reject legacy v3/v4 and malformed v5 bytes through the
     }
 });
 
-test('catalog seals qualified multiple-hint primary arXiv bindings and merges their IDs without local writer sources', t => {
+test('目录保存并核验合格的多线索 arXiv 主绑定，并在没有本地写入来源的情况下合并它们的 ID', t => {
     const f = fixture(t); const relative = 'content/posts/multiple-primary.md';
     const bytes = Buffer.from('---\ntitle: "Multiple primary"\ndate: 2026-05-03\n---\n\n# Multiple primary\n\n'
         + '✅ **7.0/10** | 前50% | #语音识别 | [arxiv](https://arxiv.org/abs/2605.28508v1)\n\n'

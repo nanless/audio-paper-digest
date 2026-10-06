@@ -41,7 +41,7 @@ function arxivFixture(t) {
     return { root, paperId, authority };
 }
 
-test('arXiv authority replays canonical identity, official snapshot/receipt and exact full text into an opaque handle', t => {
+test('arXiv 授权复核正式身份、官方快照与凭证和精确全文，并装入不透明句柄', t => {
     const f = arxivFixture(t); const handle = api.loadAuthorityHandle({ authorityRoot: f.root, authorityName: 'authority.json' });
     const snapshot = api.authorityHandleSnapshot(handle);
     assert.equal(snapshot.authority.paperId, f.paperId); assert.equal(snapshot.fulltextSha256, f.authority.proof.fulltextSha256);
@@ -52,7 +52,7 @@ test('arXiv authority replays canonical identity, official snapshot/receipt and 
     assert.throws(() => api.loadAuthorityHandle({ authorityRoot: f.root, authorityName: 'authority.json' }), /proof file\/SHA drifted/);
 });
 
-test('arXiv authority rejects title-like self claims, unsafe files and mismatched official source identity', t => {
+test('arXiv 授权拒绝像标题的自我声明、不安全文件和不匹配的官方来源身份', t => {
     const f = arxivFixture(t); const changed = structuredClone(f.authority);
     changed.identity.source.url = 'https://arxiv.org/abs/2601.00002';
     const body = structuredClone(changed); delete body.authoritySha256; changed.authoritySha256 = api.stableHash(body);
@@ -76,7 +76,7 @@ test('arXiv authority rejects title-like self claims, unsafe files and mismatche
         authorityName: 'citation.json' }), /citation must be null/);
 });
 
-test('conference authority requires and replays a real plan/import/ledger/source-context chain', t => {
+test('会议授权要求并复核真实的计划、导入、台账和来源上下文链条', t => {
     const fixture = productionPlanFixture(t); const root = path.join(fixture.root, 'authorities'); fs.mkdirSync(root, { mode: 0o700 });
     const context = contextApi.buildConferenceSourceContext({ planHandle: fixture.planHandle,
         paperId: fixture.paperId, sourceRoot: fixture.sourceRoot });

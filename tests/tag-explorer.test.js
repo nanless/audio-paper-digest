@@ -40,13 +40,13 @@ function currentData() {
     input.summary.dispositionSchema = 'paper-tag-seven-state-disposition-v2';
     return input;
 }
-test('parent selection includes all descendant papers; OR within and AND across facets', () => {
+test('选中父节点会包含全部后代论文；同一维度内取并集，跨维度取交集', () => {
     const index = validateIndex(data());
     assert.equal(filterPapers(index, { facets: { task: ['task.speech'] } }).length, 3);
     assert.equal(filterPapers(index, { facets: { task: ['task.asr', 'task.tts'], method: ['method.peft'] } }).length, 2);
     assert.deepEqual(filterPapers(index, { facets: { method: ['method.lora'], setting: ['setting.low'] } }).map(p => p.recordId), ['a']);
 });
-test('search matches title, untouched raw tags, preferred names and bilingual aliases', () => {
+test('搜索匹配标题、未改动的原始标签、首选名称和双语别名', () => {
     const index = validateIndex(data());
     assert.equal(filterPapers(index, { search: 'ASR' }).length, 2);
     assert.equal(filterPapers(index, { search: '自动语音识别' }).length, 2);
@@ -55,13 +55,13 @@ test('search matches title, untouched raw tags, preferred names and bilingual al
     assert.equal(filterPapers(index, { search: '研究 d' })[0].recordId, 'd');
     assert.equal(filterPapers(index, { search: '<script>' }).length, 0);
 });
-test('unknown records remain visible; primary task is never inferred; review filter is explicit', () => {
+test('未知记录仍然可见；主任务绝不靠推断；审查过滤是显式的', () => {
     const index = validateIndex(data());
     assert.equal(filterPapers(index, {}).length, 4);
     assert.deepEqual(filterPapers(index, { needsReview: true }).map(p => p.recordId), ['c', 'd']);
     assert(index.papers.every(p => p.primaryTaskId === null));
 });
-test('explicit primary-task errors are preserved separately from raw unknown tags', () => {
+test('显式主任务错误与原始未知标签分开保留', () => {
     const input = data();
     input.papers[1].primaryUnresolved = [{ field: 'primary_task', value: '不明确任务', reason: 'unknown' }];
     input.papers[1].classificationStatus = 'partial';
@@ -70,11 +70,11 @@ test('explicit primary-task errors are preserved separately from raw unknown tag
     assert.equal(filterPapers(index, { search: '不明确任务' })[0].recordId, 'b');
     assert.deepEqual(index.papers[1].unresolvedTags, []);
 });
-test('display suppresses mapped ancestors but preserves sibling distinctions', () => {
+test('展示时隐藏已映射的祖先节点，但保留同级之间的区分', () => {
     const index = validateIndex(data());
     assert.deepEqual(displayConcepts(index, ['task.speech', 'task.asr', 'task.tts']).map(c => c.id), ['task.asr', 'task.tts']);
 });
-test('pagination clamps, counts, and handles empty results without fabricated papers', () => {
+test('分页做边界收敛与计数，空结果不会造出论文', () => {
     const index = validateIndex(data());
     const result = queryPapers(index, { page: 99, pageSize: 2 });
     assert.equal(result.total, 4); assert.equal(result.page, 2); assert.equal(result.items.length, 2);
@@ -82,7 +82,7 @@ test('pagination clamps, counts, and handles empty results without fabricated pa
     assert.deepEqual([empty.total, empty.page, empty.pageCount, empty.items.length], [0, 1, 0, 0]);
     assert.throws(() => queryPapers(index, { pageSize: 0 }));
 });
-test('paper links allow only the exact HTTPS blog origin and bounded path', () => {
+test('论文链接只允许精确的 HTTPS 博客来源和受限路径', () => {
     assert(safePaperUrl('https://nanless.github.io/audio-paper-digest-blog/posts/test/'));
     for (const value of ['javascript:alert(1)', 'http://nanless.github.io/audio-paper-digest-blog/a',
         'https://nanless.github.io.evil.com/audio-paper-digest-blog/a',
@@ -94,7 +94,7 @@ test('paper links allow only the exact HTTPS blog origin and bounded path', () =
         'https://nanless.github.io/audio-paper-digest-blog/\\evil',
         'https://nanless.github.io/audio-paper-digest-blog/\nfoo', null]) assert.equal(safePaperUrl(value), null);
 });
-test('malformed schema, IDs, hierarchy, cross-facet references and links fail visibly', () => {
+test('结构、ID、层级、跨维度引用和链接有问题时显式报错', () => {
     for (const change of [
         x => { x.version = 'unknown'; }, x => { x.papers = null; },
         x => { x.papers.push(x.papers[0]); }, x => { x.concepts[0].broaderId = 'task.asr'; },
@@ -112,7 +112,7 @@ test('malformed schema, IDs, hierarchy, cross-facet references and links fail vi
     assert.throws(() => validateIndex(null));
     const empty = data(); empty.papers = []; assert.equal(validateIndex(empty).papers.length, 0);
 });
-test('page markup is accessible and implementation does not inject source HTML', () => {
+test('页面标记可访问，实现也不注入来源 HTML', () => {
     const fs = require('node:fs'), path = require('node:path');
     const source = fs.readFileSync(path.join(__dirname, '../web/tag-explorer/app.js'), 'utf8');
     const html = fs.readFileSync(path.join(__dirname, '../web/tag-explorer/index.html'), 'utf8');
@@ -120,7 +120,7 @@ test('page markup is accessible and implementation does not inject source HTML',
     assert.match(html, /role="alert"/); assert.match(html, /aria-live="polite"/);
     assert.match(html, /for="search"/); assert.match(html, /历史标签映射预览/);
 });
-test('server validation shares the same strict snapshot contract', () => {
+test('服务端校验共用同一套严格快照约定', () => {
     for (const input of [data(), currentData()]) {
         const original = JSON.stringify(input);
         assert.equal(validateSnapshot(input), input);
@@ -128,7 +128,7 @@ test('server validation shares the same strict snapshot contract', () => {
         input.registrySha256 = 'broken'; assert.throws(() => validateSnapshot(input));
     }
 });
-test('preview catalog fields and disposition schema must match the declared generation', () => {
+test('预览目录字段和处置结构必须与声明的代次一致', () => {
     for (const makeInput of [data, currentData]) {
         for (const value of [null, 'v1']) {
             const input = makeInput();
@@ -159,7 +159,7 @@ function fakeDocument() {
         createElement: node, createDocumentFragment: node };
 }
 function descendants(node) { return [node, ...(node.children || []).flatMap(descendants)]; }
-test('nonempty cards do not repeat explicit primary task in chips or mutate mapping', async () => {
+test('非空卡片不在标签芯片里重复显式主任务，也不改动映射', async () => {
     const doc = fakeDocument(), input = data();
     input.papers[0].primaryTaskId = 'task.asr';
     const original = JSON.stringify(input);
@@ -173,7 +173,7 @@ test('nonempty cards do not repeat explicit primary task in chips or mutate mapp
     const link = nodes.find(n => n.href);
     assert.equal(link.rel, 'noopener noreferrer');
 });
-test('initial facet expansion adapts to narrow viewport with a guarded browser API', async () => {
+test('初始维度展开根据窄视口自适应，并做浏览器 API 可用性防护', async () => {
     for (const compact of [true, false]) {
         const doc = fakeDocument();
         doc.defaultView = { matchMedia: query => {
@@ -184,7 +184,7 @@ test('initial facet expansion adapts to narrow viewport with a guarded browser A
         assert.equal(facets.filter(n => n.open).length, compact ? 0 : 3);
     }
 });
-test('fetch, JSON and schema errors render a visible error instead of empty success', async () => {
+test('抓取、JSON 和结构错误渲染为可见错误，而不是假装成功返回空', async () => {
     for (const fetcher of [
         async () => { throw new Error('offline'); },
         async () => ({ ok: false, status: 404 }),
@@ -198,14 +198,14 @@ test('fetch, JSON and schema errors render a visible error instead of empty succ
         assert.equal(doc.nodes.get('paper-list').children.length, 0);
     }
 });
-test('valid empty snapshot is distinct from failure and always fetches local index', async () => {
+test('合法的空快照与失败区分开，且始终抓取本地索引', async () => {
     const doc = fakeDocument(), empty = data(); empty.papers = [];
     await mount(doc, async url => { assert.equal(url, './index.json'); return { ok: true, json: async () => empty }; });
     assert.equal(doc.nodes.get('error').hidden, true);
     assert.equal(doc.nodes.get('controls').disabled, false);
     assert.match(doc.nodes.get('empty').textContent, /不包含论文记录/);
 });
-test('both preview generations display the same catalog version and SHA without changing input', async () => {
+test('两代预览都显示同一个目录版本和 SHA，且不改动输入', async () => {
     const earlyLegacy=data(); delete earlyLegacy.summary.dispositionSchema;
     for (const input of [data(), currentData(), earlyLegacy]) {
         const doc = fakeDocument(), original = JSON.stringify(input);

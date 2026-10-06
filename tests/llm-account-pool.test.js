@@ -29,8 +29,8 @@ function tempState() {
     return { dir, file: path.join(dir, 'llm-account-pool.json') };
 }
 
-describe('OpenCode Go sticky account state', () => {
-    it('inherits third sticky account on append and only fails forward even after old cooldowns expire', () => {
+describe('OpenCode Go 账号粘性状态', () => {
+    it('追加时继承第三个粘性账号，即使旧冷却已过期也只向前切换', () => {
         const { file } = tempState();
         const keys = ['a', 'b', 'c'];
         for (const nowMs of [1000, 1100]) {
@@ -49,7 +49,7 @@ describe('OpenCode Go sticky account state', () => {
             error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED' && error.scope === 'run');
     });
 
-    it('Node/Python share appended membership and a blocked forward cursor', () => {
+    it('Node 与 Python 共用追加后的成员集合和被阻塞的前向游标', () => {
         const { file } = tempState();
         const keys = ['a', 'b', 'c'];
         for (const nowMs of [1000, 1100]) {
@@ -70,7 +70,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(selectApiKey([...keys, 'd'], ENDPOINT, file, { nowMs: 3001 }).apiKey, 'd');
     });
 
-    it('recognizes balance only as an exact official Go 401, never generic failures', () => {
+    it('只有官方 Go 的精确 401 才算余额不足，普通失败一律不算', () => {
         const body = { error: { message: 'Insufficient balance' } };
         assert.strictEqual(classifyOpenCodeGoQuotaResponse({ statusCode: 401, body }, { endpoint: ENDPOINT }).type,
             'InsufficientBalanceError');
@@ -93,7 +93,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(classifyOpenCodeGoQuotaResponse({ statusCode: 401, body },
             { endpoint: 'https://example.com/v1' }), null);
     });
-    it('logical LLM deadline rejects a transport promise that never settles', async () => {
+    it('逻辑 LLM 截止时间拒绝永不落定的传输 Promise', async () => {
         const startedAt = Date.now();
         await assert.rejects(
             requestLlmJson(
@@ -110,14 +110,14 @@ describe('OpenCode Go sticky account state', () => {
         assert.ok(Date.now() - startedAt < 1000, 'deadline must not inherit a hanging transport lifetime');
     });
 
-    it('rejects duplicate primary and fallback credentials', () => {
+    it('拒绝重复的主账号与备用账号凭证', () => {
         assert.throws(
             () => resolveApiKeyPool('same-key', 'same-key'),
             error => error.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
         );
     });
 
-    it('keeps the explicitly configured third account after the normal fallback', () => {
+    it('普通备用账号之后仍保留显式配置的第三个账号', () => {
         assert.deepEqual(
             resolvePrimaryApiKeyPool('account-a', 'account-b', 'account-c'),
             ['account-a', 'account-b', 'account-c']
@@ -128,7 +128,7 @@ describe('OpenCode Go sticky account state', () => {
         );
     });
 
-    it('operator selection of fourth account stays sticky for matching primary and secondary pools', () => {
+    it('人工选定第四个账号后，在匹配的主池和备用池中保持粘性', () => {
         const { file } = tempState();
         const primary = resolvePrimaryApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
         const secondary = resolveApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
@@ -144,7 +144,7 @@ describe('OpenCode Go sticky account state', () => {
         for (const key of primary) assert.ok(!fs.readFileSync(file, 'utf8').includes(key));
     });
 
-    it('rejects credential-bearing or query-mutated OpenCode endpoints', () => {
+    it('拒绝带凭证或被改写查询串的 OpenCode 端点', () => {
         for (const endpoint of [
             'https://user:pass@opencode.ai/zen/go/v1',
             'https://opencode.ai:444/zen/go/v1',
@@ -157,7 +157,7 @@ describe('OpenCode Go sticky account state', () => {
         }
     });
 
-    it('rejects raw/decoded dot segments and encoded route separators before WHATWG normalization', () => {
+    it('WHATWG 归一化之前就拒绝原始或解码后的点段，以及编码过的路由分隔符', () => {
         for (const endpoint of [
             'https://opencode.ai/zen/go/./v1',
             'https://opencode.ai/zen/go/../v1',
@@ -175,7 +175,7 @@ describe('OpenCode Go sticky account state', () => {
         }
     });
 
-    it('keeps one account active until that active account is quota blocked', () => {
+    it('一个账号保持生效，直到它自己被额度阻塞', () => {
         const { file } = tempState();
         const keys = resolveApiKeyPool('account-a-secret', 'account-b-secret');
         const first = selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
@@ -198,7 +198,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(readStateStrict(file).policyVersion, POLICY_VERSION);
     });
 
-    it('uses the third account only after the first and normal fallback receive quota blocks', () => {
+    it('只有第一个账号和普通备用账号都被额度阻塞后才使用第三个账号', () => {
         const { file } = tempState();
         const keys = resolvePrimaryApiKeyPool('account-a-secret', 'account-b-secret', 'account-c-secret');
         const first = selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
@@ -210,7 +210,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(third.apiKey, 'account-c-secret');
     });
 
-    it('only classifies explicit GoUsageLimitError as quota exhaustion', () => {
+    it('只有明确的 GoUsageLimitError 才算额度耗尽', () => {
         assert.strictEqual(classifyOpenCodeGoQuotaResponse({
             statusCode: 429,
             headers: { 'retry-after': '60' },
@@ -242,7 +242,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(conflicting.limitClass, 'rolling_5h');
     });
 
-    it('uses every finite reset hint, takes the conservative maximum, and clamps once', () => {
+    it('用上每个有限的重置提示，取保守上限，并只截断一次', () => {
         const nowMs = 1000;
         const quota = classifyOpenCodeGoQuotaResponse({
             statusCode: 429,
@@ -299,7 +299,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(exponentRejected.blockedUntilMs, nowMs + 5 * 60 * 60 * 1000);
     });
 
-    it('sanitizes provider-controlled quota labels before returning or persisting them', () => {
+    it('返回或保存之前，先清洗供应商可控的额度标签', () => {
         const unsafe = '\u001b[31mrolling\r\nforged-line\u0000\u001b[0m';
         assert.strictEqual(sanitizeLimitName(unsafe), 'rolling forged-line');
         const quota = classifyOpenCodeGoQuotaResponse({
@@ -322,7 +322,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.ok(!JSON.stringify(state).includes('forged-line'));
     });
 
-    it('throws a typed retryable error when the state lock cannot be acquired', () => {
+    it('拿不到状态锁时抛出带类型的可重试错误', () => {
         const { file } = tempState();
         const release = acquireStateLock(file);
         try {
@@ -338,7 +338,7 @@ describe('OpenCode Go sticky account state', () => {
         }
     });
 
-    it('marks an expired quota record eligible when that account is selected again', () => {
+    it('该账号再次被选中时，已过期的额度记录重新算可用', () => {
         const { file } = tempState();
         const keys = ['account-a', 'account-b'];
         const first = selectApiKey(keys, ENDPOINT, file, { nowMs: 1000 });
@@ -355,7 +355,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(service.accounts[recovered.accountId].status, 'eligible_after_reset');
     });
 
-    it('fails closed instead of overwriting corrupt state', () => {
+    it('状态损坏时直接失败，不覆盖', () => {
         const { file } = tempState();
         fs.writeFileSync(file, '{broken', { mode: 0o600 });
         assert.throws(
@@ -365,7 +365,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(fs.readFileSync(file, 'utf8'), '{broken');
     });
 
-    it('rejects invalid or overflowing generation without rewriting state', () => {
+    it('拒绝非法或溢出的 generation，不改写状态', () => {
         for (const generation of [-1, 1.5, '1', Number.MAX_SAFE_INTEGER + 1]) {
             const { file } = tempState();
             const raw = JSON.stringify({
@@ -399,7 +399,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(fs.readFileSync(file, 'utf8'), raw);
     });
 
-    it('rejects explicit null blockedUntilMs without rewriting shared state', () => {
+    it('显式的 null blockedUntilMs 会被拒绝，不改写共享状态', () => {
         const { file } = tempState();
         const raw = JSON.stringify({
             schemaVersion: 1,
@@ -422,7 +422,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.strictEqual(fs.readFileSync(file, 'utf8'), raw);
     });
 
-    it('rejects a symlink state file', () => {
+    it('拒绝符号链接形式的状态文件', () => {
         const { dir, file } = tempState();
         const target = path.join(dir, 'target.json');
         fs.writeFileSync(target, '{}');
@@ -433,7 +433,7 @@ describe('OpenCode Go sticky account state', () => {
         );
     });
 
-    it('fails closed on reclaim and owner symlinks with typed state errors', () => {
+    it('回收文件和属主是符号链接时，用带类型的状态错误直接失败', () => {
         {
             const { dir, file } = tempState();
             const target = path.join(dir, 'reclaim-target');
@@ -461,7 +461,7 @@ describe('OpenCode Go sticky account state', () => {
         }
     });
 
-    it('retries when a concurrent process removes the reclaim gate during inspection', () => {
+    it('检查期间并发进程删掉了回收闸门就重试', () => {
         const { file } = tempState();
         const reclaimPath = `${file}.lock.reclaim`;
         fs.mkdirSync(reclaimPath);
@@ -487,7 +487,7 @@ describe('OpenCode Go sticky account state', () => {
         }
     });
 
-    it('shares quota blocks across groups containing the same credential', () => {
+    it('含同一凭证的账号组共享额度阻塞', () => {
         const { file } = tempState();
         const firstGroup = ['a', 'b'];
         const secondGroup = ['a', 'c'];
@@ -498,7 +498,7 @@ describe('OpenCode Go sticky account state', () => {
         assert.ok(getAccountId('a') in Object.values(readStateStrict(file).services)[0].accounts);
     });
 
-    it('writes a state schema that the Python publisher reads with the same sticky result', () => {
+    it('写出的状态 schema 让 Python 发布端读出一致的粘性结果', () => {
         const { file } = tempState();
         const first = selectApiKey(['a', 'b'], ENDPOINT, file, { nowMs: 1000 });
         markQuotaExhausted(first, { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
@@ -517,8 +517,8 @@ describe('OpenCode Go sticky account state', () => {
     });
 });
 
-describe('requestLlmJson OpenCode Go failover', () => {
-    it('four billing-balance failures stop with a typed run error and persist no billing URL', async () => {
+describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
+    it('四次余额失败后以带类型的运行错误停止，不保存计费 URL', async () => {
         const { file } = tempState();
         const seen = [];
         await assert.rejects(requestLlmJson(`${ENDPOINT}/chat/completions`, ENDPOINT, 'test-model', {}, {}, {
@@ -533,7 +533,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
         assert.deepStrictEqual(seen, ['Bearer a', 'Bearer b', 'Bearer c', 'Bearer d']);
         assert.ok(!fs.readFileSync(file, 'utf8').includes('wrk_test_placeholder'));
     });
-    it('replays exact balance 401 from third to fourth; generic 401 stops without rotation', async () => {
+    it('精确的余额 401 会从第三个复核到第四个；普通 401 直接停止，不轮换', async () => {
         for (const message of ['Insufficient balance',
             'Insufficient balance. Manage your billing here: https://opencode.ai/workspace/wrk_test_placeholder/billing',
             'Invalid API key']) {
@@ -564,7 +564,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
             }
         }
     });
-    it('rejects every duplicate configured credential before transport', async () => {
+    it('发请求之前就拒绝所有重复的配置凭证', async () => {
         let calls = 0;
         for (const apiKeys of [['key-a', 'key-b', 'key-b'], ['key-a', ' key-a ']]) {
             await assert.rejects(
@@ -583,7 +583,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
         assert.strictEqual(calls, 0);
     });
 
-    it('replays on the fallback and keeps it sticky across logical requests', async () => {
+    it('在备用账号上复核，并在多次逻辑请求之间保持粘性', async () => {
         const { file } = tempState();
         const seen = [];
         const transportRequestFn = async (url, _body, headers) => {
@@ -632,7 +632,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
         assert.ok(seen.every(item => item.userAgent === 'audio-paper-digest/1.0'));
     });
 
-    it('does not rotate a generic 429', async () => {
+    it('普通 429 不轮换账号', async () => {
         const { file } = tempState();
         const seen = [];
         const response = await requestLlmJson(
@@ -652,7 +652,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
         assert.deepStrictEqual(seen, ['Bearer key-a']);
     });
 
-    it('stops without an infinite loop when both accounts are quota exhausted', async () => {
+    it('两个账号都额度耗尽时停止，不进入死循环', async () => {
         const { file } = tempState();
         let calls = 0;
         await assert.rejects(
@@ -679,7 +679,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
         assert.strictEqual(calls, 2);
     });
 
-    it('tries each account at most once even when an earlier quota block expires mid-request', async () => {
+    it('即使先前的额度阻塞在请求中途过期，每个账号也最多尝试一次', async () => {
         const { file } = tempState();
         const realNow = Date.now;
         let nowMs = 100000;
@@ -715,7 +715,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
         assert.deepStrictEqual(seen, ['Bearer key-a', 'Bearer key-b']);
     });
 
-    it('gives the fallback only the remaining logical-request deadline', async () => {
+    it('备用账号只拿到逻辑请求剩余的那段截止时间', async () => {
         const { file } = tempState();
         const realNow = Date.now;
         let nowMs = 100000;
@@ -751,7 +751,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
         assert.deepStrictEqual(timeouts, [5000, 3800]);
     });
 
-    it('rejects endpoint/apiUrl identity drift before invoking transport', async () => {
+    it('调用传输之前就拒绝 endpoint/apiUrl 身份漂移', async () => {
         let calls = 0;
         await assert.rejects(
             requestLlmJson(
@@ -780,7 +780,7 @@ describe('requestLlmJson OpenCode Go failover', () => {
         assert.strictEqual(calls, 0);
     });
 
-    it('concurrent primary quota responses converge once on the same fallback', async () => {
+    it('并发的第一个账号额度响应只收敛到同一个备用账号一次', async () => {
         const { file } = tempState();
         const seen = [];
         const transportRequestFn = async (_url, _body, headers) => {

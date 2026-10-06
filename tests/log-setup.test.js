@@ -39,7 +39,7 @@ function runLogger(base, envPath, lines = []) {
     });
 }
 
-describe('log setup', () => {
+describe('日志初始化', () => {
     it('按年龄和总容量删除最旧日志，但保留非日志文件与符号链接', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-log-prune-'));
         const nowMs = Date.parse('2026-09-02T00:00:00Z');

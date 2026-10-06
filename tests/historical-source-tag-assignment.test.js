@@ -5,35 +5,35 @@ const runtime = require('../scripts/lib/tag-rules.js').createTagRules({ registry
 const concepts = ['task.asr', 'method.self-supervised', 'setting.multilingual'].map(id => ({ id, quote: 'This is exact multilingual self-supervised speech recognition evidence.', rationale: '原文明确包含该论文任务方法与条件。' }));
 const raw = { primaryTaskId: concepts[0].id, primaryMethodId: concepts[1].id, concepts };
 const evidence = concepts[0].quote;
-test('source-only classification verifies exact source quotes and explicit roles', () => {
+test('只含来源的分类核对精确的来源引文和显式角色', () => {
     const decision = api.parseTagSelectionResponse(JSON.stringify(raw), runtime, evidence);
     assert.equal(decision.primaryTaskId, raw.primaryTaskId); assert.equal(decision.concepts[2].quoteStart, 0);
 });
-test('unseen quotes, duplicate concepts, invented IDs and mixed primary facets reject', () => {
+test('没见过的引文、重复概念、编造的 ID 和混用的主 facet 都拒绝', () => {
     assert.throws(() => api.parseTagSelectionResponse(JSON.stringify(raw), runtime, 'unrelated source'), /引文必须同时存在于所给证据和来源全文中/);
     assert.throws(() => api.parseTagSelectionResponse(JSON.stringify(raw), runtime, evidence, 'Only a selection window label, no quote in source.'), /引文必须同时存在于所给证据和来源全文中/);
     assert.throws(() => api.parseTagSelectionResponse(JSON.stringify({ ...raw, concepts: [concepts[0], concepts[0], concepts[2]] }), runtime, evidence), /同一个概念不能重复入选/);
     assert.throws(() => api.parseTagSelectionResponse(JSON.stringify({ ...raw, primaryMethodId: raw.primaryTaskId }), runtime, evidence), /主任务、主方法或所选概念的上下级关系/);
     assert.throws(() => api.parseTagSelectionResponse(JSON.stringify({ ...raw, concepts: [...concepts.slice(0,2), { ...concepts[2], id: 'task.fake' }] }), runtime, evidence), /引文必须同时存在于所给证据和来源全文中/);
 });
-test('duplicate JSON role fields and fenced model text reject', () => {
+test('JSON 角色字段重复和模型输出带代码围栏都拒绝', () => {
     assert.throws(() => api.parseTagSelectionResponse('{"primaryTaskId":"a","primaryTaskId":"b","primaryMethodId":"c","concepts":[]}', runtime, evidence), /分类响应缺少必要的顶层字段，或同一字段出现多次/);
     assert.throws(() => api.parseTagSelectionResponse('```json\n' + JSON.stringify(raw) + '\n```', runtime, evidence), /不能使用代码围栏/);
 });
-test('independent review must explicitly accept with no issues and no duplicate keys', () => {
+test('独立审核必须显式接受，且没有问题、没有重复键', () => {
     assert.deepEqual(api.parseTagReviewResponse('{"accepted":true,"issues":[]}'), { accepted: true, issues: [] });
     assert.throws(() => api.parseTagReviewResponse('{"accepted":false,"issues":["method is not core"]}'), /独立标签审核未通过/);
     assert.throws(() => api.parseTagReviewResponse('{"accepted":false,"accepted":true,"issues":[]}'), /审核响应缺少必要字段，或同一字段出现多次/);
     assert.throws(() => api.parseTagReviewResponse('{"accepted":true,"issues":[],"other":1}'), /独立标签审核未通过/);
 });
-test('removed or inactive concepts and primary roles absent from selection reject', () => {
+test('已删除或已停用的概念，以及不在选择里的主角色都拒绝', () => {
     const missing = { ...raw, concepts: raw.concepts.map(c => ({ ...c })) };
     missing.concepts[0].id = 'task.deleted-from-registry';
     assert.throws(() => api.parseTagSelectionResponse(JSON.stringify(missing), runtime, evidence), /引文必须同时存在于所给证据和来源全文中/);
     const activeTask = runtime.tagCatalog.concepts.find(c => c.status === 'active' && c.facet === 'task' && c.id !== raw.primaryTaskId);
     assert.throws(() => api.parseTagSelectionResponse(JSON.stringify({ ...raw, primaryTaskId: activeTask.id }), runtime, evidence), /主任务、主方法或所选概念的上下级关系/);
 });
-test('cache must bind source, registry, fingerprint, injected quotes and independent review', () => {
+test('缓存必须绑定来源、词表、指纹、注入的引文和独立审核', () => {
     const sn = require('../scripts/lib/source-evidence-snippets.js');
     const hash = require('../scripts/lib/historical-direct-rewrite-runner.js').stableHash;
     const crypto = require('node:crypto'),sha = v => crypto.createHash('sha256').update(v).digest('hex');
@@ -54,12 +54,12 @@ test('cache must bind source, registry, fingerprint, injected quotes and indepen
     assert.throws(() => api.validateCachedTagSelection({ ...wrongReviewFormat, proofSha256: hash(wrongReviewFormat) }, options),
         /分类记录与审核记录格式不受支持，或不属于同一代格式/);
 });
-test('typed account pool exhaustion is run stopping but classification issues are per paper', () => {
+test('带类型的账号池耗尽会让整轮停下，分类问题只影响单篇', () => {
     const runner = require('../scripts/lib/historical-direct-rewrite-runner.js');
     assert.ok(runner.globalAccountFailure({code:'LLM_ACCOUNT_POOL_EXHAUSTED',scope:'run'}));
     assert.equal(runner.globalAccountFailure(new Error('unknown quote')),null);
 });
-test('partial quota checkpoint does not occupy final names and can resume to larger final result',()=>{
+test('部分配额检查点不占用最终文件名，续跑后能得到更大的最终结果',()=>{
  const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'source-tag-resume-')));
  try {
@@ -77,7 +77,7 @@ test('partial quota checkpoint does not occupy final names and can resume to lar
   assert.throws(()=>api.persistRunResult(root,selected,first,[selected[0]],[]),/最终报告未覆盖本次全部所选论文/);
  } finally {fs.rmSync(root,{recursive:true,force:true});}
 });
-test('partial parallel completion reports the actual gaps instead of assuming a completed prefix',()=>{
+test('并行完成度不足时报告真实缺口，不假定已完成前缀',()=>{
  const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'source-tag-parallel-')));
  try {
@@ -88,7 +88,7 @@ test('partial parallel completion reports the actual gaps instead of assuming a 
   assert.throws(()=>api.persistRunResult(root,selected,supplement,[{paperId:'outside'}],[],{status:'operator-stopped'}),/已处理论文重复，或包含本次所选集合之外的论文/);
  } finally {fs.rmSync(root,{recursive:true,force:true});}
 });
-test('conference descriptor binds extracted full text and PDF to the verified public source binding',()=>{
+test('会议描述符把提取的全文和 PDF 绑定到已核验的公开来源绑定',()=>{
  const identityApi=require('../scripts/lib/historical-source-identity-supplement.js'),runner=require('../scripts/lib/historical-direct-rewrite-runner.js');
  const paperId='conference:icml:2026:openreview-forum-id:example123';
  const input={sourceSet:'official',provenance:'sealed',metadata:{sha256:'a'.repeat(64),recordIndex:0,metadataIdentityBindingSha256:'b'.repeat(64)},pdf:{sha256:'c'.repeat(64),bytes:1000,pdfIdentityBindingSha256:'d'.repeat(64),acquisition:{sourceKind:'retained-local-no-network-receipt',networkResponseObserved:false}},sourceBindingSha256:'e'.repeat(64)};
@@ -194,7 +194,7 @@ async function sourceClassificationFixture(t, respond, metadataFamily = null) {
             ...(outputDirectory ? { outputDirectory } : {}), ...extra }), options, api: loaded.exports };
 }
 
-test('actual source classification prompts reach selection, independent review and second-round feedback', async t => {
+test('真实的来源分类提示词会走到选择、独立审核和第二轮反馈', async t => {
     for (const failure of ['selection', 'truncated']) {
         let selectionCalls = 0, fixture;
         fixture = await sourceClassificationFixture(t, call => {
@@ -286,7 +286,7 @@ test('来源标签选择拒绝混用字段，审核后新增标签字段不能�
     assert.deepEqual(Object.keys(result.supplement.records), []);
 });
 
-test('actual source classification rejects saved prompt SHA mismatches and wrong-generation request caches', async t => {
+test('真实的来源分类拒绝保存的提示词 SHA 不匹配和错代请求缓存', async t => {
     let fixture;
     fixture = await sourceClassificationFixture(t, call => call.maxTokens === 3000
         ? '{"accepted":true,"issues":[]}' : fixture.normalResponse);
@@ -340,7 +340,7 @@ test('actual source classification rejects saved prompt SHA mismatches and wrong
     assert.deepEqual(fixture.fs.readFileSync(fixture.path.join(originalDirectory, decisionName)), decisionBytes);
 });
 
-test('actual uncovered response retains its status and explicit resume excludes the original processed set', async t => {
+test('真实的未覆盖响应保留原状态，显式续跑排除最初已处理的集合', async t => {
     const reason = '当前词表没有覆盖本文实际研究的主任务和主方法。';
     const fixture = await sourceClassificationFixture(t, () => JSON.stringify({
         status: 'not-covered-by-current-tag-catalog', reason, evidenceId: 's00001' }));

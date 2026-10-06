@@ -70,9 +70,8 @@ function fixture(options = {}) {
     const artifactBody=stableObject({version:1,parserVersion:'reader-signed-draft-fixture-v1',
         flattenedTextSha256:sha(text),tables,figures:options.noFigures?[]:[figure],formulas:[{ordinal:1,latex:'y=x.',
         recoveryStatus:'complete',sourceDomSha256:'b'.repeat(64)}]});
-    // Production binding uses a stable object fingerprint, while the signed
-    // inverse independently replays the exact persisted JSON bytes. Canonical
-    // key order makes this shared fixture satisfy both production contracts.
+    // 生产端绑定算的是稳定的对象指纹，签名端的反向校验则独立重算已落盘的
+    // JSON 原始字节。键序规范化之后，这份共享夹具同时满足两边的生产约定。
     const artifacts={...artifactBody,payloadSha256:hash(artifactBody)};
     const snapshot={text,structuredArtifacts:artifacts};
     const descriptor={version:1,contract:'fresh-source-cache-v1',runId,paperId,sourceSha256:sha(text),

@@ -7,7 +7,7 @@ const path = require('node:path');
 const { normalizeLlmUsage, withLlmUsageContext, buildLlmUsageEvent,
     writeLlmUsageEvent, summarizeLlmUsage } = require('../scripts/lib/llm-usage.js');
 
-test('provider usage preserves unknown values and never double counts subtotals', () => {
+test('供应商用量保留未知值，绝不把子项重复计入总数', () => {
     const response = normalizeLlmUsage('openai_responses', { usage: {
         input_tokens: 100, output_tokens: 20, total_tokens: 120,
         input_tokens_details: { cached_tokens: 60 }, output_tokens_details: { reasoning_tokens: 5 }
@@ -22,7 +22,7 @@ test('provider usage preserves unknown values and never double counts subtotals'
     }
 });
 
-test('events contain metadata and hashes only, with concurrent paper scopes isolated', async () => {
+test('事件只含元数据和哈希，并发的论文作用域彼此隔离', async () => {
     const make = paperId => withLlmUsageContext({ paperId, stage: 'apiReaderRepair' }, async () => {
         await Promise.resolve();
         return buildLlmUsageEvent({ protocol: 'openai', model: 'test-model',
@@ -40,7 +40,7 @@ test('events contain metadata and hashes only, with concurrent paper scopes isol
     }
 });
 
-test('ledger keeps reported usage separate from estimates, missing data and failed calls', () => {
+test('账目把上报用量与估算、缺失数据和失败调用分开', () => {
     const event = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test',
         request: { input: 'abcdef' }, response: { usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } }, statusCode: 200 });
     const failed = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test', request: {}, errorCode: 'ECONNRESET' });
@@ -53,7 +53,7 @@ test('ledger keeps reported usage separate from estimates, missing data and fail
     assert.equal(report.estimatedInputTextTokens, 2);
 });
 
-test('HTTP success does not override the Responses terminal status', () => {
+test('HTTP 成功不能盖过 Responses 的终态', () => {
     const cases = [
         ['completed', 'completed'], [undefined, 'completed'], ['incomplete', 'incomplete'],
         ['failed', 'provider_error'], ['cancelled', 'provider_error'],
@@ -69,7 +69,7 @@ test('HTTP success does not override the Responses terminal status', () => {
     }
 });
 
-test('transport and HTTP errors take precedence over the response terminal status', () => {
+test('传输错误和 HTTP 错误优先于响应的终态', () => {
     const cases = [[200, 'ECONNRESET', 'transport_error'], [500, undefined, 'http_error']];
     for (const [statusCode, errorCode, outcome] of cases) {
         const event = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test', request: {},
@@ -85,7 +85,7 @@ test('transport and HTTP errors take precedence over the response terminal statu
     }
 });
 
-test('ledger uses private immutable files and rejects linked directories', t => {
+test('账目用私有的不可变文件，拒绝链接目录', t => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usage-ledger-')));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const directory = path.join(root, 'ledger');
@@ -97,7 +97,7 @@ test('ledger uses private immutable files and rejects linked directories', t => 
     assert.throws(() => writeLlmUsageEvent({}, { directory: path.join(root, 'link') }), /Unsafe/);
 });
 
-test('adoption summaries bind raw output, paper, stage and content attempt without guessing', () => {
+test('采用汇总绑定原始输出、论文、阶段和内容尝试次数，不靠猜', () => {
     const event = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test',
         request: {}, outputText: 'candidate', statusCode: 200,
         context: { paperId: '2609.03622', stage: 'apiReaderRepair', contentAttempt: 2 } });
@@ -108,14 +108,14 @@ test('adoption summaries bind raw output, paper, stage and content attempt witho
         .groups[0].dispositions.conflicting, 1);
 });
 
-test('usage report rejects impossible calendar dates before reading records', () => {
+test('用量报告在读记录之前就拒绝不存在的日历日期', () => {
     const { main } = require('../scripts/llm-usage-report.js');
     for (const date of ['2026-02-30', '2026-13-01', 'not-a-date']) {
         assert.throws(() => main(['--date', date]), /Invalid date/);
     }
 });
 
-test('fresh run scope is preserved and usage from distinct rewrites never merges', () => {
+test('全新运行的作用域会保留，不同重写的用量绝不合并', () => {
     const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
     const events = ids.map(runId => withLlmUsageContext({ runId }, () => buildLlmUsageEvent({
         request: {}, protocol: 'openai_responses', statusCode: 200,
@@ -127,7 +127,7 @@ test('fresh run scope is preserved and usage from distinct rewrites never merges
     assert.throws(() => main(['--run', '../other']), /Invalid run ID/);
 });
 
-test('transport records malformed responses and network errors without changing their result', async () => {
+test('传输层记录格式错误的响应和网络错误，但不改变它们的结果', async () => {
     const { requestLlmJson } = require('../scripts/utils.js');
     const events = [];
     for (const body of [{ choices: [{}], usage: { prompt_tokens: 9 } }, { choices: 3, usage: null }]) {

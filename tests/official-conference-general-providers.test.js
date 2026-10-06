@@ -15,7 +15,7 @@ ${volume === null ? '' : `<meta name="citation_volume" content="${volume}">`}
 </head><body></body></html>`;
 }
 
-test('fixed registry names every requested 2026 authority and cannot be mutated', () => {
+test('固定注册表列出请求的全部 2026 授权来源，且不可改动', () => {
     assert.deepEqual(Object.keys(providers.REGISTRY), [
         'aaai-2026', 'aistats-2026', 'uai-2026', 'cvpr-2026',
         'acl-2026', 'eacl-2026'
@@ -25,7 +25,7 @@ test('fixed registry names every requested 2026 authority and cannot be mutated'
     assert.throws(() => { providers.REGISTRY['aistats-2026'].collections[0] = 'v999'; }, TypeError);
 });
 
-test('AAAI OJS derives identity from the official article path and binds volume, host, and PDF path', () => {
+test('AAAI OJS 从官方文章路径推导身份，并绑定卷号、主机和 PDF 路径', () => {
     const records = providers.parseAaaiOjs({ collection: 'AAAI-volume-40', records: [{
         recordUrl: 'https://ojs.aaai.org/index.php/AAAI/article/view/41001',
         html: page({ title: 'A Title That Is Not An Identity', authors: ['Ada A.', 'Bo B.'], abstract: '  Audio   work. ',
@@ -44,7 +44,7 @@ test('AAAI OJS derives identity from the official article path and binds volume,
     assert.throws(() => providers.parseAaaiOjs(wrongVolume), /volume 40/);
 });
 
-test('PMLR parsers enforce v300 for AISTATS and v337 for UAI and bind record/PDF IDs', () => {
+test('PMLR 解析器对 AISTATS 强制 v300、对 UAI 强制 v337，并绑定记录与 PDF ID', () => {
     const aistats = providers.parsePmlr('aistats-2026', { collection: 'v300', records: [{
         recordUrl: 'https://proceedings.mlr.press/v300/smith26a.html',
         html: page({ title: 'AISTATS Paper', authors: ['Smith'], abstract: '',
@@ -68,7 +68,7 @@ test('PMLR parsers enforce v300 for AISTATS and v337 for UAI and bind record/PDF
     }] }), /identifiers differ/);
 });
 
-test('CVF parser admits only CVPR 2026 main record and PDF paths', () => {
+test('CVF 解析器只接受 CVPR 2026 主记录和 PDF 路径', () => {
     const payload = { collection: 'CVPR2026-main', records: [{
         recordUrl: 'https://openaccess.thecvf.com/content/CVPR2026/html/Smith_Audio_Model_CVPR_2026_paper.html',
         html: page({ title: 'Audio Model', authors: ['Smith'], abstract: 'Evidence.',
@@ -85,7 +85,7 @@ test('CVF parser admits only CVPR 2026 main record and PDF paths', () => {
     assert.throws(() => providers.parseCvfOpenAccess(workshop), /host\/path/);
 });
 
-test('ACL Anthology binds exact ACL/EACL venue IDs, deterministic PDFs, and DOI', () => {
+test('ACL Anthology 绑定精确的 ACL/EACL 会议 ID、确定性 PDF 和 DOI', () => {
     const acl = providers.parseAclAnthology('acl-2026', { collection: '2026.acl-long', records: [{
         recordUrl: 'https://aclanthology.org/2026.acl-long.7/',
         html: page({ title: 'ACL Paper', authors: ['A. Linguist'], abstract: 'NLP.',
@@ -108,7 +108,7 @@ test('ACL Anthology binds exact ACL/EACL venue IDs, deterministic PDFs, and DOI'
     }] }), /exact venue collection/);
 });
 
-test('PMLR accepts the fixed mlresearch raw GitHub publication path used by live volumes', () => {
+test('PMLR 接受线上卷册所用的固定 mlresearch 原始 GitHub 发布路径', () => {
     const records = providers.parsePmlr('aistats-2026', { collection: 'v300', records: [{
         recordUrl: 'https://proceedings.mlr.press/v300/smith26a.html',
         html: page({ title: 'AISTATS Paper', authors: ['Smith'],
@@ -118,7 +118,7 @@ test('PMLR accepts the fixed mlresearch raw GitHub publication path used by live
         'https://raw.githubusercontent.com/mlresearch/v300/main/assets/smith26a/smith26a.pdf');
 });
 
-test('duplicate IDs deduplicate only byte-equivalent records and reject conflicts; title never merges identities', () => {
+test('重复 ID 只对字节等价的记录去重，冲突则拒绝；标题绝不用于合并身份', () => {
     const record = { recordUrl: 'https://proceedings.mlr.press/v300/smith26a.html',
         html: page({ title: 'AISTATS Paper', authors: ['Smith'],
             pdfUrl: 'https://proceedings.mlr.press/v300/smith26a/smith26a.pdf' }) };
@@ -131,7 +131,7 @@ test('duplicate IDs deduplicate only byte-equivalent records and reject conflict
         records: [record, conflicting] }), /duplicate official paper ID.*conflicting/);
 });
 
-test('snapshot output is exactly consumable by official-proceedings discovery schema', () => {
+test('快照输出可被官方论文集发现结构直接消费', () => {
     const snapshot = providers.parseConferenceSnapshot('aistats-2026', { collection: 'v300', records: [{
         recordUrl: 'https://proceedings.mlr.press/v300/smith26a.html',
         html: page({ title: 'AISTATS Paper', authors: ['Smith'],

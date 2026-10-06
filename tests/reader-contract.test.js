@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { readerRequirements, buildReaderContractNotice, findReaderSectionNearDuplicates } = require('../scripts/lib/reader-contract.js');
 
-test('Reader prompt notices share parser thresholds and per-request evidence table requirements', () => {
+test('Reader 提示词告知与解析器共用同一组阈值，并按每次请求的证据给表格要求', () => {
     const requirements = readerRequirements({ availableTableCount: 9 });
     assert.deepEqual([requirements.minimumSections, requirements.maximumSections, requirements.minimumChineseChars,
         requirements.maximumChineseChars, requirements.minimumConceptBridges, requirements.maximumConceptBridges], [12, 18, 5000, 18000, 4, 10]);
@@ -24,7 +24,7 @@ test('Reader prompt notices share parser thresholds and per-request evidence tab
     assert.throws(() => readerRequirements({ minimumIntegratedTables: 2.5 }), /integer/);
 });
 
-test('Reader prompt distinguishes table input modes and states character and figure-direction semantics', () => {
+test('Reader 提示词区分表格输入模式，并说明字符与图片方向的语义', () => {
     const prompt = fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-article.md'), 'utf8');
     assert.match(prompt, /`selection`：正文独占一段写 `\[\[TABLE_<tableIndex>\]\]`，不手写该表的 Markdown/);
     assert.match(prompt, /`artifact_table` 是既有兼容模式。.*完整 Markdown 表，不使用 `TABLE` 占位符/);
@@ -36,7 +36,7 @@ test('Reader prompt distinguishes table input modes and states character and fig
     assert.match(prompt, /不能把曲线向下直接写成性能变差/);
 });
 
-test('runtime Reader prompt keeps source identity rules without contradictory examples or extra placeholders', () => {
+test('运行时 Reader 提示词保留来源身份规则，没有自相矛盾的示例和多余占位符', () => {
     const { loadPrompt } = require('../scripts/utils.js');
     const prompt = loadPrompt('prompts/api-reader-article.md', {
         title: 'TEST_TITLE', arxivId: '2609.99999', sourceEvidence: 'SOURCE_ONLY_EVIDENCE',
@@ -67,7 +67,7 @@ test('runtime Reader prompt keeps source identity rules without contradictory ex
 
 const explanation = '声学分支先把连续输入转换为局部表示，融合模块再根据上下文决定保留哪些细节，最后输出层把组合表示映射到当前任务需要的预测。这个执行顺序让读者能够沿着同一个样本检查信息如何跨越模块边界，也说明训练时的监督信号怎样约束各个组件，而评估时需要固定哪些条件才能公平比较不同系统的结果。';
 
-test('actual Reader IDs distinguish repeated component kinds and detect strong cross-section paraphrase', () => {
+test('真实 Reader ID 能区分重复的组件类型，并识别明显的跨小节改写', () => {
     const article = `### 模块怎样接收局部声音信息？\n\n${explanation}\n\n### 另一个组件为什么需要融合？\n\n${explanation.replace('声学分支先', '这一声学分支首先')}`;
     const findings = findReaderSectionNearDuplicates(article, [{ kind: 'component' }, { kind: 'component' }]);
     assert.equal(findings.length, 1);
@@ -78,7 +78,7 @@ test('actual Reader IDs distinguish repeated component kinds and detect strong c
     assert.ok(!JSON.stringify(findings).includes(explanation), 'diagnostics identify nodes without duplicating article bodies');
 });
 
-test('same numbers in different contexts, tables, and within-section reuse are not cross-section duplicates', () => {
+test('不同上下文、表格和同一小节内重复出现的相同数字不算跨小节重复', () => {
     const article = `### 数据与训练条件如何定义？\n\n${'训练使用 100 个样本，每个样本包含 20 帧声音。数据划分依据说话者身份分离，参数只在训练划分更新，研究者需要检查采样和标注如何支撑这一设置。'.repeat(2)}\n\n### 推理怎样测量成本与延迟？\n\n${'部署系统为 100 个并发请求各分配 20 毫秒预算。计时从收到请求到完成处理，内存分配和设备传输需要分别测量，以便确定哪些计算步骤限制了实时运行。'.repeat(2)}`;
     assert.deepEqual(findReaderSectionNearDuplicates(article), []);
     assert.deepEqual(findReaderSectionNearDuplicates(`### 单个组件怎样工作？\n\n${explanation}\n\n${explanation}`), []);
@@ -86,14 +86,14 @@ test('same numbers in different contexts, tables, and within-section reuse are n
     assert.deepEqual(findReaderSectionNearDuplicates(`### 数据怎么组织？\n\n${table}\n\n### 结果怎么比较？\n\n${table}`), []);
 });
 
-test('section warnings remain bounded even for a heavily repeated candidate', () => {
+test('小节警告有上限，重复再多也不会无限增长', () => {
     const repeated = Array.from({ length: 18 }, (_, index) => `### section ${index}\n\n${explanation}\n\n${explanation}`).join('\n\n');
     const findings = findReaderSectionNearDuplicates(repeated);
     assert.equal(findings.length, 12);
     assert.equal(new Set(findings.map(finding => `${finding.left.section}:${finding.right.section}`)).size, findings.length);
 });
 
-test('Reader editorial integration retains warnings with section targets and does not modify prose', () => {
+test('Reader 编辑质量集成保留带小节定位的警告，不改动正文', () => {
     const { validateReaderEditorialQuality, buildApiReaderQualityMetrics } = require('../scripts/deep-analyzer.js');
     const article = `### 模块怎样接收局部声音信息？\n\n${explanation}\n\n### 另一个组件为什么需要融合？\n\n${explanation.replace('声学分支先', '这一声学分支首先')}`;
     const before = article;

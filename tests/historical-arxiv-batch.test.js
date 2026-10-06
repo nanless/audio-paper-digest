@@ -72,7 +72,7 @@ function mockedDependencies(current, handoffs, { failId = null } = {}) {
 const options = (handoffNames, apply = true) => ({ crosswalkRoot: '/tmp/crosswalk', authorityRoot: '/tmp/authority',
     handoffRoot: '/tmp/handoffs', batchRoot: '/tmp/batch', crosswalkId: UUIDS[0], owner: 'batch.worker', handoffNames, apply });
 
-test('selects only named fresh-failure pages and never sweeps other pending pages with the same arXiv hint', async () => {
+test('只挑出被点名的当日失败页面，绝不顺带处理带同一 arXiv 提示的其他待办页面', async () => {
     const current = state(); const named = handoffFor(current, '2601.00001', [key('a'), key('b')], 'arxiv-fresh-failure-a.json');
     const mock = mockedDependencies(current, [named]);
     const result = await batch.runSingleHintBatch(options([named.handoffName]), mock.deps);
@@ -83,7 +83,7 @@ test('selects only named fresh-failure pages and never sweeps other pending page
     assert.equal(mock.calls.records[0].handoffName, named.handoffName);
 });
 
-test('rejects an arbitrary pending sweep, an inventory mismatch, and handoff-to-page drift before authority acquisition', async () => {
+test('在取得授权之前就拒绝任意的待办清扫、清单不一致和交接与页面之间的漂移', async () => {
     const current = state(); const named = handoffFor(current, '2601.00001', [key('a')], 'arxiv-fresh-failure-a.json');
     const mock = mockedDependencies(current, [named]);
     await assert.rejects(batch.runSingleHintBatch({ ...options([]), handoffNames: [] }, mock.deps), /named fresh-failure handoff/);
@@ -94,7 +94,7 @@ test('rejects an arbitrary pending sweep, an inventory mismatch, and handoff-to-
     assert.deepEqual(mock.calls.authority, []);
 });
 
-test('one selected failure is preserved and does not stop another explicitly named handoff', async () => {
+test('一个选中的失败会被保留，且不影响另一个被显式点名的交接', async () => {
     const current = state(); const first = handoffFor(current, '2601.00001', [key('a')], 'arxiv-fresh-failure-a.json');
     const second = handoffFor(current, '2601.00002', [key('d')], 'arxiv-fresh-failure-d.json');
     const mock = mockedDependencies(current, [first, second], { failId: '2601.00001' });
@@ -104,7 +104,7 @@ test('one selected failure is preserved and does not stop another explicitly nam
     assert.equal(current.assignments[key('d')].status, 'verified'); assert.equal(mock.calls.records[0].handoffName, first.handoffName);
 });
 
-test('dry-run is zero mutation and attempt records are append-only mode 0600', async t => {
+test('试运行不改动任何数据，尝试记录只追加且权限为 0600', async t => {
     const current = state(); const named = handoffFor(current, '2601.00001', [key('a')], 'arxiv-fresh-failure-a.json');
     const mock = mockedDependencies(current, [named]); const result = await batch.runSingleHintBatch({ ...options([named.handoffName]), apply: false }, mock.deps);
     assert.equal(result.status, 'dry-run'); assert.equal(result.selectedPages, 1); assert.equal(mock.calls.authority.length, 0);
@@ -117,7 +117,7 @@ test('dry-run is zero mutation and attempt records are append-only mode 0600', a
     assert.throws(() => batch.writeAttemptRecord(root, record), /EEXIST/);
 });
 
-test('CLI requires explicitly named failure handoffs and passes the configured handoff root', async () => {
+test('CLI 要求显式点名失败交接，并传入配置好的交接根目录', async () => {
     const parsed = cli.parseArgs(['--dry-run', '--crosswalk', UUIDS[0], '--owner', 'batch.worker',
         '--handoffs', 'arxiv-fresh-failure-a.json,arxiv-fresh-failure-b.json', '--concurrency', '3']);
     assert.deepEqual(parsed.handoffNames, ['arxiv-fresh-failure-a.json', 'arxiv-fresh-failure-b.json']); assert.equal(parsed.concurrency, 3);

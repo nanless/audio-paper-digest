@@ -78,7 +78,7 @@ function fixture(t, secondStatus = 'complete') {
         maximumActive: () => maximumActive, assignmentWrites: () => assignmentWrites };
 }
 
-test('sealed per-paper runs are assigned/staged concurrently and two runs aggregate one complete date', async t => {
+test('已保存并核验的单篇运行并发分配与暂存，两次运行汇总出一个完整日期', async t => {
     const f = fixture(t); const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 2 }, f.deps);
     assert.equal(result.status, 'complete'); assert.equal(result.processed.length, 2);
@@ -104,7 +104,7 @@ test('sealed per-paper runs are assigned/staged concurrently and two runs aggreg
         result.processed[0].tagAssignmentSha256), result.processed[0].stagingRunId);
 });
 
-test('renderer implementation change creates a new staging run and checkpoint without reusing old proof', async t => {
+test('渲染器实现变化会新建暂存运行和检查点，不复用旧证明', async t => {
     const f = fixture(t); const options = { apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 };
     const first = await api.runHistoricalPostprocess(options, f.deps);
@@ -126,7 +126,7 @@ test('renderer implementation change creates a new staging run and checkpoint wi
     assert.equal(f.stageCalls.at(-1).rendererImplementationSha256, replacementRenderer);
 });
 
-test('analysis assignment upgrade creates a new staging identity while retaining the old checkpoint proof', async t => {
+test('分析分配升级会新建暂存身份，同时保留旧检查点证明', async t => {
     const f = fixture(t); const options = { apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 };
     const first = await api.runHistoricalPostprocess(options, f.deps);
@@ -145,7 +145,7 @@ test('analysis assignment upgrade creates a new staging identity while retaining
     assert.ok(!f.aggregateCalls.at(-1).aggregates[0].inputs.options.stagingRunIds.includes(oldRunId));
 });
 
-test('pilot processing cannot aggregate a stale unselected sibling from the same date', async t => {
+test('试运行处理不会汇总同一日期下过时且未入选的兄弟记录', async t => {
     const f = fixture(t); const options = { apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 };
     await api.runHistoricalPostprocess(options, f.deps);
@@ -165,7 +165,7 @@ test('pilot processing cannot aggregate a stale unselected sibling from the same
         'the old sibling staging proof must not reach the aggregate loader');
 });
 
-test('analysis A to B drift during staging fails before checkpointing A as staged', async t => {
+test('暂存期间分析从 A 漂移到 B 时，在把 A 记为已暂存之前就失败', async t => {
     const f = fixture(t); const originalBuild = f.deps.buildAssignments;
     const originalStage = f.deps.stagePages; let drifted = false;
     f.deps.buildAssignments = args => originalBuild(args).map(assignment => drifted
@@ -185,7 +185,7 @@ test('analysis A to B drift during staging fails before checkpointing A as stage
     assert.equal(result.daily[0].status, 'blocked');
 });
 
-test('upgrading one multi-date paper rebuilds every cohort date with its new staging run', async t => {
+test('升级一篇跨多日期的论文会用新的暂存运行重建每个日期分组', async t => {
     const f = fixture(t); const extraDate = '2026-04-20';
     const extraKey = `page:${'f'.repeat(64)}`;
     f.crosswalk.source.papers.push({ ...f.crosswalk.source.papers[0], pageKey: extraKey,
@@ -222,7 +222,7 @@ test('upgrading one multi-date paper rebuilds every cohort date with its new sta
     }
 });
 
-test('checkpoint self-SHA survives the production JSON updater generation field', async t => {
+test('检查点自校验 SHA 在正式 JSON 更新器的 generation 字段下仍然成立', async t => {
     const f = fixture(t, 'pending'); f.deps.updateLocked = require('../scripts/analysis-engine.js').updateJsonFileLocked;
     const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 }, f.deps);
@@ -231,7 +231,7 @@ test('checkpoint self-SHA survives the production JSON updater generation field'
     assert.ok(checkpoint.generation >= 2);
 });
 
-test('legacy checkpoint remains readable but the locked updater cannot re-sign it', async t => {
+test('旧版检查点仍可读取，但加锁的更新器无法重新签名', async t => {
     const f = fixture(t, 'pending');
     const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 }, f.deps);
@@ -257,7 +257,7 @@ test('legacy checkpoint remains readable but the locked updater cannot re-sign i
     assert.throws(() => api.validateCheckpoint(badHash, CROSSWALK, REGISTRY, RENDERER), /内容哈希/);
 });
 
-test('dry-run is zero-write and reports only sealed-complete scheduler candidates', async t => {
+test('试运行不写盘，只报告已完成保存并核验的调度候选', async t => {
     const f = fixture(t, 'pending'); const result = await api.runHistoricalPostprocess({ apply: false,
         crosswalkId: CROSSWALK, date: null, limit: 'pilot', concurrency: 1 }, f.deps);
     assert.equal(result.status, 'dry-run'); assert.equal(result.completeAvailable, 1); assert.equal(result.selected.length, 1);
@@ -265,7 +265,7 @@ test('dry-run is zero-write and reports only sealed-complete scheduler candidate
     assert.equal(f.stageCalls.length, 0); assert.equal(f.aggregateCalls.length, 0);
 });
 
-test('dry-run never advertises checkpoint-complete but unsealed analysis', async t => {
+test('试运行绝不把检查点完成但未保存核验的分析列为候选', async t => {
     const f = fixture(t, 'pending'); f.deps.recoverRun = () => ({ storageSealed: true, currentContractComplete: false });
     const result = await api.runHistoricalPostprocess({ apply: false, crosswalkId: CROSSWALK,
         date: null, limit: null, concurrency: 1 }, f.deps);
@@ -273,7 +273,7 @@ test('dry-run never advertises checkpoint-complete but unsealed analysis', async
     assert.equal(result.unsealed, 1); assert.deepEqual(result.selected, []);
 });
 
-test('a date remains blocked until every historical paper has completed single-page staging', async t => {
+test('在所有历史论文完成单页暂存之前，该日期一直保持阻塞', async t => {
     const f = fixture(t, 'pending'); const result = await api.runHistoricalPostprocess({ apply: true,
         crosswalkId: CROSSWALK, date: DATE, limit: null, concurrency: 3 }, f.deps);
     assert.equal(result.status, 'partial'); assert.deepEqual(result.daily, [
@@ -282,14 +282,14 @@ test('a date remains blocked until every historical paper has completed single-p
     ]); assert.equal(f.aggregateCalls.length, 0);
 });
 
-test('unsealed analysis run is recorded failed and never reaches staging', async t => {
+test('未保存核验的分析运行记为失败，绝不进入暂存', async t => {
     const f = fixture(t, 'pending'); f.deps.recoverRun = () => ({ storageSealed: true, currentContractComplete: false });
     const result = await api.runHistoricalPostprocess({ apply: true, crosswalkId: CROSSWALK,
         date: DATE, limit: null, concurrency: 1 }, f.deps);
     assert.equal(result.processed[0].status, 'failed'); assert.equal(f.stageCalls.length, 0);
 });
 
-test('blocked deterministic tag assignment is preserved as an audit artifact but never staged', async t => {
+test('被阻塞的确定性标签分配作为审计产物保留，但绝不暂存', async t => {
     const f = fixture(t, 'pending'); const build = f.deps.buildAssignments;
     f.deps.buildAssignments = options => build(options).map(item => ({ ...item, status: 'blocked',
         blockedReasons: ['primary-task:unknown:#不存在的主任务'] }));
@@ -312,7 +312,7 @@ test('blocked deterministic tag assignment is preserved as an audit artifact but
     assert.equal(checkpoint.items[f.paperIds[0]].reviewRequired.code, 'HISTORICAL_TAG_REVIEW_REQUIRED');
 });
 
-test('CLI validates mode/date/limit/concurrency and forwards dry-run', async () => {
+test('CLI 校验模式、日期、上限和并发，并透传试运行参数', async () => {
     assert.equal(cli.parseArgs(['--dry-run', '--crosswalk', CROSSWALK, '--concurrency', '3']).concurrency, 3);
     assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--concurrency', '4']), /Use/);
     const result = await cli.main(['--dry-run', '--crosswalk', CROSSWALK], { run: async options => ({ options }) });

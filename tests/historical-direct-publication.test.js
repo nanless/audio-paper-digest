@@ -42,7 +42,7 @@ function fakeAuthority(bytes, baseline) {
         retainedPages: [], visualDisposition, roots: {} };
 }
 
-test('visual disposition is self-hashed and explicit', () => {
+test('视觉处置记录自带哈希且必须显式', () => {
     const plan = { planSha256: hash('1') };
     const excluded = api.buildVisualDisposition({ plan, mode: 'excluded',
         reason: '视觉不属于本次全历史正文发布事务，显式排除。', createdAt: now });
@@ -54,7 +54,7 @@ test('visual disposition is self-hashed and explicit', () => {
         reason: '代理不能自行签发视觉豁免，必须由用户明确提出。', createdAt: now }), /explicitly requested/);
 });
 
-test('publication transaction recovers through plan, generation, review, activation and remote receipt', () => {
+test('发布事务能沿计划、生成、审查、激活和远端凭证一路恢复', () => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-publication-test-'));
     try {
         const outputRoot = path.join(root, 'runtime'); const blogRepo = path.join(root, 'blog');
@@ -293,7 +293,7 @@ test('publication transaction recovers through plan, generation, review, activat
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('plan rejects baseline drift and status never calls missing stages complete', () => {
+test('计划拒绝基线漂移，状态也不会把缺失的阶段报成完成', () => {
     const baseline = Buffer.from('old'); const next = Buffer.from('new'); const authority = fakeAuthority(next, baseline);
     assert.throws(() => api.buildPlan({ publicationId, authorityOptions: {}, blogRepo: '/tmp', createdAt: now }, {
         loadAuthority: () => authority, blogState, gitBlob: () => baseline, worktreeSha: () => hash('9')
@@ -303,7 +303,7 @@ test('plan rejects baseline drift and status never calls missing stages complete
     assert.equal(absent.phase, 'absent');
 });
 
-test('plan validation rejects forged exact delta and incomplete 4490-style page coverage', () => {
+test('计划校验拒绝伪造的精确差异和不完整的 4490 式页面覆盖', () => {
     const baseline = Buffer.from('old'); const next = Buffer.from('new'); const authority = fakeAuthority(next, baseline);
     const plan = api.buildPlan({ publicationId, authorityOptions: {}, blogRepo: '/tmp', createdAt: now }, {
         loadAuthority: () => authority, blogState, gitBlob: () => baseline, worktreeSha: () => sha(baseline)
@@ -317,7 +317,7 @@ test('plan validation rejects forged exact delta and incomplete 4490-style page 
     assert.throws(() => api.validatePlan(forgedCoverage), /full-page coverage proof/);
 });
 
-test('CLI rejects ambiguous modes and parses explicit publication scope', () => {
+test('命令行拒绝有歧义的模式，并解析显式的发布范围', () => {
     assert.equal(cli.parseArgs(['publish', '--apply', '--publication-id', publicationId]).action, 'publish');
     const sample = cli.parseArgs(['plan', '--apply', '--publication-id', publicationId,
         '--plan-file', '/tmp/plan.json', '--registry-file', '/tmp/registry.json',
@@ -340,7 +340,7 @@ function versionedFixture() {
     return { arxivId, selectedSourceId, sourceVersion, item, source };
 }
 
-test('publication authority explicitly binds registry and staging historical-version identity', () => {
+test('发布权威记录显式绑定注册表和暂存的历史版本身份', () => {
     const f = versionedFixture();
     const proof = api.historicalSourceVersionProof(f.item, { source: f.source }, { sourceDisclosure: f.sourceVersion });
     assert.equal(proof.sourceVersionIdentitySha256, f.sourceVersion.identitySha256);
@@ -353,7 +353,7 @@ test('publication authority explicitly binds registry and staging historical-ver
         { sourceDisclosure: f.sourceVersion }), /has no registry source proof/);
 });
 
-test('deterministic publication review requires one exact top warning for a versioned direct page', () => {
+test('确定性发布审查要求带版本号的直连页面只有一条精确的顶部警告', () => {
     const f = versionedFixture();
     const producer = { kind: 'direct-page-staging', paperId: f.item.paperId, runId: publicationId,
         manifestSha256: hash('9'), sourceVersion: f.sourceVersion,
@@ -375,7 +375,7 @@ test('deterministic publication review requires one exact top warning for a vers
         producers: [ordinaryProducer] }, Buffer.from(exact)), /ordinary direct page forged/);
 });
 
-test('review protocol fingerprints fresh source, runner and page-staging implementations', () => {
+test('审查约定给全新来源、运行器和页面暂存的实现都记指纹', () => {
     const names = api.reviewProtocolImplementationFiles().map(filename => path.basename(filename));
     assert.ok(names.includes('page-tag-metadata.js'));
     assert.ok(names.includes('tag-rules.js'));

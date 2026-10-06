@@ -14,7 +14,7 @@ function sourceTables(caption = 'Table 1: Quantitative enhancement results acros
 }
 const markdown = '| Model | OVRL | SIG |\n| --- | --- | --- |\n| Baseline | 3.09 | 3.50 |\n| Adapted | 3.14 | 3.48 |';
 
-test('only explicit quantitative source-result captions trigger the additional result-table requirement', () => {
+test('只有明确的量化来源结果表题才触发额外的结果表要求', () => {
     assert.equal(readerResultTableRequirement(sourceTables()).minimumResultTables, 1);
     for (const caption of ['', 'Authors and affiliations', 'Training configuration results', 'Dataset statistics comparison']) {
         assert.equal(readerResultTableRequirement(sourceTables(caption)).minimumResultTables, 0);
@@ -28,7 +28,7 @@ test('only explicit quantitative source-result captions trigger the additional r
     assert.equal(readerResultTableRequirement(textOnly).minimumResultTables, 0);
 });
 
-test('dataset/configuration tables cannot replace a numeric table in result or ablation sections', () => {
+test('数据集表和配置表不能顶替 result 或 ablation 小节里的数字表', () => {
     const artifacts = sourceTables();
     const before = JSON.stringify(artifacts);
     assert.throws(() => validateReaderResultTableCoverage([
@@ -40,7 +40,7 @@ test('dataset/configuration tables cannot replace a numeric table in result or a
     assert.equal(JSON.stringify(artifacts), before);
 });
 
-test('valid original-table selection is compiled before result coverage is checked', () => {
+test('先编译合法的原表选择，再检查结果覆盖', () => {
     const artifacts = sourceTables();
     const compiled = compileReaderTableSelections([{ kind: 'result', body: '[[TABLE_1]]' }], [
         { tableIndex: 1, selection: { sourceTableOrdinal: 1, sourceRows: [0, 1, 2], sourceColumns: [0, 1, 2] } }
@@ -48,7 +48,7 @@ test('valid original-table selection is compiled before result coverage is check
     assert.equal(validateReaderResultTableCoverage(compiled.sections, artifacts).numericResultTables, 1);
 });
 
-test('missing results are diagnosed together and repair allows the empty result section as well as table bindings', () => {
+test('缺失的结果会一起诊断，修复既接受空的结果小节也接受表格绑定', () => {
     const { collectDraftIssues, buildRepairTargets } = require('../scripts/lib/reader-repair.js');
     const draft = { sections: [
         { kind: 'training', heading: 'Training', body: markdown },
@@ -65,7 +65,7 @@ test('missing results are diagnosed together and repair allows the empty result 
     assert.ok(paths.includes('/tableBindings/1'));
 });
 
-test('prompt contract discloses the source-derived result requirement before any model call', () => {
+test('提示词约定在任何模型调用之前说明来源结果表要求', () => {
     const { buildReaderContractNotice } = require('../scripts/lib/reader-contract.js');
     assert.match(buildReaderContractNotice(readerResultTableRequirement(sourceTables())), /result 或 ablation 小节须呈现至少 1 张带数字的结果表/);
     assert.doesNotMatch(buildReaderContractNotice(readerResultTableRequirement({ tables: [] })), /result 或 ablation.*带数字的结果表/);

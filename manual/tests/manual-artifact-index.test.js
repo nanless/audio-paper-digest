@@ -86,7 +86,7 @@ function fixture() {
     return { dir, context, input, text, sourceEntry, structuredArtifacts };
 }
 
-describe('Manual ArtifactIndex v1', () => {
+describe('Manual 产物索引 v1', () => {
     it('使用稳定键序重放 structured artifact payload SHA', () => {
         const left = { version: 1, parserVersion: 'arxiv-html-dom-v4', nested: { b: 2, a: 1 } };
         const right = { nested: { a: 1, b: 2 }, parserVersion: 'arxiv-html-dom-v4', version: 1 };

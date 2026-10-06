@@ -35,7 +35,7 @@ function makePageRecordFixture(paperId) {
 }
 
 test(
-    'checkpoint subset retains original proof exactly and excludes duplicate or special identities',
+    '检查点子集精确保留原始证明，并排除重复或特殊身份',
     () => {
         const a = makePageRecordFixture('arxiv:2601.00001'),
             b = makePageRecordFixture('arxiv:2605.12987'),
@@ -66,7 +66,7 @@ test(
 );
 
 test(
-    'resume excludes exact processed prefix only with immutable content hash and matching selection',
+    '只有内容哈希不可变且选择一致时，续跑才排除精确的已处理前缀',
     () => {
         const selection = {
             contract: classify.LEGACY_CONTRACT + '-selection',
@@ -125,7 +125,7 @@ test(
 );
 
 test(
-    'CLI accepts canonical conference IDs and rejects malformed or duplicate exclusions',
+    '命令行接受规范会议 ID，拒绝格式错误或重复的排除项',
     () => {
         const cli = require('../scripts/historical-tag-checkpoint-export.js');
         const ids = [
@@ -157,7 +157,7 @@ test(
 );
 
 test(
-    'remaining paper selection requires an export report that matches the checked report',
+    '剩余论文选择要求导出报告与被检查的报告一致',
     () => {
         const report = {
             contract: classify.LEGACY_CONTRACT + '-checkpoint-export-report',
@@ -173,7 +173,7 @@ test(
 );
 
 test(
-    'parallel completion checkpoint can safely exclude out-of-order completed IDs without skipping gaps',
+    '并行完成的检查点可以安全排除乱序完成的 ID，不会跳过缺口',
     () => {
         const selection = {
             contract: classify.LEGACY_CONTRACT + '-selection',
@@ -219,7 +219,7 @@ test(
 );
 
 test(
-    'parallel export uses the exact completion set and treats later accepted caches as pending',
+    '并行导出只按精确的完成集合，把之后才接受的缓存视为待处理',
     () => {
         const ids = ['a', 'b', 'c', 'd'],
             selection = { paperIds: ids };
@@ -300,7 +300,7 @@ function partialFixture() {
 }
 
 test(
-    'partial exporter retains non-prefix page records and leaves extra caches pending',
+    '部分导出保留非前缀的页面记录，把多出来的缓存留作待处理',
     () => {
         const { value, selection, proof, options } = partialFixture(),
             original = structuredClone(value);
@@ -338,7 +338,7 @@ test(
 );
 
 test(
-    'partial exporter rejects invalid counts, contracts, remaining papers and page records',
+    '部分导出拒绝不合法的计数、约定、剩余论文和页面记录',
     () => {
         const { value, selection, options } = partialFixture();
         const mutations = [
@@ -382,7 +382,7 @@ test(
 );
 
 test(
-    'partial adapter still requires accepted caches and matching page classification records',
+    '部分适配器仍然要求已接受的缓存和匹配的页面分类记录',
     () => {
         const { value, selection, proof, options } = partialFixture(),
             normalized = api.normalizeCheckpoint(value, selection, options(value));
@@ -422,7 +422,7 @@ test(
 );
 
 test(
-    'implementation-changed stop permits checkpoint export without authorizing model resume',
+    '实现变更导致的停止允许导出检查点，但不授权续跑模型',
     () => {
         const { value, selection, options } = partialFixture();
         value.report.stopped = {
@@ -445,7 +445,7 @@ test(
 );
 
 test(
-    'selection and retained page keys bind the exact paper and frozen plan page',
+    '选择和保留的页面键绑定精确的论文与冻结的计划页面',
     () => {
         const paperId = 'arxiv:2601.00001',
             otherId = 'arxiv:2601.00002';

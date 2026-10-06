@@ -63,7 +63,7 @@ function authorizedPriorPreprintSource() {
             provenanceStatement: profile.provenanceStatement, openreviewResponseBytes: false } } };
 }
 
-test('prior-preprint route disclosure replays exactly and rejects any title or hash drift', () => {
+test('先前预印本路线的披露精确复核，拒绝任何标题或哈希漂移', () => {
     const paperId = catalogApi.AUTHORIZED_PRIOR_PREPRINT_PAPER_ID;
     const sources = [authorizedPriorPreprintSource()];
     const disclosure = planner.conferenceSourceDisclosure(paperId, sources);
@@ -170,7 +170,7 @@ function fixture(t, { icasspPages = 898, iclrPages = 267, uncoveredDailyPages = 
     return { root, blog, catalog, catalogPath, catalogFileSha256, inventory, inventoryPath, inventoryFileSha256 };
 }
 
-test('conference title projections cover all 898 ICASSP and 267 ICLR pages while canonical papers run once', t => {
+test('会议标题投影覆盖全部 898 个 ICASSP 和 267 个 ICLR 页面，正式论文只跑一次', t => {
     const f = fixture(t); const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     assert.equal(artifact.projections.length, 2); assert.equal(artifact.unmatchedPages.length, 0);
@@ -199,7 +199,7 @@ test('conference title projections cover all 898 ICASSP and 267 ICLR pages while
     assert.equal(stage.adapter.postprocessSchedulerPrerequisite, false);
 });
 
-test('direct source scheduler uses the new arXiv source store and keeps arXiv local records out of writer input', async t => {
+test('直接来源调度器使用新的 arXiv 来源存储，并把 arXiv 本地记录排除在写入器输入之外', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 2 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
@@ -244,7 +244,7 @@ test('direct source scheduler uses the new arXiv source store and keeps arXiv lo
     assert.deepEqual(advanced, [conferenceIds[1]], 'durable ready checkpoint advances the next conference batch');
 });
 
-test('source worker pool rechecks the cursor after async pause checks at a non-divisible queue tail', async t => {
+test('来源工作池在队列尾部除不尽时，异步暂停检查之后会重新核对游标', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1, includeIcml: true });
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
@@ -274,7 +274,7 @@ test('source worker pool rechecks the cursor after async pause checks at a non-d
     assert.ok(pauseChecks >= 4, 'both workers crossed the asynchronous tail pause check');
 });
 
-test('source scheduler CLI persists progress and passes ready members into the next bounded selection', async t => {
+test('来源调度器命令行保存进度，并把就绪成员交给下一轮有界选择', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
@@ -298,7 +298,7 @@ test('source scheduler CLI persists progress and passes ready members into the n
     await run(); assert.deepEqual(observed, [[], [paperId]]);
 });
 
-test('source scheduler accepts only a signed pause marker bound to its plan and generation', async t => {
+test('来源调度器只接受绑定其计划和 generation 的已签名暂停标记', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
@@ -323,7 +323,7 @@ test('source scheduler accepts only a signed pause marker bound to its plan and 
     assert.equal(paused.status, 'paused');
 });
 
-test('a fresh arXiv acquisition failure writes one immutable frozen link/page handoff and never blocks conference direct sources', async t => {
+test('全新 arXiv 获取失败只写一份不可变的冻结链接与页面交接，绝不阻塞会议直接来源', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
@@ -361,7 +361,7 @@ test('a fresh arXiv acquisition failure writes one immutable frozen link/page ha
     assert.equal(conferenceOnly.status, 'ready'); assert.equal(captures, 0);
 });
 
-test('plan seals an audit and summary for every frozen paper page without a direct source route', t => {
+test('计划为每个没有直接来源路线的冻结论文页面保存并核验审计和汇总', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1, uncoveredDailyPages: 2 });
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, blogRoot: f.blog });
@@ -386,7 +386,7 @@ test('plan seals an audit and summary for every frozen paper page without a dire
     assert.throws(() => planner.normalizePlan(drifted), /coverage binding drifted/);
 });
 
-test('plan replays a catalog primary binding against multiple hints and projects it through the fresh arXiv route', t => {
+test('计划用多个线索复核目录主绑定，并通过全新 arXiv 路线投影', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     const page = inventoryPage({ blog: f.blog, relativePath: 'content/posts/multiple-primary.md',
         title: 'Multiple primary', scope: { type: 'daily', key: '2026-05-03' }, number: 'multiple-primary',
@@ -415,7 +415,7 @@ test('plan replays a catalog primary binding against multiple hints and projects
     assert.equal(planner.normalizePlan(plan).planSha256, plan.planSha256);
 });
 
-test('direct arXiv registry, analysis, and staging bind one sealed source generation and reject a newer generation', async t => {
+test('直接 arXiv 的登记、分析和暂存绑定同一代已保存并核验的来源，拒绝更新的一代', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
@@ -453,7 +453,7 @@ test('direct arXiv registry, analysis, and staging bind one sealed source genera
         paperId: arxiv.paperId, analysisArtifact }), /sealed source generation/);
 });
 
-test('plan requires a complete explicit conference projection artifact and CLI keeps queues separate', t => {
+test('计划要求完整的显式会议投影产物，命令行保持两条队列分开', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     assert.throws(() => planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: {} }), /conference page mapping record is missing required fields or contains unsupported fields/);
@@ -470,7 +470,7 @@ test('plan requires a complete explicit conference projection artifact and CLI k
         '--paper-ids', 'arxiv:2601.00001,arxiv:2601.00001']), /Use/);
 });
 
-test('conference source adapter replays the planned metadata/PDF hashes before it marks a direct source ready', t => {
+test('会议来源适配器在标记直接来源就绪之前，复核计划中的元数据和 PDF 哈希', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
@@ -481,7 +481,7 @@ test('conference source adapter replays the planned metadata/PDF hashes before i
     assert.throws(() => planner.verifyConferenceWriterInputs(icassp), /PDF changed after planning/);
 });
 
-test('catalog and plan replay internal source bindings instead of trusting hash-shaped fields', t => {
+test('目录和计划复核内部来源绑定，不轻信形状像哈希的字段', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     for (const mutate of [
         source => { source.metadata.recordIndex += 1; },
@@ -502,7 +502,7 @@ test('catalog and plan replay internal source bindings instead of trusting hash-
     assert.throws(() => planner.normalizePlan(drifted), /source binding|metadata identity binding/);
 });
 
-test('ambiguous retained metadata titles fail instead of guessing a conference page owner', t => {
+test('保留的元数据标题有歧义就直接失败，不猜会议页面归属', t => {
     const f = fixture(t, { icasspPages: 2, iclrPages: 1 });
     const duplicate = structuredClone(f.catalog.entries.find(item => item.paperId.includes(':icassp:')));
     duplicate.paperId = 'conference:icassp:2026:icassp-arnumber:101';
@@ -515,7 +515,7 @@ test('ambiguous retained metadata titles fail instead of guessing a conference p
         catalogFileSha256: sha('ambiguous catalog'), inventory: f.inventory, blogRoot: f.blog }), /the frontmatter title matches more than one retained conference paper/);
 });
 
-test('daily ICML projection consumes a sealed poster authority binding without title matching', t => {
+test('日更 ICML 投影消费已保存并核验的海报授权绑定，不做标题匹配', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1, includeIcml: true, dailyIcmlPages: [
         { title: 'ICML Daily Title', body: '[paper](https://icml.cc/virtual/2026/poster/60946)' },
         { title: 'ICML Daily Title', body: '[one](https://icml.cc/virtual/2026/poster/60946) [two](https://icml.cc/virtual/2026/poster/61140)' },
@@ -551,7 +551,7 @@ test('daily ICML projection consumes a sealed poster authority binding without t
     assert.ok(plan.uncoveredFrozenPaperPages.every(page => page.identityHintStatus === 'none'));
 });
 
-test('actual frozen inventory and v5 catalog project every retained conference canonical exactly once', {
+test('实际冻结清单和 v5 目录把每个保留的会议正式记录恰好投影一次', {
     skip: (() => {
         const root = path.resolve(__dirname, '..');
         const catalog = path.join(root, 'data/runtime/direct-local-inputs/scoped-historical-local-data-v5.json');

@@ -26,7 +26,7 @@ function minimalPlan() {
     return { ...body, planSha256: control.stableHash(body) };
 }
 
-test('pause marker is immutable, resumable, and bound to plan/generation', t => {
+test('暂停标记不可变、可续跑，并绑定计划和 generation', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-control-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();
     const first = control.writePauseRequest({ registryRoot: root, plan, generation: 2,
@@ -41,7 +41,7 @@ test('pause marker is immutable, resumable, and bound to plan/generation', t => 
     assert.equal(control.resumeRewrite({ registryRoot: root, plan, generation: 2 }).status, 'already-running');
 });
 
-test('source pause uses an isolated plan-generation marker and resumes independently', t => {
+test('来源暂停使用独立的计划代次标记，可单独续跑', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-source-control-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();
     const paused = control.writePauseRequest({ phase: 'source', sourceRoot: root, plan,
@@ -50,7 +50,7 @@ test('source pause uses an isolated plan-generation marker and resumes independe
     assert.equal(control.resumeRewrite({ phase: 'source', sourceRoot: root, plan }).status, 'resumed');
 });
 
-test('pause reason extends legacy contract without allowing credentials or stale bindings', t => {
+test('暂停原因扩展旧契约，但不允许凭证或过期绑定', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-pause-reason-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();
     const reason = { code: 'SIGINT', detail: 'User requested graceful pause via SIGINT' };
@@ -63,7 +63,7 @@ test('pause reason extends legacy contract without allowing credentials or stale
     assert.equal(control.resumeRewrite({ registryRoot: root, plan }).status, 'resumed');
 });
 
-test('recent failures include partial analysis and redact its retained error', t => {
+test('近期失败包含半成品分析，并对其保留的错误做脱敏', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-partial-status-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const item = { paperId: 'arxiv:2601.00001', runId: '11111111-1111-4111-8111-111111111111',
@@ -83,7 +83,7 @@ test('recent failures include partial analysis and redact its retained error', t
     assert.equal(snapshot.lastUpdatedAt, entry.updatedAt);
 });
 
-test('source status checkpoint is immutable in shape and advances resumable conference progress', t => {
+test('来源状态检查点形状不可变，并推进可续跑的会议进度', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-source-status-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();
     const created = control.loadOrCreateSourceStatus({ sourceRoot: root, plan, apply: true,
@@ -95,7 +95,7 @@ test('source status checkpoint is immutable in shape and advances resumable conf
     assert.throws(() => control.normalizeSourceStatus(tampered, plan, 1), /source status envelope/);
 });
 
-test('status counts a staged page with an old renderer as unfinished', t => {
+test('状态把旧渲染器暂存的页面算作未完成', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-renderer-status-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const item = { paperId: 'arxiv:2601.00001', runId: '11111111-1111-4111-8111-111111111111',
@@ -117,7 +117,7 @@ test('status counts a staged page with an old renderer as unfinished', t => {
     assert.deepEqual(snapshot.staleStagedPaperIds, [item.paperId]);
 });
 
-test('resume refuses to remove pause request while direct-run lock exists', t => {
+test('直接运行锁还在时，恢复拒绝删除暂停请求', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-control-lock-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();
     const request = control.writePauseRequest({ registryRoot: root, plan, requestedAt: '2026-09-07T00:00:00.000Z' });
@@ -126,7 +126,7 @@ test('resume refuses to remove pause request while direct-run lock exists', t =>
     assert.equal(fs.existsSync(request.pauseFile), true);
 });
 
-test('status reports pause, progress and explicit unfinished publication closeout', t => {
+test('状态报告暂停、进度和显式的未完成发布收尾', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-status-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const registryRoot = path.join(root, 'registries'); const aggregateRoot = path.join(root, 'aggregates');
@@ -146,7 +146,7 @@ test('status reports pause, progress and explicit unfinished publication closeou
     assert.ok(status.completion.blockers.some(item => item.code === 'historical-publication-not-selected'));
 });
 
-test('selected publication defaults to live remote and must bind the current history plan', t => {
+test('选中的发布默认走实时远端，且必须绑定当前历史计划', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-status-publication-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const plan = minimalPlan(); const planFile = path.join(root, 'plan.json');
@@ -172,7 +172,7 @@ test('selected publication defaults to live remote and must bind the current his
     assert.ok(mismatch.completion.blockers.some(item => item.code === 'historical-publication-plan-mismatch'));
 });
 
-test('aggregate snapshot reports exact ordinary and conference-task totals', t => {
+test('汇总快照报告精确的普通任务和会议任务总数', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-status-aggregate-counts-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const snapshot = control.aggregateSnapshot({ aggregateRoot: root, plan: minimalPlan(),
@@ -184,7 +184,7 @@ test('aggregate snapshot reports exact ordinary and conference-task totals', t =
     assert.deepEqual(snapshot.missing.conferenceTask, ['icassp-2026-asr', 'iclr-2026-audio']);
 });
 
-test('status reports pausing until each requested phase releases its operation lock', t => {
+test('状态报告为暂停中，直到每个请求的阶段释放自己的操作锁', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-status-pausing-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const plan = minimalPlan(); const planFile = path.join(root, 'plan.json');
@@ -209,7 +209,7 @@ test('status reports pausing until each requested phase releases its operation l
     }
 });
 
-test('aggregate status replays page bytes and requires exact projection task keys', t => {
+test('汇总状态复核页面字节，并要求精确的投影任务键', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-aggregate-status-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const aggregateRoot = path.join(root, 'aggregates'); const runId = '12345678-1234-4123-8123-123456789abc';
@@ -231,7 +231,7 @@ test('aggregate status replays page bytes and requires exact projection task key
         expectedTaskKeys: ['icassp-2026-task-required'] }).errors.some(item => /page bytes drifted/.test(item.error)), true);
 });
 
-test('control CLI accepts status watch only and rejects unsafe combinations', () => {
+test('控制命令行只接受 status watch，拒绝不安全的组合', () => {
     assert.deepEqual(cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--generation', '2', '--watch-seconds', '5']), {
         action: 'status', planFile: '/tmp/plan.json', generation: 2, watchSeconds: 5, phase: null,
         publicationId: null, liveRemote: false });

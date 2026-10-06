@@ -6,7 +6,7 @@ const {
     resolveApiKeyTestConfig
 } = require('../scripts/test-api-key.js');
 
-describe('test-api-key secondary account boundary', () => {
+describe('test-api-key 备用账号边界', () => {
     const primaryGo = {
         PAPER_ANALYZER_ENDPOINT: 'https://opencode.ai/zen/go/v1',
         PAPER_ANALYZER_API_KEY: 'primary-key',

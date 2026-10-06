@@ -111,7 +111,7 @@ function writeFile(projectRoot, relative, content = 'x', mtimeMs = OLD_MS) {
     return filePath;
 }
 
-describe('runtime storage status', () => {
+describe('运行时存储状态', () => {
     it('拒绝未知或重复 CLI 参数，避免 destructive apply 吞掉拼写错误', () => {
         assert.throws(() => main(['prune', '--apply', '--force']), /未知参数/);
         assert.throws(() => main(['prune', '--apply', '--apply']), /重复参数/);
@@ -211,7 +211,7 @@ describe('runtime storage status', () => {
     });
 });
 
-describe('runtime storage reference-aware prune', () => {
+describe('运行时存储的引用感知清理', () => {
     it('dry-run 列出候选但不删除', () => {
         const projectRoot = makeProject();
         try {

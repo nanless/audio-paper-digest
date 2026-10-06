@@ -14,8 +14,8 @@ const {
     MAX_REFRESH_CONCURRENCY
 } = require('../scripts/refresh-api-reader.js');
 
-describe('refresh-api-reader batch CLI', () => {
-    it('parses an explicit date-bound five-way refresh', () => {
+describe('refresh-api-reader 批量命令行', () => {
+    it('解析显式的、按日期绑定的五路刷新', () => {
         const parsed = parseRefreshCliArgs([
             '--all', '--date', '2026-09-01', '--concurrency', '5',
             '--scoring-and-reader'
@@ -35,7 +35,7 @@ describe('refresh-api-reader batch CLI', () => {
         assert.strictEqual(feedback.reviewFeedback, '图 4 的蓝黄柱数值对应错误');
     });
 
-    it('rejects ambiguous, unbounded, and unknown arguments', () => {
+    it('拒绝有歧义、没有上界和未知的参数', () => {
         assert.throws(
             () => parseRefreshCliArgs(['--all', '--date', '2026-09-01', '2608.1']),
             /--all 不能/
@@ -81,7 +81,7 @@ describe('refresh-api-reader batch CLI', () => {
         );
     });
 
-    it('selects only records that fail the current production binding', () => {
+    it('只挑出不符合当前生产绑定的记录', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-refresh-batch-'));
         const file = path.join(root, 'deep.json');
         const previous = Config.FILES.deepAnalysisResult;
@@ -141,7 +141,7 @@ describe('refresh-api-reader batch CLI', () => {
         }
     });
 
-    it('accepts a historical envelope timestamp without inventing a wall-clock batch', () => {
+    it('接受历史外层对象的时间戳，不凭它编出一个实际批次日期', () => {
         assert.strictEqual(resolveSavedAnalysisBatchDate({
             timestamp: '2026-09-02T13:46:46.159+08:00',
             lastUpdated: '2026-09-02T17:07:45.682+08:00'
@@ -153,7 +153,7 @@ describe('refresh-api-reader batch CLI', () => {
         assert.strictEqual(resolveSavedAnalysisBatchDate({}), '');
     });
 
-    it('repairs scoring from a signed v3 revision seed after a transient Reader failure', () => {
+    it('Reader 短暂失败后，从已签名的 v3 修订种子修复评分', () => {
         const article = '仍可复用的完整 Reader 正文';
         const plan = { version: 3, sections: [] };
         const crypto = require('node:crypto');

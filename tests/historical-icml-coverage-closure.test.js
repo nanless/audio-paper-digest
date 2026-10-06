@@ -57,7 +57,7 @@ function buildChain({ root, blogRoot, inventoryFile, snapshotFile, pdfRoot, fres
     return { manifest, catalog, projection, plan };
 }
 
-test('the exact receipt-bound n1m author preprint closes the v5 gap with a mandatory disclosure', async t => {
+test('凭证绑定的 n1m 作者预印本精确结清 v5 缺口，并附带强制声明', async t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-icml-coverage-closure-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blogRoot = path.join(root, 'blog'); const pdfRoot = path.join(root, 'icml-retained-pdfs');

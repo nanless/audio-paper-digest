@@ -9,7 +9,7 @@ function readPrompt(name) {
     return fs.readFileSync(path.join(PROJECT_ROOT, 'prompts', name), 'utf8');
 }
 
-describe('post-publication visual prompt style contract', () => {
+describe('发布后视觉提示词风格契约', () => {
     it('论文长图使用清新编辑设计并显式排除旧版霓虹仪表盘风格', () => {
         const prompt = readPrompt('visual-summary.md');
         for (const required of [

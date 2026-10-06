@@ -166,7 +166,7 @@ test('正式替换之前，批次输入或来源快照证据一变，promote 就
     assert.deepEqual(fs.readFileSync(f.canonicalPath), before);
 });
 
-test('promotion resumes after canonical was installed but papers database synchronization failed', t => {
+test('规范文件已安装但论文库同步失败后，提升流程可以续跑', t => {
     const f = fixture(t); const apply = f.hooks.applyDigestStatuses;
     f.hooks.applyDigestStatuses = () => { throw new Error('simulated database failure'); };
     assert.throws(() => f.promote(), /simulated database failure/);
@@ -178,7 +178,7 @@ test('promotion resumes after canonical was installed but papers database synchr
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.currentDir, 'papers.json'))).generation, 5);
 });
 
-test('installed canonical cannot resume database sync after raw or filtered batch drift', t => {
+test('原始或筛选批次漂移后，已安装的规范文件不能续跑数据库同步', t => {
     const f = fixture(t); const apply = f.hooks.applyDigestStatuses;
     f.hooks.applyDigestStatuses = () => { throw new Error('simulated database failure'); };
     assert.throws(() => f.promote(), /simulated database failure/);
@@ -198,7 +198,7 @@ test('installed canonical cannot resume database sync after raw or filtered batc
     }
 });
 
-test('promotion reuses exact prepared canonical after a crash before intent installation', t => {
+test('意图安装之前崩溃时，提升流程复用精确的已准备规范文件', t => {
     const f = fixture(t); f.promote();
     const baseline = JSON.parse(fs.readFileSync(path.join(f.runDir, 'baseline.json')));
     for (const name of ['deep-analysis-result.json', 'papers.json']) {
@@ -211,7 +211,7 @@ test('promotion reuses exact prepared canonical after a crash before intent inst
     assert.deepEqual(fs.readFileSync(f.canonicalPath), staged);
 });
 
-test('promotion respects every existing normalized paper lock before canonical CAS', t => {
+test('提升流程在规范 CAS 之前尊重每一个已存在的归一化论文锁', t => {
     const f = fixture(t);
     const { acquireFileLockSync } = require('../scripts/analysis-engine.js');
     const release = acquireFileLockSync(path.join(f.paperLockRoot, f.paperIds[14]));
@@ -224,7 +224,7 @@ test('promotion respects every existing normalized paper lock before canonical C
     } finally { release(); }
 });
 
-test('promote refuses any unchanged Reader, incomplete production, missing proof, wrong run or source drift', t => {
+test('Reader 未变化、生产不完整、证明缺失、运行不符或来源漂移时，promote 一律拒绝', t => {
     const f = fixture(t); const original = structuredClone(f.analysis.papers[29]); const before = fs.readFileSync(f.canonicalPath);
     for (const mutate of [p => { p.apiReaderArticle = `old reader ${p.arxivId}`; }, p => { p.complete = false; },
         p => { delete p.freshRewriteProvenance; }, p => { p.freshRewriteProvenance.runId = 'different'; },
@@ -235,7 +235,7 @@ test('promote refuses any unchanged Reader, incomplete production, missing proof
     f.analysis.papers.pop(); assert.throws(() => f.promote(), /paper|ID|coverage/i);
 });
 
-test('prepare refuses dirty blog, escaped run directory, symlink backups and manifest traversal', t => {
+test('博客目录不干净、运行目录逃逸、备份是符号链接或清单路径穿越时，prepare 一律拒绝', t => {
     const f = fixture(t);
     assert.throws(() => prepareBaseline({ ...f, runDir: path.dirname(f.rootDir) }), /run|root/i);
     fs.writeFileSync(path.join(f.blogRepo, 'manual-change.txt'), 'user change');

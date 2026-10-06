@@ -27,7 +27,7 @@ function download(f, overrides = {}) {
         contentType: 'application/pdf; charset=binary', ...overrides };
 }
 
-test('dry-run authenticates the forum but performs zero network and zero writes', async t => {
+test('预演认证论坛，但不发网络请求也不写文件', async t => {
     const f = fixture(t); let calls = 0;
     const result = await api.sealOpenreviewPdf({ apply: false, snapshotFile: f.snapshotFile,
         forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot }, {
@@ -37,7 +37,7 @@ test('dry-run authenticates the forum but performs zero network and zero writes'
     assert.equal(fs.existsSync(f.pdfRoot), false); assert.equal(fs.existsSync(f.receiptRoot), false);
 });
 
-test('apply seals a 0600 forum-ID PDF and self-hashed receipt, then recovers without network', async t => {
+test('写入会保存并核验 0600 权限的论坛 ID PDF 和自哈希凭证，之后不联网即可恢复', async t => {
     const f = fixture(t); let calls = 0;
     const run = () => api.sealOpenreviewPdf({ apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' }, {
@@ -51,7 +51,7 @@ test('apply seals a 0600 forum-ID PDF and self-hashed receipt, then recovers wit
     const second = await run(); assert.equal(second.status, 'recovered'); assert.equal(calls, 1);
 });
 
-test('existing receipt with missing or drifted PDF fails closed before network', async t => {
+test('已有凭证对应的 PDF 缺失或漂移时，联网之前直接失败', async t => {
     const f = fixture(t); const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' };
     await api.sealOpenreviewPdf(options, { fetchPdf: async () => download(f) });
@@ -60,7 +60,7 @@ test('existing receipt with missing or drifted PDF fails closed before network',
     assert.equal(calls, 0);
 });
 
-test('an orphan PDF is accepted only when freshly observed bytes are identical', async t => {
+test('孤儿 PDF 只有新观测到的字节完全一致时才被接受', async t => {
     const f = fixture(t); fs.mkdirSync(f.pdfRoot); fs.writeFileSync(path.join(f.pdfRoot, `${f.forumId}.pdf`), PDF);
     const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' };
@@ -72,7 +72,7 @@ test('an orphan PDF is accepted only when freshly observed bytes are identical',
         pdfRoot: other.pdfRoot, receiptRoot: other.receiptRoot }, { fetchPdf: async () => download(other) }), /refuses to overwrite/);
 });
 
-test('default downloader requires HTTP CONNECT and follows only a continuous fixed-forum redirect chain', async t => {
+test('默认下载器要求 HTTP CONNECT，且只跟随连续的固定论坛重定向链', async t => {
     const f = fixture(t); const url = api.pdfUrlForForum(f.forumId);
     await assert.rejects(api.defaultFetchPdf({ url, forumId: f.forumId }, { detectProxy: () => null,
         fetchImpl: async () => { throw new Error('must not fetch'); } }), /HTTP CONNECT proxy/);
@@ -100,7 +100,7 @@ test('default downloader requires HTTP CONNECT and follows only a continuous fix
     }), /network request failed: ECONNRESET/);
 });
 
-test('rejects non-PDF content type, oversized bodies, broken redirect receipts, and authority drift', async t => {
+test('拒绝非 PDF 内容类型、超大响应体、损坏的重定向凭证和授权漂移', async t => {
     const f = fixture(t); const base = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' };
     await assert.rejects(api.sealOpenreviewPdf(base, { fetchPdf: async () => download(f,
@@ -116,7 +116,7 @@ test('rejects non-PDF content type, oversized bodies, broken redirect receipts, 
     await assert.rejects(api.sealOpenreviewPdf(base, { fetchPdf: async () => download(f) }), /differs from authenticated forum authority|changed/);
 });
 
-test('CLI validates explicit identity/source arguments and keeps roots overridable', t => {
+test('命令行校验显式的身份和来源参数，根目录仍可覆写', t => {
     const f = fixture(t); const parsed = cli.parseArgs(['--apply', '--snapshot', f.snapshotFile,
         '--forum-id', f.forumId, '--pdf-root', f.pdfRoot, '--receipt-root', f.receiptRoot]);
     assert.equal(parsed.apply, true); assert.equal(parsed.forumId, f.forumId);

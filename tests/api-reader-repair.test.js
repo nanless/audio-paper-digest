@@ -3150,7 +3150,7 @@ test('无目标真实续跑保留实际迁移的未用凭证，消耗后也不�
         assert.equal(original.payload.attempts, 1);
         const oldIdentity = { ...original.identity, repairImplementationSha256: '0'.repeat(64) };
         saveFailedCandidate(directory, oldIdentity, original.payload);
-        fs.unlinkSync(original.filename); // Only the isolated test candidate is moved into migration input.
+        fs.unlinkSync(original.filename); // 只把隔离出来的测试候选移进迁移输入。
         const migrated = revision.loadReaderRecoveryRevision(directory, original.identity);
         const proof = migrated.implementationRepairAllowanceProof;
         assert.match(proof.allowanceSha256, /^[a-f0-9]{64}$/);

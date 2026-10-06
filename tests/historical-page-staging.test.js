@@ -50,7 +50,7 @@ function fixture(t) {
     return { root, dependencies, state, paper, assignment };
 }
 
-test('one canonical projects to every verified duplicate page while preserving path/date/url', t => {
+test('一份正式记录投影到每个已核验的重复页面，同时保留路径、日期和 URL', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: STAGING, limit: 'pilot',
         analysisRunId: ANALYSIS_RUN, crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
         tagCatalogPath: '/unused', stagingRoot: f.root };
@@ -153,7 +153,7 @@ test('完整旧页面只读恢复仍选原标签文件，旁边新版分配不�
     assert.deepEqual(fs.readFileSync(path.join(runRoot, 'manifest.json')), manifestBytes);
 });
 
-test('staging intent and manifest reject a renderer implementation change under the same immutable run id', t => {
+test('暂存意图和清单拒绝在同一个不可变运行 ID 下更换渲染器实现', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: STAGING,
         limit: 'pilot', analysisRunId: ANALYSIS_RUN, crosswalkRoot: '/unused', analysisRoot: '/unused',
         tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root,
@@ -169,7 +169,7 @@ test('staging intent and manifest reject a renderer implementation change under 
         .rendererImplementationSha256, RENDERER_SHA);
 });
 
-test('renderer implementation drift during rendering cannot produce a manifest', t => {
+test('渲染过程中渲染器实现漂移就不生成清单', t => {
     const f = fixture(t); let reads = 0;
     assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
         stagingRunId: STAGING, limit: 'pilot', analysisRunId: ANALYSIS_RUN,
@@ -180,7 +180,7 @@ test('renderer implementation drift during rendering cannot produce a manifest',
     assert.equal(fs.existsSync(path.join(f.root, STAGING, 'manifest.json')), false);
 });
 
-test('exact page left after an interrupted write resumes under the same intent and run id', t => {
+test('写入中断后留下的精确页面在同一个意图和运行 ID 下续跑', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK,
         stagingRunId: STAGING, limit: 'pilot', analysisRunId: ANALYSIS_RUN,
         crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
@@ -197,7 +197,7 @@ test('exact page left after an interrupted write resumes under the same intent a
     assert.equal(fs.existsSync(path.join(f.root, STAGING, 'manifest.json')), true);
 });
 
-test('renderer implementation identity binds source files and output base-path configuration', () => {
+test('渲染器实现身份绑定来源文件和输出根路径配置', () => {
     const real = api.rendererImplementationIdentity();
     assert.match(real.rendererImplementationSha256, /^[a-f0-9]{64}$/);
     const fileBytes = relative => Buffer.from(`implementation:${relative}`);
@@ -214,7 +214,7 @@ test('renderer implementation identity binds source files and output base-path c
     assert.deepEqual(first.files.map(item => item.relativePath), api.RENDERER_IMPLEMENTATION_FILES);
 });
 
-test('default renderer uses a private temporary input file and a bounded subprocess', () => {
+test('默认渲染器使用私有临时输入文件和受约束的子进程', () => {
     let observedInputFile;
     const rendered = api.defaultRender({ paper: { title: '中文' } }, {
         execFileSync: (command, args, options) => {
@@ -235,7 +235,7 @@ test('default renderer uses a private temporary input file and a bounded subproc
     assert.equal(fs.existsSync(path.dirname(observedInputFile)), false);
 });
 
-test('selected binding replay tolerates later unrelated or same-identity pages but rejects selected-page drift', t => {
+test('选中绑定的复核容忍之后出现的无关页面或同身份页面，但拒绝选中页面漂移', t => {
     const f = fixture(t); const selected = api.loadPageGenerationInputs({ crosswalkRoot: '/unused', crosswalkId: CROSSWALK,
         analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused',
         analysisRunId: ANALYSIS_RUN }, f.dependencies).groups;
@@ -250,7 +250,7 @@ test('selected binding replay tolerates later unrelated or same-identity pages b
     assert.throws(() => api.replaySelectedBindings(manifest, advanced), /当前论文与页面的对应记录与生成清单记录的输入不一致/);
 });
 
-test('staging selects the rebuilt current assignment and accepts a legacy name only when exact', t => {
+test('暂存选用重建后的当前分配，只有完全精确时才接受旧文件名', t => {
     const f = fixture(t); const paperId = 'arxiv:2604.12527';
     const dir = path.join(f.root, 'taxonomy', ANALYSIS_RUN); fs.mkdirSync(dir, { recursive: true });
     const legacy = path.join(dir, `arxiv-2604.12527.taxonomy.${REGISTRY_SHA}.json`);
@@ -310,14 +310,14 @@ test('标签分配文件核原对象 SHA 后严格检查已知版本与对应文
     }
 });
 
-test('dry-run validates inputs but writes no staging directory', t => {
+test('预演只校验输入，不写暂存目录', t => {
     const f = fixture(t); const result = api.stageHistoricalPages({ apply: false, crosswalkId: CROSSWALK,
         analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',
         tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root }, f.dependencies);
     assert.equal(result.status, 'dry-run'); assert.equal(result.selectedPages, 2); assert.deepEqual(fs.readdirSync(f.root), []);
 });
 
-test('staging CLI requires apply run ID and supports pilot or numeric batch', () => {
+test('暂存命令行要求写入时给出运行 ID，支持试点或数字批次', () => {
     assert.equal(cli.parseArgs(['--dry-run', '--crosswalk', CROSSWALK, '--analysis-run', ANALYSIS_RUN,
         '--limit', 'pilot']).limit, 'pilot');
     assert.equal(cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--analysis-run', ANALYSIS_RUN,
@@ -325,7 +325,7 @@ test('staging CLI requires apply run ID and supports pilot or numeric batch', ()
     assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--run-id', STAGING]), /Use/);
 });
 
-test('assignment reader rejects duplicate JSON keys and symlinks', t => {
+test('分配读取器拒绝重复 JSON 键和符号链接', t => {
     const f = fixture(t); const dir = path.join(f.root, 'unsafe'); fs.mkdirSync(dir);
     const name = `arxiv-2604.12527.taxonomy.${REGISTRY_SHA}.json`; const target = path.join(dir, name);
     fs.writeFileSync(target, `{"contract":"paper-taxonomy-assignment-v1","version":1,"status":"assigned","status":"blocked","paperId":"arxiv:2604.12527","analysisRunId":"${ANALYSIS_RUN}","registrySha256":"${REGISTRY_SHA}","assignmentSha256":"${'a'.repeat(64)}"}`);
@@ -334,7 +334,7 @@ test('assignment reader rejects duplicate JSON keys and symlinks', t => {
     assert.throws(() => api.readAssignment(link), /必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件/);
 });
 
-test('page staging rejects asset traversal and an existing symlink run directory', t => {
+test('页面暂存拒绝素材路径穿越和已存在的符号链接运行目录', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK,
         stagingRunId: '44444444-4444-4444-8444-444444444444', analysisRunId: ANALYSIS_RUN,
         limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
@@ -346,7 +346,7 @@ test('page staging rejects asset traversal and an existing symlink run directory
     assert.throws(() => api.stageHistoricalPages({ ...args, stagingRunId: symlinkRun }, f.dependencies), /Unsafe fresh rewrite directory/);
 });
 
-test('page staging rejects a self-hashed assignment that differs from deterministic current-registry projection', t => {
+test('页面暂存拒绝与确定性当前登记投影不一致的自哈希分配', t => {
     const f = fixture(t);
     assert.throws(() => api.stageHistoricalPages({ apply: false, crosswalkId: CROSSWALK,
         analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',
@@ -355,7 +355,7 @@ test('page staging rejects a self-hashed assignment that differs from determinis
     }), /标签记录与按当前词表重新计算的记录不一致/);
 });
 
-test('prepared assignment A cannot stage analysis B under A staging identity', t => {
+test('已准备的分配 A 不能用 A 的暂存身份去暂存分析 B', t => {
     const f = fixture(t); const staleExpected = {
         paperId: f.assignment.paperId,
         analysisRunId: f.assignment.analysisRunId,
@@ -375,7 +375,7 @@ test('prepared assignment A cannot stage analysis B under A staging identity', t
         'assignment drift must fail before writing staging intent or directories');
 });
 
-test('writeExact rejects leaf and parent symlinks on recovery paths', t => {
+test('writeExact 在恢复路径上拒绝末端和父级符号链接', t => {
     const f = fixture(t); const outside = path.join(f.root, 'outside.bin'); fs.writeFileSync(outside, 'outside');
     const safe = path.join(f.root, 'safe'); fs.mkdirSync(safe);
     const leaf = path.join(safe, 'leaf.bin'); fs.symlinkSync(outside, leaf);
@@ -384,7 +384,7 @@ test('writeExact rejects leaf and parent symlinks on recovery paths', t => {
     assert.throws(() => api.writeExact(path.join(parent, 'child.bin'), Buffer.from('fresh')), /Unsafe fresh rewrite directory/);
 });
 
-test('renderer failure leaves only an immutable input intent and same run ID resumes safely', t => {
+test('渲染失败只留下不可变输入意图，同一运行 ID 可安全续跑', t => {
     const f = fixture(t); const runId = '66666666-6666-4666-8666-666666666666';
     const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: runId,
         analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',
@@ -398,7 +398,7 @@ test('renderer failure leaves only an immutable input intent and same run ID res
     assert.equal(intent.selectedBindingSha256, manifest.selectedBindingSha256);
 });
 
-test('manifest-less legacy partial files are rejected because they lack an input intent', t => {
+test('没有清单的旧版半成品文件因缺少输入意图而被拒绝', t => {
     const f = fixture(t); const runId = '77777777-7777-4777-8777-777777777777';
     const runRoot = path.join(f.root, runId); fs.mkdirSync(path.join(runRoot, 'pages'), { recursive: true });
     fs.writeFileSync(path.join(runRoot, 'pages', 'orphan.md'), 'partial');

@@ -24,7 +24,7 @@ function claimWithUnit(unit) {
     };
 }
 
-test('direction arrows do not waive a missing percentage unit', () => {
+test('方向箭头不能免掉缺失的百分比单位', () => {
     const findings = findMissingComparisonUnits('准确率↑从 20 到 30。');
     assert.ok(findings.some(item => item.reason === 'percentage_metric_delta_without_unit'));
     const ambiguousErrorRate = findMissingComparisonUnits('WER↓从 2.2 升至 3.1。');
@@ -33,7 +33,7 @@ test('direction arrows do not waive a missing percentage unit', () => {
     assert.deepEqual(findMissingComparisonUnits('WER（单位为无量纲）从 2.2 升至 3.1。'), []);
 });
 
-test('result claim units reject glyph and LaTeX direction markers', () => {
+test('结果论断的单位检查拒绝字形和 LaTeX 方向标记', () => {
     for (const unit of ['↑', '\\uparrow', 'score↑']) {
         const result = validateResultClaims([claimWithUnit(unit)], '', {
             minimumClaims: 1,

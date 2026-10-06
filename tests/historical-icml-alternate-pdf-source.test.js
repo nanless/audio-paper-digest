@@ -42,7 +42,7 @@ function downloaded(f, overrides = {}) {
         redirects: [], responseStatus: 200, contentType: 'application/pdf', ...overrides };
 }
 
-test('only code-reviewed forum profiles are accepted', () => {
+test('只接受经过代码审查的论坛档案', () => {
     const profile = api.profileForForum(TTS.forumId);
     assert.equal(profile.posterId, String(TTS.posterId));
     assert.equal(profile.requestedUrl, 'https://arxiv.org/pdf/2510.06927v3');
@@ -53,7 +53,7 @@ test('only code-reviewed forum profiles are accepted', () => {
     assert.equal(api.profileForForum(TTS.forumId).title, TTS.title);
 });
 
-test('dry-run replays poster authority plus exact snapshot title and ordered authors without writes', async t => {
+test('预演复核海报授权、精确的快照标题和有序作者，不写任何文件', async t => {
     const f = fixture(t); let calls = 0;
     const result = await api.sealAlternatePdf({ apply: false, snapshotFile: f.snapshotFile,
         forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot }, {
@@ -69,7 +69,7 @@ test('dry-run replays poster authority plus exact snapshot title and ordered aut
         forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot }), /ordered authors differ/);
 });
 
-test('the cross-version SSRN profile also requires its exact authenticated poster identity', async t => {
+test('跨版本 SSRN 档案同样要求精确且已认证的海报身份', async t => {
     const f = fixture(t, BEYOND);
     const result = await api.sealAlternatePdf({ apply: false, snapshotFile: f.snapshotFile,
         forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot });
@@ -86,7 +86,7 @@ test('the cross-version SSRN profile also requires its exact authenticated poste
         forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot }), /title or ordered authors differ/);
 });
 
-test('apply seals a 0600 forum-ID PDF and recoverable self-hashed alternate-source sidecar', async t => {
+test('写入会保存并核验 0600 权限的论坛 ID PDF，以及可恢复的自哈希替代来源附带文件', async t => {
     const f = fixture(t); let calls = 0;
     const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-08T00:00:00.000Z' };
@@ -106,7 +106,7 @@ test('apply seals a 0600 forum-ID PDF and recoverable self-hashed alternate-sour
     assert.equal(second.status, 'recovered'); assert.equal(calls, 1);
 });
 
-test('reviewed n1m prior preprint can be imported from a browser download without inventing HTTP evidence', async t => {
+test('已审查的 n1m 先前预印本可以从浏览器下载导入，不需要编造 HTTP 证据', async t => {
     const f = fixture(t, BEYOND); fs.mkdirSync(f.pdfRoot); fs.mkdirSync(f.receiptRoot);
     const importFile = path.join(f.root, 'browser-download.pdf'); fs.writeFileSync(importFile, PDF);
     const profile = api.profileForForum(f.forumId);
@@ -128,7 +128,7 @@ test('reviewed n1m prior preprint can be imported from a browser download withou
     assert.equal(recovered.status, 'recovered');
 });
 
-test('operator import rejects the wrong profile and PDFs missing fixed identity markers', async t => {
+test('人工导入拒绝错误档案和缺少固定身份标记的 PDF', async t => {
     const f = fixture(t, BEYOND); const importFile = path.join(f.root, 'browser-download.pdf');
     fs.writeFileSync(importFile, PDF);
     const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId, importFile,
@@ -143,7 +143,7 @@ test('operator import rejects the wrong profile and PDFs missing fixed identity 
     /allowed only for the reviewed n1mAjfRDZ6/);
 });
 
-test('receipt/PDF recovery fails closed on missing bytes, authority drift, and orphan byte mismatch', async t => {
+test('凭证或 PDF 恢复在字节缺失、授权漂移和孤儿字节不匹配时直接失败', async t => {
     const f = fixture(t); const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-08T00:00:00.000Z' };
     await api.sealAlternatePdf(options, { fetchPdf: async () => downloaded(f) });
@@ -161,7 +161,7 @@ test('receipt/PDF recovery fails closed on missing bytes, authority drift, and o
     }), /refuses to overwrite/);
 });
 
-test('default downloader requires CONNECT and permits only profile-fixed HTTPS redirect targets', async () => {
+test('默认下载器要求 CONNECT，且只允许档案固定好的 HTTPS 重定向目标', async () => {
     const profile = api.profileForForum(TTS.forumId);
     await assert.rejects(api.defaultFetchPdf({ profile }, { detectProxy: () => null,
         fetchImpl: async () => { throw new Error('must not fetch'); } }), /HTTP CONNECT proxy/);
@@ -188,7 +188,7 @@ test('default downloader requires CONNECT and permits only profile-fixed HTTPS r
     }), /network request failed: ECONNRESET/);
 });
 
-test('download metadata, source identity, and CLI inputs are strict', async t => {
+test('下载元数据、来源身份和命令行输入都做严格校验', async t => {
     const f = fixture(t); const base = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-08T00:00:00.000Z' };
     await assert.rejects(api.sealAlternatePdf(base, { fetchPdf: async () => downloaded(f,

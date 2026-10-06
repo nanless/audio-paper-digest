@@ -12,7 +12,7 @@ function root() {
     return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-role-')));
 }
 
-test('workspace marker is private, exact, role-gated and switches only explicitly', () => {
+test('工作区标记是私有的、精确的、按角色授权的，只在显式操作时切换', () => {
     const dir = root();
     assert.throws(() => role.readWorkspaceRole(dir), /marker 缺失/);
     const daily = role.writeWorkspaceRole('daily', { root: dir });
@@ -27,7 +27,7 @@ test('workspace marker is private, exact, role-gated and switches only explicitl
     assert.equal(role.writeWorkspaceRole('history', { root: dir, force: true }).role, 'history');
 });
 
-test('copied marker cannot authorize a different realpath until explicit forced assignment', () => {
+test('复制来的标记不能授权另一个真实路径，除非显式强制指定', () => {
     const first = root();
     const second = root();
     role.writeWorkspaceRole('daily', { root: first });
@@ -40,7 +40,7 @@ test('copied marker cannot authorize a different realpath until explicit forced 
     }).workspaceRealpath, second);
 });
 
-test('unknown roles, marker schema drift, weak permissions and symlink roots fail closed', () => {
+test('未知角色、标记结构漂移、权限过弱和符号链接根目录都直接失败', () => {
     const dir = root();
     role.writeWorkspaceRole('daily', { root: dir });
     assert.throws(() => role.requireWorkspaceRole('unknown', dir), /未知 required/);
@@ -57,7 +57,7 @@ test('unknown roles, marker schema drift, weak permissions and symlink roots fai
     assert.throws(() => role.workspaceRoot(link), /不得为 symlink/);
 });
 
-test('direct command inference and package entrypoints cover daily/history boundaries', () => {
+test('直接命令推断和包入口覆盖 daily/history 边界', () => {
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('full-fetch.js'), 'daily');
     assert.equal(envLoader.requiredWorkspaceRoleForCommand('official-conference-acquire.js'), 'daily');
     for (const name of ['deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js', 'refresh-api-reader.js',
@@ -86,7 +86,7 @@ test('direct command inference and package entrypoints cover daily/history bound
     }
 });
 
-test('direct daily and history entry guards reject the opposite workspace role', () => {
+test('daily 与 history 的直接入口守卫拒绝相反的工作区角色', () => {
     const dailyRoot = root();
     const historyRoot = root();
     role.writeWorkspaceRole('daily', { root: dailyRoot });
@@ -110,7 +110,7 @@ test('direct daily and history entry guards reject the opposite workspace role',
     }
 });
 
-test('new-conference aliases admit daily only with the explicit wrapped mode', () => {
+test('new-conference 别名只认显式的包装模式，且仅限 daily', () => {
     const previousMode = process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
     const previousRole = process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE;
     try {
@@ -129,7 +129,7 @@ test('new-conference aliases admit daily only with the explicit wrapped mode', (
     }
 });
 
-test('conference:new:process wrapper and runtime guard agree on daily without weakening legacy history isolation', () => {
+test('conference:new:process 包装器与运行时守卫在 daily 上一致，又不削弱旧版 history 隔离', () => {
     const scripts = require('../package.json').scripts;
     assert.equal(scripts['conference:new:process'],
         'AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE=1 node scripts/workspace-role.js exec daily -- node scripts/conference-process.js');
@@ -173,7 +173,7 @@ test('conference:new:process wrapper and runtime guard agree on daily without we
     }
 });
 
-test('CLI parser rejects malformed role commands', () => {
+test('命令行解析器拒绝格式错误的角色命令', () => {
     assert.deepEqual(role.parseCli(['set', 'history', '--force']), {
         action: 'set', role: 'history', force: true
     });

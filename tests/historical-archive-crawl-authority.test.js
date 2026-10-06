@@ -22,7 +22,7 @@ function fixture(t) {
     return { root, dataRoot, identityRoot: path.join(root, 'identities'), record };
 }
 
-test('retained archive scan excludes current and writes a replayable identity-only authority', t => {
+test('归档扫描排除 current，并写出只含身份、可复核的权威记录', t => {
     const f = fixture(t); const index = api.scanRetainedFilteredPapers({ dataRoot: f.dataRoot });
     assert.deepEqual(index.files.map(item => item.relativePath), ['archive/2026-02-03/filtered-papers.json']);
     assert.equal(index.matches.has('2602.99999'), false);
@@ -43,7 +43,7 @@ test('retained archive scan excludes current and writes a replayable identity-on
     assert.throws(() => api.replayAuthorityHandle(prepared.authorityHandle, { requireProduction: true }), /retained filtered snapshot no longer matches/);
 });
 
-test('archive authority rejects a record that is not an exact normalized arXiv ID pair', t => {
+test('归档权威记录拒绝不是精确归一化 arXiv ID 对的条目', t => {
     const f = fixture(t); const filename = path.join(f.dataRoot, 'archive', '2026-02-03', 'filtered-papers.json');
     fs.writeFileSync(filename, JSON.stringify({ papers: [{ ...f.record, paper_id: '2602.00002' }] }), { mode: 0o600 });
     const index = api.scanRetainedFilteredPapers({ dataRoot: f.dataRoot });

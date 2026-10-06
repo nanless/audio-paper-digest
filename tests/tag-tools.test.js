@@ -33,14 +33,14 @@ function writeBundle(directory, fixture, csv = 'tag,pageCount,disposition,status
     return payloads;
 }
 
-test('tag maintenance CLI does not accept arbitrary directories or network binds', () => {
+test('标签维护 CLI 不接受任意目录，也不绑定网络', () => {
     assert.deepEqual(parseArgs(['validate']), { command: 'validate', port: 8766 });
     assert.equal(parseArgs(['serve', '--port', '8999']).port, 8999);
     for (const args of [[], ['apply'], ['serve','--host','0.0.0.0'],['serve','--port','80'],
         ['serve','--port','65536'],['serve','--port','1e4'],['validate','--port','8999']]) assert.throws(()=>parseArgs(args));
 });
 
-test('preview asset reads refuse symlinks, hardlinks, directories and excess sizes', t => {
+test('预览资源读取拒绝符号链接、硬链接、目录和超大文件', t => {
     const dir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'tag-tools-test-'));
     t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
     const good=path.join(dir,'good'); fs.writeFileSync(good,'ok');
@@ -50,7 +50,7 @@ test('preview asset reads refuse symlinks, hardlinks, directories and excess siz
     fs.linkSync(good,path.join(dir,'hard')); assert.throws(()=>readSafeFile(good));
 });
 
-test('loopback preview serves only pinned routes and rejects foreign Host/Origin and writes', async t => {
+test('回环预览只服务固定路由，拒绝外来 Host/Origin 和写操作', async t => {
     const server=createPreviewServer(new Map([['/',{type:'text/html',bytes:Buffer.from('preview')}],
         ['/index.json',{type:'application/json',bytes:Buffer.from('{}')}]]));
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -72,7 +72,7 @@ test('loopback preview serves only pinned routes and rejects foreign Host/Origin
     assert.equal((await request('/index.json?cache=1')).status,200);
 });
 
-test('preview bundle rejects torn multi-file writes, registry drift and stale source bindings', t => {
+test('预览包拒绝写到一半的多文件、注册表漂移和过时的来源绑定', t => {
     const dir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'tag-bundle-test-'));
     t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
     const tagCatalog={version:'paper-taxonomy-v1',registrySha256:'a'.repeat(64)};
@@ -92,7 +92,7 @@ test('preview bundle rejects torn multi-file writes, registry drift and stale so
     assert.throws(()=>readPreviewBundle(indexPath,tagCatalog),/博客提交或页面 SHA/);
 });
 
-test('real asset loading accepts both complete preview generations and preserves saved bytes', t => {
+test('真实资源加载接受两代完整预览，并保留已保存字节', t => {
     const dir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'tag-preview-load-'));
     t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
     const tagCatalog={version:'paper-taxonomy-v1',registrySha256:'a'.repeat(64)};
@@ -114,7 +114,7 @@ test('real asset loading accepts both complete preview generations and preserves
     assert.equal(path.basename(require('../scripts/config').FILES.tagPreviewDir),'tag-preview');
 });
 
-test('preview bundles reject mixed generations, catalog fields and bindings after checking raw hashes', t => {
+test('预览包在核对原始哈希后拒绝混用代次、目录字段和绑定', t => {
     const dir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'tag-preview-format-'));
     t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
     const tagCatalog={version:'paper-taxonomy-v1',registrySha256:'a'.repeat(64)}, indexPath=path.join(dir,'index.json');

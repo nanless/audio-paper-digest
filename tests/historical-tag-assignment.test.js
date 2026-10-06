@@ -39,7 +39,7 @@ function registry() {
     return tagCatalogApi.loadTagCatalog(path.join(__dirname, '..', 'config', 'tag-catalog.json'));
 }
 
-test('completed historical canonical maps exact concepts and binds all source SHA values', t => {
+test('已完成的历史正式记录映射精确概念，并绑定全部来源 SHA', t => {
     let analysis = validAnalysisText()
         .replace('primary_task_tag: #语音识别', 'primary_task_tag: #音视频语音识别')
         .replace('#语音识别 #Transformer #鲁棒性', '#音视频语音识别 #Transformer #鲁棒性')
@@ -71,7 +71,7 @@ test('2403.14817 bare #端到端 is blocked instead of guessed across method/set
     assert.deepEqual(assignment.conceptIds, []);
 });
 
-test('unknown, cross-facet ambiguous, deprecated, or missing primary labels become blocked', t => {
+test('未知、跨 facet 歧义、已废弃或缺失的主标签一律标记为阻塞', t => {
     const unknownAnalysis = validAnalysisText().replaceAll('#鲁棒性', '#在线');
     const f = runFixture(t, [paper('2609.03622', unknownAnalysis)]);
     const unknown = api.buildAssignment({ runHandle: f.handle, paper: f.analysis.papers[0], tagCatalog: registry() });
@@ -91,7 +91,7 @@ test('unknown, cross-facet ambiguous, deprecated, or missing primary labels beco
     assert.equal(ambiguous.status, 'blocked'); assert.ok(ambiguous.blockedReasons.some(reason => reason.includes('tag:ambiguous:#Transformer')));
 });
 
-test('loader rejects incomplete, non-historical, drifted, or stale parsed analysis runs', t => {
+test('加载器拒绝不完整、非历史、漂移或过期的已解析分析运行', t => {
     const f = runFixture(t);
     for (const mutate of [
         run => { run.status = 'analysis_partial'; },
@@ -106,7 +106,7 @@ test('loader rejects incomplete, non-historical, drifted, or stale parsed analys
     assert.throws(() => api.buildAssignment({ runHandle: f.handle, paper: stale, tagCatalog: registry() }), /论文记录与该分析运行中的完整原记录不一致/);
 });
 
-test('CLI supports batch and single dry-run with zero writes; apply writes private idempotent artifacts', t => {
+test('命令行支持批次和单篇预演，零写入；写入则生成私有且幂等的产物', t => {
     const f = runFixture(t, [paper('2609.03622'), paper('2609.03623')]);
     const config = { FILES: { freshRewriteRunsDir: path.join(f.root, 'runs'),
         tagCatalogFile: path.join(__dirname, '..', 'config', 'tag-catalog.json'),
@@ -130,7 +130,7 @@ test('CLI supports batch and single dry-run with zero writes; apply writes priva
         '--paper-id', '../escape']));
 });
 
-test('registry upgrades create a new immutable artifact beside the previous audit record', t => {
+test('登记升级会在原审计记录旁边新建一份不可变产物', t => {
     const f = runFixture(t); const firstTagCatalog = registry();
     const first = api.buildAssignments({ runHandle: f.handle, tagCatalog: firstTagCatalog });
     const firstOutput = api.writeAssignments({ outputRoot: f.output, assignments: first })[0];
@@ -143,7 +143,7 @@ test('registry upgrades create a new immutable artifact beside the previous audi
     assert.throws(() => api.assignmentFilename('arxiv:2609.03622'), /有效的词表 SHA/);
 });
 
-test('same analysis run retains every upgraded assignment without filename collisions', t => {
+test('同一次分析运行保留每个升级后的分配，文件名不冲突', t => {
     const f = runFixture(t); const tagCatalog = registry();
     const first = api.buildAssignments({ runHandle: f.handle, tagCatalog })[0];
     const firstOutput = api.writeAssignments({ outputRoot: f.output, assignments: [first] })[0];

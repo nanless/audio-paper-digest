@@ -63,7 +63,7 @@ function options(f, overrides = {}) {
             renderDirectPage: packet => ({ markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }) }, ...overrides };
 }
 
-test('sealed direct source/Reader packet materializes every projected historical page without crosswalk or legacy taxonomy inputs', t => {
+test('已保存并核验的直接来源与 Reader 数据包生成全部计划中的历史页面，不依赖来源对照或旧版词表输入', t => {
     const f = fixture(t); const packets = []; const result = api.stageDirectPages(options(f, {
         dependencies: { rendererImplementationSha256: () => sha('renderer-v1'), assertCompleteAnalysis: () => {},
             renderDirectPage: packet => { packets.push(packet); return { markdown: `---\ndate: ${packet.cohortDate}\n---\n${packet.paper.apiReaderArticle}`, assets: [] }; } }
@@ -86,7 +86,7 @@ test('sealed direct source/Reader packet materializes every projected historical
     assert.equal(recovered.manifestSha256, result.manifestSha256);
 });
 
-test('direct arXiv publication source rejects identity, source, and abstract SHA drift', t => {
+test('直接 arXiv 发布来源拒绝身份、来源和摘要 SHA 漂移', t => {
     const f = fixture(t);
     for (const publicationSource of [
         { ...f.publicationSource, paperId: 'arxiv:2609.99999' },
@@ -98,7 +98,7 @@ test('direct arXiv publication source rejects identity, source, and abstract SHA
     }
 });
 
-test('direct page staging seals an exact metadata sidecar proof and rejects every outer binding drift', t => {
+test('直接页面暂存保存并核验精确的元数据旁路证明，拒绝任何外层绑定漂移', t => {
     const f = fixture(t); const metadataSidecar = {
         contract: 'historical-arxiv-publication-metadata-v1', paperId: f.item.paperId,
         manifestSha256: sha('sidecar manifest'),
@@ -143,13 +143,13 @@ test('direct page staging seals an exact metadata sidecar proof and rejects ever
     assert.throws(() => api.stageDirectPages(options(f, { publicationSource: missing })), /缺少官方论文元数据对应记录/);
 });
 
-test('direct page staging fails closed when a rendered page byte changes after its source/Reader/projection seal', t => {
+test('来源、Reader 和汇总保存核验之后渲染页面字节仍有变化时，直接页面暂存直接失败', t => {
     const f = fixture(t); const result = api.stageDirectPages(options(f));
     fs.appendFileSync(path.join(f.root, 'staging', result.pages[0].stagedPath), 'tamper');
     assert.throws(() => api.stageDirectPages(options(f)), /生成页面 SHA 与清单不一致/);
 });
 
-test('different-title prior preprint adds a visible top disclosure whose bytes are sealed by the page and manifest SHAs', t => {
+test('标题不同的先期预印本会加上可见的顶部声明，其字节由页面和清单 SHA 保存核验', t => {
     const f = fixture(t);
     const paperId = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
     f.item.paperId = paperId;
@@ -193,7 +193,7 @@ test('different-title prior preprint adds a visible top disclosure whose bytes a
     assert.equal(result.manifestSha256, api.stableHash(manifestBody));
 });
 
-test('withdrawn arXiv historical version evidence injects an exact top warning and deterministic replay rejects its removal', t => {
+test('已撤稿的 arXiv 历史版本证据会注入精确的顶部警告，确定性复核拒绝把它删掉', t => {
     const f = fixture(t); const selected = `${f.item.route.arxivId}v1`;
     f.sourceDescriptor.sourceId = selected;
     f.sourceDescriptor.sourceVersion = freshSource.historicalVersionIdentity({ arxivId: f.item.route.arxivId,
@@ -223,7 +223,7 @@ test('withdrawn arXiv historical version evidence injects an exact top warning a
     assert.throws(() => api.stageDirectPages(options(f)), /来源版本说明缺失、内容不一致或未位于页面正文开头/);
 });
 
-test('prior-preprint staging rejects a missing route disclosure and an unterminated front matter block', t => {
+test('先期预印本暂存拒绝缺失的路径声明和未闭合的 front matter 块', t => {
     const f = fixture(t);
     f.item.paperId = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
     f.item.route = { kind: 'conference-local-pdf', writerInputs: [{ pdf: { acquisition: {

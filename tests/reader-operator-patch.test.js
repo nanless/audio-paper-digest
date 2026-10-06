@@ -69,7 +69,7 @@ function fixture(t) {
         request, filename, writeRequest, calls, deps, apply: extra => applyOperatorPatch({ loaded, patchFile: 'fix.json' }, { ...deps, ...extra }) };
 }
 
-test('operator patch saves only a failed candidate, preserves every budget, and archives exact old bytes', async t => {
+test('运维补丁只保存失败的候选，保留全部预算，并归档原字节', async t => {
     const f = fixture(t); const before = fs.readFileSync(f.candidateFile); const patchBytes = fs.readFileSync(f.filename);
     const result = await f.apply();
     assert.equal(result.status, 'failed'); assert.equal(result.alreadyApplied, false);
@@ -91,7 +91,7 @@ test('operator patch saves only a failed candidate, preserves every budget, and 
     assert.equal(fs.readFileSync(path.join(f.runDir, 'analysis.json'), 'utf8'), JSON.stringify(f.loaded.analysis));
 });
 
-test('crashes before and after candidate save reenter with the same audit and unchanged counters', async t => {
+test('候选保存前后崩溃都从同一份审计记录续跑，计数器不变', async t => {
     const f = fixture(t); const before = fs.readFileSync(f.candidateFile);
     await assert.rejects(f.apply({ afterArchive: () => { throw new Error('simulated crash after archive'); } }), /simulated crash/);
     assert.deepEqual(fs.readFileSync(f.candidateFile), before);
@@ -102,21 +102,21 @@ test('crashes before and after candidate save reenter with the same audit and un
     assert.equal(repair.loadFailedCandidate(f.candidateDir, f.identity).operatorPatches.length, 1);
 });
 
-test('invalid production output does not write candidate or an audit directory', async t => {
+test('生产输出不合法时不写候选，也不建审计目录', async t => {
     const f = fixture(t); const before = fs.readFileSync(f.candidateFile);
     await assert.rejects(f.apply({ parseApiReaderArticleResult: () => { throw new Error('production table/figure/source gate'); } }), /production/);
     assert.deepEqual(fs.readFileSync(f.candidateFile), before);
     assert.deepEqual(fs.readdirSync(path.join(f.runDir, 'patches')), ['fix.json']);
 });
 
-test('the real production parser rejects incomplete Reader output before persistence', async t => {
+test('真正的生产解析器在落盘前拒绝不完整的 Reader 输出', async t => {
     const f = fixture(t); const before = fs.readFileSync(f.candidateFile);
     await assert.rejects(f.apply({ parseApiReaderArticleResult: require('../scripts/deep-analyzer.js').parseApiReaderArticleResult }));
     assert.deepEqual(fs.readFileSync(f.candidateFile), before);
     assert.equal(fs.existsSync(path.join(f.runDir, 'patches', 'operator-archive')), false);
 });
 
-test('stale draft and node SHA, source mismatch, cross-run identity and append paths fail closed', async t => {
+test('过期的草稿和节点 SHA、来源不匹配、跨运行身份和追加路径都直接失败', async t => {
     for (const mutate of [f => { f.request.patch.draftSha256 = '0'.repeat(64); },
         f => { f.request.patch.replacements[0].oldSha256 = '0'.repeat(64); },
         f => { f.request.sourceSha256 = '0'.repeat(64); },
@@ -131,7 +131,7 @@ test('stale draft and node SHA, source mismatch, cross-run identity and append p
     }
 });
 
-test('patch file traversal, symlink, hardlink and permissions cannot escape the private run directory', async t => {
+test('补丁文件的路径穿越、符号链接、硬链接和权限都不能逃出私有运行目录', async t => {
     const f = fixture(t);
     for (const name of ['../fix.json', '/tmp/fix.json', 'nested/fix.json', 'fix.txt']) assert.throws(() => patchPath(f.runDir, name));
     fs.chmodSync(f.filename, 0o644); await assert.rejects(f.apply(), /0600/); fs.chmodSync(f.filename, 0o600);
@@ -140,7 +140,7 @@ test('patch file traversal, symlink, hardlink and permissions cannot escape the 
     await assert.rejects(f.apply(), /single-link/);
 });
 
-test('duplicate active identity and resolved-only files cannot be patched', async t => {
+test('重复的活跃身份和只剩已解决记录的文件都不能打补丁', async t => {
     const f = fixture(t);
     const otherIdentity = { ...f.identity, changed: true };
     const otherPath = repair.saveFailedCandidate(f.candidateDir, otherIdentity, f.payload);
@@ -149,13 +149,13 @@ test('duplicate active identity and resolved-only files cannot be patched', asyn
     await assert.rejects(f.apply(), /ENOENT/);
 });
 
-test('patch cannot invent unseen pixels and source identity drift blocks the parser', async t => {
+test('补丁不能凭空造出没见过的像素，来源身份漂移会挡住解析器', async t => {
     const f = fixture(t); f.request.patch.replacements[0].value = '说明\n\n[[FIGURE_1]]\n\n解释'; f.writeRequest();
     await assert.rejects(f.apply(), /pixels/); assert.equal(f.calls.parser, 0);
     f.source.text += ' drift'; await assert.rejects(f.apply(), /source snapshot/);
 });
 
-test('CAS rejects candidate/request races and idempotent replay refuses corrupted old-byte archives', async t => {
+test('CAS 拒绝候选与请求之间的竞态，幂等复核拒绝损坏的原字节归档', async t => {
     const f = fixture(t);
     await assert.rejects(f.apply({ afterArchive: () => fs.appendFileSync(f.filename, ' ') }), /bytes changed/);
     f.writeRequest(); await f.apply();
@@ -164,7 +164,7 @@ test('CAS rejects candidate/request races and idempotent replay refuses corrupte
     await assert.rejects(f.apply(), /audit.*drifted/);
 });
 
-test('CLI patch phase is explicit and accepts only run-local patch names', () => {
+test('命令行的补丁阶段必须显式指定，且只接受运行目录内的补丁名', () => {
     assert.deepEqual(runner.parseRewriteArgs(['patch', '--run-id', RUN_ID, '--patch', 'fix.json']),
         { action: 'patch', runId: RUN_ID, patchFile: 'fix.json' });
     for (const args of [['patch', '--run-id', RUN_ID], ['patch', '--run-id', RUN_ID, '--patch', '../fix.json'],
@@ -223,13 +223,13 @@ function installSignedParent(f, mutate = () => {}) {
 function useSignedCandidate(f) {
     fs.unlinkSync(f.candidateFile);
     f.identity.contentMode = 'reader-source-signed-revision-v1';
-    f.identity.inputFingerprint = 'b'.repeat(64); // Opaque parent+feedback identity stays unchanged.
+    f.identity.inputFingerprint = 'b'.repeat(64); // 不透明的父级加反馈身份保持不变。
     f.candidateFile = repair.saveFailedCandidate(f.candidateDir, f.identity, f.payload);
     f.request.candidateIdentitySha256 = repair.hashDraft(f.identity);
     f.writeRequest();
 }
 
-test('signed-revision scratch patches preserve successful parent bytes and every budget', async t => {
+test('已签名修订的临时补丁保留成功的父级字节和全部预算', async t => {
     const f = fixture(t); useSignedCandidate(f); const parent = installSignedParent(f);
     const parentPath = path.join(f.runDir, 'analysis.json'), parentBytes = fs.readFileSync(parentPath);
     const candidateBytes = fs.readFileSync(f.candidateFile), identitySha = repair.hashDraft(f.identity);
@@ -245,7 +245,7 @@ test('signed-revision scratch patches preserve successful parent bytes and every
     await f.apply(); assert.deepEqual(fs.readFileSync(parentPath), parentBytes);
 });
 
-test('signed scratch rejects absent or invalid parent signatures and fresh provenance drift without writes', async t => {
+test('已签名临时补丁拒绝缺失或无效的父级签名和全新来源漂移，且不写任何文件', async t => {
     for (const mutate of [null,
         p => { p.apiReaderArticle += ' stale'; },
         p => { p.apiReaderPlan.sections.push({ kind: 'result' }); },
@@ -265,14 +265,14 @@ test('signed scratch rejects absent or invalid parent signatures and fresh prove
     }
 });
 
-test('source-only scratch cannot bypass a current successful Reader using stale loaded metadata', async t => {
+test('只含来源的临时补丁不能靠过期的已加载元数据绕过当前成功的 Reader', async t => {
     const f = fixture(t); installSignedParent(f); const before = fs.readFileSync(f.candidateFile);
     assert.equal(f.loaded.analysis.papers[0].apiReaderArticle, undefined);
     await assert.rejects(f.apply(), /Source-only.*successful/);
     assert.deepEqual(fs.readFileSync(f.candidateFile), before); assert.equal(f.calls.parser, 0);
 });
 
-test('signed scratch still rejects cross-run and source snapshot candidate drift', async t => {
+test('已签名临时补丁仍然拒绝跨运行和来源快照的候选漂移', async t => {
     for (const field of ['runId', 'sourceSha256', 'sourceSnapshotSha256', 'structuredArtifactsSha256']) {
         const f = fixture(t); useSignedCandidate(f); installSignedParent(f);
         fs.unlinkSync(f.candidateFile); f.identity.freshAnalysis[field] = '0'.repeat(64);
@@ -283,7 +283,7 @@ test('signed scratch still rejects cross-run and source snapshot candidate drift
     }
 });
 
-test('signed scratch requires the full production parser and never writes a rejected candidate', async t => {
+test('已签名临时补丁必须用完整生产解析器，被拒绝的候选一律不写', async t => {
     const f = fixture(t); useSignedCandidate(f); installSignedParent(f);
     const before = fs.readFileSync(f.candidateFile), parent = fs.readFileSync(path.join(f.runDir, 'analysis.json'));
     await assert.rejects(f.apply({ parseApiReaderArticleResult: require('../scripts/deep-analyzer.js').parseApiReaderArticleResult }));

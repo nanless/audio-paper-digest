@@ -20,7 +20,7 @@ function fixture() {
     conceptBridges: [], figurePlacements: [], formulaBindings: [] };
 }
 
-test('stable section ordering preserves table/binding pairs and records replayable raw mappings', () => {
+test('稳定的章节排序保留表格与绑定配对，并记录可复核的原始映射', () => {
     const original = fixture();
     const frozen = JSON.stringify(original);
     const { draft, mapping } = normalizeReaderDraftOrder(original);
@@ -41,7 +41,7 @@ test('stable section ordering preserves table/binding pairs and records replayab
     assert.doesNotMatch(targets[1].value, /ablation/);
 });
 
-test('source-quote evidence realigns bindings before section sorting when raw order is shuffled', () => {
+test('原始顺序被打乱时，原文引文证据在章节排序前重新对齐绑定', () => {
     const input = { sections: [
         { kind: 'result', heading: 'results', body: '| Method | Score |\n| --- | --- |\n| result-marker | 0.91 |' },
         { kind: 'experiment_setup', heading: 'setup', body: '| Setting | Value |\n| --- | --- |\n| setup-marker | 16 kHz |' }
@@ -58,7 +58,7 @@ test('source-quote evidence realigns bindings before section sorting when raw or
         [true, false]);
 });
 
-test('mixed handwritten/selection tables retain order and simultaneous marker renames do not collide', () => {
+test('手写表与选区表混排时保持顺序，同时重命名标记不会冲突', () => {
     const input = fixture();
     input.sections[0].body = '[[TABLE_1]]\n\n' + markdown('result-second');
     input.sections[1].body = '[[TABLE_3]]';
@@ -77,7 +77,7 @@ test('mixed handwritten/selection tables retain order and simultaneous marker re
     assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
 });
 
-test('canonical sections normalize a complete selection marker permutation without changing prose bytes', () => {
+test('规范章节归一化完整的选择标记排列，且不改动正文字节', () => {
     const html = fs.readFileSync(path.join(__dirname, 'fixtures/arxiv-reader-source-bindings.html'), 'utf8');
     const sourceText = cheerio.load(html)('body').text();
     const analyzer = require('../scripts/deep-analyzer.js');
@@ -108,7 +108,7 @@ test('canonical sections normalize a complete selection marker permutation witho
     assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
 });
 
-test('canonical marker permutation normalization rejects ambiguous and mixed counterexamples', () => {
+test('规范标记排列归一化拒绝有歧义和混合的反例', () => {
     const select = (tableIndex, sourceTableOrdinal = tableIndex) => ({ tableIndex, selection: {
         sourceTableOrdinal, sourceRows: [0, 1], sourceColumns: [0, 1]
     } });
@@ -130,7 +130,7 @@ test('canonical marker permutation normalization rejects ambiguous and mixed cou
     }
 });
 
-test('canonical mixed marker and quote stream realigns without changing table prose', () => {
+test('规范的混合标记与引文流重新对齐，不改动表格正文', () => {
     const select = (tableIndex, sourceTableOrdinal) => ({ tableIndex,
         selection: { sourceTableOrdinal, sourceRows: [0, 1], sourceColumns: [0, 1] } });
     const authored = markdown('quote-middle');
@@ -149,7 +149,7 @@ test('canonical mixed marker and quote stream realigns without changing table pr
     assert.deepEqual(normalizeReaderDraftOrder(normalized).draft, normalized);
 });
 
-test('only the invisible trailing source-quote suffix is pruned', () => {
+test('只裁掉不可见的末尾原文引文后缀', () => {
     const input = { sections: [{ kind: 'result', body: `${markdown('one')}\n\n${markdown('two')}` }],
         tableBindings: [binding(1, 'one'), binding(2, 'two'), binding(3, 'missing')],
         conceptBridges: [], figurePlacements: [], formulaBindings: [] };
@@ -167,7 +167,7 @@ test('only the invisible trailing source-quote suffix is pruned', () => {
     assert.equal(normalizeReaderDraftOrder(unsafe).draft.tableBindings.length, 4);
 });
 
-test('unsorted ambiguous bindings fail closed with paths on the unchanged input, never discard tables', () => {
+test('未排序且有歧义的绑定直接失败，在未改动的输入上报出路径，绝不丢弃表格', () => {
     for (const alter of [draft => draft.tableBindings.pop(), draft => { draft.tableBindings[1].tableIndex = 1; },
         draft => { draft.sections[0].body = '[[TABLE_3]]'; }]) {
         const draft = fixture(); alter(draft); const before = JSON.stringify(draft);
@@ -186,7 +186,7 @@ test('unsorted ambiguous bindings fail closed with paths on the unchanged input,
     }
 });
 
-test('ambiguous tables in one section preserve repeated body paths before binding paths', () => {
+test('同一章节内有歧义的表格保留重复的正文路径，排在绑定路径之前', () => {
     const draft = fixture();
     draft.sections[0].body += `\n\n${markdown('second-result')}`;
     const before = JSON.stringify(draft);
@@ -201,7 +201,7 @@ test('ambiguous tables in one section preserve repeated body paths before bindin
     assert.equal(JSON.stringify(draft), before);
 });
 
-test('unsorted mixed selection and quote bindings realign by unique marker identity and prose order', () => {
+test('未排序的选区与引文混合绑定按唯一标记身份和正文顺序重新对齐', () => {
     const select = (tableIndex, sourceTableOrdinal) => ({ tableIndex,
         selection: { sourceTableOrdinal, sourceRows: [0, 1], sourceColumns: [0, 1] } });
     const input = { sections: [
@@ -222,7 +222,7 @@ test('unsorted mixed selection and quote bindings realign by unique marker ident
     assert.deepEqual(normalizeReaderDraftOrder(normalized.draft).draft, normalized.draft);
 });
 
-test('unique selection anchors prune only an unbound handwritten table and its dangling narrative', () => {
+test('唯一的选择锚点只裁掉未绑定的手写表及其悬空叙述', () => {
     const select = { tableIndex: 1,
         selection: { sourceTableOrdinal: 2, sourceRows: [0, 1], sourceColumns: [0, 1] } };
     const input = { sections: [
@@ -236,7 +236,7 @@ test('unique selection anchors prune only an unbound handwritten table and its d
     assert.deepEqual(locateReaderDraftTables(input).map(item => item.markerIndex || 'markdown'), [1, 'markdown']);
 });
 
-test('ambiguous extra handwritten tables are never pruned', () => {
+test('有歧义的多余手写表一律不裁剪', () => {
     const input = { sections: [{ kind: 'result', body: [markdown('one'), markdown('two')].join('\n\n') }],
         tableBindings: [binding(1, 'quote')] };
     const before = structuredClone(input);
@@ -244,7 +244,7 @@ test('ambiguous extra handwritten tables are never pruned', () => {
     assert.deepEqual(input, before);
 });
 
-test('conference PDF grouped numbers allow pruning an unbound table before mixed-order normalization', () => {
+test('会议 PDF 的分组数字允许在混合顺序归一化之前裁掉未绑定的表格', () => {
     const select = { tableIndex: 1,
         selection: { sourceTableOrdinal: 2, sourceRows: [0, 1], sourceColumns: [0, 1] } };
     const result = [
@@ -264,7 +264,7 @@ test('conference PDF grouped numbers allow pruning an unbound table before mixed
     ]);
 });
 
-test('source-quote evidence tables beat richer duplicate handwritten tables only with a unique score', () => {
+test('原文引文证据表只有在得分唯一时才能胜过内容更丰富的重复手写表', () => {
     const select = { tableIndex: 1,
         selection: { sourceTableOrdinal: 2, sourceRows: [0, 1], sourceColumns: [0, 1] } };
     const rich = [
@@ -284,7 +284,7 @@ test('source-quote evidence tables beat richer duplicate handwritten tables only
     assert.match(input.sections[0].body, /\| 来源证据 \| 量化值 1 \| 量化值 2 \|/);
 });
 
-test('compact k-scale source quotes can uniquely identify the unbound benchmark table', () => {
+test('紧凑的 k 量级原文引文可以唯一定位未绑定的基准表', () => {
     const table = values => [
         '| 评测对象 | 样本规模 | 视频规模 |', '| --- | --- | --- |',
         ...values.map(row => `| ${row.join(' | ')} |`)
@@ -308,20 +308,20 @@ test('compact k-scale source quotes can uniquely identify the unbound benchmark 
     assert.match(input.sections[0].body, /幻觉基准/);
 });
 
-test('structured table diagnostic paths include the exact binding without parsing a message', () => {
+test('结构化表格诊断路径直接带上精确绑定，无需解析消息文本', () => {
     const draft = normalizeReaderDraftOrder(fixture()).draft;
     const targets = buildRepairTargets(draft, [{ path: '/sections/1/body', bindingPath: '/tableBindings/1', message: '表格单位格式不匹配；应检查source quote' }]);
     assert.deepEqual(targets.map(item => item.path), ['/sections/1/body', '/tableBindings/1']);
 });
 
-test('stable same-kind sections and non-bound legacy drafts keep all prose and table bytes', () => {
+test('稳定的同类章节和未绑定的旧版草稿保留全部正文与表格字节', () => {
     const draft = fixture(); draft.sections[2].kind = 'result'; delete draft.tableBindings;
     const out = normalizeReaderDraftOrder(draft).draft;
     assert.deepEqual(out.sections.map(item => item.body), [draft.sections[0].body, draft.sections[2].body, draft.sections[1].body]);
     assert.equal(out.tableBindings, undefined);
 });
 
-test('complete bridge marker permutation normalizes array only and records node SHA/index mapping', () => {
+test('完整的桥接标记排列只归一化数组，并记录节点 SHA 与下标映射', () => {
     const bridge = n => ({ marker: `[[CONCEPT_BRIDGE_${n}]]`, terms: [`term ${n}`, 'other term'],
         sectionKind: 'component', explanation: `Unchanged explanation ${n}` });
     const input = { sections: [{ kind: 'component', body: '[[CONCEPT_BRIDGE_3]]\n\n[[CONCEPT_BRIDGE_1]]\n\n[[CONCEPT_BRIDGE_2]]' }],
@@ -345,7 +345,7 @@ test('complete bridge marker permutation normalizes array only and records node 
     assert.deepEqual(again.draft, draft);
 });
 
-test('duplicate, missing, noncanonical and malformed bridge markers are not guessed or repaired', () => {
+test('重复、缺失、非规范和有问题的桥接标记不猜测也不修补', () => {
     for (const markers of [
         ['[[CONCEPT_BRIDGE_2]]', '[[CONCEPT_BRIDGE_2]]'],
         ['[[CONCEPT_BRIDGE_3]]', '[[CONCEPT_BRIDGE_1]]'],
@@ -367,7 +367,7 @@ test('duplicate, missing, noncanonical and malformed bridge markers are not gues
     }
 });
 
-test('unique concept markers move or insert into one canonical declared section without rewriting prose', () => {
+test('唯一的概念标记移入或插入某个规范声明章节，不重写正文', () => {
     const bridge = (ordinal, sectionKind) => ({ marker: `[[CONCEPT_BRIDGE_${ordinal}]]`,
         terms: [`term ${ordinal}`, `other ${ordinal}`], sectionKind, explanation: 'unchanged explanation' });
     const input = { sections: [
@@ -387,7 +387,7 @@ test('unique concept markers move or insert into one canonical declared section 
     assert.deepEqual(normalizeReaderDraftOrder(draft).draft, draft);
 });
 
-test('adjacent standalone concept markers are separated into distinct Markdown paragraphs', () => {
+test('相邻的独立概念标记拆成各自独立的 Markdown 段落', () => {
     const bridge = ordinal => ({ marker: `[[CONCEPT_BRIDGE_${ordinal}]]`,
         terms: [`term ${ordinal}`, `other ${ordinal}`], sectionKind: 'component',
         explanation: 'unchanged explanation' });
@@ -402,7 +402,7 @@ test('adjacent standalone concept markers are separated into distinct Markdown p
     assert.deepEqual(normalizeReaderDraftOrder(normalized.draft).draft, normalized.draft);
 });
 
-test('concept marker moves and inserts tolerate terminal LF while still rejecting trailing spaces', () => {
+test('概念标记的移动与插入容忍末尾 LF，但仍拒绝行尾空格', () => {
     const bridge = (ordinal, sectionKind) => ({ marker: `[[CONCEPT_BRIDGE_${ordinal}]]`,
         terms: [`term ${ordinal}`, `other ${ordinal}`], sectionKind, explanation: 'unchanged explanation' });
     const input = { sections: [
@@ -424,7 +424,7 @@ test('concept marker moves and inserts tolerate terminal LF while still rejectin
     assert.ok(!rejected.draft.sections[0].body.includes('[[CONCEPT_BRIDGE_1]]'));
 });
 
-test('concept marker location normalization refuses ambiguous, inline and non-final moves', () => {
+test('概念标记位置归一化拒绝有歧义、行内和非末尾的移动', () => {
     const bridge = { marker: '[[CONCEPT_BRIDGE_1]]', terms: ['term one', 'term two'],
         sectionKind: 'problem', explanation: 'unchanged explanation' };
     const cases = [

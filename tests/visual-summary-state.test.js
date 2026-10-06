@@ -118,7 +118,7 @@ function makePng(width = 768, height = 1200) {
     const ihdr = Buffer.alloc(13);
     ihdr.writeUInt32BE(width, 0);
     ihdr.writeUInt32BE(height, 4);
-    ihdr.set([8, 0, 0, 0, 0], 8); // 8-bit grayscale
+    ihdr.set([8, 0, 0, 0, 0], 8); // 8 位灰度
     const scanlines = Buffer.alloc((width + 1) * height);
     return Buffer.concat([
         Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -377,7 +377,7 @@ function writeImageCache(currentDir, url, raw, mime = 'image/png') {
     return sha256;
 }
 
-describe('visual summary state', () => {
+describe('视觉汇总状态', () => {
     it('publishedPapers 指纹按 UTF-16 code unit 排序 BMP 与非 BMP 对象键', () => {
         const probe = JSON.parse(fs.readFileSync(
             path.join(__dirname, 'fixtures', 'published-papers-fingerprint-probe.json'),

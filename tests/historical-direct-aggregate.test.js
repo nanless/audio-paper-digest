@@ -287,7 +287,7 @@ function rebasedRegistry(registry, entries) {
     return { ...body, registrySha256: runner.stableHash(body) };
 }
 
-test('aggregate projection closes task rendering and retain-unchanged coverage for every frozen page', async t => {
+test('汇总结果结清每个冻结页面的任务渲染与保持原样覆盖', async t => {
     const f = await fixture(t); const projection = f.projection;
     assert.equal(projection.contract, 'historical-direct-aggregate-projection-v3');
     assert.equal(projection.version, 3);
@@ -348,7 +348,7 @@ test('aggregate projection closes task rendering and retain-unchanged coverage f
     assert.throws(() => direct.normalizeAggregateProjection(forged, f.plan), /conference task coverage report drifted/);
 });
 
-test('direct aggregate accepts a complete daily cohort and produces source-generation-bound markdown', async t => {
+test('直接汇总接受完整的当日分组，并生成绑定来源代次的 Markdown', async t => {
     const f = await fixture(t); const loadedInputs = inputs(f);
     const selected = loadedInputs.members.get('arxiv:2608.00001');
     const analysisFile = path.join(selected.entry.analysis.directory, 'analysis.json');
@@ -394,7 +394,7 @@ test('direct aggregate accepts a complete daily cohort and produces source-gener
     assert.match(fs.readFileSync(output[0].pageFilename, 'utf8'), /\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)/);
 });
 
-test('direct aggregate rejects missing, extended, or source-drifted publication proof', async t => {
+test('直接汇总拒绝缺失、多出或来源漂移的发布证明', async t => {
     const f = await fixture(t); const registry = JSON.parse(fs.readFileSync(f.firstRegistry, 'utf8'));
     const entry = registry.entries.find(value => value.paperId === 'arxiv:2608.00001');
     const filename = path.join(entry.staging.directory, 'staging-input.json');
@@ -413,7 +413,7 @@ test('direct aggregate rejects missing, extended, or source-drifted publication 
     writeJson(filename, original);
 });
 
-test('direct aggregate replays official metadata sidecar authority and rejects later raw-byte failure', async t => {
+test('直接汇总复核官方元数据旁路授权，拒绝随后的原始字节失败', async t => {
     const f = await fixture(t, { publicationSidecar: true });
     const readsBeforeAggregate = f.sidecarState.reads;
     assert.ok(readsBeforeAggregate >= 1, 'runner must read the sidecar while staging the ambiguous paper');
@@ -425,7 +425,7 @@ test('direct aggregate replays official metadata sidecar authority and rejects l
     assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE }), /raw Atom sidecar drifted/);
 });
 
-test('direct aggregate makes a sealed historical arXiv version visible and rejects identity warning drift', async t => {
+test('直接汇总让已保存并核验的历史 arXiv 版本可见，并拒绝身份告警漂移', async t => {
     const f = await fixture(t, { historicalVersion: true });
     const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
     const versioned = aggregate.members.find(member => member.paperId === 'arxiv:2608.00001');
@@ -462,7 +462,7 @@ test('direct aggregate makes a sealed historical arXiv version visible and rejec
         /source ID\/disclosure presence drifted/);
 });
 
-test('direct aggregate signs an explicit mixed source binding for a daily arXiv and ICML cohort', async t => {
+test('直接汇总为当日 arXiv 与 ICML 混合分组签署显式来源绑定', async t => {
     const f = await fixture(t, { mixedDailyConference: true });
     const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
     assert.deepEqual(aggregate.members.map(item => item.paperId), [
@@ -486,7 +486,7 @@ test('direct aggregate signs an explicit mixed source binding for a daily arXiv 
     assert.equal(binding.bindingSha256, direct.stableHash(body));
 });
 
-test('mixed daily source receipt retains the conditional historical-version identity', async t => {
+test('混合当日来源凭证保留带条件的历史版本身份', async t => {
     const f = await fixture(t, { mixedDailyConference: true, historicalVersion: true });
     const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
     const binding = aggregate.source.sourceGeneration;
@@ -499,7 +499,7 @@ test('mixed daily source receipt retains the conditional historical-version iden
     assert.equal(binding.arxiv.sourceSetSha256, direct.stableHash(binding.arxiv.sources));
 });
 
-test('direct aggregate rejects a partial daily cohort', async t => {
+test('直接汇总拒绝不完整的当日分组', async t => {
     const f = await fixture(t); const registry = JSON.parse(fs.readFileSync(f.firstRegistry, 'utf8'));
     const entries = registry.entries.map(entry => entry.paperId === 'arxiv:2608.00002'
         ? { ...entry, status: 'failed' } : entry);
@@ -507,7 +507,7 @@ test('direct aggregate rejects a partial daily cohort', async t => {
     assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f, filename), daily: DATE }), /not staged; aggregate requires complete cohort staging/);
 });
 
-test('direct aggregate rejects internally valid staging from a stale renderer', async t => {
+test('直接汇总拒绝过时渲染器产出的内部合法暂存', async t => {
     const f = await fixture(t);
     const stale = direct.loadDirectAggregateInputs({ planFile: f.paths.planFile,
         registryFile: f.firstRegistry, projectionFile: f.paths.projectionFile,
@@ -519,7 +519,7 @@ test('direct aggregate rejects internally valid staging from a stale renderer', 
         /staged renderer is not current/);
 });
 
-test('direct aggregate rejects a daily cohort mixed across arXiv source generations', async t => {
+test('直接汇总拒绝混用不同 arXiv 来源代次的当日分组', async t => {
     const f = await fixture(t); const first = JSON.parse(fs.readFileSync(f.firstRegistry, 'utf8'));
     const second = JSON.parse(fs.readFileSync(f.secondRegistry, 'utf8'));
     const upgraded = second.entries.find(entry => entry.paperId === 'arxiv:2608.00002');
@@ -528,7 +528,7 @@ test('direct aggregate rejects a daily cohort mixed across arXiv source generati
     assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f, filename), daily: DATE }), /mixed arXiv source generations/);
 });
 
-test('direct aggregate rejects a projection that omits a planned cohort', async t => {
+test('直接汇总拒绝漏掉计划分组的汇总结果', async t => {
     const f = await fixture(t); const projection = JSON.parse(fs.readFileSync(f.paths.projectionFile, 'utf8'));
     projection.daily = [];
     projection.dailySetSha256 = direct.stableHash(projection.daily);
@@ -539,7 +539,7 @@ test('direct aggregate rejects a projection that omits a planned cohort', async 
         projectionFile: filename, stagingRoot: f.paths.stagingRoot, executionRoot: f.paths.executionRoot }), /cohort coverage/);
 });
 
-test('direct aggregate creates a complete retained-local conference aggregate', async t => {
+test('直接汇总生成完整的本地留存会议汇总', async t => {
     const f = await fixture(t); const aggregates = direct.buildDirectAggregates({ inputs: inputs(f), conference: CONFERENCE });
     assert.deepEqual(aggregates.map(item => item.scope), ['conference-task', 'conference']);
     const task = aggregates[0]; const aggregate = aggregates[1];
