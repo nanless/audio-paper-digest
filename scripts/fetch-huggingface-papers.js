@@ -631,11 +631,11 @@ function mergeAndDeduplicate(arxivPapers, hfPapers) {
         } else {
             merged.set(id, { ...paper, sources: ['huggingface'] });
             hfOnlyCount++;
-            console.log(`    ✓ ${id} - ${(paper.title || '').substring(0, 60)} (↑${paper.hf_upvotes}) [仅HF]`);
+            console.log(`    ✓ ${id} - ${(paper.title || '').substring(0, 60)} (↑${paper.hf_upvotes}) [仅 HF]`);
         }
     }
 
-    console.log(`\n  合并统计: arxiv+HF ${mergedCount} 篇, 仅HF ${hfOnlyCount} 篇, 合并后总计 ${merged.size} 篇`);
+    console.log(`\n  合并统计: arxiv+HF ${mergedCount} 篇, 仅 HF ${hfOnlyCount} 篇, 合并后总计 ${merged.size} 篇`);
 
     return Array.from(merged.values());
 }

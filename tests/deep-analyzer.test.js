@@ -5494,6 +5494,13 @@ has_dataset: 否
             ...observed,
             primaryAnalysis: 'e'.repeat(64)
         }), false);
+        // 冻结的期望值是 v1 时代的记录，常量冻结之后 v1 提示词又被改写过，
+        // 所以它逐项都不等于当前从 v1 文件重算的值。这里如实记录这个漂移，
+        // 不把常量改成当前值来伪装成一致。
+        for (const [stage, frozen] of Object.entries(deep.CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256)) {
+            assert.notStrictEqual(observed[stage], frozen,
+                `${stage} 的 v1 时代期望值仍等于当前重算值，常量语义需要复核`);
+        }
     });
 
     it('无 opaque capability 时自签 sealed recovery audit 不能授权摘要窄恢复', async () => {
@@ -5600,6 +5607,64 @@ has_dataset: 否
             runtimePromptTemplateSha256(relativePath, 'core-summary-detailed-v3'),
             runtimePromptTemplateSha256(relativePath, 'core-summary-detailed-v4')
         );
+
+        // 新请求按当前版本写指纹；旧记录没有版本字段时仍按 v1 的冻结路径重算。
+        const deep = require('../scripts/deep-analyzer.js');
+        assert.strictEqual(deep.ANALYSIS_PROMPT_TEXT_V2_CONTRACT, 'analysis-prompt-text-v2');
+        assert.strictEqual(deep.currentPromptTextContract('revision'), 'analysis-prompt-text-v2');
+        assert.strictEqual(deep.currentTextStagePromptPath('revision'), 'prompts/gap-fill-v2.md');
+        assert.strictEqual(deep.promptFilePathForContract('revision', ''), 'prompts/gap-fill.md');
+        assert.strictEqual(
+            deep.promptFilePathForContract('revision', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
+            'prompts/gap-fill.md'
+        );
+        assert.throws(
+            () => deep.promptFilePathForContract('revision', 'analysis-prompt-text-v9'),
+            /没有登记/
+        );
+        assert.throws(
+            () => deep.buildTextStageFingerprint('revision', '正文', '证据', 'analysis-prompt-text-v9'),
+            /没有登记/
+        );
+        assert.throws(() => deep.prepareTextRecoveryStage(
+            { analysisStageCheckpoints: { revision: '正文' } },
+            { version: 1, stages: { revision: {
+                status: 'complete', fingerprint: 'legacy', promptTextContract: 'analysis-prompt-text-v9'
+            } } },
+            'revision', '正文', '证据'
+        ), /没有登记/);
+        const input = validAnalysisText();
+        const evidence = deep.buildStageEvidenceContext('revision', input, 'speech evidence');
+        const originalCreateHash = crypto.createHash;
+        let payload;
+        try {
+            crypto.createHash = function (...args) {
+                const hash = originalCreateHash.apply(this, args);
+                const update = hash.update;
+                hash.update = function (value, ...rest) {
+                    if (typeof value === 'string' && value.startsWith('{')) {
+                        const candidate = JSON.parse(value);
+                        if (candidate.promptTextContract) payload = candidate;
+                    }
+                    return update.call(this, value, ...rest);
+                };
+                return hash;
+            };
+            deep.buildTextStageFingerprint(
+                'revision', input, evidence, deep.ANALYSIS_PROMPT_TEXT_V2_CONTRACT
+            );
+        } finally { crypto.createHash = originalCreateHash; }
+        assert.strictEqual(payload.promptTextContract, 'analysis-prompt-text-v2');
+        assert.strictEqual(
+            payload.promptTemplateSha256,
+            deep.runtimePromptTemplateSha256('prompts/gap-fill-v2.md')
+        );
+        assert.notStrictEqual(
+            deep.buildTextStageFingerprint(
+                'revision', input, evidence, deep.ANALYSIS_PROMPT_TEXT_V2_CONTRACT
+            ),
+            deep.buildTextStageFingerprint('revision', input, evidence)
+        );
     });
 
     it('核心摘要 Prompt 字节漂移只改变 coreSummaryRepair 阶段指纹', () => {
@@ -5685,9 +5750,9 @@ has_dataset: 否
         assert.match(prompt, /汉字与中文标点合计 320–600 个/);
         assert.match(prompt, /同一量表上报告的两个条件或维度/);
         assert.match(prompt, /两个数值及各自单位、正负号和小数精度必须逐字来自同一原表行/);
-        assert.match(prompt, /禁止把 `0\.85` 改成 `85\.00`/);
-        assert.match(prompt, /禁止增删末尾零、舍入、百分数与小数互换、单位换算或自行计算差值/);
-        assert.match(prompt, /禁止把摘要\/引言中的概括值与表格中的基线值拼成一组比较/);
+        assert.match(prompt, /不要把 `0\.85` 写成 `85\.00`/);
+        assert.match(prompt, /也不要增删末尾的零、舍入、把百分数与小数互换、换算单位或自己算差值/);
+        assert.match(prompt, /摘要和引言里的概括值不能和表格里的基线值拼成一组比较/);
         assert.strictEqual(maxTokens, 8000);
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);

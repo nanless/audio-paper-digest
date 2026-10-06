@@ -8549,34 +8549,36 @@ const RECOVERY_PROMPT_FILES = Object.freeze({
 // 路径仍由 RECOVERY_PROMPT_FILES 给出；自然化改写只新增 -v2 文件。写入固定用
 // 当前版本，读取按记录里声明的版本选路径重算：字段缺失按 v1 处理，未知版本报错。
 const ANALYSIS_PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1';
+const ANALYSIS_PROMPT_TEXT_V2_CONTRACT = 'analysis-prompt-text-v2';
+// 表里登记的是各阶段当前版本。v1 不写在这里，固定由 RECOVERY_PROMPT_FILES 给出。
 const PROMPT_FILE_VERSIONS = Object.freeze({
     openSourceScan: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-        path: RECOVERY_PROMPT_FILES.openSourceScan
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/opensource-scan-v2.md'
     }),
     revision: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-        path: RECOVERY_PROMPT_FILES.revision
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/gap-fill-v2.md'
     }),
     tableRepair: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-        path: RECOVERY_PROMPT_FILES.tableRepair
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/table-fill-v2.md'
     }),
     methodRepair: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-        path: RECOVERY_PROMPT_FILES.methodRepair
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/method-fill-v2.md'
     }),
     coreSummaryRepair: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-        path: RECOVERY_PROMPT_FILES.coreSummaryRepair
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/core-summary-repair-v2.md'
     }),
     structureRepair: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-        path: RECOVERY_PROMPT_FILES.structureRepair
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/structure-repair-v2.md'
     }),
     tagSelection: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-        path: RECOVERY_PROMPT_FILES.tagSelection
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/tag-repair-v2.md'
     })
 });
 
@@ -8600,6 +8602,12 @@ function promptFilePathForContract(stage, promptTextContract) {
     const known = [ANALYSIS_PROMPT_TEXT_V1_CONTRACT];
     if (entry && !known.includes(entry.contract)) known.push(entry.contract);
     throw new Error(`阶段 ${stage} 的提示词版本 ${declared} 没有登记；只认识 ${known.join(' 和 ')}。`);
+}
+
+// 新请求用当前版本的提示词正文；旧记录的指纹核验仍走 promptFilePathForContract
+// 的 v1 冻结路径，不会因为新版本上线而按 v2 文件重算。
+function currentTextStagePromptPath(stage) {
+    return promptFilePathForContract(stage, currentPromptTextContract(stage));
 }
 
 // 已经完成的阶段按它自己声明的版本重算：旧记录没有这个字段，只能按 v1 的历史
@@ -8654,7 +8662,12 @@ const CORE_SUMMARY_V3_LEGACY_FULL_PROMPT_SHA256 = Object.freeze({
     coreSummaryRepair: '25c569ed7c3d256035f544a341c8ba66fe0b0687ef1fdc24ed21e19138bc99be',
     structureRepair: 'cf2348d480306533078ba4ca80d9b9df6c6106fbd484370609748b66ce8ffcef'
 });
-const CORE_SUMMARY_V3_EXPECTED_RUNTIME_PROMPT_SHA256 = Object.freeze({
+// 下面这张表记录的是 core-summary-detailed-v3 迁移窗口当时的 7 个 v1 提示词期望值。
+// 它已经不再等于从当前 v1 文件重算的值：常量冻结之后 v1 提示词又被改写过，
+// currentCoreSummaryV3MigrationPromptsAreExact() 因此始终为 false，整个一次性迁移
+// 窗口本来就是关闭的。这里保留原值不改写，只把它降级为 v1 时代的历史期望值；
+// tests/deep-analyzer.test.js 里有一条断言逐项记录它与当前重算值不一致。
+const CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256 = Object.freeze({
     primaryAnalysis: 'b06aeb750592c48ac5ffcbcf422118d693f261449e3be561c2f097dbc84dd8bf',
     openSourceScan: 'b925fc8b00ca3758636b1a571c3f9024c0b0f80e25cd6014ed987b98254f672b',
     revision: '8689694ecfe88420eb4c75de47ac488aeab24f9c1868cba49f8a7cec70b39fe6',
@@ -9365,8 +9378,8 @@ function validateStaleAnalysisSnapshot(snapshot) {
 }
 
 function coreSummaryV3MigrationPromptSetIsAllowed(observed) {
-    return Object.keys(CORE_SUMMARY_V3_EXPECTED_RUNTIME_PROMPT_SHA256).every(stage => (
-        observed?.[stage] === CORE_SUMMARY_V3_EXPECTED_RUNTIME_PROMPT_SHA256[stage]
+    return Object.keys(CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256).every(stage => (
+        observed?.[stage] === CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256[stage]
     ));
 }
 
@@ -15798,7 +15811,7 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
     const evidence = typeof preparedEvidence === 'string'
         ? preparedEvidence
         : buildStageEvidenceContext('openSourceScan', '', sourceText);
-    const prompt = loadPrompt('prompts/opensource-scan.md', {
+    const prompt = loadPrompt(currentTextStagePromptPath('openSourceScan'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         textForAnalysis: evidence
@@ -16142,7 +16155,7 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
     const evidence = typeof preparedEvidence === 'string'
         ? preparedEvidence
         : buildStageEvidenceContext('revision', existingAnalysis, sourceText);
-    const prompt = loadPrompt('prompts/gap-fill.md', {
+    const prompt = loadPrompt(currentTextStagePromptPath('revision'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         existingAnalysis: existingAnalysis,
@@ -16432,7 +16445,7 @@ async function repairTagSelection(paper, analysis, evidenceContext, issue, optio
     const callModelFn = options.callModelFn || callModel;
     let feedback = issue;
     for (let attempt = 1; attempt <= 2; attempt++) {
-        const prompt = loadPrompt('prompts/tag-repair.md', {
+        const prompt = loadPrompt(currentTextStagePromptPath('tagSelection'), {
             title: paper.title || '',
             arxivId: getPaperArxivId(paper),
             validationFeedback: feedback,
@@ -16497,7 +16510,7 @@ async function repairCoreSummarySection(
            : `这是第 ${attempt} 次局部修复。保留上一候选中已合格的句子，只编辑或补充下列未通过项：`
                + `${retryTargets.length ? retryTargets.join('\n') : '根据下方校验反馈逐项修正'}。\n`
                + `上次校验错误：${feedback}`;
-        const prompt = loadPrompt('prompts/core-summary-repair.md', {
+        const prompt = loadPrompt(currentTextStagePromptPath('coreSummaryRepair'), {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
             summaryIssue,
@@ -16538,7 +16551,7 @@ async function repairMissingAnalysisSections(
         : buildStageEvidenceContext('structureRepair', existingAnalysis, sourceText);
 
     for (let attempt = 1; attempt <= 2 && structureIssues.length > 0; attempt++) {
-        const prompt = loadPrompt('prompts/structure-repair.md', {
+        const prompt = loadPrompt(currentTextStagePromptPath('structureRepair'), {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
             missingSections: structureIssues.join('、'),
@@ -16750,7 +16763,7 @@ async function checkAndFixMethodSection(paper, analysis, sourceText, preparedEvi
 
     console.log(`    [deep] 🔍 检测到方法概述不够详细，触发补充...`);
 
-    const prompt = loadPrompt('prompts/method-fill.md', {
+    const prompt = loadPrompt(currentTextStagePromptPath('methodRepair'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         methodSection,
@@ -16844,7 +16857,7 @@ async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence =
 
     console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
 
-    const prompt = loadPrompt('prompts/table-fill.md', {
+    const prompt = loadPrompt(currentTextStagePromptPath('tableRepair'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         resultsSection,
@@ -17261,8 +17274,10 @@ module.exports = {
     buildTaskEvidenceContext,
     buildStageEvidenceContext,
     ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
     PROMPT_FILE_VERSIONS,
     currentPromptTextContract,
+    currentTextStagePromptPath,
     promptFilePathForContract,
     buildTextStageFingerprint,
     tagRuleFingerprintFields,
@@ -17281,6 +17296,7 @@ module.exports = {
     restoreSavedStagesForCoreSummaryRepair,
     canReuseStageForCoreSummaryRecovery,
     coreSummaryV3MigrationPromptSetIsAllowed,
+    CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256,
     currentCoreSummaryV3MigrationPromptsAreExact,
     tryMigrateCoreSummaryV3LegacyCheckpoints,
     captureStaleAnalysisSnapshot,
