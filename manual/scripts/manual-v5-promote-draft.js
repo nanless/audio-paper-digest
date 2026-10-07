@@ -76,7 +76,7 @@ function validateReview(reviewPath, paperId, articleSha256, label) {
     const model = provenance.model || provenance.reviewerModel || '';
     const effort = provenance.reasoningEffort || provenance.reasoning_effort || '';
     if (model !== 'gpt-5.6-terra' || effort !== 'high') {
-        throw new Error(`${label} 必须由 gpt-5.6-terra/high 独立 leaf 完成`);
+        throw new Error(`${label} 必须由 gpt-5.6-terra/high 的单篇子代理独立完成`);
     }
     return { path: resolved, sha256: sha256(bytes), taskName: provenance.taskName || null };
 }
