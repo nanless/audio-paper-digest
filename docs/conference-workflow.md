@@ -177,7 +177,7 @@ AAAI 的 `locator` 还须精确包含 `"profile":"aaai-2026-bare-introduction-v1
 
 筛选与日更使用同一个结构化决定解析器。格式无法解析时保存响应和用量，记为 `failed`，不在同一 intent 中追加格式修复请求。pending 优先处理；failed 只有显式 `--retry-failed`、超过五分钟退避且累计少于 `FILTER_CONFIG.maxRetries`（当前 5 次）时才重试。新尝试分别记录请求、响应及费用依据；OpenAI Responses 从第二次已登记尝试起，输出预算至少为 4096 tokens。
 
-请求中断后先恢复已有回执或决定文件。intent 已存在而终态响应不可知时，保守记为带错误类型的失败，不自动重复计费。用量完整、输出非零且严格 JSON 的 `included`/`excluded` 才能成为最终决定。账号池切换前的完整原始响应无法从公共封装取得时，回执保留物理请求的 usage-ledger 事件 SHA，并单独保存终态原始响应，不能把不可得状态说成完整响应。全集 complete 后才生成只含 included 身份的选择回执。
+请求中断后先恢复已有回执或决定文件。intent 已存在而终态响应不可知时，保守记为带错误类型的失败，不自动重复计费。用量完整、输出非零且严格 JSON 的 `included`/`excluded` 才能成为最终决定。账号池切换前的完整原始响应无法从公共封装取得时，回执保留物理请求的用量账本事件 SHA，并单独保存终态原始响应，不能把不可得状态说成完整响应。全集 complete 后才生成只含 included 身份的选择回执。
 
 当前筛选批量 runner 会捕获公共请求异常，把安全 `errorCode` 和用量写入回执，转成该篇失败后继续处理下一 pending 项；它尚未按 `scope=run` 原样抛出并停止本轮派发。不要把后面 `process` 或会议队列的停止行为当作筛选也已具备的保证。发现账号或服务故障时应停止筛选运行，保留失败证据，排除故障后再按上述条件恢复。
 
@@ -243,7 +243,7 @@ npm run conference:new:publish:status -- --conference-id odyssey-2026 --process-
 
 ### main 前移后的恢复
 
-尚未发布的生成清单（`generation.json`）因日更或 UI 更新遇到 `main` 前移时，重新走正常 `generate → review → push`，不得手改清单、审查记录或直接重放旧 push。generate 分别核对博客和图床的推送目标、`HEAD = 远端 main`，确认旧基线存在且是当前基线祖先，并逐提交检查所有会议目标，包括合并提交的父提交；“改过又恢复”不能视为未改。
+尚未发布的生成清单（`generation.json`）因日更或 UI 更新遇到 `main` 前移时，重新走正常 `generate → review → push`，不得手改清单、审查记录或直接重跑旧 push。generate 分别核对博客和图床的推送目标、`HEAD = 远端 main`，确认旧基线存在且是当前基线祖先，并逐提交检查所有会议目标，包括合并提交的父提交；“改过又恢复”不能视为未改。
 
 已经发布的目标须在当前提交中保留生成清单绑定的精确文件字节和 `100644` 模式；未发布的目标从旧基线到当前提交不得被触及，旧基线可以是旧内容或不存在。两种情况都要求工作区目标路径安全、是普通文件、硬链接数为 1、权限为 `0644`，字节 SHA 与旧清单一致。目标冲突、删除、可执行或符号链接模式变化、工作区漂移、未知基线、非祖先历史替换或远端身份改变都拒绝；其他进程仍须遵守共享锁。
 
@@ -592,7 +592,7 @@ npm run conference:execution -- transition --execution UUID \
 
 单个既有日批次可查 [`rewrite:source`](fresh-rewrite.md)。全历史会议页优先走 `history:conference-local-sources → history:direct-inputs → history:conference-projections → history:direct-plan` 后进入直接重写队列，不要求先跑旧账本或执行状态，也不把旧全文、任意路径或旧解读直接塞进正式分析。
 
-会议来源只读取本地来源清单已绑定的 metadata/PDF SHA 和冻结页面对应记录，本轮解读所需图片从 PDF 在系统临时目录准备。本地文件缺失或损坏只使该项失败，不转入 crosswalk 或备用 arXiv 获取。arXiv 来源根据冻结页的单一 arXiv 线索，每个新的来源获取序号都重新获取官方文本、PDF、runtime metadata 和 manifest；同一获取序号恢复时，先核验并复用原四文件。只有明确命名的 arXiv 新获取失败交接才能进入 crosswalk，不能任意调用备用链。只有当前官方 PDF 返回 404 后才可尝试同 ID 历史版本，文本须来自实际选中 PDF，引用使用核验的 `sourceVersion`，不能把获取序号当论文修订号或猜成 `v1`。
+会议来源只读取本地来源清单已绑定的 metadata/PDF SHA 和冻结页面对应记录，本轮解读所需图片从 PDF 在系统临时目录准备。本地文件缺失或损坏只使该项失败，不转入来源对照流程（crosswalk）或备用 arXiv 获取。arXiv 来源根据冻结页的单一 arXiv 线索，每个新的来源获取序号都重新获取官方文本、PDF、runtime metadata 和 manifest；同一获取序号恢复时，先核验并复用原四文件。只有明确命名的 arXiv 新获取失败交接才能进入来源对照流程，不能任意调用备用链。只有当前官方 PDF 返回 404 后才可尝试同 ID 历史版本，文本须来自实际选中 PDF，引用使用核验的 `sourceVersion`，不能把获取序号当论文修订号或猜成 `v1`。
 
 ICML/OpenReview 替代 PDF 默认拒绝，不能以相似题目替换来源。经用户授权的跨标题预印本例外仅为 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`，由代码白名单绑定 poster/forum、固定 SSRN 题目与作者、DOI 及 PDF、凭证和来源的 SHA。浏览器文件只经受控 `--import-file` 导入，记录 `networkResponseObserved: false`；计划、模型输入和页面都须显示不是会议 camera-ready 定稿，不能推广到其他论文。完整来源和发布要求见历史文档。
 

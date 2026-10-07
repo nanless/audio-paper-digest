@@ -88,14 +88,14 @@ npm run conference:new:process -- --dry-run --catalog catalog.json --report repo
 
 ### 来源与计划
 
-`npm run history:inventory -- --dry-run` 只读扫描历史页面、URL、汇总链接、Git tracked tree、日期/cohort 和待核旧标签 URL，只保存正文 SHA，不保存旧正文或 sidecar 路径。确认博客处于干净 `main` 后才写入：
+`npm run history:inventory -- --dry-run` 只读扫描历史页面、URL、汇总链接、Git tracked tree、日期/cohort 和待核旧标签 URL，只保存正文 SHA，不保存旧正文或附属文件路径。确认博客处于干净 `main` 后才写入：
 
 ```bash
 npm run history:inventory -- --apply \
   --ledger all-history.json --receipt all-history.receipt.json
 ```
 
-两份文件保存到受保护的 `data/runtime/historical-page-inventories`。当前 `direct-local-first` 从冻结页面的唯一 arXiv 提示和已核验会议来源创建计划，不等待 crosswalk。arXiv 每个 `generation` 都重新保存并核验官方文本、PDF、来源元数据与清单；会议核验保留的本地元数据/PDF。这里的 generation 是获取序号，与论文修订号 `vN` 不同。
+两份文件保存到受保护的 `data/runtime/historical-page-inventories`。当前 `direct-local-first` 从冻结页面的唯一 arXiv 提示和已核验会议来源创建计划，不等待状态维护结果。arXiv 每个 `generation` 都重新保存并核验官方文本、PDF、来源元数据与清单；会议核验保留的本地元数据/PDF。这里的 generation 是获取序号，与论文修订号 `vN` 不同。
 
 下面文件参数使用绝对路径；先预览，再显式写入。首次生成本地来源清单前须准备缺失 PDF，不能覆盖旧不可变文件名。OpenReview 可达时优先官方来源；替代来源仅限代码白名单。
 
@@ -147,7 +147,7 @@ npm run history:resume -- --plan /abs/direct-rewrite-plan-v5.json --phase source
 
 暂停请求等待已开始的来源或论文处理完成；相应操作锁释放后才用同 phase 的 resume。普通 status 是只读快照，`--watch-seconds` 持续输出 NDJSON。`--verify-sources true` 单次重新计算所有本地来源 SHA，不能与 watch 同用。
 
-未传 `--publication-id` 时，普通/watch 状态完全离线，只说明未选择发布。传入后默认现场核对远端 main 与审查凭证记录的远端身份/OID；`--live-remote false` 只作离线诊断，不能得到 complete。发布状态是单次检查，不能与 watch 同用，并会深核全部 arXiv 文件和会议来源 SHA。
+未传 `--publication-id` 时，普通/watch 状态完全离线，只说明未选择发布。传入后默认现场核对远端 main 与审查凭证中记录的远端身份/OID；`--live-remote false` 只作离线诊断，不能得到 complete。发布状态是单次检查，不能与 watch 同用，并会深核全部 arXiv 文件和会议来源 SHA。
 
 完整状态取决于计划的全部论文、来源、日汇总、会议汇总和精确任务页覆盖，以及绑定同一 plan SHA 的发布完成状态。数量从 plan/projection 推导，并非固定要求 4185 篇、109 日加 3 会或 193 任务；这些数字只能说明特定历史计划，不能当通用阈值。`completion.blockers` 会列出未覆盖页面、失败或未生成页面的论文、缺失汇总，以及未选择、未完成或计划不符的发布。
 
@@ -165,7 +165,7 @@ projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文
 
 实际发布使用 `history:direct-publication`，依次 plan、generate、review、publish、status。逐页通过记录只按路径与内容 SHA 复用，本批仍执行确定性/Hugo 检查并生成审查凭证。`activate --apply` 被禁用；`publish --apply` 在共享博客锁内处理激活、提交、推送和远端 OID。精确参数与视觉处置见[独立历史发布](history-direct-publication.md)。旧 `history:publication` 只提供 plan/generate 私有文件，不能用来真正发布。
 
-正常 direct 任务不依赖 crosswalk。`history:crosswalk` 仍保留显式旧状态维护：`prepare --apply`、`apply`、`apply-verified` 和 `finalize` 可以按来源授权及 CAS 检查写入状态或凭证，并非全部只读。备用 `history:arxiv-batch` 必须给出 `--handoffs NAME.json[,NAME.json...]`，只接受 scheduler/run 保存的命名、不可变的新 arXiv 获取失败交接文件，不枚举 pending 页面。会议本地来源缺失或损坏只使该项失败，不进入这条备用批处理。`history:local-crawl-batch`、`archive-crawl-batch` 和 `history:conference-crawl-batch` 已停用，不能写 crosswalk。详见[历史重写底座](history-rewrite.md)。
+正常 direct 任务不依赖状态维护。`history:crosswalk` 仍保留显式旧状态维护：`prepare --apply`、`apply`、`apply-verified` 和 `finalize` 可以按来源授权及 CAS 检查写入状态或凭证，并非全部只读。备用 `history:arxiv-batch` 必须给出 `--handoffs NAME.json[,NAME.json...]`，只接受 scheduler/run 保存的命名、不可变的新 arXiv 获取失败交接文件，不枚举 pending 页面。会议本地来源缺失或损坏只使该项失败，不进入这条备用批处理。`history:local-crawl-batch`、`archive-crawl-batch` 和 `history:conference-crawl-batch` 已停用，不能写状态记录。详见[历史重写底座](history-rewrite.md)。
 
 ## 视觉任务状态
 
