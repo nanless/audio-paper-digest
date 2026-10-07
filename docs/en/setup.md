@@ -42,7 +42,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 The current example uses OpenCode Go `mimo-v2.6-flash` through OpenAI Chat Completions, with the `/v1` endpoint used as-is; `muse-spark-*` models still use OpenAI Responses. The project configuration is what actually selects the model. Public endpoints require HTTPS. HTTP is allowed only for loopback test services.
 
-`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` is used only by the historical ICLR 2026 source collector. It must point at retained local official accepted-paper metadata and PDFs. When unset, it defaults to `~/code/github_repos/iclr2026-paper-scraper`. It supplies no daily-fetch input, triggers no download, and is not an arXiv writing source.
+`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` is used only by the historical ICLR 2026 source collector. It must point at retained local official accepted-paper metadata and PDFs. When unset, it defaults to `~/code/github_repos/iclr2026-paper-scraper`. Daily fetching and arXiv writing both ignore it, and setting it triggers no download.
 
 ### Fallback accounts
 

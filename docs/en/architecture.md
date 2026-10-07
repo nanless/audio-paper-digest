@@ -16,7 +16,7 @@ run-daily-digest.sh
   └─ visual planners → Codex image_gen → inspection, record, and status
 ```
 
-Node owns fetching, filtering, daily source capture, per-paper analysis, checkpoints, and visual tasks. Python owns page generation, read-only review, Hugo checks, and the Git publication transaction. Treat the Hugo repository as a publication target only, never as a source of analysis facts. Filtering ignores uncommitted pages when it builds the deduplication baseline.
+Node owns fetching, filtering, daily source capture, per-paper analysis, checkpoints, and visual tasks. Python owns page generation, read-only review, Hugo checks, and the Git publication transaction. The Hugo repository is a publication target, not a source of analysis facts. Uncommitted pages cannot change the deduplication baseline used during filtering.
 
 Node and Python share account selection and cooldown state in `data/runtime/llm-account-pool.json`. These request states stay out of paper, prompt, and publication-content fingerprints. The file holds no raw key, but its credential fingerprints are still sensitive, so keep it at `0600`.
 
@@ -35,11 +35,11 @@ saved source files
   → optional legacy image supplement
 ```
 
-After LLM filtering and before analysis, every selected arXiv ID refetches official HTML text and PDF and atomically saves the four-file `daily-fresh-source-run-v1` bundle. Analysis, Reader, and Python publication all revalidate the files that `dailyFreshSourceRun` names. Missing files or a SHA mismatch stop the run before any model or figure request. A source `generation` numbers one captured file set, and has nothing to do with the paper revision `vN`. Citations must use the version the saved record actually establishes.
+After LLM filtering and before analysis, every selected arXiv ID refetches official HTML text and PDF and atomically saves the four-file `daily-fresh-source-run-v1` bundle. Analysis, Reader, and Python publication all revalidate the files that `dailyFreshSourceRun` names. Missing files or a SHA mismatch stop the run before any model or figure request. A source `generation` identifies one captured file set. It is not the paper revision `vN`. Citations must use the version the saved record actually establishes.
 
 Official figure pixels are prepared in the system temporary directory for the current call only. They stay out of `data/current` and out of runtime image caches. A figure over the limit may be skipped. When the provider explicitly rejects a PNG as corrupt or incompatible, the run may convert it to a white-background RGB JPEG and retry. The final evidence records the pixel SHA actually sent to the model.
 
-Each stage saves its input fingerprint, model and protocol, prompt SHA, evidence budget, output SHA, and final state. Change an input and only the affected stage is invalidated, along with everything downstream. A normalized arXiv-ID lock protects each paper. Any merge rereads the accepted analysis record inside that lock, so a stale object read outside it is discarded.
+Each stage saves its input fingerprint, model and protocol, prompt SHA, evidence budget, output SHA, and final state. Change an input and only the affected stage is invalidated, along with everything downstream. A normalized arXiv-ID lock protects each paper. Merging requires rereading the accepted analysis record inside that lock, because a stale object read outside it must not overwrite.
 
 Model output has token, elapsed-time, and response-byte limits, and Node analysis also checks that streamed responses end correctly. Node and Python both check the response terminal state before accepting text: Responses `incomplete/failed/cancelled`, Chat `length`, and Anthropic `max_tokens` do not count as success, even when the text happens to be complete JSON. Python keeps a bounded recovery only for responses that originally had no text and spent their output budget on hidden reasoning. A rejected nonempty body gets no such recovery.
 
@@ -90,7 +90,7 @@ The remote OID proves only that the Git commit reached the remote. Before callin
 | Hugo repository | Generated pages, static assets, and verified publication commits |
 | `logs/` | Redacted diagnostics under age and capacity retention rules |
 
-Do not read an existing file as a complete stage: consumers check dates, paper sets, state, input fingerprints, and SHA. Historical snapshots are usable for recovery only after they pass the cross-file checks, and they never excuse a current batch failure.
+An existing file does not mean the stage is complete. Consumers check dates, paper sets, state, input fingerprints, and SHA. Historical snapshots are usable for recovery only after they pass the cross-file checks, and they never excuse a current batch failure.
 
 ## Lock boundaries
 

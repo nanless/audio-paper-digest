@@ -42,7 +42,7 @@ PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 
 当前文档示例使用 OpenCode Go 的 `mimo-v2.6-flash`，通过 OpenAI Chat Completions 请求，`/v1` 端点原样使用；`muse-spark-*` 模型仍走 OpenAI Responses。实际模型由项目配置决定。公开服务端点必须使用 HTTPS，只有本机回环测试服务允许 HTTP。
 
-`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 只供历史 ICLR 2026 会议来源收集使用，须指向已保留的本地官方录用论文信息与 PDF。未配置时使用 `~/code/github_repos/iclr2026-paper-scraper`。它不参与日更抓取，不会触发下载，也不作为 arXiv 写作输入。
+`PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` 只供历史 ICLR 2026 会议来源收集使用，须指向已保留的本地官方录用论文信息与 PDF。未配置时使用 `~/code/github_repos/iclr2026-paper-scraper`。日更抓取和 arXiv 写作都不读它，设置它也不会触发下载。
 
 ### 备用账号
 

@@ -13,7 +13,7 @@ This page explains what each file contains, which records must agree, and when r
 | Publication and visuals | Generation manifests, review receipts, publication commits, visual tasks, and asset records. |
 | Cross-batch request state | `data/runtime/llm-account-pool.json` keeps the active account and quota cooldowns outside batch rotation. |
 
-A file that exists, or that declares itself `complete`, may still be unfinished. Its inputs, sources, and related records must pass the relevant checks. SHA values tell you the bytes are unchanged; they say nothing about factual correctness and are not a reviewer's digital signature.
+A file that exists, or that declares itself `complete`, may still be unfinished. Its inputs, sources, and related records must pass the relevant checks. SHA values tell you the bytes are unchanged; they do not establish factual correctness and are not a reviewer's digital signature.
 
 A source `generation` identifies a capture. Account-pool and mutable-data generations count updates, and a blog generation manifest records rendered output. None of these numbers is an arXiv `vN` revision.
 
@@ -122,7 +122,7 @@ A successful push adds `publicationCommit`, matching `remoteVerifiedOid`, remote
 
 `visual-summary-manifests/<date>.json` records TOP 10 ranking, paper task tokens, reference identities, generation context, QA claims, and asset hashes. `digest-cover-manifests/<date>.json` records the batch title, popular directions, ranking, and cover asset.
 
-Modern daily tasks with `ephemeral-no-persisted-figure-assets-v1` validate official figure identity and use empty reference paths. Only legacy compatibility tasks validate persistent caches. A task is complete only with the current publication commit and remote OID, task token, the archive path, correct asset SHA, dimensions and format, and `qaAttested=true`.
+Modern daily tasks with `ephemeral-no-persisted-figure-assets-v1` validate official figure identity and use empty reference paths. Only legacy compatibility tasks validate persistent caches. Completion requires the current publication commit and remote OID, task token, the archive path, correct asset SHA, dimensions and format, and `qaAttested=true`.
 
 A user-requested visual `waiver` is separate, bound to publication and both manifest SHAs, and invalidated by changes. It replaces the visual requirement alone, not data, review, remote, or live-site checks.
 

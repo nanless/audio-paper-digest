@@ -2,7 +2,7 @@
 
 ## Method
 
-Start with the earliest failed stage and identify its inputs, configuration, and records before choosing a recovery command. All project diagnostics run outside the sandbox. If a local proxy is unreachable inside the sandbox, that says nothing about the target site. Do not edit checkpoints or source files just to make an error disappear.
+Start with the earliest failed stage and identify its inputs, configuration, and records before choosing a recovery command. All project diagnostics run outside the sandbox. A failure to reach a local proxy inside the sandbox does not establish a target-site outage. Do not edit checkpoints or source files just to make an error disappear.
 
 ## Missing Configuration
 
@@ -15,9 +15,9 @@ npm run workspace:role -- status
 
 The role must match the directory's purpose. If the marker is missing or its real path does not match, follow [Setup](setup.md) before binding the role. `node scripts/test-api-key.js` can test the model connection on its own, but it sends a real API request and is not an offline check.
 
-## Muse Failure or Empty Response
+## Primary Model Failure or Empty Response
 
-Check that the model name matches project configuration, that `HTTPS_PROXY` or `HTTP_PROXY` supplies an `http(s)://` CONNECT proxy, and that the command runs outside the sandbox. Verify the proxy exit region expected for the account. If `PD_OPENAI_RESPONSES_STREAM=1` is enabled, check that the proxy supports SSE.
+Check that the model name matches project configuration and that the command runs outside the sandbox. With Muse, `HTTPS_PROXY` or `HTTP_PROXY` must supply an `http(s)://` CONNECT proxy whose exit region matches the account. If `PD_OPENAI_RESPONSES_STREAM=1` is enabled, check that the proxy supports SSE.
 
 Muse uses a separate CONNECT proxy connection object for each request and destroys it afterward. Do not switch it to direct access. `incomplete/max_output_tokens` means truncation: adjust evidence, output budgets, or the prompt and retry. Never accept partial JSON.
 
@@ -47,7 +47,7 @@ Look for mismatched candidate/decision input SHA, missing decisions, API failure
 
 ## Slow or Repeated Analysis Failure
 
-Identify the failed stage and its saved records before restarting an entire paper. Whole-paper concurrency defaults to 3, heavy Reader stages to 5, and Muse filtering follows `PD_FILTER_BATCH_SIZE`. Primary analysis, local repair, and Reader generation have separate output and context budgets.
+Identify the failed stage and its saved records before restarting an entire paper. Whole-paper concurrency defaults to 3, heavy Reader stages to 5, and filtering follows `PD_FILTER_BATCH_SIZE`. Primary analysis, local repair, and Reader generation have separate output and context budgets.
 
 Reader repair normally allows 8000 output tokens. If a repair truncates exactly at the base limit and the candidate is still eligible for extra recovery, the run saves the failed draft and stops. The next explicit resume can use one higher-budget repair, up to 16000 tokens by default. That attempt is shared with implementation-upgrade recovery and cannot be stacked with it. Custom limits still depend on the full-article and base-repair budgets. Any model content consumes the attempt, while a transport failure with no content does not. Truncated content stays invalid.
 

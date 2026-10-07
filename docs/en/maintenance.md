@@ -37,6 +37,8 @@ This guide is for maintainers changing the default API, shared publication, prom
 
 `loadPrompt()` reads the first fenced block. Check that placeholders match the caller, the output matches the parser, inner examples do not break the outer fence, and the prompt SHA belongs to the correct stage fingerprint. Retry feedback has to locate the problem and limit what changes. Reader prose must contain no template sentences, evidence IDs, or workflow commentary.
 
+Prompt text is versioned by file and registered in `scripts/lib/prompt-text-versions.js`: v1 stays frozen at its original path (the prompt files in the table above are v1), and the current version is the same name with a -v2 suffix. New wording goes into a new version file; never edit the frozen v1. An older record is recomputed from the version it declares: a missing field means v1, and an unknown version is an error. After upgrading a version, recheck stage fingerprints and the conference and manual prompt lists.
+
 Scoring changes must preserve dimension order and ranges, Open Source anchors, evidence IDs, and code-calculated caps. Sample Reader output for term bridges, table explanations, adjacent figure discussion, and limits on descriptions without pixels.
 
 Table-count diagnostics use a stable `code`, `requiredCount`, and `actualCount`. Changes must cover production, collection, repair, feedback, and recovery signatures. A new typed diagnostic must not fall back to parsing prose. See [Data formats](data-format.md) and [Reader writing](../reader-writing.md) for fields and bounded legacy compatibility.
@@ -53,7 +55,7 @@ Explain each new field's purpose and validation:
 | Publication receipt | Bind exact files and required external state |
 | Optional diagnostic | Do not independently change completion |
 
-Structural changes require Node validators, Python publishers, fixtures, migration/historical compatibility, and `validate:data` updates. SHA checks bytes and correspondence. It says nothing about content correctness or successful deployment.
+Structural changes require Node validators, Python publishers, fixtures, migration/historical compatibility, and `validate:data` updates. SHA checks bytes and correspondence. It does not establish content correctness or successful deployment.
 
 ## Concurrency and Atomicity
 

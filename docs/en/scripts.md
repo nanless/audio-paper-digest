@@ -16,7 +16,7 @@ This page lists commands by task. File responsibilities live in [scripts/README.
 
 `digest:manual` requires an explicit request for human processing. Exit 0 from the default entry only means its script stages passed.
 
-A complete batch also needs a successful GitHub Pages build/deploy for the publication commit, or for a later commit that preserves the reviewed page bytes. Check HTTP 200, the official address, and the title of every digest and paper page by hand, and keep the results. Create, inspect, and record the infographics and cover with the built-in image tool, unless a valid user waiver covers visuals alone. Read `digest:status` afterward. It does not yet check deployment or live pages.
+Completion also requires a successful GitHub Pages build/deploy for the publication commit, or for a later commit that preserves the reviewed page bytes. Check HTTP 200, the official address, and the title of every digest and paper page by hand, and keep the results. Create, inspect, and record the infographics and cover with the built-in image tool, unless a valid user waiver covers visuals alone. Read `digest:status` afterward. It does not yet check deployment or live pages.
 
 ## Workspace Role
 
@@ -143,7 +143,7 @@ Pause requests let active sources or papers finish. Resume the same phase only a
 
 Without `--publication-id`, normal/watch status remains offline and reports no publication selected. Selecting one enables live remote-main verification against receipt identity/OID by default. `--live-remote false` is diagnostic-only and cannot complete. Publication status is one-shot, incompatible with watch, and deeply revalidates every arXiv bundle and conference source SHA.
 
-A complete run needs the plan's full paper set, sources, daily/conference aggregates, exact task-page coverage, and a completed live publication bound to the same plan SHA. Counts come from plan/projection. Numbers such as 3,824 papers, 107 daily plus 3 conference aggregates, or 193 task pages describe only a particular plan, not universal thresholds. `completion.blockers` reports uncovered pages, failed/unstaged papers, missing aggregates, and unselected, incomplete, or mismatched publication.
+Completion requires the plan's full paper set, sources, daily/conference aggregates, exact task-page coverage, and a completed live publication bound to the same plan SHA. Counts come from plan/projection. Numbers such as 3,824 papers, 107 daily plus 3 conference aggregates, or 193 task pages describe only a particular plan, not universal thresholds. `completion.blockers` reports uncovered pages, failed/unstaged papers, missing aggregates, and unselected, incomplete, or mismatched publication.
 
 ### Aggregates and independent publication
 
