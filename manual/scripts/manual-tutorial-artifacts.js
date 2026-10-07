@@ -11,6 +11,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const { writeFileAtomic } = require('../../scripts/utils.js');
 
@@ -409,15 +410,43 @@ function renderMarkdownTable(table) {
     return rendered.join('\n');
 }
 
+// 私网和本地地址的前缀表。IPv4 除了十段、172.16/12、192.168/16 这些常识段，
+// 还要挡住运营商级 NAT（100.64/10）、网络设备基准测试段（198.18/15）和组播以上；
+// IPv6 挡住未指定、回环、fc00::/7 与 fe80::/10。
+const PRIVATE_HOST_BLOCKS = new net.BlockList();
+for (const [base, prefix] of [
+    ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+    ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.168.0.0', 16],
+    ['198.18.0.0', 15], ['224.0.0.0', 4]
+]) {
+    PRIVATE_HOST_BLOCKS.addSubnet(base, prefix, 'ipv4');
+}
+for (const [base, prefix] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::', 10]]) {
+    PRIVATE_HOST_BLOCKS.addSubnet(base, prefix, 'ipv6');
+}
+
 function isPrivateOrLocalHostname(hostname) {
-    const host = String(hostname || '').toLowerCase();
-    if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
-    const octets = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-    if (!octets) return false;
-    const [a, b] = octets.slice(1).map(Number);
-    return a === 0 || a === 10 || a === 127 || a >= 224
-        || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-        || (a === 192 && b === 168);
+    let host = String(hostname || '').toLowerCase();
+    if (!host) return true;
+    // url.hostname 对 IPv6 字面量返回带方括号的形式，这里按裸地址判断。
+    if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+    // 末尾的根点（localhost.）和 IPv6 的 scope id（fe80::1%eth0）不影响地址本身。
+    if (host.endsWith('.')) host = host.slice(0, -1);
+    const zoneIndex = host.indexOf('%');
+    if (zoneIndex !== -1) host = host.slice(0, zoneIndex);
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+    const family = net.isIP(host);
+    if (family === 0) return false;
+    if (PRIVATE_HOST_BLOCKS.check(host, family === 4 ? 'ipv4' : 'ipv6')) return true;
+    // ::a.b.c.d 这种 IPv4 兼容地址（RFC 4291 已废弃）不是 ::ffff: 映射地址，
+    // net.BlockList 不会把它当 IPv4 看，这里取出末尾 32 位再查一次。
+    const compatible = family === 6 && host.match(/^::(?:([0-9a-f]{1,4}):)?([0-9a-f]{1,4})$/);
+    if (compatible) {
+        const value = (parseInt(compatible[1] || '0', 16) * 65536) + parseInt(compatible[2], 16);
+        const embedded = [value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255].join('.');
+        return PRIVATE_HOST_BLOCKS.check(embedded, 'ipv4');
+    }
+    return false;
 }
 
 function isSafeHttpsUrl(value) {

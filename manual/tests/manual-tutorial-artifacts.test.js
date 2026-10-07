@@ -104,6 +104,23 @@ describe('Manual 教程产物的汇总', () => {
         }).eligible, false);
     });
 
+    it('拒绝 IPv6 本地地址、CGNAT 与基准测试段，公网 IPv6 不受影响', () => {
+        for (const url of [
+            'https://[::1]/figure1.png', 'https://[fd00::1]/figure1.png', 'https://[fe80::1]/figure1.png',
+            'https://[::ffff:127.0.0.1]/figure1.png', 'https://100.64.1.1/figure1.png', 'https://198.18.1.1/figure1.png'
+        ]) {
+            const decision = classifyFigureCandidate({ id: 'IMG0001', url, caption: '图 1', figureOrdinal: 1 });
+            assert.equal(decision.eligible, false, url);
+            assert.match(decision.reason, /不是可用的安全 HTTPS 公网地址/, url);
+        }
+        for (const url of [
+            'https://[2001:db8::1]/figure1.png', 'https://[2606:4700::1111]/figure1.png', 'https://8.8.8.8/figure1.png'
+        ]) {
+            const decision = classifyFigureCandidate({ id: 'IMG0001', url, caption: '图 1', figureOrdinal: 1 });
+            assert.equal(decision.eligible, true, url);
+        }
+    });
+
     it('以确定结果渲染 AllMusicCaps 的三张表，数字完全保真', () => {
         const index = allMusicCapsArtifact();
         assert.equal(index.tables.length, 3);
