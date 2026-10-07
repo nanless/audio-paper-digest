@@ -129,7 +129,7 @@ npm run conference:new:filter -- status --filter UUID
 npm run conference:new:filter -- apply --filter UUID --decision DECISION.json --owner OPERATOR
 ```
 
-新任务只使用 v6 配置；模型请求记录使用 `conference-filter-llm-request-v3`。旧 v5 配置只供原 UUID 的已有任务恢复，核验原记录后仍按原格式继续，不能用它创建新任务。新旧词表字段不能同时出现，即使值相同或为空。决定、选择回执、选择凭据和锁记录仍使用各自的版本5，不能把它们当成任务版本6。
+新任务只使用 v6 配置；模型请求记录使用 `conference-filter-llm-request-v3`。旧 v5 配置只供原 UUID 的已有任务恢复，核验原记录后仍按原格式继续，不能用它创建新任务。新旧词表字段不能同时出现，即使值相同或为空。决定、选择回执、选择凭据和锁记录仍使用各自的版本 5，不能把它们当成任务版本 6。
 
 每会配置位于 `data/runtime/conference-filter-specs/`，只能由 `spec` 从同会认证的 discovery 双文件及完整摘要证据运行生成，不能跨会议共享。以下字段示例中的占位 SHA 须按相应文件原字节或规范化对象真实计算，不能直接通过校验：
 
@@ -173,7 +173,7 @@ AAAI 的 `locator` 还须精确包含 `"profile":"aaai-2026-bare-introduction-v1
 
 `prepare` 返回的 `filterId` 用于运行和恢复。先用 `--limit 1` 检查一篇论文的请求、响应和筛选记录，再保持同一组输入、去掉 `--limit` 继续。推荐全局最多同时运行 5 个不同筛选任务；这是操作建议。同一 `filterId` 的请求、原始响应、用量和状态更新共用一把锁，不得启动并发 worker。中断后继续使用原 catalog、spec 和 `filterId`，不能换输入恢复旧任务。
 
-每次请求先在锁内以 `O_EXCL` 保存 intent，再保存终态 HTTP 原始响应、提供方用量及各物理请求的 usage-ledger 事件绑定，最后生成决定文件并按状态 SHA 比较后更新。入选和排除决定都须有受控文件；模型决定还须真实请求/响应字节、模型/协议及非零逻辑请求用量。人工决定使用独立 actor，不能冒充模型。普通 `buildDecisionArtifact` 和人工 `filter apply` 拒绝 LLM actor；生产证据生成器不接受自传 transport 函数。
+每次请求先在锁内以 `O_EXCL` 保存 intent，再保存终态 HTTP 原始响应、提供方用量及各物理请求的用量账本（usage-ledger）事件绑定，最后生成决定文件并按状态 SHA 比较后更新。入选和排除决定都须有受控文件；模型决定还须真实请求/响应字节、模型/协议及非零逻辑请求用量。人工决定使用独立 actor，不能冒充模型。普通 `buildDecisionArtifact` 和人工 `filter apply` 拒绝 LLM actor；生产证据生成器不接受自传 transport 函数。
 
 筛选与日更使用同一个结构化决定解析器。格式无法解析时保存响应和用量，记为 `failed`，不在同一 intent 中追加格式修复请求。pending 优先处理；failed 只有显式 `--retry-failed`、超过五分钟退避且累计少于 `FILTER_CONFIG.maxRetries`（当前 5 次）时才重试。新尝试分别记录请求、响应及费用依据；OpenAI Responses 从第二次已登记尝试起，输出预算至少为 4096 tokens。
 
@@ -253,7 +253,7 @@ npm run conference:new:publish:status -- --conference-id odyssey-2026 --process-
 
 ### 自动验收覆盖什么
 
-新 v2 发布在推送博客和图床后，自动 GET 已审页面和全部图片，通过后才保存发布完成记录。页面检查 HTTP 200、HTML 类型、最终 URL 与唯一正式地址一致，以及已审正文、图片顺序和表格单元格的对应投影；含公式时还检查数学脚本存在。图片检查 PNG 类型、实际字节 SHA 和可解码性，允许通过安全核验的重定向，不套用页面最终 URL 必须等于正式地址的条件。线上核验默认并发 4，`PD_CONFERENCE_ONLINE_VERIFY_CONCURRENCY` 范围 1–16。
+新 v2 发布在推送博客和图床后，自动 GET 已审页面和全部图片，通过后才保存发布完成记录。页面检查 HTTP 200、HTML 类型、最终 URL 与唯一正式地址一致，以及已审正文、图片顺序和表格单元格的对应关系；含公式时还检查数学脚本存在。图片检查 PNG 类型、实际字节 SHA 和可解码性，允许通过安全核验的重定向，不套用页面最终 URL 必须等于正式地址的条件。线上核验默认并发 4，`PD_CONFERENCE_ONLINE_VERIFY_CONCURRENCY` 范围 1–16。
 
 GET 使用项目 HTTP CONNECT，逐跳核验公网地址并限制响应。全链共享 60 秒期限，响应最多 16 MiB；每一跳的瞬时传输最多尝试 6 次。HTTP 状态、哈希和 HTML 不匹配不作为瞬时故障重试。线上尚未符合时保留远端已经推送的事实，继续运行 `verify`，不要重新分析论文。
 
@@ -551,7 +551,7 @@ npm run conference:execution -- prepare \
 
 并发进程已创建相同 `authority.json` 时，失败方只重验完整文件组，不回滚共享文件。其他创建错误只清理由本进程记录、且当前 dev/ino/size/SHA 仍与写入描述符一致的文件或目录。操作锁、状态 SHA 比较及受控补丁保证可恢复，不能删除记录绕过检查。
 
-transition 只读 execution `patches/` 直属 JSON。`expectedStateSha256` 使用当前 status 对应值，`operationId` 不可复用于不同字节。来源就绪补丁如下；没有 completion-proof bundle 时手写 completed 一定拒绝：
+transition 只读 execution `patches/` 直属 JSON。`expectedStateSha256` 使用当前 status 对应值，`operationId` 不可复用于不同字节。来源就绪补丁如下；没有完成证明包（completion-proof bundle）时手写 completed 一定拒绝：
 
 ```json
 {

@@ -8,7 +8,7 @@ Use this guide to run or recover a dated digest. First follow [Setup](setup.md) 
 npm run digest:prepare -- YYYY-MM-DD
 ```
 
-`digest:api` is an exact alias. A complete task covers candidate and analysis data, blog publication, live-site checks, and the paper infographics and cover. An analysis file, or a script that exited 0, is not enough on its own. Use the [Manual subsystem](../../manual/README.md) only when someone explicitly asks for it; model, network, or quota failures never switch to it automatically.
+`digest:api` is an exact alias. A complete task covers candidate and analysis data, blog publication, live-site checks, and the paper infographics and cover. An analysis file, or a script that exited 0, does not finish the task by itself. Use the [Manual subsystem](../../manual/README.md) only when someone explicitly asks for it. Model, network, or quota failures never switch to it automatically.
 
 ## Sequence
 
@@ -40,14 +40,14 @@ Candidates are merged by normalized arXiv ID, deduplicated against published blo
 
 ## 3. Keyword and LLM Filtering
 
-The keyword layer keeps papers that might be relevant; the model makes the final call:
+The keyword layer keeps papers that might be relevant. The model makes the final call:
 
 - Papers in the core categories `eess.AS` and `cs.SD` always reach the model.
 - An abstract under 80 characters cannot be rejected on keywords alone.
 - Matches for audio, speech, music, acoustics, multimodal speech, and common models or datasets reach the model.
 - In supplementary categories, only complete abstracts with no clear match may be rejected by keyword rules.
 
-Decisions are saved per paper in `filter-decisions.json`. Muse uses the configured filter batch size. The current account moves to a later account only on an explicit `GoUsageLimitError` or `Insufficient balance` response; a generic 429 follows rate-limit backoff. Filtering is complete only when decisions cover every candidate and `filtered-papers.json` exactly matches the relevant decisions minus explicit exclusions.
+Decisions are saved per paper in `filter-decisions.json`. Muse uses the configured filter batch size. The current account moves to a later account only on an explicit `GoUsageLimitError` or `Insufficient balance` response. A generic 429 follows rate-limit backoff. Filtering is complete only when decisions cover every candidate and `filtered-papers.json` exactly matches the relevant decisions minus explicit exclusions.
 
 ## 4. Full Text and Staged Analysis
 
@@ -90,7 +90,7 @@ Generate reparses scores and article content from the recorded data. Reader-v3 a
 
 Citations and pages use the verified source version. A base arXiv ID is never guessed to mean `v1`. If the current PDF returned 404 and an official historical version of the same paper was used, the saved `sourceVersion.selectedSourceId` supplies the actual version, and the page keeps the current-unavailable warning.
 
-Review checks the digest first and paper pages concurrently, using programmatic checks, LLM review, image review, and Hugo builds. It never changes pages; content corrections go back to generation or analysis. Per-page passes are keyed permanently by relative path and exact page-content SHA, so only changed content has to be reviewed again. Hugo and other current-batch checks still run.
+Review checks the digest first and paper pages concurrently, using programmatic checks, LLM review, image review, and Hugo builds. It never changes pages. Content corrections go back to generation or analysis. Per-page passes are keyed permanently by relative path and exact page-content SHA, so only changed content has to be reviewed again. Hugo and other current-batch checks still run.
 
 A publisher-code change makes generation rerender, so real content changes show up. Generation metadata, model, code, review-protocol, or Hugo-runtime changes require batch checks and a new current receipt, but they do not re-review files whose final bytes are unchanged. A changed Git baseline or remote identity still blocks push.
 

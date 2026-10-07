@@ -20,18 +20,18 @@ A file you can still read is not automatically usable for new analysis or public
 
 ## Specific Compatibility Limits
 
-Reader article structure and table/formula source versions cover different checks. One version cannot stand in for the other. Legacy structured evidence has to pass source-manifest and full-text SHA verification, and earlier key-order hashes also need a recheck against the recorded `parserVersion`. The one exception is an implementation-recognized no-layout source marker whose `tables`, `formulas`, and `figures` arrays are all empty. Arbitrary layout declarations do not qualify, and rewriting saved files to produce new hashes is not allowed.
+Reader article structure and table/formula source versions cover different checks, and neither version stands in for the other. Legacy structured evidence has to pass source-manifest and full-text SHA verification, and earlier key-order hashes also need a recheck against the recorded `parserVersion`. The one exception is an implementation-recognized no-layout source marker whose `tables`, `formulas`, and `figures` arrays are all empty. Arbitrary layout declarations do not qualify. Never rewrite saved files to produce new hashes.
 
-Page passes are reused only by final relative path and content SHA. Model, code, protocol, generation, or Hugo changes require current batch checks and a new receipt, but they do not send pages whose bytes are unchanged back through model review. A mismatched Git baseline or remote identity still blocks push.
+Page passes are reused only by final relative path and content SHA. Model, code, protocol, generation, or Hugo changes require current batch checks and a new receipt, but unchanged page bytes stay out of model review. A mismatched Git baseline or remote identity still blocks push.
 
-Keeping old prompt and editorial-contract copies inside a Manual packet does not mean the current task may continue from it. Consumers compare their hashes against the repository's current `manual/prompts/manual-tutorial-article.md` and `manual/docs/editorial-reference-contract.md`, and reject a mismatch. Analysis specifications also check the stage prompts and the analysis-record instructions. Displaying an older result and continuing an old packet are two different operations, and these checks do not make every historical file unreadable.
+An old prompt or editorial-contract copy inside a Manual packet does not authorize continuing the current task. Consumers compare their hashes against the repository's current `manual/prompts/manual-tutorial-article.md` and `manual/docs/editorial-reference-contract.md`, and reject a mismatch. Analysis specifications also check the stage prompts and the analysis-record instructions. Displaying an older result and continuing an old packet are different operations. These checks do not make every historical file unreadable.
 
-An independent historical publisher exists, but a complete plan or staging directory does not mean the full-history task was published. See [Historical rewriting](../history-rewrite.md) and [Historical publication](../history-direct-publication.md). Operator patches for an existing-batch rewrite have additional legacy-run restrictions described in [Rewriting from source](../fresh-rewrite.md); Do not insert missing hashes to bypass them.
+An independent historical publisher exists, but a complete plan or staging directory does not mean the full-history task was published. See [Historical rewriting](../history-rewrite.md) and [Historical publication](../history-direct-publication.md). Operator patches for an existing-batch rewrite have additional legacy-run restrictions described in [Rewriting from source](../fresh-rewrite.md). Do not insert missing hashes to bypass them.
 
 ## Migration Rules
 
 1. Current writers emit current formats, and never rewrite older files so they look like the new version.
-2. Compatibility reads cannot grant old results new analysis or publication eligibility.
+2. Reading an old file never grants it new analysis or publication eligibility.
 3. Migration reopens sources and verifies real paths, byte lengths, and SHA.
 4. Version, prompt, budget, and algorithm changes enter the relevant stage fingerprint and invalidate only the stages they affect, plus downstream work.
-5. Stop when source identity or paper coverage cannot be verified. A page that looks fine is not a substitute for validation.
+5. Stop when source identity or paper coverage cannot be verified. A page that looks fine still needs validation.

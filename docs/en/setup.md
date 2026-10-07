@@ -13,7 +13,7 @@ python3.11 -m venv .venv
 cp env.example .env
 ```
 
-Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Python must be 3.11 or later with OpenSSL providing TLS; the macOS system Python 3.9/LibreSSL runtime is unsupported. Blog and visual commands use `scripts/python-runtime.sh`, which prefers the project `.venv`, then `python3.11`, and finally checks `python3`. Tests use the built-in Node test runner. The Python dependencies cover blog generation, Hugo checks, and visual preparation.
+Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Python must be 3.11 or later with OpenSSL providing TLS. The macOS system Python 3.9/LibreSSL runtime is unsupported. Blog and visual commands use `scripts/python-runtime.sh`, which prefers the project `.venv`, then `python3.11`, and finally checks `python3`. Tests use the built-in Node test runner. The Python dependencies cover blog generation, Hugo checks, and visual preparation.
 
 After installation, check the directory and its workspace role:
 
@@ -22,7 +22,7 @@ pwd
 npm run workspace:role -- status
 ```
 
-The daily checkout must have role `daily`; the full-history checkout must have role `history`. Stop if the marker is missing or its recorded real path does not match. Once you have confirmed what the directory is for, bind it with `npm run workspace:role -- set daily` or `npm run workspace:role -- set history`. Do not force a history checkout into the daily role just to get past a check.
+The daily checkout must have role `daily`. The full-history checkout must have role `history`. Stop if the marker is missing or its recorded real path does not match. Once you have confirmed what the directory is for, bind it with `npm run workspace:role -- set daily` or `npm run workspace:role -- set history`. Do not force a history checkout into the daily role just to get past a check.
 
 ## Minimum `.env`
 
@@ -40,7 +40,7 @@ PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```
 
-The current example uses OpenCode Go `muse-spark-1.3-contributor` through OpenAI Responses, but the project configuration is what actually selects the model. Public endpoints require HTTPS; HTTP is allowed only for loopback test services.
+The current example uses OpenCode Go `muse-spark-1.3-contributor` through OpenAI Responses, but the project configuration is what actually selects the model. Public endpoints require HTTPS. HTTP is allowed only for loopback test services.
 
 `PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` is used only by the historical ICLR 2026 source collector. It must point at retained local official accepted-paper metadata and PDFs. When unset, it defaults to `~/code/github_repos/iclr2026-paper-scraper`. It supplies no daily-fetch input, triggers no download, and is not an arXiv writing source.
 
@@ -96,11 +96,11 @@ Historical rewriting saves the same four files for each arXiv source capture, us
 
 Muse filtering follows `PD_FILTER_BATCH_SIZE`, while whole-paper analysis follows `PD_ANALYSIS_CONCURRENCY`. Account-pool locks cover selection and state updates, never network requests. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`.
 
-A local Reader repair normally allows 8000 output tokens. If a repair truncates exactly at that limit and the candidate is still eligible for one more recovery attempt, the run saves the failed draft and stops; the next explicit resume can use a higher limit, up to 16000 tokens with the default configuration. That attempt is shared with implementation-upgrade recovery and cannot be stacked with it. Custom limits depend on the full-article and base-repair budgets, stay capped at 16000 and `PD_API_READER_MAX_TOKENS`, and do not authorize unlimited attempts. Any model content consumes the extra attempt; a transport failure with no content does not. Truncated JSON is never accepted as a valid candidate or used to bypass content checks.
+A local Reader repair normally allows 8000 output tokens. If a repair truncates exactly at that limit and the candidate is still eligible for one more recovery attempt, the run saves the failed draft and stops. The next explicit resume can use a higher limit, up to 16000 tokens with the default configuration. That attempt is shared with implementation-upgrade recovery and cannot be stacked with it. Custom limits depend on the full-article and base-repair budgets, stay capped at 16000 and `PD_API_READER_MAX_TOKENS`, and do not authorize unlimited attempts. Any model content consumes the extra attempt. A transport failure with no content does not. Truncated JSON is never accepted as a valid candidate or used to bypass content checks.
 
 ## Optional Secondary Model
 
-Reader v3 sends safely prepared official figures directly to the primary model, so the model and the chosen protocol must support image inputs. The documented Muse example uses Responses; the shared request layer also supports Chat and Anthropic image formats. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy analysis image-supplement selection and insertion plan; it neither writes the primary prose nor scores the paper. An omitted secondary endpoint falls back to the primary endpoint, and a secondary key can be reused only for the same service.
+Reader v3 sends safely prepared official figures directly to the primary model, so the model and the chosen protocol must support image inputs. The documented Muse example uses Responses. The shared request layer also supports Chat and Anthropic image formats. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy analysis image-supplement selection and insertion plan. It neither writes the primary prose nor scores the paper. An omitted secondary endpoint falls back to the primary endpoint, and a secondary key can be reused only for the same service.
 
 `PD_API_READER_CONCURRENCY` limits heavy Reader stages inside one process. The refresh command's `--concurrency N` limits how many papers are processed at once, and those papers may still wait for Reader capacity. The two limits are separate.
 

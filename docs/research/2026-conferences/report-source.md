@@ -21,7 +21,7 @@
 | `eusipco-2026` | 信号处理重要综合会议，含语音/音频 | 567 | 官方分会场索引的逐篇 PDF | PDF、响应凭证、SHA 与发现记录已核对 |
 | `nime-2026` | 新型音乐表达界面核心会议 | 171 | 官方 2026 论文集的逐篇 PDF | PDF、响应凭证、SHA 与发现记录已核对 |
 | `dafx-2026` | 数字音频效果核心专题会议 | 91 | 72 个常规论文及挑战赛论文 PDF，加 19 个官方演示论文 PDF；演示论文保留独立分轨 | PDF、响应凭证、SHA 与发现记录已核对 |
-| `aaai-2026` | 综合人工智能顶级会议 | 4,920 | 官方 OJS 第 40 卷的固定 48 个分册；逐分册封存并证明论文编号在各分册间唯一 | PDF、响应凭证、SHA 与发现记录已核对 |
+| `aaai-2026` | 综合人工智能顶级会议 | 4,920 | 官方 OJS 第 40 卷的固定 48 个分册；逐分册保存并核验，证明论文编号在各分册间唯一 | PDF、响应凭证、SHA 与发现记录已核对 |
 | `aistats-2026` | 统计机器学习重要会议 | 588 | PMLR v300 单篇记录；排除整卷文件和卷首材料 | PDF、响应凭证、SHA 与发现记录已核对 |
 | `uai-2026` | 不确定性推理重要会议 | 330 | PMLR v337 单篇记录；排除整卷文件和卷首材料 | PDF、响应凭证、SHA 与发现记录已核对 |
 | `cvpr-2026` | 计算机视觉顶级会议 | 4,030 | CVF 主会论文；不混入研讨会论文 | PDF、响应凭证、SHA 与发现记录已核对 |
@@ -104,10 +104,10 @@ AI for Sciences 的过期 submission invitation（`expired=true`）列出 `8-pag
 
 后续接入要求逐组和并集都可核验：
 
-1. 登记八个 group 的 track、cycle、submission invitation 和 accepted venue 集合，拒绝未知 group。ADS Cycle 2 在准确 venue 值取得并封存前保持阻塞。
+1. 登记八个 group 的 track、cycle、submission invitation 和 accepted venue 集合，拒绝未知 group。ADS Cycle 2 在准确 venue 值取得并核验前保持阻塞。
 2. 各组通过官方 API 完整分页并保存数量核对依据，逐 note 核对 group/domain、invitation、accepted venue，再按 forum ID 合并去重。
 3. AI for Sciences 只收 `8-page full paper`，保留 Oral/Poster 展示或分轨子类，已录用的 `2-page extended abstract` 也不进入正式论文集合。
-4. Cycle 2 resubmission 即使记录 Cycle 1 forum，也不按标题或共用 venue 名折叠身份。输出 Cycle 2 forum，先前 forum 只保存在封存的来源记录和响应凭证中。
+4. Cycle 2 resubmission 即使记录 Cycle 1 forum，也不按标题或共用 venue 名折叠身份。输出 Cycle 2 forum，先前 forum 只保存在已保存并核验的来源记录和响应凭证中。
 5. 从 ACM 官方论文集完整取得论文记录、DOI 和实际 PDF，保存响应凭证及文件 SHA。OpenReview PDF 只能作为评审来源，录用后修订稿与 ACM 文件字节及 DOI 都精确核对后才可称最终出版稿。
 6. forum 与 ACM 论文记录只凭官方共享稳定标识自动对应。无共享 ID 时须人工审核核对表，绑定 forum/note SHA、DOI、ACM 论文记录 SHA；精确题目和作者仅供复核，不能单独当身份，也不模糊匹配。
 7. 各组及八组并集证明零未匹配、零孤立记录、零重复；`track` 至少含 track 和 cycle，如 `Research · Cycle 1`，完整来源记录保存在响应凭证中。
@@ -117,7 +117,7 @@ AI for Sciences 的过期 submission invitation（`expired=true`）列出 `8-pag
 2026-09-09 主研究把以下来源列为后续跟进对象，不能将当时的“尚未召开”当成今天状态。
 
 - INTERSPEECH 2026 当时等待最终论文集；后续接入见下段。
-- EMNLP 2026 日期为 10 月 24–29 日，录用通知及最终稿提交均已完成，但 ACL Anthology 最终会议索引尚不能封存；当时计划复用 ACL/EACL 来源适配器。
+- EMNLP 2026 日期为 10 月 24–29 日，录用通知及最终稿提交均已完成，但 ACL Anthology 最终会议索引尚不能保存并核验；当时计划复用 ACL/EACL 来源适配器。
 - ISMIR 2026 日期为 11 月 8–12 日，最终稿提交已完成，学会历年论文集还没有 2026 条目。
 - ACM Multimedia 2026 日期为 11 月 10–14 日，正式论文集未公开。ACM 自 2026 年转向开放获取，有利于后续下载，但仍须等待最终记录。
 - NeurIPS 2026 尚未到作者录用通知或最终论文集阶段，投稿记录及 OpenReview 状态不能作为正式会议论文依据。

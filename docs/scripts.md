@@ -125,7 +125,7 @@ npm run history:direct-plan -- --apply --catalog /abs/scoped-historical-local-da
 
 只有无版本 current arXiv PDF 明确返回 HTTP 404，才允许使用同一论文的官方历史 `vN` PDF。这条路径拒绝跨 ID、query、fragment 或非官方主机，并从实际选择的 PDF 提取文本。`sourceVersion` 记录尝试的 URL/状态和选定版本 URL，核验它与来源清单、分析来源及页面清单的对应关系；分析和页面 front matter 下方须提示当前稿 PDF 不可用。普通来源文件保持原有字节和格式兼容。
 
-唯一允许跨标题预印本的 `n1mAjfRDZ6` 可在 SSRN 经代理可达时直接获取；只能浏览器下载时用 `--import-file`。导入器核验固定标题、作者、日期、多个跨页特征文本及白名单 DOI，记录 `operator-browser-download` 和 `networkResponseObserved: false`，不伪造 HTTP 200。计划、模型输入和页面须说明非 camera-ready。输入副本在保存并核验后可删除；恢复核验运行目录中的 PDF 和凭证，不修改旧 JSON。普通会议 plan v5 结构保持兼容。
+唯一允许跨标题预印本的 `n1mAjfRDZ6` 可在 SSRN 经代理可达时直接获取；只能浏览器下载时用 `--import-file`。导入器核验固定标题、作者、日期、多个跨页特征文本及白名单 DOI，记录 `operator-browser-download` 和 `networkResponseObserved: false`，不伪造 HTTP 200。计划、模型输入和页面须说明非 camera-ready。输入副本在保存并核验后可删除；恢复核验运行目录中的 PDF 和核验记录，不修改旧 JSON。普通会议 plan v5 结构保持兼容。
 
 ### 执行、暂停与状态
 

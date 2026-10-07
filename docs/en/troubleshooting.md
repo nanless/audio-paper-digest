@@ -2,7 +2,7 @@
 
 ## Method
 
-Start with the earliest failed stage and identify its inputs, configuration, and records before choosing a recovery command. All project diagnostics run outside the sandbox. A failure to reach a local proxy inside the sandbox does not establish a target-site outage. Do not edit checkpoints or source files just to make an error disappear.
+Start with the earliest failed stage and identify its inputs, configuration, and records before choosing a recovery command. All project diagnostics run outside the sandbox. If a local proxy is unreachable inside the sandbox, that says nothing about the target site. Do not edit checkpoints or source files just to make an error disappear.
 
 ## Missing Configuration
 
@@ -23,7 +23,7 @@ Muse uses a separate CONNECT proxy connection object for each request and destro
 
 With fallback accounts configured, inspect `activeAccountId`, `limitClass`, and `blockedUntil` in `data/runtime/llm-account-pool.json`. It contains no raw key, but the credential fingerprints are still sensitive: keep permissions at `0600` and do not upload or archive it.
 
-Only an explicit `GoUsageLimitError` or `Insufficient balance` on the current account switches to a later account. Other authentication 401 responses stop the run, while a generic 429 keeps the account and follows rate-limit backoff. Do not delete or edit state to force a return to the primary account; a cooldown expiring does not switch back automatically. Corrupt state, an invalid generation counter, or an unsafe path stops requests before any network I/O.
+Only an explicit `GoUsageLimitError` or `Insufficient balance` on the current account switches to a later account. Other authentication 401 responses stop the run, while a generic 429 keeps the account and follows rate-limit backoff. Do not delete or edit state to force a return to the primary account. A cooldown expiring does not switch back automatically. Corrupt state, an invalid generation counter, or an unsafe path stops requests before any network I/O.
 
 ## MiMo/Kimi 403
 
@@ -33,7 +33,7 @@ These requests normally connect directly with `agent:false`. If direct curl succ
 
 Check the project proxy and the affected source checkpoint. arXiv Node requests require HTTP CONNECT; HuggingFace curl may also use `ALL_PROXY=socks5h://...`. Respect the configured 429 backoff instead of deleting checkpoints and raising concurrency.
 
-If candidate counts or SHA values do not match, fetch only that source again. A missing proxy configuration cannot establish a healthy empty HuggingFace result. HTML that carries metadata but no reliable full text should lead to PDF extraction during source capture.
+If candidate counts or SHA values do not match, fetch only that source again. Never read a missing proxy configuration as a healthy empty HuggingFace result. HTML that carries metadata but no reliable full text should lead to PDF extraction during source capture.
 
 ## Incomplete Filter State
 
@@ -43,13 +43,13 @@ Run the read-only check:
 npm run validate:data
 ```
 
-Look for mismatched candidate/decision input SHA, missing decisions, API failures still marked `pending`, non-`related` selected items, or partially updated model, prompt, and keyword versions. Resume filtering to finish the decisions; do not delete unknown ones.
+Look for mismatched candidate/decision input SHA, missing decisions, API failures still marked `pending`, non-`related` selected items, or partially updated model, prompt, and keyword versions. Resume filtering to finish the decisions. Do not delete unknown ones.
 
 ## Slow or Repeated Analysis Failure
 
 Identify the failed stage and its saved records before restarting an entire paper. Whole-paper concurrency defaults to 3, heavy Reader stages to 5, and Muse filtering follows `PD_FILTER_BATCH_SIZE`. Primary analysis, local repair, and Reader generation have separate output and context budgets.
 
-Reader repair normally allows 8000 output tokens. If a repair truncates exactly at the base limit and the candidate is still eligible for extra recovery, the run saves the failed draft and stops. The next explicit resume can use one higher-budget repair, up to 16000 tokens by default. That attempt is shared with implementation-upgrade recovery and cannot be stacked with it; custom limits still depend on the full-article and base-repair budgets. Any model content consumes the attempt, while a transport failure with no content does not. Truncated content stays invalid.
+Reader repair normally allows 8000 output tokens. If a repair truncates exactly at the base limit and the candidate is still eligible for extra recovery, the run saves the failed draft and stops. The next explicit resume can use one higher-budget repair, up to 16000 tokens by default. That attempt is shared with implementation-upgrade recovery and cannot be stacked with it. Custom limits still depend on the full-article and base-repair budgets. Any model content consumes the attempt, while a transport failure with no content does not. Truncated content stays invalid.
 
 ```bash
 npm run deep -- --date YYYY-MM-DD
@@ -57,9 +57,9 @@ npm run batch -- --retry-failed-readers
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 ```
 
-Source SHA, prompt, or model changes rerun the affected stages and the downstream work that depends on them. An older successful article cannot hide the latest failure. `batch --retry-failed-readers` stops reusing failed candidates only for unfinished papers; use `reanalyze` to force all analysis again and clear old Reader/image-supplement state.
+Source SHA, prompt, or model changes rerun the affected stages and the downstream work that depends on them. An older successful article cannot hide the latest failure. `batch --retry-failed-readers` stops reusing failed candidates only for unfinished papers. Use `reanalyze` to force all analysis again and clear old Reader/image-supplement state.
 
-If a recovery command reports missing or changed daily sources, do not edit checkpoints or paste in old `data/current` text. While the target is still Beijing today, rerun the same dated `npm run digest:prepare -- YYYY-MM-DD` to establish the sources. Historical dates cannot restart at fetch; keep the failure records and follow the historical maintenance workflow.
+If a recovery command reports missing or changed daily sources, do not edit checkpoints or paste in old `data/current` text. While the target is still Beijing today, rerun the same dated `npm run digest:prepare -- YYYY-MM-DD` to establish the sources. Historical dates cannot restart at fetch. Keep the failure records and follow the historical maintenance workflow.
 
 ## Historical Direct Source or Staging Failure
 
@@ -73,13 +73,13 @@ Never import a replacement or alter checkpoints when current-PDF 404 was not est
 
 If external conference paths may have changed, run one `history:status ... --verify-sources true` check to rehash metadata and PDFs. Do not combine deep verification with watch. An ordinary status check reads paths, types, and sizes without repeatedly reading large files.
 
-For conference items, check local-source metadata/PDF paths and SHA, the frozen inventory, and conference page mappings. A missing or damaged local conference input stops that item; it cannot enter the arXiv handoff route. Do not substitute old blog prose, old analysis, filename similarity, or ad-hoc title searches.
+For conference items, check local-source metadata/PDF paths and SHA, the frozen inventory, and conference page mappings. A missing or damaged local conference input stops that item. It cannot enter the arXiv handoff route. Do not substitute old blog prose, old analysis, filename similarity, or ad-hoc title searches.
 
 ## Repetitive Prose or Poorly Integrated Tables and Figures
 
 Compare `apiReaderPlan` with the article. Check whether combined terms explain each component's role and why they work together, whether tables connect a comparison question to results and limits, and whether figures have adjacent guidance, viewing steps, images, captions, and explanation. The model must not describe colors, axes, or modules it has not seen. Pronouns need clear referents.
 
-Revise prompts or structured review findings and refresh the Reader rather than changing pages during blog review. Table-count diagnostics use `reader_table_count_insufficient`, `requiredCount`, and `actualCount` for recovery; operators must not edit them. If a table exists but lacks its source record, repair that record rather than blindly adding a table.
+Revise prompts or structured review findings and refresh the Reader rather than changing pages during blog review. Table-count diagnostics use `reader_table_count_insufficient`, `requiredCount`, and `actualCount` for recovery. Operators must not edit them. If a table exists but lacks its source record, repair that record rather than blindly adding a table.
 
 Check that `selection` names real DOM rows and columns, that table markers have a unique ordered mapping to source records, and that quote-based pruning leaves at least two columns and one data row. Old structured evidence must pass source-manifest and full-text SHA checks and be verifiable with its recorded parser version. The only exception is an implementation-recognized no-layout source marker whose table, formula, and figure arrays are empty. An arbitrary layout declaration is not enough, and saved source files must not be rewritten to create new hashes.
 
@@ -91,7 +91,7 @@ Check current publication eligibility, batch date, eight scores, Reader v3, affi
 
 ## Review Failure
 
-Review reads pages without changing them. Content corrections go back to generation or analysis; transient API failures retry only the affected pages. Per-page passes are keyed by relative path and content SHA, so changed content needs another review. Generation metadata, model, code, protocol, or Hugo-runtime changes rerun current-batch checks and produce a current receipt without re-reviewing unchanged pages. A changed Git baseline or remote identity still blocks push.
+Review reads pages without changing them. Content corrections go back to generation or analysis. Transient API failures retry only the affected pages. Per-page passes are keyed by relative path and content SHA, so changed content needs another review. Generation metadata, model, code, protocol, or Hugo-runtime changes rerun current-batch checks and produce a current receipt without re-reviewing unchanged pages. A changed Git baseline or remote identity still blocks push.
 
 For Hugo memory failures, check for stale parallel processes and confirm the target repository and theme before running the controlled build check. Never skip Hugo and record a successful review.
 
@@ -115,7 +115,7 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-Use only absolute reference paths emitted by the current prepare command. Modern daily tasks intentionally return an empty list after verifying official figure identity; do not substitute old caches. Record requires the current task token, the analysis file, and `--qa-attested true` after visual inspection. Manifest, publication, or image SHA changes invalidate older completion records.
+Use only absolute reference paths emitted by the current prepare command. Modern daily tasks intentionally return an empty list after verifying official figure identity. Do not substitute old caches. Record requires the current task token, the analysis file, and `--qa-attested true` after visual inspection. Manifest, publication, or image SHA changes invalidate older completion records.
 
 ## Stale Status
 
