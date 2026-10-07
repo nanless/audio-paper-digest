@@ -9802,6 +9802,35 @@ def published_papers_fingerprint(published_papers):
     return _stable_json_sha256(_portable_fingerprint_value(published_papers))
 
 
+def _assert_ecmascript_record_premises(value, label):
+    """核对整份记录都按 ECMAScript 写法比对时的跨语言前提。
+
+    Node 的 visual-summary-state.js 用 stableSha256 复算发布绑定记录和发布证明，
+    那是纯 JSON.stringify 的写法。整数取值的浮点（7.0 对 7）、小于 1e-4 的浮点
+    （2e-05 对 0.00002）、负零、1e16 到 1e21 之间的浮点、超出安全整数范围的整数，
+    以及非字符串键或 BMP 以外的键，都会让两端算出不同的哈希而不报错。只有真正跨
+    语言复算的这几份记录才走这里，Python 自用的缓存键不套用这两条前提。
+    """
+    _assert_hash_key_premises(value, label)
+    _assert_ecmascript_number_premises(value, label)
+
+
+def _assert_llm_api_binding_premises(bindings):
+    """核对 LLM API 发布绑定记录的跨语言前提。
+
+    其余数字的前提与上面相同。finalScore 要单独放过：Node 的
+    stableApiBindingsSha256 对这个字段照抄 Python 的 repr 写法（Python 把整数取值
+    的浮点写成 7.0，JSON.stringify 写 7），所以它只要保证是有限浮点就够了，这一点
+    由 llm_api_publication_bindings 自己核过，不需要也不能套用 ECMAScript 前提。
+    """
+    _assert_hash_key_premises(bindings, 'LLM API 发布绑定记录')
+    without_scores = [
+        {key: item for key, item in binding.items() if key != 'finalScore'}
+        for binding in bindings if isinstance(binding, dict)
+    ]
+    _assert_ecmascript_number_premises(without_scores, 'LLM API 发布绑定记录')
+
+
 def manual_v6_publication_bindings(published_papers):
     """Build explicit v6 proof bindings instead of relying on an outer snapshot hash."""
     bindings = []
@@ -9830,6 +9859,7 @@ def manual_v6_publication_bindings(published_papers):
             'readerLongformSha256': manual_v6_bindings['readerLongformSha256'],
             'readerArticleSha256': payload['articleSha256'],
         })
+    _assert_ecmascript_record_premises(bindings, 'Manual v6 发布绑定记录')
     return sorted(bindings, key=lambda item: item['paperId'])
 
 
@@ -9852,7 +9882,7 @@ def manual_v6_production_proof(published_papers):
     paper_ids = [item['paperId'] for item in bindings]
     if len(set(paper_ids)) != len(paper_ids):
         raise PublishDataValidationError('Manual v6 发布批次中存在重复的论文 ID。')
-    return {
+    proof = {
         'contract': MANUAL_V6_PRODUCTION_CONTRACT,
         'manualDepth': MANUAL_DEPTH_CONTRACT_VERSION_V6,
         'runtimeMode': 'production',
@@ -9864,6 +9894,8 @@ def manual_v6_production_proof(published_papers):
         'paperIds': paper_ids,
         'bindingsFingerprint': _stable_json_sha256(bindings),
     }
+    _assert_ecmascript_record_premises(proof, 'Manual v6 发布证明')
+    return proof
 
 
 def llm_api_publication_bindings(published_papers):
@@ -9962,6 +9994,7 @@ def llm_api_publication_bindings(published_papers):
             'model': model.strip(),
             'protocol': protocol.strip(),
         })
+    _assert_llm_api_binding_premises(bindings)
     return sorted(bindings, key=lambda item: item['paperId'])
 
 
@@ -9979,7 +10012,7 @@ def llm_api_production_proof(published_papers):
     paper_ids = [item['paperId'] for item in bindings]
     if len(set(paper_ids)) != len(paper_ids):
         raise PublishDataValidationError('API 正式发布的批次中存在重复的论文 ID。')
-    return {
+    proof = {
         'contract': LLM_API_PRODUCTION_CONTRACT,
         'readerContract': LLM_API_READER_CONTRACT,
         'readerSourceBindingsContract': LLM_API_READER_SOURCE_BINDING_CONTRACT,
@@ -9990,6 +10023,8 @@ def llm_api_production_proof(published_papers):
         'paperIds': paper_ids,
         'bindingsFingerprint': _stable_json_sha256(bindings),
     }
+    _assert_ecmascript_record_premises(proof, 'LLM API 发布证明')
+    return proof
 
 
 def infer_generation_publication_mode(papers):

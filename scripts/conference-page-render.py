@@ -60,8 +60,9 @@ def stable_sha(value):
 
 
 def reader_record_sha(value, label):
-    """算会议读者记录的 SHA 前，先核对与 Node 共用的前提。
+    """算与 Node 共用的会议记录 SHA 前，先核对跨语言前提。
 
+    会议页里的读者记录、资源身份和公式证据都由 Node 先算一份，再由这里复算。
     Node 的 stableFingerprint 用 JSON.stringify 写这些哈希，这里用 json.dumps。
     数字写法与键排序的分歧见 publish_common 里两个 _assert 函数的说明。
     """
@@ -227,7 +228,7 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
         raise ValueError('会议论文解读的资源记录格式无效，或格式声明不符合要求。')
     resource_identity = dict(resources)
     resource_identity.pop('identitySha256', None)
-    if resources.get('identitySha256') != stable_sha(resource_identity) \
+    if resources.get('identitySha256') != reader_record_sha(resource_identity, 'API reader 资源身份记录') \
             or stage.get('resourceIdentitySha256') != resources.get('identitySha256') \
             or not isinstance(resources.get('resources'), list) \
             or stage.get('resourceCount') != len(resources['resources']):
@@ -329,7 +330,7 @@ def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
         return [], []
     body = {key: value for key, value in evidence.items() if key != 'evidenceSha256'}
     if evidence.get('contract') != 'conference-pdf-formula-images-v1' \
-            or evidence.get('evidenceSha256') != stable_sha(body) \
+            or evidence.get('evidenceSha256') != reader_record_sha(body, '会议公式证据') \
             or not re.fullmatch(r'[a-f0-9]{64}', str(evidence.get('pdfSha256', ''))) \
             or not re.fullmatch(r'[a-f0-9]{64}', str(evidence.get('sourceSnapshotSha256', ''))) \
             or not isinstance(evidence.get('regions'), list) \
