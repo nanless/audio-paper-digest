@@ -148,7 +148,7 @@ describe('Manual v6 确定性修订绑定器', () => {
         }, { sourceText }), /精确覆盖/);
         assert.throws(() => applyRevisionAuthorPatches(payload, {
             recordPatches: { researchBrief: {}, evidenceSourceQuotes: { ...quotes, E01: 'not in source text at all' } }
-        }, { sourceText }), /全文闭环/);
+        }, { sourceText }), /未通过全文核对/);
     });
 
     it('允许 revision leaf 用全文连续原句替换不完整的 legacy ledger', () => {

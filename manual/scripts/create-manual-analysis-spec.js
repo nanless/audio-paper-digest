@@ -1433,7 +1433,7 @@ function buildSpec(options) {
                 requireReaderNarrative: isCurrentRecords
             });
             if (!resultClaimValidation.valid) {
-                throw new Error(`${id} resultClaims 未与全文闭环: ${resultClaimValidation.errors.join('；')}`);
+                throw new Error(`${id} resultClaims 与全文不一致: ${resultClaimValidation.errors.join('；')}`);
             }
         }
         if (isCurrentRecords && !validatedV6Records) {

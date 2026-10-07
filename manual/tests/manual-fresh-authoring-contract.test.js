@@ -164,7 +164,7 @@ describe('Manual v5 fresh-authoring-v1 文件约定', () => {
         fs.writeFileSync(f.artifactManifestPath, JSON.stringify(manifest));
         assert.throws(
             () => resolveArtifactAuthority(f.artifactManifestPath, f.artifactExpected),
-            /checkpoint 未与当前全文/
+            /checkpoint 与当前全文/
         );
     });
 });

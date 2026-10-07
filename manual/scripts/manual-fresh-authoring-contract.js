@@ -110,7 +110,7 @@ function resolveArtifactAuthority(artifactManifestPath, expected) {
         || entry.sourceSha256 !== expected.sourceSha256
         || entry.sourceIdentitySha256 !== expected.sourceIdentitySha256
         || entry.paperInputSha256 !== expected.paperInputSha256) {
-        throw new Error(`${id} ArtifactIndex checkpoint 未与当前全文和单篇输入身份闭环`);
+        throw new Error(`${id} ArtifactIndex checkpoint 与当前全文和单篇输入身份不一致`);
     }
     const artifactPath = assertPlainFile(entry.path, `${id} ArtifactIndex`);
     const relative = path.relative(path.dirname(manifestPath), artifactPath);

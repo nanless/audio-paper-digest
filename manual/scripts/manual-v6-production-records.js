@@ -146,7 +146,7 @@ function assertProductionRevisionClosure(state, paperId, artifactRoot) {
         || payloadRef.path !== 'draft/revision-record-payload.json'
         || articleRef.sha256 !== output.finalArticle.fileSha256
         || payloadRef.sha256 !== output.recordPayload.fileSha256) {
-        throw new Error(`${paperId}.revision output 固定 article/payload 引用不闭环`);
+        throw new Error(`${paperId}.revision output 固定的 article/payload 引用不一致`);
     }
     const payloadFile = readJsonFile(
         path.join(artifactRoot, payloadRef.path), `${paperId}.revision record payload`

@@ -68,7 +68,7 @@ function buildManualPaperSourceIdentity(options = {}) {
     if (artifactEntry.sourceSha256 !== sourceSha256
         || artifactEntry.sourceIdentitySha256 !== sourceIdentitySha256
         || artifactEntry.paperInputSha256 !== paperInputSha256) {
-        throw new Error(`${paperId} ArtifactIndex entry 未与全文单篇身份闭环`);
+        throw new Error(`${paperId} ArtifactIndex entry 与全文的单篇身份不一致`);
     }
     const structuredSnapshot = fullTextEntry.structuredArtifactsSnapshot;
     const structuredArtifactsSha256 = assertSha(
@@ -76,7 +76,7 @@ function buildManualPaperSourceIdentity(options = {}) {
     );
     if (!structuredSnapshot || structuredSnapshot.healthStatus !== 'complete'
         || structuredSnapshot.payloadSha256 !== structuredArtifactsSha256) {
-        throw new Error(`${paperId} structuredArtifactsSnapshot 未与 ArtifactIndex 闭环`);
+        throw new Error(`${paperId} structuredArtifactsSnapshot 与 ArtifactIndex 不一致`);
     }
     const identity = {
         contract: MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT,

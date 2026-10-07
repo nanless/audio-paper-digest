@@ -247,7 +247,7 @@ function applyValidatedReviewDecisions(payloadValue, technicalReview, pedagogyRe
     if (!Array.isArray(technicalReview?.dims) || technicalReview.dims.length !== 8
         || !Array.isArray(technicalReview?.scoringReasons) || technicalReview.scoringReasons.length !== 8
         || !technicalReview.scoringCalibration || typeof technicalReview.scoringCalibration !== 'object') {
-        throw new Error('validated technical review 缺少八维评分闭环');
+        throw new Error('validated technical review 缺少完整的八维评分');
     }
     if (!pedagogyReview?.readabilityRubric || typeof pedagogyReview.readabilityRubric !== 'object') {
         throw new Error('validated pedagogy review 缺少 readabilityRubric');
@@ -501,7 +501,7 @@ function applyRevisionAuthorPatches(payload, map, options = {}) {
             sourceQuote: normalizedText(item.sourceQuote)
         }));
         const issue = validateManualEvidenceLedger(candidate, options.sourceText || '');
-        if (issue) throw new Error(`revision binding map.recordPatches.evidenceLedger 未通过全文闭环: ${issue}`);
+        if (issue) throw new Error(`revision binding map.recordPatches.evidenceLedger 未通过全文核对: ${issue}`);
         output.evidenceLedger = candidate;
     }
     if (patches.editorialSections !== undefined) {
@@ -567,7 +567,7 @@ function applyRevisionAuthorPatches(payload, map, options = {}) {
             sourceQuote: normalizedText(quotes[item.id])
         }));
         const issue = validateManualEvidenceLedger(candidate, options.sourceText || '');
-        if (issue) throw new Error(`revision binding map.recordPatches.evidenceSourceQuotes 未通过全文闭环: ${issue}`);
+        if (issue) throw new Error(`revision binding map.recordPatches.evidenceSourceQuotes 未通过全文核对: ${issue}`);
         output.evidenceLedger = candidate;
     }
     if (patches.resultClaims !== undefined) {

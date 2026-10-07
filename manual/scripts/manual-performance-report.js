@@ -156,7 +156,7 @@ function verifyWorkQueueMetric(metric, queue, options = {}) {
     }
     const expectedTasks = [];
     for (const [paperId, paper] of Object.entries(queue.papers || {}).sort(([left], [right]) => left.localeCompare(right))) {
-        if (paper?.paperId !== paperId) throw new Error('Manual v5 work queue paperId 闭环非法');
+        if (paper?.paperId !== paperId) throw new Error('Manual v5 work queue paperId 不一致');
         for (const role of ROLES) {
             const task = paper.tasks?.[role];
             if (!task || task.paperId !== paperId || task.role !== role || !SHA_RE.test(String(task.inputSha256 || ''))

@@ -201,7 +201,7 @@ function validatePacket(packet, options = {}) {
         assertSha(ref.semanticSha256, `metadata correction packet.${field}.semanticSha256`);
     }
     if (value.packetSha256 !== stableSha256(packetSemantic(value))) {
-        throw new Error('metadata correction packet.packetSha256 不闭环');
+        throw new Error('metadata correction packet.packetSha256 不一致');
     }
     if (options.dateRoot) {
         const output = readJsonFile(
@@ -420,7 +420,7 @@ function validateCorrectionState(state) {
         || value.pendingProductionPaperIds.some(id => !value.expectedPaperIds.includes(id))
         || value.pendingProductionPaperIds.some(id => value.requiredPaperIds.includes(id))
         || stableSha256(Object.keys(value.tasks).sort()) !== stableSha256(value.requiredPaperIds)) {
-        throw new Error('metadata correction state required/task 集合不闭环');
+        throw new Error('metadata correction state required 与 task 集合不一致');
     }
     const seenTaskNames = new Set();
     for (const paperId of value.requiredPaperIds) {
@@ -437,7 +437,7 @@ function validateCorrectionState(state) {
         }
         if (task.status !== 'awaiting_packet'
             && (!task.packetPath || !task.packetSha256 || !task.packetFileSha256)) {
-            throw new Error(`${paperId} metadata correction task packet 字段不闭环`);
+            throw new Error(`${paperId} metadata correction task packet 字段不一致`);
         }
         if (['claimed', 'running'].includes(task.status)
             && (!task.claimId || !TIMESTAMP_RE.test(String(task.queuedAt || '')))) {
@@ -454,7 +454,7 @@ function validateCorrectionState(state) {
             && (!TIMESTAMP_RE.test(String(task.completedAt || '')) || !task.outputPath
                 || !task.outputFileSha256 || !task.outputSemanticSha256 || !task.receiptPath
                 || !task.receiptFileSha256 || !task.receiptSemanticSha256)) {
-            throw new Error(`${paperId} metadata correction validated 工件不闭环`);
+            throw new Error(`${paperId} metadata correction validated 工件不一致`);
         }
         if (task.completedAt && task.startedAt
             && Date.parse(task.completedAt) < Date.parse(task.startedAt)) {
@@ -466,7 +466,7 @@ function validateCorrectionState(state) {
             const owner = value.taskNames[task.taskName];
             if (!owner || owner.paperId !== paperId || owner.claimId !== task.claimId
                 || typeof owner.retired !== 'boolean') {
-                throw new Error(`metadata correction taskName owner 不闭环: ${task.taskName}`);
+                throw new Error(`metadata correction taskName owner 不一致: ${task.taskName}`);
             }
             if (!owner.retired && task.status === 'failed') {
                 throw new Error(`metadata correction failed taskName 必须退休: ${task.taskName}`);
@@ -483,7 +483,7 @@ function validateCorrectionState(state) {
             throw new Error(`metadata correction state.taskNames.${taskName} 非法`);
         }
         if (!owner.retired && value.tasks[owner.paperId]?.taskName !== taskName) {
-            throw new Error(`metadata correction active taskName owner 不闭环: ${taskName}`);
+            throw new Error(`metadata correction active taskName owner 不一致: ${taskName}`);
         }
     }
     return value;
@@ -1074,7 +1074,7 @@ function validateManifestObject(manifest, options = {}) {
         orderedLeaves: leaves.map(item => stableSha256(item))
     });
     if (value.merkleRoot !== merkleRoot || value.manifestSha256 !== stableSha256(manifestSemantic(value))) {
-        throw new Error('metadata correction manifest Merkle 或语义 SHA 不闭环');
+        throw new Error('metadata correction manifest 的 Merkle 或语义 SHA 不一致');
     }
     return value;
 }
