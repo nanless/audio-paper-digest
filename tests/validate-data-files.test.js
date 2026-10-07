@@ -650,8 +650,13 @@ describe('validate-data-files', () => {
             'takeover=json.load(open(sys.argv[2], encoding="utf-8"))',
             'non_bmp={chr(0x1F600):2,"\ufffd":1}',
             'bmp={"a":1,"\ufffd":2}',
+            'def run(fn):',
+            '    try:',
+            '        fn(); return "no-throw"',
+            '    except Exception as error: return type(error).__name__ + ": " + str(error)',
             'print(json.dumps({"takeoverHash":_manual_hash(takeover),',
-            '    "nonBmpHash":_manual_hash(non_bmp),"bmpHash":_manual_hash(bmp)},ensure_ascii=False))'
+            '    "nonBmpOrder":sorted(non_bmp),"nonBmpError":run(lambda: _manual_hash(non_bmp)),',
+            '    "bmpHash":_manual_hash(bmp)},ensure_ascii=False))'
         ].join('\n');
         const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script,
             path.join(project, 'scripts'), input], { cwd: project, encoding: 'utf8' });
@@ -660,8 +665,15 @@ describe('validate-data-files', () => {
         assert.strictEqual(python.takeoverHash, manualSha256(takeover),
             '同一份真实 manualTakeover 两端必须同哈希；不同说明被哈希的键里有非 ASCII');
         const nonBmpKeys = { [String.fromCodePoint(0x1F600)]: 2, '\ufffd': 1 };
-        assert.notStrictEqual(python.nonBmpHash, manualSha256(nonBmpKeys),
-            '这就是要守的分歧：非 BMP 键让 JS 的码元序与 Python 的码点序不同，两端稳定哈希不同');
+        // 这就是要守的分歧：非 BMP 键让 JS 的码元序与 Python 的码点序不同。现在两端的
+        // 哈希入口都改成在算哈希之前挡住它，所以断言从「两端算出不同哈希」变成「两端
+        // 都拒绝」，排序分歧本身仍然照旧核对。
+        assert.notDeepStrictEqual(Object.keys(nonBmpKeys).sort(), python.nonBmpOrder,
+            'JS 按 UTF-16 码元排序、Python 按码点排序，非 BMP 键的顺序必须不同');
+        assert.match(python.nonBmpError, /^PublishDataValidationError: .*BMP 以外/,
+            `Python 的 _manual_hash 必须在算哈希前拒绝非 BMP 键，实际是 ${python.nonBmpError}`);
+        assert.throws(() => manualSha256(nonBmpKeys), /BMP 以外/,
+            'JS 的 manualSha256 必须在算哈希前拒绝非 BMP 键');
         assert.strictEqual(python.bmpHash, manualSha256({ a: 1, '\ufffd': 2 }),
             '全 BMP 键（含 U+FFFD）两端排序一致，哈希相同');
     });
