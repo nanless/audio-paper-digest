@@ -100,7 +100,7 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 
 ## 可选副模型
 
-API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前示例中的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片，`muse-spark-*` 通过 Responses 接收图片；公共请求封装也支持 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
+API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前示例中的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片，`muse-spark-*` 通过 Responses 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
 
 `PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
 
