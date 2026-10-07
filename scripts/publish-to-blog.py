@@ -54,7 +54,6 @@ from publish_common import (
     MANUAL_LONGFORM_CONTRACT_VERSION_V2, validate_manual_v6_payload,
     validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_VERSION,
     split_markdown_table_row,
-    _manual_canonical_json,
 )
 from path_config import (
     PROJECT_ROOT,
@@ -9675,14 +9674,10 @@ def _file_fingerprint(path):
 
 
 def _javascript_json_utf8(value):
-    """Encode canonical JSON like well-formed JavaScript JSON.stringify().
-
-    数字必须按 ECMAScript 的 Number::toString 写。裸 json.dumps 用的是 repr，
-    四类取值会与 Node 分歧：0.00002 写成 2e-05、1e17 写成 1e+17、整数浮点 1.0
-    写成 1、负零写成 -0.0。_manual_canonical_json 就是按 ECMAScript 写的，
-    键排序与分隔符也和这里的 json.dumps 调用一致。
-    """
-    serialized = _manual_canonical_json(value)
+    """Encode canonical JSON like well-formed JavaScript JSON.stringify()."""
+    serialized = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    )
     normalized = []
     index = 0
     while index < len(serialized):
