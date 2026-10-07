@@ -300,7 +300,7 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertEqual(self.git('rev-parse','HEAD').stdout,self.before_head)
         self.assertEqual(self.git('write-tree').stdout,index)
         self.assertEqual(self.git('status','--porcelain=v1','-z').stdout,dirty)
-        self.assertNotEqual(before,dirty) # tracked policy was clean before the tamper
+        self.assertNotEqual(before,dirty) # 篡改之前，索引里的策略是干净的
 
     def test_interrupted_policy_installation_uses_only_frozen_stage_and_rejects_drift(self):
         self.transaction()

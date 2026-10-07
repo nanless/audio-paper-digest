@@ -1,8 +1,7 @@
 'use strict';
 
-// Authenticates the deterministic Python PDF extraction bundle before it can
-// enter conference staging.  The extractor may carry replayable structures
-// derived from the official PDF; the original PDF remains the authority.
+// 在进入会议暂存之前，核对 Python PDF 抽取产物的确定性结果。抽取器可能带上从官方
+// PDF 复算出来的结构，但原始 PDF 才是权威。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -38,15 +37,14 @@ const MAX_JSON_BYTES = 64 * 1024 * 1024;
 const MAX_METADATA_BYTES = 16 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024 * 1024;
-// The Python extractor caps one embedded Figure at 2 MiB before base64
-// encoding.  Keep the receipt validator aligned with that bound while still
-// leaving the overall JSON artifact cap at 64 MiB.
+// Python 抽取器在 base64 编码前把单个内嵌图片限制在 2 MiB。receipt 校验器要与这个
+// 上限保持一致，同时整个 JSON 产物的上限仍是 64 MiB。
 const MAX_FIGURE_ASSET_BASE64_CHARS = 4 * Math.ceil((2 * 1024 * 1024) / 3) + 4;
 const EXTRACTION_HANDLES = new WeakSet();
 const EXTRACTION_HANDLE_DATA = new WeakMap();
-// Python str.isspace() is Unicode White_Space plus the four C0 information
-// separators. ECMAScript \s omits U+001C..U+001F and includes U+FEFF, so it
-// cannot replay the extractor's receipt count exactly.
+// Python 的 str.isspace() 是 Unicode White_Space 加上四个 C0 信息分隔符。ECMAScript
+// 的 \s 不含 U+001C..U+001F 却包含 U+FEFF，所以没法逐字符复现抽取器给出的 receipt
+// 计数。
 const PYTHON_WHITESPACE_RE = /[\p{White_Space}\u001c-\u001f]/u;
 
 class ConferenceExtractionReceiptError extends Error {
@@ -298,8 +296,8 @@ function validateMetadataIdentity(metadata, request) {
     catch (error) { fail(`metadata identity evidence does not bind canonical paperId: ${error.message}`); }
     return { conference, identity };
 }
-// PDF layouts are source evidence, not the author's TeX. Keep this gate shared
-// with source-context so a metadata-only reload cannot promote a candidate.
+// PDF 版面属于来源证据，不是作者写的 TeX。这个闸门与 source-context 共用，免得一次
+// 只读元数据的重新加载就把候选提升为可用。
 function validatePdfFormulaRecord(formula, index, audit, pageCount) {
     exact(formula, ['ordinal', 'page', 'tex', 'sourceRef', 'recoveryStatus', 'sourceExpression'], `formulas[${index}]`);
     if (formula.ordinal !== index + 1 || !Number.isSafeInteger(formula.page)
@@ -512,9 +510,8 @@ function verifyWithPinnedPython(sourceRoot, requestName) {
 
 function boundVerification({ request, requestLoaded, metadataLoaded, pdfLoaded, textLoaded,
     artifactLoaded, receiptLoaded, receipt }) {
-    // The caller has already checked every source/output byte against the
-    // signed receipt.  Reconstruct the same verification binding when the
-    // deterministic Python replay is intentionally skipped on a retry.
+    // 调用方已经逐字节核对过每个来源和输出与 receipt 是否一致。重试时如果按设计
+    // 跳过 Python 的确定性复算，就在这里重建同一套校验绑定。
     const body = {
         contract: VERIFICATION_CONTRACT, version: VERSION, status: 'verified',
         paperId: request.paperId, sourceIdentity: request.sourceIdentity,

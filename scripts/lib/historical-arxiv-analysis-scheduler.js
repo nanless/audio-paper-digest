@@ -121,8 +121,8 @@ function mergeRecoveryState(existing, observed, now, { attempted = false } = {})
 
 function deterministicRunId(crosswalkId, paperId) {
     const bytes = Buffer.from(sha256(`${crosswalkId}\0${paperId}`).slice(0, 32), 'hex');
-    // Keep the stable digest-derived identity, but use UUID v4 variant bits
-    // because the existing fresh-run loader intentionally admits only v4.
+    // 保留由摘要派生出来的稳定身份，但变体位要按 UUID v4 来设，因为现有的 fresh-run
+    // 加载器只接受 v4。
     bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
     const hex = bytes.toString('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
@@ -259,9 +259,8 @@ function selectCandidates(groups, items, { stage, queue, maximum, now }) {
         const reader = ['analysis_partial', 'analyzing'].includes(status) && item.recoveryKind === 'reader';
         const eligibleReader = reader && item.exhausted !== true
             && (!item.nextEligibleAt || new Date(item.nextEligibleAt).getTime() <= nowMs);
-        // A positively stale/missing operation lock is normalized to
-        // analysis_partial by recovery.  Remaining analyzing is live or
-        // indeterminate and is ineligible in every queue.
+        // 明确过期或缺失的操作锁会被恢复流程归一成 analysis_partial。剩下的
+        // analyzing 要么还在跑，要么无法判断，在哪个队列里都不该入选。
         if (status === 'analyzing') return false;
         if (queue === 'new-full') return !['complete', 'analysis_partial', 'analyzing'].includes(status);
         if (queue === 'reader-recovery') return eligibleReader;
@@ -401,9 +400,8 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
                         lastError: String(error.message).slice(0, 2000) }, deps);
                     continue;
                 }
-                // A direct run or an older scheduler may have completed or
-                // claimed this run after candidate selection.  The durable
-                // checkpoint update above is the current decision boundary.
+                // 候选选定之后，直接运行或更早的调度器可能已经完成或认领了这个 run。
+                // 上面那次持久化检查点更新才是当前的判定边界。
                 if (prepared.item.status === 'complete' || prepared.item.status === 'analyzing') continue;
                 try {
                     const item = prepared.item;
@@ -434,10 +432,8 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
                             lastError: status === 'complete' ? null : String(error.message).slice(0, 2000),
                             observed, attempted: true }, deps);
                     } catch (recoveryError) {
-                        // We cannot safely invent a run status when recovery
-                        // itself is unreadable.  Preserve the prior status,
-                        // record both errors, and let all sibling workers
-                        // settle before rejecting the invocation.
+                        // 恢复记录本身读不出来时，不能凭空编一个 run 状态。保留原状态，
+                        // 把两个错误都记下来，等同批 worker 全部收敛后再拒绝这次调用。
                         updateItem(filename, group, { lastError:
                             `${String(error.message)}; recovery failed: ${String(recoveryError.message)}`.slice(0, 2000) }, deps);
                         throw recoveryError;

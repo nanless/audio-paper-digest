@@ -136,11 +136,9 @@ function withFreshAnalysisContext(identity, callback) {
 
 function getFreshAnalysisContext() { return scope.getStore() || null; }
 
-// Daily source runs seal source.txt, source.pdf, source-runtime.json, and
-// source-manifest.json. Figure bytes are intentionally materialized afresh
-// for the active request, so failed Reader candidates need a separate
-// ephemeral-pixel binding. Older fresh rewrite runs retain their existing
-// candidate semantics.
+// 日更来源运行会封存 source.txt、source.pdf、source-runtime.json 和
+// source-manifest.json。图片字节按设计只为当前请求临时生成，所以失败的 Reader 候选
+// 需要单独的一份临时像素绑定。更早的 fresh rewrite 运行沿用它们已有的候选语义。
 function isDailyFreshSourceScope() {
     return getFreshAnalysisContext()?.runContract === DAILY_SOURCE_RUN_CONTRACT;
 }
@@ -178,10 +176,9 @@ function sourceDirectory(context, id) { return path.join(context.runDir, 'source
 function bundleRoot(context) { return path.join(context.runDir, 'sources'); }
 
 function buildSourceDetailsFromBundle(stored) {
-    // The sealed source bundle already validates its non-pixel runtime metadata
-    // against the persisted PDF/TXT manifest. Replaying it preserves exact
-    // table/formula bindings and figure discovery for daily Reader runs; it
-    // never contains image bytes or a legacy data/current cache path.
+    // 已封存的来源包已经用持久化的 PDF/TXT 清单校验过非像素的运行元数据。复算这份
+    // 包能保住日更 Reader 运行所需的表格、公式绑定和图片发现结果；它从不包含图片
+    // 字节，也不含旧的 data/current 缓存路径。
     const runtime = stored.runtimeDetails;
     if (!runtime || runtime.paperId !== stored.manifest.paperId
         || runtime.text !== stored.text || runtime.source !== stored.manifest.text.source
@@ -201,8 +198,8 @@ function buildSourceDetailsFromBundle(stored) {
         structuredArtifactsSha256: details.structuredArtifacts.payloadSha256 || '',
         sourceSnapshotSha256: sha(JSON.stringify(sourceSnapshot)),
         ...(runtime.sourceVersion ? { sourceVersionIdentitySha256: runtime.sourceVersion.identitySha256 } : {}) };
-    // Keep the existing snapshot fields unchanged. The source manifest already
-    // binds the runtime title and version metadata through its exact file hash.
+    // 保持已有的快照字段不变。来源清单已经通过精确文件哈希绑定了运行时的标题和版本
+    // 元数据。
     return { ...details, title: runtime.title,
         ...(runtime.sourceVersion ? { sourceVersion: structuredClone(runtime.sourceVersion) } : {}),
         freshSourceDescriptor: descriptor };
@@ -262,7 +259,7 @@ function writeExact(directory, filename, bytes) {
         fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
         fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
         safeDirectory(directory);
-        // Exclusive link commits without replacing a concurrently created file.
+        // 用排他链接提交，不会覆盖并发创建的文件。
         try { fs.linkSync(temporary, target); }
         catch (error) {
             if (error.code !== 'EEXIST' || !readBytes(target).equals(Buffer.from(bytes))) throw error;
@@ -293,8 +290,8 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
         const directory = sourceDirectory(context, id);
         let details;
         try {
-            // A crash after source-details but before the commit marker can
-            // complete locally, after verifying every original byte again.
+            // 写完 source-details、还没写提交标记时崩溃，可以在本地补齐：重新逐字节
+            // 核对原始数据即可。
             safeDirectory(directory);
             details = readJson(path.join(directory, 'source-details.json'));
         } catch (error) { if (error.code !== 'ENOENT') throw error; }

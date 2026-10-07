@@ -1,8 +1,8 @@
 'use strict';
 
-// Authenticate the retained ICML miniconf snapshot as an identity bridge:
-// frozen poster ID -> OpenReview forum ID -> a forum-ID-named local PDF.
-// Historical prose and retained generated analysis never enter this module.
+// 把保留下来的 ICML miniconf 快照当作身份桥梁来核验：
+// 冻结的 poster ID -> OpenReview forum ID -> 以 forum ID 命名的本地 PDF。
+// 历史正文和保留下来的生成分析从不进入本模块。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -300,8 +300,8 @@ function summarySectionBinding({ blogRoot, summaryPage, childPage, blogBasePath 
     for (let index = 0; index < headings.length; index += 1) {
         const start = headings[index].index; const end = headings[index + 1]?.index ?? body.length;
         const section = body.slice(start, end);
-        // The same child may also appear in the summary leaderboard. Only a
-        // level-3 detail heading owns the poster-bearing paper section.
+        // 同一篇子论文也可能出现在汇总排行榜里。只有三级详情标题下的段落才拥有带
+        // poster 的论文小节。
         const headingLine = section.slice(0, section.indexOf('\n') < 0 ? section.length : section.indexOf('\n'));
         const childLinks = [...headingLine.matchAll(new RegExp(`\\]\\(${regexEscape(childUrl)}\\)`, 'gu'))];
         if (childLinks.length) matching.push({ start, end, section, childLinks: childLinks.length });

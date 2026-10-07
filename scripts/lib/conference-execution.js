@@ -107,9 +107,8 @@ function safeDirectFile(directory, name, { mustExist = true } = {}) {
 }
 
 function readRegularJson(filename, label) {
-    // Reuse the ledger parser: besides O_NOFOLLOW/single-link checks it also
-    // rejects duplicate JSON keys, which JSON.parse would otherwise silently
-    // overwrite before our schema can inspect the document.
+    // 复用 ledger 的解析器：它除了检查 O_NOFOLLOW 和单链接，还会拒绝重复的 JSON
+    // 键。直接用 JSON.parse 的话，重复键会在 schema 读到文档之前被悄悄覆盖。
     try { return ledgerApi.readRegularJson(filename); }
     catch (error) { fail(`${label}: ${error.message}`); }
 }
@@ -261,10 +260,9 @@ function initialPaperStates(template) {
 function stateDigest(execution) {
     return stableHash({ executionId: execution.executionId, source: execution.source,
         paperStates: execution.paperStates,
-        // `nextStateSha256` is a pointer to this digest, so including that
-        // pointer would require an impossible hash fixed point.  The attempt
-        // content itself remains bound; only its self-referential receipt is
-        // omitted from the hash input.
+        // `nextStateSha256` 是指向这个摘要的指针，把它也算进来就等于要求哈希存在
+        // 不动点，做不到。本次尝试的内容仍然参与绑定，只有这条自指的凭据不进哈希
+        // 输入。
         attempts: execution.attempts.map(({ nextStateSha256: _receipt, ...attempt }) => attempt) });
 }
 
@@ -323,8 +321,8 @@ function normalizeAttempt(value, paperIds, previousStates, template) {
     const usage = runApi.normalizeUsage(value.usage);
     if (!usageAtLeast(previousStates[value.paperId].usage, usage)) fail('attempt usage regresses');
     assertTimestamp(value.recordedAt, 'attempt recordedAt'); assertSha(value.priorStateSha256, 'attempt priorStateSha256'); assertSha(value.nextStateSha256, 'attempt nextStateSha256');
-    // The stored full nextState is required: status/usage alone would lose the
-    // reason or completed projection that the run contract records.
+    // 必须保存完整的 nextState：只留 status 和用量，就会丢掉 run 协议记录的失败
+    // 原因或已完成的 projection。
     const boundNext = runApi.transitionPaperState(
         runFromState(template, previousStates), patch.paperId, patch.nextState
     ).paperStates[patch.paperId];
@@ -362,8 +360,8 @@ function assertConferenceExecution(value) {
     const operations = new Set(); let expectedPrior = initialDigest; let previousTime = value.createdAt;
     const attempts = [];
     for (const attempt of value.attempts) {
-        // Supply the immutable template only to reproduce the patch's complete
-        // run-state effect; it is not persisted as part of an attempt.
+        // 传入这份不可变的 template，只是为了让补丁对 run 状态的完整影响能够复现；
+        // 它本身不随尝试一起保存。
         const normalized = normalizeAttempt(attempt, paperIds, history, value.runTemplate);
         if (operations.has(normalized.operationId)) fail('attempt operationId is duplicated');
         if (normalized.priorStateSha256 !== expectedPrior) fail('attempt SHA history is discontinuous');
@@ -480,9 +478,8 @@ function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = cry
             return existing;
         }
         if (entries.includes('authority.json') && !entries.includes('state.json')) {
-            // An authority-only directory is indistinguishable from a progressed
-            // execution whose mutable state was deleted.  Recreating the initial
-            // state would erase its append-only history and reopen the run.
+            // 只剩 authority.json 的目录，和「执行过但可变状态被删掉」无法区分。
+            // 重建初始状态会抹掉只追加的历史，并让这个 run 重新打开。
             normalizeAuthority(readRegularJson(
                 safeDirectFile(directory, 'authority.json'), 'execution recovery authority').value);
             fail('authority-only execution cannot be recovered without its state history');

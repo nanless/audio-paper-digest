@@ -509,7 +509,7 @@ class ConferencePublishTests(unittest.TestCase):
                 M.validate_review(new, old_review)
             M.review(conference_id, process_id)
             self.assertEqual(hugo.call_count, 2)
-            self.assertEqual(reviewer.calls, 1)  # Unchanged page SHA reuses semantic evidence.
+            self.assertEqual(reviewer.calls, 1)  # 页面 SHA 没变，沿用上一次的语义证据，所以只调用一次
             self.assertEqual(hugo.call_args.args[1]['baseHead'], new['baseHead'])
             M.validate_review(new, M.load_review(conference_id, process_id))
             commit = M.commit_delta(self.repo, new['files'], new['baseHead'],

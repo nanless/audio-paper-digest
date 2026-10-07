@@ -1,7 +1,7 @@
 'use strict';
 
-// Durable adapter from the existing official arXiv fetcher to the historical
-// paper-source-authority contract.  Generated prose is never accepted here.
+// 把现有的官方 arXiv 抓取器接到历史 paper-source-authority 协议上的持久适配层。
+// 模型生成的正文在这里一律不接受。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -155,8 +155,8 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
         || structuredArtifacts.flattenedTextSha256 !== sha256(details.text)) {
         fail('official fetch structured source hashes do not bind the full text');
     }
-    // Canonical JSON sorts object keys; re-seal the exact same public source
-    // payload after canonicalization so later byte replay can verify it.
+    // 规范 JSON 会对键排序；排序之后再按同样的公开来源载荷封存一次，后续按字节复算
+    // 时才能核对。
     const durableArtifactBody = sortJsonKeys(artifactBody);
     const durableStructuredArtifacts = { ...durableArtifactBody,
         payloadSha256: sha256(JSON.stringify(durableArtifactBody)) };
@@ -290,9 +290,8 @@ function lockSnapshotIsReclaimable(snapshot, dependencies = {}) {
         processKill(snapshot.record.pid, 0);
         return false;
     } catch (error) {
-        // EPERM proves that a process occupies the PID even though we cannot
-        // signal it.  Only ESRCH is positive evidence that the local owner is
-        // gone; every other platform error fails closed.
+        // EPERM 说明某个进程占着这个 PID，只是我们没法给它发信号。只有 ESRCH 才能
+        // 证明本地持有者已经退出；其他平台错误一律按失败处理。
         return error?.code === 'ESRCH';
     }
 }
@@ -365,9 +364,8 @@ function handleLockSignal(signal) {
     for (const handle of [...ACTIVE_LOCK_HANDLES]) {
         STOPPING_LOCK_HANDLES.add(handle);
         const state = LOCK_HANDLE_DATA.get(handle);
-        // With a caller-owned handler an asynchronous fetch may continue after
-        // this callback.  Retain its lock until the operation observes the
-        // stopping flag and unwinds; idle/raw handles are safe to release now.
+        // 调用方自带 handler 时，异步 fetch 可能在这个回调之后还在跑。要等这次操作
+        // 看到停止标志并退栈再释放锁；空闲或裸句柄现在就可以放。
         if (otherListeners.length && state?.operationActive) continue;
         try { releaseLock(handle); }
         catch (error) { try { process.stderr.write(`[arxiv-source-lock] ${signal} cleanup refused: ${error.message}\n`); } catch {} }
@@ -377,8 +375,8 @@ function handleLockSignal(signal) {
 }
 function installLockSignalHandlers() {
     if (lockSignalHandlersInstalled) return;
-    // Run before caller-installed once/on handlers so their presence remains
-    // observable and cleanup never re-emits a signal they intended to handle.
+    // 要在调用方安装的 once/on handler 之前执行，这样它们的注册仍然可观察，清理时
+    // 也不会替它们重新发出本想自己处理的信号。
     for (const signal of LOCK_SIGNALS) process.prependListener(signal, handleLockSignal);
     lockSignalHandlersInstalled = true;
 }

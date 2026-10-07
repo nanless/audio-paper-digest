@@ -421,9 +421,8 @@ async function collectRewriteSources(options, overrides = {}) {
 }
 
 async function analyzeRewrite(options, overrides = {}) {
-    // `overrides` is an internal trusted test seam, never CLI/JSON input.  An
-    // opaque production recovery capability must be rooted in the complete
-    // default dependency chain; replacing even one dependency disables minting.
+    // `overrides` 是仅供测试的内部可信接缝，不是 CLI/JSON 输入。生产恢复能力必须
+    // 扎在完整的默认依赖链上；换掉其中任何一个依赖，就不再签发。
     const productionCapabilityPath = Object.keys(overrides).length === 0;
     const deps = dependencies(overrides);
     return withRunOperation(options.runId, deps, async loaded => {
@@ -460,8 +459,7 @@ async function analyzeRewrite(options, overrides = {}) {
                 concurrency: options.concurrency || deps.defaultAnalysisConcurrency,
                 maxRetries: deps.maxRetries, checkpointFilePath: analysisPath, saveInterval: 0,
                 onAttempt: (attempt, maxRetries, paper) => {
-                    // This is audit telemetry, not a new content/transport
-                    // budget. Engine retry semantics remain unchanged.
+                    // 这是审计遥测，不是新的内容或传输预算。引擎的重试语义不变。
                     try {
                         updateRun(loaded, current => {
                             const id = paperId(paper);
@@ -561,8 +559,8 @@ async function patchRewrite(options, overrides = {}) {
                 .find(item => paperId(item) === id),
             withPaperAnalysisLock: async (paper, callback) => {
                 const lock = overrides.withPaperAnalysisLock || require('../analysis-engine.js').withPaperAnalysisLock;
-                // Helper reads the current record inside this lock and checks
-                // signed-revision scratch versus source-only mode itself.
+                // 辅助函数在这个锁内读取当前记录，并自行区分 signed-revision
+                // scratch 和纯来源模式。
                 return lock(paper, callback);
             }
         });

@@ -1,10 +1,8 @@
 'use strict';
 
-// This is a fallback worker, not an inventory resolver. Its only selection
-// inputs are named, immutable fresh-acquisition failure handoffs written by
-// the direct arXiv source phase. It must never enumerate pending crosswalk
-// hints: local/conference records use the direct route and fresh arXiv routes
-// are retried there before a handoff can exist.
+// 这是一个兜底 worker，不是清单解析器。它唯一的选取输入，是直接 arXiv 来源阶段写下
+// 的、按名字指定的不可变「抓取失败交接」文件。它绝不能去枚举待处理的 crosswalk 提示：
+// 本地和会议记录走直接路线，fresh arXiv 路线要在那里重试过之后才会留下交接文件。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -147,8 +145,8 @@ async function runSingleHintBatch({ crosswalkRoot, authorityRoot, handoffRoot, h
         const pending = decisionTail.then(callback, callback); decisionTail = pending.catch(() => {}); return pending;
     };
     const currentPending = (state, group) => {
-        // Do not expand to another page merely because it now has the same
-        // arXiv hint. The immutable handoff is the complete eligibility list.
+        // 不要因为下一页现在也有同样的 arXiv 提示就扩到那里。这份不可变的交接文件
+        // 就是完整的可处理名单。
         assertHandoffMatchesCrosswalk(state, group.handoff);
         return group.pageKeys.filter(pageKey => state.assignments[pageKey]?.status === 'pending');
     };

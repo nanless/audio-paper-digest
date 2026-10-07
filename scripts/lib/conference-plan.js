@@ -71,19 +71,17 @@ function safeRuntimeFile(root, name, { output = false } = {}) {
         if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
             fail(`unsafe runtime directory parent: ${parent}`);
         }
-        // Match the existing-directory branch: system ancestors such as macOS
-        // /var may be symlinks, while the configured leaf/parent themselves
-        // must be real directories.  Materialize the prospective leaf under
-        // the parent's canonical spelling.
+        // 与「目录已存在」的分支保持一致：macOS 的 /var 之类的系统祖先可能是符号
+        // 链接，但配置里的叶子目录和父目录本身必须是真实目录。按父目录的规范写法建立
+        // 待用的叶子目录。
         const canonicalDirectory = path.join(fs.realpathSync(parent), path.basename(configuredDirectory));
         const filename = path.resolve(canonicalDirectory, name);
         if (path.dirname(filename) !== canonicalDirectory) fail('runtime filename escapes configured directory');
         return filename;
     }
     if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`unsafe runtime directory: ${configuredDirectory}`);
-    // macOS commonly exposes /var as a system symlink to /private/var.  The
-    // configured directory itself must be a real directory, then all later
-    // containment checks use its canonical spelling.
+    // macOS 通常把 /var 做成指向 /private/var 的系统符号链接。配置的目录本身必须是
+    // 真实目录，之后所有包含关系检查都用它的规范写法。
     const directory = fs.realpathSync(configuredDirectory);
     const filename = path.resolve(directory, name);
     if (path.dirname(filename) !== directory) fail('runtime filename escapes configured directory');
@@ -407,8 +405,8 @@ function applyRunPlan(result, io = fs) {
         if (createdDirectory) try { io.rmdirSync(outputDirectory); } catch {}
         fail(`unsafe runtime output directory: ${outputDirectory}`);
     }
-    // Preflight makes the normal failure atomic: neither state file is written
-    // if the chosen run or its immutable receipt already exists.
+    // 预检让常见失败变成原子的：如果选定的 run 或它的不可变 receipt 已经存在，两个
+    // 状态文件都不会写。
     for (const filename of [result.runFile, result.receiptFile]) if (io.existsSync(filename)) fail(`refusing to overwrite existing runtime file: ${path.basename(filename)}`);
     const specs = [[result.runFile, result.runBytes], [result.receiptFile, result.receiptBytes]]; const opened = [];
     try {

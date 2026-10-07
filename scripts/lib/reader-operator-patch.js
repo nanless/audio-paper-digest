@@ -40,8 +40,8 @@ function installImmutable(filename, bytes) {
     try {
         fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
         fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
-        // Caller holds the run and paper locks. Existing committed audit files
-        // are checked above and never intentionally overwritten.
+        // 调用方持有 run 锁和论文锁。上面已经检查过已提交的审计文件，这些文件按设计
+        // 从不覆盖。
         fs.renameSync(temporary, filename);
         syncDirectory(path.dirname(filename));
     } finally {
@@ -123,9 +123,8 @@ function validateScratchParent(current, identity, details, run, deps) {
         }
         return;
     }
-    // This only permits editing failed scratch. The signed-revision service
-    // must still recompute the parent + feedback input identity before it can
-    // consume the candidate; a valid current parent is not a revision receipt.
+    // 这里只允许改失败留下的 scratch。signed-revision 服务在消费候选之前仍须重新算
+    // 出「父记录 + 反馈」的输入身份；当前父记录有效不等于就是一份 revision 凭据。
     if (current.latestAnalysisAttemptError || !hasValidApiReaderV3Records(current)) {
         throw new Error('Signed-revision operator patch requires a valid signed parent Reader');
     }
@@ -166,7 +165,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         }
         const payload = repair.loadFailedCandidate(directory, identity);
         if (!payload?.draft || !same(payload, before.value.payload)) throw new Error('Operator patch needs an unchanged active failed draft');
-        // Hash-only filenames are active; resolved/migrated audit files are not.
+        // 只按哈希命名的文件才是活跃的；已解析或已迁移的审计文件不算。
         for (const name of fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
             if (name === path.basename(candidateFile)) continue;
             if (readPrivate(path.join(directory, name)).value.identity?.paperId === request.paperId) {
@@ -200,8 +199,8 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         if (!repair.parseRepairableDraft(draft) || repair.hashDraft(draft) === repair.hashDraft(payload.draft)) {
             throw new Error('Operator patch must change an existing valid draft node');
         }
-        // Production parser is the only acceptance gate. Its returned article
-        // is deliberately discarded: this operation cannot issue success proof.
+        // 生产解析器是唯一的验收闸门。它返回的文章按设计被丢弃：这次操作发不出成功
+        // 证明。
         deps.parseApiReaderArticleResult(JSON.stringify(draft), options);
         const audit = { contract: CONTRACT, runId: run.runId, paperId: request.paperId,
             candidateIdentitySha256: request.candidateIdentitySha256, patchFileSha256: requestFile.sha256,
@@ -224,7 +223,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
             payload: updated, payloadSha256: repair.hashDraft(updated) })) > 20 * 1024 * 1024) {
             throw new Error('Operator patch exceeds the Reader candidate size budget');
         }
-        // No candidate/audit writes occur before the complete parser succeeds.
+        // 完整解析器跑通之前不写任何候选或审计文件。
         assertSafeDirectory(archiveDir, true);
         installImmutable(path.join(archiveDir, 'before.json'), before.bytes);
         installImmutable(path.join(archiveDir, 'patch.json'), requestFile.bytes);

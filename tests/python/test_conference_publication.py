@@ -113,9 +113,9 @@ class GitPublicationTest(unittest.TestCase):
 
     def test_commit_and_push_are_idempotent_across_both_breakpoints(self):
         commit = self.commit()
-        self.assertEqual(self.commit(), commit)  # crash after commit, before push
+        self.assertEqual(self.commit(), commit)  # 提交后、推送前崩溃
         publisher.push_delta(self.blog, [self.record], self.base, self.identity, commit)
-        self.assertEqual(self.commit(), commit)  # crash after remote push
+        self.assertEqual(self.commit(), commit)  # 推送远端之后崩溃
         publisher.push_delta(self.blog, [self.record], self.base, self.identity, commit)
         self.assertEqual(self.git(self.blog, 'rev-list', '--count', 'HEAD').strip(), '2')
 

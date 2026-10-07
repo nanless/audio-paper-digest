@@ -31,7 +31,7 @@ const STATUS_TRANSITIONS = Object.freeze({
     source_ready: Object.freeze(['analyzing', 'blocked']),
     analyzing: Object.freeze(['completed', 'failed', 'blocked']),
     failed: Object.freeze(['analyzing', 'blocked']),
-    // A source/identity correction must be explicitly recorded before retrying.
+    // 来源或身份要改，必须先明确记录下来才能重试。
     blocked: Object.freeze(['source_ready']),
     completed: Object.freeze([])
 });
@@ -319,11 +319,9 @@ function signLedgerBinding(binding) {
     return { ...bound, bindingSha256: stableHash(bound) };
 }
 
-// This is the only constructor for an executable conference run.  A legacy
-// `createConferenceRun` is retained only for offline draft/shape validation;
-// it cannot produce aggregate or publish input.  The caller must have loaded
-// the ledger bytes and supply their SHA, so a copied member list or a title
-// spelling can never become a source identity.
+// 这是可执行会议 run 的唯一构造函数。旧的 `createConferenceRun` 只留给离线的草稿
+// 和形状校验，它产不出汇总或发布输入。调用方必须已经加载 ledger 字节并提供其 SHA，
+// 这样复制来的成员列表或另一种标题拼写都不可能变成来源身份。
 function trustedLedger(handle) {
     const ledgerApi = require('./conference-source-ledger.js');
     try { return ledgerApi.ledgerHandleSnapshot(handle); }
@@ -433,9 +431,9 @@ function usageTotals(states) {
     return totals;
 }
 
-// This is an intentionally projection-only handoff.  It has no incomplete
-// record in `papers`; callers that need a publishable conference page must use
-// `assertPublishableConferenceInput`, which rejects a partial/blocked run.
+// 这是一次刻意只交出 projection 的交接。它在 `papers` 里没有未完成记录；需要可
+// 发布会议页面的调用方必须用 `assertPublishableConferenceInput`，它会拒绝部分完成
+// 或被阻塞的 run。
 function assertTrustedLedgerContext(context, requireRun = false) {
     const fields = requireRun ? ['run', 'ledgerHandle'] : ['ledgerHandle'];
     assertExactFields(context, fields, 'trusted ledger context');

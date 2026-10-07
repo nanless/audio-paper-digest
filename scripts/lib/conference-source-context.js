@@ -1,9 +1,8 @@
 'use strict';
 
-// Build an immutable, source-only analysis context from an authenticated plan
-// handle and the local artifacts named by its ledger.  A separately named
-// low-level builder exists only for isolated ledger/run tests.  This module has
-// no arXiv, network, generated-blog, or LLM fallback.
+// 从一个已核验的 plan 句柄和它 ledger 里指定的本地产物，构建不可变的纯来源分析
+// 上下文。另有一个名字不同、层级更低的构建器，只给孤立的 ledger/run 测试用。本模块
+// 没有 arXiv、网络、生成博客或 LLM 兜底。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -25,9 +24,8 @@ const OFFSET_UNIT = 'utf8-byte';
 const SOURCE_SNAPSHOT_BINDING_CONTRACT = 'conference-source-snapshot-binding-v2';
 const OBSERVATION_BINDING_CONTRACT = 'conference-source-observation-binding-v2';
 const PLAN_AUTHORITY_BINDING_CONTRACT = 'conference-source-plan-authority-binding-v2';
-// Reserved for a future adapter that can replay a PDF extractor receipt.  A
-// ledger provenance string or a self-declared structured-artifact profile is
-// deliberately not such a receipt.
+// 预留给以后能复算 PDF 抽取器 receipt 的适配器。ledger 里的来源说明字符串，或产物
+// 自己声明的 structured-artifact 档案，按设计都不算这样的 receipt。
 const PDF_EXTRACTION_RECEIPT_CONTRACT = 'conference-pdf-extraction-receipt-v2';
 const NO_REPLAYABLE_RECEIPT = 'replayable-pdf-extraction-receipt-unavailable';
 const MIN_TEXT_CHARS = 1000;

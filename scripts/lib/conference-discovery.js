@@ -1,8 +1,7 @@
 'use strict';
 
-// Offline discovery for immutable conference metadata snapshots and local PDF
-// catalogs. Discovery only proposes source candidates: even an exact filename
-// match is not a verified identity-to-PDF binding and cannot enter execution.
+// 针对不可变的会议元数据快照和本地 PDF 目录做离线发现。发现阶段只提出来源候选：
+// 文件名完全一致也不等于身份与 PDF 已经绑定，不能进入执行。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -21,9 +20,8 @@ const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
-// A validated discovery pair is an authority boundary for filtering.  Keep
-// the admitted bytes and documents in module-private state so callers cannot
-// forge a catalog/report pair by attaching a plausible digest to an object.
+// 通过校验的 discovery pair 是筛选阶段的权限边界。允许的字节和文档保存在模块私有
+// 状态里，调用方没法给一个对象挂上看似合理的摘要来伪造 catalog/report 组合。
 const DISCOVERY_HANDLES = new WeakSet();
 const DISCOVERY_HANDLE_DATA = new WeakMap();
 
@@ -652,10 +650,8 @@ function discoveryHandleSnapshot(handle) {
         report: JSON.parse(JSON.stringify(data.report)), catalogSha256: data.catalogSha256, reportSha256: data.reportSha256 };
 }
 
-// Revalidate the immutable metadata snapshot once and replay the complete
-// member set from those same bytes.  Bulk consumers must not call the
-// single-member replay N times: that would reread and reparse the complete
-// metadata snapshot for every paper.
+// 只重新校验一次不可变的元数据快照，然后从同一份字节复算全部成员。批量调用方不能
+// 对每篇论文都调一次单成员复算：那会把整份元数据快照重读重解析 N 遍。
 function replayDiscoveryMembers(handle) {
     if (!handle || typeof handle !== 'object' || !DISCOVERY_HANDLES.has(handle)) {
         throw fail('an authenticated loaded discovery handle is required');

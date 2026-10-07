@@ -1,9 +1,8 @@
 'use strict';
 
-// Offline, immutable evidence preparation for conference filtering.  This
-// module deliberately does not classify papers or call an LLM.  It binds a
-// deterministic PDF text extraction and an exact abstract slice to an
-// authenticated discovery pair so a later filter contract can consume it.
+// 为会议筛选做离线、不可变的证据准备。本模块按设计不分类论文，也不调用 LLM。它把
+// 一次确定性的 PDF 文本抽取和一段精确的摘要切片，绑定到一对已核验的 discovery 结果
+// 上，供后续筛选协议使用。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -432,9 +431,8 @@ function validateEvidenceReceipt(value, expected) {
         assertSha(value.extraction.artifactsSha256, 'receipt extraction.artifactsSha256');
     }
     if (value.evidence.status === 'ready') {
-        // pypdf can preserve embedded C0 glyph codes. They remain exact hashed
-        // source bytes and JSON escapes them; only trusted extractor evidence,
-        // never reasons/identities, may carry them.
+        // pypdf 可能保留内嵌的 C0 字形码。它们仍是参与哈希的原始字节，JSON 会给它们
+        // 转义；只有可信的抽取器证据可以带上它们，理由和身份字段不行。
         text(value.evidence.text, 'evidence text', { maximum: ABSTRACT_MAX_CHARS, allowExtractorControls: true });
         assertSha(value.evidence.sha256, 'evidence SHA');
         if (![value.evidence.page, value.evidence.textStart, value.evidence.textEnd].every(Number.isSafeInteger)
@@ -744,9 +742,8 @@ function evidenceHandleSnapshot(handle, paperId = null) {
         reportSha256: finalized.report.reportSha256, member, receipt });
 }
 
-// Authenticate the complete evidence run once for a bulk filter pass.  Each
-// receipt and its sealed source bytes are still replayed; only repeated
-// state/catalog/metadata parsing is removed.
+// 批量筛选时，整批证据运行只核验一次。每份 receipt 和它封存的来源字节仍然会复算，
+// 省掉的只是重复的状态、catalog 和元数据解析。
 function evidenceHandleMemberSnapshots(handle) {
     if (!EVIDENCE_HANDLES.has(handle)) fail('authenticated evidence handle required');
     const data = EVIDENCE_HANDLE_DATA.get(handle);

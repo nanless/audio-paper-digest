@@ -1,8 +1,8 @@
 'use strict';
 if (require.main === module) require('../env-loader.js').requireExternalRuntime('llm-usage');
 
-// Metadata only. Provider usage and character estimates deliberately remain
-// separate; neither cached nor reasoning subtotals are added to provider totals.
+// 只记元数据。服务商返回的用量与按字符估算的值按设计分开；缓存和推理的小计都不
+// 计入服务商总量。
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -85,13 +85,13 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
 
 function writeLlmUsageEvent(event, options = {}) {
     if (options.enabled === false) return false;
-    // Node's test runner identifies its worker processes. Fake transports in
-    // unrelated tests must not pollute the real production cost ledger.
+    // Node 测试运行器会认出自己的 worker 进程。无关测试里的假传输不能污染真实的
+    // 生产成本账。
     if (process.env.NODE_TEST_CONTEXT && !options.directory) return false;
     const configured = options.directory || require('../config.js').FILES.llmUsageDir;
     const directory = path.resolve(configured);
-    // Reject existing symlinks at every level. The created leaf is private;
-    // records are exclusive immutable files, never append to an arbitrary path.
+    // 每一层都拒绝已存在的符号链接。新建的叶子文件是私有的；记录是排他的不可变
+    // 文件，绝不向任意路径追加。
     let current = path.parse(directory).root;
     for (const part of directory.slice(current.length).split(path.sep).filter(Boolean)) {
         current = path.join(current, part);

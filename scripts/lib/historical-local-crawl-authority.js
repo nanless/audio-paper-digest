@@ -1,8 +1,7 @@
 'use strict';
 
-// Identity-only authority for retained local crawler inputs. It reads stable
-// arXiv IDs and input hashes only; crawler text and generated fields are never
-// copied into an authority or used for matching.
+// 保留的本地爬虫输入只用来确认身份。它只读取稳定的 arXiv ID 和输入哈希；爬虫文本和
+// 生成的字段从不写进 authority，也不用做匹配。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -299,8 +298,8 @@ function replayAuthorityHandle(handle, options = {}) {
 function prepareLocalCrawlAuthority({ identityRoot, snapshotRoot, dataRoot, arxivId, match, apply = false } = {}) {
     if (!match || match.arxivId !== arxivId) fail('selected local crawler match must bind the requested arXiv ID'); const authorityName = authorityNameFor(arxivId, match);
     if (!apply) return { status: 'dry-run', paperId: `arxiv:${arxivId}`, arxivId, authorityName };
-    // Capture and verify one immutable read. A changed current source must be
-    // rescanned; it must never produce an authority from two different reads.
+    // 捕获并核对一次不可变读取。当前来源变了就必须重新扫描；绝不能拿两次不同的读取
+    // 生成同一份 authority。
     const loaded = readLocalCrawlFile(dataRoot, match.sourceRelativePath);
     if (loaded.fileSha256 !== match.sourceFileSha256) fail('local crawler snapshot file SHA changed before authority capture');
     const retained = verifyLoadedMatch(loaded, match);

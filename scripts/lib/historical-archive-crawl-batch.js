@@ -1,8 +1,7 @@
 'use strict';
 
-// Retained crawler records remain useful for read-only audit/recovery tools,
-// but must not create crosswalk assignments. Direct rewrites either freshly
-// acquire arXiv or replay the dedicated conference local-source catalog.
+// 保留下来的爬虫记录对只读的审计和恢复工具仍有价值，但不能用来创建 crosswalk
+// 分配。直接重写要么重新抓取 arXiv，要么复算专门的会议本地来源目录。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -28,8 +27,8 @@ function selectMatch(matches, cohortDate) {
     const preferred = matches.filter(match => match.sourceRelativePath === `archive/${cohortDate}/filtered-papers.json`);
     const current = matches.filter(match => match.sourceKind === 'current');
     const archived = matches.filter(match => match.sourceKind === 'archive');
-    // The order is deliberate: same-cohort archive, then the preserved current
-    // crawler library, then a different archive. No title/body input exists.
+    // 顺序是刻意的：先同一批次的归档，再是保留的当前爬虫库，最后是另一个归档。
+    // 这里没有任何标题或正文输入。
     return preferred[0] || current[0] || archived[0] || null;
 }
 function attemptDirectory(root, crosswalkId) {
@@ -63,7 +62,7 @@ async function runLocalCrawlBatch({ crosswalkRoot, identityRoot, snapshotRoot, d
     void crosswalkRoot; void identityRoot; void snapshotRoot; void dataRoot; void batchRoot; void crosswalkId; void owner;
     void limit; void apply; void concurrency; void recoveryPolicy; void overrides;
     fail('local crawler crosswalk mutation is retired; use history:direct-inputs and history:direct-plan');
-    /* c8 ignore next -- retained below as a forensic reference for existing runtime records. */
+    /* c8 ignore next -- 保留在下面，作为既有运行时记录的事后取证参考。 */
     const deps = { ...dependencies(), ...overrides };
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency must be an integer from 1 to 5');
     const initial = deps.readCrosswalk({ crosswalkRoot, crosswalkId }); const index = deps.scan({ dataRoot });
