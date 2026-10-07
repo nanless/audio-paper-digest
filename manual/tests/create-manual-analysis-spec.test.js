@@ -1093,8 +1093,8 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
         const current = currentStagePromptBindings();
         const legacy = legacyStagePromptBindings();
         const directSha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
-        const migrated = ['openSourceScan', 'revision', 'tableRepair', 'methodRepair', 'structureRepair',
-            'scoringAudit', 'imageSupplement'];
+        const migrated = ['primaryAnalysis', 'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
+            'structureRepair', 'scoringAudit', 'imageSupplement'];
         for (const stage of migrated) {
             assert.match(current[stage].source, /-v2\.md$/);
             assert.equal(
@@ -1110,7 +1110,7 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
             assert.notEqual(current[stage].sha256, legacy[stage].sha256, stage);
         }
         // 还没迁到 v2 的阶段和合成的阶段规则两版相同。
-        for (const stage of ['primaryAnalysis', 'coreSummaryRepair']) {
+        for (const stage of ['coreSummaryRepair']) {
             assert.equal(current[stage].sha256, legacy[stage].sha256, stage);
             assert.equal(current[stage].source, legacy[stage].source, stage);
         }

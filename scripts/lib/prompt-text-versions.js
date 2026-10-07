@@ -27,6 +27,10 @@ const FROZEN_V1_PROMPT_FILES = Object.freeze({
 
 // 表里登记的是各阶段当前版本。v1 不写在这里，固定由 FROZEN_V1_PROMPT_FILES 给出。
 const PROMPT_FILE_VERSIONS = Object.freeze({
+    primaryAnalysis: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/deep-analysis-v2.md'
+    }),
     openSourceScan: Object.freeze({
         contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
         path: 'prompts/opensource-scan-v2.md'
@@ -62,6 +66,12 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     imageSupplement: Object.freeze({
         contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
         path: 'prompts/image-supplement-v2.md'
+    }),
+    // 只登记文章正文。修复提示词 api-reader-repair.md 还没迁，仍按 v1 的冻结
+    // 路径加载和哈希，所以不在这张表里；它下一批再进。
+    apiReaderArticle: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/api-reader-article-v2.md'
     })
 });
 
@@ -108,7 +118,7 @@ function currentTextStagePromptPath(stage) {
 }
 
 // 阶段还没登记新版本时当前版本就是 v1，此时这里与 currentTextStagePromptPath 等价，
-// 但不抛错。会议与 manual 的清单里有不含 v2 的阶段（例如 primaryAnalysis）。
+// 但不抛错。会议与 manual 的清单里有不含 v2 的阶段（例如 demoLinkScan 这种合成的）。
 function currentOrFrozenPromptPath(stage) {
     const entry = PROMPT_FILE_VERSIONS[stage];
     return promptFilePathForContract(stage, entry ? entry.contract : ANALYSIS_PROMPT_TEXT_V1_CONTRACT);

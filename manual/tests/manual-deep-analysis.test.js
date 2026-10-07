@@ -517,13 +517,23 @@ describe('manual_complete v3 深度分析约定', () => {
         const replayLegacy = resolveManualSpecPromptBindings(legacySpec, current, legacy);
         assert.equal(replayLegacy.openSourceScan.sha256, legacy.openSourceScan.sha256);
         assert.equal(replayLegacy.openSourceScan.source, 'prompts/opensource-scan.md');
-        // 混用两版的配置哪一版都比不中，按 v1 处理并由逐阶段检查拒绝。
+        // 混用两版的配置哪一版都比不中，按 v1 处理并拒绝。主分析现在也区分版本，
+        // 所以这种混法先被 promptSha256 检查拦下。
         const mixed = { ...currentSpec, stagePromptSha256: {
             ...currentSpec.stagePromptSha256, openSourceScan: legacy.openSourceScan.sha256
         } };
         assert.equal(specPromptTextVersion(mixed, current, legacy), 'v1');
         assert.throws(
             () => resolveManualSpecPromptBindings(mixed, current, legacy),
+            /promptSha256 与当前主分析提示文件的 SHA 不一致/
+        );
+        // 主分析声明 v1、别的阶段声明 v2，主分析这一关能过，由逐阶段检查拒绝。
+        const mixedTail = { ...legacySpec, stagePromptSha256: {
+            ...legacySpec.stagePromptSha256, openSourceScan: current.openSourceScan.sha256
+        } };
+        assert.equal(specPromptTextVersion(mixedTail, current, legacy), 'v1');
+        assert.throws(
+            () => resolveManualSpecPromptBindings(mixedTail, current, legacy),
             /阶段的提示文件或阶段规则 SHA 与当前值不一致/
         );
     });

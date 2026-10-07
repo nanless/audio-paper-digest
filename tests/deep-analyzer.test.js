@@ -5667,6 +5667,65 @@ has_dataset: 否
         );
     });
 
+    it('读者文章阶段按记录声明的版本重算，旧记录不带版本字段', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const crypto = require('node:crypto');
+        const arxivId = '2501.00001';
+        const text = '用于核验读者文章指纹的正文';
+        const paper = { arxivId, title: '示例标题', authors: [], categories: [],
+            analysisManifest: null };
+        // 取稳定指纹真正哈希的那个对象，才能看出旧记录有没有多出新字段。
+        const capture = manifest => {
+            const original = crypto.createHash;
+            let payload = null;
+            crypto.createHash = function (...args) {
+                const hash = original.apply(this, args);
+                const update = hash.update;
+                hash.update = function (value, ...rest) {
+                    if (typeof value === 'string' && value.includes('"planVersion"')) {
+                        payload = JSON.parse(value);
+                    }
+                    return update.call(this, value, ...rest);
+                };
+                return hash;
+            };
+            try {
+                deep.buildRecoveryFingerprints(paper, text, arxivId, manifest);
+            } finally {
+                crypto.createHash = original;
+            }
+            return payload;
+        };
+        // 旧记录：没有 promptTextContract，哈希输入里也不能有这个字段，正文按 v1 算。
+        const legacyManifest = { version: 1, stages: { apiReaderArticle: {
+            status: 'complete', fingerprint: 'legacy', updatedAt: 't' } } };
+        const legacyPayload = capture(legacyManifest);
+        assert.strictEqual('promptTextContract' in legacyPayload, false);
+        assert.strictEqual(
+            legacyPayload.promptTemplateSha256,
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article.md')
+        );
+        // 新请求：登记了 v2，指纹里带合同名，正文按 v2 算。
+        const freshPayload = capture({ version: 1, stages: {} });
+        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v2');
+        assert.strictEqual(
+            freshPayload.promptTemplateSha256,
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v2.md')
+        );
+        assert.strictEqual(
+            deep.currentTextStagePromptPath('apiReaderArticle'),
+            'prompts/api-reader-article-v2.md'
+        );
+        assert.strictEqual(
+            deep.promptFilePathForContract('apiReaderArticle', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
+            'prompts/api-reader-article.md'
+        );
+        assert.throws(() => deep.buildRecoveryFingerprints(paper, text, arxivId, {
+            version: 1, stages: { apiReaderArticle: { status: 'complete',
+                fingerprint: 'legacy', promptTextContract: 'analysis-prompt-text-v9' } }
+        }), /没有登记/);
+    });
+
     it('核心摘要 Prompt 字节漂移只改变 coreSummaryRepair 阶段指纹', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const promptPath = path.resolve(__dirname, '../prompts/core-summary-repair.md');

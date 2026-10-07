@@ -191,9 +191,10 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
     const fingerprint = () => processApi.implementationSha256({ root,
         readFileSync: filename => sources.get(path.relative(root, filename)) });
     const baseline = fingerprint();
+    // Reader 正文已迁到 v2，当前指纹绑的是 -v2 那份；v1 那份留给旧记录复算。
     for (const name of ['scripts/deep-analyzer.js', 'scripts/config.js', 'scripts/env-loader.js',
         'scripts/llm-account-pool.js', 'scripts/paper_identity.py', 'scripts/utils.py',
-        'scripts/lib/reader-resource-sync.js', 'prompts/api-reader-article.md']) {
+        'scripts/lib/reader-resource-sync.js', 'prompts/api-reader-article-v2.md']) {
         const original = sources.get(name); sources.set(name, Buffer.concat([original, Buffer.from('\nrepresentative drift')]));
         assert.notEqual(fingerprint(), baseline, name); sources.set(name, original);
     }
