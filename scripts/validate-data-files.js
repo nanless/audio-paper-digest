@@ -662,7 +662,7 @@ function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
             || acquisition.imageInfosSha256 !== stableContentSha256(entry.imageInfos || [])) {
             return {
                 required: true,
-                error: `${prefix} 未通过 filtered/full-text/metadata/input/source/image assembler 全文闭环`
+                error: `${prefix} 未通过 filtered/full-text/metadata/input/source/image assembler 全文一致性检查`
             };
         }
         if (identityMode === 'per_paper_v1') {
@@ -685,7 +685,7 @@ function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
             } catch (error) {
                 return {
                     required: true,
-                    error: `${prefix} 逐论文全文/ArtifactIndex 身份闭环失败: ${error.message}`
+                    error: `${prefix} 逐论文全文/ArtifactIndex 身份不一致: ${error.message}`
                 };
             }
         }
