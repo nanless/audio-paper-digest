@@ -176,7 +176,7 @@ describe('日更运行报告', () => {
         );
     });
 
-    it('LLM API canonical 必须闭环 reader、评分、来源与实际正文哈希', () => {
+    it('LLM API canonical 必须与 reader、评分、来源和实际正文哈希保持一致', () => {
         const stable = value => {
             if (Array.isArray(value)) return value.map(stable);
             if (value && typeof value === 'object') {

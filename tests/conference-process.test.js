@@ -629,7 +629,7 @@ test('适配器部分失败时，保留标准的错误分类', async t => {
         error => error.message.includes('Insufficient balance') && error.code === 'MODEL_HTTP_NON_RETRYABLE' && error.retryable === false);
 });
 
-test('实现迁移仍可寻址，并且绝不重分析已完成的论文', async t => {
+test('迁移后旧实现仍可寻址，并且绝不重分析已完成的论文', async t => {
     const migration = require('../scripts/migrate-conference-process.js');
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
     const first = await processApi.runConferenceProcess(options, { ...f.deps,

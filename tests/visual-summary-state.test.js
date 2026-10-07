@@ -130,7 +130,7 @@ function makePng(width = 768, height = 1200) {
 
 const PNG = makePng();
 
-describe('modern Reader 视觉来源闭环', () => {
+describe('modern Reader 视觉来源一致性', () => {
     function withReader(callback, options = {}) {
         const old = Config.CURRENT_DIR;
         const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'visual-reader-source-')));

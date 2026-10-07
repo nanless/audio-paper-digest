@@ -5797,7 +5797,7 @@ has_dataset: 否
         assert.doesNotMatch(prompts[1], /量化句须在同一句内闭合/);
     });
 
-    it('核心摘要无定量证据重试要求删除实验数字且不再同时要求补量化闭环', async () => {
+    it('核心摘要无定量证据重试要求删除实验数字，不再要求量化句在同一句内闭合', async () => {
         const { repairCoreSummarySection } = require('../scripts/deep-analyzer.js');
         const original = validAnalysisText();
         const existingSummary = original.match(

@@ -361,7 +361,7 @@ test('小节形态的修复目标包含其正文，但不重复提示上下文',
     assert.ok(!targets.some(target => target.path === '/sections/0/body'));
 });
 
-test('候选存储是原子的、私有的、按输入区分的，而且绝不是成功凭证', t => {
+test('候选存储是原子的、私有的、按输入区分的，本身不是成功凭证', t => {
     const directory = temporary(t);
     const identity = { version: REPAIR_VERSION, input: 'a', source: 'b', model: 'c', prompt: 'd' };
     assert.equal(loadFailedCandidate(directory, identity), null);
@@ -988,7 +988,7 @@ test('生产的计数反馈和补丁拒绝保留都不读带码诊断的措辞',
     assert.ok(stored.payload.issues.some(issue => issue.message.startsWith('Reader patch rejected:')));
 });
 
-test('旧版恢复字节先核验再谈计数兼容，而且绝不改写', t => {
+test('旧版恢复字节先核验再谈计数兼容，绝不改写', t => {
     const directory = temporary(t);
     const identity = { version: REPAIR_VERSION, paperId: '2609.99970' };
     const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };

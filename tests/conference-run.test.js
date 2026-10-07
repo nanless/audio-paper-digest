@@ -215,7 +215,7 @@ test('旧版运行 API 不能创建或校验可发布的会议汇总', () => {
     }), /completion-proof handle/);
 });
 
-test('失败和受阻状态必须给出原因，而且只能经由 source_ready 续跑', () => {
+test('失败和受阻状态必须给出原因，续跑只能经由 source_ready', () => {
     let run = conference.createConferenceRun(base());
     assert.throws(() => conference.transitionPaperState(run, pid('100'), { status: 'blocked', usage: {} }), /requires a reason/);
     run = conference.transitionPaperState(run, pid('100'), { status: 'blocked', usage: {}, reason: 'ledger mismatch' });

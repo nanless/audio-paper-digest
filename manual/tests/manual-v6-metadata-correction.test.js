@@ -212,7 +212,7 @@ describe('Manual v6 显式元数据更正协议', () => {
         );
     });
 
-    it('空 correction 集也必须由 sorted batch set、Merkle 与 manifest SHA 闭环', () => {
+    it('空 correction 集也必须经 sorted batch set、Merkle 与 manifest SHA 三重校验', () => {
         const manifest = {
             version: 1,
             contract: CORRECTION_MANIFEST_CONTRACT,

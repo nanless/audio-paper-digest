@@ -312,7 +312,7 @@ describe('Manual v6 持久任务执行器', () => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('technical review 在 runner submit 前强制正式 V6 八维评分闭环', () => {
+    it('technical review 在 runner submit 前必须给出正式 V6 的完整八维评分', () => {
         const paperId = '2608.12345';
         const taskName = 'technical-schema-review';
         const output = {
