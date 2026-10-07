@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Explicit, audited bridge for a conference process whose implementation
-// fingerprint changed.  Completed papers are first replayed through the
-// current deterministic postprocess; only the incomplete papers are sent back
-// through the LLM lifecycle.
+// 会议流程的实现指纹变了以后，用它做一次显式迁移，过程留痕。已完成的论文先按当前
+// 的后处理代码重跑一遍；只有没做完的论文才重新送回 LLM 流程。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -114,12 +112,10 @@ function migrateAndRun(options, runtime = {}) {
             : { ...context, authority: { ...context.authority, implementationSha256: oldImplementation } };
         const shared = await (deps.prepareShared || processApi.prepareShared)(sharedContext, deps, state.createdAt);
         processApi.assertSourceContinuity(state, shared);
-        // Replay complete papers only when the implementation/lifecycle
-        // actually requires it. A publisher/renderer commit can change the
-        // projection fingerprint while the LLM process is running; refreshing
-        // then repairs staging drift without sending completed papers back to
-        // the LLM. On an ordinary retry with the same implementation, skip this
-        // deterministic replay so the runner goes straight to incomplete items.
+        // 只有实现或生命周期确实需要时，才重新处理已完成的论文。发布器或渲染器的提交
+        // 会在 LLM 流程运行期间改变实现指纹，这时重跑只是把暂存页拉回与记录一致，
+        // 不必把已完成的论文再送回 LLM。实现没变、只是普通重试时跳过这一步，
+        // 直接处理未完成的论文。
         const complete = Object.values(state.items).filter(item => item.status === 'complete');
         const stagedProofs = new Map();
         if (requiresMigration || lifecycleNeedsRefresh) {
@@ -161,12 +157,9 @@ function migrateAndRun(options, runtime = {}) {
                     }
                     const next = structuredClone(checked);
                     next.authority = processApi.authorityForExistingState(checked, context.authority);
-                    // A source-upgrade promoted process already binds its
-                    // original implementation through sourceUpgradePromotion
-                    // and its signed source-upgrade plan.  Adding the legacy
-                    // sourceImplementationSha256 field here would assert that
-                    // the promoted process UUID was derived directly from
-                    // that implementation, which is intentionally false.
+                    // 经来源升级提升过的流程，已经通过 sourceUpgradePromotion 和来源
+                    // 升级方案绑定了原始实现。这里再补上旧的 sourceImplementationSha256
+                    // 字段，就等于宣称该流程的 UUID 直接由那份实现推导而来，而事实并非如此。
                     if (!next.sourceUpgradePromotion) next.sourceImplementationSha256 = oldImplementation;
                     next.status = 'running';
                     next.aggregate = null;
@@ -200,9 +193,8 @@ function migrateAndRun(options, runtime = {}) {
         const migrationDeps = oldImplementation === currentImplementation
             ? deps
             : { ...deps, prepareShared: async () => shared };
-        // An implementation migration invalidates the old completion proof.
-        // Keep that proof recoverable, but free the canonical filename so the
-        // process can atomically write the new receipt at completion.
+        // 实现迁移会让旧的完成凭证失效。旧凭证保留下来以便恢复，但要把正式文件名让
+        // 出来，流程完成时才能原子写入新凭证。
         archiveStaleCompletionReceipt(directory, state);
         return processApi.runConferenceProcessLocked(options, migrationDeps, context,
             options.fromProcessId, directory);

@@ -2,11 +2,10 @@
 'use strict';
 
 /**
- * Read-only maintenance diagnostics for the daily conference workspace.
+ * 会议工作区的只读维护诊断。
  *
- * This file deliberately does not load the project environment through
- * env-loader: that compatibility path chmods .env. It reads only the two
- * repository path values needed for display, and never emits their values.
+ * 这个文件有意不通过 env-loader 加载项目环境：那条兼容路径会改 .env 的权限。
+ * 它只读展示需要的两个仓库路径值，而且从不把值打印出来。
  */
 
 const fs = require('node:fs');
@@ -440,9 +439,8 @@ function inspectProcessStates(options = {}) {
             itemCounts: itemStatusCounts(state?.items),
             stateIntegrity,
             completion,
-            // A valid conference-process completion receipt proves the process
-            // lifecycle only. Publication is a separate, intentionally
-            // unverified surface in this read-only diagnostic.
+            // 一份有效的会议流程完成凭证只能证明流程本身走完了。发布是另一件事，
+            // 这份只读诊断有意不去核验。
             publicationStatus: 'not_checked',
             classification,
             reason,

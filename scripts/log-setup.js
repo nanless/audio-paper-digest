@@ -65,19 +65,19 @@ function redactLogText(value) {
         if (secret && text.includes(secret)) text = text.split(secret).join('[REDACTED]');
     }
 
-    // URL credentials must be removed before generic credential fields are handled.
+    // URL 里的凭证要先去掉，再处理通用的凭证字段。
     text = text.replace(
         /\b([a-z][a-z0-9+.-]*:\/\/)([^\s/@]+)@/gi,
         '$1[REDACTED]@'
     );
 
-    // Header, environment-variable and JSON-style credential fields.
+    // Header、环境变量和 JSON 风格的凭证字段。
     text = text.replace(
         /((?:["']?(?:authorization|proxy-authorization|x-api-key|api[-_ ]?keys?|key|access[-_ ]?token|refresh[-_ ]?token|token|secret|password|passwd|cookie|set-cookie|paper_analyzer_api_keys?|kimi_api_key|[a-z0-9_-]+_(?:api_keys?|token|secret|password))["']?)\s*[:=]\s*)([^\r\n]+)/gi,
         '$1[REDACTED]'
     );
 
-    // Also protect standalone authorization values and commonly printed key fragments.
+    // 还要遮住单独出现的 authorization 值，以及经常被打印出来的密钥片段。
     text = text.replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '[REDACTED]');
     text = text.replace(/\bsk-[A-Za-z0-9._-]{3,}/gi, '[REDACTED]');
 
@@ -182,8 +182,7 @@ function pruneLogFiles(logsDir, options = {}) {
     let totalBytes = retained.reduce((sum, entry) => sum + entry.size, 0);
     for (const entry of retained.slice().reverse()) {
         if (totalBytes <= maxTotalBytes) break;
-        // A concurrently running script may still own a newly touched file.
-        // Let capacity temporarily exceed the target instead of unlinking it.
+        // 正在运行的脚本可能刚刚碰过某个文件。宁可暂时超出容量上限，也不删它。
         if (entry.activeOwner || entry.mtimeMs >= nowMs - ACTIVE_LOG_GRACE_MS) continue;
         if (!remove(entry)) continue;
         totalBytes -= entry.size;
@@ -213,7 +212,7 @@ function normalizeWriteArgs(chunk, encoding, callback) {
 function setupScriptLogging(scriptPath, options = {}) {
     if (activeLogger) return activeLogger;
 
-    // A non-default env file is accepted only through this explicit test/programmatic API.
+    // 只有走这个显式的测试/编程接口，才允许指定非默认的 env 文件。
     loadProjectEnv(options.envFile);
     configuredSecrets = Object.entries(process.env)
         .filter(([key, value]) => /(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$/i.test(key) && String(value).length >= 6)
@@ -253,7 +252,7 @@ function setupScriptLogging(scriptPath, options = {}) {
         try {
             stderrWrite(message);
         } catch (_) {
-            // Logging failure must not terminate the business script.
+            // 写日志失败不能把业务脚本带崩。
         }
     }
 

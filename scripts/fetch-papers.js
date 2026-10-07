@@ -1055,9 +1055,8 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries ?? ARXIV_CONFIG.fetchMaxRetries;
     const abstractCache = options.abstractCache instanceof Map ? options.abstractCache : new Map();
-    // A scheduler guards the real socket-opening operation. Keeping the public
-    // concurrency parameter only controls CPU/bookkeeping fan-out; arxiv.org
-    // itself never has more than one in-flight abstract request per batch.
+    // 真正开 socket 的那一步由调度器把关。公开的并发参数只管 CPU 和记账上的并行度；
+    // 对 arxiv.org 来说，一批里同时在飞的摘要请求始终只有一个。
     const requestScheduler = options.requestScheduler || createHostTaskScheduler();
     const rateLimitBudget = createRateLimitBudget(options);
     const initialRateLimitWaitMs = rateLimitBudget.waitedMs;
@@ -1084,7 +1083,7 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
                         return;
                     }
                 } catch {
-                    // The owner removes a rejected promise; this caller retries below.
+                    // 被拒的 promise 由持有方移除，这个调用方在下面重试。
                 }
             }
 
@@ -1579,7 +1578,7 @@ function extractFilterReason(responseText) {
             }
         }
     } catch {
-        // fall through
+        // JSON 解析失败，继续走下面的正则匹配
     }
     const reasonMatch = text.match(/(?:理由|原因|reason|rationale)\s*[：:]\s*([^\n]+)/i);
     if (reasonMatch) return reasonMatch[1].trim();
@@ -1616,7 +1615,7 @@ function parseFilterDecisionDetails(responseText, paperId = '') {
             if (['not_related', 'not related', 'no', 'n', 'false', '不相关', '无关', '否'].includes(decision)) return makeDecision(false, 'json');
         }
     } catch {
-        // fall through to text parsing
+        // JSON 解析失败，交给下面的文本解析
     }
 
     // 2. 优先匹配结构化结论行，先判否定，避免 fallback 中“是否相关”的“否”误伤
@@ -1676,9 +1675,8 @@ async function repairMalformedFilterDecision(initialDecision, paperId, requestFn
     ].join('\n');
 
     try {
-        // Reasoning models may spend most of a tiny budget on hidden deliberation
-        // before emitting the requested one-line conclusion.  Keep the output
-        // contract strict, but give the recovery call enough room to reach it.
+        // 推理模型可能把一点点预算大半花在隐藏思考上，最后来不及输出那一行结论。
+        // 输出格式仍然要求严格，但要给这次补救调用留够余量。
         const repairedText = await requestFn([{ role: 'user', content: repairPrompt }], 2048);
         const repaired = parseFilterDecisionDetails(repairedText, paperId);
         if (typeof repaired.related === 'boolean' && !repaired.retryable && !repaired.fallback) {

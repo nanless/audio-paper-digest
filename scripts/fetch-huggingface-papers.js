@@ -74,9 +74,8 @@ function buildCurlArgs(proxyUrl, url, timeout, options = {}) {
         ? ['--config', options.proxyConfigPath]
         : ['--proxy', proxyUrl];
     return [
-        // curl only honors -q/--disable before every other option.  Keep it
-        // first so a user-level ~/.curlrc cannot inject credentials, cookies,
-        // proxies or output settings into this minimal subprocess.
+        // curl 只认出现在所有其它选项之前的 -q/--disable。放在最前面，用户级的
+        // ~/.curlrc 就没法往这个最小子进程里塞凭证、cookie、代理或输出设置。
         '-q', '-s', '-f', '-L',
         ...proxyArgs,
         '--noproxy', '',
@@ -191,7 +190,7 @@ async function fetchWithCurl(url, timeout = 60, options = {}) {
     } catch (e) {
         const safeMessage = redactProxySecrets(e?.message || String(e), proxyUrl);
         if (Number(e.code) === 22) {
-            // curl --fail returns exit code 22 for HTTP errors (4xx, 5xx)
+            // curl --fail 遇到 HTTP 错误（4xx、5xx）时退出码为 22
             console.error(`  HTTP 请求失败 (${url}): ${safeMessage.substring(0, 100)}`);
         } else if (safeMessage.includes('Unexpected token')) {
             console.error(`  JSON 解析失败 (${url}): 响应不是有效的 JSON`);
@@ -474,9 +473,9 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             .map(item => String(item?.id || ''))
             .join('\n');
         if (seenPapersPageSignatures.has(pageSignature)) {
-            // HuggingFace /api/papers currently may ignore offset and repeat page 1.
-            // A byte-equivalent ordered ID page is an endpoint exhaustion signal;
-            // daily_papers remains the authoritative seven-day coverage source.
+            // HuggingFace 的 /api/papers 目前可能忽略 offset，一直重复第 1 页。按顺序
+            // 取到的 ID 页与上一页字节完全一致，就说明这个接口已经取尽；七天覆盖范围
+            // 仍以 daily_papers 为准。
             papersComplete = true;
             console.log(`  papers API 页${papersPage + 1}: 与前页完全重复，判定分页已穷尽`);
             break;

@@ -894,10 +894,9 @@ function nextArchiveConflictPath(archiveDayDir, basename) {
 function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}) {
     const today = batchDate;
     const archiveDir = options.archiveDir || ARCHIVE_DIR;
-    // Resolve the default set at call time. Besides keeping all fetch/filter
-    // companion snapshots together, this lets callers that temporarily bind
-    // Config.FILES to another current directory exercise the real default
-    // archive path without falling back to module-load-time constants.
+    // 默认文件清单在调用时才解析。这样抓取和筛选的配套快照会一起归档，调用方临时把
+    // Config.FILES 指向别的 current 目录时，也走真实的默认归档路径，而不是退回模块
+    // 加载时定下的常量。
     const targets = options.targets || [
         Config.FILES.deepAnalysisResult,
         Config.FILES.filteredPapers,
@@ -1340,10 +1339,9 @@ async function runFullFetch() {
         }
         console.log(`  请求顺序: ${shuffledCategories.map(c => c.id).join(' → ')}\n`);
 
-        // One scheduler and one normalized-ID abstract cache span the complete
-        // arXiv batch.  Categories are fetched sequentially, but their internal
-        // recent/search/abs/API requests now share host cooldown state, while a
-        // paper repeated in another category reuses the first fetched abstract.
+        // 整批 arXiv 抓取共用一个调度器和一份按规范化 ID 建的摘要缓存。各分类依次
+        // 抓取，但分类内部的 recent/search/abs/API 请求共享同一个主机冷却状态；
+        // 同一篇论文在别的分类里再出现时，直接复用第一次抓到的摘要。
         const arxivRequestScheduler = createProductionArxivRequestScheduler();
         const abstractCache = buildSharedAbstractCache(fetchCheckpoint);
         let fetchAttemptIndex = 0;
@@ -1724,11 +1722,9 @@ async function runFullFetch() {
 
     // ========== 第五步：深度分析 ==========
     console.log('\n🔬 第五步：深度分析每篇论文');
-    // Daily API analysis is source-first.  The selected set is frozen into a
-    // separate runtime plan, every paper gets an official HTML/PDF bundle, and
-    // only then do we enter the LLM stages.  A legacy current analysis cannot
-    // be reused merely because it was successful: it must bind this exact
-    // daily PDF/TXT manifest first.
+    // 日更 API 分析以来源为先：入选集合先固化成一份独立的运行计划，每篇论文都抓到
+    // 官方 HTML 与 PDF，之后才进入 LLM 各阶段。旧的分析结果即使当时成功过也不能直接
+    // 复用，必须能对上这一天的 PDF/TXT 清单。
     const dailySourcePlan = filteredNew.length ? dailyFreshSources.createDailyFreshSourcePlan({
         batchDate: today, batchId, papers: filteredNew
     }) : null;
@@ -1868,7 +1864,7 @@ async function runFullFetch() {
                 console.log(`  已删除 ${backups.length - 10} 个旧备份`);
             }
         } catch (e) {
-            // ignore cleanup errors
+            // 清理失败就跳过
         }
     }
 

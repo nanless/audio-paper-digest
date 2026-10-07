@@ -41,12 +41,11 @@ function getLayout(projectRoot = PROJECT_ROOT) {
             legacyDebug: true
         }))
     ];
-    // Conference source evidence is immutable operational input: it must be
-    // visible to status, but storage:prune has no authority to remove it.
-    // A future conference execution owns its own explicit retention protocol.
+    // 会议的来源证据属于不可变的运行输入：状态检查要能看到它，但 storage:prune
+    // 无权删除。以后会议执行自己负责什么该留、留多久。
     const protectedRuntime = [
-        // Fresh sealed source.txt, source.pdf, source-runtime.json, and
-        // source-manifest.json bundles are reproducible evidence, not caches.
+        // 日更时核验并保存的 source.txt、source.pdf、source-runtime.json 和
+        // source-manifest.json 是可复现的证据，不是缓存。
         { key: 'daily-fresh-source-runs', root: path.join(runtime, 'daily-fresh-source-runs') },
         { key: 'fetched-arxiv-sources', root: path.join(runtime, 'fetched-arxiv-sources') },
         { key: 'historical-arxiv-fresh-failure-handoffs', root: path.join(runtime, 'historical-arxiv-fresh-failure-handoffs') },
@@ -120,8 +119,8 @@ function getLayout(projectRoot = PROJECT_ROOT) {
         { key: 'historical-page-staging', root: path.join(runtime, 'historical-page-staging') },
         { key: 'historical-daily-aggregates', root: path.join(runtime, 'historical-daily-aggregates') },
         { key: 'historical-publications', root: path.join(runtime, 'historical-publications') },
-        // Official arXiv source bundles are crosswalk inputs and must remain
-        // replayable for final-receipt verification; automatic prune has no authority here.
+        // 官方的 arXiv 来源包是页面来源对照的输入，核验最终凭证时还要能重新读取，
+        // 自动清理在这里没有权限。
         { key: 'paper-source-authorities', root: path.join(runtime, 'paper-source-authorities') }
     ];
     return { projectRoot: root, current, archive, runtime, logs, controlled, protectedRuntime };
@@ -133,10 +132,9 @@ function readRetentionDays(value = process.env.PD_STORAGE_RETENTION_DAYS) {
     return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_RETENTION_DAYS;
 }
 
-// Do not call env-loader here: its compatibility loader chmods .env. Storage
-// status and diagnostics must remain read-only, including when the file already
-// contains the correct value. This parser is intentionally value-blind to the
-// caller; it is used only for the retention setting.
+// 这里不要调 env-loader：它的兼容加载器会改 .env 的权限。存储状态和诊断必须保持
+// 只读，文件权限已经正确时也不能例外。这个解析器不解释读到的值，原样返回，只用于
+// 读取保留天数。
 function readProjectEnvValue(key, envFile = path.join(PROJECT_ROOT, '.env')) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key))) return undefined;
     let source;
@@ -161,7 +159,7 @@ function commonRuntimeLockPaths(layout) {
             .filter(name => name.endsWith('.transaction.lock') || (/\.lock$/.test(name) && !name.startsWith('.full-fetch-run')))
             .map(name => path.join(layout.current, name)));
     } catch (_) {
-        // The later authoritative scan reports unreadable current roots.
+        // 稍后那次权威扫描会报告读不到的 current 目录。
     }
     const analysisRoot = path.join(layout.current, '.analysis-runs');
     try {
@@ -169,7 +167,7 @@ function commonRuntimeLockPaths(layout) {
             .filter(name => name.endsWith('.lock'))
             .map(name => path.join(analysisRoot, name)));
     } catch (_) {
-        // Missing analysis lock root is normal.
+        // 分析锁目录不存在是正常情况。
     }
     return [...new Set(paths.map(item => path.resolve(item)))];
 }
@@ -201,8 +199,7 @@ function activeRuntimeLockBlockers(layout) {
             if (error?.code === 'EPERM') {
                 blockers.push({ type: 'active_lock', path: lockPath, message: `运行任务 PID ${owner.pid} 存活但不可探测` });
             }
-            // ESRCH means a stale lock.  Never remove it here; normal lock
-            // owners retain sole authority to reclaim their own lock.
+            // ESRCH 说明锁已经过期。这里绝不删除它，锁的所有者才有权回收自己的锁。
         }
     }
     return blockers;
@@ -264,8 +261,7 @@ function runtimeTopLevelTargets(layout) {
             });
         }
     } catch (_) {
-        // data/runtime itself is still reported and treeStats records the error
-        // boundary if it cannot be read.
+        // data/runtime 本身仍会被报告，读不到时由 treeStats 记下错误边界。
     }
     return targets.sort((a, b) => a.key.localeCompare(b.key));
 }
