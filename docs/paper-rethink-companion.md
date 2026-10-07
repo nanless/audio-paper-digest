@@ -64,7 +64,7 @@ PD_PAPER_RETHINK_ALLOWED_ENDPOINTS=https://api.openai.com/v1,https://api.example
 
 ### `GET /ui`
 
-界面含进程启动时随机生成的会话标识（session token），响应为 `no-store`，设置严格 CSP、`frame-ancestors 'none'`、Permissions Policy 和 `no-referrer`。会话标识仅供该 UI 文档使用，重启后改变。旧博客普通导航可打开界面，但带博客 `Origin` 的脚本 fetch 被拒绝，不能读取 HTML 或会话标识。
+界面含进程启动时随机生成的会话标识，响应为 `no-store`，设置严格 CSP、`frame-ancestors 'none'`、Permissions Policy 和 `no-referrer`。会话标识仅供该 UI 文档使用，重启后改变。旧博客普通导航可打开界面，但带博客 `Origin` 的脚本 fetch 被拒绝，不能读取 HTML 或会话标识。
 
 旧导航允许以下预填字段；今天的博客不再生成这些本机导航：
 

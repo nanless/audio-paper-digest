@@ -86,7 +86,7 @@ npm run history:direct-publication -- status --publication-id UUID
 
 写入前的一致性检查（CAS）及 `activation intent` 允许中断后每条路径处于原基线或目标 SHA，发现第三种字节立即拒绝。提交只包含凭证精确允许的差异，Git add 分批执行以避免路径集合超系统 `ARG_MAX`。提交已完成而推送失败时，恢复复用已有提交凭证（commit receipt），不重复创建提交。
 
-如果新审查凭证对应的页面字节未变、页面已写入但尚未推送，activation intent/receipt 可重新绑定新 review SHA；已有提交凭证（commit receipt） 也可重新绑定新 review/activation SHA。恢复仍严格核对博客 `main`、工作区角色、基线 HEAD、路径白名单、逐文件 SHA、Git 精确差异、远端身份和 OID，不能以重绑定掩盖来源或字节漂移。
+如果新审查凭证对应的页面字节未变、页面已写入但尚未推送，activation intent/receipt 可重新绑定新 review SHA；已有提交凭证也可重新绑定新 review/activation SHA。恢复仍严格核对博客 `main`、工作区角色、基线 HEAD、路径白名单、逐文件 SHA、Git 精确差异、远端身份和 OID，不能以重绑定掩盖来源或字节漂移。
 
 ## 远端与网页验收
 

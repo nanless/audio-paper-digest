@@ -238,7 +238,7 @@ npm run history:arxiv-analyze -- analyze --run-id UUID --concurrency 1
 npm run history:arxiv-analyze -- status --run-id UUID
 ```
 
-抓取依次保存请求、来源响应观测、全文、快照、来源凭证（`receipt`）和授权记录（`authority`），权限均为 `0600`，拒绝覆盖不同字节。续跑已有完整文件只能恢复磁盘完整性证据；组合命令再次访问官方来源并逐字比较后，才在本进程取得不能序列化的生产授权对象。如果 HTTP 已返回但响应观测未保存，下次可再次抓取该非模型公共来源。孤立请求不表示成功，不能据此标 `verified` 或生成最终凭证；来源文件只保存了一侧时拒绝继续，等待人工检查。旧博客、分析、Reader 或自行拼出的快照/receipt 均不能获得生产授权。
+抓取依次保存请求、来源响应观测、全文、快照、来源凭证和授权记录（`authority`），权限均为 `0600`，拒绝覆盖不同字节。续跑已有完整文件只能恢复磁盘完整性证据；组合命令再次访问官方来源并逐字比较后，才在本进程取得不能序列化的生产授权对象。如果 HTTP 已返回但响应观测未保存，下次可再次抓取该非模型公共来源。孤立请求不表示成功，不能据此标 `verified` 或生成最终凭证；来源文件只保存了一侧时拒绝继续，等待人工检查。旧博客、分析、Reader 或自行拼出的快照/receipt 均不能获得生产授权。
 
 `arxiv-analyze prepare` 经项目代理重新获取精确单篇 Atom 元数据，结合本进程核验的官方全文创建独立、只含论文来源的分析任务，按 SHA 保存原始 Atom XML，不读旧正文、分析、Reader 或 checkpoint。`analyze` 才调用多阶段模型并产生用量；结果保存在该任务 `analysis.json`，不覆盖 `data/current/deep-analysis-result.json`。
 
