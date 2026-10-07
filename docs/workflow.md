@@ -46,7 +46,7 @@ arXiv 和 HuggingFace 请求使用项目代理。每个来源分别记录获取�
 - 命中语音、音乐、音频、声学、多模态语音及常见模型或数据集词族的论文进入模型筛选。
 - 只有摘要完整且明显未命中的补充类别论文，才由关键词规则直接判为不相关。
 
-模型决定逐篇写入 `filter-decisions.json`，Muse 筛选使用配置的批次大小。当前账号只在明确返回 `GoUsageLimitError` 或 `Insufficient balance` 时切换到后续账号；普通 429 仍按限流规则退避。决定必须覆盖全部候选，`filtered-papers.json` 必须精确对应相关决定并扣除显式排除项，筛选才算完成。
+模型决定逐篇写入 `filter-decisions.json`，筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制。当前账号只在明确返回 `GoUsageLimitError` 或 `Insufficient balance` 时切换到后续账号；普通 429 仍按限流规则退避。决定必须覆盖全部候选，`filtered-papers.json` 必须精确对应相关决定并扣除显式排除项，筛选才算完成。
 
 ## 4. 全文与多阶段分析
 

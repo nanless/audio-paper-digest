@@ -47,7 +47,7 @@ The keyword layer keeps papers that might be relevant. The model makes the final
 - Matches for audio, speech, music, acoustics, multimodal speech, and common models or datasets reach the model.
 - In supplementary categories, only complete abstracts with no clear match may be rejected by keyword rules.
 
-Decisions are saved per paper in `filter-decisions.json`. Muse uses the configured filter batch size. The current account moves to a later account only on an explicit `GoUsageLimitError` or `Insufficient balance` response. A generic 429 follows rate-limit backoff. Filtering is complete only when decisions cover every candidate and `filtered-papers.json` exactly matches the relevant decisions minus explicit exclusions.
+Decisions are saved per paper in `filter-decisions.json`. Filtering follows `PD_FILTER_BATCH_SIZE`. The current account moves to a later account only on an explicit `GoUsageLimitError` or `Insufficient balance` response. A generic 429 follows rate-limit backoff. Filtering is complete only when decisions cover every candidate and `filtered-papers.json` exactly matches the relevant decisions minus explicit exclusions.
 
 ## 4. Full Text and Staged Analysis
 
