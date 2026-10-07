@@ -6,8 +6,8 @@
 |---|---|---|---|
 | 筛选决定 | 筛选决定 v3 | 输入、模型和提示词指纹匹配时可复用 | 决定必须覆盖完整候选集合。 |
 | 分析清单 | 分析清单 v1 及当前阶段规则 | 旧阶段可用于显式恢复或迁移 | 须满足所选 API 或 Manual 模式的阶段终态。 |
-| 日更来源 | `daily-fresh-source-run-v1`、`daily-fresh-source-reference-v1` | 旧文本/PDF 缓存只可读取，不能补成新封存来源 | 核对当前批次、完整论文集合及每篇 PDF、文本、来源信息和清单四文件。 |
-| API 解读 | Reader v3、表格及公式来源 v4、作者及资源来源 v1 | v1/v2 及缺任一当前来源要求的旧 v3 只供历史读取；结构化来源兼容条件见下文 | 正文、计划、图、作者机构、资源状态及来源 SHA 均须通过核验，不改写旧封存文件。 |
+| 日更来源 | `daily-fresh-source-run-v1`、`daily-fresh-source-reference-v1` | 旧文本/PDF 缓存只可读取，不能补成新的已核验来源 | 核对当前批次、完整论文集合及每篇 PDF、文本、来源信息和清单四文件。 |
+| API 解读 | Reader v3、表格及公式来源 v4、作者及资源来源 v1 | v1/v2 及缺任一当前来源要求的旧 v3 只供历史读取；结构化来源兼容条件见下文 | 正文、计划、图、作者机构、资源状态及来源 SHA 均须通过核验，不改写旧的已保存文件。 |
 | 评分审查 | `api-scoring-audit-v2`，触发时另作稳定性裁决 | 旧评分可显示 | 重算八维总分，并核对最终分析与评分依据。 |
 | 页面生成清单 | schema v3 | v1/v2 仅用于显式历史维护 | 新日更要求 v3、实际 `publishedPapers` 及一致的发布模式和依据。 |
 | 阅读与下载资料 | `researcher-workbench-v1`、`researcher-sidecars-v1` | 无协议旧页继续可读，但不能据此取得结构化下载资格 | Reader v3/Manual v6 新页核对页面元数据、四个下载文件及各 SHA。 |
@@ -15,12 +15,12 @@
 | 论文配图清单 | v3 TOP 10 | v1/v2 由显式迁移命令处理 | 绑定发布提交、远端 OID 和当前 token；临时图片模式核验身份后使用空引用路径，不回退旧缓存。 |
 | Manual 正式结果 | 正式结果 v6 | v5、`shadow` 和封存预览仅供历史维护 | 默认 API 不把 Manual 来源当作自动分析依据；继续任务还须核对当前指令 SHA。 |
 | OpenCode Go 账号池 | `opencode-go-sticky-quota-failover-v1` | 未知版本不能被覆盖 | 仅明确的 `GoUsageLimitError` 429 或 `Insufficient balance` 401 更新冷却并向后切号；不保存原始密钥。 |
-| 历史论文目录与计划 | `merged-good-historical-local-data-v5`、`historical-direct-rewrite-plan-v5` | v4/v3 及旧 crosswalk/fresh run 只供补救审计 | 目录保留冲突或多个 Daily 主 arXiv 绑定、ICML poster 来源依据及当前可访问 PDF 的子集；计划核对页面、来源和子集 SHA，不读旧博客正文写作。 |
+| 历史论文目录与计划 | `merged-good-historical-local-data-v5`、`historical-direct-rewrite-plan-v5` | v4/v3 及旧 crosswalk 和 fresh 运行只供补救审计 | 目录保留冲突或多个 Daily 主 arXiv 绑定、ICML poster 来源依据及当前可访问 PDF 的子集；计划核对页面、来源和子集 SHA，不读旧博客正文写作。 |
 | 历史暂存、汇总与发布 | `historical-direct-*-v1` | 私有运行记录可审计，逐页通过记录按路径和内容 SHA 复用 | 完整结果通过独立审查后，才能在锁内激活、提交、推送并核验远端 OID；计划要求的会议汇总、页面或来源校验未满足时停止。 |
 
 ## 兼容读取的具体限制
 
-Reader 的正文结构版本和表格、公式来源版本负责不同检查，不能用一个版本代替另一个。早期结构化来源须通过来源清单和全文 SHA 核验；兼容旧键序哈希时，还须能按记录的 `parserVersion` 重验。例外仅限实现认可的无布局来源标记，且 `tables`、`formulas`、`figures` 数组均为空。任意布局声明不能取得资格，也不能改封存文件生成新 SHA。
+Reader 的正文结构版本和表格、公式来源版本负责不同检查，不能用一个版本代替另一个。早期结构化来源须通过来源清单和全文 SHA 核验；兼容旧键序哈希时，还须能按记录的 `parserVersion` 重验。例外仅限实现认可的无布局来源标记，且 `tables`、`formulas`、`figures` 数组均为空。任意布局声明不能取得资格，也不能改写已保存的文件来生成新 SHA。
 
 页面审查的通过记录只按最终文件路径和内容 SHA 复用。模型、代码、协议、生成清单或 Hugo 变化，仍要求当前批次检查和新的审查记录，但不使字节未变的页面重新接受模型审查。Git 基线或远端身份不匹配时仍禁止推送。
 

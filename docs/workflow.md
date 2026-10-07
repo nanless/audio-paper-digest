@@ -87,7 +87,7 @@ npm run blog:push -- --date YYYY-MM-DD
 
 `generate` 从正式分析结果重新解析评分和正文。Reader v3 或 Manual v6 页面还会生成 `researcher-workbench-v1` 页面元数据，以及 Citation JSON、BibTeX、RIS 和 `rethink-context.json` 四种同站点文件。页面与附属文件一起安装，保存内容 SHA 和 schema v3 生成清单。
 
-引用和页面使用实际经过验证的 arXiv 来源版本。普通 ID 没有版本号时，不猜成 `v1`；当前 PDF 返回 404、使用同一论文的官方历史版本时，依据封存的 `sourceVersion.selectedSourceId` 展示实际版本，并保留当前稿不可用的提示。
+引用和页面使用实际经过验证的 arXiv 来源版本。普通 ID 没有版本号时，不猜成 `v1`；当前 PDF 返回 404、使用同一论文的官方历史版本时，依据已保存的 `sourceVersion.selectedSourceId` 展示实际版本，并保留当前稿不可用的提示。
 
 `review` 先审汇总页，再并发审论文页，执行程序检查、模型审查、图片检查及 Hugo 构建。审查不修改页面；内容需要修正时，回到生成或分析阶段。每页的通过记录按“相对路径 + 页面内容 SHA”保存，只有该文件内容变化才重新审查。Hugo 和当前批次的其他检查仍须运行。
 

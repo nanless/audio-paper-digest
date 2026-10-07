@@ -190,7 +190,7 @@ npm run rewrite:source -- signed-patch --run-id "$rewrite_run_id" --patch review
 }
 ```
 
-报告须是普通文件，硬链接数为 1 且权限为 `0600`，明确写出论文 ID 及上述四个完整内容 SHA；事实和原图确已独立审查通过，才可提交 `pass`。服务重新核验报告字节、封存来源、父稿和完整论文 SHA，先持久保存 `patches/signed-fact-reviews/<reportSHA>/<paperId>.json`，再保存事实审查通过状态并更新运行 SHA。中断可用同一请求重入，不重写正文、计划或增加 API 用量。
+报告须是普通文件，硬链接数为 1 且权限为 `0600`，明确写出论文 ID 及上述四个完整内容 SHA；事实和原图确已独立审查通过，才可提交 `pass`。服务重新核验报告字节、已保存并核验的来源、父稿和完整论文 SHA，先持久保存 `patches/signed-fact-reviews/<reportSHA>/<paperId>.json`，再保存事实审查通过状态并更新运行 SHA。中断可用同一请求重入，不重写正文、计划或增加 API 用量。
 
 单篇接受不代表全批已审完。首次人工修订保留 `operatorFactReviewBaseStatus`；原批次已有的事实待审或失败，不会被最后一篇人工稿接受清除，后来新增失败也优先保留。只有人工修订从 `complete` 引入的待审、所有人工稿都已接受且全篇结构检查成功时，才可恢复原完成态。其他批次事实工作须核对全部最终正文、计划、来源及独立报告后另行恢复。任何论文的 `readerFactReview.status=pending` 都额外阻止替换正式结果，普通分析跳过成功稿并把批次写成完成也不能绕过。
 

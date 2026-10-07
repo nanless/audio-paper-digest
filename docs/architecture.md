@@ -17,7 +17,7 @@ run-daily-digest.sh
   └─ 视觉规划 → Codex image_gen → 目检、登记与状态检查
 ```
 
-Node 负责抓取、筛选、日更来源封存、单篇分析、检查点和图片任务。Python 负责页面生成、只读审查、Hugo 检查和 Git 发布。博客仓库是发布目标，不能作为分析事实来源；尚未提交的页面也不能改变筛选时的去重基线。
+Node 负责抓取、筛选、保存并核验日更来源、单篇分析、检查点和图片任务。Python 负责页面生成、只读审查、Hugo 检查和 Git 发布。博客仓库是发布目标，不能作为分析事实来源；尚未提交的页面也不能改变筛选时的去重基线。
 
 Node 与 Python 共用 `data/runtime/llm-account-pool.json`，保存 OpenCode Go 账号选择和冷却状态。这些请求状态不进入论文、提示词或发布内容的指纹。文件没有原始密钥，但凭据指纹仍属敏感信息，须使用 `0600` 权限。
 
@@ -36,7 +36,7 @@ Node 与 Python 共用 `data/runtime/llm-account-pool.json`，保存 OpenCode Go
   → 可选旧版图片补充
 ```
 
-默认 API 在 LLM 筛选后、分析前，为每个入选 arXiv ID 重新获取官方 HTML 文本和 PDF，以原子写入保存 `daily-fresh-source-run-v1` 的四份来源文件。分析、Reader 和 Python 发布都重新核验 `dailyFreshSourceRun` 指定的文件。来源缺失或 SHA 不符时，在模型或图片请求前停止。来源获取序号 `generation` 表示一组封存文件，与论文修订号 `vN` 不同；引用的论文版本须按实际封存记录核验。
+默认 API 在 LLM 筛选后、分析前，为每个入选 arXiv ID 重新获取官方 HTML 文本和 PDF，以原子写入保存 `daily-fresh-source-run-v1` 的四份来源文件。分析、Reader 和 Python 发布都重新核验 `dailyFreshSourceRun` 指定的文件。来源缺失或 SHA 不符时，在模型或图片请求前停止。来源获取序号 `generation` 表示一组已保存并核验的文件，与论文修订号 `vN` 不同；引用的论文版本须按实际保存记录核验。
 
 官方论文图的像素只为当前调用在系统临时目录中准备，不能写入 `data/current` 或运行目录的图片缓存。单张图片超过上限时可以跳过；服务明确拒绝损坏或不兼容的 PNG 时，可以转为白底 RGB JPEG 重试。最终证据记录实际送入模型的像素 SHA。
 
@@ -46,7 +46,7 @@ Node 与 Python 共用 `data/runtime/llm-account-pool.json`，保存 OpenCode Go
 
 Node 的 `analyzeBatch` 遇到认证或账号池不可用等运行级错误时停止领取新论文。已经开始的论文仍保存结果，尚未开始的论文保持待处理；最终保存后批量入口报告失败。普通单篇错误只结束该篇尝试。Python 页面审查会预先提交线程任务再收集结果，不能把 Node 的停派行为推广到它。
 
-API Reader 从封存原文、结构化证据、已核验资源和本次准备的论文图写作，不把评分后的分析正文当成事实来源。旧的 13 节分析仍供程序解析；Reader 在评分后执行，不代表评分结果是其写作输入。
+API Reader 从已保存并核验的原文、结构化证据、已核验的资源和本次准备的论文图写作，不把评分后的分析正文当成事实来源。旧的 13 节分析仍供程序解析；Reader 在评分后执行，不代表评分结果是其写作输入。
 
 Reader 的各协议分别检查不同对象：
 
@@ -57,7 +57,7 @@ Reader 的各协议分别检查不同对象：
 | `api-reader-author-identity-v1` | 作者与机构对应 HTML、论文元数据或明确不可得状态 |
 | `api-reader-resource-identity-v1` | 资源的原文/Demo 证据、重定向终点与可达状态 |
 
-结构化证据按稳定键序计算 SHA。旧结构化文件须核验来源清单、原始全文 SHA、解析器版本和布局。受限的 v1 无布局来源包括 `fresh_arxiv_text_without_layout`、`direct_conference_pdf_text`，以及能力为 `weak-text-only-v1` 的 `conference_pdf_weak_text`，其表、公式和图三个数组必须全空。识别出的旧键序文件仍受来源清单和原始全文 SHA 约束，但旧 `payloadSha256` 不必等于按当前稳定键序重算的值；程序只在内存中计算稳定指纹，不改封存文件。这个兼容例外不允许使用伪造的结构化内容。
+结构化证据按稳定键序计算 SHA。旧结构化文件须核验来源清单、原始全文 SHA、解析器版本和布局。受限的 v1 无布局来源包括 `fresh_arxiv_text_without_layout`、`direct_conference_pdf_text`，以及能力为 `weak-text-only-v1` 的 `conference_pdf_weak_text`，其表、公式和图三个数组必须全空。识别出的旧键序文件仍受来源清单和原始全文 SHA 约束，但旧 `payloadSha256` 不必等于按当前稳定键序重算的值；程序只在内存中计算稳定指纹，不改已保存的文件。这个兼容例外不允许使用伪造的结构化内容。
 
 阶段复用仍受实现 SHA 约束。当前 Reader 检查包含整个 `deep-analyzer.js` 的 SHA，因此修改其中与 Reader 无关的代码也可能要求重做；不能只凭评分结果未改就认定 Reader 可复用。
 
@@ -74,9 +74,9 @@ Reader 的各协议分别检查不同对象：
   → 发布后视觉任务
 ```
 
-审查不修改已审页面。修正须回到生成或分析阶段；推送只接受 receipt 列出的精确增删改集合。Git hook 改动、额外暂存文件、基线不符或远端身份变化都会阻断推送。
+审查不修改已审页面。修正须回到生成或分析阶段；推送只接受审查凭证（receipt）列出的精确增删改集合。Git hook 改动、额外暂存文件、基线不符或远端身份变化都会阻断推送。
 
-逐页通过记录永久按“相对路径 + 页面内容 SHA”复用，只有页面内容 SHA 变化才重审。发布器实现变化仍会重新渲染，以发现真实字节变化；清单、模型、代码、协议或 Hugo 变化须重跑当前批次检查并生成新的 receipt，不能使未变页面重审。分析阶段的实现 SHA 与这项页面缓存规则各自适用，不能混用。
+逐页通过记录永久按“相对路径 + 页面内容 SHA”复用，只有页面内容 SHA 变化才重审。发布器实现变化仍会重新渲染，以发现真实字节变化；清单、模型、代码、协议或 Hugo 变化须重跑当前批次检查并生成新的审查凭证，不能使未变页面重审。分析阶段的实现 SHA 与这项页面缓存规则各自适用，不能混用。
 
 远端 OID 只证明 Git 提交已到远端。完成前还须人工确认对应发布提交，或保留本批已审页面字节的后续提交，已经成功 build/deploy；逐页核验目标日期汇总和论文页的 HTTP 200、正式地址与标题，并保留记录。`digest:status` 尚未自动执行这些上线检查。
 
@@ -87,7 +87,7 @@ Reader 的各协议分别检查不同对象：
 | `data/current/` | 当前批次正式状态和可恢复检查点 |
 | `data/archive/<date>/` | 已结束日期快照和最终视觉资产 |
 | `data/runtime/daily-fresh-source-runs/` | 日更分析及发布重新核验的官方文本、PDF、来源元数据与清单 |
-| `data/runtime/fetched-arxiv-sources/` | 历史 arXiv 重写每次重新获取并封存的四份来源文件 |
+| `data/runtime/fetched-arxiv-sources/` | 历史 arXiv 重写每次重新获取、保存并核验的四份来源文件 |
 | Hugo 博客仓库 | 已生成页面、静态资产和已核验发布提交 |
 | `logs/` | 脱敏日志，受年龄和容量保留策略约束 |
 

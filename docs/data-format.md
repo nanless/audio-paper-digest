@@ -51,7 +51,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 若数据声明 `dailyFreshSourceRun`，该引用须使用 `daily-fresh-source-reference-v1`，绑定 `batchDate`、完整论文集合、运行清单 SHA 和来源集合 SHA。每篇的 `freshRewriteProvenance` 与 `analysisManifest.freshRewriteProvenance` 须一致，并能核对到本次获取的来源文件。文件缺失或多出、来源或集合变化、混入旧来源记录，都不能取得默认 API 的发布资格。
 
-## 日更封存来源
+## 日更来源的保存与核验
 
 日更来源运行使用 `daily-fresh-source-run-v1`，位于 `data/runtime/daily-fresh-source-runs/<runId>/`。每篇的 `sources/<arxivId>/generation-000001/` 只包含以下四文件：
 
@@ -66,11 +66,11 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 当前无版本号的官方 PDF 确认返回 HTTP 404 后，获取器才可尝试同一论文的官方历史版本。`source-runtime.json.sourceVersion` 使用 `arxiv-historical-version-source-v1`，记录实际选中的 `selectedSourceId`、PDF 地址、当前 PDF 的 404、固定警告和身份 SHA。文本必须从选中的 PDF 提取；普通当前 PDF 不携带这条历史版本记录。Node 与 Python 都检查这些条件，而不只比较文件哈希。
 
-论文的 `sourceVersion` 须与封存记录一致，两处来源记录中的 `sourceVersionIdentitySha256` 也须匹配。缺少该绑定的旧历史版本分析必须重新分析，不能在旧成功记录上补写证明。普通来源不增加这些可选字段；传递标题或版本说明也不改变既有来源快照字段、顺序和 SHA 的计算方式。
+论文的 `sourceVersion` 须与保存记录一致，两处来源记录中的 `sourceVersionIdentitySha256` 也须匹配。缺少该绑定的旧历史版本分析必须重新分析，不能在旧成功记录上补写证明。普通来源不增加这些可选字段；传递标题或版本说明也不改变既有来源快照字段、顺序和 SHA 的计算方式。
 
 ## 分析来源与恢复
 
-`analysisSource` 记录来源类型、请求 ID、原始、全文及实际输入长度、截断状态、SHA、警告和置信度。默认 API 的记录须与上述封存来源相符。来源 SHA 变化会使主分析及必要下游失效。
+`analysisSource` 记录来源类型、请求 ID、原始、全文及实际输入长度、截断状态、SHA、警告和置信度。默认 API 的记录须与上述已核验来源相符。来源 SHA 变化会使主分析及必要下游失效。
 
 失败时保留 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints`、`analysisRecoveryImageManifest` 及最新失败状态和错误。阶段检查点绑定输入、模型、协议、提示词、温度、预算和输出 SHA；恢复从第一个未完成或指纹失效的阶段开始。
 
@@ -94,7 +94,7 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和公式来源；它们各管一部分要求，版本号不必相同。新发布还须满足作者和资源的 v1 来源核验要求。Reader v1/v2 及缺少任一当前来源要求的旧 v3 只供历史兼容读取。摘要级分析默认不可发布。
 
-新日更的图片只在调用时准备像素，不保存图片文件到运行目录。`apiReaderFigures` 中存在像素 SHA 不代表还有可复用缓存。兼容早期结构化来源时，须通过来源清单和全文 SHA 校验；处理旧键序哈希还须能按记录的解析器版本重验，或属于实现认可的无布局来源且表格、公式和图片数组均为空。任意布局声明不能取得兼容资格，封存文件也不能被重写来制造新 SHA。
+新日更的图片只在调用时准备像素，不保存图片文件到运行目录。`apiReaderFigures` 中存在像素 SHA 不代表还有可复用缓存。兼容早期结构化来源时，须通过来源清单和全文 SHA 校验；处理旧键序哈希还须能按记录的解析器版本重验，或属于实现认可的无布局来源且表格、公式和图片数组均为空。任意布局声明不能取得兼容资格，已保存的文件也不能被重写来制造新 SHA。
 
 ## 博客生成清单
 
@@ -102,13 +102,13 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 默认 API 使用 `llm_api_production`；显式 Manual 使用自己的发布依据。混合两种来源、缺少绑定或使用旧 schema，不能用于新日更发布。
 
-Reader v3 和 Manual v6 新论文页使用 `researcher-workbench-v1` 页面元数据，保存读者标题、原始标题、规范 arXiv ID、明确输入或由封存来源核验的 `vN`、版本一致的 abs/PDF URL、主任务、数值评分、排名分档、文档类型、一句话主线、结构化作者及原摘要 SHA。原始摘要保存在同批 `static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`，不塞入页面元数据。
+Reader v3 和 Manual v6 新论文页使用 `researcher-workbench-v1` 页面元数据，保存读者标题、原始标题、规范 arXiv ID、明确输入或由已保存并核验的来源确定的 `vN`、版本一致的 abs/PDF URL、主任务、数值评分、排名分档、文档类型、一句话主线、结构化作者及原摘要 SHA。原始摘要保存在同批 `static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`，不塞入页面元数据。
 
 每篇有四个同源下载文件：`citation.json`、`citation.bib`、`citation.ris` 和 `rethink-context.json`。写入暂存结果前校验路径、LF/UTF-8、JSON/TeX/RIS 转义及 256 KiB 上限；四个 SHA 同时记录在页面元数据、生成清单和审查记录中。审查从 `publishedPapers` 快照重建这些文件并逐字比较，推送只允许审查记录指定的精确变更。
 
 新 `rethink-context.json` 使用 `paper-research-context-v2`、`schemaVersion=2`，标签记录位于 `assessment.tagMetadata`。页面 `paper_digest_sidecars` 中该文件的记录保存 `contract`、URL 和 SHA。旧 `researcher-sidecars-v1`、`schemaVersion=1` 使用原 `assessment.taxonomy`，原页面记录不带新的格式标识；读取时按旧格式重建，不改写原文件。格式与版本须正确配对，新旧标签字段不能混用，即使值相同或为空。其他三份引用文件保持原格式。
 
-历史版本引用采用已核验的 `sourceVersion.selectedSourceId`。输入和封存来源都没有明确版本时，保存 `version: null` 并使用无版本 abs/PDF URL，不能猜成 `v1`。
+历史版本引用采用已核验的 `sourceVersion.selectedSourceId`。输入和已保存来源都没有明确版本时，保存 `version: null` 并使用无版本 abs/PDF URL，不能猜成 `v1`。
 
 新论文把 3–5 个当前分类表中启用的首选标签写入 Hugo 的 `tags`，并记录 `paper-tag-flat-tags-v2`、选择规则、分类表版本及 SHA、有序的 `{id, facet, label}`、显式主任务和主方法。标签采用中文首选名称；既定 `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` 八个专名保留原形，并在分类表中配中文别名，不能扩成任意英文标签。`rethink-context.json.assessment.tagMetadata` 保存同一分类信息。旧页面仍按原 `paper-taxonomy-flat-tags-compat-v1` 读取，不因新发布而改写。两版的标签规则相同；汇总页“热门方向”只统计主任务。
 

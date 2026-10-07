@@ -11,12 +11,12 @@
 | Node 参数与路径 | `scripts/config.js` | 入口脚本、测试、env.example |
 | Python 发布路径 | `scripts/path_config.py` | generate/review/push 与测试 |
 | API 协议或代理 | `scripts/utils.js`、`scripts/publish_common.py` | 筛选、分析、页面审查、API key 测试 |
-| 日更封存文本与 PDF | `lib/daily-fresh-source-plan.js`、`lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
+| 日更来源的文本与 PDF | `lib/daily-fresh-source-plan.js`、`lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
 | 分析结构或评分 | `analysis-contract.js` 与提示词 | Node/Python 解析器和发布器 |
 | Reader 写作、图表或修复 | `api-reader-article.md`、`api-reader-repair.md`、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
-| 博客事务 | `publish-to-blog.py` | 三个独立入口与 receipt 测试 |
+| 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
 
@@ -28,7 +28,7 @@
 - 同篇分析及共享 JSON 更新必须持锁，并在锁内重读。
 - 检查点指纹变化只使必要阶段失效，不能无条件清空全部成功结果。
 - 日更分析、Reader 和发布只读取绑定的文本、PDF、来源元数据与清单。文件缺失或不符时，目标仍为北京时间当天才可重跑 `digest:prepare`；历史日期保留失败记录，按历史维护处理，不能用旧缓存补源。
-- 历史 arXiv 每次来源获取都重新封存官方四份文件；历史会议核验绑定的本地元数据/PDF SHA。两者都不能把旧博客、分析或 Reader 正文作为写作来源。
+- 历史 arXiv 每次来源获取都重新保存并核验官方四份文件；历史会议核验绑定的本地元数据/PDF SHA。两者都不能把旧博客、分析或 Reader 正文作为写作来源。
 - generate、review、push 各自独立；review 只读最终字节。
 - 发布资格证明、页面 SHA、Git 基线、远端 OID 和视觉任务须分别核验对应关系。
 - 项目脚本不调用图像 API。
@@ -79,7 +79,7 @@ JSON 保存使用原子写入。读改写时取得公共文件锁，在锁内重
 
 ## 运行存储诊断与清理
 
-`npm run storage:status` 只读统计文件大小与数量，包括受保护的日更封存来源、历史来源/计划/私有页面和会议来源目录。它们是可重新核验的输入与运行证据，`storage:prune` 不删除。
+`npm run storage:status` 只读统计文件大小与数量，包括受保护的日更来源、历史来源/计划/私有页面和会议来源目录。它们是可重新核验的输入与运行证据，`storage:prune` 不删除。
 
 `npm run storage:prune` 默认只扫描引用并输出预计删除清单。status 和预览可在任务运行时使用，不要求停止写入者。真正删除须先人工核对清单，并停止全部抓取、筛选、分析、博客生成/审查/推送和视觉任务，再运行：
 
@@ -110,7 +110,7 @@ CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/ta
 
 选择原表内容时，只支持能够安全逐字渲染的表。付费生成前，`TABLE_N_SELECTION` 列明可用性和原因；空表头、所有行均被来源标成表头，或未处理的 MathML/TeX 双写，会禁用该表，运行时仍会拒绝。不能猜表头角色或放宽数字等价条件；这些表可用 `source_quotes`，但连续原句、数字和单位仍须完整核验。
 
-页面审查通过记录永久按“相对路径 + 内容 SHA”复用。修改发布器仍须重新渲染，代码、模型、协议或 Hugo 变化须执行本批检查并生成新 receipt；只有实际页面内容 SHA 变化才重审该页。部署与线上页面仍需人工核验，不能由测试或状态命令代替。
+页面审查通过记录永久按“相对路径 + 内容 SHA”复用。修改发布器仍须重新渲染，代码、模型、协议或 Hugo 变化须执行本批检查并生成新的审查凭证；只有实际页面内容 SHA 变化才重审该页。部署与线上页面仍需人工核验，不能由测试或状态命令代替。
 
 ## 提交前清单
 

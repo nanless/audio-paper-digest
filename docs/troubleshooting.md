@@ -63,7 +63,7 @@ npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-
 
 ## 6.1 历史来源获取或暂存页面失败
 
-先确认失败的是哪种来源。历史 arXiv 的当前这组封存文件保存在 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`，应包含文本、PDF、来源信息和清单；`generation` 是获取序号，不是论文的 `vN` 版本号。重新运行同一 `history:direct-scheduler`，直到当前计划所选论文均已在对应获取序号下达到 `ready`，再运行 `history:direct-run --apply`。
+先确认失败的是哪种来源。历史 arXiv 的当前这组已保存文件保存在 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`，应包含文本、PDF、来源信息和清单；`generation` 是获取序号，不是论文的 `vN` 版本号。重新运行同一 `history:direct-scheduler`，直到当前计划所选论文均已在对应获取序号下达到 `ready`，再运行 `history:direct-run --apply`。
 
 `direct-run` 不补抓来源，来源状态缺失、为 `handoff` 或 `failed` 时，会在模型请求前停止。再次运行会核对来源，并复用 `analysis-recovery.json` 中仍与来源相符的阶段结果。若渲染实现已变化，它可使用匹配的分析结果重新生成暂存页，不再请求模型，也不覆盖旧暂存文件。
 
@@ -81,7 +81,7 @@ npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-
 
 调整提示词或结构化审查意见后刷新解读，不在博客审查阶段直接改页面。表格数量不足的诊断使用 `reader_table_count_insufficient`、`requiredCount` 和 `actualCount`；这些字段用于程序恢复，操作者不应手改。正文已有表格但缺来源记录时，应补对应记录，不为消除数量报错盲目加表。
 
-表格还需检查 `selection` 是否引用真实 DOM 行列，表格标记与来源记录是否有唯一顺序对应，原文引文模式裁剪后是否仍至少两列、一行数据。旧结构化来源须通过来源清单和全文 SHA 校验，并能按记录的解析器版本重新验证。例外仅限实现认可的无布局来源标记，且表格、公式和图片数组均为空；不能用任意布局声明取得兼容资格，也不得重写封存文件以制造新 SHA。
+表格还需检查 `selection` 是否引用真实 DOM 行列，表格标记与来源记录是否有唯一顺序对应，原文引文模式裁剪后是否仍至少两列、一行数据。旧结构化来源须通过来源清单和全文 SHA 校验，并能按记录的解析器版本重新验证。例外仅限实现认可的无布局来源标记，且表格、公式和图片数组均为空；不能用任意布局声明取得兼容资格，也不得重写已保存的文件来制造新 SHA。
 
 单张图片的 `RESPONSE_TOO_LARGE` 会使程序跳过该图。如果一张图都未能准备成功，再检查代理、图片地址、MIME 或源 PDF。
 

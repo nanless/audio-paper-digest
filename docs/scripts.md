@@ -35,7 +35,7 @@ npm run workspace:role -- status
 | 命令 | 行为 |
 |---|---|
 | `npm run fetch` | 归档、抓取、筛选和分析，不发布 |
-| `npm run deep -- --date DATE` | 只读取当前封存文本/PDF，续跑未完成分析 |
+| `npm run deep -- --date DATE` | 只读取当前已保存的文本/PDF，续跑未完成分析 |
 | `npm run batch` | 批量处理正式分析结果中未完成的论文 |
 | `npm run batch -- --retry-failed-readers` | 归档并停用未完成论文的失败 Reader 候选后续跑，不影响已完成论文 |
 | `npm run reanalyze -- --concurrency N` | 归档并停用全部旧失败 Reader 候选，清空 Reader/图片补充状态，再用绑定来源强制重分析 |
@@ -44,7 +44,7 @@ npm run workspace:role -- status
 | `node scripts/refilter-reanalyze-by-date.js DATE` | 受控的历史日期重筛与重分析 |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 从绑定来源批量刷新评分和 Reader，图片只为本次调用临时准备 |
 | `npm run validate:data` | 只读核验当前数据 |
-| `npm run keyword:recall` | 回放关键词预筛金标准 |
+| `npm run keyword:recall` | 按金标准重跑关键词预筛 |
 | `npm run backfill` | 只补录历史论文 ID |
 | `npm run paper:rethink` | 历史独立维护工具，博客已取消集成，读者无需启动；见[历史说明](paper-rethink-companion.md) |
 
@@ -57,14 +57,14 @@ npm run workspace:role -- status
 | 命令或参数 | 职责 |
 |---|---|
 | `npm run blog:generate -- --date DATE` | 生成页面和 generation manifest |
-| `npm run blog:review -- --date DATE` | 只读审查、Hugo 检查并生成 receipt |
+| `npm run blog:review -- --date DATE` | 只读审查、Hugo 检查并生成审查凭证 |
 | `npm run blog:push -- --date DATE` | 提交精确改动、推送并核验远端 OID |
 | `--include-id ID` | 限定单篇范围，适用阶段保持同一 ID |
 | `--exclude-id ID` | 生成时显式排除，可重复 |
 
-页面清单以 `generation-input-source-reference-v1` 记录实际选择的 current、日期 archive 或 `--data-file`，其绝对路径、字节数和 SHA-256 都进入输入指纹。review 与 push 只重读这个文件及其 `dailyFreshSourceRun`，不退回当时的 `DEEP_ANALYSIS_RESULT_FILE`。输入或封存文本/PDF 不符时必须重新 generate。
+页面清单以 `generation-input-source-reference-v1` 记录实际选择的 current、日期 archive 或 `--data-file`，其绝对路径、字节数和 SHA-256 都进入输入指纹。review 与 push 只重读这个文件及其 `dailyFreshSourceRun`，不退回当时的 `DEEP_ANALYSIS_RESULT_FILE`。输入或已保存的文本/PDF 不符时必须重新 generate。
 
-通过的逐页审查永久按“相对路径 + 内容 SHA”复用。发布器变化仍重新渲染；清单、代码、模型、协议或 Hugo 变化须执行本批检查并生成新 receipt。只有页面内容 SHA 变化才重审该页，基线和远端身份检查仍不能省略。
+通过的逐页审查永久按“相对路径 + 内容 SHA”复用。发布器变化仍重新渲染；清单、代码、模型、协议或 Hugo 变化须执行本批检查并生成新的审查凭证。只有页面内容 SHA 变化才重审该页，基线和远端身份检查仍不能省略。
 
 三个入口先取得博客 Git common-dir 下的共享锁，再取得项目日期锁。两个工作区指向同一博客时，不能同时修改工作树、index 或 HEAD。共享锁不进入博客工作树或提交；回收和释放只删除 inode、token、SHA 仍匹配的锁文件。`publish-to-blog.py` 是共同实现与生成兼容入口，不能绕过三阶段。
 
@@ -72,7 +72,7 @@ npm run workspace:role -- status
 
 ## 会议论文
 
-新会议在日更工作区获取官方来源、发现候选、准备全文证据并筛选。筛选后统一使用 `conference:new:process`，由它完成 PDF 封存、导入、逐篇分析、Reader、评分、分类和私有页面生成；不能使用已禁用的 `conference:new:execution/analyze/postprocess` 别名绕开它。
+新会议在日更工作区获取官方来源、发现候选、准备全文证据并筛选。筛选后统一使用 `conference:new:process`，由它完成 PDF 的保存与核验、导入、逐篇分析、Reader、评分、分类和私有页面生成；不能使用已禁用的 `conference:new:execution/analyze/postprocess` 别名绕开它。
 
 process 的整批并发默认 1，可用 `--concurrency` 设为 1–5，每篇内部分析并发固定 1。先用已通过核验的候选清单、报告文件名和筛选任务 UUID 预览：
 
@@ -95,7 +95,7 @@ npm run history:inventory -- --apply \
   --ledger all-history.json --receipt all-history.receipt.json
 ```
 
-两份文件保存到受保护的 `data/runtime/historical-page-inventories`。当前 `direct-local-first` 从冻结页面的唯一 arXiv 提示和已核验会议来源创建计划，不等待 crosswalk。arXiv 每个 `generation` 都重新封存官方文本、PDF、来源元数据与清单；会议核验保留的本地元数据/PDF。这里的 generation 是获取序号，与论文修订号 `vN` 不同。
+两份文件保存到受保护的 `data/runtime/historical-page-inventories`。当前 `direct-local-first` 从冻结页面的唯一 arXiv 提示和已核验会议来源创建计划，不等待 crosswalk。arXiv 每个 `generation` 都重新保存并核验官方文本、PDF、来源元数据与清单；会议核验保留的本地元数据/PDF。这里的 generation 是获取序号，与论文修订号 `vN` 不同。
 
 下面文件参数使用绝对路径；先预览，再显式写入。首次生成本地来源清单前须准备缺失 PDF，不能覆盖旧不可变文件名。OpenReview 可达时优先官方来源；替代来源仅限代码白名单。
 
@@ -125,7 +125,7 @@ npm run history:direct-plan -- --apply --catalog /abs/scoped-historical-local-da
 
 只有无版本 current arXiv PDF 明确返回 HTTP 404，才允许使用同一论文的官方历史 `vN` PDF。这条路径拒绝跨 ID、query、fragment 或非官方主机，并从实际选择的 PDF 提取文本。`sourceVersion` 记录尝试的 URL/状态和选定版本 URL，核验它与来源清单、分析来源及页面清单的对应关系；分析和页面 front matter 下方须提示当前稿 PDF 不可用。普通来源文件保持原有字节和格式兼容。
 
-唯一允许跨标题预印本的 `n1mAjfRDZ6` 可在 SSRN 经代理可达时直接获取；只能浏览器下载时用 `--import-file`。导入器核验固定标题、作者、日期、多个跨页特征文本及白名单 DOI，记录 `operator-browser-download` 和 `networkResponseObserved: false`，不伪造 HTTP 200。计划、模型输入和页面须说明非 camera-ready。输入副本在封存后可删除；恢复核验运行目录中的 PDF 和凭证，不修改旧 JSON。普通会议 plan v5 结构保持兼容。
+唯一允许跨标题预印本的 `n1mAjfRDZ6` 可在 SSRN 经代理可达时直接获取；只能浏览器下载时用 `--import-file`。导入器核验固定标题、作者、日期、多个跨页特征文本及白名单 DOI，记录 `operator-browser-download` 和 `networkResponseObserved: false`，不伪造 HTTP 200。计划、模型输入和页面须说明非 camera-ready。输入副本在保存并核验后可删除；恢复核验运行目录中的 PDF 和凭证，不修改旧 JSON。普通会议 plan v5 结构保持兼容。
 
 ### 执行、暂停与状态
 
@@ -147,7 +147,7 @@ npm run history:resume -- --plan /abs/direct-rewrite-plan-v5.json --phase source
 
 暂停请求等待已开始的来源或论文处理完成；相应操作锁释放后才用同 phase 的 resume。普通 status 是只读快照，`--watch-seconds` 持续输出 NDJSON。`--verify-sources true` 单次重新计算所有本地来源 SHA，不能与 watch 同用。
 
-未传 `--publication-id` 时，普通/watch 状态完全离线，只说明未选择发布。传入后默认现场核对远端 main 与 receipt 的远端身份/OID；`--live-remote false` 只作离线诊断，不能得到 complete。发布状态是单次检查，不能与 watch 同用，并会深核全部 arXiv 文件和会议来源 SHA。
+未传 `--publication-id` 时，普通/watch 状态完全离线，只说明未选择发布。传入后默认现场核对远端 main 与审查凭证记录的远端身份/OID；`--live-remote false` 只作离线诊断，不能得到 complete。发布状态是单次检查，不能与 watch 同用，并会深核全部 arXiv 文件和会议来源 SHA。
 
 完整状态取决于计划的全部论文、来源、日汇总、会议汇总和精确任务页覆盖，以及绑定同一 plan SHA 的发布完成状态。数量从 plan/projection 推导，并非固定要求 4185 篇、109 日加 3 会或 193 任务；这些数字只能说明特定历史计划，不能当通用阈值。`completion.blockers` 会列出未覆盖页面、失败或未生成页面的论文、缺失汇总，以及未选择、未完成或计划不符的发布。
 
@@ -163,7 +163,7 @@ npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-re
 
 projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文成员，并保存逐页来源 SHA 和完整覆盖记录。选择会议汇总时，任务页与会议总页在同一 run 生成，任务页先写，总页最后写。没有论文成员的日汇总明确标为 `retain-unchanged`，仍纳入覆盖检查。
 
-实际发布使用 `history:direct-publication`，依次 plan、generate、review、publish、status。逐页通过记录只按路径与内容 SHA 复用，本批仍执行确定性/Hugo 检查并生成 receipt。`activate --apply` 被禁用；`publish --apply` 在共享博客锁内处理激活、提交、推送和远端 OID。精确参数与视觉处置见[独立历史发布](history-direct-publication.md)。旧 `history:publication` 只提供 plan/generate 私有文件，不能用来真正发布。
+实际发布使用 `history:direct-publication`，依次 plan、generate、review、publish、status。逐页通过记录只按路径与内容 SHA 复用，本批仍执行确定性/Hugo 检查并生成审查凭证。`activate --apply` 被禁用；`publish --apply` 在共享博客锁内处理激活、提交、推送和远端 OID。精确参数与视觉处置见[独立历史发布](history-direct-publication.md)。旧 `history:publication` 只提供 plan/generate 私有文件，不能用来真正发布。
 
 正常 direct 任务不依赖 crosswalk。`history:crosswalk` 仍保留显式旧状态维护：`prepare --apply`、`apply`、`apply-verified` 和 `finalize` 可以按来源授权及 CAS 检查写入状态或凭证，并非全部只读。备用 `history:arxiv-batch` 必须给出 `--handoffs NAME.json[,NAME.json...]`，只接受 scheduler/run 保存的命名、不可变的新 arXiv 获取失败交接文件，不枚举 pending 页面。会议本地来源缺失或损坏只使该项失败，不进入这条备用批处理。`history:local-crawl-batch`、`archive-crawl-batch` 和 `history:conference-crawl-batch` 已停用，不能写 crosswalk。详见[历史重写底座](history-rewrite.md)。
 
