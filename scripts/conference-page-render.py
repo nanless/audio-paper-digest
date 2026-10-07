@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
+from publish_common import _manual_canonical_json
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
                          TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT)
@@ -50,11 +51,13 @@ REQUIRED_ANALYSIS_SECTIONS = (
 
 
 def stable_sha(value):
-    # 有效 Unicode 保持原有序列化字节；模型文本中的孤立 UTF-16 代理字符使用转义。
-    # 此处与 Node 的 JSON.stringify 转义方式对应，不把全部中文转为 ASCII 转义。
-    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode(
-        'utf-8', 'backslashreplace'
-    )
+    # 这里必须与 Node 的 JSON.stringify 逐字节一致，因为两边都会写这些哈希、也都会核验。
+    # 裸 json.dumps 用 repr 写数字，和 ECMAScript 的 Number::toString 有四类分歧：
+    # 0.00002 写成 2e-05、1e17 写成 1e+17、整数浮点 1.0 写成 1、负零写成 -0.0。
+    # 只要记录里出现这四类取值，Python 与 Node 就会对同一对象算出不同哈希。
+    # _manual_canonical_json 按 ECMAScript 规则写数字，与 Node 对齐。
+    # 孤立 UTF-16 代理字符仍走 backslashreplace，与 Node 的转义方式对应。
+    raw = _manual_canonical_json(value).encode('utf-8', 'backslashreplace')
     return hashlib.sha256(raw).hexdigest()
 
 
