@@ -244,10 +244,9 @@ function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPa
         reviewOutputs: outputs,
         allowSignedLegacyTableRender: (options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION)
             === MANUAL_V6_RUNTIME_MODE_PRODUCTION,
-        // A small number of runner-validated migration records predate the
-        // editorialPlan v2 metadata.  Their signed reader-longform-v2 bundle
-        // remains the authoritative article contract; fresh/shadow records
-        // still fail closed on anything other than editorialPlan v2.
+        // 有少数经运行器校验的迁移记录早于 editorialPlan v2 元数据。它们已
+        // 签名的 reader-longform-v2 包仍是权威的文章契约；新建与影子记录遇到
+        // 非 editorialPlan v2 仍然 fail-closed。
         allowSignedLegacyEditorialPlan: (options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION)
             === MANUAL_V6_RUNTIME_MODE_PRODUCTION,
         metadataCorrection: options.metadataCorrection || null

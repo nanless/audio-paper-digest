@@ -708,8 +708,8 @@ function buildArtifactIndex(options = {}) {
         sections,
         tables,
         figures,
-        // Historical consumers used `images`; retain the compatible projection
-        // while the longform contract standardizes on `figures`.
+        // 历史上的使用方用的是 images；长文契约统一到 figures 之后，
+        // 仍保留这份兼容投影。
         images: figures,
         formulas,
         references,
@@ -735,8 +735,8 @@ function buildArtifactIndex(options = {}) {
     };
     index.sourceSpans = collectSourceSpans(index);
     index.artifactIndexSha256 = computeArtifactIndexSha256(index);
-    // Semantic identity. The companion manifest separately stores the SHA-256
-    // of serialized artifact bytes as its entry.outputSha256.
+    // 语义身份。随附清单另外把序列化后产物字节的 SHA-256 存为
+    // entry.outputSha256。
     index.outputSha256 = index.artifactIndexSha256;
     return index;
 }

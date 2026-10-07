@@ -642,8 +642,7 @@ function reusableEditorialSentences(value) {
     value.normalize('NFKC')
         .split(/[。！？!?；;\n]+/)
         .map(sentence => sentence.trim())
-        // Markdown table delimiter rows are structural syntax shared by every
-        // table, not reusable editorial prose.
+        // Markdown 表格的分隔行是每张表共有的结构语法，不是可复用的编辑正文。
         .filter(sentence => sentence
             && !/^\|(?:\s*:?-{3,}:?\s*\|)+$/.test(sentence))
         .forEach(source => {
@@ -798,9 +797,9 @@ function sourceContainsBoundQuote(sourceText, quote) {
     const normalizedQuote = normalizeSourceText(String(quote || '')
         .replace(/^[A-Za-z][A-Za-z ]{1,30}:\s*/u, '')).replace(/[.,，。]+$/u, '');
     if (source.includes(normalizedQuote)) return true;
-    // Some signed author blocks join adjacent PDF/HTML lines with a semicolon.
-    // Require every non-trivial clause to occur in the same order so this
-    // remains an exact source binding rather than fuzzy matching.
+    // 有些已签名的作者块用分号连接相邻的 PDF/HTML 行。要求每个有实际
+    // 内容的分句都按同样顺序出现，这样它仍是精确的来源绑定，而不是
+    // 模糊匹配。
     const clauses = String(quote || '').split(/[;；]/u)
         .map(value => normalizeSourceText(value).replace(/[.,，。]+$/u, ''))
         .filter(value => value.length >= 6);
@@ -945,10 +944,9 @@ function formatInnovationClaims(value) {
     const paragraphs = distinctParagraphs(value);
     let claimIndex = 0;
     return paragraphs.map(paragraph => {
-        // Manual v5 editorialPlan may deliberately place reader-facing
-        // subsection headings inside the innovation container.  Numbering a
-        // Markdown heading (`1. ### ...`) turns it into a list item and makes
-        // the assembler's own section binding impossible to satisfy.
+        // Manual v5 的 editorialPlan 可能故意把面向读者的小节标题放进创新
+        // 点容器里。给 Markdown 标题加序号（1. ### ...）会把它变成列表项，
+        // 装配器自己的分节绑定就再也满足不了。
         if (/^#{3,6}\s+\S/u.test(paragraph)) return paragraph;
         claimIndex += 1;
         const cleaned = paragraph
@@ -1036,11 +1034,9 @@ function buildAnalysis(paper, record, options = {}) {
             .filter(block => ['prerequisites', 'problem', 'related_work'].includes(block.kind))
             .slice(0, 3).map(block => block.markdown)).join('\n\n')
         : baseSummary;
-    // The compact fields remain independent audit/provenance inputs.  They
-    // are not prepended to a finished editorial section: doing so produced a
-    // visibly field-assembled article that restated the same method and
-    // contribution twice.  Legacy records without editorial prose keep the
-    // explicit route-map fallback.
+    // 这些紧凑字段仍是独立的审计与来源输入。它们不会被前置到已完成的
+    // 编辑小节里：那样做会产出一篇明显是字段拼装的文章，把同一个方法
+    // 和贡献重复讲两遍。没有编辑正文的旧记录仍走显式的路线图兜底。
     const baseMethodBody = editorial.method ? rebalanceEditorialParagraphs(editorial.method, 5) : distinctParagraphs(
         `**路线概览。** ${record.method}`,
         `**训练与组件关系。** ${record.method2}`,

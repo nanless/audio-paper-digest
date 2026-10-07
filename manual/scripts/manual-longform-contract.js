@@ -113,8 +113,8 @@ function tableNumericCellIds(table) {
 
 function sanitizeArtifactTableCellForReader(value) {
     let text = normalizeText(value)
-        // LaTeXML may concatenate visible text with its TeX fallback. Keep the
-        // visible branch only; these rules are narrow and never infer numbers.
+        // LaTeXML 可能把可见文本和它的 TeX 回退拼在一起。这里只保留可见的
+        // 那一支；这些规则范围很窄，也不会去推断数字。
         .replace(/(binary \{0,1\})\\\{0,1\\\}/gu, '$1')
         .replace(/U\u200b?\{3,\.\.\.,7\}\\mathcal\{U\}\\\{3,\\ldots,7\\\}/gu, 'U{3,...,7}')
         .replace(/F1F_\{1\}/gu, 'F1')
@@ -185,31 +185,29 @@ function sanitizeArtifactTableCellForReader(value) {
         .replace(/−(\d+(?:\.\d+)?)%-\1\\%/gu, '−$1%')
         .replace(/\+(\d+(?:\.\d+)?)%\+\1\\%/gu, '+$1%')
         .replace(/(\[[^\]]+\])\1/gu, '$1')
-        // A known LaTeXML accessible-text duplication in one table caption:
-        // the source prose independently spells these sample counts as 5,000
-        // candidates and 1,000 queries. Match the complete paired phrase so a
-        // legitimate standalone 55K or 11K quantity is never shortened.
+        // 有一处已知的 LaTeXML 可访问文本重复：某个表注里，原文本身分别写了
+        // 5,000 个候选和 1,000 次查询。要匹配完整成对短语，这样单独出现的
+        // 55K 或 11K 不会被误缩。
         .replace(/Label quality is measured on 55K samples, and ranking performance is assessed via Hit@1 on 11K, respectively\./gu,
             'Label quality is measured on 5K samples, and ranking performance is assessed via Hit@1 on 1K, respectively.')
-        // LaTeXML may concatenate the visible ratio with its TeX fallback.
+        // LaTeXML 可能把可见的比例和它的 TeX 回退拼在一起。
         .replace(/\(A\+V−Ours\)\/A\+V\(\\text\{A\+V\}-\\text\{Ours\}\)\/\\text\{A\+V\}/gu,
             '(A+V−Ours)/A+V')
         .replace(/\+\+/gu, '+')
         .replace(/−-/gu, '−');
-    // LaTeXML may leave both a visible direction arrow and its TeX fallback in
-    // compact table headers.  Reader pages must not expose raw TeX commands.
+    // 紧凑表头里，LaTeXML 可能同时留下可见的方向箭头和它的 TeX 回退。
+    // 读者页不能出现裸 TeX 命令。
     text = text.replace(/Model\s+↓\\downarrow\s+∣\\mid\s+(#?(?:Datasets|Conditions))\s+→(?:\\rightarrow)?/gu,
         'Model / $1')
         .replace(/↓\\downarrow/gu, '(越低越好)')
         .replace(/↑\\uparrow/gu, '(越高越好)');
-    // Collapse exact duplicated unsigned numeric tokens emitted as adjacent
-    // visible/accessible branches (130130, 0.9790.979, 53.753.7).  The whole
-    // token must split into two identical halves, so unrelated digits remain.
+    // 把相邻的可见支与可访问支产生的完全重复的无符号数字串合并
+    //（130130、0.9790.979、53.753.7）。整个串必须能对半分成两个相同的
+    // 部分，这样无关的数字不会被牵连。
     text = text.replace(/(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])/gu, token => {
-        // Four-digit calendar years such as 2020 split into equal halves too,
-        // but are not duplicated accessible branches.  Never turn a cited
-        // publication year into an invented two-digit year while de-duplicating
-        // genuinely repeated numeric tokens such as 130130.
+        // 2020 这样的四位年份也能对半分成相同的两半，但它不是重复的可访问支。
+        // 去重真正重复的数字串（比如 130130）时，绝不能把引用的发表年份
+        // 变成臆造出来的两位年份。
         if (/^(?:18|19|20)\d{2}$/u.test(token)) return token;
         if (!token.includes('.') && token.length < 4) return token;
         for (let split = 1; split <= Math.floor(token.length / 2); split++) {
@@ -264,19 +262,17 @@ function flattenExplicitStructuredHeadersForReader(table, matrix, caption) {
     let headerDepth = explicitDataRows.length
         ? Math.min(...explicitDataRows)
         : (measuredDataRow > 0 ? measuredDataRow : 0);
-    // Some LaTeXML tables mark every row before the first ordinary body row as
-    // a header, including group labels and the first data row.  A full-width
-    // repeated label is a section boundary, not another column-heading level;
-    // preserve it (and the following default data row) as body rows.
+    // 有些 LaTeXML 表把第一个普通数据行之前的每一行都标成表头，包括分组
+    // 标签和第一个数据行。通栏重复的标签是分节边界，不是又一层列标题；
+    // 把它（以及紧随其后的默认数据行）保留为正文行。
     const hasSectionBoundary = matrix.slice(1, Math.max(headerDepth, measuredDataRow) + 1)
         .some(row => {
             const populated = row.map(normalizeText).filter(Boolean);
             return populated.length === matrix[0].length && new Set(populated).size === 1;
         });
     if (hasSectionBoundary) return matrix;
-    // Conversely, LaTeXML can mark the second line of a genuine multi-level
-    // column heading as `header=false`.  When it contains no measurements and
-    // the first numeric row follows immediately, include it in the heading.
+    // 反过来，真正的多级列标题的第二行可能被 LaTeXML 标成 header=false。
+    // 如果它不含测量值、而且紧接着就是第一个数字行，就把它算进标题。
     if (measuredDataRow > headerDepth
         && matrix.slice(headerDepth, measuredDataRow).every(row => !row.some(isLikelyMeasurementCell))) {
         headerDepth = measuredDataRow;
@@ -343,10 +339,9 @@ function renderArtifactTableMarkdown(table) {
             : row;
     });
     const header = normalized[0];
-    // Comparison tables sometimes intentionally leave the top-left source
-    // cell empty while the first column contains row metrics.  Markdown needs
-    // an explicit accessible label; this deterministic fallback does not
-    // alter any source values or infer a paper-specific concept.
+    // 对比表有时会故意让左上角源单元格留空，而第一列装的是各行指标。
+    // Markdown 需要一个明确的可访问标签；这个固定兜底不改动任何源值，
+    // 也不推断与具体论文有关的概念。
     if (!header[0] && normalized.slice(1).some(row => normalizeText(row?.[0] ?? ''))) {
         header[0] = 'Metric';
     }
@@ -511,10 +506,9 @@ function validateTerms(terms, blocksById, artifactIndex, label) {
 
 function validateRelatedWorks(items, blocksById, artifactIndex, label) {
     if (!Array.isArray(items)) throw new Error(`${label}.relatedWorks 必须是数组`);
-    // relatedWorks names bibliography entries.  Depending on the structured
-    // source, those IDs may live in `references` while the in-text `citations`
-    // projection is empty; both inventories are content-addressed by the same
-    // ArtifactIndex and are therefore authoritative identity sources.
+    // relatedWorks 指的是参考文献条目。取决于结构化来源，这些 ID 可能
+    // 落在 references 里，而正文的 citations 投影是空的；两份清单都由
+    // 同一个 ArtifactIndex 做内容寻址，因此都是权威的身份来源。
     const candidates = new Set([
         ...inventoryIds(artifactIndex, 'references'),
         ...inventoryIds(artifactIndex, 'citations')
@@ -534,9 +528,8 @@ function validateRelatedWorks(items, blocksById, artifactIndex, label) {
             throw new Error(`${itemLabel} 的关系与差异没有实际进入绑定正文 block`);
         }
     });
-    // Preserve the original minimum-count policy (driven by extracted in-text
-    // citations) while using bibliography references to validate any IDs that
-    // a sealed longform actually declares.
+    // 保留原来的最小数量策略（由抽取出的正文引用决定），同时用参考文献
+    // 校验封存长文实际声明的那些 ID。
     const minimum = Math.min(2, inventoryIds(artifactIndex, 'citations').size);
     if (seen.size < minimum) {
         throw new Error(`${label}.relatedWorks 必须绑定至少 ${minimum} 个真实 ArtifactIndex 引用`);

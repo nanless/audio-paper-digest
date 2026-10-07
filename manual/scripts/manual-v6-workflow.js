@@ -395,9 +395,9 @@ function validateTaskReceipt(value, role, paperId, label) {
         throw new Error(`${label} 必须绑定单篇隔离的 gpt-5.6-terra/high task`);
     }
     assertText(receipt.taskName, `${label}.taskName`, 4);
-    // Early production-runner receipts used inputPacketSha256 for the same
-    // content-addressed packet identity.  Keep the original signed bytes and
-    // normalize only the validated view, matching task-runner verification.
+    // 早期的生产运行器回执用 inputPacketSha256 表示同一个内容寻址的数据包
+    // 身份。保留原始签名字节，只规范化校验用的视图，与任务运行器的核验
+    // 保持一致。
     const consumedPacketSha256 = receipt.consumedPacketSha256 || receipt.inputPacketSha256;
     assertSha(consumedPacketSha256, `${label}.consumedPacketSha256`);
     assertSha(receipt.outputSha256, `${label}.outputSha256`);
@@ -445,9 +445,9 @@ function buildTaskPacket(options = {}) {
         allowedArtifacts,
         contractSha256: assertSha(options.contractSha256, 'task packet.contractSha256')
     };
-    // Legacy production-v6 packets remain verifiable when this optional field is
-    // absent.  Every newly materialized packet includes the canonical role
-    // contract, so a leaf does not need an out-of-band schema or hashing recipe.
+    // 这个可选字段缺失时，旧的 production-v6 数据包仍可核验。新生成的
+    // 数据包都会带上规范的 role 契约，所以叶子节点不需要额外的 schema
+    // 或哈希配方。
     if (options.outputContract !== undefined) {
         const expectedOutputContract = taskOutputContract(role);
         if (stableSha256(options.outputContract) !== stableSha256(expectedOutputContract)) {
@@ -855,11 +855,10 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
     const article = assertText(editorial.readerArticle, 'manual record.editorial.readerArticle', 2400);
     validateManualTutorialLongformBundle(editorial.longformBundle, article, artifactIndex, {
         paperId, runtimeMode,
-        // Production V6 records may carry a table fragment signed by the
-        // revision receipt before a deterministic renderer refactor. Numeric
-        // cell coverage, source matrix SHA, block inclusion and fragment SHA
-        // remain mandatory; only byte equality with today's renderer is
-        // relaxed for that already-signed fragment.
+        // 有些 Production V6 记录里的表格片段，是在一次确定性渲染器重构之前
+        // 由修订回执签名的。数字单元格覆盖率、源矩阵 SHA、块包含关系和
+        // 片段 SHA 仍然必须满足；只对那一段已签名的片段放宽「与今天的渲染器
+        // 逐字节相同」。
         allowSignedLegacyTableRender: verificationContext.allowSignedLegacyTableRender === true
     });
     const receipts = assertObject(value.reviewReceipts, 'manual record.reviewReceipts');

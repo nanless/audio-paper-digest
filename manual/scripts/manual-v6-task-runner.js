@@ -219,11 +219,9 @@ function invalidateFrom(state, paperId, role, reason) {
         if (task.taskName) state.taskNames[task.taskName] = {
             ...state.taskNames[task.taskName], retired: true
         };
-        // The retried node may reuse its own immutable packet, but every
-        // downstream packet binds the old dependency output SHA and must be
-        // rematerialized. Keeping a downstream packet here produces an
-        // impossible state: the dependency is no longer validated while the
-        // stale packet still claims that it is.
+        // 重试的节点可以复用自己那份不可变数据包，但它下游的每个数据包都绑定
+        // 了旧的依赖输出 SHA，必须重新生成。在这里保留下游数据包会造成自相
+        // 矛盾的状态：依赖已经不再通过校验，而过期的数据包仍声称它通过了。
         const keepPacket = affectedRole === role && Boolean(task.packetSha256);
         const packetFields = keepPacket ? {
             packetSha256: task.packetSha256, packetFileSha256: task.packetFileSha256,
