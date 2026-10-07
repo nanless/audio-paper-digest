@@ -14,36 +14,11 @@ function stableSha256(value) {
         .update(Buffer.from(JSON.stringify(stableJson(value)), 'utf8')).digest('hex');
 }
 
-function pythonFloatText(value) {
-    if (Object.is(value, -0)) return '-0.0';
-    const [mantissa, exponentText] = value.toExponential().split('e');
-    const exponent = Number(exponentText);
-    if (exponent < -4 || exponent >= 16) {
-        return `${mantissa}e${exponent < 0 ? '-' : '+'}${String(Math.abs(exponent)).padStart(2, '0')}`;
-    }
-    const negative = mantissa.startsWith('-');
-    const digits = mantissa.replace('-', '').replace('.', '');
-    const point = exponent + 1;
-    const body = point <= 0
-        ? `0.${'0'.repeat(-point)}${digits}`
-        : point >= digits.length
-            ? `${digits}${'0'.repeat(point - digits.length)}.0`
-            : `${digits.slice(0, point)}.${digits.slice(point)}`;
-    return negative ? `-${body}` : body;
-}
-
 function stableApiBindingsSha256(value) {
-    const scores = (Array.isArray(value) ? value : []).map(item => item?.finalScore);
-    let index = 0;
-    const encoded = JSON.stringify(stableJson(value)).replace(
-        /("finalScore":)(-?[0-9][0-9.eE+-]*)(?=[,}])/g,
-        (match, prefix) => (
-            typeof scores[index] === 'number' && Number.isFinite(scores[index])
-                ? `${prefix}${pythonFloatText(scores[index++])}`
-                : match
-        )
-    );
-    return crypto.createHash('sha256').update(Buffer.from(encoded, 'utf8')).digest('hex');
+    // 生产实现（visual-summary-state.js）与 Python 端（publish-to-blog.py 的
+    // _stable_json_sha256）都按 ECMAScript 写数字，所以这里直接用 JSON.stringify。
+    return crypto.createHash('sha256')
+        .update(Buffer.from(JSON.stringify(stableJson(value)), 'utf8')).digest('hex');
 }
 
 function productionV6GenerationFields(papers) {

@@ -139,45 +139,12 @@ function stableSha256(value) {
     return sha256Buffer(Buffer.from(JSON.stringify(stableJson(value)), 'utf8'));
 }
 
-// json.dumps renders floats with repr: shortest round-trip digits, scientific
-// notation only outside the decimal exponent range [-4, 16), at least two signed
-// exponent digits (2e-05, 1e+16), and a trailing `.0` on integral values (5.0).
-// JSON.stringify follows the ECMAScript rules instead (0.00002, 1e+21, `0` for
-// -0.0), so the two disagree on the exponent range, the exponent width and -0.0.
-function pythonFloatText(value) {
-    if (Object.is(value, -0)) return '-0.0';
-    const [mantissa, exponentText] = value.toExponential().split('e');
-    const exponent = Number(exponentText);
-    if (exponent < -4 || exponent >= 16) {
-        return `${mantissa}e${exponent < 0 ? '-' : '+'}${String(Math.abs(exponent)).padStart(2, '0')}`;
-    }
-    const negative = mantissa.startsWith('-');
-    const digits = mantissa.replace('-', '').replace('.', '');
-    const point = exponent + 1;
-    const body = point <= 0
-        ? `0.${'0'.repeat(-point)}${digits}`
-        : point >= digits.length
-            ? `${digits}${'0'.repeat(point - digits.length)}.0`
-            : `${digits.slice(0, point)}.${digits.slice(point)}`;
-    return negative ? `-${body}` : body;
-}
-
+// 这份绑定的 Python 端是 publish-to-blog.py 的 _stable_json_sha256，它按
+// ECMAScript 的 Number::toString 写数字（见 _javascript_json_utf8），所以这里直接用
+// JSON.stringify 就对了，不需要再给 finalScore 补 `.0`：整数取值的浮点两端都写 `5`，
+// 0.00002 两端都写 0.00002，负零两端都写 0。
 function stableApiBindingsSha256(bindings) {
-    // Python's json.dumps preserves an integral float as `5.0`, while
-    // JSON.stringify serializes the parsed value as `5`. finalScore is the
-    // only intentionally-float field in this cross-runtime binding, and Python
-    // stores it as float(...), so every value goes through repr.
-    const scores = (Array.isArray(bindings) ? bindings : []).map(item => item?.finalScore);
-    let index = 0;
-    const encoded = JSON.stringify(stableJson(bindings)).replace(
-        /("finalScore":)(-?[0-9][0-9.eE+-]*)(?=[,}])/g,
-        (match, prefix) => (
-            typeof scores[index] === 'number' && Number.isFinite(scores[index])
-                ? `${prefix}${pythonFloatText(scores[index++])}`
-                : match
-        )
-    );
-    return sha256Buffer(Buffer.from(encoded, 'utf8'));
+    return sha256Buffer(Buffer.from(JSON.stringify(stableJson(bindings)), 'utf8'));
 }
 
 function assertManualV6ProductionGeneration(generation, publishedPapers) {
