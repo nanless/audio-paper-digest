@@ -2071,7 +2071,7 @@ async function run() {
             }]
         });
     }
-    console.log(`人工离线分析记录共 ${saved.papers.length} 篇，本轮成功写入 ${persisted} 篇、保存失败检查点 ${failedPersisted} 篇、复用 ${skipped} 篇；当前批次成功 ${saved.stats.success} 篇、失败 ${saved.stats.failed} 篇，API 调用 0 次。`);
+    console.log(`人工离线分析记录共 ${saved.papers.length} 篇，这次运行成功写入 ${persisted} 篇、保存失败检查点 ${failedPersisted} 篇、复用 ${skipped} 篇；当前批次成功 ${saved.stats.success} 篇、失败 ${saved.stats.failed} 篇，API 调用 0 次。`);
     if (saved.stats.failed > 0) {
         console.error(`当前批次仍有 ${saved.stats.failed} 篇人工分析失败：`);
         for (const id of saved.stats.failedIds) {

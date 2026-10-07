@@ -34,7 +34,7 @@ const CARD_DIRECTIONS = Object.freeze({
     infographic: '生成一张纵向长图，从上到下完整串联研究问题与核心贡献、方法模块与信号流、关键实验发现、结论与局限；不编造数字或论文未提供的事实。'
 });
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-// Keep this aligned with publish-to-blog.py's multimodal review payload ceiling.
+// 这个上限要和 publish-to-blog.py 的多模态审查请求体上限保持一致。
 const MAX_ASSET_BYTES = 8 * 1024 * 1024;
 const MIN_ASSET_WIDTH = 768;
 const MIN_ASSET_HEIGHT = 1024;
@@ -139,11 +139,10 @@ function stableSha256(value) {
     return sha256Buffer(Buffer.from(JSON.stringify(stableJson(value)), 'utf8'));
 }
 
-// json.dumps renders floats with repr: shortest round-trip digits, scientific
-// notation only outside the decimal exponent range [-4, 16), at least two signed
-// exponent digits (2e-05, 1e+16), and a trailing `.0` on integral values (5.0).
-// JSON.stringify follows the ECMAScript rules instead (0.00002, 1e+21, `0` for
-// -0.0), so the two disagree on the exponent range, the exponent width and -0.0.
+// json.dumps 按 repr 输出浮点数：取最短往返位数，只有十进制指数超出 [-4, 16)
+// 才用科学计数法，指数至少带两位符号位（2e-05、1e+16），整数值补 `.0`（5.0）。
+// JSON.stringify 走 ECMAScript 规则（0.00002、1e+21、-0.0 写成 `0`），两者在
+// 指数范围、指数位数和 -0.0 上都不一致。
 function pythonFloatText(value) {
     if (Object.is(value, -0)) return '-0.0';
     const [mantissa, exponentText] = value.toExponential().split('e');
@@ -163,10 +162,9 @@ function pythonFloatText(value) {
 }
 
 function stableApiBindingsSha256(bindings) {
-    // Python's json.dumps preserves an integral float as `5.0`, while
-    // JSON.stringify serializes the parsed value as `5`. finalScore is the
-    // only intentionally-float field in this cross-runtime binding, and Python
-    // stores it as float(...), so every value goes through repr.
+    // Python 的 json.dumps 会把整数浮点写成 `5.0`，JSON.stringify 却把解析后的值
+    // 写成 `5`。这份跨语言绑定里只有 finalScore 是有意保留的浮点字段，Python 用
+    // float(...) 存它，所以每个值都要走 repr。
     const scores = (Array.isArray(bindings) ? bindings : []).map(item => item?.finalScore);
     let index = 0;
     const encoded = JSON.stringify(stableJson(bindings)).replace(
@@ -444,8 +442,8 @@ function promptSha256(promptPath = path.join(Config.PROJECT_ROOT, 'prompts', 'vi
 
 function referenceFigureRole(caption) {
     const text = String(caption || '').toLowerCase();
-    // Result captions such as "per-method EER" also contain the word "method".
-    // Classify explicit evaluation language first so they cannot outrank a real architecture figure.
+    // “per-method EER”这类结果图注也含 method 一词。先认出明确的评测措辞，
+    // 免得它压过真正的架构图。
     if (/result|experiment|comparison|ablation|benchmark|\beer\b|\bwer\b|\bf1\b|accuracy|score|结果|实验|对比|消融|基准|准确率|错误率/.test(text)) {
         return { role: 'result_reference', priority: 1 };
     }
@@ -561,8 +559,8 @@ function readSignedReaderVisualReference(reference, paperId) {
         `figure-${reference.ordinal}-${reference.sha256.slice(0, 16)}.png`);
     const recorded = path.resolve(Config.PROJECT_ROOT, String(reference.cachePath || ''));
     if (recorded !== expected) throw new Error('Reader 视觉原图缓存路径不受控');
-    // Check every ancestor, including the configured current root, without
-    // downloading or granting this new visual task any pixel-seen attestation.
+    // 每一级父目录都要查，配置里的 current 根目录也在内；这次新增的视觉任务
+    // 既不下载图片，也不该因为看过像素就拿到核验。
     let cursor = path.parse(recorded).root;
     for (const part of path.dirname(recorded).slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part);
@@ -592,11 +590,10 @@ function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
         signedReaderVisualSource(paper);
         if (paper?.analysisManifest?.contracts?.apiReaderFigurePersistence
             === EPHEMERAL_READER_FIGURE_PERSISTENCE_CONTRACT) {
-            // Daily sealed-source Readers intentionally discard every cache
-            // path and pixel byte after the model call. Post-publish visual
-            // planning must not demand those absent files or fall back to old
-            // image caches. Validate the durable source/pixel identities, then
-            // generate the infographic from signed text with zero references.
+            // 日更的封存来源解读在模型调用后会主动丢掉所有缓存路径和像素字节。
+            // 发布后的视觉规划不能反过来要求这些已不存在的文件，也不能退回旧图片
+            // 缓存。先核对长期保存的来源与像素身份，再只凭已核验文本生成信息图，
+            // 不带任何图片引用。
             for (const figure of paper.apiReaderFigures) {
                 const url = new URL(String(figure?.url || ''));
                 const sourceId = url.pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?\//)?.[1];
@@ -714,7 +711,7 @@ function prepareVisualReferenceInputs(manifest, {
     }
     const canonicalOutputRoot = path.resolve(Config.CURRENT_DIR, 'visual-reference-inputs');
     if (path.resolve(outputRoot) !== canonicalOutputRoot) {
-        throw new Error(`视觉参考图只能物化到受控目录: ${canonicalOutputRoot}`);
+        throw new Error(`视觉参考图只能写入受控目录: ${canonicalOutputRoot}`);
     }
     if (fs.existsSync(path.resolve(Config.CURRENT_DIR))
         && fs.lstatSync(path.resolve(Config.CURRENT_DIR)).isSymbolicLink()) {
@@ -763,8 +760,8 @@ function prepareVisualReferenceInputs(manifest, {
                         url: reference.url, sourceDomSha256: reference.sourceDomSha256 } : {}),
                     mime: reference.mime,
                     sha256: actualSha,
-                    // image_gen accepts only absolute normalized local paths.
-                    // Keep a relative field solely for compact logs and manifests.
+                    // image_gen 只接受规范化后的本地绝对路径。相对路径字段仅用于
+                    // 让日志和清单更短。
                     preparedPath: path.resolve(target),
                     relativePath: path.relative(Config.PROJECT_ROOT, target).split(path.sep).join('/')
                 };
@@ -801,9 +798,8 @@ function prepareVisualReferenceInputs(manifest, {
                 }));
                 paper.preparedReferenceInputs = {
                     batchDate: targetDate,
-                    // updateJsonFileLocked() increments the manifest generation after
-                    // this updater returns. Keep the resulting generation only as an
-                    // audit field; taskToken is the stable per-paper validity binding.
+                    // updateJsonFileLocked() 会在本更新函数返回后自增清单代数。这里
+                    // 算出的代数只作审计字段；每篇论文的有效性绑定仍是 taskToken。
                     manifestGeneration: (Number.isInteger(current.generation) ? current.generation : 0) + 1,
                     taskToken: paper.cards?.infographic?.taskToken,
                     references,
@@ -1447,8 +1443,8 @@ function buildGenerationContext(paper) {
             qaClaims: { exactEnglishTitle: String(paper.title || ''), bodyLanguage: '简体中文',
                 requiredSections: ['研究问题与核心贡献', '方法模块与信号流', '关键实验发现', '结论与局限'],
                 sourceContract: READER_VISUAL_SOURCE_CONTRACT,
-                // References to complete signed sections avoid stripping table
-                // columns/units or dropping counterexamples via first-N lines.
+                // 引用完整的已核验小节，可以避免截掉表格的列与单位，也能避免
+                // 按前 N 行截断时丢掉反例。
                 methodClaims: claims(methods), metricClaims: claims(results), limitationClaims: claims(limits),
                 referenceCaptions: referenceImages.map(item => item.caption) },
             rendering: RENDERING_CONTRACT
@@ -1698,9 +1694,9 @@ function planVisualSummaries({
         if (current && ![1, 2, MANIFEST_VERSION].includes(current.version)) {
             throw new Error(`不支持的视觉摘要 manifest 版本: ${current.version}`);
         }
-        // v1 represented three cards and v2 represented every-paper long images.
-        // Both migrate to the v3 TOP 10 contract; reusable v2 assets keep only
-        // when their analysis, prompt, publication binding, token, and path match.
+        // v1 只画三张卡片，v2 给每篇论文都出长图。两者都迁移到 v3 的 TOP 10
+        // 约定；v2 素材只有在分析、提示词、发布绑定、token 和路径都对得上时才能
+        // 继续复用。
         const previousPapers = [2, MANIFEST_VERSION].includes(current?.version) && current?.batchDate === targetDate
             ? (current.papers || {})
             : {};
@@ -1742,9 +1738,8 @@ function planVisualSummaries({
         const obsoleteVisualAssets = collectObsoleteCompletedVisualAssets(current, nextManifest);
         if (obsoleteVisualAssets.length > 0) nextManifest.obsoleteVisualAssets = obsoleteVisualAssets;
         nextManifest.generation = (Number.isInteger(current?.generation) ? current.generation : 0) + 1;
-        // Persist the invalidated/pending manifest before deleting any old
-        // canonical asset. A crash can therefore leave only a safe, resumable
-        // cleanup list, never an old complete manifest pointing at a removed file.
+        // 先落盘作废或待处理的清单，再删旧素材。这样即使中途崩溃，留下的也只是一份
+        // 可安全续跑的清理清单，不会出现旧清单仍标记完成却指向已删文件的情况。
         writeFileAtomic(manifestPath, JSON.stringify(nextManifest, null, 2));
         cleanupObsoleteCompletedVisualAssets(current, nextManifest);
         if (Object.prototype.hasOwnProperty.call(nextManifest, 'obsoleteVisualAssets')) {
@@ -1795,8 +1790,8 @@ function assertSafeAssetTarget(targetPath, allowedRootPath) {
 function extractGeneratedImagePathFromHint(outputHint) {
     const hint = String(outputHint || '').trim();
     if (!hint) throw new Error('内置图像生成结果缺少 output_hint');
-    // Built-in image_gen currently reports: "saved to <directory> as <actual.png> by default".
-    // The directory is not an asset. Always prefer the path after the final ` as ` marker.
+    // 内置 image_gen 目前返回 "saved to <directory> as <actual.png> by default"。
+    // 目录本身不是素材，一律取最后一个 ` as ` 之后的路径。
     const asMatches = [...hint.matchAll(/\bas\s+(\/[^\r\n]+?\.png)(?=\s+by\s+default(?:\.|$)|[\r\n]|$)/gi)];
     const candidates = asMatches.map(match => match[1].trim());
     if (candidates.length === 0) {
@@ -2001,10 +1996,9 @@ function main(argv = process.argv.slice(2)) {
         return;
     }
     if (command === 'archive-legacy') {
-        // This command only migrates already completed local assets after
-        // validating their manifest, SHA, PNG bytes and controlled paths. It
-        // deliberately does not mint or require a modern remote publication
-        // attestation: legacy batches may predate remoteVerifiedOid/schema v3.
+        // 这个命令只迁移已完成的本地产物，迁移前会核对清单、SHA、PNG 字节和受控
+        // 路径。它有意不签发也不要求新的远端发布凭证：旧批次可能早于
+        // remoteVerifiedOid 与 schema v3。
         const result = archiveLegacyVisualManifestAssets({
             targetDate: options.date,
             manifestPath: options.manifest,
