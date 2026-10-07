@@ -5726,6 +5726,73 @@ has_dataset: 否
         }), /没有登记/);
     });
 
+    it('主分析阶段按记录声明的版本重算，旧记录不带版本字段', () => {
+        const deep = require('../scripts/deep-analyzer.js');
+        const crypto = require('node:crypto');
+        const { CORE_SUMMARY_CONTRACT_VERSION } = require('../scripts/analysis-contract.js');
+        const arxivId = '2501.00001';
+        const text = '用于核验主分析指纹的正文';
+        const paper = { arxivId, title: '示例标题', authors: [], categories: [],
+            analysisManifest: null };
+        // usedTextSha256 是主分析独有的判别字段：同一次 buildRecoveryFingerprints 会
+        // 走 8 次哈希，只有主分析这一份带它，所以抓到的对象不会和读者、插图阶段混淆。
+        // 摘要契约版本跟着正文版本一起进主分析指纹，取 v1 期望值时不能漏掉。
+        const capture = manifest => {
+            const original = crypto.createHash;
+            let payload = null;
+            crypto.createHash = function (...args) {
+                const hash = original.apply(this, args);
+                const update = hash.update;
+                hash.update = function (value, ...rest) {
+                    if (typeof value === 'string' && value.includes('"usedTextSha256"')) {
+                        payload = JSON.parse(value);
+                    }
+                    return update.call(this, value, ...rest);
+                };
+                return hash;
+            };
+            let fingerprint;
+            try {
+                fingerprint = deep.buildRecoveryFingerprints(paper, text, arxivId, manifest)
+                    .primaryAnalysis;
+            } finally {
+                crypto.createHash = original;
+            }
+            return { payload, fingerprint };
+        };
+        // 旧记录：没有 promptTextContract，哈希输入里也不能有这个字段，正文按 v1 算。
+        const legacy = capture({ version: 1, stages: { primaryAnalysis: {
+            status: 'complete', fingerprint: 'legacy', updatedAt: 't' } } });
+        assert.strictEqual('promptTextContract' in legacy.payload, false);
+        assert.strictEqual(
+            legacy.payload.promptTemplateSha256,
+            deep.runtimePromptTemplateSha256(
+                'prompts/deep-analysis.md', CORE_SUMMARY_CONTRACT_VERSION)
+        );
+        assert.strictEqual(
+            deep.promptFilePathForContract('primaryAnalysis', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
+            'prompts/deep-analysis.md'
+        );
+        // 新请求：登记了 v2，指纹里带合同名，正文按 v2 算。
+        const fresh = capture({ version: 1, stages: {} });
+        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text-v2');
+        assert.strictEqual(
+            fresh.payload.promptTemplateSha256,
+            deep.runtimePromptTemplateSha256(
+                'prompts/deep-analysis-v2.md', CORE_SUMMARY_CONTRACT_VERSION)
+        );
+        assert.strictEqual(
+            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v2.md');
+        // 判别力：两个版本必须算出不同的正文哈希和不同的阶段指纹，否则这条测试等于没测。
+        assert.notStrictEqual(
+            fresh.payload.promptTemplateSha256, legacy.payload.promptTemplateSha256);
+        assert.notStrictEqual(fresh.fingerprint, legacy.fingerprint);
+        assert.throws(() => deep.buildRecoveryFingerprints(paper, text, arxivId, {
+            version: 1, stages: { primaryAnalysis: { status: 'complete',
+                fingerprint: 'legacy', promptTextContract: 'analysis-prompt-text-v9' } }
+        }), /没有登记/);
+    });
+
     it('核心摘要 Prompt 字节漂移只改变 coreSummaryRepair 阶段指纹', () => {
         const deep = require('../scripts/deep-analyzer.js');
         const promptPath = path.resolve(__dirname, '../prompts/core-summary-repair.md');
