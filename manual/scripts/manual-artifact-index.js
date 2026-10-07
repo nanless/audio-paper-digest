@@ -60,7 +60,7 @@ function validateStructuredArtifacts(value, expected = {}) {
     }
     if (expected.sourceSha256
         && value.flattenedTextSha256 !== expected.sourceSha256) {
-        throw new Error('structuredArtifacts 与同次抓取的扁平全文 SHA 不一致');
+        throw new Error('structuredArtifacts 没有与同次抓取的扁平全文 SHA 闭环');
     }
     for (const field of ['tables', 'formulas', 'figures', 'references']) {
         if (!Array.isArray(value[field])) throw new Error(`structuredArtifacts.${field} 必须为数组`);
@@ -155,7 +155,7 @@ function validateStructuredArtifacts(value, expected = {}) {
             for (const field of ['tables', 'formulas', 'figures', 'references']) {
                 if (!Number.isInteger(detected[field]) || !Number.isInteger(recovered[field])
                     || detected[field] !== recovered[field]) {
-                    throw new Error(`structuredArtifacts complete 的 ${field} 检测与恢复计数不一致`);
+                    throw new Error(`structuredArtifacts complete 的 ${field} 检测/恢复计数不闭环`);
                 }
             }
         }
@@ -919,7 +919,7 @@ function loadStructuredArtifactSnapshot(input, sourceEntry) {
         || envelope.sourceIdentitySha256 !== sourceEntry.sourceIdentitySha256
         || envelope.paperInputSha256 !== input.paperInputSha256
         || envelope.payloadSha256 !== pointer.payloadSha256) {
-        throw new Error(`${input.id} structuredArtifacts 快照与全文、input、source identity 不一致`);
+        throw new Error(`${input.id} structuredArtifacts 快照没有与全文/input/source identity 闭环`);
     }
     validateStructuredArtifacts(envelope.structuredArtifacts, {
         paperId: input.id,

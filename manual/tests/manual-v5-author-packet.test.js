@@ -227,7 +227,7 @@ describe('Manual v5 冷启动作者包', () => {
         const artifacts = JSON.parse(fs.readFileSync(fx2.options.artifactManifestPath, 'utf8'));
         artifacts.papers[ID].sourceIdentitySha256 = 'f'.repeat(64);
         write(fx2.options.artifactManifestPath, artifacts);
-        assert.throws(() => buildAuthorPacket(fx2.options), /checkpoint 未与当前全文|身份/);
+        assert.throws(() => buildAuthorPacket(fx2.options), /checkpoint 与当前全文|身份/);
     });
 
     it('不读取被禁止的正式记录、旧文章、质量文案或审查文案', () => {

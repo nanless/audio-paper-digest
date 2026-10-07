@@ -279,7 +279,7 @@ function validateTableClosures(value, tableById, sections) {
         }
         seen.add(id);
     }
-    for (const id of tableById.keys()) if (!seen.has(id)) throw new Error(`tableClosures 漏掉表格对应关系: ${id}`);
+    for (const id of tableById.keys()) if (!seen.has(id)) throw new Error(`tableClosures 漏少表格闭环: ${id}`);
 }
 
 function validateCausalBridges(value, sections) {
