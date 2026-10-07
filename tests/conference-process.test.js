@@ -186,7 +186,8 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
     }
     assert.match(processApi.implementationSha256(), /^[a-f0-9]{64}$/);
     const root = '/virtual/conference-process-implementation';
-    const sources = new Map(processApi.IMPLEMENTATION_FILES.map(name => [name, Buffer.from(`source:${name}`)]));
+    const sources = new Map(processApi.currentImplementationFiles()
+        .map(name => [name, Buffer.from(`source:${name}`)]));
     const fingerprint = () => processApi.implementationSha256({ root,
         readFileSync: filename => sources.get(path.relative(root, filename)) });
     const baseline = fingerprint();
@@ -197,6 +198,40 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
         assert.notEqual(fingerprint(), baseline, name); sources.set(name, original);
     }
     assert.equal(fingerprint(), baseline);
+});
+
+test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可复算', () => {
+    const root = '/virtual/conference-prompt-versions';
+    const files = [...new Set([...processApi.currentImplementationFiles(), ...processApi.IMPLEMENTATION_FILES])];
+    const sources = new Map(files.map(name => [name, Buffer.from(`source:${name}`)]));
+    const fingerprint = promptTextVersion => processApi.implementationSha256({ root, promptTextVersion,
+        readFileSync: filename => sources.get(path.relative(root, filename)) });
+    const current = fingerprint();
+    const legacy = fingerprint('v1');
+    assert.notEqual(current, legacy);
+    // 新写入绑定 v2：改 v2 正文会改变当前指纹，改 v1 正文不会。
+    const v2Name = 'prompts/opensource-scan-v2.md';
+    const v1Name = 'prompts/opensource-scan.md';
+    const v2 = sources.get(v2Name); const v1 = sources.get(v1Name);
+    sources.set(v2Name, Buffer.concat([v2, Buffer.from('\nv2 drift')]));
+    assert.notEqual(fingerprint(), current);
+    assert.equal(fingerprint('v1'), legacy);
+    sources.set(v2Name, v2);
+    sources.set(v1Name, Buffer.concat([v1, Buffer.from('\nv1 drift')]));
+    assert.equal(fingerprint(), current);
+    assert.notEqual(fingerprint('v1'), legacy);
+    sources.set(v1Name, v1);
+    assert.equal(fingerprint(), current);
+    assert.equal(fingerprint('v1'), legacy);
+    // 版本映射本身在被哈希的集合里，改映射会改变当前指纹。
+    assert.ok(processApi.currentImplementationFiles().includes('scripts/lib/prompt-text-versions.js'));
+    const mappingName = 'scripts/lib/prompt-text-versions.js';
+    const mapping = sources.get(mappingName);
+    sources.set(mappingName, Buffer.concat([mapping, Buffer.from('\nmapping drift')]));
+    assert.notEqual(fingerprint(), current);
+    assert.equal(fingerprint('v1'), legacy);
+    sources.set(mappingName, mapping);
+    assert.throws(() => fingerprint('v9'), /没有登记/);
 });
 
 test('深度执行身份会归一化路由、绑定语义配置，并排除所有密钥', () => {

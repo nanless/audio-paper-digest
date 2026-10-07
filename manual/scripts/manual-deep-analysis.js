@@ -103,6 +103,7 @@ const {
 
 const PROJECT_ROOT = path.join(__dirname, '..', '..');
 const MANUAL_AUTHORING_PROMPT_PATH = path.join(PROJECT_ROOT, 'manual', 'prompts', 'manual-analysis-record.md');
+const promptTextVersions = require('../../scripts/lib/prompt-text-versions.js');
 const STAGE_PROMPT_FILES = Object.freeze({
     primaryAnalysis: 'deep-analysis.md',
     openSourceScan: 'opensource-scan.md',
@@ -194,23 +195,46 @@ function stageStatusMap() {
     return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [stage, MANUAL_COMPLETE_STATUS]));
 }
 
-function buildStagePromptBindings() {
+// 新配置按当前版本绑定提示词正文（已迁移的阶段是 -v2 文件）；旧配置按 v1 的冻结
+// 路径复算。两套路径都来自 scripts/lib/prompt-text-versions.js，不在这里另抄一份。
+function stagePromptBindings(promptTextVersion) {
     return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
-        const promptFile = STAGE_PROMPT_FILES[stage];
-        if (promptFile) {
+        if (!STAGE_PROMPT_FILES[stage]) {
             return [stage, {
-                source: `prompts/${promptFile}`,
-                sha256: sha256File(path.join(PROJECT_ROOT, 'prompts', promptFile))
+                source: `manual-stage-contract:${stage}:v1`,
+                sha256: manualSha256({ contract: 'manual-stage-contract-v1', stage })
             }];
         }
-        return [stage, {
-            source: `manual-stage-contract:${stage}:v1`,
-            sha256: manualSha256({ contract: 'manual-stage-contract-v1', stage })
-        }];
+        const relativePath = promptTextVersion === 'v1'
+            ? promptTextVersions.promptFilePathForContract(stage, promptTextVersions.ANALYSIS_PROMPT_TEXT_V1_CONTRACT)
+            : promptTextVersions.currentOrFrozenPromptPath(stage);
+        return [stage, { source: relativePath, sha256: sha256File(path.join(PROJECT_ROOT, relativePath)) }];
     }));
 }
 
-function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromptBindings()) {
+function buildStagePromptBindings() {
+    return stagePromptBindings('current');
+}
+
+function buildLegacyStagePromptBindings() {
+    return stagePromptBindings('v1');
+}
+
+// 记录自己声明绑的是哪一版正文：拿它保存的 SHA 逐阶段比对。缺字段、或与任何一版
+// 都比不中时按 v1 处理——旧记录本来就没有版本字段，随后逐阶段检查会报出不一致。
+function specPromptTextVersion(spec, currentBindings, legacyBindings) {
+    const discriminating = REQUIRED_RECOVERY_STAGES.filter(
+        stage => legacyBindings[stage].sha256 !== currentBindings[stage].sha256
+    );
+    const declared = spec?.stagePromptSha256;
+    if (!declared || typeof declared !== 'object' || Array.isArray(declared) || !discriminating.length) return 'v1';
+    const present = discriminating.filter(stage => declared[stage] !== undefined);
+    if (!present.length) return 'v1';
+    return present.every(stage => declared[stage] === currentBindings[stage].sha256) ? 'current' : 'v1';
+}
+
+function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromptBindings(),
+    legacyBindings = buildLegacyStagePromptBindings()) {
     if (!spec || (spec.version !== 3 && !CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
         && spec.version !== MANUAL_SPEC_VERSION_V6)) {
         throw new Error('人工分析提示文件的对应记录只支持历史 v3、兼容 v4/v5，以及明确选择正式或影子模式的 v6 配置。');
@@ -220,7 +244,10 @@ function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromp
     }
     const currentAuthoringSha256 = sha256File(MANUAL_AUTHORING_PROMPT_PATH);
     if (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version) || spec.version === MANUAL_SPEC_VERSION_V6) {
-        if (spec.promptSha256 && spec.promptSha256 !== currentBindings.primaryAnalysis.sha256) {
+        // 改动前写下的配置绑的是冻结的 v1 正文；按 v2 重算会把它们全判成漂移。
+        const bindings = specPromptTextVersion(spec, currentBindings, legacyBindings) === 'v1'
+            ? legacyBindings : currentBindings;
+        if (spec.promptSha256 && spec.promptSha256 !== bindings.primaryAnalysis.sha256) {
             throw new Error('人工分析配置的 promptSha256 与当前主分析提示文件的 SHA 不一致。');
         }
         if (spec.manualAuthoringPromptSha256 !== currentAuthoringSha256) {
@@ -232,17 +259,17 @@ function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromp
                 throw new Error('人工分析配置的 stagePromptSha256 必须是按阶段记录 SHA 的对象，不能是数组。');
             }
             for (const stage of REQUIRED_RECOVERY_STAGES) {
-                if (spec.stagePromptSha256[stage] !== currentBindings[stage].sha256) {
+                if (spec.stagePromptSha256[stage] !== bindings[stage].sha256) {
                     throw new Error(`人工分析配置中 ${stage} 阶段的提示文件或阶段规则 SHA 与当前值不一致。`);
                 }
             }
         }
-        return currentBindings;
+        return bindings;
     }
 
     // 历史的 v3 配置保留它当初声明的提示哈希。这里只检查所有必需阶段都在、
     // 而且彼此自洽；要是强求今天的提示哈希，这些旧配置就再也读不进来了。
-    // 当前的 v4、v5、v6 配置走上面那套当前绑定。
+    // 当前的 v4、v5、v6 配置走上面那套按版本选择的绑定。
     if (!/^[a-f0-9]{64}$/.test(String(spec.promptSha256 || ''))
         || !/^[a-f0-9]{64}$/.test(String(spec.manualAuthoringPromptSha256 || ''))) {
         throw new Error('历史人工分析 v3 配置中的主分析提示 SHA 或成稿规范 SHA 缺失或格式无效。');
@@ -399,7 +426,7 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
         manifestPath: expectedManifestPath,
         mergedRecords,
         generatedAt: spec.generatedAt,
-        promptBindings: buildStagePromptBindings()
+        promptBindings: options.promptBindings || buildStagePromptBindings()
     });
     if (rebuilt.version !== spec.version) {
         throw new Error(
@@ -476,7 +503,8 @@ function validateManualV6AssemblyInputs(spec, options = {}) {
         allowSignedV6CompatibilityOverride: runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
             && spec.v5BridgeMode === 'signed-v6-task-evidence-override-v1',
         ...(recordsEnvelope ? { recordsEnvelope } : {}),
-        generatedAt: spec.generatedAt
+        generatedAt: spec.generatedAt,
+        promptBindings: options.promptBindings || buildStagePromptBindings()
     });
     if (manualV6StableSha256(rebuilt) !== manualV6StableSha256(spec)) {
         throw new Error('人工分析 v6 配置与当前组装程序根据这些文件重新生成的结果不一致。');
@@ -1856,16 +1884,20 @@ async function run() {
             throw new Error(`人工分析 v6 配置必须使用 ${v6RuntimeMode} 模式下为该日期指定的文件路径，且该文件不能是符号链接。`);
         }
     }
+    const currentPromptBindings = buildStagePromptBindings();
+    const legacyPromptBindings = buildLegacyStagePromptBindings();
+    // 重新组装必须用配置自己声明的那一版绑定，否则改动前写下的 v1 配置会被按 v2 复算。
+    const assemblyPromptBindings = specPromptTextVersion(spec, currentPromptBindings, legacyPromptBindings) === 'v1'
+        ? legacyPromptBindings : currentPromptBindings;
     const verifiedAssemblyInputs = spec.version === MANUAL_SPEC_VERSION_V6
-        ? validateManualV6AssemblyInputs(spec, { date, runtimeMode: v6RuntimeMode })
+        ? validateManualV6AssemblyInputs(spec, { date, runtimeMode: v6RuntimeMode, promptBindings: assemblyPromptBindings })
         : (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
-            ? validateManualV4AssemblyInputs(spec, { date })
+            ? validateManualV4AssemblyInputs(spec, { date, promptBindings: assemblyPromptBindings })
             : null);
     const analysisFilePath = v6RuntimeMode
         ? resolveManualV6RuntimePaths(Config.CURRENT_DIR, date, v6RuntimeMode).canonicalPath
         : Config.FILES.deepAnalysisResult;
-    const currentPromptBindings = buildStagePromptBindings();
-    const promptBindings = resolveManualSpecPromptBindings(spec, currentPromptBindings);
+    const promptBindings = resolveManualSpecPromptBindings(spec, currentPromptBindings, legacyPromptBindings);
     const promptSha256 = promptBindings.primaryAnalysis.sha256;
     const papers = verifiedAssemblyInputs ? verifiedAssemblyInputs.filtered.papers : filteredPapersForDate(date);
     const specPapers = spec.papers;
@@ -2000,7 +2032,7 @@ async function run() {
         if (sha256File(specPath) !== specFileSha256) {
             throw new Error('人工分析 v6 配置文件在处理期间发生变化；已保存的逐篇检查点会保留，本次不再更新最终批次状态。');
         }
-        validateManualV6AssemblyInputs(spec, { date, runtimeMode: v6RuntimeMode });
+        validateManualV6AssemblyInputs(spec, { date, runtimeMode: v6RuntimeMode, promptBindings });
     }
     const saved = finalizeManualAnalysisBatchState(analysisFilePath, {
         date,
@@ -2062,6 +2094,8 @@ module.exports = {
     buildManualFailureRecord,
     buildStageEvidence,
     buildStagePromptBindings,
+    buildLegacyStagePromptBindings,
+    specPromptTextVersion,
     conciseManualImageCaption,
     normalizeManualV4ImageArtifacts,
     getManualAnalysisReuseHash,

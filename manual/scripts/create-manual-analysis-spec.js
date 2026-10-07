@@ -10,6 +10,7 @@ if (require.main === module) {
     require('../../scripts/env-loader.js').requireExternalRuntime('create-manual-analysis-spec.js');
 }
 const Config = require('../../scripts/config.js');
+const promptTextVersions = require('../../scripts/lib/prompt-text-versions.js');
 const {
     normalizedId,
     parseAnalysis,
@@ -112,17 +113,32 @@ const STAGE_PROMPT_FILES = Object.freeze({
     imageSupplement: 'image-supplement.md'
 });
 
-function currentStagePromptBindings() {
+// 新配置按当前版本绑定提示词正文（已迁移的阶段是 -v2 文件）；旧配置按 v1 的冻结
+// 路径复算。两套路径都来自 scripts/lib/prompt-text-versions.js，不在这里另抄一份。
+function stagePromptBindings(promptTextVersion) {
     return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
-        const promptFile = STAGE_PROMPT_FILES[stage];
-        return promptFile ? [stage, {
-            source: `prompts/${promptFile}`,
-            sha256: sha256Buffer(fs.readFileSync(path.join(Config.PROJECT_ROOT, 'prompts', promptFile)))
-        }] : [stage, {
-            source: `manual-stage-contract:${stage}:v1`,
-            sha256: manualSha256({ contract: 'manual-stage-contract-v1', stage })
+        if (!STAGE_PROMPT_FILES[stage]) {
+            return [stage, {
+                source: `manual-stage-contract:${stage}:v1`,
+                sha256: manualSha256({ contract: 'manual-stage-contract-v1', stage })
+            }];
+        }
+        const relativePath = promptTextVersion === 'v1'
+            ? promptTextVersions.promptFilePathForContract(stage, promptTextVersions.ANALYSIS_PROMPT_TEXT_V1_CONTRACT)
+            : promptTextVersions.currentOrFrozenPromptPath(stage);
+        return [stage, {
+            source: relativePath,
+            sha256: sha256Buffer(fs.readFileSync(path.join(Config.PROJECT_ROOT, relativePath)))
         }];
     }));
+}
+
+function currentStagePromptBindings() {
+    return stagePromptBindings('current');
+}
+
+function legacyStagePromptBindings() {
+    return stagePromptBindings('v1');
 }
 
 function sha256Buffer(value) {
@@ -1701,5 +1717,8 @@ module.exports = {
     validateFullTextManifest,
     resolveManualImageInsertions,
     buildSpec,
-    run
+    run,
+    stagePromptBindings,
+    currentStagePromptBindings,
+    legacyStagePromptBindings
 };

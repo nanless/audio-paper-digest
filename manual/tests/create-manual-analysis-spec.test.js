@@ -14,7 +14,9 @@ const {
     reviewedClaimsByStage,
     mergeRecordsEnvelopes,
     buildAnalysis,
-    buildSpec
+    buildSpec,
+    currentStagePromptBindings,
+    legacyStagePromptBindings
 } = require('../scripts/create-manual-analysis-spec.js');
 const {
     buildManifestContext,
@@ -989,6 +991,26 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
         };
         assert.doesNotThrow(() => validateManualV4AssemblyInputs(spec, options));
 
+        // 改动前写下的配置绑的是冻结的 v1 正文；重新组装必须用同一版绑定才算得出原值。
+        const legacyBindings = legacyStagePromptBindings();
+        const legacySpec = buildSpec({
+            date: DATE,
+            filtered: f.filtered,
+            filteredPath,
+            manifest: f.manifest,
+            manifestPath: f.manifestPath,
+            mergedRecords: f.mergedRecords,
+            generatedAt: '2026-08-25T12:30:00.000+08:00',
+            promptBindings: legacyBindings
+        });
+        assert.equal(legacySpec.stagePromptSha256.openSourceScan, legacyBindings.openSourceScan.sha256);
+        assert.notEqual(legacySpec.stagePromptSha256.openSourceScan, spec.stagePromptSha256.openSourceScan);
+        assert.doesNotThrow(() => validateManualV4AssemblyInputs(legacySpec, {
+            ...options, promptBindings: legacyBindings
+        }));
+        assert.throws(() => validateManualV4AssemblyInputs(legacySpec, options),
+            /与当前组装程序根据已记录的分析文件和全文文件重新生成的结果不一致/);
+
         const arbitraryTextPath = path.join(f.root, 'operator-substitute.txt');
         fs.writeFileSync(arbitraryTextPath, sourceText());
         const arbitraryText = JSON.parse(JSON.stringify(spec));
@@ -1065,6 +1087,32 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
             manifestPath: drift.manifestPath,
             mergedRecords: drift.mergedRecords
         }), /filtered 完整批次指纹不一致/);
+    });
+
+    it('当前阶段绑定用 v2 正文，旧记录的 v1 冻结正文仍可复算', () => {
+        const current = currentStagePromptBindings();
+        const legacy = legacyStagePromptBindings();
+        const directSha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
+        const migrated = ['openSourceScan', 'revision', 'tableRepair', 'methodRepair', 'structureRepair'];
+        for (const stage of migrated) {
+            assert.match(current[stage].source, /-v2\.md$/);
+            assert.equal(
+                current[stage].sha256,
+                directSha(fs.readFileSync(path.join(__dirname, '..', '..', current[stage].source))),
+                stage
+            );
+            assert.equal(
+                legacy[stage].sha256,
+                directSha(fs.readFileSync(path.join(__dirname, '..', '..', legacy[stage].source))),
+                stage
+            );
+            assert.notEqual(current[stage].sha256, legacy[stage].sha256, stage);
+        }
+        // 还没迁到 v2 的阶段和合成的阶段规则两版相同。
+        for (const stage of ['primaryAnalysis', 'scoringAudit', 'imageSupplement', 'coreSummaryRepair']) {
+            assert.equal(current[stage].sha256, legacy[stage].sha256, stage);
+            assert.equal(current[stage].source, legacy[stage].source, stage);
+        }
     });
 });
 

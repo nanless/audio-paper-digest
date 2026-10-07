@@ -410,7 +410,7 @@ function assemblerProtocolSha256() {
 function buildSpecV6(options = {}) {
     const { date, filtered, filteredPath, fullTextManifest, fullTextManifestPath,
         artifactManifest, artifactManifestPath, records, recordsEnvelope, runtimeMode,
-        generatedAt = getBeijingISOString() } = options;
+        generatedAt = getBeijingISOString(), promptBindings } = options;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) throw new Error('spec v6 date 非法');
     if (![MANUAL_V6_RUNTIME_MODE_PRODUCTION, MANUAL_V6_RUNTIME_MODE_SHADOW].includes(runtimeMode)) {
         throw new Error('spec v6 runtimeMode 必须显式为 production 或 shadow');
@@ -455,7 +455,8 @@ function buildSpecV6(options = {}) {
     const base = v5Assembler.buildSpec({
         date, filtered, filteredPath, manifest: fullTextManifest,
         manifestPath: fullTextManifestPath, mergedRecords, generatedAt,
-        validatedV6Records: options.allowSignedV6CompatibilityOverride === true
+        validatedV6Records: options.allowSignedV6CompatibilityOverride === true,
+        ...(promptBindings ? { promptBindings } : {})
     });
     const protocolSha256 = assemblerProtocolSha256();
     const papers = {};

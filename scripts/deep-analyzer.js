@@ -112,6 +112,15 @@ const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
 const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./lib/tag-stage-record.js');
 const { getDefaultTagRules } = require('./lib/tag-rules.js');
+const {
+    ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+    FROZEN_V1_PROMPT_FILES: RECOVERY_PROMPT_FILES,
+    PROMPT_FILE_VERSIONS,
+    currentPromptTextContract,
+    promptFilePathForContract,
+    currentTextStagePromptPath
+} = require('./lib/prompt-text-versions.js');
 const TAG_RULES = getDefaultTagRules();
 
 function tagRuleFingerprintFields() {
@@ -8531,84 +8540,6 @@ function recoveryInvalidationClosure(stage) {
     return RECOVERY_STAGE_ORDER.filter(item => closure.has(item));
 }
 
-const RECOVERY_PROMPT_FILES = Object.freeze({
-    primaryAnalysis: 'prompts/deep-analysis.md',
-    openSourceScan: 'prompts/opensource-scan.md',
-    revision: 'prompts/gap-fill.md',
-    tableRepair: 'prompts/table-fill.md',
-    methodRepair: 'prompts/method-fill.md',
-    tagSelection: 'prompts/tag-repair.md',
-    coreSummaryRepair: 'prompts/core-summary-repair.md',
-    structureRepair: 'prompts/structure-repair.md',
-    scoringAudit: 'prompts/scoring-audit.md',
-    apiReaderArticle: 'prompts/api-reader-article.md',
-    imageSupplement: 'prompts/image-supplement.md'
-});
-
-// prompts/*.md 的首个围栏正文参与文本阶段指纹。已发布的 v1 正文永久冻结，
-// 路径仍由 RECOVERY_PROMPT_FILES 给出；自然化改写只新增 -v2 文件。写入固定用
-// 当前版本，读取按记录里声明的版本选路径重算：字段缺失按 v1 处理，未知版本报错。
-const ANALYSIS_PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1';
-const ANALYSIS_PROMPT_TEXT_V2_CONTRACT = 'analysis-prompt-text-v2';
-// 表里登记的是各阶段当前版本。v1 不写在这里，固定由 RECOVERY_PROMPT_FILES 给出。
-const PROMPT_FILE_VERSIONS = Object.freeze({
-    openSourceScan: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-        path: 'prompts/opensource-scan-v2.md'
-    }),
-    revision: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-        path: 'prompts/gap-fill-v2.md'
-    }),
-    tableRepair: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-        path: 'prompts/table-fill-v2.md'
-    }),
-    methodRepair: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-        path: 'prompts/method-fill-v2.md'
-    }),
-    coreSummaryRepair: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-        path: 'prompts/core-summary-repair-v2.md'
-    }),
-    structureRepair: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-        path: 'prompts/structure-repair-v2.md'
-    }),
-    tagSelection: Object.freeze({
-        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-        path: 'prompts/tag-repair-v2.md'
-    })
-});
-
-function currentPromptTextContract(stage) {
-    const entry = PROMPT_FILE_VERSIONS[stage];
-    if (!entry) throw new Error(`阶段 ${stage} 没有登记提示词版本`);
-    return entry.contract;
-}
-
-// v1 一律走 RECOVERY_PROMPT_FILES 的冻结路径，不跟着当前版本走，
-// 否则升到 v2 之后旧记录会被按 v2 文件重算。
-function promptFilePathForContract(stage, promptTextContract) {
-    const declared = String(promptTextContract || '') || ANALYSIS_PROMPT_TEXT_V1_CONTRACT;
-    if (declared === ANALYSIS_PROMPT_TEXT_V1_CONTRACT) {
-        const frozen = RECOVERY_PROMPT_FILES[stage];
-        if (!frozen) throw new Error(`阶段 ${stage} 没有冻结的 v1 提示词路径`);
-        return frozen;
-    }
-    const entry = PROMPT_FILE_VERSIONS[stage];
-    if (entry && declared === entry.contract) return entry.path;
-    const known = [ANALYSIS_PROMPT_TEXT_V1_CONTRACT];
-    if (entry && !known.includes(entry.contract)) known.push(entry.contract);
-    throw new Error(`阶段 ${stage} 的提示词版本 ${declared} 没有登记；只认识 ${known.join(' 和 ')}。`);
-}
-
-// 新请求用当前版本的提示词正文；旧记录的指纹核验仍走 promptFilePathForContract
-// 的 v1 冻结路径，不会因为新版本上线而按 v2 文件重算。
-function currentTextStagePromptPath(stage) {
-    return promptFilePathForContract(stage, currentPromptTextContract(stage));
-}
 
 // 已经完成的阶段按它自己声明的版本重算：旧记录没有这个字段，只能按 v1 的历史
 // 形状核验，替它补新形状会让全部旧检查点失效。尚未完成的阶段按当前版本写入。

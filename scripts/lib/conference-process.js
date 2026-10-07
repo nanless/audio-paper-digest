@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const recovery = require('./conference-process-recovery.js');
+const promptTextVersions = require('./prompt-text-versions.js');
 
 const CONTRACT = 'conference-process-v2';
 const LEGACY_CONTRACT = 'conference-process-v1';
@@ -106,6 +107,20 @@ const IMPLEMENTATION_FILES = Object.freeze([
     'scripts/utils.js',
     'scripts/utils.py'
 ]);
+// 提示词版本映射本身决定「哈希哪份提示词」，所以它必须留在被哈希的集合里。
+// 只有当前版本清单收录它；v1 冻结清单保持原样，旧记录仍按当时那份清单复算。
+const PROMPT_TEXT_VERSIONS_FILE = 'scripts/lib/prompt-text-versions.js';
+const IMPLEMENTATION_PROMPT_TEXT_VERSIONS = Object.freeze(['v1', 'current']);
+// 当前实现清单：把已迁移到 v2 的提示词换成 -v2 路径，其余保持冻结路径。
+// 提示词正文本身仍在清单里，所以改正文或改版本映射都会改变指纹。
+function currentImplementationFiles() {
+    const files = IMPLEMENTATION_FILES.map(name => {
+        const stage = promptTextVersions.stageForFrozenPromptPath(name);
+        return stage ? promptTextVersions.currentOrFrozenPromptPath(stage) : name;
+    });
+    files.push(PROMPT_TEXT_VERSIONS_FILE);
+    return files;
+}
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));
 function sortJsonKeys(value) {
@@ -527,10 +542,18 @@ function defaultDependencies() {
         postprocess: require('./conference-postprocess.js'), ledger: require('./conference-source-ledger.js'),
         now: () => new Date().toISOString(), execFileSync };
 }
+// 新写入按当前版本清单绑定（7 个文本阶段是 v2 正文）；旧记录按 promptTextVersion
+// 为 'v1' 的冻结清单取值。这张清单包含 conference-process.js 自己，所以改代码之后
+// 旧记录的 implementationSha256 本来就不再复现，只能走显式的实现迁移记录。
 function implementationSha256(options = {}) {
     const root = options.root || path.join(__dirname, '..', '..');
     const readFileSync = options.readFileSync || fs.readFileSync;
-    return sha256(IMPLEMENTATION_FILES.map(name => (
+    const version = options.promptTextVersion || 'current';
+    if (!IMPLEMENTATION_PROMPT_TEXT_VERSIONS.includes(version)) {
+        throw new Error(`会议实现指纹的提示词版本 ${version} 没有登记；只认识 ${IMPLEMENTATION_PROMPT_TEXT_VERSIONS.join(' 和 ')}。`);
+    }
+    const files = version === 'v1' ? IMPLEMENTATION_FILES : currentImplementationFiles();
+    return sha256(files.map(name => (
         `${name}\0${sha256(readFileSync(path.join(root, name)))}\0`
     )).join(''));
 }
@@ -1036,5 +1059,6 @@ module.exports = { CONTRACT, LEGACY_CONTRACT, COMPLETION_CONTRACT, LEGACY_COMPLE
     stateDigest, assertState, completionBodyFor, validateCompletionReceipt, buildTagReviewQueue,
     writeTagReviewQueue, buildTagReviewQueueFields, defaultDependencies, loadAuthority,
     namesFor, sourceNames, sealOneSource, prepareShared,
-    IMPLEMENTATION_FILES, implementationSha256, processOne, runWorkers, assertSourceContinuity,
+    IMPLEMENTATION_FILES, IMPLEMENTATION_PROMPT_TEXT_VERSIONS, currentImplementationFiles,
+    implementationSha256, processOne, runWorkers, assertSourceContinuity,
     runConferenceProcessLocked, runConferenceProcess, safeProcessDirectory, exactFile };

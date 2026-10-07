@@ -25,6 +25,8 @@ const { isSuccessfulAnalysisRecord } = require('../../scripts/analysis-engine.js
 const {
     buildManualRecord,
     buildStagePromptBindings,
+    buildLegacyStagePromptBindings,
+    specPromptTextVersion,
     conciseManualImageCaption,
     finalizeManualAnalysisBatchState,
     getManualAnalysisReuseHash,
@@ -483,6 +485,46 @@ describe('manual_complete v3 深度分析约定', () => {
         assert.throws(
             () => resolveManualSpecPromptBindings(incomplete, current),
             /stagePromptSha256 中完整记录所有阶段，不能缺少或多出阶段/
+        );
+    });
+
+    it('改动前写下的 v4/v5 配置按冻结的 v1 正文复算，新配置绑定当前 v2 正文', () => {
+        const current = buildStagePromptBindings();
+        const legacy = buildLegacyStagePromptBindings();
+        const authoringSha = directSha(fs.readFileSync(
+            path.join(__dirname, '..', 'prompts', 'manual-analysis-record.md')
+        ));
+        const specFor = bindings => ({
+            version: 5,
+            promptSha256: bindings.primaryAnalysis.sha256,
+            manualAuthoringPromptPath: 'manual/prompts/manual-analysis-record.md',
+            manualAuthoringPromptSha256: authoringSha,
+            stagePromptSha256: Object.fromEntries(
+                REQUIRED_RECOVERY_STAGES.map(stage => [stage, bindings[stage].sha256])
+            )
+        });
+        const currentSpec = specFor(current);
+        const legacySpec = specFor(legacy);
+        assert.equal(specPromptTextVersion(currentSpec, current, legacy), 'current');
+        assert.equal(specPromptTextVersion(legacySpec, current, legacy), 'v1');
+        // 缺 stagePromptSha256 字段的旧记录按 v1 处理。
+        const withoutStages = { ...currentSpec };
+        delete withoutStages.stagePromptSha256;
+        assert.equal(specPromptTextVersion(withoutStages, current, legacy), 'v1');
+        const replayCurrent = resolveManualSpecPromptBindings(currentSpec, current, legacy);
+        assert.equal(replayCurrent.openSourceScan.sha256, current.openSourceScan.sha256);
+        assert.equal(replayCurrent.openSourceScan.source, 'prompts/opensource-scan-v2.md');
+        const replayLegacy = resolveManualSpecPromptBindings(legacySpec, current, legacy);
+        assert.equal(replayLegacy.openSourceScan.sha256, legacy.openSourceScan.sha256);
+        assert.equal(replayLegacy.openSourceScan.source, 'prompts/opensource-scan.md');
+        // 混用两版的配置哪一版都比不中，按 v1 处理并由逐阶段检查拒绝。
+        const mixed = { ...currentSpec, stagePromptSha256: {
+            ...currentSpec.stagePromptSha256, openSourceScan: legacy.openSourceScan.sha256
+        } };
+        assert.equal(specPromptTextVersion(mixed, current, legacy), 'v1');
+        assert.throws(
+            () => resolveManualSpecPromptBindings(mixed, current, legacy),
+            /阶段的提示文件或阶段规则 SHA 与当前值不一致/
         );
     });
 
