@@ -39,6 +39,10 @@ const {
     backupPapersJson
 } = require('./digest-status.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const {
+    LLM_FILTER_PROMPT_PATH,
+    FROZEN_LLM_FILTER_PROMPT_PATH
+} = require('./lib/prompt-text-versions.js');
 
 const Config = require('./config.js');
 
@@ -111,11 +115,29 @@ function shouldUsePaperForFetchDedup(paper) {
     return status !== 'pending_analysis' && status !== 'analysis_failed';
 }
 
-function getFilterPromptHash() {
-    const prompt = loadPrompt('prompts/filter.md', {
+// 日更路径用 __TITLE__ 这类哨兵渲染首块再取前 16 位。哨兵值不同，算出的哈希和会议路径
+// 不是一回事，两边不能互相套用。
+function filterPromptHashForPath(promptPath) {
+    const prompt = loadPrompt(promptPath, {
         title: '__TITLE__', abstract: '__ABSTRACT__', categories: '__CATEGORIES__'
     });
     return crypto.createHash('sha256').update(prompt).digest('hex').slice(0, 16);
+}
+
+function getFilterPromptHash() {
+    return filterPromptHashForPath(LLM_FILTER_PROMPT_PATH);
+}
+
+// 换提示词版本之前写下的当日筛选产物，prompt 哈希和配置指纹都按 v1 正文算。两条旧值
+// 留在这里，当天中断的续跑就不用把已经判过的论文重新请求一遍。配置指纹里含 prompt 哈希，
+// 所以只认旧 prompt 哈希不够——旧配置指纹也得一起算出来。
+function legacyFilterPromptHash() {
+    return filterPromptHashForPath(FROZEN_LLM_FILTER_PROMPT_PATH);
+}
+
+function filterFingerprintMatches(actual, expected) {
+    if (expected === undefined) return true;
+    return Array.isArray(expected) ? expected.includes(actual) : actual === expected;
 }
 
 function getFilterConfigFingerprint(filterPromptHash = getFilterPromptHash()) {
@@ -344,12 +366,12 @@ function loadReusableFilterDecisions(today, filterModel, filterPromptHash, expec
     if (!fs.existsSync(FILTER_DECISIONS_FILE)) return {};
     const data = readJsonSafe(FILTER_DECISIONS_FILE);
     if (!data || getRecordDate(data) !== today) return {};
-    if (data.filterModel !== filterModel || data.filterPromptHash !== filterPromptHash) {
+    if (data.filterModel !== filterModel || !filterFingerprintMatches(data.filterPromptHash, filterPromptHash)) {
         console.log('  [filter] 已有筛选决策与当前模型/prompt 不一致，忽略旧缓存');
         return {};
     }
     for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint', 'filterConfigFingerprint']) {
-        if (expected[key] !== undefined && data[key] !== expected[key]) return {};
+        if (!filterFingerprintMatches(data[key], expected[key])) return {};
     }
     if (!data.decisions || typeof data.decisions !== 'object') return {};
     return Object.fromEntries(Object.entries(data.decisions).filter(([, decision]) => isDefinitiveFilterDecision(decision)));
@@ -382,16 +404,18 @@ function loadResumableFilterForToday(today, expected = {}, files = {}) {
         || rawCandidates.fetchSourcesSha256 !== checkpoint.fetchSourcesSha256) return null;
     const decisionsMatch = decisionsData
         && decisionsData.filterModel === expected.filterModel
-        && decisionsData.filterPromptHash === expected.filterPromptHash
+        && filterFingerprintMatches(decisionsData.filterPromptHash, expected.filterPromptHash)
         && decisionsData.candidateFingerprint === rawCandidates.candidateFingerprint
         && decisionsData.sourceConfigFingerprint === rawCandidates.sourceConfigFingerprint
         && decisionsData.blogDedupFingerprint === rawCandidates.blogDedupFingerprint
-        && decisionsData.filterConfigFingerprint === expected.filterConfigFingerprint
+        && filterFingerprintMatches(decisionsData.filterConfigFingerprint, expected.filterConfigFingerprint)
         && decisionsData.rawPapersSha256 === rawCandidates.rawPapersSha256
         && decisionsData.fetchSourcesSha256 === rawCandidates.fetchSourcesSha256
         && decisionsData.decisions && typeof decisionsData.decisions === 'object';
     if (!decisionsMatch) {
-        decisionsData = { decisions: {}, filterModel: expected.filterModel, filterPromptHash: expected.filterPromptHash };
+        decisionsData = { decisions: {}, filterModel: expected.filterModel,
+            filterPromptHash: Array.isArray(expected.filterPromptHash)
+                ? expected.filterPromptHash[0] : expected.filterPromptHash };
     }
 
     const coverage = validateFilterDecisionCoverage(rawCandidates.papers, decisionsData.decisions);
@@ -402,9 +426,9 @@ function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE, expected 
     const data = loadTodayJsonFile(filePath, today);
     if (!data || data.status !== 'complete' || !Array.isArray(data.papers)) return null;
     if (expected.filterModel !== undefined && data.filterModel !== expected.filterModel) return null;
-    if (expected.filterPromptHash !== undefined && data.filterPromptHash !== expected.filterPromptHash) return null;
+    if (!filterFingerprintMatches(data.filterPromptHash, expected.filterPromptHash)) return null;
     for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint', 'filterConfigFingerprint']) {
-        if (expected[key] !== undefined && data[key] !== expected[key]) return null;
+        if (!filterFingerprintMatches(data[key], expected[key])) return null;
     }
     if (expected.requireConsistentFilterArtifacts && !hasConsistentFilterArtifacts(today, data)) {
         console.log('  [filter] 今日筛选产物与逐篇决策缓存不一致，忽略 complete 缓存并重新筛选');
@@ -1205,18 +1229,24 @@ async function runFullFetch() {
     const filterModel = process.env.PAPER_ANALYZER_MODEL || '';
     const filterPromptHash = getFilterPromptHash();
     const filterConfigFingerprint = getFilterConfigFingerprint(filterPromptHash);
+    // 读取旧产物时同时认当前版本和 v1 的值；写入仍然只写当前值。
+    const legacyPromptHash = legacyFilterPromptHash();
+    const acceptedFilterPromptHashes = [filterPromptHash, legacyPromptHash];
+    const acceptedFilterConfigFingerprints = [
+        filterConfigFingerprint, getFilterConfigFingerprint(legacyPromptHash)
+    ];
 
     const completedFiltered = loadCompleteFilteredForToday(today, FILTERED_FILE, {
         filterModel,
-        filterPromptHash,
-        filterConfigFingerprint,
+        filterPromptHash: acceptedFilterPromptHashes,
+        filterConfigFingerprint: acceptedFilterConfigFingerprints,
         ...candidateFingerprints,
         requireConsistentFilterArtifacts: true
     });
     const resumableFilter = completedFiltered ? null : loadResumableFilterForToday(today, {
         filterModel,
-        filterPromptHash,
-        filterConfigFingerprint,
+        filterPromptHash: acceptedFilterPromptHashes,
+        filterConfigFingerprint: acceptedFilterConfigFingerprints,
         ...candidateFingerprints
     });
     if (completedFiltered) {
@@ -1232,8 +1262,8 @@ async function runFullFetch() {
             ? rawCandidates.papers
             : (databaseTodayPapers.length >= filteredNew.length ? databaseTodayPapers : filteredNew);
         allPapersFiltered = allPapers.filter(paper => !publishedIds.has(normalizedId(paper)));
-        const existingDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash, {
-            ...candidateFingerprints, filterConfigFingerprint
+        const existingDecisions = loadReusableFilterDecisions(today, filterModel, acceptedFilterPromptHashes, {
+            ...candidateFingerprints, filterConfigFingerprint: acceptedFilterConfigFingerprints
         });
         filterDecisions = existingDecisions;
         const stats = completedFiltered.stats || rawCandidates?.stats || {};
@@ -1556,8 +1586,8 @@ async function runFullFetch() {
 
         // ========== 第四步：大模型筛选 ==========
         console.log('\n🤖 第四步：大模型筛选（判断是否语音/音频相关）');
-        filterDecisions = loadReusableFilterDecisions(today, filterModel, filterPromptHash, {
-            ...candidateFingerprints, filterConfigFingerprint
+        filterDecisions = loadReusableFilterDecisions(today, filterModel, acceptedFilterPromptHashes, {
+            ...candidateFingerprints, filterConfigFingerprint: acceptedFilterConfigFingerprints
         });
         baseFilterStats = {
             ...candidateFingerprints,
@@ -1955,6 +1985,7 @@ module.exports = {
     shouldUsePaperForFetchDedup,
     markPaperDigestStatus,
     getFilterPromptHash,
+    legacyFilterPromptHash,
     getFilterConfigFingerprint,
     stableHash,
     stableContentSha256,

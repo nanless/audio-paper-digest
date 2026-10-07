@@ -16,6 +16,7 @@ loadEnvFile();
 
 const { filterPapersWithLLM } = require('./fetch-papers.js');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
+const { LLM_FILTER_PROMPT_PATH } = require('./lib/prompt-text-versions.js');
 const {
     analyzeBatch,
     readJsonFileStrict,
@@ -32,7 +33,7 @@ const Config = require('./config.js');
 function getRefilterFilterFingerprint() {
     const endpoint = process.env.PAPER_ANALYZER_ENDPOINT || '';
     const model = process.env.PAPER_ANALYZER_MODEL || '';
-    const prompt = loadPrompt('prompts/filter.md', {
+    const prompt = loadPrompt(LLM_FILTER_PROMPT_PATH, {
         title: '__TITLE__',
         abstract: '__ABSTRACT__',
         categories: '__CATEGORIES__'

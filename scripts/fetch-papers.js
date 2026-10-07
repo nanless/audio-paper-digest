@@ -42,6 +42,7 @@ const {
 const Config = require('./config.js');
 const { createHostTaskScheduler } = require('./lib/fetch-scheduler.js');
 const { resolvePrimaryApiKeyPool } = require('./llm-account-pool.js');
+const { LLM_FILTER_PROMPT_PATH } = require('./lib/prompt-text-versions.js');
 
 loadEnvFile();
 
@@ -1708,7 +1709,7 @@ function getCaseInsensitiveField(obj, names) {
 async function getSpeechAudioDecision(paper, options = {}) {
     const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
     const circuitBreaker = options.circuitBreaker || createFilterCircuitBreaker(options.circuitBreakerOptions);
-    const prompt = loadPrompt('prompts/filter.md', {
+    const prompt = loadPrompt(LLM_FILTER_PROMPT_PATH, {
         title: paper.title,
         abstract: paper.abstract || paper.summary || '',
         categories: paper.categories || paper.category || ''

@@ -224,9 +224,15 @@ test('核心音频会议按放行处理，宽泛会议仍保留确定性拒绝',
 
 test('会议筛选使用日更提示块和日更结构化决定解析器', () => {
     assert.match(filter.LLM_FILTER_PROMPT, /语音、音频或音乐处理/);
-    assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter.md', {
+    assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter-v2.md', {
         title: '{title}', abstract: '{abstract}', categories: '{categories}'
     }));
+    // v1 正文永久冻结，旧 spec 的 promptSha256 靠白名单继续通过。
+    assert.ok(filter.LEGACY_LLM_FILTER_PROMPT_SHA256_LIST.includes(
+        require('node:crypto').createHash('sha256').update(require('../scripts/utils.js').loadPrompt(
+            'prompts/filter.md', { title: '{title}', abstract: '{abstract}', categories: '{categories}' }
+        )).digest('hex')));
+    assert.ok(filter.ACCEPTED_LLM_FILTER_PROMPT_SHA256.has(filter.LLM_FILTER_PROMPT_SHA256));
     assert.deepEqual(filter.parseLlmDecisionText('理由：音频是核心输入。\n结论：相关'),
         { status: 'included', reason: '音频是核心输入。', parseSource: 'conclusion_line' });
 });

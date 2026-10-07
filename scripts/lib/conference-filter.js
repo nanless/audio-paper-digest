@@ -14,6 +14,10 @@ const paperIdentity = require('./paper-identity.js');
 const keywordPrefilter = require('./keyword-prefilter.js');
 const Config = require('../config.js');
 const utilsApi = require('../utils.js');
+const {
+    LLM_FILTER_PROMPT_PATH,
+    FROZEN_LLM_FILTER_PROMPT_PATH
+} = require('./prompt-text-versions.js');
 const fixedRequestLlmJson = utilsApi.requestLlmJson;
 
 const VERSION = 6;
@@ -63,7 +67,7 @@ const LOCK_HANDLES = new WeakSet();
 const LOCK_HANDLE_DATA = new WeakMap();
 // 会议路径有意使用日更 digest 消费的同一个首个围栏块。占位符放在这里，
 // 它的 SHA 就不依赖某一篇具体论文，而每次持久请求仍保留渲染后的文本。
-const LLM_FILTER_PROMPT = utilsApi.loadPrompt('prompts/filter.md', {
+const LLM_FILTER_PROMPT = utilsApi.loadPrompt(LLM_FILTER_PROMPT_PATH, {
     title: '{title}', abstract: '{abstract}', categories: '{categories}'
 });
 const DAILY_DECISION_PARSER_VERSION = 'filter-decision-contract-v3';
@@ -127,6 +131,14 @@ const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
     '11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275'
 ]);
 const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGACY_FILTER_POLICY_SHA256_LIST]);
+// 筛选提示词的兼容窗口。会议路径按「渲染占位符之后的首块」算 SHA，改一个字就会让
+// 旧 spec 的 promptSha256 对不上，所以提示词换版本时必须先在这里登记旧值。
+// '4489809518…' = prompts/filter.md（v1）按 {title}/{abstract}/{categories} 渲染后的首块。
+// 日更路径用 __TITLE__ 哨兵渲染，算出的值不同，不在这张表里。
+const LEGACY_LLM_FILTER_PROMPT_SHA256_LIST = Object.freeze([
+    '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661'
+]);
+const ACCEPTED_LLM_FILTER_PROMPT_SHA256 = new Set([LLM_FILTER_PROMPT_SHA256, ...LEGACY_LLM_FILTER_PROMPT_SHA256_LIST]);
 const FILTER_CONFIG_SHA256 = stableHash(FILTER_CONFIG_BINDING);
 function stableJson(value) {
     const normalize = item => Array.isArray(item) ? item.map(normalize)
@@ -137,6 +149,7 @@ function stableJson(value) {
 }
 function stableHash(value) { return sha256(stableJson(value)); }
 function isAcceptedFilterPolicySha256(value) { return ACCEPTED_FILTER_POLICY_SHA256.has(value); }
+function isAcceptedFilterPromptSha256(value) { return ACCEPTED_LLM_FILTER_PROMPT_SHA256.has(value); }
 function assertSha(value, label) {
     if (typeof value !== 'string' || !SHA_RE.test(value)) fail(`${label} must be a lowercase SHA-256`);
     return value;
@@ -1385,7 +1398,19 @@ function promptFields(envelope) {
 }
 
 function renderDailyFilterPrompt(envelope) {
-    return utilsApi.loadPrompt('prompts/filter.md', promptFields(envelope));
+    return utilsApi.loadPrompt(LLM_FILTER_PROMPT_PATH, promptFields(envelope));
+}
+
+// 换提示词版本之前写下的持久意图里，请求正文是 v1 渲染出来的。恢复时必须能按当时那份
+// 正文重算，否则中断的会议筛选会被判成「请求漂移」而卡死。所以校验请求绑定时接受当前
+// 版本和 v1 两种渲染结果：两者都只是同一份 envelope 的确定性渲染，区别仅在提示词正文。
+function renderFrozenDailyFilterPrompt(envelope) {
+    return utilsApi.loadPrompt(FROZEN_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
+}
+
+function dailyFilterPromptMatches(prompt, envelope) {
+    return prompt === renderDailyFilterPrompt(envelope)
+        || prompt === renderFrozenDailyFilterPrompt(envelope);
 }
 
 function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus = 'ready') {
@@ -1645,7 +1670,7 @@ function assertRequestBinding(request, { state, paperId, discoveryHandle, eviden
     assertRequestFormatForState(state, preservedEnvelope);
     assertRequestFormatForState(state, expected);
     if (stableHash(preservedEnvelope) !== stableHash(expected)
-        || parsed.prompt !== renderDailyFilterPrompt(preservedEnvelope)) {
+        || !dailyFilterPromptMatches(parsed.prompt, preservedEnvelope)) {
         fail('preserved LLM request does not bind current source metadata, filter input, and rendered daily prompt');
     }
     return parsed;
@@ -1679,7 +1704,8 @@ function normalizeLlmIntent(value) {
     }
     const request = normalizeByteRecord(value.request, 'LLM intent request');
     const parsedRequest = parseLlmRequestBody(Buffer.from(request.data, 'base64'), envelope.filter.endpointProtocol);
-    if (parsedRequest.body.model !== envelope.filter.model || parsedRequest.prompt !== renderDailyFilterPrompt(envelope)) {
+    if (parsedRequest.body.model !== envelope.filter.model
+        || !dailyFilterPromptMatches(parsedRequest.prompt, envelope)) {
         fail('LLM intent request is not the single-user daily filter prompt bound by its envelope');
     }
     timestamp(value.createdAt, 'LLM intent createdAt');
@@ -1920,7 +1946,7 @@ function normalizeProductionLlmConfig(value) {
 
 function assertProductionRunnerBinding(state, normalizedSpec, config) {
     if (!isAcceptedFilterPolicySha256(normalizedSpec.filterPolicySha256)
-        || normalizedSpec.promptSha256 !== LLM_FILTER_PROMPT_SHA256) {
+        || !isAcceptedFilterPromptSha256(normalizedSpec.promptSha256)) {
         fail('filter spec does not bind built-in production policy and prompt');
     }
     const protocol = config.apiType === 'openai_responses' ? 'openai-responses'
@@ -2140,7 +2166,7 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
         let state = assertBoundInputs(readFilter({ filterRoot, filterId }),
             { catalog, spec: normalizedSpec, evidenceBinding });
         if (!isAcceptedFilterPolicySha256(normalizedSpec.filterPolicySha256)
-            || normalizedSpec.promptSha256 !== LLM_FILTER_PROMPT_SHA256) fail('filter spec does not bind built-in production policy and prompt');
+            || !isAcceptedFilterPromptSha256(normalizedSpec.promptSha256)) fail('filter spec does not bind built-in production policy and prompt');
         const protocol = config.apiType === 'openai_responses' ? 'openai-responses'
             : config.apiType === 'anthropic' ? 'anthropic-messages' : 'openai-chat';
         const endpointSha = endpointIdentitySha256(config.endpoint, config.model);
@@ -2216,6 +2242,7 @@ module.exports = {
     LLM_TRANSPORT_RECEIPT_CONTRACT, LOCK_OWNER_CONTRACT, LOCK_STALE_MS,
     LLM_FILTER_POLICY, LLM_FILTER_PROMPT,
     LLM_FILTER_POLICY_SHA256, LLM_FILTER_PROMPT_SHA256, FILTER_CONFIG_BINDING, FILTER_CONFIG_SHA256,
+    LEGACY_LLM_FILTER_PROMPT_SHA256_LIST, ACCEPTED_LLM_FILTER_PROMPT_SHA256,
     DAILY_DECISION_PARSER_VERSION, CORE_CONFERENCE_FALLBACK_VERSION, CORE_AUDIO_CONFERENCE_IDS,
     CORE_AUDIO_CONFERENCE_LABELS,
     MAX_DECISION_PAYLOAD_BYTES, MAX_LLM_REQUEST_BYTES,
@@ -2226,7 +2253,7 @@ module.exports = {
     assertFilterState, assertBoundInputs, safeDirectory, filterDirectory, safeDirectJson, prepareFilter, readFilter,
     writeDecisionArtifact, loadDecisionHandle, decisionHandleSnapshot, applyDecision, applyDecisionFile,
     selectionReceiptFor, normalizeSelectionReceipt, readSelectionReceipt, loadSelectionHandle, selectionHandleSnapshot,
-    parseLlmDecisionText, renderDailyFilterPrompt, conferencePromptCategories, evaluateConferenceKeywordPrefilter,
+    parseLlmDecisionText, renderDailyFilterPrompt, renderFrozenDailyFilterPrompt, conferencePromptCategories, evaluateConferenceKeywordPrefilter,
     requestEnvelope, cumulativeUsage, endpointIdentitySha256,
     buildProductionSpec, writeFilterSpec,
     normalizeLlmIntent, normalizeTransportReceipt, advanceProductionLlmDecision,

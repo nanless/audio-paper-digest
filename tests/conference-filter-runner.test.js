@@ -384,6 +384,75 @@ test('端点和请求漂移会在第二次传输之前就失败', async t => {
     assert.equal(service.calls.length, 1);
 });
 
+test('换提示词版本后，按 v1 prompt SHA 准备的旧 spec 仍然可用', async t => {
+    const service = await serverFixture(t);
+    const f = fixture(t, service.endpoint);
+    const legacyFilterId = '33333333-3333-4333-8333-333333333333';
+    const legacyPromptSha256 = filter.LEGACY_LLM_FILTER_PROMPT_SHA256_LIST[0];
+    const legacySpec = { ...f.spec, promptSha256: legacyPromptSha256 };
+    fs.writeFileSync(path.join(f.dirs.specs, 'spec-legacy.json'), `${JSON.stringify(legacySpec)}\n`, { mode: 0o600 });
+    filter.prepareFilter({ filterRoot: f.dirs.filters, discoveryHandle: f.discoveryHandle,
+        evidenceHandle: f.evidenceHandle, spec: legacySpec, filterId: legacyFilterId, now: stamp });
+    const legacyArgs = args(['--limit', '1']).map(value => value === filterId ? legacyFilterId
+        : value === 'spec.json' ? 'spec-legacy.json' : value);
+    const result = await runner.main(legacyArgs, { files: f.files, env: f.env });
+    assert.equal(result.processed[0].status, 'included');
+    assert.equal(service.calls.length, 1);
+    // 新请求必须用 v2 正文：只有 v2 写「则要结合标题和摘要判断」，v1 写「则须结合标题与摘要判断」。
+    assert.match(service.calls[0].body.messages[0].content, /则要结合标题和摘要判断/);
+    assert.doesNotMatch(service.calls[0].body.messages[0].content, /则须结合标题与摘要判断/);
+});
+
+test('没有登记的 prompt SHA 仍在传输之前被拒绝', async t => {
+    const service = await serverFixture(t);
+    const f = fixture(t, service.endpoint);
+    const bogusFilterId = '44444444-4444-4444-8444-444444444444';
+    const bogusSpec = { ...f.spec, promptSha256: '0'.repeat(64) };
+    fs.writeFileSync(path.join(f.dirs.specs, 'spec-bogus.json'), `${JSON.stringify(bogusSpec)}\n`, { mode: 0o600 });
+    filter.prepareFilter({ filterRoot: f.dirs.filters, discoveryHandle: f.discoveryHandle,
+        evidenceHandle: f.evidenceHandle, spec: bogusSpec, filterId: bogusFilterId, now: stamp });
+    const bogusArgs = args(['--limit', '1']).map(value => value === filterId ? bogusFilterId
+        : value === 'spec.json' ? 'spec-bogus.json' : value);
+    await assert.rejects(() => runner.main(bogusArgs, { files: f.files, env: f.env }),
+        /does not bind built-in production policy and prompt/);
+    assert.equal(service.calls.length, 0);
+});
+
+test('换提示词版本后，v1 正文写下的持久意图仍能恢复', async t => {
+    const service = await serverFixture(t);
+    const f = fixture(t, service.endpoint);
+    const original = fs.openSync; let injected = false;
+    fs.openSync = function (filename, ...rest) {
+        if (!injected && String(filename).includes('/decisions/llm-')) {
+            injected = true; const error = new Error('EIO'); error.code = 'EIO'; throw error;
+        }
+        return original.call(this, filename, ...rest);
+    };
+    try { await assert.rejects(() => runner.main(args(['--limit', '1']), { files: f.files, env: f.env }), /EIO/); }
+    finally { fs.openSync = original; }
+    const intentFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-intents'));
+    const intent = JSON.parse(fs.readFileSync(intentFile));
+    const request = JSON.parse(Buffer.from(intent.request.data, 'base64'));
+    const envelope = JSON.parse(Buffer.from(intent.envelope.data, 'base64'));
+    // 把持久意图里的请求正文换回 v1 渲染结果，模拟升级之前中断的那次运行。
+    request.messages[0].content = filter.renderFrozenDailyFilterPrompt(envelope);
+    const requestBytes = Buffer.from(JSON.stringify(request));
+    intent.request = { encoding: 'base64', size: requestBytes.length,
+        sha256: sha(requestBytes), data: requestBytes.toString('base64') };
+    const intentBody = { ...intent }; delete intentBody.intentSha256;
+    intent.intentSha256 = filter.stableHash(intentBody);
+    fs.writeFileSync(intentFile, `${JSON.stringify(intent, null, 2)}\n`);
+    // 已落盘的传输凭证绑定旧的 intent SHA，跟着一起改，否则恢复会先卡在凭证校验上。
+    const receiptFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-responses'));
+    const receipt = JSON.parse(fs.readFileSync(receiptFile));
+    receipt.intentSha256 = intent.intentSha256;
+    const receiptBody = { ...receipt }; delete receiptBody.transportReceiptSha256;
+    receipt.transportReceiptSha256 = filter.stableHash(receiptBody);
+    fs.writeFileSync(receiptFile, `${JSON.stringify(receipt, null, 2)}\n`);
+    const result = await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
+    assert.equal(result.processed[0].status, 'included');
+});
+
 test('锁回收对存活持有者一律拒绝，对已死且过期的持有者则安全回收', async t => {
     const service = await serverFixture(t); const f = fixture(t, service.endpoint);
     const directory = path.join(f.dirs.filters, filterId); const lock = path.join(directory, 'operation.lock');
