@@ -56,8 +56,8 @@ test('显式 Manual 边界只声明生产 records v4/spec v6，不伪装自动 s
     assert.match(source, /data\/current\/manual-v6\/\$\{target_date\}/);
     assert.match(source, /records-v4\.json/);
     assert.match(source, /生产 spec v6\/canonical/);
-    assert.match(source, /不会创建 subagent、物化 role packet 或组装 records envelope/);
-    assert.match(source, /逐篇创建 Terra-high leaf subagent/);
+    assert.match(source, /不会创建 subagent、生成 role packet，也不会组装 records-v4\.json/);
+    assert.match(source, /逐篇创建 Terra-high 单篇子代理/);
     assert.doesNotMatch(source, /每篇由独立 paper subagent 写 records v3/);
     assert.doesNotMatch(source, /manual-v6-shadow\/\$\{target_date\}/);
 });
@@ -148,7 +148,7 @@ test('tasks 续跑只初始化并展示持久 runner，然后在真实 subagent 
     const commands = fs.readFileSync(logPath, 'utf8');
     assert.match(commands, /npm run manual:tasks -- init --date 2026-07-13/);
     assert.match(commands, /npm run manual:tasks -- status --date 2026-07-13/);
-    assert.match(result.stdout, /不会创建 subagent、物化 packet 或组装 records-v4\.json/);
+    assert.match(result.stdout, /不会创建 subagent、生成 packet，也不会组装 records-v4\.json/);
     assert.doesNotMatch(commands, /manual:spec|manual:analyze|generate-blog/);
     fs.rmSync(dir, { recursive: true, force: true });
 });

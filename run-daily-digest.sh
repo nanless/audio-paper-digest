@@ -1,7 +1,7 @@
 #!/bin/bash
-# Codex 默认“某日论文速递”编排入口。默认使用 LLM/API；Manual v6 须显式 --manual。
+# Codex 默认“某日论文速递”的入口脚本。默认使用 LLM/API；Manual v6 须显式 --manual。
 #
-# 本脚本负责所有可由项目脚本确定性执行的阶段：
+# 本脚本负责项目脚本能自动跑完的所有阶段：
 # 抓取/筛选/深度分析 → 博客生成 → review → push → 发布后视觉任务规划与参考图准备。
 # 最后的论文长图与汇总封面必须由 Codex 内置 image_gen 生成，项目脚本不得调用图像 API。
 
@@ -159,9 +159,9 @@ if [ "$start_index" -eq 1 ] && [ "$api_mode" -ne 1 ]; then
   echo "    npm run manual:tasks -- init --date ${target_date}"
   echo "    npm run manual:packet -- --date ${target_date} --paper ARXIV_ID --role author"
   echo "    npm run manual:tasks -- status --date ${target_date}"
-  echo "==> task runner 只持久化、claim 和校验真实任务；不会创建 subagent、物化 role packet 或组装 records envelope。"
-  echo "==> 主 Agent 必须逐篇创建 Terra-high leaf subagent；四类任务全部 validated 后运行 manual:records 确定性密封 records v4。"
-  echo "==> 全部任务 validated 且 records envelope 就绪后，用 --from spec 续跑生产 spec v6/canonical。"
+  echo "==> task runner 只持久化、claim 和校验真实任务；不会创建 subagent、生成 role packet，也不会组装 records-v4.json。"
+  echo "==> 主 Agent 必须逐篇创建 Terra-high 单篇子代理；四类任务全部 validated 后，由 manual:records 汇总生成 records v4。"
+  echo "==> 全部任务 validated 且 records-v4.json 就绪后，用 --from spec 续跑生产 spec v6/canonical。"
   exit 3
 fi
 
@@ -174,11 +174,11 @@ if [ "$api_mode" -ne 1 ]; then
     run_stage 2 "初始化生产 Manual v6 task runner" \
       npm run manual:tasks -- init --date "$target_date"
     npm run manual:tasks -- status --date "$target_date"
-    echo "==> task runner 已停在真实人工编排边界；它不会创建 subagent、物化 packet 或组装 records-v4.json。"
-    echo "==> 主 Agent 用 manual:packet 物化每个 role packet，并完成逐篇 register/claim/start/submit；随后用 --from spec 续跑。"
+    echo "==> task runner 已停在需要人工接手的边界；它不会创建 subagent、生成 packet，也不会组装 records-v4.json。"
+    echo "==> 主 Agent 用 manual:packet 生成每个 role packet，并完成逐篇 register/claim/start/submit；随后用 --from spec 续跑。"
     exit 3
   fi
-  run_stage 3 "确定性密封生产 Manual records v4" \
+  run_stage 3 "汇总生成生产 Manual records v4" \
     npm run manual:records -- --date "$target_date"
   run_stage 3 "组装生产 Manual spec v6" \
     npm run manual:spec -- --date "$target_date" --records "$records_v4"
@@ -191,8 +191,8 @@ if [ "$api_mode" -eq 1 ]; then
   run_stage 6 "LLM Review 博客" bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"
 elif [ "$start_index" -le 6 ]; then
   echo "==> Manual 默认链路已到逐页语义审查边界。"
-  echo "==> generation 中每个页面必须由主 Agent 直接调度独立 leaf review subagent，生成逐图 attestation v3（禁止 broker 占槽）。"
-  echo "==> 汇总 shard 后运行 blog:manual-attest 与 manual-review-blog.py，再用 --from push 续跑。"
+  echo "==> generation 中每个页面必须由主 Agent 直接调度独立的单页子代理，生成逐图 attestation v3（不允许中转代理占用并发槽）。"
+  echo "==> 逐页记录汇总后运行 blog:manual-attest 与 manual-review-blog.py，再用 --from push 续跑。"
   exit 3
 fi
 if [ "$start_index" -le 7 ]; then
