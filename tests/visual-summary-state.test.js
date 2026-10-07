@@ -607,7 +607,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('把校验通过的 .bin 缓存物化为内置生图可直接上传的规范扩展名', () => {
+    it('把校验通过的 .bin 缓存按规范扩展名写出，供内置生图直接上传', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-prepare-'));
         const current = path.join(dir, 'current');
         const output = path.join(current, 'visual-reference-inputs');

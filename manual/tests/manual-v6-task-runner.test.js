@@ -618,7 +618,7 @@ describe('Manual v6 持久任务执行器', () => {
         fs.rmSync(fx.root, { recursive: true, force: true });
     });
 
-    it('上游 review 显式 retry 必须清空下游 revision packet 并允许重新物化', () => {
+    it('上游 review 显式 retry 必须清空下游 revision packet 并允许重新生成', () => {
         const fx = fixture();
         const author = register(fx, '2608.12345', 'author');
         validateAuthor(fx);

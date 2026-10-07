@@ -196,7 +196,7 @@ describe('Manual v6 生产包生成器', () => {
         assert.throws(() => validateAuthorOwnedRecordDraft(complete), /manualAudit/);
     });
 
-    it('只物化 ArtifactIndex 授权、真实 MIME/SHA 且位于受控 cache 的图片', () => {
+    it('只写出 ArtifactIndex 授权、真实 MIME/SHA 且位于受控 cache 的图片', () => {
         const current = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-figures-'));
         const cache = path.join(current, 'image-cache');
         const paper = path.join(current, 'paper');
