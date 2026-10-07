@@ -31,7 +31,7 @@ PAPER_ANALYZER_API_KEY=your-key
 # Optional comma-separated fallback accounts for the same route
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
-PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
+PAPER_ANALYZER_MODEL=mimo-v2.6-flash
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
@@ -40,7 +40,7 @@ PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```
 
-The current example uses OpenCode Go `muse-spark-1.3-contributor` through OpenAI Responses, but the project configuration is what actually selects the model. Public endpoints require HTTPS. HTTP is allowed only for loopback test services.
+The current example uses OpenCode Go `mimo-v2.6-flash` through OpenAI Chat Completions, with the `/v1` endpoint used as-is; `muse-spark-*` models still use OpenAI Responses. The project configuration is what actually selects the model. Public endpoints require HTTPS. HTTP is allowed only for loopback test services.
 
 `PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` is used only by the historical ICLR 2026 source collector. It must point at retained local official accepted-paper metadata and PDFs. When unset, it defaults to `~/code/github_repos/iclr2026-paper-scraper`. It supplies no daily-fetch input, triggers no download, and is not an arXiv writing source.
 
@@ -64,10 +64,10 @@ Do not count on `.zshrc`, the IDE, Trae, or Codex to supply missing project valu
 
 | Traffic | Rule |
 |---|---|
-| Muse requests | Project HTTP CONNECT through `HTTPS_PROXY` or `HTTP_PROXY`; create a separate proxy connection object for each request and destroy it afterward |
+| Muse requests (`muse-spark-*`) | Project HTTP CONNECT through `HTTPS_PROXY` or `HTTP_PROXY`; create a separate proxy connection object for each request and destroy it afterward |
 | arXiv metadata, HTML, PDF, and images | Project HTTP CONNECT is required |
 | HuggingFace curl | Inherit HTTP(S) proxy settings; SOCKS `ALL_PROXY` is optional |
-| Other model providers | Connect directly with `agent:false` by default |
+| Other model providers | Connect directly with `agent:false` by default; the recommended `mimo-v2.6-flash` falls in this group |
 | External images and demos | HTTPS only; validate public IP addresses at every redirect |
 
 If a required proxy is missing, the request stops rather than silently connecting directly. All project scripts and tests must run outside the sandbox, including diagnostics that use a local proxy.
@@ -94,13 +94,13 @@ Historical rewriting saves the same four files for each arXiv source capture, us
 | `PD_API_READER_CONCURRENCY` | 5 in-process Reader generation tasks |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 independent page-review tasks |
 
-Muse filtering follows `PD_FILTER_BATCH_SIZE`, while whole-paper analysis follows `PD_ANALYSIS_CONCURRENCY`. Account-pool locks cover selection and state updates, never network requests. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`.
+Filtering follows `PD_FILTER_BATCH_SIZE`, while whole-paper analysis follows `PD_ANALYSIS_CONCURRENCY`. Account-pool locks cover selection and state updates, never network requests. Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`; `PD_OPENAI_RESPONSES_STREAM` and `PD_OPENAI_RESPONSES_REASONING_EFFORT` have no effect on the primary model's Chat Completions requests.
 
 A local Reader repair normally allows 8000 output tokens. If a repair truncates exactly at that limit and the candidate is still eligible for one more recovery attempt, the run saves the failed draft and stops. The next explicit resume can use a higher limit, up to 16000 tokens with the default configuration. That attempt is shared with implementation-upgrade recovery and cannot be stacked with it. Custom limits depend on the full-article and base-repair budgets, stay capped at 16000 and `PD_API_READER_MAX_TOKENS`, and do not authorize unlimited attempts. Any model content consumes the extra attempt. A transport failure with no content does not. Truncated JSON is never accepted as a valid candidate or used to bypass content checks.
 
 ## Optional Secondary Model
 
-Reader v3 sends safely prepared official figures directly to the primary model, so the model and the chosen protocol must support image inputs. The documented Muse example uses Responses. The shared request layer also supports Chat and Anthropic image formats. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy analysis image-supplement selection and insertion plan. It neither writes the primary prose nor scores the paper. An omitted secondary endpoint falls back to the primary endpoint, and a secondary key can be reused only for the same service.
+Reader v3 sends safely prepared official figures directly to the primary model, so the model and the chosen protocol must support image inputs. The documented `mimo-v2.6-flash` example uses Chat Completions, and `muse-spark-*` uses Responses. The shared request layer also supports Chat and Anthropic image formats. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy analysis image-supplement selection and insertion plan. It neither writes the primary prose nor scores the paper. An omitted secondary endpoint falls back to the primary endpoint, and a secondary key can be reused only for the same service.
 
 `PD_API_READER_CONCURRENCY` limits heavy Reader stages inside one process. The refresh command's `--concurrency N` limits how many papers are processed at once, and those papers may still wait for Reader capacity. The two limits are separate.
 

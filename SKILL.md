@@ -33,14 +33,14 @@ cp env.example .env
 
 先确认当前工作区用途，再运行 `npm run workspace:role -- status`。日更目录必须是 `daily`，全历史目录必须是 `history`。角色标记缺失或真实路径不符时先停止，确认用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定；不要无条件强制设置。
 
-在 `.env` 至少配置以下字段。仓库文档当前推荐模型为 `muse-spark-1.3-contributor`，实际模型由项目配置指定：
+在 `.env` 至少配置以下字段。仓库文档当前推荐模型为 `mimo-v2.6-flash`，实际模型由项目配置指定：
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=your-key
 # 可选；同一 OpenCode Go 路由的备用账号，逗号分隔
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
-PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
+PAPER_ANALYZER_MODEL=mimo-v2.6-flash
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
@@ -108,13 +108,13 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 | 优先条件 | 协议 | URL |
 |---|---|---|
 | DeepSeek 域名或模型 | OpenAI Chat | `/v1/chat/completions` |
-| Muse 模型或显式 `/responses` 端点 | OpenAI Responses | 完整端点原样使用；基础端点追加 `/responses` |
+| `muse-spark-*` 模型或显式 `/responses` 端点 | OpenAI Responses | 完整端点原样使用；基础端点追加 `/responses` |
 | `token-plan` + MiMo | Anthropic | `/anthropic/v1/messages` |
 | Kimi coding | Anthropic | `/coding/v1/messages` |
 | 其他 `/anthropic` | Anthropic | `{base}/messages` |
-| 其他 | OpenAI Chat | `/v1/chat/completions` |
+| 其他（含当前推荐的 `mimo-v2.6-flash`） | OpenAI Chat | `/v1/chat/completions` |
 
-所有 Node LLM 调用经 `requestLlmJson()`。Muse 每次请求都创建独立的 HTTP CONNECT 连接对象，结束后销毁；这里的 `agent` 指连接对象，并非分析子代理。其他模型默认以 `agent:false` 直连。Python 发布请求遵守同样的 Muse 代理规则。
+所有 Node LLM 调用经 `requestLlmJson()`。`muse-spark-*` 每次请求都创建独立的 HTTP CONNECT 连接对象，结束后销毁；这里的 `agent` 指连接对象，并非分析子代理。其他模型默认以 `agent:false` 直连，当前推荐的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，走直连。Python 发布请求遵守同样的 Muse 代理规则。
 
 配置 `PAPER_ANALYZER_FALLBACK_API_KEYS` 后启用 OpenCode Go 备用账号。初始使用主密钥；明确 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，记录账号冷却并按配置顺序向后切换，不返回前面已冷却的账号。普通认证 401 不切号，而是上报运行级错误；所有后续账号不可用时停止派发并保留断点。
 
@@ -140,7 +140,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 | `PD_API_READER_CONCURRENCY` | 5，限制 1–5 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5，限制 1–5 |
 
-Muse 筛选和整篇分析都按各自配置并发，每个请求有独立隧道；账号池状态更新仍通过短时间持锁串行完成。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时使用 SSE。返回 `incomplete/max_output_tokens` 时不得接受半截 JSON。
+筛选和整篇分析都按各自配置并发；`muse-spark-*` 每个请求有独立隧道，当前推荐的 `mimo-v2.6-flash` 直连。账号池状态更新仍通过短时间持锁串行完成。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时使用 SSE，Chat Completions 请求不受该变量影响。返回 `incomplete/max_output_tokens` 时不得接受半截 JSON。
 
 ## 5. 权威数据与恢复
 

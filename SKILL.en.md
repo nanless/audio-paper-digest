@@ -42,14 +42,14 @@ marker is missing or bound to another real path. Once you have confirmed the pur
 role with `npm run workspace:role -- set daily|history [--force]`; do not force a role change by default.
 
 Set at least these fields in the project `.env`. The current documented model recommendation is
-`muse-spark-1.3-contributor`; the project configuration is what selects the actual model:
+`mimo-v2.6-flash`; the project configuration is what selects the actual model:
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=your-key
 # Optional fallback accounts on the same OpenCode Go route, separated by commas
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
-PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
+PAPER_ANALYZER_MODEL=mimo-v2.6-flash
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
@@ -131,15 +131,16 @@ most 0.3. The audit proof must bind the adopted score and audit SHA and recomput
 | Priority condition | Protocol | URL |
 |---|---|---|
 | DeepSeek domain or model | OpenAI Chat | `/v1/chat/completions` |
-| Muse model or explicit `/responses` endpoint | OpenAI Responses | Use a complete endpoint unchanged; append `/responses` to a base endpoint |
+| `muse-spark-*` model or explicit `/responses` endpoint | OpenAI Responses | Use a complete endpoint unchanged; append `/responses` to a base endpoint |
 | `token-plan` + MiMo | Anthropic | `/anthropic/v1/messages` |
 | Kimi coding | Anthropic | `/coding/v1/messages` |
 | other `/anthropic` | Anthropic | `{base}/messages` |
-| other | OpenAI Chat | `/v1/chat/completions` |
+| other (including the recommended `mimo-v2.6-flash`) | OpenAI Chat | `/v1/chat/completions` |
 
-All Node LLM calls use `requestLlmJson()`. Muse creates a separate project HTTP CONNECT connection
-object for each request and destroys it afterward. Here, `agent` means an HTTP connection object,
-not an analysis subagent. Other providers use `agent:false` to connect directly. Python publishing
+All Node LLM calls use `requestLlmJson()`. `muse-spark-*` models create a separate project HTTP CONNECT
+connection object for each request and destroy it afterward. Here, `agent` means an HTTP connection
+object, not an analysis subagent. Other providers use `agent:false` to connect directly; the
+recommended `mimo-v2.6-flash` has no `muse-spark-` prefix, so it connects directly. Python publishing
 follows the same Muse proxy rule.
 
 OpenCode Go fallback accounts are enabled by `PAPER_ANALYZER_FALLBACK_API_KEYS`. Requests start on
@@ -166,7 +167,7 @@ arXiv metadata, HTML, PDF, and images require project HTTP CONNECT. HuggingFace 
 | Setting | Default |
 |---|---:|
 | analysis concurrency | 3 |
-| configured filter batch | 5; Muse uses the configured value |
+| configured filter batch | 5; the primary model uses the configured value |
 | whole-paper retries / per-stage attempts | 2 / 3 |
 | primary / analysis local-repair output | 64,000 / 16,000 tokens |
 | single analysis response | 16 MiB |
@@ -177,7 +178,7 @@ arXiv metadata, HTML, PDF, and images require project HTTP CONNECT. HuggingFace 
 | Reader heavy-stage concurrency | 5, bounded 1–5 |
 | independent blog-page review concurrency | 5, bounded 1–5 |
 
-OpenAI Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`. An `incomplete/max_output_tokens` response is a truncation failure, never successful JSON.
+OpenAI Responses uses SSE only when `PD_OPENAI_RESPONSES_STREAM=1`; Chat Completions requests ignore that variable. An `incomplete/max_output_tokens` response is a truncation failure, never successful JSON.
 
 ## 5. Authoritative State and Recovery
 
