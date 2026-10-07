@@ -7,7 +7,7 @@ pwd
 npm run workspace:role -- status
 ```
 
-本页处理一个既有批次。全历史重写使用[历史重写流程](history-rewrite.md)，不得把两套运行目录、计划或进度文件混用，也不能让旧 crosswalk 或试运行成为本地有效来源的前置条件。
+本页处理一个既有批次。全历史重写使用[历史重写流程](history-rewrite.md)，不得把两套运行目录、计划或进度文件混用，也不能让旧来源对照表（crosswalk）或试运行成为本地有效来源的前置条件。
 
 当前新运行保存本次从官方 arXiv 获取的四文件来源，使用 `sealed-arxiv-bundle-v1`；每篇位于本运行的 `sources/<id>/generation-000001/`，包含 `source.txt`、`source.pdf`、`source-runtime.json`、`source-manifest.json`。`generation` 是获取序号，不是论文的 `vN` 修订号。旧 `fresh-source-cache-v1` 仅用于既有运行的兼容读取，不能拿来替代新来源。
 

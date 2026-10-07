@@ -136,8 +136,8 @@
 | 来源与版本 | 启发及限制 |
 |---|---|
 | [IEEE SPS Unified EDICS，2026年4月批准](https://signalprocessingsociety.org/publications-resources/unified-edics) | 保留声学、环境声、音乐与语音的广度；不同学会代码不应制造重复任务 |
-| [DCASE 2026，目录更新2026-07-01](https://dcase.community/challenge2026/index) | 补足异常声音、联合定位检测、空间语义分割、音频问答与长音频片段检索；年度挑战不是学科全集 |
-| [ISMIR 2026 CFP](https://ismir2026.ismir.net/authors/call-for-papers) 及 [MIREX 2026任务目录](https://music-ir.org/mirex/wiki/MIREX_HOME) | 不让生成掩盖转录、对齐、节奏/和声、乐谱与音乐认知；目录不等于已完成的评测结果 |
+| [DCASE 2026，目录更新 2026-07-01](https://dcase.community/challenge2026/index) | 补足异常声音、联合定位检测、空间语义分割、音频问答与长音频片段检索；年度挑战不是学科全集 |
+| [ISMIR 2026 CFP](https://ismir2026.ismir.net/authors/call-for-papers) 及 [MIREX 2026 任务目录](https://music-ir.org/mirex/wiki/MIREX_HOME) | 不让生成掩盖转录、对齐、节奏/和声、乐谱与音乐认知；目录不等于已完成的评测结果 |
 | [ISCA Interspeech 2025 sessions](https://www.isca-archive.org/interspeech_2025/) | 补充语音科学与临床覆盖；未可靠取得 2026 完整投稿子领域表，不冒称当前年度标准 |
 | [Google AudioSet](https://research.google.com/audioset/) | 借鉴稳定 ID 和定义；它是声音事件本体，不把数百种声音直接变成研究任务标签 |
 

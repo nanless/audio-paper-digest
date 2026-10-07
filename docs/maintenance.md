@@ -93,7 +93,7 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ## 验证矩阵
 
-用户明确要求重写既有日批次、完全不使用旧生成正文时，使用 [fresh rewrite 分阶段流程](fresh-rewrite.md)。全历史使用 [direct-local-first 历史流程](history-rewrite.md)：会议核验本地元数据/PDF，arXiv 每次获取新的官方文本/PDF。备用 `history:arxiv-batch` 只接受命名、不可变的新 arXiv 获取失败交接文件；这不意味着其他旧状态维护（crosswalk）入口全部只读。普通 `reanalyze`、Reader refresh 或清除个别 analysis 字段不能提供这两种隔离保证。`rewrite:source` 的 `prepare` 和 `status` 都不调用模型，`sources` 与 `analyze` 必须显式执行；`promote` 只有在同一运行、同一来源的证据齐全，且按基线逐字节比较（CAS）通过后，才替换正式结果。
+用户明确要求重写既有日批次、完全不使用旧生成正文时，使用 [fresh rewrite 分阶段流程](fresh-rewrite.md)。全历史使用 [direct-local-first 历史流程](history-rewrite.md)：会议核验本地元数据/PDF，arXiv 每次获取新的官方文本/PDF。备用 `history:arxiv-batch` 只接受命名、不可变的新 arXiv 获取失败交接文件；这不意味着其他旧来源对照表（crosswalk）入口全部只读。普通 `reanalyze`、Reader refresh 或清除个别 analysis 字段不能提供这两种隔离保证。`rewrite:source` 的 `prepare` 和 `status` 都不调用模型，`sources` 与 `analyze` 必须显式执行；`promote` 只有在同一运行、同一来源的证据齐全，且按基线逐字节比较（CAS）通过后，才替换正式结果。
 
 ```bash
 npm run verify

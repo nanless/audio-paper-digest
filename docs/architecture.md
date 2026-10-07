@@ -112,5 +112,5 @@ Reader 的各协议分别检查不同对象：
 - OpenCode Go 只在明确 HTTP 429 `GoUsageLimitError` 或同一路由 HTTP 401 `Insufficient balance` 时向后切账号。普通认证 401 停止运行，普通 429、5xx 和网络故障不切号；成功账号持续使用，旧账号冷却到期不自动切回。附认证前核对实际 URL 与 endpoint/model 推导结果精确相同，不同服务不得共享主账号池。
 - 分析 SHA 核验字节一致性；来源检查核验表格、公式或声明是否取自论文；发布还须核对页面、凭证、Git 提交和远端状态。
 - 新来源获取序号须重新核验当前文件。历史页面仍可读取，但旧 Reader 版本号不能使它重新取得发布资格。
-- 历史 `direct-local-first` 独立准备来源、分析和私有页面，再通过 `history:direct-publication` 审查及发布。arXiv 每轮重新获取官方文本/PDF，会议核验保留的本地元数据/PDF。备用 `history:arxiv-batch` 只接命名的新 arXiv 获取失败交接文件；`history:crosswalk` 仍有受来源授权和 CAS 检查的显式旧状态维护，正常 direct 任务不依赖它。旧 `history:publication` 仍只生成私有文件，不具备该发布行为。
+- 历史 `direct-local-first` 独立准备来源、分析和私有页面，再通过 `history:direct-publication` 审查及发布。arXiv 每轮重新获取官方文本/PDF，会议核验保留的本地元数据/PDF。备用 `history:arxiv-batch` 只接命名的新 arXiv 获取失败交接文件；`history:crosswalk` 仍可显式维护旧来源对照表，并受来源授权和 CAS 检查；正常 direct 任务不依赖它。旧 `history:publication` 仍只生成私有文件，不具备该发布行为。
 - 视觉失败不撤销已核验博客。整批完成仍须数据、审查、远端、部署与网页检查全部通过，并完成图片或记录仅针对视觉的有效用户豁免。
