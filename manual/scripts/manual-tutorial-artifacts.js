@@ -425,6 +425,14 @@ for (const [base, prefix] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::
     PRIVATE_HOST_BLOCKS.addSubnet(base, prefix, 'ipv6');
 }
 
+// 公网 DNS 里查不到的域名后缀。home.arpa 由 RFC 8375 为家庭网络保留，
+// test / example / invalid 由 RFC 2606 保留且永不解析，internal 由 ICANN 在
+// 2024 年从根区永久保留给内部使用（2024.07.29.06 号决议）。
+// lan / corp / home 没有 RFC 或 ICANN 的正式保留，但三者从未委派过，corp 与 home
+// 还被 ICANN 挡在委派之外（2012 轮申请不予推进，2025 年 10 月再次确认），
+// 公网同样解析不到。它们只是事实标准，若哪天真的委派了，这几项必须删掉。
+const LOCAL_HOST_SUFFIXES = ['home.arpa', 'internal', 'test', 'example', 'invalid', 'lan', 'corp', 'home'];
+
 function isPrivateOrLocalHostname(hostname) {
     let host = String(hostname || '').toLowerCase();
     if (!host) return true;
@@ -436,7 +444,13 @@ function isPrivateOrLocalHostname(hostname) {
     if (zoneIndex !== -1) host = host.slice(0, zoneIndex);
     if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
     const family = net.isIP(host);
-    if (family === 0) return false;
+    if (family === 0) {
+        // 公网域名至少两段（顶级域加注册名）。没有点的主机名只能靠内网的
+        // search domain 或 hosts 解析，所以出现就是本地名字。
+        if (!host.includes('.')) return true;
+        // 后缀本身也算（home.arpa 是唯一多段的保留名，它的顶点不在单标签规则里）。
+        return LOCAL_HOST_SUFFIXES.some(suffix => host === suffix || host.endsWith(`.${suffix}`));
+    }
     if (PRIVATE_HOST_BLOCKS.check(host, family === 4 ? 'ipv4' : 'ipv6')) return true;
     // ::a.b.c.d 这种 IPv4 兼容地址（RFC 4291 已废弃）不是 ::ffff: 映射地址，
     // net.BlockList 不会把它当 IPv4 看，这里取出末尾 32 位再查一次。

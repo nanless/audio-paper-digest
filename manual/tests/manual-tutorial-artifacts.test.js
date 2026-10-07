@@ -107,14 +107,43 @@ describe('Manual 教程产物的汇总', () => {
     it('拒绝 IPv6 本地地址、CGNAT 与基准测试段，公网 IPv6 不受影响', () => {
         for (const url of [
             'https://[::1]/figure1.png', 'https://[fd00::1]/figure1.png', 'https://[fe80::1]/figure1.png',
-            'https://[::ffff:127.0.0.1]/figure1.png', 'https://100.64.1.1/figure1.png', 'https://198.18.1.1/figure1.png'
+            'https://[::ffff:127.0.0.1]/figure1.png', 'https://100.64.1.1/figure1.png', 'https://198.18.1.1/figure1.png',
+            'https://[::]/figure1.png', 'https://[fc00::1]/figure1.png', 'https://[fe80::abcd]/figure1.png',
+            'https://[::ffff:10.0.0.1]/figure1.png', 'https://[::ffff:192.168.1.1]/figure1.png',
+            'https://[::ffff:100.64.0.1]/figure1.png', 'https://[::7f00:1]/figure1.png', 'https://[::abcd]/figure1.png',
+            'https://localhost./figure1.png', 'https://foo.local./figure1.png'
         ]) {
             const decision = classifyFigureCandidate({ id: 'IMG0001', url, caption: '图 1', figureOrdinal: 1 });
             assert.equal(decision.eligible, false, url);
             assert.match(decision.reason, /不是可用的安全 HTTPS 公网地址/, url);
         }
         for (const url of [
-            'https://[2001:db8::1]/figure1.png', 'https://[2606:4700::1111]/figure1.png', 'https://8.8.8.8/figure1.png'
+            'https://[2001:db8::1]/figure1.png', 'https://[2606:4700::1111]/figure1.png', 'https://8.8.8.8/figure1.png',
+            'https://[::ffff:8.8.8.8]/figure1.png', 'https://100.63.255.255/figure1.png', 'https://198.20.0.1/figure1.png',
+            'https://172.32.0.1/figure1.png', 'https://172.15.255.255/figure1.png', 'https://223.255.255.255/figure1.png'
+        ]) {
+            const decision = classifyFigureCandidate({ id: 'IMG0001', url, caption: '图 1', figureOrdinal: 1 });
+            assert.equal(decision.eligible, true, url);
+        }
+    });
+
+    it('拒绝单标签主机名与本地保留后缀，公网域名不受影响', () => {
+        for (const url of [
+            'https://wiki/figure1.png', 'https://wiki./figure1.png',
+            'https://nas.home.arpa/figure1.png', 'https://home.arpa/figure1.png', 'https://wiki.internal/figure1.png',
+            'https://paper.test/figure1.png', 'https://host.example/figure1.png',
+            'https://stale.invalid/figure1.png', 'https://fileserver.lan/figure1.png',
+            'https://intranet.corp/figure1.png', 'https://srv.home/figure1.png'
+        ]) {
+            const decision = classifyFigureCandidate({ id: 'IMG0001', url, caption: '图 1', figureOrdinal: 1 });
+            assert.equal(decision.eligible, false, url);
+            assert.match(decision.reason, /不是可用的安全 HTTPS 公网地址/, url);
+        }
+        for (const url of [
+            'https://example.com/figure1.png', 'https://arxiv.org/figure1.png',
+            'https://huggingface.co/figure1.png', 'https://github.com/figure1.png',
+            'https://sub.example.com/figure1.png', 'https://[2001:db8::1]/figure1.png',
+            'https://8.8.8.8/figure1.png'
         ]) {
             const decision = classifyFigureCandidate({ id: 'IMG0001', url, caption: '图 1', figureOrdinal: 1 });
             assert.equal(decision.eligible, true, url);
