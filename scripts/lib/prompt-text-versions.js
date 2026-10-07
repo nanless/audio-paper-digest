@@ -58,6 +58,10 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     scoringAudit: Object.freeze({
         contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
         path: 'prompts/scoring-audit-v2.md'
+    }),
+    imageSupplement: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/image-supplement-v2.md'
     })
 });
 
@@ -65,6 +69,11 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
 const STAGE_BY_FROZEN_V1_PATH = Object.freeze(Object.fromEntries(
     Object.entries(FROZEN_V1_PROMPT_FILES).map(([stage, relativePath]) => [relativePath, stage])
 ));
+
+// 筛选提示词不进上面那张阶段表：它的身份是「渲染占位符之后的首块」，算法和阶段指纹
+// 那套不一样。所以单独给两条路径——v1 永久冻结，新请求读 v2，恢复旧记录时按 v1 重算。
+const LLM_FILTER_PROMPT_PATH = 'prompts/filter-v2.md';
+const FROZEN_LLM_FILTER_PROMPT_PATH = 'prompts/filter.md';
 
 function promptTextContractForStage(stage) {
     return PROMPT_FILE_VERSIONS[stage]?.contract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT;
@@ -119,5 +128,7 @@ module.exports = {
     promptFilePathForContract,
     currentTextStagePromptPath,
     currentOrFrozenPromptPath,
-    stageForFrozenPromptPath
+    stageForFrozenPromptPath,
+    LLM_FILTER_PROMPT_PATH,
+    FROZEN_LLM_FILTER_PROMPT_PATH
 };

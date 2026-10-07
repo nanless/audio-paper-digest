@@ -8863,7 +8863,32 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
     };
 }
 
-function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
+// 插图阶段的配置指纹。版本决定用哪份正文：新请求按当前版本算，旧记录按它自己
+// 声明的版本算。旧记录没有这个字段时，哈希输入里也不放 promptTextContract，
+// 与改动前逐字节一致；不传版本同样按 v1 的历史形状算。
+function buildImageSupplementBaseFingerprint(promptTextContract) {
+    const declaredPromptTextContract = String(promptTextContract || '');
+    return stableFingerprint({
+        ...(declaredPromptTextContract
+            ? { promptTextContract: declaredPromptTextContract } : {}),
+        ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE, API_MAX_TOKENS),
+        enabled: isDualModel,
+        promptTemplateSha256: promptTemplateSha256(
+            promptFilePathForContract('imageSupplement',
+                declaredPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT)
+        ),
+        imageCandidateMax: IMAGE_CANDIDATE_MAX,
+        imageMaxCount: IMAGE_MAX_COUNT,
+        imageMaxBytes: IMAGE_MAX_BYTES,
+        imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
+        imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS,
+        imageInsertionMax: IMAGE_INSERTION_MAX
+    });
+}
+
+// manifest 必须显式传入：核验旧记录时读的是它，而不是 paper 上可能尚未同步的
+// 副本，否则会按错误的版本重算插图指纹。
+function buildRecoveryFingerprints(paper, textForAnalysis, arxivId, manifest = paper?.analysisManifest) {
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity(arxivId);
     const usedTextSha256 = crypto.createHash('sha256').update(textForAnalysis).digest('hex');
     const primaryContext = {
@@ -8949,17 +8974,8 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId) {
             overallTimeoutMs: API_READER_OVERALL_TIMEOUT_MS,
             transportMaxRetries: API_READER_TRANSPORT_MAX_RETRIES
         }),
-        imageSupplement: stableFingerprint({
-            ...modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE, API_MAX_TOKENS),
-            enabled: isDualModel,
-            promptTemplateSha256: promptTemplateSha256(RECOVERY_PROMPT_FILES.imageSupplement),
-            imageCandidateMax: IMAGE_CANDIDATE_MAX,
-            imageMaxCount: IMAGE_MAX_COUNT,
-            imageMaxBytes: IMAGE_MAX_BYTES,
-            imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
-            imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS,
-            imageInsertionMax: IMAGE_INSERTION_MAX
-        })
+        imageSupplement: buildImageSupplementBaseFingerprint(
+            textStagePromptTextContract(paper, manifest, 'imageSupplement'))
     };
 }
 
@@ -13907,7 +13923,7 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
     const imageListStr = usableImageInfos.map((info, i) =>
         `候选${i + 1}: ${safeImageLabel(info.url)}\n  URL: ${info.url}\n  caption: ${sanitizeImagePlanText(info.caption || '无描述', 500)}`
     ).join('\n\n');
-    const supplementPrompt = loadPrompt('prompts/image-supplement.md', {
+    const supplementPrompt = loadPrompt(currentTextStagePromptPath('imageSupplement'), {
         title: paper.title,
         arxivId,
         imageList: imageListStr,
@@ -14182,7 +14198,8 @@ async function analyzePaperDeepInternal(paper) {
         console.log(`    [deep] ⚠️  实际分析输入发生变化，已清除主分析及依赖它的后续恢复记录`);
     }
     analysisManifest.sourceAcquisition = sourceAcquisitionRecord;
-    const recoveryFingerprints = buildRecoveryFingerprints(paper, textForAnalysis, arxivId);
+    const recoveryFingerprints = buildRecoveryFingerprints(
+        paper, textForAnalysis, arxivId, analysisManifest);
     if (migrateSealedSourceOnlyReaderBeforeAnalysis(
         paper,
         analysisManifest,
@@ -15565,6 +15582,10 @@ async function analyzePaperDeepInternal(paper) {
     const preImageAnalysis = isRecoveryStageComplete(analysisManifest, 'scoringAudit')
         ? String(paper.analysisStageCheckpoints?.scoringAudit || paper.analysisCheckpoint || analysis)
         : analysis;
+    // 核验用旧记录自己声明的版本重算，写入用当前版本。两者分开：如果只换加载路径、
+    // 核验仍按 v1 算，或者反过来的话，每次运行都会判不等，删掉插图阶段后立刻重做。
+    const imageSupplementDeclaredContract = textStagePromptTextContract(
+        paper, analysisManifest, 'imageSupplement');
     const imageSupplementFingerprint = buildImageSupplementFingerprint(
         recoveryFingerprints.imageSupplement,
         candidateImageInfos,
@@ -15577,6 +15598,18 @@ async function analyzePaperDeepInternal(paper) {
         'imageSupplement',
         imageSupplementFingerprint
     );
+    // 失效后阶段已被删除，声明的版本随之变成当前版本；此时必须按当前版本重建写入
+    // 指纹，不能拿 v1 形状的指纹配 v2 的声明，否则下一次运行又会判不等。
+    const imageSupplementWriteContract = currentPromptTextContract('imageSupplement');
+    const imageSupplementWriteFingerprint =
+        imageSupplementDeclaredContract === imageSupplementWriteContract
+            ? imageSupplementFingerprint
+            : buildImageSupplementFingerprint(
+                buildImageSupplementBaseFingerprint(imageSupplementWriteContract),
+                candidateImageInfos,
+                downloadedImages,
+                preImageAnalysis
+            );
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         analysis = preImageAnalysis;
     }
@@ -15590,7 +15623,8 @@ async function analyzePaperDeepInternal(paper) {
             officialFigureCount: Array.isArray(paper.apiReaderFigures)
                 ? paper.apiReaderFigures.length : 0,
             officialFiguresSha256: stableFingerprint(paper.apiReaderFigures || []),
-            fingerprint: imageSupplementFingerprint
+            fingerprint: imageSupplementWriteFingerprint,
+            promptTextContract: imageSupplementWriteContract
         });
         console.log('    [deep] ℹ️  本次摘要修复不重写插图，保留根据论文来源生成的读者文章及图片证据');
     } else if (hasBoundApiReaderFigures && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
@@ -15600,7 +15634,8 @@ async function analyzePaperDeepInternal(paper) {
             reason: 'api_reader_v3_official_figures_bound',
             officialFigureCount: paper.apiReaderFigures.length,
             officialFiguresSha256: stableFingerprint(paper.apiReaderFigures),
-            fingerprint: imageSupplementFingerprint
+            fingerprint: imageSupplementWriteFingerprint,
+            promptTextContract: imageSupplementWriteContract
         });
         console.log(
             `    [deep] ℹ️  已绑定 ${paper.apiReaderFigures.length} 张 v3 官方正文图，跳过旧副模型插图阶段`
@@ -15632,7 +15667,8 @@ async function analyzePaperDeepInternal(paper) {
                     selectedCount: 0,
                     discardedInvalidPlan: true,
                     error: imageInvalidReason,
-                    fingerprint: imageSupplementFingerprint
+                    fingerprint: imageSupplementWriteFingerprint,
+                    promptTextContract: imageSupplementWriteContract
                 });
                 console.log(`    [deep] ⚠️  插图结果破坏最终契约，丢弃本篇插图计划: ${imageInvalidReason}`);
             } else {
@@ -15658,7 +15694,8 @@ async function analyzePaperDeepInternal(paper) {
                         .update(preImageAnalysis).digest('hex'),
                     outputAnalysisSha256: crypto.createHash('sha256')
                         .update(analysis).digest('hex'),
-                    fingerprint: imageSupplementFingerprint
+                    fingerprint: imageSupplementWriteFingerprint,
+                    promptTextContract: imageSupplementWriteContract
                 });
             }
         } catch (err) {
@@ -15677,7 +15714,8 @@ async function analyzePaperDeepInternal(paper) {
             reason: status === 'transient_failure' ? 'candidate_downloads_failed'
                 : status === 'no_downloadable_images' ? 'all_candidates_permanently_rejected'
                     : undefined,
-            fingerprint: imageSupplementFingerprint
+            fingerprint: imageSupplementWriteFingerprint,
+            promptTextContract: imageSupplementWriteContract
         });
     }
 
