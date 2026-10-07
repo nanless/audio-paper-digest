@@ -28,6 +28,7 @@ const {
     promptFilePathForContract,
     currentPromptTextContract
 } = require('./lib/prompt-text-versions.js');
+const promptHistory = require('./lib/prompt-history.js');
 
 const MANIFEST_VERSION = 3;
 const VISUAL_QA_CHECKLIST_VERSION = 'visual-semantic-v1';
@@ -469,6 +470,21 @@ function promptSha256(promptPath = null) {
     return sha256Buffer(fs.readFileSync(
         promptPath || visualSummaryPromptPath(currentPromptTextContract(VISUAL_SUMMARY_PROMPT_STAGE))
     ));
+}
+
+// 记录里声明的 promptSha256 可能指向 prompts/history/ 里归档的历史字节：v1 提示词
+// 设计上要冻结，实际被就地改写过，所以旧 manifest 声明的 SHA 与当前文件不符。声明值
+// 与当前文件不一致时，先确认归档里真有这份字节，再按声明值走；归档里没有就返回当前值，
+// 与改动前完全一样（继续报「prompt 已失效」）。
+// 显式传入 promptPath 的是测试夹具，不查归档，避免改变夹具路径的既有行为。
+function resolvedPromptSha256(declaredSha256, promptPath = null, promptTextContract = null) {
+    const current = promptPath
+        ? promptSha256(promptPath)
+        : promptSha256(visualSummaryPromptPath(promptTextContract));
+    if (promptPath) return current;
+    const declared = String(declaredSha256 || '');
+    if (declared === current) return current;
+    return promptHistory.historicalPromptBytesForSha256(declared) ? declared : current;
 }
 
 function referenceFigureRole(caption) {
@@ -1565,9 +1581,8 @@ function assertVisualManifestCurrent(manifest, publication, targetDate, promptPa
         throw new Error('视觉摘要 TOP 10 选择契约已失效，请重新执行发布后规划');
     }
     const selected = selectTopRankedPapers(papers, targetDate, limit);
-    const currentPromptSha = promptPath
-        ? promptSha256(promptPath)
-        : promptSha256(visualSummaryPromptPath(manifest.promptTextContract));
+    const currentPromptSha = resolvedPromptSha256(
+        manifest.promptSha256, promptPath, manifest.promptTextContract);
     const expectedIds = selected.map(normalizedId);
     if (manifest.promptSha256 !== currentPromptSha
         || manifest.selection?.type !== 'top_score'

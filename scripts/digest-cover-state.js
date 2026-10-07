@@ -25,6 +25,7 @@ const {
     promptFilePathForContract,
     currentPromptTextContract
 } = require('./lib/prompt-text-versions.js');
+const promptHistory = require('./lib/prompt-history.js');
 
 const COVER_MANIFEST_VERSION = 1;
 const COVER_QA_CHECKLIST_VERSION = 'digest-cover-semantic-v1';
@@ -75,6 +76,19 @@ function promptSha256(promptPath = null) {
     return sha256Buffer(fs.readFileSync(
         promptPath || digestCoverPromptPath(currentPromptTextContract(DIGEST_COVER_PROMPT_STAGE))
     ));
+}
+
+// 同 visual-summary-state.js：记录声明的 promptSha256 可能指向 prompts/history/ 里归档
+// 的历史字节。声明值与当前文件不符时，只有归档里确实有这份字节才按声明值走，否则返回
+// 当前值，保持改动前的失败行为。显式 promptPath 是测试夹具，不查归档。
+function resolvedPromptSha256(declaredSha256, promptPath = null, promptTextContract = null) {
+    const current = promptPath
+        ? promptSha256(promptPath)
+        : promptSha256(digestCoverPromptPath(promptTextContract));
+    if (promptPath) return current;
+    const declared = String(declaredSha256 || '');
+    if (declared === current) return current;
+    return promptHistory.historicalPromptBytesForSha256(declared) ? declared : current;
 }
 
 function digestTitle(targetDate, category = '论文速递') {
@@ -282,9 +296,8 @@ function assertDigestCoverManifestCurrent(manifest, publication, targetDate, pro
     }
     const papers = bindPublishedPapersToDate(publication, targetDate);
     const context = buildCoverContext(papers, targetDate, publication.category);
-    const expectedPromptSha = promptPath
-        ? promptSha256(promptPath)
-        : promptSha256(digestCoverPromptPath(manifest.promptTextContract));
+    const expectedPromptSha = resolvedPromptSha256(
+        manifest.promptSha256, promptPath, manifest.promptTextContract);
     const expectedDataSha = coverDataSha256(context);
     const expectedToken = coverTaskToken(expectedDataSha, expectedPromptSha, publication);
     if (manifest.promptSha256 !== expectedPromptSha || manifest.dataSha256 !== expectedDataSha

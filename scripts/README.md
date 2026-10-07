@@ -67,6 +67,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；两种格式混用时拒绝，也不会改写或补签旧记录。 |
 | `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。旧记录按自己声明的版本取冻结的 v1 路径复算，未知版本直接报错；深度分析按它选正文，会议与 manual 的指纹也按它决定要哈希哪份文件。 |
+| `lib/prompt-history.js` | Node 库 | 按记录声明的 SHA 从 `prompts/history/` 取历史提示词字节。先看当前文件（含 `-v2`）是否就是那份字节，不符才查归档，查不到返回 `null` 让调用方维持原行为。 |
 | `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另外可只读盘点旧分类文件，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果选择标签，记录概念 ID 并去除上级重复标签。新版分配文件的名称包含词表 SHA 和分配 SHA；旧记录按原格式完整复算后读取，已有页面则按保存的对象及文件 SHA 找回原证据。 |
 | `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（`crosswalk`）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |
@@ -229,6 +230,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `rewrite-from-source.js` | 通过 `prepare/sources/analyze/status/patch/signed-patch/promote` 显式运行同源重写。`patch` 修复失败候选，`signed-patch` 局部修订本 run 的成功 Reader 并要求事实复核；两种补丁都不调用 API，也不接受任意路径。 |
 | `paper-rethink-server.js` | 历史独立维护工具；博客已取消本机助手集成，不应为阅读、引用或复制 AI 提问启动此服务。旧接口实现仍保留供历史维护。 |
 | `validate-data-files.js` | 只读核验当前数据、跨文件论文集合、评分及兼容结果的来源记录。 |
+| `build-prompt-history-archive.js` | 从 git 历史抽取存量数据引用过的历史提示词字节，落到 `prompts/history/<sha256>.md`。默认只报告，`--write` 才落盘，可重复运行。 |
 | `backfill_papers.py` | 只补录历史论文 ID，不执行深度分析。 |
 
 ## 配置、环境与通用工具
