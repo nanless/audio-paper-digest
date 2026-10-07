@@ -18,6 +18,7 @@ from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
                          TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT)
 from runtime_guard import require_external_runtime
+from publish_common import _assert_hash_key_premises, _assert_ecmascript_number_premises
 
 
 PAPER_ID = re.compile(r'^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$')
@@ -56,6 +57,17 @@ def stable_sha(value):
         'utf-8', 'backslashreplace'
     )
     return hashlib.sha256(raw).hexdigest()
+
+
+def reader_record_sha(value, label):
+    """算会议读者记录的 SHA 前，先核对与 Node 共用的前提。
+
+    Node 的 stableFingerprint 用 JSON.stringify 写这些哈希，这里用 json.dumps。
+    数字写法与键排序的分歧见 publish_common 里两个 _assert 函数的说明。
+    """
+    _assert_hash_key_premises(value, label)
+    _assert_ecmascript_number_premises(value, label)
+    return stable_sha(value)
 
 
 def public_https(value, label, *, conference_only=False):
@@ -165,10 +177,12 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
             or plan.get('sourceBindingsContract') != SOURCE_BINDINGS_CONTRACT \
             or stage.get('status') != 'complete':
         raise ValueError('conference Reader 合同不是 beginner-researcher-v3/source-bindings-v4')
-    article_sha, plan_sha = hashlib.sha256(article.encode()).hexdigest(), stable_sha(plan)
+    article_sha, plan_sha = hashlib.sha256(article.encode()).hexdigest(), \
+        reader_record_sha(plan, 'API reader 编辑计划')
     figures = paper.get('apiReaderFigures')
-    source_bindings_sha = stable_sha({
-        'tableBindings': plan.get('tableBindings'), 'formulaBindings': plan.get('formulaBindings')})
+    source_bindings_sha = reader_record_sha({
+        'tableBindings': plan.get('tableBindings'), 'formulaBindings': plan.get('formulaBindings')},
+        'API reader 来源绑定')
     common_records_match = paper.get('apiReaderArticleSha256') == article_sha and stage.get('articleSha256') == article_sha \
         and paper.get('apiReaderPlanSha256') == plan_sha and stage.get('planSha256') == plan_sha \
         and plan.get('sourceBindingsSha256') == source_bindings_sha \
@@ -187,7 +201,7 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
             and stage.get('figureCount') == len(figures) \
             and stage.get('tableBindingCount') == len(plan['tableBindings']) \
             and stage.get('formulaBindingCount') == len(plan['formulaBindings']) \
-            and stage.get('figuresSha256') == stable_sha(figures)
+            and stage.get('figuresSha256') == reader_record_sha(figures, 'API reader 图片记录')
         if capabilities == PDF_VISUAL:
             reader_records_match = reader_records_match and plan.get('formulaBindings') == [] and all(
                 isinstance(binding, dict) and binding.get('sourceType') == 'source_quotes'
@@ -198,8 +212,9 @@ def validate_reader_source_records(paper, manifest, stage, capabilities):
     if not reader_records_match:
         raise ValueError('conference Reader bytes/plan/structure capability is not sealed; unavailable structure cannot be inferred')
     if not isinstance(authors, dict) or contracts.get('apiReaderAuthorIdentity') != 'api-reader-author-identity-v1' \
-            or stable_sha(authors) != stage.get('readerAuthorsSha256') \
-            or authors.get('identitySha256') != stable_sha(authors.get('identity')) \
+            or reader_record_sha(authors, 'API reader 作者记录') != stage.get('readerAuthorsSha256') \
+            or authors.get('identitySha256') \
+            != reader_record_sha(authors.get('identity'), 'API reader 作者来源记录') \
             or stage.get('readerAuthorIdentitySha256') != authors.get('identitySha256') \
             or not isinstance(authors.get('authors'), list) or not authors['authors']:
         raise ValueError('会议论文解读的作者与机构记录格式无效、为空，或与格式声明及保存哈希不一致。')

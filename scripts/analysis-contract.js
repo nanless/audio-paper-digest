@@ -1597,9 +1597,28 @@ function manualCanonicalJson(value) {
 }
 
 function manualSha256(value) {
+    assertManualHashKeyPremises(value, 'manual 哈希输入');
     return crypto.createHash('sha256')
         .update(manualCanonicalJson(manualStableValue(value)))
         .digest('hex');
+}
+
+// manualSha256 与 Python 的 _manual_hash 必须对同一个对象写出同一串字节。Node 按
+// UTF-16 码元排序键，Python 按码点排序；键里出现 emoji 这类增补平面字符时两端顺序
+// 不同，哈希也就不同。键由 JSON 载入时一定是字符串，直接调用则不一定，所以在这里挡住。
+function assertManualHashKeyPremises(value, label) {
+    if (Array.isArray(value)) {
+        value.forEach((item, index) => assertManualHashKeyPremises(item, `${label}[${index}]`));
+        return;
+    }
+    if (!value || typeof value !== 'object') return;
+    for (const key of Object.keys(value)) {
+        if ([...key].some(character => character.codePointAt(0) > 0xFFFF)) {
+            throw new Error(`${label}.${key} 的对象键含 BMP 以外的字符；`
+                + 'Node 按 UTF-16 码元排序、Python 按码点排序，两端顺序会不同');
+        }
+        assertManualHashKeyPremises(value[key], `${label}.${key}`);
+    }
 }
 
 // Text evidence is hashed as its exact UTF-8 bytes (without JSON string

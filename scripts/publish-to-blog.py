@@ -54,6 +54,7 @@ from publish_common import (
     MANUAL_LONGFORM_CONTRACT_VERSION_V2, validate_manual_v6_payload,
     validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_VERSION,
     split_markdown_table_row,
+    _assert_hash_key_premises, _assert_ecmascript_number_premises,
 )
 from path_config import (
     PROJECT_ROOT,
@@ -2464,7 +2465,7 @@ def apply_publish_image_exclusions(papers, exclusions=None):
                 )
             source_analysis_sha256 = _javascript_string_sha256(analysis)
             source_article_sha256 = _javascript_string_sha256(article)
-            source_figures_sha256 = _stable_json_sha256(figures)
+            source_figures_sha256 = _reader_record_sha256(figures, 'API reader 图片记录')
             figure_urls = [
                 item.get('url') for item in figures if isinstance(item, dict)
             ]
@@ -2506,8 +2507,8 @@ def apply_publish_image_exclusions(papers, exclusions=None):
                 if item.get('figureOrdinal') not in excluded_ordinals
             ]
             article_sha256 = _javascript_string_sha256(article)
-            plan_sha256 = _stable_json_sha256(plan)
-            figures_sha256 = _stable_json_sha256(figures)
+            plan_sha256 = _reader_record_sha256(plan, 'API reader 编辑计划')
+            figures_sha256 = _reader_record_sha256(figures, 'API reader 图片记录')
             next_paper['apiReaderArticle'] = article
             next_paper['apiReaderArticleSha256'] = article_sha256
             next_paper['apiReaderPlan'] = plan
@@ -5666,10 +5667,11 @@ def _validate_api_reader_author_identity(paper):
             'contract', 'sourceDomSha256', 'sourceTextSha256',
             'metadataSha256', 'authors'}:
         raise PublishDataValidationError('读者文章的作者来源记录格式无效、缺少必要字段，或含有不允许的字段。')
-    identity_sha = _stable_json_sha256(identity)
+    identity_sha = _reader_record_sha256(identity, 'API reader 作者来源记录')
     source_sha = paper.get('sourceSha256')
-    metadata_sha = _stable_json_sha256(
-        paper.get('authors') if isinstance(paper.get('authors'), list) else []
+    metadata_sha = _reader_record_sha256(
+        paper.get('authors') if isinstance(paper.get('authors'), list) else [],
+        'API reader 作者元数据',
     )
     if identity.get('contract') != LLM_API_READER_AUTHOR_IDENTITY_CONTRACT \
             or contracts.get('apiReaderAuthorIdentity') \
@@ -5745,12 +5747,12 @@ def _validate_api_reader_author_identity(paper):
                     raise PublishDataValidationError('API reader 作者机构 unavailable binding 非法')
             else:
                 raise PublishDataValidationError('作者机构的来源类型不符合要求。')
-    if stage.get('readerAuthorsSha256') != _stable_json_sha256(payload):
+    if stage.get('readerAuthorsSha256') != _reader_record_sha256(payload, 'API reader 作者记录'):
         raise PublishDataValidationError('读者文章作者记录的 SHA 与阶段记录不一致。')
     return {
         'contract': LLM_API_READER_AUTHOR_IDENTITY_CONTRACT,
         'sha256': identity_sha,
-        'payloadSha256': _stable_json_sha256(payload),
+        'payloadSha256': _reader_record_sha256(payload, 'API reader 作者记录'),
         'count': len(public_authors),
         'authors': public_authors,
     }
@@ -6063,7 +6065,7 @@ def _api_reader_payload(paper):
         raise PublishDataValidationError('读者正文缺失或不是非空字符串，或编辑计划不是对象。')
     article = article.strip()
     article_sha = _javascript_string_sha256(article)
-    plan_sha = _stable_json_sha256(plan)
+    plan_sha = _reader_record_sha256(plan, 'API reader 编辑计划')
     if (paper.get('apiReaderArticleSha256') != article_sha
             or paper.get('apiReaderPlanSha256') != plan_sha
             or stage.get('status') != 'complete'
@@ -6198,7 +6200,7 @@ def _api_reader_payload(paper):
     if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS:
         if not isinstance(figures, list):
             raise PublishDataValidationError('读者文章缺少结构化的图片记录列表。')
-        figures_sha = _stable_json_sha256(figures)
+        figures_sha = _reader_record_sha256(figures, 'API reader 图片记录')
         if stage.get('figureCount') != len(figures) \
                 or stage.get('figuresSha256') != figures_sha:
             raise PublishDataValidationError('读者文章的图片记录条数或 SHA 与阶段记录不一致。')
@@ -6358,7 +6360,7 @@ def _api_reader_payload(paper):
                 or not re.fullmatch(
                     r'[0-9a-f]{64}', str(reader_authors.get('sourceDomSha256') or '')
                 ) \
-                or stage.get('readerAuthorsSha256') != _stable_json_sha256(reader_authors):
+                or stage.get('readerAuthorsSha256') != _reader_record_sha256(reader_authors, 'API reader 作者记录'):
             raise PublishDataValidationError('读者文章的作者与机构记录缺失、字段或来源 DOM SHA 无效，或记录 SHA 与阶段记录不一致。')
         for author in reader_authors['authors']:
             if not isinstance(author, dict) or set(author) != {'name', 'affiliations'} \
@@ -9733,6 +9735,18 @@ def _stable_json_sha256(value):
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _reader_record_sha256(value, label):
+    """算读者文章的编辑计划、图片记录或作者记录的 SHA 前，先核对跨语言前提。
+
+    Node 的 stableFingerprint 用 JSON.stringify 写这些哈希，这里用 json.dumps。
+    数字写法与键排序的分歧见 publish_common 里两个 _assert 函数的说明。前提失效时
+    两端不会报错，只会算出两个不同的哈希，最后表现为一句莫名其妙的 SHA 不一致。
+    """
+    _assert_hash_key_premises(value, label)
+    _assert_ecmascript_number_premises(value, label)
+    return _stable_json_sha256(value)
+
+
 def _javascript_utf16_sort_key(value, label):
     """Match JavaScript Array#sort string ordering by UTF-16 code units."""
     try:
@@ -9933,9 +9947,9 @@ def llm_api_publication_bindings(published_papers):
             'readerAvailableResourceTypes': reader['resourceIdentityProof']['availableTypes'],
             'readerArticleSha256': reader['articleSha256'],
             'readerPlanSha256': reader['planSha256'],
-            'readerFiguresSha256': _stable_json_sha256(reader['figures']),
+            'readerFiguresSha256': _reader_record_sha256(reader['figures'], 'API reader 图片记录'),
             'readerFigurePersistence': reader['figurePersistence'],
-            'readerAuthorsSha256': _stable_json_sha256(reader['readerAuthors']),
+            'readerAuthorsSha256': _reader_record_sha256(reader['readerAuthors'], 'API reader 作者记录'),
             'analysisSha256': analysis_sha,
             'coreSummaryContract': CORE_SUMMARY_DETAILED_CONTRACT,
             'coreSummarySha256': _javascript_string_sha256(core_summary),

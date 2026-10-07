@@ -624,6 +624,75 @@ def _manual_js_number_text(value):
     return f'-{body}' if negative else body
 
 
+def _assert_hash_key_premises(value, label):
+    """核对 Node 与 Python 对同一个对象算哈希时，键必须满足的两条前提。
+
+    键得是字符串：json.dumps 不给非字符串键加引号，{1: 'a'} 会写成 {1:"a"} 这种
+    非法 JSON，而 Node 的 Object.keys 只给出字符串键，写的是 {"1":"a"}。
+    键还得都在 BMP 内：Node 按 UTF-16 码元排序，Python 按码点排序，键里出现 emoji
+    这类增补平面字符时两端顺序不同。两条前提失效时两端都不报错，只是算出不同的哈希。
+    """
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_hash_key_premises(item, f'{label}[{index}]')
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise PublishDataValidationError(
+                f'{label} 的对象键必须是字符串，实际是 {type(key).__name__} {key!r}；'
+                'Python 会把它写成不带引号的 JSON 键，与 Node 的写法不同'
+            )
+        if any(ord(character) > 0xFFFF for character in key):
+            raise PublishDataValidationError(
+                f'{label}.{key} 的对象键含 BMP 以外的字符；'
+                'Python 按码点排序、Node 按 UTF-16 码元排序，两端顺序会不同'
+            )
+        _assert_hash_key_premises(item, f'{label}.{key}')
+
+
+def _assert_ecmascript_number_premises(value, label):
+    """核对 json.dumps 的 repr 数字写法与 Node 的 ECMAScript 写法一致。
+
+    _stable_json_sha256 用 json.dumps 写数字，Node 的 stableFingerprint 用
+    ECMAScript 的 Number::toString。四类取值会写出不同字节：整数取值的浮点
+    （1.0 对 1）、绝对值小于 1e-4 的非整浮点（2e-05 对 0.00002）、负零
+    （-0.0 对 0），以及 1e16 到 1e21 之间的浮点（1e+17 对 100000000000000000）。
+    超出安全整数范围的整数也会在 Node 里丢精度。两端都会写、都会核验这些字段，
+    出现这类取值时不会报错，只会让一端算出另一个哈希。
+    """
+    if isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        if abs(value) > (2 ** 53 - 1):
+            raise PublishDataValidationError(
+                f'{label} 含超出 JSON 安全整数范围的整数 {value}；'
+                'Node 读回时会丢精度，两端哈希会不同'
+            )
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise PublishDataValidationError(
+                f'{label} 含非有限数值 {value!r}；Python 写 NaN/Infinity，Node 写 null'
+            )
+        ecmascript = _manual_js_number_text(value)
+        if repr(value) != ecmascript:
+            raise PublishDataValidationError(
+                f'{label} 的浮点数 {value!r} 在两端写法不同：'
+                f'Python 写 {repr(value)}，Node 写 {ecmascript}，两端哈希会不同'
+            )
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_ecmascript_number_premises(item, f'{label}[{index}]')
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_ecmascript_number_premises(item, f'{label}.{key}')
+        return
+
+
 def _manual_canonical_json(value):
     if value is None:
         return 'null'
@@ -643,6 +712,7 @@ def _manual_canonical_json(value):
 
 
 def _manual_hash(value):
+    _assert_hash_key_premises(value, 'manual 哈希输入')
     return hashlib.sha256(_manual_canonical_json(value).encode('utf-8')).hexdigest()
 
 
