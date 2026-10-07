@@ -10,7 +10,8 @@
 const ANALYSIS_PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1';
 const ANALYSIS_PROMPT_TEXT_V2_CONTRACT = 'analysis-prompt-text-v2';
 
-// 11 个恢复阶段的 v1 冻结路径。旧记录的指纹一律按这里复算。
+// 恢复阶段的 v1 冻结路径，外加读者局部修复提示词（它不是一个恢复阶段，但同样
+// 参与读者阶段的指纹和失败草稿身份）。旧记录的指纹一律按这里复算。
 const FROZEN_V1_PROMPT_FILES = Object.freeze({
     primaryAnalysis: 'prompts/deep-analysis.md',
     openSourceScan: 'prompts/opensource-scan.md',
@@ -22,6 +23,7 @@ const FROZEN_V1_PROMPT_FILES = Object.freeze({
     structureRepair: 'prompts/structure-repair.md',
     scoringAudit: 'prompts/scoring-audit.md',
     apiReaderArticle: 'prompts/api-reader-article.md',
+    apiReaderRepair: 'prompts/api-reader-repair.md',
     imageSupplement: 'prompts/image-supplement.md'
 });
 
@@ -67,11 +69,15 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
         contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
         path: 'prompts/image-supplement-v2.md'
     }),
-    // 只登记文章正文。修复提示词 api-reader-repair.md 还没迁，仍按 v1 的冻结
-    // 路径加载和哈希，所以不在这张表里；它下一批再进。
+    // 读者阶段有两份文件：文章正文和局部修复提示词。它们内容不同、可以分别改字，
+    // 所以各自登记版本，记录里也用两个字段分开声明。
     apiReaderArticle: Object.freeze({
         contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
         path: 'prompts/api-reader-article-v2.md'
+    }),
+    apiReaderRepair: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/api-reader-repair-v2.md'
     })
 });
 

@@ -7117,10 +7117,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             } : {}) }),
         sourceSha256: repair.shaText(options.sourceText || ''),
         model: modelFingerprint(DEEP_CONFIG, start.temperature, API_READER_MAX_TOKENS),
-        // 正文按当前版本加载，身份里也必须记当前版本算出的 SHA，否则失败草稿
-        // 的身份会指向一份本次并没有真正读的提示词。修复提示词还没迁，仍是 v1。
+        // 正文和修复提示词各按当前版本加载，身份里也必须记当前版本算出的 SHA，
+        // 否则失败草稿的身份会指向一份本次并没有真正读的提示词。
         promptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderArticle')),
-        repairPromptSha256: promptTemplateSha256('prompts/api-reader-repair.md'),
+        repairPromptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderRepair')),
         // The Reader gate also executes the shared analysis contract.  Include
         // that dependency in the parser fingerprint so a contract fix can
         // legitimately issue one bounded implementation-repair attempt for an
@@ -7509,7 +7509,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         if (!repairContext && fullAttempts >= 2 && !implementationRepairAllowanceProof) {
             throw lastError || new Error('Reader root JSON remained invalid after two full attempts');
         }
-        const prompt = repairContext ? loadPrompt('prompts/api-reader-repair.md', {
+        const prompt = repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
             validationFeedback: [numericSpellingGuidance, reviewFeedbackPrefix,
                 ...currentIssues.map(issueFeedback)].filter(Boolean).join('\n'),
@@ -7799,8 +7799,10 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     );
     // 刷新一定会重新生成正文，加载路径也按当前版本走，所以配置指纹必须按当前
     // 版本算，不能按这条记录原来声明的版本算，否则指纹和实际用的正文对不上。
+    // 修复提示词同理。
     const configurationFingerprint = buildApiReaderBaseFingerprint(
-        currentPromptTextContract('apiReaderArticle')
+        currentPromptTextContract('apiReaderArticle'),
+        currentPromptTextContract('apiReaderRepair')
     );
     const reviewFeedback = String(options.reviewFeedback || '').trim();
     if (reviewFeedback.length > 4000) throw new Error('读者文章 review feedback 超过 4000 字符');
@@ -7849,6 +7851,10 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
                 currentTextStagePromptPath('apiReaderArticle')
             ),
             promptTextContract: currentPromptTextContract('apiReaderArticle'),
+            repairPromptTemplateSha256: promptTemplateSha256(
+                currentTextStagePromptPath('apiReaderRepair')
+            ),
+            repairPromptTextContract: currentPromptTextContract('apiReaderRepair'),
             evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION, evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
             contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
             evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
@@ -7899,10 +7905,12 @@ async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, 
             model: 'operator-local', protocol: 'local_operator',
             fingerprint: stableFingerprint(operatorRevisionRecord),
             attempts: previousStage.attempts,
-            // 本地补丁沿用父记录声明的正文版本；父记录没有这个字段时也不新加，
-            // 保持旧记录的原形状。
+            // 本地补丁沿用父记录声明的正文与修复提示词版本；父记录没有哪个字段，
+            // 这里也不新加，保持旧记录的原形状。
             ...(previousStage.promptTextContract
                 ? { promptTextContract: previousStage.promptTextContract } : {}),
+            ...(previousStage.repairPromptTextContract
+                ? { repairPromptTextContract: previousStage.repairPromptTextContract } : {}),
             originApiStage: previousStage.originApiStage || previousStage,
             operatorHistory: [...(previousStage.operatorHistory || []), operatorRevisionRecord],
             operatorProvenance: operatorRevisionRecord,
@@ -8557,6 +8565,20 @@ function textStagePromptTextContract(paper, manifest, stage) {
     return typeof record?.promptTextContract === 'string' ? record.promptTextContract : '';
 }
 
+// 读者阶段的正文和局部修复提示词是两份文件，同一个阶段记录里各声明一个版本字段，
+// 允许分开升版。记录没有 repairPromptTextContract 时按 v1 算——本轮之前写下的记录
+// 全是这个形状：正文已经声明 v2，修复提示词还停在 v1。
+function textStageRepairPromptTextContract(paper, manifest) {
+    if (!isRecoveryStageComplete(manifest, 'apiReaderArticle')) {
+        return currentPromptTextContract('apiReaderRepair');
+    }
+    const physicalStage = physicalRecoveryStage(
+        manifest, 'apiReaderArticle', paper?.analysisStageCheckpoints);
+    const record = manifest?.stages?.[physicalStage];
+    return typeof record?.repairPromptTextContract === 'string'
+        ? record.repairPromptTextContract : '';
+}
+
 function stableFingerprint(value) {
     const normalize = item => {
         if (Array.isArray(item)) return item.map(normalize);
@@ -8921,17 +8943,18 @@ function buildImageSupplementBaseFingerprint(promptTextContract) {
     });
 }
 
-// 读者文章的配置指纹。版本决定用哪份正文：新请求按当前版本算，旧记录按它自己
-// 声明的版本算。旧记录没有这个字段时，哈希输入里也不放 promptTextContract，
-// 与改动前逐字节一致；不传版本同样按 v1 的历史形状算。
-// 修复提示词 api-reader-repair.md 还没迁到 v2，这里仍按 v1 的字节哈希，和加载
-// 路径保持一致。
-function buildApiReaderBaseFingerprint(promptTextContract, arxivId) {
+// 读者文章的配置指纹。正文和修复提示词各有自己的版本：新请求按当前版本算，旧记录
+// 按它自己声明的版本算。旧记录没有这两个字段时，哈希输入里也不放它们，与改动前
+// 逐字节一致；不传版本同样按 v1 的历史形状算。
+function buildApiReaderBaseFingerprint(promptTextContract, repairPromptTextContract, arxivId) {
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity(arxivId);
     const declaredPromptTextContract = String(promptTextContract || '');
+    const declaredRepairPromptTextContract = String(repairPromptTextContract || '');
     return stableFingerprint({
         ...(declaredPromptTextContract
             ? { promptTextContract: declaredPromptTextContract } : {}),
+        ...(declaredRepairPromptTextContract
+            ? { repairPromptTextContract: declaredRepairPromptTextContract } : {}),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js'),
         ...modelFingerprint(DEEP_CONFIG, API_READER_INITIAL_TEMPERATURE, API_READER_MAX_TOKENS),
@@ -8977,7 +9000,10 @@ function buildApiReaderBaseFingerprint(promptTextContract, arxivId) {
             promptFilePathForContract('apiReaderArticle',
                 declaredPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT)
         ),
-        repairPromptSha256: promptTemplateSha256('prompts/api-reader-repair.md'),
+        repairPromptSha256: promptTemplateSha256(
+            promptFilePathForContract('apiReaderRepair',
+                declaredRepairPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT)
+        ),
         repairImplementationSha256: promptTemplateSha256('scripts/lib/reader-repair.js'),
         draftOrderContract: READER_DRAFT_ORDER_CONTRACT,
         draftOrderImplementationSha256: promptTemplateSha256('scripts/lib/reader-draft-order.js'),
@@ -9008,7 +9034,8 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId, manifest = p
             metadataResourceLinks: resolveMetadataResourceLinks(paper)
         }),
         apiReaderArticle: buildApiReaderBaseFingerprint(
-            textStagePromptTextContract(paper, manifest, 'apiReaderArticle'), arxivId),
+            textStagePromptTextContract(paper, manifest, 'apiReaderArticle'),
+            textStageRepairPromptTextContract(paper, manifest), arxivId),
         imageSupplement: buildImageSupplementBaseFingerprint(
             textStagePromptTextContract(paper, manifest, 'imageSupplement'))
     };
@@ -15558,15 +15585,21 @@ async function analyzePaperDeepInternal(paper) {
                     ? { apiReaderFigurePersistence: directContext.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT }
                     : {})
             };
-            // 走到这里说明阶段是本次新建的，正文一定来自当前版本。声明的版本与
-            // 当前版本不一致时（例如旧记录被其他改动失效后重建），必须按当前
-            // 版本重算指纹，否则写回 v1 形状的指纹配 v2 的声明，下次运行又会判不等。
+            // 走到这里说明阶段是本次新建的，正文和修复提示词都一定来自当前版本。
+            // 任一版本与记录声明的版本不一致时（例如旧记录被其他改动失效后重建），
+            // 必须按当前版本重算指纹，否则写回旧形状的指纹配新声明，下次运行又会判
+            // 不等——正文和修复提示词要分别比，只比其中一个会让另一个永远对不上。
             const apiReaderWriteContract = currentPromptTextContract('apiReaderArticle');
+            const apiReaderWriteRepairContract = currentPromptTextContract('apiReaderRepair');
+            const apiReaderDeclaredRepairContract = textStageRepairPromptTextContract(
+                paper, analysisManifest);
             const apiReaderWriteFingerprint =
                 apiReaderDeclaredContract === apiReaderWriteContract
+                    && apiReaderDeclaredRepairContract === apiReaderWriteRepairContract
                     ? apiReaderFingerprint
                     : buildApiReaderExecutionFingerprint(
-                        buildApiReaderBaseFingerprint(apiReaderWriteContract, arxivId),
+                        buildApiReaderBaseFingerprint(
+                            apiReaderWriteContract, apiReaderWriteRepairContract, arxivId),
                         apiReaderEvidenceContext,
                         sourceDetails.structuredArtifacts,
                         readerCapabilityPolicy
@@ -15574,6 +15607,7 @@ async function analyzePaperDeepInternal(paper) {
             markRecoveryStage(analysisManifest, 'apiReaderArticle', 'complete', {
                 fingerprint: apiReaderWriteFingerprint,
                 promptTextContract: apiReaderWriteContract,
+                repairPromptTextContract: apiReaderWriteRepairContract,
                 contentMode: READER_SOURCE_CONTENT_MODE,
                 attempts: readerResult.attempts,
                 model: DEEP_CONFIG.model,
@@ -15589,6 +15623,9 @@ async function analyzePaperDeepInternal(paper) {
                 transportMaxRetries: API_READER_TRANSPORT_MAX_RETRIES,
                 promptTemplateSha256: promptTemplateSha256(
                     promptFilePathForContract('apiReaderArticle', apiReaderWriteContract)
+                ),
+                repairPromptTemplateSha256: promptTemplateSha256(
+                    promptFilePathForContract('apiReaderRepair', apiReaderWriteRepairContract)
                 ),
                 evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
                 evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
