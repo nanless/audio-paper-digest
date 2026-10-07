@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for immutable text and visual-audit extraction of one staged conference PDF."""
+"""对已暂存的一篇会议 PDF 做文本与视觉审计抽取，产物不再改动；这是它的命令行入口。"""
 
 import json
 import sys
@@ -9,14 +9,14 @@ from conference_extractor import ConferenceExtractionError, parse_args, run_extr
 
 
 def main(argv=None):
-    # Reject a sandboxed direct invocation before even parsing CLI arguments.
-    # The second, mode-aware check below adds the history role for mutating
-    # modes while allowing pinned read-only replay from an already guarded flow.
+    # 先挡掉沙箱内的直接调用，连命令行参数都还没解析。下面那次按模式区分的
+    # 检查会给写操作补上 history 角色，同时允许从已经过角色校验的流程里做
+    # 固定版本的只读重放。
     require_external_runtime("conference-extraction-replay")
     mode, manifest_name, source_root = parse_args(list(sys.argv[1:] if argv is None else argv))
-    # Verification is also used as a pinned, read-only replay inside already
-    # role-gated Node production flows.  Apply/dry-run remain direct history
-    # entrypoints; npm wrappers additionally bind every mode to history.
+    # 校验模式也用作已过角色校验的 Node 生产流程内部的固定版本只读重放。
+    # apply 和 dry-run 仍是 history 的直接入口；npm 包装层还会把每种模式都
+    # 绑到 history 上。
     require_external_runtime(
         "conference-extract.py" if mode != "verify" else "conference-extraction-replay"
     )

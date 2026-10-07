@@ -29,7 +29,7 @@ from tag_catalog import load_tag_catalog
 from analysis_sections import evaluation_heading_issue
 from utils import parse_analysis, read_tag_validation
 
-# ─── Feishu Config ────────────────────────────────────────────
+# ─── 飞书配置 ────────────────────────────────────────────
 FEISHU_APP_ID = os.environ.get('FEISHU_APP_ID', '')
 FEISHU_APP_SECRET = os.environ.get('FEISHU_APP_SECRET', '')
 
@@ -117,38 +117,38 @@ def md_to_feishu_blocks(md_text):
             i += 1
             continue
 
-        # Heading 1
+        # 一级标题
         if stripped.startswith('# ') and not stripped.startswith('## '):
             blocks.append({
                 'block_type': 3,
                 'heading1': {'elements': [text_run(stripped[2:].strip())]}
             })
-        # Heading 2
+        # 二级标题
         elif stripped.startswith('## ') and not stripped.startswith('### '):
             blocks.append({
                 'block_type': 4,
                 'heading2': {'elements': [text_run(stripped[3:].strip())]}
             })
-        # Heading 3
+        # 三级标题
         elif stripped.startswith('### '):
             blocks.append({
                 'block_type': 5,
                 'heading3': {'elements': [text_run(stripped[4:].strip())]}
             })
-        # Divider
+        # 分隔线
         elif stripped == '---':
             blocks.append({'block_type': 22, 'divider': {}})
-        # Unordered list
+        # 无序列表
         elif stripped.startswith('- ') or stripped.startswith('* '):
             content = stripped[2:]
-            # Strip markdown bold/italic
+            # 去掉 Markdown 的粗体和斜体标记
             content = re.sub(r'\*\*([^*]+)\*\*', r'\1', content)
             content = re.sub(r'\*([^*]+)\*', r'\1', content)
             blocks.append({
                 'block_type': 12,
                 'bullet': {'elements': [text_run(content)]}
             })
-        # Ordered list
+        # 有序列表
         elif re.match(r'^\d+\.\s', stripped):
             content = re.sub(r'^\d+\.\s', '', stripped)
             content = re.sub(r'\*\*([^*]+)\*\*', r'\1', content)
@@ -156,24 +156,24 @@ def md_to_feishu_blocks(md_text):
                 'block_type': 13,
                 'ordered': {'elements': [text_run(content)]}
             })
-        # Table (skip for now - feishu tables need complex block structure)
+        # 表格（暂时跳过：飞书表格需要复杂的块结构）
         elif stripped.startswith('|'):
-            # Skip table rows, add placeholder
+            # 跳过表格各行，只插入一句占位说明
             if i == 0 or not lines[i-1].strip().startswith('|'):
                 blocks.append({
                     'block_type': 2,
                     'text': {'elements': [text_run('[表格内容，请手动粘贴或查看原博客]')]}
                 })
-            # Skip until end of table
+            # 一直跳到表格结束
             while i < len(lines) and lines[i].strip().startswith('|'):
                 i += 1
             continue
-        # Normal paragraph
+        # 普通段落
         else:
-            # Strip markdown bold
+            # 去掉 Markdown 的粗体标记
             content = re.sub(r'\*\*([^*]+)\*\*', r'\1', stripped)
             content = re.sub(r'\*([^*]+)\*', r'\1', content)
-            # Strip markdown links
+            # 去掉 Markdown 的链接标记，只留文字
             content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
             blocks.append({
                 'block_type': 2,
@@ -386,12 +386,12 @@ def main():
         print("❌ 错误: 未设置 FEISHU_APP_ID 或 FEISHU_APP_SECRET 环境变量")
         sys.exit(1)
 
-    # Get token
+    # 获取 token
     print(f"🔑 飞书凭据: app_id={FEISHU_APP_ID[:10]}...")
     token = get_tenant_token(FEISHU_APP_ID, FEISHU_APP_SECRET)
     print("✅ Token 获取成功")
 
-    # Create document
+    # 创建文档
     total = len(scored) + len(unscored)
     doc_title = f"📚 语音/音乐/音频论文速递 {today} | {total}篇"
     print(f"📝 创建飞书文档: {doc_title}")
@@ -399,19 +399,19 @@ def main():
     doc_id = doc['document_id']
     print(f"✅ 文档创建成功: {doc_id}")
 
-    # Get root block
+    # 取根块 ID
     root_block_id = get_root_block_id(token, doc_id)
     print(f"📄 根块 ID: {root_block_id}")
 
-    # Generate overview
+    # 生成汇总部分
     overview_md = generate_overview_md(scored, unscored, today)
     overview_blocks = md_to_feishu_blocks(overview_md)
     print(f"📊 汇总内容: {len(overview_blocks)} 个块")
 
     doc_url = f"https://feishu.cn/docx/{doc_id}"
     try:
-        # Write overview and every subsequent batch at the exact number of blocks
-        # already accepted by Feishu. Fixed per-paper offsets corrupt long documents.
+        # 汇总和各批次都按飞书已经接受的块数接着往后写。若改成按每篇论文
+        # 算固定偏移，长文档会写乱。
         batch_size = 20
         next_index = 0
         for i in range(0, len(overview_blocks), batch_size):

@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Shared PyMuPDF extraction for PDF-only source routes.
+"""只有 PDF 的来源路线共用的 PyMuPDF 抽取逻辑。
 
-The command deliberately separates two products:
+命令刻意分成两种产物：
 
-* ``extract`` returns page text and a visual audit without PNG base64.  The
-  audit is durable metadata and can be replayed against the source PDF.
-* ``render`` materializes selected pages as temporary PNG files for the one
-  model request that needs pixels.  The caller owns and removes that directory.
+* ``extract`` 返回页面文字和一份视觉审计，不带 PNG base64。审计是长期保留的
+  元数据，可以拿源 PDF 重新核对。
+* ``render`` 把选中的页面写成临时 PNG，专供那一次需要像素的模型请求。这个
+  目录由调用方负责创建和删除。
 
-PDFs do not carry the author's original TeX or an HTML DOM.  Therefore this
-utility never claims that a formula has been recovered as publishable TeX, and
-never promotes an incomplete table candidate to a semantic table.
+PDF 里没有作者的原始 TeX，也没有 HTML DOM。所以这个工具从不声称公式已经还原
+成可发布的 TeX，也不会把不完整的表格候选当成语义表格。
 """
 
 from __future__ import annotations
@@ -66,7 +65,7 @@ def read_pdf(path: Path) -> bytes:
 
 
 def strip_pixels(audit: dict) -> dict:
-    """Remove the extractor's page PNG payload before durable JSON output."""
+    """写长期 JSON 之前，先去掉抽取器带出来的页面 PNG 数据。"""
     result = copy.deepcopy(audit)
     for page in result.get("pages", []):
         page.pop("pngBase64", None)

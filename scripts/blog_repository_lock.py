@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared, inode-bound lock for every writer of one blog Git repository."""
+"""博客 Git 仓库各写入方共用的锁，绑定到 inode。"""
 
 import errno
 import hashlib
@@ -83,7 +83,7 @@ def _git_common_dir(blog_repo):
 
 
 def shared_lock_root(blog_repo, *, create=True):
-    """Return the Git-private root shared by all worktrees of one repository."""
+    """返回同一仓库各个工作树共用的 Git 私有根目录。"""
     _repo, common = _git_common_dir(blog_repo)
     root = common / PRIVATE_DIRNAME
     try:
@@ -257,10 +257,9 @@ def _reclaimable(snapshot, configured_lease, now=None):
             pid_state = _pid_state(owner['record'])
             if pid_state == 'alive':
                 return False
-            # A same-host dead PID is stronger evidence than the heartbeat
-            # lease: the owner process cannot renew or release this lock.
-            # Remote owners remain lease-bound because their PID cannot be
-            # checked safely from this machine.
+            # 同机器上 PID 已死，比心跳租约更能说明问题：持有进程已经没法
+            # 续租或释放这把锁了。别的机器上的持有者仍按租约判断，因为从
+            # 本机无法安全地查它的 PID。
             if pid_state == 'dead':
                 return True
     return now - newest_ns / 1_000_000_000 > lease
@@ -313,7 +312,7 @@ def _rmdir_exact(directory, expected_identity):
 
 
 def _cleanup_created_directory(lock_path, directory_identity, owner_identity):
-    """Remove only the exact directory/file inodes created by this attempt."""
+    """只删掉本次尝试创建的那个目录和文件 inode。"""
     flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
     directory_fd = os.open(lock_path, flags)
     try:
@@ -460,7 +459,7 @@ def _acquire(lock_path, owner, timeout_seconds, stale_seconds):
 @contextmanager
 def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
                                 timeout_seconds=30, stale_seconds=2 * 60 * 60):
-    """Serialize writers across project workspaces and linked blog worktrees."""
+    """让项目工作区和关联博客工作树的写入方互相排队。"""
     root = shared_lock_root(blog_repo)
     lock_path = root / LOCK_NAME
     snapshot = _acquire(lock_path, owner, timeout_seconds, stale_seconds)

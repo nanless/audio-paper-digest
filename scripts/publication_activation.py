@@ -1,7 +1,7 @@
-"""Explicit, recoverable retirement of a promoted fresh run's old publication.
+"""把已晋升的新批次顶掉的旧发布下线，过程可恢复。
 
-No content generation, model requests, blog writes, or scientific state changes.
-The public entry is activate-fresh-publication.js, which owns the Node run lock.
+这里不生成内容、不请求模型、不写博客，也不改动任何科研状态。对外入口是
+activate-fresh-publication.js，Node 侧的运行锁由它持有。
 """
 if __name__ == '__main__':
     from runtime_guard import require_external_runtime
@@ -166,7 +166,7 @@ def verify_completed(current, run_dir, intent):
 
 
 def retire_files(current, run_dir, intent, after_move=lambda _index: None, validate=lambda: None):
-    """Caller owns run, repository and date locks and validated all CAS proofs."""
+    """调用方已经持有运行锁、仓库锁和日期锁，并核过全部 CAS 凭证。"""
     current = safe_dir(current); run_dir = safe_dir(run_dir)
     intent_raw = encoded(intent); digest = sha(intent_raw)
     intent_path = run_dir / 'publication-activation-intent.json'
@@ -188,7 +188,7 @@ def retire_files(current, run_dir, intent, after_move=lambda _index: None, valid
         for record in records:
             saved = child(archive, record['path'])
             write(saved, read(saved))
-        # A crash after completion but before clearing the pending gate is safe.
+        # 已经写完完成记录、还没来得及清掉 pending 闸门时崩掉也没关系。
         write(marker, encoded(completion), immutable=False)
         return completion
     for record in records:
@@ -203,7 +203,7 @@ def retire_files(current, run_dir, intent, after_move=lambda _index: None, valid
     if marker.exists() and json.loads(read(marker)) != pending:
         raise ValueError('Another activation owns this date')
     write(marker, encoded(pending))
-    # Copy and fsync every byte before retiring any active path.
+    # 先把每个字节复制过去并 fsync，再动任何现役路径。
     for record in records:
         source = child(current, record['path']); saved = child(archive, record['path'])
         write(saved, read(saved) if saved.exists() else read(source))
@@ -223,7 +223,7 @@ def retire_files(current, run_dir, intent, after_move=lambda _index: None, valid
 
 
 def prepare_intent(module, run_dir):
-    """Read-only preflight, including old receipts at their own original commits."""
+    """只读预检，包括到各自原始提交上读取旧的发布凭证。"""
     run_dir = safe_dir(run_dir)
     run_raw = read(run_dir / 'run.json'); run = json.loads(run_raw)
     baseline_raw = read(run_dir / 'baseline.json'); baseline = json.loads(baseline_raw)
@@ -332,8 +332,8 @@ def main():
     with module.blog_repository_lock():
         with module.blog_transaction_lock(date):
             completed = run_dir / 'publication-activation.json'
-            # Normal generation may now replace active paths and change the
-            # blog. A completed activation never retires those new bytes.
+            # 常规生成此时可能已经替换了现役路径、改动了博客。已完成的这次
+            # 下线不会去动这些新字节。
             if completed.exists():
                 intent = json.loads(read(run_dir / 'publication-activation-intent.json'))
                 if intent.get('runId') != args.run_id or intent.get('date') != date:

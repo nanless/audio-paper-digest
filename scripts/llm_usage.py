@@ -1,4 +1,4 @@
-"""Metadata-only LLM usage events, interoperable with lib/llm-usage.js."""
+"""只记录元数据的 LLM 用量事件，格式与 lib/llm-usage.js 互通。"""
 if __name__ == '__main__':
     from runtime_guard import require_external_runtime
     require_external_runtime('llm_usage.py')
@@ -158,7 +158,7 @@ def record_llm_usage(*, sink=None, directory=None, **kwargs):
 
 
 def _running_unittest():
-    """Importing unittest.mock in a real research script is not a test run."""
+    """真正的研究脚本 import unittest.mock 不算跑测试。"""
     main = sys.modules.get('__main__')
     spec = getattr(main, '__spec__', None)
     if getattr(spec, 'name', None) == 'unittest.__main__':

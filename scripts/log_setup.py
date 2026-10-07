@@ -46,7 +46,7 @@ def redact_log_text(value):
 
 
 def format_log_timestamp(now=None):
-    # The project uses Beijing time for all operational timestamps, regardless of host locale.
+    # 项目的运行时间戳一律用北京时间，跟宿主机 locale 无关。
     if now is None:
         now = datetime.now(tz=ZoneInfo('Asia/Shanghai'))
     elif now.tzinfo is None:
@@ -232,7 +232,7 @@ def prune_log_files(logs_dir, *, retention_days=None, max_total_bytes=None, now=
     for entry in reversed(retained):
         if total_bytes <= max_total_bytes:
             break
-        # Do not unlink a log that another still-running process may own.
+        # 别的进程可能还在用这个日志，不要删。
         if entry['active_owner'] or entry['mtime'] >= now - ACTIVE_LOG_GRACE_SECONDS:
             continue
         try:

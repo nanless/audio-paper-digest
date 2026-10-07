@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Extract and split the official ICMC 2026 combined proceedings PDF.
+"""拆分 ICMC 2026 官方会议论文集 PDF。
 
-ICMC publishes one official proceedings volume rather than one PDF per paper.
-The PDF outline supplies stable paper numbers and physical start pages.  This
-helper derives page ranges and paper metadata from that volume, and can make
-page-range PDFs without rasterising their figures, tables, or formulas.
+ICMC 只出一整本论文集，不是每篇论文一个 PDF。论文编号和正文起始页取自 PDF
+大纲。这个脚本据此推出页码范围和各篇元数据，也能切出按页范围划分的 PDF，且
+不把其中的图、表、公式栅格化。
 """
 
 from __future__ import annotations
@@ -77,9 +76,8 @@ def authors_from_first_page(page: fitz.Page, title: str) -> list[str]:
         first = lines[0]
         if first == title or EMAIL.search(first):
             continue
-        # The first line of each author block is the author display name.  Do
-        # not mistake a standalone affiliation block for an author when a PDF
-        # uses separate text boxes for the same author row.
+        # 每个作者块的第一行是作者署名。有些 PDF 把同一行作者拆进独立的
+        # 文本框，这时别把单独成块的机构名当成作者。
         if re.search(
             r"\b(?:university|institute|college|school|faculty|department|laboratory|lab|centre|center|academy|conservatory|studio|nkua|calarts|orpheus)\b",
             first,
@@ -98,11 +96,10 @@ def authors_from_first_page(page: fitz.Page, title: str) -> list[str]:
 
 
 def toc_records(document: fitz.Document) -> list[tuple[str, list[str]]]:
-    """Read the title/author rows from the volume's printed table of contents.
+    """从论文集印刷目录里读出题目和作者行。
 
-    One first-page entry in the source volume has a damaged font resource, so
-    first-page text is used only as a diagnostic.  The TOC is the official
-    title/author listing and remains extractable for all 60 papers.
+    源论文集有一条首页记录的字体资源已损坏，所以首页文字只当诊断用。目录才是
+    官方的题目和作者清单，60 篇全都读得出来。
     """
     records: list[tuple[str, list[str]]] = []
     for page_number in range(14, 18):
@@ -187,10 +184,9 @@ def split_papers(source: Path, page_map_file: Path, output_dir: Path) -> dict:
                 continue
             if not (1 <= start_page <= end_page <= document.page_count):
                 raise ValueError(f"invalid page range for {paper_id}")
-            # MuPDF is needed here because the source page tree advertises two
-            # trailing pages that pypdf does not enumerate.  Rewrite that
-            # exact slice with pypdf afterward so the derived bytes have a
-            # stable document ID and metadata on every replay.
+            # 这里必须用 MuPDF：源文件的页面树声称末尾还有两页，而 pypdf
+            # 数不出来。随后再用 pypdf 重写这一段，好让派生出的字节在每次
+            # 重跑时都有稳定的文档 ID 和元数据。
             slice_document = fitz.open()
             try:
                 slice_document.insert_pdf(document, from_page=start_page - 1, to_page=end_page - 1)

@@ -120,7 +120,7 @@ def get_token():
 
 
 def download_image(url, timeout=15):
-    """Download image from URL, return bytes or None"""
+    """从 URL 下载图片，成功返回字节，失败返回 None"""
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with build_fetch_url_opener().open(req, timeout=timeout) as resp:
@@ -134,7 +134,7 @@ def download_image(url, timeout=15):
 
 
 def upload_to_wechat(token, img_data, filename='fig.png'):
-    """Upload image to WeChat, return CDN URL or None"""
+    """把图片上传到微信，成功返回 CDN 地址，失败返回 None"""
     try:
         boundary = '----FormBoundary' + hashlib.md5(os.urandom(16)).hexdigest()[:16]
         content_type = 'image/png' if filename.endswith('.png') else 'image/jpeg'
@@ -158,7 +158,7 @@ def upload_to_wechat(token, img_data, filename='fig.png'):
         return None
 
 
-# Image cache to avoid re-uploading same URL
+# 图片缓存：同一个 URL 不必重复上传
 _cache_file = os.path.join(tempfile.gettempdir(), 'wechat-image-cache.json')
 _image_cache = {}
 if os.path.exists(_cache_file):
@@ -170,7 +170,7 @@ if os.path.exists(_cache_file):
 
 
 def get_wechat_image_url(token, arxiv_url):
-    """Download arxiv image and upload to WeChat, return CDN URL. Uses cache."""
+    """下载 arXiv 图片并上传到微信，成功返回 CDN 地址，失败返回 None；命中缓存就直接用。"""
     if arxiv_url in _image_cache:
         return _image_cache[arxiv_url]
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Safely replan post-publication visuals under the blog publication lock."""
+"""在博客发布锁下重新规划发布后的视觉任务。"""
 
 import argparse
 import sys

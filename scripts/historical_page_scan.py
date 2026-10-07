@@ -116,7 +116,7 @@ PRESERVED_PUBLICATION_STRING_FIELDS = {
 
 
 class HistoricalPageInventoryError(RuntimeError):
-    """Raised when the blog snapshot or inventory evidence fails closed."""
+    """博客快照或清点证据不满足要求时抛出，宁可停下也不放行。"""
 
 
 def _fail(message: str) -> HistoricalPageInventoryError:
@@ -591,12 +591,11 @@ def _is_markdown_escaped(value: str, index: int) -> bool:
 
 
 def _strict_markdown_inline_links(body: str) -> list[tuple[int, int, str]]:
-    """Parse the deliberately narrow inline-link grammar without guessing labels.
+    """按这套刻意收窄的行内链接语法解析，不去猜标签内容。
 
-    Link labels use balanced square brackets (including the real ``[m]``/``[t]``
-    paper-title case). Destinations retain the previous strict grammar, so a
-    formula fragment such as ``[w](1)`` is parsed here but is still rejected by
-    the internal-post target allowlist in ``_strict_post_link_occurrences``.
+    链接标签允许成对的方括号（真实存在 ``[m]``/``[t]`` 这样的论文题目写法）。
+    目标地址沿用之前那套严格语法，所以 ``[w](1)`` 这类公式片段在这里会被解析
+    出来，但仍会被 ``_strict_post_link_occurrences`` 里的站内目标白名单拒掉。
     """
     result: list[tuple[int, int, str]] = []
     position = 0
@@ -619,9 +618,8 @@ def _strict_markdown_inline_links(body: str) -> list[tuple[int, int, str]]:
                     destination = MARKDOWN_DESTINATION_RE.match(body[cursor + 1:])
                     if destination:
                         end = cursor + 1 + destination.end()
-                        # Skip the complete image construct as one unit. This
-                        # prevents a nested bracket in alt text being mistaken
-                        # for an independent hyperlink.
+                        # 整个图片构造当作一个单位跳过，免得 alt 文本里的
+                        # 嵌套方括号被当成另一个独立链接。
                         if start == 0 or body[start - 1] != "!" or _is_markdown_escaped(body, start - 1):
                             result.append((start, end, destination.group(1) or destination.group(2)))
                         position = end
@@ -631,9 +629,9 @@ def _strict_markdown_inline_links(body: str) -> list[tuple[int, int, str]]:
 
 
 def _strict_post_link_occurrences(body: str, page_url: str, base: str) -> list[dict[str, Any]]:
-    # This is deliberately a narrow grammar, not a general Markdown guesser.
-    # Historical aggregate links use absolute site paths or explicit HTTPS
-    # URLs. Bare targets such as LaTeX's ``[w](1)`` are never admitted.
+    # 这套语法是刻意收窄的，不是通用 Markdown 猜测器。历史汇总页链接只用
+    # 站内绝对路径或明确的 HTTPS 地址；像 LaTeX 的 ``[w](1)`` 这种裸目标
+    # 一律不收。
     matches: list[tuple[int, int, str, str]] = []
     for start, end, target in _strict_markdown_inline_links(body):
         matches.append((start, end, "markdown-inline", target))
@@ -674,9 +672,8 @@ def _publication_evidence(frontmatter: dict[str, Any]) -> list[dict[str, Any]]:
         value_type = ("null" if value is None else "boolean" if isinstance(value, bool)
                       else "integer" if isinstance(value, int) else "number" if isinstance(value, float)
                       else "string" if isinstance(value, str) else "array" if isinstance(value, list) else "object")
-        # Strings are hash-only by default, including a scalar sidecar value.
-        # Only the smallest identity/enum set crosses this boundary, and every
-        # preserved value is checked against its field-specific grammar.
+        # 字符串默认只留哈希，包括单个附属值。只有最小的一组身份和枚举字段
+        # 能过这条边界，而且每个保留值都要过它自己那套字段语法检查。
         if value_type == "string":
             preserved = _preserved_publication_string(field, value)
         else:
@@ -866,7 +863,7 @@ def _assert_repository_snapshot(repo: Path, ledger: dict[str, Any], remote_name:
 def scan_historical_pages(blog_repo: Path, *, require_clean_main: bool = False,
                           remote_name: str = "origin",
                           after_scan_hook: Callable[[], None] | None = None) -> dict[str, Any]:
-    """Build and self-validate one immutable snapshot without writing output."""
+    """构建并自检一份不可变快照，不写任何输出。"""
     if SCAN_POLICY["contract"] != "historical-page-scan-policy-v5" or SCAN_POLICY["tagRoutes"] != "unverified-candidates-v3":
         raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：新的扫描只能使用当前标签链接候选格式。")
     repo = _safe_directory(Path(blog_repo))

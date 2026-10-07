@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Role-gated adapter that runs the existing deterministic extractor in an evidence item root."""
+"""按工作区角色放行的适配层，在证据项根目录里调用现有的确定性抽取器。"""
 
 import json
 import sys
@@ -22,9 +22,8 @@ def parse_args(argv):
 
 
 def main(argv=None):
-    # Bind direct execution to this daily-only entry point.  Passing the
-    # underlying extractor name here would make runtime_guard's direct-command
-    # detection miss this adapter when it is invoked without the Node wrapper.
+    # 直接执行时只认这个日更专用的入口名。这里若传底层抽取器的名字，
+    # runtime_guard 的直接命令识别就会在缺少 Node 包装层时漏掉这个适配层。
     require_external_runtime("conference-filter-evidence-extract.py")
     mode, manifest, root = parse_args(list(sys.argv[1:] if argv is None else argv))
     if mode == "apply":

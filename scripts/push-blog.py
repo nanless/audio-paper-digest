@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Push reviewed blog pages, verify the remote OID, then plan independent visual tasks."""
+"""推送已审查的博客页面，核对远端 OID，再规划相互独立的视觉任务。"""
 
 import argparse
 import sys

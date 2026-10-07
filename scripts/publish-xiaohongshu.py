@@ -232,7 +232,7 @@ def _load_oneliner_cache(cache_path, date_str):
 
 
 def _quarantine_oneliner_cache(cache_path, reason):
-    """Atomically isolate a derived cache; generation may safely rebuild it."""
+    """原子地把派生缓存挪到一边；下次生成时重建即可。"""
     cache_path = Path(cache_path)
     if not cache_path.exists():
         return None
@@ -265,8 +265,7 @@ def _save_oneliner_cache_entry(
         next_data = dict(current)
         entries = dict(current['entries'])
         current_entry = entries.get(paper_id)
-        # Optimistic checkpoint CAS: a worker based on an older snapshot may
-        # never replace a success written after that snapshot.
+        # 检查点用乐观 CAS：拿着旧快照的 worker 不能覆盖快照之后写入的成功记录。
         if current_entry != expected_entry and isinstance(current_entry, dict) \
                 and current_entry.get('status') == 'success':
             return None

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Deterministic local debug/fallback compositor for paper-digest visuals.
+"""论文速递视觉图的本地合成器，输出确定，供调试和离线兜底使用。
 
-The default final-asset workflow uses built-in full image generation. This
-Pillow renderer remains available for tests, diagnosis, and offline fallback;
-importing it is side-effect free.
+正式的成图流程走内置整图生成；这个 Pillow 渲染器只在测试、排查问题和断网
+兜底时使用。导入它不会产生副作用。
 """
 
 from project_env import load_project_env
@@ -61,7 +60,7 @@ FONT_CANDIDATES = (
 
 
 class SpecError(ValueError):
-    """Raised when a visual-summary spec is unsafe or malformed."""
+    """视觉图 spec 不安全或格式不对时抛出。"""
 
 
 def resolve_cjk_font():
@@ -83,8 +82,8 @@ def resolve_cjk_font():
 
 
 def load_font(font_path, size, *, bold=False):
-    # PingFang/Heiti collections expose a usable regular face at index 0.  A
-    # slightly larger regular face remains more portable than guessing TTC indices.
+    # 苹方和黑体的字体集合在索引 0 上就有可用的常规字面；与其逐个猜 TTC
+    # 索引，直接放大常规字面更稳妥。
     return ImageFont.truetype(str(font_path), int(size), index=0)
 
 
@@ -93,7 +92,7 @@ def _tokens(text):
 
 
 def wrap_text(draw, text, font, max_width):
-    """Wrap mixed CJK/Latin text without splitting Latin technical tokens."""
+    """对中英混排文本折行，不拆开拉丁文技术词。"""
     if max_width <= 0:
         raise ValueError("max_width 必须为正数")
     lines = []
@@ -115,7 +114,7 @@ def wrap_text(draw, text, font, max_width):
         if draw.textlength(token, font=font) <= max_width:
             current = token
             continue
-        # A pathological long token (usually a URL) is split deterministically.
+        # 遇到异常长的词（通常是 URL）时按固定规则逐字符拆开。
         current = ""
         for char in token:
             candidate = current + char
@@ -320,7 +319,7 @@ def _rounded_panel(draw, box, fill, *, outline=PALETTE["line"], radius=42, width
 
 
 def _add_paper_texture(canvas, *, seed=20260714):
-    """Add subtle deterministic fibres without making the page look dirty."""
+    """铺一层固定的细纤维纹理，又不让整页显得脏。"""
     draw = ImageDraw.Draw(canvas)
     state = seed & 0x7FFFFFFF
 
@@ -329,8 +328,7 @@ def _add_paper_texture(canvas, *, seed=20260714):
         state = (1103515245 * state + 12345) & 0x7FFFFFFF
         return state % limit
 
-    # Short, low-contrast fibres survive palette optimization better than noise,
-    # while remaining nearly invisible behind body copy.
+    # 短而低对比的纤维比噪点更耐调色板压缩，压在正文底下也几乎看不出来。
     for _ in range(4200):
         x = next_value(CANVAS_WIDTH)
         y = next_value(CANVAS_HEIGHT)
@@ -343,7 +341,7 @@ def _add_paper_texture(canvas, *, seed=20260714):
 
 
 def _paper_panel(draw, box, fill, *, radius=42, tape=None, deckle=True):
-    """Draw a clean editorial paper card with a restrained stationery accent."""
+    """画一张干净的编辑风格纸卡，带一点克制的文具味装饰。"""
     x0, y0, x1, y1 = map(int, box)
     draw.rounded_rectangle(
         (x0 + 16, y0 + 20, x1 + 16, y1 + 20),
@@ -358,8 +356,8 @@ def _paper_panel(draw, box, fill, *, radius=42, tape=None, deckle=True):
         width=2,
     )
     if deckle:
-        # One short irregular lower edge is enough to suggest cut paper. Keep it
-        # away from content and avoid a scrapbook-like border around every side.
+        # 下边缘留一小段不规则缺口就够暗示裁切过的纸；位置避开内容区，
+        # 也不必四面都做出剪贴簿式的边框。
         start = x0 + 72
         end = min(x1 - 72, start + 420)
         points = [(start, y1 - 1)]
@@ -384,7 +382,7 @@ def _paper_panel(draw, box, fill, *, radius=42, tape=None, deckle=True):
 
 
 def _draw_paper_cut_decor(draw):
-    """A few quiet paper-cut shapes establish visual rhythm in empty margins."""
+    """空白边角放几块安静的剪纸形状，撑起视觉节奏。"""
     draw.ellipse((-90, 160, 215, 465), fill="#E3ECE3")
     draw.polygon(((1980, 290), (2160, 170), (2160, 520), (2025, 455)), fill="#F0DCD4")
     draw.arc((60, 4200, 410, 4520), 195, 350, fill="#C9D9D7", width=16)
@@ -396,8 +394,7 @@ def _paste_contained(canvas, path, box):
     x0, y0, x1, y1 = map(int, box)
     with Image.open(path) as source:
         image = ImageOps.exif_transpose(source).convert("RGBA")
-        # Scientific figures often contain very large uniform margins. Crop only
-        # when the detected content occupies a meaningfully smaller area.
+        # 论文插图常常带着大片纯色留白。只有检测到的内容区明显更小时才裁。
         background = Image.new("RGBA", image.size, image.getpixel((0, 0)))
         bbox = ImageChops.difference(image, background).getbbox()
         if bbox:
@@ -439,7 +436,7 @@ def _draw_module_flow(draw, modules, box, font):
 
 
 def _draw_module_grid_flow(draw, modules, box, fonts):
-    """Use a spacious paper-note flow when no verified architecture is available."""
+    """没有已核实的结构图时，用宽松的纸卡便签流排布。"""
     if not modules:
         return
     x0, y0, x1, y1 = map(int, box)
@@ -470,15 +467,15 @@ def _draw_module_grid_flow(draw, modules, box, fonts):
         if row_a == row_b:
             start, end = (x_a + card_w / 2 + 6, y_a), (x_b - card_w / 2 - 8, y_b)
         else:
-            # Row numbers preserve sequence; a long wraparound connector would
-            # cross the grid and falsely imply a direct branch relationship.
+            # 序号本身已经说明了先后；再画一条绕回的长连线会横穿网格，
+            # 让人误以为这里存在直接的分支关系。
             continue
         draw.line((start, end), fill=PALETTE["accent"], width=5)
         draw.ellipse((end[0] - 7, end[1] - 7, end[0] + 7, end[1] + 7), fill=PALETTE["accent"])
 
 
 def _draw_structured_diagram(draw, diagram, box, fonts):
-    """Render verified branch/merge semantics from explicit nodes and edges."""
+    """按显式给出的节点和连线画出已核实的上下级与合并关系。"""
     x0, y0, x1, y1 = map(int, box)
     draw.text((x0, y0), diagram["caption"], font=fonts["metric_label"], fill=PALETTE["muted"])
     panel_top = y0 + 52
@@ -505,7 +502,7 @@ def _draw_structured_diagram(draw, diagram, box, fonts):
             fill = group_colors.get(group, "#F7F7F2")
             positions[node["id"]] = (left, top, left + column_w, top + card_h)
 
-    # Edges are drawn before nodes so connectors never cross readable labels.
+    # 先画连线再画节点，连线就不会压在可读的标签上。
     for edge in diagram.get("edges", []):
         source = positions[edge["from"]]
         target = positions[edge["to"]]
@@ -521,9 +518,8 @@ def _draw_structured_diagram(draw, diagram, box, fonts):
             points = (start, (start[0], mid_y), (end[0], mid_y), end)
         draw.line(points, fill=PALETTE["accent"], width=5, joint="curve")
         draw.polygon(((end[0], end[1]), (end[0] - 13, end[1] - 9), (end[0] - 13, end[1] + 9)), fill=PALETTE["accent"])
-        # Edge labels remain in the auditable spec but are intentionally omitted
-        # from dense phone-scale diagrams; stage semantics belong in node/group
-        # labels and the diagram caption, where they cannot collide with arrows.
+        # 连线标签仍保留在可核对的 spec 里，但手机上这种密集图一律不画：
+        # 阶段含义交给节点、分组标签和图注去说，那里不会和箭头打架。
 
     for column in columns:
         for node in column:
@@ -649,16 +645,15 @@ def render_paper(spec, *, illustration=None, reference=None, result_reference=No
     margin = 132
     content_width = CANVAS_WIDTH - margin * 2
 
-    # Exact English title is always real font text and occupies a stable header.
+    # 英文原题一律用真实字体绘制，固定占据页头位置。
     y = 115
     y = draw_wrapped_text(draw, (margin, y), spec["title"], fonts["title"], PALETTE["ink"], content_width, spacing=20, max_lines=4)
     draw.line((margin, 610, CANVAS_WIDTH - margin, 610), fill=PALETTE["line"], width=4)
 
     section_top = 670
     gaps = 48
-    # Each chapter has a purpose-built composition instead of a generic text
-    # block. The method remains largest, while problem and conclusion use paired
-    # notes so copy, figures, and evidence read as one editorial sequence.
+    # 每一章都单独排版，不用通用的文字块套。方法部分占最大篇幅；研究问题和
+    # 结论用成对的便签，让文字、插图和证据读起来像一条编辑过的线索。
     section_heights = (620, 1380, 950, 570)
     tints = (PALETTE["mist"], PALETTE["sage"], PALETTE["apricot"], PALETTE["lavender"])
     for index, (chapter, height) in enumerate(zip(spec["chapters"], section_heights)):
@@ -763,7 +758,7 @@ def render_paper(spec, *, illustration=None, reference=None, result_reference=No
 
 
 def digest_cover_direction_layout(directions, hero_top=560, hero_bottom=1470):
-    """Parse and place every validated hot direction without silent truncation."""
+    """解析并排布每一条已校验的热门方向，不悄悄截断。"""
     parsed = []
     for direction in directions:
         match = re.match(r"^(.*?)\s*[·:]\s*(\d+)\s*$", direction)
@@ -846,7 +841,7 @@ def render_digest_cover(spec, *, illustration=None, reference=None, font_path=No
 
 
 def save_optimized_png(image, output_path):
-    """Write an atomic, palette-optimized PNG under the publication size cap."""
+    """原子写入调色板优化过的 PNG，并把体积压在发布上限内。"""
     output_path = Path(output_path)
     fd, temp_name = tempfile.mkstemp(prefix=f".{output_path.name}.", suffix=".tmp", dir=output_path.parent)
     os.close(fd)

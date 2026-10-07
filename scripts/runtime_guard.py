@@ -1,4 +1,4 @@
-"""Runtime preconditions shared by commands that require host networking."""
+"""需要宿主机联网的命令共用的运行时前置检查。"""
 
 import json
 import os
@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 class ExternalRuntimeRequired(RuntimeError):
-    """Raised when a host-network command is launched inside a Codex sandbox."""
+    """需要联网或 Git 的命令在 Codex 沙箱里执行时抛出。"""
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -79,11 +79,11 @@ def require_workspace_role(required_role, project_root=PROJECT_ROOT):
 
 def require_external_runtime(command_name, project_root=PROJECT_ROOT,
                              enforce_workspace_role=False):
-    """Reject sandbox execution for commands requiring host networking or Git."""
+    """拦下需要联网或 Git 的命令在沙箱内的执行。"""
     sandbox = os.environ.get('CODEX_SANDBOX', '').strip()
-    # The elevation wrapper preserves CODEX_SANDBOX_NETWORK_DISABLED even after
-    # moving a command out of the seatbelt sandbox. CODEX_SANDBOX is the stable
-    # marker that distinguishes the actual sandbox from that external runtime.
+    # 提权包装层把命令挪出 seatbelt 沙箱后，仍会保留
+    # CODEX_SANDBOX_NETWORK_DISABLED。区分真正沙箱和那个外部运行时的稳定
+    # 标志是 CODEX_SANDBOX。
     if sandbox:
         raise ExternalRuntimeRequired(
             f'{command_name} 必须在沙箱外运行（检测到 CODEX_SANDBOX={sandbox}）。'

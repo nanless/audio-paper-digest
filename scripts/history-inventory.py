@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CLI for a source-only historical-page ledger and paired receipt."""
+"""只读来源的历史页面台账与配套凭证的命令行入口。"""
 
 from __future__ import annotations
 
